@@ -20,7 +20,8 @@ Ctrl+C cuts it short (status 130). What waits for the user (a question, a key, a
 a ping) gives up when that happens (task_interrupted()), along its usual way out.
 
 10/16/26 (SurfCPU, milestone 8): cp says why a write came up short ("No space left on
-device" on a full disk) instead of "short write".
+device" on a full disk) instead of "short write". 10/18/26 (audit B60): cp is shell/cp.c now,
+the one both kernels' shells use.
 */
 
 #include <blibc_common.h>
@@ -198,6 +199,10 @@ static int cmd_kill(int argc, char **argv) {
     t = task_find(pid);
     if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
     if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
+    if(t->flags & TF_SYSTEM) {          /* 10/18/26 (audit B59): killed, it left its driver's lock held for good */
+        printf("    '%s' (pid %lu) is one of the kernel's own threads (a driver needs it): not killed\n", t->name, pid);
+        return CMD_FAIL;
+    }
     printf("    killing '%s' (pid %lu)\n", t->name, pid);
     kill_task(t);                       /* 10/6/26: inside a call it ends with the call; this shell itself, after this command */
     return CMD_OK;
@@ -724,49 +729,6 @@ static int cmd_write(int argc, char **argv) {
     return r < 0 || c ? CMD_FAIL : CMD_OK;
 }
 
-static int cmd_cp(int argc, char **argv) {
-    struct file *in, *out;
-    char *buf;
-    u_long total = 0;
-    int r, w, cut = 0;
-    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return CMD_USAGE; }
-    r = vfs_open(argv[1], O_RDONLY, &in);
-    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
-    r = vfs_open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, &out);
-    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return CMD_FAIL; }
-    buf = (char *)kalloc(4096);
-    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
-    while((r = vfs_read(in, buf, 4096)) > 0) {
-        w = vfs_write(out, buf, r);
-        if(w >= 0 && w < r && !task_interrupted()) {    /* 10/16/26: short (a full disk): the rest, for why */
-            int w2 = vfs_write(out, buf + w, r - w);
-            w = w2 < 0 ? w2 : w + w2;
-        }
-        if(w != r && (w == -EINTR || task_interrupted())) {   /* 10/18/26 (audit B53): stopped by Ctrl+C or a kill (B39: */
-            if(w > 0) total += w;                       /* before its next piece), not refused: it said "short write" */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-        if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
-        total += r;
-        if(task_interrupted()) {                        /* 10/6/26: a kill, Ctrl+C */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-    }
-    if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
-    kfree(buf);
-    vfs_close(in);
-    w = vfs_close(out);
-    if(w && !cut) printf("    cp: close: %s\n", strerror(w));   /* (B53: cut short, its write-back is cut too: said) */
-    else if(r == 0) printf("    %lu bytes copied\n", total);
-    return r || w ? CMD_FAIL : CMD_OK;
-}
-
 /* 10/5/26: how fast a disk reads (nothing is written): 64 KB requests through the block layer */
 static int cmd_readbench(int argc, char **argv) {
     struct bdev *d;
@@ -877,6 +839,19 @@ static int cmd_crashint(int argc, char **argv) {
     return CMD_OK;
 }
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
+/* 10/18/26 (audit B56): the same fault while this task counts as inside a file system (as in a device request): the
+   system stops (kernel/panic.c), since nothing could give back what a task held there. Only in the kernel shell: a
+   program (the user shell's SYS_kcmd) cannot fault inside a file system, and this command does not give it a way */
+static int cmd_crashfs(int argc, char **argv) {
+    if(curTask->flags & TF_USER) {
+        printf("    crashfs stops the system: only in the kernel shell (shell=kernel), not from a program\n");
+        return CMD_FAIL;
+    }
+    fs_enter();
+    *(volatile int *)0 = 1;
+    fs_leave();
+    return CMD_FAIL;
+}
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
@@ -953,6 +928,7 @@ static const struct command commands[] = {
     { "crashdiv",  "",          "divide by zero in this shell", cmd_crashdiv },
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
+    { "crashfs",   "",          "a NULL pointer inside a file system: the system stops (kernel shell only)", cmd_crashfs },
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };

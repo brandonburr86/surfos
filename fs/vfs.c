@@ -33,6 +33,17 @@ by the old umount's binvalidate(), the card marked clean under a live mount, mkf
 FATs crossed with the old volume's writes). The device is counted as being unmounted
 (struct bdev's unmounting) from the moment its mount leaves the list until the umount
 has let go of it, and vfs_bdev_busy() counts that too; vfs_bdev_unmounting() says so.
+
+10/18/26 (audit B56, B58): vfs_bdev_busy() also counts a request issued on the device
+that has not ended (struct bdev's requests, kept by driver/bdev.c), so no mount, mkfs
+or fdisk takes a device a late write may still land on, and a mount under way (B58:
+struct bdev's mounting). A mount takes its device under mount_lock in the same step as
+it looks whether it is busy, and an eject takes its disk the same way for its whole
+run (vfs_unmount_begin()): a mount could look, find the disk free, and append itself to
+the list after the eject had listed the mounts it would unmount, or come in during the
+eject's write-out; the eject then took that volume's blocks and said "safe to remove".
+Both are counted inside (fs_enter()) while they hold such a count, so a kill waits for
+them to let go of it. vfs_bdev_busy_why() says what keeps a device busy.
 */
 
 #include <surfos/types.h>
@@ -50,6 +61,33 @@ has let go of it, and vfs_bdev_busy() counts that too; vfs_bdev_unmounting() say
 static const struct fs_type *fs_types;
 static struct mount *mounts;
 static mutex_t mount_lock = MUTEX_INIT("mounts");
+
+/* (mount_lock held) 10/18/26 (audit B56, B58): is a count of d's set nonzero, d itself, its disk (d a partition) or one
+   of its partitions (d a disk): umounts and ejects (unmounting), mounts under way (mounting), or requests not ended */
+static bool counted(const struct bdev *d, int which) {
+    const struct bdev *p;
+#define COUNT(x) (which == 0 ? (x)->unmounting : which == 1 ? (x)->mounting : (x)->requests)
+    if(COUNT(d) || (d->parent && COUNT(d->parent))) return true;
+    for(p = bdev_first(); p; p = p->next) if(p->parent == d && COUNT(p)) return true;
+#undef COUNT
+    return false;
+}
+#define claimed(d, unmount) counted(d, (unmount) ? 0 : 1)
+
+/* (mount_lock held) 10/18/26 (audit B56, B58): what keeps d from being mounted, formatted or partitioned, or NULL: a
+   mount of it, of its disk or of one of its partitions; an umount or eject of them under way, a mount under way, or a
+   request issued on them that has not ended (a late write may still land) */
+static const char *busy_why(const struct bdev *d) {
+    const struct mount *m;
+    for(m = mounts; m; m = m->next) {
+        const struct bdev *x = m->sb->dev;
+        if(x && (x == d || x->parent == d || d->parent == x)) return VFS_BUSY_MOUNTED;   /* itself, a partition, its disk */
+    }
+    if(claimed(d, true)) return VFS_BUSY_UNMOUNTING;
+    if(claimed(d, false)) return VFS_BUSY_MOUNTING;
+    if(counted(d, 2)) return VFS_BUSY_REQUEST;
+    return NULL;
+}
 static struct file *open_files;             /* 10/5/26: every open file, for vfs_busy() */
 
 /**** vnodes ****/
@@ -201,20 +239,40 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     if(!type) return fstype ? -ENODEV : -EINVAL;
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
-    for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) return -EBUSY;
-    if(dev && vfs_bdev_busy(dev)) return -EBUSY;    /* 10/5/26: two mounts of one device would each think they own it */
+    fs_enter();                                     /* 10/18/26 (audit B58): counted inside while it holds the device's
+                                                       count below, so a kill waits and never leaves it behind */
+    mutex_lock(&mount_lock);
+    for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) break;
+    if(m || (dev && busy_why(dev))) {               /* 10/5/26: two mounts of one device would each think they own it */
+        mutex_unlock(&mount_lock);
+        fs_leave();
+        return -EBUSY;
+    }
+    if(dev) dev->mounting++;                        /* 10/18/26 (audit B58): taken in the same step: busy until below */
+    mutex_unlock(&mount_lock);
 
     sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
     m = (struct mount *)kcalloc(1, sizeof(struct mount));
-    if(!sb || !m) { kfree(sb); kfree(m); return -ENOMEM; }
-    if(dev && dev->gone) { kfree(sb); kfree(m); return -ENODEV; }
-    sb->type = type;
-    sb->dev = dev;
-    sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
-    mutex_init(&sb->lock, type->name);
-    r = type->mount(sb);
-    if(r) { kfree(sb); kfree(m); return r; }
-    if(!sb->root) { kfree(sb); kfree(m); return -EIO; }
+    r = !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
+    if(r == 0) {
+        sb->type = type;
+        sb->dev = dev;
+        sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
+        mutex_init(&sb->lock, type->name);
+        r = type->mount(sb);
+        if(r == 0 && !sb->root) r = -EIO;
+    }
+    if(r) {
+        kfree(sb);
+        kfree(m);
+        if(dev) {
+            mutex_lock(&mount_lock);
+            dev->mounting--;
+            mutex_unlock(&mount_lock);
+        }
+        fs_leave();
+        return r;
+    }
     if(dev) bdev_get(dev);                          /* held until umount, even if unplugged meanwhile */
 
     strlcpy(m->path, abs, sizeof(m->path));
@@ -222,7 +280,9 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     mutex_lock(&mount_lock);
     for(pp = &mounts; *pp; pp = &(*pp)->next);   /* append: the listing keeps mount order */
     *pp = m;
+    if(dev) dev->mounting--;                        /* (B58: on the list now, busy as a mount) */
     mutex_unlock(&mount_lock);
+    fs_leave();
     return 0;
 }
 
@@ -333,38 +393,43 @@ bool vfs_disk_name_mounted(const char *name) {
 
 /* is d, the disk it is on, or a partition of d mounted? */
 bool vfs_bdev_busy(struct bdev *d) {
-    struct mount *m;
-    bool busy = false;
+    return vfs_bdev_busy_why(d) != NULL;
+}
+
+/* 10/18/26 (audit B56, B58): what keeps d busy (vfs_bdev_busy()), for the messages of mount, mkfs, fdisk and sdmode */
+const char *vfs_bdev_busy_why(struct bdev *d) {
+    const char *why;
+    if(!d) return NULL;
     mutex_lock(&mount_lock);
-    for(m = mounts; m && !busy; m = m->next) {
-        struct bdev *x = m->sb->dev;
-        if(!x) continue;
-        if(x == d || x->parent == d || d->parent == x) busy = true;     /* itself, a partition of it, its disk */
-    }
+    why = busy_why(d);
     mutex_unlock(&mount_lock);
-    return busy || vfs_bdev_unmounting(d);      /* 10/18/26 (B51): or being unmounted (its mount off the list) */
+    return why;
 }
 
 /* 10/18/26 (audit B51): is d, its disk or one of its partitions being unmounted (vfs_umount_lost()'s steps once the
-   mount is off the list, eject's unmount phase): still written, so taken by nobody else */
+   mount is off the list, an eject of the disk: B58, all of it): still written, so taken by nobody else */
 bool vfs_bdev_unmounting(struct bdev *d) {
-    struct bdev *p;
     bool busy;
     if(!d) return false;
     mutex_lock(&mount_lock);
-    busy = d->unmounting || (d->parent && d->parent->unmounting);
-    for(p = bdev_first(); p && !busy; p = p->next) if(p->parent == d && p->unmounting) busy = true;
+    busy = claimed(d, true);
     mutex_unlock(&mount_lock);
     return busy;
 }
 
 /* 10/18/26 (audit B51): d is being unmounted until vfs_unmount_end() (counted: an eject of its disk and an umount of
-   one of its partitions may overlap) */
-void vfs_unmount_begin(struct bdev *d) {
-    if(!d) return;
+   one of its partitions may overlap). (B58) For an eject, all of it: -EBUSY when d, its disk or one of its partitions
+   is being mounted or unmounted already, else taken under mount_lock in the same step as that look */
+int vfs_unmount_begin(struct bdev *d) {
+    if(!d) return 0;
     mutex_lock(&mount_lock);
+    if(claimed(d, true) || claimed(d, false)) {
+        mutex_unlock(&mount_lock);
+        return -EBUSY;
+    }
     d->unmounting++;
     mutex_unlock(&mount_lock);
+    return 0;
 }
 
 void vfs_unmount_end(struct bdev *d) {

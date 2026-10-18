@@ -246,14 +246,14 @@ by its cluster's next owner before the reader let go stayed set aside, and nobod
 unmount), whatever the task's call: cut short, an umount gave up what the card would take. (B49) A straight write
 (write_blocks()) whose wait is cut short returns BCACHE_EINTR, not BDEV_EIO: nothing was sent, nothing refused.
 
-10/18/26 (audit B50): and nothing ended those waits: a fault kills a task at once, inside a call and inside the cache
-too (kernel/panic.c), and a block it had marked as read, written or copied stays so; an umount owing it waited for
-good, every interrupt put off. Now a step that must finish gives another task's I/O of a block bcache_overdue_ms
-(30 s, longer than any driver's timeout) and then gives the block up, as for a device that stopped answering: the
-sync says -1 ("write errors", the volume unclean, the block counted given up). It looks again every IO_LOOK_MS
-(a dead task's I/O sends no wake-up). The other blocks of that device under I/O are given up with it (overdue), so
-the step does not wait that long again for each block of a dead task's run, and nobody waits for an overdue block
-any more: a reader gets an I/O error, a sync gives it up at once. A lock a fault leaves held stays held, as before.
+10/18/26 (audit B56): round fs-fix-8's bound on those waits (B50) is gone. It gave up requests that were still
+under way: the 30 s ran from the step's first look, so they took in the time a request queued for a driver's lock or
+for the bounce buffer every device shares, and a driver may take longer than 30 s anyway. The umount then let the
+device go while the request went on, and a mount or mkfs after it took the late write. A wait for another task's
+I/O lasts until the request ends, however long the driver takes: its own timeouts and retries bound it (CODE-AUDIT
+B56 gives each driver's worst case). The request that never ends, that of a task a fault killed inside the cache or a
+device request, no longer happens: such a fault stops the system (kernel/panic.c, arch/riscv32/trap.c), since
+nothing could give back what that task held there.
 */
 
 #include <surfos/types.h>
@@ -272,8 +272,6 @@ any more: a reader gets an I/O error, a sync gives it up at once. A lock a fault
 #define SYNC_ROUNDS 2                           /* B12: rounds of a sync before it writes copies */
 #define DEAD_TRIES 4                            /* B13: requests a device refuses in a sync, taking none, before it is let be */
 #define HOLD_WAIT_MS 10000UL                    /* B18: how long a sync waits for one hold of a block it owes */
-#define IO_LOOK_MS 1000UL                       /* B50: how often a step that must finish looks again at an I/O it waits for */
-u_long bcache_overdue_ms = 30000UL;             /* B50 (fs/bcache.h) */
 
 static struct buf bufs[BCACHE_BLOCKS];
 static struct buf *hash[HASH];
@@ -499,11 +497,6 @@ static bool cut_short(void) {
     return curTask != idle_task && fs_cut_short();
 }
 
-/* 10/18/26 (B50): is the calling task in a step that must finish (fs_finish), whose waits no interrupt ends */
-static bool finishing(void) {
-    return curTask && curTask != idle_task && curTask->fs_finish;
-}
-
 /* 10/17/26 (B39): what a kill at once (kernel/task.c's kill_escalate()) would leave behind here: the cache's lock or
    the bounce buffer's while the task holds one (bcache_holds(): the kill is put off while it does), and, while it
    has let go of the lock, the blocks it marked as read, written or copied, its copy's record and the copy's buffer:
@@ -583,60 +576,6 @@ static void stamp_holds(struct bdev *dev, u_long now) {
     }
 }
 
-/* (bcache_lock held) 10/18/26 (audit B50): a step that must finish waits for another task's I/O of b (loading,
-   writing, copying), which no interrupt ends (B46). true: b is given up, as for a device that stopped answering:
-   the wait has lasted bcache_overdue_ms since *since (its first look; set here), longer than any driver takes, or
-   b was given up before (overdue). Then every block of b's device under I/O is marked overdue with it: a task a
-   fault killed inside the cache leaves its whole run marked, and the step must not wait as long again for each of
-   its blocks. false: it slept, IO_LOOK_MS at most (no wake-up comes from a dead task's I/O), and looks again */
-static bool io_overdue(struct buf *b, u_long *since) {
-    struct bdev *dev = b->dev;
-    u_long now;
-    int i;
-    if(b->overdue) return true;
-    now = uptime_ms();
-    if(!now) now = 1;                           /* (0 stands for no look yet) */
-    if(!*since) *since = now;
-    else if(now - *since >= bcache_overdue_ms) {
-        for(i = 0; i < BCACHE_BLOCKS; i++) {
-            struct buf *p = &bufs[i];
-            if(p->dev == dev && (p->loading || p->writing || p->copying)) p->overdue = true;
-        }
-        kprintf("bcache: %s block %lu: under I/O for %lu s: given up, with the device's other blocks under I/O\n",
-                dev ? dev->name : "?", (u_long)b->lba, (now - *since) / 1000);
-        wake_up_all(&bwait);                    /* (whoever else waits for one of them gives it up now) */
-        return true;
-    }
-    (void)bsleep(IO_LOOK_MS, false);
-    return false;
-}
-
-#define IO_READ  1u                             /* (io_wait(): which of another task's I/O of a block to wait for) */
-#define IO_WRITE 2u
-#define IO_COPY  4u
-
-/* (bcache_lock held) 10/18/26 (audit B50): wait for another task's I/O of b to end (what: IO_READ, IO_WRITE, IO_COPY).
-   0: it has ended, or b holds another block now: look again; -1: the wait was cut short (intr: a kill, or Ctrl+C in
-   a kernel command, B39); 1: b is given up, as for a device that stopped answering (overdue already, or this step
-   must finish and has waited bcache_overdue_ms for it: io_overdue()). Out of line, with its bound's clock, so that
-   the callers' paths that wait for nothing run as they did (SurfCPU fetches every instruction from DDR) */
-static __attribute__((noinline)) int io_wait(struct buf *b, u32 what, bool intr) {
-    struct bdev *dev = b->dev;
-    u32 lba = b->lba;
-    u_long since = 0;
-    if(b->overdue) return 1;
-    if(!finishing()) {
-        if(intr) return bsleep(0, true) ? -1 : 0;
-        sleep_unlocked();
-        return 0;
-    }
-    while(!io_overdue(b, &since))
-        if(b->dev != dev || b->lba != lba ||
-           !(((what & IO_READ) && b->loading) || ((what & IO_WRITE) && b->writing) || ((what & IO_COPY) && b->copying)))
-            return 0;
-    return 1;
-}
-
 /* (bcache_lock held) 10/16/26 (B18): wait until b, a dirty block a sync owes, is in nobody's hands and
    under no write. A write ends; a hold may not: once a sync has waited HOLD_WAIT_MS for it (stamp_holds())
    it is given up on: false, b stays dirty (not written), and later syncs give up on that hold at once
@@ -648,8 +587,7 @@ static __attribute__((noinline)) int io_wait(struct buf *b, u32 what, bool intr)
    operation has it set aside: not waited for. That operation's order point may be waiting for the copy (a
    sync owes the copied block): each waited for the other, 10 s, and the copy was given up.
    10/17/26 (B39): a kill or Ctrl+C cuts the wait short (bsleep()): 0, given up on (nothing said, not stuck: the
-   holder is not the one at fault). 10/18/26 (B50): a step that must finish gives the write or copy up after
-   bcache_overdue_ms (io_wait()); an overdue one is given up at once by everyone */
+   holder is not the one at fault) */
 static int wait_for(struct buf *b, bool dep) {
     struct bdev *dev = b->dev;
     u32 lba = b->lba;
@@ -658,7 +596,7 @@ static int wait_for(struct buf *b, bool dep) {
         bool other;
         if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty) return 1;
         if(b->writing || b->copying) {          /* (a copy of another task's may take long: it waits for holders too) */
-            if(io_wait(b, IO_WRITE | IO_COPY, true)) return 0;
+            if(bsleep(0, true)) return 0;
             continue;
         }
         other = aside_other(b);
@@ -810,7 +748,6 @@ static int write_run(struct buf *b, u32 pass, struct tally *t, u32 max, u32 *pfi
     if(pn) *pn = n;
     for(i = 0; i < n; i++) {
         run[i]->writing = true;
-        run[i]->overdue = false;                /* (B50: a new I/O) */
         run[i]->next_seq = 0;
         gen[i] = run[i]->gen;
     }
@@ -859,20 +796,6 @@ static bool free_now(const struct buf *b, u32 call) {
     return !b->dirty || !(b->wfail || b->dev->bc_failed || b->skip == call);
 }
 
-/* (bcache_lock held) 10/18/26 (audit B50): reuse() for a step that must finish found every buffer held or under I/O:
-   wait until one is free (false: reuse() looks again) or bcache_overdue_ms has passed with requests under way all the
-   while (true: none is coming back, a dead task's). Out of line, as io_wait() is */
-static __attribute__((noinline)) bool free_wait(u32 call) {
-    u_long since = uptime_ms();
-    struct buf *b;
-    for(;;) {
-        (void)bsleep(IO_LOOK_MS, false);
-        for(b = oldest; b; b = b->newer) if(free_now(b, call)) return false;
-        if(!inflight) return false;
-        if(uptime_ms() - since >= bcache_overdue_ms) return true;
-    }
-}
-
 /* a buffer nobody holds or moves, clean and forgotten; NULL when every one is held or waits
    for a sync after a failed write. May drop the lock (to write a dirty block out, or to wait
    for a request to finish). 10/16/26 (B6): no failed run is tried again here: a sync does
@@ -884,10 +807,6 @@ static struct buf *reuse(void) {
         for(b = oldest; b; b = b->newer) if(free_now(b, call)) break;
         if(!b) {
             if(!inflight) return NULL;
-            if(finishing()) {                   /* 10/18/26 (B50): a request that never ends (a dead task's) is not waited for */
-                if(free_wait(call)) return NULL;   /* for good by a step that must finish */
-                continue;
-            }
             sleep_unlocked();
             continue;
         }
@@ -919,13 +838,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
     }
     for(;;) {
         b = find(dev, lba);
-        if(b && (b->loading || b->writing)) {   /* being read, or (B7) written: wait for it */
-            if(io_wait(b, IO_READ | IO_WRITE, false)) {   /* 10/18/26 (B50): given up: an I/O error (no -1: not intr) */
-                unlock();
-                return NULL;
-            }
-            continue;
-        }
+        if(b && (b->loading || b->writing)) { sleep_unlocked(); continue; }   /* being read, or (B7) written: wait for it */
         if(b) {
             hits++;
             b->refs++;
@@ -950,7 +863,6 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
         return b;
     }
     b->loading = true;
-    b->overdue = false;                         /* (B50: a new I/O) */
     ra[n++] = b;
     scan = oldest;
     while(n < ahead && n < BCACHE_RUN && lba + n < dev->nblocks && !find(dev, lba + n)) {   /* read-ahead */
@@ -964,7 +876,6 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
         v->dev = dev;
         v->lba = lba + n;
         v->loading = true;
-        v->overdue = false;
         hash_in(v);
         lru_newest(v);
         ra[n++] = v;
@@ -1281,7 +1192,6 @@ again:
     order = b->order;
     memcpy(c->data, b->data, 512);
     b->copying = true;
-    b->overdue = false;                         /* (B50: a new I/O) */
     b->next_seq = 0;
     rec.b = b;                                  /* B34: under way, spoiled by what it needs leaving the lists */
     rec.at = at;
@@ -1304,8 +1214,7 @@ again:
                 }
                 if(w == COPY_ASIDE) r = COPY_AGAIN;              /* B33 */
                 else if(w == BDEV_EGONE) r = w;
-                else if(w == RUN_BLOCKED && bsleep(finishing() ? IO_LOOK_MS : 0, true)) r = -1;   /* (a hold that came
-                                                                   back: look again; B39; B50: with a bound) */
+                else if(w == RUN_BLOCKED && bsleep(0, true)) r = -1;   /* (a hold that came back: look again; B39) */
                 else if(w != 0 && d->dev == dev && d->valid && d->dirty && d->first_seq < at) r = -1;
             }
         }
@@ -1367,20 +1276,6 @@ done:
    0 only when every block that was dirty when the call began reached the device. */
 int bsync(struct bdev *dev) {
     return bsync_order(dev, BORDER_MAX);
-}
-
-/* (bcache_lock held) 10/18/26 (audit B50): bsync_order()'s last look found an owed block under another task's write
-   or copy: wait for the first that is not given up (overdue) to end (io_wait(): cut short by a kill or Ctrl+C, B39,
-   or in a step that must finish ended by the bound). 0: look again; 1: the blocks under way are given up, or this
-   wait gave up: they stay unwritten; -1: cut short. Out of line, so that the look itself stays as it was */
-static __attribute__((noinline)) int owed_busy(const struct bdev *dev, u8 top, u64 start) {
-    int i;
-    for(i = 0; i < BCACHE_BLOCKS; i++) {
-        struct buf *b = &bufs[i];
-        if(owed(b, dev, top, start) && (b->writing || b->copying) && !b->overdue)
-            return io_wait(b, IO_WRITE | IO_COPY, true);
-    }
-    return 1;
 }
 
 /* 10/16/26 (B7): bsync() up to an order: the dirty blocks of orders 0 .. top (an order point that
@@ -1447,8 +1342,7 @@ int bsync_order(struct bdev *dev, u8 top) {
             else left = true;
         }
         if(!busy) break;
-        if(owed_busy(dev, top, start)) {        /* 10/17/26 (B39): (another task's copy may take long) cut short;
-                                                   10/18/26 (B50): or only blocks given up (overdue) are under way */
+        if(bsleep(0, true)) {                   /* 10/17/26 (B39): (another task's copy may take long) cut short */
             left = true;
             break;
         }
@@ -1680,11 +1574,9 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         for(i = 0; i < n; i++) {                /* none of them in the middle of a read, a write or a copy */
             struct buf *p = find(dev, lba + i);
             if(p && (p->loading || p->writing || p->copying)) {
-                int w = io_wait(p, IO_READ | IO_WRITE | IO_COPY, true);   /* 10/17/26 (B39): (another task's copy may
-                                                                   take long) cut short; 10/18/26 (B50): or given up */
-                if(w) {
+                if(bsleep(0, true)) {           /* 10/17/26 (B39): (another task's copy may take long) cut short */
                     mutex_unlock(&bcache_lock);
-                    return w > 0 ? BDEV_EIO : BCACHE_EINTR;   /* (B49: the caller says EINTR, not EIO: nothing was refused) */
+                    return BCACHE_EINTR;        /* (B49: the caller says EINTR, not EIO: nothing was refused) */
                 }
                 i = (u32)-1;
             }
@@ -1692,7 +1584,7 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         for(i = 0; i < n; i++) {                /* then all of them taken at once (nothing waits in between) */
             struct buf *p = find(dev, lba + i);
             copy[i] = p && p->valid ? p : NULL;
-            if(copy[i]) { copy[i]->writing = true; copy[i]->overdue = false; }   /* (B50: a new I/O) */
+            if(copy[i]) copy[i]->writing = true;
         }
         inflight++;
         inside();                               /* 10/17/26 (B39): the run's cached copies marked writing meanwhile */

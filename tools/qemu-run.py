@@ -119,6 +119,9 @@ SMOKE = [
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
+    # 10/18/26 (audit B56): a program cannot fault inside a file system, and crashfs does not give it a way (it stops
+    # the system: its own boot below, in the kernel shell)
+    ('crashfs', ['crashfs stops the system: only in the kernel shell (shell=kernel), not from a program']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     # 10/7/26 (the Wi-Fi report): the ids with the subsystem, command, interrupt; one device in full, with its bytes
@@ -451,6 +454,13 @@ SMOKE = [
                                                           ('crashgp', ['General Protection Fault', 'init: restarted the shell',
                                                                        surf_prompt(b'SURF', b'#')])],
      ['recovery console']),
+    # 10/18/26 (audit B56): a fault in kernel mode while the task is inside a file system (crashfs: as in a device
+    # request) stops the system, saying why: nothing could give back what the task held there. The boot ends halted
+    # ('halts': its wipeout is what is checked, not the absence of one)
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')],
+     [('crashfs', ['Kernel Wipeout: Page Fault', 'inside a file system, the block cache or a device request',
+                   re.compile(rb'SYSTEM HALTED')])],
+     ['init: restarted the shell'], 'halts'),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
     ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh exited at once (status 42); restarted the shell',
@@ -2904,7 +2914,8 @@ def boot_step(reboot, entry, timeout):
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
     that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'; bytes are sent
     as they are, with no newline and no prompt waited for after them (Ctrl+C, a command that runs on)."""
-    cmd, expects, follow, absent = entry
+    cmd, expects, follow, absent = entry[:4]
+    halts = len(entry) > 4 and entry[4] == 'halts'         # 10/18/26 (B56): a boot that ends in a wipeout on purpose
     try:
         q2 = reboot(cmd.split()[1:])
     except Exception as e:
@@ -2934,7 +2945,7 @@ def boot_step(reboot, entry, timeout):
             ok = ok and q2.expect(PROMPT, 10)
         q2.pump(0.5)
         text = q2.text()
-        ok = ok and not any(a in text for a in absent) and not any(bad in text for bad in BAD) and q2.alive()
+        ok = ok and not any(a in text for a in absent) and (halts or (not any(bad in text for bad in BAD) and q2.alive()))
         if not ok:
             print(f'\n---- {cmd}: serial transcript (tail) ----\n' + tail(text, 25))
     finally:

@@ -1333,3 +1333,259 @@ them (section 49).
   above. The padded trees were built from git archive b482ff1 with the pads as eight one-line C files (a top-level
   asm of nops) linked after the objects they stand behind, a word in struct bdev and four bytes of small data, in
   this session's scratch space, not kept.
+
+======================================================================================================================
+Round fs-fix-9 (10/18/26): an independent review of B50-B55 (3ce9600), and its fixes (audit B56-B60)
+date:   2026-10-18 (local)
+review: by another agent, read-only, on 3ce9600: scenarios A-D (fsrev9-tests/rev9.c: the real fs/ run by host threads,
+        each a task of its own to the cache, the kernel's waits and timers made real (round fs-fix-7's stand-ins), the
+        umount fs/vfs.c's steps once the mount is off the list; B50's bound lowered to 1.5 s and a slow request of 6 s,
+        standing for a USB storage command of 5 + 20 + 20 s or an SD write of 128 blocks at 500 ms against the 30 s
+        bound: A a slow write of the root directory block, then mkfs; B a fast card's write queued on the bounce buffer
+        behind another card's slow read; C a mount while the given-up write is under way; D a writer that never comes
+        back), against 3ce9600's fs/ and b482ff1's; its umount campaign (rev9.c U: random umounts with a sync and a
+        reader under way, requests that end before and after the bound, Ctrl+C, kills and hangups: 48 of 340 umounts on
+        3ce9600 gave up a request still under way, 47 of them with a write stored on the card after the umount had
+        returned, none of 120 on b482ff1); a step of the kernel's self test (selftest-review9.patch: mkfs after the
+        umount gave the root directory block up: the old directory landed on the new volume, "a.txt 1, b.txt 1"); cp's
+        loops (fork B: cpcheck.c, S1-S5) and the kill rules (fork B: killmodel.c, V1-V3, X1) in host models; a FAT
+        sector given up and landing after mkfs (fork D: l1.c); round fs-fix-7's threaded campaign (conc7.c) on
+        3ce9600: 138 runs, 1,571,462 operations, 53,371 kills and 52,286 Ctrl+Cs, 994.5 million exact tag checks,
+        clean; and reading. Its findings (one major, four minor, cosmetics) are docs/CODE-AUDIT.md's B56-B60.
+before: 3ce9600 (round fs-fix-8 merged): its fs/, include/, lib/ and tests/host built with this round's host tests
+        (tests/host/test_fatfs.c's B56 scenario, tests/host/test_cp.c with 3ce9600's cmd_cp() as it is). The kernel's
+        self test before: this round's shell/selftest.c in a whole 3ce9600 tree, round fs-fix-8's bound lowered to 2 s
+        in the umount step's window (as the review did) and put back after it, TF_SYSTEM given there as a plain number
+        (3ce9600 has no such flag: such a thread is an ordinary one there); volume surfos-sc-fs9-base
+after:  sc/fs-fix-9 (from surfcpu 3ce9600): 5fcc5b7 bcache (B50 taken out again, B56), 830776b the fault policy and
+        crashfs (B56), 403deaa the busy rules: requests, mounts, eject (B56, B58), b601ead kill and the kernel's own
+        threads (B59), 087a02e cp for both shells, fsbench (B60), f64a22f the self test, a167df8 the host test, then
+        49e0f0e (a mount and eject counted inside while they hold a device's count: without it a kill that had waited
+        could come between their requests and leave the count behind, B58) and ed0c06e (the self test's checks of
+        that); then docs and this evidence. The kernel's code is final at ed0c06e; the devenv runs are of a clean
+        checkout of it, the host runs of a167df8's fs/, include/, lib/ and tests/host (the same files at ed0c06e)
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32, tests/host/pager_shim), and the
+        same with -fsanitize=address,undefined; tests/host/test_mkfs.c on the Mac with four stand-ins for the Linux
+        calls it declares by hand; QEMU on the Mac for the self test's transcripts (tools/qemu-run.py's boot, as make
+        test boots); the devenv container (gcc -m32) for the builds, make test-all and make unittest
+
+== 56. The review's own materials on this tree (the clean checkout of a167df8, built as the review built them)
+  rev9.c A, B, C (fs/ of a167df8; its SET_BOUND() sets a variable of its own: there is no bound): each "ok". A: the
+          umount returned after 6,003 ms, when the slow write had ended, nothing given up, nothing said; mkfs after it,
+          and the new volume names no old file. B: the umount 6,004 ms, waiting for the fast card's write behind the
+          other card's read; the next mount clean with a and b. C: 6,005 ms; no mount while the write was under way
+          (the umount had not returned); the next mount clean with a and b. The same under the sanitizers, no report.
+          On 3ce9600 (the review's run): each FAIL, the umount returning after 2 s with the request still under way.
+  rev9.c D: a writer that never comes back: the umount waits for it, and the harness's 60 s watchdog ends the run
+          ("WATCHDOG: no operation finished for 60 s: a wait that never ends", exit 3), as on b482ff1. Such a request is
+          one no task leaves behind any more: a fault inside the cache or a driver stops the system (B56, section 57);
+          a request ends within its driver's timeouts
+  rev9.c U, the umount campaign, with the review's seeds: seed 1000 (160 umounts), 2000 with the slow request a one-
+          block one (USINGLE, 120), 3000 (120), and 4000 USINGLE under the sanitizers (100): 500 umounts, none gave
+          anything up or said the volume unclean, no write stored on the card after an umount returned, 34 with a
+          request alive past the review's bound under way at the umount (waited for), 0 BAD, no sanitizer report. The
+          review's runs of seeds 2000, 3000 and 4000 on 3ce9600: 17, 17 and 14 umounts that gave up, 16, 17 and 14 of
+          them with a write stored after the umount returned
+  selftest-review9.patch, its step on this tree (test_rv9_late_landing as the review wrote it, added to the clean
+          checkout of ed0c06e's shell/selftest.c, its ko_* variables declared there and its setting of
+          bcache_overdue_ms a no-op: there is no bound; volume surfos-sc-fs9-rv9, 08:44-08:46): "REVIEW9: stuck write
+          at block 65 (root 65, hit 1); umount done 1 r 0, 0 given up; mkfs -999 ...; the root block changed on the
+          card after mkfs 1; new volume mount -1, a.txt 0, b.txt 0", "ok review 9: a block the umount gave up does not
+          reach the card after mkfs said it made a new volume", SELFTEST PASS: the umount had not returned within the
+          step's 15 s window (the write held), so mkfs was never reached (-999), and once the write was let go the
+          umount finished with nothing given up (the root block's change is that write landing on the old volume,
+          which nothing had formatted). On 3ce9600 (the review's run): "umount done 1 r 0, 1 given up; mkfs 0; the
+          root block changed on the card after mkfs 1; new volume mount 0, a.txt 1, b.txt 1": FAIL
+  fork D, l1.c (TEST_FATFS_C this tree's tests/host/test_fatfs.c): "L1: 1 checks, 0 failures": the umount still waits
+          for the FAT sector's write while it is under way, mkfs is not reached (99), and once the request ends the new
+          volume's FAT has 40 clusters used, 40 reached from the root (3ce9600: the umount returned after 600 looks with
+          2 blocks given up, mkfs 0, and the old sector landed: 40 used, 0 reached)
+  fork B, cpcheck.c with this round's cmd_cp() (shell/cp.c as it is; task_interrupt_absorbed() clears its interrupt):
+          S1 "cp: write: No space left on device" (1000 bytes on the card); S1b "cut short after 1000 bytes" (3ce9600:
+          after 0); S2 "cp: write: Input/output error"; S2b the same; S3 "4096 bytes copied", status 0, the Ctrl+C taken
+          back; S4 "8192 bytes copied; interrupted while they were written out (sync writes the rest)" (3ce9600: "close:
+          Input/output error"); S5 "cut short after 5632 bytes" (5632 on the card)
+  fork B, killmodel.c with this round's kill_task(), kill_hangup(), kill_escalate(), task_call_enter() and
+          task_call_leave() (the struct given a flags word, never set there): seeds 11-13 (20,000 runs each) and 21-24
+          (50,000 each) give the review's 3ce9600 numbers to the run: V1 0, V2 0, V3 0, X1 0, the longest wait after a
+          plain kill in a call 2,006-2,018 ms. The only difference from 3ce9600 is kill_task()'s first line (TF_SYSTEM)
+  conc7.c, round fs-fix-7's threaded campaign (with its conc7_host.c and conc7_shim/, built against this tree's fs/,
+          the review's seven settings by its kill modes 1-3, 4 s each, as the review ran it on 3ce9600 with new seeds
+          and one run at a time): plain (9901-9903) 63 runs, with its escalation modelled at 20 ms (9911-9912) 42,
+          perturbed 7 with kills every 1,500 us (9931) 21, sanitized (9921, four settings) 12: 138 runs, exit 0 each,
+          "CONC: ok" each, 1,653,280 operations, 55,028 kills (55,027 processes ended by one: a second kill came to a
+          task already killed) and 53,602 Ctrl+Cs, every killed process's files written out at its end (no write-back
+          failed); 985.0 million exact tag checks, no violation; the final syncs 0, no dirty block left, oracle 0,
+          census 0 lost, no fs_hold or critical-section count left over, no kill at once (27 put off), no watchdog,
+          no sanitizer report. (The review's 138 runs on 3ce9600: 1,571,462 operations, 53,371 kills, 52,286 Ctrl+Cs,
+          994.5 million exact tag checks, clean.) These host runs, and those of sections 57 and 62, built a167df8's
+          fs/bcache.c, fs/fat.c, fs/fat_mkfs.c and shell/cp.c, which ed0c06e leaves as they are
+
+== 57. B56: no bound; a fault inside stops the system; a request not ended keeps its device busy
+  tests/host/test_fatfs.c, B56 (the review's A-D in a form one task can run: the umount runs inside another task's
+  device write of b's block, as another task would run then, and the clock moves 1 s at each of its looks):
+    before (3ce9600's fs/): "the umount returned after 29 looks (30 s of the clock), having given up 2 changed blocks";
+      the kernel log: "bcache: b56 block 105: under I/O for 30 s: given up, with the device's other blocks under I/O",
+      "write errors, the volume stays marked as not cleanly unmounted"; the next mount says the volume was not
+      unmounted cleanly, and b is not on it: the three checks FAIL
+    after: "the umount STILL WAITED after 20000 looks (20000 s of the clock), having given up 0 changed blocks";
+      once the write has ended the umount (run again: the first was stopped in its sync, before it unmounted
+      anything) gives fs sync 0, bsync 0, 0 given up, nothing said, the clean bit 1; the device owes 0 blocks; the
+      next mount works with a and b: the three checks pass (test_fatfs: 347 checks, 0 failures)
+  The kernel's self test (sections 61 and 62): the umount step (test_umount_waits) and the request step
+    (test_request_busy):
+    before (3ce9600, the bound lowered to 2 s in the window): "bcache: stick2 block 65: under I/O for 2 s: given up",
+      "(the umount ended BEFORE the held write did, 1 changed blocks given up; meanwhile mount -16, mkfs -13)": the
+      device was refused in the umount's window (B51), but the umount returned with the root directory's write under
+      way, and the volume mkfs made then had the old files on it (FAIL, FAIL; the window's check passes). A raw write
+      held 1 s: "mount 0" (the stick mounted under it), mkfs refused only for that mount (FAIL; the control passes)
+    after: "(the umount ended after the held write did, 0 changed blocks given up; meanwhile mount -16, mkfs -13)", the
+      volume clean, the new volume with no old file; the raw write: "mount -16, mkfs -13 "a request to it, its disk or
+      one of its partitions has not ended yet (try again once it has)", fdisk's rule the same"; once it ended the
+      stick mounts, and no request or mount is left counted on it
+  The fault policy (kernel/panic.c, arch/riscv32/trap.c: trap_fatal()): a fault in kernel mode while the task is inside
+    a file system, the cache or a device request (task_in_fs(): fs_hold, or the cache's lock or its bounce buffer held)
+    is a kernel wipeout. The smoke test boots the kernel shell (shell=kernel) and runs crashfs (fs_enter(), a store to
+    address 0): "Kernel Wipeout: Page Fault at 0x00000000: access to unmapped page, write", "in 'Shell 0' (pid 3) inside
+    a file system, the block cache or a device request: what it held there (a volume's lock, the cache's, a driver's,
+    blocks under a device's I/O) cannot be given back", the registers, the backtrace, "SYSTEM HALTED" (the step expects
+    the halt and passes at -O0 and -O2, x86.txt round fs-fix-9; the lines above from a run of the -O0 kernel by hand);
+    from the user shell crashfs is refused ("crashfs stops the system: only in the kernel shell (shell=kernel), not
+    from a program"). boards/qemu_virt/test_os.py's fsfault boot does the same on riscv32: "store access fault (mcause
+    7, mtval 0x0)" with the same lines (section 63). 3ce9600 has no crashfs; crashnull, the same store outside a file
+    system, killed the shell there and does here
+  Why not fail the device instead (the review's suggestion), and whether a program can get there: docs/CODE-AUDIT.md
+    B56. In short: the cache keeps no owner for a block's I/O, and failing the device gives back none of the locks the
+    task held (a volume's, the cache's, the bounce buffer's, a driver's); on x86 sys_read(), sys_write(), sys_stat(),
+    sys_readdir(), sys_getcwd(), sys_statfs(), sys_kcmd() and the path calls check every pointer with uvm_check() or
+    uvm_check_str() (kernel/syscall.c) before a file system is reached, the pages stay mapped through the call (one
+    thread a process), process.c's loader checks a segment's range and maps it before vfs_read() fills it, and SYS_kcmd
+    copies its arguments; riscv32 has no user mode
+  The drivers' worst cases for one of the cache's requests (BCACHE_RUN, 128 blocks, 64 KiB), from their timeouts:
+    USB storage (driver/usb/msc.c): msc_rw() sends 32 KiB commands (MSC_CHUNK), two for such a request; bot_command():
+      the command block 5 s, the data CMD_TIMEOUT 20 s (a stall's recovery 5 s), the status 20 s, tried twice with a
+      5 s recovery between; scsi() tries a command up to 3 times while the device answers a unit attention, each
+      time with a REQUEST SENSE of 5 s stages; a failure costs a reset (usb_control()'s 1 s, two endpoint resets). A
+      device that answers each stage just inside its timeout: 5 + 25 + 45 = 75 s a try, with its REQUEST SENSE
+      (5 + 10 + 15 s) 105 s, 3 tries 315 s (about 5 1/4 minutes) a command, 10 1/2 minutes the request; a failing
+      command ends within about 80 s (75 s and a reset). A flush (SYNCHRONIZE CACHE) is one command with no data
+      stage. The device lock (m->lock) is also taken by the hub thread's poll of a removable unit (TEST UNIT READY:
+      5 s stages, 20 s a try, 50 s with its sense, 3 tries 2 1/2 minutes at most)
+    ATA (driver/ata.c, polled PIO): one command of up to 256 sectors: BSY 1 s before it, each sector's DRQ 2 s, a
+      write's cache flush 5 s, no retries: 1 + 128 x 2 + 5 = 262 s for such a request, a failing one ending at its
+      first timeout; behind the channel lock (ch->lock) another request's
+    SD (boards/arty_a7/sdcard.c, SurfCPU's card and QEMU's sdsim): busy at most T_BUSY_MS 500 ms before a command and
+      after each written block and the stop token, a read block's token T_TOKEN_MS 100 ms, CRC rejections retried up
+      to CRC_TRIES 3 times in all, each try going on from the rejected block: a write about 64 + 4 = 68 s, a read about
+      14 s; a card without multi-block commands (sd->single) one command a block, about 1 s each: about 2 minutes;
+      sdblk_flush() sends nothing; behind the card lock (s->lock) another request or the card watch's start-up
+      (sd_init(): T_INIT_MS 2 s and its registers)
+    A request queued behind its driver's lock or the cache's bounce buffer waits for those ahead of it, each bounded
+    the same way; the umount waits for the requests it owes blocks to, however long that is
+
+== 58. B57: nothing stays owed
+  No block is given up as overdue any more, and no task dies inside the cache (B56), so there is no device whose blocks
+  stay owed: a request ends, its blocks are written or refused as any other, and an umount gives up only what its device
+  refused (B10, as before B50), a vanished device's blocks going as they always did. test_fatfs.c's B56 scenario checks
+  the device's account after a write that took hours (0 owed) and the next mount (a and b there): 3ce9600 fails it (b
+  given up although the card took every write). The review's D on 3ce9600 left 8 dirty blocks after the umount's
+  binvalidate() and the card unmountable (I/O errors) until reboot; on this tree D cannot happen (section 56)
+
+== 59. B58: eject takes its disk first
+  The self test's step (test_eject_writeout_mount): an 8 MB RAM disk, stick7, with two FAT16 partitions (fdisk's own
+  plan and commit: stick7p1 blocks 2048-8191, stick7p2 8192-16383), the first mounted with a file; eject runs in a
+  kernel command, and its flush at the end of the write-out is held while the second partition is mounted:
+    before (3ce9600): "(a mount of stick7p2 during eject's write-out: 0; eject 0, the partition still mounted after
+      it)": "/selftest-x1 unmounted", "stick7: safe to remove" with stick7p2 mounted, its blocks synced and dropped
+      under it (FAIL)
+    after: "(a mount of stick7p2 during eject's write-out: -16; eject 0; counted 2 deep in its flush; the disk's counts
+      after it: unmounting 0, mounting 0, requests 0)", then "/selftest-x1 unmounted", "stick7: safe to remove". The
+      second check, that eject is counted inside while it holds the disk (its own count and the flush request's: 2;
+      3ce9600 1, eject not holding the disk there) and lets go at its end, fails on 3ce9600 as well. A mount holds its
+      count counted inside the same way (49e0f0e); the request step checks that no mount count is left behind
+  Round fs-fix-8's step for B51 (a device whose umount still writes) passes on both with eject's message, which now
+  says which: "eject: stick3 or a partition of it is being unmounted: try again once that has finished"
+
+== 60. B59: kill and the kernel's own threads
+  The self test's step (test_kill_system): a thread of the test's own marked TF_SYSTEM holds a mutex; `kill <pid>` is
+  typed as the shell runs it:
+    before (3ce9600): "(kill said: killing 'selftest-sys' (pid 29))": killed at once with its lock held (FAIL)
+    after: "(kill said: 'selftest-sys' (pid 29) is one of the kernel's own threads (a driver needs it): not killed)";
+      the thread lets go of its lock and ends with status 0
+  boards/qemu_virt/test_os.py's sdsim boot: `kill` of the card watch (sdwatch) is refused and it lives on (section
+  63). The threads marked: usb (driver/usb/usb.c), sdwatch (boards/arty_a7/sdblk.c), net (net/netbuf.c), wlan
+  (net/wlan/wlan.c), iwl (driver/wifi/iwl.c), wlansim (driver/wifi/wlansim.c), touchpad (driver/touchpad.c); riscv32's
+  heartbeat holds nothing and stays killable (test_os.py kills it, as before)
+
+== 61. B60 and the cosmetic ones
+  tests/host/test_cp.c (make unittest): the real cmd_cp() (shell/cp.c, built with its printf() and strerror() renamed)
+  against a file layer the test scripts, 13 cases: after 13 of 13; 3ce9600's cmd_cp() (shell/main.c's, as it is) fails
+  5: S1 "cut short after 0 bytes" for a full disk, S1b N 0 with 1000 written, S2 "cut short" for a refused write, S3 a
+  complete copy called incomplete, S4 "close: I/O error" for a write-out Ctrl+C cut short. The self test's B53 step (cp
+  and fsbench interrupted in a write) passes on both
+  The self test's cosmetic changes: the umount step checks that mount and mkfs are refused in the umount's window
+  (section 57); the B54 steps record that the Ctrl+C they send has arrived (TI_INT seen on the task) and check it; the
+  fdisk step (B52) checks that every request the commit makes while it holds its lock runs counted twice: "each of its
+  15 requests at least 2" on both trees (B52 is in 3ce9600). On b482ff1 the commit counted nothing and each request
+  once (round fs-fix-8 measured its reads after the flush at 1 deep, section 49), so the check fails there whatever the
+  timing, where the old check (the next fdisk not refused) passed there by timing
+  The texts that called B50's 30 s longer than any driver's timeout: docs/CODE-AUDIT.md B50 (corrected in place, with a
+  note), CARD.md section 8 and PORTING-RISCV.md section 6 (rewritten: they wait as long as the driver takes); the
+  comments went with fs/bcache.c's B50 code
+
+== 62. The kernel's self test before and after, the x86 suites, the sanitizers and the threaded test
+  The self test's transcripts (QEMU on the Mac, booted as make test boots, x86 at -O0; volumes surfos-sc-fs9 and
+  surfos-sc-fs9-base, 07:11-07:14): this tree (ed0c06e's code) SELFTEST PASS, 146 checks ok; 3ce9600 with this round's
+  self test SELFTEST FAIL, 140 ok and 6 failing, the checks sections 57, 59 and 60 name (the umount step's first and
+  third, the request step's first, the eject step's two, the kill step), every check of the earlier rounds passing on
+  both. test-all's self tests at -O0 and -O2 and test-usb's three at each level say SELFTEST PASS (x86.txt round
+  fs-fix-9, sections 1 and 3)
+  make test-all, make unittest and make test-usb at ed0c06e (surfcpu/docs/evidence/os/x86.txt, round fs-fix-9): the
+  smoke test 313 of 313 at -O0 (its new steps: crashfs refused from the user shell, and crashfs in the kernel shell's
+  own boot stopping the system), and at -O2 313 of 313 in a second run (the first had one failure, in the simulated
+  Wi-Fi boot's WPA2 step, under load: x86.txt); make unittest exit 0 at -O0 (FATFS 347, FATFUZZ 4 runs, CONC ok 4
+  times, CONC umount ok, MKFS 117, CP 13) and the same at -O2 (its exit 2 the two tests/test_devenv.py tests that fail
+  with O=2 in their environment, as in the rounds before); test-usb 315 of 315 at -O0 and -O2, its three self tests
+  passing at each level
+  AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the kernel
+  files and the tests alike, on the Mac): test_fatfs 347 checks, 0 failures; test_cp 13 checks, 0 failures; test_mkfs
+  96 checks (no fsck.fat or mtools on the Mac), 0 failures; test_fatfuzz's set, 4 runs, 0 with failures; test_fatconc
+  in make unittest's four settings and its umount setting, each "CONC: ok"; the review's rev9.c A, B, C and its umount
+  campaign's seed 4000 (section 56); conc7.c's sanitized runs (section 56): no report from any
+  The threaded test: make unittest's settings (above, and in the devenv, x86.txt section 2); the review's campaign on
+  this tree: section 56
+  The randomized test: make unittest's set, 4 runs, 0 with failures (and under the sanitizers, above)
+
+== 63. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost
+  make -C surfcpu check (08:09-08:40, the clean checkout of ed0c06e, its build tree new): "check: all automated SurfCPU
+  checks passed". Among them: boards/qemu_virt/test_os.py 134 of 134 at -O2 and at -O0 (132 before; the two new: the
+  fsfault boot, crashfs in the kernel shell: "Kernel Wipeout: store access fault (mcause 7, mtval 0x0)", "in 'Shell
+  0' (pid 3) inside a file system, the block cache or a device request: what it held there ... cannot be given back",
+  the backtrace through cmd_crashfs, "SYSTEM HALTED", and init not restarting the shell; and the sdsim boot's kill of
+  the card watch: "'sdwatch' (pid 3) is one of the kernel's own threads (a driver needs it): not killed", sdwatch in
+  ps afterwards; the heartbeat still killed and collected, its eject, umount, pull and refused-write scenarios as
+  they were), test_arty 204 of 204, test_sd_iomodel 164 of 164, test-os-surfemu 18 of 18; on the RTL system
+  (surfsim, with the io track's card model) test-os-persist 17 of 17, test-os-faults 25 of 25, test-os-kit 22 of 22,
+  test-soc-system-boot 21 of 21. The riscv32 kernels build with the one warning of the rounds before (task_exit()),
+  isacheck clean (arty_a7: 57,447 instructions, all rv32im_zicsr_zifencei)
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against 3ce9600's (its tree a git worktree,
+  its kernel built the same way in the toolchain container, run with this check's surfsim and SurfBoot ROM: this
+  round changes neither; the persist and fault tests run by their scripts, 08:40-08:44):
+                                         3ce9600          after (ed0c06e)  against it
+    test-os-persist, the write run       279,574,961      279,371,510      -0.073 %
+    test-os-persist, the reboot run      225,939,595      225,780,754      -0.070 %
+    test-os-faults, the refusing card    314,556,820      314,362,558      -0.062 %
+    test-os-faults, the full card        203,948,138      203,939,023      -0.004 %
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 1,420 bytes
+  larger (404,296 -> 405,716 bytes: +180,800 cycles, the B50 code out and the busy rules, crashfs and the fault rule's
+  words in); every command within -0.3 % and +0.4 % (cp -0.24 %, cp to a full card -0.30 %, mv -0.17 %, eject
+  -0.11 % and +0.40 %), a few short steps within 1 % (the first prompt 21,594 cycles sooner, -0.74 %; a prompt after
+  the refusing card's write half written -0.94 %), but for the pairs of lines in another order seen in every round
+  (cd and mkdir: one 1.9 million cycles later and the next as much sooner; in the reboot run cd, ls and crc32 the
+  same) and, in the refusing card's run, the card taken out and put back (-0.20 and +0.76 million cycles, and the
+  write half written after it -0.87 million: the card-detect task looks every 200 ms, 5 million cycles, and met the
+  removal at another look). Without the package's load, the write run takes 384,234 cycles fewer than 3ce9600's
+  (-0.17 % of the rest).
+  No padded base was needed: this round adds no code to the cache's paths (it takes B50's out) and nothing that runs
+  per block; a device request does an increment and a decrement with interrupts off around the driver's call (the
+  card's requests are each thousands of cycles of SPI)

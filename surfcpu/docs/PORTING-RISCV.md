@@ -410,10 +410,14 @@ a killed `mkfs` left `sdblk.c`'s lock held and the card hung, and `mkfs` stops b
 and says how far it got; B48: a kernel thread killed in there that enters a call gets the call's 2 s;
 B49: a long read or write stops before its next piece, a block through the cache, up to 64 KiB
 straight; B46: but `umount`, and eject's unmount, are not cut short at all: once begun they finish,
-and give nothing up that the card takes; B50: but for another task's write that has not ended after
-30 s, a task a fault killed inside the cache or a driver that hangs, given up as for a card that
-stopped answering; B51: and the card is busy for mount, eject and `sdmode` until the umount has
-finished; B54: a finished umount's or eject's status is its own, not Ctrl+C's 130). Nothing
+and give nothing up that the card takes; B56: another task's write they wait for as long as the
+card's driver takes, at most 500 ms of busy before a command and after each block (about 68 s for a
+64 KiB write), and a fault inside the cache or a device request stops the system (for a while, B50,
+such a write was given up after 30 s and could land on the card after the umount); B51: and the card
+is busy for mount, eject and `sdmode` until the umount has finished, B56 and B58: and while a request
+to it has not ended or a mount of it is under way, and from eject's first step; B54: a finished
+umount's or eject's status is its own, not Ctrl+C's 130; B59: the card watch, `sdwatch`, is not
+killed). Nothing
 hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
@@ -651,6 +655,17 @@ in the cache's calls themselves: SurfCPU fetches every instruction from DDR, and
 saved in each call and an instruction more for each of the 1024 blocks in a sync's last look, each
 card command cost 0.5-1.8 % more against that padded base; the waits are out of line now
 (bcache-review.txt section 55).
+
+Since audit B56-B60 (counted the same way, before = 3ce9600): every workload above sends the same
+requests and blocks. The cache's waits are b482ff1's again (B50's bound and its out-of-line waits
+gone); a device request counts itself on its device (an increment and a decrement with interrupts off,
+around the driver's call); a mount and an eject count themselves inside and take their device's count
+under mount_lock; kill looks at one more flag. On SurfCPU (3ce9600's kernel against this one, the same
+simulator and ROM): test-os-persist's write run 0.07 % fewer cycles, its reboot run 0.07 % fewer,
+test-os-faults' refusing card 0.06 % fewer and its full card 0.004 % fewer; SurfBoot loads a package
+1.4 KB larger (+0.18 million cycles), and each command is within -0.3 % and +0.4 % (cp 0.24 % fewer)
+but for the pairs of lines in another order and the card-detect task's looks seen in every round
+(bcache-review.txt section 63).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by

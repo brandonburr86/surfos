@@ -95,7 +95,11 @@ struct bdev {
     u_int bc_aside;             /* B16: of its dirty blocks, those a file system set aside */
     const void *bc_aside_by;    /* B26: the task whose operation set them aside (B13's tally moved into each sync) */
     u_int unmounting;           /* 10/18/26 (audit B51): umounts of it (and ejects of its disk) under way: it, its disk
-                                   and its partitions are busy until they end (vfs_bdev_busy(), fs/vfs.c) */
+                                   and its partitions are busy until they end (vfs_bdev_busy(), fs/vfs.c). (B58) An eject
+                                   counts its disk from its first step to its last */
+    u_int mounting;             /* 10/18/26 (audit B58): mounts of it under way (vfs_mount_flags(): busy the same way) */
+    u_int requests;             /* 10/18/26 (audit B56): requests issued on it that have not ended (bdev_read(),
+                                   bdev_write(), bdev_flush()): it, its disk and its partitions are busy meanwhile */
     struct bdev *next;
 };
 

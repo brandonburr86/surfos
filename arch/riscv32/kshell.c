@@ -195,6 +195,10 @@ static int cmd_kill(int argc, char **argv) {
     t = task_find(pid);
     if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
     if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
+    if(t->flags & TF_SYSTEM) {          /* 10/18/26 (audit B59): killed, it left its driver's lock held for good */
+        printf("    '%s' (pid %lu) is one of the kernel's own threads (a driver needs it): not killed\n", t->name, pid);
+        return CMD_FAIL;
+    }
     printf("    killing '%s' (pid %lu)\n", t->name, pid);
     kill_task(t);
     return CMD_OK;
@@ -559,49 +563,6 @@ static int cmd_append(int argc, char **argv) {
     return r < 0 || c ? CMD_FAIL : CMD_OK;
 }
 
-static int cmd_cp(int argc, char **argv) {
-    struct file *in, *out;
-    char *buf;
-    u_long total = 0;
-    int r, w, cut = 0;
-    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return CMD_USAGE; }
-    r = vfs_open(argv[1], O_RDONLY, &in);
-    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
-    r = vfs_open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, &out);
-    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return CMD_FAIL; }
-    buf = (char *)kalloc(4096);
-    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
-    while((r = vfs_read(in, buf, 4096)) > 0) {
-        w = vfs_write(out, buf, r);
-        if(w >= 0 && w < r && !task_interrupted()) {    /* 10/16/26: short (a full disk): the rest, for why */
-            int w2 = vfs_write(out, buf + w, r - w);
-            w = w2 < 0 ? w2 : w + w2;
-        }
-        if(w != r && (w == -EINTR || task_interrupted())) {   /* 10/18/26 (audit B53): stopped by Ctrl+C or a kill (B39: */
-            if(w > 0) total += w;                       /* before its next piece), not refused: it said "short write" */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-        if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
-        total += r;
-        if(task_interrupted()) {                        /* 10/6/26: a kill, Ctrl+C */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-    }
-    if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
-    kfree(buf);
-    vfs_close(in);
-    w = vfs_close(out);
-    if(w && !cut) printf("    cp: close: %s\n", strerror(w));   /* (B53: cut short, its write-back is cut too: said) */
-    else if(r == 0) printf("    %lu bytes copied\n", total);
-    return r || w ? CMD_FAIL : CMD_OK;
-}
-
 /* crc32 <file>...: the CRC-32 of zlib (BOOT-ABI.md section 3) and the size, to compare a file
    with its copy on another computer (python3 -c 'import zlib...', or crc32 on macOS) */
 static int cmd_crc32(int argc, char **argv) {
@@ -728,6 +689,9 @@ static int cmd_crashmis(int argc, char **argv) {
 
 /* a store to address 0: the boot ROM on SurfCPU (not writable), nothing on QEMU virt */
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; }
+/* 10/18/26 (audit B56): the same store while this task counts as inside a file system (as in a device request): the
+   system stops (arch/riscv32/trap.c), since nothing could give back what a task held there */
+static int cmd_crashfs(int argc, char **argv) { fs_enter(); *(volatile int *)0 = 1; fs_leave(); return CMD_FAIL; }
 
 /* EBREAK: reported and stepped over (as an unused vector on x86) */
 static int cmd_crashint(int argc, char **argv) {
@@ -787,6 +751,7 @@ static const struct command commands[] = {
     { "crashill",  "",          "an illegal instruction in this shell", cmd_crashill },
     { "crashmis",  "",          "a misaligned word load in this shell", cmd_crashmis },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
+    { "crashfs",   "",          "a NULL pointer inside a file system: the system stops", cmd_crashfs },
     { "crashint",  "",          "a breakpoint (ebreak): reported and stepped over", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };

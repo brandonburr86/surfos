@@ -24,7 +24,8 @@ out or the board switched off.
 QEMU's sdsim shares: a card taken out is noticed within half a second (surf_spi has no
 interrupt for card detect: a task looks), its disk goes, and a card put back is sd0 again.
 
-10/18/26 (audit B51): sdmode refuses the card while its umount still writes, and says so.
+10/18/26 (audit B51): sdmode refuses the card while its umount still writes, and says so;
+(B56, B58) and while it is being mounted or a request to it has not ended.
 */
 
 #include <surfos/types.h>
@@ -177,6 +178,7 @@ int arty_cmd_sdinfo(int argc, char **argv) {
 /* sdmode ro|rw: whether the card may be written, while nothing on it is mounted */
 int arty_cmd_sdmode(int argc, char **argv) {
     struct bdev *d = sd.disk;
+    const char *busy;
     bool ro;
     if(!have_spi) { printf("    no SPI block in this bitstream\n"); return CMD_FAIL; }
     if(argc != 2 || (strcmp(argv[1], "ro") && strcmp(argv[1], "rw"))) {
@@ -184,11 +186,12 @@ int arty_cmd_sdmode(int argc, char **argv) {
                d ? d->name : "the card", sd.readonly ? "read-only" : "read-write", d ? d->name : "sd0");
         return CMD_USAGE;
     }
-    if(d && vfs_bdev_unmounting(d)) {           /* 10/18/26 (audit B51): its umount still writes */
-        printf("    %s or a partition of it is being unmounted: try again once that has finished\n", d->name);
+    busy = d ? vfs_bdev_busy_why(d) : NULL;    /* 10/18/26 (audit B51, B56, B58): and why */
+    if(busy && strcmp(busy, VFS_BUSY_MOUNTED)) {
+        printf("    %s or a partition of it is %s: try again once that has finished\n", d->name, busy);
         return CMD_FAIL;
     }
-    if(d && vfs_bdev_busy(d)) { printf("    %s or a partition of it is mounted: umount it first\n", d->name); return CMD_FAIL; }
+    if(busy) { printf("    %s or a partition of it is mounted: umount it first\n", d->name); return CMD_FAIL; }
     ro = !strcmp(argv[1], "ro");
     sdblk_set_readonly(&sd, ro);
     if(d) printf("    %s is now %s; mount %sp1 to use it\n", d->name, ro ? "read-only" : "read-write", d->name);

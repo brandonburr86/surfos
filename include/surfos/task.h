@@ -39,6 +39,10 @@ typedef void (*kthread_fn)(void *arg);
                               a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
+#define TF_SYSTEM   0x80 /* 10/18/26 (audit B59): one of the kernel's own threads (a driver's, the network's): no kill
+                            reaches it (kill_task()). Killed at once outside any call, it left its driver's lock held
+                            (USB storage's in the hub thread's probe and poll, the SD card's in the card watch), and
+                            every later request to that device waited for good, an umount's too */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -211,6 +215,10 @@ static inline void fs_finish_leave(void) {
     if(curTask->fs_finish) curTask->fs_finish--;
     if(curTask->fs_hold) curTask->fs_hold--;
 }
+/* 10/18/26 (audit B56): is t inside a file system, the block cache or a device request (counted, or holding the cache's
+   lock or its bounce buffer's): a fault there stops the system (kernel/panic.c, arch/riscv32/trap.c), since what t
+   holds there (a volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back */
+bool task_in_fs(const surf_task *t);
 surf_task *task_find(u_long pid);
 u_int task_count(void);
 u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */

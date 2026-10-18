@@ -209,5 +209,5 @@ static void watch(void *arg) {
 
 void sdblk_watch(struct sdblk *s) {
     if(s->watching) return;
-    s->watching = kthread_create("sdwatch", watch, s, PL_LOW, TF_DETACHED) != NULL;
+    s->watching = kthread_create("sdwatch", watch, s, PL_LOW, TF_DETACHED | TF_SYSTEM) != NULL;   /* (B59) */
 }

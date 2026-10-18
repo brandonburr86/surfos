@@ -91,16 +91,20 @@ void bdev_part_name(const struct bdev *disk, u_int n, char *out, size_t size) {
 
 int bdev_may_format(struct bdev *d, char *why, size_t size) {
     struct bdev *disk = bdev_disk(d);
-    const char *no = NULL;
+    const char *no = NULL, *busy;
     if(!d || !disk) no = "no such device";
     else if(d->gone || disk->gone) no = "it was unplugged";
     else if(disk->protect) no = disk->protect;
     else if(d->readonly || disk->readonly) no = "it is read-only";
     else if(disk->bus != BDEV_BUS_USB && disk->bus != BDEV_BUS_RAM)
         no = "it is not a USB drive (internal disks are never repartitioned or formatted)";
-    else if(vfs_bdev_unmounting(d))             /* 10/18/26 (audit B51): its umount still writes */
-        no = "it, its disk or one of its partitions is being unmounted (try again once that has finished)";
-    else if(vfs_bdev_busy(d)) no = "it, its disk or one of its partitions is mounted (umount or eject first)";
+    else if((busy = vfs_bdev_busy_why(d)) != NULL)       /* 10/18/26 (audit B51, B56, B58): and why */
+        no = !strcmp(busy, VFS_BUSY_MOUNTED) ? "it, its disk or one of its partitions is mounted (umount or eject first)"
+           : !strcmp(busy, VFS_BUSY_UNMOUNTING) ? "it, its disk or one of its partitions is being unmounted (try again "
+                                                  "once that has finished)"
+           : !strcmp(busy, VFS_BUSY_MOUNTING) ? "it, its disk or one of its partitions is being mounted (try again once "
+                                                "that has finished)"
+           : "a request to it, its disk or one of its partitions has not ended yet (try again once it has)";
     if(no) {
         if(why && size) snprintf(why, size, "%s", no);
         return -1;
@@ -136,6 +140,11 @@ static struct bdev *resolve(struct bdev *d, u32 *lba, u32 count) {
 
 /* 10/17/26 (audit B47): every request runs inside (fs_enter(), above): the cache counts its own as well, and this
    covers the raw ones (mkfs, fdisk, dumps, the self test) */
+/* 10/18/26 (audit B56): a request issued on d and not ended yet keeps d, its disk and its partitions busy
+   (struct bdev's requests: vfs_bdev_busy()): no mount, mkfs or fdisk takes the device while a late write may land */
+static void request_begin(struct bdev *d) { u_long f = irq_save(); d->requests++; irq_restore(f); }
+static void request_end(struct bdev *d) { u_long f = irq_save(); if(d->requests) d->requests--; irq_restore(f); }
+
 int bdev_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     struct bdev *disk = resolve(d, &lba, count);
     int r;
@@ -143,7 +152,9 @@ int bdev_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     if(!disk || !disk->ops || !disk->ops->read) return BDEV_ERANGE;
     if(!count) return 0;
     fs_enter();
+    request_begin(d);
     r = disk->ops->read(disk, lba, count, buf);
+    request_end(d);
     fs_leave();
     if(r == 0) { d->reads += count; if(disk != d) disk->reads += count; }
     return r;
@@ -157,7 +168,9 @@ int bdev_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     if(d->readonly || disk->readonly) return BDEV_EROFS;
     if(!count) return 0;
     fs_enter();
+    request_begin(d);
     r = disk->ops->write(disk, lba, count, buf);
+    request_end(d);
     fs_leave();
     if(r == 0) { d->writes += count; if(disk != d) disk->writes += count; }
     return r;
@@ -169,7 +182,9 @@ int bdev_flush(struct bdev *d) {
     if(!disk || disk->gone) return BDEV_EGONE;
     if(!disk->ops || !disk->ops->flush) return 0;
     fs_enter();
+    request_begin(d);
     r = disk->ops->flush(disk);
+    request_end(d);
     fs_leave();
     return r;
 }
@@ -215,6 +230,7 @@ static bool mounted(const struct bdev *d) {
 /* the first of these that applies; bdev_may_format() is the rule, this only says it */
 static const char *status_of(struct bdev *d) {
     if(d->unmounting || (d->parent && d->parent->unmounting)) return "being unmounted";   /* 10/18/26 (B51) */
+    if(d->mounting) return "being mounted";                                                /* 10/18/26 (B58) */
     if(mounted(d)) return "mounted";
     if(d->protect == bdev_boot_drive) return "boot drive: protected";
     if(d->protect) return "protected";

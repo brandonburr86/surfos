@@ -1045,7 +1045,7 @@ int init_wlansim(void) {
     if(!s) return -1;
     event_init(&s->kick);
     s->tuned = s->authed = s->assoc = -1;
-    if(!kthread_create("wlansim", sim_thread, s, PL_HIGH, TF_KTHREAD | TF_DETACHED)) {
+    if(!kthread_create("wlansim", sim_thread, s, PL_HIGH, TF_KTHREAD | TF_DETACHED | TF_SYSTEM)) {   /* (B59) */
         kfree(s);
         return -1;
     }
