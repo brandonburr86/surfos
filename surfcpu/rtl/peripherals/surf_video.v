@@ -42,9 +42,9 @@ else the graphics pixel). GFX_BASE, GFX_STRIDE and GFX_SCALE cross in their own 
 and are taken at the frame latch with CTRL. The graphics path runs from a second pair of
 counters one pixel clock ahead of hcnt and vcnt: G0 the VRAM byte address (a line address
 kept by adding the stride, plus x or x / 2), G1 vram_addr registered, G2 and G3 surf_vram's
-two pixel-port edges, then the byte lane addresses GPAL, whose registered output in G4 is
-the graphics colour of the pixel in S3. GPAL is a dual-clock block RAM (port A the bus, port
-B the scan-out), RGB332 at configuration and untouched by a reset. FRAME_CRC: every visible
+two pixel-port edges, then the byte lane addresses GPAL, whose output registered in G4 is
+the graphics colour of the pixel in S3. GPAL is distributed RAM written by the bus, in two
+copies (the scan-out's and the bus's), RGB332 at configuration and untouched by a reset. FRAME_CRC: every visible
 pixel's colour as chosen in S3 (what S4 puts on the pins) goes into zlib's CRC-32 as two
 bytes, low first, from pixel (0, 0) to (639, 479); the result and a frame count cross to the
 sys domain together, about 160 pixel clocks before the frame's vertical blanking starts.
@@ -391,24 +391,26 @@ module surf_video #(
 
     generate
         if (HAS_GFX != 0) begin : g_gfx
-            // ---- GPAL: port A the bus (NO_CHANGE, as surf_textram), port B the scan-out
-            reg [11:0] gpal [0:255];
+            // ---- GPAL: distributed RAM in two copies the bus writes together, one read by the
+            // scan-out (registered in pix_clk), one read by the bus. A read in the instant of a
+            // write may see either value. (One memory with both reads maps to RAM128X1D, which
+            // the open flow's LVS check does not know; a RAMB18 failed that check: GPU.md 12.2.)
+            (* ram_style = "distributed" *) reg [11:0] gpal_s [0:255];      // the scan-out's
+            (* ram_style = "distributed" *) reg [11:0] gpal_c [0:255];      // the bus's
             integer gi;
-            initial for (gi = 0; gi < 256; gi = gi + 1)               // RGB332, widened
-                gpal[gi] = {gi[7:5], gi[7], gi[4:2], gi[4], gi[1:0], gi[1:0]};
-            reg [11:0] gpal_a = 12'd0;
-            wire       gpal_en = accept && legal && hit_gpal;
-            always @(posedge clk) begin
-                if (gpal_en) begin
-                    if (s_req_write)
-                        gpal[gpal_idx] <= {s_req_wdata[SURF_VIDEO_GPAL_R_LSB +: 4],
-                                           s_req_wdata[SURF_VIDEO_GPAL_G_LSB +: 4],
-                                           s_req_wdata[SURF_VIDEO_GPAL_B_LSB +: 4]};
-                    else
-                        gpal_a <= gpal[gpal_idx];
-                end
+            initial for (gi = 0; gi < 256; gi = gi + 1) begin           // RGB332, widened
+                gpal_s[gi] = {gi[7:5], gi[7], gi[4:2], gi[4], gi[1:0], gi[1:0]};
+                gpal_c[gi] = {gi[7:5], gi[7], gi[4:2], gi[4], gi[1:0], gi[1:0]};
             end
-            assign gpal_rd = gpal_a;
+            wire [11:0] gpal_wd = {s_req_wdata[SURF_VIDEO_GPAL_R_LSB +: 4],
+                                   s_req_wdata[SURF_VIDEO_GPAL_G_LSB +: 4],
+                                   s_req_wdata[SURF_VIDEO_GPAL_B_LSB +: 4]};
+            always @(posedge clk)
+                if (wr && hit_gpal) begin
+                    gpal_s[gpal_idx] <= gpal_wd;
+                    gpal_c[gpal_idx] <= gpal_wd;
+                end
+            assign gpal_rd = gpal_c[gpal_idx];
 
             // ---- the placement settings cross together; the scan-out takes them per frame
             localparam [31:0] GCFG_RESET = {1'b0, GSTRIDE_RESET[13:0], 17'd0};
@@ -474,7 +476,7 @@ module surf_video #(
             end
             wire [7:0]  gpix3 = vram_data[8 * glane3 +: 8];
             reg  [11:0] gpal_b = 12'd0;
-            always @(posedge pix_clk) gpal_b <= gpal[gpix3];
+            always @(posedge pix_clk) gpal_b <= gpal_s[gpix3];
             assign vram_addr = gword1;
             assign gfx3      = gpal_b;
 
@@ -576,6 +578,11 @@ module surf_video #(
             rdata[SURF_VIDEO_PALETTE_G_LSB +: 4] = pal_q[pal_idx * 12 + 4 +: 4];
             rdata[SURF_VIDEO_PALETTE_B_LSB +: 4] = pal_q[pal_idx * 12 +: 4];
         end
+        if (hit_gpal) begin
+            rdata[SURF_VIDEO_GPAL_R_LSB +: 4] = gpal_rd[11:8];
+            rdata[SURF_VIDEO_GPAL_G_LSB +: 4] = gpal_rd[7:4];
+            rdata[SURF_VIDEO_GPAL_B_LSB +: 4] = gpal_rd[3:0];
+        end
         if (hit_gbas) rdata[18:0] = {gbase_q, 2'b00};
         if (hit_gstr) rdata[15:0] = {gstride_q, 2'b00};
         if (hit_gscl) rdata[SURF_VIDEO_GFX_SCALE_SCALE_LSB +: 2] = gscale_q;
@@ -586,23 +593,20 @@ module surf_video #(
     reg        rsp_valid_q = 1'b0;
     reg        rsp_err_q   = 1'b0;
     reg [31:0] rsp_rdata_q = 32'd0;
-    reg        gpal_rd_q   = 1'b0;          // the answer is GPAL's block RAM output
     always @(posedge clk) begin
         if (rst) begin
             rsp_valid_q <= 1'b0;
             rsp_err_q   <= 1'b0;
             rsp_rdata_q <= 32'd0;
-            gpal_rd_q   <= 1'b0;
         end else begin
             rsp_valid_q <= accept;
             rsp_err_q   <= accept && !legal;
             rsp_rdata_q <= (accept && legal && !s_req_write) ? rdata : 32'd0;
-            gpal_rd_q   <= accept && legal && !s_req_write && hit_gpal;
         end
     end
 
     assign s_rsp_valid = rsp_valid_q;
-    assign s_rsp_rdata = gpal_rd_q ? {20'd0, gpal_rd} : rsp_rdata_q;
+    assign s_rsp_rdata = rsp_rdata_q;
     assign s_rsp_err   = rsp_err_q;
     assign irq         = st_ev && ie_q;
 
