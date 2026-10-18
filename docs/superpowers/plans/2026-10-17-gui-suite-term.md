@@ -10,42 +10,49 @@ command works as on F1-F4 (the prompt shows `≋@>`, as surfsh shows on any pseu
 telnet session's too). Open it with Ctrl+T, its tile, or Apps > Terminal. Each Terminal window
 has one session, started when it opens; a desktop has one Terminal window.
 
-* **Keys.** Every key is the shell's, but Ctrl+G, which opens the menus. So Ctrl+C stops the
-  program that runs (`sleep 30000`, say), and Ctrl+Q, Ctrl+W, Ctrl+T, Tab, Esc and the arrows
-  are the program's too (`edit` quits with Ctrl+Q). The arrows, Home, End, Page Up and Down,
+* **Keys.** Every key is the shell's, but Ctrl+G and Ctrl+Space, which open the menus. So Ctrl+C
+  stops the program that runs (`sleep 30000`, say), and Ctrl+Q, Ctrl+W, Ctrl+T, Tab, Esc and the
+  arrows are the program's too (`edit` quits with Ctrl+Q). The arrows, Home, End, Page Up and Down,
   Delete and Insert reach the program as the escape sequences a terminal sends; Enter, Backspace,
   Tab and Esc as the bytes they are. To reach the desktop with the Terminal in front: Ctrl+G and
   the menus (Return to shell is in the ≋ SurfOS menu), or the mouse.
-* **The size.** The window's size is the terminal's: 77 by 21 characters as it opens, 117 by 26
-  maximized on a 1920x1080 screen. The status bar shows it. A new size reaches the shell when the
-  window is maximized or restored, or when its corner is let go; a program sees it when it asks
-  (`pagetest size`; `edit` with Ctrl+L). Lines are not rewrapped: they are cut or padded.
+* **The size.** The window's size is the terminal's, and the status bar shows it. On a 1920x1080
+  screen it opens at 77 by 21 characters and is 117 by 26 maximized; on a 1280x800 screen (or any
+  screen less than 688 of the desktop's pixels wide) it opens at 71 by 16 and is 77 by 18
+  maximized. A new size reaches the shell when the window is maximized or restored, or when its
+  corner is let go; a program sees it when it asks (`pagetest size`; `edit` with Ctrl+L). Lines are
+  not rewrapped: they are cut or padded.
 * **Scrolling back.** About 1,000 lines are kept above the screen. Use the scroll bar (click above
   or below the thumb for a page, or drag it), or the wheel of a mouse that reports one (SurfOS's
   mouse drivers report none yet). While the view is scrolled back, new output does not move it:
   the status bar says how many lines came below. Any key goes back to the end (and to the program).
 * **Copy and paste.** Drag to select (past the top or bottom edge the text scrolls), or
-  double-click a word. Edit > Copy copies the selection, or the whole screen as it shows when
-  nothing is selected; Edit > Select all selects everything kept, the scrollback too. Edit > Paste
+  double-click a word (also one that a line's end broke in two). Edit > Copy copies the selection,
+  or the whole screen as it shows when nothing is selected. A line that wrapped is copied as one,
+  also after the window got wider or when it is in the scrollback; one that a narrower window cut
+  on the screen is copied as it shows. A selection of nothing but blanks leaves the clipboard as it
+  was. Edit > Select all selects everything kept, the scrollback too. Edit > Paste
   types the clipboard into the session, each line end as Enter; what the shell does not take at
   once follows a moment later. As on every SurfOS terminal, a pasted block of several lines runs
   its first line only (the rest of a paste is skipped until the input pauses); a paste into `edit`
   arrives whole. The clipboard is the desktop's, so text goes both ways with Notepad and the
   other windows. Ctrl+C is the program's, so copying is the Edit menu's (Ctrl+G, Right, Right).
-* **The end of a session.** When the shell exits (`exit`, or Ctrl+D at an empty prompt), a line in
-  the window and the status bar say so. Enter, or the New session button in the status bar, starts
-  a new session below; Esc or Ctrl+W then closes the window.
+* **The end of a session.** When the shell exits (`exit`, or Ctrl+D at an empty prompt), the
+  session ends at once, and a line in the window and the status bar say so. A program the shell
+  left running in the background (`pagetest hold 300000 &`, say) ends with it, as when the window
+  closes. Enter, or the New session button in the status bar, starts a new session below; Esc or
+  Ctrl+W then closes the window.
 * **Closing.** Closing the window while a session runs, or leaving the desktop, asks first:
   Close (or Leave) ends the session and every program it runs; Cancel keeps it. The session goes
   on while the window is tucked into the taskbar and while another console has the screen.
 
 Limits: no keyboard path to the scrollback (there is no Shift+Page Up to take for it: the keyboard
-driver sends the special keys without their modifiers); Ctrl+G cannot be typed into a program (edit's
-"go to line" needs another key there); no mouse reporting to programs, no bracketed paste, no
+driver sends the special keys without their modifiers); Ctrl+G and Ctrl+Space (NUL) cannot be typed
+into a program (edit's "go to line" needs another key there); no mouse reporting to programs, no bracketed paste, no
 bold font (bright colours instead, as on the console); a font of code page 437, so a character
 it lacks shows as `?`, as on the console.
 
-A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is the shell's`.
+A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G and Ctrl+Space is the shell's`.
 
 ## Decisions
 
@@ -63,12 +70,14 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   inverse included, as the console's ansi_blank() does. ESC[5n gets no answer, as on the console.
 * **Colours**: the console's VGA attributes, drawn in the desktop's palette: black is NAVY (the
   window's background), light grey is SHELL (the text), light cyan FOAM, light red CORAL, light
-  blue SKY, dark grey MUTED, and the others chosen to read on navy. Inverse is navy on light grey. A block cursor when the window
-  has the keys, an outline otherwise; ESC[?25l hides it.
+  blue SKY, dark grey MUTED, and the others chosen to read on navy. Inverse is navy on light grey.
+  A block cursor when the window has the keys, an outline otherwise; ESC[?25l hides it.
 * **State**: the screen and its scrollback are 1,024 lines of 160 cells (2 bytes each: the
   character and the attribute) in a ring in gui_state, 320 KB; the widest window (1280 logical
   pixels, maximized) has 157 columns, the tallest 43 rows. With the clipboard's worth of input
-  waiting (128.5 KB) the Terminal adds 460,448 bytes to gui_state (838,600 to 1,299,048 at -m32).
+  waiting (128.5 KB) the Terminal adds 460,448 bytes to gui_state (838,600 to 1,299,048 at -m32);
+  10/18/26: with a frame's carry of read output (1 KB) and the count of cells written, 461,484
+  (1,300,084).
 * **Scrolled back**: output keeps the view where it is (it is anchored to a line's number, so the
   text under it stays still), and says so; a key brings it back. A view whose lines leave the
   ring shows from the oldest line kept.
@@ -77,20 +86,38 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   before it adds blank ones, so the cursor's line stays on the screen and the text at the bottom.
   Columns beyond the width are blanked on the screen's rows (the scrollback keeps its text). The
   size goes to the session only when it changed, never while the corner is held (once at the
-  release), and only after everything the session printed at the old size has been read.
+  release), and only after everything the session printed at the old size has been drawn.
+* **Wraps** (10/18/26, the review): a line's wrap mark is the width it wrapped at. Copied text
+  joins the line to the next there, whatever the width is now, so a long command copied after
+  maximizing is still one line; a screen row that a narrower width cut loses its mark (its rest is
+  gone), and so does the last line left when the rows below the cursor go. A middle line of a
+  selection is copied whole, also the part of a line kept from a wider screen that does not show.
+  A double-click's word follows a wrap into the next line and back.
+* **A frame's work** (10/18/26, the review): each frame draws at most READ_MAX bytes (8 KB, a
+  pty's whole buffer) and WORK_MAX cells written (32,768, counted by the emulator: a character
+  one, an erase or a new line each cell it blanks), and one byte's own work beyond (a screenful
+  at most). What was read and not drawn waits for the next frame, and so does a new size. A flood
+  of erases (ESC[2J at 160x64 writes 10,240 cells for 4 bytes) costs a frame no more than a
+  screenful of text.
 * **Input**: one queue (pend) for typed keys and pastes, so their order holds; it holds the whole
   clipboard (GUI_CLIP_MAX) and a little more. A Ctrl+C drops what waits and goes first, as
   telnetd does; if the input queue cannot take even that (raw mode, full), it waits first in line.
-  A paste sends CR for each line end (CR LF as one), as terminals do.
+  A paste sends CR for each line end (CR LF as one), as terminals do. A key goes into the queue
+  whole or not at all (never half an escape sequence); a paste as far as there is room, not
+  cutting a UTF-8 character.
 * **Copy with nothing selected** copies the screen as shown. Blanks at a line's end are left out,
-  and a line that wrapped is joined to the next again. Select all takes every line kept.
+  and a line that wrapped is joined to the next again. Select all takes every line kept. A
+  selection with only blanks copies nothing, and the clipboard keeps what it had; one whose lines
+  have left the scrollback says so.
 * **With no session** (it ended, or none could start) the desktop's Esc, Ctrl+W and Ctrl+Q work
   in the window again; Enter starts a session.
-* **The kernel's side** (shell/guisys_term.c): a session is a pty master held as an open file of
-  its own (kernel/pty.c's new pty_open() and friends; no descriptor in the desktop's task). The
-  shell is `surfsh -l`, as init and telnetd start it, a child of the task running `gui`, in its
-  directory. It is collected with task_wait_opts(WNOHANG) on the reads once it has ended (also
-  while a program it left in the background still holds the pty). At a close (the window, or
+* **The kernel's side** (shell/guisys_term.c): a session is a pty master, an open file of its own
+  (kernel/pty.c's new pty_open() and friends). The shell is `surfsh -l`, as init and telnetd
+  start it, a child of the task running `gui`, in its directory. It is collected with
+  task_wait_opts(WNOHANG) on the reads once it has ended. 10/18/26: once it has, the reads give
+  what is left and then -EPIPE, though a program the shell left in the background still holds the
+  pty: the session ends with its shell, and the Terminal's close then hangs that program up too
+  (before, the window waited for every program on the pty, `sleep 100 &` for 100 seconds). At a close (the window, or
   gui_finish() at the desktop's end) the master's close hangs the pty up, the shell is collected
   if it is gone, and otherwise, being inside a call that ends at the hangup's kill, it is handed
   to init (task_detach()), which collects it: the desktop never waits, and leaves no zombie of its
@@ -100,6 +127,13 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   checks the session is the calling task's, so two desktops on two consoles keep theirs apart.
   The kernel log gets "gui: Terminal: surfsh (pid N) on ptyM" and "... the session on ptyM ended";
   nothing typed or shown is logged.
+* **A desktop that dies** without gui_finish() (10/18/26, the review: a fault in its task, or a
+  kill that waited too long): the master is also a descriptor of the desktop's task (fd_install();
+  the shell has only 0, 1 and 2, so it never holds one), so the task's end closes it when the task
+  is collected (fd_close_all()): the hangup, the pty free again, its programs ended, the shell
+  init's to collect. The next open takes back the table's places of desktops whose task is gone
+  (or dead, not collected yet), and closes a master held there only (the task's descriptors were
+  full); nothing is closed twice.
 * **kernel/pty.c**: the system calls share the new code (the spawn, the size, the read's copy and
   the master's lookup) and keep their behaviour; the kernel's calls are declared in
   include/surfos/pty.h behind `#ifdef _SURFOS_TYPES_H`, so user programs, which include it
@@ -115,5 +149,13 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   and output while scrolled back, selection and copy, paste with a full input queue and Ctrl+C,
   the end and a new session, a session that cannot start, busy and the close and leave
   questions, no system, the pixels drawn, and every window inside guard pixels at 640x400,
-  960x540 and 1280x800, maximized and hanging off the edge).
+  960x540 and 1280x800, maximized and hanging off the edge). 10/18/26: the review's cases (wraps
+  across a width change, the shrink's wrap mark, keys whole, blank copies, a word across a wrap,
+  a frame's budget with the size waiting, a lost session, a selection gone from the ring), the
+  emulator and the Terminal against random input (150,000 steps, and 3 desktops of 4,000 events:
+  their invariants), and the kernel's side, shell/guisys_term.c, against stand-ins for the tasks,
+  descriptors and pseudo-terminals (spawn and its failure, PTY_MAX, the shell's end, a program it
+  left, closing an ended session, the detach, another task's handle, a desktop that died with
+  eight sessions, four of them in its descriptors). kernel/pty.c's calls themselves are run by the
+  smoke test's ptytest (the shared code) and by the guiapps checks (the kernel's calls).
 * On the screen: tools/gui_apps_term.py, the guiapps scenario's first checks (see its header).
