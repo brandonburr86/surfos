@@ -410,8 +410,11 @@ a killed `mkfs` left `sdblk.c`'s lock held and the card hung, and `mkfs` stops b
 and says how far it got; B48: a kernel thread killed in there that enters a call gets the call's 2 s;
 B49: a long read or write stops before its next piece, a block through the cache, up to 64 KiB
 straight; B46: but `umount`, and eject's unmount, are not cut short at all: once begun they finish,
-and give nothing up that the card takes). Nothing hangs (a 1 MB `cp` returns at once with
-its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
+and give nothing up that the card takes; B50: but for another task's write that has not ended after
+30 s, a task a fault killed inside the cache or a driver that hangs, given up as for a card that
+stopped answering; B51: and the card is busy for mount, eject and `sdmode` until the umount has
+finished; B54: a finished umount's or eject's status is its own, not Ctrl+C's 130). Nothing
+hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
 both names on one chain, and the next `mv` or `rm` freed the chain under the other name). Since
