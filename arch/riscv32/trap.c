@@ -19,6 +19,8 @@ x86 kernel's (kernel/panic.c, kernel/interrupt.c):
     trap handling itself, nothing sane is left to run: a kernel wipeout. 10/18/26 (audit
     B56): so is one while the task is inside a file system, the block cache or a device
     request (task_in_fs(): kernel/panic.c says why); every task runs in machine mode here.
+    (B62) And one while the task holds any mutex: the SD card's watch holds the card's lock
+    in sd_init() and when the card goes, outside any request.
 
 Machine mode has no memory protection: a wild store is not caught unless it lands on
 an unmapped address or a read-only region. What is caught cheaply is kept: every
@@ -129,17 +131,23 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
     char why[160];
     va_list ap;
     bool inside;
+    u_int locks;
 
     va_start(ap, fmt);
     vsnprintf(why, sizeof(why), fmt, ap);
     va_end(ap);
 
-    inside = curTask && task_in_fs(curTask);     /* 10/18/26 (audit B56): kernel/panic.c says why */
+    inside = curTask && task_in_fs(curTask);     /* 10/18/26 (audit B56, B62): kernel/panic.c says why */
+    locks = curTask ? curTask->mutexes - (console_holds(curTask) ? 1u : 0u) : 0;   /* (before console_panic()) */
     if(!curTask || curTask->pid == 0 || in_interrupt() || inside) {
         irq_disable();
         console_panic();
         kprintf("\nKernel Wipeout: %s\n", why);
-        if(inside)
+        if(inside && task_holds(curTask) == TASK_HOLDS_LOCK)   /* (B62) */
+            kprintf("in '%s' (pid %lu) holding a lock (%u held): a lock a dead task holds is never let go of, and every\n"
+                    "task that waits for it would wait for good (a driver's lock: every request to its device)\n",
+                    curTask->name, curTask->pid, locks);
+        else if(inside)
             kprintf("in '%s' (pid %lu) inside a file system, the block cache or a device request: what it held there (a\n"
                     "volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back\n",
                     curTask->name, curTask->pid);

@@ -195,9 +195,18 @@ static void kill_hangup(surf_task *t);
 /* 10/17/26 (audit B39): is t inside a file system or the block cache, where a kill at once would leave locks, blocks
    and the cache's records behind: counted by fs/fat.c and fs/bcache.c (fs_hold), or holding the cache's lock.
    10/17/26 (B46, B47): also a step that must finish (fs_finish: umount) and a device request (driver/bdev.c: a driver's
-   lock and transfer) */
-static bool in_fs(const surf_task *t) { return t->fs_hold || bcache_holds(t); }
-bool task_in_fs(const surf_task *t) { return t && in_fs(t); }   /* 10/18/26 (audit B56: the fault policy) */
+   lock and transfer). 10/18/26 (audit B62): or holding a mutex (surf_task.mutexes, kernel/sync.c), a driver's lock in
+   a thread's probe or poll outside any request among them: no task is killed at once holding one (before, a kill that
+   had waited 2 s came at once and said "holding a lock"), and a lock handed over to a waiter that has not run yet (B63)
+   counts as held by it. The console's lock, counted with them, does not count here: it is given back when its holder
+   dies (console_task_gone()) */
+static int holds(const surf_task *t) {
+    if(t->fs_hold || bcache_holds(t)) return TASK_HOLDS_FS;
+    return t->mutexes > (console_holds(t) ? 1u : 0u) ? TASK_HOLDS_LOCK : 0;
+}
+static bool in_fs(const surf_task *t) { return holds(t) != 0; }
+int task_holds(const surf_task *t) { return t ? holds(t) : 0; }   /* 10/18/26 (audit B62) */
+bool task_in_fs(const surf_task *t) { return t && in_fs(t); }     /* 10/18/26 (audit B56: the fault policy) */
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -446,8 +455,9 @@ static void kill_escalate(void *arg) {
         if(t->in_call && !(t->intr & TI_FSWAIT)) {  /* (its waits there are cut short: it leaves soon; at once it would
                                                        leave the cache's records, marks, blocks and locks behind) */
             t->intr |= TI_FSWAIT;
-            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still inside a file system or a device request %u ms "
-                     "after its kill: killed as soon as it leaves\n", t->name, t->pid, (u_int)KILL_WAIT_MS);
+            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %u ms after its kill: killed as soon as it "
+                     "lets go\n", t->name, t->pid, holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
+                     : "inside a file system or a device request", (u_int)KILL_WAIT_MS);
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
@@ -457,9 +467,8 @@ static void kill_escalate(void *arg) {
         become_zombie(t, -1);
         return;
     }
-    snprintf(line, sizeof(line), "kill: '%s' (pid %lu) did not end its %s within %u ms: killed at once%s\n",
-             t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call", (u_int)KILL_WAIT_MS,
-             t->mutexes ? ", holding a lock" : "");
+    snprintf(line, sizeof(line), "kill: '%s' (pid %lu) did not end its %s within %u ms: killed at once\n",
+             t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call", (u_int)KILL_WAIT_MS);
     klog_write(line);
     become_zombie(t, -1);
 }

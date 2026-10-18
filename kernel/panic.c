@@ -23,6 +23,10 @@ stack; and the device may still carry out the request it was given. Nothing can 
 those back, and a later umount, mkfs or unplug would wait on them for good, or a late
 write would land on a volume mounted or made since. A program cannot get there: every
 pointer it passes is checked before the call reaches a file system (kernel/syscall.c).
+10/18/26 (audit B62): so is a fault while the task holds any mutex (surf_task.mutexes):
+a driver's thread holds its device's lock in its probes and polls outside any request
+(USB storage's hub thread, the SD card's watch), and the lock would stay with the dead
+thread for good, every later request to the device waiting for it.
 */
 
 #include <surfos/system.h>
@@ -64,17 +68,23 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
     char why[160];
     va_list ap;
     bool inside;
+    u_int locks;
 
     va_start(ap, fmt);
     vsnprintf(why, sizeof(why), fmt, ap);
     va_end(ap);
 
-    inside = curTask && !(tf->cs & 3) && task_in_fs(curTask);  /* 10/18/26 (audit B56): see the top of this file */
+    inside = curTask && !(tf->cs & 3) && task_in_fs(curTask);  /* 10/18/26 (audit B56, B62): see the top of this file */
+    locks = curTask ? curTask->mutexes - (console_holds(curTask) ? 1u : 0u) : 0;   /* (before console_panic()) */
     if(!curTask || curTask->pid == 0 || in_interrupt() || inside) { //a kernel exception.. beadd
         irq_disable();
         console_panic(); //whoever was drawing will not finish: the report must reach the screen, as plain text
         kprintf("\nKernel Wipeout: %s\n", why);
-        if(inside)
+        if(inside && task_holds(curTask) == TASK_HOLDS_LOCK)   /* (B62) */
+            kprintf("in '%s' (pid %lu) holding a lock (%u held): a lock a dead task holds is never let go of, and every\n"
+                    "task that waits for it would wait for good (a driver's lock: every request to its device)\n",
+                    curTask->name, curTask->pid, locks);
+        else if(inside)
             kprintf("in '%s' (pid %lu) inside a file system, the block cache or a device request: what it held there (a\n"
                     "volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back\n",
                     curTask->name, curTask->pid);

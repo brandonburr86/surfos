@@ -852,6 +852,19 @@ static int cmd_crashfs(int argc, char **argv) {
     fs_leave();
     return CMD_FAIL;
 }
+/* 10/18/26 (audit B62): the same store while this task holds a lock (a mutex of its own): the system stops, since the
+   lock would stay with the dead task for good (a driver's thread holds its device's lock in its probes and polls) */
+static mutex_t crash_lock = MUTEX_INIT("crashlock");
+static int cmd_crashlock(int argc, char **argv) {
+    if(curTask->flags & TF_USER) {
+        printf("    crashlock stops the system: only in the kernel shell (shell=kernel), not from a program\n");
+        return CMD_FAIL;
+    }
+    mutex_lock(&crash_lock);
+    *(volatile int *)0 = 1;
+    mutex_unlock(&crash_lock);
+    return CMD_FAIL;
+}
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
@@ -929,6 +942,7 @@ static const struct command commands[] = {
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
     { "crashfs",   "",          "a NULL pointer inside a file system: the system stops (kernel shell only)", cmd_crashfs },
+    { "crashlock", "",          "a NULL pointer holding a lock: the system stops (kernel shell only)", cmd_crashlock },
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };
