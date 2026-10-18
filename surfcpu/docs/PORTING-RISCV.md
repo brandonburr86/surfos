@@ -421,9 +421,12 @@ umount's or eject's status is its own, not Ctrl+C's 130; B59: the card watch, `s
 killed; B62: no task is killed at once while it holds a lock, and a fault while it holds one stops
 the system, the card watch holding the card's lock in `sd_init()` and `taken_out()` among them; B63:
 tasks waiting for the card's lock, the cache's or a volume's take their turns in the order they
-came; B65: a close or fsync whose write-out was cut short says EINTR, one the card refused EIO,
-Ctrl+C or not; B61: mkfs and fdisk, on the qemu_virt RAM disk only (the card is never formatted
-from SurfOS), hold their device for their run, another task's requests to it refused meanwhile).
+came; B66: and one woken another way just as the lock is let go takes it then, where it slept on the
+free lock (no such wake-up reaches them today); B65: a close or fsync whose write-out was cut short
+says EINTR, one the card refused EIO, Ctrl+C or not; B61: mkfs and fdisk, on the qemu_virt RAM disk
+only (the card is never formatted from SurfOS), hold their device for their run, another task's
+requests to it refused meanwhile; B68: a mount probes the card for its file system only once it
+holds it, and says the true reason when it is busy).
 Nothing
 hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
@@ -687,6 +690,21 @@ cycles (the unlocks that wake nobody: they take the cache's lock and the card's 
 each other command is within -1.4 % and +1.0 %. Against 6ed8fcb padded to this kernel's layout (each
 object this round changed followed by as many nops as it grew, the package as large): -1.12 %,
 -0.56 %, -0.89 % and +0.21 % (bcache-review.txt section 71).
+
+Since audit B66-B72 (counted the same way, before = d4050ed): every workload above sends the same
+requests and blocks. A lock taken free goes the way it went (B66 adds a look in a mutex's wait
+loop, which a lock taken free never reaches); the kill's log line, mount's probe and the self test's
+new step do not run in these workloads. On SurfCPU (d4050ed's kernel against this one, the same
+simulator and ROM): test-os-persist's write run 0.08 % more cycles, its reboot run 0.08 % more,
+test-os-faults' full card 0.10 % more and its refusing card 1.30 % fewer (the card-detect task
+meeting the card's removal a look sooner); SurfBoot loads a package 1.2 KB larger (+0.14 million
+cycles), and each command is within -0.6 % and +1.4 % (df on the full card) but for the pairs of
+lines in another order seen in every round. Against d4050ed padded to this kernel's layout (each
+object this round changed followed by as much code that never runs as it grew once linked, its data
+and a task as large, the package as large): -0.001 %, -0.002 %, +0.10 % and -0.000 %, each command of
+the persist runs within 0.05 % (bcache-review.txt section 81). A first version of B66, which folded a
+mutex's arrival into its wait loop, loaded the lock's fields twice more on every lock and ran the
+commands that move many blocks 1.3-1.6 % slower: the arrival is as it was.
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
