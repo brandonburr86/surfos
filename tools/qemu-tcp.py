@@ -83,6 +83,7 @@ class Rig:
         self.qr = qr
         self.net = rawnet.Net(verbose)
         self.q = qr.Qemu(kernel, qemu, mem, self.net.qemu_args(), None, None, None, initrd, False, False, 'tcpka=3,1', 0)
+        self.net.set_qport(self.q.ports['dgram'])  # 10/18/26 (round fs-fix-11): the port QEMU was given
         self.ok = self.q.expect(qr.PROMPT, 60)
         if self.ok:
             self.ok = self.run('ifconfig eth0 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3')

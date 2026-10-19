@@ -621,7 +621,7 @@ static int cmd_ls(int argc, char **argv) {
     }
     r = vfs_open(path, O_RDONLY | O_DIRECTORY, &f);
     if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return CMD_FAIL; }
-    while((r = vfs_readdir(f, &de)) == 0) {
+    while(!task_interrupted() && (r = vfs_readdir(f, &de)) == 0) {   /* 10/18/26 (B73): a kill waits for the close */
         fmt_time(de.mtime, when, sizeof(when));
         printf("    %c %8lu  %-19s  %s%s\n", de.type == VN_DIR ? 'd' : '-', (u_long)de.size, when, de.name, de.type == VN_DIR ? "/" : "");
         n++;

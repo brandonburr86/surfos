@@ -689,10 +689,12 @@ static void ram_watch(void) {
 }
 
 static volatile int ram_read_fail0;                  /* 10/18/26 (round fs-fix-10): block 0 cannot be read (B61) */
+static void (*volatile ram_read_hook)(u32 lba);      /* 10/18/26 (round fs-fix-11): sees each read (B68) */
 
 static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     if(ram_watch_task && curTask == ram_watch_task && curTask->fs_hold > ram_watch_hold) ram_watch_hold = curTask->fs_hold;
     ram_watch();
+    if(ram_read_hook) ram_read_hook(lba);
     if(ram_read_fail0 && lba == 0) return BDEV_EIO;
     memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
     return 0;
@@ -2295,6 +2297,185 @@ static surf_task *kz_start(const char *name, const char *path) {
     return kthread_create_on(name, curTask->con, kz_closer, (void *)path, PL_NORMAL, 0);
 }
 
+/* 10/18/26 (audit B66): a mutex's waiter woken another way (wake_up_task()) just before its holder lets go is out of
+   the line: mutex_unlock() found nobody in line and left the mutex free, and the waiter went back in line and slept on
+   the free mutex until somebody else took it and let go (the review's R11b). Now it takes the free mutex when it runs */
+static mutex_t kw_lock = MUTEX_INIT("selftest-wake");
+static volatile int kw_got;
+
+static void kw_waiter(void *arg) {
+    (void)arg;
+    mutex_lock(&kw_lock);
+    kw_got = 1;
+    mutex_unlock(&kw_lock);
+}
+
+static void test_mutex_wake(void) {
+    surf_task *w;
+    u_long pid, f;
+    int st, waited;
+    bool got, freed;
+    kw_got = 0;
+    mutex_lock(&kw_lock);
+    w = kthread_create_on("mutexwake", curTask->con, kw_waiter, NULL, PL_NORMAL, 0);
+    if(!w) { mutex_unlock(&kw_lock); check(false, "a mutex's waiter woken another way: a thread"); return; }
+    pid = w->pid;
+    for(waited = 0; !wq_count(&kw_lock.waiters) && waited < 1000; waited += 5) sleep_ms(5);   /* (it waits in line) */
+    f = irq_save();
+    wake_up_task(w);                                 /* woken another way ... */
+    mutex_unlock(&kw_lock);                          /* ... and the mutex let go of before it runs: nobody in line */
+    irq_restore(f);
+    for(waited = 0; !kw_got && waited < 500; waited += 10) sleep_ms(10);
+    got = kw_got != 0;
+    freed = mutex_trylock(&kw_lock);                 /* (the code before: free, its waiter asleep in line) */
+    if(freed) mutex_unlock(&kw_lock);                /* (which hands it to that waiter) */
+    if(task_wait(pid, &st) != (int)pid) printf("        (the waiter did not end)\n");
+    printf("        (the waiter %s within 500 ms of the letting go%s)\n", got ? "had the mutex" : "did NOT have the mutex",
+           !got && freed ? "; the mutex was free meanwhile, its waiter asleep in line" : "");
+    check(got, "a mutex's waiter woken another way just before the letting go takes the free mutex (no mutex left free "
+          "with its waiter asleep in line)");
+}
+
+/* 10/18/26 (audit B68): mount probed the device for its file system before it took it (counted as being mounted): an
+   mkfs or fdisk that took the device in between made the probe's reads refused, and mount said "no file system found
+   (mkfs makes one)"; one that took it after the probe made the mount say EBUSY, which mount said as "something is
+   mounted there already". Here a RAM stick with a FAT volume: with another task's claim held, the mount is refused as
+   the device being changed (the probe's reads were refused before); then, while mount's probe reads the stick, another
+   task's claim is refused as the stick being mounted (it was refused only because a request was under way) */
+static struct bdev *volatile kp_dev;
+static surf_task *volatile kp_task;
+static volatile int kp_go, kp_fired, kp_claim, kp_tried, kp_release;
+static const char *volatile kp_why;
+
+static void kp_claimer(void *arg) {
+    const char *why = NULL;
+    (void)arg;
+    while(!kp_go) sleep_ms(5);
+    kp_claim = vfs_bdev_change_begin(kp_dev, &why);
+    kp_why = why;
+    kp_tried = 1;
+    if(kp_claim == 0) {
+        while(!kp_release) sleep_ms(5);
+        vfs_bdev_change_end(kp_dev);
+    }
+}
+
+static void kp_hook(u32 lba) {
+    int waited;
+    (void)lba;
+    if(!kp_task || curTask != kp_task || kp_fired) return;
+    kp_fired = 1;
+    kp_go = 1;                                       /* another task tries to take the stick now */
+    for(waited = 0; !kp_tried && waited < 1000; waited += 5) sleep_ms(5);
+}
+
+static surf_task *kp_start(int go) {
+    kp_go = go;
+    kp_fired = kp_tried = kp_release = 0;
+    kp_claim = 99;
+    kp_why = NULL;
+    return kthread_create_on("mountclaim", curTask->con, kp_claimer, NULL, PL_NORMAL, 0);
+}
+
+static void test_mount_probe(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stickp", "/selftest-mp", &mem);
+    static char out[400];
+    char *argv[] = { "mount", "stickp", "/selftest-mp", NULL };
+    const char *why = NULL, *why1, *why2;
+    surf_task *t;
+    int r1 = 99, r2 = 99, claim1, claim2, st, waited;
+    bool registered;
+    if(!d) { check(false, "mount's probe and a claim: a RAM stick"); return; }
+    vfs_umount("/selftest-mp");                      /* a FAT volume, nothing mounting it */
+    registered = bdev_register(d) == 0;              /* (mount finds devices by name) */
+    kp_dev = d;
+    t = kp_start(1);                                 /* another task's claim, held */
+    for(waited = 0; t && !kp_tried && waited < 1000; waited += 5) sleep_ms(5);
+    claim1 = kp_claim;
+    if(t) r1 = vfs_mount_why(d, "/selftest-mp", NULL, 0, &why);
+    why1 = why;
+    if(r1 == 0) vfs_umount("/selftest-mp");
+    kp_release = 1;
+    if(t) task_wait(t->pid, &st);
+    out[0] = 0;
+    t = kp_start(0);                                 /* a claim tried while mount's probe reads the stick */
+    kp_task = curTask;
+    ram_read_hook = kp_hook;
+    if(t && registered) r2 = fx_capture(out, sizeof(out), 3, argv);
+    ram_read_hook = NULL;
+    kp_task = NULL;
+    kp_go = kp_release = 1;
+    if(t) task_wait(t->pid, &st);
+    claim2 = kp_claim;
+    why2 = kp_why;
+    printf("        (with the stick taken: mount %d, %s; a claim during the probe: %d, %s; mount %d)\n", r1,
+           why1 ? why1 : "-", claim2, why2 ? why2 : "-", r2);
+    check(claim1 == 0 && r1 == -EBUSY && why1 && !strcmp(why1, VFS_BUSY_CHANGING),
+          "a mount of a device another task's mkfs or fdisk holds is refused as its being changed (its probe's reads "
+          "were refused before: \"no file system\")");
+    check(r2 == CMD_OK && kp_fired && claim2 == -EBUSY && why2 && !strcmp(why2, VFS_BUSY_MOUNTING),
+          "and mount probes the device once it holds it: a claim during the probe is refused as the device being mounted");
+    if(r2 != CMD_OK) printf("        (mount said: %s)\n", out);
+    vfs_umount("/selftest-mp");                      /* (mounted by the second part) */
+    if(registered) bdev_unregister(d);              /* (gone, off the list; nothing holds it now) */
+    fx_done(d, mem, NULL);
+}
+
+/* 10/18/26 (audit B69): a kill put off because its task holds a lock, or is inside a file system, was said in the
+   kernel log once, KILL_WAIT_MS after the kill, only for a task in a call; one killed outside any call (a kernel thread)
+   was waited for without a word. Here a kernel thread outside any call holds a lock of the test's own for 2.5 s when it
+   is killed: the log says once that the kill is put off */
+static char kg_log[KLOG_SIZE + 1];
+static mutex_t kg_lock = MUTEX_INIT("selftest-logged");
+static volatile int kg_held;
+
+/* how many times the kernel log holds what (klog_dump() into memory, as a redirected kernel command prints) */
+static int klog_count(const char *what) {
+    struct kcapture cap, *outer = curTask->kcap;
+    const char *p;
+    int n = 0;
+    cap.buf = kg_log;
+    cap.len = 0;
+    cap.size = KLOG_SIZE;
+    cap.cut = 0;
+    console_capture_begin(&cap);
+    klog_dump();
+    console_capture_end();
+    if(outer) console_capture_begin(outer);
+    kg_log[cap.len] = 0;
+    for(p = kg_log; (p = strstr(p, what)) != NULL; p++) n++;
+    return n;
+}
+
+static void kg_thread(void *arg) {
+    (void)arg;
+    mutex_lock(&kg_lock);
+    kg_held = 1;
+    sleep_ms(2500);                                  /* longer than a kill's KILL_WAIT_MS */
+    mutex_unlock(&kg_lock);
+    sleep_ms(2000);                                  /* killed long before this ends */
+}
+
+static void test_kill_lock_logged(void) {
+    char line[80];
+    surf_task *t;
+    u_long pid;
+    int status = 0, waited, said;
+    kg_held = 0;
+    t = kthread_create_on("killlong", curTask->con, kg_thread, NULL, PL_NORMAL, 0);
+    if(!t) { check(false, "a kill put off outside any call, in the kernel log: a thread"); return; }
+    pid = t->pid;
+    for(waited = 0; !kg_held && waited < 1000; waited += 5) sleep_ms(5);
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    snprintf(line, sizeof(line), "kill: 'killlong' (pid %lu) is still holding a lock", pid);
+    said = klog_count(line);
+    printf("        (the kernel log %s)\n", said == 1 ? "says so once" : said ? "says so more than once" : "says nothing");
+    check(status == -1 && said == 1, "a kernel thread killed outside any call that keeps its lock past KILL_WAIT_MS: the "
+          "kernel log says once that the kill is put off");
+}
+
 static void test_close_cut_short(void) {
     u8 *mem;
     struct bdev *d = fx_stick("stickz", "/selftest-cz", &mem);
@@ -2348,6 +2529,255 @@ static void test_close_cut_short(void) {
           "writes the rest), not EIO");
     check(refused == -EIO, "and one the device refused says EIO, Ctrl+C or not");
     fx_done(d, mem, "/selftest-cz");                 /* (its umount writes the rest) */
+}
+
+/**** round fs-fix-11 (audit B73): what a VFS call holds of a volume ****/
+
+/* 10/18/26 (audit B73): a task killed while its VFS call waited left behind what the call held of the volume, and the
+   volume could not be unmounted until restart ("a command or program is using it right now", or the file it had open).
+   Here four cases, each on a RAM stick of its own: a kernel thread outside any call whose open waits for the volume's
+   lock behind a writer's straight write held in the driver (ram_stuck_task), its walk holding the volume's root (it was
+   killed at once at its kill); a call whose open waits there past its KILL_WAIT_MS (killed at once then); a kernel
+   thread waiting for a lock of the test's own while it holds a file of the volume it opened (killed at once at its
+   kill); and a call closing a written file from its descriptor table, whose write-out waits for the volume's lock
+   behind the writer past its KILL_WAIT_MS (killed at once then, the file gone from the open files and its vnode kept).
+   Each is killed while it waits; VH_HOLD_MS later the write or the lock is let go of. The kill waits until the call has
+   let go of the volume, comes within a few ticks of that, and the volume then unmounts */
+#define VH_HOLD_MS 2500                              /* past KILL_WAIT_MS */
+static u8 *vh_big;
+static volatile int vh_ready, vh_opened, vh_held, vh_go;
+static volatile u_long vh_left;
+static mutex_t vh_lock = MUTEX_INIT("selftest-vh");
+
+static void vh_writer(void *arg) {                   /* its straight write of a.txt held, the volume's lock held */
+    struct file *f;
+    if(vfs_open((const char *)arg, O_WRONLY, &f) == 0) {   /* (no create: nothing written before the write) */
+        vfs_write(f, vh_big, 65536);
+        vfs_close(f);
+    }
+}
+
+static void vh_open(void *arg) {                     /* its open waits for the volume's lock, its walk holding the
+                                                        volume's root */
+    struct file *f;
+    int r;
+    vh_ready = 1;
+    r = vfs_open((const char *)arg, O_RDONLY, &f);
+    vh_left = uptime_ms();                           /* (it lets go of the volume now: the close below, or the open's
+                                                        own letting go) */
+    if(r == 0) {
+        vh_opened = 1;
+        vfs_close(f);
+    }
+    if(curTask->in_call) task_call_leave(TC_SYSCALL);   /* (a call's kill comes here) */
+}
+
+static void vh_file(void *arg) {                     /* a file of the volume held while it waits for the test's lock */
+    struct file *f;
+    if(vfs_open((const char *)arg, O_RDONLY, &f) != 0) return;
+    vh_opened = 1;
+    vh_ready = 1;
+    mutex_lock(&vh_lock);
+    mutex_unlock(&vh_lock);
+    vh_left = uptime_ms();
+    vfs_close(f);
+}
+
+static void vh_close(void *arg) {                    /* a written file in its descriptor table, closed once the writer
+                                                        holds the volume's lock: its write-out waits for it */
+    struct file *f;
+    int fd = -1;
+    if(vfs_open((const char *)arg, O_WRONLY | O_APPEND, &f) == 0 && (fd = fd_install(f)) < 0) vfs_close(f);
+    if(fd >= 0 && vfs_write(fd_get(fd), "more", 4) == 4) {
+        vh_opened = 1;
+        while(!vh_go) sleep_ms(5);
+        vh_ready = 1;
+        fd_close(fd);
+        vh_left = uptime_ms();
+    }
+    task_call_leave(TC_SYSCALL);                     /* (its kill comes here) */
+}
+
+/* case n (VH_OPEN: an open behind the writer's held write; VH_FILE: a file held while the test's lock is waited for;
+   VH_CLOSE: a close behind the writer's held write): fn in a task of its own (flags 0: outside any call; TF_INCALL: a
+   call) killed while it waits; the write or the lock let go of VH_HOLD_MS later. The umount's result; *put_off: the task
+   was still there then; *late: how long after it let go of the volume it ended; why: what keeps the volume busy */
+enum { VH_OPEN, VH_FILE, VH_CLOSE };
+static int vh_case(int n, int kind, const char *name, kthread_fn fn, u_int flags, bool *put_off, u_long *late,
+                   char *why, size_t size) {
+    char path[24], file[40], other[40], stick[8];
+    u8 *mem;
+    struct bdev *d;
+    surf_task *w = NULL, *t = NULL;
+    u_long pid = 0, end;
+    int st, waited, r;
+    *put_off = false;
+    *late = 0;
+    why[0] = 0;
+    snprintf(path, sizeof(path), "/selftest-vh%d", n);
+    snprintf(stick, sizeof(stick), "stickv%d", n);
+    snprintf(file, sizeof(file), "%s/a.txt", path);
+    snprintf(other, sizeof(other), "%s/b.txt", path);
+    d = fx_stick(stick, path, &mem);
+    if(!d) { strlcpy(why, "no RAM stick", size); return 1; }
+    vh_ready = vh_opened = vh_go = 0;
+    vh_left = 0;
+    if(kind == VH_CLOSE && put_file(other, "written before") != 0) strlcpy(why, "no b.txt", size);
+    if(kind != VH_OPEN) {                            /* its file open first */
+        if(kind == VH_FILE) mutex_lock(&vh_lock);
+        t = kthread_create_on(name, curTask->con, fn, kind == VH_CLOSE ? other : file, PL_NORMAL, flags);
+        for(waited = 0; t && !vh_opened && waited < 2000; waited += 5) sleep_ms(5);
+    }
+    if(kind != VH_FILE) {                            /* the writer holds the volume's lock */
+        ram_stuck_lba = 0;
+        ram_stuck_hit = 0;
+        w = kthread_create_on("vhwriter", curTask->con, vh_writer, file, PL_NORMAL, 0);
+        ram_stuck_task = w;
+        for(waited = 0; w && !ram_stuck_hit && waited < 3000; waited += 5) sleep_ms(5);
+    }
+    if(kind == VH_OPEN) t = kthread_create_on(name, curTask->con, fn, file, PL_NORMAL, flags);
+    vh_go = 1;
+    pid = t ? t->pid : 0;
+    for(waited = 0; t && !vh_ready && waited < 2000; waited += 5) sleep_ms(5);
+    sleep_ms(300);                                   /* it waits: for the volume's lock, or for the test's */
+    vh_held = kind == VH_FILE ? vh_opened : ram_stuck_hit && vh_ready && !vh_left;   /* (as meant: the write held, the
+                                                                     open or close behind it; or the file open) */
+    if(t) kill_task(t);
+    sleep_ms(VH_HOLD_MS);
+    *put_off = t && task_wait_opts(pid, &st, WNOHANG) == 0;   /* (still there: not killed at once) */
+    if(w) ram_stuck_task = NULL;                     /* the write ends */
+    else mutex_unlock(&vh_lock);
+    if(*put_off) {
+        task_wait(pid, &st);
+        end = uptime_ms();
+        *late = vh_left ? end - vh_left : end;
+    }
+    if(w) task_wait(w->pid, &st);
+    r = vfs_umount(path);
+    if(r == -EBUSY) vfs_busy(path, why, size);
+    if(r == 0) fx_done(d, mem, NULL);                /* (else it stays mounted, its memory kept) */
+    return r;
+}
+
+static void test_vfs_holds(void) {
+    static const char *const what[4] = { "a kernel thread outside any call (its walk holding the volume's root)",
+                                         "a call, past its KILL_WAIT_MS",
+                                         "a kernel thread holding a file of the volume",
+                                         "a call closing a written file, past its KILL_WAIT_MS" };
+    static const char *const names[4] = { "vhwalk", "vhcall", "vhfile", "vhclose" };
+    static const char *const meant[4] = { "its open waiting behind the held write", "its open waiting behind the held "
+                                          "write", "the file open", "its close waiting behind the held write" };
+    static kthread_fn const fns[4] = { vh_open, vh_open, vh_file, vh_close };
+    static const int kinds[4] = { VH_OPEN, VH_OPEN, VH_FILE, VH_CLOSE };
+    static const u_int flags[4] = { 0, TF_INCALL, 0, TF_INCALL };
+    char why[160], line[200], when[64];
+    bool put_off;
+    u_long late;
+    int i, r;
+    check(curTask->fs_refs == 0, "B73: the self test's VFS calls so far left nothing of a volume counted (fs_refs 0)");
+    vh_big = (u8 *)kalloc(65536);
+    if(!vh_big) { check(false, "B73: memory for the writer"); return; }
+    memset(vh_big, 'V', 65536);
+    for(i = 0; i < 4 && !task_interrupted(); i++) {
+        r = vh_case(i + 1, kinds[i], names[i], fns[i], flags[i], &put_off, &late, why, sizeof(why));
+        if(put_off) snprintf(when, sizeof(when), "once it let go of the volume: it ended %lu ms after", late);
+        else strlcpy(when, "AT ONCE, nothing waited for", sizeof(when));
+        printf("        (%s: %s when killed; killed %s; umount %d%s%s)\n", names[i], vh_held ? meant[i]
+               : "NOT WAITING AS MEANT", when, r, why[0] ? ": " : "", why);
+        snprintf(line, sizeof(line), "B73: %s, killed while it waits, is killed once it lets go of the volume, "
+                 "within a few ticks, and the volume unmounts", what[i]);
+        check(vh_held && put_off && late < 250 && r == 0, line);
+    }
+    kfree(vh_big);
+    vh_big = NULL;
+}
+
+/* 10/18/26 (audit B73): devices, terminals, pseudo-terminals and sockets have no block device: a task waiting to read
+   one is not counted inside a file system, even with a volume's file in its descriptor table (its reap closes it) and
+   its current directory there (a path). A process blocked reading its terminal (here a pty's, a kernel thread in a call
+   on it) ends at its kill within a few ticks, its read cut short; a kernel thread blocked reading a pty's master (its
+   peer: SurfOS has no pipes) is killed at once. The volume then unmounts */
+static volatile int rd_ready, rd_got;
+
+static void rd_common(void) {                        /* a file of the volume in its descriptor table, its cwd there */
+    struct file *f;
+    if(vfs_open("/selftest-rd/a.txt", O_RDONLY, &f) == 0 && fd_install(f) < 0) vfs_close(f);
+    vfs_chdir("/selftest-rd");
+}
+
+static void rd_tty(void *arg) {                      /* a call reading its terminal: no key comes */
+    struct file *tf;
+    char buf[16];
+    (void)arg;
+    rd_common();
+    if(vfs_open("/dev/console", O_RDONLY, &tf) == 0) {
+        rd_ready = 1;
+        rd_got = vfs_read(tf, buf, sizeof(buf));
+        vfs_close(tf);
+    }
+    task_call_leave(TC_SYSCALL);                     /* (its kill comes here) */
+}
+
+static void rd_master(void *arg) {                   /* outside any call, reading a pty's master of its own: nothing is
+                                                        printed on that pty */
+    char buf[16];
+    int fd;
+    (void)arg;
+    rd_common();
+    fd = sys_openpty();
+    if(fd < 0) return;
+    rd_ready = 1;
+    rd_got = vfs_read(fd_get(fd), buf, sizeof(buf));
+}
+
+/* fn on con (flags: TF_INCALL or 0), killed once it is blocked in its read: its status; *ms, from its kill to its end;
+   *counted: it was counted inside a file system or holding a lock (task_holds()) or a volume's vnode (fs_refs) */
+static int rd_kill(const char *name, surf_console *con, kthread_fn fn, u_int flags, u_long *ms, bool *counted) {
+    surf_task *t;
+    u_long pid, t0;
+    int st = 1, waited;
+    rd_ready = 0;
+    rd_got = 99;
+    *ms = 0;
+    *counted = true;
+    t = kthread_create_on(name, con, fn, NULL, PL_NORMAL, flags);
+    if(!t) return 1;
+    pid = t->pid;
+    for(waited = 0; !rd_ready && waited < 2000; waited += 5) sleep_ms(5);
+    sleep_ms(100);                                   /* (blocked in its read) */
+    *counted = task_holds(t) != 0 || t->fs_refs != 0;
+    t0 = uptime_ms();
+    kill_task(t);
+    if(task_wait(pid, &st) != (int)pid) st = 1;
+    *ms = uptime_ms() - t0;
+    return st;
+}
+
+static void test_kill_reader(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stickr", "/selftest-rd", &mem);
+    surf_console *con;
+    u_long ms1, ms2;
+    bool c1 = true, c2 = true;
+    int fd, s1 = 1, s2, r;
+    if(!d) { check(false, "B73: a reader's kill: a RAM stick"); return; }
+    fd = sys_openpty();
+    con = fd >= 0 ? pty_console_of(fd) : NULL;
+    ms1 = 0;
+    if(con) s1 = rd_kill("rdtty", con, rd_tty, TF_INCALL, &ms1, &c1);
+    if(fd >= 0) fd_close(fd);
+    s2 = rd_kill("rdmaster", curTask->con, rd_master, 0, &ms2, &c2);
+    r = vfs_umount("/selftest-rd");
+    printf("        (its terminal's reader: %s, ended %lu ms after its kill (status %d); a master's reader: %s, "
+           "ended %lu ms after (status %d); umount %d)\n", c1 ? "COUNTED" : "not counted", ms1, s1,
+           c2 ? "COUNTED" : "not counted", ms2, s2, r);
+    check(con && s1 == -1 && !c1 && ms1 < 250, "B73: a process blocked reading its terminal, a file of a mounted volume "
+          "in its descriptor table and its current directory there, is not counted inside: its kill ends it within a "
+          "few ticks");
+    check(s2 == -1 && !c2 && ms2 < 250, "B73: nor a kernel thread blocked reading a pseudo-terminal's master (it waits "
+          "for its peer; SurfOS has no pipes): killed at once");
+    check(r == 0, "B73: their files closed at their reaps, the volume unmounts");
+    if(r == 0) fx_done(d, mem, NULL);
 }
 
 static void test_fat_rename(void) {
@@ -2649,7 +3079,8 @@ static void (*const tests[])(void) = {
     test_kill_device, test_kill_outside_call, test_umount_waits, test_request_busy, test_unmounting_busy, test_eject_unmount_phase,
     test_eject_writeout_mount, test_kill_system,
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
-    test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_close_cut_short,
+    test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
+    test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };

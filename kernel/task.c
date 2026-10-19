@@ -204,9 +204,12 @@ static int holds(const surf_task *t) {
     if(t->fs_hold || bcache_holds(t)) return TASK_HOLDS_FS;
     return t->mutexes > (console_holds(t) ? 1u : 0u) ? TASK_HOLDS_LOCK : 0;
 }
-static bool in_fs(const surf_task *t) { return holds(t) != 0; }
+/* 10/18/26 (audit B73): or its call holds references to a mounted volume's vnodes (fs_refs, fs/vfs.c): killed at once
+   in one of its waits there (a volume's lock, the cache, a device) it left them behind, and the volume could not be
+   unmounted until restart. Not the fault policy's (below): that leaves no lock held */
+static bool in_fs(const surf_task *t) { return holds(t) != 0 || t->fs_refs; }
 int task_holds(const surf_task *t) { return t ? holds(t) : 0; }   /* 10/18/26 (audit B62) */
-bool task_in_fs(const surf_task *t) { return t && in_fs(t); }     /* 10/18/26 (audit B56: the fault policy) */
+bool task_in_fs(const surf_task *t) { return t && holds(t) != 0; }    /* 10/18/26 (audit B56: the fault policy) */
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -387,6 +390,7 @@ void kill_task(surf_task *t) {
     } else if(!t->in_call && !in_fs(t)) {
         become_zombie(t, -1);
     } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
+        if(!(t->intr & TI_KILL)) t->kill_at = getticks();   /* 10/18/26 (audit B69): when, for the log's one line */
         t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
         /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it
            (B48: TI_NOCALL, so that a call it enters meanwhile gets the call's KILL_WAIT_MS) */
@@ -408,6 +412,7 @@ static void kill_hangup(surf_task *t) {
        (t->in_call & TC_EXIT) ||                /* ending already (task_exit(): its files are closing), */
        (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
         return;
+    t->kill_at = getticks();                    /* 10/18/26 (audit B69) */
     if(!t->in_call) {
         if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
             t->intr |= TI_KILL | TI_NOCALL | TI_HANGUP;   /* (B48; 10/18/26, B55: a call it enters keeps the hangup's
@@ -452,12 +457,17 @@ static void kill_escalate(void *arg) {
         return;
     }
     if(in_fs(t)) {                                  /* 10/17/26 (audit B39): inside a file system or the block cache */
-        if(t->in_call && !(t->intr & TI_FSWAIT)) {  /* (its waits there are cut short: it leaves soon; at once it would
-                                                       leave the cache's records, marks, blocks and locks behind) */
+        u_long ms = (getticks() - t->kill_at) * (1000 / HZ);
+        /* (its waits there are cut short: it leaves soon; at once it would leave the cache's records, marks, blocks and
+           locks behind). Said once, KILL_WAIT_MS after the kill: for a task in a call this is its first look; 10/18/26
+           (audit B69): a task killed outside any call is looked at every FS_HOLD_RETRY_MS from its kill, and was waited
+           for without a word */
+        if(!(t->intr & TI_FSWAIT) && (t->in_call || ms >= KILL_WAIT_MS)) {
             t->intr |= TI_FSWAIT;
-            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %u ms after its kill: killed as soon as it "
+            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %lu ms after its kill: killed as soon as it "
                      "lets go\n", t->name, t->pid, holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
-                     : "inside a file system or a device request", (u_int)KILL_WAIT_MS);
+                     : holds(t) ? "inside a file system or a device request"
+                     : "holding a volume's file or directory", ms);   /* (10/18/26, B73: fs_refs) */
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
@@ -592,8 +602,10 @@ static void reap(surf_task *t) {
     }
     ntasks--;
     irq_restore(flags);
+    fs_ref();                       /* 10/18/26 (audit B73): t's files are the waiter's now: a kill of it waits until */
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
+    fs_unref();                     /* they are closed (killed at once in between, it left the rest behind) */
     if(t->uvm) uvm_destroy(t->uvm);
     kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);

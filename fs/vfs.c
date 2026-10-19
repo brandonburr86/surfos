@@ -52,6 +52,25 @@ raw request in flight at the end refused the rescan after fdisk had written its 
 leaving the old partitions registered over the new layout. While they hold it, another
 task's requests to it are refused at once (driver/bdev.c), and mount and eject say it is
 being changed.
+
+10/18/26 (audit B73): a task killed at once while its VFS call waited (for a volume's lock, the cache, a device)
+left behind the references the call held to the volume's vnodes: the mount's root and the directories of a path's
+walk, the directories of a create, an unlink or a rename, statfs's and sync's hold on the root, the file a kernel
+command or the program loader had opened, a closing file's vnode. The volume could not be unmounted until restart
+("a command or program is using it right now", or the file it had open; the self test's test_vfs_holds: a kernel
+thread killed at once in the volume's lock's line, a call killed KILL_WAIT_MS after its kill, a kernel thread killed
+holding a file). A kill waits for them now: each reference to a vnode of a mounted volume (its superblock on a block
+device: FAT, the initrd's tar file system) that a call takes counts in surf_task.fs_refs (surfos/task.h) until it is
+let go of (vhold(), vdrop()), and a kill that waited comes once that is 0, as for fs_hold (kernel/task.c); a file of
+such a volume that a call opened counts as its call's (struct file's holder) until fd_install() hands it to the
+descriptor table, which reap() closes whatever ends the task, or until vfs_close(); a close counts from before it
+gives its reference up until a last one has let go of the vnode, a descriptor's from the table's letting go of it
+(fd_close(); dup2 and a kernel command's record the same way). Device nodes, terminals, pseudo-terminals and
+sockets have no block device: a task waiting to read one is killed as before, also with a volume's file in its
+descriptor table or its current directory there (a path, which holds nothing). Every wait under such a reference is
+cut short by the kill (the cache's, B39) or ends within its drivers' bounds (a device request; the volume's lock,
+whose holder's operation is bounded by its device requests), but in a step that must finish (B46). A fault there is
+no wipeout (B56): what a task killed then leaves keeps a volume mounted, and no lock held.
 */
 
 #include <surfos/types.h>
@@ -98,6 +117,27 @@ static const char *busy_why(const struct bdev *d) {
     return NULL;
 }
 static struct file *open_files;             /* 10/5/26: every open file, for vfs_busy() */
+
+/* 10/18/26 (audit B73): does v belong to a mounted volume (its superblock on a block device), whose vnodes' references
+   keep an umount refusing (in_use())? */
+static bool pins(const struct vnode *v) {
+    return v && v->sb && v->sb->dev;
+}
+
+/* 10/18/26 (audit B73): a reference to v that a VFS call has taken (find_mount(), a lookup, a create), counted while it
+   is one of a volume's (above). Returns v */
+static struct vnode *vhold(struct vnode *v) {
+    if(pins(v)) fs_ref();
+    return v;
+}
+
+/* ... and its letting go: dropped first (the last reference's release may wait for the volume's lock), then counted
+   out */
+static void vdrop(struct vnode *v) {
+    bool p = pins(v);
+    vput(v);
+    if(p) fs_unref();
+}
 
 /**** vnodes ****/
 
@@ -239,30 +279,46 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
 }
 
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags) {
-    const struct fs_type *type = fstype ? find_type(fstype) : (dev ? probe_type(dev) : NULL);
+    return vfs_mount_why(dev, path, fstype, flags, NULL);
+}
+
+/* 10/18/26 (audit B68): the device is probed for its file system once it is this mount's (counted as being mounted):
+   before, the probe came first, and an mkfs or fdisk that took the device between the shell's look and the probe made
+   the probe's reads refused (BDEV_EBUSY: "no file system found (mkfs makes one)"), or one that took it after the probe
+   made the mount say EBUSY, which the shell said as "something is mounted there already". *why says which reason an
+   -EBUSY has: VFS_BUSY_PATH, or what keeps the device busy (vfs_bdev_busy_why()'s words) */
+int vfs_mount_why(struct bdev *dev, const char *path, const char *fstype, int flags, const char **why) {
+    const struct fs_type *type = fstype ? find_type(fstype) : NULL;
+    const char *busy;
     struct superblock *sb;
     struct mount *m, **pp;
     char abs[VFS_PATH_MAX];
     int r;
 
-    if(!type) return fstype ? -ENODEV : -EINVAL;
+    if(why) *why = NULL;
+    if(fstype && !type) return -ENODEV;
+    if(!fstype && !dev) return -EINVAL;
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
     fs_enter();                                     /* 10/18/26 (audit B58): counted inside while it holds the device's
                                                        count below, so a kill waits and never leaves it behind */
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) break;
-    if(m || (dev && busy_why(dev))) {               /* 10/5/26: two mounts of one device would each think they own it */
+    busy = m ? VFS_BUSY_PATH : dev ? busy_why(dev) : NULL;   /* 10/5/26: two mounts of one device would each think
+                                                                they own it */
+    if(busy) {
         mutex_unlock(&mount_lock);
         fs_leave();
+        if(why) *why = busy;
         return -EBUSY;
     }
     if(dev) dev->mounting++;                        /* 10/18/26 (audit B58): taken in the same step: busy until below */
     mutex_unlock(&mount_lock);
 
-    sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
-    m = (struct mount *)kcalloc(1, sizeof(struct mount));
-    r = !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
+    if(!type) type = probe_type(dev);               /* 10/18/26 (audit B68): the device this mount's meanwhile */
+    sb = type ? (struct superblock *)kcalloc(1, sizeof(struct superblock)) : NULL;
+    m = type ? (struct mount *)kcalloc(1, sizeof(struct mount)) : NULL;
+    r = !type ? -EINVAL : !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
     if(r == 0) {
         sb->type = type;
         sb->dev = dev;
@@ -502,11 +558,11 @@ int vfs_sync(void) {
     for(m = mounts; m; m = m->next) {
         struct superblock *sb = m->sb;
         if(!sb->ops || !sb->ops->sync) continue;
-        vget(sb->root);
+        vhold(vget(sb->root));                      /* 10/18/26 (B73): counted while it holds it */
         mutex_unlock(&mount_lock);
         if(sb->ops->sync(sb) != 0) r = -EIO;
         mutex_lock(&mount_lock);
-        vput(sb->root);                             /* not the last reference: the mount keeps one */
+        vdrop(sb->root);                            /* not the last reference: the mount keeps one */
     }
     mutex_unlock(&mount_lock);
     if(bsync(NULL) != 0) r = -EIO;
@@ -560,7 +616,7 @@ static struct vnode *find_mount(const char *abs, const char **rest) {
         if(l == 1) { if(!best) { best = m; bestlen = 1; } continue; }
         if(l > bestlen && !strncmp(abs, m->path, l) && (abs[l] == '/' || abs[l] == 0)) { best = m; bestlen = l; }
     }
-    if(best) root = vget(best->sb->root);
+    if(best) root = vhold(vget(best->sb->root));   /* 10/18/26 (B73): the walk's, counted */
     mutex_unlock(&mount_lock);
     if(!root) return NULL;
     *rest = abs + bestlen;
@@ -579,12 +635,13 @@ static int walk(struct vnode *v, const char *rest, struct vnode **out) {
         while(*rest && *rest != '/') rest++;
         n = rest - s;
         while(*rest == '/') rest++;
-        if(n > VFS_NAME_MAX) { vput(v); return -ENAMETOOLONG; }
+        if(n > VFS_NAME_MAX) { vdrop(v); return -ENAMETOOLONG; }
         memcpy(comp, s, n);
         comp[n] = 0;
-        if(v->type != VN_DIR || !v->ops->lookup) { vput(v); return -ENOTDIR; }
+        if(v->type != VN_DIR || !v->ops->lookup) { vdrop(v); return -ENOTDIR; }
         r = v->ops->lookup(v, comp, &next);
-        vput(v);
+        if(r == 0) vhold(next);                     /* 10/18/26 (B73): counted before the one it came from goes */
+        vdrop(v);
         if(r) return r;
         v = next;
     }
@@ -610,6 +667,11 @@ int vfs_lookup(const char *path, struct vnode **out) {
     return lookup_abs(abs, out);
 }
 
+/* 10/18/26 (audit B73): let go of a vnode vfs_lookup() gave (counted until then) */
+void vfs_put(struct vnode *v) {
+    vdrop(v);
+}
+
 /* the directory that holds the last component of path, and that component's name */
 static int lookup_parent(const char *path, struct vnode **dir, char *name) {
     char abs[VFS_PATH_MAX], *p;
@@ -622,7 +684,7 @@ static int lookup_parent(const char *path, struct vnode **dir, char *name) {
     else *p = 0;
     r = lookup_abs(abs, dir);
     if(r) return r;
-    if((*dir)->type != VN_DIR) { vput(*dir); return -ENOTDIR; }
+    if((*dir)->type != VN_DIR) { vdrop(*dir); return -ENOTDIR; }
     return 0;
 }
 
@@ -636,7 +698,7 @@ int vfs_stat(const char *path, struct stat *st) {
     st->ino = v->ino;
     strlcpy(st->fs, v->sb->type->name, sizeof(st->fs));
     strlcpy(st->dev, v->sb->dev ? v->sb->dev->name : "", sizeof(st->dev));
-    vput(v);
+    vdrop(v);
     return 0;
 }
 
@@ -649,9 +711,9 @@ int vfs_chdir(const char *path) {
     if(r) return r;
     r = lookup_abs(abs, &v);
     if(r) return r;
-    if(v->type != VN_DIR) { vput(v); return -ENOTDIR; }
-    vput(v);
-    strlcpy(curTask->cwd, abs, sizeof(curTask->cwd));
+    if(v->type != VN_DIR) { vdrop(v); return -ENOTDIR; }
+    vdrop(v);
+    strlcpy(curTask->cwd, abs, sizeof(curTask->cwd));   /* (a path: no reference is kept) */
     return 0;
 }
 
@@ -667,26 +729,28 @@ int vfs_open(const char *path, int flags, struct file **out) {
         char name[VFS_NAME_MAX + 1];
         r = lookup_parent(path, &dir, name);
         if(r) return r;
-        if(dir->sb->readonly || !dir->ops->create) { vput(dir); return -EROFS; }
+        if(dir->sb->readonly || !dir->ops->create) { vdrop(dir); return -EROFS; }
         r = dir->ops->create(dir, name, VN_FILE, &v);
-        vput(dir);
+        if(r == 0) vhold(v);
+        vdrop(dir);
         if(r) return r;
     } else if(r) {
         return r;
     } else if((flags & O_CREAT) && (flags & O_EXCL)) {
-        vput(v);
+        vdrop(v);
         return -EEXIST;
     }
-    if((flags & O_DIRECTORY) && v->type != VN_DIR) { vput(v); return -ENOTDIR; }
-    if(v->type == VN_DIR && acc != O_RDONLY) { vput(v); return -EISDIR; }
-    if(acc != O_RDONLY && v->sb->readonly) { vput(v); return -EROFS; }
+    if((flags & O_DIRECTORY) && v->type != VN_DIR) { vdrop(v); return -ENOTDIR; }
+    if(v->type == VN_DIR && acc != O_RDONLY) { vdrop(v); return -EISDIR; }
+    if(acc != O_RDONLY && v->sb->readonly) { vdrop(v); return -EROFS; }
     if((flags & O_TRUNC) && acc != O_RDONLY && v->type == VN_FILE && v->size) {
-        if(!v->ops->truncate) { vput(v); return -EROFS; }
+        if(!v->ops->truncate) { vdrop(v); return -EROFS; }
         r = v->ops->truncate(v, 0);
-        if(r) { vput(v); return r; }
+        if(r) { vdrop(v); return r; }
     }
     r = vfs_open_vnode(v, flags, out);
-    if(r) vput(v);
+    if(r) vdrop(v);
+    else if(pins(v)) fs_unref();                    /* 10/18/26 (B73): counted as the file now (its holder) */
     return r;
 }
 
@@ -702,6 +766,10 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
     if(curTask) {
         f->pid = curTask->pid;
         strlcpy(f->owner, curTask->name, sizeof(f->owner));
+        if(pins(v)) {                               /* 10/18/26 (audit B73): this call's until fd_install() or */
+            f->holder = curTask;                    /* vfs_close(), counted meanwhile */
+            fs_ref();
+        }
     }
     fl = irq_save();
     f->onext = open_files;
@@ -728,9 +796,12 @@ static int write_back(struct superblock *sb) {
 int vfs_close(struct file *f) {
     struct superblock *sb;
     u_long fl;
-    bool last;
+    bool last, held, p;
     int r = 0;
     if(!f) return -EBADF;
+    p = pins(f->v);
+    if(p) fs_ref();                                 /* 10/18/26 (B73): counted from before its reference is given up
+                                                       until its vnode is let go of */
     fl = irq_save();                                /* tasks share files (spawnfd): the count is atomic */
     last = --f->refs == 0;
     if(last) {
@@ -738,13 +809,20 @@ int vfs_close(struct file *f) {
         else open_files = f->onext;
         if(f->onext) f->onext->oprev = f->oprev;
     }
+    held = curTask && f->holder == curTask;         /* 10/18/26 (B73): its call's hold on it ends */
+    if(held) f->holder = NULL;
     irq_restore(fl);
-    if(!last) return 0;
+    if(held) fs_unref();
+    if(!last) {
+        if(p) fs_unref();
+        return 0;
+    }
     sb = f->v->sb;
     if((f->flags & O_ACCMODE) != O_RDONLY) r = write_back(sb);   /* a written file reaches the disk when it is
                                                                      closed; 10/16/26 (B10): and close says
                                                                      when it did not */
     vput(f->v);
+    if(p) fs_unref();
     kfree(f);
     return r;
 }
@@ -796,17 +874,17 @@ int vfs_mkdir(const char *path) {
     struct vnode *dir, *v;
     char name[VFS_NAME_MAX + 1];
     int r = vfs_lookup(path, &v);
-    if(r == 0) { vput(v); return -EEXIST; }
+    if(r == 0) { vdrop(v); return -EEXIST; }
     if(r != -ENOENT) return r;
     r = lookup_parent(path, &dir, name);
     if(r) return r;
-    if(dir->sb->readonly || !dir->ops->create) { vput(dir); return -EROFS; }
+    if(dir->sb->readonly || !dir->ops->create) { vdrop(dir); return -EROFS; }
     r = dir->ops->create(dir, name, VN_DIR, &v);
     if(r == 0) {
-        vput(v);
+        vput(v);                                    /* (the directory still held: counted) */
         if(dir->sb->ops && dir->sb->ops->sync) dir->sb->ops->sync(dir->sb);
     }
-    vput(dir);
+    vdrop(dir);
     return r;
 }
 
@@ -815,16 +893,16 @@ static int remove_entry(const char *path, int type) {
     char name[VFS_NAME_MAX + 1];
     int r = vfs_lookup(path, &v);
     if(r) return r;
-    if(v->type != type) { vput(v); return type == VN_DIR ? -ENOTDIR : -EISDIR; }
-    if(v == v->sb->root) { vput(v); return -EBUSY; }
-    if(v->refs > 1) { vput(v); return -EBUSY; }          /* open somewhere */
-    vput(v);
+    if(v->type != type) { vdrop(v); return type == VN_DIR ? -ENOTDIR : -EISDIR; }
+    if(v == v->sb->root) { vdrop(v); return -EBUSY; }
+    if(v->refs > 1) { vdrop(v); return -EBUSY; }         /* open somewhere */
+    vdrop(v);
     r = lookup_parent(path, &dir, name);
     if(r) return r;
-    if(dir->sb->readonly || !dir->ops->unlink) { vput(dir); return -EROFS; }
+    if(dir->sb->readonly || !dir->ops->unlink) { vdrop(dir); return -EROFS; }
     r = dir->ops->unlink(dir, name);
     if(r == 0 && dir->sb->ops && dir->sb->ops->sync) dir->sb->ops->sync(dir->sb);
-    vput(dir);
+    vdrop(dir);
     return r;
 }
 
@@ -848,19 +926,19 @@ int vfs_rename(const char *from, const char *to) {
     if(!strncmp(ato, afrom, lf) && (ato[lf] == '/' || ato[lf] == 0)) return ato[lf] ? -EINVAL : 0;   /* into itself, or no change */
     r = lookup_abs(afrom, &v);
     if(r) return r;
-    if(v == v->sb->root) { vput(v); return -EBUSY; }                /* a mount point */
-    vput(v);
+    if(v == v->sb->root) { vdrop(v); return -EBUSY; }               /* a mount point */
+    vdrop(v);
     r = lookup_parent(afrom, &odir, oname);
     if(r) return r;
     r = lookup_parent(ato, &ndir, nname);
-    if(r) { vput(odir); return r; }
+    if(r) { vdrop(odir); return r; }
     if(odir->sb != ndir->sb) r = -EXDEV;
     else if(odir->sb->readonly) r = -EROFS;
     else if(!odir->ops->rename) r = -ENOSYS;
     else r = odir->ops->rename(odir, oname, ndir, nname);
     if(r == 0 && odir->sb->ops && odir->sb->ops->sync) odir->sb->ops->sync(odir->sb);
-    vput(odir);
-    vput(ndir);
+    vdrop(odir);
+    vdrop(ndir);
     return r;
 }
 
@@ -883,7 +961,7 @@ int vfs_statfs(const char *path, struct statfs *st) {
     }
     if(best) {
         sb = best->sb;
-        vget(sb->root);
+        vhold(vget(sb->root));                      /* 10/18/26 (B73): counted while it holds it */
         strlcpy(st->path, best->path, sizeof(st->path));
     }
     mutex_unlock(&mount_lock);
@@ -892,7 +970,7 @@ int vfs_statfs(const char *path, struct statfs *st) {
     strlcpy(st->dev, sb->dev ? sb->dev->name : "", sizeof(st->dev));    /* block devices are never freed */
     st->flags = sb->readonly ? MNT_RDONLY : 0;
     r = sb->ops && sb->ops->statfs ? sb->ops->statfs(sb, st) : 0;      /* sizes unknown: all zero */
-    vput(sb->root);
+    vdrop(sb->root);
     return r;
 }
 
@@ -922,7 +1000,14 @@ int fd_install(struct file *f) {
     int i;
     if(!curTask) return -EINVAL;
     for(i = 0; i < NR_OPEN; i++) {
-        if(!curTask->files[i]) { curTask->files[i] = f; return i; }
+        if(!curTask->files[i]) {
+            curTask->files[i] = f;
+            if(f->holder == curTask) {              /* 10/18/26 (audit B73): the table's now (reap() closes it) */
+                f->holder = NULL;
+                fs_unref();
+            }
+            return i;
+        }
     }
     return -EMFILE;
 }
@@ -934,9 +1019,15 @@ struct file *fd_get(int fd) {
 
 int fd_close(int fd) {
     struct file *f = fd_get(fd);
+    bool p;
+    int r;
     if(!f) return -EBADF;
+    p = pins(f->v);
+    if(p) fs_ref();                                 /* 10/18/26 (audit B73): counted from the table's letting go */
     curTask->files[fd] = NULL;
-    return vfs_close(f);
+    r = vfs_close(f);
+    if(p) fs_unref();
+    return r;
 }
 
 void fd_close_all(struct surf_task *t) {

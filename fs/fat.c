@@ -359,7 +359,8 @@ static bool name_eq(const char *a, const char *b) {
    a kill that waited is not escalated before it lets go (kernel/task.c), so that the lock, the blocks it holds and the
    cache's state are not left behind (the cache counts none of its calls for each block: this count covers them). Counted in a critical section (KCRIT_ENTER: no preemption, and a kill that waited
    is put off a tick) so that no kill comes between taking the lock and counting it; a task still waiting for the lock
-   holds nothing here and may be killed at once. Let go first, then counted out */
+   holds nothing here (10/18/26, audit B73: what its VFS call holds above, the vnodes of its walk, puts the kill off all
+   the same: fs/vfs.c). Let go first, then counted out */
 static void fat_lock(struct superblock *sb) {
     KCRIT_ENTER
     mutex_lock(&sb->lock);

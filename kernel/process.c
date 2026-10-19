@@ -22,6 +22,13 @@ could not be loaded, whatever its exit status says.
 process was handed (its arguments, its files) is never left behind. A program started
 by a task that its console's pager covers is in the foreground (TF_FOREGROUND): Ctrl+C
 reaches it (tty.c, task_interrupt_job()).
+
+10/18/26 (audit B73): the files it was handed go into its descriptor table first, before
+anything waits, and the console after them: a kill that has waited KILL_WAIT_MS comes at
+once outside a file system, and one put off while the program file was read (fs/vfs.c:
+a file of a volume the loading holds) comes right after its close; before, the files
+still in the spawn's record were left open then (a redirection's file on a stick kept it
+from being unmounted). The task's reap closes them, whatever ends it.
 */
 
 #include <surfos/types.h>
@@ -94,6 +101,18 @@ static void user_entry(void *arg) {
     u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1];
     int i, r, fd;
 
+    /* 0, 1, 2: the files the parent passed (10/18/26, audit B73: the descriptor table's before anything waits), then
+       the console for the others */
+    for(fd = 0; fd < 3; fd++) {
+        curTask->files[fd] = sa->files[fd];               /* the descriptor table owns the reference now */
+        sa->files[fd] = NULL;
+    }
+    for(fd = 0; fd < 3; fd++) {
+        struct file *cf;
+        if(!curTask->files[fd] && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) == 0)
+            curTask->files[fd] = cf;
+    }
+
     m = uvm_create();
     if(!m) load_failed(sa, f, "out of memory for the address space");
     curTask->uvm = m;
@@ -146,14 +165,6 @@ static void user_entry(void *arg) {
         sp -= 2 * sizeof(u_long);
         ((u_long *)sp)[0] = (u_long)sa->argc;
         ((u_long *)sp)[1] = argv_addr;
-    }
-
-    /* 0, 1, 2: the files the parent passed, otherwise the console */
-    for(fd = 0; fd < 3; fd++) {
-        struct file *cf = sa->files[fd];
-        sa->files[fd] = NULL;                             /* the descriptor table owns the reference now */
-        if(!cf && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0) continue;
-        curTask->files[fd] = cf;
     }
 
     kfree(sa);

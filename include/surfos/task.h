@@ -73,6 +73,10 @@ typedef void (*kthread_fn)(void *arg);
     transfer is never left half done), and so does a file system step that must finish once begun
     (fs_finish: umount, eject's unmount, fs/vfs.c), whose waits are not cut short either: cut short,
     an umount gave up changes the card would have taken and left a working card unclean.
+    10/18/26 (audit B73): nor while its call holds references to a mounted volume's vnodes (fs_refs,
+    fs/vfs.c: a path's walk, a file it opened and has not handed to its descriptor table): killed at
+    once in a wait there (for the volume's lock) it left them behind, and the volume could not be
+    unmounted until restart. A wait to read a terminal, a pseudo-terminal or a socket holds none.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -161,6 +165,13 @@ typedef struct surf_task {
                                    waits are not cut short */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
+    u_long kill_at;             /* 10/18/26 (audit B69): the tick its kill came (TI_KILL set): the kernel log says once,
+                                   KILL_WAIT_MS after it, that a kill is put off (kill_escalate()) */
+    u_int fs_refs;              /* 10/18/26 (audit B73): references to a mounted volume's vnodes its call holds, the
+                                   files of one it opened and has not handed to its descriptor table and those it is
+                                   closing (fs/vfs.c), and reap()'s of a dead task's: a kill that waited comes once it
+                                   is 0 too, as for fs_hold (kernel/task.c). Not a fault's wipeout (B56): what a task
+                                   killed there leaves keeps a volume mounted, and no lock held */
 } surf_task;
 
 extern surf_task *curTask;
@@ -215,6 +226,9 @@ static inline void fs_finish_leave(void) {
     if(curTask->fs_finish) curTask->fs_finish--;
     if(curTask->fs_hold) curTask->fs_hold--;
 }
+/* 10/18/26 (audit B73): a reference to a mounted volume's vnode (or file) the current task's call holds, and its end */
+static inline void fs_ref(void) { if(curTask) curTask->fs_refs++; }
+static inline void fs_unref(void) { if(curTask && curTask->fs_refs) curTask->fs_refs--; }
 /* 10/18/26 (audit B56): is t inside a file system, the block cache or a device request (counted, or holding the cache's
    lock or its bounce buffer's): a fault there stops the system (kernel/panic.c, arch/riscv32/trap.c), since what t
    holds there (a volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back. (B62) Or

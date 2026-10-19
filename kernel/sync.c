@@ -17,6 +17,18 @@ copy's requests, each through its driver's lock or the cache's bounce buffer) ke
 waiter out for as long as it went on. Now a waiter waits for those queued ahead of it,
 each holding the lock once. A task holding a mutex, the one handed over too, is not killed
 at once (kernel/task.c), so a lock handed over is never left with a dead task.
+
+10/18/26 (audit B66): a waiter woken another way (wake_up_task(): none reaches a mutex's
+waiter today) is out of the line when it runs; if its holder let go meanwhile, mutex_unlock()
+found nobody in line and left the mutex free, and the waiter went back in line and slept on a
+free mutex until somebody else took it and let go. Now a waiter that finds the mutex free
+takes it, as a task arriving does: a free mutex has nobody in line (one is let go of free only
+when nobody waits, and nobody joins the line while it is free), so nobody is passed over, and
+the waiter, out of the line, can never be handed it again. It loses its place in the line if
+somebody else takes the mutex first, never the mutex. The look is in the wait loop only: a
+task arriving takes a free mutex as before (folding the two into one loop put a few loads
+more on every lock, and SurfCPU, which fetches and loads from DDR, ran the commands that move
+many blocks 1.3-1.6 % slower).
 */
 
 #include <surfos/types.h>
@@ -45,6 +57,14 @@ void mutex_lock(mutex_t *m) {
         if(curTask) curTask->mutexes++;
     } else {
         while(m->owner != curTask) {            /* 10/18/26 (audit B63): in line; mutex_unlock() hands it over */
+            if(!m->locked) {                    /* 10/18/26 (audit B66): woken another way, its holder gone
+                                                   meanwhile: free, nobody in line, so this task's (out of the
+                                                   line once woken: never handed it as well) */
+                m->locked = 1;
+                m->owner = curTask;
+                if(curTask) curTask->mutexes++;
+                break;
+            }
             wait_prepare(&m->waiters);
             irq_restore(flags);
             yield();

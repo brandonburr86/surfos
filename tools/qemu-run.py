@@ -777,35 +777,49 @@ class Qemu:
         # (10/6/26, the telnet server) 23 through forwarded ports, and the guest reaches a small HTTP
         # server on the host (10.0.2.2) whose port travels on the kernel command line. 10/9/26 (the
         # development loop): guest port RX_PORT too, where rx listens in the smoke test
+        # 10/18/26 (round fs-fix-11): a forwarded port is written {port:NAME} (here and in extra) and picked afresh for
+        # each try below: QEMU binds it, and a port free_port() found free may be taken before QEMU starts
         self.ports = {}
         self.http = None
         if net:
-            self.ports['echo'] = free_port()
-            self.ports['telnet'] = free_port()
-            self.ports['http'] = free_port()
-            self.ports['rx'] = free_port()
-            self.ports['telnet_wlan'] = free_port()          # 10/9/26: port 23 of 10.0.2.16, the simulated wlan0's lease
-            boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['rx']}-:{RX_PORT},"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23",
+            boot += ['-netdev', "user,id=net0,hostfwd=tcp:127.0.0.1:{port:echo}-:7,"
+                                "hostfwd=tcp:127.0.0.1:{port:telnet}-:23,"
+                                "hostfwd=tcp:127.0.0.1:{port:rx}-:%d,"
+                                "hostfwd=tcp:127.0.0.1:{port:telnet_wlan}-10.0.2.16:23" % RX_PORT,
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
+            # (10/9/26: telnet_wlan is port 23 of 10.0.2.16, the simulated wlan0's lease.) The test's HTTP server binds
+            # its port itself, so it keeps it (10/18/26: before, free_port()'s, which another program could take first)
+            self.http = http.server.HTTPServer(('127.0.0.1', 0), TestHandler)
+            self.ports['http'] = self.http.server_address[1]
             cmdline.append(f"httpport={self.ports['http']}")
-            self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
             threading.Thread(target=self.http.serve_forever, daemon=True).start()
         if cmdline and not iso:
             boot += ['-append', ' '.join(cmdline)]
-        cmd = [qemu, '-m', str(mem)] + boot + [
-               '-display', 'none', '-no-reboot', '-no-shutdown',
-               '-monitor', f'unix:{self.mon_path},server,nowait',
-               '-chardev', f'socket,id=ser0,path={self.ser_path},server=on,wait=off',
-               '-serial', 'chardev:ser0'] + list(extra)
-        if int_log:
-            cmd += ['-d', 'int,guest_errors,cpu_reset', '-D', os.path.abspath(int_log)]
-        self.cmd = cmd
-        self.proc = subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        self.ser = self._connect(self.ser_path)
+        for attempt in range(1, PORT_TRIES + 1):
+            ports = dict(self.ports)
+            cmd = [qemu, '-m', str(mem)] + pick_ports(boot, ports) + [
+                   '-display', 'none', '-no-reboot', '-no-shutdown',
+                   '-monitor', f'unix:{self.mon_path},server,nowait',
+                   '-chardev', f'socket,id=ser0,path={self.ser_path},server=on,wait=off',
+                   '-serial', 'chardev:ser0'] + pick_ports(list(extra), ports)
+            if int_log:
+                cmd += ['-d', 'int,guest_errors,cpu_reset', '-D', os.path.abspath(int_log)]
+            self.cmd = cmd
+            self.proc = subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            try:
+                self.ser = self._connect(self.ser_path)
+            except RuntimeError as e:
+                if attempt < PORT_TRIES and len(ports) > len(self.ports) and port_taken(str(e)):
+                    retry_note(attempt, str(e))
+                    self.proc.stdout.close()
+                    for p in (self.mon_path, self.ser_path):
+                        if os.path.exists(p):
+                            os.remove(p)
+                    continue
+                raise
+            self.ports = ports
+            break
         self.ser.setblocking(False)
         self.transcript = b''
         self.cursor = 0
@@ -820,6 +834,7 @@ class Qemu:
                 return s
             except OSError:
                 if self.proc.poll() is not None or time.time() > deadline:
+                    s.close()
                     raise RuntimeError('QEMU did not start: ' + ' '.join(self.cmd) + '\n' + self.qemu_output())
                 time.sleep(0.05)
 
@@ -990,6 +1005,38 @@ def free_port():
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+# 10/18/26 (round fs-fix-11): free_port() lets its port go so that QEMU can bind it, and another program may take it
+# first: QEMU then stops at once ("Could not set up host forwarding rule ...", or for a socket of its own "Address
+# already in use"). A launch with ports written {port:NAME} (picked here) tries again with fresh ones, PORT_TRIES times
+# in all, and says so; every other failure to start stays fatal (tests/test_qemu_ports.py)
+PORT_TRIES = 5
+PORT_TAKEN = ('Could not set up host forwarding rule', 'Address already in use')
+
+
+def pick_ports(args, ports):
+    """args with each {port:NAME} replaced by a port: the one in ports, or a fresh one (free_port()) put there"""
+    out = []
+    for a in args:
+        for name in re.findall(r'\{port:(\w+)\}', a):
+            if name not in ports:
+                ports[name] = free_port()
+            a = a.replace('{port:%s}' % name, str(ports[name]))
+        out.append(a)
+    return out
+
+
+def port_taken(output):
+    """did QEMU stop because a port it was to bind was taken?"""
+    return any(m in output for m in PORT_TAKEN)
+
+
+def retry_note(attempt, output):
+    """one line in the log for a launch tried again with fresh ports"""
+    why = next((l.strip() for l in output.splitlines() if port_taken(l)), 'a port was taken')
+    print(f'QEMU did not start: a port picked for it was taken by another program meanwhile ({why}); starting it '
+          f'again with fresh ports (try {attempt + 1} of {PORT_TRIES})', flush=True)
 
 
 class TestHandler(http.server.BaseHTTPRequestHandler):
@@ -2064,9 +2111,7 @@ class DnsPeer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('127.0.0.1', 0))
         self.port = self.sock.getsockname()[1]
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
-            reserve.bind(('127.0.0.1', 0))
-            self.qport = reserve.getsockname()[1]
+        self.qport = None           # 10/18/26 (round fs-fix-11): QEMU's end, its Qemu's ports['dns'] once it has started
         self.running = True
         self.pending = []
         self.ids = []
@@ -2076,7 +2121,7 @@ class DnsPeer:
         self.thread.start()
 
     def args(self):
-        return ['-netdev', f'dgram,id=dns,local.type=inet,local.host=127.0.0.1,local.port={self.qport},'
+        return ['-netdev', 'dgram,id=dns,local.type=inet,local.host=127.0.0.1,local.port={port:dns},'
                           f'remote.type=inet,remote.host=127.0.0.1,remote.port={self.port}',
                 '-device', 'e1000,netdev=dns,mac=52:54:00:12:34:56']
 
@@ -2120,7 +2165,7 @@ class DnsPeer:
                 continue
             except OSError:
                 break
-            if len(frame) < 42:
+            if len(frame) < 42 or not self.qport:
                 continue
             if frame[12:14] == b'\x08\x06':
                 if frame[20:22] == b'\0\x01':
@@ -2187,6 +2232,7 @@ def dns_bounded_check(q):
         kernel = q.cmd[q.cmd.index('-kernel') + 1]
         initrd = os.path.join(q.workdir, q.cmd[q.cmd.index('-initrd') + 1].split(',')[0])
         guest = Qemu(kernel, q.cmd[0], '128', peer.args(), initrd=initrd, net=False)
+        peer.qport = guest.ports['dns']
         ok = guest.expect(PROMPT, 60)
 
         def command(line, *expected, timeout=10):
@@ -2650,12 +2696,10 @@ def usbnet_later_boot(kernel, qemu, mem, extra, initrd, append):
     (QEMU's usb-net on its user network) is plugged in after boot (BOOT_CHECKS usbnet-plug), so that wlan0, which the
     simulated chip registers at boot, comes before eth0. Port 23 of 10.0.2.16 is forwarded as 'telnet' (eth0's lease
     here) and of 10.0.2.15 as 'telnet_wlan' (wlan0 asks first, and gets .15)"""
-    p_eth, p_wlan = free_port(), free_port()
-    q = Qemu(kernel, qemu, mem, list(extra) + ['-device', 'qemu-xhci,id=xhci', '-netdev',
-             f'user,id=n0,hostfwd=tcp:127.0.0.1:{p_eth}-10.0.2.16:23,hostfwd=tcp:127.0.0.1:{p_wlan}-10.0.2.15:23'],
-             None, None, None, initrd, False, False, ' '.join(append), 0)
-    q.ports.update({'telnet': p_eth, 'telnet_wlan': p_wlan})
-    return q
+    return Qemu(kernel, qemu, mem, list(extra) + ['-device', 'qemu-xhci,id=xhci', '-netdev',
+                'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-10.0.2.16:23,'
+                'hostfwd=tcp:127.0.0.1:{port:telnet_wlan}-10.0.2.15:23'],   # (10/18/26: ports picked by Qemu: fs-fix-11)
+                None, None, None, initrd, False, False, ' '.join(append), 0)
 
 
 def usbnet_plug_check(q):

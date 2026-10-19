@@ -512,6 +512,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_fatconc 21 3 3 1 100 1 1 1 1 16384 0
 	$(BUILD)/host/test_fatconc 33 3 6 1 0 1 0 0 1 8192 0
 	$(BUILD)/host/test_fatconc umount
+	$(BUILD)/host/test_fatconc mutex
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp
 	$(BUILD)/host/test_cp437
@@ -520,6 +521,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
+	$(PYTHON) -m unittest discover -s tests -p test_qemu_ports.py
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
 	$(PYTHON) -m unittest discover -s tests -p test_devenv.py

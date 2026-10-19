@@ -1,7 +1,13 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Fourteen rounds with x86 runs, newest first. Round fs-fix-10 (10/18/26) changes the x86 kernel on purpose: a review
+Fifteen rounds with x86 runs, newest first. Round fs-fix-11 (10/18/26) changes the x86 kernel on purpose: a review
+of B61-B65 and its fixes (audit B66-B72: a mutex's waiter woken another way takes the mutex when it finds it free; a
+mount probes its device only once it holds it, and says why a device is busy; the kill's log line for a kernel thread
+killed outside any call; the threaded host test's mutex as the kernel's; B64's USB figures said to be a healthy
+controller's, with the worst the code allows; the harness's QEMU started again with fresh ports when one was taken;
+and B73, found in the round: a kill waits until a VFS call has let go of what it holds of a volume).
+Round fs-fix-10 (10/18/26) changes the x86 kernel on purpose: a review
 of B56-B60 and its fixes (audit B61-B65: mkfs and fdisk's commit hold their device for their run, another task's
 requests to it refused meanwhile, and a failed rescan is said, a whole disk read again after a failed mkfs too; no kill
 at once and no fault survived while a task holds a mutex; a mutex goes to its waiters in the order they came; USB
@@ -49,6 +55,122 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-11, 10/18/26: a mutex's waiter woken another way, mount's probe, the kill's log, the threaded test's
+mutex, the USB figures' assumption and the harness's ports after a review of B61-B65 (audit B66-B72); and what a VFS
+call holds of a volume, found in the round (B73)
+date: 2026-10-18 (local)
+tree: sc/fs-fix-11 (from surfcpu d4050ed): the code final at c6aeafb (ab0fe17, e647d74, aef58ba with their self-test
+      steps, eb17d48 the threaded host test, 3dfd49b the harness and its test, 524d041 the port test ahead of
+      tests/test_devenv.py in make unittest, 0062c33 B66's look in the wait loop only, then 6cf838f and a616b99 the docs
+      and evidence of B66-B72, then c6aeafb B73 with its self-test steps); after it docs and this evidence; the "was"
+      blobs below are d4050ed's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); a clean checkout of c6aeafb (a git worktree in the session's scratch space, with
+      the ignored firmware/ and third_party/ fetches copied in) for every devenv run; volumes surfos-sc-fs11b-run (O0)
+      and surfos-sc-fs11b-o2 (O2) at c6aeafb, surfos-sc-fs11-run2 and surfos-sc-fs11-o22 at 0062c33,
+      surfos-sc-fs11-run and surfos-sc-fs11-o2 at 3dfd49b and 524d041, surfos-sc-fs11 and surfos-sc-fs11-base (the self
+      test's transcripts on 3dfd49b and on d4050ed), surfos-sc-fs11b-dev and surfos-sc-fs11b-base (B73's self test on
+      this tree before its commit and on 0062c33), surfos-sc-fs11-rev and surfos-sc-fs11b-rev (the review's steps on
+      0062c33 and on c6aeafb) and surfos-sc-fs11-f1 (F1's first step), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B66-B73):
+  kernel/sync.c            blob fb339112 (was c89d963c)  B66 a waiter that finds the mutex free after a wake-up of
+                                                         another kind takes it (a look in the wait loop)
+  kernel/task.c            blob 57ce7fa1 (was cd90b90a)  B69 the kill's log line for a task outside any call too, with
+                                                         the time since the kill; B73 in_fs() counts fs_refs, the fault
+                                                         policy's task_in_fs() does not; reap() counts the waiter
+  include/surfos/task.h    blob 5480ab15 (was 25d2d955)  surf_task.kill_at; B73 surf_task.fs_refs, fs_ref(), fs_unref()
+  fs/vfs.c                 blob 006f5f10 (was 932f1446)  B68 vfs_mount_why(): the device probed once the mount counts
+                                                         it, and the reason of an EBUSY; vfs_mount_flags() through it;
+                                                         B73 a call's references to a volume's vnodes counted (vhold(),
+                                                         vdrop(), vfs_put()), a file it opened (its holder) and a close
+                                                         (vfs_close(), fd_close()) too
+  include/fs/vfs.h         blob f82ec03b (was 6d2ad791)  vfs_mount_why()'s declaration, VFS_BUSY_PATH; B73 struct
+                                                         file's holder, vfs_put()
+  fs/fat.c                 blob c462773a (was 74565c20)  B73 a comment (fat_lock()'s waiter)
+  shell/fscmd.c            blob c368b719 (was 945dd800)  B68 mount says the true reason of an EBUSY
+x86 only:
+  kernel/process.c         blob 419d55ab (was 6c6ad32b)  B73 a new process's descriptors installed before its load
+  kernel/syscall.c         blob 55ca0920 (was e7a16048)  B73 dup2 closes the descriptor it replaces first, through
+                                                         fd_close(); a kernel command's record's file counted from its
+                                                         letting go to its close
+  shell/main.c             blob 7679fa10 (was ab1df8f4)  B73 ls stops at a kill or Ctrl+C
+  shell/selftest.c         blob 7704617c (was d40b10d1)  a mutex's waiter woken another way (B66), the kill's log line
+                                                         for a kernel thread (B69), mount's probe and a claim (B68),
+                                                         what a VFS call holds of a volume and the readers' kills (B73)
+  tests/host/test_fatconc.c blob ca9511e3 (was ed8521d1) B70 the kernel's mutex in the shim, the counts checked,
+                                                         `test_fatconc mutex`
+  tests/test_qemu_ports.py blob 32aa47dd (new)           B72 a port held while QEMU starts
+  tools/qemu-run.py        blob 6505cd6d (was e9f85c8c)  B72 ports picked for each try, a launch tried again when one
+                                                         was taken; the HTTP server binds its own port; the DNS peer's
+                                                         port
+  tools/qemu-usb.py        blob 1d8d91e4 (was b36fc869)  B72 the same in Vm
+  tools/rawnet.py          blob 805145de (was 680fc0f9)  B72 QEMU's datagram port picked by the launch
+  tools/qemu-tcp.py        blob 6757cad6 (was 14d09c97)  B72 the link told the port QEMU has
+  Makefile                 blob de72254e (was bd1daba8)  make unittest: `test_fatconc mutex`, tests/test_qemu_ports.py
+riscv32 only (surfcpu/docs/evidence/os/bcache-review.txt sections 81, 86):
+  arch/riscv32/rvtest.c    blob 9f55e7ba (was 2b2d7270)  B66 the same step in rvtest; B73 a held file's kill
+  arch/riscv32/kshell.c    blob ae529b20 (was c608f2c5)  B73 ls stops at a kill or Ctrl+C
+Every run below was of c6aeafb, a clean checkout (the devenv streams it into its volume); each ran before at 0062c33
+and at 3dfd49b too (make unittest at 524d041 as well), all passing as below.
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs11b-run, made afresh)
+  at c6aeafb, the code final (19:56-20:13): exit 0 (and at 0062c33, before B73, 17:22-17:38, volume
+  surfos-sc-fs11-run2; at 3dfd49b, 14:59-15:16, volume surfos-sc-fs11-run: the same)
+  O0  FILES TEST PASSED: 51 checks       O0  SMOKE TEST PASSED: 315 checks (selftest among them)
+  O2  FILES TEST PASSED: 51 checks       O2  SMOKE TEST PASSED: 315 checks
+  The self test (this round's twelve checks among its 169), `run kcmdtest child-selftest`, `run kcmdtest kills`, the
+  crash commands with crashlock in the kernel shell's own boot, the eject, mkfs and fdisk steps and the network's
+  (dhcp, ping, tcp and the raw TCP link's 21 scenarios, the simulated Wi-Fi boots, the DNS peer's boot) pass as before;
+  the user shell's redirections (dup2) and programs started with their parent's files (spawnfd) among them; every QEMU
+  of the smoke test started at its first try (no "a port picked for it was taken" line: no port was taken meanwhile;
+  tests/test_qemu_ports.py forces that case). The compiler warnings from the files this round changes are those of the
+  rounds before: kernel/task.c's "'noreturn' function does return" at the end of task_exit(), whose lines this round
+  leaves as they were
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs11b-run, after test-usb, 20:20-20:27 at c6aeafb; and at 0062c33, 3dfd49b and 524d041): exit 0,
+    no failures. FATFS 347, FATFUZZ 4 runs, 0 with failures, CONC ok 4 times (each "mutex counts left between
+    operations 0"), CONC umount ok, CONC mutex ok ("taken back after 3 of the 3 waiters; their order 1 2 3; counts
+    wrong 0", bcache-review.txt section 77), MKFS 126, CP 16, tests/test_qemu_ports.py's 8 tests OK (with the devenv's
+    QEMU for its check of QEMU's own messages, section 79), and every other host test passing: CRYPTO 129, WPA 118,
+    IEEE80211 144, DNS 232, the Undertow suites (URL 382, UTIL 72, HTTP 835, HTML 672 and its UBSan build 672, SESSION
+    78, VIEW 127, COMMAND 94, TRANSPORT 426), pointer 14, gui 45, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP 467, i2cdw 59,
+    AML FIELD 5120, i2chid 267, hidpointer 127, TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57,
+    PARTITION 143 and its tool checks 33, LIBC 195, PROMPT 55, CP437 69, PAGER 177, TELNET 58, TELNETD SERVER 750
+    runs, 0 bugs, PCIINFO 55, IWLFW 38; python unittest OK each
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs11b-o2, made afresh, 20:27-20:35 at c6aeafb; and at 0062c33,
+    3dfd49b and 524d041): every host test the same, FATFS 347, FATFUZZ 4 runs with no failure, CONC ok 4 times, CONC
+    umount ok, CONC mutex ok, MKFS 126, CP 16, IWLFW 38, tests/test_qemu_ports.py's 8 tests OK; the run exits 2
+    because two of tests/test_devenv.py's tests fail with O=2 in their environment, as in the rounds before (`make
+    O=2` hands O to them; this round changes neither tests/test_devenv.py nor devenv/). At 3dfd49b make stopped there
+    before tests/test_qemu_ports.py, which came after it; 524d041 runs it first of the Python tests
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs11b-run, after test-all: its test images there;
+      devenv/build-usb.sh O=0: the image's manifest says source c6aeafba9dbb, not dirty; 20:13-20:20)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs11b-o2, made afresh by unittest at O2, with
+      devenv/build.sh O=2 images first for the test disks the storage scenarios use; the image's manifest says source
+      c6aeafba9dbb, not dirty; 20:35-20:44; at 0062c33 and 3dfd49b the same at both levels)
+  test-usb runs the self test three times (on the USB image's own devices, with its network checks on the USB adapter
+  and on a network that is not QEMU's default): SELFTEST PASS in each at each level, this round's steps among them.
+  Its machine (tools/qemu-usb.py's Vm) picks the usbnet and devloop scenarios' forwarded ports as it starts (B72):
+  each started at its first try. The storage scenarios (usbdisk, storage, devloop: mount, write, eject, the stick
+  pulled and put back, fsck_msdos and fsck.fat on the sticks) pass as before; the stick is mounted there through
+  vfs_mount_why() (B68), its probe under the mount's reservation, and its files' and folders' references are counted
+  for the kill (B73).
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+mount, eject, mkfs, fdisk, the smoke test's concurrent FAT writers, kills inside kernel commands, the crash commands,
+the network's threads and commands with their mutexes, the user shell's redirections and programs, every QEMU the
+harness starts); what it fixes is shown by the kernel's self test (a mutex's waiter woken another way: asleep on the
+free mutex on d4050ed; mount's probe and a claim: the probe's reads refused, or the claim let in, on d4050ed; the kill's
+log line for a kernel thread: none on d4050ed; four tasks killed while their VFS calls hold a volume's vnodes: killed
+at once on 0062c33 and the volume then busy until restart, -16), by `test_fatconc mutex` and tests/test_qemu_ports.py
+(section 2), by the threaded harness given B73's rule (bcache-review.txt section 82), and where the same files run
+under the riscv32 kernel (surfcpu/docs/evidence/os/bcache-review.txt, sections 72-86).
 
 ======================================================================================================================
 Round fs-fix-10, 10/18/26: mkfs and fdisk hold their device, the kill and fault rule and locks, mutexes in order, the

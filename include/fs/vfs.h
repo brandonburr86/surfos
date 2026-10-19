@@ -183,6 +183,9 @@ struct file {
     u_long pid;                 /* 10/5/26: who opened it (0: before tasks), for umount's "busy" */
     char owner[16];
     struct file *onext, *oprev; /* every open file */
+    struct surf_task *holder;   /* 10/18/26 (audit B73): the task whose call holds it (a file of a mounted volume,
+                                   opened and neither installed in a descriptor table nor closed yet), counted in its
+                                   fs_refs meanwhile: a kill waits for its close (fs/vfs.c); NULL once a table's */
 };
 
 /* vnodes */
@@ -195,6 +198,10 @@ void init_fs(void);                                  /* register the file system
 int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
+/* 10/18/26 (audit B68): the same, *why saying what an -EBUSY is: VFS_BUSY_PATH (a mount at path already), or what keeps
+   the device busy (VFS_BUSY_*); the device is probed (fstype NULL) once it counts as being mounted */
+int vfs_mount_why(struct bdev *dev, const char *path, const char *fstype, int flags, const char **why);
+#define VFS_BUSY_PATH       "a mount there already"
 int vfs_umount(const char *path);
 int vfs_umount_lost(const char *path, u_int *lost);  /* 10/16/26 (B10): and how many changed blocks it gave up */
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted, or being
@@ -238,12 +245,16 @@ bool vfs_dev_mounted(const struct bdev *d);       /* 10/6/26: d itself is mounte
 
 /* paths */
 int vfs_normalize(const char *cwd, const char *path, char *out, size_t size);
-int vfs_lookup(const char *path, struct vnode **out);             /* relative to the current task's cwd */
+int vfs_lookup(const char *path, struct vnode **out);             /* relative to the current task's cwd; 10/18/26
+                                                                    (B73): let go of *out with vfs_put() */
+void vfs_put(struct vnode *v);                                   /* 10/18/26 (audit B73): a vnode vfs_lookup() gave */
 int vfs_stat(const char *path, struct stat *st);
 int vfs_chdir(const char *path);
 const char *vfs_getcwd(void);
 
 /* files */
+/* 10/18/26 (audit B73): a file of a mounted volume is held by the opening task's call (struct file's holder, counted
+   in its fs_refs: a kill waits) until fd_install() makes it the task's descriptor table's or vfs_close() closes it */
 int vfs_open(const char *path, int flags, struct file **out);
 int vfs_open_vnode(struct vnode *v, int flags, struct file **out);   /* 10/6/26: a vnode without a path (a socket) */
 int vfs_close(struct file *f);                       /* a written file's volume written out: 0, -EIO (refused, or
