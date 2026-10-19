@@ -50,11 +50,12 @@ build-fpga:
 	@tools/fpga-build.sh "$(BOARD)"
 
 # The physical test kit (docs/PHYSICAL-TESTS.md), with the Mac's own python3 and nothing installed:
-#   make board-test M=m1 [PORT=/dev/cu.usbserial-<serial>1] [ARGS="--lines 20"]
+#   make board-test M=m1 [DESIGN=...] [PORT=/dev/cu.usbserial-<serial>1] [ARGS="--lines 20"]
 #                                  one milestone's acceptance test (m1 m3 m5 m7 m8 m9): it asks for each
 #                                  step, checks what the board's serial port shows and writes
 #                                  docs/evidence/physical/<M>-<UTC date>.txt; PORT defaults to the only
-#                                  Arty UART plugged in
+#                                  Arty UART plugged in; DESIGN (passed as --design) names the design
+#                                  loaded, whose build manifest identifies the bitstream
 #   make uart-list                 the serial ports, and which one is the Arty's UART
 #   make uart-console [PORT=...] [LOG=file]   a terminal on the board at 115200 8N1; Ctrl-] quits
 #   make board-test-selftest       the kit against fake boards on this Mac's pseudo-terminals (15 s)
@@ -62,7 +63,8 @@ board-test:
 ifeq ($(M),)
 	@echo "board-test: name the milestone: make board-test M=m1 (m1, m3, m5, m7, m8 or m9; docs/PHYSICAL-TESTS.md)"; exit 2
 else
-	@$(PYTHON_HOST) tools/board-test.py $(M) --port "$(or $(PORT),auto)" --board "$(BOARD)" $(ARGS)
+	@$(PYTHON_HOST) tools/board-test.py $(M) --port "$(or $(PORT),auto)" --board "$(BOARD)" \
+	  $(if $(DESIGN),--design "$(DESIGN)") $(ARGS)
 endif
 
 uart-list:

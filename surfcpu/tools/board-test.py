@@ -28,6 +28,11 @@ design it asks the owner to load (--design names another):
       default 10), and a soak (--minutes, default 60) of shell, task and storage commands
       with CRC checks
 
+The bitstream is compared with the design's build manifest (build/fpga/BOARD/DESIGN/manifest.txt,
+or --manifest): the script refuses to start when there is none, or when it is another design's,
+since a run whose bitstream cannot be identified must not pass (make board-test passes DESIGN=
+as --design, as make program-volatile takes it).
+
 Each procedure opens the port first, so nothing the board prints afterwards is missed (a
 thread reads it all the time, also while a question waits for the owner), then asks the
 owner to do each step and waits for Enter (or y, n or s for something only a person can
@@ -304,8 +309,7 @@ class Run:
         mf = self.manifest
         if not mf:
             self.ident('  not compared: no build manifest at %s' % self.manifest_path)
-            self.checks.append(('skip', 'the bitstream\'s build id not compared: no build manifest at %s'
-                                % self.manifest_path))
+            self.fail('the bitstream\'s build id not compared: no build manifest at %s' % self.manifest_path)
             return
         same = mf.get('build_id') == build
         line = 'the bitstream\'s build id %s %s the manifest\'s (%s, %s)' % (
@@ -489,7 +493,7 @@ def m1(r):
         r.check(ok, line)
     else:
         r.ident('  not compared: no build manifest at %s' % r.manifest_path)
-        r.checks.append(('skip', 'the build identity not compared: no build manifest at %s' % r.manifest_path))
+        r.fail('the build identity not compared: no build manifest at %s' % r.manifest_path)
     # the receive pin: a byte typed comes back in the line
     r.type('S')
     m = r.expect(r'\| sw [01]{4} btn [01]{4} rx 53\n', 'the byte typed (S, 0x53) in a later line', 3.5)
@@ -1003,7 +1007,8 @@ def main(argv=None):
     ap.add_argument('--board', default=os.environ.get('BOARD', 'arty_a7_100t'), choices=sorted(BOARD_IDS))
     ap.add_argument('--design', help='the design to load, whose build manifest the bitstream is compared with '
                                      '(m1: arty_a7_baseline; m3: surfcpu_arty_a7_bramdiag, or surfcpu_arty_a7_ddr_bramdiag '
-                                     'for the DDR diagnostics; m5-m9: surfcpu_arty_a7_ddr)')
+                                     'for the DDR diagnostics; m5-m9: surfcpu_arty_a7_ddr; make board-test passes '
+                                     'DESIGN= as this)')
     ap.add_argument('--manifest', help='the build manifest (default build/fpga/BOARD/DESIGN/manifest.txt)')
     ap.add_argument('--kernel', default=str(REPO / 'build/riscv32/arty_a7/SURFOS.BIN'), help='the SURFOS.BIN installed')
     ap.add_argument('--ddrdiag', default=str(SURFCPU / 'build/fw/DDRDIAG.BIN'), help='the DDRDIAG.BIN on the card')
@@ -1019,13 +1024,23 @@ def main(argv=None):
     ap.add_argument('--soak-only', action='store_true', help='m9: the soak without the cold boots')
     ap.add_argument('--skip-no-card', action='store_true', help='m5: leave out the missing-card part')
     a = ap.parse_args(argv)
+    fn, title, design = PROCEDURES[a.milestone]
+    design = a.design or design
+    r = Run(a, a.milestone, title, design)
+    # the bitstream is identified by its build manifest: without one, or with another design's, the
+    # identity cannot be checked, so the run could not pass; refused before the owner is asked anything
+    if not r.manifest:
+        ap.error('no build manifest at %s, so the bitstream loaded could not be identified and this run could not '
+                 'pass. Name the design you load (make board-test DESIGN=..., or --design) or its build manifest '
+                 '(--manifest FILE)' % r.manifest_path)
+    if r.manifest.get('design') and r.manifest['design'] != design:
+        ap.error('the build manifest %s is %s\'s, not that of the design this run asks you to load (%s): name the '
+                 'design you load (make board-test DESIGN=..., or --design)' % (r.manifest_path,
+                                                                             r.manifest['design'], design))
     if a.port == 'auto':
         a.port, why = uart.auto_port()
         if not a.port:
             ap.error('--port auto: %s' % why)
-    fn, title, design = PROCEDURES[a.milestone]
-    design = a.design or design
-    r = Run(a, a.milestone, title, design)
     print('board-test %s: %s' % (a.milestone, title))
     interrupted = False
     try:

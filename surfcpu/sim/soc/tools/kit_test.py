@@ -21,7 +21,8 @@ mk/area-os.mk. tools/board-test.py and tools/uart.py run as the owner will run t
 The edge cases must give a clear FAIL, in seconds, never a PASS: on fake boards a port that
 goes away mid-run (USB unplugged), garbage on the line, a port where nothing arrives, a wrong
 build manifest and a lost second; on the RTL system a surfsim run that ends in the middle of the
-DDR diagnostic (the port gone) and a card without a kernel.
+DDR diagnostic (the port gone) and a card without a kernel. A run with no build manifest for its
+design, or with another design's, is refused before it asks anything (exit 2, no evidence).
 
   --set check   the fake boards, m3, m7 and the RTL edge cases (make test-os-kit)
   --set rtl     m5, m8 and m9 (make test-os-kit-rtl); --set all: both; --set fake: no surfsim
@@ -504,20 +505,53 @@ class Kit:
                 'm1-wrong-bitstream', 'm1', 'baseline', ['--lines', '3'], within=40, expect='FAIL',
                 manifest=good.replace('1a2b3c4d', '9999aaaa'), must=[r'FAIL\s+the line\'s build .* do NOT match'])),
             ('edge-unplugged', lambda: self.fake(
-                'edge-unplugged', 'm1', 'vanish', ['--lines', '5'], expect='FAIL', within=15,
+                'edge-unplugged', 'm1', 'vanish', ['--lines', '5'], manifest=good, expect='FAIL', within=15,
                 must=[r'FAIL\s+baseline line \d of 5: the port went away at \+[\d.]+ s',
                       r'USB unplugged, or the board lost power\?', r'\* the port went away'])),
             ('edge-garbage', lambda: self.fake(
-                'edge-garbage', 'm1', 'garbage', ['--lines', '3'], expect='FAIL', within=20,
+                'edge-garbage', 'm1', 'garbage', ['--lines', '3'], manifest=good, expect='FAIL', within=20,
                 must=[r'FAIL\s+baseline line 1 of 3: not seen within 5 s', r'The bytes look garbled: the wrong port'])),
             ('edge-silent', lambda: self.fake(
-                'edge-silent', 'm1', 'silent', ['--lines', '3'], expect='FAIL', within=20,
+                'edge-silent', 'm1', 'silent', ['--lines', '3'], manifest=good, expect='FAIL', within=20,
                 must=[r'not seen within 5 s', r'Nothing at all arrived on the port'])),
             ('edge-lost-second', lambda: self.fake(
-                'edge-lost-second', 'm1', 'skip', ['--lines', '4'], expect='FAIL', within=30,
+                'edge-lost-second', 'm1', 'skip', ['--lines', '4'], manifest=good, expect='FAIL', within=30,
                 must=[r'FAIL\s+the seconds since reset count up by one a line \(1, 2, 4, 5\)'])),
             ('uart', self.uart_tests),
+            ('refusals', lambda: self.refusals(good, diag)),
         ]
+
+    def refusals(self, good, diag):
+        """board-test.py refuses to start without the design's build manifest, or with another design's, so a
+        run whose bitstream cannot be identified never passes (the sixth GPU review: with the manifest missing
+        the identity check was skipped and m7 could pass). A fake board waits on the port, so a run that did
+        start would pass"""
+        for name, milestone, mode, man, args, words in (
+                ('refuse-no-manifest', 'm1', 'baseline', None, ['--lines', '3', '--manifest',
+                                                                os.path.join(self.work, 'none', 'manifest.txt')],
+                 'no build manifest at'),
+                ('refuse-other-design', 'm3', 'bramdiag', diag, [],
+                 'is surfcpu_arty_a7_ddr_bramdiag\'s, not that of the design this run asks you to load '
+                 '(surfcpu_arty_a7_bramdiag)')):
+            d = os.path.join(self.work, name)
+            os.makedirs(d, exist_ok=True)
+            link, control, state = (os.path.join(d, f) for f in ('port', 'control.json', 'state.json'))
+            json.dump({}, open(control, 'w'))
+            save(state, {'mode': 'fake', 'control': control, 'dir': d, 'slow': {}})
+            if man:
+                open(os.path.join(d, 'manifest.txt'), 'w').write(man)
+                args = args + ['--manifest', os.path.join(d, 'manifest.txt')]
+            fb = FakeBoard(link, control, mode)
+            fb.start()
+            try:
+                code, text, dt = self.board_test(name, milestone, link, state, args, timeout=60)
+            finally:
+                fb.close()
+            out = open(os.path.join(d, 'board-test.out')).read()
+            said = next((l for l in out.splitlines() if 'error:' in l), out.strip().splitlines()[-1] if out.strip() else '')
+            self.check(code == 2 and words in out and not text and dt < 20,
+                       '%s: board-test %s refused before asking anything (exit %s, no evidence%s): %s' % (
+                           name, milestone, code, '' if not text else ' -- but evidence was written', said[:170]))
 
     def uart_tests(self):
         d = os.path.join(self.work, 'uart')
