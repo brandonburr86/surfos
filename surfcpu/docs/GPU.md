@@ -397,17 +397,19 @@ every scene is whole and judged (with the total of its kind); a run seen only in
 opened late, a line lost or garbled, a RESET before its end) is cut short and not judged, but
 whatever it shows of a failure counts, a FAIL line or a scene's CRC other than the model's, and so
 does a line showing a failure outside any run; the capture must end with a whole run (it may end
-inside the echo line printed after it), and a capture of reruns only is not a full board test
-(the reset values were never checked: section 14). With `--build-id`, or `--manifest` (the
-bitstream's manifest), every run must show that build. The first run after a reset checks the
-engine's reset target and clip themselves, wherever the engine shows them: after the refused
-target, a fill at (0, 0) (the base, the clip's left and top edges), an 8x2 fill at (636, 478)
-(the stride, the right edge at 640 exactly, the bottom edge at 480 or past: rows past 479 are
-past VRAM's end) and an 8x2 copy from (636, 479) to (0, 4), whose source runs past the target's
-right and bottom edges (its width and height 640 and 480, not more). A clip edge past the target
-changes nothing a program can see, since the engine clips to both. test_gpu draws the same before
-any SET_TARGET. A rerun first sets the target and clip, since ABORT keeps whatever an abandoned
-run left.
+inside the echo line printed after it), and a capture of reruns only is not a full board test (the
+reset values were never checked: section 14). With `--build-id`, or `--manifest` (the manifest of
+the gpudiag bitstream tested, which must be a gpudiag build's that passed its checks), no run may
+show another build and one whole run at least must show this one (a run whose identity lines were
+garbled shows none); only the manifest says whether the build was clean, so only with it does a
+dirty banner or bitstream line fail. The first run after a reset checks the engine's reset target
+and clip themselves, wherever the engine shows them: after the refused target, a fill at (0, 0) (the
+base, the clip's left and top edges), an 8x2 fill at (636, 478) (the stride, the right edge at 640
+exactly, the bottom edge at 480 or past: rows past 479 are past VRAM's end) and an 8x2 copy from
+(636, 479) to (0, 4), whose source runs past the target's right and bottom edges (its width and
+height 640 and 480, not more). A clip edge past the target changes nothing a program can see, since
+the engine clips to both. test_gpu draws the same before any SET_TARGET. A rerun first sets the
+target and clip, since ABORT keeps whatever an abandoned run left.
 
 **What gpudiag checks of the engine, and what it does not.** On the board it checks: gpu.ID and
 INFO; idle state; a full FIFO behind a WAIT_VBLANK, OVERFLOW, and the drain at the next blanking; an
@@ -815,20 +817,46 @@ that fails on ecff4cd and passes after, where a test is possible:
 
 **The bitstreams.** gpudiag changed (m-C), so it was rebuilt at 317c8f4, the round's final code
 commit, from a clean tree with SOURCE_DATE_EPOCH=1792395168 (317c8f4's commit time), LC_ALL=C and
-TZ=UTC, its seeds 1 to 8 under the slack rule ([evidence](evidence/gpu/synth-gpudiag-r5.txt)):
-seed 1, the first of its list, passed the rule in 229 s (pix_clk 94.35 MHz, +29.125 ns; sys_clk
-46.38 MHz, +18.440 ns, the least margin, against 1.600); every gate PASS (LVS 14,034 proved, 0
-differ); 7,907 LUTs (12.5 %), 3,983 flip-flops, 112.5 RAMB36; ROM gpudiag.mem
+TZ=UTC, its seeds 1 to 8 under the slack rule ([evidence](evidence/gpu/synth-gpudiag-r5.txt)): seed
+1, the first of its list, passed the rule in 229 s (pix_clk 94.35 MHz, +29.125 ns; sys_clk 46.38
+MHz, +18.440 ns, the least margin, against 1.600); every gate PASS (LVS 14,034 proved, 0 differ);
+7,907 LUTs (12.5 %), 3,983 flip-flops, 112.5 RAMB36; ROM gpudiag.mem
 e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f; bitstream sha256
 a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82; 31 minutes. Its banner and
 identity line show build 317c8f4b. The DDR+GPU design's RTL and SurfBoot did not change in this
 round, so its bitstream to test stays section 12.6's: e119a78, seed 7, dram_clk +0.977 ns, sha256
 b3c750cb...68f2, build e119a787. The rebuilt gpudiag netlist runs gpudiag to `GPUDIAG: PASS (124
 checks)` with every FRAME_CRC the model's and the manifest's build id
-([evidence](evidence/gpu/g2-netlist-sim-r5.txt); 1.42 s simulated in 47 minutes). `make check` passes at 317c8f4 from a
-clean tree (30 minutes: test-gpu, test-flow, board-tools 276 of 276, test-release 56 tests), and
-test-gpu-mutants catches 45 of 45 (8 minutes); each finding's tests on ecff4cd and after are in the
-[evidence](evidence/gpu/review5-sim.txt).
+([evidence](evidence/gpu/g2-netlist-sim-r5.txt); 1.42 s simulated in 47 minutes). `make check`
+passes at 317c8f4 from a clean tree (30 minutes: test-gpu, test-flow, board-tools 276 of 276,
+test-release 56 tests), and test-gpu-mutants catches 45 of 45 (8 minutes); each finding's tests on
+ecff4cd and after are in the [evidence](evidence/gpu/review5-sim.txt).
+
+### 12.9 The sixth review (2026-10-19)
+
+A sixth independent review, of gpu-fix-5 at 9536fe3, found nothing critical or major and found the
+code sound: the reset checks pin the target's width and height at 640 and 480 exactly,
+test-gpu-mutants catches 45 of 45 and 13 more edge mutants of the review's, and the checker's sweeps
+and pseudo-terminal captures are clean. What remained was section 14's procedure and two checker
+points: two minor findings and two cosmetic ones. Neither the RTL nor gpudiag changed, so the
+bitstreams to test stay section 12.8's (gpudiag, 317c8f4) and 12.6's (DDR+GPU, e119a78). The fixes
+are 4637857..2902a6a (code) and this record:
+
+| Finding | Fix | Test: on 9536fe3 / after |
+|---|---|---|
+| 1 (minor): step 7 said to run m7 "with `DESIGN=surfcpu_arty_a7_ddr_gpu`", but make board-test passed no DESIGN, so m7 asked for surfcpu_arty_a7_ddr, whose manifest is not in the sc/gpu build directory: the identity check became a skip and m7 could pass on the wrong design; and it asked for the monitor's `info` without saying how to reach the monitor | make board-test passes DESIGN as `--design`; board-test refuses to start (exit 2, before it asks anything) when the design's build manifest is missing or names another design, and a comparison that still finds none is a FAIL, no longer a skip (2902a6a); step 7 runs `make -C surfcpu board-test M=m7 DESIGN=surfcpu_arty_a7_ddr_gpu` and names the lines that show e119a787; step 8 reaches the monitor with BTN1 held at RESET (this record) | kit_test's two new refusals, against fake boards a run would pass on (no manifest; a manifest of another design with the same build id): PASS (10 and 27 checks, "not compared") / refused, exit 2, no evidence; `make -n board-test M=m7 DESIGN=surfcpu_arty_a7_ddr_gpu`: no `--design` / `--design "surfcpu_arty_a7_ddr_gpu"`; m7 without a design: run on with surfcpu_arty_a7_ddr and no manifest / refused; the fake set 20 of 20, and test-os-kit and test-os-kit-rtl pass |
+| 2 (minor): section 14 said nothing about a FAIL, so a passing retry in a new file could stand for G1 on an intermittent board | the FAIL rule: any FAIL is that test's result, kept, recorded and investigated; a retry is a new test that does not replace it; G1 and G2 pass only when every capture made for them passed or each failure is explained (this record) | by reading |
+| 3 (cosmetic): `--manifest` read only build_id and source_dirty, so a gpudiag run judged with the DDR+GPU manifest of its build id passed (B6) | the manifest must name a gpudiag design whose boot ROM is gpudiag.mem and say result "pass", read from its top only (4637857) | B6 PASS / FAIL; test_gpudiag_check.py's 4 new cases of the kind (another design's manifest, another boot ROM, a failed build, no design named) pass with 9536fe3's checker / fail; 73 of 73 |
+| 4 (cosmetic): section 14 and section 10 said "every run shows the manifest's build", which is not what the checker asks | both say it now: no run shows another build, one whole run at least shows this one, and only the manifest knows whether the build was clean; so does the checker's docstring (4637857) | B12 (a banner garbled, the bitstream line intact) and B14 (`--build-id` alone, a dirty build) pass on both, as now documented |
+
+The review's adversarial6.py with the new checker: B6 FAIL, every other case as with 9536fe3's, and
+its sweeps (the echo line cut at each character, RESET or the console opened at each character of a
+good run, a byte garbled at each position of another build's or a dirty run) as before. `make check`
+passes at 2902a6a from a clean tree (30 minutes: test-gpu with test_gpudiag_check's 73 cases,
+test-os-kit with the fake boards' 20 checks and m3 and m7 on the RTL system, board-tools 276 of 276,
+test-flow, test-release 56 tests), and so does test-os-kit-rtl (m5, m8 and m9 on the RTL system, 3
+minutes); each finding's tests on 9536fe3 and after are in the
+[evidence](evidence/gpu/review6-sim.txt).
 
 ## 13. Risks
 
@@ -883,6 +911,14 @@ scripts run with `python3`: they are not executable files.
 | G1 | `surfcpu_arty_a7_gpudiag/surfcpu_arty_a7_gpudiag.bit` | 317c8f4 (section 12.8), seed 1 | `a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82` | `SurfGPU diagnostic 1.0.0 (build 317c8f4b)`, then `bitstream build 317c8f4b flags 0, ...` |
 | G2 | `surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit` | e119a78 (section 12.6), seed 7 | `b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2` | `SurfBoot 1.1.0 (build e119a787), the SurfCPU boot ROM` |
 
+**A FAIL is a result.** Any FAIL is the result of the test it came from: a FAIL line or `GPUDIAG:
+FAIL` from gpudiag (also in a run whose start the console missed), gpudiag_check's FAIL, a FAIL or
+INCOMPLETE from board-test, a build id other than the table's, or the owner's no about the picture.
+Keep its capture or evidence file as it is, record the FAIL, and find out why. A retry (RESET, a
+new capture file) is a new test: it does not replace the failed one. G1 and G2 pass only when every
+capture and run made for them passed, or when each failure is explained (its cause found and shown
+to lie outside the design, for example a loose Pmod cable, and written down with the capture).
+
 G1, the diagnostic:
 
 1. Check the bitstream before anything else:
@@ -914,10 +950,13 @@ G1, the diagnostic:
          --manifest surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/manifest.txt
 
    It passes only when no line shows a failure, every run that ended passed, the capture ends with
-   one, one at least is a first run, and every run shows the manifest's build (317c8f4b, from a clean
-   tree; `--build-id 317c8f4b` names it without the manifest). `--accept-rerun` would take reruns
-   alone, which is not this test. `tools/uart.py capture` works too: it writes a new file, with
-   time-stamped lines the checker reads. Start it, then press RESET:
+   one, one at least is a first run, no run shows a build other than the manifest's (317c8f4b) and
+   one whole run at least shows that one, and no run shows a dirty banner or bitstream line (the
+   manifest says the tree was clean). The manifest must be a gpudiag build's that passed its checks.
+   `--build-id 317c8f4b` names the build without the manifest, but does not know whether it was
+   clean. `--accept-rerun` would take reruns alone, which is not this test. `tools/uart.py capture`
+   works too: it writes a new file, with time-stamped lines the checker reads. Start it, then press
+   RESET:
 
        python3 surfcpu/tools/uart.py capture auto --out surfcpu/build/gpudiag-1.txt \
          --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)\n+UART echo: [^\n]*\n'
@@ -938,10 +977,31 @@ G2, the DDR+GPU design, which boots SurfOS from the card exactly as `surfcpu_art
    DESIGN=surfcpu_arty_a7_ddr_gpu`. Not a bitstream from `make build-fpga ...
    DESIGN=surfcpu_arty_a7_ddr_gpu` at another commit: that is another placement (seed 1 at e119a78
    gave +0.563 ns, other commits other placements).
-7. Follow the m7 steps of PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`. SurfBoot's
-   banner must read `SurfBoot 1.1.0 (build e119a787), the SurfCPU boot ROM`; its monitor command
-   `info` shows `bitstream build e119a787 flags 0` and features 1ff (its label list predates the
-   GPU bit). Another build id is another bitstream or boot ROM: stop.
+7. Run m7 of PHYSICAL-TESTS.md with this design:
+
+       make -C surfcpu board-test M=m7 DESIGN=surfcpu_arty_a7_ddr_gpu
+
+   (`DESIGN=` reaches board-test as `--design`; `ARGS="--design surfcpu_arty_a7_ddr_gpu"` does the
+   same.) It asks you to load that design and compares the bitstream with its build manifest,
+   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt (build_id e119a787,
+   source_dirty false); it refuses to start when that manifest is missing or is another design's.
+   Without `DESIGN=` it asks for `surfcpu_arty_a7_ddr`, whose manifest this build directory does not
+   have, and refuses. The lines that show the identity: in the transcript, SurfBoot's `SurfBoot 1.1.0
+   (build e119a787), the SurfCPU boot ROM` and `soc: Arty A7-100T (0x100), SoC 0.3.0, memory map 2,
+   25000000 Hz; bitstream e119a787` (no `dirty`); in the evidence's identity section, `SurfBoot
+   1.1.0, ROM build e119a787`, `bitstream build e119a787, flags 0, board id 0x100` and `the
+   bitstream's build id e119a787 is the manifest's (e119a787, ...)`; and among its checks `ok the
+   bitstream's build id e119a787 is the manifest's` and `ok its dirty flag (0) matches the
+   manifest's source_dirty = false`.
+8. The GPU among the features, from SurfBoot's monitor. Open the console (`python3
+   surfcpu/tools/uart.py console auto --log surfcpu/build/ddrgpu-info-1.log`), hold BTN1 down,
+   press and release RESET, and keep holding BTN1 until `surfboot>` appears (SurfBoot first prints
+   `BTN1 held: staying in the monitor`); release BTN1, type `info` and Enter. It must print `SurfBoot
+   1.1.0 build e119a787`, `sysinfo: magic 46525553, SoC 00000300, map 2, board 00000100, bitstream
+   build e119a787 flags 0, time 1792363017` and `clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel
+   25173611 Hz; features 1ff (uart timer irq gpio spi ps2 video ddr)`: 1ff has the GPU bit (0x100),
+   which the label list predates. Another build id is another bitstream or boot ROM. Press RESET
+   (holding no button) to boot again.
 
 ### 14.1 Expected FRAME_CRCs
 

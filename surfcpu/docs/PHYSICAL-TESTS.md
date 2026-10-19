@@ -38,7 +38,7 @@ apart.
 ## 2. The commands
 
 ```
-make -C surfcpu board-test M=m1 [PORT=/dev/cu.usbserial-<serial>1] [ARGS="..."]
+make -C surfcpu board-test M=m1 [DESIGN=...] [PORT=/dev/cu.usbserial-<serial>1] [ARGS="..."]
 ```
 
 | M | Milestone | The design it asks you to load | What you do when asked | Time on the board |
@@ -56,8 +56,10 @@ confirmed 1)`, with its evidence in `docs/evidence/physical/m3-2026-10-16.txt`. 
 is 0 for PASS only.
 
 Options (`ARGS="..."`): `--board arty_a7_35t`; `--design D` (the design to load, whose build
-manifest the bitstream is compared with: the table's, unless given); `--manifest FILE` (another
-build manifest);
+manifest the bitstream is compared with: the table's, unless given; `DESIGN=D` on the make command
+line passes it, as `make program-volatile` takes it; the script refuses to start, with exit 2
+before it asks anything, when that manifest is missing or names another design, since a run whose
+bitstream cannot be identified must not pass); `--manifest FILE` (another build manifest);
 `--kernel FILE` and `--ddrdiag FILE` (the packages that were put on the card, default
 `../build/riscv32/arty_a7/SURFOS.BIN` and `build/fw/DDRDIAG.BIN`); `--lines N` (m1, default
 10); `--skip-no-card` (m5); `--mount /Volumes/SURFOS` (m8: the script reads the card's files on
