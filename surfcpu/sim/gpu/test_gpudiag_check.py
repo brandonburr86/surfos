@@ -21,6 +21,10 @@ scenes, 84 checks for a first run and 83 for a rerun:
     rerun's tail) or with a garbled scene line is cut short, not judged, and a whole run after it
     passes; a failed run whose FAIL lines and summary lost bytes still fails by its wrong CRC; a
     lone PASS run with a scene line missing, or one twice and another missing, fails;
+  - the fifth review's cases: a failure shown by a line outside any run (a section's end between two
+    runs, or before the first one when the console opened inside a FAIL line, or a FAIL line whose
+    spaces were lost) fails; a capture that ends inside the echo line after a whole run (as uart.py
+    capture can stop) passes, and one whose last line is not the echo line's start fails;
   - --must-fail passes only a failing run that says what it must.
 Exit 0 when all pass.
 """
@@ -93,6 +97,12 @@ def stamped(text, cut_at_summary=False):
 
 failures = 0
 checks = 0
+
+
+def ending(text, k):
+    """text cut k characters after its first GPUDIAG line's ')' (where uart.py capture's last read ended)"""
+    i = text.index(")", text.index("GPUDIAG: ")) + 1
+    return text[:i + k]
 
 
 def expect(name, transcript, want, *extra):
@@ -172,6 +182,25 @@ expect("F3: a failed run whose summary alone is garbled, then RESET and a whole 
 expect("F6: a lone PASS run with a scene line missing", run().replace(run().split("\n")[6] + "\n", ""), False)
 expect("F7: a lone PASS run with a scene line twice and another missing",
        run().replace(run().split("\n")[6], run().split("\n")[5]), False)
+# the fifth review's cases (gpurev5-tests/capture/adversarial5.py)
+SECTION_END = "  gpu registers and errors: 1 of 14 checks failed\n"
+expect("X4: a whole run, the echo, a later run's section end alone, then RESET and a whole run",
+       run() + ECHO + "\n" + SECTION_END + run() + ECHO, False)
+expect("X5: the console opened inside a failing run's FAIL line, RESET in scene 1, then a whole run",
+       (lambda b: b[b.index("WAIT_VBLANK"):b.index("scene  1:")])(run(failed_section=True)) + run() + ECHO, False)
+expect("a section's end alone before a whole run", SECTION_END + run() + ECHO, False)
+expect("a FAIL line whose spaces were lost (the console opened at its F), then RESET and a whole run",
+       "FAIL ABORT behind a WAIT_VBLANK: 5 words queued\n" + run() + ECHO, False)
+expect("a whole run, then a section's end after the echo", run() + ECHO + SECTION_END, False)
+expect("E2: uart.py capture ending inside the echo line ('UA')", stamped(ending(run() + ECHO, 4)), True)
+expect("E3: ... ('UART ech')", stamped(ending(run() + ECHO, 10)), True)
+expect("E4: ... ('UART echo: ')", stamped(ending(run() + ECHO, 13)), True)
+expect("E6: a raw log closed while the echo line arrived ('UART ec')", ending(run() + ECHO, 9), True)
+expect("a raw log ending inside the echo line of a rerun after a first run",
+       run() + ECHO + ending(run(rerun=True) + ECHO, 6), True)
+expect("a capture ending in a line that is not the echo line's start", run() + "\nUART echo! typ", False)
+expect("the echo line's start, then more", run() + "\nUART ec\nidentity ok\n", False)
+expect("the echo line's start after a failed run", ending(run(crcs=BAD) + ECHO, 6), False)
 # --must-fail
 expect("--must-fail: a failing run that says why", run(skip=True), True, "--must-fail", "skipped: no engine")
 expect("--must-fail: a failing run that does not say it", run(skip=True), False, "--must-fail", "gpu.ID reads")
@@ -180,5 +209,5 @@ if failures:
     print("test_gpudiag_check: FAIL (%d of %d checks)" % (failures, checks))
     sys.exit(1)
 print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every whole run's verdict and total, runs cut short "
-      "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth review's cases, "
-      "--must-fail)" % checks)
+      "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth and fifth reviews' "
+      "cases, --must-fail)" % checks)

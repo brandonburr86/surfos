@@ -20,10 +20,12 @@ reached its GPUDIAG line with PASS and a passing CRC line for every scene of the
 one that did not (the console opened after its start, a line lost or garbled, a RESET before its
 end) is cut short and not judged, but whatever it shows of a failure counts. The capture passes
 only when:
-  - no run, whole or cut short, shows a failure: a FAIL line, a section's "k of n checks failed",
-    GPUDIAG: FAIL, or a scene's FRAME_CRC other than the model's;
+  - no line of the capture shows a failure, wherever it falls (in a run, whole or cut short, before
+    the first run or between two): a FAIL line, a section's "k of n checks failed", GPUDIAG: FAIL, or
+    a scene's FRAME_CRC other than the model's;
   - the capture ends with a whole run: after its GPUDIAG line only the UART echo, blank lines and
-    bytes without a word in them (a 0x00 0xFF burst while the board is reprogrammed) may follow;
+    bytes without a word in them (a 0x00 0xFF burst while the board is reprogrammed) may follow, and
+    the capture may end inside the echo line (uart.py capture stops where its last read ended);
     anything else is a later run that did not end;
   - every whole run has the checks of a complete first run or of a complete rerun (a run of the
     rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
@@ -45,11 +47,12 @@ import sys
 BANNER = re.compile(r"SurfGPU diagnostic ")             # anywhere in a line: a garbled start may precede it
 SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL) \(([^)]*)\)")
 ECHO = re.compile(r"UART echo: .*|echo +\d+: .*")      # what gpudiag prints after its GPUDIAG line
+ECHO_LINE = "UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again."
 RERUN = "a rerun (Ctrl-R)"
 STAMP = re.compile(r"^\+ *\d+\.\d+ \| ?")              # tools/uart.py capture: "+    0.240 | text"
 CAPTURE_HEAD = re.compile(r"^# uart\.py capture ")
 LEADING_JUNK = re.compile(r"^[^ -~]+")                  # NULs, U+FFFD, bytes a reset or a garbled start left
-FAILED = re.compile(r"^\s+FAIL\b|\b\d+ of \d+ checks? failed")
+FAILED = re.compile(r"^\s*FAIL\b|\bchecks? failed\b")     # a FAIL line (its spaces lost too), a section's end
 START = (("board", re.compile(r"board .*\(0x[0-9a-f]+\), SoC ")),
          ("bitstream", re.compile(r"bitstream build [0-9a-f]{8} ")),
          ("identity", re.compile(r"identity\s")))
@@ -104,9 +107,9 @@ class Run:
         return ok, failed
 
 
-def split_runs(text: str) -> list:
-    """the runs of a capture, in order"""
-    runs, cur = [], None
+def split_runs(text: str) -> tuple[list, list]:
+    """(the runs of a capture in order, the lines outside any run: before the first, after a run's end)"""
+    runs, outside, cur = [], [], None
     for raw in text.replace("\r", "").split("\n"):
         if CAPTURE_HEAD.match(raw):
             continue
@@ -123,9 +126,10 @@ def split_runs(text: str) -> list:
             elif done:
                 if cur is not None:
                     cur.after.append(line)
+                outside.append(line)
                 continue
         cur.add(line)
-    return runs
+    return runs, outside
 
 
 def main() -> int:
@@ -140,7 +144,7 @@ def main() -> int:
     ap.add_argument("--must-fail", metavar="REGEX")
     a = ap.parse_args()
 
-    runs = split_runs(open(a.uart, errors="replace").read())
+    runs, outside = split_runs(open(a.uart, errors="replace").read())
     expect = {}
     first_total = rerun_total = None
     if a.expect:
@@ -176,8 +180,9 @@ def main() -> int:
     if not runs:
         problems.append("no gpudiag output in the capture")
     elif cut_tail:                                  # tools/uart.py capture --until matched half the line
-        problems.append("the capture ends in the middle of its GPUDIAG line (%r): capture until the whole line, "
-                        "--until 'GPUDIAG: (PASS|FAIL) \\([^)]*\\)'" % tail.strip()[:40])
+        problems.append("the capture ends in the middle of its GPUDIAG line (%r): capture until the echo line "
+                        "after it is whole, --until 'GPUDIAG: (PASS|FAIL) \\([^)]*\\)\\n+UART echo: [^\\n]*\\n'"
+                        % tail.strip()[:40])
     elif not done:
         problems.append("no GPUDIAG summary line: no run ended")
     # every run's failures, whole or cut short
@@ -194,6 +199,11 @@ def main() -> int:
                 problems.append("%s printed scene %d's FRAME_CRC %08x, the model's %08x" % (which(r), sn, crc,
                                                                                          expect[sn][0]))
                 break
+    # and every line outside the runs (before the first, between two, after the last): a section's end
+    # whose run was otherwise lost still shows a failure
+    stray = next((l.strip() for l in outside if FAILED.search(l) or "GPUDIAG: FAIL" in l), None)
+    if stray is not None:
+        problems.append("a line outside any run shows a failure: %r" % stray[:80])
 
     def whole(r: Run) -> bool:
         ok, _ = r.crcs()
@@ -204,11 +214,15 @@ def main() -> int:
         first = next((l.strip() for l in runs[-1].lines if l.strip()), "")
         problems.append("a run after the last GPUDIAG line did not end (it printed %r)" % first[:60])
     if runs and runs[-1].summary:
-        for line in runs[-1].after:
-            s = line.strip()
-            if s and not ECHO.fullmatch(s) and WORD.search(s):
-                problems.append("after the last GPUDIAG line: %r (a run that did not end?)" % s[:60])
-                break
+        after = [l.strip() for l in runs[-1].after]
+        end = max((i for i, s in enumerate(after) if s), default=-1)       # the capture's last line with text
+        for i, s in enumerate(after):
+            if not s or ECHO.fullmatch(s) or not WORD.search(s):
+                continue
+            if i == end and ECHO_LINE.startswith(s) and whole(runs[-1]):
+                continue                            # the echo line, cut where the capture ended
+            problems.append("after the last GPUDIAG line: %r (a run that did not end?)" % s[:60])
+            break
         last = runs[-1]
         if last.summary.group(1) == "PASS" and not whole(last):
             ok, _ = last.crcs()
