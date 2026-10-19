@@ -23,6 +23,12 @@ moment it has let go, to end its call or itself, rather than coming at the first
 where its clean-up runs (kill_escalate()). (B79) That grace starts at the task's next path call
 holding nothing too, and a task still holding something when it has run out gets EINTR from its
 path calls (task_vfs_begin_slow()).
+10/19/26 (audit B80): the grace is owed from the kill itself when the kill finds its task holding
+something (kill_task(), kill_hangup()), and to a task that begins a VFS call after its kill, not
+only once a look has seen it holding. (B81) Every VFS call begins in task_vfs_begin_slow() for a
+killed task, a call on an open file too. (B82) The kernel log's line for a kill put off says what
+comes: a grace, or, once that is over, the kill as soon as the task lets go. What the rule
+guarantees, and what it does not, is said before kill_escalate().
 */
 
 #include <surfos/types.h>
@@ -398,6 +404,10 @@ void kill_task(surf_task *t) {
     } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
         if(!(t->intr & TI_KILL)) t->kill_at = getticks();   /* 10/18/26 (audit B69): when, for the log's one line */
         t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
+        if(in_fs(t)) t->intr |= TI_HELD;            /* 10/19/26 (audit B80): it holds something: its grace is owed from
+                                                       now (a thread that let go before the first look was killed at
+                                                       once at it, and a call that let go just before its KILL_WAIT_MS
+                                                       look at that look, both where their clean-up runs) */
         /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it
            (B48: TI_NOCALL, so that a call it enters meanwhile gets the call's KILL_WAIT_MS) */
         if(!t->in_call) t->intr |= TI_NOCALL;
@@ -421,8 +431,9 @@ static void kill_hangup(surf_task *t) {
     t->kill_at = getticks();                    /* 10/18/26 (audit B69) */
     if(!t->in_call) {
         if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
-            t->intr |= TI_KILL | TI_NOCALL | TI_HANGUP;   /* (B48; 10/18/26, B55: a call it enters keeps the hangup's
-                                                     rule, waited for to its end: kill_escalate()) */
+            t->intr |= TI_KILL | TI_NOCALL | TI_HANGUP | TI_HELD;   /* (B48; 10/18/26, B55: a call it enters keeps the
+                                                     hangup's rule, waited for to its end: kill_escalate(); 10/19/26,
+                                                     B80: its grace owed, as kill_task() has it) */
             ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
             wake_intr(t);
         } else become_zombie(t, -1);
@@ -433,12 +444,35 @@ static void kill_hangup(surf_task *t) {
     wake_intr(t);
 }
 
+/* 10/19/26 (audit B80-B82): the rule, what it guarantees and what it does not. A kill comes at the end of its task's
+   call (task_call_leave(): task_exit(-1) in the task's own context, its files closed), or at once only (1) at the kill,
+   to a task outside any call that holds nothing (2004's rule), (2) at a call's KILL_WAIT_MS look, to a call that holds
+   nothing and is not marked TI_HELD (2004's rule: the moment is the kill's, not a letting go's), (3) at a look after the
+   task's grace, to one that holds nothing then. A task holding something (in_fs()) is never killed at once (B39, B62,
+   B73): it is looked at again every FS_HOLD_RETRY_MS. TI_HELD, a grace owed, is set where the kill finds the task holding
+   something (kill_task(), kill_hangup(), B48's hand-over to a call), at each look that does, and at the start of each VFS
+   call a killed task makes (task_vfs_begin_slow(): it is to take something). The grace (TI_GRACE, once) begins at the
+   first moment after that the task is seen holding nothing, a look or the start of a VFS call, and lasts KILL_WAIT_MS:
+   a call that ends meanwhile is killed at its end, a kernel thread that ends ends by itself. At its end a task holding
+   something is marked TI_LATE: its VFS calls but a close say EINTR before they take anything, and it is killed at the
+   first look that finds it holding nothing (3).
+   So a task whose kill found it holding something, or that took something since, is never killed at once before
+   KILL_WAIT_MS after the first moment it was seen holding nothing; one that ends in that time ends with its clean-up
+   done, at its call's end or by itself; and one that ignores its kill and works on through VFS calls is killed within
+   about KILL_WAIT_MS of its first letting go and the operation then under way. Not so: (a) the grace is once: a task
+   holding something again at its end is killed at the first look after its next letting go, its clean-up then cut
+   short; (b) a call not marked (holding nothing at its kill, no VFS call since, nothing held at its KILL_WAIT_MS look: a
+   lock taken and let go outside any VFS call, a network call's, is not seen) is killed at once at that look wherever it
+   is, as in 2004; (c) a task that never lets go (a lock or a file kept while it works) is not killed while it holds:
+   its waits are cut short or bounded (B39, B73), and a command looks for its kill between its steps; (d) a hangup's kill
+   in a call waits for the call's end however long (B55); (e) a fault is not a kill (kill_task_now(), B56) */
+
 /* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing
    cuts it short, or it does not look. Killed at once, as every kill was before (whatever it
    holds stays held); the kernel log says so. From the timer interrupt. */
 static void kill_escalate(void *arg) {
     surf_task *t = (surf_task *)arg;
-    char line[160];
+    char line[200];
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) return;
     if((t->intr & TI_NOCALL) && t->in_call) {       /* 10/17/26 (audit B48): killed outside any call (put off inside a file
                                                        system), it has entered a call since: that call's rule, KILL_WAIT_MS
@@ -446,7 +480,9 @@ static void kill_escalate(void *arg) {
                                                        to have overrun its 2 s, holding whatever the call held). 10/18/26
                                                        (B55): a hangup's (TI_HANGUP too) then says so once and waits for
                                                        the call's end, as kill_hangup() has it for a task in a call */
-        t->intr &= ~(TI_NOCALL | TI_HELD | TI_GRACE | TI_LATE);   /* (10/19/26, B76: the call's rule from its start) */
+        t->intr &= ~(TI_NOCALL | TI_GRACE | TI_LATE);   /* (10/19/26, B76: the call's rule from its start; B80: a grace
+                                                       still owed to it, TI_HELD kept, and owed if it holds something) */
+        if(in_fs(t)) t->intr |= TI_HELD;
         ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
         return;
     }
@@ -471,11 +507,17 @@ static void kill_escalate(void *arg) {
         t->intr |= TI_HELD;                         /* (10/19/26, B76: below, once it has let go) */
         if(t->intr & TI_GRACE) t->intr |= TI_LATE;  /* (10/19/26, B79: its grace is over: task_vfs_begin() refuses) */
         if(!(t->intr & TI_FSWAIT) && (t->in_call || ms >= KILL_WAIT_MS)) {
+            const char *what = holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
+                             : holds(t) ? "inside a file system or a device request"
+                             : "holding a volume's file or directory";   /* (10/18/26, B73: fs_refs) */
             t->intr |= TI_FSWAIT;
-            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %lu ms after its kill: once it lets go it has "
-                     "%u ms to end\n", t->name, t->pid, holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
-                     : holds(t) ? "inside a file system or a device request"
-                     : "holding a volume's file or directory", ms, (u_int)KILL_WAIT_MS);   /* (10/18/26, B73: fs_refs) */
+            if(t->intr & TI_GRACE)                  /* 10/19/26 (audit B82): this look is its grace's end (begun at a VFS
+                                                       call, B79): a grace promised here was already spent */
+                snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is %s again %lu ms after its kill, its %u ms from "
+                         "letting go over: killed as soon as it lets go\n", t->name, t->pid, what, ms, (u_int)KILL_WAIT_MS);
+            else
+                snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %lu ms after its kill: once it lets go "
+                         "it has %u ms to end\n", t->name, t->pid, what, ms, (u_int)KILL_WAIT_MS);
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
@@ -513,14 +555,26 @@ static void kill_escalate(void *arg) {
    here instead, at its next path call holding nothing (B76); and one still holding something when its grace has run out
    (TI_LATE) gets -EINTR from every path call from then on, so that it soon holds nothing and the next look kills it
    (B79: the review measured such a task not killed 10 s after its kill, 11 times of 42; and one that never lets go
-   between its calls, holding a file, is not killed at all, as B73 has it) */
+   between its calls, holding a file, is not killed at all, as B73 has it). 10/19/26 (audit B80, B81): for every killed
+   task, at the start of every VFS call (a call on an open file too: fs/vfs.c); one that begins a call is to take
+   something, and is marked so (TI_HELD: a grace owed), here after the look above. Not for a hangup's kill in a call,
+   which waits for the call's end (its timer is never started again: B55's line is said once), nor a task ending by
+   itself (TC_EXIT: its files close); and a step that must finish (fs_finish: umount, eject's unmount) is never
+   refused */
 int task_vfs_begin_slow(void) {
+    surf_task *t = curTask;
     u_long flags = irq_save();
     int r = 0;
-    if(curTask->intr & TI_LATE) r = -EINTR;
-    else if((curTask->intr & (TI_KILL | TI_HELD | TI_GRACE)) == (TI_KILL | TI_HELD) && !in_fs(curTask)) {
-        curTask->intr |= TI_GRACE;
-        ktimer_start(&curTask->kill_timer, KILL_WAIT_MS, false);
+    if((t->intr & (TI_HANGUP | TI_NOCALL)) == TI_HANGUP || (t->in_call & TC_EXIT)) {
+        /* (the call's end awaited, or the task ending: nothing here) */
+    } else if(t->intr & TI_LATE) {
+        if(!t->fs_finish) r = -EINTR;
+    } else {
+        if((t->intr & (TI_HELD | TI_GRACE)) == TI_HELD && !in_fs(t)) {
+            t->intr |= TI_GRACE;
+            ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+        }
+        t->intr |= TI_HELD;
     }
     irq_restore(flags);
     return r;
