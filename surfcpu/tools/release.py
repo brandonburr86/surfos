@@ -92,7 +92,7 @@ PASS_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "DOCKE
             "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY")
 # set, these would change what a build makes or which image it uses: refused, never passed on
 REFUSE_ENV = ("DRY_RUN", "SURFCPU_FPGA_OUT", "SURFCPU_IMAGE", "SURFCPU_OPENXC7_IMAGE", "SURFCPU_OPENXC7_BUILD",
-              "SURFCPU_ROMCHECK", "ROM", "SURFCPU_BUILD_ID", "SURFCPU_BUILD_DIRTY")
+              "SURFCPU_ROMCHECK", "ROM", "SURFCPU_BUILD_ID", "SURFCPU_BUILD_DIRTY", "PLACER_SEEDS")
 PKG_FIELDS = ((0, 4, "magic"), (4, 2, "version"), (6, 2, "header_size"), (8, 4, "isa"), (12, 4, "platform"),
               (16, 4, "load_addr"), (20, 4, "payload_size"), (24, 4, "mem_size"), (28, 4, "entry"),
               (32, 4, "payload_crc32"), (36, 4, "flags"), (40, 4, "image_version"), (44, 4, "build_id"),
@@ -1647,8 +1647,9 @@ def cmd_verify(a) -> int:
     else:
         seed_note = ("this MANIFEST predates format 2: its placer_seed fields say 1 for every design whatever seed "
                      "was used (tools/release.py read a key fpga-build.sh does not write at the top of a build "
-                     "record), so the rebuild takes each design list's seeds, as the release did; 1.0.0-f791b8a1's "
-                     "arty_a7_100t surfcpu_arty_a7_ddr_bramdiag was placed with seed 3")
+                     "record), so the rebuild takes each design list's seeds, as the release did"
+                     + ("; its arty_a7_100t surfcpu_arty_a7_ddr_bramdiag was placed with seed 3"
+                        if man.get("release") == "1.0.0-f791b8a1" else ""))
     say(f"rebuilding there: {len(rebuilt)} of the release's {len(built)} bitstreams and every other artifact")
     rc = subprocess.run(cmd, cwd=str(src / "surfcpu"), env=clean_env()).returncode
     say(f"the rebuild ended with exit status {rc} after {minutes(time.time() - t0)}")

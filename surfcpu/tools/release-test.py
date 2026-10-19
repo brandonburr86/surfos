@@ -355,7 +355,7 @@ else:
 head += ["", "[openxc7]", f'image = "{os.environ.get("FAKE_OX_IMAGE") or "surfcpu-openxc7:" + tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
          'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5", f"placer_seed = {seed}",
          f'slack_margin = "{"THIN" if thin else "PASS"}"',
-         f'slack_margin_note = "{"dram_clk +0.087 ns, wants 0.500; every seed of 1 2 thin or failed: seed 1 kept, the most margin" if thin else "least margin sys_clk +30.000 ns, wants 1.600"}"']
+         f'slack_margin_note = "{"dram_clk +0.087 ns, wants 0.500; every seed tried was thin or failed, this one has the most margin" if thin else "least margin sys_clk +30.000 ns, wants 1.600"}"']
 (base / "manifest.txt").write_text("# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by "
                                    "tools/fpga-build.sh\n" + "\n".join(head) + "\n")
 sys.exit(1 if fail else 0)
@@ -784,7 +784,8 @@ class TestEnvironment(ScratchRelease):
 
     def test_settings_that_change_the_builds_are_refused(self):
         for var, val in (("DRY_RUN", "1"), ("SURFCPU_OPENXC7_IMAGE", "x:y"), ("SURFCPU_IMAGE", "x:y"),
-                         ("SURFCPU_OPENXC7_BUILD", "/bin/true"), ("SURFCPU_ROMCHECK", "/bin/true"), ("ROM", "/x")):
+                         ("SURFCPU_OPENXC7_BUILD", "/bin/true"), ("SURFCPU_ROMCHECK", "/bin/true"), ("ROM", "/x"),
+                         ("PLACER_SEEDS", "3")):
             r = self.make("--prerelease", "--skip-ddr", **{var: val})
             self.assertEqual(r.returncode, 1, f"{var}: {r.stdout}")
             self.assertIn(var, r.stderr)
@@ -859,6 +860,7 @@ class TestSeedAndSlack(ScratchRelease):
         got = dict(line.split() for line in log.read_text().splitlines())
         self.assertEqual(set(got.values()), {"-"}, got)
         self.assertIn("predates format 2", r.stdout)
+        self.assertNotIn("seed 3", r.stdout)            # 1.0.0-f791b8a1's design is named in its own report only
 
     def test_thin_needs_a_prerelease(self):
         r = self.make("--skip-ddr", "--prerelease", "--designs", "base,top", FAKE_FPGA_THIN="top")
