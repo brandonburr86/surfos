@@ -23,14 +23,17 @@ thin; 2, with the reason on stderr, when the placement cannot be judged or must 
 report.json cannot be read, has no clock (a design without a clock constraint: the rule has
 nothing to judge, so it does not build), a clock's figures are not positive numbers, a clock
 misses its constraint, or a --min names a clock twice or one the design does not have; 3 when this
-script itself fails. Only 1 lets the seed loop keep a placement as thin. Only the Python standard
-library.
+script itself fails (a crash, or an --out file it cannot write). Only 1 lets the seed loop keep a
+placement as thin. Only the Python standard library.
 """
 
 import argparse
 import json
 import math
+import os
+import subprocess
 import sys
+import tempfile
 
 RULE_NS = 0.5           # the least slack any clock may have
 RULE_SHARE = 0.04       # ... and the least share of its period
@@ -139,6 +142,24 @@ def self_test() -> int:
             ok = words in str(e)
             fails += not ok
             print("%s %s is refused (%s)" % ("ok  " if ok else "FAIL", name, e))
+    # the program itself: --out written with a line per clock (exit 0), and --out that cannot be written,
+    # which is this script failing (exit 3), never a verdict
+    with tempfile.TemporaryDirectory() as d:
+        rep = os.path.join(d, "report.json")
+        with open(rep, "w") as f:
+            json.dump({"fmax": ddr}, f)
+        for name, out, status, check in (
+                ("--out written", os.path.join(d, "slack.txt"), 0, lambda r, o: r.stdout.startswith("pass") and
+                 len(open(o).read().splitlines()) == 5),
+                ("--out in a directory that does not exist", os.path.join(d, "no", "slack.txt"), 3,
+                 lambda r, o: r.stdout.strip() == "unreadable" and "internal error" in r.stderr)):
+            cases += 1
+            r = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--report", rep, "--min",
+                                "dram_clk=0.05", "--out", out], capture_output=True, text=True)
+            ok = r.returncode == status and check(r, out)
+            fails += not ok
+            print("%s %s: exit %d%s" % ("ok  " if ok else "FAIL", name, r.returncode,
+                                        (", " + r.stderr.strip().splitlines()[-1]) if r.stderr.strip() else ""))
     print("slackcheck self-test: %s" % ("PASS (%d cases)" % cases if not fails else "FAIL (%d of %d)" % (fails, cases)))
     return 1 if fails else 0
 
@@ -164,6 +185,10 @@ def main() -> int:
             raise Unjudged("min-slack names %s, which the design does not have (its clocks: %s)"
                            % (", ".join(unknown), ", ".join(sorted(fmax))))
         status, lines, summary = judge(fmax, mins)
+        if a.out:                               # a file that cannot be written is this script failing: 3
+            with open(a.out, "w") as f:
+                f.write("slackcheck: each clock's slack at least max(%.1f ns, %d %% of its period), or the design's\n"
+                        % (RULE_NS, round(RULE_SHARE * 100)) + "".join(l + "\n" for l in lines) + summary + "\n")
     except Unjudged as e:
         print("unreadable")
         print("slackcheck: %s" % e, file=sys.stderr)
@@ -172,10 +197,6 @@ def main() -> int:
         print("unreadable")
         print("slackcheck: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
         return 3
-    if a.out:
-        with open(a.out, "w") as f:
-            f.write("slackcheck: each clock's slack at least max(%.1f ns, %d %% of its period), or the design's\n"
-                    % (RULE_NS, round(RULE_SHARE * 100)) + "".join(l + "\n" for l in lines) + summary + "\n")
     print(summary)
     return status
 
