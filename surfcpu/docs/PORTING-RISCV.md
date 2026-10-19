@@ -429,7 +429,9 @@ requests to it refused meanwhile; B68: a mount probes the card for its file syst
 holds it, and says the true reason when it is busy; B73: a task killed while its call holds the
 card's files or folders (a path's walk, a file `cat`, `cp` or `ls` opened, a close's write-out) is
 killed once it has let go of them, where it was killed at once and the card could not be unmounted
-until restart).
+until restart; B76: and then it finishes what follows its letting go (it has 2 s to end its command
+or itself), where the kill came in that, leaving what it was freeing; B79: one that keeps working
+on the card, ignoring its kill, is killed all the same, within about 4 to 5 s).
 Nothing
 hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
@@ -711,6 +713,19 @@ alike: +0.012 %, +0.015 %, +0.39 % and +0.011 %, a few thousand cycles a command
 sections 81 and 86). A first version of B66, which folded a mutex's arrival into its wait loop,
 loaded the lock's fields twice more on every lock and ran the commands that move many blocks
 1.3-1.6 % slower: the arrival is as it was.
+
+Since audit B74-B79 (counted the same way, before = 913e9fe): every workload above sends the same
+requests and blocks. A path call begins with a look at two of its task's flags (B79); a walk counts
+each lookup from before it, the same count moved (B77); reap() lets its count go after its frees
+(B75); a kill's new rule (B76) and the self test's new steps do not run in these workloads. On
+SurfCPU (913e9fe's kernel against this one, the same simulator and ROM): test-os-persist's write run
+and its reboot run 0.039 % more cycles, test-os-faults' full card 0.063 % more and its refusing card
+1.05 % fewer (the card-detect task meeting the card's removal at another look); SurfBoot loads a
+package 896 bytes larger (+0.12 million cycles), and each command is within -0.5 % and +0.6 % but
+for the pair of lines that moves in every round. Against 913e9fe padded to this kernel's layout
+(each object this round changed followed by as much code that never runs as it grew once linked,
+its data, the package as large): +0.002 %, -0.000 %, +0.16 % (the card-detect task's look) and
++0.003 %, a few hundred to a few thousand cycles a command (bcache-review.txt section 95).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
