@@ -783,10 +783,9 @@ design's RTL and SurfBoot did not change in this round, so its bitstream to test
 12.6's: e119a78, seed 7, dram_clk +0.977 ns, sha256 b3c750cb...68f2, rebuilt only from e119a78
 (section 14). The rebuilt gpudiag netlist runs gpudiag to `GPUDIAG: PASS (124 checks)` with every
 FRAME_CRC the model's ([evidence](evidence/gpu/g2-netlist-sim-r4.txt); 1.42 s simulated in 50
-minutes). `make check` passes at
-04caffe from a clean tree (30 minutes: test-gpu, test-flow, board-tools 276 of 276, test-release
-56 tests), and test-gpu-mutants catches 35 of 35 (6 minutes); each finding's tests on d8fdcee and
-after are in the [evidence](evidence/gpu/review4-sim.txt).
+minutes). `make check` passes at 04caffe from a clean tree (30 minutes: test-gpu, test-flow,
+board-tools 276 of 276, test-release 56 tests), and test-gpu-mutants catches 35 of 35 (6 minutes);
+each finding's tests on d8fdcee and after are in the [evidence](evidence/gpu/review4-sim.txt).
 
 ## 13. Risks
 
