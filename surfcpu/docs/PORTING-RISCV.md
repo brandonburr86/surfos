@@ -431,7 +431,11 @@ card's files or folders (a path's walk, a file `cat`, `cp` or `ls` opened, a clo
 killed once it has let go of them, where it was killed at once and the card could not be unmounted
 until restart; B76: and then it finishes what follows its letting go (it has 2 s to end its command
 or itself), where the kill came in that, leaving what it was freeing; B79: one that keeps working
-on the card, ignoring its kill, is killed all the same, within about 4 to 5 s).
+on the card, ignoring its kill, is killed all the same, within about 4 to 5 s; B80: the 2 s are
+owed from the kill itself to a task holding something then, or taking something after it, where a
+task that let go before the kernel first looked at it, or just before its 2 s were up, was killed
+at once there; B81: one that keeps reading or writing a file it has open is killed as B79's is,
+not only one that keeps opening files).
 Nothing
 hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
@@ -726,6 +730,20 @@ for the pair of lines that moves in every round. Against 913e9fe padded to this 
 (each object this round changed followed by as much code that never runs as it grew once linked,
 its data, the package as large): +0.002 %, -0.000 %, +0.16 % (the card-detect task's look) and
 +0.003 %, a few hundred to a few thousand cycles a command (bcache-review.txt section 95).
+
+Since audit B80-B82 (counted the same way, before = e48f043): every workload above sends the same
+requests and blocks. Each VFS call on an open file (a read, a write, a readdir), statfs and sync
+now looks once at whether its task is killed (B81), as a path call did; the kill's marks and its
+log line (B80, B82) and the self test's new steps do not run in these workloads. On SurfCPU
+(e48f043's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.047 % more cycles, its reboot run 0.097 % more, test-os-faults' full card 0.111 % more and its
+refusing card 0.62 % fewer (the card-detect task meeting the card's removal at another look);
+SurfBoot loads a package 1.3 KB larger (+0.17 million cycles), and each command is within -0.7 %
+and +0.3 % but for the pair of lines that moves in every round. Against e48f043 padded to this
+kernel's layout (each object this round changed followed by as much code that never runs as it
+grew once linked, its data, the package as large): +0.009 %, +0.007 %, -1.6 % (the card-detect
+task's look) and +0.005 %, a few thousand cycles a command (cp 12,601 of its 117 million;
+bcache-review.txt section 102).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
