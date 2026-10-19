@@ -89,6 +89,11 @@ MUTANTS = [
     ("soc-pair-never-cleared", VIDEO, "end else if (rd_ok && hit_crc) begin\n                    snap_valid <= 1'b0;\n",
      "end else if (1'b0) begin\n                    snap_valid <= 1'b0;\n", "soc"),
     ("soc-pair-cleared-by-any-read", VIDEO, "end else if (rd_ok && hit_crc) begin", "end else if (rd_ok) begin", "soc"),
+    # the target and clip a reset leaves, which the first run's refused-target fill checks (the fourth review)
+    ("soc-target-reset-base", GPU, "t_base <= 19'd0; t_stride <= 16'd640;", "t_base <= 19'd4096; t_stride <= 16'd640;",
+     "soc"),
+    ("soc-clip-reset", GPU, "c_x0 <= 16'd0; c_y0 <= 16'd0; c_x1 <= 16'd640; c_y1 <= 16'd480;",
+     "c_x0 <= 16'd8; c_y0 <= 16'd0; c_x1 <= 16'd640; c_y1 <= 16'd480;", "soc"),
 ]
 
 CFLAGS = "-std=c++17 -O1 -g -I{r}/sim/models -I{r}/sim/io -I{r}/sim/gpu -I{r}/firmware/include"

@@ -266,13 +266,17 @@ static void gpu_registers(uint32_t unused)
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     GREG(SURF_GPU_IE) = 0;
     fifo_credit = 0;
-    /* the target and clip a reset leaves (SET_TARGET sets the clip too): ABORT keeps them, so a rerun
-     * after a run abandoned inside an engine scene would otherwise start with that scene's */
-    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
-    GREG(SURF_GPU_CMD) = 0;
-    GREG(SURF_GPU_CMD) = 640;
-    GREG(SURF_GPU_CMD) = GPU_WH(640, 480);
-    hw_sync();
+    /* a rerun sets the target and clip a reset leaves (SET_TARGET sets the clip too): ABORT keeps
+     * them, so a rerun after a run abandoned inside an engine scene would otherwise start with that
+     * scene's. The first run after a reset does not: its refused-target fill below checks the reset
+     * values themselves, as video_registers checks the GFX_ ones */
+    if (!first_run) {
+        GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
+        GREG(SURF_GPU_CMD) = 0;
+        GREG(SURF_GPU_CMD) = 640;
+        GREG(SURF_GPU_CMD) = GPU_WH(640, 480);
+        hw_sync();
+    }
     diag_check(GREG(SURF_GPU_ID) == GPU_ID_VALUE, "gpu.ID 0x%08x", GREG(SURF_GPU_ID));
     diag_check(GREG(SURF_GPU_INFO) == (300u << SURF_GPU_INFO_VRAM_KIB_LSB | 64u), "gpu.INFO 0x%08x", GREG(SURF_GPU_INFO));
     diag_check(GREG(SURF_GPU_FIFO_FREE) == 64 && GREG(SURF_GPU_STATUS) == 0, "idle: FIFO_FREE %u, STATUS 0x%x",
@@ -307,8 +311,9 @@ static void gpu_registers(uint32_t unused)
     st = GREG(SURF_GPU_STATUS);
     diag_check((st & GPU_STICKY) == (SURF_GPU_STATUS_BAD_OPCODE_MASK | SURF_GPU_STATUS_BAD_PARAM_MASK),
                "unknown opcode and refused target: STATUS 0x%x", st);
-    /* the refused target was not taken: a fill at (0, 0) lands in the target a reset leaves (0, not
-     * byte 4002 or 4000, where the refused one would have put it) */
+    /* the refused target was not taken: a fill at (0, 0) lands in the target a reset leaves (base 0,
+     * stride 640, the clip the whole of it; on a rerun, set so above), not at byte 4002 or 4000,
+     * where the refused one would have put it */
     W(VRAM(0)) = 0;
     W(VRAM(4)) = 0;
     W(VRAM(4000)) = 0;
