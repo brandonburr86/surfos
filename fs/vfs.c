@@ -76,6 +76,9 @@ no wipeout (B56): what a task killed then leaves keeps a volume mounted, and no 
 chose its mount, hands back that volume's root with its reference taken, which nothing counted until the lookup had
 returned. (B76, B79) A path call begins with task_vfs_begin() (surfos/task.h): a kill put off while the task held
 something gives it KILL_WAIT_MS from here when it holds nothing now, and once that has run out the call says EINTR.
+10/19/26 (audit B81): so does every call on an open file (read, write, lseek, readdir, ftruncate, fsync, and close,
+which is never refused: it lets go), statfs and sync: a task working on a file of its descriptor table reached no
+path call, and through a slow device it was found holding something at every look, its kill never coming.
 */
 
 #include <surfos/types.h>
@@ -558,7 +561,8 @@ const char *vfs_probe(struct bdev *dev) {
    meanwhile finds it busy, and the mount stays on the list, where the walk goes on from */
 int vfs_sync(void) {
     struct mount *m;
-    int r = 0;
+    int r = task_vfs_begin();                       /* 10/19/26 (audit B81): a kill (task.h), as for every VFS call */
+    if(r) return r;
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) {
         struct superblock *sb = m->sb;
@@ -811,6 +815,8 @@ int vfs_close(struct file *f) {
     bool last, held, p;
     int r = 0;
     if(!f) return -EBADF;
+    (void)task_vfs_begin();                         /* 10/19/26 (audit B81): a kill (task.h); a close is never refused:
+                                                       it lets go of its file, whatever else it says */
     p = pins(f->v);
     if(p) fs_ref();                                 /* 10/18/26 (B73): counted from before its reference is given up
                                                        until its vnode is let go of */
@@ -842,6 +848,7 @@ int vfs_close(struct file *f) {
 int vfs_read(struct file *f, void *buf, u32 len) {
     int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81): a kill (task.h), as for a path call */
     if(f->v->type == VN_DIR) return -EISDIR;
     if((f->flags & O_ACCMODE) == O_WRONLY) return -EBADF;
     if(!f->v->ops->read) return -EINVAL;
@@ -854,6 +861,7 @@ int vfs_read(struct file *f, void *buf, u32 len) {
 int vfs_write(struct file *f, const void *buf, u32 len) {
     int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81) */
     if(f->v->type == VN_DIR) return -EISDIR;
     if((f->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if(f->v->sb->readonly || !f->v->ops->write) return -EROFS;
@@ -866,7 +874,9 @@ int vfs_write(struct file *f, const void *buf, u32 len) {
 
 int vfs_lseek(struct file *f, i32 off, int whence) {
     i32 base;
+    int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81) */
     base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (i32)f->pos : whence == SEEK_END ? (i32)f->v->size : -1;
     if(base < 0 || base + off < 0) return -EINVAL;
     f->pos = (u32)(base + off);
@@ -876,6 +886,7 @@ int vfs_lseek(struct file *f, i32 off, int whence) {
 int vfs_readdir(struct file *f, struct dirent *de) {
     int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81) */
     if(f->v->type != VN_DIR || !f->v->ops->readdir) return -ENOTDIR;
     r = f->v->ops->readdir(f->v, f->pos, de);
     if(r == 0) f->pos++;
@@ -962,7 +973,8 @@ int vfs_statfs(const char *path, struct statfs *st) {
     struct mount *m, *best = NULL;
     struct superblock *sb = NULL;
     size_t bestlen = 0;
-    int r = vfs_normalize(vfs_getcwd(), path, abs, sizeof(abs));
+    int r = task_vfs_begin();                       /* 10/19/26 (audit B81): a kill (task.h) */
+    if(r == 0) r = vfs_normalize(vfs_getcwd(), path, abs, sizeof(abs));
     if(r) return r;
     memset(st, 0, sizeof(*st));
     mutex_lock(&mount_lock);
@@ -989,6 +1001,7 @@ int vfs_statfs(const char *path, struct statfs *st) {
 int vfs_ftruncate(struct file *f, u32 size) {
     int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81) */
     if(f->v->type != VN_FILE) return -EISDIR;
     if((f->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if(f->v->sb->readonly || !f->v->ops->truncate) return -EROFS;
@@ -1000,6 +1013,7 @@ int vfs_fsync(struct file *f) {
     struct superblock *sb;
     int r;
     if(!f) return -EBADF;
+    if((r = task_vfs_begin()) != 0) return r;       /* 10/19/26 (audit B81) */
     sb = f->v->sb;
     if((r = write_back(sb)) != 0) return r;         /* 10/16/26 (B10): as close says it (10/18/26, B65: EINTR too) */
     if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;

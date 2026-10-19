@@ -2892,9 +2892,10 @@ static void kt_loop(void *arg) {
 }
 
 static void test_kill_loop(void) {
+    char line[96];
     surf_task *t;
     u_long pid, t0, ms = 0;
-    int st = 1, r = 0, opens;
+    int st = 1, r = 0, opens, promised, over;
     kt_stop = kt_opens = 0;
     t = kthread_create_on("killloop", curTask->con, kt_loop, NULL, PL_NORMAL, 0);
     if(!t) { check(false, "B79: a thread"); return; }
@@ -2909,9 +2910,196 @@ static void test_kill_loop(void) {
         kt_stop = 1;
         task_wait(pid, &st);
     }
-    printf("        (%s %lu ms after its kill, %d opens; status %d)\n", r ? "it ended" : "STILL THERE", ms, opens, st);
+    /* 10/19/26 (audit B82): the kernel log's one line for a kill put off is written at the first look that finds the
+       thread holding something KILL_WAIT_MS after its kill; its grace began at a path call before that (B79), so that
+       look is the grace's end, and the line promised what was spent ("once it lets go it has 2000 ms to end"): it
+       says now that the grace is over and the kill comes as soon as the thread lets go */
+    snprintf(line, sizeof(line), "kill: 'killloop' (pid %lu) is still ", pid);
+    promised = klog_count(line);
+    snprintf(line, sizeof(line), "(pid %lu) is holding a volume's file or directory again", pid);
+    over = klog_count(line);
+    printf("        (%s %lu ms after its kill, %d opens; status %d; the kernel log: a grace promised %d time(s), its "
+           "grace over %d time(s))\n", r ? "it ended" : "STILL THERE", ms, opens, st, promised, over);
     check(r == (int)pid && st == -1 && ms < KILL_WAIT_MS + 600, "B79: a kernel thread that keeps opening, holding and "
           "closing a volume's file, ignoring its kill, is killed within KILL_WAIT_MS and a little");
+    check(promised == 0 && over <= 1, "B82: and the kernel log does not promise it KILL_WAIT_MS from letting go once its "
+          "grace is over");
+}
+
+/**** round fs-fix-13 (audit B80-B82): the thirteenth review ****/
+
+/* 10/19/26 (audit B80): B76's grace was owed only to a task that a look had seen holding something. A kernel thread
+   whose kill was put off by kill_task() itself (outside any call, holding something: looked at 20 ms later) was not
+   marked, and one that let go before that first look was killed at once at it, in its clean-up (the review's R13a);
+   and a call that held something at its kill and let go just before its KILL_WAIT_MS look was killed at once at that
+   look, in its clean-up (R13b). Now the kill marks a task it finds holding something, and a VFS call that a killed task
+   begins marks it too (it is to take something), so that the first look that finds it out gives it its grace, the
+   KILL_WAIT_MS look of a call too. Here: a kernel thread killed while it holds a file of the initrd that lets go a few
+   milliseconds after its kill; a call killed while it holds the file that lets go 40 ms before its KILL_WAIT_MS look;
+   and a call killed holding nothing that then opens the file and lets go 40 ms before that look. Each runs 60 ms of
+   clean-up after letting go that nothing counts (busy, interrupts on: the looks go on), then ends */
+static mutex_t ky_lock = MUTEX_INIT("selftest-soon");
+static volatile int ky_ready, ky_go, ky_done;
+static volatile u_long ky_left;
+
+static void ky_thread(void *arg) {
+    struct file *f;
+    u_long t0;
+    if(arg) {                                        /* (it opens the file only once killed) */
+        ky_ready = 1;
+        while(!ky_go) sleep_ms(1);
+    }
+    if(vfs_open("/initrd/bin/hello", O_RDONLY, &f) == 0) {
+        ky_ready = 2;
+        mutex_lock(&ky_lock);
+        mutex_unlock(&ky_lock);
+        vfs_close(f);                                /* it lets go: nothing counted from here */
+        ky_left = uptime_ms();
+        for(t0 = uptime_ms(); uptime_ms() - t0 < 60; ) ;     /* its clean-up */
+        ky_done = 1;
+    }
+    if(curTask->in_call) task_call_leave(TC_SYSCALL);   /* (a call's kill comes here) */
+}
+
+/* ky_thread in a task of its own (flags: TF_INCALL, a call; 0, a kernel thread; late: it opens the file only after its
+   kill), killed, the file let go of hold ms after the kill: its status; *kl, from the kill to its letting go; *le, from
+   its letting go to its end */
+static int ky_run(const char *name, u_int flags, bool late, u_long hold, u_long *kl, u_long *le, u_long *pidp) {
+    surf_task *t;
+    u_long pid, tk, now;
+    int st = 1, waited;
+    ky_ready = ky_go = ky_done = 0;
+    ky_left = 0;
+    *kl = *le = 0;
+    mutex_lock(&ky_lock);
+    t = kthread_create_on(name, curTask->con, ky_thread, late ? (void *)1 : NULL, PL_NORMAL, flags);
+    if(!t) { mutex_unlock(&ky_lock); return 1; }
+    pid = t->pid;
+    *pidp = pid;
+    for(waited = 0; ky_ready != (late ? 1 : 2) && waited < 2000; waited += 5) sleep_ms(5);
+    sleep_ms(50);
+    tk = uptime_ms();
+    kill_task(t);                                    /* put off when it holds the file; not when it holds nothing */
+    if(late) {
+        ky_go = 1;
+        for(waited = 0; ky_ready != 2 && waited < 1000; waited++) sleep_ms(1);
+    }
+    now = uptime_ms();
+    if(hold > now - tk) sleep_ms(hold - (now - tk));
+    mutex_unlock(&ky_lock);                          /* it lets go now */
+    if(task_wait(pid, &st) != (int)pid) st = 1;
+    if(ky_left) {
+        *kl = ky_left - tk;
+        *le = uptime_ms() - ky_left;
+    }
+    return st;
+}
+
+static void test_kill_soon(void) {
+    char line[112];
+    u_long kl1, le1, kl2, le2, kl3, le3, pid1 = 0, pid2 = 0, pid3 = 0;
+    int s1, s2, s3, d1, d2, d3, said2, said3;
+    s1 = ky_run("soonthread", 0, false, 0, &kl1, &le1, &pid1);
+    d1 = ky_done;
+    s2 = ky_run("sooncall", TF_INCALL, false, KILL_WAIT_MS - 40, &kl2, &le2, &pid2);
+    d2 = ky_done;
+    s3 = ky_run("soonlate", TF_INCALL, true, KILL_WAIT_MS - 40, &kl3, &le3, &pid3);
+    d3 = ky_done;
+    snprintf(line, sizeof(line), "kill: 'sooncall' (pid %lu) did not end its system call within %u ms: killed at once",
+             pid2, (u_int)KILL_WAIT_MS);
+    said2 = klog_count(line);
+    snprintf(line, sizeof(line), "kill: 'soonlate' (pid %lu) did not end its system call within %u ms: killed at once",
+             pid3, (u_int)KILL_WAIT_MS);
+    said3 = klog_count(line);
+    printf("        (a kernel thread: let go %lu ms after its kill, its clean-up %s, status %d, ended %lu ms after it "
+           "let go; a call: let go %lu ms after, %s, status %d, %lu ms%s; a call that took the file after its kill: %lu "
+           "ms, %s, status %d, %lu ms%s)\n", kl1, d1 ? "done" : "CUT SHORT", s1, le1, kl2, d2 ? "done" : "CUT SHORT",
+           s2, le2, said2 ? ", KILLED AT ONCE at its look" : "", kl3, d3 ? "done" : "CUT SHORT", s3, le3,
+           said3 ? ", KILLED AT ONCE at its look" : "");
+    check(d1 && s1 == 0, "B80: a kernel thread whose kill was put off while it held a file and that let go before the "
+          "first look finishes its clean-up and ends by itself");
+    check(d2 && s2 == -1 && !said2, "B80: a call killed while it held a file that lets go just before its KILL_WAIT_MS "
+          "look finishes its clean-up: the kill comes at its call's end");
+    check(d3 && s3 == -1 && !said3, "B80: and so does a call killed holding nothing that took the file after its kill");
+}
+
+/* 10/19/26 (audit B81): B79's start of the grace and its EINTR were only in a path call (lookup_abs()): a task working
+   on a file of its descriptor table (read, write, lseek, fsync: no path) and ignoring its kill reached neither, and
+   through a slow device it was found holding something at every look, its kill never coming (the review's R13c:
+   still there 6 s after its kill). Every VFS call begins so now, and once the grace has run out with the task holding
+   something, every one but a close says EINTR before it takes anything; a close always lets go of its descriptor and
+   its file. Here a kernel thread writes 512 bytes of a file of its descriptor table and fsyncs it, again and again, on
+   a RAM stick whose writes take a tick; it is killed inside a write (held there until the kill); at its first EINTR it
+   closes the file and goes on holding nothing. It must be gone within KILL_WAIT_MS and a little, its close must have
+   let go of the file, and the stick must unmount after */
+static volatile int ki_stop, ki_ops, ki_eintr, ki_closed, ki_slot;
+static volatile int ki_close_r;
+
+static void ki_loop(void *arg) {
+    static char buf[512];
+    struct file *f;
+    int fd, w, s;
+    memset(buf, 'w', sizeof(buf));
+    if(vfs_open((const char *)arg, O_WRONLY | O_CREAT, &f) != 0) return;
+    if((fd = fd_install(f)) < 0) { vfs_close(f); return; }   /* (the table's: counted by nothing) */
+    while(!ki_stop) {
+        if(fd < 0) continue;                         /* (holding nothing, ignoring its kill) */
+        vfs_lseek(fd_get(fd), 0, SEEK_SET);
+        w = vfs_write(fd_get(fd), buf, sizeof(buf));
+        s = vfs_fsync(fd_get(fd));
+        if(w == -EINTR || s == -EINTR) {
+            ki_eintr++;
+            ki_close_r = fd_close(fd);               /* (never refused: it lets go) */
+            ki_slot = fd_get(fd) != NULL;
+            ki_closed = 1;
+            fd = -1;
+        } else ki_ops++;
+    }
+}
+
+static void test_kill_fileloop(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stickw", "/selftest-kw", &mem);
+    surf_task *t;
+    u_long pid, t0, ms;
+    int st = 1, r = 0, ops, ru, waited;
+    if(!d) { check(false, "B81: a RAM stick"); return; }
+    ki_stop = ki_ops = ki_eintr = ki_closed = ki_slot = 0;
+    ki_close_r = 1;
+    ram_slow_ms = 1;
+    ram_stuck_hit = 0;
+    ram_stuck_lba = 0;
+    t = kthread_create_on("killfile", curTask->con, ki_loop, (void *)"/selftest-kw/w.txt", PL_NORMAL, 0);
+    if(!t) { ram_slow_ms = 0; check(false, "B81: a thread"); fx_done(d, mem, "/selftest-kw"); return; }
+    pid = t->pid;
+    sleep_ms(300);
+    ram_stuck_task = t;                              /* its next write waits here: killed inside it */
+    for(waited = 0; !ram_stuck_hit && waited < 2000; waited += 5) sleep_ms(5);
+    t0 = uptime_ms();
+    kill_task(t);
+    ram_stuck_task = NULL;
+    while((r = task_wait_opts(pid, &st, WNOHANG)) == 0 && uptime_ms() - t0 < 3 * KILL_WAIT_MS) sleep_ms(10);
+    ms = uptime_ms() - t0;
+    ops = ki_ops;
+    if(r == 0) {                                     /* still there: told to stop */
+        ki_stop = 1;
+        task_wait(pid, &st);
+    }
+    ram_slow_ms = 0;
+    ru = vfs_umount("/selftest-kw");
+    if(ki_closed)
+        printf("        (%s %lu ms after its kill, %d writes; EINTR %d time(s), its close %d, the descriptor %s; status "
+               "%d; umount %d)\n", r ? "it ended" : "STILL THERE", ms, ops, ki_eintr, ki_close_r,
+               ki_slot ? "STILL SET" : "freed", st, ru);
+    else
+        printf("        (%s %lu ms after its kill, %d writes; no EINTR: %s, its file closed by its reap; status %d; umount "
+               "%d)\n", r ? "it ended" : "STILL THERE", ms, ops, r ? "killed holding nothing" : "told to stop", st, ru);
+    check(r == (int)pid && st == -1 && ms < KILL_WAIT_MS + 600, "B81: a kernel thread that keeps writing and fsyncing a "
+          "file of its descriptor table through a slow device, ignoring its kill, is killed within KILL_WAIT_MS and a "
+          "little");
+    check(ru == 0 && (!ki_closed || ((ki_close_r == 0 || ki_close_r == -EINTR) && !ki_slot)), "B81: told EINTR, it "
+          "closes the file: the close lets go of its descriptor and the file, and the stick unmounts");
+    if(ru == 0) fx_done(d, mem, NULL);
 }
 
 static void test_fat_rename(void) {
@@ -3215,7 +3403,7 @@ static void (*const tests[])(void) = {
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
     test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader, test_kill_cleanup,
-    test_kill_loop,
+    test_kill_loop, test_kill_soon, test_kill_fileloop,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };

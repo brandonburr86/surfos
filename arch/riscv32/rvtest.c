@@ -608,6 +608,34 @@ static void test_vfs_hold(const char *path) {
     check(put_off && vh_cleaned, "B76: and the kill does not come in its clean-up after the close: it ends by itself");
 }
 
+/* 10/19/26 (audit B80): the same thread, the test's lock let go at once after the kill: it closes the file before the
+   first look, 20 ms after the kill, which killed it at once there, in its clean-up (only a look marked a task as one
+   holding something; kill_task() itself puts the kill of a thread holding something off): the kill marks it now, and
+   the first look gives it its grace */
+static void test_vfs_hold_soon(const char *path) {
+    surf_task *t;
+    u_long pid, kl = 0, tk = 0;
+    int st = 1, waited;
+    vh_ready = vh_cleaned = 0;
+    vh_closed = 0;
+    mutex_lock(&vh_lock);
+    t = kthread_create("vhsoon", vh_file, (void *)path, PL_NORMAL, 0);
+    pid = t ? t->pid : 0;
+    for(waited = 0; t && !vh_ready && waited < 1000; waited += 5) sleep_ms(5);
+    sleep_ms(50);                                    /* (it waits for the test's lock) */
+    if(t && vh_ready) {
+        tk = uptime_ms();
+        kill_task(t);                                /* put off: it holds the file */
+    }
+    mutex_unlock(&vh_lock);                          /* it lets go now */
+    if(t) task_wait(pid, &st);
+    if(vh_closed && tk) kl = vh_closed - tk;
+    printf("        (it closed the file %lu ms after its kill: its clean-up %s, status %d)\n", kl,
+           vh_cleaned ? "done" : "CUT SHORT", st);
+    check(t && vh_ready && vh_cleaned && st == 0, "B80: and one that lets go of the file before the first look after its "
+          "kill finishes its clean-up and ends by itself");
+}
+
 static void test_fat(void) {
     struct vfs_mount_view *views;
     struct file *f;
@@ -641,6 +669,7 @@ static void test_fat(void) {
     if(r == 0) { memset(rb, 0, 10240); r = vfs_read(f, rb, 10240); vfs_close(f); }
     check(r == 10240 && !memcmp(w, rb, 10240), "read it back identically");
     test_vfs_hold(path);                             /* 10/18/26 (audit B73) */
+    test_vfs_hold_soon(path);                        /* 10/19/26 (audit B80) */
     check(vfs_unlink(path) == 0 && vfs_stat(path, &st) == -ENOENT, "unlink removes it");
     kfree(w);
     kfree(rb);
