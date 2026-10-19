@@ -56,7 +56,8 @@ into its manifest. Details: [evidence/flow/image.txt](evidence/flow/image.txt).
 
 ```sh
 surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t --xdc <file> \
-    [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--pnr-timeout s] [--dsp safe|full|none] [--expect file] \
+    [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--pnr-timeout s] [--min-slack clock=ns]... \
+    [--dsp safe|full|none] [--expect file] \
     [--manifest-include file] [--out dir] [--lvs-timeout s] [--no-lvs] [--no-check] [--synth-only] \
     [--dry-run] <source.v>...
 ```
@@ -98,7 +99,36 @@ design), and steps ran up to 1.8 times slower on the loaded Mac, so 1800 s is 5.
 good run and 3 times that slowed. Within the limit the command and its outputs are what they were:
 the same inputs and seed through the flow before the limit and after it gave byte-identical
 bitstreams, FASM, placements, netlists and reports for the baseline and the bramdiag SoC design
-(evidence/gpu/review2-sim.txt).
+(evidence/gpu/review2-sim.txt). `timeout --verbose` says when it stops an attempt, so nextpnr
+ended by SIGKILL inside the limit (the kernel's out-of-memory killer, in a Docker VM other builds
+share) is recorded as `killed (exit 137: SIGKILL, not from the time limit ...) after S s`, not as a
+timeout, and an attempt stopped at the limit after routing says `routed, but stopped before
+nextpnr finished` (its outputs are never used). `timeout --foreground` leaves nextpnr in the
+terminal's process group, so Ctrl-C in an interactive build stops it at once, as before the limit
+(nextpnr starts no process of its own, so the limit's signals still reach all of it). A limit of
+0 or 00, which timeout takes as no limit, is refused.
+
+**The slack rule** (`--min-slack <clock>=<ns>`; a design list's `min-slack <clock> <ns>` line):
+nextpnr passes a placement whose clocks meet their constraints by any margin, and its timing is an
+estimate, not Vivado's sign-off. A routed placement must also leave every clock a slack (its
+period at the constraint minus its period at the frequency nextpnr achieved, as timing.txt prints
+it) of at least max(0.5 ns, 4 % of its period), or what the design list sets for that clock: 1.6 ns
+for sys_clk and pix_clk at 25 MHz, 0.5 ns for LiteDRAM's dram_clk at 80 MHz, the 200 MHz IODELAY
+clock and the 100 MHz input (devenv/openxc7/slackcheck.py judges report.json and writes
+slack-seed<n>.txt). A thinner placement is recorded as `seed N: thin, routed; ...; slack: dram_clk
++0.087 ns, wants 0.500` and the next seed is tried. When every seed is thin (or failed), the thin
+one with the most margin is kept, its FASM, placement, report and log put back, seeds.txt says
+`kept: seed N, the thin placement with the most margin (THIN)`, the manifests say `check slack
+margin THIN` and `slack_margin = "THIN"`, the build says THIN, and make release refuses the
+bitstream without PRERELEASE=1 (RELEASE.md section 1). The default comes from the record: every
+design of release 1.0.0 meets it, the least margin being the 35T DDR design's dram_clk at +0.930 ns
+against 0.5; the builds on record that would have been thin are two DDR placements that failed on
+the board through route-throughs, rebuilt with that fix (+0.263 ns at 92a2b51 and +0.132 ns at
+69ee491, evidence/flow/bufg-routethrough.txt section 5; not on record as run again), and the
+DDR+GPU design at 72ba06c (+0.087 ns, never on a board). No design on record has run on a board
+with less than about 0.9 ns. The tests: test-flow runs the seed loop with stand-in nextpnrs that
+hang, are killed, ignore TERM, route thinly or well, and one Ctrl-C through a pty
+(tools/openxc7-flow-test.sh), and slackcheck's self-test.
 
 * `tools/openxc7-demo.sh` is the proof run behind this page (both parts, the demo, the feature
   probe, the expected failures, gate-level simulation, a determinism rebuild; about 7 minutes).

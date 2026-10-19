@@ -23,7 +23,13 @@ comparisons refuse damaged releases; a reduced release made with it, `1.0.0-pre-
 baseline design on the 100T, 11 artifacts), reproduces byte for byte from a pristine copy too. A
 release made before that fails today's `release-check` on one point (its `MANIFEST` names a boot
 design it does not have), and its bitstreams predate the open flow's fix for BUFGCTRL
-route-throughs (OPEN-FLOW.md section 6.8): make it again.
+route-throughs (OPEN-FLOW.md section 6.8): make it again. Until the third GPU review (2026-10-18)
+every `MANIFEST` said placer seed 1 for every design, whatever seed its bitstream was placed with
+(`tools/release.py` read the seed at the top of a build record; `tools/fpga-build.sh` writes it in
+the `[openxc7]` table): `1.0.0-f791b8a1`'s says 1 for the 100T `surfcpu_arty_a7_ddr_bramdiag`, which
+was placed with seed 3 (its own build record says so). That release's files stay as they are;
+releases since (`manifest_format = 2`) record each bitstream's seed, and `release-verify` rebuilds
+each with it (section 5).
 
 ## 1. What a release is
 
@@ -53,11 +59,13 @@ the first 8 hex digits, the build id every artifact carries:
 | `surfcpu_arty_a7_ddr_bramdiag` | | DDR | milestone 4: the DDR3L diagnostics |
 | `surfcpu_arty_a7_ddr` | **boot** | DDR | the standalone design: SurfBoot loads SurfOS from the card into DDR |
 
-A design that needs DDR and does not build makes the release a **pre-release**. That needs
-`PRERELEASE=1`, so it is never mistaken for a complete one: the directory name says `-pre`,
-`MANIFEST` says `status = "prerelease"`, `complete = false` and lists what is missing and why.
-Any other design that does not build stops the release. No gate is relaxed for a release: a
-design is in it only if `tools/fpga-build.sh` passed it as it is.
+A design that needs DDR and does not build makes the release a **pre-release**, and so does a
+bitstream whose build is THIN (every placer seed of its design list met timing with less slack
+than the open flow's rule wants, OPEN-FLOW.md section 3). That needs `PRERELEASE=1`, so it is
+never mistaken for a complete one: the directory name says `-pre`, `MANIFEST` says
+`status = "prerelease"`, `complete = false` and lists what is missing and why (`missing`) and
+which bitstreams are THIN (`thin`). Any other design that does not build stops the release. No gate
+is relaxed for a release: a design is in it only if `tools/fpga-build.sh` passed it as it is.
 
 ## 2. Before you start
 
@@ -204,7 +212,7 @@ What made two builds of one commit differ, and what was done about it:
 | build paths | none found: the containers mount the tree at `/work` wherever it is, so the debug information and the `.bit` header's relative path are the same from any checkout (`-ffile-prefix-map` is not needed) | the verify runs build in other directories and compare the ELF files too |
 | file order | none found: GNU Make 4.4.1 in the image sorts `$(wildcard)`; `tools/fpga-build.sh` sorts its source lists, and the Mac's `en_US.UTF-8` order equals `C` order for every file there | the release runs the Mac-side scripts with `LC_ALL=C`; the images set no locale, so the containers use the POSIX locale (`MANIFEST` records it) |
 | the generated LiteDRAM core (DDR designs) | LiteX lists the core's instances in a block comment of `litedram_core.v` in an order that follows the Python interpreter's memory: a fresh checkout's first `make litedram-gen` wrote a file that failed its own check against `ip/litedram/arty.sha256`, while every line of Verilog outside that comment was the same in the five different files 16 runs produced (evidence `determinism.txt` section 6) | fixed by the ddr track (d6f3ef8): `ip/litedram/run_gen.py` replaces that comment with a fixed note after the generator has run, stopping unless it finds exactly one; `make litedram-repro` generated both cores in eight differently set-up Python processes and got one set of files, the locked one (evidence `../ddr/litedram.txt`) |
-| threads and seeds | none found: nextpnr runs with 4 threads (`OPENXC7_THREADS` inside the image; `devenv/run.sh` does not pass it, so the release always gets 4), placer seeds come from the design lists, and two SoC builds gave the same netlist, placement, FASM and frames | recorded in `MANIFEST` (`nextpnr_threads`) |
+| threads and seeds | none found: nextpnr runs with 4 threads (`OPENXC7_THREADS` inside the image; `devenv/run.sh` does not pass it, so the release always gets 4), placer seeds come from the design lists, and two SoC builds gave the same netlist, placement, FASM and frames. But which seed of a list a build ends with can depend on the machine's load since each seed has a time limit (and, since the slack rule, on a seed being thin) | recorded in `MANIFEST` (`nextpnr_threads`, and each design's `placer_seed`, the one its build record names, since `manifest_format = 2`); `release-verify` rebuilds each bitstream with exactly that seed (`release.py make --seed BOARD/DESIGN=SEED`, which gives that build `PLACER_SEEDS`) |
 
 Check a release with:
 
@@ -216,8 +224,11 @@ It first checks the release as `release-check` does (a damaged one is refused, e
 clones its commit into `build/release-verify/<name>-<time>/src` (`git clone --shared`: a checkout
 of its own that borrows this repository's objects), runs the same release there for the designs
 the release has, and compares every artifact of the release's `SHA256SUMS` byte for byte, hashing
-both sides' files. `DESIGNS` and `BOARDS` name some of them: a name the release's `MANIFEST` does
-not know, or a design it did not build, is refused (exit 2) before anything is cloned. Each
+both sides' files. Each bitstream is rebuilt with the placer seed the release's `MANIFEST` records
+for it (`manifest_format = 2`; an older `MANIFEST`, whose seeds all say 1, is rebuilt with the
+design lists' seeds, as its release was, and the report says so). `DESIGNS` and `BOARDS` name
+some of them: a name the release's `MANIFEST` does not know, or a design it did not build, is
+refused (exit 2) before anything is cloned. Each
 artifact is `match`, `DIFFERS`, `MISSING`, `DAMAGED` (a file that is not the one its own
 `SHA256SUMS` lists, on either side), `EXTRA` (only the rebuild has it) or `not rebuilt` (its
 design was not asked for). A difference names the first differing byte and its likely cause:
@@ -431,7 +442,7 @@ the same; its `MANIFEST` comparison names the new image ids.
 
 | | What |
 |---|---|
-| `make test-release` (on `make check`, about a minute), and `make release-selftest` (the same with the Mac's own Python) | `tools/release-test.py`: `tools/bitfile.py`'s self-test, flash image and header rule (shared with `tools/program.sh`); `tools/release.py`'s TOML subset, its comparison and the causes it names for planted differences (the `.bit` header's time, a frame, a kernel word with its symbol, a missing and an extra file); `make` in a scratch repository with stand-ins for the builds: a dirty tree (also one git's configuration hides), a foreign `SOURCE_DATE_EPOCH`, settings that would change the builds and missing designs without `PRERELEASE` refused; a complete release; a DDR design that fails gives a pre-release only with `PRERELEASE`; another design that fails stops it; two releases of one commit are the same bytes; other builds, a new commit or a changed staged file during the release; build records from another run or image; the builds' environment; a damaged, renamed, padded or cut release refused by `check` and `compare`; `verify` with names it does not know, and a partial one; the tools never deleting a directory they did not make; `tools/program.sh flash` on a release's bitstream with the board tests' fake openFPGALoader, and the host targets with paths that hold spaces |
+| `make test-release` (on `make check`, about a minute), and `make release-selftest` (the same with the Mac's own Python) | `tools/release-test.py`: `tools/bitfile.py`'s self-test, flash image and header rule (shared with `tools/program.sh`); `tools/release.py`'s TOML subset, its comparison and the causes it names for planted differences (the `.bit` header's time, a frame, a kernel word with its symbol, a missing and an extra file); `make` in a scratch repository with stand-ins for the builds: a dirty tree (also one git's configuration hides), a foreign `SOURCE_DATE_EPOCH`, settings that would change the builds and missing designs without `PRERELEASE` refused; a complete release; a DDR design that fails gives a pre-release only with `PRERELEASE`; another design that fails stops it; two releases of one commit are the same bytes; other builds, a new commit or a changed staged file during the release; build records from another run or image; the builds' environment; a damaged, renamed, padded or cut release refused by `check` and `compare`; `verify` with names it does not know, and a partial one; the placer seed each bitstream was placed with recorded (from its build record) and given back by `verify`, an older `MANIFEST` rebuilt with the design lists' seeds, a THIN bitstream refused without `PRERELEASE` and listed in a pre-release; the tools never deleting a directory they did not make; `tools/program.sh flash` on a release's bitstream with the board tests' fake openFPGALoader, and the host targets with paths that hold spaces |
 | `evidence/release/release.txt` | the pre-release `1.0.0-pre-bb066932` made from a fresh checkout (`tools/fresh-checkout.sh`): the output, `SHA256SUMS`, the gates of every bitstream, the missing DDR designs and why |
 | `evidence/release/verify.txt` | `make release-verify` of it: every artifact, with what it found |
 | `evidence/release/release-1.0.0-f791b8a1.txt` | the first complete release, made from a fresh checkout: the output, `SHA256SUMS`, the gates of all ten bitstreams |
