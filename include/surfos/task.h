@@ -77,6 +77,15 @@ typedef void (*kthread_fn)(void *arg);
     fs/vfs.c: a path's walk, a file it opened and has not handed to its descriptor table): killed at
     once in a wait there (for the volume's lock) it left them behind, and the volume could not be
     unmounted until restart. A wait to read a terminal, a pseudo-terminal or a socket holds none.
+    10/19/26 (audit B76): a kill put off while the task held something does not come at once the
+    moment it has let go, which is where its own clean-up runs (a waiter's reap() freeing a dead
+    task, a spawn handing its files over, a command freeing its buffers): from that moment the task
+    has KILL_WAIT_MS to end its call (the kill comes at its end, task_call_leave()) or, a kernel
+    thread outside any call, to end by itself; only one still running then is killed at once (as
+    soon as it holds nothing, if it holds something again by then). (B79) The grace starts at the
+    task's next VFS path call holding nothing, if no look found it out before (task_vfs_begin());
+    and one still holding something when its grace has run out gets EINTR from every new path
+    call from then on, so that it soon holds nothing and is killed.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -86,6 +95,10 @@ typedef void (*kthread_fn)(void *arg);
 #define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
 #define TI_FSWAIT   0x8  /* 10/17/26, intr: the kill that waited found it inside a file system (said once) */
 #define TI_NOCALL   0x10 /* 10/17/26 (audit B48), intr: killed outside any call, put off inside a file system */
+#define TI_HELD     0x20 /* 10/19/26 (audit B76), intr: the kill that waited found it holding something (in_fs()) */
+#define TI_GRACE    0x40 /* 10/19/26 (audit B76), intr: ... and later found it let go: KILL_WAIT_MS to end (once) */
+#define TI_LATE     0x80 /* 10/19/26 (audit B79), intr: ... and found it holding something again at the grace's end:
+                            every new VFS path call says EINTR (task_vfs_begin()), so that it is soon out and killed */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -229,6 +242,13 @@ static inline void fs_finish_leave(void) {
 /* 10/18/26 (audit B73): a reference to a mounted volume's vnode (or file) the current task's call holds, and its end */
 static inline void fs_ref(void) { if(curTask) curTask->fs_refs++; }
 static inline void fs_unref(void) { if(curTask && curTask->fs_refs) curTask->fs_refs--; }
+/* 10/19/26 (audit B76, B79): a VFS path call begins in the current task (fs/vfs.c's lookup_abs()). A kill of it that was
+   put off and finds it holding nothing here gives it its KILL_WAIT_MS from here (B76), as a look finding it out does; and
+   a task still holding something when that ran out gets -EINTR, nothing taken (B79). 0 to go on */
+int task_vfs_begin_slow(void);
+static inline int task_vfs_begin(void) {
+    return curTask && (curTask->intr & (TI_HELD | TI_LATE)) ? task_vfs_begin_slow() : 0;
+}
 /* 10/18/26 (audit B56): is t inside a file system, the block cache or a device request (counted, or holding the cache's
    lock or its bounce buffer's): a fault there stops the system (kernel/panic.c, arch/riscv32/trap.c), since what t
    holds there (a volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back. (B62) Or

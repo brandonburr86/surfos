@@ -810,7 +810,8 @@ class Qemu:
             try:
                 self.ser = self._connect(self.ser_path)
             except RuntimeError as e:
-                if attempt < PORT_TRIES and len(ports) > len(self.ports) and port_taken(str(e)):
+                picked = {ports[n] for n in ports if n not in self.ports}   # (10/19/26, B78: not the caller's own)
+                if attempt < PORT_TRIES and picked_port_taken(str(e), picked):
                     retry_note(attempt, str(e))
                     self.proc.stdout.close()
                     for p in (self.mon_path, self.ser_path):
@@ -1010,7 +1011,9 @@ def free_port():
 # 10/18/26 (round fs-fix-11): free_port() lets its port go so that QEMU can bind it, and another program may take it
 # first: QEMU then stops at once ("Could not set up host forwarding rule ...", or for a socket of its own "Address
 # already in use"). A launch with ports written {port:NAME} (picked here) tries again with fresh ones, PORT_TRIES times
-# in all, and says so; every other failure to start stays fatal (tests/test_qemu_ports.py)
+# in all, and says so; every other failure to start stays fatal (tests/test_qemu_ports.py). 10/19/26 (audit B78): only
+# when the port QEMU names is one picked here: a port the caller wrote itself, taken, stays fatal at once, also in a
+# launch that has picked ones too (before, any taken port was tried again whenever the launch had picked ports)
 PORT_TRIES = 5
 PORT_TAKEN = ('Could not set up host forwarding rule', 'Address already in use')
 
@@ -1030,6 +1033,25 @@ def pick_ports(args, ports):
 def port_taken(output):
     """did QEMU stop because a port it was to bind was taken?"""
     return any(m in output for m in PORT_TAKEN)
+
+
+def taken_ports(output):
+    """10/19/26 (audit B78): the ports QEMU says it could not bind: the forwarding rule's ('tcp:127.0.0.1:PORT-...'),
+    or a datagram socket's (its -netdev, which QEMU's message quotes, says local.port=PORT)"""
+    found = []
+    for line in output.splitlines():
+        m = re.search(r"Could not set up host forwarding rule '[a-z]+:[0-9.]*:(\d+)-", line)
+        if m:
+            found.append(int(m.group(1)))
+        elif 'Address already in use' in line:
+            found += [int(p) for p in re.findall(r'local\.port=(\d+)', line)]
+    return found
+
+
+def picked_port_taken(output, picked):
+    """10/19/26 (audit B78): did QEMU stop because a port picked for it (in picked) was taken, and only such a one?"""
+    taken = taken_ports(output)
+    return bool(taken) and port_taken(output) and all(p in picked for p in taken)
 
 
 def retry_note(attempt, output):

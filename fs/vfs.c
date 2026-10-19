@@ -71,6 +71,11 @@ descriptor table or its current directory there (a path, which holds nothing). E
 cut short by the kill (the cache's, B39) or ends within its drivers' bounds (a device request; the volume's lock,
 whose holder's operation is bounded by its device requests), but in a step that must finish (B46). A fault there is
 no wipeout (B56): what a task killed then leaves keeps a volume mounted, and no lock held.
+
+10/19/26 (audit B77): a walk counts each lookup from before it: rootfs's lookup, meeting a mount made after the walk
+chose its mount, hands back that volume's root with its reference taken, which nothing counted until the lookup had
+returned. (B76, B79) A path call begins with task_vfs_begin() (surfos/task.h): a kill put off while the task held
+something gives it KILL_WAIT_MS from here when it holds nothing now, and once that has run out the call says EINTR.
 */
 
 #include <surfos/types.h>
@@ -639,8 +644,12 @@ static int walk(struct vnode *v, const char *rest, struct vnode **out) {
         memcpy(comp, s, n);
         comp[n] = 0;
         if(v->type != VN_DIR || !v->ops->lookup) { vdrop(v); return -ENOTDIR; }
+        fs_ref();                                   /* 10/18/26 (B73): what it finds counted before the one it came from
+                                                       goes; 10/19/26 (audit B77): from before the lookup, which hands it
+                                                       back with its reference taken: rootfs's, meeting a mount made just
+                                                       then, hands back the volume's root, counted by nothing before */
         r = v->ops->lookup(v, comp, &next);
-        if(r == 0) vhold(next);                     /* 10/18/26 (B73): counted before the one it came from goes */
+        if(r || !pins(next)) fs_unref();            /* (not a volume's: nothing to count) */
         vdrop(v);
         if(r) return r;
         v = next;
@@ -651,7 +660,10 @@ static int walk(struct vnode *v, const char *rest, struct vnode **out) {
 
 static int lookup_abs(const char *abs, struct vnode **out) {
     const char *rest;
-    struct vnode *root = find_mount(abs, &rest);
+    struct vnode *root;
+    int r = task_vfs_begin();                       /* 10/19/26 (audit B76, B79): a kill that was put off (task.h) */
+    if(r) return r;
+    root = find_mount(abs, &rest);
     if(!root) return -ENOENT;
     return walk(root, rest, out);
 }

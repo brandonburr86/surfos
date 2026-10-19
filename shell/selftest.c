@@ -1149,7 +1149,9 @@ static void test_kill_device(void) {
 /* 10/17/26 (audit B48): a kernel thread killed outside any call while it is inside a file system: the kill waits until
    it leaves (looked at every 20 ms). One that enters a call meanwhile gets that call's 2 s, as any call does: it was
    killed at once in the call 20 ms later, said not to have ended within 2000 ms, holding whatever the call held. One
-   that leaves without entering a call is killed within a few ticks of leaving (B39) */
+   that leaves without entering a call is killed within a few ticks of leaving (B39). 10/19/26 (audit B76): not within
+   a few ticks any more, which put the kill where a thread's clean-up runs: it has KILL_WAIT_MS from leaving to end by
+   itself (test_kill_cleanup), and one that goes on is killed at once then */
 static volatile int kn_flag;
 static volatile u_long kn_out;
 
@@ -1170,7 +1172,7 @@ static void kn_leave(void *arg) {
     sleep_ms(300);
     fs_leave();
     kn_out = uptime_ms();
-    sleep_ms(2000);                                  /* killed long before this ends */
+    sleep_ms(3000);                                  /* (10/19/26, B76: past KILL_WAIT_MS) killed before this ends */
     kn_flag = 1;
 }
 
@@ -1201,8 +1203,8 @@ static void test_kill_outside_call(void) {
     kn_flag = 0;
     kn_out = 0;
     status = kn_kill("killout", kn_leave, &killed, &end);
-    check(status == -1 && !kn_flag && kn_out && end - kn_out < 250,
-          "a kill put off inside a file system comes within a few ticks of the thread leaving it");
+    check(status == -1 && !kn_flag && kn_out && end - kn_out >= KILL_WAIT_MS - 50 && end - kn_out < KILL_WAIT_MS + 300,
+          "a kill put off inside a file system comes KILL_WAIT_MS after the thread left it, as it goes on (B76)");
     printf("        (killed %lu ms after it left the file system)\n", kn_out ? end - kn_out : 0UL);
 }
 
@@ -2186,7 +2188,8 @@ out:
    left the lock with the dead task, and every task that wanted the lock waited for good (a driver's thread holds its
    device's lock in its probes and polls outside any request, as the USB hub thread and the SD card's watch do: every
    later request to the device). Here a kernel thread outside any call holds a lock of the test's own for 300 ms when it
-   is killed: the kill comes once it lets go, and the lock is free after */
+   is killed: the kill comes once it lets go, and the lock is free after. 10/19/26 (audit B76): KILL_WAIT_MS after it
+   lets go (it goes on, never ending by itself) */
 static mutex_t kl_lock = MUTEX_INIT("selftest-kill");
 static volatile int kl_held, kl_let_go;
 static volatile u_long kl_out;
@@ -2199,7 +2202,7 @@ static void kl_thread(void *arg) {
     kl_let_go = 1;
     kl_out = uptime_ms();
     mutex_unlock(&kl_lock);
-    sleep_ms(2000);                                  /* killed long before this ends */
+    sleep_ms(3000);                                  /* (10/19/26, B76: past KILL_WAIT_MS) killed before this ends */
     kl_held = 2;
 }
 
@@ -2221,8 +2224,9 @@ static void test_kill_holding_lock(void) {
     if(free_after) mutex_unlock(&kl_lock);
     printf("        (%s; it ended %lu ms after)\n", kl_let_go ? "it let go of its lock" : "killed holding its lock",
            kl_let_go ? end - kl_out : 0UL);
-    check(status == -1 && kl_let_go && kl_held == 1 && free_after && end - kl_out < 250,
-          "a task holding a lock is not killed at once: the kill comes once it lets go, and the lock is free after");
+    check(status == -1 && kl_let_go && kl_held == 1 && free_after && end - kl_out >= KILL_WAIT_MS - 50 &&
+          end - kl_out < KILL_WAIT_MS + 300, "a task holding a lock is not killed at once: the kill comes once it lets "
+          "go (KILL_WAIT_MS after, as it goes on: B76), and the lock is free after");
 }
 
 /* 10/18/26 (audit B63): a mutex goes to its waiters in the order they came. mutex_unlock() only woke the first waiter,
@@ -2454,14 +2458,14 @@ static void kg_thread(void *arg) {
     kg_held = 1;
     sleep_ms(2500);                                  /* longer than a kill's KILL_WAIT_MS */
     mutex_unlock(&kg_lock);
-    sleep_ms(2000);                                  /* killed long before this ends */
+    sleep_ms(3000);                                  /* (10/19/26, B76: past KILL_WAIT_MS) killed before this ends */
 }
 
 static void test_kill_lock_logged(void) {
-    char line[80];
+    char line[96];
     surf_task *t;
     u_long pid;
-    int status = 0, waited, said;
+    int status = 0, waited, said, said2;
     kg_held = 0;
     t = kthread_create_on("killlong", curTask->con, kg_thread, NULL, PL_NORMAL, 0);
     if(!t) { check(false, "a kill put off outside any call, in the kernel log: a thread"); return; }
@@ -2471,9 +2475,15 @@ static void test_kill_lock_logged(void) {
     if(task_wait(pid, &status) != (int)pid) status = 1;
     snprintf(line, sizeof(line), "kill: 'killlong' (pid %lu) is still holding a lock", pid);
     said = klog_count(line);
-    printf("        (the kernel log %s)\n", said == 1 ? "says so once" : said ? "says so more than once" : "says nothing");
+    snprintf(line, sizeof(line), "kill: 'killlong' (pid %lu) did not end within %u ms of letting go", pid,
+             (u_int)KILL_WAIT_MS);
+    said2 = klog_count(line);                        /* (10/19/26, audit B76) */
+    printf("        (the kernel log %s; and that it was killed at once KILL_WAIT_MS after it let go: %s)\n",
+           said == 1 ? "says so once" : said ? "says so more than once" : "says nothing",
+           said2 == 1 ? "once" : said2 ? "more than once" : "NOT SAID");
     check(status == -1 && said == 1, "a kernel thread killed outside any call that keeps its lock past KILL_WAIT_MS: the "
           "kernel log says once that the kill is put off");
+    check(said2 == 1, "and once that it did not end within KILL_WAIT_MS of letting go: killed at once then (B76)");
 }
 
 static void test_close_cut_short(void) {
@@ -2780,6 +2790,130 @@ static void test_kill_reader(void) {
     if(r == 0) fx_done(d, mem, NULL);
 }
 
+/**** round fs-fix-12 (audit B74-B78): the twelfth review ****/
+
+/* 10/19/26 (audit B76): a kill put off while its task held something (fs_hold, fs_refs, a lock) came at once at the
+   first look after the task had let go, the looks 20 ms apart: right where its clean-up runs (the review's R12a: a
+   waiter's reap() killed in its tail, the dead task's address space, stack and record never freed; R12c: a spawn's
+   caller killed after its walk, the files it handed the child left referenced for good). Now the task has KILL_WAIT_MS
+   from letting go to end its call, where the kill comes, or (a kernel thread) to end by itself; one that goes on is
+   killed at once then. Here a call and a kernel thread each hold a file of the initrd while they wait for a lock of the
+   test's past KILL_WAIT_MS (the kill comes meanwhile and is put off), then let go and run 60 ms of clean-up that
+   nothing counts (busy, interrupts on: the looks go on); the call then ends, the thread returns. And a call that goes
+   on past KILL_WAIT_MS after letting go is killed at once then, and the kernel log says so */
+static mutex_t kj_lock = MUTEX_INIT("selftest-cleanup");
+static volatile int kj_ready, kj_done;
+static volatile u_long kj_left;
+
+static void kj_thread(void *arg) {
+    struct file *f;
+    u_long t0;
+    if(vfs_open("/initrd/bin/hello", O_RDONLY, &f) == 0) {   /* (the initrd: a volume's file, counted) */
+        kj_ready = 1;
+        mutex_lock(&kj_lock);
+        mutex_unlock(&kj_lock);
+        vfs_close(f);                                /* it lets go: nothing counted from here */
+        kj_left = uptime_ms();
+        for(t0 = uptime_ms(); uptime_ms() - t0 < 60; ) ;     /* its clean-up */
+        kj_done = 1;
+        if(arg) sleep_ms(3000);                      /* (one that goes on: a driver's delay, never cut short) */
+    }
+    if(curTask->in_call) task_call_leave(TC_SYSCALL);   /* (a call's kill comes here) */
+}
+
+/* kj_thread in a task of its own (flags: TF_INCALL, a call; 0, a kernel thread; go_on: it goes on after its clean-up),
+   killed while it holds the file, which it closes KILL_WAIT_MS + 500 ms later: its status; *ms, from its letting go to
+   its end */
+static int kj_run(const char *name, u_int flags, bool go_on, u_long *ms, u_long *pidp) {
+    surf_task *t;
+    u_long pid;
+    int st = 1, waited;
+    kj_ready = kj_done = 0;
+    kj_left = 0;
+    *ms = 0;
+    mutex_lock(&kj_lock);
+    t = kthread_create_on(name, curTask->con, kj_thread, go_on ? (void *)1 : NULL, PL_NORMAL, flags);
+    if(!t) { mutex_unlock(&kj_lock); return 1; }
+    pid = t->pid;
+    *pidp = pid;
+    for(waited = 0; !kj_ready && waited < 2000; waited += 5) sleep_ms(5);
+    sleep_ms(50);
+    kill_task(t);                                    /* put off: it holds the file */
+    sleep_ms(KILL_WAIT_MS + 500);
+    mutex_unlock(&kj_lock);                          /* it lets go now */
+    if(task_wait(pid, &st) != (int)pid) st = 1;
+    if(kj_left) *ms = uptime_ms() - kj_left;
+    return st;
+}
+
+static void test_kill_cleanup(void) {
+    char line[112];
+    u_long ms1, ms2, ms3, pid3 = 0, pid;
+    int s1, s2, s3, d1, d2, d3, said;
+    s1 = kj_run("cleancall", TF_INCALL, false, &ms1, &pid);
+    d1 = kj_done;
+    s2 = kj_run("cleanthread", 0, false, &ms2, &pid);
+    d2 = kj_done;
+    s3 = kj_run("cleanon", TF_INCALL, true, &ms3, &pid3);
+    d3 = kj_done;
+    snprintf(line, sizeof(line), "kill: 'cleanon' (pid %lu) did not end its system call within %u ms of letting go",
+             pid3, (u_int)KILL_WAIT_MS);
+    said = klog_count(line);
+    printf("        (a call: its clean-up %s, status %d, ended %lu ms after it let go; a kernel thread: %s, status %d, "
+           "%lu ms; a call that goes on: %s, status %d, %lu ms, the kernel log %s)\n", d1 ? "done" : "CUT SHORT", s1,
+           ms1, d2 ? "done" : "CUT SHORT", s2, ms2, d3 ? "done" : "CUT SHORT", s3, ms3,
+           said == 1 ? "says so" : "SAYS NOTHING");
+    check(d1 && s1 == -1 && ms1 < 250, "B76: a call whose kill was put off while it held a file finishes the clean-up "
+          "after its letting go: the kill comes at its call's end");
+    check(d2 && s2 == 0 && ms2 < 250, "B76: and a kernel thread finishes its clean-up and ends by itself");
+    check(d3 && s3 == -1 && ms3 >= KILL_WAIT_MS - 50 && ms3 < KILL_WAIT_MS + 300 && said == 1,
+          "B76: a call that goes on is killed at once KILL_WAIT_MS after its letting go, and the kernel log says so");
+}
+
+/* 10/19/26 (audit B79): a task that keeps making VFS calls and ignores its kill holds something nearly all the time,
+   and the looks 20 ms apart rarely found it out: the review's storm had such workers not killed 10 s after their
+   kill, 11 times of 42. Now its grace (B76) starts at its next path call that finds it holding nothing, and once the
+   grace has run out with it holding something again, every new path call says EINTR: it is soon out, and killed.
+   Here a kernel thread opens a file of the initrd, holds it 50 ms (busy), closes it and opens it again, out for a
+   few instructions between; killed, it must be gone within KILL_WAIT_MS and a little (it was looked at in vain until
+   told to stop) */
+static volatile int kt_stop, kt_opens;
+
+static void kt_loop(void *arg) {
+    struct file *f;
+    u_long t0;
+    (void)arg;
+    while(!kt_stop) {
+        if(vfs_open("/initrd/bin/hello", O_RDONLY, &f) != 0) continue;   /* (refused once its grace has run out) */
+        kt_opens++;
+        for(t0 = uptime_ms(); uptime_ms() - t0 < 50; ) ;     /* holding the file */
+        vfs_close(f);
+    }
+}
+
+static void test_kill_loop(void) {
+    surf_task *t;
+    u_long pid, t0, ms = 0;
+    int st = 1, r = 0, opens;
+    kt_stop = kt_opens = 0;
+    t = kthread_create_on("killloop", curTask->con, kt_loop, NULL, PL_NORMAL, 0);
+    if(!t) { check(false, "B79: a thread"); return; }
+    pid = t->pid;
+    sleep_ms(200);
+    t0 = uptime_ms();
+    kill_task(t);
+    while((r = task_wait_opts(pid, &st, WNOHANG)) == 0 && uptime_ms() - t0 < 3 * KILL_WAIT_MS) sleep_ms(10);
+    ms = uptime_ms() - t0;
+    opens = kt_opens;
+    if(r == 0) {                                     /* still there: told to stop */
+        kt_stop = 1;
+        task_wait(pid, &st);
+    }
+    printf("        (%s %lu ms after its kill, %d opens; status %d)\n", r ? "it ended" : "STILL THERE", ms, opens, st);
+    check(r == (int)pid && st == -1 && ms < KILL_WAIT_MS + 600, "B79: a kernel thread that keeps opening, holding and "
+          "closing a volume's file, ignoring its kill, is killed within KILL_WAIT_MS and a little");
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -3080,7 +3214,8 @@ static void (*const tests[])(void) = {
     test_eject_writeout_mount, test_kill_system,
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
-    test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader,
+    test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader, test_kill_cleanup,
+    test_kill_loop,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
