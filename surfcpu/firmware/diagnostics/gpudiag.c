@@ -8,8 +8,8 @@ section 10), like bramdiag: it needs only the CPU, block RAM, the UART, the time
 video block. It prints the build identity, then checks the VRAM window (walking ones, address
 lines, byte lanes, March C- and address-in-address over all 300 KiB, the error at 300 KiB for
 loads and stores, no fetch), the new video registers and GPAL, the engine's registers and errors
-(a full FIFO and OVERFLOW, an unknown opcode, a refused target, a fence and its interrupt at intc
-source gpu), then draws gpudiag's scenes
+(a full FIFO and OVERFLOW, an unknown opcode, a refused target, the target and clip a reset
+leaves, a fence and its interrupt at intc source gpu), then draws gpudiag's scenes
 (gpuscenes.c) one after the other. For each it waits until a frame that began after the
 picture was complete has been shown (FRAME_COUNT two on), and compares FRAME_CRC with the CRC
 the C model computed for that scene when the ROM was built (gpuscenes_expect.h), printing both.
@@ -252,7 +252,7 @@ static void no_engine(void)
 }
 
 /* the engine's registers and errors: overflow behind a WAIT_VBLANK, unknown opcodes, a refused
- * target, a fence with its interrupt (intc source gpu) */
+ * target and the reset target and clip, a fence with its interrupt (intc source gpu) */
 static void gpu_registers(uint32_t unused)
 {
     (void)unused;
@@ -268,8 +268,8 @@ static void gpu_registers(uint32_t unused)
     fifo_credit = 0;
     /* a rerun sets the target and clip a reset leaves (SET_TARGET sets the clip too): ABORT keeps
      * them, so a rerun after a run abandoned inside an engine scene would otherwise start with that
-     * scene's. The first run after a reset does not: its refused-target fill below checks the reset
-     * values themselves, as video_registers checks the GFX_ ones */
+     * scene's. The first run after a reset does not: the fills and the copy after the refused target
+     * below check the reset values themselves, as video_registers checks the GFX_ ones */
     if (!first_run) {
         GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
         GREG(SURF_GPU_CMD) = 0;
@@ -311,20 +311,52 @@ static void gpu_registers(uint32_t unused)
     st = GREG(SURF_GPU_STATUS);
     diag_check((st & GPU_STICKY) == (SURF_GPU_STATUS_BAD_OPCODE_MASK | SURF_GPU_STATUS_BAD_PARAM_MASK),
                "unknown opcode and refused target: STATUS 0x%x", st);
-    /* the refused target was not taken: a fill at (0, 0) lands in the target a reset leaves (base 0,
-     * stride 640, the clip the whole of it; on a rerun, set so above), not at byte 4002 or 4000,
-     * where the refused one would have put it */
-    W(VRAM(0)) = 0;
-    W(VRAM(4)) = 0;
-    W(VRAM(4000)) = 0;
-    W(VRAM(4004)) = 0;
+    /* the refused target was not taken, and the target and clip are the ones a reset leaves (base 0,
+     * stride 640, 640 x 480, the clip the whole of it; on a rerun, set so above), seen wherever the
+     * engine shows them: two fills and a copy, each word below set to "before", must leave "after".
+     * The fill at (0, 0) lands at byte 0 (base 0, the clip's left and top edges at 0), not at byte
+     * 4002 or 4000, where the refused target would have put it. The 8 x 2 fill at (636, 478) writes
+     * the last four pixels of rows 478 and 479 (stride 640; the clip's right edge at 640 or past,
+     * its bottom edge at 480 or past) and not row 479's first four, where its pixels 640..643 of
+     * row 478 would land if the right edge were past 640 (row 479's would be past VRAM's end). The
+     * 8 x 2 copy from (636, 479) to (0, 4) copies its top-left four pixels only: the rest of its
+     * source lies beyond the target's width or height, so those are 640 and 480, not more. (The
+     * engine clips to the target as well as to the clip, so a clip edge past the target changes
+     * nothing a program can see.) */
+    static const struct { uint32_t off, before, after; } reset_view[] = {
+        {0, 0, 0xC3C3C3C3u},                /* fill (0, 0) 4 x 1 */
+        {4, 0, 0},
+        {4000, 0, 0},                       /* the refused target's (0, 0) is byte 4002 */
+        {4004, 0, 0},
+        {306556, 0, 0x5A5A5A5Au},           /* fill (636, 478) 8 x 2: (636, 478) */
+        {306560, 0, 0},                     /* (0, 479), where (640, 478) would land */
+        {307196, 0, 0x5A5A5A5Au},           /* (636, 479) */
+        {2560, 0xA5A5A5A5u, 0x5A5A5A5Au},   /* copy (636, 479) to (0, 4) 8 x 2: from (636, 479) */
+        {2564, 0xA5A5A5A5u, 0xA5A5A5A5u},   /* from (640, 479): beyond the target's width */
+        {3200, 0xA5A5A5A5u, 0xA5A5A5A5u},   /* from (636, 480): beyond its height */
+        {3204, 0xA5A5A5A5u, 0xA5A5A5A5u},
+    };
+    const uint32_t n_view = sizeof reset_view / sizeof reset_view[0];
+    for (uint32_t i = 0; i < n_view; i++)
+        W(VRAM(reset_view[i].off)) = reset_view[i].before;
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FILL_RECT, 0xC3u);
     GREG(SURF_GPU_CMD) = GPU_XY(0, 0);
     GREG(SURF_GPU_CMD) = GPU_WH(4, 1);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FILL_RECT, 0x5Au);
+    GREG(SURF_GPU_CMD) = GPU_XY(636, 478);
+    GREG(SURF_GPU_CMD) = GPU_WH(8, 2);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_COPY_RECT, 0);
+    GREG(SURF_GPU_CMD) = GPU_XY(636, 479);
+    GREG(SURF_GPU_CMD) = GPU_XY(0, 4);
+    GREG(SURF_GPU_CMD) = GPU_WH(8, 2);
     hw_sync();
-    diag_check(W(VRAM(0)) == 0xC3C3C3C3u && W(VRAM(4)) == 0 && W(VRAM(4000)) == 0 && W(VRAM(4004)) == 0,
-               "after the refused target a fill at (0, 0) left VRAM words 0x%08x 0x%08x at 0, 0x%08x 0x%08x at 4000",
-               W(VRAM(0)), W(VRAM(4)), W(VRAM(4000)), W(VRAM(4004)));
+    uint32_t wrong = 0, w_at = 0;
+    for (uint32_t i = 0; i < n_view; i++)
+        if (W(VRAM(reset_view[i].off)) != reset_view[i].after && wrong++ == 0)
+            w_at = i;
+    diag_check(wrong == 0, "after the refused target, the fills and the copy in the reset target: the VRAM word at "
+               "byte %u reads 0x%08x, not 0x%08x (%u of %u words wrong)", reset_view[w_at].off,
+               W(VRAM(reset_view[w_at].off)), reset_view[w_at].after, wrong, n_view);
     /* the error interrupt, with the errors still sticky: only IE.ERR lets it through */
     GREG(SURF_GPU_IE) = SURF_GPU_IE_ERR_MASK;
     uint32_t p_err = REG(SURF_INTC_BASE, SURF_INTC_PENDING) & (1u << SURF_IRQ_GPU);

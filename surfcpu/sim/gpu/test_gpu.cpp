@@ -7,8 +7,8 @@ Verilator harness for surf_gpu with surf_vram (sim/gpu/tb_gpu.v) against the C m
 (sim/models/gpu_model.c): every command word written to CMD also goes to the model, and at every
 FENCE the harness waits for STATUS.BUSY = 0, then compares all 307,200 bytes of VRAM (through
 VRAM's pixel port, so port A is left alone), FENCE and the sticky bits with the model's.
-Directed tests (docs/GPU.md sections 4 and 5): the registers and their error rules, every
-command at every x mod 4 alignment and size, clipping at each edge, zero and out-of-range sizes
+Directed tests (docs/GPU.md sections 4 and 5): the registers and their error rules, the target
+and clip a reset leaves, every command at every x mod 4 alignment and size, clipping at each edge, zero and out-of-range sizes
 and coordinates, SET_TARGET's refusals, copies overlapping in all eight directions with and
 without the key, lines in every octant with their endpoints, EXPAND's bit order and
 transparency, WRITE_RECT's byte order, a full FIFO and OVERFLOW, an unknown opcode, fences and
@@ -211,6 +211,21 @@ static void test_registers(Tb &tb, Bus &bus) {
               "partial access or fetch at %03x", r);
     CHECK(rd(bus, SURF_GPU_FIFO_FREE) == 64 && !(rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_OVERFLOW_MASK),
           "a refused CMD write went into the FIFO");
+}
+
+// the target and clip a reset leaves (base 0, stride 640, 640 x 480, the clip the whole of it), before
+// any SET_TARGET or SET_CLIP; the model starts with them (gpu_engine_init). A fill from far out covers
+// exactly the frame (the base, the stride, the clip's four edges); a fill across the bottom-right corner
+// shows the right edge at 640, not past it (its pixels 640..643 of row 478 would land on row 479's
+// first four); a copy whose source runs past the frame's right and bottom edges copies only what lies
+// in the target, so its width and height are 640 and 480, not more (the clip edges past the target
+// change nothing a program can see: the engine clips to both)
+static void test_reset_target(Tb &tb, Bus &bus) {
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0x5A), xy(-32768, -32768), wh(65535, 65535)});
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0xC3), xy(636, 478), wh(8, 2)});
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0x96), xy(0, 4), wh(8, 2)});
+    cmd(bus, {GPU_HDR(GPU_OP_COPY_RECT, 0), xy(636, 479), xy(0, 4), wh(8, 2)});
+    fence_check(tb, bus, "the target and clip a reset leaves");
 }
 
 static void test_fill(Tb &tb, Bus &bus) {
@@ -584,6 +599,7 @@ int main(int argc, char **argv) {
     }
 
     test_registers(tb, bus);
+    test_reset_target(tb, bus);                         // before anything sets a target
     test_fill(tb, bus);
     test_target(tb, bus);
     test_copy(tb, bus);

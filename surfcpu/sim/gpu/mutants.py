@@ -7,9 +7,9 @@ Each mutant is a one-line change to a copy of surf_gpu.v, surf_vram.v or surf_vi
 of the kind the design could have (a copy in the wrong direction, a clip off by one, EXPAND's
 bits in the wrong order, the engine taking the port without its grant, an ABORT that keeps the
 FIFO, an interrupt without its enable, the overlay rule wrong, FRAME_CRC's bytes swapped, a
-placement change not waiting for the frame latch...). The test
-that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with Verilator
-and run on seed 1; it must fail. A "soc" mutant is judged by gpudiag on the RTL SoC instead
+placement change not waiting for the frame latch, a wrong target or clip after a reset...). The
+test that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with
+Verilator and run on seed 1; it must fail. A "soc" mutant is judged by gpudiag on the RTL SoC instead
 (surfsim built with HAS_GPU = 1 from the copy, running build/fw/gpudiag.mem): gpudiag must say
 FAIL, or gpudiag_check.py fail the capture in its board or its simulation form, since gpudiag is
 what runs on the board. Exit 0 when every mutant is caught. Run in the toolchain container from
@@ -94,6 +94,21 @@ MUTANTS = [
      "soc"),
     ("soc-clip-reset", GPU, "c_x0 <= 16'd0; c_y0 <= 16'd0; c_x1 <= 16'd640; c_y1 <= 16'd480;",
      "c_x0 <= 16'd8; c_y0 <= 16'd0; c_x1 <= 16'd640; c_y1 <= 16'd480;", "soc"),
+    # the rest of the target and clip a reset leaves: the stride, the clip's right and bottom edges, the
+    # width and height past the clip (seen by COPY_RECT's sources only), which test_gpu's test_reset_target
+    # and gpudiag's first run (its fills and copy after the refused target) check (the fifth review)
+    ("target-reset-stride-320", GPU, "t_stride <= 16'd640; t_w <= 15'd640;",
+     "t_stride <= 16'd320; t_w <= 15'd640;", "gpu"),
+    ("clip-reset-right-4", GPU, "c_x1 <= 16'd640; c_y1 <= 16'd480;", "c_x1 <= 16'd4; c_y1 <= 16'd480;", "gpu"),
+    ("clip-reset-bottom-1", GPU, "c_x1 <= 16'd640; c_y1 <= 16'd480;", "c_x1 <= 16'd640; c_y1 <= 16'd1;", "gpu"),
+    ("target-reset-width-644", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd644; t_h <= 15'd480;", "gpu"),
+    ("target-reset-height-481", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd640; t_h <= 15'd481;", "gpu"),
+    ("soc-target-reset-stride-320", GPU, "t_stride <= 16'd640; t_w <= 15'd640;",
+     "t_stride <= 16'd320; t_w <= 15'd640;", "soc"),
+    ("soc-clip-reset-right-4", GPU, "c_x1 <= 16'd640; c_y1 <= 16'd480;", "c_x1 <= 16'd4; c_y1 <= 16'd480;", "soc"),
+    ("soc-clip-reset-bottom-1", GPU, "c_x1 <= 16'd640; c_y1 <= 16'd480;", "c_x1 <= 16'd640; c_y1 <= 16'd1;", "soc"),
+    ("soc-target-reset-width-644", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd644; t_h <= 15'd480;", "soc"),
+    ("soc-target-reset-height-481", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd640; t_h <= 15'd481;", "soc"),
 ]
 
 CFLAGS = "-std=c++17 -O1 -g -I{r}/sim/models -I{r}/sim/io -I{r}/sim/gpu -I{r}/firmware/include"
