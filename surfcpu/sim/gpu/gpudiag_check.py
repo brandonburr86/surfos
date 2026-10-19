@@ -15,18 +15,20 @@ values a reset leaves, and says so in a line under its banner.
 A capture may hold several runs (a RESET, a Ctrl-R rerun, a console opened in the middle of one).
 A run starts at its banner ("SurfGPU diagnostic", anywhere in a line), or, where the banner was lost
 or garbled, at the first line of a run that comes (a "board", "bitstream build" or "identity" line
-again, or any line of a run after the last one ended), and ends at its GPUDIAG line. The capture
-passes only when:
-  - every run that reached its GPUDIAG line says PASS with the checks of a complete first run or of
-    a complete rerun (a run of the rerun's total is a rerun, whether or not its rerun line arrived;
-    one whose rerun line arrived must have that total), printed one CRC for every scene of the
-    header, each the model's and, with FRAMES, also a captured frame's (so FRAME_CRC is the picture
-    that left the chip);
-  - no run printed a failed check, not even one a RESET cut short (only such runs may come before
-    the last one, and only when they failed nothing);
-  - the capture ends with a run that reached its GPUDIAG line: after it only the UART echo, blank
-    lines and bytes without a word in them (a 0x00 0xFF burst while the board is reprogrammed)
-    may follow; anything else is a later run that did not end;
+again, or any line of a run after the last one ended), and ends at its GPUDIAG line. A run that
+reached its GPUDIAG line with PASS and a passing CRC line for every scene of the header is whole;
+one that did not (the console opened after its start, a line lost or garbled, a RESET before its
+end) is cut short and not judged, but whatever it shows of a failure counts. The capture passes
+only when:
+  - no run, whole or cut short, shows a failure: a FAIL line, a section's "k of n checks failed",
+    GPUDIAG: FAIL, or a scene's FRAME_CRC other than the model's;
+  - the capture ends with a whole run: after its GPUDIAG line only the UART echo, blank lines and
+    bytes without a word in them (a 0x00 0xFF burst while the board is reprogrammed) may follow;
+    anything else is a later run that did not end;
+  - every whole run has the checks of a complete first run or of a complete rerun (a run of the
+    rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
+    must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
+    FRAME_CRC is the picture that left the chip);
   - every run comes from one build (an appended log that still holds an older build's runs fails);
   - one complete run at least is a first run: a rerun does not check the GFX_ values a reset
     leaves, so it is not a full board test; --accept-rerun accepts a capture of reruns only.
@@ -57,6 +59,8 @@ WORD = re.compile(r"[A-Za-z]{2}")
 BUILD_BANNER = re.compile(r"SurfGPU diagnostic \S+ \(build ([0-9a-f]{8})")
 BUILD_BIT = re.compile(r"bitstream build ([0-9a-f]{8}) ")
 SCENE_OK = re.compile(r"^scene +(\d+): (.*?) +crc ([0-9a-f]{8}) ok")
+SCENE_FAILED = re.compile(r"^crc ([0-9a-f]{8}) +scene +(\d+): ")     # a scene with a failed check (report.c)
+CUT_SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL)\b(?! \([^)]*\))")
 
 
 class Run:
@@ -86,6 +90,18 @@ class Run:
 
     def text(self) -> str:
         return "\n".join(self.lines) + "\n"
+
+    def crcs(self) -> tuple[dict, dict]:
+        """(the CRC of each scene that passed, the CRC printed for each scene with a failed check)"""
+        ok, failed = {}, {}
+        for line in self.lines:
+            m = SCENE_OK.match(line)
+            if m:
+                ok.setdefault(int(m.group(1)), int(m.group(3), 16))
+            m = SCENE_FAILED.match(line)
+            if m:
+                failed.setdefault(int(m.group(2)), int(m.group(1), 16))
+        return ok, failed
 
 
 def split_runs(text: str) -> list:
@@ -155,11 +171,16 @@ def main() -> int:
     def which(r: Run) -> str:
         return "run %d of %d" % (runs.index(r) + 1, count) if count > 1 else "the run"
 
+    tail = next((l for r in reversed(runs) for l in reversed(r.lines) if l.strip()), "")
+    cut_tail = bool(CUT_SUMMARY.search(tail)) and not SUMMARY.search(tail)
     if not runs:
         problems.append("no gpudiag output in the capture")
+    elif cut_tail:                                  # tools/uart.py capture --until matched half the line
+        problems.append("the capture ends in the middle of its GPUDIAG line (%r): capture until the whole line, "
+                        "--until 'GPUDIAG: (PASS|FAIL) \\([^)]*\\)'" % tail.strip()[:40])
     elif not done:
         problems.append("no GPUDIAG summary line: no run ended")
-    # every run's failures, finished or cut short by a reset
+    # every run's failures, whole or cut short
     for r in runs:
         if r.summary and r.summary.group(1) == "FAIL":
             problems.append("%s says FAIL (%s)%s" % (which(r), r.summary.group(2),
@@ -167,8 +188,19 @@ def main() -> int:
         elif r.failed:
             problems.append("%s%s printed a failed check: %s" % (which(r), "" if r.summary else ", cut short,",
                                                                 r.failed[0]))
-    # the capture must end with a run that ended
-    if runs and not runs[-1].summary and done:
+        ok, failed = r.crcs()
+        for sn, crc in sorted(list(ok.items()) + list(failed.items())):
+            if sn in expect and crc != expect[sn][0]:
+                problems.append("%s printed scene %d's FRAME_CRC %08x, the model's %08x" % (which(r), sn, crc,
+                                                                                         expect[sn][0]))
+                break
+
+    def whole(r: Run) -> bool:
+        ok, _ = r.crcs()
+        return bool(r.summary) and r.summary.group(1) == "PASS" and (all(n in ok for n in expect) if expect else bool(ok))
+    judged = [r for r in done if whole(r)]
+    # the capture must end with a whole run
+    if runs and not runs[-1].summary and done and not cut_tail:
         first = next((l.strip() for l in runs[-1].lines if l.strip()), "")
         problems.append("a run after the last GPUDIAG line did not end (it printed %r)" % first[:60])
     if runs and runs[-1].summary:
@@ -177,11 +209,17 @@ def main() -> int:
             if s and not ECHO.fullmatch(s) and WORD.search(s):
                 problems.append("after the last GPUDIAG line: %r (a run that did not end?)" % s[:60])
                 break
-    # each complete run's kind and total, and its scenes
-    for r in done:
-        m = re.fullmatch(r"(\d+) checks", r.summary.group(2)) if r.summary.group(1) == "PASS" else None
-        if r.summary.group(1) != "PASS":
-            continue
+        last = runs[-1]
+        if last.summary.group(1) == "PASS" and not whole(last):
+            ok, _ = last.crcs()
+            if not expect and not ok:
+                problems.append("%s: no scene printed a CRC" % which(last))
+            for sn, (crc, name) in sorted(expect.items()):
+                if sn not in ok:
+                    problems.append("%s: scene %d (%s): no CRC printed" % (which(last), sn, name))
+    # each whole run's kind and total, and its scenes against the frames
+    for r in judged:
+        m = re.fullmatch(r"(\d+) checks", r.summary.group(2))
         if not m:
             problems.append("%s says PASS (%s), not a number of checks" % (which(r), r.summary.group(2)))
             continue
@@ -198,30 +236,19 @@ def main() -> int:
         else:
             problems.append("%s says PASS (%d checks), but a complete run makes %d, a complete rerun %d"
                             % (which(r), n, first_total, rerun_total))
-        seen = {}
-        for line in r.lines:
-            mm = SCENE_OK.match(line)
-            if mm:
-                seen[int(mm.group(1))] = int(mm.group(3), 16)
-        if not a.expect and not seen:
-            problems.append("%s: no scene printed a CRC" % which(r))
+        ok, _ = r.crcs()
         for sn, (crc, name) in sorted(expect.items()):
-            if sn not in seen:
-                problems.append("%s: scene %d (%s): no CRC printed" % (which(r), sn, name))
-                continue
-            if seen[sn] != crc:
-                problems.append("%s: scene %d (%s): FRAME_CRC %08x, the model's %08x" % (which(r), sn, name, seen[sn], crc))
-            if frames and seen[sn] not in frames:
-                problems.append("%s: scene %d (%s): no captured frame has CRC %08x" % (which(r), sn, name, seen[sn]))
+            if frames and ok.get(sn) not in frames:
+                problems.append("%s: scene %d (%s): no captured frame has CRC %08x" % (which(r), sn, name, ok[sn]))
         if not a.expect:
-            expect.update({sn: (crc, "scene %d" % sn) for sn, crc in seen.items() if sn not in expect})
+            expect.update({sn: (crc, "scene %d" % sn) for sn, crc in ok.items() if sn not in expect})
     # one build, and a first run among them
     for what, rx in (("banners", BUILD_BANNER), ("bitstream lines", BUILD_BIT)):
         ids = sorted({m.group(1) for r in runs for l in r.lines for m in [rx.search(l)] if m})
         if len(ids) > 1:
             problems.append("the runs' %s name more than one build (%s): an appended log? Capture each test into "
                             "a new file" % (what, ", ".join(ids)))
-    passed = [r for r in done if r.kind]
+    passed = [r for r in judged if r.kind]
     if passed and not any(r.kind == "first" for r in passed) and not a.accept_rerun:
         problems.append("every complete run is a rerun (Ctrl-R, %d checks): a rerun does not check the GFX_ values a "
                         "reset leaves, so it is not a full board test; press RESET and capture the first run "
@@ -256,11 +283,11 @@ def main() -> int:
         for p in problems:
             print("gpudiag_check: FAIL: " + p)
         return 1
-    desc = ", then ".join("%d checks%s" % (r.checks, ", a rerun" if r.kind == "rerun" else "") for r in done)
-    cut = count - len(done)
+    desc = ", then ".join("%d checks%s" % (r.checks, ", a rerun" if r.kind == "rerun" else "") for r in judged)
+    cut = count - len(judged)
     print("gpudiag_check: PASS (%s; %d scenes%s, every FRAME_CRC the model's%s; %s%d frames captured, %d distinct%s)"
-          % (desc, len(expect), " in each run" if len(done) > 1 else "", " and a captured frame's" if frames else "",
-             "%d run%s cut short by a reset, not judged; " % (cut, "" if cut == 1 else "s") if cut else "",
+          % (desc, len(expect), " in each run" if len(judged) > 1 else "", " and a captured frame's" if frames else "",
+             "%d run%s cut short, not judged; " % (cut, "" if cut == 1 else "s") if cut else "",
              nframes, len(frames), cycles))
     return 0
 

@@ -16,7 +16,11 @@ scenes, 84 checks for a first run and 83 for a rerun:
     captured; a first run's total with the rerun line fails; a capture of reruns only fails, being
     no full board test, unless --accept-rerun, also when the console missed the rerun's start;
   - layouts: tools/uart.py capture's time-stamped lines, whole or cut at the GPUDIAG line, and a
-    console opened in the middle of a run, pass;
+    console opened in the middle of a run, pass; a capture cut inside its GPUDIAG line fails, saying so;
+  - the fourth review's cases: an earlier run seen only in part (its tail, its summary alone, a
+    rerun's tail) or with a garbled scene line is cut short, not judged, and a whole run after it
+    passes; a failed run whose FAIL lines and summary lost bytes still fails by its wrong CRC; a
+    lone PASS run with a scene line missing, or one twice and another missing, fails;
   - --must-fail passes only a failing run that says what it must.
 Exit 0 when all pass.
 """
@@ -150,6 +154,24 @@ expect("tools/uart.py capture's lines", stamped(run() + ECHO), True)
 expect("tools/uart.py capture's lines, cut at the GPUDIAG line", stamped(run(), cut_at_summary=True), True)
 expect("tools/uart.py capture's lines of a failed run", stamped(run(crcs=BAD)), False)
 expect("a console opened in the middle of a run", "VRAM window" + run().split("identity", 1)[1], True)
+expect("tools/uart.py capture cut inside the GPUDIAG line", stamped(run()).split("(84 checks)")[0], False)
+# the fourth review's cases (gpurev4-tests/capture/adversarial4.py)
+expect("P2: the tail of a passing run (its last scene, summary, echo), then RESET and a whole run",
+       "scene  1:" + run().split("scene  1:", 1)[1] + ECHO + run() + ECHO, True)
+expect("P3: only an earlier run's GPUDIAG line and the echo, then RESET and a whole run",
+       "GPUDIAG: PASS (84 checks)\n" + ECHO + run() + ECHO, True)
+expect("P5: the tail of a passing rerun, then RESET and a whole first run",
+       "scene  1:" + run(rerun=True).split("scene  1:", 1)[1] + ECHO + run() + ECHO, True)
+expect("G1: a passing run with one byte garbled in a scene line, then RESET and a whole run",
+       run().replace("crc 11111111 ok", "crc 11111111 o\xff") + ECHO + run() + ECHO, True)
+expect("F1: a failed run whose FAIL line, section end and summary lost bytes (its CRC still wrong), then a whole run",
+       run(crcs=BAD).replace("  FAIL FRAME_CRC", "  FA\xffL FRAME_CRC").replace("checks failed", "checks fa\xffled")
+       .replace("GPUDIAG: FAIL", "GPUDIA\xff: FAIL") + ECHO + run() + ECHO, False)
+expect("F3: a failed run whose summary alone is garbled, then RESET and a whole run",
+       run(crcs=BAD).replace("GPUDIAG: FAIL", "GPUDIA\xff: FAIL") + ECHO + run() + ECHO, False)
+expect("F6: a lone PASS run with a scene line missing", run().replace(run().split("\n")[6] + "\n", ""), False)
+expect("F7: a lone PASS run with a scene line twice and another missing",
+       run().replace(run().split("\n")[6], run().split("\n")[5]), False)
 # --must-fail
 expect("--must-fail: a failing run that says why", run(skip=True), True, "--must-fail", "skipped: no engine")
 expect("--must-fail: a failing run that does not say it", run(skip=True), False, "--must-fail", "gpu.ID reads")
@@ -157,5 +179,6 @@ expect("--must-fail: a passing run", run(), False, "--must-fail", "colour bars")
 if failures:
     print("test_gpudiag_check: FAIL (%d of %d checks)" % (failures, checks))
     sys.exit(1)
-print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every complete run's verdict and total, runs a reset "
-      "cut short, the capture's end, reruns, one build, uart.py's layout, --must-fail)" % checks)
+print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every whole run's verdict and total, runs cut short "
+      "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth review's cases, "
+      "--must-fail)" % checks)
