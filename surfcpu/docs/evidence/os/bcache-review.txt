@@ -2662,6 +2662,11 @@ host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -
   task outside any call, at KILL_WAIT_MS for one in a call (kcmdtest's "sleep -u 10000" killed at once after 2 s, the
   smoke test's, unchanged); a hangup's kill in a call still waits for the call's end; the log line of a kill put off
   says "once it lets go it has 2000 ms to end" where it said "killed as soon as it lets go"
+  (Round fs-fix-13, B80, sections 97 and 100: only a look marked a task TI_HELD, so a kernel thread whose kill
+  kill_task() itself put off and that let go before its first look, and a call that held something at its kill and
+  let go just before its KILL_WAIT_MS look, were killed at once at that look, in their clean-up; the kill marks a task
+  holding something now, and so does every VFS call a killed task begins. B82, section 99: at a grace's end the line
+  said "once it lets go it has 2000 ms to end", a grace already spent)
   Every count's drop in both kernels, and what follows it before the task's call or the thread ends:
     fs_unref() (B73's references): each path call's last vdrop(), then the call's return; vfs_open()'s handing its
       count to the file; vfs_close()'s and fd_close()'s ends, then the caller (a system call returns; a kernel command
@@ -2735,6 +2740,9 @@ host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -
   -1)" (2070 ms before its commit): ok; 913e9fe "(STILL THERE 6000 ms after its kill, 124 opens; status 0)" (told to
   stop then): FAIL. R12b: section 87, none left 30 s, the longest 4.7 s. A task that holds a file throughout its loop
   is still not killed (B73)
+  (Round fs-fix-13, B81, section 98: only a path call began so; a task working on a file of its descriptor table
+  reached none and was never killed through a slow device. Every VFS call begins so now, a call on an open file,
+  statfs and sync too, a close never refused)
 
 == 94. The kernel's self test, the x86 suites, the sanitizers and the threaded test at the code final
   The self test's transcript (QEMU on the Mac, booted as make test boots, x86 at -O0): b532b41 (volume
@@ -2798,3 +2806,293 @@ host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -
   +0.060 %: this round's cost in these workloads is its layout's (rvtest's new step and kernel/task.c's 316 bytes of
   code move the code after them) and the package's load; its own code costs at most 0.003 %. kill_escalate()'s new rule
   and task_vfs_begin_slow() do not run in them (no kill), and reap()'s count only lets go later
+======================================================================================================================
+Round fs-fix-13 (10/19/26): an independent review of B74-B79 (e48f043), and its fixes (audit B80-B82)
+date:   2026-10-19 (local)
+review: by another agent, read-only, on e48f043: counters on top of round fs-fix-12's instrumented copy (r13_patch.py:
+        graces begun by a look and by a path call, TI_LATE set, EINTR returned, kills put off that came at a look with
+        no grace, calls killed at once at KILL_WAIT_MS with no grace, a task dying or ending a call with TI_HELD,
+        TI_GRACE or TI_LATE but no TI_KILL) with steps of the kernel's self test (r13_selftest.c.inc,
+        r13d_selftest.c.inc: R13a, a kernel thread killed while it holds a file of the initrd that lets go at once, then
+        60 ms of clean-up; R13b, the same as a call, let go 40 ms before its KILL_WAIT_MS look; R13c, a kernel thread
+        writing and fsyncing a file of its descriptor table on a RAM stick whose writes take a tick; R13d,
+        test_kill_loop's thread and the kernel log), three builds at -O0 and one at -O2, with R12a-R12c and the R12b
+        storm; test-all and unittest at -O0; the port test; round fs-fix-12's threaded campaigns again (54 runs, clean);
+        and a reading of B74-B79, every caller of the calls they change and the self test's changed steps. Its findings
+        (two minor, one cosmetic) are docs/CODE-AUDIT.md's B80-B82, its note on R13b decided in B80
+before: e48f043 (round fs-fix-12 merged into surfcpu): a git archive of it with this round's shell/selftest.c and
+        arch/riscv32/rvtest.c (volume surfos-sc-fs13-base), and one with the reviews' instrumentation (patch_r12x.py
+        fix12 and r13x_patch.py base: r13_patch.py's counters as they are, R13a-R13d listed first; volume
+        surfos-sc-fs13-r13b); a git worktree of it for the cost
+after:  sc/fs-fix-13 (from surfcpu e48f043): 1e2bb2a, B80-B82 with their self-test steps; then docs (8137e54) and this
+        evidence. The code is final at 1e2bb2a: every devenv run, make -C surfcpu check and the RTL runs are of a clean
+        checkout of it, the instrumented runs of a copy of it (patch_r12x.py fix12, r13x_patch.py fix13: the same
+        counters, task_vfs_begin_slow()'s two anchors where this tree has them)
+host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -fsanitize=address,undefined; QEMU on
+        the Mac for the self tests (tools/qemu-run.py's boot, as make test boots); the devenv container for the builds,
+        make test-all, make unittest and make test-usb; the SurfCPU toolchain container for make -C surfcpu check and
+        the RTL runs
+
+== 96. The review's own materials on this tree
+  R13a-R13d (r13_selftest.c.inc and r13d_selftest.c.inc as they are, R13d first) with R12a-R12c and the R12b storm, in
+  a copy of the tree instrumented as the reviews did (patch_r12x.py fix12, r13x_patch.py: r13_patch.py's counters,
+  their meaning unchanged), the self test from the user shell (the review's run_selftest13.py):
+    e48f043 (-O0, volume surfos-sc-fs13-r13b): SELFTEST FAIL
+      "(R13d: ended 2070 ms after its kill, status -1; the log's 'is still holding ... once it lets go it has 2000 ms
+      to end' 1 time(s), and 'did not end within 2000 ms of letting go: killed at once' 1 time(s))": FAIL
+      "(R13a: a kernel thread killed holding a file, let go 0 ms after the kill: its clean-up CUT SHORT, status -1,
+      ended 20 ms after it let go)": FAIL, the counters saying "put-off kill of 'r13a' (pid 8) at the first look after
+      it let go: no grace (intr 11)"
+      "(R13b: a call killed holding a file, let go 1960 ms after the kill: its clean-up CUT SHORT, status -1, ended 40
+      ms after it let go; the log's at-once line SAID)": FAIL
+      "(R13c: a thread writing and fsyncing a file of its descriptor table: STILL THERE 6000 ms after its kill, 300
+      writes after it; status 0; umount 0)": FAIL
+      R12a, R12c ok; R12b "(48 rounds, ..., 951824 operations; 153 kills, ...; longest 4670 ms; never landed 0; ...)"
+      ok; the instrumentation "0 report(s), 0 death(s) with fs_refs, 0 kill(s) pending 30 s; longest kill put off
+      6000 ms" (R13c's thread); the counters "(put-off thread kills landing at a look with no grace 1; calls killed at
+      once at KILL_WAIT_MS with no grace 2; graces begun by a look 7, by a path call 80; TI_LATE set 75, EINTR returned
+      310303; killed at once after a grace: threads 22, calls 58; TI_* bits without TI_KILL 0)"
+    this tree (1e2bb2a's code: -O0 before its commit, volume surfos-sc-fs13-r13f; at the code final -O0 and -O2,
+    volume surfos-sc-fs13-r13): SELFTEST PASS
+      "(R13d: ended 2060 ms after its kill, status -1; the log's 'is still holding ... once it lets go it has 2000 ms
+      to end' 0 time(s), and 'did not end within 2000 ms of letting go: killed at once' 1 time(s))": ok
+      "(R13a: a kernel thread killed holding a file, let go 0 ms after the kill: its clean-up done, status 0, ended 60
+      ms after it let go)": ok
+      "(R13b: a call killed holding a file, let go 1960 ms after the kill: its clean-up done, status -1, ended 60 ms
+      after it let go; the log's at-once line not said)": ok
+      "(R13c: a thread writing and fsyncing a file of its descriptor table: it ended 2020 ms after its kill, 16894
+      writes after it; status -1; umount 0)": ok (its writes refused from its grace's end: each an EINTR, counted)
+      R12a, R12c ok; R12b "(48 rounds, ..., 722498 operations; 153 kills, ...; longest 4850 ms; never landed 0; ...)"
+      ok; the instrumentation "0 report(s), 0 death(s) with fs_refs, 0 kill(s) pending 30 s; longest kill put off 4830
+      ms"; the counters "(put-off thread kills landing at a look with no grace 0; calls killed at once at KILL_WAIT_MS
+      with no grace 0; graces begun by a look 11, by a path call 77; TI_LATE set 71, EINTR returned 376149; killed at
+      once after a grace: threads 25, calls 50; TI_* bits without TI_KILL 0)"
+      at the code final: R13a-R13d, R12a and R12c as above at -O0 and at -O2 but for their times and counts (R13d's
+      thread ended 2020 ms and 2060 ms after its kill, R13c's 2020 ms at both), each ok; R12b "(48 rounds, workers by
+      kind 51/49/48/44, 759976 operations; 151 kills, 38 Ctrl+C then kill, 41 stopped; ends: 130 killed, 62 by
+      themselves, 0 other; kills that took over 100 ms 123, longest 4630 ms; never landed 0; busy after round -1; umount
+      0)" at -O0 and "(48 rounds, workers by kind 47/57/50/38, 1549973 operations; 153 kills, ...; longest 4670 ms;
+      never landed 0; ...)" at -O2, ok; the instrumentation reports nothing (the longest kill put off 4610 ms and 4650
+      ms); the counters: section 100
+  R11a-R11e in the x86 self test (as in section 87; volume surfos-sc-fs13-rev) and R11a-R11b in rvtest on riscv32: each
+  ok: on x86 at -O0 and at -O2, SELFTEST PASS at both (R11a at -O0 "7306 takes, 67 workers, 141 kills (69 waiting, 27
+  holding), 67 ended (61 killed), 0 hung; two owners 0, wrong counts 0, a dead owner seen 0; locks free after: yes
+  yes"), and on riscv32 at -O2 and at -O0 (make -C surfcpu test-os-qemu, 135 of 135 checks at each)
+  R12b's longest kills (4.6-4.9 s) are within section 100's bound: a worker whose kill came while the storm's volume
+  lock was held 2.6 s (every fifth round) waits that out, finishes the operation then under way, and has its
+  KILL_WAIT_MS of grace from its letting go
+
+== 97. B80: the grace owed from the kill, and from every VFS call begun after it
+  The finding (the review's 1, confirmed): kill_task() and kill_hangup() put off the kill of a kernel thread outside
+  any call that holds something (TI_NOCALL, its first look FS_HOLD_RETRY_MS later) without marking it TI_HELD, and
+  B76's grace was owed only to a task marked so: a thread that let go before its first look was killed at once at that
+  look, wherever it was (913e9fe's rule, which section 90 said was gone). Who meets it: a kernel thread killed while it
+  holds something and lets go within 20 ms (autonet in process_spawn(), tcpecho holding net_lock, the self test's
+  threads, R12b's thread workers: the review's storm met it once, pid 108; this round's harness on e48f043 once, R13a).
+  The review's note on R13b: a call that held something at its kill and let go 40 ms before its KILL_WAIT_MS look was
+  killed at once at that look, its clean-up cut short ("did not end its system call within 2000 ms: killed at once")
+  Decided: fixed, not only documented. The class B76 names is a kill at the instant after a letting go; whether a look
+  saw the task holding before is chance, and the KILL_WAIT_MS look of a call lands right after such a letting go as the
+  20 ms looks did. So TI_HELD (a grace owed) is set (kernel/task.c): by kill_task() and kill_hangup() when they find
+  the task holding something, in a call or outside any; by every look that finds it holding (as before); by B48's
+  hand-over to a call, which keeps it (it cleared it) and sets it if the task holds something then; and by
+  task_vfs_begin_slow() at the start of every VFS call a killed task makes (it is to take something). The grace begins
+  at the first moment after that the task is seen holding nothing: a look (FS_HOLD_RETRY_MS after a put-off, a call's
+  KILL_WAIT_MS look, B48's) or the start of a VFS call when the mark was set before it. A call never marked (holding
+  nothing at its kill, no VFS call since, holding nothing at its KILL_WAIT_MS look) is killed at once at that look as in
+  2004: that moment is the kill's, not a letting go's (section 100, (b))
+  The self test (test_kill_soon, x86 -O0): 1e2bb2a (and before its commit) "(a kernel thread: let go 0 ms after its
+  kill, its clean-up done, status 0, ended 60 ms after it let go; a call: let go 1960 ms after, done, status -1, 60 ms;
+  a call that took the file after its kill: 1960 ms, done, status -1, 60 ms)", three checks ok; e48f043 with this self
+  test "(a kernel thread: let go 0 ms after its kill, its clean-up CUT SHORT, status -1, ended 20 ms after it let go; a
+  call: let go 1960 ms after, CUT SHORT, status -1, 40 ms, KILLED AT ONCE at its look; a call that took the file after
+  its kill: 1960 ms, CUT SHORT, status -1, 40 ms, KILLED AT ONCE at its look)": three FAIL. rvtest on riscv32
+  (test_vfs_hold_soon: the held file's thread, the test's lock let go at once after the kill): "B80: and one that lets
+  go of the file before the first look after its kill finishes its clean-up and ends by itself" ok at -O2 and -O0, 135
+  of 135; on e48f043 with this rvtest FAIL, 134 of 135. R13a and R13b: section 96. The review's counters: "put-off
+  thread kills landing at a look with no grace" and "calls killed at once at KILL_WAIT_MS with no grace" on e48f043 1
+  and 2 with this round's harness (the review's four builds 2 and 2, 1 and 1, 1 and 0, 1 and 3), at the code final 0 and
+  0 at -O0 and at -O2 (section 96)
+
+== 98. B81: every VFS call begins so, a call on an open file too; what EINTR means to each caller
+  The finding (the review's 2, confirmed, latent): task_vfs_begin() was called only in lookup_abs(): a call on an open
+  file (read, write, lseek, fsync, readdir, close) never reached the grace's start or B79's EINTR, so a task working on
+  a file of its descriptor table, ignoring its kill, was found holding something at every look through a slow device
+  and never killed (R13c: "STILL THERE 6000 ms after its kill, 300 writes after it", two runs; this round's harness on
+  e48f043 the same). No kernel code loops so today
+  The change (fs/vfs.c, kernel/task.c, surfos/task.h): task_vfs_begin() at the start of vfs_read(), vfs_write(),
+  vfs_lseek(), vfs_readdir(), vfs_ftruncate(), vfs_fsync(), vfs_statfs() and vfs_sync() (B79 had left statfs and sync
+  out), and of vfs_close(), whose result is ignored: a close is never refused, it lets go of its descriptor and its
+  file (fd_close() clears the descriptor before, as it did; EINTR from a close is B65's, its write-out cut short, after
+  it let go). Its fast test is now "a killed task" (TI_KILL) rather than TI_HELD or TI_LATE: one load and test, as
+  before. Its slow part does nothing for a hangup's kill in a call (which waits for the call's end, B55: starting its
+  timer again would say B55's line twice) or a task ending (TC_EXIT); refuses (EINTR) once the grace is over (TI_LATE)
+  but never in a step that must finish (fs_finish: no such step makes a VFS call today: umount's and eject's call the
+  file system and the cache directly); else begins the grace (marked before, holding nothing) and marks the task
+  What EINTR means to each caller, both kernels: only a killed task past its grace gets it, from a call it makes itself
+    a user program's system call (sys_read, sys_write, sys_readdir, SYS_lseek, SYS_fsync, SYS_ftruncate, SYS_sync,
+      SYS_statfs): returned to the call's end, where the kill comes (task_call_leave()): programs, libsurf, surfsh's
+      redirections of programs (dup2, spawnfd), edit, the GUI's apps, undertow and telnetd never see it
+    kernel commands, x86 (shell/) and riscv32 (arch/riscv32/kshell.c): cp (the read or the write cut short: "cut short
+      after N bytes", its files closed), cat and crc32 (the read loop ends, the file closed), ls (readdir ends), hexdump
+      (lseek's and read's errors said), write and append (the error said), fsbench (its write "interrupted", the file
+      closed; its unlink after a path call, refused too once the grace is over: fsbench.tmp then stays, truncated by
+      the next fsbench; its read-back says FAILED), df (the volume's line left out), lsblk and sync (the error said),
+      eject's write-out (fsync's EINTR: "interrupted: it stays mounted", as a Ctrl+C there, B46) and riscv32's
+      sync_mounts (said per mount)
+    SYS_kcmd's write of a killed command's captured output after the command (write_all()): refused; the redirect's
+      file keeps what it had, the record let go of as before (kcmd_release(): its close is never refused)
+    the loader (kernel/process.c): lseek's or read's failure fails the load, which frees what it made; the task ends
+    the Wi-Fi firmware's load (driver/wifi/iwl.c): the read loop ends, the file closed, its buffer freed
+    reap() and task_exit(): their closes are never refused (fd_close_all(); TC_EXIT skips the begin entirely)
+    the pseudo-terminals and sockets (kernel/pty.c, net/sock.c): their files are the system calls' (above)
+  None of them waits or loops holding something on EINTR (each refusal comes before the call takes anything); a loop
+  that ignores it holds nothing and is killed at the next look (test_kill_fileloop's thread after its close)
+  The self test (test_kill_fileloop, x86 -O0: a kernel thread writing and fsyncing a file of its descriptor table on a
+  RAM stick whose writes take a tick, killed inside a write, closing the file at its first EINTR): 1e2bb2a (and before
+  its commit) "(it ended 2040 ms after its kill, 115 writes; EINTR 1 time(s), its close 0, the descriptor freed; status
+  -1; umount 0)", both checks ok; e48f043 with this self test "(STILL THERE 6000 ms after its kill, 313 writes; no
+  EINTR: told to stop, its file closed by its reap; status 0; umount 0)": the first check FAIL (the second, that what
+  was held is let go, passes on both). R13c: section 96
+
+== 99. B82: the kernel log's line says what comes
+  The finding (the review's 3, confirmed, cosmetic): for a task outside any call the line "is still holding ... once it
+  lets go it has 2000 ms to end" is written at the first look that finds it holding at least KILL_WAIT_MS after its
+  kill; when its grace began at a VFS call before that (B79), that look is the grace's end (TI_LATE is set in it), and
+  the line promised a grace already spent (R13d counted both lines once). The line now says, when the grace has begun
+  (TI_GRACE), "kill: 'X' (pid N) is holding ... again M ms after its kill, its 2000 ms from letting go over: killed as
+  soon as it lets go"; before a grace, as it did. The line is still said once, at the first look in a call or the first
+  look KILL_WAIT_MS after the kill outside any; a call's first look that finds it holding with TI_GRACE set is its
+  grace's end too (the grace's start restarts the one timer). The self test (test_kill_loop's new check: the line for
+  its thread): 1e2bb2a "(it ended 2060 ms after its kill, 45 opens; status -1; the kernel log: a grace promised 0
+  time(s), its grace over 1 time(s))" (before its commit 2020 ms, 44 opens, the same lines): ok; e48f043 "(... the
+  kernel log: a grace promised 1 time(s), its grace over 0 time(s))": FAIL. R13d: section 96
+
+== 100. The kill rule re-derived (section 90, with B80-B82's marks): what it guarantees and what it does not
+  Marks (surf_task.intr): TI_KILL, a kill; TI_NOCALL, killed outside any call (looks every FS_HOLD_RETRY_MS); TI_HELD,
+  a grace owed; TI_GRACE, the grace begun (once); TI_LATE, the grace over with the task holding something; TI_FSWAIT,
+  the log's line said; TI_HANGUP, a hangup's kill (in a call it waits for the call's end, one line, no look after). All
+  but TI_INT come with TI_KILL and go with the call's end (intr = 0) or the task's death
+  The kill comes at the end of the task's call (task_call_leave(): task_exit(-1) in its own context, its files
+  closed), or a kernel thread ends by itself; at once (become_zombie()) only (1) at kill_task() or kill_hangup(), to a
+  task outside any call holding nothing (2004's rule), (2) at a call's KILL_WAIT_MS look (B48's too), to a call holding
+  nothing and not marked TI_HELD (2004's rule), (3) at a look with TI_GRACE, to a task holding nothing. Never while the
+  task holds something (in_fs(): fs_hold with fs_finish, the cache's lock, a mutex but the console's, fs_refs): every
+  look that finds it so marks it and looks again FS_HOLD_RETRY_MS later. (A fault is no kill: kill_task_now(), B56.)
+  TI_HELD is set: by kill_task() and kill_hangup() finding it holding; by a look finding it holding; by B48's hand-over
+  (kept, and set when holding then); by task_vfs_begin_slow() at the start of every VFS call a killed task makes but a
+  hangup's in a call or a task ending
+  The grace begins (TI_HELD, no TI_GRACE, holding nothing): at a look; or at the start of a VFS call when TI_HELD was
+  set before that call. It ends KILL_WAIT_MS later, at the look of the one timer it starts again (kill_task(),
+  kill_hangup(), kill_escalate() and task_vfs_begin_slow() start that timer; task_exit() and become_zombie() cancel
+  it; no look comes during a grace, and a VFS call begun in it finds TI_GRACE set). At its end: holding nothing, the
+  task is killed at once (3), the log saying "did not end ... within 2000 ms of letting go: killed at once"; holding
+  something, TI_LATE: from then every VFS call but a close says EINTR before it takes anything (in a step that must
+  finish none), the log saying once "... again ..., its 2000 ms from letting go over: killed as soon as it lets go"
+  (B82), and the first look that finds it holding nothing kills it (3). B48's hand-over (a thread outside any call that
+  entered one) starts the call's rule afresh, its grace included: two graces at most for such a thread
+  So, by kind of task:
+    a kernel thread outside any call: killed at once if it holds nothing at the kill; otherwise marked and looked at
+      every 20 ms; its grace begins at the first look or VFS call that finds it holding nothing (R13a: before, a look
+      that had not seen it holding killed it at once); it ends by itself in the grace, or is killed at its end
+      holding nothing, or after it (TI_LATE)
+    a call (a system call, a kernel command, a program being loaded): marked if it holds something at its kill or
+      begins a VFS call after it; its KILL_WAIT_MS look finds it holding (marked, looked at every 20 ms, its grace at
+      the letting go), or out and marked (its grace from that look: R13b), or out and not marked (killed at once)
+    a hangup's kill: in a call it waits for the call's end (B55); outside any call (a task holding something: none
+      can be, a process outside any call holds nothing) as a kill
+    a task in a step that must finish (fs_finish: umount, eject's unmount): held, so never killed at once there; never
+      refused
+    a task ending (task_exit(): TC_EXIT): no kill reaches it
+  Guaranteed: a task whose kill found it holding something, or that has taken or begun to take something since (a look
+  saw it holding, or it began a VFS call), is never killed at once before KILL_WAIT_MS after the first moment it was
+  seen holding nothing; one that ends in that time ends with its clean-up done, at its call's end (status -1) or by
+  itself (its own status). A task that ignores its kill and works on through VFS calls is killed within about
+  KILL_WAIT_MS of its first letting go plus the operation then under way (R12b's longest at the code final: 4630 ms at
+  -O0, 4670 ms at -O2). The count of what a call holds (B73's fs_refs, B74's spawn, B75's reap) is let go of on every
+  way out
+  Not guaranteed: (a) the grace is once: a task holding something again when its grace ends is killed at the first
+  look after its next letting go, its clean-up after that cut short; from then its VFS calls are refused so that this
+  comes soon. (b) A call never marked (holding nothing at its kill, no VFS call since, holding nothing at its
+  KILL_WAIT_MS look) is killed at once at that look wherever it is, as in 2004: a lock taken and let go between the
+  kill and that look outside any VFS call (a network call's net_lock) is not seen; marking at every mutex_lock() would
+  cost every lock a load (B66's first version showed what that costs on SurfCPU). (c) A task that never lets go (a lock
+  or a file kept while it works) is not killed while it holds (B39, B62, B73): its waits there are cut short or end
+  within its drivers' bounds (section 83), and a command looks for its kill between its steps; a loop that holds
+  something throughout and never looks is not killed. (d) A hangup's kill in a call waits for the call's end, however
+  long (B55). (e) A loop that takes a lock outside any VFS call each time round (none does today) is killed only when a
+  look finds it out, as before B79
+  Every count's drop of section 90 is followed now by the grace whichever way the task was found holding: before, a
+  thread whose kill kill_task() itself put off, or a call killed holding something and out by its KILL_WAIT_MS look,
+  met the kill at its first look after the drop (B80); what follows each drop is unchanged (section 90's list), and so
+  is its conclusion: it ends the call or the thread within milliseconds, waiting only where the kill cuts the wait
+  short or on a bounded holder
+  The review's counters (r13_patch.py, section 96) at the code final: -O0 "(put-off thread kills landing at a look with
+  no grace 0; calls killed at once at KILL_WAIT_MS with no grace 0; graces begun by a look 11, by a path call 92;
+  TI_LATE set 82, EINTR returned 406321; killed at once after a grace: threads 25, calls 63; TI_* bits without TI_KILL
+  0)", -O2 the same but for its counts (by a path call 86, TI_LATE 75, after a grace 26 and 57). "By a path call" counts
+  a grace begun at the start of any VFS call now (B81)
+
+== 101. The kernel's self test, the x86 suites, the sanitizers and the threaded test at the code final
+  The self test's transcript (QEMU on the Mac, booted as make test boots, x86 at -O0): 1e2bb2a (volume
+  surfos-sc-fs13-run) SELFTEST PASS, 180 checks ok, this round's lines as in sections 97-99; e48f043 with this self test
+  (volume surfos-sc-fs13-base) SELFTEST FAIL, 175 checks ok and 5 failing (B80's three, B81's first and B82's; B81's
+  second, that what its thread held is let go, passes on both), every other check passing on both. test-all's self tests
+  at -O0 and -O2 and test-usb's three at each level say SELFTEST PASS (x86.txt round fs-fix-13, sections 1 and 3)
+  The review's own materials on this tree: section 96
+  make test-all, make unittest and make test-usb at 1e2bb2a (x86.txt, round fs-fix-13): the smoke test 315 of 315 at
+  -O0 and -O2 (`run kcmdtest kills` among its steps, each kill as before, `sleep -u 10000` killed at once at its
+  KILL_WAIT_MS look: a call never marked); make unittest exit 0 at -O0 (FATFS 347, FATFUZZ 4 runs, CONC ok 4 times,
+  CONC umount ok, CONC mutex ok, MKFS 126, CP 16, tests/test_qemu_ports.py 9 OK, every result line as in round
+  fs-fix-12) and the same at -O2 (its exit 2 the two tests/test_devenv.py tests that fail with O=2 in their
+  environment, as in the rounds before); test-usb 315 of 315 at -O0 and -O2, its three self tests passing at each
+  level; no QEMU started twice in any of them
+  AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the kernel
+  files and the tests alike, on the Mac, against 1e2bb2a's files): test_fatfs 347 checks, 0 failures; test_fatfuzz's
+  set, 4 runs, 0 with failures; test_cp 16 checks, 0 failures; test_mkfs 105 checks (no fsck.fat or mtools on the
+  Mac), 0 failures; test_fatconc in make unittest's four settings, its umount setting and its mutex setting, each
+  "CONC: ok": no report from any. (kernel/task.c and fs/vfs.c, which this round changes, are built by no host test:
+  the kernels' runs above cover them; the host tests build include/surfos/task.h's task_vfs_begin() with the rest,
+  which they do not call)
+  The threaded test: make unittest's settings (above, and in the devenv, x86.txt); the file system's files its harness
+  builds (fs/bcache.c, fs/fat.c, fs/fat_mkfs.c) are e48f043's, and the review's 54 campaign runs on them stand
+
+== 102. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost, at the code final
+  make -C surfcpu check (05:16-05:46, the clean checkout of 1e2bb2a): "check: all automated SurfCPU checks passed".
+  Among them: boards/qemu_virt/test_os.py 135 of 135 at -O2 and at -O0 (rvtest's B73, B76 and B80 steps among its self
+  test's checks: "B80: and one that lets go of the file before the first look after its kill finishes its clean-up and
+  ends by itself", ok at both), test_arty 204 of 204, test_sd_iomodel 164 of 164, test-os-surfemu 18 of 18; on the RTL
+  system (surfsim, with the io track's card model) test-os-persist 17 of 17, test-os-faults 25 of 25, test-os-kit 22 of
+  22, test-soc-system-boot 21 of 21. The riscv32 kernels build with the one warning of the rounds before (task_exit()),
+  isacheck clean (arty_a7: 59,149 instructions, e48f043's 58,907, all rv32im_zicsr_zifencei)
+  The cost on SurfCPU: the RTL runs' simulated cycles, this kernel's against e48f043's, built from a git worktree the
+  same way in the toolchain container and run with this check's surfsim and SurfBoot ROM (this round changes neither),
+  and against e48f043 laid out as this kernel (pad_from_maps2.py, as in section 95: each riscv32 object that grew once
+  linked followed by as much code that never runs, or data, as it grew, from the two link maps: arch/riscv32/rvtest.o
+  540 bytes of code and 208 of read-only data, fs/vfs.o 356 of code, kernel/task.o 72 of code and 120 of read-only data;
+  the read-only data padded to the section's total, the string merge crediting 324 bytes of it to absent.o; no struct
+  changed; checked in the link maps: .text, .rodata, .ksyms, .data and .bss at this kernel's addresses and sizes, the
+  package 414,724 bytes as this one's):
+                               e48f043      padded       after        against
+                                            e48f043      (1e2bb2a)    e48f043  padded
+    persist, the write run     277,456,691  277,562,542  277,586,512  +0.047 % +0.009 %
+    persist, the reboot run    225,556,965  225,761,615  225,776,715  +0.097 % +0.007 %
+    faults, the refusing card  317,348,729  320,524,415  315,383,167  -0.619 % -1.604 %
+    faults, the full card      203,293,948  203,508,428  203,518,632  +0.111 % +0.005 %
+  (e48f043's kernel is b532b41's, and its runs are within 0.002 % of section 95's: the build's ID and time are in the
+  package and the banner)
+  Step by step (each expected line's cycle, from the runs' evidence files): against e48f043 laid out alike each command
+  costs a few thousand cycles more or less (cd 17, mkdir 789, write 2,508, cp 12,601 of its 117 million, ls 8,676 and
+  2,986, sync -5,748, crc32 of the folder 7,166 of its 75 million, df 28: a VFS call's look at whether its task is
+  killed, at every read, write, readdir, lseek, fsync, close, statfs and sync, ls's once per directory entry), every
+  line within -0.52 % and +0.42 % (a command's lines and the prompt after them splitting a few thousand cycles
+  otherwise), but for the refusing card's run, where the card-detect task, which looks every 200 ms (5 million cycles),
+  met the card's removal at another look (-4.5 million cycles at "taken out", -0.64 million in step 4's half-written
+  write). Against e48f043 itself: SurfBoot loads a package 1,296 bytes larger (413,428 -> 414,724: +0.17 million
+  cycles), cd's line 1.9 million cycles sooner and the next line as much later (such a pair moves in every round), each
+  other line within -0.70 % and +0.30 % (prompts), cp -0.07 %, crc32 of the folder -0.00 %, and the card-detect task's
+  look again (-1.75 million cycles at "taken out", +0.24 million at "put back", -0.63 million in step 4). The layout
+  alone (e48f043 against the padded e48f043): +0.038 %, +0.091 %, +1.0 % and +0.106 %: this round's cost in these
+  workloads is its layout's (rvtest's new step and fs/vfs.c's 356 bytes of code move the code after them) and the
+  package's load; its own code costs 0.005-0.009 %. kill_escalate()'s rule and task_vfs_begin_slow() do not run in them
+  (no kill)

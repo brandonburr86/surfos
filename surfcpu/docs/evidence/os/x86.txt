@@ -1,7 +1,13 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Sixteen rounds with x86 runs, newest first. Round fs-fix-12 (10/19/26) changes the x86 kernel on purpose: a review
+Seventeen rounds with x86 runs, newest first. Round fs-fix-13 (10/19/26) changes the x86 kernel on purpose: a
+review of B74-B79 and its fixes (audit B80-B82: the grace a kill owes is owed from the kill itself to a task holding
+something then, and to a task that begins a VFS call after its kill, not only once a look has seen it holding; every
+call on an open file, statfs and sync begin as a path call does, so that a task working on a file of its descriptor
+table and ignoring its kill gets EINTR once its grace is over, a close never refused; the kernel log's line says what
+comes).
+Round fs-fix-12 (10/19/26) changes the x86 kernel on purpose: a review
 of B66-B73 and its fixes (audit B74-B79: a kill put off while its task held something gives the task KILL_WAIT_MS from
 the moment it lets go, to end its call or itself, instead of coming at the first look after it; the spawn's window and
 reap()'s tail counted; a walk's lookups counted from before them; a task that keeps making VFS calls and ignores its
@@ -60,6 +66,77 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-13, 10/19/26: a kill owes its grace from the kill and from every VFS call, every call on an open file
+begins as a path call does, and the kernel log's line says what comes, after a review of B74-B79 (audit B80-B82)
+date: 2026-10-19 (local)
+tree: sc/fs-fix-13 (from surfcpu e48f043): the code final at 1e2bb2a (B80-B82 with their self-test steps); after it
+      docs (8137e54) and this evidence; the "was" blobs below are e48f043's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); a clean checkout of 1e2bb2a (a git worktree in the session's scratch space, with
+      the ignored firmware/ and third_party/ fetches copied in) for every devenv run; volumes surfos-sc-fs13-run (O0)
+      and surfos-sc-fs13-o2 (O2) at 1e2bb2a, surfos-sc-fs13-dev and surfos-sc-fs13-base (the self test's transcripts
+      on this tree before its commit and on e48f043 with this round's self test), surfos-sc-fs13-r13b, surfos-sc-fs13-
+      r13f and surfos-sc-fs13-r13 (the reviews' instrumented R13a-R13d and R12a-R12c on e48f043, on this tree before
+      its commit and at the code final) and surfos-sc-fs13-rev (the review's R11a-R11e), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B80-B82):
+  kernel/task.c            blob d909668d (was 7ce8f054)  B80 kill_task() and kill_hangup() mark a task holding
+                                                         something, B48's hand-over keeps the mark; B81
+                                                         task_vfs_begin_slow() for every killed task; B82
+                                                         kill_escalate()'s line; the rule said
+  include/surfos/task.h    blob 19349b8d (was 1c26c849)  B81 task_vfs_begin() for every killed task; the rule's notes
+  fs/vfs.c                 blob 2429015f (was c37d2924)  B81 task_vfs_begin() at the start of every call on an open
+                                                         file, statfs and sync; a close begins and is never refused
+x86 only:
+  shell/selftest.c         blob 52d0984b (was f9c05602)  B80 test_kill_soon; B81 test_kill_fileloop; B82
+                                                         test_kill_loop's look at the kernel log
+riscv32 only (surfcpu/docs/evidence/os/bcache-review.txt section 102):
+  arch/riscv32/rvtest.c    blob b891e4ee (was 423e5c42)  B80 test_vfs_hold_soon
+Every run below was of 1e2bb2a, a clean checkout (the devenv streams it into its volume).
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs13-run, made afresh)
+  at 1e2bb2a (04:24-04:43): exit 0
+  O0  FILES TEST PASSED: 51 checks       O0  SMOKE TEST PASSED: 315 checks (selftest among them)
+  O2  FILES TEST PASSED: 51 checks       O2  SMOKE TEST PASSED: 315 checks
+  The self test (this round's new and changed checks among its 180), `run kcmdtest kills` (each kill landing at its
+  call's end as before, and `sleep -u 10000` killed at once after the kernel's 2 s: a call never marked, B80), `run
+  kcmdtest child-selftest`, the crash commands in the kernel shell's own boot, the eject, mkfs and fdisk steps, the user
+  shell's redirections and the network's steps pass as before; every QEMU of the smoke test started at its first try.
+  The compiler warnings from the files this round changes are those of the rounds before (kernel/task.c's "'noreturn'
+  function does return" at the end of task_exit())
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs13-run, after test-usb, 04:51-04:58): exit 0, no failures. FATFS 347, FATFUZZ 4 runs, 0 with
+    failures, CONC ok 4 times (each "mutex counts left between operations 0"), CONC umount ok, CONC mutex ok, MKFS 126,
+    CP 16, tests/test_qemu_ports.py's 9 tests OK (none skipped), and every other host test passing with the counts of
+    round fs-fix-12 (CRYPTO 129, WPA 118, IEEE80211 144, DNS 232, the Undertow suites, pointer 14, gui 45, PS2 MOUSE
+    1574, USB MOUSE 99, ACPIDUMP 467, i2cdw 59, AML FIELD 5120, i2chid 267, hidpointer 127, TOUCHPAD PLATFORM 454, BLIBC
+    45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143 and its tool checks 33, LIBC 195, PROMPT 55, CP437 69, PAGER
+    177, TELNET 58, TELNETD SERVER 750 runs, 0 bugs, PCIINFO 55, IWLFW 38; every result line the same); python unittest
+    OK each
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs13-o2, made afresh, 04:58-05:06): every host test the same,
+    every result line as round fs-fix-12's at -O2 (tests/test_qemu_web.py's look at a built initrd skipped: the fresh
+    volume's images are made after it); the run exits 2 because two of tests/test_devenv.py's tests fail with O=2 in
+    their environment, as in the rounds before (`make O=2` hands O to them; this round changes neither
+    tests/test_devenv.py nor devenv/)
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs13-run, after test-all; the image's manifest says
+      source 1e2bb2a23174, not dirty; 04:43-04:51)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs13-o2, made afresh by unittest at O2, with
+      devenv/build.sh O=2 images first; the image's manifest says source 1e2bb2a23174, not dirty; 05:08-05:16)
+  test-usb runs the self test three times (on the USB image's own devices): SELFTEST PASS in each at each level, this
+  round's steps among them; its machine's launches started at their first try
+
+What the x86 suites show is that the change does no harm (kills of commands and programs, FAT on the RAM disks, the
+ATA disk and the USB sticks, mount, eject, mkfs, fdisk, the user shell's redirections and programs); what it fixes is
+shown by the kernel's self test (a kernel thread that lets go before the first look and a call that lets go just
+before its KILL_WAIT_MS look finish their clean-up, where on e48f043 the kill came in it; a thread working on a file of
+its descriptor table is killed, where on e48f043 it was still there 6 s after its kill; the kernel log's line), by the
+reviews' instrumented R13a-R13d (bcache-review.txt section 96) and where the same files run under the riscv32 kernel
+(bcache-review.txt, sections 96-102).
 
 ======================================================================================================================
 Round fs-fix-12, 10/19/26: a kill put off lets its task end first, the spawn's window and reap()'s tail counted, a
