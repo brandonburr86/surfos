@@ -1,0 +1,126 @@
+SurfGPU, the fifth review's fixes (2026-10-19): gpudiag's first run checks the whole reset target
+and clip, the capture checker tests every line for a failure, takes a capture that ends inside the
+echo line and names the build to test, the GPU SoC models carry the tree's build id, slackcheck's
+--out failure exits 3; in the surfcpu-toolchain container and on the Mac's python3, on
+8da49c5..317c8f4 (sc/gpu). Nothing here ran on a board.
+
+make check at 317c8f4, from a clean tree: PASS in 1815 s; then test-gpu-mutants: 45 of 45 caught in 474 s.
+Excerpts:
+  test_gpu: PASS (seed 1: 729 checks; 1986 commands, 30775 words, 1195789 pixel writes in the model; VRAM compared 138 times (18 directed, 120 random chunks); engine 424630 grants, 10914 cycles wait ...
+  gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct, 71831931 cycles)
+  [after Ctrl-R] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct)
+  [a rerun after a target and clip were left] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3756487 cycles
+  [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  test_gpudiag_check: PASS (67 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth  ...
+  [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 1 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+  [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (8 of 100 checks failed), 1 problems found, 'no engine: gpu.ID reads 0x31555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete ...
+  test-gpu: PASS
+  test_tools: 276 passed, 0 failed
+  ok   --out written: exit 0
+  ok   --out in a directory that does not exist: exit 3, slackcheck: internal error: FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpu2kfdioa/no/slack.txt'
+  slackcheck self-test: PASS (13 cases)
+  test-flow: PASS
+  test-release: Ran 56 tests in 32.177s OK
+  check: all automated SurfCPU checks passed
+(make check at 1c5e26c, the code before 317c8f4, failed test-gpu-soc: "gpudiag_check: FAIL: the run
+shows build 589223c6, not 1c5e26c7": build/sim/surfsim_gpu kept the build id it was compiled with at
+an earlier commit; 317c8f4 makes the GPU SoC models depend on an identity stamp, as surfsim does.)
+
+test-gpu-mutants' ten new mutants at 317c8f4 (each FAIL line in full from its uart.txt):
+  target-reset-stride-320        gpu    caught: test_gpu: FAIL (3 of 429 checks, seed 1)
+  clip-reset-right-4             gpu    caught: test_gpu: FAIL (3 of 429 checks, seed 1)
+  clip-reset-bottom-1            gpu    caught: test_gpu: FAIL (3 of 429 checks, seed 1)
+  target-reset-width-644         gpu    caught: test_gpu: FAIL (3 of 429 checks, seed 1)
+  target-reset-height-481        gpu    caught: test_gpu: FAIL (3 of 429 checks, seed 1)
+  soc-target-reset-stride-320    soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL after the refuse ...
+  soc-clip-reset-right-4         soc    caught: gpudiag: GPUDIAG: FAIL (2 of 124 checks failed) (FAIL after the refuse ...
+  soc-clip-reset-bottom-1        soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL after the refuse ...
+  soc-target-reset-width-644     soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL after the refuse ...
+  soc-target-reset-height-481    soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL after the refuse ...
+    soc-target-reset-stride-320: FAIL after the refused target, the fills and the copy in the reset target: the VRAM word at byte 306556 reads 0x00000000, not 0x5a5a5a5a (3 of 11 words wrong)
+    soc-clip-reset-right-4: FAIL after the refused target, the fills and the copy in the reset target: the VRAM word at byte 306556 reads 0x00000000, not 0x5a5a5a5a (3 of 11 words wrong)
+    soc-clip-reset-bottom-1: FAIL after the refused target, the fills and the copy in the reset target: the VRAM word at byte 306556 reads 0x00000000, not 0x5a5a5a5a (3 of 11 words wrong)
+    soc-target-reset-width-644: FAIL after the refused target, the fills and the copy in the reset target: the VRAM word at byte 2564 reads 0x00000000, not 0xa5a5a5a5 (1 of 11 words wrong)
+    soc-target-reset-height-481: FAIL after the refused target, the fills and the copy in the reset target: the VRAM word at byte 3200 reads 0x00000000, not 0xa5a5a5a5 (1 of 11 words wrong)
+
+each finding's tests on ecff4cd (a git archive of it, or its scripts) and after:
+
+m-C: the ten new mutants judged by ecff4cd's test_gpu and gpudiag (ROM build ecff4cda), then at 317c8f4:
+  target-reset-stride-320      gpu  NOT CAUGHT test_gpu: PASS (seed 1: 424 checks; 1071 commands, 12712 words, 661410 pixel writes in the model; VRAM compare ...
+  clip-reset-right-4           gpu  NOT CAUGHT test_gpu: PASS (seed 1: 424 checks; 1071 commands, 12712 words, 661410 pixel writes in the model; VRAM compare ...
+  clip-reset-bottom-1          gpu  NOT CAUGHT test_gpu: PASS (seed 1: 424 checks; 1071 commands, 12712 words, 661410 pixel writes in the model; VRAM compare ...
+  target-reset-width-644       gpu  NOT CAUGHT test_gpu: PASS (seed 1: 424 checks; 1071 commands, 12712 words, 661410 pixel writes in the model; VRAM compare ...
+  target-reset-height-481      gpu  NOT CAUGHT test_gpu: PASS (seed 1: 424 checks; 1071 commands, 12712 words, 661410 pixel writes in the model; VRAM compare ...
+  soc-target-reset-stride-320  soc  NOT CAUGHT gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+  soc-clip-reset-right-4       soc  caught     gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL WRITE_RECT waiting for its last data word: STATUS 0x1; w ...
+  soc-clip-reset-bottom-1      soc  NOT CAUGHT gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+  soc-target-reset-width-644   soc  NOT CAUGHT gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+  soc-target-reset-height-481  soc  NOT CAUGHT gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+  ecff4cd: 1 of 10 caught (soc-clip-reset-right-4 only, by the WRITE_RECT check at (16, 0), which a
+  right edge at 4 clips away); 317c8f4: 10 of 10 (above), 45 of 45 in all.
+
+m-A, m-B: the review's adversarial5.py (a real gpudiag transcript and the real header) with
+ecff4cd's checker, then 8af5ab9's (317c8f4's: unchanged since); 'right' is the review's column:
+  PASS / PASS  E0 uart.py capture ending exactly at the GPUDIAG line's ')'
+  PASS / PASS  E1 ... ending 3 characters on ('\n\nU')
+  FAIL / PASS  E2 ... ending 4 characters on ('UA')
+  FAIL / PASS  E3 ... ending 10 characters on ('UART ech')
+  FAIL / PASS  E4 ... ending 13 characters on ('UART echo: ')
+  PASS / PASS  E5 ... ending 14 characters on ('UART echo: t')
+  FAIL / PASS  E6 raw LOG (uart-console) closed while the echo line was arriving ('\r\nUART ec')
+  PASS / PASS  U1 uart.py capture with a U+FFFD (a RESET glitch) before the banner, written as UTF-8
+  PASS / PASS  U2 raw log: 0xFF 0x00 before the banner, CRLF
+  FAIL / FAIL  X1 a failure in 'gpu registers' (no CRC witness), RESET in scene 3, then a good run
+  FAIL / FAIL  X2 the same with its FAIL line garbled ('  FA\xffL') 
+  FAIL / FAIL  X3 the same with the FAIL line lost and the section-end line kept
+  PASS / FAIL  X4 a whole run, the echo, then only '  gpu registers and errors: 1 of 14 checks failed' of a later run, then RESET and a whole run
+  PASS / FAIL  X5 console opened inside a failing run's '  FAIL ABORT ...' line (it shows '...: 1 of 14 checks failed' next), RESET in scene 5, then a whole good run
+  FAIL / FAIL  X6 the same, the console opened inside the failing scene's '  FAIL FRAME_CRC' line, RESET in scene 11
+  PASS / PASS  B1 a whole first run of another gpudiag build (e119a787) alone
+  (right: E0 to E6, U1, U2 PASS; X1 to X6 FAIL; B1 PASS, as the checker is given no build there)
+  the review's sweeps with the new checker:
+    S1 RESET at each of 1357 characters of a good first run (a NUL at the cut), then a whole run: 0 false fails
+    S2 the console opened at each of 1357 characters of a good run, then RESET and a whole run: 0 false fails
+    S3 one byte garbled at each of 1476 positions of a FAILING run (scene 9's CRC), then RESET and a good run: 0 false passes
+    S4 one byte garbled at each of 1488 positions of a FAILING run (gpu registers), then RESET and a good run: 0 false passes
+    S5 a FAILING run cut by RESET at each of 369 characters after its '  FAIL ', then a good run: 0 false passes
+
+test_gpudiag_check.py (67 cases) with ecff4cd's gpudiag_check.py: 12 fail; at 317c8f4 67 of 67:
+  FAIL X4: a whole run, the echo, a later run's section end alone, then RESET and a whole run
+  FAIL X5: the console opened inside a failing run's FAIL line, RESET in scene 1, then a whole run
+  FAIL a section's end alone before a whole run
+  FAIL a FAIL line whose spaces were lost (the console opened at its F), then RESET and a whole run
+  FAIL E2: uart.py capture ending inside the echo line ('UA')
+  FAIL E3: ... ('UART ech')
+  FAIL E4: ... ('UART echo: ')
+  FAIL E6: a raw log closed while the echo line arrived ('UART ec')
+  FAIL a raw log ending inside the echo line of a rerun after a first run
+  FAIL --build-id: the run's build
+  FAIL --manifest: the run's build
+  FAIL --manifest: a dirty build, as its manifest says
+  test_gpudiag_check: FAIL (12 of 67 checks)
+  (the last three: ecff4cd's checker has no --build-id or --manifest and exits 2, so the build cases
+  that must fail fail there only for that)
+
+m-B, the capture: the review's pty_capture.py (uart.py capture on a pseudo-terminal fed the real
+first run and the echo line in 12-byte reads every 1 ms, 24 captures each), then the checker:
+  --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)', ecff4cd's checker: 16 PASS, 8 FAIL (last lines 'UART ech', 'UART echo', 'UART echo: ', 'UART echo:')
+  --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)', the new checker: 24 PASS, 0 FAIL
+  --until '... \n+UART echo: [^\n]*\n' (section 14), ecff4cd's checker: 24 PASS, 0 FAIL
+  --until '... \n+UART echo: [^\n]*\n' (section 14), the new checker: 24 PASS, 0 FAIL
+
+m-D: the review's B1 (the real first run with its build id changed to e119a787), judged with the
+build to test (d8fdceeb, the transcript's own); ecff4cd's checker has no such option (exit 2):
+  B1 another build (e119a787), no build given             PASS           gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 disti
+  B1 another build, --build-id d8fdceeb                   FAIL (exit 1)  gpudiag_check: FAIL: the run shows build e119a787, not d8fdceeb, the build to test: another gpudiag
+  B1 another build, --manifest (build_id d8fdceeb)        FAIL (exit 1)  gpudiag_check: FAIL: the run shows build e119a787, not d8fdceeb, the build to test: another gpudiag
+  the build itself, --build-id d8fdceeb                   PASS           gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 disti
+  the build itself, --manifest (build_id d8fdceeb)        PASS           gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 disti
+  the fourth round's netlist transcript (04caffe) with its manifest: PASS; with --build-id 317c8f4b: FAIL
+  ("the run shows build 04caffea, not 317c8f4b"); make test-gpu-soc now passes --build-id (above).
+
+c2: the review's slack_exits.sh, the --out file in a directory that does not exist:
+  ecff4cd: out-fail exit 1  stdout ''                                   stderr FileNotFoundError: [Errno 2] No such file or directo
+  1c5e26c: out-fail exit 3  stdout 'unreadable'                         stderr slackcheck: internal error: FileNotFoundError: [Errn
+  every other report kind exits as before (0, 1, 2 with the same reasons).

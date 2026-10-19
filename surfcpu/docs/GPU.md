@@ -252,7 +252,8 @@ byte at base + y * stride + x. SET_TARGET sets base, stride, W and H and the cli
 It is refused (BAD_PARAM, nothing changes) unless: base and stride are multiples of 4, base <
 307,200, stride < 65,536, W and H < 32,768, and either W = 0, H = 0, or (W <= stride or H = 1) and
 base + (H - 1) * stride + W <= 307,200. So every pixel of a target is in VRAM and two lines never
-share a word. Reset: base 0, stride 640, 640 x 480.
+share a word. Reset: base 0, stride 640, 640 x 480, and the clip (0, 0, 640, 480), as SET_TARGET
+would set them (gpudiag's first run after a reset and test_gpu check them: section 10).
 
 **The clip** is [x0, x1) x [y0, y1), unsigned; the effective clip is it intersected with the
 target, [x0, min(x1, W)) x [y0, min(y1, H)). A command writes only pixels inside the effective
@@ -391,31 +392,41 @@ before changed them): it says so in a line under its banner ("a rerun (Ctrl-R): 
 passed: a missing FEATURES.GPU, a gpu window that traps or reads another ID than "GPU1", each
 engine scene that could not run, and a run with another number of checks than a complete one of
 its kind (GPUDIAG_CHECKS 124, GPUDIAG_RERUN_CHECKS 123) all fail it. `sim/gpu/gpudiag_check.py`
-judges a capture (sections 12.4 to 12.7): a run that ended with PASS and a passing CRC line for
+judges a capture (sections 12.4 to 12.8): a run that ended with PASS and a passing CRC line for
 every scene is whole and judged (with the total of its kind); a run seen only in part (the console
 opened late, a line lost or garbled, a RESET before its end) is cut short and not judged, but
-whatever it shows of a failure counts, a FAIL line or a scene's CRC other than the model's; the
-capture must end with a whole run, and a capture of reruns only is not a full board test (the
-reset values were never checked: section 14). The first run after a reset checks the engine's
-reset target and clip themselves (its refused-target fill); a rerun first sets them, since ABORT
-keeps whatever an abandoned run left.
+whatever it shows of a failure counts, a FAIL line or a scene's CRC other than the model's, and so
+does a line showing a failure outside any run; the capture must end with a whole run (it may end
+inside the echo line printed after it), and a capture of reruns only is not a full board test
+(the reset values were never checked: section 14). With `--build-id`, or `--manifest` (the
+bitstream's manifest), every run must show that build. The first run after a reset checks the
+engine's reset target and clip themselves, wherever the engine shows them: after the refused
+target, a fill at (0, 0) (the base, the clip's left and top edges), an 8x2 fill at (636, 478)
+(the stride, the right edge at 640 exactly, the bottom edge at 480 or past: rows past 479 are
+past VRAM's end) and an 8x2 copy from (636, 479) to (0, 4), whose source runs past the target's
+right and bottom edges (its width and height 640 and 480, not more). A clip edge past the target
+changes nothing a program can see, since the engine clips to both. test_gpu draws the same before
+any SET_TARGET. A rerun first sets the target and clip, since ABORT keeps whatever an abandoned
+run left.
 
 **What gpudiag checks of the engine, and what it does not.** On the board it checks: gpu.ID and
-INFO; idle state; a full FIFO behind a WAIT_VBLANK, OVERFLOW, and the drain at the next blanking;
-an unknown opcode and a refused SET_TARGET (sticky, and the refused target not taken); the error
-interrupt (through intc with IE.ERR only); a fence and its interrupt (IE.FENCE), cleared; ABORT (the
-FIFO empty and the engine idle at once, nothing queued running later); BUSY held while a WRITE_RECT
-waits for its last data word; the FRAME pair (sections 3, 4.1); and through the scenes' CRCs
-FILL_RECT at every alignment and edge with a clip, LINE in every octant, overlapping COPY_RECT in
-eight directions with the key, EXPAND opaque and transparent, WRITE_RECT, WAIT_VBLANK with a page
-flip, 320x240 doubling, the overlay. It does not check, and only the RTL tests do: OVERFLOW through
-the error interrupt; BAD_PARAM from SET_CLIP or a drawing command; ABORT in the middle of a drawing
-command (gpudiag aborts behind a WAIT_VBLANK); COPY_RECT from sources outside the target; random
-command streams against the model; the engine waiting behind the CPU on VRAM's port A; BUSY at
-cycle precision (it can only see BUSY while the engine waits for data); GFX_ placements that wrap at
-512 KiB, stride 0 and the scale values 0 and 3; GPAL written in mid-frame; a reset of the pixel
-domain alone. The scenes are written once and run in three places: on the CPU (writing the
-gpu, video and vram registers), in the host model (the expected CRCs), and in the RTL tests.
+INFO; idle state; a full FIFO behind a WAIT_VBLANK, OVERFLOW, and the drain at the next blanking; an
+unknown opcode and a refused SET_TARGET (sticky, and the refused target not taken); the target and
+clip a reset leaves (the first run); the error interrupt (through intc with IE.ERR only); a fence
+and its interrupt (IE.FENCE), cleared; ABORT (the FIFO empty and the engine idle at once, nothing
+queued running later); BUSY held while a WRITE_RECT waits for its last data word; the FRAME pair
+(sections 3, 4.1); and through the scenes' CRCs FILL_RECT at every alignment and edge with a clip,
+LINE in every octant, overlapping COPY_RECT in eight directions with the key, EXPAND opaque and
+transparent, WRITE_RECT, WAIT_VBLANK with a page flip, 320x240 doubling, the overlay. It does not
+check, and only the RTL tests do: OVERFLOW through the error interrupt; BAD_PARAM from SET_CLIP or a
+drawing command; ABORT in the middle of a drawing command (gpudiag aborts behind a WAIT_VBLANK);
+COPY_RECT from sources left of or above the target (its first run copies from past the right and
+bottom edges); random command streams against the model; the engine waiting behind the CPU on VRAM's
+port A; BUSY at cycle precision (it can only see BUSY while the engine waits for data); GFX_
+placements that wrap at 512 KiB, stride 0 and the scale values 0 and 3; GPAL written in mid-frame; a
+reset of the pixel domain alone. The scenes are written once and run in three places: on the CPU
+(writing the gpu, video and vram registers), in the host model (the expected CRCs), and in the RTL
+tests.
 
 ## 11. Milestones
 
@@ -787,6 +798,38 @@ minutes). `make check` passes at 04caffe from a clean tree (30 minutes: test-gpu
 board-tools 276 of 276, test-release 56 tests), and test-gpu-mutants catches 35 of 35 (6 minutes);
 each finding's tests on d8fdcee and after are in the [evidence](evidence/gpu/review4-sim.txt).
 
+### 12.8 The fifth review (2026-10-19)
+
+A fifth independent review, of gpu-fix-4 at ecff4cd, found nothing critical or major: four minor
+and two cosmetic findings. The fixes are 8da49c5..317c8f4 (code) and this record; each has a test
+that fails on ecff4cd and passes after, where a test is possible:
+
+| Finding | Fix | Test: on ecff4cd / after |
+|---|---|---|
+| m-A: a line showing a failure outside any run was dropped: a section's end ("gpu registers and errors: 1 of 14 checks failed") between two runs, or before the first when the console opened inside a FAIL line (the review's X4, X5 passed) | every line outside the runs goes through the failure test too, which also takes a FAIL line whose spaces were lost (8af5ab9) | the review's adversarial5.py: X4, X5 PASS / FAIL; test_gpudiag_check.py's 4 new cases of the kind pass with ecff4cd's checker / fail; the review's sweeps (RESET or the console opened at each character of a good run, one byte garbled at each position of a failing run, a failing run cut at each character): no false fail or pass, as before |
+| m-B: `uart.py capture --until 'GPUDIAG: (PASS\|FAIL) \([^)]*\)'` stops where its last read ended, which can be inside the echo line after the summary, and the checker failed such a file (E2 to E4, E6; 8 of 24 captures through a pseudo-terminal) | the capture's last line may be a strict prefix of the echo line after a whole final run (8af5ab9); section 14's capture waits until the echo line is whole: `--until 'GPUDIAG: (PASS\|FAIL) \([^)]*\)\n+UART echo: [^\n]*\n'` (this record) | adversarial5.py: E2, E3, E4, E6 FAIL / PASS; test_gpudiag_check.py: 5 new cases fail / pass, and 3 (a last line that is not the echo line's start, more after the prefix, the prefix after a failed run) fail on both; the review's pty_capture.py, 12-byte reads every 1 ms, 24 captures each: the old pattern 8 FAIL with ecff4cd's checker / 24 PASS; the new pattern 24 PASS with either checker |
+| m-C: the first run's fill at (0, 0) saw only the reset base and the clip's left and top edges, not what its comment and section 10 claimed (the review's mutants: a reset stride of 320 and a clip bottom edge of 1 caught by neither gpudiag nor test_gpu, a right edge of 4 by gpudiag only through the BUSY check) | after the refused target an 8x2 fill at (636, 478) and an 8x2 copy from (636, 479) to (0, 4) too, in the one check (124 and 123 checks, the 14.1 CRCs unchanged); test_gpu draws the same before any SET_TARGET (8da49c5) | test-gpu-mutants' ten new mutants (stride 320, clip right edge 4, bottom edge 1, width 644, height 481; each as gpu and soc), with ecff4cd's gpudiag and test_gpu: 1 of 10 caught (soc-clip-reset-right-4, by the BUSY check's WRITE_RECT at (16, 0), which that edge clips away) / 10 of 10, each failing at the word it should; 45 of 45 |
+| m-D: section 14 built and loaded a bitstream before naming the one to test, checked no sha256 and no build id, and the checker could not tell builds apart (B1: a whole run of another gpudiag build passed) | section 14 rewritten: the recorded bitstream, its sha256 checked first, the build its banner must show, the rebuild apart in 14.2 (this record); gpudiag_check `--build-id`, and `--manifest` for the build_id and source_dirty of fpga-build's manifest: a run of another build or a dirty one where the build was clean fails, and so does a capture whose whole runs show no build (7b51a4a); make test-gpu-soc checks the tree's build id, gpu-netlist-sim the manifest's, and the GPU SoC models rebuild when the build id changes (they kept an old one, which that check found: 317c8f4) | B1 PASS / FAIL with `--build-id d8fdceeb` or a manifest naming it, PASS for the build itself (ecff4cd's checker has no such option: exit 2); test_gpudiag_check.py: 13 new cases (67 in all) |
+| c1: section 14 ran sim/gpu/gpudiag_check.py and tools/uart.py as programs (mode 100644: exit 126), from surfcpu/ | `python3 ...`, every path from the repository root, as `make -C surfcpu` (this record) | by reading |
+| c2: slackcheck wrote `--out` after its try, so a failed write exited 1 with a traceback | inside it: exit 3, "internal error" (1c5e26c) | the review's probe: exit 1 / 3; slackcheck's self-test runs the program both ways (13 cases) |
+
+**The bitstreams.** gpudiag changed (m-C), so it was rebuilt at 317c8f4, the round's final code
+commit, from a clean tree with SOURCE_DATE_EPOCH=1792395168 (317c8f4's commit time), LC_ALL=C and
+TZ=UTC, its seeds 1 to 8 under the slack rule ([evidence](evidence/gpu/synth-gpudiag-r5.txt)):
+seed 1, the first of its list, passed the rule in 229 s (pix_clk 94.35 MHz, +29.125 ns; sys_clk
+46.38 MHz, +18.440 ns, the least margin, against 1.600); every gate PASS (LVS 14,034 proved, 0
+differ); 7,907 LUTs (12.5 %), 3,983 flip-flops, 112.5 RAMB36; ROM gpudiag.mem
+e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f; bitstream sha256
+a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82; 31 minutes. Its banner and
+identity line show build 317c8f4b. The DDR+GPU design's RTL and SurfBoot did not change in this
+round, so its bitstream to test stays section 12.6's: e119a78, seed 7, dram_clk +0.977 ns, sha256
+b3c750cb...68f2, build e119a787. The rebuilt gpudiag netlist runs gpudiag to `GPUDIAG: PASS (124
+checks)` with every FRAME_CRC the model's and the manifest's build id
+([evidence](evidence/gpu/g2-netlist-sim-r5.txt); 1.42 s simulated in 47 minutes). `make check` passes at 317c8f4 from a
+clean tree (30 minutes: test-gpu, test-flow, board-tools 276 of 276, test-release 56 tests), and
+test-gpu-mutants catches 45 of 45 (8 minutes); each finding's tests on ecff4cd and after are in the
+[evidence](evidence/gpu/review5-sim.txt).
+
 ## 13. Risks
 
 * **Block RAM 83 %.** VRAM's 76 RAMB36 spread over most of the 100T's block RAM columns, so its
@@ -831,73 +874,74 @@ each finding's tests on d8fdcee and after are in the [evidence](evidence/gpu/rev
 
 Nothing here has run on a board. These are the steps for G1 and G2 on the owner's A7-100T, with
 the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is needed for gpudiag.
+Every command runs from the root of the sc/gpu worktree, as `make -C surfcpu` does, and its
+build directory holds the two bitstreams to test (section 14.2 rebuilds them elsewhere). The
+scripts run with `python3`: they are not executable files.
 
-1. Build and load the diagnostic: `make -C surfcpu build-rom`, then on the Mac
-   `make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag` and
-   `make -C surfcpu program-volatile DESIGN=surfcpu_arty_a7_gpudiag` (volatile: the flash is not
-   touched). Both GPU designs try the placer seeds 1 to 8 in turn, each for at most 30 minutes
-   (pnr-timeout) and each taken only if every clock keeps the slack the flow's rule wants
-   (OPEN-FLOW.md section 3); a build in which every seed was thin keeps the best and says THIN.
-   The bitstreams to test are in the sc/gpu worktree's `build/fpga/arty_a7_100t/<design>/`:
-   gpudiag from 04caffe (section 12.7) and DDR+GPU from e119a78 (section 12.6). Each rebuilds to the
-   same sha256 only from a clean checkout of its own commit (the build id is the commit's, the build
-   time the epoch's, the .bit header holds the output path, and the seed is pinned), with the same
-   images, on the same kind of host. Any other commit has another build id, so another netlist and
-   another placement for every seed: the slack rule then decides which seed is taken. On a fresh
-   clone:
+| Test | The bitstream, in surfcpu/build/fpga/arty_a7_100t/ | Built at, seed | sha256 | The build its banner must show |
+|---|---|---|---|---|
+| G1 | `surfcpu_arty_a7_gpudiag/surfcpu_arty_a7_gpudiag.bit` | 317c8f4 (section 12.8), seed 1 | `a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82` | `SurfGPU diagnostic 1.0.0 (build 317c8f4b)`, then `bitstream build 317c8f4b flags 0, ...` |
+| G2 | `surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit` | e119a78 (section 12.6), seed 7 | `b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2` | `SurfBoot 1.1.0 (build e119a787), the SurfCPU boot ROM` |
 
-       git clone <the repository> surfos && cd surfos   # git status must show nothing at each checkout
-       unset SURFCPU_FPGA_OUT ROM OPENXC7_PNR_TIMEOUT PLACER_SEEDS   # build/fpga, the lists' ROMs, 1800 s
-       export LC_ALL=C TZ=UTC
-       git checkout 04caffe                             # gpudiag, section 12.7
-       export SOURCE_DATE_EPOCH=1792382496                # git log -1 --format=%ct 04caffe
-       make -C surfcpu build-rom
-       PLACER_SEEDS=1 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
-       git checkout e119a78                             # the DDR+GPU design, section 12.6
-       export SOURCE_DATE_EPOCH=1792363017              # git log -1 --format=%ct e119a78
-       make -C surfcpu build-rom
-       make -C surfcpu litedram-gen                     # its LiteDRAM core (fetches pinned sources once)
-       PLACER_SEEDS=7 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+G1, the diagnostic:
 
-   on an Apple Silicon Mac (Darwin-arm64, the containers aarch64) with surfcpu-toolchain:2026-10-15
-   (image sha256:e4389c3c6d93...) and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37...; its chip
-   database's sha256 is checked against devenv/openxc7/chipdb.sha256). PLACER_SEEDS gives each
-   build only the seed it was placed with (without it the lists' seeds are tried in turn, and a
-   loaded machine could stop at the time limit a seed that routed here). Expected: gpudiag.mem
-   abe5a4df..., `surfcpu_arty_a7_gpudiag.bit` 5a43a578...8846; surfboot.mem cb83ad33...,
-   `surfcpu_arty_a7_ddr_gpu.bit` b3c750cb...68f2 (the full values in sections 12.7 and 12.6). A
-   second build to compare was not made.
-2. Capture the UART into a new file, then press RESET:
+1. Check the bitstream before anything else:
 
-       make -C surfcpu uart-console LOG=build/gpudiag-1.log    # a new name for each test
+       shasum -a 256 surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/surfcpu_arty_a7_gpudiag.bit
 
-   `LOG=` appends the raw bytes to the file, so a file used before still holds that session's
-   runs: they are judged too, and runs of another build fail the check (give each test its own
-   file, or remove the old one first). The first run after RESET is the board test: gpudiag prints
-   its identity (board Arty A7-100T (0x100), SoC 0.3.0, features 17f: no DDR), its sections, one
-   line per scene with its FRAME_CRC, and `GPUDIAG: PASS (124 checks)`, as the synthesized netlist
-   did in simulation (section 12.6). If the console opened after that run began, press RESET
-   again, not Ctrl-R: a rerun (123 checks) cannot check the GFX_ values a reset leaves, so it is
-   no full board test. Every scene's CRC must be the one in section 14.1; with the console closed,
-   `sim/gpu/gpudiag_check.py --uart build/gpudiag-1.log --frames - --expect
-   build/fw/gen/gpuscenes_expect.h` checks the capture: every run that ended passed, the capture
-   ends with one, and one at least is a first run (`--accept-rerun` would take reruns alone, which
-   is not this test). `tools/uart.py capture <port> --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)' --out
-   <file>` also works: it writes a new file, with time-stamped lines the checker reads, and stops at
-   the end of the first run's GPUDIAG line (start it, then press RESET; a pattern without the
-   parenthesis can stop in the middle of that line, which the checker refuses).
-3. The monitor: each scene shows for about a twentieth of a second while it is checked; the last
+   It must print the table's sha256. Anything else is not the bitstream this record describes:
+   stop, and rebuild it (section 14.2) or ask.
+2. Load it: `make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag`
+   (volatile: the flash is not touched; tools/program.sh also checks that the manifest next to the
+   file describes it).
+3. Capture the UART into a new file, then press RESET:
+
+       python3 surfcpu/tools/uart.py console auto --log surfcpu/build/gpudiag-1.log   # a new name for each test
+
+   `--log` appends the raw bytes, so a file used before still holds that session's runs: they are
+   judged too, and runs of another build fail the check (give each test its own file).
+   The first run after RESET is the board test. Its banner must read `SurfGPU diagnostic 1.0.0
+   (build 317c8f4b)` and its identity line `bitstream build 317c8f4b flags 0, features 17f`, after
+   `board Arty A7-100T (0x100), SoC 0.3.0`: another build id is another gpudiag or another
+   bitstream, so stop. Then come its sections, one line per scene with its FRAME_CRC (each the one
+   in section 14.1), and `GPUDIAG: PASS (124 checks)`, as the synthesized netlist did in simulation
+   (section 12.8). If the console opened after that run began, press RESET again, not Ctrl-R: a
+   rerun (123 checks) does not check the values a reset leaves, so it is no full board test.
+4. Close the console (Ctrl-]) and check the capture against the build:
+
+       python3 surfcpu/sim/gpu/gpudiag_check.py --uart surfcpu/build/gpudiag-1.log --frames - \
+         --expect surfcpu/build/fw/gen/gpuscenes_expect.h \
+         --manifest surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/manifest.txt
+
+   It passes only when no line shows a failure, every run that ended passed, the capture ends with
+   one, one at least is a first run, and every run shows the manifest's build (317c8f4b, from a clean
+   tree; `--build-id 317c8f4b` names it without the manifest). `--accept-rerun` would take reruns
+   alone, which is not this test. `tools/uart.py capture` works too: it writes a new file, with
+   time-stamped lines the checker reads. Start it, then press RESET:
+
+       python3 surfcpu/tools/uart.py capture auto --out surfcpu/build/gpudiag-1.txt \
+         --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)\n+UART echo: [^\n]*\n'
+
+   It stops once the echo line after the first run's GPUDIAG line is whole. (A pattern that ends
+   earlier stops where its last read ended, in the middle of a line: the checker takes the echo
+   line cut so, but not the GPUDIAG line.)
+5. The monitor: each scene shows for about a twentieth of a second while it is checked; the last
    picture (the demo: colour bands, boxes, rays, "SURFGPU" in large letters, a yellow frame) stays,
    with a green bar on the top text row saying `GPUDIAG: PASS (...)` (red with FAIL). The owner
    confirms the picture: square corners, the frame on all four edges, nothing cut off.
-4. G2 also: the DDR+GPU design boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does.
-   Load the bitstream of section 12.6 (e119a78, seed 7, sha256 b3c750cb...68f2): `make -C surfcpu
-   program-volatile DESIGN=surfcpu_arty_a7_ddr_gpu` in the sc/gpu worktree, whose build/fpga holds
-   it, or after rebuilding it as step 1 says. Not a `make build-fpga ... DESIGN=surfcpu_arty_a7_ddr_gpu`
-   at another commit: that makes another bitstream (seed 1 at e119a78 gave +0.563 ns, other commits
-   other placements). Then follow the m7 steps of PHYSICAL-TESTS.md with
-   `DESIGN=surfcpu_arty_a7_ddr_gpu`; SurfBoot's monitor command `info` shows features 1ff (its label
-   list predates the GPU bit).
+
+G2, the DDR+GPU design, which boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does:
+
+6. Check its bitstream first: `shasum -a 256
+   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit` must print
+   the table's sha256; then load it with `make -C surfcpu program-volatile BOARD=arty_a7_100t
+   DESIGN=surfcpu_arty_a7_ddr_gpu`. Not a bitstream from `make build-fpga ...
+   DESIGN=surfcpu_arty_a7_ddr_gpu` at another commit: that is another placement (seed 1 at e119a78
+   gave +0.563 ns, other commits other placements).
+7. Follow the m7 steps of PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`. SurfBoot's
+   banner must read `SurfBoot 1.1.0 (build e119a787), the SurfCPU boot ROM`; its monitor command
+   `info` shows `bitstream build e119a787 flags 0` and features 1ff (its label list predates the
+   GPU bit). Another build id is another bitstream or boot ROM: stop.
 
 ### 14.1 Expected FRAME_CRCs
 
@@ -922,4 +966,39 @@ do not depend on the build: the same numbers on every bitstream with this gpudia
 | 12 | engine: the demo (stays on the screen with the result bar) | f501eb46 |
 
 In simulation (2026-10-18, `make test-gpu-soc`) every one of these was also the CRC of a frame the
-VGA capture took at the RTL SoC's pins.
+VGA capture took at the RTL SoC's pins, and gpudiag printed each of them on the netlist of the
+bitstream to test (section 12.8).
+
+### 14.2 Rebuilding the bitstreams (not part of the test)
+
+Only when a bitstream of the table in section 14 is missing or its sha256 differs. Each rebuilds
+to the same sha256 only from a clean checkout of its own commit (the build id is the commit's,
+the build time the epoch's, the .bit header holds the output path, and the seed is pinned), with
+the same images, on the same kind of host. Any other commit has another build id, so another
+netlist and another placement for every seed: the slack rule then decides which seed is taken
+(OPEN-FLOW.md section 3), and the bitstream is not the one this record describes. On a fresh
+clone, from its root:
+
+    git clone <the repository> surfos && cd surfos   # git status must show nothing at each checkout
+    unset SURFCPU_FPGA_OUT ROM OPENXC7_PNR_TIMEOUT PLACER_SEEDS   # build/fpga, the lists' ROMs, 1800 s
+    export LC_ALL=C TZ=UTC
+    git checkout e119a78                             # the DDR+GPU design, section 12.6
+    export SOURCE_DATE_EPOCH=1792363017              # git log -1 --format=%ct e119a78
+    make -C surfcpu build-rom
+    make -C surfcpu litedram-gen                     # its LiteDRAM core (fetches pinned sources once)
+    PLACER_SEEDS=7 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+    git checkout 317c8f4                             # gpudiag, section 12.8, last: its build/fw is the checker's
+    export SOURCE_DATE_EPOCH=1792395168              # git log -1 --format=%ct 317c8f4
+    make -C surfcpu build-rom
+    PLACER_SEEDS=1 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
+
+on an Apple Silicon Mac (Darwin-arm64, the containers aarch64) with surfcpu-toolchain:2026-10-15
+(image sha256:e4389c3c6d93...) and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37...; its chip
+database's sha256 is checked against devenv/openxc7/chipdb.sha256). PLACER_SEEDS gives each
+build only the seed it was placed with (without it the lists' seeds are tried in turn, and a
+loaded machine could stop at the time limit a seed that routed here). Expected: surfboot.mem
+cb83ad33c0f25c9dbd95880e758bd9e288139413bdb1964b7bb8977f3b176005 and `surfcpu_arty_a7_ddr_gpu.bit`
+b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2; gpudiag.mem
+e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f and `surfcpu_arty_a7_gpudiag.bit`
+a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82. Then test them from that clone's
+root as section 14 says, its step 1 first. A second build to compare was not made.

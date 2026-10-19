@@ -1,0 +1,107 @@
+SurfGPU: the gpudiag design through the open flow at the fifth review's fixes (317c8f4), 2026-10-19
+make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag on the Mac (docker surfcpu-openxc7:2026-10-15:
+Yosys 0.69, nextpnr-himbaechel 1.0.0, Project X-Ray), 31 minutes. nextpnr's timing is an estimate, not
+Vivado sign-off. Nothing here was loaded on a board: the physical tests are the integrator's.
+
+The rebuild. Built from a clean tree at 317c8f4, the final code commit of round gpu-fix-5 (sc/gpu),
+on an Apple Silicon Mac (Darwin-arm64, the containers aarch64):
+  unset SURFCPU_FPGA_OUT ROM OPENXC7_PNR_TIMEOUT PLACER_SEEDS
+  export SOURCE_DATE_EPOCH=1792395168 LC_ALL=C TZ=UTC    # 317c8f4's commit time: git log -1 --format=%ct
+  make build-rom
+  make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
+images surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d9349dd5270223947f4caf58aada608b7ba3e0fcf21b03ad85fef55)
+and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac370d991addab18ddf9529d16e4bcaa93c457eb1941c59cb236b2f0);
+chip database sha256 f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f. The design list's
+seeds 1..8, each under the limit of 1800 s and the slack rule: seed 1 routed in 229 s with the least
+margin on sys_clk, +18.440 ns against 1.600, and was taken, the only seed tried; PLACER_SEEDS=1 pins
+it for a rebuild. The .bit header's date is the epoch (2026/10/19 07:32:48 UTC), as is the
+manifest's build_time. The ROM differs from 04caffe's by the first run's engine checks (the fills and
+the copy that show the reset target and clip) and the build id: its banner and identity line show
+build 317c8f4b. A second build was not made.
+
+source 317c8f4bef99, dirty = false; build id 317c8f4b; defines ["ARTY_HAS_GPU", ]
+boot ROM build/fw/gpudiag.mem sha256 e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f
+bitstream sha256 a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82, 3825962 bytes
+
+checks (tools/openxc7-build.sh, then tools/fpga-build.sh's own):
+  check SRL cells     PASS (none in the synthesized netlist, which LVS could not check: check-srl.txt)
+  check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)
+  check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)
+  check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)
+  check block RAM     PASS (contents decoded from the bitstream: check-bram.txt)
+  check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)
+  check clocks        PASS (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  check slack margin  PASS (least margin sys_clk +18.440 ns, wants 1.600: slack-seed1.txt)
+  check_netlist = "PASS"
+  check_boot_rom = "PASS"
+  LVS: registers: 3983 gold, 3983 gate, 3983 matched by name
+  LVS: memories: 236 gold, 277 gate, 236 paired and checked at the boundary
+  LVS: 14034 proved, 0 differ, 0 unknown   (1375.97s)
+  memories and multiplier (boards/arty_a7/netlist_check.py):
+    memory (RTL)                                   bits   netlist cells
+    u_soc.g_gpu.u_gpu.u_fifo.mem                   2048   11 RAM64M
+    u_soc.g_gpu.u_vram.g_bank[0].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[1].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[2].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[3].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[4].u_bank.mem      360448   12 RAMB36E1
+    u_soc.u_bootrom.rom                          524288   15 RAMB36E1
+    u_soc.u_core.fetch.fifo.mem                     252   11 RAM32M
+    u_soc.u_core.regfile.regs                      1024   12 RAM32M
+    u_soc.u_ps2.u_fifo.mem                          128   2 RAM32M
+    u_soc.u_scratch.ram                          524288   16 RAMB36E1
+    u_soc.u_textram.mem                          131072   4 RAMB36E1
+    u_soc.u_uart.u_rxfifo.mem                       512   3 RAM64M
+    u_soc.u_uart.u_txfifo.mem                       128   2 RAM32M
+    u_soc.u_video.g_gfx.gpal                       3072   1 RAMB18E1
+    u_soc.u_video.u_font.rom                      32768   1 RAMB36E1
+    DSP48E1 in the netlist: 4
+    DSP48E1 taking operands from u_soc.u_core.muldiv: 4 (expected 4)
+    netlist_check: PASS
+
+placement attempts:
+  seed 1: pass, routed; 'pix_clk': 94.35 MHz (PASS at 25.17 MHz), 'sys_clk': 46.38 MHz (PASS at 25.00 MHz); slack: least margin sys_clk +18.440 ns, wants 1.600
+timing (nextpnr):
+  clock pix_clk: constraint 25.17 MHz, achieved 94.35 MHz, slack +29.125 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 46.38 MHz, slack +18.440 ns  PASS
+  cross-domain paths (reported, not checked):
+    posedge pix_clk -> posedge sys_clk: 1.57 ns
+    posedge sys_clk -> posedge pix_clk: 1.66 ns
+  critical paths:
+    pix_clk: 10.60 ns = 2.17 ns logic, 8.42 ns routing; from u_soc.u_video.px3[0] (rtl/peripherals/surf_video.v:300) to u_soc.u_video.g_gfx.crc_nxt[16] (rtl/peripherals/surf_video.v:496)
+    sys_clk: 21.56 ns = 3.83 ns logic, 17.73 ns routing; from u_soc.g_gpu.u_gpu.cg[12] (rtl/peripherals/surf_gpu.v:183) to u_soc.g_gpu.u_vram.a_addr[16] (rtl/soc/surf_vram.v:76)
+
+utilization:
+  Against the xc7a100t's documented capacity (AMD DS180):
+  LUTs (Yosys LUT1-6 and INV cells; packing can only reduce)     7907 / 63400    12.5%
+  LUT positions (nextpnr SLICE_LUTX, two per LUT6)              12034 / 126800    9.5%
+  flip-flops                                                     3983 / 126800    3.1%
+  carry chains (CARRY4, one per slice)                            618 / 15850     3.9%
+  36 Kb block RAMs (RAMB18 = 1/2)                               112.5 / 135      83.3%
+  DSP48E1                                                           4 / 240       1.7%
+  Yosys cells: BUFG 2, CARRY4 605, DSP48E1 4, FDPE 6, FDRE 3524, FDSE 453, IBUF 17, INV 286, IOBUF 2, LUT1 6, LUT2 1518, LUT3 1365, LUT4 1167, LUT5 2331, LUT6 1234, MMCME2_BASE 1, OBUF 34, PLLE2_BASE 1, RAM32M 27, RAM64M 14, RAMB18E1 1, RAMB36E1 112
+
+step times:
+  presynth         2.67 s  ok
+  synth           30.62 s  ok
+  check-srl        0.13 s  ok
+  models           0.00 s  ok
+  check-synth      0.16 s  ok
+  chipdb           0.00 s  ok
+  chipdb-sha       0.03 s  ok
+  pnr            228.54 s  ok
+  frames          37.87 s  ok
+  bit              0.08 s  ok
+  stamp            0.03 s  ok
+  report           0.03 s  ok
+  check-clk       26.45 s  ok
+  check-gclk       0.15 s  ok
+  check-bit        2.30 s  ok
+  decode           8.81 s  ok
+  roundtrip       52.51 s  ok
+  bram-extract    23.60 s  ok
+  check-bram       0.44 s  ok
+  lvs-gold         0.63 s  ok
+  lvs-extract     22.06 s  ok
+  lvs-bramwe       1.01 s  ok
+  lvs-prove     1378.32 s  ok

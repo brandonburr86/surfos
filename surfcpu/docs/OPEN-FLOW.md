@@ -126,7 +126,8 @@ note. The rule judges only positive, finite figures: a report without a clock (a
 clock constraint, which so does not build, saying why), a clock at 0 MHz or not a number, a clock
 that misses its constraint (never kept, thin or not), and a min-slack naming a clock twice or one
 the design does not have, fail the attempt with the reason (slackcheck exit 2; 3 if the script
-itself fails), and only slackcheck's own `thin` verdict keeps a placement aside. The default comes
+itself fails or cannot write its slack file), and only slackcheck's own `thin` verdict keeps a
+placement aside. The default comes
 from the record: every design of release 1.0.0 meets it, the least margin being the 35T DDR design's dram_clk at +0.930 ns
 against 0.5; the builds on record that would have been thin are two DDR placements that failed on
 the board through route-throughs, rebuilt with that fix (+0.263 ns at 92a2b51 and +0.132 ns at
