@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); after `deploy-sd` it lists `/BOOT` and `/SYSTEM` and reads the whole 388,724-byte `SURFOS.BIN` through its 8 fragments, every byte position matching the Mac's copy ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); SurfBoot 1.1.0 then loads SURFOS.BIN from the card into DDR (CRC checked in both) and starts it ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); the formal m5 test (DDRDIAG.BIN from the card, the card taken out) not run yet | software done on the host; RTL SoC done; on the board: card reads and the DDR boot shown, m5 pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: neither of the owner's keyboards answers. The first (a USB keyboard on a passive USB-to-PS/2 adapter) does not speak PS/2; the second, an MCSAITE PS/2 keyboard specified for 5 V, does not start on the adapter's 3.3 V ([evidence](evidence/physical/ps2-2026-10-17.txt)): it needs a level shifter with 5 V, or a keyboard that runs at 3.3 V | done in simulation; on the board: VGA done, the PS/2 keyboard pending (a level shifter for the owner's 5 V keyboard, or a keyboard that runs at 3.3 V) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the twelfth storage review's findings, being fixed in fs-fix-12) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the thirteenth storage review's findings, being fixed in fs-fix-13) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
 
 ## Log
@@ -1062,3 +1062,39 @@ ddr-3 built five candidates, every gate passing on each
   fs-fix-12 is fixing them. The plan stands: when a review finds nothing above cosmetic, storage
   is done in simulation, and the file test on the owner's card (m8) and milestone 9's board test
   come next.
+
+### 2026-10-19: storage round fs-fix-12 and the thirteenth review
+
+* fs-fix-12 was merged as e48f043. It answers the twelfth review's findings as audit B74-B79:
+  * B74, B75: starting a program with redirected files, and the end of cleaning up a dead
+    program, are counted to their ends, so a kill no longer lands inside them;
+  * B76: a kill that was put off gives the task 2 s, once, after it lets go, to end its call or,
+    for a kernel thread, to end by itself; only then is it killed at once;
+  * B77: the walk through a path counts each lookup from before it;
+  * B78: the test harness starts an emulator again only when a port it picked itself was taken;
+  * B79: a task that keeps making file system calls after its kill gets EINTR from its path
+    calls once its grace is over, so the kill lands: in the test within about 5 s, where some
+    never landed before.
+
+  Each has a test that fails on 913e9fe and passes now; the kernel's self test has 174 checks.
+  The runs on the RTL system cost within 0.2 % of before.
+* The integrator's runs at e48f043, from a fresh build volume, all pass:
+  * x86 test-all at O0 and O2: smoke 315 and files 51 each (18 minutes);
+  * unittest: MKFS 126/0, FATFS 347/0, FATFUZZ 4/0, CP 16/0, CONC ok x4, the umount and mutex
+    settings ok, and the port tests 9/9 (7 minutes);
+  * `make check` in 26 minutes: test-os 135/135 at O2 and O0, persist 17/17, faults 25/25,
+    kit 22/22, system boot 21/21.
+* A thirteenth independent review found nothing critical or major. It found:
+  * **Minor:** a kernel thread that lets go within 20 ms of its kill gets no grace and is killed
+    at once in its clean-up (shown three times); and B79's rule covers only calls that look up a
+    path, so a task looping on reads and writes of a file it already holds would never be
+    killed (nothing in the kernel loops like that today);
+  * **Cosmetic:** a log line that promises a grace already spent.
+
+  It confirmed that the rest holds: the counts are balanced on every exit, the instrumented
+  build found no reference left behind and no kill stuck, the grace is given once, Ctrl+C and
+  hangups are unaffected, and 54 threaded runs (about 37 k kills and 21 k Ctrl+Cs) were clean.
+
+  fs-fix-13 is fixing them, with the kill rules' remaining edge cases. Then one more review: if
+  it finds nothing above cosmetic that can happen in this tree, storage is done in simulation,
+  and the file test on the owner's card (m8) and milestone 9's board test come next.
