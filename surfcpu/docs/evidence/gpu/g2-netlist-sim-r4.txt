@@ -1,0 +1,43 @@
+SurfGPU: make gpu-netlist-sim (sim/board/netlist_sim.sh, Verilator 5.032) in the surfcpu-toolchain
+container, 2026-10-19: the synthesized netlist of the gpudiag build at 04caffe (the fourth review's
+fixes: the first run checks the engine's reset target and clip; seed 1, every open-flow gate PASS,
+the slack rule passed, LVS proved the routed bitstream equal to this netlist; built with
+SOURCE_DATE_EPOCH=1792382496) run from its pins with its boot ROM inside it, until the UART line
+GPUDIAG:; then sim/gpu/gpudiag_check.py (this round's: a whole first run of 124 checks, every
+scene's FRAME_CRC the C model's). The CRCs are those of GPU.md 14.1, unchanged.
+
+netlist_sim: arty_a7_100t surfcpu_arty_a7_gpudiag: 12738 cells in build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/openxc7/surfcpu_arty_a7_top.netlist.v, verilator
+netlist_sim: tb_netlist: 330 us uart| 
+netlist_sim: tb_netlist: 4062 us uart| SurfGPU diagnostic 1.0.0 (build 04caffea)
+netlist_sim: tb_netlist: 12308 us uart| board Arty A7-100T (0x100), SoC 0.3.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+netlist_sim: tb_netlist: 16474 us uart| bitstream build 04caffea flags 0, features 17f
+netlist_sim: tb_netlist: 20814 us uart| identity                           ok (5 checks)
+netlist_sim: tb_netlist: 273743 us uart| VRAM window (March C-)             (300 KiB) ok (59 checks)
+netlist_sim: tb_netlist: 328623 us uart| video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+netlist_sim: tb_netlist: 407130 us uart| gpu registers and errors           ok (14 checks)
+netlist_sim: tb_netlist: 411904 us uart| scenes                             13, engine present
+netlist_sim: tb_netlist: 434790 us uart| scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+netlist_sim: tb_netlist: 518211 us uart| scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (5 checks)
+netlist_sim: tb_netlist: 868577 us uart| scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+netlist_sim: tb_netlist: 901946 us uart| scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+netlist_sim: tb_netlist: 1002050 us uart| scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+netlist_sim: tb_netlist: 1035419 us uart| scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+netlist_sim: tb_netlist: 1068787 us uart| scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+netlist_sim: tb_netlist: 1102155 us uart| scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
+netlist_sim: tb_netlist: 1135524 us uart| scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
+netlist_sim: tb_netlist: 1168892 us uart| scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
+netlist_sim: tb_netlist: 1252313 us uart| scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
+netlist_sim: tb_netlist: 1319049 us uart| scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
+netlist_sim: tb_netlist: 1419154 us uart| scene 12: engine: demo             crc f501eb46 ok (3 checks)
+netlist_sim: tb_netlist: 1419328 us uart| 
+netlist_sim: tb_netlist: 1421758 us uart| GPUDIAG: PASS (124 checks)
+netlist_sim: tb_netlist: 24 lines, 1360 characters, 0 framing errors, at 1421758 us of simulated time
+netlist_sim: tb_netlist: LEDs 1111, RGB LEDs 000
+netlist_sim: tb_netlist: VGA hsync every 31.779 us (44738), vsync every 16.684 ms (85)
+netlist_sim: - sim/board/tb_netlist.v:113: Verilog $finish
+netlist_sim: - S i m u l a t i o n   R e p o r t: Verilator 5.032 2025-01-01
+netlist_sim: - Verilator: $finish at 1s; walltime 2972.312 s; speed 478.434 us/s
+netlist_sim: - Verilator: cpu 2971.690 s on 1 threads; alloced 108 MB
+netlist_sim: built in 34 s, ran 2972 s (exit 0)
+gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+netlist exit 0 after 3006 s

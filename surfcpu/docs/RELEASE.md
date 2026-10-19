@@ -78,7 +78,8 @@ is relaxed for a release: a design is in it only if `tools/fpga-build.sh` passed
   `git update-index --assume-unchanged` or `--skip-worktree`.
 * Nothing set that would change what the builds make: `DRY_RUN`, `SURFCPU_FPGA_OUT`,
   `SURFCPU_IMAGE`, `SURFCPU_OPENXC7_IMAGE`, `SURFCPU_OPENXC7_BUILD`, `SURFCPU_ROMCHECK`, `ROM`,
-  `SURFCPU_BUILD_ID` or `SURFCPU_BUILD_DIRTY` in the environment is refused. Everything else is
+  `SURFCPU_BUILD_ID`, `SURFCPU_BUILD_DIRTY` or `PLACER_SEEDS` (release-verify gives each rebuild
+  the seed its release recorded itself, section 5) in the environment is refused. Everything else is
   simply not passed on: the builds get `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`
   and Docker's own settings from your shell, and what the release sets.
 * About an hour for the six bitstreams without DDR (the SoC ones take 10 to 17 minutes each, most

@@ -34,9 +34,10 @@ slave only (SURFBUS.md is unchanged).
 **Status (2026-10-18).** G0 (this document and the contract changes) is done. G1 (VRAM, the
 graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, gpudiag's CPU-drawn scenes) and
 G2 (the engine) are done in simulation and in synthesis: the gpudiag design passes every gate of
-the open flow and its netlist runs gpudiag to PASS (section 12). Three independent reviews'
-findings are fixed (sections 12.4 to 12.6), and the bitstreams of section 12.6 can be rebuilt to
-their sha256 (section 14). Their physical tests (section 14) are open: nothing has run on a board.
+the open flow and its netlist runs gpudiag to PASS (section 12). Four independent reviews'
+findings are fixed (sections 12.4 to 12.7), and the bitstreams to test (gpudiag of section 12.7,
+DDR+GPU of section 12.6) can be rebuilt to their sha256 (section 14). Their physical tests
+(section 14) are open: nothing has run on a board.
 Section 11 has the milestones.
 
 ## 1. Decisions and where this deviates from the brief
@@ -390,11 +391,14 @@ before changed them): it says so in a line under its banner ("a rerun (Ctrl-R): 
 passed: a missing FEATURES.GPU, a gpu window that traps or reads another ID than "GPU1", each
 engine scene that could not run, and a run with another number of checks than a complete one of
 its kind (GPUDIAG_CHECKS 124, GPUDIAG_RERUN_CHECKS 123) all fail it. `sim/gpu/gpudiag_check.py`
-judges a capture (sections 12.4 to 12.6): every run in it that ended must have passed with the total
-of its kind and the model's CRCs, no run may have printed a failed check, not even one a RESET cut
-short, the capture must end with a run that ended, and a capture of reruns only is not a full
-board test (the reset values were never checked: section 14). The engine checks start from the
-target and clip a reset leaves, whatever an abandoned run left (ABORT keeps them).
+judges a capture (sections 12.4 to 12.7): a run that ended with PASS and a passing CRC line for
+every scene is whole and judged (with the total of its kind); a run seen only in part (the console
+opened late, a line lost or garbled, a RESET before its end) is cut short and not judged, but
+whatever it shows of a failure counts, a FAIL line or a scene's CRC other than the model's; the
+capture must end with a whole run, and a capture of reruns only is not a full board test (the
+reset values were never checked: section 14). The first run after a reset checks the engine's
+reset target and clip themselves (its refused-target fill); a rerun first sets them, since ABORT
+keeps whatever an abandoned run left.
 
 **What gpudiag checks of the engine, and what it does not.** On the board it checks: gpu.ID and
 INFO; idle state; a full FIFO behind a WAIT_VBLANK, OVERFLOW, and the drain at the next blanking;
@@ -744,6 +748,46 @@ passes at e119a78 from a clean tree (30 minutes; test-gpu with the leftover reru
 board-tools 275 of 275, test-release 56 tests) and test-gpu-mutants catches 33 of 33 (5 minutes);
 each finding's tests on f0a33e7 and after are in the [evidence](evidence/gpu/review3-sim.txt).
 
+### 12.7 The fourth review (2026-10-18)
+
+A fourth independent review, of gpu-fix-3 at d8fdcee, found nothing critical or major: two minor
+and five cosmetic findings. The fixes are 64cb9bb..04caffe (code) and this record; each has a test
+that fails on d8fdcee and passes after, where a test is possible:
+
+| Finding | Fix | Test: on d8fdcee / after |
+|---|---|---|
+| m1: C4's SET_TARGET ran on every run, so the first run after a reset no longer checked the engine's reset target and clip (the review's mutant, a reset base of 4096: PASS, 124 checks) | only a rerun sets them, as the GFX_ reset values are handled (64cb9bb) | test-gpu-mutants' new soc-target-reset-base and soc-clip-reset: each `GPUDIAG: PASS (124 checks)` and gpudiag_check PASS in both forms with d8fdcee's gpudiag / each FAIL; 35 of 35 |
+| m2: an earlier run seen only in part failed a capture whose whole first run passed (the review's P2, P3, P5, G1; a regression of gpu-fix-3) | a run is whole only with PASS and every scene's passing CRC line; any other is cut short and not judged, but what it shows of a failure counts, a CRC other than the model's among it (5352299) | test_gpudiag_check.py: 5 of its 41 cases fail with d8fdcee's checker (P2, P3, P5, G1, F1) / 41 of 41; the review's adversarial4.py: P2, P3, P5, G1 FAIL / PASS; F1 PASS / FAIL; F3 to F8, F10 and the two-build case FAIL / FAIL |
+| c1: a crash of slackcheck exited 1, "thin": a report with a clock at 0 MHz was kept as THIN, even over a real thin seed (probes C, D) | slackcheck judges only positive, finite figures (exit 2, the reason on stderr), a missed constraint is never thin, a crash of the script exits 3, and the loop keeps only slackcheck's own thin (80c7e0a) | the review's probes at d8fdcee: C and D THIN, the 0 MHz seed kept over the real thin one / test-flow: those placements fail, saying why, and the real thin seed is kept; a broken slackcheck fails the attempt; slackcheck's self-test, 11 cases |
+| c2: no reason for a report without a clock (`fail (the slack rule: )`), and a min-slack clock named twice took the last value (probes A, H) | the reason is written; a clock named twice is refused by slackcheck, openxc7-build.sh and in a design list (80c7e0a) | d8fdcee: an empty reason; `--min dram_clk=0.5 --min dram_clk=0.05` judged with 0.05; a dry run naming the clock twice taken / test-flow: the reasons, the duplicate refused; test_tools.sh: a design list naming it twice refused (276 checks) |
+| c3: make release left PLACER_SEEDS unused without a word; the format-1 note named 1.0.0's design in any old release's report | PLACER_SEEDS refused as ROM is; the note names that design in 1.0.0-f791b8a1's report only (04caffe) | release-test.py's two changed tests: FAIL with d8fdcee's release.py (PLACER_SEEDS taken; "seed 3" in another release's report) / pass (56 tests) |
+| c4: section 14's DDR+GPU step built the list's seed 1 (+0.563 ns), not the seed-7 bitstream section 12.6 argues for | section 14 names the bitstream to test, where it is and how to rebuild it at e119a78 with PLACER_SEEDS=7, and says that another commit means another placement, which the slack rule decides (this record) | by reading |
+| c5: a THIN build's note listed the seeds tried, so release-verify's rebuild with the kept seed alone gave another note | the note names the kept placement's least margin only (80c7e0a) | test-flow: the note of a list and of its kept seed pinned are the same (at d8fdcee they differ by the list) |
+
+Two of the review's cases stay as they were, by choice. F2 (a failed run whose output from the
+failing scene on was lost, then RESET and a good run) passes: it cannot be told from P4 (a run a
+RESET cut short, then a good run), which must pass. U1 and U2 (tools/uart.py capture stopping in
+the middle of the GPUDIAG line, as `--until 'GPUDIAG: (PASS|FAIL)'` can) fail, now saying why: the
+line's total tells a first run from a rerun, so the checker does not guess it, and section 14's
+capture command waits for the whole line.
+
+**The bitstreams.** gpudiag changed (m1), so it was rebuilt at 04caffe, the round's final code
+commit, from a clean tree with SOURCE_DATE_EPOCH=1792382496 (04caffe's commit time), LC_ALL=C and
+TZ=UTC, its seeds 1 to 8 under the slack rule ([evidence](evidence/gpu/synth-gpudiag-r4.txt)):
+seed 1, the first of its list, passed the rule in 178 s (pix_clk 97.67 MHz, +29.485 ns; sys_clk
+44.12 MHz, +17.332 ns, the least margin, against 1.600); every gate PASS (LVS 14,034 proved, 0
+differ); 7,929 LUTs (12.5 %), 3,983 flip-flops, 112.5 RAMB36; ROM gpudiag.mem
+abe5a4dff4ef1f3bd112567f50baeaf278d002ea7b9934ff0094806e8df988d2; bitstream sha256
+5a43a578bdb70c366d867e825d2c98168d7d40e56a91765523a61a7514b18846; 28 minutes. The DDR+GPU
+design's RTL and SurfBoot did not change in this round, so its bitstream to test stays section
+12.6's: e119a78, seed 7, dram_clk +0.977 ns, sha256 b3c750cb...68f2, rebuilt only from e119a78
+(section 14). The rebuilt gpudiag netlist runs gpudiag to `GPUDIAG: PASS (124 checks)` with every
+FRAME_CRC the model's ([evidence](evidence/gpu/g2-netlist-sim-r4.txt); 1.42 s simulated in 50
+minutes). `make check` passes at
+04caffe from a clean tree (30 minutes: test-gpu, test-flow, board-tools 276 of 276, test-release
+56 tests), and test-gpu-mutants catches 35 of 35 (6 minutes); each finding's tests on d8fdcee and
+after are in the [evidence](evidence/gpu/review4-sim.txt).
+
 ## 13. Risks
 
 * **Block RAM 83 %.** VRAM's 76 RAMB36 spread over most of the 100T's block RAM columns, so its
@@ -794,28 +838,36 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
    `make -C surfcpu program-volatile DESIGN=surfcpu_arty_a7_gpudiag` (volatile: the flash is not
    touched). Both GPU designs try the placer seeds 1 to 8 in turn, each for at most 30 minutes
    (pnr-timeout) and each taken only if every clock keeps the slack the flow's rule wants
-   (OPEN-FLOW.md section 3); a build in which every seed was thin keeps the best and says THIN. The
-   bitstreams of section 12.6 are in the sc/gpu worktree's `build/fpga/arty_a7_100t/<design>/`.
-   They rebuild to the same sha256 only from a clean checkout of e119a78 (the build id is the
-   commit's, the build time the epoch's, the .bit header holds the output path, and each seed is
-   pinned), with the same images, on the same kind of host. On a fresh clone:
+   (OPEN-FLOW.md section 3); a build in which every seed was thin keeps the best and says THIN.
+   The bitstreams to test are in the sc/gpu worktree's `build/fpga/arty_a7_100t/<design>/`:
+   gpudiag from 04caffe (section 12.7) and DDR+GPU from e119a78 (section 12.6). Each rebuilds to the
+   same sha256 only from a clean checkout of its own commit (the build id is the commit's, the build
+   time the epoch's, the .bit header holds the output path, and the seed is pinned), with the same
+   images, on the same kind of host. Any other commit has another build id, so another netlist and
+   another placement for every seed: the slack rule then decides which seed is taken. On a fresh
+   clone:
 
-       git clone <the repository> surfos && cd surfos && git checkout e119a78   # git status: nothing
+       git clone <the repository> surfos && cd surfos   # git status must show nothing at each checkout
        unset SURFCPU_FPGA_OUT ROM OPENXC7_PNR_TIMEOUT PLACER_SEEDS   # build/fpga, the lists' ROMs, 1800 s
-       export SOURCE_DATE_EPOCH=1792363017 LC_ALL=C TZ=UTC       # git log -1 --format=%ct e119a78
+       export LC_ALL=C TZ=UTC
+       git checkout 04caffe                             # gpudiag, section 12.7
+       export SOURCE_DATE_EPOCH=1792382496                # git log -1 --format=%ct 04caffe
        make -C surfcpu build-rom
-       make -C surfcpu litedram-gen      # the DDR+GPU design's LiteDRAM core (fetches pinned sources once)
        PLACER_SEEDS=1 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
+       git checkout e119a78                             # the DDR+GPU design, section 12.6
+       export SOURCE_DATE_EPOCH=1792363017              # git log -1 --format=%ct e119a78
+       make -C surfcpu build-rom
+       make -C surfcpu litedram-gen                     # its LiteDRAM core (fetches pinned sources once)
        PLACER_SEEDS=7 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
 
    on an Apple Silicon Mac (Darwin-arm64, the containers aarch64) with surfcpu-toolchain:2026-10-15
    (image sha256:e4389c3c6d93...) and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37...; its chip
    database's sha256 is checked against devenv/openxc7/chipdb.sha256). PLACER_SEEDS gives each
-   build only the seed it was placed with (section 12.6; without it the lists' seeds are tried in
-   turn, as they were, and a loaded machine could stop a seed at the time limit that routed here).
-   Expected: gpudiag.mem 78dab052..., surfboot.mem cb83ad33...,
-   `surfcpu_arty_a7_gpudiag.bit` 88a5e71c...32cc and `surfcpu_arty_a7_ddr_gpu.bit` b3c750cb...68f2 (the
-   full values in section 12.6). A second build to compare was not made.
+   build only the seed it was placed with (without it the lists' seeds are tried in turn, and a
+   loaded machine could stop at the time limit a seed that routed here). Expected: gpudiag.mem
+   abe5a4df..., `surfcpu_arty_a7_gpudiag.bit` 5a43a578...8846; surfboot.mem cb83ad33...,
+   `surfcpu_arty_a7_ddr_gpu.bit` b3c750cb...68f2 (the full values in sections 12.7 and 12.6). A
+   second build to compare was not made.
 2. Capture the UART into a new file, then press RESET:
 
        make -C surfcpu uart-console LOG=build/gpudiag-1.log    # a new name for each test
@@ -831,17 +883,22 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
    `sim/gpu/gpudiag_check.py --uart build/gpudiag-1.log --frames - --expect
    build/fw/gen/gpuscenes_expect.h` checks the capture: every run that ended passed, the capture
    ends with one, and one at least is a first run (`--accept-rerun` would take reruns alone, which
-   is not this test). `tools/uart.py capture <port> --until 'GPUDIAG: (PASS|FAIL)' --out <file>`
-   also works: it writes a new file, with time-stamped lines the checker reads, and stops at the
-   first run's end (start it, then press RESET).
+   is not this test). `tools/uart.py capture <port> --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)' --out
+   <file>` also works: it writes a new file, with time-stamped lines the checker reads, and stops at
+   the end of the first run's GPUDIAG line (start it, then press RESET; a pattern without the
+   parenthesis can stop in the middle of that line, which the checker refuses).
 3. The monitor: each scene shows for about a twentieth of a second while it is checked; the last
    picture (the demo: colour bands, boxes, rays, "SURFGPU" in large letters, a yellow frame) stays,
    with a green bar on the top text row saying `GPUDIAG: PASS (...)` (red with FAIL). The owner
    confirms the picture: square corners, the frame on all four edges, nothing cut off.
-4. G2 also: the DDR+GPU design boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does
-   (`make build-fpga FLOW=openxc7 DESIGN=surfcpu_arty_a7_ddr_gpu`, then the m7 steps of
-   PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`); SurfBoot's monitor command `info`
-   shows features 1ff (its label list predates the GPU bit).
+4. G2 also: the DDR+GPU design boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does.
+   Load the bitstream of section 12.6 (e119a78, seed 7, sha256 b3c750cb...68f2): `make -C surfcpu
+   program-volatile DESIGN=surfcpu_arty_a7_ddr_gpu` in the sc/gpu worktree, whose build/fpga holds
+   it, or after rebuilding it as step 1 says. Not a `make build-fpga ... DESIGN=surfcpu_arty_a7_ddr_gpu`
+   at another commit: that makes another bitstream (seed 1 at e119a78 gave +0.563 ns, other commits
+   other placements). Then follow the m7 steps of PHYSICAL-TESTS.md with
+   `DESIGN=surfcpu_arty_a7_ddr_gpu`; SurfBoot's monitor command `info` shows features 1ff (its label
+   list predates the GPU bit).
 
 ### 14.1 Expected FRAME_CRCs
 

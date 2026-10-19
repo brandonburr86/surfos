@@ -120,8 +120,14 @@ slack-seed<n>.txt). A thinner placement is recorded as `seed N: thin, routed; ..
 one with the most margin is kept, its FASM, placement, report and log put back, seeds.txt says
 `kept: seed N, the thin placement with the most margin (THIN)`, the manifests say `check slack
 margin THIN` and `slack_margin = "THIN"`, the build says THIN, and make release refuses the
-bitstream without PRERELEASE=1 (RELEASE.md section 1). The default comes from the record: every
-design of release 1.0.0 meets it, the least margin being the 35T DDR design's dram_clk at +0.930 ns
+bitstream without PRERELEASE=1 (RELEASE.md section 1); its note names the kept placement's least
+margin, not the seeds tried, so a rebuild with the kept seed pinned (release-verify) gives the same
+note. The rule judges only positive, finite figures: a report without a clock (a design without a
+clock constraint, which so does not build, saying why), a clock at 0 MHz or not a number, a clock
+that misses its constraint (never kept, thin or not), and a min-slack naming a clock twice or one
+the design does not have, fail the attempt with the reason (slackcheck exit 2; 3 if the script
+itself fails), and only slackcheck's own `thin` verdict keeps a placement aside. The default comes
+from the record: every design of release 1.0.0 meets it, the least margin being the 35T DDR design's dram_clk at +0.930 ns
 against 0.5; the builds on record that would have been thin are two DDR placements that failed on
 the board through route-throughs, rebuilt with that fix (+0.263 ns at 92a2b51 and +0.132 ns at
 69ee491, evidence/flow/bufg-routethrough.txt section 5; not on record as run again), and the

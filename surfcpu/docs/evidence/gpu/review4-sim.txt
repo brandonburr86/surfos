@@ -1,0 +1,102 @@
+SurfGPU, the fourth review's fixes (2026-10-18): gpudiag's first run checks the engine's reset
+target and clip again, the capture checker judges whole runs only, the slack rule's failures and
+the release's settings, in the surfcpu-toolchain container (surfcpu-openxc7 for the open flow), on
+64cb9bb..04caffe (sc/gpu). Nothing here ran on a board.
+
+make check at 04caffe, from a clean tree: PASS in 1802 s; then test-gpu-mutants: 35 of 35 in 344 s.
+Excerpts:
+  gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct, 71831941 cycles)
+    [after Ctrl-R] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct)
+    [a rerun after a target and clip were left] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+    [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3756481 cycles
+    [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  test_gpudiag_check: PASS (41 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth re
+    [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 1 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+    [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (8 of 100 checks failed), 1 problems found, 'no engine: gpu.ID reads 0x31555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete
+  test-gpu: PASS
+  test_tools: 276 passed, 0 failed
+  slackcheck self-test: PASS (11 cases)
+  test-flow: PASS
+  test-release: Ran 56 tests in 30.250s OK 
+  check: all automated SurfCPU checks passed
+  ok    build: refuses --min-slack naming a clock twice
+  ok    pnr: a THIN build's note does not depend on the seeds tried (all of a list, or the kept seed pinned, as release-verify does)
+  ok    pnr: placements the rule cannot judge (a clock at 0 MHz, one that misses its constraint, no clock) fail, saying why; never kept as thin
+  ok    pnr: a slackcheck that fails (exit 1 without its verdict) fails the attempt; nothing is kept as thin
+
+test-gpu-mutants' two new SoC mutants at 04caffe:
+  soc-target-reset-base          soc    caught: gpudiag: GPUDIAG: FAIL (2 of 124 checks failed) (FAIL after the refused target a fill at (0, 0) left VRAM words 0x00000000 0x00000000 at 0,); gpudiag_check board FAIL, simulation FAI
+  soc-clip-reset                 soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL after the refused target a fill at (0, 0) left VRAM words 0x00000000 0x00000000 at 0,); gpudiag_check board FAIL, simulation FAI
+
+the review's adversarial4.py (built from a real transcript and the real header) against the new
+checker; "right" is the review's column:
+  ok         d8fdcee PASS (right: PASS) P1 the real first run, then the echo
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) P2 console opened late: the tail of a PASSING first run (from scene 9, with its GPUDIAG line and the echo), then RESET (GPU.md 14: 'press RESET again'
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) P3 console opened late: only the earlier run's GPUDIAG line and echo, then RESET and a full first run
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) P4 console opened late: the tail of a run cut by RESET before its GPUDIAG line, then a full first run
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) P2b the documented order after make program-volatile: the console opened while the run that starts at configuration was printing (from the VRAM window
+             gpudiag_check: PASS (124 checks, then 124 checks; 13 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) P5 console opened late on a passing Ctrl-R rerun (from scene 5, 123), then RESET and a full first run
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  ok         d8fdcee PASS (right: PASS) G1 an earlier complete PASS run with one byte garbled in scene 4's line ('ok' -> 'o\xff'), then RESET and a full first run
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  FALSE FAIL d8fdcee FAIL (right: PASS) U1 uart.py capture --until 'GPUDIAG: (PASS|FAIL)' matched before the line was complete: last line 'GPUDIAG: PASS'
+             gpudiag_check: FAIL: the capture ends in the middle of its GPUDIAG line ('GPUDIAG: PASS'): capture until the whole line, --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)'
+  FALSE FAIL d8fdcee FAIL (right: PASS) U2 ... last line 'GPUDIAG: PASS (12'
+             gpudiag_check: FAIL: the capture ends in the middle of its GPUDIAG line ('GPUDIAG: PASS (12'): capture until the whole line, --until 'GPUDIAG: (PASS|FAIL) \([^)]*\)'
+  ok         d8fdcee PASS (right: PASS) U3 ... last line complete 'GPUDIAG: PASS (124 checks)'
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         d8fdcee FAIL (right: FAIL) F1 a FAILING first run whose '  FAIL' line, section-end line and summary each lost bytes (4 byte errors), then RESET and a good run
+             gpudiag_check: FAIL: run 1 of 2 printed scene 9's FRAME_CRC deadbeef, the model's eeef382e
+  FALSE PASS d8fdcee PASS (right: FAIL (undetectable)) F2 a FAILING first run whose output from the failing scene on was lost (a burst on the console), then RESET and a good run
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 1 run cut short, not judged; 0 frames captured, 0 distinct)
+  ok         d8fdcee FAIL (right: FAIL) F3 a FAILING first run whose summary alone is garbled ('GPUDIAÿ: FAIL'), then RESET and a good run
+             gpudiag_check: FAIL: run 1 of 2, cut short, printed a failed check: FAIL FRAME_CRC 0xdeadbeef, the model's 0xeeef382e
+  ok         d8fdcee FAIL (right: FAIL (by design)) F4 an older session of the same build whose run failed, appended before a passing session (LOG= appends)
+             gpudiag_check: FAIL: run 1 of 2 says FAIL (1 of 124 checks failed): FAIL FRAME_CRC 0xdeadbeef, the model's 0xeeef382e
+  ok         d8fdcee FAIL (right: FAIL (by design)) F5 a passing run of build aaaaaaaa appended before a passing run of this build
+             gpudiag_check: FAIL: the runs' banners name more than one build (aaaaaaaa, d8fdceeb): an appended log? Capture each test into a new file
+  ok         d8fdcee FAIL (right: FAIL) F6 summary PASS (124) but scene 4's line missing
+             gpudiag_check: FAIL: the run: scene 4 (320x240 page 2, doubled): no CRC printed
+  ok         d8fdcee FAIL (right: FAIL) F7 summary PASS (124) with scene 3's line twice and scene 4's missing
+             gpudiag_check: FAIL: the run: scene 4 (320x240 page 2, doubled): no CRC printed
+  ok         d8fdcee FAIL (right: FAIL) F8 --accept-rerun: a failed first run, then Ctrl-R and a passing rerun
+             gpudiag_check: FAIL: run 1 of 2 says FAIL (1 of 124 checks failed): FAIL FRAME_CRC 0xdeadbeef, the model's 0xeeef382e
+  ok         d8fdcee PASS (right: PASS (only as asked)) F9 --accept-rerun: a lone passing rerun (no first run: reset values never checked)
+             gpudiag_check: PASS (123 checks, a rerun; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         d8fdcee FAIL (right: FAIL) F10 a first run with 123 checks whose rerun line was lost: a RESET that did not re-copy .data (first_run stayed 0)
+             gpudiag_check: FAIL: every complete run is a rerun (Ctrl-R, 123 checks): a rerun does not check the GFX_ values a reset leaves, so it is not a full board test; press RESE
+  FALSE PASS d8fdcee PASS (right: FAIL (misuse passes)) F11 the same, with --accept-rerun
+             gpudiag_check: PASS (123 checks, a rerun; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  F2 passes by choice (it cannot be told from P4, which must pass); U1 and U2 fail, saying the
+  capture ends in the middle of its GPUDIAG line (section 14's capture command waits for the
+  whole line); F11 passes because --accept-rerun asks for it.
+
+this round's tests against d8fdcee's code (a git archive of d8fdcee):
+  m1: the two new SoC mutants judged by d8fdcee's gpudiag (ROM build d8fdceeb):
+    soc-target-reset-base          soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+    soc-clip-reset                 soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (124 checks); gpudiag_check board PASS, simulation PASS
+  m2: test_gpudiag_check.py (41 cases) with d8fdcee's gpudiag_check.py:
+    FAIL P2: the tail of a passing run (its last scene, summary, echo), then RESET and a whole run: gpudiag_check failed, wanted pass:
+    FAIL P3: only an earlier run's GPUDIAG line and the echo, then RESET and a whole run: gpudiag_check failed, wanted pass:
+    FAIL P5: the tail of a passing rerun, then RESET and a whole first run: gpudiag_check failed, wanted pass:
+    FAIL G1: a passing run with one byte garbled in a scene line, then RESET and a whole run: gpudiag_check failed, wanted pass:
+    FAIL F1: a failed run whose FAIL line, section end and summary lost bytes (its CRC still wrong), then a whole run: gpudiag_check passed, wanted fail:
+    test_gpudiag_check: FAIL (5 of 41 checks)
+  c1, c2: d8fdcee's slackcheck.py: the review's zero.json (a clock at 0 MHz): ZeroDivisionError,
+    exit 1, so the seed loop called the placement thin and kept it (the review's probes C, D);
+    nofmax.json (no clock): "unreadable", exit 2, no reason on stderr ("fail (the slack rule: )",
+    probe A); --min dram_clk=0.5 --min dram_clk=0.05: "pass dram_clk +0.977 0.050 +0.927", the
+    last value taken (probe H); openxc7-build.sh --dry-run with the clock twice: taken.
+  c3: release-test.py with d8fdcee's release.py: test_settings_that_change_the_builds_are_refused
+    FAIL ("PLACER_SEEDS: ... 0 != 1": make release went on), and
+    test_older_manifest_rebuilt_with_the_design_lists_seeds FAIL ("seed 3" in another release's
+    report); now both pass (56 tests).
+  c5: at d8fdcee a THIN note named the seeds tried (openxc7-steps.sh: "every seed of $* thin or
+    failed: seed $best kept"), so a list and its kept seed pinned gave two notes (by reading, as
+    the review found); now both say "... every seed tried was thin or failed, this one has the most
+    margin" (test-flow compares the two).
