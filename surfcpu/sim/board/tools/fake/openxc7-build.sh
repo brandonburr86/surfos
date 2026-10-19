@@ -22,7 +22,7 @@
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
-top= board= xdc= out= dsp= dry=0 srcs= seeds=1
+top= board= xdc= out= dsp= dry=0 srcs= seeds=1 slack_clocks=
 while [ $# -gt 0 ]; do
     case "$1" in
         --top) top=$2; shift 2 ;;
@@ -36,7 +36,9 @@ while [ $# -gt 0 ]; do
         --pnr-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --pnr-timeout $2" >&2; exit 2 ;; esac
                        [ "$2" -gt 0 ] || { echo "fake openxc7: --pnr-timeout $2" >&2; exit 2; }; shift 2 ;;
         --min-slack) case "$2" in *=*=*|=*|*=|*[!a-zA-Z0-9_.=]*) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; *=*) ;;
-                     *) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; esac; shift 2 ;;
+                     *) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; esac
+                     case " $slack_clocks " in *" ${2%%=*} "*) echo "fake openxc7: --min-slack ${2%%=*} twice" >&2; exit 2 ;; esac
+                     slack_clocks="$slack_clocks ${2%%=*}"; shift 2 ;;
         --seed) case "$2" in ''|*[!0-9,]*|,*|*,|*,,*) echo "fake openxc7: --seed $2" >&2; exit 2 ;; esac; seeds=$(echo "$2" | tr ',' ' '); shift 2 ;;
         -I) [ -d "$2" ] || { echo "fake openxc7: no include directory $2" >&2; exit 2; }; shift 2 ;;
         --dry-run) dry=1; shift ;;
@@ -89,7 +91,7 @@ if [ -z "$stop" ]; then
     if [ -z "$passed" ] && [ -n "$thin" ]; then
         passed=$thin
         echo "kept: seed $thin, the thin placement with the most margin (THIN)" >> "$out/seeds.txt"
-        slack="THIN (dram_clk +0.087 ns, wants 0.500; every seed of $seeds thin or failed: seed $thin kept, the most margin: slack-seed$thin.txt)"
+        slack="THIN (dram_clk +0.087 ns, wants 0.500; every seed tried was thin or failed, this one has the most margin: slack-seed$thin.txt)"
     fi
     [ -n "$passed" ] || stop=pnr
 elif [ "$stop" = pnr ]; then

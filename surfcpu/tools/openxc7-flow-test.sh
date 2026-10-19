@@ -99,6 +99,8 @@ for v in dram_clk dram_clk= =0.5 dram_clk=x dram_clk=0.5.1 a=1=2; do
   if dry --board arty_a7_35t --min-slack "$v" > /dev/null 2>&1
   then bad "build: accepted --min-slack '$v'"; else ok "build: refuses --min-slack '$v'"; fi
 done
+if dry --board arty_a7_35t --min-slack dram_clk=0.5 --min-slack dram_clk=0.05 > /dev/null 2>&1
+then bad "build: accepted --min-slack naming dram_clk twice"; else ok "build: refuses --min-slack naming a clock twice"; fi
 for v in 0 00 000 2h ""; do
   if dry --board arty_a7_35t --pnr-timeout "$v" > /dev/null 2>&1
   then bad "build: accepted --pnr-timeout '$v'"; else ok "build: refuses --pnr-timeout '$v'"; fi
@@ -205,6 +207,9 @@ case " $PLAN " in
   *" $seed:pass "*) routes 90.00 ;;
   *" $seed:thin "*) routes 80.56 ;;
   *" $seed:thinner "*) routes 80.20 ;;
+  *" $seed:zero "*) routes 0 ;;
+  *" $seed:late "*) routes 79.00 ;;
+  *" $seed:noclock "*) echo '{"fmax": {}}' > "$rep"; echo "Info: Routing complete." > "$log"; echo "seed$seed" > "$fasm" ;;
   *" $seed:hang "*) echo "Info:     iter=11 wires=427863 overused=2358 overuse=2373 archfail=NA" > "$log"; echo partial > "$fasm"; exec sleep 600 ;;
   *" $seed:routed-hang "*) echo "Info: Routing complete." > "$log"; exec sleep 600 ;;
   *" $seed:kill "*) echo "Info: placing" > "$log"; kill -KILL $$ ;;
@@ -255,14 +260,35 @@ EOF
   else bad "pnr: the thin seed"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
   pnr_try "1:thinner 2:hang 3:thin 4:thinner" 1 2 3 4
   if has '^pnr_ok=1 seed_used=3 slack_state=THIN$' run.txt && has '^kept: seed 3, the thin placement with the most margin (THIN)$' out/seeds.txt &&
-     has '^slack_note=dram_clk +0.087 ns, wants 0.500; every seed of 1 2 3 4 thin or failed: seed 3 kept, the most margin$' run.txt &&
+     has '^slack_note=dram_clk +0.087 ns, wants 0.500; every seed tried was thin or failed, this one has the most margin$' run.txt &&
      [ "$(cat "$p/out/t.fasm")" = seed3 ] && grep -q "dram_clk': 80.56 MHz" "$p/out/nextpnr.log" && grep -q '80.56' "$p/out/report.json"
   then ok "pnr: when every seed is thin or failed, the thin placement with the most margin is kept (its outputs back in place), THIN"
   else bad "pnr: every seed thin"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
+  pnr_try "1:thinner 3:thin" 1 3; note_all=$(grep '^slack_note=' "$p/run.txt")
+  pnr_try "3:thin" 3; note_one=$(grep '^slack_note=' "$p/run.txt")
+  if [ -n "$note_all" ] && [ "$note_all" = "$note_one" ] && has '^pnr_ok=1 seed_used=3 slack_state=THIN$' run.txt
+  then ok "pnr: a THIN build's note does not depend on the seeds tried (all of a list, or the kept seed pinned, as release-verify does)"
+  else bad "pnr: the THIN note depends on the seeds tried: '$note_all' against '$note_one'"; fi
   MIN_SLACK="dram_clk=0.05" pnr_try "1:thin 2:pass" 1 2
   if has '^pnr_ok=1 seed_used=1 slack_state=PASS$' run.txt && has 'slack: least margin dram_clk +0.087 ns, wants 0.050$' out/seeds.txt
   then ok "pnr: a design's min-slack (dram_clk 0.05 ns) takes the placement the rule calls thin"
   else bad "pnr: the design's min-slack"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
+  pnr_try "1:zero 2:late 3:noclock 4:thin" 1 2 3 4
+  if has '^pnr_ok=1 seed_used=4 slack_state=THIN$' run.txt &&
+     has '^seed 1: fail (the slack rule: slackcheck: clock dram_clk: achieved 0.0 MHz is not a positive number), routed;' out/seeds.txt &&
+     has '^seed 2: fail (the slack rule: slackcheck: clock dram_clk misses its constraint (79.00 MHz of 80.00, slack -0.158 ns)' out/seeds.txt &&
+     has '^seed 3: fail (the slack rule: slackcheck: the report has no clock' out/seeds.txt && [ "$(cat "$p/out/t.fasm")" = seed4 ]
+  then ok "pnr: placements the rule cannot judge (a clock at 0 MHz, one that misses its constraint, no clock) fail, saying why; never kept as thin"
+  else bad "pnr: placements the rule cannot judge"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
+  mkdir -p "$p/broken"
+  printf 'raise SystemExit("slackcheck broken on purpose")\n' > "$p/broken/slackcheck.py"
+  ( PATH="$p/bin:$PATH"; PLAN="1:thin 2:pass"; export PLAN
+    dry=0 out=$p/out top=t part=xc7a35tcsg324-1 chipdb=none threads=1 xdc=none tools=$p/broken pnr_timeout=2 pnr_grace=1 min_slack=
+    rm -f "$p/out/"*; . tools/openxc7-steps.sh; place_and_route 1 2
+    echo "pnr_ok=$pnr_ok seed_used=$seed_used slack_state=$slack_state" ) > "$p/run.txt" 2>&1
+  if has '^pnr_ok=0 ' run.txt && has '^seed 1: fail (the slack rule: slackcheck broken on purpose)' out/seeds.txt
+  then ok "pnr: a slackcheck that fails (exit 1 without its verdict) fails the attempt; nothing is kept as thin"
+  else bad "pnr: a failing slackcheck"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
   MIN_SLACK="ddr_clk=0.5" pnr_try "1:pass" 1
   if has '^pnr_ok=0 ' run.txt && has 'fail (the slack rule: slackcheck: min-slack names ddr_clk, which the design does not have' out/seeds.txt
   then ok "pnr: a min-slack naming a clock the design does not have fails the attempt, saying so"

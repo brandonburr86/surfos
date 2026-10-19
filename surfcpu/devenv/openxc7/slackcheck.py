@@ -19,12 +19,17 @@ marked THIN, only when every seed is (tools/openxc7-steps.sh; docs/OPEN-FLOW.md 
 Prints one line for the seed loop: "pass" or "thin", then the clock with the least margin over
 what it wants, its slack, what it wants and the margin, in ns ("thin dram_clk +0.087 0.500
 -0.413"); --out gets a line for every clock. Exit 0 when every clock has enough, 1 when one is
-thin, 2 when report.json has no clock or cannot be read, or a --min names no clock of the design.
-Only the Python standard library.
+thin; 2, with the reason on stderr, when the placement cannot be judged or must not be kept:
+report.json cannot be read, has no clock (a design without a clock constraint: the rule has
+nothing to judge, so it does not build), a clock's figures are not positive numbers, a clock
+misses its constraint, or a --min names a clock twice or one the design does not have; 3 when this
+script itself fails. Only 1 lets the seed loop keep a placement as thin. Only the Python standard
+library.
 """
 
 import argparse
 import json
+import math
 import sys
 
 RULE_NS = 0.5           # the least slack any clock may have
@@ -36,15 +41,29 @@ def wants(constraint_mhz: float) -> float:
     return max(RULE_NS, RULE_SHARE * 1000.0 / constraint_mhz)
 
 
+class Unjudged(Exception):
+    """a placement the rule cannot judge, or one that must not be kept even as thin"""
+
+
 def judge(fmax: dict, mins: dict) -> tuple[int, list, str]:
     """(exit status, a line per clock, the seed loop's line) for nextpnr's fmax table"""
+    if not fmax:
+        raise Unjudged("the report has no clock (nextpnr's fmax is empty): a design without a clock constraint "
+                       "gives the slack rule nothing to judge")
     rows = []
     for clk, v in sorted(fmax.items()):
-        slack = 1000.0 / v["constraint"] - 1000.0 / v["achieved"]
-        want = mins.get(clk, wants(v["constraint"]))
+        got = {}
+        for what in ("achieved", "constraint"):
+            x = v[what]
+            if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or x <= 0:
+                raise Unjudged("clock %s: %s %r MHz is not a positive number" % (clk, what, x))
+            got[what] = float(x)
+        slack = 1000.0 / got["constraint"] - 1000.0 / got["achieved"]
+        if slack < 0:
+            raise Unjudged("clock %s misses its constraint (%.2f MHz of %.2f, slack %+.3f ns): not a placement to "
+                           "keep, thin or not" % (clk, got["achieved"], got["constraint"], slack))
+        want = mins.get(clk, wants(got["constraint"]))
         rows.append((slack - want, clk, slack, want, "the design's" if clk in mins else "the rule's"))
-    if not rows:
-        return 2, ["no clock in the report"], "unreadable"
     lines = ["clock %s: slack %+.3f ns, wants %.3f ns (%s): %s" % (clk, slack, want, whose,
              "ok" if margin >= 0 else "THIN") for margin, clk, slack, want, whose in rows]
     margin, clk, slack, want, _ = min(rows)
@@ -60,10 +79,16 @@ def parse_mins(items: list) -> dict:
             value = float(ns)
         except ValueError:
             value = -1.0
-        if not sep or not clk or value < 0:
+        if not sep or not clk or not math.isfinite(value) or value < 0:
             raise ValueError("--min wants CLOCK=NS with NS a number of nanoseconds, not %r" % it)
+        if clk in mins:
+            raise ValueError("min-slack names %s twice (%s and %s ns)" % (clk, ns_text(mins[clk]), ns))
         mins[clk] = value
     return mins
+
+
+def ns_text(v: float) -> str:
+    return ("%f" % v).rstrip("0").rstrip(".")
 
 
 def self_test() -> int:
@@ -87,14 +112,33 @@ def self_test() -> int:
          {"sys_clk": {"achieved": 1000.0 / 38.5, "constraint": 25}}, {}, 1, "thin sys_clk +1.500 1.600")
     case("a 200 MHz clock wants 0.5 ns (4 % is 0.2 ns)", {"iod": {"achieved": 1000.0 / 4.6, "constraint": 200}}, {},
          1, "thin iod +0.400 0.500")
-    case("no clock: unreadable", {}, {}, 2, "unreadable")
-    cases += 1
-    try:
-        parse_mins(["dram_clk"])
-        fails += 1
-        print("FAIL a --min without =NS was taken")
-    except ValueError:
-        print("ok   a --min without =NS is refused")
+    for name, fmax, words in (("no clock (a design without a clock constraint)", {}, "has no clock"),
+                              ("a clock whose achieved frequency is 0", {"c": {"achieved": 0.0, "constraint": 80.0}},
+                               "not a positive number"),
+                              ("a clock whose achieved frequency is NaN", {"c": {"achieved": float("nan"),
+                                                                                 "constraint": 80.0}}, "not a positive"),
+                              ("a clock that misses its constraint (79 MHz of 80)",
+                               {"dram_clk": {"achieved": 79.0, "constraint": 80.0}}, "misses its constraint")):
+        cases += 1
+        try:
+            judge(fmax, {})
+            fails += 1
+            print("FAIL %s: judged" % name)
+        except Unjudged as e:
+            ok = words in str(e)
+            fails += not ok
+            print("%s %s: not judged (%s)" % ("ok  " if ok else "FAIL", name, e))
+    for name, items, words in (("a --min without =NS", ["dram_clk"], "wants CLOCK=NS"),
+                               ("a --min naming a clock twice", ["dram_clk=0.5", "dram_clk=0.05"], "twice")):
+        cases += 1
+        try:
+            parse_mins(items)
+            fails += 1
+            print("FAIL %s was taken" % name)
+        except ValueError as e:
+            ok = words in str(e)
+            fails += not ok
+            print("%s %s is refused (%s)" % ("ok  " if ok else "FAIL", name, e))
     print("slackcheck self-test: %s" % ("PASS (%d cases)" % cases if not fails else "FAIL (%d of %d)" % (fails, cases)))
     return 1 if fails else 0
 
@@ -109,20 +153,25 @@ def main() -> int:
     if a.self_test:
         return self_test()
     try:
-        mins = parse_mins(a.min)
-        fmax = json.load(open(a.report)).get("fmax", {})
-        fmax = {k: {"achieved": float(v["achieved"]), "constraint": float(v["constraint"])} for k, v in fmax.items()}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        try:
+            mins = parse_mins(a.min)
+            fmax = json.load(open(a.report)).get("fmax", {})
+            fmax = {k: {"achieved": float(v["achieved"]), "constraint": float(v["constraint"])} for k, v in fmax.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            raise Unjudged(str(e))
+        unknown = sorted(set(mins) - set(fmax))
+        if unknown and fmax:
+            raise Unjudged("min-slack names %s, which the design does not have (its clocks: %s)"
+                           % (", ".join(unknown), ", ".join(sorted(fmax))))
+        status, lines, summary = judge(fmax, mins)
+    except Unjudged as e:
         print("unreadable")
         print("slackcheck: %s" % e, file=sys.stderr)
         return 2
-    unknown = sorted(set(mins) - set(fmax))
-    if unknown and fmax:
+    except Exception as e:                      # noqa: BLE001 (a bug here must never read as "thin")
         print("unreadable")
-        print("slackcheck: min-slack names %s, which the design does not have (its clocks: %s)"
-              % (", ".join(unknown), ", ".join(sorted(fmax))), file=sys.stderr)
-        return 2
-    status, lines, summary = judge(fmax, mins)
+        print("slackcheck: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        return 3
     if a.out:
         with open(a.out, "w") as f:
             f.write("slackcheck: each clock's slack at least max(%.1f ns, %d %% of its period), or the design's\n"

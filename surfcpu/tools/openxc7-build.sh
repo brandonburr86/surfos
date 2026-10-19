@@ -102,12 +102,15 @@ seeds=$(echo "$seed" | tr ',' ' ')
 case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
 case "$pnr_timeout" in ''|*[!0-9]*) die_usage "--pnr-timeout must be a number of seconds" ;; esac
 [ "$pnr_timeout" -gt 0 ] 2>/dev/null || die_usage "--pnr-timeout must be more than 0 seconds (timeout takes 0 as no limit)"
+slack_clocks=
 for w in $min_slack; do
   case "$w" in
     *=*=*|=*|*=) die_usage "--min-slack wants CLOCK=NS, not $w" ;;
     *=*) case "${w#*=}" in *[!0-9.]*|.|*.*.*) die_usage "--min-slack $w: NS must be a number of nanoseconds" ;; esac ;;
     *) die_usage "--min-slack wants CLOCK=NS, not $w" ;;
   esac
+  case " $slack_clocks " in *" ${w%%=*} "*) die_usage "--min-slack names ${w%%=*} twice" ;; esac
+  slack_clocks="$slack_clocks ${w%%=*}"
 done
 
 if [ -z "$part" ]; then

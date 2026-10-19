@@ -119,10 +119,14 @@ place_and_route() {   # SEED...: see the top of this file
       line=$(pnr_summary "$seed" "$st")
     else
       # shellcheck disable=SC2046
+      # only slackcheck's own "thin" (exit 1 with that verdict) keeps a placement aside as thin; a
+      # placement it cannot judge, one that misses a constraint, or a failure of the script, fails
       if sl=$(python3 -I "$tools/slackcheck.py" --report "$out/report.json" $(slack_args) \
                 --out "$out/slack-seed$seed.txt" 2> "$out/slack-seed$seed.err")
       then verdict=pass
-      else [ $? = 1 ] && verdict=thin || verdict=bad
+      else
+        st_sl=$?
+        if [ "$st_sl" = 1 ] && [ "${sl%% *}" = thin ]; then verdict=thin; else verdict=bad; fi
       fi
       read -r _ sclk sslack swant smargin <<EOF
 $sl
@@ -137,7 +141,8 @@ EOF
               if [ -z "$best" ] || awk -v a="$smargin" -v b="$best_margin" 'BEGIN { exit !(a + 0 > b + 0) }'; then
                 best=$seed best_margin=$smargin best_note="$sclk $sslack ns, wants $swant"
               fi ;;
-        *)    line=$(pnr_summary "$seed" 0 "fail (the slack rule: $(tail -n 1 "$out/slack-seed$seed.err"))") ;;
+        *)    why=$(tail -n 1 "$out/slack-seed$seed.err" 2>/dev/null)
+              line=$(pnr_summary "$seed" 0 "fail (the slack rule: ${why:-slackcheck exit $st_sl, no reason given})") ;;
       esac
     fi
     echo "$line" | tee -a "$out/seeds.txt" | sed 's/^/openxc7-build.sh: placement and routing, /'
@@ -152,7 +157,7 @@ EOF
       if [ -f "$out/thin-seed$best/$f" ]; then cp "$out/thin-seed$best/$f" "$out/$f"; fi
     done
     pnr_ok=1 seed_used=$best slack_state=THIN
-    slack_note="$best_note; every seed of $* thin or failed: seed $best kept, the most margin"
+    slack_note="$best_note; every seed tried was thin or failed, this one has the most margin"
     echo "kept: seed $best, the thin placement with the most margin (THIN)" | tee -a "$out/seeds.txt" |
       sed 's/^/openxc7-build.sh: placement and routing, /'
   fi

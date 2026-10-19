@@ -492,6 +492,8 @@ case "$pnr_timeout" in *[!0-9]*) die "$design: pnr-timeout must be a number of s
 # at least max(0.5 ns, 4 % of its period)); a placement with less is thin and the next seed is tried
 min_slack=$(items min-slack | awk 'NF != 2 || $2 !~ /^[0-9]+(\.[0-9]+)?$/ { bad = 1 } { printf "%s=%s ", $1, $2 } END { exit bad }') ||
     die "$design: a min-slack line wants a clock and a number of nanoseconds (min-slack dram_clk 0.5)"
+twice=$(items min-slack | awk '++n[$1] == 2 { print $1 }' | head -n 1)
+[ -z "$twice" ] || die "$design: min-slack names $twice twice"
 seed=$(items seed | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')   # the open flow's placer seeds (default 1),
 case "$seed" in *[!0-9\ ]*) die "$design: seed must be a number or numbers" ;; esac   # tried in turn
 # PLACER_SEEDS= replaces them for one build (a diagnostic build of chosen placements, with its
