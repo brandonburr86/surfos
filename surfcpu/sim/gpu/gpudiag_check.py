@@ -33,9 +33,13 @@ only when:
     must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
     FRAME_CRC is the picture that left the chip);
   - every run comes from one build (an appended log that still holds an older build's runs fails),
-    and with --build-id (or --manifest, tools/fpga-build.sh's manifest.txt of the bitstream tested,
-    for its build_id and source_dirty) from that one: no run's banner or bitstream line names
-    another, nor a tree with uncommitted changes when that build's was clean, and a whole run shows it;
+    and with --build-id or --manifest from the build to test: no run's banner or bitstream line
+    names another build, and one whole run at least shows this one (a run whose identity lines were
+    lost or garbled shows none, and is not held against it). --manifest is tools/fpga-build.sh's
+    manifest.txt of the bitstream tested: it must be a gpudiag build's (its design gpudiag, its
+    boot ROM gpudiag.mem) that passed its build checks (result "pass"); it gives the build id, and,
+    when it says the tree was clean (source_dirty false), no run may show a dirty banner or
+    bitstream line. --build-id alone gives only the id: it does not know whether the build was clean;
   - one complete run at least is a first run: a rerun does not check the GFX_ values a reset
     leaves, so it is not a full board test; --accept-rerun accepts a capture of reruns only.
 --engine-scenes N also requires that the last complete run passed N scenes that needed the engine.
@@ -182,14 +186,29 @@ def main() -> int:
             problems.append("--build-id %r is not 8 hex digits (gpudiag's banner shows the commit's first 8)" % a.build_id)
     if a.manifest:
         man = open(a.manifest, errors="replace").read()
-        m = re.search(r'^build_id = "([0-9a-f]{8})"', man, re.M)
+        # a gpudiag build's manifest, of a build that passed its checks: another design's (the DDR+GPU
+        # one, built at the same commit, has the same build id) or a failed build is not the bitstream
+        # this capture can be judged against (the sixth review's B6)
+        top = man.split("\n[", 1)[0]
+        design = re.search(r'^design = "([^"]*)"', top, re.M)
+        rom = re.search(r'^rom_image = "([^"]*)"', top, re.M)
+        result = re.search(r'^result = "([^"]*)"', top, re.M)
+        if not (design and "gpudiag" in design.group(1) and rom and rom.group(1).split("/")[-1] == "gpudiag.mem"):
+            problems.append("%s is not a gpudiag build's manifest (design %s, boot ROM %s): give the manifest of "
+                            "the gpudiag bitstream tested, build/fpga/<board>/surfcpu_arty_a7_gpudiag/manifest.txt"
+                            % (a.manifest, design.group(1) if design else "not named",
+                               rom.group(1) if rom else "not named"))
+        if not result or result.group(1) != "pass":
+            problems.append("%s says result = %s: that bitstream did not pass its build checks"
+                            % (a.manifest, result.group(1) if result else "nothing"))
+        m = re.search(r'^build_id = "([0-9a-f]{8})"', top, re.M)
         if not m:
             problems.append("no build_id in %s (tools/fpga-build.sh's manifest.txt of the bitstream)" % a.manifest)
         elif want_id is not None and want_id != m.group(1):
             problems.append("--build-id %s, but %s says build_id %s" % (want_id, a.manifest, m.group(1)))
         else:
             want_id = m.group(1)
-        want_clean = re.search(r"^source_dirty = false$", man, re.M) is not None
+        want_clean = re.search(r"^source_dirty = false$", top, re.M) is not None
     if a.expect and (first_total is None or rerun_total is None):
         problems.append("no GPUDIAG_CHECKS and GPUDIAG_RERUN_CHECKS in %s" % a.expect)
     if a.expect and not expect:

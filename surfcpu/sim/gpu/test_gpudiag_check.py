@@ -27,7 +27,10 @@ scenes, 84 checks for a first run and 83 for a rerun:
     capture can stop) passes, and one whose last line is not the echo line's start fails;
   - the build: with --build-id, or --manifest (its build_id and source_dirty), a run of another build
     fails, and so do a dirty banner or bitstream line where the build was clean, and a capture whose
-    whole runs show no build at all;
+    whole runs show no build at all; the sixth review's: a manifest of another design (B6), of a
+    gpudiag-named design with another boot ROM, of a failed build, or naming no design fails; a run
+    whose banner was garbled but whose bitstream line shows the build passes (B12), and --build-id
+    alone does not see a dirty build (B14), as documented;
   - --must-fail passes only a failing run that says what it must.
 Exit 0 when all pass.
 """
@@ -108,11 +111,13 @@ def ending(text, k):
     return text[:i + k]
 
 
-def manifest(build_id="12345678", dirty="false"):
-    """the lines of tools/fpga-build.sh's manifest.txt that gpudiag_check.py reads"""
+def manifest(build_id="12345678", dirty="false", design="surfcpu_arty_a7_gpudiag", rom="build/fw/gpudiag.mem",
+             result="pass"):
+    """the lines of tools/fpga-build.sh's manifest.txt that gpudiag_check.py reads (and a section after them,
+    whose keys it must not take for the top's)"""
     return ('# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n'
-            'design = "surfcpu_arty_a7_gpudiag"\nsource_dirty = %s\nbuild_id = "%s"\nresult = "pass"\n'
-            % (dirty, build_id))
+            'design = "%s"\nsource_dirty = %s\nbuild_id = "%s"\nrom_image = "%s"\nresult = "%s"\n\n'
+            '[openxc7]\nresult = "pass"\n' % (design, dirty, build_id, rom, result))
 
 
 def expect(name, transcript, want, *extra, man=None):
@@ -235,6 +240,21 @@ expect("--manifest: a dirty build, as its manifest says", run().replace("(build 
        "(build 12345678, dirty tree)").replace("12345678 flags 0", "12345678 flags 1") + ECHO, True,
        man=manifest(dirty="true"))
 expect("--manifest without a build_id", run() + ECHO, False, man="result = \"pass\"\n")
+# the sixth review's B6: a manifest must be a gpudiag build's, of a build that passed its checks
+expect("B6: --manifest: the DDR+GPU design's manifest (the same build id)", run() + ECHO, False,
+       man=manifest(design="surfcpu_arty_a7_ddr_gpu", rom="build/fw/surfboot.mem"))
+expect("--manifest: a gpudiag-named design with another boot ROM", run() + ECHO, False,
+       man=manifest(rom="build/fw/bramdiag.mem"))
+expect("--manifest: a build that failed its checks (its flow section's result pass)", run() + ECHO, False,
+       man=manifest(result="fail"))
+expect("--manifest naming no design", run() + ECHO, False,
+       man=manifest().replace('design = "surfcpu_arty_a7_gpudiag"\n', ''))
+# B12, B14: what the build rule does not ask, as documented
+expect("B12: --manifest: the run's banner garbled, its bitstream line the build's",
+       run().replace("(build 12345678)", "(bu\xffld 12345678)") + ECHO, True, man=manifest())
+expect("B14: --build-id alone: a dirty build of that id (the manifest would know)",
+       run().replace("(build 12345678)", "(build 12345678, dirty tree)").replace("12345678 flags 0", "12345678 flags 1")
+       + ECHO, True, "--build-id", "12345678")
 expect("--build-id and --manifest that disagree", run() + ECHO, False, "--build-id", "12345678",
        man=manifest("87654321"))
 # --must-fail
@@ -245,5 +265,5 @@ if failures:
     print("test_gpudiag_check: FAIL (%d of %d checks)" % (failures, checks))
     sys.exit(1)
 print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every whole run's verdict and total, runs cut short "
-      "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth and fifth reviews' "
+      "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth to sixth reviews' "
       "cases, the build to test, --must-fail)" % checks)
