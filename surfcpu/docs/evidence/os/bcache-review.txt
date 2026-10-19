@@ -2454,6 +2454,9 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
   at its kill, a call KILL_WAIT_MS after it) and left the references behind. Not done: making a walk stop between its
   components once its call is to end, which would shorten a killed task's wait on a busy volume but make its own
   clean-up fail (fsbench removes its file "whatever ends it" through a walk; eject's write-out opens each mount)
+  (Round fs-fix-12, B76, section 90: the kill that waited came at once at the first look after the task let go, where
+  its clean-up runs; it comes at the task's call's end now, or KILL_WAIT_MS after the letting go for a task that goes
+  on. B79, section 93: a task that keeps making VFS calls is killed within about 2 x KILL_WAIT_MS)
 
 == 84. B73: the same leak elsewhere
   What else a call holds across a wait, and what a kill at once there would leave (both kernels):
@@ -2461,7 +2464,9 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
       no kill reaches; reap() in the waiter's for a task killed at once). reap() had the same gap one level up: the
       dead task is off every list once reap() begins, so a waiter killed at once between two of its closes left the
       rest open and the task's memory allocated for good. Fixed the same way: reap() counts the waiter in fs_refs while
-      it closes the dead task's files and its kernel command's record
+      it closes the dead task's files and its kernel command's record (round fs-fix-12, B75, section 89: only around the
+      closes: the frees after them, the task's address space, stack and record, came after the count, where the kill
+      that waited for the closes came; counted to reap()'s end now)
     a struct file: one a call opened and holds (a kernel command's, the loader's, the firmware's): counted (the holder,
       section 82). One on its way from a table or a record to its close: fd_close() cleared the descriptor and then
       closed the file, dup2 put the new file in and then closed the one it replaced, a kernel command's record let go
@@ -2479,7 +2484,9 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
     a kernel command's descriptor 1 while it is captured (SYS_kcmd's record, a reference): released by reap() through
       kcmd_task_gone() whatever ends the task: no leak
     open-file counts: dup2() and spawnfd take a reference and put it in a table in one step; process_spawn_files() takes
-      its references and starts the child, or gives them back, with nothing between that waits: no leak
+      its references and starts the child, or gives them back, with nothing between that waits: no leak (round
+      fs-fix-12, B74, section 88: not so: a kill at once needs no wait, and one put off by the spawn's walk came in that
+      window, at the first look after the walk let go; the window is counted now)
     superblock references: a mount holds its device (bdev_get()) from its probe to its umount, counted inside while it
       is being taken (B58); umount gives it back in a step that must finish (B46); nothing else counts a superblock
       (in_use() looks at the open files, the vnodes and the asking task's cwd): nothing a kill can leave
@@ -2561,3 +2568,233 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
   code move the code after them) and the package's load; its own code costs 0.011-0.015 %. Against d4050ed the lines
   are as in section 81 (the first prompt 1.9 million cycles sooner and the next line as much later; df on the full card
   +1.42 %), SurfBoot's load of a package 3,360 bytes larger +0.39 million cycles
+======================================================================================================================
+Round fs-fix-12 (10/19/26): an independent review of B66-B73 (913e9fe), and its fixes (audit B74-B79)
+date:   2026-10-19 (local)
+review: by another agent, read-only, on 913e9fe: an instrumented copy of the tree (patch_r12.py: B73's count checked at
+        every call's end and every task's death, a held file closed or installed by another task, a kill pending 30 s,
+        a hook in reap()'s tail) with steps of the kernel's self test (r12_selftest.c.inc, r12c_selftest.c.inc: R12a, a
+        waiter killed while reap() closes a dead task's files, the tail widened to 60 ms; R12b, a storm of kills, Ctrl+C
+        and stops at random points of every VFS call, 48 rounds, workers of four kinds (a kernel thread, a call, a
+        kernel command, a kernel command in a call), half of them never looking for their kill, a slow driver every
+        other round and the volume's lock held 2.6 s every fifth; R12c, a spawn's caller killed after its walk, the
+        window widened to 60 ms by a hook), the storm also under 0062c33's rule (34 tasks died holding references), a
+        measure of how long kills of workers that never look take (11 of 42 not landed 10 s after their kill);
+        ports/test_r12_ports.py (a caller's port in a launch with picked ones); round fs-fix-11's threaded campaigns
+        again (camp/c12_*, 86 runs, clean); and a reading of section 83's waits, pins() and B66-B72. Its findings (two
+        minor, one cosmetic) and the class behind the two minor ones are docs/CODE-AUDIT.md's B74-B78; B79 answers its
+        measure (pre-existing)
+before: 913e9fe (round fs-fix-11 merged into surfcpu): a git archive of it with this round's shell/selftest.c and
+        arch/riscv32/rvtest.c (volume surfos-sc-fs12-base), and one with the review's instrumentation (patch_r12x.py
+        base: patch_r12.py as it is, R12c's hook and step; volume surfos-sc-fs12-r12b); the review's port test and
+        this round's against its tools/; a git worktree of it for the cost
+after:  sc/fs-fix-12 (from surfcpu 913e9fe): b532b41, B74-B79 with their self-test steps and tests; then docs (765e30a)
+        and this evidence. The code is final at b532b41: every devenv run, make -C surfcpu check and the RTL runs are of
+        a clean checkout of it, the instrumented runs of a copy of it (patch_r12x.py fix12: the same instrumentation,
+        reap()'s anchors where this tree has them, the hook at the same point, the start of reap()'s tail)
+host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -fsanitize=address,undefined; QEMU on
+        the Mac for the self tests (tools/qemu-run.py's boot, as make test boots); the devenv container for the builds,
+        make test-all, make unittest and make test-usb; the SurfCPU toolchain container for make -C surfcpu check and
+        the RTL runs
+
+== 87. The review's own materials on this tree
+  R12a-R12c (r12_selftest.c.inc and r12c_selftest.c.inc as they are) in a copy of the tree instrumented as the review
+  did (patch_r12x.py: patch_r12.py's checks, B73's count 0 at every call's end and every task's death, no task's held
+  file closed or installed by another, no kill pending 30 s; reap()'s tail and the spawn's window widened to 60 ms by
+  hooks that are in the copy only), the self test from the user shell (the review's run_selftest12.py):
+    913e9fe (-O0, volume surfos-sc-fs12-r12b): SELFTEST FAIL
+      "(R12a: child killed yes; the reap's write held yes; waiter status -1; reap's tail entered 1, finished 0; heap
+      used -17056 bytes more; umount 0)": FAIL
+      "(R12c: caller status -1; the spawn's window entered 1, finished 0, spawn result -99; umount -16: r12spawn (pid
+      9) has a file or directory open there)": FAIL
+      "(R12b: 48 rounds, workers by kind 50/44/49/49, 487523 operations; 158 kills, 31 Ctrl+C then kill, 34 stopped;
+      ends: 135 killed, 57 by themselves, 0 other; kills that took over 100 ms 129, longest 30070 ms; never landed 21;
+      busy after round -1; umount 0)": FAIL; the instrumentation "21 report(s), 0 death(s) with fs_refs, 21 kill(s)
+      pending 30 s", each a worker that never looks for its kill, found holding something at every look
+    this tree (b532b41's code: -O0 before its commit, volume surfos-sc-fs12-r12f; at the code final -O0 and -O2,
+    volume surfos-sc-fs12-r12): SELFTEST PASS
+      "(R12a: child killed yes; the reap's write held yes; waiter status -1; reap's tail entered 1, finished 1; heap
+      used -33952 bytes more; umount 0)": ok
+      "(R12c: caller status -1; the spawn's window entered 1, finished 1, spawn result 10; umount 0)": ok
+      "(R12b: 48 rounds, workers by kind 50/50/51/41, 974651 operations; 142 kills, 35 Ctrl+C then kill, 50 stopped;
+      ends: 127 killed, 65 by themselves, 0 other; kills that took over 100 ms 120, longest 4660 ms; never landed 0;
+      busy after round -1; umount 0)": ok; the instrumentation "0 report(s), 0 death(s) with fs_refs, 0 kill(s) pending
+      30 s; longest kill put off 4640 ms": ok
+      at the code final (-O0 and -O2): R12a and R12c the same, ok; R12b at -O0 "(48 rounds, workers by kind 52/47/49/44,
+      1099654 operations; 153 kills, 47 Ctrl+C then kill, 39 stopped; ends: 129 killed, 63 by themselves, 0 other; kills
+      that took over 100 ms 129, longest 4630 ms; never landed 0; busy after round -1; umount 0)", at -O2 "(48 rounds,
+      workers by kind 51/46/53/42, 2544006 operations; 148 kills, 36 Ctrl+C then kill, 44 stopped; ends: 132 killed, 60
+      by themselves, 0 other; kills that took over 100 ms 112, longest 4590 ms; never landed 0; busy after round -1;
+      umount 0)", ok; the instrumentation reports nothing (the longest kill put off 4610 ms and 4560 ms)
+  ports/test_r12_ports.py (a port the caller wrote, taken, with net=True): against 913e9fe's tools "R12 B72 mixed:
+  launches 5; retry notes 4": FAILED; against this tree's "launches 1; retry notes 0": OK
+  R11a-R11e in the x86 self test (the review's way, as in section 72; volume surfos-sc-fs12-rev) and R11a-R11b in rvtest
+  on riscv32: each ok: on x86 at -O0 and at -O2, SELFTEST PASS at both (R11a at -O0 "7667 takes, 80 workers, 141 kills
+  (70 waiting, 25 holding), 80 ended (74 killed), 0 hung; two owners 0, wrong counts 0, a dead owner seen 0; locks free
+  after: yes yes"), and on riscv32 at -O2 and at -O0 (make -C surfcpu test-os-qemu, 135 of 135 checks at each)
+  The threaded campaigns: the files the harness builds (fs/bcache.c, fs/fat.c, fs/fat_mkfs.c) are 913e9fe's; the
+  review's 86 runs on them stand
+
+== 88. B74: the spawn's record and the files it hands the child counted
+  process_spawn_files() (kernel/process.c) counts its caller in fs_refs from before its record is made until
+  kthread_create_on() has given record and references to the child's task, whose user_entry() puts the files in its
+  descriptor table before anything waits (B73), or, when the child cannot be made, until release_files() has given the
+  references back; every way out lets the count go. With the count a kill that waited comes after the window, at the
+  caller's call's end: R12c, section 87 (its hook widens the window to 60 ms; B76 alone would cover a window shorter
+  than KILL_WAIT_MS, the count any window)
+
+== 89. B75: reap() counted to its end
+  reap() (kernel/task.c) counts the waiter from before the dead task's closes until it has freed the task's address
+  space, stack and record (the count let go last). R12a, section 87: the hook at the start of the tail (in this tree
+  inside the count) runs its 60 ms and the frees after it
+
+== 90. B76: a kill put off gives its task KILL_WAIT_MS from letting go
+  The rule (kernel/task.c's kill_escalate()): a look at a kill put off (every FS_HOLD_RETRY_MS, 20 ms) that finds the
+  task holding something (in_fs(): fs_hold, the cache's lock, a mutex but the console's, fs_refs) marks it TI_HELD; the
+  first look that then finds it holding nothing does not kill it, as it did, but marks it TI_GRACE and looks again
+  KILL_WAIT_MS later (task_vfs_begin() starts the grace too, at the task's next path call holding nothing: B79). A call
+  ends meanwhile (task_call_leave(): the kill comes there, task_exit(-1) in the task's own context, which closes its
+  files); a kernel thread outside any call ends by itself (its status its own). Still running at that look, the task is
+  killed at once if it holds nothing, the kernel log saying "kill: 'X' (pid N) did not end its system call within 2000
+  ms of letting go: killed at once" ("did not end within 2000 ms of letting go" for a thread); holding something, it is
+  marked TI_LATE (B79) and killed at once at the first look that finds it holding nothing: no second grace. A thread
+  that enters a call meanwhile (B48) starts that call's rule afresh. A kill never put off is as before: at once for a
+  task outside any call, at KILL_WAIT_MS for one in a call (kcmdtest's "sleep -u 10000" killed at once after 2 s, the
+  smoke test's, unchanged); a hangup's kill in a call still waits for the call's end; the log line of a kill put off
+  says "once it lets go it has 2000 ms to end" where it said "killed as soon as it lets go"
+  Every count's drop in both kernels, and what follows it before the task's call or the thread ends:
+    fs_unref() (B73's references): each path call's last vdrop(), then the call's return; vfs_open()'s handing its
+      count to the file; vfs_close()'s and fd_close()'s ends, then the caller (a system call returns; a kernel command
+      frees its buffers and prints: cp, fsbench, hexdump, crc32, the shells' write and append; the loader maps the stack
+      and frees its record); fd_install() (sys_open()'s, then its return); kcmd_release()'s end (the call's end);
+      reap()'s end (B75: after the frees); process_spawn_files()'s end (B74: the child's task made)
+    fs_leave() (fs_hold): fat_unlock() and fat_out() at the end of each FAT call, inside a VFS call's references on a
+      volume (the count goes to 0 with the VFS call's) or in mkfs inside its claim; the cache's outside() around a
+      device request; driver/bdev.c's request end (a raw request: readbench and hexdump free their buffer after it);
+      vfs_mount_why()'s end (B58); vfs_bdev_change_end() (mkfs's and fdisk's commit: then their messages and buffers);
+      eject's write-out and unmount (B58: then its messages); umount's fs_finish_leave() at its end (B46)
+    mutex_unlock(): every lock's callers (the network's calls after net_lock, a buffer freed; USB storage's requests
+      after m->lock; the cache's and a volume's locks inside the counts above); the console's lock does not count
+    What follows each drop is code that ends the call or the thread within milliseconds: frees, messages, returns. Its
+    waits are cut short by the kill (the pager, a pty's room, a terminal's read, sleep_intr(), the network's waits, a
+    task_wait() with WINTR) or bounded by their holders (the console's lock; a mutex, whose holder is counted and so
+    bounded as section 83 has it), and a VFS call in it (fsbench's unlink of its file, eject's write-out of its next
+    mount) is counted again and waits as section 83 says, its cache waits cut short. So within KILL_WAIT_MS of letting
+    go each has finished, and the kill comes at the call's end; a task still running then is one that goes on working
+    after its kill (a loop that does not look for it: B79 for one that keeps making VFS calls), and only it is killed
+    at once, at a look KILL_WAIT_MS after the moment it could have ended, no longer aimed at that moment
+  The self test (test_kill_cleanup, x86 -O0): b532b41 (and before its commit) "(a call: its clean-up done, status -1,
+  ended 60 ms after it let go; a kernel thread: done, status 0, 60 ms; a call that goes on: done, status -1, 2020 ms,
+  the kernel log says so)", three checks ok; 913e9fe with this self test "(a call: its clean-up CUT SHORT, status -1,
+  ended 20 ms after it let go; a kernel thread: CUT SHORT, status -1, 20 ms; a call that goes on: CUT SHORT, status -1,
+  20 ms, the kernel log SAYS NOTHING)": three FAIL. B39/B48's kill step (a thread that goes on after leaving a file
+  system: killed 2020 ms after it left; on 913e9fe 20 ms), B62's (after letting go of a lock: 2010 ms; on 913e9fe 10 ms)
+  and B69's second log line (said once; on 913e9fe not said): ok here, FAIL on 913e9fe. rvtest on riscv32 (test_fat's
+  held file, 60 ms of clean-up after its close): "B76: and the kill does not come in its clean-up after the close: it
+  ends by itself" ok at -O2 and -O0, 135 of 135; on 913e9fe with this rvtest FAIL, 134 of 135. The other kill steps pass
+  on both as before: B39's in the cache, B46's in umount (killed at its call's end), B47's in a device request and in
+  mkfs, B48's thread entering a call, B55's hangup, B61's fdisk, B73's four cases and readers, B59's kernel threads.
+  B73's two calls are killed at their calls' ends, a few ticks after letting go; its kernel threads (two in the self
+  test, and rvtest's, after its 60 ms of clean-up) now end by themselves once their open or close is done: their checks,
+  which look at when each ends and at the umount, still say "killed" (rvtest's B76 line says how its thread ends)
+  Not done, the review's other form: a kill put off delivered only at task_call_leave(). A call that after letting go
+  never ends would never be killed, and a kernel thread outside any call has no such point; the grace gives both one
+  rule and keeps KILL_WAIT_MS's safety net, timed from the moment the task could end
+
+== 91. B77: a walk counts each lookup from before it
+  walk() (fs/vfs.c) counts the task (fs_ref()) before each component's lookup; when the lookup hands back a volume's
+  vnode, the count is that vnode's, else it goes. rootfs_lookup() takes a mount's root under mount_lock and lets the
+  lock go before returning it: the root of a volume mounted after the walk chose "/" was held between the unlock and the
+  count after the return by a task counted by nothing (the parent, rootfs's root, is no volume's). A lookup in a
+  volume's directory was counted throughout already (the directory's own count). No test can place a kill in those
+  instructions; the walk's count is balanced on every path (R12's instrumentation, section 87: no call ended or task
+  died with a count)
+
+== 92. B78: a port the caller wrote, taken, stays fatal
+  tools/qemu-run.py: taken_ports() reads the port QEMU says it could not bind (the forwarding rule's
+  'tcp:127.0.0.1:PORT-...', or a datagram socket's local.port=PORT, which QEMU's message quotes from its -netdev), and
+  picked_port_taken() asks whether it is one picked for this launch; Qemu and tools/qemu-usb.py's Vm try again only
+  then. tests/test_qemu_ports.py, 9 tests, OK (the Mac, QEMU 11.1.1 for its real messages; and in make unittest at -O0
+  and -O2, section 94): test_fixed_port_is_not_retried with net=False and net=True (one launch, no retry note, QEMU's
+  failure as before), test_usb_vm with a caller's port beside a picked one (fatal, one launch),
+  test_taken_ports_read_from_qemu (both kinds of message, picked or not), and test_qemu_says_so reading the port from
+  QEMU's own messages for a held TCP and a held UDP port. Against 913e9fe's tools: test_fixed_port_is_not_retried and
+  test_usb_vm FAIL (the caller's port tried again 4 times), test_taken_ports_read_from_qemu and test_qemu_says_so ERROR
+  (no taken_ports())
+
+== 93. B79: a task that keeps making VFS calls
+  The review's measure: workers that loop VFS calls and never look for their kill hold something nearly all the time;
+  the looks, 20 ms apart, rarely find them holding nothing (11 of 42 not landed 10 s after their kill, 8 of 41 under
+  0062c33's rule; R12b on 913e9fe, section 87: 21 not landed 30 s after it). B76's grace, begun at such a look, would
+  have needed two of them. lookup_abs() (fs/vfs.c), where every path call but statfs and sync begins, calls
+  task_vfs_begin() (surfos/task.h: a test of the task's flags, the rest in kernel/task.c's task_vfs_begin_slow() only
+  for a task whose kill was put off): holding nothing there, the task's grace starts there; marked TI_LATE (its grace
+  run out with it holding something), the call says EINTR before it takes anything. Such a worker then fails its
+  calls, holds nothing, and the next look kills it. The self test (test_kill_loop: a kernel thread opening, holding 50
+  ms and closing a file of the initrd in a loop, killed): b532b41 "(it ended 2060 ms after its kill, 45 opens; status
+  -1)" (2070 ms before its commit): ok; 913e9fe "(STILL THERE 6000 ms after its kill, 124 opens; status 0)" (told to
+  stop then): FAIL. R12b: section 87, none left 30 s, the longest 4.7 s. A task that holds a file throughout its loop
+  is still not killed (B73)
+
+== 94. The kernel's self test, the x86 suites, the sanitizers and the threaded test at the code final
+  The self test's transcript (QEMU on the Mac, booted as make test boots, x86 at -O0): b532b41 (volume
+  surfos-sc-fs12-run) SELFTEST PASS, 174 checks ok, this round's lines as in sections 90 and 93; 913e9fe with this self
+  test (volume surfos-sc-fs12-base) SELFTEST FAIL, 167 checks ok and 7 failing (B76's three, B79's, B69's new line, and
+  the kill steps of B39/B48 and B62 changed to the new rule), every other check passing on both. test-all's self tests
+  at -O0 and -O2 and test-usb's three at each level say SELFTEST PASS (x86.txt round fs-fix-12, sections 1 and 3)
+  The review's own materials on this tree: section 87
+  make test-all, make unittest and make test-usb at b532b41 (x86.txt, round fs-fix-12): the smoke test 315 of 315 at
+  -O0 and -O2 (`run kcmdtest kills` among its steps, each kill as before); make unittest exit 0 at -O0 (FATFS 347,
+  FATFUZZ 4 runs, CONC ok 4 times, CONC umount ok, CONC mutex ok, MKFS 126, CP 16, tests/test_qemu_ports.py 9 OK) and
+  the same at -O2 (its exit 2 the two tests/test_devenv.py tests that fail with O=2 in their environment, as in the
+  rounds before); test-usb 315 of 315 at -O0 and -O2, its three self tests passing at each level; no QEMU started
+  twice in any of them
+  AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the kernel
+  files and the tests alike, on the Mac, against b532b41's files): test_fatfs 347 checks, 0 failures; test_fatfuzz's
+  set, 4 runs, 0 with failures; test_cp 16 checks, 0 failures; test_mkfs 105 checks (no fsck.fat or mtools on the
+  Mac), 0 failures; test_fatconc in make unittest's four settings, its umount setting and its mutex setting, each
+  "CONC: ok": no report from any. (kernel/task.c, kernel/process.c and fs/vfs.c, which this round changes, are built
+  by no host test: the kernels' runs above cover them; the host tests build include/surfos/task.h's new flags and
+  task_vfs_begin() with the rest, which they do not call)
+  The threaded test: make unittest's settings (above, and in the devenv, x86.txt); the files its harness builds are
+  913e9fe's, and the review's 86 campaign runs on them stand (section 87)
+
+== 95. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost, at the code final
+  make -C surfcpu check (01:43-02:13, the clean checkout of b532b41): "check: all automated SurfCPU checks passed".
+  Among them: boards/qemu_virt/test_os.py 135 of 135 at -O2 and at -O0 (rvtest's B73 step and B76's after it among
+  its self test's checks: "B76: and the kill does not come in its clean-up after the close: it ends by itself", ok at
+  both), test_arty 204 of 204, test_sd_iomodel 164 of 164, test-os-surfemu 18 of 18; on the RTL system (surfsim, with
+  the io track's card model) test-os-persist 17 of 17, test-os-faults 25 of 25, test-os-kit 22 of 22,
+  test-soc-system-boot 21 of 21. The riscv32 kernels build with the one warning of the rounds before (task_exit()),
+  isacheck clean (arty_a7: 58,907 instructions, 913e9fe's 58,737, all rv32im_zicsr_zifencei)
+  The cost on SurfCPU: the RTL runs' simulated cycles, this kernel's against 913e9fe's, built from a git worktree the
+  same way in the toolchain container and run with this check's surfsim and SurfBoot ROM (this round changes neither),
+  and against 913e9fe laid out as this kernel (pad_from_maps2.py, as in section 86: each riscv32 object that grew once
+  linked followed by as much code that never runs, or data, as it grew, from the two link maps: kernel/task.o 316
+  bytes of code and 104 of read-only data, fs/vfs.o 84 of code, arch/riscv32/rvtest.o 280 of code, 120 of read-only
+  data and 4 of small data; the read-only data padded to the section's total, the string merge crediting 224 bytes of
+  it to absent.o; no struct changed; checked in the link maps: .text, .rodata, .ksyms, .data and .bss at this kernel's
+  addresses and sizes, the package 413,428 bytes as this one's):
+                               913e9fe      padded       after        against
+                                            913e9fe      (b532b41)    913e9fe  padded
+    persist, the write run     277,343,751  277,447,080  277,452,350  +0.039 % +0.002 %
+    persist, the reboot run    225,467,461  225,556,130  225,555,861  +0.039 % -0.000 %
+    faults, the refusing card  320,721,994  316,841,282  317,348,704  -1.052 % +0.160 %
+    faults, the full card      203,166,778  203,287,760  203,293,851  +0.063 % +0.003 %
+  (913e9fe's kernel is c6aeafb's, and its runs are within 0.006 % of section 86's: the build's ID and time are in the
+  package and the banner)
+  Step by step (each expected line's cycle, from the runs' evidence files): against 913e9fe laid out alike each command
+  costs a few hundred to a few thousand cycles more or less (cd 10, mkdir 402, write 637, cp 253 of its 117 million, ls
+  58, sync 1,060, crc32 of the folder 341 of its 75 million, df on the full card 0: a path call's look at two of its
+  task's flags, a walk's count moved to before each lookup), every line within -0.48 % and +0.21 % (a command's lines
+  and the prompt after them splitting a few thousand cycles otherwise: append +0.14 %, mv -0.08 %), but eject's last
+  line on the persist card (+11,074 cycles, +0.67 %; +494 against 913e9fe itself: the padded build's own line) and the
+  refusing card's run, where the card-detect task, which looks every 200 ms (5 million cycles), met the card's removal
+  at another look (+0.25 million cycles at "taken out", +0.26 million at "put back"). Against 913e9fe itself: SurfBoot
+  loads a package 896 bytes larger (412,532 -> 413,428: +0.12 million cycles), cd's line 1.9 million cycles later and
+  the next line as much sooner (such a pair moves in every round), each other line within -0.47 % and +0.57 % (prompts),
+  cp +0.01 %, crc32 of the folder -0.01 %, and the card-detect task's look again (-2.73 million cycles at "taken out",
+  -0.75 million at "put back"). The layout alone (913e9fe against the padded 913e9fe): +0.037 %, +0.039 %, -1.21 % and
+  +0.060 %: this round's cost in these workloads is its layout's (rvtest's new step and kernel/task.c's 316 bytes of
+  code move the code after them) and the package's load; its own code costs at most 0.003 %. kill_escalate()'s new rule
+  and task_vfs_begin_slow() do not run in them (no kill), and reap()'s count only lets go later
