@@ -29,6 +29,11 @@ once outside a file system, and one put off while the program file was read (fs/
 a file of a volume the loading holds) comes right after its close; before, the files
 still in the spawn's record were left open then (a redirection's file on a stick kept it
 from being unmounted). The task's reap closes them, whatever ends it.
+
+10/19/26 (audit B74): and the parent's call counts itself (fs_refs) from the record's making
+until the child's task holds it: a kill of the parent put off by its spawn's walk of the
+program's path came at once in between, and the references taken for the child (a
+redirection's file on a stick) and the record were left for good.
 */
 
 #include <surfos/types.h>
@@ -190,13 +195,15 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     if(r) return r;
     if(st.type != VN_FILE) return -EACCES;
     if(argc < 1 || argc > SPAWN_MAX_ARGS) return -EINVAL;
+    fs_ref();                                       /* 10/19/26 (audit B74): the record and the files it hands over are
+                                                       this call's until the child's task holds them, counted (below) */
     sa = (struct spawn_args *)kcalloc(1, sizeof(struct spawn_args));
-    if(!sa) return -ENOMEM;
+    if(!sa) { fs_unref(); return -ENOMEM; }
     r = vfs_normalize(vfs_getcwd(), path, sa->path, sizeof(sa->path));
-    if(r) { kfree(sa); return r; }
+    if(r) { kfree(sa); fs_unref(); return r; }
     for(i = 0; i < argc; i++) {
         size_t n = strlen(argv[i]) + 1;
-        if(used + n > SPAWN_STR_BYTES) { kfree(sa); return -E2BIG; }
+        if(used + n > SPAWN_STR_BYTES) { kfree(sa); fs_unref(); return -E2BIG; }
         memcpy(sa->strs + used, argv[i], n);
         sa->argv[i] = sa->strs + used;
         used += n;
@@ -215,6 +222,7 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     base = base ? base + 1 : sa->path;
     if(!(flags & TF_DETACHED) && con && console_paging(con)) flags |= TF_FOREGROUND;   /* 10/6/26 */
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
-    if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
+    if(!t) { release_files(sa); kfree(sa); fs_unref(); return -ENOMEM; }
+    fs_unref();                                     /* (the child's now: its reap closes them, whatever ends it) */
     return (int)t->pid;
 }

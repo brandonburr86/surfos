@@ -9,7 +9,8 @@ go and returns its number; QEMU binds it a moment later and stops at once if ano
 held for the whole test and free_port() returns it first. A stand-in for QEMU (FAKE below: it binds the forwarded and
 datagram ports as QEMU does, and serves the monitor and serial sockets) stops with QEMU's message when it cannot bind
 one, so the launch must start it again with fresh ports, say so, and give up after PORT_TRIES; any other failure must
-stay fatal at the first try. Where qemu-system-i386 is installed, its own messages are checked as well.
+stay fatal at the first try, and (10/19/26, audit B78) so must a port the caller wrote itself, also in a launch with
+picked ports. Where qemu-system-i386 is installed, its own messages are checked as well.
 """
 import contextlib
 import importlib.util
@@ -211,15 +212,33 @@ class Ports(unittest.TestCase):
         self.assertIn('could not load kernel', str(e.exception))
 
     def test_fixed_port_is_not_retried(self):
-        """a port the caller wrote itself is not this harness's to change: its failure stays fatal"""
-        s = hold()
-        self.held.append(s)
-        extra = ['-netdev', 'user,id=n9,hostfwd=tcp:127.0.0.1:%d-:23' % s.getsockname()[1]]
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(RuntimeError):
-            self.qr.Qemu(self.kernel, self.qemu, '64', extra, net=False)
-        self.assertEqual(len(self.launches()), 1)
-        self.assertNotIn('starting it again', out.getvalue())
+        """a port the caller wrote itself is not this harness's to change: its failure stays fatal, alone and (10/19/26,
+        audit B78) in a launch that has picked ports too (net=True: four of them), where it was tried again 4 times"""
+        for net in (False, True):
+            s = hold()
+            self.held.append(s)
+            extra = ['-netdev', 'user,id=n9,hostfwd=tcp:127.0.0.1:%d-:23' % s.getsockname()[1]]
+            before = len(self.launches())
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(RuntimeError) as e:
+                self.qr.Qemu(self.kernel, self.qemu, '64', extra, net=net)
+            self.assertEqual(len(self.launches()) - before, 1, 'net=%s' % net)
+            self.assertNotIn('starting it again', out.getvalue())
+            self.assertIn("forwarding rule 'tcp:127.0.0.1:%d-" % s.getsockname()[1], str(e.exception))
+
+    def test_taken_ports_read_from_qemu(self):
+        """10/19/26 (audit B78): the port a failure names, QEMU's words for both kinds, and whether it was a picked one"""
+        tcp = ("qemu-system-i386: -netdev user,id=net0,hostfwd=tcp:127.0.0.1:4001-:7,hostfwd=tcp:127.0.0.1:4002-:23: "
+               "Could not set up host forwarding rule 'tcp:127.0.0.1:4002-:23'")
+        udp = ("qemu-system-i386: -netdev dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=4003,remote.type=inet,"
+               "remote.host=127.0.0.1,remote.port=9: can't bind ip=127.0.0.1 to socket: Address already in use")
+        self.assertEqual(self.qr.taken_ports(tcp), [4002])
+        self.assertEqual(self.qr.taken_ports(udp), [4003])
+        self.assertTrue(self.qr.picked_port_taken(tcp, {4001, 4002}))
+        self.assertFalse(self.qr.picked_port_taken(tcp, {4001}))
+        self.assertTrue(self.qr.picked_port_taken(udp, {4003}))
+        self.assertFalse(self.qr.picked_port_taken(udp, set()))
+        self.assertFalse(self.qr.picked_port_taken('qemu-system-i386: could not load kernel', {4001}))
 
     def test_datagram_port(self):
         """tools/rawnet.py's link (tools/qemu-tcp.py, the @tcp-raw steps): QEMU's own UDP port, taken meanwhile"""
@@ -268,6 +287,15 @@ class Ports(unittest.TestCase):
             usb.Vm('fatal', args, image, (code, vars_), serial=True,
                    extra=['-netdev', 'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-:23'])
         self.assertEqual(len(self.launches()), 3)
+        fixed = hold()                              # (10/19/26, audit B78) a port the caller wrote, beside a picked one
+        self.held.append(fixed)
+        with mock.patch.object(usb, 'load_smoke_harness', return_value=self.qr), contextlib.redirect_stdout(out), \
+                self.assertRaises(RuntimeError):
+            usb.Vm('fixed', args, image, (code, vars_), serial=True,
+                   extra=['-netdev', 'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-:23,'
+                                     'hostfwd=tcp:127.0.0.1:%d-:24' % fixed.getsockname()[1]])
+        self.assertEqual(len(self.launches()), 4)
+        self.assertEqual(out.getvalue().count('starting it again'), 1)    # (the first Vm's retry only)
 
     # -- QEMU itself --------------------------------------------------------------------------------------------------
     @unittest.skipUnless(shutil.which('qemu-system-i386'), 'qemu-system-i386 is not installed')
@@ -275,9 +303,9 @@ class Ports(unittest.TestCase):
         """QEMU's own words for a taken port are among the ones the harness looks for (PORT_TAKEN)"""
         tcp, udp = hold(), hold(socket.SOCK_DGRAM)
         self.held += [tcp, udp]
-        for netdev in ('user,id=n0,hostfwd=tcp:127.0.0.1:%d-:23' % tcp.getsockname()[1],
-                       'dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,remote.type=inet,'
-                       'remote.host=127.0.0.1,remote.port=9' % udp.getsockname()[1]):
+        for netdev, port in (('user,id=n0,hostfwd=tcp:127.0.0.1:%d-:23' % tcp.getsockname()[1], tcp.getsockname()[1]),
+                             ('dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,remote.type=inet,'
+                              'remote.host=127.0.0.1,remote.port=9' % udp.getsockname()[1], udp.getsockname()[1])):
             try:
                 r = subprocess.run(['qemu-system-i386', '-machine', 'none', '-nodefaults', '-display', 'none', '-S',
                                     '-netdev', netdev], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -289,6 +317,7 @@ class Ports(unittest.TestCase):
                 continue                            # a QEMU without this backend
             self.assertNotEqual(r.returncode, 0, text)
             self.assertTrue(self.qr.port_taken(text), text)
+            self.assertEqual(self.qr.taken_ports(text), [port], text)     # (10/19/26, B78: the port read from it)
 
 
 if __name__ == '__main__':

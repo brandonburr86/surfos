@@ -354,7 +354,8 @@ class Vm:
                 if serial else ['-serial', 'none'])
         # 10/18/26 (round fs-fix-11): forwarded ports are written {port:NAME} in extra and picked afresh for each try:
         # QEMU binds them, and one found free may be taken by another program before it does (tools/qemu-run.py's
-        # pick_ports(), port_taken(), PORT_TRIES); any other failure to start stays fatal
+        # pick_ports(), port_taken(), PORT_TRIES); any other failure to start stays fatal. 10/19/26 (audit B78): and so
+        # does a port the caller wrote itself, taken: tried again only when QEMU names a picked one
         qr = load_smoke_harness()
         self.ports = {}
         for attempt in range(1, qr.PORT_TRIES + 1):
@@ -366,7 +367,7 @@ class Vm:
                 self.mon = Monitor(self.mon_path, self.proc)
             except RuntimeError:
                 out = self.proc.stdout.read().decode(errors='replace') if self.proc.poll() is not None else ''
-                if attempt < qr.PORT_TRIES and ports and qr.port_taken(out):
+                if attempt < qr.PORT_TRIES and qr.picked_port_taken(out, set(ports.values())):
                     qr.retry_note(attempt, out)
                     self.proc.stdout.close()
                     for p in (self.mon_path, ser_path):

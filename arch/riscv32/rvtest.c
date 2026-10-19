@@ -558,19 +558,23 @@ static void test_event_fn(void) {
 /* 10/18/26 (audit B73): a kernel thread killed while it holds a file of the volume it opened (here waiting for a lock of
    the test's own) was killed at once, and the file was left open for good. The file counts for the kill now
    (surf_task.fs_refs, fs/vfs.c): the kill comes once the thread has closed it, and the fault policy's predicate does not
-   count it (task_in_fs(): no lock is held). The unlink after it finds the file closed */
+   count it (task_in_fs(): no lock is held). The unlink after it finds the file closed. 10/19/26 (audit B76): and the
+   kill does not come in the 60 ms of clean-up after the close, where the first look after the thread let go put it */
 static mutex_t vh_lock = MUTEX_INIT("rvtest-vh");
-static volatile int vh_ready;
+static volatile int vh_ready, vh_cleaned;
 static volatile u_long vh_closed;
 
 static void vh_file(void *arg) {
     struct file *f;
+    u_long t0;
     if(vfs_open((const char *)arg, O_RDONLY, &f) != 0) return;
     vh_ready = 1;
     mutex_lock(&vh_lock);
     mutex_unlock(&vh_lock);
     vh_closed = uptime_ms();
     vfs_close(f);
+    for(t0 = uptime_ms(); uptime_ms() - t0 < 60; ) ;     /* (10/19/26, B76) its clean-up: nothing counted */
+    vh_cleaned = 1;
 }
 
 static void test_vfs_hold(const char *path) {
@@ -578,7 +582,7 @@ static void test_vfs_hold(const char *path) {
     u_long pid, late = 0;
     int st, waited;
     bool counted = false, put_off = false;
-    vh_ready = 0;
+    vh_ready = vh_cleaned = 0;
     vh_closed = 0;
     mutex_lock(&vh_lock);
     t = kthread_create("vhfile", vh_file, (void *)path, PL_NORMAL, 0);
@@ -596,11 +600,12 @@ static void test_vfs_hold(const char *path) {
         task_wait(pid, &st);
         late = uptime_ms() - vh_closed;
     } else if(t && !vh_ready) task_wait(pid, &st);
-    if(put_off) printf("        (its file counted for the kill: %s; killed %lu ms after it closed it)\n",
-                       counted ? "yes" : "NO", late);
+    if(put_off) printf("        (its file counted for the kill: %s; ended %lu ms after it closed it, its clean-up "
+                       "%s)\n", counted ? "yes" : "NO", late, vh_cleaned ? "done" : "CUT SHORT");
     else printf("        (its file counted for the kill: %s; killed AT ONCE)\n", counted ? "yes" : "NO");
     check(counted && put_off && vh_closed && late < 250, "B73: a kernel thread holding a file of the volume, killed "
           "while it waits for another lock, is killed once it has closed the file");
+    check(put_off && vh_cleaned, "B76: and the kill does not come in its clean-up after the close: it ends by itself");
 }
 
 static void test_fat(void) {
