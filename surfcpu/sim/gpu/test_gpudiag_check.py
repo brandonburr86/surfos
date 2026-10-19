@@ -25,6 +25,9 @@ scenes, 84 checks for a first run and 83 for a rerun:
     runs, or before the first one when the console opened inside a FAIL line, or a FAIL line whose
     spaces were lost) fails; a capture that ends inside the echo line after a whole run (as uart.py
     capture can stop) passes, and one whose last line is not the echo line's start fails;
+  - the build: with --build-id, or --manifest (its build_id and source_dirty), a run of another build
+    fails, and so do a dirty banner or bitstream line where the build was clean, and a capture whose
+    whole runs show no build at all;
   - --must-fail passes only a failing run that says what it must.
 Exit 0 when all pass.
 """
@@ -105,7 +108,14 @@ def ending(text, k):
     return text[:i + k]
 
 
-def expect(name, transcript, want, *extra):
+def manifest(build_id="12345678", dirty="false"):
+    """the lines of tools/fpga-build.sh's manifest.txt that gpudiag_check.py reads"""
+    return ('# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n'
+            'design = "surfcpu_arty_a7_gpudiag"\nsource_dirty = %s\nbuild_id = "%s"\nresult = "pass"\n'
+            % (dirty, build_id))
+
+
+def expect(name, transcript, want, *extra, man=None):
     global failures, checks
     checks += 1
     with tempfile.TemporaryDirectory() as d:
@@ -114,6 +124,10 @@ def expect(name, transcript, want, *extra):
             f.write(transcript.encode("latin-1"))
         with open(h, "w") as f:
             f.write(HEADER)
+        if man is not None:
+            with open(os.path.join(d, "manifest.txt"), "w") as f:
+                f.write(man)
+            extra = extra + ("--manifest", os.path.join(d, "manifest.txt"))
         r = subprocess.run([sys.executable, CHECK, "--uart", u, "--frames", "-", "--expect", h] + list(extra),
                            capture_output=True, text=True)
     got = r.returncode == 0
@@ -201,6 +215,28 @@ expect("a raw log ending inside the echo line of a rerun after a first run",
 expect("a capture ending in a line that is not the echo line's start", run() + "\nUART echo! typ", False)
 expect("the echo line's start, then more", run() + "\nUART ec\nidentity ok\n", False)
 expect("the echo line's start after a failed run", ending(run(crcs=BAD) + ECHO, 6), False)
+# the build: --build-id, --manifest
+expect("--build-id: the run's build", run() + ECHO, True, "--build-id", "12345678")
+expect("B1: --build-id: a run of another build", run() + ECHO, False, "--build-id", "87654321")
+expect("--build-id: the build's banner, another bitstream", run().replace("bitstream build 12345678",
+       "bitstream build 87654321") + ECHO, False, "--build-id", "12345678")
+expect("--build-id: an earlier run of another build, then the build's", run(build="87654321") + ECHO + run() + ECHO,
+       False, "--build-id", "12345678")
+expect("--build-id: a whole run that shows no build (its start lost)", "identity" + run().split("identity", 1)[1] +
+       ECHO, False, "--build-id", "12345678")
+expect("--build-id: not 8 hex digits", run() + ECHO, False, "--build-id", "1234567")
+expect("--manifest: the run's build", run() + ECHO, True, man=manifest())
+expect("--manifest: another build", run() + ECHO, False, man=manifest("87654321"))
+expect("--manifest: a dirty banner where the build was clean", run().replace("(build 12345678)",
+       "(build 12345678, dirty tree)") + ECHO, False, man=manifest())
+expect("--manifest: a dirty bitstream where the build was clean", run().replace("12345678 flags 0",
+       "12345678 flags 1") + ECHO, False, man=manifest())
+expect("--manifest: a dirty build, as its manifest says", run().replace("(build 12345678)",
+       "(build 12345678, dirty tree)").replace("12345678 flags 0", "12345678 flags 1") + ECHO, True,
+       man=manifest(dirty="true"))
+expect("--manifest without a build_id", run() + ECHO, False, man="result = \"pass\"\n")
+expect("--build-id and --manifest that disagree", run() + ECHO, False, "--build-id", "12345678",
+       man=manifest("87654321"))
 # --must-fail
 expect("--must-fail: a failing run that says why", run(skip=True), True, "--must-fail", "skipped: no engine")
 expect("--must-fail: a failing run that does not say it", run(skip=True), False, "--must-fail", "gpu.ID reads")
@@ -210,4 +246,4 @@ if failures:
     sys.exit(1)
 print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every whole run's verdict and total, runs cut short "
       "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth and fifth reviews' "
-      "cases, --must-fail)" % checks)
+      "cases, the build to test, --must-fail)" % checks)

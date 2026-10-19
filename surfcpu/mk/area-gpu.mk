@@ -17,10 +17,12 @@
 #                          each fail their test (sim/gpu/mutants.py; not part of check)
 #   make gpu-netlist-sim   the synthesized netlist of an open-flow gpudiag build (make build-fpga
 #                          FLOW=openxc7 DESIGN=surfcpu_arty_a7_gpudiag) runs gpudiag from its pins to
-#                          GPUDIAG: PASS (sim/board/netlist_sim.sh; minutes; not part of check)
+#                          GPUDIAG: PASS, showing the build its manifest names (sim/board/netlist_sim.sh;
+#                          about an hour; not part of check)
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
-#                          the pins (sim/gpu/gpudiag_check.py); SurfBoot's monitor reports features 1ff
+#                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py); SurfBoot's
+#                          monitor reports features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
@@ -217,10 +219,11 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/surfsim.txt; tail -30 $(GPU_BUILD)/soc/uart.txt; exit 1; }
 	$(Q)awk '{ print } /GPUDIAG: / { exit }' $(GPU_BUILD)/soc/uart.txt > $(GPU_BUILD)/soc/uart-first.txt
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart-first.txt --frames $(GPU_BUILD)/soc/frames.txt \
-	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt --engine-scenes $(GPU_ENGINE_SCENES)
+	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt --engine-scenes $(GPU_ENGINE_SCENES) \
+	  --build-id $(BUILD_ID_HEX)
 	@printf '  [after Ctrl-R] '
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
-	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES)
+	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES) --build-id $(BUILD_ID_HEX)
 	$(Q)grep -q 'a rerun (Ctrl-R)' $(GPU_BUILD)/soc/uart.txt || { echo "test-gpu-soc: the rerun did not say it is one"; exit 1; }
 	@# a rerun after a run that left the engine's target and clip set (gpudiag-leftover.mem), as one
 	@# abandoned inside an engine scene would: the rerun sets its own, and passes (the third review, C4)
@@ -322,4 +325,5 @@ test-gpu-mutants: build-gpu-rom
 GPU_NET_DIR = $(BUILD)/fpga/$(BOARD)/surfcpu_arty_a7_gpudiag/openxc7
 gpu-netlist-sim:
 	$(Q)NETLIST_MAX_MS=$(or $(NETLIST_MAX_MS),2500) sh sim/board/netlist_sim.sh $(GPU_NET_DIR) "GPUDIAG:" $(BOARD_NETLIST_SIM)
-	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart build/sim/board/netlist/$(BOARD)-surfcpu_arty_a7_gpudiag/uart.txt --frames -
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart build/sim/board/netlist/$(BOARD)-surfcpu_arty_a7_gpudiag/uart.txt --frames - \
+	  --manifest $(GPU_NET_DIR)/../manifest.txt

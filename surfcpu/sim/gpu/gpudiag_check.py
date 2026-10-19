@@ -2,7 +2,8 @@
 """SurfGPU: check a gpudiag capture (docs/GPU.md sections 10 and 14).
 
     gpudiag_check.py --uart CAPTURE --frames FRAMES --expect gpuscenes_expect.h [--log LOG]
-                     [--engine-scenes N] [--accept-rerun] [--must-fail REGEX]
+                     [--build-id HHHHHHHH | --manifest MANIFEST] [--engine-scenes N] [--accept-rerun]
+                     [--must-fail REGEX]
 
 CAPTURE is what the UART carried: surfsim --transcript, a board's raw log (make uart-console
 LOG=<file>, which appends to the file), or tools/uart.py capture's lines, whose time stamps
@@ -31,7 +32,10 @@ only when:
     rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
     must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
     FRAME_CRC is the picture that left the chip);
-  - every run comes from one build (an appended log that still holds an older build's runs fails);
+  - every run comes from one build (an appended log that still holds an older build's runs fails),
+    and with --build-id (or --manifest, tools/fpga-build.sh's manifest.txt of the bitstream tested,
+    for its build_id and source_dirty) from that one: no run's banner or bitstream line names
+    another, nor a tree with uncommitted changes when that build's was clean, and a whole run shows it;
   - one complete run at least is a first run: a rerun does not check the GFX_ values a reset
     leaves, so it is not a full board test; --accept-rerun accepts a capture of reruns only.
 --engine-scenes N also requires that the last complete run passed N scenes that needed the engine.
@@ -61,6 +65,8 @@ RUN_LINE = re.compile(r"(board |bitstream build |identity\s|VRAM window|video gr
 WORD = re.compile(r"[A-Za-z]{2}")
 BUILD_BANNER = re.compile(r"SurfGPU diagnostic \S+ \(build ([0-9a-f]{8})")
 BUILD_BIT = re.compile(r"bitstream build ([0-9a-f]{8}) ")
+BUILD_DIRTY = re.compile(r"SurfGPU diagnostic \S+ \(build [0-9a-f]{8}, dirty tree\)")
+BIT_FLAGS = re.compile(r"bitstream build [0-9a-f]{8} flags ([0-9a-f]+)\b")   # bit 0: DIRTY (spec/soc.toml)
 SCENE_OK = re.compile(r"^scene +(\d+): (.*?) +crc ([0-9a-f]{8}) ok")
 SCENE_FAILED = re.compile(r"^crc ([0-9a-f]{8}) +scene +(\d+): ")     # a scene with a failed check (report.c)
 CUT_SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL)\b(?! \([^)]*\))")
@@ -142,6 +148,9 @@ def main() -> int:
     ap.add_argument("--accept-rerun", action="store_true",
                     help="accept a capture whose complete runs are all reruns (not a full board test)")
     ap.add_argument("--must-fail", metavar="REGEX")
+    ap.add_argument("--build-id", metavar="HHHHHHHH", help="the build every run must show (banner, bitstream line)")
+    ap.add_argument("--manifest", help="tools/fpga-build.sh's manifest.txt of the bitstream tested: its build_id "
+                    "(and source_dirty) is the build every run must show")
     a = ap.parse_args()
 
     runs, outside = split_runs(open(a.uart, errors="replace").read())
@@ -165,6 +174,22 @@ def main() -> int:
                 nframes += 1
 
     problems = []
+    # the build to test: --build-id, or the bitstream's manifest
+    want_id, want_clean = None, False
+    if a.build_id is not None:
+        want_id = a.build_id.lower()
+        if not re.fullmatch(r"[0-9a-f]{8}", want_id):
+            problems.append("--build-id %r is not 8 hex digits (gpudiag's banner shows the commit's first 8)" % a.build_id)
+    if a.manifest:
+        man = open(a.manifest, errors="replace").read()
+        m = re.search(r'^build_id = "([0-9a-f]{8})"', man, re.M)
+        if not m:
+            problems.append("no build_id in %s (tools/fpga-build.sh's manifest.txt of the bitstream)" % a.manifest)
+        elif want_id is not None and want_id != m.group(1):
+            problems.append("--build-id %s, but %s says build_id %s" % (want_id, a.manifest, m.group(1)))
+        else:
+            want_id = m.group(1)
+        want_clean = re.search(r"^source_dirty = false$", man, re.M) is not None
     if a.expect and (first_total is None or rerun_total is None):
         problems.append("no GPUDIAG_CHECKS and GPUDIAG_RERUN_CHECKS in %s" % a.expect)
     if a.expect and not expect:
@@ -262,6 +287,19 @@ def main() -> int:
         if len(ids) > 1:
             problems.append("the runs' %s name more than one build (%s): an appended log? Capture each test into "
                             "a new file" % (what, ", ".join(ids)))
+    if want_id is not None:
+        for r in runs:
+            ids = {m.group(1) for l in r.lines for rx in (BUILD_BANNER, BUILD_BIT) for m in [rx.search(l)] if m}
+            if ids - {want_id}:
+                problems.append("%s shows build %s, not %s, the build to test: another gpudiag or bitstream"
+                                % (which(r), ", ".join(sorted(ids - {want_id})), want_id))
+            elif want_clean and (any(BUILD_DIRTY.search(l) for l in r.lines) or
+                                 any(int(m.group(1), 16) & 1 for l in r.lines for m in [BIT_FLAGS.search(l)] if m)):
+                problems.append("%s shows build %s from a tree with uncommitted changes, but the build to test "
+                                "is a clean one" % (which(r), want_id))
+        if judged and not any(BUILD_BANNER.search(l) or BUILD_BIT.search(l) for r in judged for l in r.lines):
+            problems.append("no whole run shows its build (banner or bitstream line), so none is known to be "
+                            "build %s" % want_id)
     passed = [r for r in judged if r.kind]
     if passed and not any(r.kind == "first" for r in passed) and not a.accept_rerun:
         problems.append("every complete run is a rerun (Ctrl-R, %d checks): a rerun does not check the GFX_ values a "
