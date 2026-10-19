@@ -555,6 +555,54 @@ static void test_event_fn(void) {
 
 #define FAT_VIEWS 16
 
+/* 10/18/26 (audit B73): a kernel thread killed while it holds a file of the volume it opened (here waiting for a lock of
+   the test's own) was killed at once, and the file was left open for good. The file counts for the kill now
+   (surf_task.fs_refs, fs/vfs.c): the kill comes once the thread has closed it, and the fault policy's predicate does not
+   count it (task_in_fs(): no lock is held). The unlink after it finds the file closed */
+static mutex_t vh_lock = MUTEX_INIT("rvtest-vh");
+static volatile int vh_ready;
+static volatile u_long vh_closed;
+
+static void vh_file(void *arg) {
+    struct file *f;
+    if(vfs_open((const char *)arg, O_RDONLY, &f) != 0) return;
+    vh_ready = 1;
+    mutex_lock(&vh_lock);
+    mutex_unlock(&vh_lock);
+    vh_closed = uptime_ms();
+    vfs_close(f);
+}
+
+static void test_vfs_hold(const char *path) {
+    surf_task *t;
+    u_long pid, late = 0;
+    int st, waited;
+    bool counted = false, put_off = false;
+    vh_ready = 0;
+    vh_closed = 0;
+    mutex_lock(&vh_lock);
+    t = kthread_create("vhfile", vh_file, (void *)path, PL_NORMAL, 0);
+    pid = t ? t->pid : 0;
+    for(waited = 0; t && !vh_ready && waited < 1000; waited += 5) sleep_ms(5);
+    sleep_ms(50);                                    /* (it waits for the test's lock) */
+    if(t && vh_ready) {
+        counted = t->fs_refs == 1 && !task_in_fs(t);
+        kill_task(t);
+        sleep_ms(300);
+        put_off = task_wait_opts(pid, &st, WNOHANG) == 0;   /* (still there: not killed at once) */
+    }
+    mutex_unlock(&vh_lock);
+    if(put_off) {
+        task_wait(pid, &st);
+        late = uptime_ms() - vh_closed;
+    } else if(t && !vh_ready) task_wait(pid, &st);
+    if(put_off) printf("        (its file counted for the kill: %s; killed %lu ms after it closed it)\n",
+                       counted ? "yes" : "NO", late);
+    else printf("        (its file counted for the kill: %s; killed AT ONCE)\n", counted ? "yes" : "NO");
+    check(counted && put_off && vh_closed && late < 250, "B73: a kernel thread holding a file of the volume, killed "
+          "while it waits for another lock, is killed once it has closed the file");
+}
+
 static void test_fat(void) {
     struct vfs_mount_view *views;
     struct file *f;
@@ -587,6 +635,7 @@ static void test_fat(void) {
     r = vfs_open(path, O_RDONLY, &f);
     if(r == 0) { memset(rb, 0, 10240); r = vfs_read(f, rb, 10240); vfs_close(f); }
     check(r == 10240 && !memcmp(w, rb, 10240), "read it back identically");
+    test_vfs_hold(path);                             /* 10/18/26 (audit B73) */
     check(vfs_unlink(path) == 0 && vfs_stat(path, &st) == -ENOENT, "unlink removes it");
     kfree(w);
     kfree(rb);

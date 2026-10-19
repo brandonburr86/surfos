@@ -204,9 +204,12 @@ static int holds(const surf_task *t) {
     if(t->fs_hold || bcache_holds(t)) return TASK_HOLDS_FS;
     return t->mutexes > (console_holds(t) ? 1u : 0u) ? TASK_HOLDS_LOCK : 0;
 }
-static bool in_fs(const surf_task *t) { return holds(t) != 0; }
+/* 10/18/26 (audit B73): or its call holds references to a mounted volume's vnodes (fs_refs, fs/vfs.c): killed at once
+   in one of its waits there (a volume's lock, the cache, a device) it left them behind, and the volume could not be
+   unmounted until restart. Not the fault policy's (below): that leaves no lock held */
+static bool in_fs(const surf_task *t) { return holds(t) != 0 || t->fs_refs; }
 int task_holds(const surf_task *t) { return t ? holds(t) : 0; }   /* 10/18/26 (audit B62) */
-bool task_in_fs(const surf_task *t) { return t && in_fs(t); }     /* 10/18/26 (audit B56: the fault policy) */
+bool task_in_fs(const surf_task *t) { return t && holds(t) != 0; }    /* 10/18/26 (audit B56: the fault policy) */
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -463,7 +466,8 @@ static void kill_escalate(void *arg) {
             t->intr |= TI_FSWAIT;
             snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %lu ms after its kill: killed as soon as it "
                      "lets go\n", t->name, t->pid, holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
-                     : "inside a file system or a device request", ms);
+                     : holds(t) ? "inside a file system or a device request"
+                     : "holding a volume's file or directory", ms);   /* (10/18/26, B73: fs_refs) */
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
@@ -598,8 +602,10 @@ static void reap(surf_task *t) {
     }
     ntasks--;
     irq_restore(flags);
+    fs_ref();                       /* 10/18/26 (audit B73): t's files are the waiter's now: a kill of it waits until */
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
+    fs_unref();                     /* they are closed (killed at once in between, it left the rest behind) */
     if(t->uvm) uvm_destroy(t->uvm);
     kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
