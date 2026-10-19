@@ -199,8 +199,16 @@ gpu-scenes: $(FW)/host/gpuscenes_expect
 # deleted once the binary is copied, as the soc track does.
 GPU_SIM_DEPS = $(wildcard rtl/soc/*.v rtl/soc/*.vh rtl/peripherals/*.v rtl/cpu/*.v rtl/cpu/*.vh rtl/lib/*.v) \
                rtl/generated/surfcpu_soc.vh sim/soc/surfsim/surfsim.cpp $(wildcard sim/models/*.cpp sim/models/*.h)
+# the build identity is compiled into these SoCs (sysinfo), as into surfsim: a stamp per identity
+# rebuilds them when the commit or the dirty state changes, so the bitstream line gpudiag prints
+# names the tree's build, as its banner does (test-gpu-soc's --build-id checks both)
+GPU_ID_STAMP := $(GPU_BUILD)/build-id.$(BUILD_ID_HEX).$(SURFCPU_BUILD_DIRTY).stamp
+$(GPU_ID_STAMP):
+	@mkdir -p $(GPU_BUILD)
+	@rm -f $(GPU_BUILD)/build-id.*.stamp
+	@touch $@
 
-$(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS)
+$(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS) $(GPU_ID_STAMP)
 	@mkdir -p $(BUILD)/sim/obj_surfsim_gpu
 	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(BUILD)/sim/obj_surfsim_gpu -o surfsim \
 	  $(SOC_TOP_RTL) $(VRAM_RTL) rtl/peripherals/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim_gpu.txt 2>&1 \
@@ -281,7 +289,7 @@ $(GPU_NOENG)/surf_gpu.v: rtl/peripherals/surf_gpu.v sim/gpu/noengine.py
 	@mkdir -p $(dir $@)
 	$(Q)$(PYTHON) sim/gpu/noengine.py $< $@
 
-$(BUILD)/sim/surfsim_gpu_noengine: $(GPU_SIM_DEPS) $(GPU_NOENG)/surf_gpu.v
+$(BUILD)/sim/surfsim_gpu_noengine: $(GPU_SIM_DEPS) $(GPU_NOENG)/surf_gpu.v $(GPU_ID_STAMP)
 	@mkdir -p $(GPU_NOENG)/obj
 	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(GPU_NOENG)/obj -o surfsim \
 	  $(SOC_TOP_RTL) $(VRAM_RTL) $(GPU_NOENG)/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(GPU_NOENG)/build.txt 2>&1 \
