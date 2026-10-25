@@ -2238,21 +2238,26 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   A desktop registers with `win_register()`, a descriptor of the desktop's own task, so its end, by its exit
   or its task's reap after it died, lets every window of it go (the trick of `shell/guisys_term.c`'s notes of
   10/18/26). A window lives while its program or its desktop holds it, and the second to let go frees it.
-  Programs are not killed by the desktop's end: their reads end (0) and their presents fail (EPIPE).
+  Programs are not killed by the desktop's end: their reads end (0) and their presents fail (EPIPE). A window
+  is the program's that opened it: that program's death takes it away at once, also when a child of it holds
+  the descriptor.
 * **Which desktop.** A program's window goes to the desktop of its terminal: the console where `gui`
-  registered one, or a pty that desktop's Terminal adopted (`win_adopt()`). Text mode, another console,
-  telnet's ptys and a desktop whose task is dead have none: -ENODEV, after the arguments were checked, so
-  `run wintest nodesk` in the smoke test sees EFAULT and EINVAL first, and `@telnet-win` the same in a session.
+  registered one, or a pty that desktop's Terminal adopted (`win_adopt()`), until that pty hangs up or is free
+  again (`win_pty_gone()`, from `kernel/pty.c`: the next session on it, a telnet session's say, opens none).
+  Text mode, another console, telnet's ptys and a desktop whose task is dead have none: -ENODEV, after the
+  arguments were checked, so `run wintest nodesk` in the smoke test sees EFAULT and EINVAL first, and
+  `@telnet-win` the same in a session.
 * **Pixels are copied, not shared.** No frame of the kernel is mapped into a program, and nothing in `mm/`
   changed. A window's buffer comes from the kernel heap, filled with its background before anything sees it.
   WIN_PRESENT checks the rectangle's whole span with `user_buf()` in 64-bit arithmetic and copies it in with
   interrupts on (1.75 MB for a whole window on a 1080p screen; a frame drawn meanwhile may show one torn frame,
   and the next mends it). A new size allocates a new buffer, and the old one lives while the desktop still
   draws it: a buffer counts its holders (the window, the desktop's view of it, a present copying into it).
-* **Events.** 64 are queued at most: a pointer move with the same buttons as the event queued last takes its
-  place, as a new size does the last one's; past that an event is lost and counted.
+* **Events.** 64 are queued at most: a pointer move with the same buttons as the move queued last takes its
+  place (never a press's or a release's), as a new size does the last one's; past that an event is lost and
+  counted.
 * **Budgets.** 8 windows and 8 MB of pixels per desktop, 32 windows and 32 MB in all (EAGAIN, ENOMEM), counted
-  from the buffers alive, the desktop's views too; a buffer no larger than the desktop's largest content area
+  from the buffers alive, the desktop's views too (a window its desktop let go keeps none, only its size); a buffer no larger than the desktop's largest content area
   (958x457 on a desktop of 960x540); and each window takes one of its program's 16 descriptors.
 * **Locking.** kernel/win.c takes short interrupts-off sections and no mutex; memory is allocated, filled and
   freed with interrupts on. It never calls the framebuffer, and the desktop never calls it from inside a

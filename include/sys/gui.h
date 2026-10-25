@@ -222,6 +222,10 @@ void gui_calc_key(struct gui_calc *c, int key);
 /* 10/17/26: the arrow keys belong to the model (Notepad, Files, a menu or a dialog has them),
    not to the pointer */
 bool gui_wants_arrows(const struct gui_state *g);
+/* 10/25/26 (the review): an application works without drawing every pass (a picture being read, a Hex search, a
+   Terminal's output read but not drawn, keys its session has not taken): the desktop's next pass comes a frame
+   later, not after its idle nap */
+bool gui_working(const struct gui_state *g);
 /* leave the desktop: at once, or after asking about Notepad's unsaved changes */
 void gui_request_quit(struct gui_state *g);
 /* 10/17/26 (the suite): the shell calls gui_tick() every frame (the applications read what is new: a terminal's output,

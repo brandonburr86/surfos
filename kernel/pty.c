@@ -42,6 +42,9 @@ keys) and returns how many it took, or -EAGAIN when the first does not fit; a by
 needs no room always fits (a line-mode Ctrl+C, which drops what was typed ahead; the rest of
 a cursor key's escape sequence). POLLOUT says a key fits; room appearing wakes poll()
 (kernel/tty.c).
+
+10/25/26: the hangup, and the pty's freeing, end a desktop's adoption of it (win_pty_gone(),
+kernel/win.c): the next session on the same pty opens no window where the Terminal's did.
 */
 
 #include <surfos/types.h>
@@ -53,6 +56,7 @@ a cursor key's escape sequence). POLLOUT says a key fits; room appearing wakes p
 #include <surfos/process.h>
 #include <surfos/syscall.h>
 #include <surfos/pty.h>
+#include <surfos/win.h>
 #include <surfos/poll.h>
 #include <surfos/sysimpl.h>
 #include <fs/vfs.h>
@@ -94,8 +98,9 @@ static surf_console *pty_con(struct pty *p) {
     return &conArray[NUM_CONSOLES + (p - ptys)];
 }
 
-/* free again: nobody has it, nobody is on it. Interrupts off. */
+/* free again: nobody has it, nobody is on it. Interrupts off. 10/25/26: no desktop has it adopted any more */
 static void pty_free(struct pty *p) {
+    win_pty_gone(pty_tty(p));
     p->used = 0;
     p->master = 0;
     p->started = p->ended = 0;
@@ -261,6 +266,7 @@ static void master_release(struct vnode *v) {
     p->out_len = 0;
     t->hungup = 1;                                      /* no key comes: reads end (tty.c), and a process */
     wake_up_all(&t->readers);                           /* started on it from now on is killed (task.c) */
+    win_pty_gone(t);                                    /* 10/25/26: what is left of it opens no window */
     wake_up_all(&p->room);
     if(!task_kill_tty(t)) pty_free(p);
     irq_restore(flags);

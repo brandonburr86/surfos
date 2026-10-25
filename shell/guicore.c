@@ -296,16 +296,22 @@ static void refocus(struct gui_state *g) {
     g->dirty = true;
 }
 
-void gui_open(struct gui_state *g, int app) {
+/* 10/25/26 (the review): a window in front of the others, the focus left where it is (a program's new window) */
+void gui_raise(struct gui_state *g, int id) {
     int i,j;
+    for(i=0;i<GUI_SLOTS;i++) if(g->order[i]==id) {
+        for(j=i;j<GUI_SLOTS-1;j++) g->order[j]=g->order[j+1];
+        g->order[GUI_SLOTS-1]=id; break;
+    }
+    g->dirty=true;
+}
+
+void gui_open(struct gui_state *g, int app) {
     bool was;
     if(app<0 || app>=GUI_SLOTS) return;
     if(app>=GUI_FIRST_CLIENT && !g->win[app].open) return;     /* 10/25/26: a program's slot opens only with its window */
     was = g->win[app].open;
-    for(i=0;i<GUI_SLOTS;i++) if(g->order[i]==app) {
-        for(j=i;j<GUI_SLOTS-1;j++) g->order[j]=g->order[j+1];
-        g->order[GUI_SLOTS-1]=app; break;
-    }
+    gui_raise(g, app);
     g->win[app].open=true; g->win[app].min=false; g->focus=app; g->menu=0; g->dirty=true;
     if(!was && app == GUI_FILES) files_open(g);
     if(!was && gui_app_of(app) && gui_app_of(app)->opened) gui_app_of(app)->opened(g);
@@ -719,6 +725,8 @@ void gui_finish(struct gui_state *g) {
 
 static void next_window(struct gui_state *g) {
     int i, id;
+    for(i = GUI_SLOTS - 1; i >= 0; i--)                 /* 10/25/26: a program's window waiting for the focus first */
+        if(client_waiting(g, g->order[i])) { gui_open(g, g->order[i]); return; }
     for(i = 0; i < GUI_SLOTS; i++) {                    /* the window at the back comes to the front */
         id = g->order[i];
         if(g->win[id].open && id != g->focus) { gui_open(g, id); return; }
@@ -1086,6 +1094,12 @@ bool gui_wants_arrows(const struct gui_state *g) {
             (a && (a->keys || (a->wants_arrows ? a->wants_arrows(g) : a->arrows)))));
 }
 
+/* 10/25/26 (the review): sys/gui.h */
+bool gui_working(const struct gui_state *g) {
+    return g->viewer.loading || g->hex.searching || g->term.carry_at < g->term.carry_len ||
+           g->term.pend_at < g->term.pend_len;
+}
+
 /**** keys ****/
 
 void gui_key(struct gui_state *g, int key) {
@@ -1313,6 +1327,7 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
         const struct gui_window *win=&g->win[ids[i]];
         x=6+i*(w+4);
         gd_rect(&d,x,g->height-TASK_H+3,w,TASK_H-6,g->focus==ids[i]?TEAL:win->min?0x1A3B48:INK);
+        if(client_waiting(g,ids[i])) gd_rect(&d,x,g->height-6,w,3,CORAL);   /* 10/25/26: opened without the focus */
         if(icon_of(ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
         else gd_icon(&d,x+4,g->height-TASK_H+4,icon_of(ids[i]),1);
         title_of(g,ids[i],b,sizeof(b));

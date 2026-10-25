@@ -601,11 +601,14 @@ and its title says what it was last sent.
   desktop runs on, may open windows on it. Programs on other consoles and in telnet
   sessions cannot: their window calls say ENODEV. A window appears when its program first
   draws in it, or after a quarter of a second, in front of the others, in a cascade from
-  the top left.
+  the top left, but without the focus: what you type still goes where it went (a program
+  in the background never catches the rest of a password typed in the Terminal). Its
+  taskbar button is marked until a click on the window, on that button, or Next window
+  (the Window menu) gives it the focus.
 * **The pointer and the keys.** Everything the pointer does over a program's window is
   the program's: moving over it, all three buttons, the wheel. A press in it brings the
   window to the front, and while a button is held the program follows the pointer
-  wherever it goes. While its window is in front every key is the program's, but Ctrl+G
+  wherever it goes. While its window has the focus every key is the program's, but Ctrl+G
   and Ctrl+Space, which open the menus, as in the Terminal.
 * **Moving and resizing.** Drag the title bar to move the window. A program that allows
   it can be resized from the dotted corner and maximized: it is told the new size when the

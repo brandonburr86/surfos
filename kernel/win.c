@@ -41,6 +41,13 @@ freed with interrupts on; pixels and events are copied to and from the program w
 on. Nothing here calls the framebuffer, and the desktop never calls here from inside a
 framebuffer_graphics_draw() callback. Whatever changes what a window or the desktop is ready for
 calls poll_wake().
+
+10/25/26 (the review of stages C1-C3): a pty's adoption ends with its hangup or its freeing
+(win_pty_gone(), from kernel/pty.c), so a later session on the same pty (a telnet session's)
+opens no window; a pointer move is merged only into a move, never into the press or release
+before it; a window its desktop let go keeps no pixels (its size stays, for WIN_INFO); and a
+window belongs to the program that opened it: its death takes the window away at once, also
+when a child of it holds the descriptor.
 */
 
 #include <surfos/types.h>
@@ -84,9 +91,11 @@ struct win {
     int min_w, min_h, max_w, max_h;
     u32 flags, background, serial, presents;
     bool focused;
+    int size_w, size_h;                 /* its size: buf's, and still once the buffers went at the hang-up */
     char title[WIN_TITLE_MAX];
     struct win_event ev[WIN_EVENTS];    /* a ring */
     u_int ev_first, ev_count, lost;
+    u32 buttons, buttons_before;        /* the last pointer event queued: its buttons, and those before it */
     wait_queue_t readers;
 };
 
@@ -158,12 +167,14 @@ static int room_for(const struct desk *d, u_long bytes) {
     return 0;
 }
 
-/* e into w's queue: a pointer move with the same buttons as the event queued last takes its place, and so does a
-   new size the last one's; a full queue drops it and counts it. 1 queued, 0 merged, -EAGAIN lost. Interrupts off */
+/* e into w's queue: a pointer move with the same buttons as the event queued last takes its place when that one was a
+   move too (10/25/26: never a press or a release, whose place would go), and a new size the last one's; a full queue
+   drops it and counts it. 1 queued, 0 merged, -EAGAIN lost. Interrupts off */
 static int queue_event(struct win *w, const struct win_event *e) {
     struct win_event *last = w->ev_count ? &w->ev[(w->ev_first + w->ev_count - 1) % WIN_EVENTS] : NULL;
     if(last && last->type == e->type &&
-       ((e->type == WIN_EV_POINTER && last->value == e->value) || e->type == WIN_EV_RESIZE)) {
+       ((e->type == WIN_EV_POINTER && last->value == e->value && w->buttons_before == last->value) ||
+        e->type == WIN_EV_RESIZE)) {
         last->x = e->x;
         last->y = e->y;
         last->mods = e->mods;
@@ -174,6 +185,10 @@ static int queue_event(struct win *w, const struct win_event *e) {
         return -EAGAIN;
     }
     w->ev[(w->ev_first + w->ev_count++) % WIN_EVENTS] = *e;
+    if(e->type == WIN_EV_POINTER) {
+        w->buttons_before = w->buttons;
+        w->buttons = e->value;
+    }
     return 1;
 }
 
@@ -233,21 +248,18 @@ static struct win *held_win(int h) {
     return w->used && w->held && w->desk == d && w->gen == (u_short)(h / WIN_MAX) ? w : NULL;
 }
 
-/* the window let go of by its desktop (interrupts off): hung up; free when its program let go too. The buffers to
-   free are put in dead[0] and dead[1] */
+/* the window let go of by its desktop (interrupts off): hung up, and its pixels go (10/25/26: a program that holds on
+   to it keeps no memory with it; its size stays); free when its program let go too. The buffers to free are put in
+   dead[0] and dead[1] */
 static void hang_up(struct win *w, struct winbuf **dead) {
     dead[0] = buf_put(w->view);
-    dead[1] = NULL;
-    w->view = NULL;
+    dead[1] = buf_put(w->buf);
+    w->view = w->buf = NULL;
     w->desk = NULL;
     w->held = false;
     w->hung = true;
     wake_up_all(&w->readers);
-    if(!w->prog) {
-        dead[1] = buf_put(w->buf);
-        w->buf = NULL;
-        w->used = false;
-    }
+    if(!w->prog) w->used = false;
 }
 
 /**** a program's side: the window's file ****/
@@ -399,6 +411,8 @@ int sys_winopen(const struct win_open *uo) {
         w->opened = getticks();
         w->seq = ++opened_so_far;
         w->buf = b;
+        w->size_w = wd;
+        w->size_h = ht;
         w->min_w = o.min_w;
         w->min_h = o.min_h;
         w->max_w = o.max_w;
@@ -494,6 +508,8 @@ static int set_size(struct win *w, u32 arg) {
     if(!r) {
         dead = buf_put(w->buf);
         w->buf = b;
+        w->size_w = nw;
+        w->size_h = nh;
         w->serial++;
     }
     irq_restore(flags);
@@ -541,8 +557,8 @@ static int info(struct win *w, struct win_info *u) {
     memset(&k, 0, sizeof(k));
     k.version = WIN_VERSION;
     flags = irq_save();
-    k.w = (unsigned short)w->buf->w;
-    k.h = (unsigned short)w->buf->h;
+    k.w = (unsigned short)w->size_w;                   /* buf's, or the last it had: none once hung up */
+    k.h = (unsigned short)w->size_h;
     if(w->desk) {
         k.screen_w = (unsigned short)w->desk->info.width;
         k.screen_h = (unsigned short)w->desk->info.height;
@@ -657,6 +673,14 @@ int win_adopt(int n) {
     return r;
 }
 
+/* 10/25/26 (kernel/pty.c): pty t hung up or is free again (interrupts off): no desktop has it adopted any more, so
+   that a later session on the same pty, a telnet session's say, opens no window there */
+void win_pty_gone(const struct tty *t) {
+    int i, k;
+    for(i = 0; i < WIN_DESKS; i++)
+        for(k = 0; k < DESK_PTYS; k++) if(desks[i].ptys[k] == t) desks[i].ptys[k] = NULL;
+}
+
 void win_drop(int n) {
     struct tty *pty;
     struct desk *d;
@@ -692,7 +716,8 @@ int win_accept(void) {
 }
 
 /* its state and pixels now, the pixels lent until the next update or close; -EPIPE once its program let it go or
-   is gone (dead, not reaped yet: the desktop takes the window away at once) */
+   is gone (dead, not reaped yet: the desktop takes the window away at once; a window is the program's that opened it,
+   so also when a child of it holds the descriptor) */
 int win_update(int h, struct win_state *st, struct win_view *view) {
     struct win *w;
     struct winbuf *dead = NULL;

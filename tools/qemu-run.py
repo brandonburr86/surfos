@@ -547,7 +547,9 @@ SMOKE = [
     ('run pipetest waitx', ['waitx says a child ended by itself (status 0), one was killed; WNOHANG while it runs',
                             'waitx: ECHILD, EINVAL, EFAULT', 'PIPETEST waitx PASS', 'exit status 0']),
     # 10/25/26 (windows for programs, user/bin/wintest.c): where no desktop runs, the window calls' refusals: the
-    # arguments first (EFAULT, EINVAL), then ENODEV; winctl on what is no window. @telnet-win: the same in a session
+    # arguments first (EFAULT, EINVAL), then ENODEV; winctl on what is no window. wintest pty: the same on a pty of
+    # its own, @telnet-win: in a telnet session, both with no desktop running here (nodesk checks: the refusal while
+    # a desktop runs is the guiapps scenario's, tools/gui_apps_win.py)
     ('run wintest nodesk', ['EFAULT: no description, one below the program, one where nothing is mapped',
                             'EINVAL: version 2, an unknown flag, no width, limits that leave no width, a colour',
                             'ENODEV: a good window, on a terminal that is no desktop', 'EBADF, EINVAL: winctl',
@@ -2970,8 +2972,8 @@ def telnet_port_busy_check(q):
 
 
 def telnet_win_check(q):
-    """10/25/26 (windows for programs): a telnet session opens no window: wintest nodesk in it is refused as on a
-    console where no desktop runs (a session's pty is never a desktop's)"""
+    """10/25/26 (windows for programs): wintest nodesk in a telnet session, with no desktop running: refused
+    (ENODEV) as on a console where none runs (a nodesk check; with a desktop running, tools/gui_apps_win.py)"""
     t = Telnet(q.ports['telnet'])
     try:
         ok = t.expect(TELNET_ROOT, 15)
@@ -2984,7 +2986,7 @@ def telnet_win_check(q):
             ok = t.wait_closed(10)
     finally:
         t.close()
-    return ('telnet: wintest nodesk in a session is refused (ENODEV): no window opens over telnet', ok)
+    return ('telnet, no desktop running: wintest nodesk in a session is refused (ENODEV)', ok)
 
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,

@@ -35,12 +35,15 @@ SYS_winctl (int fd, int op, void *arg): -EBADF, or -EINVAL for a descriptor that
 read(): whole events, as many as fit in the buffer (-EINVAL for less than one) and are queued;
     it waits for one (a kill or Ctrl+C cuts the wait short: -EINTR), and returns 0 once the
     desktop let the window go and everything queued was read. WIN_EVENTS are queued at most:
-    a pointer move with the same buttons as the event queued last takes its place, as a new
-    size does the last one's; past that an event is lost (WIN_INFO counts them).
+    a pointer move with the same buttons as the move queued last takes its place (never a
+    press's or a release's), as a new size does the last one's; past that an event is lost
+    (WIN_INFO counts them).
 poll() (surfos/poll.h): POLLIN when events are queued or the window was let go, POLLHUP once it
     was and everything was read, POLLOUT always (a present never waits).
-The last close of the descriptor, or the program's reap after a kill, ends the window. The
-desktop's exit, or its death, lets every window of it go; the programs are not killed for it.
+The last close of the descriptor, or the program's reap after a kill, ends the window. A window
+is the program's that opened it: that program's death takes it away at once, also when a child
+of it holds the descriptor. The desktop's exit, or its death, lets every window of it go (and
+their pixels); the programs are not killed for it.
 
 The events (struct win_event): a key as it was typed (value: the byte, or WIN_KEY_* for the
 keys that are no bytes); the pointer over the window's content, and anywhere while a button
@@ -123,7 +126,8 @@ struct win_view { const u32 *pixels; int w, h; };
    task (its close, or the task's reap, is the desktop's end: every window is let go); -EBUSY when that console
    has one, -EAGAIN past WIN_DESKS, -ENODEV without a console. win_unregister: that descriptor closed. win_adopt:
    the programs on pty number pty (the Terminal's) may open windows on it too (-EINVAL for no pty, -ENOSPC past
-   4, -ENODEV for a task without a desktop); win_drop: no longer. win_accept,
+   4, -ENODEV for a task without a desktop); win_drop: no longer. win_pty_gone (kernel/pty.c, interrupts off):
+   pty t hung up or is free, adopted by no desktop any more (10/25/26). win_accept,
    win_update, win_event, win_close: as struct gui_sys's (sys/gui_sys.h); -EINVAL for a handle that is not one of
    the calling task's desktop's. */
 #define WIN_DESKS 4
@@ -132,6 +136,8 @@ int win_register(const struct win_desk *desk);
 void win_unregister(int fd);
 int win_adopt(int pty);
 void win_drop(int pty);
+struct tty;
+void win_pty_gone(const struct tty *t);
 int win_accept(void);
 int win_update(int h, struct win_state *st, struct win_view *view);
 int win_event(int h, const struct win_event *e);

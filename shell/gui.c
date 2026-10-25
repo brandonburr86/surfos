@@ -23,6 +23,13 @@ measured with the TSC); and a 32-bit framebuffer gets its rows expanded once and
 with its logical size, the largest content a window may have and its scale, and lets the
 registration go after gui_finish(); the registration is a descriptor of this task, so a desktop
 that dies lets them go when it is reaped.
+10/25/26 (the review of C1-C3): the pace. A pass with work (a frame drawn, a button held, an
+escape's end awaited, keys left past a pass's 32, an application at work that draws nothing every
+pass: gui_working()) is followed by the next a frame after it began (FRAME_MS), slept out whatever
+wakes meanwhile. An idle pass naps until something wakes it or 100 ms pass, but a pass woken
+within a frame of the one before waits out a frame first: wakes are the whole system's (a pipe, a
+TCP segment), so a flood of them gets two passes a frame, not one each. While another console has
+the screen the desktop looks for its own every frame (a switch wakes nobody).
 */
 #include <stdio.h>
 #include <string.h>
@@ -290,12 +297,14 @@ void gui_frame_info(void) {
         printf("      the last: composing %s, presenting %s; the slowest: %s, %s\n",a,b,c,e);
     }
 }
-/* 10/25/26: how long the desktop may sleep when nothing wakes it: a frame's time while something moves or works
-   (a frame was drawn: a picture being read, a terminal's flood; a button held: a drag that scrolls; an escape
-   sequence's end to wait for), 100 ms otherwise (the clocks, the applications' readings) */
-static u_long nap(const struct gui_state *g,bool drew,int esc,unsigned keys_down) {
-    return drew || esc || keys_down || g->buttons ? 16 : 100;
+/* 10/25/26 (the review): a pass with work, followed by the next a frame after it began: a frame drawn (a picture
+   being read, a terminal's flood), a button held (a drag that scrolls), an escape sequence's end to wait for, keys
+   left past a pass's 32, or an application at work that draws nothing every pass (gui_working()) */
+#define FRAME_MS 16
+static bool busy(const struct gui_state *g,bool drew,int esc,unsigned keys_down,bool keys_left) {
+    return drew || esc || keys_down || keys_left || g->buttons || gui_working(g);
 }
+static u32 ms_now(void) { return (u32)getticks()*(1000/HZ); }
 /* 10/17/26: the taskbar's clock, from the CMOS clock; and the whole date and time, for the suite's Clock */
 static void clock_tick(struct gui_state *g) {
     time_t t;
@@ -328,7 +337,7 @@ int cmd_gui(int argc,char **argv) {
     struct frame_clock fc;                              /* 10/25/26: the TSC's rate, for the frame times */
     struct win_desk desk;                               /* 10/25/26: what programs' windows may be here */
     int oldraw,result=CMD_OK,esc=0,number=0,reg;
-    u32 esc_at=0,clock_at;
+    u32 esc_at=0,clock_at,pass_ms=0,last_ms;
     unsigned keys_down=0;
     if(argc!=1) { printf("    usage: gui\n"); return CMD_USAGE; }
     printf("    SurfOS desktop: Ctrl+Q returns to the shell; Ctrl+E Notepad, Ctrl+B Files\n");
@@ -373,7 +382,9 @@ int cmd_gui(int argc,char **argv) {
         int n,key,oldx=g->x,oldy=g->y,drawn=0;
         unsigned devices;
         u_long gen=poll_generation();                   /* 10/25/26: before looking: whatever comes later ends the nap */
+        bool keys_left;
         u64 t0,t1;
+        last_ms=pass_ms; pass_ms=ms_now();              /* 10/25/26 (the review): this pass's start, and the last's */
         frame_calibrate(&fc);
         g->now=(u32)getticks()*(1000/HZ);
         if((u32)(getticks()-clock_at)>=HZ) { clock_tick(g); clock_at=getticks(); }
@@ -387,7 +398,7 @@ int cmd_gui(int argc,char **argv) {
                 continue;
             }
             gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while the desktop sleeps */
-            if(poll_sleep(gen,100)) break;              /* 10/25/26: was sleep_intr(16) */
+            if(sleep_intr(FRAME_MS)) break;             /* 10/25/26 (the review): a switch wakes nobody */
             continue;
         }
         for(n=0;n<POINTER_QUEUE && pointer_next(&e);n++) gui_pointer(g,&e);
@@ -403,6 +414,7 @@ int cmd_gui(int argc,char **argv) {
             if(esc) { gui_key(g,27); esc=0; }
             if(key==27) { esc=1; esc_at=getticks(); } else input_key(g,key,&keys_down);
         }
+        keys_left=n==32;                                /* 10/25/26: the rest in the next pass, a frame on */
         if(esc && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) gui_key(g,27); esc=0; }
         gui_kernel_fs_idle(g->fs);                      /* 10/18/26: the frame's reads are done (the tick, the input) */
         if(g->quit) break;
@@ -422,7 +434,12 @@ int cmd_gui(int argc,char **argv) {
             if(!present(&d,oldx,oldy,12,16)) continue;
             if(framebuffer_graphics_draw(pointer_paint,&d)<0) continue;
         }
-        if(poll_sleep(gen,nap(g,drawn>0,esc,keys_down))) break;    /* 10/25/26: was sleep_intr(16) */
+        if(busy(g,drawn>0,esc,keys_down,keys_left)) {   /* 10/25/26 (the review): the next pass a frame after this one */
+            n=(int)(ms_now()-pass_ms);
+            if(n<FRAME_MS && sleep_intr(FRAME_MS-n)) break;
+        } else if(pass_ms-last_ms<FRAME_MS) {           /* woken within a frame of the last pass: a frame first */
+            if(sleep_intr(FRAME_MS)) break;
+        } else if(poll_sleep(gen,100)) break;
     }
     gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
     if(reg>=0) win_unregister(reg);                     /* 10/25/26: every program's window let go */

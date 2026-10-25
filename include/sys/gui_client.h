@@ -8,7 +8,8 @@ docs/superpowers/plans/2026-10-25-app-windows.md): GUI_CLIENTS slots after the f
 window numbers from GUI_FIRST_CLIENT on (shell/guiclient.c). A slot holds the system's handle
 (struct gui_sys's win_* calls), the window's state and pixels as its last update gave them, and
 what the desktop last told its program: the buttons and where the pointer was, the focus, the
-size it asked for, and whether the close button was pressed.
+size it asked for, and whether the close button was pressed. 10/25/26 (the review): whether it
+waits for the focus it opened without.
 */
 #ifndef _SYS_GUI_CLIENT_H
 #define _SYS_GUI_CLIENT_H
@@ -26,6 +27,8 @@ struct gui_client {
     bool asked;                         /* a RESIZE to sent_w x sent_h waits for the program's image */
     int sent_w, sent_h;
     bool closing;                       /* CLOSE was sent: the close button asks to end the program */
+    bool waiting;                       /* 10/25/26: opened without the focus; its taskbar button is marked until
+                                           it has it */
 };
 
 struct gui_clients {

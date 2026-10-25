@@ -7,7 +7,10 @@
    buttons, the wheel; one RESIZE per corner drag, maximizing and restoring, a program's limits; keys and the menus'
    two; focus; close, "End the program?" with Cancel first and End, a refused kill; a window whose program has gone;
    a ninth window waiting for a slot; leaving the desktop; and 8 programs' windows with every fixed window inside
-   guard pixels at 640x400, 960x540 and 1280x800. */
+   guard pixels at 640x400, 960x540 and 1280x800.
+   10/25/26 (the review of C1-C3): a new window comes in front without the focus, which stays where it was (keys
+   typed into Notepad stay Notepad's), its taskbar button marked until a click on it, on that button or Next window
+   gives it the focus; gui_working() for the desktop's pace. */
 #include "gui_fake.h"
 
 static struct gui_state g;
@@ -53,11 +56,13 @@ static int win_id(int i) {
 static int cx(int id) { return g.win[id].x + 1; }
 static int cy(int id) { return g.win[id].y + TITLE_H; }
 
-/* a fake window that has presented in color, on the desktop */
+/* a fake window that has presented in color, on the desktop, and given the focus as a click on it would (10/25/26:
+   a new window opens without it) */
 static int shown(int w, int h, u32 flags, const char *title, int pid, u32 color) {
     int i = fake_win_open(w, h, flags, 0x203040, title, pid);
     fake_win_present(i, color);
     tick();
+    gui_open(&g, win_id(i));
     return i;
 }
 
@@ -99,7 +104,8 @@ static void test_appear(void) {
     tick();
     id = win_id(a);
     CHECK(client_count(&g) == 1 && id == GUI_FIRST_CLIENT);
-    CHECK(g.win[id].open && !g.win[id].min && g.focus == id && g.order[GUI_SLOTS - 1] == id);
+    CHECK(g.win[id].open && !g.win[id].min && g.order[GUI_SLOTS - 1] == id);   /* in front, */
+    CHECK(g.focus != id && client_waiting(&g, id));     /* 10/25/26: without the focus, its taskbar button marked */
     CHECK(g.win[id].w == 202 && g.win[id].h == 100 + TITLE_H + 1);
     draw(960, 540);
     CHECK(fake_guards(960, 540));
@@ -108,8 +114,14 @@ static void test_appear(void) {
     CHECK(fake_pixel(960, cx(id) + 200, cy(id) + 50) == INK);    /* the border just after its pixels */
     CHECK(shows(960, g.win[id].x + 30, g.win[id].y + 6, "Demo", PAPER));
     CHECK(shows(960, 6 + 1 * (156 + 4) + 24, 540 - TASK_H + 5, "Demo", FOAM));   /* the taskbar's second button */
+    CHECK(fake_pixel(960, 6 + 1 * (156 + 4) + 80, 540 - 5) == CORAL);            /* and its mark */
     tick();
-    CHECK(count(a, WIN_EV_FOCUS) == 1 && last(a, WIN_EV_FOCUS)->value == 1);
+    CHECK(count(a, WIN_EV_FOCUS) == 0);
+    click(g.win[id].x + 80, g.win[id].y + 14);          /* a click on its title bar: the focus */
+    tick();
+    CHECK(g.focus == id && !client_waiting(&g, id) && count(a, WIN_EV_FOCUS) == 1 && last(a, WIN_EV_FOCUS)->value == 1);
+    draw(960, 540);
+    CHECK(fake_pixel(960, 6 + 1 * (156 + 4) + 80, 540 - 5) != CORAL);
     /* a new present draws the desktop again */
     g.dirty = false;
     tick();
@@ -246,7 +258,8 @@ static void test_grab(void) {
     /* a window that appears while a menu is open leaves the menu open */
     gui_key(&g, 7);
     CHECK(g.menu == 1);
-    shown(80, 60, 0, "Late", 43, 0x123456);
+    fake_win_present(fake_win_open(80, 60, 0, 0x203040, "Late", 43), 0x123456);
+    tick();
     CHECK(g.menu == 1 && client_count(&g) == 3);
     gui_key(&g, 27);
 }
@@ -451,6 +464,63 @@ static void test_focus(void) {
     CHECK(g.focus == id && count(a, WIN_EV_FOCUS) == 3 && last(a, WIN_EV_FOCUS)->value == 1);
 }
 
+/* 10/25/26 (the review, a security finding): a program's new window never takes the focus, so keys typed into
+   another window (a password at a hidden prompt, in the Terminal's case) stay there; its taskbar button is marked,
+   and a click on that button, or Next window, gives it the focus */
+static int task_x(int id) {
+    int ids[GUI_SLOTS], n = 0, i, w;
+    for(i = 0; i < GUI_SLOTS; i++) if(g.win[i].open) ids[n++] = i;
+    w = (g.width - 96) / n - 4;
+    if(w > 156) w = 156;
+    for(i = 0; i < n && ids[i] != id; i++) ;
+    return 6 + i * (w + 4) + w / 2;
+}
+
+static void test_focus_kept(void) {
+    int a, b, ida, idb;
+    fake_desktop(&g, 960, 540);
+    gui_open(&g, GUI_NOTEPAD);
+    fake_type(&g, "sec");
+    a = fake_win_open(200, 100, 0, 0x102030, "Late", 41);
+    fake_win_present(a, 0xC0FFEE);
+    tick();
+    ida = win_id(a);
+    CHECK(ida >= 0 && g.order[GUI_SLOTS - 1] == ida && g.focus == GUI_NOTEPAD && client_waiting(&g, ida));
+    fake_type(&g, "ret");                               /* the keys stay Notepad's */
+    tick();
+    CHECK(count(a, WIN_EV_KEY) == 0 && count(a, WIN_EV_FOCUS) == 0 && g.note.len == 6);
+    CHECK(!client_keys(&g));
+    click(task_x(ida), g.height - TASK_H / 2);          /* its taskbar button: the focus, and the mark goes */
+    tick();
+    CHECK(g.focus == ida && !client_waiting(&g, ida) && count(a, WIN_EV_FOCUS) == 1);
+    fake_type(&g, "x");
+    CHECK(count(a, WIN_EV_KEY) == 1 && g.note.len == 6);
+    gui_open(&g, GUI_NOTEPAD);                          /* a second one: Next window gives it the focus first */
+    b = fake_win_open(100, 50, 0, 0x102030, "Later", 42);
+    fake_win_present(b, 0x00FF00);
+    tick();
+    idb = win_id(b);
+    CHECK(g.focus == GUI_NOTEPAD && client_waiting(&g, idb) && !client_waiting(&g, ida));
+    gui_act(&g, ACT_NEXT_WINDOW);
+    tick();
+    CHECK(g.focus == idb && !client_waiting(&g, idb) && count(b, WIN_EV_FOCUS) == 1);
+    /* the desktop's pace: an application at work that draws nothing every pass */
+    CHECK(!gui_working(&g));
+    g.viewer.loading = true;
+    CHECK(gui_working(&g));
+    g.viewer.loading = false;
+    g.hex.searching = true;
+    CHECK(gui_working(&g));
+    g.hex.searching = false;
+    g.term.carry_len = 5;
+    CHECK(gui_working(&g));
+    g.term.carry_len = 0;
+    g.term.pend_len = 2;
+    CHECK(gui_working(&g));
+    g.term.pend_len = 0;
+    CHECK(!gui_working(&g));
+}
+
 static void test_close(void) {
     int a, b, id, n;
     fake_desktop(&g, 960, 540);
@@ -530,7 +600,8 @@ static void test_ninth(void) {
     for(k = 0; k < 8; k++) CHECK(win_id(w[k]) == GUI_FIRST_CLIENT + k);
     fake_win_end(w[3]);                                 /* a slot comes free: the ninth takes it */
     tick();
-    CHECK(client_count(&g) == GUI_CLIENTS && win_id(w[8]) == GUI_FIRST_CLIENT + 3 && g.focus == win_id(w[8]));
+    CHECK(client_count(&g) == GUI_CLIENTS && win_id(w[8]) == GUI_FIRST_CLIENT + 3);
+    CHECK(g.order[GUI_SLOTS - 1] == win_id(w[8]) && client_waiting(&g, win_id(w[8])));     /* in front, no focus */
     CHECK(g.win[win_id(w[8])].w == 182);
 }
 
@@ -633,6 +704,7 @@ int main(void) {
     test_limits();
     test_keys();
     test_focus();
+    test_focus_kept();
     test_close();
     test_gone();
     test_ninth();

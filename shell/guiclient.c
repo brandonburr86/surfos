@@ -12,7 +12,10 @@ Every frame (client_tick(), from gui_tick()) each window is read again: its titl
 its pixels and the pixels themselves, lent until the next read (a new serial draws the desktop
 again); one whose program has gone is let go and shut. Then windows that are ready (their
 program presented, or 250 ms passed since it opened them) come into the free slots, in front,
-opening in a cascade. A window's frame follows its pixels: a pixel of border and the title bar
+opening in a cascade. 10/25/26 (the review): in front without the focus, which stays where it
+was, so that a program in the background never takes keys typed into another window (the rest
+of a password at a hidden prompt); its taskbar button is marked until a click on it, on its
+taskbar button, or Next window gives it the focus. A window's frame follows its pixels: a pixel of border and the title bar
 around them, never narrower than the title bar needs. A frame given another size, by its corner
 or by maximizing, is the program's to answer: once the corner is let go its program is told the
 new content size (one RESIZE, the Terminal's rule), and until it presents pixels of that size
@@ -68,6 +71,12 @@ const struct gui_client *client_at(const struct gui_state *g, int id) {
 
 struct gui_client *client_of(struct gui_state *g, int id) {
     return (struct gui_client *)client_at(g, id);
+}
+
+/* 10/25/26: opened without the focus, and not given it yet: its taskbar button is marked */
+bool client_waiting(const struct gui_state *g, int id) {
+    const struct gui_client *c = client_at(g, id);
+    return c && c->waiting && g->focus != id;
 }
 
 int client_count(const struct gui_state *g) {
@@ -192,13 +201,15 @@ static void update(struct gui_state *g, int id) {
         c->sent_h = ch;
     }
     focus = g->focus == id && !win->min;
+    if(focus) c->waiting = false;                       /* 10/25/26: it has it now */
     if(focus != c->focused) {
         c->focused = focus;
         send(g, c, WIN_EV_FOCUS, 0, 0, focus);
     }
 }
 
-/* windows that are ready come into the free slots, in front, in a cascade from the top left */
+/* windows that are ready come into the free slots, in front, in a cascade from the top left; 10/25/26: without the
+   focus (their taskbar buttons marked) */
 static void accept(struct gui_state *g) {
     struct gui_client *c;
     struct gui_window *win;
@@ -225,7 +236,8 @@ static void accept(struct gui_state *g) {
         fit(g, id, c->st.w, c->st.h);
         win->open = true;                               /* gui_open() opens no closed slot of a program's */
         menu = g->menu;
-        gui_open(g, id);
+        gui_raise(g, id);                               /* 10/25/26: the focus stays where it is */
+        c->waiting = true;
         g->menu = menu;                                 /* a menu open meanwhile stays open */
     }
 }

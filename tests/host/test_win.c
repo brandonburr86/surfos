@@ -10,7 +10,13 @@
    between UTF-8 characters; which desktop a terminal's programs reach), and the life cycle: a window appearing,
    events read and polled, both orders of ending, the desktop's exit and its death, the owner's death, out of memory
    at every allocation, a buffer the desktop still draws outliving a new size, stale handles. Every scenario ends
-   with nothing allocated. */
+   with nothing allocated.
+   10/25/26 (the review of C1-C3): a press or a release never takes a move's place; a pty's hangup ends its
+   adoption (win_pty_gone()); windows let go keep no pixels, so the budgets count only windows that are shown or to
+   be (WIN_ALL_BYTES stays a guard: four desktops of WIN_DESK_BYTES reach it and no more); a new size whose first
+   allocation fails. test_present needs a 32-bit build (HOSTFLAGS' -m32, as every host test of kernel code has
+   where the host can link one): present() takes the program's addresses to be below 4 GB, as they are in SurfOS,
+   and the test presents from its own memory. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -309,6 +315,28 @@ static void test_queue(void) {
     w.ev_count = 1;
     e = event(WIN_EV_KEY, 0, 0, 'z');
     CHECK(queue_event(&w, &e) == 1 && w.ev[0].value == 'z');
+    /* 10/25/26: a move after a press, or after a release, is queued: the press and the release keep their place */
+    memset(&w, 0, sizeof(w));
+    e = event(WIN_EV_POINTER, 10, 10, WIN_BUTTON_LEFT);
+    CHECK(queue_event(&w, &e) == 1);
+    e = event(WIN_EV_POINTER, 40, 12, WIN_BUTTON_LEFT); /* the same buttons, but the press is no move */
+    CHECK(queue_event(&w, &e) == 1 && w.ev_count == 2 && w.ev[0].x == 10 && w.ev[0].y == 10);
+    e = event(WIN_EV_POINTER, 50, 14, WIN_BUTTON_LEFT); /* a move after a move: merged */
+    CHECK(queue_event(&w, &e) == 0 && w.ev_count == 2 && w.ev[1].x == 50 && w.ev[1].y == 14);
+    e = event(WIN_EV_POINTER, 50, 14, 0);
+    CHECK(queue_event(&w, &e) == 1 && w.ev_count == 3);
+    e = event(WIN_EV_POINTER, 60, 20, 0);               /* the release keeps its place too */
+    CHECK(queue_event(&w, &e) == 1 && w.ev_count == 4 && w.ev[2].x == 50 && w.ev[2].value == 0);
+    e = event(WIN_EV_POINTER, 70, 25, 0);
+    CHECK(queue_event(&w, &e) == 0 && w.ev_count == 4 && w.ev[3].x == 70);
+    w.ev_first = 4;                                     /* all read: the next move is queued */
+    w.ev_count = 0;
+    e = event(WIN_EV_POINTER, 71, 25, 0);
+    CHECK(queue_event(&w, &e) == 1 && w.ev_count == 1);
+    e = event(WIN_EV_POINTER, 72, 25, 0);               /* and the one after it merged */
+    CHECK(queue_event(&w, &e) == 0 && w.ev_count == 1 && w.ev[4].x == 72);
+    e = event(WIN_EV_POINTER, 72, 25, WIN_BUTTON_LEFT); /* a press: queued */
+    CHECK(queue_event(&w, &e) == 1 && w.ev_count == 2);
 }
 
 static void test_titles(void) {
@@ -407,6 +435,17 @@ static void test_open(void) {
     win_drop(1);
     as(ptyprog);
     CHECK(sys_winopen(&o) == -ENODEV);
+    /* 10/25/26: a pty that hangs up, or is free again, is no desktop's: the next session on it (a telnet session's)
+       opens no window; what its programs opened before stays theirs */
+    as(desktop);
+    CHECK(win_adopt(1) == 0);
+    win_pty_gone(PTY(2));                               /* another pty: nothing changes */
+    as(ptyprog);
+    fd = sys_winopen(&o);
+    CHECK(fd >= 0);
+    win_pty_gone(PTY(1));
+    CHECK(sys_winopen(&o) == -ENODEV && win_of_fd(ptyprog, fd)->desk == &desks[0]);
+    CHECK(desks[0].ptys[0] == NULL);
     /* a desktop whose task is dead takes no window; one started on its console takes them */
     desktop->state = TS_DEAD;
     as(prog);
@@ -504,21 +543,24 @@ static void test_budgets(void) {
     CHECK(sys_winctl(fd, WIN_SETSIZE, (void *)(u_long)((958 << 16) | 457)) == -ENOMEM);
     CHECK(info_of(prog, fd).w == 100);
     end();
-    /* in all: windows let go by their desktop still hold their pixels while their programs keep them */
+    /* 10/25/26: windows let go by their desktop keep no pixels while their programs hold them, only their size: the
+       next desktop has its whole budget */
     begin();
     for(k = 0; k < 4; k++) {
         p[k] = task_new(100 + k, CONSOLE(1));
         for(i = 0; i < 4; i++) CHECK(open_as(p[k], 958, 457) >= 0);
         as(desktop);
         win_unregister(reg);                            /* the desktop leaves; its windows are let go */
-        CHECK(!desks[0].used && win_of_fd(p[k], 0)->hung);
+        CHECK(!desks[0].used && win_of_fd(p[k], 0)->hung && !win_of_fd(p[k], 0)->buf);
+        CHECK(info_of(p[k], 0).w == 958 && info_of(p[k], 0).h == 457 && info_of(p[k], 0).screen_w == 0);
+        as(desktop);
         reg = win_register(&desk960);                   /* and a new one starts on F1 */
         CHECK(reg >= 0);
     }
-    CHECK(bytes_of(NULL) == 16 * 958 * 457 * 4u);
-    for(i = 0; i < 3; i++) CHECK(open_as(prog, 958, 457) >= 0);
-    CHECK(open_as(prog, 958, 457) == -ENOMEM);          /* 35 MB: past WIN_ALL_BYTES, though the desktop has 5.25 */
-    CHECK(bytes_of(&desks[0]) == 3 * 958 * 457 * 4u);
+    CHECK(bytes_of(NULL) == 0);
+    for(i = 0; i < 4; i++) CHECK(open_as(prog, 958, 457) >= 0);
+    CHECK(open_as(prog, 958, 457) == -ENOMEM);          /* the desktop's own 8 MB, as for the first */
+    CHECK(bytes_of(&desks[0]) == 4 * 958 * 457 * 4u && bytes_of(NULL) == bytes_of(&desks[0]));
     CHECK(open_as(prog, 100, 100) >= 0);
     end();
     /* in all: WIN_MAX windows */
@@ -554,10 +596,12 @@ static void test_no_memory(void) {
     fd = open_as(prog, 50, 50);
     CHECK(fd >= 0);
     before = live;
-    fail_in = 2;                                        /* a new size whose pixels cannot be had: the old ones stay */
-    as(prog);
-    CHECK(sys_winctl(fd, WIN_SETSIZE, (void *)(u_long)((60 << 16) | 60)) == -ENOMEM && live == before);
-    fail_in = 0;
+    for(i = 1; i <= 2; i++) {                           /* a new size whose record (10/25/26) or pixels cannot be */
+        fail_in = i;                                    /* had: the old ones stay */
+        as(prog);
+        CHECK(sys_winctl(fd, WIN_SETSIZE, (void *)(u_long)((60 << 16) | 60)) == -ENOMEM && live == before);
+        fail_in = 0;
+    }
     k = info_of(prog, fd);
     CHECK(k.w == 50 && k.h == 50);
     as(desktop);                                        /* a registration without memory: nothing left */
@@ -573,6 +617,7 @@ static void test_no_memory(void) {
 
 /**** presents ****/
 
+/* 10/25/26: a 32-bit build's (see the top): the image's address below 4 GB, as a program's is */
 static void test_present(void) {
     static unsigned image[100 * 50];
     struct win_present p;
@@ -768,6 +813,7 @@ static void test_desktop_first(void) {
     woken = 0;
     win_close(h);                                       /* the desktop lets it go first (End, or its own end) */
     CHECK(woken == 1 && wins[h % WIN_MAX].used && win_of_fd(prog, fd)->hung);
+    CHECK(!win_of_fd(prog, fd)->buf && !win_of_fd(prog, fd)->view && live == before + 2);   /* its pixels gone */
     CHECK(pollw(prog, fd) == (POLLOUT | POLLIN));
     CHECK(readev(prog, fd, ev, sizeof(ev)) == 32);      /* what was queued, then the end */
     CHECK(pollw(prog, fd) == (POLLOUT | POLLIN | POLLHUP));
@@ -801,6 +847,7 @@ static void test_desktop_end(void) {
     CHECK(win_update(ha, &st, &view) == 0);
     win_unregister(reg);                                /* the desktop leaves: every window let go */
     CHECK(!desks[0].used && win_of_fd(prog, a)->hung && win_of_fd(prog, b)->hung && !win_of_fd(prog, a)->view);
+    CHECK(!win_of_fd(prog, a)->buf && !win_of_fd(prog, b)->buf);   /* 10/25/26: and their pixels */
     CHECK(readev(prog, a, ev, sizeof(ev)) == 0 && readev(prog, b, ev, sizeof(ev)) == 0);
     CHECK(open_as(prog, 10, 10) == -ENODEV);            /* no desktop on F1 now */
     as(prog);

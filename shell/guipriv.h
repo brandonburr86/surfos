@@ -219,7 +219,8 @@ void client_tick(struct gui_state *g);                  /* windows come, are rea
 void client_finish(struct gui_state *g);                /* the desktop closes: every window is let go */
 bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a program's (old: the buttons before) */
 void client_wheel(struct gui_state *g, int id, int rows);
-bool client_keys(const struct gui_state *g);            /* the window in front is a program's: the keys are its own */
+bool client_keys(const struct gui_state *g);            /* the focused window is a program's: the keys are its own */
+bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened without the focus, not given it yet */
 void client_key(struct gui_state *g, int key);
 void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
 void client_answer(struct gui_state *g, int slot, int button, const char *target);
@@ -293,6 +294,7 @@ void dialog_wheel(struct gui_state *g, int rows);
 void dialog_render(const struct gui_state *g, const struct gui_draw *d);
 void dialog_close(struct gui_state *g);
 void dialog_box(const struct gui_state *g, int *x, int *y, int *w, int *h);
+void gui_raise(struct gui_state *g, int id);   /* 10/25/26: in front, the focus left where it is */
 void field_set(struct gui_field *f, const char *text, bool all);
 bool field_key(struct gui_field *f, int key, const char *clip, u32 clip_len);   /* true: the key was the field's */
 void field_render(const struct gui_draw *d, const struct gui_field *f, int x, int y, int w, bool focused);

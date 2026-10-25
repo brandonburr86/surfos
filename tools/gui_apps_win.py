@@ -1,8 +1,10 @@
 """The guiapps scenario's checks of programs' windows (milestone M12, docs/superpowers/plans/2026-10-25-app-windows.md);
 the Driver is gui_apps_scenario.py's. 10/25/26 (stage C4): wintest show, typed in the Terminal, opens a window in
 front with its title and its four quadrants at 2x; a key typed reaches the program (its title says which); its close
-button sends CLOSE and the program ends, and its window goes. The checks leave the desktop as they found it (the
-window and the Terminal closed), also when one fails."""
+button sends CLOSE and the program ends, and its window goes. 10/25/26 (the review): the window comes in front
+without the focus (its title bar muted), and a key typed meanwhile stays the Terminal's; a click on its title bar gives
+it the focus. The checks leave the desktop as they found it (the window and the Terminal closed), also when one
+fails."""
 import gui_apps_term as term
 from gui_apps_scenario import PAPER, TEAL, MUTED
 
@@ -33,8 +35,16 @@ def checks(d):
         d.visible('Ctrl+T opens the Terminal, for a program with a window', d.title('Terminal'))
         d.require('the Terminal shows its prompt', term.wait_rows(d, grid, term.prompted, 30) is not None)
         d.keys('wintest show &\n')
-        d.visible('wintest show opens a window in front of the Terminal: its title and its quadrants at 2x',
-                  lambda s: titled(d, s, 'wintest') and quadrants(d, s), 'guiapps-wintest.png', timeout=20)
+        d.visible('wintest show opens a window in front of the Terminal, without the focus: its title and its '
+                  'quadrants at 2x', lambda s: titled(d, s, 'wintest', False) and quadrants(d, s), 'guiapps-wintest.png',
+                  timeout=20)
+        d.keys('z')                                 # the Terminal's still: the program hears nothing of it
+        d.check('a key typed meanwhile stays the Terminal\'s', d.vm.wait_screen(
+            lambda s: titled(d, s, 'wintest: key', False) or titled(d, s, 'wintest: key'), 2, interval=0.2) is None)
+        d.key('backspace')                          # and leaves the Terminal's line as it was
+        d.click(x + 150, y + 14)                    # its title bar: the focus
+        d.visible('a click on its title bar gives it the focus', lambda s: titled(d, s, 'wintest'))
+        d.move(900, 480)
         d.keys('a')
         d.visible('a key typed reaches the program: its title says "key 97"',
                   lambda s: titled(d, s, 'wintest: key 97'))
