@@ -1973,8 +1973,8 @@ def telnet_stalled_check(q):
         ok = a.expect(TELNET_ROOT, 15)
         if ok:
             a.send('/initrd/bin/hexdump /dev/zero &\n')
-            ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
-            m = re.search(rb'\[(\d+)\] started', a.data)
+            ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
+            m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
         stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
         while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
@@ -3073,7 +3073,7 @@ def nettest_kills_check(q):
     start = len(q.transcript)
     q.send('nettest echo 23 1 &\n')
     ok = q.expect('] started', 10) and q.expect(PROMPT, 10) and ok
-    pids = re.findall(r'\[(\d+)\] started', q.transcript[start:].decode(errors='replace'))
+    pids = re.findall(r'\] started \(pid (\d+)\)', q.transcript[start:].decode(errors='replace'))   # 10/24/26: jobs
     if ok and pids:
         q.wait(0.5)
         q.send('kill %s\n' % pids[-1])

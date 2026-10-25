@@ -50,6 +50,10 @@ undone by the end of a task.
 10/6/26: on a pseudo-terminal (a telnet session) the prompt is in its remote state,
 "≋@>" (surfos/prompt.h): the terminal is another computer's. The process list says which
 terminal this shell has (procinfo), once.
+
+10/24/26: a line that goes on with a command (more) has the continuation prompt, "… ≋> "
+(shell/prompt.c); there ^C drops the whole command, and so does ^D on an empty line, which
+does not leave the shell.
 */
 
 #include "surfsh.h"
@@ -112,6 +116,7 @@ static int width = 80;                  /* the terminal's columns */
 static int colour;                      /* prompt.color, where the console has colours */
 static char prompt[PROMPT_MAX];
 static int pcols;                       /* the columns of the prompt */
+static int continuing;                  /* 10/24/26: the line goes on with a command (the continuation prompt) */
 static int cur;                         /* the cursor: columns from the prompt's start */
 static int drawn;                       /* where the prompt and the line on the screen end, likewise */
 
@@ -177,6 +182,7 @@ static void make_prompt(void) {
     c.unicode = use_unicode();
     c.color = colour;
     c.max_depth = settings.max_depth;
+    c.continuation = continuing;
     prompt_render(&c, prompt, sizeof(prompt));
     pcols = prompt_columns(prompt);
 }
@@ -490,8 +496,9 @@ static int plain_line(char *buf, int size) {
     return n < 0 ? -1 : n;
 }
 
-int edit_line(char *buf, int size) {
+int edit_line(char *buf, int size, int more) {
     int key, last_tab = 0, result;
+    continuing = more;
     if(raw_failed || ttyctl(TTY_RAW, 1) < 0) {
         raw_failed = 1;
         return plain_line(buf, size);
@@ -528,10 +535,21 @@ int edit_line(char *buf, int size) {
                 if(pos < len) delete_range(pos, next_char(pos));
                 break;
             }
+            if(continuing) {                    /* 10/24/26: the command is dropped; the shell goes on */
+                leave_line("^D");
+                result = -3;
+                goto done;
+            }
             leave_line("exit");
             result = -1;
             goto done;
         case CTRL('c'):
+            if(continuing) {                    /* 10/24/26: the whole command is dropped */
+                leave_line("^C");
+                len = 0;
+                result = -3;
+                goto done;
+            }
             leave_line("^C");
             len = pos = too_long = 0;
             hist_pos = hist_count;

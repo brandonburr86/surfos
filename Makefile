@@ -467,6 +467,24 @@ test-edit: $(BUILD)/host/test_edit $(BUILD)/host/test_rx
 unittest: test-edit
 .PHONY: test-edit
 
+# 10/24/26: surfsh's parser, unparser and expansions, user/surfsh/*.c as they are, against the user headers with the
+# C library's names (tests/host/surfsh_bridge.c gives them what they need of the rest of surfsh, tests/host/sim_fs.c the
+# system calls)
+SURFSH_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,parse.o unparse.o expand.o util.o)
+$(BUILD)/host/surfsh/%.o: user/surfsh/%.c user/surfsh/surfsh.h tests/host/libsurf_names.h tests/host/sim_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(SIM_FLAGS) -c $< -o $@
+$(BUILD)/host/sim/surfsh_bridge.o: tests/host/surfsh_sim.h user/surfsh/surfsh.h
+$(BUILD)/host/test_surfsh: tests/host/test_surfsh.c tests/host/surfsh_sim.h $(BUILD)/host/sim/surfsh_bridge.o $(SURFSH_HOST_OBJ) \
+                           $(BUILD)/host/sim/sim_fs.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_surfsh.c $(filter %.o,$^) -o $@
+test-surfsh: $(BUILD)/host/test_surfsh
+	$(BUILD)/host/test_surfsh
+unittest: test-surfsh
+.PHONY: test-surfsh
+
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
 	@mkdir -p $(dir $@)

@@ -4,9 +4,9 @@ SurfOS shell: surfsh
 File: complete.c  Date: 10/6/26
 --------------------
 Tab completion of the word before the cursor. The line up to the cursor is read
-with the parser's rules (quotes, backslashes, ; & < >) to find that word, its
-characters and whether it names a command: the first word of a command, unless
-it follows < or >.
+with the parser's rules (quotes, backslashes, ; & | < > ( )) to find that word, its
+characters and whether it names a command: the first word of a command (also
+after a | or && and inside ( or after it), unless it follows < or >.
 
 A command name, without a /, completes against surfsh's own commands, the
 kernel's (SYS_kcmdinfo; none on a kernel without the bridge) and the programs in
@@ -56,13 +56,13 @@ static void word_at(const char *line, int pos, struct word *w) {
             else add_char(w, c);
             continue;
         }
-        if(c == ' ' || c == '\t' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>') {
+        if(c == ' ' || c == '\t' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>' || c == '(' || c == ')') {
             if(in_word) {
                 if(is_target) is_target = 0;
                 else words++;
                 in_word = 0;
             }
-            if(c == ';' || c == '&' || c == '|') words = target = 0;
+            if(c == ';' || c == '&' || c == '|' || c == '(' || c == ')') words = target = 0;
             else if(c == '<' || c == '>') target = 1;
             continue;
         }

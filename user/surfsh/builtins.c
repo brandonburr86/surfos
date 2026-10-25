@@ -6,7 +6,8 @@ File: builtins.c  Date: 10/6/26
 surfsh's own commands. They come before the kernel's commands of the same names
 (the kernel's help, echo, cd and pwd are not used). echo is one of them, so
 "echo text > file" needs nothing from the kernel. Their output can be
-redirected like a program's (run.c puts the file on descriptor 1).
+redirected like a program's (exec.c puts the file on descriptor 1), and they can
+be in a pipeline (in a new surfsh, unless they are its last stage).
 
     cd [dir]          no dir: /; "cd -": the previous directory (printed)
     pwd               the current directory
@@ -272,18 +273,28 @@ static int b_help(int argc, char **argv) {
 
     printf("\n    A line: words with blanks between them. \"double\" or 'single' quotes keep\n"
            "    blanks and the characters below in a word; a \\ keeps the next character.\n"
-           "      cmd < file     the program reads the file\n"
+           "      cmd < file     cmd reads the file (a kernel command reads the console)\n"
            "      cmd > file     what cmd prints goes into the file, which starts empty\n"
            "      cmd >> file    ... is added at the end of the file\n"
-           "      cmd &          the program runs in the background; the first prompt\n"
+           "      cmd 2> file    its error messages go there; 2>&1: where 1 goes\n"
+           "      cmd << END     cmd reads the lines that follow, up to a line END\n"
+           "      a | b | c      what a prints, b reads; what b prints, c reads\n"
+           "      a && b         b runs when a succeeded; a || b: when a failed\n"
+           "      ! a            the status turned round: 0 when a failed\n"
+           "      { a; b; }      a group: its redirections are for all of it\n"
+           "      ( a; b )       the same in a new surfsh: a cd there changes nothing here\n"
+           "      cmd &          cmd runs in the background as a job; the first prompt\n"
            "                     after it has ended says how it ended\n"
-           "      cmd1 ; cmd2    one after the other\n"
+           "      a ; b          one after the other\n"
            "      # comment      the rest of the line is not read\n"
            "      $?             the status of the command before, as a number (also in\n"
            "                     double quotes; '$?' is just the two characters)\n"
-           "    $? is the one expansion: no variables and no wildcards, * is just a star.\n"
+           "    $? is the one expansion yet: no variables and no wildcards, * is a star.\n"
+           "    A line that ends with | or && (or inside quotes, or in a group) goes on\n"
+           "    in the next one, after the prompt %s.\n"
            "    Which command runs: surfsh's own, then the kernel's, then a program in\n"
-           "    %s; a name with a / is the path of a program.\n", PROGRAM_DIR);
+           "    %s; a name with a / is the path of a program.\n", use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>",
+           PROGRAM_DIR);
     printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
            "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
            "    the history; Tab completes a command or a path, a second Tab lists the\n"
