@@ -48,7 +48,8 @@ comes out of the framebuffer.
              controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
              this host (a small page and 1 MB), the self test's network checks, a telnet
              session (telnetd on; this host reaches port 23 through a forwarded port), the web
-             server's sample site (httpd on; port 80 forwarded, 10/17/26), then the
+             server's sample site (httpd on; port 80 forwarded, 10/17/26), the file transfer
+             server (ftpd on /initrd; port 21 and a passive range forwarded, 10/24/26), then the
              adapter unplugged and plugged in again through the monitor, and finally a
              different adapter on another network (192.168.76.0/24) in its place
   usbdisk    a second emulated USB stick (a copy of the QEMU test disk: MBR + FAT16) next to the
@@ -100,10 +101,12 @@ screenshots as PNG, results.json) goes to --output-dir.
 """
 import argparse
 import collections
+import ftplib
 import http.client
 import http.server
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -1147,6 +1150,41 @@ def www_session(vm, qr, port):
             ('httpd off', off)]
 
 
+def ftp_session(vm, qr, port, pasv):
+    """10/24/26: ftpd over the adapter, as an FTP client on another computer of the laptop's network reaches it
+    (Python's ftplib; this host reaches guest port 21 and the passive range pasv..pasv+3 through n0's forwarded
+    ports): a login, the listing of the initrd, a file sent whole (its SIZE and its bytes), an upload into the initrd
+    refused (read-only); then ftpd off"""
+    ok, _ = run_cmd(vm, f'ftpd on /initrd {pasv}-{pasv + 3}', ['ftpd: serving /initrd at ftp://10.0.2.15/ (read-write)'])
+    if ok:
+        try:
+            with Draining(vm):
+                f = ftplib.FTP()
+                f.trust_server_pasv_ipv4_address = False
+                f.connect('127.0.0.1', port, timeout=30)
+                f.login()
+                names = f.nlst()
+                size = f.size('/README')
+                got = io.BytesIO()
+                f.retrbinary('RETR /README', got.write)
+                try:
+                    f.storbinary('STOR /upload.txt', io.BytesIO(b'refused\n'))
+                    refused = False
+                except ftplib.error_perm as e:
+                    refused = str(e).startswith('550 /upload.txt: Read-only file system')
+                f.quit()
+            ok = 'README' in names and 'bin' in names and size and size == len(got.getvalue()) and refused
+            if not ok:
+                print(f'      ftpd: names {names}, SIZE {size}, {len(got.getvalue())} bytes, upload refused {refused}',
+                      flush=True)
+        except (OSError, EOFError, ftplib.Error) as e:
+            print(f'      ftpd: {e!r}', flush=True)
+            ok = False
+    off, _ = run_cmd(vm, 'ftpd off', ['ftpd: stopped'])
+    return [('ftpd: a login, the initrd listed, a file whole, an upload refused (read-only), over the adapter', ok),
+            ('ftpd off', off)]
+
+
 def scenario_usbnet(args, image, firmware, outdir):
     results = []
     httpd = http.server.HTTPServer(('127.0.0.1', 0), HttpHandler)
@@ -1155,6 +1193,9 @@ def scenario_usbnet(args, image, firmware, outdir):
     qr = load_smoke_harness()
     telnet_port = qr.free_port()
     www_port = qr.free_port()
+    ftp_port, pasv = qr.free_port(), qr.free_port_range(4)     # 10/24/26: ftpd, its passive range to the same ports
+    ftp_fwd = f',hostfwd=tcp:127.0.0.1:{ftp_port}-:21' + ''.join(f',hostfwd=tcp:127.0.0.1:{p}-:{p}' for p in
+                                                                  range(pasv, pasv + 4))
     # QEMU limits injected tables to 65535 bytes. Exercise a large export here;
     # host tests cover multi-chunk tables up to 1 MiB. Noop AML has no side effects.
     large_table = bytearray(b'SSDT' + struct.pack('<I', 60 * 1024 + 37) +
@@ -1166,7 +1207,8 @@ def scenario_usbnet(args, image, firmware, outdir):
     table_file.write(large_table)
     table_file.flush()
     vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
-            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23,hostfwd=tcp:127.0.0.1:{www_port}-:80',
+            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23,hostfwd=tcp:127.0.0.1:{www_port}-:80'
+                   + ftp_fwd,
                    '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV,
                    '-acpitable', 'file=' + table_file.name])
     try:
@@ -1205,6 +1247,7 @@ def scenario_usbnet(args, image, firmware, outdir):
             results.append(('selftest, with its network checks on the USB adapter', ok))
             results += telnet_session(vm, qr, telnet_port)
             results += www_session(vm, qr, www_port)
+            results += ftp_session(vm, qr, ftp_port, pasv)
             # unplugged: the port reports it, eth0 stays but has no link
             vm.mon.cmd('device_del usbnet0')
             ok = vm.expect('unplugged (eth0, cdc-ecm', 20)

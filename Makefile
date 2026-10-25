@@ -47,6 +47,7 @@ USER_PROGS  += files         # text file browser, independent of the web browser
 USER_PROGS  += undertow      # 10/11/26: the web browser, a program of several files in user/undertow/
 USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the network, for tools/devloop.py
 USER_PROGS  += httpd         # 10/17/26: the web server, a program of several files in user/httpd/
+USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
@@ -60,6 +61,9 @@ UNDERTOW_OBJ = $(UNDERTOW_SRC:user/undertow/%.c=$(BUILD)/user/undertow/%.o)
 # httpd, the web server (10/17/26): user/httpd/, its protocol module host-tested too (tests/host/test_httpd.c)
 HTTPD_SRC    = $(wildcard user/httpd/*.c)
 HTTPD_OBJ    = $(HTTPD_SRC:user/httpd/%.c=$(BUILD)/user/httpd/%.o)
+# ftpd, the file transfer server (10/24/26): user/ftpd/, its protocol module host-tested too (tests/host/test_ftp.c)
+FTPD_SRC     = $(wildcard user/ftpd/*.c)
+FTPD_OBJ     = $(FTPD_SRC:user/ftpd/%.c=$(BUILD)/user/ftpd/%.o)
 
 
 CC         = gcc
@@ -102,7 +106,7 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
-             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d)
+             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -300,6 +304,17 @@ $(BUILD)/user/bin/httpd: $(HTTPD_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(HTTPD_OBJ) $(USER_LIB)
 
+# ftpd likewise (10/24/26)
+$(BUILD)/user/ftpd/%.o: user/ftpd/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/ftpd: $(FTPD_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FTPD_OBJ) $(USER_LIB)
+
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)$(PYTHON) tools/mkimage.py disk $@ 16 $(DISK_FILES)
@@ -486,10 +501,16 @@ $(BUILD)/host/test_httpd: tests/host/test_httpd.c user/httpd/http.c user/httpd/h
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/httpd tests/host/test_httpd.c user/httpd/http.c -o $@
 
+# 10/24/26: ftpd's FTP protocol, user/ftpd/ftp.c as it is (it makes no system calls)
+$(BUILD)/host/test_ftp: tests/host/test_ftp.c user/ftpd/ftp.c user/ftpd/ftp.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/ftpd tests/host/test_ftp.c user/ftpd/ftp.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -506,6 +527,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
 	$(BUILD)/host/test_httpd
+	$(BUILD)/host/test_ftp
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
