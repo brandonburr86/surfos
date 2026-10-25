@@ -124,8 +124,8 @@ enum {
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
 /* 10/17/26 (the suite): the answers to the suite's dialogs */
-#define ACT_DLG_LEAVE (ACT_WINDOW + GUI_WINDOWS)            /* leave the desktop although an application is busy */
-#define ACT_APP_DIALOG (ACT_WINDOW + GUI_WINDOWS + 1)       /* + 32 * (id - GUI_FIRST_APP) + the app's own number */
+#define ACT_DLG_LEAVE (ACT_WINDOW + GUI_SLOTS)              /* leave the desktop although an application is busy */
+#define ACT_APP_DIALOG (ACT_WINDOW + GUI_SLOTS + 1)         /* + 32 * (id - GUI_FIRST_APP) + the app's own number */
 
 /* what waits for Notepad's changes to be saved or dropped (gui_state.pending) */
 enum { PEND_NONE, PEND_NEW, PEND_OPEN, PEND_OPEN_PATH, PEND_QUIT, PEND_CLOSE };

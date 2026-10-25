@@ -16,6 +16,9 @@ items in Apps, their tiles, Help's lines, keys, the pointer, gui_tick() and
 gui_finish(). The desktop's own windows keep their code as it was.
 10/17/26 (the suite, track MEDIA): Sketch saves its canvas as a BMP and opens one
 (Save as BMP, Ctrl+S, and Open BMP in its File menu and its window; shell/guibmp.c).
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the window
+manager's loops run over GUI_SLOTS, the fixed windows and then the programs' slots; the
+suite's loops stop at GUI_FIRST_CLIENT, and a program's slot is opened only by its window.
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -276,7 +279,7 @@ void gui_calc_key(struct gui_calc *c, int key) {
 static void refocus(struct gui_state *g) {
     int i;
     g->focus = -1;
-    for(i = GUI_WINDOWS - 1; i >= 0; i--) {
+    for(i = GUI_SLOTS - 1; i >= 0; i--) {
         if(g->win[g->order[i]].open && !g->win[g->order[i]].min) { g->focus = g->order[i]; break; }
     }
     g->dirty = true;
@@ -285,11 +288,12 @@ static void refocus(struct gui_state *g) {
 void gui_open(struct gui_state *g, int app) {
     int i,j;
     bool was;
-    if(app<0 || app>=GUI_WINDOWS) return;
+    if(app<0 || app>=GUI_SLOTS) return;
+    if(app>=GUI_FIRST_CLIENT && !g->win[app].open) return;     /* 10/25/26: a program's slot opens only with its window */
     was = g->win[app].open;
-    for(i=0;i<GUI_WINDOWS;i++) if(g->order[i]==app) {
-        for(j=i;j<GUI_WINDOWS-1;j++) g->order[j]=g->order[j+1];
-        g->order[GUI_WINDOWS-1]=app; break;
+    for(i=0;i<GUI_SLOTS;i++) if(g->order[i]==app) {
+        for(j=i;j<GUI_SLOTS-1;j++) g->order[j]=g->order[j+1];
+        g->order[GUI_SLOTS-1]=app; break;
     }
     g->win[app].open=true; g->win[app].min=false; g->focus=app; g->menu=0; g->dirty=true;
     if(!was && app == GUI_FILES) files_open(g);
@@ -310,7 +314,7 @@ static void close_now(struct gui_state *g, int id) {
 void gui_close(struct gui_state *g, int id) {
     const struct gui_app *a;
     char why[80];
-    if(id < 0 || id >= GUI_WINDOWS || !g->win[id].open) return;
+    if(id < 0 || id >= GUI_SLOTS || !g->win[id].open) return;
     if(id == GUI_NOTEPAD && !gui_guard(g, PEND_CLOSE, NULL)) return;
     a = gui_app_of(id);
     if(a && a->busy && a->busy(g, why, sizeof(why))) {
@@ -355,7 +359,7 @@ void gui_init(struct gui_state *g, int width, int height) {
     g->focus=g->drag=g->resize=g->scroll=g->app_drag=-1; g->brush=1; g->speed=1;
     g->title_id=g->files.click_row=g->dialog.click_row=-1;
     g->x=width/2; g->y=height/2;
-    for(i=0;i<GUI_WINDOWS;i++) g->order[i]=i;
+    for(i=0;i<GUI_SLOTS;i++) g->order[i]=i;
     g->win[GUI_CALC]=(struct gui_window){width-272,50,248,300};
     g->win[GUI_SKETCH]=(struct gui_window){(width-432)/2,64,432,294};
     g->win[GUI_ABOUT]=(struct gui_window){(width-432)/2,(height-234)/2,432,234};
@@ -398,7 +402,7 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
     int count = 0, i, id;
 #define ITEM(l, k, a, e) do { it[count].label = (l); it[count].keys = (k); it[count].act = (a); it[count].on = (e); count++; } while(0)
 #define SEPARATOR() do { it[count].label = NULL; it[count].keys = ""; it[count].act = ACT_NONE; it[count].on = false; count++; } while(0)
-    for(i = 0; i < GUI_WINDOWS; i++) if(g->win[i].open) any = true;
+    for(i = 0; i < GUI_SLOTS; i++) if(g->win[i].open) any = true;
     switch(m) {
     case 1:
         ITEM("About SurfOS", "", ACT_ABOUT, true);
@@ -484,7 +488,7 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Close", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
         if(any) SEPARATOR();
         /* 10/17/26: the open windows, as many as fit above the taskbar (Next window reaches the rest) */
-        for(id = 0; id < GUI_WINDOWS && item_room(g, count); id++)
+        for(id = 0; id < GUI_SLOTS && item_room(g, count); id++)
             if(g->win[id].open) ITEM(gui_app_of(id) ? gui_app_of(id)->title : titles[id],
                                      g->focus == id ? "\x10" : g->win[id].min ? "hidden" : "", ACT_WINDOW + id, true);
         break;
@@ -657,7 +661,7 @@ void gui_proceed(struct gui_state *g) {
 void gui_request_quit(struct gui_state *g) {
     char why[80];
     int id;
-    for(id = GUI_FIRST_APP; id < GUI_WINDOWS; id++) {
+    for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++) {
         const struct gui_app *a = gui_app_of(id);
         if(!g->win[id].open || !a->busy || !a->busy(g, why, sizeof(why))) continue;
         dialog_confirm(g, ACT_DLG_LEAVE, "Leave the desktop?", why, "It ends when the desktop closes.", "Leave", NULL,
@@ -669,19 +673,19 @@ void gui_request_quit(struct gui_state *g) {
 
 void gui_tick(struct gui_state *g) {
     int id;
-    for(id = GUI_FIRST_APP; id < GUI_WINDOWS; id++)
+    for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
 }
 
 void gui_finish(struct gui_state *g) {
     int id;
-    for(id = GUI_FIRST_APP; id < GUI_WINDOWS; id++)
+    for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->closed) gui_app_of(id)->closed(g);
 }
 
 static void next_window(struct gui_state *g) {
     int i, id;
-    for(i = 0; i < GUI_WINDOWS; i++) {                  /* the window at the back comes to the front */
+    for(i = 0; i < GUI_SLOTS; i++) {                    /* the window at the back comes to the front */
         id = g->order[i];
         if(g->win[id].open && id != g->focus) { gui_open(g, id); return; }
     }
@@ -692,7 +696,7 @@ void gui_act(struct gui_state *g, int act) {
     char line[80], dir[GUI_PATH_MAX];
     bool note = g->focus == GUI_NOTEPAD && g->win[GUI_NOTEPAD].open;
     g->dirty = true;
-    if(act >= ACT_WINDOW && act < ACT_WINDOW + GUI_WINDOWS) { gui_open(g, act - ACT_WINDOW); return; }
+    if(act >= ACT_WINDOW && act < ACT_WINDOW + GUI_SLOTS) { gui_open(g, act - ACT_WINDOW); return; }
     if(act >= ACT_FILES_OPEN && act <= ACT_FILES_EJECT) { files_act(g, act); return; }
     if(act >= ACT_UNDO && act <= ACT_GOTO && edit_app(g)) {    /* 10/17/26: the focused application's Edit menu */
         if(edit_app(g)->can_edit(g, act)) edit_app(g)->edit(g, act);
@@ -836,14 +840,14 @@ static void stroke(struct gui_state *g, int x, int y) {
 /* the taskbar's buttons: the open windows, by number */
 static int task_buttons(const struct gui_state *g, int *ids, int *width) {
     int n = 0, i;
-    for(i = 0; i < GUI_WINDOWS; i++) if(g->win[i].open) ids[n++] = i;
+    for(i = 0; i < GUI_SLOTS; i++) if(g->win[i].open) ids[n++] = i;
     *width = n ? (g->width - 96) / n - 4 : 0;
     if(*width > 156) *width = 156;
     return n;
 }
 
 static void taskbar_press(struct gui_state *g) {
-    int ids[GUI_WINDOWS], n, w, i;
+    int ids[GUI_SLOTS], n, w, i;
     n = task_buttons(g, ids, &w);
     for(i = 0; i < n; i++) {
         if(!gui_inside(g->x, g->y, 6 + i * (w + 4), g->height - TASK_H + 3, w, TASK_H - 6)) continue;
@@ -923,7 +927,7 @@ static void wheel(struct gui_state *g, int dz) {
     int i, id, lines = -dz * 3;                         /* the wheel turned away from the user: up */
     struct gui_window *w;
     if(g->dialog.kind) { dialog_wheel(g, lines); return; }
-    for(i = GUI_WINDOWS - 1; i >= 0; i--) {
+    for(i = GUI_SLOTS - 1; i >= 0; i--) {
         id = g->order[i];
         w = &g->win[id];
         if(!w->open || w->min || !gui_inside(g->x, g->y, w->x, w->y, w->w, w->h)) continue;
@@ -1011,7 +1015,7 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
         return;
     }
     if(g->y>=g->height-TASK_H) { taskbar_press(g); return; }
-    for(i=GUI_WINDOWS-1;i>=0;i--) {
+    for(i=GUI_SLOTS-1;i>=0;i--) {
         id=g->order[i]; w=&g->win[id];
         if(!w->open || w->min || !gui_inside(g->x,g->y,w->x,w->y,w->w,w->h)) continue;
         gui_open(g,id); x=g->x-w->x; y=g->y-w->y;
@@ -1090,8 +1094,8 @@ void gui_key(struct gui_state *g, int key) {
     if(key==27) {                                       /* with no window open at all, back to the shell */
         if(g->focus>=0) gui_close(g,g->focus);
         else {
-            for(rows=0;rows<GUI_WINDOWS && !g->win[rows].open;rows++) ;
-            if(rows==GUI_WINDOWS) gui_request_quit(g);
+            for(rows=0;rows<GUI_SLOTS && !g->win[rows].open;rows++) ;
+            if(rows==GUI_SLOTS) gui_request_quit(g);
         }
         return;
     }
@@ -1223,7 +1227,7 @@ static void menu_render(const struct gui_state *g, const struct gui_draw *d) {
 
 void gui_render(const struct gui_state *g,const struct fb_surface *s) {
     struct gui_draw d,desk;
-    int i,x,n,w,ids[GUI_WINDOWS];
+    int i,x,n,w,ids[GUI_SLOTS];
     u32 bg=g->night?0x142638:0x245A67;
     char b[96];
     gd_init(&d,s,g->width,g->height);
@@ -1266,7 +1270,7 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
     if(!n) gd_text(&d,12,g->height-20,"Ctrl+E Notepad  Ctrl+B Files  Ctrl+K Calc  Ctrl+D Sketch  Ctrl+Q Shell",FOAM);
     if(g->clock[0]) gd_text(&d,g->width-10-(int)strlen(g->clock)*8,g->height-20,g->clock,FOAM);
     desk=gd_clip(&d,0,MENU_H,g->width,g->height-MENU_H-TASK_H);   /* windows and their shadows stay off the bars */
-    for(i=0;i<GUI_WINDOWS;i++) {
+    for(i=0;i<GUI_SLOTS;i++) {
         const struct gui_window *win=&g->win[g->order[i]];
         if(win->open && !win->min) window(g,&desk,g->order[i]);
     }

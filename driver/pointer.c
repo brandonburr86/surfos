@@ -5,9 +5,12 @@ File: pointer.c Date: 10/10/26
 --------------------
 Single-CPU producer/consumer queue, shared by native pointing devices. Drop the
 oldest event on overflow: the newest position and release always reach the GUI.
+10/25/26 (programs' windows): an event queued wakes poll() waiters, as a key does
+(kernel/tty.c), so the desktop sleeps until something happens (shell/gui.c).
 */
 #include <sys/pointer.h>
 #include <surfos/irq.h>
+#include <fs/vfs.h>
 static struct pointer_event queue[POINTER_QUEUE], state;
 static unsigned head, count, dropped, buttons[POINTER_SOURCES];
 static bool devices[POINTER_SOURCES];
@@ -15,6 +18,7 @@ static int width = 640, height = 400, speed = 1;
 static void enqueue(void) {
     if(count == POINTER_QUEUE) { head = (head + 1) % POINTER_QUEUE; count--; dropped++; }
     queue[(head + count++) % POINTER_QUEUE] = state;
+    poll_wake();                        /* 10/25/26: from interrupts too, as kernel/tty.c's keys */
 }
 static int clamp(i64 n, int limit) { return n < 0 ? 0 : n >= limit ? limit - 1 : (int)n; }
 static unsigned all_buttons(void) {

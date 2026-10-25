@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <sys/pointer.h>
-static int checks, failed;
+static int checks, failed, wakes;
 #define CHECK(x) do { checks++; if(!(x)) { failed++; printf("FAIL line %d: %s\n", __LINE__, #x); } } while(0)
+void poll_wake(void) { wakes++; }       /* 10/25/26: fs/poll.c's; each event queued wakes the desktop */
 int main(void) {
     struct pointer_event e;
-    int i;
+    int i, before;
     pointer_limits(640, 400);
     pointer_snapshot(&e); CHECK(e.x == 320 && e.y == 200);
     pointer_device(0, true); pointer_device(1, true);
@@ -28,6 +29,15 @@ int main(void) {
     CHECK(pointer_dropped() > 0);
     pointer_limits(0, -1); pointer_snapshot(&e); CHECK(e.x == 0 && e.y == 0);
     pointer_report(100, 1, 1, 0, 7); CHECK(!pointer_read(&e));
+    /* 10/25/26: an event queued wakes poll() waiters (the desktop's poll_sleep()); a report that changes nothing
+       queues none and wakes nobody */
+    pointer_limits(640, 400);
+    before = wakes;
+    pointer_report(0, 3, 0, 0, 0);
+    CHECK(wakes == before + 1 && pointer_read(&e));
+    before = wakes;
+    pointer_report(0, 0, 0, 0, 0);
+    CHECK(wakes == before && !pointer_read(&e));
     printf("pointer: %d checks, %d failures\n", checks, failed);
     return !!failed;
 }

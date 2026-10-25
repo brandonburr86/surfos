@@ -36,6 +36,11 @@ which the model calls from its handlers and from gui_tick(), never from gui_rend
 #define GUI_CHARMAP 14
 #define GUI_FIRST_APP GUI_TERMINAL
 #define GUI_WINDOWS 15
+/* 10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): after the fixed windows come
+   GUI_CLIENTS slots for programs' windows (shell/guiclient.c); win[] and order[] hold all GUI_SLOTS */
+#define GUI_CLIENTS 8
+#define GUI_FIRST_CLIENT GUI_WINDOWS
+#define GUI_SLOTS (GUI_FIRST_CLIENT + GUI_CLIENTS)
 #define GUI_CANVAS_W 400
 #define GUI_CANVAS_H 180
 /* keys that are not bytes: shell/gui.c turns the terminal's escape sequences into these */
@@ -164,8 +169,8 @@ struct gui_state {
     int x, y, last_x, last_y, brush, speed;
     unsigned buttons, devices;
     bool quit, dirty, night, drawing;
-    int order[GUI_WINDOWS];
-    struct gui_window win[GUI_WINDOWS];
+    int order[GUI_SLOTS];
+    struct gui_window win[GUI_SLOTS];
     struct gui_calc calc;
     u8 canvas[GUI_CANVAS_W * GUI_CANVAS_H];
     /* 10/17/26 */

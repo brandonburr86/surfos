@@ -15,6 +15,10 @@ and draws itself again, so Notepad's unsaved text is not lost.
 (struct gui_sys); the model gets the whole date and time each second, gui_tick()
 every frame (also while another console has the screen, so a Terminal's session
 keeps being read) and gui_finish() before the state is freed.
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the desktop sleeps until
+something happens (poll_sleep(): a key, the pointer, a terminal's output) or 100 ms pass, a frame's time
+while something moves or works; gfxinfo shows each desktop's frame times (composing and presenting,
+measured with the TSC); and a 32-bit framebuffer gets its rows expanded once and copied in order.
 */
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +29,8 @@ keeps being read) and gui_finish() before the state is freed.
 #include <surfos/tty.h>
 #include <surfos/irq.h>
 #include <surfos/console.h>
+#include <surfos/cpu.h>
+#include <fs/vfs.h>
 #include <sys/gui.h>
 #include <sys/touchpad.h>
 #include "shell.h"
@@ -32,7 +38,8 @@ keeps being read) and gui_finish() before the state is freed.
 struct display {
     struct gui_state *gui;
     u32 *pixels, *shown;        /* the frame, and what the screen shows of it (NULL: present it all) */
-    int width,height,scale,ox,oy;
+    u32 *row;                   /* 10/25/26: a row of the screen, for the 32-bit path (NULL: no such path) */
+    int width,height,scale,ox,oy,screen_w;
     int left,top,right,bottom;
     bool first, full;
 };
@@ -46,6 +53,34 @@ static void dimensions(const struct fb_surface *s,void *arg) {
     if(d->height>800) d->height=800;
     d->ox=(s->mode.width-d->width*d->scale)/2;
     d->oy=(s->mode.height-d->height*d->scale)/2;
+    d->screen_w=s->mode.width;
+}
+/* 10/25/26: a 32-bit framebuffer with 8-bit channels: the frame's rows go to it as they are (expanded and
+   converted once into d->row, then copied to each of its scale rows in order: the framebuffer is
+   write-combining), instead of a rectangle for each run of one colour */
+static bool direct(const struct fb_surface *s,const struct display *d) {
+    return d->row && s->mode.bpp==32 && s->bytespp==4 && s->mode.red_size==8 && s->mode.green_size==8 &&
+           s->mode.blue_size==8;
+}
+static inline void copy32(u32 *to,const u32 *from,u32 n) {
+    asm volatile("cld; rep movsl" : "+D"(to), "+S"(from), "+c"(n) : : "memory");
+}
+static void present_direct(const struct fb_surface *s,const struct display *d) {
+    const struct fb_mode *m=&s->mode;
+    bool same=m->red_pos==16 && m->green_pos==8 && m->blue_pos==0;     /* 0x00RRGGBB as it is */
+    u32 n=(u32)((d->right-d->left)*d->scale), c, p;
+    int x,y,k;
+    for(y=d->top;y<d->bottom;y++) {
+        const u32 *from=d->pixels+y*d->width;
+        u32 *out=d->row;
+        for(x=d->left;x<d->right;x++) {
+            c=from[x];
+            p=same ? (c&0xFFFFFF) : ((c>>16&0xFF)<<m->red_pos)|((c>>8&0xFF)<<m->green_pos)|((c&0xFF)<<m->blue_pos);
+            for(k=0;k<d->scale;k++) *out++=p;
+        }
+        for(k=0;k<d->scale;k++)
+            copy32((u32*)(s->base+(u32)(d->oy+y*d->scale+k)*m->pitch)+d->ox+d->left*d->scale,d->row,n);
+    }
 }
 static void present_rows(const struct fb_surface *s,void *arg) {
     struct display *d=arg;
@@ -57,6 +92,7 @@ static void present_rows(const struct fb_surface *s,void *arg) {
         fb_rect_rgb(s,d->ox+d->width*d->scale,d->oy,s->mode.width-(d->ox+d->width*d->scale),d->height*d->scale,0x102E3B);
         d->first=false;
     }
+    if(direct(s,d)) { present_direct(s,d); return; }
     for(y=d->top;y<d->bottom;y++) for(x=d->left;x<d->right;) {
         u32 color=d->pixels[y*d->width+x];
         start=x++;
@@ -174,6 +210,86 @@ static int sequence(int number,int final) {
     }
     return 0;
 }
+/* 10/25/26: the frame times gfxinfo shows, a record for each console's desktop (written by that desktop alone,
+   read by gfxinfo with interrupts off). The TSC's cycles are turned into microseconds at a rate measured against
+   the timer over the desktop's first 100 ms, in 32 bits (the kernel has no 64-bit division); without a TSC, or
+   before that, no times. Composing is gui_render() into RAM; presenting, the changed rows and the pointer. A
+   record whose desktop's task is gone (killed at once) is not shown. */
+struct frame_times { bool on, timed; u_long pid; int width,height,scale; u32 frames,compose_us,present_us,worst_compose_us,worst_present_us; };
+static struct frame_times frame_record[NUM_CONSOLES];
+struct frame_clock { u64 start; u_long ticks; u32 per_us; bool started; };
+static void frame_calibrate(struct frame_clock *c) {
+    u_long t=getticks();
+    u64 cycles;
+    if(c->per_us || !cpu.tsc) return;
+    if(!c->started) { c->start=rdtsc(); c->ticks=t; c->started=true; return; }
+    if(t-c->ticks<HZ/10) return;
+    cycles=rdtsc()-c->start;
+    if(cycles>>32) { c->started=false; return; }        /* over 4e9 cycles in a few ticks: start again */
+    c->per_us=(u32)cycles/((u32)(t-c->ticks)*(1000/HZ))/1000;
+    if(!c->per_us) c->per_us=1;
+}
+static u64 frame_now(void) { return cpu.tsc ? rdtsc() : 0; }
+static u32 frame_us(const struct frame_clock *c,u64 from,u64 to) {
+    u64 cycles=to-from;
+    if(!c->per_us) return 0;
+    return cycles>>32 ? 0xFFFFFFFF : (u32)cycles/c->per_us;
+}
+static struct frame_times *frame_mine(void) {
+    int i=(int)(curTask->con-conArray);
+    return i>=0 && i<NUM_CONSOLES ? &frame_record[i] : NULL;
+}
+static void frame_note(const struct frame_clock *c,u64 t0,u64 t1,u64 t2) {
+    struct frame_times *f=frame_mine();
+    u32 compose=frame_us(c,t0,t1), present=frame_us(c,t1,t2);
+    u_long flags;
+    if(!f) return;
+    flags=irq_save();
+    f->frames++;
+    if(!c->per_us) { irq_restore(flags); return; }
+    f->timed=true;
+    f->compose_us=compose; f->present_us=present;
+    if(compose>f->worst_compose_us) f->worst_compose_us=compose;
+    if(present>f->worst_present_us) f->worst_present_us=present;
+    irq_restore(flags);
+}
+static void frame_begin(const struct display *d,bool on) {
+    struct frame_times *f=frame_mine();
+    u_long flags;
+    if(!f) return;
+    flags=irq_save();
+    memset(f,0,sizeof(*f));
+    f->on=on; f->pid=curTask->pid; f->width=d->width; f->height=d->height; f->scale=d->scale;
+    irq_restore(flags);
+}
+static void ms_text(u32 us,char *out,size_t n) { snprintf(out,n,"%u.%u ms",us/1000,us%1000/100); }
+/* shell.h: gfxinfo's lines about the desktops that run, their size and frame times */
+void gui_frame_info(void) {
+    struct frame_times f;
+    surf_task *t;
+    char a[16],b[16],c[16],e[16];
+    u_long flags;
+    bool alive;
+    int i;
+    for(i=0;i<NUM_CONSOLES;i++) {
+        flags=irq_save();
+        f=frame_record[i];
+        alive=f.on && (t=task_find(f.pid)) && t->state!=TS_DEAD;
+        irq_restore(flags);
+        if(!alive) continue;
+        printf("    desktop on F%d: %dx%d at %dx, %u frames drawn\n",i+1,f.width,f.height,f.scale,f.frames);
+        if(!f.timed) continue;
+        ms_text(f.compose_us,a,sizeof(a)); ms_text(f.present_us,b,sizeof(b));
+        ms_text(f.worst_compose_us,c,sizeof(c)); ms_text(f.worst_present_us,e,sizeof(e));
+        printf("      the last: composing %s, presenting %s; the slowest: %s, %s\n",a,b,c,e);
+    }
+}
+/* 10/25/26: how long the desktop may sleep when nothing wakes it: a frame's time while something moves or works
+   (a frame was drawn: a picture being read, a terminal's flood; a button held: a drag that scrolls; an escape
+   sequence's end to wait for), 100 ms otherwise (the clocks, the applications' readings) */
+static u_long nap(const struct gui_state *g,bool drew,int esc,unsigned keys_down) {
+    return drew || esc || keys_down || g->buttons ? 16 : 100;
+}
 /* 10/17/26: the taskbar's clock, from the CMOS clock; and the whole date and time, for the suite's Clock */
 static void clock_tick(struct gui_state *g) {
     time_t t;
@@ -203,6 +319,7 @@ int cmd_gui(int argc,char **argv) {
     struct gui_state *g;
     struct gui_fs *own_fs;                              /* 10/18/26: this desktop's, keeping read_at's file in a frame */
     struct tty *tty=curTask->tty;
+    struct frame_clock fc;                              /* 10/25/26: the TSC's rate, for the frame times */
     int oldraw,result=CMD_OK,esc=0,number=0;
     u32 esc_at=0,clock_at;
     unsigned keys_down=0;
@@ -222,6 +339,7 @@ int cmd_gui(int argc,char **argv) {
         framebuffer_graphics_end(); printf("    gui: not enough memory\n"); return CMD_FAIL;
     }
     d.shown=kalloc(d.width*d.height*sizeof(u32));   /* without it every frame is presented whole */
+    d.row=kalloc(d.screen_w*sizeof(u32));           /* 10/25/26: without it rectangles, as before */
     memset(&mode,0,sizeof(mode));
     mode.width=d.width; mode.height=d.height; mode.pitch=d.width*4;
     mode.bpp=32; mode.type=1; mode.addr=1;
@@ -235,12 +353,17 @@ int cmd_gui(int argc,char **argv) {
     if(!pointer_begin(&d)) {
         gui_kernel_fs_end(own_fs);
         if(d.shown) kfree(d.shown);
+        if(d.row) kfree(d.row);
         kfree(d.pixels); kfree(g); framebuffer_graphics_end(); return CMD_OK;
     }
     oldraw=tty->raw; tty_ctl(tty,TTY_RAW,1); d.first=d.full=true;
+    memset(&fc,0,sizeof(fc)); frame_begin(&d,true);
     while(!g->quit && !curTask->intr) {
-        int n,key,oldx=g->x,oldy=g->y,drawn;
+        int n,key,oldx=g->x,oldy=g->y,drawn=0;
         unsigned devices;
+        u_long gen=poll_generation();                   /* 10/25/26: before looking: whatever comes later ends the nap */
+        u64 t0,t1;
+        frame_calibrate(&fc);
         g->now=(u32)getticks()*(1000/HZ);
         if((u32)(getticks()-clock_at)>=HZ) { clock_tick(g); clock_at=getticks(); }
         gui_tick(g);                                    /* 10/17/26: the suite reads what is new, screen or not */
@@ -253,7 +376,7 @@ int cmd_gui(int argc,char **argv) {
                 continue;
             }
             gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while the desktop sleeps */
-            if(sleep_intr(16)) break;
+            if(poll_sleep(gen,100)) break;              /* 10/25/26: was sleep_intr(16) */
             continue;
         }
         for(n=0;n<POINTER_QUEUE && pointer_next(&e);n++) gui_pointer(g,&e);
@@ -277,21 +400,26 @@ int cmd_gui(int argc,char **argv) {
         if(devices!=g->devices) { g->devices=devices; g->dirty=true; }
         pointer_speed_owned(g->speed,false);
         if(g->dirty) {
+            t0=frame_now();
             gui_render(g,&ram); g->dirty=false;
+            t1=frame_now();
             if((drawn=present_changes(&d))<0) continue;
             if((drawn || oldx!=g->x || oldy!=g->y) &&
                (!present(&d,oldx,oldy,12,16) || framebuffer_graphics_draw(pointer_paint,&d)<0)) continue;
+            if(drawn) frame_note(&fc,t0,t1,frame_now());
         } else if(oldx!=g->x || oldy!=g->y) {
             if(!present(&d,oldx,oldy,12,16)) continue;
             if(framebuffer_graphics_draw(pointer_paint,&d)<0) continue;
         }
-        if(sleep_intr(16)) break;
+        if(poll_sleep(gen,nap(g,drawn>0,esc,keys_down))) break;    /* 10/25/26: was sleep_intr(16) */
     }
     gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
     gui_kernel_fs_end(own_fs);                          /* 10/18/26: read_at's file closed, if one is open */
     tty_ctl(tty,TTY_RAW,oldraw); pointer_speed_owned(1,true);
     framebuffer_graphics_end();
+    frame_begin(&d,false);
     if(d.shown) kfree(d.shown);
+    if(d.row) kfree(d.row);
     kfree(d.pixels); kfree(g);
     printf("    desktop closed; text console restored\n");
     return result;
