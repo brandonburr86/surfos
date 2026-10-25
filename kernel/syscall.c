@@ -477,7 +477,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     /* 10/6/26: the telnet server's calls, each in its own file (surfos/sysimpl.h) */
     case SYS_listen:   r = sys_listen(a, b); break;         /* 10/6/26: the port as it came: checked there */
     case SYS_accept:   r = sys_accept((int)a, (struct netaddr *)b); break;
-    case SYS_connect:  r = sys_connect((u32)a, b); break;
+    case SYS_connect:  r = sys_connect((u32)a, b, c); break;    /* 10/24/26: c, the flags (libsurf passes 0) */
     case SYS_netinfo:  r = sys_netinfo((struct netinfo *)a); break;
     case SYS_poll:     r = sys_poll((struct pollfd *)a, (int)b, (int)c); break;
     case SYS_openpty:  r = sys_openpty(); break;
@@ -488,6 +488,9 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_resolve:  r = sys_resolve((const char *)a, (u32 *)b); break;
     case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
+    /* 10/24/26 (the network tools): net/sock.c */
+    case SYS_shutdown: r = sys_shutdown((int)a, b); break;
+    case SYS_sockaddr: r = sys_sockaddr((int)a, (struct netaddr *)b, (struct netaddr *)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

@@ -45,6 +45,13 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               backoff, no full segment every second; when it opens, everything arrives
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
+  halfclose   (10/24/26) shutdown(SHUT_WR): the FIN behind a line, then 12000 bytes from the other
+              end taken as the program reads them, read() 0 at its FIN, TIME_WAIT, gone; then a
+              program that reads late, in TIME_WAIT: what came is kept for it (10/25/26)
+  nowait      (10/24/26) connect() with CONNECT_NOWAIT: polled for while its SYN goes unanswered,
+              made when one is answered late; refused by a reset (POLLERR, ECONNREFUSED)
+  finwait     (10/25/26) a connection its program half-closed, its FIN acknowledged (FIN_WAIT_2),
+              then an other end that vanishes: keepalive gives it up as an open one (5 probes)
 
   tools/qemu-tcp.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --test
   tools/qemu-tcp.py ... --scenario window --verbose     (the segments as they go)
@@ -62,7 +69,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rawnet                                       # noqa: E402
-from rawnet import ACK, FIN, PSH, RST, Conn, Server   # noqa: E402
+from rawnet import ACK, FIN, PSH, RST, SYN, Conn, Server   # noqa: E402
 
 
 def load_harness():
@@ -605,6 +612,115 @@ def sc_pollstall(rig):
     return ok
 
 
+def sc_nowait(rig):
+    """10/24/26: connect() with CONNECT_NOWAIT: the descriptor at once while its SYN goes unanswered, the program
+    polling on (it is not held in the call); the SYN answered 2.5 s late makes the connection (POLLOUT), and the
+    program's bytes and this end's answer go through; a SYN answered with a reset fails it (POLLERR, read() says
+    ECONNREFUSED)"""
+    ok = rig.start('nettest nowait 10.0.2.2 7400', 'nettest: connect started')
+    ok = rig.net.wait(lambda s: s.dport == 7400 and s.flags & SYN, 5) is not None and ok
+    m = rig.mark()
+    rig.q.wait(2.5)                                 # unanswered: the program polls on
+    Server(rig.net, 7400, close=True, reply=lambda d: b'got it\n' if d == b'hello\n' else b'what?\n')
+    ok = rig.expect('nettest: connected after ', 15) and rig.expect('got it', 10) and \
+        rig.expect('nettest: read 7 bytes, then EOF', 10) and ok
+    polls = re.search(r'connected after (\d+) ms \((\d+) polls in between\)', rig.since(m))
+    ok = polls is not None and int(polls.group(1)) >= 2500 and int(polls.group(2)) >= 4 and ok
+    if polls:
+        print('        (connected after %s ms, %s polls in between)' % polls.groups())
+    ok = rig.start('nettest nowait 10.0.2.2 7401', 'nettest: connect started') and ok
+    syn = rig.net.wait(lambda s: s.dport == 7401 and s.flags & SYN, 5)
+    if syn:
+        rig.net.send(7401, syn.sport, 0, syn.seq + 1, RST | ACK, 0)
+    ok = syn is not None and rig.expect('nettest: the connection failed: Connection refused', 10) and ok
+    return ok
+
+
+def sc_halfclose(rig):
+    """10/24/26: shutdown(SHUT_WR): the program's line, then its FIN behind it; acknowledged (FIN_WAIT_2), the
+    program still reads: 12000 bytes sent after the FIN, more than its 8 KB window, are all taken and acknowledged
+    (no reset) as it reads them; then this end's FIN: read() says 0, the FIN is acknowledged (TIME_WAIT), and the
+    socket is gone 2 s later"""
+    ok = rig.start('nettest halfclose 23', 'listening on port 23')
+    c = Conn(rig.net, 3200, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096)                           # the line, then the FIN: receive() stops there
+    ok = got == b'nettest: half-closed after this line\n' and c.fin is not None and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()                                     # its FIN acknowledged: FIN_WAIT_2, and it reads on
+    ok = rig.expect('nettest: shut; reading what comes after the FIN') and ok
+    data = bytes(97 + i % 26 for i in range(12000))
+    base, reset = c.snd, False
+    end = (base + len(data)) & 0xffffffff
+    for i in range(0, len(data), 1460):             # all at once: what does not fit comes again below
+        rig.net.send(c.pp, c.gp, (base + i) & 0xffffffff, c.rcv, ACK | PSH, 8192, data[i:i + 1460])
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        s = rig.net.wait(lambda s: c.mine(s) and s.flags & (ACK | RST), 1.0)
+        if not s:
+            continue
+        if s.flags & RST:
+            reset = True
+            break
+        if s.ack == end:
+            break
+        if s.win and rawnet.seq_lt(s.ack, end):    # what its window takes now, from where it is
+            off = (s.ack - base) & 0xffffffff
+            rig.net.send(c.pp, c.gp, s.ack, c.rcv, ACK | PSH, 8192, data[off:off + min(1460, s.win)])
+    c.snd = end
+    c.ack(flags=ACK | FIN)
+    ok = not reset and rig.expect('nettest: half-close: ok, %d bytes after the FIN' % len(data)) and ok
+    ack = rig.net.wait(lambda s: c.mine(s) and s.flags & ACK and s.ack == c.snd, 3)
+    ok = ack is not None and ok
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    # 10/25/26 (review: the above reaches TIME_WAIT with bytes unread only when the program happens to be slow): the
+    # program reads 1 s after its shutdown, by when 6000 bytes and this end's FIN have come and been acknowledged
+    # (TIME_WAIT, 2 s): the receive buffer is kept for it, and it reads them all, then the end
+    ok = rig.start('nettest halfclose 23 1000', 'listening on port 23') and ok
+    c = Conn(rig.net, 3201, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096)
+    ok = got == b'nettest: half-closed after this line\n' and c.fin is not None and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()
+    ok = rig.expect('nettest: shut; reading what comes after the FIN') and ok
+    data = bytes(65 + i % 26 for i in range(6000))
+    base = c.snd
+    for i in range(0, len(data), 1460):
+        rig.net.send(c.pp, c.gp, (base + i) & 0xffffffff, c.rcv, ACK | PSH, 8192, data[i:i + 1460])
+    c.snd = (base + len(data)) & 0xffffffff
+    c.ack(flags=ACK | FIN)
+    ack = rig.net.wait(lambda s: c.mine(s) and s.flags & ACK and s.ack == c.snd, 3)
+    ok = ack is not None and rig.expect('nettest: half-close: ok, %d bytes after the FIN' % len(data), 10) and ok
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    return ok
+
+
+def sc_finwait(rig):
+    """10/25/26 (review): a connection whose program half-closed it waits in FIN_WAIT_2 for the other end's data
+    and FIN with nothing in flight: keepalive probes it as an open one, so an other end that has vanished is given
+    up (ETIMEDOUT after tcpka's 3 s and 5 probes, as in keepalive) and the read ends. Nothing ended it before"""
+    ok = rig.start('nettest shutreader 23', 'listening on port 23')
+    c = Conn(rig.net, 3300, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096, timeout=5)                # nothing, then its FIN: receive() stops there
+    ok = got == b'' and c.fin is not None and rig.expect('nettest: shut at once; reading') and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()                                     # its FIN acknowledged: FIN_WAIT_2, then silence
+    t0 = time.time()
+    ok = rig.expect('nettest: read 0 bytes, then Connection timed out', 20) and ok
+    probes = len([s for s in rig.net.drain(lambda s: c.is_probe(s))])
+    dt = time.time() - t0
+    ok = ok and probes == 5 and 6 < dt < 15
+    print('        (FIN_WAIT_2, the other end gone: given up after %.1f s and %d probes)' % (dt, probes))
+    return ok
+
+
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
@@ -627,6 +743,9 @@ SCENARIOS = [
     ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
+    ('halfclose', sc_halfclose, 'a half-closed connection reads on after its FIN, until the other end closes'),
+    ('nowait', sc_nowait, 'a connection not waited for is polled for: made late, or refused'),
+    ('finwait', sc_finwait, 'a half-closed connection whose other end vanished is given up by keepalive'),
 ]
 
 

@@ -11,6 +11,8 @@ esi, edi; the result comes back in eax, negative values are -errno.
 user shell, surfsh (surfos/kcmd.h). Calls 34-43 give programs network
 connections, poll, pseudo-terminals and the process list, for the telnet
 server (surfos/sock.h, poll.h, pty.h, proc.h).
+10/24/26 (the network tools): 46 and 47, a connection's half-close and both
+ends' addresses (surfos/sock.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -57,7 +59,7 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 /* 10/6/26 (the telnet server): network connections, poll, pseudo-terminals, processes */
 #define SYS_listen   34  /* (u32 port): a listening descriptor (surfos/sock.h) */
 #define SYS_accept   35  /* (int fd, struct netaddr *peer): a connection's descriptor */
-#define SYS_connect  36  /* (u32 ip, u32 port): a connection's descriptor */
+#define SYS_connect  36  /* (u32 ip, u32 port, u32 flags): a connection's descriptor (10/24/26: flags) */
 #define SYS_netinfo  37  /* (struct netinfo *ni): the default interface */
 #define SYS_poll     38  /* (struct pollfd *fds, int nfds, int timeout_ms): entries ready (surfos/poll.h) */
 #define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
@@ -67,7 +69,10 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
 #define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */
-#define NR_SYSCALLS 46
+/* 10/24/26 (the network tools): surfos/sock.h */
+#define SYS_shutdown 46  /* (int fd, u32 how): SHUT_WR, the half-close */
+#define SYS_sockaddr 47  /* (int fd, struct netaddr *local, struct netaddr *peer): both ends of a socket */
+#define NR_SYSCALLS 48
 
 #define SPAWN_MAX_ARGS 32
 

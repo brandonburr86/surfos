@@ -95,6 +95,11 @@ int tcp_connect(unsigned int ip, unsigned short port);  /* ip in network byte or
 /* Resolve a hostname within 5 seconds; output changes only on success. */
 int net_resolve(const char *host, unsigned int *ip);
 int netinfo(struct netinfo *ni);                        /* the default interface; -1 ENODEV without one */
+int shutdown(int fd, int how);                          /* 10/24/26: how SHUT_WR: the FIN after what is queued,
+                                                           while read() goes on until the other end's FIN */
+int tcp_addrs(int fd, struct netaddr *local, struct netaddr *peer);   /* 10/24/26: both ends; either may be NULL */
+int tcp_connect_start(unsigned int ip, unsigned short port);  /* 10/24/26: at once, the handshake on its way: poll()
+                                                                 says POLLOUT when it is made, POLLERR when it failed */
 char *ipstr(unsigned int ip, char buf[16]);             /* "192.168.1.20" from network byte order */
 int ipparse(const char *s, unsigned int *ip);           /* "192.168.1.20" -> network byte order; 0, or -1 */
 

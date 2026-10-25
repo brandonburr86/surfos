@@ -151,6 +151,14 @@ int tcp_connect(unsigned int ip, unsigned short port) { return (int)ret(sc(SYS_c
 int getentropy(void *buf, size_t len) { return (int)ret(sc(SYS_getentropy, (long)buf, (long)len, 0)); }
 int net_resolve(const char *host, unsigned int *ip) { return (int)ret(sc(SYS_resolve, (long)host, (long)ip, 0)); }
 int netinfo(struct netinfo *ni) { return (int)ret(sc(SYS_netinfo, (long)ni, 0, 0)); }
+/* 10/24/26 (the network tools): the half-close, both ends of a socket, a connection not waited for */
+int shutdown(int fd, int how) { return (int)ret(sc(SYS_shutdown, fd, how, 0)); }
+int tcp_connect_start(unsigned int ip, unsigned short port) {
+    return (int)ret(sc(SYS_connect, (long)ip, port, CONNECT_NOWAIT));
+}
+int tcp_addrs(int fd, struct netaddr *local, struct netaddr *peer) {
+    return (int)ret(sc(SYS_sockaddr, fd, (long)local, (long)peer));
+}
 int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) { return (int)ret(sc(SYS_poll, (long)fds, (long)nfds, timeout_ms)); }
 int openpty(void) { return (int)ret(sc(SYS_openpty, 0, 0, 0)); }
 int spawnpty(const char *path, char *const argv[], int masterfd) {
