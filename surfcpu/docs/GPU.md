@@ -1062,3 +1062,221 @@ b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2; gpudiag.mem
 e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f and `surfcpu_arty_a7_gpudiag.bit`
 a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82. Then test them from that clone's
 root as section 14 says, its step 1 first. A second build to compare was not made.
+
+## 16. GPU2: triangles, depth and page flips (G4)
+
+G4 (the brief [plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md), track gpu-g4) adds
+three commands to the engine: SET_ZBUF (a 16-bit depth buffer in VRAM), TRIANGLE (flat or
+Gouraud, with a depth test) and FLIP (video GFX_BASE written at the next vertical blanking). The
+command set becomes "GPU2": gpu.ID reads 0x32555047, soc_version is 0.4.0 (spec/soc.toml, map 2
+kept: additions only), and every GPU1 command keeps its encoding and behaviour, so a GPU1
+program runs unchanged. gpudiag checks the new commands and ends with a spinning cube drawn by
+the engine (section 16.9). This section is the specification the C model (sim/models/gpu_model.c)
+is written from and the RTL (rtl/peripherals/surf_gpu.v, surf_gpu_tri.v) is compared with; the
+arithmetic below is exact, so the model, the RTL and a reader get the same pixels.
+
+### 16.1 Decisions and where this deviates from the brief
+
+| Point | Decided (the brief) | Done | Why |
+|---|---|---|---|
+| ID, version | "GPU2" 0x32555047, soc_version 0.4.0, new opcodes from 0x0A | as decided: SET_ZBUF 0x0A, TRIANGLE 0x0B, FLIP 0x0C; gpu.h keeps GPU1's value as `GPU_ID_GPU1` | the SurfOS driver (G3) accepts either ID |
+| SET_ZBUF | base, stride; 16 bits a pixel at base + y stride + 2x; refused unless it fits the target as SET_TARGET's rule; none after a reset | as decided, and an accepted SET_TARGET leaves no depth buffer (a refused one changes nothing; ABORT keeps it) | the depth buffer was checked against the target it was set for: a larger target set later could reach past its end, past VRAM's end or into other data |
+| TRIANGLE flags | 7:0 colour; GOURAUD, ZTEST, ZFUNC, ZWRITE, CULL_CW, CULL_CCW | bits 8 to 13 in that order (section 16.2) | |
+| Coverage | pixel centres, the top-left rule, exact edge functions on 12.4 | as decided (16.3) | |
+| Interpolation | affine plane gradients, one division per gradient (a sequential divider), at least 16 fractional bits, no rounding along a row, clamped to the vertices' range | gradients per 1/16 pixel with 20 fractional bits (16 per pixel), floor; every value taken relative to vertex 0, rounded to the nearest; clamped (16.4). Each gradient has its own sequential (one bit a cycle) divider and the four run at once | values relative to vertex 0 do not depend on the clip or on where the walk starts; four dividers at once make the setup about 60 cycles instead of about 230, for about 450 flip-flops. The clamp is kept as decided, but with this precision it never changes a value (16.4 proves it), so a mutant without it cannot fail any test: the model counts every clamp that would change a value, and the tests require none |
+| The walk | the box cut by the clip, rows, groups of four pixels; about 6 cycles a covered group with depth, 1 without; a setup of a few hundred cycles | as decided, with the order of a group's accesses fixed (16.5) | the order decides the result when a program lets the depth buffer overlap the target, so the model and the RTL must agree on it |
+| FLIP | waits for the next blanking, writes GFX_BASE as a CPU store would (a port into surf_video, sys_clk) | as decided; a CPU store to GFX_BASE in the same cycle wins over the FLIP's | one rule for a case software should not make; the CPU's store is the one on the bus |
+| Depth clearing | FILL_RECT 0xFF over the depth bytes | as decided, with the command words (16.6) | |
+| 320x240 layout | A at 0, B at 76,800, depth at 153,600 (stride 640) | as decided (16.6) | |
+| The cube | gpudiag after its checks: 8 vertices turned on the CPU, 12 Gouraud triangles with depth, FLIP; expected CRCs from the model; a line a second with frames drawn and shown and torn frames | as decided: 16 frames at full rate are part of the checks (in simulation too), then after a PASS the cube runs on under a fixed result bar, a line a second (16.9) | every picture on the screen counts in FRAME_CRC, so the bar over the running cube says the same for every passing run (first or rerun); a failed run shows its red bar over the last picture as GPU1's gpudiag did |
+
+### 16.2 The commands
+
+| Op | Command | Header bits | Parameter words |
+|---|---|---|---|
+| 0x0A | SET_ZBUF | | base; stride |
+| 0x0B | TRIANGLE | 7:0 colour, 8 GOURAUD, 9 ZTEST, 10 ZFUNC (0 less, 1 less or equal), 11 ZWRITE, 12 CULL_CW, 13 CULL_CCW | for each vertex 0, 1, 2: `X \| Y << 16` (12.4), then `Z \| C << 16` |
+| 0x0C | FLIP | | base |
+
+Header bits not listed are ignored, as are bits 31:24 of a vertex's `Z | C` word. gpu.h has the
+encodings (`GPU_OP_SET_ZBUF`, `GPU_TRI_*`, `GPU_ZC(z, c)`, `GPU_FX(pixels)`).
+
+**SET_ZBUF** sets the depth buffer: pixel (x, y) of the target has its depth, an unsigned 16-bit
+value (0 near, 0xFFFF far), at VRAM byte base + y * stride + 2x, little-endian. It is refused
+(BAD_PARAM, nothing changes) unless base and stride are multiples of 4, base < 307,200, stride <
+65,536, and, with W and H the target's, either W = 0, H = 0, or (2W <= stride or H = 1) and base
++ (H - 1) * stride + 2W <= 307,200: every pixel's depth is in VRAM and two lines never share a
+word. A reset leaves no depth buffer, and so does an accepted SET_TARGET; a refused SET_TARGET,
+SET_CLIP and ABORT keep it.
+
+**TRIANGLE** draws the pixels of the effective clip (section 5) whose centres the triangle covers
+(16.3), in the flat colour (header bits 7:0) or, with GOURAUD, the vertices' colours interpolated
+(16.4); with ZTEST a pixel is drawn only where its depth is less than (ZFUNC 0) or not greater
+than (ZFUNC 1) the depth buffer's, and with ZWRITE every pixel drawn has its depth written. A
+TRIANGLE with ZTEST or ZWRITE and no depth buffer is refused (BAD_PARAM, nothing drawn; its six
+words are taken). A triangle of zero area draws nothing, and so does one culled by its winding
+(16.3); neither is an error. Vertices may lie anywhere in the 12.4 range: nothing outside the
+effective clip is written, and nothing wraps.
+
+**FLIP** waits, as WAIT_VBLANK does, for the start of the next vertical blanking (the event that
+sets video STATUS.VBLANK_EV), then writes base into video GFX_BASE as a CPU store of base would
+(bits 18:2 kept), and is done; the next command starts in the next cycle. Section 16.7 gives the
+timing: the frame after that blanking shows the new base, and commands after the FLIP may draw
+into the picture shown until then.
+
+### 16.3 Coverage
+
+Coordinates are signed 12.4 fixed point: a vertex word's bits 15:0 are X and bits 31:16 are Y,
+each a two's complement count of sixteenths of a pixel (-2048.0 to 2047.9375 pixels). All of
+this section is in those units. The centre of pixel (px, py) is (16 px + 8, 16 py + 8).
+
+The vertices as given are v0, v1, v2. Their doubled signed area is
+
+```
+    A = (X1 - X0) (Y2 - Y0) - (Y1 - Y0) (X2 - X0)
+```
+
+With y down the screen, A > 0 means v0, v1, v2 go clockwise on the screen and A < 0
+counter-clockwise. A = 0 draws nothing; CULL_CW draws nothing when A > 0, CULL_CCW when A < 0.
+Otherwise, when A < 0, v1 and v2 are swapped, so that the triangle walked is clockwise (its area
+-A > 0); only the edges below use the swapped order.
+
+For the (possibly swapped) vertices, edge e (0, 1, 2) runs from vertex e to vertex (e + 1) mod 3,
+with dX_e = X_b - X_a and dY_e = Y_b - Y_a (a = e, b = (e + 1) mod 3). Its edge function at a point
+(x, y) is
+
+```
+    E_e(x, y) = dX_e (y - Y_a) - dY_e (x - X_a)
+```
+
+which is positive inside the triangle. Edge e is a **top or left edge** when dY_e < 0, or dY_e = 0
+and dX_e > 0 (y down: a left edge has the inside to its right, a top edge is horizontal with the
+inside below it). Pixel (px, py) is **covered** when for each of the three edges, at its centre
+c = (16 px + 8, 16 py + 8), either E_e(c) > 0, or E_e(c) = 0 and edge e is a top or left edge.
+
+So a pixel whose centre lies exactly on an edge two triangles share is covered by exactly one of
+them (the edge runs one way in each, and exactly one of the two directions is top or left), and
+triangles that tile a region cover each of its pixels exactly once: the rule is the same as
+taking the centre moved right by an infinitesimal t and down by an infinitesimal t^2, a point on
+no edge. Coverage depends only on the three points, not on their order (a rotation or the swap
+gives the same edges). The values are exact integers: |dX_e|, |dY_e| <= 65,535, and for a centre
+the walk visits |E_e| < 2^34.
+
+**The box.** Only centres inside the vertices' bounding box can be covered: the columns from
+floor((minX + 7) / 16) to floor((maxX - 8) / 16) and the rows from floor((minY + 7) / 16) to
+floor((maxY - 8) / 16), with minX, maxX, minY, maxY taken over the three vertices. The walk
+(16.5) covers that box cut by the effective clip, [x0, min(x1, W)) x [y0, min(y1, H)); when it is
+empty the triangle draws nothing.
+
+### 16.4 Depth and colour
+
+The depth Z (a vertex word's bits 15:0 of its second word) and, with GOURAUD, the colour index C
+(bits 23:16) are interpolated with the same rule; v_i is vertex i's value, in the order given (the
+swap of 16.3 changes nothing here). With A from 16.3 (not 0):
+
+```
+    Nx = (v1 - v0) (Y2 - Y0) - (v2 - v0) (Y1 - Y0)          GX = floor(Nx * 2^20 / A)
+    Ny = (v2 - v0) (X1 - X0) - (v1 - v0) (X2 - X0)          GY = floor(Ny * 2^20 / A)
+```
+
+(floor of the exact quotient, which is the same for A and -A with Nx, Ny negated with it). GX and
+GY are the plane's slopes per sixteenth of a pixel with 20 fractional bits (per pixel, 16 times
+that: 16 fractional bits). The value at the centre c = (cx, cy) of a covered pixel is
+
+```
+    V = v0 * 2^20 + GX (cx - X0) + GY (cy - Y0)
+    value = min(max(floor((V + 2^19) / 2^20), vmin), vmax)
+```
+
+rounded to the nearest (halves up) and clamped to the smallest and largest of v0, v1, v2. V is
+taken relative to vertex 0, so a pixel's value does not depend on the clip, on the box or on
+where the walk starts, and moving one pixel right adds exactly 16 GX (one row down 16 GY): the
+engine steps it by exact additions, so nothing accumulates along a row or down the triangle.
+
+**The error is less than 1/8, so the clamp never acts.** Let P(c) be the exact plane at c: with
+GX = Nx 2^20 / A - ex, 0 <= ex < 1, and likewise ey, V = 2^20 P(c) - ex (cx - X0) - ey (cy - Y0).
+A covered centre lies in the closed triangle, so P(c) is between vmin and vmax, and |cx - X0|,
+|cy - Y0| <= 65,535 (both are in the vertices' range), so |V - 2^20 P(c)| < 2 * 65,535 < 2^17 =
+2^20 / 8. Rounding to the nearest then lands in [vmin, vmax]: the clamp, kept as the brief
+decided, is a safety net that never changes a covered pixel's value. (The model counts the values
+it would change, `tri_clamped`, and the tests require 0.)
+
+**Widths.** The same bound gives the engine its widths: for a covered pixel -2^17 < V < 65,535 *
+2^20 + 2^17 < 2^36 for depth and < 255 * 2^20 + 2^17 < 2^28 for colour, so the RTL keeps V, the
+gradients and every step in 37 bits (depth) and 29 bits (colour) and lets them wrap: modulo
+2^37 (2^29) the sums are the same, and at a covered pixel the true V fits, so the wrapped value
+is the true one. (Values at pixels that are not covered may wrap; they are never written. The
+model computes V exactly with 128-bit integers and counts covered values outside those widths,
+`tri_wide`: the tests require 0.) The quotients need the full division: |Nx| < 2^33, so Nx 2^20
+has 53 bits, and A < 2^33.
+
+### 16.5 The walk and the order of a group's accesses
+
+The engine walks the box of 16.3 cut by the clip, row by row from the top, and in each row the
+groups of four pixels that are the target's words (pixels 4g to 4g + 3, as FILL_RECT walks),
+from the group of the box's left column to that of its right column. A pixel of a group is a
+candidate when its column is inside the cut box, and a candidate is drawn as follows. For each
+group with at least one covered candidate, in this order:
+
+1. with ZTEST, the depth word of pixels 4g and 4g + 1 is read if either is covered, then that of
+   4g + 2 and 4g + 3 if either is covered; a covered pixel passes when its depth (16.4) is less
+   than (ZFUNC 0) or not greater than (ZFUNC 1) the buffer's. Without ZTEST every covered pixel
+   passes;
+2. with ZWRITE, the passing pixels' depths are written: the word of 4g and 4g + 1 (if either
+   passes), then that of 4g + 2 and 4g + 3 (if either passes), each with byte enables;
+3. the passing pixels' colours are written, one word with byte enables (if any passes).
+
+So a group's reads come before its writes, and its depth before its colour; the order matters
+only to a program that lets the depth buffer overlap the target, where it decides the result.
+The depth words of a group are whole words (16.2's rule keeps every target pixel's depth in VRAM
+and two lines apart), and a depth word read for a pixel at the target's right edge may hold
+bytes past it: they are read, never written.
+
+Cycles, with VRAM's port A free (the CPU's accesses take it first, as for every command): a group
+without a covered candidate takes 1 cycle and no access; a covered group without depth 1 (its
+colour write); with ZWRITE alone 1 to 3 (the depth words with a passing pixel, then the colour);
+with ZTEST 1 to 2 reads, a cycle for the last word to arrive, then the writes, 6 in all for both
+words and every write. Rows add no cycles. The setup (16.8) takes 4 cycles for a flat triangle
+without depth and 58 with depth or GOURAUD (the divisions), before the first group.
+
+### 16.6 Clearing the depth buffer, and the 320x240 double-buffered layout
+
+No command clears depth: a FILL_RECT of 0xFF over the depth buffer's bytes, with a target set to
+them, makes every depth 0xFFFF (the farthest). VRAM holds two 320x240 pictures and their depth
+buffer exactly:
+
+| Bytes | What |
+|---|---|
+| 0 .. 76,799 | picture A, stride 320 |
+| 76,800 .. 153,599 | picture B, stride 320 |
+| 153,600 .. 307,199 | depth, stride 640 (320 pixels of 2 bytes) |
+
+GFX_SCALE 2 shows either picture doubled to 640x480. One frame into the back buffer B, with
+every word written to CMD (hexadecimal):
+
+```
+    01000000 00025800 00000280 00F00280    SET_TARGET 153600, 640, 640 x 240: the depth bytes
+    030000FF 00000000 00F00280             FILL_RECT 0xFF, (0, 0), 640 x 240: every depth 0xFFFF
+    01000000 00012C00 00000140 00F00140    SET_TARGET 76800, 320, 320 x 240: picture B
+    03000000 00000000 00F00140             FILL_RECT colour 0, (0, 0), 320 x 240
+    0A000000 00025800 00000280             SET_ZBUF 153600, 640 (after the SET_TARGET)
+    0B000Bxx ...                           TRIANGLEs with GOURAUD | ZTEST | ZWRITE (0x0B00)
+    0C000000 00012C00                      FLIP 76800: B shows from the next frame
+```
+
+and the next frame into A (base 0) the same way. The FILL_RECTs take about 38,400 and 19,200
+cycles (2.3 ms in all at 25 MHz).
+
+### 16.7 FLIP and the frame latch
+
+FLIP takes video's vertical blanking pulse in sys_clk, as WAIT_VBLANK does (surf_video's
+`vblank`, the start of line 480 crossed by `surf_pulse_sync`), and in the next cycle writes
+surf_video's GFX_BASE register through a port of its own (`gfx_base_we`, `gfx_base_in`; a CPU
+store in the same cycle wins). From there the value goes the way of a CPU store (section 3): it
+crosses to the pixel domain in its `surf_cdc_word` within about a microsecond and is taken at the
+frame latch, the start of line 524, 1.4 ms after the blanking began. So the frame after that
+blanking shows the new base, whole. The picture shown until then was sent completely before the
+blanking (its last visible line is 479), so the commands after the FLIP may draw into it at once.
+With every frame drawn into the back buffer and then FLIPped, a frame never tears, and the CPU
+never times anything: a FLIP that reaches the engine after a blanking began waits for the next one.
+
