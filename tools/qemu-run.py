@@ -12,12 +12,14 @@ go through the QEMU monitor (pmemsave / sendkey), so they keep working when the
 serial path itself is what is broken.
 """
 import argparse
+import ftplib
 import hashlib
 import http.client
 import http.server
 import io
 import threading
 import os
+import random
 import re
 import select
 import shutil
@@ -100,10 +102,15 @@ def surf_prompt(crumbs, state):
 # 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
-           'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
+           'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'halfclose',
+           'nowait', 'finwait', 'ncstuck', 'end')
 
 # 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
 RX_PORT = 5555
+
+# 10/24/26 (ftpd): the passive ports the smoke test forwards, each to the same port of the guest (q.ports['ftp_pasv'] is
+# the first; ftpd is started with q.ports['ftp_pasv_range'])
+FTP_PASV_PORTS = 4
 
 # 10/17/26 (one stick): with the scratch ramdisk, the command line names a boot volume as GRUB would (bootvol=, the
 # serial number of the FAT volume it was started from); the self test writes a FAT32 boot sector with this serial
@@ -731,7 +738,12 @@ SMOKE = [
       ('wifi connect', ['wlan0 is joined to SurfSimWPA already']),
       ('wlansim off SurfSimWPA', ['wlansim: SurfSimWPA is off']),
       ('keeper-skips-open', CHECK),
+      # 10/24/26: an FTP server keeps SurfSim aside too (no logins, files written), once telnetd is off
+      ('ftpd on', ['ftpd: serving / ']),
       ('telnetd off', ['telnetd: stopped']),
+      ('wifi connect', ['wlan0: SurfSim is in range, but it is open and an FTP server (ftpd) runs: not joined by itself '
+                        '(wifi join SurfSim joins it)']),
+      ('ftpd off', ['ftpd: stopped']),
       ('keeper-joins-open', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'inet 10.0.2.15']),
       ('wifi saved', [' 1  SurfSimWPA', ' 2  SurfSim ', 'open  joined now']),
@@ -955,6 +967,70 @@ SMOKE = [
     ('rmdir /hda1/WWW', []),
     ('dmesg', ['httpd: serving /initrd/www on port 80', 'httpd: httpd off stops the server (pid',
                'httpd: serving /initrd on port 8080', 'httpd: serving /hda1 on port 80']),
+    # 10/24/26: ftpd, the file transfer server (user/ftpd/), from this host through the forwarded port 21 and its
+    # passive range (q.ports['ftp'], q.ports['ftp_pasv_range'], each passive port forwarded to the same port of the
+    # guest) with Python's ftplib and raw sockets (the checks below). Not running at first; the commands' refusals
+    # (status 1 and 2); on: every mounted volume; on again; a session (login, folders, listings, the initrd's files
+    # byte for byte); uploads to the FAT disk read back, append, resume, unique names, renames, folders, hidden files;
+    # text mode; active mode; ABOR and commands during a transfer; the protocol; six places; the data connection's
+    # time; off. Then the FAT disk alone, read-only; ftpd serve, a screenful of commands and more, Ctrl+C; the log.
+    ('ftpd', ['ftpd: not running (ftpd on starts it)']),
+    ('run ftpd on /initrd/nowhere', ['ftpd: /initrd/nowhere: no such folder', 'exit status 1']),
+    ('run ftpd on /initrd/README', ['ftpd: /initrd/README is a file, not a folder', 'exit status 1']),
+    ('run ftpd on /dev', ['ftpd: /dev is not for serving (the devices)', 'exit status 1']),
+    ('run ftpd on 0', ['ftpd: 0 is no port (1-65535)', 'exit status 2']),
+    ('run ftpd on 21 22', ['usage: ftpd [on [-r] [-a address]', 'exit status 2']),
+    ('run ftpd on -x', ['ftpd: no option -x', 'exit status 2']),
+    ('run ftpd on 9-2', ['ftpd: 9-2 is no range of ports', 'exit status 2']),
+    ('run ftpd on 50010', ['ftpd: port 50010 is inside the passive range 50000-50999', 'exit status 2']),
+    ('run ftpd on -a 300.1.1.1', ['ftpd: -a needs an IPv4 address', 'exit status 2']),
+    ('run ftpd --server 21 / rw 50000-50999', ['ftpd: --server is how ftpd on starts the server', 'exit status 2']),
+    ('run ftpd off', ['ftpd: not running', 'exit status 1']),
+    ('ftpd on {ftp_pasv_range}', ['ftpd: serving / at ftp://10.0.2.15/ (read-write)']),
+    ('run ftpd on /hda1', ['ftpd: running already (pid', 'exit status 1']),
+    ('ftpd status', ['ftpd: running (pid']),
+    ('run ftpd serve 21', ['ftpd: port 21 is in use (the server ftpd on started, pid', 'exit status 1']),
+    ('@ftpd-session', []),
+    ('@ftpd-upload', []),
+    ('@ftpd-text', []),
+    ('@ftpd-active', []),
+    (BIG_BIN, []),
+    ('@ftpd-abort', []),
+    ('@ftpd-descriptors', []),
+    ('rm /hda1/BIG.BIN', []),
+    ('@ftpd-protocol', []),
+    ('@ftpd-places', []),
+    ('@ftpd-data-time', []),
+    ('ftpd off', ['ftpd: stopped']),
+    ('ftpd', ['ftpd: not running']),
+    ('ftpd on -r /hda1 {ftp_pasv_range}', ['ftpd: serving /hda1 at ftp://10.0.2.15/ (read-only)']),
+    ('@ftpd-readonly', []),
+    ('ftpd off', ['ftpd: stopped']),
+    ('@ftpd-serve', []),
+    ('dmesg', ['ftpd: serving / on port 21 (read-write, passive ports', 'ftpd: session 1 from 10.0.2.2:',
+               'ftpd: session 1 ended (the client left): 4 files sent, 0 received',
+               'ftpd: a session from 10.0.2.2 refused: 6 are open', 'ftpd: ftpd off stops the server (pid',
+               'ftpd: serving /hda1 on port 21 (read-only, passive ports']),
+    # 10/24/26: nc, the netcat of SurfOS (user/bin/nc.c), with this host as the Mac's nc: the refusals; a file of
+    # 200000 random bytes received (nc -l on guest port RX_PORT, forwarded) and sent back whole with -v (the input's
+    # end said with a half-close, the answer after it printed); a line typed, sent with CR LF (-c); -z on an open
+    # and a closed port
+    ('run nc', ['usage: nc [-vc] [-w seconds] host port', 'exit status 2']),
+    ('run nc -q 10.0.2.2 1', ['nc: no option -q', 'exit status 2']),
+    ('run nc 10.0.2.2 0', ['nc: 0 is no port (1-65535)', 'exit status 2']),
+    ('run nc -z 10.0.2.2 9-1', ['nc: 9-1 is no port (1-65535) or range (first-last)', 'exit status 2']),
+    ('run nc -z 10.0.2.2 1-2000', ['nc: 2000 ports: at most 1000 at once', 'exit status 2']),
+    ('run nc -w 0 -l 5555', ['nc: -w 0: a time in seconds, 1-86400', 'exit status 2']),
+    ('run nc a..b 80', ['nc: a..b: not a host name', 'exit status 1']),
+    ('run nc 10.0.2.2 1', ['nc: 10.0.2.2 port 1: Connection refused', 'exit status 1']),
+    ('run nc -w 2 -l %d' % RX_PORT, ['nc: listening on 10.0.2.15 port %d' % RX_PORT, 'nc: no connection within 2 s',
+                                    'exit status 1']),
+    ('@nc-receive', []),
+    ('run wc -c /hda1/NC.BIN', [' 200000 /hda1/NC.BIN']),
+    ('@nc-send', []),
+    ('@nc-talk', []),
+    ('@nc-scan', []),
+    ('rm /hda1/NC.BIN', []),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -1021,12 +1097,21 @@ class Qemu:
             self.ports['telnet_wlan'] = free_port()          # 10/9/26: port 23 of 10.0.2.16, the simulated wlan0's lease
             self.ports['www'] = free_port()                  # 10/17/26: httpd, the web server, on port 80
             self.ports['www2'] = free_port()                 # ... and on port 8080
+            # 10/24/26: ftpd, the file transfer server, on port 21, and its passive range: FTP_PASV_PORTS ports
+            # forwarded to the same ports of the guest (EPSV gives a client the port alone), its first one
+            # ports['ftp_pasv'] ('ftpd on ... {ftp_pasv_range}' in a step)
+            self.ports['ftp'] = free_port()
+            self.ports['ftp_pasv'] = free_port_range(FTP_PASV_PORTS, set(self.ports.values()))
+            self.ports['ftp_pasv_range'] = f"{self.ports['ftp_pasv']}-{self.ports['ftp_pasv'] + FTP_PASV_PORTS - 1}"
+            pasv = ''.join(f",hostfwd=tcp:127.0.0.1:{p}-:{p}"
+                           for p in range(self.ports['ftp_pasv'], self.ports['ftp_pasv'] + FTP_PASV_PORTS))
             boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['rx']}-:{RX_PORT},"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23,"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['www']}-:80,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['www2']}-:8080",
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['www2']}-:8080,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['ftp']}-:21" + pasv,
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
             cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
@@ -1228,6 +1313,38 @@ def free_port():
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+def console_keep(q):
+    """10/25/26: what the console has printed, read now. A check that makes the guest print a burst of lines (a
+    server's line for each of many requests) reads them as they come: QEMU writes the serial port to its socket a
+    byte at a time, and under Linux the socket holds only some hundred bytes unread (each byte costs a buffer's
+    overhead); beyond that QEMU drops what the guest writes, and the guest's bounded wait for the UART gives up.
+    macOS holds kilobytes, so a check that read the console only afterwards passed there and lost lines in Docker"""
+    q.pump(0)
+
+
+def free_port_range(n, avoid=()):
+    """10/24/26 (ftpd): the first of n ports in a row that are free here, from 20000 up to 59999: forwarded to the
+    same ports of the guest, which listens on them for passive data connections. 10/25/26 (review): none of the
+    ports in avoid, which free_port() gave the other forwards (closed again, so they look free here too)"""
+    for _ in range(200):
+        base = random.randrange(20000, 60000 - n)
+        if any(base <= p < base + n for p in avoid):
+            continue
+        socks = []
+        try:
+            for p in range(base, base + n):
+                s = socket.socket()
+                socks.append(s)
+                s.bind(('127.0.0.1', p))
+            return base
+        except OSError:
+            continue
+        finally:
+            for s in socks:
+                s.close()
+    raise RuntimeError(f'no {n} free ports in a row')
 
 
 class TestHandler(http.server.BaseHTTPRequestHandler):
@@ -2687,7 +2804,8 @@ def httpd_initrd_check(q):
 def httpd_serve_check(q):
     """httpd serve /hda1 on this console (the FAT disk, a site made by the steps before): each request printed as it
     comes; the folder's INDEX.HTM, a name with a space, a hidden name neither listed nor sent, nor reached through
-    its 8.3 alias (fs/fat.c makes SECRET~1 of .secret; a lookup matches only the long name); Ctrl+C ends it"""
+    its 8.3 alias (fs/fat.c makes SECRET~1 of .secret; a lookup matches only the long name); 10/24/26: forty more,
+    more than a screen holds lines, answered at once (no --More-- holds the server); Ctrl+C ends it"""
     port, results = q.ports['www'], []
     q.send('httpd serve /hda1\n')
     results.append(q.expect('httpd: serving /hda1 at http://10.0.2.15/', 10) and q.expect('Ctrl+C stops the server', 10))
@@ -2705,13 +2823,23 @@ def httpd_serve_check(q):
         results.append(st == 404 and q.expect('10.0.2.2 GET /.secret 404 ', 10))
         st, h, body = www_get(port, '/SECRET~1')
         results.append(st == 404 and q.expect('10.0.2.2 GET /SECRET~1 404 ', 10))
+        # 10/24/26: more requests than a screen holds lines, answered at once: the user shell pages every command,
+        # and the server waited at --More-- after a screenful (22 requests). The console is read as they go
+        start, t0, heads = len(q.transcript), time.time(), []
+        for _ in range(40):
+            heads.append(www_get(port, '/README', 'HEAD')[0] == 200)
+            console_keep(q)
+        results.append(all(heads) and time.time() - t0 < 20)
+        q.pump(1)
+        results.append(b'--More--' not in q.transcript[start:] and
+                       q.transcript[start:].count(b'10.0.2.2 HEAD /README 200 ') == 40)
     except (OSError, http.client.HTTPException) as e:
         print(f'  httpd serve: {e!r}')
         results.append(False)
     q.ser.sendall(b'\x03')
     results.append(q.expect(PROMPT, 10))
-    return ('httpd serve /hda1: a site on FAT, every request printed, Ctrl+C (%d of %d)' % (sum(results), len(results)),
-            all(results))
+    return ('httpd serve /hda1: a site on FAT, every request printed, a screenful and more, Ctrl+C (%d of %d)' %
+            (sum(results), len(results)), all(results))
 
 
 def httpd_slow_check(q):
@@ -2746,6 +2874,759 @@ CONSOLE_CHECKS.update({'@httpd-site': httpd_site_check, '@httpd-protocol': httpd
                        '@httpd-keepalive': httpd_keepalive_check, '@httpd-places': httpd_places_check,
                        '@httpd-timeouts': httpd_timeouts_check, '@httpd-initrd': httpd_initrd_check,
                        '@httpd-serve': httpd_serve_check, '@httpd-slow': httpd_slow_check})
+
+
+# 10/24/26: ftpd, the file transfer server (user/ftpd/), from this host through the forwarded port 21
+# (q.ports['ftp']) and its passive range, each port of it forwarded to the same port of the guest. Python's ftplib
+# takes a passive reply's address from its own control connection (127.0.0.1: trust_server_pasv_ipv4_address
+# False), so the guest's 10.0.2.15 in the reply does no harm here. The FAT disk's README is the repository's.
+REPO_README = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'README')
+
+
+def ftp_open(q, login=True, timeout=15):
+    """an ftplib session with ftpd, its control connection made by www_connect() (50 ms after the one before)"""
+    f = ftplib.FTP(timeout=timeout)
+    f.trust_server_pasv_ipv4_address = False
+    f.sock = www_connect(q.ports['ftp'], timeout)
+    f.af = f.sock.family
+    f.file = f.sock.makefile('r', encoding=f.encoding)
+    f.welcome = f.getresp()
+    if login:
+        f.login()
+    return f
+
+
+def ftp_get(f, path):
+    """the bytes of RETR path (TYPE I)"""
+    out = io.BytesIO()
+    f.retrbinary('RETR ' + path, out.write)
+    return out.getvalue()
+
+
+def ftp_reply(f, cmd):
+    """the reply to cmd whatever its code (ftplib raises for 4xx and 5xx), its lines joined by newlines"""
+    f.putcmd(cmd)
+    return f.getmultiline()
+
+
+def ftp_drain(conn, timeout=20):
+    """what a data connection sends until it closes"""
+    got, deadline = b'', time.time() + timeout
+    conn.settimeout(timeout)
+    while time.time() < deadline:
+        d = conn.recv(65536)
+        if not d:
+            break
+        got += d
+    return got
+
+
+def ftp_close(f):
+    try:
+        f.quit()
+    except (OSError, EOFError, ftplib.Error):
+        f.close()
+
+
+def ftp_replies(s, n, timeout=8):
+    """the codes of the next n replies on a raw control connection s (a reply's last line is "ddd text"), and
+    whether s then closed: ([codes], closed)"""
+    codes, buf, deadline, closed = [], b'', time.time() + timeout, False
+    while len(codes) < n and time.time() < deadline:
+        while b'\n' in buf and len(codes) < n:
+            line, buf = buf.split(b'\n', 1)
+            if re.match(rb'^\d{3} ', line):
+                codes.append(line[:3].decode())
+        if len(codes) == n:
+            break
+        s.settimeout(max(deadline - time.time(), 0.05))
+        try:
+            d = s.recv(4096)
+        except socket.timeout:
+            break
+        if not d:
+            closed = True
+            break
+        buf += d
+    if not closed and len(codes) == n:
+        s.settimeout(1)
+        try:
+            closed = s.recv(4096) == b''
+        except socket.timeout:
+            closed = False
+        except OSError:
+            closed = True
+    return codes, closed
+
+
+def ftpd_session_check(q):
+    """a session: the welcome, a login with any name and password, SYST, FEAT (no MLST or MDTM: SurfOS has no UTC),
+    PWD and CWD (.. held at /), the listing of / (the mount points, never /dev), the initrd's listings in each form
+    (LIST, NLST with and without a folder, MLSD, MLST, STAT), its files byte for byte (the sample site's page, a
+    program, cert.pem) and SIZE, a download through EPSV, QUIT"""
+    results = []
+    try:
+        readme, pem = initrd_file(q, 'README'), initrd_file(q, 'etc/ssl/cert.pem')
+        f = ftp_open(q, login=False)
+        results.append(f.welcome.startswith('220 SurfOS ftpd: the files of /, to read and write'))
+        results.append(f.sendcmd('USER surfer').startswith('331') and f.sendcmd('PASS anything').startswith('230'))
+        results.append(f.sendcmd('SYST') == '215 UNIX Type: L8')
+        feat = f.sendcmd('FEAT')
+        results.append(all(x in feat for x in (' EPSV', ' PASV', ' SIZE', ' REST STREAM', ' UTF8')) and
+                       'MLST' not in feat and 'MDTM' not in feat)
+        results.append(f.pwd() == '/')
+        f.cwd('/initrd/bin')
+        results.append(f.pwd() == '/initrd/bin')
+        f.cwd('../../../..')
+        results.append(f.pwd() == '/')
+        lines = []
+        f.retrlines('LIST', lines.append)
+        names = [l.split()[-1] for l in lines]
+        results.append('initrd' in names and 'hda1' in names and 'dev' not in names and all(l[:1] in 'd-' for l in lines))
+        results.append(sorted(f.nlst('/initrd/www')) == ['/initrd/www/index.html', '/initrd/www/style.css',
+                                                         '/initrd/www/wave.svg'])
+        f.cwd('/initrd/www')
+        results.append(sorted(f.nlst()) == ['index.html', 'style.css', 'wave.svg'])
+        facts = dict(f.mlsd('/initrd'))
+        results.append(facts.get('bin', {}).get('type') == 'dir' and facts.get('README', {}).get('size') == str(len(readme))
+                       and facts['README'].get('perm') == 'r' and 'modify' not in facts['README'])
+        mlst = f.sendcmd('MLST /initrd/README')
+        results.append(mlst.startswith('250-') and (' type=file;size=%d;perm=r; /initrd/README' % len(readme)) in mlst)
+        stat = ftp_reply(f, 'STAT /initrd/www')
+        results.append(stat.startswith('213-Status of /initrd/www:') and ' index.html' in stat and
+                       stat.endswith('213 End of status (3 entries)'))
+        for name in ('www/index.html', 'bin/cat', 'etc/ssl/cert.pem'):
+            results.append(ftp_get(f, '/initrd/' + name) == initrd_file(q, name))
+        results.append(f.size('/initrd/etc/ssl/cert.pem') == len(pem))
+        m = re.search(r'\(\|\|\|(\d+)\|\)', f.sendcmd('EPSV'))
+        data = socket.create_connection(('127.0.0.1', int(m.group(1))), 10)
+        f.voidcmd('TYPE I')
+        f.putcmd('RETR /initrd/README')
+        first = f.getresp()
+        got = ftp_drain(data)
+        data.close()
+        results.append(first.startswith('150 Opening BINARY mode') and got == readme and f.voidresp().startswith('226'))
+        results.append(f.quit().startswith('221'))
+    except (OSError, EOFError, ftplib.Error, AttributeError, KeyError) as e:
+        print(f'  ftpd session: {e!r}')
+        results.append(False)
+    if not all(results):
+        print(f'  ftpd session: {results}')
+    return ('ftpd: a session: login, FEAT, folders, every listing, the initrd byte for byte, SIZE, EPSV (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_upload_check(q):
+    """uploads to the FAT disk (/hda1), each read back: 300 KB of random bytes, a file replaced by a shorter one (no
+    old tail left), APPE, a resumed download and upload (REST: the upload cut at its offset), STOU's new name, a name
+    with a space, RNFR and RNTO (a folder into itself refused), DELE, MKD and RMD; a hidden file: left out of LIST
+    and NLST, shown by LIST -a and MLSD, and named in RMD's refusal of its folder"""
+    results = []
+    blob = os.urandom(300000)
+    try:
+        f = ftp_open(q)
+        f.storbinary('STOR /hda1/FTP.BIN', io.BytesIO(blob))
+        results.append(ftp_get(f, '/hda1/FTP.BIN') == blob and f.size('/hda1/FTP.BIN') == len(blob))
+        f.storbinary('STOR /hda1/FTP.BIN', io.BytesIO(b'short'))
+        results.append(ftp_get(f, '/hda1/FTP.BIN') == b'short')
+        f.storbinary('APPE /hda1/FTP.BIN', io.BytesIO(b' and more'))
+        results.append(ftp_get(f, '/hda1/FTP.BIN') == b'short and more')
+        out = io.BytesIO()
+        f.retrbinary('RETR /hda1/FTP.BIN', out.write, rest=6)
+        results.append(out.getvalue() == b'and more')
+        f.storbinary('STOR /hda1/FTP.BIN', io.BytesIO(b'-resumed'), rest=5)
+        results.append(ftp_get(f, '/hda1/FTP.BIN') == b'short-resumed')
+        f.voidcmd('TYPE I')
+        with f.transfercmd('STOU /hda1/FTP.BIN') as c:
+            c.sendall(b'unique')
+        m = re.search(r', as (\S+)$', f.voidresp())
+        results.append(m is not None and m.group(1) == 'FTP.BIN.1' and ftp_get(f, '/hda1/FTP.BIN.1') == b'unique')
+        f.storbinary('STOR /hda1/Two Words.txt', io.BytesIO(b'spaced\n'))
+        results.append(ftp_get(f, '/hda1/Two Words.txt') == b'spaced\n' and '/hda1/Two Words.txt' in f.nlst('/hda1'))
+        f.rename('/hda1/Two Words.txt', '/hda1/Renamed.txt')
+        results.append(ftp_get(f, '/hda1/Renamed.txt') == b'spaced\n' and '/hda1/Two Words.txt' not in f.nlst('/hda1'))
+        # 10/25/26 (audit R1): a folder renamed into itself under another case of its name is refused (FAT wrote it
+        # into itself and took it out of /hda1), and stays where it was
+        f.mkd('/hda1/LOOPDIR')
+        results.append(ftp_reply(f, 'RNFR /hda1/LOOPDIR').startswith('350') and
+                       ftp_reply(f, 'RNTO /hda1/loopdir/inside').startswith('553') and
+                       f.rmd('/hda1/LOOPDIR').startswith('250'))
+        f.mkd('/hda1/FTPDIR')
+        f.cwd('/hda1/FTPDIR')
+        f.storbinary('STOR .hidden', io.BytesIO(b'h'))
+        f.storbinary('STOR shown', io.BytesIO(b's'))
+        lines, every = [], []
+        f.retrlines('LIST', lines.append)
+        f.retrlines('LIST -a', every.append)
+        results.append([l.split()[-1] for l in lines] == ['shown'] and sorted(l.split()[-1] for l in every) ==
+                       ['.hidden', 'shown'] and sorted(n for n, _ in f.mlsd()) == ['.hidden', 'shown'] and
+                       f.nlst() == ['shown'])
+        f.delete('shown')
+        results.append(ftp_reply(f, 'RMD /hda1/FTPDIR').startswith('550 /hda1/FTPDIR is not empty: it holds 1 hidden file'))
+        f.delete('.hidden')
+        f.cwd('/hda1')
+        results.append(f.rmd('/hda1/FTPDIR').startswith('250'))
+        for name in ('FTP.BIN', 'FTP.BIN.1', 'Renamed.txt'):
+            f.delete('/hda1/' + name)
+        left = f.nlst('/hda1')
+        results.append(not any(n in left for n in ('/hda1/FTP.BIN', '/hda1/FTP.BIN.1', '/hda1/Renamed.txt', '/hda1/FTPDIR')))
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error, AttributeError) as e:
+        print(f'  ftpd upload: {e!r}')
+        results.append(False)
+    if not all(results):
+        print(f'  ftpd upload: {results}')
+    return ('ftpd: uploads read back, replace, APPE, REST both ways, STOU, rename, folders, hidden files (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_text_check(q):
+    """text mode (TYPE A): an LF goes out as CR LF, a CR LF as it is, a CR alone too; CR LF comes in as LF, also when
+    a CR and its LF arrive apart; a CR alone stays; listings end their lines with CR LF in either mode"""
+    results = []
+    try:
+        f = ftp_open(q)
+        f.storbinary('STOR /hda1/TEXT.TXT', io.BytesIO(b'one\ntwo\r\nthree\rfour\n'))
+        f.voidcmd('TYPE A')
+        with f.transfercmd('RETR /hda1/TEXT.TXT') as c:
+            wire = ftp_drain(c)
+        results.append(wire == b'one\r\ntwo\r\nthree\rfour\r\n' and f.voidresp().startswith('226'))
+        f.voidcmd('TYPE A')
+        with f.transfercmd('STOR /hda1/TEXT.TXT') as c:
+            c.sendall(b'a\r\nb\r')
+            time.sleep(0.3)                                  # the CR and its LF in pieces of their own
+            c.sendall(b'\nc\rd\r\n')
+        results.append(f.voidresp().startswith('226') and ftp_get(f, '/hda1/TEXT.TXT') == b'a\nb\nc\rd\n')
+        f.voidcmd('TYPE I')
+        with f.transfercmd('LIST /hda1') as c:
+            listing = ftp_drain(c)
+        f.voidresp()
+        results.append(listing.endswith(b'\r\n') and listing.count(b'\n') == listing.count(b'\r\n') > 2)
+        f.delete('/hda1/TEXT.TXT')
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd text: {e!r}')
+        results.append(False)
+    if not all(results):
+        print(f'  ftpd text: {results}')
+    return ('ftpd: text mode both ways, a CR LF in pieces, listings in CR LF (%d of %d)' % (sum(results), len(results)),
+            bool(results) and all(results))
+
+
+def ftpd_active_check(q):
+    """active mode: PORT and EPRT with this host's address as the guest sees it (10.0.2.2, which QEMU's user network
+    takes to this host's 127.0.0.1): a file sent and one received; a PORT to another address and to a port below
+    1024 refused (no FTP bounce), EPRT for IPv6 and EPSV 2 told the one protocol, a PORT that is none; EPSV ALL
+    leaves EPSV alone"""
+    results = []
+    srv = socket.socket()
+    try:
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(2)
+        srv.settimeout(10)
+        port = srv.getsockname()[1]
+        f = ftp_open(q)
+        f.voidcmd('TYPE I')
+        results.append(f.sendcmd('PORT 10,0,2,2,%d,%d' % (port >> 8, port & 255)).startswith('200'))
+        f.putcmd('RETR /initrd/README')
+        first = f.getresp()
+        c, _ = srv.accept()
+        got = ftp_drain(c)
+        c.close()
+        results.append(first.startswith('150') and got == initrd_file(q, 'README') and f.voidresp().startswith('226'))
+        results.append(f.sendcmd('EPRT |1|10.0.2.2|%d|' % port).startswith('200'))
+        f.putcmd('STOR /hda1/ACTIVE.TXT')
+        first = f.getresp()
+        c, _ = srv.accept()
+        c.sendall(b'sent the other way\n')
+        c.close()
+        results.append(first.startswith('150') and f.voidresp().startswith('226') and
+                       ftp_get(f, '/hda1/ACTIVE.TXT') == b'sent the other way\n')
+        closed = free_port()                                # nobody listens: refused at once, the loop not held
+        f.sendcmd('PORT 10,0,2,2,%d,%d' % (closed >> 8, closed & 255))
+        f.putcmd('RETR /initrd/README')
+        first = f.getresp()
+        results.append(first.startswith('150') and
+                       f.getmultiline() == '425 No data connection to 10.0.2.2 port %d: Connection refused' % closed)
+        results.append(ftp_reply(f, 'PORT 10,0,2,99,4,1').startswith('504 A data connection to 10.0.2.99 is refused'))
+        results.append(ftp_reply(f, 'PORT 10,0,2,2,0,21').startswith('504 A data connection to port 21 is refused'))
+        results.append(ftp_reply(f, 'EPRT |2|::1|5000|').startswith('522') and ftp_reply(f, 'EPSV 2').startswith('522'))
+        results.append(ftp_reply(f, 'PORT 1,2,3').startswith('501'))
+        results.append(ftp_reply(f, 'EPSV ALL').startswith('200') and ftp_reply(f, 'PASV').startswith('503') and
+                       ftp_reply(f, 'PORT 10,0,2,2,%d,%d' % (port >> 8, port & 255)).startswith('503') and
+                       ftp_reply(f, 'EPSV').startswith('229'))
+        f.delete('/hda1/ACTIVE.TXT')
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd active: {e!r}')
+        results.append(False)
+    finally:
+        srv.close()
+    if not all(results):
+        print(f'  ftpd active: {results}')
+    return ('ftpd: active mode both ways, no bounce, IPv6 told, EPSV ALL (%d of %d)' % (sum(results), len(results)),
+            bool(results) and all(results))
+
+
+def ftp_slow_transfer(f, cmd, rcvbuf=4096):
+    """cmd through PASV on a data connection with a small receive buffer, read by nobody yet: (its 150 reply, the
+    connection). The file (BIG.BIN, 2.5 MB) is far more than the guest, QEMU and this host hold on the way, so the
+    server's transfer waits for room until the connection is read, as httpd's @httpd-slow has it"""
+    f.voidcmd('TYPE I')
+    m = re.search(r'\((?:\d+,){4}(\d+),(\d+)\)', f.sendcmd('PASV'))
+    c = socket.socket()
+    c.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+    c.settimeout(20)
+    c.connect(('127.0.0.1', int(m.group(1)) * 256 + int(m.group(2))))
+    f.putcmd(cmd)
+    return f.getresp(), c
+
+
+def ftpd_abort_check(q):
+    """ABOR during the download of a large file (BIG.BIN on the FAT disk, read slowly), as Python's ftplib abort()
+    sends it (426 for the transfer, then 226 for ABOR), the session in step after it; STAT during a transfer answered
+    at once; a NOOP sent during a transfer answered after its 226, in order; ABOR with no transfer (225)"""
+    results = []
+    try:
+        big = initrd_file(q, 'bin/undertow') * 4
+        f = ftp_open(q, timeout=30)
+        first, c = ftp_slow_transfer(f, 'RETR /hda1/BIG.BIN')
+        c.recv(1000)
+        aborted = f.abort()
+        c.close()
+        results.append(first.startswith('150') and aborted.startswith('426') and f.voidresp().startswith('226') and
+                       f.sendcmd('NOOP').startswith('200'))
+        first, c = ftp_slow_transfer(f, 'RETR /hda1/BIG.BIN')
+        time.sleep(0.5)                                     # what the way holds is full: the transfer waits
+        f.putcmd('STAT')
+        stat = f.getline()
+        got = ftp_drain(c, 60)
+        c.close()
+        results.append(stat.startswith('213 RETR /hda1/BIG.BIN: ') and got == big and f.voidresp().startswith('226'))
+        first, c = ftp_slow_transfer(f, 'RETR /hda1/BIG.BIN')
+        f.putcmd('NOOP')
+        time.sleep(0.3)
+        got = ftp_drain(c, 60)
+        c.close()
+        results.append(got == big and f.getresp().startswith('226') and f.getresp().startswith('200'))
+        # 10/25/26 (review): what comes behind a held command is still read: the NOOP is held, STAT and ABOR are
+        # answered at once (an ABOR behind a held NOOP waited for the end of the transfer, here the 60 s stall:
+        # the data connection is left unread, as ftplib's abort() leaves it), the NOOP's 200 after them
+        first, c = ftp_slow_transfer(f, 'RETR /hda1/BIG.BIN')
+        time.sleep(0.3)
+        t0 = time.time()
+        f.sock.sendall(b'NOOP\r\nSTAT\r\nABOR\r\n')
+        codes = [f.getmultiline()[:3] for _ in range(4)]
+        c.close()
+        results.append(first.startswith('150') and codes == ['213', '426', '226', '200'] and time.time() - t0 < 10)
+        results.append(ftp_reply(f, 'ABOR').startswith('225'))
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error, KeyError) as e:
+        print(f'  ftpd abort: {e!r}')
+        results.append(False)
+    if not all(results):
+        print(f'  ftpd abort: {results}')
+    return ('ftpd: ABOR during a transfer, STAT during one, commands after it in order, ABOR behind them (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_protocol_check(q):
+    """the control connection as it may come, on a raw socket: commands before a login (NOOP yes, PWD 530), Telnet's
+    IP and Synch and an option before commands, several commands in one segment and a line ended by LF alone
+    (answered in order), a NUL in a path (501), a line of 600 bytes (500) with the session going on; then the
+    replies a client gets wrong: unknown (500), not implemented (502), no argument (501), REST that is no offset (501)
+    or past the end (554), RNTO without RNFR (503), a transfer without PASV (425), a folder for a file and the other
+    way round, the initrd written to, /dev, a folder there already, MODE and TYPE that are not served, REIN"""
+    results = []
+    s = None
+    try:
+        s = www_connect(q.ports['ftp'])
+        results.append(ftp_replies(s, 1)[0] == ['220'])
+        s.sendall(b'NOOP\r\nPWD\r\n')
+        results.append(ftp_replies(s, 2)[0] == ['200', '530'])
+        s.sendall(b'\xff\xf4\xff\xf2USER a\r\nPASS b\r\n\xff\xfb\x01SYST\nPWD\r\n')
+        results.append(ftp_replies(s, 4)[0] == ['331', '230', '215', '257'])
+        s.sendall(b'CWD a\x00b\r\n' + b'X' * 600 + b'\r\nNOOP\r\n')
+        results.append(ftp_replies(s, 3)[0] == ['501', '500', '200'])
+        s.close()
+        s = None
+        f = ftp_open(q)
+        want = [('XYZZY', '500'), ('AUTH TLS', '502'), ('MDTM /initrd/README', '502'), ('CWD', '501'),
+                ('REST abc', '501'), ('RNTO /x', '503'), ('RETR /initrd/README', '425'), ('CWD /initrd/README', '550'),
+                ('SIZE /initrd', '550'), ('MKD /initrd/x', '550'), ('CWD /dev', '550'), ('DELE /hda1', '550'),
+                ('RMD /', '550'), ('MKD /hda1/DOCS', '550'), ('TYPE X', '501'), ('MODE B', '504'), ('STRU R', '504'),
+                ('SITE CHMOD 644 x', '502'), ('OPTS UTF8 ON', '200'), ('ALLO 10', '202'), ('HELP', '214'),
+                ('STAT', '211'), ('ACCT x', '202')]
+        got = [(cmd, ftp_reply(f, cmd)[:3]) for cmd, _ in want]
+        results.append(got == want)
+        if got != want:
+            print(f'  ftpd protocol: {[(c, r) for (c, r), (_, w) in zip(got, want) if r != w]}')
+        for cmd, code in (('RETR /initrd', '550'), ('STOR /initrd/x', '550'), ('RETR /dev/console', '550')):
+            f.sendcmd('PASV')
+            results.append(ftp_reply(f, cmd)[:3] == code)
+        f.sendcmd('REST 999999')
+        f.sendcmd('PASV')
+        results.append(ftp_reply(f, 'RETR /initrd/README').startswith('554 REST 999999 is past the end'))
+        results.append(ftp_reply(f, 'REIN').startswith('220') and ftp_reply(f, 'PWD').startswith('530'))
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd protocol: {e!r}')
+        results.append(False)
+    finally:
+        if s:
+            s.close()
+    if not all(results):
+        print(f'  ftpd protocol: {results}')
+    return ('ftpd: the control connection: Telnet sequences, commands together, long lines, NUL; every refusal (%d of %d)'
+            % (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_pasv_port(f):
+    """PASV on an ftplib session: the port its reply names"""
+    m = re.search(r'\((?:\d+,){4}(\d+),(\d+)\)', f.sendcmd('PASV'))
+    return int(m.group(1)) * 256 + int(m.group(2))
+
+
+def ftpd_descriptors_check(q):
+    """10/25/26 (review): the server's 16 descriptors with six sessions open. Three transfers whose clients send RETR
+    before they connect (each waits holding its listener alone; the file is opened and the 150 given once the
+    connection is there) move at once (the third got its 150, then accept() found no descriptor: 425), and so do
+    three whose clients connect first (ftplib, curl); a fourth is told to try again (425) each time, and gets its
+    file once they are done"""
+    results, fs = [], []
+    time.sleep(0.5)                                         # the sessions of the checks before have ended
+    try:
+        readme, big = initrd_file(q, 'README'), initrd_file(q, 'bin/undertow') * 4
+        for _ in range(6):
+            fs.append(ftp_open(q, timeout=30))
+        for f in fs:
+            f.voidcmd('TYPE I')
+        ports = [ftpd_pasv_port(f) for f in fs[:3]]
+        for f in fs[:3]:
+            f.putcmd('RETR /hda1/BIG.BIN')                  # no reply yet: it waits for its connection
+        slow = []
+        for f, port in zip(fs[:3], ports):
+            c = socket.socket()
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+            c.settimeout(20)
+            c.connect(('127.0.0.1', port))
+            slow.append((f.getresp(), c))
+        results.append(all(first.startswith('150') for first, c in slow) and ftp_reply(fs[3], 'PASV')[:3] == '425')
+        for (first, c), f in zip(slow, fs[:3]):
+            results.append(ftp_drain(c, 60) == big and f.voidresp().startswith('226'))
+            c.close()
+        slow = [ftp_slow_transfer(f, 'RETR /hda1/BIG.BIN') for f in fs[:3]]
+        results.append(all(first.startswith('150') for first, c in slow) and ftp_reply(fs[3], 'PASV')[:3] == '425')
+        for (first, c), f in zip(slow, fs[:3]):
+            results.append(ftp_drain(c, 60) == big and f.voidresp().startswith('226'))
+            c.close()
+        results.append(ftp_get(fs[3], '/initrd/README') == readme)
+    except (OSError, EOFError, ftplib.Error, AttributeError) as e:
+        print(f'  ftpd descriptors: {e!r}')
+        results.append(False)
+    finally:
+        for f in fs:
+            ftp_close(f)
+    if not all(results):
+        print(f'  ftpd descriptors: {results}')
+    return ('ftpd: six sessions, three transfers at once in either order, the next told to try again (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_places_check(q):
+    """six sessions fill every place: a seventh is told 421 and closed; once one has left, a new one is taken; a
+    client that sends its commands and closes its side (as nc does when its input ends) gets every reply, QUIT's
+    among them, and so does one that sends no QUIT"""
+    results, socks = [], []
+    time.sleep(0.5)                                         # the sessions of the checks before have ended
+    try:
+        for _ in range(6):
+            s = www_connect(q.ports['ftp'])
+            socks.append(s)
+            results.append(ftp_replies(s, 1)[0] == ['220'])
+        seventh = www_connect(q.ports['ftp'])
+        socks.append(seventh)
+        codes, closed = ftp_replies(seventh, 1)
+        results.append(codes == ['421'] and closed)
+        socks[0].sendall(b'QUIT\r\n')
+        results.append(ftp_replies(socks[0], 1) == (['221'], True))
+        time.sleep(0.5)
+        f = ftp_open(q)
+        results.append(f.pwd() == '/')
+        ftp_close(f)
+        for s in socks:
+            s.close()
+        socks = []
+        time.sleep(0.5)
+        s = www_connect(q.ports['ftp'])
+        socks.append(s)
+        s.sendall(b'USER a\r\nPASS b\r\nPWD\r\nNOOP\r\nQUIT\r\n')
+        s.shutdown(socket.SHUT_WR)
+        results.append(ftp_replies(s, 6) == (['220', '331', '230', '257', '200', '221'], True))
+        s = www_connect(q.ports['ftp'])
+        socks.append(s)
+        s.sendall(b'USER a\r\nPASS b\r\nCWD /initrd\r\nPWD\r\n')
+        s.shutdown(socket.SHUT_WR)
+        results.append(ftp_replies(s, 5) == (['220', '331', '230', '250', '257'], True))
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd places: {e!r}')
+        results.append(False)
+    finally:
+        for s in socks:
+            s.close()
+    if not all(results):
+        print(f'  ftpd places: {results}')
+    return ('ftpd: six places, a seventh refused, half-closed clients answered whole (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def ftpd_data_time_check(q):
+    """a transfer whose passive data connection never comes is given up after 30 s (425, its only reply: 10/25/26,
+    the 150 comes once the connection is there), and the session goes on"""
+    ok = False
+    try:
+        f = ftp_open(q, timeout=45)
+        f.sendcmd('PASV')
+        start = time.time()
+        f.putcmd('RETR /initrd/README')
+        last = f.getmultiline()
+        took = time.time() - start
+        ok = last.startswith('425 No data connection came within 30 s') and 28 <= took <= 36 and \
+            f.sendcmd('NOOP').startswith('200')
+        if not ok:
+            print(f'  ftpd data time: {last!r} after {took:.1f} s')
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd data time: {e!r}')
+    return ('ftpd: a data connection that never comes: 425 after 30 s, the session goes on', ok)
+
+
+def ftpd_readonly_check(q):
+    """ftpd on -r /hda1: the FAT disk is all a client sees, read-only: its files listed (r--) and sent, .. held at
+    its top, and every write refused (STOR, APPE, STOU, DELE, MKD, RMD, RNFR) with the disk unchanged"""
+    results = []
+    try:
+        with open(REPO_README, 'rb') as fh:
+            readme = fh.read()
+        f = ftp_open(q)
+        results.append('read-only' in f.welcome)
+        lines = []
+        f.retrlines('LIST', lines.append)
+        results.append(any(l.split()[-1] == 'README' and l.startswith('-r--r--r--') for l in lines) and
+                       not any(l.split()[-1] in ('initrd', 'hda1') for l in lines))
+        results.append(ftp_get(f, '/README') == readme and dict(f.mlsd('/'))['README'].get('perm') == 'r')
+        f.cwd('..')
+        results.append(f.pwd() == '/')
+        before = sorted(f.nlst())
+        refusals = [ftp_reply(f, c) for c in ('DELE /README', 'MKD /X', 'RMD /DOCS', 'RNFR /README', 'STOR /X.TXT',
+                                               'APPE /README', 'STOU')]
+        results.append(all(r.startswith('550') and 'served read-only' in r for r in refusals))
+        results.append(sorted(f.nlst()) == before)
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error, KeyError) as e:
+        print(f'  ftpd read-only: {e!r}')
+        results.append(False)
+    if not all(results):
+        print(f'  ftpd read-only: {results}')
+    return ('ftpd on -r /hda1: the disk read-only, every write refused (%d of %d)' % (sum(results), len(results)),
+            bool(results) and all(results))
+
+
+def ftpd_serve_check(q):
+    """ftpd serve -a 127.0.0.1 /hda1 on this console: each command printed with its reply's code (PASS as ****), a
+    transfer with its bytes, a passive reply naming -a's address; sixty commands, more than a screen holds, answered
+    at once (the user shell pages every command, and a server held at --More-- would answer none until a key came);
+    Ctrl+C ends it"""
+    results = []
+    q.send(f"ftpd serve -a 127.0.0.1 /hda1 {q.ports['ftp_pasv_range']}\n")
+    results.append(q.expect('ftpd: serving /hda1 at ftp://10.0.2.15/ (read-write)', 10) and
+                   q.expect('Ctrl+C stops the server', 10))
+    start = len(q.transcript)
+    try:
+        with open(REPO_README, 'rb') as fh:
+            readme = fh.read()
+        f = ftp_open(q)
+        results.append(re.match(r'227 Entering Passive Mode \(127,0,0,1,\d+,\d+\)\.$', f.sendcmd('PASV')) is not None)
+        results.append(ftp_get(f, '/README') == readme)
+        t0, noops = time.time(), []
+        for _ in range(60):
+            noops.append(f.sendcmd('NOOP').startswith('200'))
+            console_keep(q)                                 # the console read as they go
+        results.append(all(noops) and time.time() - t0 < 20)
+        ftp_close(f)
+    except (OSError, EOFError, ftplib.Error) as e:
+        print(f'  ftpd serve: {e!r}')
+        results.append(False)
+    q.pump(1)
+    out = q.transcript[start:]
+    results.append(b'10.0.2.2 USER anonymous -> 331' in out and b'10.0.2.2 PASS **** -> 230' in out and
+                   b'10.0.2.2 RETR /README -> 226, %d bytes' % len(readme) in out and
+                   out.count(b'NOOP -> 200') == 60 and b'--More--' not in out)
+    q.ser.sendall(b'\x03')
+    results.append(q.expect(PROMPT, 10))
+    if not all(results):
+        print(f'  ftpd serve: {results}')
+    return ('ftpd serve: every command printed, -a in PASV, a screenful and more without --More--, Ctrl+C (%d of %d)' %
+            (sum(results), len(results)), all(results))
+
+
+# 10/24/26: nc, the netcat of SurfOS (user/bin/nc.c): files both ways with this host, which plays the Mac's nc (it
+# closes its side when its input ends and reads on until the other end closes: shutdown(SHUT_WR)). The guest
+# listens on RX_PORT (forwarded: q.ports['rx']) and reaches this host's 127.0.0.1 as 10.0.2.2.
+NC_SENT = []                                                # the bytes @nc-receive sent, for @nc-send
+
+
+def host_listener():
+    """a listening socket of this host for the guest to reach as 10.0.2.2: (socket, port)"""
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('127.0.0.1', 0))
+    s.listen(4)
+    s.settimeout(20)
+    return s, s.getsockname()[1]
+
+
+def nc_receive_check(q):
+    """nc -l RX_PORT > /hda1/NC.BIN: where it listens and who came are said; 200000 random bytes from this host,
+    which closes its side when they are all sent, as the Mac's nc does; nc then ends, so the connection closes and
+    the prompt comes (the file's size is the next step's)"""
+    results = []
+    blob = os.urandom(200000)
+    NC_SENT[:] = [blob]
+    q.send(f'nc -l {RX_PORT} > /hda1/NC.BIN\n')
+    results.append(q.expect(f'nc: listening on 10.0.2.15 port {RX_PORT}', 10))
+    try:
+        s = www_connect(q.ports['rx'], 30)
+        try:
+            results.append(q.expect('nc: connection from 10.0.2.2 port ', 10))
+            s.sendall(blob)
+            s.shutdown(socket.SHUT_WR)
+            got, closed = www_recv(s, 30)
+            results.append(got == b'' and closed)
+        finally:
+            s.close()
+    except OSError as e:
+        print(f'  nc receive: {e!r}')
+        results.append(False)
+    results.append(q.expect(PROMPT, 30))
+    if not all(results):
+        print(f'  nc receive: {results}')
+    return ('nc -l: a file of 200000 bytes from this host, ended by its half-close (%d of %d)' %
+            (sum(results), len(results)), all(results))
+
+
+def nc_send_check(q):
+    """nc -v 10.0.2.2 <port> < /hda1/NC.BIN, to a listener of this host: both ends of the connection said, the
+    file's bytes arrive whole, then nc's FIN (its input has ended: shutdown()); what this host answers after that
+    still reaches nc, which prints it and ends when this host closes, with status 0. Then the same to a listener
+    that half-closes at once, as the Mac's nc -l does when its own input is at its end (< /dev/null, or no
+    terminal): nc sends the rest of its file all the same, and ends when both ways have"""
+    results, box = [], {}
+    srv, port = host_listener()
+
+    def serve(early):
+        try:
+            c, _ = srv.accept()
+            c.settimeout(30)
+            if early:
+                c.shutdown(socket.SHUT_WR)
+            data = b''
+            while True:
+                d = c.recv(65536)
+                if not d:
+                    break
+                data += d
+            box['data'] = data
+            if not early:
+                c.sendall(b'thanks: %d bytes\n' % len(data))
+            c.close()
+        except OSError as e:
+            box['error'] = e
+    t = threading.Thread(target=serve, args=(False,), daemon=True)
+    t.start()
+    q.send(f'nc -v 10.0.2.2 {port} < /hda1/NC.BIN; echo status $?\n')
+    results.append(q.expect(f'nc: connected to 10.0.2.2 port {port} (this end: 10.0.2.15 port ', 15))
+    results.append(q.expect('nc: the input has ended: the other end is told so', 30))
+    results.append(q.expect('thanks: 200000 bytes', 30))
+    results.append(q.expect('nc: the other end has sent all it will', 10) and q.expect('nc: both ways have ended', 10))
+    results.append(q.expect('status 0', 10) and q.expect(PROMPT, 10))
+    t.join(30)
+    results.append(bool(NC_SENT) and box.get('data') == NC_SENT[0])
+    box.clear()
+    t = threading.Thread(target=serve, args=(True,), daemon=True)
+    t.start()
+    q.send(f'nc 10.0.2.2 {port} < /hda1/NC.BIN; echo status $?\n')
+    results.append(q.expect('status 0', 30) and q.expect(PROMPT, 10))
+    t.join(30)
+    srv.close()
+    results.append(bool(NC_SENT) and box.get('data') == NC_SENT[0])
+    if not all(results):
+        print(f'  nc send: {results} {box.get("error")!r} {len(box.get("data", b""))} bytes')
+    return ('nc: the file sent back whole, the half-close, the answer after it; to one that half-closed first '
+            '(%d of %d)' % (sum(results), len(results)), all(results))
+
+
+def nc_talk_check(q):
+    """nc -c 10.0.2.2 <port>, typed to on the console: what this host says is printed, the line typed goes out with
+    CR LF (-c), and when this host closes, nc ends"""
+    results, box = [], {}
+    srv, port = host_listener()
+
+    def serve():
+        try:
+            c, _ = srv.accept()
+            c.settimeout(15)
+            c.sendall(b'220 the host says hello\r\n')
+            line = b''
+            while not line.endswith(b'\n'):
+                d = c.recv(100)
+                if not d:
+                    break
+                line += d
+            box['line'] = line
+            c.sendall(b'250 bye\r\n')
+            c.close()
+        except OSError as e:
+            box['error'] = e
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    q.send(f'nc -c 10.0.2.2 {port}\n')
+    results.append(q.expect('220 the host says hello', 10))
+    q.send('HELO surfos\n')
+    results.append(q.expect('250 bye', 10) and q.expect(PROMPT, 10))
+    t.join(10)
+    srv.close()
+    results.append(box.get('line') == b'HELO surfos\r\n')
+    if not all(results):
+        print(f'  nc talk: {results} {box!r}')
+    return ('nc -c: what the other end says printed, a line typed sent with CR LF (%d of %d)' %
+            (sum(results), len(results)), all(results))
+
+
+def nc_scan_check(q):
+    """nc -z: a port of this host that listens is open, one that does not is closed (status 1); an open one alone
+    gives status 0"""
+    srv, open_port = host_listener()
+    closed_port = free_port()
+    q.send(f'nc -z 10.0.2.2 {open_port} {closed_port}; echo status $?\n')
+    results = [q.expect(f'10.0.2.2 port {open_port}: open', 15), q.expect(f'10.0.2.2 port {closed_port}: closed', 15),
+               q.expect('status 1', 10) and q.expect(PROMPT, 10)]
+    q.send(f'nc -z 10.0.2.2 {open_port}; echo status $?\n')
+    results.append(q.expect(f'10.0.2.2 port {open_port}: open', 15) and q.expect('status 0', 10) and q.expect(PROMPT, 10))
+    srv.close()
+    return ('nc -z: an open port and a closed one (%d of %d)' % (sum(results), len(results)), all(results))
+
+
+CONSOLE_CHECKS.update({'@nc-receive': nc_receive_check, '@nc-send': nc_send_check, '@nc-talk': nc_talk_check,
+                       '@nc-scan': nc_scan_check})
+
+
+CONSOLE_CHECKS.update({'@ftpd-session': ftpd_session_check, '@ftpd-upload': ftpd_upload_check,
+                       '@ftpd-text': ftpd_text_check, '@ftpd-active': ftpd_active_check,
+                       '@ftpd-abort': ftpd_abort_check, '@ftpd-protocol': ftpd_protocol_check,
+                       '@ftpd-descriptors': ftpd_descriptors_check,
+                       '@ftpd-places': ftpd_places_check, '@ftpd-data-time': ftpd_data_time_check,
+                       '@ftpd-readonly': ftpd_readonly_check, '@ftpd-serve': ftpd_serve_check})
 
 
 # 10/10/26 (Undertow): a private DNS peer on a QEMU raw link. No public DNS,
