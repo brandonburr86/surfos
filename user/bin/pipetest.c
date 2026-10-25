@@ -28,6 +28,9 @@ pipetest kill        a child waiting to read an empty pipe, and one waiting for 
                      full one, are killed at once (the kill cuts the wait short)
 pipetest share       a writing end kept open by dup2() or by a child holds the end of the
                      input back until the last descriptor of it is closed
+pipetest spawnx      spawnx() (surfos/spawn.h): a child's environment and its descriptor 3,
+                     one of its descriptors closed, spawnfd() passing environ on, and the
+                     errors: E2BIG, EINVAL, EBADF, EFAULT
 pipetest all         every mode above, in that order
 */
 
@@ -158,6 +161,23 @@ static int c_reader(void) {
     char buf[256];
     while(read(0, buf, sizeof(buf)) > 0);
     return 0;
+}
+
+/* env-child: its environment, a line each, then SURF_B's value, on descriptor 3 (or 1 without one) */
+static int c_env(void) {
+    struct stat st;
+    int fd = fstat(3, &st) == 0 ? 3 : 1, i;
+    char **e;
+    for(e = environ, i = 0; e && *e; e++, i++) dprintf(fd, "%s\n", *e);
+    dprintf(fd, "getenv: %s\ncount: %d\n", getenv("SURF_B") ? getenv("SURF_B") : "(none)", i);
+    return 0;
+}
+
+/* closed-child: descriptor 0 must not be open; says so on descriptor 3 */
+static int c_closed(void) {
+    struct stat st;
+    if(fstat(0, &st) == 0 || errno != EBADF) return 1;
+    return write(3, "closed\n", 7) == 7 ? 0 : 1;
 }
 
 /**** the modes ****/
@@ -538,9 +558,94 @@ static int m_share(void) {
     return pass();
 }
 
+/* what a child wrote on the pipe p[0] until its end, into buf */
+static int read_all(int fd, char *buf, int size) {
+    int n = 0, r;
+    while(n < size - 1 && (r = (int)read(fd, buf + n, (size_t)(size - 1 - n))) > 0) n += r;
+    buf[n] = 0;
+    return n;
+}
+
+static int m_spawnx(void) {
+    static char buf[2048], big[SPAWN_ENV_BYTES + 16];
+    char *argv[] = { "pipetest", "env-child", NULL }, *cargv[] = { "pipetest", "closed-child", NULL };
+    char *env[] = { "SURF_A=1", "SURF_B=two words", NULL }, *many[SPAWN_ENV_MAX + 2], *one[2];
+    struct spawnx o;
+    int p[2], pid, i, fds[3];
+    mode = "spawnx";
+    if(pipe(p) < 0) return fail("pipe()");
+    memset(&o, 0, sizeof(o));
+    o.fds[0] = o.fds[1] = o.fds[2] = -1;
+    o.fds[3] = p[1];
+    o.envp = env;
+    pid = spawnx(SELF, argv, &o);
+    close(p[1]);
+    if(pid < 0) return fail("spawnx with an environment and a descriptor 3");
+    read_all(p[0], buf, sizeof(buf));
+    close(p[0]);
+    if(collect(pid) != 0) return fail("the child's exit status");
+    if(strcmp(buf, "SURF_A=1\nSURF_B=two words\ngetenv: two words\ncount: 2\n")) {
+        printf("pipetest: the child said:\n%s", buf);
+        return fail("the child's environment, or its descriptor 3");
+    }
+    printf("pipetest: a child's environment and its descriptor 3\n");
+
+    if(pipe(p) < 0) return fail("pipe()");
+    o.fds[0] = SPAWN_CLOSED;
+    o.fds[3] = p[1];
+    o.envp = NULL;
+    pid = spawnx(SELF, cargv, &o);
+    close(p[1]);
+    if(pid < 0) return fail("spawnx with descriptor 0 closed");
+    read_all(p[0], buf, sizeof(buf));
+    close(p[0]);
+    if(collect(pid) != 0 || strcmp(buf, "closed\n")) return fail("descriptor 0 was not closed in the child");
+    printf("pipetest: a child with descriptor 0 closed\n");
+
+    if(setenv("SURF_B", "inherited", 1) < 0 || pipe(p) < 0) return fail("setenv");
+    fds[0] = fds[2] = -1;
+    fds[1] = p[1];
+    pid = spawnfd(SELF, argv, fds);
+    close(p[1]);
+    if(pid < 0) return fail("spawnfd");
+    read_all(p[0], buf, sizeof(buf));
+    close(p[0]);
+    if(collect(pid) != 0 || !strstr(buf, "SURF_B=inherited\n") || !strstr(buf, "getenv: inherited\n"))
+        return fail("spawnfd() did not pass environ on");
+    unsetenv("SURF_B");
+    if(getenv("SURF_B")) return fail("unsetenv");
+    printf("pipetest: spawnfd() passes environ on; setenv, getenv, unsetenv\n");
+
+    o.fds[0] = -1;
+    o.fds[3] = -1;
+    for(i = 0; i <= SPAWN_ENV_MAX; i++) many[i] = "SURF_X=x";
+    many[SPAWN_ENV_MAX + 1] = NULL;
+    o.envp = many;
+    if(spawnx(SELF, argv, &o) != -1 || errno != E2BIG) return fail("more than SPAWN_ENV_MAX strings: not E2BIG");
+    memset(big, 'b', sizeof(big) - 1);
+    big[sizeof(big) - 1] = 0;
+    memcpy(big, "BIG=", 4);
+    one[0] = big;
+    one[1] = NULL;
+    o.envp = one;
+    if(spawnx(SELF, argv, &o) != -1 || errno != E2BIG) return fail("more than SPAWN_ENV_BYTES: not E2BIG");
+    o.envp = NULL;
+    o.flags = 0x100;
+    if(spawnx(SELF, argv, &o) != -1 || errno != EINVAL) return fail("a flag not known: not EINVAL");
+    o.flags = 0;
+    o.job = 12345;
+    if(spawnx(SELF, argv, &o) != -1 || errno != EINVAL) return fail("a job not known: not EINVAL");
+    o.job = 0;
+    o.fds[1] = 13;
+    if(spawnx(SELF, argv, &o) != -1 || errno != EBADF) return fail("a descriptor not open: not EBADF");
+    if(spawnx(SELF, argv, (const struct spawnx *)0) != -1 || errno != EFAULT) return fail("no options: not EFAULT");
+    printf("pipetest: E2BIG, EINVAL, EBADF, EFAULT\n");
+    return pass();
+}
+
 static int run_all(void) {
     if(m_basic() || m_stream(262144) || m_full() || m_atomic() || m_broken() || m_poll() || m_limits() || m_kill() ||
-       m_share()) return 1;
+       m_share() || m_spawnx()) return 1;
     mode = "all";
     return pass();
 }
@@ -558,6 +663,7 @@ int main(int argc, char **argv) {
     if(!strcmp(m, "limits")) return m_limits();
     if(!strcmp(m, "kill")) return m_kill();
     if(!strcmp(m, "share")) return m_share();
+    if(!strcmp(m, "spawnx")) return m_spawnx();
     if(!strcmp(m, "all")) return run_all();
     /* the children */
     if(!strcmp(m, "writer")) return c_writer(n);
@@ -569,6 +675,9 @@ int main(int argc, char **argv) {
     if(!strcmp(m, "later")) return c_later((unsigned int)n);
     if(!strcmp(m, "reader")) return c_reader();
     if(!strcmp(m, "sleeper")) { msleep((unsigned int)n); return 0; }
-    fprintf(stderr, "usage: pipetest basic | stream [N] | full | atomic | broken | poll | limits | kill | share | all\n");
+    if(!strcmp(m, "env-child")) return c_env();
+    if(!strcmp(m, "closed-child")) return c_closed();
+    fprintf(stderr, "usage: pipetest basic | stream [N] | full | atomic | broken | poll | limits | kill | share | spawnx |\n"
+                    "       all\n");
     return 2;
 }

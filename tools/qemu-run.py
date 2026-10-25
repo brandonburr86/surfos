@@ -522,6 +522,10 @@ SMOKE = [
                            'PIPETEST kill PASS', 'exit status 0']),
     ('run pipetest share', ['a dup2() copy holds the end of the input back', 'until it ended', 'PIPETEST share PASS',
                             'exit status 0']),
+    # 10/24/26: spawnx(): an environment, a descriptor 3, a closed descriptor, spawnfd() passing environ on, the errors
+    ('run pipetest spawnx', ["a child's environment and its descriptor 3", 'a child with descriptor 0 closed',
+                             'spawnfd() passes environ on', 'E2BIG, EINVAL, EBADF, EFAULT', 'PIPETEST spawnx PASS',
+                             'exit status 0']),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
