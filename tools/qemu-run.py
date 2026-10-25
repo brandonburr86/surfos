@@ -1720,7 +1720,8 @@ def surfsh_jobs_check(q):
     (reading the terminal), fg gives it the keys and Ctrl+D ends its input; cat > file ended by Ctrl+D; the stopped job
     of a surfsh that exits is killed. A program waiting for a key stops off the terminal's queue of readers (the shell's
     next line is the shell's), also when a key comes in the same burst as the Ctrl+Z; a program that a kernel command
-    starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone"""
+    starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone. Two surfshs inside each other:
+    the inner one's job stopped, and its end, leave the middle one the terminal"""
     count = '/initrd/bin/count 100 100'
     stopped = shown('\u224b!> ')
 
@@ -1782,6 +1783,14 @@ def surfsh_jobs_check(q):
     ok = step('/initrd/bin/cat', [], b' \x1a', 0.5)[0]
     ok = step(None, ['[1] stopped  /initrd/bin/cat', stopped])[0]
     ok = ok and step('kill %1; sleep 300', ['[1] killed  /initrd/bin/cat', PROMPT])[0]
+    results.append(ok)
+    # two surfshs inside each other: the inner one's job stopped, and its end, leave the middle one the terminal
+    ok = step('surfsh', [PROMPT])[0]
+    ok = ok and step('surfsh', [PROMPT])[0]
+    ok = ok and step(count, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('exit 0', [PROMPT])[0]
+    ok = ok and step('echo middle-reads', ['\r\nmiddle-reads\r\n', PROMPT])[0]
+    ok = ok and step('exit', [PROMPT])[0]
     results.append(ok)
     # a program the kernel's run starts is in no job: Ctrl+Z leaves it alone, Ctrl+C ends it
     ok = step('surfsh', [PROMPT])[0]

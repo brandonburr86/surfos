@@ -38,7 +38,8 @@ struct tty {
     u_char skip;                        /* 10/6/26: the rest of a paste is dropped until the input pauses (TTY_SKIP) */
     u_long last_in;                     /* 10/6/26: when tty_term_input() last had a byte (ticks), for the skip */
     u_long fg_job;                      /* 10/25/26: the foreground job (surfos/job.h), 0 for none */
-    u_long fg_shell;                    /* the pid of the shell that made it the foreground one */
+    u_long fg_shell;                    /* the pid of its shell (the one that made it; 10/25/26: when that one
+                                           ends, the foreground is its own job, for the shell above it) */
 };
 
 extern struct tty ttys[NUM_TTYS];     /* 10/6/26: F1-F4, then the pseudo-terminals' */

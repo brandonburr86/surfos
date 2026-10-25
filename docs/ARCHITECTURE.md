@@ -1800,10 +1800,11 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   no stop), and the shell that made it (`job_shell`) is the only one that may move it. Each
   terminal has a foreground job (`fg_job`), which surfsh sets with `SYS_job` (49, `JOB_FG`)
   while it waits for one; a task of a job in the background may not (`-EACCES`), but the
-  shell that set it gives the terminal back to its own job (a surfsh typed at a surfsh's
-  prompt). Ctrl+Z in line mode stops the foreground job's tasks (at `--More--` it is a key;
-  over the serial line and a pty it passes a paste's skip and an escape sequence, as Ctrl+C
-  does), and a task of another job that reads the terminal stops instead
+  foreground job's shell (`fg_shell`) gives the terminal back to its own job (a surfsh typed at
+  a surfsh's prompt), and when that shell ends the foreground is its own job, for the shell
+  above it to take back. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
+  it is a key; over the serial line and a pty it passes a paste's skip and an escape
+  sequence, as Ctrl+C does), and a task of another job that reads the terminal stops instead
   (`task_stop_reader()`: as `tty_read()` begins, before it looks at the mode, and in
   `tty_getc()`). A stopped task waits where it was: in its own code it is taken off its run
   queue at once (`TS_STOPPED`, and `irq_dispatch()` switches away from it); waiting for a key

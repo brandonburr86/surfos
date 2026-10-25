@@ -662,7 +662,10 @@ void tty_task_gone(struct surf_task *task) {
     int i;
     for(i = 0; i < NUM_TTYS; i++) {
         if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
-        if(ttys[i].fg_job && ttys[i].fg_shell == task->pid) ttys[i].fg_job = ttys[i].fg_shell = 0;   /* 10/25/26 */
+        if(ttys[i].fg_job && ttys[i].fg_shell == task->pid) {     /* 10/25/26: the foreground job's shell: */
+            ttys[i].fg_job = task->job;                             /* the shell's own job, for the one above */
+            ttys[i].fg_shell = task->job ? task->job_shell : 0;     /* it to give the terminal back to its own */
+        }
     }
     console_task_gone(task);
     pty_task_gone(task);

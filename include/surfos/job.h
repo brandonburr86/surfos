@@ -44,8 +44,9 @@ SYS_job (int op, int arg), for the caller's terminal and the jobs the caller mad
   JOB_KILL  arg: a job: every task of it killed, a stopped one too. How many.
   JOB_ID    the caller's job (0: none).
 -EINVAL for an op or a job that is not the caller's, -EACCES for JOB_FG from a task of a job in
-the background (but the shell that made the foreground job may give the terminal back to its
-own), -ENOTTY without a terminal.
+the background (but the shell of the foreground job may give the terminal back to its own job;
+when that shell ends, the foreground is its job, for the shell above it), -ENOTTY without a
+terminal.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/job.h.
 */
