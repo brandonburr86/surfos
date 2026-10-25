@@ -34,6 +34,10 @@ int jobs_last_pid(void) {
     return last_pid;
 }
 
+void jobs_set_last(int pid) {
+    last_pid = pid;
+}
+
 void job_add(const char *text, const int *pids, int n) {
     struct job *j;
     int i, id, slot = -1;

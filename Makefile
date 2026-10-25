@@ -471,7 +471,7 @@ unittest: test-edit
 # 10/24/26: surfsh's parser, unparser and expansions, user/surfsh/*.c as they are, against the user headers with the
 # C library's names (tests/host/surfsh_bridge.c gives them what they need of the rest of surfsh, tests/host/sim_fs.c the
 # system calls)
-SURFSH_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,parse.o unparse.o expand.o util.o)
+SURFSH_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,parse.o unparse.o expand.o util.o vars.o arith.o glob.o)
 $(BUILD)/host/surfsh/%.o: user/surfsh/%.c user/surfsh/surfsh.h tests/host/libsurf_names.h tests/host/sim_names.h
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"

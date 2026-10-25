@@ -901,7 +901,7 @@ SMOKE = [
       ('crash null', ['killed by "Page Fault', 'killed]', shown('hda1 \u224b!> ')]),
       ('echo status $?', ['\r\nstatus 137\r\n', shown('hda1 \u224b> ')]),
       ('help', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--', 'lsblk', 'programs in /initrd/bin',
-                'fstest', '$? is the one expansion', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
+                'fstest', 'the names that match: * any characters', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
@@ -946,6 +946,33 @@ SMOKE = [
       ('/initrd/bin/count 2 50 | /initrd/bin/wc -w &', ['[1] started (pid ', shown('SURF \u224b> ')]),
       ('sleep 600', ['slept 600 ms', '[1] done  /initrd/bin/count 2 50 | /initrd/bin/wc -w', shown('SURF \u224b> ')]),
       ('rm /hda1/GROUP.TXT /hda1/ERR.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 10/24/26 (variables and expansions in surfsh), in a surfsh of their own: a variable, quoted and not; export into a
+    # program's environment (env), x=1 cmd for cmd alone, env -i; unset, readonly; $( ) and ` `, a line of assignments
+    # alone with the status of its last $( ); $(( )); ${ } forms; splitting; set --, $#, shift; a variable that is not
+    # exported, in a stage that runs in a new surfsh; wildcards, quoted, matching nothing; ${x:?} and $((1 / 0))
+    ('surfsh', [shown('SURF ≋> ')],
+     [('x=hello; echo $x ${x}! "$x" \'$x\'', ['\r\nhello hello! hello $x\r\n', shown('SURF ≋> ')]),
+      ('export GREETING="hi there"; env', ['\r\nGREETING=hi there\r\n', 'PATH=/initrd/bin\r\n', 'PWD=/\r\n',
+                                            'SHELL=/initrd/bin/surfsh\r\n', shown('SURF ≋> ')]),
+      ('LANG=C env | /initrd/bin/head -1; echo ${LANG-unset}', ['\r\nLANG=C\r\nunset\r\n', shown('SURF ≋> ')]),
+      ('env -i ONLY=1 env', ['\r\nONLY=1\r\n', shown('SURF ≋> ')]),
+      ('unset x; echo "[${x-gone}]"', ['\r\n[gone]\r\n', shown('SURF ≋> ')]),
+      ('readonly r=1; r=2; echo $? $r', ['surfsh: r: read-only', '\r\n1 1\r\n', shown('SURF ≋> ')]),
+      ('v=$(cat /initrd/etc/version); echo "[$v]"', ['\r\n[SurfOS 1.0 (ai-dev)]\r\n', shown('SURF ≋> ')]),
+      ('echo "a`echo b`c" $(/initrd/bin/echo d)', ['\r\nabc d\r\n', shown('SURF ≋> ')]),
+      ('v=$(/initrd/bin/ls /nonexistent 2> /dev/null); echo status $?', ['\r\nstatus 1\r\n', shown('SURF ≋> ')]),
+      ('i=6; echo $((i * 7)) $((i += 1)) $i $((0x10 + 010))', ['\r\n42 7 7 24\r\n', shown('SURF ≋> ')]),
+      ('f=/hda1/notes.txt; echo ${f##*/} ${f%.txt} ${#f} ${u:-default}',
+       ['\r\nnotes.txt /hda1/notes 15 default\r\n', shown('SURF ≋> ')]),
+      ('sp="a  b"; set -- $sp "$sp"; echo $# "$3"', ['\r\n3 a  b\r\n', shown('SURF ≋> ')]),
+      ('set -- one "two words" three; shift; echo $# "$1"', ['\r\n2 two words\r\n', shown('SURF ≋> ')]),
+      ('z=inside; { echo $z $1; } | /initrd/bin/cat', ['\r\ninside two words\r\n', shown('SURF ≋> ')]),
+      ('echo /initrd/etc/*.conf', ['\r\n/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF ≋> ')]),
+      ('echo "/initrd/etc/*.conf" /initrd/etc/v?rsion /initrd/etc/none*',
+       ['\r\n/initrd/etc/*.conf /initrd/etc/version /initrd/etc/none*\r\n', shown('SURF ≋> ')]),
+      ('echo ${nothing:?is not set}', ['surfsh: nothing: is not set', shown('SURF ≋!> ')]),
+      ('echo $((1 / 0))', ['division by 0', shown('SURF ≋!> ')]),
       ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and

@@ -27,10 +27,12 @@ shell. A kernel command reads only the console: one after a | is refused. Every 
 the pipeline is waited for; its status is the last stage's. A pipeline in the background has
 no stage in this shell.
 
-A new surfsh is "surfsh --sub STATUS PID" with descriptors 0 and 1 given, 2 this shell's, and
-on its 3 the text to run (unparse.c), which this shell writes into a pipe after starting it.
-It is how SurfOS, which has no fork(), runs ( list ), a stage of a pipeline and a job in the
-background that are surfsh's own.
+A new surfsh is "surfsh --sub STATUS PID LASTPID NAME" with descriptors 0 and 1 given, 2 this
+shell's, the exported variables as its environment, and on its 3 what makes it this shell (the
+other variables, the read-only marks, the positional parameters: var_state()), a NUL, and the
+text to run (unparse.c), which this shell writes into a pipe after starting it. It is how
+SurfOS, which has no fork(), runs ( list ), a stage of a pipeline, a job in the background
+that are surfsh's own, and $( ).
 */
 
 #include "surfsh.h"
@@ -203,11 +205,11 @@ static int redirect(struct redir *r, struct saved *s, int for_program) {
         }
         if(save(s, fd) < 0) return -1;
         if(r->op == R_HERE || r->op == R_HERESTRIP) {
-            if(here_doc(s, fd, r->quoted ? xstrdup(r->body ? r->body : "") : expand_doc(r->body ? r->body : ""), for_program) < 0)
-                return -1;
+            char *text = r->quoted ? xstrdup(r->body ? r->body : "") : expand_doc(r->body ? r->body : "");
+            if(!text || here_doc(s, fd, text, for_program) < 0) return -1;
             continue;
         }
-        target = expand_one(r->word);
+        if(!(target = expand_one(r->word))) return -1;
         if(r->op == R_DUPIN || r->op == R_DUPOUT) {
             if(!strcmp(target, "-")) close(fd);
             else if(!all_digits(target) || atoi(target) > 15 || !is_open(atoi(target))) {
@@ -258,14 +260,25 @@ static int has_input(struct redir *r) {
 /**** a new surfsh ****/
 
 int start_surfsh(const char *text, int in, int out, int background) {
-    char st[16], pid[16], *argv[] = { "surfsh", "--sub", st, pid, NULL };
+    char st[16], pid[16], bg[16], *argv[] = { "surfsh", "--sub", st, pid, bg, arg0, NULL }, **env;
+    struct sbuf all = { NULL, 0, 0 };
     struct spawnx o;
-    size_t left = strlen(text);
+    const char *p_text;
+    size_t left;
     int p[2], child;
     snprintf(st, sizeof(st), "%d", last_status);
     snprintf(pid, sizeof(pid), "%d", shell_pid);
+    snprintf(bg, sizeof(bg), "%d", jobs_last_pid());
+    if(strlen(arg0) > WORD_LIMIT) argv[5] = "surfsh";
+    if(!(env = var_environ(NULL, 0))) return -1;
+    var_state(&all);                            /* what makes it this shell, then a NUL, then the text */
+    if(strstr(text, "history")) history_state(&all);   /* only for a history in it: the lines are many */
+    sb_putc(&all, 0);
+    sb_puts(&all, text);
     if(pipe(p) < 0) {
         fprintf(stderr, "surfsh: a new surfsh: %s\n", strerror(errno));
+        var_env_free(env);
+        sb_free(&all);
         return -1;
     }
     fflush(stdout);
@@ -274,24 +287,29 @@ int start_surfsh(const char *text, int in, int out, int background) {
     o.fds[1] = out >= 0 ? out : is_open(1) ? 1 : SPAWN_CLOSED;
     o.fds[2] = is_open(2) ? 2 : SPAWN_CLOSED;
     o.fds[3] = p[0];
-    o.envp = environ;
+    o.envp = env;
     o.flags = background ? SPAWN_BG : 0;
     child = spawnx(SURFSH_PATH, argv, &o);
     close(p[0]);
+    var_env_free(env);
     if(child < 0) {
         fprintf(stderr, "surfsh: %s: %s\n", SURFSH_PATH, strerror(errno));
         close(p[1]);
+        sb_free(&all);
         return -1;
     }
     broken_pipe_exit(0);                        /* a new surfsh that could not start: an error here, no end */
+    p_text = all.s;
+    left = (size_t)all.len;
     while(left) {
-        ssize_t n = write(p[1], text, left);
+        ssize_t n = write(p[1], p_text, left);
         if(n <= 0) break;
-        text += n;
+        p_text += n;
         left -= (size_t)n;
     }
     broken_pipe_exit(!interactive);
     close(p[1]);
+    sb_free(&all);
     return child;
 }
 
@@ -321,8 +339,8 @@ static char *job_text(struct node *n) {
 /* a command's name that is a word with no expansion in it: its text, quotes taken off, in buf; 0 when it has one */
 static int literal_name(const char *w, char *buf, int size) {
     char *x;
-    if(strpbrk(w, "$`")) return 0;
-    x = expand_one(w);
+    if(strpbrk(w, "$`*?[")) return 0;              /* an expansion or a pattern: known only when it runs */
+    if(!(x = expand_one(w))) return 0;
     if((int)strlen(x) >= size) {
         free(x);
         return 0;
@@ -337,7 +355,7 @@ enum { CMD_PROGRAM, CMD_KERNEL, CMD_SURFSH };
 /* what a stage of a pipeline is: a program (a process of its own), a kernel command, or surfsh's */
 static int stage_kind(struct node *n) {
     char name[WORD_LIMIT + 1];
-    if(n->type != N_SIMPLE || !n->nwords || n->nassigns || !literal_name(n->words[0], name, sizeof(name)))
+    if(n->type != N_SIMPLE || !n->nwords || !literal_name(n->words[0], name, sizeof(name)))
         return CMD_SURFSH;
     if(!strchr(name, '/') && builtin_find(name)) return CMD_SURFSH;
     if(!strchr(name, '/') && kcmd_find(name)) return CMD_KERNEL;
@@ -360,58 +378,92 @@ static const char *program_of(const char *name) {
     return stat(path, &st) == 0 && S_ISREG(st.type) ? path : NULL;
 }
 
-/* the words of n as fields, with the old order: assignments before the name are words (no variables yet) */
-static int command_fields(struct node *n, struct fields *f) {
-    if(expand_words(n->assigns, n->nassigns, f) < 0 || expand_words(n->words, n->nwords, f) < 0) {
-        fields_free(f);
-        return -1;
+/* the words of n as fields, and its assignments as name=value with the value expanded (POSIX's
+   order: the words first): 0, or -1 said */
+static int command_fields(struct node *n, struct fields *f, struct fields *a) {
+    int i;
+    if(expand_words(n->words, n->nwords, f) < 0) goto failed;
+    for(i = 0; i < n->nassigns; i++) {
+        const char *eq = strchr(n->assigns[i], '=');
+        size_t k = (size_t)(eq - n->assigns[i]) + 1;
+        char *v = expand_one(eq + 1), *w;
+        if(!v) goto failed;
+        w = xmalloc(k + strlen(v) + 1);
+        memcpy(w, n->assigns[i], k);
+        strcpy(w + k, v);
+        free(v);
+        fields_take(a, w);
     }
     if(f->n > MAX_WORDS) {
         fprintf(stderr, "surfsh: too many words in a command (at most %d)\n", MAX_WORDS);
-        fields_free(f);
-        return -1;
+        goto failed;
     }
+    return 0;
+failed:
+    fields_free(f);
+    fields_free(a);
+    return -1;
+}
+
+/* the assignments before a builtin or a kernel command: theirs while they run (var_pop() after) */
+static int push_all(struct fields *a) {
+    int i;
+    for(i = 0; i < a->n; i++) if(var_push(a->v[i]) < 0) return -1;
     return 0;
 }
 
-/* A simple command in this shell: surfsh's own, the kernel's or a program (waited for unless
-   X_BACK, when it is a job of its own). in, out: its 0 and 1 first (-1: this shell's) */
+/* A simple command in this shell: surfsh's own, the kernel's or a program (waited for unless pidp,
+   which gets its pid; X_BACK: a job in the background). in, out: its 0 and 1 first (-1: this
+   shell's). Assignments alone stay; before a builtin or a kernel command they are theirs while
+   they run, before a program they are its environment's. An expansion that fails ends a shell
+   that runs a script, as POSIX has it. */
 static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
-    struct fields f = { NULL, 0, 0 };
+    struct fields f = { NULL, 0, 0 }, a = { NULL, 0, 0 };
     struct saved s;
     const struct builtin *b;
-    char path[PATH_MAX];
+    char path[PATH_MAX], **env;
     const char *name;
-    int status = 0, i, pid;
+    int status = 0, i, pid, pushed = var_pushed();
     memset(&s, 0, sizeof(s));
     if(pidp) *pidp = -1;
-    if(command_fields(n, &f) < 0) return STATUS_USAGE;
+    subst_count = 0;
+    if(command_fields(n, &f, &a) < 0) {
+        if(!interactive) {
+            exit_requested = 1;
+            exit_code = STATUS_FAIL;
+        }
+        return STATUS_FAIL;
+    }
     if((in >= 0 && (save(&s, 0) < 0 || dup2(in, 0) < 0)) || (out >= 0 && (save(&s, 1) < 0 || dup2(out, 1) < 0))) {
         fields_free(&f);
+        fields_free(&a);
         return restore(&s, STATUS_FAIL);
     }
-    if(!f.n) {                                  /* redirections alone: made (a file made empty), then undone */
-        status = redirect(n->redirs, &s, 0) < 0 ? STATUS_FAIL : 0;
+    if(!f.n) {                                  /* assignments and redirections alone */
+        for(i = 0; i < a.n && !status; i++) if(var_assign(a.v[i], 0) < 0) status = STATUS_FAIL;
+        if(!status) status = subst_count ? subst_status : 0;
+        if(redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         finish_docs(&s);
+        fields_free(&a);
         return restore(&s, status);
     }
     name = f.v[0];
     if(!name[0] || !strcmp(name, ".") || !strcmp(name, "..")) {    /* no name at all, or a directory's */
         fprintf(stderr, "surfsh: %s: command not found\n", name);
-        fields_free(&f);
-        return restore(&s, STATUS_NOTFOUND);
+        status = STATUS_NOTFOUND;
+        goto done;
     }
     if(!strchr(name, '/') && (b = builtin_find(name))) {
-        if(redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
+        if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         else status = b->fn(f.n, f.v);
+        var_pop(pushed);
         finish_docs(&s);
-        fields_free(&f);
-        return restore(&s, status);
+        goto done;
     }
     for(i = 0; i < f.n; i++) {
         if(too_long(i ? "an argument" : "a command name", f.v[i])) {
-            fields_free(&f);
-            return restore(&s, STATUS_USAGE);
+            status = STATUS_USAGE;
+            goto done;
         }
     }
     if(!strchr(name, '/') && kcmd_find(name)) {
@@ -421,37 +473,82 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
             if(program) fprintf(stderr, "; use %s for that", program);
             fputc('\n', stderr);
             status = STATUS_USAGE;
-        } else if(redirect(n->redirs, &s, 0) < 0) {
+        } else if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) {
             status = STATUS_FAIL;
         } else {
             int found;
             status = run_kernel(f.v, &found);
             if(!found) {                        /* the table said so, the kernel not: as a program */
+                var_pop(pushed);
                 restore(&s, 0);
                 memset(&s, 0, sizeof(s));
                 goto program;
             }
         }
+        var_pop(pushed);
         finish_docs(&s);
-        fields_free(&f);
-        return restore(&s, status);
+        goto done;
     }
 program:
-    if((status = find_program(name, path, sizeof(path))) != 0) {
-        fields_free(&f);
-        return restore(&s, status);
+    if((status = find_program(name, path, sizeof(path))) != 0) goto done;
+    if(!(env = var_environ(a.v, a.n))) {
+        status = STATUS_CANNOT;
+        goto done;
     }
     if(redirect(n->redirs, &s, 1) < 0) {
         finish_docs(&s);
-        fields_free(&f);
-        return restore(&s, STATUS_FAIL);
+        var_env_free(env);
+        status = STATUS_FAIL;
+        goto done;
     }
-    pid = start_program(path, f.v, -1, -1, (flags & X_BACK) != 0);
+    pid = start_program(path, f.v, -1, -1, (flags & X_BACK) != 0, env);
+    var_env_free(env);
     status = restore(&s, pid < 0 ? STATUS_CANNOT : 0);
     finish_docs(&s);                            /* the here-documents, as the program reads them */
     if(pid > 0 && pidp) *pidp = pid;
     else if(pid > 0) status = wait_program(pid, flags & X_TOP);
     fields_free(&f);
+    fields_free(&a);
+    return status;
+done:
+    fields_free(&f);
+    fields_free(&a);
+    return restore(&s, status);
+}
+
+/* $( text ): its output, the newlines at its end taken off; its status. A plain program (a simple
+   command whose name is a program, without redirections) starts here with its output on a pipe;
+   anything else runs in a new surfsh. The output is read as it comes, so the command never waits
+   for room; more than TEXT_LIMIT bytes of it are dropped, and said. */
+int exec_capture(const char *text, struct sbuf *out) {
+    struct arena mem = { NULL };
+    struct parser p;
+    struct node *n = NULL, *more = NULL;
+    char buf[1024];
+    ssize_t r;
+    int fds[2], pid = -1, status = 0, dropped = 0;
+    if(pipe(fds) < 0) {
+        fprintf(stderr, "surfsh: $( ): %s\n", strerror(errno));
+        return STATUS_FAIL;
+    }
+    parser_init(&p, text, &mem);
+    if(parse_command(&p, &n) == PARSE_OK && parse_command(&p, &more) == PARSE_EOF && n->type == N_SIMPLE &&
+       !n->redirs && stage_kind(n) == CMD_PROGRAM) {
+        status = exec_simple(n, 0, -1, fds[1], &pid);
+    } else {
+        pid = start_surfsh(text, -1, fds[1], 0);
+        if(pid < 0) status = STATUS_CANNOT;
+    }
+    close(fds[1]);
+    while((r = read(fds[0], buf, sizeof(buf))) > 0) {
+        if(out->len + r <= TEXT_LIMIT) sb_put(out, buf, (int)r);
+        else dropped = 1;
+    }
+    close(fds[0]);
+    if(pid > 0) status = wait_program(pid, 0);
+    if(dropped) fprintf(stderr, "surfsh: $( ): more than %d bytes of output: the rest was dropped\n", TEXT_LIMIT);
+    while(out->len && out->s[out->len - 1] == '\n') out->s[--out->len] = 0;
+    arena_free(&mem);
     return status;
 }
 

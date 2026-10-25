@@ -241,6 +241,23 @@ static int skip_dollar(struct parser *p, int i) {
     return i + 1;
 }
 
+/* surfsh.h: past what begins at s[i] (a quote, $( ), ${ }, $(( )) or ` `), for expand.c on a word
+   this parser has read already (so it is well made); i + 1 past anything else; the end of s when
+   the construct would not end */
+int word_skip(const char *s, int i) {
+    struct parser p;
+    struct arena junk = { NULL };
+    int r;
+    parser_init(&p, s, &junk);
+    if(s[i] == '\'') r = skip_squote(&p, i);
+    else if(s[i] == '"') r = skip_dquote(&p, i);
+    else if(s[i] == '`') r = skip_backquote(&p, i);
+    else if(s[i] == '$') r = skip_dollar(&p, i);
+    else r = i + 1;
+    arena_free(&junk);
+    return r < 0 ? (int)strlen(s) : r;
+}
+
 /* a word from i: the index where it ends, or -1 */
 static int scan_word(struct parser *p, int i) {
     const char *s = p->src;

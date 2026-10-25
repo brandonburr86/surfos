@@ -13,5 +13,16 @@ int sh_err_line(void);                          /* the line of the last reason *
 int sh_expand(const char *word, char *out, int size);
 int sh_expand_doc(const char *body, char *out, int size);   /* a here-document's text */
 void sh_set_status(int status);                 /* $? */
+/* 10/24/26: variables, the positional parameters, IFS (NULL unsets it), $(( )) */
+void sh_set_var(const char *name, const char *value);   /* value NULL: unset */
+const char *sh_get_var(const char *name);
+void sh_readonly(const char *name);
+void sh_set_args(int n, const char *const *args);
+int sh_arith(const char *text, long *result, char *err, int errsize);
+/* the names a pattern may match (a trailing / makes a directory; relative names are below "."), given
+   to the stand-ins for opendir() and readdir() and to sim_fs.c's stat() */
+void sh_tree(const char *const *names);
+/* one word as one string (expand_one), and a here-document's text: -1 on an error */
+int sh_expand_one(const char *word, char *out, int size);
 
 #endif

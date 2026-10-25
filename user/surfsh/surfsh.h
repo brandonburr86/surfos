@@ -13,7 +13,10 @@ ring-3 program in /initrd/bin; init starts it with -l on every console.
     util.c      strings that grow, arenas, memory
     parse.c     text becomes a tree: lists, && and ||, pipelines, commands, redirections
     unparse.c   a tree becomes text again (what a new surfsh gets to run)
-    expand.c    words become fields: $?, quotes
+    expand.c    words become fields: parameters, $( ), $(( )), splitting at IFS, quotes
+    arith.c     $(( )): C's integer arithmetic
+    glob.c      patterns (* ? [...]) and the names they match
+    vars.c      variables, the environment, the positional parameters
     exec.c      the tree runs: lists, pipelines, groups, subshells, redirections
     run.c       one command: surfsh's own, then the kernel's (kcmd), then programs
     jobs.c      the jobs in the background: started, collected, reported
@@ -43,7 +46,7 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 
 #define LINE_LIMIT      1023        /* bytes of one typed line; the editor refuses a longer one */
 #define HIST_MAX        128         /* lines the history keeps */
-#define MAX_WORDS       32          /* words of one command, its name included (SPAWN_MAX_ARGS) */
+#define MAX_WORDS       128         /* words of one command, its name included (SPAWN_MAX_ARGS) */
 #define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
 #define TEXT_LIMIT      (1024 * 1024)   /* bytes of a script, or of what a new surfsh is given */
 #define DEPTH_LIMIT     64          /* compound commands inside each other, at most */
@@ -133,6 +136,7 @@ int edit_line(char *buf, int size, int more);
 void edit_fresh_row(void);          /* the cursor at the start of a fresh row, as before a prompt */
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
+void history_state(struct sbuf *out);   /* the history as text a new surfsh runs (history -s lines) */
 
 /**** complete.c: Tab ****/
 
@@ -237,6 +241,7 @@ void parser_init(struct parser *p, const char *text, struct arena *mem);
 int parse_command(struct parser *p, struct node **out);
 int is_name(const char *s, int n); /* a variable's name: a letter or _, then letters, digits, _ */
 int needs_quotes(const char *s);    /* a word that the parser would split or change */
+int word_skip(const char *s, int i);   /* past the quote, $( ), ${ }, $(( )) or ` ` at s[i] (expand.c) */
 int line_of(const char *text, int pos);    /* the line (1, 2, ...) that byte pos is on */
 
 /**** unparse.c: a tree becomes text again ****/
@@ -250,11 +255,48 @@ struct fields {
     int n, cap;
 };
 
-/* the words as fields: $? and quotes; -1 with a message */
+/* the words as fields: parameters, $( ), $(( )), splitting, wildcards, quotes; -1 said */
 int expand_words(char **words, int n, struct fields *out);
-char *expand_one(const char *word);     /* a word as one field, never split (a file's name): malloc'ed */
-char *expand_doc(const char *body);     /* a here-document's text: $? (quotes are themselves) */
+char *expand_one(const char *word);     /* a word as one string, never split nor matched (a file's name): NULL said */
+char *expand_doc(const char *body);     /* a here-document's text (its quotes are themselves): NULL said */
+int expand_pattern(const char *word, char **pat, char **quoted, int *len);  /* a pattern with its quoted characters */
 void fields_free(struct fields *f);
+void fields_take(struct fields *f, char *s);    /* s (malloc'ed) is the next field */
+extern int subst_status, subst_count;   /* the last command substitution's status, how many ran */
+
+/**** arith.c, glob.c ****/
+
+int arith(const char *text, long *result, char *err, int errsize);   /* 0, or -1 and why */
+int pmatch(const char *p, const char *q, int pn, const char *s, int sn);   /* q[i]: p[i] was quoted */
+int has_pattern(const char *p, const char *q, int pn);
+int glob_field(const char *p, const char *q, int pn, struct fields *out);  /* the names, sorted: how many */
+
+/**** vars.c: variables ****/
+
+#define V_EXPORT   1                /* programs get it in their environment */
+#define V_READONLY 2
+#define V_SET      4                /* var_flags(): it has a value */
+
+extern char *arg0;                  /* $0 */
+extern char **posargs;                  /* $1 ... */
+extern int npos;                    /* $# */
+
+const char *var_get(const char *name);          /* NULL: not set */
+int var_flags(const char *name);
+int var_set(const char *name, const char *value, int flags);    /* value NULL: flags only; -1 said (read-only) */
+int var_unset(const char *name);                /* -1 said (read-only) */
+int var_assign(const char *word, int flags);    /* "name=value": -1 said */
+int var_push(const char *word);                 /* name=value until var_pop() */
+void var_pop(int to);
+int var_pushed(void);
+char **var_environ(char **extra, int nextra);   /* the environment for a program; NULL said: too big */
+void var_env_free(char **env);
+void vars_init(char **env);
+void vars_print(int only);                      /* 0: all; V_EXPORT, V_READONLY: those, as export/readonly lines */
+void var_state(struct sbuf *out);               /* what a new surfsh needs to be this one, as text it runs */
+void pos_set(int n, char **v);
+int pos_shift(int n);                           /* -1: not that many */
+const char *ifs(void);                          /* IFS, or blank, tab and newline when it is not set */
 
 /**** exec.c: the tree runs ****/
 
@@ -265,6 +307,7 @@ void fields_free(struct fields *f);
 int exec_tree(struct node *n, int flags);  /* in this shell: the status */
 /* a new surfsh that runs text: descriptors 0, 1 (-1: this shell's own), the text on its 3; its pid */
 int start_surfsh(const char *text, int in, int out, int background);
+int exec_capture(const char *text, struct sbuf *out);  /* $( text ): its output, the newlines at its end off; its status */
 
 /**** run.c: commands ****/
 
@@ -274,9 +317,10 @@ const struct kcmd_info *kcmd_entry(int i);
 const struct kcmd_info *kcmd_find(const char *name);
 int kcmd_bridge(void);              /* the kernel offers its commands to programs */
 int program_names(struct cands *c); /* the programs in /initrd/bin, added to c, sorted; -1: none */
-int find_program(const char *name, char *path, int size);   /* 0 and its path; else a status, said */
+int find_program(const char *name, char *path, int size);   /* 0 and its path (PATH's), else a status, said */
 int run_kernel(char **argv, int *found);   /* a kernel command in this shell: its status; *found 0: none */
-int start_program(const char *path, char **argv, int in, int out, int background);   /* its pid; -1 said */
+/* a program with this shell's 0, 1, 2 (in, out: those instead; -1 not) and the environment env: its pid; -1 said */
+int start_program(const char *path, char **argv, int in, int out, int background, char **env);
 int wait_program(int pid, int report);       /* its status: 137 killed; report: [exit status n] */
 void page(int on);                  /* the pager for this shell's commands (TTY_PAGE) */
 
@@ -285,6 +329,7 @@ void page(int on);                  /* the pager for this shell's commands (TTY_
 void job_add(const char *text, const int *pids, int n);   /* "[n] started (pid ...)" */
 void jobs_collect(int fresh);       /* the jobs that ended: reported (fresh: from a fresh row) */
 int jobs_last_pid(void);            /* the last job's last pid ($!), 0 for none */
+void jobs_set_last(int pid);        /* a new surfsh's $!: the one of the shell that started it */
 
 /**** builtins.c: surfsh's own commands ****/
 

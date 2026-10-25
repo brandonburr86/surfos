@@ -412,6 +412,16 @@ void history_add(const char *s) {
     hist_count++;
 }
 
+/* 10/24/26: the history as lines a new surfsh runs (history -s), for its history builtin (exec.c) */
+void history_state(struct sbuf *out) {
+    int i;
+    for(i = hist_oldest(); i < hist_count; i++) {
+        sb_puts(out, "history -s ");
+        sb_quote(out, hist[i % HIST_MAX]);
+        sb_putc(out, '\n');
+    }
+}
+
 int history_print(void) {
     int i;
     for(i = hist_oldest(); i < hist_count; i++) printf("%5d  %s\n", i + 1, hist[i % HIST_MAX]);

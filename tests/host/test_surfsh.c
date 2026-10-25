@@ -1,10 +1,12 @@
-/* Host-side tests of surfsh's parser and expansions (10/24/26): user/surfsh/parse.c, unparse.c and
-   expand.c as they are (tests/host/surfsh_bridge.c). A text is parsed into its first complete command,
+/* Host-side tests of surfsh's parser and expansions (10/24/26): user/surfsh/parse.c, unparse.c, expand.c,
+   vars.c, arith.c and glob.c as they are (tests/host/surfsh_bridge.c). A text is parsed into its first complete command,
    which unparse.c writes back: the words as typed, lists, && and ||, !, pipelines, groups, subshells,
    redirections with their descriptors, here-documents (<< <<- and a quoted end line), comments and
    empty commands; text that ends inside a command (PARSE_MORE, with what is open) and mistakes
    (PARSE_ERROR); the limits on nesting and on a pipeline's length. Then words become fields: quotes,
-   backslashes, $?, a here-document's text. Run by `make unittest`. */
+   backslashes, $?, a here-document's text; variables, splitting at IFS, the positional parameters and
+   "$@", every ${ } form, $(( )) (arith.c, also directly) and $( ) (exec.c's side stands in), and
+   wildcards over a tree of names (glob.c). Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "surfsh_sim.h"
@@ -166,10 +168,192 @@ static void test_expand(void) {
     expands("''", "|", "an empty word in quotes is a field");
     expands("\"\"", "|", "\"\" too");
     expands("a'b'\"c\"d", "abcd|", "quotes inside a word");
-    expands("$x*", "$x*|", "no variables and no wildcards yet");
+    expands("$", "$|", "a $ alone is itself");
+    expands("a$%b", "a$%b|", "a $ before what is no parameter is itself");
     expands("end\\", "end\\|", "a \\ at the very end is itself");
     check(sh_expand_doc("a $? \\$ \\\\ \\x \"q\" 'q'\nb\\\nc\n", out, sizeof(out)) == 0 &&
           !strcmp(out, "a 7 $ \\ \\x \"q\" 'q'\nbc\n"), "a here-document's text: $?, \\ before $ \\ and a newline");
+}
+
+/* 10/24/26: variables, field splitting, the positional parameters, ${ } */
+static void test_parameters(void) {
+    static const char *const args[] = { "a", "b c", "" };
+    sh_set_var("x", "hello");
+    sh_set_var("sp", "a  b c");
+    sh_set_var("st", "*");
+    sh_set_var("e", "");
+    sh_set_var("u", NULL);
+    sh_set_var("f", "/a/b/c.txt");
+    sh_set_var("IFS", NULL);
+    expands("$x", "hello|", "$name");
+    expands("pre${x}post$x", "prehelloposthello|", "${name} and $name in a word");
+    expands("'$x'\\$x\"$x\"", "$x$xhello|", "quoted $ is itself, but not in double quotes");
+    expands("$sp", "a|b|c|", "an unquoted value is split at blanks");
+    expands("\"$sp\"", "a  b c|", "a quoted one is not");
+    expands("x${sp}y", "xa|b|cy|", "split inside a word");
+    expands("$e", "", "an empty value unquoted: no field");
+    expands("\"$e\"", "|", "quoted: an empty field");
+    expands("$u$e", "", "unset and empty: no field");
+    expands("$st", "*|", "a value's * with nothing to match it stays");
+    expands("${#x}.${#u}.${#e}", "5.0.0|", "${#name}");
+    sh_set_var("ue", "\xc3\xa9t\xc3\xa9");
+    expands("${#ue}", "3|", "${#name} counts characters, not bytes");
+    expands("${u:-d1}${u-d2}${e:-d3}${x:-d4}", "d1d2d3hello|", "${:-} and ${-}");
+    expands("\"${e-d5}\"", "|", "${e-...} of an empty but set e is its value");
+    expands("${x:+alt}${u:+alt}${e:+alt}${e+set}", "altset|", "${:+} and ${+}");
+    expands("${v:=assigned}", "assigned|", "${:=} gives the word");
+    check(sh_get_var("v") && !strcmp(sh_get_var("v"), "assigned"), "... and assigns it");
+    check(sh_expand("${u:?it is missing}", out, sizeof(out)) < 0, "${:?} is an error");
+    check(sh_expand("${e:?}", out, sizeof(out)) < 0, "${:?} of an empty one too");
+    expands("${f#*/}|${f##*/}|${f%/*}|${f%%/*}|${f%.txt}", "a/b/c.txt|c.txt|/a/b||/a/b/c|", "# ## % %%");
+    expands("${f#\"*\"}", "/a/b/c.txt|", "a quoted pattern is itself");
+    expands("${x%l*}${x%%l*}", "helhe|", "% shortest, %% longest");
+    expands("${u:-a b}", "a|b|", "the word of ${:-} unquoted is split");
+    expands("\"${u:-a b}\"", "a b|", "... quoted not");
+    expands("${u:-\"a b\" c}", "a b|c|", "... nor the quoted part of it");
+    expands("${x:+$sp}", "a|b|c|", "a value in the word of ${:+}");
+    sh_set_var("IFS", ":");
+    sh_set_var("c", "a::b:");
+    expands("$c", "a||b|", "IFS=: a::b: is three fields, the last : ends one");
+    sh_set_var("c", ":lead");
+    expands("$c", "|lead|", "a field before a leading :");
+    sh_set_var("IFS", " :");
+    sh_set_var("c", " a : b  c :");
+    expands("$c", "a|b|c|", "blanks and one : around it are one delimiter");
+    sh_set_var("IFS", "");
+    expands("$sp", "a  b c|", "IFS empty: nothing is split");
+    sh_set_var("IFS", NULL);
+    sh_set_args(3, args);
+    expands("$#.$1.${2}", "3.a.b|c|", "$# $1 ${2}");
+    expands("\"$@\"", "a|b c||", "\"$@\": a field each, the empty one too");
+    expands("$@", "a|b|c|", "$@ unquoted: split, the empty one gone");
+    expands("\"x$@y\"", "xa|b c|y|", "\"x$@y\"");
+    expands("\"$*\"", "a b c |", "\"$*\": one field, joined by a blank");
+    sh_set_var("IFS", "-");
+    expands("\"$*\"", "a-b c-|", "\"$*\" joined by IFS's first character");
+    sh_set_var("IFS", NULL);
+    expands("${10}${3}x", "x|", "a parameter that is not there");
+    sh_set_args(0, args);
+    expands("\"$@\"", "", "\"$@\" of none: no field at all");
+    expands("\"${@}\"", "", "\"${@}\" of none: no field at all");
+    expands("\"x$@\"", "x|", "\"x$@\" of none");
+    expands("\"$*\"", "|", "\"$*\" of none: one empty field");
+    expands("$#", "0|", "$# of none");
+    expands("$$.$!.$0", "1.42.surfsh|", "$$ $! $0");
+    sh_set_args(3, args);
+    check(sh_expand_doc("<$@> <$*>\n", out, sizeof(out)) == 0 && !strcmp(out, "<a b c > <a b c >\n"),
+          "$@ and $* in a here-document: joined by blanks");
+    expands("${x%\"$@\"}", "hello|", "\"$@\" in a pattern: joined, and it does not match");
+    sh_set_args(0, args);
+}
+
+/* $(( )) and $( ) */
+static void test_arith(void) {
+    char err[120];
+    long v = 0;
+    static const struct { const char *text; long want; } ok[] = {
+        { "1 + 2 * 3", 7 }, { "(1 + 2) * 3", 9 }, { "7 / 2", 3 }, { "-7 / 2", -3 }, { "7 % 3", 1 }, { "-7 % 3", -1 },
+        { "1 << 4", 16 }, { "256 >> 2", 64 }, { "0x10 + 010", 24 }, { "~0", -1 }, { "!5", 0 }, { "!0", 1 },
+        { "3 > 2", 1 }, { "3 <= 2", 0 }, { "2 == 2 && 3 != 4", 1 }, { "0 || 0", 0 }, { "6 & 3", 2 }, { "6 | 3", 7 },
+        { "6 ^ 3", 5 }, { "1 ? 2 : 3", 2 }, { "0 ? 2 : 0 ? 4 : 5", 5 }, { "-(3)", -3 }, { "+4", 4 }, { "", 0 },
+        { "2147483647 + 1", -2147483647L - 1 }, { "n", 5 }, { "n * n", 25 }, { "undefined + 1", 1 },
+    };
+    unsigned i;
+    sh_set_var("n", "5");
+    for(i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+        int r = sh_arith(ok[i].text, &v, err, sizeof(err));
+        checks++;
+        if(r < 0 || v != ok[i].want) {
+            failures++;
+            printf("FAIL: $((%s)) is %ld (%s), not %ld\n", ok[i].text, v, r < 0 ? err : "ok", ok[i].want);
+        }
+    }
+    check(sh_arith("m = 4", &v, err, sizeof(err)) == 0 && v == 4 && !strcmp(sh_get_var("m"), "4"), "an assignment");
+    check(sh_arith("m += 3", &v, err, sizeof(err)) == 0 && v == 7 && !strcmp(sh_get_var("m"), "7"), "+=");
+    check(sh_arith("m <<= 1", &v, err, sizeof(err)) == 0 && v == 14, "<<=");
+    check(sh_arith("a = b = 2", &v, err, sizeof(err)) == 0 && v == 2 && !strcmp(sh_get_var("a"), "2") &&
+          !strcmp(sh_get_var("b"), "2"), "assignments to the right");
+    check(sh_arith("m++", &v, err, sizeof(err)) == 0 && v == 14 && !strcmp(sh_get_var("m"), "15"), "m++ gives the old value");
+    check(sh_arith("++m", &v, err, sizeof(err)) == 0 && v == 16 && !strcmp(sh_get_var("m"), "16"), "++m the new one");
+    check(sh_arith("--m", &v, err, sizeof(err)) == 0 && v == 15, "--m");
+    check(sh_arith("0 && (m = 99)", &v, err, sizeof(err)) == 0 && v == 0 && !strcmp(sh_get_var("m"), "15"),
+          "&& does not work out the side it does not take");
+    check(sh_arith("1 || 1 / 0", &v, err, sizeof(err)) == 0 && v == 1, "|| neither (no division by 0 there)");
+    check(sh_arith("1 ? 3 : (m = 1)", &v, err, sizeof(err)) == 0 && v == 3 && !strcmp(sh_get_var("m"), "15"), "?: neither");
+    check(sh_arith("1 / 0", &v, err, sizeof(err)) < 0 && strstr(err, "division by 0"), "division by 0");
+    check(sh_arith("1 % 0", &v, err, sizeof(err)) < 0, "% by 0");
+    check(sh_arith("-2147483648 / -1", &v, err, sizeof(err)) < 0, "the one division the processor refuses");
+    check(sh_arith("1 +", &v, err, sizeof(err)) < 0, "1 +");
+    check(sh_arith("(1", &v, err, sizeof(err)) < 0 && strstr(err, "not closed"), "an open (");
+    check(sh_arith("1 2", &v, err, sizeof(err)) < 0, "two numbers");
+    check(sh_arith("08", &v, err, sizeof(err)) < 0, "8 is no octal digit");
+    sh_set_var("w", "abc");
+    check(sh_arith("w + 1", &v, err, sizeof(err)) < 0 && strstr(err, "not a number"), "a variable that is no number");
+    check(sh_arith("0 && w", &v, err, sizeof(err)) == 0 && v == 0, "... on the side not taken: no error");
+    sh_set_var("ro", "1");
+    sh_readonly("ro");
+    check(sh_arith("ro = 2", &v, err, sizeof(err)) < 0 && strstr(err, "ro is read-only") && !strcmp(sh_get_var("ro"), "1"),
+          "an assignment to a read-only variable");
+    {
+        char deep[400];
+        int k;
+        for(k = 0; k < 90; k++) memcpy(deep + 4 * k, "1?1:", 4);
+        strcpy(deep + 360, "1");
+        check(sh_arith(deep, &v, err, sizeof(err)) < 0 && strstr(err, "too deep"), "?: nested too deep");
+        for(k = 0; k < 90; k++) deep[k] = '(';
+        deep[90] = '1';
+        for(k = 0; k < 90; k++) deep[91 + k] = ')';
+        deep[181] = 0;
+        check(sh_arith(deep, &v, err, sizeof(err)) < 0 && strstr(err, "too deep"), "( ) nested too deep");
+        for(k = 0; k < 30; k++) memcpy(deep + 2 * k, "1?", 2);
+        strcpy(deep + 60, "7");
+        for(k = 0; k < 30; k++) memcpy(deep + 61 + 2 * k, ":0", 2);
+        deep[121] = 0;
+        check(sh_arith(deep, &v, err, sizeof(err)) == 0 && v == 7, "?: 30 deep is fine");
+    }
+    expands("$((n + 1))", "6|", "$(( )) in a word");
+    expands("$(( $n * 2 ))x", "10x|", "$n inside $(( ))");
+    check(sh_expand("$((1 / 0))", out, sizeof(out)) < 0, "$(( )) that fails is an error");
+    expands("$(echo a b)", "[echo|a|b]|", "$( ) unquoted is split");
+    expands("\"$(echo a  b)\"", "[echo a  b]|", "quoted not, and its newlines at the end go");
+    expands("`echo \\$n`", "[echo|$n]|", "` ` with \\$");
+    expands("\"`echo \\\"q\\\"`\"", "[echo \"q\"]|", "` ` in double quotes with \\\"");
+    expands("$(echo $(inner))", "[echo|$(inner)]|", "$( ) inside $( ) is the inner command's");
+    check(sh_expand_doc("x=$x $(c) $((1+1)) \\$x \"q\" '$x'\n", out, sizeof(out)) == 0 &&
+          !strcmp(out, "x=hello [c] 2 $x \"q\" 'hello'\n"), "a here-document's expansions");
+    check(sh_expand_one("a  $sp $st", out, sizeof(out)) == 0 && !strcmp(out, "a  a  b c *"),
+          "one word for a file's name: nothing split nor matched");
+}
+
+/* wildcards over the names of sh_tree() */
+static void test_glob(void) {
+    static const char *const names[] = {
+        "/g/", "/g/a.txt", "/g/b.txt", "/g/c.c", "/g/.hid", "/g/sub/", "/g/sub/x.txt", "/g/sub/y.c",
+        "/g/\xc3\xa9.txt", "/g/[x]", "rel/", "rel/one", "rel/two", NULL
+    };
+    sh_tree(names);
+    expands("/g/*.txt", "/g/a.txt|/g/b.txt|/g/\xc3\xa9.txt|", "*.txt, sorted, é after b");
+    expands("/g/?.txt", "/g/a.txt|/g/b.txt|/g/\xc3\xa9.txt|", "? is one character, é too");
+    expands("/g/?.c", "/g/c.c|", "?.c");
+    expands("/g/*", "/g/[x]|/g/a.txt|/g/b.txt|/g/c.c|/g/sub|/g/\xc3\xa9.txt|", "* leaves the dot names out");
+    expands("/g/.*", "/g/.hid|", "only a . finds them");
+    expands("/g/*/*.c", "/g/sub/y.c|", "a pattern in each part");
+    expands("/g/[ab].txt", "/g/a.txt|/g/b.txt|", "[ab]");
+    expands("/g/[!a]*.txt", "/g/b.txt|/g/\xc3\xa9.txt|", "[!a]");
+    expands("/g/[a-b].txt", "/g/a.txt|/g/b.txt|", "[a-b]");
+    expands("/g/sub/*", "/g/sub/x.txt|/g/sub/y.c|", "below a plain part");
+    expands("/g/\\*.txt", "/g/*.txt|", "\\* is a star");
+    expands("'/g/*.txt'", "/g/*.txt|", "and so is a quoted one");
+    expands("\"/g/\"*.c", "/g/c.c|", "a quoted part with a pattern after it");
+    expands("/g/nothing*", "/g/nothing*|", "nothing matches: the word stays");
+    expands("/g/[x]", "/g/[x]|", "[x] matches x, which is not there: the word stays");
+    expands("/g/[x", "/g/[x|", "a [ not closed is itself");
+    expands("rel/*", "rel/one|rel/two|", "a relative pattern");
+    expands("/g/*/x.*", "/g/sub/x.txt|", "a file below a matched directory");
+    expands("/g/a.txt/*", "/g/a.txt/*|", "a file is no directory to go into");
+    sh_set_var("pat", "/g/*.c");
+    expands("$pat", "/g/c.c|", "a pattern in a value matches");
+    expands("\"$pat\"", "/g/*.c|", "quoted it does not");
 }
 
 int main(void) {
@@ -179,6 +363,9 @@ int main(void) {
     test_errors();
     sh_set_status(7);
     test_expand();
+    test_parameters();
+    test_arith();
+    test_glob();
     printf("SURFSH UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;
 }

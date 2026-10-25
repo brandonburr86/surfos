@@ -9,14 +9,19 @@ surfsh's own commands. They come before the kernel's commands of the same names
 redirected like a program's (exec.c puts the file on descriptor 1), and they can
 be in a pipeline (in a new surfsh, unless they are its last stage).
 
-    cd [dir]          no dir: /; "cd -": the previous directory (printed)
+    cd [dir]          no dir: /; "cd -": the previous directory (printed); PWD and OLDPWD follow
     pwd               the current directory
     echo [-n] [-e]    the words; -n: no newline; -e: \n \r \t \\ are the characters they name
     exit [n]          leave with status n (0-255, n & 255 as on Unix), 0 when it is not given
     help [command]    this shell's commands, the kernel's, the programs; or one of them
-    history           the lines typed before, oldest first
+    history           the lines typed before, oldest first (history -s LINE adds one: a new surfsh's)
     set [key [value]] the settings (main.c); also "set key = value" and "set key=value",
-                      as surfsh.conf writes them
+                      as surfsh.conf writes them; set alone: the settings, then the variables;
+                      set -- [args]: the positional parameters
+    export [name[=value]...]    programs get these variables (none, or -p: the list)
+    readonly [name[=value]...]  these variables cannot change any more (none, or -p: the list)
+    unset name...     the variables are gone
+    shift [n]         $n+1 becomes $1 (1)
 */
 
 #include "surfsh.h"
@@ -29,15 +34,23 @@ static int b_history(int argc, char **argv);
 static int b_set(int argc, char **argv);
 static int b_help(int argc, char **argv);
 static int b_exit(int argc, char **argv);
+static int b_export(int argc, char **argv);
+static int b_readonly(int argc, char **argv);
+static int b_unset(int argc, char **argv);
+static int b_shift(int argc, char **argv);
 
 const struct builtin builtins[] = {
     { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd },
     { "pwd",     "",              "print the current directory", b_pwd },
     { "echo",    "[-n] [-e] ...", "print the words (-n: no newline, -e: \\n \\r \\t \\\\)", b_echo },
     { "history", "",              "the lines typed before (Up and Down recall them)", b_history },
-    { "set",     "[key [value]]", "show or change the settings (set alone: all)", b_set },
+    { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set },
     { "help",    "[command]",     "this list, or one command", b_help },
     { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit },
+    { "export",  "[name[=value]...]", "programs get these variables (none: the list)", b_export },
+    { "readonly", "[name[=value]...]", "these variables can no longer change (none: the list)", b_readonly },
+    { "unset",   "name...",       "the variables are gone", b_unset },
+    { "shift",   "[n]",           "the positional parameters move down by n (1)", b_shift },
 };
 const int nbuiltins = sizeof(builtins) / sizeof(builtins[0]);
 
@@ -60,6 +73,8 @@ static int b_cd(int argc, char **argv) {
         return STATUS_USAGE;
     }
     if(!strcmp(dir, "-")) {
+        const char *old = var_get("OLDPWD");    /* 10/24/26: the variable, which a script may set */
+        if(old && *old && strlen(old) < sizeof(oldpwd)) strcpy(oldpwd, old);
         if(!oldpwd[0]) {
             fprintf(stderr, "surfsh: cd: no previous directory\n");
             return STATUS_FAIL;
@@ -76,8 +91,14 @@ static int b_cd(int argc, char **argv) {
         fprintf(stderr, "surfsh: cd: %s: %s\n", dir, strerror(errno));
         return STATUS_FAIL;
     }
-    if(cwd[0]) strcpy(oldpwd, cwd);         /* after chdir: dir may be oldpwd itself */
-    if(back && getcwd(cwd, sizeof(cwd))) printf("%s\n", cwd);
+    if(cwd[0]) {                            /* after chdir: dir may be oldpwd itself */
+        strcpy(oldpwd, cwd);
+        if(!(var_flags("OLDPWD") & V_READONLY)) var_set("OLDPWD", cwd, V_EXPORT);
+    }
+    if(getcwd(cwd, sizeof(cwd))) {
+        if(!(var_flags("PWD") & V_READONLY)) var_set("PWD", cwd, V_EXPORT);
+        if(back) printf("%s\n", cwd);
+    }
     return 0;
 }
 
@@ -145,7 +166,10 @@ static int b_exit(int argc, char **argv) {
 }
 
 static int b_history(int argc, char **argv) {
-    (void)argv;
+    if(argc == 3 && !strcmp(argv[1], "-s")) {  /* 10/24/26: a line for the history (a new surfsh's) */
+        history_add(argv[2]);
+        return 0;
+    }
     if(argc > 1) {
         fprintf(stderr, "usage: history\n");
         return STATUS_USAGE;
@@ -153,11 +177,21 @@ static int b_history(int argc, char **argv) {
     return history_print();
 }
 
-/* set, set key, set key value; with an = the words are "key = value" as surfsh.conf has them */
+/* set, set key, set key value; with an = the words are "key = value" as surfsh.conf has them.
+   10/24/26: set alone lists the variables too, and set -- the positional parameters */
 static int b_set(int argc, char **argv) {
     char why[120], text[LINE_LIMIT + 1] = "", *key = argv[1], *value = argc == 3 ? argv[2] : NULL, *eq, *p;
     int i;
-    if(argc == 1) return settings_show(NULL), 0;
+    if(argc == 1) {
+        settings_show(NULL);
+        printf("\n");
+        vars_print(0);
+        return 0;
+    }
+    if(!strcmp(argv[1], "--")) {
+        pos_set(argc - 2, argv + 2);
+        return 0;
+    }
     for(i = 1; i < argc; i++) {
         strlcat(text, argv[i], sizeof(text));
         if(i < argc - 1) strlcat(text, " ", sizeof(text));
@@ -179,6 +213,74 @@ static int b_set(int argc, char **argv) {
     if(settings_apply(key, value, why, sizeof(why))) {
         fprintf(stderr, "surfsh: set: %s\n", why);
         return STATUS_USAGE;
+    }
+    return 0;
+}
+
+/**** variables: export, readonly, unset, shift ****/
+
+/* export and readonly: each name (name=value assigns it first) gets the flag; none or -p: the list */
+static int mark(int argc, char **argv, int flag, const char *cmd) {
+    int i, status = 0;
+    if(argc == 1 || (argc == 2 && !strcmp(argv[1], "-p"))) {
+        vars_print(flag);
+        return 0;
+    }
+    for(i = 1; i < argc; i++) {
+        const char *eq = strchr(argv[i], '=');
+        int n = eq ? (int)(eq - argv[i]) : (int)strlen(argv[i]);
+        char name[WORD_LIMIT + 1];
+        if(!is_name(argv[i], n) || n > WORD_LIMIT) {
+            fprintf(stderr, "surfsh: %s: %s: not a name\n", cmd, argv[i]);
+            status = STATUS_FAIL;
+            continue;
+        }
+        memcpy(name, argv[i], (size_t)n);
+        name[n] = 0;
+        if(var_set(name, eq ? eq + 1 : NULL, flag) < 0) status = STATUS_FAIL;
+    }
+    return status;
+}
+
+static int b_export(int argc, char **argv) {
+    return mark(argc, argv, V_EXPORT, "export");
+}
+
+static int b_readonly(int argc, char **argv) {
+    return mark(argc, argv, V_READONLY, "readonly");
+}
+
+static int b_unset(int argc, char **argv) {
+    int i = 1, status = 0;
+    if(i < argc && !strcmp(argv[i], "-v")) i++;
+    for(; i < argc; i++) {
+        if(!is_name(argv[i], (int)strlen(argv[i]))) {
+            fprintf(stderr, "surfsh: unset: %s: not a name\n", argv[i]);
+            status = STATUS_FAIL;
+        } else if(var_unset(argv[i]) < 0) {
+            status = STATUS_FAIL;
+        }
+    }
+    return status;
+}
+
+static int b_shift(int argc, char **argv) {
+    char *end;
+    long n = 1;
+    if(argc > 2) {
+        fprintf(stderr, "usage: shift [n]\n");
+        return STATUS_USAGE;
+    }
+    if(argc == 2) {
+        n = strtol(argv[1], &end, 10);
+        if(!argv[1][0] || *end || n < 0) {
+            fprintf(stderr, "surfsh: shift: %s is not a number\n", argv[1]);
+            return STATUS_USAGE;
+        }
+    }
+    if(pos_shift((int)n) < 0) {
+        fprintf(stderr, "surfsh: shift: %ld: there are only %d\n", n, npos);
+        return STATUS_FAIL;
     }
     return 0;
 }
@@ -246,7 +348,7 @@ static int b_help(int argc, char **argv) {
     }
     if(shadowed[0]) printf("    (the kernel's %s as well: surfsh's own, above, are used)\n", shadowed);
 
-    printf("\n    programs in %s:\n", PROGRAM_DIR);
+    printf("\n    programs in %s:\n", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
     if(program_names(&progs) < 0 || !progs.n) printf("    (none)\n");
     else if((names = malloc((size_t)progs.n * sizeof(char *)))) {
         const char *example = NULL;
@@ -287,14 +389,20 @@ static int b_help(int argc, char **argv) {
            "                     after it has ended says how it ended\n"
            "      a ; b          one after the other\n"
            "      # comment      the rest of the line is not read\n"
-           "      $?             the status of the command before, as a number (also in\n"
-           "                     double quotes; '$?' is just the two characters)\n"
-           "    $? is the one expansion yet: no variables and no wildcards, * is a star.\n"
+           "      name=value     a variable; $name or ${name} is its value (in \"$name\"\n"
+           "                     one word, whatever it holds); x=1 cmd: for cmd alone\n"
+           "      export name    programs get the variable too, in their environment\n"
+           "      ${x:-y} ${#x}  y when x is empty; x's length (${x%%.txt}: without .txt)\n"
+           "      $(cmd)         what cmd prints (`cmd` too); $((n + 1)) arithmetic\n"
+           "      *.txt  [ab]?   the names that match: * any characters, ? one, [ab] one\n"
+           "                     of those; quoted (\"*\") a star is just a star\n"
+           "      $? $$ $!       the status of the command before, this shell's pid, the\n"
+           "                     last job's; $0 $1 $# \"$@\": the name, the arguments\n"
            "    A line that ends with | or && (or inside quotes, or in a group) goes on\n"
            "    in the next one, after the prompt %s.\n"
-           "    Which command runs: surfsh's own, then the kernel's, then a program in\n"
-           "    %s; a name with a / is the path of a program.\n", use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>",
-           PROGRAM_DIR);
+           "    Which command runs: surfsh's own, then the kernel's, then a program of\n"
+           "    PATH's directories (%s); a name with a / is the path of a program.\n",
+           use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
     printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
            "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
            "    the history; Tab completes a command or a path, a second Tab lists the\n"

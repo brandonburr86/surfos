@@ -5,10 +5,10 @@ File: run.c     Date: 10/6/26, 10/24/26
 --------------------
 One command. The name decides, in the ring-0 shell's order: surfsh's own commands
 (builtins.c), then the kernel's (SYS_kcmd, include/surfos/kcmd.h), then a program; a name
-with a / is always a program's path, any other name is /initrd/bin/<name>. So ls, cat and
-cp are the kernel's, and the programs of the same names are reached by their paths
-(/initrd/bin/ls -l). exec.c decides which applies and makes the redirections; this file runs
-them.
+with a / is always a program's path, any other name is looked for in the directories of PATH
+(10/24/26; /initrd/bin when it is not set). So ls, cat and cp are the kernel's, and the
+programs of the same names are reached by their paths (/initrd/bin/ls -l). exec.c decides
+which applies and makes the redirections; this file runs them.
 
 Kernel commands run in this task, as they did in the ring-0 shell; the kernel's table
 (SYS_kcmdinfo) is read once at the start. A kernel without the bridge answers ENOSYS, and
@@ -18,8 +18,8 @@ answers. A kernel command prints on the console, or, when descriptor 1 is a file
 takes a path or an argument of at most 255 bytes: exec.c refuses a longer word with that
 reason rather than leaving it to the kernel's EFAULT.
 
-A program runs with this shell's descriptors 0, 1 and 2 as they are (SYS_spawnx) and this
-shell's environment. In the foreground it is waited for: its exit status is the command's
+A program runs with this shell's descriptors 0, 1 and 2 as they are (SYS_spawnx) and the
+exported variables as its environment (vars.c). In the foreground it is waited for: its exit status is the command's
 ("[exit status n]" when it is not 0, said for a command of its own at the prompt); a program
 the kernel killed counts as 137 ("[pid n killed]"). Those lines come after paging ends, so
 q at --More-- does not hide them. A program started in the background (SPAWN_BG) is not in
@@ -84,51 +84,92 @@ int run_kernel(char **argv, int *found) {
     return r;
 }
 
-/**** the programs in /initrd/bin ****/
+/**** the programs of PATH ****/
 
 static int cand_cmp(const void *a, const void *b) {
     return strcmp(((const struct cand *)a)->name, ((const struct cand *)b)->name);
 }
 
+/* PATH's directories one after the other: dir gets the next (an empty one is "."); 0 at the end */
+static int path_next(const char **at, char *dir, int size) {
+    const char *p = *at, *colon;
+    int n;
+    if(!p) return 0;
+    colon = strchr(p, ':');
+    n = colon ? (int)(colon - p) : (int)strlen(p);
+    if(n >= size) n = size - 1;
+    if(n) memcpy(dir, p, (size_t)n);
+    else dir[n++] = '.';
+    dir[n] = 0;
+    *at = colon ? colon + 1 : NULL;
+    return 1;
+}
+
+static const char *path_list(void) {
+    const char *p = var_get("PATH");
+    return p ? p : PROGRAM_DIR;
+}
+
 int program_names(struct cands *c) {
-    DIR *d = opendir(PROGRAM_DIR);
-    struct dirent *de;
-    if(!d) return -1;
-    while((de = readdir(d))) {
-        char *name;
-        if(de->d_type != DT_REG || de->d_name[0] == '.') continue;
-        if(c->n == c->cap) {
-            struct cand *v = realloc(c->v, (size_t)(c->cap ? c->cap * 2 : 32) * sizeof(*v));
-            if(!v) break;
-            c->v = v;
-            c->cap = c->cap ? c->cap * 2 : 32;
+    const char *at = path_list();
+    char dir[PATH_MAX];
+    int any = 0, i, n = 0;
+    while(path_next(&at, dir, sizeof(dir))) {
+        DIR *d = opendir(dir);
+        struct dirent *de;
+        if(!d) continue;
+        any = 1;
+        while((de = readdir(d))) {
+            char *name;
+            if(de->d_type != DT_REG || de->d_name[0] == '.') continue;
+            if(c->n == c->cap) {
+                struct cand *v = realloc(c->v, (size_t)(c->cap ? c->cap * 2 : 32) * sizeof(*v));
+                if(!v) break;
+                c->v = v;
+                c->cap = c->cap ? c->cap * 2 : 32;
+            }
+            if(!(name = strdup(de->d_name))) break;
+            c->v[c->n].name = name;
+            c->v[c->n].dir = 0;
+            c->n++;
         }
-        if(!(name = strdup(de->d_name))) break;
-        c->v[c->n].name = name;
-        c->v[c->n].dir = 0;
-        c->n++;
+        closedir(d);
     }
-    closedir(d);
+    if(!any) return -1;
     qsort(c->v, (size_t)c->n, sizeof(struct cand), cand_cmp);
+    for(i = 0; i < c->n; i++) {                     /* a name in two directories: once */
+        if(n && !strcmp(c->v[n - 1].name, c->v[i].name)) free(c->v[i].name);
+        else c->v[n++] = c->v[i];
+    }
+    c->n = n;
     return 0;
 }
 
-/* the program a name runs: its path in path; 0, or the status (said) when there is none */
+/* the program a name runs: a path as it is, any other name in PATH's directories (/initrd/bin when
+   PATH is not set), the first that has it as a file; 0 and its path in path, or the status (said) */
 int find_program(const char *name, char *path, int size) {
     struct stat st;
+    const char *at = path_list();
+    char dir[PATH_MAX];
     int n;
-    if(strchr(name, '/')) n = snprintf(path, (size_t)size, "%s", name);
-    else n = snprintf(path, (size_t)size, PROGRAM_DIR "/%s", name);
-    if(n >= size || stat(path, &st) < 0) {
-        if(strchr(name, '/')) fprintf(stderr, "surfsh: %s: %s\n", name, strerror(n >= size ? ENAMETOOLONG : errno));
-        else fprintf(stderr, "surfsh: %s: command not found\n", name);
-        return STATUS_NOTFOUND;
+    if(strchr(name, '/')) {
+        n = snprintf(path, (size_t)size, "%s", name);
+        if(n >= size || stat(path, &st) < 0) {
+            fprintf(stderr, "surfsh: %s: %s\n", name, strerror(n >= size ? ENAMETOOLONG : errno));
+            return STATUS_NOTFOUND;
+        }
+        if(!S_ISREG(st.type)) {
+            fprintf(stderr, "surfsh: %s: is a directory\n", name);
+            return STATUS_CANNOT;
+        }
+        return 0;
     }
-    if(!S_ISREG(st.type)) {
-        fprintf(stderr, "surfsh: %s: is a directory\n", name);
-        return STATUS_CANNOT;
+    while(path_next(&at, dir, sizeof(dir))) {
+        n = snprintf(path, (size_t)size, "%s/%s", dir, name);
+        if(n < size && stat(path, &st) == 0 && S_ISREG(st.type)) return 0;
     }
-    return 0;
+    fprintf(stderr, "surfsh: %s: command not found\n", name);
+    return STATUS_NOTFOUND;
 }
 
 /**** programs ****/
@@ -145,7 +186,7 @@ static int fd_for_child(int fd, int mine) {
     return fstat(mine, &st) == 0 ? mine : SPAWN_CLOSED;
 }
 
-int start_program(const char *path, char **argv, int in, int out, int background) {
+int start_program(const char *path, char **argv, int in, int out, int background, char **env) {
     struct spawnx o;
     int pid;
     memset(&o, 0, sizeof(o));
@@ -153,7 +194,7 @@ int start_program(const char *path, char **argv, int in, int out, int background
     o.fds[1] = fd_for_child(out, 1);
     o.fds[2] = fd_for_child(-1, 2);
     o.fds[3] = -1;
-    o.envp = environ;
+    o.envp = env;
     o.flags = background ? SPAWN_BG : 0;
     fflush(stdout);
     pid = spawnx(path, argv, &o);

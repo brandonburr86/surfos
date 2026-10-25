@@ -20,7 +20,8 @@ Before each prompt (each line of a file) the jobs in the background that ended a
 reported. The exit status is kept in 0-255, as on Unix: init takes -1 for a shell
 that was killed.
 
-10/24/26: surfsh -c TEXT runs TEXT, and surfsh FILE the lines of FILE, without a prompt.
+10/24/26: surfsh -c TEXT [NAME [ARGS]] runs TEXT ($0 NAME, $1... ARGS), and surfsh FILE [ARGS]
+the lines of FILE ($0 FILE), without a prompt. The environment becomes exported variables.
 Lines are read until they make a complete command (parse.c), which then runs (exec.c):
 at the prompt a line that is not complete yet is continued on the next one, after the
 continuation prompt (… ≋>); Ctrl-C there drops the command. A file that ends inside a
@@ -324,13 +325,14 @@ static void banner(void) {
     fflush(stdout);
 }
 
-/* a new surfsh (exec.c): what to run, from descriptor 3 */
-static int run_sub(const char *status, const char *pid) {
+/* A new surfsh (exec.c): from descriptor 3 what makes it the shell it was started from (its
+   variables, positional parameters), a NUL, and the text to run, with $?, $$, $! and $0 as they
+   were there (its arguments) */
+static int run_sub(char **argv) {
     struct sbuf text = { NULL, 0, 0 };
     char buf[1024];
+    const char *run;
     ssize_t n;
-    last_status = atoi(status);
-    shell_pid = atoi(pid);
     while((n = read(3, buf, sizeof(buf))) > 0) {
         if(text.len + n > TEXT_LIMIT) {
             fprintf(stderr, "surfsh: more than %d bytes to run\n", TEXT_LIMIT);
@@ -339,13 +341,22 @@ static int run_sub(const char *status, const char *pid) {
         sb_put(&text, buf, (int)n);
     }
     close(3);
-    run_text(sb_str(&text), NULL);
+    run = sb_str(&text);
+    if((int)strlen(run) < text.len) {           /* the state first */
+        run_text(run, NULL);
+        run += strlen(run) + 1;
+    }
+    last_status = atoi(argv[0]);
+    shell_pid = atoi(argv[1]);
+    jobs_set_last(atoi(argv[2]));
+    arg0 = argv[3];
+    run_text(run, NULL);
     sb_free(&text);
     return exit_requested ? exit_code : last_status;
 }
 
 static int usage(void) {
-    fprintf(stderr, "usage: surfsh [-l] [-c text | file]   (-l: the banner, as init starts it)\n");
+    fprintf(stderr, "usage: surfsh [-l] [-c text [name [args]] | file [args]]   (-l: the banner, as init starts it)\n");
     return STATUS_USAGE;
 }
 
@@ -355,18 +366,23 @@ int main(int argc, char **argv) {
     const char *text = NULL, *file = NULL;
     setvbuf(stdout, NULL, _IOLBF, 0);           /* line by line, wherever descriptor 1 goes later */
     shell_pid = getpid();
+    vars_init(environ);
     for(i = 1; i < argc; i++) {
         if(!strcmp(argv[i], "-l")) login = 1;
-        else if(!strcmp(argv[i], "--sub") && i + 2 < argc) {
+        else if(!strcmp(argv[i], "--sub") && i + 4 < argc) {
             run_init();
-            return run_sub(argv[i + 1], argv[i + 2]) & 0xff;
+            return run_sub(argv + i + 1) & 0xff;
         } else if(!strcmp(argv[i], "-c") && i + 1 < argc) {
-            text = argv[++i];
+            text = argv[++i];                   /* then $0 and the positional parameters */
+            if(i + 1 < argc) arg0 = argv[++i];
+            pos_set(argc - i - 1, argv + i + 1);
             break;
         } else if(argv[i][0] == '-') {
             return usage();
         } else {
-            file = argv[i];
+            file = argv[i];                     /* $0, then the positional parameters */
+            arg0 = argv[i];
+            pos_set(argc - i - 1, argv + i + 1);
             break;
         }
     }
