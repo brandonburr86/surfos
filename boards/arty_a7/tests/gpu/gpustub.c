@@ -13,6 +13,7 @@ register answers, when the engine takes a word, when a frame latch takes the dis
 #include <string.h>
 #include "surfcpu/soc.h"
 #include "gpustub.h"
+#include "../../../../shell/shell.h"
 
 extern const uint8_t font8x16[256][16];        /* driver/font8x16.c */
 
@@ -501,11 +502,13 @@ int gt_printf(const char *fmt, ...) {
     return n;
 }
 
+/* the words as the kernel shell splits them (arch/riscv32/kshell.c's split_args(): spaces and tabs,
+   SHELL_MAX_ARGS words at most, the rest dropped) */
 int stub_gfx(struct stub *s, struct gpu *g, const char *line) {
-    char buf[512], *argv[64], *save = NULL, *t;
+    char buf[SHELL_LINE_LEN + 1], *argv[SHELL_MAX_ARGS + 1], *save = NULL, *t;
     int argc = 0;
     snprintf(buf, sizeof(buf), "%s", line);
-    for(t = strtok_r(buf, " ", &save); t && argc < 63; t = strtok_r(NULL, " ", &save)) argv[argc++] = t;
+    for(t = strtok_r(buf, " \t", &save); t && argc < SHELL_MAX_ARGS; t = strtok_r(NULL, " \t", &save)) argv[argc++] = t;
     argv[argc] = NULL;
     cur = s;
     s->nout = 0;

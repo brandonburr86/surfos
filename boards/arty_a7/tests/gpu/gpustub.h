@@ -121,7 +121,8 @@ void stub_drain(struct stub *s, uint64_t max_us);
 /* gt_printf (the driver's and gfx's printf in this build) writes into the stub that is current */
 void stub_current(struct stub *s);
 int gt_printf(const char *fmt, ...);
-/* gfx with a line of words, on driver g over stub s; the output in s->out (cleared first) */
+/* gfx with a line of words, split as the kernel shell splits them, on driver g over stub s; the
+   output in s->out (cleared first) */
 int stub_gfx(struct stub *s, struct gpu *g, const char *line);
 
 #endif

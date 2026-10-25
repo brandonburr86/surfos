@@ -693,7 +693,9 @@ static void t_usage(unsigned seed) {
         "gfx text 0 0 1", "gfx text 0 0 1 x hello", "gfx mode", "gfx mode foo", "gfx mode text 2", "gfx mode gfx 3",
         "gfx pal", "gfx pal blue", "gfx pal 256 0", "gfx pal 0 0x1000", "gfx put 640 0 1", "gfx put 0 0", "gfx get 0 480",
         "gfx clear 1 2", "gfx clear 0x100", "gfx crc 1", "gfx reset now", "gfx bench 3", "gfx demo x", "gfx frobnicate",
-        "gfx fill 0x 0 1 1 1", "gfx fill 99999999999999 0 1 1 1", NULL
+        "gfx fill 0x 0 1 1 1", "gfx fill 99999999999999 0 1 1 1",
+        "gfx text 0 0 255 0 one two three four five six seven eight nine ten eleven twelve",
+        "gfx text 0 0 1 2 a b c d e f g h i j", NULL
     };
     struct stub *s = fresh(1);
     unsigned i, n0, bad_ones = 0;
@@ -707,6 +709,11 @@ static void t_usage(unsigned seed) {
     }
     check(!bad_ones, "usage errors: CMD_USAGE, a usage line, and not a word sent");
     check(!s->locked, "  the claim never left held");
+    check(gfx(s, "gfx text 0 0 255 0 one two three four five six seven eight nine ten eleven twelve") == CMD_USAGE &&
+          said(s, "a gfx line holds 15 words at most, gfx text 9 of text"),
+          "  a line the shell may have cut (it keeps 16 words) is refused, saying why");
+    check(gfx(s, "gfx clear 0x25") == CMD_OK && gfx(s, "gfx text 0 0 1 2 a b c d e f g h i") == CMD_OK &&
+          px(s, 8 * 16, 0) == 2 && px(s, 8 * 17, 0) == 0x25, "  15 words (9 of text) draw all 17 cells");
     done(s);
 }
 TEST(t_usage)

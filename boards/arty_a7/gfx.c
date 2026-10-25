@@ -673,6 +673,14 @@ static const struct {
 
 int gfx_command(struct gpu *g, int argc, char **argv) {
     u_int i;
+    /* The kernel shell hands a command SHELL_MAX_ARGS words at most and drops the rest without a
+       word (arch/riscv32/kshell.c's split_args(), as shell/main.c's): a line that filled them may
+       have lost some, so it is refused rather than drawn short. */
+    if(argc >= SHELL_MAX_ARGS) {
+        printf("    usage: a gfx line holds %d words at most, gfx text 9 of text: the shell\n"
+               "    passes a command %d and drops the rest\n", SHELL_MAX_ARGS - 1, SHELL_MAX_ARGS);
+        return CMD_USAGE;
+    }
     if(argc >= 2 && (!strcmp(argv[1], "help") || !strcmp(argv[1], "-h"))) {
         usage(NULL);
         return CMD_OK;
