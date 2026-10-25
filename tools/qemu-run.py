@@ -103,7 +103,7 @@ def surf_prompt(crumbs, state):
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
            'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'halfclose',
-           'nowait', 'finwait', 'ncstuck', 'end')
+           'nowait', 'finwait', 'ncstuck', 'mdns', 'end')
 
 # 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
 RX_PORT = 5555
@@ -296,6 +296,13 @@ SMOKE = [
     ('tcpecho 7', ['tcpecho server started']),
     ('@host-echo', []),
     ('netstat', ['tcpecho: connection from 10.0.2.2', 'tcpecho: closed, 39 bytes echoed', 'tcp  LISTEN']),
+    # 10/25/26: mdns, this computer as surfos.local on its network (net/mdns.c): not running; a name that is none;
+    # off when it is not running. It is not started here: QEMU's user network sends a guest's UDP on through a socket
+    # of this host's, so its probes and announcements would go out onto this host's own network. On the raw link,
+    # tools/qemu-tcp.py's mdns scenario ('@tcp-raw mdns' below) starts it and plays the other hosts
+    ('mdns', ['mdns: not running (mdns on answers for this computer']),
+    ('mdns on my_pc', ['mdns: my_pc is no name here: 1 to 63 letters, digits and hyphens']),
+    ('mdns off', ['mdns: not running']),
     # 10/6/26 (the telnet server, track N): network connections for programs (surfos/sock.h), with nettest: the
     # interface; an echo server the host reaches through the forwarded port 23, and a megabyte the host reads slowly;
     # an HTTP GET from the harness's server; a refused connection, and one to an address that does not answer ARP;

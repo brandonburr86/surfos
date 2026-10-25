@@ -54,6 +54,10 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               then an other end that vanishes: keepalive gives it up as an open one (5 probes)
   ncstuck     (10/25/26) nc -w 3 sending a file to an other end that takes nothing (its window shut)
               and half-closes at once: -w ends nc after 3 s (status 1)
+  mdns        (10/25/26, UDP) the multicast DNS responder: mdns on probes for surfos.local and
+              announces it (to the group, TTL 255); queries to the group answered to the group, a QU
+              one to the querier, a one-shot one with its ID; others not; a conflict while probing
+              makes it surfos-2; mdns off answers nothing (the e1000's multicast filter on the way)
 
   tools/qemu-tcp.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --test
   tools/qemu-tcp.py ... --scenario window --verbose     (the segments as they go)
@@ -65,6 +69,8 @@ import argparse
 import importlib.util
 import os
 import re
+import socket
+import struct
 import sys
 import time
 
@@ -772,6 +778,222 @@ def sc_ncstuck(rig):
     return ok
 
 
+MDNS_MAC = bytes.fromhex('01005e0000fb')
+MDNS_IP = socket.inet_aton('224.0.0.251')
+
+
+def mdns_name(labels):
+    return b''.join(bytes([len(l)]) + l.encode() for l in labels.split('.')) + b'\0'
+
+
+def mdns_query(name, qtype=1, qu=False, qid=0):
+    """10/25/26: a query for name's qtype (1: A, 28: AAAA, 255: ANY), with QU when asked"""
+    return struct.pack('!HHHHHH', qid, 0, 1, 0, 0, 0) + mdns_name(name) + struct.pack('!HH', qtype, 0x8001 if qu else 1)
+
+
+def mdns_records(data):
+    """the header and the records of a message as (id, flags, questions, [(section, name, type, class, ttl, rdata)]);
+    None for one that does not parse"""
+    def name_at(off, depth=0):
+        labels = []
+        while depth < 64:
+            n = data[off]
+            if n & 0xc0 == 0xc0:
+                rest, _ = name_at(((n & 0x3f) << 8) | data[off + 1], depth + 1)
+                return '.'.join(labels + ([rest] if rest else [])), off + 2
+            off += 1
+            if not n:
+                return '.'.join(labels), off
+            labels.append(data[off:off + n].decode('ascii', 'replace'))
+            off += n
+            depth += 1
+        raise ValueError('a name loops')
+    try:
+        qid, flags, qd, an, ns, ar = struct.unpack('!HHHHHH', data[:12])
+        off, questions, records = 12, [], []
+        for _ in range(qd):
+            name, off = name_at(off)
+            questions.append((name.lower(),) + struct.unpack('!HH', data[off:off + 4]))
+            off += 4
+        for section, count in (('an', an), ('ns', ns), ('ar', ar)):
+            for _ in range(count):
+                name, off = name_at(off)
+                rtype, rclass, ttl, size = struct.unpack('!HHIH', data[off:off + 10])
+                records.append((section, name.lower(), rtype, rclass, ttl, data[off + 10:off + 10 + size]))
+                off += 10 + size
+        return qid, flags, questions, records
+    except (IndexError, struct.error, ValueError):
+        return None
+
+
+def mdns_a(d, name, ip='10.0.2.15'):
+    """d: a response whose answers hold name's A record for ip: (its TTL, cache-flush), or None"""
+    m = mdns_records(d.data)
+    if not m or not m[1] & 0x8000:
+        return None
+    for section, n, rtype, rclass, ttl, rdata in m[3]:
+        if section == 'an' and n == name and rtype == 1 and rclass & 0x7fff == 1 and rdata == socket.inet_aton(ip):
+            return ttl, bool(rclass & 0x8000)
+    return None
+
+
+def mdns_is_probe(d, name):
+    m = mdns_records(d.data)
+    return bool(m) and not m[1] & 0x8000 and any(q[0] == name and q[1] == 255 and q[2] & 0x8000 for q in m[2]) and \
+        any(r[0] == 'ns' and r[1] == name and r[2] == 1 for r in m[3])
+
+
+def mdns_nsec(d, name, section='an'):
+    """d: a response whose section holds name's NSEC record (RFC 6762 section 6.1) saying A is its only type"""
+    m = mdns_records(d.data) if d else None
+    return bool(m) and any(s == section and n == name and t == 47 and c == 0x8001 and
+                           r == mdns_name(name) + b'\x00\x01\x40' for s, n, t, c, ttl, r in m[3])
+
+
+def mdns_probe_of(name, ip, qu=True):
+    """another host's probe for name, its A record for ip in the authority section"""
+    return struct.pack('!HHHHHH', 0, 0, 1, 0, 1, 0) + mdns_name(name) + struct.pack('!HH', 255, 0x8001 if qu else 1) + \
+        mdns_name(name) + struct.pack('!HHIH', 1, 1, 120, 4) + socket.inet_aton(ip)
+
+
+def sc_mdns(rig):
+    """10/25/26: the multicast DNS responder (net/mdns.c, `mdns on`): three probes for surfos.local to the group with
+    IP TTL 255, then two announcements; a query to the group (any case) is answered to the group with the
+    cache-flush bit, a TTL of 120 s and an NSEC record (A alone); within the second after, a plain query gets
+    nothing more to the group and another host's probe an answer; one with QU to the querier alone (IP TTL 255),
+    one to our address too, one from off the link nothing; a one-shot query (port 40000) to it with its ID, the
+    question as written and a TTL of 10 s; AAAA the NSEC record alone; another name nothing; mdns off a goodbye (TTL
+    0). Then a conflict: an answer to a probe that gives surfos.local to another address makes it probe for
+    surfos-2.local, and answer for it (the same answer from port 5354, or from off the link, changes nothing).
+    mdns off: nothing more is answered. Then ties (RFC 6762 section 8.2): another host probing for surfos.local at
+    the same moment with a later address wins, and the responder probes again a second later; with an earlier one
+    it goes on. Last, a host that claims every name: after fifteen conflicts in a row the next probe waits 5 s
+    (section 8.1). The queries go to the group's MAC, so the e1000's multicast filter has to take it
+    (NETDEV_ADD_MULTICAST)"""
+    ok = rig.run('mdns', 'mdns: not running')
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    probes = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.mac == MDNS_MAC and mdns_is_probe(d, 'surfos.local'), 3)
+              for _ in range(3)]
+    ok = all(probes) and all(p.dst == MDNS_IP and p.ttl == 255 for p in probes) and ok
+    ann = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP and
+                            mdns_a(d, 'surfos.local') == (120, True), 4) for _ in range(2)]
+    ok = all(ann) and ok
+    if all(probes) and all(ann):
+        print('        (probes %.2f %.2f %.2f s, announcements %.2f %.2f s)' %
+              tuple([p.t - probes[0].t for p in probes] + [a.t - probes[0].t for a in ann]))
+        ok = 0.2 < probes[1].t - probes[0].t < 0.5 and 0.6 < ann[0].t - probes[0].t < 1.1 and \
+            0.8 < ann[1].t - ann[0].t < 1.4 and ok
+    rig.q.wait(1.1)                                 # its record goes to the group once a second at most
+    rig.net.send_udp(5353, 5353, mdns_query('SurfOS.Local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == MDNS_IP and d.mac == MDNS_MAC and mdns_a(d, 'surfos.local') == (120, True) and \
+        mdns_nsec(d, 'surfos.local', 'ar') and ok
+    # within that second: a plain query gets nothing to the group, another host's probe for the name an answer at
+    # once (section 6: a probe is answered 250 ms after the last)
+    rig.q.wait(0.3)
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP, 0.3) is None and ok
+    rig.net.send_udp(5353, 5353, mdns_probe_of('surfos.local', '10.0.2.99', qu=False), src=socket.inet_aton('10.0.2.99'),
+                     dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP and mdns_a(d, 'surfos.local'), 2)
+    ok = d is not None and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local', qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == rawnet.PEER_IP and d.ttl == 255 and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'))                   # to our address (section 5.5)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == rawnet.PEER_IP and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'), src=socket.inet_aton('192.168.77.5'))  # off the link
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.0) is None and ok
+    rig.net.send_udp(40000, 5353, mdns_query('surfos.local', qid=0x4242), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 40000, 3)
+    m = mdns_records(d.data) if d else None
+    ok = d is not None and d.dst == rawnet.PEER_IP and m and m[0] == 0x4242 and m[2] == [('surfos.local', 1, 1)] and \
+        mdns_a(d, 'surfos.local') == (10, False) and d.ttl == 255 and not mdns_nsec(d, 'surfos.local', 'ar') and ok
+    q = mdns_query('SurfOS.Local', qtype=255, qid=0x4343)                     # its question back as it was written
+    rig.net.send_udp(40001, 5353, q, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 40001, 3)
+    ok = d is not None and d.data[12:len(q)] == q[12:] and mdns_a(d, 'surfos.local') == (10, False) and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local', qtype=28, qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353, 3)                         # AAAA: the NSEC record, no address
+    ok = d is not None and mdns_nsec(d, 'surfos.local') and mdns_a(d, 'surfos.local') is None and ok
+    rig.net.send_udp(5353, 5353, mdns_query('other.local', qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.5) is None and ok
+    ok = rig.run('mdns', 'mdns: answering for surfos.local', 'eth0 10.0.2.15') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local') == (0, True), 2)     # goodbye
+    ok = d is not None and d.dst == MDNS_IP and ok
+    # a conflict while probing: another host answers a probe. The same claim from another port than 5353, or to our
+    # address from off the link, is not looked at (sections 6 and 11)
+    rig.net.dgrams.clear()
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 3)
+    claim = struct.pack('!HHHHHH', 0, 0x8400, 0, 1, 0, 0) + mdns_name('surfos.local') + \
+        struct.pack('!HHIH', 1, 0x8001, 120, 4) + socket.inet_aton('10.0.2.99')
+    rig.net.send_udp(5354, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    rig.net.send_udp(5353, 5353, claim, src=socket.inet_aton('192.168.77.5'))
+    p1 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 3)
+    ok = p1 is not None and rig.net.wait_udp(lambda d: mdns_is_probe(d, 'surfos-2.local'), 0.05) is None and ok
+    rig.net.send_udp(5353, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    p2 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos-2.local'), 3)
+    a2 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos-2.local') == (120, True), 5)
+    ok = p is not None and p2 is not None and a2 is not None and ok
+    ok = rig.run('mdns', 'mdns: answering for surfos-2.local') and ok
+    ok = rig.run('dmesg', '+MDNS: another host answers for that name: probing for surfos-2.local instead') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    rig.net.dgrams.clear()
+    rig.net.send_udp(5353, 5353, mdns_query('surfos-2.local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.5) is None and ok
+    # ties: the other host's probe goes out as soon as the responder's first is seen (the command's output is read
+    # after), so it lands while the responder probes. A later address wins: three probes again a second on, then the
+    # announcements (that host never makes its own); an earlier one changes nothing
+    for other, loses in (('10.0.2.99', True), ('10.0.2.3', False)):
+        rig.net.dgrams.clear()
+        rig.mark()
+        rig.q.send('mdns on\n')
+        p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 5)
+        probe = struct.pack('!HHHHHH', 0, 0, 1, 0, 1, 0) + mdns_name('surfos.local') + struct.pack('!HH', 255, 0x8001) + \
+            mdns_name('surfos.local') + struct.pack('!HHIH', 1, 1, 120, 4) + socket.inet_aton(other)
+        rig.net.send_udp(5353, 5353, probe, src=socket.inet_aton(other), dst=MDNS_IP, dst_mac=MDNS_MAC)
+        sent = rig.net.now()
+        ok = rig.expect('mdns: answering for surfos.local') and rig.expect(rig.qr.PROMPT) and p is not None and ok
+        later = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.t > sent and mdns_is_probe(d, 'surfos.local'), 3)
+                 for _ in range(3 if loses else 2)]
+        a = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local') == (120, True), 4)
+        ok = all(later) and a is not None and a.t > later[-1].t and ok
+        if all(later):
+            print('        (a probe from %s: the next of ours %.2f s after it)' % (other, later[0].t - sent))
+            ok = (0.9 < later[0].t - sent < 1.6 if loses else later[0].t - sent < 0.5) and ok
+        if loses:
+            ok = rig.run('dmesg', '+MDNS: eth0: another host probes for surfos.local too and wins the tie') and ok
+        ok = rig.run('mdns off', 'mdns: stopped') and ok
+    # a host that claims every name probed for: the probes for surfos-2 to surfos-15 go out at once, the one after the
+    # fifteenth conflict in a row 5 s later (section 8.1)
+    rig.net.dgrams.clear()
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    gaps, name, claimed = [], 'surfos.local', 0
+    for k in range(16):
+        p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, name), 7)
+        if p is None:
+            break
+        if k:
+            gaps.append(p.t - claimed)
+        if k == 15:
+            break
+        claim = struct.pack('!HHHHHH', 0, 0x8400, 0, 1, 0, 0) + mdns_name(name) + \
+            struct.pack('!HHIH', 1, 0x8001, 120, 4) + socket.inet_aton('10.0.2.99')
+        rig.net.send_udp(5353, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+        claimed = rig.net.now()
+        name = 'surfos-%d.local' % (k + 2)
+    ok = len(gaps) == 15 and max(gaps[:14]) < 1 and 4.5 < gaps[14] < 6.5 and ok
+    if len(gaps) == 15:
+        print('        (a claim on every name: the next probe %.2f s after it at most, after the fifteenth %.2f s)' %
+              (max(gaps[:14]), gaps[14]))
+    ok = rig.run('dmesg', '+MDNS: 15 conflicts in a row: each probe from now on waits 5 s') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    return ok
+
+
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
@@ -798,6 +1020,7 @@ SCENARIOS = [
     ('nowait', sc_nowait, 'a connection not waited for is polled for: made late, or refused'),
     ('finwait', sc_finwait, 'a half-closed connection whose other end vanished is given up by keepalive'),
     ('ncstuck', sc_ncstuck, 'nc -w ends a connection whose other end half-closed and takes nothing'),
+    ('mdns', sc_mdns, 'the multicast DNS responder: probes, announcements, answers, conflicts, off, ties'),
 ]
 
 

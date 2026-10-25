@@ -11,6 +11,9 @@ guest. This side plays the rest of the network, 10.0.2.2 and any other address o
 TCP segments, and sends whatever segments a test makes, right or wrong. A test is then
 the guest's other end, one segment at a time (Conn), or leaves a port to a small
 automatic server (Server) when the guest is the one that connects.
+10/25/26 (multicast DNS): the guest's UDP datagrams are recorded too (Dgram, with the frame's
+destination MAC: a multicast one shows the group), and send_udp() sends one from any address
+and MAC, to the guest's own or to a group.
 
 Grown from the experiments of the review of track N into a test tool.
 """
@@ -57,6 +60,18 @@ class Seg:
                                                                 self.seq, self.ack, self.win, len(self.data))
 
 
+class Dgram:
+    """10/25/26: a UDP datagram the guest sent, with the Ethernet frame's destination"""
+    def __init__(self, t, mac, src, dst, sport, dport, data, ttl):
+        self.t, self.mac, self.src, self.dst, self.sport, self.dport, self.data, self.ttl = \
+            t, mac, src, dst, sport, dport, data, ttl
+
+    def __repr__(self):
+        return '%.2f udp %s:%d -> %s:%d (%s) len=%d' % (self.t, socket.inet_ntoa(self.src), self.sport,
+                                                       socket.inet_ntoa(self.dst), self.dport, self.mac.hex(':'),
+                                                       len(self.data))
+
+
 class Net:
     """the link: ARP answered, the guest's segments queued for the test (or handed to a Server)"""
     def __init__(self, verbose=False):
@@ -69,6 +84,7 @@ class Net:
         s2.close()
         self.dst = ('127.0.0.1', self.qport)
         self.segs = []
+        self.dgrams = []                            # 10/25/26: the guest's UDP datagrams (Dgram)
         self.servers = {}                           # peer port -> Server
         self.cv = threading.Condition()
         self.lock = threading.Lock()                # one sender at a time (the test and the servers)
@@ -113,6 +129,16 @@ class Net:
             ip = f[14:]
             ihl = (ip[0] & 15) * 4
             tot = struct.unpack('!H', ip[2:4])[0]
+            if ip[9] == 17:                         # 10/25/26: UDP, kept for the test
+                udp = ip[ihl:tot]
+                sport, dport, ulen = struct.unpack('!HHH', udp[:6])
+                d = Dgram(self.now(), f[:6], ip[12:16], ip[16:20], sport, dport, udp[8:ulen], ip[8])
+                if self.verbose:
+                    print('    <- guest', d, flush=True)
+                with self.cv:
+                    self.dgrams.append(d)
+                    self.cv.notify_all()
+                continue
             if ip[9] != 6:
                 continue
             tcp = ip[ihl:tot]
@@ -143,6 +169,35 @@ class Net:
                 print('    -> guest %.2f %d->%d %s seq=%u ack=%u win=%u len=%d' % (self.now(), sport, dport, flagstr(flags),
                       seq & 0xffffffff, ack & 0xffffffff, win, len(data)), flush=True)
             self.sock.sendto(GUEST_MAC + PEER_MAC + b'\x08\x00' + ip + tcp, self.dst)
+
+    def send_udp(self, sport, dport, data, src=PEER_IP, dst=GUEST_IP, src_mac=PEER_MAC, dst_mac=GUEST_MAC, ttl=64):
+        """10/25/26: a UDP datagram for the guest, from any address and MAC, to its own or to a group's"""
+        udp = struct.pack('!HHHH', sport, dport, 8 + len(data), 0) + data
+        pseudo = src + dst + struct.pack('!BBH', 0, 17, len(udp))
+        c = csum(pseudo + udp) or 0xffff
+        udp = udp[:6] + struct.pack('!H', c) + udp[8:]
+        with self.lock:
+            ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(udp), self.ipid, 0x4000, ttl, 17, 0, src, dst)
+            self.ipid += 1
+            ip = ip[:10] + struct.pack('!H', csum(ip)) + ip[12:]
+            if self.verbose:
+                print('    -> guest %.2f udp %s:%d -> %s:%d len=%d' % (self.now(), socket.inet_ntoa(src), sport,
+                      socket.inet_ntoa(dst), dport, len(data)), flush=True)
+            self.sock.sendto(dst_mac + src_mac + b'\x08\x00' + ip + udp, self.dst)
+
+    def wait_udp(self, pred, timeout=5.0):
+        """10/25/26: the first recorded datagram matching pred (taken), or None"""
+        deadline = time.time() + timeout
+        with self.cv:
+            while True:
+                for i, d in enumerate(self.dgrams):
+                    if pred(d):
+                        del self.dgrams[i]
+                        return d
+                left = deadline - time.time()
+                if left <= 0:
+                    return None
+                self.cv.wait(left)
 
     def wait(self, pred, timeout=5.0):
         """the first queued segment matching pred (taken from the queue), or None"""
