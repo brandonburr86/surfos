@@ -440,7 +440,7 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 | G0 | this document, spec/soc.toml (soc_version 0.3.0), make gen, MODULES.md, SOC.md | `make check-generated` | | |
 | G1 | surf_vram, the graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, the C display model, gpudiag's window and CPU-drawn scenes, the gpudiag design | VRAM unit test with random CPU and engine traffic; surf_video's graphics modes captured and compared with the model, FRAME_CRC equal to the model's and to the captured pins' CRC; the old video tests unchanged; gpudiag on the RTL SoC (surfsim) prints the model's CRCs | gpudiag through the open flow, every gate; its netlist runs gpudiag as the RTL does | load the gpudiag bitstream: its UART transcript ends in PASS with the expected CRCs; the monitor shows the scenes (the owner looks) |
 | G2 | surf_gpu, its C model, the engine's scenes in gpudiag, both designs | directed tests of every command and edge case, randomized command streams compared with the model at every FENCE, mutants caught; gpudiag's engine scenes in surfsim | gpudiag and ddr_gpu through the open flow, every gate; dram_clk's margin recorded | gpudiag PASS with the engine scenes; ddr_gpu boots SurfOS from the card as the DDR design does |
-| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo | the kernel's driver against the RTL SoC with HAS_GPU (surfsim), its commands' FRAME_CRCs against the model | ddr_gpu with the driver's kernel | the demo on the monitor; `gfx crc` equal to the model's |
+| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)** | the driver and `gfx` against the C model on the host (`test-gpuos-host`); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's; the overlay; the demo; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream | **pending** (section 15.6): the demo on the monitor; `gfx crc` equal to the model's |
 | G4 | triangles (flat, then Gouraud in the palette), the 320x240 double-buffered mode with page flips at vertical blanking, a z-buffer in VRAM (16-bit, 150 KiB at 320x240), perhaps a 16-bit colour format (RGB565 at 320x240) | model-first tests for every new command; tearing checked frame by frame with FRAME_COUNT | the designs with the new engine; timing of the wider data paths | a spinning cube at 30+ frames a second without tearing |
 | G5 | optional: the GPU constrained to a region of the die, a faster GPU clock (50 MHz, its own clock domain and crossing on port A) | the crossing's tests at several clock ratios | placement in the region; timing of the faster clock | the G2 and G4 tests again at the faster clock |
 
@@ -1062,3 +1062,237 @@ b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2; gpudiag.mem
 e55bbbfd4c8658f746078ce886ade206c0a4f05485a1a4b297e53f2321adfd5f and `surfcpu_arty_a7_gpudiag.bit`
 a44314088944e7e2eb1330b8c22bd0cc4f10c1806c3edc2fa145f9fee7ef6c82. Then test them from that clone's
 root as section 14 says, its step 1 first. A second build to compare was not made.
+
+## 15. SurfOS's driver and the `gfx` command (G3)
+
+**Status (2026-10-25).** G3 is done in simulation and on the host: the driver and the `gfx`
+command run against the C model on the host, and SurfOS on the RTL SoC with SurfGPU prints, for
+every `gfx crc`, the CRC of a frame captured at the VGA pins and, where the display shows graphics
+alone, the CRC the C model computes for the same commands; the overlay, the demo, the bench and
+the two "no GPU" systems (QEMU virt, the SoC with HAS_GPU = 0) pass too (section 15.4). Nothing
+here has run on a board: the physical test (section 15.6) is the integrator's, with the owner.
+The brief is [plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md); the G3 commands use
+GPU1's command set only, on a GPU1 or a GPU2 (G4's superset). The cube and GPU2's commands in
+SurfOS (`gfx cube`, `gfx tri`, `gfx flip`) are the round after G3 and G4 merge.
+
+### 15.1 The driver
+
+| File | What |
+|---|---|
+| `boards/arty_a7/gpu.h`, `gpu.c` | the driver: pure code over `struct gpu_port`, as `sdcard.c` is over its SPI host |
+| `boards/arty_a7/gpuhw.c` | the port on the board; the driver's entry in board.c's table; `gfx`'s kernel side |
+| `boards/arty_a7/gfx.c` | the `gfx` command, pure code over the driver |
+| `boards/arty_a7/textcon.c` | CTRL.MODE in the text console's copy of CTRL; a panic switches back to text |
+| `boards/arty_a7/board.c`, `arty.h` | `gpu` in the driver table, `gfx` in the board's commands, its line in `drivers` |
+| `arch/riscv32/kernel.mk` | `driver/font8x16.c` compiled into the Arty kernel, from where it is, unchanged |
+| `arch/riscv32/kshell.c` | `gfx` on a board without one (QEMU virt): "no GPU on this board" |
+| `arch/riscv32/fbcon.c`, `include/arch/riscv32/riscv/board.h` | the display's panic hook |
+| `boards/arty_a7/tests/gpu/` | the host test (`test_gpu.c`), the stand-in for the hardware (`gpustub.c`), `gfxscene.c` |
+| `boards/arty_a7/tests/gpuos_test.py` | SurfOS with `gfx` on the RTL SoC (`test-gpuos`) |
+| `surfcpu/mk/area-gpuos.mk` | `test-gpuos-host` (on test-os and check), `test-gpuos` (on check), `gfxscene`, `evidence-gpuos` |
+
+No shared kernel file changed (kernel/, fs/, driver/, mm/, lib/, shell/, include/ outside
+include/arch/riscv32/): the x86 kernel is as it was.
+
+**Present** when sysinfo.FEATURES has GPU and video, gpu.ID reads "GPU1" (0x31555047) or "GPU2"
+(0x32555047) and INFO gives a FIFO and 300 KiB. The driver names the two IDs itself
+(`GPUDRV_ID_GPU1`, `GPUDRV_ID_GPU2`): G4 gives gpu.h's `GPU_ID_VALUE` GPU2's value. Without
+FEATURES.GPU the gpu window (unmapped then) is never touched. Said once at boot:
+
+```
++GPU: SurfGPU GPU1 (gpu.ID 0x31555047), VRAM 300 KiB at 0x30000000
++GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
+```
+
+or `+GPU: none: sysinfo.FEATURES has no GPU (a bitstream without one)`; `drivers` lists `gpu` (ok
+or not present) and a line of counts. The probe ends with the engine reset: ABORT, the sticky bits
+cleared, the reset target (640x480 at 0, stride 640) and its clip.
+
+**Command words** go to CMD only while FIFO_FREE says there is room: FIFO_FREE is read, that many
+words are written, then it is read again. Two seconds in which FIFO_FREE stays 0 is a stopped
+engine: said (with STATUS, FIFO_FREE and FENCE), ABORT, the command fails.
+
+**Fences.** A submission that must be finished ends with `FENCE value` (with IRQ when the port has
+the interrupt), the values counted from the FENCE register read at the probe. The wait polls FENCE
+for 2 ms (`spin_us`), yielding between reads, then sleeps on the GPU's interrupt in 10 ms steps
+(intc source 5, IE.FENCE: the handler clears FENCE_EV and sets an event) or, without an
+interrupt path (no FEATURES.IRQ), sleeps 1 ms at a time; two seconds in which neither FENCE nor
+FIFO_FREE moves is a stopped engine. The poll comes first because a task the interrupt wakes runs
+only at the next tick (the scheduler runs in trap context; up to 10 ms later), so every short
+command would otherwise take a tick. `gfx bench` polls its fences to the end and `gfx demo` for
+20 ms, so their times are the engine's, not the scheduler's.
+
+**Errors.** After every finished submission STATUS's OVERFLOW, BAD_OPCODE and BAD_PARAM are read;
+each one set is said on a line of its own in words, they are cleared (written 1), the engine is
+ABORTed and the driver's target and clip are queued again (SET_TARGET, SET_CLIP), ahead of
+anything sent after them: the known state. ABORT never waits for them (the FIFO is empty after
+it), so a stopped engine costs no second timeout and Ctrl+C is not held up. Ctrl+C (the task's
+interrupt flag) ends every wait the same way: ABORT, the target and clip queued again.
+
+**The claim.** A mutex, taken for one `gfx` command's run (trylock, then 20 ms sleeps that Ctrl+C
+cuts short): a second console's command waits, saying who has the GPU, and the commands of two
+consoles never interleave. The driver's state is its own struct, used only under the claim.
+
+**Display modes** (CTRL.MODE 1 text, 2 graphics, 3 graphics with the text over it). textcon.c
+keeps the copy of CTRL that it rewrites for the cursor, so the mode lives in that copy:
+`arty_text_lock()` takes the console lock, `arty_text_set_mode()` sets the mode bits with
+interrupts off, and the cursor's own read-modify-write is made with interrupts off too.
+GFX_BASE, GFX_STRIDE, GFX_SCALE and the mode follow section 3's frame latch rule: the driver
+samples the clock and STATUS.FRAME (it counts as a blanking begins) as one atomic pair, in a loop;
+when FRAME moved between two samples taken less than 1 ms apart, the blanking began less than
+1 ms ago, and the four stores are made at once in that same atomic stretch: within 1.3 ms of
+VBLANK_EV, before the latch 1.4 ms after it, so the picture changes in one frame. A pair further
+apart (an interrupt handler, another task) is not used. Without a blanking in 250 ms (no pixel
+clock) the registers are written at once and that is said. The console lock is held meanwhile
+(about a frame). A panic switches the display back to text (`board_display.panic`), so a panic's
+report is seen over any picture.
+
+**The palette** is left as the configuration made it (RGB332) unless a command loads another (a
+warm reset keeps GPAL). Named palettes: `rgb332` (R4 = {R, R[2]}, G4 = {G, G[2]}, B4 = {B, B}, as
+section 3), `grey` (entry n = (n >> 4) in each of red, green and blue: 16 greys of 16 entries) and
+`ramps` (8 hues of 32 shades for G4's Gouraud: entry n is hue n >> 5 of white, red, green, blue,
+yellow, cyan, magenta and orange (0xF80), shade i = n & 31, each component C of the hue becoming
+(C i + 15) / 31: black at i = 0, the hue at i = 31). `gfx` names the palette GPAL holds.
+
+**Text** is one EXPAND of 8n x 16 for a string of n cells, the rows of the console's own font
+(`driver/font8x16.c`) packed as section 5 says, the words UTF-8 decoded as the console decodes them
+(`driver/cp437.c`). **Pixels** through the CPU's VRAM window are the target's, after a fence.
+**FRAME_CRC** of a still picture as section 3 says: after a fence, c0 = FRAME_COUNT, then
+FRAME_COUNT until it is two on (sleeping 5 ms between reads), then FRAME_CRC.
+
+### 15.2 The command
+
+| | |
+|---|---|
+| `gfx` | the GPU: ID, VRAM, the engine and FIFO, the display mode, GFX_BASE/STRIDE/SCALE, the palette, the target and clip, fences and interrupts, words, errors, timeouts, ABORTs, FRAME_COUNT and FRAME_CRC |
+| `gfx mode text\|gfx\|overlay [1\|2]` | the display mode; for gfx and overlay the scale given (the current GFX_SCALE when not), GFX_BASE 0, GFX_STRIDE 640 or 320, and the target becomes that picture (640x480, or 320x240 at VRAM 0); text keeps the target and the picture |
+| `gfx clear [c]` | FILL_RECT of the target, colour c (0) |
+| `gfx fill x y w h c` | FILL_RECT |
+| `gfx rect x y w h c` | the outline as four LINEs; its far corner (x + w - 1, y + h - 1) must be a coordinate; w or h 0 draws nothing |
+| `gfx line x0 y0 x1 y1 c` | LINE |
+| `gfx copy sx sy dx dy w h [key]` | COPY_RECT, with KEY when a key is given |
+| `gfx text x y fg bg\|- words...` | EXPAND in the console's font; `-` transparent; the words joined by one space |
+| `gfx pal rgb332\|grey\|ramps`, `gfx pal n rgb444` | a palette, or entry n |
+| `gfx put x y c`, `gfx get x y` | one pixel of the target through the window at 0x3000_0000 |
+| `gfx crc` | `gfx crc: frame N, crc XXXXXXXX (a frame begun after the last change)` |
+| `gfx bench` | on the target: 8 fills of it, 8 copies of its left half onto its right half, 256 lines between points of it (chosen before the clock starts), 64 strings of 32 cells; each from the first word to its fence, in pixels a second |
+| `gfx demo [seconds]` | the animation below, 10 s when not given (1 to 3600); Ctrl+C ends it |
+| `gfx reset` | ABORT, the sticky bits cleared, the reset target and clip |
+| `gfx help` | the list |
+
+Coordinates and sizes are section 5's (x, y -32768 to 32767, w, h 0 to 65535, colours 0 to 255),
+in decimal or 0x hex, in the target's pixels; the clip cuts, nothing wraps. Every argument is
+checked before a word is sent (a usage line, CMD_USAGE); a drawing command prints nothing when it
+worked and returns once its fence came and no error was found (CMD_OK), else CMD_FAIL with what
+went wrong. Every line `gfx` prints fits the console's 80 columns.
+
+**The demo.** One target 320 wide and 496 high holds two pages of 320x240 (A at VRAM 0, B at 76,800)
+and a row of sprites below them (a ball made with EXPAND and the font's ☻, on the key colour 0xE3).
+The display shows a page at scale 2 (GFX_STRIDE 320). Each frame is drawn into the page not shown:
+WAIT_VBLANK first (by then the page shown last has left the screen: the frame that showed it has
+ended its last line), the clip on that page's rows, eight bands of colour, a turning fan of 16
+lines, five bouncing boxes (FILL_RECT and an outline), six balls and two faces copied from the
+sprite row with the key, a line of text; then a FENCE, and once it came GFX_BASE is written: a
+single register, which the next frame latch takes whole. No frame ever shows a page being drawn
+(the host test checks every engine word against the page on the screen). Before it starts the demo
+keeps the display (mode, GFX_ registers), GPAL (it draws in RGB332), the target and clip, and the
+158,720 bytes of VRAM it draws on (a copy in the kernel heap; without memory it says so and runs
+anyway); when it ends, also on Ctrl+C, it puts them all back and the engine is idle. It prints a
+line a second and the frames a second at the end.
+
+### 15.3 Decisions, and where this deviates from the brief
+
+| Point | Done | Why |
+|---|---|---|
+| The driver's files | `gpu.c`/`gpu.h` the driver, plus `gpuhw.c` the board's port | the brief names gpu.c and gpu.h; the port split (sdcard.c and sd.c's) lets the host test run the driver's own code against the model |
+| `gfx` on QEMU virt | answered by `kshell.c` after the board's table (`absent_cmds`), not listed by `help` | boards/qemu_virt/board.c is not this track's; QEMU's shell is otherwise as it was |
+| After an error or a stopped engine | ABORT, then the target and clip queued, not waited for | waiting would double a stopped engine's timeout and hold up Ctrl+C; queued, they still reach the engine before anything later |
+| The fence wait | polled for 2 ms, then the interrupt | the brief's interrupt wait; the poll avoids a tick's latency per command (15.1) |
+| The frame latch rule | the blanking caught by atomic (clock, STATUS.FRAME) samples less than 1 ms apart | interrupts stay on (an interrupts-off wait for VBLANK_EV could last a frame and lose UART input); an interrupt handler could not take the console lock that textcon's copy of CTRL needs |
+| The demo | also puts VRAM back | "puts the display back as it was": the picture shown before comes back whole (test-gpuos checks its CRC) |
+| textcon.c | the cursor's change of the CTRL copy made with interrupts off; a panic hook | the mode's change and the cursor's must not interleave; a panic in a graphics mode would not be seen |
+| `include/arch/riscv32/riscv/board.h` | `struct board_display` gains `panic` | the hook above (QEMU virt has no display, so nothing else changes) |
+| `gfx put`, `gfx get` | in target coordinates | what `gfx fill` and the others use |
+| The IDs | `GPUDRV_ID_GPU1`, `GPUDRV_ID_GPU2` | G4 changes `GPU_ID_VALUE` to GPU2's; the driver keeps accepting both whichever gpu.h it builds against |
+| The host test's summary line | `test_arty: N of N checks passed` | it links boards/arty_a7/tests/harness.c, whose main() prints that name |
+
+The host test's stand-in uses the C model's `struct gpu_engine` fields `base`, `stride`, `tw`, `th`,
+`cx0`..`cy1`, `fence`, `sticky`, `writes`, `in_cmd`, `np`, `need`, `hdr` and `data_left`, and
+`gpu_engine_idle()`: a change to those in G4's model needs the stand-in changed with it.
+
+### 15.4 What was tested ([evidence](evidence/gpu-g3/))
+
+| Test | Result |
+|---|---|
+| `make test-gpuos-host` (boards/arty_a7/tests/gpu/test_gpu.c, seeds 1, 7, 123) | 429 of 429 checks, 15 tests: every `gfx` drawing command's VRAM equal to a second model fed GPU.md's words (clear, fill clipped, line, copy with and without a key, overlapping, text opaque, transparent and UTF-8, rect pixel by pixel, put and get, both scales) and 120 random commands a seed; the FIFO rule (no word into a full FIFO or past the room read, with a slow engine that fills it); a stopped engine and a FIFO that stays full (said, ABORT, after 2 s of simulated time and not much more), recovery, Ctrl+C in a wait; BAD_OPCODE, BAD_PARAM and OVERFLOW said in words, cleared, ABORTed, the target and clip sent again; fences on the interrupt and with sleeps; two claimants (the second waits, its words all after the first's; Ctrl+C gives up the wait); the frame latch rule (the four stores within 1.3 ms after a blanking, all in the frame after; a 2 ms stall's pair not used; no frames: written at once and said); FRAME_CRC the model's, of a frame begun after the command; the palettes; the demo (no drawing into the page shown, about 60 flips a second, VRAM, GPAL, display, target and clip back, Ctrl+C, no memory); the bench; reset; 31 usage errors refused with nothing sent; GPU1 and GPU2 |
+| `make test-gpuos` (boards/arty_a7/tests/gpuos_test.py) | 21 of 21 checks: SurfBoot boots the kernel from a card in build/sim/surfsim_gpu; 36 commands typed: the six `gfx crc` FRAME_CRCs are each the CRC of a frame captured at the VGA pins, and the four in mode 2 the C model's (`gfxscene`); the picture's CRC after `gfx demo 1` is the one before it; the demo's 60 frames in about 1.06 s of simulated time; the bench's four rates; the last frame at the pins in mode 3: the console's text decoded from the pixels over the picture, every blank cell the model's picture exactly; side by side, build/sim/surfsim (HAS_GPU = 0): `+GPU: none`, `gfx` and `drivers` say there is no GPU. About 340 million cycles (13.5 s simulated) in about 2.5 minutes |
+| `make test-os-qemu` | 136 of 136 checks at -O2 and at -O0, the new one `gfx: no GPU on this board (qemu_virt)` |
+| `make check` (big) | see the evidence: passed at the hand-back commit |
+
+What the RTL run measured (simulation, 25 MHz; the board's numbers may differ): FILL_RECT about
+88 million pixels a second (the engine's 4 pixels a cycle, 100 million, less the commands' own
+time), COPY_RECT about 43 million (2 cycles a word: 50 million), lines about 1.2 million and text
+about 0.7 million pixels a second: those two are the CPU's, which builds every command word (and
+the font's bitmap) fetching each instruction from DDR (no cache, about 2 million instructions a
+second). The demo draws about 300 command words a frame and keeps up with 59.94 Hz in most frames.
+
+Not tested: anything on the board (15.6); two consoles at once on the RTL system (the host test's
+claimants only); `gfx` typed on the PS/2 keyboard (the UART was used); a real monitor.
+
+### 15.5 Pending
+
+The physical test, the integrator's with the owner (15.6). Nothing else of G3 is open.
+
+### 15.6 Trying it on the board (for the owner)
+
+You need the board wired as for G1 and G2 (the Pmod VGA on JB and JC, a monitor, WIRING.md), the
+card with SurfOS, and the UART console. Nothing here writes the card except step 2's deploy, and
+nothing programs the flash.
+
+1. **The bitstream**: the DDR+GPU design of section 14 (G2's table), its sha256 checked as step 6
+   there says, then loaded:
+
+       make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+
+2. **The kernel with the driver** (from the branch the integrator merged G3 into): build it and put
+   it on the card (OWNER-GUIDE.md section 7; the old kernel is kept as /BOOT/BACKUP.BIN):
+
+       make -C surfcpu build-kernel
+       make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS
+
+3. **Boot**: the card in the Pmod MicroSD, `make -C surfcpu uart-console`, press RESET. Among the
+   boot lines: `+GPU: SurfGPU GPU1 (gpu.ID 0x31555047), VRAM 300 KiB at 0x30000000` and
+   `Drivers: serial gpio ps2kbd sdcard gpu`.
+4. **A picture whose CRC is known**: type these at the prompt (the first line switches the monitor
+   to the picture; the console is then on the UART only):
+
+       gfx mode gfx 1
+       gfx pal rgb332
+       gfx clear 0x25
+       gfx fill 16 16 200 120 0xe0
+       gfx rect 8 8 216 136 0xff
+       gfx line 0 479 639 0 0x1c
+       gfx line 0 0 639 479 0xfc
+       gfx copy 16 16 400 300 200 120
+       gfx copy 0 0 240 160 64 64 0x25
+       gfx text 24 200 0xff - Hello from SurfOS on SurfGPU
+       gfx text 24 220 0x03 0xfc opaque text in the console font
+       gfx put 639 479 0x92
+       gfx crc
+
+   It must print `gfx crc: frame N, crc 039d507c`: the C model's CRC of that picture (any N). The
+   monitor shows a dark blue screen, a red box in a white frame with its copy lower right and part
+   of it again in the middle, a green and a yellow diagonal, white text and blue text on yellow,
+   and one light pixel in the bottom right corner. `make -C surfcpu gfxscene` and
+   `surfcpu/build/gpuos/gfxscene FILE` print the model's CRC for any other list of gfx lines.
+5. **The demo**: `gfx demo 10` (Ctrl+C ends it sooner): bands of colour, a turning fan, bouncing
+   boxes and balls at 320x240, without tearing; the UART prints a line a second and the frames a
+   second at the end, and the picture of step 4 comes back (`gfx crc` prints 039d507c again).
+6. **Text over the picture**: `gfx mode overlay` shows the console over the picture (type `help`,
+   say); `gfx mode text` gives the plain console back. `gfx` prints the GPU's state; `gfx help` the
+   commands.
+
+What to send back: the UART capture (with the boot lines, the `gfx crc` lines and the demo's
+summary) and what the monitor showed at steps 4 to 6. A CRC other than 039d507c, a line saying
+`a stopped engine` or `the GPU reports`, or a picture that tears is a FAIL to keep and look into,
+as section 14 says of the G1 and G2 tests.
