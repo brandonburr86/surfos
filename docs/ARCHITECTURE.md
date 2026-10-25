@@ -1597,7 +1597,7 @@ http.c     the HTTP/1.1 protocol, no system calls: request heads, paths, header 
   background server; the address `httpd on` prints is the default interface's (`netinfo`).
   SurfOS has no loopback interface, so Undertow on the same machine cannot open the site.
 
-## 21. Files to and from other computers: ftpd and nc (October 2026)
+## 21. Files to and from other computers: ftpd, nc and fetch (October 2026)
 
 The owner asked (2026-10-24) for networking applications to transfer files remotely, some
 sort of file transfer protocol, so that files go back and forth with other computers such
@@ -1608,6 +1608,7 @@ and what they needed of them:
 ```
 ftpd (user/ftpd/)      ring 3: an FTP server. main.c the commands, server.c one poll() loop, ftp.c the protocol
 nc (user/bin/nc.c)     ring 3: connections by hand, files to and from the Mac's nc
+fetch (user/fetch/)    ring 3: HTTP and HTTPS downloads on Undertow's transport; fetchhttp.c reads the responses
 sockets (net/sock.c)   SYS_shutdown (the half-close), SYS_sockaddr (both ends), SYS_connect's CONNECT_NOWAIT
 TCP (net/tcp.c)        tcp_shutdown(), tcp_addrs(), tcp_open_nowait(); TIME_WAIT keeps what a program has not read
 the network manager    a running ftpd keeps the Wi-Fi keeper off open networks, as telnetd does (section 19)
@@ -1713,6 +1714,33 @@ the network manager    a running ftpd keeps the Wi-Fi keeper off open networks, 
   (`tcp_addrs()`) and how it ended. The console's line mode reads a line at its Enter, so
   what arrives while one is being typed shows after it, and there is no key for the end of
   the input (Ctrl+C ends `nc`).
+* **fetch** (`user/fetch/`, 10/25/26): `fetch [-o file|folder|-] [-c] [-f] [-q] [-t utc]
+  address` downloads an `http://` or `https://` address into a file named after its path
+  (`index.html` for a folder), in the current directory or the folder `-o` names (`-o -`
+  standard output, `-o /dev/null` nothing). The connection is Undertow's: `transport.c` with
+  `url.c`, `config.c`, `util.c` and the TLS glue, linked as they are (the transport gained
+  one accessor, `ut_transport_eof_clean()`), so HTTPS has the browser's roots, checks and
+  messages, and no way around them; `-t` gives the UTC time for one run as the browser's
+  `clock` does. The response is read as it comes (`fetchhttp.c`, no system calls,
+  host-tested), its head as strictly as Undertow's `http.c` reads one (the same refusals:
+  obsolete folding, a CR inside a line, two lengths, a length with Transfer-Encoding, a
+  coding other than chunked), the chunked coding undone a piece at a time and the body
+  written 16 KB at a time, so a download is as large as a file may be (2 GB) and not as
+  memory. Nothing is written before a 2xx response that has something in it (a 204 or 205
+  changes no file); a file there already is kept unless `-f`, and one that appears while a
+  new download is asked for is not replaced (`O_EXCL`). `-c` asks for the rest (`Range:
+  bytes=N-`): a 206 must start at the file's end (which must not have moved meanwhile) and be
+  as long as its range, which it may not pass; one that ends before the file does is added
+  and fetch says `fetch -c` goes on; a 200 leaves the file as it was, as curl and wget
+  refuse it (a network's login page never takes the place of half a download), and `-f`
+  downloads it anew; 416 with the same total says the file is whole. A download cut short
+  keeps what came and says `fetch -c` goes on with it. Over HTTPS a body that only the end
+  of the connection delimits is whole only after TLS's close_notify (RFC 9112 section 9.8:
+  anyone on the way can end a TCP connection); without it fetch keeps what came and says it
+  may be cut short. A download may take 20 days. Redirects are the browser's five codes, ten
+  at most, never in a loop or from HTTPS to HTTP; the file keeps the first address's name (a
+  server's Content-Disposition names nothing on SurfOS). On a terminal a progress line is
+  written over; the end says the size, the time, the rate, the TLS version and the file.
 * **The network manager.** `netman_ftp_exposed()` is true while any user task named `ftpd`
   lives; the keeper then joins no open network by itself (`+NET: wlan0: SurfSim is in range,
   but it is open and an FTP server (ftpd) runs: not joined by itself`), `wifi join` of an open
@@ -1746,13 +1774,24 @@ the network manager    a running ftpd keeps the Wi-Fi keeper off open networks, 
   half-closed connection whose other end vanished: keepalive gives it up) and `ncstuck` (`nc
   -w` ends a connection whose other end half-closed and takes nothing; through QEMU's user
   network this host's buffers take the whole file under Linux, so it is no smoke check of
-  its own). `make test-usb`'s `usbnet` scenario logs in over the USB Ethernet adapter, lists
-  the initrd, takes a file and is refused an upload. On the Mac against SurfOS in QEMU: curl
-  (list, download, upload, delete, a download and an upload resumed), Python's ftplib, the
-  Mac's own `nc` both ways (300000 random bytes each, byte for byte), and Finder's own FTP
-  (`mount_ftp`, Go > Connect to Server), which mounted the server, listed it and copied a
-  file out byte for byte (it tried PORT first and fell back to PASV when PORT was refused
-  behind QEMU's NAT; through QEMU it needs `-a 127.0.0.1`).
+  its own). `make unittest` adds `test_fetch` too (`fetchhttp.c` as it is: the head and its
+  refusals, the chunked coding at random in every piece size, the names, the sizes), and
+  `make test` fetch's steps: this host's server through TestHandler's `/fetch/` paths (a
+  file, one there already, one cut short and gone on with by a Range request, a server that
+  ignores Range (refused, then `-f`), the rest in two parts, a part longer than its range, a
+  204, chunked, the end of the connection, a redirect, a loop, a 404, a name with spaces, a
+  folder, /dev/null, the read-only initrd, `-o ''`), the files read back through httpd.
+  `make test-web` adds the fetch scenarios: HTTPS against the fixtures (TLS 1.3, 1.2,
+  ECDSA), their framing, every refusal the browser makes and a close-delimited HTTPS body
+  ended without close_notify (the fixtures' `/frame/close-cut`; over HTTP it is whole), the
+  production roots, no RDRAND and a clock in 2004 (`-t`). `make test-usb`'s `usbnet`
+  scenario logs in over the USB Ethernet adapter, lists the initrd, takes a file and is
+  refused an upload. On the Mac
+  against SurfOS in QEMU: curl (list, download, upload, delete, a download and an upload
+  resumed), Python's ftplib, the Mac's own `nc` both ways (300000 random bytes each, byte
+  for byte), and Finder's own FTP (`mount_ftp`, Go > Connect to Server), which mounted the
+  server, listed it and copied a file out byte for byte (it tried PORT first and fell back
+  to PASV when PORT was refused behind QEMU's NAT; through QEMU it needs `-a 127.0.0.1`).
 * **Limits.** No logins or encryption (no FTPS, no SFTP) and no time zone (no MDTM). One
   background server, six sessions, files below 2 GB (SurfOS's file offsets). Text mode
   converts line ends only. `nc` speaks TCP alone (no UDP), one connection at a time.

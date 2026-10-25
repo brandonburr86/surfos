@@ -1134,7 +1134,7 @@ Limits:
   seen.
 * A stick ejected while it is served: its pages are "not found" until it is mounted again.
 
-## 17. Files to and from other computers: FTP and nc
+## 17. Files to and from other computers: FTP, nc and fetch
 
 `ftpd` is a file transfer server. While it runs, the Mac (or any computer on the same
 network) copies files from the laptop's sticks and onto them, with what it has already:
@@ -1239,6 +1239,35 @@ adapters). More:
 * A line typed is sent when its Enter comes, and what arrives meanwhile shows after it.
   Ctrl+C ends `nc`.
 
+**fetch, files from the web or from the Mac.** `fetch` downloads an `http://` or `https://`
+address into a file in the current directory (on a mounted stick: the initrd is read-only):
+
+```
+SURF ≋> cd /data
+SURF ≋> fetch https://www.example.com/
+fetch: 1.2 KB in 0.4 s (3.1 KB/s), TLSv1.3 -> index.html
+```
+
+From the Mac, with nothing installed: in Terminal, in the folder whose files the laptop is to
+take, start a web server with `python3 -m http.server 8000` (with the Mac's firewall on, macOS
+may ask once whether Python may accept incoming connections: Allow), then on SurfOS:
+
+```
+SURF ≋> fetch http://10.0.0.2:8000/photo.jpg       (the Mac's address)
+fetch: 470.8 KB in 0.9 s (523.1 KB/s) -> photo.jpg
+```
+
+* The file is named after the address (`index.html` for a folder); `-o name` names it, `-o
+  /data/photos` puts it in that folder, `-o -` prints it.
+* A file that is there already is kept: `-f` replaces it. A download cut short keeps what
+  came and says so; `fetch -c` the same address goes on with it. A server that cannot send the
+  rest of a file sends all of it again, and then the file is kept as it was: `fetch -f`
+  downloads it anew (Python's `http.server` on the Mac is such a server).
+* HTTPS checks the server's certificate as Undertow does, with no way around it, so the
+  laptop's clock must be roughly right (Undertow's guide, The clock); `-t '2026-10-25
+  14:05:00'` gives the time in UTC for one download. Redirects are followed, never from
+  HTTPS to HTTP.
+
 Limits:
 
 * One background server; up to 6 clients at once (a seventh is told to try again later). A
@@ -1273,6 +1302,7 @@ Limits:
 | Wi-Fi on the Intel 9560 (open and WPA2-Personal, joined on the laptop 10/10/26); saved networks joined by themselves at startup and the settings on the stick (under emulation) | |
 | A web server for static sites (`httpd`): HTML, CSS, pictures, folders listed | Forms, uploads, server-side programs, HTTPS |
 | Files to and from other computers over FTP (`ftpd`: Finder, curl, Cyberduck and FileZilla on the Mac), and `nc` both ways | FTPS and SFTP, logins; UTC file times (MDTM) |
+| Downloads over HTTP and HTTPS (`fetch`), resumed where they stopped | Uploads over HTTP; FTP as a client |
 
 ## How it works
 

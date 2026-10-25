@@ -71,4 +71,6 @@ USB stick, as a website that browsers on the network open at the laptop's addres
 Since 10/24/26 (under emulation, and with the Mac's own curl, Finder and `nc` against it in
 QEMU) `ftpd on` lets the Mac copy files from the laptop's sticks and onto them over FTP
 (Finder reads, curl and FTP programs such as Cyberduck both read and write), and `nc` sends
-a file to another computer's `nc` or takes one from it.
+a file to another computer's `nc` or takes one from it. Since 10/25/26 `fetch` downloads
+an `http://` or `https://` address into a file (from the web, or from a Mac running
+`python3 -m http.server`), on Undertow's HTTPS.

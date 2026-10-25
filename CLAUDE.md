@@ -25,7 +25,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
-                  # httpd's HTTP protocol (test_httpd), ftpd's FTP protocol (test_ftp)
+                  # httpd's HTTP protocol (test_httpd), ftpd's FTP protocol (test_ftp), fetch's reading of
+                  # HTTP responses (test_fetch)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -98,7 +99,10 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
            ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
-           docs/USB-BOOT.md section 17, ARCHITECTURE.md section 21)
+           docs/USB-BOOT.md section 17, ARCHITECTURE.md section 21),
+           fetch/ (10/25/26, downloads over HTTP and HTTPS: main the download, fetchhttp the response read as
+           Undertow reads it, host-tested; linked with Undertow's url, config, util and transport, the last with
+           one accessor added: ut_transport_eof_clean(), whether TLS ended with close_notify)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
