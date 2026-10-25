@@ -1056,8 +1056,11 @@ static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
         return 1;
     }
     if(con->page_asker) return 0;                       /* it may not wait: it prints, the question gives way */
-    if(con->esc || (con->stream ? (b & 0xC0) == 0x80 : writer_utf()->have) || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
-        return 0;                                       /* draws nothing, or not yet (10/6/26: the rest of a UTF-8 character) */
+    if(con->esc || (con->stream ? (b & 0xC0) == 0x80 : writer_utf()->have) ||
+       !(b == '\n' || (b == '\t' && !con->wrap) || (b >= 0x20 && b != 0x7F)))
+        return 0;                                       /* draws nothing, or not yet (10/6/26: the rest of a UTF-8 character;
+                                                           10/25/26: a TAB starts a row as a character does, except at a
+                                                           pending wrap, where it does nothing) */
     /* 10/6/26: on a stream a newline after a full row starts just one row, as on any terminal */
     if((con->wrap && !(con->stream && b == '\n')) ? con->page_rows + 2 < con_rows(con)
                                                   : !con->page_fresh || con->page_rows + 1 < con_rows(con))
@@ -1166,6 +1169,13 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         else if(con->loc.y > 0) { con->loc.y--; con->loc.x = COLUMNS - 1; }
         else { syncVideoConsole(false); break; }
         putcell(con, ansi_attr(con, color), ' ');
+        con->page_fresh = 0;
+        syncVideoConsole(false);
+        break;
+    case '\t': /* 10/25/26: to the next multiple of 8, as on a terminal (and stream_put()): never past the
+                  last column, nothing at a pending wrap, and the cells it passes stay as they are */
+        if(!con->wrap) con->loc.x = (con->loc.x + 8) & ~7u;
+        if(con->loc.x >= COLUMNS) con->loc.x = COLUMNS - 1;
         con->page_fresh = 0;
         syncVideoConsole(false);
         break;

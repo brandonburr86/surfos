@@ -12,7 +12,8 @@
    the column count), the serial line's input rules (tty_term_input()). 10/9/26 (Wi-Fi): a
    secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
    serial line or a pty's stream, the history, or stays in the input queue. 10/25/26: a job in
-   the background is not paged with its shell's command. */
+   the background is not paged with its shell's command; TAB on the screen and the serial line,
+   and the pager at a row that starts with one. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -772,6 +773,66 @@ static void t_stream_columns(void) {
     check(stream_is(want), "the bytes go as they were printed: no UTF-8 decoding, no cells");
 }
 
+/* 10/25/26: TAB on the screen (F1) and its serial mirror, by stream_put()'s rules: to the next multiple
+   of 8, never past the last column, nothing at a pending wrap, the cells it passes left as they are.
+   For the pager a TAB starts a row as a character does, on the screen and on a pty. */
+static void t_tab(void) {
+    char r[256], ser[4096], l77[78];
+    int x, y, st;
+    memset(l77, 'x', 77);
+    l77[77] = 0;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    say(SHELL, "a\tb|");
+    sim_cursor(&x, &y);
+    row(0, r);
+    check(!strcmp(r, "a       b|") && sim_cell(1, 0) == 0 && sim_cell(7, 0) == 0 && x == 10 && y == 0,
+          "a TAB b: b in column 8, the cells passed left empty");
+    sim_serial(ser, sizeof(ser));
+    check(!strcmp(ser, "a\tb|"), "the serial terminal gets the TAB as it is");
+    say(SHELL, "\rabcdefghij\r\tX");
+    row(0, r);
+    check(!strcmp(r, "abcdefghXj"), "a TAB moves over cells without erasing them");
+    say(SHELL, "\n");
+    say(SHELL, l77);
+    say(SHELL, "\t");
+    sim_cursor(&x, &y);
+    check(x == 79 && y == 1, "a TAB in column 77 stops at the last column");
+    say(SHELL, "y\t");
+    sim_cursor(&x, &y);
+    check(x == 79 && y == 1 && sim_cell(79, 1) == 'y', "with the last column written (the wrap pending) a TAB does nothing");
+    say(SHELL, "z");
+    sim_cursor(&x, &y);
+    check(sim_cell(0, 2) == 'z' && x == 1 && y == 2, "and the next character starts the next row");
+
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    run(CHILD, w_lines, 1, 24);
+    say_text = "\tindented\n";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == BLOCKED && asking_after(24), "after a screenful, a row that starts with a TAB asks first");
+    if(st == BLOCKED) {
+        sim_input(' ');
+        st = resume(CHILD);
+    }
+    row(23, r);
+    check(st == DONE && !strcmp(r, "        indented"), "then the TAB moves along the row where the question was");
+    run(SHELL, w_page, 0, 0);
+
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 9);
+    stream_now();
+    say_text = "\tindented\n";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == BLOCKED && stream_is(QUESTION), "a pty: after a screenful, a row that starts with a TAB asks first");
+    if(st == BLOCKED) {
+        sim_input(' ');
+        st = resume(CHILD);
+    }
+    check(st == DONE && stream_is(UNASKED "\tindented\n"), "and the TAB goes out after the question is taken away");
+    run(SHELL, w_page, 0, 0);
+}
+
 static void t_stream_wrap_ask(void) {
     char l80[81];
     int st;
@@ -1213,6 +1274,7 @@ int main(void) {
     t_caps();
     t_stream_screenful();
     t_stream_columns();
+    t_tab();
     t_stream_wrap_ask();
     t_stream_resize();
     t_stream_colour();

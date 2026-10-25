@@ -290,7 +290,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
   clear becomes an ANSI clear; **ai-dev**: CR and ESC pass through, so the terminal draws
   the same escape sequences as the screen; since 10/6/26 so do the bytes of UTF-8
-  characters, as they were printed: the terminal is taken to speak UTF-8).
+  characters, as they were printed: the terminal is taken to speak UTF-8; since 10/25/26
+  TAB, which the terminal's tab stops take where the screen does).
   IRQ 4 feeds received bytes to the active tty (CR to newline, DEL to backspace,
   `ESC [ A/B/C/D/H/F` to the arrow/Home/End key codes; **ai-dev**: in raw mode, the bytes
   as they came; in line mode, a lone Esc reaches the pager's question). `qemu -nographic` therefore
@@ -321,7 +322,11 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   prints in the writer's colour, so `kprintf()` and the older programs look as they did.
   Wrapping is VT100's: writing the last column leaves the cursor there and the next
   character starts the next line, so a program can write the bottom right corner without
-  scrolling. Until 10/6/26 only printable ASCII (32-126) was drawn (now UTF-8 is, below). `tty_ctl()`
+  scrolling. Until 10/6/26 only printable ASCII (32-126) was drawn (now UTF-8 is, below).
+  Since 10/25/26 TAB moves the cursor to the next multiple of 8, as on a terminal: never past
+  the last column, not at all at a pending wrap, and the cells it passes stay as they are;
+  for the pager it starts a row as a character does. A pty's stream console (section 18)
+  had these rules already. `tty_ctl()`
   (system call `ttyctl`) with `TTY_RAW` 1 stops echo and line editing: keys arrive one at a
   time, Ctrl-C is just 0x03, the keyboard's special keys become the sequences a terminal
   sends (`ESC [ A` ... `ESC [ 6 ~`, Backspace 0x7f, Enter CR), and serial input arrives as

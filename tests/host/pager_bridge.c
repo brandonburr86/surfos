@@ -43,7 +43,7 @@ void serial_console_putc(int c) {           /* driver/serial.c's rules */
     switch(c) {
     case '\n': serial_putc('\r'); serial_putc('\n'); break;
     case 0x08: serial_putc('\b'); serial_putc(' '); serial_putc('\b'); break;
-    case '\r': case 0x1B: serial_putc((char)c); break;
+    case '\r': case '\t': case 0x1B: serial_putc((char)c); break;
     default: if((c >= 32 && c <= 126) || c < 0 || c >= 0x80) serial_putc((char)c); break;
     }
 }
