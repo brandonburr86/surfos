@@ -228,6 +228,8 @@ void gui_request_quit(struct gui_state *g);
    the task list), and gui_finish() before it frees the state (a terminal session hangs up) */
 void gui_tick(struct gui_state *g);
 void gui_finish(struct gui_state *g);
+/* 10/25/26: the largest content a program's window can have here, a maximized one's (shell/gui.c registers it) */
+void gui_client_room(const struct gui_state *g, int *w, int *h);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */
 /* 10/18/26: a desktop's own struct gui_fs, whose read_at keeps the file it read last open until
    gui_kernel_fs_idle() (each frame, before drawing or sleeping); gui_kernel_fs_end() closes and frees it */

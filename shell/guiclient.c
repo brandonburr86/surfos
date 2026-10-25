@@ -238,6 +238,11 @@ void client_tick(struct gui_state *g) {
     accept(g);
 }
 
+void gui_client_room(const struct gui_state *g, int *w, int *h) {
+    *w = g->width - FRAME_W;
+    *h = g->height - MENU_H - TASK_H - FRAME_H;
+}
+
 void client_finish(struct gui_state *g) {
     int id;
     for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) {

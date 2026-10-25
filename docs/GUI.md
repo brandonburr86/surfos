@@ -590,6 +590,36 @@ refuse; Hex's own Open (or O) opens any file.
   are selected, the last message, and the file's size. The title bar shows the file's
   name. Hex opens files, not devices. Closing the window forgets the file.
 
+## Programs' windows
+
+*10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
+program can open a window on the desktop, draw in it and take its keys and its pointer.
+Type `wintest show &` in the Terminal: a window of four coloured quadrants opens in front,
+and its title says what it was last sent.
+
+* **Which programs.** Programs started in the desktop's Terminal, or on the console the
+  desktop runs on, may open windows on it. Programs on other consoles and in telnet
+  sessions cannot: their window calls say ENODEV. A window appears when its program first
+  draws in it, or after a quarter of a second, in front of the others, in a cascade from
+  the top left.
+* **The pointer and the keys.** Everything the pointer does over a program's window is
+  the program's: moving over it, all three buttons, the wheel. A press in it brings the
+  window to the front, and while a button is held the program follows the pointer
+  wherever it goes. While its window is in front every key is the program's, but Ctrl+G
+  and Ctrl+Space, which open the menus, as in the Terminal.
+* **Moving and resizing.** Drag the title bar to move the window. A program that allows
+  it can be resized from the dotted corner and maximized: it is told the new size when the
+  corner is let go, and draws itself again at that size. The taskbar and the Window menu
+  list programs' windows with the others.
+* **Closing.** The close button asks the program to close its window. A program that does
+  not is asked about the second time: "End the program?", with Cancel first, and End stops
+  it and takes its window away. A program that ends or crashes takes only its own window
+  with it. Leaving the desktop with programs' windows open asks first; their windows close
+  with the desktop, and the programs are told so (they are not stopped).
+* **Limits.** 8 windows on a desktop, 32 in all. A window's content is at most the room
+  below the menu bar (958 by 457 on a 1920x1080 screen), and a desktop keeps at most 8 MB
+  of programs' pixels.
+
 ## Mouse support
 
 `pointerinfo` reports connected pointing devices and the latest position/buttons.
@@ -731,7 +761,15 @@ each application are in `tools/gui_apps_<track>.py`. Among them:
 * the Image Viewer shows the stick's pictures;
 * Sketch saves one that the host reads back;
 * Files opens a picture in the Image Viewer and a file that is not text in Hex
-  (`tools/gui_apps_suite.py`, after the applications' own checks).
+  (`tools/gui_apps_suite.py`, after the applications' own checks);
+* 10/25/26: `wintest show` typed in the Terminal opens a window, takes a key and closes
+  (`tools/gui_apps_win.py`, before the suite's checks).
+
+Programs' windows (10/25/26) are `shell/guiclient.c` in the model (host-tested by
+`test_guiclient.c` against fake windows: appearing, drawing and clipping, the pointer and its
+grab, sizes, keys, focus, closing, a program that has gone, every window inside guard pixels at
+three sizes), `shell/guisys_win.c` on the kernel's side, and the windows themselves in
+`kernel/win.c` (host-tested by `test_win.c`).
 
 Each part leaves the desktop as it found it, and the host runs `fsck` on the stick
 afterwards.

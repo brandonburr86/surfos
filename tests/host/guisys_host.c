@@ -18,6 +18,7 @@ static void irq_restore(u_long flags) { (void)flags; }
 #include <mm/pmm.h>
 #include <sys/bdev.h>
 #include <sys/framebuffer.h>
+#include <surfos/win.h>                 /* 10/25/26: struct win_state, for programs' windows' stand-ins */
 #include <fs/vfs.h>
 
 void setpos(surf_console *con) { (void)con; }      /* surfos/console.h declares it inline; kernel/console.c's */
@@ -102,6 +103,13 @@ int guisys_term_read(void *ctx, int h, char *buf, u32 n) { (void)ctx; (void)h; (
 int guisys_term_write(void *ctx, int h, const char *buf, u32 n) { (void)ctx; (void)h; (void)buf; (void)n; return -ENOSYS; }
 int guisys_term_resize(void *ctx, int h, int cols, int rows) { (void)ctx; (void)h; (void)cols; (void)rows; return -ENOSYS; }
 void guisys_term_close(void *ctx, int h) { (void)ctx; (void)h; }
+/* 10/25/26: nor are programs' windows (shell/guisys_win.c) */
+int guisys_win_accept(void *ctx) { (void)ctx; return -EAGAIN; }
+int guisys_win_update(void *ctx, int h, struct win_state *st, struct win_view *view) {
+    (void)ctx; (void)h; (void)st; (void)view; return -EINVAL;
+}
+int guisys_win_event(void *ctx, int h, const struct win_event *e) { (void)ctx; (void)h; (void)e; return -EINVAL; }
+void guisys_win_close(void *ctx, int h) { (void)ctx; (void)h; }
 
 /**** memory: an allocator that can fail ****/
 

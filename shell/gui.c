@@ -19,6 +19,10 @@ keeps being read) and gui_finish() before the state is freed.
 something happens (poll_sleep(): a key, the pointer, a terminal's output) or 100 ms pass, a frame's time
 while something moves or works; gfxinfo shows each desktop's frame times (composing and presenting,
 measured with the TSC); and a 32-bit framebuffer gets its rows expanded once and copied in order.
+10/25/26 (stage C4): the desktop registers itself for programs' windows (kernel/win.c) once it runs,
+with its logical size, the largest content a window may have and its scale, and lets the
+registration go after gui_finish(); the registration is a descriptor of this task, so a desktop
+that dies lets them go when it is reaped.
 */
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +34,8 @@ measured with the TSC); and a 32-bit framebuffer gets its rows expanded once and
 #include <surfos/irq.h>
 #include <surfos/console.h>
 #include <surfos/cpu.h>
+#include <surfos/klog.h>
+#include <surfos/win.h>
 #include <fs/vfs.h>
 #include <sys/gui.h>
 #include <sys/touchpad.h>
@@ -320,7 +326,8 @@ int cmd_gui(int argc,char **argv) {
     struct gui_fs *own_fs;                              /* 10/18/26: this desktop's, keeping read_at's file in a frame */
     struct tty *tty=curTask->tty;
     struct frame_clock fc;                              /* 10/25/26: the TSC's rate, for the frame times */
-    int oldraw,result=CMD_OK,esc=0,number=0;
+    struct win_desk desk;                               /* 10/25/26: what programs' windows may be here */
+    int oldraw,result=CMD_OK,esc=0,number=0,reg;
     u32 esc_at=0,clock_at;
     unsigned keys_down=0;
     if(argc!=1) { printf("    usage: gui\n"); return CMD_USAGE; }
@@ -358,6 +365,10 @@ int cmd_gui(int argc,char **argv) {
     }
     oldraw=tty->raw; tty_ctl(tty,TTY_RAW,1); d.first=d.full=true;
     memset(&fc,0,sizeof(fc)); frame_begin(&d,true);
+    desk.width=d.width; desk.height=d.height; desk.scale=d.scale;      /* 10/25/26: programs' windows */
+    gui_client_room(g,&desk.max_w,&desk.max_h);
+    reg=win_register(&desk);
+    if(reg<0) klog_write("gui: programs cannot open windows on this desktop\n");
     while(!g->quit && !curTask->intr) {
         int n,key,oldx=g->x,oldy=g->y,drawn=0;
         unsigned devices;
@@ -414,6 +425,7 @@ int cmd_gui(int argc,char **argv) {
         if(poll_sleep(gen,nap(g,drawn>0,esc,keys_down))) break;    /* 10/25/26: was sleep_intr(16) */
     }
     gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
+    if(reg>=0) win_unregister(reg);                     /* 10/25/26: every program's window let go */
     gui_kernel_fs_end(own_fs);                          /* 10/18/26: read_at's file closed, if one is open */
     tty_ctl(tty,TTY_RAW,oldraw); pointer_speed_owned(1,true);
     framebuffer_graphics_end();
