@@ -39,7 +39,8 @@ at most), each line that is not understood said with its number; then
   three times in a row is set aside for 10 minutes. While a telnet server runs (any telnetd
   process counts) or is to start by itself (telnetd = on until it has started; autonet until
   it is done), it joins no open network, and looks again just before each: telnetd has no
-  password.
+  password. 10/24/26: nor while an FTP server runs (any ftpd process), which has none either
+  and lets its clients write files (netman_ftp_exposed()).
 * ethernet = dhcp: an Ethernet interface whose link comes up gets a lease (30 s, doubling to
   5 minutes, between tries without one), unless autonet is still at it.
 * telnetd = on: telnetd on [port] on F1 once there is an address on Ethernet or on a WPA2
@@ -811,23 +812,34 @@ out:
 
 /**** telnetd ****/
 
-/* a user task named telnetd that is not dead (its pid), or 0: with server, the running server only (detached, as
+/* a user task named name that is not dead (its pid), or 0: with server, the running server only (detached, as
    telnetd itself finds it); else any, a telnetd on starting one or a telnetd status included. The list is read by
    index and a task collected meanwhile shifts the rest, so a search that finds none looks twice more, as telnetd
-   does */
-static int telnetd_running(bool server) {
+   does. 10/24/26: of any name (ftpd's too) */
+static int task_running(const char *name, bool server) {
     struct procinfo pi;
     int i, k;
     for(k = 0; k < 3; k++)
         for(i = 0; task_info(i, &pi) == 0; i++)
-            if((pi.flags & PROC_USER) && pi.state != PROC_DEAD && !strcmp(pi.name, "telnetd") &&
+            if((pi.flags & PROC_USER) && pi.state != PROC_DEAD && !strcmp(pi.name, name) &&
                (!server || (pi.flags & PROC_DETACHED)))
                 return pi.pid;
     return 0;
 }
 
+static int telnetd_running(bool server) {
+    return task_running("telnetd", server);
+}
+
 bool netman_telnet_exposed(void) {
     return telnetd_due || autonet_busy() || telnetd_running(false) > 0;    /* any telnetd: the safe side */
+}
+
+/* 10/24/26 (the network tools): ftpd has no logins either, and its clients write files: while one runs, the keeper
+   joins no open network by itself, as for telnetd. Any ftpd process counts (the server, ftpd serve, an ftpd on
+   starting one, an ftpd status, -r or not): the safe side */
+bool netman_ftp_exposed(void) {
+    return task_running("ftpd", false) > 0;
 }
 
 bool netman_trusted(struct netdev *dev) {
@@ -1093,7 +1105,7 @@ static void address_later(struct wlan_dev *w, const char *name, bool cmd) {
 static int connect_saved(struct wlan_dev *w, bool cmd, bool quiet, u_int stops) {
     struct saved *list = (struct saved *)kcalloc(NETCFG_NETS_MAX, sizeof(struct saved));
     struct wlan_bss *bss = (struct wlan_bss *)kalloc(BSS_MAX * sizeof(struct wlan_bss));
-    bool *heard = (bool *)kcalloc(NETCFG_NETS_MAX, sizeof(bool)), exposed;
+    bool *heard = (bool *)kcalloc(NETCFG_NETS_MAX, sizeof(bool)), exposed, ftp;
     char name[4 * NETCFG_SSID_MAX + 1];
     u_long now, scanned;
     u_int join = 0;
@@ -1129,6 +1141,7 @@ static int connect_saved(struct wlan_dev *w, bool cmd, bool quiet, u_int stops) 
     nb = (int)wlan_bss_list(w, bss, BSS_MAX);
     now = getticks();
     exposed = netman_telnet_exposed();
+    ftp = netman_ftp_exposed();                         /* 10/24/26 */
     for(i = 0; i < n && pick < 0; i++) {                /* the saved ones in their order, as heard */
         for(j = 0; j < nb; j++) {                       /* heard in this scan: the list keeps a network for a minute */
             if(bss[j].ssid_len == list[i].net.ssid_len && !memcmp(bss[j].ssid, list[i].net.ssid, bss[j].ssid_len) &&
@@ -1151,6 +1164,12 @@ static int connect_saved(struct wlan_dev *w, bool cmd, bool quiet, u_int stops) 
             skipped++;
             continue;
         }
+        if(list[i].net.security == NETCFG_SEC_OPEN && (ftp || (ftp = netman_ftp_exposed()))) {
+            say(cmd, quiet, "%s: %s is in range, but it is open and an FTP server (ftpd) runs: not joined by itself "
+                "(wifi join %s joins it)", w->name, name, name);
+            skipped++;
+            continue;
+        }
         say(cmd, quiet, "%s: %s is in range (%d dBm): joining it", w->name, name, bss[j].rssi);
         tried++;
         r = join_saved(w, &list[i], cmd, quiet, stops, &join);
@@ -1170,6 +1189,12 @@ static int connect_saved(struct wlan_dev *w, bool cmd, bool quiet, u_int stops) 
         if(list[i].net.security == NETCFG_SEC_OPEN && (exposed || (exposed = netman_telnet_exposed()))) {
             say(cmd, quiet, "%s: the hidden network %s is open and a telnet server runs or is to start: not looked for "
                 "by itself (wifi join %s joins it)", w->name, name, name);
+            skipped++;
+            continue;
+        }
+        if(list[i].net.security == NETCFG_SEC_OPEN && (ftp || (ftp = netman_ftp_exposed()))) {
+            say(cmd, quiet, "%s: the hidden network %s is open and an FTP server (ftpd) runs: not looked for by itself "
+                "(wifi join %s joins it)", w->name, name, name);
             skipped++;
             continue;
         }
