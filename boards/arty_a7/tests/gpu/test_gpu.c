@@ -837,6 +837,14 @@ static void t_usage(unsigned seed) {
     }
     check(!bad_ones, "usage errors: CMD_USAGE, a usage line, and not a word sent");
     check(!s->locked, "  the claim never left held");
+    /* numbers: decimal (a leading zero too) or 0x hex (the review's finding 9) */
+    check(gfx(s, "gfx clear 0") == CMD_OK && gfx(s, "gfx fill 010 0 1 1 7") == CMD_OK && px(s, 10, 0) == 7 && px(s, 8, 0) == 0 &&
+          gfx(s, "gfx fill 08 1 1 1 0x1F") == CMD_OK && px(s, 8, 1) == 0x1F && gfx(s, "gfx fill 0 2 1 1 012") == CMD_OK &&
+          px(s, 0, 2) == 12 && gfx(s, "gfx fill -0x2 3 3 1 0XfF") == CMD_OK && px(s, 0, 3) == 255 && px(s, 1, 3) == 0,
+          "  numbers: 010 is ten, 08 eight, 012 twelve, -0x2 and 0XfF hex");
+    check(gfx(s, "gfx fill 0 0 4294967297 1 1") == CMD_USAGE && gfx(s, "gfx fill 0 0 1 1 -") == CMD_USAGE &&
+          gfx(s, "gfx fill 0 0 0x 1 1") == CMD_USAGE && gfx(s, "gfx fill 0 0 1 1 1x") == CMD_USAGE,
+          "  a number past 32 bits, a sign alone, 0x alone and a stray letter are refused");
     check(gfx(s, "gfx text 0 0 255 0 one two three four five six seven eight nine ten eleven twelve") == CMD_USAGE &&
           said(s, "a gfx line holds 15 words at most, gfx text 9 of text"),
           "  a line the shell may have cut (it keeps 16 words) is refused, saying why");

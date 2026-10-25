@@ -78,14 +78,31 @@ static int usage(const char *line) {
     return CMD_USAGE;
 }
 
-/* a whole number in [lo, hi], decimal or 0x hex, with a sign */
+/* a whole number in [lo, hi]: decimal (a leading zero is still decimal: 012 is twelve), or hex
+   after 0x; an optional sign. Read here rather than with strtol(), whose base 0 takes a leading
+   zero for octal and whose overflow differs between the kernel's library and the host's. */
 static bool num(const char *s, long lo, long hi, long *out) {
-    char *end;
-    long v;
-    if(!s || !*s || strlen(s) > 12) return false;
-    v = strtol(s, &end, 0);
-    if(*end || v < lo || v > hi) return false;
-    *out = v;
+    u32 v = 0, base = 10, d, digits = 0;
+    bool neg = false;
+    long n;
+    if(!s) return false;
+    if(*s == '-' || *s == '+') neg = *s++ == '-';
+    if(s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+        s += 2;
+    }
+    for(; *s; s++, digits++) {
+        if(*s >= '0' && *s <= '9') d = (u32)(*s - '0');
+        else if(base == 16 && *s >= 'a' && *s <= 'f') d = (u32)(*s - 'a' + 10);
+        else if(base == 16 && *s >= 'A' && *s <= 'F') d = (u32)(*s - 'A' + 10);
+        else return false;
+        if(v > (0x7FFFFFFFu - d) / base) return false;          /* past any range here */
+        v = v * base + d;
+    }
+    if(!digits) return false;
+    n = neg ? -(long)v : (long)v;
+    if(n < lo || n > hi) return false;
+    *out = n;
     return true;
 }
 
