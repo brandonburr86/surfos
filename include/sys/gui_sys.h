@@ -9,10 +9,13 @@ the tasks, memory and the machine (System Monitor), the block devices (Disks), t
 it from its handlers only (gui_key, gui_pointer, gui_tick), never while drawing, and it never
 waits long: a call returns what is there now. Every call returns 0 (a list: how many entries)
 or a negative errno. shell/guisys.c implements it on the kernel, tests/host/gui_fake.c in memory.
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): five calls at its
+end for the windows of ordinary programs (shell/guiclient.c) and the launcher.
 */
 #ifndef _SYS_GUI_SYS_H
 #define _SYS_GUI_SYS_H
 #include <surfos/types.h>
+#include <surfos/win.h>                 /* 10/25/26: struct win_event, win_state, win_view */
 
 /* the time of day and the date, as the CMOS clock keeps them (shell/gui.c sets gui_state.time) */
 struct gui_time { u32 year, month, date, weekday, hour, minute, second; };   /* weekday: 1 Sunday .. 7 Saturday */
@@ -95,6 +98,19 @@ struct gui_sys {
     int (*term_write)(void *ctx, int h, const char *buf, u32 n);
     int (*term_resize)(void *ctx, int h, int cols, int rows);
     void (*term_close)(void *ctx, int h);
+    /* 10/25/26: programs' windows (shell/guiclient.c; the kernel's side, shell/guisys_win.c on kernel/win.c). win_accept:
+       the next window of this desktop that is ready to appear (its program presented, or 250 ms passed since it
+       opened): a handle >= 0, -EAGAIN when none waits. win_update: the window's state and pixels as they are now (the
+       pixels lent until the next update or win_close); -EPIPE once it has ended (its program closed it, or is gone):
+       win_close it then. win_event: an event for its program (a full queue drops it, and counts it). win_close: this
+       desktop is done with the window: its program's reads end and its presents fail. run (the launcher): the command
+       line's program started on the desktop's console, its input /dev/null, detached (init collects it): its pid, or
+       -errno with the reason in msg */
+    int (*win_accept)(void *ctx);
+    int (*win_update)(void *ctx, int h, struct win_state *st, struct win_view *view);
+    int (*win_event)(void *ctx, int h, const struct win_event *e);
+    void (*win_close)(void *ctx, int h);
+    int (*run)(void *ctx, const char *line, char *msg, size_t n);
 };
 
 const struct gui_sys *gui_kernel_sys(void);     /* shell/guisys.c: the kernel's (the kernel only) */

@@ -28,7 +28,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh),
                   # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
-                  # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
+                  # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
+                  # programs' windows in the desktop (test_guiclient)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -128,7 +129,9 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
            applications in files of their own behind struct gui_app's table (guiterm.c + guivt.c, guimon.c,
            guidisks.c + guimeter.c, guilog.c, guiclock.c, guiview.c + guibmp.c, guihex.c, guichar.c), the kernel's
            side struct gui_sys (guisys*.c),
-           host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario
+           host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario;
+           10/25/26 programs' windows in the desktop (docs/superpowers/plans/2026-10-25-app-windows.md): guiclient.c,
+           in the slots after the fixed windows, through struct gui_sys's win_* calls, host-tested by test_guiclient
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against

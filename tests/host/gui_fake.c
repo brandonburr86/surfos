@@ -192,6 +192,8 @@ u32 fake_term_out_len, fake_term_in_len;
 int fake_term_cols, fake_term_rows, fake_term_open_count;
 bool fake_term_running, fake_term_ended;
 
+static void wins_reset(void);           /* 10/25/26: below, with the programs' windows */
+
 static void task(int pid, int ppid, int state, int tty, u32 flags, const char *name) {
     struct gui_task *t = &fake_tasks[fake_ntasks++];
     t->pid = pid; t->ppid = ppid; t->state = state; t->tty = tty; t->flags = flags;
@@ -224,6 +226,7 @@ void fake_sys_reset(void) {
     fake_term_out_len = fake_term_in_len = 0;
     fake_term_cols = fake_term_rows = fake_term_open_count = 0;
     fake_term_running = fake_term_ended = false;
+    wins_reset();
 }
 
 void fake_term_feed(const char *s, u32 n) {
@@ -308,8 +311,135 @@ static void s_term_close(void *ctx, int h) {
     if(h == 3) fake_term_running = false;
 }
 
+/* 10/25/26: programs' windows */
+struct fake_win fake_wins[FAKE_WINS];
+char fake_run_line[256];
+int fake_run_count, fake_run_result;
+static u32 win_pool[4 * 1024 * 1024];
+static u32 win_pool_used;
+
+static void wins_reset(void) {
+    memset(fake_wins, 0, sizeof(fake_wins));
+    win_pool_used = 0;
+    fake_run_line[0] = 0;
+    fake_run_count = 0;
+    fake_run_result = 77;
+}
+
+static u32 *pixels_for(int w, int h, u32 color) {
+    u32 n = (u32)w * (u32)h, i, *p;
+    if(win_pool_used + n > sizeof(win_pool) / sizeof(win_pool[0])) return NULL;
+    p = win_pool + win_pool_used;
+    win_pool_used += n;
+    for(i = 0; i < n; i++) p[i] = color;
+    return p;
+}
+
+int fake_win_open(int w, int h, u32 flags, u32 background, const char *title, int pid) {
+    int i;
+    for(i = 0; i < FAKE_WINS && fake_wins[i].used; i++) ;
+    if(i == FAKE_WINS) return -1;
+    memset(&fake_wins[i], 0, sizeof(fake_wins[i]));
+    fake_wins[i].px = pixels_for(w, h, background);
+    if(!fake_wins[i].px) return -1;
+    fake_wins[i].used = true;
+    fake_wins[i].handle = 200 + i;
+    fake_wins[i].st.w = w;
+    fake_wins[i].st.h = h;
+    fake_wins[i].st.flags = flags;
+    fake_wins[i].st.background = background;
+    fake_wins[i].st.pid = pid;
+    strlcpy(fake_wins[i].st.title, title, sizeof(fake_wins[i].st.title));
+    return i;
+}
+
+void fake_win_present(int i, u32 color) {
+    u32 k, n = (u32)fake_wins[i].st.w * (u32)fake_wins[i].st.h;
+    for(k = 0; k < n; k++) fake_wins[i].px[k] = color;
+    fake_wins[i].ready = true;
+    fake_wins[i].st.serial++;
+}
+
+void fake_win_size(int i, int w, int h, u32 color) {
+    u32 *p = pixels_for(w, h, color);
+    if(!p) return;
+    fake_wins[i].px = p;
+    fake_wins[i].st.w = w;
+    fake_wins[i].st.h = h;
+    fake_wins[i].st.serial++;
+}
+
+void fake_win_end(int i) { fake_wins[i].ended = true; }
+
+int fake_win_count(int i, int type) {
+    int k, n = 0;
+    for(k = 0; k < fake_wins[i].nev; k++) if(fake_wins[i].ev[k].type == type) n++;
+    return n;
+}
+
+const struct win_event *fake_win_last(int i, int type) {
+    int k;
+    for(k = fake_wins[i].nev - 1; k >= 0; k--) if(fake_wins[i].ev[k].type == type) return &fake_wins[i].ev[k];
+    return NULL;
+}
+
+void fake_win_forget(int i) { fake_wins[i].nev = 0; }
+
+/* the window of handle h that the desktop took, not let go of: its number, -1 */
+static int win_of(int h) {
+    int i = h - 200;
+    return i >= 0 && i < FAKE_WINS && fake_wins[i].used && fake_wins[i].accepted && !fake_wins[i].closed ? i : -1;
+}
+
+static int s_win_accept(void *ctx) {
+    int i;
+    (void)ctx;
+    for(i = 0; i < FAKE_WINS; i++) {
+        struct fake_win *w = &fake_wins[i];
+        if(!w->used || !w->ready || w->accepted || w->ended) continue;
+        w->accepted = true;
+        return w->handle;
+    }
+    return -EAGAIN;
+}
+
+static int s_win_update(void *ctx, int h, struct win_state *st, struct win_view *view) {
+    int i = win_of(h);
+    (void)ctx;
+    if(i < 0) return -EINVAL;
+    if(fake_wins[i].ended) return -EPIPE;
+    *st = fake_wins[i].st;
+    view->pixels = fake_wins[i].px;
+    view->w = fake_wins[i].st.w;
+    view->h = fake_wins[i].st.h;
+    return 0;
+}
+
+static int s_win_event(void *ctx, int h, const struct win_event *e) {
+    int i = win_of(h);
+    (void)ctx;
+    if(i < 0) return -EINVAL;
+    if(fake_wins[i].nev < FAKE_EVENTS) fake_wins[i].ev[fake_wins[i].nev++] = *e;
+    return 0;
+}
+
+static void s_win_close(void *ctx, int h) {
+    int i = win_of(h);
+    (void)ctx;
+    if(i >= 0) fake_wins[i].closed = true;
+}
+
+static int s_run(void *ctx, const char *line, char *msg, size_t n) {
+    (void)ctx;
+    strlcpy(fake_run_line, line, sizeof(fake_run_line));
+    fake_run_count++;
+    if(fake_run_result < 0) snprintf(msg, n, "could not start %s", line);
+    return fake_run_result;
+}
+
 const struct gui_sys fake_sys = { NULL, s_tasks, s_memory, s_machine, s_kill, s_disks, s_log,
-                                  s_term_open, s_term_read, s_term_write, s_term_resize, s_term_close };
+                                  s_term_open, s_term_read, s_term_write, s_term_resize, s_term_close,
+                                  s_win_accept, s_win_update, s_win_event, s_win_close, s_run };
 
 /**** a screen ****/
 

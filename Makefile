@@ -994,7 +994,7 @@ unittest-gui: $(BUILD)/host/test_pointer
 # 10/17/26: the desktop's model is several files (shell/guipriv.h); Notepad and Files run against an in-memory file system
 # 10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the applications in files of their own
 GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog \
-                 guiterm guimon guidisks guilog guiclock guiview guihex guichar) \
+                 guiterm guimon guidisks guilog guiclock guiview guihex guichar guiclient) \
                $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
 # each track's own model files beyond its stubs ($(BUILD)/host/kernel/shell/<name>.o), on a line of its own so that
 # the tracks' merges are clean (the kernel takes every shell/*.c by itself)
@@ -1012,7 +1012,8 @@ $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 # 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c. The
 # test and gui_fake.c are objects of their own, so that each has its own dependency file (test_guitools.c includes
 # kernel/klog.c): compiled in one command, the last source's .d was the binary's only one
-GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite)
+GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite \
+                    test_guiclient)
 $(GUI_SUITE_TESTS): $(BUILD)/host/%: $(BUILD)/host/kernel/tests/host/%.o $(BUILD)/host/kernel/tests/host/gui_fake.o \
                                      $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(filter %.o,$^) -o $@
@@ -1025,6 +1026,7 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 	$(BUILD)/host/test_guitools
 	$(BUILD)/host/test_guimedia
 	$(BUILD)/host/test_guisuite
+	$(BUILD)/host/test_guiclient
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@

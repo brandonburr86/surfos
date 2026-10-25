@@ -13,6 +13,9 @@ System Monitor, Disks, Log, Clock, Image Viewer, Hex and Character Map, each in 
 file of its own that the window manager reaches through a table (struct gui_app,
 shell/guipriv.h). What they need of the kernel is struct gui_sys (sys/gui_sys.h),
 which the model calls from its handlers and from gui_tick(), never from gui_render().
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the windows of
+ordinary programs, in GUI_CLIENTS slots after the fixed windows (sys/gui_client.h,
+shell/guiclient.c), through struct gui_sys's win_* calls.
 */
 #ifndef _SYS_GUI_H
 #define _SYS_GUI_H
@@ -163,6 +166,7 @@ struct gui_dialog {
 #include <sys/gui_sysapps.h>
 #include <sys/gui_tools.h>
 #include <sys/gui_media.h>
+#include <sys/gui_client.h>             /* 10/25/26: programs' windows */
 
 struct gui_state {
     int width, height, menu, selection, focus, drag, drag_x, drag_y;
@@ -205,6 +209,7 @@ struct gui_state {
        them all, and past GUI_UNSURE the desktop saves over, deletes and renames no file (new names still) */
     char unsure[GUI_UNSURE][GUI_PATH_MAX], kept[GUI_UNSURE][GUI_PATH_MAX];
     int nunsure;
+    struct gui_clients clients;         /* 10/25/26: programs' windows (shell/guiclient.c) */
 };
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);
