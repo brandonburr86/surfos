@@ -326,7 +326,10 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   (arrows, Home/End, PgUp/PgDn, Insert/Delete), shift, caps lock on letters, num
   lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots.
   Special keys arrive in the tty as codes above 0x80 (`include/surfos/keyboard.h`).
-  The ISR does nothing but decode and queue; the 2004 debug hooks are gone.
+  The ISR does nothing but decode and queue; the 2004 debug hooks are gone. **10/25/26**
+  (track A, A4): each key goes to the tty with the modifiers held (`tty_key(t, c, mods)`,
+  `KEY_SHIFT` 1, `KEY_ALT` 2, `KEY_CTRL` 4), which raw mode sends on (below); line mode is
+  as it was.
 * **Escape sequences and raw mode** (**ai-dev**, for the text editor; `include/surfos/tty.h`
   is the contract). Each console parses the ANSI subset full-screen programs need: cursor
   position and moves (`CSI H f A B C D`), erase in display and line (`CSI J K`), bright,
@@ -343,7 +346,12 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   (system call `ttyctl`) with `TTY_RAW` 1 stops echo and line editing: keys arrive one at a
   time, Ctrl-C is just 0x03, the keyboard's special keys become the sequences a terminal
   sends (`ESC [ A` ... `ESC [ 6 ~`, Backspace 0x7f, Enter CR), and serial input arrives as
-  sent. `TTY_GETSIZE` gives `(columns << 16) | rows`. Raw mode, colours and a hidden cursor
+  sent. **10/25/26** (A4): as xterm sends them, with the modifiers as the parameter
+  m = 1 + Shift + 2 Alt + 4 Ctrl: `ESC [ 1 ; m A` ... `ESC [ 1 ; m F` for the arrows, Home and
+  End, `ESC [ n ; m ~` for Insert, Delete, PgUp and PgDn; F5-F12 are `ESC [ 15 ~` ...
+  `ESC [ 24 ~` (they were dropped), Shift+Tab `ESC [ Z`, Alt on any other key an ESC before
+  it, Ctrl+Space NUL and Ctrl+/ 0x1f. The desktop's key reader and its programs' windows
+  read the same encoding (track C). `TTY_GETSIZE` gives `(columns << 16) | rows`. Raw mode, colours and a hidden cursor
   end with the task that set them (`tty_task_gone()`, from task exit and `trap_fatal()`),
   so a crashed editor cannot leave its console raw or unreadable. A read of `/dev/console`
   is `tty_read()`: a line with its newline, or in raw mode the keys queued (at least one).

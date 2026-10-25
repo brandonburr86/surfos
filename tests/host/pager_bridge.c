@@ -221,7 +221,7 @@ void sim_print(const char *s, int len) { int i; for(i = 0; i < len; i++) kputch(
 void sim_kprintf_line(const char *s) { kprintf("%s", s); }
 int sim_ttyctl(int op, unsigned arg) { return tty_ctl(curTask->tty, op, arg); }
 void sim_input(int c) { tty_input(&ttys[term], (u_char)c); }
-void sim_key(int c) { tty_key(&ttys[term], (u_char)c); }
+void sim_key(int c) { tty_key(&ttys[term], (u_char)c, 0); }
 int sim_getc(void) { return tty_getc(&ttys[term]); }
 int sim_readline(char *buf, int size) { return tty_readline(&ttys[term], buf, (size_t)size); }
 /* 10/9/26 (Wi-Fi): a secret line, and whether bytes are anywhere in the terminal's input queue */

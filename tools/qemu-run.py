@@ -379,6 +379,9 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     # raw mode (tty.h): the terminal's bytes arrive unchanged, an arrow key as ESC [ A
     ('rawkeys', ['raw mode (80x25)'], [('\x1b[A\x7f\x03q', ['1b 5b 41 7f 03 71'])]),
+    # 10/25/26 (track A, A4): on the PS/2 keyboard, the modifiers as xterm sends them: Ctrl+Left ESC[1;5D, Shift+PgUp
+    # ESC[5;2~, F5 ESC[15~ (dropped until then), Shift+Tab ESC[Z, Alt+x ESC x
+    ('@rawkeys-mods', []),
     # escape sequences (tty.h): the test pattern, then read back from VGA memory with its colours
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
@@ -1590,11 +1593,15 @@ class Qemu:
                        '\'': 'apostrophe', '[': 'bracket_left', ']': 'bracket_right'})
         named = {'esc': 'esc', 'bs': 'backspace', 'tab': 'tab', 'up': 'up', 'down': 'down',
                  'left': 'left', 'right': 'right', 'del': 'delete', 'ins': 'insert',
-                 'home': 'home', 'end': 'end', 'pgup': 'pgup', 'pgdn': 'pgdn'}
+                 'home': 'home', 'end': 'end', 'pgup': 'pgup', 'pgdn': 'pgdn',
+                 'spc': 'spc', 'space': 'spc', 'ret': 'ret'}    # 10/25/26: for <ctrl-spc>, <alt-ret> (A4)
         named.update({f'f{i}': f'f{i}' for i in range(1, 13)})
         for tok in re.findall(r'<[^>]+>|.', spec.encode().decode('unicode_escape'), re.S):
-            if tok.startswith('<'):
-                key = named.get(tok[1:-1].lower())
+            if tok.startswith('<'):             # 10/25/26 (track A, A4): <ctrl-left>, <shift-tab>, <alt-x> too
+                *mods, name = tok[1:-1].lower().split('-')
+                key = named.get(name) or keymap.get(name)
+                if key and mods:
+                    key = '-'.join(mods + [key]) if set(mods) <= {'shift', 'ctrl', 'alt'} else None
             elif tok.isupper():
                 key = 'shift-' + tok.lower()
             else:
@@ -1951,6 +1958,18 @@ def pager_background_check(q):
     return ('pager: a command after a background job that holds the pager is paged all the same', ok)
 
 
+def rawkeys_mods_check(q):
+    """10/25/26 (track A, A4): raw mode on the PS/2 keyboard: special keys with Shift, Alt and Ctrl as xterm sends them,
+    F5, Shift+Tab, and Alt on a letter as ESC before it (rawkeys prints the bytes it reads, q ends it)"""
+    q.send('rawkeys\n')
+    ok = q.expect('q ends', 10)
+    if ok:
+        q.sendkeys('<ctrl-left><shift-pgup><f5><shift-tab><alt-x>q')
+        ok = q.expect('1b 5b 31 3b 35 44 1b 5b 35 3b 32 7e 1b 5b 31 35 7e 1b 5b 5a 1b 78 71', 15) and q.expect(PROMPT, 10)
+    return ('raw mode on the PS/2 keyboard: Ctrl+Left ESC[1;5D, Shift+PgUp ESC[5;2~, F5 ESC[15~, Shift+Tab ESC[Z, '
+            'Alt+x ESC x', ok)
+
+
 def kcmd_echo_check(q):
     """typed input's echo is shown and never kept with a kernel command's output: fdisk's question with its
     output on a file (kcmdtest run), answered on the console. The interactive commands that read without a
@@ -2161,7 +2180,7 @@ def readme_cat_check(q):
 
 
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
-CONSOLE_CHECKS = {'@readme-cat': readme_cat_check, '@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
+CONSOLE_CHECKS = {'@readme-cat': readme_cat_check, '@rawkeys-mods': rawkeys_mods_check, '@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
                   '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}

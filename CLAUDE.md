@@ -352,7 +352,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
-  `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides.
+  `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides. 10/25/26:
+  raw mode sends keys with Shift, Alt and Ctrl as xterm does (tty.h); the harnesses type them
+  as `<ctrl-left>`, `<shift-tab>`, `<alt-x>`, `<ctrl-spc>`, `<alt-ret>`.
 
 ## Undertow validation
 

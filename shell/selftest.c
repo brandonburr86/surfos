@@ -1385,7 +1385,7 @@ static void test_ansi(void) {
 /* raw mode on this shell's own terminal: nothing is typed, the keys are made up here */
 static void test_tty(void) {
     struct tty *t = curTask->tty;
-    char buf[16];
+    char buf[64];
     int size = tty_ctl(t, TTY_GETSIZE, 0), n, status;
     u_int cols = t->con->stream ? t->con->cols : COLUMNS, rows = t->con->stream ? t->con->rows : LINES;
     surf_task *k;
@@ -1394,9 +1394,16 @@ static void test_tty(void) {
     check((size >> 16) == (int)cols && (size & 0xFFFF) == (int)rows, "tty: TTY_GETSIZE is the console's text grid, or the pty's size");
     tty_flush(t);
     check(tty_ctl(t, TTY_RAW, 1) == 0 && t->raw, "tty: raw mode on");
-    tty_key(t, UP); tty_key(t, DEL); tty_key(t, 0x03); tty_key(t, F5); tty_key(t, 'x');
+    tty_key(t, UP, 0); tty_key(t, DEL, 0); tty_key(t, 0x03, KEY_CTRL); tty_key(t, F5, 0); tty_key(t, 'x', 0);
     n = tty_read(t, buf, sizeof(buf));
-    check(n == 9 && !memcmp(buf, "\033[A\033[3~\003x", 9), "tty: raw keys at once, special keys as escape sequences");
+    check(n == 14 && !memcmp(buf, "\033[A\033[3~\003\033[15~x", 14),
+          "tty: raw keys at once, special keys as escape sequences (10/25/26: F5 too)");
+    /* 10/25/26 (track A, A4): xterm's modifiers, m = 1 + Shift + 2 Alt + 4 Ctrl; Shift+Tab; Alt as ESC first */
+    tty_key(t, LEFT, KEY_CTRL); tty_key(t, PGUP, KEY_SHIFT); tty_key(t, F12, KEY_ALT | KEY_SHIFT);
+    tty_key(t, HOME, KEY_CTRL | KEY_ALT); tty_key(t, BACKTAB, KEY_SHIFT); tty_key(t, 'b', KEY_ALT);
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 30 && !memcmp(buf, "\033[1;5D\033[5;2~\033[24;4~\033[1;7H\033[Z\033b", 30),
+          "tty: raw mode sends modifiers as xterm does: Ctrl+Left, Shift+PgUp, Alt+Shift+F12, Ctrl+Alt+Home, Shift+Tab, Alt+b");
     check(tty_ctl(t, TTY_RAW, 0) == 0 && !t->raw, "tty: raw mode off");
     check(tty_ctl(t, TTY_RAW, 2) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
     raw_was_set = 0;

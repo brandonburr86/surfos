@@ -236,17 +236,44 @@ int tty_term_queues(struct tty *t, u_char esc, u_char c) {
     return 1;
 }
 
-/* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h) */
-static const char *const raw_keys[RT - INS + 1] = {
-    "\033[2~", "\033[3~", "\033[H", "\033[F", "\033[5~", "\033[6~",     /* INS DEL HOME END PGUP PGDN */
-    "\033[D", "\033[A", "\033[B", "\033[C"                                /* LEFT UP DOWN RT */
+/* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h). 10/25/26
+   (track A, A4): xterm's, F5-F12 and Shift+Tab too: CSI final for the arrows, Home and End, CSI n ~ for
+   the others; with modifiers CSI 1;m final and CSI n;m ~, m = 1 + KEY_SHIFT/ALT/CTRL (keyboard.h) */
+static const struct raw_key { char final; u_char n; } raw_keys[BACKTAB - F1 + 1] = {
+    { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 },                             /* F1-F4 switch consoles */
+    { '~', 15 }, { '~', 17 }, { '~', 18 }, { '~', 19 },                 /* F5-F8 */
+    { '~', 20 }, { '~', 21 }, { '~', 23 }, { '~', 24 },                 /* F9-F12 */
+    { '~', 2 }, { '~', 3 }, { 'H', 1 }, { 'F', 1 }, { '~', 5 }, { '~', 6 },   /* INS DEL HOME END PGUP PGDN */
+    { 'D', 1 }, { 'A', 1 }, { 'B', 1 }, { 'C', 1 },                     /* LEFT UP DOWN RT */
+    { 'Z', 0 }                                                          /* BACKTAB: CSI Z, never with an m */
 };
 
 /* A key from the keyboard, as a code from keyboard.h. Line mode queues the code; raw mode
-   queues the escape sequence for it, and F5-F12 (which have none) are dropped. */
-void tty_key(struct tty *t, u_char c) {
+   queues the escape sequence for it. 10/25/26 (A4): with the modifiers held (mods); in raw mode
+   Alt on any other key is an ESC before it, the two queued together */
+void tty_key(struct tty *t, u_char c, u_int mods) {
+    char seq[16];
     if(t->raw && c >= 0x80) {
-        if(c >= INS && c <= RT) input_seq(t, raw_keys[c - INS]);
+        const struct raw_key *k = c <= BACKTAB ? &raw_keys[c - F1] : NULL;
+        if(!k || !k->final) return;
+        if(k->final == 'Z') snprintf(seq, sizeof(seq), "\033[Z");
+        else if(k->final == '~' && !mods) snprintf(seq, sizeof(seq), "\033[%u~", k->n);
+        else if(k->final == '~') snprintf(seq, sizeof(seq), "\033[%u;%u~", k->n, 1 + mods);
+        else if(!mods) snprintf(seq, sizeof(seq), "\033[%c", k->final);
+        else snprintf(seq, sizeof(seq), "\033[1;%u%c", 1 + mods, k->final);
+        input_seq(t, seq);
+        return;
+    }
+    if(t->raw && (mods & KEY_ALT)) {
+        if(!c) {                                /* Alt+Ctrl+Space: input_seq() takes no NUL */
+            tty_input(t, 0x1B);
+            tty_input(t, 0);
+            return;
+        }
+        seq[0] = 0x1B;
+        seq[1] = (char)c;
+        seq[2] = 0;
+        input_seq(t, seq);
         return;
     }
     tty_input(t, c);

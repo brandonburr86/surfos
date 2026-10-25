@@ -357,7 +357,9 @@ SHIFTED = dict(zip('!@#$%^&*()_+:"<>?{}|~', ['1', '2', '3', '4', '5', '6', '7', 
                                               'semicolon', 'apostrophe', 'comma', 'dot', 'slash', 'bracket_left',
                                               'bracket_right', 'backslash', 'grave_accent']))
 NAMED = {'esc': 'esc', 'bs': 'backspace', 'tab': 'tab', 'up': 'up', 'down': 'down', 'left': 'left',
-         'right': 'right', 'del': 'delete', 'home': 'home', 'end': 'end', 'ret': 'ret'}
+         'right': 'right', 'del': 'delete', 'home': 'home', 'end': 'end', 'ret': 'ret',
+         'pgup': 'pgup', 'pgdn': 'pgdn', 'ins': 'insert',   # 10/25/26 (A4): PgUp, PgDn, Insert,
+         'spc': 'spc', 'space': 'spc'}                      # and space for <ctrl-spc>
 NAMED.update({f'f{i}': f'f{i}' for i in range(1, 13)})
 
 
@@ -453,8 +455,11 @@ class Vm:
     # keyboard and screen
     def keys(self, spec):
         for tok in re.findall(r'<[^>]+>|.', spec.encode().decode('unicode_escape'), re.S):
-            if tok.startswith('<'):
-                key = NAMED.get(tok[1:-1].lower())
+            if tok.startswith('<'):             # 10/25/26 (track A, A4): <ctrl-left>, <shift-tab>, <alt-x> too
+                *mods, name = tok[1:-1].lower().split('-')
+                key = NAMED.get(name) or KEYMAP.get(name)
+                if key and mods:
+                    key = '-'.join(mods + [key]) if set(mods) <= {'shift', 'ctrl', 'alt'} else None
             elif tok in SHIFTED:
                 key = 'shift-' + SHIFTED[tok]
             elif tok.isupper():
@@ -736,14 +741,23 @@ def scenario_keyboard(args, image, firmware, outdir):
         results.append(('keyboard: help, paged: its header, --More-- answered with Space, the end and the prompt',
                         seen is not None and len(seen) > 1 and 'surfsh 1.0, the SurfOS shell' in seen[0].text() and
                         '(C)2004-2026 Brandon Burr.' in seen[-1].text()))
-        # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them, F5 nothing
+        # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them; 10/25/26 (track A,
+        # A4): F5 as xterm sends it (it was dropped), then the modifiers: Ctrl+Left, Shift+PgUp, Shift+Tab, Alt+x
         vm.keys('rawkeys\n')
         ok = vm.wait_screen(lambda s: 'q ends' in s.text(), 20, interval=0.5) is not None
         if ok:
             vm.keys('<up><bs>\n<f5>xq')
-            ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 78 71' in s.text() and
+            ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 1b 5b 31 35 7e 78 71' in s.text() and
                                 ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
-        results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter', ok))
+        results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter, ESC [ 1 5 ~ for F5', ok))
+        vm.keys('rawkeys\n')
+        ok = vm.wait_screen(lambda s: s.text().count('q ends') == 2, 20, interval=0.5) is not None
+        if ok:
+            vm.keys('<ctrl-left><shift-pgup><shift-tab><alt-x>q')
+            ok = vm.wait_screen(lambda s: '1b 5b 31 3b 35 44 1b 5b 35 3b 32 7e 1b 5b 5a 1b 78 71' in s.text() and
+                                ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
+        results.append(('keyboard: raw mode sends the modifiers as xterm does: Ctrl+Left ESC[1;5D, Shift+PgUp ESC[5;2~, '
+                        'Shift+Tab ESC[Z, Alt+x ESC x', ok))
         # console switching: F2 shows another shell, F1 comes back
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'Hello World' not in s.text(), 20, interval=0.5)
