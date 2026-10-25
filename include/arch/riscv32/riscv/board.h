@@ -65,6 +65,7 @@ struct board_display {
     void (*present)(const u8 *cells, u32 cols, u32 rows);   /* every cell that differs; may scroll in hardware */
     void (*set_cursor)(u32 col, u32 row, bool visible);
     const char *(*describe)(char *buf, size_t size);
+    void (*panic)(void);    /* 10/25/26: a panic's report must be seen (the Arty: text, not a picture); may be NULL */
 };
 const struct board_display *board_display(void);
 
