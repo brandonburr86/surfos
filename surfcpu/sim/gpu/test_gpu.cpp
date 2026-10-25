@@ -840,6 +840,19 @@ static void test_tri_timing(Tb &tb, Bus &bus) {
                     "beyond the 1 every group takes\n", r.what, (unsigned long long)n, box, covered,
                     covered ? (double)((long long)n - (long long)box) / covered : 0.0);
     }
+    // the setup (16.8): a culled triangle, then one of a single pixel (5, 5), flat and with Gouraud and depth;
+    // from the first word to idle as STATUS is polled (about 10 cycles apart)
+    const int px[3][4] = {{84, 84, 100, 10}, {94, 84, 200, 20}, {84, 94, 300, 30}};
+    const struct { const char *what; uint32_t flags; } small[] = {
+        {"culled", GPU_TRI_CULL_CW | 0x24}, {"one pixel, flat", 0x25},
+        {"one pixel, Gouraud and depth", GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE}};
+    for (auto &r : small) {
+        wait_idle(bus);
+        const uint64_t c0 = tb.cycles;
+        tri(bus, r.flags, px);
+        wait_idle(bus);
+        std::printf("tri timing: %s: %llu cycles\n", r.what, (unsigned long long)(tb.cycles - c0));
+    }
     fence_check(tb, bus, "TRIANGLE timing");
 }
 

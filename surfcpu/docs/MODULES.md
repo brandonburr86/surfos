@@ -217,8 +217,8 @@ takes the card out and SIGUSR2 puts it back. Without it surfsim behaves as befor
 
 Version 4 (2026-10-25, the gpu-g4 track, docs/GPU.md section 16): `surf_video` has the inputs
 `gfx_base_we` and `gfx_base_in` and `surf_gpu` the outputs `gfx_base_we` and `gfx_base_out`, the
-engine's FLIP into video's GFX_BASE; `surf_gpu` instantiates `surf_gpu_tri` and `surf_gpu_div`
-(rtl/peripherals, its TRIANGLE). A version 3 user ties the two `surf_video` inputs to 0 and nothing
+engine's FLIP into video's GFX_BASE; `surf_gpu` instantiates `surf_gpu_tri`, which instantiates
+`surf_gpu_div` (rtl/peripherals, its TRIANGLE). A version 3 user ties the two `surf_video` inputs to 0 and nothing
 behaves differently. Every user was changed with it: `surfcpu_soc`, the io track's test tops
 (`sim/io/tb_video.v` with a `FLIP_PORT` parameter, default 0, that ties the port off;
 `sim/io/tb_io_icarus.v`), the soc track's `surf_video` stand-in and the gpu track's `sim/gpu/tb_gpu.v`.

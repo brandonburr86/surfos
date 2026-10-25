@@ -124,7 +124,7 @@ MUTANTS = [
     # GPU2 (docs/GPU.md section 16): the brief's rules (the tie rule, a lane, the depth function, the cull
     # sense, the gradient's rounding, FLIP before blanking) and more
     ("tri-top-edge-excluded", TRI, "wire tl0 = ey0[16] || (ey0 == 17'sd0 && ex0 > 17'sd0);", "wire tl0 = ey0[16];", "gpu"),
-    ("tri-right-edge-included", TRI, "- {pe1b[34], pe1b} - {35'd0, !tl1};", "- {pe1b[34], pe1b};", "gpu"),
+    ("tri-right-edge-included", TRI, "e1s <= mdiff - {35'd0, !tl1};", "e1s <= mdiff;", "gpu"),
     ("tri-lane-3-edge-0", TRI, "wire signed [35:0] a0x3 = a0 + a0x2,", "wire signed [35:0] a0x3 = a0x2,", "gpu"),
     ("tri-zfunc-swapped", TRI, "zle ? (zq[16 * gl +: 16] <= zbuf) : (zq[16 * gl +: 16] < zbuf);",
      "zle ? (zq[16 * gl +: 16] < zbuf) : (zq[16 * gl +: 16] <= zbuf);", "gpu"),
