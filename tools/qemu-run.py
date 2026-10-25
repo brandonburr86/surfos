@@ -1623,12 +1623,22 @@ class Qemu:
         shutil.rmtree(self.workdir, ignore_errors=True)
 
 
+PORTS_GIVEN = set()     # 10/25/26: every port free_port() and free_port_range() have handed out in this run
+
+
 def free_port():
-    s = socket.socket()
-    s.bind(('127.0.0.1', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    """a port free here, never one handed out before in this run. 10/25/26: the port is let go again for QEMU to
+    bind, so the system may give the same one to the next call, and two forwards of one QEMU on one port stop it
+    starting ("QEMU did not start", seen on @boot autonet)"""
+    for _ in range(100):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+        s.close()
+        if port not in PORTS_GIVEN:
+            PORTS_GIVEN.add(port)
+            return port
+    raise RuntimeError('no free port that was not handed out already')
 
 
 def console_keep(q):
@@ -1643,10 +1653,11 @@ def console_keep(q):
 def free_port_range(n, avoid=()):
     """10/24/26 (ftpd): the first of n ports in a row that are free here, from 20000 up to 59999: forwarded to the
     same ports of the guest, which listens on them for passive data connections. 10/25/26 (review): none of the
-    ports in avoid, which free_port() gave the other forwards (closed again, so they look free here too)"""
+    ports in avoid, which free_port() gave the other forwards (closed again, so they look free here too), nor any
+    other port handed out in this run; free_port() then hands out none of these"""
     for _ in range(200):
         base = random.randrange(20000, 60000 - n)
-        if any(base <= p < base + n for p in avoid):
+        if any(base <= p < base + n for p in avoid) or any(p in PORTS_GIVEN for p in range(base, base + n)):
             continue
         socks = []
         try:
@@ -1654,6 +1665,7 @@ def free_port_range(n, avoid=()):
                 s = socket.socket()
                 socks.append(s)
                 s.bind(('127.0.0.1', p))
+            PORTS_GIVEN.update(range(base, base + n))
             return base
         except OSError:
             continue
