@@ -92,8 +92,18 @@ static void say(const char *fmt, ...) {
     write(kmsg, buf, (size_t)n);
 }
 
+/* 10/24/26: the user shell pages every command it runs, and httpd serve held at --More-- after a screenful of
+   lines answered no request until a key came: each line starts a new screenful (TTY_PAGE 0 does for a program
+   the shell pages, and changes nothing for one it does not) */
+static void console_line(void) {
+    ttyctl(TTY_PAGE, 0);
+}
+
 static void drop(struct conn *c, const char *why) {
-    if(verbose && why && c->state == SENDING) printf("%s: the response was cut short: %s\n", c->peer, why);
+    if(verbose && why && c->state == SENDING) {
+        console_line();
+        printf("%s: the response was cut short: %s\n", c->peer, why);
+    }
     if(c->file >= 0) close(c->file);
     free(c->mem);
     close(c->fd);
@@ -115,6 +125,7 @@ static void begin(struct conn *c, const struct http_req *req, const struct http_
     c->since = uptime();
     if(verbose) {
         long body = req->method == HTTP_HEAD || r->status == 304 || r->length < 0 ? 0 : r->length;
+        console_line();
         printf("%s %s %s %d %ld\n", c->peer, req->method_name[0] ? req->method_name : "-",
                req->target[0] ? req->target : "-", r->status, body);
     }
