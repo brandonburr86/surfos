@@ -49,6 +49,7 @@ USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the
 USER_PROGS  += httpd         # 10/17/26: the web server, a program of several files in user/httpd/
 USER_PROGS  += pipetest      # 10/24/26 (pipelines and scripting): the kernel's pipes from user space
 USER_PROGS  += env           # 10/24/26: the environment, or a program run with a changed one
+USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeline wants (user/bin/lineutil.h)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)

@@ -1043,6 +1043,26 @@ SMOKE = [
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
+    # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('printf "b\\na\\nc\\na\\n" | sort', ['a\r\na\r\nb\r\nc\r\n', shown('SURF \u224b> ')]),
+      ('printf "b\\na\\nc\\na\\n" | sort -u | tr a-z A-Z', ['A\r\nB\r\nC\r\n', shown('SURF \u224b> ')]),
+      ('printf "10\\n9\\n100\\n" | sort -n; printf "10\\n9\\n100\\n" | sort -rn',
+       ['9\r\n10\r\n100\r\n', '100\r\n10\r\n9\r\n', shown('SURF \u224b> ')]),
+      ('printf "x\\nx\\ny\\nx\\n" | uniq -c', ['      2 x\r\n      1 y\r\n      1 x\r\n', shown('SURF \u224b> ')]),
+      ('seq 1 3 10 | tail -n 2; seq 10 -3 1 | tr "\\n" " "; echo', ['7\r\n10\r\n', '10 7 4 1 \r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -i an', ['Banana\r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -n e', ['1:apple\r\n3:cherry\r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep "^c.*y$"; seq 5 | grep -v 3 | tr -d "\\n"; echo',
+       ['cherry\r\n', '1245\r\n', shown('SURF \u224b> ')]),
+      ('seq 20 | grep -c "1"; printf "a.p\\nap\\n" | grep -F "a.p"; printf "x\\n" | grep -F y; echo status $?',
+       ['11\r\n', 'a.p\r\n', 'status 1\r\n', shown('SURF \u224b> ')]),
+      ('echo "hello    world" | tr -s " "', ['hello world\r\n', shown('SURF \u224b> ')]),
+      ('seq 3 | tee /hda1/TEE.TXT | wc -l; cat /hda1/TEE.TXT; rm /hda1/TEE.TXT',
+       ['      3 ', '1\r\n2\r\n3\r\n', shown('SURF \u224b> ')]),
+      ('dmesg | grep -i "fat16: hda1" | head -1', ['+FAT16: hda1: label SURFOS', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
