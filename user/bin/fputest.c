@@ -15,6 +15,9 @@ MXCSR, sleeps 300 ms in the same asm block (int 0x80), reads them all back and c
 for bit: FPUTEST race PASS. Two at once (the self test's test_fpu) make the kernel save one's
 registers and load the other's in turn.
 
+fputest printf: libsurf's %f, %e and %g (10/25/26, L14) in a program, against what they must
+print (tests/host/test_libc.c compares them with the host's printf): FPUTEST printf PASS.
+
 The SSE code is in asm, chosen with CPUID: the program itself stays i486 code (-mno-sse), so it
 runs on a CPU without SSE (QEMU's -cpu pentium: fnsave instead of fxsave). It prints its numbers
 with a decimal of its own: it tests the FPU, not printf.
@@ -183,9 +186,37 @@ static int race(void) {
 
 /* GCC realigns main's own frame (andl $-16), but argc stays where crt0 put it: the i386 ABI's 16-byte alignment at a
    call puts the first argument on a 16-byte boundary, which SSE code in a program built for it relies on (L12) */
+/* 10/25/26 (L14): libsurf's floating-point conversions, here where they run (the x87 in ring 3) */
+static int formats(void) {
+    static const struct { const char *fmt; double v; const char *want; } cases[] = {
+        { "%f", 1.5, "1.500000" },              { "%.2f", 3.14159, "3.14" },          { "%.0f", 2.5, "2" },
+        { "%.0f", 3.5, "4" },                   { "%8.3f|", -2.5, "  -2.500|" },      { "%-8.1f|", 0.25, "0.2     |" },
+        { "%+.1f", 9.96, "+10.0" },             { "%010.3f", -2.5, "-00002.500" },    { "%f", -0.0, "-0.000000" },
+        { "%.3f", 0.0006, "0.001" },            { "%f", 1e20, "100000000000000000000.000000" },
+        { "%e", 12345.678, "1.234568e+04" },    { "%.3E", 9.9996, "1.000E+01" },      { "%e", 0.0, "0.000000e+00" },
+        { "%g", 0.0001234, "0.0001234" },       { "%g", 1e6, "1e+06" },               { "%g", 100000.0, "100000" },
+        { "%g", 1e-5, "1e-05" },                { "%#g", 1.0, "1.00000" },            { "%.17g", 0.1, "0.10000000000000001" },
+        { "%G", 1.5e-10, "1.5E-10" },           { "%g", 0.0, "0" },
+    };
+    char got[64];
+    int i, bad = 0;
+    for(i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        snprintf(got, sizeof(got), cases[i].fmt, cases[i].v);
+        if(strcmp(got, cases[i].want)) {
+            printf("fputest printf: \"%s\" gave [%s], not [%s]\n", cases[i].fmt, got, cases[i].want);
+            bad++;
+        }
+    }
+    printf("fputest printf: %d formats, %d wrong; 1/3 as %%.6f is %.6f, as %%g %g, as %%e %e\n", i, bad, 1.0 / 3,
+           1.0 / 3, 1.0 / 3);
+    printf("FPUTEST printf %s\n", bad ? "FAIL" : "PASS");
+    return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     if(argc == 1) return results(((unsigned long)&argc & 15) == 0);
     if(argc == 2 && !strcmp(argv[1], "race")) return race();
-    fprintf(stderr, "usage: fputest [race]\n");
+    if(argc == 2 && !strcmp(argv[1], "printf")) return formats();
+    fprintf(stderr, "usage: fputest [race|printf]\n");
     return 2;
 }

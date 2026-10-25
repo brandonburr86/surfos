@@ -617,7 +617,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   headers, and `--gc-sections` keeps each to what it uses). A failed call returns -1 (or
   NULL) and sets `errno`, whose numbers are Linux's and the kernel's. It has buffered
   `FILE` streams (stdout line-buffered on the console, stderr unbuffered, everything
-  flushed at `exit()`), one formatter for every `printf` (no floating point) and `sscanf`,
+  flushed at `exit()`), one formatter for every `printf` (10/25/26: with floating point, `%f %e %g`
+  and their capitals, the exact value's digits as glibc prints them, L14) and `sscanf`,
   `malloc`/`free`/`realloc` with boundary tags and first fit (the heap grows by `sbrk()`,
   64 KB at least), the string and memory functions, `strtol`, `qsort` and `bsearch`,
   `opendir`/`readdir`, the file calls (`open`, `lseek`, `stat`, `fstat`, `rename`,
@@ -1078,7 +1079,7 @@ shell/                lsblk, fdisk, mkfs, mount, umount, eject, df, mv (main.c, 
   read and written). 512-byte sectors only: a drive with 4096-byte sectors is refused
   (`+USB: port …: 4096-byte blocks are not supported`), and a disk of 2 TB or more is used
   up to 2 TB. In user space `time_t` is a signed 32-bit count, so the clock wraps in
-  January 2038; `printf` has no floating point; `lseek` takes a signed 32-bit offset, so a
+  January 2038; `lseek` takes a signed 32-bit offset, so a
   file can grow to FAT's 4 GB limit but positions past 2 GB cannot be sought.
 
 ## 17. surfsh, the SurfOS shell (ai-dev, October 2026)

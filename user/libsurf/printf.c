@@ -8,6 +8,9 @@ into a sink, so one formatter serves strings, streams and descriptors: flags
 - 0 + space #, width and precision (numbers or *), lengths hh h l ll z j t,
 conversions d i u x X o c s p %. sscanf() reads %d %i %u %x %o %s %c %n %%,
 with widths, * (no assignment) and the length letters.
+10/25/26 (robustness, L14): and floating point, f F e E g G (L: a long double,
+printed as the double nearest to it), now that every program's FPU registers
+are its own (kernel/fpu.c). The digits are the exact value's, as glibc's are.
 */
 
 #include <stddef.h>
@@ -103,9 +106,178 @@ static void fmt_num(struct sink *s, u64 val, int neg, unsigned base, int upper, 
     if(flags & FL_LEFT) pad(s, width - total, ' ');
 }
 
+/**** 10/25/26 (L14): floating point ****/
+
+/* A double is mant * 2^e2 exactly, which is mant * 5^-e2 / 10^-e2 when e2 < 0: an integer, and a place for the
+   point. That integer's decimal digits come from a number in base 10^9 (767 digits at most, for the smallest
+   denormal), so every digit printed is the exact value's, rounded to nearest with a tie to even: what glibc prints.
+   Integer arithmetic only (div64_32() above, no libgcc): of the FPU, a conversion uses no more than it takes to
+   pass the double, so a program that prints no floating point never touches it. */
+#define FLT_LIMBS 90                    /* 9 digits each */
+#define FLT_BASE 1000000000u
+
+/* big (n limbs, the least significant first) times f; the new n */
+static int big_mul(u32 *big, int n, u32 f) {
+    u32 carry = 0, r;
+    int i;
+    for(i = 0; i < n; i++) {
+        u64 t = (u64)big[i] * f + carry;        /* below 10^9 * 2^32: the quotient fits 32 bits */
+        carry = div64_32((u32)(t >> 32), (u32)t, FLT_BASE, &r);
+        big[i] = r;
+    }
+    while(carry) {
+        big[n++] = carry % FLT_BASE;
+        carry /= FLT_BASE;
+    }
+    return n;
+}
+
+/* the exact decimal digits of v (finite, > 0) in dig[] (FLT_LIMBS * 9 bytes; the first is not 0): how many, and in
+   *exp10 the power of ten of the first */
+static int flt_exact(double v, char *dig, int *exp10) {
+    static const u32 pow5[14] = { 1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125, 9765625, 48828125,
+                                  244140625, 1220703125 };
+    union { double d; u64 u; } x;
+    u32 big[FLT_LIMBS], r, w;
+    u64 mant;
+    int e2, n = 0, k, len = 0;
+    char tmp[10];
+    x.d = v;
+    mant = x.u & 0xFFFFFFFFFFFFFULL;
+    e2 = (int)(x.u >> 52) & 0x7FF;
+    if(e2) mant |= 1ULL << 52;
+    else e2 = 1;                                /* a denormal */
+    e2 -= 1075;
+    while(!(mant & 1)) {
+        mant >>= 1;
+        e2++;
+    }
+    while(mant) {
+        mant = udiv64_small(mant, FLT_BASE, &r);
+        big[n++] = r;
+    }
+    for(k = e2; k > 0; k -= 31) n = big_mul(big, n, k >= 31 ? 0x80000000u : 1u << k);
+    for(k = -e2; k > 0; k -= 13) n = big_mul(big, n, pow5[k >= 13 ? 13 : k]);
+    w = big[n - 1];                             /* the first limb without its zeros, then 9 digits a limb */
+    k = 0;
+    do { tmp[k++] = (char)('0' + w % 10); w /= 10; } while(w);
+    while(k) dig[len++] = tmp[--k];
+    while(--n > 0) {
+        w = big[n - 1];
+        for(k = 8; k >= 0; k--, w /= 10) dig[len + k] = (char)('0' + w % 10);
+        len += 9;
+    }
+    *exp10 = len - 1 + (e2 < 0 ? e2 : 0);
+    return len;
+}
+
+/* dig[0..n) rounded to ndig digits, a tie to even (the digits after the n are 0): how many are left; *exp10 one more
+   when 9s carried into a new first digit. ndig 0 rounds to the place just above the first digit (to nothing, or to
+   a 1 there), less than 0 to nothing */
+static int flt_round(char *dig, int n, int ndig, int *exp10) {
+    int i, up, rest = 0;
+    if(ndig >= n) return n;
+    if(ndig < 0) return 0;
+    for(i = ndig + 1; i < n && !rest; i++) rest = dig[i] != '0';
+    up = dig[ndig] > '5' || (dig[ndig] == '5' && (rest || (ndig > 0 && ((dig[ndig - 1] - '0') & 1))));
+    if(!up) return ndig;
+    for(i = ndig - 1; i >= 0; i--) {
+        if(dig[i] != '9') {
+            dig[i]++;
+            return ndig;
+        }
+        dig[i] = '0';
+    }
+    dig[0] = '1';                               /* 9s carried over, or nothing was kept: a 1 at the place above */
+    ++*exp10;
+    return ndig ? ndig : 1;
+}
+
+/* count digits from index j of dig[0..n), 0 outside them */
+static void put_digits(struct sink *s, const char *dig, int n, int j, int count) {
+    char buf[32];
+    int k = 0;
+    for(; count > 0; count--, j++) {
+        buf[k++] = j >= 0 && j < n ? dig[j] : '0';
+        if(k == (int)sizeof(buf)) {
+            emit(s, buf, (size_t)k);
+            k = 0;
+        }
+    }
+    emit(s, buf, (size_t)k);
+}
+
+static void fmt_float(struct sink *s, double v, char conv, int width, int prec, int flags) {
+    union { double d; u64 u; } x;
+    char dig[FLT_LIMBS * 9], sign = 0, ebuf[8], ex[2];
+    int upper = conv == 'F' || conv == 'E' || conv == 'G', n = 0, e = 0, fixed, frac, len, elen = 0, point, k;
+    x.d = v;
+    if(x.u >> 63) sign = '-';                   /* -0.0 too */
+    else if(flags & FL_PLUS) sign = '+';
+    else if(flags & FL_SPACE) sign = ' ';
+    x.u &= ~(1ULL << 63);
+    if((x.u >> 52) == 0x7FF) {                  /* an infinity or a NaN: no 0 padding */
+        len = 3 + (sign ? 1 : 0);
+        if(!(flags & FL_LEFT)) pad(s, width - len, ' ');
+        if(sign) emit(s, &sign, 1);
+        emit(s, x.u << 12 ? (upper ? "NAN" : "nan") : (upper ? "INF" : "inf"), 3);
+        if(flags & FL_LEFT) pad(s, width - len, ' ');
+        return;
+    }
+    if(prec < 0) prec = 6;
+    if(x.u) n = flt_exact(x.d, dig, &e);        /* 0: no digits, the power 0 */
+    if(conv == 'f' || conv == 'F') {
+        fixed = 1;
+        frac = prec;
+        n = flt_round(dig, n, e + 1 + prec, &e);
+    } else if(conv == 'e' || conv == 'E') {
+        fixed = 0;
+        frac = prec;
+        n = flt_round(dig, n, prec + 1, &e);
+    } else {                                    /* g: P significant digits, %e's way when the power is not in [-4, P) */
+        int p = prec ? prec : 1;
+        n = flt_round(dig, n, p, &e);
+        fixed = e >= -4 && e < p;
+        frac = fixed ? p - 1 - e : p - 1;
+        if(!(flags & FL_ALT)) {                 /* no 0s at the end of the fraction, nor a point with none */
+            for(k = n - 1; k >= 0 && dig[k] == '0'; k--);
+            k = fixed ? k - e : k;              /* the fraction's digits up to its last one that is not 0 */
+            if(k < frac) frac = k > 0 ? k : 0;
+        }
+    }
+    if(!n && fixed) e = -1;                     /* rounded to 0: the integer part is the 0 alone */
+    point = frac || (flags & FL_ALT);
+    if(fixed) len = (e >= 0 ? e + 1 : 1) + (point ? 1 + frac : 0);
+    else {
+        k = e < 0 ? -e : e;
+        do { ebuf[elen++] = (char)('0' + k % 10); k /= 10; } while(k);
+        if(elen < 2) ebuf[elen++] = '0';
+        len = 1 + (point ? 1 + frac : 0) + 2 + elen;
+    }
+    len += sign ? 1 : 0;
+    if(!(flags & FL_LEFT) && !(flags & FL_ZERO)) pad(s, width - len, ' ');
+    if(sign) emit(s, &sign, 1);
+    if(!(flags & FL_LEFT) && (flags & FL_ZERO)) pad(s, width - len, '0');
+    if(fixed) {
+        if(e >= 0) put_digits(s, dig, n, 0, e + 1);
+        else emit(s, "0", 1);
+        if(point) emit(s, ".", 1);
+        put_digits(s, dig, n, e + 1, frac);
+    } else {
+        put_digits(s, dig, n, 0, 1);
+        if(point) emit(s, ".", 1);
+        put_digits(s, dig, n, 1, frac);
+        ex[0] = upper ? 'E' : 'e';
+        ex[1] = e < 0 ? '-' : '+';
+        emit(s, ex, 2);
+        while(elen) emit(s, &ebuf[--elen], 1);
+    }
+    if(flags & FL_LEFT) pad(s, width - len, ' ');
+}
+
 int __format(struct sink *s, const char *fmt, va_list ap) {
     while(*fmt) {
-        int flags = 0, width = 0, prec = -1, length = 0;    /* length: -2 hh, -1 h, 0 int, 1 l, 2 ll */
+        int flags = 0, width = 0, prec = -1, length = 0;    /* length: -2 hh, -1 h, 0 int, 1 l, 2 ll, 3 L */
         char c;
         if(*fmt != '%') {
             const char *start = fmt;
@@ -145,6 +317,7 @@ int __format(struct sink *s, const char *fmt, va_list ap) {
         else if(*fmt == 'l') { length = 1; fmt++; if(*fmt == 'l') { length = 2; fmt++; } }
         else if(*fmt == 'j') { length = 2; fmt++; }
         else if(*fmt == 'z' || *fmt == 't') { length = 1; fmt++; }
+        else if(*fmt == 'L') { length = 3; fmt++; }
 
         c = *fmt++;
         switch(c) {
@@ -174,6 +347,9 @@ int __format(struct sink *s, const char *fmt, va_list ap) {
         }
         case 'p':
             fmt_num(s, (u64)(unsigned long)va_arg(ap, void *), 0, 16, 0, width, -1, flags | FL_PTR);
+            break;
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':      /* 10/25/26 (L14) */
+            fmt_float(s, length == 3 ? (double)va_arg(ap, long double) : va_arg(ap, double), c, width, prec, flags);
             break;
         case 'c': {
             char ch = (char)va_arg(ap, int);

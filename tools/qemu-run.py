@@ -289,6 +289,8 @@ SMOKE = [
                  'x87: 1.5 + 2.25 = 3.75, * 4 = 15, / 8 = 1.875, sqrt(2.25) = 1.5, (int)-2.5 = -2',
                  'SSE2: 1.5 + 2.25 = 3.75, * 4 = 15, / 8 = 1.875, sqrt(2.25) = 1.5, (int)-2.5 = -2', 'FPUTEST PASS']),
     ('fputest race', ['8 x87 registers and 8 XMM registers across 300 ms of sleep: the same bits', 'FPUTEST race PASS']),
+    ('fputest printf', ['22 formats, 0 wrong; 1/3 as %.6f is 0.333333, as %g 0.333333, as %e 3.333333e-01',
+                        'FPUTEST printf PASS']),                     # 10/25/26 (L14): libsurf's %f %e %g
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('acpidump DSDT', ['not found']),
     ('acpidump MSDM', ['usage: acpidump']),
