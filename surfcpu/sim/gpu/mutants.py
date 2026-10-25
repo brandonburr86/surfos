@@ -3,17 +3,26 @@
 
     mutants.py --work DIR [--only NAME,...] [--jobs N]
 
-Each mutant is a one-line change to a copy of surf_gpu.v, surf_vram.v or surf_video.v: a bug
-of the kind the design could have (a copy in the wrong direction, a clip off by one, EXPAND's
-bits in the wrong order, the engine taking the port without its grant, an ABORT that keeps the
-FIFO, an interrupt without its enable, the overlay rule wrong, FRAME_CRC's bytes swapped, a
-placement change not waiting for the frame latch, a wrong target or clip after a reset...). The
+Each mutant is a one-line change to a copy of surf_gpu.v, surf_gpu_tri.v, surf_gpu_div.v,
+surf_vram.v or surf_video.v: a bug of the kind the design could have (a copy in the wrong
+direction, a clip off by one, EXPAND's bits in the wrong order, the engine taking the port without
+its grant, an ABORT that keeps the FIFO, an interrupt without its enable, the overlay rule wrong,
+FRAME_CRC's bytes swapped, a placement change not waiting for the frame latch, a wrong target or
+clip after a reset; GPU2's: the top-left rule, a lane, the depth function, the cull sense, the
+gradient's rounding, the values' rounding, FLIP before the blanking, the depth buffer kept or
+refused wrongly, a depth word's lanes, ZWRITE ignored, the swap of a counter-clockwise triangle, a
+step, the clip, ABORT...). The
 test that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with
 Verilator and run on seed 1; it must fail. A "soc" mutant is judged by gpudiag on the RTL SoC instead
 (surfsim built with HAS_GPU = 1 from the copy, running build/fw/gpudiag.mem): gpudiag must say
 FAIL, or gpudiag_check.py fail the capture in its board or its simulation form, since gpudiag is
-what runs on the board. Exit 0 when every mutant is caught. Run in the toolchain container from
-surfcpu/ (it needs verilator and g++, and make build-gpu-rom first).
+what runs on the board. An equivalent mutant (EQUIVALENT) changes nothing any test can see, by a
+proof in docs/GPU.md (the clamp of section 16.4 never acts): its test must pass, and if it fails
+the proof is wrong. A "model" mutant breaks the C model (sim/models/gpu_model.c) instead, and the
+model's own tests (sim/gpu/test_gpu_model.c, written from GPU.md) must fail: so that none of their
+hand-worked expectations is vacuous. Exit 0 when every mutant is caught and every equivalent one
+survives. Run in
+the toolchain container from surfcpu/ (it needs verilator and g++, and make build-gpu-rom first).
 """
 
 import argparse
@@ -25,7 +34,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 GPU = "rtl/peripherals/surf_gpu.v"
+TRI = "rtl/peripherals/surf_gpu_tri.v"
+DIV = "rtl/peripherals/surf_gpu_div.v"
 VRAM = "rtl/soc/surf_vram.v"
+MODEL = "sim/models/gpu_model.c"
 VIDEO = "rtl/peripherals/surf_video.v"
 
 # name, file, the line's text, its replacement, the test
@@ -109,15 +121,83 @@ MUTANTS = [
     ("soc-clip-reset-bottom-1", GPU, "c_x1 <= 16'd640; c_y1 <= 16'd480;", "c_x1 <= 16'd640; c_y1 <= 16'd1;", "soc"),
     ("soc-target-reset-width-644", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd644; t_h <= 15'd480;", "soc"),
     ("soc-target-reset-height-481", GPU, "t_w <= 15'd640; t_h <= 15'd480;", "t_w <= 15'd640; t_h <= 15'd481;", "soc"),
+    # GPU2 (docs/GPU.md section 16): the brief's rules (the tie rule, a lane, the depth function, the cull
+    # sense, the gradient's rounding, FLIP before blanking) and more
+    ("tri-top-edge-excluded", TRI, "wire tl0 = ey0[16] || (ey0 == 17'sd0 && ex0 > 17'sd0);", "wire tl0 = ey0[16];", "gpu"),
+    ("tri-right-edge-included", TRI, "- {pe1b[34], pe1b} - {35'd0, !tl1};", "- {pe1b[34], pe1b};", "gpu"),
+    ("tri-lane-3-edge-0", TRI, "wire signed [35:0] a0x3 = a0 + a0x2,", "wire signed [35:0] a0x3 = a0x2,", "gpu"),
+    ("tri-zfunc-swapped", TRI, "zle ? (zq[16 * gl +: 16] <= zbuf) : (zq[16 * gl +: 16] < zbuf);",
+     "zle ? (zq[16 * gl +: 16] < zbuf) : (zq[16 * gl +: 16] <= zbuf);", "gpu"),
+    ("tri-cull-sense", TRI, "(area > 35'sd0 && fl[HDR_TRI_CULL_CW]) || (area < 35'sd0 && fl[HDR_TRI_CULL_CCW]);",
+     "(area > 35'sd0 && fl[HDR_TRI_CULL_CCW]) || (area < 35'sd0 && fl[HDR_TRI_CULL_CW]);", "gpu"),
+    ("tri-gradient-toward-zero", DIV, "assign q    = neg ? ~q_mag + {36'd0, rem == 34'd0} : q_mag;",
+     "assign q    = neg ? ~q_mag + 37'd1 : q_mag;", "gpu"),
+    ("tri-depth-rounded-down", TRI, "t = $signed({v[17], v[17:1]}) + $signed({17'd0, v[0]});",
+     "t = $signed({v[17], v[17:1]});", "gpu"),
+    ("tri-colour-rounded-down", TRI, "t = $signed({v[9], v[9:1]}) + $signed({9'd0, v[0]});", "t = $signed({v[9], v[9:1]});",
+     "gpu"),
+    ("flip-before-blanking", GPU, "S_FLIP: if (vblank) begin", "S_FLIP: if (1'b1) begin", "gpu"),
+    ("zbuf-kept-by-set-target", GPU, "z_valid <= 1'b0;                              // the depth buffer was the old target's",
+     "z_valid <= z_valid;", "gpu"),
+    ("zbuf-bound-off-by-one", GPU, "({4'd0, p0} + mul_acc + {19'd0, tw2} > VRAM_36)));",
+     "({4'd0, p0} + mul_acc + {19'd0, tw2} >= VRAM_36)));", "gpu"),
+    ("tri-depth-word-lanes", TRI, "wire [3:0]  zbe0   = {pass[1], pass[1], pass[0], pass[0]};",
+     "wire [3:0]  zbe0   = {pass[0], pass[0], pass[1], pass[1]};", "gpu"),
+    ("tri-zwrite-alone-ignored", TRI, "end else if (zwrite) begin                 // every covered lane passes",
+     "end else if (1'b0) begin", "gpu"),
+    ("tri-colour-ignores-grant", TRI, "T_CW: begin\n                m_req = 1'b1; m_be = pass; m_addr = cword; m_wdata = cval;\n"
+     "                if (m_gnt) adv = 1'b1;", "T_CW: begin\n                m_req = 1'b1; m_be = pass; m_addr = cword; "
+     "m_wdata = cval;\n                adv = 1'b1;", "gpu"),
+    ("tri-ccw-not-swapped", TRI, "if (area[34]) begin                // counter-clockwise",
+     "if (1'b0) begin                    // counter-clockwise", "gpu"),
+    ("tri-gouraud-x-step-half", TRI, "scx <= {gcx[24:0], 4'd0};", "scx <= {gcx[25:0], 3'd0};", "gpu"),
+    ("tri-depth-row-target-stride", TRI, "zrow <= zrow + {16'd0, z_stride};", "zrow <= zrow + {16'd0, t_stride};", "gpu"),
+    ("tri-clip-left-ignored", TRI, "bx0_c = (bxa > ecx0) ? bxa : ecx0,", "bx0_c = bxa,", "gpu"),
+    ("tri-ignores-abort", TRI, "if (rst || stop) begin", "if (rst) begin", "gpu"),
+    # gpudiag on the RTL SoC must catch GPU2's too
+    ("soc-flip-before-blanking", GPU, "S_FLIP: if (vblank) begin", "S_FLIP: if (1'b1) begin", "soc"),
+    ("soc-zbuf-kept-by-set-target", GPU,
+     "z_valid <= 1'b0;                              // the depth buffer was the old target's", "z_valid <= z_valid;", "soc"),
+    ("soc-tri-cull-sense", TRI, "(area > 35'sd0 && fl[HDR_TRI_CULL_CW]) || (area < 35'sd0 && fl[HDR_TRI_CULL_CCW]);",
+     "(area > 35'sd0 && fl[HDR_TRI_CULL_CCW]) || (area < 35'sd0 && fl[HDR_TRI_CULL_CW]);", "soc"),
+    ("soc-tri-zfunc-swapped", TRI, "zle ? (zq[16 * gl +: 16] <= zbuf) : (zq[16 * gl +: 16] < zbuf);",
+     "zle ? (zq[16 * gl +: 16] < zbuf) : (zq[16 * gl +: 16] <= zbuf);", "soc"),
+    ("soc-tri-top-edge-excluded", TRI, "wire tl0 = ey0[16] || (ey0 == 17'sd0 && ex0 > 17'sd0);", "wire tl0 = ey0[16];",
+     "soc"),
+    ("soc-tri-gouraud-x-step-half", TRI, "scx <= {gcx[24:0], 4'd0};", "scx <= {gcx[25:0], 3'd0};", "soc"),
+    # the C model's own tests catch a broken model (GPU2's rules)
+    ("model-top-left-rule", MODEL, "t->tl[e] = t->ey[e] < 0 || (t->ey[e] == 0 && t->ex[e] > 0);",
+     "t->tl[e] = t->ey[e] < 0;", "model"),
+    ("model-gradient-toward-zero", MODEL, "int64_t q = n / d;\n    return (n % d != 0 && n < 0) ? q - 1 : q;",
+     "int64_t q = n / d;\n    return q;", "model"),
+    ("model-rounded-down", MODEL, "floor_div128(v + (1 << 19), 1 << 20)", "floor_div128(v, 1 << 20)", "model"),
+    ("model-ccw-not-swapped", MODEL, "const int ccw = t->area2 < 0;", "const int ccw = 0;", "model"),
+    ("model-zfunc-swapped", MODEL, "pass[L] = zle ? z[L] <= zb : z[L] < zb;", "pass[L] = zle ? z[L] < zb : z[L] <= zb;",
+     "model"),
+    ("model-zbuf-kept-by-set-target", MODEL, "g->zvalid = 0;                          /* the depth buffer belonged",
+     "(void)0;                                /* the depth buffer belonged", "model"),
+]
+
+# mutants that change nothing a test can see, by a proof in docs/GPU.md: their test must pass
+EQUIVALENT = [
+    # 16.4: a covered pixel's value is within 1/8 of the exact plane, so rounding lands inside the
+    # vertices' range and the clamp never changes it
+    ("tri-depth-clamp-removed", TRI,
+     "zround = (t < $signed({2'b00, lo})) ? lo : (t > $signed({2'b00, hi})) ? hi : t[15:0];", "zround = t[15:0];", "gpu"),
+    ("tri-colour-clamp-removed", TRI,
+     "cround = (t < $signed({2'b00, lo})) ? lo : (t > $signed({2'b00, hi})) ? hi : t[7:0];", "cround = t[7:0];", "gpu"),
+    ("model-clamp-removed", MODEL, "const int64_t c = t < p->vmin ? p->vmin : t > p->vmax ? p->vmax : t;",
+     "const int64_t c = t;", "model"),
 ]
 
 CFLAGS = "-std=c++17 -O1 -g -I{r}/sim/models -I{r}/sim/io -I{r}/sim/gpu -I{r}/firmware/include"
 TESTS = {
-    "gpu": dict(top="tb_gpu", rtl=["sim/gpu/tb_gpu.v", GPU, "rtl/lib/surf_fifo.v", VRAM, "rtl/soc/surf_vram_bank.v"],
+    "gpu": dict(top="tb_gpu", rtl=["sim/gpu/tb_gpu.v", GPU, TRI, DIV, "rtl/lib/surf_fifo.v", VRAM,
+                                   "rtl/soc/surf_vram_bank.v"],
                 cpp=["sim/gpu/test_gpu.cpp", "sim/models/gpu_model.c"], args=["--seed", "1", "--chunks", "60"]),
     "vram": dict(top="surf_vram", rtl=[VRAM, "rtl/soc/surf_vram_bank.v"], cpp=["sim/gpu/test_vram.cpp"],
                  args=["--seed", "1", "--cycles", "150000"]),
-    "video": dict(top="tb_video", rtl=["sim/io/tb_video.v"], gparams=["-GHAS_GFX=1"],
+    "video": dict(top="tb_video", rtl=["sim/io/tb_video.v"], gparams=["-GHAS_GFX=1", "-GFLIP_PORT=1"],
                   cpp=["sim/gpu/test_video_gfx.cpp", "sim/models/vga_capture.cpp", "sim/models/gpu_model.c"],
                   args=["--seed", "1", "--font", str(ROOT.parent / "driver/font8x16.c"), "--out", "{w}"]),
 }
@@ -169,6 +249,20 @@ def soc_one(w: Path, path: str, mutated: Path) -> tuple[bool, str]:
         "FAIL" if forms[1] else "PASS")
 
 
+def model_one(w: Path, mutated: Path) -> tuple[bool, str]:
+    """the model's tests against the mutated model: (caught, their last line)"""
+    exe = w / "test_gpu_model"
+    b = subprocess.run(["gcc", "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-I" + str(ROOT / "sim/models"),
+                        "-I" + str(ROOT / "firmware/include"), "-o", str(exe), str(ROOT / "sim/gpu/test_gpu_model.c"),
+                        str(mutated)], capture_output=True, text=True)
+    if b.returncode != 0:
+        return False, "the mutant did not build: " + b.stderr[-400:]
+    r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=600)
+    exe.unlink()
+    last = (r.stdout.strip().splitlines() or ["(no output)"])[-1]
+    return r.returncode != 0, last
+
+
 def run_one(name, path, old, new, test, work: Path) -> tuple[bool, str]:
     w = work / name
     if w.exists():
@@ -181,6 +275,8 @@ def run_one(name, path, old, new, test, work: Path) -> tuple[bool, str]:
     mutated.write_text(src.replace(old, new, 1))
     if test == "soc":
         return soc_one(w, path, mutated)
+    if test == "model":
+        return model_one(w, mutated)
     t = TESTS[test]
     files = [str(mutated) if f == path else str(ROOT / f) for f in t["rtl"]]
     # the mutated copy first in the search path, so a module found by -y/-I comes from it
@@ -208,7 +304,7 @@ def main() -> int:
     work = Path(a.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     only = set(a.only.split(",")) if a.only else None
-    caught = missed = 0
+    caught = missed = survived = wrong = 0
     for name, path, old, new, test in MUTANTS:
         if only and name not in only:
             continue
@@ -219,8 +315,21 @@ def main() -> int:
             caught += 1
         else:
             missed += 1
-    print("test-gpu-mutants: %d of %d caught" % (caught, caught + missed))
-    return 0 if missed == 0 else 1
+    for name, path, old, new, test in EQUIVALENT:
+        if only and name not in only:
+            continue
+        failed, last = run_one(name, path, old, new, test, work)
+        built = not last.startswith("the mutant did not build") and not last.startswith("the line to mutate")
+        print("%-30s %-6s %s: %s" % (name, test, "survives (equivalent)" if built and not failed else
+                                     "CAUGHT: the proof of its equivalence is wrong" if built else "NOT RUN", last))
+        sys.stdout.flush()
+        if built and not failed:
+            survived += 1
+        else:
+            wrong += 1
+    print("test-gpu-mutants: %d of %d caught%s" % (caught, caught + missed, "; %d of %d equivalent ones survive, as "
+          "docs/GPU.md says" % (survived, survived + wrong) if survived + wrong else ""))
+    return 0 if missed == 0 and wrong == 0 else 1
 
 
 if __name__ == "__main__":

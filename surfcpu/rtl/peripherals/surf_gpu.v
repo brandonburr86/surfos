@@ -494,11 +494,10 @@ module surf_gpu #(
                     end
                     S_ZBUF: begin
                         st <= S_IDLE;
-                        if (zb_bad)
-                            badpar_q <= 1'b1;
-                        else begin
+                        if (!zb_bad) begin
                             z_base <= p0[18:0]; z_stride <= p1[15:0]; z_valid <= 1'b1;
-                        end
+                        end else
+                            badpar_q <= 1'b1;                             // refused: nothing changes
                     end
                     S_TRI: if (!tri_busy) st <= S_IDLE;
                     S_FLIP: if (vblank) begin                             // as WAIT_VBLANK, then the write
