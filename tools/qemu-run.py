@@ -906,6 +906,47 @@ SMOKE = [
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
+    # 10/24/26 (pipelines and scripting in surfsh): pipelines and lists, in a surfsh of their own. A program into a
+    # program; a kernel command and a builtin into one (a new surfsh runs them); five stages; the last stage in this
+    # shell (its cd stays), another stage in a new surfsh (its cd does not); && || ! { } ( ); 2>&1 and 2> file; a
+    # here-document into a pipeline, over lines after the continuation prompt; a line that goes on after |, and ^C
+    # there; a broken pipe ends its writer; a kernel command after | refused; a mistake; a job in the background, a
+    # pipeline, reported by its number
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
+      ('ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('dmesg | /initrd/bin/head -1', ['SurfOS: serial console on COM1', shown('SURF \u224b> ')]),
+      ('help | /initrd/bin/head -2', ['surfsh 1.0, the SurfOS shell', shown('SURF \u224b> ')]),
+      ('echo one two | /initrd/bin/wc -w', ['      2 ', shown('SURF \u224b> ')]),
+      ('echo abc | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/wc -c', ['      4 ', shown('SURF \u224b> ')]),
+      ('echo x | cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
+      ('cd / | /initrd/bin/cat; pwd', ['\r\n/initrd/bin\r\n', shown('bin \u224b> ')]),
+      ('cd /', [shown('SURF \u224b> ')]),
+      ('echo a && echo b || echo c; echo end', ['\r\na\r\nb\r\nend\r\n', shown('SURF \u224b> ')]),
+      ('ls /nonexistent && echo yes || echo no', ['No such file or directory', '\r\nno\r\n', shown('SURF \u224b> ')]),
+      ('! ls /initrd > /dev/null; echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('{ echo one; echo two; } > /hda1/GROUP.TXT; cat /hda1/GROUP.TXT', ['one\r\ntwo\r\n', shown('SURF \u224b> ')]),
+      ('( cd /initrd; pwd ); pwd', ['\r\n/initrd\r\n/\r\n', shown('SURF \u224b> ')]),
+      ('/initrd/bin/ls /nonexistent 2>&1 | /initrd/bin/wc -l', ['      1 ', shown('SURF \u224b> ')]),
+      ('/initrd/bin/ls /nonexistent 2> /hda1/ERR.TXT; cat /hda1/ERR.TXT',
+       ['[exit status 1]', 'ls: /nonexistent: No such file or directory', shown('SURF \u224b> ')]),
+      ('/initrd/bin/cat <<END | /initrd/bin/wc -l', [shown('\u2026 \u224b> ')]),
+      ('one', [shown('\u2026 \u224b> ')]),
+      ('two $?', [shown('\u2026 \u224b> ')]),
+      ('END', ['      2 ', shown('SURF \u224b> ')]),
+      ('echo three |', [shown('\u2026 \u224b> ')]),
+      ('/initrd/bin/wc -c', ['      6 ', shown('SURF \u224b> ')]),
+      ('echo unfinished |', [shown('\u2026 \u224b> ')]),
+      (b'\x03', ['^C', shown('SURF \u224b> ')]),
+      ('/initrd/bin/hexdump /dev/zero | /initrd/bin/head -1; echo status $?',
+       ['00000000  00 00 00 00', '\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ('echo x | lsblk', ['surfsh: lsblk is a kernel command: it reads only the console, not the pipe before it',
+                          shown('SURF \u224b!> ')]),
+      ('echo (', ['surfsh: unexpected (', shown('SURF \u224b!> ')]),
+      ('/initrd/bin/count 2 50 | /initrd/bin/wc -w &', ['[1] started (pid ', shown('SURF \u224b> ')]),
+      ('sleep 600', ['slept 600 ms', '[1] done  /initrd/bin/count 2 50 | /initrd/bin/wc -w', shown('SURF \u224b> ')]),
+      ('rm /hda1/GROUP.TXT /hda1/ERR.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
