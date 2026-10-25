@@ -1,0 +1,515 @@
+/*
+SurfOS host test: SurfGPU's driver -- the stand-in for the hardware
+--------------------
+File: gpustub.c Date: 10/25/26 (SurfGPU G3)
+--------------------
+See gpustub.h. Written from surfcpu/docs/GPU.md sections 3 to 5 and MEMORY-MAP.md: what each
+register answers, when the engine takes a word, when a frame latch takes the display registers.
+*/
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "surfcpu/soc.h"
+#include "gpustub.h"
+
+extern const uint8_t font8x16[256][16];        /* driver/font8x16.c */
+
+static struct stub *cur;
+static uint16_t picture[GPU_SCREEN_W * GPU_SCREEN_H];
+
+void stub_current(struct stub *s) { cur = s; }
+
+/**** the frame clock ****/
+
+uint64_t stub_frame_of(uint64_t t) { return t / STUB_FRAME_US; }
+static uint64_t vblank_of(uint64_t k) { return k * STUB_FRAME_US + STUB_VBLANK_US; }
+static uint64_t latch_of(uint64_t k) { return k * STUB_FRAME_US + STUB_LATCH_US; }
+
+/* how many blankings have begun at time t: STATUS.FRAME and FRAME_COUNT (a frame's CRC is taken as
+   its blanking begins) */
+static uint64_t blankings(const struct stub *s, uint64_t t) {
+    if(s->frames_stop) return 7;
+    return t >= STUB_VBLANK_US ? (t - STUB_VBLANK_US) / STUB_FRAME_US + 1 : 0;
+}
+
+/* the first blanking that begins after t */
+static uint64_t next_vblank(uint64_t t) {
+    uint64_t k = stub_frame_of(t);
+    return vblank_of(k) > t ? vblank_of(k) : vblank_of(k + 1);
+}
+
+static void apply(struct stub_disp *d, const struct stub_write *w) {
+    if(w->reg == SURF_VIDEO_GFX_BASE) d->base = w->value & SURF_VIDEO_GFX_BASE_BASE_MASK;
+    else if(w->reg == SURF_VIDEO_GFX_STRIDE) d->stride = w->value & SURF_VIDEO_GFX_STRIDE_STRIDE_MASK;
+    else if(w->reg == SURF_VIDEO_GFX_SCALE) d->scale = w->value & SURF_VIDEO_GFX_SCALE_SCALE_MASK;
+    else d->mode = w->value;
+}
+
+/* frame k shows what the latch before it took: writes that reached it (a microsecond's crossing) */
+struct stub_disp stub_shown(const struct stub *s, uint64_t k) {
+    struct stub_disp d = { 1, 0, 640, 1 };
+    uint64_t cut = k ? latch_of(k - 1) : 0;
+    unsigned i;
+    for(i = 0; i < s->nw && s->wlog[i].t + 1 <= cut; i++) apply(&d, &s->wlog[i]);
+    return d;
+}
+
+static void log_write(struct stub *s, uint32_t reg, uint32_t v) {
+    struct stub_write w = { s->now, reg, v };
+    if(s->nw < STUB_DISP_LOG) s->wlog[s->nw++] = w;
+    apply(&s->reg, &w);
+}
+
+/**** the picture ****/
+
+void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *frame) {
+    struct gpu_display gd;
+    gpu_display_reset(&gd, 1);
+    gd.mode = (int)d->mode;
+    gd.gfx_base = d->base;
+    gd.gfx_stride = d->stride;
+    gd.gfx_scale = d->scale;
+    memcpy(gd.gpal, s->gpal, sizeof(gd.gpal));
+    gpu_display_render(&gd, s->vram, NULL, font8x16, frame);
+}
+
+uint32_t stub_crc(const struct stub *s, const struct stub_disp *d) {
+    stub_render(s, d, picture);
+    return gpu_frame_crc(picture);
+}
+
+/**** the engine ****/
+
+/* does this word make the engine draw (the last parameter of a FILL, COPY or LINE, or data)? */
+static int draws(const struct gpu_engine *e) {
+    unsigned op;
+    if(e->data_left) return 1;
+    if(!e->in_cmd) return 0;
+    op = e->hdr >> 24;
+    return (op == GPU_OP_FILL_RECT || op == GPU_OP_COPY_RECT || op == GPU_OP_LINE) && e->np + 1 == e->need;
+}
+
+/* the demo's layout (320 x 240 pages at 0 and 76,800, stride 320, doubled): a word that draws
+   while a page is on the screen must not reach that page's rows */
+static void tearing(struct stub *s) {
+    uint64_t t = s->eng_cycles / 25, k = stub_frame_of(t);
+    struct stub_disp d;
+    uint32_t page, y0, y1;
+    if(t % STUB_FRAME_US >= STUB_VBLANK_US || !draws(&s->eng)) return;   /* blanking: nothing is shown */
+    d = stub_shown(s, k);
+    if(d.mode != 2 || d.stride != 320 || d.scale != 2 || (d.base != 0 && d.base != 76800)) return;
+    page = d.base / 76800;
+    y0 = s->eng.cy0;
+    y1 = s->eng.cy1 < s->eng.th ? s->eng.cy1 : s->eng.th;
+    if(y0 < 240 * page + 240 && y1 > 240 * page) s->shown_draws++;
+}
+
+static void take(struct stub *s, uint32_t w) {
+    unsigned long long before = s->eng.writes;
+    if(gpu_engine_idle(&s->eng) && (w >> 24) == GPU_OP_WAIT_VBLANK) {
+        s->wait_vbl = 1;
+        s->vbl_until = next_vblank(s->eng_cycles / 25);
+    }
+    if(s->check_tearing) tearing(s);
+    gpu_engine_word(&s->eng, w);
+    s->eng_cycles += 1 + s->slow + (s->eng.writes - before) / 4;
+}
+
+/* the engine's work until the CPU's now: a word a cycle when it is free */
+static void run(struct stub *s) {
+    uint64_t limit = s->now * 25;
+    for(;;) {
+        if(s->wait_vbl) {
+            if(s->vbl_until * 25 > limit) break;
+            if(s->eng_cycles < s->vbl_until * 25) s->eng_cycles = s->vbl_until * 25;
+            s->wait_vbl = 0;
+        }
+        if(!s->count || s->stopped || s->eng_cycles >= limit) break;
+        take(s, s->fifo[s->head]);
+        s->head = (s->head + 1) % 64;
+        s->count--;
+    }
+    if(!s->count && !s->wait_vbl && s->eng_cycles < limit) s->eng_cycles = limit;
+    /* the interrupt: the kernel's handler clears FENCE_EV and wakes the waiter */
+    if(s->irq_path && (s->ie & SURF_GPU_IE_FENCE_MASK) && (s->eng.sticky & GPU_ST_FENCE_EV)) {
+        s->eng.sticky &= ~GPU_ST_FENCE_EV;
+        s->interrupts_sent++;
+        s->event = 1;
+    }
+}
+
+static void push(struct stub *s, uint32_t w) {
+    if(s->ncmd < STUB_CMD_LOG) s->cmd[s->ncmd++] = w;
+    s->fifo[(s->head + s->count) % 64] = w;
+    s->count++;
+}
+
+/* time passes on the CPU's side */
+static void tick(struct stub *s, uint64_t us) {
+    s->now += us;
+    if(s->stall_at && s->now >= s->stall_at) {
+        s->now += s->stall_us;
+        s->stall_at = 0;
+    }
+    if(s->other_holds && !s->other_done && s->now + 1000 >= s->other_until) {
+        unsigned i;
+        s->cmd_at_other = s->ncmd;
+        for(i = 0; i < s->other_n; i++) {           /* the other claimant's last words, while it holds */
+            while(s->count == s->depth) {
+                s->now++;
+                run(s);
+            }
+            push(s, s->other_words[i]);
+            run(s);
+        }
+        s->other_done = 1;
+    }
+    run(s);
+}
+
+void stub_drain(struct stub *s, uint64_t max_us) {
+    uint64_t end = s->now + max_us;
+    while(s->now < end && (s->count || s->wait_vbl || s->eng_cycles > s->now * 25)) tick(s, 10);
+}
+
+static int interrupted(struct stub *s) {
+    return s->intr_at && s->now >= s->intr_at;
+}
+
+/**** the port ****/
+
+static uint32_t p_rd(void *c, uint32_t off) {
+    struct stub *s = c;
+    uint32_t v = 0;
+    tick(s, 1);
+    switch(off) {
+    case SURF_GPU_ID: v = s->id; break;
+    case SURF_GPU_STATUS:
+        v = s->overflow | (s->eng.sticky & (GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM | GPU_ST_FENCE_EV));
+        if(s->count || s->wait_vbl || s->eng_cycles > s->now * 25 || !gpu_engine_idle(&s->eng)) v |= GPU_ST_BUSY;
+        break;
+    case SURF_GPU_IE: v = s->ie; break;
+    case SURF_GPU_FIFO_FREE:
+        v = s->depth - s->count;
+        s->fifo_free_reads++;
+        s->free_said = v;
+        if(!v) s->full_seen++;
+        break;
+    case SURF_GPU_FENCE: v = s->eng.fence; break;
+    case SURF_GPU_INFO: v = s->info; break;
+    }
+    return v;
+}
+
+static void p_wr(void *c, uint32_t off, uint32_t v) {
+    struct stub *s = c;
+    tick(s, 1);
+    switch(off) {
+    case SURF_GPU_STATUS:
+        if(v & GPU_ST_OVERFLOW) s->overflow = 0;
+        s->eng.sticky &= ~(v & (GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM | GPU_ST_FENCE_EV));
+        break;
+    case SURF_GPU_IE: s->ie = v & 3; break;
+    case SURF_GPU_CTRL:
+        if(v & SURF_GPU_CTRL_ABORT_MASK) {
+            s->count = 0;
+            s->wait_vbl = 0;
+            gpu_engine_abort(&s->eng);
+            s->eng_cycles = s->now * 25;
+            s->aborts++;
+        }
+        break;
+    case SURF_GPU_CMD:
+        s->cmd_writes++;
+        if(s->free_said) s->free_said--;
+        else s->writes_blind++;
+        if(s->cmd_writes == s->drop_word) {         /* a knob: as if the FIFO had been full */
+            s->overflow = GPU_ST_OVERFLOW;
+            break;
+        }
+        if(s->cmd_writes == s->corrupt_word) v = (v & 0x00FFFFFFu) | 0x0F000000u;
+        if(s->cmd_writes == s->corrupt_value_at) v = s->corrupt_value;
+        if(s->count == s->depth) {
+            s->writes_full++;
+            s->overflow = GPU_ST_OVERFLOW;
+            break;
+        }
+        push(s, v);
+        run(s);
+        break;
+    }
+}
+
+static uint32_t p_vrd(void *c, uint32_t off) {
+    struct stub *s = c;
+    uint64_t b;
+    tick(s, 1);
+    b = blankings(s, s->now);
+    if(off == SURF_VIDEO_STATUS) {
+        uint32_t v = (uint32_t)(b & 0xFFFF) << SURF_VIDEO_STATUS_FRAME_LSB;
+        if(!s->frames_stop && s->now % STUB_FRAME_US >= STUB_VBLANK_US) v |= SURF_VIDEO_STATUS_VBLANK_MASK;
+        if(b > blankings(s, s->ev_cleared)) v |= SURF_VIDEO_STATUS_VBLANK_EV_MASK;
+        return v;
+    }
+    if(off == SURF_VIDEO_GFX_BASE) return s->reg.base;
+    if(off == SURF_VIDEO_GFX_STRIDE) return s->reg.stride;
+    if(off == SURF_VIDEO_GFX_SCALE) return s->reg.scale;
+    if(off == SURF_VIDEO_FRAME_COUNT) {
+        s->kept = 1;
+        s->kept_frame = (uint32_t)b;
+        return (uint32_t)(b & 0xFFFF);
+    }
+    if(off == SURF_VIDEO_FRAME_CRC) {
+        uint64_t n = s->kept ? s->kept_frame : b;   /* the kept frame, else the newest */
+        struct stub_disp d;
+        s->kept = 0;
+        if(!n) return 0;
+        d = stub_shown(s, n - 1);
+        s->crc_frame = n - 1;
+        return stub_crc(s, &d);
+    }
+    if(off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4 * 256) return s->gpal[(off - SURF_VIDEO_GPAL) / 4];
+    return 0;
+}
+
+static void p_vwr(void *c, uint32_t off, uint32_t v) {
+    struct stub *s = c;
+    tick(s, 1);
+    if(off == SURF_VIDEO_STATUS && (v & SURF_VIDEO_STATUS_VBLANK_EV_MASK)) s->ev_cleared = s->now;
+    else if(off == SURF_VIDEO_GFX_BASE || off == SURF_VIDEO_GFX_STRIDE || off == SURF_VIDEO_GFX_SCALE) log_write(s, off, v);
+    else if(off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4 * 256) s->gpal[(off - SURF_VIDEO_GPAL) / 4] = v & 0xFFF;
+}
+
+static uint32_t p_vram_rd(void *c, uint32_t off) {
+    struct stub *s = c;
+    tick(s, 1);
+    if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
+        s->bad_vram++;
+        return 0;
+    }
+    return (uint32_t)s->vram[off] | (uint32_t)s->vram[off + 1] << 8 | (uint32_t)s->vram[off + 2] << 16 |
+           (uint32_t)s->vram[off + 3] << 24;
+}
+
+static void p_vram_wr(void *c, uint32_t off, uint32_t v) {
+    struct stub *s = c;
+    tick(s, 1);
+    if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
+        s->bad_vram++;
+        return;
+    }
+    s->vram[off] = (uint8_t)v;
+    s->vram[off + 1] = (uint8_t)(v >> 8);
+    s->vram[off + 2] = (uint8_t)(v >> 16);
+    s->vram[off + 3] = (uint8_t)(v >> 24);
+}
+
+static uint8_t p_vram_rd8(void *c, uint32_t off) {
+    struct stub *s = c;
+    tick(s, 1);
+    if(off >= GPU_VRAM_BYTES) {
+        s->bad_vram++;
+        return 0;
+    }
+    return s->vram[off];
+}
+
+static void p_vram_wr8(void *c, uint32_t off, uint8_t v) {
+    struct stub *s = c;
+    tick(s, 1);
+    if(off >= GPU_VRAM_BYTES) {
+        s->bad_vram++;
+        return;
+    }
+    s->vram[off] = v;
+}
+
+static uint64_t p_us(void *c) {
+    struct stub *s = c;
+    tick(s, 1);
+    return s->now;
+}
+
+static void p_relax(void *c) {
+    struct stub *s = c;
+    s->relaxes++;
+    tick(s, 5);
+}
+
+/* sleep_intr(): at once when Ctrl+C has come, cut short when it comes */
+static int p_sleep(void *c, uint32_t ms) {
+    struct stub *s = c;
+    uint64_t end = s->now + (uint64_t)ms * 1000;
+    s->sleeps++;
+    if(interrupted(s)) {
+        tick(s, 1);
+        return GPU_EINTR;
+    }
+    if(s->intr_at && s->intr_at < end) {
+        tick(s, s->intr_at - s->now);
+        return GPU_EINTR;
+    }
+    tick(s, end - s->now);
+    return 0;
+}
+
+static bool p_interrupted(void *c) { return (bool)interrupted((struct stub *)c); }
+
+static void p_irq_arm(void *c) {
+    struct stub *s = c;
+    s->event = 0;
+}
+
+static int p_irq_wait(void *c, uint32_t ms) {
+    struct stub *s = c;
+    uint64_t end = s->now + (uint64_t)ms * 1000;
+    s->irq_waits++;
+    while(!s->event && s->now < end) {
+        if(interrupted(s)) return GPU_EINTR;
+        tick(s, 10);
+    }
+    return 0;
+}
+
+static u_long p_atomic_begin(void *c) {
+    struct stub *s = c;
+    s->in_atomic++;
+    return 1;
+}
+
+static void p_atomic_end(void *c, u_long flags) {
+    struct stub *s = c;
+    (void)flags;
+    s->in_atomic--;
+}
+
+static int p_text_lock(void *c) {
+    struct stub *s = c;
+    s->text_locks++;
+    return 1;
+}
+
+static void p_text_unlock(void *c, int how) {
+    struct stub *s = c;
+    (void)how;
+    s->text_locks--;
+}
+
+static uint32_t p_get_mode(void *c) { return ((struct stub *)c)->reg.mode; }
+
+static void p_set_mode(void *c, uint32_t mode) {
+    struct stub *s = c;
+    if(s->text_locks <= 0 || s->in_atomic <= 0) s->mode_unlocked++;
+    tick(s, 1);
+    log_write(s, 0xFFFF, mode);
+}
+
+static bool p_trylock(void *c) {
+    struct stub *s = c;
+    if(s->other_holds) {
+        if(s->now < s->other_until) return false;
+        s->other_holds = 0;
+    }
+    if(s->locked) {
+        s->claimed_twice++;
+        return false;
+    }
+    s->locked = 1;
+    s->claims++;
+    return true;
+}
+
+static void p_unlock(void *c) {
+    struct stub *s = c;
+    if(!s->locked) s->unlocked_free++;
+    s->locked = 0;
+}
+
+static const char *p_holder(void *c, char *buf, u_int size) {
+    (void)c;
+    snprintf(buf, size, "'Shell 2', pid 9");
+    return buf;
+}
+
+static void *p_alloc(void *c, uint32_t bytes) {
+    struct stub *s = c;
+    return s->no_memory ? NULL : malloc(bytes);
+}
+
+static void p_free(void *c, void *p) {
+    (void)c;
+    free(p);
+}
+
+void stub_init(struct stub *s, int irq_path) {
+    static const struct gpu_port port = {
+        NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_rd, p_vram_wr, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
+        p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
+        p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
+    };
+    unsigned n;
+    uint32_t *log = s->cmd ? s->cmd : malloc(STUB_CMD_LOG * sizeof(uint32_t));
+    memset(s, 0, sizeof(*s));
+    s->cmd = log;
+    s->port = port;
+    s->port.ctx = s;
+    if(!irq_path) {
+        s->port.irq_arm = NULL;
+        s->port.irq_wait = NULL;
+    }
+    s->irq_path = irq_path;
+    gpu_engine_init(&s->eng, s->vram);
+    s->depth = 64;
+    s->id = GPUDRV_ID_GPU1;
+    s->info = 64u | 300u << 16;
+    s->reg.mode = 1;                            /* textcon.c left text */
+    s->reg.base = 0;
+    s->reg.stride = 640;
+    s->reg.scale = 1;
+    for(n = 0; n < 256; n++) s->gpal[n] = gpu_gpal_initial(n);
+    s->now = 1000;
+    s->eng_cycles = s->now * 25;
+    s->ev_cleared = 0;
+    cur = s;
+}
+
+void stub_free(struct stub *s) {
+    free(s->cmd);
+    s->cmd = NULL;
+}
+
+/**** gfx with a line ****/
+
+int gt_printf(const char *fmt, ...) {
+    va_list ap;
+    int n = 0;
+    if(!cur) return 0;
+    va_start(ap, fmt);
+    if(cur->nout < sizeof(cur->out) - 1) {
+        n = vsnprintf(cur->out + cur->nout, sizeof(cur->out) - cur->nout, fmt, ap);
+        if(n > 0) cur->nout += (unsigned)n;
+        if(cur->nout > sizeof(cur->out) - 1) cur->nout = sizeof(cur->out) - 1;
+    }
+    va_end(ap);
+    if(getenv("GPU_TEST_VERBOSE")) {
+        va_start(ap, fmt);
+        vprintf(fmt, ap);
+        va_end(ap);
+    }
+    return n;
+}
+
+int stub_gfx(struct stub *s, struct gpu *g, const char *line) {
+    char buf[512], *argv[64], *save = NULL, *t;
+    int argc = 0;
+    snprintf(buf, sizeof(buf), "%s", line);
+    for(t = strtok_r(buf, " ", &save); t && argc < 63; t = strtok_r(NULL, " ", &save)) argv[argc++] = t;
+    argv[argc] = NULL;
+    cur = s;
+    s->nout = 0;
+    s->out[0] = 0;
+    if(getenv("GPU_TEST_VERBOSE")) printf("> %s\n", line);
+    return gfx_command(g, argc, argv);
+}
