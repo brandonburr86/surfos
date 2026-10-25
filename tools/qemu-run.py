@@ -377,7 +377,10 @@ SMOKE = [
     # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
     ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
     # 10/17/26 (one stick): test_boot_volume must run here (bootvol= and rd1), not print its skip line
+    # 10/24/26 (storage, milestone 1): and test_fat_refused, a stick that refuses writes: close says EIO, umount gives up
     ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
+                  "ok   refused writes: a save's new file goes into the cache, and its close says EIO",
+                  'ok   refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted',
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage

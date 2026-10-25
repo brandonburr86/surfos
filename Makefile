@@ -8,7 +8,7 @@
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
 #   make test-tcp     TCP against hand-made segments on a raw link (tools/qemu-tcp.py; the smoke test runs it too)
-#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs too)
+#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs, the cache and FAT too)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
@@ -430,6 +430,25 @@ $(BUILD)/host/test_mkfs: tests/host/test_mkfs.c $(BUILD)/host/kernel/fs/fat_mkfs
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
+# 10/24/26 (storage, milestone 1): the block cache and FAT together, fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they
+# are, over RAM disks that refuse writes and are pulled out at every write (tests/host/test_fatfs.c, the SurfCPU
+# branch's harness); tests/host/pager_shim stands in for the interrupt flag
+FATFS_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+FATFS_OBJ   = $(BUILD)/host/fatfs/fs/bcache.o $(BUILD)/host/fatfs/fs/fat.o $(BUILD)/host/fatfs/fs/fat_mkfs.o
+$(BUILD)/host/fatfs/%.o: %.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatfs test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) -c $< -o $@
+
+$(BUILD)/host/test_fatfs: tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) $^ -o $@
+
+test-fatfs: $(BUILD)/host/test_fatfs
+	$(BUILD)/host/test_fatfs
+unittest: test-fatfs
+.PHONY: test-fatfs
+
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
                user/libsurf/time.c user/libsurf/malloc.c
@@ -572,7 +591,7 @@ help:
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
-                           $(BUILD)/host/sim/*.d \
+                           $(BUILD)/host/sim/*.d $(BUILD)/host/fatfs/fs/*.d \
                            $(BUILD)/host/pager/tests/host/*.d)
 
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
