@@ -125,7 +125,7 @@ MUTANTS = [
     # sense, the gradient's rounding, FLIP before blanking) and more
     ("tri-top-edge-excluded", TRI, "wire tl0 = ey0[16] || (ey0 == 17'sd0 && ex0 > 17'sd0);", "wire tl0 = ey0[16];", "gpu"),
     ("tri-right-edge-included", TRI, "e1s <= mdiff - {35'd0, !tl1};", "e1s <= mdiff;", "gpu"),
-    ("tri-lane-3-edge-0", TRI, "wire signed [35:0] a0x3 = a0 + a0x2,", "wire signed [35:0] a0x3 = a0x2,", "gpu"),
+    ("tri-lane-3-edge-0", TRI, "a0x3 <= a0 + a0x2;", "a0x3 <= a0x2;", "gpu"),
     ("tri-zfunc-swapped", TRI, "zle ? (zq[16 * gl +: 16] <= zbuf) : (zq[16 * gl +: 16] < zbuf);",
      "zle ? (zq[16 * gl +: 16] < zbuf) : (zq[16 * gl +: 16] <= zbuf);", "gpu"),
     ("tri-cull-sense", TRI, "(area > 35'sd0 && fl[HDR_TRI_CULL_CW]) || (area < 35'sd0 && fl[HDR_TRI_CULL_CCW]);",

@@ -23,18 +23,19 @@ sequential divider (surf_gpu_div), so that the setup's wiring stays small next t
             each;
   T_START   (4 products) the depth and colour values V at the first lane 0 relative to vertex 0,
             modulo 2^37 and 2^29 (16.4), and their steps;
-  T_LANES   the four lanes' edge functions and values, kept twice (the lane, and the lane at
-            the row's first group).
+  T_LANES   lane 0's edge functions and values, kept twice (the group's, and the row's first
+            group's), and three pixel steps of each.
 
 The walk (16.5): rows from the box's top, groups of four pixels (the target's words) from the
-box's left; every quantity a lane needs is a register stepped by exact additions (a group:
-4 steps; a row: the row copy plus one row step), so a lane's coverage is the sign bits of three
-registers and its value a rounding and a clamp of one. A group without a covered lane takes
-one cycle and no access (T_GRP); with ZTEST its depth words are read (T_GRP, T_RD1), the last
-one arrives (T_RDW) and the lanes are compared with registered values (T_CMP); with ZWRITE the
-depth words of the passing lanes are written, then the colour word (T_CMP or T_GRP, T_ZW1,
-T_CW), each with byte enables. The order of the accesses is section 16.5's; every value is the
-C model's (sim/models/gpu_model.c), which sim/gpu/test_gpu.cpp compares with this at every FENCE.
+box's left; every quantity lane 0 needs is a register stepped by exact additions (a group:
+4 pixel steps; a row: the row copy plus one row step), and lane L adds L pixel steps to lane 0's,
+so a lane's coverage is the sign bits of three sums and its value a rounding and a clamp of one.
+A group without a covered lane takes one cycle and no access (T_GRP); with ZTEST its depth words
+are read (T_GRP, T_RD1), the last one arrives (T_RDW) and the lanes are compared with registered
+values (T_CMP); with ZWRITE the depth words of the passing lanes are written, then the colour
+word (T_CMP or T_GRP, T_ZW1, T_CW), each with byte enables. The order of the accesses is section
+16.5's; every value is the C model's (sim/models/gpu_model.c), which sim/gpu/test_gpu.cpp compares
+with this at every FENCE.
 */
 module surf_gpu_tri (
     input  wire               clk,
@@ -217,17 +218,19 @@ module surf_gpu_tri (
     // set by T_START (modulo 2^37 and 2^29)
     reg        [36:0] vzs = 37'd0, szx = 37'd0, szy = 37'd0;           // start, per pixel, per row
     reg        [28:0] vcs = 29'd0, scx = 29'd0, scy = 29'd0;
-    // the lanes' offsets from lane 0: 0, 1, 2 and 3 steps
+    // the lanes' offsets from lane 0: 1, 2 and 3 pixel steps (3 is registered in T_LANES)
     wire signed [35:0] a0x2 = {a0[34:0], 1'b0}, a1x2 = {a1[34:0], 1'b0}, a2x2 = {a2[34:0], 1'b0};
-    wire signed [35:0] a0x3 = a0 + a0x2, a1x3 = a1 + a1x2, a2x3 = a2 + a2x2;
-    wire       [36:0] szx2 = {szx[35:0], 1'b0}, szx3 = szx + szx2;
-    wire       [28:0] scx2 = {scx[27:0], 1'b0}, scx3 = scx + scx2;
+    wire       [36:0] szx2 = {szx[35:0], 1'b0};
+    wire       [28:0] scx2 = {scx[27:0], 1'b0};
+    reg  signed [35:0] a0x3 = 36'sd0, a1x3 = 36'sd0, a2x3 = 36'sd0;
+    reg        [36:0] szx3 = 37'd0;
+    reg        [28:0] scx3 = 29'd0;
 
     // ---------------------------------------------------------------- the lanes
-    reg [143:0] el0 = 144'd0, el1 = 144'd0, el2 = 144'd0;  // edge e, lane L in bits 36L+35..36L
-    reg [143:0] er0 = 144'd0, er1 = 144'd0, er2 = 144'd0;  // the same at the row's first group
-    reg [147:0] vzl = 148'd0, vzr = 148'd0;                // depth V, lane L in 37L+36..37L
-    reg [115:0] vcl = 116'd0, vcr = 116'd0;                // colour V, lane L in 29L+28..29L
+    reg signed [35:0] ew0 = 36'sd0, ew1 = 36'sd0, ew2 = 36'sd0;   // edge e at the group's lane 0
+    reg signed [35:0] er0 = 36'sd0, er1 = 36'sd0, er2 = 36'sd0;   // the same at the row's first group
+    reg        [36:0] vzw = 37'd0, vzr = 37'd0;                    // depth V at lane 0: the group's, the row's
+    reg        [28:0] vcw = 29'd0, vcr = 29'd0;                    // colour V
     reg [12:0]  g = 13'd0;                                 // the group (pixels 4g .. 4g + 3)
     reg [14:0]  y = 15'd0;                                 // the row
     reg [63:0]  zq = 64'd0;                                // the lanes' depths, registered
@@ -242,11 +245,18 @@ module surf_gpu_tri (
     generate
         for (gl = 0; gl < 4; gl = gl + 1) begin : g_lane
             localparam [1:0] LN = gl;
-            wire [17:0] xl = {3'd0, g, LN};
-            wire        in_box = ($signed(xl) >= bx0) && ($signed(xl) <= bx1);
-            assign cov[gl]  = in_box && !el0[36 * gl + 35] && !el1[36 * gl + 35] && !el2[36 * gl + 35];
-            assign zval[16 * gl +: 16] = zround(vzl[37 * gl + 19 +: 18], zmin, zmax);
-            assign cval[8 * gl +: 8]   = gouraud ? cround(vcl[29 * gl + 19 +: 10], cmin, cmax) : fl[7:0];
+            // lane LN: lane 0's edge functions and values plus LN pixel steps
+            wire signed [35:0] le0 = ew0 + ((LN == 2'd0) ? 36'sd0 : (LN == 2'd1) ? a0 : (LN == 2'd2) ? a0x2 : a0x3);
+            wire signed [35:0] le1 = ew1 + ((LN == 2'd0) ? 36'sd0 : (LN == 2'd1) ? a1 : (LN == 2'd2) ? a1x2 : a1x3);
+            wire signed [35:0] le2 = ew2 + ((LN == 2'd0) ? 36'sd0 : (LN == 2'd1) ? a2 : (LN == 2'd2) ? a2x2 : a2x3);
+            wire        [36:0] lz  = vzw + ((LN == 2'd0) ? 37'd0 : (LN == 2'd1) ? szx : (LN == 2'd2) ? szx2 : szx3);
+            wire        [28:0] lc  = vcw + ((LN == 2'd0) ? 29'd0 : (LN == 2'd1) ? scx : (LN == 2'd2) ? scx2 : scx3);
+            wire        [17:0] xl  = {3'd0, g, LN};
+            wire               in_box = ($signed(xl) >= bx0) && ($signed(xl) <= bx1);
+            assign cov[gl]  = in_box && !le0[35] && !le1[35] && !le2[35];
+            assign zval[16 * gl +: 16] = zround(lz[36:19], zmin, zmax);
+            assign cval[8 * gl +: 8]   = gouraud ? cround(lc[28:19], cmin, cmax) : fl[7:0];
+            wire unused_lane = &{1'b0, le0[34:0], le1[34:0], le2[34:0], lz[18:0], lc[18:0]};
             wire [15:0] zbuf = zbw[16 * gl +: 16];
             wire        zok  = zle ? (zq[16 * gl +: 16] <= zbuf) : (zq[16 * gl +: 16] < zbuf);
             assign pass[gl] = cov[gl] && (!ztest || zok);
@@ -316,7 +326,6 @@ module surf_gpu_tri (
     end
 
     // ---------------------------------------------------------------- the sequence
-    integer k;
     always @(posedge clk) begin
         zq <= zval;
         mprod <= mfull[36:0];
@@ -418,16 +427,15 @@ module surf_gpu_tri (
                     end
                 end
                 T_LANES: begin
-                    el0 <= {e0s + a0x3, e0s + a0x2, e0s + a0, e0s};
-                    el1 <= {e1s + a1x3, e1s + a1x2, e1s + a1, e1s};
-                    el2 <= {e2s + a2x3, e2s + a2x2, e2s + a2, e2s};
-                    er0 <= {e0s + a0x3, e0s + a0x2, e0s + a0, e0s};
-                    er1 <= {e1s + a1x3, e1s + a1x2, e1s + a1, e1s};
-                    er2 <= {e2s + a2x3, e2s + a2x2, e2s + a2, e2s};
-                    vzl <= {vzs + szx3, vzs + szx2, vzs + szx, vzs};
-                    vzr <= {vzs + szx3, vzs + szx2, vzs + szx, vzs};
-                    vcl <= {vcs + scx3, vcs + scx2, vcs + scx, vcs};
-                    vcr <= {vcs + scx3, vcs + scx2, vcs + scx, vcs};
+                    ew0 <= e0s; ew1 <= e1s; ew2 <= e2s;
+                    er0 <= e0s; er1 <= e1s; er2 <= e2s;
+                    vzw <= vzs; vzr <= vzs;
+                    vcw <= vcs; vcr <= vcs;
+                    a0x3 <= a0 + a0x2;
+                    a1x3 <= a1 + a1x2;
+                    a2x3 <= a2 + a2x2;
+                    szx3 <= szx + szx2;
+                    scx3 <= scx + scx2;
                     g <= gs;
                     y <= by0[14:0];
                     st <= T_GRP;
@@ -436,33 +444,29 @@ module surf_gpu_tri (
                     if (m_gnt && m_req && !m_we) rd_slot <= (st == T_RD1) || !lo2;
                     if (!adv)
                         st <= nxt;
-                    else if (g != ge) begin                // the next group
+                    else if (g != ge) begin                // the next group: four pixel steps
                         g <= g + 13'd1;
-                        for (k = 0; k < 4; k = k + 1) begin
-                            el0[36 * k +: 36] <= el0[36 * k +: 36] + {a0[33:0], 2'b00};
-                            el1[36 * k +: 36] <= el1[36 * k +: 36] + {a1[33:0], 2'b00};
-                            el2[36 * k +: 36] <= el2[36 * k +: 36] + {a2[33:0], 2'b00};
-                            vzl[37 * k +: 37] <= vzl[37 * k +: 37] + {szx[34:0], 2'b00};
-                            vcl[29 * k +: 29] <= vcl[29 * k +: 29] + {scx[26:0], 2'b00};
-                        end
+                        ew0 <= ew0 + {a0[33:0], 2'b00};
+                        ew1 <= ew1 + {a1[33:0], 2'b00};
+                        ew2 <= ew2 + {a2[33:0], 2'b00};
+                        vzw <= vzw + {szx[34:0], 2'b00};
+                        vcw <= vcw + {scx[26:0], 2'b00};
                         st <= T_GRP;
-                    end else if (y != by1[14:0]) begin       // the next row
+                    end else if (y != by1[14:0]) begin       // the next row: its copy plus a row step
                         y <= y + 15'd1;
                         g <= gs;
                         row  <= row + {16'd0, t_stride};
                         zrow <= zrow + {16'd0, z_stride};
-                        for (k = 0; k < 4; k = k + 1) begin
-                            el0[36 * k +: 36] <= er0[36 * k +: 36] + b0;
-                            el1[36 * k +: 36] <= er1[36 * k +: 36] + b1;
-                            el2[36 * k +: 36] <= er2[36 * k +: 36] + b2;
-                            er0[36 * k +: 36] <= er0[36 * k +: 36] + b0;
-                            er1[36 * k +: 36] <= er1[36 * k +: 36] + b1;
-                            er2[36 * k +: 36] <= er2[36 * k +: 36] + b2;
-                            vzl[37 * k +: 37] <= vzr[37 * k +: 37] + szy;
-                            vzr[37 * k +: 37] <= vzr[37 * k +: 37] + szy;
-                            vcl[29 * k +: 29] <= vcr[29 * k +: 29] + scy;
-                            vcr[29 * k +: 29] <= vcr[29 * k +: 29] + scy;
-                        end
+                        ew0 <= er0 + b0;
+                        ew1 <= er1 + b1;
+                        ew2 <= er2 + b2;
+                        er0 <= er0 + b0;
+                        er1 <= er1 + b1;
+                        er2 <= er2 + b2;
+                        vzw <= vzr + szy;
+                        vzr <= vzr + szy;
+                        vcw <= vcr + scy;
+                        vcr <= vcr + scy;
                         st <= T_GRP;
                     end else
                         st <= T_IDLE;                      // the last group of the last row
