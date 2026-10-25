@@ -1031,6 +1031,72 @@ SMOKE = [
     ('@nc-talk', []),
     ('@nc-scan', []),
     ('rm /hda1/NC.BIN', []),
+    # 10/24/26: fetch, the downloader (user/fetch/), from this host's HTTP server (TestHandler's /fetch/ paths) onto
+    # the FAT disk: the refusals; a file, then again (there already: -f replaces it, -c finds it whole); one cut
+    # short and gone on with (-c: a Range request for the rest); a server that ignores Range (its 200 refused: -f);
+    # the rest in parts, a part longer than its range, a 204; chunked;
+    # the end of the connection, to standard output; a redirect (the first name kept), a loop, a 404 (no file); a
+    # name with spaces; -o a folder, a device; the initrd (read-only); the files read back through httpd. HTTPS and
+    # the fixtures' strict framing: tools/qemu-web.py's fetch scenarios.
+    ('run fetch', ['usage: fetch [-o file|folder|-] [-c] [-f] [-q] [-t ', 'exit status 2']),
+    # the user shell's quotes keep the time one word (the kernel's run would split it)
+    ("fetch -t '2026-13-01 00:00:00' http://10.0.2.2/; echo status $?",
+     ['fetch: -t: 2026-13-01 00:00:00: the month must be 01 to 12', 'status 2']),
+    ('run fetch ftp://10.0.2.2/x', ['fetch: ftp://10.0.2.2/x: the address starts with http:// or https://',
+                                    'exit status 2']),
+    ('run fetch -x http://10.0.2.2/', ['fetch: there is no option -x', 'exit status 2']),
+    ('run fetch -c -o - http://10.0.2.2/', ['fetch: -c goes on with a file, not with standard output', 'exit status 2']),
+    ('run fetch http://10.0.2.2:1/x', ['fetch: ', 'refused', 'exit status 1']),
+    ('cd /hda1', []),
+    ('fetch http://10.0.2.2:{http}/fetch/data.bin', ['fetch: 292.9 KB in', '-> data.bin']),
+    ('run fetch http://10.0.2.2:{http}/fetch/data.bin', ['fetch: data.bin is there already: -f replaces it, -c goes '
+                                                         'on with it', 'exit status 1']),
+    ('fetch -c http://10.0.2.2:{http}/fetch/data.bin', ['fetch: data.bin is whole already (300000 bytes)']),
+    ('fetch -f -q http://10.0.2.2:{http}/fetch/data.bin', []),
+    ('run fetch http://10.0.2.2:{http}/fetch/cut.bin', ['fetch: 10.0.2.2 closed the connection after 100000 of 300000 '
+                                                        'bytes; fetch -c goes on with cut.bin', 'exit status 1']),
+    ('fetch -c http://10.0.2.2:{http}/fetch/cut.bin', ['fetch: 195.3 KB in', '-> cut.bin (the rest of it)']),
+    ('run fetch -o norange.bin http://10.0.2.2:{http}/fetch/cut.bin', ['after 100000 of 300000 bytes',
+                                                                       'exit status 1']),
+    ('run fetch -c http://10.0.2.2:{http}/fetch/norange.bin', ['fetch: 10.0.2.2 sent all of it (200 OK), not the rest: '
+                                                               'norange.bin is kept as it was; fetch -f downloads it '
+                                                               'anew', 'exit status 1']),
+    ('fetch -f http://10.0.2.2:{http}/fetch/norange.bin', ['-> norange.bin']),
+    # the rest a part at a time (part.bin: 100000 bytes a Range), a part longer than its range, a 204 (nothing to save)
+    ('run fetch -o part.bin http://10.0.2.2:{http}/fetch/cut.bin', ['after 100000 of 300000 bytes', 'exit status 1']),
+    ('run fetch -c -o part.bin http://10.0.2.2:{http}/fetch/badpart.bin',
+     ['fetch: 10.0.2.2 sent a part of 200010 bytes for a range of 200000 (bytes 100000 to 299999): part.bin is kept '
+      'as it was', 'exit status 1']),
+    ('run fetch -c -o part.bin http://10.0.2.2:{http}/fetch/empty',
+     ['fetch: 10.0.2.2 answered 204 No Content: there is nothing to save, and the file there is kept as it was',
+      'exit status 1']),
+    ('run fetch -c http://10.0.2.2:{http}/fetch/part.bin', ['fetch: 10.0.2.2 sent bytes 100000 to 199999 of 300000, not '
+                                                            'all of the rest; fetch -c goes on with part.bin',
+                                                            'exit status 1']),
+    ('fetch -c http://10.0.2.2:{http}/fetch/part.bin', ['-> part.bin (the rest of it)']),
+    ('run fetch http://10.0.2.2:{http}/fetch/empty', ['fetch: 10.0.2.2 answered 204 No Content: there is nothing to save',
+                                                      'exit status 1']),
+    ("fetch -o '' http://10.0.2.2/; echo status $?", ['fetch: -o names nothing', 'status 2']),
+    ('fetch http://10.0.2.2:{http}/fetch/chunked.txt', ['-> chunked.txt']),
+    ('fetch -o - http://10.0.2.2:{http}/fetch/close.txt', ['the end of the connection ends this body']),
+    ('fetch http://10.0.2.2:{http}/fetch/redirect', ['fetch: 302 Found: to http://10.0.2.2:', '/fetch/data.bin',
+                                                     '-> redirect']),
+    ('run fetch http://10.0.2.2:{http}/fetch/loop', ['fetch: the address redirects in a loop (back to http://10.0.2.2:',
+                                                     'exit status 1']),
+    ('run fetch http://10.0.2.2:{http}/fetch/missing', ['/fetch/missing: 404 Not Found', 'exit status 1']),
+    ('fetch http://10.0.2.2:{http}/fetch/name%20with%20space.txt', ['-> name with space.txt']),
+    ('mkdir /hda1/DL', []),
+    ('fetch -o /hda1/DL http://10.0.2.2:{http}/fetch/data.bin', ['-> /hda1/DL/data.bin']),
+    ('fetch -o /dev/null http://10.0.2.2:{http}/fetch/data.bin', ['-> /dev/null']),
+    ('run fetch -c -o /dev/null http://10.0.2.2:{http}/fetch/data.bin', ['fetch: -c goes on with a file, not with the '
+                                                                         'device /dev/null', 'exit status 1']),
+    ('cd /initrd', []),
+    ('run fetch http://10.0.2.2:{http}/fetch/data.bin', ['fetch: data.bin: ', 'exit status 1']),
+    ('cd /', []),
+    ('@fetch-files', []),
+    ('rm /hda1/data.bin /hda1/cut.bin /hda1/norange.bin /hda1/part.bin /hda1/chunked.txt /hda1/redirect '
+     '"/hda1/name with space.txt" /hda1/DL/data.bin', []),
+    ('rmdir /hda1/DL', []),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -1347,15 +1413,83 @@ def free_port_range(n, avoid=()):
     raise RuntimeError(f'no {n} free ports in a row')
 
 
+# 10/24/26 (fetch, user/fetch/): what fetch downloads from this host, TestHandler's /fetch/ paths. FETCH_DATA has
+# a Content-Length and takes a Range (bytes=N-): 206 and the rest, 416 at its end; cut.bin is FETCH_DATA cut after
+# FETCH_CUT bytes (the end of the connection) unless a Range asks for the rest; norange.bin never takes a Range;
+# part.bin sends FETCH_CUT bytes of the rest at most; badpart.bin a part 10 bytes longer than its range; empty is a
+# 204; chunked.txt is FETCH_TEXT in chunks with a trailer; close.txt ends with the connection; redirect goes to
+# data.bin; loop to itself; missing is a 404. FETCH_SEEN: (path, Range, User-Agent) of every request.
+FETCH_DATA = b''.join(b'fetch %06d ' % i + bytes(range(i % 11, 250, 11)) for i in range(9000))[:300000]
+FETCH_CUT = 100000
+FETCH_TEXT = b''.join(b'line %03d of the chunked text\n' % i for i in range(300))
+FETCH_CLOSE = b'the end of the connection ends this body\n'
+FETCH_SEEN = []
+
+
 class TestHandler(http.server.BaseHTTPRequestHandler):
-    """what the guest's httpget and self test fetch"""
+    """what the guest's httpget and self test fetch; 10/24/26: and fetch (the /fetch/ paths)"""
     def do_GET(self):
+        if self.path.startswith('/fetch/'):
+            FETCH_SEEN.append((self.path, self.headers.get('Range'), self.headers.get('User-Agent')))
+            return self.fetch_path(self.path[len('/fetch/'):])
         body = f'SurfOS HTTP test OK: {self.path}\n'.encode()
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def raw(self, head, body=b''):
+        """a response as it is written here (status line and fields, one per line), then the end of the connection"""
+        self.close_connection = True
+        try:
+            self.wfile.write(head.replace('\n', '\r\n').encode() + b'Connection: close\r\n\r\n' + body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass                        # 10/25/26: fetch refuses a response it does not want, its body unread
+
+    def ranged(self, data, ranges=True, cap=None, extra=b''):
+        """data, or the rest of it from byte N when a Range (bytes=N-) asks for it: 206 (cap bytes of it at most;
+        extra: bytes more than the range, counted in the Content-Length), or 416 at or past its end"""
+        m = re.fullmatch(r'bytes=(\d+)-', self.headers.get('Range') or '')
+        if not (m and ranges):
+            return self.raw(f'HTTP/1.1 200 OK\nContent-Length: {len(data)}\n', data)
+        start = int(m.group(1))
+        if start >= len(data):
+            return self.raw(f'HTTP/1.1 416 Range Not Satisfiable\nContent-Range: bytes */{len(data)}\n'
+                            f'Content-Length: 0\n')
+        end = len(data) if cap is None else min(len(data), start + cap)
+        return self.raw(f'HTTP/1.1 206 Partial Content\nContent-Range: bytes {start}-{end - 1}/{len(data)}\n'
+                        f'Content-Length: {end - start + len(extra)}\n', data[start:end] + extra)
+
+    def fetch_path(self, name):
+        if name == 'data.bin':
+            self.ranged(FETCH_DATA)
+        elif name == 'cut.bin' and not self.headers.get('Range'):
+            self.raw(f'HTTP/1.1 200 OK\nContent-Length: {len(FETCH_DATA)}\n', FETCH_DATA[:FETCH_CUT])
+        elif name == 'cut.bin':
+            self.ranged(FETCH_DATA)
+        elif name == 'norange.bin':
+            self.ranged(FETCH_DATA, ranges=False)
+        elif name == 'part.bin':
+            self.ranged(FETCH_DATA, cap=FETCH_CUT)
+        elif name == 'badpart.bin':
+            self.ranged(FETCH_DATA, extra=b'0123456789')
+        elif name == 'empty':
+            self.raw('HTTP/1.1 204 No Content\n')
+        elif name == 'chunked.txt':
+            body = b''.join(b'%x;n=%d\r\n%s\r\n' % (len(FETCH_TEXT[i:i + 333]), i, FETCH_TEXT[i:i + 333])
+                            for i in range(0, len(FETCH_TEXT), 333))
+            self.raw('HTTP/1.1 200 OK\nTransfer-Encoding: chunked\n', body + b'0\r\nX-Trailer: yes\r\n\r\n')
+        elif name == 'close.txt':
+            self.raw('HTTP/1.1 200 OK\nContent-Type: text/plain\n', FETCH_CLOSE)
+        elif name == 'redirect':
+            self.raw('HTTP/1.1 302 Found\nLocation: /fetch/data.bin\nContent-Length: 0\n')
+        elif name == 'loop':
+            self.raw('HTTP/1.1 302 Found\nLocation: /fetch/loop\nContent-Length: 0\n')
+        elif name == 'name%20with%20space.txt':
+            self.raw('HTTP/1.1 200 OK\nContent-Length: 19\n', b'a name with spaces\n')
+        else:
+            self.raw('HTTP/1.1 404 Not Found\nContent-Length: 14\n', b'no such thing\n')
 
     def log_message(self, *args):
         pass
@@ -3619,6 +3753,44 @@ def nc_scan_check(q):
 
 CONSOLE_CHECKS.update({'@nc-receive': nc_receive_check, '@nc-send': nc_send_check, '@nc-talk': nc_talk_check,
                        '@nc-scan': nc_scan_check})
+
+
+def fetch_files_check(q):
+    """10/25/26: what fetch wrote on the FAT disk, read back byte for byte through httpd on /hda1: data.bin (fetched,
+    then replaced with -f), cut.bin (cut short, then the rest asked for with a Range), norange.bin (its rest refused,
+    then downloaded anew with -f), part.bin (the rest in two parts, a bad part and a 204 between), redirect (the
+    first address's name), DL/data.bin, chunked.txt (the chunked coding undone), the name with spaces; nothing for
+    the 404 or the 204; the Range requests fetch sent and its User-Agent"""
+    port, results = q.ports['www'], []
+    q.send('httpd on /hda1\n')
+    results.append(q.expect('httpd: serving /hda1 at http://10.0.2.15/', 10) and q.expect(PROMPT, 10))
+    try:
+        for path in ('/data.bin', '/cut.bin', '/norange.bin', '/part.bin', '/redirect', '/DL/data.bin'):
+            st, h, body = www_get(port, path, timeout=30)
+            results.append(st == 200 and body == FETCH_DATA)
+        st, h, body = www_get(port, '/chunked.txt')
+        results.append(st == 200 and body == FETCH_TEXT)
+        st, h, body = www_get(port, '/name%20with%20space.txt')
+        results.append(st == 200 and body == b'a name with spaces\n')
+        results.append(www_get(port, '/missing')[0] == 404 and www_get(port, '/empty')[0] == 404)
+    except (OSError, http.client.HTTPException) as e:
+        print(f'  fetch files: {e!r}')
+        results.append(False)
+    seen = [(p, r) for p, r, a in FETCH_SEEN]
+    results.append(('/fetch/cut.bin', 'bytes=100000-') in seen and ('/fetch/norange.bin', 'bytes=100000-') in seen and
+                   ('/fetch/data.bin', 'bytes=300000-') in seen and ('/fetch/badpart.bin', 'bytes=100000-') in seen and
+                   ('/fetch/part.bin', 'bytes=100000-') in seen and ('/fetch/part.bin', 'bytes=200000-') in seen and
+                   all(a == 'fetch/1.0 (SurfOS 1.0)' for p, r, a in FETCH_SEEN))
+    q.send('httpd off\n')
+    results.append(q.expect('httpd: stopped', 10) and q.expect(PROMPT, 10))
+    if not all(results):
+        print(f'  fetch files: {results}')
+    return ('fetch: the files read back through httpd, the Range requests (%d of %d)' % (sum(results), len(results)),
+            all(results))
+
+
+CONSOLE_CHECKS['@fetch-files'] = fetch_files_check
+TIMEOUTS['fetch'] = 30                  # the downloads (by the first word), 300000 bytes each at -O0
 
 
 CONSOLE_CHECKS.update({'@ftpd-session': ftpd_session_check, '@ftpd-upload': ftpd_upload_check,

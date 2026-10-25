@@ -1190,6 +1190,13 @@ def frame_early_eof_chunked(ex):
     ex.abort()
 
 
+@route('/frame/close-cut', 'HTTP/1.1 without a length, the connection ended without TLS close_notify (10/25/26: '
+                           'fetch refuses that over HTTPS)')
+def frame_close_cut(ex):
+    ex.respond(200, 'OK', 'text/plain', b'A body that only the end of the connection delimits, cut.\n', length=False)
+    ex.abort()
+
+
 @route('/frame/early-eof-head', 'the end of the connection in the middle of the headers')
 def frame_early_eof_head(ex):
     ex.send(b'HTTP/1.1 200 OK\r\nContent-Type: text/pl')

@@ -527,6 +527,33 @@ class FramingTests(unittest.TestCase):
                 self.assertIsNone(header(r, 'Transfer-Encoding'))
                 self.assertTrue(r[4].endswith(b'the body arrived whole.\n'))
 
+    def test_close_notify(self):
+        """10/25/26: over TLS a whole response ends with close_notify; /frame/close-cut's (a close-delimited body)
+        with the TCP connection's end alone"""
+        for target, clean in (('/frame/close', True), ('/frame/close-cut', False)):
+            ctx = client_context()
+            ctx.options &= ~getattr(ssl, 'OP_IGNORE_UNEXPECTED_EOF', 0)     # Python 3.11 sets it (3.14 does not):
+            s = socket.create_connection(('127.0.0.1', FX.ports['https']), timeout=10)     # an end is an end then
+            s = ctx.wrap_socket(s, server_hostname=wf.FIXTURE_HOST, suppress_ragged_eofs=False)
+            try:
+                s.sendall(f'GET {target} HTTP/1.1\r\nHost: {wf.FIXTURE_HOST}\r\nConnection: close\r\n\r\n'.encode())
+                data, ended = b'', None
+                while ended is None:
+                    try:
+                        chunk = s.recv(65536)
+                    except ssl.SSLError as e:       # 3.14: SSLEOFError; 3.11: an SSLError of that reason
+                        if not isinstance(e, ssl.SSLEOFError) and e.reason != 'UNEXPECTED_EOF_WHILE_READING':
+                            raise
+                        ended = False
+                        continue
+                    data += chunk
+                    if not chunk:
+                        ended = True
+                self.assertEqual(ended, clean, target)
+                self.assertIsNone(header(final(data), 'Content-Length'), target)
+            finally:
+                s.close()
+
     def test_interim(self):
         for target, n in (('/frame/interim', 2), ('/frame/interim-8', 8), ('/frame/interim-9', 9)):
             rs = parse(get('http', target))

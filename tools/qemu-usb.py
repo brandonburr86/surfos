@@ -1243,6 +1243,10 @@ def scenario_usbnet(args, image, firmware, outdir):
             # the body and the response header: at least the body, and the end of the body seen
             results.append(('1 MB over HTTP arrives complete', ok and m is not None and got > len(BIG_BODY)
                             and 'timed out' not in m.group(3)))
+            # 10/25/26: fetch, the downloader, takes the same megabyte over the adapter (to /dev/null: the summary)
+            ok, _ = run_cmd(vm, f'fetch -o /dev/null http://10.0.2.2:{port}/big', ['fetch: 1.0 MB in ', '-> /dev/null'],
+                            timeout=120)
+            results.append(('fetch: 1 MB over the adapter, to /dev/null', ok))
             ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
             results.append(('selftest, with its network checks on the USB adapter', ok))
             results += telnet_session(vm, qr, telnet_port)

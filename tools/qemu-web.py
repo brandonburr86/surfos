@@ -319,7 +319,8 @@ def _recs(ctx, server=None, path=None, whole=False):
 
 
 def fetched(server, path, n=1, **want):
-    """n requests for path on server during the step, each with the headers of a browser that behaves"""
+    """n requests for path on server during the step, each with the headers of a browser that behaves (10/25/26: or
+    of fetch, the downloader: agent='fetch/1.0', the start of its User-Agent)"""
     def check(ctx):
         recs = [r for r in _recs(ctx, server, path) if r['request_line']]
         if len(recs) != n:
@@ -334,7 +335,7 @@ def fetched(server, path, n=1, **want):
             host = fill(want.get('host', f'fixture.test:{{{server}}}'), ctx)
             if r['host'] != host:
                 problems.append(f'Host {r["host"]!r}, not {host!r}')
-            if not heads.get('user-agent', '').startswith('Undertow/1.0'):
+            if not heads.get('user-agent', '').startswith(want.get('agent', 'Undertow/1.0')):
                 problems.append(f'User-Agent {heads.get("user-agent")!r}')
             if heads.get('accept-encoding') != 'identity' or heads.get('connection', '').lower() != 'close':
                 problems.append('Accept-Encoding identity and Connection close expected')
@@ -974,6 +975,70 @@ SCENARIOS = [
         Step('echo status $?', 'status 0', wait=SH),
         Step('undertow --dump ' + H('/long'), 'Line 400: the last line', wait=SH, timeout=60),
     ], boot='usbnet'),
+
+    # -- 10/25/26: fetch, the downloader (user/fetch/), on the browser's own transport: HTTPS checked as Undertow
+    # checks it (the same roots, versions and refusals), the fixtures' framing read as strictly, to standard output
+    # (-o -) or /dev/null (the guests have no disk) --
+    Scenario('fetch', 'fetch -o -: HTTP, HTTPS with TLS 1.3, 1.2 and the ECDSA chain, chunked, close-delimited and '
+                      'HTTP/1.0 bodies, interim responses, a redirect, 1 MiB to /dev/null both framings; its requests', [
+        Step('fetch -o - ' + H('/plain.txt'), 'Plain text, shown as it is.', '<b>Not markup</b> &amp; no entities.',
+             wait=SH, check=fetched('http', '/plain.txt', agent='fetch/1.0')),
+        Step('fetch -o - ' + url('tls13', '/frame/chunked'), 'Chunked transfer coding: three chunks, with extensions '
+             'and a trailer.', wait=SH, check=fetched('tls13', '/frame/chunked', tls='TLSv1.3', agent='fetch/1.0')),
+        Step('fetch -o /dev/null ' + url('tls12', '/size/1m'), 'fetch: 1.0 MB in ', ', TLSv1.2 -> /dev/null', wait=SH,
+             timeout=60, check=fetched('tls12', '/size/1m', tls='TLSv1.2', agent='fetch/1.0')),
+        Step('fetch -o /dev/null ' + url('https-ecdsa', '/size/1m-chunked'), 'fetch: 1.0 MB in ', ', TLSv1.',
+             '-> /dev/null', wait=SH, timeout=60),
+        Step('fetch -o - ' + S('/frame/close'), 'Close-delimited framing: the body arrived whole.', wait=SH),
+        Step('fetch -o - ' + H('/frame/close-cut'), 'A body that only the end of the connection delimits, cut.',
+             wait=SH),                  # over HTTP the end of the connection is the only end there is
+        Step('fetch -o - ' + S('/frame/http10'), 'An HTTP/1.0 response: the body arrived whole.', wait=SH),
+        Step('fetch -o - ' + S('/frame/interim'), 'After two interim responses: the body arrived whole.', wait=SH),
+        Step('fetch -o - ' + S('/redirect/relative'), 'fetch: 302 ', ': to ' + S('/about'), 'About the fixtures',
+             wait=SH),
+        Step('echo status $?', 'status 0', wait=SH),
+    ], browser=False),
+    Scenario('fetch-refused', 'what fetch refuses, as Undertow does: certificates from an unknown root, for another '
+                              'name, expired (no request sent); https to http; two lengths, a transfer coding, '
+                              'folding, nine interim responses, an early end; a redirect loop; a 404; and (fetch '
+                              'alone) a close-delimited HTTPS body ended without close_notify', [
+        Step('fetch -o - ' + url('unknown-ca', '/'), MSG['untrusted'], wait=SH, check=no_http_on('unknown-ca')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('fetch -o - ' + url('wrong-name', '/'), 'HTTPS refused', wait=SH, check=no_http_on('wrong-name')),
+        Step('fetch -o - ' + url('expired', '/'), MSG['expired'], wait=SH, check=no_http_on('expired')),
+        Step('fetch -o - ' + S('/redirect/to-http'), 'redirects from HTTPS to unencrypted HTTP', wait=SH,
+             check=fetched('https', '/redirect/to-http', agent='fetch/1.0')),
+        Step('fetch -o - ' + S('/frame/length-conflict'), 'two different Content-Lengths', wait=SH),
+        Step('fetch -o - ' + S('/frame/te-gzip'), 'a transfer coding other than chunked', wait=SH),
+        Step('fetch -o - ' + S('/frame/folded'), 'obsolete line folding', wait=SH),
+        Step('fetch -o - ' + S('/frame/interim-9'), 'more than 8 interim (1xx) responses', wait=SH),
+        Step('fetch -o - ' + S('/frame/early-eof'), 'after 100 of 1000 bytes', wait=SH),
+        Step('fetch -o - ' + S('/frame/close-cut'), 'ended its TLS connection without close_notify after 58 bytes: it '
+             'may be cut short', wait=SH),
+        Step('fetch -o - ' + S('/redirect/loop-a'), 'the address redirects in a loop (back to ', wait=SH),
+        Step('fetch -o - ' + S('/status/404'), ': 404 Not Found', wait=SH),
+        Step('echo status $?', 'status 1', wait=SH),
+    ], browser=False),
+    Scenario('fetch-production', 'the normal initrd: fetch does not trust the fixture CA either; HTTP works', [
+        Step('fetch -o - https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, check=no_http_on('https')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('fetch -o - http://10.0.2.2:{http}/plain.txt', 'Plain text, shown as it is.', wait=SH),
+    ], boot='production', browser=False),
+    Scenario('fetch-old-clock', 'a clock in 2004: fetch refuses HTTPS as Undertow does; -t gives the time for the run; '
+                                'a time that is none is a usage error', [
+        Step('fetch -o - ' + S('/about'), MSG['clock'], wait=SH, check=no_http_on('https')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step("fetch -t '{now}' -o - " + S('/about'), 'About the fixtures', wait=SH,
+             check=fetched('https', '/about', agent='fetch/1.0')),
+        Step("fetch -t '2026-02-30 10:00:00' -o - " + S('/about'), 'fetch: -t: ' + MSG['not-a-date'], wait=SH),
+        Step('echo status $?', 'status 2', wait=SH),
+        Step('date', '2004-06-01', wait=SH),
+    ], boot='old-clock', browser=False),
+    Scenario('fetch-no-rdrand', 'without RDRAND: fetch refuses HTTPS and says why; HTTP works', [
+        Step('fetch -o - ' + S('/about'), MSG['entropy'], wait=SH, check=no_http_on('https')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('fetch -o - ' + H('/plain.txt'), 'Plain text, shown as it is.', wait=SH),
+    ], boot='no-rdrand', browser=False),
 ]
 
 # the guests: (initrd, CPU with RDRAND, the RTC, kernel words, a USB Ethernet adapter instead of the e1000, setup)
