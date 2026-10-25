@@ -54,6 +54,7 @@ USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of 
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
+USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)

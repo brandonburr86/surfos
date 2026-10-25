@@ -8,9 +8,11 @@ clipped to a rectangle (struct gui_draw), so a window's text never spills out
 of it. Text is drawn with the console's 8x16 code page 437 font; names, which
 are UTF-8, go through the console's decoder (driver/cp437.c).
 10/25/26 (programs' windows): gd_blit(), a program's pixels into the scene, and
-the programs' icon.
+the programs' icon. Its declarations are include/sys/guidraw.h's, and libsurf builds
+this file too (user/libsurf/guidraw.c) for programs' windows (libgui): it uses
+nothing of the desktop's model. gd_line(), for libgui.
 */
-#include "guipriv.h"
+#include <sys/guidraw.h>
 #include <sys/cp437.h>
 #include <string.h>
 #include <stdio.h>
@@ -196,6 +198,19 @@ void gd_blit(const struct gui_draw *d, int x, int y, const u32 *pixels, int w, i
         image.stride = stride;
         image.bytes = ((size_t)(b - t - 1) * stride + n) * 4;
         fb_blit_rgb(s, l, t, &image);
+    }
+}
+
+/* 10/25/26: a line, both ends included, clipped to d a pixel at a time (Bresenham's steps) */
+void gd_line(const struct gui_draw *d, int x0, int y0, int x1, int y1, u32 c) {
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy, e2;
+    for(;;) {
+        gd_rect(d, x0, y0, 1, 1, c);
+        if(x0 == x1 && y0 == y1) return;
+        e2 = 2 * err;
+        if(e2 >= dy) { err += dy; x0 += sx; }
+        if(e2 <= dx) { err += dx; y0 += sy; }
     }
 }
 

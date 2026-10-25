@@ -622,6 +622,14 @@ and its title says what it was last sent.
 * **Limits.** 8 windows on a desktop, 32 in all. A window's content is at most the room
   below the menu bar (958 by 457 on a 1920x1080 screen), and a desktop keeps at most 8 MB
   of programs' pixels.
+* **Writing one.** libgui (`user/include/gui.h`, in libsurf) gives a program a window with
+  an image to draw in: `gw_open()`, then rectangles, lines, UTF-8 text in the console's
+  font, images and buttons, drawn as the desktop draws its own windows (its drawing kit,
+  `include/sys/guidraw.h`, is built into libsurf); `gw_present()` shows what changed, and
+  `gw_next()` waits for the next event and remakes the image at a new size by itself.
+  `wdemo` is the example: colour bars, its size and the last event it got (`wdemo hang`
+  pays no heed to the close button, `wdemo crash` faults after it first draws). Until the
+  kernel keeps floating point across task switches, such a program must not use it.
 
 ## Mouse support
 
