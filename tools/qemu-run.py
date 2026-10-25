@@ -1042,6 +1042,7 @@ SMOKE = [
       ('rm /hda1/DOT.SH /hda1/T.SH /hda1/P.SH /hda1/B.SH /hda1/FD3.TXT', [shown('SURF \u224b> ')]),
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
+    ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
@@ -1690,6 +1691,64 @@ def surfsh_ctrl_c_check(q):
     return ('surfsh: Ctrl+C stops loops of builtins, programs and kernel commands, read, a script; a surfsh in a surfsh '
             'lives on (%d of %d)' % (sum(results), len(results)), all(results) and ok)
 
+def surfsh_jobs_check(q):
+    """10/25/26 (job control in surfsh): Ctrl+Z stops a program: [1] stopped, $? 148, jobs and ps say so; bg lets it go
+    on, fg brings it back, Ctrl+Z again, kill %1 ends it ([1] killed before a prompt); a pipeline stops as one job; Ctrl+Z
+    on a loop of builtins does nothing (Ctrl+C ends it); a program in the background that reads the terminal stops
+    (reading the terminal), fg gives it the keys and Ctrl+D ends its input; cat > file ended by Ctrl+D; the stopped job
+    of a surfsh that exits is killed"""
+    count = '/initrd/bin/count 100 100'
+    stopped = shown('\u224b!> ')
+
+    def step(line, expects, keys=None, wait=1.0):
+        start = len(q.transcript)
+        if line is not None:
+            q.send(line + '\n')
+        if keys is not None:
+            q.wait(wait)
+            q.ser.sendall(keys)
+        ok = all(q.expect(e, 15) for e in expects)
+        return ok, q.transcript[start:]
+
+    results = []
+    ok, _ = step(count, ['[1] stopped  ' + count, stopped], b'\x1a')
+    ok = ok and step('echo status $?', ['\r\nstatus 148\r\n', PROMPT])[0]
+    ok = ok and step('jobs', ['[1]  stopped  ' + count, PROMPT])[0]
+    ok = ok and step('ps', [re.compile(rb'stopped +\S+ +\d+ +\d+ +\d+ +count'), PROMPT])[0]
+    results.append(ok)
+    ok = step('bg', ['[1] ' + count + ' &', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n' + count + '\r\n'])[0]
+    ok = ok and step(None, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + count, PROMPT])[0]
+    results.append(ok)
+    pipeline = count + ' | /initrd/bin/cat'
+    ok = step(pipeline, ['[1] stopped  ' + pipeline, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + pipeline, PROMPT])[0]
+    results.append(ok)
+    ok, out = step('while :; do :; done', [], b'\x1a')
+    q.wait(1)
+    ok, out = step(None, ['^C', stopped], b'\x03', 0)
+    results.append(ok and b'stopped' not in out)
+    ok = step('/initrd/bin/cat &', ['[1] started (pid ', PROMPT])[0]
+    ok = ok and step('sleep 500', ['[1] stopped (reading the terminal)  /initrd/bin/cat', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n/initrd/bin/cat\r\n'])[0]
+    ok = ok and step('hello-from-fg', ['hello-from-fg', 'hello-from-fg'])[0]
+    ok = ok and step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    results.append(ok)
+    ok = step('/initrd/bin/cat > /hda1/CATD.TXT', [])[0]
+    q.wait(0.5)
+    ok = step('line one', [])[0]
+    ok = step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    ok = ok and step('cat /hda1/CATD.TXT; rm /hda1/CATD.TXT', ['line one\r\n', PROMPT])[0]
+    results.append(ok)
+    ok = step('surfsh', [PROMPT])[0]
+    ok = ok and step(count, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('exit; sleep 300', [PROMPT])[0]
+    ok2, out = step('ps', [PROMPT])
+    results.append(ok and ok2 and b' count' not in out)
+    return ('surfsh: job control: Ctrl+Z, jobs, bg, fg, kill %%1, a pipeline, a reader in the background, Ctrl+D '
+            '(%d of %d)' % (sum(results), len(results)), all(results))
+
 def readme_cat_check(q):
     """cat of a file of several clusters on the FAT16 disk (docs/README.md as DOCS/README.md, tools/mkimage.py), through
     the pager: every line of it arrives in order, and the step ends at the prompt after its last line. 10/6/26: the file
@@ -1847,6 +1906,7 @@ def surfsh_corner_check(q):
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
 CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
+CONSOLE_CHECKS['@surfsh-jobs'] = surfsh_jobs_check        # 10/25/26
 
 
 # ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------

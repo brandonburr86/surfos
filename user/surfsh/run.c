@@ -217,6 +217,7 @@ int start_program(const char *path, char **argv, int in, int out, int background
     o.fds[2] = fd_for_child(-1, 2);
     o.fds[3] = -1;
     o.envp = env;
+    o.job = job_spawn_value();                  /* 10/25/26: its job (jobs.c) */
     o.flags = background ? SPAWN_BG : 0;
     fflush(stdout);
     pid = spawnx(path, argv, &o);
@@ -237,6 +238,7 @@ int start_program(const char *path, char **argv, int in, int out, int background
         e = errno;
     }
     if(pid < 0) fprintf(stderr, "surfsh: %s: %s\n", argv[0], strerror(e));
+    job_spawned(pid);
     return pid;
 }
 
@@ -249,15 +251,20 @@ static void say(const char *fmt, int n) {
     if(was) page(1);
 }
 
-/* 10/25/26: waitx says how it ended: one Ctrl+C killed is 130 and stops the rest (exec.c) */
-int wait_program(int pid, int report) {
+/* 10/25/26: waitx says how it ended: one Ctrl+C killed is 130 and stops the rest (exec.c). untraced
+   (job control): a stop is said too, STATUS_STOPPED, and why it stopped in *why (WX_STOP_*) */
+int wait_program_ex(int pid, int report, int untraced, int *why) {
     struct waitx w;
     int r;
-    while((r = waitx(pid, &w, 0)) < 0 && errno == EINTR)
+    while((r = waitx(pid, &w, untraced ? WUNTRACED : 0)) < 0 && errno == EINTR)
         note_interrupt(0);                      /* a Ctrl+C for this shell alone: the program is waited for still */
     if(r != pid) {
         fprintf(stderr, "surfsh: waiting for %d: %s\n", pid, strerror(errno));
         return STATUS_FAIL;
+    }
+    if(w.how == WX_STOPPED) {
+        if(why) *why = w.status;
+        return STATUS_STOPPED;
     }
     if(w.how != WX_EXITED) {
         if(report) say("[pid %d killed]\n", pid);
@@ -270,4 +277,8 @@ int wait_program(int pid, int report) {
         if(w.status == STATUS_INTERRUPTED) interrupt_said = 1;     /* a script Ctrl+C ended */
     }
     return w.status;
+}
+
+int wait_program(int pid, int report) {
+    return wait_program_ex(pid, report, 0, NULL);
 }

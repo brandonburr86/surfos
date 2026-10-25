@@ -75,6 +75,12 @@ const struct builtin builtins[] = {
     { "source",  "file [args]",   "the same as .", b_dot, 0 },
     { "exec",    "[cmd [args]]",  "cmd, and then this shell ends; alone: its redirections stay", b_colon, 1 },
     { "kernel",  "name [args]",   "the kernel's command name, where surfsh has its own", b_kernel, 0 },
+    /* 10/25/26: job control (jobs.c) */
+    { "jobs",    "",              "the jobs: running, stopped (Ctrl+Z), and their commands", b_jobs, 0 },
+    { "fg",      "[%n]",          "job n (the last one) in the foreground again", b_fg, 0 },
+    { "bg",      "[%n]",          "job n goes on in the background", b_bg, 0 },
+    { "wait",    "[%n|pid...]",   "until those jobs end (none: all of them); Ctrl+C ends the wait", b_wait, 0 },
+    { "kill",    "%n|pid...",     "job n's processes killed, the stopped ones too; a pid as the kernel's kill", b_kill, 0 },
 };
 const int nbuiltins = sizeof(builtins) / sizeof(builtins[0]);
 
@@ -455,6 +461,7 @@ static int b_help(int argc, char **argv) {
            "      ( a; b )       the same in a new surfsh: a cd there changes nothing here\n"
            "      cmd &          cmd runs in the background as a job; the first prompt\n"
            "                     after it has ended says how it ended\n"
+           "      Ctrl+Z         the command that runs stops: a job (jobs, fg, bg, kill %%1)\n"
            "      a ; b          one after the other\n"
            "      # comment      the rest of the line is not read\n"
            "      name=value     a variable; $name or ${name} is its value (in \"$name\"\n"

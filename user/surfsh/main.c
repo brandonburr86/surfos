@@ -313,7 +313,8 @@ int run_source(struct source *s) {
                 printf("^C\n");
             }
             if(interrupted) last_status = STATUS_INTERRUPTED;
-            interrupted = interrupt_said = 0;
+            if(suspended) last_status = STATUS_STOPPED;     /* 10/25/26: a job stopped (jobs.c) */
+            interrupted = interrupt_said = suspended = 0;
         }
         arena_free(&mem);
         fflush(stdout);

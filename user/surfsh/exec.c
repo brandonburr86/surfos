@@ -43,6 +43,11 @@ the rest of the line, loop or script is left (a script ends with 130; an interac
 goes back to its prompt, main.c). set -e ends a script at a command that failed where its
 status is not looked at (X_COND), set -x shows each command on 2 before it runs. exec runs
 its command and ends the shell with its status; exec alone keeps its redirections.
+
+10/25/26, job control (an interactive shell, jobs.c): a foreground program, a pipeline whose
+stages are all processes, and ( list ) are each a job of the kernel's while they run, the
+terminal's foreground job while they are waited for (wait_fg()); when Ctrl+Z stops one it
+joins the job table and the rest of the line, loop or function is left, as for Ctrl+C.
 */
 
 #include "surfsh.h"
@@ -73,12 +78,13 @@ static int is_open(int fd) {
 /**** 10/25/26: break, continue, return and Ctrl+C on their way out ****/
 
 static int exec_node(struct node *n, int flags);
+static int wait_fg(const int *pids, int np, int last, int kid, struct node *n, int report);
 
 int loop_depth, break_count, continue_count, returning, return_status, func_depth, dot_depth, local_base;
-int interrupted, interrupt_said;
+int interrupted, interrupt_said, suspended;
 
 int stopping(void) {
-    return exit_requested || break_count || continue_count || returning || interrupted;
+    return exit_requested || break_count || continue_count || returning || interrupted || suspended;
 }
 
 void note_interrupt(int said) {
@@ -344,7 +350,9 @@ int start_surfsh(const char *text, int in, int out, int background) {
     o.fds[3] = p[0];
     o.envp = env;
     o.flags = background ? SPAWN_BG : 0;
+    o.job = job_spawn_value();                  /* 10/25/26: its job (jobs.c) */
     child = spawnx(SURFSH_PATH, argv, &o);
+    job_spawned(child);
     close(p[0]);
     var_env_free(env);
     if(child < 0) {
@@ -535,7 +543,7 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
     struct func *fn = NULL;
     char path[PATH_MAX], **env;
     const char *name;
-    int status = 0, i, pid, pushed = var_pushed(), exec_cmd = 0;
+    int status = 0, i, pid, pushed = var_pushed(), exec_cmd = 0, kid;
     memset(&s, 0, sizeof(s));
     if(pidp) *pidp = -1;
     subst_count = 0;
@@ -640,12 +648,14 @@ program:
         status = STATUS_FAIL;
         goto done;
     }
+    if(!pidp) job_open();                       /* 10/25/26: a job of its own (jobs.c) */
     pid = start_program(path, f.v, -1, -1, (flags & X_BACK) != 0, env);
+    kid = pidp ? 0 : job_close();
     var_env_free(env);
     status = restore(&s, pid < 0 ? STATUS_CANNOT : 0);
     finish_docs(&s);                            /* the here-documents, as the program reads them */
     if(pid > 0 && pidp) *pidp = pid;
-    else if(pid > 0) status = wait_program(pid, flags & X_TOP);
+    else if(pid > 0) status = wait_fg(&pid, 1, pid, kid, n, flags & X_TOP);
     fields_free(&f);
     fields_free(&a);
     if(!pidp) check_interrupt();
@@ -674,6 +684,7 @@ int exec_capture(const char *text, struct sbuf *out) {
     struct arena mem = { NULL };
     struct parser p;
     struct node *n = NULL, *more = NULL;
+    struct jobwin win;
     char buf[1024];
     ssize_t r;
     int fds[2], pid = -1, status = 0, dropped = 0;
@@ -681,6 +692,7 @@ int exec_capture(const char *text, struct sbuf *out) {
         fprintf(stderr, "surfsh: $( ): %s\n", strerror(errno));
         return STATUS_FAIL;
     }
+    job_hold(&win);                             /* 10/25/26: in no job, even inside a pipeline's */
     parser_init(&p, text, &mem);
     if(parse_command(&p, &n) == PARSE_OK && parse_command(&p, &more) == PARSE_EOF && n->type == N_SIMPLE &&
        !n->redirs && stage_kind(n) == CMD_PROGRAM) {
@@ -699,10 +711,31 @@ int exec_capture(const char *text, struct sbuf *out) {
     if(dropped) fprintf(stderr, "surfsh: $( ): more than %d bytes of output: the rest was dropped\n", TEXT_LIMIT);
     while(out->len && out->s[out->len - 1] == '\n') out->s[--out->len] = 0;
     arena_free(&mem);
+    job_unhold(&win);
     return status;
 }
 
 /**** the tree ****/
+
+/* 10/25/26: the processes of a command in the foreground, waited for (pids[0..np), last the one whose
+   status it is; kid: its job, the terminal's foreground job meanwhile). When Ctrl+Z stops it, the
+   job joins the table, stopped, the status is 148, and the rest of the line is left. */
+static int wait_fg(const int *pids, int np, int last, int kid, struct node *n, int report) {
+    int prev = kid ? jobctl(JOB_FG, kid) : 0, i, status = 0, why = 0;
+    for(i = 0; i < np; i++) {
+        int st = wait_program_ex(pids[i], report && pids[i] == last, kid != 0, &why);
+        if(st == STATUS_STOPPED) {
+            char *text = job_text(n);
+            job_stopped(text, pids + i, np - i, kid, why);
+            free(text);
+            status = st;
+            break;
+        }
+        if(pids[i] == last) status = st;
+    }
+    if(kid) jobctl(JOB_FG, prev > 0 ? prev : 0);
+    return status;
+}
 
 /* A stage of a pipeline, not in this shell: a process with 0 = in, 1 = out (-1: this shell's).
    Its pid, or -1 (it could not start; *status says why) */
@@ -719,7 +752,7 @@ static int start_stage(struct node *n, int in, int out, int background, int *sta
 }
 
 static int exec_pipe(struct node *n, int flags) {
-    int i, in = -1, pids[STAGES_LIMIT], np = 0, last = -1, status = 0, here, st;
+    int i, in = -1, pids[STAGES_LIMIT], np = 0, last = -1, status = 0, here, st, kid;
     int background = (flags & X_BACK) != 0;
     for(i = 1; i < n->nkids; i++) {
         if(stage_kind(n->kids[i]) == CMD_KERNEL) {
@@ -730,6 +763,7 @@ static int exec_pipe(struct node *n, int flags) {
         }
     }
     here = !background && stage_kind(n->kids[n->nkids - 1]) == CMD_SURFSH;
+    if(!here) job_open();                       /* 10/25/26: its processes are one job, unless it ends here */
     fflush(stdout);
     for(i = 0; i < n->nkids; i++) {
         int p[2] = { -1, -1 }, lastone = i == n->nkids - 1, pid;
@@ -761,17 +795,18 @@ static int exec_pipe(struct node *n, int flags) {
         in = p[0];
     }
     if(in >= 0) close(in);
+    kid = here ? 0 : job_close();
     if(background) {
         if(np) {
             char *text = job_text(n);
-            job_add(text, pids, np);
+            job_add(text, pids, np, kid);
             free(text);
         }
         return 0;
     }
-    for(i = 0; i < np; i++) {
-        st = wait_program(pids[i], pids[i] == last && (flags & X_TOP) && stage_kind(n->kids[n->nkids - 1]) == CMD_PROGRAM);
-        if(pids[i] == last) status = st;
+    if(np) {
+        st = wait_fg(pids, np, last, kid, n, (flags & X_TOP) && stage_kind(n->kids[n->nkids - 1]) == CMD_PROGRAM);
+        if(!here) status = st;
     }
     check_interrupt();
     return status;
@@ -779,17 +814,22 @@ static int exec_pipe(struct node *n, int flags) {
 
 /* a job in the background: a program, a pipeline, or anything else in a new surfsh */
 static int exec_background(struct node *n) {
-    int pid = -1, st;
+    int pid = -1, st, kid;
     if(n->type == N_PIPE) return exec_pipe(n, X_BACK);
+    job_open();                                 /* 10/25/26: a job of its own */
     if(stage_kind(n) == CMD_PROGRAM) {
         st = exec_simple(n, X_BACK, -1, -1, &pid);
+        kid = job_close();
         if(pid < 0) return st;
     } else if((pid = start_tree(n, -1, -1, 1)) < 0) {
+        job_close();
         return STATUS_CANNOT;
+    } else {
+        kid = job_close();
     }
     {
         char *text = job_text(n);
-        job_add(text, &pid, 1);
+        job_add(text, &pid, 1, kid);
         free(text);
     }
     return 0;
@@ -798,17 +838,19 @@ static int exec_background(struct node *n) {
 /* ( list ): a new surfsh, with the redirections made for it here */
 static int exec_sub(struct node *n) {
     struct saved s;
-    int pid, status;
+    int pid, status, kid;
     memset(&s, 0, sizeof(s));
     if(redirect(n->redirs, &s, 1) < 0) {
         finish_docs(&s);
         return restore(&s, STATUS_FAIL);
     }
+    job_open();                                 /* 10/25/26: a job of its own */
     pid = start_tree(n->a, -1, -1, 0);
+    kid = job_close();
     status = restore(&s, 0);
     finish_docs(&s);
     if(pid < 0) return STATUS_CANNOT;
-    pid = wait_program(pid, 0);
+    pid = wait_fg(&pid, 1, pid, kid, n, 0);
     check_interrupt();
     return pid ? pid : status;
 }

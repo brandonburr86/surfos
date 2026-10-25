@@ -63,6 +63,7 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 #define STATUS_CANNOT   126
 #define STATUS_NOTFOUND 127
 #define STATUS_INTERRUPTED 130     /* 10/25/26: Ctrl+C stopped it (128 + 2, SIGINT's number) */
+#define STATUS_STOPPED  148         /* 10/25/26: Ctrl+Z stopped it (128 + 20, SIGTSTP's), job control */
 #define STATUS_KILLED   137
 
 /* the colours of SurfOS as ANSI SGR (the subset include/surfos/tty.h lists) */
@@ -356,6 +357,7 @@ int exec_tree(struct node *n, int flags);  /* in this shell: the status */
    are left; loops (loop_depth of them), functions and . files take what is theirs */
 extern int loop_depth, break_count, continue_count, returning, return_status, func_depth, dot_depth, local_base;
 extern int interrupted, interrupt_said;         /* Ctrl+C stopped a command; something said so already */
+extern int suspended;                           /* 10/25/26: Ctrl+Z stopped a job in the foreground */
 int stopping(void);
 void note_interrupt(int said);                  /* a script ends (130); an interactive shell's line does */
 int check_interrupt(void);                      /* after a command: TTY_INTR's count; interrupted */
@@ -376,11 +378,30 @@ int run_kernel(char **argv, int *found);   /* a kernel command in this shell: it
 /* a program with this shell's 0, 1, 2 (in, out: those instead; -1 not) and the environment env: its pid; -1 said */
 int start_program(const char *path, char **argv, int in, int out, int background, char **env);
 int wait_program(int pid, int report);       /* its status: 137 killed; report: [exit status n] */
+int wait_program_ex(int pid, int report, int untraced, int *why);   /* 10/25/26: a stop too: 148, why WX_STOP_* */
 void page(int on);                  /* the pager for this shell's commands (TTY_PAGE) */
 
 /**** jobs.c: the jobs in the background ****/
 
-void job_add(const char *text, const int *pids, int n);   /* "[n] started (pid ...)" */
+void job_add(const char *text, const int *pids, int n, int kid);   /* "[n] started (pid ...)"; kid: its kernel job */
+/* 10/25/26, job control: what is started between job_open() and job_close() is one job of the kernel's
+   (an interactive shell's), whose id job_close() answers; spawnx's job is job_spawn_value(), and
+   job_spawned() with the pid once a process started. job_hold() keeps a $( ) out of it. */
+struct jobwin {
+    int next, kid;
+};
+void job_open(void);
+int job_close(void);
+int job_spawn_value(void);
+void job_spawned(int pid);
+void job_hold(struct jobwin *w);
+void job_unhold(struct jobwin *w);
+void job_stopped(const char *text, const int *pids, int n, int kid, int why);   /* "[n] stopped  ..." */
+int b_jobs(int argc, char **argv);
+int b_fg(int argc, char **argv);
+int b_bg(int argc, char **argv);
+int b_wait(int argc, char **argv);
+int b_kill(int argc, char **argv);
 void jobs_collect(int fresh);       /* the jobs that ended: reported (fresh: from a fresh row) */
 int jobs_last_pid(void);            /* the last job's last pid ($!), 0 for none */
 void jobs_set_last(int pid);        /* a new surfsh's $!: the one of the shell that started it */
