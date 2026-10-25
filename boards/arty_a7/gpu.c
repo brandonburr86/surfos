@@ -602,7 +602,20 @@ void gpu_state_read(struct gpu *g, struct gpu_state *s) {
 u64 gpu_now_us(struct gpu *g) { return NOW(g); }
 bool gpu_interrupted(struct gpu *g) { return interrupted(g); }
 void gpu_flip(struct gpu *g, u32 base) { VWR(g, SURF_VIDEO_GFX_BASE, base & SURF_VIDEO_GFX_BASE_BASE_MASK); }
-u32 gpu_vram_rd(struct gpu *g, u32 off) { return P(g)->vram_rd(CTX(g), off); }
-void gpu_vram_wr(struct gpu *g, u32 off, u32 v) { P(g)->vram_wr(CTX(g), off, v); }
+static bool vram_span(u32 off, u32 words) {
+    return !(off & 3) && off <= SURF_VRAM_BYTES && words <= (SURF_VRAM_BYTES - off) / 4;
+}
+
+int gpu_vram_read(struct gpu *g, u32 off, u32 *dst, u32 words) {
+    if(!vram_span(off, words)) return GPU_EARG;
+    P(g)->vram_read(CTX(g), off, dst, words);
+    return GPU_OK;
+}
+
+int gpu_vram_write(struct gpu *g, u32 off, const u32 *src, u32 words) {
+    if(!vram_span(off, words)) return GPU_EARG;
+    P(g)->vram_write(CTX(g), off, src, words);
+    return GPU_OK;
+}
 void *gpu_alloc(struct gpu *g, u32 bytes) { return P(g)->alloc ? P(g)->alloc(CTX(g), bytes) : NULL; }
 void gpu_free(struct gpu *g, void *p) { if(p && P(g)->free) P(g)->free(CTX(g), p); }

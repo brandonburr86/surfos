@@ -79,8 +79,9 @@ struct gpu_port {
     void (*wr)(void *ctx, u32 off, u32 v);
     u32 (*vrd)(void *ctx, u32 off);                     /* a video register */
     void (*vwr)(void *ctx, u32 off, u32 v);
-    u32 (*vram_rd)(void *ctx, u32 off);                 /* a VRAM word through the CPU's window */
-    void (*vram_wr)(void *ctx, u32 off, u32 v);
+    /* words of VRAM through the CPU's window, in a tight loop (off and the length multiples of 4) */
+    void (*vram_read)(void *ctx, u32 off, u32 *dst, u32 words);
+    void (*vram_write)(void *ctx, u32 off, const u32 *src, u32 words);
     u8 (*vram_rd8)(void *ctx, u32 off);                 /* a VRAM byte */
     void (*vram_wr8)(void *ctx, u32 off, u8 v);
     u64 (*us)(void *ctx);                               /* microseconds, from any start */
@@ -190,8 +191,8 @@ void gpu_state_read(struct gpu *g, struct gpu_state *s);
 u64 gpu_now_us(struct gpu *g);
 bool gpu_interrupted(struct gpu *g);               /* Ctrl+C, unless keep_going */
 void gpu_flip(struct gpu *g, u32 base);            /* GFX_BASE alone: the next frame latch takes it whole */
-u32 gpu_vram_rd(struct gpu *g, u32 off);
-void gpu_vram_wr(struct gpu *g, u32 off, u32 v);
+int gpu_vram_read(struct gpu *g, u32 off, u32 *dst, u32 words);      /* GPU_EARG outside VRAM */
+int gpu_vram_write(struct gpu *g, u32 off, const u32 *src, u32 words);
 void *gpu_alloc(struct gpu *g, u32 bytes);         /* NULL when there is none */
 void gpu_free(struct gpu *g, void *p);
 

@@ -39,6 +39,14 @@ struct stub_disp {                      /* the display registers as one value */
     uint32_t mode, base, stride, scale;
 };
 
+struct stub_event {                     /* what changed what a picture shows (stub.watch) */
+    uint64_t t;
+    unsigned kind;
+};
+#define STUB_EV_CPU_VRAM    1           /* the CPU wrote VRAM through the window */
+#define STUB_EV_GPAL        2           /* a GPAL entry was written */
+#define STUB_EV_ENGINE_DRAW 3           /* the engine took a word that draws */
+
 struct stub_write {                     /* a display register write */
     uint64_t t;
     uint32_t reg, value;                /* reg: SURF_VIDEO_GFX_* or 0xFFFF for CTRL.MODE */
@@ -102,6 +110,9 @@ struct stub {
     unsigned mode_unlocked;             /* set_mode() without the console lock or outside an atomic stretch */
     unsigned claims, claimed_twice, unlocked_free;
     int no_memory;                      /* alloc() fails */
+    int watch;                          /* keep the events below */
+    struct stub_event *ev;
+    unsigned nev, ev_cap;
     char out[1 << 16];                  /* what the driver and gfx printed */
     unsigned nout;
 };
@@ -112,6 +123,7 @@ void stub_free(struct stub *s);
 /* the display a frame shows that began at frame k's start (what latch k - 1 took) */
 struct stub_disp stub_shown(const struct stub *s, uint64_t frame);
 uint64_t stub_frame_of(uint64_t t);     /* the frame t is in */
+struct stub_disp stub_visible(const struct stub *s, uint64_t t);    /* what the screen shows at t */
 /* the RGB444 picture the display shows now (a still picture), and its FRAME_CRC */
 void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *frame);
 uint32_t stub_crc(const struct stub *s, const struct stub_disp *d);

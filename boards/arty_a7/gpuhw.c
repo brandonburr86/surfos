@@ -53,8 +53,33 @@ static u32 p_rd(void *c, u32 off) { (void)c; return mmio_read32(GREG(off)); }
 static void p_wr(void *c, u32 off, u32 v) { (void)c; mmio_write32(GREG(off), v); }
 static u32 p_vrd(void *c, u32 off) { (void)c; return mmio_read32(VREG(off)); }
 static void p_vwr(void *c, u32 off, u32 v) { (void)c; mmio_write32(VREG(off), v); }
-static u32 p_vram_rd(void *c, u32 off) { (void)c; return mmio_read32(VRAM(off)); }
-static void p_vram_wr(void *c, u32 off, u32 v) { (void)c; mmio_write32(VRAM(off), v); }
+/* words through the window four at a time: every instruction comes from DDR, so the loop's own
+   cost is most of a word's */
+static void p_vram_read(void *c, u32 off, u32 *dst, u32 words) {
+    const volatile u32 *v = (const volatile u32 *)VRAM(off);
+    (void)c;
+    for(; words >= 4; words -= 4, v += 4, dst += 4) {
+        u32 a = v[0], b = v[1], d = v[2], e = v[3];
+        dst[0] = a;
+        dst[1] = b;
+        dst[2] = d;
+        dst[3] = e;
+    }
+    for(; words; words--) *dst++ = *v++;
+}
+
+static void p_vram_write(void *c, u32 off, const u32 *src, u32 words) {
+    volatile u32 *v = (volatile u32 *)VRAM(off);
+    (void)c;
+    for(; words >= 4; words -= 4, v += 4, src += 4) {
+        u32 a = src[0], b = src[1], d = src[2], e = src[3];
+        v[0] = a;
+        v[1] = b;
+        v[2] = d;
+        v[3] = e;
+    }
+    for(; words; words--) *v++ = *src++;
+}
 static u8 p_vram_rd8(void *c, u32 off) { (void)c; return mmio_read8(VRAM(off)); }
 static void p_vram_wr8(void *c, u32 off, u8 v) { (void)c; mmio_write8(VRAM(off), v); }
 
@@ -130,13 +155,13 @@ static void *p_alloc(void *c, u32 bytes) { (void)c; return kalloc(bytes); }
 static void p_free(void *c, void *p) { (void)c; kfree(p); }
 
 static const struct gpu_port port_irq = {
-    NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_rd, p_vram_wr, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
+    NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
     p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
 };
 
 static const struct gpu_port port_poll = {             /* no interrupt path: fences with sleeps */
-    NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_rd, p_vram_wr, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
+    NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, NULL, NULL, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
     p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
 };

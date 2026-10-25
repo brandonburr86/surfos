@@ -560,10 +560,10 @@ static int demo_frame(struct gpu *g, struct demo *s, u32 page, const char *what)
 
 static int demo(struct gpu *g, int argc, char **argv) {
     const char *what = "gfx demo";
-    struct gpu_screen before, shown;
+    struct gpu_screen before, text, shown;
     struct demo s;
     u16 pal_before[256], rgb[256];
-    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, i, spin;
+    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, spin;
     u64 t0, tick, now, secs;
     long seconds = 10;
     bool pal_changed = false, interrupted = false;
@@ -576,15 +576,21 @@ static int demo(struct gpu *g, int argc, char **argv) {
     t_base = g->t_base; t_stride = g->t_stride; t_w = g->t_w; t_h = g->t_h;
     c_x0 = g->c_x0; c_y0 = g->c_y0; c_x1 = g->c_x1; c_y1 = g->c_y1;
     r = gpu_sync(g, what);
+    /* The console is on the screen whenever the palette and VRAM change, before and after: no frame
+       shows the picture from before over the demo's pages or palette, or the demo's pages being
+       overwritten (text mode shows neither VRAM nor GPAL). */
+    text = before;
+    text.mode = GPU_MODE_TEXT;
+    if(!r && before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &text, what);
     if(!r) {
         kept = (u32 *)gpu_alloc(g, DBYTES);
-        if(kept) for(i = 0; i < DBYTES / 4; i++) kept[i] = gpu_vram_rd(g, 4 * i);
+        if(kept) gpu_vram_read(g, 0, kept, DBYTES / 4);
         else printf("    gfx demo: no memory to keep the %lu bytes of VRAM it draws on;\n"
                     "    they stay as the demo leaves them\n", (u_long)DBYTES);
     }
     /* RGB332, the sprites, both pages, the first frame on page A, then the display */
     gpu_pal_make(GPU_PAL_RGB332, rgb);
-    if(memcmp(rgb, pal_before, sizeof(rgb))) {
+    if(!r && memcmp(rgb, pal_before, sizeof(rgb))) {
         gpu_pal_write(g, rgb);
         pal_changed = true;
     }
@@ -632,19 +638,21 @@ static int demo(struct gpu *g, int argc, char **argv) {
     if(r == GPU_EINTR) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
-    /* the display back as it was, also after Ctrl+C */
+    /* back as it was, also after Ctrl+C: the console on the screen while VRAM and the palette go
+       back, then the display from before */
     g->keep_going = true;
     if(interrupted) gpu_abort(g, what);
     r2 = gpu_sync(g, what);
-    if(!r2) r2 = gpu_screen_set(g, &before, what);
+    if(!r2) r2 = gpu_screen_set(g, &text, what);
     if(kept) {
-        for(i = 0; i < DBYTES / 4; i++) gpu_vram_wr(g, 4 * i, kept[i]);
+        gpu_vram_write(g, 0, kept, DBYTES / 4);
         gpu_free(g, kept);
     }
     if(pal_changed) gpu_pal_write(g, pal_before);
     if(!r2) r2 = gpu_set_target(g, t_base, t_stride, t_w, t_h, what);
     if(!r2 && (c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h)) r2 = gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what);
     if(!r2) r2 = gpu_sync(g, what);
+    if(!r2 && before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &before, what);
     g->keep_going = false;
     gpu_release(g);
     if(frames) {

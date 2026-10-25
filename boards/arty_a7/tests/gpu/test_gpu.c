@@ -639,6 +639,58 @@ static void t_demo(unsigned seed) {
 }
 TEST(t_demo)
 
+/* The demo's way in and out (the G3 review's finding 2): whenever the CPU writes VRAM or GPAL during
+   it the screen shows text, and whenever the engine draws, text or the demo's own pages; so no frame
+   shows the picture from before over the demo's pages or palette, or the demo's pages being
+   overwritten. "Shows" is what a frame's lines show, a change in a blanking counting for the frame
+   after it (stub_visible()). */
+static int demo_layout(const struct stub_disp *d) {
+    return d->mode == 2 && d->stride == 320 && d->scale == 2 && (d->base == 0 || d->base == 76800);
+}
+
+static void demo_order(struct stub *s, const char *what) {
+    unsigned i, cpu = 0, gpal = 0, eng = 0, bad_cpu = 0, bad_eng = 0;
+    char line[160];
+    for(i = 0; i < s->nev; i++) {
+        struct stub_disp d = stub_visible(s, s->ev[i].t);
+        if(s->ev[i].kind == STUB_EV_ENGINE_DRAW) {
+            eng++;
+            bad_eng += d.mode != 1 && !demo_layout(&d);
+        } else {
+            gpal += s->ev[i].kind == STUB_EV_GPAL;
+            cpu += s->ev[i].kind == STUB_EV_CPU_VRAM;
+            bad_cpu += d.mode != 1;
+        }
+    }
+    snprintf(line, sizeof(line), "  %s: VRAM put back (%u words), GPAL changed both ways (%u entries), the engine drew", what,
+             cpu, gpal);
+    check(cpu >= 39680 && gpal >= 512 && eng > 0, line);
+    check(!bad_cpu, "  every CPU write of VRAM or GPAL while the screen showed text");
+    check(!bad_eng, "  the engine drew while the screen showed text or the demo's own pages");
+    s->nev = 0;
+}
+
+static void t_demo_order(unsigned seed) {
+    struct stub *s = fresh(1);
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    s->watch = 1;
+    check(gfx(s, "gfx demo 1") == CMD_OK && s->reg.mode == 2 && s->reg.stride == 640, "gfx demo 1 from a 640x480 picture");
+    s->watch = 0;
+    demo_order(s, "gfx demo 1");
+    gfx(s, "gfx mode overlay 2");
+    s->watch = 1;
+    s->intr_at = s->now + 400000;
+    check(gfx(s, "gfx demo 3") == CMD_FAIL && s->reg.mode == 3 && s->reg.scale == 2, "gfx demo 3 from the overlay, Ctrl+C");
+    s->intr_at = 0;
+    s->watch = 0;
+    demo_order(s, "Ctrl+C");
+    done(s);
+}
+TEST(t_demo_order)
+
 /**** bench, reset, the state, usage ****/
 
 static void t_bench(unsigned seed) {
