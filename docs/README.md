@@ -5,10 +5,10 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, the network manager with the settings on the stick, the web server `httpd`, and surfsh's pipelines and scripting with the kernel's pipes |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, the network manager with the settings on the stick, the web server `httpd`, surfsh's pipelines and scripting with the kernel's pipes, and files to and from other computers with `ftpd` and `nc` (section 22) |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, one stick for everything, Wi-Fi with saved networks and the settings on the stick (section 15), and hosting websites with `httpd` (section 16) |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, one stick for everything, Wi-Fi with saved networks and the settings on the stick (section 15), hosting websites with `httpd` (section 16), and files to and from the Mac over FTP and `nc` (section 17) |
 | [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card: the plan it was built from (the driver works on the laptop since 10/10/26; saved networks: USB-BOOT.md section 15) |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the Terminal, System Monitor, Disks, Log, Clock, Character Map, Image Viewer and Hex, the menus and windows, mouse input and current touchpad limits |
@@ -21,6 +21,7 @@ as the restoration; new work happens here.
 | [superpowers/plans/…network-manager.md](superpowers/plans/2026-10-17-network-manager.md) | The brief for the network manager: saved Wi-Fi networks joined at every start, the settings on the stick |
 | [superpowers/plans/…httpd.md](superpowers/plans/2026-10-17-httpd.md) | The brief for httpd, the web server: static websites from a folder, keep-alive, folder listings |
 | [superpowers/plans/…surfsh-scripting.md](superpowers/plans/2026-10-24-surfsh-scripting.md) | The brief for pipelines and scripting in surfsh: kernel pipes, pipelines, variables and the environment, script files, job control |
+| [superpowers/plans/…nettools.md](superpowers/plans/2026-10-24-nettools.md) | The brief for the network tools: `ftpd`, an FTP server for files both ways with the Mac, `nc`, and the sockets' half-close, both ends and connections not waited for |
 
 ## Building and running
 
@@ -71,3 +72,10 @@ USB stick, as a website that browsers on the network open at the laptop's addres
 Since 10/24/26 (under emulation so far) surfsh has pipelines (`dmesg | head`), `&&`,
 `||`, groups and subshells, here-documents and lines that continue, on pipes in the
 kernel (`SYS_pipe`).
+Since 10/24/26 (under emulation, and with the Mac's own curl, Finder and `nc` against it in
+QEMU) `ftpd on` lets the Mac copy files from the laptop's sticks and onto them over FTP
+(Finder reads, curl and FTP programs such as Cyberduck both read and write), and `nc` sends
+a file to another computer's `nc` or takes one from it. Since 10/25/26 `fetch` downloads
+an `http://` or `https://` address into a file (from the web, or from a Mac running
+`python3 -m http.server`), on Undertow's HTTPS, and `mdns on` makes the laptop
+`surfos.local` to the Mac (multicast DNS).

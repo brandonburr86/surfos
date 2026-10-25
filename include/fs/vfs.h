@@ -60,6 +60,7 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define ENETUNREACH 101
 #define ECONNRESET  104
 #define ENOTCONN    107
+#define ENOTSOCK     88         /* 10/24/26: shutdown() and sockaddr() on a descriptor that is no socket */
 #define ETIMEDOUT   110
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113

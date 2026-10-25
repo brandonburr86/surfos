@@ -13,6 +13,10 @@ controller's poll; a frame to send is copied into a free transmit buffer and
 queued at once. The adapter's notification endpoint reports the cable's link
 state. An adapter that is unplugged and plugged in again gets its interface
 name back, and with the same MAC address its address configuration too.
+10/25/26 (multicast DNS): NETDEV_ADD_MULTICAST makes the adapter pass every multicast frame
+(the class has no filter by address worth the trouble; IP keeps the mDNS group and drops the
+others). Only then: the usb thread tells the adapter so (usbnet_service(): endpoint 0 is
+its), and again whenever it is plugged in, so without `mdns on` nothing changes.
 */
 
 #include <surfos/types.h>
@@ -35,6 +39,7 @@ name back, and with the same MAC address its address configuration too.
 
 /* CDC requests and notifications (CDC 1.2, ECM 1.2, NCM 1.0) */
 #define CDC_SET_ETHERNET_PACKET_FILTER 0x43
+#define CDC_PACKET_TYPE_ALL_MULTICAST (1 << 1)
 #define CDC_PACKET_TYPE_DIRECTED   (1 << 2)
 #define CDC_PACKET_TYPE_BROADCAST  (1 << 3)
 #define NCM_GET_NTB_PARAMETERS     0x80
@@ -63,6 +68,9 @@ struct usbnet {
     volatile u32 speed;                /* bit/s, from the last speed notification */
     struct ncm_out_params ncm;
     u16 ntb_seq;
+    u8 comm_iface;                     /* 10/25/26: its communication interface, for the packet filter */
+    volatile bool multicast;           /* 10/25/26: every multicast frame asked for (NETDEV_ADD_MULTICAST) ... */
+    bool multicast_set;                /* ... and the adapter told so */
 };
 
 static struct usbnet *units[UNITS];
@@ -179,7 +187,26 @@ static int usbnet_send(struct netdev *nd, struct netbuf *nb) {
     return r ? -1 : 0;
 }
 
-static const struct netdev_ops usbnet_ops = { usbnet_send, NULL };
+/* 10/25/26: NETDEV_ADD_MULTICAST, in any context: the usb thread sets the filter (usbnet_service()) */
+static int usbnet_ioctl(struct netdev *nd, int cmd, void *arg) {
+    struct usbnet *un = (struct usbnet *)nd->priv;
+    (void)arg;
+    if(cmd != NETDEV_ADD_MULTICAST) return -1;
+    if(!un->multicast) {
+        un->multicast = true;
+        usb_wake();
+    }
+    return 0;
+}
+
+static const struct netdev_ops usbnet_ops = { usbnet_send, usbnet_ioctl };
+
+/* SET_ETHERNET_PACKET_FILTER: directed and broadcast frames, and every multicast one when asked for; a device that
+   does not know the request sends them anyway */
+static void set_filter(struct usb_device *udev, u8 comm_iface, bool multicast) {
+    usb_control(udev, CLASS_OUT, CDC_SET_ETHERNET_PACKET_FILTER, CDC_PACKET_TYPE_DIRECTED | CDC_PACKET_TYPE_BROADCAST |
+                (multicast ? CDC_PACKET_TYPE_ALL_MULTICAST : 0), comm_iface, NULL, 0);
+}
 
 /**** attaching (the usb thread, or boot) ****/
 
@@ -298,14 +325,16 @@ static int usbnet_attach(struct usb_device *udev) {
         mac[0] = 0x02; mac[1] = 0x53; mac[2] = 0x46;                /* locally administered, "SF" */
         mac[3] = udev->port; mac[4] = (u8)(t >> 8); mac[5] = (u8)t;
     }
-    /* directed and broadcast frames; a device that does not know the request sends them anyway */
-    usb_control(udev, CLASS_OUT, CDC_SET_ETHERNET_PACKET_FILTER, CDC_PACKET_TYPE_DIRECTED | CDC_PACKET_TYPE_BROADCAST,
-                fn.comm_iface, NULL, 0);
-
     stage = "allocating its buffers";
     r = USB_ENOMEM;
     un = unit_for(mac);
     if(!un || !un->tx_bufs || !un->irq_buf) goto fail;
+    {                                           /* 10/25/26: every multicast frame too once mdns asked for it */
+        bool mc = un->multicast;
+        set_filter(udev, fn.comm_iface, mc);
+        un->comm_iface = fn.comm_iface;
+        un->multicast_set = mc;
+    }
     un->ncm = ncm;
     un->rx_size = rx_size;
     un->kind = fn.kind;
@@ -383,10 +412,15 @@ static void usbnet_detach(struct usb_device *udev) {
     udev->driver_data = NULL;
 }
 
-/* the usb thread: say what the notifications changed */
+/* the usb thread: say what the notifications changed; 10/25/26: and tell the adapter to pass multicast once asked */
 static void usbnet_service(struct usb_device *udev) {
     struct usbnet *un = (struct usbnet *)udev->driver_data;
-    if(!un || !un->link_changed) return;
+    if(!un) return;
+    if(un->multicast && !un->multicast_set) {
+        un->multicast_set = true;
+        set_filter(udev, un->comm_iface, true);
+    }
+    if(!un->link_changed) return;
     un->link_changed = false;
     if(un->dev.link_up != un->link_reported) {
         un->link_reported = un->dev.link_up;

@@ -8,6 +8,10 @@ use them.
 10/9/26 (Wi-Fi, track S): a socket may be bound to an interface (udp_bind_dev()): it sends
 through it and takes only what came in on it. DHCP on wlan0 is, while eth0 hears the same
 broadcasts on the same network.
+10/25/26 (multicast DNS): a datagram keeps the interface it came in on and where it was sent
+(udp_recvfrom_dev()), and one may be sent through a given interface (udp_sendto_dev()) and
+with an IP TTL of the socket's (udp_set_ttl()): the responder answers a query where it came
+from, with that interface's address, and tells the local link's messages from others.
 */
 
 #include <surfos/types.h>
@@ -24,6 +28,7 @@ struct udp_socket {
     bool used;
     u16 port;
     struct netdev *dev;                 /* 10/9/26: bound to it (udp_bind_dev()), NULL: any */
+    u8 ttl;                             /* 10/25/26: the IP TTL of what it sends (udp_set_ttl()), 0: ip_output()'s */
     struct netbuf *head, *tail;
     u_int queued;
     u_long rx, tx, dropped;
@@ -79,14 +84,24 @@ void udp_bind_dev(struct udp_socket *s, struct netdev *dev) {
     mutex_unlock(&net_lock);
 }
 
+void udp_set_ttl(struct udp_socket *s, u8 ttl) {
+    mutex_lock(&net_lock);
+    s->ttl = ttl;
+    mutex_unlock(&net_lock);
+}
+
 int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, u_int len) {
+    return udp_sendto_dev(s, NULL, dst, dport, data, len);
+}
+
+int udp_sendto_dev(struct udp_socket *s, struct netdev *via, ipaddr_t dst, u16 dport, const void *data, u_int len) {
     struct netbuf *nb;
     struct udp_hdr *uh;
     struct netdev *dev;
     int r;
     if(len > NETBUF_SIZE - NETBUF_HEADROOM) return -1;
     mutex_lock(&net_lock);
-    dev = s->dev ? s->dev : ip_route(0, dst);          /* 10/9/26 */
+    dev = via ? via : s->dev ? s->dev : ip_route(0, dst);  /* 10/9/26; 10/25/26: via */
     nb = dev ? netbuf_alloc() : NULL;
     if(!nb) { mutex_unlock(&net_lock); return -1; }
     memcpy(netbuf_put(nb, len), data, len);
@@ -97,7 +112,7 @@ int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, 
     uh->csum = 0;
     uh->csum = ip_checksum_pseudo(dev->ip, dst, IPPROTO_UDP, uh, nb->len);
     if(uh->csum == 0) uh->csum = 0xFFFF;
-    r = ip_output(dev, dst, IPPROTO_UDP, nb);
+    r = ip_output_ttl(dev, dst, IPPROTO_UDP, nb, s->ttl);
     if(r == 0) s->tx++;
     mutex_unlock(&net_lock);
     return r;
@@ -117,6 +132,8 @@ void udp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     if(!s || s->queued >= UDP_QUEUE_MAX) { if(s) s->dropped++; netbuf_free(nb); return; }
     nb->aux_ip = ip->src;
     nb->aux_port = ntohs(uh->sport);
+    nb->aux_dev = dev;
+    nb->aux_dst = ip->dst;
     netbuf_pull(nb, sizeof(*uh));
     nb->next = NULL;
     if(s->tail) s->tail->next = nb; else s->head = nb;
@@ -127,6 +144,11 @@ void udp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
 }
 
 int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *sport, u_long timeout_ms) {
+    return udp_recvfrom_dev(s, buf, size, src, sport, NULL, NULL, timeout_ms);
+}
+
+int udp_recvfrom_dev(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *sport, struct netdev **dev,
+                     ipaddr_t *dst, u_long timeout_ms) {
     for(;;) {
         struct netbuf *nb;
         mutex_lock(&net_lock);
@@ -140,6 +162,8 @@ int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16
             memcpy(buf, netbuf_data(nb), n);
             if(src) *src = nb->aux_ip;
             if(sport) *sport = nb->aux_port;
+            if(dev) *dev = nb->aux_dev;
+            if(dst) *dst = nb->aux_dst;
             netbuf_free(nb);
             return (int)n;
         }

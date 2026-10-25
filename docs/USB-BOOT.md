@@ -22,6 +22,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | One stick for everything: the boot files copied onto a FAT32 stick that keeps your files (`tools/stick.py`), new builds copied into it | done under emulation; **pending on the laptop** | `make test-usb` (scenarios `onestick` and `twosticks`), `make unittest`, `make test-mkusb`; [section 14](#14-one-stick-for-everything) |
 | Saved Wi-Fi networks joined by themselves at every start, and the settings on the stick (telnet at startup, Ethernet's DHCP, a host name) | done under emulation (a simulated Wi-Fi chip); **pending on the laptop** | `make test` (boots with a settings disk), `make test-usb` (scenario `settings`), `make unittest` (`test_netcfg`); [section 15](#15-wi-fi-saved-networks-and-the-settings-on-the-stick) |
 | A web server: websites from a folder of a stick, opened in a browser on another computer (`httpd`) | done under emulation; **pending on the laptop** | `make test`, `make unittest` and `make test-usb` (scenario `usbnet`); [section 16](#16-a-web-server-hosting-a-site) |
+| Files to and from other computers: an FTP server for the Mac's Finder, curl and FTP programs (`ftpd`), and `nc` both ways | done under emulation, and with the Mac's own curl, Finder and `nc` against SurfOS in QEMU; **pending on the laptop** | `make test`, `make unittest`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 17](#17-files-to-and-from-other-computers-ftp-and-nc) |
 
 ## What is on the drive
 
@@ -1196,6 +1197,162 @@ Limits:
   seen.
 * A stick ejected while it is served: its pages are "not found" until it is mounted again.
 
+## 17. Files to and from other computers: FTP, nc and fetch
+
+`ftpd` is a file transfer server. While it runs, the Mac (or any computer on the same
+network) copies files from the laptop's sticks and onto them, with what it has already:
+Finder, `curl` in Terminal, or an FTP program such as Cyberduck or FileZilla. `nc` works the
+other way round as well: typed on SurfOS, it sends a file to another computer's `nc`, or takes
+one from it.
+
+> **There is no password and no encryption.** Anyone who can reach the laptop over the
+> network can read, change and delete the files `ftpd` serves, and everything crosses the
+> network as plain text. Use it on your own network only, and turn it off when you are done.
+> It never starts by itself, and while it runs SurfOS joins no open Wi-Fi network by itself
+> (one anyone nearby may join); `ftpd on -r` serves files read-only.
+
+**Turn it on**, on one of the laptop's own consoles (F1 to F4), with the network up (section
+8, or Wi-Fi in section 15):
+
+1. Mount the stick whose files you want to reach: `mount usb1p1 /data` (section 9).
+2. `ftpd on` serves every mounted volume and says where:
+   `ftpd: serving / at ftp://10.0.0.4/ (read-write)`. The console is free again at once.
+   `/data/notes.txt` on SurfOS is `ftp://10.0.0.4/data/notes.txt` on the Mac. Without an
+   address yet it says `... has no address yet: run dhcp first`; the server listens all the
+   same.
+
+`ftpd on /data` serves that folder alone (`ftp://10.0.0.4/notes.txt` is then
+`/data/notes.txt`), and `ftpd on -r /data` the same read-only. A folder without a leading `/`
+is taken from the current directory.
+
+**From the Mac:**
+
+* **Finder** reads: Go > Connect to Server (Command-K), `ftp://10.0.0.4`, Connect, and
+  Guest. The laptop's folders open in a Finder window; drag files out of it to copy them to
+  the Mac. Finder's FTP never writes: to copy onto the laptop use one of the others.
+* **Terminal**, with `curl`, which macOS has:
+
+  ```sh
+  curl ftp://10.0.0.4/data/                         # the folder's listing
+  curl -O ftp://10.0.0.4/data/notes.txt             # a file, into the current folder
+  curl -T photo.jpg ftp://10.0.0.4/data/            # a file onto the laptop
+  curl -T photo.jpg ftp://10.0.0.4/data/pic.jpg     # ... under another name
+  curl -Q 'DELE /data/old.txt' ftp://10.0.0.4/      # delete one
+  curl -Q 'MKD /data/photos' ftp://10.0.0.4/        # a new folder
+  curl -Q 'RNFR /data/a.txt' -Q 'RNTO /data/b.txt' ftp://10.0.0.4/    # rename
+  curl -C - -O ftp://10.0.0.4/data/big.zip          # go on with a download that stopped
+  ```
+
+* **An FTP program**, for dragging files both ways and whole folders: Cyberduck (free),
+  FileZilla or Transmit. Server `10.0.0.4`, port 21, protocol FTP (plain FTP, not FTPS or
+  SFTP), anonymous login (any user name and password do). FileZilla asks once whether to go
+  on without TLS: yes.
+* **Python**, for scripts: `ftplib` in the standard library, for example
+  `ftplib.FTP('10.0.0.4', 'anonymous').storbinary('STOR /data/a.txt', open('a.txt', 'rb'))`.
+
+**What can be written:** mounted FAT sticks, and the stick SurfOS started from when it is a
+one-stick (section 14). The initrd (`/initrd`) and a SURFOSUSB boot stick are read-only: an
+upload there is refused (`550 ... Read-only file system`). `/dev` is never served.
+
+**Watch it work.** `ftpd serve` runs the same server on this console instead of in the
+background, and prints each command a client sends with its reply's code (a password shows as
+`****`), and each transfer with its bytes. Ctrl+C stops it.
+
+```
+SURF ≋> ftpd serve /data
+ftpd: serving /data at ftp://10.0.0.4/ (read-write)
+ftpd: each command is printed here; Ctrl+C stops the server
+10.0.0.12 session 1 from port 51234
+10.0.0.12 USER anonymous -> 331
+10.0.0.12 PASS **** -> 230
+10.0.0.12 PASV -> 227
+10.0.0.12 STOR /photo.jpg -> 226, 482113 bytes
+```
+
+**Check and turn off**, on the laptop or in a telnet session:
+
+| Command | What it says |
+|---|---|
+| `ftpd` (or `ftpd status`) | `ftpd: running (pid 15)`, or `ftpd: not running` |
+| `ftpd off` | `ftpd: stopped`: the server is gone, and every client's connection with it |
+| `dmesg` | `ftpd: serving / on port 21 (read-write, passive ports 50000-50999)` when it started, each session (`ftpd: session 1 from 10.0.0.12:51234`, and when it ended, with the files it sent and received) |
+
+**nc, started on SurfOS.** `nc` makes one connection by hand. The Mac's `nc` is the other end:
+
+```sh
+# the Mac to the laptop
+SURF ≋> nc -l 9000 > /data/photo.jpg          # on SurfOS: wait for it
+$ nc 10.0.0.4 9000 < photo.jpg                 # on the Mac: send it
+
+# the laptop to the Mac
+$ nc -l 9000 > notes.txt                       # on the Mac: wait for it
+SURF ≋> nc 10.0.0.2 9000 < /data/notes.txt    # on SurfOS: send it (the Mac's address)
+```
+
+Either side ends when the file is through: the sender tells the other end its file has ended
+(a half-close), the receiver closes, and both are done. The Mac's address is in System
+Settings > Wi-Fi > Details, or `ipconfig getifaddr en0` in Terminal (`en1` for some Ethernet
+adapters). More:
+
+* `nc -z 10.0.0.2 22 80 443` says which of those ports are open (a range: `8000-8010`).
+* `nc -c example.com 80`, then type `GET / HTTP/1.0` and an empty line: a web server answered
+  by hand (`-c` sends each line with CR LF, as mail and web servers want).
+* `nc -v ...` says both ends of the connection and how it ended; `-w 30` ends a connection
+  silent for 30 seconds, or an `nc -l` that nobody connects to.
+* A line typed is sent when its Enter comes, and what arrives meanwhile shows after it.
+  Ctrl+C ends `nc`.
+
+**The laptop by name.** `mdns on` makes the laptop `surfos.local` on its network (Bonjour, which
+the Mac asks by itself), so its address need not be looked up: `ftp://surfos.local/` in Finder,
+`curl ftp://surfos.local/data/`, `telnet surfos.local`, `ping surfos.local`. `mdns` says where it
+answers, `mdns off` stops it (and tells the other computers to forget the name at once); `mdns
+on lab-pc` answers for `lab-pc.local` instead (the name in the settings' `hostname` is the
+default). When another computer has the name already, SurfOS takes `surfos-2.local` and says so
+in `dmesg`.
+
+**fetch, files from the web or from the Mac.** `fetch` downloads an `http://` or `https://`
+address into a file in the current directory (on a mounted stick: the initrd is read-only):
+
+```
+SURF ≋> cd /data
+SURF ≋> fetch https://www.example.com/
+fetch: 1.2 KB in 0.4 s (3.1 KB/s), TLSv1.3 -> index.html
+```
+
+From the Mac, with nothing installed: in Terminal, in the folder whose files the laptop is to
+take, start a web server with `python3 -m http.server 8000` (with the Mac's firewall on, macOS
+may ask once whether Python may accept incoming connections: Allow), then on SurfOS:
+
+```
+SURF ≋> fetch http://10.0.0.2:8000/photo.jpg       (the Mac's address)
+fetch: 470.8 KB in 0.9 s (523.1 KB/s) -> photo.jpg
+```
+
+* The file is named after the address (`index.html` for a folder); `-o name` names it, `-o
+  /data/photos` puts it in that folder, `-o -` prints it.
+* A file that is there already is kept: `-f` replaces it. A download cut short keeps what
+  came and says so; `fetch -c` the same address goes on with it. A server that cannot send the
+  rest of a file sends all of it again, and then the file is kept as it was: `fetch -f`
+  downloads it anew (Python's `http.server` on the Mac is such a server).
+* HTTPS checks the server's certificate as Undertow does, with no way around it, so the
+  laptop's clock must be roughly right (Undertow's guide, The clock); `-t '2026-10-25
+  14:05:00'` gives the time in UTC for one download. Redirects are followed, never from
+  HTTPS to HTTP.
+
+Limits:
+
+* One background server; up to 6 clients at once (a seventh is told to try again later). A
+  client silent for 5 minutes is disconnected (programs reconnect by themselves).
+* Files up to 2 GB.
+* No logins, no encryption (no FTPS or SFTP). Clients on the network can change everything in
+  the folder served: serve only what may be changed, or use `-r`.
+* File times show as SurfOS's clock has them (it has no time zone): `ftpd` does not give the
+  Mac the UTC times some programs ask for, so they show no time, or the listing's.
+* Started in a telnet session, the server ends with the session (`ftpd on` says so).
+* Passive data connections use ports 50000-50999; behind a router that forwards them, tell
+  `ftpd` the router's address: `ftpd on -a 203.0.113.7` (a range of your own:
+  `ftpd on 60000-60099`).
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |
@@ -1215,6 +1372,9 @@ Limits:
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |
 | Wi-Fi on the Intel 9560 (open and WPA2-Personal, joined on the laptop 10/10/26); saved networks joined by themselves at startup and the settings on the stick (under emulation) | |
 | A web server for static sites (`httpd`): HTML, CSS, pictures, folders listed | Forms, uploads, server-side programs, HTTPS |
+| Files to and from other computers over FTP (`ftpd`: Finder, curl, Cyberduck and FileZilla on the Mac), and `nc` both ways | FTPS and SFTP, logins; UTC file times (MDTM) |
+| Downloads over HTTP and HTTPS (`fetch`), resumed where they stopped | Uploads over HTTP; FTP as a client |
+| The laptop by name on its network (`mdns`: `surfos.local` to the Mac's Bonjour) | Services in Finder's sidebar (DNS-SD), reverse lookups, IPv6 |
 
 ## How it works
 

@@ -6,6 +6,8 @@ File: tcp.h     Date: 10/3/26 (roadmap N2)
 10/6/26 (the telnet server): calls that answer -errno and may wait without a time
 limit, for the connections programs have (net/sock.c, surfos/sock.h). A wait that a
 kill or Ctrl+C cuts short gives up: -EINTR (surfos/task.h).
+10/24/26 (the network tools): the half-close of shutdown(SHUT_WR), both ends' addresses, and
+an active open that does not wait for its handshake.
 */
 
 #ifndef _NET_TCP_H
@@ -48,6 +50,9 @@ ipaddr_t tcp_peer(struct tcp_socket *s, u16 *port);
    waits until it happens or the wait is cut short (-EINTR) */
 #define TCP_NO_LIMIT ((u_long)-1)
 int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out);
+/* 10/24/26: the same without the wait: the socket at once in SYN_SENT; tcp_poll() says POLLOUT when it is made,
+   POLLERR and POLLHUP when it failed (refused, no answer within the SYN's retries, no route), read() why */
+int tcp_open_nowait(ipaddr_t dst, u16 dport, struct tcp_socket **out);
 int tcp_listen_on(u16 port, u_int backlog, struct tcp_socket **out);  /* 10/17/26: backlog 0: the default (4), 8 at most */
 int tcp_accept_next(struct tcp_socket *l, u_long timeout_ms, struct tcp_socket **out);
 int tcp_read(struct tcp_socket *s, void *buf, u_int len);     /* read(): bytes, 0 at the end; waits */
@@ -56,5 +61,11 @@ void tcp_release(struct tcp_socket *s);    /* the last descriptor closed: FIN, o
 int tcp_poll(struct tcp_socket *s);        /* POLLIN POLLOUT POLLHUP POLLERR (surfos/poll.h); takes net_lock */
 bool tcp_listening(const struct tcp_socket *s);
 void tcp_set_nodelay(struct tcp_socket *s);     /* 10/6/26: small writes go at once (no Nagle): a program's connection */
+/* 10/24/26: the FIN after the bytes queued, while what comes is still read (shutdown(SHUT_WR)): 0, also when it
+   was shut or closing already; -ENOTCONN for a listener, or a failed connection's error */
+int tcp_shutdown(struct tcp_socket *s);
+/* 10/24/26: the addresses (network order) and ports of this end and the other; a listener's own address is 0
+   (every interface), and it has no other end (0) */
+void tcp_addrs(struct tcp_socket *s, ipaddr_t *local, u16 *lport, ipaddr_t *remote, u16 *rport);
 
 #endif

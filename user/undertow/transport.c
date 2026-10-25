@@ -40,6 +40,10 @@ no TLS connection is open: Mbed TLS 3.6.7 can leave an entropy context unusable
 after an allocation fails inside it (its next reseed would dereference NULL,
 third_party/README.md), and such a failure often reaches us only as
 MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE.
+
+10/25/26 (fetch): the end of a TLS stream remembers whether it was the server's close_notify
+or the TCP connection's end alone (ut_transport_eof_clean()); reads return 0 for both, as
+before.
 */
 
 #include <stdio.h>
@@ -70,6 +74,7 @@ struct ut_transport {
     int ssl_ready;                          /* ssl and conf are initialized (and are freed) */
     int handshake_done, verified;
     int eof;                                /* the end of the stream was returned */
+    int notified;                           /* 10/25/26: TLS: that end was the server's close_notify */
     int failed;                             /* an error ended the connection: read and write give -1 */
     int suspect;                            /* the handshake failed inside Mbed TLS: the shared state is made again */
     unsigned int deadline;                  /* the caller's, absolute ut_now() */
@@ -707,6 +712,7 @@ int ut_transport_read(struct ut_transport *t, void *buf, size_t len) {
             }
             if(n == 0 || n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == MBEDTLS_ERR_SSL_CONN_EOF) {
                 t->eof = 1;
+                t->notified = n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;     /* 0, CONN_EOF: the TCP end alone */
                 return 0;
             }
             if(n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) continue;
@@ -798,4 +804,8 @@ int ut_transport_verified(const struct ut_transport *t) {
 
 const char *ut_transport_tls(const struct ut_transport *t) {
     return t ? t->tls : "";
+}
+
+int ut_transport_eof_clean(const struct ut_transport *t) {
+    return t && t->eof && (!t->secure || t->notified);
 }

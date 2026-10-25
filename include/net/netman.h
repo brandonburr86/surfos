@@ -67,6 +67,9 @@ bool netman_trusted(struct netdev *dev);
 /* a telnet server runs or is starting (any telnetd process), or is to start by itself (telnetd = on until it has
    started, autonet until it is done): the keeper then joins no open network by itself */
 bool netman_telnet_exposed(void);
+/* 10/24/26: an FTP server runs or is starting (any ftpd process): no logins, and files written: the keeper then
+   joins no open network by itself either */
+bool netman_ftp_exposed(void);
 /* autonet's telnetd on (port 0: its own, 23) as a process on F1, "+AUTONET:" when it fails: its status, -1 when it
    could not be started or waited for */
 int netman_start_telnetd(u16 port);

@@ -54,6 +54,13 @@ under QEMU's loader and dangerous on a UEFI PC:
 | U6 | `kernel/cpu.c` (new) | CR0/CR4 inherited from the boot loader: GRUB on OVMF hands over CR0.WP set, and firmware may set SMAP or PVI | both registers set explicitly at boot, the originals shown by `cpuinfo` |
 | U7 | `kernel/keyboard.c` | the ISR read port 0x60 whatever the status said | reads only when a keyboard byte is waiting, so polling and the IRQ never take one twice |
 
+Found by the review of the network tools (October 2026, `docs/superpowers/plans/2026-10-24-nettools.md`)
+in code that was there before them, and that an FTP client reaches now as well as `mv`:
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| R1 | `fs/vfs.c`, `fs/fat.c` | `vfs_rename()` refuses to move a directory into itself by comparing the paths with their case, and FAT folds it: `mv dir DIR/sub` wrote the directory into itself and took it out of its parent, its `..` pointing at itself (a subtree nothing reaches, lost clusters) | `fat_rename()` follows `..` up from the new parent and refuses (EINVAL) whatever the spelling |
+
 ## What was verified under QEMU
 
 Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with

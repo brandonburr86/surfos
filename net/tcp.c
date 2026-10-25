@@ -91,6 +91,21 @@ to TCP_BACKLOG_MAX (SYS_listen's second argument; 0 keeps TCP_BACKLOG). A browse
 connections at once, and with four places the SYNs beyond them were dropped (or took a
 half-open one's place) before the server could accept the first: those clients waited a
 retransmission. The rules of a full backlog are the same at any length.
+
+10/24/26 (the network tools): a program may half-close a connection (tcp_shutdown(), for
+shutdown(SHUT_WR)): the FIN goes out behind what is queued, as a close's does, but the
+program keeps the socket and reads what the other end still sends, until its FIN. Such a
+connection can reach TIME_WAIT while the program has not read everything: it keeps its
+receive buffer then, which TIME_WAIT otherwise gives back at once. tcp_addrs() gives both
+ends' addresses, for an FTP server's passive reply (the address the client reached). And a
+program may open a connection without waiting for it (tcp_open_nowait()): the socket is its
+at once, in SYN_SENT; poll() says when the handshake is done, or that it failed. A write on
+it waits for that, as a blocking write does: before, no program ever held such a socket.
+10/25/26 (their review): a half-closed connection that its program still holds, in
+FIN_WAIT_2, waits for the other end's data and FIN with nothing in flight: keepalive probes
+it as an open one (only orphans had a bound there, TCP_ORPHAN_LIFE), so a read on it ends
+with ETIMEDOUT when the other end has gone. A shutdown() during the handshake is refused
+(-ENOTCONN, POSIX): no FIN could follow it then.
 */
 
 #include <surfos/types.h>
@@ -239,9 +254,11 @@ static void sock_free(struct tcp_socket *s) {
 
 /* 10/6/26: what s no longer needs goes back to the heap at once, its sequence numbers staying: once
    nobody reads for it (an orphan drops what comes, TIME_WAIT takes nothing more) its receive buffer,
-   and its send buffer when nothing in it is left to send or to send again */
+   and its send buffer when nothing in it is left to send or to send again. 10/24/26: a half-closed
+   connection (tcp_shutdown()) reaches TIME_WAIT with its program still reading: what it has not read
+   yet stays (the buffers go at its release) */
 static void drop_buffers(struct tcp_socket *s) {
-    if(!s->orphan && s->state != TIME_WAIT) return;
+    if(!s->orphan && (s->state != TIME_WAIT || s->rx_len)) return;
     kfree(s->rxbuf);
     s->rxbuf = NULL;
     s->rx_len = 0;
@@ -774,7 +791,8 @@ void tcp_tick(void) {
         if(s->rto_at && (long)(now - s->rto_at) >= 0) retransmit(s);
         if(!s->used) continue;                           /* it failed and went */
         if(s->persist_at && (long)(now - s->persist_at) >= 0) probe_window(s);
-        if((s->state == ESTABLISHED || s->state == CLOSE_WAIT) && !s->rto_at) keepalive(s, now);
+        if((s->state == ESTABLISHED || s->state == CLOSE_WAIT || (s->state == FIN_WAIT_2 && !s->orphan)) && !s->rto_at)
+            keepalive(s, now);                          /* 10/25/26: a program's half-closed one too */
     }
 }
 
@@ -820,8 +838,9 @@ static int no_route(ipaddr_t dst) {
    -ECONNREFUSED (a reset answered), -EHOSTUNREACH (the next hop never answered ARP),
    -ETIMEDOUT (no answer within timeout_ms, or the SYN's retries ran out), -EINTR (cut short).
    A connection that was made is handed out even when the other end has sent its data and closed,
-   or reset it, before this task ran again: read() says so. reserved: the kernel's own. */
-static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, struct tcp_socket **out) {
+   or reset it, before this task ran again: read() says so. reserved: the kernel's own. 10/24/26:
+   without wait the socket is handed out at once in SYN_SENT, its SYN on the way (tcp_open_nowait()) */
+static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, bool wait, struct tcp_socket **out) {
     struct tcp_socket *s;
     int err = 0;
     *out = NULL;
@@ -842,6 +861,11 @@ static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, 
     send_segment(s->local_ip, dst, s->local_port, dport, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
     s->tx_segs++;
     arm_rto(s);
+    if(!wait) {                                         /* 10/24/26: the program polls for the handshake's end */
+        mutex_unlock(&net_lock);
+        *out = s;
+        return 0;
+    }
     WAIT_FOR(s, s->state != SYN_SENT, timeout_ms);
     if(!s->synced) {
         err = s->state == SYN_SENT ? (task_interrupted() ? -EINTR : -ETIMEDOUT) : (s->error ? s->error : -ECONNREFUSED);
@@ -855,12 +879,20 @@ static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, 
 }
 
 int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out) {
-    return open_conn(dst, dport, timeout_ms, false, out);
+    return open_conn(dst, dport, timeout_ms, false, true, out);
+}
+
+/* 10/24/26: the active open of a program that does not wait for it (an FTP server's connection to a client's
+   PORT): the socket at once, in SYN_SENT. tcp_poll() says POLLOUT once the handshake is done; a reset, the SYN's
+   retries running out (about 27 s) or ARP giving up fail it (CLOSED, its error: POLLIN, POLLHUP, POLLERR, and
+   read() says why); the program's own time limit closes it before that, if it likes */
+int tcp_open_nowait(ipaddr_t dst, u16 dport, struct tcp_socket **out) {
+    return open_conn(dst, dport, 0, false, false, out);
 }
 
 struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
     struct tcp_socket *s;
-    return open_conn(dst, dport, timeout_ms, true, &s) ? NULL : s;
+    return open_conn(dst, dport, timeout_ms, true, true, &s) ? NULL : s;
 }
 
 /* 10/6/26: -EINVAL for port 0, -EADDRINUSE when another socket listens there, -ENFILE */
@@ -974,8 +1006,8 @@ int tcp_write(struct tcp_socket *s, const void *data, u_int len) {
     int r = 0;
     mutex_lock(&net_lock);
     if(s->state == LISTEN) r = -ENOTCONN;
-    else if(!WAIT_FOR(s, s->tx_len < TCP_BUF || !can_send(s), TCP_NO_LIMIT)) r = -EINTR;
-    else if(!can_send(s)) r = send_error(s);
+    else if(!WAIT_FOR(s, s->state != SYN_SENT && (s->tx_len < TCP_BUF || !can_send(s)), TCP_NO_LIMIT)) r = -EINTR;
+    else if(!can_send(s)) r = send_error(s);            /* 10/24/26: one still opening (tcp_open_nowait()) waits above */
     else r = (int)queue_some(s, (const u8 *)data, len);
     mutex_unlock(&net_lock);
     return r;
@@ -1096,6 +1128,31 @@ bool tcp_listening(const struct tcp_socket *s) {
 ipaddr_t tcp_peer(struct tcp_socket *s, u16 *port) {
     if(port) *port = s->remote_port;
     return s->remote_ip;
+}
+
+/* 10/24/26: shutdown(SHUT_WR). The FIN follows what is queued, as for a close (start_close()), but the
+   program keeps the socket: it is no orphan, so what the other end still sends is read as before, and
+   write() says -EPIPE. Its state says what is left: only a connection data may still be sent on is shut
+   here; one shut or closing already is left as it is (0), and start_close() never sees a failed one,
+   which it would free under the program's descriptor. 10/25/26 (review): one still in its handshake
+   (CONNECT_NOWAIT) is not connected yet: -ENOTCONN, as for a listener and a connection that has ended. */
+int tcp_shutdown(struct tcp_socket *s) {
+    int r = 0;
+    mutex_lock(&net_lock);
+    if(s->state == LISTEN || s->state == SYN_SENT) r = -ENOTCONN;
+    else if(s->state == CLOSED) r = s->error ? s->error : -ENOTCONN;
+    else if(can_send(s)) start_close(s);                 /* ESTABLISHED, CLOSE_WAIT: never frees */
+    mutex_unlock(&net_lock);
+    return r;
+}
+
+void tcp_addrs(struct tcp_socket *s, ipaddr_t *local, u16 *lport, ipaddr_t *remote, u16 *rport) {
+    mutex_lock(&net_lock);
+    *local = s->local_ip;
+    *lport = s->local_port;
+    *remote = s->state == LISTEN ? 0 : s->remote_ip;
+    *rport = s->state == LISTEN ? 0 : s->remote_port;
+    mutex_unlock(&net_lock);
 }
 
 void tcp_print(void) {

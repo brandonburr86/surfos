@@ -14,6 +14,11 @@ several would do, one with its link up, then Ethernet (ethN) before Wi-Fi, then 
 order they registered. The laptop registers wlan0 at boot and its USB adapter later as
 eth0, and traffic with no source address still takes eth0, as dhcp, netinfo and
 dns_server() do (the review of track S, M1).
+10/25/26 (multicast DNS, net/mdns.c): a datagram to the mDNS group 224.0.0.251 is taken on any
+interface (no other group is), and one to a multicast address goes out on the interface the
+caller names, to the group's MAC (arp_resolve()), with an IP TTL of 255, as RFC 6762 asks: the
+only multicast SurfOS sends. A caller may give another TTL (ip_output_ttl()): the responder's
+unicast answers go with 255 too.
 */
 
 #include <surfos/types.h>
@@ -22,6 +27,7 @@ dns_server() do (the review of track S, M1).
 #include <net/eth.h>
 #include <net/ip.h>
 #include <net/tcp.h>
+#include <net/mdns.h>
 #include <blibc_common.h>
 
 static u16 ip_id;
@@ -94,8 +100,9 @@ struct netdev *ip_route_dev(ipaddr_t dst) {
 
 /* where a datagram to dst goes first: on our subnet (or a broadcast) directly, otherwise the gateway */
 ipaddr_t ip_next_hop(struct netdev *dev, ipaddr_t dst) {
-    if(dst != IP_BROADCAST && dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) && dev->gateway) return dev->gateway;
-    return dst;
+    if(dst != IP_BROADCAST && !IP_MULTICAST(dst) && dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) &&
+       dev->gateway) return dev->gateway;
+    return dst;                                         /* 10/25/26: a group stays on the link */
 }
 
 ipaddr_t ip_route_src(ipaddr_t dst) {
@@ -104,7 +111,7 @@ ipaddr_t ip_route_src(ipaddr_t dst) {
 }
 
 static bool for_us(struct netdev *dev, ipaddr_t dst) {
-    if(dst == IP_BROADCAST) return true;
+    if(dst == IP_BROADCAST || dst == MDNS_GROUP) return true;  /* 10/25/26: the mDNS group (the responder's port 5353) */
     if(!dev->ip) return true;                             /* unconfigured: DHCP may answer to the offered address */
     if(dst == dev->ip) return true;
     if(dev->netmask && (dst | dev->netmask) == IP_BROADCAST && (dst & dev->netmask) == (dev->ip & dev->netmask)) return true;
@@ -132,6 +139,10 @@ void ip_input(struct netdev *dev, struct netbuf *nb) {
 }
 
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb) {
+    return ip_output_ttl(dev, dst, proto, nb, 0);
+}
+
+int ip_output_ttl(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb, u8 ttl) {
     struct ip_hdr *ip;
     ipaddr_t hop;
     u8 mac[ETH_ALEN];
@@ -145,7 +156,7 @@ int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb) {
     ip->len = htons((u16)nb->len);
     ip->id = htons(ip_id++);
     ip->frag = htons(0x4000);                              /* don't fragment */
-    ip->ttl = 64;
+    ip->ttl = ttl ? ttl : IP_MULTICAST(dst) ? 255 : 64;  /* 10/25/26: RFC 6762 section 11 */
     ip->proto = proto;
     ip->csum = 0;
     ip->src = dev->ip;

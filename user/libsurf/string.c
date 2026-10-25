@@ -245,6 +245,7 @@ char *strerror(int err) {
     if(err == ENETUNREACH) return "Network is unreachable";
     if(err == ECONNRESET) return "Connection reset by peer";
     if(err == ENOTCONN) return "Transport endpoint is not connected";
+    if(err == ENOTSOCK) return "Socket operation on non-socket";
     if(err == ETIMEDOUT) return "Connection timed out";
     if(err == ECONNREFUSED) return "Connection refused";
     if(err == EHOSTUNREACH) return "No route to host";

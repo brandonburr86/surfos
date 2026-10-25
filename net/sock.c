@@ -12,6 +12,9 @@ vnode is released and the socket closed: a connection sends its FIN and finishes
 its own, a listening socket stops listening. dup2() and spawnfd() share the file, as
 for any other. The calls answer -errno. A program's connection sends small writes at
 once (tcp_set_nodelay(): no Nagle delay behind a client's delayed ACK).
+10/24/26 (the network tools): SYS_shutdown, the half-close (tcp_shutdown()),
+SYS_sockaddr, both ends' addresses of a socket (tcp_addrs()), and SYS_connect's flag
+CONNECT_NOWAIT, a connection handed out before its handshake is done (tcp_open_nowait()).
 */
 
 #include <surfos/types.h>
@@ -110,15 +113,42 @@ int sys_accept(int fd, struct netaddr *peer) {
     return r;
 }
 
-int sys_connect(u32 ip, u32 port) {
+/* 10/24/26: flags CONNECT_NOWAIT hands the connection out at once, its handshake on the way (tcp_open_nowait()) */
+int sys_connect(u32 ip, u32 port, u32 flags) {
     struct tcp_socket *s;
     int r;
-    if(!ip || !port || port > 65535) return -EINVAL;
+    if(!ip || !port || port > 65535 || (flags & ~CONNECT_NOWAIT)) return -EINVAL;
     if(!fd_free()) return -EMFILE;
-    r = tcp_open(ip, (u16)port, CONNECT_MS, &s);
+    r = flags & CONNECT_NOWAIT ? tcp_open_nowait(ip, (u16)port, &s) : tcp_open(ip, (u16)port, CONNECT_MS, &s);
     if(r) return r;
     tcp_set_nodelay(s);
     return sock_fd(s);
+}
+
+/* 10/24/26: shutdown(fd, SHUT_WR); the descriptor stays open, for reading */
+int sys_shutdown(int fd, u32 how) {
+    struct file *f = fd_get(fd);
+    struct tcp_socket *s = fd_socket(f);
+    if(!f) return -EBADF;
+    if(!s) return -ENOTSOCK;
+    if(how != SHUT_WR) return -EINVAL;
+    return tcp_shutdown(s);
+}
+
+/* 10/24/26: both ends of a socket; either pointer may be NULL. Both are checked before anything is copied */
+int sys_sockaddr(int fd, struct netaddr *local, struct netaddr *peer) {
+    struct file *f = fd_get(fd);
+    struct tcp_socket *s = fd_socket(f);
+    struct netaddr l, p;
+    if(!f) return -EBADF;
+    if(!s) return -ENOTSOCK;
+    if((local && !user_buf(local, sizeof(*local), true)) || (peer && !user_buf(peer, sizeof(*peer), true))) return -EFAULT;
+    memset(&l, 0, sizeof(l));
+    memset(&p, 0, sizeof(p));
+    tcp_addrs(s, &l.ip, &l.port, &p.ip, &p.port);
+    if(local) memcpy(local, &l, sizeof(l));
+    if(peer) memcpy(peer, &p, sizeof(p));
+    return 0;
 }
 
 int sys_netinfo(struct netinfo *ni) {

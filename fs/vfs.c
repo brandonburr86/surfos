@@ -879,6 +879,7 @@ const char *strerror(int err) {
     case ENETUNREACH: return "Network is unreachable";
     case ECONNRESET: return "Connection reset by peer";
     case ENOTCONN: return "Transport endpoint is not connected";
+    case ENOTSOCK: return "Socket operation on non-socket";
     case ETIMEDOUT: return "Connection timed out";
     case ECONNREFUSED: return "Connection refused";
     case EHOSTUNREACH: return "No route to host";

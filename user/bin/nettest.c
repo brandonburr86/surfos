@@ -38,12 +38,27 @@ connections send and stops after n connections have ended.
 nettest burst <port> <bursts> <ms> <size>...: one connection gets <bursts> bursts, each a
 write() of every size in turn (the pattern), ms apart; then it is read until it ends, or,
 with ms below 0, closed at once after the writes. When each burst began (the uptime).
+nettest halfclose <port> [ms] (10/24/26): one connection gets a line, then this end's FIN by
+shutdown(SHUT_WR); what the other end sends after that is read and shown until its FIN (10/25/26:
+from ms milliseconds after the shutdown on, so that all of it and the FIN may have come). On
+the way: both ends' addresses (tcp_addrs()), a write after the shutdown (EPIPE), poll() with
+no POLLOUT, a second shutdown (0). "nettest: half-close: ok, <n> bytes after the FIN" at the
+end, or FAILED with what went wrong before it.
+nettest nowait <ip> <port> (10/24/26): a connection not waited for (tcp_connect_start()):
+"connect started" at once, then poll() every 500 ms until it is made ("connected after <ms>
+ms (<n> polls in between)"; "hello" is sent and the answer read until it ends) or fails ("the
+connection failed: <why>"), 30 s at most.
+nettest shutreader <port> (10/25/26): one connection, half-closed at once (shutdown(SHUT_WR)),
+then read until it ends, as reader: "nettest: read <n> bytes, then <EOF or why>".
 
 nettest limits: the calls' errors: listen on port 0 (EINVAL) and on a port in use
 (EADDRINUSE); accept on no descriptor (EBADF), on the console or a file (EINVAL: no
 listening socket), into memory that is not the caller's (EFAULT, before anything
 waits); read and write on a listening socket (ENOTCONN); connect to
-port 0 (EINVAL); netinfo into the kernel's memory (EFAULT); listening sockets until
+port 0 (EINVAL); netinfo into the kernel's memory (EFAULT); 10/24/26: shutdown on no
+descriptor (EBADF), the console (ENOTSOCK), with another how (EINVAL) and on a listening socket
+(ENOTCONN), both ends of a listening socket (every address, its port, no other end), of the
+console (ENOTSOCK) and into the kernel's memory (EFAULT); listening sockets until
 the descriptors run out (EMFILE, or ENFILE when the sockets run out first), then a
 child that listens until the sockets run out (ENFILE); everything closed, every port
 free again. One line per check, then NETTEST PASS (exit 0) or NETTEST FAIL.
@@ -196,6 +211,20 @@ static int read_to_end(int c, int show) {
 static int reader(int port, int ms, int backlog) {
     int c = accept_one(port, ms, backlog);
     return c < 0 ? 1 : read_to_end(c, 0);
+}
+
+/* 10/25/26: the half-closed reader (FIN_WAIT_2 once its FIN is acknowledged) */
+static int shutreader(int port) {
+    int c = accept_one(port, 0, 0);
+    if(c < 0) return 1;
+    if(shutdown(c, SHUT_WR) < 0) {
+        printf("nettest: shutdown: %s\n", strerror(errno));
+        close(c);
+        return 1;
+    }
+    printf("nettest: shut at once; reading\n");
+    fflush(stdout);
+    return read_to_end(c, 0);
 }
 
 static int writer(int port, long count, int chunk) {
@@ -453,6 +482,105 @@ static int entropy(int expected) {
 
 /**** limits ****/
 
+/* 10/24/26: a connection not waited for: polled for every 500 ms until it is made or fails (30 s at most) */
+static int nowait(unsigned int ip, int port) {
+    struct pollfd p;
+    unsigned int start = uptime();
+    int fd = tcp_connect_start(ip, (unsigned short)port), r, polls = 0;
+    char b;
+    if(fd < 0) {
+        printf("nettest: connect: %s\n", strerror(errno));
+        return 1;
+    }
+    printf("nettest: connect started\n");
+    fflush(stdout);
+    for(;;) {
+        p.fd = fd;
+        p.events = POLLOUT;
+        p.revents = 0;
+        if((r = poll(&p, 1, 500)) < 0) {
+            printf("nettest: poll: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+        if(r == 0) {
+            polls++;
+            if(uptime() - start < 30000) continue;
+            printf("nettest: not connected after 30 s (%d polls)\n", polls);
+            close(fd);
+            return 1;
+        }
+        if(p.revents & POLLOUT) break;
+        if(read(fd, &b, 1) < 0) printf("nettest: the connection failed: %s (after %d polls)\n", strerror(errno), polls);
+        else printf("nettest: the connection failed (after %d polls)\n", polls);
+        close(fd);
+        return 1;
+    }
+    printf("nettest: connected after %u ms (%d polls in between)\n", uptime() - start, polls);
+    fflush(stdout);
+    if(write_all(fd, "hello\n", 6, NULL, NULL)) {
+        printf("nettest: write: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+    return read_to_end(fd, 1);
+}
+
+/* 10/24/26: one connection, half-closed after a line; then read until the other end's FIN */
+static int halfclose(int port, int ms) {
+    static const char line[] = "nettest: half-closed after this line\n";
+    struct netaddr here, there;
+    struct pollfd p;
+    char buf[1025];
+    long total = 0, r;
+    int c = accept_one(port, 0, 0), bad = 0;
+    if(c < 0) return 1;
+    if(tcp_addrs(c, &here, &there) < 0 || here.port != port || !here.ip || !there.ip || !there.port) {
+        printf("nettest: tcp_addrs: %s, this end port %u\n", strerror(errno), here.port);
+        bad++;
+    }
+    if(write_all(c, line, sizeof(line) - 1, NULL, NULL)) {
+        printf("nettest: write: %s\n", strerror(errno));
+        bad++;
+    }
+    if(shutdown(c, SHUT_WR) < 0) {
+        printf("nettest: shutdown: %s\n", strerror(errno));
+        bad++;
+    }
+    errno = 0;
+    if(write(c, "x", 1) >= 0 || errno != EPIPE) {
+        printf("nettest: a write after the shutdown was not EPIPE (%s)\n", strerror(errno));
+        bad++;
+    }
+    p.fd = c;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if(poll(&p, 1, 0) > 0 && (p.revents & POLLOUT)) {
+        printf("nettest: poll() says POLLOUT after the shutdown\n");
+        bad++;
+    }
+    if(shutdown(c, SHUT_WR) < 0) {
+        printf("nettest: a second shutdown: %s\n", strerror(errno));
+        bad++;
+    }
+    printf("nettest: shut; reading what comes after the FIN\n");
+    fflush(stdout);
+    if(ms) msleep((unsigned int)ms);
+    while((r = (long)read(c, buf, sizeof(buf) - 1)) > 0) {
+        buf[r] = 0;
+        fputs(buf, stdout);
+        total += r;
+    }
+    if(r < 0) {
+        printf("%snettest: a read after the FIN: %s\n", total ? "\n" : "", strerror(errno));
+        bad++;
+    }
+    close(c);
+    printf("%snettest: half-close: %s, %ld bytes after the FIN\n", total && r >= 0 ? "\n" : "", bad ? "FAILED" : "ok",
+           total);
+    return bad ? 1 : 0;
+}
+
 /* listening sockets on ports from first on, until a listen fails: how many, and why it failed (errno) */
 static int listen_all(int first, int *fds, int max, int *why) {
     int n = 0;
@@ -502,6 +630,27 @@ static int limits(void) {
     check(read(l, buf, sizeof(buf)) < 0 && errno == ENOTCONN, "read on a listening socket: ENOTCONN");
     errno = 0;
     check(write(l, "x", 1) < 0 && errno == ENOTCONN, "write on a listening socket: ENOTCONN");
+    errno = 0;                          /* 10/24/26: the half-close and both ends' addresses */
+    check(shutdown(99, SHUT_WR) < 0 && errno == EBADF, "shutdown on a descriptor that is not open: EBADF");
+    errno = 0;
+    check(shutdown(0, SHUT_WR) < 0 && errno == ENOTSOCK, "shutdown on the console: ENOTSOCK");
+    errno = 0;
+    check(shutdown(l, 0) < 0 && errno == EINVAL, "shutdown with another how than SHUT_WR: EINVAL");
+    errno = 0;
+    check(shutdown(l, SHUT_WR) < 0 && errno == ENOTCONN, "shutdown on a listening socket: ENOTCONN");
+    {
+        struct netaddr here, there;
+        memset(&here, 0xff, sizeof(here));
+        memset(&there, 0xff, sizeof(there));
+        check(tcp_addrs(l, &here, &there) == 0 && here.ip == 0 && here.port == LIMIT_PORT && there.ip == 0 &&
+              there.port == 0, "a listening socket's ends: every address and its port, no other end");
+        check(tcp_addrs(l, NULL, NULL) == 0, "both ends asked for into nothing: 0");
+        errno = 0;
+        check(tcp_addrs(l, (struct netaddr *)KERNEL_ADDR, NULL) < 0 && errno == EFAULT,
+              "both ends into the kernel's memory: EFAULT");
+        errno = 0;
+        check(tcp_addrs(0, &here, NULL) < 0 && errno == ENOTSOCK, "the ends of the console: ENOTSOCK");
+    }
     errno = 0;
     check(tcp_connect(0x0202000a, 0) < 0 && errno == EINVAL, "connect to port 0: EINVAL");
     errno = 0;
@@ -565,6 +714,9 @@ int main(int argc, char **argv) {
     if(argc == 5 && !strcmp(argv[1], "churn")) return ip_arg(argv[2], &ip) ? 2 : churn(ip, atoi(argv[3]), atoi(argv[4]));
     if(argc == 4 && !strcmp(argv[1], "pollsrv")) return pollsrv(atoi(argv[2]), atoi(argv[3]));
     if(argc >= 6 && !strcmp(argv[1], "burst")) return burst(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), argc - 5, argv + 5);
+    if((argc == 3 || argc == 4) && !strcmp(argv[1], "halfclose")) return halfclose(atoi(argv[2]), argc == 4 ? atoi(argv[3]) : 0);
+    if(argc == 4 && !strcmp(argv[1], "nowait")) return ip_arg(argv[2], &ip) ? 2 : nowait(ip, atoi(argv[3]));
+    if(argc == 3 && !strcmp(argv[1], "shutreader")) return shutreader(atoi(argv[2]));
     fprintf(stderr, "usage: nettest echo <port> [n]\n"
                     "       nettest send <port> <bytes>\n"
                     "       nettest get <ip> <port> <path>\n"
@@ -574,6 +726,7 @@ int main(int argc, char **argv) {
                     "       nettest connect <ip> <port>\n"
                     "       nettest refuse <ip> <port>\n"
                     "       nettest limits\n"
-                    "       nettest reader|writer|sleepsrv|recv|churn|pollsrv|burst ...   (tools/qemu-tcp.py)\n");
+                    "       nettest reader|writer|sleepsrv|recv|churn|pollsrv|burst|halfclose|nowait|shutreader ...   "
+                    "(tools/qemu-tcp.py)\n");
     return 2;
 }

@@ -122,6 +122,12 @@ int arp_resolve(struct netdev *dev, ipaddr_t ip, u8 *mac, struct netbuf *park) {
         memcpy(mac, eth_broadcast, ETH_ALEN);
         return 0;
     }
+    if(IP_MULTICAST(ip)) {                              /* 10/25/26: 01:00:5e and the address's low 23 bits */
+        const u8 *b = (const u8 *)&ip;
+        mac[0] = 0x01; mac[1] = 0x00; mac[2] = 0x5e;
+        mac[3] = b[1] & 0x7f; mac[4] = b[2]; mac[5] = b[3];
+        return 0;
+    }
     e = find(dev, ip);
     if(e && e->resolved) {
         memcpy(mac, e->mac, ETH_ALEN);

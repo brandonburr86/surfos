@@ -40,7 +40,7 @@ started from:
 
 Nothing here prints a key; wifi saved shows names and securities only. While a telnet server
 runs or is to start by itself, SurfOS joins no open network by itself (kernel/netman.c), and
-wifi save of an open network says so.
+wifi save of an open network says so. 10/24/26: the same while an FTP server (ftpd) runs.
 */
 
 #include <surfos/types.h>
@@ -213,6 +213,9 @@ static int joined(struct wlan_dev *w, const char *name, const char *ap, int r) {
             if(si.security == WLAN_SEC_OPEN && netman_telnet_exposed())
                 printf("    (a telnet server runs or is to start, and it has no password: it answers on this open\n"
                        "    network too; telnetd off stops it)\n");
+            if(si.security == WLAN_SEC_OPEN && netman_ftp_exposed())     /* 10/24/26 */
+                printf("    (an FTP server runs, and it has no password: anyone on this open network may reach\n"
+                       "    its files; ftpd off stops it)\n");
             if(netman_can_save() && !netman_settings_off() && !is_saved(si.ssid, si.ssid_len))
                 printf("    (wifi save keeps it on the stick, for SurfOS to join by itself at startup)\n");
         }
@@ -395,6 +398,9 @@ static int saved_it(const struct netcfg_net *net, const char *name, bool checked
     if(net->security == NETCFG_SEC_OPEN && netman_telnet_exposed())
         printf("    (a telnet server runs or is to start by itself, and it has no password: meanwhile SurfOS joins\n"
                "    no open network by itself; wifi join %s joins it by hand)\n", name);
+    if(net->security == NETCFG_SEC_OPEN && netman_ftp_exposed())         /* 10/24/26 */
+        printf("    (an FTP server runs, and it has no password: meanwhile SurfOS joins no open network by itself;\n"
+               "    wifi join %s joins it by hand)\n", name);
     return CMD_OK;
 }
 

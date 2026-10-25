@@ -25,6 +25,13 @@ writes nothing.
 
 10/17/26 (the network manager): a mount with MNT_QUIET (the settings on the stick,
 kernel/netman.c) leaves its line about the volume to the kernel log.
+
+10/25/26 (audit R1, found by the network tools' review): rename refuses to move a
+directory into itself or below it. The VFS compares paths with their case (mv dir
+DIR/sub got through), while lookups here fold it: the directory was written into
+itself and taken out of its parent, its ".." pointing at itself (a subtree nothing
+reached, lost clusters for a checker). fat_rename() follows ".." up from the new
+parent now, which no spelling of a path gets around.
 */
 
 #include <surfos/types.h>
@@ -1210,11 +1217,37 @@ static int set_dotdot(struct fat_fs *fs, u32 first, const struct fat_node *paren
     return 0;
 }
 
+/* 10/25/26 (audit R1): is the directory at cluster dir the one at cluster top, or below it? Its ".." entries are
+   followed up to the root (0, or FAT32's root cluster). A chain that does not end there in a cluster count of steps
+   (a damaged volume) counts as below: nothing is moved. 0, or -EIO */
+static int dir_below(struct fat_fs *fs, u32 dir, u32 top, bool *below) {
+    u32 steps;
+    for(steps = 0; steps <= fs->nclusters; steps++) {
+        struct buf *b;
+        const u8 *p;
+        if(dir == top) { *below = true; return 0; }
+        if(dir < 2 || dir >= fs->nclusters + 2 || dir == fs->root_cluster) { *below = false; return 0; }
+        b = bread(fs->dev, clus_lba(fs, dir));
+        if(!b) return -EIO;
+        p = b->data + 32;
+        if(!(p[0] == '.' && p[1] == '.' && p[2] == ' ' && (p[11] & ATTR_DIR))) {   /* no ".." to follow */
+            brelse(b);
+            *below = false;
+            return 0;
+        }
+        dir = (u32)le16(p + 26) | (fs->type == 32 ? (u32)le16(p + 20) << 16 : 0);
+        brelse(b);
+    }
+    *below = true;
+    return 0;
+}
+
 /* 10/5/26: rename within the volume. The new entries (a fresh short alias, the long name if
    one is needed, everything else copied from the old short entry) are written before the
    old ones are deleted, so an interruption leaves two names rather than none. A file at the
    target is replaced (POSIX), so is an empty directory; a directory that moves to another
-   parent gets its ".." pointed there. The VFS has refused moving a directory into itself. */
+   parent gets its ".." pointed there. The VFS has refused moving a directory into itself, as it spells
+   the paths; 10/25/26: so does this, as the volume holds them (dir_below()). */
 static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname) {
     struct fat_fs *fs = (struct fat_fs *)odir->sb->priv;
     struct fat_node *on = (struct fat_node *)odir->priv, *nn = (struct fat_node *)ndir->priv, *x;
@@ -1232,6 +1265,12 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     r = dir_find(fs, on, oname, &src);
     if(r) goto out;
     is_dir = (src.raw[11] & ATTR_DIR) != 0;
+    if(is_dir && !same && src.first >= 2) {                    /* 10/25/26 (audit R1): not into itself */
+        bool below;
+        r = dir_below(fs, nn->is_root ? 0 : nn->first, src.first, &below);
+        if(r == 0 && below) r = -EINVAL;
+        if(r) goto out;
+    }
     r = dir_find(fs, nn, nname, &dst);
     if(r == 0 && !(same && dst.idx == src.idx)) {            /* another object has the name (else: a change of case) */
         if(live_node(fs, dst.lba, dst.off)) { r = -EBUSY; goto out; }   /* in use: not deleted under its user */

@@ -34,6 +34,7 @@ void dhcp_drop(struct netdev *dev, const char *why, u_long lease_at);
 /* the name requests carry (option 12), so the router can list SurfOS by it: letters, digits and '-', 1-32
    characters; NULL or "" sends none */
 void dhcp_set_hostname(const char *name);
+void dhcp_hostname(char *out, size_t size);    /* 10/25/26: that name (multicast DNS's default), "" for none */
 
 /* Bounded A lookup: 0 or negative errno; output changes only on success. */
 int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms);

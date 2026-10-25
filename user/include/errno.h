@@ -59,6 +59,7 @@ extern int errno;
 #define ENETUNREACH 101         /* Network is unreachable */
 #define ECONNRESET  104         /* Connection reset by peer */
 #define ENOTCONN    107         /* Transport endpoint is not connected */
+#define ENOTSOCK     88         /* Socket operation on non-socket (10/24/26: shutdown, tcp_addrs) */
 #define ETIMEDOUT   110         /* Connection timed out */
 #define ECONNREFUSED 111        /* Connection refused */
 #define EHOSTUNREACH 113        /* No route to host */

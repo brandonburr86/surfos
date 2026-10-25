@@ -98,6 +98,13 @@ void dhcp_set_hostname(const char *name) {
     irq_restore(flags);
 }
 
+/* 10/25/26 (multicast DNS): the name DHCP requests give, the responder's by default ("" when none) */
+void dhcp_hostname(char *out, size_t size) {
+    u_long flags = irq_save();
+    strlcpy(out, hostname, size);
+    irq_restore(flags);
+}
+
 /* 10/17/26: ciaddr, the address being renewed (0 for a new lease: then the answer is asked to come broadcast) */
 static u_int build(struct dhcp_msg *m, struct netdev *dev, u32 xid, u8 type, ipaddr_t req, ipaddr_t server,
                    ipaddr_t ciaddr) {

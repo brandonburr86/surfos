@@ -25,7 +25,9 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
-                  # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh)
+                  # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh),
+                  # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
+                  # multicast DNS messages (test_mdns)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -42,6 +44,8 @@ python3 tools/qemu-run.py --kernel build/O0/surfos.bin --disk build/images/test.
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --scratch 64 --shell 'fdisk rd1'  # a blank ramdisk rd1 to partition and format
 # the harness gives QEMU a user-mode network (gateway 10.0.2.2) with port forwards to guest ports 7 and 23 (telnet: q.ports['telnet']) and a host HTTP server (httpport= on the kernel command line)
 # 10/17/26: and to guest ports 80 and 8080 (httpd, the web server: q.ports['www'], q.ports['www2'])
+# 10/24/26: and to guest port 21 and four passive ports, each to the same port of the guest (ftpd: q.ports['ftp'];
+# a step 'ftpd on ... {ftp_pasv_range}' gets the range); the guest reaches a listener of the host as 10.0.2.2
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n'  # VGA text dump
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append shell=kernel --shell ps   # the ring-0 shell (≋#>)
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append profile=laptop --shell drivers acpi
@@ -83,6 +87,7 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
 fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
            (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake()), pipe.c (10/24/26: pipes, SYS_pipe: 8 KB, 32 at most)
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client (leases kept and renewed), DNS resolver;
+           10/25/26: multicast DNS (mdns.c the responder, `mdns on`: name.local; mdns_wire.c its messages, host-tested);
            netcfg.c (the text of the settings files and the lease timers: pure, host-tested); sock.c (TCP connections as
            programs' descriptors); routing over several interfaces (by source address, then subnet, Ethernet before Wi-Fi);
            wlan/: the 802.11 station layer (wlan.c: scan list, joining, wlan0; ieee80211.c: frames, host-tested) and the
@@ -91,13 +96,19 @@ lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAN
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), env, the filters grep
-           sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
+           sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
+           and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
            Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
-           httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16)
+           httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
+           ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
+           docs/USB-BOOT.md section 17, ARCHITECTURE.md section 22),
+           fetch/ (10/25/26, downloads over HTTP and HTTPS: main the download, fetchhttp the response read as
+           Undertow reads it, host-tested; linked with Undertow's url, config, util and transport, the last with
+           one accessor added: ut_transport_eof_clean(), whether TLS ended with close_notify)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
@@ -174,8 +185,16 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   one makes the change refused).
   `httpd` (10/17/26) only sends the files of the folder it was given, and never starts by
   itself either.
+  `ftpd` (10/24/26) has no logins either, by the owner's choice for telnetd: it reaches only
+  the files of the folder it was given (never `/dev` or `/.netman`), takes a data connection
+  only from the client's own address and connects out only to it (ports from 1024: no FTP
+  bounce), never starts by itself, and while any ftpd runs the Wi-Fi keeper joins no open
+  network by itself (`netman_ftp_exposed()`): keep it so.
   A listener's backlog is 4 unless its program asks for up to 8 (`SYS_listen`'s second
-  argument, `tcp_listen_backlog()`, 10/17/26).
+  argument, `tcp_listen_backlog()`, 10/17/26). 10/24/26: a program's connection may be
+  half-closed (`shutdown(SHUT_WR)`: reads go on to the other end's FIN), name both its ends
+  (`tcp_addrs()`), and be opened without a wait (`tcp_connect_start()`: poll for POLLOUT);
+  a server's loop never waits for one client, so it opens its connections that way.
 * Wi-Fi passwords (2026-10-09, 2026-10-17): an agent never asks for, types, logs or stores
   the owner's password; tests use wlansim's test network. SurfOS keeps a saved network's key
   (the PMK) in networks.conf on the owner's stick, at the owner's request, never the password,
@@ -263,6 +282,25 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   a forwarded port one at a time: of two made in the same instant, one is reset on the host
   before the guest sees it. Start test clients a little apart (a browser on the Mac pointed
   at a forwarded port hits this too: reload when a first load fails).
+* Files to and from other computers (10/24/26): `ftpd serve` prints every command with its
+  reply's code (passwords as `****`) and each transfer with its bytes; the background server
+  logs its start, each session and its end to `dmesg`. The `@ftpd-*` checks use Python's
+  ftplib through `q.ports['ftp']`, which takes a passive reply's address from its own
+  connection; a client that trusts the address in PASV (Finder) needs `ftpd on -a 127.0.0.1`
+  behind QEMU's user network, and its PORT is refused there (it names 127.0.0.1, not the
+  10.0.2.2 the guest sees). `nc -v` says both ends and how a connection ended. `nettest
+  halfclose <port>` and `nettest nowait <ip> <port>` exercise the half-close and the
+  connection not waited for (`tools/qemu-tcp.py --scenario halfclose`, `--scenario nowait`).
+  A server that prints on its console resets the pager first (`ttyctl(TTY_PAGE, 0)`): the
+  user shell pages every command, and a server held at `--More--` answers nobody.
+* mdns (10/25/26): `mdns` says what name it answers for and on which interfaces; `+MDNS:` lines in
+  `dmesg` tell each probe's outcome, the name taken after a conflict, a tie lost, the conflict
+  limit reached and the answering start. It looks only at the local link's messages (to the
+  group, or to its address from the subnet) and takes a conflict only from port 5353.
+  It never starts by itself (the boot stays as it was). Never start it in a test through QEMU's
+  user network: libslirp passes a guest's multicast on through a socket of the host's, onto the
+  host's own network. `tools/qemu-tcp.py --scenario mdns` plays the other hosts on the raw link
+  (rawnet.py's `send_udp()`, `wait_udp()`), where nothing leaves the test.
 * The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
   telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
   `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under

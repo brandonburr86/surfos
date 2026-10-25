@@ -28,6 +28,8 @@ u16 ip_checksum_pseudo(ipaddr_t src, ipaddr_t dst, u8 proto, const void *data, u
 void ip_input(struct netdev *dev, struct netbuf *nb);         /* after the Ethernet header */
 /* send nb (payload only) to dst: adds the IP header, resolves the next hop, hands to Ethernet; frees nb */
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb);
+/* 10/25/26: the same with the IP TTL ttl; 0: 255 to a multicast address (RFC 6762 section 11), 64 otherwise */
+int ip_output_ttl(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb, u8 ttl);
 ipaddr_t ip_route_src(ipaddr_t dst);                          /* our address to use for dst */
 struct netdev *ip_route_dev(ipaddr_t dst);                    /* ip_route(0, dst) */
 /* 10/9/26: the interface for a datagram from src (0: none yet) to dst: the one that has src (NULL when
@@ -53,6 +55,9 @@ int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u
 int icmp_ping_dev(struct netdev *dev, ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out);
 
 /* UDP */
+/* 10/25/26 (multicast DNS): a in 224.0.0.0/4, the multicast addresses (network order, so its first byte) */
+#define IP_MULTICAST(a) (((a) & 0xF0) == 0xE0)
+
 struct udp_hdr {
     u16 sport, dport, len, csum;
 } __attribute__((packed));
@@ -64,6 +69,12 @@ void udp_close(struct udp_socket *s);
    while eth0 hears the same broadcasts); NULL: any, as the routes say */
 void udp_bind_dev(struct udp_socket *s, struct netdev *dev);
 int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, u_int len);
+/* 10/25/26: through dev (NULL: as udp_sendto()); and a datagram with the interface it came in on (*dev) and
+   where it was sent (*dst: a group, a broadcast or our address); and the IP TTL of what s sends (0: the default) */
+int udp_sendto_dev(struct udp_socket *s, struct netdev *dev, ipaddr_t dst, u16 dport, const void *data, u_int len);
+int udp_recvfrom_dev(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *sport, struct netdev **dev,
+                     ipaddr_t *dst, u_long timeout_ms);
+void udp_set_ttl(struct udp_socket *s, u8 ttl);
 /* a datagram, or -1 after timeout_ms; src/sport tell where it came from */
 int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *sport, u_long timeout_ms);
 u16 udp_local_port(struct udp_socket *s);

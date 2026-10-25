@@ -14,6 +14,8 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 
 10/24/26 (pipelines and scripting in surfsh): call 46 makes a pipe (surfos/pipe.h), 47
 starts a program with an environment and a descriptor 3 (surfos/spawn.h).
+10/24/26 (the network tools): 50 and 51, a connection's half-close and both
+ends' addresses (surfos/sock.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -60,7 +62,7 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 /* 10/6/26 (the telnet server): network connections, poll, pseudo-terminals, processes */
 #define SYS_listen   34  /* (u32 port): a listening descriptor (surfos/sock.h) */
 #define SYS_accept   35  /* (int fd, struct netaddr *peer): a connection's descriptor */
-#define SYS_connect  36  /* (u32 ip, u32 port): a connection's descriptor */
+#define SYS_connect  36  /* (u32 ip, u32 port, u32 flags): a connection's descriptor (10/24/26: flags) */
 #define SYS_netinfo  37  /* (struct netinfo *ni): the default interface */
 #define SYS_poll     38  /* (struct pollfd *fds, int nfds, int timeout_ms): entries ready (surfos/poll.h) */
 #define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
@@ -76,7 +78,10 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 /* 10/25/26 */
 #define SYS_waitx    48  /* (int pid, struct waitx *w, int options): pid; how the child ended (surfos/job.h) */
 #define SYS_job      49  /* (int op, int arg): job control for a shell (surfos/job.h) */
-#define NR_SYSCALLS 50
+/* 10/24/26 (the network tools): surfos/sock.h */
+#define SYS_shutdown 50  /* (int fd, u32 how): SHUT_WR, the half-close */
+#define SYS_sockaddr 51  /* (int fd, struct netaddr *local, struct netaddr *peer): both ends of a socket */
+#define NR_SYSCALLS 52
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

@@ -45,6 +45,19 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               backoff, no full segment every second; when it opens, everything arrives
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
+  halfclose   (10/24/26) shutdown(SHUT_WR): the FIN behind a line, then 12000 bytes from the other
+              end taken as the program reads them, read() 0 at its FIN, TIME_WAIT, gone; then a
+              program that reads late, in TIME_WAIT: what came is kept for it (10/25/26)
+  nowait      (10/24/26) connect() with CONNECT_NOWAIT: polled for while its SYN goes unanswered,
+              made when one is answered late; refused by a reset (POLLERR, ECONNREFUSED)
+  finwait     (10/25/26) a connection its program half-closed, its FIN acknowledged (FIN_WAIT_2),
+              then an other end that vanishes: keepalive gives it up as an open one (5 probes)
+  ncstuck     (10/25/26) nc -w 3 sending a file to an other end that takes nothing (its window shut)
+              and half-closes at once: -w ends nc after 3 s (status 1)
+  mdns        (10/25/26, UDP) the multicast DNS responder: mdns on probes for surfos.local and
+              announces it (to the group, TTL 255); queries to the group answered to the group, a QU
+              one to the querier, a one-shot one with its ID; others not; a conflict while probing
+              makes it surfos-2; mdns off answers nothing (the e1000's multicast filter on the way)
 
   tools/qemu-tcp.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --test
   tools/qemu-tcp.py ... --scenario window --verbose     (the segments as they go)
@@ -56,13 +69,15 @@ import argparse
 import importlib.util
 import os
 import re
+import socket
+import struct
 import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rawnet                                       # noqa: E402
-from rawnet import ACK, FIN, PSH, RST, Conn, Server   # noqa: E402
+from rawnet import ACK, FIN, PSH, RST, SYN, Conn, Server   # noqa: E402
 
 
 def load_harness():
@@ -605,6 +620,380 @@ def sc_pollstall(rig):
     return ok
 
 
+def sc_nowait(rig):
+    """10/24/26: connect() with CONNECT_NOWAIT: the descriptor at once while its SYN goes unanswered, the program
+    polling on (it is not held in the call); the SYN answered 2.5 s late makes the connection (POLLOUT), and the
+    program's bytes and this end's answer go through; a SYN answered with a reset fails it (POLLERR, read() says
+    ECONNREFUSED)"""
+    ok = rig.start('nettest nowait 10.0.2.2 7400', 'nettest: connect started')
+    ok = rig.net.wait(lambda s: s.dport == 7400 and s.flags & SYN, 5) is not None and ok
+    m = rig.mark()
+    rig.q.wait(2.5)                                 # unanswered: the program polls on
+    Server(rig.net, 7400, close=True, reply=lambda d: b'got it\n' if d == b'hello\n' else b'what?\n')
+    ok = rig.expect('nettest: connected after ', 15) and rig.expect('got it', 10) and \
+        rig.expect('nettest: read 7 bytes, then EOF', 10) and ok
+    polls = re.search(r'connected after (\d+) ms \((\d+) polls in between\)', rig.since(m))
+    ok = polls is not None and int(polls.group(1)) >= 2500 and int(polls.group(2)) >= 4 and ok
+    if polls:
+        print('        (connected after %s ms, %s polls in between)' % polls.groups())
+    ok = rig.start('nettest nowait 10.0.2.2 7401', 'nettest: connect started') and ok
+    syn = rig.net.wait(lambda s: s.dport == 7401 and s.flags & SYN, 5)
+    if syn:
+        rig.net.send(7401, syn.sport, 0, syn.seq + 1, RST | ACK, 0)
+    ok = syn is not None and rig.expect('nettest: the connection failed: Connection refused', 10) and ok
+    return ok
+
+
+def sc_halfclose(rig):
+    """10/24/26: shutdown(SHUT_WR): the program's line, then its FIN behind it; acknowledged (FIN_WAIT_2), the
+    program still reads: 12000 bytes sent after the FIN, more than its 8 KB window, are all taken and acknowledged
+    (no reset) as it reads them; then this end's FIN: read() says 0, the FIN is acknowledged (TIME_WAIT), and the
+    socket is gone 2 s later"""
+    ok = rig.start('nettest halfclose 23', 'listening on port 23')
+    c = Conn(rig.net, 3200, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096)                           # the line, then the FIN: receive() stops there
+    ok = got == b'nettest: half-closed after this line\n' and c.fin is not None and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()                                     # its FIN acknowledged: FIN_WAIT_2, and it reads on
+    ok = rig.expect('nettest: shut; reading what comes after the FIN') and ok
+    data = bytes(97 + i % 26 for i in range(12000))
+    base, reset = c.snd, False
+    end = (base + len(data)) & 0xffffffff
+    for i in range(0, len(data), 1460):             # all at once: what does not fit comes again below
+        rig.net.send(c.pp, c.gp, (base + i) & 0xffffffff, c.rcv, ACK | PSH, 8192, data[i:i + 1460])
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        s = rig.net.wait(lambda s: c.mine(s) and s.flags & (ACK | RST), 1.0)
+        if not s:
+            continue
+        if s.flags & RST:
+            reset = True
+            break
+        if s.ack == end:
+            break
+        if s.win and rawnet.seq_lt(s.ack, end):    # what its window takes now, from where it is
+            off = (s.ack - base) & 0xffffffff
+            rig.net.send(c.pp, c.gp, s.ack, c.rcv, ACK | PSH, 8192, data[off:off + min(1460, s.win)])
+    c.snd = end
+    c.ack(flags=ACK | FIN)
+    ok = not reset and rig.expect('nettest: half-close: ok, %d bytes after the FIN' % len(data)) and ok
+    ack = rig.net.wait(lambda s: c.mine(s) and s.flags & ACK and s.ack == c.snd, 3)
+    ok = ack is not None and ok
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    # 10/25/26 (review: the above reaches TIME_WAIT with bytes unread only when the program happens to be slow): the
+    # program reads 1 s after its shutdown, by when 6000 bytes and this end's FIN have come and been acknowledged
+    # (TIME_WAIT, 2 s): the receive buffer is kept for it, and it reads them all, then the end
+    ok = rig.start('nettest halfclose 23 1000', 'listening on port 23') and ok
+    c = Conn(rig.net, 3201, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096)
+    ok = got == b'nettest: half-closed after this line\n' and c.fin is not None and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()
+    ok = rig.expect('nettest: shut; reading what comes after the FIN') and ok
+    data = bytes(65 + i % 26 for i in range(6000))
+    base = c.snd
+    for i in range(0, len(data), 1460):
+        rig.net.send(c.pp, c.gp, (base + i) & 0xffffffff, c.rcv, ACK | PSH, 8192, data[i:i + 1460])
+    c.snd = (base + len(data)) & 0xffffffff
+    c.ack(flags=ACK | FIN)
+    ack = rig.net.wait(lambda s: c.mine(s) and s.flags & ACK and s.ack == c.snd, 3)
+    ok = ack is not None and rig.expect('nettest: half-close: ok, %d bytes after the FIN' % len(data), 10) and ok
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    return ok
+
+
+def sc_finwait(rig):
+    """10/25/26 (review): a connection whose program half-closed it waits in FIN_WAIT_2 for the other end's data
+    and FIN with nothing in flight: keepalive probes it as an open one, so an other end that has vanished is given
+    up (ETIMEDOUT after tcpka's 3 s and 5 probes, as in keepalive) and the read ends. Nothing ended it before"""
+    ok = rig.start('nettest shutreader 23', 'listening on port 23')
+    c = Conn(rig.net, 3300, 23)
+    ok = c.connect() is not None and ok
+    got = c.receive(4096, timeout=5)                # nothing, then its FIN: receive() stops there
+    ok = got == b'' and c.fin is not None and rig.expect('nettest: shut at once; reading') and ok
+    if c.fin is not None:
+        c.rcv = (c.fin + 1) & 0xffffffff
+        c.ack()                                     # its FIN acknowledged: FIN_WAIT_2, then silence
+    t0 = time.time()
+    ok = rig.expect('nettest: read 0 bytes, then Connection timed out', 20) and ok
+    probes = len([s for s in rig.net.drain(lambda s: c.is_probe(s))])
+    dt = time.time() - t0
+    ok = ok and probes == 5 and 6 < dt < 15
+    print('        (FIN_WAIT_2, the other end gone: given up after %.1f s and %d probes)' % (dt, probes))
+    return ok
+
+
+class ShutPeer:
+    """10/25/26: the other end of a connection the guest makes to port: its SYN answered with the window shut, the
+    FIN at once behind it, every probe after that answered with the window still shut; nothing is ever taken"""
+    def __init__(self, net, port, iss=7000):
+        self.net, self.port, self.iss, self.rcv, self.gp = net, port, iss, None, None
+        net.servers[port] = self
+
+    def handle(self, s):
+        if s.flags & RST:
+            return
+        if s.flags & SYN:
+            self.gp, self.rcv = s.sport, (s.seq + 1) & 0xffffffff
+            self.net.send(self.port, s.sport, self.iss, self.rcv, SYN | ACK, 0)
+            self.net.send(self.port, s.sport, self.iss + 1, self.rcv, FIN | ACK, 0)
+        elif self.rcv is not None:
+            self.net.send(self.port, s.sport, self.iss + 2, self.rcv, ACK, 0)
+
+    def reset(self):
+        """the connection given up from this end (the guest's orphan goes at once)"""
+        if self.gp is not None:
+            self.net.send(self.port, self.gp, self.iss + 2, self.rcv, RST | ACK, 0)
+        del self.net.servers[self.port]
+
+
+def sc_ncstuck(rig):
+    """10/25/26 (review): nc -w 3 sending a file to an other end that takes none of it (the window shut from its SYN
+    on) and half-closes at once: what waits never fits, nothing comes, and -w ends nc 3 s after its last write, with
+    status 1. Its rests after the other end's FIN kept poll() from timing out, so it never ended, and spun once the
+    time was up. (Through QEMU's user network this host's buffers take the whole file under Linux: no test there)"""
+    peer = ShutPeer(rig.net, 7500)
+    t0 = time.time()
+    ok = rig.start('nc -w 3 10.0.2.2 7500 < /initrd/bin/nettest', '] started')
+    ok = rig.expect('nc: nothing came or went for 3 s: the connection is closed', 20) and ok
+    dt = time.time() - t0
+    # the shell says a job's end before the prompt after it; nc's last moments may take longer than the shell's
+    # first prompt (a smoke run beside the USB tests showed it), so a few: one that never ends is still caught
+    m, prompts = rig.mark(), 0
+    while prompts < 6 and '] exit status 1' not in rig.since(m):
+        ok = rig.run('') and ok
+        prompts += 1
+        if '] exit status 1' not in rig.since(m):
+            rig.q.wait(0.5)
+    ok = '] exit status 1' in rig.since(m) and 3 <= dt < 12 and ok
+    print('        (nc ended %.1f s after it started; its end said after %d prompt(s))' % (dt, prompts))
+    peer.reset()
+    rig.q.wait(1)
+    return ok
+
+
+MDNS_MAC = bytes.fromhex('01005e0000fb')
+MDNS_IP = socket.inet_aton('224.0.0.251')
+
+
+def mdns_name(labels):
+    return b''.join(bytes([len(l)]) + l.encode() for l in labels.split('.')) + b'\0'
+
+
+def mdns_query(name, qtype=1, qu=False, qid=0):
+    """10/25/26: a query for name's qtype (1: A, 28: AAAA, 255: ANY), with QU when asked"""
+    return struct.pack('!HHHHHH', qid, 0, 1, 0, 0, 0) + mdns_name(name) + struct.pack('!HH', qtype, 0x8001 if qu else 1)
+
+
+def mdns_records(data):
+    """the header and the records of a message as (id, flags, questions, [(section, name, type, class, ttl, rdata)]);
+    None for one that does not parse"""
+    def name_at(off, depth=0):
+        labels = []
+        while depth < 64:
+            n = data[off]
+            if n & 0xc0 == 0xc0:
+                rest, _ = name_at(((n & 0x3f) << 8) | data[off + 1], depth + 1)
+                return '.'.join(labels + ([rest] if rest else [])), off + 2
+            off += 1
+            if not n:
+                return '.'.join(labels), off
+            labels.append(data[off:off + n].decode('ascii', 'replace'))
+            off += n
+            depth += 1
+        raise ValueError('a name loops')
+    try:
+        qid, flags, qd, an, ns, ar = struct.unpack('!HHHHHH', data[:12])
+        off, questions, records = 12, [], []
+        for _ in range(qd):
+            name, off = name_at(off)
+            questions.append((name.lower(),) + struct.unpack('!HH', data[off:off + 4]))
+            off += 4
+        for section, count in (('an', an), ('ns', ns), ('ar', ar)):
+            for _ in range(count):
+                name, off = name_at(off)
+                rtype, rclass, ttl, size = struct.unpack('!HHIH', data[off:off + 10])
+                records.append((section, name.lower(), rtype, rclass, ttl, data[off + 10:off + 10 + size]))
+                off += 10 + size
+        return qid, flags, questions, records
+    except (IndexError, struct.error, ValueError):
+        return None
+
+
+def mdns_a(d, name, ip='10.0.2.15'):
+    """d: a response whose answers hold name's A record for ip: (its TTL, cache-flush), or None"""
+    m = mdns_records(d.data)
+    if not m or not m[1] & 0x8000:
+        return None
+    for section, n, rtype, rclass, ttl, rdata in m[3]:
+        if section == 'an' and n == name and rtype == 1 and rclass & 0x7fff == 1 and rdata == socket.inet_aton(ip):
+            return ttl, bool(rclass & 0x8000)
+    return None
+
+
+def mdns_is_probe(d, name):
+    m = mdns_records(d.data)
+    return bool(m) and not m[1] & 0x8000 and any(q[0] == name and q[1] == 255 and q[2] & 0x8000 for q in m[2]) and \
+        any(r[0] == 'ns' and r[1] == name and r[2] == 1 for r in m[3])
+
+
+def mdns_nsec(d, name, section='an'):
+    """d: a response whose section holds name's NSEC record (RFC 6762 section 6.1) saying A is its only type"""
+    m = mdns_records(d.data) if d else None
+    return bool(m) and any(s == section and n == name and t == 47 and c == 0x8001 and
+                           r == mdns_name(name) + b'\x00\x01\x40' for s, n, t, c, ttl, r in m[3])
+
+
+def mdns_probe_of(name, ip, qu=True):
+    """another host's probe for name, its A record for ip in the authority section"""
+    return struct.pack('!HHHHHH', 0, 0, 1, 0, 1, 0) + mdns_name(name) + struct.pack('!HH', 255, 0x8001 if qu else 1) + \
+        mdns_name(name) + struct.pack('!HHIH', 1, 1, 120, 4) + socket.inet_aton(ip)
+
+
+def sc_mdns(rig):
+    """10/25/26: the multicast DNS responder (net/mdns.c, `mdns on`): three probes for surfos.local to the group with
+    IP TTL 255, then two announcements; a query to the group (any case) is answered to the group with the
+    cache-flush bit, a TTL of 120 s and an NSEC record (A alone); within the second after, a plain query gets
+    nothing more to the group and another host's probe an answer; one with QU to the querier alone (IP TTL 255),
+    one to our address too, one from off the link nothing; a one-shot query (port 40000) to it with its ID, the
+    question as written and a TTL of 10 s; AAAA the NSEC record alone; another name nothing; mdns off a goodbye (TTL
+    0). Then a conflict: an answer to a probe that gives surfos.local to another address makes it probe for
+    surfos-2.local, and answer for it (the same answer from port 5354, or from off the link, changes nothing).
+    mdns off: nothing more is answered. Then ties (RFC 6762 section 8.2): another host probing for surfos.local at
+    the same moment with a later address wins, and the responder probes again a second later; with an earlier one
+    it goes on. Last, a host that claims every name: after fifteen conflicts in a row the next probe waits 5 s
+    (section 8.1). The queries go to the group's MAC, so the e1000's multicast filter has to take it
+    (NETDEV_ADD_MULTICAST)"""
+    ok = rig.run('mdns', 'mdns: not running')
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    probes = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.mac == MDNS_MAC and mdns_is_probe(d, 'surfos.local'), 3)
+              for _ in range(3)]
+    ok = all(probes) and all(p.dst == MDNS_IP and p.ttl == 255 for p in probes) and ok
+    ann = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP and
+                            mdns_a(d, 'surfos.local') == (120, True), 4) for _ in range(2)]
+    ok = all(ann) and ok
+    if all(probes) and all(ann):
+        print('        (probes %.2f %.2f %.2f s, announcements %.2f %.2f s)' %
+              tuple([p.t - probes[0].t for p in probes] + [a.t - probes[0].t for a in ann]))
+        ok = 0.2 < probes[1].t - probes[0].t < 0.5 and 0.6 < ann[0].t - probes[0].t < 1.1 and \
+            0.8 < ann[1].t - ann[0].t < 1.4 and ok
+    rig.q.wait(1.1)                                 # its record goes to the group once a second at most
+    rig.net.send_udp(5353, 5353, mdns_query('SurfOS.Local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == MDNS_IP and d.mac == MDNS_MAC and mdns_a(d, 'surfos.local') == (120, True) and \
+        mdns_nsec(d, 'surfos.local', 'ar') and ok
+    # within that second: a plain query gets nothing to the group, another host's probe for the name an answer at
+    # once (section 6: a probe is answered 250 ms after the last)
+    rig.q.wait(0.3)
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP, 0.3) is None and ok
+    rig.net.send_udp(5353, 5353, mdns_probe_of('surfos.local', '10.0.2.99', qu=False), src=socket.inet_aton('10.0.2.99'),
+                     dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and d.dst == MDNS_IP and mdns_a(d, 'surfos.local'), 2)
+    ok = d is not None and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local', qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == rawnet.PEER_IP and d.ttl == 255 and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'))                   # to our address (section 5.5)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local'), 3)
+    ok = d is not None and d.dst == rawnet.PEER_IP and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local'), src=socket.inet_aton('192.168.77.5'))  # off the link
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.0) is None and ok
+    rig.net.send_udp(40000, 5353, mdns_query('surfos.local', qid=0x4242), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 40000, 3)
+    m = mdns_records(d.data) if d else None
+    ok = d is not None and d.dst == rawnet.PEER_IP and m and m[0] == 0x4242 and m[2] == [('surfos.local', 1, 1)] and \
+        mdns_a(d, 'surfos.local') == (10, False) and d.ttl == 255 and not mdns_nsec(d, 'surfos.local', 'ar') and ok
+    q = mdns_query('SurfOS.Local', qtype=255, qid=0x4343)                     # its question back as it was written
+    rig.net.send_udp(40001, 5353, q, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 40001, 3)
+    ok = d is not None and d.data[12:len(q)] == q[12:] and mdns_a(d, 'surfos.local') == (10, False) and ok
+    rig.net.send_udp(5353, 5353, mdns_query('surfos.local', qtype=28, qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    d = rig.net.wait_udp(lambda d: d.dport == 5353, 3)                         # AAAA: the NSEC record, no address
+    ok = d is not None and mdns_nsec(d, 'surfos.local') and mdns_a(d, 'surfos.local') is None and ok
+    rig.net.send_udp(5353, 5353, mdns_query('other.local', qu=True), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.5) is None and ok
+    ok = rig.run('mdns', 'mdns: answering for surfos.local', 'eth0 10.0.2.15') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    d = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local') == (0, True), 2)     # goodbye
+    ok = d is not None and d.dst == MDNS_IP and ok
+    # a conflict while probing: another host answers a probe. The same claim from another port than 5353, or to our
+    # address from off the link, is not looked at (sections 6 and 11)
+    rig.net.dgrams.clear()
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 3)
+    claim = struct.pack('!HHHHHH', 0, 0x8400, 0, 1, 0, 0) + mdns_name('surfos.local') + \
+        struct.pack('!HHIH', 1, 0x8001, 120, 4) + socket.inet_aton('10.0.2.99')
+    rig.net.send_udp(5354, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    rig.net.send_udp(5353, 5353, claim, src=socket.inet_aton('192.168.77.5'))
+    p1 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 3)
+    ok = p1 is not None and rig.net.wait_udp(lambda d: mdns_is_probe(d, 'surfos-2.local'), 0.05) is None and ok
+    rig.net.send_udp(5353, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+    p2 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos-2.local'), 3)
+    a2 = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos-2.local') == (120, True), 5)
+    ok = p is not None and p2 is not None and a2 is not None and ok
+    ok = rig.run('mdns', 'mdns: answering for surfos-2.local') and ok
+    ok = rig.run('dmesg', '+MDNS: another host answers for that name: probing for surfos-2.local instead') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    rig.net.dgrams.clear()
+    rig.net.send_udp(5353, 5353, mdns_query('surfos-2.local'), dst=MDNS_IP, dst_mac=MDNS_MAC)
+    ok = rig.net.wait_udp(lambda d: d.dport == 5353, 1.5) is None and ok
+    # ties: the other host's probe goes out as soon as the responder's first is seen (the command's output is read
+    # after), so it lands while the responder probes. A later address wins: three probes again a second on, then the
+    # announcements (that host never makes its own); an earlier one changes nothing
+    for other, loses in (('10.0.2.99', True), ('10.0.2.3', False)):
+        rig.net.dgrams.clear()
+        rig.mark()
+        rig.q.send('mdns on\n')
+        p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, 'surfos.local'), 5)
+        probe = struct.pack('!HHHHHH', 0, 0, 1, 0, 1, 0) + mdns_name('surfos.local') + struct.pack('!HH', 255, 0x8001) + \
+            mdns_name('surfos.local') + struct.pack('!HHIH', 1, 1, 120, 4) + socket.inet_aton(other)
+        rig.net.send_udp(5353, 5353, probe, src=socket.inet_aton(other), dst=MDNS_IP, dst_mac=MDNS_MAC)
+        sent = rig.net.now()
+        ok = rig.expect('mdns: answering for surfos.local') and rig.expect(rig.qr.PROMPT) and p is not None and ok
+        later = [rig.net.wait_udp(lambda d: d.dport == 5353 and d.t > sent and mdns_is_probe(d, 'surfos.local'), 3)
+                 for _ in range(3 if loses else 2)]
+        a = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_a(d, 'surfos.local') == (120, True), 4)
+        ok = all(later) and a is not None and a.t > later[-1].t and ok
+        if all(later):
+            print('        (a probe from %s: the next of ours %.2f s after it)' % (other, later[0].t - sent))
+            ok = (0.9 < later[0].t - sent < 1.6 if loses else later[0].t - sent < 0.5) and ok
+        if loses:
+            ok = rig.run('dmesg', '+MDNS: eth0: another host probes for surfos.local too and wins the tie') and ok
+        ok = rig.run('mdns off', 'mdns: stopped') and ok
+    # a host that claims every name probed for: the probes for surfos-2 to surfos-15 go out at once, the one after the
+    # fifteenth conflict in a row 5 s later (section 8.1)
+    rig.net.dgrams.clear()
+    ok = rig.run('mdns on', 'mdns: answering for surfos.local') and ok
+    gaps, name, claimed = [], 'surfos.local', 0
+    for k in range(16):
+        p = rig.net.wait_udp(lambda d: d.dport == 5353 and mdns_is_probe(d, name), 7)
+        if p is None:
+            break
+        if k:
+            gaps.append(p.t - claimed)
+        if k == 15:
+            break
+        claim = struct.pack('!HHHHHH', 0, 0x8400, 0, 1, 0, 0) + mdns_name(name) + \
+            struct.pack('!HHIH', 1, 0x8001, 120, 4) + socket.inet_aton('10.0.2.99')
+        rig.net.send_udp(5353, 5353, claim, dst=MDNS_IP, dst_mac=MDNS_MAC)
+        claimed = rig.net.now()
+        name = 'surfos-%d.local' % (k + 2)
+    ok = len(gaps) == 15 and max(gaps[:14]) < 1 and 4.5 < gaps[14] < 6.5 and ok
+    if len(gaps) == 15:
+        print('        (a claim on every name: the next probe %.2f s after it at most, after the fifteenth %.2f s)' %
+              (max(gaps[:14]), gaps[14]))
+    ok = rig.run('dmesg', '+MDNS: 15 conflicts in a row: each probe from now on waits 5 s') and ok
+    ok = rig.run('mdns off', 'mdns: stopped') and ok
+    return ok
+
+
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
@@ -627,6 +1016,11 @@ SCENARIOS = [
     ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
+    ('halfclose', sc_halfclose, 'a half-closed connection reads on after its FIN, until the other end closes'),
+    ('nowait', sc_nowait, 'a connection not waited for is polled for: made late, or refused'),
+    ('finwait', sc_finwait, 'a half-closed connection whose other end vanished is given up by keepalive'),
+    ('ncstuck', sc_ncstuck, 'nc -w ends a connection whose other end half-closed and takes nothing'),
+    ('mdns', sc_mdns, 'the multicast DNS responder: probes, announcements, answers, conflicts, off, ties'),
 ]
 
 
