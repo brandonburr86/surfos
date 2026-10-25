@@ -2209,6 +2209,60 @@ the NICs                        NETDEV_ADD_MULTICAST: the e1000's MTA bit; the U
   started there would announce its name onto the host's own network. The Mac's own resolver
   against the laptop is the owner's check.
 
+## 24. Windows for programs (October 2026)
+
+The owner chose (2026-10-25) a platform for new applications: an ordinary ring-3 program opens a window on
+the desktop, draws in it and takes its keys and pointer (milestone M12; the brief is
+`docs/superpowers/plans/2026-10-25-app-windows.md`). Until then only kernel code drew, the 13 applications
+inside `gui`; this reverses `docs/GRAPHICS.md`'s "no new user-memory mapping or system call" and the desktop
+spec's "not a new userspace graphics ABI". The layers, from the top:
+
+```
+a program (ring 3)   draws in its own memory: SYS_winopen; SYS_winctl (WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO);
+                     read() for its events, poll()
+kernel/win.c         the window: a descriptor (a vnode of winfs), its buffer, its event queue; a desktop's registration
+shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots after the fixed ones, through
+                     struct gui_sys's win_* calls
+```
+
+* **The calls** (`include/surfos/win.h`; numbers 52 and 53). `SYS_winopen (const struct win_open *)` gives a
+  descriptor: a version, the content's size and its limits, WIN_RESIZABLE, a background colour and a UTF-8
+  title of 63 bytes at most, cut between characters. `SYS_winctl (fd, op, arg)`: WIN_PRESENT copies a rectangle
+  of the program's image (rows at most 4096 pixels apart) into the window during the call; WIN_SETSIZE gives
+  the window pixels of another size, all background; WIN_TITLE; WIN_INFO (its size, the desktop's screen and
+  scale, the focus, the events lost). `read()` gives whole 16-byte events (a key, the pointer, the wheel, the
+  focus, a new size, the close button), waits for one, and gives 0 once the desktop let the window go;
+  `poll()` says POLLIN, POLLHUP, and POLLOUT always. libsurf has `winopen()` and `winctl()`.
+* **A descriptor, as a pty's master.** A window is a vnode of winfs, a file system with no paths (as ptyfs and
+  pipefs are), opened as a file of the program's: its last close, or the program's reap after a kill, ends it.
+  A desktop registers with `win_register()`, a descriptor of the desktop's own task, so its end, by its exit
+  or its task's reap after it died, lets every window of it go (the trick of `shell/guisys_term.c`'s notes of
+  10/18/26). A window lives while its program or its desktop holds it, and the second to let go frees it.
+  Programs are not killed by the desktop's end: their reads end (0) and their presents fail (EPIPE).
+* **Which desktop.** A program's window goes to the desktop of its terminal: the console where `gui`
+  registered one, or a pty that desktop's Terminal adopted (`win_adopt()`). Text mode, another console,
+  telnet's ptys and a desktop whose task is dead have none: -ENODEV, after the arguments were checked, so
+  `run wintest nodesk` in the smoke test sees EFAULT and EINVAL first, and `@telnet-win` the same in a session.
+* **Pixels are copied, not shared.** No frame of the kernel is mapped into a program, and nothing in `mm/`
+  changed. A window's buffer comes from the kernel heap, filled with its background before anything sees it.
+  WIN_PRESENT checks the rectangle's whole span with `user_buf()` in 64-bit arithmetic and copies it in with
+  interrupts on (1.75 MB for a whole window on a 1080p screen; a frame drawn meanwhile may show one torn frame,
+  and the next mends it). A new size allocates a new buffer, and the old one lives while the desktop still
+  draws it: a buffer counts its holders (the window, the desktop's view of it, a present copying into it).
+* **Events.** 64 are queued at most: a pointer move with the same buttons as the event queued last takes its
+  place, as a new size does the last one's; past that an event is lost and counted.
+* **Budgets.** 8 windows and 8 MB of pixels per desktop, 32 windows and 32 MB in all (EAGAIN, ENOMEM), counted
+  from the buffers alive, the desktop's views too; a buffer no larger than the desktop's largest content area
+  (958x457 on a desktop of 960x540); and each window takes one of its program's 16 descriptors.
+* **Locking.** kernel/win.c takes short interrupts-off sections and no mutex; memory is allocated, filled and
+  freed with interrupts on. It never calls the framebuffer, and the desktop never calls it from inside a
+  `framebuffer_graphics_draw()` callback.
+* **Checks.** `tests/host/test_win.c` builds kernel/win.c as it is with stand-ins for the rest of the kernel:
+  the queue, rectangles and strides, sizes, budgets, titles, which desktop, both orders of ending, the
+  desktop's exit and its death, the owner's death, no memory at each allocation, a buffer outliving a new
+  size, stale handles; every scenario ends with nothing allocated. `user/bin/wintest.c` has `nodesk`, `pty` (a
+  pty of its own is refused while a desktop runs) and `show`.
+
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
 `/initrd/bin/undertow` is a ring-3 text browser linked with libsurf and pinned Mbed TLS

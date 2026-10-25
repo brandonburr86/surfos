@@ -16,6 +16,8 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 10/24/26 (the network tools): 50 and 51, a connection's half-close and both
 ends' addresses (surfos/sock.h).
+10/25/26 (windows for programs): 52 and 53 open a window on the desktop and drive it
+(surfos/win.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -81,7 +83,10 @@ ends' addresses (surfos/sock.h).
 /* 10/24/26 (the network tools): surfos/sock.h */
 #define SYS_shutdown 50  /* (int fd, u32 how): SHUT_WR, the half-close */
 #define SYS_sockaddr 51  /* (int fd, struct netaddr *local, struct netaddr *peer): both ends of a socket */
-#define NR_SYSCALLS 52
+/* 10/25/26 (windows for programs): surfos/win.h */
+#define SYS_winopen  52  /* (const struct win_open *o): a window's descriptor */
+#define SYS_winctl   53  /* (int fd, int op, void *arg): WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO */
+#define NR_SYSCALLS 54
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

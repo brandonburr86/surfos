@@ -546,6 +546,14 @@ SMOKE = [
     # 10/25/26: waitx(): a child that ended by itself, one that was killed, WNOHANG, the errors
     ('run pipetest waitx', ['waitx says a child ended by itself (status 0), one was killed; WNOHANG while it runs',
                             'waitx: ECHILD, EINVAL, EFAULT', 'PIPETEST waitx PASS', 'exit status 0']),
+    # 10/25/26 (windows for programs, user/bin/wintest.c): where no desktop runs, the window calls' refusals: the
+    # arguments first (EFAULT, EINVAL), then ENODEV; winctl on what is no window. @telnet-win: the same in a session
+    ('run wintest nodesk', ['EFAULT: no description, one below the program, one where nothing is mapped',
+                            'EINVAL: version 2, an unknown flag, no width, limits that leave no width, a colour',
+                            'ENODEV: a good window, on a terminal that is no desktop', 'EBADF, EINVAL: winctl',
+                            'WINTEST nodesk PASS', 'exit status 0']),
+    ('run wintest pty', ['wintest nodesk on pty', 'ENODEV, as on a console where no desktop runs', 'WINTEST pty PASS',
+                         'exit status 0']),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
@@ -1150,6 +1158,7 @@ SMOKE = [
     ('@surfsh-crlf', []),
     ('@telnet-protocol', []),
     ('@telnet-binary', []),
+    ('@telnet-win', []),                    # 10/25/26: before off-inside stops the server
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -2960,6 +2969,24 @@ def telnet_port_busy_check(q):
     return ('telnet: telnetd on while nettest has port 23: in use, and no server left', ok)
 
 
+def telnet_win_check(q):
+    """10/25/26 (windows for programs): a telnet session opens no window: wintest nodesk in it is refused as on a
+    console where no desktop runs (a session's pty is never a desktop's)"""
+    t = Telnet(q.ports['telnet'])
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t.send('wintest nodesk\n')
+            ok = t.expect('ENODEV: a good window', 20) and t.expect('WINTEST nodesk PASS', 20) and \
+                t.expect(TELNET_ROOT, 20)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: wintest nodesk in a session is refused (ENODEV): no window opens over telnet', ok)
+
+
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
                        '@telnet-flood': telnet_flood_check, '@telnet-paste': telnet_paste_check,
@@ -2967,7 +2994,8 @@ CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': t
                        '@telnet-paste-lines': telnet_paste_lines_check, '@surfsh-crlf': surfsh_crlf_check,
                        '@telnet-protocol': telnet_protocol_check,
                        '@telnet-binary': telnet_binary_check,
-                       '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
+                       '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check,
+                       '@telnet-win': telnet_win_check})
 
 
 # 10/17/26: httpd, the web server (user/httpd/), from this host through the forwarded ports 80 (q.ports['www']) and

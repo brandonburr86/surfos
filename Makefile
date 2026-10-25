@@ -53,6 +53,7 @@ USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeli
 USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
+USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -1027,6 +1028,14 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 	$(BUILD)/host/test_guimedia
 	$(BUILD)/host/test_guisuite
 	$(BUILD)/host/test_guiclient
+
+# 10/25/26 (windows for programs): kernel/win.c as it is, with stand-ins for the rest of the kernel (tests/host/test_win.c)
+$(BUILD)/host/test_win: $(BUILD)/host/kernel/tests/host/test_win.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+unittest-win: $(BUILD)/host/test_win
+	$(BUILD)/host/test_win
+unittest: unittest-win
+.PHONY: unittest-win
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@

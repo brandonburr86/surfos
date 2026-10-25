@@ -5,7 +5,8 @@ File: sysimpl.h Date: 10/6/26
 ----------------------
 Kernel only. The telnet server's calls (34-43, surfos/syscall.h) live with what they
 work on: net/sock.c (network connections), fs/poll.c (poll), kernel/pty.c
-(pseudo-terminals), kernel/proc.c (the process list, detach); 10/24/26: fs/pipe.c (pipes).
+(pseudo-terminals), kernel/proc.c (the process list, detach); 10/24/26: fs/pipe.c (pipes);
+10/25/26: kernel/win.c (windows for programs).
 syscall_trap() calls them
 with the user's arguments as they are: each checks its own pointers with user_buf() and
 user_str(), and copies an argv with user_argv(), as kernel/syscall.c does for its own.
@@ -21,6 +22,7 @@ struct netaddr;
 struct netinfo;
 struct pollfd;
 struct procinfo;
+struct win_open;
 
 /* kernel/syscall.c */
 bool user_str(const char *s);                                   /* a NUL-terminated string the caller may read */
@@ -53,5 +55,9 @@ int sys_detach(void);
 
 /* fs/pipe.c (10/24/26) */
 int sys_pipe(int *fds);
+
+/* kernel/win.c (10/25/26) */
+int sys_winopen(const struct win_open *o);
+int sys_winctl(int fd, int op, void *arg);
 
 #endif

@@ -29,7 +29,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
-                  # programs' windows in the desktop (test_guiclient)
+                  # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -71,6 +71,7 @@ shell command or a kernel feature that the shell can exercise, and a check in
 boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg for the USB image
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
            pty.c (pseudo-terminals: a tty with a stream console; pty_open() etc. for the desktop's Terminal), proc.c (procinfo, detach),
+           win.c (10/25/26: windows for programs, SYS_winopen and SYS_winctl: a window is a descriptor; the desktop's side),
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile),
            autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds),
            netman.c (the network manager: the settings and saved Wi-Fi networks in surfos-config/ on the stick SurfOS
@@ -97,7 +98,8 @@ net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP
 lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
-           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), env, the filters grep
+           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), wintest (the window
+           calls), env, the filters grep
            sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
@@ -203,6 +205,17 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   the owner's password; tests use wlansim's test network. SurfOS keeps a saved network's key
   (the PMK) in networks.conf on the owner's stick, at the owner's request, never the password,
   and nothing prints or logs a key.
+* Windows for programs (milestone M12, 10/25/26: kernel/win.c, include/surfos/win.h): a window is a
+  descriptor of its program's (a vnode of winfs) and a desktop's registration one of the desktop's task, so
+  either's end, also by a reap, lets go; pixels are copied in during the program's WIN_PRESENT, never shared
+  (no kernel frame is mapped into ring 3); a window's buffer is the kernel's, filled with its background before
+  anything sees it; every user pointer and size is checked first (`user_buf()`, 64-bit arithmetic for a
+  rectangle's span, a stride of at most WIN_STRIDE_MAX); a window goes only to the desktop of its program's
+  terminal (its console, or a pty its Terminal adopted: -ENODEV otherwise, telnet's ptys included); the budgets
+  are WIN_PER_DESK windows and WIN_DESK_BYTES per desktop, WIN_MAX and WIN_ALL_BYTES in all. kernel/win.c takes
+  only short interrupts-off sections and no mutex, allocates and frees with interrupts on, never calls the
+  framebuffer, and is never called from inside a `framebuffer_graphics_draw()` callback. Keep it so, and give
+  anything new a scenario in tests/host/test_win.c (each ends with nothing allocated).
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
