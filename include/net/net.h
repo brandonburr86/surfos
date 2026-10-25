@@ -38,6 +38,8 @@ struct netbuf {
     u_int off, len;                 /* the frame is data[off .. off+len) */
     ipaddr_t aux_ip;                /* UDP/TCP: where a queued datagram or segment came from */
     u16 aux_port;
+    struct netdev *aux_dev;         /* 10/25/26: UDP: the interface it came in on (udp_recvfrom_dev()), */
+    ipaddr_t aux_dst;               /* and where it was sent */
     u8 data[NETBUF_SIZE];
 };
 
@@ -67,6 +69,10 @@ struct netdev_ops {
    arg (u8[ETH_ALEN]) are received too, for a bridge (the simulated Wi-Fi chip's access point,
    driver/wifi/wlansim.c); 0, or -1 when the device cannot */
 #define NETDEV_ADD_RX_ADDR 1
+/* 10/25/26 (multicast DNS): NETDEV_ADD_MULTICAST: frames sent to the multicast address arg (u8[ETH_ALEN]) are
+   received too (the NIC's multicast filter); 0, or -1 when the device cannot. A device without the call passes
+   multicast as it comes (wlan0) */
+#define NETDEV_ADD_MULTICAST 2
 
 struct netdev {
     char name[8];                   /* eth0 */

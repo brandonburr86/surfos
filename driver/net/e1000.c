@@ -10,6 +10,8 @@ from the interrupt handler (netdev_rx queues them for the net thread);
 transmit fills the next descriptor and bumps the tail.
 10/9/26 (Wi-Fi, track S): NETDEV_ADD_RX_ADDR puts another address in a free receive
 address register, for the simulated Wi-Fi chip's bridge (driver/wifi/wlansim.c).
+10/25/26 (multicast DNS): NETDEV_ADD_MULTICAST sets the address's bit in the multicast table
+array (MTA, indexed by bits 47:36 of the address: RCTL.MO is 0), so frames to the group come in.
 */
 
 #include <surfos/types.h>
@@ -166,12 +168,18 @@ static int e1000_isr(u_int irq, void *param) {
     return 0;
 }
 
-/* 10/9/26: frames to one more unicast address are received too (receive address 1-15) */
+/* 10/9/26: frames to one more unicast address are received too (receive address 1-15); 10/25/26: or to a
+   multicast address (its bit in the multicast table array) */
 static int e1000_ioctl(struct netdev *dev, int cmd, void *arg) {
     struct e1000 *e = (struct e1000 *)dev->priv;
     const u8 *mac = (const u8 *)arg;
     u32 ral, rah;
     int i;
+    if(cmd == NETDEV_ADD_MULTICAST && mac && (mac[0] & 1)) {
+        u32 h = ((u32)(mac[4] >> 4) | ((u32)mac[5] << 4)) & 0xFFF;
+        wr(e, REG_MTA + (h >> 5) * 4, rd(e, REG_MTA + (h >> 5) * 4) | (1u << (h & 31)));
+        return 0;
+    }
     if(cmd != NETDEV_ADD_RX_ADDR || !mac || (mac[0] & 1)) return -1;
     ral = mac[0] | (mac[1] << 8) | (mac[2] << 16) | ((u32)mac[3] << 24);
     rah = mac[4] | (mac[5] << 8) | RAH_AV;
