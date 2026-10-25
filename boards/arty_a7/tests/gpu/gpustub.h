@@ -110,6 +110,7 @@ struct stub {
     unsigned bad_vram;                  /* window accesses outside VRAM or unaligned */
     unsigned mode_unlocked;             /* set_mode() without the console lock or outside an atomic stretch */
     unsigned claims, claimed_twice, unlocked_free;
+    uint64_t abort_at, fence_read_at;   /* the first ABORT, the first read of FENCE */
     int no_memory;                      /* alloc() fails */
     int watch;                          /* keep the events below */
     struct stub_event *ev;

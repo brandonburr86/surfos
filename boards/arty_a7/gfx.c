@@ -699,8 +699,7 @@ int gfx_command(struct gpu *g, int argc, char **argv) {
         return CMD_OK;
     }
     if(!g->present) {
-        if(g->why && g->id) printf("    gfx: no GPU: %s (it reads 0x%08lx)\n", g->why, (u_long)g->id);
-        else printf("    gfx: no GPU: %s\n", g->why ? g->why : "none found");
+        printf("    gfx: no GPU: %s\n", g->why ? g->why : "none found");
         return CMD_FAIL;
     }
     if(argc < 2) return show(g);

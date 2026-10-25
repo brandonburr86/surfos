@@ -65,18 +65,23 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
     }
     g->id = RD(g, SURF_GPU_ID);
     if(!gpu_id_name(g->id)) {
-        g->why = "its gpu.ID is not GPU1 or GPU2";
+        snprintf(g->why_buf, sizeof(g->why_buf), "its gpu.ID reads 0x%08lx, neither GPU1 nor GPU2", (u_long)g->id);
+        g->why = g->why_buf;
         return GPU_EABSENT;
     }
     info = RD(g, SURF_GPU_INFO);
     g->fifo_depth = (info & SURF_GPU_INFO_FIFO_DEPTH_MASK) >> SURF_GPU_INFO_FIFO_DEPTH_LSB;
     g->vram_bytes = ((info & SURF_GPU_INFO_VRAM_KIB_MASK) >> SURF_GPU_INFO_VRAM_KIB_LSB) * 1024u;
     if(!g->fifo_depth || g->vram_bytes != SURF_VRAM_BYTES) {
-        g->why = "gpu.INFO gives no FIFO, or not the map's 300 KiB of VRAM";
+        snprintf(g->why_buf, sizeof(g->why_buf), "gpu.INFO reads 0x%08lx: no FIFO, or not 300 KiB of VRAM", (u_long)info);
+        g->why = g->why_buf;
         return GPU_EABSENT;
     }
     g->irq = port->irq_arm && port->irq_wait;
     g->spin_us = GPU_SPIN_US;
+    /* ABORT before FENCE is read: a FENCE a warm restart left queued cannot complete after the read,
+       so the values sent from here on are new ones */
+    WR(g, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
     g->fence_sent = RD(g, SURF_GPU_FENCE);
     WR(g, SURF_GPU_IE, g->irq ? SURF_GPU_IE_FENCE_MASK : 0);
     g->present = true;

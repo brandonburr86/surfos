@@ -197,8 +197,7 @@ int arty_gpu_init(void) {
             del_irq_handler(SURF_IRQ_GPU, gpu_isr, NULL);
             have_isr = false;
         }
-        if(gpu.id) kprintf("+GPU: none: %s (it reads 0x%08lx)\n", gpu.why, (u_long)gpu.id);
-        else kprintf("+GPU: none: %s\n", gpu.why);
+        kprintf("+GPU: none: %s\n", gpu.why);
         return 1;
     }
     kprintf("+GPU: SurfGPU %s (gpu.ID 0x%08lx), VRAM %lu KiB at 0x%08lx\n+GPU: a %lu-word command FIFO; fences %s\n",

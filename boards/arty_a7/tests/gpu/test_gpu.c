@@ -123,7 +123,14 @@ static void t_probe(unsigned seed) {
     check(gpu_probe(&G, &s->port, FEAT & ~SURF_SYSINFO_FEATURES_VIDEO_MASK) == GPU_EABSENT, "probe: no video block, no GPU");
     s->id = 0x31555048u;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_EABSENT && strstr(G.why, "gpu.ID"), "probe: another gpu.ID is no GPU");
-    check(gfx(s, "gfx") == CMD_FAIL && said(s, "it reads 0x31555048"), "gfx names the ID it found");
+    check(gfx(s, "gfx") == CMD_FAIL && said(s, "gfx: no GPU: its gpu.ID reads 0x31555048, neither GPU1 nor GPU2"),
+          "gfx names the ID it found");
+    s->id = GPUDRV_ID_GPU1;
+    s->info = 300u << 16;
+    check(gpu_probe(&G, &s->port, FEAT) == GPU_EABSENT && gfx(s, "gfx") == CMD_FAIL &&
+          said(s, "gfx: no GPU: gpu.INFO reads 0x012c0000: no FIFO, or not 300 KiB of VRAM"),
+          "probe: an INFO without a FIFO is no GPU, with INFO's value");
+    s->info = 64u | 300u << 16;
     s->id = GPUDRV_ID_GPU2;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.present && !strcmp(gpu_id_name(G.id), "GPU2"),
           "probe: GPU2 (G4's superset) is a GPU");
@@ -131,12 +138,15 @@ static void t_probe(unsigned seed) {
           gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU2 (gpu.ID 0x32555047)"), "  and gfx draws on it with GPU1's commands");
     s->id = GPUDRV_ID_GPU1;
     a0 = s->aborts;
+    s->abort_at = s->fence_read_at = 0;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.fifo_depth == 64 && G.vram_bytes == 307200 && G.irq,
           "probe: GPU1, a 64-word FIFO, 300 KiB, fences on the interrupt");
     check(s->ie == SURF_GPU_IE_FENCE_MASK, "probe: IE.FENCE set (and IE.ERR not)");
     check(s->eng.base == 0 && s->eng.stride == 640 && s->eng.tw == 640 && s->eng.th == 480 && s->eng.cx1 == 640 &&
           s->eng.cy1 == 480 && G.t_w == 640 && G.c_y1 == 480, "probe: the engine at the reset target and clip, as the driver knows them");
-    check(s->aborts == a0 + 1 && !(p_status(s) & 0x1E), "probe: one ABORT, the sticky bits clear");
+    check(s->aborts == a0 + 2 && !(p_status(s) & 0x1E), "probe: two ABORTs (before FENCE is read, the reset), the sticky bits clear");
+    check(s->abort_at && s->fence_read_at && s->abort_at < s->fence_read_at,
+          "probe: ABORT before FENCE is read (a FENCE a warm restart left queued cannot complete after it)");
     stub_init(s, 0);
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && !G.irq && s->ie == 0,
           "probe: a port without the interrupt: fences with sleeps, IE 0");

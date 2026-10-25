@@ -224,7 +224,10 @@ static uint32_t p_rd(void *c, uint32_t off) {
         s->free_said = v;
         if(!v) s->full_seen++;
         break;
-    case SURF_GPU_FENCE: v = s->eng.fence; break;
+    case SURF_GPU_FENCE:
+        v = s->eng.fence;
+        if(!s->fence_read_at) s->fence_read_at = s->now;
+        break;
     case SURF_GPU_INFO: v = s->info; break;
     }
     return v;
@@ -246,6 +249,7 @@ static void p_wr(void *c, uint32_t off, uint32_t v) {
             gpu_engine_abort(&s->eng);
             s->eng_cycles = s->now * 25;
             s->aborts++;
+            if(!s->abort_at) s->abort_at = s->now;
         }
         break;
     case SURF_GPU_CMD:

@@ -114,6 +114,7 @@ struct gpu {
     bool present;                       /* FEATURES.GPU and a known gpu.ID */
     bool irq;                           /* fences wait on the GPU's interrupt */
     const char *why;                    /* why there is no GPU */
+    char why_buf[72];                   /* (with the value read) */
     u32 features;                       /* sysinfo.FEATURES */
     u32 id, fifo_depth, vram_bytes;
     u32 credit;                         /* FIFO words known to be free */
