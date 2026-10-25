@@ -153,8 +153,11 @@ struct surf_task;
 void tty_key(struct tty *t, u_char c);
 int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
 /* 10/25/26: Ctrl+Z (0x1A) in line mode stops the terminal's foreground job, and a task of another job
-   that reads the terminal stops first (surfos/job.h); Ctrl+D (0x04) on an empty line is the end of the
-   input for read(2): 0 */
+   that reads the terminal stops first (surfos/job.h), in tty_getc(), off the queue of readers, as one
+   stopped while it waited for a key does; Ctrl+D (0x04) on an empty line is the end of the input for
+   read(2): 0 */
+struct task_list;
+int tty_is_readers(struct task_list *q);
 void tty_task_gone(struct surf_task *task);          /* interrupts off */
 
 /* 10/6/26: pseudo-terminals (kernel/pty.c): a task on one ended (from tty_task_gone()); when

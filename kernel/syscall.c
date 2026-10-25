@@ -269,6 +269,9 @@ static int sys_job(int op, int arg) {
     if(op == JOB_ID) return (int)curTask->job;
     if(arg < 0) return -EINVAL;
     if(op == JOB_FG) {
+        /* a task of a job in the background may not, but the shell that made the foreground job may
+           give the terminal back to its own (a surfsh typed at a surfsh's prompt) */
+        if(curTask->job && curTask->job != t->fg_job && t->fg_shell != curTask->pid) return -EACCES;
         if(arg && (u_long)arg != curTask->job && !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
         flags = irq_save();
         prev = t->fg_job;

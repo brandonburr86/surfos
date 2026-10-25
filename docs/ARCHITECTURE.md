@@ -1795,15 +1795,26 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   `user/surfsh/jobs.c`). A job is the tasks of one command an interactive surfsh runs: its id
   is the pid of its first process (`SYS_spawnx`'s job: `SPAWN_JOB_NEW`, then the job's id for
   the others; `SPAWN_JOB_NONE` for what surfsh starts outside a job, a `$( )` or a pipeline
-  that ends in the shell), what they start is in it too, and the shell that made it
-  (`job_shell`) is the only one that may move it. Each terminal has a foreground job
-  (`fg_job`), which surfsh sets with `SYS_job` (49, `JOB_FG`) while it waits for one: Ctrl+Z
-  in line mode stops its tasks (at `--More--` it is a key), and a task of another job that
-  reads the terminal stops instead (`task_stop_reader()`, before `tty_read()` reads). A
-  stopped task waits where it was: in its own code it is taken off its run queue at once
-  (`TS_STOPPED`, and `irq_dispatch()` switches away from it); in a wait that a kill would cut
-  short it counts as stopped and the wait goes on; anywhere in a call it parks at the call's
-  end (`task_call_leave()`), so nothing is cut short or lost. It leaves the foreground
+  that ends in the shell), what they start on the same terminal is in it too (a pty's session
+  is in none, and so is what a kernel command starts: `run` waits for its program and knows of
+  no stop), and the shell that made it (`job_shell`) is the only one that may move it. Each
+  terminal has a foreground job (`fg_job`), which surfsh sets with `SYS_job` (49, `JOB_FG`)
+  while it waits for one; a task of a job in the background may not (`-EACCES`), but the
+  shell that set it gives the terminal back to its own job (a surfsh typed at a surfsh's
+  prompt). Ctrl+Z in line mode stops the foreground job's tasks (at `--More--` it is a key;
+  over the serial line and a pty it passes a paste's skip and an escape sequence, as Ctrl+C
+  does), and a task of another job that reads the terminal stops instead
+  (`task_stop_reader()`: as `tty_read()` begins, before it looks at the mode, and in
+  `tty_getc()`). A stopped task waits where it was: in its own code it is taken off its run
+  queue at once (`TS_STOPPED`, and `irq_dispatch()` switches away from it); waiting for a key
+  or in a sleep that a kill would cut short (`sleep_intr()`) it is woken and parks there, off
+  the terminal's queue of readers, so the keys typed meanwhile are its shell's, and then
+  reads or sleeps on to the same end; in another wait that a kill would cut short it counts
+  as stopped and the wait goes on; anywhere else in a call it parks at the call's end
+  (`task_call_leave()`) and counts as stopped as soon as it waits again
+  (`wait_prepare_intr()`), so nothing is cut short or lost and its shell always learns of
+  the stop. A kill's mark (`TI_KILL`) says how a task ended: a program's own `exit(-1)` is no
+  kill. It leaves the foreground
   (Ctrl+C no longer reaches it); `JOB_FG` and `JOB_BG` let it go on, in the foreground or
   not, and a kill reaches a stopped task too. `SYS_waitx` with `WUNTRACED` says each stop
   once (`WX_STOPPED`, why: Ctrl+Z or a read from the background), and `pid < -1` waits for any
@@ -1833,8 +1844,10 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   `@surfsh-ctrl-c`: Ctrl+C in loops of builtins, of programs and of kernel commands, in
   `read`, in a surfsh inside a surfsh, and in a script; and `@surfsh-jobs`: Ctrl+Z, `jobs`,
   `ps`, `bg`, `fg`, `kill %1`, a pipeline as one job, a loop of builtins Ctrl+Z leaves alone, a
-  reader in the background stopped and given the keys by `fg`, Ctrl+D, and the stopped job of
-  a surfsh that exits killed; and a block of the filters in pipelines.
+  reader in the background stopped and given the keys by `fg`, Ctrl+D, the stopped job of a
+  surfsh that exits killed, a reader stopped while it waits for a key (the shell's next line
+  is the shell's), a key in the same burst as the Ctrl+Z, and a program that `run` starts in a
+  surfsh inside a surfsh, which Ctrl+Z leaves alone; and a block of the filters in pipelines.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

@@ -29,10 +29,12 @@ void wait_prepare(wait_queue_t *q) {
     task_list_append(q, curTask);
 }
 
-/* 10/6/26: kill_task() and Ctrl+C wake a task queued this way (task.c) */
+/* 10/6/26: kill_task() and Ctrl+C wake a task queued this way (task.c). 10/25/26: a task that is to
+   stop (job control) and waits here counts as stopped from now on, so its shell learns of it */
 void wait_prepare_intr(wait_queue_t *q) {
     wait_prepare(q);
     curTask->wait_intr = 1;
+    if(curTask->stop_req) task_now_stopped(curTask);
 }
 
 void wait_on(wait_queue_t *q) {

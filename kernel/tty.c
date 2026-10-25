@@ -166,13 +166,14 @@ static void input_seq(struct tty *t, const char *s) {
    arrive as they were sent. *esc is the line's state (0 normal, 1 after ESC, 2 inside ESC [ or
    ESC O); one per line. From interrupt handlers too. 10/6/26: while the rest of a paste is
    skipped (TTY_SKIP, tty.h), bytes that come less than TTY_SKIP_MS after the one before are
-   dropped, whatever the mode; a Ctrl+C, or a byte after such a pause, ends the skip. */
+   dropped, whatever the mode; a Ctrl+C, or a byte after such a pause, ends the skip. 10/25/26:
+   Ctrl+Z (job control) gets through as Ctrl+C does. */
 void tty_term_input(struct tty *t, u_char *esc, u_char c) {
     u_long flags = irq_save(), now = getticks();
     int burst = now - t->last_in < ms_to_ticks(TTY_SKIP_MS);
     t->last_in = now;
     if(t->skip) {
-        if(burst && c != 0x03) {        /* the paste goes on: dropped */
+        if(burst && c != 0x03 && c != 0x1A) {   /* the paste goes on: dropped */
             irq_restore(flags);
             return;
         }
@@ -185,7 +186,7 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
         tty_input(t, c);
         return;
     }
-    if(c == 0x03) {                     /* 10/6/26: before the sequence: Ctrl+C always reaches tty_input() */
+    if(c == 0x03 || c == 0x1A) {        /* 10/6/26: before the sequence: Ctrl+C (and Ctrl+Z) always reach tty_input() */
         *esc = 0;
         tty_input(t, c);
         return;
@@ -224,10 +225,11 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
    the queue first, and interrupts the job or is queued then, tty_input()), nor a lone Esc with no
    question up. A pty's master takes those whatever room is left (kernel/pty.c). */
 int tty_term_queues(struct tty *t, u_char esc, u_char c) {
-    if(t->skip && c != 0x03 && getticks() - t->last_in < ms_to_ticks(TTY_SKIP_MS))
+    if(t->skip && c != 0x03 && c != 0x1A && getticks() - t->last_in < ms_to_ticks(TTY_SKIP_MS))
         return 0;                                   /* the rest of a paste: dropped (tty_term_input()) */
     if(t->raw) return 1;
     if(c == 0x03) return 0;                         /* even inside a sequence: it ends it (tty_term_input()) */
+    if(c == 0x1A) return t->con->page_asker != NULL;    /* 10/25/26: Ctrl+Z is queued only at --More-- */
     if(esc == 1) return 0;
     if(esc == 2) return c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'H' || c == 'F';
     if(c == 0x1B) return t->con->page_asker != NULL;
@@ -276,6 +278,15 @@ int tty_getc(struct tty *t) {
             irq_restore(flags);
             return -1;
         }
+        /* 10/25/26: a task of a job that is to stop (Ctrl+Z), or that reads from the background,
+           stops here, off the queue of readers: no key is its until its shell lets it go on in the
+           foreground (surfos/job.h). Looked at with interrupts off: a Ctrl+Z after it finds the
+           task on the queue (task.c's stop_task() takes it off) */
+        if(curTask && curTask->job && !in_interrupt() && (curTask->stop_req || curTask->job != t->fg_job)) {
+            irq_restore(flags);
+            if(task_stop_reader(t) < 0) return -1;
+            continue;
+        }
         if(t->in_tail != t->in_head) {
             int c = t->inq[t->in_tail], full = queue_full(t);
             t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
@@ -322,6 +333,13 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
             irq_restore(flags);
         }
     }
+}
+
+/* 10/25/26: is q a terminal's queue of readers (stop_task(): a stopped reader leaves it, task.c)? */
+int tty_is_readers(struct task_list *q) {
+    int i;
+    for(i = 0; i < NUM_TTYS; i++) if(q == &ttys[i].readers) return 1;
+    return 0;
 }
 
 /* 10/6/26: how many more keys the input queue takes (a pty's master waits for room, kernel/pty.c) */
@@ -460,7 +478,10 @@ int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;
     if(!len) return 0;
-    if(curTask->job && task_stop_reader(t) < 0) return -EINTR;  /* 10/25/26: from the background, it stops first */
+    /* 10/25/26: from the background a reader stops before the mode is looked at, which may change
+       before it goes on (a shell's line editor reads its keys raw); tty_getc() stops one that is to
+       stop while it waits for a key */
+    if(curTask->job && task_stop_reader(t) < 0) return -EINTR;
     if(t->raw) {
         size_t got = 0;
         n = tty_getc(t);

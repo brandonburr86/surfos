@@ -190,6 +190,9 @@ int task_stop_reader(struct tty *tty);                  /* a read from the backg
 int task_job_go_on(struct tty *tty, u_long job, int foreground, u_long shell);   /* how many tasks */
 int task_job_kill(struct tty *tty, u_long job, u_long shell);                    /* how many */
 int task_job_made(u_long job, u_long shell);            /* a task of that job (collected or not), made by that shell? */
+void task_now_stopped(surf_task *t);                    /* it counts as stopped (WUNTRACED); interrupts off */
+int kthread_create_job(const char *name, surf_console *con, kthread_fn fn, void *arg, prio_level prio,
+                       u_int flags, int job);           /* kthread_create_on() in a job (SPAWN_JOB_* or one): its pid */
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 int kill_task_patient(surf_task *t); /* 10/18/26: as a hangup's kill: inside a call it waits for its end, however long

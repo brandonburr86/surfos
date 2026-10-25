@@ -1716,7 +1716,9 @@ def surfsh_jobs_check(q):
     on, fg brings it back, Ctrl+Z again, kill %1 ends it ([1] killed before a prompt); a pipeline stops as one job; Ctrl+Z
     on a loop of builtins does nothing (Ctrl+C ends it); a program in the background that reads the terminal stops
     (reading the terminal), fg gives it the keys and Ctrl+D ends its input; cat > file ended by Ctrl+D; the stopped job
-    of a surfsh that exits is killed"""
+    of a surfsh that exits is killed. A program waiting for a key stops off the terminal's queue of readers (the shell's
+    next line is the shell's), also when a key comes in the same burst as the Ctrl+Z; a program that a kernel command
+    starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone"""
     count = '/initrd/bin/count 100 100'
     stopped = shown('\u224b!> ')
 
@@ -1766,6 +1768,27 @@ def surfsh_jobs_check(q):
     ok = ok and step('exit; sleep 300', [PROMPT])[0]
     ok2, out = step('ps', [PROMPT])
     results.append(ok and ok2 and b' count' not in out)
+    # a program waiting for a key stops off the queue of readers: the shell's next line is the shell's
+    ok = step('/initrd/bin/cat', ['[1] stopped  /initrd/bin/cat', stopped], b'\x1a', 0.5)[0]
+    ok = ok and step('echo shell-got-it', ['\r\nshell-got-it\r\n', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n/initrd/bin/cat\r\n'])[0]
+    ok = ok and step('to-cat', ['to-cat', 'to-cat'])[0]
+    ok = ok and step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    results.append(ok)
+    # a key and Ctrl+Z in one burst: the stop is said all the same (a key the program has not read yet stays for
+    # whoever reads next, here the shell: a space)
+    ok = step('/initrd/bin/cat', [], b' \x1a', 0.5)[0]
+    ok = step(None, ['[1] stopped  /initrd/bin/cat', stopped])[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  /initrd/bin/cat', PROMPT])[0]
+    results.append(ok)
+    # a program the kernel's run starts is in no job: Ctrl+Z leaves it alone, Ctrl+C ends it
+    ok = step('surfsh', [PROMPT])[0]
+    ok, out = step('run ' + count, [], b'\x1a')
+    q.wait(0.5)
+    ok2, out2 = step(None, [PROMPT], b'\x03', 0)
+    ok = ok2 and b'stopped' not in out + out2
+    ok = ok and step('exit', [PROMPT])[0]
+    results.append(ok)
     return ('surfsh: job control: Ctrl+Z, jobs, bg, fg, kill %%1, a pipeline, a reader in the background, Ctrl+D '
             '(%d of %d)' % (sum(results), len(results)), all(results))
 

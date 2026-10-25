@@ -119,7 +119,11 @@ static void user_entry(void *arg) {
     m = uvm_create();
     if(!m) load_failed(sa, f, "out of memory for the address space");
     curTask->uvm = m;
-    curTask->flags |= TF_USER;
+    {
+        u_long irqf = irq_save();               /* 10/25/26: Ctrl+Z changes the flags from an interrupt (job control) */
+        curTask->flags |= TF_USER;
+        irq_restore(irqf);
+    }
     uvm_switch(m);                                        /* schedule() keeps it loaded for this task */
 
     r = vfs_open(sa->path, O_RDONLY, &f);
@@ -194,7 +198,11 @@ static void user_entry(void *arg) {
     }
 
     kfree(sa);
-    curTask->flags |= TF_LOADED;                          /* 10/6/26: it runs: init tells a load failure apart */
+    {
+        u_long irqf = irq_save();
+        curTask->flags |= TF_LOADED;                      /* 10/6/26: it runs: init tells a load failure apart */
+        irq_restore(irqf);
+    }
     task_call_leave(TC_SYSCALL);                          /* 10/6/26: loaded; a kill that waited ends it here */
     enter_user(eh.e_entry, sp);
 }
@@ -256,16 +264,15 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
                      const struct spawn_more *more) {
     struct spawn_args *sa;
     struct stat st;
-    surf_task *t;
     const char *base, *const *args = (const char *const *)argv;
     const char *head[3];
     char line[SCRIPT_LINE + 1], *interp = NULL, *iarg = NULL;
     size_t used = 0;
-    int i, r, kind, nhead = 0, nargs = argc;
+    int i, r, kind, nhead = 0, nargs = argc, job;
 
     r = vfs_stat(path, &st);
     if(r) return r;
-    if(st.type != VN_FILE) return -EACCES;
+    if(st.type != VN_FILE || !strcmp(st.fs, "devfs")) return -EACCES;      /* 10/25/26: a device is read by no #! check */
     if(argc < 1 || argc > SPAWN_MAX_ARGS) return -EINVAL;
     kind = program_kind(path, line, &interp, &iarg);    /* 10/25/26: an ELF program, or a script */
     if(kind < 0) return kind;
@@ -320,20 +327,12 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     base = base ? base + 1 : (kind == 1 ? path : sa->path);
     if(!(flags & TF_DETACHED) && con && console_paging(con) && !(more && more->background))
         flags |= TF_FOREGROUND;                     /* 10/6/26; 10/24/26: not a job started in the background */
-    t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
-    if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
-    {
-        u_long irqf = irq_save();               /* 10/25/26: its job (surfos/job.h), before it reads anything */
-        if((flags & TF_DETACHED) || (more && more->job == SPAWN_JOB_NONE)) {
-            /* init's, or asked for: in no job */
-        } else if(more && more->job) {
-            t->job = more->job == SPAWN_JOB_NEW ? t->pid : (u_long)more->job;
-            t->job_shell = curTask ? curTask->pid : 0;
-        } else if(curTask) {
-            t->job = curTask->job;
-            t->job_shell = curTask->job_shell;
-        }
-        irq_restore(irqf);
-    }
-    return (int)t->pid;
+    /* 10/25/26: its job (surfos/job.h), set before it can run: the one spawnx asks for, else the
+       caller's on the caller's terminal (none on a pty's: kthread_create_job()). In none: a detached
+       task, and what a kernel command starts (run waits for its end and knows of no stop) */
+    job = (flags & TF_DETACHED) || (curTask && (curTask->in_call & TC_COMMAND)) ? SPAWN_JOB_NONE : more ? more->job : 0;
+    r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL,
+                           job);
+    if(r < 0) { release_files(sa); kfree(sa); }
+    return r;
 }

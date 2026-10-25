@@ -24,13 +24,16 @@ waiting for a job in the background), -EFAULT, -EINVAL (options).
 
 10/25/26, job control. A job is the tasks of one command a shell runs (a pipeline's processes
 and what they start); its id is the pid of its first task. SYS_spawnx's job starts one
-(SPAWN_JOB_NEW), joins one (its id) or keeps the caller's (0). Each terminal has a foreground
-job, or none: the one that Ctrl+Z stops (in line mode; at --More-- it is a key) and the only
-one whose tasks may read the terminal. A task of another job that reads it stops instead
-(WX_STOP_READ) until its shell lets it go on in the foreground. A stopped task waits where it
-was: in its own code, at the end of a system call, or in a wait that a kill would cut short,
-which goes on afterwards (nothing is cut short, nothing is lost, and it stops at the end of
-that call). A shell that looks for Ctrl+C itself (TTY_INTR 1) is never stopped. When the shell
+(SPAWN_JOB_NEW), joins one (its id) or keeps the caller's (0: on the caller's terminal; a
+pty's session is in none, and so is what a kernel command starts, run waiting for its end).
+Each terminal has a foreground job, or none: the one that Ctrl+Z stops (in line mode; at
+--More-- it is a key) and the only one whose tasks may read the terminal. A task of another
+job that reads it stops instead (WX_STOP_READ) until its shell lets it go on in the
+foreground. A stopped task waits where it was: in its own code, at the end of a system call,
+or in a wait that a kill would cut short, which goes on afterwards (nothing is cut short,
+nothing is lost, and it stops at the end of that call); waiting for a key, or in a sleep, it
+is woken and waits there, off the queue of the terminal's readers (the keys are its shell's
+meanwhile), and then reads or sleeps on. A shell that looks for Ctrl+C itself (TTY_INTR 1) is never stopped. When the shell
 that made a job ends, the job's stopped tasks are killed (nothing could let them go on) and
 the others leave it. SYS_detach leaves the job too.
 
@@ -40,7 +43,9 @@ SYS_job (int op, int arg), for the caller's terminal and the jobs the caller mad
   JOB_BG    arg: a job: its stopped tasks go on, in the background. How many tasks it has.
   JOB_KILL  arg: a job: every task of it killed, a stopped one too. How many.
   JOB_ID    the caller's job (0: none).
--EINVAL for an op or a job that is not the caller's, -ENOTTY without a terminal.
+-EINVAL for an op or a job that is not the caller's, -EACCES for JOB_FG from a task of a job in
+the background (but the shell that made the foreground job may give the terminal back to its
+own), -ENOTTY without a terminal.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/job.h.
 */
