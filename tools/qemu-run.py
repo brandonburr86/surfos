@@ -2342,11 +2342,16 @@ def telnet_stalled_check(q):
                     quiet_since = time.time()
             a.send('\n')
             ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
-            # every line, in order: the job's first lines can come while surfsh still writes "[pid] started" and its
-            # prompt, which then cut a line or three of them; past those, no line may be missing
-            offsets = [int(x, 16) for x in line.findall(a.data)]
+            # every line, in order: the job's lines can come while surfsh still writes "[1] started (pid n)" and its
+            # prompt, which then cut a line or three of them; past those, no line may be missing. 10/25/26: wherever
+            # they are (& is a job of surfsh's now, which starts at once, and the shell's line waits for room in the
+            # session's output behind the job's): a gap is allowed only where the shell's own text is between the lines
+            found = list(line.finditer(a.data))
+            offsets = [int(m.group(1), 16) for m in found]
             gaps = [(i, offsets[i + 1] - offsets[i]) for i in range(len(offsets) - 1) if offsets[i + 1] != offsets[i] + 16]
-            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i < 1000 and 16 < d <= 64 for i, d in gaps)
+            shell = [i for i, _ in gaps
+                     if re.search(rb'started \(pid [0-9]+\)|\xe2\x89\x8b', a.data[found[i].end():found[i + 1].start()])]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i in shell and 16 < d <= 64 for i, d in gaps)
             why = why or ('' if ok else ' (%d lines, gaps %s)' % (len(offsets), gaps[:3]))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
