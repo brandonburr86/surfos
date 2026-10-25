@@ -64,6 +64,9 @@ int spawnfd(const char *path, char *const argv[], const int fds[3]);
 #include <surfos/spawn.h>
 int spawnx(const char *path, char *const argv[], const struct spawnx *o);
 int wait(int pid, int *status);     /* pid -1: any child. status: the exit code, -1 when it was killed */
+/* 10/25/26: the same, and how it ended: killed, or killed by Ctrl+C (surfos/job.h) */
+#include <surfos/job.h>
+int waitx(int pid, struct waitx *w, int options);
 #define WNOHANG 1                   /* 10/6/26: waitpid() answers 0 at once while the children run on */
 int waitpid(int pid, int *status, int options);
 int kill(int pid);
@@ -81,6 +84,9 @@ int msleep(unsigned int ms);
                            Enter): what comes from the serial line or a pty's master is dropped until it pauses for
                            200 ms; Ctrl+C gets through. Raw mode's end does the same with keys queued (a lone
                            LF or NUL, CR LF's or CR NUL's end, is dropped without it). 0: end it */
+#define TTY_INTR    6   /* 10/25/26: the Ctrl+Cs that reached this program's job since it last asked. arg 1: it looks
+                           for Ctrl+C itself (a shell): never killed by one, its own wait in a call ends, and as the
+                           pager's owner it takes one that reaches nothing else; 0: no more */
 #define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
 #define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */
 int ttyctl(int op, unsigned int arg);

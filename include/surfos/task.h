@@ -39,6 +39,7 @@ typedef void (*kthread_fn)(void *arg);
                               a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
+#define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -139,6 +140,8 @@ typedef struct surf_task {
     struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
+    u_char end_how;             /* 10/25/26: how it ended, for SYS_waitx: WX_* (surfos/job.h) */
+    u_short ctrl_c;             /* 10/25/26: the Ctrl+Cs that reached it since it last asked (TTY_INTR) */
 } surf_task;
 
 extern surf_task *curTask;
@@ -166,10 +169,12 @@ void task_exit(int code) __attribute__((noreturn));
 #define WAIT_ANY ((u_long)-1)
 #define WNOHANG  1              /* 10/6/26, task_wait_opts() and SYS_wait: 0 at once when no child has ended */
 #define WINTR    2              /* 10/6/26, task_wait_opts(): a kill of the caller ends the wait (-1) */
+#define WCTRLC   8              /* 10/25/26, with WINTR: so does a Ctrl+C that reached the caller itself (TTY_INTR) */
 int task_wait(u_long pid, int *status);                            /* returns the pid, or -1 with nothing to wait for */
 int task_wait_opts(u_long pid, int *status, int options);   /* WNOHANG: 0 while children are left running */
 u_int task_child_count(void);
 int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
+int task_wait_how(u_long pid, int *status, int *how, int options);    /* 10/25/26: how: WX_* (surfos/job.h) */
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 int kill_task_patient(surf_task *t); /* 10/18/26: as a hangup's kill: inside a call it waits for its end, however long

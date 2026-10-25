@@ -31,6 +31,9 @@ pipetest share       a writing end kept open by dup2() or by a child holds the e
 pipetest spawnx      spawnx() (surfos/spawn.h): a child's environment and its descriptor 3,
                      one of its descriptors closed, spawnfd() passing environ on, and the
                      errors: E2BIG, EINVAL, EBADF, EFAULT
+pipetest waitx       10/25/26, waitx() (surfos/job.h): a child that ended by itself (its
+                     status), one that was killed (WX_KILLED), WNOHANG while one runs, and
+                     the errors: ECHILD, EINVAL, EFAULT
 pipetest all         every mode above, in that order
 */
 
@@ -643,9 +646,41 @@ static int m_spawnx(void) {
     return pass();
 }
 
+/* 10/25/26: how a child ended (Ctrl+C's WX_INTERRUPTED needs a terminal: the smoke test's surfsh block) */
+static int m_waitx(void) {
+    char ms[] = "200", *sleeper[] = { "pipetest", "sleeper", ms, NULL }, *reader[] = { "pipetest", "reader", NULL };
+    struct waitx w;
+    int p[2], pid, r;
+    mode = "waitx";
+    pid = child(sleeper, -1, -1);
+    if(pid < 0) return fail("spawnfd");
+    memset(&w, 0x55, sizeof(w));
+    if(waitx(pid, &w, WNOHANG) != 0) return fail("WNOHANG while the child runs: not 0");
+    if(waitx(pid, &w, 0) != pid || w.pid != pid || w.how != WX_EXITED || w.status != 0 || w.job != 0)
+        return fail("a child that ended by itself: not WX_EXITED with status 0");
+    if(pipe(p) < 0) return fail("pipe()");
+    pid = child(reader, p[0], -1);                      /* it waits for bytes that never come */
+    if(pid < 0) return fail("spawnfd");
+    msleep(100);
+    if(kill(pid) < 0) return fail("kill");
+    r = waitx(pid, &w, 0);
+    close(p[0]);
+    close(p[1]);
+    if(r != pid || w.how != WX_KILLED || w.status != -1) return fail("a child that was killed: not WX_KILLED and -1");
+    printf("pipetest: waitx says a child ended by itself (status 0), one was killed; WNOHANG while it runs\n");
+    errno = 0;
+    if(waitx(-1, &w, 0) != -1 || errno != ECHILD) return fail("no child: not ECHILD");
+    errno = 0;
+    if(waitx(-1, &w, 4) != -1 || errno != EINVAL) return fail("an option it does not know: not EINVAL");
+    errno = 0;
+    if(waitx(-1, (struct waitx *)4, 0) != -1 || errno != EFAULT) return fail("a bad address: not EFAULT");
+    printf("pipetest: waitx: ECHILD, EINVAL, EFAULT\n");
+    return pass();
+}
+
 static int run_all(void) {
     if(m_basic() || m_stream(262144) || m_full() || m_atomic() || m_broken() || m_poll() || m_limits() || m_kill() ||
-       m_share() || m_spawnx()) return 1;
+       m_share() || m_spawnx() || m_waitx()) return 1;
     mode = "all";
     return pass();
 }
@@ -664,6 +699,7 @@ int main(int argc, char **argv) {
     if(!strcmp(m, "kill")) return m_kill();
     if(!strcmp(m, "share")) return m_share();
     if(!strcmp(m, "spawnx")) return m_spawnx();
+    if(!strcmp(m, "waitx")) return m_waitx();
     if(!strcmp(m, "all")) return run_all();
     /* the children */
     if(!strcmp(m, "writer")) return c_writer(n);
@@ -678,6 +714,6 @@ int main(int argc, char **argv) {
     if(!strcmp(m, "env-child")) return c_env();
     if(!strcmp(m, "closed-child")) return c_closed();
     fprintf(stderr, "usage: pipetest basic | stream [N] | full | atomic | broken | poll | limits | kill | share | spawnx |\n"
-                    "       all\n");
+                    "       waitx | all\n");
     return 2;
 }

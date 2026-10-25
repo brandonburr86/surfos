@@ -205,3 +205,8 @@ int waitpid(int pid, int *status, int options) {
     if(r == -1) { errno = ECHILD; return -1; }          /* the kernel's "nothing to wait for" */
     return (int)ret(r);
 }
+
+/* 10/25/26: how the child ended too (surfos/job.h) */
+int waitx(int pid, struct waitx *w, int options) {
+    return (int)ret(sc(SYS_waitx, pid, (long)w, options));
+}

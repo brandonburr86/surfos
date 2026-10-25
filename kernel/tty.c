@@ -594,6 +594,18 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
         irq_restore(flags);
         return 0;
     }
+    if(op == TTY_INTR) {                          /* 10/25/26: Ctrl+C for a shell's own commands (tty.h) */
+        u_long flags;
+        int n;
+        if(arg > 1) return -22;
+        flags = irq_save();
+        n = curTask->ctrl_c;
+        curTask->ctrl_c = 0;
+        if(arg) curTask->flags |= TF_INTR;
+        else curTask->flags &= ~TF_INTR;
+        irq_restore(flags);
+        return n;
+    }
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);

@@ -73,7 +73,9 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 /* 10/24/26 (pipelines and scripting in surfsh) */
 #define SYS_pipe     46  /* (int fds[2]): fds[0] reads what fds[1] writes (surfos/pipe.h) */
 #define SYS_spawnx   47  /* (const char *path, char *const argv[], const struct spawnx *o): pid (surfos/spawn.h) */
-#define NR_SYSCALLS 48
+/* 10/25/26 */
+#define SYS_waitx    48  /* (int pid, struct waitx *w, int options): pid; how the child ended (surfos/job.h) */
+#define NR_SYSCALLS 49
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

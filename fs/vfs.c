@@ -872,6 +872,8 @@ const char *strerror(int err) {
     case ENFILE: return "File table overflow";
     case EPIPE: return "Broken pipe";
     case ESPIPE: return "Illegal seek";
+    case ENOEXEC: return "Exec format error";
+    case ECHILD: return "No child processes";
     case EADDRINUSE: return "Address already in use";
     case ENETUNREACH: return "Network is unreachable";
     case ECONNRESET: return "Connection reset by peer";

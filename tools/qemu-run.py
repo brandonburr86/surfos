@@ -526,6 +526,9 @@ SMOKE = [
     ('run pipetest spawnx', ["a child's environment and its descriptor 3", 'a child with descriptor 0 closed',
                              'spawnfd() passes environ on', 'E2BIG, EINVAL, EBADF, EFAULT', 'PIPETEST spawnx PASS',
                              'exit status 0']),
+    # 10/25/26: waitx(): a child that ended by itself, one that was killed, WNOHANG, the errors
+    ('run pipetest waitx', ['waitx says a child ended by itself (status 0), one was killed; WNOHANG while it runs',
+                            'waitx: ECHILD, EINVAL, EFAULT', 'PIPETEST waitx PASS', 'exit status 0']),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no

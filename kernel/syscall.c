@@ -27,6 +27,9 @@ for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short
 pipe answers -ESPIPE; spawnx (47, surfos/spawn.h): spawnfd with a descriptor 3, closed
 descriptors, an environment and a job in the background. A kernel command's output on a pipe whose reader went away
 (dmesg | head) is dropped quietly: that is no failure of the command.
+
+10/25/26: waitx (48, surfos/job.h): wait, and how the child ended (by itself, killed, or
+killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped.
 */
 
 #include <surfos/types.h>
@@ -50,6 +53,7 @@ descriptors, an environment and a job in the background. A kernel command's outp
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
 #include <surfos/spawn.h>
+#include <surfos/job.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
@@ -65,6 +69,7 @@ typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
 typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
+typedef char waitx_layout_is_fixed[sizeof(struct waitx) == 16 ? 1 : -1];       /* 10/25/26 */
 
 /* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
 bool user_str(const char *s) {
@@ -228,6 +233,24 @@ static int sys_wait(int pid, int *status, int options) {
     r = task_wait_opts(pid < 0 ? WAIT_ANY : (u_long)pid, &st, options | WINTR);
     if(r < 0 && (curTask->intr & TI_KILL)) return -EINTR;
     if(r > 0 && status) *status = st;
+    return r;
+}
+
+/* 10/25/26: SYS_wait, and how the child ended (surfos/job.h) */
+static int sys_waitx(int pid, struct waitx *w, int options) {
+    struct waitx k;
+    int st = 0, how = WX_EXITED, r;
+    if(!w || !ubuf(w, sizeof(k), true)) return -EFAULT;
+    if(options & ~WNOHANG) return -EINVAL;
+    r = task_wait_how(pid < 0 ? WAIT_ANY : (u_long)pid, &st, &how, options | WINTR | WCTRLC);
+    if(r < 0) return (curTask->intr & (TI_KILL | TI_INT)) ? -EINTR : -ECHILD;
+    if(r > 0) {
+        memset(&k, 0, sizeof(k));
+        k.pid = r;
+        k.how = how;
+        k.status = how == WX_EXITED ? st : -1;
+        memcpy(w, &k, sizeof(k));
+    }
     return r;
 }
 
@@ -514,6 +537,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_yield:   yield(); r = 0; break;
     case SYS_spawn:   r = sys_spawn((const char *)a, (char *const *)b); break;
     case SYS_wait:    r = sys_wait((int)a, (int *)b, (int)c); break;
+    case SYS_waitx:   r = sys_waitx((int)a, (struct waitx *)b, (int)c); break;
     case SYS_sbrk:    r = (int)uvm_sbrk(curTask->uvm, (long)a); break;
     case SYS_uptime:  r = (int)(getticks() * (1000 / HZ)); break;
     case SYS_kill:    r = sys_kill((int)a); break;

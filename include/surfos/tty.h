@@ -124,10 +124,21 @@ void tty_switch(int index);
    after the pause is input again (type-ahead typed while a command runs, well after its
    Enter, is kept). TTY_SKIP 1 starts the same skip for a program that dropped keys it had
    read itself (the user shell: the rest of its read buffer after an Enter); TTY_SKIP 0
-   ends it. The PS/2 keyboard cannot paste: its keys are never skipped. */
+   ends it. The PS/2 keyboard cannot paste: its keys are never skipped.
+   TTY_INTR (10/25/26): Ctrl+C for shells. Every task of the job a Ctrl+C reaches (the
+   pager's owner and the programs of its foreground) counts it, and TTY_INTR answers how
+   many came since the caller last asked, starting the count again: a shell asks after each
+   command it runs, and leaves its loop or script when one came, even when the program it
+   waited for was a script that ended by itself. A loop of a shell's builtins has no program
+   to interrupt: TTY_INTR 1 says the caller looks for Ctrl+C itself. Where it would be
+   killed (the innermost task of the job: a shell inside a shell), it is not, and as the
+   pager's owner it is reached when nothing else of its job was, so the key does not wait for
+   the next reader; either way a wait of its own in a system call (a read of the terminal)
+   is cut short. TTY_INTR 0 ends that. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
 #define TTY_SKIP    5
+#define TTY_INTR    6
 #define TTY_SKIP_MS 200
 #define TTY_CAP_UTF8  1
 #define TTY_CAP_COLOR 2

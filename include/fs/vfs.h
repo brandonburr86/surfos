@@ -65,6 +65,8 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define EHOSTUNREACH 113
 #define ECANCELED   125         /* 10/17/26: a request called off (the network manager's, after a wifi leave) */
 #define ESPIPE       29         /* 10/24/26: lseek() on a pipe */
+#define ENOEXEC       8         /* 10/25/26: a file that is no program (no ELF, no #!): a shell runs it as a script */
+#define ECHILD       10         /* 10/25/26: SYS_waitx with no such child */
 #define ERANGE       34
 
 /* open flags (Linux values) */
