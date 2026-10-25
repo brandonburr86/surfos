@@ -551,9 +551,33 @@ matches any characters of a file's name, `?` one, `[ab]` one of those: `ls
 quotes (`"*"`) a star is just a star. `$?` is the status of the last command, `$!` the pid
 of the last job, `$$` the shell's own. `PATH` says where programs are looked for.
 
+**Scripts.** A script is a file of commands: `surfsh /data/backup.sh` runs it, and one whose
+first line is `#!/initrd/bin/surfsh` runs by its name too (`/data/backup.sh`; any file that is
+not a program runs as a surfsh script). In it, and at the prompt, `$1`, `$2` ... and `"$@"` are
+its arguments, and these work as in other shells:
+
+```sh
+if [ -f /data/notes.txt ]; then echo there; else echo missing; fi
+for f in /data/*.txt; do echo "$f"; done
+n=0; while [ $n -lt 3 ]; do n=$((n + 1)); done
+case $1 in -h|--help) echo "usage: ..."; exit 2;; esac
+copy() { local from=$1; cp "$from" /data/backup/; }
+lsblk | while read name rest; do echo "device $name"; done
+printf '%-10s %5d\n' files 12
+```
+
+`test` (or `[`) checks files (`-e -f -d -s`), strings (`= != -z -n`) and numbers (`-eq -lt
+-gt` ...); `read` takes a line of input into variables, `printf` formats, `eval`, `.` (runs a
+file's commands in this shell), `break`, `continue`, `return`, `local`, `exec`, `true`, `false`
+and `:` are there too. `set -e` ends a script at the first command that fails, `set -x` shows
+each command before it runs, `set -u` makes an unset variable an error. `kernel test` runs the
+kernel's command of a name that surfsh has too. Ctrl+C stops a loop or a script as a whole,
+not just the command that was running: the prompt comes back with `$?` 130.
+
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
-that could not be started, 127 no such command, 130 a kernel command stopped with Ctrl+C,
-137 a program that was killed (by `kill`, by Ctrl+C or by a fault). A
+that could not be started, 127 no such command, 130 a command stopped with Ctrl+C (a
+program, a kernel command, a loop), 137 a program that was killed (by `kill` or by a
+fault). A
 program that ends with another status says `[exit status N]`.
 
 **Settings.** `set` lists them, `set <key> <value>` (or `<key>=<value>`) changes one for

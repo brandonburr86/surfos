@@ -19,9 +19,13 @@ next stage begins, so the branch can stop after any of them.
 | 1. Pipes | `pipe()`: a bounded buffer in the kernel between two descriptors, 8 KB each, 32 pipes at most | `fs/pipe.c`, `include/surfos/pipe.h`, libsurf |
 | 2. Pipelines and lists | `a \| b \| c`, `&&`, `\|\|`, `!`, `{ list; }`, `( list )`, `2>`, `2>&1`, `>&2`, `<` for surfsh's own commands too | `user/surfsh/` (a parser that builds a tree, an executor) |
 | 3. Variables and expansions | `name=value`, `export`, `unset`, the environment of programs, `$name ${name} ${name:-x}` and the rest of POSIX's forms, `$1 $# $@ $* $$ $! $0`, `$(command)`, `$((arithmetic))`, wildcards `* ? [...]`, `PATH` | kernel: `SYS_spawnx` (an environment, four descriptors); libsurf: `environ`, `getenv`, `setenv`; surfsh |
-| 4. Script files | `if`, `while`, `until`, `for`, `case`, functions, `break`, `continue`, `return`, `local`; `test` and `[`, `read`, `shift`, `printf`, `eval`, `.`/`source`, `exec`, `true`, `false`, `:`; `set -e -u -x -f`, `set --`; here-documents; `surfsh FILE ARGS`, `surfsh -c TEXT`; `#!` in the kernel; lines that continue on the next | surfsh; `kernel/process.c` |
+| 4. Script files | `if`, `while`, `until`, `for`, `case`, functions, `break`, `continue`, `return`, `local`; `test` and `[`, `read`, `printf`, `eval`, `.`/`source`, `exec`, `true`, `false`, `:`, `kernel`; `set -e -u -x -f`; `#!` in the kernel; Ctrl+C that leaves a loop or a script (`SYS_waitx`, `TTY_INTR`) | surfsh; `kernel/process.c`, `kernel/task.c`, `kernel/tty.c` |
 | 5. Job control | Ctrl+Z stops the job in the foreground; `jobs`, `fg`, `bg`, `wait`, `kill %1`; a job in the background that reads the terminal stops until it is brought to the foreground | kernel: jobs, stopped tasks, `SYS_job`, `SYS_waitx`; surfsh |
 | 6. Filters | `grep`, `sort`, `uniq`, `tail`, `tee`, `tr`, `seq`: programs that pipelines want and SurfOS lacks | `user/bin/` |
+
+As built: `surfsh -c TEXT`, `surfsh FILE ARGS`, here-documents and lines that continue came
+with stage 2, `set --`, `shift` and `SPAWN_MAX_ARGS` 128 with stage 3, and `SYS_waitx` with
+stage 4 (Ctrl+C in loops needs it), so it is number 48 and `SYS_job` 49.
 
 Stage 6 is the integrator's addition: of the programs a pipeline wants after `cat`,
 `head` and `wc`, SurfOS has none, and `dmesg | grep usb` is the first thing anyone types.
@@ -114,9 +118,11 @@ Stage 6 is the integrator's addition: of the programs a pipeline wants after `ca
 |---|---|
 | `SYS_pipe` 46 `(int fds[2])`: `fds[0]` reads, `fds[1]` writes; `PIPE_SIZE` 8192, `PIPE_BUF` 4096, `PIPE_MAX` 32 | `include/surfos/syscall.h`, `include/surfos/pipe.h`, `fs/pipe.c`; libsurf `pipe()` |
 | `SYS_spawnx` 47 `(const char *path, char *const argv[], const struct spawnx *o)`: `struct spawnx { int fds[4]; char *const *envp; int job; unsigned int flags; }` (28 bytes); `fds[0..2]` -1 the console, `fds[3]` -1 none; `envp` NULL an empty environment; `SPAWN_ENV_MAX` 64 strings in `SPAWN_ENV_BYTES` 4096; `job` 0 the caller's, `SPAWN_JOB_NEW` (-1) a new one led by the child, or a job to join; `flags` `SPAWN_FG`: the new job is the terminal's foreground | `include/surfos/spawn.h`, `kernel/process.c`; libsurf `spawnx()`, `environ` (crt0: the third word on the stack), `spawn()` and `spawnfd()` over it with `environ` |
-| `SPAWN_MAX_ARGS` 128, `SPAWN_ARG_BYTES` 8192 | `include/surfos/syscall.h`, `kernel/process.c` |
-| `SYS_job` 48 `(int op, int arg)`: `JOB_SHELL`, `JOB_FG`, `JOB_BG`, `JOB_KILL` | `include/surfos/job.h`, `kernel/job.c` |
-| `SYS_waitx` 49 `(int pid, struct waitx *w, int options)`: `struct waitx { int pid, how, status, job; }` (16 bytes); `how` `WX_EXITED`, `WX_KILLED`, `WX_INTERRUPTED`, `WX_STOPPED`; options `WNOHANG` 1, `WUNTRACED` 4 | `include/surfos/job.h`, `kernel/task.c`; libsurf `waitx()` |
+| `SPAWN_MAX_ARGS` 128, `SPAWN_ARG_BYTES` 8192 | `include/surfos/spawn.h`, `kernel/process.c` |
+| `SYS_waitx` 48 (stage 4) `(int pid, struct waitx *w, int options)`: `struct waitx { int pid, how, status, job; }` (16 bytes); `how` `WX_EXITED` 0, `WX_KILLED` 1, `WX_INTERRUPTED` 2 (Ctrl+C), `WX_STOPPED` (stage 5); options `WNOHANG` 1, `WUNTRACED` 4 (stage 5) | `include/surfos/job.h`, `kernel/task.c`, `kernel/syscall.c`; libsurf `waitx()` |
+| `TTY_INTR` 6 (stage 4): the Ctrl+Cs that reached the caller's job since it last asked; 1: the caller (a shell) looks for Ctrl+C itself, is told instead of killed, and as the pager's owner takes one that reaches nothing else | `include/surfos/tty.h`, `kernel/tty.c`, `kernel/task.c` (`task_interrupt_job()`) |
+| `#!` (stage 4): `process_spawn_ex()` runs `#!INTERPRETER [ARG]` scripts; a file neither ELF nor `#!` is `-ENOEXEC` at once | `kernel/process.c` |
+| `SYS_job` 49 `(int op, int arg)`: `JOB_SHELL`, `JOB_FG`, `JOB_BG`, `JOB_KILL` | `include/surfos/job.h`, `kernel/job.c` |
 | `PROC_STOPPED` 5 in `struct procinfo`'s state; `ps` says `stopped` | `include/surfos/proc.h`, `kernel/task.c` |
 | `broken_pipe_exit(int on)` | `user/include/surf.h`, `user/libsurf/syscalls.c` |
 | `struct prompt_ctx.continuation`: the continuation prompt | `include/surfos/prompt.h`, `shell/prompt.c`, `tests/host/test_prompt.c` |
@@ -126,18 +132,23 @@ Stage 6 is the integrator's addition: of the programs a pipeline wants after `ca
     main.c      the start (-l, -c, a file), the settings, the input: the editor, a file, a pipe
     editor.c    the line editor (unchanged but for the continuation prompt)
     complete.c  Tab: the commands of PATH too
-    lex.c       a line becomes tokens: words with their quotes, operators, here-documents
-    parse.c     tokens become a tree: lists, and-or lists, pipelines, commands, compound commands
+    parse.c     text becomes a tree (the scanner too): lists, and-or lists, pipelines,
+                commands, compound commands, functions' definitions
+    unparse.c   a tree becomes text again: what a new surfsh runs, a function's definition
     expand.c    words become fields: parameters, $(...), $((...)), splitting, wildcards, quotes
     arith.c     $((...)): C's integer operators on 32-bit numbers
-    vars.c      variables, the environment, positional parameters, functions
-    exec.c      the tree runs: pipelines, redirections, subshells, the commands' order
-    run.c       a command: surfsh's own, the kernel's (kcmd), a program
+    glob.c      patterns and wildcards
+    vars.c      variables, the environment, positional parameters, locals, options, functions
+    exec.c      the tree runs: pipelines, redirections, subshells, compound commands,
+                functions, the commands' order, Ctrl+C
+    run.c       a command: the kernel's (kcmd), a program (and a script without #!)
     jobs.c      the jobs: their table, fg, bg, wait, the reports before a prompt
-    builtins.c  the builtins of before; builtins2.c the new ones; test.c test and [
+    builtins.c  the builtins of before, export, readonly, unset, shift, set's options
+    script.c    : true false break continue return local eval . source read kernel
+    test.c      test and [;  printf.c  printf
 
-`tests/host/test_surfsh.c` runs the lexer, the parser, the expansions (on
-`tests/host/sim_fs.c` for wildcards), arithmetic and `test` on the host.
+`tests/host/test_surfsh.c` runs the parser, the expansions (on `tests/host/sim_fs.c` for
+wildcards), arithmetic, `test` and `printf` on the host.
 
 ## Checks
 
