@@ -19,6 +19,17 @@ of drawing would otherwise keep it, and the screen would never change again), an
 panic, or a task dying of an exception while it draws, takes the screen back.
 Nothing here allocates memory before framebuffer_grow(), so the screen works before
 the kernel heap does.
+
+10/25/26 (track A, A3): a fast screen. Scrolling and erasing ask for a present that may
+wait (framebuffer_present_lazy()): if the last present was PRESENT_MS ago or more it
+happens now, otherwise the screen is marked pending and a one-shot timer wakes the
+fbflush thread, which presents then; meanwhile framebuffer_draw_cell() and
+framebuffer_set_cursor() only record, so a burst of output costs one present every
+PRESENT_MS instead of one per line. The thread exists only with a framebuffer
+(framebuffer_start(), once there are tasks), so VGA boots are as they were. A reader
+about to wait for a key presents first (framebuffer_flush(), from tty.c through
+console_flush()), so a prompt and --More-- show at once. A cell whose cursor alone came
+or went is drawn as its two underline rows (fb_draw_cursor()). gfxinfo shows the counts.
 */
 
 #include <surfos/types.h>
@@ -26,6 +37,9 @@ the kernel heap does.
 #include <surfos/irq.h>
 #include <surfos/cpu.h>
 #include <surfos/task.h>
+#include <surfos/wait.h>
+#include <surfos/ktimer.h>
+#include <surfos/interrupt.h>
 #include <mm/paging.h>
 #include <mm/kalloc.h>
 #include <sys/framebuffer.h>
@@ -34,6 +48,7 @@ the kernel heap does.
 #define SHOWN_CURSOR 0x10000
 #define SHOWN_UNKNOWN 0xFFFFFFFF
 #define NO_CURSOR 0xFFFFFFFF
+#define PRESENT_MS 20                       /* 10/25/26: while output pours in, a present at most this often */
 
 static struct fb_surface fbs;               /* fbs.cols x fbs.rows: the grid drawn now */
 static bool ready;
@@ -49,6 +64,12 @@ static surf_task *graphics_task;            /* a longer-lived graphics session, 
 static surf_console *graphics_console;
 static bool clear_text;                     /* remove graphics, including the text grid's margins */
 static const char *why_not = "the boot loader passed no framebuffer";
+static volatile int pending;                /* 10/25/26: a present is due: draw_cell() and set_cursor() only record */
+static u_long last_present;                 /* uptime_ms() when the last present ended */
+static struct ktimer present_timer;         /* wakes the thread once a pending present is due */
+static wait_queue_t present_wait;
+static surf_task *presenter;                /* fbflush: started once there are tasks (framebuffer_start()) */
+static struct fb_counts counts;
 
 int framebuffer_init(void) {
     struct fb_mode m;
@@ -123,7 +144,13 @@ void framebuffer_bind(const u8 *buffer) {
 static void draw(u32 i) {
     u32 want = cells[i * 2] | ((u32)cells[i * 2 + 1] << 8) | (i == cursor ? SHOWN_CURSOR : 0);
     if(want == shown[i]) return;
-    fb_draw_glyph(&fbs, i % fbs.cols, i / fbs.cols, cells[i * 2], cells[i * 2 + 1], i == cursor);
+    if((want ^ shown[i]) == SHOWN_CURSOR) {     /* 10/25/26: only the cursor came or went: its two rows */
+        fb_draw_cursor(&fbs, i % fbs.cols, i / fbs.cols, cells[i * 2], cells[i * 2 + 1], i == cursor);
+        counts.cursors++;
+    } else {
+        fb_draw_glyph(&fbs, i % fbs.cols, i / fbs.cols, cells[i * 2], cells[i * 2 + 1], i == cursor);
+        counts.glyphs++;
+    }
     shown[i] = want;
 }
 
@@ -218,22 +245,99 @@ void framebuffer_task_died(surf_task *t) {
 }
 
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color) {
-    if(col >= fbs.cols || row >= fbs.rows || !begin(false)) return;
+    if(pending || col >= fbs.cols || row >= fbs.rows || !begin(false)) return;   /* 10/25/26: pending: the present draws it */
     draw(row * fbs.cols + col);                 /* ch and color are already in the buffer */
     end();
 }
 
 void framebuffer_present(void) {
+    u_long t0, took;
     u32 i;
-    if(!begin(false)) return;
+    if(!begin(false)) {
+        pending = 0;                            /* 10/25/26: a drawer that holds the screen goes round again (dirty),
+                                                   and graphics ending redraws the text whole: nothing is owed */
+        return;
+    }
+    pending = 0;                                /* 10/25/26: what changes from here on asks again */
+    t0 = uptime_ms();
     for(i = 0; i < ncells; i++) draw(i);
     end();
+    last_present = uptime_ms();
+    took = last_present - t0;
+    counts.presents++;
+    if(took > counts.slowest_ms) counts.slowest_ms = (u32)took;
+}
+
+/* 10/25/26: a present that may wait (scrolling, erasing: console.c): now if the last one was PRESENT_MS
+   ago or more, otherwise by the fbflush thread when that much time has passed. Before the thread exists
+   (the boot), and on a screen without one, it presents now. From interrupt handlers too. */
+static void present_due(void *arg) {
+    (void)arg;
+    wake_up(&present_wait);                     /* a timer callback, interrupts off: it draws nothing itself */
+}
+
+void framebuffer_present_lazy(void) {
+    u_long flags, since;
+    if(!presenter) {
+        framebuffer_present();
+        return;
+    }
+    flags = irq_save();
+    if(pending) {
+        counts.saved++;
+        irq_restore(flags);
+        return;
+    }
+    since = uptime_ms() - last_present;
+    if(since >= PRESENT_MS) {
+        irq_restore(flags);
+        framebuffer_present();
+        return;
+    }
+    pending = 1;
+    counts.saved++;
+    ktimer_start(&present_timer, PRESENT_MS - since, false);
+    irq_restore(flags);
+}
+
+/* a pending present now: a reader is about to wait for a key (console_flush(), tty.c) */
+void framebuffer_flush(void) {
+    if(pending && !in_interrupt()) framebuffer_present();
+}
+
+static void presenter_main(void *arg) {
+    (void)arg;
+    for(;;) {
+        u_long flags = irq_save();
+        if(!pending) {
+            wait_prepare(&present_wait);        /* enqueued before interrupts come back: no lost wakeup */
+            irq_restore(flags);
+            yield();
+            continue;
+        }
+        irq_restore(flags);
+        framebuffer_present();
+    }
+}
+
+/* the fbflush thread, once there are tasks (kernel/main.c, after init_task()); nothing without a framebuffer */
+void framebuffer_start(void) {
+    if(!ready || presenter) return;
+    wq_init(&present_wait);
+    ktimer_init(&present_timer, present_due, NULL);
+    presenter = kthread_create("fbflush", presenter_main, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+}
+
+void framebuffer_counts(struct fb_counts *out) {
+    u_long flags = irq_save();
+    *out = counts;
+    irq_restore(flags);
 }
 
 void framebuffer_set_cursor(u32 col, u32 row) {
     u32 old, now = (col < fbs.cols && row < fbs.rows) ? row * fbs.cols + col : NO_CURSOR;
-    if(now == cursor || !begin(false)) {
-        if(now != cursor) cursor = now;         /* the owner's next pass draws it */
+    if(now == cursor || pending || !begin(false)) {
+        if(now != cursor) cursor = now;         /* the owner's next pass draws it (10/25/26: or the pending present) */
         return;
     }
     old = cursor;

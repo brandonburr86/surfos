@@ -244,7 +244,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   what the firmware handed over and which console, timer and keyboard path was chosen.
   `lspci -v` gives every PCI function's ids, subsystem, power state, MSI/MSI-X and PCI
   Express link, `lspci bb:dd.f` one with its 256 bytes, and `wifiinfo` the Wi-Fi card
-  (its driver: driver/wifi/, docs/WIFI-PLANNING.md).
+  (its driver: driver/wifi/, docs/WIFI-PLANNING.md). 10/25/26: `gfxinfo` counts the
+  console's presents (batched by the `fbflush` thread, at most one per 20 ms while output
+  pours in), and surfsh's `time cmd` says how long cmd took.
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * The network manager: `settings` says where the settings came from, `wifi saved` what is

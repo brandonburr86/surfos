@@ -385,6 +385,9 @@ SMOKE = [
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     # 10/25/26 (track A): a TAB reaches the serial terminal as it was printed (the screen: test_pager, qemu-usb's fullhd)
     ("printf 'a\\tb|\\n'", ['a\tb|']),
+    # 10/25/26 (track A, A3): time, how long a command took (its status is the command's)
+    ('time sleep 200; time false; echo status $?', ['slept 200 ms', re.compile(rb'real [0-9]+\.[0-9]{2} s'),
+                                                   re.compile(rb'real [0-9]+\.[0-9]{2} s'), 'status 1']),
     # 10/6/26 (the console's character set, the pager): a line of UTF-8 reaches the serial port as it
     # was printed, and VGA memory as code page 437 cells
     ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),

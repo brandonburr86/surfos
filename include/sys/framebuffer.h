@@ -58,6 +58,9 @@ void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m);   /* m m
 u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b);
 void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel);  /* clipped to the surface */
 void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor); /* ignored outside the grid */
+/* 10/25/26: the cursor's rows of a cell alone (its bottom two glyph rows): the underline, or the glyph's own rows
+   again; the rest of the cell is left as drawn */
+void fb_draw_cursor(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor);
 
 /* 10/10/26: software 2D. Colours are 0x00RRGGBB, coordinates are signed;
    all drawing clips to the visible pixels and leaves pitch padding alone.
@@ -92,6 +95,20 @@ int framebuffer_grow(const u8 *cells);    /* show that whole grid from this cols
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color);
 void framebuffer_present(void); /* redraw every cell that differs from the buffer */
 void framebuffer_set_cursor(u32 col, u32 row);
+/* 10/25/26 (track A, A3): a present that may wait up to 20 ms, batching a burst of output into one (scrolling,
+   erasing, a console switch); the immediate one stays for panics and graphics. framebuffer_flush(): a pending
+   present now (before a reader waits). framebuffer_start(): the thread that does them, once there are tasks. */
+void framebuffer_present_lazy(void);
+void framebuffer_flush(void);
+void framebuffer_start(void);
+struct fb_counts {
+    u32 presents;               /* passes over the whole grid */
+    u32 glyphs;                 /* cells drawn whole */
+    u32 cursors;                /* cursor moves drawn as two rows */
+    u32 saved;                  /* presents asked for while one was pending: folded into it */
+    u32 slowest_ms;             /* the longest present */
+};
+void framebuffer_counts(struct fb_counts *out);
 bool framebuffer_active(void);
 const char *framebuffer_describe(char *buf, size_t size);  /* the mode, or why there is none */
 void framebuffer_panic(void);   /* panic/wipeout: take the screen back from whoever was drawing */

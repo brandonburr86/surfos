@@ -21,7 +21,11 @@ gfxtest 15
 ```
 
 `gfxinfo` reports the actual boot framebuffer's resolution, depth, text scale and
-memory caching. `gfxtest` displays eight color bars, diagonal lines and a small
+memory caching. Since 10/25/26 it also says what the text console's screen has cost:
+how many presents (passes over the whole grid) there were and the slowest one, how many
+more were asked for while one was pending and folded into it, how many cells were drawn
+whole and how many cursor moves were drawn as their two underline rows alone
+(ARCHITECTURE.md section 7). `gfxtest` displays eight color bars, diagonal lines and a small
 RGB image for five seconds by default. The optional duration is 1–60 seconds.
 Ctrl+C ends the test early. Switching to another console with F1–F4 cancels it;
 returning to the original console shows its shell. Background text output is

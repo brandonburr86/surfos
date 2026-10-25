@@ -154,6 +154,10 @@ $(BUILD)/%.o: %.c
 	@echo "CC   $<"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
+# 10/25/26 (track A, A3): the screen's drawing code at -O2 at every level, as Mbed TLS is (below): the laptop runs
+# -O0 builds, and these loops draw every pixel of every glyph of the console and the desktop. The last -O wins.
+$(BUILD)/driver/fbcore.o $(BUILD)/driver/framebuffer.o $(BUILD)/shell/guidraw.o $(BUILD)/shell/gui.o: CFLAGS += -O2
+
 $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
 	@echo "AS   $<"

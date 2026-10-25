@@ -273,7 +273,9 @@ int tty_trygetc(struct tty *t) {
 int tty_getc(struct tty *t) {
     console_page_read(t->con);
     for(;;) {
-        u_long flags = irq_save();
+        u_long flags;
+        console_flush();                 /* 10/25/26: the screen as it is before a key is waited for (a prompt) */
+        flags = irq_save();
         if((task_interrupted() && !in_interrupt()) || t->hungup) {
             irq_restore(flags);
             return -1;
@@ -313,7 +315,9 @@ int tty_getc(struct tty *t) {
    screenful is the pager's own business. -1 too when the asker's call is cut short. */
 int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
     for(;;) {
-        u_long flags = irq_save();
+        u_long flags;
+        console_flush();                 /* 10/25/26: --More-- shows before the key is waited for */
+        flags = irq_save();
         if(*cancel || (task_interrupted() && !in_interrupt()) || t->hungup) {
             irq_restore(flags);
             return -1;

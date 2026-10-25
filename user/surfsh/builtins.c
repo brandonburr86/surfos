@@ -29,7 +29,7 @@ programs before the kernel's commands (ls, cat, cp, df); type says which runs.
                       program and its path, a kernel command) and what it hides; 1 for none
 
 10/25/26 (scripts): the builtins of script.c (: true false break continue return local eval
-. source read kernel), test.c (test and [) and printf.c are in the table too, and exec, which
+. source read kernel time), test.c (test and [) and printf.c are in the table too, and exec, which
 exec.c carries out itself. POSIX's special builtins (: . break continue eval exec exit export
 readonly return set shift unset) come before a function of the same name, the others after
 it. set also takes POSIX's options: set -e -u -x -f, +e ... to end them, -o NAME / +o NAME,
@@ -82,6 +82,7 @@ const struct builtin builtins[] = {
     { "source",  "file [args]",   "the same as .", b_dot, 0 },
     { "exec",    "[cmd [args]]",  "cmd, and then this shell ends; alone: its redirections stay", b_colon, 1 },
     { "kernel",  "name [args]",   "the kernel's command name, where surfsh or a program has its own", b_kernel, 0 },
+    { "time",    "cmd [args]",    "cmd, then how long it took (real n.nn s)", b_time, 0 },
     /* 10/25/26: job control (jobs.c) */
     { "jobs",    "",              "the jobs: running, stopped (Ctrl+Z), and their commands", b_jobs, 0 },
     { "fg",      "[%n]",          "job n (the last one) in the foreground again", b_fg, 0 },

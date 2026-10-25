@@ -157,6 +157,12 @@ void console_replay_log(void) {
     mirror_serial = true;
 }
 
+/* 10/25/26 (track A, A3): what the framebuffer owes (framebuffer_present_lazy()), now: a reader is about
+   to wait for a key (tty.c), so the prompt or the pager's question shows at once */
+void console_flush(void) {
+    if(video == VIDEO_FB) framebuffer_flush();
+}
+
 void syncVideoConsole(bool memcopy) {
     surf_console *con = conActive;
     if(!con) return;
@@ -166,7 +172,7 @@ void syncVideoConsole(bool memcopy) {
     setpos(con);
     if(memcopy) memcpy(conVideo.vmem,con->vmem,SCREEN_BYTES);
     KCRIT_LEAVE
-    if(memcopy && video == VIDEO_FB) framebuffer_present();
+    if(memcopy && video == VIDEO_FB) framebuffer_present_lazy();   /* 10/25/26: a scroll, a clear: batched */
 }
 
 bool isConsoleActive(surf_console *con) {
@@ -400,7 +406,7 @@ static void ansi_blank(surf_console *con, u_int from, u_int to, TEXTCOLOR attr) 
     }
     if(isConsoleActive(con)) memcpy(conVideo.vmem + from * 2, con->vmem + from * 2, (to - from) * 2);
     KCRIT_LEAVE
-    if(isConsoleActive(con) && video == VIDEO_FB) framebuffer_present();
+    if(isConsoleActive(con) && video == VIDEO_FB) framebuffer_present_lazy();   /* 10/25/26: batched */
 }
 
 static void ansi_sgr(surf_console *con) {

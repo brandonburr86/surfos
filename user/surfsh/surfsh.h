@@ -21,7 +21,7 @@ ring-3 program in /initrd/bin; init starts it with -l on every console.
     run.c       one command: surfsh's own, then programs, then the kernel's (kcmd; 10/25/26)
     jobs.c      the jobs in the background: started, collected, reported
     builtins.c  cd, pwd, echo, exit, help, history, set, export, readonly, unset, shift, type
-    script.c    10/25/26: : true false break continue return local eval . source read kernel
+    script.c    10/25/26: : true false break continue return local eval . source read kernel time
     test.c      test and [;  printf.c  printf
 
 10/24/26: a line is parsed into a tree (parse.c) and run (exec.c). A stage of a pipeline
@@ -435,6 +435,7 @@ int b_eval(int argc, char **argv);
 int b_dot(int argc, char **argv);
 int b_read(int argc, char **argv);
 int b_kernel(int argc, char **argv);
+int b_time(int argc, char **argv);                 /* 10/25/26 */
 int b_test(int argc, char **argv);
 int test_eval(int n, char **v);                 /* test's arguments: 0 true, 1 false, 2 said */
 int b_printf(int argc, char **argv);

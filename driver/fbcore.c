@@ -174,12 +174,13 @@ void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel) 
     for(r = 0; r < h; r++) put_run(s, s->base + (u_long)(y + r) * s->mode.pitch + (u_long)x * s->bytespp, w, pixel);
 }
 
-void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+/* glyph rows [from, FONT_HEIGHT) of a cell; 10/25/26: the cursor alone is its last two (fb_draw_cursor()) */
+static void glyph_rows(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor, u32 from) {
     u32 fg = s->palette[attr & 0x0F], bg = s->palette[(attr >> 4) & 0x07];  /* bit 7 is blink in text mode */
     u32 x0 = s->ox + col * FONT_WIDTH * s->scale, y0 = s->oy + row * FONT_HEIGHT * s->scale;
     u32 gy, gx, k;
     if(col >= s->cols || row >= s->rows) return;
-    for(gy = 0; gy < FONT_HEIGHT; gy++) {
+    for(gy = from; gy < FONT_HEIGHT; gy++) {
         u8 bits = font8x16[ch][gy];
         if(cursor && gy >= FONT_HEIGHT - 2) bits = 0xFF;    /* an underline cursor */
         for(k = 0; k < s->scale; k++) {
@@ -190,4 +191,12 @@ void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr,
             }
         }
     }
+}
+
+void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+    glyph_rows(s, col, row, ch, attr, cursor, 0);
+}
+
+void fb_draw_cursor(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+    glyph_rows(s, col, row, ch, attr, cursor, FONT_HEIGHT - 2);
 }

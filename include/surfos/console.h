@@ -103,6 +103,7 @@ void syncVideoConsole(bool);
 const char *console_describe(char *buf, size_t size);
 void console_replay_log(void);   /* the early boot messages, on a screen that did not exist yet */
 void init_console_grid(void);    /* a framebuffer's whole grid, after init_interrupt() (the heap faults its pages in) */
+void console_flush(void);        /* 10/25/26: what the screen owes, now (a reader is about to wait: tty.c) */
 
 /* 10/5/26: escape sequences. Back to plain text (no sequence half read, the writer's colours,
    the cursor shown) when the task that changed them ends, and for a panic report. */

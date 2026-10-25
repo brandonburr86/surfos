@@ -20,6 +20,9 @@ The builtins of scripts (exec.c runs them like the others; builtins.c lists them
     kernel name [args]      the kernel's command name, where surfsh has one of its own (test,
                       echo, cd, pwd, help, history, set) or, 10/25/26, a program of PATH's
                       directories comes first (ls, cat, cp, df, hexdump, mkdir, mv, rm, rmdir)
+    time cmd [args]   10/25/26 (track A, A3): cmd runs in this shell as it would alone (its
+                      words quoted again, so nothing is expanded twice), then "real n.nn s" on 2;
+                      the status is cmd's
 
 read takes one line and no more: from a terminal a line is one read; from a file it reads a
 block and puts back what follows the line (lseek), so the next command reads on from there;
@@ -329,4 +332,28 @@ int b_kernel(int argc, char **argv) {
         }
     }
     return run_kernel(argv + 1, &found);
+}
+
+/**** time (10/25/26, track A: how long a screenful takes) ****/
+
+int b_time(int argc, char **argv) {
+    struct sbuf b = { NULL, 0, 0 };
+    unsigned int t0, ms;
+    int i, status = 0;
+    if(argc < 2) {
+        fprintf(stderr, "usage: time cmd [args]\n");
+        return STATUS_USAGE;
+    }
+    for(i = 1; i < argc; i++) {
+        if(i > 1) sb_putc(&b, ' ');
+        if(argv[i][0]) sb_quote(&b, argv[i]);
+        else sb_puts(&b, "''");                 /* an empty word stays a word */
+    }
+    t0 = uptime();
+    status = run_text(sb_str(&b), NULL);
+    ms = uptime() - t0;
+    sb_free(&b);
+    fflush(stdout);
+    fprintf(stderr, "real %u.%02u s\n", ms / 1000, ms % 1000 / 10);
+    return status;
 }

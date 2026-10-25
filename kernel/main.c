@@ -97,6 +97,7 @@ void kmain(u_long magic, u_long addr) {
     if(bootinfo.laptop) init_apic(); //8259s through the local APIC's LINT0, I/O APICs masked
     init_delay(); //udelay() for the drivers, calibrated on whatever clock counts
     init_task(); //setup multitasking
+    framebuffer_start(); //10/25/26: the thread that batches the framebuffer's presents (none on VGA text)
 
     init_keyboard(); //get keyboard ready
 

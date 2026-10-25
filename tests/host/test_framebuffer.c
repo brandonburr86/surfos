@@ -334,6 +334,43 @@ static void test_graphics(void) {
     }
 }
 
+/* the pixels of one cell, row by row */
+static void cell_pixels(const struct fb_surface *s, u32 col, u32 row, u32 *out) {
+    u32 x0 = s->ox + col * FONT_WIDTH * s->scale, y0 = s->oy + row * FONT_HEIGHT * s->scale, x, y, n = 0;
+    for(y = 0; y < FONT_HEIGHT * s->scale; y++)
+        for(x = 0; x < FONT_WIDTH * s->scale; x++) out[n++] = pixel(s, x0 + x, y0 + y);
+}
+
+/* 10/25/26 (track A, A3): the cursor drawn alone (fb_draw_cursor()), as the console draws a move of it: given
+   to a cell it is that cell drawn with the cursor, taken away it is the cell without; above the bottom two
+   glyph rows nothing is written (at scale 2: 28 of the cell's 32 lines) */
+static void test_cursor_rows(void) {
+    static u32 with[2048], without[2048], got[2048];
+    struct fb_surface s;
+    struct fb_mode m = mode(1920, 1080, 1920 * 4, 32, 0);
+    u32 n, x0, y0, x, y, ok;
+    surface(&s, &m);
+    n = FONT_WIDTH * s.scale * FONT_HEIGHT * s.scale;
+    fb_draw_glyph(&s, 3, 2, 'g', 0x1E, 1);
+    cell_pixels(&s, 3, 2, with);
+    fb_draw_glyph(&s, 3, 2, 'g', 0x1E, 0);
+    cell_pixels(&s, 3, 2, without);
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 1);
+    cell_pixels(&s, 3, 2, got);
+    check(s.scale == 2 && !memcmp(got, with, n * sizeof(u32)), "fb_draw_cursor: the cursor given to a cell is that cell drawn with it");
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 0);
+    cell_pixels(&s, 3, 2, got);
+    check(!memcmp(got, without, n * sizeof(u32)), "fb_draw_cursor: the cursor taken away is the cell drawn without it");
+    x0 = s.ox + 3 * FONT_WIDTH * s.scale;
+    y0 = s.oy + 2 * FONT_HEIGHT * s.scale;
+    fb_fill(&s, x0, y0, FONT_WIDTH * s.scale, FONT_HEIGHT * s.scale, 0x123456);
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 1);
+    for(ok = 1, y = 0; y < FONT_HEIGHT * s.scale; y++)
+        for(x = 0; x < FONT_WIDTH * s.scale; x++)
+            if(pixel(&s, x0 + x, y0 + y) != (y < (FONT_HEIGHT - 2) * s.scale ? 0x123456 : s.palette[14])) ok = 0;
+    check(ok && guards_intact(&s), "fb_draw_cursor writes the bottom two glyph rows only, the underline in the foreground");
+}
+
 int main(void) {
     test_modes();
     test_colours();
@@ -341,6 +378,7 @@ int main(void) {
     test_cp437_cells();
     test_scaling();
     test_graphics();
+    test_cursor_rows();
     printf("%s: %d checks, %d failures\n", failures ? "FRAMEBUFFER UNIT TESTS FAILED" : "FRAMEBUFFER UNIT TESTS PASSED",
            checks, failures);
     exit(failures ? 1 : 0);

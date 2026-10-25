@@ -282,6 +282,19 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   170x48 at scale 1 on 1366x768, 80x25 as before on 1280x800. One heap block holds the four
   consoles and the screen, and the boot log so far is drawn again on the bigger grid. VGA
   text mode stays 80x25.
+  **10/25/26** (track A, A3): a fast screen. The drawing code (`fbcore.c`, `framebuffer.c`,
+  and the desktop's `gui.c` and `guidraw.c`) is built at -O2 at every level. A scroll, an
+  erase or a console switch asks for a present that may wait
+  (`framebuffer_present_lazy()`): when the last one was 20 ms ago or more it happens at once,
+  otherwise the screen is marked pending and a one-shot timer wakes the `fbflush` kernel
+  thread, which presents then; meanwhile drawing a cell or moving the cursor only records.
+  So a burst of output costs one present every 20 ms rather than one per line. A reader
+  about to wait for a key presents first (`console_flush()` in `tty_getc()`), so a prompt
+  and `--More--` show at once; panics and graphics sessions keep the immediate present. A
+  cell whose cursor alone came or went is drawn as its two underline rows
+  (`fb_draw_cursor()`), not as a whole glyph. The thread exists only with a framebuffer,
+  started after `init_task()` (`framebuffer_start()`), so a VGA boot is as it was.
+  `gfxinfo` shows the counts (presents, the slowest, the ones folded in, cells, cursor moves).
   Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
   from task context, `kprintf()` print on the calling task's console (`kprintf()`
   in yellow, boot code and interrupt handlers on the active console), so a shell

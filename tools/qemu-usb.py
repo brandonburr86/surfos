@@ -150,7 +150,9 @@ PORTABLE = [
                   'MSI, 64-bit, up to 1 vector']),
     ('wifiinfo', ['chipset: 00:00.0 8086:29c0', 'none: no PCI device', 'QEMU USB HARDDRIVE', 'hold Option']),
     ('tick', ['Ticks:']),
-    ('ps', ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),
+    ('ps', ['Kernel Idle Task', 'init', 'fbflush', 'surfsh (ring 3)']),   # 10/25/26 (A3): the presents' thread
+    # 10/25/26 (track A, A3): what the console's screen has cost: presents, the slowest, the ones folded in
+    ('gfxinfo', ['software 2D', 'console: ', ' presents (the slowest ', ' more folded into them; ', ' cursor moves']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
     ('lsblk', ['rd0']),
     ('mount', ['rd0', '/initrd', 'tarfs']),
@@ -480,14 +482,28 @@ class Vm:
         return scr
 
     def wait_screen(self, test, timeout, interval=1.0):
+        """the first screen that passes test and stays so: 10/25/26 (track A, A3) the console presents its changes in
+        batches, the whole grid in cell order, so a screenshot can come in the middle of a present (the prompt on row
+        13 drawn, the rows below it not yet); a screen that passes is taken again, and kept when no pixel changed. A
+        screen that keeps changing and passes each time (a running stopwatch) is kept after three passes in a row"""
         deadline = time.time() + timeout
+        streak = 0
         while True:
             scr = self.screen()
-            if test(scr):
-                return scr
+            passed = test(scr)
+            if passed:
+                again = self.screen()
+                if again.px == scr.px:
+                    return again
+                streak += 1
+                if streak >= 3 and test(again):
+                    return again
+            else:
+                streak = 0
             if time.time() > deadline or self.proc.poll() is not None:
                 return None
-            self.pump(interval)
+            if not passed:
+                self.pump(interval)
 
     def xp_bytes(self, phys, n):
         out = self.mon.cmd(f'xp /{n}xb 0x{phys:x}')
@@ -819,7 +835,12 @@ def scenario_graphics(args, image, firmware, outdir):
         results.append(('background and image copy reach the actual display',
                         rgb(s, 0, 0) == (16, 32, 48) and rgb(s, s.w // 2, 3 * s.h // 4) == (255, 128, 0)))
         results.append(('normal completion restores the prompt', vm.expect('text console restored', 12) and vm.expect(PROMPT, 12)))
-        restored = vm.screen('graphics-restored.png')
+        # 10/25/26 (track A, A3): the console presents in batches, so the screen follows the serial line a little later
+        restored = vm.wait_screen(lambda s: 'text console restored' in s.text() and prompt_on(s), 10, interval=0.2)
+        if restored is None:
+            restored = vm.screen()
+        if outdir:
+            restored.png(os.path.join(outdir, 'graphics-restored.png'))
         results.append(('graphics margins cleared when text returns', rgb(restored, 0, 0) == (0, 0, 0)))
         results.append(('restored framebuffer contains shell text', 'text console restored' in restored.text() and prompt_on(restored)))
         active = start(30)
@@ -839,8 +860,10 @@ def scenario_graphics(args, image, firmware, outdir):
         vm.auto_more = False
         vm.send('kcmdtest gfxpager\n')
         more = vm.expect(MORE.decode(), 10)
-        s = vm.screen('graphics-pager.png')
-        results.append(('a full pager is visible before graphics takes ownership', more and '--More--' in s.text()))
+        s = vm.wait_screen(lambda s: '--More--' in s.text(), 10, interval=0.2) if more else None   # (A3: batched)
+        if s is not None and outdir:
+            s.png(os.path.join(outdir, 'graphics-pager.png'))
+        results.append(('a full pager is visible before graphics takes ownership', more and s is not None))
         vm.send(' ')
         results.append(('graphics finishes after the visible pager is answered',
                         vm.expect('GRAPHICS PAGER PASS', 12) and vm.expect(PROMPT, 12)))
@@ -889,6 +912,24 @@ def scenario_fullhd(args, image, firmware, outdir):
         # 10/25/26 (track A): a TAB goes to the next multiple of 8 and leaves the cells it passes empty
         got = typed(r"printf '1\\t2\\n'" + '\n', lambda s: '1       2' in s.rows)
         results.append(('printf with a TAB: the 2 in column 8', got is not None))
+        # 10/25/26 (track A, A3): a fast screen. 3000 lines from a job in the background (the pager leaves a job
+        # alone) are presented in batches: fewer presents than lines, and about 50 a second at most (gfxinfo's count
+        # before and after). How long the job took is said, not judged: QEMU's emulated CPU is no laptop.
+        def presents(s):
+            m = re.search(r'console: (\d+) presents', s.text()) if s else None
+            return int(m.group(1)) if m else None
+        # (each command typed once the prompt is back, the job's report too: surfsh drops keys typed ahead)
+        typed('clear\n', lambda s: last_prompt_row(s) == 0)
+        before = presents(typed('gfxinfo\n', lambda s: presents(s) is not None))
+        vm.keys('{ time seq 1 3000; } &\n')
+        done = vm.wait_screen(lambda s: '3000' in s.rows and re.search(r'real \d+\.\d\d s', s.text()), 120, interval=0.5)
+        took = re.search(r'real (\d+\.\d\d) s', done.text()).group(1) if done else '?'
+        typed('\n', lambda s: '] done' in s.text())
+        after = presents(typed('gfxinfo\n', lambda s: presents(s) is not None))
+        spent = after - before if before is not None and after is not None else None
+        results.append((f'3000 lines in {took} s from a job in the background: {spent} presents for them '
+                        '(fewer than the lines, at most about 50 a second)',
+                        spent is not None and took != '?' and spent < 3000 and spent <= 100 + 60 * float(took)))
         seen = page_through(vm, 'help\n')
         results.append(('help: its 104-character line on one row (paged)',
                         seen is not None and any(r.startswith('    die ') and r.endswith('processes use run)')
@@ -1011,10 +1052,13 @@ def scenario_kernel_shell(args, image, firmware, outdir):
             ok = vm.expect('Loading SurfOS with shell=kernel', 30) and vm.expect(elevated, args.boot_timeout)
             results.append(('the kernel shell entry boots to the ring-0 shell, elevated: SURF \u224b#>', ok))
         if ok:
-            vm.pump(1)
-            scr = vm.screen('kernel-shell.png')
-            row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
-            results.append(('the framebuffer shows the banner and the elevated prompt', banner_ok(scr) and row.endswith('#>')))
+            def shown(scr):                     # 10/25/26 (track A, A3): the screen follows the serial line in batches
+                row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
+                return banner_ok(scr) and row.endswith('#>')
+            scr = vm.wait_screen(shown, 15, interval=0.5)
+            if scr is not None and outdir:
+                scr.png(os.path.join(outdir, 'kernel-shell.png'))
+            results.append(('the framebuffer shows the banner and the elevated prompt', scr is not None))
             results.append(('it was asked for: no recovery line', 'recovery console' not in vm.text()))
             ok, out = run_cmd(vm, 'ps', ['Shell 0', 'Shell 1', 'Shell 2', 'Shell 3'])
             results.append(('ps: the ring-0 shells on F1 to F4, no surfsh', ok and 'surfsh' not in out))
@@ -1250,6 +1294,15 @@ def scenario_usbnet(args, image, firmware, outdir):
             ok, _ = run_cmd(vm, f'fetch -o /dev/null http://10.0.2.2:{port}/big', ['fetch: 1.0 MB in ', '-> /dev/null'],
                             timeout=120)
             results.append(('fetch: 1 MB over the adapter, to /dev/null', ok))
+            # 10/25/26 (track A): fetch's connection is finished by the net thread a moment after fetch ends (the FINs,
+            # the last ACK, TIME_WAIT), which frees what it held, and selftest's heaptest compares the whole heap's
+            # use before and after its rounds: that free fell inside them each time at -O0 once the console got
+            # faster (A3), and heaptest failed. So selftest waits until netstat shows no connection but listeners
+            for _ in range(10):
+                _, out = run_cmd(vm, 'netstat', [])
+                if not re.search(r'\btcp  (?!LISTEN)', out):
+                    break
+                time.sleep(1)
             ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
             results.append(('selftest, with its network checks on the USB adapter', ok))
             results += telnet_session(vm, qr, telnet_port)
