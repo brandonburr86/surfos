@@ -1,7 +1,7 @@
 /*
 SurfGPU reference model
 --------------------
-File: gpu_model.h Date: 10/18/26 (SurfGPU)
+File: gpu_model.h Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
 --------------------
 The C reference model of docs/GPU.md: one implementation, used by the Verilator tests of
 surf_video, surf_vram and surf_gpu, by surfsim's checks and by the firmware's host tools (the
@@ -13,10 +13,15 @@ graphics modes with GPAL, GFX_BASE, GFX_STRIDE, GFX_SCALE and the text overlay),
 settings a frame latch took, VRAM and text RAM as they are during the frame (a still
 picture), and the font. gpu_frame_crc() is FRAME_CRC of such a frame.
 
-The engine (docs/GPU.md section 5): struct gpu_engine takes command words one at a time,
+The engine (docs/GPU.md sections 5 and 16): struct gpu_engine takes command words one at a time,
 exactly as surf_gpu's FIFO hands them over, and draws on a 307,200-byte VRAM array; it keeps
-the target, the clip, FENCE and the sticky status bits as the hardware does. It has no timing:
-WAIT_VBLANK does nothing in it.
+the target, the clip, the depth buffer, FENCE and the sticky status bits as the hardware does.
+It has no timing: WAIT_VBLANK does nothing in it, and FLIP records its base (flip_base, flips),
+which a display model takes as GFX_BASE.
+
+TRIANGLE's rules are also open to tests on their own (GPU2, docs/GPU.md section 16):
+gpu_tri_setup() and gpu_tri_inside() are its coverage (the counting mode of the property
+tests), gpu_plane_setup() and gpu_plane_value() its interpolation of one vertex value.
 */
 #ifndef SURFGPU_GPU_MODEL_H
 #define SURFGPU_GPU_MODEL_H
@@ -85,7 +90,7 @@ struct gpu_engine {
     uint32_t sticky;            /* GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM | GPU_ST_FENCE_EV */
     unsigned fences;            /* FENCE commands completed (for tests) */
     /* the command being collected */
-    uint32_t hdr, p[3];
+    uint32_t hdr, p[6];
     unsigned np, need;          /* parameter words held, needed */
     int in_cmd;
     /* EXPAND, WRITE_RECT: the data stream */
@@ -93,12 +98,55 @@ struct gpu_engine {
     uint32_t dx, dy, dw, dh;    /* the rectangle (dx, dy signed 16-bit), as given */
     uint64_t pix_done;          /* pixels of it taken */
     unsigned long long writes;  /* pixel writes (for tests) */
+    /* GPU2: the depth buffer (SET_ZBUF; none after a reset or an accepted SET_TARGET) */
+    int zvalid;
+    uint32_t zbase, zstride;
+    /* GPU2: FLIP (the base as video GFX_BASE keeps it: bits 18:2) */
+    uint32_t flip_base;
+    unsigned flips;
+    /* GPU2: TRIANGLE statistics (for tests) */
+    unsigned long long tri_cmds;        /* TRIANGLE commands taken */
+    unsigned long long tri_drawn;       /* ... that reached the walk (not refused, culled, empty) */
+    unsigned long long tri_zero;        /* ... of zero area */
+    unsigned long long tri_culled;      /* ... culled */
+    unsigned long long tri_pixels;      /* pixels covered (before the depth test) */
+    unsigned long long tri_zfail;       /* covered pixels the depth test dropped */
+    unsigned long long tri_clamped;     /* values the clamp changed (docs/GPU.md 16.4: never) */
+    unsigned long long tri_wide;        /* covered values outside the RTL's widths (16.4: never) */
 };
 
 void gpu_engine_init(struct gpu_engine *g, uint8_t *vram);  /* the state after a reset */
 void gpu_engine_word(struct gpu_engine *g, uint32_t w);      /* one CMD word, as the FIFO gives it */
 void gpu_engine_abort(struct gpu_engine *g);                 /* CTRL.ABORT */
 int gpu_engine_idle(const struct gpu_engine *g);             /* no command partly taken */
+
+/* ------------------------------------------------------------------ TRIANGLE's rules (GPU2) */
+
+/* a triangle's edges, in the order docs/GPU.md 16.3 walks them (clockwise on the screen) */
+struct gpu_tri {
+    int64_t area2;              /* twice the signed area of the vertices as given (1/256 pixel^2) */
+    int32_t x[3], y[3];         /* 12.4, vertices 1 and 2 swapped when area2 < 0 */
+    int32_t ex[3], ey[3];       /* edge e: from vertex e to vertex (e + 1) mod 3 */
+    int tl[3];                  /* edge e is a top or a left edge */
+};
+/* from three vertices in 12.4 (x, y signed 16-bit each): 0 when the area is zero */
+int gpu_tri_setup(struct gpu_tri *t, const int32_t vx[3], const int32_t vy[3]);
+/* 1 when pixel (px, py)'s centre is covered: inside, or on a top or left edge */
+int gpu_tri_inside(const struct gpu_tri *t, int64_t px, int64_t py);
+
+/* the plane of one vertex value (depth or colour index) over the triangle */
+struct gpu_plane {
+    int32_t x0, y0;             /* vertex 0 (12.4) */
+    int64_t v0;                 /* its value */
+    int64_t gx, gy;             /* the gradients: floor(N * 2^20 / area2), per 1/16 pixel */
+    int64_t vmin, vmax;         /* the smallest and largest of the three values */
+};
+/* the vertices as TRIANGLE takes them (any winding), the area not zero */
+void gpu_plane_setup(struct gpu_plane *p, const int32_t vx[3], const int32_t vy[3], const uint32_t v[3]);
+/* the value at pixel (px, py)'s centre, rounded and clamped; *clamped and *wide (may be NULL)
+ * say whether the clamp changed it and whether the unrounded value left the RTL's width of
+ * `bits` (37 for depth, 29 for colour: docs/GPU.md 16.4) */
+uint32_t gpu_plane_value(const struct gpu_plane *p, int64_t px, int64_t py, unsigned bits, int *clamped, int *wide);
 
 #ifdef __cplusplus
 }

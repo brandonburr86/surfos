@@ -9,7 +9,8 @@ window (the C++ harness sends VRAM addresses as offsets with the vram base). Res
 from the slave that took the request (both answer in the next cycle). VRAM's pixel port is the
 harness's backdoor: pix_clk is clk here and pix_addr / pix_data read a word two edges later, so
 the harness can compare all of VRAM with the C model without touching port A. vblank is driven
-by the harness. Simulation only.
+by the harness, and FLIP's write into video's GFX_BASE (gfx_base_we, gfx_base_out: GPU2) goes
+out to it. Simulation only.
 */
 module tb_gpu (
     input  wire        clk,
@@ -26,6 +27,8 @@ module tb_gpu (
     output wire        s_rsp_err,
     output wire        irq,
     input  wire        vblank,
+    output wire        gfx_base_we,
+    output wire [16:0] gfx_base_out,
     input  wire [16:0] pix_addr,
     output wire [31:0] pix_data,
     // the engine's port, for the harness's watch on it
@@ -51,6 +54,7 @@ module tb_gpu (
         .s_req_valid(s_req_valid && to_gpu), .s_req_ready(g_ready), .s_req_addr(s_req_addr),
         .s_req_write(s_req_write), .s_req_be(s_req_be), .s_req_wdata(s_req_wdata), .s_req_fetch(s_req_fetch),
         .s_rsp_valid(g_rv), .s_rsp_rdata(g_rd), .s_rsp_err(g_re), .irq(irq), .vblank(vblank),
+        .gfx_base_we(gfx_base_we), .gfx_base_out(gfx_base_out),
         .m_req(m_req), .m_we(m_we), .m_be(m_be), .m_addr(m_addr), .m_wdata(m_wdata),
         .m_gnt(m_gnt), .m_rvalid(m_rvalid), .m_rdata(m_rdata));
 

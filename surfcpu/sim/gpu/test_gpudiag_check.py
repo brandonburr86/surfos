@@ -65,7 +65,7 @@ def run(crcs=("11111111", "22222222"), summary=None, skip=False, rerun=False, bu
     lines = []
     if banner:
         lines += ["", "SurfGPU diagnostic 1.0.0 (build %s)" % build] + ([RERUN] if rerun else [])
-        lines += ["board Arty A7-100T (0x100), SoC 0.3.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz",
+        lines += ["board Arty A7-100T (0x100), SoC 0.4.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz",
                   "bitstream build %s flags 0, features 17f" % build]
     lines.append("identity                           ok (5 checks)")
     if failed_section:

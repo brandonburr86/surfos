@@ -1,7 +1,7 @@
 /*
 SurfGPU drawing engine
 --------------------
-File: surf_gpu.v Date: 10/18/26 (SurfGPU)
+File: surf_gpu.v Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
 --------------------
 The gpu block of docs/MEMORY-MAP.md (registers at 0x1000_9000) and docs/GPU.md sections 5 and 6:
 software writes command words to CMD, a FIFO of 2**FIFO_LOG2 words (surf_fifo, distributed RAM)
@@ -32,6 +32,13 @@ command's writes have been granted, so they are in VRAM. WAIT_VBLANK waits for t
 pulse (surf_video's, in this clock domain). CTRL.ABORT empties the FIFO and ends the running
 command between two accesses. Opcodes and header bits are firmware/include/surfcpu/gpu.h's
 (sim/gpu/check_gpu_h.py compares them); every behaviour is the C model's (sim/models/gpu_model.c).
+
+GPU2 (docs/GPU.md section 16): SET_ZBUF checks the depth buffer against the target with the same
+multiplier and keeps it (an accepted SET_TARGET drops it); TRIANGLE's six words are collected
+like any parameters, a TRIANGLE that tests or writes depth without a depth buffer is refused,
+and any other is handed to surf_gpu_tri, which has VRAM's port until it is done; FLIP waits for
+the vblank pulse as WAIT_VBLANK does and then writes its base into surf_video's GFX_BASE through
+gfx_base_we / gfx_base_out (bits 18:2, one cycle). gpu.ID reads "GPU2".
 */
 module surf_gpu #(
     parameter integer FIFO_LOG2  = 6,
@@ -52,6 +59,8 @@ module surf_gpu #(
     output wire        s_rsp_err,
     output wire        irq,
     input  wire        vblank,             // one clk pulse as vertical blanking begins
+    output wire        gfx_base_we,        // FLIP: write gfx_base_out into video GFX_BASE (one cycle)
+    output wire [16:0] gfx_base_out,       // its value, GFX_BASE bits 18:2
     // VRAM's engine side of port A (surf_vram g_*)
     output wire        m_req,
     output wire        m_we,
@@ -67,9 +76,11 @@ module surf_gpu #(
     // ---------------------------------------------------------------- opcodes (gpu.h)
     localparam [7:0] OP_NOP = 8'h00, OP_SET_TARGET = 8'h01, OP_SET_CLIP = 8'h02, OP_FILL_RECT = 8'h03,
                      OP_COPY_RECT = 8'h04, OP_LINE = 8'h05, OP_EXPAND = 8'h06, OP_WRITE_RECT = 8'h07,
-                     OP_FENCE = 8'h08, OP_WAIT_VBLANK = 8'h09;
+                     OP_FENCE = 8'h08, OP_WAIT_VBLANK = 8'h09, OP_SET_ZBUF = 8'h0A, OP_TRIANGLE = 8'h0B,
+                     OP_FLIP = 8'h0C;
     localparam integer HDR_COPY_KEY = 8, HDR_EXPAND_TRANSP = 16, HDR_FENCE_IRQ = 0;
-    localparam [31:0]  ID_VALUE = 32'h3155_5047;                  // "GPU1"
+    localparam integer HDR_TRI_ZTEST = 9, HDR_TRI_ZWRITE = 11;       // the rest: surf_gpu_tri.v
+    localparam [31:0]  ID_VALUE = 32'h3255_5047;                  // "GPU2"
     localparam integer DEPTH    = 1 << FIFO_LOG2;
     localparam [31:0]  VRAM_32  = VRAM_BYTES;
     wire       [31:0]  vram_32  = VRAM_32;
@@ -96,11 +107,11 @@ module surf_gpu #(
     // ---------------------------------------------------------------- engine state
     localparam [3:0] S_IDLE = 4'd0, S_PARAM = 4'd1, S_SETUP = 4'd2, S_MUL = 4'd3, S_TARGET = 4'd4,
                      S_RECT = 4'd5, S_COPY_GO = 4'd6, S_COPY_RD = 4'd7, S_COPY_WT = 4'd8, S_COPY_WR = 4'd9,
-                     S_LINE = 4'd10, S_VBL = 4'd11;
+                     S_LINE = 4'd10, S_VBL = 4'd11, S_ZBUF = 4'd12, S_TRI = 4'd13, S_FLIP = 4'd14;
     reg [3:0]  st = S_IDLE;
     reg [31:0] hdr = 32'd0;
-    reg [31:0] p0 = 32'd0, p1 = 32'd0, p2 = 32'd0;
-    reg [1:0]  pn = 2'd0, need = 2'd0;                            // parameter words held, needed
+    reg [31:0] p0 = 32'd0, p1 = 32'd0, p2 = 32'd0, p3 = 32'd0, p4 = 32'd0, p5 = 32'd0;
+    reg [2:0]  pn = 3'd0, need = 3'd0;                            // parameter words held, needed
     wire [7:0] op = hdr[31:24];
 
     // ---------------------------------------------------------------- registers, FIFO
@@ -118,10 +129,17 @@ module surf_gpu #(
         .rd_en(pop), .rd_data(fifo_q), .empty(fifo_empty), .full(fifo_full), .count(fifo_count));
     wire [15:0] fifo_free = DEPTH[15:0] - {{(15 - FIFO_LOG2){1'b0}}, fifo_count};
 
-    // ---------------------------------------------------------------- target and clip
+    // ---------------------------------------------------------------- target, clip, depth buffer
     reg [18:0] t_base = 19'd0;
     reg [15:0] t_stride = 16'd640;
     reg [14:0] t_w = 15'd640, t_h = 15'd480;
+    reg [18:0] z_base = 19'd0;
+    reg [15:0] z_stride = 16'd0;
+    reg        z_valid = 1'b0;                                    // SET_ZBUF taken for this target
+    reg        flip_we = 1'b0;                                    // FLIP's write to video GFX_BASE
+    reg [16:0] flip_base = 17'd0;
+    assign gfx_base_we  = flip_we;
+    assign gfx_base_out = flip_base;
     reg [15:0] c_x0 = 16'd0, c_y0 = 16'd0, c_x1 = 16'd640, c_y1 = 16'd480;
     // the effective clip as 18-bit signed values: [ecx0, ecx1) x [ecy0, ecy1)
     wire [15:0] cx1m = (c_x1 < {1'b0, t_w}) ? c_x1 : {1'b0, t_w};
@@ -259,23 +277,19 @@ module surf_gpu #(
             default: ;
         endcase
     end
-    assign m_req   = q_req;
-    assign m_we    = q_we;
-    assign m_be    = q_be;
-    assign m_addr  = q_addr;
-    assign m_wdata = q_wdata;
 
     // ---------------------------------------------------------------- the header's command
     // (comparisons, not a case statement: Yosys would make a case of constants a ROM, and the
     // board's netlist check wants every memory of the RTL in RAM cells)
     wire [7:0] h_op = fifo_q[31:24];
     wire       h_p0 = (h_op == OP_NOP) || (h_op == OP_WAIT_VBLANK);
-    wire       h_p1 = (h_op == OP_FENCE);
+    wire       h_p1 = (h_op == OP_FENCE) || (h_op == OP_FLIP);
     wire       h_p2 = (h_op == OP_SET_CLIP) || (h_op == OP_FILL_RECT) || (h_op == OP_LINE) ||
-                      (h_op == OP_EXPAND) || (h_op == OP_WRITE_RECT);
+                      (h_op == OP_EXPAND) || (h_op == OP_WRITE_RECT) || (h_op == OP_SET_ZBUF);
     wire       h_p3 = (h_op == OP_SET_TARGET) || (h_op == OP_COPY_RECT);
-    wire       h_known = h_p0 || h_p1 || h_p2 || h_p3;
-    wire [1:0] h_params = h_p3 ? 2'd3 : h_p2 ? 2'd2 : h_p1 ? 2'd1 : 2'd0;
+    wire       h_p6 = (h_op == OP_TRIANGLE);
+    wire       h_known = h_p0 || h_p1 || h_p2 || h_p3 || h_p6;
+    wire [2:0] h_params = h_p6 ? 3'd6 : h_p3 ? 3'd3 : h_p2 ? 3'd2 : h_p1 ? 3'd1 : 3'd0;
 
     // the FIFO word is taken: a header, a parameter, or a data word EXPAND or WRITE_RECT needs
     assign pop = !rst && !abort && !fifo_empty &&
@@ -293,14 +307,46 @@ module surf_gpu #(
                          (tg_w != 16'd0 && tg_h != 16'd0 &&
                           (!(tg_w <= p1[15:0] || tg_h == 16'd1) ||
                            ({4'd0, p0} + mul_acc + {20'd0, tg_w} > VRAM_36)));
+    // SET_ZBUF's: the target's pixels at 2 bytes each (with (H - 1) * stride in mul_acc)
+    wire [16:0] tw2 = {1'b0, t_w, 1'b0};
+    wire        zb_bad = (p0[1:0] != 2'd0) || (p1[1:0] != 2'd0) || ({4'd0, p0} >= VRAM_36) ||
+                         (p1[31:16] != 16'd0) ||
+                         (t_w != 15'd0 && t_h != 15'd0 &&
+                          (!(tw2 <= {1'b0, p1[15:0]} || t_h == 15'd1) ||
+                           ({4'd0, p0} + mul_acc + {19'd0, tw2} > VRAM_36)));
+
+    // TRIANGLE: surf_gpu_tri walks it on the port (m_* below while st is S_TRI)
+    wire        tri_depth = hdr[HDR_TRI_ZTEST] || hdr[HDR_TRI_ZWRITE];
+    wire        tri_start = (st == S_SETUP) && (op == OP_TRIANGLE) && !abort && !(tri_depth && !z_valid);
+    wire        tri_busy;
+    wire        t_req, t_we;
+    wire [3:0]  t_be;
+    wire [16:0] t_addr;
+    wire [31:0] t_wdata;
+    surf_gpu_tri u_tri (
+        .clk(clk), .rst(rst), .stop(abort), .start(tri_start), .flags(hdr[13:0]),
+        .vtx({p5, p4, p3, p2, p1, p0}), .t_base(t_base), .t_stride(t_stride), .z_base(z_base),
+        .z_stride(z_stride), .ecx0(ecx0), .ecx1(ecx1), .ecy0(ecy0), .ecy1(ecy1), .busy(tri_busy),
+        .m_req(t_req), .m_we(t_we), .m_be(t_be), .m_addr(t_addr), .m_wdata(t_wdata),
+        .m_gnt(m_gnt), .m_rvalid(m_rvalid), .m_rdata(m_rdata));
+
+    // VRAM's port: surf_gpu_tri's while a TRIANGLE runs, else the walkers' above
+    wire   tri_port = (st == S_TRI);
+    assign m_req   = tri_port ? t_req   : q_req;
+    assign m_we    = tri_port ? t_we    : q_we;
+    assign m_be    = tri_port ? t_be    : q_be;
+    assign m_addr  = tri_port ? t_addr  : q_addr;
+    assign m_wdata = tri_port ? t_wdata : q_wdata;
 
     // ---------------------------------------------------------------- the engine
     always @(posedge clk) begin
         if (rst) begin
             st <= S_IDLE;
-            pn <= 2'd0;
+            pn <= 3'd0;
             scnt <= 7'd0;
             t_base <= 19'd0; t_stride <= 16'd640; t_w <= 15'd640; t_h <= 15'd480;
+            z_valid <= 1'b0;
+            flip_we <= 1'b0;
             c_x0 <= 16'd0; c_y0 <= 16'd0; c_x1 <= 16'd640; c_y1 <= 16'd480;
             fence_q <= 32'd0;
             ovf_q <= 1'b0; badop_q <= 1'b0; badpar_q <= 1'b0; fev_q <= 1'b0;
@@ -315,6 +361,7 @@ module surf_gpu #(
                 if (s_req_wdata[SURF_GPU_STATUS_FENCE_EV_LSB])   fev_q    <= 1'b0;
             end
             if (wr && hit_cmd && fifo_full) ovf_q <= 1'b1;
+            flip_we <= 1'b0;
 
             if (abort) begin
                 st <= S_IDLE;
@@ -323,23 +370,24 @@ module surf_gpu #(
                 case (st)
                     S_IDLE: if (!fifo_empty) begin
                         hdr  <= fifo_q;
-                        pn   <= 2'd0;
+                        pn   <= 3'd0;
                         need <= h_params;
                         if (!h_known)
                             badop_q <= 1'b1;
-                        else if (h_params != 2'd0)
+                        else if (h_params != 3'd0)
                             st <= S_PARAM;
                         else if (h_op == OP_WAIT_VBLANK)
                             st <= S_VBL;
                     end
                     S_PARAM: if (!fifo_empty) begin
-                        case (pn)
-                            2'd0:    p0 <= fifo_q;
-                            2'd1:    p1 <= fifo_q;
-                            default: p2 <= fifo_q;
-                        endcase
-                        pn <= pn + 2'd1;
-                        if (pn + 2'd1 == need) st <= S_SETUP;
+                        if (pn == 3'd0) p0 <= fifo_q;
+                        if (pn == 3'd1) p1 <= fifo_q;
+                        if (pn == 3'd2) p2 <= fifo_q;
+                        if (pn == 3'd3) p3 <= fifo_q;
+                        if (pn == 3'd4) p4 <= fifo_q;
+                        if (pn == 3'd5) p5 <= fifo_q;
+                        pn <= pn + 3'd1;
+                        if (pn + 3'd1 == need) st <= S_SETUP;
                     end
                     S_SETUP: begin
                         st <= S_IDLE;
@@ -356,6 +404,18 @@ module surf_gpu #(
                             OP_SET_CLIP: begin
                                 c_x0 <= p0[15:0]; c_y0 <= p0[31:16]; c_x1 <= p1[15:0]; c_y1 <= p1[31:16];
                             end
+                            OP_SET_ZBUF: begin                            // (H - 1) * stride, then S_ZBUF
+                                mul_a <= (t_h == 15'd0) ? 36'sd0 : {21'd0, t_h - 15'd1};
+                                mul_b <= p1[15:0];
+                                st <= S_MUL;
+                            end
+                            OP_TRIANGLE: begin
+                                if (tri_depth && !z_valid)
+                                    badpar_q <= 1'b1;                     // depth without a depth buffer
+                                else
+                                    st <= S_TRI;                          // tri_start this cycle
+                            end
+                            OP_FLIP: st <= S_FLIP;
                             OP_FILL_RECT: if (f_x0 < f_x1 && f_y0 < f_y1) begin
                                 rx0 <= f_x0; rx1 <= f_x1; cy <= f_y0; cy_last <= f_y1 - 18'sd1;
                                 ydn <= 1'b0; xdn <= 1'b0;
@@ -405,6 +465,8 @@ module surf_gpu #(
                             mul_n <= mul_n + 5'd1;
                         end else if (op == OP_SET_TARGET) begin
                             st <= S_TARGET;
+                        end else if (op == OP_SET_ZBUF) begin
+                            st <= S_ZBUF;
                         end else if (mul_two) begin                       // COPY: the first row's address,
                             row <= mul_acc + {17'd0, t_base};            // then (sy - dy) * stride
                             mul_two <= 1'b0;
@@ -427,7 +489,22 @@ module surf_gpu #(
                         else begin
                             t_base <= p0[18:0]; t_stride <= p1[15:0]; t_w <= tg_w[14:0]; t_h <= tg_h[14:0];
                             c_x0 <= 16'd0; c_y0 <= 16'd0; c_x1 <= tg_w; c_y1 <= tg_h;
+                            z_valid <= 1'b0;                              // the depth buffer was the old target's
                         end
+                    end
+                    S_ZBUF: begin
+                        st <= S_IDLE;
+                        if (zb_bad)
+                            badpar_q <= 1'b1;
+                        else begin
+                            z_base <= p0[18:0]; z_stride <= p1[15:0]; z_valid <= 1'b1;
+                        end
+                    end
+                    S_TRI: if (!tri_busy) st <= S_IDLE;
+                    S_FLIP: if (vblank) begin                             // as WAIT_VBLANK, then the write
+                        flip_we   <= 1'b1;
+                        flip_base <= p0[18:2];
+                        st <= S_IDLE;
                     end
                     S_RECT: begin
                         if (!have) begin
@@ -542,7 +619,9 @@ module surf_gpu #(
     assign irq = (fev_q && ie_q[SURF_GPU_IE_FENCE_LSB]) ||
                  ((ovf_q || badop_q || badpar_q) && ie_q[SURF_GPU_IE_ERR_LSB]);
 
-    // unused: the address above the window, the top of the 18-bit sizes, the COPY size's top bits
+    // unused: the address above the window, the top of the 18-bit sizes, the COPY size's top bits,
+    // the header bits TRIANGLE does not use, FLIP's base outside GFX_BASE's bits
     wire unused_ok = &{1'b0, s_req_addr[31:12], cw[17:16], ch[17:16], src_row[35:19], l_byte[35:19],
-                       row[35:19], row[1:0], src_row[1:0], f_x1m[1:0], e_x1m[1:0], k_x1m[1:0]};
+                       row[35:19], row[1:0], src_row[1:0], f_x1m[1:0], e_x1m[1:0], k_x1m[1:0], hdr[23:14],
+                       p0[31:19], p3[31:16], p5[31:24]};
 endmodule

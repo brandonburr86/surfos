@@ -248,7 +248,7 @@ static void no_engine(void)
         diag_check(0, "no engine: a load of gpu.ID at 0x%08x traps (mcause 0x%08x)", SURF_GPU_BASE + SURF_GPU_ID,
                    engine_cause);
     else
-        diag_check(0, "no engine: gpu.ID reads 0x%08x, not 0x%08x (\"GPU1\")", engine_id, GPU_ID_VALUE);
+        diag_check(0, "no engine: gpu.ID reads 0x%08x, not 0x%08x (\"GPU2\")", engine_id, GPU_ID_VALUE);
 }
 
 /* the engine's registers and errors: overflow behind a WAIT_VBLANK, unknown opcodes, a refused
@@ -302,7 +302,7 @@ static void gpu_registers(uint32_t unused)
                "after the vertical blanking: FENCE 0x%x, FIFO_FREE %u", GREG(SURF_GPU_FENCE), GREG(SURF_GPU_FIFO_FREE));
     GREG(SURF_GPU_STATUS) = SURF_GPU_STATUS_OVERFLOW_MASK;
     /* an unknown opcode, a refused target: sticky, nothing else changes */
-    GREG(SURF_GPU_CMD) = GPU_HDR(0x0Au, 0);
+    GREG(SURF_GPU_CMD) = GPU_HDR(0x0Du, 0);                         /* the first after GPU2's */
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
     GREG(SURF_GPU_CMD) = 4002;                                      /* not a multiple of 4 */
     GREG(SURF_GPU_CMD) = 320;

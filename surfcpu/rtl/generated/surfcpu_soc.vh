@@ -1,5 +1,5 @@
 // Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
-// SurfCPU memory map version 2, SoC version 0.3.0.
+// SurfCPU memory map version 2, SoC version 0.4.0.
 
 // `include this file once inside each module body that needs it (it holds localparams,
 // so it has no include guard). Addresses and masks are [31:0]; bit positions and counts
@@ -7,7 +7,7 @@
 
 /* verilator lint_off UNUSEDPARAM */
 localparam integer SURF_MAP_VERSION = 2;  // memory map version
-localparam [31:0] SURF_SOC_VERSION = 32'h0000_0300;  // SoC version 0.3.0
+localparam [31:0] SURF_SOC_VERSION = 32'h0000_0400;  // SoC version 0.4.0
 localparam [31:0] SURF_RESET_PC = 32'h0000_0000;  // reset vector
 localparam integer SURF_HART_ID = 0;  // mhartid
 localparam integer SURF_OSC_HZ = 100000000;  // Hz
@@ -331,7 +331,7 @@ localparam [31:0] SURF_VIDEO_PALETTE_G_MASK = 32'h0000_00F0;  // in place
 localparam integer SURF_VIDEO_PALETTE_R_LSB = 8;  // red
 localparam integer SURF_VIDEO_PALETTE_R_WIDTH = 4;
 localparam [31:0] SURF_VIDEO_PALETTE_R_MASK = 32'h0000_0F00;  // in place
-localparam [31:0] SURF_VIDEO_GFX_BASE = 32'h0000_0080;  // rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU.
+localparam [31:0] SURF_VIDEO_GFX_BASE = 32'h0000_0080;  // rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. The gpu engine's FLIP command writes it too, at the start of a vertical blanking, as a CPU store would (a CPU store in the same cycle wins: docs/GPU.md section 16). Only with sysinfo.FEATURES.GPU.
 localparam integer SURF_VIDEO_GFX_BASE_BASE_LSB = 0;  // byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0
 localparam integer SURF_VIDEO_GFX_BASE_BASE_WIDTH = 19;
 localparam [31:0] SURF_VIDEO_GFX_BASE_BASE_MASK = 32'h0007_FFFF;  // in place
@@ -420,7 +420,7 @@ localparam [31:0] SURF_SYSINFO_DDR_SIZE = 32'h0000_0024;  // ro: Bytes of DDR be
 localparam [31:0] SURF_SYSINFO_PIX_HZ = 32'h0000_0028;  // ro: Pixel clock in Hz (0 without video).
 localparam [31:0] SURF_SYSINFO_SCRATCH = 32'h0000_002C;  // rw: Free read/write word for bus tests (reset 0).
 localparam [31:0] SURF_SYSINFO_BUILD_TIME = 32'h0000_0030;  // ro: Build time, seconds since 1970-01-01 UTC (0 if unknown).
-localparam [31:0] SURF_GPU_ID = 32'h0000_0000;  // ro: 0x31555047, the bytes "GPU1" in memory order: the command set of docs/GPU.md version 1.
+localparam [31:0] SURF_GPU_ID = 32'h0000_0000;  // ro: 0x32555047, the bytes "GPU2" in memory order: the command set of docs/GPU.md version 2 (GPU1's, 0x31555047, unchanged, plus SET_ZBUF, TRIANGLE and FLIP: docs/GPU.md section 16).
 localparam [31:0] SURF_GPU_STATUS = 32'h0000_0004;  // w1c: Engine state and sticky events; write 1 to clear a sticky bit.
 localparam integer SURF_GPU_STATUS_BUSY_LSB = 0;  // commands are queued or running; 0: every command written so far is done and its writes are in VRAM
 localparam integer SURF_GPU_STATUS_BUSY_WIDTH = 1;
@@ -431,7 +431,7 @@ localparam [31:0] SURF_GPU_STATUS_OVERFLOW_MASK = 32'h0000_0002;  // in place
 localparam integer SURF_GPU_STATUS_BAD_OPCODE_LSB = 2;  // sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command)
 localparam integer SURF_GPU_STATUS_BAD_OPCODE_WIDTH = 1;
 localparam [31:0] SURF_GPU_STATUS_BAD_OPCODE_MASK = 32'h0000_0004;  // in place
-localparam integer SURF_GPU_STATUS_BAD_PARAM_LSB = 3;  // sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large)
+localparam integer SURF_GPU_STATUS_BAD_PARAM_LSB = 3;  // sticky: a command had invalid parameters and did nothing (SET_TARGET or SET_ZBUF outside VRAM, unaligned or too large; a TRIANGLE that tests or writes depth without a depth buffer)
 localparam integer SURF_GPU_STATUS_BAD_PARAM_WIDTH = 1;
 localparam [31:0] SURF_GPU_STATUS_BAD_PARAM_MASK = 32'h0000_0008;  // in place
 localparam integer SURF_GPU_STATUS_FENCE_EV_LSB = 4;  // sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE)

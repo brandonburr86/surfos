@@ -132,7 +132,7 @@ green LEDs on and LD0 green (pass) or red (fail).
 
 ```
 SurfBoot 1.1.0 (build 1cd47417), the SurfCPU boot ROM
-soc: Arty A7-100T (0x100), SoC 0.3.0, memory map 2, 25000000 Hz; bitstream 0123abcd
+soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream 0123abcd
 ddr: initialized by SurfBoot, read leveling lane 0: bitslip 3, delay 16 (window +-10); lane 1: bitslip 5, delay 15 (window +-5)
 ddr: calibrated after 240 ms, 256 MiB, quick test passed (data, address, byte lanes)
 sd: SDHC/SDXC, 29.7 GiB; ready after 230 ms; SPI 6250 kHz, data CRC checked

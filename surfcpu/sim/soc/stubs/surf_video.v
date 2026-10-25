@@ -12,6 +12,7 @@ pattern), INFO the text geometry, PIXCLK the pixel clock, everything else 0; wri
 ignored; the picture is black with both syncs inactive (high) and text address 0.
 10/18/26 (SurfGPU): the version 3 ports (HAS_GFX, vram_addr, vram_data, vblank); it stands in
 for the block without graphics only (HAS_GFX 0: the graphics registers are errors there too).
+10/25/26 (GPU2): the version 4 ports gfx_base_we and gfx_base_in, ignored.
 */
 module surf_video #(
     parameter integer PIX_HZ  = 25173611,
@@ -37,6 +38,8 @@ module surf_video #(
     output wire [16:0] vram_addr,
     input  wire [31:0] vram_data,
     output wire        vblank,
+    input  wire        gfx_base_we,
+    input  wire [16:0] gfx_base_in,
     output wire [3:0]  vga_r,
     output wire [3:0]  vga_g,
     output wire [3:0]  vga_b,
@@ -99,5 +102,6 @@ module surf_video #(
     assign vga_hs      = 1'b1;
     assign vga_vs      = 1'b1;
 
-    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata, pix_clk, pix_rst, text_data, vram_data, HAS_GFX[0]};
+    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata, pix_clk, pix_rst, text_data, vram_data, HAS_GFX[0],
+                       gfx_base_we, gfx_base_in};
 endmodule

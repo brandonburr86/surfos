@@ -10,9 +10,13 @@ pix_clk edge. Simulation only.
 HAS_GFX (10/18/26, SurfGPU) builds surf_video with its graphics modes, and a stand-in for
 surf_vram's pixel port: 76,800 words written by the harness (vram_we/waddr/wdata), the word
 for vram_addr two pix_clk edges later, 0 at or above 76,800 (docs/GPU.md section 2).
+FLIP_PORT (10/25/26, GPU2) connects the gpu engine's GFX_BASE port (gfx_base_we, gfx_base_in,
+docs/GPU.md section 16.7) to the harness; with 0 (the default) it is tied off, so a harness that
+does not know it (sim/io/test_video.cpp) is not affected by inputs it never sets.
 */
 module tb_video #(
-    parameter integer HAS_GFX = 0
+    parameter integer HAS_GFX   = 0,
+    parameter integer FLIP_PORT = 0
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -36,6 +40,8 @@ module tb_video #(
     input  wire [16:0] vram_waddr,
     input  wire [31:0] vram_wdata,
     output wire        vblank,
+    input  wire        gfx_base_we,
+    input  wire [16:0] gfx_base_in,
     output wire [11:0] text_addr,
     output wire [3:0]  vga_r,
     output wire [3:0]  vga_g,
@@ -73,5 +79,6 @@ module tb_video #(
         .s_rsp_err(s_rsp_err), .irq(irq),
         .pix_clk(pix_clk), .pix_rst(pix_rst), .text_addr(text_addr), .text_data(text_data),
         .vram_addr(vram_addr), .vram_data(vram_data), .vblank(vblank),
+        .gfx_base_we((FLIP_PORT != 0) && gfx_base_we), .gfx_base_in((FLIP_PORT != 0) ? gfx_base_in : 17'd0),
         .vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b), .vga_hs(vga_hs), .vga_vs(vga_vs));
 endmodule
