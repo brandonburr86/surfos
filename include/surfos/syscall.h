@@ -75,7 +75,8 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 #define SYS_spawnx   47  /* (const char *path, char *const argv[], const struct spawnx *o): pid (surfos/spawn.h) */
 /* 10/25/26 */
 #define SYS_waitx    48  /* (int pid, struct waitx *w, int options): pid; how the child ended (surfos/job.h) */
-#define NR_SYSCALLS 49
+#define SYS_job      49  /* (int op, int arg): job control for a shell (surfos/job.h) */
+#define NR_SYSCALLS 50
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

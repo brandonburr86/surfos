@@ -37,6 +37,8 @@ struct tty {
     volatile u_char hungup;             /* 10/6/26: a pty whose master side is closed: no key comes, reads end */
     u_char skip;                        /* 10/6/26: the rest of a paste is dropped until the input pauses (TTY_SKIP) */
     u_long last_in;                     /* 10/6/26: when tty_term_input() last had a byte (ticks), for the skip */
+    u_long fg_job;                      /* 10/25/26: the foreground job (surfos/job.h), 0 for none */
+    u_long fg_shell;                    /* the pid of the shell that made it the foreground one */
 };
 
 extern struct tty ttys[NUM_TTYS];     /* 10/6/26: F1-F4, then the pseudo-terminals' */
@@ -150,6 +152,9 @@ int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -err
 struct surf_task;
 void tty_key(struct tty *t, u_char c);
 int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
+/* 10/25/26: Ctrl+Z (0x1A) in line mode stops the terminal's foreground job, and a task of another job
+   that reads the terminal stops first (surfos/job.h); Ctrl+D (0x04) on an empty line is the end of the
+   input for read(2): 0 */
 void tty_task_gone(struct surf_task *task);          /* interrupts off */
 
 /* 10/6/26: pseudo-terminals (kernel/pty.c): a task on one ended (from tty_task_gone()); when

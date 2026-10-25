@@ -36,7 +36,9 @@ most SCRIPT_LINE bytes) starts INTERPRETER, which must be an ELF program (no #! 
 argument, its blanks at the end off. The task is named after the script. A file that is
 neither ELF nor #! is refused with -ENOEXEC before anything starts, so that a shell can run
 it as a script of its own (POSIX's rule); an ELF file the loader cannot run still fails in
-the new task, as before.
+the new task, as before. A new task is in the caller's job (surfos/job.h), or in the one
+SYS_spawnx names: a new one (SPAWN_JOB_NEW, the task its first) or one of the caller's; a
+detached one (init's) is in none.
 */
 
 #include <surfos/types.h>
@@ -320,5 +322,18 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
         flags |= TF_FOREGROUND;                     /* 10/6/26; 10/24/26: not a job started in the background */
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
     if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
+    {
+        u_long irqf = irq_save();               /* 10/25/26: its job (surfos/job.h), before it reads anything */
+        if((flags & TF_DETACHED) || (more && more->job == SPAWN_JOB_NONE)) {
+            /* init's, or asked for: in no job */
+        } else if(more && more->job) {
+            t->job = more->job == SPAWN_JOB_NEW ? t->pid : (u_long)more->job;
+            t->job_shell = curTask ? curTask->pid : 0;
+        } else if(curTask) {
+            t->job = curTask->job;
+            t->job_shell = curTask->job_shell;
+        }
+        irq_restore(irqf);
+    }
     return (int)t->pid;
 }

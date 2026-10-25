@@ -29,7 +29,8 @@ descriptors, an environment and a job in the background. A kernel command's outp
 (dmesg | head) is dropped quietly: that is no failure of the command.
 
 10/25/26: waitx (48, surfos/job.h): wait, and how the child ended (by itself, killed, or
-killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped.
+killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped; with WUNTRACED a child
+that stopped too. job (49): job control for a shell; spawnx's job field.
 */
 
 #include <surfos/types.h>
@@ -200,8 +201,10 @@ static int sys_spawnx(const char *path, char *const argv[], const struct spawnx 
     if(argc < 0) return argc;
     if(!uo || !ubuf(uo, sizeof(o), false)) return -EFAULT;
     memcpy(&o, uo, sizeof(o));
-    if(o.job != 0 || (o.flags & ~(u_int)SPAWN_BG)) return -EINVAL;
+    if(o.flags & ~(u_int)SPAWN_BG) return -EINVAL;
+    if(o.job < SPAWN_JOB_NONE || (o.job > 0 && !task_job_made((u_long)o.job, curTask->pid))) return -EINVAL;
     memset(&m, 0, sizeof(m));
+    m.job = o.job;                              /* 10/25/26: a new job, one of the caller's, or its own */
     for(i = 0; i < 4; i++) {
         if(o.fds[i] == -1 || o.fds[i] == SPAWN_CLOSED) {
             if(o.fds[i] == SPAWN_CLOSED && i < 3) m.closed |= 1u << i;
@@ -236,22 +239,49 @@ static int sys_wait(int pid, int *status, int options) {
     return r;
 }
 
-/* 10/25/26: SYS_wait, and how the child ended (surfos/job.h) */
+/* 10/25/26: SYS_wait, and how the child ended (surfos/job.h); a stop too with WUNTRACED, and pid < -1
+   any child of the job -pid */
 static int sys_waitx(int pid, struct waitx *w, int options) {
     struct waitx k;
-    int st = 0, how = WX_EXITED, r;
+    int st = 0, how = WX_EXITED, job = 0, r;
     if(!w || !ubuf(w, sizeof(k), true)) return -EFAULT;
-    if(options & ~WNOHANG) return -EINVAL;
-    r = task_wait_how(pid < 0 ? WAIT_ANY : (u_long)pid, &st, &how, options | WINTR | WCTRLC);
+    if(options & ~(WNOHANG | WUNTRACED)) return -EINVAL;
+    r = task_wait_how(pid < 0 ? WAIT_ANY : (u_long)pid, pid < -1 ? (u_long)-pid : 0, &st, &how, &job,
+                      options | WINTR | WCTRLC);
     if(r < 0) return (curTask->intr & (TI_KILL | TI_INT)) ? -EINTR : -ECHILD;
     if(r > 0) {
         memset(&k, 0, sizeof(k));
         k.pid = r;
         k.how = how;
-        k.status = how == WX_EXITED ? st : -1;
+        k.status = how == WX_EXITED || how == WX_STOPPED ? st : -1;
+        k.job = job;
         memcpy(w, &k, sizeof(k));
     }
     return r;
+}
+
+/* 10/25/26: job control for a shell (surfos/job.h): its terminal's foreground job, its jobs going on
+   or killed */
+static int sys_job(int op, int arg) {
+    struct tty *t = curTask->tty;
+    u_long flags, prev;
+    if(!t) return -ENOTTY;
+    if(op == JOB_ID) return (int)curTask->job;
+    if(arg < 0) return -EINVAL;
+    if(op == JOB_FG) {
+        if(arg && (u_long)arg != curTask->job && !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
+        flags = irq_save();
+        prev = t->fg_job;
+        t->fg_job = (u_long)arg;
+        t->fg_shell = arg ? curTask->pid : 0;
+        irq_restore(flags);
+        if(arg) task_job_go_on(t, (u_long)arg, 1, curTask->pid);
+        return (int)prev;
+    }
+    if(op != JOB_BG && op != JOB_KILL) return -EINVAL;
+    if(!arg || !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
+    if(op == JOB_BG) return task_job_go_on(t, (u_long)arg, 0, curTask->pid);
+    return task_job_kill(t, (u_long)arg, curTask->pid);
 }
 
 /* 10/6/26: the caller killing itself ends when this call does, like any task in a call */
@@ -538,6 +568,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_spawn:   r = sys_spawn((const char *)a, (char *const *)b); break;
     case SYS_wait:    r = sys_wait((int)a, (int *)b, (int)c); break;
     case SYS_waitx:   r = sys_waitx((int)a, (struct waitx *)b, (int)c); break;
+    case SYS_job:     r = sys_job((int)a, (int)b); break;
     case SYS_sbrk:    r = (int)uvm_sbrk(curTask->uvm, (long)a); break;
     case SYS_uptime:  r = (int)(getticks() * (1000 / HZ)); break;
     case SYS_kill:    r = sys_kill((int)a); break;

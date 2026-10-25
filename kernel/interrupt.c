@@ -155,6 +155,7 @@ static u_long *irq_dispatch(struct trapframe *tf) {
 
     if(irq == IRQ_TIMER) return timer_tick(tf); /* the scheduler may hand back another task */
     if(curTask && curTask->state == TS_DEAD) return schedule(tf);   /* 10/6/26: Ctrl+C killed the program it interrupted */
+    if(curTask && curTask->state == TS_STOPPED) return schedule(tf);    /* 10/25/26: Ctrl+Z stopped it */
     return (u_long*)tf;
 }
 

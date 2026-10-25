@@ -34,6 +34,7 @@ struct spawn_more {
     int envc;
     char *const *envp;
     bool background;
+    int job;                            /* 10/25/26: 0 the caller's, SPAWN_JOB_NEW, or a job to join (surfos/job.h) */
 };
 int process_spawn_ex(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
                      const struct spawn_more *more);

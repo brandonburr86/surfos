@@ -82,6 +82,7 @@ void tty_reset(struct tty *t) {
     t->dropped = 0;
     t->raw = 0;
     t->raw_owner = NULL;
+    t->fg_job = t->fg_shell = 0;                /* 10/25/26 */
     irq_restore(flags);
 }
 
@@ -118,6 +119,13 @@ void tty_input(struct tty *t, u_char c) {
             irq_restore(flags);
             return;
         }
+    }
+    /* 10/25/26: Ctrl+Z in line mode stops the foreground job (surfos/job.h) and goes no further, with
+       one or without; at --More-- it is a key (it shows the next screenful) */
+    if(c == 0x1A && !t->raw && !t->con->page_asker) {
+        task_stop_job(t, t->fg_job);
+        irq_restore(flags);
+        return;
     }
     next = (t->in_head + 1) % TTY_INPUT_SIZE;
     if(next == t->in_tail) {
@@ -359,7 +367,7 @@ static void scrub_last(struct tty *t) {
 }
 
 /* the line discipline; 10/9/26: secret, the echo is off for this line (tty_readline_secret()) */
-static int readline(struct tty *t, char *buf, size_t size, int secret) {
+static int readline(struct tty *t, char *buf, size_t size, int secret, int eof) {
     size_t len = 0;
     int pos = t->hist_count;            /* history cursor; == hist_count means the line being typed */
     int oldest = t->hist_count > TTY_HISTORY ? t->hist_count - TTY_HISTORY : 0;
@@ -385,6 +393,10 @@ static int readline(struct tty *t, char *buf, size_t size, int secret) {
             buf[len] = 0;
             if(len && !secret) history_add(t, buf);
             return (int)len;
+        }
+        if(c == 0x04 && eof && !len) {  /* 10/25/26: Ctrl+D on an empty line: the end of the input */
+            buf[0] = 0;
+            return -2;
         }
         if(c == 0x08 || c == 0x7F) {
             if(len) {
@@ -433,11 +445,11 @@ static int readline(struct tty *t, char *buf, size_t size, int secret) {
 }
 
 int tty_readline(struct tty *t, char *buf, size_t size) {
-    return readline(t, buf, size, 0);
+    return readline(t, buf, size, 0, 0);
 }
 
 int tty_readline_secret(struct tty *t, char *buf, size_t size) {
-    return readline(t, buf, size, 1);
+    return readline(t, buf, size, 1, 0);
 }
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
@@ -448,6 +460,7 @@ int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;
     if(!len) return 0;
+    if(curTask->job && task_stop_reader(t) < 0) return -EINTR;  /* 10/25/26: from the background, it stops first */
     if(t->raw) {
         size_t got = 0;
         n = tty_getc(t);
@@ -456,7 +469,8 @@ int tty_read(struct tty *t, char *buf, size_t len) {
         while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
         return (int)got;
     }
-    n = tty_readline(t, line, sizeof(line));
+    n = readline(t, line, sizeof(line), 0, 1);
+    if(n == -2) return 0;                                       /* 10/25/26: Ctrl+D */
     if(n < 0) return t->hungup ? 0 : -EINTR;
     line[n++] = '\n';
     if((size_t)n > len) n = (int)len;
@@ -627,6 +641,7 @@ void tty_task_gone(struct surf_task *task) {
     int i;
     for(i = 0; i < NUM_TTYS; i++) {
         if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
+        if(ttys[i].fg_job && ttys[i].fg_shell == task->pid) ttys[i].fg_job = ttys[i].fg_shell = 0;   /* 10/25/26 */
     }
     console_task_gone(task);
     pty_task_gone(task);

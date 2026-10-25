@@ -15,7 +15,9 @@ shell needs besides:
              empty one), at most SPAWN_ENV_MAX of them in SPAWN_ENV_BYTES bytes, -E2BIG
              beyond. The program finds it on its stack after argv: crt0 makes it libsurf's
              environ, and main's third argument.
-  job        0, the caller's job (job control: surfos/job.h comes later; until then 0)
+  job        0: the caller's job; SPAWN_JOB_NEW: a new job, the child its first task (its id
+             the child's pid); a job's id: the child joins it; SPAWN_JOB_NONE: in no job
+             (10/25/26, surfos/job.h)
   flags      SPAWN_BG: the child is not in the foreground of its terminal even when the
              caller's output is paged (a job started with &): Ctrl+C there does not reach it.
 
@@ -39,11 +41,13 @@ This header uses no SurfOS types: user programs reach it through user/include/su
 #define SPAWN_CLOSED    (-2)        /* fds[]: the child has no such descriptor */
 
 #define SPAWN_BG        0x2         /* flags: not in the foreground of its terminal */
+#define SPAWN_JOB_NEW   (-1)        /* job: a new job (surfos/job.h) */
+#define SPAWN_JOB_NONE  (-2)        /* job: in none (a shell's $( ), which no Ctrl+Z may stop) */
 
 struct spawnx {
     int fds[4];                     /* the child's 0, 1, 2 and 3 */
     char *const *envp;              /* its environment */
-    int job;                        /* 0: the caller's */
+    int job;                        /* 0: the caller's; SPAWN_JOB_NEW; a job's id */
     unsigned int flags;             /* SPAWN_BG */
 };
 

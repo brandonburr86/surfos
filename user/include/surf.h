@@ -67,6 +67,7 @@ int wait(int pid, int *status);     /* pid -1: any child. status: the exit code,
 /* 10/25/26: the same, and how it ended: killed, or killed by Ctrl+C (surfos/job.h) */
 #include <surfos/job.h>
 int waitx(int pid, struct waitx *w, int options);
+int jobctl(int op, int arg);        /* 10/25/26: SYS_job: JOB_FG, JOB_BG, JOB_KILL, JOB_ID (surfos/job.h) */
 #define WNOHANG 1                   /* 10/6/26: waitpid() answers 0 at once while the children run on */
 int waitpid(int pid, int *status, int options);
 int kill(int pid);

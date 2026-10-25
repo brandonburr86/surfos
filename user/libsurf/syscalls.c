@@ -210,3 +210,8 @@ int waitpid(int pid, int *status, int options) {
 int waitx(int pid, struct waitx *w, int options) {
     return (int)ret(sc(SYS_waitx, pid, (long)w, options));
 }
+
+/* 10/25/26: job control (surfos/job.h) */
+int jobctl(int op, int arg) {
+    return (int)ret(sc(SYS_job, op, arg, 0));
+}

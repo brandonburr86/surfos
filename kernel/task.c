@@ -148,6 +148,7 @@ const char *task_state_name(task_state s) {
     case TS_BLOCKED: return "blocked";
     case TS_SLEEPING: return "sleeping";
     case TS_DEAD: return "zombie";
+    case TS_STOPPED: return "stopped";     /* 10/25/26: job control */
     }
     return "?";
 }
@@ -281,6 +282,17 @@ u_int task_count(void) {
 
 /**** Death ****/
 
+/* 10/25/26: the shell t ends: the stopped tasks of the jobs it made are killed (nothing could let
+   them go on), the others leave their jobs (surfos/job.h). Interrupts off. */
+static void jobs_shell_gone(surf_task *t) {
+    surf_task *u;
+    for(u = all_tasks; u; u = u->all_next) {
+        if(u == t || u->state == TS_DEAD || !u->job || u->job_shell != t->pid) continue;
+        if(u->stopped || u->stop_req) kill_task(u);
+        else u->job = u->job_shell = 0;
+    }
+}
+
 /* interrupts off: hand t's children to init and tell waiters */
 static void orphan_children(surf_task *t) {
     surf_task *c;
@@ -302,6 +314,7 @@ static void become_zombie(surf_task *t, int code) {
     t->state = TS_DEAD;
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
+    jobs_shell_gone(t);                       /* 10/25/26: the jobs it made */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
     task_list_append(&zombies, t);
@@ -370,6 +383,7 @@ void kill_task(surf_task *t) {
         t->intr = (t->intr | TI_KILL) & ~(TI_HANGUP | TI_PATIENT);
         ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
         wake_intr(t);
+        if(t->state == TS_STOPPED) task_make_ready(t);  /* 10/25/26: stopped in its call: it ends it */
     }
     irq_restore(flags);
 }
@@ -393,6 +407,7 @@ static void kill_waiting(surf_task *t, u_int mark) {
     t->intr |= TI_KILL | mark;
     ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
     wake_intr(t);
+    if(t->state == TS_STOPPED) task_make_ready(t);      /* 10/25/26: stopped in its call: it ends it */
 }
 
 static void kill_hangup(surf_task *t) {
@@ -445,6 +460,119 @@ static void kill_escalate(void *arg) {
     become_zombie(t, -1);
 }
 
+/**** 10/25/26: job control (surfos/job.h) ****/
+
+/* t counts as stopped from now on: a parent waiting with WUNTRACED looks. Interrupts off. */
+static void now_stopped(surf_task *t) {
+    if(t->stopped) return;
+    t->stopped = 1;
+    t->stop_seen = 0;
+    wake_up_all(&zombie_wq);
+}
+
+/* t is to stop (why: WX_STOP_*). In its own code it stops at once; in a wait that a kill would cut
+   short it counts as stopped and the wait goes on; anywhere in a call it stops at the call's end
+   (task_call_leave()). Never a task that is ending, nor a shell that looks for Ctrl+C itself
+   (TF_INTR: it runs commands of its own). Interrupts off. */
+static void stop_task(surf_task *t, int why) {
+    if(t->state == TS_DEAD || (t->in_call & TC_EXIT) || (t->flags & TF_INTR)) return;
+    t->stop_req = 1;
+    t->stop_why = (u_char)why;
+    t->flags &= ~TF_FOREGROUND;                 /* out of the foreground: Ctrl+C no longer reaches it (fg) */
+    if(!t->in_call) {
+        if(t->state == TS_READY) {
+            task_list_remove(t->list, t);
+            t->state = TS_STOPPED;
+        } else if(t == curTask && t->state == TS_RUNNING) {
+            t->state = TS_STOPPED;              /* switched away from before the interrupt returns (irq_dispatch()) */
+        }
+        now_stopped(t);
+    } else if(t->wait_intr && (t->state == TS_BLOCKED || t->state == TS_SLEEPING)) {
+        now_stopped(t);
+    }
+}
+
+/* t goes on: in the foreground of its terminal (Ctrl+C reaches it) or not. Interrupts off. */
+static void go_on(surf_task *t, int foreground) {
+    if(t->state == TS_DEAD) return;
+    if(foreground) t->flags |= TF_FOREGROUND;
+    else t->flags &= ~TF_FOREGROUND;
+    t->stop_req = t->stopped = t->stop_seen = 0;
+    if(t->state == TS_STOPPED) task_make_ready(t);
+}
+
+/* Ctrl+Z on tty: the tasks of its foreground job stop; how many. Interrupts off. */
+int task_stop_job(struct tty *tty, u_long job) {
+    surf_task *t;
+    int n = 0;
+    if(!job) return 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->job != job || t->tty != tty || t->state == TS_DEAD) continue;
+        stop_task(t, WX_STOP_KEY);
+        n++;
+    }
+    return n;
+}
+
+/* The current task wants to read tty while its job is not the foreground one: it stops here,
+   in its call, until its shell lets it go on, and reads once its job is in the foreground (in
+   the background it stops again). 0 when it may read, -EINTR when it was killed meanwhile. */
+int task_stop_reader(struct tty *tty) {
+    u_long flags = irq_save();
+    int r;
+    while(curTask->job && curTask->job != tty->fg_job && !(curTask->intr & TI_KILL) && !tty->hungup) {
+        curTask->stop_req = 1;
+        curTask->stop_why = WX_STOP_READ;
+        now_stopped(curTask);
+        curTask->state = TS_STOPPED;
+        irq_restore(flags);
+        yield();                                /* go_on() makes it ready, its marks taken off */
+        flags = irq_save();
+    }
+    r = (curTask->intr & TI_KILL) ? -EINTR : 0;
+    irq_restore(flags);
+    return r;
+}
+
+/* a task of job (one that ended and is not collected yet counts: a pipeline's first program may end
+   before the next joins its job), made by shell? */
+int task_job_made(u_long job, u_long shell) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int found = 0;
+    for(t = all_tasks; t && !found; t = t->all_next) found = t->job == job && t->job_shell == shell;
+    irq_restore(flags);
+    return found;
+}
+
+/* SYS_job's JOB_FG and JOB_BG: the tasks of job (made by shell, on tty) go on; how many */
+int task_job_go_on(struct tty *tty, u_long job, int foreground, u_long shell) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int n = 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->job != job || t->job_shell != shell || t->tty != tty || t->state == TS_DEAD) continue;
+        go_on(t, foreground);
+        n++;
+    }
+    irq_restore(flags);
+    return n;
+}
+
+/* SYS_job's JOB_KILL: the tasks of job (made by shell, on tty) killed, the stopped ones too; how many */
+int task_job_kill(struct tty *tty, u_long job, u_long shell) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int n = 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->job != job || t->job_shell != shell || t->tty != tty || t->state == TS_DEAD) continue;
+        kill_task(t);
+        n++;
+    }
+    irq_restore(flags);
+    return n;
+}
+
 /* 10/6/26: a call begins (TC_SYSCALL, TC_COMMAND) */
 void task_call_enter(u_int what) {
     u_long flags = irq_save();
@@ -466,6 +594,13 @@ int task_call_leave(u_int what) {
             task_exit(-1);
         }
         curTask->intr = 0;
+        while(curTask->stop_req) {              /* 10/25/26: stopped: here, out of its call, until it goes on */
+            now_stopped(curTask);
+            curTask->state = TS_STOPPED;        /* a kill now makes it a zombie where it is */
+            irq_restore(flags);
+            yield();
+            flags = irq_save();
+        }
     }
     irq_restore(flags);
     return cut;
@@ -605,16 +740,25 @@ u_int task_child_count(void) {
     return n;
 }
 
+/* 10/25/26: is z the child a wait for pid (or any of job, when job) is for? Interrupts off. */
+static bool wait_matches(surf_task *z, u_long pid, u_long job) {
+    if(z->parent != curTask) return false;
+    if(job) return z->job == job;
+    return pid == WAIT_ANY || z->pid == pid;
+}
+
 /* 10/6/26: WNOHANG in options answers 0 at once when children are left but none has ended; with
-   WINTR a kill of the caller (TI_KILL) ends the wait, -1. 10/25/26: how_out, how it ended (WX_*) */
-static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **con_out, int options, int *how_out) {
+   WINTR a kill of the caller (TI_KILL) ends the wait, -1. 10/25/26: how_out, how it ended (WX_*);
+   job: any child of that job; WUNTRACED: a child that stopped is said too, once a stop */
+static int wait_for(u_long pid, u_long job, int *status, u_int *flags_out, surf_console **con_out, int options,
+                    int *how_out, int *job_out) {
     for(;;) {
         u_long flags = irq_save();
         surf_task *z, *found = NULL;
         bool have_children = false;
 
         for(z = zombies.first; z; z = z->next) {
-            if(z->parent == curTask && (pid == WAIT_ANY || z->pid == pid)) { found = z; break; }
+            if(wait_matches(z, pid, job)) { found = z; break; }
         }
         if(found) {
             u_long fpid = found->pid;
@@ -622,13 +766,23 @@ static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **co
             irq_restore(flags);
             if(status) *status = found->exit_code;
             if(how_out) *how_out = found->end_how;
+            if(job_out) *job_out = (int)found->job;
             if(flags_out) *flags_out = found->flags;
             if(con_out) *con_out = found->con;
             reap(found);
             return (int)fpid;
         }
         for(z = all_tasks; z; z = z->all_next) {
-            if(z->parent == curTask && (pid == WAIT_ANY || z->pid == pid)) { have_children = true; break; }
+            if(!wait_matches(z, pid, job) || z->state == TS_DEAD) continue;
+            have_children = true;
+            if((options & WUNTRACED) && z->stopped && !z->stop_seen) {     /* 10/25/26: one that stopped */
+                z->stop_seen = 1;
+                irq_restore(flags);
+                if(status) *status = z->stop_why;
+                if(how_out) *how_out = WX_STOPPED;
+                if(job_out) *job_out = (int)z->job;
+                return (int)z->pid;
+            }
         }
         if(!have_children) {
             irq_restore(flags);
@@ -653,19 +807,19 @@ static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **co
 }
 
 int task_wait_ex(u_long pid, int *status, u_int *flags_out, surf_console **con_out) {
-    return wait_for(pid, status, flags_out, con_out, 0, NULL);
+    return wait_for(pid, 0, status, flags_out, con_out, 0, NULL, NULL);
 }
 
 int task_wait(u_long pid, int *status) {
-    return wait_for(pid, status, NULL, NULL, 0, NULL);
+    return wait_for(pid, 0, status, NULL, NULL, 0, NULL, NULL);
 }
 
 int task_wait_opts(u_long pid, int *status, int options) {
-    return wait_for(pid, status, NULL, NULL, options, NULL);
+    return wait_for(pid, 0, status, NULL, NULL, options, NULL, NULL);
 }
 
-int task_wait_how(u_long pid, int *status, int *how, int options) {
-    return wait_for(pid, status, NULL, NULL, options, how);
+int task_wait_how(u_long pid, u_long job, int *status, int *how, int *job_out, int options) {
+    return wait_for(pid, job, status, NULL, NULL, options, how, job_out);
 }
 
 /**** Blocking ****/
@@ -946,7 +1100,7 @@ static void init_main(void *arg) {
         surf_console *con = NULL;
         bool missing = false;
         for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) missing = true;
-        pid = wait_for(WAIT_ANY, &status, &flags, &con, missing ? WNOHANG : 0, NULL);
+        pid = wait_for(WAIT_ANY, 0, &status, &flags, &con, missing ? WNOHANG : 0, NULL, NULL);
         if(pid <= 0) {
             /* 10/6/26: a console without a shell (no memory a moment ago): another try. No
                children at all should not happen, but never spin. */
@@ -1042,8 +1196,10 @@ static void fill_info(surf_task *t, struct procinfo *pi) {
     case TS_RUNNING:  pi->state = PROC_RUNNING; break;
     case TS_BLOCKED:  pi->state = PROC_BLOCKED; break;
     case TS_SLEEPING: pi->state = PROC_SLEEPING; break;
+    case TS_STOPPED:  pi->state = PROC_STOPPED; break;
     default:          pi->state = PROC_DEAD; break;
     }
+    if(t->stopped && t->state != TS_DEAD) pi->state = PROC_STOPPED;    /* 10/25/26: in a wait that goes on */
     pi->flags = ((t->flags & TF_USER) ? PROC_USER : 0) | ((t->flags & TF_DETACHED) ? PROC_DETACHED : 0) |
                 ((t->flags & TF_SHELL) ? PROC_SHELL : 0);
     pi->tty = (t->tty && t->state != TS_DEAD) ? tty_number(t->tty) : -1;
@@ -1061,6 +1217,7 @@ int task_detach(surf_task *t) {
     flags = irq_save();
     t->parent = init_task_ptr;
     t->flags = (t->flags | TF_DETACHED) & ~TF_FOREGROUND;
+    t->job = t->job_shell = 0;                  /* 10/25/26: out of its job too */
     if(t->con && t->con->page_owner == t) console_page_start(t->con, NULL);
     irq_restore(flags);
     wake_up_all(&zombie_wq);
@@ -1075,7 +1232,8 @@ void print_tasks() {
     printf("  PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME\n");
     flags = irq_save();
     for(t = all_tasks; t; t = t->all_next) {
-        printf("%5lu  %-8s  %-6s  %10lu  %8lu  %6ld  %s%s\n", t->pid, task_state_name(t->state), plNumToName(t->prio),
+        printf("%5lu  %-8s  %-6s  %10lu  %8lu  %6ld  %s%s\n", t->pid,
+               t->stopped && t->state != TS_DEAD ? "stopped" : task_state_name(t->state), plNumToName(t->prio),
                t->cpu_ticks, t->switches, t->parent ? (long)t->parent->pid : -1L, t->name,
                (t->flags & TF_USER) ? " (ring 3)" : "");
     }

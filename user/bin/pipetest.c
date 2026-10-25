@@ -671,7 +671,7 @@ static int m_waitx(void) {
     errno = 0;
     if(waitx(-1, &w, 0) != -1 || errno != ECHILD) return fail("no child: not ECHILD");
     errno = 0;
-    if(waitx(-1, &w, 4) != -1 || errno != EINVAL) return fail("an option it does not know: not EINVAL");
+    if(waitx(-1, &w, 0x40) != -1 || errno != EINVAL) return fail("an option it does not know: not EINVAL");
     errno = 0;
     if(waitx(-1, (struct waitx *)4, 0) != -1 || errno != EFAULT) return fail("a bad address: not EFAULT");
     printf("pipetest: waitx: ECHILD, EINVAL, EFAULT\n");

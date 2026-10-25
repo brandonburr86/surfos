@@ -30,6 +30,7 @@ struct procinfo {
 #define PROC_BLOCKED  2
 #define PROC_SLEEPING 3
 #define PROC_DEAD     4
+#define PROC_STOPPED  5                 /* 10/25/26: job control (surfos/job.h): Ctrl+Z, or a read from the background */
 
 #define PROC_USER     0x1               /* a program in ring 3 */
 #define PROC_DETACHED 0x2               /* init collects it */
