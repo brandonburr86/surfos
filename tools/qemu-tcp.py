@@ -757,8 +757,16 @@ def sc_ncstuck(rig):
     ok = rig.start('nc -w 3 10.0.2.2 7500 < /initrd/bin/nettest', '] started')
     ok = rig.expect('nc: nothing came or went for 3 s: the connection is closed', 20) and ok
     dt = time.time() - t0
-    ok = rig.run('', '] exit status 1') and 3 <= dt < 12 and ok        # the job's end, said before the next prompt
-    print('        (nc ended %.1f s after it started)' % dt)
+    # the shell says a job's end before the prompt after it; nc's last moments may take longer than the shell's
+    # first prompt (a smoke run beside the USB tests showed it), so a few: one that never ends is still caught
+    m, prompts = rig.mark(), 0
+    while prompts < 6 and '] exit status 1' not in rig.since(m):
+        ok = rig.run('') and ok
+        prompts += 1
+        if '] exit status 1' not in rig.since(m):
+            rig.q.wait(0.5)
+    ok = '] exit status 1' in rig.since(m) and 3 <= dt < 12 and ok
+    print('        (nc ended %.1f s after it started; its end said after %d prompt(s))' % (dt, prompts))
     peer.reset()
     rig.q.wait(1)
     return ok
