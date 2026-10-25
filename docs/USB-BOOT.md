@@ -519,13 +519,25 @@ all three groups, `help <name>` one command.
 
 **A line** is words separated by blanks. `"double"` or `'single'` quotes keep blanks
 inside a word, and `\` keeps the next character as it is. `cmd > file` sends what the
-command prints into the file (`>>` adds to its end), `cmd < file` makes a program read
-the file, `cmd &` runs a program in the background (its end is reported before the next
-prompt), and `;` separates commands. `$?` is
-the status of the last command (`echo $?`); there are no other variables, no wildcards
-and no pipes. The kernel's commands can be redirected too, which is a quick way to keep
-what they say: `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the
-screen.
+command prints into the file (`>>` adds to its end; `2> file` sends its error messages
+there, and `2>&1` where its output goes), `cmd < file` makes it read the file, `cmd &`
+runs it in the background as a job (`[1] started (pid 42)`; its end, `[1] done  cmd`, is
+reported before the next prompt), and `;` separates commands. `$?` is the status of the
+last command (`echo $?`); there are no other variables and no wildcards yet. The kernel's
+commands can be redirected too, which is a quick way to keep what they say:
+`lspci > /data/lspci.txt`. A question such as fdisk's still appears on the screen.
+
+**Pipelines.** `a | b` sends what `a` prints to `b`, which reads it: `dmesg | head -20`,
+`ls /initrd/bin | wc -l`, `lspci | head -3`, `help | head`. A kernel command can begin a
+pipeline but not follow a `|`, since it reads only the console; its output arrives when it
+is done. A program that writes to a pipe whose reader has ended ends too (`hexdump
+/dev/zero | head` stops). `a && b` runs `b` when `a` succeeded, `a || b` when it failed,
+and `! a` turns the status round. `{ a; b; } > file` sends both into the file, and
+`( cd /initrd; ls )` runs in a shell of its own, so its `cd` changes nothing here.
+`cmd << END` makes `cmd` read the lines that follow, up to a line `END` (`$?` is filled in
+there; with `<< 'END'` nothing is). A line that ends with `|`, `&&` or `||`, or inside
+quotes or a `{ }`, goes on in the next line, after the prompt `… ≋>`; Ctrl+C there drops
+the whole command.
 
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
 that could not be started, 127 no such command, 130 a kernel command stopped with Ctrl+C,

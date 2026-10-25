@@ -25,7 +25,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
-                  # httpd's HTTP protocol (test_httpd)
+                  # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -81,17 +81,18 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
            usbnet.c (CDC ECM/NCM Ethernet adapters as eth0), msc.c (USB sticks: Bulk-Only Transport + SCSI, as usb0, usb1, ...),
            usbdesc.c (descriptor and NCM parsing, host-tested)
 fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
-           (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake())
+           (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake()), pipe.c (10/24/26: pipes, SYS_pipe: 8 KB, 32 at most)
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client (leases kept and renewed), DNS resolver;
            netcfg.c (the text of the settings files and the lease timers: pure, host-tested); sock.c (TCP connections as
            programs' descriptors); routing over several interfaces (by source address, then subnet, Ethernet before Wi-Fi);
            wlan/: the 802.11 station layer (wlan.c: scan list, joining, wlan0; ieee80211.c: frames, host-tested) and the
            WPA2 supplicant (wpa.c); interfaces in include/net/wlan.h and include/net/wpa.h
 lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
-user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno), include/ (the
-           standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv, rm, mkdir, df, fstest,
-           pagetest, kcmdtest, nettest, ptytest, rx (one file from the network), ...), surfsh/ (the SurfOS shell: main,
-           editor, complete, parse, run, builtins),
+user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
+           environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
+           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes and spawnx), rx (one file from the
+           network), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand, exec (pipelines,
+           redirections, a new surfsh for a subshell), run, jobs, util, builtins; host-tested by tests/host/test_surfsh.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16)

@@ -5,7 +5,7 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, the network manager with the settings on the stick, and the web server `httpd` |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, the network manager with the settings on the stick, the web server `httpd`, and surfsh's pipelines and scripting with the kernel's pipes |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
 | [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, one stick for everything, Wi-Fi with saved networks and the settings on the stick (section 15), and hosting websites with `httpd` (section 16) |
@@ -68,3 +68,6 @@ itself at every start, with the settings (`settings`: telnet at startup, Etherne
 a host name) kept on the stick SurfOS starts from.
 `httpd on` (10/17/26, under emulation so far too) serves a folder, such as a site on a
 USB stick, as a website that browsers on the network open at the laptop's address.
+Since 10/24/26 (under emulation so far) surfsh has pipelines (`dmesg | head`), `&&`,
+`||`, groups and subshells, here-documents and lines that continue, on pipes in the
+kernel (`SYS_pipe`).
