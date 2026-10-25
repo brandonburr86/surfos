@@ -174,12 +174,26 @@ static int editor_get(struct source *s, struct sbuf *out, int more) {
     n = edit_line(line, sizeof(line), more);
     if(n == -1) return -1;                      /* Ctrl-D, or no more input */
     if(n == -3) return -2;                      /* Ctrl-C on a line that continued a command */
+    if(n >= 0 && !blank(line)) {                /* 10/25/26: !! and the like (editor.c) */
+        int r = history_expand(line, line, sizeof(line));
+        if(r == -1) {
+            fprintf(stderr, "surfsh: %s: no such line in the history\n", line);
+            last_status = STATUS_USAGE;
+            return -2;
+        }
+        if(r == -2) {
+            n = -2;
+        } else if(r == 1) {                     /* the line as it runs, shown as bash shows it */
+            n = (int)strlen(line);
+            fprintf(stderr, "%s\n", line);
+        }
+    }
     if(n == -2) {
         fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);
         last_status = STATUS_USAGE;
         return -2;
     }
-    if(!blank(line)) history_add(line);
+    if(!blank(line) && line[0] != ' ') history_add(line);  /* 10/25/26: not one that starts with a space */
     s->lines++;
     sb_put(out, line, n);
     sb_putc(out, '\n');

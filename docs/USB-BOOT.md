@@ -502,13 +502,23 @@ SurfOS has no users and no home directories, so a shell starts at `/`.
 | Keys | What they do |
 |---|---|
 | Left, Right, Home, End (Ctrl+A, Ctrl+E) | move in the line |
+| Ctrl+Left, Ctrl+Right (Alt+B, Alt+F) | move by words |
 | Backspace, Delete | delete before or under the cursor |
-| Ctrl+U, Ctrl+K, Ctrl+W | delete the whole line, to its end, the word before the cursor |
-| Up, Down | the lines typed before (`history` lists them) |
+| Alt+Backspace, Alt+D | delete the word before the cursor, or the rest of the word after it |
+| Ctrl+U, Ctrl+K, Ctrl+W | delete the whole line, to its end, back to the last blank |
+| Up, Down | the lines typed before (`history` lists them; the last 1,000 are kept) |
+| Ctrl+R | search them: type part of a line and the newest one that has it shows; Ctrl+R again goes further back, Enter runs it, Esc puts back what you had |
+| Alt+. | put in the last word of the line before (press again for the line before that) |
 | Tab | complete the command or file name; a second Tab lists the choices |
 | Ctrl+L | clear the screen |
 | Ctrl+C | drop the line; while a command runs, stop it |
 | Ctrl+D | on an empty line: leave this shell |
+
+**Lines from the history** (as in bash): `!!` is the line before (`!! | head` runs it again
+into `head`), `!$` its last word (`mkdir /data/new` then `cd !$`), `!12` line 12 of
+`history`, `!-2` the line before the last, and `!ls` the last line that started with `ls`.
+The line is shown as it runs; a `!` that nothing follows, `!=`, and anything in quotes stay
+as typed. A line that starts with a space is not kept in the history.
 
 Tab completes the first word from the shell's commands, the kernel's and the programs, and
 any other word (or one with a `/` in it) as a file or directory name: one match is filled
@@ -680,6 +690,9 @@ cannot do yet. A few differences:
   time. A paste into a program that reads what is typed, such as `edit`, arrives whole.
   Keys typed while a command runs are given to that command; Ctrl+C stops the command and
   drops what was typed ahead, so it never runs afterwards.
+* **Alt keys** (Alt+., Alt+B, Alt+D, ...) reach surfsh when the terminal sends the Option
+  key as Alt, an ESC before the key: in the Mac's Terminal, Settings, Profiles, Keyboard,
+  "Use Option as Meta key". Ctrl+R and the `!` references need nothing.
 * **Messages on the laptop's screen:** a background task that a command starts (such as
   `tcpecho`) prints on the laptop's F1 console, not in the session, and keeps running after
   the session ends.
@@ -1377,7 +1390,7 @@ Limits:
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
 | USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
-| The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | Scrolling back, Ctrl+R, a startup file and saved history (in the works) |
+| The shell, surfsh: the SurfOS prompt, Tab completion, history (Ctrl+R, `!!`), a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | Scrolling back, a startup file and saved history (in the works) |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |

@@ -382,6 +382,9 @@ SMOKE = [
     # 10/25/26 (track A, A4): on the PS/2 keyboard, the modifiers as xterm sends them: Ctrl+Left ESC[1;5D, Shift+PgUp
     # ESC[5;2~, F5 ESC[15~ (dropped until then), Shift+Tab ESC[Z, Alt+x ESC x
     ('@rawkeys-mods', []),
+    # 10/25/26 (track A, A5): surfsh's line editor on the PS/2 keyboard, where Alt reaches it as ESC and the key
+    # together: Alt+., Alt+B and Alt+D, Ctrl+Left, Ctrl+R
+    ('@editor-keys', []),
     # escape sequences (tty.h): the test pattern, then read back from VGA memory with its colours
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
@@ -954,6 +957,26 @@ SMOKE = [
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
+    # 10/25/26 (track A, A5): the line editor, in a surfsh of its own. History expansion: !$ !! !str !-n, each line
+    # shown as it runs; a line that starts with a space is not kept; ! left as typed where bash leaves it, and in
+    # double quotes; a reference to nothing refused. Ctrl+R: the row under the line says what it looks for, Enter
+    # runs the line found, Ctrl+R again an older one, Esc the line back. Ctrl+Left as a terminal sends it.
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo one two', ['\r\none two\r\n', shown('SURF \u224b> ')]),
+      ('echo !$', ['\r\necho two\r\ntwo\r\n', shown('SURF \u224b> ')]),
+      ('!!', ['\r\necho two\r\ntwo\r\n', shown('SURF \u224b> ')]),
+      ('!echo o', ['\r\necho two o\r\ntwo o\r\n', shown('SURF \u224b> ')]),
+      (' echo unkept', ['\r\nunkept\r\n', shown('SURF \u224b> ')]),
+      ('!!', ['\r\necho two o\r\ntwo o\r\n', shown('SURF \u224b> ')]),
+      ('!-3', ['\r\necho one two\r\none two\r\n', shown('SURF \u224b> ')]),
+      ('echo "#!/x" \'!!\' ! != x!', ['\r\n#!/x !! ! != x!\r\n', shown('SURF \u224b> ')]),
+      ('echo !nothing-like-it', ['surfsh: !nothing-like-it: no such line in the history', shown('SURF \u224b!> ')]),
+      ('\x12one', ['search: one', '\r\none two\r\n', shown('SURF \u224b> ')]),
+      ('\x12two\x12', ['search: two', '\r\ntwo o\r\n', shown('SURF \u224b> ')]),
+      (b'echo kept\x12one\x1b', ['search: one']),
+      (b'\n', ['\r\nkept\r\n', shown('SURF \u224b> ')]),
+      ('echo world\x1b[1;5Dhello ', ['\r\nhello world\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/24/26 (pipelines and scripting in surfsh): pipelines and lists, in a surfsh of their own. A program into a
     # program; a kernel command and a builtin into one (a new surfsh runs them); five stages; the last stage in this
     # shell (its cd stays), another stage in a new surfsh (its cd does not); && || ! { } ( ); 2>&1 and 2> file; a
@@ -1970,6 +1993,19 @@ def rawkeys_mods_check(q):
             'Alt+x ESC x', ok)
 
 
+def editor_keys_check(q):
+    """10/25/26 (track A, A5): surfsh's line editor on the PS/2 keyboard, where the console sends Alt+key as ESC and the
+    key together (A4): Alt+. puts the last word of the line before at the cursor, Alt+B goes back a word and Alt+D
+    deletes it, Ctrl+Left goes back a word, Ctrl+R finds an earlier line and Enter runs it"""
+    steps = [('echo alpha beta\n', 'alpha beta'), ('echo <alt-.>\n', 'beta'), ('echo gamma delta<alt-b><alt-d>x\n', 'gamma x'),
+             ('echo two<ctrl-left>one \n', 'one two'), ('<ctrl-r>alpha\n', 'alpha beta')]
+    ok = True
+    for keys, want in steps:
+        q.sendkeys(keys)
+        ok = ok and q.expect(f'\r\n{want}\r\n', 10) and q.expect(PROMPT, 10)
+    return ('the line editor on the PS/2 keyboard: Alt+., Alt+B, Alt+D, Ctrl+Left, Ctrl+R', ok)
+
+
 def kcmd_echo_check(q):
     """typed input's echo is shown and never kept with a kernel command's output: fdisk's question with its
     output on a file (kcmdtest run), answered on the console. The interactive commands that read without a
@@ -2180,7 +2216,7 @@ def readme_cat_check(q):
 
 
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
-CONSOLE_CHECKS = {'@readme-cat': readme_cat_check, '@rawkeys-mods': rawkeys_mods_check, '@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
+CONSOLE_CHECKS = {'@readme-cat': readme_cat_check, '@rawkeys-mods': rawkeys_mods_check, '@editor-keys': editor_keys_check, '@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
                   '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}

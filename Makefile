@@ -539,6 +539,19 @@ test-surfsh: $(BUILD)/host/test_surfsh
 unittest: test-surfsh
 .PHONY: test-surfsh
 
+# 10/25/26 (track A, A5): surfsh's line editor and Tab, user/surfsh/editor.c and complete.c as they are (with parse.c
+# and util.c), keys given a read at a time on a terminal whose screen is read back (tests/host/editor_bridge.c)
+EDITOR_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,editor.o complete.o parse.o util.o)
+$(BUILD)/host/sim/editor_bridge.o: tests/host/editor_sim.h user/surfsh/surfsh.h
+$(BUILD)/host/test_editor: tests/host/test_editor.c tests/host/editor_sim.h $(BUILD)/host/sim/editor_bridge.o \
+                           $(EDITOR_HOST_OBJ) $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_editor.c $(filter %.o,$^) -o $@
+test-editor: $(BUILD)/host/test_editor
+	$(BUILD)/host/test_editor
+unittest: test-editor
+.PHONY: test-editor
+
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
 	@mkdir -p $(dir $@)

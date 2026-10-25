@@ -50,7 +50,7 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 #define PROGRAM_DIR     "/initrd/bin"
 
 #define LINE_LIMIT      1023        /* bytes of one typed line; the editor refuses a longer one */
-#define HIST_MAX        128         /* lines the history keeps */
+#define HIST_MAX        1000        /* lines the history keeps (10/25/26: 128 before) */
 #define MAX_WORDS       128         /* words of one command, its name included (SPAWN_MAX_ARGS) */
 #define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
 #define TEXT_LIMIT      (1024 * 1024)   /* bytes of a script, or of what a new surfsh is given */
@@ -147,6 +147,9 @@ void edit_fresh_row(void);          /* the cursor at the start of a fresh row, a
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 void history_state(struct sbuf *out);   /* the history as text a new surfsh runs (history -s lines) */
+/* 10/25/26: !! !n !-n !str !$ in a typed line: 1 expanded into out, 0 none, -1 a reference no line
+   answers (in out), -2 longer than size - 1 bytes; out may be in */
+int history_expand(const char *in, char *out, int size);
 
 /**** complete.c: Tab ****/
 

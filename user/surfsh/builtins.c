@@ -554,11 +554,16 @@ static int b_help(int argc, char **argv) {
            "    directories (%s), then the kernel's; a name with a / is a\n"
            "    program's path. type NAME says which runs; kernel NAME runs the kernel's.\n",
            use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
-    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
-           "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
-           "    the history; Tab completes a command or a path, a second Tab lists the\n"
-           "    choices; ^L clears the screen, ^C drops the line, ^D on an empty line\n"
-           "    leaves surfsh.\n");
+    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; Ctrl+Left and\n"
+           "    Ctrl+Right (Alt+B, Alt+F) move by words, Alt+D and Alt+Backspace delete\n"
+           "    one; ^U clears the line, ^K deletes to its end, ^W back to a blank; Up and\n"
+           "    Down: the history, ^R searches it as you type (^R again: an older line,\n"
+           "    Esc: the line back), Alt+. puts in the last word of the line before; Tab\n"
+           "    completes a command or a path, a second Tab lists the choices; ^L clears\n"
+           "    the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n"
+           "    In a line: !! the line before, !$ its last word, !n line n of history,\n"
+           "    !-n the n-th line back, !str the last line that starts with str (the\n"
+           "    line is shown as it runs). A line that starts with a space is not kept.\n");
     printf("\n    The prompt shows the current directory and the wave; a ! after the wave\n"
            "    says that the last command failed, an @ that this is a telnet session\n"
            "    (another computer's terminal; there the @ shows instead of a !). set\n"

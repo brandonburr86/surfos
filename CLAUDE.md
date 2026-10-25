@@ -26,6 +26,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
                   # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh),
+                  # surfsh's line editor: keys, Ctrl+R, history expansion, Tab (test_editor),
                   # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
@@ -101,7 +102,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
-           Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c),
+           Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c,
+           the editor (Ctrl+R, !!, Alt+.) and complete by tests/host/test_editor.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),

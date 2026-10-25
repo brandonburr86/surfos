@@ -1186,10 +1186,32 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   `tty.h`, the same on the screen and over the serial line. Raw mode is on only while a
   line is typed: whatever runs finds the console in line mode, where the kernel's commands
   ask their questions and the pager can stop. Keys: Left, Right, Home, End (^A ^E),
-  Backspace, Delete, ^U, ^K, ^W, Up and Down through 128 lines of history (no line twice in
-  a row), Tab, ^L, ^C (the line dropped), ^D (on an empty line, the end); typed text is
-  teal, and a terminal's escape sequences are read to their final byte, so one the editor
-  does not know leaves nothing in the line. It draws only on its own rows. The cursor is a
+  Backspace, Delete, ^U, ^K, ^W, Up and Down through 1,000 lines of history (no line twice
+  in a row; 128 until 10/25/26), Tab, ^L, ^C (the line dropped), ^D (on an empty line, the
+  end); typed text is teal, and a terminal's escape sequences are read to their final byte,
+  so one the editor does not know leaves nothing in the line. 10/25/26 (track A): a
+  sequence's modifiers count (xterm's `ESC[1;5D`, which the console sends since then,
+  section 7): Ctrl+Left and Ctrl+Right (and Alt+Left, Alt+Right, Alt+B, Alt+F) move by
+  words, letters and digits as bash counts them, Alt+D and Alt+Backspace delete one, and
+  Alt+. puts in the last word of the line before (again at once: of the line before that).
+  ESC with another byte in the same read is Alt and that key; an ESC alone is Esc, and `[`
+  or `O` within 250 ms after it still makes a sequence that arrived in two reads. **Ctrl+R**
+  searches the history backwards as text is typed: the line shows the newest line that
+  holds the text, with the cursor where it begins, and the row under the line says
+  `search: text` (`(not found)` when no line does), so the prompt stays as `prompt.c`
+  drew it; Ctrl+R again goes to an older line (never the same text twice; on an empty text
+  it takes the last search's), Backspace shortens the text, Enter runs the line found, Esc
+  or ^G puts the line back as it was, and any other key keeps the line found and does what
+  it does. The search's row is emptied when the search ends, and the next output starts
+  there. **History expansion** (`history_expand()`, called by `main.c` for each line typed
+  before it is kept): `!!`, `!n` (history's numbers), `!-n`, `!str` (the newest line that
+  starts with str) and `!$` (the last word of the line before, as bash's history splits
+  one); the line as it runs is shown first, as bash shows it, and a reference no line
+  answers refuses the line (status 2). A `!` stays as typed before a blank, `=`, `(` or the
+  end of the line, after a backslash, in `$!`, `${!` and `[!`, inside single quotes and,
+  unlike bash, inside double quotes (so `echo "#!/bin/sh"` works), and in a comment. A line
+  that starts with a space is not kept in the history (bash's `ignorespace`).
+  It draws only on its own rows (and the search's row under the line). The cursor is a
   count of columns from the prompt's start, moved only with CR and `ESC[nA/B/C`, and never
   left in the console's pending wrap (CR LF where the prompt or the line ends exactly at a
   row's end). An edit rewrites the line from the first changed character and blanks only
@@ -1213,7 +1235,12 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   entry for it ("SurfOS (kernel shell)").
 * **Tests.** `make unittest`: `test_prompt` (the states and their priority, shortening by
   depth and by width, ASCII, colours, odd names, small buffers), `test_cp437` (the tables,
-  the decoder's corner cases, the font's glyphs) and `test_pager` (the real `console.c` and
+  the decoder's corner cases, the font's glyphs), 10/25/26 `test_editor` (`editor.c` and
+  `complete.c` as they are, keys given a read at a time on a terminal whose screen a small
+  VT100 reads back, also as it was each time the editor waited: history expansion and its
+  1,000 lines, the word keys, Esc and Alt, Alt+., Ctrl+R with its row on a narrow terminal,
+  at the screen's foot and in colour, Tab, the limit, ^C, ^D, a paste after Enter) and
+  `test_pager` (the real `console.c` and
   `tty.c` on the host: exact fits and wraps, the keys, where a task may not wait, the
   call-off in both orders, a killed asker, the owner's end, takeover and EBUSY, the drop
   and its replay, the serial bytes of the question). `make test` drives surfsh on every
@@ -1226,6 +1253,10 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   the PS/2 keyboard (read back from VGA memory), and check a question after q, a crash
   report after q and a background job during a paged command. `@surfsh-corner` checks that
   `ansi`'s Z stays in VGA memory's corner through a prompt and an edited, cancelled line.
+  10/25/26: the line editor has a block of its own (history expansion and what it leaves as
+  typed, a line with a leading space not kept, Ctrl+R, Ctrl+R again, Esc, Ctrl+Left as a
+  terminal sends it) and `@editor-keys` on the PS/2 keyboard (Alt+., Alt+B, Alt+D,
+  Ctrl+Left, Ctrl+R).
   `kcmdtest` covers the bridge's statuses, limits, errors and redirection, heaptests and
   pings from several processes at once, and selftest from a process with a child. `@boot`
   steps boot again with other kernel words or initrds: `shell=kernel` (`≋#>`), `ascii`
