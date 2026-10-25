@@ -12,7 +12,8 @@ its helpers: its files are the tracks' own, each track module's optional STICK (
 across the tracks). After the guest has stopped, each module's optional readback(d, stick, helpers) reads it on
 the host (helpers['read_fat32'](stick, 'path')), and, when every check passed, independent FAT checkers look it over.
 
-10/25/26: gui_apps_win.py, programs' windows (docs/superpowers/plans/2026-10-25-app-windows.md), before the suite's.
+10/25/26: gui_apps_win.py, programs' windows (docs/superpowers/plans/2026-10-25-app-windows.md), before the suite's;
+its last check leaves the desktop (d.prompt: the serial console's prompt) and starts it again.
 10/17/26 (the integration): gui_apps_suite.py's checks come last: Files opening a picture in the Image Viewer and a
 binary file in Hex, with track MEDIA's files. For development, GUIAPPS_ONLY=gui_apps_suite (module names, by commas)
 runs only those modules' checks and readbacks; the stick still holds every module's files.
@@ -139,6 +140,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                   '-device', 'usb-storage,bus=xhci.0,drive=appstick,removable=on']
     vm = Vm('guiapps', args, image, firmware, mem='512', serial=True, outdir=outdir, extra=extra)
     d = Driver(vm, font, results, outdir)
+    d.prompt = PROMPT                               # 10/25/26: the serial console's, for checks that leave the desktop
     try:
         ok = vm.expect(PROMPT, args.boot_timeout)
         d.check('guiapps boot reaches the shell', ok)

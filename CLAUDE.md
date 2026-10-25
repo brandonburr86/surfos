@@ -97,9 +97,11 @@ net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP
            WPA2 supplicant (wpa.c); interfaces in include/net/wlan.h and include/net/wpa.h
 lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
-           environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
+           environment; 10/25/26 libgui, gui.h: windows on the desktop, gui.c and guikit.c over the kernel's drawing kit
+           built in as fbcore.c, font8x16.c, guidraw.c and guicalc.c), include/ (the standard headers, surf.h, gui.h),
+           bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), wintest (the window
-           calls), env, the filters grep
+           calls; wintest tty names its terminal), wdemo and wcalc (windows through libgui), env, the filters grep
            sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
@@ -215,7 +217,17 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   are WIN_PER_DESK windows and WIN_DESK_BYTES per desktop, WIN_MAX and WIN_ALL_BYTES in all. kernel/win.c takes
   only short interrupts-off sections and no mutex, allocates and frees with interrupts on, never calls the
   framebuffer, and is never called from inside a `framebuffer_graphics_draw()` callback. Keep it so, and give
-  anything new a scenario in tests/host/test_win.c (each ends with nothing allocated).
+  anything new a scenario in tests/host/test_win.c (each ends with nothing allocated). The desktop's side
+  (shell/guiclient.c, host-tested by test_guiclient) gives a program's window the pointer over its content (a
+  press holds it until every button is up; the corner grip stays the desktop's) and, once it has the focus,
+  every key but Ctrl+G; a second press of the close button asks before it kills. A new window never takes the
+  focus by itself (the review of 10/25/26: keys typed into the Terminal, a password say, stay there), but for
+  the first window of a program the launcher just started and that of the focused Terminal's foreground job,
+  a job its session's shell made (`win_adopt_shell()`; CODE-AUDIT T14 is why the foreground alone is not
+  enough): keep it so. libgui (user/include/gui.h) is integer-only: a windowed
+  program must not use floating point until the kernel keeps it across task switches (track B's B2). Apps > Run
+  program... starts a program on the desktop's console with /dev/null for its input, detached (init collects
+  it); the desktop starts nothing by itself.
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
@@ -263,6 +275,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   (its driver: driver/wifi/, docs/WIFI-PLANNING.md).
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+* Programs' windows (10/25/26): `wintest show`, `wdemo [hang | crash]` and `wcalc` in the desktop's Terminal, or
+  from Apps > Run program... (`dmesg` then has `gui: started <name> (pid N)`); `gfxinfo` gives the desktop's
+  frame times. `GUIAPPS_ONLY=gui_apps_win python3 tools/qemu-usb.py --image ... --test --scenario guiapps` runs
+  only their screen checks (its last one leaves the desktop and starts it again).
 * The network manager: `settings` says where the settings came from, `wifi saved` what is
   saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
   and after (the keeper's repeated tries are written only there). `settings=off` on the kernel

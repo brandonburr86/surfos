@@ -18,6 +18,8 @@ wintest pty      wintest nodesk on a pseudo-terminal of its own: refused as well
 wintest show     a resizable window of four coloured quadrants, with the events it gets in its
                  title; a new size is answered with quadrants of that size; the close button
                  ends it, and so does the desktop letting it go
+wintest tty      10/25/26: the terminal it runs on, as procinfo says ("WINTEST tty: pty0"): the
+                 screen test's way to see a pty's number come back to a pty of its own
 */
 
 #include <stdio.h>
@@ -26,6 +28,7 @@ wintest show     a resizable window of four coloured quadrants, with the events 
 #include <errno.h>
 #include <unistd.h>
 #include <surf.h>
+#include <surfos/proc.h>
 
 #define SELF "/initrd/bin/wintest"
 
@@ -116,6 +119,20 @@ static int mode_pty(void) {
     return pass();
 }
 
+/* 10/25/26: the terminal this program is on, as procinfo says */
+static int mode_tty(void) {
+    struct procinfo pi;
+    int i, me = (int)getpid();
+    for(i = 0; procinfo(i, &pi) == 0; i++) {
+        if(pi.pid != me) continue;
+        if(pi.tty >= PROC_TTY_PTY) printf("WINTEST tty: pty%d\n", pi.tty - PROC_TTY_PTY);
+        else if(pi.tty >= 0) printf("WINTEST tty: F%d\n", pi.tty + 1);
+        else printf("WINTEST tty: none\n");
+        return 0;
+    }
+    return fail("not in the task list");
+}
+
 /**** show ****/
 
 static unsigned *image;
@@ -204,6 +221,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "nodesk")) return mode_nodesk();
     if(!strcmp(mode, "pty")) return mode_pty();
     if(!strcmp(mode, "show")) return mode_show();
-    fprintf(stderr, "usage: wintest nodesk | pty | show\n");
+    if(!strcmp(mode, "tty")) return mode_tty();
+    fprintf(stderr, "usage: wintest nodesk | pty | show | tty\n");
     return 2;
 }

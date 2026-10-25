@@ -788,14 +788,28 @@ each application are in `tools/gui_apps_<track>.py`. Among them:
 * Sketch saves one that the host reads back;
 * Files opens a picture in the Image Viewer and a file that is not text in Hex
   (`tools/gui_apps_suite.py`, after the applications' own checks);
-* 10/25/26: `wintest show` typed in the Terminal opens a window, takes a key and closes
-  (`tools/gui_apps_win.py`, before the suite's checks).
+* 10/25/26: programs' windows (`tools/gui_apps_win.py`, before the suite's checks):
+  `wintest show` and `wdemo` typed in the Terminal open windows at 2x without the focus
+  (a key typed meanwhile stays the Terminal's), take it at a click on their title bar, and
+  then take keys, a press and a release (echoed with where they were), keep their content
+  across F2 and F1,
+  answer a corner resize and close by their close button (`ps` then finds none); `wdemo`
+  typed without `&` opens with the focus; `wdemo hang` is ended through "End the
+  program?", and `wdemo crash` loses only its window;
+  `wintest pty` is refused; Run program... starts wcalc, with the focus, which counts by
+  keys and clicks,
+  and a wcalc started so outlives the Terminal and ends with the desktop (the check leaves
+  the desktop, runs `ps` on the serial console and starts the desktop again); and once the
+  Terminal has closed, `wintest pty` started from Run program... takes the Terminal's pty
+  number for a pty of its own and is refused there.
 
 Programs' windows (10/25/26) are `shell/guiclient.c` in the model (host-tested by
 `test_guiclient.c` against fake windows: appearing, drawing and clipping, the pointer and its
-grab, sizes, keys, focus, closing, a program that has gone, every window inside guard pixels at
-three sizes), `shell/guisys_win.c` on the kernel's side, and the windows themselves in
-`kernel/win.c` (host-tested by `test_win.c`).
+grab, sizes, keys, focus, closing, a program that has gone, the launcher, every window inside
+guard pixels at three sizes), `shell/guisys_win.c` on the kernel's side, and the windows
+themselves in `kernel/win.c` (host-tested by `test_win.c`). libgui (`user/libsurf/gui.c`,
+`guikit.c`) builds the desktop's own drawing kit, so the screen checks of wdemo and wcalc
+test both.
 
 Each part leaves the desktop as it found it, and the host runs `fsck` on the stick
 afterwards.

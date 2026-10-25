@@ -14,7 +14,11 @@ Bound controller waits, demultiplex keyboard and auxiliary bytes, and recover
 truncated packets. USB hotplug follows the existing xHCI driver lifecycle.
 
 The GUI is a kernel command using the existing framebuffer ownership contract,
-not a new userspace graphics ABI. Keep drawing/model code host-testable, prepare
+not a new userspace graphics ABI. (Reversed 10/25/26 at the owner's choice of a
+platform for new applications: programs open windows on the desktop through
+`SYS_winopen` and `SYS_winctl`, their pixels copied into the kernel's buffers, while
+the desktop alone keeps the framebuffer; see
+`docs/superpowers/plans/2026-10-25-app-windows.md` and docs/GUI.md.) Keep drawing/model code host-testable, prepare
 a RAM scene outside the framebuffer lock, and present only changed regions.
 Scale logical coordinates by integers, retain the existing physical mode, and
 clip all drawing. Use the existing font with a custom navy/teal/seafoam palette.
