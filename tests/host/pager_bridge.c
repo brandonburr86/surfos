@@ -163,6 +163,8 @@ void sim_init(int ascii) {
         T[i].state = TS_RUNNING;
         T[i].con = &conArray[0];
         T[i].parent = parent[i] >= 0 ? &T[parent[i]] : NULL;
+        if(i == 3 || i == 4) T[i].flags |= TF_FOREGROUND;   /* 10/25/26: the command and its child: the
+                                                           shell's foreground; the job (5) is not */
     }
     idle_task = &T[0];
     init_task_ptr = &T[1];

@@ -86,7 +86,8 @@ void tty_switch(int index);
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
-   descended from it is paged; the caller owns the pager of this terminal. After a
+   descended from it is paged (10/25/26: the programs of its foreground, TF_FOREGROUND, not a
+   job in the background); the caller owns the pager of this terminal. After a
    screenful (the console's rows less one) the console shows TTY_MORE in inverse video on
    the next row, the last one of a full screen, and waits for a key: Space (or any other
    key) shows the next screenful, Enter one more line; q, Q, Esc or Ctrl-C drops the rest

@@ -349,7 +349,9 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 * **The pager** (**ai-dev**, 10/6/26; `include/surfos/tty.h` is the contract,
   `kernel/console.c` counts the rows and asks, `kernel/tty.c` decides who is paged).
   `ttyctl(TTY_PAGE, 1)` makes the caller the owner on its console: what it and the tasks
-  descended from it (the parent chain) print there in task context is paged. The console
+  descended from it (the parent chain; 10/25/26: through the programs of its foreground,
+  `TF_FOREGROUND`, so a job surfsh started with `&` is not paged with its next command) print
+  there in task context is paged. The console
   counts the rows that start, by a newline or a VT100 wrap; once LINES - 1 rows have been
   shown and a paged task is about to draw on, or start, another, that task first waits at
   `TTY_MORE`, `--More-- (Space: next page, Enter: next line, q: skip the rest)`, in inverse

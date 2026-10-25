@@ -579,7 +579,8 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 }
 
 /* 10/6/26: TTY_PAGE (tty.h). Paging belongs to the task that turned it on, its owner: what
-   the owner and the tasks descended from it print on this terminal is paged until the
+   the owner and the tasks descended from it (10/25/26: the programs of its foreground, as
+   console.c's page_descends() has it) print on this terminal is paged until the
    owner turns it off or ends (tty_task_gone). TTY_PAGE 1 again from the owner starts a new
    screenful. An ancestor of the owner takes the pager over (a shell whose job in the
    background turned paging on, and which runs a command now). A task that is paged
