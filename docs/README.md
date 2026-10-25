@@ -20,6 +20,7 @@ as the restoration; new work happens here.
 | [superpowers/plans/…telnetd.md](superpowers/plans/2026-10-06-telnetd.md) | The brief for telnetd, the telnet server: network connections for programs, pseudo-terminals, `poll()` |
 | [superpowers/plans/…network-manager.md](superpowers/plans/2026-10-17-network-manager.md) | The brief for the network manager: saved Wi-Fi networks joined at every start, the settings on the stick |
 | [superpowers/plans/…httpd.md](superpowers/plans/2026-10-17-httpd.md) | The brief for httpd, the web server: static websites from a folder, keep-alive, folder listings |
+| [superpowers/plans/…surfsh-scripting.md](superpowers/plans/2026-10-24-surfsh-scripting.md) | The brief for pipelines and scripting in surfsh: kernel pipes, pipelines, variables and the environment, script files, job control |
 
 ## Building and running
 
