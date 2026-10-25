@@ -855,6 +855,11 @@ static void start_surfsh(int i) {
         }
         return;
     }
+    if(pid == -ENOEXEC) {                                   /* 10/25/26: refused at once now; the same words */
+        snprintf(cshell[i].why, sizeof(cshell[i].why), "init: %s could not be loaded; recovery console", SURFSH_PATH);
+        recovery_console(i);
+        return;
+    }
     if(pid < 0) {                                           /* missing, not a file: it cannot be started */
         snprintf(cshell[i].why, sizeof(cshell[i].why), "init: %s: %s; recovery console", SURFSH_PATH, strerror(pid));
         recovery_console(i);

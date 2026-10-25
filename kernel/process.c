@@ -29,6 +29,14 @@ its stack after argv: argc, argv, envp for crt0), and starts a job in the backgr
 the pager's Ctrl+C does not reach. A program takes up to SPAWN_MAX_ARGS (128) arguments in
 SPAWN_ARG_BYTES (8 KB), and with the environment's 4 KB they all fit in the stack's first
 16 KB.
+
+10/25/26: a script runs by its name. A file whose first line is "#!INTERPRETER [ARG]" (at
+most SCRIPT_LINE bytes) starts INTERPRETER, which must be an ELF program (no #! behind a
+#!), as INTERPRETER [ARG] FILE ARGS..., as on every Unix: ARG is the rest of the line, one
+argument, its blanks at the end off. The task is named after the script. A file that is
+neither ELF nor #! is refused with -ENOEXEC before anything starts, so that a shell can run
+it as a script of its own (POSIX's rule); an ELF file the loader cannot run still fails in
+the new task, as before.
 */
 
 #include <surfos/types.h>
@@ -49,6 +57,7 @@ SPAWN_ARG_BYTES (8 KB), and with the environment's 4 KB they all fit in the stac
 
 #define USER_STACK_INIT 0x4000          /* mapped before the program starts; the rest on demand */
 #define EXIT_LOAD_FAILED 127
+#define SCRIPT_LINE 256                 /* 10/25/26: a script's #! line, at most */
 
 struct spawn_args {
     char path[VFS_PATH_MAX];
@@ -202,32 +211,88 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     return process_spawn_ex(path, argc, argv, con, flags, &m);
 }
 
+/* 10/25/26: the start of the file at path: 0 for an ELF program (the loader checks the rest), 1 for a
+   script, its #! line's interpreter and argument ("" for none) in *interp and *arg (inside line), -ENOEXEC
+   for anything else; another -errno when it cannot be read */
+static int program_kind(const char *path, char *line, char **interp, char **arg) {
+    struct file *f;
+    char *s, *e, *a, *z;
+    int n, k, r = vfs_open(path, O_RDONLY, &f);
+    if(r) return r;
+    n = vfs_read(f, line, SCRIPT_LINE);
+    vfs_close(f);
+    if(n < 0) return n;
+    if(n >= 4 && !memcmp(line, ELF_MAGIC, 4)) return 0;
+    if(n < 2 || line[0] != '#' || line[1] != '!') return -ENOEXEC;
+    for(k = 0; k < n && line[k] != '\n'; k++);
+    if(k == SCRIPT_LINE) return -ENAMETOOLONG;          /* no end to the #! line */
+    line[k] = 0;
+    for(z = line + k; z > line + 2 && (z[-1] == ' ' || z[-1] == '\t' || z[-1] == '\r'); ) *--z = 0;
+    for(s = line + 2; *s == ' ' || *s == '\t'; s++);
+    for(e = s; *e && *e != ' ' && *e != '\t'; e++);
+    if(e == s) return -ENOEXEC;                         /* #! and nothing after it */
+    for(a = e; *a == ' ' || *a == '\t'; a++);
+    *e = 0;
+    *interp = s;
+    *arg = a;
+    return 1;
+}
+
+/* 10/25/26: 1 when the file at path begins as an ELF program, 0 when not, -errno when it cannot be read */
+static int is_elf(const char *path) {
+    struct file *f;
+    char m[4];
+    int n, r = vfs_open(path, O_RDONLY, &f);
+    if(r) return r;
+    n = vfs_read(f, m, sizeof(m));
+    vfs_close(f);
+    return n == (int)sizeof(m) && !memcmp(m, ELF_MAGIC, 4);
+}
+
 /* 10/24/26: with a descriptor 3, closed descriptors, an environment, in the background (process.h) */
 int process_spawn_ex(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
                      const struct spawn_more *more) {
     struct spawn_args *sa;
     struct stat st;
     surf_task *t;
-    const char *base;
+    const char *base, *const *args = (const char *const *)argv;
+    const char *head[3];
+    char line[SCRIPT_LINE + 1], *interp = NULL, *iarg = NULL;
     size_t used = 0;
-    int i, r;
+    int i, r, kind, nhead = 0, nargs = argc;
 
     r = vfs_stat(path, &st);
     if(r) return r;
     if(st.type != VN_FILE) return -EACCES;
     if(argc < 1 || argc > SPAWN_MAX_ARGS) return -EINVAL;
+    kind = program_kind(path, line, &interp, &iarg);    /* 10/25/26: an ELF program, or a script */
+    if(kind < 0) return kind;
+    if(kind == 1) {                                     /* INTERPRETER [ARG] FILE ARGS... */
+        r = vfs_stat(interp, &st);
+        if(r) return r;
+        if(st.type != VN_FILE) return -EACCES;
+        r = is_elf(interp);
+        if(r <= 0) return r < 0 ? r : -ENOEXEC;        /* no #! behind a #! */
+        head[nhead++] = interp;
+        if(*iarg) head[nhead++] = iarg;
+        head[nhead++] = path;
+        nargs = nhead + argc - 1;
+        if(nargs > SPAWN_MAX_ARGS) return -E2BIG;
+        args++;                                         /* argv[0] gives way to the interpreter's */
+    }
     sa = (struct spawn_args *)kcalloc(1, sizeof(struct spawn_args));
     if(!sa) return -ENOMEM;
-    r = vfs_normalize(vfs_getcwd(), path, sa->path, sizeof(sa->path));
+    r = vfs_normalize(vfs_getcwd(), kind == 1 ? interp : path, sa->path, sizeof(sa->path));
     if(r) { kfree(sa); return r; }
-    for(i = 0; i < argc; i++) {
-        size_t n = strlen(argv[i]) + 1;
+    for(i = 0; i < nargs; i++) {
+        const char *a = i < nhead ? head[i] : args[i - nhead];
+        size_t n = strlen(a) + 1;
         if(used + n > SPAWN_ARG_BYTES) { kfree(sa); return -E2BIG; }
-        memcpy(sa->strs + used, argv[i], n);
+        memcpy(sa->strs + used, a, n);
         sa->argv[i] = sa->strs + used;
         used += n;
     }
-    sa->argc = argc;
+    sa->argc = nargs;
     if(more) {                                      /* 10/24/26: the environment */
         if(more->envc < 0 || more->envc > SPAWN_ENV_MAX) { kfree(sa); return -E2BIG; }
         for(i = 0, used = 0; i < more->envc; i++) {
@@ -249,8 +314,8 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
         }
         sa->files[i] = more->files[i];
     }
-    base = strrchr(sa->path, '/');
-    base = base ? base + 1 : sa->path;
+    base = strrchr(kind == 1 ? path : sa->path, '/');   /* 10/25/26: a script's task is named after it */
+    base = base ? base + 1 : (kind == 1 ? path : sa->path);
     if(!(flags & TF_DETACHED) && con && console_paging(con) && !(more && more->background))
         flags |= TF_FOREGROUND;                     /* 10/6/26; 10/24/26: not a job started in the background */
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);

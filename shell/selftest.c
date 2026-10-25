@@ -1072,6 +1072,37 @@ static int run_and_wait(const char *path, int argc, char **argv) {
     return status;
 }
 
+/* 10/25/26: #! scripts (kernel/process.c), written on /hda1: one whose interpreter runs (hello, 42),
+   with its argument; one that names nothing, one whose interpreter is no program, one with nothing
+   after its #!, one whose line is too long */
+static void test_scripts(void) {
+    static char longline[300];
+    char *script[] = { "script", "x" };
+    struct stat st;
+    if(vfs_stat("/hda1", &st) != 0) {
+        printf("  skip #! scripts (no /hda1 mounted)\n");
+        return;
+    }
+    memset(longline, 'a', sizeof(longline) - 2);
+    memcpy(longline, "#!/", 3);
+    longline[sizeof(longline) - 2] = '\n';
+    check(put_file("/hda1/SELFT1.SH", "#!/initrd/bin/hello one two\nnot read\n") == 0 &&
+          run_and_wait("/hda1/SELFT1.SH", 2, script) == 42, "a #! script runs its interpreter (hello: 42)");
+    check(put_file("/hda1/SELFT2.SH", "#!/initrd/bin/nothing\n") == 0 &&
+          run_and_wait("/hda1/SELFT2.SH", 1, script) == -ENOENT, "a #! that names nothing: ENOENT");
+    check(put_file("/hda1/SELFT3.SH", "#! /initrd/motd\n") == 0 &&
+          run_and_wait("/hda1/SELFT3.SH", 1, script) == -ENOEXEC, "an interpreter that is no program (no #! behind #!): ENOEXEC");
+    check(put_file("/hda1/SELFT4.SH", "#!  \r\n") == 0 &&
+          run_and_wait("/hda1/SELFT4.SH", 1, script) == -ENOEXEC, "a #! with nothing after it: ENOEXEC");
+    check(put_file("/hda1/SELFT5.SH", longline) == 0 &&
+          run_and_wait("/hda1/SELFT5.SH", 1, script) == -ENAMETOOLONG, "a #! line longer than 255 bytes: ENAMETOOLONG");
+    vfs_unlink("/hda1/SELFT1.SH");
+    vfs_unlink("/hda1/SELFT2.SH");
+    vfs_unlink("/hda1/SELFT3.SH");
+    vfs_unlink("/hda1/SELFT4.SH");
+    vfs_unlink("/hda1/SELFT5.SH");
+}
+
 static void test_user(void) {
     char *hello[] = { "hello", "one", "two" };
     char *crash_null[] = { "crash", "null" };
@@ -1092,8 +1123,10 @@ static void test_user(void) {
     check(run_and_wait("/initrd/bin/crash", 2, crash_int40) == -1, "int 0x40 from user mode kills the process");
     check(run_and_wait("/initrd/bin/crash", 2, crash_efault) == 0, "a kernel pointer in a system call is EFAULT, not a crash");
     check(run_and_wait("/initrd/bin/crash", 2, crash_stack) == 0, "the user stack grows on demand");
-    check(run_and_wait("/initrd/motd", 1, motd) == 127, "a file that is not an ELF exits 127");
+    /* 10/25/26: a file that is no program is refused before anything starts (a shell runs it as a script) */
+    check(run_and_wait("/initrd/motd", 1, motd) == -ENOEXEC, "a file that is neither ELF nor #! is ENOEXEC at once");
     check(run_and_wait("/initrd/bin/nothing", 1, motd) == -ENOENT, "a missing program is ENOENT");
+    test_scripts();
     check(task_count() == before, "every process was reaped");
 }
 
