@@ -13,7 +13,10 @@
    secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
    serial line or a pty's stream, the history, or stays in the input queue. 10/25/26: a job in
    the background is not paged with its shell's command; TAB on the screen and the serial line,
-   and the pager at a row that starts with one. */
+   and the pager at a row that starts with one. 10/25/26 (track A, A6): the scrollback of a
+   framebuffer console: rows kept as they scroll off and by ESC[2J and a clear, Shift+PgUp, PgDn,
+   Home and End, the view's tag and hidden cursor, output that does not move the view, any other key,
+   a console switch, the pager's question, a graphics session, no memory, a full ring. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -70,6 +73,15 @@ int sim_key_up(void);
 int sim_key_home(void);
 int sim_readline_secret(char *buf, int size);
 int sim_inq_has(const char *s);
+int sim_scroll_key(int which);              /* 10/25/26 (A6): 0 Shift+PgUp, 1 PgDn, 2 Home, 3 End */
+void sim_view_live(void);
+void sim_screen_row(int r, char *out, int *attr_last);
+int sim_view(void);
+int sim_kept(void);
+void sim_fb_cursor(int *x, int *y);
+void sim_graphics(int on);
+void sim_heap_refuse(int on);
+void sim_switch(int n);
 
 static int failures, checks;
 
@@ -833,6 +845,104 @@ static void t_tab(void) {
     run(SHELL, w_page, 0, 0);
 }
 
+/* 10/25/26 (track A, A6): the screen's row r starts with "line n" */
+static int screen_line(int r, int n) {
+    char s[256], want[32];
+    sim_screen_row(r, s, NULL);
+    snprintf(want, sizeof(want), "line %03d", n);
+    return !strncmp(s, want, 8);
+}
+
+/* the screen shows the console as it is (no view back): every row the same */
+static int screen_live(void) {
+    char a[256], b[256];
+    int i;
+    for(i = 0; i < sim_lines(); i++) {
+        row(i, a);
+        sim_screen_row(i, b, NULL);
+        if(strcmp(a, b)) return 0;
+    }
+    return 1;
+}
+
+enum { S_PGUP, S_PGDN, S_HOME, S_END };
+
+static void t_scrollback(void) {
+    char r[256];
+    int x, y, attr, st, ok, i;
+    reset(0);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 16 && screen_live(), "40 lines on 25 rows: the 16 that scrolled off are kept, the screen as ever");
+    check(sim_scroll_key(S_PGUP) == 1 && sim_view() == 16, "Shift+PgUp: back a screenful, or as far as there are rows");
+    sim_screen_row(0, r, &attr);
+    check(screen_line(0, 1) && screen_line(15, 16) && screen_line(16, 17) && screen_line(23, 24),
+          "the view: the kept rows, oldest first, then the console's own");
+    check(strlen(r) == 79 && !strcmp(r + 75, " -16") && attr == 0x70, "the view's tag in the top right corner, inverse");
+    sim_fb_cursor(&x, &y);
+    row(0, r);
+    check(y == 25 && !strcmp(r, "line 017"), "no cursor in the view; the console's own rows are as they were");
+    run(SHELL, w_lines, 41, 42);
+    check(screen_line(0, 1) && screen_line(16, 17) && sim_view() == 18 && sim_kept() == 18,
+          "output meanwhile: the console scrolls, the screen keeps what it shows, the view moves along");
+    check(sim_scroll_key(S_PGDN) == 1 && sim_view() == 0 && screen_live() && screen_line(0, 19),
+          "Shift+PgDn back past the live screen: the live screen");
+    sim_fb_cursor(&x, &y);
+    check(x == 0 && y == 24, "and the cursor where the console has it");
+    check(sim_scroll_key(S_HOME) == 1 && sim_view() == 18 && screen_line(0, 1), "Shift+Home: the oldest row at the top");
+    check(sim_scroll_key(S_END) == 1 && sim_view() == 0 && screen_live(), "Shift+End: the live screen");
+    sim_scroll_key(S_PGUP);
+    sim_view_live();
+    check(sim_view() == 0 && screen_live(), "any other key: the live screen");
+    sim_scroll_key(S_PGUP);
+    sim_switch(1);
+    sim_switch(0);
+    check(sim_view() == 0 && screen_live(), "a console switch: back live");
+
+    reset(0);
+    say(SHELL, "one\ntwo\nthree\n\033[2J\033[H");
+    check(sim_kept() == 3, "ESC[2J keeps the screen's rows, up to the last that shows anything");
+    sim_scroll_key(S_PGUP);
+    sim_screen_row(2, r, NULL);
+    check(sim_view() == 3 && !strcmp(r, "three"), "and Shift+PgUp shows them");
+    sim_scroll_key(S_END);
+    say(SHELL, "four\n");
+    sim_clear();
+    check(sim_kept() == 4, "a clear (clearConsole) keeps them too");
+
+    reset(0);
+    run(SHELL, w_lines, 1, 30);
+    st = paged_lines(31, 60);
+    check(st == BLOCKED && asking_after(54), "a paged command at the question");
+    ok = sim_scroll_key(S_PGUP) == 1 && sim_view() == 24 && screen_line(0, 7);
+    check(ok && asker() == CHILD && sim_on_list(CHILD), "Shift+PgUp at the question: the view moves, the question waits");
+    check(sim_scroll_key(S_END) == 1 && screen_live() && asking_after(54), "Shift+End: the question again");
+    if(st == BLOCKED) {
+        sim_input('q');
+        st = resume(CHILD);
+    }
+    check(st == DONE, "and a key answers it");
+    run(SHELL, w_page, 0, 0);
+
+    sim_graphics(1);
+    check(sim_scroll_key(S_PGUP) == 0 && sim_view() == 0, "under a graphics session the keys are the session's");
+    sim_graphics(0);
+
+    reset(0);
+    sim_heap_refuse(1);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 0 && sim_scroll_key(S_PGUP) == 1 && sim_view() == 0 && screen_live(),
+          "no memory for a ring: nothing kept, the keys do nothing");
+
+    reset(0);
+    run(SHELL, w_lines, 1, 3400);
+    sim_scroll_key(S_HOME);
+    sim_screen_row(0, r, NULL);
+    check(sim_kept() == 3276 && sim_view() == 3276 && screen_line(0, 101) && !strcmp(r + 73, " -3276"),
+          "a full ring (512 KB: 3,276 rows of 80 columns) keeps the newest rows");
+    for(i = 0; i < 200 && sim_view(); i++) sim_scroll_key(S_PGDN);
+    check(sim_view() == 0 && screen_live(), "and Shift+PgDn comes back down to the live screen");
+}
+
 static void t_stream_wrap_ask(void) {
     char l80[81];
     int st;
@@ -1275,6 +1385,7 @@ int main(void) {
     t_stream_screenful();
     t_stream_columns();
     t_tab();
+    t_scrollback();
     t_stream_wrap_ask();
     t_stream_resize();
     t_stream_colour();

@@ -79,7 +79,10 @@ void framebuffer_present(void) {}
 void framebuffer_present_lazy(void) {}      /* 10/25/26 (A3) */
 void framebuffer_flush(void) {}
 void framebuffer_console_switched(void) {}
-void framebuffer_set_cursor(u32 col, u32 row) { (void)col; (void)row; }
+static int fb_cx, fb_cy, graphics_on;       /* 10/25/26 (A6): the drawn cursor, a graphics session */
+void framebuffer_set_cursor(u32 col, u32 row) { fb_cx = (int)col; fb_cy = (int)row; }
+void framebuffer_present_soon(void) {}
+bool framebuffer_graphics_on(void) { return graphics_on; }
 bool framebuffer_active(void) { return true; }
 const char *framebuffer_describe(char *buf, size_t size) { if(size) buf[0] = 0; return buf; }
 void framebuffer_panic(void) {}
@@ -87,7 +90,18 @@ void framebuffer_task_died(struct surf_task *t) { (void)t; }
 
 void klog_write(const char *s) { (void)s; }
 void klog_dump(void) {}
-void *kalloc(size_t n) { (void)n; return NULL; }
+/* 10/25/26 (A6): the scrollback's rings come from here, and sim_init() starts it over */
+static char heap[3 << 20] __attribute__((aligned(16)));
+static size_t heap_used;
+static int heap_refuse;
+void *kalloc(size_t n) {
+    void *p;
+    n = (n + 15) & ~(size_t)15;
+    if(heap_refuse || heap_used + n > sizeof(heap)) return NULL;
+    p = heap + heap_used;
+    heap_used += n;
+    return p;
+}
 void kfree(void *p) { (void)p; }
 bool bootinfo_has_arg(const struct boot_info *bi, const char *arg) { (void)bi; return ascii_word && !strcmp(arg, "ascii"); }
 
@@ -151,12 +165,16 @@ void yield(void) {
 
 /* fresh consoles and terminals, and the family: init's children are the shell and the usb
    thread; the shell's are a command (child, with a grandchild) and a background job */
+extern surf_console conVideo;
+
 void sim_init(int ascii) {
     static const int parent[NT] = { -1, -1, 1, 2, 3, 2, 1, -1 };
     int i;
     extern void init_console(void);
-    extern surf_console conVideo;
     ascii_word = ascii;
+    heap_used = 0;                                                  /* 10/25/26 (A6) */
+    heap_refuse = 0;
+    graphics_on = 0;
     memset(T, 0, sizeof(T));
     memset(conArray, 0, sizeof(surf_console) * NUM_TTYS);         /* a scenario that ended at a question leaves nothing */
     memset(&conVideo, 0, sizeof(conVideo));
@@ -174,6 +192,7 @@ void sim_init(int ascii) {
     sim_if = 1;
     in_irq = 0;
     init_console();
+    init_console_grid();                                            /* 10/25/26 (A6): 80x25 stays, and is final */
     init_tty();
     for(i = 0; i < NT; i++) T[i].tty = &ttys[0];
     serial_len = 0;
@@ -247,6 +266,31 @@ void sim_row(int r, char *out, int *attr0) {
 }
 
 u_char sim_cell(int x, int y) { return conArray[0].vmem[(y * COLUMNS + x) * 2]; }
+
+/* 10/25/26 (track A, A6): the scrollback. which: 0 Shift+PgUp, 1 Shift+PgDn, 2 Shift+Home, 3 Shift+End, as
+   keyboard.c gives them; row r of the screen (conVideo, what the framebuffer draws) as sim_row() reads a
+   console's, and the attribute of its last cell; the active console's view and rows kept */
+int sim_scroll_key(int which) {
+    static const int keys[4] = { PGUP, PGDN, HOME, END };
+    return console_scroll_key(keys[which]);
+}
+void sim_view_live(void) { console_view_live(); }
+void sim_screen_row(int r, char *out, int *attr_last) {
+    int c;
+    for(c = 0; c < (int)COLUMNS; c++) {
+        u_char ch = conVideo.vmem[(r * COLUMNS + c) * 2];
+        out[c] = ch ? (char)ch : ' ';
+    }
+    out[COLUMNS] = 0;
+    for(c = COLUMNS; c > 0 && out[c - 1] == ' '; c--) out[c - 1] = 0;
+    if(attr_last) *attr_last = conVideo.vmem[(r * COLUMNS + COLUMNS - 1) * 2 + 1];
+}
+int sim_view(void) { return (int)conActive->view; }
+int sim_kept(void) { return (int)conActive->sb_count; }
+void sim_fb_cursor(int *x, int *y) { *x = fb_cx; *y = fb_cy; }
+void sim_graphics(int on) { graphics_on = on; }
+void sim_heap_refuse(int on) { heap_refuse = on; }
+void sim_switch(int n) { tty_switch(n); }
 void sim_cursor(int *x, int *y) { *x = (int)conArray[0].loc.x; *y = (int)conArray[0].loc.y; }
 
 /* what the serial port got since the last call */

@@ -13,6 +13,10 @@ reboots. Everything else goes to the active tty.
 KEY_CTRL), which raw mode sends as xterm does (kernel/tty.c); in raw mode Ctrl+Space
 is NUL, Ctrl+/ 0x1f, Shift+Tab ESC[Z, and Ctrl leaves Backspace, Enter and Tab alone.
 Line mode is as it was.
+10/25/26 (track A, A6): Shift+PgUp, PgDn, Home and End move the screen through the
+console's scrollback (console.c) before the tty sees them, unless a graphics session
+(the desktop) holds the screen or there is no framebuffer; any other key shows the
+live screen again first.
 
 10/5/26 (USB boot): a laptop's built-in keyboard sits behind an 8042 that the
 embedded controller emulates, and UEFI firmware may hand it over with its interrupt
@@ -122,11 +126,14 @@ static u_int mods_held(void) {
 }
 
 static void deliver(u_char c) {
+    u_int mods = mods_held();
     if(c >= F1 && c < F1 + NUM_CONSOLES) {      /* F1..Fn: switch console */
         tty_switch(c - F1);
         return;
     }
-    tty_key(tty_active, c, mods_held());        /* raw mode turns special keys into escape sequences */
+    if(mods == KEY_SHIFT && console_scroll_key(c)) return;     /* 10/25/26 (A6): the scrollback's keys */
+    console_view_live();
+    tty_key(tty_active, c, mods);               /* raw mode turns special keys into escape sequences */
 }
 
 static void handle_e0(u_char code) {

@@ -300,6 +300,22 @@ void framebuffer_present_lazy(void) {
     irq_restore(flags);
 }
 
+/* 10/25/26 (track A, A6): a present the thread does at once, not the caller: a keyboard interrupt that shows
+   another part of the scrollback (console.c) changes every cell, too long a draw for an interrupt handler */
+void framebuffer_present_soon(void) {
+    u_long flags;
+    if(!presenter) {
+        framebuffer_present();
+        return;
+    }
+    flags = irq_save();
+    if(!pending) {
+        pending = 1;
+        wake_up(&present_wait);
+    }
+    irq_restore(flags);
+}
+
 /* a pending present now: a reader is about to wait for a key (console_flush(), tty.c) */
 void framebuffer_flush(void) {
     if(pending && !in_interrupt()) framebuffer_present();
@@ -386,6 +402,12 @@ void framebuffer_console_switched(void) {
     u_long flags = irq_save();
     if(graphics_task && graphics_console != conActive) drop_graphics();
     irq_restore(flags);
+}
+
+/* 10/25/26 (track A, A6): the desktop holds the screen of the console shown: Shift+PgUp and the other
+   scrollback keys are its own (keyboard.c sends them on, ESC[5;2~ and so on) */
+bool framebuffer_graphics_on(void) {
+    return graphics_task && graphics_console == conActive;
 }
 
 const char *framebuffer_describe(char *buf, size_t size) {

@@ -86,6 +86,7 @@ bool framebuffer_graphics_owned(void);
 int framebuffer_graphics_draw(void (*draw)(const struct fb_surface *, void *), void *arg);
 void framebuffer_graphics_end(void);
 void framebuffer_console_switched(void); /* console.c, after changing conActive */
+bool framebuffer_graphics_on(void);      /* 10/25/26 (A6): a session holds the screen of conActive (its keys are its own) */
 
 /* framebuffer.c: the console's screen */
 int framebuffer_init(void);     /* 0 when the boot loader's framebuffer is mapped and cleared */
@@ -101,6 +102,7 @@ void framebuffer_set_cursor(u32 col, u32 row);
 void framebuffer_present_lazy(void);
 void framebuffer_flush(void);
 void framebuffer_start(void);
+void framebuffer_present_soon(void);    /* 10/25/26 (A6): by the thread at once: a whole new screen from an interrupt */
 struct fb_counts {
     u32 presents;               /* passes over the whole grid */
     u32 glyphs;                 /* cells drawn whole */

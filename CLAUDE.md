@@ -231,6 +231,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   is the sorted symbol table for anything else. `dmesg` in the shell shows the kernel log.
 * Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose.
 * The screen dump works even when the serial console does not.
+* Scrollback (10/25/26): Shift+PgUp/PgDn/Home/End on F1-F4 on a framebuffer (kernel/console.c, keys caught in
+  keyboard.c); VGA text mode has none, so `make test` never sees it: `test_pager` and qemu-usb's fullhd check it.
 * `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
   `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.
 * Kernel APIs: `kthread_create()`/`task_exit()`/`task_wait()`/`sleep_ms()` (task.h),

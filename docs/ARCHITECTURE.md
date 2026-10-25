@@ -295,6 +295,23 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   (`fb_draw_cursor()`), not as a whole glyph. The thread exists only with a framebuffer,
   started after `init_task()` (`framebuffer_start()`), so a VGA boot is as it was.
   `gfxinfo` shows the counts (presents, the slowest, the ones folded in, cells, cursor moves).
+  **10/25/26** (track A, A6; audit C9): **scrollback**. F1-F4 on a framebuffer keep the rows
+  that go off the top in a ring of their own (512 KB from the kernel heap, made at the first
+  such row once the grid is final: about 1,600 rows of 160 columns, 2 MB for the four);
+  `ESC[2J` and `clearConsole()` add the screen's rows up to the last that shows anything, so
+  `clear` and Ctrl+L lose nothing. Shift+PgUp and Shift+PgDn move the view a screenful less a
+  row back and forth, Shift+Home to the oldest row, Shift+End to the live screen:
+  `keyboard.c` gives them to `console_scroll_key()` before the tty, so they work at
+  `--More--` without answering it. The view shows the ring's rows and then the console's own,
+  `" -N "` (rows back) in inverse video in the top right corner and no cursor; output meanwhile
+  goes into the console's cells but not onto the screen (`shows_live()` where the active
+  console used to be enough: `cell_at()`, `ansi_blank()`, `setpos()`, `syncVideoConsole()`),
+  and a row that goes into the ring moves the view along, so the screen keeps what it shows.
+  Any other key (`console_view_live()`), a console switch or a panic shows the live screen
+  again; the fbflush thread presents a new view (`framebuffer_present_soon()`), not the
+  keyboard interrupt. Under a graphics session the four keys are the session's (the desktop
+  gets `ESC[5;2~` and the like, `framebuffer_graphics_on()`). VGA text mode keeps no rows and
+  passes the keys on as before; so do the pseudo-terminals, whose terminals have their own.
   Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
   from task context, `kprintf()` print on the calling task's console (`kprintf()`
   in yellow, boot code and interrupt handlers on the active console), so a shell

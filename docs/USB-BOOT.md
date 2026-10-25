@@ -529,6 +529,14 @@ are more than the screen holds).
 shows the next screenful, Enter one more line, and q (or Esc, or Ctrl+C) leaves the rest
 unshown. `help` is long on purpose.
 
+**Scrolling back.** Shift+PgUp shows what scrolled off the top of the screen, a screenful
+at a time (each console keeps about 1,600 lines; `clear` and Ctrl+L keep the screen there
+too); Shift+PgDn goes forward again, Shift+Home to the oldest line, Shift+End back to the
+present. The top right corner says how many lines back you are (` -32 `). Anything printed
+meanwhile waits below; any other key brings the live screen back and does what it does.
+It works at `--More--` too, without answering it. (Not in the desktop, where the keys are
+the desktop's, nor on a VGA text screen.)
+
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
 `help`, `history`, `set`, `type`, ...), then a program in the directories of `PATH`
 (`/initrd/bin`), then the kernel's (everything in sections 7 to 9: `lsblk`, `fdisk`,
@@ -1390,7 +1398,7 @@ Limits:
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
 | USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
-| The shell, surfsh: the SurfOS prompt, Tab completion, history (Ctrl+R, `!!`), a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | Scrolling back, a startup file and saved history (in the works) |
+| The shell, surfsh: the SurfOS prompt, Tab completion, history (Ctrl+R, `!!`), scrolling back (Shift+PgUp), a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | A startup file and saved history (in the works) |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |

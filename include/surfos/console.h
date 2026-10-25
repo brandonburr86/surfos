@@ -83,6 +83,12 @@ typedef struct surf_console {
     u_char at_home;             /* its cursor went to the top left (ESC[H): ESC[J then clears it all */
     TEXTCOLOR shown;            /* the writer's colour the far terminal draws in (the last SGR sent) */
     u_int cols, rows;           /* its size (PTY_SETSIZE): the pager counts these */
+    /* 10/25/26 (track A, A6; audit C9): scrollback, F1-F4 on a framebuffer (console.c); all zero is none */
+    u_char *sb;                 /* the rows that went off the top: a ring of sb_cap rows of COLUMNS cells */
+    u_int sb_cap, sb_count;     /* the rows it has room for, the rows it holds */
+    u_int sb_next;              /* where the next row goes */
+    u_int view;                 /* the screen shows this many rows back from the live one; 0: live */
+    u_char sb_none;             /* no memory for a ring: not asked again */
 } surf_console;
 
 void sscroll(surf_console *con);
@@ -132,6 +138,13 @@ void console_page_new(surf_console *con);    /* a new screenful, nothing dropped
 int console_paging(surf_console *con);       /* is what the current task prints there paged? */
 void console_page_call_off(surf_console *con);  /* interrupts off: the task at the question goes on without a key */
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */
+
+/* 10/25/26 (track A, A6; audit C9): scrollback on F1-F4 on a framebuffer. keyboard.c gives Shift+PgUp, PgDn,
+   Home and End (PGUP, PGDN, HOME, END) to console_scroll_key() first: 1 when they were the view's, 0 when they
+   go to the tty as keys (VGA text mode, a graphics session); console_view_live() before any other key. From
+   the keyboard interrupt. */
+int console_scroll_key(int key);
+void console_view_live(void);
 
 /* 10/6/26: stream consoles (pseudo-terminals). pty_out() (kernel/pty.c) hands bytes of a stream
    console to its master side, all or none: 1, or 0 when they were dropped (the master is closed,

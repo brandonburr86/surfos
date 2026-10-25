@@ -742,7 +742,8 @@ def scenario_keyboard(args, image, firmware, outdir):
                         seen is not None and len(seen) > 1 and 'surfsh 1.0, the SurfOS shell' in seen[0].text() and
                         '(C)2004-2026 Brandon Burr.' in seen[-1].text()))
         # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them; 10/25/26 (track A,
-        # A4): F5 as xterm sends it (it was dropped), then the modifiers: Ctrl+Left, Shift+PgUp, Shift+Tab, Alt+x
+        # A4): F5 as xterm sends it (it was dropped), then the modifiers: Ctrl+Left, Ctrl+PgUp, Shift+Tab, Alt+x; and
+        # (A6) Shift+PgUp, which on a framebuffer is the scrollback's and never reaches the program
         vm.keys('rawkeys\n')
         ok = vm.wait_screen(lambda s: 'q ends' in s.text(), 20, interval=0.5) is not None
         if ok:
@@ -753,11 +754,11 @@ def scenario_keyboard(args, image, firmware, outdir):
         vm.keys('rawkeys\n')
         ok = vm.wait_screen(lambda s: s.text().count('q ends') == 2, 20, interval=0.5) is not None
         if ok:
-            vm.keys('<ctrl-left><shift-pgup><shift-tab><alt-x>q')
-            ok = vm.wait_screen(lambda s: '1b 5b 31 3b 35 44 1b 5b 35 3b 32 7e 1b 5b 5a 1b 78 71' in s.text() and
+            vm.keys('<ctrl-left><shift-pgup><ctrl-pgup><shift-tab><alt-x>q')
+            ok = vm.wait_screen(lambda s: '1b 5b 31 3b 35 44 1b 5b 35 3b 35 7e 1b 5b 5a 1b 78 71' in s.text() and
                                 ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
-        results.append(('keyboard: raw mode sends the modifiers as xterm does: Ctrl+Left ESC[1;5D, Shift+PgUp ESC[5;2~, '
-                        'Shift+Tab ESC[Z, Alt+x ESC x', ok))
+        results.append(('keyboard: raw mode sends the modifiers as xterm does: Ctrl+Left ESC[1;5D, Ctrl+PgUp ESC[5;5~, '
+                        'Shift+Tab ESC[Z, Alt+x ESC x; Shift+PgUp is the scrollback\'s', ok))
         # console switching: F2 shows another shell, F1 comes back
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'Hello World' not in s.text(), 20, interval=0.5)
@@ -979,13 +980,27 @@ def scenario_fullhd(args, image, firmware, outdir):
         if ok:
             vm.keys(' ')
             ok = vm.wait_screen(asking_after(65), 30, interval=0.5) is not None
+        back = live = None
         if ok:
             vm.screen('pager.png')
+            # 10/25/26 (track A, A6): Shift+PgUp at the question shows the rows that scrolled off the top (the view's top
+            # 32 rows), " -32 " in the top right corner in inverse video, and the question waits; Shift+PgDn brings the
+            # live screen back, the question on it
+            vm.keys('<shift-pgup>')
+            back = vm.wait_screen(lambda s: s.rows[0].startswith('pagetest line 002') and s.rows[0].rstrip().endswith(' -32')
+                                  and s.colours.get((s.cols - 2, 0)) == (BLACK, GREY) and s.rows[1] == 'pagetest line 003'
+                                  and s.rows[-1] == 'pagetest line 034', 30, interval=0.5)
+            if back is not None:
+                vm.screen('scrollback.png')
+            vm.keys('<shift-pgdn>')
+            live = vm.wait_screen(asking_after(65), 30, interval=0.5)
             vm.keys('<esc>')
             got = vm.wait_screen(lambda s: at_prompt(s), 30, interval=0.5)   # the rest, run's status line too, dropped
             ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 066' not in got.text()
         results.append(('pager on the keyboard at 120x33: --More-- after 32 lines, Enter one more, Space 32 more, '
                         'Esc drops the rest', ok))
+        results.append(('scrollback at the question: Shift+PgUp shows the rows above, tagged -32, the question waits; '
+                        'Shift+PgDn the live screen and the question', back is not None and live is not None))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:
