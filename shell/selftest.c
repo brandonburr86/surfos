@@ -1047,6 +1047,12 @@ static void test_fat_rename(void) {
           file_is("/hda1/rn_dir/a much longer name.txt", "gamma") && vfs_stat("/hda1/rn_c.txt", &st) == -ENOENT,
           "rename replaces an existing file");
     check(vfs_rename("/hda1/rn_dir", "/hda1/rn_dir/sub") == -EINVAL, "a directory cannot move into itself");
+    /* 10/25/26 (audit R1): nor under another spelling of its name, which the VFS's comparison of the paths let
+       through to FAT (the directory was written into itself and taken out of its parent) */
+    check(vfs_mkdir("/hda1/rn_dir/deep") == 0 && vfs_rename("/hda1/rn_dir", "/hda1/RN_DIR/sub") == -EINVAL &&
+          vfs_rename("/hda1/rn_dir", "/hda1/Rn_Dir/deep/x") == -EINVAL && vfs_stat("/hda1/rn_dir/deep", &st) == 0 &&
+          file_is("/hda1/rn_dir/a much longer name.txt", "gamma") && vfs_rmdir("/hda1/rn_dir/deep") == 0,
+          "nor into itself or below it under another case of its name");
     check(vfs_mkdir("/hda1/rn_full") == 0 && put_file("/hda1/rn_full/x", "x") == 0 &&
           vfs_rename("/hda1/rn_dir", "/hda1/rn_full") == -ENOTEMPTY && put_file("/hda1/rn_d.txt", "d") == 0 &&
           vfs_rename("/hda1/rn_d.txt", "/hda1/rn_full") == -EISDIR, "no rename onto a non-empty directory or a file onto a directory");
