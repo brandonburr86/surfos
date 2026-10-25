@@ -49,6 +49,7 @@ USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the
 USER_PROGS  += httpd         # 10/17/26: the web server, a program of several files in user/httpd/
 USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
+USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -64,6 +65,11 @@ HTTPD_OBJ    = $(HTTPD_SRC:user/httpd/%.c=$(BUILD)/user/httpd/%.o)
 # ftpd, the file transfer server (10/24/26): user/ftpd/, its protocol module host-tested too (tests/host/test_ftp.c)
 FTPD_SRC     = $(wildcard user/ftpd/*.c)
 FTPD_OBJ     = $(FTPD_SRC:user/ftpd/%.c=$(BUILD)/user/ftpd/%.o)
+# fetch, the downloader (10/25/26): user/fetch/, its reading of responses host-tested too (tests/host/test_fetch.c),
+# and of Undertow the URLs, the settings, the helpers and the transport with its TLS (linked below Mbed TLS's rules)
+FETCH_SRC    = $(wildcard user/fetch/*.c)
+FETCH_OBJ    = $(FETCH_SRC:user/fetch/%.c=$(BUILD)/user/fetch/%.o)
+FETCH_UT_OBJ = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
 
 
 CC         = gcc
@@ -106,7 +112,7 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
-             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d)
+             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -218,7 +224,8 @@ define initrd_firmware
 if ls firmware/*.ucode > /dev/null 2>&1; then mkdir -p $(1)/lib/firmware && cp firmware/*.ucode firmware/LICENCE.* $(1)/lib/firmware/; fi
 endef
 
-# 10/11/26 (Undertow): the licence of Mbed TLS, whose code /bin/undertow carries, in /licenses/ of both initrds
+# 10/11/26 (Undertow): the licence of Mbed TLS, whose code /bin/undertow carries (10/25/26: and /bin/fetch), in
+# /licenses/ of both initrds
 # (Apache-2.0 asks for it with every copy of the program). The fetch put it in third_party/ before undertow was built.
 define initrd_licenses
 mkdir -p $(1)/licenses && cp third_party/mbedtls/LICENSE $(1)/licenses/mbedtls.txt
@@ -314,6 +321,12 @@ $(BUILD)/user/bin/ftpd: $(FTPD_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FTPD_OBJ) $(USER_LIB)
+
+# fetch likewise (10/25/26), with Undertow's headers; its link rule is below Mbed TLS's
+$(BUILD)/user/fetch/%.o: user/fetch/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -Iuser/undertow -c $< -o $@
 
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
@@ -507,10 +520,17 @@ $(BUILD)/host/test_ftp: tests/host/test_ftp.c user/ftpd/ftp.c user/ftpd/ftp.h
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/ftpd tests/host/test_ftp.c user/ftpd/ftp.c -o $@
 
+# 10/25/26: what fetch reads of an HTTP response, user/fetch/fetchhttp.c as it is (it makes no system calls)
+$(BUILD)/host/test_fetch: tests/host/test_fetch.c user/fetch/fetchhttp.c user/fetch/fetch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/fetch tests/host/test_fetch.c user/fetch/fetchhttp.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp \
+          $(BUILD)/host/test_fetch
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -528,6 +548,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_iwlfw
 	$(BUILD)/host/test_httpd
 	$(BUILD)/host/test_ftp
+	$(BUILD)/host/test_fetch
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
@@ -805,11 +826,18 @@ $(BUILD)/user/undertow/transport.o $(BUILD)/user/undertow/tls_platform.o: $(MBED
 UNDERTOW_OBJ  += $(MBEDTLS_LIB) $(UT_LIBGCC)
 $(BUILD)/user/bin/undertow: $(MBEDTLS_LIB)
 
+# 10/25/26: fetch, its objects and Undertow's it uses, then Mbed TLS and libgcc, before libsurf (as undertow)
+$(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also
 # linked with the transport's entry points as roots (-u): undertow-tls.elf, never installed, is undertow with all of
 # TLS in it, and gets the same checks. The file left says how much of each is Mbed TLS: the sizes of the symbols the
-# library defines, out of all of them.
+# library defines, out of all of them. 10/25/26: /bin/fetch, which calls the transport, gets the same checks.
 UNDERTOW_LINKCHECK = $(BUILD)/user/undertow/link-check.txt
 UNDERTOW_TLS_ELF   = $(BUILD)/user/undertow/undertow-tls.elf
 UT_TRANSPORT_ROOTS = $(addprefix -u ,ut_transport_open ut_transport_read ut_transport_write ut_transport_close \
@@ -827,11 +855,12 @@ $(NM) -S -t d $(1) | awk 'FNR == NR { lib[$$1] = 1; next } NF == 4 { t += $$2; i
 	END { printf "%s: %d bytes in symbols, %d of them Mbed TLS\n", "$(1)", t, m }' $@.lib - >> $@
 endef
 
-$(UNDERTOW_LINKCHECK): $(BUILD)/user/bin/undertow $(UNDERTOW_TLS_ELF) $(MBEDTLS_LIB)
+$(UNDERTOW_LINKCHECK): $(BUILD)/user/bin/undertow $(UNDERTOW_TLS_ELF) $(BUILD)/user/bin/fetch $(MBEDTLS_LIB)
 	@$(NM) $(MBEDTLS_LIB) | awk 'NF == 3 { print $$3 }' > $@.lib
 	@rm -f $@
 	@$(call ut_link_check,$(BUILD)/user/bin/undertow)
 	@$(call ut_link_check,$(UNDERTOW_TLS_ELF))
+	@$(call ut_link_check,$(BUILD)/user/bin/fetch)
 	@rm -f $@.lib
 	@cat $@
 $(INITRD) $(USB_INITRD): $(UNDERTOW_LINKCHECK)
