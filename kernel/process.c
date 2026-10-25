@@ -26,7 +26,9 @@ reaches it (tty.c, task_interrupt_job()).
 10/24/26 (pipelines and scripting in surfsh): process_spawn_ex() (SYS_spawnx, surfos/spawn.h)
 also hands the child a descriptor 3, leaves a descriptor closed, gives it an environment (on
 its stack after argv: argc, argv, envp for crt0), and starts a job in the background that
-the pager's Ctrl+C does not reach.
+the pager's Ctrl+C does not reach. A program takes up to SPAWN_MAX_ARGS (128) arguments in
+SPAWN_ARG_BYTES (8 KB), and with the environment's 4 KB they all fit in the stack's first
+16 KB.
 */
 
 #include <surfos/types.h>
@@ -46,14 +48,13 @@ the pager's Ctrl+C does not reach.
 #include <blibc_common.h>
 
 #define USER_STACK_INIT 0x4000          /* mapped before the program starts; the rest on demand */
-#define SPAWN_STR_BYTES 2048
 #define EXIT_LOAD_FAILED 127
 
 struct spawn_args {
     char path[VFS_PATH_MAX];
     int argc;
     char *argv[SPAWN_MAX_ARGS];
-    char strs[SPAWN_STR_BYTES];
+    char strs[SPAWN_ARG_BYTES];
     struct file *files[4];              /* the child's 0, 1, 2, 3 (a reference each); NULL: the console (0-2), none (3) */
     u_int closed;                       /* 10/24/26: bit n: no descriptor n at all (0-2) */
     int envc;                           /* 10/24/26: the environment */
@@ -138,7 +139,7 @@ static void user_entry(void *arg) {
     m->brk_start = m->brk = PAGE_ALIGN_UP(top);
 
     /* the stack: strings at the top (the environment's, then argv's), then the envp and argv arrays,
-       then argc, argv and envp for _start (10/24/26: envp; at most SPAWN_STR_BYTES + SPAWN_ENV_BYTES
+       then argc, argv and envp for _start (10/24/26: envp; at most SPAWN_ARG_BYTES + SPAWN_ENV_BYTES
        of strings and both arrays, well inside the pages mapped here) */
     if(uvm_map_range(m, USER_END - USER_STACK_INIT, USER_STACK_INIT, PTE_W) != 0) load_failed(sa, f, "out of memory for the stack");
     m->stack_low = USER_END - USER_STACK_INIT;
@@ -221,7 +222,7 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     if(r) { kfree(sa); return r; }
     for(i = 0; i < argc; i++) {
         size_t n = strlen(argv[i]) + 1;
-        if(used + n > SPAWN_STR_BYTES) { kfree(sa); return -E2BIG; }
+        if(used + n > SPAWN_ARG_BYTES) { kfree(sa); return -E2BIG; }
         memcpy(sa->strs + used, argv[i], n);
         sa->argv[i] = sa->strs + used;
         used += n;

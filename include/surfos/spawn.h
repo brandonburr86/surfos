@@ -29,6 +29,11 @@ This header uses no SurfOS types: user programs reach it through user/include/su
 #ifndef _SURFOS_SPAWN_H
 #define _SURFOS_SPAWN_H
 
+/* the arguments a program (or a kernel command, SYS_kcmd) takes: 128 in 8 KB (until 10/24/26 they were 32
+   in 2 KB), so that a wildcard's names fit (rm *.tmp); each at most 255 bytes long */
+#define SPAWN_MAX_ARGS  128
+#define SPAWN_ARG_BYTES 8192
+
 #define SPAWN_ENV_MAX   64          /* environment strings at most */
 #define SPAWN_ENV_BYTES 4096        /* their bytes, terminators included */
 #define SPAWN_CLOSED    (-2)        /* fds[]: the child has no such descriptor */

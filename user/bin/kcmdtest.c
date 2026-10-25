@@ -11,8 +11,8 @@ and returning its exit status; a command whose output is redirected (a file in <
 descriptor 1 with dup2, then the console back on 1 from /dev/console) and the file read
 back, the same for a program started by run, and an output longer than KCMD_CAPTURE_MAX
 cut with a note at its end; kcmdinfo() walking the table, which holds lsblk and fdisk and
-ends with ENOENT; cd moving this process. 10/6/26: the limits (32 arguments, 255
-bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
+ends with ENOENT; cd moving this process. 10/6/26: the limits (SPAWN_MAX_ARGS arguments,
+128 since 10/24/26, 255 bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
 (EFAULT, nothing written), and descriptor 1 read-only (the write fails: status 1),
 closed (the console) and /dev/null; clear writes escape sequences to descriptor 1, and
 rawkeys, which reads the keyboard as it goes, refuses a redirection (status 2); usage
@@ -221,21 +221,21 @@ static void test_cut(void) {
    descriptor 1 may be */
 static void test_edges(void) {
     static char a255[256], a256[257];
-    char *argv[40], *end, *ro = in_dir("KCMDRO.TXT");
+    char *argv[SPAWN_MAX_ARGS + 8], *end, *ro = in_dir("KCMDRO.TXT");
     struct kcmd_info *info;
     int i, r, fd, untouched;
 
-    for(i = 1; i < 32; i++) argv[i] = "w";
+    for(i = 1; i < SPAWN_MAX_ARGS; i++) argv[i] = "w";   /* 10/24/26: SPAWN_MAX_ARGS is 128 (it was 32) */
     argv[0] = "true-is-not-a-kernel-command";            /* the count is checked before the name */
-    argv[32] = "33rd";
-    argv[33] = NULL;
+    argv[SPAWN_MAX_ARGS] = "one-more";
+    argv[SPAWN_MAX_ARGS + 1] = NULL;
     errno = 0;
-    check(kcmd(argv) == -1 && errno == E2BIG, "33 arguments: E2BIG");
+    check(kcmd(argv) == -1 && errno == E2BIG, "SPAWN_MAX_ARGS + 1 arguments: E2BIG");
     argv[0] = "echo";
-    argv[32] = NULL;
+    argv[SPAWN_MAX_ARGS] = NULL;
     r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
     if(out_to(NULL) < 0) exit(3);
-    check(r == 0, "32 arguments are taken (and descriptor 1 on /dev/null: nothing shown, status 0)");
+    check(r == 0, "SPAWN_MAX_ARGS arguments are taken (and descriptor 1 on /dev/null: nothing shown, status 0)");
     memset(a255, 'a', 255);
     memset(a256, 'b', 256);
     argv[1] = a255;
