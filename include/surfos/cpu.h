@@ -6,6 +6,8 @@ File: cpu.h     Date: 10/5/26 (USB boot)
 CPUID, MSRs and the two paging features the laptop port needs: 4 MB pages with
 PSE-36, which let 32-bit paging reach a framebuffer the firmware put above 4 GB, and
 PAT, which makes that framebuffer write-combining instead of uncached.
+10/25/26 (robustness, L11): FXSR, SSE and SSE2, and the CR4 bits that let programs use
+them (kernel/fpu.c keeps each program's registers).
 */
 
 #ifndef _SURFOS_CPU_H
@@ -22,6 +24,7 @@ struct cpu_info {
     u32 features_edx, features_ecx;     /* CPUID 1 */
     u32 phys_bits;                      /* MAXPHYADDR (36 when the CPU does not report it) */
     bool fpu, pse, tsc, msr, pae, apic, pse36, pat, invariant_tsc;
+    bool fxsr, sse, sse2;               /* 10/25/26 (L11): fxsave, and SSE for programs (kernel/fpu.c) */
     bool pse_on;                        /* CR4.PSE set: 4 MB pages usable */
     bool pat_wc;                        /* PAT entry 4 is write-combining */
     u_long boot_cr0, boot_cr4;          /* as the boot loader left them (cpuinfo shows them) */
@@ -39,6 +42,9 @@ struct cpu_info {
 #define CR0_CD 0x40000000
 
 #define CR4_PSE 0x00000010
+#define CR4_OSFXSR     0x00000200       /* 10/25/26 (L11): fxsave/fxrstor keep the XMM registers, SSE runs */
+#define CR4_OSXMMEXCPT 0x00000400       /* an unmasked SSE exception is #XM, not #UD */
+#define CR4_OSXSAVE    0x00040000       /* XSAVE and AVX: kept off, since fxsave holds no AVX state */
 /* cleared at boot: VME PVI TSD PAE PGE PCE UMIP PCIDE SMEP SMAP PKE CET PKS */
 #define CR4_CLEAR (0x1 | 0x2 | 0x4 | 0x20 | 0x80 | 0x100 | 0x800 | 0x20000 | 0x100000 | 0x200000 | 0x400000 | 0x800000 | 0x1000000)
 

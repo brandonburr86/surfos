@@ -239,6 +239,18 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   kill would end it on the spot holding its locks: `SYS_kill` answers EPERM, and the
   commands say "is a kernel thread". A thread that users need to stop gets a command of
   its own.
+* 10/25/26 (robustness, L10-L13): floating point is the programs'. A process has an area
+  for its registers (`fpu`, 512 bytes, made with the task and freed at `reap()`): the x87
+  stack with its control and status words, and with SSE the XMM registers and MXCSR, as
+  every program starts with them (control words 0x037F and 0x1F80, every register zero).
+  They are switched lazily (`kernel/fpu.c`): `schedule()` sets CR0.TS whenever it switches
+  to a task that does not own the FPU (`fpu_switch()`, which writes CR0 only when the bit
+  changes), and that task's first floating-point instruction raises #NM, whose handler
+  saves the owner's registers (fxsave, or fnsave on a CPU without FXSR) and loads the
+  current task's. `become_zombie()` lets go of the FPU; kernel threads have no area. The
+  kernel never uses the FPU: it is built with `-mno-80387` (a float in kernel code fails to
+  link), and a #NM in ring 0 panics. CR4.OSFXSR and OSXMMEXCPT follow CPUID
+  (`kernel/cpu.c`), `cpuinfo` has an FPU line, and `fputest` checks it all.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -550,7 +562,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   their addresses, put the strings, `argv[]`, `argc` and `argv` on the user stack, open
   `/dev/console` as descriptors 0-2 and `iret` to ring 3 (`enter_user()`). A load
   failure ends the task with exit code 127; the pid is returned at once and `wait`
-  collects the exit code. **ai-dev** (10/6/26): a process that gets as far as ring 3 is
+  collects the exit code (10/25/26: the stack 16-aligned at `_start`, and `crt0` calls
+  `main` 16-aligned, as the i386 ABI has it). **ai-dev** (10/6/26): a process that gets as far as ring 3 is
   flagged `TF_LOADED`, and `process_spawn()` passes `TF_SHELL` through for init. **ai-dev**: `process_spawn_files()` (system call `spawnfd`)
   hands the child open files of its parent as 0, 1 and 2 instead, which is how the user
   shell redirects; a new task starts in its creator's current directory. Exceptions in
@@ -767,6 +780,9 @@ See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags
 **ai-dev**: `usb-image` and `test-usb` (section 14), `test-mkusb`; CI runs them too.
 Most user programs are one `.c` file each in `user/bin/`. The multi-file programs
 `user/surfsh/`, `user/telnetd/` and `user/undertow/` have their own link rules.
+10/25/26 (robustness, L13): the kernel is built with `-mno-80387` as well as `-mno-sse`,
+since the FPU is the programs'; `USER_CFLAGS` takes it out. Programs and libsurf are i486
+code (x87); one may opt into SSE2 with flags of its own (the Makefile shows how).
 
 ## 14. UEFI laptop boot (ai-dev, October 2026)
 

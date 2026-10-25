@@ -48,6 +48,7 @@ them at once (about 20 ms) and checks nothing then.
 #include <surfos/pty.h>
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
+#include <surfos/fpu.h>
 #include "shell.h"
 
 static int fails;
@@ -434,6 +435,28 @@ static void test_user_kill(void) {
     got = child > 0 ? task_wait((u_long)child, &status) : -1;
     check(child > 0 && r == 0 && !strcmp(name, "crash") && got == child && status == -1,
           "kill: a child process is ended (crash loop, status -1)");
+}
+
+/* 10/25/26 (L10): two fputest races at once. Each holds its floating-point registers (8 x87, 8 XMM with SSE, both
+   control words) across 300 ms of sleep while the other loads its own, so the kernel saves one's and loads the
+   other's in turn (kernel/fpu.c); each compares what it reads back bit for bit and exits 0. Their sleeps overlap
+   (each loads its registers a few milliseconds after its start, then sleeps 300 ms), so at least two saves happen:
+   the first race's for the second's load, and the second's when the first reads its registers back */
+static void test_fpu(void) {
+    char *race[] = { "fputest", "race" };
+    int pid[2], status[2] = { 99, 99 }, i;
+    u_long saves = fpu_saves();
+    struct stat st;
+    if(vfs_stat("/initrd/bin/fputest", &st) != 0) {
+        printf("  skip floating point (no /initrd/bin/fputest)\n");
+        return;
+    }
+    for(i = 0; i < 2; i++) pid[i] = process_spawn("/initrd/bin/fputest", 2, race, curTask->con, 0);
+    for(i = 0; i < 2; i++) if(pid[i] > 0) task_wait((u_long)pid[i], &status[i]);
+    saves = fpu_saves() - saves;
+    check(pid[0] > 0 && pid[1] > 0 && status[0] == 0 && status[1] == 0 && saves >= 2,
+          "floating point: two programs at once keep their registers (two fputest races)");
+    if(saves < 2) printf("        (%lu saves of a program's registers for another's)\n", saves);
 }
 
 static bool same_info(const struct procinfo *a, const struct procinfo *b) {
@@ -1480,7 +1503,7 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_user_kill, test_fpu, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

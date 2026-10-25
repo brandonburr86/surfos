@@ -165,7 +165,10 @@ PORTABLE = [
     ('touchpad', ['not present on this platform']),
     ('touchpad up', ['not present on this platform']),
     ('acpidump MSDM', ['usage: acpidump']),
-    ('cpuinfo', ['physical address bits', '4 MB pages on']),
+    ('cpuinfo', ['physical address bits', 'FPU      x87, FXSR, SSE, SSE2', '4 MB pages on']),
+    # 10/25/26 (robustness, L10, L11): a program's floating point after the firmware and GRUB (the kernel sets CR4's
+    # OSFXSR and OSXMMEXCPT from CPUID whatever they left)
+    ('fputest', ['control words at the start: x87 0x037f, MXCSR 0x1f80', 'SSE2: 1.5 + 2.25 = 3.75', 'FPUTEST PASS']),
     ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),
 ]
 TIMEOUTS = {'selftest': 180, 'heaptest': 60}

@@ -17,6 +17,9 @@ long, as a hangup's does (kill_task_patient()), and the task list is copied in o
 (task_info_all()).
 10/25/26 (robustness, L15): a user's kill ends processes and ring-0 shells only (task_user_may_kill(),
 task_kill_user()): a process is marked TF_PROCESS from its creation.
+10/25/26 (robustness, L10): a process has floating-point registers of its own, switched lazily
+(kernel/fpu.c): an area made with the task and freed with it, the FPU no longer its own when it
+dies, and CR0.TS set by schedule() for whoever does not own it.
 */
 
 #include <surfos/types.h>
@@ -42,6 +45,7 @@ task_kill_user()): a process is marked TF_PROCESS from its creation.
 #include <fs/vfs.h>
 #include <mm/uvm.h>
 #include <surfos/proc.h>
+#include <surfos/fpu.h>
 
 #include <blibc_common.h>
 
@@ -198,6 +202,11 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
         kfree(t);
         return NULL;
     }
+    if((flags & TF_PROCESS) && fpu_task_new(t)) {         /* 10/25/26 (L10): its floating-point registers */
+        kfree(t->stackmem);
+        kfree(t);
+        return NULL;
+    }
     /* Touch every page now: a kernel stack must never be demand paged, because the CPU
        pushes the page fault frame onto that very stack and faults again (double fault). */
     memset(t->stackmem, 0, KSTACK_SIZE);
@@ -349,6 +358,7 @@ static void become_zombie(surf_task *t, int code) {
     t->state = TS_DEAD;
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
+    fpu_task_gone(t);                         /* 10/25/26 (L10): what the FPU holds is nobody's now */
     jobs_shell_gone(t);                       /* 10/25/26: the jobs it made */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
@@ -796,6 +806,7 @@ static void reap(surf_task *t) {
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
+    fpu_task_free(t);               /* 10/25/26 (L10) */
     kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
 }
@@ -985,6 +996,7 @@ u_long *schedule(struct trapframe *tf) {
         curTask = next;
         tss_set_kernel_stack(next->stack_top);
         if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
+        fpu_switch(next);                                   /* 10/25/26 (L10): CR0.TS unless it owns the FPU */
     }
     return next->esp;
 }
@@ -1210,6 +1222,7 @@ void init_task() {
     ntasks = 0;
 
     trap_set_handler(T_YIELD, yield_trap); //interrupt for yield()
+    init_fpu(); //10/25/26 (L10): programs' floating point, switched on first use (kernel/fpu.c)
 
     /* The code running now (kmain) becomes the idle task: its registers are first saved
        by the first timer interrupt, so curTask MUST start out as the idle task. */

@@ -96,7 +96,8 @@ net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP
 lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
-           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), env, the filters grep
+           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), fputest (10/25/26:
+           floating point, and two programs' registers at once), env, the filters grep
            sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
@@ -217,6 +218,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
   `kprintf()` in the kernel and `printf()` in task code.
+* The kernel never uses floating point (10/25/26): it is built with `-mno-80387 -mno-sse`,
+  so a float in kernel code fails to link, and a #NM in ring 0 panics. The FPU is the
+  programs': `kernel/fpu.c` keeps each process's registers and switches them on first use.
 * Keep the 2004 file headers and style where you touch old code; new files use the
   same header block with the current date.
 * Small commits, one topic each. Do not rewrite `master`.

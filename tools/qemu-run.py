@@ -281,7 +281,14 @@ SMOKE = [
     ('gfxtest 0', ['usage: gfxtest']),
     ('drivers', ['parport   ok', 'usb       not present', 'iwlwifi   skipped', 'console   VGA text mode',
                  'timer     PIT channel 0']),   # in the order printed; 10/10/26: iwlwifi only with profile=laptop
-    ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
+    ('cpuinfo', ['physical address bits', 'FPU      x87, FXSR, SSE, SSE2: a program\'s registers are kept with fxsave',
+                 'from the boot loader: CR0']),
+    # 10/25/26 (robustness, L10-L13): a program's floating point: the control words it starts with, results computed
+    # with the x87 and with SSE2; its registers held across a sleep (two races at once: the self test's test_fpu)
+    ('fputest', ['control words at the start: x87 0x037f, MXCSR 0x1f80', 'the stack is 16-aligned at main',
+                 'x87: 1.5 + 2.25 = 3.75, * 4 = 15, / 8 = 1.875, sqrt(2.25) = 1.5, (int)-2.5 = -2',
+                 'SSE2: 1.5 + 2.25 = 3.75, * 4 = 15, / 8 = 1.875, sqrt(2.25) = 1.5, (int)-2.5 = -2', 'FPUTEST PASS']),
+    ('fputest race', ['8 x87 registers and 8 XMM registers across 300 ms of sleep: the same bits', 'FPUTEST race PASS']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('acpidump DSDT', ['not found']),
     ('acpidump MSDM', ['usage: acpidump']),

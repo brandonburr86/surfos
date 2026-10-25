@@ -41,7 +41,9 @@ SYS_spawnx names: a new one (SPAWN_JOB_NEW, the task its first) or one of the ca
 detached one (init's) is in none.
 
 10/25/26 (robustness, L15): a process is TF_PROCESS from its creation, which a user's kill
-looks for (task_user_may_kill()): a kernel thread is never killed by one.
+looks for (task_user_may_kill()): a kernel thread is never killed by one. L10, L12: it gets
+floating-point registers of its own with that flag (task_alloc(), kernel/fpu.c), and its stack
+is 16-aligned at _start.
 */
 
 #include <surfos/types.h>
@@ -176,7 +178,10 @@ static void user_entry(void *arg) {
         argv_user[i] = sp;
     }
     argv_user[sa->argc] = 0;
-    sp &= ~3UL;
+    /* 10/25/26 (L12): the arrays and the three words placed so that _start finds its stack 16-aligned, as the
+       i386 ABI has it (a program's SSE code keeps 16-byte values there; crt0 aligns it again for main) */
+    sp &= ~15UL;
+    sp -= (0 - (sa->envc + 1 + sa->argc + 1 + 3) * sizeof(u_long)) & 15;
     sp -= (sa->envc + 1) * sizeof(u_long);
     memcpy((void *)sp, env_user, (sa->envc + 1) * sizeof(u_long));
     {

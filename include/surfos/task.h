@@ -112,6 +112,8 @@ typedef struct surf_task {
     char cwd[TASK_CWD_LEN];     /* current directory, absolute and normalized ("/" when empty) */
     struct file *files[NR_OPEN]; /* open file descriptors (fs/vfs.c) */
     struct uvm *uvm;            /* user address space (mm/uvm.c), NULL for kernel threads */
+    void *fpu;                  /* 10/25/26 (L10): a process's floating-point registers while the FPU holds another
+                                   task's (kernel/fpu.c): FPU_AREA bytes, 16-aligned; NULL for a kernel thread */
 
     u_long *esp;                /* saved trap frame while not running */
     u_char *stackmem;           /* kernel stack (NULL for the idle task: it uses the boot stack) */
