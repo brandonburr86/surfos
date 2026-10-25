@@ -886,6 +886,9 @@ def scenario_fullhd(args, image, firmware, outdir):
         long = 'abcdefghij' * 11
         got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:104] + 'Z' in s.rows)
         results.append(('a 105-character line on one row; Backspace erases back across a wrapped line', got is not None))
+        # 10/25/26 (track A): a TAB goes to the next multiple of 8 and leaves the cells it passes empty
+        got = typed(r"printf '1\\t2\\n'" + '\n', lambda s: '1       2' in s.rows)
+        results.append(('printf with a TAB: the 2 in column 8', got is not None))
         seen = page_through(vm, 'help\n')
         results.append(('help: its 104-character line on one row (paged)',
                         seen is not None and any(r.startswith('    die ') and r.endswith('processes use run)')

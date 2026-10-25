@@ -278,7 +278,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   the pager and the character set, `kcmdtest` the kernel-command calls. The harnesses
   answer `--More--` with Space (`auto_more`), and `PROMPT` is a compiled pattern that
   matches every prompt state; a smoke step `@boot <words>` boots QEMU again with other
-  kernel words (or `no-initrd`).
+  kernel words (or `no-initrd`). 10/25/26: surfsh runs a program on PATH before a kernel
+  command of the same name (`ls`, `cat`, `cp`, `df`, `hexdump`, `mkdir`, `mv`, `rm`,
+  `rmdir`): `type NAME` says which one runs, `kernel NAME` runs the kernel's, and a smoke
+  step that checks the kernel's output (`3 entries`, `bytes copied`) says `kernel ls`.
 * Network connections and telnet: `nettest` (echo server and client, limits) and `ptytest`
   (pseudo-terminals, poll, detach, hangups) are in the initrd; `tcpka=<idle>,<interval>` on
   the kernel command line shortens keepalive; `tools/qemu-tcp.py --scenario <name>` runs

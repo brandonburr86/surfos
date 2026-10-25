@@ -197,25 +197,37 @@ SMOKE = [
     ('lsblk', ['rd1', 'disk gpt', 'rd1p1', 'part gpt basic data', 'SurfOS data', 'rd1p2', 'part gpt Linux']),
     ('fdisk rd1', ['GPT partition table, usable blocks 34-131038', 'rd1p1', 'Microsoft basic data', 'SurfOS data',
                    'rd1p2', 'Linux filesystem', 'free: none']),
-    ('hexdump hda 0', ['55 aa']),
+    ('hexdump hda 0', ['55 aa']),           # 10/25/26: the program, which hands a disk to the kernel's hexdump
     ('mount',   ['rd0', '/initrd', 'tarfs']),
     ('ls /initrd', ['etc/', 'motd']),
     ('cat /initrd/motd', ['Welcome to SurfOS']),
-    ('ls /hda1', ['DOCS/', 'README', 'motd']),
+    ('ls /hda1', ['DOCS/', 'motd', 'README']),         # 10/25/26: the program's listing, in its sorted order
     ('@readme-cat', []),                    # cat /hda1/DOCS/README.md, every line of it (readme_cat_check)
+    # 10/25/26 (track A): a program on PATH runs before a kernel command of the same name. ls -l is the program's long
+    # listing; a program reads a pipe and < file (the kernel's cat read files only); type says what each name runs and
+    # what it hides (a function, surfsh's own, a program, a kernel command; none: status 1); kernel NAME runs the
+    # kernel's command
+    ('ls -l /initrd', ['bin/', 'etc/', 'motd', 'README', ' entries']),
+    ('echo x | cat', ['\r\nx\r\n']),
+    ('cat < /initrd/motd', ['Welcome to SurfOS']),
+    ('type ls', ["ls is the program /initrd/bin/ls; it hides the kernel's ls (kernel ls runs it)"]),
+    ('f() { :; }; type f echo lsblk nosuch; echo status $?; unset -f f',
+     ['f is a function', "echo is surfsh's own command; it hides the program /initrd/bin/echo and the kernel's echo "
+      '(kernel echo runs it)', 'lsblk is a kernel command', 'surfsh: type: nosuch: not found', 'status 1']),
+    ('kernel ls /initrd', ['motd', ' entries, ']),
     # 10/5/26 (USB storage): on the GPT fdisk left on rd1, FAT16 on rd1p1 and FAT32 (forced) on rd1p2,
     # used, remounted and ejected; then the whole disk as one volume, and the refusals
     answered('mkfs rd1p1 TESTVOL', 'Type rd1p1 to erase rd1p1 (16 MB) and create a FAT16 file system: ', 'rd1p1',
              ['rd1p1: FAT16, 2048-byte clusters', 'label TESTVOL']),
     ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL', 'read-write']),
     ('write /scratch/hello.txt Hello from SurfOS', []),
-    ('cp /initrd/motd /scratch/motd', ['bytes copied']),
+    ('kernel cp /initrd/motd /scratch/motd', ['bytes copied']),     # 10/25/26: the kernel's (cp is a program's)
     ('write /scratch/a-much-longer-file-name.text long names work', []),
     ('mkdir /scratch/docs', []),
     ('mv /scratch/hello.txt /scratch/docs', []),
     ('mv /scratch/docs /scratch/papers', []),
-    ('ls /scratch/papers', ['hello.txt', '1 entries']),
-    ('ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
+    ('kernel ls /scratch/papers', ['hello.txt', '1 entries']),     # 10/25/26: the kernel's ls counts the entries
+    ('kernel ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
     ('df', ['rd1p1   fat16', '/scratch', 'TESTVOL']),
     ('fsbench /scratch 4', ['read, 64 KB pieces:', 'fsbench: ok']),
     ('cd /scratch/papers', []),
@@ -371,6 +383,8 @@ SMOKE = [
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
+    # 10/25/26 (track A): a TAB reaches the serial terminal as it was printed (the screen: test_pager, qemu-usb's fullhd)
+    ("printf 'a\\tb|\\n'", ['a\tb|']),
     # 10/6/26 (the console's character set, the pager): a line of UTF-8 reaches the serial port as it
     # was printed, and VGA memory as code page 437 cells
     ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
@@ -398,9 +412,10 @@ SMOKE = [
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
-    # error; $? in the ring-0 shell; 127 for no such command; a program's exit status through run
+    # error; $? in the ring-0 shell; 127 for no such command; a program's exit status through run. 10/25/26: kernel ls,
+    # since the program ls comes first
     ('echo status $?', ['status 0']),
-    ('ls /hda1/no-such-file', ['No such file or directory']),
+    ('kernel ls /hda1/no-such-file', ['No such file or directory']),
     ('echo status $?', ['status 1']),
     ('fdisk hda new mbr', ['hda will not be changed']),
     ('echo status $?', ['status 1']),
@@ -748,7 +763,7 @@ SMOKE = [
                                                  'security = wpa2', 'psk = ' + SURFSIM_PSK, 'network = "SurfSim"',
                                                  'security = open', '# SurfOS did not understand the lines below',
                                                  'network = "Broken"', 'security = wpa2', 'psk = 1234']),
-      ('ls /hda1/surfos-config', ['networks.conf', 'settings.conf', '2 entries']),
+      ('kernel ls /hda1/surfos-config', ['networks.conf', 'settings.conf', '2 entries']),   # 10/25/26: the kernel's count
       # 10/18/26: each of these boots ends with the stick unmounted, as the owner ejects it before pulling it out:
       # mounted read-write (here at boot, as /hda1) a FAT volume is marked as not cleanly unmounted until then
       # (fs/fat.c), and QEMU's quit is a pull, which fsck.fat on the host would report in @settings-disk
@@ -896,6 +911,8 @@ SMOKE = [
     # path (a second Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue
     # takes), a kernel command's status and its redirection, < refused for it, a builtin and a program redirected,
     # & reported at the next prompt, a killed program, help paged (the harness answers --More--), set, exit.
+    # 10/25/26: the kernel's ls as kernel ls (the program ls comes first); < refused for a kernel command where PATH
+    # has no program of its name (a subshell with PATH=/), with the hint that names the one in /initrd/bin
     ('surfsh', [shown('SURF \u224b> ')],
      [('cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
       ('nosuchcommand', ['surfsh: nosuchcommand: command not found', shown('initrd \u25b8 bin \u224b!> ')]),
@@ -910,13 +927,13 @@ SMOKE = [
       (b'cd /hd\t\n', [shown('hda1 \u224b> ')]),
       (b'c\t\t', ['cpuinfo', shown('hda1 \u224b> ')]),
       (b'\x03', ['^C', shown('hda1 \u224b> ')]),
-      ('ls no-such-file', ['No such file or directory', shown('hda1 \u224b!> ')]),
+      ('kernel ls no-such-file', ['No such file or directory', shown('hda1 \u224b!> ')]),
       ('echo status $?', ['\r\nstatus 1\r\n', shown('hda1 \u224b> ')]),
       (b'lsbl\t\n', ['part mbr FAT16', shown('hda1 \u224b> ')]),
       ('lsblk > LSBLK.TXT; echo status $?', ['\r\nstatus 0\r\n', shown('hda1 \u224b> ')]),
       ('cat LSBLK.TXT', ['rd0', 'part mbr FAT16', shown('hda1 \u224b> ')]),
       ('lsblk < LSBLK.TXT', ['surfsh: lsblk is a kernel command: it reads only the console', shown('hda1 \u224b!> ')]),
-      ('ls < LSBLK.TXT', ['use /initrd/bin/ls for that', shown('hda1 \u224b!> ')]),
+      ('( PATH=/; ls < LSBLK.TXT )', ['use /initrd/bin/ls for that', shown('hda1 \u224b!> ')]),
       ('echo hello > /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/echo more >> /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/cat < /hda1/SURFSH.TXT', ['hello\r\nmore\r\n', shown('hda1 \u224b> ')]),
@@ -936,10 +953,10 @@ SMOKE = [
     # shell (its cd stays), another stage in a new surfsh (its cd does not); && || ! { } ( ); 2>&1 and 2> file; a
     # here-document into a pipeline, over lines after the continuation prompt; a line that goes on after |, and ^C
     # there; a broken pipe ends its writer; a kernel command after | refused; a mistake; a job in the background, a
-    # pipeline, reported by its number
+    # pipeline, reported by its number. 10/25/26: the kernel's ls into a program as kernel ls (ls is the program)
     ('surfsh', [shown('SURF \u224b> ')],
      [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
-      ('ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('kernel ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
       ('dmesg | /initrd/bin/head -1', ['SurfOS: serial console on COM1', shown('SURF \u224b> ')]),
       ('help | /initrd/bin/head -2', ['surfsh 1.0, the SurfOS shell', shown('SURF \u224b> ')]),
       ('echo one two | /initrd/bin/wc -w', ['      2 ', shown('SURF \u224b> ')]),

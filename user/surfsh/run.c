@@ -3,12 +3,13 @@ SurfOS shell: surfsh
 --------------------
 File: run.c     Date: 10/6/26, 10/24/26
 --------------------
-One command. The name decides, in the ring-0 shell's order: surfsh's own commands
-(builtins.c), then the kernel's (SYS_kcmd, include/surfos/kcmd.h), then a program; a name
-with a / is always a program's path, any other name is looked for in the directories of PATH
-(10/24/26; /initrd/bin when it is not set). So ls, cat and cp are the kernel's, and the
-programs of the same names are reached by their paths (/initrd/bin/ls -l). exec.c decides
-which applies and makes the redirections; this file runs them.
+One command. The name decides: surfsh's own commands (builtins.c), then a program, then the
+kernel's (SYS_kcmd, include/surfos/kcmd.h); a name with a / is always a program's path, any
+other name is looked for in the directories of PATH (10/24/26; /initrd/bin when it is not
+set). 10/25/26 (track A): programs come before the kernel's commands of the same names, which
+came first until then, in the ring-0 shell's order. So ls, cat, cp and df are the programs;
+kernel NAME runs the kernel's command (script.c), and type NAME says which one runs
+(builtins.c). exec.c decides which applies and makes the redirections; this file runs them.
 
 Kernel commands run in this task, as they did in the ring-0 shell; the kernel's table
 (SYS_kcmdinfo) is read once at the start. A kernel without the bridge answers ENOSYS, and
@@ -151,31 +152,44 @@ int program_names(struct cands *c) {
     return 0;
 }
 
-/* the program a name runs: a path as it is, any other name in PATH's directories (/initrd/bin when
-   PATH is not set), the first that has it as a file; 0 and its path in path, or the status (said) */
-int find_program(const char *name, char *path, int size) {
+/* 10/25/26: the program a name runs, saying nothing (exec.c asks before a kernel command, type and
+   help to tell): a path as it is, any other name in PATH's directories (/initrd/bin when PATH is not
+   set), the first that has it as a file; 0 and its path in path, -1 when there is none */
+int program_path(const char *name, char *path, int size) {
     struct stat st;
     const char *at = path_list();
     char dir[PATH_MAX];
     int n;
     if(strchr(name, '/')) {
         n = snprintf(path, (size_t)size, "%s", name);
-        if(n >= size || stat(path, &st) < 0) {
-            fprintf(stderr, "surfsh: %s: %s\n", name, strerror(n >= size ? ENAMETOOLONG : errno));
-            return STATUS_NOTFOUND;
-        }
-        if(!S_ISREG(st.type)) {
-            fprintf(stderr, "surfsh: %s: is a directory\n", name);
-            return STATUS_CANNOT;
-        }
-        return 0;
+        return n < size && stat(path, &st) == 0 && S_ISREG(st.type) ? 0 : -1;
     }
     while(path_next(&at, dir, sizeof(dir))) {
         n = snprintf(path, (size_t)size, "%s/%s", dir, name);
         if(n < size && stat(path, &st) == 0 && S_ISREG(st.type)) return 0;
     }
-    fprintf(stderr, "surfsh: %s: command not found\n", name);
-    return STATUS_NOTFOUND;
+    return -1;
+}
+
+/* the program a name runs, as program_path() finds it; 0 and its path in path, or the status (said) */
+int find_program(const char *name, char *path, int size) {
+    struct stat st;
+    int n;
+    if(!strchr(name, '/')) {
+        if(program_path(name, path, size) == 0) return 0;
+        fprintf(stderr, "surfsh: %s: command not found\n", name);
+        return STATUS_NOTFOUND;
+    }
+    n = snprintf(path, (size_t)size, "%s", name);
+    if(n >= size || stat(path, &st) < 0) {
+        fprintf(stderr, "surfsh: %s: %s\n", name, strerror(n >= size ? ENAMETOOLONG : errno));
+        return STATUS_NOTFOUND;
+    }
+    if(!S_ISREG(st.type)) {
+        fprintf(stderr, "surfsh: %s: is a directory\n", name);
+        return STATUS_CANNOT;
+    }
+    return 0;
 }
 
 /**** programs ****/

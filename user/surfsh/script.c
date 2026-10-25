@@ -18,7 +18,8 @@ The builtins of scripts (exec.c runs them like the others; builtins.c lists them
                       line to the last one (REPLY without names); \ joins a line to the next and
                       keeps the character after it, unless -r. Status 1 at the end of the input.
     kernel name [args]      the kernel's command name, where surfsh has one of its own (test,
-                      echo, cd, pwd, help, history, set)
+                      echo, cd, pwd, help, history, set) or, 10/25/26, a program of PATH's
+                      directories comes first (ls, cat, cp, df, hexdump, mkdir, mv, rm, rmdir)
 
 read takes one line and no more: from a terminal a line is one read; from a file it reads a
 block and puts back what follows the line (lseek), so the next command reads on from there;

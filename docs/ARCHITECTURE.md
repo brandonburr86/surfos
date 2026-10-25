@@ -290,7 +290,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
   clear becomes an ANSI clear; **ai-dev**: CR and ESC pass through, so the terminal draws
   the same escape sequences as the screen; since 10/6/26 so do the bytes of UTF-8
-  characters, as they were printed: the terminal is taken to speak UTF-8).
+  characters, as they were printed: the terminal is taken to speak UTF-8; since 10/25/26
+  TAB, which the terminal's tab stops take where the screen does).
   IRQ 4 feeds received bytes to the active tty (CR to newline, DEL to backspace,
   `ESC [ A/B/C/D/H/F` to the arrow/Home/End key codes; **ai-dev**: in raw mode, the bytes
   as they came; in line mode, a lone Esc reaches the pager's question). `qemu -nographic` therefore
@@ -321,7 +322,11 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   prints in the writer's colour, so `kprintf()` and the older programs look as they did.
   Wrapping is VT100's: writing the last column leaves the cursor there and the next
   character starts the next line, so a program can write the bottom right corner without
-  scrolling. Until 10/6/26 only printable ASCII (32-126) was drawn (now UTF-8 is, below). `tty_ctl()`
+  scrolling. Until 10/6/26 only printable ASCII (32-126) was drawn (now UTF-8 is, below).
+  Since 10/25/26 TAB moves the cursor to the next multiple of 8, as on a terminal: never past
+  the last column, not at all at a pending wrap, and the cells it passes stay as they are;
+  for the pager it starts a row as a character does. A pty's stream console (section 18)
+  had these rules already. `tty_ctl()`
   (system call `ttyctl`) with `TTY_RAW` 1 stops echo and line editing: keys arrive one at a
   time, Ctrl-C is just 0x03, the keyboard's special keys become the sequences a terminal
   sends (`ESC [ A` ... `ESC [ 6 ~`, Backspace 0x7f, Enter CR), and serial input arrives as
@@ -1112,13 +1117,19 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   reason. **10/24/26**: `parse.c` makes a tree of the whole command (lists, `&&` and `||`,
   pipelines, groups, redirections, here-documents), and the words are expanded only when
   their command runs, so `$?` is still the status just before (section 21).
-* **Which command runs** (`run.c`), in the ring-0 shell's order: surfsh's own, then the
-  kernel's (a name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`), then
-  a program, `/initrd/bin/<name>` or a path when the name has a `/`. So `ls`, `cat` and `cp`
-  are the kernel's, as they always were at the prompt, and the programs of the same names
-  are reached by path (`help` marks them with `*`); the kernel's `help`, `echo`, `cd` and
-  `pwd` give way to surfsh's own. On a kernel without the bridge (ENOSYS) there are no
-  kernel commands; a name the table lists is the kernel's whatever `kcmd()` answers.
+* **Which command runs** (`run.c`): surfsh's own, then a program, `/initrd/bin/<name>` (the
+  directories of `PATH`, section 21) or a path when the name has a `/`, then the kernel's (a
+  name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`). **10/25/26**
+  (track A): the programs come before the kernel's commands of the same names, which came
+  first until then, in the ring-0 shell's order. So `ls`, `cat`, `cp`, `df`, `hexdump`,
+  `mkdir`, `mv`, `rm` and `rmdir` are the programs (`ls -l`, `echo x | cat` and `cat < file`
+  work); `kernel NAME` runs the kernel's command, and `type NAME` says which one runs and
+  what it hides. `help` marks with `*` a kernel command that a program hides and a program
+  that surfsh's own hides (`echo`). The `hexdump` program hands what is no file to the
+  kernel's (`hexdump usb0 0`: a block device's blocks), and `df` has the kernel df's columns.
+  The kernel's `help`, `echo`, `cd` and `pwd` give way to surfsh's own. On a kernel without
+  the bridge (ENOSYS) there are no kernel commands; a name the table lists is the kernel's
+  whatever `kcmd()` answers.
 * **Redirection.** A program gets its files from `spawnfd()`. A builtin or a kernel command
   runs in surfsh's own task, so its file is put on descriptor 1 (`dup2`) and taken off
   again afterwards from a copy of descriptor 1 made at the start (`dup2(1, 15)`, the last
@@ -1766,9 +1777,10 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   only joined on); a character is a whole UTF-8 sequence, names are matched as stored, a name
   that starts with `.` only by a part that does, and a pattern that matches nothing stays as
   it is (POSIX's rule). The same matcher does `${x#p}` and the rest.
-* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own or the kernel's is
-  looked for in each directory of `PATH` (an empty one is `.`); `help` and Tab list the
-  programs of all of them, a name in two directories once.
+* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own is looked for in each
+  directory of `PATH` (an empty one is `.`), and only then among the kernel's commands
+  (10/25/26; they came first until then, section 17); `help` and Tab list the programs of
+  all of them, a name in two directories once.
 * **A new surfsh** is `surfsh --sub STATUS PID LASTPID NAME`, started with `spawnx` with the
   given descriptors 0 and 1, surfsh's 2, the exported variables as its environment, and the
   reading end of a pipe as 3, into which surfsh writes what makes the new one this shell

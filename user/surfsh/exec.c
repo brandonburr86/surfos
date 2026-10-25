@@ -56,6 +56,10 @@ another stage reads, or of a job in the background, is written by a new surfsh t
 stage, never by this one before it goes on; a feeder is waited for once this shell has closed
 its pipe (restore(), then finish_docs()). eval's and .'s text, and a new surfsh, run as the
 command they are part of: in a condition (X_COND, cond_flag) set -e is ignored there too.
+
+10/25/26 (track A): a program of PATH's directories comes before a kernel command of the same
+name (stage_kind(), exec_simple()), so ls, cat, cp and df are the programs, in a pipeline too;
+a kernel command runs when PATH has no program of its name, or as kernel NAME (script.c).
 */
 
 #include "surfsh.h"
@@ -462,13 +466,14 @@ static int literal_name(const char *w, char *buf, int size) {
 
 enum { CMD_PROGRAM, CMD_KERNEL, CMD_SURFSH };
 
-/* what a stage of a pipeline is: a program (a process of its own), a kernel command, or surfsh's */
+/* what a stage of a pipeline is: a program (a process of its own), a kernel command, or surfsh's.
+   10/25/26: a kernel command only when PATH has no program of its name */
 static int stage_kind(struct node *n) {
-    char name[WORD_LIMIT + 1];
+    char name[WORD_LIMIT + 1], path[PATH_MAX];
     if(n->type != N_SIMPLE || !n->nwords || !literal_name(n->words[0], name, sizeof(name)))
         return CMD_SURFSH;
     if(!strchr(name, '/') && (builtin_find(name) || func_find(name))) return CMD_SURFSH;
-    if(!strchr(name, '/') && kcmd_find(name)) return CMD_KERNEL;
+    if(!strchr(name, '/') && kcmd_find(name) && program_path(name, path, sizeof(path)) < 0) return CMD_KERNEL;
     return CMD_PROGRAM;
 }
 
@@ -480,7 +485,8 @@ static int too_long(const char *what, const char *word) {
     return 1;
 }
 
-/* /initrd/bin/<name> when that program exists, for a hint; NULL otherwise */
+/* /initrd/bin/<name> when that program exists, for a hint; NULL otherwise. 10/25/26: a kernel command
+   runs only when PATH has no program of its name, so this is one that PATH leaves out */
 static const char *program_of(const char *name) {
     static char path[PATH_MAX];
     struct stat st;
@@ -578,7 +584,7 @@ static int call_function(struct func *fn, struct fields *f, int flags) {
     return status;
 }
 
-/* A simple command in this shell: surfsh's own, a function, the kernel's or a program (waited for
+/* A simple command in this shell: surfsh's own, a function, a program or the kernel's (waited for
    unless pidp, which gets its pid; X_BACK: a job in the background). in, out: its 0 and 1 first
    (-1: this shell's). Assignments alone stay; before a builtin, a function or a kernel command
    they are theirs while they run, before a program they are its environment's. An expansion
@@ -667,7 +673,7 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
             goto done;
         }
     }
-    if(!strchr(name, '/') && kcmd_find(name)) {
+    if(!strchr(name, '/') && kcmd_find(name) && program_path(name, path, sizeof(path)) < 0) {   /* 10/25/26: programs first */
         if(has_input(n->redirs)) {
             const char *program = program_of(name);
             fprintf(stderr, "surfsh: %s is a kernel command: it reads only the console, not < file", name);
