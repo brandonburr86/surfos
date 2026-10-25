@@ -183,3 +183,15 @@ int sh_expand_one(const char *word, char *out, int size) {
     free(s);
     return r;
 }
+
+int sh_test(int n, char **v) {
+    return test_eval(n, v);
+}
+
+int sh_printf(int n, const char *const *args, char *out, int size) {
+    struct sbuf b = { NULL, 0, 0 };
+    int r = printf_text(&b, n, (char **)args);
+    copy_out(sb_str(&b), out, size);
+    sb_free(&b);
+    return r;
+}

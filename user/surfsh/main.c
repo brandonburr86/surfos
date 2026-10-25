@@ -22,6 +22,9 @@ that was killed.
 
 10/24/26: surfsh -c TEXT [NAME [ARGS]] runs TEXT ($0 NAME, $1... ARGS), and surfsh FILE [ARGS]
 the lines of FILE ($0 FILE), without a prompt. The environment becomes exported variables.
+10/25/26: . files and eval run their text inside a command (run_source() within run_source());
+an interactive shell asks to be told of Ctrl+C itself (TTY_INTR 1): when it stopped commands of
+surfsh's own and nobody said so, ^C is written before the next prompt.
 Lines are read until they make a complete command (parse.c), which then runs (exec.c):
 at the prompt a line that is not complete yet is continued on the next one, after the
 continuation prompt (… ≋>); Ctrl-C there drops the command. A file that ends inside a
@@ -244,13 +247,18 @@ static void parse_failed(struct source *s, struct parser *p, int first, int at_e
     else fprintf(stderr, "surfsh: %s%s\n", head, p->err);
 }
 
+/* 10/25/26: sources inside each other (. files and eval run theirs within a command): only the
+   outermost of an interactive shell is what was typed at the prompt */
+static int source_depth;
+
 int run_source(struct source *s) {
     struct sbuf buf = { NULL, 0, 0 };
     struct arena mem = { NULL };
     struct parser p;
     struct node *n;
-    int used = 0, more = 0, ended = 0, first = 1, r;
-    while(!exit_requested) {
+    int used = 0, more = 0, ended = 0, first = 1, r, top = interactive && !source_depth;
+    source_depth++;
+    while(!exit_requested && (top || !stopping())) {
         if(used >= buf.len && !more) {          /* all of it ran: start again empty */
             buf.len = used = 0;
             if(buf.s) buf.s[0] = 0;
@@ -281,7 +289,7 @@ int run_source(struct source *s) {
             parse_failed(s, &p, first, r == PARSE_MORE);
             arena_free(&mem);
             last_status = STATUS_USAGE;
-            if(!interactive) break;             /* a script with a mistake goes no further */
+            if(!top) break;                     /* a script with a mistake goes no further */
             buf.len = used = 0;
             continue;
         }
@@ -293,13 +301,25 @@ int run_source(struct source *s) {
         first += count_lines(buf.s + used, p.pos);
         used += p.pos;
         if(s->get == fd_get) fd_give_back(s);
-        if(interactive) page(1);
-        last_status = exec_tree(n, interactive ? X_TOP : 0);
-        if(interactive) page(0);
+        if(top) {
+            page(1);
+            ttyctl(TTY_INTR, 1);                /* 10/25/26: a Ctrl+C counts from here (exec.c) */
+        }
+        last_status = exec_tree(n, top ? X_TOP : 0);
+        if(top) {
+            page(0);
+            if(interrupted && !interrupt_said) {    /* Ctrl+C stopped surfsh's own commands: say so */
+                edit_fresh_row();
+                printf("^C\n");
+            }
+            if(interrupted) last_status = STATUS_INTERRUPTED;
+            interrupted = interrupt_said = 0;
+        }
         arena_free(&mem);
         fflush(stdout);
         if(s->get == fd_get) jobs_collect(0);   /* after each command of a file, as surfsh did after each line */
     }
+    source_depth--;
     sb_free(&buf);
     return last_status;
 }

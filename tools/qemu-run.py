@@ -151,7 +151,7 @@ SMOKE = [
     ('memstat', ['Physical memory:', 'Free physical pages:']),
     ('ps',      ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),                 # 10/6/26: surfsh on every console
     ('help',    ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
-    ('test',    ['linear is using physical']),
+    ('kernel test', ['linear is using physical']),      # 10/25/26: test is surfsh's own now; kernel runs the kernel's
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
@@ -954,29 +954,94 @@ SMOKE = [
     # program's environment (env), x=1 cmd for cmd alone, env -i; unset, readonly; $( ) and ` `, a line of assignments
     # alone with the status of its last $( ); $(( )); ${ } forms; splitting; set --, $#, shift; a variable that is not
     # exported, in a stage that runs in a new surfsh; wildcards, quoted, matching nothing; ${x:?} and $((1 / 0))
-    ('surfsh', [shown('SURF ≋> ')],
-     [('x=hello; echo $x ${x}! "$x" \'$x\'', ['\r\nhello hello! hello $x\r\n', shown('SURF ≋> ')]),
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('x=hello; echo $x ${x}! "$x" \'$x\'', ['\r\nhello hello! hello $x\r\n', shown('SURF \u224b> ')]),
       ('export GREETING="hi there"; env', ['\r\nGREETING=hi there\r\n', 'PATH=/initrd/bin\r\n', 'PWD=/\r\n',
-                                            'SHELL=/initrd/bin/surfsh\r\n', shown('SURF ≋> ')]),
-      ('LANG=C env | /initrd/bin/head -1; echo ${LANG-unset}', ['\r\nLANG=C\r\nunset\r\n', shown('SURF ≋> ')]),
-      ('env -i ONLY=1 env', ['\r\nONLY=1\r\n', shown('SURF ≋> ')]),
-      ('unset x; echo "[${x-gone}]"', ['\r\n[gone]\r\n', shown('SURF ≋> ')]),
-      ('readonly r=1; r=2; echo $? $r', ['surfsh: r: read-only', '\r\n1 1\r\n', shown('SURF ≋> ')]),
-      ('v=$(cat /initrd/etc/version); echo "[$v]"', ['\r\n[SurfOS 1.0 (ai-dev)]\r\n', shown('SURF ≋> ')]),
-      ('echo "a`echo b`c" $(/initrd/bin/echo d)', ['\r\nabc d\r\n', shown('SURF ≋> ')]),
-      ('v=$(/initrd/bin/ls /nonexistent 2> /dev/null); echo status $?', ['\r\nstatus 1\r\n', shown('SURF ≋> ')]),
-      ('i=6; echo $((i * 7)) $((i += 1)) $i $((0x10 + 010))', ['\r\n42 7 7 24\r\n', shown('SURF ≋> ')]),
+                                            'SHELL=/initrd/bin/surfsh\r\n', shown('SURF \u224b> ')]),
+      ('LANG=C env | /initrd/bin/head -1; echo ${LANG-unset}', ['\r\nLANG=C\r\nunset\r\n', shown('SURF \u224b> ')]),
+      ('env -i ONLY=1 env', ['\r\nONLY=1\r\n', shown('SURF \u224b> ')]),
+      ('unset x; echo "[${x-gone}]"', ['\r\n[gone]\r\n', shown('SURF \u224b> ')]),
+      ('readonly r=1; r=2; echo $? $r', ['surfsh: r: read-only', '\r\n1 1\r\n', shown('SURF \u224b> ')]),
+      ('v=$(cat /initrd/etc/version); echo "[$v]"', ['\r\n[SurfOS 1.0 (ai-dev)]\r\n', shown('SURF \u224b> ')]),
+      ('echo "a`echo b`c" $(/initrd/bin/echo d)', ['\r\nabc d\r\n', shown('SURF \u224b> ')]),
+      ('v=$(/initrd/bin/ls /nonexistent 2> /dev/null); echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('i=6; echo $((i * 7)) $((i += 1)) $i $((0x10 + 010))', ['\r\n42 7 7 24\r\n', shown('SURF \u224b> ')]),
       ('f=/hda1/notes.txt; echo ${f##*/} ${f%.txt} ${#f} ${u:-default}',
-       ['\r\nnotes.txt /hda1/notes 15 default\r\n', shown('SURF ≋> ')]),
-      ('sp="a  b"; set -- $sp "$sp"; echo $# "$3"', ['\r\n3 a  b\r\n', shown('SURF ≋> ')]),
-      ('set -- one "two words" three; shift; echo $# "$1"', ['\r\n2 two words\r\n', shown('SURF ≋> ')]),
-      ('z=inside; { echo $z $1; } | /initrd/bin/cat', ['\r\ninside two words\r\n', shown('SURF ≋> ')]),
-      ('echo /initrd/etc/*.conf', ['\r\n/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF ≋> ')]),
+       ['\r\nnotes.txt /hda1/notes 15 default\r\n', shown('SURF \u224b> ')]),
+      ('sp="a  b"; set -- $sp "$sp"; echo $# "$3"', ['\r\n3 a  b\r\n', shown('SURF \u224b> ')]),
+      ('set -- one "two words" three; shift; echo $# "$1"', ['\r\n2 two words\r\n', shown('SURF \u224b> ')]),
+      ('z=inside; { echo $z $1; } | /initrd/bin/cat', ['\r\ninside two words\r\n', shown('SURF \u224b> ')]),
+      ('echo /initrd/etc/*.conf', ['\r\n/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
       ('echo "/initrd/etc/*.conf" /initrd/etc/v?rsion /initrd/etc/none*',
-       ['\r\n/initrd/etc/*.conf /initrd/etc/version /initrd/etc/none*\r\n', shown('SURF ≋> ')]),
-      ('echo ${nothing:?is not set}', ['surfsh: nothing: is not set', shown('SURF ≋!> ')]),
-      ('echo $((1 / 0))', ['division by 0', shown('SURF ≋!> ')]),
+       ['\r\n/initrd/etc/*.conf /initrd/etc/version /initrd/etc/none*\r\n', shown('SURF \u224b> ')]),
+      ('echo ${nothing:?is not set}', ['surfsh: nothing: is not set', shown('SURF \u224b!> ')]),
+      ('echo $((1 / 0))', ['division by 0', shown('SURF \u224b!> ')]),
       ('exit', [])]),
+    # 10/25/26 (scripts in surfsh), in a surfsh of their own: if, elif and else; while with $(( )); for over words and
+    # wildcards; case; a function with its arguments, local and return; one that calls itself; continue and break;
+    # printf; read in the last stage of a pipeline, and a while read loop there; eval; a . file with arguments; kernel;
+    # test and [, and a test that is no test; set -e, -u and -x in surfsh -c; a script over several lines (a here-
+    # document), run by surfsh and by its name (#!), one without #! (run as a script), one whose #! names nothing;
+    # exec with redirections alone and with a command; unset -f; $- and set -o; a function in a pipeline and in ( );
+    # an if typed over lines; mistakes
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('if false; then echo no; elif [ -d /initrd ]; then echo elif-yes; else echo no; fi',
+       ['\r\nelif-yes\r\n', shown('SURF \u224b> ')]),
+      ('i=0; while [ $i -lt 3 ]; do printf "i=%d " $i; i=$((i + 1)); done; echo', ['\r\ni=0 i=1 i=2 \r\n', shown('SURF \u224b> ')]),
+      ('for x in a "b c" /initrd/etc/*.conf; do echo "<$x>"; done',
+       ['\r\n<a>\r\n<b c>\r\n</initrd/etc/surfsh.conf>\r\n</initrd/etc/undertow.conf>\r\n', shown('SURF \u224b> ')]),
+      ('for w in apple Bob 42 x.txt; do case $w in [a-z]*.txt) echo "$w: a file";; [A-Z]*) echo "$w: a name";; '
+       '*[0-9]) echo "$w: a number";; *) echo "$w: a word";; esac; done',
+       ['\r\napple: a word\r\nBob: a name\r\n42: a number\r\nx.txt: a file\r\n', shown('SURF \u224b> ')]),
+      ('greet() { local who=${1:-nobody}; echo "hello $who ($#)"; return 3; }; greet world x; echo status $? ${who-unset}',
+       ['\r\nhello world (2)\r\nstatus 3 unset\r\n', shown('SURF \u224b> ')]),
+      ('fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(( $1 - 1 ))) )); fi; }; fact 6',
+       ['\r\n720\r\n', shown('SURF \u224b> ')]),
+      ('for i in 1 2 3 4 5 6; do [ $i = 2 ] && continue; [ $i = 5 ] && break; printf "%s " $i; done; echo',
+       ['\r\n1 3 4 \r\n', shown('SURF \u224b> ')]),
+      ('printf "%-5s|%05d|%x|%c|%b\\n" ab 42 255 xyz "x\\0101y"', ['\r\nab   |00042|ff|x|xAy\r\n', shown('SURF \u224b> ')]),
+      ('echo "one two three" | { read a b; echo "a=$a b=$b"; }', ['\r\na=one b=two three\r\n', shown('SURF \u224b> ')]),
+      ('printf "x 1\\ny 2\\n" | while read k v; do echo "$k=$v"; done', ['\r\nx=1\r\ny=2\r\n', shown('SURF \u224b> ')]),
+      ('eval "e1=10; e2=\\$((e1 * 2))"; echo $e2', ['\r\n20\r\n', shown('SURF \u224b> ')]),
+      ('echo "echo dot \\$# \\$1; dotvar=yes" > /hda1/DOT.SH; . /hda1/DOT.SH first second; echo dotvar=$dotvar',
+       ['\r\ndot 2 first\r\ndotvar=yes\r\n', shown('SURF \u224b> ')]),
+      ('kernel echo the kernel says', ['\r\nthe kernel says\r\n', shown('SURF \u224b> ')]),
+      ('[ -f /initrd/etc/version ] && test ! -d /initrd/etc/version && [ "a b" = "a b" ] && [ 10 -gt 9 ] && echo tests-pass',
+       ['\r\ntests-pass\r\n', shown('SURF \u224b> ')]),
+      ('[ 1 -eq x ]; echo status $?', ['surfsh: test: x: not a number', '\r\nstatus 2\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -e; echo before; false; echo not-reached"; echo status $?',
+       ['before\r\n[exit status 1]\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -u; echo \\$undefined; echo not-reached"', ['surfsh: undefined: not set', '[exit status 1]',
+                                                                   shown('SURF \u224b!> ')]),
+      ('surfsh -c "set -x; v=1; echo \\$v"', ['+ v=1', '+ echo 1', '\r\n1\r\n', shown('SURF \u224b> ')]),
+      ("/initrd/bin/cat > /hda1/T.SH << 'EOF'", [shown('\u2026 \u224b> ')]),
+      ('#!/initrd/bin/surfsh', [shown('\u2026 \u224b> ')]),
+      ('total=0', [shown('\u2026 \u224b> ')]),
+      ('for n in "$@"; do', [shown('\u2026 \u224b> ')]),
+      ('  total=$((total + n))', [shown('\u2026 \u224b> ')]),
+      ('done', [shown('\u2026 \u224b> ')]),
+      ('echo "$0: $# numbers, total $total"', [shown('\u2026 \u224b> ')]),
+      ('EOF', [shown('SURF \u224b> ')]),
+      ('surfsh /hda1/T.SH 1 2 3', ['/hda1/T.SH: 3 numbers, total 6\r\n', shown('SURF \u224b> ')]),
+      ('/hda1/T.SH 10 20', ['/hda1/T.SH: 2 numbers, total 30\r\n', shown('SURF \u224b> ')]),
+      ('echo "echo no hashbang \\$1" > /hda1/P.SH; /hda1/P.SH ok', ['no hashbang ok\r\n', shown('SURF \u224b> ')]),
+      ('echo "#!/bin/sh" > /hda1/B.SH; /hda1/B.SH; echo status $?',
+       ['surfsh: /hda1/B.SH: its #! line names /bin/sh, which cannot run', '\r\nstatus 126\r\n', shown('SURF \u224b> ')]),
+      ('exec 3> /hda1/FD3.TXT; echo via-three >&3; exec 3>&-; cat /hda1/FD3.TXT', ['\r\nvia-three\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "exec /initrd/bin/echo exec-ran; echo not-reached"; echo status $?',
+       ['exec-ran\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ('unset -f greet; greet; echo status $?', ['surfsh: greet: command not found', '\r\nstatus 127\r\n', shown('SURF \u224b> ')]),
+      ('echo opts=$-; set -o | /initrd/bin/head -1', ['\r\nopts=i\r\n', 'errexit    off\r\n', shown('SURF \u224b> ')]),
+      ('piped() { echo from-a-function; }; piped | /initrd/bin/wc -c; ( piped )',
+       ['     16 ', 'from-a-function\r\n', shown('SURF \u224b> ')]),
+      ('if true', [shown('\u2026 \u224b> ')]),
+      ('then echo over-lines', [shown('\u2026 \u224b> ')]),
+      ('fi', ['\r\nover-lines\r\n', shown('SURF \u224b> ')]),
+      ('break; echo status $?', ['surfsh: break: not in a loop', '\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('if true; then fi', ['surfsh: a command is missing before fi', shown('SURF \u224b!> ')]),
+      ('rm /hda1/DOT.SH /hda1/T.SH /hda1/P.SH /hda1/B.SH /hda1/FD3.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
@@ -1587,6 +1652,44 @@ def ctrl_c_check(q):
     return ('Ctrl+C: a ping surfsh runs is cut short, a program it waits for is killed, surfsh lives on', ok)
 
 
+def surfsh_ctrl_c_check(q):
+    """10/25/26 (scripts in surfsh): Ctrl+C in surfsh's own commands. A loop of builtins at the prompt stops with ^C,
+    the prompt saying so and $? 130, and what came after it on the line does not run; a loop that runs a program, and
+    one that runs a kernel command (sleep), stop as a whole, not just their round; read at the terminal ends with ^C
+    and 130; a surfsh typed at the prompt lives through a Ctrl+C of its own loop, and the shell outside says nothing of
+    it after its exit; a script (surfsh -c) is stopped as a whole: [pid n killed]"""
+    def interrupt(line, wait, expects):
+        start = len(q.transcript)
+        q.send(line + '\n')
+        q.wait(wait)
+        q.ser.sendall(b'\x03')
+        ok = all(q.expect(e, 15) for e in expects)
+        return ok and b'\nnot-reached' not in q.transcript[start:]       # only in the line as typed
+
+    def status(want):
+        q.send('echo status $?\n')
+        return q.expect('\r\nstatus %d\r\n' % want, 10) and q.expect(PROMPT, 10)
+
+    results = []
+    results.append(interrupt('while :; do :; done; echo not-reached', 1.0, ['^C', shown('\u224b!> ')]) and status(130))
+    results.append(interrupt('for i in 1 2 3; do /initrd/bin/count 100 100; done; echo not-reached', 1.5,
+                             ['^C', shown('\u224b!> ')]) and status(130))
+    results.append(interrupt('while :; do sleep 100; done; echo not-reached', 1.0, ['sleep cut short', shown('\u224b!> ')]))
+    results.append(interrupt('read line; echo not-reached', 0.5, ['^C', shown('\u224b!> ')]) and status(130))
+    q.send('surfsh\n')
+    ok = q.expect(PROMPT, 10)
+    ok = ok and interrupt('while :; do :; done; echo not-reached', 1.0, ['^C', shown('\u224b!> ')]) and status(130)
+    start = len(q.transcript)
+    q.send('exit\n')
+    ok = ok and q.expect(PROMPT, 10)
+    q.pump(0.5)
+    results.append(ok and b'^C' not in q.transcript[start:])
+    results.append(interrupt('surfsh -c "while :; do :; done"; echo not-reached', 1.0, ['killed]', shown('\u224b!> ')]))
+    q.send('echo surfsh lives on\n')
+    ok = q.expect('\r\nsurfsh lives on\r\n', 10) and q.expect(PROMPT, 10)
+    return ('surfsh: Ctrl+C stops loops of builtins, programs and kernel commands, read, a script; a surfsh in a surfsh '
+            'lives on (%d of %d)' % (sum(results), len(results)), all(results) and ok)
+
 def readme_cat_check(q):
     """cat of a file of several clusters on the FAT16 disk (docs/README.md as DOCS/README.md, tools/mkimage.py), through
     the pager: every line of it arrives in order, and the step ends at the prompt after its last line. 10/6/26: the file
@@ -1743,6 +1846,7 @@ def surfsh_corner_check(q):
 
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
+CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
 
 
 # ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------

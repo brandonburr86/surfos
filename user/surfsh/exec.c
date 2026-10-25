@@ -33,6 +33,16 @@ other variables, the read-only marks, the positional parameters: var_state()), a
 text to run (unparse.c), which this shell writes into a pipe after starting it. It is how
 SurfOS, which has no fork(), runs ( list ), a stage of a pipeline, a job in the background
 that are surfsh's own, and $( ).
+
+10/25/26 (scripts): if, while, until, for and case; functions (vars.c keeps them), called
+with their own positional parameters and local variables, before surfsh's other builtins
+(after the special ones) and the kernel's commands; break, continue and return on their
+way out leave the commands between (script.c). Ctrl+C: a program it killed (waitx), a
+kernel command it cut short (130), or the count TTY_INTR answers after each command means
+the rest of the line, loop or script is left (a script ends with 130; an interactive shell
+goes back to its prompt, main.c). set -e ends a script at a command that failed where its
+status is not looked at (X_COND), set -x shows each command on 2 before it runs. exec runs
+its command and ends the shell with its status; exec alone keeps its redirections.
 */
 
 #include "surfsh.h"
@@ -58,6 +68,41 @@ struct saved {
 static int is_open(int fd) {
     struct stat st;
     return fstat(fd, &st) == 0;
+}
+
+/**** 10/25/26: break, continue, return and Ctrl+C on their way out ****/
+
+static int exec_node(struct node *n, int flags);
+
+int loop_depth, break_count, continue_count, returning, return_status, func_depth, dot_depth, local_base;
+int interrupted, interrupt_said;
+
+int stopping(void) {
+    return exit_requested || break_count || continue_count || returning || interrupted;
+}
+
+void note_interrupt(int said) {
+    interrupted = 1;
+    if(said) interrupt_said = 1;
+    if(!interactive) {                          /* a script ends there, as one stopped by SIGINT does */
+        exit_requested = 1;
+        exit_code = STATUS_INTERRUPTED;
+    }
+}
+
+/* after a command: a Ctrl+C that reached this shell's job (TTY_INTR) */
+int check_interrupt(void) {
+    if(ttyctl(TTY_INTR, (unsigned int)interactive) > 0) note_interrupt(0);
+    return interrupted;
+}
+
+/* set -e: a failure whose status nobody looks at ends the shell */
+static int errexit(int status, int flags) {
+    if(status && opt_e && !(flags & X_COND) && !stopping()) {
+        exit_requested = 1;
+        exit_code = status;
+    }
+    return status;
 }
 
 /* a descriptor no one uses: 10-15 first, then 3-9; -1 */
@@ -124,6 +169,16 @@ static int restore(struct saved *s, int status) {
     }
     s->n = 0;
     return status;
+}
+
+/* 10/25/26, exec alone: the redirections stay; what was kept of the descriptors goes */
+static void keep_redirections(struct saved *s) {
+    int i;
+    for(i = 0; i < s->n; i++) {
+        if(s->copy[i] >= 0) close(s->copy[i]);
+        free(s->name[i]);
+    }
+    s->n = 0;
 }
 
 /* the here-documents for a program that has started, then the feeders: all of them written and closed */
@@ -357,7 +412,7 @@ static int stage_kind(struct node *n) {
     char name[WORD_LIMIT + 1];
     if(n->type != N_SIMPLE || !n->nwords || !literal_name(n->words[0], name, sizeof(name)))
         return CMD_SURFSH;
-    if(!strchr(name, '/') && builtin_find(name)) return CMD_SURFSH;
+    if(!strchr(name, '/') && (builtin_find(name) || func_find(name))) return CMD_SURFSH;
     if(!strchr(name, '/') && kcmd_find(name)) return CMD_KERNEL;
     return CMD_PROGRAM;
 }
@@ -412,28 +467,85 @@ static int push_all(struct fields *a) {
     return 0;
 }
 
-/* A simple command in this shell: surfsh's own, the kernel's or a program (waited for unless pidp,
-   which gets its pid; X_BACK: a job in the background). in, out: its 0 and 1 first (-1: this
-   shell's). Assignments alone stay; before a builtin or a kernel command they are theirs while
-   they run, before a program they are its environment's. An expansion that fails ends a shell
-   that runs a script, as POSIX has it. */
+/* 10/25/26: an expansion that failed: its command does not run, and a script ends (POSIX) */
+static int expansion_failed(void) {
+    if(!interactive) {
+        exit_requested = 1;
+        exit_code = STATUS_FAIL;
+    }
+    return STATUS_FAIL;
+}
+
+/* set -x: the command as it runs, on 2 */
+static void trace(struct fields *a, struct fields *f) {
+    struct sbuf b = { NULL, 0, 0 };
+    int i;
+    sb_puts(&b, "+");
+    for(i = 0; i < a->n; i++) {
+        sb_putc(&b, ' ');
+        sb_puts(&b, a->v[i]);
+    }
+    for(i = 0; i < f->n; i++) {
+        sb_putc(&b, ' ');
+        if(f->v[i][0]) sb_quote(&b, f->v[i]);
+        else sb_puts(&b, "''");
+    }
+    fprintf(stderr, "%s\n", sb_str(&b));
+    sb_free(&b);
+}
+
+/* a function with the words of its call as its positional parameters, the call's assignments
+   and its locals put back when it returns */
+static int call_function(struct func *fn, struct fields *f, int flags) {
+    struct pos_saved ps;
+    int status, base = local_base, loops = loop_depth;
+    if(func_depth >= FUNC_DEPTH_LIMIT) {
+        fprintf(stderr, "surfsh: %s: functions inside each other: at most %d\n", f->v[0], FUNC_DEPTH_LIMIT);
+        return STATUS_FAIL;
+    }
+    pos_save(&ps);
+    pos_set(f->n - 1, f->v + 1);
+    func_hold(fn);
+    func_depth++;
+    local_base = local_mark();
+    loop_depth = 0;                             /* break and continue are for its own loops */
+    status = exec_node(func_body(fn), flags & X_COND);
+    if(returning) {
+        returning = 0;
+        status = return_status;
+    }
+    loop_depth = loops;
+    local_restore(local_base);
+    local_base = base;
+    func_depth--;
+    func_release(fn);
+    pos_restore(&ps);
+    return status;
+}
+
+/* A simple command in this shell: surfsh's own, a function, the kernel's or a program (waited for
+   unless pidp, which gets its pid; X_BACK: a job in the background). in, out: its 0 and 1 first
+   (-1: this shell's). Assignments alone stay; before a builtin, a function or a kernel command
+   they are theirs while they run, before a program they are its environment's. An expansion
+   that fails ends a shell that runs a script, as POSIX has it. */
 static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
     struct fields f = { NULL, 0, 0 }, a = { NULL, 0, 0 };
     struct saved s;
-    const struct builtin *b;
+    const struct builtin *b = NULL;
+    struct func *fn = NULL;
     char path[PATH_MAX], **env;
     const char *name;
-    int status = 0, i, pid, pushed = var_pushed();
+    int status = 0, i, pid, pushed = var_pushed(), exec_cmd = 0;
     memset(&s, 0, sizeof(s));
     if(pidp) *pidp = -1;
     subst_count = 0;
-    if(command_fields(n, &f, &a) < 0) {
-        if(!interactive) {
-            exit_requested = 1;
-            exit_code = STATUS_FAIL;
-        }
-        return STATUS_FAIL;
+    if(command_fields(n, &f, &a) < 0) return expansion_failed();
+    if(check_interrupt()) {                     /* in a $( ): the command does not run */
+        fields_free(&f);
+        fields_free(&a);
+        return STATUS_INTERRUPTED;
     }
+    if(opt_x) trace(&a, &f);
     if((in >= 0 && (save(&s, 0) < 0 || dup2(in, 0) < 0)) || (out >= 0 && (save(&s, 1) < 0 || dup2(out, 1) < 0))) {
         fields_free(&f);
         fields_free(&a);
@@ -448,12 +560,39 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
         return restore(&s, status);
     }
     name = f.v[0];
-    if(!name[0] || !strcmp(name, ".") || !strcmp(name, "..")) {    /* no name at all, or a directory's */
+    if(!strcmp(name, "exec")) {                 /* 10/25/26: exec, which surfsh does here */
+        if(f.n == 1) {                          /* alone: its redirections stay for what follows */
+            status = redirect(n->redirs, &s, 0) < 0 ? STATUS_FAIL : 0;
+            finish_docs(&s);
+            if(status) status = restore(&s, status);
+            else keep_redirections(&s);
+            fields_free(&f);
+            fields_free(&a);
+            return status;
+        }
+        free(f.v[0]);                           /* the command, and then the end of this shell */
+        memmove(f.v, f.v + 1, (size_t)f.n * sizeof(char *));
+        f.n--;
+        name = f.v[0];
+        exec_cmd = 1;
+    }
+    if(!name[0] || !strcmp(name, "..")) {     /* no name at all, or a directory's (. is a builtin) */
         fprintf(stderr, "surfsh: %s: command not found\n", name);
         status = STATUS_NOTFOUND;
         goto done;
     }
-    if(!strchr(name, '/') && (b = builtin_find(name))) {
+    if(!strchr(name, '/')) {
+        b = builtin_find(name);
+        if(!b || !b->special) fn = func_find(name);
+    }
+    if(fn) {                                    /* 10/25/26: a function */
+        if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
+        else status = call_function(fn, &f, flags);
+        var_pop(pushed);
+        finish_docs(&s);
+        goto done;
+    }
+    if(b) {
         if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         else status = b->fn(f.n, f.v);
         var_pop(pushed);
@@ -509,11 +648,22 @@ program:
     else if(pid > 0) status = wait_program(pid, flags & X_TOP);
     fields_free(&f);
     fields_free(&a);
+    if(!pidp) check_interrupt();
+    if(exec_cmd && !stopping()) {
+        exit_requested = 1;
+        exit_code = status;
+    }
     return status;
 done:
     fields_free(&f);
     fields_free(&a);
-    return restore(&s, status);
+    status = restore(&s, status);
+    check_interrupt();
+    if(exec_cmd && !stopping()) {
+        exit_requested = 1;
+        exit_code = status;
+    }
+    return status;
 }
 
 /* $( text ): its output, the newlines at its end taken off; its status. A plain program (a simple
@@ -553,8 +703,6 @@ int exec_capture(const char *text, struct sbuf *out) {
 }
 
 /**** the tree ****/
-
-static int exec_node(struct node *n, int flags);
 
 /* A stage of a pipeline, not in this shell: a process with 0 = in, 1 = out (-1: this shell's).
    Its pid, or -1 (it could not start; *status says why) */
@@ -625,6 +773,7 @@ static int exec_pipe(struct node *n, int flags) {
         st = wait_program(pids[i], pids[i] == last && (flags & X_TOP) && stage_kind(n->kids[n->nkids - 1]) == CMD_PROGRAM);
         if(pids[i] == last) status = st;
     }
+    check_interrupt();
     return status;
 }
 
@@ -660,41 +809,153 @@ static int exec_sub(struct node *n) {
     finish_docs(&s);
     if(pid < 0) return STATUS_CANNOT;
     pid = wait_program(pid, 0);
+    check_interrupt();
     return pid ? pid : status;
+}
+
+/**** 10/25/26: the compound commands ****/
+
+/* after a part of a loop: 1 when the loop ends here (a break, a continue of an outer loop, or
+   anything that leaves more than the loop); 2 when its next round begins (a continue of it); 0 */
+static int loop_ends(void) {
+    if(break_count) {
+        break_count--;
+        return 1;
+    }
+    if(continue_count) return --continue_count ? 1 : 2;
+    return exit_requested || returning || interrupted;
+}
+
+static int exec_if(struct node *n, int flags) {
+    int c = exec_node(n->a, flags | X_COND);
+    if(stopping()) return c;
+    last_status = c;
+    if(!c) return exec_node(n->b, flags);
+    return n->c ? exec_node(n->c, flags) : 0;
+}
+
+/* while and until: the status of the last round's commands, 0 when none ran */
+static int exec_loop(struct node *n, int flags) {
+    int status = 0, c;
+    loop_depth++;
+    for(;;) {
+        int r;
+        c = exec_node(n->a, flags | X_COND);
+        if((r = loop_ends()) == 1) break;
+        if(r == 2) continue;
+        if(n->type == N_WHILE ? c != 0 : c == 0) break;
+        last_status = c;
+        status = exec_node(n->b, flags);
+        last_status = status;
+        if(loop_ends() == 1 || check_interrupt()) break;   /* a loop of builtins: Ctrl+C reaches it here too */
+    }
+    loop_depth--;
+    return interrupted ? STATUS_INTERRUPTED : status;
+}
+
+static int exec_for(struct node *n, int flags) {
+    struct fields f = { NULL, 0, 0 };
+    int status = 0, i;
+    if(n->in) {
+        if(expand_words(n->words, n->nwords, &f) < 0) return expansion_failed();
+    } else {
+        for(i = 0; i < npos; i++) fields_take(&f, xstrdup(posargs[i]));
+    }
+    loop_depth++;
+    for(i = 0; i < f.n; i++) {
+        if(var_set(n->name, f.v[i], 0) < 0) {
+            status = STATUS_FAIL;
+            break;
+        }
+        status = exec_node(n->b, flags);
+        last_status = status;
+        if(loop_ends() == 1 || check_interrupt()) break;
+    }
+    loop_depth--;
+    fields_free(&f);
+    return interrupted ? STATUS_INTERRUPTED : status;
+}
+
+/* case: the first item with a pattern that matches the word runs; 0 when none does */
+static int exec_case(struct node *n, int flags) {
+    struct case_item *it;
+    char *word = expand_one(n->name);
+    int i;
+    if(!word) return expansion_failed();
+    for(it = n->items; it; it = it->next) {
+        for(i = 0; i < it->npats; i++) {
+            char *pat, *q;
+            int len, hit;
+            if(expand_pattern(it->pats[i], &pat, &q, &len) < 0) {
+                free(word);
+                return expansion_failed();
+            }
+            hit = pmatch(pat, q, len, word, (int)strlen(word));
+            free(pat);
+            free(q);
+            if(hit) {
+                free(word);
+                return it->body ? exec_node(it->body, flags) : 0;
+            }
+        }
+    }
+    free(word);
+    return 0;
+}
+
+static int exec_compound(struct node *n, int flags) {
+    switch(n->type) {
+    case N_GROUP: return exec_node(n->a, flags);
+    case N_IF: return exec_if(n, flags & ~X_TOP);
+    case N_WHILE:
+    case N_UNTIL: return exec_loop(n, flags & ~X_TOP);
+    case N_FOR: return exec_for(n, flags & ~X_TOP);
+    case N_CASE: return exec_case(n, flags & ~X_TOP);
+    }
+    return STATUS_FAIL;
 }
 
 static int exec_node(struct node *n, int flags) {
     struct saved s;
     int status;
-    if(exit_requested) return last_status;
+    if(stopping()) return last_status;
     switch(n->type) {
     case N_SIMPLE:
-        return exec_simple(n, flags, -1, -1, NULL);
+        return errexit(exec_simple(n, flags, -1, -1, NULL), flags);
     case N_PIPE:
-        return exec_pipe(n, flags);
+        return errexit(exec_pipe(n, flags), flags);
     case N_AND:
     case N_OR:
         status = exec_node(n->a, (flags & ~X_TOP) | X_COND);
-        if(exit_requested || (n->type == N_AND ? status != 0 : status == 0)) return status;
+        if(stopping() || (n->type == N_AND ? status != 0 : status == 0)) return status;
         last_status = status;
         return exec_node(n->b, flags);
     case N_NOT:
-        return exec_node(n->a, (flags & ~X_TOP) | X_COND) ? 0 : 1;
+        status = exec_node(n->a, (flags & ~X_TOP) | X_COND);
+        return stopping() ? status : !status;
     case N_SEQ:
         status = exec_node(n->a, flags);
-        if(exit_requested) return status;
+        if(stopping()) return status;
         last_status = status;
         return exec_node(n->b, flags);
     case N_BG:
         return exec_background(n->a);
+    case N_SUB:
+        return errexit(exec_sub(n), flags);
+    case N_FUNC:                                /* 10/25/26 */
+        return func_define(n) < 0 ? STATUS_FAIL : 0;
     case N_GROUP:
+    case N_IF:
+    case N_WHILE:
+    case N_UNTIL:
+    case N_FOR:
+    case N_CASE:
+        if(!n->redirs) return exec_compound(n, flags);
         memset(&s, 0, sizeof(s));
         if(redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
-        else status = exec_node(n->a, flags);
+        else status = exec_compound(n, flags);
         finish_docs(&s);
         return restore(&s, status);
-    case N_SUB:
-        return exec_sub(n);
     }
     return STATUS_FAIL;
 }

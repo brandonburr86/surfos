@@ -20,7 +20,9 @@ ring-3 program in /initrd/bin; init starts it with -l on every console.
     exec.c      the tree runs: lists, pipelines, groups, subshells, redirections
     run.c       one command: surfsh's own, then the kernel's (kcmd), then programs
     jobs.c      the jobs in the background: started, collected, reported
-    builtins.c  cd, pwd, echo, exit, help, history, set
+    builtins.c  cd, pwd, echo, exit, help, history, set, export, readonly, unset, shift
+    script.c    10/25/26: : true false break continue return local eval . source read kernel
+    test.c      test and [;  printf.c  printf
 
 10/24/26: a line is parsed into a tree (parse.c) and run (exec.c). A stage of a pipeline
 that is surfsh's own (a builtin, a kernel command, a group), except the last, a job in the
@@ -29,8 +31,11 @@ text to run on its descriptor 3 (exec.c): SurfOS has no fork().
 
 Statuses: 0 success; 1 a command failed; 2 a line or a command used the wrong way; 126 a
 program that could not be started; 127 no such command; 137 a program the kernel killed
-(128 + 9, as for SIGKILL on Unix); 141 a program that wrote to a pipe nobody reads. A kernel
-command answers its own 0, 1 or 2 (130 when Ctrl+C cut it short), and run the program's.
+(128 + 9, as for SIGKILL on Unix); 141 a program that wrote to a pipe nobody reads; 130 a
+command Ctrl+C stopped (10/25/26: a program it killed, a loop, read). A kernel command
+answers its own 0, 1 or 2 (130 when Ctrl+C cut it short), and run the program's.
+10/25/26: if, while, until, for, case and functions; scripts (surfsh FILE, #!, a file that
+is no program); set -e -u -x -f; Ctrl+C leaves a loop or a script (exec.c).
 Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line is the number.
 */
 
@@ -50,12 +55,14 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 #define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
 #define TEXT_LIMIT      (1024 * 1024)   /* bytes of a script, or of what a new surfsh is given */
 #define DEPTH_LIMIT     64          /* compound commands inside each other, at most */
+#define FUNC_DEPTH_LIMIT 100        /* 10/25/26: function calls (and . files) inside each other */
 #define STAGES_LIMIT    16          /* commands of one pipeline */
 
 #define STATUS_FAIL     1
 #define STATUS_USAGE    2
 #define STATUS_CANNOT   126
 #define STATUS_NOTFOUND 127
+#define STATUS_INTERRUPTED 130     /* 10/25/26: Ctrl+C stopped it (128 + 2, SIGINT's number) */
 #define STATUS_KILLED   137
 
 /* the colours of SurfOS as ANSI SGR (the subset include/surfos/tty.h lists) */
@@ -172,7 +179,13 @@ enum node_type {
     N_SEQ,                          /* a ; b, or a & b when a is N_BG */
     N_BG,                           /* a & */
     N_GROUP,                        /* { a ; } */
-    N_SUB                           /* ( a ) */
+    N_SUB,                          /* ( a ) */
+    /* 10/25/26: compound commands and functions */
+    N_IF,                           /* if a; then b; else c; fi (c: NULL, or the else part: an N_IF for elif) */
+    N_WHILE, N_UNTIL,               /* while a; do b; done */
+    N_FOR,                          /* for name in words; do b; done (no in: "$@") */
+    N_CASE,                         /* case name in items esac */
+    N_FUNC                          /* name() a: a function's definition (a: a compound command) */
 };
 
 enum redir_op {
@@ -197,17 +210,29 @@ struct redir {
     int quoted;                     /* << : the end line had quotes: the document is not expanded */
 };
 
+struct case_item {                  /* 10/25/26: pattern|pattern) body ;; */
+    struct case_item *next;
+    char **pats;                    /* as typed */
+    int npats;
+    struct node *body;              /* NULL: nothing to run */
+};
+
 struct node {
     int type;
     int line;                       /* the line it began on, for messages */
-    struct node *a, *b;             /* N_AND, N_OR, N_SEQ: a and b; N_NOT, N_BG, N_GROUP, N_SUB: a */
+    struct node *a, *b;             /* N_AND, N_OR, N_SEQ: a and b; N_NOT, N_BG, N_GROUP, N_SUB, N_FUNC: a;
+                                       N_IF, N_WHILE, N_UNTIL: a the condition, b what it runs; N_FOR: b */
+    struct node *c;                 /* N_IF: the else part */
     struct node **kids;             /* N_PIPE: the stages */
     int nkids;
-    char **words;                   /* N_SIMPLE: the words as typed */
+    char **words;                   /* N_SIMPLE: the words as typed; N_FOR: the words after in */
     int nwords;
     char **assigns;                 /* N_SIMPLE: name=value words before the command */
     int nassigns;
-    struct redir *redirs;           /* N_SIMPLE, N_GROUP, N_SUB */
+    struct redir *redirs;           /* N_SIMPLE and the compound commands */
+    char *name;                     /* N_FOR: the variable; N_CASE: the word, as typed; N_FUNC: the function */
+    struct case_item *items;        /* N_CASE */
+    int in;                         /* N_FOR: in was there (with words or none) */
 };
 
 enum { PARSE_OK, PARSE_EOF, PARSE_MORE, PARSE_ERROR };
@@ -297,6 +322,28 @@ void var_state(struct sbuf *out);               /* what a new surfsh needs to be
 void pos_set(int n, char **v);
 int pos_shift(int n);                           /* -1: not that many */
 const char *ifs(void);                          /* IFS, or blank, tab and newline when it is not set */
+/* 10/25/26 (scripts) */
+struct pos_saved {
+    char **v;
+    int n;
+};
+void pos_save(struct pos_saved *s);             /* the positional parameters kept, none in their place */
+void pos_restore(struct pos_saved *s);
+int local_mark(void);                           /* a function's call begins: its locals from here */
+int local_keep(const char *name, int mark);     /* local name: put back at local_restore(mark); -1 said */
+void local_restore(int mark);
+extern int opt_e, opt_u, opt_x, opt_f;          /* set -e (errexit), -u (nounset), -x (xtrace), -f (noglob) */
+int option_set(char letter, const char *name, int on);  /* a letter, or a name for -o (name NULL: the letter) */
+const char *options_string(void);               /* $- */
+void options_print(int as_commands);            /* set -o, set +o */
+struct func;
+int func_define(struct node *n);                /* N_FUNC: defined (replacing one of the name); -1 said */
+struct func *func_find(const char *name);
+struct node *func_body(struct func *f);
+void func_hold(struct func *f);                 /* a call runs it: it stays until func_release() */
+void func_release(struct func *f);
+int func_unset(const char *name);               /* 0; 1 when there is no such function */
+void funcs_text(struct sbuf *out);              /* the definitions, each a line (and its here-documents) */
 
 /**** exec.c: the tree runs ****/
 
@@ -305,6 +352,13 @@ const char *ifs(void);                          /* IFS, or blank, tab and newlin
 #define X_BACK    4                 /* in a job in the background: nothing runs in this shell */
 
 int exec_tree(struct node *n, int flags);  /* in this shell: the status */
+/* 10/25/26: break, continue, return and Ctrl+C on their way out: while stopping() the commands between
+   are left; loops (loop_depth of them), functions and . files take what is theirs */
+extern int loop_depth, break_count, continue_count, returning, return_status, func_depth, dot_depth, local_base;
+extern int interrupted, interrupt_said;         /* Ctrl+C stopped a command; something said so already */
+int stopping(void);
+void note_interrupt(int said);                  /* a script ends (130); an interactive shell's line does */
+int check_interrupt(void);                      /* after a command: TTY_INTR's count; interrupted */
 /* a new surfsh that runs text: descriptors 0, 1 (-1: this shell's own), the text on its 3; its pid */
 int start_surfsh(const char *text, int in, int out, int background);
 int exec_capture(const char *text, struct sbuf *out);  /* $( text ): its output, the newlines at its end off; its status */
@@ -336,10 +390,26 @@ void jobs_set_last(int pid);        /* a new surfsh's $!: the one of the shell t
 struct builtin {
     const char *name, *args, *help;
     int (*fn)(int argc, char **argv);
+    int special;                    /* 10/25/26: POSIX's special builtins come before functions */
 };
 
 extern const struct builtin builtins[];
 extern const int nbuiltins;
+/* 10/25/26: script.c, test.c, printf.c */
+int b_colon(int argc, char **argv);
+int b_false(int argc, char **argv);
+int b_break(int argc, char **argv);
+int b_continue(int argc, char **argv);
+int b_return(int argc, char **argv);
+int b_local(int argc, char **argv);
+int b_eval(int argc, char **argv);
+int b_dot(int argc, char **argv);
+int b_read(int argc, char **argv);
+int b_kernel(int argc, char **argv);
+int b_test(int argc, char **argv);
+int test_eval(int n, char **v);                 /* test's arguments: 0 true, 1 false, 2 said */
+int b_printf(int argc, char **argv);
+int printf_text(struct sbuf *out, int argc, char **argv);   /* format and args: 0, 1, 2 (said) */
 const struct builtin *builtin_find(const char *name);
 
 #endif

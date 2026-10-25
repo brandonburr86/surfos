@@ -24,7 +24,9 @@ without its shortest or longest beginning that the pattern matches, ${name%patte
 ${name%%pattern} without its end. $1 ... $9 and ${10} ...; $# how many; $@ and $* all of them:
 "$@" one field each (none when there are none), "$*" one field, joined by IFS's first
 character, unquoted both split; $? the last status; $$ this shell's pid; $! the last job's;
-$0 the shell's name; $- the options (none yet). A $ before anything else is itself.
+$0 the shell's name; $- the options (10/25/26: set -e -f -u -x, and i in an interactive shell).
+A $ before anything else is itself. 10/25/26: with set -u a parameter that is not set is an
+error ($@ and $* never are, nor the ${x-...} forms), and with set -f nothing is a pattern.
 
 Command substitution: the command's output, its newlines at the end taken off (exec.c runs
 it: a plain program by itself, anything else in a new surfsh). $(( ... )): the text is
@@ -161,13 +163,20 @@ static const char *special(const char *name) {
     if(!strcmp(name, "$")) return snprintf(numbuf, sizeof(numbuf), "%d", shell_pid), numbuf;
     if(!strcmp(name, "!")) return jobs_last_pid() ? (snprintf(numbuf, sizeof(numbuf), "%d", jobs_last_pid()), numbuf) : NULL;
     if(!strcmp(name, "#")) return snprintf(numbuf, sizeof(numbuf), "%d", npos), numbuf;
-    if(!strcmp(name, "-")) return "";
+    if(!strcmp(name, "-")) return options_string();
     if(!strcmp(name, "0")) return arg0;
     if(isdigit((unsigned char)name[0])) {
         long k = strtol(name, NULL, 10);
         return k >= 1 && k <= npos ? posargs[k - 1] : NULL;
     }
     return var_get(name);
+}
+
+/* 10/25/26: $name or ${name}'s value: NULL when it is not set, which set -u makes an error */
+static const char *value_of(struct ex *e, const char *name) {
+    const char *v = special(name);
+    if(!v && opt_u) fail(e, "%s: not set", name, NULL);
+    return v;
 }
 
 /* $@ and $* (at is '@' or '*'), in or out of double quotes */
@@ -244,7 +253,8 @@ static int braced(struct ex *e, const char *w, int len, int dq) {
         memcpy(name, w + 1, (size_t)(len - 1));
         name[len - 1] = 0;
         if(!strcmp(name, "@") || !strcmp(name, "*")) snprintf(numbuf, sizeof(numbuf), "%d", npos);
-        else snprintf(numbuf, sizeof(numbuf), "%d", (v = special(name)) ? utf8_chars(v) : 0);
+        else if((v = value_of(e, name)) || !e->failed) snprintf(numbuf, sizeof(numbuf), "%d", v ? utf8_chars(v) : 0);
+        else return -1;
         put_value(e, numbuf, dq);
         return 0;
     }
@@ -258,7 +268,8 @@ static int braced(struct ex *e, const char *w, int len, int dq) {
     name[n] = 0;
     if(n == len) {                                  /* ${name} */
         if(!strcmp(name, "@") || !strcmp(name, "*")) put_all(e, name[0], dq);
-        else put_value(e, special(name), dq);
+        else if(!(v = value_of(e, name)) && e->failed) return -1;
+        else put_value(e, v, dq);
         return 0;
     }
     if(w[n] == ':' && n + 1 < len && strchr("-=?+", w[n + 1])) {
@@ -396,7 +407,11 @@ static int dollar(struct ex *e, const char *w, int i, int len, int dq) {
         memcpy(name, w + p, (size_t)n);
         name[n] = 0;
         if(!strcmp(name, "@") || !strcmp(name, "*")) put_all(e, name[0], dq);
-        else put_value(e, special(name), dq);
+        else {
+            const char *v = value_of(e, name);
+            if(e->failed) return -1;
+            put_value(e, v, dq);
+        }
         return p + n;
     }
     xw_put(&e->cur, "$", 1, dq ? XF_QUOTED : e->lit);  /* a $ before anything else is itself */
@@ -476,7 +491,7 @@ static void emit(struct xw *field, struct fields *out) {
     char *q = xmalloc((size_t)field->s.len + 1);
     int j;
     for(j = 0; j < field->s.len; j++) q[j] = field->f[j] == XF_QUOTED;
-    if(!has_pattern(sb_str(&field->s), q, field->s.len) || !glob_field(sb_str(&field->s), q, field->s.len, out))
+    if(opt_f || !has_pattern(sb_str(&field->s), q, field->s.len) || !glob_field(sb_str(&field->s), q, field->s.len, out))
         fields_take(out, xstrdup(sb_str(&field->s)));
     free(q);
     field->s.len = 0;

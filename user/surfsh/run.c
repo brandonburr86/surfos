@@ -25,6 +25,11 @@ the kernel killed counts as 137 ("[pid n killed]"). Those lines come after pagin
 q at --More-- does not hide them. A program started in the background (SPAWN_BG) is not in
 the foreground of the terminal: Ctrl+C there does not reach it. The pager pages every line
 typed at the prompt (main.c).
+
+10/25/26 (scripts): a program that Ctrl+C killed counts as 130 (waitx says so), as does a kernel
+command it cut short, and the rest of the line, loop or script is left (exec.c). A file that
+is neither a program nor a #! script (the kernel answers ENOEXEC) runs as a surfsh script, as
+POSIX's shells do; a #! line that names something that cannot run is said as such.
 */
 
 #include "surfsh.h"
@@ -81,6 +86,7 @@ int run_kernel(char **argv, int *found) {
         fprintf(stderr, "surfsh: %s: %s\n", argv[0], strerror(e));
         return STATUS_FAIL;
     }
+    if(r == KCMD_INTERRUPTED) note_interrupt(1);    /* 10/25/26: cut short by Ctrl+C, which it said */
     return r;
 }
 
@@ -186,9 +192,25 @@ static int fd_for_child(int fd, int mine) {
     return fstat(mine, &st) == 0 ? mine : SPAWN_CLOSED;
 }
 
+/* 10/25/26: the interpreter a file's #! line names, in line; 0 when it has no #! */
+static int hashbang(const char *path, char *line, int size) {
+    int fd = open(path, O_RDONLY), n, i;
+    if(fd < 0) return 0;
+    n = (int)read(fd, line, (size_t)size - 1);
+    close(fd);
+    if(n < 2 || line[0] != '#' || line[1] != '!') return 0;
+    line[n] = 0;
+    for(i = 2; line[i] == ' ' || line[i] == '\t'; i++);
+    memmove(line, line + i, strlen(line + i) + 1);
+    for(i = 0; line[i] && line[i] != ' ' && line[i] != '\t' && line[i] != '\n' && line[i] != '\r'; i++);
+    line[i] = 0;
+    return 1;
+}
+
 int start_program(const char *path, char **argv, int in, int out, int background, char **env) {
     struct spawnx o;
-    int pid;
+    char line[128];
+    int pid, e;
     memset(&o, 0, sizeof(o));
     o.fds[0] = fd_for_child(in, 0);
     o.fds[1] = fd_for_child(out, 1);
@@ -198,7 +220,23 @@ int start_program(const char *path, char **argv, int in, int out, int background
     o.flags = background ? SPAWN_BG : 0;
     fflush(stdout);
     pid = spawnx(path, argv, &o);
-    if(pid < 0) fprintf(stderr, "surfsh: %s: %s\n", argv[0], strerror(errno));
+    e = errno;
+    if(pid < 0 && (e == ENOEXEC || e == ENOENT || e == EACCES) && hashbang(path, line, sizeof(line))) {
+        fprintf(stderr, "surfsh: %s: its #! line names %s, which cannot run: %s\n", argv[0], line[0] ? line : "nothing",
+                strerror(e == ENOEXEC ? ENOEXEC : e));
+        return -1;
+    }
+    if(pid < 0 && e == ENOEXEC) {               /* a script without #!: a new surfsh runs it */
+        char *sargv[MAX_WORDS + 2];
+        int i;
+        sargv[0] = "surfsh";
+        sargv[1] = (char *)path;
+        for(i = 1; argv[i] && i < MAX_WORDS; i++) sargv[i + 1] = argv[i];
+        sargv[i + 1] = NULL;
+        pid = spawnx(SURFSH_PATH, sargv, &o);
+        e = errno;
+    }
+    if(pid < 0) fprintf(stderr, "surfsh: %s: %s\n", argv[0], strerror(e));
     return pid;
 }
 
@@ -211,16 +249,25 @@ static void say(const char *fmt, int n) {
     if(was) page(1);
 }
 
+/* 10/25/26: waitx says how it ended: one Ctrl+C killed is 130 and stops the rest (exec.c) */
 int wait_program(int pid, int report) {
-    int status = 0;
-    if(waitpid(pid, &status, 0) != pid) {
+    struct waitx w;
+    int r;
+    while((r = waitx(pid, &w, 0)) < 0 && errno == EINTR)
+        note_interrupt(0);                      /* a Ctrl+C for this shell alone: the program is waited for still */
+    if(r != pid) {
         fprintf(stderr, "surfsh: waiting for %d: %s\n", pid, strerror(errno));
         return STATUS_FAIL;
     }
-    if(status == -1) {
+    if(w.how != WX_EXITED) {
         if(report) say("[pid %d killed]\n", pid);
-        return STATUS_KILLED;
+        if(w.how == WX_KILLED) return STATUS_KILLED;
+        note_interrupt(report);
+        return STATUS_INTERRUPTED;
     }
-    if(status && report) say("[exit status %d]\n", status);
-    return status;
+    if(w.status && report) {
+        say("[exit status %d]\n", w.status);
+        if(w.status == STATUS_INTERRUPTED) interrupt_said = 1;     /* a script Ctrl+C ended */
+    }
+    return w.status;
 }

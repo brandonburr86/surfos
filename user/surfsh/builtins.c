@@ -20,8 +20,15 @@ be in a pipeline (in a new surfsh, unless they are its last stage).
                       set -- [args]: the positional parameters
     export [name[=value]...]    programs get these variables (none, or -p: the list)
     readonly [name[=value]...]  these variables cannot change any more (none, or -p: the list)
-    unset name...     the variables are gone
+    unset name...     the variables are gone (unset -f: the functions)
     shift [n]         $n+1 becomes $1 (1)
+
+10/25/26 (scripts): the builtins of script.c (: true false break continue return local eval
+. source read kernel), test.c (test and [) and printf.c are in the table too, and exec, which
+exec.c carries out itself. POSIX's special builtins (: . break continue eval exec exit export
+readonly return set shift unset) come before a function of the same name, the others after
+it. set also takes POSIX's options: set -e -u -x -f, +e ... to end them, -o NAME / +o NAME,
+set -o and set +o to list them, and set -e -- args.
 */
 
 #include "surfsh.h"
@@ -40,17 +47,34 @@ static int b_unset(int argc, char **argv);
 static int b_shift(int argc, char **argv);
 
 const struct builtin builtins[] = {
-    { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd },
-    { "pwd",     "",              "print the current directory", b_pwd },
-    { "echo",    "[-n] [-e] ...", "print the words (-n: no newline, -e: \\n \\r \\t \\\\)", b_echo },
-    { "history", "",              "the lines typed before (Up and Down recall them)", b_history },
-    { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set },
-    { "help",    "[command]",     "this list, or one command", b_help },
-    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit },
-    { "export",  "[name[=value]...]", "programs get these variables (none: the list)", b_export },
-    { "readonly", "[name[=value]...]", "these variables can no longer change (none: the list)", b_readonly },
-    { "unset",   "name...",       "the variables are gone", b_unset },
-    { "shift",   "[n]",           "the positional parameters move down by n (1)", b_shift },
+    { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd, 0 },
+    { "pwd",     "",              "print the current directory", b_pwd, 0 },
+    { "echo",    "[-n] [-e] ...", "print the words (-n: no newline, -e: \\n \\r \\t \\\\)", b_echo, 0 },
+    { "history", "",              "the lines typed before (Up and Down recall them)", b_history, 0 },
+    { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set, 1 },
+    { "help",    "[command]",     "this list, or one command", b_help, 0 },
+    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit, 1 },
+    { "export",  "[name[=value]...]", "programs get these variables (none: the list)", b_export, 1 },
+    { "readonly", "[name[=value]...]", "these variables can no longer change (none: the list)", b_readonly, 1 },
+    { "unset",   "[-f] name...",  "the variables are gone (-f: the functions)", b_unset, 1 },
+    { "shift",   "[n]",           "the positional parameters move down by n (1)", b_shift, 1 },
+    /* 10/25/26: scripts */
+    { "test",    "expression",    "true or false: -e -f -d -s file, -n -z s, s = s, n -lt n, ! -a -o ( )", b_test, 0 },
+    { "[",       "expression ]",  "the same as test", b_test, 0 },
+    { "true",    "",              "status 0 (: too)", b_colon, 0 },
+    { "false",   "",              "status 1", b_false, 0 },
+    { ":",       "[args]",        "nothing, status 0", b_colon, 1 },
+    { "read",    "[-r] [name...]", "a line of input into the variables (split at IFS; REPLY)", b_read, 0 },
+    { "printf",  "format [args]", "the arguments as the format says (%s %d %x %c %b, \\n ...)", b_printf, 0 },
+    { "break",   "[n]",           "leave the loop (n of them)", b_break, 1 },
+    { "continue", "[n]",          "the loop's next round", b_continue, 1 },
+    { "return",  "[n]",           "leave the function or the . file, with status n", b_return, 1 },
+    { "local",   "name[=value]...", "the function's own variables", b_local, 0 },
+    { "eval",    "[args]",        "the arguments as a command line", b_eval, 1 },
+    { ".",       "file [args]",   "the commands of the file, in this shell", b_dot, 1 },
+    { "source",  "file [args]",   "the same as .", b_dot, 0 },
+    { "exec",    "[cmd [args]]",  "cmd, and then this shell ends; alone: its redirections stay", b_colon, 1 },
+    { "kernel",  "name [args]",   "the kernel's command name, where surfsh has its own", b_kernel, 0 },
 };
 const int nbuiltins = sizeof(builtins) / sizeof(builtins[0]);
 
@@ -177,21 +201,59 @@ static int b_history(int argc, char **argv) {
     return history_print();
 }
 
+/* 10/25/26: set -e -u -x -f (+ to end them), -o name, +o name, and then -- and the positional
+   parameters, or nothing: 0, or a usage status said */
+static int set_options(int argc, char **argv) {
+    int i;
+    for(i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        int on = a[0] == '-';
+        if(!strcmp(a, "--")) {
+            pos_set(argc - i - 1, argv + i + 1);
+            return 0;
+        }
+        if((a[0] != '-' && a[0] != '+') || !a[1]) break;
+        if(a[1] == 'o' && !a[2]) {
+            if(i + 1 == argc) {
+                options_print(!on);
+                return 0;
+            }
+            if(option_set(0, argv[++i], on) < 0) {
+                fprintf(stderr, "surfsh: set: no option called %s (set -o lists them)\n", argv[i]);
+                return STATUS_USAGE;
+            }
+            continue;
+        }
+        for(a++; *a; a++) {
+            if(option_set(*a, NULL, on) < 0) {
+                fprintf(stderr, "surfsh: set: -%c: not an option (-e -u -x -f, -o name)\n", *a);
+                return STATUS_USAGE;
+            }
+        }
+    }
+    if(i < argc) {
+        fprintf(stderr, "surfsh: set: %s: options come first, then -- and the positional parameters\n", argv[i]);
+        return STATUS_USAGE;
+    }
+    return 0;
+}
+
 /* set, set key, set key value; with an = the words are "key = value" as surfsh.conf has them.
    10/24/26: set alone lists the variables too, and set -- the positional parameters */
 static int b_set(int argc, char **argv) {
     char why[120], text[LINE_LIMIT + 1] = "", *key = argv[1], *value = argc == 3 ? argv[2] : NULL, *eq, *p;
     int i;
     if(argc == 1) {
+        struct sbuf f = { NULL, 0, 0 };
         settings_show(NULL);
         printf("\n");
         vars_print(0);
+        funcs_text(&f);                         /* 10/25/26: and the functions */
+        if(f.len) printf("%s", sb_str(&f));
+        sb_free(&f);
         return 0;
     }
-    if(!strcmp(argv[1], "--")) {
-        pos_set(argc - 2, argv + 2);
-        return 0;
-    }
+    if(argv[1][0] == '-' || (argv[1][0] == '+' && argv[1][1])) return set_options(argc, argv);
     for(i = 1; i < argc; i++) {
         strlcat(text, argv[i], sizeof(text));
         if(i < argc - 1) strlcat(text, " ", sizeof(text));
@@ -251,12 +313,18 @@ static int b_readonly(int argc, char **argv) {
 }
 
 static int b_unset(int argc, char **argv) {
-    int i = 1, status = 0;
+    int i = 1, status = 0, funcs = 0;
     if(i < argc && !strcmp(argv[i], "-v")) i++;
+    else if(i < argc && !strcmp(argv[i], "-f")) {  /* 10/25/26: functions */
+        funcs = 1;
+        i++;
+    }
     for(; i < argc; i++) {
         if(!is_name(argv[i], (int)strlen(argv[i]))) {
             fprintf(stderr, "surfsh: unset: %s: not a name\n", argv[i]);
             status = STATUS_FAIL;
+        } else if(funcs) {
+            func_unset(argv[i]);
         } else if(var_unset(argv[i]) < 0) {
             status = STATUS_FAIL;
         }
@@ -398,10 +466,17 @@ static int b_help(int argc, char **argv) {
            "                     of those; quoted (\"*\") a star is just a star\n"
            "      $? $$ $!       the status of the command before, this shell's pid, the\n"
            "                     last job's; $0 $1 $# \"$@\": the name, the arguments\n"
-           "    A line that ends with | or && (or inside quotes, or in a group) goes on\n"
-           "    in the next one, after the prompt %s.\n"
-           "    Which command runs: surfsh's own, then the kernel's, then a program of\n"
-           "    PATH's directories (%s); a name with a / is the path of a program.\n",
+           "      if a; then b; elif c; then d; else e; fi   b when a succeeded, ...\n"
+           "      while a; do b; done   b again while a succeeds (until a: until it does)\n"
+           "      for x in w1 w2; do b; done   b with x each of the words in turn\n"
+           "      case $x in a|b) c;; *) d;; esac   the first pattern that x matches\n"
+           "      f() { b; }     a function: f runs b, with $1 ... its arguments\n"
+           "      surfsh file    the commands of the file, a script (a first line\n"
+           "                     #!/initrd/bin/surfsh lets it run by its name)\n"
+           "    A line that ends with | or && (or inside quotes, an if, a loop, a group)\n"
+           "    goes on in the next one, after the prompt %s.\n"
+           "    Which command runs: a function or surfsh's own, then the kernel's, then a\n"
+           "    program of PATH's directories (%s); a name with a / is a program's path.\n",
            use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
     printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
            "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"

@@ -10,8 +10,17 @@ its end):
     list       and-or lists separated by ; and &              a & b ; c
     and-or     pipelines joined by && and ||, left to right   a && b || c
     pipeline   commands joined by |, perhaps ! first          ! a | b | c
-    command    a simple command, { list ; } or ( list ) with redirections after them
+    command    a simple command, a compound command with redirections after it, or a
+               function's definition
     simple     words, name=value words before them, and redirections anywhere among them
+    compound   { list ; }   ( list )   if list then list [elif list then list]... [else list] fi
+               while list do list done   until list do list done
+               for name [in word...] ; do list done   case word in [(]pattern[|pattern]...) list ;; ... esac
+    function   name ( ) compound  (10/25/26, with the compound commands)
+
+if then else elif fi do done case esac while until for { } and ! are reserved words where a
+command's name would be, unquoted; in only after for's name and case's word. A list inside a
+compound command goes on over newlines up to the reserved word that ends it.
 
 Words are kept as typed, quotes and all; expand.c makes fields of them when the command
 runs, so $? is always the status of the command just before. The scanner finds where a word
@@ -55,11 +64,13 @@ struct heredoc {
     int strip;                      /* <<-: the tabs at the front of its lines go */
 };
 
-enum { LIST_TOP, LIST_GROUP, LIST_SUB };     /* what ends a list: a newline, a }, a ) */
+/* what ends a list: a newline; a ); one of the reserved words given; ;; or esac (an item of a case,
+   which may be empty) */
+enum { LIST_TOP, LIST_SUB, LIST_WORDS, LIST_CASE };
 
 static int peek(struct parser *p);
 static void take(struct parser *p);
-static struct node *parse_list(struct parser *p, int kind);
+static struct node *parse_list(struct parser *p, int kind, const char *const *ends);
 static int skip_dollar(struct parser *p, int i);
 
 /**** names, words, lines ****/
@@ -213,7 +224,7 @@ static int skip_subst(struct parser *p, int i) {
     sub.line = line_at(p, i);
     sub.lpos = i;
     while(peek(&sub) == T_NEWLINE) take(&sub);
-    if(peek(&sub) == T_RPAREN || (parse_list(&sub, LIST_SUB) && peek(&sub) == T_RPAREN)) {
+    if(peek(&sub) == T_RPAREN || (parse_list(&sub, LIST_SUB, NULL) && peek(&sub) == T_RPAREN)) {
         take(&sub);
         end = sub.pos;
     } else if(!sub.status) {
@@ -544,6 +555,32 @@ static struct node *parse_simple(struct parser *p) {
     return n;
 }
 
+static const char *const to_brace[] = { "}", NULL }, *const to_then[] = { "then", NULL },
+                         *const to_else[] = { "elif", "else", "fi", NULL }, *const to_fi[] = { "fi", NULL },
+                         *const to_do[] = { "do", NULL }, *const to_done[] = { "done", NULL },
+                         *const to_esac[] = { "esac", NULL };
+
+/* the reserved words that end a part of a compound command: never a command's name */
+static const char *const closers[] = { "then", "else", "elif", "fi", "do", "done", "esac", NULL };
+
+static int is_closer(struct parser *p) {
+    int i;
+    for(i = 0; closers[i]; i++) if(is_word(p, closers[i])) return 1;
+    return 0;
+}
+
+/* the reserved word w must come next: taken, 1; else 0, with what is open (the text ended) or wrong */
+static int expect_word(struct parser *p, const char *w, const char *open) {
+    if(is_word(p, w)) {
+        take(p);
+        return 1;
+    }
+    if(p->status) return 0;
+    if(peek(p) == T_EOF) open_at_end(p, open);
+    else syntax(p, p->look.start, "unexpected %s where %s was to come", what_comes(p), w);
+    return 0;
+}
+
 /* { list ; } and ( list ): the list, the closing token, the redirections after it */
 static struct node *parse_compound(struct parser *p, int type) {
     struct node *n = new_node(p, type);
@@ -554,7 +591,7 @@ static struct node *parse_compound(struct parser *p, int type) {
         syntax(p, at, type == N_GROUP ? "a { } group needs a command in it" : "a ( ) needs a command in it");
         return NULL;
     }
-    n->a = parse_list(p, type == N_GROUP ? LIST_GROUP : LIST_SUB);
+    n->a = type == N_GROUP ? parse_list(p, LIST_WORDS, to_brace) : parse_list(p, LIST_SUB, NULL);
     if(!n->a) return NULL;
     if(type == N_GROUP ? !is_word(p, "}") : peek(p) != T_RPAREN) {
         if(peek(p) == T_EOF && !p->status) open_at_end(p, type == N_GROUP ? "a { group is not closed with }" : "a ( is not closed");
@@ -564,6 +601,181 @@ static struct node *parse_compound(struct parser *p, int type) {
     take(p);
     if(parse_redirs(p, &n->redirs) < 0) return NULL;
     return n;
+}
+
+/* 10/25/26: if list then list [elif list then list]... [else list] fi, and redirections after it */
+static struct node *parse_if(struct parser *p) {
+    struct node *n = new_node(p, N_IF), *cur = n;
+    take(p);                                        /* the if */
+    for(;;) {
+        if(!(cur->a = parse_list(p, LIST_WORDS, to_then)) || !expect_word(p, "then", "an if needs a then") ||
+           !(cur->b = parse_list(p, LIST_WORDS, to_else)))
+            return NULL;
+        if(is_word(p, "elif")) {                    /* the else part is another if */
+            cur->c = new_node(p, N_IF);
+            cur = cur->c;
+            take(p);
+            continue;
+        }
+        if(is_word(p, "else")) {
+            take(p);
+            if(!(cur->c = parse_list(p, LIST_WORDS, to_fi))) return NULL;
+        }
+        if(!expect_word(p, "fi", "an if is not closed with fi")) return NULL;
+        break;
+    }
+    return parse_redirs(p, &n->redirs) < 0 ? NULL : n;
+}
+
+/* do list done, into n->b, and the redirections after it */
+static struct node *parse_do(struct parser *p, struct node *n, const char *open) {
+    if(!expect_word(p, "do", open) || !(n->b = parse_list(p, LIST_WORDS, to_done)) ||
+       !expect_word(p, "done", "a do is not closed with done") || parse_redirs(p, &n->redirs) < 0)
+        return NULL;
+    return n;
+}
+
+/* while list do list done, until list do list done */
+static struct node *parse_loop(struct parser *p, int type) {
+    struct node *n = new_node(p, type);
+    take(p);                                        /* the while or until */
+    if(!(n->a = parse_list(p, LIST_WORDS, to_do))) return NULL;
+    return parse_do(p, n, type == N_WHILE ? "a while needs a do" : "an until needs a do");
+}
+
+/* for name [in word...] (; or a newline) do list done; without in, the words are "$@" */
+static struct node *parse_for(struct parser *p) {
+    struct node *n = new_node(p, N_FOR);
+    struct grow words = { NULL, 0, 0 };
+    take(p);                                        /* the for */
+    if(peek(p) != T_WORD || !is_name(p->src + p->look.start, p->look.end - p->look.start)) {
+        if(p->status) return NULL;
+        if(peek(p) == T_EOF) open_at_end(p, "a for needs a name");
+        else syntax(p, p->look.start, "a for needs a variable's name, not %s", what_comes(p));
+        return NULL;
+    }
+    n->name = token_text(p);
+    take(p);
+    skip_newlines(p);
+    if(is_word(p, "in")) {
+        take(p);
+        n->in = 1;
+        while(peek(p) == T_WORD) {
+            grow_add(&words, token_text(p));
+            take(p);
+        }
+        if(peek(p) != T_SEMI && peek(p) != T_NEWLINE) {
+            free(words.v);
+            if(p->status) return NULL;
+            if(peek(p) == T_EOF) open_at_end(p, "a for needs a do");
+            else syntax(p, p->look.start, "unexpected %s in a for's words", what_comes(p));
+            return NULL;
+        }
+        take(p);
+    } else if(peek(p) == T_SEMI) {
+        take(p);
+    }
+    n->nwords = words.n;
+    n->words = (char **)grow_done(p, &words);
+    skip_newlines(p);
+    return parse_do(p, n, "a for needs a do");
+}
+
+/* case word in [(]pattern[|pattern]...) list ;; ... esac (the last ;; may go) */
+static struct node *parse_case(struct parser *p) {
+    struct node *n = new_node(p, N_CASE);
+    struct case_item **tail = &n->items;
+    take(p);                                        /* the case */
+    if(peek(p) != T_WORD) {
+        if(p->status) return NULL;
+        if(peek(p) == T_EOF) open_at_end(p, "a case needs a word");
+        else syntax(p, p->look.start, "a case needs a word, not %s", what_comes(p));
+        return NULL;
+    }
+    n->name = token_text(p);
+    take(p);
+    skip_newlines(p);
+    if(!expect_word(p, "in", "a case needs in")) return NULL;
+    for(;;) {
+        struct grow pats = { NULL, 0, 0 };
+        struct case_item *it;
+        skip_newlines(p);
+        if(is_word(p, "esac")) break;
+        if(peek(p) == T_LPAREN) take(p);
+        for(;;) {                                   /* pattern | pattern ... ) */
+            int t = peek(p);
+            if(t == T_WORD) {
+                grow_add(&pats, token_text(p));
+                take(p);
+                if((t = peek(p)) == T_PIPE) {
+                    take(p);
+                    continue;
+                }
+                if(t == T_RPAREN) {
+                    take(p);
+                    break;
+                }
+            }
+            free(pats.v);
+            if(p->status) return NULL;
+            if(t == T_EOF) open_at_end(p, "a case is not closed with esac");
+            else syntax(p, p->look.start, "unexpected %s in a case's patterns", what_comes(p));
+            return NULL;
+        }
+        it = arena_alloc(p->mem, sizeof(*it));
+        it->npats = pats.n;
+        it->pats = (char **)grow_done(p, &pats);
+        *tail = it;
+        tail = &it->next;
+        it->body = parse_list(p, LIST_CASE, to_esac);
+        if(p->status) return NULL;
+        if(peek(p) == T_DSEMI) take(p);
+        else if(!is_word(p, "esac")) {
+            if(peek(p) == T_EOF) open_at_end(p, "a case is not closed with esac");
+            else syntax(p, p->look.start, "unexpected %s where ;; was to come", what_comes(p));
+            return NULL;
+        }
+    }
+    take(p);                                        /* the esac */
+    return parse_redirs(p, &n->redirs) < 0 ? NULL : n;
+}
+
+/* name followed by ( ): a function's definition comes */
+static int is_function(struct parser *p) {
+    const char *s = p->src;
+    int i = p->look.end;
+    if(!is_name(s + p->look.start, p->look.end - p->look.start)) return 0;
+    while(BLANK(s[i])) i++;
+    if(s[i] != '(') return 0;
+    for(i++; BLANK(s[i]); i++);
+    return s[i] == ')';
+}
+
+static struct node *parse_cmd(struct parser *p);
+
+/* name ( ) compound-command: the body with its redirections is n->a */
+static struct node *parse_function(struct parser *p) {
+    struct node *n = new_node(p, N_FUNC);
+    int t;
+    n->name = token_text(p);
+    take(p);                                        /* the name, */
+    peek(p);
+    take(p);                                        /* ( */
+    peek(p);
+    take(p);                                        /* ) */
+    skip_newlines(p);
+    t = peek(p);
+    if(p->status) return NULL;
+    if(t == T_EOF) {
+        open_at_end(p, "a function needs a body");
+        return NULL;
+    }
+    if(t != T_LPAREN && !is_word(p, "{") && !is_word(p, "if") && !is_word(p, "while") && !is_word(p, "until") &&
+       !is_word(p, "for") && !is_word(p, "case")) {
+        syntax(p, p->look.start, "a function's body is a { } group or another compound command, not %s", what_comes(p));
+        return NULL;
+    }
+    return (n->a = parse_cmd(p)) ? n : NULL;
 }
 
 static struct node *parse_cmd(struct parser *p) {
@@ -577,6 +789,13 @@ static struct node *parse_cmd(struct parser *p) {
     if(t == T_LPAREN) n = parse_compound(p, N_SUB);
     else if(is_word(p, "{")) n = parse_compound(p, N_GROUP);
     else if(is_word(p, "}")) syntax(p, p->look.start, "} without a { before it");
+    else if(is_word(p, "if")) n = parse_if(p);
+    else if(is_word(p, "while")) n = parse_loop(p, N_WHILE);
+    else if(is_word(p, "until")) n = parse_loop(p, N_UNTIL);
+    else if(is_word(p, "for")) n = parse_for(p);
+    else if(is_word(p, "case")) n = parse_case(p);
+    else if(is_closer(p)) syntax(p, p->look.start, "unexpected %s", what_comes(p));
+    else if(t == T_WORD && is_function(p)) n = parse_function(p);
     else if(t == T_WORD || t == T_REDIR) n = parse_simple(p);
     else if(t == T_EOF) open_at_end(p, "a command is missing");
     else syntax(p, p->look.start, "%s needs a command before it", what_comes(p));
@@ -647,24 +866,29 @@ static struct node *parse_and_or(struct parser *p) {
 }
 
 /* does the token looked at end a list of this kind (it is not taken)? */
-static int list_ends(struct parser *p, int kind) {
-    int t = peek(p);
+static int list_ends(struct parser *p, int kind, const char *const *ends) {
+    int t = peek(p), i;
     if(t == T_EOF) return 1;
     if(kind == LIST_TOP) return t == T_NEWLINE;
     if(kind == LIST_SUB) return t == T_RPAREN;
-    return is_word(p, "}");
+    if(kind == LIST_CASE && t == T_DSEMI) return 1;
+    for(i = 0; ends && ends[i]; i++) if(is_word(p, ends[i])) return 1;
+    return 0;
 }
 
-/* And-or lists separated by ; & (and newlines, inside a group or a ( )): a chain of N_SEQ, a list
-   ending in & is N_BG. A top list ends at a newline (not taken), the others at their } or ). */
-static struct node *parse_list(struct parser *p, int kind) {
+/* And-or lists separated by ; & (and newlines, inside a compound command): a chain of N_SEQ, a list
+   ending in & is N_BG. A top list ends at a newline (not taken), the others at their ), at one of
+   the reserved words in ends, or (an item of a case) at ;; too, and only that one may be empty
+   (NULL, with no reason given) */
+static struct node *parse_list(struct parser *p, int kind, const char *const *ends) {
     struct node *first = NULL, **link = &first;
     for(;;) {
         struct node *n;
         int t;
-        while((t = peek(p)) == T_SEMI || t == T_DSEMI || (kind != LIST_TOP && t == T_NEWLINE)) take(p);   /* empty commands */
-        if(list_ends(p, kind)) {
-            if(first) break;
+        while((t = peek(p)) == T_SEMI || (t == T_DSEMI && kind != LIST_CASE) || (kind != LIST_TOP && t == T_NEWLINE))
+            take(p);                                /* empty commands */
+        if(list_ends(p, kind, ends)) {
+            if(first || (kind == LIST_CASE && !p->status)) break;
             if(peek(p) == T_EOF) open_at_end(p, "a command is missing");
             else syntax(p, p->look.start, "a command is missing before %s", what_comes(p));
             return NULL;
@@ -676,7 +900,7 @@ static struct node *parse_list(struct parser *p, int kind) {
             bg->a = n;
             bg->line = n->line;
             n = bg;
-        } else if(!list_ends(p, kind) && peek(p) != T_SEMI && peek(p) != T_DSEMI && peek(p) != T_NEWLINE) {
+        } else if(!list_ends(p, kind, ends) && peek(p) != T_SEMI && peek(p) != T_DSEMI && peek(p) != T_NEWLINE) {
             if(!p->status) syntax(p, p->look.start, "unexpected %s", what_comes(p));
             return NULL;
         }
@@ -710,7 +934,7 @@ int parse_command(struct parser *p, struct node **out) {
     while((t = peek(p)) == T_NEWLINE || t == T_SEMI || t == T_DSEMI) take(p);
     if(p->status) return p->status;
     if(t == T_EOF) return PARSE_EOF;
-    n = parse_list(p, LIST_TOP);
+    n = parse_list(p, LIST_TOP, NULL);
     if(!n) return p->status ? p->status : PARSE_ERROR;
     t = peek(p);                                    /* a newline (its here-documents are read), or the end */
     if(p->status) return p->status;

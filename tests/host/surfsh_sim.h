@@ -24,5 +24,8 @@ int sh_arith(const char *text, long *result, char *err, int errsize);
 void sh_tree(const char *const *names);
 /* one word as one string (expand_one), and a here-document's text: -1 on an error */
 int sh_expand_one(const char *word, char *out, int size);
+/* 10/25/26: test's arguments (0 true, 1 false, 2 a mistake), and printf's output: its status */
+int sh_test(int n, char **v);
+int sh_printf(int n, const char *const *args, char *out, int size);
 
 #endif

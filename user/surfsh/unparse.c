@@ -8,6 +8,9 @@ given to run (exec.c: a stage of a pipeline, a job in the background, a ( list )
 are as they were typed, quotes and all, so that the new surfsh expands them itself. It is
 all one line, and the here-documents' lines come after it, each document ending in its end
 line, as the parser reads them after the next newline.
+
+10/25/26: the compound commands (if, while, until, for, case) and functions' definitions;
+a function is kept as this text (vars.c) and given to a new surfsh so.
 */
 
 #include "surfsh.h"
@@ -48,6 +51,12 @@ static void put_list(struct node *n, struct sbuf *b, struct sbuf *docs) {
 static int ends_in_bg(struct node *n) {
     while(n->type == N_SEQ) n = n->b;
     return n->type == N_BG;
+}
+
+/* a list inside a compound command, and what ends it before the next reserved word */
+static void put_body(struct node *n, struct sbuf *b, struct sbuf *docs) {
+    put_list(n, b, docs);
+    sb_puts(b, ends_in_bg(n) ? " " : "; ");
 }
 
 static void put(struct node *n, struct sbuf *b, struct sbuf *docs) {
@@ -98,6 +107,79 @@ static void put(struct node *n, struct sbuf *b, struct sbuf *docs) {
         put_list(n->a, b, docs);
         sb_puts(b, " )");
         put_redirs(n->redirs, b, docs, 1);
+        break;
+    case N_IF: {
+        struct node *c = n;
+        sb_puts(b, "if ");
+        for(;;) {
+            put_body(c->a, b, docs);
+            sb_puts(b, "then ");
+            put_body(c->b, b, docs);
+            if(c->c && c->c->type == N_IF && !c->c->redirs) {   /* else if ...; fi is elif */
+                c = c->c;
+                sb_puts(b, "elif ");
+                continue;
+            }
+            if(c->c) {
+                sb_puts(b, "else ");
+                put_body(c->c, b, docs);
+            }
+            break;
+        }
+        sb_puts(b, "fi");
+        put_redirs(n->redirs, b, docs, 1);
+        break;
+    }
+    case N_WHILE:
+    case N_UNTIL:
+        sb_puts(b, n->type == N_WHILE ? "while " : "until ");
+        put_body(n->a, b, docs);
+        sb_puts(b, "do ");
+        put_body(n->b, b, docs);
+        sb_puts(b, "done");
+        put_redirs(n->redirs, b, docs, 1);
+        break;
+    case N_FOR:
+        sb_puts(b, "for ");
+        sb_puts(b, n->name);
+        if(n->in) {
+            sb_puts(b, " in");
+            for(i = 0; i < n->nwords; i++) {
+                sb_putc(b, ' ');
+                sb_puts(b, n->words[i]);
+            }
+        }
+        sb_puts(b, "; do ");
+        put_body(n->b, b, docs);
+        sb_puts(b, "done");
+        put_redirs(n->redirs, b, docs, 1);
+        break;
+    case N_CASE: {
+        struct case_item *it;
+        sb_puts(b, "case ");
+        sb_puts(b, n->name);
+        sb_puts(b, " in");
+        for(it = n->items; it; it = it->next) {
+            sb_puts(b, " (");
+            for(i = 0; i < it->npats; i++) {
+                if(i) sb_putc(b, '|');
+                sb_puts(b, it->pats[i]);
+            }
+            sb_puts(b, ") ");
+            if(it->body) {
+                put_list(it->body, b, docs);
+                sb_putc(b, ' ');
+            }
+            sb_puts(b, ";;");
+        }
+        sb_puts(b, " esac");
+        put_redirs(n->redirs, b, docs, 1);
+        break;
+    }
+    case N_FUNC:
+        sb_puts(b, n->name);
+        sb_puts(b, "() ");
+        put(n->a, b, docs);
         break;
     }
 }
