@@ -441,7 +441,12 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   and `vfs_busy()` says who: an open file or directory and its task, a command using it
   right now, or the current directory, of the asking task only. Unmounting syncs the file
   system, writes its blocks, flushes the device's cache (`bdev_flush()`), drops its cached
-  blocks and lets go of the device.
+  blocks and lets go of the device. **Storage milestone 1** (10/24/26): the last close of a
+  written file returns EIO when it did not reach the disk, as `fsync` does (it returned 0
+  whatever happened); `umount` says how many changed blocks it gave up because they could
+  not be written (`vfs_umount_lost()`), and `eject` writes every mount out first, unmounts
+  nothing when that fails, and takes the disk from its first step to its last
+  (`vfs_claim_disk()`), so no mount of a partition comes in meanwhile.
 * `fs/bcache.c`: 128 cached blocks (until the storage work), LRU, write-back. `bsync()`
   runs when a written file is closed, after `mkdir`/`unlink`/`rmdir` (and `rename`,
   through the file system's `sync`, which for FAT writes FSInfo too), on `sync` and at
@@ -456,7 +461,18 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   bounce buffer, coherent with the cached copies (FAT sends whole-block runs of 8 KB or
   more that way). An unplugged device's blocks are never served again, its dirty blocks
   are dropped instead of written, and a block still held when it went is dropped when it
-  is released.
+  is released. **Storage milestone 1** (10/24/26, the SurfCPU branch's B1-B41 where x86
+  needs them): a block whose write failed stays dirty for the next sync and is never
+  reused before; a device that refuses writes keeps at most a quarter of the cache, and its
+  file system's writes fail once it holds that much (`bcache_room()`). Blocks carry the
+  order a file system gives them (`bdirty_order()`: FAT's data 0, tables 1, directory
+  entries 2, FSInfo 3); one of order k reaches its device only when the device has no dirty
+  block of a lower order, checked where every write is issued, and a block someone holds is
+  not written while one being written is not handed out, so what reaches the device is what
+  was checked. `bsync()` returns 0 only when every block dirty when it began reached the
+  device. A refused straight write changes nothing in the cache. `tests/host/test_fatfs.c`
+  runs this file and `fs/fat.c` over RAM disks that refuse writes and are pulled out at
+  every write.
 * `fs/tarfs.c`: a ustar archive on a block device, read-only; the tree is built at
   mount time (GNU long names supported), data is read through the cache.
 * `fs/fat.c`: FAT12/16/32 by cluster count, VFAT long names on read and write,
@@ -474,7 +490,21 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   Windows check a stick that was pulled out while mounted, and SurfOS's own mount warns
   about one (`+FAT32: ... was not unmounted cleanly`). A read-only mount writes nothing; once the
   device is unplugged every operation fails with EIO and the volume can still be
-  unmounted.
+  unmounted. **Storage milestone 1** (10/24/26): what an operation changes reaches the disk
+  in an order a pulled stick leaves repairable. Taking away needs the reverse of the cache's
+  order, so an operation that frees clusters syncs in between (an order point): an entry is
+  off the disk before its clusters are freed, a cut before the clusters past it, a new name
+  before the old one goes; a link into a new cluster waits for that cluster's own FAT entry
+  when they are in different FAT sectors. An order point that fails puts back what the
+  operation changed and it says EIO (nothing changed); an undo that cannot be done leaves
+  the volume read-only until unmounted. A rename over a file (a save) takes the moved name
+  away first and then changes the replaced file's entry in place, so the name holds a whole
+  file, old or new, at every moment on the disk, and no two names ever share a chain; a
+  chain another entry of the same directory holds (two names on one chain, as an
+  interrupted rename leaves them) is never freed or cut for one of them. A write that stops
+  early gives back the clusters it linked past the file's end. A volume that was not marked
+  clean when it was mounted, or that this mount damaged or lost clusters on, stays marked
+  as not cleanly unmounted: only a checker clears the mark.
 * `fs/fat_mkfs.c` (**ai-dev**): `mkfs`, a new and empty FAT16 or FAT32 volume laid out as
   Microsoft's FAT specification (fatgen103) and Windows do it, so macOS, Windows and Linux
   take it as one of their own. FAT16 below 512 MB, FAT32 from 512 MB (or on request, down
@@ -618,7 +648,11 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   care: the shell's `rm`, `mv` and `cp`, `rx`'s rename over a file with a `.tmp` twin, a
   stick mounted again under another path, and a `.tmp` of which only the 8.3 alias was
   left. The real fix is in `fs/fat.c` (not freeing a chain that another entry still holds;
-  ROADMAP.md section 7). `tests/host/test_edit.c` and `test_rx.c` run `edit.c` and `rx.c`
+  ROADMAP.md section 7), made by storage milestone 1 (10/24/26): a rename that fails no longer
+  leaves such a pair, nor does a rename over a file cut short (every save), and an `rm`, a
+  `mv` over either name or a truncate to 0 keeps the chain for the other name of a pair in
+  one directory (a plain rename cut short between its new name and its old one's removal
+  still leaves one); the care above stays for the pairs older SurfOS and other systems left. `tests/host/test_edit.c` and `test_rx.c` run `edit.c` and `rx.c`
   as they are on an in-memory file system that fails on demand (`tests/host/sim_fs.c`). The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that

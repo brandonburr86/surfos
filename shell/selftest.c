@@ -971,7 +971,10 @@ static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     return 0;
 }
 
+static bool ram_refuse;                              /* 10/24/26 (B10): the test's RAM disks refuse every write */
+
 static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
+    if(ram_refuse) return BDEV_EIO;
     memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
     return 0;
 }
@@ -1023,6 +1026,59 @@ static void test_fat_unplug(void) {
     check(r == 0 && file_is("/selftest-stick/kept.txt", "written before") && (mem[512 + 3] & 0x80) == 0,
           "plugged in again: the file written before is there, the volume says not cleanly unmounted");
     if(r == 0) vfs_umount("/selftest-stick");
+    if(d2) { binvalidate(d2); kfree(d2); }
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/24/26 (storage, milestone 1; the SurfCPU branch's audit B2, B5, B10): a stick that starts refusing every write.
+   A save made then (a new file, its close, then the rename edit would do only if the close said 0) says EIO at the
+   close, which said nothing before (cp and edit reported a save that was only in the cache); an rm and a mv of the
+   file already there say EIO and change nothing; eject unmounts nothing; umount gives the blocks up and says how
+   many; and the stick, read again, holds the file written before, whole, and is marked as not cleanly unmounted.
+   The stick is registered for eject to find it (stick8), and unregistered at the end */
+static void test_fat_refused(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL, *d2 = NULL;
+    struct file *f;
+    struct stat st;
+    char msg[160], arg0[8] = "eject", arg1[8] = "stick8", *argv[2] = { arg0, arg1 };
+    u_int lost = 0;
+    int r, c = 0;
+    if(!d) { check(false, "refused writes: 4 MB of memory"); kfree(mem); return; }
+    strlcpy(d->name, "stick8", sizeof(d->name));
+    if(bdev_find("stick8") || bdev_register(d) != 0) {
+        printf("  skip refused writes (a device named stick8 is there already)\n");
+        kfree(d); kfree(mem);
+        return;
+    }
+    r = fat_mkfs(d, "REFUSED", 0, msg, sizeof(msg));
+    check(r == 0 && (r = vfs_mount_flags(d, "/selftest-refused", "fat", 0)) == 0 &&
+          (r = put_file("/selftest-refused/notes.txt", "the old notes")) == 0, "refused writes: a RAM stick with a file on it");
+    if(r) { vfs_umount("/selftest-refused"); bdev_unregister(d); kfree(d); kfree(mem); return; }
+    ram_refuse = true;
+    r = vfs_open("/selftest-refused/notes.txt.tmp", O_WRONLY | O_CREAT | O_EXCL, &f);
+    if(r == 0) {
+        r = vfs_write(f, "the new notes", 13) == 13 ? 0 : -EIO;
+        c = vfs_close(f);
+    }
+    check(r == 0 && c == -EIO, "refused writes: a save's new file goes into the cache, and its close says EIO");
+    check(vfs_unlink("/selftest-refused/notes.txt") == -EIO && vfs_rename("/selftest-refused/notes.txt",
+          "/selftest-refused/n2.txt") == -EIO && file_is("/selftest-refused/notes.txt", "the old notes") &&
+          vfs_stat("/selftest-refused/n2.txt", &st) == -ENOENT, "refused writes: rm and mv of the old file say EIO and change nothing");
+    check(cmd_eject(2, argv) == CMD_FAIL && vfs_stat("/selftest-refused", &st) == 0,
+          "refused writes: eject unmounts nothing (sync tries again, umount gives up)");
+    r = vfs_umount_lost("/selftest-refused", &lost);
+    check(r == 0 && lost > 0, "refused writes: umount gives the blocks up and says how many");
+    ram_refuse = false;
+    bdev_unregister(d);                              /* (taken out) */
+    d2 = ram_disk(mem);                              /* the stick read again */
+    if(d2) strlcpy(d2->name, "stick8", sizeof(d2->name));
+    r = d2 ? vfs_mount_flags(d2, "/selftest-refused", "fat", MNT_RDONLY) : -ENOMEM;
+    check(r == 0 && file_is("/selftest-refused/notes.txt", "the old notes") && (mem[512 + 3] & 0x80) == 0,
+          "refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted");
+    if(r == 0) vfs_umount("/selftest-refused");
     if(d2) { binvalidate(d2); kfree(d2); }
     binvalidate(d);
     kfree(d);
@@ -1363,7 +1419,7 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks, test_kills,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
     test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 

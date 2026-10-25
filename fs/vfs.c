@@ -23,6 +23,14 @@ clusters for seconds), so a second mount of the same device or path is refused
 then too, not only once the first is on the list; so is a device being unmounted,
 until its blocks are let go (binvalidate() would drop a new mount's). vfs_hold_mount() holds the
 mount of a device for a while, so it can neither go nor be swapped meanwhile.
+
+10/24/26 (storage, milestone 1; the SurfCPU branch's audit B10, B51, B58): the last close
+of a written file and fsync say whether it reached the disk (close returned 0 whatever
+happened, so cp and edit said a file was saved that only the cache held); umount says how
+many changed blocks it gave up because they could not be written (vfs_umount_lost()).
+vfs_claim_disk() takes a disk and its partitions for an eject from its first step to its
+last, so no mount of one comes in between its listing of the mounts and its dropping of
+their blocks (binvalidate() would drop a new mount's under it).
 */
 
 #include <surfos/types.h>
@@ -315,10 +323,18 @@ int vfs_busy(const char *path, char *why, size_t size) {
 }
 
 int vfs_umount(const char *path) {
+    return vfs_umount_lost(path, NULL);
+}
+
+/* 10/24/26 (B10): what could not be written is given up (binvalidate()), the number of changed blocks in *lost, or
+   said on the console when lost is NULL */
+int vfs_umount_lost(const char *path, u_int *lost) {
     struct mount *m, **pp;
     struct superblock *sb;
     char abs[VFS_PATH_MAX];
+    u_int gave_up = 0;
     int r = vfs_normalize("/", path, abs, sizeof(abs)), i, slot = -1;
+    if(lost) *lost = 0;
     if(r) return r;
     if(!strcmp(abs, "/")) return -EBUSY;
     mutex_lock(&mount_lock);
@@ -343,6 +359,7 @@ int vfs_umount(const char *path) {
     vput(sb->root);
     if(sb->ops && sb->ops->unmount) sb->ops->unmount(sb);
     if(sb->dev) {
+        gave_up = sb->dev->gone ? 0 : bdirty_count(sb->dev);   /* (B10) refused: given up, and said */
         binvalidate(sb->dev);
         bdev_put(sb->dev);
     }
@@ -351,9 +368,39 @@ int vfs_umount(const char *path) {
         unpend(slot);
         mutex_unlock(&mount_lock);
     }
+    if(lost) *lost = gave_up;
+    else if(gave_up) kprintf("+VFS: %s: %u changed block%s could not be written and %s given up\n", abs, gave_up,
+                             gave_up == 1 ? "" : "s", gave_up == 1 ? "was" : "were");
     kfree(sb);
     kfree(m);
     return 0;
+}
+
+/* 10/24/26 (B58): disk and its partitions for an eject, from its first step to its last: no mount, mkfs or fdisk of
+   one of them comes in meanwhile (they find it busy). The slot to give back to vfs_release_disk(), or -EBUSY while
+   one of them is being mounted or unmounted already (try again once that has finished) */
+int vfs_claim_disk(struct bdev *disk) {
+    int i, slot = -1;
+    mutex_lock(&mount_lock);
+    for(i = 0; i < PENDING_MAX; i++) {
+        struct bdev *x = pending[i].used ? pending[i].dev : NULL;
+        if(x && (x == disk || x->parent == disk || disk->parent == x)) { mutex_unlock(&mount_lock); return -EBUSY; }
+    }
+    for(i = 0; i < PENDING_MAX && slot < 0; i++) if(!pending[i].used) slot = i;
+    if(slot >= 0) {
+        pending[slot].used = true;
+        pending[slot].dev = disk;
+        pending[slot].path[0] = 0;
+    }
+    mutex_unlock(&mount_lock);
+    return slot >= 0 ? slot : -EBUSY;
+}
+
+void vfs_release_disk(int slot) {
+    if(slot < 0 || slot >= PENDING_MAX) return;
+    mutex_lock(&mount_lock);
+    unpend(slot);
+    mutex_unlock(&mount_lock);
 }
 
 /* is a disk of this name, or one of its partitions, mounted (it may be unplugged and gone)? */
@@ -616,10 +663,21 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
     return 0;
 }
 
+/* 10/24/26 (B10): a file system's state and its device's blocks out to the device; 0 when everything reached it by
+   the end (a block refused by the first sync and written by the second counts as written), else -EIO */
+static int write_back(struct superblock *sb) {
+    int r = sb->ops && sb->ops->sync ? sb->ops->sync(sb) : 0;
+    if(!sb->dev) return r ? -EIO : 0;
+    if(sb->dev->gone) return -EIO;
+    if(r == 0 || bsync(sb->dev) == 0) return 0;
+    return -EIO;
+}
+
 int vfs_close(struct file *f) {
     struct superblock *sb;
     u_long fl;
     bool last;
+    int r = 0;
     if(!f) return -EBADF;
     fl = irq_save();                                /* tasks share files (spawnfd): the count is atomic */
     last = --f->refs == 0;
@@ -631,13 +689,11 @@ int vfs_close(struct file *f) {
     irq_restore(fl);
     if(!last) return 0;
     sb = f->v->sb;
-    if((f->flags & O_ACCMODE) != O_RDONLY) {      /* a written file reaches the disk when it is closed */
-        if(sb->ops && sb->ops->sync) sb->ops->sync(sb);
-        if(sb->dev) bsync(sb->dev);
-    }
+    if((f->flags & O_ACCMODE) != O_RDONLY) r = write_back(sb);   /* a written file reaches the disk when it is closed;
+                                                                    10/24/26 (B10): and close says when it did not */
     vput(f->v);
     kfree(f);
-    return 0;
+    return r;
 }
 
 int vfs_read(struct file *f, void *buf, u32 len) {
@@ -799,13 +855,11 @@ int vfs_ftruncate(struct file *f, u32 size) {
 
 int vfs_fsync(struct file *f) {
     struct superblock *sb;
+    int r;
     if(!f) return -EBADF;
     sb = f->v->sb;
-    if(sb->ops && sb->ops->sync && sb->ops->sync(sb) != 0) return -EIO;
-    if(sb->dev) {
-        if(bsync(sb->dev) != 0) return -EIO;
-        if(bdev_flush(sb->dev) != 0) return -EIO;
-    }
+    if((r = write_back(sb)) != 0) return r;         /* 10/24/26 (B10): as close says it */
+    if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;
 }
 

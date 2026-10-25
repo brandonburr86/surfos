@@ -517,7 +517,22 @@ whenever they find a pair that looks so beside a file; `rx` does not start over 
 `.part` that looks so. Anything else still can (`rm`, `mv`, `cp`, a stick mounted
 again under another path): the driver should not free a chain that another entry of
 the directory still holds (the SurfCPU branch's FAT work, `sc/fs-fix-*`, changes the
-same functions).
+same functions). 10/24/26 (storage, milestone 1, branch `storage/main`: interrupted saves,
+failed writes and concurrent unmounts preserve existing files): fixed, with the SurfCPU
+branch's ordered writes, failed-write handling and undo brought back (`docs/CODE-AUDIT.md`,
+"Storage milestone 1"). A rename that fails no longer leaves two names on a chain, nor does a
+rename over a file cut short (it changes that file's entry in place, after the moved name is
+gone), and the driver keeps a chain for the other name of a pair in one directory. Left for
+the next milestones: a plain rename cut short by a pull between its new name and the old
+one's removal still leaves a pair, and one in two directories (a move between them) is found
+by fsck.fat only, so a volume found not cleanly unmounted could be searched for such pairs
+at mount; a kill that has waited 2 s still kills a task at once inside the block
+cache or a FAT operation (`kernel/task.c`'s `kill_escalate()`), leaving what it held
+behind (SurfCPU's B39 puts the kill off until the task is out, on its own kill model);
+`reboot` does not write the mounts out first, so a volume mounted read-write then stays
+marked as not cleanly unmounted (B42 keeps it so until it is checked); and SurfCPU's later
+rounds (B46-B82, but for B58 and eject's part of B46: kills and Ctrl+C inside umount and
+eject, mkfs and fdisk holding their device, mutex hand-over).
 
 After that, in the order the laptop needs them (each its own milestone): USB hub
 support (docks and multi-port dongles), the controller's interrupt through MSI (lower

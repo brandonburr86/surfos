@@ -15,6 +15,9 @@ vfs_bdev_busy() for the destructive tools' safety rule. A mount holds its block
 device (bdev_get) until it is unmounted. A superblock counts its live vnodes
 and the VFS keeps a list of open files with the task that opened each, so
 umount refuses a mount that is in use and can say who uses it (vfs_busy).
+
+10/24/26 (storage, milestone 1): the last close of a written file returns -EIO
+when it did not reach the disk, as fsync does; umount says what it gave up.
 */
 
 #ifndef _FS_VFS_H
@@ -205,6 +208,13 @@ int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
+/* 10/24/26 (B10): vfs_umount(), and in *lost how many changed blocks it gave up because they could not be written
+   (vfs_umount() says that on the console) */
+int vfs_umount_lost(const char *path, u_int *lost);
+/* 10/24/26 (B58): a disk and its partitions taken for an eject from its first step to its last (no mount, mkfs or
+   fdisk of them comes in): a slot for vfs_release_disk(), or -EBUSY while one is being mounted or unmounted */
+int vfs_claim_disk(struct bdev *disk);
+void vfs_release_disk(int slot);
 /* 10/17/26: the mount of dev held (its root vnode: umount says it is busy) until vfs_release_mount(root): 0, its path
    and whether it is read-only; -ENOENT when dev is not mounted */
 int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly);
