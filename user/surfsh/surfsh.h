@@ -112,6 +112,8 @@ extern struct settings settings;
 extern int last_status;             /* the previous command's status: the prompt shows it */
 extern int exit_requested, exit_code;   /* the exit builtin, carried out by whoever runs the commands */
 extern int interactive;             /* commands typed at the prompt: reports, paging, ^C back to the prompt */
+extern int term_fd;                 /* 10/25/26: where the prompt and the reports go: an interactive shell's own
+                                       copy of its terminal (10-15, exec.c), whatever 1 is meanwhile; else 1 */
 extern int shell_pid;               /* $$: this shell's, or the one a new surfsh was started from */
 
 int use_unicode(void);              /* the setting, where the console draws UTF-8 (TTY_CAPS) */
@@ -319,7 +321,8 @@ char **var_environ(char **extra, int nextra);   /* the environment for a program
 void var_env_free(char **env);
 void vars_init(char **env);
 void vars_print(int only);                      /* 0: all; V_EXPORT, V_READONLY: those, as export/readonly lines */
-void var_state(struct sbuf *out);               /* what a new surfsh needs to be this one, as text it runs */
+void var_state(struct sbuf *out, int no_errexit);  /* what a new surfsh needs to be this one, as text it runs;
+                                                   10/25/26: no_errexit: without set -e (in a condition) */
 void pos_set(int n, char **v);
 int pos_shift(int n);                           /* -1: not that many */
 const char *ifs(void);                          /* IFS, or blank, tab and newline when it is not set */
@@ -364,6 +367,8 @@ int check_interrupt(void);                      /* after a command: TTY_INTR's c
 /* a new surfsh that runs text: descriptors 0, 1 (-1: this shell's own), the text on its 3; its pid */
 int start_surfsh(const char *text, int in, int out, int background);
 int exec_capture(const char *text, struct sbuf *out);  /* $( text ): its output, the newlines at its end off; its status */
+int fd_copy_high(int fd);           /* 10/25/26: a copy of fd among the shell's own descriptors (10-15); -1: none free */
+extern int cond_flag;               /* 10/25/26: X_COND while a command whose status is looked at runs (eval, ., a new surfsh) */
 
 /**** run.c: commands ****/
 
@@ -375,8 +380,9 @@ int kcmd_bridge(void);              /* the kernel offers its commands to program
 int program_names(struct cands *c); /* the programs in /initrd/bin, added to c, sorted; -1: none */
 int find_program(const char *name, char *path, int size);   /* 0 and its path (PATH's), else a status, said */
 int run_kernel(char **argv, int *found);   /* a kernel command in this shell: its status; *found 0: none */
-/* a program with this shell's 0, 1, 2 (in, out: those instead; -1 not) and the environment env: its pid; -1 said */
-int start_program(const char *path, char **argv, int in, int out, int background, char **env);
+/* a program with this shell's 0, 1, 2 (in, out: those instead; -1 not) and the environment env: its pid; -1 said.
+   10/25/26: fd3, its descriptor 3 (-1: none) */
+int start_program(const char *path, char **argv, int in, int out, int background, char **env, int fd3);
 int wait_program(int pid, int report);       /* its status: 137 killed; report: [exit status n] */
 int wait_program_ex(int pid, int report, int untraced, int *why);   /* 10/25/26: a stop too: 148, why WX_STOP_* */
 void page(int on);                  /* the pager for this shell's commands (TTY_PAGE) */
@@ -403,6 +409,7 @@ int b_bg(int argc, char **argv);
 int b_wait(int argc, char **argv);
 int b_kill(int argc, char **argv);
 void jobs_collect(int fresh);       /* the jobs that ended: reported (fresh: from a fresh row) */
+void jobs_state(struct sbuf *out);  /* 10/25/26: the table as jobs -s lines, for a new surfsh to show */
 int jobs_last_pid(void);            /* the last job's last pid ($!), 0 for none */
 void jobs_set_last(int pid);        /* a new surfsh's $!: the one of the shell that started it */
 

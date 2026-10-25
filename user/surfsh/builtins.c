@@ -12,7 +12,8 @@ be in a pipeline (in a new surfsh, unless they are its last stage).
     cd [dir]          no dir: /; "cd -": the previous directory (printed); PWD and OLDPWD follow
     pwd               the current directory
     echo [-n] [-e]    the words; -n: no newline; -e: \n \r \t \\ are the characters they name
-    exit [n]          leave with status n (0-255, n & 255 as on Unix), 0 when it is not given
+    exit [n]          leave with status n (0-255, n & 255 as on Unix); 10/25/26: without n, the
+                      status of the command before (cmd || exit), as POSIX has it
     help [command]    this shell's commands, the kernel's, the programs; or one of them
     history           the lines typed before, oldest first (history -s LINE adds one: a new surfsh's)
     set [key [value]] the settings (main.c); also "set key = value" and "set key=value",
@@ -53,7 +54,7 @@ const struct builtin builtins[] = {
     { "history", "",              "the lines typed before (Up and Down recall them)", b_history, 0 },
     { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set, 1 },
     { "help",    "[command]",     "this list, or one command", b_help, 0 },
-    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit, 1 },
+    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: $?)", b_exit, 1 },
     { "export",  "[name[=value]...]", "programs get these variables (none: the list)", b_export, 1 },
     { "readonly", "[name[=value]...]", "these variables can no longer change (none: the list)", b_readonly, 1 },
     { "unset",   "[-f] name...",  "the variables are gone (-f: the functions)", b_unset, 1 },
@@ -177,7 +178,7 @@ static int b_echo(int argc, char **argv) {
 /**** exit, history, set ****/
 
 static int b_exit(int argc, char **argv) {
-    long n = 0;
+    long n = last_status;                   /* 10/25/26: none given: the status of the command before */
     if(argc > 2) {
         fprintf(stderr, "usage: exit [n]\n");
         return STATUS_USAGE;

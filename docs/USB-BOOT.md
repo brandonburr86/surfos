@@ -574,14 +574,18 @@ printf '%-10s %5d\n' files 12
 -gt` ...); `read` takes a line of input into variables, `printf` formats, `eval`, `.` (runs a
 file's commands in this shell), `break`, `continue`, `return`, `local`, `exec`, `true`, `false`
 and `:` are there too. `set -e` ends a script at the first command that fails, `set -x` shows
-each command before it runs, `set -u` makes an unset variable an error. `kernel test` runs the
+each command before it runs, `set -u` makes an unset variable an error. `exit` without a
+number leaves with the status of the command before it (`cd /data || exit`). Descriptors 0
+to 9 are yours in redirections (`exec 3< /data/list.txt`, then `read line <&3`); a program
+gets 0 to 3 of them. `kernel test` runs the
 kernel's command of a name that surfsh has too. Ctrl+C stops a loop or a script as a whole,
 not just the command that was running: the prompt comes back with `$?` 130.
 
 **Jobs.** Ctrl+Z stops the program that runs (`[1] stopped  count 100 100`) and gives the
 prompt back; `jobs` lists the jobs, `fg` brings the last one (or `fg %2`) back to the screen,
 `bg` lets it go on in the background, `kill %1` ends it, `wait` waits for the jobs in the
-background. A program in the background that wants to read the keyboard stops until `fg`
+background (in a script, `wait $p` waits for the job whose pid `$!` gave, even when it has
+ended already). A program in the background that wants to read the keyboard stops until `fg`
 gives it the keys (`[1] stopped (reading the terminal)`). Ctrl+D on an empty line ends what a
 program reads from the keyboard: `cat > /data/notes.txt`, a few lines, then Ctrl+D.
 

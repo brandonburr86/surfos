@@ -1041,6 +1041,46 @@ SMOKE = [
       ('if true; then fi', ['surfsh: a command is missing before fi', shown('SURF \u224b!> ')]),
       ('rm /hda1/DOT.SH /hda1/T.SH /hda1/P.SH /hda1/B.SH /hda1/FD3.TXT', [shown('SURF \u224b> ')]),
       ('exit', [])]),
+    # 10/25/26 (what a review of the scripting found, in a surfsh of its own): a script that redirects descriptor 3 reads
+    # on (its own file is on one of surfsh's); a pipeline whose last command is not found is 127; $? in eval's text is
+    # the one before it; eval and a subshell in a condition under set -e; a script's wait for a job that ended before;
+    # exit alone is $?'s; { ...; } > file holds the command's output, not surfsh's report; printf's widest width; jobs
+    # in a pipeline and in $( ); x=1 x=2 prog; exec of a typo at the prompt; here-documents of more than a pipe holds
+    # into : and read, and into a stage whose output another stage reads; a surfsh reading the terminal into a file, a
+    # line at a time; tail -n of a huge count
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo "exec 3< /initrd/etc/version; read v <&3; echo got-\\$v; exec 3<&-; echo after-close" > /hda1/E3.SH; '
+       'surfsh /hda1/E3.SH', ['\r\ngot-SurfOS', 'after-close\r\n', shown('SURF \u224b> ')]),
+      ('echo hi | nosuchcmd; echo status $?', ['nosuchcmd: command not found', '\r\nstatus 127\r\n', shown('SURF \u224b> ')]),
+      ("false; eval 'echo was $?'", ['\r\nwas 1\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -e; eval false || echo handled; if (false; echo in-sub); then echo then-part; fi; echo end"',
+       ['\r\nhandled\r\nin-sub\r\nthen-part\r\nend\r\n', shown('SURF \u224b> ')]),
+      ('echo "sleep 100 & p=\\$!; sleep 400; wait \\$p; echo waited \\$?" > /hda1/W.SH; surfsh /hda1/W.SH',
+       ['\r\nwaited 0\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "false; exit"; echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('{ /initrd/bin/grep nothing /initrd/etc/version; } > /hda1/G.TXT; /initrd/bin/wc -c < /hda1/G.TXT',
+       ['[exit status 1]', '      0', shown('SURF \u224b> ')]),
+      ("printf '%1500000000s' x; echo status $?",
+       ['a width or a precision above 65536', '\r\nstatus 2\r\n', shown('SURF \u224b> ')]),
+      ('sleep 60000 &', ['[1] started (pid ', shown('SURF \u224b> ')]),
+      ('jobs | /initrd/bin/cat; n=$(jobs); echo "<${n%% *}>"', ['[1]  running  sleep 60000\r\n', '<[1]>\r\n',
+                                                               shown('SURF \u224b> ')]),
+      ('kill %1; sleep 300', ['[1] killed  sleep 60000', shown('SURF \u224b> ')]),
+      ('x=1 x=2 /initrd/bin/env | /initrd/bin/grep "^x="', ['\r\nx=2\r\n', shown('SURF \u224b> ')]),
+      ('x=1 x=2 /initrd/bin/env | /initrd/bin/grep -c "^x="', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ('exec nosuchcmd; echo alive', ['nosuchcmd: command not found', '\r\nalive\r\n', shown('SURF \u224b> ')]),
+      ('{ echo ": <<END"; /initrd/bin/seq 3000; echo END; echo "read first <<END"; /initrd/bin/seq 3000; echo END; '
+       'echo "echo first=\\$first"; } > /hda1/H.SH; surfsh /hda1/H.SH', ['\r\nfirst=1\r\n', shown('SURF \u224b> ')]),
+      ('{ echo "/initrd/bin/tr 0-9 a-j <<END | /initrd/bin/tail -n 1"; /initrd/bin/seq 3000; echo END; } > /hda1/T2.SH; '
+       'surfsh /hda1/T2.SH', ['\r\ndaaa\r\n', shown('SURF \u224b> ')]),
+      ('echo ready; surfsh > /hda1/LOG.TXT', ['\r\nready\r\n']),
+      ('echo hello-log', []),
+      ('echo second-line', []),
+      (b'\x04', [shown('SURF \u224b> ')]),
+      ('/initrd/bin/cat /hda1/LOG.TXT', ['\r\nhello-log\r\nsecond-line\r\n', shown('SURF \u224b> ')]),
+      ('/initrd/bin/seq 5 | /initrd/bin/tail -n 1073741825 | /initrd/bin/wc -l', ['      5', shown('SURF \u224b> ')]),
+      ('rm /hda1/E3.SH /hda1/W.SH /hda1/G.TXT /hda1/H.SH /hda1/T2.SH /hda1/LOG.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
@@ -1721,7 +1761,7 @@ def surfsh_jobs_check(q):
     of a surfsh that exits is killed. A program waiting for a key stops off the terminal's queue of readers (the shell's
     next line is the shell's), also when a key comes in the same burst as the Ctrl+Z; a program that a kernel command
     starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone. Two surfshs inside each other:
-    the inner one's job stopped, and its end, leave the middle one the terminal"""
+    the inner one's job stopped, and its end, leave the middle one the terminal. Ctrl+Z leaves an until loop"""
     count = '/initrd/bin/count 100 100'
     stopped = shown('\u224b!> ')
 
@@ -1791,6 +1831,10 @@ def surfsh_jobs_check(q):
     ok = ok and step('exit 0', [PROMPT])[0]
     ok = ok and step('echo middle-reads', ['\r\nmiddle-reads\r\n', PROMPT])[0]
     ok = ok and step('exit', [PROMPT])[0]
+    results.append(ok)
+    # 10/25/26: Ctrl+Z leaves an until loop as it does a while loop, with the prompt at once (no rounds without end)
+    ok = step('until false; do ' + count + '; done', ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + count, PROMPT])[0]
     results.append(ok)
     # a program the kernel's run starts is in no job: Ctrl+Z leaves it alone, Ctrl+C ends it
     ok = step('surfsh', [PROMPT])[0]

@@ -278,7 +278,7 @@ void vars_print(int only) {
 
 /* what a new surfsh needs to be this one: the variables that are not exported (those come in its
    environment), the read-only marks, the functions, the positional parameters, the options */
-void var_state(struct sbuf *out) {
+void var_state(struct sbuf *out, int no_errexit) {
     struct var *v;
     int i;
     for(v = vars; v; v = v->next) {
@@ -301,10 +301,10 @@ void var_state(struct sbuf *out) {
         }
         sb_putc(out, '\n');
     }
-    if(opt_e || opt_f || opt_u || opt_x) {          /* 10/25/26: the options, last (set -e) */
+    if((opt_e && !no_errexit) || opt_f || opt_u || opt_x) {    /* 10/25/26: the options, last (set -e) */
         const char *o = options_string();
         sb_puts(out, "set -");
-        for(; *o; o++) if(*o != 'i') sb_putc(out, *o);
+        for(; *o; o++) if(*o != 'i' && !(*o == 'e' && no_errexit)) sb_putc(out, *o);
         sb_putc(out, '\n');
     }
 }

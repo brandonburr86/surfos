@@ -35,6 +35,12 @@ pager pages each command typed at the prompt as a whole. surfsh --sub STATUS PID
 surfsh that another one started (exec.c): it reads what to run from its descriptor 3, with
 $? and $$ as they were there. An interactive surfsh lives on when it writes to a pipe nobody
 reads (broken_pipe_exit(0)); one that runs a script or a subshell ends, as other programs.
+10/25/26: an interactive surfsh draws its prompt and line and writes its reports on a copy of
+its terminal (term_fd, among the shell's own descriptors 10-15), so exec > file or
+{ ...; } > file takes only what the commands write. A script's file is read on such a
+descriptor too, out of the way of its exec 3< and the like; a terminal that is no
+interactive shell's input (surfsh > log) is read a line at a time. A . file or eval's text
+in which no command runs answers 0, and $? there is the status before it.
 */
 
 #include "surfsh.h"
@@ -45,6 +51,7 @@ int last_status;
 int exit_requested, exit_code;
 int interactive;
 int shell_pid;
+int term_fd = 1;
 
 /**** the settings ****/
 
@@ -181,21 +188,25 @@ static int editor_get(struct source *s, struct sbuf *out, int more) {
 
 /* Input that is not the console: a pipe a byte at a time (what follows the line is not taken from
    it), a file a block at a time, with what was read past the line given back (fd_give_back())
-   before a command runs. Read in blocks: rd[rpos .. rlen). */
+   before a command runs. Read in blocks: rd[rpos .. rlen). 10/25/26: a terminal a line at a time
+   (a read of it answers one line, cut to what is asked: a byte would be all of each line) */
 static char rd[4096];
-static int rpos, rlen, seekable = -1;
+static int rpos, rlen, seekable = -1, terminal;
 
 static int fd_get(struct source *s, struct sbuf *out, int more) {
     int got = 0;
     (void)more;
-    if(seekable < 0) seekable = !isatty(s->fd) && lseek(s->fd, 0, SEEK_CUR) >= 0;
+    if(seekable < 0) {
+        terminal = isatty(s->fd);
+        seekable = !terminal && lseek(s->fd, 0, SEEK_CUR) >= 0;
+    }
     for(;;) {
         char c;
         if(rpos < rlen) c = rd[rpos++];
         else {
-            ssize_t n = seekable ? read(s->fd, rd, sizeof(rd)) : read(s->fd, &c, 1);
+            ssize_t n = seekable || terminal ? read(s->fd, rd, sizeof(rd)) : read(s->fd, &c, 1);
             if(n <= 0) break;
-            if(seekable) {
+            if(seekable || terminal) {
                 rpos = 1;
                 rlen = (int)n;
                 c = rd[0];
@@ -256,7 +267,7 @@ int run_source(struct source *s) {
     struct arena mem = { NULL };
     struct parser p;
     struct node *n;
-    int used = 0, more = 0, ended = 0, first = 1, r, top = interactive && !source_depth;
+    int used = 0, more = 0, ended = 0, first = 1, r, top = interactive && !source_depth, ran = 0;
     source_depth++;
     while(!exit_requested && (top || !stopping())) {
         if(used >= buf.len && !more) {          /* all of it ran: start again empty */
@@ -289,6 +300,7 @@ int run_source(struct source *s) {
             parse_failed(s, &p, first, r == PARSE_MORE);
             arena_free(&mem);
             last_status = STATUS_USAGE;
+            ran = 1;
             if(!top) break;                     /* a script with a mistake goes no further */
             buf.len = used = 0;
             continue;
@@ -305,12 +317,14 @@ int run_source(struct source *s) {
             page(1);
             ttyctl(TTY_INTR, 1);                /* 10/25/26: a Ctrl+C counts from here (exec.c) */
         }
-        last_status = exec_tree(n, top ? X_TOP : 0);
+        last_status = exec_tree(n, top ? X_TOP : cond_flag);    /* 10/25/26: eval's and .'s text as their command */
+        ran = 1;
         if(top) {
             page(0);
             if(interrupted && !interrupt_said) {    /* Ctrl+C stopped surfsh's own commands: say so */
                 edit_fresh_row();
-                printf("^C\n");
+                fflush(stdout);
+                dprintf(term_fd, "^C\n");
             }
             if(interrupted) last_status = STATUS_INTERRUPTED;
             if(suspended) last_status = STATUS_STOPPED;     /* 10/25/26: a job stopped (jobs.c) */
@@ -322,7 +336,7 @@ int run_source(struct source *s) {
     }
     source_depth--;
     sb_free(&buf);
-    return last_status;
+    return ran ? last_status : 0;                   /* 10/25/26: no command, as for a . file of comments */
 }
 
 int run_text(const char *text, const char *name) {
@@ -414,10 +428,15 @@ int main(int argc, char **argv) {
     if(text) {
         run_text(text, "-c");
     } else if(file) {
+        int high;
         s.fd = open(file, O_RDONLY);
         if(s.fd < 0) {
             fprintf(stderr, "surfsh: %s: %s\n", file, strerror(errno));
             return STATUS_NOTFOUND;
+        }
+        if((high = fd_copy_high(s.fd)) >= 0) {     /* 10/25/26: not 3, which the script may redirect */
+            close(s.fd);
+            s.fd = high;
         }
         s.get = fd_get;
         s.name = file;
@@ -425,6 +444,7 @@ int main(int argc, char **argv) {
         close(s.fd);
     } else if(isatty(0) && isatty(1)) {
         interactive = 1;
+        if((term_fd = fd_copy_high(1)) < 0) term_fd = 1;     /* 10/25/26: the prompt's and the reports' */
         broken_pipe_exit(0);
         s.get = editor_get;
         run_source(&s);

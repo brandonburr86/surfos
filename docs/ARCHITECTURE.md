@@ -1738,7 +1738,8 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   new surfsh) is a job with the smallest free number: `[1] started (pid 42)` (the last
   process's pid); before each prompt the processes that ended are collected and a job whose
   processes have all ended is reported with its first line: `[1] done  cmd`, `[1] exit
-  status 3  cmd`, `[1] killed  cmd`. A shell that runs a script says nothing about its jobs.
+  status 3  cmd`, `[1] killed  cmd`. A shell that runs a script says nothing about its jobs
+  (10/25/26: it keeps one that ended for `wait`).
 * **Input** (`main.c`). `surfsh -c TEXT` and `surfsh FILE` run without a prompt; input that is
   not the console is read a byte at a time from a pipe and a block at a time from a file,
   which is put back where the next command's own reading begins, so a command reads what
@@ -1827,6 +1828,35 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   loop or function is left, as for Ctrl+C), `[1] stopped (reading the terminal)` before a
   prompt; `ps` and `SYS_procinfo` say `stopped` (`PROC_STOPPED`). In line mode Ctrl+D on an
   empty line is the end of the input: `read(2)` answers 0 (`cat > file`, `read`).
+* **What a review found** (10/25/26). Descriptors 10-15 are surfsh's own: the copies that
+  redirections keep, a script's own file (so `exec 3< file` in a script no longer takes the
+  script's place) and, in an interactive shell, a copy of its terminal (`term_fd`), on which
+  it draws its prompt and line and writes its reports (`[exit status n]`, `[1] started`,
+  `[1] stopped`, `[1] done`): `{ ...; } > file` and `exec > file` take only what the commands
+  write. `<&` and `>&` take 0-9; a program gets a descriptor 3 that is the user's (`prog 3>
+  file`, `exec 3> file`; for 4-9 surfsh says they do not reach it). surfsh never writes a
+  here-document while what reads it cannot go on: a feeder is waited for once surfsh has
+  closed its end of the pipe (so a command that reads part of a long document, `: <<'END'`
+  or `read`, no longer hangs), and the document of a stage whose output another stage reads,
+  or of a job in the background, is written by a new surfsh that runs that stage. A pipeline
+  whose last command cannot start has its 126 or 127. Ctrl+Z leaves an `until` and a `for`
+  loop as it leaves a `while`, and a program's own exit status of 148 is no stop (the stop is
+  said apart). `eval`'s and `.`'s text runs as the command it is part of: `$?` there is the
+  status before it, and in a condition `set -e` is ignored there, as it is in a subshell or a
+  pipeline's stage in a condition (`cond_flag`; the new surfsh gets the options without
+  `-e`); a text in which no command runs answers 0. `exit` alone leaves with `$?` (POSIX). A
+  script keeps a job that ended until `wait` asks for it (`sleep 1 & p=$!; ...; wait $p`);
+  `jobs` collects only the table's processes (in `true | jobs` the pipeline's first stage is
+  not taken from its wait), and in a pipeline or `$( )` it shows the table of the shell (a new
+  surfsh is given it as `jobs -s` lines). `exec` of a command that cannot start leaves an
+  interactive shell running. A surfsh that reads a terminal that is not its prompt (`surfsh >
+  log`) reads it a line at a time. Limits: `${ }` and `$(( ))` nest 64 deep (in the parser's
+  scanner and in `braced()`), a `${#name}` longer than any name is an error, `printf`'s
+  widths and precisions are at most 65536, a string that grows stops at what an `int`
+  counts, and `tail -n` grows its ring with its input. The value of `${x#pattern}` is taken
+  before the pattern expands (which may change `x`), `x=1 x=2 prog` gives the program `x=2`
+  alone, and an empty quote (`""`, `''`, `"$empty"`) begins a field where it is (`""$x` of
+  `x=" a"` is two fields, as in other shells).
 * **Filters** (stage 6, `user/bin/`): `grep` (a basic regular expression: `. * ^ $ [...]`
   and `\`; `-i -v -n -c -l -q -F -e`), `sort` (`-r -n -f -u`), `uniq` (`-c -d -u -i`), `tail`
   (`-n N`), `tee` (`-a`), `tr` (ranges, `-d`, `-s`) and `seq`, the programs a pipeline wants
@@ -1847,8 +1877,15 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   `ps`, `bg`, `fg`, `kill %1`, a pipeline as one job, a loop of builtins Ctrl+Z leaves alone, a
   reader in the background stopped and given the keys by `fg`, Ctrl+D, the stopped job of a
   surfsh that exits killed, a reader stopped while it waits for a key (the shell's next line
-  is the shell's), a key in the same burst as the Ctrl+Z, and a program that `run` starts in a
-  surfsh inside a surfsh, which Ctrl+Z leaves alone; and a block of the filters in pipelines.
+  is the shell's), a key in the same burst as the Ctrl+Z, two surfshs inside each other (the
+  middle one keeps the terminal after the inner one's end), an `until` loop, and a program
+  that `run` starts in a surfsh inside a surfsh, which Ctrl+Z leaves alone; a block of what a
+  review found (a script's descriptor 3, a pipeline's 127, `$?` in `eval`, `set -e` in
+  conditions, a script's `wait`, `exit` alone, a redirected group, `printf`'s widths, `jobs`
+  in a pipeline and `$( )`, `x=1 x=2`, `exec` of a typo, long here-documents into `:`,
+  `read` and a pipeline's stage, `surfsh > log`, `tail -n` of a huge count); and a block of
+  the filters in pipelines. `test_surfsh` adds the nesting limits, a long `${#name}`,
+  `printf`'s widths, empty quotes and a pattern that changes its variable.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

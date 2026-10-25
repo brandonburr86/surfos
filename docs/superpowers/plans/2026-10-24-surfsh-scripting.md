@@ -168,3 +168,16 @@ wildcards), arithmetic, `test` and `printf` on the host.
   surfsh over the serial line, and the two test programs; `make test-all`, `make test-tcp`,
   `make test-usb` at O0 and O2 (the terminal changes: Ctrl+Z, Ctrl+D), then an independent
   review.
+* 10/25/26, the review (two reviewers: the kernel side, and surfsh with the new programs).
+  Kernel: a reader Ctrl+Z stopped kept its place in the terminal's queue of readers; a stop
+  asked for in a call that then waited again was never counted; a job was inherited onto
+  another terminal and by what a kernel command starts; `JOB_FG` was open to any task, and
+  the foreground job's shell was the last caller rather than the job's own (a surfsh inside a
+  surfsh inside a surfsh lost the terminal); Ctrl+Z was swallowed in escape sequences; the
+  job was set after the task could run; `exit(-1)` read as a kill. surfsh: a stack overflow
+  in `${#name}` and a use after free in `${x#pattern}`; a script's own file on descriptor 3;
+  a pipeline's status when its last command could not start; Ctrl+Z in an `until` loop;
+  long here-documents that hung; `eval` and `.` losing `$?` and `set -e`'s conditions; a
+  script's jobs dropped before `wait`; reports written into a redirected group; `exit` alone
+  being 0; `tail -n` of a huge count; and smaller ones (`docs/ARCHITECTURE.md` section 21,
+  "What a review found"). Each has a check in the smoke test or `test_surfsh`.

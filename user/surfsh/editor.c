@@ -74,7 +74,7 @@ static int olen;
 static void flush_out(void) {
     int done = 0;
     while(done < olen) {
-        ssize_t n = write(1, obuf + done, (size_t)(olen - done));
+        ssize_t n = write(term_fd, obuf + done, (size_t)(olen - done));   /* 10/25/26: the terminal, whatever 1 is */
         if(n <= 0) break;
         done += (int)n;
     }
@@ -501,7 +501,8 @@ static int plain_line(char *buf, int size) {
     int n;
     screen_setup();
     make_prompt();
-    fputs(prompt, stdout);
+    fflush(stdout);
+    dprintf(term_fd, "%s", prompt);
     n = readline(buf, (size_t)size);
     return n < 0 ? -1 : n;
 }

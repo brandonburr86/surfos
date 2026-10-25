@@ -207,7 +207,7 @@ static int hashbang(const char *path, char *line, int size) {
     return 1;
 }
 
-int start_program(const char *path, char **argv, int in, int out, int background, char **env) {
+int start_program(const char *path, char **argv, int in, int out, int background, char **env, int fd3) {
     struct spawnx o;
     char line[128];
     int pid, e;
@@ -215,7 +215,7 @@ int start_program(const char *path, char **argv, int in, int out, int background
     o.fds[0] = fd_for_child(in, 0);
     o.fds[1] = fd_for_child(out, 1);
     o.fds[2] = fd_for_child(-1, 2);
-    o.fds[3] = -1;
+    o.fds[3] = fd3;                             /* 10/25/26: a descriptor 3 the user made (exec.c) */
     o.envp = env;
     o.job = job_spawn_value();                  /* 10/25/26: its job (jobs.c) */
     o.flags = background ? SPAWN_BG : 0;
@@ -242,20 +242,23 @@ int start_program(const char *path, char **argv, int in, int out, int background
     return pid;
 }
 
-/* a line about a program that ended, after paging ends so that q does not hide it */
+/* a line about a program that ended, after paging ends so that q does not hide it. 10/25/26: on the
+   terminal (main.c's term_fd), not into a file the command's output goes to */
 static void say(const char *fmt, int n) {
     int was = paging;
     if(was) page(0);
-    printf(fmt, n);
     fflush(stdout);
+    dprintf(term_fd, fmt, n);
     if(was) page(1);
 }
 
 /* 10/25/26: waitx says how it ended: one Ctrl+C killed is 130 and stops the rest (exec.c). untraced
-   (job control): a stop is said too, STATUS_STOPPED, and why it stopped in *why (WX_STOP_*) */
+   (job control): a stop is said too, STATUS_STOPPED, and why it stopped in *why (WX_STOP_*); *why is
+   -1 when it did not stop (a program's own exit 148 is no stop) */
 int wait_program_ex(int pid, int report, int untraced, int *why) {
     struct waitx w;
     int r;
+    if(why) *why = -1;
     while((r = waitx(pid, &w, untraced ? WUNTRACED : 0)) < 0 && errno == EINTR)
         note_interrupt(0);                      /* a Ctrl+C for this shell alone: the program is waited for still */
     if(r != pid) {
@@ -272,6 +275,7 @@ int wait_program_ex(int pid, int report, int untraced, int *why) {
         note_interrupt(report);
         return STATUS_INTERRUPTED;
     }
+    w.status &= 0xff;                           /* 10/25/26: 0-255, as a shell's (exit(-1) is 255) */
     if(w.status && report) {
         say("[exit status %d]\n", w.status);
         if(w.status == STATUS_INTERRUPTED) interrupt_said = 1;     /* a script Ctrl+C ended */

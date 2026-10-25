@@ -32,6 +32,13 @@ terminal)  cmd"). The builtins of jobs:
 %n is a job's number, %% and %+ the last job, %- the one before; a job given by its pid works too.
 Commands in a pipeline whose last stage runs in surfsh, $( ) and here-documents' feeders are
 in no job of their own (Ctrl+Z does nothing to them), nor is what a script starts.
+
+10/25/26: the reports go to the terminal (main.c's term_fd), not into a file the command's
+output goes to ({ ...; } > file). A shell that runs a script keeps a job that ended, without a
+word, until wait asks for it (sleep 1 & p=$!; ...; wait $p), or until the table needs its
+place. A new surfsh is given the table to show (jobs -s lines, exec.c): jobs | grep, $(jobs).
+jobs collects only the table's own processes: inside a command, any other child may be one
+that is being waited for (a stage of the pipeline jobs is in).
 */
 
 #include "surfsh.h"
@@ -44,7 +51,7 @@ struct job {
     int pids[STAGES_LIMIT];
     int done[STAGES_LIMIT];
     int n, left;                    /* its processes, those still running */
-    int status;                     /* its last process's, once it ended */
+    int how, status;                /* its last process's end (WX_*) and exit status, once it ended */
     int stopped;                    /* 0 running; WX_STOP_KEY + 1, WX_STOP_READ + 1: stopped, and why */
     int said;                       /* the stop was said */
     int order;                      /* when it was started or stopped last: %+ is the latest */
@@ -53,7 +60,22 @@ struct job {
 
 static struct job *jobs[JOBS_MAX];
 static int last_pid, order;
+static struct shown {               /* 10/25/26: the table of the shell that started this one (jobs -s) */
+    int id;
+    char *state, *text;
+} shown[JOBS_MAX];
+static int nshown;
 static int next_job, next_kid;      /* job_spawn_value(): the job the next process goes into */
+
+/* 10/25/26: a line about the jobs, on the terminal */
+static void tell(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void tell(const char *fmt, ...) {
+    va_list ap;
+    fflush(stdout);
+    va_start(ap, fmt);
+    vdprintf(term_fd, fmt, ap);
+    va_end(ap);
+}
 
 int jobs_last_pid(void) {
     return last_pid;
@@ -107,9 +129,17 @@ void job_unhold(struct jobwin *w) {
 
 /**** the table ****/
 
+static void drop(struct job *j);
+
 static struct job *add(const char *text, const int *pids, int n, int kid) {
-    struct job *j;
+    struct job *j, *old = NULL;
     int i, id, slot = -1;
+    for(i = 0; i < JOBS_MAX && slot < 0; i++) if(!jobs[i]) slot = i;
+    if(slot < 0) {                                  /* 10/25/26: a script's job that ended makes room */
+        for(i = 0; i < JOBS_MAX; i++) if(!jobs[i]->left && (!old || jobs[i]->order < old->order)) old = jobs[i];
+        if(old) drop(old);
+    }
+    slot = -1;
     for(id = 1; id <= JOBS_MAX; id++) {             /* the smallest number no job has */
         for(i = 0; i < JOBS_MAX && !(jobs[i] && jobs[i]->id == id); i++);
         if(i == JOBS_MAX) break;
@@ -140,18 +170,15 @@ void job_add(const char *text, const int *pids, int n, int kid) {
     if(n <= 0) return;
     last_pid = pids[n - 1];
     if(!(j = add(text, pids, n, kid))) {            /* no room: reported by pid when it ends */
-        if(interactive) printf("[%d] started\n", last_pid);
-        fflush(stdout);
+        if(interactive) tell("[%d] started\n", last_pid);
         return;
     }
-    if(interactive) printf("[%d] started (pid %d)\n", j->id, last_pid);
-    fflush(stdout);
+    if(interactive) tell("[%d] started (pid %d)\n", j->id, last_pid);
 }
 
 static void say_stopped(struct job *j) {
-    printf("[%d] stopped%s  %s\n", j->id, j->stopped == WX_STOP_READ + 1 ? " (reading the terminal)" : "", j->text);
+    tell("[%d] stopped%s  %s\n", j->id, j->stopped == WX_STOP_READ + 1 ? " (reading the terminal)" : "", j->text);
     j->said = 1;
-    fflush(stdout);
 }
 
 /* a job in the foreground stopped (WX_STOP_*): the processes from pids on are a job of the table,
@@ -173,10 +200,22 @@ void job_stopped(const char *text, const int *pids, int n, int kid, int why) {
     say_stopped(j);
 }
 
-static void report(const char *head, int status, const char *text) {
-    if(status == -1) printf("%s killed  %s\n", head, text);
-    else if(status) printf("%s exit status %d  %s\n", head, status, text);
-    else printf("%s done  %s\n", head, text);
+static void report(const char *head, int how, int status, const char *text) {
+    if(how != WX_EXITED) tell("%s killed  %s\n", head, text);
+    else if(status) tell("%s exit status %d  %s\n", head, status, text);
+    else tell("%s done  %s\n", head, text);
+}
+
+/* 10/25/26: a job's status as a command's: its last process's exit status, 130 for one Ctrl+C
+   killed, 137 for any other kill */
+static int job_status(struct job *j) {
+    return j->how == WX_EXITED ? j->status : j->how == WX_INTERRUPTED ? STATUS_INTERRUPTED : STATUS_KILLED;
+}
+
+static const char *state_of(struct job *j) {
+    if(!j->left) return "done";                     /* 10/25/26: a script's, kept for wait */
+    if(j->stopped == WX_STOP_READ + 1) return "stopped (reading the terminal)";
+    return j->stopped ? "stopped" : "running";
 }
 
 /* the job that has pid among its processes still running, and its index there; NULL for none */
@@ -189,46 +228,95 @@ static struct job *job_of(int pid, int *k) {
     return NULL;
 }
 
-/* process k of job j ended with status (-1: killed): 1 when j has ended with it (not freed yet) */
-static int ended(struct job *j, int k, int status) {
+/* the job that has pid among its processes, ended or not; NULL for none */
+static struct job *job_with(int pid) {
+    int i, k;
+    for(i = 0; i < JOBS_MAX; i++) {
+        if(!jobs[i]) continue;
+        for(k = 0; k < jobs[i]->n; k++) if(jobs[i]->pids[k] == pid) return jobs[i];
+    }
+    return NULL;
+}
+
+/* process k of job j ended (how: WX_*, status its exit status): 1 when j has ended with it (not
+   freed yet). The status is kept in 0-255, as a shell's are (exit(-1) is 255). */
+static int ended(struct job *j, int k, int how, int status) {
     j->done[k] = 1;
     j->left--;
-    if(k == j->n - 1) j->status = status;
+    if(k == j->n - 1) {
+        j->how = how;
+        j->status = how == WX_EXITED ? status & 0xff : 0;
+    }
     return !j->left;
+}
+
+/* a child that waitx said ended or stopped: the table and the reports (*any: one was made) */
+static void collected(int pid, struct waitx *w, int fresh, int *any) {
+    char head[24];
+    int k;
+    struct job *j = job_of(pid, &k);
+    if(w->how == WX_STOPPED) {                      /* 10/25/26: a job in the background stopped */
+        if(!j || (j->stopped && j->said)) return;
+        j->stopped = w->status + 1;
+        if(!interactive) return;
+        if(!*any && fresh) edit_fresh_row();
+        *any = 1;
+        say_stopped(j);
+        return;
+    }
+    if(j && !ended(j, k, w->how, w->status)) return;
+    if(!interactive) return;                        /* a script's jobs end without a word; kept for wait */
+    if(!*any && fresh) edit_fresh_row();            /* the first report starts on a fresh row */
+    *any = 1;
+    if(!j) {                                        /* no job's */
+        snprintf(head, sizeof(head), "[%d]", pid);
+        report(head, w->how, w->how == WX_EXITED ? w->status & 0xff : 0, "");
+        return;
+    }
+    snprintf(head, sizeof(head), "[%d]", j->id);
+    report(head, j->how, j->status, j->text);
+    drop(j);
 }
 
 void jobs_collect(int fresh) {
     struct waitx w;
-    int pid, any = 0, k;
-    char head[24];
-    while((pid = waitx(-1, &w, WNOHANG | WUNTRACED)) > 0) {
-        struct job *j = job_of(pid, &k);
-        if(w.how == WX_STOPPED) {                   /* 10/25/26: a job in the background stopped */
-            if(!j || (j->stopped && j->said)) continue;
-            j->stopped = w.status + 1;
-            if(!interactive) continue;
-            if(!any && fresh) edit_fresh_row();
-            any = 1;
-            say_stopped(j);
-            continue;
+    int pid, any = 0;
+    while((pid = waitx(-1, &w, WNOHANG | WUNTRACED)) > 0) collected(pid, &w, fresh, &any);
+}
+
+/* 10/25/26: the same for the table's processes alone (jobs, inside a command: another child may
+   be one that is being waited for) */
+static void jobs_poll(void) {
+    struct waitx w;
+    int i, k, any = 0;
+    for(i = 0; i < JOBS_MAX; i++) {
+        for(k = 0; jobs[i] && k < jobs[i]->n; k++) {
+            int pid = jobs[i]->pids[k];
+            if(!jobs[i]->done[k] && waitx(pid, &w, WNOHANG | WUNTRACED) == pid) collected(pid, &w, 0, &any);
         }
-        if(j && !ended(j, k, w.how == WX_EXITED ? w.status : -1)) continue;
-        if(!interactive) {                          /* a script's jobs end without a word */
-            if(j) drop(j);
-            continue;
-        }
-        if(!any && fresh) edit_fresh_row();         /* the first report starts on a fresh row */
-        any = 1;
-        if(!j) {                                    /* no job's */
-            snprintf(head, sizeof(head), "[%d]", pid);
-            report(head, w.how == WX_EXITED ? w.status : -1, "");
-            continue;
-        }
-        snprintf(head, sizeof(head), "[%d]", j->id);
-        report(head, j->status, j->text);
-        drop(j);
     }
-    if(any) fflush(stdout);
+}
+
+/* 10/25/26: the table as text a new surfsh runs: jobs -s lines, for its jobs to show */
+void jobs_state(struct sbuf *out) {
+    int i, id;
+    for(id = 1; id <= JOBS_MAX; id++) {
+        for(i = 0; i < JOBS_MAX; i++) {
+            if(!jobs[i] || jobs[i]->id != id) continue;
+            sb_printf(out, "jobs -s %d ", id);
+            sb_quote(out, state_of(jobs[i]));
+            sb_putc(out, ' ');
+            sb_quote(out, jobs[i]->text);
+            sb_putc(out, '\n');
+        }
+    }
+    for(i = 0; i < nshown; i++) {               /* the table this shell was given, passed on */
+        sb_printf(out, "jobs -s %d ", shown[i].id);
+        sb_quote(out, shown[i].state);
+        sb_putc(out, ' ');
+        sb_quote(out, shown[i].text);
+        sb_putc(out, '\n');
+    }
 }
 
 /**** the builtins ****/
@@ -236,7 +324,7 @@ void jobs_collect(int fresh) {
 /* %n, %%, %+, %-, or a pid of one of its processes; NULL said */
 static struct job *find(const char *cmd, const char *arg) {
     struct job *best = NULL, *second = NULL;
-    int i, k;
+    int i;
     for(i = 0; i < JOBS_MAX; i++) {
         if(!jobs[i]) continue;
         if(!best || jobs[i]->order > best->order) {
@@ -261,52 +349,60 @@ static struct job *find(const char *cmd, const char *arg) {
     } else {
         char *end;
         long pid = strtol(arg, &end, 10);
-        struct job *j = *end || !*arg ? NULL : job_of((int)pid, &k);
+        struct job *j = *end || !*arg ? NULL : job_with((int)pid);     /* 10/25/26: one that ended too */
         if(j) return j;
     }
     fprintf(stderr, "surfsh: %s: %s: no such job\n", cmd, arg);
     return NULL;
 }
 
-static const char *state_of(struct job *j) {
-    if(j->stopped == WX_STOP_READ + 1) return "stopped (reading the terminal)";
-    return j->stopped ? "stopped" : "running";
-}
-
 int b_jobs(int argc, char **argv) {
-    int i, id;
-    (void)argv;
+    int i, id, own = 0;
+    if(argc == 5 && !strcmp(argv[1], "-s")) {      /* 10/25/26: a line of the table a new surfsh is given */
+        if(nshown < JOBS_MAX) {
+            shown[nshown].id = atoi(argv[2]);
+            shown[nshown].state = xstrdup(argv[3]);
+            shown[nshown++].text = xstrdup(argv[4]);
+        }
+        return 0;
+    }
     if(argc > 1) {
         fprintf(stderr, "usage: jobs\n");
         return STATUS_USAGE;
     }
-    jobs_collect(0);
+    jobs_poll();
     for(id = 1; id <= JOBS_MAX; id++) {             /* by number */
         for(i = 0; i < JOBS_MAX; i++) {
-            if(jobs[i] && jobs[i]->id == id) printf("[%d]  %-8s %s\n", id, state_of(jobs[i]), jobs[i]->text);
+            if(!jobs[i] || jobs[i]->id != id) continue;
+            printf("[%d]  %-8s %s\n", id, state_of(jobs[i]), jobs[i]->text);
+            own = 1;
         }
     }
+    for(i = 0; i < nshown && !own; i++) printf("[%d]  %-8s %s\n", shown[i].id, shown[i].state, shown[i].text);
     return 0;
 }
 
 /* job j in the foreground until it ends or stops again: the status of its last process, or 148 */
 static int foreground(struct job *j) {
-    int prev = j->kid ? jobctl(JOB_FG, j->kid) : 0, k, status = 0, why;
+    int prev = j->kid ? jobctl(JOB_FG, j->kid) : 0, k, status, why = -1;
     j->stopped = j->said = 0;
     for(k = 0; k < j->n; k++) {
         int st;
         if(j->done[k]) continue;
         st = wait_program_ex(j->pids[k], 0, j->kid != 0, &why);
-        if(st == STATUS_STOPPED) {
+        if(why >= 0) {                              /* stopped again (an exit status of 148 is none) */
             job_stopped(j->text, j->pids, j->n, j->kid, why);
-            status = st;
             break;
         }
-        ended(j, k, st == STATUS_KILLED || st == STATUS_INTERRUPTED ? -1 : st);
-        if(k == j->n - 1) status = st;
+        ended(j, k, st == STATUS_KILLED ? WX_KILLED : st == STATUS_INTERRUPTED ? WX_INTERRUPTED : WX_EXITED, st);
     }
     if(j->kid) jobctl(JOB_FG, prev > 0 ? prev : 0);
-    if(status != STATUS_STOPPED && !j->left) drop(j);
+    if(why >= 0) {
+        status = STATUS_STOPPED;
+    } else {
+        status = job_status(j);                     /* 10/25/26: its last process's, waited for now or before */
+        if(!j->left) drop(j);
+    }
     check_interrupt();
     return status;
 }
@@ -341,10 +437,10 @@ int b_bg(int argc, char **argv) {
 }
 
 /* wait for job j's processes (Ctrl+C ends the wait: 130); the status of its last one; a stopped job
-   is not waited for (148) */
+   is not waited for (148). 10/25/26: one that ended already (a script's) answers at once */
 static int wait_job(struct job *j) {
-    int k, status = 0;
-    if(j->stopped) {
+    int k, status;
+    if(j->stopped && j->left) {
         fprintf(stderr, "surfsh: wait: %%%d is stopped (fg or bg lets it go on)\n", j->id);
         return STATUS_STOPPED;
     }
@@ -357,10 +453,9 @@ static int wait_job(struct job *j) {
             return STATUS_INTERRUPTED;
         }
         if(r < 0) return STATUS_FAIL;
-        ended(j, k, w.how == WX_EXITED ? w.status : -1);
-        if(k == j->n - 1)
-            status = w.how == WX_EXITED ? w.status : w.how == WX_INTERRUPTED ? STATUS_INTERRUPTED : STATUS_KILLED;
+        ended(j, k, w.how, w.status);
     }
+    status = job_status(j);
     drop(j);
     return status;
 }

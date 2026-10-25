@@ -118,8 +118,7 @@ int b_eval(int argc, char **argv) {
         if(i > 1) sb_putc(&b, ' ');
         sb_puts(&b, argv[i]);
     }
-    last_status = 0;
-    status = b.len ? run_text(sb_str(&b), NULL) : 0;
+    status = b.len ? run_text(sb_str(&b), NULL) : 0;   /* 10/25/26: $? there is the one before it */
     sb_free(&b);
     return status;
 }
@@ -179,7 +178,6 @@ int b_dot(int argc, char **argv) {
         pos_set(argc - 2, argv + 2);
     }
     dot_depth++;
-    last_status = 0;
     status = run_text(sb_str(&text), path);
     if(returning) {
         returning = 0;

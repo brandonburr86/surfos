@@ -48,6 +48,14 @@ its command and ends the shell with its status; exec alone keeps its redirection
 stages are all processes, and ( list ) are each a job of the kernel's while they run, the
 terminal's foreground job while they are waited for (wait_fg()); when Ctrl+Z stops one it
 joins the job table and the rest of the line, loop or function is left, as for Ctrl+C.
+
+10/25/26: descriptors 10-15 are the shell's own (the copies redirections keep, a script's file,
+an interactive shell's terminal, main.c): a redirection and <& >& take 0-9. A program gets 0-3
+(spawnx), so 4-9 are for surfsh's own commands. The here-document of a stage whose output
+another stage reads, or of a job in the background, is written by a new surfsh that runs that
+stage, never by this one before it goes on; a feeder is waited for once this shell has closed
+its pipe (restore(), then finish_docs()). eval's and .'s text, and a new surfsh, run as the
+command they are part of: in a condition (X_COND, cond_flag) set -e is ignored there too.
 */
 
 #include "surfsh.h"
@@ -82,6 +90,8 @@ static int wait_fg(const int *pids, int np, int last, int kid, struct node *n, i
 
 int loop_depth, break_count, continue_count, returning, return_status, func_depth, dot_depth, local_base;
 int interrupted, interrupt_said, suspended;
+int cond_flag;                                  /* X_COND while a command whose status is looked at runs */
+static unsigned kept_fds;                       /* 10/25/26: descriptors 3-9 that exec alone redirected */
 
 int stopping(void) {
     return exit_requested || break_count || continue_count || returning || interrupted || suspended;
@@ -117,6 +127,14 @@ static int spare_fd(void) {
     for(fd = 10; fd < 16; fd++) if(!is_open(fd)) return fd;
     for(fd = 3; fd < 10; fd++) if(!is_open(fd)) return fd;
     return -1;
+}
+
+/* 10/25/26: a copy of fd among the shell's own descriptors (10-15), out of the way of a script's
+   redirections: the copy, or -1 when none is free */
+int fd_copy_high(int fd) {
+    int k = spare_fd();
+    if(k < 10 || dup2(fd, k) < 0) return -1;
+    return k;
 }
 
 /* fd as it is now, kept in s (once): 0, or -1 said */
@@ -177,17 +195,35 @@ static int restore(struct saved *s, int status) {
     return status;
 }
 
-/* 10/25/26, exec alone: the redirections stay; what was kept of the descriptors goes */
+/* 10/25/26, exec alone: the redirections stay; what was kept of the descriptors goes. A feeder
+   goes on feeding what now reads its pipe: it is collected as any child (jobs.c) */
 static void keep_redirections(struct saved *s) {
     int i;
     for(i = 0; i < s->n; i++) {
         if(s->copy[i] >= 0) close(s->copy[i]);
         free(s->name[i]);
     }
+    for(i = 0; i < s->n; i++) {
+        if(s->fd[i] < 3 || s->fd[i] > 9) continue;
+        if(is_open(s->fd[i])) kept_fds |= 1u << s->fd[i];
+        else kept_fds &= ~(1u << s->fd[i]);
+    }
     s->n = 0;
+    s->nfeeders = 0;
 }
 
-/* the here-documents for a program that has started, then the feeders: all of them written and closed */
+/* 10/25/26: descriptor k as a program is to get it: open, and the user's (a redirection of the
+   command, or one exec kept), never one of this shell's pipes that happens to be k */
+static int users_fd(struct redir *r, int k) {
+    if(!is_open(k)) return 0;
+    if(kept_fds & (1u << k)) return 1;
+    for(; r; r = r->next) if(r->fd == k) return 1;
+    return 0;
+}
+
+/* the here-documents for a program that has started, then the feeders: all of them written and closed.
+   10/25/26: after restore(), which closes this shell's ends of their pipes: a document a command did
+   not read to its end then stops its writer at once (EPIPE), whoever that is */
 static void finish_docs(struct saved *s) {
     int i, st;
     broken_pipe_exit(0);                        /* a reader that ends early is no reason for this shell to */
@@ -240,7 +276,8 @@ static int here_doc(struct saved *s, int fd, char *text, int for_program) {
         int k = 0, pid;
         do snprintf(end, sizeof(end), "SURFSH_END_%d", k++);    /* an end line that is no line of it */
         while(strstr(text, end));
-        sb_printf(&b, "%s/cat <<'%s'\n%s%s\n", PROGRAM_DIR, end, text, end);
+        sb_printf(&b, "%s/cat <<'%s'\n%s%s%s\n", PROGRAM_DIR, end, text,
+                  n && text[n - 1] != '\n' ? "\n" : "", end);      /* 10/25/26: the end line on a line of its own */
         pid = start_surfsh(sb_str(&b), -1, p[1], 0);
         sb_free(&b);
         close(p[1]);
@@ -273,7 +310,7 @@ static int redirect(struct redir *r, struct saved *s, int for_program) {
         if(!(target = expand_one(r->word))) return -1;
         if(r->op == R_DUPIN || r->op == R_DUPOUT) {
             if(!strcmp(target, "-")) close(fd);
-            else if(!all_digits(target) || atoi(target) > 15 || !is_open(atoi(target))) {
+            else if(!all_digits(target) || atoi(target) > 9 || !is_open(atoi(target))) {   /* 10/25/26: 10-15 are surfsh's */
                 fprintf(stderr, "surfsh: %s: %s\n", target, all_digits(target) ? "no such descriptor" : "a descriptor's number (or -) must follow <& and >&");
                 free(target);
                 return -1;
@@ -318,6 +355,12 @@ static int has_input(struct redir *r) {
     return 0;
 }
 
+/* 10/25/26: has r a here-document? */
+static int has_doc(struct redir *r) {
+    for(; r; r = r->next) if(r->op == R_HERE || r->op == R_HERESTRIP) return 1;
+    return 0;
+}
+
 /**** a new surfsh ****/
 
 int start_surfsh(const char *text, int in, int out, int background) {
@@ -332,8 +375,12 @@ int start_surfsh(const char *text, int in, int out, int background) {
     snprintf(bg, sizeof(bg), "%d", jobs_last_pid());
     if(strlen(arg0) > WORD_LIMIT) argv[5] = "surfsh";
     if(!(env = var_environ(NULL, 0))) return -1;
-    var_state(&all);                            /* what makes it this shell, then a NUL, then the text */
-    if(strstr(text, "history")) history_state(&all);   /* only for a history in it: the lines are many */
+    /* what makes it this shell, then a NUL, then the text: the history only for a history in it (the
+       lines are many), 10/25/26 the job table for a jobs in it (to be shown), both before the options
+       (set -x traces what follows it); in a condition without set -e (it is ignored there) */
+    if(strstr(text, "history")) history_state(&all);
+    if(strstr(text, "jobs")) jobs_state(&all);
+    var_state(&all, cond_flag != 0);
     sb_putc(&all, 0);
     sb_puts(&all, text);
     if(pipe(p) < 0) {
@@ -543,7 +590,7 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
     struct func *fn = NULL;
     char path[PATH_MAX], **env;
     const char *name;
-    int status = 0, i, pid, pushed = var_pushed(), exec_cmd = 0, kid;
+    int status = 0, i, pid, pushed = var_pushed(), exec_cmd = 0, kid, ran = 0;
     memset(&s, 0, sizeof(s));
     if(pidp) *pidp = -1;
     subst_count = 0;
@@ -563,17 +610,21 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
         for(i = 0; i < a.n && !status; i++) if(var_assign(a.v[i], 0) < 0) status = STATUS_FAIL;
         if(!status) status = subst_count ? subst_status : 0;
         if(redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
-        finish_docs(&s);
         fields_free(&a);
-        return restore(&s, status);
+        status = restore(&s, status);
+        finish_docs(&s);
+        return status;
     }
     name = f.v[0];
     if(!strcmp(name, "exec")) {                 /* 10/25/26: exec, which surfsh does here */
         if(f.n == 1) {                          /* alone: its redirections stay for what follows */
             status = redirect(n->redirs, &s, 0) < 0 ? STATUS_FAIL : 0;
-            finish_docs(&s);
-            if(status) status = restore(&s, status);
-            else keep_redirections(&s);
+            if(status) {
+                status = restore(&s, status);
+                finish_docs(&s);
+            } else {
+                keep_redirections(&s);
+            }
             fields_free(&f);
             fields_free(&a);
             return status;
@@ -597,14 +648,17 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
         if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         else status = call_function(fn, &f, flags);
         var_pop(pushed);
-        finish_docs(&s);
+        ran = 1;
         goto done;
     }
     if(b) {
+        int was = cond_flag;
+        cond_flag = flags & X_COND;             /* 10/25/26: eval's and .'s text runs as this command */
         if(push_all(&a) < 0 || redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         else status = b->fn(f.n, f.v);
+        cond_flag = was;
         var_pop(pushed);
-        finish_docs(&s);
+        ran = 1;
         goto done;
     }
     for(i = 0; i < f.n; i++) {
@@ -628,12 +682,13 @@ static int exec_simple(struct node *n, int flags, int in, int out, int *pidp) {
             if(!found) {                        /* the table said so, the kernel not: as a program */
                 var_pop(pushed);
                 restore(&s, 0);
+                finish_docs(&s);
                 memset(&s, 0, sizeof(s));
                 goto program;
             }
         }
         var_pop(pushed);
-        finish_docs(&s);
+        ran = 1;
         goto done;
     }
 program:
@@ -643,13 +698,20 @@ program:
         goto done;
     }
     if(redirect(n->redirs, &s, 1) < 0) {
-        finish_docs(&s);
         var_env_free(env);
         status = STATUS_FAIL;
         goto done;
     }
+    {
+        struct redir *r;                        /* 10/25/26: a program gets 0-3 (spawnx) */
+        for(r = n->redirs; r; r = r->next) {
+            if(r->fd <= 3 || ((r->op == R_DUPIN || r->op == R_DUPOUT) && !strcmp(r->word, "-"))) continue;
+            fprintf(stderr, "surfsh: %s: descriptor %d is not given to a program (0 to 3 are)\n", name, r->fd);
+            break;
+        }
+    }
     if(!pidp) job_open();                       /* 10/25/26: a job of its own (jobs.c) */
-    pid = start_program(path, f.v, -1, -1, (flags & X_BACK) != 0, env);
+    pid = start_program(path, f.v, -1, -1, (flags & X_BACK) != 0, env, users_fd(n->redirs, 3) ? 3 : -1);
     kid = pidp ? 0 : job_close();
     var_env_free(env);
     status = restore(&s, pid < 0 ? STATUS_CANNOT : 0);
@@ -659,7 +721,7 @@ program:
     fields_free(&f);
     fields_free(&a);
     if(!pidp) check_interrupt();
-    if(exec_cmd && !stopping()) {
+    if(exec_cmd && !stopping() && (pid > 0 || !interactive)) {     /* 10/25/26: exec typo at the prompt: no end */
         exit_requested = 1;
         exit_code = status;
     }
@@ -668,8 +730,9 @@ done:
     fields_free(&f);
     fields_free(&a);
     status = restore(&s, status);
+    finish_docs(&s);                            /* 10/25/26: after restore() (finish_docs()) */
     check_interrupt();
-    if(exec_cmd && !stopping()) {
+    if(exec_cmd && !stopping() && (ran || !interactive)) {
         exit_requested = 1;
         exit_code = status;
     }
@@ -724,7 +787,7 @@ static int wait_fg(const int *pids, int np, int last, int kid, struct node *n, i
     int prev = kid ? jobctl(JOB_FG, kid) : 0, i, status = 0, why = 0;
     for(i = 0; i < np; i++) {
         int st = wait_program_ex(pids[i], report && pids[i] == last, kid != 0, &why);
-        if(st == STATUS_STOPPED) {
+        if(why >= 0) {                          /* stopped (an exit status of 148 is none) */
             char *text = job_text(n);
             job_stopped(text, pids + i, np - i, kid, why);
             free(text);
@@ -738,10 +801,12 @@ static int wait_fg(const int *pids, int np, int last, int kid, struct node *n, i
 }
 
 /* A stage of a pipeline, not in this shell: a process with 0 = in, 1 = out (-1: this shell's).
-   Its pid, or -1 (it could not start; *status says why) */
-static int start_stage(struct node *n, int in, int out, int background, int *status) {
+   Its pid, or -1 (it could not start; *status says why). 10/25/26: docs_apart: a here-document of
+   its may not wait for this shell (another stage reads its output, or it is in the background):
+   a new surfsh runs it and writes the document */
+static int start_stage(struct node *n, int in, int out, int background, int docs_apart, int *status) {
     int pid = -1;
-    if(stage_kind(n) == CMD_PROGRAM) {
+    if(stage_kind(n) == CMD_PROGRAM && !(docs_apart && has_doc(n->redirs))) {
         *status = exec_simple(n, background ? X_BACK : 0, in, out, &pid);
         if(pid < 0 && !*status) *status = STATUS_CANNOT;
         return pid;
@@ -783,7 +848,7 @@ static int exec_pipe(struct node *n, int flags) {
             }
             status = restore(&s, status);
         } else {
-            pid = start_stage(n->kids[i], in, p[1], background, &st);
+            pid = start_stage(n->kids[i], in, p[1], background, background || !lastone, &st);
             if(pid > 0) pids[np++] = pid;
             if(lastone) {
                 last = pid;
@@ -806,7 +871,7 @@ static int exec_pipe(struct node *n, int flags) {
     }
     if(np) {
         st = wait_fg(pids, np, last, kid, n, (flags & X_TOP) && stage_kind(n->kids[n->nkids - 1]) == CMD_PROGRAM);
-        if(!here) status = st;
+        if(!here && (last > 0 || st == STATUS_STOPPED)) status = st;  /* 10/25/26: a last stage that did not start: its 126, 127 */
     }
     check_interrupt();
     return status;
@@ -817,7 +882,7 @@ static int exec_background(struct node *n) {
     int pid = -1, st, kid;
     if(n->type == N_PIPE) return exec_pipe(n, X_BACK);
     job_open();                                 /* 10/25/26: a job of its own */
-    if(stage_kind(n) == CMD_PROGRAM) {
+    if(stage_kind(n) == CMD_PROGRAM && !has_doc(n->redirs)) {     /* 10/25/26: a document: a new surfsh writes it */
         st = exec_simple(n, X_BACK, -1, -1, &pid);
         kid = job_close();
         if(pid < 0) return st;
@@ -841,8 +906,9 @@ static int exec_sub(struct node *n) {
     int pid, status, kid;
     memset(&s, 0, sizeof(s));
     if(redirect(n->redirs, &s, 1) < 0) {
+        status = restore(&s, STATUS_FAIL);
         finish_docs(&s);
-        return restore(&s, STATUS_FAIL);
+        return status;
     }
     job_open();                                 /* 10/25/26: a job of its own */
     pid = start_tree(n->a, -1, -1, 0);
@@ -865,7 +931,7 @@ static int loop_ends(void) {
         return 1;
     }
     if(continue_count) return --continue_count ? 1 : 2;
-    return exit_requested || returning || interrupted;
+    return exit_requested || returning || interrupted || suspended;    /* 10/25/26: Ctrl+Z too */
 }
 
 static int exec_if(struct node *n, int flags) {
@@ -965,7 +1031,13 @@ static int exec_node(struct node *n, int flags) {
     case N_SIMPLE:
         return errexit(exec_simple(n, flags, -1, -1, NULL), flags);
     case N_PIPE:
-        return errexit(exec_pipe(n, flags), flags);
+    case N_SUB: {                               /* 10/25/26: what runs in a new surfsh takes cond_flag */
+        int was = cond_flag;
+        cond_flag = flags & X_COND;
+        status = n->type == N_PIPE ? exec_pipe(n, flags) : exec_sub(n);
+        cond_flag = was;
+        return errexit(status, flags);
+    }
     case N_AND:
     case N_OR:
         status = exec_node(n->a, (flags & ~X_TOP) | X_COND);
@@ -982,8 +1054,6 @@ static int exec_node(struct node *n, int flags) {
         return exec_node(n->b, flags);
     case N_BG:
         return exec_background(n->a);
-    case N_SUB:
-        return errexit(exec_sub(n), flags);
     case N_FUNC:                                /* 10/25/26 */
         return func_define(n) < 0 ? STATUS_FAIL : 0;
     case N_GROUP:
@@ -996,8 +1066,9 @@ static int exec_node(struct node *n, int flags) {
         memset(&s, 0, sizeof(s));
         if(redirect(n->redirs, &s, 0) < 0) status = STATUS_FAIL;
         else status = exec_compound(n, flags);
+        status = restore(&s, status);
         finish_docs(&s);
-        return restore(&s, status);
+        return status;
     }
     return STATUS_FAIL;
 }
