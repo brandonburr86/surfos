@@ -26,6 +26,12 @@ get a 'p' (usb0p1).
 from (its serial number is on the kernel command line, bootvol=); that volume
 alone may be mounted read-write (protect = bdev_boot_volume), because a stick
 made bootable by copying files onto it holds the owner's files too.
+
+10/24/26 (storage, milestone 1; SurfCPU's audit B9): a device carries the block
+cache's account of it (the bc_ fields, kept by fs/bcache.c alone): its dirty
+cached blocks by write order, those set aside, those whose last write failed,
+and whether the console was told it refuses writes. It goes with the device: a
+disk put in again is a new struct bdev with a fresh account.
 */
 
 #ifndef _SYS_BDEV_H
@@ -80,6 +86,12 @@ struct bdev {
     const struct bdev_ops *ops; /* NULL for a partition (the parent's are used) */
     void *priv;                 /* driver data; not touched once gone */
     u_long reads, writes;       /* blocks moved, for lsblk */
+    /* 10/24/26 (B9): fs/bcache.c's account of this device (the header comment) */
+    u_int bc_dirty[4];          /* its dirty cached blocks by write order (BORDER_* in fs/bcache.h), set-aside ones not counted */
+    u_int bc_aside;             /* its dirty blocks set aside (baside()) */
+    u_int bc_failed;            /* its dirty blocks whose last write failed */
+    const void *bc_aside_by;    /* the task whose operation set them aside (its own syncs do not owe them) */
+    bool bc_said;               /* the console was told it refuses writes (until a write works again) */
     struct bdev *next;
 };
 
