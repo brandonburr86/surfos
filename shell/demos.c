@@ -6,6 +6,8 @@ Moved out of main.c in 10/2026; the code is the original. 10/6/26: they clear th
 console of the task that runs them, which is not always the one that shows (the user
 shell runs them through SYS_kcmd on any console), and the menus that wait for a key
 leave when the wait is cut short (a kill of their task, Ctrl+C: surfos/task.h).
+10/25/26 (robustness, L13): funky counts its tempo in integers; the kernel never uses
+the FPU (-mno-80387), which is the programs'.
 */
 
 #include <blibc_common.h>
@@ -181,137 +183,137 @@ void invokeDemo() {
 void getFunky(int tempo)
 {
 
-float x = ((float)tempo / (float)10);
+int x = tempo; /* 10/25/26 (L13): in tenths, x/10 the old float: the same milliseconds, the kernel keeps off the FPU */
 
-sysbeep(2093,250*x);//C
-            sleep(50*x);
+sysbeep(2093,250*x/10);//C
+            sleep(50*x/10);
 
-            sysbeep(2093,250*x);//C
-            sleep(50*x);
+            sysbeep(2093,250*x/10);//C
+            sleep(50*x/10);
 
-            sysbeep(1865,250*x);//A#
-            sleep(50*x);
+            sysbeep(1865,250*x/10);//A#
+            sleep(50*x/10);
 
-            sysbeep(2093,250*x);//C
+            sysbeep(2093,250*x/10);//C
 
-            sleep(250*x);//1*8 rest
+            sleep(250*x/10);//1*8 rest
 
-            sysbeep(1568,500*x);//G
-            sleep(50*x);
+            sysbeep(1568,500*x/10);//G
+            sleep(50*x/10);
 
-            sysbeep(1568,250*x);//G
-            sleep(50*x);
+            sysbeep(1568,250*x/10);//G
+            sleep(50*x/10);
 
-            sysbeep(2093,250*x);//C
-            sleep(50*x);
+            sysbeep(2093,250*x/10);//C
+            sleep(50*x/10);
 
-            sysbeep(2794,250*x);//F
-            sleep(50*x);
+            sysbeep(2794,250*x/10);//F
+            sleep(50*x/10);
 
-            sysbeep(2637,250*x);//E
-            sleep(50*x);
+            sysbeep(2637,250*x/10);//E
+            sleep(50*x/10);
 
-            sysbeep(2093,250*x);//E
-            sleep(50*x);
+            sysbeep(2093,250*x/10);//E
+            sleep(50*x/10);
 
-        sleep(5000*x);
+        sleep(5000*x/10);
 
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(1865,250*x);//A#
-        sleep(50*x);
+        sysbeep(1865,250*x/10);//A#
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
+        sysbeep(2093,250*x/10);//C
 
-        sleep(250*x);//1*8 rest
+        sleep(250*x/10);//1*8 rest
 
-        sysbeep(1568,500*x);//G
-        sleep(50*x);
+        sysbeep(1568,500*x/10);//G
+        sleep(50*x/10);
 
-        sysbeep(1568,250*x);//G
-        sleep(50*x);
+        sysbeep(1568,250*x/10);//G
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(2794,250*x);//F
-        sleep(50*x);
+        sysbeep(2794,250*x/10);//F
+        sleep(50*x/10);
 
-        sysbeep(2637,250*x);//E
-        sleep(50*x);
+        sysbeep(2637,250*x/10);//E
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//E
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//E
+        sleep(50*x/10);
 
-        sleep(5000*x);
+        sleep(5000*x/10);
 
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
+    sysbeep(1568,250*x/10);//G
+    sleep(50*x/10);
 
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
+    sysbeep(1568,250*x/10);//G
+    sleep(50*x/10);
 
-    sysbeep(1396,250*x);//F
-    sleep(50*x);
+    sysbeep(1396,250*x/10);//F
+    sleep(50*x/10);
 
-    sysbeep(1568,250*x);//G
+    sysbeep(1568,250*x/10);//G
 
-    sleep(250*x);//1*8 rest
+    sleep(250*x/10);//1*8 rest
 
-    sysbeep(1175,500*x);//d
-    sleep(50*x);
+    sysbeep(1175,500*x/10);//d
+    sleep(50*x/10);
 
-    sysbeep(1175,250*x);//d
-    sleep(50*x);
+    sysbeep(1175,250*x/10);//d
+    sleep(50*x/10);
 
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
+    sysbeep(1568,250*x/10);//G
+    sleep(50*x/10);
 
-    sysbeep(2093, 250*x);//c
-    sleep(50*x);
+    sysbeep(2093, 250*x/10);//c
+    sleep(50*x/10);
 
-    sysbeep(1976, 250*x);//b
-    sleep(50*x);
+    sysbeep(1976, 250*x/10);//b
+    sleep(50*x/10);
 
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
+    sysbeep(1568,250*x/10);//G
+    sleep(50*x/10);
 
-    sleep(5000*x);
+    sleep(5000*x/10);
 
-    sysbeep(2093,250*x);//C
-        sleep(50*x);
+    sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(1865,250*x);//A#
-        sleep(50*x);
+        sysbeep(1865,250*x/10);//A#
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
+        sysbeep(2093,250*x/10);//C
 
-        sleep(250*x);//1*8 rest
+        sleep(250*x/10);//1*8 rest
 
-        sysbeep(1568,500*x);//G
-        sleep(50*x);
+        sysbeep(1568,500*x/10);//G
+        sleep(50*x/10);
 
-        sysbeep(1568,250*x);//G
-        sleep(50*x);
+        sysbeep(1568,250*x/10);//G
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//C
+        sleep(50*x/10);
 
-        sysbeep(2794,250*x);//F
-        sleep(50*x);
+        sysbeep(2794,250*x/10);//F
+        sleep(50*x/10);
 
-        sysbeep(2637,250*x);//E
-        sleep(50*x);
+        sysbeep(2637,250*x/10);//E
+        sleep(50*x/10);
 
-        sysbeep(2093,250*x);//E
-        sleep(50*x);
+        sysbeep(2093,250*x/10);//E
+        sleep(50*x/10);
 
 
 }

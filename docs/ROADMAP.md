@@ -508,7 +508,8 @@ sees only the asking task's current directory (it should look at every task's);
 `fdisk add` of logical partitions; one cache identity for a disk and its
 partitions (today a block reached both ways is cached twice); FAT12 in `mkfs`; exFAT,
 which larger sticks are sold with (deferred by the owner, October 2026); floating point in
-`printf`; and a 64-bit `time_t` before 2038. 10/17/26: a FAT rename that fails with an
+`printf` (10/25/26: done, with each program's FPU registers its own: the robustness track's B2,
+`docs/CODE-AUDIT.md` L10-L14); and a 64-bit `time_t` before 2038. 10/17/26: a FAT rename that fails with an
 I/O error between writing the new name and removing the old one leaves two names on one
 cluster chain, and `fs/fat.c` frees the chain when either name is deleted, replaced or
 truncated, so the other is left on free clusters. `edit` and the desktop keep the new

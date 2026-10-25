@@ -103,7 +103,7 @@ static int machine(void *ctx, struct gui_machine *out) {
     return 0;
 }
 
-/* as kill does, but only a program (a kernel thread is the kernel's: the kill command ends one), and never the
+/* as kill does (10/25/26: its rule, task_user_may_kill(): never a kernel thread, L15), and never the
    desktop's own task. 10/17/26 (System Monitor): the task is found and killed with interrupts off and its name
    copied first, since a zombie may be collected (and freed) by its parent at any time; each refusal says why.
    10/18/26: nor the shells this desktop runs in (curTask's parents): init would start a new shell on the
@@ -129,7 +129,7 @@ static int kill(void *ctx, int pid, char *msg, size_t n) {
         else if(t == init_task_ptr) no = "starts the consoles' shells: it is never ended";
         else if(t == curTask) no = "runs this desktop: Ctrl+Q leaves it";
         else if(above) no = "runs the shell this desktop runs in";
-        else if(!(t->flags & TF_USER)) no = "is a kernel thread: the shell's kill command ends one";
+        else if(!task_user_may_kill(t)) no = "is a kernel thread: End task ends programs";
         else if(t->state == TS_DEAD) ended = true;
         else if(t->in_call & TC_EXIT) ending = true;
         else {

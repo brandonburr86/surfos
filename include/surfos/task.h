@@ -40,6 +40,8 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
 #define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
+#define TF_PROCESS  0x100 /* 10/25/26 (L15): a process, from its creation (process_spawn_ex()): a process carries
+                             TF_KTHREAD too, and TF_USER only once its loading starts */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -110,6 +112,8 @@ typedef struct surf_task {
     char cwd[TASK_CWD_LEN];     /* current directory, absolute and normalized ("/" when empty) */
     struct file *files[NR_OPEN]; /* open file descriptors (fs/vfs.c) */
     struct uvm *uvm;            /* user address space (mm/uvm.c), NULL for kernel threads */
+    void *fpu;                  /* 10/25/26 (L10): a process's floating-point registers while the FPU holds another
+                                   task's (kernel/fpu.c): FPU_AREA bytes, 16-aligned; NULL for a kernel thread */
 
     u_long *esp;                /* saved trap frame while not running */
     u_char *stackmem;           /* kernel stack (NULL for the idle task: it uses the boot stack) */
@@ -197,6 +201,15 @@ void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for 
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 int kill_task_patient(surf_task *t); /* 10/18/26: as a hangup's kill: inside a call it waits for its end, however long
                                         (above); 1 when it does, 0 when the task ended at once or had ended */
+/* 10/25/26 (L15): may a user's kill (SYS_kill, the kill command, End task) end t? A process, or a ring-0 shell (TF_SHELL:
+   init starts it again, and its commands are calls that a kill waits for). Never the idle task, init or a kernel
+   thread: in no call, a kernel thread is killed on the spot, holding whatever locks it holds. A thread that users need
+   to stop has a command of its own for it. */
+static inline bool task_user_may_kill(const surf_task *t) {
+    return t && t != idle_task && t != init_task_ptr && (t->flags & (TF_PROCESS | TF_SHELL)) != 0;
+}
+int task_kill_user(u_long pid, char *name);  /* 10/25/26 (L15): SYS_kill's and the kill command's: 0, -EINVAL (no such task)
+                                                or -EPERM (above); name: its name (TASK_NAME_LEN) when found, or NULL */
 void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the current task */
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */

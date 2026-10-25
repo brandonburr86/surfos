@@ -751,23 +751,30 @@ static void nothing(void) {
 /**** 10/18/26: the kernel's side (tests/host/guisys_host.c builds shell/guisys.c and guisys_disk.c) ****/
 
 /* kill's refusals and its words: idle, init, the desktop's own task and the shell above it, a kernel thread; a
-   zombie; a program in its own code, in a system call, in a kernel command; a pid that is not there */
+   zombie; a program in its own code, in a system call, in a kernel command; a pid that is not there. 10/25/26 (L15):
+   the rule is kill's (task_user_may_kill(), surfos/task.h): a process carries TF_PROCESS (and TF_KTHREAD) as the
+   kernel's do, and one still being loaded, without TF_USER yet, may be ended too, as may a ring-0 shell; a task
+   with neither TF_PROCESS nor TF_SHELL may not, whatever its other flags */
 static void kernel_kill(void) {
     const struct gui_sys *sys = gui_kernel_sys();
+    const u_int proc = TF_KTHREAD | TF_PROCESS | TF_USER;
     surf_task *init, *f1, *f2, *t;
     char msg[GUI_STATUS];
     nktasks = patient_kills = 0;
     patient_last = NULL;
     idle_task = ktask_add(0, "Kernel Idle Task", 0, NULL, 0);
-    init_task_ptr = init = ktask_add(1, "init", 0, NULL, 0);
-    ktask_add(2, "usb", 0, init, 0);
-    f1 = ktask_add(4, "surfsh", TF_USER | TF_SHELL, init, TC_SYSCALL);          /* F1's shell, which ran another */
-    f2 = ktask_add(5, "surfsh", TF_USER | TF_SHELL, init, TC_SYSCALL | TC_COMMAND);   /* F2's, in a kernel command */
-    ktask_add(9, "edit", TF_USER, f2, TC_SYSCALL);
-    ktask_add(10, "cat", TF_USER, f2, 0);
-    ktask_add(11, "ls", TF_USER, f2, 0)->state = TS_DEAD;
-    curTask = ktask_add(12, "surfsh", TF_USER, f1, TC_SYSCALL | TC_COMMAND);   /* the shell that ran gui */
-    ktask_add(13, "more", TF_USER, f2, TC_EXIT);                               /* in task_exit(): its files close */
+    init_task_ptr = init = ktask_add(1, "init", TF_KTHREAD, NULL, 0);
+    ktask_add(2, "usb", TF_KTHREAD | TF_DETACHED, init, 0);
+    ktask_add(3, "odd", TF_KTHREAD | TF_DETACHED | TF_USER | TF_FOREGROUND | TF_LOADED, init, 0);  /* neither of the two */
+    f1 = ktask_add(4, "surfsh", proc | TF_SHELL, init, TC_SYSCALL);            /* F1's shell, which ran another */
+    f2 = ktask_add(5, "surfsh", proc | TF_SHELL, init, TC_SYSCALL | TC_COMMAND);   /* F2's, in a kernel command */
+    ktask_add(6, "Shell 2", TF_KTHREAD | TF_SHELL, init, 0);                   /* a ring-0 shell, at its prompt */
+    ktask_add(9, "edit", proc, f2, TC_SYSCALL);
+    ktask_add(10, "cat", proc, f2, 0);
+    ktask_add(11, "ls", proc, f2, 0)->state = TS_DEAD;
+    curTask = ktask_add(12, "surfsh", proc, f1, TC_SYSCALL | TC_COMMAND);     /* the shell that ran gui */
+    ktask_add(13, "more", proc, f2, TC_EXIT);                                 /* in task_exit(): its files close */
+    ktask_add(14, "hello", TF_KTHREAD | TF_PROCESS, f2, TC_SYSCALL);           /* being loaded: no TF_USER yet */
     CHECK(sys->kill(sys->ctx, 0, msg, sizeof(msg)) == -EACCES &&
           !strcmp(msg, "Kernel Idle Task (pid 0) is the idle task: the kernel's own"));
     CHECK(sys->kill(sys->ctx, 1, msg, sizeof(msg)) == -EACCES &&
@@ -777,7 +784,9 @@ static void kernel_kill(void) {
     CHECK(sys->kill(sys->ctx, 4, msg, sizeof(msg)) == -EACCES &&
           !strcmp(msg, "surfsh (pid 4) runs the shell this desktop runs in"));
     CHECK(sys->kill(sys->ctx, 2, msg, sizeof(msg)) == -EACCES &&
-          !strcmp(msg, "usb (pid 2) is a kernel thread: the shell's kill command ends one"));
+          !strcmp(msg, "usb (pid 2) is a kernel thread: End task ends programs"));
+    CHECK(sys->kill(sys->ctx, 3, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "odd (pid 3) is a kernel thread: End task ends programs"));      /* TF_USER is not the rule */
     CHECK(patient_kills == 0);
     CHECK(sys->kill(sys->ctx, 11, msg, sizeof(msg)) == 0 && !strcmp(msg, "ls (pid 11) had ended already") &&
           patient_kills == 0);
@@ -791,11 +800,16 @@ static void kernel_kill(void) {
     CHECK(patient_kills == 3);
     CHECK(sys->kill(sys->ctx, 13, msg, sizeof(msg)) == 0 && !strcmp(msg, "more (pid 13) is ending already") &&
           patient_kills == 3 && !task_find(13)->intr);
+    /* 10/25/26 (L15): a process still being loaded ends when its loading does; a ring-0 shell elsewhere at once */
+    CHECK(sys->kill(sys->ctx, 14, msg, sizeof(msg)) == 0 && !strcmp(msg, "hello (pid 14) ends when its system call does") &&
+          patient_kills == 4 && patient_last->pid == 14);
+    CHECK(sys->kill(sys->ctx, 6, msg, sizeof(msg)) == 0 && !strcmp(msg, "ended Shell 2 (pid 6)") && patient_kills == 5 &&
+          patient_last->pid == 6 && patient_last->state == TS_DEAD);
     /* killed already (the shell's kill, say): that kill's rule stands, and the words are the call's */
     t = task_find(9);
     t->intr = TI_KILL;
     CHECK(sys->kill(sys->ctx, 9, msg, sizeof(msg)) == 0 && !strcmp(msg, "edit (pid 9) ends when its system call does") &&
-          patient_kills == 4 && t->intr == TI_KILL);
+          patient_kills == 6 && t->intr == TI_KILL);
     curTask = idle_task = init_task_ptr = NULL;
 }
 

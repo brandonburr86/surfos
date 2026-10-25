@@ -15,6 +15,11 @@ kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 10/18/26 (the desktop's System Monitor): End task's kill waits for the end of the call however
 long, as a hangup's does (kill_task_patient()), and the task list is copied in one go
 (task_info_all()).
+10/25/26 (robustness, L15): a user's kill ends processes and ring-0 shells only (task_user_may_kill(),
+task_kill_user()): a process is marked TF_PROCESS from its creation.
+10/25/26 (robustness, L10): a process has floating-point registers of its own, switched lazily
+(kernel/fpu.c): an area made with the task and freed with it, the FPU no longer its own when it
+dies, and CR0.TS set by schedule() for whoever does not own it.
 */
 
 #include <surfos/types.h>
@@ -40,6 +45,7 @@ long, as a hangup's does (kill_task_patient()), and the task list is copied in o
 #include <fs/vfs.h>
 #include <mm/uvm.h>
 #include <surfos/proc.h>
+#include <surfos/fpu.h>
 
 #include <blibc_common.h>
 
@@ -196,6 +202,11 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
         kfree(t);
         return NULL;
     }
+    if((flags & TF_PROCESS) && fpu_task_new(t)) {         /* 10/25/26 (L10): its floating-point registers */
+        kfree(t->stackmem);
+        kfree(t);
+        return NULL;
+    }
     /* Touch every page now: a kernel stack must never be demand paged, because the CPU
        pushes the page fault frame onto that very stack and faults again (double fault). */
     memset(t->stackmem, 0, KSTACK_SIZE);
@@ -347,6 +358,7 @@ static void become_zombie(surf_task *t, int code) {
     t->state = TS_DEAD;
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
+    fpu_task_gone(t);                         /* 10/25/26 (L10): what the FPU holds is nobody's now */
     jobs_shell_gone(t);                       /* 10/25/26: the jobs it made */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
@@ -462,6 +474,25 @@ int kill_task_patient(surf_task *t) {
     waits = t->state != TS_DEAD && t->in_call;
     irq_restore(flags);
     return waits;
+}
+
+/* 10/25/26 (L15): a user's kill of pid (SYS_kill; the kill command, which surfsh's kill of a pid runs): kill_task()'s
+   rule for what task_user_may_kill() allows, -EPERM for the rest (killed on the spot, a kernel thread would keep its
+   locks), -EINVAL when there is no such task. Found and killed with interrupts off: a zombie may be collected (and
+   freed) by its parent at any time. Its name is copied into name (TASK_NAME_LEN bytes) when it is found. */
+int task_kill_user(u_long pid, char *name) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int r = 0;
+    t = task_find(pid);
+    if(!t) r = -EINVAL;
+    else {
+        if(name) strlcpy(name, t->name, TASK_NAME_LEN);
+        if(!task_user_may_kill(t)) r = -EPERM;
+        else kill_task(t);
+    }
+    irq_restore(flags);
+    return r;
 }
 
 /* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing
@@ -775,6 +806,7 @@ static void reap(surf_task *t) {
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
+    fpu_task_free(t);               /* 10/25/26 (L10) */
     kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
 }
@@ -964,6 +996,7 @@ u_long *schedule(struct trapframe *tf) {
         curTask = next;
         tss_set_kernel_stack(next->stack_top);
         if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
+        fpu_switch(next);                                   /* 10/25/26 (L10): CR0.TS unless it owns the FPU */
     }
     return next->esp;
 }
@@ -1189,6 +1222,7 @@ void init_task() {
     ntasks = 0;
 
     trap_set_handler(T_YIELD, yield_trap); //interrupt for yield()
+    init_fpu(); //10/25/26 (L10): programs' floating point, switched on first use (kernel/fpu.c)
 
     /* The code running now (kmain) becomes the idle task: its registers are first saved
        by the first timer interrupt, so curTask MUST start out as the idle task. */

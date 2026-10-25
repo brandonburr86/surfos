@@ -1,7 +1,8 @@
 /* Host-side unit tests for the user C library (user/libsurf): the formatter, sscanf, strtol,
    the string functions, the calendar functions and qsort are compared with the host libc;
    malloc runs a random workload over an arena that stands in for sbrk(). Built and run by
-   `make unittest`; the library is compiled with tests/host/libsurf_names.h (surf_ names). */
+   `make unittest`; the library is compiled with tests/host/libsurf_names.h (surf_ names).
+   10/25/26 (L14): the formatter's floating point too, digit for digit with glibc's. */
 #define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <string.h>
@@ -104,6 +105,57 @@ static void test_format(void) {
         close(fds[1]);
         check(n > 0 && read(fds[0], back, sizeof back - 1) == n && strstr(back, "dprintf\n"), "dprintf writes to a descriptor");
         close(fds[0]);
+    }
+}
+
+/* 10/25/26 (L14): floating point against the host's printf, which prints the exact value's digits as libsurf does: the
+   conversions with their flags, ties (to even), carries, the smallest and largest doubles, digits far past the 17 a
+   double needs, zeros, infinities and NaNs, %Lf; then doubles of random bits (a fixed seed). A long double that no
+   double holds is printed as the nearest double (glibc prints its own digits) */
+static void test_format_float(void) {
+    static const double v[] = { 0.0, -0.0, 1.0, -1.0, 0.5, 1.5, 2.5, 3.5, 0.25, 0.125, 0.375, 0.1, 0.2, 0.3, 2.675,
+                                1e-5, 1.234e-4, 3.14159265358979, 2.0 / 3, 1e5, 1e6, 123456789.0, 9.9996, 0.0006, 0.0004,
+                                0.0005, 1e20, 1e23, 1.5e-10, 1e-300, 5e-324, 2.2250738585072014e-308,
+                                1.7976931348623157e308, 12345.678, -987.65, 4503599627370496.5, 9007199254740993.0,
+                                999999.5, 0.95, 9.5 };
+    static const char *const f[] = { "%f", "%.0f", "%.1f", "%.2f", "%.3f", "%.10f", "%.20f", "%e", "%.0e", "%.3e",
+                                     "%.20e", "%E", "%g", "%.0g", "%.1g", "%.3g", "%.10g", "%.17g", "%.25g", "%G",
+                                     "%#.0f", "%#.0e", "%12.4f", "%-12.4e|", "%+g", "% f", "%012.3f", "%+012.3e",
+                                     "%-+9.2f|", "%F" };
+    double inf = strtod("inf", NULL), nan = strtod("nan", NULL);
+    char a[64], b[64];
+    unsigned i, j;
+    for(i = 0; i < sizeof(v) / sizeof(v[0]); i++)
+        for(j = 0; j < sizeof(f) / sizeof(f[0]); j++) fmt_check(f[j], v[i]);
+    fmt_check("%f %F %e %E %g %G", inf, inf, -inf, inf, inf, -inf);
+    fmt_check("[%8f][%-8F][%08e][%+g][% G]", inf, -inf, inf, inf, inf);
+    fmt_check("%f %F %e %g", nan, nan, -nan, nan);
+    fmt_check("[%6.2f][%-6.2f][%06.2f]", nan, nan, nan);
+    fmt_check("%Lf %Le %Lg %.3LE", 1.5L, -1234.5L, 1e-5L, 0.125L);
+    fmt_check("%5.1f%%, %d, %.2e, %s", 99.95, 7, 6.02e23, "done");
+    /* %#g against glibc where its rounding carries into no new power of ten; where it carries into exponent P, glibc
+       2.36 prints 1.e+06 and drops the zeros # keeps, so those are checked against C11 7.21.6.1's rule instead */
+    fmt_check("[%#g][%#g][%#g][%#.3g][%#.3g][%#.1g][%#.0g][%#.3G][%#.3G]", 1.0, 0.0001234, 123456789.0, 0.125, 9.9996,
+              0.25, 2.5, 0.00099951, 0.0009995);
+    surf_snprintf(a, sizeof a, "[%#g][%#.3g]", 999999.5, 999.5);
+    check(!strcmp(a, "[1.00000e+06][1.00e+03]"), "%#g of a value that rounds up to 10^P keeps its zeros");
+    surf_snprintf(a, sizeof a, "%Lf %.20Lg", 1.0L / 3, 1.0L / 3);
+    snprintf(b, sizeof b, "%f %.20g", (double)(1.0L / 3), (double)(1.0L / 3));
+    check(!strcmp(a, b), "%Lf of a long double no double holds: the nearest double's digits");
+    {
+        unsigned long long bits;
+        double d;
+        srand(20261025);
+        for(i = 0; i < 4000; i++) {
+            bits = ((unsigned long long)rand() << 62) ^ ((unsigned long long)rand() << 31) ^ (unsigned long long)rand();
+            if(((bits >> 52) & 0x7ff) == 0x7ff) continue;             /* an infinity or a NaN: above */
+            memcpy(&d, &bits, sizeof d);
+            fmt_check("%.17g", d);
+            fmt_check("%.3e", d);
+            fmt_check("%.0f", d);
+            fmt_check("%.6f", d);
+            fmt_check("%g", d);
+        }
     }
 }
 
@@ -315,6 +367,7 @@ static void test_malloc(void) {
 
 int main(void) {
     test_format();
+    test_format_float();
     test_scanf();
     test_strtol();
     test_strings();

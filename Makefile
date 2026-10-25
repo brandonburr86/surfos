@@ -31,8 +31,12 @@ ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null)
 # user programs (roadmap P2): static ELF at 0x40000000 linked with libsurf.a, the user C library
 # (10/5/26). Programs see only user/include, never the kernel's headers; the library also finds
 # the system call numbers in include/surfos/syscall.h (-idirafter). Sections per function and
-# --gc-sections keep each program to what it uses.
-USER_CFLAGS  = $(filter-out -Iinclude,$(CFLAGS)) -Iuser/include -ffunction-sections -fdata-sections \
+# --gc-sections keep each program to what it uses. 10/25/26 (L10-L13): programs have the FPU (the kernel keeps
+# each one's registers, kernel/fpu.c), so the kernel's -mno-80387 is not theirs; libsurf and the programs stay i486
+# code (x87). A program may opt into SSE2 with flags of its own, for example
+#   $(BUILD)/user/obj/NAME.o: USER_CFLAGS += -march=pentium4 -msse2 -mfpmath=sse
+# (main is called with a 16-aligned stack, user/libsurf/crt0.S); such a program needs a CPU with SSE2.
+USER_CFLAGS  = $(filter-out -Iinclude -mno-80387,$(CFLAGS)) -Iuser/include -ffunction-sections -fdata-sections \
                -fno-tree-loop-distribute-patterns
 USER_LIB_CFLAGS = $(USER_CFLAGS) -idirafter include
 USER_LIB_SRC = $(wildcard user/libsurf/*.c)
@@ -53,6 +57,7 @@ USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeli
 USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
+USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point, and two programs' at once
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -94,10 +99,12 @@ Q = $(if $(V),,@)
 
 # Freestanding 32-bit code: no PIE, no stack protector, no CET, no SSE, no unwind tables.
 # -fgnu89-inline keeps the 2004 "inline" definitions visible to other files (audit A7).
-# The FPU is left enabled on purpose: the shell's speaker tune uses float arithmetic.
+# 10/25/26 (L13): no x87 either. The FPU is the programs' (kernel/fpu.c switches their registers only when they
+# use it), so the kernel never touches it: with -mno-80387 a float in kernel code becomes a call to libgcc, which
+# the kernel does not link, and the link fails. USER_CFLAGS takes the flag out again.
 CFLAGS     = -m32 -march=i486 -ffreestanding -fno-builtin -nostdlib -nostdinc \
              -fno-pie -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables \
-             -fcf-protection=none -mno-sse -mno-sse2 -mno-mmx \
+             -fcf-protection=none -mno-sse -mno-sse2 -mno-mmx -mno-80387 \
              -fgnu89-inline -fno-strict-aliasing -fno-omit-frame-pointer \
              -Wall -Wno-main -g -O$(O) -Iinclude -MMD -MP
 ASFLAGS    = -m32 -ffreestanding -nostdlib -fno-pie -g -Iinclude -MMD -MP

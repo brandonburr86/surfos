@@ -39,6 +39,11 @@ it as a script of its own (POSIX's rule); an ELF file the loader cannot run stil
 the new task, as before. A new task is in the caller's job (surfos/job.h), or in the one
 SYS_spawnx names: a new one (SPAWN_JOB_NEW, the task its first) or one of the caller's; a
 detached one (init's) is in none.
+
+10/25/26 (robustness, L15): a process is TF_PROCESS from its creation, which a user's kill
+looks for (task_user_may_kill()): a kernel thread is never killed by one. L10, L12: it gets
+floating-point registers of its own with that flag (task_alloc(), kernel/fpu.c), and its stack
+is 16-aligned at _start.
 */
 
 #include <surfos/types.h>
@@ -173,7 +178,10 @@ static void user_entry(void *arg) {
         argv_user[i] = sp;
     }
     argv_user[sa->argc] = 0;
-    sp &= ~3UL;
+    /* 10/25/26 (L12): the arrays and the three words placed so that _start finds its stack 16-aligned, as the
+       i386 ABI has it (a program's SSE code keeps 16-byte values there; crt0 aligns it again for main) */
+    sp &= ~15UL;
+    sp -= (0 - (sa->envc + 1 + sa->argc + 1 + 3) * sizeof(u_long)) & 15;
     sp -= (sa->envc + 1) * sizeof(u_long);
     memcpy((void *)sp, env_user, (sa->envc + 1) * sizeof(u_long));
     {
@@ -331,8 +339,9 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
        caller's on the caller's terminal (none on a pty's: kthread_create_job()). In none: a detached
        task, and what a kernel command starts (run waits for its end and knows of no stop) */
     job = (flags & TF_DETACHED) || (curTask && (curTask->in_call & TC_COMMAND)) ? SPAWN_JOB_NONE : more ? more->job : 0;
-    r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL,
-                           job);
+    /* 10/25/26 (L15): TF_PROCESS, so that a user's kill may end it (task_user_may_kill()) */
+    r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL,
+                           (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL | TF_PROCESS, job);
     if(r < 0) { release_files(sa); kfree(sa); }
     return r;
 }

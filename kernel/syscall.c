@@ -288,12 +288,11 @@ static int sys_job(int op, int arg) {
     return task_job_kill(t, (u_long)arg, curTask->pid);
 }
 
-/* 10/6/26: the caller killing itself ends when this call does, like any task in a call */
+/* 10/6/26: the caller killing itself ends when this call does, like any task in a call. 10/25/26 (L15): a process
+   or a ring-0 shell; -EPERM for idle, init and a kernel thread (task_user_may_kill()) */
 static int sys_kill(int pid) {
-    surf_task *t = task_find((u_long)pid);
-    if(!t || pid <= 1) return -EINVAL;
-    kill_task(t);
-    return 0;
+    if(pid < 0) return -EINVAL;
+    return task_kill_user((u_long)pid, NULL);
 }
 
 /**** 10/5/26: calls 22-31 ****/

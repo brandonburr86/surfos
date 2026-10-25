@@ -5,11 +5,14 @@ File: cpu.c     Date: 10/5/26 (USB boot)
 --------------------
 See include/surfos/cpu.h. A 486 without CPUID still boots: every feature reads as
 absent and nothing here is used.
+10/25/26 (robustness, L11): CR4.OSFXSR and OSXMMEXCPT follow the CPU (FXSR, SSE), never
+the boot loader; cpuinfo says what a program's floating point has.
 */
 
 #include <surfos/types.h>
 #include <surfos/cpu.h>
 #include <surfos/console.h>
+#include <surfos/fpu.h>
 #include <blibc_common.h>
 
 struct cpu_info cpu;
@@ -114,6 +117,9 @@ void init_cpu(void) {
         cpu.apic = (d >> 9) & 1;
         cpu.pat = (d >> 16) & 1;
         cpu.pse36 = (d >> 17) & 1;
+        cpu.fxsr = (d >> 24) & 1;               /* 10/25/26 (L11) */
+        cpu.sse = (d >> 25) & 1;
+        cpu.sse2 = (d >> 26) & 1;
     }
     cpuid(0x80000000, 0, &a, 0, 0, 0);
     cpu.max_ext_leaf = (a & 0x80000000) ? a : 0;
@@ -129,10 +135,15 @@ void init_cpu(void) {
 
     /* CR4 as this kernel expects it, whatever the firmware enabled: in particular SMAP would
        fault every system call that reads user memory and PVI would let ring 3 run cli. Only
-       4 MB pages are added (the framebuffer window, mm/paging.c). */
+       4 MB pages are added (the framebuffer window, mm/paging.c). 10/25/26 (L11): and fxsave
+       with SSE for programs when the CPU has them, whatever the boot loader left;
+       kernel/fpu.c keeps each program's registers with fxsave, which holds no AVX state, so
+       XSAVE and AVX stay off (CR4.OSXSAVE: AVX code raises #UD) */
     {
-        u_long cr4 = cpu.boot_cr4 & ~CR4_CLEAR;
+        u_long cr4 = cpu.boot_cr4 & ~(CR4_CLEAR | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE);
         if(cpu.pse) cr4 |= CR4_PSE;
+        if(cpu.fxsr) cr4 |= CR4_OSFXSR;
+        if(cpu.fxsr && cpu.sse) cr4 |= CR4_OSXMMEXCPT;
         asm volatile("movl %0, %%cr4" : : "r"(cr4) : "memory");
         cpu.pse_on = cpu.pse;
     }
@@ -161,6 +172,11 @@ void cpu_print(void) {
     printf("    features%s%s%s%s%s%s%s%s%s\n", cpu.fpu ? " fpu" : "", cpu.pse ? " pse" : "", cpu.tsc ? " tsc" : "",
            cpu.msr ? " msr" : "", cpu.pae ? " pae" : "", cpu.apic ? " apic" : "", cpu.pat ? " pat" : "",
            cpu.pse36 ? " pse36" : "", cpu.invariant_tsc ? " invariant-tsc" : "");
+    /* 10/25/26 (L10, L11): what a program's floating point has, and how the kernel keeps its registers */
+    if(!cpu.fpu) printf("    FPU      none reported\n");
+    else printf("    FPU      %s%s%s: a program's registers are kept with %s (%lu saved for another's)\n",
+                cpu.fxsr ? "x87, FXSR" : "x87 only", cpu.fxsr && cpu.sse ? ", SSE" : "", cpu.fxsr && cpu.sse2 ? ", SSE2" : "",
+                cpu.fxsr ? "fxsave" : "fnsave", fpu_saves());
     printf("    4 MB pages %s, framebuffer %s\n", cpu.pse_on ? "on" : "off",
            cpu.pat_wc ? "write-combining (PAT)" : "uncached");
     printf("    from the boot loader: CR0 0x%08lx, CR4 0x%08lx\n", cpu.boot_cr0, cpu.boot_cr4);
