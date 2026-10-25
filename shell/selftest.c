@@ -376,6 +376,66 @@ static void test_kills(void) {
     kfree(log);
 }
 
+static void sleep_then_exit(void *arg) {
+    sleep_ms((u_long)arg);
+    task_exit(7);
+}
+
+/* 10/25/26 (L15): a user's kill (task_kill_user(): SYS_kill's and the kill command's) refuses idle, init, the net
+   thread and a kernel thread of the test's own, which run on, and says when there is no such task; it ends a child
+   process (crash loop: at the end of its loading, or at once in its own code). The child is killed for certain
+   before the test waits for it: crash loop never ends by itself. */
+static void test_user_kill(void) {
+    char *loop[] = { "crash", "loop" };
+    char name[TASK_NAME_LEN];
+    u_long pid, net = 0, flags;
+    int r, status = 99, child, got;
+    surf_task *t;
+    struct stat st;
+
+    check(task_kill_user(idle_task->pid, NULL) == -EPERM && task_kill_user(init_task_ptr->pid, NULL) == -EPERM &&
+          task_kill_user(999999, NULL) == -EINVAL, "kill: idle and init are refused, and a pid nobody has");
+    flags = irq_save();
+    for(pid = 2; pid < 64 && !net; pid++) {
+        t = task_find(pid);
+        if(t && !strcmp(t->name, "net") && !(t->flags & TF_PROCESS)) net = pid;
+    }
+    irq_restore(flags);
+    if(!net) printf("  skip kill of the net thread (no net thread)\n");
+    else {
+        bool on;
+        r = task_kill_user(net, name);
+        flags = irq_save();
+        t = task_find(net);
+        on = t && t->state != TS_DEAD && !t->intr;
+        irq_restore(flags);
+        check(r == -EPERM && !strcmp(name, "net") && on, "kill: the net thread is refused, and it runs on");
+    }
+    t = kthread_create("killkt", sleep_then_exit, (void *)200, PL_NORMAL, 0);
+    if(!t) check(false, "kill: a kernel thread of the test's own is refused, and ends by itself");
+    else {
+        pid = t->pid;                   /* it sleeps 200 ms first: t is there to read */
+        r = task_kill_user(pid, NULL);
+        check(r == -EPERM && task_wait(pid, &status) == (int)pid && status == 7,
+              "kill: a kernel thread of the test's own is refused, and ends by itself");
+    }
+    if(vfs_stat("/initrd/bin/crash", &st) != 0) {
+        printf("  skip kill of a child process (no /initrd/bin/crash)\n");
+        return;
+    }
+    name[0] = 0;
+    child = process_spawn("/initrd/bin/crash", 2, loop, curTask->con, 0);
+    r = child > 0 ? task_kill_user((u_long)child, name) : child;
+    if(child > 0 && r) {                /* refused (a fault of this stage): ended anyway, or the wait would never end */
+        flags = irq_save();
+        kill_task(task_find((u_long)child));
+        irq_restore(flags);
+    }
+    got = child > 0 ? task_wait((u_long)child, &status) : -1;
+    check(child > 0 && r == 0 && !strcmp(name, "crash") && got == child && status == -1,
+          "kill: a child process is ended (crash loop, status -1)");
+}
+
 static bool same_info(const struct procinfo *a, const struct procinfo *b) {
     return a->pid == b->pid && a->ppid == b->ppid && a->state == b->state && a->flags == b->flags && a->tty == b->tty &&
            !strcmp(a->name, b->name);
@@ -1420,7 +1480,7 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_user_kill, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

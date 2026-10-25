@@ -51,6 +51,7 @@ a ping) gives up when that happens (task_interrupted()), along its usual way out
 #include <surfos/system.h>
 #include <surfos/klog.h>
 #include <surfos/interrupt.h>
+#include <surfos/irq.h>
 #include <surfos/multiboot.h>
 #include <surfos/cpu.h>
 #include <surfos/acpi.h>
@@ -186,18 +187,20 @@ static int cmd_sleep(int argc, char **argv) {
 
 static int cmd_ps(int argc, char **argv) { print_tasks(); return CMD_OK; }
 
+/* 10/25/26 (L15): a program or a ring-0 shell, never a kernel thread (task_kill_user()) */
 static int cmd_kill(int argc, char **argv) {
-    surf_task *t;
+    char name[TASK_NAME_LEN];
     u_long pid;
     char *end;
+    int r;
     if(argc < 2) { printf("    usage: kill <pid>\n"); return CMD_USAGE; }
     pid = strtoul(argv[1], &end, 10);
     if(!argv[1][0] || *end) { printf("    usage: kill <pid>   (a number: ps lists them)\n"); return CMD_USAGE; }
-    t = task_find(pid);
-    if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
-    if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
-    printf("    killing '%s' (pid %lu)\n", t->name, pid);
-    kill_task(t);                       /* 10/6/26: inside a call it ends with the call; this shell itself, after this command */
+    r = task_kill_user(pid, name);      /* 10/6/26: inside a call it ends with the call; this shell itself, after this command */
+    if(r == -EINVAL) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
+    if(r && (pid == idle_task->pid || (init_task_ptr && pid == init_task_ptr->pid))) { printf("    not that one\n"); return CMD_FAIL; }
+    if(r) { printf("    '%s' (pid %lu) is a kernel thread: kill ends programs and shells\n", name, pid); return CMD_FAIL; }
+    printf("    killing '%s' (pid %lu)\n", name, pid);
     return CMD_OK;
 }
 
@@ -474,37 +477,77 @@ static int cmd_ping(int argc, char **argv) {
     return got ? CMD_OK : CMD_FAIL;
 }
 
+/* 10/25/26 (L15): kill no longer ends a kernel thread, so the servers stop when asked (tcpecho stop). Each looks at
+   tcpecho_gen at least every TCPECHO_LOOK_MS (its accept and its reads wait no longer) and ends, closing its
+   connection and its listener, once the number has moved on from the one it was started with (passed with its
+   port). tcpecho_servers counts them from their start to their end. A connection still ends after a minute without
+   data, as before. */
+static volatile u_int tcpecho_gen, tcpecho_servers;
+#define TCPECHO_LOOK_MS 500
+
+static void tcpecho_gone(void) {
+    u_long irqf = irq_save();
+    tcpecho_servers--;
+    irq_restore(irqf);
+}
+
 static void tcpecho_thread(void *arg) {
-    u16 port = (u16)(u_long)arg;
+    u16 port = (u16)(u_long)arg, gen = (u16)((u_long)arg >> 16);
     struct tcp_socket *l = tcp_listen(port), *c;
     char buf[1024], a[16];
-    if(!l) { printf("tcpecho: port %u is busy\n", port); return; }
+    if(!l) { printf("tcpecho: port %u is busy\n", port); tcpecho_gone(); return; }
     printf("tcpecho: listening on port %u\n", port);
-    for(;;) {
+    while(gen == (u16)tcpecho_gen) {
         u16 rp;
-        u_long total = 0;
+        u_long total = 0, idle = 0;
         int n;
-        c = tcp_accept(l, 3600000);
+        c = tcp_accept(l, TCPECHO_LOOK_MS);
         if(!c) continue;
         printf("tcpecho: connection from %s:%u\n", ipfmt(tcp_peer(c, &rp), a), rp);
-        while((n = tcp_recv(c, buf, sizeof(buf), 60000)) > 0) {
-            if(tcp_send(c, buf, n) != n) break;
+        while(gen == (u16)tcpecho_gen && idle < 60000) {
+            n = tcp_recv(c, buf, sizeof(buf), TCPECHO_LOOK_MS);
+            if(n == -1) { idle += TCPECHO_LOOK_MS; continue; }     /* nothing within the wait */
+            if(n <= 0 || tcp_send(c, buf, n) != n) break;          /* closed, reset, or the send failed */
             total += n;
+            idle = 0;
         }
         tcp_close(c);
         printf("tcpecho: closed, %lu bytes echoed\n", total);
     }
+    tcp_release(l);                     /* it stops listening; the port is free */
+    printf("tcpecho: stopped, port %u is free\n", port);
+    tcpecho_gone();
 }
 
-/* the server task says itself whether it could listen: the status says it was started */
+/* the server task says itself whether it could listen: the status says it was started. 10/25/26 (L15): tcpecho
+   stop ends every server started before it (above), and waits 3 s at most */
 static int cmd_tcpecho(int argc, char **argv) {
     char *end = NULL;
-    u_long port = argc > 1 ? strtoul(argv[1], &end, 10) : 7;
+    u_long port, irqf;
+    u_int n, waited;
+    if(argc == 2 && !strcmp(argv[1], "stop")) {
+        n = tcpecho_servers;
+        if(!n) { printf("    tcpecho: no server running\n"); return CMD_OK; }
+        tcpecho_gen++;
+        for(waited = 0; tcpecho_servers && waited < 3000; waited += 50) if(sleep_intr(50)) break;
+        if(tcpecho_servers) {
+            printf("    tcpecho: %u server%s still running\n", tcpecho_servers, tcpecho_servers == 1 ? "" : "s");
+            return CMD_FAIL;
+        }
+        printf("    tcpecho: %u server%s stopped\n", n, n == 1 ? "" : "s");
+        return CMD_OK;
+    }
+    port = argc > 1 ? strtoul(argv[1], &end, 10) : 7;
     if(argc > 2 || (end && (!argv[1][0] || *end || !port || port > 65535))) {
-        printf("    usage: tcpecho [port]   (1 to 65535, default 7)\n");
+        printf("    usage: tcpecho [port] | tcpecho stop   (port 1 to 65535, default 7)\n");
         return CMD_USAGE;
     }
-    if(!kthread_create("tcpecho", tcpecho_thread, (void *)port, PL_NORMAL, TF_DETACHED)) {
+    irqf = irq_save();
+    tcpecho_servers++;
+    irq_restore(irqf);
+    if(!kthread_create("tcpecho", tcpecho_thread, (void *)(port | ((u_long)(u16)tcpecho_gen << 16)), PL_NORMAL,
+                       TF_DETACHED)) {
+        tcpecho_gone();
         printf("    tcpecho: no memory for the server task\n");
         return CMD_FAIL;
     }
@@ -989,7 +1032,7 @@ static const struct command commands[] = {
     { "arp",       "",          "the ARP table", cmd_arp },
     { "dhcp",      "[renew] [if]", "get an address lease (renew: keep the one there is)", cmd_dhcp },
     { "nslookup",  "<name>",    "resolve a host name", cmd_nslookup },
-    { "tcpecho",   "[port]",    "start a TCP echo server (port 7)", cmd_tcpecho },
+    { "tcpecho",   "[port]|stop", "start a TCP echo server (port 7), or stop them", cmd_tcpecho },
     { "httpget",   "<host> <port> [path]", "fetch a page over TCP", cmd_httpget },
     { "ping",      "<ip> [n] [if]", "ICMP echo (if: through that interface)", cmd_ping },
     { "netstat",   "",          "interfaces and sockets", cmd_netstat },

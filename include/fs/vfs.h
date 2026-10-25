@@ -31,6 +31,7 @@ when it did not reach the disk, as fsync does; umount says what it gave up.
 #define VFS_PATH_MAX 256
 
 /* errno values (the numbers Linux uses, so a user libc can share them later) */
+#define EPERM         1         /* 10/25/26: a kill that a user may not make (surfos/task.h, task_user_may_kill()) */
 #define ENOENT        2
 #ifndef EINTR
 #define EINTR         4         /* 10/6/26: a wait cut short by a kill or Ctrl+C (surfos/wait.h) */

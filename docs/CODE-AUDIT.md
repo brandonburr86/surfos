@@ -116,6 +116,16 @@ Left as it is (as on SurfCPU, its B16): while a dirty block of the volume refuse
 and fails, so rm, mv and truncate of other files, and closes, say EIO (nothing changed) until the block is written,
 its file is removed (B16 lets that rm through) or the volume is unmounted (which gives it up and says so).
 
+### Robustness (October 2026, branch `robust/main`)
+
+SurfOS should survive a misbehaving program (`docs/superpowers/plans/2026-10-25-robustness.md`, track B). The
+track's IDs use a letter of their own: L1-9 memory, L10-14 floating point, L15-19 kills and stacks, L20-29
+shutdown. Closed so far:
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| L15 | `kernel/syscall.c`, `shell/main.c`, `shell/guisys.c` | `SYS_kill` refused only pids 0 and 1, and the `kill` command only idle and init, so `kill` on the usb, net, iwl or touchpad thread ended it at once (a kernel thread is never inside a call, where a kill waits for the call's end), holding whatever locks it held. The flags could not tell a process from a kernel thread: a process carries `TF_KTHREAD` too, and `TF_USER` only once its loading starts | `TF_PROCESS`, set by `process_spawn_ex()`; a user's kill (`task_user_may_kill()`, `task_kill_user()`) ends processes and ring-0 shells (init starts them again, and their commands are calls a kill waits for), and nothing else: `SYS_kill` says EPERM, `kill` and End task say "is a kernel thread". `tcpecho`, the kernel thread a user starts, stops with `tcpecho stop`. **Verified** by `selftest` (idle, init, the net thread and a thread of its own refused, a child process ended), the smoke test (`kill` of the net thread's pid; `tcpecho stop`, and port 7 free again) and `test_guisys` (End task: a process still being loaded, a ring-0 shell, kernel threads) |
+
 ## What was verified under QEMU
 
 Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with

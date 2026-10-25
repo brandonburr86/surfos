@@ -899,6 +899,7 @@ const char *strerror(int err) {
     if(err < 0) err = -err;
     switch(err) {
     case 0: return "Success";
+    case EPERM: return "Operation not permitted";
     case ENOENT: return "No such file or directory";
     case EINTR: return "Interrupted system call";
     case EIO: return "I/O error";

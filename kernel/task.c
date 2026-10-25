@@ -15,6 +15,8 @@ kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 10/18/26 (the desktop's System Monitor): End task's kill waits for the end of the call however
 long, as a hangup's does (kill_task_patient()), and the task list is copied in one go
 (task_info_all()).
+10/25/26 (robustness, L15): a user's kill ends processes and ring-0 shells only (task_user_may_kill(),
+task_kill_user()): a process is marked TF_PROCESS from its creation.
 */
 
 #include <surfos/types.h>
@@ -462,6 +464,25 @@ int kill_task_patient(surf_task *t) {
     waits = t->state != TS_DEAD && t->in_call;
     irq_restore(flags);
     return waits;
+}
+
+/* 10/25/26 (L15): a user's kill of pid (SYS_kill; the kill command, which surfsh's kill of a pid runs): kill_task()'s
+   rule for what task_user_may_kill() allows, -EPERM for the rest (killed on the spot, a kernel thread would keep its
+   locks), -EINVAL when there is no such task. Found and killed with interrupts off: a zombie may be collected (and
+   freed) by its parent at any time. Its name is copied into name (TASK_NAME_LEN bytes) when it is found. */
+int task_kill_user(u_long pid, char *name) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int r = 0;
+    t = task_find(pid);
+    if(!t) r = -EINVAL;
+    else {
+        if(name) strlcpy(name, t->name, TASK_NAME_LEN);
+        if(!task_user_may_kill(t)) r = -EPERM;
+        else kill_task(t);
+    }
+    irq_restore(flags);
+    return r;
 }
 
 /* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing

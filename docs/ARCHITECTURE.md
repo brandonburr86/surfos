@@ -230,6 +230,15 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   output kept in memory for a redirected kernel command (section 10). `TF_LOADED` marks a
   process whose program was loaded and entered, which tells init a load failure from a
   program that ran and ended.
+* 10/25/26 (robustness, L15): a user's kill ends processes and ring-0 shells only.
+  `SYS_kill`, the `kill` command (which surfsh's `kill <pid>` runs) and the desktop's End
+  task go through `task_user_may_kill()` (`include/surfos/task.h`; `task_kill_user()` finds
+  and kills with interrupts off). A process is `TF_PROCESS` from its creation
+  (`process_spawn_ex()`); a ring-0 shell (`TF_SHELL`) is started again by init, and its
+  commands are calls that a kill waits for. A kernel thread is never inside a call, so a
+  kill would end it on the spot holding its locks: `SYS_kill` answers EPERM, and the
+  commands say "is a kernel thread". A thread that users need to stop gets a command of
+  its own.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -688,7 +697,7 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   address, netmask, router and DNS server (the lease is kept per interface and renewed
   since 10/17/26: section 19); one A query with name compression on the answer.
 * **Shell**: `ifconfig [if ip mask [gw] [dns]]`, `arp`, `ping <ip|name> [n]`, `dhcp [renew] [if]`,
-  `nslookup`, `tcpecho [port]` (a server task), `httpget <host> <port> [path]`,
+  `nslookup`, `tcpecho [port]` (a server task; 10/25/26: `tcpecho stop` ends them), `httpget <host> <port> [path]`,
   `netstat`. Under QEMU's user network the gateway is 10.0.2.2, DHCP gives 10.0.2.15,
   DNS is 10.0.2.3; the harness forwards a host port to guest port 7 and runs an HTTP
   server whose port reaches the kernel as `httpport=` on the command line.

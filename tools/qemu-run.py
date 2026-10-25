@@ -157,6 +157,7 @@ SMOKE = [
     ('tick',    ['Ticks:']),
     ('memstat', ['Physical memory:', 'Free physical pages:']),
     ('ps',      ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),                 # 10/6/26: surfsh on every console
+    ('@kill-kthread', []),                  # 10/25/26 (L15): kill <the net thread's pid> is refused (kill_kthread_check)
     ('help',    ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
     ('kernel test', ['linear is using physical']),      # 10/25/26: test is surfsh's own now; kernel runs the kernel's
     ('dmesg',   ['Booting SurfOS Kernel']),
@@ -296,6 +297,9 @@ SMOKE = [
     ('tcpecho 7', ['tcpecho server started']),
     ('@host-echo', []),
     ('netstat', ['tcpecho: connection from 10.0.2.2', 'tcpecho: closed, 39 bytes echoed', 'tcp  LISTEN']),
+    # 10/25/26 (L15): kill no longer ends a kernel thread: tcpecho stops when asked, its port free again
+    ('tcpecho stop', ['tcpecho: stopped, port 7 is free', 'tcpecho: 1 server stopped']),
+    ('tcpecho 7; sleep 500', ['tcpecho server started', 'tcpecho: listening on port 7']),
     # 10/25/26: mdns, this computer as surfos.local on its network (net/mdns.c): not running; a name that is none;
     # off when it is not running. It is not started here: QEMU's user network sends a guest's UDP on through a socket
     # of this host's, so its probes and announcements would go out onto this host's own network. On the raw link,
@@ -2163,6 +2167,35 @@ def kmsg_check(q):
 
 
 CONSOLE_CHECKS['@kmsg'] = kmsg_check
+
+
+def net_thread_pids(raw):
+    """10/25/26: the pids ps lists for the net thread in this part of the transcript (bytes)"""
+    text = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', raw.decode(errors='replace').replace('\r', ''))
+    return re.findall(r'^ *(\d+) +\S+ +\S+ +\d+ +\d+ +-?\d+ +net$', text, re.M)
+
+
+def kill_kthread_check(q):
+    """10/25/26 (robustness, L15): kill refuses a kernel thread: the net thread's pid from ps, kill says what it is and
+    kills nothing, and the next ps lists the thread with the same pid"""
+    what = 'kill: the net thread is a kernel thread, refused, and it runs on'
+    start = len(q.transcript)
+    q.send('ps\n')
+    ok = q.expect(PROMPT, 30)
+    pids = net_thread_pids(q.transcript[start:])
+    if not ok or not pids:
+        return (what, False)
+    start = len(q.transcript)
+    q.send(f'kill {pids[-1]}\n')
+    ok = q.expect(f"'net' (pid {pids[-1]}) is a kernel thread: kill ends programs and shells", 10) and q.expect(PROMPT, 10)
+    ok = ok and b'killing' not in q.transcript[start:]
+    start = len(q.transcript)
+    q.send('ps\n')
+    ok = ok and q.expect(PROMPT, 30) and net_thread_pids(q.transcript[start:]) == pids[-1:]
+    return (what, ok)
+
+
+CONSOLE_CHECKS['@kill-kthread'] = kill_kthread_check
 
 
 def settings_disk(name):
