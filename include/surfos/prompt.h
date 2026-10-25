@@ -19,6 +19,10 @@ items, and at most half the terminal's width. Without Unicode the same prompt is
 ASCII: "initrd > bin ~>", "~!>", "~#>", "...". With colour the prompt is light blue, as
 SurfOS's prompt always was, and a state character has its own colour.
 
+10/24/26: the continuation prompt, before a line that goes on with a command the line before
+did not end (an open quote, a | at its end, a group not closed): "… ≋> ", "... ~> " in ASCII,
+light blue with colour, and no state character.
+
 prompt.c is plain C without library calls, so the kernel's shell (shell/main.c), the user
 shell (user/bin/surfsh.c, through libsurf) and the host tests build the same file. This
 header uses no SurfOS types for the same reason; user programs reach it through
@@ -41,6 +45,7 @@ struct prompt_ctx {
     int unicode;                /* ▸ ≋ …; 0: the ASCII fallback (> ~ ...) */
     int color;                  /* ANSI colours in the SurfOS palette; 0: plain text */
     int max_depth;              /* breadcrumb items at most, "…" included; 0: 5 */
+    int continuation;           /* 10/24/26: a line that goes on with a command: "… ≋> " (ASCII "... ~> ") */
 };
 
 #define PROMPT_MAX 640          /* bytes always enough for prompt_render() */
