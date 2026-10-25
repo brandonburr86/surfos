@@ -1695,7 +1695,9 @@ def surfsh_ctrl_c_check(q):
     results.append(interrupt('while :; do :; done; echo not-reached', 1.0, ['^C', shown('\u224b!> ')]) and status(130))
     results.append(interrupt('for i in 1 2 3; do /initrd/bin/count 100 100; done; echo not-reached', 1.5,
                              ['^C', shown('\u224b!> ')]) and status(130))
-    results.append(interrupt('while :; do sleep 100; done; echo not-reached', 1.0, ['sleep cut short', shown('\u224b!> ')]))
+    # 10/25/26: sleeps of 300 ms, so that the Ctrl+C a second after the line comes in the middle of one, not where
+    # one ends and the next begins (with 100 ms it did, a second being ten of them, and then sometimes between two)
+    results.append(interrupt('while :; do sleep 300; done; echo not-reached', 1.0, ['sleep cut short', shown('\u224b!> ')]))
     results.append(interrupt('read line; echo not-reached', 0.5, ['^C', shown('\u224b!> ')]) and status(130))
     q.send('surfsh\n')
     ok = q.expect(PROMPT, 10)
@@ -2254,7 +2256,9 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
             m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
-        stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
+        # 10/25/26: 120 s (it was 45): behind QEMU's user network the host's socket can take megabytes before the
+        # guest's send buffer fills, and in the Docker toolchain (x86 emulated) the guest makes them slowly
+        stalled, deadline = False, time.time() + 120    # seconds here; the server ends no session for a stall
         while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
             start = len(q.transcript)
             q.send('netstat\n')
