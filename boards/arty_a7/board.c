@@ -9,7 +9,8 @@ surf_uart (the console), surf_timer (mtime at sysinfo's timebase, 1 MHz), surf_i
 (level sources ORed into mip.MEIP, no claim or complete), surf_gpio (LEDs, switches,
 buttons) and surf_sysinfo (who and what the board is). The microSD card
 (boards/arty_a7/sd.c), the PS/2 keyboard (ps2kbd.c) and the 80x30 text display
-(textcon.c) have files of their own.
+(textcon.c) have files of their own; so has SurfGPU (10/25/26: gpu.c, gpuhw.c, the gfx command
+in gfx.c), a driver of the table below where the bitstream has one.
 
 Nothing here has run on the FPGA yet: the board is not connected (milestone 7's physical
 tests are pending). What is tested is the logic that can be tested on a host.
@@ -153,6 +154,10 @@ bool arty_has(u32 feature_mask) {
     return (features & feature_mask) != 0;
 }
 
+u32 arty_features(void) {
+    return features;
+}
+
 void board_print_info(void) {
     u32 flags;
     if(!is_surfcpu) {
@@ -223,6 +228,7 @@ static struct driver drivers[] = {
     { "gpio",    drv_gpio,      0, 0 },
     { "ps2kbd",  arty_ps2_init, 0, 0 },
     { "sdcard",  arty_sd_init,  0, 0 },
+    { "gpu",     arty_gpu_init, 0, 0 },         /* 10/25/26: SurfGPU, where the bitstream has it */
 };
 
 struct driver *board_drivers(u_int *count) {
@@ -234,6 +240,7 @@ void board_print_devices(void) {
     char buf[160];
     printf("    keyboard  %s\n", arty_ps2_describe(buf, sizeof(buf)));
     printf("    sdcard    %s\n", arty_sd_describe(buf, sizeof(buf)));
+    printf("    gpu       %s\n", arty_gpu_describe(buf, sizeof(buf)));
 }
 
 /**** the board's commands ****/
@@ -262,6 +269,7 @@ static const struct command board_cmds[] = {
     { "kbdinfo", "",         "the PS/2 keyboard: state and error counters", arty_cmd_kbdinfo, 0 },
     { "sdinfo",  "",         "the microSD card: type, size, registers, errors", arty_cmd_sdinfo, 0 },
     { "sdmode",  "ro|rw",    "whether the card may be written (while unmounted)", arty_cmd_sdmode, 0 },
+    { "gfx",     "[what ...]", "SurfGPU: draw, modes, crc, bench, demo (gfx help)", arty_cmd_gfx, 0 },
     { NULL, NULL, NULL, NULL, 0 }
 };
 

@@ -14,6 +14,10 @@ ports; what is printed then reaches the serial mirror only.
 
 Graphics sessions (the desktop's 2D drawing, docs/GRAPHICS.md) need a pixel
 framebuffer: there is none, so they are refused.
+
+10/25/26 (SurfGPU G3): the Arty's GPU shows pictures in the video block's graphics modes, under
+the gfx command (boards/arty_a7/gpu.c), not through this interface; a panic switches the display
+back to the text (framebuffer_panic()), so its report is seen.
 */
 
 #include <surfos/types.h>
@@ -73,7 +77,9 @@ const char *framebuffer_describe(char *buf, size_t size) {
     return buf;
 }
 
+/* 10/25/26 (SurfGPU G3): the display shows the console again, whatever picture it showed */
 void framebuffer_panic(void) {
+    if(disp && disp->panic) disp->panic();
 }
 
 void framebuffer_task_died(struct surf_task *t) {

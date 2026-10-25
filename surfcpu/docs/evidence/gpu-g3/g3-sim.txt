@@ -1,0 +1,19 @@
+SurfGPU G3: SurfOS's driver and the gfx command, simulation and host tests (2026-10-25), in the
+surfcpu-toolchain container (gcc, Verilator 5.032), make check (SURFGPU_DOCKER_SIZE=big) at 4aa4c8f
+(sc/gpu-g3). Nothing here ran on a board.
+
+make test-gpuos-host (boards/arty_a7/tests/gpu/test_gpu.c: gpu.c and gfx.c on the host against
+sim/models/gpu_model.c through gpustub.c; the whole output: test-gpuos-host.txt):
+  test_arty: 429 of 429 checks passed, 15 tests x 3 seeds (1 7 123)
+
+make test-gpuos (boards/arty_a7/tests/gpuos_test.py; every check, the gfx crc lines and the last
+frame's decoded text: test-gpuos.txt):
+  test-gpuos: 23 of 23 checks passed in 166 s (gpu 415386681 cycles = 16.615 s simulated in 165.7 s wall (2.51 M cycles/s); nogpu 144379603 cycles = 5.775 s simulated in 43.8 s wall (3.30 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+
+make test-os-qemu (boards/qemu_virt/test_os.py), its new check at -O2 and -O0:
+  test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 136 of 136 checks passed in 49 s
+  test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 136 of 136 checks passed in 50 s
+  ok   gfx: there is no GPU on this board (SurfGPU is the Arty's)
+
+make check (SURFGPU_DOCKER_SIZE=big) at 4aa4c8f: check: all automated SurfCPU checks passed
+  (ended 17:20 CDT on 2026-10-25 after waiting for a Docker slot; the same check at 398bb6d, before the Ctrl+C step was added, passed in about 36 minutes)
