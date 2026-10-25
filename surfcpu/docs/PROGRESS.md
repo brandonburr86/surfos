@@ -15,6 +15,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the thirteenth storage review's findings, being fixed in fs-fix-13) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
+| GPU SurfGPU ([GPU.md](GPU.md) section 11) | G0-G2: the graphics modes and the 2D engine against their C models, gpudiag on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 12.1); G3: SurfOS's driver and `gfx` against the model on the host and on the RTL SoC, every `gfx crc` equal to the frame at the VGA pins ([evidence](evidence/gpu-g3/)) | gpudiag and the DDR+GPU design through the open flow, every gate PASS ([GPU.md](GPU.md) 12.2) | not run: the G2 bitstreams and the G3 kernel wait for the owner ([GPU.md](GPU.md) sections 14 and 15.6) | G0-G2 done in simulation and synthesis (six reviews); G3 done in simulation, its review under way; G4 being built; every board test outstanding |
 
 ## Log
 
@@ -1098,3 +1099,41 @@ ddr-3 built five candidates, every gate passing on each
   fs-fix-13 is fixing them, with the kill rules' remaining edge cases. Then one more review: if
   it finds nothing above cosmetic that can happen in this tree, storage is done in simulation,
   and the file test on the owner's card (m8) and milestone 9's board test come next.
+
+### 2026-10-25: the GPU line, and G3 (SurfOS's GPU driver) merged
+
+* SurfGPU (milestones G0-G2 on `sc/gpu`, [GPU.md](GPU.md)) is recorded here from now on. Its
+  integration branch is `sc/gpu-integ`, made of three steps:
+  * `sc/gpu` (5551bce);
+  * surfcpu (a2958c7) merged into it, as 98c7742, where `make check` passed in 33.5 minutes;
+  * the brief for G3 and G4 ([plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md), 8fdf554).
+* G3 (`sc/gpu-g3`, merged as dfe6901; [GPU.md](GPU.md) section 15):
+  * **the driver:** `boards/arty_a7/gpu.c` over a port, so that the host test runs its own code,
+    and `gpuhw.c` on the board.
+    * The FIFO is filled only as far as FIFO_FREE allows.
+    * Every wait is bounded at 2 s and ended by Ctrl+C.
+    * Fences are polled for 2 ms, then waited for on the GPU's interrupt.
+    * Sticky errors are reported and cleared.
+    * One command uses the GPU at a time.
+  * **the `gfx` command:** mode, clear, fill, rect, line, copy, text, pal, put, get, crc, bench,
+    demo and reset.
+    * Its 2D demo draws into a hidden page behind WAIT_VBLANK and flips.
+    * The display mode is set through textcon's copy of CTRL.
+    * A panic switches the display back to text.
+* Its tests, all simulation and host, on `make check`:
+  * `test-gpuos-host`: 429 of 429 checks against the C model (15 tests, seeds 1, 7 and 123);
+  * `test-gpuos`: 23 of 23 on the RTL SoC with SurfGPU, 16.6 s simulated.
+    * Every `gfx crc` equals the CRC of a frame captured at the VGA pins, and in graphics mode
+      also the model's.
+    * The console's text decodes from the pixels over the picture.
+    * The demo ran at 56 frames a second.
+    * Without a GPU, the boot, `gfx` and `drivers` each say there is none.
+  * `test-os-qemu`: 136/136 at O2 and O0.
+* The integrator's `make check` on dfe6901 passed.
+* On the board: not run. GPU.md section 15.6 has the steps:
+  * load the DDR+GPU bitstream;
+  * put this kernel on the card;
+  * run `gfx demo` on the monitor;
+  * `gfx crc` should print 039d507c.
+* An independent review of G3 is under way. G4 (triangles, a depth buffer, page flips;
+  `sc/gpu-g4`) is being built.
