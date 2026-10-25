@@ -1606,6 +1606,7 @@ bounded kernel pipes, pipelines, environment variables, script files, and job co
 
 ```
 surfsh (user/surfsh/)  parse.c: a tree of lists, pipelines, groups; exec.c runs it; a new surfsh for a subshell
+                       vars.c, expand.c, arith.c, glob.c: variables, the environment, $( ), $(( )), wildcards
 libsurf                pipe(); spawnx(), and spawn()/spawnfd() over it with environ; a broken pipe ends a program (141)
 SYS_spawnx             kernel/process.c: descriptors 0-3 as the caller says, an environment, a job in the background
 SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
@@ -1643,12 +1644,16 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   third word `environ` (and `main`'s third argument), `env.c` has `getenv`, `setenv`,
   `unsetenv` and `putenv`, and `spawn()` and `spawnfd()` are now `spawnx()` with `environ`,
   so an environment reaches what a program starts. The job field must be 0 (job control
-  comes later).
+  comes later). A program takes 128 arguments in 8 KB (`SPAWN_MAX_ARGS`, `SPAWN_ARG_BYTES`;
+  until now 32 in 2 KB), and so does a kernel command (`SYS_kcmd`), so that the names a
+  wildcard gives fit (`rm *.tmp`). `env` (`user/bin/env.c`) prints the environment it gets,
+  or runs a program with assignments put over it (`env -i` from an empty one).
 * **surfsh's parts** now (`user/surfsh/`): `parse.c` (the scanner and the grammar), `unparse.c`
-  (a tree back to text), `expand.c` (words to fields), `exec.c` (the tree runs), `run.c`
-  (the kernel's commands, programs, waiting), `jobs.c` (jobs in the background), `util.c`
-  (strings that grow, arenas), with `main.c`, `editor.c`, `complete.c` and `builtins.c` as
-  before.
+  (a tree back to text), `expand.c` (words to fields), `vars.c` (variables, the environment,
+  the positional parameters), `arith.c` (`$(( ))`), `glob.c` (patterns and wildcards),
+  `exec.c` (the tree runs), `run.c` (the kernel's commands, programs of `PATH`, waiting),
+  `jobs.c` (jobs in the background), `util.c` (strings that grow, arenas), with `main.c`,
+  `editor.c`, `complete.c` and `builtins.c` as before.
 * **Parsing** (`parse.c`). A complete command is what the text holds up to a newline outside
   every command: a list of and-or lists (`;` `&`), and-or lists of pipelines (`&&` `||`,
   left to right), pipelines of commands (`|`, `!` in front), and commands: a simple command
@@ -1677,12 +1682,52 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   it reads only the console. The pipeline's status is its last stage's, and every process of
   it is waited for. `( list )` runs in a new surfsh too, and so does a job in the background
   that is surfsh's own (`{ ...; } &`, `ping 10.0.2.2 100 &`, which before was refused).
-* **A new surfsh** is `surfsh --sub STATUS PID`, started with `spawnx` with the given
-  descriptors 0 and 1, surfsh's 2, and the reading end of a pipe as 3, into which surfsh
-  writes the text to run (`unparse()` of the tree: one line, its here-documents after it)
-  and closes it; the new one reads it to the end, runs it as a script with `$?` and `$$` as
-  they were, and ends with its status. That is how SurfOS, which has no `fork()`, gets the
-  copy of the shell a subshell is.
+* **Variables** (`vars.c`). A variable has a name (letters, digits and `_`, no digit
+  first), a value, and two marks: exported (`export`: programs get it in their environment)
+  and read-only (`readonly`: no assignment or `unset` changes it). surfsh starts with its
+  environment as exported variables and sets `PATH` (`/initrd/bin`), `SHELL` and `PWD`
+  when they are missing; `cd` sets `PWD` and `OLDPWD` (`cd -` goes to `OLDPWD`). A line of
+  assignments alone (`x=1 y=$x`) keeps them, left to right; assignments before a command
+  are for that command alone: a program finds them in its environment (over the exported
+  ones), surfsh's own command sees them while it runs and they are put back afterwards. The
+  positional parameters (`$1`, `${10}`, `$#`, `"$@"`) are a script's or `-c`'s arguments;
+  `set -- a b` gives new ones and `shift [n]` moves them down. `set` alone lists the
+  settings and then the variables, `export` and `readonly` alone the marked ones, as lines
+  that would set them again.
+* **Expansions** (`expand.c`), when a command runs, in POSIX's order: parameters, `$( )` and
+  backquotes, and `$(( ))`, left to right; then field splitting of what unquoted expansions
+  gave, at `IFS` (POSIX's rule: blanks around a field are none, one other `IFS` character
+  ends a field even an empty one); then pathname expansion; then the quotes go. Each
+  character carries a flag through this (quoted; from an unquoted expansion), so what quotes
+  hold is never split nor a pattern, `"$x"` is one field whatever `x` holds and `"$@"` is a
+  field for each parameter. The `${ }` forms are `${x:-w} ${x-w} ${x:=w} ${x:?w} ${x:+w}
+  ${#x} ${x#p} ${x##p} ${x%p} ${x%%p}`; `$?`, `$$`, `$!` (the last job's last pid), `$#`,
+  `$0` and `$-`. `$( )` runs a plain program by itself and anything else in a new surfsh,
+  reads its output to the end and takes off the newlines at its end; a line of assignments
+  alone has the status of its last `$( )`. `$(( ))` (`arith.c`) is C's integer arithmetic on
+  32-bit numbers, assignments, `++` and `--` included; dividing by 0 is an error, and the
+  side of `&&`, `||`, `?:` that is not taken is not worked out. An expansion that fails
+  (`${x:?}`, a division by 0, a parameter that is not one) says why and the command does not
+  run (status 1); a script ends there. A here-document whose end line is not quoted has
+  parameters, `$( )` and `$(( ))` in it, its quotes being themselves. A file's name in a
+  redirection and an assignment's value are expanded but never split nor matched.
+* **Wildcards** (`glob.c`). `*`, `?`, `[abc]`, `[a-z]`, `[!a]` outside quotes make a field
+  the sorted names that match it, part by part between the `/`s (a part without a pattern is
+  only joined on); a character is a whole UTF-8 sequence, names are matched as stored, a name
+  that starts with `.` only by a part that does, and a pattern that matches nothing stays as
+  it is (POSIX's rule). The same matcher does `${x#p}` and the rest.
+* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own or the kernel's is
+  looked for in each directory of `PATH` (an empty one is `.`); `help` and Tab list the
+  programs of all of them, a name in two directories once.
+* **A new surfsh** is `surfsh --sub STATUS PID LASTPID NAME`, started with `spawnx` with the
+  given descriptors 0 and 1, surfsh's 2, the exported variables as its environment, and the
+  reading end of a pipe as 3, into which surfsh writes what makes the new one this shell
+  (`var_state()`: the variables that are not exported, the read-only marks, the positional
+  parameters; and the history, when the text uses it), a NUL, and the text to run
+  (`unparse()` of the tree: one line, its here-documents after it), and closes it; the new
+  one reads it to the end, runs it as a script with `$?`, `$$`, `$!` and `$0` as they were,
+  and ends with its status. That is how SurfOS, which has no `fork()`, gets the copy of the
+  shell a subshell is.
 * **Jobs** (`jobs.c`). A command started with `&` (a program, a pipeline's processes, or a
   new surfsh) is a job with the smallest free number: `[1] started (pid 42)` (the last
   process's pid); before each prompt the processes that ended are collected and a job whose
@@ -1692,12 +1737,15 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   not the console is read a byte at a time from a pipe and a block at a time from a file,
   which is put back where the next command's own reading begins, so a command reads what
   follows it. A mistake in a file, or a file that ends inside a command, ends it with 2.
-* **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c` and
-  `util.c` as they are on the host, `tests/host/surfsh_bridge.c`: lists, pipelines, groups,
-  redirections and here-documents parsed and written back, `PARSE_MORE` for what is open,
-  the mistakes, the limits, quote removal) and `test_prompt` the continuation prompt. `make
+* **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
+  `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
+  lists, pipelines, groups, redirections and here-documents parsed and written back,
+  `PARSE_MORE` for what is open, the mistakes, the limits, quote removal; variables, field
+  splitting, `"$@"`, every `${ }` form, arithmetic, `$( )` against a stand-in, wildcards over
+  a tree of names on `tests/host/sim_fs.c`) and `test_prompt` the continuation prompt. `make
   test` adds `pipetest` (`user/bin/pipetest.c`: pipes from a program and its children, and
-  `spawnx`) and a block of pipelines and lists in a nested surfsh.
+  `spawnx`), a block of pipelines and lists in a nested surfsh, and one of variables, the
+  environment (`env`), expansions and wildcards.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

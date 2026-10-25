@@ -511,8 +511,8 @@ unshown. `help` is long on purpose.
 
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
 `help`, `history`, `set`), then the kernel's (everything in sections 7 to 9: `lsblk`,
-`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in `/initrd/bin`; a name with a
-`/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
+`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in the directories of `PATH`
+(`/initrd/bin`); a name with a `/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
 `rmdir` come before the programs of the same names, which know more options: run those by
 their path, for example `/initrd/bin/ls -la` (`help` marks them with `*`). `help` lists
 all three groups, `help <name>` one command.
@@ -522,8 +522,7 @@ inside a word, and `\` keeps the next character as it is. `cmd > file` sends wha
 command prints into the file (`>>` adds to its end; `2> file` sends its error messages
 there, and `2>&1` where its output goes), `cmd < file` makes it read the file, `cmd &`
 runs it in the background as a job (`[1] started (pid 42)`; its end, `[1] done  cmd`, is
-reported before the next prompt), and `;` separates commands. `$?` is the status of the
-last command (`echo $?`); there are no other variables and no wildcards yet. The kernel's
+reported before the next prompt), and `;` separates commands. The kernel's
 commands can be redirected too, which is a quick way to keep what they say:
 `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the screen.
 
@@ -538,6 +537,19 @@ and `! a` turns the status round. `{ a; b; } > file` sends both into the file, a
 there; with `<< 'END'` nothing is). A line that ends with `|`, `&&` or `||`, or inside
 quotes or a `{ }`, goes on in the next line, after the prompt `… ≋>`; Ctrl+C there drops
 the whole command.
+
+**Variables and wildcards.** `name=value` sets a variable, and `$name` (or `${name}`) is
+its value: `dir=/initrd/bin; ls $dir`. `export name` gives it to the programs started
+afterwards, in their environment (`env` lists what a program gets), and `name=value cmd`
+to that one command alone; `unset name` removes it, `readonly name` keeps it as it is.
+`$(cmd)` is what `cmd` prints (`n=$(ls /initrd/bin | wc -l)`), `$((n * 2))` arithmetic,
+`${name:-default}` a value for an empty variable, `${#name}` its length, `${f%.txt}` and
+`${f##*/}` the value without its end or its beginning. A value with blanks in it becomes
+several words unless it is in double quotes: `"$name"` is always one. In a word, `*`
+matches any characters of a file's name, `?` one, `[ab]` one of those: `ls
+/initrd/etc/*.conf`, `rm /data/*.tmp`; a word that matches nothing stays as it is, and in
+quotes (`"*"`) a star is just a star. `$?` is the status of the last command, `$!` the pid
+of the last job, `$$` the shell's own. `PATH` says where programs are looked for.
 
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
 that could not be started, 127 no such command, 130 a kernel command stopped with Ctrl+C,

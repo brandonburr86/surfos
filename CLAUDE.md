@@ -90,9 +90,10 @@ net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP
 lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
-           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes and spawnx), rx (one file from the
-           network), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand, exec (pipelines,
-           redirections, a new surfsh for a subshell), run, jobs, util, builtins; host-tested by tests/host/test_surfsh.c),
+           rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes and spawnx), env, rx (one file from
+           the network), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
+           vars (variables, the environment), arith ($(( ))), glob (wildcards), exec (pipelines, redirections, a new surfsh
+           for a subshell), run (PATH), jobs, util, builtins; host-tested by tests/host/test_surfsh.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16)
