@@ -276,13 +276,13 @@ def checks(d):
         # a program the shell left running in the background does not keep the session: exit ends it at once,
         # and the hangup ends the program (ps below finds no pagetest)
         run(d, grid, 'a program runs in the background', 'pagetest hold 300000 &',
-            lambda rows: any(re.fullmatch(r'\[\d+\] started', r) for r in rows) and prompted(rows))
+            lambda rows: any(re.fullmatch(r'\[\d+\] started \(pid \d+\)', r) for r in rows) and prompted(rows))
         d.keys('exit\n')
         d.require('exit ends the session at once, though that program would run on',
-                  wait_rows(d, grid, lambda rows: ended_after(rows, r'\[\d+\] started'), 15) is not None)
+                  wait_rows(d, grid, lambda rows: ended_after(rows, r'\[\d+\] started \(pid \d+\)'), 15) is not None)
         d.key('ret')
         d.require('and Enter starts another', wait_rows(d, grid, lambda rows: prompted(rows) and
-                                                         ended_after(rows, r'\[\d+\] started')) is not None)
+                                                         ended_after(rows, r'\[\d+\] started \(pid \d+\)')) is not None)
         # closing while a session runs asks first: Cancel keeps it
         d.close('Terminal')
         d.require('closing with a session running asks first',

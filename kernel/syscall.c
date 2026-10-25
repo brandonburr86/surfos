@@ -22,6 +22,15 @@ written there afterwards, with a note when it did not all fit.
 10/6/26: a task is inside a call from its int 0x80 until it returns to user mode
 (TC_SYSCALL), and a kernel command is a call of its own (TC_COMMAND): a kill waits
 for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short.
+
+10/24/26 (pipelines and scripting in surfsh): pipe (call 46, fs/pipe.c); lseek on a
+pipe answers -ESPIPE; spawnx (47, surfos/spawn.h): spawnfd with a descriptor 3, closed
+descriptors, an environment and a job in the background. A kernel command's output on a pipe whose reader went away
+(dmesg | head) is dropped quietly: that is no failure of the command.
+
+10/25/26: waitx (48, surfos/job.h): wait, and how the child ended (by itself, killed, or
+killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped; with WUNTRACED a child
+that stopped too. job (49): job control for a shell; spawnx's job field.
 */
 
 #include <surfos/types.h>
@@ -44,6 +53,8 @@ for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short
 #include <surfos/pty.h>
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
+#include <surfos/spawn.h>
+#include <surfos/job.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
@@ -58,6 +69,8 @@ typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
+typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
+typedef char waitx_layout_is_fixed[sizeof(struct waitx) == 16 ? 1 : -1];       /* 10/25/26 */
 
 /* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
 bool user_str(const char *s) {
@@ -99,6 +112,14 @@ static int sys_open(const char *path, int flags) {
     r = fd_install(f);
     if(r < 0) vfs_close(f);
     return r;
+}
+
+/* 10/24/26: a pipe has no positions (surfos/pipe.h) */
+static int sys_lseek(int fd, i32 off, int whence) {
+    struct file *f = fd_get(fd);
+    if(!f) return -EBADF;
+    if(pipe_file(f)) return -ESPIPE;
+    return vfs_lseek(f, off, whence);
 }
 
 static int sys_readdir(int fd, struct dirent *de) {
@@ -167,6 +188,46 @@ static int sys_spawnfd(const char *path, char *const argv[], const int *fds) {
     return process_spawn_files(path, argc, kargv, curTask->con, 0, files);
 }
 
+/* 10/24/26: spawnfd with descriptor 3, closed descriptors, an environment, the background
+   (surfos/spawn.h). The environment's strings are checked as long as SPAWN_ENV_BYTES may hold
+   and copied by process_spawn_ex(), which says -E2BIG for too many of them or bytes */
+static int sys_spawnx(const char *path, char *const argv[], const struct spawnx *uo) {
+    char *kargv[SPAWN_MAX_ARGS], *kenv[SPAWN_ENV_MAX];
+    struct spawnx o;
+    struct spawn_more m;
+    int argc, i;
+    if(!ustr(path)) return -EFAULT;
+    argc = user_argv(path, argv, kargv);
+    if(argc < 0) return argc;
+    if(!uo || !ubuf(uo, sizeof(o), false)) return -EFAULT;
+    memcpy(&o, uo, sizeof(o));
+    if(o.flags & ~(u_int)SPAWN_BG) return -EINVAL;
+    if(o.job < SPAWN_JOB_NONE || (o.job > 0 && !task_job_made((u_long)o.job, curTask->pid))) return -EINVAL;
+    memset(&m, 0, sizeof(m));
+    m.job = o.job;                              /* 10/25/26: a new job, one of the caller's, or its own */
+    for(i = 0; i < 4; i++) {
+        if(o.fds[i] == -1 || o.fds[i] == SPAWN_CLOSED) {
+            if(o.fds[i] == SPAWN_CLOSED && i < 3) m.closed |= 1u << i;
+            continue;
+        }
+        m.files[i] = fd_get(o.fds[i]);
+        if(!m.files[i]) return -EBADF;
+    }
+    if(o.envp) {
+        for(;; m.envc++) {
+            if(!ubuf(o.envp + m.envc, sizeof(char *), false)) return -EFAULT;
+            if(!o.envp[m.envc]) break;
+            if(m.envc == SPAWN_ENV_MAX) return -E2BIG;
+            if(!uvm_check_str(curTask->uvm, o.envp[m.envc], SPAWN_ENV_BYTES))
+                return ubuf(o.envp[m.envc], SPAWN_ENV_BYTES, false) ? -E2BIG : -EFAULT;
+            kenv[m.envc] = o.envp[m.envc];
+        }
+    }
+    m.envp = kenv;
+    m.background = (o.flags & SPAWN_BG) != 0;
+    return process_spawn_ex(path, argc, kargv, curTask->con, 0, &m);
+}
+
 /* 10/6/26: a kill of the caller ends the wait (EINTR), and the caller ends with the call */
 static int sys_wait(int pid, int *status, int options) {
     int st = 0, r;
@@ -176,6 +237,55 @@ static int sys_wait(int pid, int *status, int options) {
     if(r < 0 && (curTask->intr & TI_KILL)) return -EINTR;
     if(r > 0 && status) *status = st;
     return r;
+}
+
+/* 10/25/26: SYS_wait, and how the child ended (surfos/job.h); a stop too with WUNTRACED, and pid < -1
+   any child of the job -pid */
+static int sys_waitx(int pid, struct waitx *w, int options) {
+    struct waitx k;
+    int st = 0, how = WX_EXITED, job = 0, r;
+    if(!w || !ubuf(w, sizeof(k), true)) return -EFAULT;
+    if(options & ~(WNOHANG | WUNTRACED)) return -EINVAL;
+    r = task_wait_how(pid < 0 ? WAIT_ANY : (u_long)pid, pid < -1 ? (u_long)-pid : 0, &st, &how, &job,
+                      options | WINTR | WCTRLC);
+    if(r < 0) return (curTask->intr & (TI_KILL | TI_INT)) ? -EINTR : -ECHILD;
+    if(r > 0) {
+        memset(&k, 0, sizeof(k));
+        k.pid = r;
+        k.how = how;
+        k.status = how == WX_EXITED || how == WX_STOPPED ? st : -1;
+        k.job = job;
+        memcpy(w, &k, sizeof(k));
+    }
+    return r;
+}
+
+/* 10/25/26: job control for a shell (surfos/job.h): its terminal's foreground job, its jobs going on
+   or killed */
+static int sys_job(int op, int arg) {
+    struct tty *t = curTask->tty;
+    u_long flags, prev;
+    if(!t) return -ENOTTY;
+    if(op == JOB_ID) return (int)curTask->job;
+    if(arg < 0) return -EINVAL;
+    if(op == JOB_FG) {
+        /* a task of a job in the background may not, but the shell of the foreground job may give the
+           terminal back to its own job (a surfsh typed at a surfsh's prompt). fg_shell is the shell of
+           the foreground job: the caller for a job it made, the one above it for its own */
+        if(curTask->job && curTask->job != t->fg_job && t->fg_shell != curTask->pid) return -EACCES;
+        if(arg && (u_long)arg != curTask->job && !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
+        flags = irq_save();
+        prev = t->fg_job;
+        t->fg_job = (u_long)arg;
+        t->fg_shell = !arg ? 0 : (u_long)arg == curTask->job ? curTask->job_shell : curTask->pid;
+        irq_restore(flags);
+        if(arg) task_job_go_on(t, (u_long)arg, 1, curTask->pid);
+        return (int)prev;
+    }
+    if(op != JOB_BG && op != JOB_KILL) return -EINVAL;
+    if(!arg || !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
+    if(op == JOB_BG) return task_job_go_on(t, (u_long)arg, 0, curTask->pid);
+    return task_job_kill(t, (u_long)arg, curTask->pid);
 }
 
 /* 10/6/26: the caller killing itself ends when this call does, like any task in a call */
@@ -411,7 +521,8 @@ static int sys_kcmd(char *const argv[]) {
                      cap.len && cap.buf[cap.len - 1] != '\n' ? "\n" : "", kargv[0], cap.cut, (u_int)(KCMD_CAPTURE_MAX / 1024));
             w = write_all(call.out, note, strlen(note));
         }
-        if(w) {
+        /* 10/24/26: a pipe whose reader has gone (dmesg | head) is no failure: the rest is dropped */
+        if(w && w != -EPIPE) {
             printf("    %s: its output could not be written to descriptor 1: %s\n", kargv[0], strerror(w));
             if(r == 0) r = 1;                                /* the command worked; keeping what it said did not */
         }
@@ -447,7 +558,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_read:    r = sys_read((int)a, (void *)b, c); break;
     case SYS_open:    r = sys_open((const char *)a, (int)b); break;
     case SYS_close:   r = fd_close((int)a); break;
-    case SYS_lseek:   r = fd_get((int)a) ? vfs_lseek(fd_get((int)a), (i32)b, (int)c) : -EBADF; break;
+    case SYS_lseek:   r = sys_lseek((int)a, (i32)b, (int)c); break;
     case SYS_readdir: r = sys_readdir((int)a, (struct dirent *)b); break;
     case SYS_stat:    r = sys_stat((const char *)a, (struct stat *)b); break;
     case SYS_chdir:   r = ustr((const char *)a) ? vfs_chdir((const char *)a) : -EFAULT; break;
@@ -460,6 +571,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_yield:   yield(); r = 0; break;
     case SYS_spawn:   r = sys_spawn((const char *)a, (char *const *)b); break;
     case SYS_wait:    r = sys_wait((int)a, (int *)b, (int)c); break;
+    case SYS_waitx:   r = sys_waitx((int)a, (struct waitx *)b, (int)c); break;
+    case SYS_job:     r = sys_job((int)a, (int)b); break;
     case SYS_sbrk:    r = (int)uvm_sbrk(curTask->uvm, (long)a); break;
     case SYS_uptime:  r = (int)(getticks() * (1000 / HZ)); break;
     case SYS_kill:    r = sys_kill((int)a); break;
@@ -488,6 +601,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_resolve:  r = sys_resolve((const char *)a, (u32 *)b); break;
     case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
+    case SYS_pipe:     r = sys_pipe((int *)a); break;          /* 10/24/26: fs/pipe.c */
+    case SYS_spawnx:   r = sys_spawnx((const char *)a, (char *const *)b, (const struct spawnx *)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

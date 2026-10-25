@@ -5,7 +5,8 @@ File: sysimpl.h Date: 10/6/26
 ----------------------
 Kernel only. The telnet server's calls (34-43, surfos/syscall.h) live with what they
 work on: net/sock.c (network connections), fs/poll.c (poll), kernel/pty.c
-(pseudo-terminals), kernel/proc.c (the process list, detach). syscall_trap() calls them
+(pseudo-terminals), kernel/proc.c (the process list, detach); 10/24/26: fs/pipe.c (pipes).
+syscall_trap() calls them
 with the user's arguments as they are: each checks its own pointers with user_buf() and
 user_str(), and copies an argv with user_argv(), as kernel/syscall.c does for its own.
 They return a value or -errno.
@@ -47,5 +48,8 @@ int sys_ptyctl(int masterfd, int op, u32 arg);
 /* kernel/proc.c */
 int sys_procinfo(int index, struct procinfo *pi);
 int sys_detach(void);
+
+/* fs/pipe.c (10/24/26) */
+int sys_pipe(int *fds);
 
 #endif

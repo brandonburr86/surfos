@@ -1,6 +1,7 @@
 /* Host-side unit tests for shell/prompt.c, the SurfOS prompt: breadcrumbs and the root, the
    five states and their priority, shortening by depth and by width, the ASCII fallback, the
-   colours, names with UTF-8 or control characters in them, and buffers that are too small.
+   colours, names with UTF-8 or control characters in them, and buffers that are too small;
+   10/24/26: the continuation prompt.
    Built like the kernel objects and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
@@ -187,6 +188,24 @@ static void test_colour(void) {
     check(strstr(render(&c), "\033[1;35m@") != NULL, "remote in light magenta");
 }
 
+/* 10/24/26: the continuation prompt of surfsh, whatever the directory and the state */
+static void test_continuation(void) {
+    struct prompt_ctx c = at("/initrd/bin");
+    c.continuation = 1;
+    c.last_status = 1;
+    expect(&c, "… ≋> ", "the continuation prompt: no breadcrumbs, no state");
+    c.unicode = 0;
+    expect(&c, "... ~> ", "the continuation prompt in ASCII");
+    c.unicode = 1;
+    c.color = 1;
+    expect(&c, "\033[0;1;34m… ≋>\033[0m ", "the continuation prompt in light blue");
+    check(prompt_columns(render(&c)) == 5, "the continuation prompt takes 5 columns");
+    c.color = 0;
+    c.remote = 1;
+    c.hostname = "atlas";
+    expect(&c, "… ≋> ", "the continuation prompt of a remote session");
+}
+
 static void test_sizes(void) {
     struct prompt_ctx c = at("/");
     char out[16];
@@ -208,6 +227,7 @@ int main(void) {
     test_names();
     test_ascii();
     test_colour();
+    test_continuation();
     test_sizes();
     printf("PROMPT UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);

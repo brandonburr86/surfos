@@ -39,6 +39,7 @@ typedef void (*kthread_fn)(void *arg);
                               a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
+#define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -72,7 +73,8 @@ typedef enum {
     TS_RUNNING,     /* curTask */
     TS_BLOCKED,     /* on a wait queue */
     TS_SLEEPING,    /* on the sleep list until wake_at */
-    TS_DEAD         /* on the zombie list until a parent (or init) collects it */
+    TS_DEAD,        /* on the zombie list until a parent (or init) collects it */
+    TS_STOPPED      /* 10/25/26: stopped (job control, surfos/job.h): on no list until it goes on */
 } task_state;
 
 /*
@@ -139,6 +141,14 @@ typedef struct surf_task {
     struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
+    u_char end_how;             /* 10/25/26: how it ended, for SYS_waitx: WX_* (surfos/job.h) */
+    u_short ctrl_c;             /* 10/25/26: the Ctrl+Cs that reached it since it last asked (TTY_INTR) */
+    u_long job;                 /* 10/25/26: its job (surfos/job.h), 0 for none; what it starts is in it too */
+    u_long job_shell;           /* the pid of the shell that made the job */
+    u_char stop_req;            /* 10/25/26: it is to stop (Ctrl+Z, a read from the background) */
+    u_char stopped;             /* it counts as stopped (SYS_waitx, ps): parked, or in a wait that goes on */
+    u_char stop_seen;           /* its parent was told of this stop (WUNTRACED) */
+    u_char stop_why;            /* WX_STOP_KEY, WX_STOP_READ */
 } surf_task;
 
 extern surf_task *curTask;
@@ -166,10 +176,23 @@ void task_exit(int code) __attribute__((noreturn));
 #define WAIT_ANY ((u_long)-1)
 #define WNOHANG  1              /* 10/6/26, task_wait_opts() and SYS_wait: 0 at once when no child has ended */
 #define WINTR    2              /* 10/6/26, task_wait_opts(): a kill of the caller ends the wait (-1) */
+#define WCTRLC   8              /* 10/25/26, with WINTR: so does a Ctrl+C that reached the caller itself (TTY_INTR) */
+/* 10/25/26: WUNTRACED (4, surfos/job.h): a child that stopped too, how WX_STOPPED */
 int task_wait(u_long pid, int *status);                            /* returns the pid, or -1 with nothing to wait for */
 int task_wait_opts(u_long pid, int *status, int options);   /* WNOHANG: 0 while children are left running */
 u_int task_child_count(void);
 int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
+int task_wait_how(u_long pid, u_long job, int *status, int *how, int *job_out, int options);  /* 10/25/26: how: WX_*; job: any child of it */
+/* 10/25/26: job control (surfos/job.h); interrupts off for the first */
+struct tty;
+int task_stop_job(struct tty *tty, u_long job);         /* Ctrl+Z: the job's tasks stop; how many */
+int task_stop_reader(struct tty *tty);                  /* a read from the background stops first: 0, -EINTR */
+int task_job_go_on(struct tty *tty, u_long job, int foreground, u_long shell);   /* how many tasks */
+int task_job_kill(struct tty *tty, u_long job, u_long shell);                    /* how many */
+int task_job_made(u_long job, u_long shell);            /* a task of that job (collected or not), made by that shell? */
+void task_now_stopped(surf_task *t);                    /* it counts as stopped (WUNTRACED); interrupts off */
+int kthread_create_job(const char *name, surf_console *con, kthread_fn fn, void *arg, prio_level prio,
+                       u_int flags, int job);           /* kthread_create_on() in a job (SPAWN_JOB_* or one): its pid */
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 int kill_task_patient(surf_task *t); /* 10/18/26: as a hangup's kill: inside a call it waits for its end, however long

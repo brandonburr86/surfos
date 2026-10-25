@@ -47,6 +47,9 @@ USER_PROGS  += files         # text file browser, independent of the web browser
 USER_PROGS  += undertow      # 10/11/26: the web browser, a program of several files in user/undertow/
 USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the network, for tools/devloop.py
 USER_PROGS  += httpd         # 10/17/26: the web server, a program of several files in user/httpd/
+USER_PROGS  += pipetest      # 10/24/26 (pipelines and scripting): the kernel's pipes from user space
+USER_PROGS  += env           # 10/24/26: the environment, or a program run with a changed one
+USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeline wants (user/bin/lineutil.h)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -465,6 +468,24 @@ test-edit: $(BUILD)/host/test_edit $(BUILD)/host/test_rx
 	$(BUILD)/host/test_rx
 unittest: test-edit
 .PHONY: test-edit
+
+# 10/24/26: surfsh's parser, unparser and expansions, user/surfsh/*.c as they are, against the user headers with the
+# C library's names (tests/host/surfsh_bridge.c gives them what they need of the rest of surfsh, tests/host/sim_fs.c the
+# system calls)
+SURFSH_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,parse.o unparse.o expand.o util.o vars.o arith.o glob.o test.o printf.o)
+$(BUILD)/host/surfsh/%.o: user/surfsh/%.c user/surfsh/surfsh.h tests/host/libsurf_names.h tests/host/sim_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(SIM_FLAGS) -c $< -o $@
+$(BUILD)/host/sim/surfsh_bridge.o: tests/host/surfsh_sim.h user/surfsh/surfsh.h
+$(BUILD)/host/test_surfsh: tests/host/test_surfsh.c tests/host/surfsh_sim.h $(BUILD)/host/sim/surfsh_bridge.o $(SURFSH_HOST_OBJ) \
+                           $(BUILD)/host/sim/sim_fs.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_surfsh.c $(filter %.o,$^) -o $@
+test-surfsh: $(BUILD)/host/test_surfsh
+	$(BUILD)/host/test_surfsh
+unittest: test-surfsh
+.PHONY: test-surfsh
 
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h

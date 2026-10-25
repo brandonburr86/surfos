@@ -82,6 +82,7 @@ void tty_reset(struct tty *t) {
     t->dropped = 0;
     t->raw = 0;
     t->raw_owner = NULL;
+    t->fg_job = t->fg_shell = 0;                /* 10/25/26 */
     irq_restore(flags);
 }
 
@@ -118,6 +119,13 @@ void tty_input(struct tty *t, u_char c) {
             irq_restore(flags);
             return;
         }
+    }
+    /* 10/25/26: Ctrl+Z in line mode stops the foreground job (surfos/job.h) and goes no further, with
+       one or without; at --More-- it is a key (it shows the next screenful) */
+    if(c == 0x1A && !t->raw && !t->con->page_asker) {
+        task_stop_job(t, t->fg_job);
+        irq_restore(flags);
+        return;
     }
     next = (t->in_head + 1) % TTY_INPUT_SIZE;
     if(next == t->in_tail) {
@@ -158,13 +166,14 @@ static void input_seq(struct tty *t, const char *s) {
    arrive as they were sent. *esc is the line's state (0 normal, 1 after ESC, 2 inside ESC [ or
    ESC O); one per line. From interrupt handlers too. 10/6/26: while the rest of a paste is
    skipped (TTY_SKIP, tty.h), bytes that come less than TTY_SKIP_MS after the one before are
-   dropped, whatever the mode; a Ctrl+C, or a byte after such a pause, ends the skip. */
+   dropped, whatever the mode; a Ctrl+C, or a byte after such a pause, ends the skip. 10/25/26:
+   Ctrl+Z (job control) gets through as Ctrl+C does. */
 void tty_term_input(struct tty *t, u_char *esc, u_char c) {
     u_long flags = irq_save(), now = getticks();
     int burst = now - t->last_in < ms_to_ticks(TTY_SKIP_MS);
     t->last_in = now;
     if(t->skip) {
-        if(burst && c != 0x03) {        /* the paste goes on: dropped */
+        if(burst && c != 0x03 && c != 0x1A) {   /* the paste goes on: dropped */
             irq_restore(flags);
             return;
         }
@@ -177,7 +186,7 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
         tty_input(t, c);
         return;
     }
-    if(c == 0x03) {                     /* 10/6/26: before the sequence: Ctrl+C always reaches tty_input() */
+    if(c == 0x03 || c == 0x1A) {        /* 10/6/26: before the sequence: Ctrl+C (and Ctrl+Z) always reach tty_input() */
         *esc = 0;
         tty_input(t, c);
         return;
@@ -216,10 +225,11 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
    the queue first, and interrupts the job or is queued then, tty_input()), nor a lone Esc with no
    question up. A pty's master takes those whatever room is left (kernel/pty.c). */
 int tty_term_queues(struct tty *t, u_char esc, u_char c) {
-    if(t->skip && c != 0x03 && getticks() - t->last_in < ms_to_ticks(TTY_SKIP_MS))
+    if(t->skip && c != 0x03 && c != 0x1A && getticks() - t->last_in < ms_to_ticks(TTY_SKIP_MS))
         return 0;                                   /* the rest of a paste: dropped (tty_term_input()) */
     if(t->raw) return 1;
     if(c == 0x03) return 0;                         /* even inside a sequence: it ends it (tty_term_input()) */
+    if(c == 0x1A) return t->con->page_asker != NULL;    /* 10/25/26: Ctrl+Z is queued only at --More-- */
     if(esc == 1) return 0;
     if(esc == 2) return c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'H' || c == 'F';
     if(c == 0x1B) return t->con->page_asker != NULL;
@@ -267,6 +277,15 @@ int tty_getc(struct tty *t) {
         if((task_interrupted() && !in_interrupt()) || t->hungup) {
             irq_restore(flags);
             return -1;
+        }
+        /* 10/25/26: a task of a job that is to stop (Ctrl+Z), or that reads from the background,
+           stops here, off the queue of readers: no key is its until its shell lets it go on in the
+           foreground (surfos/job.h). Looked at with interrupts off: a Ctrl+Z after it finds the
+           task on the queue (task.c's stop_task() takes it off) */
+        if(curTask && curTask->job && !in_interrupt() && (curTask->stop_req || curTask->job != t->fg_job)) {
+            irq_restore(flags);
+            if(task_stop_reader(t) < 0) return -1;
+            continue;
         }
         if(t->in_tail != t->in_head) {
             int c = t->inq[t->in_tail], full = queue_full(t);
@@ -316,6 +335,13 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
     }
 }
 
+/* 10/25/26: is q a terminal's queue of readers (stop_task(): a stopped reader leaves it, task.c)? */
+int tty_is_readers(struct task_list *q) {
+    int i;
+    for(i = 0; i < NUM_TTYS; i++) if(q == &ttys[i].readers) return 1;
+    return 0;
+}
+
 /* 10/6/26: how many more keys the input queue takes (a pty's master waits for room, kernel/pty.c) */
 u_int tty_room(struct tty *t) {
     return (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
@@ -359,7 +385,7 @@ static void scrub_last(struct tty *t) {
 }
 
 /* the line discipline; 10/9/26: secret, the echo is off for this line (tty_readline_secret()) */
-static int readline(struct tty *t, char *buf, size_t size, int secret) {
+static int readline(struct tty *t, char *buf, size_t size, int secret, int eof) {
     size_t len = 0;
     int pos = t->hist_count;            /* history cursor; == hist_count means the line being typed */
     int oldest = t->hist_count > TTY_HISTORY ? t->hist_count - TTY_HISTORY : 0;
@@ -385,6 +411,10 @@ static int readline(struct tty *t, char *buf, size_t size, int secret) {
             buf[len] = 0;
             if(len && !secret) history_add(t, buf);
             return (int)len;
+        }
+        if(c == 0x04 && eof && !len) {  /* 10/25/26: Ctrl+D on an empty line: the end of the input */
+            buf[0] = 0;
+            return -2;
         }
         if(c == 0x08 || c == 0x7F) {
             if(len) {
@@ -433,11 +463,11 @@ static int readline(struct tty *t, char *buf, size_t size, int secret) {
 }
 
 int tty_readline(struct tty *t, char *buf, size_t size) {
-    return readline(t, buf, size, 0);
+    return readline(t, buf, size, 0, 0);
 }
 
 int tty_readline_secret(struct tty *t, char *buf, size_t size) {
-    return readline(t, buf, size, 1);
+    return readline(t, buf, size, 1, 0);
 }
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
@@ -448,6 +478,10 @@ int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;
     if(!len) return 0;
+    /* 10/25/26: from the background a reader stops before the mode is looked at, which may change
+       before it goes on (a shell's line editor reads its keys raw); tty_getc() stops one that is to
+       stop while it waits for a key */
+    if(curTask->job && task_stop_reader(t) < 0) return -EINTR;
     if(t->raw) {
         size_t got = 0;
         n = tty_getc(t);
@@ -456,7 +490,8 @@ int tty_read(struct tty *t, char *buf, size_t len) {
         while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
         return (int)got;
     }
-    n = tty_readline(t, line, sizeof(line));
+    n = readline(t, line, sizeof(line), 0, 1);
+    if(n == -2) return 0;                                       /* 10/25/26: Ctrl+D */
     if(n < 0) return t->hungup ? 0 : -EINTR;
     line[n++] = '\n';
     if((size_t)n > len) n = (int)len;
@@ -544,7 +579,8 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 }
 
 /* 10/6/26: TTY_PAGE (tty.h). Paging belongs to the task that turned it on, its owner: what
-   the owner and the tasks descended from it print on this terminal is paged until the
+   the owner and the tasks descended from it (10/25/26: the programs of its foreground, as
+   console.c's page_descends() has it) print on this terminal is paged until the
    owner turns it off or ends (tty_task_gone). TTY_PAGE 1 again from the owner starts a new
    screenful. An ancestor of the owner takes the pager over (a shell whose job in the
    background turned paging on, and which runs a command now). A task that is paged
@@ -594,6 +630,18 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
         irq_restore(flags);
         return 0;
     }
+    if(op == TTY_INTR) {                          /* 10/25/26: Ctrl+C for a shell's own commands (tty.h) */
+        u_long flags;
+        int n;
+        if(arg > 1) return -22;
+        flags = irq_save();
+        n = curTask->ctrl_c;
+        curTask->ctrl_c = 0;
+        if(arg) curTask->flags |= TF_INTR;
+        else curTask->flags &= ~TF_INTR;
+        irq_restore(flags);
+        return n;
+    }
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);
@@ -615,6 +663,10 @@ void tty_task_gone(struct surf_task *task) {
     int i;
     for(i = 0; i < NUM_TTYS; i++) {
         if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
+        if(ttys[i].fg_job && ttys[i].fg_shell == task->pid) {     /* 10/25/26: the foreground job's shell: */
+            ttys[i].fg_job = task->job;                             /* the shell's own job, for the one above */
+            ttys[i].fg_shell = task->job ? task->job_shell : 0;     /* it to give the terminal back to its own */
+        }
     }
     console_task_gone(task);
     pty_task_gone(task);

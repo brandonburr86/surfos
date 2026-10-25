@@ -56,17 +56,18 @@ shell/       main.c (the ring-0 shell and the kernel's command table), prompt.c 
              built into libsurf), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
              selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, fat_mkfs.c (mkfs),
-             devfs.c (/dev, /dev/kmsg), poll.c (poll())
+             devfs.c (/dev, /dev/kmsg), poll.c (poll()), pipe.c (pipes, 10/24/26)
 net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c,
              sock.c (TCP connections as descriptors)
 user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.c stdlib.c string.c ctype.c
-             malloc.c dirent.c time.c inet.c, and prompt.c, which builds shell/prompt.c again); include/ (surf.h,
+             malloc.c dirent.c time.c inet.c env.c, and prompt.c, which builds shell/prompt.c again); include/ (surf.h,
              the standard headers stdio.h stdlib.h string.h unistd.h fcntl.h errno.h dirent.h time.h ctype.h
              limits.h stdarg.h stddef.h stdint.h poll.h, sys/stat.h sys/statfs.h sys/types.h, and
-             surfos/prompt.h kcmd.h version.h sock.h poll.h pty.h proc.h, which include the kernel's headers
-             of those names); bin/ (hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head
-             hexdump fstest edit pagetest kcmdtest nettest ptytest); surfsh/ (the SurfOS shell: main.c
-             editor.c complete.c parse.c run.c builtins.c surfsh.h); telnetd/ (the telnet server: main.c
+             surfos/prompt.h kcmd.h version.h sock.h poll.h pty.h proc.h pipe.h spawn.h, which include the kernel's
+             headers of those names); bin/ (hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head
+             hexdump fstest edit pagetest kcmdtest nettest ptytest pipetest); surfsh/ (the SurfOS shell: main.c
+             editor.c complete.c parse.c unparse.c expand.c exec.c run.c jobs.c util.c builtins.c surfsh.h);
+             telnetd/ (the telnet server: main.c
              server.c telnet.c telnet.h telnetd.h)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, pciinfo.c (lspci -v, wifiinfo), serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
@@ -348,7 +349,9 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 * **The pager** (**ai-dev**, 10/6/26; `include/surfos/tty.h` is the contract,
   `kernel/console.c` counts the rows and asks, `kernel/tty.c` decides who is paged).
   `ttyctl(TTY_PAGE, 1)` makes the caller the owner on its console: what it and the tasks
-  descended from it (the parent chain) print there in task context is paged. The console
+  descended from it (the parent chain; 10/25/26: through the programs of its foreground,
+  `TF_FOREGROUND`, so a job surfsh started with `&` is not paged with its next command) print
+  there in task context is paged. The console
   counts the rows that start, by a newline or a VT100 wrap; once LINES - 1 rows have been
   shown and a paged task is about to draw on, or start, another, that task first waits at
   `TTY_MORE`, `--More-- (Space: next page, Enter: next line, q: skip the rest)`, in inverse
@@ -527,7 +530,9 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   with; `ttyctl` is raw mode and the screen size (section 7). **ai-dev** (10/6/26): `wait`
   takes options, `WNOHANG` (0 at once while children run on); `ttyctl` also `TTY_PAGE`
   and `TTY_CAPS`; `kcmd` and `kcmdinfo` (32 and 33) run and list the kernel's shell
-  commands (below).
+  commands (below). **ai-dev** (10/24/26): `pipe` (46) and `spawnx` (47), section 21;
+  (10/25/26) `waitx` (48: how a child ended, killed by Ctrl+C or not), `ttyctl`'s
+  `TTY_INTR`, `#!` scripts and `ENOEXEC`, `job` (49: job control), section 21.
 * **Kernel commands from programs** (**ai-dev**, 10/6/26; `kernel/syscall.c`,
   `include/surfos/kcmd.h`). `SYS_kcmd(argv)` runs one of the ring-0 shell's commands in
   the calling task through `shell_run_command()`, as the ring-0 shell would, and returns
@@ -1067,7 +1072,9 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   is read again just before it runs (`parse_next()`), so in `ls x; echo $?` the echo sees the
   status of ls. A line holds at most 1023 bytes and a command 32 words; a word of more than
   255 bytes, which the kernel would answer with EFAULT, is refused by surfsh with that
-  reason.
+  reason. **10/24/26**: `parse.c` makes a tree of the whole command (lists, `&&` and `||`,
+  pipelines, groups, redirections, here-documents), and the words are expanded only when
+  their command runs, so `$?` is still the status just before (section 21).
 * **Which command runs** (`run.c`), in the ring-0 shell's order: surfsh's own, then the
   kernel's (a name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`), then
   a program, `/initrd/bin/<name>` or a path when the name has a `/`. So `ls`, `cat` and `cp`
@@ -1083,14 +1090,20 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   done (section 10). What stdout could not write (a full disk) is dropped with `fpurge()`
   rather than shown on the console later, and the command fails. `<` and `&` are refused
   for builtins and kernel commands, with a hint when a program of the name exists.
+  **10/24/26**: every kind of command is redirected the same way, the descriptor's file kept
+  on a spare descriptor while it runs, and a program gets surfsh's 0, 1 and 2 as they are
+  then (`SYS_spawnx`); `<` is refused for kernel commands only, `&` for none (section 21).
 * **Background programs** (`&`) are not waited for (`[pid] started`); before each prompt
   the ones that have ended are collected with `waitpid(-1, &status, WNOHANG)` and reported
   (`[pid] done`, `[pid] exit status n`, `[pid] killed`). Their files were closed when they
-  exited (section 5).
+  exited (section 5). **10/24/26**: a job in the background has a number, `[1] started (pid
+  42)`, and its report names it, `[1] done  cmd` (section 21).
 * **Paging.** Every command in the foreground, builtin, kernel command or program, runs
   between `ttyctl(TTY_PAGE, 1)` and `ttyctl(TTY_PAGE, 0)`, so long output (`help`, long on
   purpose) stops at `--More--` (section 7). The lines surfsh itself prints after a program,
   `[exit status n]` and `[pid n killed]`, come after paging ends, so q cannot hide them.
+  **10/24/26**: a command typed at the prompt is paged as a whole, a pipeline or a list
+  included, between one `TTY_PAGE 1` and its `TTY_PAGE 0`.
 * **Tab** (`complete.c`) reads the line up to the cursor with the parser's rules. The first
   word of a command, without a `/`, completes against the builtins, the kernel's commands
   and the programs; anything else is a path, relative to the current directory, with `.`,
@@ -1172,7 +1185,7 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
 * **Limits.** Typing stays ASCII: in line mode the bytes above 0x7F are the keyboard's
   special keys, so accented letters show but cannot be typed. No pipes, no variables other
   than `$?`, no wildcards and no job control (a program in the background cannot be brought
-  back). A kill that has to fall back to killing at once after 2 seconds leaves what the
+  back): **10/24/26**, pipelines, lists and groups since then (section 21). A kill that has to fall back to killing at once after 2 seconds leaves what the
   task held (a lock, a file) as before, and a long `mkfs` is not cut short. The console's
   input queue holds 256 bytes, so a long paste over the serial line loses bytes. A serial
   terminal must be as wide as the console's grid for the editor's wrapping to look right
@@ -1587,6 +1600,294 @@ http.c     the HTTP/1.1 protocol, no system calls: request heads, paths, header 
 * **Limits.** GET and HEAD only: no forms, uploads, server-side programs or HTTPS; one
   background server; the address `httpd on` prints is the default interface's (`netinfo`).
   SurfOS has no loopback interface, so Undertow on the same machine cannot open the site.
+
+## 21. Pipelines and scripting in surfsh (October 2026)
+
+The owner asked (2026-10-24) for pipelines and useful scripting in surfsh, in stages:
+bounded kernel pipes, pipelines, environment variables, script files, and job control
+(`docs/USB-BOOT.md` section 10; the brief is
+`docs/superpowers/plans/2026-10-24-surfsh-scripting.md`). The layers, from the top:
+
+```
+surfsh (user/surfsh/)  parse.c: a tree of lists, pipelines, groups; exec.c runs it; a new surfsh for a subshell
+                       vars.c, expand.c, arith.c, glob.c: variables, the environment, $( ), $(( )), wildcards
+                       if while until for case, functions, script.c test.c printf.c: the builtins of scripts
+libsurf                pipe(); spawnx(), and spawn()/spawnfd() over it with environ; a broken pipe ends a program (141)
+SYS_spawnx             kernel/process.c: descriptors 0-3 as the caller says, an environment, a job in the background;
+                       #! scripts, and ENOEXEC for a file that is no program
+SYS_waitx, TTY_INTR    kernel/task.c, kernel/tty.c: how a child ended (killed by Ctrl+C?), Ctrl+C for shells
+SYS_job                kernel/task.c, kernel/tty.c: jobs, the terminal's foreground job, Ctrl+Z, stopped tasks
+SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
+```
+
+* **Pipes** (`fs/pipe.c`, `include/surfos/pipe.h`). `SYS_pipe` (46) makes a ring of
+  `PIPE_SIZE` (8 KB) bytes from the kernel heap with two ends, each a vnode of `pipefs`, a
+  file system that is never mounted, as `sockfs` and `ptyfs` are; `fds[0]` is an open file
+  of the reading end, `fds[1]` of the writing end, so `dup2` and `spawnfd` pass them on and
+  an end closes with its last descriptor, in whichever process. A reader waits while the
+  pipe is empty and a writing end is open anywhere and then takes what is there; once the
+  writing end is closed it gets 0. A writer writes everything, waiting while the pipe is
+  full; a write of up to `PIPE_BUF` (4 KB) waits until all of it fits and goes in whole, so
+  two writers' blocks never mix. With the reading end closed a write answers `EPIPE` (the
+  bytes written before it, when there were some). The ring is changed with interrupts off and
+  the bytes copied with them on, each side marked busy while it copies, so a reader and a
+  writer work at once and two readers never get the same bytes. Every wait is one a kill,
+  Ctrl+C or a hangup cuts short, and every change calls `poll_wake()`: `POLLIN` when there is
+  something to read or the writing end is gone (`POLLHUP` then), `POLLOUT` when `PIPE_BUF`
+  bytes fit, `POLLERR` with it when nobody reads. `lseek()` on an end answers `ESPIPE`. At
+  most `PIPE_MAX` (32) pipes exist at once (`ENFILE`), so no program can take the kernel's
+  memory with them. The pipe goes with its second end.
+* **A broken pipe.** libsurf's `write()` ends a program with status 141 (128 + 13, as
+  SIGPIPE does elsewhere) when a write to a pipe answers `EPIPE` (it asks `fstat()`: only
+  `pipefs` counts, since a connection answers `EPIPE` too once it is closed both ways), so
+  `cat file | head -3` ends `cat` quietly; `broken_pipe_exit(0)` asks for the error instead.
+  A kernel command whose output goes to a pipe whose reader has gone (`dmesg | head`) is no
+  failure: the rest of its kept output is dropped (`kernel/syscall.c`).
+* **`SYS_spawnx`** (47, `include/surfos/spawn.h`): `spawnfd` with what a shell needs
+  besides: the child's descriptors 0-3 from the caller's (-1 the console for 0-2,
+  `SPAWN_CLOSED` none), an environment of at most 64 strings in 4 KB, and `SPAWN_BG`: not in
+  the foreground of its terminal even while the caller's output is paged, so Ctrl+C there
+  does not reach a job started with `&`. `user_entry()` puts the environment's strings
+  above argv's on the new stack and `argc, argv, envp` under them; libsurf's crt0 makes the
+  third word `environ` (and `main`'s third argument), `env.c` has `getenv`, `setenv`,
+  `unsetenv` and `putenv`, and `spawn()` and `spawnfd()` are now `spawnx()` with `environ`,
+  so an environment reaches what a program starts. The job field must be 0 (job control
+  comes later). A program takes 128 arguments in 8 KB (`SPAWN_MAX_ARGS`, `SPAWN_ARG_BYTES`;
+  until now 32 in 2 KB), and so does a kernel command (`SYS_kcmd`), so that the names a
+  wildcard gives fit (`rm *.tmp`). `env` (`user/bin/env.c`) prints the environment it gets,
+  or runs a program with assignments put over it (`env -i` from an empty one).
+* **surfsh's parts** now (`user/surfsh/`): `parse.c` (the scanner and the grammar), `unparse.c`
+  (a tree back to text), `expand.c` (words to fields), `vars.c` (variables, the environment,
+  the positional parameters), `arith.c` (`$(( ))`), `glob.c` (patterns and wildcards),
+  `exec.c` (the tree runs), `run.c` (the kernel's commands, programs of `PATH`, waiting),
+  `jobs.c` (jobs in the background), `util.c` (strings that grow, arenas), with `main.c`,
+  `editor.c`, `complete.c` and `builtins.c` as before.
+* **Parsing** (`parse.c`). A complete command is what the text holds up to a newline outside
+  every command: a list of and-or lists (`;` `&`), and-or lists of pipelines (`&&` `||`,
+  left to right), pipelines of commands (`|`, `!` in front), and commands: a simple command
+  (assignments, words and redirections in any order), `{ list; }` or `( list )` with
+  redirections after them. Words are kept as typed, quotes and all; the scanner reads quotes,
+  `$( )` (whose inside it parses, so that its `)` is the one that ends a command), `${ }`,
+  `$(( ))` and backquotes to their ends, joins lines at `\` and a newline, and takes `#` at
+  the start of a word to the end of the line. Redirections are `[n]< > >> >| <> <& >& << <<-`;
+  a here-document is the lines after the next newline up to its end line (`<<-` drops their
+  leading tabs; a quoted end line keeps the text as it is). Text that ends inside something
+  answers `PARSE_MORE` with what is open; at the prompt the next line is read after the
+  continuation prompt `… ≋>` (`shell/prompt.c`, where ^C or ^D on an empty line drops the
+  command), in a file it is an error. Commands nest 64 deep at most, a pipeline has 16
+  stages. An empty command (`;;`, a leading `;`) is skipped, as before.
+* **Running** (`exec.c`). Redirections are made in surfsh itself: the descriptor's file is
+  kept on a spare descriptor (10-15, then 3-9) and put back afterwards, so builtins, kernel
+  commands, groups and programs are redirected alike, and a program gets surfsh's 0, 1 and
+  2 as they are then (`2>&1`, `3>&1 1>&2 2>&3`). A here-document goes in through a pipe:
+  for a program it is written once the program has started, as it reads; for surfsh's own
+  command it must be in the pipe first, so one longer than `PIPE_SIZE` is written by a new
+  surfsh running `cat`. A pipeline's programs are processes joined by pipes; a stage that is
+  surfsh's own (a builtin, a kernel command, a group, a command whose name comes from an
+  expansion) runs in a new surfsh, except the last stage, which runs in surfsh itself with
+  the last pipe as its descriptor 0, so that `... | cd x` (and later `... | read line` and a
+  loop) change this shell, as zsh and ksh have it. A kernel command after a `|` is refused:
+  it reads only the console. The pipeline's status is its last stage's, and every process of
+  it is waited for. `( list )` runs in a new surfsh too, and so does a job in the background
+  that is surfsh's own (`{ ...; } &`, `ping 10.0.2.2 100 &`, which before was refused).
+* **Variables** (`vars.c`). A variable has a name (letters, digits and `_`, no digit
+  first), a value, and two marks: exported (`export`: programs get it in their environment)
+  and read-only (`readonly`: no assignment or `unset` changes it). surfsh starts with its
+  environment as exported variables and sets `PATH` (`/initrd/bin`), `SHELL` and `PWD`
+  when they are missing; `cd` sets `PWD` and `OLDPWD` (`cd -` goes to `OLDPWD`). A line of
+  assignments alone (`x=1 y=$x`) keeps them, left to right; assignments before a command
+  are for that command alone: a program finds them in its environment (over the exported
+  ones), surfsh's own command sees them while it runs and they are put back afterwards. The
+  positional parameters (`$1`, `${10}`, `$#`, `"$@"`) are a script's or `-c`'s arguments;
+  `set -- a b` gives new ones and `shift [n]` moves them down. `set` alone lists the
+  settings and then the variables, `export` and `readonly` alone the marked ones, as lines
+  that would set them again.
+* **Expansions** (`expand.c`), when a command runs, in POSIX's order: parameters, `$( )` and
+  backquotes, and `$(( ))`, left to right; then field splitting of what unquoted expansions
+  gave, at `IFS` (POSIX's rule: blanks around a field are none, one other `IFS` character
+  ends a field even an empty one); then pathname expansion; then the quotes go. Each
+  character carries a flag through this (quoted; from an unquoted expansion), so what quotes
+  hold is never split nor a pattern, `"$x"` is one field whatever `x` holds and `"$@"` is a
+  field for each parameter. The `${ }` forms are `${x:-w} ${x-w} ${x:=w} ${x:?w} ${x:+w}
+  ${#x} ${x#p} ${x##p} ${x%p} ${x%%p}`; `$?`, `$$`, `$!` (the last job's last pid), `$#`,
+  `$0` and `$-`. `$( )` runs a plain program by itself and anything else in a new surfsh,
+  reads its output to the end and takes off the newlines at its end; a line of assignments
+  alone has the status of its last `$( )`. `$(( ))` (`arith.c`) is C's integer arithmetic on
+  32-bit numbers, assignments, `++` and `--` included; dividing by 0 is an error, and the
+  side of `&&`, `||`, `?:` that is not taken is not worked out. An expansion that fails
+  (`${x:?}`, a division by 0, a parameter that is not one) says why and the command does not
+  run (status 1); a script ends there. A here-document whose end line is not quoted has
+  parameters, `$( )` and `$(( ))` in it, its quotes being themselves. A file's name in a
+  redirection and an assignment's value are expanded but never split nor matched.
+* **Wildcards** (`glob.c`). `*`, `?`, `[abc]`, `[a-z]`, `[!a]` outside quotes make a field
+  the sorted names that match it, part by part between the `/`s (a part without a pattern is
+  only joined on); a character is a whole UTF-8 sequence, names are matched as stored, a name
+  that starts with `.` only by a part that does, and a pattern that matches nothing stays as
+  it is (POSIX's rule). The same matcher does `${x#p}` and the rest.
+* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own or the kernel's is
+  looked for in each directory of `PATH` (an empty one is `.`); `help` and Tab list the
+  programs of all of them, a name in two directories once.
+* **A new surfsh** is `surfsh --sub STATUS PID LASTPID NAME`, started with `spawnx` with the
+  given descriptors 0 and 1, surfsh's 2, the exported variables as its environment, and the
+  reading end of a pipe as 3, into which surfsh writes what makes the new one this shell
+  (`var_state()`: the variables that are not exported, the read-only marks, the positional
+  parameters; and the history, when the text uses it), a NUL, and the text to run
+  (`unparse()` of the tree: one line, its here-documents after it), and closes it; the new
+  one reads it to the end, runs it as a script with `$?`, `$$`, `$!` and `$0` as they were,
+  and ends with its status. That is how SurfOS, which has no `fork()`, gets the copy of the
+  shell a subshell is.
+* **Jobs** (`jobs.c`). A command started with `&` (a program, a pipeline's processes, or a
+  new surfsh) is a job with the smallest free number: `[1] started (pid 42)` (the last
+  process's pid); before each prompt the processes that ended are collected and a job whose
+  processes have all ended is reported with its first line: `[1] done  cmd`, `[1] exit
+  status 3  cmd`, `[1] killed  cmd`. A shell that runs a script says nothing about its jobs
+  (10/25/26: it keeps one that ended for `wait`).
+* **Input** (`main.c`). `surfsh -c TEXT` and `surfsh FILE` run without a prompt; input that is
+  not the console is read a byte at a time from a pipe and a block at a time from a file,
+  which is put back where the next command's own reading begins, so a command reads what
+  follows it. A mistake in a file, or a file that ends inside a command, ends it with 2.
+* **Compound commands and functions** (`parse.c`, `exec.c`, 10/25/26). `if`/`elif`/`else`,
+  `while`, `until`, `for NAME [in WORDS]` (`"$@"` without `in`) and `case` (its patterns are
+  `glob.c`'s, quoted characters themselves), each with redirections after it; `if then else
+  elif fi do done case esac while until for { } !` are reserved where a command's name would
+  be, and a list inside a compound command goes on over newlines to the word that ends it (at
+  the prompt, the continuation prompt). A function, `NAME() COMPOUND`, is kept by `vars.c` as
+  its definition's text (`unparse.c`), parsed again into memory of its own so that it
+  outlives the line that defined it, and handed to a new surfsh with the variables; one that
+  is replaced while it runs goes when its last call ends. It is called before surfsh's other
+  builtins and after POSIX's special ones (`: . break continue eval exec exit export readonly
+  return set shift unset`), with its own positional parameters, `local` variables put back
+  when it returns, and loops of its own for `break`; calls nest 100 deep at most. `break N`,
+  `continue N` and `return N` are counters that every list on the way out looks at
+  (`stopping()`), and the loop or function they are for takes them.
+* **The builtins of scripts** (`script.c`, `test.c`, `printf.c`). `test` and `[` (POSIX's rules
+  by the number of arguments, then `! -a -o ( )`; SurfOS's files have no permissions, so `-r`
+  and `-w` are "it exists"); `read [-r]` (one line and no more: from a terminal one read,
+  from a file a block and `lseek()` back, from a pipe a byte at a time; split at `IFS`, the
+  rest to the last name); `printf` (POSIX's conversions and `\` sequences on libsurf's
+  formatter, the format used again for the arguments left); `eval`; `.` and `source` (`PATH`'s
+  directories, then here; `return` leaves the file); `exec` (alone, its redirections stay;
+  with a command, the shell ends with its status: SurfOS has no `exec()`); `kernel NAME` (the
+  kernel's command where surfsh has one of its own, `kernel test`); `:`, `true`, `false`.
+  `set` takes POSIX's options: `-e` (a failure whose status is not looked at, outside `if`
+  and loop conditions, `&&`, `||` and `!`, ends the shell), `-u` (a parameter that is not set
+  is an error), `-x` (each simple command on 2 after `+`), `-f` (no wildcards); `$-`; a new
+  surfsh gets them.
+* **Scripts.** `surfsh FILE ARGS`, or a file with `#!INTERPRETER [ARG]` on its first line run
+  by its name: `process_spawn_ex()` reads the line in the caller's context and starts
+  `INTERPRETER [ARG] FILE ARGS` (an ELF program; no `#!` behind a `#!`), the task named after
+  the script. A file that is neither ELF nor `#!` is refused with `-ENOEXEC` before anything
+  starts (until now the new task failed to load it), and surfsh then runs it as a surfsh
+  script, as POSIX's shells do; a `#!` line that names something that cannot run is said
+  ("its #! line names /bin/sh, which cannot run"). init words a surfsh that is no program as
+  before.
+* **Ctrl+C in loops and scripts** (`kernel/task.c`, `kernel/tty.c`). Whom a Ctrl+C reaches is
+  unchanged: the innermost programs of the job of the pager's owner are killed, a kernel
+  command is cut short. New: `SYS_waitx` (48, `include/surfos/job.h`) says that a child was
+  killed by Ctrl+C (`WX_INTERRUPTED`: it ended with `TI_INT`), not just killed; every task of
+  the job counts the Ctrl+C (`TTY_INTR` answers the count), except those above a shell that
+  looks for Ctrl+C itself, so a script that runs a script stops as a whole; and a shell that
+  asked (`TTY_INTR 1`, every interactive surfsh) is told instead of killed where it would be
+  (a surfsh typed at a surfsh's prompt), and as the owner, when nothing else of its job was
+  reached, it takes the key and has its own wait in a call cut short (`read` at the
+  terminal). surfsh asks after each command: a script ends with 130, an interactive shell
+  leaves the rest of its line, loop or function and is back at its prompt with `$?` 130,
+  saying `^C` when nothing else did. A program Ctrl+C killed still reports `[pid n killed]`
+  at the prompt, now with status 130.
+* **Job control** (stage 5; `include/surfos/job.h`, `kernel/task.c`, `kernel/tty.c`,
+  `user/surfsh/jobs.c`). A job is the tasks of one command an interactive surfsh runs: its id
+  is the pid of its first process (`SYS_spawnx`'s job: `SPAWN_JOB_NEW`, then the job's id for
+  the others; `SPAWN_JOB_NONE` for what surfsh starts outside a job, a `$( )` or a pipeline
+  that ends in the shell), what they start on the same terminal is in it too (a pty's session
+  is in none, and so is what a kernel command starts: `run` waits for its program and knows of
+  no stop), and the shell that made it (`job_shell`) is the only one that may move it. Each
+  terminal has a foreground job (`fg_job`), which surfsh sets with `SYS_job` (49, `JOB_FG`)
+  while it waits for one; a task of a job in the background may not (`-EACCES`), but the
+  foreground job's shell (`fg_shell`) gives the terminal back to its own job (a surfsh typed at
+  a surfsh's prompt), and when that shell ends the foreground is its own job, for the shell
+  above it to take back. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
+  it is a key; over the serial line and a pty it passes a paste's skip and an escape
+  sequence, as Ctrl+C does), and a task of another job that reads the terminal stops instead
+  (`task_stop_reader()`: as `tty_read()` begins, before it looks at the mode, and in
+  `tty_getc()`). A stopped task waits where it was: in its own code it is taken off its run
+  queue at once (`TS_STOPPED`, and `irq_dispatch()` switches away from it); waiting for a key
+  or in a sleep that a kill would cut short (`sleep_intr()`) it is woken and parks there, off
+  the terminal's queue of readers, so the keys typed meanwhile are its shell's, and then
+  reads or sleeps on to the same end; in another wait that a kill would cut short it counts
+  as stopped and the wait goes on; anywhere else in a call it parks at the call's end
+  (`task_call_leave()`) and counts as stopped as soon as it waits again
+  (`wait_prepare_intr()`), so nothing is cut short or lost and its shell always learns of
+  the stop. A kill's mark (`TI_KILL`) says how a task ended: a program's own `exit(-1)` is no
+  kill. It leaves the foreground
+  (Ctrl+C no longer reaches it); `JOB_FG` and `JOB_BG` let it go on, in the foreground or
+  not, and a kill reaches a stopped task too. `SYS_waitx` with `WUNTRACED` says each stop
+  once (`WX_STOPPED`, why: Ctrl+Z or a read from the background), and `pid < -1` waits for any
+  child of a job. A shell that looks for Ctrl+C itself (`TF_INTR`) is never stopped, so
+  surfsh's own commands (builtins, loops, kernel commands) do not stop. When the shell that
+  made a job ends, the job's stopped tasks are killed and its other tasks leave it; a
+  detached task is in no job. surfsh: the job table (`jobs`, `fg`, `bg`, `wait`, `kill %n`),
+  `[1] stopped  cmd` when one stops in the foreground (status 148, and the rest of the line,
+  loop or function is left, as for Ctrl+C), `[1] stopped (reading the terminal)` before a
+  prompt; `ps` and `SYS_procinfo` say `stopped` (`PROC_STOPPED`). In line mode Ctrl+D on an
+  empty line is the end of the input: `read(2)` answers 0 (`cat > file`, `read`).
+* **What a review found** (10/25/26). Descriptors 10-15 are surfsh's own: the copies that
+  redirections keep, a script's own file (so `exec 3< file` in a script no longer takes the
+  script's place) and, in an interactive shell, a copy of its terminal (`term_fd`), on which
+  it draws its prompt and line and writes its reports (`[exit status n]`, `[1] started`,
+  `[1] stopped`, `[1] done`): `{ ...; } > file` and `exec > file` take only what the commands
+  write. `<&` and `>&` take 0-9; a program gets a descriptor 3 that is the user's (`prog 3>
+  file`, `exec 3> file`; for 4-9 surfsh says they do not reach it). surfsh never writes a
+  here-document while what reads it cannot go on: a feeder is waited for once surfsh has
+  closed its end of the pipe (so a command that reads part of a long document, `: <<'END'`
+  or `read`, no longer hangs), and the document of a stage whose output another stage reads,
+  or of a job in the background, is written by a new surfsh that runs that stage. A pipeline
+  whose last command cannot start has its 126 or 127. Ctrl+Z leaves an `until` and a `for`
+  loop as it leaves a `while`, and a program's own exit status of 148 is no stop (the stop is
+  said apart). `eval`'s and `.`'s text runs as the command it is part of: `$?` there is the
+  status before it, and in a condition `set -e` is ignored there, as it is in a subshell or a
+  pipeline's stage in a condition (`cond_flag`; the new surfsh gets the options without
+  `-e`); a text in which no command runs answers 0. `exit` alone leaves with `$?` (POSIX). A
+  script keeps a job that ended until `wait` asks for it (`sleep 1 & p=$!; ...; wait $p`);
+  `jobs` collects only the table's processes (in `true | jobs` the pipeline's first stage is
+  not taken from its wait), and in a pipeline or `$( )` it shows the table of the shell (a new
+  surfsh is given it as `jobs -s` lines). `exec` of a command that cannot start leaves an
+  interactive shell running. A surfsh that reads a terminal that is not its prompt (`surfsh >
+  log`) reads it a line at a time. Limits: `${ }` and `$(( ))` nest 64 deep (in the parser's
+  scanner and in `braced()`), a `${#name}` longer than any name is an error, `printf`'s
+  widths and precisions are at most 65536, a string that grows stops at what an `int`
+  counts, and `tail -n` grows its ring with its input. The value of `${x#pattern}` is taken
+  before the pattern expands (which may change `x`), `x=1 x=2 prog` gives the program `x=2`
+  alone, and an empty quote (`""`, `''`, `"$empty"`) begins a field where it is (`""$x` of
+  `x=" a"` is two fields, as in other shells).
+* **Filters** (stage 6, `user/bin/`): `grep` (a basic regular expression: `. * ^ $ [...]`
+  and `\`; `-i -v -n -c -l -q -F -e`), `sort` (`-r -n -f -u`), `uniq` (`-c -d -u -i`), `tail`
+  (`-n N`), `tee` (`-a`), `tr` (ranges, `-d`, `-s`) and `seq`, the programs a pipeline wants
+  after `cat`, `head` and `wc`; `lineutil.h` reads their lines of any length.
+* **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
+  `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
+  lists, pipelines, groups, redirections and here-documents parsed and written back,
+  `PARSE_MORE` for what is open, the mistakes, the limits, quote removal; variables, field
+  splitting, `"$@"`, every `${ }` form, arithmetic, `$( )` against a stand-in, wildcards over
+  a tree of names on `tests/host/sim_fs.c`; compound commands and functions parsed and written
+  back, their mistakes; `test` and `printf`) and `test_prompt` the continuation prompt. `make
+  test` adds `pipetest` (`user/bin/pipetest.c`: pipes from a program and its children,
+  `spawnx` and `waitx`), a block of pipelines and lists in a nested surfsh, one of variables,
+  the environment (`env`), expansions and wildcards, one of scripts (compound commands,
+  functions, the builtins of scripts, scripts by name, `set -e -u -x`, `exec`), and
+  `@surfsh-ctrl-c`: Ctrl+C in loops of builtins, of programs and of kernel commands, in
+  `read`, in a surfsh inside a surfsh, and in a script; and `@surfsh-jobs`: Ctrl+Z, `jobs`,
+  `ps`, `bg`, `fg`, `kill %1`, a pipeline as one job, a loop of builtins Ctrl+Z leaves alone, a
+  reader in the background stopped and given the keys by `fg`, Ctrl+D, the stopped job of a
+  surfsh that exits killed, a reader stopped while it waits for a key (the shell's next line
+  is the shell's), a key in the same burst as the Ctrl+Z, two surfshs inside each other (the
+  middle one keeps the terminal after the inner one's end), an `until` loop, and a program
+  that `run` starts in a surfsh inside a surfsh, which Ctrl+Z leaves alone; a block of what a
+  review found (a script's descriptor 3, a pipeline's 127, `$?` in `eval`, `set -e` in
+  conditions, a script's `wait`, `exit` alone, a redirected group, `printf`'s widths, `jobs`
+  in a pipeline and `$( )`, `x=1 x=2`, `exec` of a typo, long here-documents into `:`,
+  `read` and a pipeline's stage, `surfsh > log`, `tail -n` of a huge count); and a block of
+  the filters in pipelines. `test_surfsh` adds the nesting limits, a long `${#name}`,
+  `printf`'s widths, empty quotes and a pattern that changes its variable.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

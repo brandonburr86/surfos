@@ -11,6 +11,9 @@ esi, edi; the result comes back in eax, negative values are -errno.
 user shell, surfsh (surfos/kcmd.h). Calls 34-43 give programs network
 connections, poll, pseudo-terminals and the process list, for the telnet
 server (surfos/sock.h, poll.h, pty.h, proc.h).
+
+10/24/26 (pipelines and scripting in surfsh): call 46 makes a pipe (surfos/pipe.h), 47
+starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -67,8 +70,14 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
 #define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */
-#define NR_SYSCALLS 46
+/* 10/24/26 (pipelines and scripting in surfsh) */
+#define SYS_pipe     46  /* (int fds[2]): fds[0] reads what fds[1] writes (surfos/pipe.h) */
+#define SYS_spawnx   47  /* (const char *path, char *const argv[], const struct spawnx *o): pid (surfos/spawn.h) */
+/* 10/25/26 */
+#define SYS_waitx    48  /* (int pid, struct waitx *w, int options): pid; how the child ended (surfos/job.h) */
+#define SYS_job      49  /* (int op, int arg): job control for a shell (surfos/job.h) */
+#define NR_SYSCALLS 50
 
-#define SPAWN_MAX_ARGS 32
+#include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 
 #endif

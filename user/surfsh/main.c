@@ -1,7 +1,7 @@
 /*
 SurfOS shell: surfsh
 --------------------
-File: main.c    Date: 10/6/26
+File: main.c    Date: 10/6/26, 10/24/26
 --------------------
 surfsh [-l]: the SurfOS shell. init starts it with -l on every console (F1 to F4)
 and again when it ends; typed at a prompt, it starts a shell inside the shell.
@@ -16,9 +16,31 @@ was started in ("/" when init starts it).
 On the console the line is typed in the line editor (editor.c); with any other
 input (surfsh < file) the lines are read and run without a prompt. Either way
 the shell ends with exit, at the end of the input or with Ctrl-D on an empty line.
-Before each prompt (each line of a file) the programs that ran in the background
-and ended are reported. The exit status is kept in 0-255, as on Unix: init takes
--1 for a shell that was killed.
+Before each prompt (each line of a file) the jobs in the background that ended are
+reported. The exit status is kept in 0-255, as on Unix: init takes -1 for a shell
+that was killed.
+
+10/24/26: surfsh -c TEXT [NAME [ARGS]] runs TEXT ($0 NAME, $1... ARGS), and surfsh FILE [ARGS]
+the lines of FILE ($0 FILE), without a prompt. The environment becomes exported variables.
+10/25/26: . files and eval run their text inside a command (run_source() within run_source());
+an interactive shell asks to be told of Ctrl+C itself (TTY_INTR 1): when it stopped commands of
+surfsh's own and nobody said so, ^C is written before the next prompt.
+Lines are read until they make a complete command (parse.c), which then runs (exec.c):
+at the prompt a line that is not complete yet is continued on the next one, after the
+continuation prompt (… ≋>); Ctrl-C there drops the command. A file that ends inside a
+command, and a mistake in a line of one, end it with status 2. Input that is not the
+console is read a byte at a time from a pipe, and a line at a time from a file (put back
+where the command's own reading begins), so that a command reads what follows it. The
+pager pages each command typed at the prompt as a whole. surfsh --sub STATUS PID is a new
+surfsh that another one started (exec.c): it reads what to run from its descriptor 3, with
+$? and $$ as they were there. An interactive surfsh lives on when it writes to a pipe nobody
+reads (broken_pipe_exit(0)); one that runs a script or a subshell ends, as other programs.
+10/25/26: an interactive surfsh draws its prompt and line and writes its reports on a copy of
+its terminal (term_fd, among the shell's own descriptors 10-15), so exec > file or
+{ ...; } > file takes only what the commands write. A script's file is read on such a
+descriptor too, out of the way of its exec 3< and the like; a terminal that is no
+interactive shell's input (surfsh > log) is read a line at a time. A . file or eval's text
+in which no command runs answers 0, and $? there is the status before it.
 */
 
 #include "surfsh.h"
@@ -27,6 +49,9 @@ and ended are reported. The exit status is kept in 0-255, as on Unix: init takes
 struct settings settings = { 1, 1, 5 };
 int last_status;
 int exit_requested, exit_code;
+int interactive;
+int shell_pid;
+int term_fd = 1;
 
 /**** the settings ****/
 
@@ -134,6 +159,195 @@ static void read_conf(const char *path) {
     fclose(f);
 }
 
+/**** the sources of lines ****/
+
+static int blank(const char *s) {
+    while(*s == ' ' || *s == '\t') s++;
+    return !*s;
+}
+
+/* the line editor: a line typed at the prompt (the jobs that ended reported first) */
+static int editor_get(struct source *s, struct sbuf *out, int more) {
+    static char line[LINE_LIMIT + 1];
+    int n;
+    if(!more) jobs_collect(1);
+    n = edit_line(line, sizeof(line), more);
+    if(n == -1) return -1;                      /* Ctrl-D, or no more input */
+    if(n == -3) return -2;                      /* Ctrl-C on a line that continued a command */
+    if(n == -2) {
+        fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);
+        last_status = STATUS_USAGE;
+        return -2;
+    }
+    if(!blank(line)) history_add(line);
+    s->lines++;
+    sb_put(out, line, n);
+    sb_putc(out, '\n');
+    return 0;
+}
+
+/* Input that is not the console: a pipe a byte at a time (what follows the line is not taken from
+   it), a file a block at a time, with what was read past the line given back (fd_give_back())
+   before a command runs. Read in blocks: rd[rpos .. rlen). 10/25/26: a terminal a line at a time
+   (a read of it answers one line, cut to what is asked: a byte would be all of each line) */
+static char rd[4096];
+static int rpos, rlen, seekable = -1, terminal;
+
+static int fd_get(struct source *s, struct sbuf *out, int more) {
+    int got = 0;
+    (void)more;
+    if(seekable < 0) {
+        terminal = isatty(s->fd);
+        seekable = !terminal && lseek(s->fd, 0, SEEK_CUR) >= 0;
+    }
+    for(;;) {
+        char c;
+        if(rpos < rlen) c = rd[rpos++];
+        else {
+            ssize_t n = seekable || terminal ? read(s->fd, rd, sizeof(rd)) : read(s->fd, &c, 1);
+            if(n <= 0) break;
+            if(seekable || terminal) {
+                rpos = 1;
+                rlen = (int)n;
+                c = rd[0];
+            }
+        }
+        if(out->len >= TEXT_LIMIT) {
+            fprintf(stderr, "surfsh: %s: more than %d bytes in a command\n", s->name ? s->name : "the input", TEXT_LIMIT);
+            return -1;
+        }
+        sb_putc(out, c);
+        got = 1;
+        if(c == '\n') break;
+    }
+    if(!got) return -1;
+    if(out->s[out->len - 1] != '\n') sb_putc(out, '\n');
+    s->lines++;
+    return 0;
+}
+
+/* a file's descriptor where the next line begins: what the commands read comes after it */
+static void fd_give_back(struct source *s) {
+    if(seekable > 0 && rpos < rlen) lseek(s->fd, -(off_t)(rlen - rpos), SEEK_CUR);
+    rpos = rlen = 0;
+}
+
+/* text in memory: all of what is left at once */
+static int text_get(struct source *s, struct sbuf *out, int more) {
+    size_t n = strlen(s->text);
+    (void)more;
+    if(!n) return -1;
+    sb_put(out, s->text, (int)n);
+    if(s->text[n - 1] != '\n') sb_putc(out, '\n');
+    s->text += n;
+    return 0;
+}
+
+/**** running what the lines say ****/
+
+static int count_lines(const char *s, int n) {
+    int i, k = 0;
+    for(i = 0; i < n; i++) if(s[i] == '\n') k++;
+    return k;
+}
+
+static void parse_failed(struct source *s, struct parser *p, int first, int at_end) {
+    const char *head = at_end ? (s->get == editor_get ? "the input ended inside a command: " :
+                                 "the text ends inside a command: ") : "";
+    if(s->name) fprintf(stderr, "surfsh: %s: line %d: %s%s\n", s->name, first + p->err_line - 1, head, p->err);
+    else fprintf(stderr, "surfsh: %s%s\n", head, p->err);
+}
+
+/* 10/25/26: sources inside each other (. files and eval run theirs within a command): only the
+   outermost of an interactive shell is what was typed at the prompt */
+static int source_depth;
+
+int run_source(struct source *s) {
+    struct sbuf buf = { NULL, 0, 0 };
+    struct arena mem = { NULL };
+    struct parser p;
+    struct node *n;
+    int used = 0, more = 0, ended = 0, first = 1, r, top = interactive && !source_depth, ran = 0;
+    source_depth++;
+    while(!exit_requested && (top || !stopping())) {
+        if(used >= buf.len && !more) {          /* all of it ran: start again empty */
+            buf.len = used = 0;
+            if(buf.s) buf.s[0] = 0;
+            first = s->lines + 1;
+            if(ended) break;
+        }
+        if(!ended && (more || used >= buf.len)) {
+            r = s->get(s, &buf, more);
+            if(r == -2) {                       /* the line refused: so is the command it was part of */
+                buf.len = used = more = 0;
+                if(buf.s) buf.s[0] = 0;
+                continue;
+            }
+            if(r < 0) {
+                ended = 1;
+                if(used >= buf.len) break;
+            }
+        }
+        parser_init(&p, buf.s + used, &mem);
+        r = parse_command(&p, &n);
+        if(r == PARSE_MORE && !ended) {
+            arena_free(&mem);
+            more = 1;
+            continue;
+        }
+        more = 0;
+        if(r == PARSE_MORE || r == PARSE_ERROR) {
+            parse_failed(s, &p, first, r == PARSE_MORE);
+            arena_free(&mem);
+            last_status = STATUS_USAGE;
+            ran = 1;
+            if(!top) break;                     /* a script with a mistake goes no further */
+            buf.len = used = 0;
+            continue;
+        }
+        if(r == PARSE_EOF) {
+            arena_free(&mem);
+            used = buf.len;
+            continue;
+        }
+        first += count_lines(buf.s + used, p.pos);
+        used += p.pos;
+        if(s->get == fd_get) fd_give_back(s);
+        if(top) {
+            page(1);
+            ttyctl(TTY_INTR, 1);                /* 10/25/26: a Ctrl+C counts from here (exec.c) */
+        }
+        last_status = exec_tree(n, top ? X_TOP : cond_flag);    /* 10/25/26: eval's and .'s text as their command */
+        ran = 1;
+        if(top) {
+            page(0);
+            if(interrupted && !interrupt_said) {    /* Ctrl+C stopped surfsh's own commands: say so */
+                edit_fresh_row();
+                fflush(stdout);
+                dprintf(term_fd, "^C\n");
+            }
+            if(interrupted) last_status = STATUS_INTERRUPTED;
+            if(suspended) last_status = STATUS_STOPPED;     /* 10/25/26: a job stopped (jobs.c) */
+            interrupted = interrupt_said = suspended = 0;
+        }
+        arena_free(&mem);
+        fflush(stdout);
+        if(s->get == fd_get) jobs_collect(0);   /* after each command of a file, as surfsh did after each line */
+    }
+    source_depth--;
+    sb_free(&buf);
+    return ran ? last_status : 0;                   /* 10/25/26: no command, as for a . file of comments */
+}
+
+int run_text(const char *text, const char *name) {
+    struct source s;
+    memset(&s, 0, sizeof(s));
+    s.get = text_get;
+    s.text = text;
+    s.name = name;
+    return run_source(&s);
+}
+
 /**** the start ****/
 
 /* the kernel's banner (kernel/sys.c, do_banner) with the same strings, light red and orange */
@@ -146,62 +360,101 @@ static void banner(void) {
     fflush(stdout);
 }
 
-static int blank(const char *s) {
-    while(*s == ' ' || *s == '\t') s++;
-    return !*s;
+/* A new surfsh (exec.c): from descriptor 3 what makes it the shell it was started from (its
+   variables, positional parameters), a NUL, and the text to run, with $?, $$, $! and $0 as they
+   were there (its arguments) */
+static int run_sub(char **argv) {
+    struct sbuf text = { NULL, 0, 0 };
+    char buf[1024];
+    const char *run;
+    ssize_t n;
+    while((n = read(3, buf, sizeof(buf))) > 0) {
+        if(text.len + n > TEXT_LIMIT) {
+            fprintf(stderr, "surfsh: more than %d bytes to run\n", TEXT_LIMIT);
+            return STATUS_USAGE;
+        }
+        sb_put(&text, buf, (int)n);
+    }
+    close(3);
+    run = sb_str(&text);
+    if((int)strlen(run) < text.len) {           /* the state first */
+        run_text(run, NULL);
+        run += strlen(run) + 1;
+    }
+    last_status = atoi(argv[0]);
+    shell_pid = atoi(argv[1]);
+    jobs_set_last(atoi(argv[2]));
+    arg0 = argv[3];
+    run_text(run, NULL);
+    sb_free(&text);
+    return exit_requested ? exit_code : last_status;
 }
 
-/* lines from a file or another program, without a prompt or an editor */
-static void read_lines(void) {
-    char buf[LINE_LIMIT + 2];
-    while(!exit_requested && fgets(buf, sizeof(buf), stdin)) {
-        size_t n = strlen(buf);
-        if(n && buf[n - 1] == '\n') buf[--n] = 0;
-        else if(n == sizeof(buf) - 1) {             /* no line end: longer than the editor takes */
-            int c;
-            while((c = fgetc(stdin)) != EOF && c != '\n');
-            fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);
-            last_status = STATUS_USAGE;
-            continue;
-        }
-        if(n && buf[n - 1] == '\r') buf[--n] = 0;
-        last_status = run_line(buf);
-        run_collect(0);
-    }
+static int usage(void) {
+    fprintf(stderr, "usage: surfsh [-l] [-c text [name [args]] | file [args]]   (-l: the banner, as init starts it)\n");
+    return STATUS_USAGE;
 }
 
 int main(int argc, char **argv) {
-    static char line[LINE_LIMIT + 1];
+    struct source s;
     int i, login = 0;
-    setvbuf(stdout, NULL, _IOLBF, 0);               /* line by line, wherever descriptor 1 goes later */
+    const char *text = NULL, *file = NULL;
+    setvbuf(stdout, NULL, _IOLBF, 0);           /* line by line, wherever descriptor 1 goes later */
+    shell_pid = getpid();
+    vars_init(environ);
     for(i = 1; i < argc; i++) {
         if(!strcmp(argv[i], "-l")) login = 1;
-        else {
-            fprintf(stderr, "usage: surfsh [-l]   (-l: the banner, as init starts it)\n");
-            return STATUS_USAGE;
+        else if(!strcmp(argv[i], "--sub") && i + 4 < argc) {
+            run_init();
+            return run_sub(argv + i + 1) & 0xff;
+        } else if(!strcmp(argv[i], "-c") && i + 1 < argc) {
+            text = argv[++i];                   /* then $0 and the positional parameters */
+            if(i + 1 < argc) arg0 = argv[++i];
+            pos_set(argc - i - 1, argv + i + 1);
+            break;
+        } else if(argv[i][0] == '-') {
+            return usage();
+        } else {
+            file = argv[i];                     /* $0, then the positional parameters */
+            arg0 = argv[i];
+            pos_set(argc - i - 1, argv + i + 1);
+            break;
         }
     }
     read_conf(SURFSH_CONF);
     if(login) banner();
     run_init();
-    if(!isatty(0) || !isatty(1)) {
-        read_lines();
-        return (exit_requested ? exit_code : last_status) & 0xff;
-    }
-    while(!exit_requested) {
-        int n;
-        run_collect(1);                             /* the background programs that ended */
-        n = edit_line(line, sizeof(line));
-        if(n == -1) break;                          /* Ctrl-D, or no more input */
-        if(n == -2) {
-            fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);
-            last_status = STATUS_USAGE;
-            continue;
+    memset(&s, 0, sizeof(s));
+    if(text) {
+        run_text(text, "-c");
+    } else if(file) {
+        int high;
+        s.fd = open(file, O_RDONLY);
+        if(s.fd < 0) {
+            fprintf(stderr, "surfsh: %s: %s\n", file, strerror(errno));
+            return STATUS_NOTFOUND;
         }
-        if(blank(line)) continue;
-        history_add(line);
-        last_status = run_line(line);
+        if((high = fd_copy_high(s.fd)) >= 0) {     /* 10/25/26: not 3, which the script may redirect */
+            close(s.fd);
+            s.fd = high;
+        }
+        s.get = fd_get;
+        s.name = file;
+        run_source(&s);
+        close(s.fd);
+    } else if(isatty(0) && isatty(1)) {
+        interactive = 1;
+        if((term_fd = fd_copy_high(1)) < 0) term_fd = 1;     /* 10/25/26: the prompt's and the reports' */
+        broken_pipe_exit(0);
+        s.get = editor_get;
+        run_source(&s);
+        fflush(stdout);
+        return exit_requested ? exit_code & 0xff : 0;   /* Ctrl-D: 0, as an exit without a number */
+    } else {
+        s.get = fd_get;
+        s.fd = 0;
+        run_source(&s);
     }
     fflush(stdout);
-    return exit_requested ? exit_code & 0xff : 0;
+    return (exit_requested ? exit_code : last_status) & 0xff;
 }

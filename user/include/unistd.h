@@ -33,6 +33,7 @@ int rmdir(const char *path);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);           /* buf NULL: a malloc'ed buffer */
 int dup2(int oldfd, int newfd);
+int pipe(int fds[2]);                           /* 10/24/26: fds[0] reads what fds[1] writes (surfos/pipe.h) */
 int fsync(int fd);                              /* the file system's dirty blocks reach the device */
 int ftruncate(int fd, off_t size);              /* shorter, or longer with zeros */
 void sync(void);
@@ -42,5 +43,6 @@ int usleep(useconds_t usec);                    /* rounded up to whole milliseco
 int isatty(int fd);                             /* 1 for the console (/dev/console, /dev/tty) */
 void _exit(int code) __attribute__((noreturn)); /* no stdio flush, no atexit handlers */
 void *sbrk(intptr_t incr);                      /* (void *)-1 when there is no more memory */
+extern char **environ;                          /* 10/24/26: "name=value" strings, NULL-terminated (env.c) */
 
 #endif

@@ -511,25 +511,88 @@ unshown. `help` is long on purpose.
 
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
 `help`, `history`, `set`), then the kernel's (everything in sections 7 to 9: `lsblk`,
-`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in `/initrd/bin`; a name with a
-`/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
+`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in the directories of `PATH`
+(`/initrd/bin`); a name with a `/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
 `rmdir` come before the programs of the same names, which know more options: run those by
 their path, for example `/initrd/bin/ls -la` (`help` marks them with `*`). `help` lists
 all three groups, `help <name>` one command.
 
 **A line** is words separated by blanks. `"double"` or `'single'` quotes keep blanks
 inside a word, and `\` keeps the next character as it is. `cmd > file` sends what the
-command prints into the file (`>>` adds to its end), `cmd < file` makes a program read
-the file, `cmd &` runs a program in the background (its end is reported before the next
-prompt), and `;` separates commands. `$?` is
-the status of the last command (`echo $?`); there are no other variables, no wildcards
-and no pipes. The kernel's commands can be redirected too, which is a quick way to keep
-what they say: `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the
-screen.
+command prints into the file (`>>` adds to its end; `2> file` sends its error messages
+there, and `2>&1` where its output goes), `cmd < file` makes it read the file, `cmd &`
+runs it in the background as a job (`[1] started (pid 42)`; its end, `[1] done  cmd`, is
+reported before the next prompt), and `;` separates commands. The kernel's
+commands can be redirected too, which is a quick way to keep what they say:
+`lspci > /data/lspci.txt`. A question such as fdisk's still appears on the screen.
+
+**Pipelines.** `a | b` sends what `a` prints to `b`, which reads it: `dmesg | head -20`,
+`ls /initrd/bin | wc -l`, `lspci | head -3`, `help | head`, `dmesg | grep -i usb`. The
+programs made for pipelines: `grep` (lines that match a pattern: `.`, `*`, `^`, `$`,
+`[a-z]`; `-i` any case, `-v` those that do not, `-c` how many, `-n` with their numbers),
+`sort` (`-n` by number, `-r` reversed, `-u` once each), `uniq` (`-c` with counts), `head`,
+`tail` (`-n 5`), `wc`, `tee FILE` (a copy into a file), `tr a-z A-Z`, `seq 1 10`. A kernel command can begin a
+pipeline but not follow a `|`, since it reads only the console; its output arrives when it
+is done. A program that writes to a pipe whose reader has ended ends too (`hexdump
+/dev/zero | head` stops). `a && b` runs `b` when `a` succeeded, `a || b` when it failed,
+and `! a` turns the status round. `{ a; b; } > file` sends both into the file, and
+`( cd /initrd; ls )` runs in a shell of its own, so its `cd` changes nothing here.
+`cmd << END` makes `cmd` read the lines that follow, up to a line `END` (`$?` is filled in
+there; with `<< 'END'` nothing is). A line that ends with `|`, `&&` or `||`, or inside
+quotes or a `{ }`, goes on in the next line, after the prompt `… ≋>`; Ctrl+C there drops
+the whole command.
+
+**Variables and wildcards.** `name=value` sets a variable, and `$name` (or `${name}`) is
+its value: `dir=/initrd/bin; ls $dir`. `export name` gives it to the programs started
+afterwards, in their environment (`env` lists what a program gets), and `name=value cmd`
+to that one command alone; `unset name` removes it, `readonly name` keeps it as it is.
+`$(cmd)` is what `cmd` prints (`n=$(ls /initrd/bin | wc -l)`), `$((n * 2))` arithmetic,
+`${name:-default}` a value for an empty variable, `${#name}` its length, `${f%.txt}` and
+`${f##*/}` the value without its end or its beginning. A value with blanks in it becomes
+several words unless it is in double quotes: `"$name"` is always one. In a word, `*`
+matches any characters of a file's name, `?` one, `[ab]` one of those: `ls
+/initrd/etc/*.conf`, `rm /data/*.tmp`; a word that matches nothing stays as it is, and in
+quotes (`"*"`) a star is just a star. `$?` is the status of the last command, `$!` the pid
+of the last job, `$$` the shell's own. `PATH` says where programs are looked for.
+
+**Scripts.** A script is a file of commands: `surfsh /data/backup.sh` runs it, and one whose
+first line is `#!/initrd/bin/surfsh` runs by its name too (`/data/backup.sh`; any file that is
+not a program runs as a surfsh script). In it, and at the prompt, `$1`, `$2` ... and `"$@"` are
+its arguments, and these work as in other shells:
+
+```sh
+if [ -f /data/notes.txt ]; then echo there; else echo missing; fi
+for f in /data/*.txt; do echo "$f"; done
+n=0; while [ $n -lt 3 ]; do n=$((n + 1)); done
+case $1 in -h|--help) echo "usage: ..."; exit 2;; esac
+copy() { local from=$1; cp "$from" /data/backup/; }
+lsblk | while read name rest; do echo "device $name"; done
+printf '%-10s %5d\n' files 12
+```
+
+`test` (or `[`) checks files (`-e -f -d -s`), strings (`= != -z -n`) and numbers (`-eq -lt
+-gt` ...); `read` takes a line of input into variables, `printf` formats, `eval`, `.` (runs a
+file's commands in this shell), `break`, `continue`, `return`, `local`, `exec`, `true`, `false`
+and `:` are there too. `set -e` ends a script at the first command that fails, `set -x` shows
+each command before it runs, `set -u` makes an unset variable an error. `exit` without a
+number leaves with the status of the command before it (`cd /data || exit`). Descriptors 0
+to 9 are yours in redirections (`exec 3< /data/list.txt`, then `read line <&3`); a program
+gets 0 to 3 of them. `kernel test` runs the
+kernel's command of a name that surfsh has too. Ctrl+C stops a loop or a script as a whole,
+not just the command that was running: the prompt comes back with `$?` 130.
+
+**Jobs.** Ctrl+Z stops the program that runs (`[1] stopped  count 100 100`) and gives the
+prompt back; `jobs` lists the jobs, `fg` brings the last one (or `fg %2`) back to the screen,
+`bg` lets it go on in the background, `kill %1` ends it, `wait` waits for the jobs in the
+background (in a script, `wait $p` waits for the job whose pid `$!` gave, even when it has
+ended already). A program in the background that wants to read the keyboard stops until `fg`
+gives it the keys (`[1] stopped (reading the terminal)`). Ctrl+D on an empty line ends what a
+program reads from the keyboard: `cat > /data/notes.txt`, a few lines, then Ctrl+D.
 
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
-that could not be started, 127 no such command, 130 a kernel command stopped with Ctrl+C,
-137 a program that was killed (by `kill`, by Ctrl+C or by a fault). A
+that could not be started, 127 no such command, 130 a command stopped with Ctrl+C (a
+program, a kernel command, a loop), 137 a program that was killed (by `kill` or by a
+fault), 148 a program stopped with Ctrl+Z. A
 program that ends with another status says `[exit status N]`.
 
 **Settings.** `set` lists them, `set <key> <value>` (or `<key>=<value>`) changes one for

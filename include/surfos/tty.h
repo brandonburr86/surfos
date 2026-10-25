@@ -37,6 +37,9 @@ struct tty {
     volatile u_char hungup;             /* 10/6/26: a pty whose master side is closed: no key comes, reads end */
     u_char skip;                        /* 10/6/26: the rest of a paste is dropped until the input pauses (TTY_SKIP) */
     u_long last_in;                     /* 10/6/26: when tty_term_input() last had a byte (ticks), for the skip */
+    u_long fg_job;                      /* 10/25/26: the foreground job (surfos/job.h), 0 for none */
+    u_long fg_shell;                    /* the pid of its shell (the one that made it; 10/25/26: when that one
+                                           ends, the foreground is its own job, for the shell above it) */
 };
 
 extern struct tty ttys[NUM_TTYS];     /* 10/6/26: F1-F4, then the pseudo-terminals' */
@@ -83,7 +86,8 @@ void tty_switch(int index);
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
-   descended from it is paged; the caller owns the pager of this terminal. After a
+   descended from it is paged (10/25/26: the programs of its foreground, TF_FOREGROUND, not a
+   job in the background); the caller owns the pager of this terminal. After a
    screenful (the console's rows less one) the console shows TTY_MORE in inverse video on
    the next row, the last one of a full screen, and waits for a key: Space (or any other
    key) shows the next screenful, Enter one more line; q, Q, Esc or Ctrl-C drops the rest
@@ -124,10 +128,21 @@ void tty_switch(int index);
    after the pause is input again (type-ahead typed while a command runs, well after its
    Enter, is kept). TTY_SKIP 1 starts the same skip for a program that dropped keys it had
    read itself (the user shell: the rest of its read buffer after an Enter); TTY_SKIP 0
-   ends it. The PS/2 keyboard cannot paste: its keys are never skipped. */
+   ends it. The PS/2 keyboard cannot paste: its keys are never skipped.
+   TTY_INTR (10/25/26): Ctrl+C for shells. Every task of the job a Ctrl+C reaches (the
+   pager's owner and the programs of its foreground) counts it, and TTY_INTR answers how
+   many came since the caller last asked, starting the count again: a shell asks after each
+   command it runs, and leaves its loop or script when one came, even when the program it
+   waited for was a script that ended by itself. A loop of a shell's builtins has no program
+   to interrupt: TTY_INTR 1 says the caller looks for Ctrl+C itself. Where it would be
+   killed (the innermost task of the job: a shell inside a shell), it is not, and as the
+   pager's owner it is reached when nothing else of its job was, so the key does not wait for
+   the next reader; either way a wait of its own in a system call (a read of the terminal)
+   is cut short. TTY_INTR 0 ends that. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
 #define TTY_SKIP    5
+#define TTY_INTR    6
 #define TTY_SKIP_MS 200
 #define TTY_CAP_UTF8  1
 #define TTY_CAP_COLOR 2
@@ -139,6 +154,12 @@ int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -err
 struct surf_task;
 void tty_key(struct tty *t, u_char c);
 int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
+/* 10/25/26: Ctrl+Z (0x1A) in line mode stops the terminal's foreground job, and a task of another job
+   that reads the terminal stops first (surfos/job.h), in tty_getc(), off the queue of readers, as one
+   stopped while it waited for a key does; Ctrl+D (0x04) on an empty line is the end of the input for
+   read(2): 0 */
+struct task_list;
+int tty_is_readers(struct task_list *q);
 void tty_task_gone(struct surf_task *task);          /* interrupts off */
 
 /* 10/6/26: pseudo-terminals (kernel/pty.c): a task on one ended (from tty_task_gone()); when

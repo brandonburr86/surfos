@@ -23,6 +23,22 @@ struct file;
 int process_spawn_files(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
                         struct file *const files[3]);
 
+/* 10/24/26 (SYS_spawnx, surfos/spawn.h): files[0..3] the child's 0-3 (each gains a reference; NULL:
+   the console for 0-2 unless its bit is set in closed, none for 3), an environment of envc strings
+   (copied), and background: not in the foreground of its terminal whatever the pager says. -E2BIG
+   for an environment of more than SPAWN_ENV_MAX strings or SPAWN_ENV_BYTES bytes. more NULL: as
+   process_spawn() */
+struct spawn_more {
+    struct file *files[4];
+    u_int closed;
+    int envc;
+    char *const *envp;
+    bool background;
+    int job;                            /* 10/25/26: 0 the caller's, SPAWN_JOB_NEW, or a job to join (surfos/job.h) */
+};
+int process_spawn_ex(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
+                     const struct spawn_more *more);
+
 void init_syscalls(void);
 
 /* 10/6/26: a task is being reaped (task.c): what a kernel command it ran through SYS_kcmd still

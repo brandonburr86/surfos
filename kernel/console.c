@@ -808,7 +808,8 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
 
 /*
     TTY_PAGE 1 makes a task the pager's owner on its console (tty.c). What the owner, and
-    any task descended from it, prints on that console in task context is paged: the
+    any task descended from it (10/25/26: through the programs of its foreground, not a job in
+    the background), prints on that console in task context is paged: the
     console counts the rows that start (a newline, or the VT100 wrap), and when a
     screenful has been shown, LINES - 1 rows since it began, and a paged task is about to
     draw on, or start, another row, that task first waits: TTY_MORE in inverse video on
@@ -962,15 +963,22 @@ static void page_keep(surf_console *con, TEXTCOLOR color, u_char b) {
     con->page_tail_color = color;
 }
 
-/* is t the owner, or descended from it? Interrupts off. */
+/* is t the owner, or descended from it? Interrupts off. 10/25/26: through the programs of its
+   foreground only (TF_FOREGROUND all the way up, as Ctrl+C's job, task.c's in_job()): a job in the
+   background, a child of its shell since surfsh has job control, is not paged with the shell's
+   command, nor stopped at its question */
 static int page_descends(struct surf_task *t, struct surf_task *owner) {
     int depth;
-    for(depth = 0; t && depth < 64; t = t->parent, depth++) if(t == owner) return 1;
+    for(depth = 0; t && depth < 64; t = t->parent, depth++) {
+        if(t == owner) return 1;
+        if(!(t->flags & TF_FOREGROUND)) return 0;
+    }
     return 0;
 }
 
-/* Is the current task the owner, or descended from it (its parent's parent, ...)? With
-   interrupts off: a parent that ends hands its children to init meanwhile. */
+/* Is the current task the owner, or descended from it (its parent's parent, ...) through the
+   programs of its foreground? With interrupts off: a parent that ends hands its children to
+   init meanwhile. */
 int console_paging(surf_console *con) {
     u_long flags;
     int found;

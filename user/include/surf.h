@@ -6,6 +6,7 @@ File: surf.h    Date: 10/3/26 (roadmap P2), 10/5/26
 What only SurfOS has: starting and waiting for programs, the terminal control
 call of full-screen programs, the uptime and the raw directory call. Since
 10/6/26 also the kernel's shell commands (kcmd), for the user shell surfsh.
+10/24/26: what a broken pipe does (broken_pipe_exit()).
 
 Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
 stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
@@ -58,7 +59,15 @@ int spawn(const char *path, char *const argv[]);                    /* the new p
 int spawnfd(const char *path, char *const argv[], const int fds[3]);
     /* the same, with the child's descriptors 0, 1 and 2 sharing this process's fds[0..2]
        (-1: the console), for redirection: the files stay open here too */
+/* 10/24/26: the same with a descriptor 3, closed descriptors, an environment, the background
+   (surfos/spawn.h); spawn() and spawnfd() are this with environ (unistd.h) */
+#include <surfos/spawn.h>
+int spawnx(const char *path, char *const argv[], const struct spawnx *o);
 int wait(int pid, int *status);     /* pid -1: any child. status: the exit code, -1 when it was killed */
+/* 10/25/26: the same, and how it ended: killed, or killed by Ctrl+C (surfos/job.h) */
+#include <surfos/job.h>
+int waitx(int pid, struct waitx *w, int options);
+int jobctl(int op, int arg);        /* 10/25/26: SYS_job: JOB_FG, JOB_BG, JOB_KILL, JOB_ID (surfos/job.h) */
 #define WNOHANG 1                   /* 10/6/26: waitpid() answers 0 at once while the children run on */
 int waitpid(int pid, int *status, int options);
 int kill(int pid);
@@ -76,6 +85,9 @@ int msleep(unsigned int ms);
                            Enter): what comes from the serial line or a pty's master is dropped until it pauses for
                            200 ms; Ctrl+C gets through. Raw mode's end does the same with keys queued (a lone
                            LF or NUL, CR LF's or CR NUL's end, is dropped without it). 0: end it */
+#define TTY_INTR    6   /* 10/25/26: the Ctrl+Cs that reached this program's job since it last asked. arg 1: it looks
+                           for Ctrl+C itself (a shell): never killed by one, its own wait in a call ends, and as the
+                           pager's owner it takes one that reaches nothing else; 0: no more */
 #define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
 #define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */
 int ttyctl(int op, unsigned int arg);
@@ -107,6 +119,12 @@ int spawnpty(const char *path, char *const argv[], int masterfd);   /* a program
 int ptyctl(int masterfd, int op, unsigned int arg);     /* PTY_SETSIZE, PTY_INDEX */
 int procinfo(int index, struct procinfo *pi);           /* task number index; -1 ENOENT after the last */
 int detach(void);                                       /* init becomes this process's parent */
+
+/* 10/24/26: pipes (pipe() is in unistd.h; surfos/pipe.h has the rules). A write to a pipe nobody reads any more
+   ends the program with exit status 141 (128 + 13, as SIGPIPE does on Unix); broken_pipe_exit(0) makes it fail with
+   EPIPE instead (a shell that must live on), 1 is the default again */
+#include <surfos/pipe.h>
+void broken_pipe_exit(int on);
 
 /* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
 int getdent(int fd, struct dirent *de);

@@ -121,6 +121,8 @@ void wait_prepare(wait_queue_t *q) {
 /* 10/6/26: a wait a kill or Ctrl+C may cut short (task.h); the test's tasks are never cut short */
 void wait_prepare_intr(wait_queue_t *q) { wait_prepare(q); curTask->wait_intr = 1; }
 int task_interrupt_job(struct surf_task *owner) { (void)owner; return 0; }
+int task_stop_job(struct tty *tty, u_long job) { (void)tty; (void)job; return 0; }    /* 10/25/26: job control */
+int task_stop_reader(struct tty *tty) { (void)tty; return 0; }
 
 static void wake(surf_task *t) {
     task_list_remove(t->list, t);
@@ -161,6 +163,8 @@ void sim_init(int ascii) {
         T[i].state = TS_RUNNING;
         T[i].con = &conArray[0];
         T[i].parent = parent[i] >= 0 ? &T[parent[i]] : NULL;
+        if(i == 3 || i == 4) T[i].flags |= TF_FOREGROUND;   /* 10/25/26: the command and its child: the
+                                                           shell's foreground; the job (5) is not */
     }
     idle_task = &T[0];
     init_task_ptr = &T[1];

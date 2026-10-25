@@ -5,7 +5,7 @@ File: stdlib.h  Date: 10/5/26
 ----------------------
 malloc() keeps a free list over memory from sbrk(); freed blocks are reused and
 merged with free neighbours (user/libsurf/malloc.c). exit() runs the atexit()
-functions, flushes stdio and ends the process.
+functions, flushes stdio and ends the process. 10/24/26: the environment (env.c).
 */
 
 #ifndef _STDLIB_H
@@ -35,7 +35,10 @@ long labs(long v);
 
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
-char *getenv(const char *name);                 /* there is no environment: always NULL */
+char *getenv(const char *name);                 /* 10/24/26: the value in environ (unistd.h), or NULL */
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
+int putenv(char *s);                            /* s ("name=value") becomes the entry itself */
 int rand(void);
 void srand(unsigned int seed);
 

@@ -14,6 +14,9 @@ items are shown ("…" counts as one), and the prompt takes at most half the ter
 width (at least 20 columns), which leaves the other half for typing. When even "… ▸ "
 and the current directory do not fit, the directory's name keeps its last characters
 after "…". Every character counts as one column, as on the SurfOS console.
+
+10/24/26: the continuation prompt (continuation set): "… ≋> ", without breadcrumbs or a
+state, for the lines that go on with a command at surfsh's prompt.
 */
 
 #include <surfos/prompt.h>
@@ -115,6 +118,18 @@ int prompt_render(const struct prompt_ctx *c, char *out, int size) {
     wave = c->unicode ? WAVE_U : WAVE_A;
     more = c->unicode ? MORE_U : MORE_A;
     morec = c->unicode ? 1 : 3;
+
+    if(c->continuation) {                       /* 10/24/26: "… ≋> " */
+        if(c->color) puts_(&b, C_PROMPT);
+        puts_(&b, more);
+        puts_(&b, " ");
+        puts_(&b, wave);
+        puts_(&b, ">");
+        if(c->color) puts_(&b, C_RESET);
+        puts_(&b, " ");
+        b.p[b.len] = 0;
+        return b.full ? -1 : b.len;
+    }
 
     /* the breadcrumbs: a remote session's host, then the path's names (the root's is SURF) */
     if(c->remote && c->hostname && c->hostname[0]) {

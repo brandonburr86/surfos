@@ -151,7 +151,7 @@ SMOKE = [
     ('memstat', ['Physical memory:', 'Free physical pages:']),
     ('ps',      ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),                 # 10/6/26: surfsh on every console
     ('help',    ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
-    ('test',    ['linear is using physical']),
+    ('kernel test', ['linear is using physical']),      # 10/25/26: test is surfsh's own now; kernel runs the kernel's
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
@@ -500,6 +500,35 @@ SMOKE = [
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
     ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
     ('@kmsg', []),
+    # 10/24/26 (pipelines and scripting in surfsh): the kernel's pipes from user space (user/bin/pipetest.c): bytes
+    # through and the end of the input; a stream from a child and one write() to a child; a full pipe and POLLOUT; two
+    # writers' blocks of PIPE_BUF never mixed; a broken pipe (status 141, or EPIPE when asked); poll(); EMFILE,
+    # ENFILE at PIPE_MAX and no pipe lost after 200; a kill cuts a reader's and a writer's wait short; the end held
+    # back by a dup2() copy and by a child
+    ('run pipetest basic', ['bytes through, the end of the input, EBADF, ESPIPE, pipefs, EFAULT', 'PIPETEST basic PASS',
+                            'exit status 0']),
+    ('run pipetest stream', ['262144 bytes from a child, in order', 'bytes to a child in one write()',
+                             'PIPETEST stream PASS', 'exit status 0']),
+    ('run pipetest full', ['8192 bytes go in at once; POLLOUT only with 4096 bytes of room',
+                           'a write into a full pipe waited', 'PIPETEST full PASS', 'exit status 0']),
+    ('run pipetest atomic', ['128 writes of 4096 bytes from two children, each whole', 'PIPETEST atomic PASS',
+                             'exit status 0']),
+    ('run pipetest broken', ['ended with status 141', 'with broken_pipe_exit(0) a write says EPIPE',
+                             'PIPETEST broken PASS', 'exit status 0']),
+    ('run pipetest poll', ['POLLIN, POLLHUP, POLLOUT, POLLERR', "poll() waited", 'PIPETEST poll PASS', 'exit status 0']),
+    ('run pipetest limits', ['then EMFILE', 'held by five children and 2 here, then ENFILE',
+                             '200 pipes made and closed; 32 there again', 'PIPETEST limits PASS', 'exit status 0']),
+    ('run pipetest kill', ['a reader waiting on an empty pipe killed in', 'a writer waiting on a full pipe killed in',
+                           'PIPETEST kill PASS', 'exit status 0']),
+    ('run pipetest share', ['a dup2() copy holds the end of the input back', 'until it ended', 'PIPETEST share PASS',
+                            'exit status 0']),
+    # 10/24/26: spawnx(): an environment, a descriptor 3, a closed descriptor, spawnfd() passing environ on, the errors
+    ('run pipetest spawnx', ["a child's environment and its descriptor 3", 'a child with descriptor 0 closed',
+                             'spawnfd() passes environ on', 'E2BIG, EINVAL, EBADF, EFAULT', 'PIPETEST spawnx PASS',
+                             'exit status 0']),
+    # 10/25/26: waitx(): a child that ended by itself, one that was killed, WNOHANG, the errors
+    ('run pipetest waitx', ['waitx says a child ended by itself (status 0), one was killed; WNOHANG while it runs',
+                            'waitx: ECHILD, EINVAL, EFAULT', 'PIPETEST waitx PASS', 'exit status 0']),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
@@ -875,11 +904,205 @@ SMOKE = [
       ('crash null', ['killed by "Page Fault', 'killed]', shown('hda1 \u224b!> ')]),
       ('echo status $?', ['\r\nstatus 137\r\n', shown('hda1 \u224b> ')]),
       ('help', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--', 'lsblk', 'programs in /initrd/bin',
-                'fstest', '$? is the one expansion', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
+                'fstest', 'the names that match: * any characters', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
+    # 10/24/26 (pipelines and scripting in surfsh): pipelines and lists, in a surfsh of their own. A program into a
+    # program; a kernel command and a builtin into one (a new surfsh runs them); five stages; the last stage in this
+    # shell (its cd stays), another stage in a new surfsh (its cd does not); && || ! { } ( ); 2>&1 and 2> file; a
+    # here-document into a pipeline, over lines after the continuation prompt; a line that goes on after |, and ^C
+    # there; a broken pipe ends its writer; a kernel command after | refused; a mistake; a job in the background, a
+    # pipeline, reported by its number
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
+      ('ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('dmesg | /initrd/bin/head -1', ['SurfOS: serial console on COM1', shown('SURF \u224b> ')]),
+      ('help | /initrd/bin/head -2', ['surfsh 1.0, the SurfOS shell', shown('SURF \u224b> ')]),
+      ('echo one two | /initrd/bin/wc -w', ['      2 ', shown('SURF \u224b> ')]),
+      ('echo abc | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/wc -c', ['      4 ', shown('SURF \u224b> ')]),
+      ('echo x | cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
+      ('cd / | /initrd/bin/cat; pwd', ['\r\n/initrd/bin\r\n', shown('bin \u224b> ')]),
+      ('cd /', [shown('SURF \u224b> ')]),
+      ('echo a && echo b || echo c; echo end', ['\r\na\r\nb\r\nend\r\n', shown('SURF \u224b> ')]),
+      ('ls /nonexistent && echo yes || echo no', ['No such file or directory', '\r\nno\r\n', shown('SURF \u224b> ')]),
+      ('! ls /initrd > /dev/null; echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('{ echo one; echo two; } > /hda1/GROUP.TXT; cat /hda1/GROUP.TXT', ['one\r\ntwo\r\n', shown('SURF \u224b> ')]),
+      ('( cd /initrd; pwd ); pwd', ['\r\n/initrd\r\n/\r\n', shown('SURF \u224b> ')]),
+      ('/initrd/bin/ls /nonexistent 2>&1 | /initrd/bin/wc -l', ['      1 ', shown('SURF \u224b> ')]),
+      ('/initrd/bin/ls /nonexistent 2> /hda1/ERR.TXT; cat /hda1/ERR.TXT',
+       ['[exit status 1]', 'ls: /nonexistent: No such file or directory', shown('SURF \u224b> ')]),
+      ('/initrd/bin/cat <<END | /initrd/bin/wc -l', [shown('\u2026 \u224b> ')]),
+      ('one', [shown('\u2026 \u224b> ')]),
+      ('two $?', [shown('\u2026 \u224b> ')]),
+      ('END', ['      2 ', shown('SURF \u224b> ')]),
+      ('echo three |', [shown('\u2026 \u224b> ')]),
+      ('/initrd/bin/wc -c', ['      6 ', shown('SURF \u224b> ')]),
+      ('echo unfinished |', [shown('\u2026 \u224b> ')]),
+      (b'\x03', ['^C', shown('SURF \u224b> ')]),
+      ('/initrd/bin/hexdump /dev/zero | /initrd/bin/head -1; echo status $?',
+       ['00000000  00 00 00 00', '\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ('echo x | lsblk', ['surfsh: lsblk is a kernel command: it reads only the console, not the pipe before it',
+                          shown('SURF \u224b!> ')]),
+      ('echo (', ['surfsh: unexpected (', shown('SURF \u224b!> ')]),
+      ('/initrd/bin/count 2 50 | /initrd/bin/wc -w &', ['[1] started (pid ', shown('SURF \u224b> ')]),
+      ('sleep 600', ['slept 600 ms', '[1] done  /initrd/bin/count 2 50 | /initrd/bin/wc -w', shown('SURF \u224b> ')]),
+      ('rm /hda1/GROUP.TXT /hda1/ERR.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 10/24/26 (variables and expansions in surfsh), in a surfsh of their own: a variable, quoted and not; export into a
+    # program's environment (env), x=1 cmd for cmd alone, env -i; unset, readonly; $( ) and ` `, a line of assignments
+    # alone with the status of its last $( ); $(( )); ${ } forms; splitting; set --, $#, shift; a variable that is not
+    # exported, in a stage that runs in a new surfsh; wildcards, quoted, matching nothing; ${x:?} and $((1 / 0))
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('x=hello; echo $x ${x}! "$x" \'$x\'', ['\r\nhello hello! hello $x\r\n', shown('SURF \u224b> ')]),
+      ('export GREETING="hi there"; env', ['\r\nGREETING=hi there\r\n', 'PATH=/initrd/bin\r\n', 'PWD=/\r\n',
+                                            'SHELL=/initrd/bin/surfsh\r\n', shown('SURF \u224b> ')]),
+      ('LANG=C env | /initrd/bin/head -1; echo ${LANG-unset}', ['\r\nLANG=C\r\nunset\r\n', shown('SURF \u224b> ')]),
+      ('env -i ONLY=1 env', ['\r\nONLY=1\r\n', shown('SURF \u224b> ')]),
+      ('unset x; echo "[${x-gone}]"', ['\r\n[gone]\r\n', shown('SURF \u224b> ')]),
+      ('readonly r=1; r=2; echo $? $r', ['surfsh: r: read-only', '\r\n1 1\r\n', shown('SURF \u224b> ')]),
+      ('v=$(cat /initrd/etc/version); echo "[$v]"', ['\r\n[SurfOS 1.0 (ai-dev)]\r\n', shown('SURF \u224b> ')]),
+      ('echo "a`echo b`c" $(/initrd/bin/echo d)', ['\r\nabc d\r\n', shown('SURF \u224b> ')]),
+      ('v=$(/initrd/bin/ls /nonexistent 2> /dev/null); echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('i=6; echo $((i * 7)) $((i += 1)) $i $((0x10 + 010))', ['\r\n42 7 7 24\r\n', shown('SURF \u224b> ')]),
+      ('f=/hda1/notes.txt; echo ${f##*/} ${f%.txt} ${#f} ${u:-default}',
+       ['\r\nnotes.txt /hda1/notes 15 default\r\n', shown('SURF \u224b> ')]),
+      ('sp="a  b"; set -- $sp "$sp"; echo $# "$3"', ['\r\n3 a  b\r\n', shown('SURF \u224b> ')]),
+      ('set -- one "two words" three; shift; echo $# "$1"', ['\r\n2 two words\r\n', shown('SURF \u224b> ')]),
+      ('z=inside; { echo $z $1; } | /initrd/bin/cat', ['\r\ninside two words\r\n', shown('SURF \u224b> ')]),
+      ('echo /initrd/etc/*.conf', ['\r\n/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
+      ('echo "/initrd/etc/*.conf" /initrd/etc/v?rsion /initrd/etc/none*',
+       ['\r\n/initrd/etc/*.conf /initrd/etc/version /initrd/etc/none*\r\n', shown('SURF \u224b> ')]),
+      ('echo ${nothing:?is not set}', ['surfsh: nothing: is not set', shown('SURF \u224b!> ')]),
+      ('echo $((1 / 0))', ['division by 0', shown('SURF \u224b!> ')]),
+      ('exit', [])]),
+    # 10/25/26 (scripts in surfsh), in a surfsh of their own: if, elif and else; while with $(( )); for over words and
+    # wildcards; case; a function with its arguments, local and return; one that calls itself; continue and break;
+    # printf; read in the last stage of a pipeline, and a while read loop there; eval; a . file with arguments; kernel;
+    # test and [, and a test that is no test; set -e, -u and -x in surfsh -c; a script over several lines (a here-
+    # document), run by surfsh and by its name (#!), one without #! (run as a script), one whose #! names nothing;
+    # exec with redirections alone and with a command; unset -f; $- and set -o; a function in a pipeline and in ( );
+    # an if typed over lines; mistakes
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('if false; then echo no; elif [ -d /initrd ]; then echo elif-yes; else echo no; fi',
+       ['\r\nelif-yes\r\n', shown('SURF \u224b> ')]),
+      ('i=0; while [ $i -lt 3 ]; do printf "i=%d " $i; i=$((i + 1)); done; echo', ['\r\ni=0 i=1 i=2 \r\n', shown('SURF \u224b> ')]),
+      ('for x in a "b c" /initrd/etc/*.conf; do echo "<$x>"; done',
+       ['\r\n<a>\r\n<b c>\r\n</initrd/etc/surfsh.conf>\r\n</initrd/etc/undertow.conf>\r\n', shown('SURF \u224b> ')]),
+      ('for w in apple Bob 42 x.txt; do case $w in [a-z]*.txt) echo "$w: a file";; [A-Z]*) echo "$w: a name";; '
+       '*[0-9]) echo "$w: a number";; *) echo "$w: a word";; esac; done',
+       ['\r\napple: a word\r\nBob: a name\r\n42: a number\r\nx.txt: a file\r\n', shown('SURF \u224b> ')]),
+      ('greet() { local who=${1:-nobody}; echo "hello $who ($#)"; return 3; }; greet world x; echo status $? ${who-unset}',
+       ['\r\nhello world (2)\r\nstatus 3 unset\r\n', shown('SURF \u224b> ')]),
+      ('fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(( $1 - 1 ))) )); fi; }; fact 6',
+       ['\r\n720\r\n', shown('SURF \u224b> ')]),
+      ('for i in 1 2 3 4 5 6; do [ $i = 2 ] && continue; [ $i = 5 ] && break; printf "%s " $i; done; echo',
+       ['\r\n1 3 4 \r\n', shown('SURF \u224b> ')]),
+      ('printf "%-5s|%05d|%x|%c|%b\\n" ab 42 255 xyz "x\\0101y"', ['\r\nab   |00042|ff|x|xAy\r\n', shown('SURF \u224b> ')]),
+      ('echo "one two three" | { read a b; echo "a=$a b=$b"; }', ['\r\na=one b=two three\r\n', shown('SURF \u224b> ')]),
+      ('printf "x 1\\ny 2\\n" | while read k v; do echo "$k=$v"; done', ['\r\nx=1\r\ny=2\r\n', shown('SURF \u224b> ')]),
+      ('eval "e1=10; e2=\\$((e1 * 2))"; echo $e2', ['\r\n20\r\n', shown('SURF \u224b> ')]),
+      ('echo "echo dot \\$# \\$1; dotvar=yes" > /hda1/DOT.SH; . /hda1/DOT.SH first second; echo dotvar=$dotvar',
+       ['\r\ndot 2 first\r\ndotvar=yes\r\n', shown('SURF \u224b> ')]),
+      ('kernel echo the kernel says', ['\r\nthe kernel says\r\n', shown('SURF \u224b> ')]),
+      ('[ -f /initrd/etc/version ] && test ! -d /initrd/etc/version && [ "a b" = "a b" ] && [ 10 -gt 9 ] && echo tests-pass',
+       ['\r\ntests-pass\r\n', shown('SURF \u224b> ')]),
+      ('[ 1 -eq x ]; echo status $?', ['surfsh: test: x: not a number', '\r\nstatus 2\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -e; echo before; false; echo not-reached"; echo status $?',
+       ['before\r\n[exit status 1]\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -u; echo \\$undefined; echo not-reached"', ['surfsh: undefined: not set', '[exit status 1]',
+                                                                   shown('SURF \u224b!> ')]),
+      ('surfsh -c "set -x; v=1; echo \\$v"', ['+ v=1', '+ echo 1', '\r\n1\r\n', shown('SURF \u224b> ')]),
+      ("/initrd/bin/cat > /hda1/T.SH << 'EOF'", [shown('\u2026 \u224b> ')]),
+      ('#!/initrd/bin/surfsh', [shown('\u2026 \u224b> ')]),
+      ('total=0', [shown('\u2026 \u224b> ')]),
+      ('for n in "$@"; do', [shown('\u2026 \u224b> ')]),
+      ('  total=$((total + n))', [shown('\u2026 \u224b> ')]),
+      ('done', [shown('\u2026 \u224b> ')]),
+      ('echo "$0: $# numbers, total $total"', [shown('\u2026 \u224b> ')]),
+      ('EOF', [shown('SURF \u224b> ')]),
+      ('surfsh /hda1/T.SH 1 2 3', ['/hda1/T.SH: 3 numbers, total 6\r\n', shown('SURF \u224b> ')]),
+      ('/hda1/T.SH 10 20', ['/hda1/T.SH: 2 numbers, total 30\r\n', shown('SURF \u224b> ')]),
+      ('echo "echo no hashbang \\$1" > /hda1/P.SH; /hda1/P.SH ok', ['no hashbang ok\r\n', shown('SURF \u224b> ')]),
+      ('echo "#!/bin/sh" > /hda1/B.SH; /hda1/B.SH; echo status $?',
+       ['surfsh: /hda1/B.SH: its #! line names /bin/sh, which cannot run', '\r\nstatus 126\r\n', shown('SURF \u224b> ')]),
+      ('exec 3> /hda1/FD3.TXT; echo via-three >&3; exec 3>&-; cat /hda1/FD3.TXT', ['\r\nvia-three\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "exec /initrd/bin/echo exec-ran; echo not-reached"; echo status $?',
+       ['exec-ran\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ('unset -f greet; greet; echo status $?', ['surfsh: greet: command not found', '\r\nstatus 127\r\n', shown('SURF \u224b> ')]),
+      ('echo opts=$-; set -o | /initrd/bin/head -1', ['\r\nopts=i\r\n', 'errexit    off\r\n', shown('SURF \u224b> ')]),
+      ('piped() { echo from-a-function; }; piped | /initrd/bin/wc -c; ( piped )',
+       ['     16 ', 'from-a-function\r\n', shown('SURF \u224b> ')]),
+      ('if true', [shown('\u2026 \u224b> ')]),
+      ('then echo over-lines', [shown('\u2026 \u224b> ')]),
+      ('fi', ['\r\nover-lines\r\n', shown('SURF \u224b> ')]),
+      ('break; echo status $?', ['surfsh: break: not in a loop', '\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('if true; then fi', ['surfsh: a command is missing before fi', shown('SURF \u224b!> ')]),
+      ('rm /hda1/DOT.SH /hda1/T.SH /hda1/P.SH /hda1/B.SH /hda1/FD3.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 10/25/26 (what a review of the scripting found, in a surfsh of its own): a script that redirects descriptor 3 reads
+    # on (its own file is on one of surfsh's); a pipeline whose last command is not found is 127; $? in eval's text is
+    # the one before it; eval and a subshell in a condition under set -e; a script's wait for a job that ended before;
+    # exit alone is $?'s; { ...; } > file holds the command's output, not surfsh's report; printf's widest width; jobs
+    # in a pipeline and in $( ); x=1 x=2 prog; exec of a typo at the prompt; here-documents of more than a pipe holds
+    # into : and read, and into a stage whose output another stage reads; a surfsh reading the terminal into a file, a
+    # line at a time; tail -n of a huge count
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo "exec 3< /initrd/etc/version; read v <&3; echo got-\\$v; exec 3<&-; echo after-close" > /hda1/E3.SH; '
+       'surfsh /hda1/E3.SH', ['\r\ngot-SurfOS', 'after-close\r\n', shown('SURF \u224b> ')]),
+      ('echo hi | nosuchcmd; echo status $?', ['nosuchcmd: command not found', '\r\nstatus 127\r\n', shown('SURF \u224b> ')]),
+      ("false; eval 'echo was $?'", ['\r\nwas 1\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "set -e; eval false || echo handled; if (false; echo in-sub); then echo then-part; fi; echo end"',
+       ['\r\nhandled\r\nin-sub\r\nthen-part\r\nend\r\n', shown('SURF \u224b> ')]),
+      ('echo "sleep 100 & p=\\$!; sleep 400; wait \\$p; echo waited \\$?" > /hda1/W.SH; surfsh /hda1/W.SH',
+       ['\r\nwaited 0\r\n', shown('SURF \u224b> ')]),
+      ('surfsh -c "false; exit"; echo status $?', ['\r\nstatus 1\r\n', shown('SURF \u224b> ')]),
+      ('{ /initrd/bin/grep nothing /initrd/etc/version; } > /hda1/G.TXT; /initrd/bin/wc -c < /hda1/G.TXT',
+       ['[exit status 1]', '      0', shown('SURF \u224b> ')]),
+      ("printf '%1500000000s' x; echo status $?",
+       ['a width or a precision above 65536', '\r\nstatus 2\r\n', shown('SURF \u224b> ')]),
+      ('sleep 60000 &', ['[1] started (pid ', shown('SURF \u224b> ')]),
+      ('jobs | /initrd/bin/cat; n=$(jobs); echo "<${n%% *}>"', ['[1]  running  sleep 60000\r\n', '<[1]>\r\n',
+                                                               shown('SURF \u224b> ')]),
+      ('kill %1; sleep 300', ['[1] killed  sleep 60000', shown('SURF \u224b> ')]),
+      ('x=1 x=2 /initrd/bin/env | /initrd/bin/grep "^x="', ['\r\nx=2\r\n', shown('SURF \u224b> ')]),
+      ('x=1 x=2 /initrd/bin/env | /initrd/bin/grep -c "^x="', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ('exec nosuchcmd; echo alive', ['nosuchcmd: command not found', '\r\nalive\r\n', shown('SURF \u224b> ')]),
+      ('{ echo ": <<END"; /initrd/bin/seq 3000; echo END; echo "read first <<END"; /initrd/bin/seq 3000; echo END; '
+       'echo "echo first=\\$first"; } > /hda1/H.SH; surfsh /hda1/H.SH', ['\r\nfirst=1\r\n', shown('SURF \u224b> ')]),
+      ('{ echo "/initrd/bin/tr 0-9 a-j <<END | /initrd/bin/tail -n 1"; /initrd/bin/seq 3000; echo END; } > /hda1/T2.SH; '
+       'surfsh /hda1/T2.SH', ['\r\ndaaa\r\n', shown('SURF \u224b> ')]),
+      ('echo ready; surfsh > /hda1/LOG.TXT', ['\r\nready\r\n']),
+      ('echo hello-log', []),
+      ('echo second-line', []),
+      (b'\x04', [shown('SURF \u224b> ')]),
+      ('/initrd/bin/cat /hda1/LOG.TXT', ['\r\nhello-log\r\nsecond-line\r\n', shown('SURF \u224b> ')]),
+      ('/initrd/bin/seq 5 | /initrd/bin/tail -n 1073741825 | /initrd/bin/wc -l', ['      5', shown('SURF \u224b> ')]),
+      ('rm /hda1/E3.SH /hda1/W.SH /hda1/G.TXT /hda1/H.SH /hda1/T2.SH /hda1/LOG.TXT', [shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
+    ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
+    # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('printf "b\\na\\nc\\na\\n" | sort', ['a\r\na\r\nb\r\nc\r\n', shown('SURF \u224b> ')]),
+      ('printf "b\\na\\nc\\na\\n" | sort -u | tr a-z A-Z', ['A\r\nB\r\nC\r\n', shown('SURF \u224b> ')]),
+      ('printf "10\\n9\\n100\\n" | sort -n; printf "10\\n9\\n100\\n" | sort -rn',
+       ['9\r\n10\r\n100\r\n', '100\r\n10\r\n9\r\n', shown('SURF \u224b> ')]),
+      ('printf "x\\nx\\ny\\nx\\n" | uniq -c', ['      2 x\r\n      1 y\r\n      1 x\r\n', shown('SURF \u224b> ')]),
+      ('seq 1 3 10 | tail -n 2; seq 10 -3 1 | tr "\\n" " "; echo', ['7\r\n10\r\n', '10 7 4 1 \r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -i an', ['Banana\r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -n e', ['1:apple\r\n3:cherry\r\n', shown('SURF \u224b> ')]),
+      ('printf "apple\\nBanana\\ncherry\\n" | grep "^c.*y$"; seq 5 | grep -v 3 | tr -d "\\n"; echo',
+       ['cherry\r\n', '1245\r\n', shown('SURF \u224b> ')]),
+      ('seq 20 | grep -c "1"; printf "a.p\\nap\\n" | grep -F "a.p"; printf "x\\n" | grep -F y; echo status $?',
+       ['11\r\n', 'a.p\r\n', 'status 1\r\n', shown('SURF \u224b> ')]),
+      ('echo "hello    world" | tr -s " "', ['hello world\r\n', shown('SURF \u224b> ')]),
+      ('seq 3 | tee /hda1/TEE.TXT | wc -l; cat /hda1/TEE.TXT; rm /hda1/TEE.TXT',
+       ['      3 ', '1\r\n2\r\n3\r\n', shown('SURF \u224b> ')]),
+      ('dmesg | grep -i "fat16: hda1" | head -1', ['+FAT16: hda1: label SURFOS', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
@@ -958,7 +1181,7 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {BIG_BIN: 60, 'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
+TIMEOUTS = {BIG_BIN: 60, 'selftest': 120, 'run pipetest stream': 60, 'run pipetest atomic': 60, 'run pipetest limits': 60, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
             'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
             'run kcmdtest pings /hda1 10.0.2.2': 60, 'run kcmdtest kills /hda1 10.0.2.2': 180}
 # anything that means the kernel fell over
@@ -1490,6 +1713,140 @@ def ctrl_c_check(q):
     return ('Ctrl+C: a ping surfsh runs is cut short, a program it waits for is killed, surfsh lives on', ok)
 
 
+def surfsh_ctrl_c_check(q):
+    """10/25/26 (scripts in surfsh): Ctrl+C in surfsh's own commands. A loop of builtins at the prompt stops with ^C,
+    the prompt saying so and $? 130, and what came after it on the line does not run; a loop that runs a program, and
+    one that runs a kernel command (sleep), stop as a whole, not just their round; read at the terminal ends with ^C
+    and 130; a surfsh typed at the prompt lives through a Ctrl+C of its own loop, and the shell outside says nothing of
+    it after its exit; a script (surfsh -c) is stopped as a whole: [pid n killed]"""
+    def interrupt(line, wait, expects):
+        start = len(q.transcript)
+        q.send(line + '\n')
+        q.wait(wait)
+        q.ser.sendall(b'\x03')
+        ok = all(q.expect(e, 15) for e in expects)
+        return ok and b'\nnot-reached' not in q.transcript[start:]       # only in the line as typed
+
+    def status(want):
+        q.send('echo status $?\n')
+        return q.expect('\r\nstatus %d\r\n' % want, 10) and q.expect(PROMPT, 10)
+
+    results = []
+    results.append(interrupt('while :; do :; done; echo not-reached', 1.0, ['^C', shown('\u224b!> ')]) and status(130))
+    results.append(interrupt('for i in 1 2 3; do /initrd/bin/count 100 100; done; echo not-reached', 1.5,
+                             ['^C', shown('\u224b!> ')]) and status(130))
+    # 10/25/26: sleeps of 300 ms, so that the Ctrl+C a second after the line comes in the middle of one, not where
+    # one ends and the next begins (with 100 ms it did, a second being ten of them, and then sometimes between two)
+    results.append(interrupt('while :; do sleep 300; done; echo not-reached', 1.0, ['sleep cut short', shown('\u224b!> ')]))
+    results.append(interrupt('read line; echo not-reached', 0.5, ['^C', shown('\u224b!> ')]) and status(130))
+    q.send('surfsh\n')
+    ok = q.expect(PROMPT, 10)
+    ok = ok and interrupt('while :; do :; done; echo not-reached', 1.0, ['^C', shown('\u224b!> ')]) and status(130)
+    start = len(q.transcript)
+    q.send('exit\n')
+    ok = ok and q.expect(PROMPT, 10)
+    q.pump(0.5)
+    results.append(ok and b'^C' not in q.transcript[start:])
+    results.append(interrupt('surfsh -c "while :; do :; done"; echo not-reached', 1.0, ['killed]', shown('\u224b!> ')]))
+    q.send('echo surfsh lives on\n')
+    ok = q.expect('\r\nsurfsh lives on\r\n', 10) and q.expect(PROMPT, 10)
+    return ('surfsh: Ctrl+C stops loops of builtins, programs and kernel commands, read, a script; a surfsh in a surfsh '
+            'lives on (%d of %d)' % (sum(results), len(results)), all(results) and ok)
+
+def surfsh_jobs_check(q):
+    """10/25/26 (job control in surfsh): Ctrl+Z stops a program: [1] stopped, $? 148, jobs and ps say so; bg lets it go
+    on, fg brings it back, Ctrl+Z again, kill %1 ends it ([1] killed before a prompt); a pipeline stops as one job; Ctrl+Z
+    on a loop of builtins does nothing (Ctrl+C ends it); a program in the background that reads the terminal stops
+    (reading the terminal), fg gives it the keys and Ctrl+D ends its input; cat > file ended by Ctrl+D; the stopped job
+    of a surfsh that exits is killed. A program waiting for a key stops off the terminal's queue of readers (the shell's
+    next line is the shell's), also when a key comes in the same burst as the Ctrl+Z; a program that a kernel command
+    starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone. Two surfshs inside each other:
+    the inner one's job stopped, and its end, leave the middle one the terminal. Ctrl+Z leaves an until loop"""
+    count = '/initrd/bin/count 100 100'
+    stopped = shown('\u224b!> ')
+
+    def step(line, expects, keys=None, wait=1.0):
+        start = len(q.transcript)
+        if line is not None:
+            q.send(line + '\n')
+        if keys is not None:
+            q.wait(wait)
+            q.ser.sendall(keys)
+        ok = all(q.expect(e, 15) for e in expects)
+        return ok, q.transcript[start:]
+
+    results = []
+    ok, _ = step(count, ['[1] stopped  ' + count, stopped], b'\x1a')
+    ok = ok and step('echo status $?', ['\r\nstatus 148\r\n', PROMPT])[0]
+    ok = ok and step('jobs', ['[1]  stopped  ' + count, PROMPT])[0]
+    ok = ok and step('ps', [re.compile(rb'stopped +\S+ +\d+ +\d+ +\d+ +count'), PROMPT])[0]
+    results.append(ok)
+    ok = step('bg', ['[1] ' + count + ' &', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n' + count + '\r\n'])[0]
+    ok = ok and step(None, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + count, PROMPT])[0]
+    results.append(ok)
+    pipeline = count + ' | /initrd/bin/cat'
+    ok = step(pipeline, ['[1] stopped  ' + pipeline, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + pipeline, PROMPT])[0]
+    results.append(ok)
+    ok, out = step('while :; do :; done', [], b'\x1a')
+    q.wait(1)
+    ok, out = step(None, ['^C', stopped], b'\x03', 0)
+    results.append(ok and b'stopped' not in out)
+    ok = step('/initrd/bin/cat &', ['[1] started (pid ', PROMPT])[0]
+    ok = ok and step('sleep 500', ['[1] stopped (reading the terminal)  /initrd/bin/cat', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n/initrd/bin/cat\r\n'])[0]
+    ok = ok and step('hello-from-fg', ['hello-from-fg', 'hello-from-fg'])[0]
+    ok = ok and step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    results.append(ok)
+    ok = step('/initrd/bin/cat > /hda1/CATD.TXT', [])[0]
+    q.wait(0.5)
+    ok = step('line one', [])[0]
+    ok = step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    ok = ok and step('cat /hda1/CATD.TXT; rm /hda1/CATD.TXT', ['line one\r\n', PROMPT])[0]
+    results.append(ok)
+    ok = step('surfsh', [PROMPT])[0]
+    ok = ok and step(count, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('exit; sleep 300', [PROMPT])[0]
+    ok2, out = step('ps', [PROMPT])
+    results.append(ok and ok2 and b' count' not in out)
+    # a program waiting for a key stops off the queue of readers: the shell's next line is the shell's
+    ok = step('/initrd/bin/cat', ['[1] stopped  /initrd/bin/cat', stopped], b'\x1a', 0.5)[0]
+    ok = ok and step('echo shell-got-it', ['\r\nshell-got-it\r\n', PROMPT])[0]
+    ok = ok and step('fg', ['\r\n/initrd/bin/cat\r\n'])[0]
+    ok = ok and step('to-cat', ['to-cat', 'to-cat'])[0]
+    ok = ok and step(None, [shown('\u224b> ')], b'\x04', 0.5)[0]
+    results.append(ok)
+    # a key and Ctrl+Z in one burst: the stop is said all the same (a key the program has not read yet stays for
+    # whoever reads next, here the shell: a space)
+    ok = step('/initrd/bin/cat', [], b' \x1a', 0.5)[0]
+    ok = step(None, ['[1] stopped  /initrd/bin/cat', stopped])[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  /initrd/bin/cat', PROMPT])[0]
+    results.append(ok)
+    # two surfshs inside each other: the inner one's job stopped, and its end, leave the middle one the terminal
+    ok = step('surfsh', [PROMPT])[0]
+    ok = ok and step('surfsh', [PROMPT])[0]
+    ok = ok and step(count, ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('exit 0', [PROMPT])[0]
+    ok = ok and step('echo middle-reads', ['\r\nmiddle-reads\r\n', PROMPT])[0]
+    ok = ok and step('exit', [PROMPT])[0]
+    results.append(ok)
+    # 10/25/26: Ctrl+Z leaves an until loop as it does a while loop, with the prompt at once (no rounds without end)
+    ok = step('until false; do ' + count + '; done', ['[1] stopped  ' + count, stopped], b'\x1a')[0]
+    ok = ok and step('kill %1; sleep 300', ['[1] killed  ' + count, PROMPT])[0]
+    results.append(ok)
+    # a program the kernel's run starts is in no job: Ctrl+Z leaves it alone, Ctrl+C ends it
+    ok = step('surfsh', [PROMPT])[0]
+    ok, out = step('run ' + count, [], b'\x1a')
+    q.wait(0.5)
+    ok2, out2 = step(None, [PROMPT], b'\x03', 0)
+    ok = ok2 and b'stopped' not in out + out2
+    ok = ok and step('exit', [PROMPT])[0]
+    results.append(ok)
+    return ('surfsh: job control: Ctrl+Z, jobs, bg, fg, kill %%1, a pipeline, a reader in the background, Ctrl+D '
+            '(%d of %d)' % (sum(results), len(results)), all(results))
+
 def readme_cat_check(q):
     """cat of a file of several clusters on the FAT16 disk (docs/README.md as DOCS/README.md, tools/mkimage.py), through
     the pager: every line of it arrives in order, and the step ends at the prompt after its last line. 10/6/26: the file
@@ -1646,6 +2003,8 @@ def surfsh_corner_check(q):
 
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
+CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
+CONSOLE_CHECKS['@surfsh-jobs'] = surfsh_jobs_check        # 10/25/26
 
 
 # ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------
@@ -1947,8 +2306,8 @@ def telnet_stalled_check(q):
         ok = a.expect(TELNET_ROOT, 15)
         if ok:
             a.send('/initrd/bin/hexdump /dev/zero &\n')
-            ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
-            m = re.search(rb'\[(\d+)\] started', a.data)
+            ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
+            m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
         stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
         while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
@@ -1983,11 +2342,16 @@ def telnet_stalled_check(q):
                     quiet_since = time.time()
             a.send('\n')
             ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
-            # every line, in order: the job's first lines can come while surfsh still writes "[pid] started" and its
-            # prompt, which then cut a line or three of them; past those, no line may be missing
-            offsets = [int(x, 16) for x in line.findall(a.data)]
+            # every line, in order: the job's lines can come while surfsh still writes "[1] started (pid n)" and its
+            # prompt, which then cut a line or three of them; past those, no line may be missing. 10/25/26: wherever
+            # they are (& is a job of surfsh's now, which starts at once, and the shell's line waits for room in the
+            # session's output behind the job's): a gap is allowed only where the shell's own text is between the lines
+            found = list(line.finditer(a.data))
+            offsets = [int(m.group(1), 16) for m in found]
             gaps = [(i, offsets[i + 1] - offsets[i]) for i in range(len(offsets) - 1) if offsets[i + 1] != offsets[i] + 16]
-            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i < 1000 and 16 < d <= 64 for i, d in gaps)
+            shell = [i for i, _ in gaps
+                     if re.search(rb'started \(pid [0-9]+\)|\xe2\x89\x8b', a.data[found[i].end():found[i + 1].start()])]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i in shell and 16 < d <= 64 for i, d in gaps)
             why = why or ('' if ok else ' (%d lines, gaps %s)' % (len(offsets), gaps[:3]))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
@@ -3047,7 +3411,7 @@ def nettest_kills_check(q):
     start = len(q.transcript)
     q.send('nettest echo 23 1 &\n')
     ok = q.expect('] started', 10) and q.expect(PROMPT, 10) and ok
-    pids = re.findall(r'\[(\d+)\] started', q.transcript[start:].decode(errors='replace'))
+    pids = re.findall(r'\] started \(pid (\d+)\)', q.transcript[start:].decode(errors='replace'))   # 10/24/26: jobs
     if ok and pids:
         q.wait(0.5)
         q.send('kill %s\n' % pids[-1])

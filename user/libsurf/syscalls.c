@@ -5,6 +5,11 @@ File: syscalls.c  Date: 10/3/26 (roadmap P2), rewritten 10/5/26
 --------------------
 int 0x80 with the number in eax and the arguments in ebx, ecx and edx. The
 kernel answers -errno on failure; the wrappers turn that into -1 and errno.
+
+10/24/26 (pipelines): pipe(), and a write to a pipe nobody reads any more ends the
+program with status 141, as SIGPIPE does elsewhere, unless it asked for the error
+(broken_pipe_exit(0)). Only a pipe ends it: a connection's EPIPE is an error.
+spawnx(), and spawn() and spawnfd() over it with environ (env.c).
 */
 
 #include <errno.h>
@@ -29,6 +34,7 @@ typedef char netaddr_layout_is_fixed[sizeof(struct netaddr) == 8 ? 1 : -1];
 typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
+typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
 
 int errno;
 
@@ -49,7 +55,24 @@ static long ret(long r) {
 
 void _exit(int code) { for(;;) sc(SYS_exit, code, 0, 0); }
 ssize_t read(int fd, void *buf, size_t n) { return (ssize_t)ret(sc(SYS_read, fd, (long)buf, (long)n)); }
-ssize_t write(int fd, const void *buf, size_t n) { return (ssize_t)ret(sc(SYS_write, fd, (long)buf, (long)n)); }
+
+/* 10/24/26: a broken pipe ends the program (surf.h) */
+static int pipe_exits = 1;
+
+void broken_pipe_exit(int on) { pipe_exits = on; }
+
+static int is_pipe(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0 && !strcmp(st.fs, "pipefs");
+}
+
+ssize_t write(int fd, const void *buf, size_t n) {
+    long r = sc(SYS_write, fd, (long)buf, (long)n);
+    if(r == -EPIPE && pipe_exits && is_pipe(fd)) _exit(141);        /* 128 + 13, SIGPIPE's number */
+    return (ssize_t)ret(r);
+}
+
+int pipe(int fds[2]) { return (int)ret(sc(SYS_pipe, (long)fds, 0, 0)); }
 int close(int fd) { return (int)ret(sc(SYS_close, fd, 0, 0)); }
 off_t lseek(int fd, off_t off, int whence) { return (off_t)ret(sc(SYS_lseek, fd, off, whence)); }
 int unlink(const char *path) { return (int)ret(sc(SYS_unlink, (long)path, 0, 0)); }
@@ -127,10 +150,21 @@ int isatty(int fd) {
 
 /**** SurfOS calls (surf.h) ****/
 
-int spawn(const char *path, char *const argv[]) { return (int)ret(sc(SYS_spawn, (long)path, (long)argv, 0)); }
-int spawnfd(const char *path, char *const argv[], const int fds[3]) {
-    return (int)ret(sc(SYS_spawnfd, (long)path, (long)argv, (long)fds));
+/* 10/24/26: spawn() and spawnfd() are spawnx() with this program's environment (surfos/spawn.h) */
+int spawnx(const char *path, char *const argv[], const struct spawnx *o) {
+    return (int)ret(sc(SYS_spawnx, (long)path, (long)argv, (long)o));
 }
+int spawnfd(const char *path, char *const argv[], const int fds[3]) {
+    struct spawnx o;
+    int i;
+    for(i = 0; i < 3; i++) o.fds[i] = fds ? fds[i] : -1;
+    o.fds[3] = -1;
+    o.envp = environ;
+    o.job = 0;
+    o.flags = 0;
+    return spawnx(path, argv, &o);
+}
+int spawn(const char *path, char *const argv[]) { return spawnfd(path, argv, NULL); }
 int kill(int pid) { return (int)ret(sc(SYS_kill, pid, 0, 0)); }
 int yield(void) { return (int)sc(SYS_yield, 0, 0, 0); }
 unsigned int uptime(void) { return (unsigned int)sc(SYS_uptime, 0, 0, 0); }
@@ -170,4 +204,14 @@ int waitpid(int pid, int *status, int options) {
     long r = sc(SYS_wait, pid, (long)status, options);
     if(r == -1) { errno = ECHILD; return -1; }          /* the kernel's "nothing to wait for" */
     return (int)ret(r);
+}
+
+/* 10/25/26: how the child ended too (surfos/job.h) */
+int waitx(int pid, struct waitx *w, int options) {
+    return (int)ret(sc(SYS_waitx, pid, (long)w, options));
+}
+
+/* 10/25/26: job control (surfos/job.h) */
+int jobctl(int op, int arg) {
+    return (int)ret(sc(SYS_job, op, arg, 0));
 }

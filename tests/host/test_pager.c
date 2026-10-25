@@ -11,7 +11,8 @@
    the stream does (the writer's colour as SGR, Backspace, UTF-8 and escape sequences in
    the column count), the serial line's input rules (tty_term_input()). 10/9/26 (Wi-Fi): a
    secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
-   serial line or a pty's stream, the history, or stays in the input queue. */
+   serial line or a pty's stream, the history, or stays in the input queue. 10/25/26: a job in
+   the background is not paged with its shell's command. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -585,6 +586,20 @@ static void t_nested(void) {
     run(GRAND, w_page, 1, 0);               /* a program the command starts turns paging on */
     say(GRAND, "grand\n");
     check(owner() == SHELL && screen_has("grand"), "and ends a drop, while the pager stays its owner's");
+}
+
+/* 10/25/26: a job in the background (no TF_FOREGROUND) is not paged with the shell's command */
+static void t_background_unpaged(void) {
+    int st;
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    st = run(BG, w_lines, 1, 30);
+    check(st == DONE && asker() < 0 && !screen_has("--More--") && screen_has("line 030"),
+          "a job in the background prints on, unpaged, while the shell pages its command");
+    st = run(CHILD, w_lines, 31, 70);
+    check(st == BLOCKED && asker() == CHILD, "the command itself is paged all the same");
+    sim_input(' ');
+    resume(CHILD);
 }
 
 /* a shell whose background job turned paging on takes the pager for its next command */
@@ -1192,6 +1207,7 @@ int main(void) {
     t_drop_crash();
     t_nested();
     t_takeover();
+    t_background_unpaged();
     t_new_screenful();
     t_echo_not_kept();
     t_caps();

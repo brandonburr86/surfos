@@ -200,6 +200,8 @@ static void fill(int n, struct stat *st) {
     st->type = nodes[n].dir ? S_IFDIR : S_IFREG;
     st->size = (unsigned)nodes[n].len;
     st->mtime = nodes[n].mtime;
+    st->ino = (unsigned)n + 1;                  /* 10/25/26: a name of its own (surfsh's test -ef) */
+    strcpy(st->fs, "sim");
 }
 
 int fstat(int fd, struct stat *st) {
