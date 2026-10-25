@@ -4,32 +4,37 @@ SurfOS user program: tail
 File: tail.c    Date: 10/25/26
 --------------------
 tail [-n N | -N] [file...]: the last N lines (10) of each file or of standard input; with more
-than one file each gets a "==> name <==" heading, as head does.
+than one file each gets a "==> name <==" heading, as head does. The lines are kept in a ring
+that grows with the input up to N of them, however big N is.
 */
 
 #include "lineutil.h"
 
 static int tail(FILE *f, long want) {
-    char **ring, *line = NULL;
+    char **ring = NULL, *line = NULL;
     size_t cap = 0;
-    long n = 0, k;
+    long n = 0, size = 0, k;                /* lines read; the ring's places, at most want */
     int nl;
     if(want <= 0) {
         while(lu_getline(f, &line, &cap, &nl) >= 0);
         free(line);
         return ferror(f) ? -1 : 0;
     }
-    ring = lu_alloc(NULL, (size_t)want * sizeof(char *));
-    memset(ring, 0, (size_t)want * sizeof(char *));
     while(lu_getline(f, &line, &cap, &nl) >= 0) {
-        free(ring[n % want]);
-        ring[n % want] = strdup(line);
-        if(!ring[n % want]) lu_alloc(NULL, (size_t)-1);
+        if(n == size && size < want) {      /* full before it wrapped: twice the places (no more than want) */
+            long more = size ? (size > want / 2 ? want : size * 2) : (want < 64 ? want : 64);
+            ring = lu_alloc(ring, (size_t)more * sizeof(char *));
+            memset(ring + size, 0, (size_t)(more - size) * sizeof(char *));
+            size = more;
+        }
+        free(ring[n % size]);
+        ring[n % size] = strdup(line);
+        if(!ring[n % size]) lu_alloc(NULL, (size_t)-1);
         n++;
     }
-    for(k = n > want ? n - want : 0; k < n; k++) {
-        printf("%s\n", ring[k % want]);
-        free(ring[k % want]);
+    for(k = n > size ? n - size : 0; k < n; k++) {
+        printf("%s\n", ring[k % size]);
+        free(ring[k % size]);
     }
     free(ring);
     free(line);
