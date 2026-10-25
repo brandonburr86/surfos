@@ -608,6 +608,16 @@ unittest-netcfg: $(BUILD)/host/test_netcfg
 	$(BUILD)/host/test_netcfg
 .PHONY: unittest-netcfg
 
+# 10/25/26 (the network tools): multicast DNS messages (net/mdns_wire.c): queries answered to the group, QU and
+# one-shot ones, known answers, probes, announcements, conflicts, broken messages, the names
+$(BUILD)/host/test_mdns: tests/host/test_mdns.c $(BUILD)/host/kernel/net/mdns_wire.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline $^ -o $@
+unittest: unittest-mdns
+unittest-mdns: $(BUILD)/host/test_mdns
+	$(BUILD)/host/test_mdns
+.PHONY: unittest-mdns
+
 clean:
 	rm -rf build
 

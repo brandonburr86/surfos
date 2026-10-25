@@ -44,6 +44,7 @@ a ping) gives up when that happens (task_interrupted()), along its usual way out
 #include <net/ip.h>
 #include <net/tcp.h>
 #include <net/dhcp.h>
+#include <net/mdns.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/tty.h>
@@ -558,6 +559,61 @@ static int cmd_netstat(int argc, char **argv) {
     return CMD_OK;
 }
 
+/* 10/25/26 (the network tools): the multicast DNS responder (net/mdns.c): this computer as <name>.local to the
+   others on its network. mdns says what it answers for and where, mdns on [name] starts it (the DHCP hostname,
+   surfos unless the settings say otherwise), mdns off stops it */
+static int cmd_mdns(int argc, char **argv) {
+    char name[MDNS_NAME_MAX + 1], where[160];
+    const char *want;
+    int r;
+    if(argc == 1 || (argc == 2 && !strcmp(argv[1], "status"))) {
+        if(!mdns_running(name, sizeof(name))) {
+            printf("mdns: not running (mdns on answers for this computer's name.local)\n");
+            return CMD_OK;
+        }
+        mdns_status(where, sizeof(where));
+        printf("mdns: answering for %s.local: %s\n", name, where);
+        return CMD_OK;
+    }
+    if(!strcmp(argv[1], "on") && argc <= 3) {
+        dhcp_hostname(name, sizeof(name));
+        want = argc == 3 ? argv[2] : *name ? name : "surfos";
+        if((r = mdns_start(want)) == -EINVAL) {
+            printf("mdns: %s is no name here: 1 to %d letters, digits and hyphens (not first or last)\n", want,
+                   MDNS_NAME_MAX);
+            return CMD_USAGE;
+        }
+        if(r == -EBUSY) {
+            mdns_running(name, sizeof(name));
+            printf("mdns: running already, for %s.local (mdns off first)\n", name);
+            return CMD_FAIL;
+        }
+        if(r == -EADDRINUSE) {
+            printf("mdns: no UDP socket on port 5353 to be had (netstat shows the open ones)\n");
+            return CMD_FAIL;
+        }
+        if(r) {
+            printf("mdns: %s\n", strerror(r));
+            return CMD_FAIL;
+        }
+        printf("mdns: answering for %s.local once no other computer does (dmesg: +MDNS)\n", want);
+        return CMD_OK;
+    }
+    if(!strcmp(argv[1], "off") && argc == 2) {
+        if(!mdns_running(name, sizeof(name))) {
+            printf("mdns: not running\n");
+            return CMD_FAIL;
+        }
+        if(mdns_stop() < 0) {
+            printf("mdns: stopping: it ends within seconds (mdns says when)\n");
+            return CMD_OK;
+        }
+        printf("mdns: stopped\n");
+        return CMD_OK;
+    }
+    return CMD_USAGE;
+}
+
 /**** processes ****/
 
 /* "hello" means /initrd/bin/hello unless the name has a slash in it */
@@ -937,6 +993,7 @@ static const struct command commands[] = {
     { "httpget",   "<host> <port> [path]", "fetch a page over TCP", cmd_httpget },
     { "ping",      "<ip> [n] [if]", "ICMP echo (if: through that interface)", cmd_ping },
     { "netstat",   "",          "interfaces and sockets", cmd_netstat },
+    { "mdns",      "[on [name]|off]", "this computer as name.local on its network (multicast DNS)", cmd_mdns },
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },
     { "spawn",     "<prog> [args]", "run a user program in the background", cmd_spawn },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
