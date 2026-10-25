@@ -381,14 +381,16 @@ SURF ≋> echo "hello from SurfOS" > /data/hello.txt
 SURF ≋> mkdir /data/Documents
 SURF ≋> mv /data/hello.txt "/data/Documents/Hello World.txt"
 SURF ≋> cd /data/Documents
-data ▸ Documents ≋> /initrd/bin/ls -la
+data ▸ Documents ≋> ls -la
 ```
 
-The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and `rmdir` come first; the programs
-of the same names know more options (`ls -la`, `cp -r`, `rm -rf`, `mkdir -p`) and run by
-their path, as above. The other programs: `touch`, `head [-n N]`, `wc [-lwc]`,
-`hexdump`, `df`, `edit` and `sh` (an earlier, smaller shell). They are written against
-SurfOS's small C library (`user/libsurf`), which new programs can use too.
+`ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `df` and `hexdump` are programs in
+`/initrd/bin` with the usual options (`ls -la`, `cp -r`, `rm -rf`, `mkdir -p`), and they
+read pipes and files (`cat < notes.txt`). The kernel has commands of the same names, which
+`kernel ls` and so on run (section 10); `hexdump usb1 0` still shows the blocks of a drive.
+The other programs: `touch`, `head [-n N]`, `wc [-lwc]`, `edit` and `sh` (an earlier,
+smaller shell). They are written against SurfOS's small C library (`user/libsurf`), which
+new programs can use too.
 
 **The editor.** `edit <file>` opens a file, or starts a new one, on the whole screen: a
 title line, the text, a status line and a line of keys.
@@ -518,12 +520,13 @@ shows the next screenful, Enter one more line, and q (or Esc, or Ctrl+C) leaves 
 unshown. `help` is long on purpose.
 
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
-`help`, `history`, `set`), then the kernel's (everything in sections 7 to 9: `lsblk`,
-`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in the directories of `PATH`
-(`/initrd/bin`); a name with a `/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
-`rmdir` come before the programs of the same names, which know more options: run those by
-their path, for example `/initrd/bin/ls -la` (`help` marks them with `*`). `help` lists
-all three groups, `help <name>` one command.
+`help`, `history`, `set`, `type`, ...), then a program in the directories of `PATH`
+(`/initrd/bin`), then the kernel's (everything in sections 7 to 9: `lsblk`, `fdisk`,
+`mount`, `ifconfig`, `ps`, ...); a name with a `/` in it is a program's path. Since
+10/25/26 the programs `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `df` and `hexdump`
+come before the kernel's commands of the same names: `kernel ls` runs the kernel's, and
+`type ls` says which one runs and what it hides (`help` marks the kernel's with `*`).
+`help` lists all three groups, `help <name>` one command.
 
 **A line** is words separated by blanks. `"double"` or `'single'` quotes keep blanks
 inside a word, and `\` keeps the next character as it is. `cmd > file` sends what the
@@ -1374,7 +1377,7 @@ Limits:
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
 | USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
-| The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, the kernel's commands; UTF-8 on the screen | Pipes, variables, wildcards, job control |
+| The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | Scrolling back, Ctrl+R, a startup file and saved history (in the works) |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |

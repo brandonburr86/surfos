@@ -1117,13 +1117,19 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   reason. **10/24/26**: `parse.c` makes a tree of the whole command (lists, `&&` and `||`,
   pipelines, groups, redirections, here-documents), and the words are expanded only when
   their command runs, so `$?` is still the status just before (section 21).
-* **Which command runs** (`run.c`), in the ring-0 shell's order: surfsh's own, then the
-  kernel's (a name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`), then
-  a program, `/initrd/bin/<name>` or a path when the name has a `/`. So `ls`, `cat` and `cp`
-  are the kernel's, as they always were at the prompt, and the programs of the same names
-  are reached by path (`help` marks them with `*`); the kernel's `help`, `echo`, `cd` and
-  `pwd` give way to surfsh's own. On a kernel without the bridge (ENOSYS) there are no
-  kernel commands; a name the table lists is the kernel's whatever `kcmd()` answers.
+* **Which command runs** (`run.c`): surfsh's own, then a program, `/initrd/bin/<name>` (the
+  directories of `PATH`, section 21) or a path when the name has a `/`, then the kernel's (a
+  name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`). **10/25/26**
+  (track A): the programs come before the kernel's commands of the same names, which came
+  first until then, in the ring-0 shell's order. So `ls`, `cat`, `cp`, `df`, `hexdump`,
+  `mkdir`, `mv`, `rm` and `rmdir` are the programs (`ls -l`, `echo x | cat` and `cat < file`
+  work); `kernel NAME` runs the kernel's command, and `type NAME` says which one runs and
+  what it hides. `help` marks with `*` a kernel command that a program hides and a program
+  that surfsh's own hides (`echo`). The `hexdump` program hands what is no file to the
+  kernel's (`hexdump usb0 0`: a block device's blocks), and `df` has the kernel df's columns.
+  The kernel's `help`, `echo`, `cd` and `pwd` give way to surfsh's own. On a kernel without
+  the bridge (ENOSYS) there are no kernel commands; a name the table lists is the kernel's
+  whatever `kcmd()` answers.
 * **Redirection.** A program gets its files from `spawnfd()`. A builtin or a kernel command
   runs in surfsh's own task, so its file is put on descriptor 1 (`dup2`) and taken off
   again afterwards from a copy of descriptor 1 made at the start (`dup2(1, 15)`, the last
@@ -1771,9 +1777,10 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   only joined on); a character is a whole UTF-8 sequence, names are matched as stored, a name
   that starts with `.` only by a part that does, and a pattern that matches nothing stays as
   it is (POSIX's rule). The same matcher does `${x#p}` and the rest.
-* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own or the kernel's is
-  looked for in each directory of `PATH` (an empty one is `.`); `help` and Tab list the
-  programs of all of them, a name in two directories once.
+* **`PATH`** (`run.c`). A name without a `/` that is not surfsh's own is looked for in each
+  directory of `PATH` (an empty one is `.`), and only then among the kernel's commands
+  (10/25/26; they came first until then, section 17); `help` and Tab list the programs of
+  all of them, a name in two directories once.
 * **A new surfsh** is `surfsh --sub STATUS PID LASTPID NAME`, started with `spawnx` with the
   given descriptors 0 and 1, surfsh's 2, the exported variables as its environment, and the
   reading end of a pipe as 3, into which surfsh writes what makes the new one this shell

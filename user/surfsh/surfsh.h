@@ -18,9 +18,9 @@ ring-3 program in /initrd/bin; init starts it with -l on every console.
     glob.c      patterns (* ? [...]) and the names they match
     vars.c      variables, the environment, the positional parameters
     exec.c      the tree runs: lists, pipelines, groups, subshells, redirections
-    run.c       one command: surfsh's own, then the kernel's (kcmd), then programs
+    run.c       one command: surfsh's own, then programs, then the kernel's (kcmd; 10/25/26)
     jobs.c      the jobs in the background: started, collected, reported
-    builtins.c  cd, pwd, echo, exit, help, history, set, export, readonly, unset, shift
+    builtins.c  cd, pwd, echo, exit, help, history, set, export, readonly, unset, shift, type
     script.c    10/25/26: : true false break continue return local eval . source read kernel
     test.c      test and [;  printf.c  printf
 
@@ -379,6 +379,7 @@ const struct kcmd_info *kcmd_find(const char *name);
 int kcmd_bridge(void);              /* the kernel offers its commands to programs */
 int program_names(struct cands *c); /* the programs in /initrd/bin, added to c, sorted; -1: none */
 int find_program(const char *name, char *path, int size);   /* 0 and its path (PATH's), else a status, said */
+int program_path(const char *name, char *path, int size);   /* 10/25/26: the same, saying nothing: 0, or -1 */
 int run_kernel(char **argv, int *found);   /* a kernel command in this shell: its status; *found 0: none */
 /* a program with this shell's 0, 1, 2 (in, out: those instead; -1 not) and the environment env: its pid; -1 said.
    10/25/26: fd3, its descriptor 3 (-1: none) */

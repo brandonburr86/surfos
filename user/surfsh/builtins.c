@@ -7,7 +7,9 @@ surfsh's own commands. They come before the kernel's commands of the same names
 (the kernel's help, echo, cd and pwd are not used). echo is one of them, so
 "echo text > file" needs nothing from the kernel. Their output can be
 redirected like a program's (exec.c puts the file on descriptor 1), and they can
-be in a pipeline (in a new surfsh, unless they are its last stage).
+be in a pipeline (in a new surfsh, unless they are its last stage). 10/25/26
+(track A): they come before the programs of the same names too (echo), and the
+programs before the kernel's commands (ls, cat, cp, df); type says which runs.
 
     cd [dir]          no dir: /; "cd -": the previous directory (printed); PWD and OLDPWD follow
     pwd               the current directory
@@ -23,6 +25,8 @@ be in a pipeline (in a new surfsh, unless they are its last stage).
     readonly [name[=value]...]  these variables cannot change any more (none, or -p: the list)
     unset name...     the variables are gone (unset -f: the functions)
     shift [n]         $n+1 becomes $1 (1)
+    type name...      10/25/26: what each name runs (a function, surfsh's own command, a
+                      program and its path, a kernel command) and what it hides; 1 for none
 
 10/25/26 (scripts): the builtins of script.c (: true false break continue return local eval
 . source read kernel), test.c (test and [) and printf.c are in the table too, and exec, which
@@ -46,6 +50,7 @@ static int b_export(int argc, char **argv);
 static int b_readonly(int argc, char **argv);
 static int b_unset(int argc, char **argv);
 static int b_shift(int argc, char **argv);
+static int b_type(int argc, char **argv);
 
 const struct builtin builtins[] = {
     { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd, 0 },
@@ -54,6 +59,7 @@ const struct builtin builtins[] = {
     { "history", "",              "the lines typed before (Up and Down recall them)", b_history, 0 },
     { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set, 1 },
     { "help",    "[command]",     "this list, or one command", b_help, 0 },
+    { "type",    "name...",       "which command a name runs, and what it hides", b_type, 0 },
     { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: $?)", b_exit, 1 },
     { "export",  "[name[=value]...]", "programs get these variables (none: the list)", b_export, 1 },
     { "readonly", "[name[=value]...]", "these variables can no longer change (none: the list)", b_readonly, 1 },
@@ -75,7 +81,7 @@ const struct builtin builtins[] = {
     { ".",       "file [args]",   "the commands of the file, in this shell", b_dot, 1 },
     { "source",  "file [args]",   "the same as .", b_dot, 0 },
     { "exec",    "[cmd [args]]",  "cmd, and then this shell ends; alone: its redirections stay", b_colon, 1 },
-    { "kernel",  "name [args]",   "the kernel's command name, where surfsh has its own", b_kernel, 0 },
+    { "kernel",  "name [args]",   "the kernel's command name, where surfsh or a program has its own", b_kernel, 0 },
     /* 10/25/26: job control (jobs.c) */
     { "jobs",    "",              "the jobs: running, stopped (Ctrl+Z), and their commands", b_jobs, 0 },
     { "fg",      "[%n]",          "job n (the last one) in the foreground again", b_fg, 0 },
@@ -360,7 +366,7 @@ static int b_shift(int argc, char **argv) {
     return 0;
 }
 
-/**** help ****/
+/**** help, type ****/
 
 static void put_stdout(const char *s, int n) {
     fwrite(s, 1, (size_t)n, stdout);
@@ -370,34 +376,85 @@ static void row(const char *name, const char *args, const char *help) {
     printf("    %-9s %-14s %s\n", name, args, help);
 }
 
-static int is_program(const char *name, char *path, int size) {
-    struct stat st;
-    if(strchr(name, '/') || snprintf(path, (size_t)size, PROGRAM_DIR "/%s", name) >= size) return 0;
-    return stat(path, &st) == 0 && S_ISREG(st.type);
-}
-
-/* help <name>: what runs under that name, and what else has it */
+/* help <name>: what runs under that name, and what else has it. 10/25/26: a program of PATH's
+   directories comes before the kernel's command of the same name */
 static int help_one(const char *name) {
     const struct builtin *b = builtin_find(name);
     const struct kcmd_info *k = kcmd_find(name);
     char path[PATH_MAX];
-    int program = is_program(name, path, sizeof(path));
+    int program = program_path(name, path, sizeof(path)) == 0;
     if(b) printf("    %s %s\n    %s\n    (surfsh's own command)\n", b->name, b->args, b->help);
-    else if(k) printf("    %s %s\n    %s\n    (a kernel command)\n", k->name, k->args, k->help);
     else if(program) printf("    %s: the program %s\n", name, path);
+    else if(k) printf("    %s %s\n    %s\n    (a kernel command)\n", k->name, k->args, k->help);
     else {
         fprintf(stderr, "surfsh: help: no command called %s\n", name);
         return STATUS_FAIL;
     }
-    if(b && k) printf("    The kernel has a command of this name too; surfsh's own comes first.\n");
-    if((b || k) && program) printf("    The program of this name runs by its path: %s\n", path);
+    if(b && program) printf("    The program of this name runs by its path: %s\n", path);
+    if(k && (b || program))
+        printf("    The kernel has a command of this name too, which kernel %s runs:\n    %s %s\n    %s\n", k->name,
+               k->name, k->args, k->help);
     return 0;
+}
+
+/* 10/25/26: type. What has a name, in the order exec.c tries them: a special builtin, a function,
+   surfsh's own command, a program of PATH's directories, a kernel command */
+enum { T_OWN, T_FUNC, T_PROGRAM, T_KERNEL };
+
+static void type_what(int kind, int first, const char *name, const char *path) {
+    if(kind == T_PROGRAM) printf("the program %s", path);
+    else if(first) fputs(kind == T_OWN ? "surfsh's own command" : kind == T_FUNC ? "a function" : "a kernel command", stdout);
+    else if(kind == T_OWN) printf("surfsh's own %s", name);
+    else if(kind == T_FUNC) printf("the function %s", name);
+    else printf("the kernel's %s (kernel %s runs it)", name, name);
+}
+
+/* the first of them runs, and it hides the others; 1 when nothing has the name */
+static int type_one(const char *name) {
+    const struct builtin *b = NULL;
+    const struct kcmd_info *k = NULL;
+    struct func *fn = NULL;
+    char path[PATH_MAX];
+    int kinds[4], n = 0, i;
+    if(!strchr(name, '/')) {
+        b = builtin_find(name);
+        fn = func_find(name);
+        k = kcmd_find(name);
+    }
+    if(b && b->special) kinds[n++] = T_OWN;
+    if(fn) kinds[n++] = T_FUNC;
+    if(b && !b->special) kinds[n++] = T_OWN;
+    if(program_path(name, path, sizeof(path)) == 0) kinds[n++] = T_PROGRAM;
+    if(k) kinds[n++] = T_KERNEL;
+    if(!n) {
+        fflush(stdout);                             /* after the names before it, also into a file */
+        fprintf(stderr, "surfsh: type: %s: not found\n", name);
+        return STATUS_FAIL;
+    }
+    printf("%s is ", name);
+    for(i = 0; i < n; i++) {
+        if(i) fputs(i == 1 ? "; it hides " : i == n - 1 ? " and " : ", ", stdout);
+        type_what(kinds[i], !i, name, path);
+    }
+    printf("\n");
+    return 0;
+}
+
+static int b_type(int argc, char **argv) {
+    int i, status = 0;
+    if(argc < 2) {
+        fprintf(stderr, "usage: type name...\n");
+        return STATUS_USAGE;
+    }
+    for(i = 1; i < argc; i++) if(type_one(argv[i])) status = STATUS_FAIL;
+    return status;
 }
 
 static int b_help(int argc, char **argv) {
     static const char rule[] = "    ----------------------------";
     struct cands progs = { NULL, 0, 0 };
-    char **names = NULL, shadowed[64] = "";
+    char **names = NULL, shadowed[64] = "", path[PATH_MAX];
+    const char *kexample = NULL;
     int i, n = 0, size, width;
     if(argc > 2) {
         fprintf(stderr, "usage: help [command]\n");
@@ -419,9 +476,17 @@ static int b_help(int argc, char **argv) {
                 snprintf(shadowed + strlen(shadowed), sizeof(shadowed) - strlen(shadowed), "%s%s", shadowed[0] ? ", " : "", k->name);
             continue;
         }
+        if(program_path(k->name, path, sizeof(path)) == 0) {      /* 10/25/26: a program comes first: starred */
+            char starred[KCMD_NAME_MAX + 1];
+            snprintf(starred, sizeof(starred), "%s*", k->name);
+            row(starred, k->args, k->help);
+            if(!kexample) kexample = k->name;
+            continue;
+        }
         row(k->name, k->args, k->help);
     }
     if(shadowed[0]) printf("    (the kernel's %s as well: surfsh's own, above, are used)\n", shadowed);
+    if(kexample) printf("    * a program of this name runs first; kernel %s runs the kernel's\n", kexample);
 
     printf("\n    programs in %s:\n", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
     if(program_names(&progs) < 0 || !progs.n) printf("    (none)\n");
@@ -429,7 +494,7 @@ static int b_help(int argc, char **argv) {
         const char *example = NULL;
         for(i = 0; i < progs.n; i++) {
             const char *p = progs.v[i].name;
-            int hidden = builtin_find(p) || kcmd_find(p);
+            int hidden = builtin_find(p) || func_find(p);     /* 10/25/26: a kernel command comes after it */
             names[n] = malloc(strlen(p) + 2);
             if(!names[n]) continue;
             strcpy(names[n], p);
@@ -442,7 +507,8 @@ static int b_help(int argc, char **argv) {
         size = ttyctl(TTY_GETSIZE, 0);
         width = size > 0 ? (size >> 16) & 0xffff : 80;
         columns(names, n, width, "    ", "\n", put_stdout);
-        if(example) printf("    * a command of this name runs first; %s/%s runs the program\n", PROGRAM_DIR, example);
+        if(example && program_path(example, path, sizeof(path)) == 0)
+            printf("    * surfsh's own command comes first; %s runs the program\n", path);
         for(i = 0; i < n; i++) free(names[i]);
         free(names);
     }
@@ -483,8 +549,9 @@ static int b_help(int argc, char **argv) {
            "                     #!/initrd/bin/surfsh lets it run by its name)\n"
            "    A line that ends with | or && (or inside quotes, an if, a loop, a group)\n"
            "    goes on in the next one, after the prompt %s.\n"
-           "    Which command runs: a function or surfsh's own, then the kernel's, then a\n"
-           "    program of PATH's directories (%s); a name with a / is a program's path.\n",
+           "    Which command runs: a function or surfsh's own, then a program of PATH's\n"
+           "    directories (%s), then the kernel's; a name with a / is a\n"
+           "    program's path. type NAME says which runs; kernel NAME runs the kernel's.\n",
            use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
     printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
            "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
