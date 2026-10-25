@@ -636,6 +636,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 | `help`, `clear`, `echo`, `tick`, `uptime`, `date`, `ps`, `kill`, `sleep`, `memstat`, `dmesg`, `irqstat`, `bootinfo`, `lpstat`, `test` | Work |
 | `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
 | `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task (from surfsh: the surfsh process); the first three kill it and init restarts it, the last is reported and ignored |
+| `crashfs` | **ai-dev** (10/18/26, CODE-AUDIT B56): the same NULL store while the task counts as inside a file system: the system stops with a kernel wipeout that says why (in the kernel shell only; surfsh's `SYS_kcmd` is refused) |
+| `crashlock` | **ai-dev** (10/18/26, CODE-AUDIT B62): the same NULL store while the task holds a mutex of its own: the system stops with a kernel wipeout that says the task held a lock (in the kernel shell only; surfsh's `SYS_kcmd` is refused) |
 | `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
@@ -1114,7 +1116,9 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   context, so its files close and nothing is left held. Mutexes, semaphores, untimed
   events, the block cache and drivers' waits are not cut short. A task that has not ended
   its call 2 seconds after the kill is killed at once from the timer, with a line in the
-  kernel log (`sleep -u` shows it); faults kill at once, as before. Ctrl+C in line mode
+  kernel log (`sleep -u` shows it); faults kill at once, as before (since 10/18/26 a fault in
+  kernel mode inside a file system, the block cache or a device request stops the system
+  instead, CODE-AUDIT B56, and `kill` refuses the kernel's own threads, B59). Ctrl+C in line mode
   while a shell pages a command in the foreground uses the same path: a kernel command
   running in the shell's own task is cut short and answers `KCMD_INTERRUPTED` (130) while
   the shell lives on, and the innermost programs started under the pager

@@ -22,6 +22,18 @@ could not be loaded, whatever its exit status says.
 process was handed (its arguments, its files) is never left behind. A program started
 by a task that its console's pager covers is in the foreground (TF_FOREGROUND): Ctrl+C
 reaches it (tty.c, task_interrupt_job()).
+
+10/18/26 (audit B73): the files it was handed go into its descriptor table first, before
+anything waits, and the console after them: a kill that has waited KILL_WAIT_MS comes at
+once outside a file system, and one put off while the program file was read (fs/vfs.c:
+a file of a volume the loading holds) comes right after its close; before, the files
+still in the spawn's record were left open then (a redirection's file on a stick kept it
+from being unmounted). The task's reap closes them, whatever ends it.
+
+10/19/26 (audit B74): and the parent's call counts itself (fs_refs) from the record's making
+until the child's task holds it: a kill of the parent put off by its spawn's walk of the
+program's path came at once in between, and the references taken for the child (a
+redirection's file on a stick) and the record were left for good.
 */
 
 #include <surfos/types.h>
@@ -94,6 +106,18 @@ static void user_entry(void *arg) {
     u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1];
     int i, r, fd;
 
+    /* 0, 1, 2: the files the parent passed (10/18/26, audit B73: the descriptor table's before anything waits), then
+       the console for the others */
+    for(fd = 0; fd < 3; fd++) {
+        curTask->files[fd] = sa->files[fd];               /* the descriptor table owns the reference now */
+        sa->files[fd] = NULL;
+    }
+    for(fd = 0; fd < 3; fd++) {
+        struct file *cf;
+        if(!curTask->files[fd] && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) == 0)
+            curTask->files[fd] = cf;
+    }
+
     m = uvm_create();
     if(!m) load_failed(sa, f, "out of memory for the address space");
     curTask->uvm = m;
@@ -148,14 +172,6 @@ static void user_entry(void *arg) {
         ((u_long *)sp)[1] = argv_addr;
     }
 
-    /* 0, 1, 2: the files the parent passed, otherwise the console */
-    for(fd = 0; fd < 3; fd++) {
-        struct file *cf = sa->files[fd];
-        sa->files[fd] = NULL;                             /* the descriptor table owns the reference now */
-        if(!cf && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0) continue;
-        curTask->files[fd] = cf;
-    }
-
     kfree(sa);
     curTask->flags |= TF_LOADED;                          /* 10/6/26: it runs: init tells a load failure apart */
     task_call_leave(TC_SYSCALL);                          /* 10/6/26: loaded; a kill that waited ends it here */
@@ -179,13 +195,15 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     if(r) return r;
     if(st.type != VN_FILE) return -EACCES;
     if(argc < 1 || argc > SPAWN_MAX_ARGS) return -EINVAL;
+    fs_ref();                                       /* 10/19/26 (audit B74): the record and the files it hands over are
+                                                       this call's until the child's task holds them, counted (below) */
     sa = (struct spawn_args *)kcalloc(1, sizeof(struct spawn_args));
-    if(!sa) return -ENOMEM;
+    if(!sa) { fs_unref(); return -ENOMEM; }
     r = vfs_normalize(vfs_getcwd(), path, sa->path, sizeof(sa->path));
-    if(r) { kfree(sa); return r; }
+    if(r) { kfree(sa); fs_unref(); return r; }
     for(i = 0; i < argc; i++) {
         size_t n = strlen(argv[i]) + 1;
-        if(used + n > SPAWN_STR_BYTES) { kfree(sa); return -E2BIG; }
+        if(used + n > SPAWN_STR_BYTES) { kfree(sa); fs_unref(); return -E2BIG; }
         memcpy(sa->strs + used, argv[i], n);
         sa->argv[i] = sa->strs + used;
         used += n;
@@ -204,6 +222,7 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     base = base ? base + 1 : sa->path;
     if(!(flags & TF_DETACHED) && con && console_paging(con)) flags |= TF_FOREGROUND;   /* 10/6/26 */
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
-    if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
+    if(!t) { release_files(sa); kfree(sa); fs_unref(); return -ENOMEM; }
+    fs_unref();                                     /* (the child's now: its reap closes them, whatever ends it) */
     return (int)t->pid;
 }

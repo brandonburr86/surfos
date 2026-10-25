@@ -680,7 +680,7 @@ static int attach(struct pci_dev *pci) {
         kfree(sc);
         return -1;
     }
-    if(!kthread_create("iwl", iwl_thread, sc, PL_HIGH, TF_KTHREAD | TF_DETACHED))
+    if(!kthread_create("iwl", iwl_thread, sc, PL_HIGH, TF_KTHREAD | TF_DETACHED | TF_SYSTEM))   /* (B59) */
         kprintf("+IWL: no thread for the card: its notifications are read only while a command waits\n");
     return 0;
 }

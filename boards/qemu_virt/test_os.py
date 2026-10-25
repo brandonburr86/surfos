@@ -404,6 +404,52 @@ def scroll_boot(args, disk, check):
     return transcript
 
 
+def fsfault_boot(args, disk, check):
+    """10/18/26 (audit B56): a fault while the task is inside a file system, the block cache or a device request
+    (crashfs: a store to address 0 between fs_enter() and fs_leave()) stops the system with a wipeout that says why:
+    nothing could give back what the task held there. crashnull, the same store outside, kills only the shell"""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        mark = len(q.transcript)
+        q.cursor = mark
+        q.send('crashfs\r')
+        ok2 = all(q.expect(t, 20) for t in ['Kernel Wipeout: ', 'inside a file system, the block cache or a device request',
+                                             'SYSTEM HALTED'])
+        q.wait(1)
+        out = q.since(mark)
+        m = re.search(r'Kernel Wipeout: (.*)', out)
+        check(ok and ok2 and 'init: restarted the shell' not in out,
+              'crashfs: a store to address 0 inside a file system stops the system with a wipeout that says why (%s)'
+              % (m.group(1).strip() if m else 'none'))
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
+def lockfault_boot(args, disk, check):
+    """10/18/26 (audit B62): a fault while the task holds a lock (crashlock: a mutex of its own) stops the system with a
+    wipeout that says so: the lock would stay with the dead task for good, as the card's lock in the card watch would"""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        mark = len(q.transcript)
+        q.cursor = mark
+        q.send('crashlock\r')
+        ok2 = all(q.expect(t, 20) for t in ['Kernel Wipeout: ', 'holding a lock (1 held)', 'SYSTEM HALTED'])
+        q.wait(1)
+        out = q.since(mark)
+        m = re.search(r'Kernel Wipeout: (.*)', out)
+        check(ok and ok2 and 'init: restarted the shell' not in out,
+              'crashlock: a store to address 0 holding a lock stops the system with a wipeout that says so (%s)'
+              % (m.group(1).strip() if m else 'none'))
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
 def package_boot(args, disk, check, work):
     """SURFOS.BIN, packed by the fw track's tools/surfimg.py: its verify, then copied to its load address"""
     hdr = package_header(args.package)
@@ -461,6 +507,14 @@ def sdsim_boot(args, disk, check, work):
               'sdsim: the RAM disk through the SD driver and a simulated card is sd0; its FAT32 partition mounted')
         ok, out = q.cmd('ls /sd0p1', ['entries'])
         check(ok and 'A long file name written elsewhere.txt' in out and 'BIG.BIN' in out, 'sdsim: ls /sd0p1 over the SD driver')
+        # 10/18/26 (audit B59): the card watch is one of the kernel's own threads: kill refuses it (killed at once, it
+        # left the driver's lock held, and every later request to the card waited for good)
+        ok, out = q.cmd('ps', ['sdwatch'])
+        m = re.search(r'^\s*(\d+)\s+\w+\s+\w+\s+.*sdwatch$', out, re.M)
+        ok2, out2 = q.cmd('kill %s' % (m.group(1) if m else '0'), ['not killed']) if m else (False, '')
+        ok3, out3 = q.cmd('ps', ['sdwatch'])
+        check(ok and m and ok2 and "is one of the kernel's own threads" in out2 and ok3,
+              'sdsim: kill refuses the card watch (one of the kernel\'s own threads), which lives on')
         ok, out = q.cmd('crc32 /sd0p1/BIG.BIN', ['BIG.BIN'], timeout=90)
         check(ok and re.search(r'%08x\s+1048576' % big_crc, out), 'sdsim: the 1 MB file read through the SD driver (CMD17/CMD18)')
         ok, out = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/SDCOPY.BIN', ['1048576 bytes copied'], timeout=120)
@@ -1140,6 +1194,8 @@ def main():
 
     try:
         transcript += scroll_boot(args, disk, check)
+        transcript += fsfault_boot(args, disk, check)
+        transcript += lockfault_boot(args, disk, check)
         if args.stub:
             transcript += handoff_boots(args, disk, check, work)
             transcript += sdsim_boot(args, disk, check, work)

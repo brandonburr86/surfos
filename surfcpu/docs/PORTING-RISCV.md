@@ -97,7 +97,7 @@ command that does not need PC hardware or processes.
 | Linker script at 1 MB | `linker.ld` | `arch/riscv32/linker.ld` + `boards/*/board.ld` at 0x80000000 |
 | GDT, TSS, segment registers | `kernel/gdt.c` | nothing: no segmentation, no privilege change. `tss_set_kernel_stack()` is not called (kernel/task.c, guarded) |
 | IDT, 256 stubs, `trap_common` | `kernel/traps.asm`, `kernel/interrupt.c` | `arch/riscv32/traps.S`: one entry (`mtvec` direct mode), a 144-byte frame aligned to 16 bytes below the interrupted `sp` with all 31 registers, mepc, mstatus, mcause, mtval; `gp` reloaded for C; `trap_dispatch()` returns the frame to resume; the exit restores mepc and mstatus, every register, `sp` last, MRET |
-| Exception policy, register dump | `kernel/panic.c` | `arch/riscv32/trap.c`: the same policy (kill the faulting task with a report and a backtrace; a wipeout in the idle task, in an interrupt handler or before tasks), RISC-V causes and register names; EBREAK reported and stepped over |
+| Exception policy, register dump | `kernel/panic.c` | `arch/riscv32/trap.c`: the same policy (kill the faulting task with a report and a backtrace; a wipeout in the idle task, in an interrupt handler or before tasks, and, since audit B56 and B62, in a task inside a file system, the block cache or a device request or holding a lock: `crashfs` and `crashlock` show it), RISC-V causes and register names; EBREAK reported and stepped over |
 | 8259 PICs, IRQ chains | `kernel/interrupt.c` | `arch/riscv32/irq.c`: the same chains (`add_irq_handler()` ...) over the board's controller: the PLIC on QEMU, `surf_intc` on the Arty (levels, no claim/complete); a source nobody handles is switched off before it storms |
 | `int $0x40` = `yield()` | `kernel/task.c` | `ecall` (guarded in task.c); `trap_dispatch()` steps mepc past it, then the yield handler task.c installs (`T_YIELD` = ECALL from M) calls `schedule()` |
 | First frame of a task (segments, EFLAGS) | `kernel/task.c` `build_initial_frame()` | `arch_task_frame()` (guarded in task.c): mepc = the task's start, mstatus MPP = M and MPIE = 1 (MRET enables interrupts), `sp` = the stack top, `gp` the kernel's, `ra` = `s0` = 0, the stack canary |
@@ -233,15 +233,16 @@ The console before the lock fails it in both (rows half written, doubled or blan
 lock it passes, and the scroll is faster (892 ticks instead of 1430 for the 120 lines in the
 emulator).
 
-The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 118 checks per build on a tree without
-the fw track's tools, 132 with them): the banner and identity, help, ps (idle, init, heartbeat, a
+The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 120 checks per build on a tree without
+the fw track's tools, 135 with them): the banner and identity, help, ps (idle, init, heartbeat, a
 kernel shell on each of F1-F4), the tick against a 1000 ms sleep, the heartbeat task, two kernel
 tasks that count, sleep and wake (`tasks`), interrupt counts, the CPU, the self test and
 heaptest; FAT32 on the RAM disk: long, accented and 8.3 names, three folders deep, a 1 MB file
 read back by CRC, `/USERS/DOCUMENTS/` (below), write, mkdir, a 1 MB copy under a long name, mv,
 rm, sync, umount, then the image saved through QEMU's monitor and checked on the host (fsck.fat
 clean, mtools reads back what SurfOS wrote); faults that kill the shell with a backtrace and
-init restarting it, EBREAK stepped over, RISC-V's division by zero; the boot ABI's handoff: a
+init restarting it, and the two that stop the system instead (`crashfs` and `crashlock`: a task
+inside a file system, one holding a lock, audit B56 and B62), EBREAK stepped over, RISC-V's division by zero; the boot ABI's handoff: a
 stand-in for SurfBoot's last step (`boards/qemu_virt/stub/`) enters the kernel with a0/a1/a2 as
 BOOT-ABI.md says, its boot information's command line taking effect, and a corrupted boot
 information block refused; FAT32 over the SD driver: with the kernel word `sdsim`
@@ -405,8 +406,38 @@ buffers in hand left every later sync hanging; B39: a kill or Ctrl+C cuts a sync
 and a task inside a FAT call, holding the cache's lock, or with blocks of its own marked in the cache
 is not killed at once (`fs_hold`, `bcache_holds()`): the kill that waited 2 s comes once it is out,
 never in the middle, where it left a copy's record on the dead task's stack and blocks marked as
-copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
-its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
+copied, written or read for good; B47: nor inside a device request, also one outside the cache, where
+a killed `mkfs` left `sdblk.c`'s lock held and the card hung, and `mkfs` stops before its next request
+and says how far it got; B48: a kernel thread killed in there that enters a call gets the call's 2 s;
+B49: a long read or write stops before its next piece, a block through the cache, up to 64 KiB
+straight; B46: but `umount`, and eject's unmount, are not cut short at all: once begun they finish,
+and give nothing up that the card takes; B56: another task's write they wait for as long as the
+card's driver takes, at most 500 ms of busy before a command and after each block (about 68 s for a
+64 KiB write), and a fault inside the cache or a device request stops the system (for a while, B50,
+such a write was given up after 30 s and could land on the card after the umount); B51: and the card
+is busy for mount, eject and `sdmode` until the umount has finished, B56 and B58: and while a request
+to it has not ended or a mount of it is under way, and from eject's first step; B54: a finished
+umount's or eject's status is its own, not Ctrl+C's 130; B59: the card watch, `sdwatch`, is not
+killed; B62: no task is killed at once while it holds a lock, and a fault while it holds one stops
+the system, the card watch holding the card's lock in `sd_init()` and `taken_out()` among them; B63:
+tasks waiting for the card's lock, the cache's or a volume's take their turns in the order they
+came; B66: and one woken another way just as the lock is let go takes it then, where it slept on the
+free lock (no such wake-up reaches them today); B65: a close or fsync whose write-out was cut short
+says EINTR, one the card refused EIO, Ctrl+C or not; B61: mkfs and fdisk, on the qemu_virt RAM disk
+only (the card is never formatted from SurfOS), hold their device for their run, another task's
+requests to it refused meanwhile; B68: a mount probes the card for its file system only once it
+holds it, and says the true reason when it is busy; B73: a task killed while its call holds the
+card's files or folders (a path's walk, a file `cat`, `cp` or `ls` opened, a close's write-out) is
+killed once it has let go of them, where it was killed at once and the card could not be unmounted
+until restart; B76: and then it finishes what follows its letting go (it has 2 s to end its command
+or itself), where the kill came in that, leaving what it was freeing; B79: one that keeps working
+on the card, ignoring its kill, is killed all the same, within about 4 to 5 s; B80: the 2 s are
+owed from the kill itself to a task holding something then, or taking something after it, where a
+task that let go before the kernel first looked at it, or just before its 2 s were up, was killed
+at once there; B81: one that keeps reading or writing a file it has open is killed as B79's is,
+not only one that keeps opening files).
+Nothing
+hangs (a 1 MB `cp` returns at once with its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
 both names on one chain, and the next `mv` or `rm` freed the chain under the other name). Since
@@ -620,6 +651,99 @@ that SurfBoot loads (+0.48 million cycles). Each command is within 0.3 %. Two dr
 taken back: a count in each of the cache's calls (+1.05 % on the write run against the padded base, cp
 +1.9 %), and a wake-up of the cache's waiters for each block an eject's binvalidate() dropped (+5 % on
 the eject) (bcache-review.txt section 39).
+
+Since audit B46-B49 (counted the same way, before = 0a9a5f2): every workload above sends the same
+requests and blocks. A device request counts its task inside (two stores around the driver's call),
+a cache wait looks at one more flag where it begins, and mkfs at its call before each request. On
+SurfCPU (0a9a5f2's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.05 % more cycles, its reboot run 0.06 %, test-os-faults' full card 0.06 %, and its refusing card
+1.46 %, all but 0.04 % of that the card-detect task meeting the card's removal one look (200 ms)
+later; SurfBoot loads a package 880 bytes larger (+0.08 million cycles), and each command is within
+0.5 % (bcache-review.txt section 47).
+
+Since audit B50-B55 (counted the same way, before = b482ff1): every workload above sends the same
+requests and blocks. A new I/O of a block clears one flag (a store); the bounded waits, the count of
+a device being unmounted and fdisk's count run only where nothing ran before. On SurfCPU (b482ff1's
+kernel against this one, the same simulator and ROM): test-os-persist's write run 0.27 % more
+cycles, its reboot run 0.29 %, test-os-faults' full card 0.29 %, and its refusing card 1.37 % fewer
+(the card-detect task meeting the card's removal a look sooner); SurfBoot loads a package 2.9 KB
+larger (+0.36 million cycles), and each command is within 0.5 %. Against b482ff1 padded to this
+kernel's layout (each object this round changed followed by as much code that never runs as it grew,
+the package as large): +0.13 %, +0.09 %, +0.09 % and -0.08 %. A first version kept the bound's clock
+in the cache's calls themselves: SurfCPU fetches every instruction from DDR, and with more registers
+saved in each call and an instruction more for each of the 1024 blocks in a sync's last look, each
+card command cost 0.5-1.8 % more against that padded base; the waits are out of line now
+(bcache-review.txt section 55).
+
+Since audit B56-B60 (counted the same way, before = 3ce9600): every workload above sends the same
+requests and blocks. The cache's waits are b482ff1's again (B50's bound and its out-of-line waits
+gone); a device request counts itself on its device (an increment and a decrement with interrupts off,
+around the driver's call); a mount and an eject count themselves inside and take their device's count
+under mount_lock; kill looks at one more flag. On SurfCPU (3ce9600's kernel against this one, the same
+simulator and ROM): test-os-persist's write run 0.07 % fewer cycles, its reboot run 0.07 % fewer,
+test-os-faults' refusing card 0.06 % fewer and its full card 0.004 % fewer; SurfBoot loads a package
+1.4 KB larger (+0.18 million cycles), and each command is within -0.3 % and +0.4 % (cp 0.24 % fewer)
+but for the pairs of lines in another order and the card-detect task's looks seen in every round
+(bcache-review.txt section 63).
+
+Since audit B61-B65 (counted the same way, before = 6ed8fcb): every workload above sends the same
+requests and blocks. A mutex's unlock looks at its first waiter and wakes a task only to hand the
+lock over (6ed8fcb woke the queue on every unlock, with its own interrupt save and restore); a device
+request looks at one count more; the claims of mkfs and fdisk and the kill and fault rule's look at
+a task's mutexes do not run in these workloads. On SurfCPU (6ed8fcb's kernel against this one, the
+same simulator and ROM): test-os-persist's write run 0.95 % fewer cycles, its reboot run 0.35 %
+fewer, test-os-faults' full card 0.62 % fewer and its refusing card 1.07 % more, all of that and more
+the card-detect task meeting the card's removal a look later (+3.1 million cycles); SurfBoot loads a
+package 3.4 KB larger (+0.43 million cycles); the commands that move many blocks run 1.4-2.6 % fewer
+cycles (the unlocks that wake nobody: they take the cache's lock and the card's for each block), and
+each other command is within -1.4 % and +1.0 %. Against 6ed8fcb padded to this kernel's layout (each
+object this round changed followed by as many nops as it grew, the package as large): -1.12 %,
+-0.56 %, -0.89 % and +0.21 % (bcache-review.txt section 71).
+
+Since audit B66-B73 (counted the same way, before = d4050ed): every workload above sends the same
+requests and blocks. A lock taken free goes the way it went (B66 adds a look in a mutex's wait loop,
+which a lock taken free never reaches); B73 counts a call's references to the card's volume, a few
+instructions for each component of a path and for each close; the kill's log line, mount's probe and
+the self test's new steps do not run in these workloads. On SurfCPU (d4050ed's kernel against this
+one, the same simulator and ROM): test-os-persist's write run 0.22 % more cycles, its reboot run
+0.21 % more, test-os-faults' full card 0.24 % more and its refusing card 0.67 % more (the
+card-detect task meeting the card's removal at another look); SurfBoot loads a package 3.3 KB larger
+(+0.39 million cycles), and each command is within -0.4 % and +1.4 % (df on the full card) but for
+the pairs of lines in another order seen in every round. Against d4050ed padded to this kernel's
+layout (each object this round changed followed by as much code that never runs as it grew once
+linked, its data, a task and a file as large, the package as large): +0.012 %, +0.014 %, +1.7 % (the
+card-detect task's look) and +0.011 %; against 0062c33, the round's kernel before B73, laid out
+alike: +0.012 %, +0.015 %, +0.39 % and +0.011 %, a few thousand cycles a command (bcache-review.txt
+sections 81 and 86). A first version of B66, which folded a mutex's arrival into its wait loop,
+loaded the lock's fields twice more on every lock and ran the commands that move many blocks
+1.3-1.6 % slower: the arrival is as it was.
+
+Since audit B74-B79 (counted the same way, before = 913e9fe): every workload above sends the same
+requests and blocks. A path call begins with a look at two of its task's flags (B79); a walk counts
+each lookup from before it, the same count moved (B77); reap() lets its count go after its frees
+(B75); a kill's new rule (B76) and the self test's new steps do not run in these workloads. On
+SurfCPU (913e9fe's kernel against this one, the same simulator and ROM): test-os-persist's write run
+and its reboot run 0.039 % more cycles, test-os-faults' full card 0.063 % more and its refusing card
+1.05 % fewer (the card-detect task meeting the card's removal at another look); SurfBoot loads a
+package 896 bytes larger (+0.12 million cycles), and each command is within -0.5 % and +0.6 % but
+for the pair of lines that moves in every round. Against 913e9fe padded to this kernel's layout
+(each object this round changed followed by as much code that never runs as it grew once linked,
+its data, the package as large): +0.002 %, -0.000 %, +0.16 % (the card-detect task's look) and
++0.003 %, a few hundred to a few thousand cycles a command (bcache-review.txt section 95).
+
+Since audit B80-B82 (counted the same way, before = e48f043): every workload above sends the same
+requests and blocks. Each VFS call on an open file (a read, a write, a readdir), statfs and sync
+now looks once at whether its task is killed (B81), as a path call did; the kill's marks and its
+log line (B80, B82) and the self test's new steps do not run in these workloads. On SurfCPU
+(e48f043's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.047 % more cycles, its reboot run 0.097 % more, test-os-faults' full card 0.111 % more and its
+refusing card 0.62 % fewer (the card-detect task meeting the card's removal at another look);
+SurfBoot loads a package 1.3 KB larger (+0.17 million cycles), and each command is within -0.7 %
+and +0.3 % but for the pair of lines that moves in every round. Against e48f043 padded to this
+kernel's layout (each object this round changed followed by as much code that never runs as it
+grew once linked, its data, the package as large): +0.009 %, +0.007 %, -1.6 % (the card-detect
+task's look) and +0.005 %, a few thousand cycles a command (cp 12,601 of its 117 million;
+bcache-review.txt section 102).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by

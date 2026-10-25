@@ -27,6 +27,28 @@ umount gives the changes up.
 they could not be written (written between eject's check and its unmount, or by the
 unmount itself, such as the clean-shutdown mark), and fail; eject then does not say
 "safe to remove".
+
+10/17/26 (audit B46): Ctrl+C, a kill or a hangup no longer makes them give anything up.
+An umount, once begun, finishes (fs/vfs.c). eject stops before it unmounts anything when
+its call is to end while it writes the mounts out, and says the disk stays mounted;
+once it unmounts, it finishes.
+
+10/18/26 (audit B51): eject's disk and its partitions stay busy for mount, mkfs and fdisk
+from its unmount phase to its end (vfs_unmount_begin()); mount, and eject itself, refuse
+a device that is being unmounted, and say so. (B58) From eject's first step: a mount
+during its write-out was taken in, then synced and dropped while it was mounted. (B54)
+An umount or eject that Ctrl+C reached and that finished all the same returns its own
+status, not 130: "safe to remove" and status 0 agree. (B60) fsbench says an error a
+write returned as that error, also with Ctrl+C pending, and a close whose write-out
+Ctrl+C cut short as interrupted.
+
+10/18/26 (audit B61): mkfs holds its device from the user's answer to its end
+(vfs_bdev_change_begin(), fs/vfs.c), the partition type's rewrite and a whole disk's
+rescan included: no mount or other task's request comes between its check and its
+writes, and a rescan that fails is said, with what to do, and fails mkfs (it was passed
+over). eject says when mkfs or fdisk holds the disk. (B65) fsbench says EIO from a close
+the device refused as an I/O error, Ctrl+C or not (vfs_close() says EINTR when its
+write-out was cut short).
 */
 
 #include <blibc_common.h>
@@ -117,7 +139,7 @@ static int set_type(struct bdev *d, const struct part_kind *k) {
     struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
     struct part_plan plan;
     struct part_io io;
-    char name[BDEV_NAME_LEN], why[128];
+    char name[BDEV_NAME_LEN], why[256];
     u_int index = d->part_index;
 
     strlcpy(name, d->name, sizeof(name));
@@ -141,13 +163,26 @@ static int set_type(struct bdev *d, const struct part_kind *k) {
     return -1;
 }
 
+/* 10/18/26 (audit B61): a whole disk mkfs wrote to, or began to (its old boot sector, block 0, goes first): read again,
+   so that the partitions SurfOS knows are those on it, and said when that fails; 0, or -1 after saying why */
+static int reread(struct bdev *d, int parts) {
+    int found = bdev_rescan(d);
+    if(found < 0) {
+        printf("    mkfs: %s could not be read again (%s): unplug it and plug it in again before you use it\n", d->name,
+               bdev_rescan_words(found));
+        return -1;
+    }
+    if(parts && !found) printf("    %s was read again: no partitions now\n", d->name);
+    return 0;
+}
+
 int cmd_mkfs(int argc, char **argv) {
     struct fat_layout l;
     struct part_kind kind;
     struct bdev *d, *p;
     char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1], question[160];
     const char *label, *t;
-    int bits = 0, i = 1, parts = 0;
+    int bits = 0, i = 1, parts = 0, bad;
     bool retype;
 
     if(argc > 1 && !strcmp(argv[1], "-t")) {
@@ -182,11 +217,26 @@ int cmd_mkfs(int argc, char **argv) {
     snprintf(question, sizeof(question), "    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
     shell_ask(question, line, sizeof(line));                 /* on the console, also when the output goes to a file */
     if(strcmp(line, d->name)) { printf("    Cancelled\n"); return CMD_FAIL; }
-    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return CMD_FAIL; }
+    if(vfs_bdev_change_begin(d, &t) != 0) {                  /* 10/18/26 (audit B61): the device is mkfs's from here to */
+        printf("    mkfs: %s: %s\n", d->name, bdev_busy_words(t));   /* its end (its partition type's fdisk too) */
+        return CMD_FAIL;
+    }
+    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) {
+        printf("    mkfs: %s: %s\n", d->name, msg);
+        if(!d->parent) reread(d, parts);                     /* (B61: its block 0 may be gone, its old partitions too) */
+        vfs_bdev_change_end(d);
+        return CMD_FAIL;
+    }
     printf("    %s: %s\n", d->name, msg);
-    if(retype) return set_type(d, &kind) ? CMD_FAIL : CMD_OK;
-    if(!d->parent && bdev_rescan(d) >= 0 && parts) printf("    %s was read again: no partitions now\n", d->name);
-    return CMD_OK;
+    if(retype) {
+        int r = set_type(d, &kind);
+        vfs_bdev_change_end(d);
+        return r ? CMD_FAIL : CMD_OK;
+    }
+    bad = d->parent ? 0 : reread(d, parts);                  /* a whole disk: read again (its old partitions go); 10/18/26
+                                                                (audit B61): a failure said, not passed over */
+    vfs_bdev_change_end(d);
+    return bad ? CMD_FAIL : CMD_OK;
 }
 
 /**** mount, umount, eject ****/
@@ -195,6 +245,7 @@ int cmd_mount(int argc, char **argv) {
     struct vfs_mount_view *v;
     char path[VFS_PATH_MAX];
     struct bdev *d;
+    const char *busy;
     int flags = 0, i = 1, r, n, total, j;
 
     if(argc == 1) {
@@ -212,14 +263,27 @@ int cmd_mount(int argc, char **argv) {
     if(!d) { printf("    mount: no block device '%s' (lsblk lists them)\n", argv[i]); return CMD_FAIL; }
     if(argc > i + 1) strlcpy(path, argv[i + 1], sizeof(path));
     else snprintf(path, sizeof(path), "/%s", d->name);
-    if(vfs_bdev_busy(d)) { printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name); return CMD_FAIL; }
+    busy = vfs_bdev_busy_why(d);                             /* 10/18/26 (audit B51, B56, B58): and why */
+    if(busy && !strcmp(busy, VFS_BUSY_MOUNTED)) {
+        printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name);
+        return CMD_FAIL;
+    }
+    if(busy) {
+        printf("    mount: %s, its disk or a partition of it is %s: try again once that has finished\n", d->name, busy);
+        return CMD_FAIL;
+    }
     if(d->protect || bdev_disk(d)->protect) {               /* the SurfOS boot drive is only ever read */
         printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
         flags |= MNT_RDONLY;
     }
-    r = vfs_mount_flags(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags);
+    r = vfs_mount_why(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags, &busy);   /* 10/18/26 (audit B68): probed */
     if(r == -EINVAL && argc <= i + 2) printf("    mount: %s: no file system found (mkfs makes one)\n", d->name);
-    else if(r == -EBUSY) printf("    mount: %s: something is mounted there already\n", path);
+    else if(r == -EBUSY && busy && !strcmp(busy, VFS_BUSY_PATH))              /* as the mount took the device: */
+        printf("    mount: %s: something is mounted there already\n", path);
+    else if(r == -EBUSY && busy && !strcmp(busy, VFS_BUSY_MOUNTED))           /* (B68: the look above may be stale) */
+        printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name);
+    else if(r == -EBUSY && busy)
+        printf("    mount: %s, its disk or a partition of it is %s: try again once that has finished\n", d->name, busy);
     else if(r) printf("    mount: %s: %s\n", d->name, strerror(r));
     else describe_mount(path);
     return r ? CMD_FAIL : CMD_OK;
@@ -242,16 +306,20 @@ static int unmount(const char *cmd, const char *path, u_int *lost) {
 int cmd_umount(int argc, char **argv) {
     char path[VFS_PATH_MAX];
     u_int lost = 0;
+    int r;
     if(argc != 2) { printf("    usage: umount <path|device>\n"); return CMD_USAGE; }
     if(argv[1][0] == '/' || !mount_of(argv[1], path, sizeof(path)))   /* a device name stands for its mount */
         strlcpy(path, argv[1], sizeof(path));
-    return unmount("umount", path, &lost) || lost ? CMD_FAIL : CMD_OK;
+    r = unmount("umount", path, &lost);
+    if(!r) task_interrupt_absorbed();                        /* 10/18/26 (B54): it finished: its own status, not 130 */
+    return r || lost ? CMD_FAIL : CMD_OK;
 }
 
 /* eject <disk>: every mount of the disk and its partitions goes (all of them, or none when one
    is busy), the cache and the disk's own cache are written out, and its blocks forgotten */
 int cmd_eject(int argc, char **argv) {
     struct vfs_mount_view *v;
+    const char *busy;
     struct bdev *d, *disk = NULL, *p;
     char paths[8][VFS_PATH_MAX], why[128];
     bool ro[8];
@@ -259,24 +327,35 @@ int cmd_eject(int argc, char **argv) {
     int r = 0, nv, total, j;
 
     if(argc != 2) { printf("    usage: eject <disk>   (usb0, or one of its partitions)\n"); return CMD_USAGE; }
-    if(!(v = mounts_now(&nv, &total))) return CMD_FAIL;
     d = bdev_find(argv[1]);
     if(d) disk = bdev_disk(d);
-    for(j = 0; j < nv && !disk; j++) {                       /* an unplugged disk is off the list: its mounts know it */
-        struct bdev *x = v[j].dev;
-        if(x && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
+    else {                                                   /* an unplugged disk is off the list: its mounts know it */
+        if(!(v = mounts_now(&nv, &total))) return CMD_FAIL;
+        for(j = 0; j < nv && !disk; j++) {
+            struct bdev *x = v[j].dev;
+            if(x && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
+        }
+        kfree(v);
     }
-    for(j = 0; j < nv && disk; j++) {
+    if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
+    fs_enter();                                              /* (B58: counted inside while it holds its disk, */
+    if(vfs_unmount_begin(disk, &busy) != 0) {                /* so a kill waits until it lets go of it) */
+        fs_leave();                                          /* 10/18/26 (audit B51, B58): the disk is this eject's from */
+        printf("    eject: %s or a partition of it is %s: try again once that has finished\n", disk->name, busy);
+        return CMD_FAIL;                                     /* here to its end: no mount of it comes in (B61: nor */
+    }                                                        /* while mkfs or fdisk holds it) */
+    if(!(v = mounts_now(&nv, &total))) { vfs_unmount_end(disk); fs_leave(); return CMD_FAIL; }
+    for(j = 0; j < nv; j++) {                                /* (listed once the disk is taken: B58) */
         if(v[j].dev && bdev_disk(v[j].dev) == disk && n < 8) {
             ro[n] = v[j].readonly;
             strlcpy(paths[n++], v[j].path, sizeof(paths[0]));
         }
     }
     kfree(v);
-    if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
     for(i = 0; i < n; i++) {
         if(vfs_busy(paths[i], why, sizeof(why)) == -EBUSY) {
             printf("    eject: %s: %s is busy: %s\n", disk->name, paths[i], why);
+            vfs_unmount_end(disk); fs_leave();
             return CMD_FAIL;
         }
     }
@@ -289,37 +368,52 @@ int cmd_eject(int argc, char **argv) {
             w = vfs_fsync(f);
             vfs_close(f);
         }
+        if(w == -EINTR) break;                               /* (B46: cut short, not refused: said below; B65: told
+                                                                apart by fsync's EINTR, a refusal said as one) */
         if(w) {
             printf("    eject: %s: %s could not be written: %s\n", disk->name, paths[i], strerror(w));
             r = w;
         }
     }
-    if(r) {
-        printf("    eject: %s stays mounted: sync tries the writes again; umount gives them up\n", disk->name);
+    if(task_interrupted()) {                                 /* 10/17/26 (B46): Ctrl+C, a kill: nothing unmounted yet */
+        printf("    eject: %s: interrupted: it stays mounted (eject it again)\n", disk->name);
+        vfs_unmount_end(disk); fs_leave();
         return CMD_FAIL;
     }
+    if(r) {
+        printf("    eject: %s stays mounted: sync tries the writes again; umount gives them up\n", disk->name);
+        vfs_unmount_end(disk); fs_leave();
+        return CMD_FAIL;
+    }
+    fs_finish_enter();                                       /* (B46: from here it finishes: no wait cut short) */
     for(i = 0; i < n && !r; i++) {
         r = unmount("eject", paths[i], &lost);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
-    if(r) return CMD_FAIL;
+    if(r) { vfs_unmount_end(disk); fs_leave(); fs_finish_leave(); return CMD_FAIL; }
     /* 10/16/26 (B10): what the disk's devices still had could not be written: given up, and said */
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); lost += bdirty_count(p); binvalidate(p); }
     bsync(disk);
     lost += bdirty_count(disk);
     binvalidate(disk);
-    if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return CMD_OK; }
-    if(lost) {                                               /* written after the check above, and refused */
+    if(disk->gone) {
+        printf("    %s: unmounted (it was unplugged already)\n", disk->name);
+        r = CMD_OK;
+    } else if(lost) {                                        /* written after the check above, and refused */
         printf("    eject: %s: %u changed block%s could not be written: check the disk elsewhere before trusting it\n",
                disk->name, lost, lost == 1 ? "" : "s");
-        return CMD_FAIL;
-    }
-    if(bdev_flush(disk) != 0) {
+        r = CMD_FAIL;
+    } else if(bdev_flush(disk) != 0) {
         printf("    eject: %s: the disk did not confirm that its cache was written (check it elsewhere)\n", disk->name);
-        return CMD_FAIL;
+        r = CMD_FAIL;
+    } else {
+        printf("    %s: safe to remove\n", disk->name);
+        r = CMD_OK;
     }
-    printf("    %s: safe to remove\n", disk->name);
-    return CMD_OK;
+    vfs_unmount_end(disk); fs_leave();
+    fs_finish_leave();
+    task_interrupt_absorbed();                               /* 10/18/26 (B54): it finished: its own status, not 130 */
+    return r;
 }
 
 /**** df, mv ****/
@@ -421,14 +515,19 @@ int cmd_fsbench(int argc, char **argv) {
     r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
     if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return CMD_FAIL; }
     for(off = 0; r == 0 && off < size; off += 4096) {
+        int w;
         pattern(buf, off, 4096);
-        if(vfs_write(f, buf, 4096) != 4096) r = -EIO;
-        else if(task_interrupted()) r = -EINTR;
+        w = vfs_write(f, buf, 4096);
+        if(w != 4096) r = w < 0 && w != -EINTR ? w                /* 10/18/26 (audit B60): an error is that error */
+                        : w == -EINTR || task_interrupted() ? -EINTR : -EIO;   /* (B53: a write Ctrl+C or a kill */
+        else if(task_interrupted()) r = -EINTR;              /* stopped is no I/O error) */
     }
     c = vfs_close(f);                                        /* close writes it out */
-    if(!r) r = c;
+    if(!r || (r == -EINTR && c && c != -EINTR)) r = c;      /* (B65: EINTR for a write-out cut short, else its error) */
     tw = (long)uptime_ms() - tw;
-    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); vfs_unlink(path); kfree(buf); kfree(want); return CMD_FAIL; }
+    if(r == -EINTR) printf("    fsbench: interrupted\n");
+    else if(r) printf("    fsbench: %s: %s\n", path, strerror(r));
+    if(r) { vfs_unlink(path); kfree(buf); kfree(want); return CMD_FAIL; }
     tr4 = bench_read(path, buf, want, size, 4096);
     tr64 = bench_read(path, buf, want, size, 65536);
     bcache_io_stats(&b);

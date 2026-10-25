@@ -39,6 +39,10 @@ typedef void (*kthread_fn)(void *arg);
                               a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
+#define TF_SYSTEM   0x80 /* 10/18/26 (audit B59): one of the kernel's own threads (a driver's, the network's): no kill
+                            reaches it (kill_task()). Killed at once outside any call, it left its driver's lock held
+                            (USB storage's in the hub thread's probe and poll, the SD card's in the card watch), and
+                            every later request to that device waited for good, an umount's too */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -63,7 +67,34 @@ typedef void (*kthread_fn)(void *arg);
     there are cut short like the others, so the call unwinds; when the kill that waited comes and
     the task is still inside (a device that takes its time), it comes as soon as the task leaves,
     and the kernel log says once that it waits. A kernel thread outside any call that is killed
-    inside one is marked the same way and killed as soon as it leaves.
+    inside one is marked the same way and killed as soon as it leaves (10/17/26, audit B48: unless
+    it has entered a call meanwhile, which then gets KILL_WAIT_MS as any call does: TI_NOCALL).
+    10/17/26 (audit B46, B47): a device request counts as inside (driver/bdev.c: a driver's lock or
+    transfer is never left half done), and so does a file system step that must finish once begun
+    (fs_finish: umount, eject's unmount, fs/vfs.c), whose waits are not cut short either: cut short,
+    an umount gave up changes the card would have taken and left a working card unclean.
+    10/18/26 (audit B73): nor while its call holds references to a mounted volume's vnodes (fs_refs,
+    fs/vfs.c: a path's walk, a file it opened and has not handed to its descriptor table): killed at
+    once in a wait there (for the volume's lock) it left them behind, and the volume could not be
+    unmounted until restart. A wait to read a terminal, a pseudo-terminal or a socket holds none.
+    10/19/26 (audit B76): a kill put off while the task held something does not come at once the
+    moment it has let go, which is where its own clean-up runs (a waiter's reap() freeing a dead
+    task, a spawn handing its files over, a command freeing its buffers): from that moment the task
+    has KILL_WAIT_MS to end its call (the kill comes at its end, task_call_leave()) or, a kernel
+    thread outside any call, to end by itself; only one still running then is killed at once (as
+    soon as it holds nothing, if it holds something again by then). (B79) The grace starts at the
+    task's next VFS path call holding nothing, if no look found it out before (task_vfs_begin());
+    and one still holding something when its grace has run out gets EINTR from every new path
+    call from then on, so that it soon holds nothing and is killed.
+    10/19/26 (audit B80, B81): the grace is owed to every task its kill finds holding something,
+    at the kill itself (it was owed only to one a look had seen holding: a thread that let go
+    before the first look, 20 ms after its kill, was killed at once there, and a call that let go
+    just before its KILL_WAIT_MS look at that look), and to a task that begins a VFS call after
+    its kill (it is to take something); and every VFS call begins so, a call on an open file too
+    (read, write, lseek, readdir, ftruncate, fsync, close), statfs and sync: a task working on a
+    file of its descriptor table reached no path call, and through a slow device it was found
+    holding something at every look. A close is never refused: it lets go. What the rule
+    guarantees, and what it does not: kernel/task.c, before kill_escalate().
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -72,6 +103,13 @@ typedef void (*kthread_fn)(void *arg);
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
 #define TI_FSWAIT   0x8  /* 10/17/26, intr: the kill that waited found it inside a file system (said once) */
+#define TI_NOCALL   0x10 /* 10/17/26 (audit B48), intr: killed outside any call, put off inside a file system */
+#define TI_HELD     0x20 /* 10/19/26 (audit B76), intr: the kill that waited found it holding something (in_fs()):
+                            10/19/26 (B80): the kill itself, a look, or a VFS call it began since: a grace is owed */
+#define TI_GRACE    0x40 /* 10/19/26 (audit B76), intr: ... and later found it let go: KILL_WAIT_MS to end (once) */
+#define TI_LATE     0x80 /* 10/19/26 (audit B79), intr: ... and found it holding something again at the grace's end:
+                            every new VFS call but a close says EINTR (task_vfs_begin(); B81: a call on an open file
+                            too), so that it is soon out and killed */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -146,9 +184,18 @@ typedef struct surf_task {
     struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies
                                    (10/17/26: fs/bcache.c's timed waits too) */
     u_int fs_hold;              /* 10/17/26 (audit B39): inside a file system or the block cache (above): the kill
-                                   that waited comes once it is 0 */
+                                   that waited comes once it is 0 (B47: or a device request) */
+    u_int fs_finish;            /* 10/17/26 (audit B46): inside a file system step that must finish (above): its
+                                   waits are not cut short */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
+    u_long kill_at;             /* 10/18/26 (audit B69): the tick its kill came (TI_KILL set): the kernel log says once,
+                                   KILL_WAIT_MS after it, that a kill is put off (kill_escalate()) */
+    u_int fs_refs;              /* 10/18/26 (audit B73): references to a mounted volume's vnodes its call holds, the
+                                   files of one it opened and has not handed to its descriptor table and those it is
+                                   closing (fs/vfs.c), and reap()'s of a dead task's: a kill that waited comes once it
+                                   is 0 too, as for fs_hold (kernel/task.c). Not a fault's wipeout (B56): what a task
+                                   killed there leaves keeps a volume mounted, and no lock held */
 } surf_task;
 
 extern surf_task *curTask;
@@ -187,6 +234,45 @@ void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the curre
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
+void task_interrupt_absorbed(void); /* 10/18/26 (audit B54): Ctrl+C reached a kernel command that finished all the same
+                                       (umount, eject): its status is its own, not 130 (task_call_leave()) */
+/* 10/17/26 (audit B39, B46): may the current task's waits in a file system be cut short: its call is to end (a kill,
+   Ctrl+C in a kernel command), and it is neither ending by itself (TC_EXIT: its files close and are written out) nor
+   in a step that must finish (fs_finish) */
+#define fs_cut_short() (curTask && curTask->intr && !(curTask->in_call & TC_EXIT) && !curTask->fs_finish)
+/* 10/17/26 (audit B39, B46, B47): the current task inside a file system, the block cache or a device request (a kill
+   that waited comes once it is out: kernel/task.c), and inside a step that must finish (its waits not cut short too) */
+static inline void fs_enter(void) { if(curTask) curTask->fs_hold++; }
+static inline void fs_leave(void) { if(curTask && curTask->fs_hold) curTask->fs_hold--; }
+static inline void fs_finish_enter(void) { if(curTask) { curTask->fs_hold++; curTask->fs_finish++; } }
+static inline void fs_finish_leave(void) {
+    if(!curTask) return;
+    if(curTask->fs_finish) curTask->fs_finish--;
+    if(curTask->fs_hold) curTask->fs_hold--;
+}
+/* 10/18/26 (audit B73): a reference to a mounted volume's vnode (or file) the current task's call holds, and its end */
+static inline void fs_ref(void) { if(curTask) curTask->fs_refs++; }
+static inline void fs_unref(void) { if(curTask && curTask->fs_refs) curTask->fs_refs--; }
+/* 10/19/26 (audit B76, B79): a VFS path call begins in the current task (fs/vfs.c's lookup_abs()). A kill of it that was
+   put off and finds it holding nothing here gives it its KILL_WAIT_MS from here (B76), as a look finding it out does; and
+   a task still holding something when that ran out gets -EINTR, nothing taken (B79). 0 to go on. 10/19/26 (audit B80,
+   B81): every VFS call begins here (a call on an open file, statfs and sync too; a close takes no refusal), and a killed
+   task that begins one is marked as one that holds something (TI_HELD): it is to take something */
+int task_vfs_begin_slow(void);
+static inline int task_vfs_begin(void) {
+    return curTask && (curTask->intr & TI_KILL) ? task_vfs_begin_slow() : 0;
+}
+/* 10/18/26 (audit B56): is t inside a file system, the block cache or a device request (counted, or holding the cache's
+   lock or its bounce buffer's): a fault there stops the system (kernel/panic.c, arch/riscv32/trap.c), since what t
+   holds there (a volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back. (B62) Or
+   holding a mutex: no kill at once comes then either (kernel/task.c) */
+bool task_in_fs(const surf_task *t);
+/* 10/18/26 (audit B62): which of the two: TASK_HOLDS_FS, TASK_HOLDS_LOCK (a mutex, kernel/sync.c, counted in
+   surf_task.mutexes with the console's lock, which does not count here: it is given back when its holder dies,
+   console_task_gone()), or 0 */
+#define TASK_HOLDS_FS   1
+#define TASK_HOLDS_LOCK 2
+int task_holds(const surf_task *t);
 surf_task *task_find(u_long pid);
 u_int task_count(void);
 u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */

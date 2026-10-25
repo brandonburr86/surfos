@@ -13,6 +13,20 @@ handler is a kernel wipeout.
 10/6/26: a kernel command run by the user shell keeps its output for a file while
 the shell's descriptor 1 is redirected (SYS_kcmd, console_capture_begin()); a fault
 report or a panic is never kept there, it goes to the screen.
+
+10/18/26 (audit B56): a fault in kernel mode while the task is inside a file system,
+the block cache or a device request (task_in_fs()) is a kernel wipeout too. Killed
+there, the task would leave behind what it held: a volume's lock, the cache's or its
+bounce buffer's, a driver's per-device lock (USB storage, ATA, the SD card hold theirs
+for the whole request), blocks marked as under a device's I/O, a copy's record on its
+stack; and the device may still carry out the request it was given. Nothing can give
+those back, and a later umount, mkfs or unplug would wait on them for good, or a late
+write would land on a volume mounted or made since. A program cannot get there: every
+pointer it passes is checked before the call reaches a file system (kernel/syscall.c).
+10/18/26 (audit B62): so is a fault while the task holds any mutex (surf_task.mutexes):
+a driver's thread holds its device's lock in its probes and polls outside any request
+(USB storage's hub thread, the SD card's watch), and the lock would stay with the dead
+thread for good, every later request to the device waiting for it.
 */
 
 #include <surfos/system.h>
@@ -53,15 +67,27 @@ void dump_trapframe(struct trapframe *tf) {
 u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
     char why[160];
     va_list ap;
+    bool inside;
+    u_int locks;
 
     va_start(ap, fmt);
     vsnprintf(why, sizeof(why), fmt, ap);
     va_end(ap);
 
-    if(!curTask || curTask->pid == 0 || in_interrupt()) { //a kernel exception.. beadd
+    inside = curTask && !(tf->cs & 3) && task_in_fs(curTask);  /* 10/18/26 (audit B56, B62): see the top of this file */
+    locks = curTask ? curTask->mutexes - (console_holds(curTask) ? 1u : 0u) : 0;   /* (before console_panic()) */
+    if(!curTask || curTask->pid == 0 || in_interrupt() || inside) { //a kernel exception.. beadd
         irq_disable();
         console_panic(); //whoever was drawing will not finish: the report must reach the screen, as plain text
         kprintf("\nKernel Wipeout: %s\n", why);
+        if(inside && task_holds(curTask) == TASK_HOLDS_LOCK)   /* (B62) */
+            kprintf("in '%s' (pid %lu) holding a lock (%u held): a lock a dead task holds is never let go of, and every\n"
+                    "task that waits for it would wait for good (a driver's lock: every request to its device)\n",
+                    curTask->name, curTask->pid, locks);
+        else if(inside)
+            kprintf("in '%s' (pid %lu) inside a file system, the block cache or a device request: what it held there (a\n"
+                    "volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back\n",
+                    curTask->name, curTask->pid);
         dump_trapframe(tf);
         backtrace(tf->ebp, tf->eip);
         kprintf("\nSYSTEM HALTED\n");

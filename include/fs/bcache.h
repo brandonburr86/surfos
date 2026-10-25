@@ -57,6 +57,8 @@ the task holds the cache's lock (bcache_holds()) or state of its own in it with 
 counted around device requests and copies; a file system counts its own calls: kernel/task.c).
 B40: binvalidate() drops as bdiscard() does. B41: a copy is spoiled only when its block changed since it was
 taken, and it is taken again as long as it takes (no bound: rm traffic alone no longer fails a sync).
+B56: round fs-fix-8's bound on a step that must finish (B50) is gone: a wait for another task's I/O lasts until the
+request ends (the drivers' timeouts bound it), and a fault inside the cache or a device request stops the system.
 */
 
 #ifndef _FS_BCACHE_H
@@ -144,7 +146,9 @@ bool bcache_holds(const struct surf_task *t);        /* 10/17/26 (B39): t has th
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache
    holds where it holds a block; a write updates the copies the cache holds (10/16/26, B15: once
    the device has the bytes; a refused write leaves the dirty ones as they were, and B22 drops the
-   clean ones: the device may have stored part of the request). 0 or BDEV_E*. */
+   clean ones: the device may have stored part of the request). 0 or BDEV_E*. 10/17/26 (B49): or BCACHE_EINTR, a
+   write whose wait for a block under another task's I/O a kill or Ctrl+C cut short (B39): that piece was not sent */
+#define BCACHE_EINTR (-5)               /* (no driver's: the drivers return BDEV_E*) */
 int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst);
 int bwrite_blocks(struct bdev *dev, u32 lba, u32 count, const void *src);
 int bzero_blocks(struct bdev *dev, u32 lba, u32 count);

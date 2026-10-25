@@ -241,6 +241,19 @@ long as it takes (each look waits for or writes something; a kill ends it).
 10/17/26 (audit B45): a change to a block whose drop was asked for (bdiscard(): its bytes were nobody's) starts its
 dirt again, with that change's order, set aside no more: a block set aside, read meanwhile, dropped, and written
 by its cluster's next owner before the reader let go stayed set aside, and nobody wrote it.
+
+10/17/26 (audit B46): no wait is cut short in a step that must finish (surf_task.fs_finish: umount, eject's
+unmount), whatever the task's call: cut short, an umount gave up what the card would take. (B49) A straight write
+(write_blocks()) whose wait is cut short returns BCACHE_EINTR, not BDEV_EIO: nothing was sent, nothing refused.
+
+10/18/26 (audit B56): round fs-fix-8's bound on those waits (B50) is gone. It gave up requests that were still
+under way: the 30 s ran from the step's first look, so they took in the time a request queued for a driver's lock or
+for the bounce buffer every device shares, and a driver may take longer than 30 s anyway. The umount then let the
+device go while the request went on, and a mount or mkfs after it took the late write. A wait for another task's
+I/O lasts until the request ends, however long the driver takes: its own timeouts and retries bound it (CODE-AUDIT
+B56 gives each driver's worst case). The request that never ends, that of a task a fault killed inside the cache or a
+device request, no longer happens: such a fault stops the system (kernel/panic.c, arch/riscv32/trap.c), since
+nothing could give back what that task held there.
 */
 
 #include <surfos/types.h>
@@ -478,9 +491,10 @@ static void discard_now(struct buf *b) {
 
 /* 10/17/26 (B39): is the calling task's call to end? A kill (TI_KILL) or, in a kernel command, Ctrl+C (TI_INT)
    cuts the cache's long waits short (surfos/task.h), so that the call gives up and unwinds; not while the task
-   ends by itself (TC_EXIT: its files are closing and written out, and no kill comes any more) */
+   ends by itself (TC_EXIT: its files are closing and written out, and no kill comes any more). 10/17/26 (B46): nor
+   in a step that must finish (fs_finish: umount, whose syncs cut short gave up changes the card would take) */
 static bool cut_short(void) {
-    return curTask && curTask != idle_task && curTask->intr && !(curTask->in_call & TC_EXIT);
+    return curTask != idle_task && fs_cut_short();
 }
 
 /* 10/17/26 (B39): what a kill at once (kernel/task.c's kill_escalate()) would leave behind here: the cache's lock or
@@ -1562,7 +1576,7 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
             if(p && (p->loading || p->writing || p->copying)) {
                 if(bsleep(0, true)) {           /* 10/17/26 (B39): (another task's copy may take long) cut short */
                     mutex_unlock(&bcache_lock);
-                    return BDEV_EIO;
+                    return BCACHE_EINTR;        /* (B49: the caller says EINTR, not EIO: nothing was refused) */
                 }
                 i = (u32)-1;
             }

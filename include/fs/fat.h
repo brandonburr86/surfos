@@ -6,7 +6,8 @@ File: fat.h     Date: 10/5/26 (USB storage)
 What the FAT driver (fs/fat.c) and its formatter (fs/fat_mkfs.c) offer
 besides the VFS: describing a device's FAT volume, and making a new one.
 fat_mkfs() obeys bdev_may_format() itself, whoever calls it; the shell's
-mkfs asks the user first (shell/fscmd.c).
+mkfs asks the user first (shell/fscmd.c). 10/18/26 (audit B61): and holds the
+device from that check to its end (vfs_bdev_change_begin(), fs/vfs.c).
 */
 
 #ifndef _FS_FAT_H

@@ -16,7 +16,12 @@
    item that fixes each: B27-B31, B22b) and of their fixes (B28c, B28d, B30b, B31b, B32).
    10/17/26 (round fs-fix-6): and those of the review of B34-B38 (its scenarios Q1-Q6, under the audit item
    that fixes each: B39-B45; a kill is made as kill_task() makes it, TI_KILL in a call, and BEFORE builds
-   them against 47fb4ec, which has no fs_hold).
+   them against 47fb4ec, which has no fs_hold). 10/17/26 (round fs-fix-7): and the review of B39-B45's R1 (B46, in a
+   form one task can run: its own form is test_fatconc's "umount" setting) and the fixes of its other findings (B49
+   here, B47 in test_mkfs.c); BEFORE builds of those use 3fe29bf. 10/18/26 (round fs-fix-8): and the review of
+   B46-B49's M3 (B50, an umount owing a block whose writer died inside the cache); BEFORE builds use b482ff1.
+   10/18/26 (round fs-fix-9): B50 taken out again, and the review of B50-B55's scenarios A-D in its place (B56, B57: an
+   umount waits for a write under way however long it takes); BEFORE builds use 3ce9600.
    Built like the kernel objects (tests/host/pager_shim for the interrupt flag) and run by `make
    unittest`; surfcpu/docs/evidence/os/bcache-review.txt has what each scenario found before and
    after the fixes. */
@@ -228,6 +233,9 @@ int bdev_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
 int bdev_flush(struct bdev *d) { return d->gone ? BDEV_EGONE : 0; }
 struct bdev *bdev_disk(struct bdev *d) { while(d && d->parent) d = d->parent; return d; }
 int bdev_may_format(struct bdev *d, char *why, size_t size) { (void)d; if(why && size) why[0] = 0; return 0; }
+int vfs_bdev_change_begin(struct bdev *d, const char **why) { (void)d; if(why) *why = NULL; return 0; }   /* (B61) */
+void vfs_bdev_change_end(struct bdev *d) { (void)d; }
+const char *bdev_busy_words(const char *busy) { return busy ? busy : ""; }
 
 /**** the VFS, as much as fat.c needs ****/
 
@@ -3778,6 +3786,303 @@ static void b45(void) {
     check(x->mem[300 * 512] == 'B' && r2 == 0, "B45 (Q6): the block written by its cluster's next owner reaches the card");
 }
 
+/**** round fs-fix-7: the review of B39-B45 (its scenario R1, here under the audit item that fixes it: B46) and the fixes
+      of its other findings (B47-B49) ****/
+
+#ifndef TI_NOCALL                                     /* (BEFORE builds against 3fe29bf: no step that must finish) */
+#define fs_finish_enter() ((void)0)
+#define fs_finish_leave() ((void)0)
+#endif
+
+/**** B46 (R1): Ctrl+C, a kill or a hangup during umount while another task's work on the volume's device is under way.
+      The umount's waits were cut short (B39), and vfs_umount_lost() went on all the same: it gave up changes the card
+      would have taken and left a working card marked as not cleanly unmounted (B42 then kept it so); fat_unmount()
+      counted the chains still waiting to be freed as lost. The review's R1 ran the umount inside another task's device
+      write (a sync's, or one making room for a reader of another disk), whose end a test with one task cannot wait for:
+      here the other task holds one of the volume's changed blocks instead and lets go of it once the umount has waited
+      for it a few times (the same wait, wait_for(), cut short the same way). R1 as the review wrote it, with threads, is
+      test_fatconc's "umount" setting, and the kernel's self test runs it with tasks (shell/selftest.c). Now an umount
+      that has begun finishes (fs_finish: fs/vfs.c, fs/fat.c): its waits are not cut short ****/
+
+static struct buf *b46_held;
+static int b46_yields, b46_released;
+static surf_task b46_t;
+static void b46_yield(void) {                        /* the other task lets go of its block at the umount's third look */
+    if(++b46_yields >= 3 && b46_held) { brelse(b46_held); b46_held = NULL; b46_released = 1; }
+}
+/* fs/vfs.c's vfs_umount_lost() once the mount is off the list: the changed blocks it gives up */
+static u_int b46_umount(struct superblock *sb, int *s1, int *s2) {
+    u_int gave_up;
+    fs_finish_enter();
+    *s1 = sb->ops->sync(sb);
+    *s2 = bsync(sb->dev);
+    vput(sb->root);
+    sb->ops->unmount(sb);
+    gave_up = bdirty_count(sb->dev);
+    binvalidate(sb->dev);
+    fs_finish_leave();
+    return gave_up;
+}
+static void b46(int mode) {
+    static const char *what[] = { "Ctrl+C (TI_INT, a kernel command)", "a kill (TI_KILL, a system call)",
+                                  "a hangup (TI_KILL and TI_HANGUP, in a call)", "the control: no interrupt",
+                                  "Ctrl+C in fat_unmount() alone, a chain waiting to be freed" };
+    struct ram *x = ram_new("b46", 8192);
+    struct superblock *sb, *sb2;
+    struct vnode *root, *v;
+    struct geo g;
+    static u8 a_now[4096];
+    int s1 = 0, s2 = 0, a_ok, b_ok, clean, unclean_said, lost_said, warns, hold_after;
+    u_int gave_up;
+    char title[160];
+    snprintf(title, sizeof(title), "B46 (R1): an umount interrupted while another task holds a changed block of the volume: %s", what[mode]);
+    fresh(title);
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 46);
+    fill(pat2, 65536, 47);
+    if(put_file(root, "a", pat, 4096) || fsync_sb(sb)) die("B46: setup");
+    if(mode == 4) {                                  /* an append cut back while the card refuses: its chain waits (B25) */
+        v = lookup(root, "a");
+        x->fail_all = 1;
+        if(!v || v->ops->write(v, 4096, pat, 8192) != -EIO) die("B46: the refused append");
+        x->fail_all = 0;
+        vput(v);
+    }
+    if(put_file(root, "b", pat2, 512)) die("B46: b");   /* changed, not written: b's block, its FAT entry, its entry */
+    b46_held = bread(&x->bd, clus_lba(&g, 2));       /* another task holds a's first block, changed */
+    if(!b46_held) die("B46: read");
+    b46_held->data[0] ^= 1;
+    bdirty(b46_held);
+    memcpy(a_now, pat, sizeof(a_now));
+    a_now[0] ^= 1;
+    b46_yields = b46_released = 0;
+    memset(&b46_t, 0, sizeof(b46_t));
+    if(mode == 0 || mode == 4) { b46_t.in_call = TC_COMMAND; b46_t.intr = TI_INT; }      /* task_interrupt_job() */
+    else if(mode == 1) { b46_t.in_call = TC_SYSCALL; b46_t.intr = TI_KILL; }             /* kill_task() */
+    else if(mode == 2) { b46_t.in_call = TC_SYSCALL; b46_t.intr = TI_KILL | TI_HANGUP; } /* kill_hangup() */
+    else b46_t.in_call = TC_COMMAND;
+    klog_len = 0; klog[0] = 0;
+    yield_hook = b46_yield;
+    curTask = &b46_t;
+    if(mode == 4) {                                  /* fat_unmount() as the first step: its own sync frees the chain */
+        vput(root);
+        sb->ops->unmount(sb);
+        gave_up = bdirty_count(&x->bd);
+        binvalidate(&x->bd);
+    } else gave_up = b46_umount(sb, &s1, &s2);
+    hold_after = FS_HOLD(curTask);
+    curTask = NULL;
+    yield_hook = NULL;
+    if(b46_held) { brelse(b46_held); b46_held = NULL; }   /* (a umount that did not wait for it) */
+    unclean_said = said("stays marked as not cleanly unmounted");
+    lost_said = said("could not be freed");
+    clean = (fat1(x, &g, 1) & 0x8000) != 0;
+    klog_len = 0; klog[0] = 0;
+    sb2 = mount(x);                                  /* the next mount: what the card holds */
+    warns = said("not unmounted cleanly");
+    a_ok = file_is(sb2->root, "a", a_now, 4096);
+    b_ok = file_is(sb2->root, "b", pat2, 512);
+    if(verbose) printf("      %s: the umount waited for the hold %d (looks %d); fs sync %d, bsync %d; %u changed blocks given up; said"
+                       " 'not cleanly unmounted' %d, 'could not be freed' %d; inside after %d; the card: clean bit %d, a %s, b %s; the next"
+                       " mount warns %d\n", what[mode], b46_released, b46_yields, s1, s2, gave_up, unclean_said, lost_said, hold_after,
+                       clean, a_ok ? "ok" : "BAD", b_ok ? "ok" : "MISSING", warns);
+    check(b46_released && gave_up == 0 && a_ok && b_ok && hold_after == 0, mode == 3 ? "B46 control: the umount writes everything" :
+          mode == 4 ? "B46 (R1): fat_unmount() interrupted waits for the hold and writes everything" :
+          "B46 (R1): an interrupted umount waits for the other task and gives up nothing the card takes");
+    check(clean && !unclean_said && !lost_said && !warns, mode == 3 ? "B46 control: the volume is marked clean" :
+          mode == 4 ? "B46 (R1): fat_unmount() interrupted frees the waiting chain (none counted lost) and marks the volume clean" :
+          "B46 (R1): an interrupted umount leaves a working card marked clean");
+    vput(sb2->root);
+    sb2->ops->unmount(sb2);
+    binvalidate(&x->bd);
+}
+
+/**** B49: a write stopped by a kill or Ctrl+C. A piece is one block through the cache, up to 64 KB straight to the device
+      (the comments said 64 KB for both; the review: a write of 2637 bytes at offset 678, killed, returned 346). A
+      straight write whose wait for a block under another task's I/O was cut short said EIO (bwrite_blocks() returned
+      BDEV_EIO), as if the card had refused it: now EINTR (BCACHE_EINTR; nothing of that piece was sent) ****/
+
+static surf_task b49_t;
+static struct vnode *b49_v;
+static int b49_w, b49_done;
+static u32 b49_lba;
+static void b49_hook(struct ram *r, u32 lba, u32 count) {   /* another task's sync writes f's first block: f's writer, killed */
+    surf_task *was = curTask;
+    (void)r;
+    if(b49_done || !(lba <= b49_lba && b49_lba < lba + count)) return;
+    b49_done = 1;
+    curTask = &b49_t;
+    memset(&b49_t, 0, sizeof(b49_t));
+    b49_t.in_call = TC_SYSCALL;
+    b49_t.intr = TI_KILL;
+    b49_w = b49_v->ops->write(b49_v, 0, pat2, 16384);    /* 32 blocks straight over it: its first piece */
+    curTask = was;
+}
+static void b49(void) {
+    struct ram *x = ram_new("b49", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    static u8 want[16384];
+    int w1, s, same;
+    fresh("B49: writes stopped by a kill: a piece through the cache, and a straight one cut short in its wait");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 49);
+    fill(pat2, 65536, 50);
+    if(put_file(root, "f", pat, 16384) || fsync_sb(sb)) die("B49: setup");   /* clusters 2-33, one after the other */
+    v = lookup(root, "f");
+    if(!v) die("B49: f");
+    memset(&b49_t, 0, sizeof(b49_t));
+    b49_t.in_call = TC_SYSCALL;
+    b49_t.intr = TI_KILL;                            /* killed before it began: its first piece goes, then it stops */
+    curTask = &b49_t;
+    w1 = v->ops->write(v, 678, pat2, 2637);
+    curTask = NULL;
+    memcpy(want, pat, sizeof(want));
+    if(w1 > 0) memcpy(want + 678, pat2, (u32)w1);
+    if(v->ops->write(v, 0, (const u8 *)"Z", 1) != 1) die("B49: Z");   /* f's first block changed, through the cache */
+    want[0] = 'Z';
+    b49_v = v;
+    b49_lba = clus_lba(&g, 2);
+    b49_done = 0;
+    b49_w = 1;
+    x->hook = b49_hook;
+    s = bsync(&x->bd);                               /* another task's sync: the block under its write meanwhile */
+    x->hook = NULL;
+    vput(v);
+    same = file_is(root, "f", want, sizeof(want));
+    if(verbose) printf("      killed before it began, a write of 2637 bytes at 678 wrote %d; killed in a straight write's wait for a"
+                       " block under another task's write: %d; the sync %d; f holds what the writes said %d\n", w1, b49_w, s, same);
+    check(w1 == 346, "B49: a killed write stops after its first piece, one block through the cache (346 of 2637 bytes at offset 678)");
+    check(b49_done && b49_w == -EINTR && s == 0 && same,
+          "B49: a straight write cut short in its wait says EINTR (not EIO), wrote nothing, and the file is what the writes said");
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
+/**** round fs-fix-8: the review of B46-B49 (its scenarios M1-M5: M1 confirmed B47's messages at every cut; M2 and M5
+      are B51's, in fs/vfs.c, which the kernel's self test runs; M4 is B53's, in the shells, run there too) and M3, the
+      fix of which (B50: an umount gave up a block whose writer had died inside the cache after 30 s) round fs-fix-9
+      took out again (B56, below) ****/
+
+/**** round fs-fix-9: the review of B50-B55 (its scenarios A-D, rev9.c, with threads), here in a form one task can run,
+      under the audit items that fix them: B56, B57 ****/
+
+/**** B56 (A-D): an umount (a step that must finish, B46) owes a block under another task's write that takes long (a USB
+      stick's write can take minutes with its timeouts and retries). Round fs-fix-8 (B50) gave such a write up after
+      bcache_overdue_ms (30 s) as if its task had died: the umount said "write errors", left the volume unclean and let
+      the device go while the write was still under way, and (B57) the blocks it gave up stayed owed until reboot: the
+      card could not be mounted again. Now no task dies inside the cache (a fault there stops the system: B56), so a
+      write under way always ends, and the umount waits for it however long it takes. Here the umount runs inside the
+      other task's device write (as another task would run then) and the clock moves 1 s at each of its looks: after
+      20000 looks (5 1/2 hours) it still waits, and is stopped there by a longjmp() (one task cannot wait on). The
+      write ends, and the umount is run again (the first one was stopped in its sync, before it unmounted anything): it
+      writes everything, gives nothing up, leaves the volume clean, and the device owes nothing ****/
+
+/* the host's setjmp()/longjmp(), declared by hand (-nostdinc); a buffer larger than any host's jmp_buf */
+typedef long b56_jmp_buf[64];
+int setjmp(long *env) __attribute__((returns_twice));
+void longjmp(long *env, int v) __attribute__((noreturn));
+static b56_jmp_buf b56_stuck;
+static surf_task b56_o, b56_u, b56_u2;
+static struct superblock *b56_sb;
+static int b56_in, b56_stuck_at, b56_yields, b56_s1, b56_s2;
+static u_int b56_gave;
+static u32 b56_lba;
+static u_long b56_began, b56_ended;
+static void b56_yield(void) {                        /* one of the umount's looks: a second goes by */
+    clock_ms += 1000;
+    if(++b56_yields >= 20000) longjmp(b56_stuck, 1);
+}
+static int __attribute__((noinline)) b56_umount(void) {
+    if(setjmp(b56_stuck)) return 1;                  /* it still waits */
+    b56_gave = b46_umount(b56_sb, &b56_s1, &b56_s2);
+    return 0;
+}
+static void b56_hook(struct ram *r, u32 lba, u32 count) {   /* the other task's write of b's block is under way */
+    (void)r;
+    if(b56_in || !(lba <= b56_lba && b56_lba < lba + count)) return;
+    b56_in = 1;
+    memset(&b56_u, 0, sizeof(b56_u));
+    b56_u.in_call = TC_COMMAND;
+    b56_u.intr = TI_INT;                             /* Ctrl+C (a kill, a hangup: the same here) */
+    b56_yields = 0;
+    b56_began = clock_ms;
+    yield_hook = b56_yield;
+    curTask = &b56_u;
+    b56_stuck_at = b56_umount();
+    b56_ended = clock_ms;
+    curTask = &b56_o;
+    yield_hook = NULL;
+}
+/* a mount that may fail (the harness's mount() stops the run then) */
+static struct superblock *b56_mount(struct ram *r) {
+    struct superblock *sb = (struct superblock *)calloc(1, sizeof(*sb));
+    sb->type = fat;
+    sb->dev = &r->bd;
+    mutex_init(&sb->lock, "fat");
+    if(fat->mount(sb) != 0) { free(sb); return NULL; }
+    return sb;
+}
+static void b56(void) {
+    struct ram *x = ram_new("b56", 8192);
+    struct superblock *sb2;
+    struct geo g;
+    int s1b = -9, s2b = -9, synced, errors_said, clean, files;
+    u_int gave2 = 99, owed;
+    fresh("B56 (A-D): an interrupted umount owes a block under another task's write that takes hours");
+    mkfs(x);
+    b56_sb = mount(x);
+    geometry(x, &g);
+    fill(pat, 65536, 56);
+    fill(pat2, 65536, 57);
+    if(put_file(b56_sb->root, "a", pat, 4096) || fsync_sb(b56_sb)) die("B56: setup");
+    if(put_file(b56_sb->root, "b", pat2, 512)) die("B56: b");   /* changed, not written: b's block, its FAT entry, its entry */
+    b56_lba = clus_lba(&g, 2 + 8);                   /* b's block (a has clusters 2-9) */
+    b56_in = 0;
+    b56_stuck_at = -1;
+    b56_gave = 0;
+    memset(&b56_o, 0, sizeof(b56_o));
+    b56_o.in_call = TC_SYSCALL;
+    klog_len = 0; klog[0] = 0;
+    x->hook = b56_hook;
+    curTask = &b56_o;
+    synced = bsync(NULL);                            /* `sync` on another console: the umount runs in its write of b */
+    curTask = NULL;
+    x->hook = NULL;
+    if(!b56_in) die("B56: the other task's write");
+    errors_said = said("write errors");
+    if(b56_stuck_at == 1) {                          /* the umount again, now that the write has ended */
+        memset(&b56_u2, 0, sizeof(b56_u2));
+        b56_u2.in_call = TC_COMMAND;
+        curTask = &b56_u2;
+        gave2 = b46_umount(b56_sb, &s1b, &s2b);
+        curTask = NULL;
+        errors_said += said("write errors");
+    }
+    owed = bdirty_count(&x->bd);
+    clean = (fat1(x, &g, 1) & 0x8000) != 0;
+    sb2 = b56_mount(x);                              /* the next mount: what the card holds */
+    files = sb2 && file_is(sb2->root, "a", pat, 4096) && file_is(sb2->root, "b", pat2, 512);
+    if(sb2) { vput(sb2->root); sb2->ops->unmount(sb2); binvalidate(&x->bd); }
+    if(verbose) printf("      the umount %s after %d looks (%lu s of the clock), having given up %u changed blocks; the other task's"
+                       " sync %d; the umount again: fs sync %d, bsync %d, %u given up; 'write errors' said %d; the card's clean"
+                       " bit %d; the device owes %u blocks; the next mount %s, a and b %s\n",
+                       b56_stuck_at == 1 ? "STILL WAITED" : "returned", b56_yields, (b56_ended - b56_began) / 1000, b56_gave,
+                       synced, s1b, s2b, gave2, errors_said, clean, owed, sb2 ? "works" : "FAILS", files ? "intact" : "NOT");
+    check(b56_stuck_at == 1 && b56_gave == 0,
+          "B56 (A): an interrupted umount waits for another task's write under way, however long (hours): it gives nothing up meanwhile");
+    check(b56_stuck_at == 1 && synced == 0 && s1b == 0 && s2b == 0 && gave2 == 0 && errors_said == 0 && clean,
+          "B56 (B): once the write has ended the umount writes everything, gives nothing up, leaves the volume clean");
+    check(owed == 0 && sb2 && files, "B57 (D): the device owes nothing afterwards, and the card mounts again with a and b on it");
+}
+
 int main(int argc, char **argv) {
     const char *only = argc > 1 ? argv[1] : NULL;
     verbose = getenv("FATFS_VERBOSE") != NULL;
@@ -3859,6 +4164,9 @@ int main(int argc, char **argv) {
     RUN("b43", b43());
     RUN("b44", b44());
     RUN("b45", b45());
+    RUN("b46", b46(0); b46(1); b46(2); b46(3); b46(4));
+    RUN("b49", b49());
+    RUN("b56", b56());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -250,12 +250,52 @@ own writing out, fail on a card that takes every write: it waits until they paus
 
 **Stopping a command.** Ctrl+C, or a `kill` of the program, while it waits on the card (for a block
 another program holds, or for another program's write) ends the wait at once: the command fails
-with `I/O error`, and what it had not written stays in memory for the next `sync`; one writing or
-reading a large piece stops at the next 64 KiB (it wrote what it says). One in the middle of the
-card's own write ends when that write does (a card that stops answering times out), and one in the
-middle of changing a folder or the FAT finishes that change first: stopped at once there, it left the card
-locked for every other program and SurfOS's records of its writes in a mess (since 2026-10-17). A
-program that is ending by itself still writes its files out.
+(`I/O error` from a `sync`, `Interrupted system call` from a write and from a file's closing, which
+writes the file out: since 2026-10-18, when it said `I/O error` there as a refusing card does), and
+what it had not written stays in memory for the next `sync`. A card that refused a write is said as
+`I/O error`, Ctrl+C or not (`cp: close: I/O error`: `cp` says `interrupted while they were written
+out (sync writes the rest)` only when the card refused nothing, and an error reading the file it
+copies as that error, since 2026-10-18).
+One reading or writing a large file stops before its next piece
+and says how much it did (it wrote what it says: `cp` says `cp: cut short after N bytes: <file> is
+incomplete`, and `fsbench` says `fsbench: interrupted`, since 2026-10-18; before, `cp` said `short
+write`, its message for a full card, and `fsbench` `I/O error`; and a full or refusing card is said
+as that, Ctrl+C or not, `cp: write: No space left on device` or `I/O error`, N counts every byte
+written, and a copy whose last piece went whole is complete, `N bytes copied` with status 0, since
+later that day): a piece is one 512-byte block where the bytes go through SurfOS's cache, up to 64
+KiB where they go straight to the card (until 2026-10-17 this said 64 KiB for both). One in the
+middle of a request to the card (a write of its own, or `mkfs` and `fdisk` writing the card
+directly) ends when that request does (a card that stops answering times out), and one in the middle
+of changing a folder or the FAT finishes that change first: stopped at once there, it left the card
+locked for every other program and SurfOS's records of its writes in a mess (since 2026-10-17).
+`mkfs` stopped says how far it got (`interrupted at sector ...`: the card holds no usable file
+system then, so make it again) or that it wrote nothing. `umount`, and `eject` once it unmounts, are
+not stopped: they finish as they would have and give up nothing the card takes (until 2026-10-17,
+Ctrl+C or a `kill` then gave changes up and left a working card marked as not cleanly unmounted),
+and their status is then their own: 0 after `safe to remove` (until 2026-10-18 it was 130, the
+status of a command Ctrl+C cut short). They wait for another program's write to the card as long as
+it takes: the card's driver ends every request on its own (it waits at most 500 ms for the card
+before a command and after each block it writes, so a 64 KiB write takes at most about a minute),
+and a fault inside SurfOS while a program is in the middle of the card's file system or of a request
+to the card stops SurfOS (`Kernel Wipeout`, `inside a file system`) rather than leave the card
+locked (since 2026-10-18; earlier that day they gave such a write up after 30 seconds, and the write
+could then land on the card after it was formatted again). So does a fault while a task holds one of
+SurfOS's locks, the card watch holding the card's while it starts a card or sees one taken out
+(`holding a lock`), and a `kill` of a program holding one waits until it lets go; programs waiting
+for the card take their turns in the order they came (both since later on 2026-10-18; before, one
+program's stream of requests could keep another waiting for as long as it went on).
+While a card is being unmounted, `mount`,
+`eject` and `sdmode` refuse it and say it `is being unmounted`: type the command again once the
+umount has finished (since 2026-10-18; before, they could take the card while the umount still wrote
+to it, and `eject` could say `safe to remove` too soon); `lsblk` shows it as `being unmounted`.
+`mount` and `sdmode` refuse it as well while it is being mounted (`being mounted`) or a request to
+it has not ended (`in the middle of a request`), and `eject` holds the card from its first step: a
+`mount` typed while `eject` still writes the card out is refused (since 2026-10-18). `eject` stopped
+while it still writes the card's files out unmounts nothing and says `interrupted: it stays
+mounted`: type it again. A program that is ending by itself still writes its files out. SurfOS's own
+tasks (`sdwatch`, which watches the card slot) cannot be killed: `kill` says so (since 2026-10-18;
+before, a `kill` of it while it held the card's lock left every later request to the card waiting
+for good).
 
 If a failed `mv`, `rm`, `mkdir` or truncation cannot be undone (the card refuses to read back,
 in the middle of putting things back, a block the command had changed; a block it could not read
