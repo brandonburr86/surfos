@@ -2309,9 +2309,7 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
             m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
-        # 10/25/26: 120 s (it was 45): behind QEMU's user network the host's socket can take megabytes before the
-        # guest's send buffer fills, and in the Docker toolchain (x86 emulated) the guest makes them slowly
-        stalled, deadline = False, time.time() + 120    # seconds here; the server ends no session for a stall
+        stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
         while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
             start = len(q.transcript)
             q.send('netstat\n')
