@@ -32,6 +32,11 @@ Command substitution: the command's output, its newlines at the end taken off (e
 it: a plain program by itself, anything else in a new surfsh). $(( ... )): the text is
 expanded first, then worked out as arith.c says. A here-document's text has the same
 expansions, with its quotes taken as they are and a \ before $ ` \ or a newline only.
+
+10/25/26: a quote that gives nothing ("", '', "$empty") begins a field where it is, which
+splitting keeps even when it stays empty (""$x of x=" a" is "" and a). ${ } inside ${ } goes
+DEPTH_LIMIT deep at most; ${#name} of a name longer than any is an error; the value of
+${name#pattern} is taken before the pattern expands, which may change it ($((x=1)), ${x:=y}).
 */
 
 #include "surfsh.h"
@@ -45,6 +50,8 @@ struct xw {
     char *f;
     int fcap;
     int quoted;                     /* a quote was in it: when nothing else is, it is an empty field */
+    int *marks, nmarks, markcap;    /* 10/25/26: where a quote that gave nothing ("", '', "$empty") was:
+                                       a field begins there, which splitting keeps even when empty */
 };
 
 struct ex {
@@ -89,7 +96,17 @@ static void xw_put(struct xw *w, const char *s, int n, int flag) {
 static void xw_free(struct xw *w) {
     sb_free(&w->s);
     free(w->f);
+    free(w->marks);
     memset(w, 0, sizeof(*w));
+}
+
+/* 10/25/26: a quote that gave nothing ends here, at the piece's end so far */
+static void xw_mark(struct xw *w) {
+    if(w->nmarks == w->markcap) {
+        w->markcap = w->markcap ? w->markcap * 2 : 4;
+        w->marks = xrealloc(w->marks, (size_t)w->markcap * sizeof(int));
+    }
+    w->marks[w->nmarks++] = w->s.len;
 }
 
 /* the piece made so far is a field of its own ("$@"): a new one begins */
@@ -245,11 +262,33 @@ static int word_of(struct ex *e, const char *word, int wlen, int dq) {
 }
 
 /* ${ ... }: w[0 .. len) is what is between the braces */
+static int braced_in(struct ex *e, const char *w, int len, int dq);
+
+/* 10/25/26: ${ } inside ${ } goes through braced() again: at most DEPTH_LIMIT of them */
 static int braced(struct ex *e, const char *w, int len, int dq) {
+    static int depth;
+    int r;
+    if(depth >= DEPTH_LIMIT) {
+        char n[16];
+        snprintf(n, sizeof(n), "%d", DEPTH_LIMIT);
+        return fail(e, "${ } inside each other: at most %s", n, NULL);
+    }
+    depth++;
+    r = braced_in(e, w, len, dq);
+    depth--;
+    return r;
+}
+
+static int braced_in(struct ex *e, const char *w, int len, int dq) {
     char name[WORD_LIMIT + 1], op[3] = "";
     const char *v, *word;
     int n, wlen, is_set, colon = 0;
     if(len > 1 && w[0] == '#' && param_name(w + 1, len - 1) == len - 1) {     /* ${#name} */
+        if(len - 1 > WORD_LIMIT) {                  /* 10/25/26: no name is that long */
+            char what[WORD_LIMIT + 8];
+            snprintf(what, sizeof(what), "%.*s", WORD_LIMIT, w);
+            return fail(e, "${%s}: not a parameter", what, NULL);
+        }
         memcpy(name, w + 1, (size_t)(len - 1));
         name[len - 1] = 0;
         if(!strcmp(name, "@") || !strcmp(name, "*")) snprintf(numbuf, sizeof(numbuf), "%d", npos);
@@ -296,12 +335,13 @@ static int braced(struct ex *e, const char *w, int len, int dq) {
     }
     if(op[0] == '#' || op[0] == '%') {             /* the value without what the pattern matches */
         struct ex x;
-        char *r;
+        char *r, *val = xstrdup(v ? v : "");        /* 10/25/26: the pattern may change it ($((x=1)), ${x:=y}) */
         memset(&x, 0, sizeof(x));
         expand_part(&x, word, wlen, 0, 0);
         join_pieces(&x);
         if(x.failed) {
             xw_free(&x.cur);
+            free(val);
             e->failed = 1;
             return -1;
         }
@@ -309,9 +349,10 @@ static int braced(struct ex *e, const char *w, int len, int dq) {
             char *q = xmalloc((size_t)x.cur.s.len + 1);
             int i;
             for(i = 0; i < x.cur.s.len; i++) q[i] = x.cur.f[i] == XF_QUOTED;
-            r = trim(v ? v : "", op, sb_str(&x.cur.s), q, x.cur.s.len);
+            r = trim(val, op, sb_str(&x.cur.s), q, x.cur.s.len);
             free(q);
         }
+        free(val);
         put_value(e, r, dq);
         free(r);
         xw_free(&x.cur);
@@ -446,14 +487,18 @@ static int expand_part(struct ex *e, const char *w, int len, int dq, int doc) {
             while(end < len && w[end] != '\'') end++;
             xw_put(&e->cur, w + i + 1, end - i - 1, XF_QUOTED);
             e->cur.quoted = 1;
+            if(end == i + 1) xw_mark(&e->cur);
             i = end < len ? end + 1 : end;
         } else if(c == '"' && !dq) {
-            int end = word_skip(w, i);
+            int end = word_skip(w, i), raw = e->nraw, at = e->cur.s.len, field = 1;
             if(end > len) end = len;
             if(!(!npos && ((end - i - 2 == 2 && !memcmp(w + i + 1, "$@", 2)) ||
                            (end - i - 2 == 4 && !memcmp(w + i + 1, "${@}", 4)))))
                 e->cur.quoted = 1;                  /* "$@" of no parameters is no field */
+            else
+                field = 0;
             expand_part(e, w + i + 1, end - i - 2 > 0 ? end - i - 2 : 0, 1, 0);
+            if(field && e->nraw == raw && e->cur.s.len == at) xw_mark(&e->cur);
             i = end;
         } else if(c == '\\') {
             if(i + 1 >= len) {
@@ -505,11 +550,12 @@ static void emit(struct xw *field, struct fields *out) {
 static void split_glob(struct xw *w, struct fields *out) {
     const char *set = ifs(), *s = sb_str(&w->s);
     char *f = w->f;
-    int n = w->s.len, i = 0, made = 0;
+    int n = w->s.len, i = 0, made = 0, m = 0, begun = 0;
     struct xw field;
     memset(&field, 0, sizeof(field));
 #define SPLITS(k) ((f[k] & XF_SPLIT) && in(set, s[k]))
 #define BLANK_AT(k) (SPLITS(k) && in(" \t\n", s[k]))
+#define MARK_AT(k) (m < w->nmarks && w->marks[m] == (k))  /* 10/25/26: an empty quote: a field begins */
     if(!*set) {                                     /* IFS empty: nothing is split */
         if(n || w->quoted) {
             xw_put(&field, s, n, 0);
@@ -519,31 +565,42 @@ static void split_glob(struct xw *w, struct fields *out) {
         xw_free(&field);
         return;
     }
-    while(i < n && BLANK_AT(i)) i++;
+    while(i < n && BLANK_AT(i) && !MARK_AT(i)) i++;
     while(i < n) {
         int other = 0;
-        while(i < n && !SPLITS(i)) {
+        for(;;) {
+            while(MARK_AT(i)) {
+                m++;
+                begun = 1;
+            }
+            if(i == n || SPLITS(i)) break;
             xw_put(&field, s + i, 1, f[i]);
             i++;
         }
         if(i == n) break;
-        while(i < n && BLANK_AT(i)) i++;
-        if(i < n && SPLITS(i) && !BLANK_AT(i)) {
+        while(i < n && BLANK_AT(i) && !MARK_AT(i)) i++;
+        if(i < n && SPLITS(i) && !BLANK_AT(i) && !MARK_AT(i)) {
             other = 1;
             i++;
-            while(i < n && BLANK_AT(i)) i++;
+            while(i < n && BLANK_AT(i) && !MARK_AT(i)) i++;
         }
-        if(field.s.len || other) {
+        if(field.s.len || other || begun) {
             emit(&field, out);
             made++;
         }
+        begun = 0;
     }
-    if(field.s.len) {
+    while(MARK_AT(n)) {
+        m++;
+        begun = 1;
+    }
+    if(field.s.len || begun) {
         emit(&field, out);
         made++;
     }
 #undef SPLITS
 #undef BLANK_AT
+#undef MARK_AT
     if(!made && w->quoted) fields_take(out, xstrdup(""));      /* "" and "$x" of an empty x */
     xw_free(&field);
 }

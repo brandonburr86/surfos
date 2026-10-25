@@ -211,7 +211,12 @@ char **var_environ(char **extra, int nextra) {
     for(v = vars; v; v = v->next) if((v->flags & V_EXPORT) && v->value) n++;
     env = xmalloc((size_t)(n + nextra + 1) * sizeof(char *));
     n = 0;
-    for(i = 0; i < nextra; i++) env[n++] = xstrdup(extra[i]);
+    for(i = 0; i < nextra; i++) {                   /* 10/25/26: x=1 x=2 prog: the last one of a name */
+        const char *eq = strchr(extra[i], '=');
+        size_t len = eq ? (size_t)(eq - extra[i]) : strlen(extra[i]);
+        for(k = i + 1; k < nextra && !(!strncmp(extra[k], extra[i], len) && extra[k][len] == '='); k++);
+        if(k == nextra) env[n++] = xstrdup(extra[i]);
+    }
     for(v = vars; v; v = v->next) {
         size_t len;
         if(!(v->flags & V_EXPORT) || !v->value) continue;

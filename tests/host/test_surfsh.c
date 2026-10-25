@@ -7,8 +7,9 @@
    functions' definitions (10/25/26). Then words become fields: quotes,
    backslashes, $?, a here-document's text; variables, splitting at IFS, the positional parameters and
    "$@", every ${ } form, $(( )) (arith.c, also directly) and $( ) (exec.c's side stands in), and
-   wildcards over a tree of names (glob.c); test and [ (test.c) and printf (printf.c), 10/25/26. Run by
-   `make unittest`. */
+   wildcards over a tree of names (glob.c); test and [ (test.c) and printf (printf.c), 10/25/26; and the
+   limits a review asked for: ${ } inside ${ }, a long ${#name}, printf's widths, an empty quote's field,
+   a pattern that changes its own variable. Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "surfsh_sim.h"
@@ -151,6 +152,12 @@ static void test_errors(void) {
     strcat(pipe, "\n");
     fails(pipe, SH_ERROR, "commands in a pipeline: at most 16", "a pipeline too long");
     check(sh_parse("a\nb\n{ c\n", out, sizeof(out), NULL) == SH_OK, "a mistake later in the text is for later");
+    strcpy(deep, "echo ");                                  /* 10/25/26: ${ } inside ${ }, with no end */
+    for(i = 0; i < 70; i++) strcat(deep, "${a:-");
+    strcat(deep, "x");
+    for(i = 0; i < 70; i++) strcat(deep, "}");
+    strcat(deep, "\n");
+    fails(deep, SH_ERROR, "${ } and $(( )) inside each other: at most 64", "${ } too deep");
     sh_parse("a |\n\n\nb (\n", out, sizeof(out), NULL);
     check(sh_err_line() == 4, "the line of a mistake");
 }
@@ -293,6 +300,25 @@ static void test_parameters(void) {
     sh_set_var("IFS", "");
     expands("$sp", "a  b c|", "IFS empty: nothing is split");
     sh_set_var("IFS", NULL);
+    /* 10/25/26: a quote that gives nothing begins a field where it is, which splitting keeps */
+    sh_set_var("lb", " a");
+    sh_set_var("tb", "a ");
+    expands("\"\"$lb", "|a|", "\"\" before a value that begins with a blank: an empty field, then a");
+    expands("$tb''", "a||", "'' after a value that ends with a blank: a, then an empty field");
+    expands("$tb\"$e\"$lb", "a||a|", "\"$e\" between two blanks: a field of its own");
+    expands("$lb\"$e\"", "a|", "... but against a character it is part of that field");
+    expands("a\"\"b''c", "abc|", "inside a word it is nothing");
+    sh_set_var("ux", "abc");
+    expands("${ux#$((ux=1))}.$ux", "abc.1|", "a pattern that changes the variable: the value from before it");
+    sh_set_var("ux", "");
+    expands("\"${ux%${ux:=y}}\".$ux", ".y|", "... ${x:=y} in the pattern of an empty x");
+    {
+        char longname[400] = "${#";
+        int i;
+        for(i = 0; i < 300; i++) strcat(longname, "a");
+        strcat(longname, "}");
+        check(sh_expand(longname, out, sizeof(out)) < 0, "${#name} of a name longer than any: an error, nothing overrun");
+    }
     sh_set_args(3, args);
     expands("$#.$1.${2}", "3.a.b|c|", "$# $1 ${2}");
     expands("\"$@\"", "a|b c||", "\"$@\": a field each, the empty one too");
@@ -496,7 +522,8 @@ static void test_printf(void) {
         *const a9[] = { "%d|", "'A", NULL }, *const a10[] = { "%d|%s|", NULL }, *const a11[] = { "%d|", "12abc", NULL },
         *const a12[] = { "100%%\\101\\n", NULL }, *const a13[] = { "%*d|%.*s|", "4", "7", "2", "abc", NULL },
         *const a14[] = { "%q", "x", NULL }, *const a15[] = { "no conversions\\n", "extra", NULL },
-        *const a16[] = { "%s\\n", "one", "two", NULL };
+        *const a16[] = { "%s\\n", "one", "two", NULL }, *const a17[] = { "%1500000000s", "x", NULL },
+        *const a18[] = { "%.99999999d|", "1", NULL }, *const a19[] = { "%*s|", "65537", "x", NULL };
     prints(a1, "a\tb\n", 0, "\\t \\n in the format");
     prints(a2, "x-y|z-|", 0, "the format again for the arguments left, a missing one empty");
     prints(a3, "   ab|cd   |ef|", 0, "width, -, precision");
@@ -513,6 +540,9 @@ static void test_printf(void) {
     prints(a14, "", 2, "%q: no conversion, status 2");
     prints(a15, "no conversions\n", 0, "a format with no conversion: once, whatever the arguments");
     prints(a16, "one\ntwo\n", 0, "a line for each argument");
+    prints(a17, "", 2, "10/25/26: a width above 65536: said, status 2");
+    prints(a18, "", 2, "... a precision too");
+    prints(a19, "", 2, "... and one from *");
 }
 
 int main(void) {

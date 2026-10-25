@@ -244,11 +244,23 @@ static int skip_subst(struct parser *p, int i) {
     return end;
 }
 
+/* 10/25/26: ${ } and $(( )) inside each other (and the quotes in them), at most DEPTH_LIMIT: the
+   scanner goes into each with a call of its own */
+static int nested(struct parser *p, int i, int (*skip)(struct parser *, int)) {
+    static int depth;
+    int r;
+    if(depth >= DEPTH_LIMIT) return syntax(p, i, "${ } and $(( )) inside each other: at most %d", DEPTH_LIMIT);
+    depth++;
+    r = skip(p, i);
+    depth--;
+    return r;
+}
+
 static int skip_dollar(struct parser *p, int i) {
     const char *s = p->src;
-    if(s[i + 1] == '(' && s[i + 2] == '(') return skip_arith(p, i);
+    if(s[i + 1] == '(' && s[i + 2] == '(') return nested(p, i, skip_arith);
     if(s[i + 1] == '(') return skip_subst(p, i);
-    if(s[i + 1] == '{') return skip_brace(p, i);
+    if(s[i + 1] == '{') return nested(p, i, skip_brace);
     return i + 1;
 }
 

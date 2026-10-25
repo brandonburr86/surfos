@@ -11,10 +11,13 @@ character, %d and %i a number, %u %o %x %X one without a sign, %% a %. Between t
 letter: the flags - + space # 0, a width and a .precision, numbers or * (from an argument). A
 number is decimal, 0x... hex, 0... octal, or 'c: the character's code. The format is used
 again while arguments are left; one that is missing is "" or 0. An argument that is no number
-is said, counts as what of it was one, and the status is 1.
+is said, counts as what of it was one, and the status is 1. 10/25/26: a width or a precision
+is at most PRINTF_WIDE.
 */
 
 #include "surfsh.h"
+
+#define PRINTF_WIDE 65536
 
 /* the \ sequence at s (s[0] is the \): what it stands for into out, the characters it takes;
    in %b's argument \0ddd and \c too (*stop: the output ends) */
@@ -60,6 +63,21 @@ static long number(const char *s, int unsigned_ok, int *ok) {
         *ok = 0;
     }
     return v;
+}
+
+/* 10/25/26: a number in the n characters of a conversion (its width, its precision) above PRINTF_WIDE? */
+static int too_wide(const char *spec, int n) {
+    int i = 0;
+    while(i < n) {
+        long v = 0;
+        if(!isdigit((unsigned char)spec[i])) {
+            i++;
+            continue;
+        }
+        for(; i < n && isdigit((unsigned char)spec[i]); i++) if(v <= PRINTF_WIDE) v = v * 10 + (spec[i] - '0');
+        if(v > PRINTF_WIDE) return 1;
+    }
+    return 0;
 }
 
 /* the output of printf argv[0] argv[1...] into out: 0, or 1 when an argument was no number, 2 for a
@@ -108,6 +126,10 @@ int printf_text(struct sbuf *out, int argc, char **argv) {
             }
             if(n > 26) {
                 fprintf(stderr, "surfsh: printf: a conversion too long in %s\n", fmt);
+                return STATUS_USAGE;
+            }
+            if(too_wide(spec, n)) {
+                fprintf(stderr, "surfsh: printf: a width or a precision above %d in %s\n", PRINTF_WIDE, fmt);
                 return STATUS_USAGE;
             }
             conv = *p ? *p++ : 0;

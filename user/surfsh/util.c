@@ -51,6 +51,7 @@ char *xstrdup(const char *s) {
 /**** strings that grow ****/
 
 static void sb_room(struct sbuf *b, int more) {
+    if(more < 0 || more > INT_MAX / 2 - 1 - b->len) no_memory();    /* 10/25/26: more than an int counts */
     if(b->len + more + 1 <= b->cap) return;
     while(b->len + more + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 64;
     b->s = xrealloc(b->s, (size_t)b->cap);
