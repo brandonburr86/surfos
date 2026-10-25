@@ -25,7 +25,12 @@ next stage begins, so the branch can stop after any of them.
 
 As built: `surfsh -c TEXT`, `surfsh FILE ARGS`, here-documents and lines that continue came
 with stage 2, `set --`, `shift` and `SPAWN_MAX_ARGS` 128 with stage 3, and `SYS_waitx` with
-stage 4 (Ctrl+C in loops needs it), so it is number 48 and `SYS_job` 49.
+stage 4 (Ctrl+C in loops needs it), so it is number 48 and `SYS_job` 49. Stage 5's checks
+are the smoke test's `@surfsh-jobs` over the serial console (the real surfsh, rather than a
+`jobtest` program), Ctrl+D came with it, and `SPAWN_JOB_NONE` was added: what an interactive
+shell starts outside a job (a `$( )`, a pipeline that ends in the shell) is in none, since a
+surfsh typed at a surfsh's prompt is in a job itself and must keep it as the terminal's
+foreground to read its prompt.
 
 Stage 6 is the integrator's addition: of the programs a pipeline wants after `cat`,
 `head` and `wc`, SurfOS has none, and `dmesg | grep usb` is the first thing anyone types.
@@ -122,8 +127,8 @@ Stage 6 is the integrator's addition: of the programs a pipeline wants after `ca
 | `SYS_waitx` 48 (stage 4) `(int pid, struct waitx *w, int options)`: `struct waitx { int pid, how, status, job; }` (16 bytes); `how` `WX_EXITED` 0, `WX_KILLED` 1, `WX_INTERRUPTED` 2 (Ctrl+C), `WX_STOPPED` (stage 5); options `WNOHANG` 1, `WUNTRACED` 4 (stage 5) | `include/surfos/job.h`, `kernel/task.c`, `kernel/syscall.c`; libsurf `waitx()` |
 | `TTY_INTR` 6 (stage 4): the Ctrl+Cs that reached the caller's job since it last asked; 1: the caller (a shell) looks for Ctrl+C itself, is told instead of killed, and as the pager's owner takes one that reaches nothing else | `include/surfos/tty.h`, `kernel/tty.c`, `kernel/task.c` (`task_interrupt_job()`) |
 | `#!` (stage 4): `process_spawn_ex()` runs `#!INTERPRETER [ARG]` scripts; a file neither ELF nor `#!` is `-ENOEXEC` at once | `kernel/process.c` |
-| `SYS_job` 49 `(int op, int arg)`: `JOB_SHELL`, `JOB_FG`, `JOB_BG`, `JOB_KILL` | `include/surfos/job.h`, `kernel/job.c` |
-| `PROC_STOPPED` 5 in `struct procinfo`'s state; `ps` says `stopped` | `include/surfos/proc.h`, `kernel/task.c` |
+| `SYS_job` 49 (stage 5) `(int op, int arg)`: `JOB_FG` 1 (the terminal's foreground job; the previous one), `JOB_BG` 2, `JOB_KILL` 3, `JOB_ID` 4; spawnx's `job`: 0 the caller's, `SPAWN_JOB_NEW` (-1), a job of the caller's, `SPAWN_JOB_NONE` (-2); `WUNTRACED` 4, `WX_STOPPED` 3 (status `WX_STOP_KEY` 0, `WX_STOP_READ` 1) | `include/surfos/job.h`, `include/surfos/spawn.h`, `kernel/task.c`, `kernel/tty.c`, `kernel/syscall.c`; libsurf `jobctl()` |
+| `PROC_STOPPED` 5 in `struct procinfo`'s state; `ps` says `stopped`; `TS_STOPPED` | `include/surfos/proc.h`, `include/surfos/task.h`, `kernel/task.c` |
 | `broken_pipe_exit(int on)` | `user/include/surf.h`, `user/libsurf/syscalls.c` |
 | `struct prompt_ctx.continuation`: the continuation prompt | `include/surfos/prompt.h`, `shell/prompt.c`, `tests/host/test_prompt.c` |
 
@@ -156,8 +161,9 @@ wildcards), arithmetic, `test` and `printf` on the host.
 * `user/bin/pipetest.c`: pipes from user space: data in order and whole, a full pipe's
   writer waits, the end of the input, a broken pipe (EPIPE, and status 141 by default),
   writes of up to `PIPE_BUF` never mixed, `poll()`, `PIPE_MAX`, the descriptors' limit, a kill
-  and Ctrl+C cut its waits short. `user/bin/jobtest.c`: job control on a pseudo-terminal:
-  Ctrl+Z, `fg`, `bg`, a background reader stopped, a stopped job killed, the shell's end.
+  and Ctrl+C cut its waits short. Job control: the smoke test's `@surfsh-jobs` over the
+  serial line (Ctrl+Z, `fg`, `bg`, a background reader stopped, a stopped job killed, the
+  shell's end, Ctrl+D) in place of the `jobtest` program first planned.
 * The smoke test (`tools/qemu-run.py`): a block of pipelines, variables, scripts and jobs in
   surfsh over the serial line, and the two test programs; `make test-all`, `make test-tcp`,
   `make test-usb` at O0 and O2 (the terminal changes: Ctrl+Z, Ctrl+D), then an independent

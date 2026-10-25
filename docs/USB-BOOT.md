@@ -527,7 +527,11 @@ commands can be redirected too, which is a quick way to keep what they say:
 `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the screen.
 
 **Pipelines.** `a | b` sends what `a` prints to `b`, which reads it: `dmesg | head -20`,
-`ls /initrd/bin | wc -l`, `lspci | head -3`, `help | head`. A kernel command can begin a
+`ls /initrd/bin | wc -l`, `lspci | head -3`, `help | head`, `dmesg | grep -i usb`. The
+programs made for pipelines: `grep` (lines that match a pattern: `.`, `*`, `^`, `$`,
+`[a-z]`; `-i` any case, `-v` those that do not, `-c` how many, `-n` with their numbers),
+`sort` (`-n` by number, `-r` reversed, `-u` once each), `uniq` (`-c` with counts), `head`,
+`tail` (`-n 5`), `wc`, `tee FILE` (a copy into a file), `tr a-z A-Z`, `seq 1 10`. A kernel command can begin a
 pipeline but not follow a `|`, since it reads only the console; its output arrives when it
 is done. A program that writes to a pipe whose reader has ended ends too (`hexdump
 /dev/zero | head` stops). `a && b` runs `b` when `a` succeeded, `a || b` when it failed,
@@ -574,10 +578,17 @@ each command before it runs, `set -u` makes an unset variable an error. `kernel 
 kernel's command of a name that surfsh has too. Ctrl+C stops a loop or a script as a whole,
 not just the command that was running: the prompt comes back with `$?` 130.
 
+**Jobs.** Ctrl+Z stops the program that runs (`[1] stopped  count 100 100`) and gives the
+prompt back; `jobs` lists the jobs, `fg` brings the last one (or `fg %2`) back to the screen,
+`bg` lets it go on in the background, `kill %1` ends it, `wait` waits for the jobs in the
+background. A program in the background that wants to read the keyboard stops until `fg`
+gives it the keys (`[1] stopped (reading the terminal)`). Ctrl+D on an empty line ends what a
+program reads from the keyboard: `cat > /data/notes.txt`, a few lines, then Ctrl+D.
+
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
 that could not be started, 127 no such command, 130 a command stopped with Ctrl+C (a
 program, a kernel command, a loop), 137 a program that was killed (by `kill` or by a
-fault). A
+fault), 148 a program stopped with Ctrl+Z. A
 program that ends with another status says `[exit status N]`.
 
 **Settings.** `set` lists them, `set <key> <value>` (or `<key>=<value>`) changes one for

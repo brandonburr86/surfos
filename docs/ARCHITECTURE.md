@@ -530,7 +530,7 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   and `TTY_CAPS`; `kcmd` and `kcmdinfo` (32 and 33) run and list the kernel's shell
   commands (below). **ai-dev** (10/24/26): `pipe` (46) and `spawnx` (47), section 21;
   (10/25/26) `waitx` (48: how a child ended, killed by Ctrl+C or not), `ttyctl`'s
-  `TTY_INTR`, `#!` scripts and `ENOEXEC`, section 21.
+  `TTY_INTR`, `#!` scripts and `ENOEXEC`, `job` (49: job control), section 21.
 * **Kernel commands from programs** (**ai-dev**, 10/6/26; `kernel/syscall.c`,
   `include/surfos/kcmd.h`). `SYS_kcmd(argv)` runs one of the ring-0 shell's commands in
   the calling task through `shell_run_command()`, as the ring-0 shell would, and returns
@@ -1614,6 +1614,7 @@ libsurf                pipe(); spawnx(), and spawn()/spawnfd() over it with envi
 SYS_spawnx             kernel/process.c: descriptors 0-3 as the caller says, an environment, a job in the background;
                        #! scripts, and ENOEXEC for a file that is no program
 SYS_waitx, TTY_INTR    kernel/task.c, kernel/tty.c: how a child ended (killed by Ctrl+C?), Ctrl+C for shells
+SYS_job                kernel/task.c, kernel/tty.c: jobs, the terminal's foreground job, Ctrl+Z, stopped tasks
 SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
 ```
 
@@ -1790,6 +1791,34 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   leaves the rest of its line, loop or function and is back at its prompt with `$?` 130,
   saying `^C` when nothing else did. A program Ctrl+C killed still reports `[pid n killed]`
   at the prompt, now with status 130.
+* **Job control** (stage 5; `include/surfos/job.h`, `kernel/task.c`, `kernel/tty.c`,
+  `user/surfsh/jobs.c`). A job is the tasks of one command an interactive surfsh runs: its id
+  is the pid of its first process (`SYS_spawnx`'s job: `SPAWN_JOB_NEW`, then the job's id for
+  the others; `SPAWN_JOB_NONE` for what surfsh starts outside a job, a `$( )` or a pipeline
+  that ends in the shell), what they start is in it too, and the shell that made it
+  (`job_shell`) is the only one that may move it. Each terminal has a foreground job
+  (`fg_job`), which surfsh sets with `SYS_job` (49, `JOB_FG`) while it waits for one: Ctrl+Z
+  in line mode stops its tasks (at `--More--` it is a key), and a task of another job that
+  reads the terminal stops instead (`task_stop_reader()`, before `tty_read()` reads). A
+  stopped task waits where it was: in its own code it is taken off its run queue at once
+  (`TS_STOPPED`, and `irq_dispatch()` switches away from it); in a wait that a kill would cut
+  short it counts as stopped and the wait goes on; anywhere in a call it parks at the call's
+  end (`task_call_leave()`), so nothing is cut short or lost. It leaves the foreground
+  (Ctrl+C no longer reaches it); `JOB_FG` and `JOB_BG` let it go on, in the foreground or
+  not, and a kill reaches a stopped task too. `SYS_waitx` with `WUNTRACED` says each stop
+  once (`WX_STOPPED`, why: Ctrl+Z or a read from the background), and `pid < -1` waits for any
+  child of a job. A shell that looks for Ctrl+C itself (`TF_INTR`) is never stopped, so
+  surfsh's own commands (builtins, loops, kernel commands) do not stop. When the shell that
+  made a job ends, the job's stopped tasks are killed and its other tasks leave it; a
+  detached task is in no job. surfsh: the job table (`jobs`, `fg`, `bg`, `wait`, `kill %n`),
+  `[1] stopped  cmd` when one stops in the foreground (status 148, and the rest of the line,
+  loop or function is left, as for Ctrl+C), `[1] stopped (reading the terminal)` before a
+  prompt; `ps` and `SYS_procinfo` say `stopped` (`PROC_STOPPED`). In line mode Ctrl+D on an
+  empty line is the end of the input: `read(2)` answers 0 (`cat > file`, `read`).
+* **Filters** (stage 6, `user/bin/`): `grep` (a basic regular expression: `. * ^ $ [...]`
+  and `\`; `-i -v -n -c -l -q -F -e`), `sort` (`-r -n -f -u`), `uniq` (`-c -d -u -i`), `tail`
+  (`-n N`), `tee` (`-a`), `tr` (ranges, `-d`, `-s`) and `seq`, the programs a pipeline wants
+  after `cat`, `head` and `wc`; `lineutil.h` reads their lines of any length.
 * **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
   `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
   lists, pipelines, groups, redirections and here-documents parsed and written back,
@@ -1802,7 +1831,10 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   the environment (`env`), expansions and wildcards, one of scripts (compound commands,
   functions, the builtins of scripts, scripts by name, `set -e -u -x`, `exec`), and
   `@surfsh-ctrl-c`: Ctrl+C in loops of builtins, of programs and of kernel commands, in
-  `read`, in a surfsh inside a surfsh, and in a script.
+  `read`, in a surfsh inside a surfsh, and in a script; and `@surfsh-jobs`: Ctrl+Z, `jobs`,
+  `ps`, `bg`, `fg`, `kill %1`, a pipeline as one job, a loop of builtins Ctrl+Z leaves alone, a
+  reader in the background stopped and given the keys by `fg`, Ctrl+D, and the stopped job of
+  a surfsh that exits killed; and a block of the filters in pipelines.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
