@@ -788,11 +788,25 @@ static int split_args(char *line, char **argv, int last, char *status, size_t si
     return argc;
 }
 
+/* 10/25/26 (SurfGPU G3): commands only some boards have. The board's own table comes first, so
+   these answer only where it has none: on QEMU's virt machine `gfx` says there is no GPU, as it
+   does on an Arty bitstream built without one (boards/arty_a7/gfx.c). Not listed by help. */
+static int cmd_nogfx(int argc, char **argv) {
+    printf("    gfx: no GPU on this board (%s): SurfGPU is the Arty A7's\n", board_name());
+    return CMD_FAIL;
+}
+
+static const struct command absent_cmds[] = {
+    { "gfx",       "[what ...]", "the GPU (not on this board)", cmd_nogfx },
+    { NULL, NULL, NULL, NULL, 0 }
+};
+
 static const struct command *find_command(const char *name) {
     const struct command *b;
     u_int i;
     for(i = 0; i < ncommands; i++) if(!strcmp(commands[i].name, name)) return &commands[i];
     for(b = board_commands(); b && b->name; b++) if(!strcmp(b->name, name)) return b;
+    for(b = absent_cmds; b->name; b++) if(!strcmp(b->name, name)) return b;
     return NULL;
 }
 

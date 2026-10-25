@@ -1043,6 +1043,9 @@ def main():
 
         ok, out = cmd('help', ['SurfOS kernel shell 1.0', 'poweroff', '(C)2004-2026 Brandon Burr.'])
         check(ok and 'selftest' in out and 'lspci' not in out, 'help: the kernel shell 1.0, portable commands, no PCI')
+        # 10/25/26 (SurfGPU G3): the Arty's gfx command; QEMU's virt machine has no GPU
+        ok, out = cmd('gfx', ['gfx: no GPU on this board (qemu_virt)'])
+        check(ok and "SurfGPU is the Arty A7's" in out, 'gfx: there is no GPU on this board (SurfGPU is the Arty\'s)')
 
         ok, out = cmd('ps', ['SurfOS Task List'])
         names = ['Kernel Idle Task', 'init', 'heartbeat', 'Shell 0', 'Shell 1', 'Shell 2', 'Shell 3']
