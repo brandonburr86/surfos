@@ -500,6 +500,28 @@ SMOKE = [
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
     ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
     ('@kmsg', []),
+    # 10/24/26 (pipelines and scripting in surfsh): the kernel's pipes from user space (user/bin/pipetest.c): bytes
+    # through and the end of the input; a stream from a child and one write() to a child; a full pipe and POLLOUT; two
+    # writers' blocks of PIPE_BUF never mixed; a broken pipe (status 141, or EPIPE when asked); poll(); EMFILE,
+    # ENFILE at PIPE_MAX and no pipe lost after 200; a kill cuts a reader's and a writer's wait short; the end held
+    # back by a dup2() copy and by a child
+    ('run pipetest basic', ['bytes through, the end of the input, EBADF, ESPIPE, pipefs, EFAULT', 'PIPETEST basic PASS',
+                            'exit status 0']),
+    ('run pipetest stream', ['262144 bytes from a child, in order', 'bytes to a child in one write()',
+                             'PIPETEST stream PASS', 'exit status 0']),
+    ('run pipetest full', ['8192 bytes go in at once; POLLOUT only with 4096 bytes of room',
+                           'a write into a full pipe waited', 'PIPETEST full PASS', 'exit status 0']),
+    ('run pipetest atomic', ['128 writes of 4096 bytes from two children, each whole', 'PIPETEST atomic PASS',
+                             'exit status 0']),
+    ('run pipetest broken', ['ended with status 141', 'with broken_pipe_exit(0) a write says EPIPE',
+                             'PIPETEST broken PASS', 'exit status 0']),
+    ('run pipetest poll', ['POLLIN, POLLHUP, POLLOUT, POLLERR', "poll() waited", 'PIPETEST poll PASS', 'exit status 0']),
+    ('run pipetest limits', ['then EMFILE', 'held by five children and 2 here, then ENFILE',
+                             '200 pipes made and closed; 32 there again', 'PIPETEST limits PASS', 'exit status 0']),
+    ('run pipetest kill', ['a reader waiting on an empty pipe killed in', 'a writer waiting on a full pipe killed in',
+                           'PIPETEST kill PASS', 'exit status 0']),
+    ('run pipetest share', ['a dup2() copy holds the end of the input back', 'until it ended', 'PIPETEST share PASS',
+                            'exit status 0']),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
@@ -958,7 +980,7 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {BIG_BIN: 60, 'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
+TIMEOUTS = {BIG_BIN: 60, 'selftest': 120, 'run pipetest stream': 60, 'run pipetest atomic': 60, 'run pipetest limits': 60, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
             'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
             'run kcmdtest pings /hda1 10.0.2.2': 60, 'run kcmdtest kills /hda1 10.0.2.2': 180}
 # anything that means the kernel fell over
