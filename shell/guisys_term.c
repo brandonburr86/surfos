@@ -41,7 +41,9 @@ its place (interrupts off) before the descriptor is closed. A task killed at onc
 open or a close thus leaves its master to its end (fd_close_all()), never in a place to be closed a
 second time, and the next open takes back every place of a task that is gone, whatever it was doing.
 10/25/26 (programs' windows, kernel/win.c): a session's pty is adopted by the desktop as soon as it is
-open, so the programs started in the Terminal may open windows on it, and dropped with the master.
+open, so the programs started in the Terminal may open windows on it, and dropped with the master. Once
+its shell runs, the desktop knows its pid (win_adopt_shell()): only the jobs that shell makes take the
+focus as the pty's foreground (stage C6).
 */
 #include <stdio.h>
 #include <surfos/types.h>
@@ -170,6 +172,7 @@ int guisys_term_open(void *ctx, int cols, int rows) {
         return r;
     }
     s->pid = r;
+    win_adopt_shell(s->pty, s->pid);                    /* 10/25/26: its jobs alone take the focus as the foreground */
     snprintf(line, sizeof(line), "gui: Terminal: surfsh (pid %d) on pty%d\n", s->pid, s->pty);
     klog_write(line);
     return (int)(s - sessions);

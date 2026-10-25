@@ -604,7 +604,9 @@ and its title says what it was last sent.
   the top left, but without the focus: what you type still goes where it went (a program
   in the background never catches the rest of a password typed in the Terminal). Its
   taskbar button is marked until a click on the window, on that button, or Next window
-  (the Window menu) gives it the focus.
+  (the Window menu) gives it the focus. A window you asked for takes the focus as it
+  appears: that of a program typed at the Terminal's prompt without `&` while the
+  Terminal has the focus, and the first of a program started from Run program....
 * **The pointer and the keys.** Everything the pointer does over a program's window is
   the program's: moving over it, all three buttons, the wheel. A press in it brings the
   window to the front, and while a button is held the program follows the pointer
@@ -630,6 +632,19 @@ and its title says what it was last sent.
   `wdemo` is the example: colour bars, its size and the last event it got (`wdemo hang`
   pays no heed to the close button, `wdemo crash` faults after it first draws). Until the
   kernel keeps floating point across task switches, such a program must not use it.
+* **The Calculator as a program.** `wcalc` is the desktop's Calculator in a window of its
+  own, looking and counting the same (they share their arithmetic, `shell/guicalc.c`): the
+  first application to move out of the kernel, so that a fault in it costs only its window.
+* **Run program...** (in the Apps menu) lists the programs of `/initrd/bin` above a line
+  to run: a program picked in the list takes the line, and arguments may be typed after
+  it (`wcalc` is offered, selected in the list). Run starts it on the desktop's own
+  console, its input from `/dev/null`, so that it never takes the desktop's keys; its
+  first window takes the focus when it appears. It is
+  nobody's child: it outlives the Terminal. It ends with the desktop, whose end hangs its
+  windows up (libgui's `gw_next()` then fails with `EPIPE`, and the program returns). A
+  program that cannot start is named in a message, with the reason. (The brief's
+  Apps > Programs list is this dialog's list: the Apps menu has room for one item more
+  on a 640x400 desktop.)
 
 ## Mouse support
 

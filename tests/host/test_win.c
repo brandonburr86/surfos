@@ -16,7 +16,8 @@
    be (WIN_ALL_BYTES stays a guard: four desktops of WIN_DESK_BYTES reach it and no more); a new size whose first
    allocation fails. test_present needs a 32-bit build (HOSTFLAGS' -m32, as every host test of kernel code has
    where the host can link one): present() takes the program's addresses to be below 4 GB, as they are in SurfOS,
-   and the test presents from its own memory. */
+   and the test presents from its own memory.
+   10/25/26 (stage C6): whether a window's program is in the foreground job of a pty its desktop adopted. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -944,6 +945,63 @@ static void test_title_calls(void) {
     end();
 }
 
+/* 10/25/26 (stage C6): a window says whether its program is in the foreground job of a pty its desktop adopted (the
+   Terminal's), a job that session's shell made, where the desktop gives its window the focus; a task in no job that
+   makes a job of its own the foreground (sys_job lets it, CODE-AUDIT T14) gets no such window */
+static void test_foreground(void) {
+    struct win_state st;
+    struct win_view view;
+    surf_task *evil, *child;
+    int fd, h;
+    begin();
+    as(desktop);
+    CHECK(win_adopt(1) == 0);
+    ptyprog->job = 40;                                  /* a job the session's shell (pid 50) made, in the foreground */
+    ptyprog->job_shell = 50;
+    PTY(1)->fg_job = 40;
+    fd = open_as(ptyprog, 100, 100);
+    h = shown(ptyprog, fd);
+    CHECK(h >= 0 && win_update(h, &st, &view) == 0 && st.foreground == 0);     /* no shell known yet: none */
+    as(desktop);
+    CHECK(win_adopt_shell(1, 50) == 0 && desks[0].shells[0] == 50);
+    CHECK(win_update(h, &st, &view) == 0 && st.foreground == 1);
+    CHECK(win_adopt_shell(2, 50) == -EINVAL && win_adopt_shell(1, 0) == -EINVAL && win_adopt_shell(PTY_MAX, 50) == -EINVAL);
+    as(other);
+    CHECK(win_adopt_shell(1, 50) == -ENODEV);           /* a task with no desktop */
+    as(desktop);
+    PTY(1)->fg_job = 7;                                 /* another job in the foreground: this one is behind */
+    CHECK(win_update(h, &st, &view) == 0 && st.foreground == 0);
+    PTY(1)->fg_job = 40;
+    ptyprog->job = 0;                                   /* in no job */
+    CHECK(win_update(h, &st, &view) == 0 && st.foreground == 0);
+    ptyprog->job = 40;
+    /* a task in no job on that pty (detached from a job in the background) makes a job of its own the foreground */
+    evil = task_new(60, PTY(1));
+    child = task_new(61, PTY(1));
+    child->job = 61;
+    child->job_shell = 60;
+    PTY(1)->fg_job = 61;
+    fd = open_as(child, 50, 50);
+    h = shown(child, fd);
+    CHECK(h >= 0 && win_update(h, &st, &view) == 0 && st.foreground == 0);
+    (void)evil;
+    PTY(1)->fg_job = 40;
+    as(desktop);
+    win_drop(1);                                        /* a pty no longer adopted: its shell forgotten too */
+    CHECK(!desks[0].ptys[0] && !desks[0].shells[0]);
+    CHECK(win_adopt(1) == 0 && win_adopt_shell(1, 50) == 0);
+    win_pty_gone(PTY(1));                               /* and so at its hangup */
+    CHECK(!desks[0].ptys[0] && !desks[0].shells[0]);
+    prog->job = 9;                                      /* the desktop's own console is no Terminal's pty */
+    prog->job_shell = 50;
+    CONSOLE(1)->fg_job = 9;
+    fd = open_as(prog, 50, 50);
+    h = shown(prog, fd);
+    CHECK(h >= 0 && win_update(h, &st, &view) == 0 && st.foreground == 0);
+    CONSOLE(1)->fg_job = PTY(1)->fg_job = 0;
+    end();
+}
+
 int main(void) {
     test_queue();
     test_titles();
@@ -961,6 +1019,7 @@ int main(void) {
     test_owner_death();
     test_outlives_resize();
     test_title_calls();
+    test_foreground();
     printf("test_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
 }

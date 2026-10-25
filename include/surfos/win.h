@@ -110,12 +110,16 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
 /* The desktop's side (shell/guiclient.c, through struct gui_sys's win_* calls). A window as the desktop draws it:
    its title; the size of its pixels, which are its content; the limits and flags it asked for (max 0: as large as
    the desktop allows); its background, shown where its pixels do not reach; a serial that moves with every present,
-   size and title; and the pid of the program that opened it. */
+   size and title; the pid of the program that opened it; and (10/25/26, stage C6) whether that program is in the
+   foreground job of a pty the desktop adopted, its Terminal's, a job that session's shell made (typed at its prompt
+   without &, or started by one that was): the desktop gives such a window the focus when it appears and the Terminal
+   has it. */
 struct win_state {
     char title[WIN_TITLE_MAX];
     int w, h, min_w, min_h, max_w, max_h;
     u32 flags, background, serial;
     int pid;
+    int foreground;
 };
 /* its pixels, 0x00RRGGBB in rows of w, lent to the desktop until its next update or close */
 struct win_view { const u32 *pixels; int w, h; };
@@ -127,7 +131,9 @@ struct win_view { const u32 *pixels; int w, h; };
    has one, -EAGAIN past WIN_DESKS, -ENODEV without a console. win_unregister: that descriptor closed. win_adopt:
    the programs on pty number pty (the Terminal's) may open windows on it too (-EINVAL for no pty, -ENOSPC past
    4, -ENODEV for a task without a desktop); win_drop: no longer. win_pty_gone (kernel/pty.c, interrupts off):
-   pty t hung up or is free, adopted by no desktop any more (10/25/26). win_accept,
+   pty t hung up or is free, adopted by no desktop any more (10/25/26). win_adopt_shell (10/25/26, stage C6): the
+   session on adopted pty number pty has the shell pid (the Terminal's surfsh), whose jobs alone count as its
+   foreground for win_state.foreground (-EINVAL for a pty not adopted). win_accept,
    win_update, win_event, win_close: as struct gui_sys's (sys/gui_sys.h); -EINVAL for a handle that is not one of
    the calling task's desktop's. */
 #define WIN_DESKS 4
@@ -138,6 +144,7 @@ int win_adopt(int pty);
 void win_drop(int pty);
 struct tty;
 void win_pty_gone(const struct tty *t);
+int win_adopt_shell(int pty, int pid);
 int win_accept(void);
 int win_update(int h, struct win_state *st, struct win_view *view);
 int win_event(int h, const struct win_event *e);

@@ -61,6 +61,15 @@ in code that was there before them, and that an FTP client reaches now as well a
 |---|---|---|---|
 | R1 | `fs/vfs.c`, `fs/fat.c` | `vfs_rename()` refuses to move a directory into itself by comparing the paths with their case, and FAT folds it: `mv dir DIR/sub` wrote the directory into itself and took it out of its parent, its `..` pointing at itself (a subtree nothing reaches, lost clusters) | `fat_rename()` follows `..` up from the new parent and refuses (EINVAL) whatever the spelling |
 
+Found by the review of programs' windows (October 2026, `docs/superpowers/plans/2026-10-25-app-windows.md`) in job
+control (surfsh's pipelines and scripting, October 2026), recorded and still open. The desktop's foreground exception
+does not rely on it: `kernel/win.c`'s `in_foreground()` takes only a job the Terminal session's shell made
+(`win_adopt_shell()`), so a foreground set this way gives no window the focus.
+
+| ID | Where | Problem | Fix (to come) |
+|---|---|---|---|
+| T14 | `kernel/syscall.c` (`sys_job()`, `JOB_FG`) | the permission check (a caller in a job in the background may not, but the foreground job's shell may) applies only to a caller in a job: a task in no job that is still on the terminal (a program that called `detach()`, a child spawned with `SPAWN_JOB_NONE`, one a kernel command started) may make a job it made, or none, the terminal's foreground, taking the terminal from its shell: the only job whose tasks may read it, and the one Ctrl+C and Ctrl+Z reach | a caller in no job may set the foreground only if it is the tty's `fg_shell`, or the session shell the pty recorded at its spawn |
+
 ### Storage milestone 1 (October 2026, branch `storage/main`)
 
 Interrupted saves, failed writes and concurrent unmounts preserve existing files. The SurfCPU branch

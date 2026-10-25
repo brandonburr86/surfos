@@ -67,6 +67,7 @@ enum {
     /* a dialog's answer */
     ACT_DLG_NEW_FILE, ACT_DLG_NEW_FOLDER, ACT_DLG_RENAME, ACT_DLG_DELETE, ACT_DLG_GOTO, ACT_DLG_OPEN,
     ACT_DLG_SAVE_AS, ACT_DLG_REPLACE, ACT_DLG_GUARD, ACT_DLG_READONLY,
+    ACT_RUN, ACT_DLG_RUN,               /* 10/25/26: Run program..., and its answer */
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
 /* 10/17/26 (the suite): the answers to the suite's dialogs */
@@ -163,6 +164,7 @@ bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a
 void client_wheel(struct gui_state *g, int id, int rows);
 bool client_keys(const struct gui_state *g);            /* the focused window is a program's: the keys are its own */
 bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened without the focus, not given it yet */
+void client_launched(struct gui_state *g, int pid);     /* 10/25/26 (C6): its first window takes the focus */
 void client_key(struct gui_state *g, int key);
 void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
 void client_answer(struct gui_state *g, int slot, int button, const char *target);

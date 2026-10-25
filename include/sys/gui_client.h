@@ -31,8 +31,10 @@ struct gui_client {
                                            it has it */
 };
 
+#define GUI_LAUNCHED 4                  /* 10/25/26: programs the launcher started lately, whose window takes the focus */
 struct gui_clients {
     struct gui_client slot[GUI_CLIENTS];
+    int launched[GUI_LAUNCHED];         /* 10/25/26: their pids (0: none), the first window of each takes the focus */
     int grab;                           /* the window whose content had a press, while a button is held; -1 */
     int hover;                          /* the window whose content the pointer is over; -1 */
     int opened;                         /* windows opened so far: where the next one goes (a cascade) */

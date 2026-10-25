@@ -21,6 +21,7 @@ shell/guiclient.c), through struct gui_sys's win_* calls.
 #define _SYS_GUI_H
 #include <sys/framebuffer.h>
 #include <sys/pointer.h>
+#include <sys/guicalc.h>                /* 10/25/26: the Calculator's arithmetic, which libsurf shares */
 #define GUI_CALC 0
 #define GUI_SKETCH 1
 #define GUI_ABOUT 2
@@ -99,7 +100,6 @@ struct gui_fs {
 };
 
 struct gui_window { int x,y,w,h; bool open, max, min; int nx,ny,nw,nh; };   /* n*: the place before maximizing */
-struct gui_calc { i32 value, operand; char op; bool fresh, error, entered; };
 /* a one-line text box; all: its whole text is selected, and typing replaces it */
 struct gui_field { char text[GUI_PATH_MAX]; u32 len, cursor; bool all; };
 
@@ -147,6 +147,7 @@ struct gui_files {
 #define GUI_DLG_INPUT 3
 #define GUI_DLG_OPEN 4
 #define GUI_DLG_SAVE 5
+#define GUI_DLG_RUN 6                   /* 10/25/26: the launcher's: a folder's programs and the line to run */
 struct gui_dialog {
     int kind, act, choice;
     bool list_focus;                    /* a chooser's Enter is for its list, not its name field */
@@ -218,7 +219,6 @@ void gui_release(struct gui_state *g);      /* 10/18/26: the button let go of wi
 void gui_key(struct gui_state *g, int key);
 void gui_render(const struct gui_state *g, const struct fb_surface *s);
 void gui_cursor(const struct fb_surface *s, int x, int y, int scale);
-void gui_calc_key(struct gui_calc *c, int key);
 /* 10/17/26: the arrow keys belong to the model (Notepad, Files, a menu or a dialog has them),
    not to the pointer */
 bool gui_wants_arrows(const struct gui_state *g);

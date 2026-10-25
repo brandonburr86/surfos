@@ -74,6 +74,7 @@ struct desk {
     u_long owner;                       /* the desktop's task */
     struct tty *tty;                    /* its console */
     struct tty *ptys[DESK_PTYS];        /* its Terminal's */
+    u_long shells[DESK_PTYS];           /* 10/25/26: the session shell on each (the Terminal's surfsh), 0: unknown */
     struct win_desk info;
 };
 
@@ -678,7 +679,33 @@ int win_adopt(int n) {
 void win_pty_gone(const struct tty *t) {
     int i, k;
     for(i = 0; i < WIN_DESKS; i++)
-        for(k = 0; k < DESK_PTYS; k++) if(desks[i].ptys[k] == t) desks[i].ptys[k] = NULL;
+        for(k = 0; k < DESK_PTYS; k++)
+            if(desks[i].ptys[k] == t) {
+                desks[i].ptys[k] = NULL;
+                desks[i].shells[k] = 0;
+            }
+}
+
+/* 10/25/26 (stage C6): pty number n, adopted, runs a session whose shell is pid: only the jobs that shell makes may
+   take the focus as the pty's foreground (in_foreground()); -ENODEV for a task without a desktop, -EINVAL for a pty
+   it has not adopted */
+int win_adopt_shell(int n, int pid) {
+    struct tty *pty;
+    struct desk *d;
+    u_long flags;
+    int k, r = -EINVAL;
+    if(n < 0 || n >= PTY_MAX || pid <= 0) return -EINVAL;
+    pty = &ttys[NUM_CONSOLES + n];
+    flags = irq_save();
+    d = own_desk();
+    if(!d) r = -ENODEV;
+    for(k = 0; d && k < DESK_PTYS; k++)
+        if(d->ptys[k] == pty) {
+            d->shells[k] = (u_long)pid;
+            r = 0;
+        }
+    irq_restore(flags);
+    return r;
 }
 
 void win_drop(int n) {
@@ -690,7 +717,11 @@ void win_drop(int n) {
     pty = &ttys[NUM_CONSOLES + n];
     flags = irq_save();
     d = own_desk();
-    for(k = 0; d && k < DESK_PTYS; k++) if(d->ptys[k] == pty) d->ptys[k] = NULL;
+    for(k = 0; d && k < DESK_PTYS; k++)
+        if(d->ptys[k] == pty) {
+            d->ptys[k] = NULL;
+            d->shells[k] = 0;
+        }
     irq_restore(flags);
 }
 
@@ -713,6 +744,19 @@ int win_accept(void) {
     }
     irq_restore(flags);
     return d ? h : -ENODEV;
+}
+
+/* 10/25/26 (stage C6): the window's program is in the foreground job of a pty its desktop adopted (its Terminal's):
+   typed at that Terminal's prompt without &, or started by such a program. The job must be one the session's shell
+   made (win_adopt_shell()): a task in no job may make a job of its own the terminal's foreground (sys_job, CODE-AUDIT
+   T14), which would give its window the focus; a surfsh started inside that shell loses the exception. Interrupts off */
+static bool in_foreground(const struct win *w) {
+    surf_task *t = w->desk ? task_find(w->owner) : NULL;
+    int k;
+    if(!t || !t->tty || !t->job || t->job != t->tty->fg_job) return false;
+    for(k = 0; k < DESK_PTYS; k++)
+        if(w->desk->ptys[k] == t->tty) return w->desk->shells[k] && t->job_shell == w->desk->shells[k];
+    return false;
 }
 
 /* its state and pixels now, the pixels lent until the next update or close; -EPIPE once its program let it go or
@@ -738,6 +782,7 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
         st->background = w->background;
         st->serial = w->serial;
         st->pid = (int)w->owner;
+        st->foreground = in_foreground(w);
         if(w->view != w->buf) {                         /* the desktop draws the new pixels from now on */
             dead = buf_put(w->view);
             w->view = w->buf;

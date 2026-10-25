@@ -15,7 +15,9 @@ program presented, or 250 ms passed since it opened them) come into the free slo
 opening in a cascade. 10/25/26 (the review): in front without the focus, which stays where it
 was, so that a program in the background never takes keys typed into another window (the rest
 of a password at a hidden prompt); its taskbar button is marked until a click on it, on its
-taskbar button, or Next window gives it the focus. A window's frame follows its pixels: a pixel of border and the title bar
+taskbar button, or Next window gives it the focus. 10/25/26 (stage C6): the windows asked for
+take it as they appear: the first of a program the launcher just started (client_launched()),
+and that of the focused Terminal's foreground job (typed at its prompt without &). A window's frame follows its pixels: a pixel of border and the title bar
 around them, never narrower than the title bar needs. A frame given another size, by its corner
 or by maximizing, is the program's to answer: once the corner is let go its program is told the
 new content size (one RESIZE, the Terminal's rule), and until it presents pixels of that size
@@ -208,8 +210,28 @@ static void update(struct gui_state *g, int id) {
     }
 }
 
+/* 10/25/26 (stage C6): the launcher started a program: its first window takes the focus (the oldest record makes
+   room) */
+void client_launched(struct gui_state *g, int pid) {
+    int k;
+    for(k = GUI_LAUNCHED - 1; k > 0; k--) g->clients.launched[k] = g->clients.launched[k - 1];
+    g->clients.launched[0] = pid;
+}
+
+/* a window that may take the focus as it appears: its program's first since the launcher started it, or the focused
+   Terminal's foreground job's (the kernel's foreground, sys/win.h's win_state) */
+static bool takes_focus(struct gui_state *g, const struct gui_client *c) {
+    int k;
+    for(k = 0; k < GUI_LAUNCHED; k++)
+        if(c->st.pid > 0 && g->clients.launched[k] == c->st.pid) {
+            g->clients.launched[k] = 0;
+            return true;
+        }
+    return c->st.foreground && g->focus == GUI_TERMINAL && g->win[GUI_TERMINAL].open && !g->win[GUI_TERMINAL].min;
+}
+
 /* windows that are ready come into the free slots, in front, in a cascade from the top left; 10/25/26: without the
-   focus (their taskbar buttons marked) */
+   focus (their taskbar buttons marked), but for the launcher's program and the focused Terminal's foreground job */
 static void accept(struct gui_state *g) {
     struct gui_client *c;
     struct gui_window *win;
@@ -236,8 +258,11 @@ static void accept(struct gui_state *g) {
         fit(g, id, c->st.w, c->st.h);
         win->open = true;                               /* gui_open() opens no closed slot of a program's */
         menu = g->menu;
-        gui_raise(g, id);                               /* 10/25/26: the focus stays where it is */
-        c->waiting = true;
+        if(takes_focus(g, c)) gui_open(g, id);          /* 10/25/26 (C6): asked for: the focus */
+        else {
+            gui_raise(g, id);                           /* 10/25/26: the focus stays where it is */
+            c->waiting = true;
+        }
         g->menu = menu;                                 /* a menu open meanwhile stays open */
     }
 }

@@ -10,7 +10,10 @@
    guard pixels at 640x400, 960x540 and 1280x800.
    10/25/26 (the review of C1-C3): a new window comes in front without the focus, which stays where it was (keys
    typed into Notepad stay Notepad's), its taskbar button marked until a click on it, on that button or Next window
-   gives it the focus; gui_working() for the desktop's pace. */
+   gives it the focus; gui_working() for the desktop's pace.
+   10/25/26 (stage C6): Apps > Run program...: /initrd/bin's programs in a list, the line to run (a program picked,
+   arguments typed), run through struct gui_sys's run; a refusal shown. The window of a program the launcher just
+   started takes the focus when it appears, and so does that of the focused Terminal's foreground job. */
 #include "gui_fake.h"
 
 static struct gui_state g;
@@ -663,6 +666,156 @@ static void test_no_system(void) {
     CHECK(fake_guards(960, 540));
 }
 
+/**** the launcher ****/
+
+/* the launcher's programs: a folder first, then the names */
+static void programs(void) {
+    fake_dir("/initrd/bin");
+    fake_file("/initrd/bin/wdemo", "\x7F" "ELF", 4);
+    fake_file("/initrd/bin/wcalc", "\x7F" "ELF", 4);
+    fake_file("/initrd/bin/ls", "\x7F" "ELF", 4);
+    fake_dir("/initrd/bin/sub");
+}
+
+/* a click on button i of the open dialog (0 Run, 2 Cancel), or on its list's row */
+static void dialog_button(int i) {
+    int x, y, w, h;
+    dialog_box(&g, &x, &y, &w, &h);
+    fake_click(&g, i == 0 ? x + w - 200 + 44 : x + w - 16 - 44, y + h - 40 + 14);
+}
+
+static void dialog_row(int row) {
+    int x, y, w, h;
+    dialog_box(&g, &x, &y, &w, &h);
+    fake_click(&g, x + 100, y + 64 + row * ROW_H + 9);
+}
+
+static void test_launcher(void) {
+    fake_desktop(&g, 960, 540);
+    programs();
+    CHECK(gui_menu_on(&g, 4, ACT_RUN));                 /* Apps > Run program... */
+    gui_act(&g, ACT_RUN);                               /* /initrd/bin's programs, and wcalc offered, selected */
+    CHECK(g.dialog.kind == GUI_DLG_RUN && !strcmp(g.dialog.dir, "/initrd/bin") && g.dialog.count == 4 &&
+          !strcmp(g.dialog.list[1].name, "ls") && !strcmp(g.dialog.field.text, "wcalc") && g.dialog.field.all &&
+          g.dialog.selected == 2 && !g.dialog.list_focus && !strcmp(g.dialog.label[0], "Run") &&
+          !strcmp(g.dialog.title, "Run a program"));
+    draw(960, 540);
+    CHECK(fake_guards(960, 540));
+    fake_type(&g, "wdemo hang");                        /* typing replaces what was offered */
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "wdemo hang") && !g.dialog.kind);
+
+    gui_act(&g, ACT_RUN);                               /* a program picked in the list is the line */
+    gui_key(&g, GUI_UP);
+    CHECK(g.dialog.selected == 1 && !strcmp(g.dialog.field.text, "ls"));
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, GUI_DOWN);
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 2 && !strcmp(fake_run_line, "wdemo") && !g.dialog.kind);
+    gui_act(&g, ACT_RUN);                               /* and arguments typed after it */
+    gui_key(&g, GUI_UP);
+    fake_type(&g, " -l");
+    CHECK(!g.dialog.list_focus);
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 3 && !strcmp(fake_run_line, "ls -l"));
+
+    gui_act(&g, ACT_RUN);                               /* the launcher never leaves its folder */
+    gui_key(&g, GUI_UP);
+    gui_key(&g, GUI_UP);                                /* sub: the line stays */
+    gui_key(&g, '\r');
+    CHECK(g.dialog.kind == GUI_DLG_RUN && !strcmp(g.dialog.dir, "/initrd/bin") && fake_run_count == 3 &&
+          !strcmp(g.dialog.field.text, "ls"));
+    gui_key(&g, 8);                                     /* Backspace edits the line */
+    CHECK(!strcmp(g.dialog.dir, "/initrd/bin") && !strcmp(g.dialog.field.text, "l") && !g.dialog.list_focus);
+    gui_key(&g, 27);
+
+    gui_act(&g, ACT_RUN);                               /* by the pointer: a row, then Run */
+    dialog_row(3);
+    CHECK(g.dialog.selected == 3 && !strcmp(g.dialog.field.text, "wdemo"));
+    dialog_button(0);
+    CHECK(fake_run_count == 4 && !strcmp(fake_run_line, "wdemo") && !g.dialog.kind);
+    gui_act(&g, ACT_RUN);                               /* Run with the line offered */
+    dialog_button(0);
+    CHECK(fake_run_count == 5 && !strcmp(fake_run_line, "wcalc"));
+    gui_act(&g, ACT_RUN);                               /* Cancel, and Esc, run nothing */
+    dialog_button(2);
+    CHECK(fake_run_count == 5 && !g.dialog.kind);
+    gui_act(&g, ACT_RUN);
+    gui_key(&g, 27);
+    CHECK(fake_run_count == 5 && !g.dialog.kind);
+    gui_act(&g, ACT_RUN);                               /* nothing to run */
+    gui_key(&g, 8);
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 5 && g.dialog.kind == GUI_DLG_RUN);
+    gui_key(&g, 27);
+
+    fake_run_result = -ENOENT;                          /* a program that cannot start: the desktop says why */
+    gui_act(&g, ACT_RUN);
+    fake_type(&g, "nosuch");
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 6 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not started") &&
+          strstr(g.dialog.text[0], "nosuch"));
+    gui_key(&g, '\r');
+
+    fake_files_reset();                                 /* no /initrd/bin: an empty list that says so, the line still runs */
+    fake_run_result = 77;
+    gui_act(&g, ACT_RUN);
+    CHECK(g.dialog.kind == GUI_DLG_RUN && !strcmp(g.dialog.dir, "/initrd/bin") && !g.dialog.count &&
+          g.dialog.text[0][0]);
+    gui_key(&g, '\r');
+    CHECK(fake_run_count == 7 && !strcmp(fake_run_line, "wcalc"));
+
+    fake_desktop(&g, 640, 400);                         /* the smallest desktop: the menu and the dialog fit */
+    programs();
+    CHECK(gui_menu_on(&g, 4, ACT_RUN));
+    gui_act(&g, ACT_RUN);
+    draw(640, 400);
+    CHECK(g.dialog.kind == GUI_DLG_RUN && fake_guards(640, 400));
+    gui_key(&g, 27);
+    g.sys = NULL;                                       /* no system: nothing to run with */
+    CHECK(!gui_menu_on(&g, 4, ACT_RUN));
+    gui_act(&g, ACT_RUN);
+    CHECK(!g.dialog.kind);
+}
+
+/* 10/25/26 (stage C6): the windows asked for take the focus as they appear: the first of a program the launcher just
+   started, and the focused Terminal's foreground job's (the kernel says which, win_state.foreground); others wait */
+static void test_asked_focus(void) {
+    int a, b, c, t;
+    fake_desktop(&g, 960, 540);
+    programs();
+    gui_open(&g, GUI_NOTEPAD);
+    gui_act(&g, ACT_RUN);
+    gui_key(&g, '\r');                                  /* wcalc, pid 77 */
+    CHECK(fake_run_count == 1 && g.focus == GUI_NOTEPAD && g.clients.launched[0] == 77);
+    a = fake_win_open(100, 80, 0, 0x203040, "Calculator", 77);
+    fake_win_present(a, 0x00FF00);
+    tick();
+    CHECK(win_id(a) >= 0 && g.focus == win_id(a) && !client_waiting(&g, win_id(a)) && !g.clients.launched[0]);
+    b = fake_win_open(100, 80, 0, 0x203040, "Second", 77);  /* its second window waits */
+    fake_win_present(b, 0x0000FF);
+    tick();
+    CHECK(win_id(b) >= 0 && g.focus == win_id(a) && client_waiting(&g, win_id(b)));
+    fake_run_result = -ENOENT;                          /* a refusal records nothing */
+    gui_act(&g, ACT_RUN);
+    gui_key(&g, '\r');
+    CHECK(!g.clients.launched[0]);
+    gui_key(&g, '\r');
+    fake_run_result = 77;
+    gui_open(&g, GUI_TERMINAL);                         /* the focused Terminal's foreground job */
+    c = fake_win_open(100, 80, 0, 0x203040, "Fg", 88);
+    fake_wins[c].st.foreground = 1;
+    fake_win_present(c, 0x111111);
+    tick();
+    CHECK(win_id(c) >= 0 && g.focus == win_id(c));
+    gui_open(&g, GUI_NOTEPAD);                          /* the same with Notepad in front of the Terminal: it waits */
+    t = fake_win_open(100, 80, 0, 0x203040, "Fg2", 89);
+    fake_wins[t].st.foreground = 1;
+    fake_win_present(t, 0x222222);
+    tick();
+    CHECK(win_id(t) >= 0 && g.focus == GUI_NOTEPAD && client_waiting(&g, win_id(t)));
+}
+
 /**** every window at once ****/
 
 static void test_guards(int width, int height) {
@@ -711,6 +864,8 @@ int main(void) {
     test_menus();
     test_leave();
     test_no_system();
+    test_launcher();
+    test_asked_focus();
     test_guards(640, 400);
     test_guards(960, 540);
     test_guards(1280, 800);

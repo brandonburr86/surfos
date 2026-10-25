@@ -2,17 +2,22 @@
 the Driver is gui_apps_scenario.py's. 10/25/26 (stage C4): wintest show, typed in the Terminal, opens a window in
 front with its title and its four quadrants at 2x; a key typed reaches the program (its title says which); its close
 button sends CLOSE and the program ends, and its window goes. (stage C5) wdemo, through libgui: its colour bars and
-its size as text at 2x, a key shown as its last event, and its close button. 10/25/26 (the review): a window comes in
-front without the focus (its title bar muted), and a key typed meanwhile stays the Terminal's; a click on its title bar
-gives it the focus. The checks leave the desktop as they found it (the windows and the Terminal closed), also when one
-fails."""
+its size as text at 2x, a key shown as its last event, and its close button. (stage C6) Apps > Run program...
+lists /initrd/bin's programs and offers wcalc, which opens the Calculator as a program, drawn as the desktop draws its
+own, with the focus (the launcher started it), and counts by keys and by clicks; Esc ends it. 10/25/26 (the review): a
+window comes in front without the focus (its title bar muted), and a key typed meanwhile stays the Terminal's; a click
+on its title bar gives it the focus. The checks leave the desktop as they found it (the windows, the dialog and the
+Terminal closed), also when one fails."""
 import gui_apps_term as term
-from gui_apps_scenario import PAPER, TEAL, MUTED
+from gui_apps_scenario import APPS, PAPER, INK, FOAM, TEAL, MUTED
 
 CORAL, TEALQ, SKY, SAND = (bytes.fromhex('ee906d'), bytes.fromhex('197d83'), bytes.fromhex('659ecb'),
                            bytes.fromhex('d0b056'))         # user/bin/wintest.c's quadrants
 FIRST = (72, 52)            # where shell/guiclient.c opens the first program's window of a desktop (its cascade)
 SECOND = (96, 72)           # and the second
+CALC = (120, 92)            # and the third: wcalc's, from Apps > Run program...
+CALC_KEYS = '789/456*123-C0=+'
+RUN_DIALOG = (220, 81, 520, 380)    # the launcher's chooser at 960x540 (shell/guidialog.c's layout)
 TITLE_H = 28
 NAVY, FOAM, PAPER_TEXT = bytes.fromhex('102e3b'), bytes.fromhex('b8e9d9'), bytes.fromhex('f4f1e6')
 BARS = (bytes.fromhex('ee906d'), bytes.fromhex('d0b056'), bytes.fromhex('7ed48c'), bytes.fromhex('197d83'),
@@ -37,6 +42,43 @@ def wdemo_shown(d, s, last=None):
     ok = all(d.pixel(s, x + 45 * i + 20, y + 80) == BARS[i] for i in range(8)) and \
         d.text(s, x + 8, y + 168, 'wdemo 360x240', FOAM, NAVY)
     return ok and (last is None or d.text(s, x + 8, y + 188, last, PAPER_TEXT, NAVY))
+
+
+def calc_shows(d, s, value):
+    """wcalc's display shows value, where the desktop's own Calculator shows it in a window at the same place"""
+    return d.text(s, CALC[0] + 28, CALC[1] + 58, str(value) + '  ', FOAM, INK)
+
+
+def calc_titled(d, s):
+    return d.text(s, CALC[0] + 30, CALC[1] + 6, 'Calculator', PAPER, TEAL)
+
+
+def calc_click(d, key):
+    """a click on wcalc's button for key (its grid: shell/guicore.c's Calculator's)"""
+    i = CALC_KEYS.index(key)
+    d.click(CALC[0] + 1 + 15 + i % 4 * 54 + 24, CALC[1] + TITLE_H + 76 + i // 4 * 40 + 17)
+
+
+def run_titled(d, s):
+    """the launcher's chooser is open: its title"""
+    return d.text(s, RUN_DIALOG[0] + 28, RUN_DIALOG[1] + 6, 'Run a program', PAPER, TEAL)
+
+
+def run_dialog(d, s):
+    """the launcher's chooser: its title, wcalc in its list, and the label of the line to run, clear of the list"""
+    x, y, _, h = RUN_DIALOG
+    return run_titled(d, s) and any(d.text(s, x + 44, y + 64 + 18 * row + 1, 'wcalc', INK) for row in range(12)) and \
+        d.text(s, x + 16, y + h - 74 - 18, 'The program, and its arguments:', MUTED, PAPER)
+
+
+def run_program(d):
+    """Apps > Run program... by the keyboard: Ctrl+G, three menus right, past the suite's applications, Enter"""
+    d.key('ctrl-g')
+    for _ in range(3):
+        d.key('right')
+    for _ in range(5 + len(APPS)):                  # Notepad, Files, Calculator, Sketch, Clear sketch, the suite
+        d.key('down')
+    d.key('ret')
 
 
 def checks(d):
@@ -77,9 +119,30 @@ def checks(d):
         d.visible('a key typed is wdemo\'s last event', lambda s: wdemo_shown(d, s, 'last: key 97'))
         d.click(SECOND[0] + 362 - 16, SECOND[1] + 14)
         d.visible('its close button ends wdemo', lambda s: not wdemo_shown(d, s), timeout=15)
+        # wcalc, from the launcher
+        d.move(900, 480)
+        run_program(d)
+        d.visible('Apps > Run program... lists /initrd/bin\'s programs, with a line to run', lambda s: run_dialog(d, s),
+                  'guiapps-run.png')
+        d.key('ret')                                # wcalc, offered
+        d.visible('Run starts wcalc: the Calculator as a program, drawn as the desktop draws its own',
+                  lambda s: calc_titled(d, s) and calc_shows(d, s, 0) and not run_titled(d, s), 'guiapps-wcalc.png',
+                  timeout=20)
+        d.keys('12+30=')
+        d.visible('typed, 12+30= makes 42 in wcalc', lambda s: calc_shows(d, s, 42))
+        for key, value in (('C', 0), ('7', 7), ('*', 7), ('6', 6), ('=', 42)):
+            calc_click(d, key)
+            d.visible(f'a click on wcalc\'s {key} shows {value}', lambda s, v=value: calc_shows(d, s, v))
+        d.key('esc')
+        d.visible('Esc ends wcalc, and its window goes', lambda s: not calc_titled(d, s) and not calc_shows(d, s, 42),
+                  timeout=15)
     finally:
         if wdemo_shown(d, d.vm.screen()):           # wdemo left over: its close button
             d.click(SECOND[0] + 362 - 16, SECOND[1] + 14)
+        if run_titled(d, d.vm.screen()):            # the launcher's chooser left open
+            d.key('esc')
+        if calc_titled(d, d.vm.screen()):           # wcalc left over: its close button
+            d.click(CALC[0] + 248 - 16, CALC[1] + 14)
 
         def there(s):
             return titled(d, s, 'wintest') or titled(d, s, 'wintest', False)

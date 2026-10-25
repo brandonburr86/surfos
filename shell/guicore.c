@@ -22,6 +22,9 @@ suite's loops stop at GUI_FIRST_CLIENT, and a program's slot is opened only by i
 Where the window manager asks an application something it asks a program's window too
 (shell/guiclient.c): its title, icon, limits, keys, pointer and wheel, closing, drawing, the
 Window menu, the tick and the end; leaving the desktop with programs' windows open asks first.
+10/25/26 (stage C6): the Calculator's arithmetic is shell/guicalc.c's (the program wcalc shares it),
+and Apps > Run program... (the programs of /initrd/bin in a list, and the line to run: guidialog.c's
+GUI_DLG_RUN) starts one on the desktop's console (struct gui_sys's run).
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -257,34 +260,6 @@ void tool_render(const struct gui_draw *d, int x, int y, const struct gui_tool *
         gd_button(d, at, y + TITLE_H + 4, tool_width(&t[i]), 22, t[i].label, on[i] ? SHELL : BAND, on[i] ? INK : MUTED);
 }
 
-/**** the calculator ****/
-
-void gui_calc_key(struct gui_calc *c, int key) {
-    i64 v;
-    if(key=='c' || key=='C') { memset(c,0,sizeof(*c)); return; }
-    if(c->error) return;
-    if(key>='0' && key<='9') {
-        v = (c->fresh ? 0 : (i64)c->value) * 10 + key-'0';
-        if(v > 999999999 || v < -999999999) { c->error=true; return; }
-        c->value=v; c->fresh=false; c->entered=true; return;
-    }
-    if(key==8 || key==127) { if(!c->fresh) c->value/=10; return; }
-    if(key!='+' && key!='-' && key!='*' && key!='/' && key!='=' && key!='\r' && key!='\n') return;
-    if(c->op && c->entered) {
-        v=c->operand;
-        switch(c->op) {
-        case '+': v+=c->value; break;
-        case '-': v-=c->value; break;
-        case '*': v*=c->value; break;
-        case '/': if(!c->value) { c->error=true; return; } v=c->operand/c->value; break;
-        }
-        if(v > 999999999 || v < -999999999) { c->error=true; return; }
-        c->value=v;
-    }
-    c->operand=c->value; c->fresh=true; c->entered=false;
-    c->op=(key=='=' || key=='\r' || key=='\n') ? 0 : key;
-}
-
 /**** windows ****/
 
 static void refocus(struct gui_state *g) {
@@ -511,6 +486,8 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Clear sketch", "", ACT_CLEAR_SKETCH, true);
         SEPARATOR();                                    /* 10/17/26: the suite */
         for(i = 0; i < SUITE; i++) ITEM(suite[i]->title, suite[i]->shortcut, ACT_WINDOW + GUI_FIRST_APP + i, true);
+        SEPARATOR();                                    /* 10/25/26: the launcher (the last item a 640x400 screen has */
+        ITEM("Run program\xF9", "", ACT_RUN, g->sys && g->sys->run);    /* room for in this menu) */
         break;
     case 5:
         ITEM("Next window", note ? "" : "Tab", ACT_NEXT_WINDOW, any);   /* in Notepad, Tab is a tab */
@@ -799,7 +776,23 @@ void gui_act(struct gui_state *g, int act) {
     case ACT_MINIMIZE: minimize(g, g->focus); break;
     case ACT_MAXIMIZE: maximize(g, g->focus); break;
     case ACT_HELP: gui_open(g, GUI_HELP); break;
+    case ACT_RUN:                                       /* 10/25/26: the launcher: /initrd/bin's programs, a line to run */
+        if(g->sys && g->sys->run) dialog_chooser(g, GUI_DLG_RUN, ACT_DLG_RUN, "/initrd/bin", "wcalc");
+        break;
     }
+}
+
+/* 10/25/26: the launcher: the line started on the desktop's console (struct gui_sys's run), its first window to
+   take the focus as it appears; or why not */
+static void run_program(struct gui_state *g, const char *line) {
+    char msg[80];
+    int pid;
+    msg[0] = 0;
+    if(!g->sys || !g->sys->run) return;
+    pid = g->sys->run(g->sys->ctx, line, msg, sizeof(msg));
+    if(pid > 0) client_launched(g, pid);
+    if(pid >= 0) return;
+    dialog_message(g, "Not started", msg[0] ? msg : "The program could not be started.", "");
 }
 
 void gui_answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
@@ -862,6 +855,9 @@ void gui_answer(struct gui_state *g, int act, int button, const char *text, cons
         break;
     case ACT_DLG_GOTO:
         if(button == 0) note_goto(g, atoi(text));
+        break;
+    case ACT_DLG_RUN:                                   /* 10/25/26 */
+        if(button == 0) run_program(g, text);
         break;
     case ACT_DLG_NEW_FILE: case ACT_DLG_NEW_FOLDER: case ACT_DLG_RENAME: case ACT_DLG_DELETE:
         files_answer(g, act, button, text, target);

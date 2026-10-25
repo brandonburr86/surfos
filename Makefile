@@ -55,6 +55,7 @@ USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by ha
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
 USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
+USER_PROGS  += wcalc         # 10/25/26: the desktop's Calculator as a program
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -996,7 +997,7 @@ unittest-gui: $(BUILD)/host/test_pointer
 # 10/17/26: the desktop's model is several files (shell/guipriv.h); Notepad and Files run against an in-memory file system
 # 10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the applications in files of their own
 GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog \
-                 guiterm guimon guidisks guilog guiclock guiview guihex guichar guiclient) \
+                 guiterm guimon guidisks guilog guiclock guiview guihex guichar guiclient guicalc) \
                $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
 # each track's own model files beyond its stubs ($(BUILD)/host/kernel/shell/<name>.o), on a line of its own so that
 # the tracks' merges are clean (the kernel takes every shell/*.c by itself)
