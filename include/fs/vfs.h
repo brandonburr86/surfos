@@ -64,6 +64,7 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113
 #define ECANCELED   125         /* 10/17/26: a request called off (the network manager's, after a wifi leave) */
+#define ESPIPE       29         /* 10/24/26: lseek() on a pipe */
 #define ERANGE       34
 
 /* open flags (Linux values) */
@@ -258,6 +259,7 @@ void tarfs_init(void);
 void fatfs_init(void);
 void devfs_init(void);
 bool devfs_is_console(const struct file *f);     /* 10/6/26: /dev/console or /dev/tty */
+bool pipe_file(const struct file *f);            /* 10/24/26: an end of a pipe (fs/pipe.c, surfos/pipe.h) */
 
 /* 10/6/26: poll() (surfos/poll.h). Whatever may change a descriptor's readiness (data
    arriving, a connection made or closed, room to write, a session's output or end) calls

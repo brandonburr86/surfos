@@ -22,6 +22,10 @@ written there afterwards, with a note when it did not all fit.
 10/6/26: a task is inside a call from its int 0x80 until it returns to user mode
 (TC_SYSCALL), and a kernel command is a call of its own (TC_COMMAND): a kill waits
 for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short.
+
+10/24/26 (pipelines and scripting in surfsh): pipe (call 46, fs/pipe.c); lseek on a
+pipe answers -ESPIPE. A kernel command's output on a pipe whose reader went away
+(dmesg | head) is dropped quietly: that is no failure of the command.
 */
 
 #include <surfos/types.h>
@@ -99,6 +103,14 @@ static int sys_open(const char *path, int flags) {
     r = fd_install(f);
     if(r < 0) vfs_close(f);
     return r;
+}
+
+/* 10/24/26: a pipe has no positions (surfos/pipe.h) */
+static int sys_lseek(int fd, i32 off, int whence) {
+    struct file *f = fd_get(fd);
+    if(!f) return -EBADF;
+    if(pipe_file(f)) return -ESPIPE;
+    return vfs_lseek(f, off, whence);
 }
 
 static int sys_readdir(int fd, struct dirent *de) {
@@ -411,7 +423,8 @@ static int sys_kcmd(char *const argv[]) {
                      cap.len && cap.buf[cap.len - 1] != '\n' ? "\n" : "", kargv[0], cap.cut, (u_int)(KCMD_CAPTURE_MAX / 1024));
             w = write_all(call.out, note, strlen(note));
         }
-        if(w) {
+        /* 10/24/26: a pipe whose reader has gone (dmesg | head) is no failure: the rest is dropped */
+        if(w && w != -EPIPE) {
             printf("    %s: its output could not be written to descriptor 1: %s\n", kargv[0], strerror(w));
             if(r == 0) r = 1;                                /* the command worked; keeping what it said did not */
         }
@@ -447,7 +460,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_read:    r = sys_read((int)a, (void *)b, c); break;
     case SYS_open:    r = sys_open((const char *)a, (int)b); break;
     case SYS_close:   r = fd_close((int)a); break;
-    case SYS_lseek:   r = fd_get((int)a) ? vfs_lseek(fd_get((int)a), (i32)b, (int)c) : -EBADF; break;
+    case SYS_lseek:   r = sys_lseek((int)a, (i32)b, (int)c); break;
     case SYS_readdir: r = sys_readdir((int)a, (struct dirent *)b); break;
     case SYS_stat:    r = sys_stat((const char *)a, (struct stat *)b); break;
     case SYS_chdir:   r = ustr((const char *)a) ? vfs_chdir((const char *)a) : -EFAULT; break;
@@ -488,6 +501,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_resolve:  r = sys_resolve((const char *)a, (u32 *)b); break;
     case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
+    case SYS_pipe:     r = sys_pipe((int *)a); break;          /* 10/24/26: fs/pipe.c */
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

@@ -11,6 +11,8 @@ esi, edi; the result comes back in eax, negative values are -errno.
 user shell, surfsh (surfos/kcmd.h). Calls 34-43 give programs network
 connections, poll, pseudo-terminals and the process list, for the telnet
 server (surfos/sock.h, poll.h, pty.h, proc.h).
+
+10/24/26 (pipelines and scripting in surfsh): call 46 makes a pipe (surfos/pipe.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -67,7 +69,9 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
 #define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */
-#define NR_SYSCALLS 46
+/* 10/24/26 (pipelines and scripting in surfsh) */
+#define SYS_pipe     46  /* (int fds[2]): fds[0] reads what fds[1] writes (surfos/pipe.h) */
+#define NR_SYSCALLS 47
 
 #define SPAWN_MAX_ARGS 32
 

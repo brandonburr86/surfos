@@ -871,6 +871,7 @@ const char *strerror(int err) {
     case EAGAIN: return "Try again";
     case ENFILE: return "File table overflow";
     case EPIPE: return "Broken pipe";
+    case ESPIPE: return "Illegal seek";
     case EADDRINUSE: return "Address already in use";
     case ENETUNREACH: return "Network is unreachable";
     case ECONNRESET: return "Connection reset by peer";
