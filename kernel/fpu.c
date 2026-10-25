@@ -25,6 +25,10 @@ The kernel never uses the FPU. It is built with -mno-80387 and -mno-sse (Makefil
 kernel code fails to link (the kernel has no libgcc); interrupt handlers therefore never touch a
 program's registers, and a #NM from ring 0 is a kernel bug: a panic. Nothing here allocates or
 waits: the trap runs with interrupts off (an interrupt gate), as schedule() does.
+
+10/25/26 (the review of B2): when no task owns the FPU, the trap clears the exceptions left
+pending in it before loading the current task's registers (fnclex), so that a program that
+died of an x87 exception cannot make frstor fault in ring 0 for every program after it.
 */
 
 #include <surfos/types.h>
@@ -63,6 +67,12 @@ static u_long *fpu_trap(struct trapframe *tf) {
         if(owner) {
             fpu_save(owner->fpu);
             saves++;
+        } else {
+            /* the registers of a program that ended are there, with an exception pending if it raised one (the #MF
+               that killed it). frstor checks for one first, as every x87 instruction but the FN* ones does, and would
+               raise it here, in ring 0, for each program to come; fnsave clears it on the other branch. Not at the
+               end (fpu_task_gone()): CR0.TS may be set there */
+            asm volatile("fnclex");
         }
         fpu_restore(t->fpu);
         owner = t;
