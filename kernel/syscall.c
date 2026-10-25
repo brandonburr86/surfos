@@ -24,7 +24,8 @@ written there afterwards, with a note when it did not all fit.
 for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short.
 
 10/24/26 (pipelines and scripting in surfsh): pipe (call 46, fs/pipe.c); lseek on a
-pipe answers -ESPIPE. A kernel command's output on a pipe whose reader went away
+pipe answers -ESPIPE; spawnx (47, surfos/spawn.h): spawnfd with a descriptor 3, closed
+descriptors, an environment and a job in the background. A kernel command's output on a pipe whose reader went away
 (dmesg | head) is dropped quietly: that is no failure of the command.
 */
 
@@ -48,6 +49,7 @@ pipe answers -ESPIPE. A kernel command's output on a pipe whose reader went away
 #include <surfos/pty.h>
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
+#include <surfos/spawn.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
@@ -62,6 +64,7 @@ typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
+typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
 
 /* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
 bool user_str(const char *s) {
@@ -177,6 +180,44 @@ static int sys_spawnfd(const char *path, char *const argv[], const int *fds) {
         }
     }
     return process_spawn_files(path, argc, kargv, curTask->con, 0, files);
+}
+
+/* 10/24/26: spawnfd with descriptor 3, closed descriptors, an environment, the background
+   (surfos/spawn.h). The environment's strings are checked as long as SPAWN_ENV_BYTES may hold
+   and copied by process_spawn_ex(), which says -E2BIG for too many of them or bytes */
+static int sys_spawnx(const char *path, char *const argv[], const struct spawnx *uo) {
+    char *kargv[SPAWN_MAX_ARGS], *kenv[SPAWN_ENV_MAX];
+    struct spawnx o;
+    struct spawn_more m;
+    int argc, i;
+    if(!ustr(path)) return -EFAULT;
+    argc = user_argv(path, argv, kargv);
+    if(argc < 0) return argc;
+    if(!uo || !ubuf(uo, sizeof(o), false)) return -EFAULT;
+    memcpy(&o, uo, sizeof(o));
+    if(o.job != 0 || (o.flags & ~(u_int)SPAWN_BG)) return -EINVAL;
+    memset(&m, 0, sizeof(m));
+    for(i = 0; i < 4; i++) {
+        if(o.fds[i] == -1 || o.fds[i] == SPAWN_CLOSED) {
+            if(o.fds[i] == SPAWN_CLOSED && i < 3) m.closed |= 1u << i;
+            continue;
+        }
+        m.files[i] = fd_get(o.fds[i]);
+        if(!m.files[i]) return -EBADF;
+    }
+    if(o.envp) {
+        for(;; m.envc++) {
+            if(!ubuf(o.envp + m.envc, sizeof(char *), false)) return -EFAULT;
+            if(!o.envp[m.envc]) break;
+            if(m.envc == SPAWN_ENV_MAX) return -E2BIG;
+            if(!uvm_check_str(curTask->uvm, o.envp[m.envc], SPAWN_ENV_BYTES))
+                return ubuf(o.envp[m.envc], SPAWN_ENV_BYTES, false) ? -E2BIG : -EFAULT;
+            kenv[m.envc] = o.envp[m.envc];
+        }
+    }
+    m.envp = kenv;
+    m.background = (o.flags & SPAWN_BG) != 0;
+    return process_spawn_ex(path, argc, kargv, curTask->con, 0, &m);
 }
 
 /* 10/6/26: a kill of the caller ends the wait (EINTR), and the caller ends with the call */
@@ -502,6 +543,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
     case SYS_pipe:     r = sys_pipe((int *)a); break;          /* 10/24/26: fs/pipe.c */
+    case SYS_spawnx:   r = sys_spawnx((const char *)a, (char *const *)b, (const struct spawnx *)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

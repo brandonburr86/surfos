@@ -59,6 +59,10 @@ int spawn(const char *path, char *const argv[]);                    /* the new p
 int spawnfd(const char *path, char *const argv[], const int fds[3]);
     /* the same, with the child's descriptors 0, 1 and 2 sharing this process's fds[0..2]
        (-1: the console), for redirection: the files stay open here too */
+/* 10/24/26: the same with a descriptor 3, closed descriptors, an environment, the background
+   (surfos/spawn.h); spawn() and spawnfd() are this with environ (unistd.h) */
+#include <surfos/spawn.h>
+int spawnx(const char *path, char *const argv[], const struct spawnx *o);
 int wait(int pid, int *status);     /* pid -1: any child. status: the exit code, -1 when it was killed */
 #define WNOHANG 1                   /* 10/6/26: waitpid() answers 0 at once while the children run on */
 int waitpid(int pid, int *status, int options);

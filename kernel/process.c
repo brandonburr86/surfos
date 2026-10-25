@@ -22,6 +22,11 @@ could not be loaded, whatever its exit status says.
 process was handed (its arguments, its files) is never left behind. A program started
 by a task that its console's pager covers is in the foreground (TF_FOREGROUND): Ctrl+C
 reaches it (tty.c, task_interrupt_job()).
+
+10/24/26 (pipelines and scripting in surfsh): process_spawn_ex() (SYS_spawnx, surfos/spawn.h)
+also hands the child a descriptor 3, leaves a descriptor closed, gives it an environment (on
+its stack after argv: argc, argv, envp for crt0), and starts a job in the background that
+the pager's Ctrl+C does not reach.
 */
 
 #include <surfos/types.h>
@@ -31,6 +36,7 @@ reaches it (tty.c, task_interrupt_job()).
 #include <surfos/elf.h>
 #include <surfos/process.h>
 #include <surfos/syscall.h>
+#include <surfos/spawn.h>
 #include <surfos/irq.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
@@ -48,13 +54,17 @@ struct spawn_args {
     int argc;
     char *argv[SPAWN_MAX_ARGS];
     char strs[SPAWN_STR_BYTES];
-    struct file *files[3];              /* the child's 0, 1, 2 (a reference each); NULL: the console */
+    struct file *files[4];              /* the child's 0, 1, 2, 3 (a reference each); NULL: the console (0-2), none (3) */
+    u_int closed;                       /* 10/24/26: bit n: no descriptor n at all (0-2) */
+    int envc;                           /* 10/24/26: the environment */
+    char *envp[SPAWN_ENV_MAX];
+    char envstrs[SPAWN_ENV_BYTES];
 };
 
 /* drop the references to the files the child has not taken over */
 static void release_files(struct spawn_args *sa) {
     int i;
-    for(i = 0; i < 3; i++) {
+    for(i = 0; i < 4; i++) {
         if(sa->files[i]) vfs_close(sa->files[i]);
         sa->files[i] = NULL;
     }
@@ -91,7 +101,7 @@ static void user_entry(void *arg) {
     struct file *f = NULL;
     struct elf32_ehdr eh;
     struct elf32_phdr ph;
-    u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1];
+    u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1], env_user[SPAWN_ENV_MAX + 1];
     int i, r, fd;
 
     m = uvm_create();
@@ -127,10 +137,19 @@ static void user_entry(void *arg) {
     if(!top) load_failed(sa, f, "nothing to load");
     m->brk_start = m->brk = PAGE_ALIGN_UP(top);
 
-    /* the stack: strings at the top, then the argv array, then argc and argv for _start */
+    /* the stack: strings at the top (the environment's, then argv's), then the envp and argv arrays,
+       then argc, argv and envp for _start (10/24/26: envp; at most SPAWN_STR_BYTES + SPAWN_ENV_BYTES
+       of strings and both arrays, well inside the pages mapped here) */
     if(uvm_map_range(m, USER_END - USER_STACK_INIT, USER_STACK_INIT, PTE_W) != 0) load_failed(sa, f, "out of memory for the stack");
     m->stack_low = USER_END - USER_STACK_INIT;
     sp = USER_END;
+    for(i = sa->envc - 1; i >= 0; i--) {
+        size_t n = strlen(sa->envp[i]) + 1;
+        sp -= n;
+        memcpy((void *)sp, sa->envp[i], n);
+        env_user[i] = sp;
+    }
+    env_user[sa->envc] = 0;
     for(i = sa->argc - 1; i >= 0; i--) {
         size_t n = strlen(sa->argv[i]) + 1;
         sp -= n;
@@ -139,20 +158,26 @@ static void user_entry(void *arg) {
     }
     argv_user[sa->argc] = 0;
     sp &= ~3UL;
-    sp -= (sa->argc + 1) * sizeof(u_long);
-    memcpy((void *)sp, argv_user, (sa->argc + 1) * sizeof(u_long));
+    sp -= (sa->envc + 1) * sizeof(u_long);
+    memcpy((void *)sp, env_user, (sa->envc + 1) * sizeof(u_long));
     {
-        u_long argv_addr = sp;
-        sp -= 2 * sizeof(u_long);
+        u_long envp_addr = sp, argv_addr;
+        sp -= (sa->argc + 1) * sizeof(u_long);
+        memcpy((void *)sp, argv_user, (sa->argc + 1) * sizeof(u_long));
+        argv_addr = sp;
+        sp -= 3 * sizeof(u_long);
         ((u_long *)sp)[0] = (u_long)sa->argc;
         ((u_long *)sp)[1] = argv_addr;
+        ((u_long *)sp)[2] = envp_addr;
     }
 
-    /* 0, 1, 2: the files the parent passed, otherwise the console */
-    for(fd = 0; fd < 3; fd++) {
+    /* 0, 1, 2: the files the parent passed, otherwise the console (10/24/26: or nothing); 3 only
+       when one was passed */
+    for(fd = 0; fd < 4; fd++) {
         struct file *cf = sa->files[fd];
         sa->files[fd] = NULL;                             /* the descriptor table owns the reference now */
-        if(!cf && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0) continue;
+        if(!cf && (fd == 3 || (sa->closed & (1u << fd)) ||
+                   vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0)) continue;
         curTask->files[fd] = cf;
     }
 
@@ -163,11 +188,22 @@ static void user_entry(void *arg) {
 }
 
 int process_spawn(const char *path, int argc, char *const argv[], surf_console *con, u_int flags) {
-    return process_spawn_files(path, argc, argv, con, flags, NULL);
+    return process_spawn_ex(path, argc, argv, con, flags, NULL);
 }
 
 int process_spawn_files(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
                         struct file *const files[3]) {
+    struct spawn_more m;
+    int i;
+    if(!files) return process_spawn_ex(path, argc, argv, con, flags, NULL);
+    memset(&m, 0, sizeof(m));
+    for(i = 0; i < 3; i++) m.files[i] = files[i];
+    return process_spawn_ex(path, argc, argv, con, flags, &m);
+}
+
+/* 10/24/26: with a descriptor 3, closed descriptors, an environment, in the background (process.h) */
+int process_spawn_ex(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
+                     const struct spawn_more *more) {
     struct spawn_args *sa;
     struct stat st;
     surf_task *t;
@@ -191,18 +227,31 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
         used += n;
     }
     sa->argc = argc;
-    for(i = 0; files && i < 3; i++) {
-        if(!files[i]) continue;
+    if(more) {                                      /* 10/24/26: the environment */
+        if(more->envc < 0 || more->envc > SPAWN_ENV_MAX) { kfree(sa); return -E2BIG; }
+        for(i = 0, used = 0; i < more->envc; i++) {
+            size_t n = strlen(more->envp[i]) + 1;
+            if(used + n > SPAWN_ENV_BYTES) { kfree(sa); return -E2BIG; }
+            memcpy(sa->envstrs + used, more->envp[i], n);
+            sa->envp[i] = sa->envstrs + used;
+            used += n;
+        }
+        sa->envc = more->envc;
+        sa->closed = more->closed & 7;
+    }
+    for(i = 0; more && i < 4; i++) {
+        if(!more->files[i]) continue;
         {
             u_long irqf = irq_save();               /* the count is shared with the parent's descriptors */
-            files[i]->refs++;
+            more->files[i]->refs++;
             irq_restore(irqf);
         }
-        sa->files[i] = files[i];
+        sa->files[i] = more->files[i];
     }
     base = strrchr(sa->path, '/');
     base = base ? base + 1 : sa->path;
-    if(!(flags & TF_DETACHED) && con && console_paging(con)) flags |= TF_FOREGROUND;   /* 10/6/26 */
+    if(!(flags & TF_DETACHED) && con && console_paging(con) && !(more && more->background))
+        flags |= TF_FOREGROUND;                     /* 10/6/26; 10/24/26: not a job started in the background */
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
     if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
     return (int)t->pid;

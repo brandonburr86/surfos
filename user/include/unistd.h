@@ -43,5 +43,6 @@ int usleep(useconds_t usec);                    /* rounded up to whole milliseco
 int isatty(int fd);                             /* 1 for the console (/dev/console, /dev/tty) */
 void _exit(int code) __attribute__((noreturn)); /* no stdio flush, no atexit handlers */
 void *sbrk(intptr_t incr);                      /* (void *)-1 when there is no more memory */
+extern char **environ;                          /* 10/24/26: "name=value" strings, NULL-terminated (env.c) */
 
 #endif

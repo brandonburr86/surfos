@@ -9,6 +9,7 @@ kernel answers -errno on failure; the wrappers turn that into -1 and errno.
 10/24/26 (pipelines): pipe(), and a write to a pipe nobody reads any more ends the
 program with status 141, as SIGPIPE does elsewhere, unless it asked for the error
 (broken_pipe_exit(0)). Only a pipe ends it: a connection's EPIPE is an error.
+spawnx(), and spawn() and spawnfd() over it with environ (env.c).
 */
 
 #include <errno.h>
@@ -33,6 +34,7 @@ typedef char netaddr_layout_is_fixed[sizeof(struct netaddr) == 8 ? 1 : -1];
 typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
+typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
 
 int errno;
 
@@ -148,10 +150,21 @@ int isatty(int fd) {
 
 /**** SurfOS calls (surf.h) ****/
 
-int spawn(const char *path, char *const argv[]) { return (int)ret(sc(SYS_spawn, (long)path, (long)argv, 0)); }
-int spawnfd(const char *path, char *const argv[], const int fds[3]) {
-    return (int)ret(sc(SYS_spawnfd, (long)path, (long)argv, (long)fds));
+/* 10/24/26: spawn() and spawnfd() are spawnx() with this program's environment (surfos/spawn.h) */
+int spawnx(const char *path, char *const argv[], const struct spawnx *o) {
+    return (int)ret(sc(SYS_spawnx, (long)path, (long)argv, (long)o));
 }
+int spawnfd(const char *path, char *const argv[], const int fds[3]) {
+    struct spawnx o;
+    int i;
+    for(i = 0; i < 3; i++) o.fds[i] = fds ? fds[i] : -1;
+    o.fds[3] = -1;
+    o.envp = environ;
+    o.job = 0;
+    o.flags = 0;
+    return spawnx(path, argv, &o);
+}
+int spawn(const char *path, char *const argv[]) { return spawnfd(path, argv, NULL); }
 int kill(int pid) { return (int)ret(sc(SYS_kill, pid, 0, 0)); }
 int yield(void) { return (int)sc(SYS_yield, 0, 0, 0); }
 unsigned int uptime(void) { return (unsigned int)sc(SYS_uptime, 0, 0, 0); }

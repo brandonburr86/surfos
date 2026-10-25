@@ -119,11 +119,6 @@ void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*cm
     return NULL;
 }
 
-char *getenv(const char *name) {
-    (void)name;
-    return NULL;
-}
-
 static unsigned long rand_state = 1;
 
 int rand(void) {
