@@ -65,9 +65,10 @@ user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.
              limits.h stdarg.h stddef.h stdint.h poll.h, sys/stat.h sys/statfs.h sys/types.h, and
              surfos/prompt.h kcmd.h version.h sock.h poll.h pty.h proc.h, which include the kernel's headers
              of those names); bin/ (hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head
-             hexdump fstest edit pagetest kcmdtest nettest ptytest); surfsh/ (the SurfOS shell: main.c
-             editor.c complete.c parse.c run.c builtins.c surfsh.h); telnetd/ (the telnet server: main.c
-             server.c telnet.c telnet.h telnetd.h)
+             hexdump fstest edit pagetest kcmdtest nettest ptytest; 10/24/26 nc); surfsh/ (the SurfOS shell:
+             main.c editor.c complete.c parse.c run.c builtins.c surfsh.h); telnetd/ (the telnet server:
+             main.c server.c telnet.c telnet.h telnetd.h); 10/24/26 ftpd/ (the file transfer server: main.c
+             server.c ftp.c ftp.h ftpd.h, section 21)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, pciinfo.c (lspci -v, wifiinfo), serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
              framebuffer.c + fbcore.c + font8x16.c (the UEFI console: the 256 code page 437 characters;
@@ -88,7 +89,8 @@ tests/       host/: unit tests built with the host compiler (make unittest): bli
              framebuffer, USB parsing, partition tables, mkfs, the user C library, the prompt, code page 437
              and the font, the pager (test_pager.c with pager_bridge.c and pager_shim/: the real console.c and
              tty.c on the host), the telnet protocol (test_telnet.c) and telnetd's loop (test_telnetd.c with
-             telnetd/surf.h, a simulated kernel), PCI configuration space (test_pciinfo.c);
+             telnetd/surf.h, a simulated kernel), PCI configuration space (test_pciinfo.c), ftpd's FTP
+             protocol (test_ftp.c, 10/24/26);
              test_part_tools.py (partition tables against sfdisk and sgdisk), test_mkusb.py, test_devenv.py
 ```
 
@@ -527,7 +529,9 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   with; `ttyctl` is raw mode and the screen size (section 7). **ai-dev** (10/6/26): `wait`
   takes options, `WNOHANG` (0 at once while children run on); `ttyctl` also `TTY_PAGE`
   and `TTY_CAPS`; `kcmd` and `kcmdinfo` (32 and 33) run and list the kernel's shell
-  commands (below).
+  commands (below); 34-45 are the network's, pseudo-terminals' and processes' (section 18,
+  Undertow's `resolve` and `getentropy`), and 10/24/26 `shutdown` and `sockaddr` (46 and 47,
+  section 21).
 * **Kernel commands from programs** (**ai-dev**, 10/6/26; `kernel/syscall.c`,
   `include/surfos/kcmd.h`). `SYS_kcmd(argv)` runs one of the ring-0 shell's commands in
   the calling task through `shell_run_command()`, as the ring-0 shell would, and returns
@@ -1215,7 +1219,9 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   in the 8 KB send buffer and returns that count, waiting only while nothing fits, and
   `close()` never waits: the FIN follows the queued bytes and the socket finishes on its
   own. Errors are POSIX's (ECONNRESET, ETIMEDOUT, ECONNREFUSED, EHOSTUNREACH,
-  ENETUNREACH, EADDRINUSE, ...), with Linux's numbers.
+  ENETUNREACH, EADDRINUSE, ...), with Linux's numbers. 10/24/26 (section 21): `SYS_shutdown`
+  (46) half-closes a connection, `SYS_sockaddr` (47) gives both its ends, and
+  `SYS_connect`'s `CONNECT_NOWAIT` hands one out before its handshake is done.
 * **TCP** (`net/tcp.c`), reviewed twice and hardened for a server that must outlive bad
   clients. A handshake that dies leaves the listener's backlog at once, the SYN-ACK gives
   up after 4 tries, a SYN that finds the backlog full replaces the oldest half-open entry
@@ -1523,7 +1529,10 @@ http.c     the HTTP/1.1 protocol, no system calls: request heads, paths, header 
   holds no volume through its current directory. `httpd off` kills it; the kill ends it at
   the end of its `poll()`, and its descriptors close with it. `httpd serve` runs the same
   loop in the foreground and prints each request on its console instead (never in the
-  kernel log, whose 16 KB a few hundred requests would fill). A server started in a telnet
+  kernel log, whose 16 KB a few hundred requests would fill). 10/24/26: each line it prints
+  starts a new screenful of the pager first (`ttyctl(TTY_PAGE, 0)`): the user shell pages
+  every command, and the server stopped at `--More--` after 22 requests, answering none until
+  a key came. A server started in a telnet
   session is on the session's pseudo-terminal and ends at its hangup; `httpd on` says so.
 * **The loop.** A connection reads its request head (`http_head_end()`; at most 4 KB, else
   414 or 431), then sends the response: the header, then the body from the file, or from
@@ -1587,6 +1596,166 @@ http.c     the HTTP/1.1 protocol, no system calls: request heads, paths, header 
 * **Limits.** GET and HEAD only: no forms, uploads, server-side programs or HTTPS; one
   background server; the address `httpd on` prints is the default interface's (`netinfo`).
   SurfOS has no loopback interface, so Undertow on the same machine cannot open the site.
+
+## 21. Files to and from other computers: ftpd and nc (October 2026)
+
+The owner asked (2026-10-24) for networking applications to transfer files remotely, some
+sort of file transfer protocol, so that files go back and forth with other computers such
+as their Mac, and then other tools like it (`docs/USB-BOOT.md` section 17; the brief is
+`docs/superpowers/plans/2026-10-24-nettools.md`). Two programs on the sockets of section 18,
+and what they needed of them:
+
+```
+ftpd (user/ftpd/)      ring 3: an FTP server. main.c the commands, server.c one poll() loop, ftp.c the protocol
+nc (user/bin/nc.c)     ring 3: connections by hand, files to and from the Mac's nc
+sockets (net/sock.c)   SYS_shutdown (the half-close), SYS_sockaddr (both ends), SYS_connect's CONNECT_NOWAIT
+TCP (net/tcp.c)        tcp_shutdown(), tcp_addrs(), tcp_open_nowait(); TIME_WAIT keeps what a program has not read
+the network manager    a running ftpd keeps the Wi-Fi keeper off open networks, as telnetd does (section 19)
+```
+
+* **The sockets' new calls** (`include/surfos/sock.h`). `SYS_shutdown` (46, `shutdown(fd,
+  SHUT_WR)`) is the half-close: the FIN goes out behind the bytes queued, as a close's does,
+  but the descriptor stays open and `read()` goes on with what the other end still sends,
+  until its FIN; `write()` says EPIPE afterwards and `poll()` no longer says POLLOUT. The
+  socket is no orphan, so FIN_WAIT_1 and FIN_WAIT_2 take its data as ESTABLISHED does, and
+  one that reaches TIME_WAIT with bytes unread keeps its receive buffer (TIME_WAIT gave it
+  back at once, which only orphans and the kernel's own closes ever reached before);
+  `tcp_shutdown()` never hands a failed connection to `start_close()`, which would free it
+  under the program's descriptor. A half-closed connection the program still holds is probed
+  by keepalive in FIN_WAIT_2 as an open one is, so a read waiting there for the other end
+  ends (ETIMEDOUT) when that end has gone; only orphans had a bound there before. A shutdown
+  during the handshake (`CONNECT_NOWAIT`) is ENOTCONN, as POSIX has it: no FIN could follow
+  it then. `SYS_sockaddr` (47, `tcp_addrs()`) gives a socket's two
+  ends, this one's being the address the other end reached (a listener's: 0, every
+  interface). `SYS_connect`'s third argument, `CONNECT_NOWAIT` (`tcp_connect_start()`),
+  hands the descriptor out at once with the SYN on its way: `poll()` says POLLOUT once the
+  handshake is done and POLLERR when it failed, `read()` then says why (refused, the SYN's
+  tries run out after about 27 s, ARP gave up), and a read or write before the end of the
+  handshake waits for it (no program held a SYN_SENT socket before; `tcp_write()` would
+  have said EPIPE). libsurf passes 0, so every program that connects is as it was. ENOTSOCK
+  (88) is new in both errno tables.
+* **ftpd's commands** (`main.c`), laid out as httpd's: `ftpd on [-r] [-a address] [folder]
+  [port] [first-last]` (the folder `/` by default: every mounted volume at its own path;
+  port 21; passive ports 50000-50999), `ftpd serve` the same in the foreground, each command
+  printed with its reply's code, `ftpd off`, `ftpd [status]`. The words come in any order,
+  told apart by their shape. The running server is a detached user task named `ftpd`; `on`
+  takes the port itself and starts the server with `spawnfd()` and the internal word
+  `--server`, the listening socket as its descriptor 0. A folder under `/dev` or `/.netman`
+  is refused, and a control port inside the passive range.
+* **The server** (`server.c`): one `poll()` loop over the listener and up to six sessions. A
+  session's control connection is read into a buffer and cut into lines by `ftp.c` (Telnet's
+  IAC sequences taken out: Python's ftplib sends ABOR as urgent data, which comes in line
+  here, and other clients put IP and Synch before it); one command runs at a time and its
+  replies go into a buffer written on POLLOUT. Commands wait in the buffer and in the kernel
+  while 16 KB of replies wait for a client that does not read them, during a transfer too.
+  During a transfer the control connection is still read: ABOR (426 for the transfer, then
+  226) and STAT (213, how far it is) are answered at once, and up to four other commands are
+  held, to run in their order once the transfer has ended (their replies come after ABOR's
+  and STAT's); more wait unread. A client that closes its side of the control connection (as
+  `nc` does when its input ends) has what it sent run and answered, then the session closes;
+  while it takes nothing, its connection rests 20 ms between polls instead of spinning on
+  POLLHUP, as httpd's do. A data connection is prepared by PASV or EPSV (a listener with a
+  backlog of 1 on the next free port of the range; the connection is accepted at once if it
+  comes from the client's own address, another is closed and the listener waits on) or by
+  PORT or EPRT (the client's own address only, ports from 1024: no FTP bounce), whose
+  connection out is made with `CONNECT_NOWAIT` and polled for, so a client whose firewall
+  drops it holds up no other session. A transfer opens its file and answers 150 once its
+  data connection is there (taken, begun for active mode, or there before the command), as
+  vsftpd and ProFTPD do: one waiting for its passive connection holds the listener alone, so
+  `accept()` always finds a descriptor for it (one got its 150 and then none: 425), and an
+  upload whose connection never comes leaves its file as it was. It moves the bytes a piece
+  of 8 KB at a time as far as the connection takes them, closes the data connection and
+  answers 226. Listings are made in memory first (8 MB at most), so no folder stays open
+  while a client reads one. Times: 30 s for a data connection to come or be made (425), 60 s
+  for a transfer that moves nothing (426), 60 s for replies nobody takes, 5 minutes without
+  a command (421). Six sessions fit the 16 descriptors (0, 1, 2 and the kernel log's leave
+  twelve: a session holds its control connection, and a data connection and a file while it
+  moves one): three sessions move files at once. A seventh connection is told 421, and a
+  transfer that finds no descriptor is told to try again (425) instead of its 150. `ftpd
+  serve` resets the pager before each line it prints (`ttyctl(TTY_PAGE, 0)`): the user shell
+  pages every command, and a server held at `--More--` would answer nobody until a key came.
+* **The protocol** (`ftp.c`, no system calls, host-tested): the control stream, the verb table
+  (with the X forms of Windows' ftp, and the verbs known but not done: AUTH and the rest of
+  RFC 2228, MDTM, MFMT, the hashes, all 502), a session's paths (its own `/` the folder
+  served, `..` held there) and the file system's, the paths never reached (`/dev`, `/.netman`),
+  the texts of PORT, EPRT, PASV and EPSV, REST's offsets, LIST's options, the lines of LIST
+  (`ls -l`'s, the year for a time six months back or an hour ahead), NLST, MLSD and MLST,
+  text mode's line ends both ways in pieces, quoting a path for 257, errno's replies.
+* **What a client sees.** `RETR` reads a file, `STOR` writes it in place (with REST, cut at
+  the offset and written from it, so a resumed upload ends as the file sent; there is no
+  temporary name renamed over it, which on FAT would need the rename of a file over another,
+  section 10), `APPE` appends, `STOU` makes `name.1` and so on; an upload is fsync()ed before
+  its 226. `DELE`, `MKD`, `RMD` (whose refusal of a folder that holds only names starting with
+  a dot says so), `RNFR` and `RNTO` (as `mv`); `SIZE`; `CWD`, `CDUP`, `PWD`. LIST and NLST leave
+  names starting with a dot out unless asked (`-a`), as `ls` does; MLSD lists them, for
+  programs that empty a folder. LIST gives SurfOS's clock as it is, local time as `ls -l`
+  does; MDTM and MLSD's `modify` would have to be UTC, which the clock does not know, so they
+  are not offered, and MLST is not in FEAT (GUI clients then list with LIST). Text mode (TYPE
+  A) turns LF into CR LF going out and CR LF into LF coming in. `-a` names the address PASV
+  replies give (a server behind a router, or QEMU's user network in the tests); by default
+  it is the address the client reached (`tcp_addrs()`), right on a laptop with Ethernet and
+  Wi-Fi on two networks. `-r` refuses every write with 550; a volume mounted read-only, the
+  initrd and the root of the mount points refuse them by themselves, and LIST and MLSD show
+  their permissions so.
+* **nc** (`user/bin/nc.c`): `nc host port` connects, `nc -l port` takes one connection, `nc
+  -z host port...` says which ports are open (ranges too, 1000 ports at most). One `poll()`
+  loop: what is typed (or a file given with `<`) goes out, what comes back is written to
+  stdout byte for byte. Each way ends by itself: the input's end is sent as the half-close,
+  and the other end's FIN says it has sent all it will; `nc` ends when both have, or at that
+  FIN when the input is typed (the console has no end of its own). That is what the Mac's
+  `nc` does, so either one sends a file to the other, also to a Mac `nc -l` whose own input
+  is at its end and half-closes at once (a smoke check: the first `nc` ended at that FIN and
+  lost the rest of its file, which the Mac's real `nc` showed). After the FIN the socket is
+  left out of `poll()` while nothing waits to go, and rests 20 ms when what waits does not
+  fit. `-c` sends CR LF for each line typed, `-w` ends a connection silent that long
+  (counted from the last byte in or out whatever `poll()` says, so a rest after the other
+  end's FIN neither holds it off nor spins once it is up), `-v` says both ends
+  (`tcp_addrs()`) and how it ended. The console's line mode reads a line at its Enter, so
+  what arrives while one is being typed shows after it, and there is no key for the end of
+  the input (Ctrl+C ends `nc`).
+* **The network manager.** `netman_ftp_exposed()` is true while any user task named `ftpd`
+  lives; the keeper then joins no open network by itself (`+NET: wlan0: SurfSim is in range,
+  but it is open and an FTP server (ftpd) runs: not joined by itself`), `wifi join` of an open
+  network says the server answers there too, and `wifi save` of one says SurfOS will not join
+  it by itself meanwhile.
+* **Tests.** `make unittest` adds `test_ftp` (`ftp.c` as it is, 131 checks: the control
+  stream in every piece size and at random with Telnet commands in it, every path and
+  address rule, the listing lines and their dates, text mode both ways at random). `make
+  test` adds the commands' refusals and `@ftpd-session` (a login, FEAT, folders, every
+  listing, the initrd's files byte for byte, EPSV), `@ftpd-upload` (uploads to the FAT disk
+  read back, a shorter file over a longer one, APPE, REST both ways, STOU, a name with a
+  space, renames, folders, hidden files), `@ftpd-text`, `@ftpd-active` (PORT and EPRT both
+  ways, a refused connection, no bounce, IPv6 told, EPSV ALL), `@ftpd-abort` (ABOR, STAT and
+  a NOOP during a 2.5 MB transfer read slowly; NOOP, STAT and ABOR together: the NOOP held,
+  the others answered at once), `@ftpd-descriptors` (six sessions: three transfers at once
+  whose clients send RETR before they connect, then three that connect first, a fourth told
+  to try again each time), `@ftpd-protocol` (Telnet sequences, commands together, a NUL, a
+  line of 600 bytes, every refusal), `@ftpd-places` (six sessions and a seventh refused; two
+  half-closed clients answered whole), `@ftpd-data-time` (425 after 30 s), `@ftpd-readonly`
+  and `@ftpd-serve` (sixty commands printed without `--More--`); `nettest limits` checks the
+  new calls' errors; `nc`'s refusals, `@nc-receive` and `@nc-send` (200000 random bytes each
+  way with this host playing the Mac's `nc`, and a receiver that half-closes first),
+  `@nc-talk` and `@nc-scan`; `selftest` refuses a folder renamed into itself under another
+  case of its name (audit R1), and so does `@ftpd-upload` over FTP; and the network
+  manager's second settings boot runs `ftpd on` and sees `wifi connect` set the open network
+  aside. The smoke test forwards guest port 21 and four passive ports, each to the same port
+  of the guest, as EPSV needs (`q.ports['ftp']`, `q.ports['ftp_pasv_range']`). `make
+  test-tcp` adds `halfclose` (the program's FIN, 12000 bytes after it read as its window
+  allows, read() 0, TIME_WAIT; a program that reads late, in TIME_WAIT, gets what came),
+  `nowait` (a SYN answered 2.5 s late while the program polls; a reset) `finwait` (a
+  half-closed connection whose other end vanished: keepalive gives it up) and `ncstuck` (`nc
+  -w` ends a connection whose other end half-closed and takes nothing; through QEMU's user
+  network this host's buffers take the whole file under Linux, so it is no smoke check of
+  its own). `make test-usb`'s `usbnet` scenario logs in over the USB Ethernet adapter, lists
+  the initrd, takes a file and is refused an upload. On the Mac against SurfOS in QEMU: curl
+  (list, download, upload, delete, a download and an upload resumed), Python's ftplib, the
+  Mac's own `nc` both ways (300000 random bytes each, byte for byte), and Finder's own FTP
+  (`mount_ftp`, Go > Connect to Server), which mounted the server, listed it and copied a
+  file out byte for byte (it tried PORT first and fell back to PASV when PORT was refused
+  behind QEMU's NAT; through QEMU it needs `-a 127.0.0.1`).
+* **Limits.** No logins or encryption (no FTPS, no SFTP) and no time zone (no MDTM). One
+  background server, six sessions, files below 2 GB (SurfOS's file offsets). Text mode
+  converts line ends only. `nc` speaks TCP alone (no UDP), one connection at a time.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
