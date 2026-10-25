@@ -496,7 +496,7 @@ static int latched_together(struct stub *s, unsigned from, uint64_t *when) {
 static void t_latch(unsigned seed) {
     struct stub *s = fresh(1);
     unsigned from;
-    uint64_t vb, next;
+    uint64_t vb = 0, next;
     (void)seed;
     from = s->nw;
     check(gfx(s, "gfx mode gfx 2") == CMD_OK && G.latched && latched_together(s, from, &vb),
