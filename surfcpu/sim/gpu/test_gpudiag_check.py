@@ -31,7 +31,11 @@ scenes, 84 checks for a first run and 83 for a rerun:
     gpudiag-named design with another boot ROM, of a failed build, or naming no design fails; a run
     whose banner was garbled but whose bitstream line shows the build passes (B12), and --build-id
     alone does not see a dirty build (B14), as documented;
-  - --must-fail passes only a failing run that says what it must.
+  - --must-fail passes only a failing run that says what it must;
+  - the cube (GPU2): its header and its lines a second after a whole run pass, and so does a capture
+    that ends inside one; a line with a torn frame, a missed one or fewer than 30 frames drawn fails,
+    also after an earlier run that a rerun follows; words after them fail; --cube-seconds N wants N
+    lines after the last run.
 Exit 0 when all pass.
 """
 
@@ -90,6 +94,21 @@ def run(crcs=("11111111", "22222222"), summary=None, skip=False, rerun=False, bu
         summary = "GPUDIAG: FAIL (%d of %d checks failed)" % (failures, total) if failures else \
                   "GPUDIAG: PASS (%d checks)" % total
     return "\n".join(lines + ["", summary, ""])
+
+
+CUBE = ("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not "
+        "checked), torn (frames that were none of the cube's 128)\n")
+
+
+def cube(n, drawn=60, missed=0, torn=0, at=None):
+    """n of the cube's lines a second, the one numbered `at` with the given drawn, missed and torn"""
+    out, td, ts, tm, tt = "", 0, 0, 0, 0
+    for k in range(1, n + 1):
+        d, m, t = (drawn, missed, torn) if (at is None or at == k) else (60, 0, 0)
+        td, ts, tm, tt = td + d, ts + 60, tm + m, tt + t
+        out += "cube %4d s: %3d drawn, %3d shown, %d missed, %d torn (in all %d drawn, %d shown, %d missed, %d torn)\n" % (
+            k, d, 60, m, t, td, ts, tm, tt)
+    return out
 
 
 def stamped(text, cut_at_summary=False):
@@ -257,6 +276,23 @@ expect("B14: --build-id alone: a dirty build of that id (the manifest would know
        + ECHO, True, "--build-id", "12345678")
 expect("--build-id and --manifest that disagree", run() + ECHO, False, "--build-id", "12345678",
        man=manifest("87654321"))
+# the cube (GPU2): its lines after a whole run
+expect("a whole run, the echo, the cube's header and three seconds", run() + ECHO + CUBE + cube(3), True)
+expect("the cube: a torn frame", run() + ECHO + CUBE + cube(3, torn=1, at=2), False)
+expect("the cube: a frame not checked", run() + ECHO + CUBE + cube(3, missed=1, at=3), False)
+expect("the cube: 29 frames drawn in a second", run() + ECHO + CUBE + cube(3, drawn=29, at=1), False)
+expect("the cube: the capture ends inside a line", run() + ECHO + CUBE + cube(2) + "cube    3 s:  6", True)
+expect("the cube: the capture ends inside the word cube", run() + ECHO + CUBE + cube(2) + "cu", True)
+expect("the cube: words after its lines", run() + ECHO + CUBE + cube(2) + "identity ok\n", False)
+expect("the cube: an echo among its lines", run() + ECHO + CUBE + cube(1) + "echo   1: 'a' 0x61\n" + cube(2), True)
+expect("the cube's torn frame after a run that a rerun follows", run() + ECHO + CUBE + cube(2, torn=2, at=1) +
+       run(rerun=True) + ECHO, False)
+expect("the cube's lines after a run, then Ctrl-R and a rerun", run() + ECHO + CUBE + cube(2) + run(rerun=True) +
+       ECHO + CUBE, True)
+expect("--cube-seconds 3: three lines", run() + ECHO + CUBE + cube(3), True, "--cube-seconds", "3")
+expect("--cube-seconds 3: two lines", run() + ECHO + CUBE + cube(2), False, "--cube-seconds", "3")
+expect("--cube-seconds 1: the lines were the run before's", run() + ECHO + CUBE + cube(2) + run(rerun=True) + ECHO,
+       False, "--cube-seconds", "1")
 # --must-fail
 expect("--must-fail: a failing run that says why", run(skip=True), True, "--must-fail", "skipped: no engine")
 expect("--must-fail: a failing run that does not say it", run(skip=True), False, "--must-fail", "gpu.ID reads")
@@ -266,4 +302,4 @@ if failures:
     sys.exit(1)
 print("test_gpudiag_check: PASS (%d checks of gpudiag_check.py: every whole run's verdict and total, runs cut short "
       "and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth to sixth reviews' "
-      "cases, the build to test, --must-fail)" % checks)
+      "cases, the build to test, --must-fail, the cube's lines)" % checks)

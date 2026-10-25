@@ -21,8 +21,9 @@
 #                          about an hour; not part of check)
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
-#                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py); SurfBoot's
-#                          monitor reports features 1ff
+#                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py), the cube's
+#                          16 checked frames and its first second of free run (none torn or missed);
+#                          SurfBoot's monitor reports features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
@@ -153,15 +154,16 @@ test-gpu-interconnect: $(GPU_BUILD)/tb_interconnect_gpu.vvp
 	  grep -h "PASS" $(GPU_BUILD)/tb_interconnect_gpu.$$s.txt | sed "s/^/  [seed $$s] /"; done
 
 # ---------------------------------------------------------------- gpudiag and its expected CRCs
-GPUDIAG_SRC := diagnostics/gpudiag.c diagnostics/gpuscenes.c diagnostics/report.c diagnostics/probes.S
+GPUDIAG_SRC := diagnostics/gpudiag.c diagnostics/gpuscenes.c diagnostics/gpucube.c diagnostics/report.c diagnostics/probes.S
 GPUDIAG_OBJ := $(FW_OBJ)/common/start_rom.o $(patsubst %,$(FW_OBJ)/%.o,$(GPUDIAG_SRC)) $(FW_COMMON_OBJ)
 GPU_FONT    := ../driver/font8x16.c
 
 $(FW)/host/gpuscenes_expect: firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c \
-                             firmware/diagnostics/gpuscenes.h $(GPU_MODEL) $(GPU_MODEL_H) firmware/include/surfcpu/soc.h
+                             firmware/diagnostics/gpuscenes.h firmware/diagnostics/gpucube.c firmware/diagnostics/gpucube.h \
+                             $(GPU_MODEL) $(GPU_MODEL_H) firmware/include/surfcpu/soc.h
 	@mkdir -p $(dir $@)
 	$(Q)$(FW_HOST_CC) -std=gnu11 -O2 -g -Wall -Wextra -Werror -Isim/models -Ifirmware/include -Ifirmware/diagnostics \
-	  -o $@ firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c $(GPU_MODEL)
+	  -o $@ firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c firmware/diagnostics/gpucube.c $(GPU_MODEL)
 
 $(FW_GEN)/gpuscenes_expect.h: $(FW)/host/gpuscenes_expect $(GPU_FONT)
 	@mkdir -p $(dir $@)
@@ -217,14 +219,15 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS) $(GPU_ID_STAMP)
 	  || { tail -40 $(BUILD)/sim/obj_surfsim_gpu.txt; exit 1; }
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
-GPU_ENGINE_SCENES ?= 6
+GPU_ENGINE_SCENES ?= 10
 test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem
 	@mkdir -p $(GPU_BUILD)/soc
-	@# gpudiag, then Ctrl-R (as GPU.md section 14 and tools/board-test.py's late port type it), then the
-	@# rerun: the first run alone must pass, and the whole capture, whose final run is the rerun
+	@# gpudiag, its cube's first second of free run, then Ctrl-R (as GPU.md section 14 and
+	@# tools/board-test.py's late port type it), then the rerun: the first run alone must pass, and the
+	@# whole capture, whose final run is the rerun
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 900000000 \
 	  --vga-crc $(GPU_BUILD)/soc/frames.txt --transcript $(GPU_BUILD)/soc/uart.txt \
-	  --send 'Ctrl-R runs the diagnostic again\.\r\n=\x12' \
+	  --send 'cube +1 s:[^\n]*\n=\x12' \
 	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/surfsim.txt 2>&1; \
 	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/surfsim.txt; tail -30 $(GPU_BUILD)/soc/uart.txt; exit 1; }
 	$(Q)awk '{ print } /GPUDIAG: / { exit }' $(GPU_BUILD)/soc/uart.txt > $(GPU_BUILD)/soc/uart-first.txt
@@ -235,6 +238,8 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
 	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES) --build-id $(BUILD_ID_HEX)
 	$(Q)grep -q 'a rerun (Ctrl-R)' $(GPU_BUILD)/soc/uart.txt || { echo "test-gpu-soc: the rerun did not say it is one"; exit 1; }
+	@echo "  [the cube] $$(grep -a -o 'cube: 16 frames at full rate.*' $(GPU_BUILD)/soc/uart.txt | head -1 | tr -s ' ')"
+	@echo "  [the cube's free run] $$(grep -a -o 'cube  *1 s:[^)]*)' $(GPU_BUILD)/soc/uart.txt | head -1)"
 	@# a rerun after a run that left the engine's target and clip set (gpudiag-leftover.mem), as one
 	@# abandoned inside an engine scene would: the rerun sets its own, and passes (the third review, C4)
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-leftover.mem --quiet --max-cycles 900000000 \

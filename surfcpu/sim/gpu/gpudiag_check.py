@@ -3,7 +3,7 @@
 
     gpudiag_check.py --uart CAPTURE --frames FRAMES --expect gpuscenes_expect.h [--log LOG]
                      [--build-id HHHHHHHH | --manifest MANIFEST] [--engine-scenes N] [--accept-rerun]
-                     [--must-fail REGEX]
+                     [--cube-seconds N] [--must-fail REGEX]
 
 CAPTURE is what the UART carried: surfsim --transcript, a board's raw log (make uart-console
 LOG=<file>, which appends to the file), or tools/uart.py capture's lines, whose time stamps
@@ -24,10 +24,14 @@ only when:
   - no line of the capture shows a failure, wherever it falls (in a run, whole or cut short, before
     the first run or between two): a FAIL line, a section's "k of n checks failed", GPUDIAG: FAIL, or
     a scene's FRAME_CRC other than the model's;
-  - the capture ends with a whole run: after its GPUDIAG line only the UART echo, blank lines and
-    bytes without a word in them (a 0x00 0xFF burst while the board is reprogrammed) may follow, and
-    the capture may end inside the echo line (uart.py capture stops where its last read ended);
-    anything else is a later run that did not end;
+  - the capture ends with a whole run: after its GPUDIAG line only the UART echo, the cube's lines
+    (GPU2, docs/GPU.md section 16.9: after a PASS gpudiag spins the cube and prints its header line,
+    then a line a second), blank lines and bytes without a word in them (a 0x00 0xFF burst while the
+    board is reprogrammed) may follow, and the capture may end inside the echo line or a cube line
+    (uart.py capture stops where its last read ended); anything else is a later run that did not end;
+  - every cube line, wherever it is, shows no torn frame (a frame whose FRAME_CRC is none of the
+    cube's), no missed one (shown but not checked) and at least 30 frames drawn in its second; with
+    --cube-seconds N at least N of them follow the last whole run (the board test of the cube);
   - every whole run has the checks of a complete first run or of a complete rerun (a run of the
     rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
     must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
@@ -65,7 +69,8 @@ START = (("board", re.compile(r"board .*\(0x[0-9a-f]+\), SoC ")),
          ("bitstream", re.compile(r"bitstream build [0-9a-f]{8} ")),
          ("identity", re.compile(r"identity\s")))
 RUN_LINE = re.compile(r"(board |bitstream build |identity\s|VRAM window|video graphics registers|gpu registers|"
-                      r"scenes\s|scene +\d+:|completeness|crc [0-9a-f]{8} |a rerun \(Ctrl-R\)|\s+FAIL |GPUDIAG: )")
+                      r"gpu2 commands|scenes\s|scene +\d+:|cube: \d+ frames at full rate|completeness|"
+                      r"crc [0-9a-f]{8} |a rerun \(Ctrl-R\)|\s+FAIL |GPUDIAG: )")
 WORD = re.compile(r"[A-Za-z]{2}")
 BUILD_BANNER = re.compile(r"SurfGPU diagnostic \S+ \(build ([0-9a-f]{8})")
 BUILD_BIT = re.compile(r"bitstream build ([0-9a-f]{8}) ")
@@ -74,6 +79,11 @@ BIT_FLAGS = re.compile(r"bitstream build [0-9a-f]{8} flags ([0-9a-f]+)\b")   # b
 SCENE_OK = re.compile(r"^scene +(\d+): (.*?) +crc ([0-9a-f]{8}) ok")
 SCENE_FAILED = re.compile(r"^crc ([0-9a-f]{8}) +scene +(\d+): ")     # a scene with a failed check (report.c)
 CUT_SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL)\b(?! \([^)]*\))")
+# the cube's free run after a PASS (gpudiag.c cube_free_run)
+CUBE_HEAD = re.compile(r"cube: a line a second: .*")
+CUBE_LINE = re.compile(r"cube +(\d+) s: +(\d+) drawn, +(\d+) shown, (\d+) missed, (\d+) torn \(in all (\d+) drawn, "
+                       r"(\d+) shown, (\d+) missed, (\d+) torn\)")
+CUBE_RATE = 30                                          # frames drawn a second, at least
 
 
 class Run:
@@ -152,6 +162,8 @@ def main() -> int:
     ap.add_argument("--accept-rerun", action="store_true",
                     help="accept a capture whose complete runs are all reruns (not a full board test)")
     ap.add_argument("--must-fail", metavar="REGEX")
+    ap.add_argument("--cube-seconds", type=int, metavar="N",
+                    help="at least N of the cube's lines a second after the last whole run (the board test)")
     ap.add_argument("--build-id", metavar="HHHHHHHH", help="the build every run must show (banner, bitstream line)")
     ap.add_argument("--manifest", help="tools/fpga-build.sh's manifest.txt of the bitstream tested: its build_id "
                     "(and source_dirty) is the build every run must show")
@@ -248,6 +260,17 @@ def main() -> int:
     stray = next((l.strip() for l in outside if FAILED.search(l) or "GPUDIAG: FAIL" in l), None)
     if stray is not None:
         problems.append("a line outside any run shows a failure: %r" % stray[:80])
+    # the cube's lines (outside the runs): no torn or missed frame, 30 frames a second or more
+    for l in outside:
+        m = CUBE_LINE.search(l)
+        if not m:
+            continue
+        sec, drawn, missed, torn = int(m.group(1)), int(m.group(2)), int(m.group(4)), int(m.group(5))
+        if torn or missed or drawn < CUBE_RATE:
+            problems.append("the cube's second %d: %d frames drawn, %d missed, %d torn (%s)" % (
+                sec, drawn, missed, torn, "a torn frame" if torn else "a frame not checked" if missed else
+                "fewer than %d frames a second" % CUBE_RATE))
+            break
 
     def whole(r: Run) -> bool:
         ok, _ = r.crcs()
@@ -261,12 +284,19 @@ def main() -> int:
         after = [l.strip() for l in runs[-1].after]
         end = max((i for i, s in enumerate(after) if s), default=-1)       # the capture's last line with text
         for i, s in enumerate(after):
-            if not s or ECHO.fullmatch(s) or not WORD.search(s):
+            if not s or ECHO.fullmatch(s) or not WORD.search(s) or CUBE_HEAD.fullmatch(s) or CUBE_LINE.fullmatch(s):
                 continue
-            if i == end and ECHO_LINE.startswith(s) and whole(runs[-1]):
-                continue                            # the echo line, cut where the capture ended
+            if i == end and (ECHO_LINE.startswith(s) or ((s.startswith("cube ") or "cube ".startswith(s)) and
+                                                         not CUBE_LINE.match(s))) and \
+                    whole(runs[-1]):
+                continue                            # the echo line or a cube line, cut where the capture ended
             problems.append("after the last GPUDIAG line: %r (a run that did not end?)" % s[:60])
             break
+        if a.cube_seconds is not None:
+            n_cube = sum(1 for l in runs[-1].after if CUBE_LINE.search(l))
+            if n_cube < a.cube_seconds:
+                problems.append("%d of the cube's lines after the last run, %d wanted (--cube-seconds): capture "
+                                "longer" % (n_cube, a.cube_seconds))
         last = runs[-1]
         if last.summary.group(1) == "PASS" and not whole(last):
             ok, _ = last.crcs()
@@ -356,10 +386,15 @@ def main() -> int:
         return 1
     desc = ", then ".join("%d checks%s" % (r.checks, ", a rerun" if r.kind == "rerun" else "") for r in judged)
     cut = count - len(judged)
-    print("gpudiag_check: PASS (%s; %d scenes%s, every FRAME_CRC the model's%s; %s%d frames captured, %d distinct%s)"
+    cube = [m for l in outside for m in [CUBE_LINE.search(l)] if m]
+    cube_desc = ""
+    if cube:
+        cube_desc = "; the cube %d seconds, %d to %d frames drawn a second, none torn or missed" % (
+            len(cube), min(int(m.group(2)) for m in cube), max(int(m.group(2)) for m in cube))
+    print("gpudiag_check: PASS (%s; %d scenes%s, every FRAME_CRC the model's%s; %s%d frames captured, %d distinct%s%s)"
           % (desc, len(expect), " in each run" if len(judged) > 1 else "", " and a captured frame's" if frames else "",
              "%d run%s cut short, not judged; " % (cut, "" if cut == 1 else "s") if cut else "",
-             nframes, len(frames), cycles))
+             nframes, len(frames), cycles, cube_desc))
     return 0
 
 
