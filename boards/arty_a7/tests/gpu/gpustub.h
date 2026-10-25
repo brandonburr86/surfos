@@ -78,6 +78,7 @@ struct stub {
     unsigned nw;
     /* knobs */
     int stopped;                        /* the engine takes no word */
+    uint64_t stop_at;                   /* it stops when now passes this (0: never) */
     unsigned slow;                      /* extra engine cycles for every word it takes */
     int irq_path;                       /* the port has the interrupt */
     unsigned drop_word;                 /* the CMD write with this number (1, 2, ...) is lost: OVERFLOW */

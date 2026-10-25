@@ -566,7 +566,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
     u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, spin;
     u64 t0, tick, now, secs;
     long seconds = 10;
-    bool pal_changed = false, interrupted = false;
+    bool pal_changed = false, interrupted = false, dead;
     int r, r2;
     if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx demo [seconds]   (1-3600, 10 when not given)");
     if(claim(g, what)) return CMD_FAIL;
@@ -638,20 +638,25 @@ static int demo(struct gpu *g, int argc, char **argv) {
     if(r == GPU_EINTR) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
-    /* back as it was, also after Ctrl+C: the console on the screen while VRAM and the palette go
-       back, then the display from before */
+    /* Back as it was, also after Ctrl+C or a stopped engine: the console on the screen while VRAM and
+       the palette go back, the driver's target and clip as before (queued for the engine), then the
+       display from before. None of it needs the engine: one that stopped was said and ABORTed once,
+       and nothing here waits for it again (its FIFO is empty after the ABORT, so the queued words
+       fit). */
     g->keep_going = true;
+    dead = r == GPU_ETIMEOUT;
     if(interrupted) gpu_abort(g, what);
-    r2 = gpu_sync(g, what);
-    if(!r2) r2 = gpu_screen_set(g, &text, what);
+    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
+    r2 = gpu_screen_set(g, &text, what);
     if(kept) {
         gpu_vram_write(g, 0, kept, DBYTES / 4);
         gpu_free(g, kept);
     }
     if(pal_changed) gpu_pal_write(g, pal_before);
-    if(!r2) r2 = gpu_set_target(g, t_base, t_stride, t_w, t_h, what);
-    if(!r2 && (c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h)) r2 = gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what);
-    if(!r2) r2 = gpu_sync(g, what);
+    if(gpu_set_target(g, t_base, t_stride, t_w, t_h, what) == GPU_ETIMEOUT) dead = true;
+    if((c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h) && gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what) == GPU_ETIMEOUT)
+        dead = true;
+    if(!dead) gpu_sync(g, what);
     if(!r2 && before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &before, what);
     g->keep_going = false;
     gpu_release(g);

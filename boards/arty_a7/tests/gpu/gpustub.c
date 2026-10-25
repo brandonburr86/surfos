@@ -176,6 +176,10 @@ static void tick(struct stub *s, uint64_t us) {
         s->now += s->stall_us;
         s->stall_at = 0;
     }
+    if(s->stop_at && s->now >= s->stop_at) {
+        s->stopped = 1;
+        s->stop_at = 0;
+    }
     if(s->other_holds && !s->other_done && s->now + 1000 >= s->other_until) {
         unsigned i;
         s->cmd_at_other = s->ncmd;

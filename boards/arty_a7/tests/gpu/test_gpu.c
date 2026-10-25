@@ -648,7 +648,7 @@ static int demo_layout(const struct stub_disp *d) {
     return d->mode == 2 && d->stride == 320 && d->scale == 2 && (d->base == 0 || d->base == 76800);
 }
 
-static void demo_order(struct stub *s, const char *what) {
+static void demo_order(struct stub *s, const char *what, unsigned gpal_writes) {
     unsigned i, cpu = 0, gpal = 0, eng = 0, bad_cpu = 0, bad_eng = 0;
     char line[160];
     for(i = 0; i < s->nev; i++) {
@@ -662,9 +662,9 @@ static void demo_order(struct stub *s, const char *what) {
             bad_cpu += d.mode != 1;
         }
     }
-    snprintf(line, sizeof(line), "  %s: VRAM put back (%u words), GPAL changed both ways (%u entries), the engine drew", what,
-             cpu, gpal);
-    check(cpu >= 39680 && gpal >= 512 && eng > 0, line);
+    snprintf(line, sizeof(line), "  %s: VRAM put back (%u words), GPAL written %u times (%u expected), the engine drew", what,
+             cpu, gpal, gpal_writes);
+    check(cpu >= 39680 && gpal == gpal_writes && eng > 0, line);
     check(!bad_cpu, "  every CPU write of VRAM or GPAL while the screen showed text");
     check(!bad_eng, "  the engine drew while the screen showed text or the demo's own pages");
     s->nev = 0;
@@ -679,17 +679,68 @@ static void t_demo_order(unsigned seed) {
     s->watch = 1;
     check(gfx(s, "gfx demo 1") == CMD_OK && s->reg.mode == 2 && s->reg.stride == 640, "gfx demo 1 from a 640x480 picture");
     s->watch = 0;
-    demo_order(s, "gfx demo 1");
+    demo_order(s, "gfx demo 1", 512);
     gfx(s, "gfx mode overlay 2");
     s->watch = 1;
     s->intr_at = s->now + 400000;
     check(gfx(s, "gfx demo 3") == CMD_FAIL && s->reg.mode == 3 && s->reg.scale == 2, "gfx demo 3 from the overlay, Ctrl+C");
     s->intr_at = 0;
     s->watch = 0;
-    demo_order(s, "Ctrl+C");
+    demo_order(s, "Ctrl+C", 512);
     done(s);
 }
 TEST(t_demo_order)
+
+/* The engine stops in the middle of a demo (the G3 review's finding 3): said once, no second
+   timeout, and the display, the driver's target and clip, VRAM and GPAL all put back. */
+static unsigned count(const char *hay, const char *needle) {
+    unsigned n = 0;
+    for(; (hay = strstr(hay, needle)) != NULL; hay++) n++;
+    return n;
+}
+
+static void t_demo_stop(unsigned seed) {
+    int from_gfx;
+    (void)seed;
+    for(from_gfx = 0; from_gfx < 2; from_gfx++) {
+        struct stub *s = fresh(1);
+        uint8_t *before = malloc(GPU_VRAM_BYTES);
+        uint16_t pal[256];
+        struct stub_disp reg;
+        uint64_t t0;
+        if(from_gfx) {
+            gfx(s, "gfx mode gfx 1");
+            gfx(s, "gfx clear 0x92");
+            gfx(s, "gfx pal grey");
+        } else {
+            gfx(s, "gfx mode text");
+        }
+        stub_drain(s, 100000);
+        memcpy(before, s->vram, GPU_VRAM_BYTES);
+        memcpy(pal, s->gpal, sizeof(pal));
+        reg = s->reg;
+        s->watch = 1;
+        s->stop_at = s->now + 500000;
+        t0 = s->now;
+        check(gfx(s, "gfx demo 3") == CMD_FAIL && count(s->out, "a stopped engine") == 1 && said(s, "display back as it was"),
+              from_gfx ? "the engine stops 0.5 s into a demo begun on a 640x480 picture: said once" :
+                         "the engine stops 0.5 s into a demo begun in text mode: said once");
+        check(s->now - t0 < 3000000, "  no second timeout (0.5 s, then one 2 s wait, and the put-back)");
+        check(s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale,
+              "  the display registers back");
+        check(G.t_base == 0 && G.t_stride == 640 && G.t_w == 640 && G.t_h == 480 && G.c_x1 == 640 && G.c_y1 == 480,
+              "  the driver's target and clip back");
+        check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)), "  VRAM and GPAL back");
+        s->watch = 0;
+        demo_order(s, "a stopped engine", from_gfx ? 512 : 0);
+        s->stopped = 0;
+        check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && s->eng.tw == 640 && s->eng.th == 480 && s->eng.stride == 640,
+              "  the engine back: its target is the driver's, and drawing works");
+        free(before);
+        done(s);
+    }
+}
+TEST(t_demo_stop)
 
 /**** bench, reset, the state, usage ****/
 
