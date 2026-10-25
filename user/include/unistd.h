@@ -33,6 +33,7 @@ int rmdir(const char *path);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);           /* buf NULL: a malloc'ed buffer */
 int dup2(int oldfd, int newfd);
+int pipe(int fds[2]);                           /* 10/24/26: fds[0] reads what fds[1] writes (surfos/pipe.h) */
 int fsync(int fd);                              /* the file system's dirty blocks reach the device */
 int ftruncate(int fd, off_t size);              /* shorter, or longer with zeros */
 void sync(void);

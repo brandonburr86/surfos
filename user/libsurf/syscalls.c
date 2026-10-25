@@ -5,6 +5,10 @@ File: syscalls.c  Date: 10/3/26 (roadmap P2), rewritten 10/5/26
 --------------------
 int 0x80 with the number in eax and the arguments in ebx, ecx and edx. The
 kernel answers -errno on failure; the wrappers turn that into -1 and errno.
+
+10/24/26 (pipelines): pipe(), and a write to a pipe nobody reads any more ends the
+program with status 141, as SIGPIPE does elsewhere, unless it asked for the error
+(broken_pipe_exit(0)). Only a pipe ends it: a connection's EPIPE is an error.
 */
 
 #include <errno.h>
@@ -49,7 +53,24 @@ static long ret(long r) {
 
 void _exit(int code) { for(;;) sc(SYS_exit, code, 0, 0); }
 ssize_t read(int fd, void *buf, size_t n) { return (ssize_t)ret(sc(SYS_read, fd, (long)buf, (long)n)); }
-ssize_t write(int fd, const void *buf, size_t n) { return (ssize_t)ret(sc(SYS_write, fd, (long)buf, (long)n)); }
+
+/* 10/24/26: a broken pipe ends the program (surf.h) */
+static int pipe_exits = 1;
+
+void broken_pipe_exit(int on) { pipe_exits = on; }
+
+static int is_pipe(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0 && !strcmp(st.fs, "pipefs");
+}
+
+ssize_t write(int fd, const void *buf, size_t n) {
+    long r = sc(SYS_write, fd, (long)buf, (long)n);
+    if(r == -EPIPE && pipe_exits && is_pipe(fd)) _exit(141);        /* 128 + 13, SIGPIPE's number */
+    return (ssize_t)ret(r);
+}
+
+int pipe(int fds[2]) { return (int)ret(sc(SYS_pipe, (long)fds, 0, 0)); }
 int close(int fd) { return (int)ret(sc(SYS_close, fd, 0, 0)); }
 off_t lseek(int fd, off_t off, int whence) { return (off_t)ret(sc(SYS_lseek, fd, off, whence)); }
 int unlink(const char *path) { return (int)ret(sc(SYS_unlink, (long)path, 0, 0)); }

@@ -6,6 +6,7 @@ File: surf.h    Date: 10/3/26 (roadmap P2), 10/5/26
 What only SurfOS has: starting and waiting for programs, the terminal control
 call of full-screen programs, the uptime and the raw directory call. Since
 10/6/26 also the kernel's shell commands (kcmd), for the user shell surfsh.
+10/24/26: what a broken pipe does (broken_pipe_exit()).
 
 Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
 stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
@@ -107,6 +108,12 @@ int spawnpty(const char *path, char *const argv[], int masterfd);   /* a program
 int ptyctl(int masterfd, int op, unsigned int arg);     /* PTY_SETSIZE, PTY_INDEX */
 int procinfo(int index, struct procinfo *pi);           /* task number index; -1 ENOENT after the last */
 int detach(void);                                       /* init becomes this process's parent */
+
+/* 10/24/26: pipes (pipe() is in unistd.h; surfos/pipe.h has the rules). A write to a pipe nobody reads any more
+   ends the program with exit status 141 (128 + 13, as SIGPIPE does on Unix); broken_pipe_exit(0) makes it fail with
+   EPIPE instead (a shell that must live on), 1 is the default again */
+#include <surfos/pipe.h>
+void broken_pipe_exit(int on);
 
 /* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
 int getdent(int fd, struct dirent *de);
