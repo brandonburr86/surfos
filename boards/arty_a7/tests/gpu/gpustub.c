@@ -172,8 +172,8 @@ static void push(struct stub *s, uint32_t w) {
 /* time passes on the CPU's side */
 static void tick(struct stub *s, uint64_t us) {
     s->now += us;
-    if(s->stall_at && s->now >= s->stall_at) {
-        s->now += s->stall_us;
+    if(s->stall_at && s->now >= s->stall_at && !s->in_atomic) {    /* an interrupt or another task: */
+        s->now += s->stall_us;                                      /* never inside an atomic stretch */
         s->stall_at = 0;
     }
     if(s->stop_at && s->now >= s->stop_at) {
@@ -418,10 +418,12 @@ static u_long p_atomic_begin(void *c) {
     return 1;
 }
 
+/* interrupts on again: a stall that came meanwhile (an interrupt, another task) happens now */
 static void p_atomic_end(void *c, u_long flags) {
     struct stub *s = c;
     (void)flags;
     s->in_atomic--;
+    if(!s->in_atomic) tick(s, 0);
 }
 
 static int p_text_lock(void *c) {

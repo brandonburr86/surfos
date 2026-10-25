@@ -65,7 +65,7 @@ struct stub {
     uint64_t vbl_until;
     /* the CPU's time */
     uint64_t now;
-    uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us */
+    uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us (outside atomic stretches) */
     int frames_stop;                    /* the frame counter does not move (no pixel clock) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */

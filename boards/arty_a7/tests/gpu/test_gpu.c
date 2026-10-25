@@ -506,14 +506,15 @@ static void t_latch(unsigned seed) {
     check(stub_shown(s, stub_frame_of(vb) + 1).scale == 2 && stub_shown(s, stub_frame_of(vb)).scale == 1 &&
           stub_shown(s, stub_frame_of(vb) + 1).mode == 2 && stub_shown(s, stub_frame_of(vb) + 1).stride == 320,
           "  the frame after that latch shows all of it, the frame before none");
-    /* the CPU stalled for 2 ms just as the next blanking begins: that pair is not used */
+    /* the CPU stalled for 2 ms (an interrupt, another task: between two samples, never inside one)
+       just before the next blanking begins: the pair across it is not used */
     next = (stub_frame_of(s->now) + 1) * STUB_FRAME_US + STUB_VBLANK_US;
     if(next < s->now + 3000) next += STUB_FRAME_US;
-    s->stall_at = next;
+    s->stall_at = next - 10;
     s->stall_us = 2000;
     from = s->nw;
-    check(gfx(s, "gfx mode gfx 1") == CMD_OK && latched_together(s, from, &vb) && vb > next, "a stall across a blanking: "
-          "the next blanking caught instead");
+    check(gfx(s, "gfx mode gfx 1") == CMD_OK && !s->stall_at && latched_together(s, from, &vb) && vb > next,
+          "a stall across a blanking: the next blanking caught instead");
     /* no frames at all */
     s->frames_stop = 1;
     from = s->nw;
