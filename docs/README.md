@@ -22,6 +22,9 @@ as the restoration; new work happens here.
 | [superpowers/plans/…httpd.md](superpowers/plans/2026-10-17-httpd.md) | The brief for httpd, the web server: static websites from a folder, keep-alive, folder listings |
 | [superpowers/plans/…surfsh-scripting.md](superpowers/plans/2026-10-24-surfsh-scripting.md) | The brief for pipelines and scripting in surfsh: kernel pipes, pipelines, variables and the environment, script files, job control |
 | [superpowers/plans/…nettools.md](superpowers/plans/2026-10-24-nettools.md) | The brief for the network tools: `ftpd`, an FTP server for files both ways with the Mac, `nc`, and the sockets' half-close, both ends and connections not waited for |
+| [superpowers/plans/…daily-console.md](superpowers/plans/2026-10-25-daily-console.md) | The brief for track A, the everyday console and shell: TAB, programs before kernel commands, a fast screen, modifier keys, Ctrl+R, scrollback, Spleen 12x24, escapes, `less` and tools, a startup file and saved history |
+| [superpowers/plans/…robustness.md](superpowers/plans/2026-10-25-robustness.md) | The brief for track B, robustness: kernel threads that can't be killed, floating point per task, out of memory that fails the program and not the machine, kernel stack guards, a clean reboot and `poweroff` |
+| [superpowers/plans/…app-windows.md](superpowers/plans/2026-10-25-app-windows.md) | The brief for track C, windows for user programs (milestone M12): a window descriptor, `libgui`, the Calculator as a program, a launcher; then the desktop's polish |
 
 ## Building and running
 
