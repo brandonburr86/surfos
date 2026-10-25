@@ -57,4 +57,10 @@ void ut_transport_cleanup(void);
    usable roots). It reads the roots and seeds the random generator if nothing did yet. */
 int ut_transport_status(const struct ut_config *cfg, char *msg, size_t cap);
 
+/* 10/25/26 (fetch, additive): did the stream end as it should? 1 after the end of a plain TCP stream, or of a TLS
+   one with the server's close_notify; 0 before the end, or after a TLS connection's TCP ended without close_notify
+   (anyone on the way can end a TCP connection: a body that only the end delimits is whole only with it, RFC 9112
+   section 9.8). ut_transport_read()'s 0 is the same either way */
+int ut_transport_eof_clean(const struct ut_transport *t);
+
 #endif
