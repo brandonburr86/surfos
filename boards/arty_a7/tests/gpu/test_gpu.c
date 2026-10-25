@@ -359,6 +359,20 @@ static void t_fifo(unsigned seed) {
     s->intr_at = 0;
     s->stopped = 0;
     check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK, "  and the next command works");
+    /* a word lost (OVERFLOW), then the FIFO stays full: the error said and cleared with the stopped
+       engine, not left for the next command (the review's finding 7) */
+    s->stopped = 1;
+    s->drop_word = s->cmd_writes + 1;
+    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 seconds") &&
+          said(s, "OVERFLOW: a command word found the FIFO full and was dropped") && !s->overflow,
+          "a lost word and a FIFO that stays full: the stopped engine and the OVERFLOW said, OVERFLOW cleared");
+    s->stopped = 0;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && !s->nout, "  the next command works and finds no old error");
+    /* Ctrl+C where nothing was ABORTed (waiting for frames) says so without an ABORT */
+    s->intr_at = s->now + 10000;
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "gfx crc: interrupted (Ctrl+C)") && !said(s, "ABORT"),
+          "Ctrl+C while gfx crc waits for frames: interrupted, no ABORT claimed");
+    s->intr_at = 0;
     done(s);
 }
 TEST(t_fifo)

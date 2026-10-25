@@ -93,6 +93,7 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
 int gpu_claim(struct gpu *g, const char *what) {
     char who[64];
     bool said = false;
+    g->intr_aborted = false;
     while(!P(g)->trylock(CTX(g))) {
         if(!said) {
             printf("    %s: the GPU is in use (%s): waiting; Ctrl+C gives up\n", what,
@@ -135,30 +136,9 @@ int gpu_abort(struct gpu *g, const char *what) {
     return r;
 }
 
-static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
-    char buf[48];
-    u32 st = RD(g, SURF_GPU_STATUS), ff = RD(g, SURF_GPU_FIFO_FREE), fence = RD(g, SURF_GPU_FENCE);
-    g->timeouts++;
-    if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
-    else buf[0] = 0;
-    printf("    %s: the GPU %s for 2 seconds: a stopped engine; ABORT\n"
-           "    (STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s)\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
-    gpu_abort(g, what);
-    return GPU_ETIMEOUT;
-}
-
-static int stop_intr(struct gpu *g, const char *what) {
-    g->ctrl_c++;
-    gpu_abort(g, what);
-    return GPU_EINTR;
-}
-
-int gpu_check(struct gpu *g, const char *what) {
+/* the sticky errors in st said in words, counted and cleared (written 1); the caller ABORTs */
+static void say_errors(struct gpu *g, const char *what, u32 st) {
     char msg[300];
-    u32 st;
-    if(!g->present) return GPU_EABSENT;
-    st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
-    if(!st) return GPU_OK;
     g->errors++;
     g->last_error = st;
     if(st & SURF_GPU_STATUS_OVERFLOW_MASK) g->overflows++;
@@ -171,6 +151,42 @@ int gpu_check(struct gpu *g, const char *what) {
     printf("    %s: the GPU reports:\n%s    %s: cleared; the engine ABORTed, its target and clip sent again\n", what, msg,
            what);
     WR(g, SURF_GPU_STATUS, st);
+}
+
+/* after an ABORT that ended a submission early (a stopped engine, Ctrl+C): the sticky errors are
+   said and cleared now, not left for the next command to find (an OVERFLOW is often why) */
+static void after_abort(struct gpu *g, const char *what) {
+    u32 st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
+    if(st) say_errors(g, what, st);
+}
+
+static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
+    char buf[48];
+    u32 st = RD(g, SURF_GPU_STATUS), ff = RD(g, SURF_GPU_FIFO_FREE), fence = RD(g, SURF_GPU_FENCE);
+    g->timeouts++;
+    if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
+    else buf[0] = 0;
+    printf("    %s: the GPU %s for 2 seconds: a stopped engine; ABORT\n"
+           "    (STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s)\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
+    gpu_abort(g, what);
+    after_abort(g, what);
+    return GPU_ETIMEOUT;
+}
+
+static int stop_intr(struct gpu *g, const char *what) {
+    g->ctrl_c++;
+    g->intr_aborted = true;
+    gpu_abort(g, what);
+    after_abort(g, what);
+    return GPU_EINTR;
+}
+
+int gpu_check(struct gpu *g, const char *what) {
+    u32 st;
+    if(!g->present) return GPU_EABSENT;
+    st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
+    if(!st) return GPU_OK;
+    say_errors(g, what, st);
     gpu_abort(g, what);
     return GPU_EERROR;
 }

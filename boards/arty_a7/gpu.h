@@ -127,6 +127,7 @@ struct gpu {
     bool latched;                       /* the last display change caught the frame latch */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back) */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
+    bool intr_aborted;                  /* this command's Ctrl+C stopped the engine (ABORT) */
     /* what happened, for gfx */
     u_long words, fences, irqs, irq_waits, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;

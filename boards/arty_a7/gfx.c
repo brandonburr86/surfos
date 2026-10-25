@@ -100,9 +100,9 @@ static bool nums(char **argv, int first, const char *kinds, long *out) {
 }
 
 /* the driver's result as the command's status; GPU_EINTR is said here, the rest by the driver */
-static int status(int r, const char *what) {
+static int status(struct gpu *g, int r, const char *what) {
     if(r == GPU_OK) return CMD_OK;
-    if(r == GPU_EINTR) printf("    %s: interrupted: the engine stopped (ABORT)\n", what);
+    if(r == GPU_EINTR) printf("    %s: interrupted%s\n", what, g->intr_aborted ? ": the engine stopped (ABORT)" : " (Ctrl+C)");
     if(r == GPU_EARG) {
         printf("    %s: refused: a coordinate outside -32768..32767 or a size outside 0..65535\n", what);
         return CMD_USAGE;
@@ -120,7 +120,7 @@ static int claim(struct gpu *g, const char *what) {
 static int finish(struct gpu *g, int r, const char *what) {
     if(!r) r = gpu_sync(g, what);
     gpu_release(g);
-    return status(r, what);
+    return status(g, r, what);
 }
 
 /**** gfx: the state ****/
@@ -185,7 +185,7 @@ static int mode(struct gpu *g, int argc, char **argv) {
     d.mode = m;
     if(!r) r = gpu_screen_set(g, &d, "gfx mode");
     gpu_release(g);
-    if(r) return status(r, "gfx mode");
+    if(r) return status(g, r, "gfx mode");
     if(m == GPU_MODE_TEXT) printf("    display: mode 1, text (the picture stays in VRAM)\n");
     else printf("    display: mode %lu, %s, %s\n    the target is that picture: %lux%lu at VRAM 0, stride %lu\n",
                 (u_long)m, gpu_mode_name(m), scale == 2 ? "320x240 doubled" : "640x480", (u_long)g->t_w,
@@ -309,7 +309,7 @@ static int put(struct gpu *g, int argc, char **argv) {
     }
     r = gpu_pixel_put(g, (u32)x, (u32)y, (u8)c, "gfx put");
     gpu_release(g);
-    return status(r, "gfx put");
+    return status(g, r, "gfx put");
 }
 
 static int get(struct gpu *g, int argc, char **argv) {
@@ -328,7 +328,7 @@ static int get(struct gpu *g, int argc, char **argv) {
     off = g->t_base + (u32)y * g->t_stride + (u32)x;
     r = gpu_pixel_get(g, (u32)x, (u32)y, &c, "gfx get");
     gpu_release(g);
-    if(r) return status(r, "gfx get");
+    if(r) return status(g, r, "gfx get");
     printf("    (%ld, %ld) = %u (0x%02x), VRAM byte %lu (0x%08lx)\n", x, y, c, c, (u_long)off, (u_long)(SURF_VRAM_BASE + off));
     return CMD_OK;
 }
@@ -341,7 +341,7 @@ static int crc(struct gpu *g, int argc, char **argv) {
     if(claim(g, "gfx crc")) return CMD_FAIL;
     r = gpu_still_crc(g, &count, &value, "gfx crc");
     gpu_release(g);
-    if(r) return status(r, "gfx crc");
+    if(r) return status(g, r, "gfx crc");
     printf("    gfx crc: frame %lu, crc %08lx (a frame begun after the last change)\n",
            (u_long)count, (u_long)value);
     return CMD_OK;
@@ -354,7 +354,7 @@ static int reset(struct gpu *g, int argc, char **argv) {
     if(claim(g, "gfx reset")) return CMD_FAIL;
     r = gpu_reset(g, "gfx reset");
     gpu_release(g);
-    if(r) return status(r, "gfx reset");
+    if(r) return status(g, r, "gfx reset");
     printf("    gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640\n");
     return CMD_OK;
 }
@@ -443,7 +443,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
     if(!r && gpu_interrupted(g)) r = GPU_EINTR;
     g->spin_us = spin;
     gpu_release(g);
-    return status(r, what);
+    return status(g, r, what);
 }
 
 /**** gfx demo ****/
@@ -670,7 +670,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
         printf("    gfx demo: ended by Ctrl+C\n");
         return CMD_FAIL;
     }
-    return r ? status(r, what) : r2 ? CMD_FAIL : CMD_OK;
+    return r ? status(g, r, what) : r2 ? CMD_FAIL : CMD_OK;
 }
 
 /**** the command ****/
