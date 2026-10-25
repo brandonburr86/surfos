@@ -79,6 +79,11 @@ SHARED_C    = kernel/task.c kernel/wait.c kernel/sync.c kernel/ktimer.c kernel/k
               fs/vfs.c fs/bcache.c fs/fat.c fs/fat_mkfs.c fs/devfs.c fs/poll.c fs/tarfs.c \
               driver/bdev.c driver/part.c driver/parttab.c driver/cp437.c \
               shell/prompt.c shell/fscmd.c shell/fdisk.c shell/cp.c
+ifeq ($(KBOARD),arty_a7)
+# 10/25/26 (SurfGPU G3): the console's 8x16 font, for the GPU's text (boards/arty_a7/gfx.c, gfx text: the
+# console's own glyphs), compiled from where it is
+SHARED_C   += driver/font8x16.c
+endif
 ARCH_C      = $(wildcard arch/riscv32/*.c)
 ARCH_S      = $(wildcard arch/riscv32/*.S)
 BOARD_C     = $(wildcard boards/$(KBOARD)/*.c)
