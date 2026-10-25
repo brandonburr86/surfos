@@ -52,6 +52,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               made when one is answered late; refused by a reset (POLLERR, ECONNREFUSED)
   finwait     (10/25/26) a connection its program half-closed, its FIN acknowledged (FIN_WAIT_2),
               then an other end that vanishes: keepalive gives it up as an open one (5 probes)
+  ncstuck     (10/25/26) nc -w 3 sending a file to an other end that takes nothing (its window shut)
+              and half-closes at once: -w ends nc after 3 s (status 1)
 
   tools/qemu-tcp.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --test
   tools/qemu-tcp.py ... --scenario window --verbose     (the segments as they go)
@@ -721,6 +723,47 @@ def sc_finwait(rig):
     return ok
 
 
+class ShutPeer:
+    """10/25/26: the other end of a connection the guest makes to port: its SYN answered with the window shut, the
+    FIN at once behind it, every probe after that answered with the window still shut; nothing is ever taken"""
+    def __init__(self, net, port, iss=7000):
+        self.net, self.port, self.iss, self.rcv, self.gp = net, port, iss, None, None
+        net.servers[port] = self
+
+    def handle(self, s):
+        if s.flags & RST:
+            return
+        if s.flags & SYN:
+            self.gp, self.rcv = s.sport, (s.seq + 1) & 0xffffffff
+            self.net.send(self.port, s.sport, self.iss, self.rcv, SYN | ACK, 0)
+            self.net.send(self.port, s.sport, self.iss + 1, self.rcv, FIN | ACK, 0)
+        elif self.rcv is not None:
+            self.net.send(self.port, s.sport, self.iss + 2, self.rcv, ACK, 0)
+
+    def reset(self):
+        """the connection given up from this end (the guest's orphan goes at once)"""
+        if self.gp is not None:
+            self.net.send(self.port, self.gp, self.iss + 2, self.rcv, RST | ACK, 0)
+        del self.net.servers[self.port]
+
+
+def sc_ncstuck(rig):
+    """10/25/26 (review): nc -w 3 sending a file to an other end that takes none of it (the window shut from its SYN
+    on) and half-closes at once: what waits never fits, nothing comes, and -w ends nc 3 s after its last write, with
+    status 1. Its rests after the other end's FIN kept poll() from timing out, so it never ended, and spun once the
+    time was up. (Through QEMU's user network this host's buffers take the whole file under Linux: no test there)"""
+    peer = ShutPeer(rig.net, 7500)
+    t0 = time.time()
+    ok = rig.start('nc -w 3 10.0.2.2 7500 < /initrd/bin/nettest', '] started')
+    ok = rig.expect('nc: nothing came or went for 3 s: the connection is closed', 20) and ok
+    dt = time.time() - t0
+    ok = rig.run('', '] exit status 1') and 3 <= dt < 12 and ok        # the job's end, said before the next prompt
+    print('        (nc ended %.1f s after it started)' % dt)
+    peer.reset()
+    rig.q.wait(1)
+    return ok
+
+
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
@@ -746,6 +789,7 @@ SCENARIOS = [
     ('halfclose', sc_halfclose, 'a half-closed connection reads on after its FIN, until the other end closes'),
     ('nowait', sc_nowait, 'a connection not waited for is polled for: made late, or refused'),
     ('finwait', sc_finwait, 'a half-closed connection whose other end vanished is given up by keepalive'),
+    ('ncstuck', sc_ncstuck, 'nc -w ends a connection whose other end half-closed and takes nothing'),
 ]
 
 
