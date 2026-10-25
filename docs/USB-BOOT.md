@@ -429,7 +429,14 @@ unmounts every partition of the stick and writes everything still held in memory
 something still uses the stick, `eject` says what, for example `eject: usb1: /data is
 busy: it holds the current directory, /data (cd / first)`. A stick pulled out without
 `eject` may lose its last changes, and the next `mount` warns `… was not unmounted
-cleanly`; let the Mac check it then (*Disk Utility* → *First Aid*).
+cleanly`; let the Mac check it then (*Disk Utility* → *First Aid*). Since 10/24/26 (storage,
+milestone 1) SurfOS writes in an order that leaves a pulled stick's files whole: a file
+being saved holds the old text or the new one, never neither, and nothing names freed
+space. It no longer clears that mark by itself either: it stays until the Mac (or
+`fsck.fat`) has checked the stick. When the stick stops taking writes, `eject` writes
+nothing off and says `eject: usb1 stays mounted: sync tries the writes again; umount gives
+them up`; a save says it failed (the file keeps its old text), and `umount` says how many
+changed blocks it had to give up.
 
 **On the Mac.** The stick appears under its label, and the files SurfOS wrote are
 ordinary files. macOS adds hidden files of its own (`.fseventsd`, `.Spotlight-V100`,
@@ -651,7 +658,8 @@ starts it (section 15) or a development build does (section 13).
 | `mount: usb1p1: no file system found (mkfs makes one)` | The stick holds exFAT, NTFS or nothing: `mkfs` it (this erases it), or format it as MS-DOS (FAT) on the Mac. |
 | `fdisk` or `mkfs` says it will not change a drive | The line after it says why: the boot drive, not a USB drive, or something on it is mounted (`umount` or `eject` first). |
 | `… is busy: it holds the current directory` | `cd /`, then `umount` or `eject` again. |
-| `+FAT32: usb1p1 was not unmounted cleanly` | The stick was pulled out without `eject`. If files look wrong, let the Mac check it (*Disk Utility* → *First Aid*). |
+| `+FAT32: usb1p1 was not unmounted cleanly` | The stick was pulled out without `eject` (or the laptop restarted with it mounted). If files look wrong, let the Mac check it (*Disk Utility* → *First Aid*); since 10/24/26 the warning comes back at every mount until it has been checked. |
+| `bcache: write of usb1p1 blocks … failed (-3): kept for the next sync` | The stick refused a write. Nothing is lost yet: `sync` tries again. If it keeps failing, copy what matters off the stick; `eject` keeps it mounted until the writes work, `umount` gives them up. |
 | A file name shows a `?` | It has a character the console cannot draw (section 10); the file itself is fine. |
 | `--More--` on the last row | The output is longer than the screen: Space shows the next screenful, Enter one more line, q the rest is not shown. |
 | The prompt ends in `≋!>` | The last command failed and said why; the mark goes away after one that succeeds. |
@@ -1210,7 +1218,10 @@ Limits:
   checked before either is deleted or rx runs for them again. So a later rx does not start
   over a `<path>.part` of `<path>`'s size and time, which is how that pair looks, and says
   so; delete it once the disk is known to be sound. A `.part` that a killed rx left is
-  written again as before. The Makefile writes
+  written again as before. (Since 10/24/26, storage milestone 1, a failed rename changes
+  nothing, a rename over a file cut short never leaves two names on one chain, and SurfOS
+  keeps the chain for the other name of such a pair; rx's care stays for the pairs older
+  builds and other systems left.) The Makefile writes
   `etc/build-id` into the initrd at every build.
 * **One stick** (`boot/grub-usb.cfg`, `driver/part.c`, `driver/bdev.c`, `tools/stick.py`).
   The boot loader finds the partition it was started from through GRUB's `$cmdpath`, so it

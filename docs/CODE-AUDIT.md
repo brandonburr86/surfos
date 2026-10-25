@@ -54,6 +54,61 @@ under QEMU's loader and dangerous on a UEFI PC:
 | U6 | `kernel/cpu.c` (new) | CR0/CR4 inherited from the boot loader: GRUB on OVMF hands over CR0.WP set, and firmware may set SMAP or PVI | both registers set explicitly at boot, the originals shown by `cpuinfo` |
 | U7 | `kernel/keyboard.c` | the ISR read port 0x60 whatever the status said | reads only when a keyboard byte is waiting, so polling and the IRQ never take one twice |
 
+### Storage milestone 1 (October 2026, branch `storage/main`)
+
+Interrupted saves, failed writes and concurrent unmounts preserve existing files. The SurfCPU branch
+found and closed these in the block cache and FAT it shares with x86 (its `docs/CODE-AUDIT.md`, items
+B1-B82, thirteen review rounds); they are brought back here where x86 needs them, under the same IDs, with
+one rule of x86's own in place of SurfCPU's copies (B12): a file system that must know what reached its
+device syncs holding its volume's lock, so nothing makes that device's blocks dirty meanwhile. Not brought
+back: SurfCPU's kill model and what rests on it (B39's `fs_hold`, B46-B57, B59-B82), whose ROADMAP.md note
+says what stays open, but for two eject fixes x86 needs without it: B58, and eject's part of B46 (the
+review's table below). The items W1-W3 are x86's own. The rows are **verified** by `tests/host/test_fatfs.c`
+(`make unittest`: the real `fs/bcache.c`, `fs/fat.c` and `fs/fat_mkfs.c` over RAM disks that refuse writes,
+or are pulled out, at every write, FAT16 and FAT32, with a check of the image after every write the disk
+stores, and fsck.fat on the results), which fails 88 of its 655 checks on `ai-dev`'s code before these
+changes (40 of its 46 scenarios), but for B2 and B10's shell side, verified by `selftest` (a RAM stick that
+refuses writes, in the smoke test: close, rm, mv, eject, umount), and B58, from reading only:
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| B1 | `fs/bcache.c` | a dirty block that had to make room and could not be written was dropped ("lost, and said so"): the next sync found nothing wrong, and a dropped FAT or directory block let FAT read its old copy back and hand out clusters a file had | the block stays dirty while its device is there, is never reused before a write of it works, and every sync tries it again |
+| B3, B7 | `fs/bcache.c`, `fs/fat.c` | dirty blocks reached the disk in the order of the buffer table: a stick pulled in a sync could keep a new file's entry with its cluster still free, or (a save) the old file's name on clusters freed for the new one (test S1 on `ai-dev`: `NOTES.TXT` on a free cluster after a pull at the save's seventh write) | a write order (data, FAT, entries, FSInfo), checked where every write is issued; FAT syncs between the steps that need the reverse (an entry off the disk before its clusters are freed, a cut before the clusters past it, a new cluster's FAT entry before a link to it in another FAT sector, a new directory before anything names it) |
+| B4, B23 | `fs/fat.c` | a write that stopped early (the volume full, a block refused) left the clusters it linked past the file's end; a gap of zeros refused in part grew the file by what was written | a run ends where the volume does, a write puts in what fits, the chain is cut back to the file's size; the gap is all or nothing |
+| B5, B17, B24, B27, B29 | `fs/fat.c` | an operation whose sync failed stopped half done in the cache: a rename left two names on one chain, an rm the name gone and the clusters lost | what the operation changed is put back and it says EIO (nothing changed); ".." first in a move; an undo puts back only what it saved and changed; one that cannot be done leaves the volume read-only (EROFS) until unmounted, said once, and marked |
+| B6, B14 | `fs/bcache.c`, `fs/fat.c` | with B1, a device that refused every write would fill the cache every device shares, and every read of every device would fail | a refusing device keeps at most a quarter of the cache (its writes fail with EIO past that), making room tries none of its blocks, and it is asked again with one write before a write is refused |
+| B8, B9, B13 | `fs/bcache.c` | (in the order's own machinery) making room could write a block that changed hands while it wrote what the block needed; one bad sector held back the blocks of its run | the cache is looked at again after each write; each device keeps the cache's account of itself (`bcache_audit()`); a failed run is tried again block by block in the same sync |
+| B10 | `fs/vfs.c`, `shell/fscmd.c` | the last close of a written file returned 0 whatever happened, so `cp` and `edit` said a file was saved that only the cache held; `umount` gave up what could not be written without a word | close returns the sync's error, as fsync does; `umount` and `eject` say how many changed blocks they gave up, and fail |
+| B2, B58 | `shell/fscmd.c`, `fs/vfs.c` | `eject` unmounted a disk whose writes failed (giving up what it could not write) and said "safe to remove"; a mount of another partition between its listing and its drop of the disk's blocks had them dropped under it | every mount is written out first and none goes when one cannot be; the disk is the eject's from its first step to its last (`vfs_claim_disk()`) |
+| B11 | `fs/fat.c` | `fat_set()` changed the first FAT and gave up when the second copy's block could not be read | both copies' blocks in hand before either changes |
+| B15, B22 | `fs/bcache.c` | a straight write put its bytes into the cached copies before the device had them: a refused write was in the file as read back, and written by the next sync | the copies take the bytes once the device has them; when it refuses, the clean ones are dropped (it may have stored part of the request) |
+| B16, B28, B32, B36 | `fs/fat.c`, `fs/bcache.c` | (with B3) a block of a file that refused held back the sync that takes that file's entry away: it could not be removed | the dirty blocks of a chain about to lose its last name are set aside for that sync, and dropped once the chain is free; so are those of every cluster freed or given back |
+| B18 | `fs/bcache.c` | a sync waited for ever for a block someone held: a task killed at once while it held one left every later sync of that device hanging | a sync gives up on a hold after 10 s (-1, said) |
+| B25, B30, B31 | `fs/fat.c` | (with B3) clusters cut off while the device refused the sync between the cut and their free had to be freed or lost | they wait (up to 64 chains) to be freed after a later sync that works |
+| B38, B42, B43, B44 | `fs/fat.c` | the unmount marked a volume clean that had clusters a failed free left allocated, that the session damaged, or that was not clean when it was mounted: the next computer was told not to check it | such a volume stays marked as not cleanly unmounted and the unmount says why; only a checker clears the mark |
+| B35, B40 | `fs/bcache.c` | `binvalidate()` kept blocks held or under I/O, and an umount left blocks of its volume cached | dropped when let go or when their I/O ends, out of the table at once |
+| W1 | `fs/fat.c` | the ROADMAP's 10/17/26 note: two names on one chain (an interrupted rename's, SurfOS's or another system's), and an `rm`, a `mv` over either or a truncate freed the chain under the other (test S3 on `ai-dev`) | a chain that another entry of the same directory holds is never freed or cut: an rm or a replace keeps it for the other name, a truncate to 0 lets go of it, one to a smaller size says EBUSY |
+| W2 | `fs/fat.c` | a rename over an existing file (every save of `edit`, the desktop and `rx`) wrote a second entry of the name, then deleted the replaced one, then the moved one: a stick pulled in between held the name twice, or two names on one chain | the moved name goes first, then the replaced file's short entry takes the moved file's cluster, size, times and attributes in place, keeping its name and long name (one sector, when both are in one directory block): on the disk the name always holds a whole file, the old one or the new, and no two names share a chain |
+
+Found by a review of the above (10/24/26: the real files over the test's harness, seven scenarios of its own, R1-R7,
+now in `tests/host/test_fatfs.c` under the IDs below) and fixed; each scenario fails with its fix taken out. The
+review found the write order, the undo paths, the cache's account and the live vnodes of a rename sound (R3-R7: a
+rename over an object in another directory and a save, pulled at every write and with one write refused and the
+stick pulled at any later one; a truncate, an rm and a short write the same way):
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| B30 | `fs/fat.c` (`fat_table_point()`) | a mkdir that failed after another task's sync had written its name put the name back and left its cluster waiting (B25's chains); the next table point (any mkdir, a folder or a file growing into another FAT sector) freed it, writing only data and tables, so the FAT's free could reach the disk before the name's removal, and a file made meanwhile took the cluster the disk's directory still named (R1, R1b; scenario B30b) | a table point frees no waiting chain: only an order point or a sync, which write entries |
+| B3 | `fs/fat.c` (`fat_order_point()`, `fat_sync()`) | order points and syncs owed FSInfo, which is rewritten at every sync: one refusing FSInfo sector failed every rm, mv and truncate of the volume, and every close (R2; scenario B3s) | they owe data, tables and entries; FSInfo, a hint, is written after them and a refusal of it fails nothing but the unmount's clean mark (the next mount then counts the free clusters) |
+| B13 | `fs/bcache.c` (`drop()`) | a buffer reused for another block kept the mark of the sync call that wrote its old one: made dirty by another task while that sync went on, the new block was passed over, and an entry block waiting for it made the sync say -1 though every write worked (scenario B13p) | a dropped buffer carries no sync call's mark |
+| B18 | `fs/bcache.c` (`bsync_order()`) | the 10 s wait for a block someone holds outlasted a kill's 2 s: a task killed in it (an order point, holding the volume's lock) was killed at once there, and every later operation on the volume, umount's too, waited for that lock for ever (scenario B18k) | the sync of a task being killed gives up on a held block at once (-1: the operation fails and lets go of the lock) |
+| B46 | `shell/fscmd.c` (`cmd_eject()`) | eject went on to unmount after a Ctrl+C or a kill that came while it wrote the mounts out | it unmounts nothing then and says so ("interrupted: it stays mounted") |
+| W3 | `fs/fat.c` (`fat_unlink()`) | `fs/vfs.c`'s `remove_entry()` looks at the file's references and lets go of it before FAT removes it, so a file opened in between had its chain freed while open, and its writes went to clusters the next file would take (scenario W3) | FAT refuses to remove an object in use (EBUSY), as a rename over one already did |
+
+Left as it is (as on SurfCPU, its B16): while a dirty block of the volume refuses writes, an order point waits for it
+and fails, so rm, mv and truncate of other files, and closes, say EIO (nothing changed) until the block is written,
+its file is removed (B16 lets that rm through) or the volume is unmounted (which gives it up and says so).
+
 ## What was verified under QEMU
 
 Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with

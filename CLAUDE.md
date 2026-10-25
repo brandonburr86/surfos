@@ -25,7 +25,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
-                  # httpd's HTTP protocol (test_httpd)
+                  # httpd's HTTP protocol (test_httpd), the block cache and FAT over RAM disks that refuse
+                  # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -241,6 +242,14 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   stays in the list as gone (never freed while referenced); its mounts fail cleanly until
   `umount`. The storage scenario checks the sticks afterwards with macOS `fsck_msdos`
   (`hdiutil attach -nomount -readonly`) and `fsck.fat` (host or the devenv container).
+  Storage milestone 1 (10/24/26, docs/CODE-AUDIT.md): the cache writes a device's blocks in the
+  order FAT gives them (data, tables, entries, FSInfo: `bdirty_order()`), and FAT syncs between
+  the steps that need the reverse (`fat_order_point()`) holding the volume's lock, which every
+  FAT operation and `fat_sync()` hold: keep new code that frees or links clusters inside that
+  rule, and add a scenario to `tests/host/test_fatfs.c` (its oracle checks the image after every
+  write; `test_fatfs <name>` runs one, `FATFS_VERBOSE=1` says each check). A block whose write
+  failed stays dirty (`bcache: write of ... failed`): `sync` tries again, `umount` gives it up and
+  says how many.
 * The shell: `shell=kernel` on the kernel command line gives the ring-0 shell on every
   console; a recovery console (`≋?>`) has a line from init saying why surfsh could not run.
   `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps` exercises
