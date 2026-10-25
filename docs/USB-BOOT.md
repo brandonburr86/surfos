@@ -1239,6 +1239,14 @@ adapters). More:
 * A line typed is sent when its Enter comes, and what arrives meanwhile shows after it.
   Ctrl+C ends `nc`.
 
+**The laptop by name.** `mdns on` makes the laptop `surfos.local` on its network (Bonjour, which
+the Mac asks by itself), so its address need not be looked up: `ftp://surfos.local/` in Finder,
+`curl ftp://surfos.local/data/`, `telnet surfos.local`, `ping surfos.local`. `mdns` says where it
+answers, `mdns off` stops it (and tells the other computers to forget the name at once); `mdns
+on lab-pc` answers for `lab-pc.local` instead (the name in the settings' `hostname` is the
+default). When another computer has the name already, SurfOS takes `surfos-2.local` and says so
+in `dmesg`.
+
 **fetch, files from the web or from the Mac.** `fetch` downloads an `http://` or `https://`
 address into a file in the current directory (on a mounted stick: the initrd is read-only):
 
@@ -1303,6 +1311,7 @@ Limits:
 | A web server for static sites (`httpd`): HTML, CSS, pictures, folders listed | Forms, uploads, server-side programs, HTTPS |
 | Files to and from other computers over FTP (`ftpd`: Finder, curl, Cyberduck and FileZilla on the Mac), and `nc` both ways | FTPS and SFTP, logins; UTC file times (MDTM) |
 | Downloads over HTTP and HTTPS (`fetch`), resumed where they stopped | Uploads over HTTP; FTP as a client |
+| The laptop by name on its network (`mdns`: `surfos.local` to the Mac's Bonjour) | Services in Finder's sidebar (DNS-SD), reverse lookups, IPv6 |
 
 ## How it works
 

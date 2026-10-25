@@ -26,7 +26,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
                   # httpd's HTTP protocol (test_httpd), ftpd's FTP protocol (test_ftp), fetch's reading of
-                  # HTTP responses (test_fetch)
+                  # HTTP responses (test_fetch), multicast DNS messages (test_mdns)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -86,6 +86,7 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
 fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
            (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake())
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client (leases kept and renewed), DNS resolver;
+           10/25/26: multicast DNS (mdns.c the responder, `mdns on`: name.local; mdns_wire.c its messages, host-tested);
            netcfg.c (the text of the settings files and the lease timers: pure, host-tested); sock.c (TCP connections as
            programs' descriptors); routing over several interfaces (by source address, then subnet, Ethernet before Wi-Fi);
            wlan/: the 802.11 station layer (wlan.c: scan list, joining, wlan0; ieee80211.c: frames, host-tested) and the
@@ -287,6 +288,14 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   connection not waited for (`tools/qemu-tcp.py --scenario halfclose`, `--scenario nowait`).
   A server that prints on its console resets the pager first (`ttyctl(TTY_PAGE, 0)`): the
   user shell pages every command, and a server held at `--More--` answers nobody.
+* mdns (10/25/26): `mdns` says what name it answers for and on which interfaces; `+MDNS:` lines in
+  `dmesg` tell each probe's outcome, the name taken after a conflict, a tie lost, the conflict
+  limit reached and the answering start. It looks only at the local link's messages (to the
+  group, or to its address from the subnet) and takes a conflict only from port 5353.
+  It never starts by itself (the boot stays as it was). Never start it in a test through QEMU's
+  user network: libslirp passes a guest's multicast on through a socket of the host's, onto the
+  host's own network. `tools/qemu-tcp.py --scenario mdns` plays the other hosts on the raw link
+  (rawnet.py's `send_udp()`, `wait_udp()`), where nothing leaves the test.
 * The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
   telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
   `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under

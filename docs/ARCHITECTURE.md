@@ -1796,6 +1796,85 @@ the network manager    a running ftpd keeps the Wi-Fi keeper off open networks, 
   background server, six sessions, files below 2 GB (SurfOS's file offsets). Text mode
   converts line ends only. `nc` speaks TCP alone (no UDP), one connection at a time.
 
+## 22. A name on the local network: mdns (October 2026)
+
+The owner's Mac reaches SurfOS by an address it has to look up first (`ifconfig` on the laptop).
+`mdns on` makes the laptop `surfos.local` (multicast DNS, RFC 6762, which the Mac's Bonjour asks
+by itself): `ftp://surfos.local/`, `http://surfos.local/`, `telnet surfos.local`, `ping
+surfos.local`. It never starts by itself; `mdns off` stops it.
+
+```
+the responder (net/mdns.c)      a kernel thread, UDP port 5353: probes, announces, answers, per interface
+the messages (net/mdns_wire.c)  queries read, answers, probes and announcements made: pure, host-tested
+IP (net/ip.c, net/arp.c)        224.0.0.251 taken on any interface; multicast out to its MAC, IP TTL 255
+UDP (net/udp.c)                 a datagram's interface and destination kept (udp_recvfrom_dev()), one sent
+                                through a given interface (udp_sendto_dev()), a socket's IP TTL (udp_set_ttl())
+the NICs                        NETDEV_ADD_MULTICAST: the e1000's MTA bit; the USB adapter all multicast, once asked
+```
+
+* **The name** is the DHCP hostname (`hostname` in `surfos-config/settings.conf`, surfos by
+  default) or the one `mdns on <name>` gives: 1 to 63 letters, digits and hyphens, one label
+  before `.local`.
+* **Each interface** with an address and a link is followed: the thread asks its NIC for the
+  group's MAC (`NETDEV_ADD_MULTICAST`; a device without the call, wlan0, passes multicast as it
+  comes), probes for the name three times 250 ms apart, the first after a random 0 to 250 ms (a
+  query for ANY with QU and our record in the authority section, RFC 6762 section 8.1), and then
+  announces it twice a second apart (8.3). An answer to a probe from another host is a conflict:
+  the thread takes `name-2` (up to `name-99`) and probes again on every interface; one after the
+  announcements sends every interface back to probing (section 9). Another host probing for the
+  name at the same moment is a tie (8.2), settled by the records in the probes' authority
+  sections (class, type, then data; the longer list wins a draw): when its are the later, the
+  thread probes again a second later, and that host, which has the name by then, answers; when
+  ours are, it goes on. Fifteen conflicts in a row, each within 10 s of the last, make every
+  probe after them wait 5 s (8.1), so a host at fault, ours or another, floods nobody. A new
+  address on an interface probes again for it. `mdns off` says goodbye where the name was
+  announced (the record with a TTL of 0, 10.1): the Mac forgets it at once, not 120 s later.
+* **Answers.** A query for `<name>.local` in any case, through compression pointers, is answered
+  from the interface it came in on with that interface's address. A or ANY gets the A record;
+  another type (AAAA: SurfOS has no IPv6) gets an NSEC record saying A is the name's only type
+  (6.1), and the NSEC record goes with every A answer too (the additional section), so a Mac that
+  asks for both learns at once that no IPv6 address will come. To the group (the cache-flush bit,
+  a TTL of 120 s, once a second at most per interface; an answer to another host's probe for the
+  name 250 ms after the last, as section 6 allows, so the name is defended at once); to the
+  querier alone when it asked so (QU) or sent the query to our own address (5.5); and to a
+  one-shot querier (a port other than 5353, 6.7) as a plain DNS answer: its ID, RD and questions
+  as they were written, a TTL of 10 s, no NSEC (a "no such record" for AAAA). Answers to one
+  querier go with an IP TTL of 255 as well (section 11, for queriers that check it). A query that
+  already holds our record with half its TTL left gets nothing (known-answer suppression, 7.1).
+* **What is looked at** (sections 5.5, 6, 11 and 18): messages from the local link only, that is
+  to the group (no router passes it on) or to our own address from the interface's subnet; with
+  opcode and response code 0; a response (a conflict) only from port 5353, and while probing only
+  once a probe for the name has gone out (during the random wait, a tie's second or a hold, the
+  probes to come hear whoever has the name, and a forged answer cannot run through the names);
+  never one from our own addresses: with Ethernet and Wi-Fi on one network each interface hears
+  the other's announcements, which are no conflict.
+* **IP.** A datagram to 224.0.0.251 is taken on any interface (no other group is), and only the
+  responder listens on its port; TCP never takes a multicast destination. Multicast goes out on
+  the interface the caller names, to `01:00:5e` and the address's low 23 bits (no ARP), with an IP
+  TTL of 255 as section 11 asks; a socket may ask for another TTL (`udp_set_ttl()`,
+  `ip_output_ttl()`), which the responder does for its unicast answers.
+* **The NICs.** The e1000's multicast table array gets the group's bit (bits 47:36 of the MAC,
+  `RCTL.MO` 0); QEMU's model filters by it, so the raw-link test sees the driver's change work.
+  The USB Ethernet adapter's packet filter takes all multicast once the responder asks: the usb
+  thread makes the CDC request (endpoint 0 is its) within a second, and again whenever the adapter
+  is plugged in, so without `mdns on` the adapter passes what it always did; IP drops what is not
+  the group. The laptop's Intel Wi-Fi passes every multicast frame from its access point already.
+* **Tests.** `make unittest` adds `test_mdns` (`mdns_wire.c` as it is: every kind of query, the
+  answers' bytes and their NSEC record, one-shot answers and their questions, known answers,
+  opcodes and response codes, conflicts, ties, goodbyes, broken messages, the names). `make
+  test-tcp` adds `mdns` on the raw link: the probes and announcements and their timing and TTL,
+  answers to the group (with the NSEC record), the second's limit and a probe answered within it,
+  answers to a QU querier (IP TTL 255), to a query sent to our address and none to one from off
+  the link, to one-shot queriers (the question as written), the NSEC record for AAAA, nothing for
+  other names, a goodbye at `mdns off`; a conflict while probing (surfos-2.local), the same claim
+  from another port or from off the link changing nothing; nothing after `mdns off`; a tie lost
+  (probing again a second later) and one won; a host that claims every name (the probe after the
+  fifteenth conflict 5 s late). Queries go to the group's MAC, through the e1000's filter (also a
+  smoke step, `@tcp-raw mdns`). Over QEMU's user network `make test` only checks the command's
+  refusals: libslirp sends a guest's UDP on through a socket of the host's, so a responder
+  started there would announce its name onto the host's own network. The Mac's own resolver
+  against the laptop is the owner's check.
+
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
 `/initrd/bin/undertow` is a ring-3 text browser linked with libsurf and pinned Mbed TLS
