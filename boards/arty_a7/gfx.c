@@ -190,6 +190,7 @@ static int mode(struct gpu *g, int argc, char **argv) {
     else printf("    display: mode %lu, %s, %s\n    the target is that picture: %lux%lu at VRAM 0, stride %lu\n",
                 (u_long)m, gpu_mode_name(m), scale == 2 ? "320x240 doubled" : "640x480", (u_long)g->t_w,
                 (u_long)g->t_h, (u_long)g->t_stride);
+    if(m == GPU_MODE_GFX) printf("    the text console is hidden: gfx mode text or overlay shows it again\n");
     return CMD_OK;
 }
 

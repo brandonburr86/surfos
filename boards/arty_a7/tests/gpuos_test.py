@@ -14,9 +14,9 @@ typed on the UART. Checked:
     (surfsim --vga-crc), and, where the display shows graphics alone (mode 2), the CRC the C
     model computes for the same commands: boards/arty_a7/tests/gpu/gfxscene replays them in
     sim/models/gpu_model.c through the same gfx.c and gpu.c;
-  * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, and the picture's CRC after
-    it is the CRC before it (the display, the palette and VRAM back as they were); gfx bench
-    reports its four rates; gfx reset;
+  * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
+    typed after its first second, and after each the picture's CRC is the CRC before them (the
+    display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
   * gfx mode overlay: the last frame at the pins shows the console's text over the picture: the
     text decoded from the pixels (surfsim --vga-dir) holds the last command and its output, every
     pixel where no character is is the picture's (gfxscene's frame of it), and the rest are text;
@@ -48,7 +48,8 @@ FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfB
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 
-# (what is typed, what its output must hold before the next prompt (a regex, or None), why)
+# (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
+# which Ctrl+C is typed])
 STEPS = [
     ('gfx', r'SurfGPU GPU1 \(gpu\.ID 0x31555047\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*'
             r'frames: FRAME_COUNT \d+', 'the state'),
@@ -81,6 +82,9 @@ STEPS = [
     ('gfx crc', CRC_LINE.pattern, 'crc 3'),
     ('gfx demo 1', r'gfx demo: \d+ frames in \d+\.\d\d s, \d+\.\d a second; display back as it was', 'the demo'),
     ('gfx crc', CRC_LINE.pattern, 'crc 4'),
+    ('gfx demo 5', r'gfx demo: \d+ frames in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
+     r'\s+gfx demo: ended by Ctrl\+C', 'the demo ended by Ctrl+C', r'\n    1 s: \d+ frames'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 5'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
     ('gfx mode text', r'display: mode 1, text', 'text'),
@@ -144,19 +148,19 @@ def main():
     script = os.path.join(w, 'gfx-script.txt')
     with open(script, 'w') as f:
         f.write('# the gfx commands typed in the RTL run, replayed in the C model (gfxscene)\n')
-        for cmd, _, _ in STEPS:
-            if cmd.startswith('gfx'):
-                f.write(cmd + '\n')
+        for step in STEPS:
+            if step[0].startswith('gfx'):
+                f.write(step[0] + '\n')
     os.makedirs(os.path.join(w, 'model'))
     r = subprocess.run([a.gfxscene, '--ppm', os.path.join(w, 'model'), script], capture_output=True, text=True)
     with open(os.path.join(w, 'gfxscene.txt'), 'w') as f:
         f.write(r.stdout + r.stderr)
     expect = {int(n): (crc, int(mode)) for n, crc, mode in re.findall(r'^expect (\d+) ([0-9a-f]{8}) mode (\d+)$',
                                                                        r.stdout, re.M)}
-    ncrc = sum(1 for cmd, _, _ in STEPS if cmd == 'gfx crc')
+    ncrc = sum(1 for step in STEPS if step[0] == 'gfx crc')
     if not check(r.returncode == 0 and len(expect) == ncrc,
                  'gfxscene: the %d gfx commands replayed in the C model (sim/models/gpu_model.c), %d FRAME_CRCs'
-                 % (sum(1 for c, _, _ in STEPS if c.startswith('gfx')), len(expect))):
+                 % (sum(1 for step in STEPS if step[0].startswith('gfx')), len(expect))):
         print(r.stdout[-3000:] + r.stderr[-2000:])
         sys.exit(1)
 
@@ -180,8 +184,11 @@ def main():
 
     def plan(steps, boot_expects):
         e, sends = list(boot_expects), []
-        for cmd, want, why in steps:
+        for step in steps:
+            cmd, want, why = step[:3]
             sends.append((PROMPT, cmd + '\\r'))
+            if len(step) > 3:
+                sends.append((step[3], '\\x03'))      # Ctrl+C, once that has been printed
             e.append((why or cmd, rx(cmd) + NL))
             if want:
                 e.append((why or cmd, want))
@@ -262,9 +269,11 @@ def main():
         else:
             check(pins, 'crc %d (mode %d, the console\'s text in the picture): FRAME_CRC %s; a frame at the VGA pins %s'
                   % (i, mode, crc, 'has it (frame %d)' % frames[crc] if pins else 'does not'))
-    if len(got) >= 4:
-        check(got[3] == got[2], 'after gfx demo 1 the picture is the one before it (crc 4 = crc 3: the display, the '
-              'palette and VRAM back)')
+    if len(got) >= 5:
+        check(got[3] == got[2] and got[4] == got[2], 'after gfx demo 1, and after gfx demo 5 ended by Ctrl+C, the picture '
+              'is the one before them (crc 4 = crc 5 = crc 3: the display, the palette and VRAM back)')
+    check(re.search(r'gfx demo: \d+ frames in [12]\.\d\d s[^\n]*\n\s+gfx demo: ended by Ctrl\+C', out),
+          'gfx demo 5: Ctrl+C typed after its first second ends it within the next')
     m = re.search(r'gfx demo: (\d+) frames in (\d+\.\d\d) s, (\d+\.\d) a second', out)
     check(m and int(m.group(1)) >= 20, 'gfx demo 1: %s frames in %s s of simulated time (%s a second), two pages flipped'
           % (m.group(1), m.group(2), m.group(3)) if m else 'gfx demo 1: no summary line')
@@ -327,8 +336,8 @@ def main():
             for ok, what in results:
                 f.write('%s %s\n' % ('ok  ' if ok else 'FAIL', what))
             f.write('\nthe gfx commands typed, and what SurfOS printed for each gfx crc:\n')
-            for cmd, _, _ in STEPS:
-                f.write('  %s\n' % cmd)
+            for step in STEPS:
+                f.write('  %s%s\n' % (step[0], ' (Ctrl+C after its first second)' if len(step) > 3 else ''))
             for i, crc in enumerate(got, 1):
                 model, mode = expect.get(i, ('?', -1))
                 f.write('  crc %d: SurfOS %s, mode %d%s\n' % (i, crc, mode, ', the C model %s' % model if mode == 2 else ''))

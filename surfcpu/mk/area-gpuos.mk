@@ -8,7 +8,7 @@
 #                          (build/sim/surfsim_gpu): gfx commands, every gfx crc against the C model
 #                          (gfxscene) and the frames captured at the VGA pins, the overlay, gfx demo 1,
 #                          the bench; and on the SoC without one (build/sim/surfsim) gfx says there is
-#                          none (boards/arty_a7/tests/gpuos_test.py; two runs side by side, about two
+#                          none (boards/arty_a7/tests/gpuos_test.py; two runs side by side, under three
 #                          minutes); on check
 #   make gfxscene          build/gpuos/gfxscene: gfx command lines replayed in the C model, the
 #                          FRAME_CRCs SurfOS must print for them

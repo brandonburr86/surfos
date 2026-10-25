@@ -1225,7 +1225,7 @@ The host test's stand-in uses the C model's `struct gpu_engine` fields `base`, `
 | Test | Result |
 |---|---|
 | `make test-gpuos-host` (boards/arty_a7/tests/gpu/test_gpu.c, seeds 1, 7, 123) | 429 of 429 checks, 15 tests: every `gfx` drawing command's VRAM equal to a second model fed GPU.md's words (clear, fill clipped, line, copy with and without a key, overlapping, text opaque, transparent and UTF-8, rect pixel by pixel, put and get, both scales) and 120 random commands a seed; the FIFO rule (no word into a full FIFO or past the room read, with a slow engine that fills it); a stopped engine and a FIFO that stays full (said, ABORT, after 2 s of simulated time and not much more), recovery, Ctrl+C in a wait; BAD_OPCODE, BAD_PARAM and OVERFLOW said in words, cleared, ABORTed, the target and clip sent again; fences on the interrupt and with sleeps; two claimants (the second waits, its words all after the first's; Ctrl+C gives up the wait); the frame latch rule (the four stores within 1.3 ms after a blanking, all in the frame after; a 2 ms stall's pair not used; no frames: written at once and said); FRAME_CRC the model's, of a frame begun after the command; the palettes; the demo (no drawing into the page shown, about 60 flips a second, VRAM, GPAL, display, target and clip back, Ctrl+C, no memory); the bench; reset; 31 usage errors refused with nothing sent; GPU1 and GPU2 |
-| `make test-gpuos` (boards/arty_a7/tests/gpuos_test.py) | 21 of 21 checks: SurfBoot boots the kernel from a card in build/sim/surfsim_gpu; 36 commands typed: the six `gfx crc` FRAME_CRCs are each the CRC of a frame captured at the VGA pins, and the four in mode 2 the C model's (`gfxscene`); the picture's CRC after `gfx demo 1` is the one before it; the demo's 60 frames in about 1.06 s of simulated time; the bench's four rates; the last frame at the pins in mode 3: the console's text decoded from the pixels over the picture, every blank cell the model's picture exactly; side by side, build/sim/surfsim (HAS_GPU = 0): `+GPU: none`, `gfx` and `drivers` say there is no GPU. About 340 million cycles (13.5 s simulated) in about 2.5 minutes |
+| `make test-gpuos` (boards/arty_a7/tests/gpuos_test.py) | 23 of 23 checks: SurfBoot boots the kernel from a card in build/sim/surfsim_gpu; 38 commands typed: the seven `gfx crc` FRAME_CRCs are each the CRC of a frame captured at the VGA pins, and the five in mode 2 the C model's (`gfxscene`); the picture's CRC after `gfx demo 1`, and after a `gfx demo 5` that the Ctrl+C typed after its first second ended, is the one before them; the demo's 60 frames in about 1.06 s of simulated time; the bench's four rates; the last frame at the pins in mode 3: the console's text decoded from the pixels over the picture, every blank cell the model's picture exactly; side by side, build/sim/surfsim (HAS_GPU = 0): `+GPU: none`, `gfx` and `drivers` say there is no GPU. About 415 million cycles (16.6 s simulated) in under 3 minutes |
 | `make test-os-qemu` | 136 of 136 checks at -O2 and at -O0, the new one `gfx: no GPU on this board (qemu_virt)` |
 | `make check` (big) | see the evidence: passed at the hand-back commit |
 
@@ -1283,11 +1283,13 @@ nothing programs the flash.
    It must print `gfx crc: frame N, crc 039d507c`: the C model's CRC of that picture (any N). The
    monitor shows a dark blue screen, a red box in a white frame with its copy lower right and part
    of it again in the middle, a green and a yellow diagonal, white text and blue text on yellow,
-   and one light pixel in the bottom right corner. `make -C surfcpu gfxscene` and
-   `surfcpu/build/gpuos/gfxscene FILE` print the model's CRC for any other list of gfx lines.
+   and one light pixel in the bottom right corner.
 5. **The demo**: `gfx demo 10` (Ctrl+C ends it sooner): bands of colour, a turning fan, bouncing
    boxes and balls at 320x240, without tearing; the UART prints a line a second and the frames a
    second at the end, and the picture of step 4 comes back (`gfx crc` prints 039d507c again).
+   `gfxscene` (`make -C surfcpu gfxscene`) prints the model's CRC for any other list of gfx lines,
+   one per line in a file of the repository: `surfcpu/devenv/run.sh surfcpu/build/gpuos/gfxscene
+   FILE` from the repository's root (it is built for the container, not the Mac).
 6. **Text over the picture**: `gfx mode overlay` shows the console over the picture (type `help`,
    say); `gfx mode text` gives the plain console back. `gfx` prints the GPU's state; `gfx help` the
    commands.
