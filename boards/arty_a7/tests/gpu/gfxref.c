@@ -534,7 +534,7 @@ int main(int argc, char **argv) {
     say("gfx crc");                                                 crc();
     say("gfx flip 0");                                              flip(0);
     say("gfx crc");                                                 crc();
-    say("gfx cube 1");
+    say("gfx cube 2");
     say("gfx crc");                                                 crc();
     say("gfx pal rgb332");                                          pal_rgb332();
     /* the bench draws on the target; the reset's target; text mode (crc 10: the console) */

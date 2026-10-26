@@ -38,11 +38,13 @@ typed on the UART. Checked:
   * 10/26/26, GPU2 (GPU.md section 16): gfx zbuf, zclear, tri (flat, culled both ways, a square split
     through pixel centres, Gouraud with depth through each other, sixteenths) and their picture's
     gfx crc equal to gfxref's, which works it out from section 16 alone; picture B drawn and shown
-    by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 1: every frame it showed at the
-    VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
-    one contiguous run of them, each the same frame as the one before or the next, and the cube
-    turning (50 of its pictures or more, each new one within two video frames of the one before:
-    the review of 58ac7b3's M2, a cube that stood still while it FLIPped passed); SurfOS's own
+    by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 2 (two seconds, so that its first
+    line a second comes while it runs: the re-review of e655c39's low 1, a line held the picture
+    four to five frames): every frame it showed at the VGA pins one of gfx cube's expected frames
+    (gfxcube_expect.h, from the C model and gpucube.c), one contiguous run of them, each the same
+    frame as the one before or the next, and the cube turning (110 of its pictures or more, each new
+    one within two video frames of the one before: the review of 58ac7b3's M2, a cube that stood
+    still while it FLIPped passed); SurfOS's own
     lines say every frame shown was checked (none missed: the review of 58ac7b3's L1) and whole
     (in order too when the turn's 128 pictures differ), fewer frames drawn (FLIPs after frame 0's)
     than video frames shown, and a frame rate of 30 or more and at most the display's 59.94 (the
@@ -120,7 +122,7 @@ STEPS = [
      r'\s+gfx demo: ended by Ctrl\+C', 'the demo ended by Ctrl+C', r'\n    1 s: \d+ frames'),
     ('gfx crc', CRC_LINE.pattern, 'crc 5'),
     # GPU2 (10/26/26, GPU.md section 16): triangles in 320x240 with a depth buffer, picture B shown by FLIP,
-    # A again; gfx cube 1, after which the picture is the one before it
+    # A again; gfx cube 2, after which the picture is the one before it
     ('gfx mode gfx 2', r'display: mode 2, graphics, 320x240 doubled', 'graphics at 320x240 for GPU2'),
     ('gfx pal ramps', r'palette: ramps \(8 hues of 32 shades\)', 'the ramps again'),
     ('gfx zbuf 153600 640', r"depth buffer: VRAM 153600, stride 640, for the target's 320x240", 'the depth buffer'),
@@ -142,7 +144,7 @@ STEPS = [
     ('gfx crc', CRC_LINE.pattern, 'crc 7'),
     ('gfx flip 0', r'display: GFX_BASE 0, written by FLIP at a vertical blanking', 'FLIP back to picture A'),
     ('gfx crc', CRC_LINE.pattern, 'crc 8'),
-    ('gfx cube 1', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
+    ('gfx cube 2', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
      CUBE_TURN + r'\s+gfx cube: \d+ shown, \d+ missed: ', 'gfx cube'),
     ('gfx crc', CRC_LINE.pattern, 'crc 9'),
     ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
@@ -403,7 +405,7 @@ def main():
         check(got[3] == got[2] and got[4] == got[2], 'after gfx demo 1, and after gfx demo 5 ended by Ctrl+C, the picture '
               'is the one before them (crc 4 = crc 5 = crc 3: the display, the palette and VRAM back)')
     if len(got) >= 9:
-        check(got[7] == got[5] and got[8] == got[7], 'after gfx flip 0, picture A again, and after gfx cube 1 the picture '
+        check(got[7] == got[5] and got[8] == got[7], 'after gfx flip 0, picture A again, and after gfx cube 2 the picture '
               'before it (crc 8 = crc 6, crc 9 = crc 8: the display, the palette, the depth buffer and VRAM back)')
     # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step, and turning (the review of
     # 58ac7b3's M2: a cube that stood still passed): 50 of the turn's pictures at least in its second, each new
@@ -429,8 +431,8 @@ def main():
         run += 1
         prev = f
     whole_run = bool(at) and at == list(range(at[0], at[-1] + 1))
-    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad and len(seen) >= 50 and not slow,
-          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step; '
+    check(len(crcs) == 128 and whole_run and len(at) >= 110 and not steps_bad and len(seen) >= 110 and not slow,
+          'gfx cube 2 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step; '
           '%d pictures, %d after more than two video frames'
           % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad,
              len(seen), slow))
@@ -438,9 +440,9 @@ def main():
     sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) missed: ([^\n]*)', out)
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
                   CUBE_TURN + r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
-    check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(7) == '0' and not m.group(4) and
+    check(m and len(sec) >= 2 and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(7) == '0' and not m.group(4) and
           m.group(8) == want and int(m.group(1)) < int(m.group(6)) and 30 <= float(m.group(3)) <= 59.94,
-          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s%s shown, %s missed: %s; a line a '
+          'gfx cube 2 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s%s shown, %s missed: %s; a line a '
           'second: %s' % (m.group(1), m.group(2), m.group(3),
                           'the frames shown %s on for %s FLIPs, ' % (m.group(4), m.group(5)) if m.group(4) else '',
                           m.group(6), m.group(7), m.group(8),
