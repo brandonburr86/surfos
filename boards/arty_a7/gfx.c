@@ -31,7 +31,9 @@ the VRAM it drew on back as they were.
 
 Pure code over the driver: the host test runs this file against the C model of the engine
 (boards/arty_a7/tests/gpu/), and gfxscene.c there replays a list of these commands in the model
-to know the FRAME_CRCs SurfOS must print on the RTL system (make test-gpuos).
+to know the FRAME_CRCs SurfOS must print for them; test-gpuos checks SurfOS's, and gfxscene's,
+against gfxref.c's, which are worked out from GPU.md without this file or the driver. Every
+line printed fits the console's 80 columns, whatever the numbers in it (the host test measures).
 */
 
 #include <surfos/types.h>
