@@ -169,9 +169,12 @@ PORTABLE = [
     # 10/25/26 (robustness, L10, L11): a program's floating point after the firmware and GRUB (the kernel sets CR4's
     # OSFXSR and OSXMMEXCPT from CPUID whatever they left)
     ('fputest', ['control words at the start: x87 0x037f, MXCSR 0x1f80', 'SSE2: 1.5 + 2.25 = 3.75', 'FPUTEST PASS']),
+    # 10/25/26 (robustness, L1-L9): a program that takes all a program may have, on real (OVMF) memory: it stops at
+    # the kernel's reserve, the machine goes on
+    ('memhog', ['blocks of 64 KB before malloc failed', 'memhog: given back']),
     ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),
 ]
-TIMEOUTS = {'selftest': 180, 'heaptest': 60}
+TIMEOUTS = {'selftest': 180, 'heaptest': 60, 'memhog': 120}
 
 # (keys to type, strings that must be on the screen afterwards) - keyboard and framebuffer only
 KEYBOARD = [

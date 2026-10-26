@@ -173,6 +173,7 @@ defined in `include/mm/memory.h` and `include/sys/dma.h`.
 | placed at boot (**ai-dev**) | DMA heap | 5 MB, `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
 | the rest of RAM below 4 GB | Free page frames | From the memory map, minus the reserved ranges (low memory and the kernel, modules, framebuffer, arenas) |
 | 0x40000000 - 0x7FFFFFFF | User range (per process) | ELF image from 0x40000000, sbrk heap above it, stack growing down from 0x80000000 (up to 4 MB); `mm/uvm.c` |
+| 0x80000000 - 0x8FFFFFFF | Page-table window (10/25/26) | The processes' page directories and tables, in frames of the programs' class, mapped for the kernel (`UVMWIN`, `mm/uvm.c`) |
 | 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
 | 0xC0000000 - 0xCFFDFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
 | 0xCFFE0000 - 0xCFFFFFFF | `vmm_temp_map()` (**ai-dev**) | One read-only view of a firmware table at a time (ACPI) |
@@ -192,6 +193,19 @@ the page fault handler maps kernel-heap pages on demand and reports every other 
 with address and cause. `mm/kalloc.c` is a first-fit allocator with 16-byte headers,
 splitting, merging in both directions, poisoning and bad-pointer panics, instantiated
 twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` churns it.
+
+10/25/26 (robustness, L1-L9): out of memory is a program's, never the machine's. Each frame is
+asked for by a class (`mm/pmm.h`): programs (`PMM_USER`: their pages, page tables and
+directories) stop while the kernel's reserve is left, a 32nd of the frames between 2 and 16 MB;
+large kernel buffers (`PMM_BULK`) stop at half of it; the kernel (`PMM_KERNEL`, `pmm_alloc()`)
+may take the last frame. The kernel heap stays demand-paged, but growing it promises the frames
+its new pages will take (`pmm_commit()`, as BULK for a request over 64 KB), and a growth that
+cannot be promised makes `kalloc()` return NULL; the page fault takes a promised frame below the
+heap's top, and a fault above it is a stray pointer. A program meets a full machine as malloc()
+returning NULL, a spawn refused with ENOMEM (fewer than 16 frames left for programs), or, when
+its stack cannot grow, its end with "out of memory: its stack could not grow". Its memory goes
+when it ends (section 5). `memstat` adds the reserve, the frames promised to the heap, the fewest
+ever left, each class's refusals, and what programs hold; `memhog` takes all a program may have.
 
 ## 5. Tasks and scheduling (`kernel/task.c`)
 
@@ -251,6 +265,13 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   kernel never uses the FPU: it is built with `-mno-80387` (a float in kernel code fails to
   link), and a #NM in ring 0 panics. CR4.OSFXSR and OSXMMEXCPT follow CPUID
   (`kernel/cpu.c`), `cpuinfo` has an FPU line, and `fputest` checks it all.
+* 10/25/26 (robustness, L7): a process's memory goes when it ends, not when it is collected.
+  `task_exit()` destroys the address space after closing the files (detached, the kernel's
+  directory loaded first, with interrupts off). A task killed on the spot (a fault, Ctrl+C in a
+  program's own code, a kill that waited too long) may die inside an interrupt, where nothing is
+  freed: `become_zombie()` hands its address space to the `uvmreap` kernel thread (pid 2), which
+  frees it. `schedule()` compares the next task's address space with the one loaded
+  (`uvm_current()`), so a dying task's directory is never left loaded under a kernel thread.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -551,7 +572,11 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   everything mapped into them later, heap pages included) are shared; the user range
   0x40000000-0x7FFFFFFF is built from per-process page tables kept in kernel heap
   pages. User frames come from `pmm_alloc()` and are zeroed through their user
-  mapping, which is why a process builds its own image inside its own task.
+  mapping, which is why a process builds its own image inside its own task. 10/25/26
+  (L1, L4-L6): user frames, page tables and directories are all frames of the programs' class;
+  the tables and directories are mapped for the kernel in the window at 0x80000000; mapping
+  says -ENOMEM when no frame may be had, and `sbrk()` gives back what a growth it could not
+  finish mapped.
   `schedule()` reloads CR3 only when the next task belongs to another address space;
   kernel threads run in whichever directory is loaded. The user stack grows from a
   page fault (`uvm_grow_stack()`, up to 4 MB below 0x80000000), `sbrk()` grows a heap

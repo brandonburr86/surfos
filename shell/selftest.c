@@ -49,6 +49,7 @@ them at once (about 20 ms) and checks nothing then.
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
 #include <surfos/fpu.h>
+#include <mm/pmm.h>
 #include "shell.h"
 
 static int fails;
@@ -457,6 +458,47 @@ static void test_fpu(void) {
     check(pid[0] > 0 && pid[1] > 0 && status[0] == 0 && status[1] == 0 && saves >= 2,
           "floating point: two programs at once keep their registers (two fputest races)");
     if(saves < 2) printf("        (%lu saves of a program's registers for another's)\n", saves);
+}
+
+/* 10/25/26 (L7): n hellos started at once (their output to /dev/null), each waited for; how many ended with 42 */
+static int spawn_round(struct file *null, int n) {
+    char *hello[] = { "hello", "quiet" };
+    struct file *files[3] = { NULL, null, null };
+    int pid[64], i, ok = 0, status;
+    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/hello", 2, hello, curTask->con, 0, files);
+    for(i = 0; i < n; i++) {
+        status = 0;
+        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == 42) ok++;
+    }
+    return ok;
+}
+
+/* 10/25/26 (L7): 64 programs at once, and their memory back as they end. A first round lets the kernel heap grow to
+   what 64 tasks take (it never shrinks); after a second, the heap's bytes in use are where they were, and so are the
+   frames left (free, less those promised), but for the frames the heap grew by meanwhile: each process's pages,
+   page tables and kernel objects went back at its end */
+static void test_spawn64(void) {
+    struct heap_stats h0, h1;
+    struct file *null;
+    struct stat st;
+    u_long a0, a1;
+    int ok1, ok2;
+    if(vfs_stat("/initrd/bin/hello", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
+        printf("  skip 64 programs at once (no /initrd/bin/hello or /dev/null)\n");
+        return;
+    }
+    ok1 = spawn_round(null, 64);
+    kheap_stats(&h0);
+    a0 = pmm_room(PMM_KERNEL);
+    ok2 = spawn_round(null, 64);
+    kheap_stats(&h1);
+    a1 = pmm_room(PMM_KERNEL);
+    vfs_close(null);
+    check(ok1 == 64 && ok2 == 64 && h1.bytes_used == h0.bytes_used && a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
+          "64 programs at once, twice: all end with 42, and their frames and heap bytes come back");
+    if(ok1 != 64 || ok2 != 64 || h1.bytes_used != h0.bytes_used || a0 - a1 != (h1.brk - h0.brk) / PAGE_SIZE)
+        printf("        (%d and %d of 64; heap bytes %lu, then %lu; frames left %lu, then %lu; the heap grew %lu KB)\n",
+               ok1, ok2, h0.bytes_used, h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
 }
 
 static bool same_info(const struct procinfo *a, const struct procinfo *b) {
@@ -1503,7 +1545,7 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_fpu, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_user_kill, test_fpu, test_spawn64, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

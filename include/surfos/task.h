@@ -222,6 +222,8 @@ struct procinfo;
 int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
 int task_info_all(struct procinfo *out, int max); /* 10/18/26: the list in one go, the newest max; how many */
 int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
+void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames programs hold, and those uvmreap has
+                                                          still to free (memstat) */
 
 void yield(void);
 void sleep_ms(u_long ms);

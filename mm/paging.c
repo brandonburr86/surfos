@@ -25,6 +25,8 @@ above 4 GB uncached (ioremap64(): a 64-bit BAR, like the laptop's USB controller
 #include <surfos/trap.h>
 #include <surfos/task.h>
 #include <mm/uvm.h>
+#include <mm/kalloc.h>
+#include <fs/vfs.h>
 #include <blibc_common.h>
 
 static u_long pd_storage[1024] __attribute__((aligned(4096))); /* used to live at 0x9C000, inside the EBDA on some machines */
@@ -118,21 +120,26 @@ void *mm_lookup_linear(void *linear) {
 /*
  ahh.. the infamous page fault. The kernel heap is mapped a page at a time as it is
  touched (the 2004 demand paging). Any other fault is reported like an exception.
+ 10/25/26 (robustness, L2, L3): the heap's page takes a frame its growth promised
+ (mm/kalloc.c), so there always is one; a fault above the heap's top is a stray pointer,
+ reported as any other fault. A program whose stack cannot grow for want of memory is ended
+ with a line that says so.
  */
 u_long *page_fault_trap(struct trapframe *tf) {
     u_long cr2, err = tf->errcode;
     asm volatile("movl %%cr2, %0" : "=r"(cr2));
 
-    if(!(err & PF_PRESENT) && !(err & PF_USER) && cr2 >= KHEAP_START && cr2 < KHEAP_END) {
-        u_long frame = pmm_alloc();
-        if(!frame) panic("out of memory: no frame for kernel heap page 0x%08lx", PAGE_ALIGN_DOWN(cr2));
+    if(!(err & PF_PRESENT) && !(err & PF_USER) && cr2 >= KHEAP_START && cr2 < kheap_top()) {
+        u_long frame = pmm_take_committed();
+        if(!frame) panic("kernel heap page 0x%08lx has no promised frame", PAGE_ALIGN_DOWN(cr2));
         vmm_map(PAGE_ALIGN_DOWN(cr2), frame, PTE_W);
         return (u_long*)tf;
     }
 
-    if(curTask && curTask->uvm && !(err & PF_PRESENT) && cr2 >= USER_START && cr2 < USER_END &&
-       uvm_grow_stack(curTask->uvm, cr2) == 0) {
-        return (u_long*)tf;                       /* the user stack grew by a page */
+    if(curTask && curTask->uvm && !(err & PF_PRESENT) && cr2 >= USER_START && cr2 < USER_END) {
+        int r = uvm_grow_stack(curTask->uvm, cr2);
+        if(r == 0) return (u_long*)tf;            /* the user stack grew by a page */
+        if(r == -ENOMEM) return trap_fatal(tf, "out of memory: its stack could not grow");
     }
 
     return trap_fatal(tf, "Page Fault at 0x%08lx: %s %s%s", cr2,

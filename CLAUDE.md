@@ -97,7 +97,8 @@ lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAN
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), fputest (10/25/26:
-           floating point, two programs' registers at once, printf's %f %e %g), env, the filters grep
+           floating point, two programs' registers at once, printf's %f %e %g), memhog (10/25/26: all the memory a
+           program may have; stack, hold MS), env, the filters grep
            sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
@@ -218,6 +219,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
   `kprintf()` in the kernel and `printf()` in task code.
+* Memory (10/25/26, robustness B1): programs stop at the kernel's reserve, and the kernel heap promises its
+  frames when it grows, so `kalloc()` returns NULL when memory is short, never a panic: every caller checks it.
+  Frames have classes (`pmm_alloc_as()`, mm/pmm.h): `PMM_USER` for anything a program's memory takes, `PMM_KERNEL`
+  (`pmm_alloc()`) otherwise; a kalloc() over 64 KB that grows the heap counts as `PMM_BULK` by itself. A process's
+  memory goes when it ends (`task_exit()`, or the `uvmreap` thread after a kill on the spot); `memstat` shows the
+  reserve and who was refused.
 * The kernel never uses floating point (10/25/26): it is built with `-mno-80387 -mno-sse`,
   so a float in kernel code fails to link, and a #NM in ring 0 panics. The FPU is the
   programs': `kernel/fpu.c` keeps each process's registers and switches them on first use.

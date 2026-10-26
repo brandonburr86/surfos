@@ -11,6 +11,7 @@
 #include <mm/kalloc.h>
 #include <surfos/system.h>
 #include <surfos/timer.h>
+#include <surfos/task.h>
 
 #include <blibc_common.h>
 
@@ -84,6 +85,16 @@ void printMemInfo() {
            KERNEL_END - 1, arena_page_tables, arena_frame_stack, arena_dma_heap);
     printf("Memstart: 0x%lx  Memend: 0x%lx\n", KERNEL_END, pmm_highest_address());
     printf("Free physical pages: %lu of %lu\n", pmm_free_frames(), pmm_total_frames());
+    {
+        struct pmm_stats ps;                /* 10/25/26 (robustness, L9): the reserve and who was refused */
+        u_long programs, dying;
+        pmm_stats(&ps);
+        task_mem_held(&programs, &dying);
+        printf("Reserve: %lu pages programs leave the kernel (big buffers half); %lu promised to the heap; fewest left %lu\n",
+               ps.reserve, ps.committed, ps.lowest);
+        printf("Refused: %lu pages to programs, %lu to big buffers, %lu to the kernel; programs hold %lu, uvmreap %lu\n",
+               ps.refused[PMM_USER], ps.refused[PMM_BULK], ps.refused[PMM_KERNEL], programs, dying);
+    }
     pmm_print_reserved();
     printf("\n");
     print_heap(&k);

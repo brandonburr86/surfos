@@ -28,6 +28,7 @@ struct heap_stats {
 void kheap_stats(struct heap_stats *st);
 void dmaheap_stats(struct heap_stats *st);
 bool kheap_check(void);      /* walk every block; false (after a message) when the heap is corrupt */
+u_long kheap_top(void);      /* 10/25/26 (L2): the kernel heap's top: a page below it is mapped when touched */
 void heap_init(void);
 
 #endif

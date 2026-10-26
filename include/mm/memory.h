@@ -30,6 +30,8 @@ Physical layout (the first 16 MB and the arenas mapped 1:1):
 Virtual only:
 
     0x40000000 - 0x7FFFFFFF  user processes (mm/uvm.h)
+    0x80000000 - 0x8FFFFFFF  10/25/26: the processes' page directories and tables, in frames of the
+                             programs' class (mm/pmm.h), mapped here for the kernel (mm/uvm.c)
     0xB0000000 - 0xBFFFFFFF  kernel heap (KHEAP): kalloc(), pages mapped on first touch
     0xC0000000 - 0xCFFDFFFF  ioremap(): device registers and boot modules above 16 MB
     0xCFFE0000 - 0xCFFFFFFF  a reusable window for reading firmware tables (vmm_temp_map)
@@ -54,6 +56,11 @@ Virtual only:
 /** SurfOS Kernel Address Space **/
 #define KHEAP_START 0xB0000000
 #define KHEAP_END   0xC0000000   /* 256 MB of virtual room; RAM is the real limit */
+
+/* 10/25/26 (robustness, L4): the window for processes' page directories and tables (mm/uvm.c): 65536 pages, more
+   than RAM can fill with them */
+#define UVMWIN_START 0x80000000
+#define UVMWIN_END   0x90000000
 
 /* ioremap(): device registers and boot modules that are not in the first 16 MB */
 #define IOMAP_START 0xC0000000

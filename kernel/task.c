@@ -20,6 +20,9 @@ task_kill_user()): a process is marked TF_PROCESS from its creation.
 10/25/26 (robustness, L10): a process has floating-point registers of its own, switched lazily
 (kernel/fpu.c): an area made with the task and freed with it, the FPU no longer its own when it
 dies, and CR0.TS set by schedule() for whoever does not own it.
+10/25/26 (robustness, L7): a process's memory goes when it ends, not when it is collected: its
+address space is destroyed by task_exit(), or, for a task killed on the spot, by the uvmreap
+thread, which become_zombie() hands it to. schedule() compares with the directory loaded.
 */
 
 #include <surfos/types.h>
@@ -75,6 +78,9 @@ static wait_queue_t zombie_wq;           /* parents waiting in task_wait() */
 static surf_task *all_tasks, *all_tasks_tail; /* in pid order */
 static u_long next_pid;
 static u_int ntasks;
+static struct uvm *uvms_dead;            /* 10/25/26 (L7): address spaces of tasks killed on the spot, for uvmreap */
+static u_long uvms_dead_pages;           /* the frames they hold until uvmreap frees them (memstat) */
+static wait_queue_t uvmreap_wq;
 
 static const u_int quantum_for[NUM_PRIO] = { 0, 4, 2, 1 };   /* FIFO: no slice */
 static const prio_level pick_order[8] = { PL_FIFO, PL_HIGH, PL_NORMAL, PL_LOW, PL_FIFO, PL_HIGH, PL_NORMAL, PL_HIGH };
@@ -359,6 +365,13 @@ static void become_zombie(surf_task *t, int code) {
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
     fpu_task_gone(t);                         /* 10/25/26 (L10): what the FPU holds is nobody's now */
+    if(t->uvm) {                              /* 10/25/26 (L7): killed on the spot: uvmreap frees its memory now */
+        t->uvm->reap_next = uvms_dead;
+        uvms_dead = t->uvm;
+        uvms_dead_pages += t->uvm->pages + t->uvm->table_pages;
+        t->uvm = NULL;
+        wake_up(&uvmreap_wq);
+    }
     jobs_shell_gone(t);                       /* 10/25/26: the jobs it made */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
@@ -368,6 +381,7 @@ static void become_zombie(surf_task *t, int code) {
 
 void task_exit(int code) {
     u_long flags;
+    struct uvm *m;
     if(curTask == idle_task) panic("the idle task tried to exit");
     /* 10/6/26 (review of the network connections): the task ends by itself now. Closing its files
        (a socket's close takes net_lock, a file's may write) must not be cut by a kill at once (a
@@ -381,6 +395,14 @@ void task_exit(int code) {
     /* 10/6/26: its files close now, in its own context, not when someone waits for it: a
        background program's file is written out and its volume can be unmounted at once */
     fd_close_all(curTask);
+    /* 10/25/26 (L7): and its memory goes now, whoever collects it and when: detached, and the kernel's directory
+       loaded, with interrupts off (uvm_destroy() never frees the directory that is loaded) */
+    flags = irq_save();
+    m = curTask->uvm;
+    curTask->uvm = NULL;
+    if(m) uvm_switch(NULL);
+    irq_restore(flags);
+    if(m) uvm_destroy(m);
     flags = irq_save();
     become_zombie(curTask, code);
     irq_restore(flags);
@@ -959,6 +981,40 @@ int sleep_intr(u_long ms) {
     }
 }
 
+/* 10/25/26 (L7): frees the address spaces of tasks killed on the spot (a fault, Ctrl+C in a program's own code, a
+   kill that waited too long), which become_zombie() hands over: it may run in an interrupt, where nothing is freed.
+   This is a kernel thread, so schedule() has the kernel's directory loaded when it runs: none of them is loaded. */
+static void uvmreap_thread(void *arg) {
+    struct uvm *m;
+    u_long flags, held;
+    for(;;) {
+        flags = irq_save();
+        while(!uvms_dead) {
+            wait_prepare(&uvmreap_wq);
+            irq_restore(flags);
+            yield();
+            flags = irq_save();
+        }
+        m = uvms_dead;
+        uvms_dead = m->reap_next;
+        held = m->pages + m->table_pages;
+        irq_restore(flags);
+        uvm_destroy(m);
+        flags = irq_save();
+        uvms_dead_pages -= held;
+        irq_restore(flags);
+    }
+}
+
+void task_mem_held(u_long *programs, u_long *dying) {
+    surf_task *t;
+    u_long flags = irq_save(), n = 0;
+    for(t = all_tasks; t; t = t->all_next) if(t->uvm) n += t->uvm->pages + t->uvm->table_pages;
+    *programs = n;
+    *dying = uvms_dead_pages;
+    irq_restore(flags);
+}
+
 /**** The scheduler ****/
 
 static surf_task *pick_next(void) {
@@ -995,7 +1051,8 @@ u_long *schedule(struct trapframe *tf) {
         next->switches++;
         curTask = next;
         tss_set_kernel_stack(next->stack_top);
-        if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
+        if(next->uvm != uvm_current()) uvm_switch(next->uvm);   /* another process: its page directory (10/25/26: against
+                                                       the one loaded: a dying task's may have gone to uvmreap) */
         fpu_switch(next);                                   /* 10/25/26 (L10): CR0.TS unless it owns the FPU */
     }
     return next->esp;
@@ -1243,6 +1300,9 @@ void init_task() {
     init_task_ptr = kthread_create("init", init_main, NULL, PL_HIGH, TF_KTHREAD);
     if(!init_task_ptr) panic("init_task: no memory for init");
     init_task_ptr->parent = NULL;
+    wq_init(&uvmreap_wq);                   /* 10/25/26 (L7) */
+    if(!kthread_create("uvmreap", uvmreap_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED))
+        panic("init_task: no memory for uvmreap");
 }
 
 /**** ps ****/

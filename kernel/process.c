@@ -43,7 +43,8 @@ detached one (init's) is in none.
 10/25/26 (robustness, L15): a process is TF_PROCESS from its creation, which a user's kill
 looks for (task_user_may_kill()): a kernel thread is never killed by one. L10, L12: it gets
 floating-point registers of its own with that flag (task_alloc(), kernel/fpu.c), and its stack
-is 16-aligned at _start.
+is 16-aligned at _start. L8: a spawn fails at once (ENOMEM) when fewer than 16 frames are left
+for programs, which could not even load it.
 */
 
 #include <surfos/types.h>
@@ -59,12 +60,14 @@ is 16-aligned at _start.
 #include <mm/paging.h>
 #include <mm/kalloc.h>
 #include <mm/uvm.h>
+#include <mm/pmm.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
 #define USER_STACK_INIT 0x4000          /* mapped before the program starts; the rest on demand */
 #define EXIT_LOAD_FAILED 127
 #define SCRIPT_LINE 256                 /* 10/25/26: a script's #! line, at most */
+#define SPAWN_MIN_FRAMES 16             /* 10/25/26 (L8): fewer left for programs, and a spawn fails at once */
 
 struct spawn_args {
     char path[VFS_PATH_MAX];
@@ -278,6 +281,7 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     size_t used = 0;
     int i, r, kind, nhead = 0, nargs = argc, job;
 
+    if(pmm_room(PMM_USER) < SPAWN_MIN_FRAMES) return -ENOMEM;   /* 10/25/26 (L8): it could not even load */
     r = vfs_stat(path, &st);
     if(r) return r;
     if(st.type != VN_FILE || !strcmp(st.fs, "devfs")) return -EACCES;      /* 10/25/26: a device is read by no #! check */

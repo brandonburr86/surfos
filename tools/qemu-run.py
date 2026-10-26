@@ -291,6 +291,10 @@ SMOKE = [
     ('fputest race', ['8 x87 registers and 8 XMM registers across 300 ms of sleep: the same bits', 'FPUTEST race PASS']),
     ('fputest printf', ['22 formats, 0 wrong; 1/3 as %.6f is 0.333333, as %g 0.333333, as %e 3.333333e-01',
                         'FPUTEST printf PASS']),                     # 10/25/26 (L14): libsurf's %f %e %g
+    # 10/25/26 (robustness, L1-L9): out of memory is a program's, never the machine's: memhog takes all a program may
+    # have (the kernel keeps its reserve) and gives it back; with its stack unable to grow it is ended, and says why
+    ('memhog', ['blocks of 64 KB before malloc failed', 'memhog: given back']),
+    ('memhog stack', ['KB taken; now a stack that cannot grow', 'killed by "out of memory: its stack could not grow"']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('acpidump DSDT', ['not found']),
     ('acpidump MSDM', ['usage: acpidump']),
@@ -1153,6 +1157,7 @@ SMOKE = [
     ('run telnetd on +23', ['telnetd: +23 is no port (1-65535)', 'exit status 2']),
     ('run telnetd --server 23', ['telnetd: --server is how telnetd on starts the server', 'exit status 2']),
     ('@telnet-session', []),
+    ('@memhog-hold', []),                   # 10/25/26 (L1-L9): memhog hold, and a telnet login after (memhog_hold_check)
     ('@telnet-two', []),
     ('@telnet-full', []),
     ('@telnet-stalled', []),
@@ -2512,6 +2517,49 @@ def telnet_no_sessions(q, timeout=20):
             return True
         q.wait(0.5)
     return False
+
+
+def memstat_free(raw):
+    """10/25/26: (free, total) pages from each memstat in this part of the transcript (bytes)"""
+    return [(int(a), int(b)) for a, b in re.findall(rb'Free physical pages: (\d+) of (\d+)', raw)]
+
+
+def memhog_hold_check(q):
+    """10/25/26 (robustness, L1-L9): memhog holds all the memory a program may have for 3 s: meanwhile a program
+    either runs or says it is out of memory, and ps (a kernel command) works; once memhog has given it back, a telnet
+    login works (telnetd on came before) and memstat's free pages are back within 1%"""
+    what = 'memory: while memhog holds it all a program runs or is refused and ps works; then telnet, free pages back'
+    start = len(q.transcript)
+    q.send('memstat\n')
+    ok = q.expect(PROMPT, 30)
+    before = memstat_free(q.transcript[start:])
+    q.send('memhog hold 3000 &\n')
+    ok = ok and q.expect('started (pid', 20) and q.expect('KB taken; holding them 3000 ms', 60)
+    q.send('/initrd/bin/ls /initrd\n')
+    ok = ok and q.expect(re.compile(rb'motd|Out of memory'), 20) and q.expect(PROMPT, 20)
+    q.send('ps\n')
+    ok = ok and q.expect('Kernel Idle Task', 20) and q.expect(PROMPT, 20)
+    ok = ok and q.expect('memhog hold: given back', 60)
+    if ok:
+        t = Telnet(q.ports['telnet'])
+        try:
+            ok = t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)
+            if ok:
+                t.send('exit\n')
+                ok = t.wait_closed(10)
+        finally:
+            t.close()
+    start = len(q.transcript)
+    q.send('memstat\n')
+    ok = q.expect(PROMPT, 30) and ok
+    after = memstat_free(q.transcript[start:])
+    ok = ok and len(before) == 1 and len(after) == 1 and abs(after[0][0] - before[0][0]) * 100 <= before[0][1]
+    if not ok:
+        print(f'  memhog hold: free pages before {before}, after {after}')
+    return (what, ok)
+
+
+CONSOLE_CHECKS['@memhog-hold'] = memhog_hold_check
 
 
 def telnet_session_check(q):
@@ -4207,6 +4255,7 @@ def fetch_files_check(q):
 
 CONSOLE_CHECKS['@fetch-files'] = fetch_files_check
 TIMEOUTS['fetch'] = 30                  # the downloads (by the first word), 300000 bytes each at -O0
+TIMEOUTS['memhog'] = 60                 # 10/25/26: it writes every page programs may have, 200 MB or more
 
 
 CONSOLE_CHECKS.update({'@ftpd-session': ftpd_session_check, '@ftpd-upload': ftpd_upload_check,

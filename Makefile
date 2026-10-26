@@ -58,6 +58,7 @@ USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of 
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point, and two programs' at once
+USER_PROGS  += memhog        # 10/25/26 (robustness): a program that takes all the memory it can
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -487,6 +488,23 @@ test-fatfs: $(BUILD)/host/test_fatfs
 	$(BUILD)/host/test_fatfs
 unittest: test-fatfs
 .PHONY: test-fatfs
+
+# 10/25/26 (robustness, B1): the kernel heap, mm/kalloc.c as it is, in a static array of the test whose frame
+# allocator refuses on demand (tests/host/kalloc_host.h, test_kalloc.c), and the rule of the frame classes (mm/pmm.h)
+KALLOC_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+$(BUILD)/host/kalloc/mm/kalloc.o: mm/kalloc.c tests/host/kalloc_host.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (kalloc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) -include tests/host/kalloc_host.h -c $< -o $@
+
+$(BUILD)/host/test_kalloc: tests/host/test_kalloc.c tests/host/kalloc_host.h $(BUILD)/host/kalloc/mm/kalloc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) $(filter %.c %.o,$^) -o $@
+
+test-kalloc: $(BUILD)/host/test_kalloc
+	$(BUILD)/host/test_kalloc
+unittest: test-kalloc
+.PHONY: test-kalloc
 
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
