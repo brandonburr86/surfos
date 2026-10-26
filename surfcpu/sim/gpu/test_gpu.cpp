@@ -1075,13 +1075,14 @@ int main(int argc, char **argv) {
         if (failures > 20) break;
     }
     CHECK(bus.problems.empty(), "SurfBus protocol: %s", bus.problems.empty() ? "" : bus.problems[0].c_str());
+    // (before the verdict: the clamp's check came after it until the review of 3fea963, so it could not fail)
+    CHECK(g_eng.tri_clamped == 0 && g_eng.tri_wide == 0, "the model's clamp changed %llu values, %llu were wide",
+          g_eng.tri_clamped, g_eng.tri_wide);
     top->final();
     if (failures) {
         std::printf("test_gpu: FAIL (%d of %d checks, seed %u)\n", failures, checks, seed);
         return 1;
     }
-    CHECK(g_eng.tri_clamped == 0 && g_eng.tri_wide == 0, "the model's clamp changed %llu values, %llu were wide",
-          g_eng.tri_clamped, g_eng.tri_wide);
     std::printf("test_gpu: PASS (seed %u: %d checks; %llu commands, %llu words, %llu pixel writes in the model; "
                 "VRAM compared %llu times (%llu directed, %u random chunks); engine %llu grants, %llu cycles waiting "
                 "for the CPU (%llu CPU accesses meanwhile); %llu cycles)\n",
