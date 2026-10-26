@@ -317,6 +317,7 @@ struct gfx_cube_check {
 void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first,
                           u32 fence0);
 void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after,
-                          bool input);    /* input: the serial line took bytes since the look before */
+                          u32 rx_bytes);  /* the bytes the serial line took since the look before */
+u32 gfx_cube_rx_needed(u32 missed);     /* the bytes that can account for that many frames missed */
 
 #endif

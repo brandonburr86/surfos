@@ -1748,6 +1748,17 @@ pins, none more than two video frames after the one before; the interrupt 181 ta
 fences that asked, 4 fence waits slept, 3 woken: the timing coincidence of 15.9's table, which the
 rule allows), test-os-qemu 137 of 137 at -O2 and -O0, and G4's gpudiag_check PASS.
 
+**Second addendum: the final re-check of e811468 (2026-10-26).** Two lows, fixed and tested with the
+host test built with the Mac's clang (seeds 1, 7 and 123; no container run this time):
+
+| Finding | Fix (commit) | Test: the bug put back / the fix |
+|---|---|---|
+| **Low 1**: one byte in a gap excused every frame missed in it, though its receive costs about 0.1 ms and a frame missed needs 6.7 ms of hold-off (the tick held 261 ms with one byte: `14 of the 14 missed came while the serial line took input`, CMD_OK) | a gap's misses are excused only when its bytes can account for the hold-off: between two looks a tick (10 ms) is the normal gap, and m frames pass unseen only when it is more than m frames (16.7 ms each) long, so the tick was held off m x 16.7 - 10 ms at least, while the receive path holds it off 100 us a byte at most (about 97 us at -O2, rounded up): `gfx_cube_rx_needed(m)` bytes, 67 for one frame, 401 for three, 2,403 for fifteen, which the 3,000-byte paste still passes (3a57117) | t_cube_check: one byte, and one byte fewer than needed, excuse nothing; t_cube_look: the tick held 261 ms with one byte fails. With any byte excusing: 1055 of 1059 / 1059 of 1059 |
+| **Low 2**: nothing tested that a frame is recorded only while it would be shown within the run's time: the review's mutant M-b (recording while now - t0 < secs) passed, every run 7 frames longer (`68 drawn in 1.13 s`) | a test (700f80c): `gfx cube N` must draw N seconds' frames at 59.94 a second, two more at most (those in the FIFO and the engine when recording stops) and three fewer at least, and end within three frames (50 ms) of N s; for `gfx cube 1`, `2` and, with 80 ms console lines, `3` | with M-b 1059 of 1062 (`68 drawn in 1.13 s`, `128 drawn in 2.13 s`, `188 drawn in 3.13 s`) / 1062 of 1062 |
+
+The integration check of the merge that brings these runs make check; nothing here ran in the
+container or on the RTL system.
+
 ## 16. GPU2: triangles, depth and page flips (G4)
 
 G4 (the brief [plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md), track gpu-g4) adds
