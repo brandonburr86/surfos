@@ -28,9 +28,10 @@ frame missed or out of order, or one more than two video frames after the one be
 the first and last as still pictures.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)" and the LEDs (LD0 green or red).
 After a PASS the cube spins on under a result bar (MODE 3), a line a second on the UART with the
-frames drawn, shown, missed, torn and out of order; after a FAIL the result shows in the top text
-row over the last picture. Either way UART input is echoed, and Ctrl-R runs it all again. The text
-console is not used (the scenes own the screen): everything goes to the UART.
+frames drawn and shown, the most video frames between two new ones (apart: the checks' rule, two
+at most), and the frames missed, torn and out of order; after a FAIL the result shows in the top
+text row over the last picture. Either way UART input is echoed, and Ctrl-R runs it all again.
+The text console is not used (the scenes own the screen): everything goes to the UART.
 */
 #include "diag.h"
 #include "gpucube.h"
