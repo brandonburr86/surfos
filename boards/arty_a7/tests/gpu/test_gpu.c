@@ -759,15 +759,24 @@ static void t_fences(unsigned seed) {
         if(irq) {
             /* the re-review's N3: the interrupt must end the waits, not only reach its handler */
             unsigned long w0 = G.irq_waits, k0 = G.irq_wakes;
-            check(G.irq_waits >= 3 && G.irq_wakes == G.irq_waits && gfx(s, "gfx") == CMD_OK &&
-                  said(s, "    waits on the interrupt: 3, 3 of them woken by it\n"),
-                  "  each of those waits ended by the interrupt, counted, and gfx says so");
+            check(G.irq_waits == 3 && G.irq_wakes == 3 && gfx(s, "gfx") == CMD_OK &&
+                  said(s, "    fence waits that slept on it: 3, woken by it: 3\n"),
+                  "  each of those waits woken by the interrupt, counted, and gfx says so");
             s->isr_no_wake = 1;                 /* a handler that runs and wakes nobody */
             t0 = s->now;
             check(gfx(s, "gfx fill 0 0 640 480 4") == CMD_OK && gfx(s, "gfx fill 0 0 640 480 5") == CMD_OK &&
-                  s->interrupts_sent > 0 && G.irq_wakes == k0 && G.irq_waits >= w0 + 2 && s->now - t0 >= 20000,
+                  s->interrupts_sent > 0 && G.irq_wakes == k0 && G.irq_waits == w0 + 2 && s->now - t0 >= 20000,
                   "an interrupt that wakes nobody: the fences come all the same, each wait ended by its 10 ms");
-            check(gfx(s, "gfx") == CMD_OK && said(s, ", 3 of them woken by it\n"), "  and gfx shows the waits it did not end");
+            check(gfx(s, "gfx") == CMD_OK && said(s, "    fence waits that slept on it: 5, woken by it: 3\n"),
+                  "  and gfx shows the waits it did not wake");
+            /* a wait of more than one 10 ms step (a FLIP waits up to a frame), woken: one wait, one woken */
+            s->isr_no_wake = 0;
+            s->slow = 7500;                     /* 300 us a word: a full FIFO is 19 ms of work at the wait */
+            w0 = G.irq_waits;
+            k0 = G.irq_wakes;
+            check(gfx(s, "gfx text 0 0 1 2 ABCDEFGHIJKLMNOPQRSTUVWXYZ") == CMD_OK && G.irq_waits == w0 + 1 && G.irq_wakes == k0 + 1 &&
+                  s->irq_waits >= 2, "  a wait of two 10 ms steps that the interrupt ends: one wait, woken");
+            s->slow = 0;
             s->isr_no_wake = 0;
         }
         done(s);
@@ -1298,7 +1307,7 @@ static void t_state(unsigned seed) {
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
           said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
-          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    waits on the interrupt: 0, 0 of them woken by it\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
           said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
           said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
           "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");

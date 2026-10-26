@@ -203,7 +203,7 @@ static int show(struct gpu *g) {
     else if(c.gpu2) printf("    depth buffer: none\n");
     printf("    sent: %lu words, %lu fences; FENCE %lu\n", c.words, c.fences, (u_long)s.fence);
     if(c.irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n"
-                     "    waits on the interrupt: %lu, %lu of them woken by it\n", c.irqs, c.irq_waits, c.irq_wakes);
+                     "    fence waits that slept on it: %lu, woken by it: %lu\n", c.irqs, c.irq_waits, c.irq_wakes);
     else printf("    interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n");
     printf("    errors %lu, timeouts %lu, ABORTs %lu\n"
            "    by kind: OVERFLOW %lu, BAD_OPCODE %lu, BAD_PARAM %lu\n"

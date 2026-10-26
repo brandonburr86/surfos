@@ -150,7 +150,8 @@ struct gpu {
     u32 pump_fence;
     u64 pump_since;
     /* what happened, for gfx */
-    u_long words, fences, irqs, irq_waits, irq_wakes, sleeps, timeouts, aborts, errors, ctrl_c;
+    u_long words, fences, irqs, sleeps, timeouts, aborts, errors, ctrl_c;
+    u_long irq_waits, irq_wakes;        /* fence waits that slept on the interrupt, and those it woke */
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
     u32 last_error;                     /* the sticky bits of the last error */
 };

@@ -295,12 +295,15 @@ int gpu_fence_send(struct gpu *g, const char *what, u32 *value) {
 
 /* FENCE at or past value: polled for spin_us (most submissions are done by then; a task woken
    by the interrupt runs only at the next tick, up to 10 ms later), then the GPU's interrupt or
-   sleeps; two seconds in which neither FENCE nor FIFO_FREE moves is a stopped engine. The waits on
-   the interrupt are counted, and those it ended (irq_waits, irq_wakes: gfx shows both, and
-   test-gpuos wants it to end them, not only the handler to run) */
+   sleeps; two seconds in which neither FENCE nor FIFO_FREE moves is a stopped engine. The fence
+   waits that slept on the interrupt are counted, and those it woke (irq_waits, irq_wakes: gfx
+   shows both, and test-gpuos wants it to wake them, not only the handler to run). A wait is
+   counted once, however many 10 ms steps it slept: a FLIP waits up to a frame, so a step that
+   ends before its fence is no sign of a dead interrupt, and a wait it never woke is */
 int gpu_fence_wait(struct gpu *g, u32 value, const char *what) {
     u64 t0 = NOW(g), last = t0;
     u32 fence = ~value, room_seen = 0xFFFFFFFFu;
+    bool slept = false, woken = false;
     if(!g->present) return GPU_EABSENT;
     for(;;) {
         u32 f, ff, lim;
@@ -322,10 +325,12 @@ int gpu_fence_wait(struct gpu *g, u32 value, const char *what) {
             P(g)->relax(CTX(g));
         } else if(g->irq) {
             int woke;
-            g->irq_waits++;
+            if(!slept) g->irq_waits++;
+            slept = true;
             woke = P(g)->irq_wait(CTX(g), 10);
             if(woke > 0) {
-                g->irq_wakes++;         /* the interrupt ended the wait (the re-review's N3: counted) */
+                if(!woken) g->irq_wakes++;  /* the interrupt woke the wait (the re-review's N3) */
+                woken = true;
             } else if(woke == GPU_EINTR) {
                 if(interrupted(g)) return stop_intr(g, what);
                 P(g)->relax(CTX(g));    /* keep_going: a wait Ctrl+C cuts short at once; others may run */
