@@ -333,6 +333,21 @@ SMOKE = [
                                          '[exit status 1]']),
     ('undertow --dump http://10.0.2.2:1/', ['undertow: http://10.0.2.2:1/: ', '[exit status 1]']),
     ('undertow http://10.0.2.2:1/', ['Loading http://10.0.2.2:1/ ...', 'undertow: ', 'undertow> '], [('quit', [])]),
+    # 10/25/26 (wundertow, the web browser in a window, user/wundertow/): a page over HTTP from the harness's server
+    # laid out (Undertow's transport), the sample site from a file (its headings at twice the size, bold), a page
+    # painted into a BMP picture, bad usage (a width past 4096 too), a file that is not there. Its window is the
+    # desktop's (the screen tests).
+    ('wundertow --layout http://10.0.2.2:{http}/wundertow-layout', ['address: http://10.0.2.2:', 'status: 200',
+                                                                    'SurfOS HTTP test OK: /wundertow-layout']),
+    ('wundertow --layout /initrd/www/index.html', ['address: file:///initrd/www/index.html', 'title: SurfOS',
+                                                    ' x2 b "SurfOS"', ' x2 b "This page came from SurfOS."']),
+    ('wundertow --render /initrd/www/index.html /hda1/WEB.BMP', ['wundertow: /hda1/WEB.BMP: 640x',
+                                                                 'pixels of file:///initrd/www/index.html ("SurfOS")']),
+    ('rm /hda1/WEB.BMP', []),
+    ('wundertow --layout', ['usage: wundertow [ADDRESS]', '[exit status 2]']),
+    ('wundertow --render /initrd/www/index.html /hda1/WEB.BMP 99999', ['WIDTH: 64 to 4096 pixels (640)',
+                                                                       '[exit status 2]']),
+    ('wundertow --layout /initrd/nowhere.html', ['wundertow: /initrd/nowhere.html: ', '[exit status 1]']),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
     ('@nettest-host', []),
     ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),

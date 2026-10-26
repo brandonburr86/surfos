@@ -53,6 +53,7 @@ USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeli
 USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
+USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -73,6 +74,14 @@ FTPD_OBJ     = $(FTPD_SRC:user/ftpd/%.c=$(BUILD)/user/ftpd/%.o)
 FETCH_SRC    = $(wildcard user/fetch/*.c)
 FETCH_OBJ    = $(FETCH_SRC:user/fetch/%.c=$(BUILD)/user/fetch/%.o)
 FETCH_UT_OBJ = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
+# wundertow, the web browser in a window (10/25/26, docs/superpowers/plans/2026-10-25-browser.md): user/wundertow/,
+# each module host-tested (tests/host/test_wundertow_*.c); of Undertow the URLs, HTTP, the settings, the helpers, the
+# transport with its TLS and the HTML scanner; the console's font (driver/font8x16.c), which it draws itself. Its
+# window needs the windows for programs (include/surfos/win.h): without them it has --layout and --render only.
+WUNDERTOW_SRC    = $(wildcard user/wundertow/*.c)
+WUNDERTOW_OBJ    = $(WUNDERTOW_SRC:user/wundertow/%.c=$(BUILD)/user/wundertow/%.o) $(BUILD)/user/wundertow/font8x16.o
+WUNDERTOW_UT_OBJ = $(addprefix $(BUILD)/user/undertow/,url.o http.o config.o util.o transport.o tls_platform.o html_scan.o)
+WUNDERTOW_CFLAGS = -Iuser/undertow -Iuser/wundertow $(if $(wildcard include/surfos/win.h),-DWUNDERTOW_WINDOW)
 
 
 CC         = gcc
@@ -786,7 +795,7 @@ unittest: test-undertow-html-ubsan
 # doc.c with html_scan.c, url.c, util.c and the test's allocator: the fixtures in tests/fixtures/wundertow/ (NAME.html
 # in, NAME.tree out) and Undertow's own pages; layout.c and paint.c with the console's font and code page 437 (built
 # for the host as the kernel's): NAME.layout, pages made there and every page at widths from 64 to 1300 pixels;
-# browser.c driven as a person drives the window.
+# browser.c driven as a person drives the window. Each test also builds the real program.
 WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
 WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
 WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
@@ -802,7 +811,7 @@ $(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
 
-test-wundertow-doc: $(BUILD)/host/test_wundertow_doc
+test-wundertow-doc: $(BUILD)/host/test_wundertow_doc $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_doc tests/fixtures
 unittest: test-wundertow-doc
 .PHONY: test-wundertow-doc
@@ -812,7 +821,7 @@ $(BUILD)/host/test_wundertow_layout: tests/host/test_wundertow_layout.c $(WT_HOS
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
 
-test-wundertow-layout: $(BUILD)/host/test_wundertow_layout
+test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_layout tests/fixtures
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
@@ -823,7 +832,7 @@ $(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUIL
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
 
-test-wundertow-browser: $(BUILD)/host/test_wundertow_browser
+test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_browser
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
@@ -931,6 +940,24 @@ $(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
 
+# 10/25/26: wundertow, its objects (the font from driver/, with the kernel's headers after the user's, as libsurf
+# builds its code page 437) and Undertow's it uses, then Mbed TLS and libgcc, before libsurf (as fetch)
+$(BUILD)/user/wundertow/%.o: user/wundertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) $(WUNDERTOW_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/wundertow/font8x16.o: driver/font8x16.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $< (wundertow)"
+	$(Q)$(CC) $(USER_CFLAGS) -idirafter include -c $< -o $@
+
+$(BUILD)/user/bin/wundertow: $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) \
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also
 # linked with the transport's entry points as roots (-u): undertow-tls.elf, never installed, is undertow with all of
@@ -953,12 +980,14 @@ $(NM) -S -t d $(1) | awk 'FNR == NR { lib[$$1] = 1; next } NF == 4 { t += $$2; i
 	END { printf "%s: %d bytes in symbols, %d of them Mbed TLS\n", "$(1)", t, m }' $@.lib - >> $@
 endef
 
-$(UNDERTOW_LINKCHECK): $(BUILD)/user/bin/undertow $(UNDERTOW_TLS_ELF) $(BUILD)/user/bin/fetch $(MBEDTLS_LIB)
+$(UNDERTOW_LINKCHECK): $(BUILD)/user/bin/undertow $(UNDERTOW_TLS_ELF) $(BUILD)/user/bin/fetch $(BUILD)/user/bin/wundertow \
+                      $(MBEDTLS_LIB)
 	@$(NM) $(MBEDTLS_LIB) | awk 'NF == 3 { print $$3 }' > $@.lib
 	@rm -f $@
 	@$(call ut_link_check,$(BUILD)/user/bin/undertow)
 	@$(call ut_link_check,$(UNDERTOW_TLS_ELF))
 	@$(call ut_link_check,$(BUILD)/user/bin/fetch)
+	@$(call ut_link_check,$(BUILD)/user/bin/wundertow)
 	@rm -f $@.lib
 	@cat $@
 $(INITRD) $(USB_INITRD): $(UNDERTOW_LINKCHECK)
