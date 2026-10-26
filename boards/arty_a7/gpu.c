@@ -56,6 +56,15 @@ static bool interrupted(struct gpu *g) {
     return !g->keep_going && P(g)->interrupted(CTX(g));
 }
 
+/* How long the engine may make no progress before it is a stopped engine: two seconds, but only
+   GPU_QUICK_US once Ctrl+C came to a run that goes on to put things back (keep_going): its ABORT
+   emptied the FIFO, and what it sent since (a target, a clip, a fence) takes a live engine
+   microseconds. So Ctrl+C on a dead engine no longer costs two seconds it cannot cut short (the
+   re-review's N1). */
+static u32 limit_us(struct gpu *g) {
+    return g->keep_going && P(g)->interrupted(CTX(g)) ? GPU_QUICK_US : GPU_TIMEOUT_US;
+}
+
 /**** finding it ****/
 
 int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
@@ -171,15 +180,17 @@ static void after_abort(struct gpu *g, const char *what) {
 }
 
 /* (80 columns with every number at its widest: STATUS 8 hex digits, FIFO_FREE's 16 bits, FENCE 10 digits) */
-static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
-    char buf[48];
+static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for, u32 limit) {
+    char buf[48], span[16];
     u32 st = RD(g, SURF_GPU_STATUS), fence = RD(g, SURF_GPU_FENCE);
     u32 ff = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
     g->timeouts++;
     if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
     else buf[0] = 0;
-    printf("    %s: the GPU %s for 2 s: a stopped engine; ABORT\n"
-           "    STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
+    if(limit >= 1000000u) snprintf(span, sizeof(span), "%lu s", (u_long)(limit / 1000000u));
+    else snprintf(span, sizeof(span), "%lu ms", (u_long)(limit / 1000u));
+    printf("    %s: the GPU %s for %s: a stopped engine; ABORT\n"
+           "    STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s\n", what, how, span, (u_long)st, (u_long)ff, (u_long)fence, buf);
     gpu_abort(g, what);
     after_abort(g, what);
     return GPU_ETIMEOUT;
@@ -222,12 +233,13 @@ bool gpu_busy(struct gpu *g) {
 static int room(struct gpu *g, const char *what) {
     u64 t0 = NOW(g);
     for(;;) {
-        u32 f = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
+        u32 f = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB, lim;
         if(f) {
             g->credit = f < g->fifo_depth ? f : g->fifo_depth;
             return GPU_OK;
         }
-        if(NOW(g) - t0 >= GPU_TIMEOUT_US) return stopped(g, what, "took no command word", 0);
+        lim = limit_us(g);
+        if(NOW(g) - t0 >= lim) return stopped(g, what, "took no command word", 0, lim);
         if(interrupted(g)) return stop_intr(g, what);
         P(g)->relax(CTX(g));
     }
@@ -268,7 +280,7 @@ int gpu_fence_wait(struct gpu *g, u32 value, const char *what) {
     u32 fence = ~value, room_seen = 0xFFFFFFFFu;
     if(!g->present) return GPU_EABSENT;
     for(;;) {
-        u32 f, ff;
+        u32 f, ff, lim;
         u64 now;
         if(g->irq) P(g)->irq_arm(CTX(g));
         f = RD(g, SURF_GPU_FENCE);
@@ -279,18 +291,24 @@ int gpu_fence_wait(struct gpu *g, u32 value, const char *what) {
             fence = f;
             room_seen = ff;
             last = now;
-        } else if(now - last >= GPU_TIMEOUT_US) {
-            return stopped(g, what, "finished nothing", value);
+        } else if(now - last >= (lim = limit_us(g))) {
+            return stopped(g, what, "finished nothing", value, lim);
         }
         if(interrupted(g)) return stop_intr(g, what);
         if(now - t0 < g->spin_us) {
             P(g)->relax(CTX(g));
         } else if(g->irq) {
             g->irq_waits++;
-            if(P(g)->irq_wait(CTX(g), 10) == GPU_EINTR && interrupted(g)) return stop_intr(g, what);
+            if(P(g)->irq_wait(CTX(g), 10) == GPU_EINTR) {
+                if(interrupted(g)) return stop_intr(g, what);
+                P(g)->relax(CTX(g));    /* keep_going: a wait Ctrl+C cuts short at once; others may run */
+            }
         } else {
             g->sleeps++;
-            if(P(g)->sleep(CTX(g), 1) == GPU_EINTR && interrupted(g)) return stop_intr(g, what);
+            if(P(g)->sleep(CTX(g), 1) == GPU_EINTR) {
+                if(interrupted(g)) return stop_intr(g, what);
+                P(g)->relax(CTX(g));
+            }
         }
     }
 }

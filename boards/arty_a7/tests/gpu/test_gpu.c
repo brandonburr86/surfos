@@ -820,6 +820,46 @@ static void t_demo_stop(unsigned seed) {
 }
 TEST(t_demo_stop)
 
+/* The re-review's N1: Ctrl+C on an engine that has stopped, before two seconds could say so. The
+   demo's way out waits through Ctrl+C (keep_going) and gave the dead engine two seconds that a
+   second Ctrl+C could not cut short. Now, once Ctrl+C has come, a run putting things back gives a
+   stopped engine 50 ms (its ABORT emptied the FIFO; what is left takes a live engine microseconds). */
+static void t_ctrlc_dead(unsigned seed) {
+    struct stub *s = fresh(1);
+    uint8_t *before = malloc(GPU_VRAM_BYTES);
+    uint16_t pal[256];
+    struct stub_disp reg;
+    uint64_t intr;
+    char line[120];
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    s->stop_at = s->now + 500000;
+    s->intr_at = intr = s->now + 600000;
+    check(gfx(s, "gfx demo 5") == CMD_FAIL && said(s, "gfx demo: ended by Ctrl+C") && count(s->out, "a stopped engine") == 1 &&
+          said(s, "gfx demo: the GPU finished nothing for 50 ms: a stopped engine; ABORT\n") &&
+          said(s, "display back as it was"),
+          "Ctrl+C 0.1 s after the engine stopped: the demo ends, the stopped engine said once, after 50 ms");
+    snprintf(line, sizeof(line), "  all over %llu ms after the Ctrl+C: within 0.3 s, not another 2 s",
+             (unsigned long long)((s->now - intr) / 1000));
+    check(s->now - intr < 300000, line);
+    if(getenv("GPU_TEST_VERBOSE")) printf("%s\n", line);
+    check(s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale &&
+          !memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && G.t_w == 640 && G.t_h == 480 &&
+          G.c_x1 == 640 && G.c_y1 == 480, "  the display, VRAM, GPAL, the target and the clip back");
+    s->stopped = 0;
+    s->intr_at = 0;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && s->eng.tw == 640 && s->eng.th == 480, "  the engine back: drawing works");
+    free(before);
+    done(s);
+}
+TEST(t_ctrlc_dead)
+
 /**** bench, reset, the state, usage ****/
 
 /* the words of the command at c[i]: header, parameters, data (GPU.md section 5) */

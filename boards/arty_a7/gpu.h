@@ -51,6 +51,9 @@ lock), in the host test a stand-in that hands the command words to the C model o
 #define GPU_ECANCEL    -8               /* Ctrl+C or a kill where nothing needed stopping (no ABORT) */
 
 #define GPU_TIMEOUT_US  2000000u        /* without a word taken or a command finished: stopped */
+#define GPU_QUICK_US    50000u          /* the same once Ctrl+C came to a run putting things back
+                                           (keep_going): ABORT emptied the FIFO, and what was sent
+                                           since takes a live engine microseconds */
 #define GPU_SPIN_US     2000u           /* a fence is polled this long before the driver sleeps (spin_us) */
 #define GPU_LATCH_GAP_US 1000u          /* the frame latch rule: a blanking seen less than this after it began */
 #define GPU_LATCH_LIMIT_US 250000u      /* how long a display change looks for a blanking */
@@ -126,7 +129,8 @@ struct gpu {
     u32 c_x0, c_y0, c_x1, c_y1;
     u32 spin_us;                        /* a fence is polled this long before the wait sleeps (GPU_SPIN_US) */
     bool latched;                       /* the last display change caught the frame latch */
-    bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back) */
+    bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back),
+                                           a stopped engine given GPU_QUICK_US once Ctrl+C came */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
     /* what happened, for gfx */
     u_long words, fences, irqs, irq_waits, sleeps, timeouts, aborts, errors, ctrl_c;
