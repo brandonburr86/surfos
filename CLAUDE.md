@@ -284,8 +284,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   says how many.
 * The shell: `shell=kernel` on the kernel command line gives the ring-0 shell on every
   console; a recovery console (`≋?>`) has a line from init saying why surfsh could not run.
-  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps` exercises
-  the pager and the character set, `kcmdtest` the kernel-command calls. The harnesses
+  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps|alt` exercises
+  the pager, the character set and the alternate screen, `kcmdtest` the kernel-command calls. The harnesses
   answer `--More--` with Space (`auto_more`), and `PROMPT` is a compiled pattern that
   matches every prompt state; a smoke step `@boot <words>` boots QEMU again with other
   kernel words (or `no-initrd`). 10/25/26: surfsh runs a program on PATH before a kernel

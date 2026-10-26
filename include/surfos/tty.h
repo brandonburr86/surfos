@@ -84,7 +84,13 @@ void tty_switch(int index);
    raw mode also ends when the task that set it exits. TTY_GETSIZE: (columns << 16) | rows.
    The console draws this ANSI subset (and the serial port passes it through): ESC[H,
    ESC[row;colH (or f), ESC[nA/B/C/D, ESC[J ESC[0J ESC[2J, ESC[K ESC[0K ESC[2K, ESC[m ESC[0m,
-   ESC[1m (bright), ESC[7m (inverse), ESC[30-37m, ESC[40-47m, ESC[?25l / ESC[?25h (cursor). */
+   ESC[1m (bright), ESC[7m (inverse), ESC[30-37m, ESC[40-47m, ESC[?25l / ESC[?25h (cursor).
+   10/25/26 (track A, A8): also ESC[nG (column n), ESC[nd (row n), ESC[nX (n blanks, the cursor stays), ESC[s and
+   ESC[u (the cursor saved and put back), ESC 7 and ESC 8 (the same with the colours), ESC[22m ESC[27m ESC[39m ESC[49m
+   (bright, inverse, the colours off), ESC[90-97m and ESC[100-107m (bright colours; a text mode background has no
+   bright one), ESC[38;...m and ESC[48;...m read and dropped (256 colours, RGB), and the alternate screen,
+   ESC[?1049h / ESC[?1049l (TTY_CAP_ALTSCREEN): the main screen and its cursor come back as they were, and also
+   when the task that asked for it ends. */
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
@@ -148,6 +154,7 @@ void tty_switch(int index);
 #define TTY_SKIP_MS 200
 #define TTY_CAP_UTF8  1
 #define TTY_CAP_COLOR 2
+#define TTY_CAP_ALTSCREEN 4                 /* 10/25/26 (A8): ESC[?1049h / l, the alternate screen */
 #define TTY_MORE    "--More-- (Space: next page, Enter: next line, q: skip the rest)"
 int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -errno */
 

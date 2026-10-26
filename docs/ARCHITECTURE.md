@@ -373,7 +373,16 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 * **Escape sequences and raw mode** (**ai-dev**, for the text editor; `include/surfos/tty.h`
   is the contract). Each console parses the ANSI subset full-screen programs need: cursor
   position and moves (`CSI H f A B C D`), erase in display and line (`CSI J K`), bright,
-  inverse and the eight colours (`CSI m`), and hiding the cursor (`CSI ? 25 l/h`). Any
+  inverse and the eight colours (`CSI m`), and hiding the cursor (`CSI ? 25 l/h`).
+  **10/25/26** (track A, A8): also the column or the row alone (`CSI G d`), blanks from the
+  cursor (`CSI X`), the cursor saved and put back (`CSI s u`; `ESC 7 8` with its colours),
+  SGR 22, 27, 39 and 49 (bright, inverse and the colours off), the bright colours 90-97
+  (100-107 give the plain backgrounds), 38 and 48 read with their numbers and dropped, and
+  the alternate screen (`CSI ? 1049 h/l`, `TTY_CAP_ALTSCREEN`): the main screen's cells and
+  cursor are kept (a pty's far terminal keeps its own; the console follows its column) and
+  come back with `l`, or when the task that asked ends, as raw mode does; the scrollback
+  takes nothing from it. `tests/host/vt_cases.h` holds cases that the console's
+  `test_pager` and the desktop terminal's `test_guiterm` can both run. Any
   other sequence is read to its end and dropped, and a console with no attributes set
   prints in the writer's colour, so `kprintf()` and the older programs look as they did.
   Wrapping is VT100's: writing the last column leaves the cursor there and the next
@@ -409,7 +418,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   437 characters they are, as the programs of 2004 meant them. Each writer has its own
   decoder state (`surf_task.utf`; the interrupt handlers and early boot share one), so two
   tasks printing at once cannot mix the halves of their characters. `ttyctl(TTY_CAPS)`
-  answers `TTY_CAP_UTF8 | TTY_CAP_COLOR`; `ascii` on the kernel command line leaves UTF-8
+  answers `TTY_CAP_UTF8 | TTY_CAP_COLOR` (and since 10/25/26 `TTY_CAP_ALTSCREEN`, the
+  alternate screen); `ascii` on the kernel command line leaves UTF-8
   out, for a serial terminal that cannot show it (the shells then draw their prompt in
   ASCII). Input stays ASCII: in line mode the bytes above 0x7F are the keyboard's
   special keys.
@@ -1416,7 +1426,8 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   dropped whole instead of arriving at the next prompt in pieces. A Ctrl+C always gets
   through, a lone LF or NUL left behind by an Enter starts no skip, and the PS/2
   keyboard is never skipped. `TTY_GETSIZE` on a
-  pty answers its size, `TTY_CAPS` UTF-8 and colour; raw mode and the pager work as on a
+  pty answers its size, `TTY_CAPS` UTF-8 and colour (10/25/26: and the alternate screen, which the
+  far terminal draws); raw mode and the pager work as on a
   console, and a pty's output never reaches the screen or the serial mirror.
 * **Hangup.** Closing the last master descriptor hangs the pty up: each process whose
   terminal it is gets a kill that waits for the end of its call however long that takes

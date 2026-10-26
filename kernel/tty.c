@@ -648,9 +648,9 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
        `ascii` on the kernel command line, for a serial terminal that cannot show UTF-8, leaves
        UTF-8 out: the user shell then draws its prompt in ASCII. A pseudo-terminal passes both
        on to the terminal at its far end, which is taken to draw them (the telnet client). */
-    if(op == TTY_CAPS) {
-        if(t->con->stream) return TTY_CAP_COLOR | TTY_CAP_UTF8;
-        return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
+    if(op == TTY_CAPS) {                /* 10/25/26 (A8): the alternate screen on every console */
+        if(t->con->stream) return TTY_CAP_COLOR | TTY_CAP_UTF8 | TTY_CAP_ALTSCREEN;
+        return TTY_CAP_COLOR | TTY_CAP_ALTSCREEN | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
     }
     if(op == TTY_PAGE) return arg > 1 ? -22 : tty_page(t, (int)arg);
     if(op == TTY_SKIP) {                          /* 10/6/26: the caller dropped keys it had read (tty.h) */

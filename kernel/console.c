@@ -62,6 +62,7 @@ static void page_show(surf_console *con);       /* 10/6/26: the pager's question
 static void page_unshow(surf_console *con);
 static int page_descends(struct surf_task *t, struct surf_task *owner);
 static void stream_clear(surf_console *con);    /* 10/6/26: stream consoles (below) */
+static void alt_gone(surf_console *con);        /* 10/25/26 (A8): the alternate screen (below) */
 static void stream_csi(surf_console *con, int final);
 static int stream_how(void);
 static bool panicking;                          /* 10/6/26: console_panic() was called: the report goes to the screen */
@@ -229,7 +230,7 @@ static u_char *sb_row(surf_console *con, u_int k) {
    it shows. Interrupt handlers print too: with interrupts off. */
 static void sb_push(surf_console *con, const u_char *row) {
     u_long flags;
-    if(!scrollback_ok || con < conArray || con >= conArray + NUM_CONSOLES || con->stream) return;
+    if(!scrollback_ok || con < conArray || con >= conArray + NUM_CONSOLES || con->stream || con->alt_on) return;
     flags = irq_save();
     if(!con->sb && !con->sb_none && !panicking) {       /* never into the heap from a panic's report */
         con->sb_cap = SCROLLBACK_BYTES / (COLUMNS * 2);
@@ -249,7 +250,7 @@ static void sb_push(surf_console *con, const u_char *row) {
 static void sb_push_screen(surf_console *con) {
     int last = -1;
     u_int r, c;
-    if(!scrollback_ok) return;
+    if(!scrollback_ok || con->alt_on) return;           /* 10/25/26 (A8): not the alternate screen */
     for(r = 0; r < LINES; r++)
         for(c = 0; c < COLUMNS; c++) {
             u_char ch = con->vmem[(r * COLUMNS + c) * 2];
@@ -495,6 +496,7 @@ void console_task_gone(struct surf_task *task) {
     for(i = 0; i < NUM_TTYS; i++) {                     /* 10/6/26: the pseudo-terminals' too */
         con = &conArray[i];
         if(con->ansi_owner == task) console_reset_ansi(con);
+        if(con->alt_on && con->alt_owner == task) alt_gone(con);   /* 10/25/26 (A8): the main screen back */
         if(con->page_asker == task) {                   /* 10/6/26: killed at the question: it goes */
             page_unshow(con);
             con->page_asker = NULL;
@@ -556,9 +558,105 @@ static void ansi_sgr(surf_console *con) {
         else if(p == 7) con->inverse = 1;
         else if(p >= 30 && p <= 37) con->fg = ansi_vga[p - 30] + 1;
         else if(p >= 40 && p <= 47) con->bg = ansi_vga[p - 40] + 1;
-        /* anything else (underline, blink, 256 colours, ...) is not drawn */
+        /* 10/25/26 (A8): bright and inverse off, the writer's colours again, bright colours (a text mode
+           background has no bright one), and 256 colours or RGB read and dropped, their numbers too */
+        else if(p == 22) con->bold = 0;
+        else if(p == 27) con->inverse = 0;
+        else if(p == 39) con->fg = 0;
+        else if(p == 49) con->bg = 0;
+        else if(p >= 90 && p <= 97) con->fg = (ansi_vga[p - 90] | 8) + 1;
+        else if(p >= 100 && p <= 107) con->bg = ansi_vga[p - 100] + 1;
+        else if(p == 38 || p == 48) i += i + 1 <= con->nparam && con->param[i + 1] == 2 ? 4 : 2;
+        /* anything else (underline, blink, ...) is not drawn */
     }
     ansi_owner(con);
+}
+
+/* 10/25/26 (A8): ESC 7, ESC 8 (with the colours) and ESC[s, ESC[u: the cursor saved and put back */
+static void ansi_save(surf_console *con, bool colours) {
+    con->saved_loc = con->loc;
+    if(!colours) return;
+    con->saved_fg = con->fg;
+    con->saved_bg = con->bg;
+    con->saved_bold = con->bold;
+    con->saved_inverse = con->inverse;
+}
+
+static void ansi_restore(surf_console *con, bool colours) {
+    if(colours) {
+        con->fg = con->saved_fg;
+        con->bg = con->saved_bg;
+        con->bold = con->saved_bold;
+        con->inverse = con->saved_inverse;
+        ansi_owner(con);
+    }
+    if(con->stream) {                                   /* the far terminal moves; the column is followed */
+        con->loc.x = con->saved_loc.x < con->cols ? con->saved_loc.x : con->cols - 1;
+        con->wrap = 0;
+        con->at_home = 0;
+        return;
+    }
+    ansi_moveto(con, (int)con->saved_loc.x, (int)con->saved_loc.y);
+}
+
+/* 10/25/26 (A8): ESC[?1049h, the alternate screen: the main screen's cells and cursor kept (a stream's far
+   terminal keeps its own: the console follows the column), the screen blank, the cursor where it was, as xterm
+   has it; ESC[?1049l puts the main screen back. Without memory for the copy the sequence does nothing. A new
+   screenful for the pager either way, and the scrollback takes nothing while the alternate screen shows. */
+static void alt_enter(surf_console *con, TEXTCOLOR attr) {
+    u_char *keep;
+    u_int i;
+    if(con->alt_on) return;
+    con->alt_loc = con->loc;
+    con->alt_owner = in_interrupt() ? NULL : curTask;
+    con->page_rows = 0;
+    if(con->stream) {
+        con->alt_on = 1;
+        return;
+    }
+    keep = (u_char *)kalloc(SCREEN_BYTES);
+    if(!keep) return;
+    KCRIT_ENTER
+    memcpy(keep, con->vmem, SCREEN_BYTES);
+    con->alt = keep;
+    con->alt_on = 1;
+    for(i = 0; i < COLUMNS * LINES; i++) {
+        con->vmem[i * 2] = ' ';
+        con->vmem[i * 2 + 1] = attr;
+    }
+    KCRIT_LEAVE
+    con->wrap = 0;
+    if(shows_live(con)) syncVideoConsole(true);
+}
+
+static void alt_leave(surf_console *con) {
+    u_char *keep = con->alt;
+    if(!con->alt_on) return;
+    con->alt_on = 0;
+    con->alt_owner = NULL;
+    con->page_rows = 0;
+    if(con->stream) {
+        con->loc.x = con->alt_loc.x < con->cols ? con->alt_loc.x : con->cols - 1;
+        con->wrap = 0;
+        return;
+    }
+    KCRIT_ENTER
+    memcpy(con->vmem, keep, SCREEN_BYTES);
+    con->alt = NULL;
+    con->loc = con->alt_loc;
+    con->wrap = 0;
+    KCRIT_LEAVE
+    kfree(keep);
+    if(shows_live(con)) syncVideoConsole(true);
+    else setpos(con);
+}
+
+/* the task that showed the alternate screen ended without ESC[?1049l (console_task_gone(), interrupts off): the
+   main screen back, on the terminals too (the serial line's, a stream's far one) */
+static void alt_gone(surf_console *con) {
+    if(con->stream) PTY_OUT_LIT(con, "\033[?1049l", PTY_OUT_URGENT);
+    else if(con == conActive && mirror_serial) serial_puts("\033[?1049l");
+    alt_leave(con);
 }
 
 /* a whole CSI sequence has arrived: carry it out */
@@ -572,11 +670,15 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
         stream_csi(con, final);
         return;
     }
-    if(con->esc_mark == '?') {                           /* only ESC [ ? 25 l / h */
+    if(con->esc_mark == '?') {                           /* ESC [ ? 25 l / h; 10/25/26 (A8): ESC [ ? 1049 h / l */
         if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
             con->cursor_off = final == 'l';
             ansi_owner(con);
             setpos(con);
+        } else if(final == 'h' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_enter(con, attr);
+        } else if(final == 'l' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_leave(con);
         }
         return;
     }
@@ -590,6 +692,14 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
     case 'B': ansi_moveto(con, x, y + n); break;
     case 'C': ansi_moveto(con, x + n, y); break;
     case 'D': ansi_moveto(con, x - n, y); break;
+    case 'G': ansi_moveto(con, n - 1, y); break;       /* 10/25/26 (A8): the column, the row */
+    case 'd': ansi_moveto(con, x, n - 1); break;
+    case 's': if(!con->nparam) ansi_save(con, false); break;
+    case 'u': if(!con->nparam) ansi_restore(con, false); break;
+    case 'X':                                            /* n blanks from the cursor, which stays */
+        con->wrap = 0;
+        ansi_blank(con, here, here + (u_int)n < row + COLUMNS ? here + (u_int)n : row + COLUMNS, attr);
+        break;
     case 'J':                                            /* erase in display: 0 below, 1 above, 2 all */
         con->wrap = 0;
         if(con->param[0] == 0) ansi_blank(con, here, COLUMNS * LINES, attr);
@@ -638,7 +748,9 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
         }
         if(c == 0x1B || (c >= 0x20 && c <= 0x2F)) return 1;      /* ESC again, or ESC ( B and the like */
         con->esc = ESC_NONE;
-        return c >= 0x30 && c < 0x80;                           /* ESC 7, ESC c, ...: not ours; a UTF-8 byte is printed */
+        if(c == '7') ansi_save(con, true);                       /* 10/25/26 (A8): ESC 7, ESC 8 */
+        else if(c == '8') ansi_restore(con, true);
+        return c >= 0x30 && c < 0x80;                           /* ESC c, ...: not ours; a UTF-8 byte is printed */
     case ESC_CSI:
         if(c >= '0' && c <= '9') {
             if(con->nparam < ESC_PARAMS && con->param[con->nparam] < 1000)
@@ -746,6 +858,10 @@ static void stream_csi(surf_console *con, int final) {
         if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
             con->cursor_off = final == 'l';
             ansi_owner(con);
+        } else if(final == 'h' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_enter(con, WHITE_TXT);                   /* 10/25/26 (A8): the far terminal's alternate screen */
+        } else if(final == 'l' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_leave(con);
         }
         return;
     }
@@ -760,7 +876,11 @@ static void stream_csi(surf_console *con, int final) {
     case 'D': x -= n; con->at_home = 0; break;
     case 'G': x = n - 1; con->at_home = 0; break;
     case 'A':
-    case 'B': con->at_home = 0; break;
+    case 'B':
+    case 'd': con->at_home = 0; break;                  /* 10/25/26 (A8): ESC[nd, another row */
+    case 's': if(!con->nparam) ansi_save(con, false); return;
+    case 'u': if(!con->nparam) ansi_restore(con, false); return;
+    case 'X': con->wrap = 0; return;
     case 'J':                                            /* an empty screen: a new screenful */
         con->wrap = 0;
         if(con->param[0] == 2 || (con->param[0] == 0 && con->at_home)) con->page_rows = 0;

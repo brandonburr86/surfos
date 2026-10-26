@@ -17,12 +17,15 @@
    framebuffer console: rows kept as they scroll off and by ESC[2J and a clear, Shift+PgUp, PgDn,
    Home and End, the view's tag and hidden cursor, output that does not move the view, any other key,
    a console switch, the pager's question, a graphics session, no memory, a full ring; a kernel
-   thread's message whole, after another writer's line. */
+   thread's message whole, after another writer's line. 10/25/26 (A8): the escape sequences of
+   tests/host/vt_cases.h (shared with the desktop's terminal), and the alternate screen on the
+   screen and on a pseudo-terminal, the scrollback left alone, a task that ends without leaving it. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "vt_cases.h"
 
 /* tasks (tests/host/pager_bridge.c): init's children are the shell and the usb thread; the
    shell's are a command (CHILD, which has GRAND) and a background job (BG) */
@@ -75,6 +78,7 @@ int sim_key_home(void);
 int sim_readline_secret(char *buf, int size);
 int sim_inq_has(const char *s);
 int sim_scroll_key(int which);              /* 10/25/26 (A6): 0 Shift+PgUp, 1 PgDn, 2 Home, 3 End */
+int sim_attr(int x, int y);                 /* 10/25/26 (A8) */
 void sim_view_live(void);
 void sim_screen_row(int r, char *out, int *attr_last);
 int sim_view(void);
@@ -680,9 +684,9 @@ static void t_echo_not_kept(void) {
 
 static void t_caps(void) {
     reset(0);
-    check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
+    check(sim_ttyctl(TTY_CAPS, 0) == 7, "TTY_CAPS: UTF-8, colour (10/25/26: and the alternate screen)");
     reset(1);
-    check(sim_ttyctl(TTY_CAPS, 0) == 2, "TTY_CAPS with `ascii` on the command line: colour only");
+    check(sim_ttyctl(TTY_CAPS, 0) == 6, "TTY_CAPS with `ascii` on the command line: colour (and the alternate screen)");
 }
 
 /**** 10/6/26: a pseudo-terminal: the stream console ****/
@@ -944,6 +948,78 @@ static void t_scrollback(void) {
     check(sim_view() == 0 && screen_live(), "and Shift+PgDn comes back down to the live screen");
 }
 
+/* 10/25/26 (track A, A8): the cases of vt_cases.h on the console */
+static void t_vt_cases(void) {
+    char r[256], what[160];
+    int i, k, x, y, ok;
+    for(i = 0; i < VT_CASES; i++) {
+        const struct vt_case *c = &vt_cases[i];
+        reset(0);
+        say(SHELL, c->input);
+        for(ok = 1, k = 0; k < VT_ROWS_MAX && c->rows[k].text; k++) {
+            row(c->rows[k].row, r);
+            if(strcmp(r, c->rows[k].text)) ok = 0;
+        }
+        for(k = 0; k < VT_ATTRS_MAX && c->attrs[k].attr >= 0; k++)
+            if(sim_attr(c->attrs[k].col, c->attrs[k].row) != c->attrs[k].attr) ok = 0;
+        sim_cursor(&x, &y);
+        if(c->col >= 0 && (x != c->col || y != c->row)) ok = 0;
+        snprintf(what, sizeof(what), "escape sequences: %s", c->name);
+        check(ok, what);
+    }
+}
+
+static void t_alt_screen(void) {
+    char r[256], ser[4096], out[512];
+    int x, y, kept, i;
+    reset(0);
+    check(sim_ttyctl(TTY_CAPS, 0) & 4, "TTY_CAPS says the console has the alternate screen (TTY_CAP_ALTSCREEN)");
+    run(SHELL, w_lines, 1, 30);
+    say(SHELL, "prompt> ");
+    kept = sim_kept();
+    say(SHELL, "\033[?1049h");
+    sim_cursor(&x, &y);
+    row(0, r);
+    check(!strcmp(r, "") && x == 8 && y == 24, "ESC[?1049h: a blank screen, the cursor where it was");
+    say(SHELL, "\033[HALT");
+    for(i = 0; i < 30; i++) say(SHELL, "\n");
+    say(SHELL, "\033[2J");
+    check(sim_kept() == kept, "the alternate screen's rows never go into the scrollback, ESC[2J's neither");
+    say(SHELL, "\033[?1049l");
+    sim_cursor(&x, &y);
+    row(23, r);
+    check(!strcmp(r, "line 030") && x == 8 && y == 24 && sim_cell(0, 24) == 'p' && !screen_has("ALT"),
+          "ESC[?1049l: the main screen as it was, and its cursor");
+    say(SHELL, "\033[?1049l");
+    check(sim_cell(0, 24) == 'p', "ESC[?1049l on the main screen does nothing");
+
+    reset(0);
+    say(SHELL, "main");
+    say_text = "\033[?1049hfull screen";
+    run(CHILD, w_say, 0, 0);
+    sim_serial(ser, sizeof(ser));
+    sim_task_gone(CHILD);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(!strcmp(r, "main") && strstr(ser, "\033[?1049l"), "a task that ends on the alternate screen: the main one back, "
+          "on the serial terminal too");
+
+    on_pty(80, 24, 0);
+    say(SHELL, "abc");
+    say(SHELL, "\033[?1049h\033[Hxyz");
+    say(SHELL, "\033[?1049l");
+    sim_stream_pos(&x, &y);
+    sim_stream(out, sizeof(out));
+    check(x == 3 && strstr(out, "\033[?1049h") && strstr(out, "\033[?1049l"),
+          "a pseudo-terminal: the sequences go to the far terminal, the column comes back with the main screen");
+    say_text = "\033[?1049h";
+    run(CHILD, w_say, 0, 0);
+    sim_stream(out, sizeof(out));
+    sim_task_gone(CHILD);
+    sim_stream(out, sizeof(out));
+    check(strstr(out, "\033[?1049l") != NULL, "and its far terminal leaves the alternate screen when the task that asked ends");
+}
+
 /* 10/25/26: a kernel thread's message comes out whole (kprintf): it waits for another writer's line to end */
 static void w_kprintf(int unused, int unused2) { (void)unused; (void)unused2; sim_kprintf_line(say_text); }
 
@@ -1118,7 +1194,7 @@ static void t_stream_tty(void) {
     int st;
     reset(1);                                       /* `ascii` on the kernel command line */
     sim_term(0);
-    check(sim_ttyctl(TTY_CAPS, 0) == 3, "a pty's TTY_CAPS: UTF-8 and colour, whatever `ascii` says");
+    check(sim_ttyctl(TTY_CAPS, 0) == 7, "a pty's TTY_CAPS: UTF-8, colour and the alternate screen, whatever `ascii` says");
     check(sim_ttyctl(2, 0) == ((80 << 16) | 24), "TTY_GETSIZE: 80x24 at first");
     sim_stream_size(100, 30);
     check(sim_ttyctl(2, 0) == ((100 << 16) | 30), "TTY_GETSIZE: the size PTY_SETSIZE gave");
@@ -1427,6 +1503,8 @@ int main(void) {
     t_tab();
     t_scrollback();
     t_whole_kernel_lines();
+    t_vt_cases();
+    t_alt_screen();
     t_stream_wrap_ask();
     t_stream_resize();
     t_stream_colour();

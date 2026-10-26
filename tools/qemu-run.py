@@ -389,6 +389,8 @@ SMOKE = [
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
+    # 10/25/26 (track A, A8): the alternate screen, left by the program or for it by the console when it is killed
+    ('@alt-screen', []),
     # 10/25/26 (track A): a TAB reaches the serial terminal as it was printed (the screen: test_pager, qemu-usb's fullhd)
     ("printf 'a\\tb|\\n'", ['a\tb|']),
     # 10/25/26 (track A, A3): time, how long a command took (its status is the command's)
@@ -398,7 +400,7 @@ SMOKE = [
     # was printed, and VGA memory as code page 437 cells
     ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
     ('@utf8-screen', []),
-    ('run pagetest caps', ['TTY_CAPS 3: UTF-8 colour', 'exit status 0']),     # no `ascii` on the command line
+    ('run pagetest caps', ['TTY_CAPS 7: UTF-8 colour alternate-screen', 'exit status 0']),   # no `ascii`; (A8) ESC[?1049h
     # the pager (TTY_PAGE): --More-- after a screenful less one row, 24 lines at 80x25; answered by the
     # harness with Space, then with Enter and q, then on the PS/2 keyboard and read back from VGA memory
     ('@pager-space', []),
@@ -412,7 +414,7 @@ SMOKE = [
     # what is typed for a kernel command whose output goes to a file is shown, and is not in the file
     ('@kcmd-echo', []),
     # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
-    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
+    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 6: colour alternate-screen'])], []),
     # 10/17/26 (one stick): test_boot_volume must run here (bootvol= and rd1), not print its skip line
     # 10/24/26 (storage, milestone 1): and test_fat_refused, a stick that refuses writes: close says EIO, umount gives up
     ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
@@ -512,7 +514,7 @@ SMOKE = [
     ('run ptytest surfsh', ['ptytest: typed "echo hello"', 'ptytest: Ctrl+C: sleep cut short, count killed',
                             'in the kernel\'s colour', 'ptytest: exit typed: the master read 0', 'PTYTEST surfsh PASS',
                             'exit status 0']),
-    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 3: UTF-8 colour',
+    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 7: UTF-8 colour alternate-screen',
                                  'PTYTEST size PASS', 'exit status 0']),
     ('run ptytest pager', ['the lines between them: 1-9 10-18 19-27 28-36 37-45 46-54 55-60', 'PTYTEST pager PASS',
                            'exit status 0']),
@@ -1806,7 +1808,9 @@ def host_echo_check(q):
 # what the shell command `ansi` draws with escape sequences (row: text), 80x25
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
              6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
-             12: 'ANSI-TEST done, 80x25'}
+             12: 'ANSI-TEST done, 80x25',
+             # 10/25/26 (track A, A8): CHA and ECH; ESC 7/8, ESC[s/u and VPA; SGR 22, 92, 39, 44, 49, 38 dropped
+             5: '         COL       TWENTY    X   XX', 9: '         CB        FE        VPA', 11: '         BNGDU.S'}
 
 
 def ansi_screen_check(q):
@@ -1820,7 +1824,10 @@ def ansi_screen_check(q):
         return d[(r * 80 + c) * 2 + 1]
     ok = all(row(r) == text for r, text in ANSI_ROWS.items()) and d[(24 * 80 + 79) * 2] == ord('Z')
     ok = ok and attr(9, 2) == 0x70 and attr(16, 2) == 0x07 and attr(9, 3) == 0x1E   # inverse, normal, bright yellow on blue
-    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
+    # 10/25/26 (A8): bright yellow, bright off, bright green, the writer's, blue behind, behind off, 38;5;1 not bold
+    ok = ok and [attr(c, 11) for c in range(9, 16)] == [0x0E, 0x06, 0x0A, 0x07, 0x17, 0x07, 0x07]
+    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner; '
+            'G d s u X, ESC 7 and 8, SGR 22 39 49 92 and 38', ok)
 
 
 # 10/6/26: the prompt in the root directory as a repaint draws it from a console's cells: a console that does not
@@ -2339,6 +2346,44 @@ def surfsh_corner_check(q):
 
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
+
+
+def alt_screen_check(q):
+    """10/25/26 (track A, A8): the alternate screen (ESC[?1049h and l) in VGA memory: `pagetest alt` asks its question
+    on a blank screen, and the shell's screen comes back after it with the cursor where it was; a program killed there
+    (Ctrl+C at its question) gets the main screen back from the console, which tells the serial terminal too"""
+    def rows():
+        q.wait(0.3)
+        d = q.vga_memory() or bytes(4000)
+        return [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
+
+    def alt_gone(screen):
+        return not any('ALT-SCREEN' in r or 'alternate question' in r for r in screen)
+    q.send('clear\n')
+    ok = q.expect(PROMPT, 10)
+    q.send('echo main screen kept\n')
+    ok = ok and q.expect('main screen kept\r\n', 10) and q.expect(PROMPT, 10)
+    q.send('run pagetest alt\n')
+    ok = ok and q.expect('alternate question: ', 10)
+    alt = rows()
+    ok = ok and alt[0] == 'PAGETEST ALT-SCREEN' and alt[1] == 'alternate question:' and not any(alt[2:])
+    q.send('yes\n')
+    ok = ok and q.expect('PAGETEST MAIN SCREEN: yes', 10) and q.expect(PROMPT, 10)
+    main = rows()
+    ok = ok and main[1] == 'main screen kept' and main[2].endswith('run pagetest alt') and \
+        main[3] == 'PAGETEST MAIN SCREEN: yes' and main[4].endswith('exit status 0]') and alt_gone(main)
+    q.send('run pagetest alt\n')
+    ok = ok and q.expect('alternate question: ', 10)
+    start = len(q.transcript)
+    q.ser.sendall(b'\x03')
+    ok = ok and q.expect('killed]', 10) and q.expect(PROMPT, 10) and b'\x1b[?1049l' in q.transcript[start:]
+    killed = rows()
+    ok = ok and killed[:5] == main[:5] and killed[5].endswith('run pagetest alt') and alt_gone(killed)
+    return ('the alternate screen: a program\'s question on a blank screen, the shell\'s screen back after it, and back '
+            'from the console when the program is killed there (the serial terminal told)', ok)
+
+
+CONSOLE_CHECKS['@alt-screen'] = alt_screen_check
 CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
 CONSOLE_CHECKS['@surfsh-jobs'] = surfsh_jobs_check        # 10/25/26
 

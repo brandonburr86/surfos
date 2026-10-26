@@ -362,6 +362,11 @@ static int cmd_ansi(int argc, char **argv) {
     printf("\033[5;10HKEEP-ERASED\033[5;14H\033[K");
     printf("\033[8;10HA\033[BB\033[2AC\033[3DD\033[5CE");                    /* moves: D C E above A, B below */
     printf("\033[11;10H\033[5n\033[?7h\033(B\033[ q\033[38;5;196mUNKNOWN-IGNORED\033[0m");
+    /* 10/25/26 (track A, A8), on rows 6, 10 and 12 only, so a terminal without them goes wrong only there: G and X;
+       ESC 7 and 8, ESC[s and u (C on A, F on D), d (VPA from row 12 up to 10); SGR 22, 92, 39, 44, 49, 38;5;1 dropped */
+    printf("\033[6;10HCOL\033[20GTWENTY\033[6;30HXXXXXX\033[6;31H\033[3X");
+    printf("\033[10;10H\0337AB\033[10;40H\0338C\033[10;20H\033[sDE\033[10;50H\033[uF\033[12;30H\033[10dVPA");
+    printf("\033[12;10H\033[1;33mB\033[22mN\033[92mG\033[39mD\033[44mU\033[49m.\033[38;5;1mS\033[0m");
     printf("\033[%d;%dHZ", rows, cols);                                          /* the corner, without scrolling */
     printf("\033[13;1H\033[?25l\033[?25hANSI-TEST done, %dx%d\n", cols, rows);
     return CMD_OK;

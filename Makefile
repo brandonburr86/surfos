@@ -457,9 +457,9 @@ $(BUILD)/host/pager/%.o: %.c tests/host/surf_names.h
 	@echo "HOSTCC $< (pager test)"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(PAGER_FLAGS) -c $< -o $@
 
-$(BUILD)/host/test_pager: tests/host/test_pager.c $(PAGER_OBJ) $(HOSTLIB_OBJ)
+$(BUILD)/host/test_pager: tests/host/test_pager.c tests/host/vt_cases.h $(PAGER_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $(filter %.c %.o,$^) -o $@
 
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
