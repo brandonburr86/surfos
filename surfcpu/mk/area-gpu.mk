@@ -22,8 +22,8 @@
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
 #                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py), the cube's
-#                          16 checked frames and its first second of free run (none torn or missed);
-#                          SurfBoot's monitor reports features 1ff
+#                          16 checked frames and its first second of free run (none torn, missed or
+#                          out of order); SurfBoot's monitor reports features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)

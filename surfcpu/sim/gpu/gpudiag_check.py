@@ -30,8 +30,9 @@ only when:
     board is reprogrammed) may follow, and the capture may end inside the echo line or a cube line
     (uart.py capture stops where its last read ended); anything else is a later run that did not end;
   - every cube line, wherever it is, shows no torn frame (a frame whose FRAME_CRC is none of the
-    cube's), no missed one (shown but not checked) and at least 30 frames drawn in its second; with
-    --cube-seconds N at least N of them follow the last whole run (the board test of the cube);
+    cube's), no missed one (shown but not checked), none out of order (one that cannot follow the
+    frame shown before it) and at least 30 frames drawn in its second; with --cube-seconds N at
+    least N of them follow the last whole run (the board test of the cube);
   - every whole run has the checks of a complete first run or of a complete rerun (a run of the
     rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
     must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
@@ -81,8 +82,8 @@ SCENE_FAILED = re.compile(r"^crc ([0-9a-f]{8}) +scene +(\d+): ")     # a scene w
 CUT_SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL)\b(?! \([^)]*\))")
 # the cube's free run after a PASS (gpudiag.c cube_free_run)
 CUBE_HEAD = re.compile(r"cube: a line a second: .*")
-CUBE_LINE = re.compile(r"cube +(\d+) s: +(\d+) drawn, +(\d+) shown, (\d+) missed, (\d+) torn \(in all (\d+) drawn, "
-                       r"(\d+) shown, (\d+) missed, (\d+) torn\)")
+CUBE_LINE = re.compile(r"cube +(\d+) s: +(\d+) drawn, +(\d+) shown, (\d+) missed, (\d+) torn, (\d+) out of order "
+                       r"\(in all (\d+) drawn, (\d+) shown, (\d+) missed, (\d+) torn, (\d+) out of order\)")
 CUBE_RATE = 30                                          # frames drawn a second, at least
 
 
@@ -260,16 +261,18 @@ def main() -> int:
     stray = next((l.strip() for l in outside if FAILED.search(l) or "GPUDIAG: FAIL" in l), None)
     if stray is not None:
         problems.append("a line outside any run shows a failure: %r" % stray[:80])
-    # the cube's lines (outside the runs): no torn or missed frame, 30 frames a second or more
+    # the cube's lines (outside the runs): no torn, missed or out-of-order frame, 30 frames drawn a second or
+    # more
     for l in outside:
         m = CUBE_LINE.search(l)
         if not m:
             continue
-        sec, drawn, missed, torn = int(m.group(1)), int(m.group(2)), int(m.group(4)), int(m.group(5))
-        if torn or missed or drawn < CUBE_RATE:
-            problems.append("the cube's second %d: %d frames drawn, %d missed, %d torn (%s)" % (
-                sec, drawn, missed, torn, "a torn frame" if torn else "a frame not checked" if missed else
-                "fewer than %d frames a second" % CUBE_RATE))
+        sec, drawn, shown, missed, torn, order = (int(m.group(k)) for k in range(1, 7))
+        why = ("a torn frame" if torn else "a frame not checked" if missed else "a frame out of order" if order else
+               "fewer than %d frames a second" % CUBE_RATE if drawn < CUBE_RATE else None)
+        if why:
+            problems.append("the cube's second %d: %d frames drawn, %d shown, %d missed, %d torn, %d out of order (%s)"
+                            % (sec, drawn, shown, missed, torn, order, why))
             break
 
     def whole(r: Run) -> bool:
@@ -389,7 +392,7 @@ def main() -> int:
     cube = [m for l in outside for m in [CUBE_LINE.search(l)] if m]
     cube_desc = ""
     if cube:
-        cube_desc = "; the cube %d seconds, %d to %d frames drawn a second, none torn or missed" % (
+        cube_desc = "; the cube %d seconds, %d to %d frames drawn a second, none torn, missed or out of order" % (
             len(cube), min(int(m.group(2)) for m in cube), max(int(m.group(2)) for m in cube))
     print("gpudiag_check: PASS (%s; %d scenes%s, every FRAME_CRC the model's%s; %s%d frames captured, %d distinct%s%s)"
           % (desc, len(expect), " in each run" if len(judged) > 1 else "", " and a captured frame's" if frames else "",

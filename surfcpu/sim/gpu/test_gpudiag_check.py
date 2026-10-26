@@ -33,9 +33,10 @@ scenes, 84 checks for a first run and 83 for a rerun:
     alone does not see a dirty build (B14), as documented;
   - --must-fail passes only a failing run that says what it must;
   - the cube (GPU2): its header and its lines a second after a whole run pass, and so does a capture
-    that ends inside one; a line with a torn frame, a missed one or fewer than 30 frames drawn fails,
-    also after an earlier run that a rerun follows; words after them fail; --cube-seconds N wants N
-    lines after the last run.
+    that ends inside one; a line with a torn frame, a missed one, one out of order or fewer than 30
+    frames drawn fails, also after an earlier run that a rerun follows; words after them fail; the
+    first cube's lines, without frames out of order, are not the cube's lines any more;
+    --cube-seconds N wants N lines after the last run.
 Exit 0 when all pass.
 """
 
@@ -97,17 +98,19 @@ def run(crcs=("11111111", "22222222"), summary=None, skip=False, rerun=False, bu
 
 
 CUBE = ("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not "
-        "checked), torn (frames that were none of the cube's 128)\n")
+        "checked), torn (frames that were none of the cube's 128), out of order (frames that did not follow the one "
+        "before)\n")
 
 
-def cube(n, drawn=60, missed=0, torn=0, at=None):
-    """n of the cube's lines a second, the one numbered `at` with the given drawn, missed and torn"""
-    out, td, ts, tm, tt = "", 0, 0, 0, 0
+def cube(n, drawn=60, missed=0, torn=0, at=None, shown=60, order=0):
+    """n of the cube's lines a second, the one numbered `at` with the given drawn, shown, missed, torn and out of
+    order"""
+    out, td, ts, tm, tt, to = "", 0, 0, 0, 0, 0
     for k in range(1, n + 1):
-        d, m, t = (drawn, missed, torn) if (at is None or at == k) else (60, 0, 0)
-        td, ts, tm, tt = td + d, ts + 60, tm + m, tt + t
-        out += "cube %4d s: %3d drawn, %3d shown, %d missed, %d torn (in all %d drawn, %d shown, %d missed, %d torn)\n" % (
-            k, d, 60, m, t, td, ts, tm, tt)
+        d, s, m, t, o = (drawn, shown, missed, torn, order) if (at is None or at == k) else (60, 60, 0, 0, 0)
+        td, ts, tm, tt, to = td + d, ts + s, tm + m, tt + t, to + o
+        out += ("cube %4d s: %3d drawn, %3d shown, %d missed, %d torn, %d out of order (in all %d drawn, %d shown, %d "
+                "missed, %d torn, %d out of order)\n" % (k, d, s, m, t, o, td, ts, tm, tt, to))
     return out
 
 
@@ -281,6 +284,11 @@ expect("a whole run, the echo, the cube's header and three seconds", run() + ECH
 expect("the cube: a torn frame", run() + ECHO + CUBE + cube(3, torn=1, at=2), False)
 expect("the cube: a frame not checked", run() + ECHO + CUBE + cube(3, missed=1, at=3), False)
 expect("the cube: 29 frames drawn in a second", run() + ECHO + CUBE + cube(3, drawn=29, at=1), False)
+# the review of 3fea963: frames out of order (L1: printed and judged since), and the first cube's lines, without them
+expect("the cube: a frame out of order", run() + ECHO + CUBE + cube(3, order=1, at=2), False)
+expect("the cube: the first cube's line, without frames out of order, then one of today's", run() + ECHO + CUBE +
+       "cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 60 drawn, 60 shown, 0 missed, 0 torn)\n" + cube(1),
+       False)
 expect("the cube: the capture ends inside a line", run() + ECHO + CUBE + cube(2) + "cube    3 s:  6", True)
 expect("the cube: the capture ends inside the word cube", run() + ECHO + CUBE + cube(2) + "cu", True)
 expect("the cube: words after its lines", run() + ECHO + CUBE + cube(2) + "identity ok\n", False)

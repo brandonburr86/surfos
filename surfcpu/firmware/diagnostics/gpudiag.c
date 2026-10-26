@@ -27,9 +27,9 @@ FRAME_CRC of every frame shown against the model's CRCs of the cube's frames (a 
 frame missed or out of order fails), and the first and last as still pictures.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)" and the LEDs (LD0 green or red).
 After a PASS the cube spins on under a result bar (MODE 3), a line a second on the UART with the
-frames drawn, shown, missed and torn; after a FAIL the result shows in the top text row over the
-last picture. Either way UART input is echoed, and Ctrl-R runs it all again. The text console is
-not used (the scenes own the screen): everything goes to the UART.
+frames drawn, shown, missed, torn and out of order; after a FAIL the result shows in the top text
+row over the last picture. Either way UART input is echoed, and Ctrl-R runs it all again. The text
+console is not used (the scenes own the screen): everything goes to the UART.
 */
 #include "diag.h"
 #include "gpucube.h"
@@ -603,8 +603,9 @@ struct cube_run {
     uint32_t next;                                      /* the next frame to draw */
     uint32_t last_count;                                /* FRAME_COUNT at the last look */
     uint32_t shown, missed, torn;                       /* frames counted, not looked at, no cube frame's */
-    int32_t last_frame;                                 /* the frame index of the last frame shown */
-    uint32_t out_of_order;
+    uint32_t out_of_order;                              /* frames shown that cannot follow the last one shown */
+    int32_t last_frame;                                 /* the frame index of the last cube frame shown */
+    uint32_t last_at;                                   /* FRAME_COUNT when it was looked at */
     uint32_t seen_lo, seen_hi;                          /* frames 0..63 seen (the checked run) */
 };
 
@@ -616,7 +617,9 @@ static int32_t cube_lookup(const struct cube_run *c, uint32_t crc)
     return -1;
 }
 
-/* the frame counter: every new frame's CRC must be one of the cube's frames */
+/* the frame counter: every frame counted must be one of the cube's frames, and it must follow the
+ * last one: a FLIP waits for a blanking, so after d frames counted the frame shown is the last one
+ * again or at most d frames on (frame 127 is followed by frame 0) */
 static void cube_look(struct cube_run *c)
 {
     const uint32_t count = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
@@ -631,9 +634,11 @@ static void cube_look(struct cube_run *c)
         c->torn++;
         return;
     }
-    if (f < c->last_frame && !(c->ncrcs == GPU_CUBE_PERIOD && c->last_frame - f > (int32_t)GPU_CUBE_PERIOD / 2))
-        c->out_of_order++;                               /* (the free run wraps from 127 to 0) */
+    const uint32_t step = (uint32_t)(f - c->last_frame + (int32_t)c->ncrcs) % c->ncrcs;
+    if (step > ((count - c->last_at) & 0xFFFFu))
+        c->out_of_order++;
     c->last_frame = f;
+    c->last_at = count;
     if (f < 32)
         c->seen_lo |= 1u << f;
     else if (f < 64)
@@ -668,7 +673,7 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
     const int still = wait_still();
     *crc = VREG(SURF_VIDEO_FRAME_CRC);
     c->next = 1;
-    c->last_count = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
+    c->last_count = c->last_at = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
     c->shown = c->missed = c->torn = c->out_of_order = 0;
     c->last_frame = 0;
     c->seen_lo = 1;
@@ -687,7 +692,7 @@ static void cube_check(uint32_t unused)
         diag_section_end();
         return;
     }
-    struct cube_run c = {gpu_cube_expect_check, GPU_CUBE_CHECK_FRAMES, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    struct cube_run c = {.crcs = gpu_cube_expect_check, .ncrcs = GPU_CUBE_CHECK_FRAMES};
     uint32_t crc0 = 0;
     const int ok0 = cube_start(&c, 0, &crc0);
     diag_check(ok0 && crc0 == gpu_cube_expect_check[0], "frame 0, a still picture: FRAME_CRC 0x%08x, the model's 0x%08x%s",
@@ -759,15 +764,16 @@ static void cube_free_run(void)
 {
     con_puts("\nUART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again.\n");
     con_printf("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames "
-               "not checked), torn (frames that were none of the cube's %u)\n", GPU_CUBE_PERIOD);
-    struct cube_run c = {gpu_cube_expect_run, GPU_CUBE_PERIOD, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+               "not checked), torn (frames that were none of the cube's %u), out of order (frames that did not "
+               "follow the one before)\n", GPU_CUBE_PERIOD);
+    struct cube_run c = {.crcs = gpu_cube_expect_run, .ncrcs = GPU_CUBE_PERIOD};
     uint32_t crc0 = 0;
     if (!cube_start(&c, 1, &crc0) || crc0 != gpu_cube_expect_run[0])
         con_printf("  FAIL cube frame 0 under the bar: FRAME_CRC 0x%08x, the model's 0x%08x\n", crc0,
                    gpu_cube_expect_run[0]);
     out_head = out_tail = 0;
     uint32_t sec = 0, beat = timer_now32(), echoes = 0;
-    uint32_t drawn_base = 0, shown_base = 0, missed_base = 0, torn_base = 0;
+    uint32_t drawn_base = 0, shown_base = 0, missed_base = 0, torn_base = 0, order_base = 0;
     for (;;) {
         cube_step(&c, 0xFFFFFFFFu);
         ring_drain();
@@ -776,13 +782,15 @@ static void cube_free_run(void)
             sec++;
             REG(SURF_GPIO_BASE, SURF_GPIO_LED) ^= 0x8u;     /* heartbeat on LD7 */
             const uint32_t drawn = GREG(SURF_GPU_FENCE) - CUBE_FENCE;
-            ring_printf("cube %4u s: %3u drawn, %3u shown, %u missed, %u torn (in all %u drawn, %u shown, %u missed, "
-                        "%u torn)\n", sec, drawn - drawn_base, c.shown - shown_base, c.missed - missed_base,
-                        c.torn - torn_base, drawn, c.shown, c.missed, c.torn);
+            ring_printf("cube %4u s: %3u drawn, %3u shown, %u missed, %u torn, %u out of order (in all %u drawn, %u "
+                        "shown, %u missed, %u torn, %u out of order)\n", sec, drawn - drawn_base, c.shown - shown_base,
+                        c.missed - missed_base, c.torn - torn_base, c.out_of_order - order_base, drawn, c.shown,
+                        c.missed, c.torn, c.out_of_order);
             drawn_base = drawn;
             shown_base = c.shown;
             missed_base = c.missed;
             torn_base = c.torn;
+            order_base = c.out_of_order;
         }
         const int ch = con_getc();
         if (ch == 0x12) {
