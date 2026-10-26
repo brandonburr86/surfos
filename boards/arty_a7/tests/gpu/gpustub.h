@@ -82,6 +82,7 @@ struct stub {
     uint64_t stop_at;                   /* it stops when now passes this (0: never) */
     unsigned slow;                      /* extra engine cycles for every word it takes */
     int irq_path;                       /* the port has the interrupt */
+    int isr_no_wake;                    /* the handler runs (FENCE_EV cleared) but wakes nobody */
     unsigned drop_word;                 /* the CMD write with this number (1, 2, ...) is lost: OVERFLOW */
     unsigned corrupt_word;              /* this CMD write arrives with opcode 0x0F instead */
     uint32_t corrupt_value;             /* or (corrupt_value_at) arrives as this word */

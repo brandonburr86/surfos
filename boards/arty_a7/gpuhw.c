@@ -114,13 +114,18 @@ static bool p_interrupted(void *c) { (void)c; return task_interrupted(); }
 
 static void p_irq_arm(void *c) { (void)c; event_clear(&fence_event); }
 
+/* 1 when the interrupt came (event_wait_timeout(): 0, set before the wait or by the handler's
+   wake-up), 0 when the time passed, GPU_EINTR when Ctrl+C cut it short (10/26/26: the driver counts
+   the waits the interrupt ended) */
 static int p_irq_wait(void *c, u32 ms) {
+    int r;
     (void)c;
     if(!can_wait()) {
         spin_ms(ms);
         return 0;
     }
-    return event_wait_timeout(&fence_event, ms) == -EINTR ? GPU_EINTR : 0;
+    r = event_wait_timeout(&fence_event, ms);
+    return r == -EINTR ? GPU_EINTR : r == 0 ? 1 : 0;
 }
 
 static u_long p_atomic_begin(void *c) { (void)c; return irq_save(); }

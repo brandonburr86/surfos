@@ -173,7 +173,8 @@ static int show(struct gpu *g) {
            "    sent: %lu words, %lu fences; FENCE %lu\n",
            (u_long)g->t_base, (u_long)g->t_stride, (u_long)g->t_w, (u_long)g->t_h, (u_long)g->c_x0, (u_long)g->c_y0,
            (u_long)g->c_x1, (u_long)g->c_y1, g->words, g->fences, (u_long)s.fence);
-    if(g->irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n", g->irqs);
+    if(g->irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n"
+                      "    waits on the interrupt: %lu, %lu of them woken by it\n", g->irqs, g->irq_waits, g->irq_wakes);
     else printf("    interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n");
     printf("    errors %lu, timeouts %lu, ABORTs %lu\n"
            "    by kind: OVERFLOW %lu, BAD_OPCODE %lu, BAD_PARAM %lu\n"

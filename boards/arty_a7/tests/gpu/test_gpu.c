@@ -453,6 +453,20 @@ static void t_fences(unsigned seed) {
         else check(s->sleeps > sleeps && s->irq_waits == 0 && s->interrupts_sent == 0 && !(s->ie & 1),
                    "long commands without the interrupt: sleeps, IE.FENCE off");
         check(s->now - t0 < 40000, "  done in time (3 x 3.1 ms of engine time, under 40 ms in all)");
+        if(irq) {
+            /* the re-review's N3: the interrupt must end the waits, not only reach its handler */
+            unsigned long w0 = G.irq_waits, k0 = G.irq_wakes;
+            check(G.irq_waits >= 3 && G.irq_wakes == G.irq_waits && gfx(s, "gfx") == CMD_OK &&
+                  said(s, "    waits on the interrupt: 3, 3 of them woken by it\n"),
+                  "  each of those waits ended by the interrupt, counted, and gfx says so");
+            s->isr_no_wake = 1;                 /* a handler that runs and wakes nobody */
+            t0 = s->now;
+            check(gfx(s, "gfx fill 0 0 640 480 4") == CMD_OK && gfx(s, "gfx fill 0 0 640 480 5") == CMD_OK &&
+                  s->interrupts_sent > 0 && G.irq_wakes == k0 && G.irq_waits >= w0 + 2 && s->now - t0 >= 20000,
+                  "an interrupt that wakes nobody: the fences come all the same, each wait ended by its 10 ms");
+            check(gfx(s, "gfx") == CMD_OK && said(s, ", 3 of them woken by it\n"), "  and gfx shows the waits it did not end");
+            s->isr_no_wake = 0;
+        }
         done(s);
     }
 }
@@ -972,7 +986,8 @@ static void t_state(unsigned seed) {
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
           said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
-          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n") && said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    waits on the interrupt: 0, 0 of them woken by it\n") &&
+          said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
           said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
           "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
     done(s);
@@ -1002,7 +1017,7 @@ static void t_columns(unsigned seed) {
     check(gpu_set_target(&G, 307196, 65532, 4, 1, "gfx") == GPU_OK &&
           gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
           "the widest target (VRAM 307196, stride 65532) and clip");
-    G.words = G.fences = G.irqs = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.words = G.fences = G.irqs = G.irq_waits = G.irq_wakes = G.timeouts = G.aborts = G.errors = 4294967295ul;
     G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
     G.fifo_depth = 65535;
     G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */

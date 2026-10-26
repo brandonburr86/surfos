@@ -94,7 +94,9 @@ struct gpu_port {
     bool (*interrupted)(void *ctx);                     /* Ctrl+C (or a kill) reached the command */
     /* the GPU's interrupt (FENCE_EV); NULL when the board's interrupt path has none */
     void (*irq_arm)(void *ctx);                         /* forget what came so far */
-    int (*irq_wait)(void *ctx, u32 ms);                 /* until one since irq_arm(), or ms: 0, GPU_EINTR */
+    /* until one since irq_arm(), or ms: 1 when the interrupt came (it woke the wait, or had come
+       before it), 0 when ms passed without it, GPU_EINTR when Ctrl+C cut it short */
+    int (*irq_wait)(void *ctx, u32 ms);
     /* a stretch of a few register accesses that nothing may come between (interrupts off) */
     u_long (*atomic_begin)(void *ctx);
     void (*atomic_end)(void *ctx, u_long flags);
@@ -133,7 +135,7 @@ struct gpu {
                                            a stopped engine given GPU_QUICK_US once Ctrl+C came */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
     /* what happened, for gfx */
-    u_long words, fences, irqs, irq_waits, sleeps, timeouts, aborts, errors, ctrl_c;
+    u_long words, fences, irqs, irq_waits, irq_wakes, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
     u32 last_error;                     /* the sticky bits of the last error */
 };

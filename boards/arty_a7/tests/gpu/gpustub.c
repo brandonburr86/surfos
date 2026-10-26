@@ -161,7 +161,7 @@ static void run(struct stub *s) {
     if(s->irq_path && (s->ie & SURF_GPU_IE_FENCE_MASK) && (s->eng.sticky & GPU_ST_FENCE_EV)) {
         s->eng.sticky &= ~GPU_ST_FENCE_EV;
         s->interrupts_sent++;
-        s->event = 1;
+        if(!s->isr_no_wake) s->event = 1;
     }
 }
 
@@ -417,6 +417,7 @@ static void p_irq_arm(void *c) {
     s->event = 0;
 }
 
+/* event_wait_timeout(): 1 when the interrupt came (before or during the wait), 0 when ms passed */
 static int p_irq_wait(void *c, uint32_t ms) {
     struct stub *s = c;
     uint64_t end = s->now + (uint64_t)ms * 1000;
@@ -425,7 +426,7 @@ static int p_irq_wait(void *c, uint32_t ms) {
         if(interrupted(s)) return GPU_EINTR;
         tick(s, 10);
     }
-    return 0;
+    return s->event ? 1 : 0;
 }
 
 static u_long p_atomic_begin(void *c) {
