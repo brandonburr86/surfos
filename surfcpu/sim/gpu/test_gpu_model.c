@@ -595,6 +595,93 @@ static void count_any_order(int32_t ax, int32_t ay, int32_t bx, int32_t by, int3
     count_tri(x[i0], y[i0], x[i1], y[i1], x[i2], y[i2]);
 }
 
+/* ------------------------------------------------------------------ GPU2: the top-left rule at each edge */
+
+/* docs/GPU.md 16.3 numbers the edges in the order the triangle is walked: clockwise, vertices 1 and
+ * 2 exchanged when they come counter-clockwise. So whether a top or a left edge is edge 0, 1 or 2
+ * depends on the order the vertices are given in and on their winding, and a rule that went wrong
+ * for one edge index alone shows only where that edge runs through pixel centres (the review of
+ * 3fea963, M1). A diamond of four right triangles around a pixel centre P, their legs along P's row
+ * and column, gives each triangle a top and a left leg through pixel centres, each shared with a
+ * neighbour for which it is a bottom or a right edge. Drawn with every triangle's vertices taken
+ * from 0, 1 or 2 on (rotations 0 to 2) and in both windings, each of the six cases (edge 0, 1 or 2
+ * a top or a left edge) decides pixels in each winding, and the diamond must be covered exactly
+ * once (its pixels by poly_has, from its own four edges): a gap or a double draw on a leg fails. */
+
+static unsigned long tl_cases[2][3][2];     /* [given counter-clockwise][edge][left]: pixels the case took */
+
+/* the four triangles of the diamond around P = (a, b) with half-diagonal d (12.4), each clockwise
+ * with P first: right and down of P, right and up, left and down, left and up */
+static void diamond(int32_t a, int32_t b, int32_t d, int32_t v[4][3][2])
+{
+    const int32_t p[5][2] = {{a, b}, {a + d, b}, {a, b + d}, {a - d, b}, {a, b - d}};   /* P, right, down, left, up */
+    static const int k[4][3] = {{0, 1, 2}, {0, 4, 1}, {0, 2, 3}, {0, 3, 4}};
+    for (int t = 0; t < 4; t++)
+        for (int i = 0; i < 3; i++) {
+            v[t][i][0] = p[k[t][i]][0];
+            v[t][i][1] = p[k[t][i]][1];
+        }
+}
+
+/* add a triangle's coverage to cnt, and to tl_cases each covered centre that lies on one of its
+ * edges (which the top-left rule then took: that edge is a top or a left one) */
+static void count_tri_cases(const int32_t vx[3], const int32_t vy[3])
+{
+    struct gpu_tri t;
+    if (!gpu_tri_setup(&t, vx, vy))
+        return;
+    for (int y = 0; y < PW; y++)
+        for (int x = 0; x < PW; x++) {
+            if (!gpu_tri_inside(&t, x, y))
+                continue;
+            cnt[y][x]++;
+            const int64_t cx = 16 * x + 8, cy = 16 * y + 8;
+            for (int e = 0; e < 3; e++)
+                if ((int64_t)t.ex[e] * (cy - t.y[e]) - (int64_t)t.ey[e] * (cx - t.x[e]) == 0)
+                    tl_cases[t.area2 < 0][e][t.ey[e] < 0]++;
+        }
+}
+
+static void top_left_cases(void)
+{
+    int fails = 0;
+    memset(tl_cases, 0, sizeof tl_cases);
+    for (int w = 0; w < 2; w++)
+        for (int r = 0; r < 3; r++) {
+            /* P on a pixel centre; legs of 5 to 13 pixels, ending on a centre (w = 0) or half a
+             * pixel past one (w = 1): either way through the centres of P's row and column */
+            const int32_t a = 16 * (30 + 3 * r + w) + 8, b = 16 * (40 + r + 2 * w) + 8, d = 16 * (5 + 4 * r) + 8 * w;
+            int32_t v[4][3][2];
+            diamond(a, b, d, v);
+            memset(cnt, 0, sizeof cnt);
+            for (int k = 0; k < 4; k++) {
+                int32_t vx[3], vy[3];
+                for (int i = 0; i < 3; i++) {   /* from vertex r on; counter-clockwise: v0, v2, v1 */
+                    const int j = (r + (w && i ? 3 - i : i)) % 3;
+                    vx[i] = v[k][j][0];
+                    vy[i] = v[k][j][1];
+                }
+                count_tri_cases(vx, vy);
+            }
+            struct polyc p = {{a, a + d, a, a - d}, {b - d, b, b + d, b}, 4};     /* up, right, down, left */
+            fails += compare_counts("diamond", want_poly, &p) != 0;
+        }
+    CHECK(fails == 0, "diamonds of four triangles sharing top and left edges through pixel centres, in three vertex "
+          "orders and both windings: %d of 6 not covered exactly once", fails);
+    int none = 0;
+    for (int w = 0; w < 2; w++)
+        for (int e = 0; e < 3; e++)
+            for (int k = 0; k < 2; k++)
+                none += tl_cases[w][e][k] == 0;
+    CHECK(none == 0, "%d of the 12 cases (edge 0, 1 or 2 a top or a left edge, given clockwise or counter-clockwise) "
+          "took no pixel", none);
+    printf("top-left cases: pixels on an edge each case took (given clockwise / counter-clockwise): edge 0 top %lu / %lu, "
+           "left %lu / %lu; edge 1 top %lu / %lu, left %lu / %lu; edge 2 top %lu / %lu, left %lu / %lu\n",
+           tl_cases[0][0][0], tl_cases[1][0][0], tl_cases[0][0][1], tl_cases[1][0][1], tl_cases[0][1][0],
+           tl_cases[1][1][0], tl_cases[0][1][1], tl_cases[1][1][1], tl_cases[0][2][0], tl_cases[1][2][0],
+           tl_cases[0][2][1], tl_cases[1][2][1]);
+}
+
 /* a quarter of a sine, 16384 sin(i pi / 128): only to place a polygon's points on a circle */
 static const int16_t s64[65] = {0, 402, 804, 1205, 1606, 2006, 2404, 2801, 3196, 3590, 3981, 4370,
     4756, 5139, 5520, 5897, 6270, 6639, 7005, 7366, 7723, 8076, 8423, 8765, 9102, 9434, 9760, 10080,
@@ -762,6 +849,7 @@ int main(void)
     display();
     engine();
     triangles();
+    top_left_cases();
     properties();
     if (failures) {
         printf("test_gpu_model: FAIL (%d of %d checks)\n", failures, checks);
