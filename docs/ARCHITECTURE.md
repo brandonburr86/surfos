@@ -17,7 +17,7 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | CPU mode | 32-bit protected mode, paging on, single CPU; **ai-dev**: CR0/CR4 set explicitly, x87 initialised |
 | Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB; **ai-dev**: also Multiboot 2 (GRUB on UEFI, the USB image, section 14) |
 | Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80`; **ai-dev** (10/6/26): the shell is a ring-3 program, surfsh, on every console, and the ring-0 shell is the recovery console (section 17) |
-| Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack |
+| Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack; 10/25/26: a second TSS (0x30), the double fault's task (section 6) |
 | Memory | Identity map of the low 16 MB, demand-paged kernel heap at 0xB0000000, a page directory per process with the user range 0x40000000-0x7FFFFFFF |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task; **ai-dev** `profile=laptop`: the 8259s reach the CPU through the local APIC (virtual wire), whose timer is the fallback tick |
@@ -174,6 +174,7 @@ defined in `include/mm/memory.h` and `include/sys/dma.h`.
 | the rest of RAM below 4 GB | Free page frames | From the memory map, minus the reserved ranges (low memory and the kernel, modules, framebuffer, arenas) |
 | 0x40000000 - 0x7FFFFFFF | User range (per process) | ELF image from 0x40000000, sbrk heap above it, stack growing down from 0x80000000 (up to 4 MB); `mm/uvm.c` |
 | 0x80000000 - 0x8FFFFFFF | Page-table window (10/25/26) | The processes' page directories and tables, in frames of the programs' class, mapped for the kernel (`UVMWIN`, `mm/uvm.c`) |
+| 0x90000000 - 0x93FFFFFF | Kernel stacks (10/25/26) | 2048 slots of 32 KB: a task's 16 KB stack mapped from frames at the top of its slot, the 16 KB below left unmapped as its guard (`KSTACK_WIN_START`, `kernel/task.c`) |
 | 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
 | 0xC0000000 - 0xCFFDFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
 | 0xCFFE0000 - 0xCFFFFFFF | `vmm_temp_map()` (**ai-dev**) | One read-only view of a firmware table at a time (ACPI) |
@@ -232,7 +233,8 @@ ever left, each class's refusals, and what programs hold; `memhog` takes all a p
   at the end of its call, section 17);
   init (pid 1) collects detached and orphaned tasks and restarts a shell when one
   dies. Nothing frees a stack that may still be running, and every kernel stack is
-  pre-faulted at creation (a stack page fault would double-fault). **ai-dev** (10/6/26):
+  mapped in full at creation (a fault on the stack could not push its own frame).
+  **ai-dev** (10/6/26):
   `task_exit()` closes the task's descriptors first, in its own context, so a background
   program's file is written and its volume can be unmounted before anyone collects it (a
   killed task's are closed at `reap()`, as before); `task_wait_opts(pid, &status,
@@ -272,6 +274,17 @@ ever left, each class's refusals, and what programs hold; `memhog` takes all a p
   freed: `become_zombie()` hands its address space to the `uvmreap` kernel thread (pid 2), which
   frees it. `schedule()` compares the next task's address space with the one loaded
   (`uvm_current()`), so a dying task's directory is never left loaded under a kernel thread.
+* 10/25/26 (robustness, L16-L18): kernel stacks have guards. A task's 16 KB stack is the top of
+  a 32 KB slot in a window of its own (0x90000000-0x93FFFFFF, `kstack_alloc()` from
+  `task_alloc()`, `kstack_free()` from `reap()`, after `kcmd_task_gone()` has read it), mapped
+  from frames when the task is made: a process's from the programs' class (`PMM_USER`), a kernel
+  thread's from the kernel's. The 16 KB below it stay unmapped. A stack that overflows faults
+  there, the page fault cannot push its frame on that stack, and the double fault that follows
+  comes through a task gate to a stack of its own (section 6), which says "kernel stack overflow
+  in 'name' (pid n)" with a backtrace and halts the machine. A trap frame that lands within 1 KB
+  of its stack's bottom halts it earlier, with "nearly full". The idle task keeps the 16 KB boot
+  stack, which has no guard. The 2004 stacks were kernel-heap blocks with nothing below them but
+  other blocks (M10). `crashstack` overflows the stack of the task that runs it.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -297,6 +310,19 @@ ever left, each class's refusals, and what programs hold; `memhog` takes all a p
   and not acknowledged. IRQ masking is under `irq_save()`.
 * `init_interrupt()` populates all 256 IDT entries (int 0x80 with DPL 3 for the
   future syscall gate), remaps the PICs to 0x20/0x28 and enables the cascade.
+* 10/25/26 (robustness, L16, L18): the double fault (8) is a task gate, the only one. It
+  switches to a second TSS (selector 0x30, `kernel/gdt.c`) with its own 8 KB stack, the
+  kernel's page directory and interrupts off, so a fault whose frame could not be pushed (a
+  kernel stack that ran into its guard, section 5) is reported instead of becoming a triple
+  fault, a silent reset. The interrupted state is what the task switch saved in the main TSS
+  (`tss_main()`); `double_fault_task()` (`kernel/panic.c`) names the task whose guard holds the
+  fault's address (CR2) or the stack pointer ("kernel stack overflow in ..."), or says "Double
+  Fault", prints the registers and a backtrace on the console shown and the serial line, and
+  halts: an interrupt may have been in progress and locks may be held. `trap_dispatch()` also
+  halts the machine when a trap frame lands within `KSTACK_LOW` (1 KB) of the running task's
+  stack bottom; its report would not fit there, so it is made from the same task (`int $8`,
+  which ring 3 cannot reach). Backtraces fold a frame that repeats the one above it into one
+  line, so a recursion's report shows where it started and fits on the screen.
 * Backtraces: `tools/gensyms.py` turns the link map into a `.ksyms` table (the
   kernel is linked twice; the table sits after the code so nothing moves) and
   `kernel/ksym.c` walks the frame-pointer chain, checking each frame against the

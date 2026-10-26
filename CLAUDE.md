@@ -238,7 +238,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   QEMU delivers (`-d int`); `grep "v=0d"` finds general protection faults.
 * A killed task or a panic prints a symbolized backtrace; `build/O<level>/surfos.sym`
   is the sorted symbol table for anything else. `dmesg` in the shell shows the kernel log.
-* Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose.
+* Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose; `crashstack`
+  overflows its task's kernel stack and halts the machine (`crashstack near`: the trap frame check).
 * The screen dump works even when the serial console does not.
 * `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
   `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.
@@ -247,8 +248,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `ktimer_start()` (ktimer.h), `kalloc()`/`kcalloc()`/`kfree()`/`kalloc_dma()`
   (mm/kalloc.h), `vmm_map()`/`pmm_alloc()` (mm/paging.h, mm/pmm.h). The scheduler
   runs only in trap context; never call `schedule()` directly.
-* Every kernel stack must be fully mapped (task_alloc pre-faults it): a page fault on
-  the stack itself is a double fault.
+* Every kernel stack must be fully mapped: a page fault on the stack itself cannot push its
+  frame. Since 10/25/26 (robustness, L16-L18) the stacks are 16 KB at the top of 32 KB slots
+  (0x90000000-0x93FFFFFF, kernel/task.c) over unmapped guards: an overflow is a double fault,
+  which a task gate takes to a stack of its own ("kernel stack overflow in 'name'", a
+  backtrace, SYSTEM HALTED), and a trap frame within 1 KB of a stack's bottom halts the
+  machine with "nearly full".
 * `selftest` in the shell (shell/selftest.c) is where kernel-level tests go; add a
   check there and a line to `SMOKE` in tools/qemu-run.py for new features.
 * On the laptop (or under OVMF): `bootinfo`, `drivers`, `cpuinfo`, `acpi`, `memstat` say

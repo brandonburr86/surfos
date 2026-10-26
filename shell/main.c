@@ -972,6 +972,36 @@ static int cmd_crashint(int argc, char **argv) {
 }
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
 
+/* 10/25/26 (robustness, L17, L18): this task's kernel stack used up, 256 bytes a call, until it runs into the guard
+   below it: the double fault's task gate says "kernel stack overflow" and halts the machine (kernel/panic.c).
+   Interrupts are off on the way down, so the overflow, not a trap frame near the bottom, is what stops it. With
+   near: down to half of KSTACK_LOW above the bottom, where a trap (yield's) halts the machine with "nearly full". */
+static int crash_down(volatile const char *up, u_long left) {
+    volatile char here[256];
+    here[0] = up[0] + 1;
+    if(!left) return here[0];
+    return crash_down(here, left - 1) + here[0];       /* not a tail call: each frame stays */
+}
+static int crash_near(volatile const char *up) {
+    volatile char here[64];
+    here[0] = up[0] + 1;
+    if((u_long)here - task_stack_bottom(curTask) < KSTACK_LOW / 2) {
+        asm volatile("int $0x40");                      /* its trap frame lands within KSTACK_LOW of the bottom */
+        return here[0];
+    }
+    return crash_near(here) + here[0];
+}
+static int cmd_crashstack(int argc, char **argv) {
+    volatile char top = 0;
+    if(argc > 2 || (argc == 2 && strcmp(argv[1], "near"))) return CMD_USAGE;
+    irq_disable();
+    if(argc == 2) crash_near(&top);
+    else crash_down(&top, KSTACK_SIZE);                 /* KSTACK_SIZE calls: far more than fit */
+    irq_enable();
+    printf("crashstack: the stack check did not stop it\n");
+    return CMD_FAIL;
+}
+
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
     { "clear",     "",          "clear the console", cmd_clear },
@@ -1051,6 +1081,7 @@ static const struct command commands[] = {
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
+    { "crashstack", "[near]",   "overflow this task's kernel stack, or trap near its bottom (halts the machine)", cmd_crashstack },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };
 static const u_int ncommands = sizeof(commands) / sizeof(commands[0]);

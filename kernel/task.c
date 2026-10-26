@@ -23,6 +23,8 @@ dies, and CR0.TS set by schedule() for whoever does not own it.
 10/25/26 (robustness, L7): a process's memory goes when it ends, not when it is collected: its
 address space is destroyed by task_exit(), or, for a task killed on the spot, by the uvmreap
 thread, which become_zombie() hands it to. schedule() compares with the directory loaded.
+10/25/26 (robustness, L17): kernel stacks live in a window of their own, each over a guard left
+unmapped (kstack_alloc()), so an overflow is a double fault that kernel/panic.c reports.
 */
 
 #include <surfos/types.h>
@@ -47,6 +49,9 @@ thread, which become_zombie() hands it to. schedule() compares with the director
 #include <sys/framebuffer.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
+#include <mm/memory.h>
+#include <mm/paging.h>
+#include <mm/pmm.h>
 #include <surfos/proc.h>
 #include <surfos/fpu.h>
 
@@ -199,22 +204,93 @@ static void kill_escalate(void *arg);
 static void kill_hangup(surf_task *t);
 static void fill_info(surf_task *t, struct procinfo *pi);
 
+/**** Kernel stacks (10/25/26, robustness, L17) ****/
+
+/* The window (include/mm/memory.h) is cut into slots of KSTACK_SLOT. A stack is the top KSTACK_SIZE of its slot,
+   mapped from frames when its task is made: a process's from the programs' class (PMM_USER), which leaves the
+   kernel its reserve, a kernel thread's from the kernel's. The rest of the slot is never mapped, so a stack that
+   overflows faults there; that fault cannot push its own frame, and the double fault's task gate reports it
+   (kernel/panic.c). The 2004 stacks were heap blocks, with whatever lay below them to run into (M10). */
+#define KSTACK_SLOTS ((KSTACK_WIN_END - KSTACK_WIN_START) / KSTACK_SLOT)
+#define KSTACK_PAGES (KSTACK_SIZE / PAGE_SIZE)
+static u32 kstack_used[KSTACK_SLOTS / 32];
+static u_long kstack_next;
+
+static u_char *kstack_alloc(int cls) {
+    u_long frame[KSTACK_PAGES], slot = 0, i, flags, base;
+    u_int n;
+    for(n = 0; n < KSTACK_PAGES; n++) {
+        frame[n] = pmm_alloc_as(cls);
+        if(!frame[n]) {
+            while(n--) pmm_free(frame[n]);
+            return NULL;
+        }
+    }
+    flags = irq_save();
+    for(i = 0; i < KSTACK_SLOTS; i++) {
+        slot = (kstack_next + i) % KSTACK_SLOTS;
+        if(!(kstack_used[slot / 32] & (1u << (slot % 32)))) break;
+    }
+    if(i == KSTACK_SLOTS) {                     /* 2048 tasks: memory runs out first */
+        irq_restore(flags);
+        for(n = 0; n < KSTACK_PAGES; n++) pmm_free(frame[n]);
+        return NULL;
+    }
+    kstack_used[slot / 32] |= 1u << (slot % 32);
+    kstack_next = slot + 1;
+    irq_restore(flags);
+    /* in the kernel's tables, which every address space shares */
+    base = KSTACK_WIN_START + slot * KSTACK_SLOT + KSTACK_SLOT - KSTACK_SIZE;
+    for(n = 0; n < KSTACK_PAGES; n++) vmm_map(base + n * PAGE_SIZE, frame[n], PTE_W);
+    return (u_char *)base;
+}
+
+/* never the stack the caller runs on: reap() frees a zombie's, in its waiter */
+static void kstack_free(u_char *stack) {
+    u_long base = (u_long)stack, slot = (base - KSTACK_WIN_START) / KSTACK_SLOT, flags;
+    u_int n;
+    for(n = 0; n < KSTACK_PAGES; n++) {
+        u_long frame = vmm_get_phys(base + n * PAGE_SIZE) & PTE_FRAME;
+        vmm_unmap(base + n * PAGE_SIZE);
+        pmm_free(frame);
+    }
+    flags = irq_save();
+    kstack_used[slot / 32] &= ~(1u << (slot % 32));
+    irq_restore(flags);
+}
+
+/* The task whose stack's slot holds addr (the guard below the stack included), and in *guard whether addr is in
+   that guard. For the double fault's report: interrupts are off, and nothing is taken or changed. */
+surf_task *task_stack_owner(u_long addr, bool *guard) {
+    u_long slot, base;
+    surf_task *t;
+    u_int n = 0;
+    *guard = false;
+    if(addr < KSTACK_WIN_START || addr >= KSTACK_WIN_END) return NULL;
+    slot = (addr - KSTACK_WIN_START) / KSTACK_SLOT;
+    base = KSTACK_WIN_START + slot * KSTACK_SLOT + KSTACK_SLOT - KSTACK_SIZE;
+    *guard = addr < base;
+    if(curTask && (u_long)curTask->stackmem == base) return curTask;
+    for(t = all_tasks; t && n < 4 * KSTACK_SLOTS; t = t->all_next, n++) if((u_long)t->stackmem == base) return t;
+    return NULL;
+}
+
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
     u_long irqf;
     if(!t) return NULL;
-    t->stackmem = (u_char *)kalloc(KSTACK_SIZE);
+    t->stackmem = kstack_alloc((flags & TF_PROCESS) ? PMM_USER : PMM_KERNEL);  /* 10/25/26 (L17) */
     if(!t->stackmem) {
         kfree(t);
         return NULL;
     }
     if((flags & TF_PROCESS) && fpu_task_new(t)) {         /* 10/25/26 (L10): its floating-point registers */
-        kfree(t->stackmem);
+        kstack_free(t->stackmem);
         kfree(t);
         return NULL;
     }
-    /* Touch every page now: a kernel stack must never be demand paged, because the CPU
-       pushes the page fault frame onto that very stack and faults again (double fault). */
+    /* A kernel stack is mapped in full before it is used (kstack_alloc()): the CPU pushes a page fault's frame onto
+       that very stack, so a fault there could not be taken. */
     memset(t->stackmem, 0, KSTACK_SIZE);
     strlcpy(t->name, name, TASK_NAME_LEN);
     t->prio = prio;
@@ -829,7 +905,7 @@ static void reap(surf_task *t) {
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
     fpu_task_free(t);               /* 10/25/26 (L10) */
-    kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
+    kstack_free(t->stackmem);       /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
 }
 
@@ -1009,7 +1085,10 @@ static void uvmreap_thread(void *arg) {
 void task_mem_held(u_long *programs, u_long *dying) {
     surf_task *t;
     u_long flags = irq_save(), n = 0;
-    for(t = all_tasks; t; t = t->all_next) if(t->uvm) n += t->uvm->pages + t->uvm->table_pages;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->uvm) n += t->uvm->pages + t->uvm->table_pages;
+        if(t->flags & TF_PROCESS) n += KSTACK_PAGES;        /* 10/25/26 (L17): its kernel stack, of their class too */
+    }
     *programs = n;
     *dying = uvms_dead_pages;
     irq_restore(flags);

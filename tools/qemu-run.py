@@ -412,6 +412,7 @@ SMOKE = [
     ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
                   "ok   refused writes: a save's new file goes into the cache, and its close says EIO",
                   'ok   refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted',
+                  "ok   kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected",
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
@@ -600,6 +601,19 @@ SMOKE = [
       ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
       (own_shell_killed, ['init: surfsh was killed; restarted the shell', 'SurfOS user shell', SH_PROMPT])],
      ['exited (status 0)', 'recovery console']),
+    # 10/25/26 (robustness, L16-L18): crashstack uses up surfsh's kernel stack (a kernel command runs on it) until it
+    # runs into the guard below; the double fault's task gate reports it with surfsh's name and a backtrace, and halts.
+    # crashstack near: a trap within KSTACK_LOW of the bottom halts with "nearly full", reported from the same task.
+    # The kernel words are only these boots' names: nothing reads them. Boots that halt on purpose: the step expects
+    # SYSTEM HALTED, so boot_step() does not count it as a fall
+    ('@boot crashstack', [PROMPT],
+     [('crashstack', ["kernel stack overflow in 'surfsh' (pid ", 'its stack: 0x9', 'Backtrace:', 'crash_down',
+                      'more times)', 'cmd_crashstack+0x', re.compile(rb'SYSTEM HALTED')])],
+     ['Kernel Wipeout', 'Kernel panic', 'did not stop it']),
+    ('@boot crashstack near', [PROMPT],
+     [('crashstack near', ["Kernel panic: the kernel stack of 'surfsh' (pid ", 'is nearly full: a trap frame ',
+                           'vector 64 (yield)', 'crash_near', re.compile(rb'SYSTEM HALTED')])],
+     ['Kernel Wipeout', 'stack overflow', 'did not stop it']),
     # 10/9/26 (Wi-Fi, track S): the station layer, the wifi command and two interfaces on one network, with the simulated
     # chip (`wlansim`, driver/wifi/wlansim.c) and QEMU's user network (`net`: eth0, which the simulated access points are
     # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
@@ -5218,7 +5232,12 @@ def boot_step(reboot, entry, timeout):
             ok = ok and q2.expect(PROMPT, 10)
         q2.pump(0.5)
         text = q2.text()
-        ok = ok and not any(a in text for a in absent) and not any(bad in text for bad in BAD) and q2.alive()
+        # 10/25/26: a fall the step itself expects (crashstack's SYSTEM HALTED) is no fall
+        wanted = [e.pattern if isinstance(e, re.Pattern) else e for e in expects] + \
+                 [e.pattern if isinstance(e, re.Pattern) else e for _, exp in follow if exp is not CHECK for e in exp]
+        bad = [b for b in BAD if not any((b.encode() if isinstance(e, bytes) else b) in e for e in wanted
+                                         if isinstance(e, (str, bytes)))]
+        ok = ok and not any(a in text for a in absent) and not any(b in text for b in bad) and q2.alive()
         if not ok:
             print(f'\n---- {cmd}: serial transcript (tail) ----\n' + tail(text, 25))
     finally:

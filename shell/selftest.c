@@ -50,6 +50,8 @@ them at once (about 20 ms) and checks nothing then.
 #include <surfos/sysimpl.h>
 #include <surfos/fpu.h>
 #include <mm/pmm.h>
+#include <mm/memory.h>
+#include <mm/paging.h>
 #include "shell.h"
 
 static int fails;
@@ -499,6 +501,38 @@ static void test_spawn64(void) {
     if(ok1 != 64 || ok2 != 64 || h1.bytes_used != h0.bytes_used || a0 - a1 != (h1.brk - h0.brk) / PAGE_SIZE)
         printf("        (%d and %d of 64; heap bytes %lu, then %lu; frames left %lu, then %lu; the heap grew %lu KB)\n",
                ok1, ok2, h0.bytes_used, h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
+}
+
+/* 10/25/26 (L17): a kernel thread's look at its own stack: every page mapped, and the guard below it (the rest of its
+   slot) not; 1 in *arg when so */
+static void kstack_look(void *arg) {
+    u_long bottom = task_stack_bottom(curTask), a;
+    int ok = curTask->stack_top - bottom == KSTACK_SIZE;
+    for(a = bottom; a < curTask->stack_top; a += PAGE_SIZE) ok = ok && vmm_is_mapped(a);
+    for(a = bottom - (KSTACK_SLOT - KSTACK_SIZE); a < bottom; a += PAGE_SIZE) ok = ok && !vmm_is_mapped(a);
+    *(int *)arg = ok;
+}
+
+/* 10/25/26 (L17): kernel stacks over their guards: the self test's own, and a new kernel thread's, unmapped once the
+   thread is collected (a slot is used again only after all the others) */
+static void test_kstack(void) {
+    u_long bottom = task_stack_bottom(curTask), a, other = 0;
+    bool mine = true, gone;
+    int seen = 0, status;
+    surf_task *t;
+    for(a = bottom; a < curTask->stack_top; a += PAGE_SIZE) mine = mine && vmm_is_mapped(a);
+    mine = mine && !vmm_is_mapped(bottom - 1) && !vmm_is_mapped(bottom - (KSTACK_SLOT - KSTACK_SIZE));
+    t = kthread_create("kstack", kstack_look, &seen, PL_NORMAL, 0);
+    if(t) {
+        other = task_stack_bottom(t);
+        task_wait(t->pid, &status);
+    }
+    gone = other && !vmm_is_mapped(other) && !vmm_is_mapped(other + KSTACK_SIZE - 1);
+    check(mine && seen == 1 && other != bottom && gone,
+          "kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected");
+    if(!(mine && seen == 1 && other != bottom && gone))
+        printf("        (this task's %s; the thread's %s, then %s)\n", mine ? "right" : "wrong",
+               seen ? "right" : (t ? "wrong" : "not made"), gone ? "unmapped" : "still mapped");
 }
 
 static bool same_info(const struct procinfo *a, const struct procinfo *b) {
@@ -1545,7 +1579,8 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_fpu, test_spawn64, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_user_kill, test_fpu, test_spawn64, test_kstack, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
+    test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

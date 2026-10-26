@@ -203,9 +203,10 @@ Each module: why, what exists, what to build, how to prove it, size
   `mm_lookup_linear`), `invlpg`; page 0 unmapped so NULL dereferences fault; the
   page-fault handler checks the error code and the address range: kernel-heap
   ranges are demand-mapped, everything else is a bug (K3 backtrace); guard pages
-  below task stacks.
+  below task stacks (10/25/26: done by track B, stage B3, behind a double-fault task gate:
+  `docs/CODE-AUDIT.md` L16-L18).
 * Prove: `*(int*)0 = 1` in the shell produces a page-fault panic with a backtrace;
-  a recursion test hits the guard page instead of corrupting the heap.
+  a recursion test hits the guard page instead of corrupting the heap (`crashstack`).
 
 **M3. Kernel heap v2** (M1-M5, M11, M12, T5) - size M - deps M2 (soft) - **done on `ai-dev`**
 

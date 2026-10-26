@@ -1027,6 +1027,33 @@ def scenario_kernel_shell(args, image, firmware, outdir):
     return results
 
 
+def scenario_crashstack(args, image, firmware, outdir):
+    """10/25/26 (robustness, L16, L17): on the laptop's path (UEFI, the framebuffer console, the local APIC), crashstack
+    uses up surfsh's kernel stack until it runs into the guard below it. The double fault's task gate reports it on the
+    serial line and on the screen (the laptop has no serial line), and the machine halts: QEMU runs on (-no-reboot
+    would end it at a reset)"""
+    results = []
+    vm = Vm('crashstack', args, image, firmware, mem='512', serial=True, outdir=outdir)
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            vm.send('crashstack\n')
+            ok = vm.expect("kernel stack overflow in 'surfsh' (pid ", 30) and vm.expect('crash_down', 30) and \
+                vm.expect('cmd_crashstack+0x', 30) and vm.expect('SYSTEM HALTED', 30)
+            results.append(('crashstack: a kernel stack overflow reported, with a backtrace, and the machine halted', ok))
+            vm.pump(2)
+            scr = vm.screen('crashstack.png')
+            results.append(('the report is on the screen too',
+                            any('kernel stack overflow' in r for r in scr.rows) and any('SYSTEM HALTED' in r for r in scr.rows)))
+        text = vm.text()
+        for bad in BAD:
+            if bad != 'SYSTEM HALTED':                  # this one is the point here
+                results.append((f'no "{bad}"', bad not in text))
+        results.append(('QEMU still running: halted, not reset', vm.proc.poll() is None))
+    finally:
+        vm.close()
+    return results
+
+
 def scenario_nopit(args, image, firmware, outdir):
     """no 8254 at all (as when a chipset gates its clock): another clock calibrates, the APIC timer ticks"""
     results = []
@@ -2236,7 +2263,7 @@ def scenario_settings(args, image, firmware, outdir):
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
-             'no-pit': scenario_nopit,
+             'no-pit': scenario_nopit, 'crashstack': scenario_crashstack,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
              'settings': scenario_settings,
@@ -2342,7 +2369,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
+                               'crashstack', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None

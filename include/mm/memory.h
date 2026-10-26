@@ -32,6 +32,8 @@ Virtual only:
     0x40000000 - 0x7FFFFFFF  user processes (mm/uvm.h)
     0x80000000 - 0x8FFFFFFF  10/25/26: the processes' page directories and tables, in frames of the
                              programs' class (mm/pmm.h), mapped here for the kernel (mm/uvm.c)
+    0x90000000 - 0x93FFFFFF  10/25/26: the tasks' kernel stacks (kernel/task.c): 32 KB slots, each a
+                             16 KB stack mapped when its task is made, over 16 KB left unmapped as a guard
     0xB0000000 - 0xBFFFFFFF  kernel heap (KHEAP): kalloc(), pages mapped on first touch
     0xC0000000 - 0xCFFDFFFF  ioremap(): device registers and boot modules above 16 MB
     0xCFFE0000 - 0xCFFFFFFF  a reusable window for reading firmware tables (vmm_temp_map)
@@ -61,6 +63,13 @@ Virtual only:
    than RAM can fill with them */
 #define UVMWIN_START 0x80000000
 #define UVMWIN_END   0x90000000
+
+/* 10/25/26 (robustness, L17): the kernel stacks (kernel/task.c): 2048 slots, each a stack of KSTACK_SIZE at its top,
+   mapped from frames when the task is made, over the rest of the slot, which stays unmapped: an overflow faults
+   there, and the double fault's task gate reports it (kernel/panic.c) */
+#define KSTACK_WIN_START 0x90000000
+#define KSTACK_WIN_END   0x94000000
+#define KSTACK_SLOT      0x8000
 
 /* ioremap(): device registers and boot modules that are not in the first 16 MB */
 #define IOMAP_START 0xC0000000

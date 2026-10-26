@@ -13,6 +13,9 @@ handler is a kernel wipeout.
 10/6/26: a kernel command run by the user shell keeps its output for a file while
 the shell's descriptor 1 is redirected (SYS_kcmd, console_capture_begin()); a fault
 report or a panic is never kept there, it goes to the screen.
+
+10/25/26 (robustness, L16, L18): the double fault's report, from a task of its own: a
+kernel stack overflow, or a stack that trap_dispatch() found nearly full.
 */
 
 #include <surfos/system.h>
@@ -27,7 +30,9 @@ report or a panic is never kept there, it goes to the screen.
 #include <surfos/tty.h>
 #include <sys/framebuffer.h>
 #include <mm/paging.h>
+#include <mm/memory.h>
 #include <surfos/ksym.h>
+#include <surfos/gdt.h>
 
 #include <blibc_common.h>
 #include <stdarg.h>
@@ -118,6 +123,48 @@ void panic(const char *fmt, ...) {
     if(curTask) kprintf("task '%s' (pid %i), in_irq %i\n", curTask->name, curTask->pid, in_irq);
     asm volatile("movl %%ebp, %0" : "=r"(ebp));
     backtrace(ebp, 0);
+    kprintf("\nSYSTEM HALTED\n");
+    halt();
+}
+
+struct trapframe *stack_low_frame;
+
+/* 10/25/26 (robustness, L16, L18): the double fault's task (kernel/gdt.c, kernel/traps.asm), on a stack of its own,
+   with interrupts off; what it interrupted is in the main TSS. A kernel stack that ran into its guard (kernel/task.c)
+   faults again while the CPU pushes the page fault's frame there, which makes a double fault: said with the task's
+   name, from the fault's address (CR2, in the guard) or the stack pointer. trap_dispatch() sends a stack that is
+   nearly full here too (int $8: stack_low_frame), since its report would not fit on what is left. Nothing is
+   recovered: an interrupt may have been in progress, and locks may be held. The report goes to the console shown
+   and the serial line (in_irq: as an interrupt handler's kprintf() does), whichever console the task had. */
+void double_fault_task(void) {
+    const struct tss_entry *ts = tss_main();
+    struct trapframe *tf = stack_low_frame;
+    surf_task *t = NULL;
+    bool guard = false;
+    u_long cr2;
+
+    asm volatile("movl %%cr2, %0" : "=r"(cr2));
+    in_irq++;
+    console_capture_end();
+    console_panic();
+    if(tf && curTask) {
+        kprintf("\nKernel panic: the kernel stack of '%s' (pid %lu) is nearly full: a trap frame %lu bytes above "
+                "its bottom\n", curTask->name, curTask->pid, (u_long)tf - task_stack_bottom(curTask));
+        kprintf(" vector %lu (%s)  EIP: 0x%x  CS: 0x%x  EFLAGS: 0x%x  EBP: 0x%x  in_irq %i\n", tf->vector,
+                trap_name(tf->vector), tf->eip, tf->cs, tf->eflags, tf->ebp, in_irq - 1);
+        backtrace(tf->ebp, tf->eip);
+    } else {
+        t = task_stack_owner(cr2, &guard);
+        if(!guard) t = task_stack_owner(ts->esp, &guard);
+        if(guard) kprintf("\nkernel stack overflow in '%s' (pid %lu)\n", t ? t->name : "?", t ? t->pid : 0);
+        else kprintf("\nKernel Wipeout: Double Fault in '%s' (pid %lu)\n", curTask ? curTask->name : "?",
+                     curTask ? curTask->pid : 0);
+        kprintf(" EIP: 0x%x  ESP: 0x%x  EBP: 0x%x  CR2: 0x%x  EFLAGS: 0x%x  CS: 0x%x\n", ts->eip, ts->esp, ts->ebp,
+                cr2, ts->eflags, ts->cs);
+        if(t) kprintf(" its stack: 0x%x-0x%x, the guard below it from 0x%x\n", task_stack_bottom(t), t->stack_top,
+                      task_stack_bottom(t) - (KSTACK_SLOT - KSTACK_SIZE));
+        backtrace(ts->ebp, ts->eip);
+    }
     kprintf("\nSYSTEM HALTED\n");
     halt();
 }

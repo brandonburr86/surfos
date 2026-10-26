@@ -9,7 +9,9 @@
 [BITS 32]
 
 GLOBAL isr_stub_table
+GLOBAL double_fault_entry
 EXTERN trap_dispatch
+EXTERN double_fault_task
 
 %macro TRAP_NOERR 1
 isr%1:
@@ -62,6 +64,17 @@ trap_common:
     pop gs
     add esp, 8              ; vector and error code
     iret
+
+; 10/25/26 (robustness, L16): vector 8 is a task gate (kernel/gdt.c, kernel/interrupt.c). The CPU arrives here in
+; the double fault's own task, on its own stack, with interrupts off and the error code (0) pushed; what it
+; interrupted is in the main TSS. The report halts the machine and never returns.
+ALIGN 4
+double_fault_entry:
+    call double_fault_task
+.halt:
+    cli
+    hlt
+    jmp .halt
 
 SECTION .rodata
 ALIGN 4

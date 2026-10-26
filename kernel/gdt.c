@@ -8,10 +8,16 @@ File: gdt.c Date: Prior to 4/23/04, rebuilt 10/2026 (roadmap K2)
 The 2004 version built the table at physical 0x6000 through a bitfield struct and
 blanked the ring-3 entries again by accident (audit I8). The table and the TSS are
 now ordinary kernel data: null, kernel code/data, user code/data, one TSS.
+
+10/25/26 (robustness, L16): a second TSS, the double fault's. Its task gate (vector 8,
+kernel/interrupt.c) switches to a stack of its own, so a kernel stack that ran into its
+guard (kernel/task.c), whose page fault cannot push its frame, is reported
+(kernel/panic.c) instead of resetting the machine with a triple fault.
 */
 
 #include <surfos/gdt.h>
 #include <surfos/console.h>
+#include <mm/paging.h>
 #include <blibc_common.h>
 
 struct gdt_entry {
@@ -28,18 +34,6 @@ struct gdt_ptr {
     u_long  base;
 } __attribute__((packed));
 
-struct tss_entry {
-    u_long prev_tss;
-    u_long esp0, ss0;
-    u_long esp1, ss1;
-    u_long esp2, ss2;
-    u_long cr3, eip, eflags;
-    u_long eax, ecx, edx, ebx, esp, ebp, esi, edi;
-    u_long es, cs, ss, ds, fs, gs;
-    u_long ldt;
-    u_short trap, iomap_base;
-} __attribute__((packed));
-
 /* access byte: present | DPL | S | type */
 #define ACC_KCODE 0x9A  /* present, ring 0, code, readable */
 #define ACC_KDATA 0x92  /* present, ring 0, data, writable */
@@ -48,8 +42,13 @@ struct tss_entry {
 #define ACC_TSS   0x89  /* present, ring 0, 32-bit TSS (available) */
 #define FLAG_4K32 0xC   /* 4 KB granularity, 32-bit segment */
 
+#define DF_STACK_SIZE 0x2000
+
 static struct gdt_entry gdt[GDT_ENTRIES] __attribute__((aligned(8)));
 static struct tss_entry tss __attribute__((aligned(16)));
+static struct tss_entry df_tss __attribute__((aligned(16)));      /* 10/25/26 (L16) */
+static u_char df_stack[DF_STACK_SIZE] __attribute__((aligned(16)));
+extern void double_fault_entry(void);                               /* kernel/traps.asm */
 
 static void gdt_set(int i, u_long base, u_long limit, u_char access, u_char flags) {
     gdt[i].limit_low = limit & 0xFFFF;
@@ -75,6 +74,19 @@ void init_gdt() {
     tss.esp0 = 0;                                       /* set per task once ring 3 exists */
     tss.iomap_base = sizeof(tss);                       /* no I/O permission bitmap */
     gdt_set(5, (u_long)&tss, sizeof(tss) - 1, ACC_TSS, 0); /* 0x28 */
+
+    /* 10/25/26 (L16): the double fault's task: the kernel's page directory (every kernel mapping is in it), a stack
+       of its own, interrupts off */
+    memset(&df_tss, 0, sizeof(df_tss));
+    df_tss.cr3 = (u_long)page_directory;               /* in .bss, inside the identity map: its physical address */
+    df_tss.eip = (u_long)double_fault_entry;
+    df_tss.eflags = 0x2;
+    df_tss.esp = df_tss.esp0 = (u_long)df_stack + DF_STACK_SIZE;
+    df_tss.ss = df_tss.ss0 = KERNEL_DS;
+    df_tss.cs = KERNEL_CS;
+    df_tss.ds = df_tss.es = df_tss.fs = df_tss.gs = KERNEL_DS;
+    df_tss.iomap_base = sizeof(df_tss);
+    gdt_set(6, (u_long)&df_tss, sizeof(df_tss) - 1, ACC_TSS, 0); /* 0x30 */
     kprintf("*GDT Populated\n");
 
     gdtr.limit = sizeof(gdt) - 1;
@@ -103,4 +115,8 @@ void init_gdt() {
 
 void tss_set_kernel_stack(u_long esp0) {
     tss.esp0 = esp0;
+}
+
+const struct tss_entry *tss_main(void) {
+    return &tss;
 }

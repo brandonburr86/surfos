@@ -31,6 +31,10 @@ MM - July 2nd update:
 
 10/6/26: a handler that killed the task it interrupted (Ctrl+C from the keyboard or
 the serial port, kernel/tty.c) gets the next task run before it returns.
+
+10/25/26 (robustness, L16, L18): the double fault comes through a task gate, on a stack of
+its own (kernel/gdt.c), and a trap frame that lands near its stack's bottom halts the machine
+with its task's name before the next nesting overflows the stack.
 */
 
 #include <asm/io.h>
@@ -161,6 +165,13 @@ static u_long *irq_dispatch(struct trapframe *tf) {
 
 u_long *trap_dispatch(struct trapframe *tf) {
     u_int vector = tf->vector;
+    /* 10/25/26 (L18): a frame within KSTACK_LOW of the bottom of the stack it is on, the running task's: the next
+       nesting may overflow it. The report needs more room than is left, so it is made in the double fault's task,
+       on that task's stack (int $8 reaches its gate from ring 0 only), and halts the machine (kernel/panic.c). */
+    if(curTask && (u_long)tf - task_stack_bottom(curTask) < KSTACK_LOW) {
+        stack_low_frame = tf;
+        asm volatile("int $8");
+    }
     if(vector < NR_VECTORS && trap_handlers[vector]) return trap_handlers[vector](tf);
     if(vector >= T_IRQ0 && vector < T_IRQ0 + NR_IRQS) return irq_dispatch(tf);
     return trap_unexpected(tf);
@@ -184,6 +195,9 @@ void init_interrupt() {
     }
     /* user mode will enter through int 0x80, so that gate must be reachable from ring 3 */
     _set_idt_entry(T_SYSCALL, isr_stub_table[T_SYSCALL], KERNEL_CS, INT_GATE | IDT_PRESENT | INT_RING3 | BITS_32);
+    /* 10/25/26 (L16): the double fault switches to a task of its own (kernel/gdt.c), whose stack is always there:
+       a kernel stack that overflowed into its guard cannot take even the page fault's frame */
+    _set_idt_entry(T_DBLFLT, 0, DF_TSS_SEL, TASK_GATE | IDT_PRESENT | INT_RING0);
     load_idtr();
     kprintf("*IDT: %i vectors\n", NR_VECTORS);
 

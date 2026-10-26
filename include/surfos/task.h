@@ -16,7 +16,8 @@ File: task.h    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 
 #define DEF_EFLAGS_0 0x202   /* IF, plus bit 1 which is always set */
 #define DEF_EFLAGS_3 0x3202  /* the same with IOPL 3 */
-#define KSTACK_SIZE 0x4000   /* 16 KB kernel stack per task */
+#define KSTACK_SIZE 0x4000   /* 16 KB kernel stack per task (10/25/26: over a guard, kernel/task.c; so is the boot stack's size) */
+#define KSTACK_LOW  0x400    /* 10/25/26 (L18): a trap frame this close to its stack's bottom halts the machine */
 #define TASK_NAME_LEN 32
 #define TASK_CWD_LEN 256
 #define NR_OPEN 16
@@ -224,6 +225,10 @@ int task_info_all(struct procinfo *out, int max); /* 10/18/26: the list in one g
 int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
 void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames programs hold, and those uvmreap has
                                                           still to free (memstat) */
+/* 10/25/26 (L17): the task whose kernel stack's slot holds addr, and whether addr is in the guard below that stack
+   (the double fault's report) */
+surf_task *task_stack_owner(u_long addr, bool *guard);
+#define task_stack_bottom(t) ((t)->stack_top - KSTACK_SIZE)     /* every task's, the idle task's boot stack too */
 
 void yield(void);
 void sleep_ms(u_long ms);

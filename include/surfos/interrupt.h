@@ -15,6 +15,7 @@ File: interrupt.h   Date: Prior to 4/23/04, rebuilt 10/2026 (roadmap K1)
 #define NR_IRQS 16
 
 /* IDT gate option bits (byte 5 of a gate descriptor) */
+#define TASK_GATE   0x05    /* 10/25/26 (L16): the double fault's (no BITS_32: the gate has no size) */
 #define INT_GATE    0x06
 #define TRAP_GATE   0x07
 #define BITS_32     0x08
