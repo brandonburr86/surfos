@@ -1,16 +1,21 @@
 /*
 SurfGPU diagnostics: the spinning cube
 --------------------
-File: gpucube.c Date: 10/25/26 (SurfGPU GPU2)
+File: gpucube.c Date: 10/25/26 (SurfGPU GPU2), 10/26/26 (the review of 3fea963)
 --------------------
-gpucube.h's cube. The corners are (+-1, +-1, +-1) in Q12 (4096 = 1), turned about y by k + 7 and
-about x by 2k + 11 steps of a 128-step turn (sines in Q14 from a quarter-wave table; the offsets
-tilt it so that three faces show), seen from 4.5 units away with a focal length of 160 pixels,
-into the 320x240 picture's 12.4 coordinates (at most 100 pixels from the centre); a corner's depth
-maps its distance along z to 0 (near) .. 65535 (far), and its shade (11 .. 31 of a face's ramp of
-32) grows as it comes nearer, so each face's colours change across it (Gouraud). Plain integer C
-for RV32 and the host: only +, -, *, / and >> of int32_t values that never overflow (GCC's >> of
-a negative number is arithmetic on both).
+gpucube.h's cube. The corners are (+-1, +-1, +-1) in Q12 (4096 = 1). The cube stands on a corner:
+(1, 1, 1) is turned onto the vertical axis, about z by 45 degrees and then about x by arctan(1 /
+sqrt 2) = 35.26 degrees; frame k then turns it about the vertical by k steps of a 128-step turn
+(sines in Q14 from a quarter-wave table), and it is seen from 4.5 units away with a focal length of
+160 pixels, into the 320x240 picture's 12.4 coordinates (at most 100 pixels from the centre). The
+eye looks across the vertical, so every frame shows two of the faces or three, never one alone, and
+over a turn all six (a face shows only when it turns more than arcsin(1 / 4.5) = 12.8 degrees
+towards the eye, 4.5 units away; a frame of one face alone could be another frame turned about that
+face's axis, which made frames 9 and 73 of the first cube, turned about y and x, the same picture).
+A corner's depth maps its distance along z to 0 (near) .. 65535 (far), and its shade (11 .. 31 of a
+face's ramp of 32) grows as it comes nearer, so each face's colours change across it (Gouraud).
+Plain integer C for RV32 and the host: only +, -, *, / and >> of int32_t values that never overflow
+(GCC's >> of a negative number is arithmetic on both).
 */
 #include "gpucube.h"
 #include "surfcpu/gpu.h"
@@ -39,6 +44,10 @@ static int32_t cos128(uint32_t a) { return sin128(a + 32u); }
 
 /* (a c - b s) / 16384, rounded to the nearest */
 static int32_t turn(int32_t a, int32_t b, int32_t c, int32_t s) { return (a * c - b * s + 8192) >> 14; }
+
+#define COS45   11585                  /* 16384 cos 45 degrees */
+#define COS_D   13377                  /* 16384 cos 35.26 degrees, sqrt(2 / 3): (1, 1, 1) onto the vertical */
+#define SIN_D   9459                   /* 16384 sin 35.26 degrees, 1 / sqrt 3 */
 
 /* the faces as corners (bit 0 x, bit 1 y, bit 2 z set: +1), each cut along its first diagonal */
 static const uint8_t faces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1}, {2, 3, 7, 6}};
@@ -77,13 +86,14 @@ static void cmd(const struct gpu_sink *s, uint32_t w) { s->cmd(w); }
 void gpu_cube_frame(const struct gpu_sink *s, uint32_t k, unsigned b, uint32_t fence)
 {
     const uint32_t base = b ? GPU_CUBE_B : GPU_CUBE_A, a = k % GPU_CUBE_PERIOD;
-    const int32_t cy = cos128(a + 7u), sy = sin128(a + 7u), cx = cos128(2u * a + 11u), sx = sin128(2u * a + 11u);
+    const int32_t cy = cos128(a), sy = sin128(a);
     int32_t vx[8], vy[8], vz[8], shade[8];
     for (unsigned i = 0; i < 8; i++) {
         const int32_t x = (i & 1u) ? CUBE_S : -CUBE_S, y = (i & 2u) ? CUBE_S : -CUBE_S, z = (i & 4u) ? CUBE_S : -CUBE_S;
-        const int32_t x1 = turn(x, -z, cy, sy), z1 = turn(z, x, cy, sy);       /* about y */
-        const int32_t y2 = turn(y, z1, cx, sx), z2 = turn(z1, -y, cx, sx);     /* then about x */
-        vx[i] = 160 * 16 + CUBE_F16 * x1 / (z2 + CUBE_D);
+        const int32_t x1 = turn(x, y, COS45, COS45), y1 = turn(y, -x, COS45, COS45);  /* about z: (1, 1, 1) ... */
+        const int32_t y2 = turn(y1, -z, COS_D, SIN_D), z1 = turn(z, y1, COS_D, SIN_D); /* ... onto the vertical */
+        const int32_t x2 = turn(x1, -z1, cy, sy), z2 = turn(z1, x1, cy, sy);           /* frame k: about it */
+        vx[i] = 160 * 16 + CUBE_F16 * x2 / (z2 + CUBE_D);
         vy[i] = 120 * 16 + CUBE_F16 * y2 / (z2 + CUBE_D);
         int32_t d = (z2 + CUBE_R) * 65535 / (2 * CUBE_R), sh = 31 - (z2 + CUBE_R) * 20 / (2 * CUBE_R);
         vz[i] = d < 0 ? 0 : d > 65535 ? 65535 : d;
