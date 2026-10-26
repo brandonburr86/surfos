@@ -241,6 +241,8 @@ static void push(struct stub *s, uint32_t w) {
 static void tick(struct stub *s, uint64_t us) {
     uint64_t to = s->now + us, b;
     if(s->stall_at && to >= s->stall_at && !s->in_atomic) {        /* an interrupt or another task: */
+        if(s->stall_holds_tick) s->tick_held_until = s->now + s->stall_us;   /* 10/26/26: an interrupt that */
+        s->input_bytes += s->stall_paste;                                    /* holds the tick off: a paste */
         to += s->stall_us;                                          /* never inside an atomic stretch */
         s->stall_at = 0;
     }
@@ -262,6 +264,7 @@ static void tick(struct stub *s, uint64_t us) {
     for(;;) {
         uint64_t vb = s->frames_stop ? STUB_NEVER : vblank_of(s->frames_seen);
         uint64_t tk = (s->tick_fn && !s->in_tick && !s->in_atomic) ? s->next_tick : STUB_NEVER;
+        if(tk != STUB_NEVER && tk < s->tick_held_until) tk = s->tick_held_until;  /* held off: it comes late, once */
         uint64_t t = vb <= tk ? vb : tk;
         if(t > to) break;
         if(t > s->now) {
@@ -272,6 +275,7 @@ static void tick(struct stub *s, uint64_t us) {
             frame_end(s, s->frames_seen++);
         } else {
             s->next_tick += 10000;
+            while(s->next_tick <= s->now) s->next_tick += 10000;   /* the ones held off: counted, not run */
             s->in_tick = 1;
             s->tick_fn(s->tick_arg);            /* its own register reads move the time on a little */
             s->ticks_run++;
@@ -302,6 +306,11 @@ static void tick(struct stub *s, uint64_t us) {
         s->other_done = 1;
     }
     run(s);
+}
+
+void stub_freeze_status(struct stub *s, uint64_t us) {
+    s->status_frozen_frame = (uint32_t)blankings(s, s->now);
+    s->status_frozen_until = s->now + us;
 }
 
 void stub_drain(struct stub *s, uint64_t max_us) {
@@ -398,7 +407,8 @@ static uint32_t p_vrd(void *c, uint32_t off) {
     tick(s, 1);
     b = blankings(s, s->now);
     if(off == SURF_VIDEO_STATUS) {
-        uint32_t v = (uint32_t)(b & 0xFFFF) << SURF_VIDEO_STATUS_FRAME_LSB;
+        uint32_t v = (uint32_t)((s->now < s->status_frozen_until ? s->status_frozen_frame : b) & 0xFFFF)
+                     << SURF_VIDEO_STATUS_FRAME_LSB;
         if(!s->frames_stop && s->now % STUB_FRAME_US >= STUB_VBLANK_US) v |= SURF_VIDEO_STATUS_VBLANK_MASK;
         if(b > blankings(s, s->ev_cleared)) v |= SURF_VIDEO_STATUS_VBLANK_EV_MASK;
         return v;
@@ -619,11 +629,16 @@ static void p_tick_stop(void *c) {
     s->tick_fn = NULL;
 }
 
+static unsigned long p_input_count(void *c) {
+    struct stub *s = c;
+    return s->input_bytes;
+}
+
 void stub_init(struct stub *s, int irq_path) {
     static const struct gpu_port port = {
         NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
         p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-        p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
+        p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop, p_input_count
     };
     unsigned n;
     uint32_t *log = s->cmd ? s->cmd : malloc(STUB_CMD_LOG * sizeof(uint32_t));

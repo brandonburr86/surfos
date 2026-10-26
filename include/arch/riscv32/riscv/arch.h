@@ -26,6 +26,9 @@ void bootinfo_print(void);
 /* trap.c, irq.c */
 void arch_clear_soft_irq(void);
 
+/* serial.c (10/26/26): bytes received on the console's serial line since boot */
+u_long serial_rx_count(void);
+
 /* timer.c */
 u64 timer_mtime_at_tick(void);              /* mtime when the current tick began */
 u_long timer_period(void);                  /* mtime units per tick */

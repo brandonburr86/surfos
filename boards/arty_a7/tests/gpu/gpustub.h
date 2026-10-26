@@ -102,6 +102,9 @@ struct stub {
     struct stub_logged flog[STUB_FRAME_LOG];
     unsigned nflog;
     uint64_t poke_at;                   /* then a byte of the page on the screen is spoiled (0: never) */
+    uint64_t status_frozen_until;       /* STATUS.FRAME reads status_frozen_frame until then: no display
+                                           change sees a blanking begin (FRAME_COUNT and FLIPs go on) */
+    uint32_t status_frozen_frame;
     uint32_t poke_off;                  /* its offset in the picture shown */
     /* the port's tick: fn(arg) every 10 ms of the CPU's time, as the timer interrupt (never inside an
        atomic stretch or inside itself); no_tick: a port without one */
@@ -111,6 +114,11 @@ struct stub {
     int in_tick, no_tick;
     unsigned ticks_run;
     uint64_t line_us;                   /* each line printed costs the CPU this long (SurfCPU's console) */
+    unsigned long input_bytes;          /* the serial line's bytes received (the port's input_count) */
+    int stall_holds_tick;               /* the stall (stall_at, stall_us) holds the timer's tick off too, */
+    unsigned stall_paste;               /* and the serial line takes this many bytes meanwhile: a paste,
+                                           whose receive path outranks the tick (10/26/26) */
+    uint64_t tick_held_until;
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];
@@ -195,6 +203,8 @@ void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *fram
 uint32_t stub_crc(const struct stub *s, const struct stub_disp *d);
 /* run the engine until it is idle (or time max_us passes) */
 void stub_drain(struct stub *s, uint64_t max_us);
+/* STATUS.FRAME as it reads now, for the next us microseconds (10/26/26) */
+void stub_freeze_status(struct stub *s, uint64_t us);
 
 /* gt_printf (the driver's and gfx's printf in this build) writes into the stub that is current */
 void stub_current(struct stub *s);

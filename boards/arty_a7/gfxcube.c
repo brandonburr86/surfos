@@ -39,12 +39,19 @@ whether all were whole (and in order); at the end the frame rate (the frames dra
 since the blanking at which the cube's display began: never above the display's 59.94, the
 review's M1) and the same for the whole run. Ctrl+C, the time running out, a stopped engine and an
 error each end it with the engine idle and everything put back; it fails when a frame shown was
-torn, out of order or missed.
+torn, out of order or missed. Frames missed while the serial line took input are said apart and
+fail nothing: on SurfCPU the line's receive path takes longer for a byte (about 97 us) than the
+line does to send one (87 us at 115200 baud), and the external interrupt outranks the timer's, so
+a paste holds the tick, and the looks, off for as long as it lasts (the re-review of e655c39's
+question: 3,000 bytes held them 261 ms, 16 frames, on the RTL SoC); the GPU and the run did
+nothing wrong then.
 
-The sink has no context pointer and no error return: it only records, into the run's own record,
-which `rec` points to while the run holds the driver's claim (one gfx cube at a time, as heaptest
+The sink has no context pointer and no error return: it only records, into the run's own state,
+which `run` points to while the run holds the driver's claim (one gfx cube at a time, as heaptest
 and selftest claim theirs; it is cleared before the claim is let go). Errors and Ctrl+C are the
-driver's, said and handled where the run sends the words.
+driver's, said and handled where the run sends the words. The frames are recorded ahead into a
+queue of eight, which the run sends, and the tick too while the run prints its line (struct
+cube_run, below).
 */
 
 #include <surfos/types.h>
@@ -57,21 +64,39 @@ driver's, said and handled where the run sends the words.
 #include "gfxcube_expect.h"
 
 #define REC_WORDS (GPU_CUBE_FRAME_WORDS + 16)
+#define QUEUE 8                         /* frames recorded ahead: 133 ms at a frame a blanking */
+#define FRAME_US 16683u                 /* a video frame, 800 x 525 pixel clocks at 25.17 MHz (for when the
+                                           frames recorded ahead will have been shown: no check uses it) */
 
-/* one frame's words, and gpu_cube_display()'s palette, as the sink records them */
-struct cube_rec {
+/* one frame's words as the sink records them */
+struct cube_frame {
     u32 w[REC_WORDS];
     u_int n;
-    bool odd;                           /* more words than room, or VRAM written through the sink */
-    u16 pal[256];
 };
 
-static struct cube_rec *rec;            /* the run's, under the driver's claim (above) */
+/* The run's state, under the driver's claim (above). Frames are recorded ahead into the queue: the
+   frames [head, tail) wait to be sent, the one at head up to pos. The run sends them itself, and
+   while it prints its line, which costs SurfCPU three frames or more (the console compares its whole
+   screen, and the UART takes its bytes), the tick sends them (pump), so that the engine is never
+   left without words and the cube turns on at a frame a frame (the re-review of e655c39's low 1:
+   a line held the picture four to five frames once a second). Static: four kilobytes. */
+struct cube_run {
+    struct cube_frame q[QUEUE];
+    volatile u_int head, tail, pos;
+    volatile bool pump;
+    struct cube_frame *rec;             /* the frame being recorded (the sink's) */
+    bool odd;                           /* more words than room, or VRAM written through the sink */
+    u16 pal[256];                       /* gpu_cube_display()'s palette */
+};
+
+static struct cube_run run_state;
+static struct cube_run *run;            /* &run_state while the run holds the claim */
 
 static void rec_cmd(uint32_t w) {
-    if(!rec) return;
-    if(rec->n < REC_WORDS) rec->w[rec->n++] = w;
-    else rec->odd = true;
+    struct cube_frame *f = run ? run->rec : NULL;
+    if(!f) return;
+    if(f->n < REC_WORDS) f->w[f->n++] = w;
+    else run->odd = true;
 }
 
 static void rec_sync(void) {}
@@ -79,12 +104,12 @@ static void rec_sync(void) {}
 static void rec_vram(uint32_t off, uint32_t v) {
     (void)off;
     (void)v;
-    if(rec) rec->odd = true;            /* gpucube.c draws nothing through the CPU's window */
+    if(run) run->odd = true;            /* gpucube.c draws nothing through the CPU's window */
 }
 
 static void rec_video(uint32_t off, uint32_t v) {
-    if(rec && off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4u * SURF_VIDEO_GPAL_COUNT)
-        rec->pal[(off - SURF_VIDEO_GPAL) / 4] = (u16)(v & 0xFFFu);
+    if(run && off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4u * SURF_VIDEO_GPAL_COUNT)
+        run->pal[(off - SURF_VIDEO_GPAL) / 4] = (u16)(v & 0xFFFu);
 }
 
 static void rec_text(uint32_t cell, uint32_t v) {
@@ -103,6 +128,7 @@ static const struct gpu_sink sink = { rec_cmd, rec_sync, rec_vram, rec_vram, rec
 
 struct cube_look {
     u32 count, crc, fb, fa;             /* FRAME_COUNT, FRAME_CRC; FENCE before and after them */
+    u32 rx;                             /* the serial line's bytes received by then (gpu_input_count()) */
     u64 t;                              /* when */
 };
 
@@ -118,13 +144,28 @@ static bool look(struct gpu *g, u32 since, struct cube_look *l) {
     l->fb = gpu_fence_now(g);
     if(!gpu_frame_next(g, since, &l->count, &l->crc)) return false;
     l->fa = gpu_fence_now(g);
+    l->rx = (u32)gpu_input_count(g);
     l->t = gpu_now_us(g);
     return true;
+}
+
+/* the queued words the FIFO takes now, never waiting: the tick's, while the run prints (the run
+   sends nothing itself then) */
+static void pump_queue(struct gpu *g, struct cube_run *c) {
+    while(c->head != c->tail) {
+        struct cube_frame *f = &c->q[c->head % QUEUE];
+        u_int taken = gpu_push(g, f->w + c->pos, f->n - c->pos);
+        c->pos += taken;
+        if(c->pos < f->n) return;                       /* the FIFO is full */
+        c->pos = 0;
+        c->head++;
+    }
 }
 
 static void look_tick(void *arg) {
     struct cube_looks *ls = arg;
     struct cube_look l;
+    if(run && run->pump) pump_queue(ls->g, run);
     if(!look(ls->g, ls->count, &l)) return;
     ls->count = l.count;
     if(ls->head - ls->tail >= LOOKS) {
@@ -135,6 +176,7 @@ static void look_tick(void *arg) {
     ls->l[ls->head % LOOKS].crc = l.crc;
     ls->l[ls->head % LOOKS].fb = l.fb;
     ls->l[ls->head % LOOKS].fa = l.fa;
+    ls->l[ls->head % LOOKS].rx = l.rx;
     ls->l[ls->head % LOOKS].t = l.t;
     ls->head++;
 }
@@ -170,13 +212,18 @@ static bool in_step(const struct gfx_cube_check *c, u32 f, u32 fb, u32 fa) {
 
 /* frame f of the turn shown d frames after the last whole one, l: in order when (f - l) mod n <= d
    (a FLIP waits for a blanking, so the turn moves on a frame a frame at most) and f is in step with
-   the FLIPs (above) */
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after) {
+   the FLIPs (above). The d - 1 frames before it passed unseen: missed, and missed while the serial
+   line took input when it took bytes since the look before (the re-review of e655c39's question:
+   on SurfCPU its receive path costs more than a byte's time on the line, so a paste holds the
+   timer's tick off, and the looks with it) */
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after,
+                          bool input) {
     u32 d = (count - c->count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, dl = (count - c->last_count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, f;
     if(!d) return;
     c->count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
     c->shown += d;
     c->checked++;
+    if(input) c->missed_input += d - 1;
     for(f = 0; f < c->n && c->crcs[f] != crc; f++) {}
     if(f == c->n) {                                     /* none of the turn's frames: torn */
         if(!c->torn++) {
@@ -205,48 +252,54 @@ static const char *verdict(const struct gfx_cube_check *c, u_long missed, u_long
 
 /**** the run ****/
 
-/* frame k recorded, its FENCE the driver's next value (*fence) */
-static int record(struct gpu *g, struct cube_rec *r, u32 k, u32 *fence, const char *what) {
-    r->n = 0;
+/* frame k recorded at the queue's tail, its FENCE the driver's next value (*fence); only then may it
+   be sent */
+static int record(struct gpu *g, struct cube_run *c, u32 k, u32 *fence, const char *what) {
+    struct cube_frame *f = &c->q[c->tail % QUEUE];
+    f->n = 0;
+    c->rec = f;
     *fence = gpu_fence_next(g);
     gpu_cube_frame(&sink, k, k & 1u, *fence);
-    if(r->odd || r->n != GPU_CUBE_FRAME_WORDS) {
+    c->rec = NULL;
+    if(c->odd || f->n != GPU_CUBE_FRAME_WORDS) {
         printf("    %s: gpucube.c's frame is not the %u words this kernel was built for\n", what,
                (u_int)GPU_CUBE_FRAME_WORDS);
         return GPU_EARG;
     }
+    c->tail++;
     return GPU_OK;
 }
 
 int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
-    struct cube_rec r;
+    struct cube_run *cr = &run_state;
     struct gfx_keep keep;
     struct gfx_cube_check c;
     struct cube_looks looks;
     struct cube_look lk;
     struct gpu_screen shown;
     char buf[48];
-    u32 k = 1, pos = 0, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0;
+    u32 k = 1, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0, last_rx = 0;
     u32 ends_done = 0;
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0, seen_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
-    bool stood = false;
+    bool stood = false, timed = false;
     u_int taken;
     int rc, r2;
-    memset(&r, 0, sizeof(r));
-    rec = &r;
+    memset(cr, 0, sizeof(*cr));
+    run = cr;
     gpu_cube_display(&sink, 0);                         /* only its GPAL is kept: nothing reaches the hardware */
     gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, 0, 0, 0);
-    rc = gfx_keep_begin(g, &keep, SURF_VRAM_BYTES, r.pal, what);
+    rc = gfx_keep_begin(g, &keep, SURF_VRAM_BYTES, cr->pal, what);
     /* frame 0 into picture A, and once its FLIP is done the display: mode 2, 320x240 doubled (the
        wait is gpu_sync()'s, whose FENCE asks for the interrupt: gpucube.c's does not, and a wait on
        it could only end by its 10 ms steps). That FENCE comes after frame 0's, so frame k's is
        vbase + k and the FLIPs done since frame 0's are FENCE - vbase (the review of 58ac7b3's M1:
        counted from frame 0's own FENCE, the sync's was one more). The first lines are said before
        the display changes, while the console is on the screen, so that no frame waits for them */
-    if(!rc) rc = record(g, &r, 0, &v0, what);
-    if(!rc) rc = gpu_put(g, r.w, r.n, what);
+    if(!rc) rc = record(g, cr, 0, &v0, what);
+    if(!rc) rc = gpu_put(g, cr->q[0].w, cr->q[0].n, what);
+    cr->head = cr->tail;                                /* frame 0: sent */
     if(!rc) rc = gpu_sync(g, what);
     vbase = g->fence_sent;
     if(!rc) {
@@ -265,17 +318,21 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         ran = true;
         /* the time counts from just before the blanking at which the cube's display began (the
            latch's last sample before it): FLIP k comes at the k-th blanking after it or later, so
-           the rate, the FLIPs done since frame 0's over that time, is never above the display's */
+           the rate, the FLIPs done since frame 0's over that time, is never above the display's.
+           Without a blanking caught (the registers written at once) the time has no such start: FLIP
+           1 may come a millisecond after the write, so no rate is said (the re-review of e655c39's
+           low 2) */
+        timed = g->latched;
         t0 = tick = g->latched ? g->latch_us : gpu_now_us(g);
         gpu_frame_next(g, 0x10000u, &count, &crc);     /* the frames after this one are the cube's */
         gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0, vbase);
         skip = !g->latched;                             /* the display changed off the latch: a mixed frame */
+        last_rx = (u32)gpu_input_count(g);
         memset(&looks, 0, sizeof(looks));
         looks.g = g;
         looks.count = c.count;
         ticking = gpu_tick_start(g, look_tick, &looks);
         vlast = fence = vbase;
-        r.n = 0;
     }
     while(!rc) {
         bool seen = false;
@@ -286,13 +343,15 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
                 lk.crc = looks.l[looks.tail % LOOKS].crc;
                 lk.fb = looks.l[looks.tail % LOOKS].fb;
                 lk.fa = looks.l[looks.tail % LOOKS].fa;
+                lk.rx = looks.l[looks.tail % LOOKS].rx;
                 lk.t = looks.l[looks.tail % LOOKS].t;
                 looks.tail++;
             } else if(!look(g, c.count, &lk)) {
                 break;
             }
             if(skip) c.count = c.last_count = lk.count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
-            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa);
+            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa, lk.rx != last_rx);
+            last_rx = lk.rx;
             if(!seen_at && (i32)(lk.fa - vlast) >= 0) seen_at = lk.t;      /* the last frame recorded, done */
             skip = false;
             seen = true;
@@ -304,10 +363,13 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         if(seen && now - tick >= 1000000u) {            /* a line a second, just after a frame was looked at */
             tick += 1000000u;
             sec++;
+            cr->pump = ticking;                         /* the tick sends the queued frames meanwhile */
             printf("    cube %lu s: %lu drawn, %lu shown, %lu missed: %s\n", (u_long)sec, (u_long)drawn - last_drawn,
                    c.shown - last_shown, c.shown - c.checked - last_missed,
                    verdict(&c, c.shown - c.checked - last_missed, c.torn - last_torn, c.disorder - last_dis, buf,
                            sizeof(buf)));
+            cr->pump = false;                           /* (a handler runs to its end before this task goes on:
+                                                           none is sending now) */
             last_drawn = drawn;
             last_shown = c.shown;
             last_missed = c.shown - c.checked;
@@ -319,22 +381,29 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
             break;
         }
         f0 = fence;
-        if(pos < r.n) {                                 /* this frame's words, as the FIFO takes them */
-            rc = gpu_pump(g, r.w + pos, r.n - pos, &taken, &fence, what);
-            pos += taken;
-        } else if(now - t0 < secs) {                    /* the next frame */
-            rc = record(g, &r, k++, &vlast, what);
+        if(now - t0 + (u64)(cr->tail - cr->head) * FRAME_US < secs && cr->tail - cr->head < QUEUE) {
+            /* the next frame, recorded ahead while it would be shown in the run's time */
+            rc = record(g, cr, k++, &vlast, what);
             seen_at = 0;
-            pos = 0;
-        } else if((i32)(fence - vlast) < 0) {           /* time is up: the last frame's FLIP and FENCE */
-            rc = gpu_pump(g, r.w, 0, &taken, &fence, what);
+        }
+        if(rc) break;
+        if(cr->head != cr->tail) {                      /* the frame at head's words, as the FIFO takes them */
+            struct cube_frame *f = &cr->q[cr->head % QUEUE];
+            rc = gpu_pump(g, f->w + cr->pos, f->n - cr->pos, &taken, &fence, what);
+            cr->pos += taken;
+            if(cr->pos == f->n) {
+                cr->pos = 0;
+                cr->head++;
+            }
+        } else if(now - t0 < secs || (i32)(fence - vlast) < 0) {   /* the next frame, or the last FLIPs */
+            rc = gpu_pump(g, NULL, 0, &taken, &fence, what);
         } else {                                        /* all drawn: looked at until the last is shown */
             if(!done_at) {
                 done_at = now;
                 ends_done = ends;
             }
             if(ends >= ends_done + 2 || now - done_at >= 200000u) break;
-            rc = gpu_pump(g, r.w, 0, &taken, &fence, what);
+            rc = gpu_pump(g, NULL, 0, &taken, &fence, what);
         }
         if(!rc && fence != f0) rc = gpu_check(g, what);    /* a frame done: the engine's errors */
     }
@@ -352,16 +421,25 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         if(seen_at && seen_at < now) now = seen_at;
     }
     r2 = gfx_keep_end(g, &keep, rc, intr, what);
-    rec = NULL;
+    run = NULL;
     if(ran) {
         u64 us = now - t0, rate10 = us ? (u64)drawn * 10000000u / us : 0;
-        printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn, (u_long)(us / 1000000u),
-               (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10), (u_long)(rate10 % 10),
-               r2 ? "display NOT put back" : "display back as it was");
+        if(timed)
+            printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn,
+                   (u_long)(us / 1000000u), (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10),
+                   (u_long)(rate10 % 10), r2 ? "display NOT put back" : "display back as it was");
+        else
+            printf("    %s: %lu drawn in %lu.%02lu s; %s\n"
+                   "    %s: no rate: its display changed without a blanking caught\n", what, (u_long)drawn,
+                   (u_long)(us / 1000000u), (u_long)(us % 1000000u / 10000u),
+                   r2 ? "display NOT put back" : "display back as it was", what);
         if(stood)
             printf("    %s: the frames shown went %lu on for %lu FLIPs\n", what, c.advance, (u_long)drawn);
         printf("    %s: %lu shown, %lu missed: %s\n", what, c.shown, c.shown - c.checked,
                verdict(&c, c.shown - c.checked, c.torn, c.disorder, buf, sizeof(buf)));
+        if(c.missed_input)
+            printf("    %s: %lu of the %lu missed came while the serial line took input\n", what, c.missed_input,
+                   c.shown - c.checked);
         if(c.torn)
             printf("    %s: the first torn: frame %lu, FRAME_CRC %08lx, none of the turn's\n", what,
                    (u_long)c.torn_count, (u_long)c.torn_crc);
@@ -371,5 +449,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         return GPU_EINTR;
     }
     if(rc) return rc;
-    return c.torn || c.disorder || c.shown != c.checked || r2 ? GPU_EERROR : GPU_OK;
+    /* frames missed while the serial line took input are said, and fail nothing: the looks were held
+       off, not the GPU or the run; torn and out-of-order frames, and any other missed, fail */
+    return c.torn || c.disorder || c.shown - c.checked > c.missed_input || r2 ? GPU_EERROR : GPU_OK;
 }
