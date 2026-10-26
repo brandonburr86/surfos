@@ -211,6 +211,8 @@ struct gui_state {
     char unsure[GUI_UNSURE][GUI_PATH_MAX], kept[GUI_UNSURE][GUI_PATH_MAX];
     int nunsure;
     struct gui_clients clients;         /* 10/25/26: programs' windows (shell/guiclient.c) */
+    int menu_x, menu_y;                 /* 10/26/26 (stage C8): where a right-click opened the menu; menu_y 0: the bar's */
+    int menu_win;                       /* and the window it is for, whose focus it lasts while; -1: the desktop's */
 };
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);

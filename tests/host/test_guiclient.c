@@ -217,7 +217,7 @@ static void test_hover(void) {
 }
 
 static void test_grab(void) {
-    int a, b, id, n, ida;
+    int a, b, c, id, n, ida;
     fake_desktop(&g, 960, 540);
     a = shown(200, 100, 0, "Demo", 41, 0xC0FFEE);
     id = win_id(a);
@@ -246,10 +246,38 @@ static void test_grab(void) {
     hold(POINTER_RIGHT);
     CHECK(g.focus == ida && g.order[GUI_SLOTS - 1] == ida && g.clients.grab == ida);
     CHECK(last(a, WIN_EV_POINTER)->value == POINTER_RIGHT && count(b, WIN_EV_POINTER) == 0);
+    CHECK(!g.menu);                                     /* 10/26/26 (C8): no right-click menu over its content */
     hold(POINTER_RIGHT | POINTER_MIDDLE);
     CHECK(last(a, WIN_EV_POINTER)->value == (POINTER_RIGHT | POINTER_MIDDLE));
     hold(0);
     CHECK(last(a, WIN_EV_POINTER)->value == 0 && g.clients.grab == -1);
+    /* 10/26/26 (stage C8): a right-click on its title bar opens the Window menu there, for it; the program gets no
+       button (its last event: leaving its content, no button) */
+    at(g.win[ida].x + 60, g.win[ida].y + 10);
+    hold(POINTER_RIGHT);
+    hold(0);
+    CHECK(g.menu == 5 && g.menu_y && g.focus == ida && last(a, WIN_EV_POINTER)->value == 0);
+    gui_key(&g, 27);
+    CHECK(!g.menu);
+    /* 10/26/26: a right-click menu is its window's: that window gone, it closes; a window coming up with the focus
+       closes it too (a bar menu stays) */
+    at(g.win[ida].x + 60, g.win[ida].y + 10);
+    hold(POINTER_RIGHT);
+    hold(0);
+    CHECK(g.menu == 5 && g.menu_win == ida);
+    gui_open(&g, GUI_NOTEPAD);
+    at(g.win[GUI_NOTEPAD].x + 120, g.win[GUI_NOTEPAD].y + 150);
+    hold(POINTER_RIGHT);
+    hold(0);
+    CHECK(g.menu == 3 && g.menu_win == GUI_NOTEPAD);
+    client_launched(&g, 43);
+    c = fake_win_open(80, 60, 0, 0x203040, "Launched", 43);
+    fake_win_present(c, 0x123456);
+    tick();
+    CHECK(g.focus == win_id(c) && !g.menu);
+    fake_win_end(c);                                    /* gone again: the windows below as they were */
+    tick();
+    gui_open(&g, ida);
     /* a press on the desktop or on a fixed window never grabs, and its drag over a program's window is not its own */
     at(900, 300);
     hold(POINTER_LEFT);

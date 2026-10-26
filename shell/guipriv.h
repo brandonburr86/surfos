@@ -215,6 +215,7 @@ void files_refresh(struct gui_state *g);                             /* read aga
 void files_reveal(struct gui_state *g, const char *path);            /* expand down to path and select it */
 void files_key(struct gui_state *g, int key);
 void files_press(struct gui_state *g, int x, int y);
+void files_select_at(struct gui_state *g, int x, int y);   /* 10/26/26: a right-click's row */
 void files_wheel(struct gui_state *g, int rows);
 void files_scroll(struct gui_state *g, int y);
 void files_render(const struct gui_state *g, const struct gui_draw *d);

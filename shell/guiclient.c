@@ -264,7 +264,7 @@ static void accept(struct gui_state *g) {
             gui_raise(g, id);                           /* 10/25/26: the focus stays where it is */
             c->waiting = true;
         }
-        g->menu = menu;                                 /* a menu open meanwhile stays open */
+        if(!g->menu_y) g->menu = menu;                  /* a menu open meanwhile stays open: 10/26/26, the bar's */
     }
 }
 

@@ -30,6 +30,18 @@ and each item shows its shortcut.
 | **Window** | Next window, Minimize, Maximize (or Restore size), Close, then every open window |
 | **Help** | Keyboard and mouse (the Help window), About SurfOS |
 
+*10/26/26:* a right-click opens one of these menus where the pointer is, kept on the
+screen. Over a window, which comes to the front first so that the items act on it, it
+is the window's Edit menu when the window edits (Notepad, and the applications with an
+Edit menu of their own), File for Files, and Window on a title bar and anywhere else;
+over the desktop it is Apps; in Files the row under the pointer is selected first. Its
+items are chosen and run as from the bar: a click, or the arrows and Enter, and Esc or a
+click elsewhere closes it (a right-click elsewhere too; in the menu it does nothing). It
+belongs to its window: when the focus leaves that window (a program's window comes up
+with the focus, or the window goes) it closes, and its items never act on another.
+Nothing happens on the menu bar and the taskbar, and over a program's own content the
+right button stays the program's.
+
 Drag a title bar to move a window. Notepad, Files, Help and the applications (all
 but Clock and Character Map) also fill the screen (double-click the title bar, or
 press its middle button) and resize from their dotted corner, never narrower than

@@ -8,7 +8,8 @@ data stick (usb1), which is read back on the host afterwards; the desktop waits
 through a console switch and comes back on its own console.
 10/26/26 (stage C8 of docs/superpowers/plans/2026-10-25-app-windows.md): the wheel, from QEMU's
 monitor (mouse_move 0 0 1), of the PS/2 mouse (a wheel mouse by the IntelliMouse handshake) and of
-the USB mouse: each scrolls Help three lines a notch.
+the USB mouse: each scrolls Help three lines a notch. A right-click on the desktop opens Apps where
+it was (kept on the screen), and its first item opens Notepad.
 """
 import os
 import re
@@ -40,6 +41,7 @@ SETTINGS = (280, 72)
 NOTEPAD = (296, 38, 640, 420)
 FILES = (24, 48, 600, 380)
 HELP, HELP_MENU_X, TITLE_H = (210, 38), 340, 28  # 10/26/26: Help's window, and the Help menu's title text
+APPS_W = 192                                     # 10/26/26: the Apps menu's width (its widest item, Calculator)
 STICK = {'notes.txt': b'Hello from the Mac\r\nSecond line\r\n', 'Folder/inner.txt': b'inside\n'}
 EDITED = b'SurfOS was here. Hello from the Mac\r\nSecond line\r\n'
 
@@ -147,6 +149,23 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         if line == 0:
             return lambda s: _text(s, font, x + 16, y, 'The desktop', TEAL)
         return lambda s: _text(s, font, x, y, 'Ctrl+O opens a file in Notepad', INK)
+
+    def right_click_menu():
+        """10/26/26 (stage C8): a right-click on the desktop opens Apps where it was, moved left to stay on the
+        screen, its first item chosen; a click on it opens Notepad, and Ctrl+W closes Notepad again"""
+        move(880, 60)
+        vm.mon.cmd('mouse_button 2')
+        vm.pump(0.05)
+        vm.mon.cmd('mouse_button 0')
+        x = 960 - APPS_W
+        visible('a right-click on the desktop opens the Apps menu there, kept on the screen',
+                lambda s: _text(s, font, x + 14, 60 + 8, 'Notepad', PAPER, TEAL) and
+                _text(s, font, x + 14, 60 + 8 + 2 * ITEM_H, 'Calculator', INK) and
+                not _text(s, font, APPS_ITEM_X, ITEM_Y, 'Notepad', PAPER), 'gui-right-click.png')
+        click(x + 20, 60 + 16)
+        visible('its first item opens Notepad', notepad_title('Untitled'))
+        key('ctrl-w')
+        visible('Ctrl+W closes it again', lambda s: _pixel(s, 900, 300) != SHEET)
 
     def help_wheel(mouse):
         """10/26/26 (stage C8): Help > Keyboard and mouse, the wheel over Help (a notch toward the user is three lines
@@ -264,6 +283,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                 vm.expect('PS/2 wheel mouse', 15) and vm.expect(PROMPT, 15))
         desktop()
         vm.screen('gui-desktop.png')
+        right_click_menu()
 
         click(APPS_X + 18, 14)
         visible('PS/2 click opens the Apps menu',
