@@ -41,6 +41,16 @@ its terminal (term_fd, among the shell's own descriptors 10-15), so exec > file 
 descriptor too, out of the way of its exec 3< and the like; a terminal that is no
 interactive shell's input (surfsh > log) is read a line at a time. A . file or eval's text
 in which no command runs answers 0, and $? there is the status before it.
+
+10/25/26 (track A, A10): an interactive surfsh runs the owner's startup file after surfsh.conf:
+surfos-config/surfshrc on the stick SurfOS was started from (/dev/config/surfshrc, fs/devfs.c),
+as a . file runs. It loads the history kept there (/dev/config/history, there only while the
+history setting is on: settings history on) and saves it again when it ends, on history -w and
+after every HIST_SAVE_EVERY lines typed: what the file holds by then (another session's lines
+too), then the lines typed here since the last save, the last HIST_MAX of them in at most
+HIST_FILE_MAX bytes. A line that starts with a space was never kept. And it sets HOSTNAME, not
+exported, from /dev/config/hostname (the hostname setting), which a telnet session's prompt
+shows (≋@>, shell/prompt.c), when the environment has none and the kernel has one.
 */
 
 #include "surfsh.h"
@@ -159,6 +169,135 @@ static void read_conf(const char *path) {
     fclose(f);
 }
 
+/**** 10/25/26 (track A, A10): the startup file and the history on the stick ****/
+
+static int hist_saved;              /* history_count() when the file was last read or written: the lines after are new */
+static int hist_kept;               /* this shell keeps its history there (an interactive one) */
+
+static int fd_get(struct source *s, struct sbuf *out, int more);
+
+/* a line more for lines (n of cap): 0, -1 without memory */
+static int add_line(const char ***lines, int *n, int *cap, const char *l) {
+    if(*n == *cap) {
+        const char **more = realloc(*lines, (size_t)(*cap ? *cap * 2 : 256) * sizeof(**lines));
+        if(!more) return -1;
+        *lines = more;
+        *cap = *cap ? *cap * 2 : 256;
+    }
+    (*lines)[(*n)++] = l;
+    return 0;
+}
+
+/* the file's lines (other sessions' too), then the new ones, the last HIST_MAX in at most HIST_FILE_MAX bytes: as the
+   file again. 0; -1, said when say (history -w), as it is when nothing new needs saving */
+int history_save(int say) {
+    struct sbuf out = { NULL, 0, 0 };
+    char *old = NULL;
+    const char **lines = NULL;
+    int fd, n = 0, cap = 0, i, first, bytes = 0, r = 0, short_of = 0;
+    ssize_t got, len = 0;
+    if(!hist_kept || (!say && hist_saved >= history_count())) return 0;
+    fd = open(HISTORY_FILE, O_RDWR);
+    if(fd < 0) {
+        if(say) fprintf(stderr, "surfsh: history: %s\n", errno == ENOENT ? "not kept on the stick: the history setting "
+                        "is off (settings history on), or SurfOS was not started from one" : strerror(errno));
+        return -1;
+    }
+    old = malloc(HIST_FILE_MAX + 1);
+    while(old && len < HIST_FILE_MAX && (got = read(fd, old + len, HIST_FILE_MAX - len)) > 0) len += got;
+    if(old) old[len] = 0;
+    for(i = 0; old && i < len && !short_of; ) {     /* the file's lines */
+        char *nl = memchr(old + i, '\n', (size_t)(len - i));
+        if(nl) *nl = 0;
+        if(old[i] && add_line(&lines, &n, &cap, old + i)) short_of = 1;
+        i = nl ? (int)(nl - old) + 1 : (int)len;
+    }
+    for(i = hist_saved; i < history_count() && !short_of; i++)     /* then the new ones still kept */
+        if(history_line(i) && add_line(&lines, &n, &cap, history_line(i))) short_of = 1;
+    first = n > HIST_MAX ? n - HIST_MAX : 0;
+    for(i = n - 1; i >= first; i--) {               /* as many of the last as fit */
+        if(bytes + (int)strlen(lines[i]) + 1 > HIST_FILE_MAX) {
+            first = i + 1;
+            break;
+        }
+        bytes += (int)strlen(lines[i]) + 1;
+    }
+    for(i = first; i < n; i++) {
+        sb_puts(&out, lines[i]);
+        sb_putc(&out, '\n');
+    }
+    if(!old || short_of) {
+        r = -1;
+        errno = ENOMEM;
+    } else if(lseek(fd, 0, SEEK_SET) < 0 || (out.len && write(fd, sb_str(&out), (size_t)out.len) != out.len) ||
+              ftruncate(fd, out.len) < 0) {
+        r = -1;
+    }
+    if(close(fd) < 0 && !r) r = -1;                 /* the stick written: EIO when not (dmesg says why) */
+    if(r && say) fprintf(stderr, "surfsh: history: not saved on the stick: %s%s\n", strerror(errno),
+                         errno == EIO ? " (dmesg says why)" : "");
+    if(!r) {
+        hist_saved = history_count();
+        if(say) printf("history: %d line%s in surfos-config/history on the stick\n", n - first, n - first == 1 ? "" : "s");
+    }
+    free(lines);
+    free(old);
+    sb_free(&out);
+    return r;
+}
+
+/* the history the stick keeps, as lines typed before this shell's */
+static void history_load(void) {
+    char *buf;
+    ssize_t got, len = 0;
+    int fd, i;
+    hist_kept = 1;
+    if((fd = open(HISTORY_FILE, O_RDONLY)) < 0) return;
+    buf = malloc(HIST_FILE_MAX + 1);
+    while(buf && len < HIST_FILE_MAX && (got = read(fd, buf + len, HIST_FILE_MAX - len)) > 0) len += got;
+    close(fd);
+    if(!buf) return;
+    buf[len] = 0;
+    for(i = 0; i < len; ) {
+        char *nl = memchr(buf + i, '\n', (size_t)(len - i));
+        if(nl) *nl = 0;
+        if(buf[i]) history_add(buf + i);
+        i = nl ? (int)(nl - buf) + 1 : (int)len;
+    }
+    free(buf);
+    hist_saved = history_count();
+}
+
+/* HOSTNAME from the kernel's host name, for a telnet session's prompt */
+static void hostname_load(void) {
+    char name[80];
+    int fd, n;
+    if(var_get("HOSTNAME") || (fd = open("/dev/config/hostname", O_RDONLY)) < 0) return;
+    n = (int)read(fd, name, sizeof(name) - 1);
+    close(fd);
+    while(n > 0 && (name[n - 1] == '\n' || name[n - 1] == '\r')) n--;
+    if(n <= 0) return;
+    name[n] = 0;
+    var_set("HOSTNAME", name, 0);
+}
+
+/* the owner's startup file, run as a . file is */
+static void run_rc(void) {
+    struct source s;
+    int fd = open(SURFSHRC, O_RDONLY), high;
+    if(fd < 0) return;
+    if((high = fd_copy_high(fd)) >= 0) {
+        close(fd);
+        fd = high;
+    }
+    memset(&s, 0, sizeof(s));
+    s.fd = fd;
+    s.get = fd_get;
+    s.name = SURFSHRC;
+    run_source(&s);
+    close(fd);
+}
+
 /**** the sources of lines ****/
 
 static int blank(const char *s) {
@@ -193,7 +332,10 @@ static int editor_get(struct source *s, struct sbuf *out, int more) {
         last_status = STATUS_USAGE;
         return -2;
     }
-    if(!blank(line) && line[0] != ' ') history_add(line);  /* 10/25/26: not one that starts with a space */
+    if(!blank(line) && line[0] != ' ') {        /* 10/25/26: not one that starts with a space */
+        history_add(line);
+        if(hist_kept && history_count() - hist_saved >= HIST_SAVE_EVERY) history_save(0);   /* (A10) */
+    }
     s->lines++;
     sb_put(out, line, n);
     sb_putc(out, '\n');
@@ -460,8 +602,14 @@ int main(int argc, char **argv) {
         interactive = 1;
         if((term_fd = fd_copy_high(1)) < 0) term_fd = 1;     /* 10/25/26: the prompt's and the reports' */
         broken_pipe_exit(0);
-        s.get = editor_get;
-        run_source(&s);
+        history_load();                         /* 10/25/26 (A10): the stick's history and startup file */
+        hostname_load();
+        run_rc();
+        if(!exit_requested) {
+            s.get = editor_get;
+            run_source(&s);
+        }
+        history_save(0);
         fflush(stdout);
         return exit_requested ? exit_code & 0xff : 0;   /* Ctrl-D: 0, as an exit without a number */
     } else {

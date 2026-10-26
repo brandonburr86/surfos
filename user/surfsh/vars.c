@@ -7,7 +7,8 @@ Variables. A variable has a name (letters, digits and _, not a digit first) and 
 it may be exported (export: programs get it in their environment, SYS_spawnx) and read-only
 (readonly: no assignment or unset changes it). At the start surfsh takes its environment
 (environ) as exported variables, and sets PATH (/initrd/bin), PWD and SHELL when they are
-missing; cd changes PWD and OLDPWD. The positional parameters are $1, $2, ... ($# of them),
+missing; cd changes PWD and OLDPWD. 10/25/26 (track A, A10): and HOME (/), which ~ stands for
+(expand.c); an interactive shell sets HOSTNAME too (main.c). The positional parameters are $1, $2, ... ($# of them),
 $0 the shell's name or its script's. A command's assignments before its name (x=1 cmd) are
 for that command alone: a program finds them in its environment, a builtin sees them while
 it runs (var_push()); a line of assignments alone keeps them.
@@ -254,6 +255,7 @@ void vars_init(char **env) {
     if(!var_get("PATH")) var_set("PATH", PROGRAM_DIR, V_EXPORT);
     if(!var_get("SHELL")) var_set("SHELL", SURFSH_PATH, V_EXPORT);
     if(getcwd(cwd, sizeof(cwd))) var_set("PWD", cwd, V_EXPORT);
+    if(!var_get("HOME")) var_set("HOME", "/", V_EXPORT);           /* 10/25/26 (A10) */
 }
 
 /* set, export -p, readonly -p: the variables as lines that set them (in single quotes where needed) */

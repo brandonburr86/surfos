@@ -33,6 +33,11 @@ it: a plain program by itself, anything else in a new surfsh). $(( ... )): the t
 expanded first, then worked out as arith.c says. A here-document's text has the same
 expansions, with its quotes taken as they are and a \ before $ ` \ or a newline only.
 
+10/25/26 (track A, A10): tilde expansion: ~ alone at a word's start, or before its first /, is
+$HOME (vars.c makes it / when the environment has none), quoted, so never split nor a pattern;
+the same at the start of an assignment's value or a redirection's file name. There are no
+users, so ~name stays as it is, and so does ~ with HOME unset.
+
 10/25/26: a quote that gives nothing ("", '', "$empty") begins a field where it is, which
 splitting keeps even when it stays empty (""$x of x=" a" is "" and a). ${ } inside ${ } goes
 DEPTH_LIMIT deep at most; ${#name} of a name longer than any is an error; the value of
@@ -158,11 +163,22 @@ static void join_pieces(struct ex *e) {
 }
 
 /* text expanded by itself as one string (quotes gone, nothing split): the := and :? words, $(( )) */
+/* 10/25/26 (track A, A10): ~ at the start of w (len), alone or before a /, as $HOME: how many characters it took */
+static int tilde(struct ex *e, const char *w, int len) {
+    const char *home = var_get("HOME");
+    if(len < 1 || w[0] != '~' || (len > 1 && w[1] != '/') || !home) return 0;
+    xw_put(&e->cur, home, (int)strlen(home), XF_QUOTED);
+    e->cur.quoted = 1;                                  /* an empty HOME still gives a field */
+    return 1;
+}
+
 static char *expand_string(const char *w, int len, int dq, int *failed) {
     struct ex x;
     char *r;
+    int t;
     memset(&x, 0, sizeof(x));
-    expand_part(&x, w, len, dq, 0);
+    t = dq ? 0 : tilde(&x, w, len);
+    expand_part(&x, w + t, len - t, dq, 0);
     *failed = x.failed;
     join_pieces(&x);
     r = xstrdup(sb_str(&x.cur.s));
@@ -608,9 +624,10 @@ static void split_glob(struct xw *w, struct fields *out) {
 /* the fields of one word into out: 0, or -1 said */
 static int expand_word(const char *word, struct fields *out) {
     struct ex e;
-    int i, r;
+    int i, r, len = (int)strlen(word), t;
     memset(&e, 0, sizeof(e));
-    r = expand_part(&e, word, (int)strlen(word), 0, 0);
+    t = tilde(&e, word, len);
+    r = expand_part(&e, word + t, len - t, 0, 0);
     field_break(&e);
     for(i = 0; i < e.nraw; i++) {
         if(r == 0) split_glob(&e.raw[i], out);

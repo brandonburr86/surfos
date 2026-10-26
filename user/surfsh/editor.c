@@ -192,6 +192,7 @@ static void make_prompt(void) {
     c.cwd = getcwd(cwd, sizeof(cwd)) ? cwd : NULL;
     c.last_status = last_status;
     c.remote = remote_session();
+    c.hostname = var_get("HOSTNAME");                  /* 10/25/26 (A10): a telnet session's prompt names the host */
     c.width = width;
     c.unicode = use_unicode();
     c.color = colour;
@@ -485,6 +486,15 @@ int history_print(void) {
     int i;
     for(i = hist_oldest(); i < hist_count; i++) printf("%5d  %s\n", i + 1, hist[i % HIST_MAX]);
     return 0;
+}
+
+/* 10/25/26 (track A, A10): for main.c's history on the stick */
+int history_count(void) {
+    return hist_count;
+}
+
+const char *history_line(int i) {
+    return i >= hist_oldest() && i < hist_count ? hist[i % HIST_MAX] : NULL;
 }
 
 /**** 10/25/26: history expansion, and the last word of a line (!$, Alt+.) ****/

@@ -56,7 +56,8 @@ shell/       main.c (the ring-0 shell and the kernel's command table), prompt.c 
              built into libsurf), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
              selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, fat_mkfs.c (mkfs),
-             devfs.c (/dev, /dev/kmsg), poll.c (poll()), pipe.c (pipes, 10/24/26)
+             devfs.c (/dev, /dev/kmsg, 10/25/26 /dev/config: surfsh's files on the stick), poll.c (poll()),
+             pipe.c (pipes, 10/24/26)
 net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c,
              sock.c (TCP connections as descriptors)
 user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.c stdlib.c string.c ctype.c
@@ -494,7 +495,9 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 ## 9. File systems (`fs/`)
 
 * `include/fs/vfs.h`: a **vnode** is a file or directory handed out by a file system
-  (reference counted, `vget()`/`vput()`, released through `ops->release`); a
+  (reference counted, `vget()`/`vput()`, released through `ops->release`; since 10/25/26
+  `ops->flush`, when there is one, at a file's last close and at fsync: its error is theirs,
+  for `/dev/config/history`, which goes back to the stick then, section 19); a
   **superblock** is a mounted instance with its device, root vnode and a mutex that
   serializes metadata updates; a **file** is a vnode plus position and open flags.
   Errors are negative errno values (`strerror()`); open flags and `SEEK_*` use the
@@ -1290,6 +1293,18 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   its first prompt; a spawn that fails for want of memory is tried again every second.
   `shell=kernel` gives every console the ring-0 shell, and the USB image's GRUB menu has an
   entry for it ("SurfOS (kernel shell)").
+* **The startup file and the history on the stick** (10/25/26, track A, A10; the kernel's side
+  is section 19). An interactive surfsh runs `/dev/config/surfshrc`, the owner's
+  `surfos-config/surfshrc`, after `surfsh.conf`, as a `.` file runs (an `exit` there ends the
+  shell). It loads `/dev/config/history` (there only while `settings history on`) into its
+  history, and saves when it ends, on `history -w` and after every 25 lines typed: the file as
+  it is by then (another session's lines kept), then its own lines since the last save, the
+  last 1,000 in at most 256 KB; a line that starts with a space was never kept. `~` alone or
+  before a `/` at a word's start (also of an assignment's value and a redirection's file) is
+  `$HOME`, quoted; vars.c sets `HOME=/` when the environment has none, and surfshrc may set
+  another. An interactive surfsh sets `HOSTNAME` (not exported) from `/dev/config/hostname`,
+  which a telnet session's prompt shows before its breadcrumbs (`≋@>`). The save at shutdown
+  is track B's B4 (a shell that ends saves; a kill does not).
 * **Tests.** `make unittest`: `test_prompt` (the states and their priority, shortening by
   depth and by width, ASCII, colours, odd names, small buffers), `test_cp437` (the tables,
   the decoder's corner cases, the font's glyphs), 10/25/26 `test_editor` (`editor.c` and
@@ -1666,6 +1681,24 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   link went down and up (QEMU's `set_link`); the disk read on the host afterwards. `make
   test-usb`'s `settings` scenario does it through GRUB's menu on a one-stick, under the laptop
   profile, and boots the menu's entry without the settings.
+* **surfsh's files** (10/25/26, track A, A10; the owner approved a startup file and saved history
+  on the stick). Beside the settings, by their way (the stick lock, the short mount or the
+  owner's held, a `.new` file synced, renamed and read back), and only these:
+  `surfos-config/surfshrc`, the owner's startup file, read, and `surfos-config/history`, read,
+  and written only while the new setting `history` is on (off by default). No system call:
+  `fs/devfs.c`'s `/dev/config/surfshrc` and `/dev/config/history` (`netman_file_read()`,
+  `netman_file_write()`) are read from the stick when looked up, so when opened, and history
+  goes back when it is closed: the VFS's new vnode op `flush` (`fs/vfs.c` calls it at the last
+  close and at fsync), whose error is close's, `EIO` with the reason in the kernel log. A
+  reader that comes while the boot still reads the settings waits for it (`netman_wait_boot()`,
+  30 s at most, said in the kernel log), so surfsh's first prompt at boot follows the read; with
+  nothing to read (`settings=off`, no `bootvol=`, no netman thread) it never waits, and while the
+  stick is still looked for it waits only with a USB controller (a disk can come no other way),
+  until 8 s from the start; a surfsh that goes on without them then says so on its console
+  ("the stick SurfOS was started from was not ready"), and the kernel log has a line for each wait. Under
+  `settings=off` neither is read or written. `/dev/config/hostname` gives the host name (the hostname
+  setting, from memory) for surfsh's `$HOSTNAME`; the system calls' structures keep their
+  sizes, so `SYS_netinfo` could not carry it. surfsh's side: section 17.
 * **Limits.** One Wi-Fi device; DHCP only (an address by hand is `ifconfig`, not a setting);
   no per-network priorities beyond the file's order; at most 16 saved networks; settings are
   read at boot, so a stick plugged in later is not read until the next start, and `telnetd`

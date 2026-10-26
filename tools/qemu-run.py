@@ -143,6 +143,9 @@ SETTINGS_FILES = {
     'ether': {'surfos-config/settings.conf': b'ethernet = dhcp\n'},
     # a hidden network saved by hand: no security line (and nothing else not understood), so open
     'hidden': {'surfos-config/networks.conf': b'network = "SurfSimHidden"\nhidden = yes\n'},
+    # 10/25/26 (track A, A10): surfsh's history kept, and the owner's startup file, which moves HOME for ~
+    'history': {'surfos-config/settings.conf': b'history = on\n',
+                'surfos-config/surfshrc': b'# the owner\'s startup file\nHOME=/hda1\necho "surfshrc ran: HOME $HOME"\n'},
 }
 SURFSIM_PSK = hashlib.pbkdf2_hmac('sha1', WLANSIM_PASSPHRASE.encode(), b'SurfSimWPA', 4096, 32).hex()
 SETTINGS_DISKS = {}                                         # name: its image file, made the first time a boot asks
@@ -869,6 +872,40 @@ SMOKE = [
      ['given up', 'no lease']),
     # what those boots left on the owner's stick, read here
     ('@settings-disk', []),
+    # 10/25/26 (track A, A10): surfsh's startup file and history on the owner's stick (settingsdisk=history: history = on
+    # and a surfshrc), twice. 1: surfshrc runs at the interactive start (its HOME for ~, a quoted ~ left), the lines
+    # typed kept but the one that starts with a space, history -w, the file as written, /dev/config, $HOSTNAME
+    ('@boot settingsdisk=history',
+     ['+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos, history on; 0 '
+      'saved Wi-Fi networks', 'surfshrc ran: HOME /hda1'],
+     [('echo ~ ~/notes "~"', ['/hda1 /hda1/notes ~']),
+      ('echo history-marker-one', ['history-marker-one']),
+      (' echo kept-out', ['kept-out']),
+      ('history -w', ['in surfos-config/history on the stick']),
+      ('grep -c marker-one /hda1/surfos-config/history; grep -c kept-out /hda1/surfos-config/history', ['1\r\n0\r\n']),
+      ('ls /dev/config', ['history', 'hostname', 'surfshrc']),
+      ('echo host $HOSTNAME', ['host surfos']),
+      ('umount /hda1', [])],
+     ['was not saved']),
+    # 2: the same stick again: surfshrc again, the history recalled; history off: history -w says it is not kept, the
+    # file stays
+    ('@boot settingsdisk=history',
+     ['surfshrc ran: HOME /hda1'],
+     [("history | grep -c '^ *[0-9]*  echo history-marker-one'", ['\r\n1\r\n']),
+      ('settings history off', ['history = off, saved on hda1']),
+      ('history -w', ['history: not kept on the stick: the history setting is off']),
+      ('cat /hda1/surfos-config/history', ['echo history-marker-one']),
+      ('umount /hda1', [])],
+     ['was not saved']),
+    # 3: the same stick, started without the settings (settings=off): neither file is read (no surfshrc, ~ is /, no
+    # history), and no surfsh waited for the stick before its first prompt (the kernel log says when one does)
+    ('@boot settingsdisk=history settings=off',
+     ['+NET: settings=off: the settings on the stick are not read at this start'],
+     [('echo home ~', ['home /\r\n']),
+      ("history | grep -c '^ *[0-9]*  echo history-marker-one'", ['\r\n0\r\n']),
+      ("dmesg | grep -c 'for the settings to be read'", ['\r\n0\r\n']),
+      ('umount /hda1', [])],
+     ['surfshrc ran']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),

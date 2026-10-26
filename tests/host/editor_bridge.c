@@ -262,6 +262,11 @@ int procinfo(int index, struct procinfo *pi) {
     return -1;                                  /* no terminal of a telnet session */
 }
 
+const char *var_get(const char *name) {         /* 10/25/26 (A10): HOSTNAME for the prompt: none here */
+    (void)name;
+    return NULL;
+}
+
 int readline(char *buf, size_t size) {
     (void)buf;
     (void)size;

@@ -56,7 +56,7 @@ const struct builtin builtins[] = {
     { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd, 0 },
     { "pwd",     "",              "print the current directory", b_pwd, 0 },
     { "echo",    "[-n] [-e] ...", "print the words (-n: no newline, -e: \\n \\r \\t \\\\)", b_echo, 0 },
-    { "history", "",              "the lines typed before (Up and Down recall them)", b_history, 0 },
+    { "history", "[-w]",          "the lines typed before (Up and Down recall them; -w: saved on the stick now)", b_history, 0 },
     { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set, 1 },
     { "help",    "[command]",     "this list, or one command", b_help, 0 },
     { "type",    "name...",       "which command a name runs, and what it hides", b_type, 0 },
@@ -208,8 +208,10 @@ static int b_history(int argc, char **argv) {
         history_add(argv[2]);
         return 0;
     }
+    if(argc == 2 && !strcmp(argv[1], "-w"))     /* 10/25/26 (A10): surfos-config/history now (main.c) */
+        return history_save(1) ? 1 : 0;
     if(argc > 1) {
-        fprintf(stderr, "usage: history\n");
+        fprintf(stderr, "usage: history [-w]\n");
         return STATUS_USAGE;
     }
     return history_print();

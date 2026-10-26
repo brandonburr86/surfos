@@ -46,6 +46,10 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 #include <surfos/kcmd.h>
 
 #define SURFSH_CONF     "/initrd/etc/surfsh.conf"
+#define SURFSHRC        "/dev/config/surfshrc"      /* 10/25/26 (track A, A10): surfos-config/ on the stick (fs/devfs.c) */
+#define HISTORY_FILE    "/dev/config/history"       /* there only while the history setting is on */
+#define HIST_FILE_MAX   262144      /* the most the kernel keeps of it (NETCFG_HISTORY_MAX) */
+#define HIST_SAVE_EVERY 25          /* lines typed between saves */
 #define SURFSH_PATH     "/initrd/bin/surfsh"    /* a new surfsh: subshells, jobs of surfsh's own */
 #define PROGRAM_DIR     "/initrd/bin"
 
@@ -147,6 +151,9 @@ void edit_fresh_row(void);          /* the cursor at the start of a fresh row, a
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 void history_state(struct sbuf *out);   /* the history as text a new surfsh runs (history -s lines) */
+int history_count(void);            /* 10/25/26 (A10): lines ever added */
+const char *history_line(int i);    /* line i of those (from 0), NULL when it is no longer kept */
+int history_save(int say);          /* main.c: the history on the stick (history -w): 0, -1 (said when say) */
 /* 10/25/26: !! !n !-n !str !$ in a typed line: 1 expanded into out, 0 none, -1 a reference no line
    answers (in out), -2 longer than size - 1 bytes; out may be in */
 int history_expand(const char *in, char *out, int size);

@@ -149,7 +149,7 @@ def run(a, initrd):
         command('cat /hda1/FILETEST/note.txt')
         check('original-added' in q.text(), 'editor changes persisted to disk')
         launch('/dev')
-        keys(b'\x1b[H')
+        keys(b'\x1b[F')                 # 10/25/26 (track A, A10): the last entry, a device (/dev/config, a folder, is first)
         screen = keys(b'e')
         check('device' in screen.lower() and 'SurfOS Files' in screen, 'device cannot be opened in editor')
         keys(b'q')

@@ -24,5 +24,8 @@ struct driver {
 
 void init_drivers(void);
 void print_drivers(void);
+/* 10/25/26 (track A, A10): the init result of the driver of that name (0 up, 1 not present, DRV_SKIPPED, < 0 failed);
+   -1 when there is none */
+int driver_status(const char *name);
 
 #endif

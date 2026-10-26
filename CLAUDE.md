@@ -168,7 +168,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   kernel/netman.c mounts the volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman`
   (read-only to read) for the moment it reads or writes `surfos-config/`, holds that mount
   or the owner's (`vfs_hold_mount()`) meanwhile, and unmounts its own again; never another
-  device.
+  device. 10/25/26 (track A, A10, approved by the owner): the same way, and only these two
+  files besides the settings: surfsh's `surfos-config/surfshrc` (only read) and
+  `surfos-config/history` (read, and written only while the owner's `history` setting is on),
+  through `/dev/config` (fs/devfs.c, `netman_file_read()`, `netman_file_write()`).
 * Network connections and terminals (milestone M11): a TCP connection or listening socket
   is a descriptor (`include/surfos/sock.h`, `net/sock.c`); a pseudo-terminal
   (`include/surfos/pty.h`, `kernel/pty.c`) is a tty whose console is a byte stream that

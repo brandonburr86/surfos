@@ -109,6 +109,16 @@ static void test_keys(void) {
           !strcmp(s.hostname, "abcdefghijklmnopqrstuvwxyz012345"),
           "host names too long, with a - at an end, a blank, a dot, or empty are refused");
     check(netcfg_set(&s, 99, "on", why, sizeof(why)) < 0, "no key 99");
+    /* 10/25/26 (track A, A10): history */
+    netcfg_defaults(&s);
+    check(!s.history && netcfg_key_find("History") == NETCFG_HISTORY &&
+          !strcmp(netcfg_value(&s, NETCFG_HISTORY, buf, sizeof(buf)), "off") &&
+          !strcmp(netcfg_default_value(NETCFG_HISTORY, buf, sizeof(buf)), "off"), "history: off by default, found by name");
+    check(netcfg_set(&s, NETCFG_HISTORY, "on", why, sizeof(why)) == 0 && s.history && (s.set & (1u << NETCFG_HISTORY)) &&
+          !strcmp(netcfg_value(&s, NETCFG_HISTORY, buf, sizeof(buf)), "on") && !s.telnetd && s.wifi,
+          "history on, and no other on/off key with it");
+    check(netcfg_set(&s, NETCFG_HISTORY, "always", why, sizeof(why)) < 0 && s.history &&
+          strstr(why, "history is on | off, not always"), "history always: refused");
 }
 
 /**** reading settings.conf ****/
@@ -179,6 +189,7 @@ static void test_edit(void) {
           strstr(out, "#wifi = on\n") && strstr(out, "#ethernet = off\n") && strstr(out, "#hostname = surfos\n"),
           "the new file: the template, telnetd's commented-out default made the setting, the others left commented out");
     check(strstr(out, "# SurfOS settings") && strstr(out, "no password"), "the new file explains itself");
+    check(strstr(out, "#history = off\n") && strstr(out, "plain text"), "10/25/26: and history, off, saying it is plain text");
     s = parse(out);
     check(s.telnetd && s.set == (1u << NETCFG_TELNETD) && !nnotes, "it reads back: telnetd on, the rest defaults, no note");
     {
@@ -190,6 +201,12 @@ static void test_edit(void) {
               "a second edit of the new file: both set");
         check(strlen(out) == strlen(first) + strlen("hostname = atlas") - strlen("#hostname = surfos"),
               "only that line changed length");
+        strcpy(first, out);                     /* 10/25/26 (A10) */
+        n = edit(first, NETCFG_HISTORY, "on");
+        s = parse(out);
+        check(n > 0 && s.history && s.telnetd && !strcmp(s.hostname, "atlas") &&
+              strlen(out) == strlen(first) + strlen("history = on") - strlen("#history = off"),
+              "history on in the new file: its commented-out line made the setting, the others kept");
     }
 
     n = edit("  telnetd = off\t# was on before\n", NETCFG_TELNETD, "on");

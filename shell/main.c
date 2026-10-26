@@ -958,7 +958,7 @@ static const struct command commands[] = {
     { "lspci",     "[-v] [bus:dev.fn]", "PCI devices (-v: ids, power, interrupts, link)", cmd_lspci },
     { "wifiinfo",  "",          "the Wi-Fi card's ids, for a Wi-Fi driver", cmd_wifiinfo },
     { "wifi",      "up|down|scan|join <ssid>|status|leave|save|saved|forget|connect", "Wi-Fi: start the card, list networks, join one, save it", cmd_wifi },
-    { "settings",  "[key [value]]", "the settings on the stick: telnetd at startup, wifi, ethernet, hostname", cmd_settings },
+    { "settings",  "[key [value]]", "the settings on the stick: telnetd, wifi, ethernet, hostname, history", cmd_settings },
     { "wlansim",   "on|off <ssid>", "the simulated Wi-Fi's access points (tests: the kernel word wlansim)", cmd_wlansim },
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },

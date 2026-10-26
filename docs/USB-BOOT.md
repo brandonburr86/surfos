@@ -1102,7 +1102,22 @@ the address.
 ```text
 surfos-config/settings.conf   the settings, "key = value", each explained in the file
 surfos-config/networks.conf   the saved networks
+surfos-config/surfshrc        10/25/26: your own commands, which surfsh runs at each prompt's start
+surfos-config/history         10/25/26: what you typed, kept while settings history is on
 ```
+
+`surfshrc` is a surfsh script of your own, made on the Mac (plain text, as below): every
+surfsh with a prompt runs it before its first one (on F1 to F4, a telnet session, a surfsh
+typed at a prompt), after `/initrd/etc/surfsh.conf`. `HOME=/data` there makes `~` stand for
+`/data`; it may set variables, define functions and print a line. SurfOS only reads it, and
+not under the menu's entry without the settings. `settings history on` makes surfsh keep the
+last 1,000 lines typed at its prompts in `history` and recall them at its next start (Up,
+Ctrl+R); it saves when surfsh ends, after every 25 lines and on `history -w`. The file is
+plain text on the stick: a password typed on a command line would be in it (a line that
+starts with a space is never kept). `settings history off` stops the saving; the file stays
+until you delete it. At startup a surfsh waits for the stick's settings to be read (30 seconds
+at most) before its first prompt; started without the settings, or not from a stick, it does not
+wait at all.
 
 On the Mac they open in TextEdit (*Open With* → *TextEdit*, as `.conf` files are not its
 own): keep them plain text (*Format* → *Make Plain Text*), and before typing turn off *Edit*
