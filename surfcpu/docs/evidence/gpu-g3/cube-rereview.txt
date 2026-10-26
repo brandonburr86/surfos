@@ -75,3 +75,16 @@ keyboard's pace, were echoed and run, and a UART command after them too:
     uart works
   (source 0, the UART: 12 interrupts for the 3,032 bytes received, each serial_isr() call taking its 256 bytes:
   the receive path never caught up with the line while the burst came)
+
+make check (SURFGPU_DOCKER_SIZE=big, through the capped wrapper) at 6e04323, the commit that added the addendum
+(the code of 4696b70), 16:28:10 to 17:03:15:
+    test_arty: 1053 of 1053 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (303 sent); 4 fence waits slept on it, 3 of them woken by it
+    ok   gfx cube 2 at the VGA pins: 127 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 122 pictures, 0 after more than two video frames
+    ok   gfx cube 2 by SurfOS's own check: 121 drawn in 2.01 s (59.9 a second), 126 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order; 60 drawn, 60 shown, 0 missed: all whole, in order
+    test-gpuos: 32 of 32 checks passed in 236 s (gpu 536828349 cycles = 21.473 s simulated in 235.5 s wall (2.28 M cycles/s); nogpu 158580218 cycles = 6.343 s simulated in 46.4 s wall (3.42 M cycles/s))
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541870 cycles)
+    check: all automated SurfCPU checks passed

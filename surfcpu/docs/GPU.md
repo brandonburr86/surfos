@@ -1732,8 +1732,13 @@ On the board: after a long paste, wait a moment before the next command, or type
 
 **What was tested in the addendum's round**: the host test 1053 of 1053 at 4696b70 (31 tests, seeds
 1, 7 and 123); test-gpuos 32 of 32 at 94f5c3f in 237 s
-([evidence](evidence/gpu-g3/cube-rereview-test-gpuos.txt)); make check (big) is run on the commit
-that adds this addendum, its result recorded in the commit after it.
+([evidence](evidence/gpu-g3/cube-rereview-test-gpuos.txt)); make check (big) passed on 6e04323, the
+commit that added this addendum (the code of 4696b70), 16:28 to 17:03: `check: all automated SurfCPU
+checks passed`, with the host test 1053 of 1053, test-gpuos 32 of 32 in 236 s (`gfx cube 2` 121
+drawn in 2.01 s, 59.9 a second, 126 shown, 0 missed, all whole and in order; 122 pictures at the
+pins, none more than two video frames after the one before; the interrupt 181 taken for the 181
+fences that asked, 4 fence waits slept, 3 woken: the timing coincidence of 15.9's table, which the
+rule allows), test-os-qemu 137 of 137 at -O2 and -O0, and G4's gpudiag_check PASS.
 
 ## 16. GPU2: triangles, depth and page flips (G4)
 
