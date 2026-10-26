@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>Hidden content</title>
+<p>Shown 1
+<script type="text/javascript">if(a < b && c > d) { document.write("</p>no"); }</script>
+<style>p { color: red }</style>
+<template><p>never shown</p></template>
+<noscript><p>Shown 2: no script runs here</p></noscript>
+<svg width="10" height="10"><circle r="5"/><text>no</text></svg>
+<math><mi>x</mi></math>
+<div hidden><p>never shown<div>nor this</div></p></div>
+<p hidden>never shown</p>
+<object data="movie.swf"><p>no</p></object>
+<iframe src="frame.html"><p>no</p></iframe>
+<p>Shown 3<!-- a comment --> after a comment
+<svg><p>Shown 4: a p ends the svg</p></svg>

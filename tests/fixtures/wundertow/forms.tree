@@ -1,0 +1,33 @@
+title "Forms"
+block
+  block
+    block para
+      text "Search: "
+      text field checked "Words to find"
+      text " "
+      button field "Go"
+    block para
+      checkbox field checked ""
+      text " Checked "
+      checkbox field ""
+      text " Not checked"
+    block para
+      radio field checked ""
+      text " One "
+      radio field ""
+      text " Two"
+    block para
+      text "Password: "
+      password field "********"
+      text " File: "
+      file field "Choose a file"
+    block para
+      select field "Green"
+    block para
+      area field "Some text in a box"
+    block para
+      button field "A button"
+      text " "
+      button field "Reset"
+      text " "
+      button field "Send"

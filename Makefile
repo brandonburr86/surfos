@@ -782,6 +782,31 @@ unittest: test-undertow-html-ubsan
 .PHONY: test-undertow-html-ubsan
 -include $(wildcard $(BUILD)/host/undertow-ubsan/*.d)
 
+# -- wundertow, the browser's window (10/25/26) --
+# doc.c with html_scan.c, url.c, util.c and the test's allocator: the fixtures in tests/fixtures/wundertow/ (NAME.html
+# in, NAME.tree out) and Undertow's own pages; layout.c and paint.c with the console's font and code page 437 (built
+# for the host as the kernel's): NAME.layout, pages made there and every page at widths from 64 to 1300 pixels;
+# browser.c driven as a person drives the window.
+WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
+WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
+WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
+               $(BUILD)/host/kernel/driver/cp437.o
+$(BUILD)/host/wundertow/%.o: user/wundertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/wundertow/*.d)
+
+$(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/wundertow/doc.o $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-doc: $(BUILD)/host/test_wundertow_doc
+	$(BUILD)/host/test_wundertow_doc tests/fixtures
+unittest: test-wundertow-doc
+.PHONY: test-wundertow-doc
+
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
 $(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \

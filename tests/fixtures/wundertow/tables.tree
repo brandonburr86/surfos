@@ -1,0 +1,36 @@
+title "Tables"
+block
+  table center border=1 padding=3 width=100% bg=eeeeee
+    block caption center
+      text "Results"
+    row
+      cell header center
+        text b "Name"
+      cell header center
+        text b "Score"
+    row
+      cell
+        text "Ann"
+      cell right
+        text "10"
+    row bg=ffff00
+      cell colspan=2
+        text "A row with one wide cell"
+  table border=0 padding=1
+    row
+      cell
+        text "outer"
+      cell
+        table border=1 padding=1
+          row
+            cell
+              text "inner 1"
+            cell
+              text "inner 2"
+  table border=0 padding=1
+    row
+      cell
+        text "a cell without a row"
+    row
+      cell
+        text "text in the row, not in a cell"

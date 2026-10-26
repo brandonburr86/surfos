@@ -1,0 +1,45 @@
+title "Links"
+block
+  block para
+    text "Go "
+    text "to the next page" link=0
+    text ", "
+    text "up" link=1
+    text ", "
+    text "to the root" link=2
+    text ", or "
+    text "far away" link=3
+    text "."
+  block para
+    text "Jump" link=4
+    text " to "
+    text "mail" link=5
+    text " or "
+    text "script" link=6
+    text ". An anchor without an address."
+  block para
+    text "First " link=7
+    text b "bold" link=7
+    text " part" link=7
+    text " "
+    text "spaced" link=8
+    text " "
+    image src=https://example.test/docs/guide/icon.png "An icon" link=9
+  block h2 para
+    text b h2 "Section 2"
+  block para
+    text "An old-style anchor and an id on a span."
+link 0 "https://example.test/docs/guide/next.html" "to the next page"
+link 1 "https://example.test/docs/up.html" "up"
+link 2 "https://example.test/root.html" "to the root"
+link 3 "https://other.test/away?q=1&r=2" "far away"
+link 4 "https://example.test/docs/guide/index.html#section-2" "Jump"
+link 5 unusable "mailto:me@example.test" "mail"
+link 6 unusable "javascript:void(0)" "script"
+link 7 "https://example.test/docs/guide/a.html" "First bold part"
+link 8 "https://example.test/docs/guide/spaced%20name.html" "spaced"
+link 9 "https://example.test/docs/guide/x.html" "An icon"
+link 10 "https://example.test/docs/guide/y.html" "Labelled"
+anchor section-2 133
+anchor old-style 142
+anchor span-id 165

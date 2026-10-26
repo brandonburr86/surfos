@@ -1,0 +1,23 @@
+title "Preformatted"
+block
+  block para pre
+    text mono pre "int main(void) {"
+    br
+    text mono pre "        return 0;       /* a tab */"
+    br
+    text mono pre "}"
+    br
+  block para pre
+    text mono pre "  "
+    text b mono pre "bold"
+    text mono pre " and   spaces"
+    br
+    text mono pre "        <tags> as text"
+  block para pre
+    text mono pre "a listing"
+  block para pre
+    text mono pre "<p>xmp shows <b>tags</b></p>"
+  block para
+    text "After "
+    text mono "code collapses "
+    text "outside pre."
