@@ -160,6 +160,8 @@ struct gpu {
     /* what happened, for gfx */
     u_long words, fences, irqs, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long irq_waits, irq_wakes;        /* fence waits that slept on the interrupt, and those it woke */
+    u_long irq_fences;                  /* the fences sent that asked for the interrupt (IRQ): gfx cube's
+                                           frames' own do not (the review of 58ac7b3's L3) */
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
     u32 last_error;                     /* the sticky bits of the last error */
 };

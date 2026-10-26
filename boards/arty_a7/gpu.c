@@ -278,7 +278,7 @@ int gpu_put(struct gpu *g, const u32 *w, u_int n, const char *what) {
 }
 
 /* a FENCE value of the driver's count for a FENCE the caller writes in its own words (gfx cube's
-   frames end with one): later fences are after it */
+   frames end with one, without IRQ: counted in fences, not in irq_fences): later fences are after it */
 u32 gpu_fence_next(struct gpu *g) {
     g->fences++;
     return ++g->fence_sent;
@@ -290,6 +290,7 @@ int gpu_fence_send(struct gpu *g, const char *what, u32 *value) {
     w[1] = ++g->fence_sent;
     *value = w[1];
     g->fences++;
+    if(g->irq) g->irq_fences++;
     return gpu_put(g, w, 2, what);
 }
 

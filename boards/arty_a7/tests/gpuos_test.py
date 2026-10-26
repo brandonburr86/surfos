@@ -19,10 +19,12 @@ typed on the UART. Checked:
     gfxref's lines must be this test's, and gfxscene (the same lines through gfx.c and gpu.c in
     the model, the owner's tool for other pictures) must agree with gfxref;
   * the GPU's interrupt works: between the first gfx and the last, interrupts (intc source 5,
-    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one), and it
-    woke the fence waits that slept on it: one at least, and at least half of them, a wait counted
-    once however many 10 ms steps it slept (10/26/26, the re-review's N3: a handler that ran
-    without waking anyone passed the count of interrupts alone);
+    IE.FENCE) were taken for at least half of the fences that asked for one (the driver's own; gfx
+    cube's frames end with FENCEs of gpucube.c's that ask for none, counted apart since the review
+    of 58ac7b3's L3: a longer cube would have failed the rule), and it woke the fence waits that
+    slept on it: one at least, and at least half of them, a wait counted once however many 10 ms
+    steps it slept (10/26/26, the re-review's N3: a handler that ran without waking anyone passed
+    the count of interrupts alone);
   * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
     typed after its first second, and after each the picture's CRC is the CRC before them (the
     display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
@@ -361,16 +363,19 @@ def main():
     check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
           re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
-    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead; and
-    # it must wake the fence waits that sleep on it (a handler that runs and wakes nobody leaves each such
-    # wait to its 10 ms and still counts its interrupts: the re-review's N3)
+    # the interrupt: each of the driver's FENCEs asks for one (IRQ), so the count grows with them unless it is
+    # dead (gfx cube's frames' FENCEs ask for none: counted apart, the review of 58ac7b3's L3); and it must
+    # wake the fence waits that sleep on it (a handler that runs and wakes nobody leaves each such wait to its
+    # 10 ms and still counts its interrupts: the re-review's N3)
     st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5, IE\.FENCE\)' +
-                    NL + r'\s+fence waits that slept on it: (\d+), woken by it: (\d+)', out)
+                    NL + r'\s+fences that asked for it: (\d+)[^\n]*' + NL +
+                    r'\s+fence waits that slept on it: (\d+), woken by it: (\d+)', out)
     if len(st) >= 2:
-        fences, irqs, waits, woken = (int(st[-1][i]) - int(st[0][i]) for i in range(4))
-        check(irqs > 0 and 2 * irqs >= fences and woken > 0 and 2 * woken >= waits,
-              'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences sent between the first gfx and '
-              'the last; %d fence waits slept on it, %d of them woken by it' % (irqs, fences, waits, woken))
+        fences, irqs, asked, waits, woken = (int(st[-1][i]) - int(st[0][i]) for i in range(5))
+        check(irqs > 0 and 2 * irqs >= asked and woken > 0 and 2 * woken >= waits,
+              'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences that asked for one between the '
+              'first gfx and the last (%d sent); %d fence waits slept on it, %d of them woken by it'
+              % (irqs, asked, fences, waits, woken))
     else:
         check(False, 'the GPU interrupt: gfx said its fences, interrupts and waits %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,

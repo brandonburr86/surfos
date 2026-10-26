@@ -1307,7 +1307,8 @@ static void t_state(unsigned seed) {
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
           said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
-          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fences that asked for it: ") &&
+          said(s, " (gfx cube's frames' do not)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
           said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
           said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
           "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
@@ -1339,12 +1340,14 @@ static void t_columns(unsigned seed) {
           gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
           "the widest target (VRAM 307196, stride 65532) and clip");
     G.words = G.fences = G.irqs = G.irq_waits = G.irq_wakes = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.irq_fences = 4294967295ul;
     G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
     G.fifo_depth = 65535;
     G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */
     s->frames_stop = 1;
     s->frames_frozen = 65535;                           /* FRAME_COUNT's 16 bits */
     check(gfx(s, "gfx") == CMD_OK && said(s, "    sent: 4294967295 words, 4294967295 fences; FENCE 4294967290\n") &&
+          said(s, "    fences that asked for it: 4294967295 (gfx cube's frames' do not)\n") &&
           said(s, "    clip: (65535, 65535)-(65535, 65535)\n") && said(s, "FRAME_COUNT 65535"),
           "gfx with every count at 10 digits");
     snprintf(buf, sizeof(buf), "    gpu       ");
@@ -1898,23 +1901,36 @@ TEST(t_cube_order)
    once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
    timer's tick every frame shown is checked all the same; on a port without the tick the run looks
    from its loop, and frames pass unseen while it prints, which its lines say (missed), and then it
-   fails: a frame not looked at was not checked (the review of 58ac7b3's L1) */
+   fails: a frame not looked at was not checked (the review of 58ac7b3's L1).
+   And test-gpuos's rule of the interrupt holds for a run as long (the review's L3): interrupts for
+   half the fences that asked for one at least; the cube's frames' FENCEs, which ask for none, are
+   counted in fences alone */
 static int once_t_cube_look;
 static void t_cube_look(unsigned seed) {
     struct stub *s;
-    unsigned long drawn = 0, shown = 0, missed = 0;
-    char line[160], want[80];
+    unsigned long drawn = 0, shown = 0, missed = 0, asked, all;
+    unsigned irqs;
+    char line[200], want[80];
     int r, ok;
     (void)seed;
     if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
     s->line_us = 40000;
     s->log_frames = 1;
+    irqs = s->interrupts_sent;
+    asked = G.irq_fences;
+    all = G.fences;
     check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &missed) && s->ticks_run > 250,
           "gfx cube 3 with a slow console and the timer's tick");
     snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at", drawn, shown, missed);
     check(!missed && shown >= 170, line);
     cube_at_the_pins(s, "and at the pins", 170, 120);
+    irqs = s->interrupts_sent - irqs;
+    asked = G.irq_fences - asked;
+    all = G.fences - all;
+    snprintf(line, sizeof(line), "  the interrupt: %u taken for the %lu fences that asked for one (of %lu sent: the cube's "
+             "%lu frames' FENCEs ask for none)", irqs, asked, all, drawn + 1);
+    check(asked > 0 && 2 * irqs >= asked && all >= asked + drawn + 1, line);
     done(s);
     s = fresh2(-1);
     s->line_us = 40000;
