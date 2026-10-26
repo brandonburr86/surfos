@@ -1028,6 +1028,15 @@ static void t_demo(unsigned seed) {
     check(gfx(s, "gfx demo 0") == CMD_USAGE && gfx(s, "gfx demo 4000") == CMD_USAGE, "gfx demo 0 and 4000: usage");
     free(before);
     done(s);
+    /* GPU2: the depth buffer kept too (the demo's SET_TARGET drops the engine's; 10/26/26) */
+    s = fresh2(1);
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    gfx(s, "gfx zclear 0x12");
+    check(gfx(s, "gfx demo 1") == CMD_OK && G.z_valid && G.z_base == 153600 && G.z_stride == 640 && s->eng.zvalid &&
+          s->eng.zbase == 153600 && s->eng.zstride == 640 && s->eng.tw == 320 && s->vram[153600] == 0x12 &&
+          s->vram[GPU_VRAM_BYTES - 1] == 0x12, "gfx demo on a GPU2 with a depth buffer: it and its depths back after");
+    done(s);
 }
 TEST(t_demo)
 

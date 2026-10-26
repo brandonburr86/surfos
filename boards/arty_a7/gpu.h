@@ -251,4 +251,23 @@ void gpu_free(struct gpu *g, void *p);
 /* boards/arty_a7/gfx.c: the gfx command on a driver (CMD_OK, CMD_FAIL, CMD_USAGE) */
 int gfx_command(struct gpu *g, int argc, char **argv);
 
+/* gfx.c: a run that takes the whole display (gfx demo, gfx cube), under the claim, keeps what it
+   changes and puts it back: the display, the palette, the target, the clip, the depth buffer and
+   the first `bytes` of VRAM (a copy in the kernel heap; without memory it says so and runs
+   anyway). The console is on the screen whenever VRAM or the palette changes, on the way in and
+   out; pal (NULL: none) is loaded on the way in. The way out takes the run's result r (a stopped
+   engine is not waited for again) and whether Ctrl+C ended it (ABORT first); 0 when the display
+   went back. */
+struct gfx_keep {
+    struct gpu_screen before, text;
+    u16 pal[256];
+    u32 t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1;
+    bool z_valid;
+    u32 z_base, z_stride;
+    u32 *vram, bytes;
+    bool pal_changed;
+};
+int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal, const char *what);
+int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what);
+
 #endif

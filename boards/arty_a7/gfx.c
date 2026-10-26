@@ -731,6 +731,77 @@ static int bench(struct gpu *g, int argc, char **argv) {
     return status(g, r, what);
 }
 
+/**** a run that takes the whole display: its way in and out (gfx demo, gfx cube) ****/
+
+/* What is put back afterwards is kept first: the display (mode, GFX_ registers), the palette, the
+   target, the clip, the depth buffer and the first `bytes` of VRAM (a copy in the kernel heap, four
+   words a loop; without memory it says so and runs anyway). The console is on the screen whenever
+   VRAM or the palette changes, on the way in and out: no frame shows the picture from before over
+   the run's pages or palette, or the run's pages being overwritten (text mode shows neither VRAM
+   nor GPAL). pal (NULL: none) is loaded on the way in. */
+int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal, const char *what) {
+    int r;
+    memset(k, 0, sizeof(*k));
+    gpu_screen_get(g, &k->before);
+    gpu_pal_read(g, k->pal);
+    k->t_base = g->t_base;
+    k->t_stride = g->t_stride;
+    k->t_w = g->t_w;
+    k->t_h = g->t_h;
+    k->c_x0 = g->c_x0;
+    k->c_y0 = g->c_y0;
+    k->c_x1 = g->c_x1;
+    k->c_y1 = g->c_y1;
+    k->z_valid = g->z_valid;
+    k->z_base = g->z_base;
+    k->z_stride = g->z_stride;
+    k->bytes = bytes;
+    r = gpu_sync(g, what);
+    k->text = k->before;
+    k->text.mode = GPU_MODE_TEXT;
+    if(!r && k->before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &k->text, what);
+    if(!r) {
+        k->vram = (u32 *)gpu_alloc(g, bytes);
+        if(k->vram) gpu_vram_read(g, 0, k->vram, bytes / 4);
+        else printf("    %s: no memory to keep the %lu bytes of VRAM it draws on;\n"
+                    "    they stay as it leaves them\n", what, (u_long)bytes);
+    }
+    if(!r && pal && memcmp(pal, k->pal, sizeof(k->pal))) {
+        gpu_pal_write(g, pal);
+        k->pal_changed = true;
+    }
+    return r;
+}
+
+/* Back as it was, also after Ctrl+C (intr: ABORT first), a stopped engine or an error: the console
+   on the screen while VRAM and the palette go back, the driver's target, clip and depth buffer as
+   before (queued for the engine), then the display from before. None of it needs the engine: one
+   that stopped (r) was said and ABORTed once, and nothing here waits for it again (its FIFO is
+   empty after the ABORT, so the queued words fit); after Ctrl+C a dead engine costs 50 ms (N1). */
+int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what) {
+    bool dead = r == GPU_ETIMEOUT;
+    int r2;
+    g->keep_going = true;
+    if(intr) gpu_abort(g, what);
+    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
+    r2 = gpu_screen_set(g, &k->text, what);
+    if(k->vram) {
+        gpu_vram_write(g, 0, k->vram, k->bytes / 4);
+        gpu_free(g, k->vram);
+        k->vram = NULL;
+    }
+    if(k->pal_changed) gpu_pal_write(g, k->pal);
+    if(gpu_set_target(g, k->t_base, k->t_stride, k->t_w, k->t_h, what) == GPU_ETIMEOUT) dead = true;
+    if((k->c_x0 || k->c_y0 || k->c_x1 != k->t_w || k->c_y1 != k->t_h) &&
+       gpu_set_clip(g, k->c_x0, k->c_y0, k->c_x1, k->c_y1, what) == GPU_ETIMEOUT)
+        dead = true;
+    if(k->z_valid && gpu_zbuf_set(g, k->z_base, k->z_stride, what) == GPU_ETIMEOUT) dead = true;
+    if(!dead) gpu_sync(g, what);
+    if(!r2 && k->before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &k->before, what);
+    g->keep_going = false;
+    return r2;
+}
+
 /**** gfx demo ****/
 
 /* Two pages of 320x240 (A at VRAM 0, B after it) and a row of sprites below them, all in one
@@ -845,40 +916,22 @@ static int demo_frame(struct gpu *g, struct demo *s, u32 page, const char *what)
 
 static int demo(struct gpu *g, int argc, char **argv) {
     const char *what = "gfx demo";
-    struct gpu_screen before, text, shown;
+    struct gfx_keep keep;
+    struct gpu_screen shown;
     struct demo s;
-    u16 pal_before[256], rgb[256];
-    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, spin;
+    u16 rgb[256];
+    u32 page = 1, frames = 0, last = 0, v, spin;
     u64 t0, tick, now, secs;
     long seconds = 10;
-    bool pal_changed = false, interrupted = false, dead;
+    bool interrupted = false;
     int r, r2;
     if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx demo [seconds]   (1-3600, 10 when not given)");
     if(claim(g, what)) return CMD_FAIL;
-    /* what is put back afterwards */
-    gpu_screen_get(g, &before);
-    gpu_pal_read(g, pal_before);
-    t_base = g->t_base; t_stride = g->t_stride; t_w = g->t_w; t_h = g->t_h;
-    c_x0 = g->c_x0; c_y0 = g->c_y0; c_x1 = g->c_x1; c_y1 = g->c_y1;
-    r = gpu_sync(g, what);
-    /* The console is on the screen whenever the palette and VRAM change, before and after: no frame
-       shows the picture from before over the demo's pages or palette, or the demo's pages being
-       overwritten (text mode shows neither VRAM nor GPAL). */
-    text = before;
-    text.mode = GPU_MODE_TEXT;
-    if(!r && before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &text, what);
-    if(!r) {
-        kept = (u32 *)gpu_alloc(g, DBYTES);
-        if(kept) gpu_vram_read(g, 0, kept, DBYTES / 4);
-        else printf("    gfx demo: no memory to keep the %lu bytes of VRAM it draws on;\n"
-                    "    they stay as the demo leaves them\n", (u_long)DBYTES);
-    }
-    /* RGB332, the sprites, both pages, the first frame on page A, then the display */
+    /* the display, palette, target, clip, depth buffer and the VRAM it draws on kept; the console on
+       the screen while RGB332 goes in */
     gpu_pal_make(GPU_PAL_RGB332, rgb);
-    if(!r && memcmp(rgb, pal_before, sizeof(rgb))) {
-        gpu_pal_write(g, rgb);
-        pal_changed = true;
-    }
+    r = gfx_keep_begin(g, &keep, DBYTES, rgb, what);
+    /* the sprites, both pages, the first frame on page A, then the display */
     demo_start(&s);
     if(!r) r = gpu_set_target(g, 0, DW, DW, DROWS, what);
     if(!r) r = demo_sheet(g, what);
@@ -923,27 +976,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
     if(r == GPU_EINTR || r == GPU_ECANCEL) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
-    /* Back as it was, also after Ctrl+C or a stopped engine: the console on the screen while VRAM and
-       the palette go back, the driver's target and clip as before (queued for the engine), then the
-       display from before. None of it needs the engine: one that stopped was said and ABORTed once,
-       and nothing here waits for it again (its FIFO is empty after the ABORT, so the queued words
-       fit). */
-    g->keep_going = true;
-    dead = r == GPU_ETIMEOUT;
-    if(interrupted) gpu_abort(g, what);
-    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
-    r2 = gpu_screen_set(g, &text, what);
-    if(kept) {
-        gpu_vram_write(g, 0, kept, DBYTES / 4);
-        gpu_free(g, kept);
-    }
-    if(pal_changed) gpu_pal_write(g, pal_before);
-    if(gpu_set_target(g, t_base, t_stride, t_w, t_h, what) == GPU_ETIMEOUT) dead = true;
-    if((c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h) && gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what) == GPU_ETIMEOUT)
-        dead = true;
-    if(!dead) gpu_sync(g, what);
-    if(!r2 && before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &before, what);
-    g->keep_going = false;
+    r2 = gfx_keep_end(g, &keep, r, interrupted, what);
     gpu_release(g);
     if(frames) {
         u64 us = now - t0, rate10 = us ? (u64)frames * 10000000u / us : 0;
