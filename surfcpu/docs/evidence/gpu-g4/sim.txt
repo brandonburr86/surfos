@@ -209,3 +209,12 @@ with scene 13's culling pairs half a pixel down (committed as 32e1a86 after thes
   soc-tri-top-edge-excluded      soc    caught: gpudiag: GPUDIAG: FAIL (1 of 146 checks failed) (FAIL FRAME_CRC 0x313fd79e, the model's 0xa04d1e8a); gpudiag_check board FAIL, simulation FAIL
   soc-tri-gouraud-x-step-half    soc    caught: gpudiag: GPUDIAG: FAIL (8 of 146 checks failed) (FAIL FRAME_CRC 0xc0880a88, the model's 0xf4bcafe0); gpudiag_check board FAIL, simulation FAIL
   test-gpu-mutants: 20 of 20 caught
+
+make check at 4fa9d49 (the record's commit, after scene 13's fix 32e1a86; nothing untracked, so the builds
+say no dirty tree): "check: all automated SurfCPU checks passed", 2026-10-26 06:36 to 07:08 local. Among its lines:
+  gpudiag_check: PASS (146 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 299 frames captured, 129 distinct, 125670777 cycles)
+  test-gpu: PASS
+  test_gpu: PASS (seed 1: 1120 checks; 2696 commands, 24064 words, 4638969 pixel writes in the model; VRAM compared 175 ti
+  test_gpu: PASS (seed 2: 1120 checks; 2937 commands, 26975 words, 4499950 pixel writes in the model; VRAM compared 175 ti
+  test_gpu: PASS (seed 3: 1120 checks; 2821 commands, 27966 words, 4329247 pixel writes in the model; VRAM compared 175 ti
+  SurfGPU diagnostic 1.0.0 (build 4fa9d498)   (gpudiag on the RTL SoC: scene 13 crc a04d1e8a)
