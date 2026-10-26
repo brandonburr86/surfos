@@ -745,10 +745,11 @@ unittest: test-undertow-http
 .PHONY: test-undertow-http
 
 # -- html.c (track R) --
-# html.c with url.c and util.c: the fixtures in tests/fixtures/undertow/ (NAME.html, or NAME.body for other text,
+# html.c (and html_scan.c, its tokenizer's parts, 10/25/26) with url.c and util.c: the fixtures in tests/fixtures/undertow/ (NAME.html, or NAME.body for other text,
 # in; NAME.txt and NAME.doc what must come out) and pages the test makes. The test brings its own allocator, which counts bytes so that a
 # document's bytes field is checked, so alloc.o is not linked.
 $(BUILD)/host/test_undertow_html: tests/host/test_undertow_html.c $(BUILD)/host/undertow/html.o \
+                                  $(BUILD)/host/undertow/html_scan.o \
                                   $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
@@ -770,6 +771,7 @@ $(BUILD)/host/undertow-ubsan/%.o: user/undertow/%.c
 	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -MMD -MP $(UT_ALLOC) -c $< -o $@
 
 $(BUILD)/host/test_undertow_html_ubsan: tests/host/test_undertow_html.c $(BUILD)/host/undertow-ubsan/html.o \
+                                        $(BUILD)/host/undertow-ubsan/html_scan.o \
                                         $(BUILD)/host/undertow-ubsan/url.o $(BUILD)/host/undertow-ubsan/util.o
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) $^ -o $@
