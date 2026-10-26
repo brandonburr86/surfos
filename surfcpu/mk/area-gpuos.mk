@@ -1,5 +1,8 @@
 # SurfGPU in SurfOS (milestone G3, docs/GPU.md section 15): the GPU driver of the Arty kernel
-# (boards/arty_a7/gpu.c, gpuhw.c) and the gfx command (boards/arty_a7/gfx.c).
+# (boards/arty_a7/gpu.c, gpuhw.c) and the gfx command (boards/arty_a7/gfx.c); since 10/26/26 (GPU.md
+# 15.8) GPU2's commands and gfx cube (boards/arty_a7/gfxcube.c, with gpudiag's gpucube.c), whose
+# expected FRAME_CRCs boards/arty_a7/gen/gfxcube_expect.c works out from the C model at build time
+# (here into build/gpuos/gen/, for the kernel by arch/riscv32/kernel.mk).
 #
 #   make test-gpuos-host   the driver and gfx built for the host against the C model of the engine
 #                          (sim/models/gpu_model.c) through a stand-in for the hardware
@@ -9,9 +12,11 @@
 #                          (build/sim/surfsim_gpu): gfx commands, every gfx crc against the frames
 #                          captured at the VGA pins and, in mode 2, against gfxref (the pictures worked
 #                          out from GPU.md, not from SurfOS's code), with which gfxscene must agree; the
-#                          GPU's interrupt, the overlay, gfx demo 1, the bench; and on the SoC without one
-#                          (build/sim/surfsim) gfx says there is none (boards/arty_a7/tests/gpuos_test.py;
-#                          two runs side by side, under three minutes); on check
+#                          GPU's interrupt (its waits woken), the overlay, gfx demo 1, the bench, GPU2's
+#                          triangles and FLIP, gfx cube 1 (every frame at the pins one of the table's);
+#                          and on the SoC without one (build/sim/surfsim) gfx says there is none
+#                          (boards/arty_a7/tests/gpuos_test.py; two runs side by side, about four
+#                          minutes); on check
 #   make gfxscene          build/gpuos/gfxscene: gfx command lines replayed in the C model, the
 #                          FRAME_CRCs SurfOS must print for them
 #   make gfxref            build/gpuos/gfxref: test-gpuos's pictures from GPU.md's words and pixels
@@ -122,6 +127,7 @@ test-gpuos: build-kernel-os $(FW)/surfboot.mem $(BUILD)/sim/surfsim_gpu $(BUILD)
 	$(Q)$(PYTHON) ../boards/arty_a7/tests/gpuos_test.py --surfsim-gpu $(BUILD)/sim/surfsim_gpu --surfsim $(BUILD)/sim/surfsim \
 	  --rom $(FW)/surfboot.mem --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN \
 	  --gfxscene $(GPUOS_OUT)/gfxscene --gfxref $(GPUOS_OUT)/gfxref --gpu-h firmware/include/surfcpu/gpu.h \
+	  --cube-expect ../build/riscv32/arty_a7/gen/gfxcube_expect.h \
 	  --work $(GPUOS_OUT)/system --evidence $(GPUOS_EVIDENCE)/test-gpuos.txt
 else
 test-gpuos:

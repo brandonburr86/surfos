@@ -8,7 +8,8 @@ File: gfxscene.c    Date: 10/25/26 (SurfGPU G3)
 Runs the gfx command lines of SCRIPT (one per line; empty lines and lines starting with # are
 skipped) through the same gfx.c and gpu.c that SurfOS runs, on the stand-in of gpustub.c, whose
 engine and display are sim/models/gpu_model.c, from the state SurfOS starts in (text mode,
-GFX_BASE 0, GFX_STRIDE 640, GFX_SCALE 1, GPAL RGB332, the reset target). For each `gfx crc` it
+GFX_BASE 0, GFX_STRIDE 640, GFX_SCALE 1, GPAL RGB332, the reset target), with the gpu.ID that
+surfcpu/gpu.h gives the engine (10/26/26: GPU2, so its commands run too). For each `gfx crc` it
 prints
 
   expect <n> <crc> mode <m>
@@ -61,6 +62,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     stub_init(&s, 1);
+    s.id = GPU_ID_VALUE;                /* 10/26/26: the engine gpu.h describes (GPU2 since G4), as test-gpuos's RTL */
     if(gpu_probe(&g, &s.port, SURF_SYSINFO_FEATURES_GPU_MASK | SURF_SYSINFO_FEATURES_VIDEO_MASK |
                  SURF_SYSINFO_FEATURES_IRQ_MASK) != GPU_OK) {
         fprintf(stderr, "gfxscene: the stand-in is no GPU?\n");

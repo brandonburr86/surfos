@@ -1046,6 +1046,10 @@ def main():
         # 10/25/26 (SurfGPU G3): the Arty's gfx command; QEMU's virt machine has no GPU
         ok, out = cmd('gfx', ['gfx: no GPU on this board (qemu_virt)'])
         check(ok and "SurfGPU is the Arty A7's" in out, 'gfx: there is no GPU on this board (SurfGPU is the Arty\'s)')
+        # 10/26/26 (SurfGPU GPU2: gfx tri, flip, cube): the same
+        oks = [cmd(line, ['gfx: no GPU on this board (qemu_virt)'])[0] for line in
+               ('gfx tri 0 0 9 0 0 9 1', 'gfx flip', 'gfx cube 1')]
+        check(all(oks), 'gfx tri, gfx flip, gfx cube: no GPU on this board either')
 
         ok, out = cmd('ps', ['SurfOS Task List'])
         names = ['Kernel Idle Task', 'init', 'heartbeat', 'Shell 0', 'Shell 1', 'Shell 2', 'Shell 3']
