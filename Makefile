@@ -1048,8 +1048,10 @@ unittest: unittest-win
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
-$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ) -o $@
+$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o \
+                             $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o \
+	    $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ) -o $@
 unittest-mouse: $(BUILD)/host/test_ps2mouse $(BUILD)/host/test_usbmouse
 	$(BUILD)/host/test_ps2mouse
 	$(BUILD)/host/test_usbmouse
@@ -1075,12 +1077,13 @@ unittest: unittest-i2c
 .PHONY: unittest-i2c
 
 # Bounded firmware fields and HID reports used by the native touchpad binding.
+# 10/26/26: their .d files (-MMD) make the headers prerequisites too, which gcc must not be given to compile
 $(BUILD)/host/test_amlfield: tests/host/test_amlfield.c $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 $(BUILD)/host/test_i2chid: tests/host/test_i2chid.c $(BUILD)/host/kernel/driver/i2chid.o
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 $(BUILD)/host/test_hidpointer: tests/host/test_hidpointer.c $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 TOUCHPAD_TEST_OBJ = $(BUILD)/host/kernel/driver/amlfield.o $(BUILD)/host/kernel/driver/i2chid.o \
 	$(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
 $(BUILD)/host/test_touchpad: tests/host/test_touchpad.c driver/touchpad.c $(TOUCHPAD_TEST_OBJ)

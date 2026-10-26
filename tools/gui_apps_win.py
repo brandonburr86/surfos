@@ -7,6 +7,8 @@ lists /initrd/bin's programs and offers wcalc, which opens the Calculator as a p
 own, with the focus (the launcher started it), and counts by keys and by clicks; Esc ends it. 10/25/26 (the review):
 a window comes in front without the focus (its title bar muted), and a key typed meanwhile stays the Terminal's; a
 click on its title bar gives it the focus.
+(stage C8) The wheel over wdemo: a notch away from the user is WIN_EV_WHEEL -3, toward it 3 (QEMU's PS/2 mouse, a wheel
+mouse once the IntelliMouse handshake has found it).
 (stage C7, the platform's whole check) wintest tty names the Terminal's pty; wintest pty in the Terminal is refused on
 a pty of its own while this desktop runs. wdemo echoes a press and a release of the button with where they were; F2
 shows a text console and F1 brings the desktop back with wdemo's window as it was; its corner dragged gives it a new
@@ -282,6 +284,13 @@ def checks(d):
         d.visible('F1 brings the desktop back, wdemo\'s window as it was',
                   lambda s: wdemo_shown(d, s, 'last: pointer 100,60 buttons 0'), 'guiapps-wdemo-f1.png')
         d.position[:] = [480, 270]                  # a desktop that has the screen again puts the pointer in the middle
+        # 10/26/26 (stage C8): the wheel of QEMU's PS/2 mouse, a wheel mouse to SurfOS (the IntelliMouse handshake)
+        d.move(cx + 150, cy + 50)
+        d.vm.mon.cmd('mouse_move 0 0 1')            # one notch away from the user
+        d.visible('the wheel over wdemo, a notch away from the user, is its last event: 3 rows up',
+                  lambda s: wdemo_shown(d, s, 'last: wheel -3'))
+        d.vm.mon.cmd('mouse_move 0 0 -1')
+        d.visible('and a notch toward the user: 3 rows down', lambda s: wdemo_shown(d, s, 'last: wheel 3'))
         gx, gy = SECOND[0] + 362 - 6, SECOND[1] + 240 + TITLE_H + 1 - 6
         d.move(gx, gy)                              # the corner grip, the desktop's own
         d.button(True)

@@ -655,6 +655,15 @@ static void notepad_review(void) {
     click(w->x+l.bar_x+5,w->y+l.find_y-4);
     CHECK(g.note.top==note_lines(&g.note)-l.rows);
     note_wheel(&g,1000); CHECK(g.note.top==note_lines(&g.note)-l.rows);
+    /* 10/26/26 (C8): a turn of the wheel during a drag-select scrolls, and the selection's end follows to the line now
+       under the pointer (the drag runs again after the scroll) */
+    g.note.top=0;
+    e.x=w->x+l.tx+8; e.y=w->y+l.ty+2; e.wheel=0; e.buttons=1; gui_pointer(&g,&e);    /* line 0 */
+    e.y=w->y+l.ty+2+2*16; gui_pointer(&g,&e);                                       /* line 2 */
+    i=(int)g.note.cursor;
+    e.wheel=-1; gui_pointer(&g,&e); e.wheel=0;          /* a notch toward the user, the pointer where it was */
+    CHECK(g.note.top==3 && (int)g.note.cursor==i+3*5 && note_has_selection(&g.note));
+    e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
     /* a drag past the right edge scrolls sideways only as far as the line goes */
     note_reset(&g.note); for(i=0;i<150;i++) type("x");
     note_layout(&g,&l); g.note.left=0;

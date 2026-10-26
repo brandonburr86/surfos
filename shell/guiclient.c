@@ -33,7 +33,8 @@ press elsewhere (a drag from the desktop) is not the program's either. When the 
 the content one event says where it went: a position outside the content. A dialog, a menu, the
 window minimized or let go, or the buttons let go with no event (the screen came back) end a
 grab with an event without buttons. The wheel over the content is its program's (rows,
-positive down). Keys (client_key()): while a program's window is in front every key but Ctrl+G
+positive down); 10/26/26 (C8): during a grab, the grabbing window's wherever the pointer is, and
+with a menu open nobody's. Keys (client_key()): while a program's window is in front every key but Ctrl+G
 and Ctrl+Space (the menus) is its program's, as in the Terminal.
 
 Closing. The close button (or Close in the menus) sends CLOSE; the program closes its window,
@@ -379,10 +380,11 @@ bool client_pointer(struct gui_state *g, unsigned old) {
     return true;
 }
 
+/* over its content; 10/26/26 (C8): during its grab wherever the pointer is, as its pointer events */
 void client_wheel(struct gui_state *g, int id, int rows) {
     struct gui_client *c = client_of(g, id);
     int x, y;
-    if(c && over(g, id, &x, &y)) send(g, c, WIN_EV_WHEEL, x, y, (unsigned)rows);
+    if(c && (over(g, id, &x, &y) || g->clients.grab == id)) send(g, c, WIN_EV_WHEEL, x, y, (unsigned)rows);
 }
 
 /**** keys and closing ****/

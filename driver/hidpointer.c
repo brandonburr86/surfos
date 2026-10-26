@@ -6,6 +6,11 @@ File: hidpointer.c Date: 10/12/26
 HID 1.11 section 6.2.2; Usage Tables Generic Desktop, Button and Digitizer pages.
 https://www.usb.org/sites/default/files/hid1_11.pdf
 https://www.usb.org/sites/default/files/hut1_5.pdf
+10/26/26 (stage C8): the first relative Wheel of a pointer collection is bound too (a report's
+wheel field, for the USB boot mouse); a second one is skipped, as a second InputMode is. A Wheel
+never changes what the parse returns: one that cannot be bound (wrapped, nonlinear, buffered, a
+range that does not fit) is left unbound, and one bound is kept only in a report whose pointer
+fields are of its collection.
 */
 #include <sys/hidpointer.h>
 
@@ -32,6 +37,7 @@ struct parser {
     struct locals local;
     struct scope scope, enclosing[COLLECTION_DEPTH];
     u32 owner, report_owner[HID_POINTER_REPORTS];
+    u32 wheel_owner[HID_POINTER_REPORTS];   /* 10/26/26: the collection of each report's Wheel */
     u32 feature_data[HID_POINTER_REPORTS];  /* Non-constant Feature fields per report. */
 };
 
@@ -171,7 +177,16 @@ static enum hid_pointer_error data_item(struct parser *p, u_int tag, u32 flags) 
         if(tag==8 && p->scope.pointer) {
             if((flags&4) && usage==0x10030) field=&r->x;
             else if((flags&4) && usage==0x10031) field=&r->y;
-            else if(!(flags&4) && usage>=0x90001 && usage<=0x90003) {
+            else if((flags&4) && usage==0x10038) {
+                /* 10/26/26: the first Wheel that can be bound; it claims neither the report nor a pointer
+                   (the end of the parse keeps it in its own collection's report only) */
+                if(!r->wheel.bit_size && !(flags&(0x100|0x10|8)) &&
+                   bind_field(p,&r->wheel,offset+i*p->g.size)==HID_POINTER_OK) {
+                    r->wheel.null_state=(flags&0x40)!=0;
+                    p->wheel_owner[ri]=p->scope.owner;
+                }
+                continue;
+            } else if(!(flags&4) && usage>=0x90001 && usage<=0x90003) {
                 if(p->g.minimum!=0 || p->g.maximum!=1) return HID_POINTER_UNSUPPORTED;
                 field=&r->button[usage-0x90001];
             }
@@ -255,6 +270,10 @@ enum hid_pointer_error hid_pointer_parse(const u8 *descriptor, u_int length,
         return HID_POINTER_MALFORMED;
     for(i=0;i<layout.count;i++) {
         if(layout.numbered && !layout.report[i].id) return HID_POINTER_MALFORMED;
+        if(p.wheel_owner[i]!=p.report_owner[i]) {   /* 10/26/26: a Wheel only with its pointer */
+            struct hid_pointer_field none={0};
+            layout.report[i].wheel=none;
+        }
         if(layout.mode.field.bit_size && layout.report[i].id==layout.mode.report_id) {
             layout.mode.report_bytes=(layout.report[i].feature_bits+7)/8+(layout.numbered?1:0);
             layout.mode.exclusive=p.feature_data[i]==1;

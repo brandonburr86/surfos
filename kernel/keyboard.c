@@ -18,6 +18,8 @@ also polled on every timer tick in case IRQ 1 never reaches the CPU. The handler
 reads port 0x60 when the status register says a byte is waiting, so the interrupt and
 the poll never take the same byte twice. 10/10/26: the same controller also supplies
 standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
+10/26/26 (track C's C8): the IntelliMouse handshake finds a wheel mouse, whose wheel is
+reported with its motion.
 */
 
 #include <surfos/keyboard.h>
@@ -199,7 +201,7 @@ static void i8042_byte(u_char status, u_char byte) {
     if(status & KBD_AUX) {
         struct ps2mouse_event event;
         if(mouse_present && ps2mouse_byte(&mouse, byte, (u32)getticks() * (1000 / HZ), &event))
-            pointer_report(POINTER_PS2, event.dx, event.dy, 0, event.buttons);
+            pointer_report(POINTER_PS2, event.dx, event.dy, event.wheel, event.buttons);
     } else if(byte != 0xFA && byte != 0xFE && byte != 0xFC && byte != 0xFD) {
         keyboard_byte(byte);
     }
@@ -317,9 +319,36 @@ static int i8042_setup(void) {
     return 0;
 }
 
+/* the mouse reset to its defaults, three-byte packets in stream mode: the reset (BAT can take 500 ms on a physical
+   device; every wait stays bounded), defaults, stream mode */
+static bool i8042_mouse_reset(void) {
+    return i8042_device_command(true, 0xFF) && i8042_reply(true, false, 750) == 0xAA &&
+           i8042_reply(true, false, 50) == 0x00 && i8042_device_command(true, 0xF6) && i8042_device_command(true, 0xEA);
+}
+
+/* 10/26/26 (C8): the IntelliMouse handshake: sample rates 200, 100 and 80, then the ID, 3 for a wheel mouse, whose
+   packets have a fourth byte from then on: 1 for one, 0 for a three-button mouse, -1 when the mouse could not be
+   put back. A mouse takes the four-byte packets at the third rate, before the ID is asked: once 80 was taken, or
+   may have been (the third pair failed: its ACK lost, or later than the wait), the ID says which; one that does not
+   come is asked once more, and a mouse that still says none, or names another protocol, is reset to three-byte
+   packets (F6 alone does not undo it). The rate is 100 a second again whatever happens (the reset's) */
+static int i8042_wheel(void) {
+    static const u_char rates[] = { 200, 100, 80 };
+    int i, id = 0;
+    for(i = 0; i < 3; i++)
+        if(!i8042_device_command(true, 0xF3) || !i8042_device_command(true, rates[i])) break;
+    if(i >= 2) {
+        id = i8042_device_command(true, 0xF2) ? i8042_reply(true, false, 50) : -1;
+        if(id < 0) id = i8042_device_command(true, 0xF2) ? i8042_reply(true, false, 50) : -1;
+        if(id != 0 && id != 3) return i8042_mouse_reset() ? 0 : -1;
+    }
+    if(i8042_device_command(true, 0xF3)) i8042_device_command(true, 100);
+    return id == 3;
+}
+
 static void i8042_mouse_setup(void) {
-    int cfg;
-    ps2mouse_reset(&mouse);
+    int cfg, wheel;
+    ps2mouse_set_wheel(&mouse, false);
     pointer_device(POINTER_PS2, false);
     if(bootinfo_has_arg(&bootinfo, "mouse=off")) {
         mouse_description = "disabled (mouse=off)";
@@ -333,19 +362,19 @@ static void i8042_mouse_setup(void) {
        device, so real keyboard input remains live and is demultiplexed below. */
     cfg = (cfg | 0x20) & ~(0x02 | 0x10);
     if(!i8042_config(cfg) || !i8042_command(0xAE) || !i8042_command(0xA8)) goto failed;
-    /* Reset also clears any wheel protocol left by firmware. F6 alone does not.
-       BAT can take 500 ms on a physical device; every wait remains bounded. */
-    if(!i8042_device_command(true, 0xFF) || i8042_reply(true, false, 750) != 0xAA ||
-       i8042_reply(true, false, 50) != 0x00) goto failed;
-    if(!i8042_device_command(true, 0xF6) || !i8042_device_command(true, 0xEA)) goto failed;
+    /* Reset also clears any wheel protocol left by firmware. F6 alone does not. */
+    if(!i8042_mouse_reset()) goto failed;
+    wheel = i8042_wheel();                              /* 10/26/26 (C8) */
+    if(wheel < 0) goto failed;
     if(!i8042_config((cfg | 0x02) & ~0x20)) goto failed;
     if(!i8042_device_command(true, 0xF4)) goto failed;
     config_after = (cfg | 0x02) & ~0x20;
     mouse_present = true;
-    ps2mouse_reset(&mouse);
+    ps2mouse_set_wheel(&mouse, wheel == 1);
     pointer_device(POINTER_PS2, true);
     add_irq_handler(IRQ_MOUSE, keyboard_handler, 0);
-    mouse_description = polling ? "PS/2 three-button mouse (IRQ 12 + poll)" : "PS/2 three-button mouse (IRQ 12)";
+    mouse_description = wheel ? (polling ? "PS/2 wheel mouse (IRQ 12 + poll)" : "PS/2 wheel mouse (IRQ 12)")
+                              : (polling ? "PS/2 three-button mouse (IRQ 12 + poll)" : "PS/2 three-button mouse (IRQ 12)");
     return;
 failed:
     i8042_command(0xA7);

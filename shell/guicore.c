@@ -25,6 +25,9 @@ Window menu, the tick and the end; leaving the desktop with programs' windows op
 10/25/26 (stage C6): the Calculator's arithmetic is shell/guicalc.c's (the program wcalc shares it),
 and Apps > Run program... (the programs of /initrd/bin in a list, and the line to run: guidialog.c's
 GUI_DLG_RUN) starts one on the desktop's console (struct gui_sys's run).
+10/26/26 (stage C8): a turn of the wheel that moves nothing else (the mice send it in a report of its
+own) is only the wheel's: a program's window under the pointer gets WIN_EV_WHEEL and no pointer event
+after it, so the wheel is its last event.
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -969,6 +972,8 @@ static void wheel(struct gui_state *g, int dz) {
     int i, id, lines = -dz * 3;                         /* the wheel turned away from the user: up */
     struct gui_window *w;
     if(g->dialog.kind) { dialog_wheel(g, lines); return; }
+    if(g->menu) return;                                 /* 10/26/26 (C8): a menu open drops it */
+    if(g->clients.grab >= 0) { client_wheel(g, g->clients.grab, lines); return; }   /* a program's grab: its own */
     for(i = GUI_SLOTS - 1; i >= 0; i--) {
         id = g->order[i];
         w = &g->win[id];
@@ -999,10 +1004,14 @@ void gui_release(struct gui_state *g) {
 void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     bool press=(e->buttons&POINTER_LEFT) && !(g->buttons&POINTER_LEFT);
     unsigned old=g->buttons;
-    int i,id,x,y;
+    int i,id,x,y,oldx=g->x,oldy=g->y;
     struct gui_window *w;
     g->x=gui_clamp(e->x,0,g->width-1); g->y=gui_clamp(e->y,0,g->height-1); g->buttons=e->buttons;
-    if(e->wheel) wheel(g,e->wheel);
+    if(e->wheel) {                                      /* 10/26/26 (C8): a turn alone is the wheel's, but a drag */
+        wheel(g,e->wheel);                              /* under way goes on after the scroll (a selection's end) */
+        if(g->x==oldx && g->y==oldy && g->buttons==old && g->drag<0 && g->resize<0 && g->scroll<0 &&
+           g->app_drag<0 && !g->note.selecting && !g->drawing) return;
+    }
     if(!(e->buttons&POINTER_LEFT)) gui_release(g);
     if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
     if(client_pointer(g,old)) return;                   /* 10/25/26: a program's: over its content, or held for it */

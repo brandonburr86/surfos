@@ -652,9 +652,20 @@ and its title says what it was last sent.
 The driver supports three-button PS/2 relative mice and PS/2-compatible touchpads,
 and USB HID **boot-protocol** mice connected directly to a supported xHCI root
 port. USB attach/unplug is supported; unplug releases that device's buttons.
-The existing USB stack does not enumerate devices behind hubs. Wheel reports,
-USB report-protocol-only devices and multi-touch gestures are not implemented.
+The existing USB stack does not enumerate devices behind hubs. USB
+report-protocol-only devices and multi-touch gestures are not implemented.
 `mouse=off` on the kernel command line disables PS/2 mouse probing for diagnostics.
+*10/26/26:* the wheel. A PS/2 mouse that answers the IntelliMouse handshake (sample
+rates 200, 100 and 80, then ID 3) sends four-byte packets, the fourth its wheel's, and
+`pointerinfo` calls it a wheel mouse; a USB boot mouse whose report descriptor puts its
+Wheel in the boot report's fourth byte (an 8-bit field at bit 24, with no report IDs) has
+it there, and lsusb says "boot mouse with a wheel". A notch scrolls the window under the
+pointer three rows (Notepad, Files, Help, the suite's applications), and a program's window
+gets it as WIN_EV_WHEEL (rows, + down: -3 for a notch away from the user). A turn that
+moves nothing else, as the mice report it, is the wheel's alone: no pointer event follows
+it, so the wheel is a program's last event. With a menu open the wheel does nothing, and
+while a program holds the pointer (a button pressed in its window and not let go) the
+wheel is that program's, wherever the pointer is.
 
 The PS/2 controller routes keyboard and auxiliary bytes separately. Its reset,
 ACK and self-test waits are bounded; an absent mouse leaves the keyboard usable.

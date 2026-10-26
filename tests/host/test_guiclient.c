@@ -13,7 +13,9 @@
    gives it the focus; gui_working() for the desktop's pace.
    10/25/26 (stage C6): Apps > Run program...: /initrd/bin's programs in a list, the line to run (a program picked,
    arguments typed), run through struct gui_sys's run; a refusal shown. The window of a program the launcher just
-   started takes the focus when it appears, and so does that of the focused Terminal's foreground job. */
+   started takes the focus when it appears, and so does that of the focused Terminal's foreground job.
+   10/26/26 (stage C8): a turn of the wheel alone is the window's last event, no pointer event after it; one in a
+   report that moves too is followed by where the pointer went. */
 #include "gui_fake.h"
 
 static struct gui_state g;
@@ -310,11 +312,37 @@ static void test_wheel(void) {
     spin(1);                                            /* away from the user: up */
     CHECK(count(a, WIN_EV_WHEEL) == 1 && (int)last(a, WIN_EV_WHEEL)->value == -3 && last(a, WIN_EV_WHEEL)->x == 7 &&
           last(a, WIN_EV_WHEEL)->y == 9);
+    CHECK(count(a, WIN_EV_POINTER) == 0);               /* 10/26/26 (C8): the wheel alone, its last event */
     spin(-2);
     CHECK(count(a, WIN_EV_WHEEL) == 2 && (int)last(a, WIN_EV_WHEEL)->value == 6);
+    {                                                   /* a turn in a report that moves too: and where it went */
+        struct pointer_event e;
+        memset(&e, 0, sizeof(e));
+        e.x = g.x + 3;
+        e.y = g.y;
+        e.wheel = 1;
+        gui_pointer(&g, &e);
+    }
+    CHECK(count(a, WIN_EV_WHEEL) == 3 && count(a, WIN_EV_POINTER) == 1 && last(a, WIN_EV_POINTER)->x == 10);
     at(cx(id) + 7, g.win[id].y + 5);                    /* over its title bar: nothing */
     spin(1);
-    CHECK(count(a, WIN_EV_WHEEL) == 2);
+    CHECK(count(a, WIN_EV_WHEEL) == 3);
+    /* 10/26/26 (C8): during its grab the wheel is the grabbing window's wherever the pointer is, not the window's
+       under it; with a menu open nobody's */
+    at(cx(id) + 20, cy(id) + 20);
+    hold(POINTER_LEFT);
+    CHECK(g.clients.grab == id);
+    at(900, 300);                                       /* outside, over the desktop */
+    spin(1);
+    CHECK(count(a, WIN_EV_WHEEL) == 4 && (int)last(a, WIN_EV_WHEEL)->value == -3 &&
+          last(a, WIN_EV_WHEEL)->x == 900 - cx(id) && last(a, WIN_EV_WHEEL)->y == 300 - cy(id));
+    hold(0);
+    at(cx(id) + 7, cy(id) + 9);
+    gui_key(&g, 7);                                     /* Ctrl+G: the menus */
+    CHECK(g.menu);
+    spin(1);
+    CHECK(count(a, WIN_EV_WHEEL) == 4);
+    gui_key(&g, 27);
 }
 
 /**** sizes ****/

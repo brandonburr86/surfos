@@ -1,4 +1,5 @@
-/* Hand-built HID descriptors exercise the actual parser and report decoder. */
+/* Hand-built HID descriptors exercise the actual parser and report decoder.
+   10/26/26 (stage C8): a report's wheel, the first relative Generic Desktop Wheel. */
 #include <sys/hidpointer.h>
 #include "touchpad_06cb_ce2d.h"
 int printf(const char *format, ...);
@@ -32,6 +33,49 @@ static void test_mouse(void) {
           "signed movement and three independent buttons decoded");
     check(hid_pointer_decode(&l,shortp,sizeof(shortp),&s)==HID_POINTER_SHORT &&
           s.dx==-127 && s.buttons==5, "short input cannot synthesize button releases");
+}
+/* 10/26/26 (stage C8): a relative Wheel after X and Y is the report's wheel (a USB boot mouse's fourth byte); a
+   second Wheel is skipped, and a mouse without one has none. One that cannot be bound, or is another collection's,
+   is left out and the report parses as it would without it */
+static void test_wheel(void) {
+    static const u8 wheel[] = {
+        0x05,1, 0x09,2, 0xa1,1, 0x09,1, 0xa1,0,
+        0x05,9, 0x19,1, 0x29,3, 0x15,0, 0x25,1, 0x75,1, 0x95,3, 0x81,2,
+        0x75,5, 0x95,1, 0x81,1,
+        0x05,1, 0x09,0x30, 0x09,0x31, 0x09,0x38, 0x09,0x38, 0x15,0x81, 0x25,0x7f,
+        0x75,8, 0x95,4, 0x81,6, 0xc0,0xc0
+    };
+    struct hid_pointer_layout l={0};
+    check(hid_pointer_parse(wheel,sizeof(wheel),&l)==HID_POINTER_OK && l.report[0].wheel.bit_offset==24 &&
+          l.report[0].wheel.bit_size==8 && l.report[0].wheel.minimum==-127 && l.report[0].x.bit_offset==8,
+          "a relative Wheel after X and Y bound at bit 24; a second one skipped");
+    check(hid_pointer_parse(mouse,sizeof(mouse),&l)==HID_POINTER_OK && !l.report[0].wheel.bit_size,
+          "a mouse without a Wheel has none");
+    /* a Wheel never fails the parse (touchpad.c parses with it too): one that cannot be bound is left out */
+    copy_mouse(); used-=2;
+    ADD(0x09,0x38, 0x95,1, 0x81,0x0e, 0xc0,0xc0);       /* wrapped */
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_OK && l.has_pointer && !l.report[0].wheel.bit_size &&
+          l.report[0].input_bits==32 && l.report[0].x.bit_offset==8, "a wrapped Wheel is left out; the report parses");
+    copy_mouse(); used-=2;
+    ADD(0x09,0x38, 0x95,1, 0x81,0x16, 0x09,0x38, 0x95,1, 0x81,0x06, 0xc0,0xc0);    /* nonlinear, then a plain one */
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_OK && l.report[0].wheel.bit_offset==32 &&
+          l.report[0].wheel.bit_size==8, "a nonlinear Wheel is left out; the first one that can be bound is bound");
+    copy_mouse(); used-=2;
+    ADD(0x09,0x38, 0x26,0xff,0x7f, 0x95,1, 0x81,0x06, 0xc0,0xc0);  /* 32767 in eight bits */
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_OK && l.has_pointer && !l.report[0].wheel.bit_size,
+          "a Wheel whose range does not fit its bits is left out; the report parses");
+    copy_mouse();                                       /* another collection's Wheel in the same report */
+    ADD(0x05,1, 0x09,2, 0xa1,1, 0x09,1, 0xa1,0, 0x09,0x38, 0x15,0x81, 0x25,0x7f, 0x75,8, 0x95,1, 0x81,6, 0xc0,0xc0);
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_OK && l.count==1 && l.report[0].x.bit_offset==8 &&
+          !l.report[0].wheel.bit_size, "a Wheel of another collection after the pointer's fields is left out");
+    used=0;                                             /* and before them */
+    ADD(0x05,1, 0x09,2, 0xa1,1, 0x09,1, 0xa1,0, 0x09,0x38, 0x15,0x81, 0x25,0x7f, 0x75,8, 0x95,1, 0x81,6, 0xc0,0xc0);
+    add(mouse,sizeof(mouse));
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_OK && l.report[0].x.bit_offset==16 &&
+          !l.report[0].wheel.bit_size, "a Wheel of another collection before the pointer's fields is left out");
+    used=0;
+    ADD(0x05,1, 0x09,2, 0xa1,1, 0x09,1, 0xa1,0, 0x09,0x38, 0x15,0x81, 0x25,0x7f, 0x75,8, 0x95,1, 0x81,6, 0xc0,0xc0);
+    check(hid_pointer_parse(desc,used,&l)==HID_POINTER_UNSUPPORTED, "a Wheel alone makes no pointer");
 }
 static void test_bit_fields(void) {
     struct hid_pointer_field f={3,12,-2048,2047};
@@ -372,7 +416,7 @@ int main(void) {
     test_mouse(); test_bit_fields(); test_ids_and_mode(); test_split_reports_and_push();
     test_full_report_and_failure(); test_extended_usages_and_mode_only();
     test_synaptics_ce2d(); test_mode_report_sharing(); test_ranges_and_quirks();
-    test_invalid(); test_mutated_descriptors();
+    test_invalid(); test_mutated_descriptors(); test_wheel();
     printf("hidpointer: %u checks, %u failures\n",checks,failures);
     return failures ? 1 : 0;
 }

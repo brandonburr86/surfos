@@ -6,6 +6,9 @@ application state is read from framebuffer pixels, not guest memory or hooks.
 10/17/26: the menus and windows of the new layout; Notepad and Files on a FAT32
 data stick (usb1), which is read back on the host afterwards; the desktop waits
 through a console switch and comes back on its own console.
+10/26/26 (stage C8 of docs/superpowers/plans/2026-10-25-app-windows.md): the wheel, from QEMU's
+monitor (mouse_move 0 0 1), of the PS/2 mouse (a wheel mouse by the IntelliMouse handshake) and of
+the USB mouse: each scrolls Help three lines a notch.
 """
 import os
 import re
@@ -36,6 +39,7 @@ SKETCH = (264, 64)
 SETTINGS = (280, 72)
 NOTEPAD = (296, 38, 640, 420)
 FILES = (24, 48, 600, 380)
+HELP, HELP_MENU_X, TITLE_H = (210, 38), 340, 28  # 10/26/26: Help's window, and the Help menu's title text
 STICK = {'notes.txt': b'Hello from the Mac\r\nSecond line\r\n', 'Folder/inner.txt': b'inside\n'}
 EDITED = b'SurfOS was here. Hello from the Mac\r\nSecond line\r\n'
 
@@ -137,6 +141,27 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
     def key(chord):
         vm.mon.cmd('sendkey ' + chord)
 
+    def help_from(line):
+        """a predicate: Help shows its text from line 0 (its heading, The desktop) or 3 on"""
+        x, y = HELP[0] + 14, HELP[1] + TITLE_H + 8
+        if line == 0:
+            return lambda s: _text(s, font, x + 16, y, 'The desktop', TEAL)
+        return lambda s: _text(s, font, x, y, 'Ctrl+O opens a file in Notepad', INK)
+
+    def help_wheel(mouse):
+        """10/26/26 (stage C8): Help > Keyboard and mouse, the wheel over Help (a notch toward the user is three lines
+        down, one away from the user three lines up), then Esc closes it"""
+        click(HELP_MENU_X + 10, 14)
+        click(HELP_MENU_X + 10, ITEM_Y + 8)
+        visible(f'{mouse}: Help > Keyboard and mouse opens Help at its first line', help_from(0))
+        move(HELP[0] + 270, HELP[1] + 200)
+        vm.mon.cmd('mouse_move 0 0 -1')
+        visible(f'{mouse}: a notch of the wheel toward the user scrolls Help three lines down', help_from(3))
+        vm.mon.cmd('mouse_move 0 0 1')
+        visible(f'{mouse}: a notch away from the user, three lines back up', help_from(0))
+        key('esc')
+        visible(f'{mouse}: Esc closes Help', lambda s: not help_from(0)(s) and not help_from(3)(s))
+
     def desktop():
         position[:] = [480, 270]
         vm.send('gui\n')
@@ -235,8 +260,8 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
             require(command + ' rejects extra arguments with usage',
                     vm.expect('usage: ' + command, 15) and vm.expect(PROMPT, 15))
         vm.send('pointerinfo\n')
-        require('native PS/2 mouse is detected before GUI launch',
-                vm.expect('PS/2 three-button mouse', 15) and vm.expect(PROMPT, 15))
+        require('native PS/2 mouse is detected before GUI launch, a wheel mouse (10/26/26: the IntelliMouse handshake)',
+                vm.expect('PS/2 wheel mouse', 15) and vm.expect(PROMPT, 15))
         desktop()
         vm.screen('gui-desktop.png')
 
@@ -288,6 +313,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                 _text(s, font, 18, ITEM_Y + ITEM_H, 'Pointer & desktop', INK, PAPER))
         click(800, 400)
         visible('clicking outside a menu closes it', lambda s: _pixel(s, 194, 32) == OCEAN)
+        help_wheel('PS/2 wheel')
         key('ctrl-k')
         visible('Ctrl+K restores Calculator with its answer intact', display(42))
 
@@ -317,6 +343,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                 lambda s: _text(s, font, APPS_ITEM_X, ITEM_Y, 'Notepad', PAPER))
         click(*apps_item(2))
         visible('native USB mouse selects Calculator', display(42))
+        help_wheel('USB wheel')
         move(860, 64)
         button(True)
         move(870, 74)
