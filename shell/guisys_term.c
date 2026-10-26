@@ -40,6 +40,10 @@ sys_openpty() answers a program), so no master is ever held here only. Closing t
 its place (interrupts off) before the descriptor is closed. A task killed at once at any point of an
 open or a close thus leaves its master to its end (fd_close_all()), never in a place to be closed a
 second time, and the next open takes back every place of a task that is gone, whatever it was doing.
+10/25/26 (programs' windows, kernel/win.c): a session's pty is adopted by the desktop as soon as it is
+open, so the programs started in the Terminal may open windows on it, and dropped with the master. Once
+its shell runs, the desktop knows its pid (win_adopt_shell()): only the jobs that shell makes take the
+focus as the pty's foreground (stage C6).
 */
 #include <stdio.h>
 #include <surfos/types.h>
@@ -47,6 +51,7 @@ second time, and the next open takes back every place of a task that is gone, wh
 #include <surfos/irq.h>
 #include <surfos/klog.h>
 #include <surfos/pty.h>
+#include <surfos/win.h>
 #include <fs/vfs.h>
 #include "guisys.h"
 
@@ -106,6 +111,7 @@ static void drop(struct session *s) {
     f = s->master;
     s->master = NULL;
     irq_restore(flags);
+    if(f) win_drop(s->pty);                             /* 10/25/26: its programs open no more windows here */
     if(f && fd_get(s->fd) == f) fd_close(s->fd);
 }
 
@@ -157,6 +163,8 @@ int guisys_term_open(void *ctx, int cols, int rows) {
         return r;
     }
     pty_resize(f, (u32)cols, (u32)rows);                /* before the shell starts: it sees its size at once */
+    s->pty = pty_number(f);
+    win_adopt(s->pty);                                  /* 10/25/26: its programs' windows come to this desktop */
     r = pty_spawn(f, SHELL_PATH, 2, argv);
     if(r < 0) {
         drop(s);                                        /* the same */
@@ -164,7 +172,7 @@ int guisys_term_open(void *ctx, int cols, int rows) {
         return r;
     }
     s->pid = r;
-    s->pty = pty_number(f);
+    win_adopt_shell(s->pty, s->pid);                    /* 10/25/26: its jobs alone take the focus as the foreground */
     snprintf(line, sizeof(line), "gui: Terminal: surfsh (pid %d) on pty%d\n", s->pid, s->pty);
     klog_write(line);
     return (int)(s - sessions);

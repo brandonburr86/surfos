@@ -590,6 +590,62 @@ refuse; Hex's own Open (or O) opens any file.
   are selected, the last message, and the file's size. The title bar shows the file's
   name. Hex opens files, not devices. Closing the window forgets the file.
 
+## Programs' windows
+
+*10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
+program can open a window on the desktop, draw in it and take its keys and its pointer.
+Type `wintest show &` in the Terminal: a window of four coloured quadrants opens in front,
+and its title says what it was last sent.
+
+* **Which programs.** Programs started in the desktop's Terminal, or on the console the
+  desktop runs on, may open windows on it. Programs on other consoles and in telnet
+  sessions cannot: their window calls say ENODEV. A window appears when its program first
+  draws in it, or after a quarter of a second, in front of the others, in a cascade from
+  the top left, but without the focus: what you type still goes where it went (a program
+  in the background never catches the rest of a password typed in the Terminal). Its
+  taskbar button is marked until a click on the window, on that button, or Next window
+  (the Window menu) gives it the focus. A window you asked for takes the focus as it
+  appears: that of a program typed at the Terminal's prompt without `&` while the
+  Terminal has the focus, and the first of a program started from Run program....
+* **The pointer and the keys.** Everything the pointer does over a program's window is
+  the program's: moving over it, all three buttons, the wheel. A press in it brings the
+  window to the front, and while a button is held the program follows the pointer
+  wherever it goes. While its window has the focus every key is the program's, but Ctrl+G
+  and Ctrl+Space, which open the menus, as in the Terminal.
+* **Moving and resizing.** Drag the title bar to move the window. A program that allows
+  it can be resized from the dotted corner and maximized: it is told the new size when the
+  corner is let go, and draws itself again at that size. The taskbar and the Window menu
+  list programs' windows with the others.
+* **Closing.** The close button asks the program to close its window. A program that does
+  not is asked about the second time: "End the program?", with Cancel first, and End stops
+  it and takes its window away. A program that ends or crashes takes only its own window
+  with it. Leaving the desktop with programs' windows open asks first; their windows close
+  with the desktop, and the programs are told so (they are not stopped).
+* **Limits.** 8 windows on a desktop, 32 in all. A window's content is at most the room
+  below the menu bar (958 by 457 on a 1920x1080 screen), and a desktop keeps at most 8 MB
+  of programs' pixels.
+* **Writing one.** libgui (`user/include/gui.h`, in libsurf) gives a program a window with
+  an image to draw in: `gw_open()`, then rectangles, lines, UTF-8 text in the console's
+  font, images and buttons, drawn as the desktop draws its own windows (its drawing kit,
+  `include/sys/guidraw.h`, is built into libsurf); `gw_present()` shows what changed, and
+  `gw_next()` waits for the next event and remakes the image at a new size by itself.
+  `wdemo` is the example: colour bars, its size and the last event it got (`wdemo hang`
+  pays no heed to the close button, `wdemo crash` faults after it first draws). Until the
+  kernel keeps floating point across task switches, such a program must not use it.
+* **The Calculator as a program.** `wcalc` is the desktop's Calculator in a window of its
+  own, looking and counting the same (they share their arithmetic, `shell/guicalc.c`): the
+  first application to move out of the kernel, so that a fault in it costs only its window.
+* **Run program...** (in the Apps menu) lists the programs of `/initrd/bin` above a line
+  to run: a program picked in the list takes the line, and arguments may be typed after
+  it (`wcalc` is offered, selected in the list). Run starts it on the desktop's own
+  console, its input from `/dev/null`, so that it never takes the desktop's keys; its
+  first window takes the focus when it appears. It is
+  nobody's child: it outlives the Terminal. It ends with the desktop, whose end hangs its
+  windows up (libgui's `gw_next()` then fails with `EPIPE`, and the program returns). A
+  program that cannot start is named in a message, with the reason. (The brief's
+  Apps > Programs list is this dialog's list: the Apps menu has room for one item more
+  on a 640x400 desktop.)
+
 ## Mouse support
 
 `pointerinfo` reports connected pointing devices and the latest position/buttons.
@@ -731,7 +787,29 @@ each application are in `tools/gui_apps_<track>.py`. Among them:
 * the Image Viewer shows the stick's pictures;
 * Sketch saves one that the host reads back;
 * Files opens a picture in the Image Viewer and a file that is not text in Hex
-  (`tools/gui_apps_suite.py`, after the applications' own checks).
+  (`tools/gui_apps_suite.py`, after the applications' own checks);
+* 10/25/26: programs' windows (`tools/gui_apps_win.py`, before the suite's checks):
+  `wintest show` and `wdemo` typed in the Terminal open windows at 2x without the focus
+  (a key typed meanwhile stays the Terminal's), take it at a click on their title bar, and
+  then take keys, a press and a release (echoed with where they were), keep their content
+  across F2 and F1,
+  answer a corner resize and close by their close button (`ps` then finds none); `wdemo`
+  typed without `&` opens with the focus; `wdemo hang` is ended through "End the
+  program?", and `wdemo crash` loses only its window;
+  `wintest pty` is refused; Run program... starts wcalc, with the focus, which counts by
+  keys and clicks,
+  and a wcalc started so outlives the Terminal and ends with the desktop (the check leaves
+  the desktop, runs `ps` on the serial console and starts the desktop again); and once the
+  Terminal has closed, `wintest pty` started from Run program... takes the Terminal's pty
+  number for a pty of its own and is refused there.
+
+Programs' windows (10/25/26) are `shell/guiclient.c` in the model (host-tested by
+`test_guiclient.c` against fake windows: appearing, drawing and clipping, the pointer and its
+grab, sizes, keys, focus, closing, a program that has gone, the launcher, every window inside
+guard pixels at three sizes), `shell/guisys_win.c` on the kernel's side, and the windows
+themselves in `kernel/win.c` (host-tested by `test_win.c`). libgui (`user/libsurf/gui.c`,
+`guikit.c`) builds the desktop's own drawing kit, so the screen checks of wdemo and wcalc
+test both.
 
 Each part leaves the desktop as it found it, and the host runs `fsck` on the stick
 afterwards.

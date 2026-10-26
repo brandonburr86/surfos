@@ -58,6 +58,9 @@ USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of 
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point, and two programs' at once
+USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
+USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
+USER_PROGS  += wcalc         # 10/25/26: the desktop's Calculator as a program
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -1001,7 +1004,7 @@ unittest-gui: $(BUILD)/host/test_pointer
 # 10/17/26: the desktop's model is several files (shell/guipriv.h); Notepad and Files run against an in-memory file system
 # 10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the applications in files of their own
 GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog \
-                 guiterm guimon guidisks guilog guiclock guiview guihex guichar) \
+                 guiterm guimon guidisks guilog guiclock guiview guihex guichar guiclient guicalc) \
                $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
 # each track's own model files beyond its stubs ($(BUILD)/host/kernel/shell/<name>.o), on a line of its own so that
 # the tracks' merges are clean (the kernel takes every shell/*.c by itself)
@@ -1019,7 +1022,8 @@ $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 # 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c. The
 # test and gui_fake.c are objects of their own, so that each has its own dependency file (test_guitools.c includes
 # kernel/klog.c): compiled in one command, the last source's .d was the binary's only one
-GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite)
+GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite \
+                    test_guiclient)
 $(GUI_SUITE_TESTS): $(BUILD)/host/%: $(BUILD)/host/kernel/tests/host/%.o $(BUILD)/host/kernel/tests/host/gui_fake.o \
                                      $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(filter %.o,$^) -o $@
@@ -1032,6 +1036,15 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 	$(BUILD)/host/test_guitools
 	$(BUILD)/host/test_guimedia
 	$(BUILD)/host/test_guisuite
+	$(BUILD)/host/test_guiclient
+
+# 10/25/26 (windows for programs): kernel/win.c as it is, with stand-ins for the rest of the kernel (tests/host/test_win.c)
+$(BUILD)/host/test_win: $(BUILD)/host/kernel/tests/host/test_win.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+unittest-win: $(BUILD)/host/test_win
+	$(BUILD)/host/test_win
+unittest: unittest-win
+.PHONY: unittest-win
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@

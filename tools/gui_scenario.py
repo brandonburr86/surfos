@@ -341,10 +341,20 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         vm.send('\x03')
         restored('Ctrl+C closes the desktop')
         desktop()
+        # 10/25/26: frames drawn (the menu opened and closed again), timed for gfxinfo on another console
+        key('ctrl-g')
+        visible('Ctrl+G opens the first menu', lambda s: _text(s, font, SURFOS_X, MENU_Y, '\xf7 SurfOS', PAPER, TEAL))
+        key('esc')
+        visible('Esc closes it again', lambda s: _text(s, font, SURFOS_X, MENU_Y, '\xf7 SurfOS', INK, PAPER))
         vm.cursor = len(vm.transcript)
         vm.keys('<f2>')
         visible('F2 switches to a text console; the desktop waits on its own',
                 lambda s: _prompt(s) and s.pixel(0, 0) == b'\0\0\0')
+        vm.cursor = len(vm.transcript)
+        vm.send('gfxinfo\n')
+        require('gfxinfo names the desktop waiting on F1 and its frame times',
+                vm.expect('desktop on F1: 960x540 at 2x', 15) and vm.expect('the last: composing', 15) and
+                vm.expect(PROMPT, 15))
         desktop()
         key('ctrl-p')
         visible('the second console can own a new desktop session',

@@ -8,6 +8,9 @@ message, a question with up to three buttons, a line to type, and the choosers
 of Open and Save as (a folder's entries, .. to go up, a name to type). Its answer
 goes to gui_answer() after the dialog has closed, so the answer may open another.
 Also the one-line text box that dialogs and Notepad's find bar use.
+10/25/26 (programs' windows, stage C6): the launcher's chooser, GUI_DLG_RUN: the programs of one
+folder (it never leaves it) above the line to run, which a program picked in the list replaces;
+its answer is that line as typed.
 */
 #include "guipriv.h"
 #include <string.h>
@@ -109,11 +112,16 @@ void field_render(const struct gui_draw *d, const struct gui_field *f, int x, in
 struct dlg_layout { int x, y, w, h, list_y, rows, field_y, buttons_y, up_x; };
 
 static bool chooser(const struct gui_dialog *dl) {
-    return dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_SAVE;
+    return dl->kind == GUI_DLG_OPEN || dl->kind == GUI_DLG_SAVE || dl->kind == GUI_DLG_RUN;
+}
+
+/* 10/25/26: a chooser with a line to type under its list: Save's name, the launcher's command */
+static bool named(const struct gui_dialog *dl) {
+    return dl->kind == GUI_DLG_SAVE || dl->kind == GUI_DLG_RUN;
 }
 
 static int has_up(const struct gui_dialog *dl) {
-    return strcmp(dl->dir, "/") != 0;
+    return dl->kind != GUI_DLG_RUN && strcmp(dl->dir, "/") != 0;      /* the launcher stays in its folder */
 }
 
 static void layout(const struct gui_state *g, struct dlg_layout *l) {
@@ -127,8 +135,9 @@ static void layout(const struct gui_state *g, struct dlg_layout *l) {
     l->buttons_y = l->h - 40;
     l->up_x = l->w - 16 - 56;
     l->list_y = 64;
-    l->field_y = dl->kind == GUI_DLG_SAVE ? l->h - 74 : dl->kind == GUI_DLG_INPUT ? 66 : 0;
-    l->rows = ((dl->kind == GUI_DLG_SAVE ? l->field_y : l->buttons_y) - 8 - l->list_y) / ROW_H;
+    l->field_y = named(dl) ? l->h - 74 : dl->kind == GUI_DLG_INPUT ? 66 : 0;
+    /* 10/25/26: a named chooser's list ends above its line's label (- 18) */
+    l->rows = ((named(dl) ? l->field_y - 18 : l->buttons_y) - 8 - l->list_y) / ROW_H;
     if(l->rows < 1) l->rows = 1;
 }
 
@@ -228,6 +237,7 @@ static void navigate(struct gui_state *g, const char *to) {
         n = g->fs ? gui_list(g->fs, dl->dir, dl->list, GUI_LIST_MAX, &dl->total) : -ENOSYS;
         if(n >= 0) break;
         if(!tries) snprintf(dl->text[0], sizeof(dl->text[0]), "%s: %s", gui_basename(dir), gui_error(g, n));
+        if(dl->kind == GUI_DLG_RUN) break;              /* 10/25/26: the launcher's list is its folder's, or none */
         strlcpy(dir, tries == 0 && old[0] ? old : "/", sizeof(dir));
     }
     dl->count = n < 0 ? 0 : n;
@@ -238,15 +248,26 @@ static void navigate(struct gui_state *g, const char *to) {
     g->dirty = true;
 }
 
+static void show_row(struct gui_state *g);
+
 void dialog_chooser(struct gui_state *g, int kind, int act, const char *dir, const char *name) {
+    struct gui_dialog *dl = &g->dialog;
     char start[GUI_PATH_MAX];
+    int i;
     strlcpy(start, dir && dir[0] ? dir : "/", sizeof(start));        /* dir may be the last chooser's own */
-    begin(g, kind, act, kind == GUI_DLG_OPEN ? "Open a file" : "Save as");
-    g->dialog.label[0] = kind == GUI_DLG_OPEN ? "Open" : "Save";
+    begin(g, kind, act, kind == GUI_DLG_OPEN ? "Open a file" : kind == GUI_DLG_RUN ? "Run a program" : "Save as");
+    g->dialog.label[0] = kind == GUI_DLG_OPEN ? "Open" : kind == GUI_DLG_RUN ? "Run" : "Save";
     g->dialog.label[2] = "Cancel";
     g->dialog.dir[0] = 0;
     navigate(g, start);
-    if(kind == GUI_DLG_SAVE) field_set(&g->dialog.field, name, true);
+    if(named(dl)) field_set(&dl->field, name, true);
+    if(kind != GUI_DLG_RUN) return;
+    for(i = 0; i < dl->count; i++)                      /* 10/25/26: the program offered, selected in view */
+        if(dl->list[i].type != GUI_DIR && !strcmp(dl->list[i].name, name)) {
+            dl->selected = i;
+            show_row(g);
+            break;
+        }
 }
 
 static void show_row(struct gui_state *g) {
@@ -268,11 +289,11 @@ static void go_up(struct gui_state *g) {
     navigate(g, path);
 }
 
-/* the selected row was picked in a Save chooser: a file's name goes in the box */
+/* the selected row was picked in a Save chooser (or the launcher's): a file's name goes in the box */
 static void picked(struct gui_state *g) {
     struct gui_dialog *dl = &g->dialog;
     int i = dl->selected - has_up(dl);
-    if(dl->kind == GUI_DLG_SAVE && i >= 0 && i < dl->count && dl->list[i].type != GUI_DIR)
+    if(named(dl) && i >= 0 && i < dl->count && dl->list[i].type != GUI_DIR)
         field_set(&dl->field, dl->list[i].name, false);
 }
 
@@ -291,12 +312,13 @@ static void choose(struct gui_state *g) {
         if(up && dl->selected == 0) { go_up(g); return; }
         if(i >= 0 && i < dl->count) {
             if(!gui_join(path, sizeof(path), dl->dir, dl->list[i].name)) { too_long(g); return; }
-            if(dl->list[i].type == GUI_DIR) { navigate(g, path); return; }
+            if(dl->list[i].type == GUI_DIR) { if(dl->kind != GUI_DLG_RUN) navigate(g, path); return; }
             if(dl->kind == GUI_DLG_OPEN) { answer(g, 0, path); return; }
             field_set(&dl->field, dl->list[i].name, false);
         } else if(dl->kind == GUI_DLG_OPEN) return;
     }
     if(!dl->field.len) return;
+    if(dl->kind == GUI_DLG_RUN) { answer(g, 0, dl->field.text); return; }   /* 10/25/26: the line, as it is */
     if(strchr(dl->field.text, '/') || !strcmp(dl->field.text, ".") || !strcmp(dl->field.text, "..")) {
         strlcpy(dl->text[0], "That is not a name for a file.", sizeof(dl->text[0]));
         g->dirty = true;
@@ -324,7 +346,7 @@ static void chooser_key(struct gui_state *g, int key) {
     case GUI_PGUP: dl->selected -= l.rows - 1; dl->list_focus = true; break;
     case GUI_PGDN: dl->selected += l.rows - 1; dl->list_focus = true; break;
     case '\r': case '\n': choose(g); return;
-    case 9: if(dl->kind == GUI_DLG_SAVE) dl->list_focus = !dl->list_focus; g->dirty = true; return;
+    case 9: if(named(dl)) dl->list_focus = !dl->list_focus; g->dirty = true; return;
     default:
         if(list && (key == GUI_HOME || key == GUI_END)) { dl->selected = key == GUI_HOME ? 0 : dl->count + has_up(dl) - 1; break; }
         if(dl->kind == GUI_DLG_OPEN) { if((key == 8 || key == 127) && has_up(dl)) go_up(g); return; }
@@ -371,7 +393,7 @@ void dialog_pointer(struct gui_state *g, int x, int y, bool press) {
     if(!gui_inside(x, y, l.x, l.y, l.w, l.h)) return;    /* the rest of the screen waits */
     for(i = 0; i < 3; i++) {
         if(!button_place(dl, &l, i, &bx, &bw) || !gui_inside(x, y, bx, l.y + l.buttons_y, bw, 28)) continue;
-        if(chooser(dl) && i == 0) { if(dl->kind == GUI_DLG_SAVE) dl->list_focus = false; choose(g); }   /* Save: the name */
+        if(chooser(dl) && i == 0) { if(named(dl)) dl->list_focus = false; choose(g); }   /* Save, Run: the line */
         else answer(g, i == 2 ? -1 : i, dl->kind == GUI_DLG_INPUT ? dl->field.text : "");
         return;
     }
@@ -379,7 +401,7 @@ void dialog_pointer(struct gui_state *g, int x, int y, bool press) {
     x -= l.x;
     y -= l.y;
     if(gui_inside(x, y, l.up_x, 34, 56, 24)) { if(has_up(dl)) go_up(g); return; }
-    if(dl->kind == GUI_DLG_SAVE && gui_inside(x, y, 16, l.field_y, l.w - 32, 24)) { dl->list_focus = false; g->dirty = true; return; }
+    if(named(dl) && gui_inside(x, y, 16, l.field_y, l.w - 32, 24)) { dl->list_focus = false; g->dirty = true; return; }
     rows = dl->count + has_up(dl);
     if(y < l.list_y || y >= l.list_y + l.rows * ROW_H || x < 16 || x >= l.w - 16) return;
     if(x >= l.w - 16 - SCROLL_W) {
@@ -446,7 +468,8 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
         rows = dl->count + up;
         gd_text(d, l.x + 16, l.y + 38, "Folder:", MUTED);
         tail(d, l.x + 80, l.y + 38, dl->dir, (l.up_x - 80 - 8) / 8, INK);
-        gd_button(d, l.x + l.up_x, l.y + 34, 56, 24, "Up", has_up(dl) ? SHELL : BAND, has_up(dl) ? INK : MUTED);
+        if(dl->kind != GUI_DLG_RUN)                     /* 10/25/26: the launcher has no Up */
+            gd_button(d, l.x + l.up_x, l.y + 34, 56, 24, "Up", has_up(dl) ? SHELL : BAND, has_up(dl) ? INK : MUTED);
         gd_rect(d, l.x + 15, l.y + l.list_y - 1, l.w - 30, l.rows * ROW_H + 2, LINE);
         gd_rect(d, l.x + 16, l.y + l.list_y, l.w - 32, l.rows * ROW_H, 0xFFFDF5);
         list = gd_clip(d, l.x + 16, l.y + l.list_y, l.w - 32 - SCROLL_W, l.rows * ROW_H);
@@ -460,7 +483,7 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
                 gd_text(&list, l.x + 44, py + 1, ".. (up one folder)", MUTED);
                 continue;
             }
-            gd_icon(&list, l.x + 22, py + 1, dl->list[k].type == GUI_DIR ? ICON_FOLDER : ICON_TEXT, 1);
+            gd_icon(&list, l.x + 22, py + 1, dl->list[k].type == GUI_DIR ? ICON_FOLDER : dl->kind == GUI_DLG_RUN ? ICON_PROGRAM : ICON_TEXT, 1);
             x = l.x + l.w - 32 - SCROLL_W;
             if(dl->list[k].type != GUI_DIR) {
                 gui_bytes(dl->list[k].size, size, sizeof(size));
@@ -470,8 +493,8 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
         }
 
         gd_scrollbar(d, l.x + l.w - 16 - SCROLL_W, l.y + l.list_y, l.rows * ROW_H, dl->top, l.rows, rows);
-        if(dl->kind == GUI_DLG_SAVE) {
-            gd_text(d, l.x + 16, l.y + l.field_y - 18, "Name:", MUTED);
+        if(named(dl)) {
+            gd_text(d, l.x + 16, l.y + l.field_y - 18, dl->kind == GUI_DLG_RUN ? "The program, and its arguments:" : "Name:", MUTED);
             field_render(d, &dl->field, l.x + 16, l.y + l.field_y, l.w - 32, !dl->list_focus);
         }
         if(button_place(dl, &l, 0, &bx, &bw)) cells = (bx - l.x - 24) / 8;   /* left of the buttons */

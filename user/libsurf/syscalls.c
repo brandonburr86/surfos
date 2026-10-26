@@ -10,6 +10,7 @@ kernel answers -errno on failure; the wrappers turn that into -1 and errno.
 program with status 141, as SIGPIPE does elsewhere, unless it asked for the error
 (broken_pipe_exit(0)). Only a pipe ends it: a connection's EPIPE is an error.
 spawnx(), and spawn() and spawnfd() over it with environ (env.c).
+10/25/26 (windows for programs): winopen() and winctl(), bare (surfos/win.h).
 */
 
 #include <errno.h>
@@ -35,6 +36,10 @@ typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
 typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
+typedef char win_open_layout_is_fixed[sizeof(struct win_open) == 88 ? 1 : -1];  /* 10/25/26 */
+typedef char win_present_layout_is_fixed[sizeof(struct win_present) == 16 ? 1 : -1];
+typedef char win_info_layout_is_fixed[sizeof(struct win_info) == 20 ? 1 : -1];
+typedef char win_event_layout_is_fixed[sizeof(struct win_event) == 16 ? 1 : -1];
 
 int errno;
 
@@ -201,6 +206,9 @@ int spawnpty(const char *path, char *const argv[], int masterfd) {
 int ptyctl(int masterfd, int op, unsigned int arg) { return (int)ret(sc(SYS_ptyctl, masterfd, op, (long)arg)); }
 int procinfo(int index, struct procinfo *pi) { return (int)ret(sc(SYS_procinfo, index, (long)pi, 0)); }
 int detach(void) { return (int)ret(sc(SYS_detach, 0, 0, 0)); }
+/* 10/25/26: windows on the desktop (surfos/win.h) */
+int winopen(const struct win_open *o) { return (int)ret(sc(SYS_winopen, (long)o, 0, 0)); }
+int winctl(int fd, int op, void *arg) { return (int)ret(sc(SYS_winctl, fd, op, (long)arg)); }
 int getdent(int fd, struct dirent *de) { return (int)ret(sc(SYS_readdir, fd, (long)de, 0)); }
 
 int wait(int pid, int *status) {

@@ -59,6 +59,7 @@ int cmd_settings(int argc, char **argv);
 /* wifi.c: the simulated Wi-Fi's access points off and on, for the tests (10/17/26) */
 int cmd_wlansim(int argc, char **argv);
 int cmd_gui(int argc, char **argv);
+void gui_frame_info(void);     /* 10/25/26 (gui.c): gfxinfo's lines about the desktops that run */
 int cmd_pointerinfo(int argc, char **argv);
 int cmd_touchpad(int argc, char **argv);
 int cmd_acpidump(int argc, char **argv);

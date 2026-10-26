@@ -7,8 +7,12 @@ Rectangles, text, buttons, scroll bars, the wave and the desktop's icons, all
 clipped to a rectangle (struct gui_draw), so a window's text never spills out
 of it. Text is drawn with the console's 8x16 code page 437 font; names, which
 are UTF-8, go through the console's decoder (driver/cp437.c).
+10/25/26 (programs' windows): gd_blit(), a program's pixels into the scene, and
+the programs' icon. Its declarations are include/sys/guidraw.h's, and libsurf builds
+this file too (user/libsurf/guidraw.c) for programs' windows (libgui): it uses
+nothing of the desktop's model. gd_line(), for libgui.
 */
-#include "guipriv.h"
+#include <sys/guidraw.h>
 #include <sys/cp437.h>
 #include <string.h>
 #include <stdio.h>
@@ -160,6 +164,56 @@ int gd_scroll_to(int h, int y, int shown, int total) {
     return first < 0 ? 0 : first > total - shown ? total - shown : first;
 }
 
+/* 10/25/26: the surface's pixels are the desktop's own 0x00RRGGBB in 32 bits (shell/gui.c's frame, the host test's) */
+static bool own_pixels(const struct fb_surface *s) {
+    return s->bytespp == 4 && s->mode.red_pos == 16 && s->mode.green_pos == 8 && s->mode.blue_pos == 0 &&
+           s->mode.red_size == 8 && s->mode.green_size == 8 && s->mode.blue_size == 8;
+}
+
+/* 10/25/26: an image of w x h pixels, 0x00RRGGBB in rows of stride, its top left at x, y, clipped to d: on the desktop's
+   own pixels its rows are copied straight in, as the Image Viewer does (guiview.c), on any other surface through
+   fb_blit_rgb() */
+void gd_blit(const struct gui_draw *d, int x, int y, const u32 *pixels, int w, int h, int stride) {
+    const struct fb_surface *s = d->s;
+    int l = x > d->l ? x : d->l, t = y > d->t ? y : d->t, r = x + w < d->r ? x + w : d->r, b = y + h < d->b ? y + h : d->b;
+    int row, i, n;
+    if(!pixels || w <= 0 || h <= 0 || stride < w) return;
+    if(l < 0) l = 0;
+    if(t < 0) t = 0;
+    if(r > (int)s->mode.width) r = s->mode.width;
+    if(b > (int)s->mode.height) b = s->mode.height;
+    if(l >= r || t >= b) return;
+    n = r - l;
+    if(own_pixels(s)) {
+        for(row = t; row < b; row++) {
+            const u32 *from = pixels + (row - y) * stride + (l - x);
+            u32 *to = (u32 *)(s->base + (u32)row * s->mode.pitch) + l;
+            for(i = 0; i < n; i++) to[i] = from[i];
+        }
+    } else {
+        struct fb_bitmap image;
+        image.pixels = pixels + (t - y) * stride + (l - x);
+        image.width = n;
+        image.height = b - t;
+        image.stride = stride;
+        image.bytes = ((size_t)(b - t - 1) * stride + n) * 4;
+        fb_blit_rgb(s, l, t, &image);
+    }
+}
+
+/* 10/25/26: a line, both ends included, clipped to d a pixel at a time (Bresenham's steps) */
+void gd_line(const struct gui_draw *d, int x0, int y0, int x1, int y1, u32 c) {
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy, e2;
+    for(;;) {
+        gd_rect(d, x0, y0, 1, 1, c);
+        if(x0 == x1 && y0 == y1) return;
+        e2 = 2 * err;
+        if(e2 >= dy) { err += dy; x0 += sx; }
+        if(e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
 void gd_scrollbar(const struct gui_draw *d, int x, int y, int h, int first, int shown, int total) {
     int top, size;
     gd_rect(d, x, y, SCROLL_W, h, BAND);
@@ -272,6 +326,12 @@ static const char *const icons[][16] = {
         ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", ".KPPPKPPPKPPPPK.", ".KPCPKPTPKPPCPK.",
         ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", ".KPPPKPPPKPPPPK.", ".KPTPKPPPKPPTPK.",
         ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", "................", "................" },
+    /* 10/25/26: a program's window */
+    [ICON_PROGRAM] = {
+        "................", ".KKKKKKKKKKKKKK.", ".KTTTTTTTTTFTFK.", ".KKKKKKKKKKKKKK.",
+        ".KPPPPPPPPPPPPK.", ".KPBBBBPPSSSSPK.", ".KPBBBBPPSSSSPK.", ".KPBBBBPPSSSSPK.",
+        ".KPPPPPPPPPPPPK.", ".KPCCCCPPTTTTPK.", ".KPCCCCPPTTTTPK.", ".KPCCCCPPTTTTPK.",
+        ".KPPPPPPPPPPPPK.", ".KKKKKKKKKKKKKK.", "................", "................" },
 };
 
 static u32 paint(char c) {

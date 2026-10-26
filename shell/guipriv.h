@@ -11,6 +11,8 @@ system; the handlers do both.
 10/17/26 (the suite): struct gui_app, what the window manager asks of an application
 in a file of its own (Terminal, System Monitor, Disks, Log, Clock, Image Viewer, Hex,
 Character Map), and the table of them (guicore.c).
+10/25/26 (programs' windows): guiclient.c's calls, gd_blit() and the programs' icon; the palette
+and the drawing kit moved to include/sys/guidraw.h (libgui builds them too).
 */
 #ifndef _SHELL_GUIPRIV_H
 #define _SHELL_GUIPRIV_H
@@ -39,21 +41,8 @@ Character Map), and the table of them (guicore.c).
 #define EPIPE 32
 #endif
 
-/* the SurfOS palette */
-#define NAVY 0x102E3B
-#define INK 0x153D49
-#define TEAL 0x197D83
-#define FOAM 0xB8E9D9
-#define PAPER 0xF4F1E6
-#define MUTED 0x6C888C
-#define CORAL 0xEE906D
-#define SAND 0xD0B056
-#define SKY 0x659ECB
-#define SHELL 0xDEE3D8                  /* light buttons */
-#define BAND 0xE7E2D2                   /* gutters, headers, status bars */
-#define LINE 0xC9CFC4                   /* thin separators */
-#define SHADOW 0x0B2530
-#define PICK 0xBFE3DD                   /* selected text and rows */
+/* 10/25/26: the palette and the drawing kit (guidraw.c) are sys/guidraw.h's, which libsurf shares */
+#include <sys/guidraw.h>
 
 /* layout, in logical pixels */
 #define MENU_H 28                       /* the menu bar */
@@ -61,52 +50,9 @@ Character Map), and the table of them (guicore.c).
 #define TITLE_H 28                      /* a window's title bar */
 #define BAR_H 28                        /* a window's toolbar */
 #define STATUS_H 22                     /* a window's status bar */
-#define SCROLL_W 12
 #define ROW_H 18                        /* a row of Files or a chooser */
 #define TAB_W 8                         /* a tab moves to the next multiple of 8 columns, as in edit */
 #define DOUBLE_MS 500                   /* two clicks this close together are a double-click */
-
-/* where a drawing may go: the surface and a clipping rectangle (left, top, right, bottom) */
-struct gui_draw { const struct fb_surface *s; int l, t, r, b; };
-void gd_init(struct gui_draw *d, const struct fb_surface *s, int width, int height);
-struct gui_draw gd_clip(const struct gui_draw *d, int x, int y, int w, int h);
-void gd_rect(const struct gui_draw *d, int x, int y, int w, int h, u32 c);
-void gd_frame(const struct gui_draw *d, int x, int y, int w, int h, u32 c);
-void gd_glyph(const struct gui_draw *d, int x, int y, u8 ch, u32 c, int scale);
-int gd_text(const struct gui_draw *d, int x, int y, const char *s, u32 c);     /* x after the text */
-int gd_text_scaled(const struct gui_draw *d, int x, int y, const char *s, u32 c, int scale);
-int gd_name(const struct gui_draw *d, int x, int y, const char *s, int cells, u32 c);   /* UTF-8, cut with … */
-int gd_cells(const char *s);                                                    /* cells a UTF-8 name takes */
-u32 gd_char_len(const char *s, u32 avail);            /* the bytes of the character at s (UTF-8 as the console has it) */
-u8 gd_char(const char *s, u32 avail, u32 *len);       /* its glyph, and its bytes */
-void gd_button(const struct gui_draw *d, int x, int y, int w, int h, const char *label, u32 bg, u32 fg);
-void gd_wave(const struct gui_draw *d, int x, int y, int w, int h, u32 c);
-void gd_scrollbar(const struct gui_draw *d, int x, int y, int h, int first, int shown, int total);
-#define ICON_FOLDER 0
-#define ICON_OPEN_FOLDER 1
-#define ICON_FILE 2
-#define ICON_TEXT 3
-#define ICON_DRIVE 4
-#define ICON_NOTEPAD 5
-#define ICON_FILES 6
-#define ICON_CALC 7
-#define ICON_SKETCH 8
-#define ICON_WAVE 9
-#define ICON_HELP 10
-#define ICON_GEAR 11
-#define ICON_TERMINAL 12                /* 10/17/26: the suite's */
-#define ICON_MONITOR 13
-#define ICON_DISKS 14
-#define ICON_LOG 15
-#define ICON_CLOCK 16
-#define ICON_VIEWER 17
-#define ICON_HEX 18
-#define ICON_CHARMAP 19
-void gd_icon(const struct gui_draw *d, int x, int y, int icon, int scale);
-void gd_icon_tint(const struct gui_draw *d, int x, int y, int icon, int scale, u32 tint);   /* one colour */
-/* the scroll bar's thumb, for drawing and for the pointer: its top and height in a bar of h pixels */
-void gd_thumb(int h, int first, int shown, int total, int *top, int *size);
-int gd_scroll_to(int h, int y, int shown, int total);  /* the first row for the thumb's top at y */
 
 /* what menus, toolbars and dialogs do (guicore.c: gui_act) */
 enum {
@@ -121,11 +67,15 @@ enum {
     /* a dialog's answer */
     ACT_DLG_NEW_FILE, ACT_DLG_NEW_FOLDER, ACT_DLG_RENAME, ACT_DLG_DELETE, ACT_DLG_GOTO, ACT_DLG_OPEN,
     ACT_DLG_SAVE_AS, ACT_DLG_REPLACE, ACT_DLG_GUARD, ACT_DLG_READONLY,
+    ACT_RUN, ACT_DLG_RUN,               /* 10/25/26: Run program..., and its answer */
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
 /* 10/17/26 (the suite): the answers to the suite's dialogs */
-#define ACT_DLG_LEAVE (ACT_WINDOW + GUI_WINDOWS)            /* leave the desktop although an application is busy */
-#define ACT_APP_DIALOG (ACT_WINDOW + GUI_WINDOWS + 1)       /* + 32 * (id - GUI_FIRST_APP) + the app's own number */
+#define ACT_DLG_LEAVE (ACT_WINDOW + GUI_SLOTS)              /* leave the desktop although an application is busy */
+#define ACT_APP_DIALOG (ACT_WINDOW + GUI_SLOTS + 1)         /* + 32 * (id - GUI_FIRST_APP) + the app's own number */
+/* 10/25/26: "End the program?" for a program's window: + its slot (id - GUI_FIRST_CLIENT); beyond Sketch's two
+   numbers after the suite's dialogs (gui_media.h) */
+#define ACT_CLIENT_END (ACT_APP_DIALOG + 32 * (GUI_WINDOWS - GUI_FIRST_APP) + 8)
 
 /* what waits for Notepad's changes to be saved or dropped (gui_state.pending) */
 enum { PEND_NONE, PEND_NEW, PEND_OPEN, PEND_OPEN_PATH, PEND_QUIT, PEND_CLOSE };
@@ -183,6 +133,7 @@ void gui_act(struct gui_state *g, int act);
    what was typed or chosen, target what the dialog was about */
 void gui_answer(struct gui_state *g, int act, int button, const char *text, const char *target);
 void gui_close(struct gui_state *g, int id);
+void gui_close_now(struct gui_state *g, int id);                      /* 10/25/26: shut, asking nothing */
 bool gui_guard(struct gui_state *g, int pending, const char *path);   /* true: go ahead now */
 void gui_proceed(struct gui_state *g);                                /* run what was pending */
 void gui_place(struct gui_state *g, int id);                          /* keep a window on the screen */
@@ -202,6 +153,27 @@ bool gui_inside(int x, int y, int l, int t, int w, int h);
 int gui_clamp(int n, int a, int b);
 bool gui_menu_on(const struct gui_state *g, int menu, int act);      /* for the host test */
 void gui_menu_box(const struct gui_state *g, int menu, int *x, int *y, int *w, int *h);
+
+/* guiclient.c (10/25/26): programs' windows, in the slots from GUI_FIRST_CLIENT (sys/gui_client.h) */
+struct gui_client *client_of(struct gui_state *g, int id);           /* NULL: no program's window */
+const struct gui_client *client_at(const struct gui_state *g, int id);
+int client_count(const struct gui_state *g);
+void client_tick(struct gui_state *g);                  /* windows come, are read again, go; RESIZE and FOCUS */
+void client_finish(struct gui_state *g);                /* the desktop closes: every window is let go */
+bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a program's (old: the buttons before) */
+void client_wheel(struct gui_state *g, int id, int rows);
+bool client_keys(const struct gui_state *g);            /* the focused window is a program's: the keys are its own */
+bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened without the focus, not given it yet */
+void client_launched(struct gui_state *g, int pid);     /* 10/25/26 (C6): its first window takes the focus */
+void client_key(struct gui_state *g, int key);
+void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
+void client_answer(struct gui_state *g, int slot, int button, const char *target);
+void client_render(const struct gui_state *g, const struct gui_draw *d, int id);   /* d: its content */
+const char *client_title(const struct gui_state *g, int id);
+bool client_resizable(const struct gui_state *g, int id);
+int client_min_width(const struct gui_state *g, int id);
+int client_min_height(const struct gui_state *g, int id);
+void client_limit(const struct gui_state *g, int id, int *w, int *h);   /* a frame no larger than it may be */
 
 /* guinote.c */
 struct note_layout { int tx, ty, cols, rows, gutter, bar_x, find_y, status_y; };
@@ -266,6 +238,7 @@ void dialog_wheel(struct gui_state *g, int rows);
 void dialog_render(const struct gui_state *g, const struct gui_draw *d);
 void dialog_close(struct gui_state *g);
 void dialog_box(const struct gui_state *g, int *x, int *y, int *w, int *h);
+void gui_raise(struct gui_state *g, int id);   /* 10/25/26: in front, the focus left where it is */
 void field_set(struct gui_field *f, const char *text, bool all);
 bool field_key(struct gui_field *f, int key, const char *clip, u32 clip_len);   /* true: the key was the field's */
 void field_render(const struct gui_draw *d, const struct gui_field *f, int x, int y, int w, bool focused);

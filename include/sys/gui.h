@@ -13,11 +13,15 @@ System Monitor, Disks, Log, Clock, Image Viewer, Hex and Character Map, each in 
 file of its own that the window manager reaches through a table (struct gui_app,
 shell/guipriv.h). What they need of the kernel is struct gui_sys (sys/gui_sys.h),
 which the model calls from its handlers and from gui_tick(), never from gui_render().
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the windows of
+ordinary programs, in GUI_CLIENTS slots after the fixed windows (sys/gui_client.h,
+shell/guiclient.c), through struct gui_sys's win_* calls.
 */
 #ifndef _SYS_GUI_H
 #define _SYS_GUI_H
 #include <sys/framebuffer.h>
 #include <sys/pointer.h>
+#include <sys/guicalc.h>                /* 10/25/26: the Calculator's arithmetic, which libsurf shares */
 #define GUI_CALC 0
 #define GUI_SKETCH 1
 #define GUI_ABOUT 2
@@ -36,6 +40,11 @@ which the model calls from its handlers and from gui_tick(), never from gui_rend
 #define GUI_CHARMAP 14
 #define GUI_FIRST_APP GUI_TERMINAL
 #define GUI_WINDOWS 15
+/* 10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): after the fixed windows come
+   GUI_CLIENTS slots for programs' windows (shell/guiclient.c); win[] and order[] hold all GUI_SLOTS */
+#define GUI_CLIENTS 8
+#define GUI_FIRST_CLIENT GUI_WINDOWS
+#define GUI_SLOTS (GUI_FIRST_CLIENT + GUI_CLIENTS)
 #define GUI_CANVAS_W 400
 #define GUI_CANVAS_H 180
 /* keys that are not bytes: shell/gui.c turns the terminal's escape sequences into these */
@@ -91,7 +100,6 @@ struct gui_fs {
 };
 
 struct gui_window { int x,y,w,h; bool open, max, min; int nx,ny,nw,nh; };   /* n*: the place before maximizing */
-struct gui_calc { i32 value, operand; char op; bool fresh, error, entered; };
 /* a one-line text box; all: its whole text is selected, and typing replaces it */
 struct gui_field { char text[GUI_PATH_MAX]; u32 len, cursor; bool all; };
 
@@ -139,6 +147,7 @@ struct gui_files {
 #define GUI_DLG_INPUT 3
 #define GUI_DLG_OPEN 4
 #define GUI_DLG_SAVE 5
+#define GUI_DLG_RUN 6                   /* 10/25/26: the launcher's: a folder's programs and the line to run */
 struct gui_dialog {
     int kind, act, choice;
     bool list_focus;                    /* a chooser's Enter is for its list, not its name field */
@@ -158,14 +167,15 @@ struct gui_dialog {
 #include <sys/gui_sysapps.h>
 #include <sys/gui_tools.h>
 #include <sys/gui_media.h>
+#include <sys/gui_client.h>             /* 10/25/26: programs' windows */
 
 struct gui_state {
     int width, height, menu, selection, focus, drag, drag_x, drag_y;
     int x, y, last_x, last_y, brush, speed;
     unsigned buttons, devices;
     bool quit, dirty, night, drawing;
-    int order[GUI_WINDOWS];
-    struct gui_window win[GUI_WINDOWS];
+    int order[GUI_SLOTS];
+    struct gui_window win[GUI_SLOTS];
     struct gui_calc calc;
     u8 canvas[GUI_CANVAS_W * GUI_CANVAS_H];
     /* 10/17/26 */
@@ -200,6 +210,7 @@ struct gui_state {
        them all, and past GUI_UNSURE the desktop saves over, deletes and renames no file (new names still) */
     char unsure[GUI_UNSURE][GUI_PATH_MAX], kept[GUI_UNSURE][GUI_PATH_MAX];
     int nunsure;
+    struct gui_clients clients;         /* 10/25/26: programs' windows (shell/guiclient.c) */
 };
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);
@@ -208,16 +219,21 @@ void gui_release(struct gui_state *g);      /* 10/18/26: the button let go of wi
 void gui_key(struct gui_state *g, int key);
 void gui_render(const struct gui_state *g, const struct fb_surface *s);
 void gui_cursor(const struct fb_surface *s, int x, int y, int scale);
-void gui_calc_key(struct gui_calc *c, int key);
 /* 10/17/26: the arrow keys belong to the model (Notepad, Files, a menu or a dialog has them),
    not to the pointer */
 bool gui_wants_arrows(const struct gui_state *g);
+/* 10/25/26 (the review): an application works without drawing every pass (a picture being read, a Hex search, a
+   Terminal's output read but not drawn, keys its session has not taken): the desktop's next pass comes a frame
+   later, not after its idle nap */
+bool gui_working(const struct gui_state *g);
 /* leave the desktop: at once, or after asking about Notepad's unsaved changes */
 void gui_request_quit(struct gui_state *g);
 /* 10/17/26 (the suite): the shell calls gui_tick() every frame (the applications read what is new: a terminal's output,
    the task list), and gui_finish() before it frees the state (a terminal session hangs up) */
 void gui_tick(struct gui_state *g);
 void gui_finish(struct gui_state *g);
+/* 10/25/26: the largest content a program's window can have here, a maximized one's (shell/gui.c registers it) */
+void gui_client_room(const struct gui_state *g, int *w, int *h);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */
 /* 10/18/26: a desktop's own struct gui_fs, whose read_at keeps the file it read last open until
    gui_kernel_fs_idle() (each frame, before drawing or sleeping); gui_kernel_fs_end() closes and frees it */

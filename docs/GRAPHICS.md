@@ -37,8 +37,19 @@ interactive-command rule. `gfxinfo` works over telnet and with redirection.
 `include/sys/framebuffer.h` exposes a **kernel-only** interface. Rendering lives
 in `driver/fbcore.c`, and `driver/framebuffer.c` owns the mapped framebuffer and
 the transition between text and graphics. No new user-memory mapping or system
-call is provided. User applications can invoke the test through the existing
-kernel-command interface; a general graphics application API is future work.
+call is provided for the framebuffer itself. User applications can invoke the
+test through the existing kernel-command interface.
+
+*10/25/26, reversed for programs' windows (milestone M12,
+`docs/superpowers/plans/2026-10-25-app-windows.md`):* the owner chose a platform
+for new applications, so an ordinary program now draws in a window of the desktop
+through two system calls, `SYS_winopen` and `SYS_winctl` (`include/surfos/win.h`,
+`kernel/win.c`; [GUI.md](GUI.md#programs-windows), ARCHITECTURE.md section 24). Its
+pixels are copied into a buffer of the kernel's during its own call, never shared:
+the framebuffer stays the desktop's, and still no frame of the kernel is mapped
+into ring 3. libgui (`user/include/gui.h`) builds this renderer and the desktop's
+drawing kit into libsurf, so a program draws into its own memory as the desktop
+draws its scene.
 
 All drawing colors use `0x00RRGGBB`. The driver converts them to the bootloader's
 15-, 16-, 24- or 32-bit RGB/BGR format, honors scanline pitch and clips to visible

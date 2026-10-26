@@ -5,6 +5,7 @@ File: graphics.c  Date: 10/10/26
 ----------------------
 The basic 2D framebuffer driver, exercised from a local shell. No mode setting:
 GRUB keeps the panel in the firmware's selected mode.
+10/25/26: gfxinfo also names each desktop that runs, with its frame times (shell/gui.c).
 */
 
 #include <stdio.h>
@@ -19,6 +20,7 @@ int cmd_gfxinfo(int argc, char **argv) {
     printf("    graphics: software 2D (pixels, rectangles, lines, RGB images)\n");
     if(!framebuffer_active()) printf("    no framebuffer: boot the UEFI USB image for graphics\n");
     else printf("    %s\n", framebuffer_describe(description, sizeof(description)));
+    gui_frame_info();                   /* 10/25/26: each desktop that runs, with its frame times */
     return CMD_OK;
 }
 

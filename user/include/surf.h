@@ -7,6 +7,7 @@ What only SurfOS has: starting and waiting for programs, the terminal control
 call of full-screen programs, the uptime and the raw directory call. Since
 10/6/26 also the kernel's shell commands (kcmd), for the user shell surfsh.
 10/24/26: what a broken pipe does (broken_pipe_exit()).
+10/25/26: windows on the desktop (winopen(), winctl(); surfos/win.h).
 
 Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
 stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
@@ -130,6 +131,12 @@ int detach(void);                                       /* init becomes this pro
    EPIPE instead (a shell that must live on), 1 is the default again */
 #include <surfos/pipe.h>
 void broken_pipe_exit(int on);
+
+/* 10/25/26: a window on the desktop of this program's terminal, as a descriptor (surfos/win.h has the rules): read()
+   gives its events, poll() says when there are some; winctl() presents pixels, sets its size and title, describes it */
+#include <surfos/win.h>
+int winopen(const struct win_open *o);
+int winctl(int fd, int op, void *arg);
 
 /* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
 int getdent(int fd, struct dirent *de);

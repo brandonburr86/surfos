@@ -390,7 +390,7 @@ static bool digits_hidden(const struct gui_state *g) {
     const struct gui_window *w = &g->win[GUI_CLOCK], *o;
     int i, x = w->x + 8, y = w->y + TOP + 8, wd = w->w - 16, h = 16 * BIG;
     bool above = false;
-    for(i = 0; i < GUI_WINDOWS; i++) {                  /* g->order runs from the back to the front */
+    for(i = 0; i < GUI_SLOTS; i++) {                    /* g->order runs from the back to the front */
         if(g->order[i] == GUI_CLOCK) { above = true; continue; }
         o = &g->win[g->order[i]];
         if(above && o->open && !o->min && o->x <= x && o->y <= y && o->x + o->w >= x + wd && o->y + o->h >= y + h)

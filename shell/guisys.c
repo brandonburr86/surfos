@@ -10,6 +10,7 @@ guisys_disk.c and the Terminal's sessions in guisys_term.c (shell/guisys.h). Not
 each call copies what is there now.
 10/18/26: the tasks are copied in one go; End task never ends the shells the desktop runs in,
 and its kill waits for the end of the call however long (kill_task_patient()).
+10/25/26: programs' windows in the table (shell/guisys_win.c); End the program uses kill.
 */
 #include <stdio.h>
 #include <string.h>
@@ -164,6 +165,8 @@ static int log_copy(void *ctx, char *buf, u32 size, u32 *len, u32 *written) {
 static const struct gui_sys kernel_sys = {
     NULL, tasks, memory, machine, kill, guisys_disks, log_copy,
     guisys_term_open, guisys_term_read, guisys_term_write, guisys_term_resize, guisys_term_close,
+    guisys_win_accept, guisys_win_update, guisys_win_event, guisys_win_close,  /* 10/25/26: programs' windows */
+    guisys_win_run,                                                             /* the launcher */
 };
 
 const struct gui_sys *gui_kernel_sys(void) {

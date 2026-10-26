@@ -1327,6 +1327,11 @@ int task_detach(surf_task *t);
 int fd_install(struct file *f);
 struct file *fd_get(int fd);
 int fd_close(int fd);
+static bool k_adopted[PTY_MAX];                 /* 10/25/26: the ptys whose programs may open windows (kernel/win.c) */
+static int k_shell[PTY_MAX];                    /* 10/25/26: the session shell each was given (win_adopt_shell()) */
+int win_adopt(int pty) { k_adopted[pty] = true; return 0; }
+void win_drop(int pty) { k_adopted[pty] = false; k_shell[pty] = 0; }
+int win_adopt_shell(int pty, int pid) { if(!k_adopted[pty]) return -EINVAL; k_shell[pty] = pid; return 0; }
 #include "../../shell/guisys_term.c"
 
 void klog_write(const char *s) { strlcpy(k_log, s, sizeof(k_log)); }
@@ -1457,6 +1462,8 @@ static void kernel_side(void) {
     CHECK(h == 0 && sessions[0].fd == 0 && a->files[0] == &k_master[0] && k_cols[0] == 77 && k_rows[0] == 21);
     CHECK(!strcmp(k_argv, "/initrd/bin/surfsh 2 surfsh -l") && strstr(k_log, "surfsh (pid") && strstr(k_log, "on pty0"));
     CHECK(shell && shell->parent == a && shell->pty == 0);
+    CHECK(k_adopted[0]);                            /* 10/25/26: its programs may open windows on this desktop */
+    CHECK(k_shell[0] == sessions[0].pid);           /* and its shell's jobs alone take the focus as the foreground */
     memcpy(k_out[0], "hi", 2);
     k_out_len[0] = 2;
     CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == 2 && !memcmp(buf, "hi", 2));
@@ -1478,6 +1485,7 @@ static void kernel_side(void) {
     CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == -EPIPE);
     guisys_term_close(NULL, h);                     /* the hangup ends that program, the descriptor goes */
     CHECK(k_hangups == 1 && !a->files[0] && job->state == TS_DEAD && !sessions[0].used && !k_used[0]);
+    CHECK(!k_adopted[0] && !k_shell[0]);            /* and no more windows from that pty */
     CHECK(strstr(k_log, "the session on pty0 ended") && !strstr(k_log, "init"));
     /* a session whose shell ends by itself, no program left: the end without the shell's help too */
     h = guisys_term_open(NULL, 77, 21);

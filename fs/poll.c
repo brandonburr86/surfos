@@ -14,6 +14,11 @@ the time it is on the queue (interrupts off from that check to the enqueue). The
 descriptors' poll operations are called with interrupts on, so they may take what locks
 they need. The wait is one that a kill or Ctrl+C cuts short (-EINTR), and its timer is the
 task's wait_timer while it waits, as in wait_on_timeout() (kernel/wait.c).
+
+10/25/26 (programs' windows, docs/superpowers/plans/2026-10-25-app-windows.md): the same wait for
+a caller in the kernel that has no descriptors to look at, the desktop (shell/gui.c): it reads
+poll_generation() before it looks at what may have changed (its keys, the pointer, a terminal's
+output, programs' windows), and poll_sleep() then sleeps only if no poll_wake() came since.
 */
 
 #include <surfos/types.h>
@@ -52,6 +57,38 @@ static void poll_timeout(void *arg) {
         t->wait_timed_out = true;
         wake_up_task(t);
     }
+}
+
+/* 10/25/26: fs/vfs.h. The poll_wake() calls so far: read it before looking, pass it to poll_sleep() */
+u_long poll_generation(void) {
+    return poll_gen;
+}
+
+/* 10/25/26: sleep until a poll_wake() that came after gen was read (at once if one did), or ms have passed:
+   0, or -EINTR when a kill or Ctrl+C cuts it short (as sys_poll()'s wait, with no descriptors) */
+int poll_sleep(u_long gen, u_long ms) {
+    struct ktimer timer;
+    u_long flags;
+    ktimer_init(&timer, poll_timeout, curTask);
+    flags = irq_save();
+    if(curTask->intr) {
+        irq_restore(flags);
+        return -EINTR;
+    }
+    if(poll_gen != gen || !ms) {                        /* something changed since it was read: no sleep */
+        irq_restore(flags);
+        return 0;
+    }
+    wait_prepare_intr(&poll_wq);
+    curTask->wait_timer = &timer;
+    ktimer_start(&timer, ms, false);
+    irq_restore(flags);
+    yield();
+    flags = irq_save();
+    ktimer_cancel(&timer);
+    curTask->wait_timer = NULL;
+    irq_restore(flags);
+    return curTask->intr ? -EINTR : 0;
 }
 
 /* what descriptor fd is ready for, of what was asked (POLLERR, POLLHUP and POLLNVAL always) */

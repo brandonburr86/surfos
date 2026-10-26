@@ -2247,6 +2247,109 @@ the NICs                        NETDEV_ADD_MULTICAST: the e1000's MTA bit; the U
   started there would announce its name onto the host's own network. The Mac's own resolver
   against the laptop is the owner's check.
 
+## 24. Windows for programs (October 2026)
+
+The owner chose (2026-10-25) a platform for new applications: an ordinary ring-3 program opens a window on
+the desktop, draws in it and takes its keys and pointer (milestone M12; the brief is
+`docs/superpowers/plans/2026-10-25-app-windows.md`). Until then only kernel code drew, the 13 applications
+inside `gui`; this reverses `docs/GRAPHICS.md`'s "no new user-memory mapping or system call" and the desktop
+spec's "not a new userspace graphics ABI". The layers, from the top:
+
+```
+a program (ring 3)   draws in its own memory, with libgui (gui.h: the desktop's drawing kit built into libsurf) or
+                     bare: SYS_winopen; SYS_winctl (WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO); read(), poll()
+kernel/win.c         the window: a descriptor (a vnode of winfs), its buffer, its event queue; a desktop's registration
+shell/guisys_win.c   the desktop's calls into it (struct gui_sys's win_* calls), and the launcher (run)
+shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots after the fixed ones
+```
+
+* **The calls** (`include/surfos/win.h`; numbers 52 and 53). `SYS_winopen (const struct win_open *)` gives a
+  descriptor: a version, the content's size and its limits, WIN_RESIZABLE, a background colour and a UTF-8
+  title of 63 bytes at most, cut between characters. `SYS_winctl (fd, op, arg)`: WIN_PRESENT copies a rectangle
+  of the program's image (rows at most 4096 pixels apart) into the window during the call; WIN_SETSIZE gives
+  the window pixels of another size, all background; WIN_TITLE; WIN_INFO (its size, the desktop's screen and
+  scale, the focus, the events lost). `read()` gives whole 16-byte events (a key, the pointer, the wheel, the
+  focus, a new size, the close button), waits for one, and gives 0 once the desktop let the window go;
+  `poll()` says POLLIN, POLLHUP, and POLLOUT always. libsurf has `winopen()` and `winctl()`.
+* **A descriptor, as a pty's master.** A window is a vnode of winfs, a file system with no paths (as ptyfs and
+  pipefs are), opened as a file of the program's: its last close, or the program's reap after a kill, ends it.
+  A desktop registers with `win_register()`, a descriptor of the desktop's own task, so its end, by its exit
+  or its task's reap after it died, lets every window of it go (the trick of `shell/guisys_term.c`'s notes of
+  10/18/26). A window lives while its program or its desktop holds it, and the second to let go frees it.
+  Programs are not killed by the desktop's end: their reads end (0) and their presents fail (EPIPE). A window
+  is the program's that opened it: that program's death takes it away at once, also when a child of it holds
+  the descriptor.
+* **Which desktop.** A program's window goes to the desktop of its terminal: the console where `gui`
+  registered one, or a pty that desktop's Terminal adopted (`win_adopt()`), until that pty hangs up or is free
+  again (`win_pty_gone()`, from `kernel/pty.c`: the next session on it, a telnet session's say, opens none).
+  Text mode, another console, telnet's ptys and a desktop whose task is dead have none: -ENODEV, after the
+  arguments were checked, so `run wintest nodesk` in the smoke test sees EFAULT and EINVAL first, and
+  `@telnet-win` the same in a session.
+* **Pixels are copied, not shared.** No frame of the kernel is mapped into a program, and nothing in `mm/`
+  changed. A window's buffer comes from the kernel heap, filled with its background before anything sees it.
+  WIN_PRESENT checks the rectangle's whole span with `user_buf()` in 64-bit arithmetic and copies it in with
+  interrupts on (1.75 MB for a whole window on a 1080p screen; a frame drawn meanwhile may show one torn frame,
+  and the next mends it). A new size allocates a new buffer, and the old one lives while the desktop still
+  draws it: a buffer counts its holders (the window, the desktop's view of it, a present copying into it).
+* **Events.** 64 are queued at most: a pointer move with the same buttons as the move queued last takes its
+  place (never a press's or a release's), as a new size does the last one's; past that an event is lost and
+  counted.
+* **Budgets.** 8 windows and 8 MB of pixels per desktop, 32 windows and 32 MB in all (EAGAIN, ENOMEM), counted
+  from the buffers alive, the desktop's views too (a window its desktop let go keeps none, only its size); a buffer no larger than the desktop's largest content area
+  (958x457 on a desktop of 960x540); and each window takes one of its program's 16 descriptors.
+* **Locking.** kernel/win.c takes short interrupts-off sections and no mutex; memory is allocated, filled and
+  freed with interrupts on. It never calls the framebuffer, and the desktop never calls it from inside a
+  `framebuffer_graphics_draw()` callback.
+* **Checks.** `tests/host/test_win.c` builds kernel/win.c as it is with stand-ins for the rest of the kernel:
+  the queue, rectangles and strides, sizes, budgets, titles, which desktop, both orders of ending, the
+  desktop's exit and its death, the owner's death, no memory at each allocation, a buffer outliving a new
+  size, stale handles; every scenario ends with nothing allocated. `user/bin/wintest.c` has `nodesk`, `pty` (a
+  pty of its own is refused while a desktop runs) and `show`.
+* **The desktop's side** (`shell/gui.c`, `shell/guiclient.c`). The desktop registers once its frame has
+  begun and lets go at its end. Each tick it takes the windows that are ready (presented, or 250 ms old) into
+  its free slots (`GUI_SLOTS` = the 15 fixed windows + 8), in front, in a cascade from (72, 52), 24 by 20
+  apart, and without the focus (a program in the background never catches keys typed into another window,
+  the rest of a password say): its taskbar button is marked until a click on it, on that button or Next
+  window gives it the focus. A window asked for takes it as it appears: the first of a program the launcher
+  just started, and that of the focused Terminal's foreground job (the kernel's `win_state.foreground`: its
+  program is in the foreground job of a pty the desktop adopted, a job that session's shell made, whose pid
+  `win_adopt_shell()` records; a task in no job may set a terminal's foreground, CODE-AUDIT T14, but not to a job
+  of that shell's). A frame is a pixel of border and the title bar, its content drawn with `gd_blit()` from the pixels
+  `win_update()` lends it until the next update. Every event over a program's visible content is the
+  program's: hover, the wheel and all three buttons; a press there brings the window to the front and holds
+  the pointer for it until every button is up (a grab), while the corner grip stays the desktop's. A size
+  given by the corner or by maximizing is told once the corner is let go (one RESIZE), the old pixels drawn
+  on the background until the program presents pixels of the new size. FOCUS says when the window takes the
+  focus or loses it; the focused window takes every key but Ctrl+G. The close button sends CLOSE;
+  pressed again it asks "End the program?" (Cancel first), and End kills the program. Leaving the desktop
+  with programs' windows open asks first. A console switch changes nothing: presents go on into the kernel's
+  buffers, and the desktop draws them again when it has the screen back (its pointer in the middle).
+* **The Terminal** adopts its session's pty (`win_adopt()`, `shell/guisys_term.c`), so that a program typed
+  in it opens its window on the Terminal's desktop, and drops it when the session ends.
+* **libgui** (`user/include/gui.h`, `user/libsurf/gui.c`, `guikit.c`). The desktop's drawing kit
+  (`include/sys/guidraw.h`, `shell/guidraw.c`), the framebuffer renderer (`driver/fbcore.c`) and the console's
+  font are built into libsurf by one-line wrappers, so a program draws its image as the desktop draws its
+  scene: rectangles, lines, UTF-8 text in code page 437, images, buttons, in the desktop's colours.
+  `gw_present()` presents a rectangle; `gw_next()` polls and reads, and remakes the image at a new size
+  before it returns the RESIZE. Integer only: until the kernel keeps floating point across task switches
+  (track B's B2), a windowed program must not use it. `wdemo` is the example (`hang` ignores CLOSE, `crash`
+  faults after its first present).
+* **Programs started by the desktop.** `wcalc` is the desktop's Calculator as a program (the arithmetic of
+  `shell/guicalc.c` built into both): the first application out of the kernel, and the pattern for the
+  others. Apps > Run program... is a chooser (`GUI_DLG_RUN`) of /initrd/bin's programs above the line to run;
+  `guisys_win_run()` spawns that line on the desktop's console, its input `/dev/null` (it never takes the
+  desktop's keys), detached so that init collects it: it outlives the Terminal and ends with the desktop,
+  whose end hangs its windows up (libgui's `gw_next()` then fails with EPIPE).
+* **On the screen** (`tools/gui_apps_win.py`, the guiapps scenario of `tools/qemu-usb.py`): wintest show and
+  wdemo at 2x, keys, a press and a release echoed with where they were, F2 and F1 keeping a window's content,
+  a corner resize answered, the close button ending a program (and `ps`), `wdemo hang` ended through the
+  question, `wdemo crash` losing only its window, `wintest pty` refused in the Terminal, `wdemo` typed
+  without `&` taking the focus as the Terminal's foreground job, wcalc from the launcher counting by keys and
+  clicks, and a launched wcalc outliving the Terminal and ending with the
+  desktop (ps on the serial console once the desktop has closed); once the Terminal has closed, a
+  `wintest pty` started by the desktop takes the Terminal's pty number (`wintest tty` named it) and is
+  refused there.
+
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
 `/initrd/bin/undertow` is a ring-3 text browser linked with libsurf and pinned Mbed TLS

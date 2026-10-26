@@ -31,6 +31,8 @@ descriptors, an environment and a job in the background. A kernel command's outp
 10/25/26: waitx (48, surfos/job.h): wait, and how the child ended (by itself, killed, or
 killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped; with WUNTRACED a child
 that stopped too. job (49): job control for a shell; spawnx's job field.
+
+10/25/26 (windows for programs): winopen and winctl (52, 53, kernel/win.c, surfos/win.h).
 */
 
 #include <surfos/types.h>
@@ -55,6 +57,7 @@ that stopped too. job (49): job control for a shell; spawnx's job field.
 #include <surfos/sysimpl.h>
 #include <surfos/spawn.h>
 #include <surfos/job.h>
+#include <surfos/win.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
@@ -71,6 +74,10 @@ typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
 typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
 typedef char waitx_layout_is_fixed[sizeof(struct waitx) == 16 ? 1 : -1];       /* 10/25/26 */
+typedef char win_open_layout_is_fixed[sizeof(struct win_open) == 88 ? 1 : -1];  /* 10/25/26: surfos/win.h */
+typedef char win_present_layout_is_fixed[sizeof(struct win_present) == 16 ? 1 : -1];
+typedef char win_info_layout_is_fixed[sizeof(struct win_info) == 20 ? 1 : -1];
+typedef char win_event_layout_is_fixed[sizeof(struct win_event) == 16 ? 1 : -1];
 
 /* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
 bool user_str(const char *s) {
@@ -605,6 +612,9 @@ static u_long *syscall_trap(struct trapframe *tf) {
     /* 10/24/26 (the network tools): net/sock.c */
     case SYS_shutdown: r = sys_shutdown((int)a, b); break;
     case SYS_sockaddr: r = sys_sockaddr((int)a, (struct netaddr *)b, (struct netaddr *)c); break;
+    /* 10/25/26 (windows for programs): kernel/win.c */
+    case SYS_winopen:  r = sys_winopen((const struct win_open *)a); break;
+    case SYS_winctl:   r = sys_winctl((int)a, (int)b, (void *)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

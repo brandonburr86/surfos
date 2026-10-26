@@ -282,5 +282,10 @@ bool pipe_file(const struct file *f);            /* 10/24/26: an end of a pipe (
 void poll_init(void);
 void poll_wake(void);
 wait_queue_t *poll_queue(void);
+/* 10/25/26: the same wait for a kernel task without descriptors (the desktop, shell/gui.c): read poll_generation()
+   before looking at what it waits for; poll_sleep() then sleeps up to ms only while no poll_wake() came since
+   (0, or -EINTR when a kill or Ctrl+C cuts it short) */
+u_long poll_generation(void);
+int poll_sleep(u_long gen, u_long ms);
 
 #endif

@@ -38,6 +38,28 @@ extern u32 fake_term_out_len, fake_term_in_len;
 extern int fake_term_cols, fake_term_rows, fake_term_open_count;
 extern bool fake_term_running, fake_term_ended;
 void fake_term_feed(const char *s, u32 n);      /* the session prints this */
+/* 10/25/26: programs' windows (struct gui_sys's win_* calls): a window waits until its program presents; its pixels
+   come from a pool, and every event the desktop sends it is kept (nev of them); run keeps the line it was given */
+#define FAKE_WINS 12
+#define FAKE_EVENTS 512
+struct fake_win {
+    bool used, ready, accepted, ended, closed;
+    int handle;
+    struct win_state st;
+    u32 *px;                                    /* st.w x st.h */
+    struct win_event ev[FAKE_EVENTS];
+    int nev;
+};
+extern struct fake_win fake_wins[FAKE_WINS];
+extern char fake_run_line[256];
+extern int fake_run_count, fake_run_result;     /* run's calls; what it answers (a pid, or -errno) */
+int fake_win_open(int w, int h, u32 flags, u32 background, const char *title, int pid);   /* its number; -1: no room */
+void fake_win_present(int i, u32 color);        /* its pixels all in color: it is ready */
+void fake_win_size(int i, int w, int h, u32 color);   /* pixels of a new size, in color */
+void fake_win_end(int i);                       /* its program closed it, or is gone */
+int fake_win_count(int i, int type);            /* the events of that type sent to it */
+const struct win_event *fake_win_last(int i, int type);   /* the last of them, NULL for none */
+void fake_win_forget(int i);                    /* the events sent so far forgotten */
 void fake_sys_reset(void);
 extern const struct gui_sys fake_sys;
 
