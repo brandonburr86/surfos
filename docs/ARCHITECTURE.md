@@ -333,7 +333,12 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
   from task context, `kprintf()` print on the calling task's console (`kprintf()`
   in yellow, boot code and interrupt handlers on the active console), so a shell
-  on console 3 sees its own `ps` and its own fault report.
+  on console 3 sees its own `ps` and its own fault report. **10/25/26**: a kernel
+  thread's `kprintf()` line comes out whole (`kernel_puts()`): when another writer's
+  line is half written on that console (`line_by`, the cursor not at a row's start) it
+  waits up to 100 ms for that line to end, then goes out with preemption off, so a
+  program's output (surfsh's banner) no longer cuts netman's `+NET:` lines in two.
+  Processes, shells, paged tasks, pseudo-terminals and interrupt handlers print as before.
 * Serial console (`driver/serial.c`): `kputch()` mirrors everything written to the
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
   clear becomes an ANSI clear; **ai-dev**: CR and ESC pass through, so the terminal draws

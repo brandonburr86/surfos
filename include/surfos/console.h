@@ -89,6 +89,7 @@ typedef struct surf_console {
     u_int sb_next;              /* where the next row goes */
     u_int view;                 /* the screen shows this many rows back from the live one; 0: live */
     u_char sb_none;             /* no memory for a ring: not asked again */
+    struct surf_task *line_by;  /* 10/25/26: who wrote the cursor's row's last character (kprintf waits for another's line) */
 } surf_console;
 
 void sscroll(surf_console *con);

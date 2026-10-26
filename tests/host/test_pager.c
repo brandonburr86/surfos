@@ -16,7 +16,8 @@
    and the pager at a row that starts with one. 10/25/26 (track A, A6): the scrollback of a
    framebuffer console: rows kept as they scroll off and by ESC[2J and a clear, Shift+PgUp, PgDn,
    Home and End, the view's tag and hidden cursor, output that does not move the view, any other key,
-   a console switch, the pager's question, a graphics session, no memory, a full ring. */
+   a console switch, the pager's question, a graphics session, no memory, a full ring; a kernel
+   thread's message whole, after another writer's line. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -943,6 +944,45 @@ static void t_scrollback(void) {
     check(sim_view() == 0 && screen_live(), "and Shift+PgDn comes back down to the live screen");
 }
 
+/* 10/25/26: a kernel thread's message comes out whole (kprintf): it waits for another writer's line to end */
+static void w_kprintf(int unused, int unused2) { (void)unused; (void)unused2; sim_kprintf_line(say_text); }
+
+static void t_whole_kernel_lines(void) {
+    char ser[4096], r[256];
+    int st, i;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    say(SHELL, "Brandon Burr");
+    say_text = "+NET: eth0 up\n";
+    st = run(USB, w_kprintf, 0, 0);
+    check(st == BLOCKED, "a kernel thread's message waits while a program's line is half written");
+    say(SHELL, "'s SurfOS\n");
+    st = resume(USB);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(st == DONE && !strcmp(ser, "Brandon Burr's SurfOS\r\n+NET: eth0 up\r\n") && !strcmp(r, "Brandon Burr's SurfOS"),
+          "then comes out whole after the line, on the screen and the serial line");
+    say_text = "+NET: lease ";
+    run(USB, w_kprintf, 0, 0);
+    say_text = "10.0.2.15\n";
+    st = run(USB, w_kprintf, 0, 0);
+    row(2, r);
+    check(st == DONE && !strcmp(r, "+NET: lease 10.0.2.15"), "its own half line does not make it wait");
+    say(SHELL, "SURF > ");
+    say_text = "+USB: plugged\n";
+    st = run(USB, w_kprintf, 0, 0);
+    for(i = 0; i < 10 && st == BLOCKED; i++) st = resume(USB);
+    row(3, r);
+    check(st == DONE && i == 10 && !strcmp(r, "SURF > +USB: plugged"), "a line that never ends (a prompt): after 100 ms, as before");
+    paged_lines(1, 3);
+    say(CHILD, "half ");
+    sim_set_in_irq(1);
+    sim_kprintf_line("irq\n");
+    sim_set_in_irq(0);
+    check(screen_has("half irq"), "an interrupt handler's message goes at once, as before");
+    run(SHELL, w_page, 0, 0);
+}
+
 static void t_stream_wrap_ask(void) {
     char l80[81];
     int st;
@@ -1386,6 +1426,7 @@ int main(void) {
     t_stream_columns();
     t_tab();
     t_scrollback();
+    t_whole_kernel_lines();
     t_stream_wrap_ask();
     t_stream_resize();
     t_stream_colour();

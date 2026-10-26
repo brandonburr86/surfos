@@ -1280,6 +1280,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
     if(!con) return;
+    con->line_by = in_interrupt() ? NULL : curTask;     /* 10/25/26: whose line the cursor's row is (kprintf) */
     if(con->esc && ansi_byte(con, color, b)) return;
     /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
        it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
@@ -1335,9 +1336,32 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     return;
 }
 
+/* 10/25/26: a kernel thread's message comes out whole, no other task's output between its characters:
+   surfsh's banner used to cut netman's +NET: lines in two, on the screen and the serial line. From a
+   kernel thread (not a process, not a shell, not on a pseudo-terminal, not paged, free to wait) the
+   message first waits up to 100 ms for another writer's line to end (the cursor back at a row's start),
+   then goes out with preemption off; interrupts stay on, so a slow serial port holds up only this
+   thread. A program's line that never ends (a prompt) gets the message after it, as before. Anyone
+   else's message goes out as before, a character at a time. */
+static bool whole_line_writer(surf_console *con) {
+  return con && curTask && curTask != idle_task && !in_interrupt() && irqs_enabled() && !curTask->crit &&
+         !curTask->mutexes && !(curTask->flags & (TF_USER | TF_SHELL)) && !con->stream && !console_paging(con);
+}
+
+static void kernel_puts(surf_console *con, const char *s) {
+  int i;
+  if(whole_line_writer(con)) {
+    for(i = 0; i < 10 && con->loc.x && con->line_by != curTask; i++) sleep_ms(10);
+    KCRIT_ENTER
+    for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+    KCRIT_LEAVE
+    return;
+  }
+  for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+}
+
 void kprintf(const char *format, ...) {
   char buf[512];
-  char *p;
   surf_console *con;
   va_list ap;
   va_start(ap, format);
@@ -1347,15 +1371,14 @@ void kprintf(const char *format, ...) {
   /* a task's kernel messages (ps, lspci, a fault report) belong on that task's console;
      boot code and interrupt handlers print on whatever console is showing */
   con = (curTask && curTask->con && !in_interrupt()) ? curTask->con : conActive;
-  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
+  kernel_puts(con, buf);
 }
 
 void kcprintf(surf_console *con, const char *format, ...) {
   char buf[512];
-  char *p;
   va_list ap;
   va_start(ap, format);
   vsnprintf(buf, sizeof(buf), format, ap);
   va_end(ap);
-  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
+  kernel_puts(con, buf);
 }

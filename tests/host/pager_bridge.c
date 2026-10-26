@@ -106,6 +106,7 @@ void kfree(void *p) { (void)p; }
 bool bootinfo_has_arg(const struct boot_info *bi, const char *arg) { (void)bi; return ascii_word && !strcmp(arg, "ascii"); }
 
 void kcritical_enter(void) { if(curTask) curTask->crit++; }
+void sleep_ms(u_long ms) { (void)ms; yield(); }    /* 10/25/26 (kprintf's wait): the test decides when the task goes on */
 void kcritical_leave(void) { if(curTask && curTask->crit) curTask->crit--; }
 
 void task_list_append(struct task_list *l, surf_task *t) {

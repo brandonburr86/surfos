@@ -220,7 +220,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * Fix things the way the audit describes them and cite the audit ID (for example
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
-  `kprintf()` in the kernel and `printf()` in task code.
+  `kprintf()` in the kernel and `printf()` in task code. 10/25/26: a kernel thread's `kprintf()`
+  line comes out whole (it waits up to 100 ms for another writer's half line, then prints with
+  preemption off): end a kernel thread's message with its newline in the same call.
 * Keep the 2004 file headers and style where you touch old code; new files use the
   same header block with the current date.
 * Small commits, one topic each. Do not rewrite `master`.
