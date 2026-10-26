@@ -1,0 +1,118 @@
+SurfGPU G4: the gpudiag design (GPU2) through the open flow, 2026-10-26: the bitstream to test
+Built as docs/GPU.md 14.2 describes: make build-rom, then make build-fpga FLOW=openxc7
+BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag on the Mac (docker surfcpu-openxc7:2026-10-15:
+Yosys 0.69, nextpnr-himbaechel 1.0.0, Project X-Ray), SOURCE_DATE_EPOCH the commit's time (1792971531),
+LC_ALL=C, TZ=UTC, the flow's settings unset, with nothing untracked in the tree (synth-gpudiag-r2.txt
+says why); 04:11 to 06:43 UTC, half an hour of it waiting for a Docker slot and two seeds at the flow's
+limit. nextpnr's timing is an estimate, not Vivado sign-off. Nothing here was loaded on a
+board: the physical tests are the integrator's. The first build, at 804127d, did not route
+(synth-gpudiag-r1.txt); the first at bfaac48 passed every gate with a dirty boot ROM (synth-gpudiag-r2.txt).
+This one placed and routed exactly as that one (every seed's router iterations, the timing and the
+utilization identical); only the boot ROM, and so the bitstream, differ.
+
+source bfaac48905dc, dirty = false; build id bfaac489; defines ["ARTY_HAS_GPU", ]
+run_id surfcpu_arty_a7_gpudiag-arty_a7_100t-bfaac489-20261026T044414Z
+boot ROM build/fw/gpudiag.mem sha256 aaee817dc8a0ad3c37d3fb95050cbe8504fc4dcda1cc3339820cae96cdc8947a (FW_BUILD_DIRTY 0)
+bitstream sha256 f9a5ac9cb2430ac938b861e08f1fc31bbb1df602414099998cd02aa9e0131c9f, 3825962 bytes
+
+checks (tools/openxc7-build.sh, then tools/fpga-build.sh's own):
+  check SRL cells     PASS (srlcheck: no SRL cell among 19739 cells)
+  check synthesis     PASS (netlist against the RTL: flip-flops 6247 in the RTL, 6161 in the netlist, of them
+                      surf_gpu 916, its walker u_tri 1898 and the walker's divider 144; memories; outputs)
+  check bitstream     PASS (IDCODE 0x03631093, 9464 frames of 101 words, the standard length)
+  check round trip    PASS (bitstream decoded back to FASM: fasmcheck)
+  check block RAM     PASS (RAMB36E1 112 and RAMB18E1 1, contents identical to the netlist's)
+  check LVS           PASS (routed netlist equivalent to the synthesis)
+  check clocks        PASS (MMCM/PLL against XAPP888: 46 fields, 0 differ; 2 global buffers, no clock-to-data use)
+  slack margin        PASS (sys_clk +17.632 ns, wants 1.600; pix_clk +28.674 ns, wants 1.589)
+  check_netlist = "PASS"
+  check_boot_rom = "PASS" (15 blocks identical to the ROM synthesized alone; 16384 words on each port, 0 mismatches)
+  LVS: registers: 6161 gold, 6161 gate, 6161 matched by name
+  LVS: memories: 236 gold, 277 gate, 236 paired and checked at the boundary
+  LVS: 16212 proved, 0 differ, 0 unknown   (2734.6s)
+  memories and multipliers (boards/arty_a7/netlist_check.py):
+    memory (RTL)                                   bits   netlist cells
+    u_soc.g_gpu.u_gpu.u_fifo.mem                   2048   11 RAM64M
+    u_soc.g_gpu.u_vram.g_bank[0].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[1].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[2].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[3].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[4].u_bank.mem      360448   12 RAMB36E1
+    u_soc.u_bootrom.rom                          524288   15 RAMB36E1
+    u_soc.u_core.fetch.fifo.mem                     252   11 RAM32M
+    u_soc.u_core.regfile.regs                      1024   12 RAM32M
+    u_soc.u_ps2.u_fifo.mem                          128   2 RAM32M
+    u_soc.u_scratch.ram                          524288   16 RAMB36E1
+    u_soc.u_textram.mem                          131072   4 RAMB36E1
+    u_soc.u_uart.u_rxfifo.mem                       512   3 RAM64M
+    u_soc.u_uart.u_txfifo.mem                       128   2 RAM32M
+    u_soc.u_video.g_gfx.gpal                       3072   1 RAMB18E1
+    u_soc.u_video.u_font.rom                      32768   1 RAMB36E1
+    DSP48E1 in the netlist: 6 (the CPU's 4 and the triangle setup's multiplier, 2)
+    DSP48E1 taking operands from u_soc.u_core.muldiv: 4 (expected 4)
+    netlist_check: PASS
+
+placement attempts (seeds 1 to 8 from the design list; the flow takes the first that routes and passes):
+  seed 1: timeout (nextpnr stopped at the limit of 1800 s, exit 124), not routed; router at iter=70, overused=7397
+  seed 2: timeout (nextpnr stopped at the limit of 1800 s, exit 124), not routed; router at iter=143, overused=9206
+  seed 3: pass, routed; 'pix_clk': 90.50 MHz (PASS at 25.17 MHz), 'sys_clk': 44.71 MHz (PASS at 25.00 MHz)
+router progress (every tenth iteration):
+  seed 1  iter=1 overused=30140, 11: 832, 21: 694, 31: 709, 41: 837, 51: 1447, 61: 3380, 70: 7397 (stopped)
+  seed 2  iter=1 overused=31152, 11: 499, 21: 266, 31: 151, 41: 113, 51: 77, 61: 101, 81: 147, 101: 226,
+          121: 1050, 141: 7898, 143: 9206 (stopped)
+  seed 3  iter=1 overused=29883, 11: 306, 21: 64, 31: 30, 41: 9, 61: 4, 81: 2, 91: 0 (routed; router2 165.05 s)
+  placer estimates before routing: seed 1 sys_clk 43.92 MHz, seed 2 39.98, seed 3 49.05
+timing (nextpnr):
+  clock pix_clk: constraint 25.17 MHz, achieved 90.50 MHz, slack +28.674 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 44.71 MHz, slack +17.632 ns  PASS
+  no hold violations; nextpnr warnings: 0
+  cross-domain paths (reported, not checked):
+    posedge pix_clk -> posedge sys_clk: 1.27 ns
+    posedge sys_clk -> posedge pix_clk: 1.68 ns
+  critical paths:
+    pix_clk: 11.05 ns = 2.40 ns logic, 8.60 ns routing; from u_soc.u_video.px3[0] (rtl/peripherals/surf_video.v:305)
+             to u_soc.u_video.g_gfx.crc_nxt (rtl/peripherals/surf_video.v:502): the FRAME_CRC update, as in G2
+    sys_clk: 22.37 ns = 4.72 ns logic, 17.59 ns routing; from u_soc.g_gpu.u_gpu.t_h[10] (rtl/peripherals/surf_gpu.v:158)
+             to the enable (ENARDEN) of a block RAM of VRAM bank 0: GPU1's engine path of G2 (the target
+             height through the clip and VRAM's bounds check), not the triangle walker's
+
+utilization:
+  Against the xc7a100t's documented capacity (AMD DS180):
+  LUTs (Yosys LUT1-6 and INV cells; packing can only reduce)    12034 / 63400    19.0%
+  LUT positions (nextpnr SLICE_LUTX, two per LUT6)              19881 / 126800   15.7%
+  flip-flops                                                     6161 / 126800    4.9%
+  carry chains (CARRY4, one per slice)                           1287 / 15850     8.1%
+  36 Kb block RAMs (RAMB18 = 1/2)                               112.5 / 135      83.3%
+  DSP48E1                                                           6 / 240       2.5%
+  Yosys cells: BUFG 2, CARRY4 1265, DSP48E1 6, FDPE 6, FDRE 5702, FDSE 453, IBUF 17, INV 486, IOBUF 2, LUT1 6,
+  LUT2 3088, LUT3 1997, LUT4 1345, LUT5 3242, LUT6 1870, MMCME2_BASE 1, MUXF7 1, OBUF 34, PLLE2_BASE 1, RAM32M 27,
+  RAM64M 14, RAMB18E1 1, RAMB36E1 112
+  against G2's gpudiag (95d0bd1, synth-gpudiag.txt of evidence/gpu): 7898 LUTs, 12029 positions, 3950
+  flip-flops, 620 CARRY4, 4 DSP48E1, the same block RAM
+
+step times:
+  presynth         5.82 s  ok
+  synth           44.19 s  ok
+  check-srl        0.30 s  ok
+  models           0.01 s  ok
+  check-synth      0.29 s  ok
+  chipdb           0.00 s  ok
+  chipdb-sha       0.05 s  ok
+  pnr           1800.06 s  FAILED (124)   seed 1
+  pnr           1800.01 s  FAILED (124)   seed 2
+  pnr            493.75 s  ok   seed 3
+  frames          43.25 s  ok
+  bit              0.07 s  ok
+  stamp            0.04 s  ok
+  report           0.04 s  ok
+  check-clk       37.53 s  ok
+  check-gclk       0.19 s  ok
+  check-bit        2.26 s  ok
+  decode          10.40 s  ok
+  roundtrip       68.03 s  ok
+  bram-extract    26.27 s  ok
+  check-bram       0.52 s  ok
+  lvs-gold         0.83 s  ok
+  lvs-extract     29.50 s  ok
+  lvs-bramwe       1.29 s  ok
+  lvs-prove     2738.38 s  ok

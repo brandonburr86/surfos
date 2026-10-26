@@ -1,0 +1,101 @@
+SurfGPU G4 (GPU2): simulation and host tests (2026-10-25), in the surfcpu-toolchain container
+(Verilator 5.032, Icarus 12.0, gcc), at bfaac48 (sc/gpu-g4), from make check (big) unless said.
+The builds say "dirty tree": this directory was untracked while make check ran (devenv/run.sh counts
+an untracked file as dirty); the sources were bfaac48's.
+
+make check: "check: all automated SurfCPU checks passed" at bfaac48, 21:45 to 22:21 local (36 min, a few
+of them waiting for a Docker slot another track held).
+
+lint-gpu: surf_vram, surf_gpu (with surf_gpu_tri and surf_gpu_div), surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles
+check_gpu_h: PASS (13 opcodes, 9 header bits and the ID agree in gpu.h, surf_gpu.v and surf_gpu_tri.v; VRAM's size in soc.h, surf_gpu.v and surfcpu_soc.v)
+test_gpu_model: PASS (84 checks against docs/GPU.md: display path, CRCs, every command, TRIANGLE's rules and properties)
+  (properties, build/sim/gpu/test_gpu_model.txt): properties: 2640 random triangles drawn (0 culled, 2 of zero area), 27565149 pixels, 18240645 failed the depth test
+
+test_gpu (surf_gpu with surf_gpu_tri, surf_gpu_div and surf_vram against the C model), seeds 1-3:
+  abort: 24 TRIANGLEs aborted at random moments, 6 stopped inside their walk (1 with a group's depth written, not its colour)
+  test_gpu: PASS (seed 1: 1120 checks; 2696 commands, 24064 words, 4638969 pixel writes in the model; VRAM compared 175 times (55 directed, 120 random chunks); engine 1600620 grants, 36982 cycles waiting for the CPU (61587 CPU accesses meanwhile); 17972074 cycles)
+  test_gpu: GPU2 (seed 1): 751 TRIANGLEs (409 walked, 134 culled, 47 of zero area), 778814 pixels covered, 44792 failing the depth test; 29 FLIPs
+  abort: 24 TRIANGLEs aborted at random moments, 7 stopped inside their walk (0 with a group's depth written, not its colour)
+  test_gpu: PASS (seed 2: 1120 checks; 2937 commands, 26975 words, 4499950 pixel writes in the model; VRAM compared 175 times (55 directed, 120 random chunks); engine 1549644 grants, 36066 cycles waiting for the CPU (62558 CPU accesses meanwhile); 17908037 cycles)
+  test_gpu: GPU2 (seed 2): 789 TRIANGLEs (457 walked, 129 culled, 46 of zero area), 718405 pixels covered, 45787 failing the depth test; 23 FLIPs
+  abort: 24 TRIANGLEs aborted at random moments, 10 stopped inside their walk (0 with a group's depth written, not its colour)
+  test_gpu: PASS (seed 3: 1120 checks; 2821 commands, 27966 words, 4329247 pixel writes in the model; VRAM compared 175 times (55 directed, 120 random chunks); engine 1487147 grants, 43828 cycles waiting for the CPU (69614 CPU accesses meanwhile); 17712919 cycles)
+  test_gpu: GPU2 (seed 3): 825 TRIANGLEs (448 walked, 148 culled, 58 of zero area), 681441 pixels covered, 33896 failing the depth test; 19 FLIPs
+  the walk's cycles (a box of 14,938 groups, 7,499 covered; and the setup), seeds 1 / 2 / 3:
+    fill: 640x480 in 76844 cycles
+    copy: 639x400 (unaligned, overlapping) in 129260 cycles
+    tri timing: flat: 15002 / 14991 / 14991 cycles
+    tri timing: Gouraud: 15221 / 15221 / 15211 cycles
+    tri timing: depth: 52328 / 52334 / 52332 cycles
+    tri timing: Gouraud and depth: 52326 / 52332 / 52333 cycles
+    tri timing: ZWRITE alone: 30028 / 30032 / 30019 cycles
+    tri timing: culled: 33 / 47 / 30 cycles
+    tri timing: one pixel, flat: 59 / 71 / 52 cycles
+    tri timing: one pixel, Gouraud and depth: 287 / 298 / 283 cycles
+
+test-gpu-video:
+  [old tests, HAS_GFX=1] test_video: PASS (122 checks, seed 1, 108 frames, 46145504 pix cycles)
+  [old tests, HAS_GFX=1] test_video: PASS (122 checks, seed 2, 108 frames, 46144276 pix cycles)
+  [old tests, HAS_GFX=1] test_video: PASS (122 checks, seed 3, 108 frames, 46148229 pix cycles)
+  test_video_gfx: PASS (90 checks, seed 1, 99 frames)
+  test_video_gfx: PASS (90 checks, seed 2, 99 frames)
+  test_video_gfx: PASS (90 checks, seed 3, 99 frames)
+  flip port: GFX_BASE written by the port in mid-frame shows from the next frame, at a blanking's start from the frame after it (3 times); a CPU store in the same cycle wins
+
+test-gpu-interconnect:
+  [seed 1] tb_interconnect: PASS (HAS_DDR=1 HAS_DDRC=0 HAS_GPU=1, 24932 accesses: 9965 answered by targets, 14967 errors expected and seen, 529 DDR errors before calibration; DDR 491 fetches + 638 data; ddrc 0; gpu 614, vram 455; 5753+6717 back-to-back)
+  [seed 2] tb_interconnect: PASS (HAS_DDR=1 HAS_DDRC=0 HAS_GPU=1, 24932 accesses: 9990 answered by targets, 14942 errors expected and seen, 525 DDR errors before calibration; DDR 541 fetches + 623 data; ddrc 0; gpu 598, vram 484; 5818+6742 back-to-back)
+  [seed 3] tb_interconnect: PASS (HAS_DDR=1 HAS_DDRC=0 HAS_GPU=1, 24932 accesses: 10012 answered by targets, 14920 errors expected and seen, 543 DDR errors before calibration; DDR 511 fetches + 625 data; ddrc 0; gpu 650, vram 443; 5835+6660 back-to-back)
+
+test-gpu-soc (gpudiag on build/sim/surfsim_gpu, the RTL SoC with HAS_GPU = 1, HAS_DDR = 1):
+  gpudiag_check: PASS (146 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 300 frames captured, 129 distinct, 126087889 cycles)
+  [after Ctrl-R] gpudiag_check: PASS (146 checks, then 145 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's and a captured frame's; 300 frames captured, 129 distinct; the cube 1 seconds, 60 to 60 frames drawn a second, none torn or missed)
+  [the cube] cube: 16 frames at full rate (16 video frames, 16 shown) ok (6 checks)
+  [the cube's free run] cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn (in all 60 drawn, 59 shown, 0 missed, 0 torn)
+  [a rerun after a target and clip were left] gpudiag_check: PASS (146 checks, then 145 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3773790 cycles
+  [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  surfsim: output matched after 126087889 cycles (5.044 s simulated) in 56.8 s wall (2.22 M cycles/s); UART 1 bytes in, 4019 out, 0 framing errors; DDR calibrated, 0 reads 0 writes 0 fetches 0 errors; exit 0
+  the first run and the cube's first second, as the UART carried them:
+    
+    SurfGPU diagnostic 1.0.0 (build bfaac489, dirty tree)
+    board simulation (0xf0), SoC 0.4.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+    bitstream build bfaac489 flags 3, features 1ff
+    identity                           ok (5 checks)
+    VRAM window (March C-)             (300 KiB) ok (59 checks)
+    video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+    gpu registers and errors           ok (14 checks)
+    gpu2 commands                      ok (4 checks)
+    scenes                             17, engine present
+    scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+    scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (5 checks)
+    scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+    scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+    scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+    scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+    scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+    scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
+    scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
+    scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
+    scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
+    scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
+    scene 12: engine: demo             crc f501eb46 ok (3 checks)
+    scene 13: engine: flat triangles, culling crc bbb6a4cb ok (3 checks)
+    scene 14: engine: Gouraud triangles, ramps crc f4bcafe0 ok (3 checks)
+    scene 15: engine: depth, 320x240   crc bbe8cf82 ok (3 checks)
+    scene 16: engine: page B drawn, FLIP crc e82b76e5 ok (3 checks)
+    cube: 16 frames at full rate       (16 video frames, 16 shown) ok (6 checks)
+    
+    GPUDIAG: PASS (146 checks)
+    
+    UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again.
+    cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not checked), torn (frames that were none of the cube's 128)
+    cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn (in all 60 drawn, 59 shown, 0 missed, 0 torn)
+
+test-gpu-noengine:
+  test_gpudiag_check: PASS (86 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth to sixth reviews' cases, the build to test, --must-fail, the cube's lines)
+  [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 1 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+  [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (14 of 106 checks failed), 1 problems found, 'no engine: gpu.ID reads 0x32555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete run makes' said)
+
+test-gpu-system-boot (SurfOS from a card image on the DDR+GPU SoC):
+  test-soc-system-boot: 21 of 21 checks passed in 106 s (boot 228965831 cycles = 9.159 s simulated in 105.7 s wall (2.17 M cycles/s); recovery 166723725 cycles = 6.669 s simulated in 75.2 s wall (2.22 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
