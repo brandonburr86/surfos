@@ -11,11 +11,13 @@ emulated USB stick (a copy of the image on an xHCI controller, usb-storage, remo
 and runs \\EFI\\BOOT\\BOOTX64.EFI from it, the same removable-media path a laptop takes.
 
 The screen is read back without OCR: the framebuffer is captured with the monitor's
-screendump and every 8x16 cell is matched against the console font (driver/font8x16.c),
-using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at scale 2;
-1920x1080: 120x33). That is how the keyboard-only boot (no serial port at all, like the
-laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
-comes out of the framebuffer.
+screendump and every cell is matched against the console font (driver/font8x16.c),
+using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at scale 2).
+10/25/26 (track A, A7): at 1920x1080 the console draws in Spleen 12x24 (driver/font12x24.c),
+160x45 cells at the font's own size, as driver/fbfont.c chooses it under profile=laptop,
+which every boot here has; Vm.font says which. That is how the keyboard-only boot (no
+serial port at all, like the laptop) is driven: keys go in through the emulated PS/2
+keyboard (monitor sendkey), text comes out of the framebuffer.
 
 --test runs eighteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
@@ -24,10 +26,11 @@ comes out of the framebuffer.
              switching, a set of commands and the escape sequences of `ansi`, all through
              the keyboard and the screen
   fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
-             hands that mode over. The console fills it with 120x33 cells at scale 2: a long
-             line on one row, Backspace back across a typed line that wrapped, `ansi` with
-             its corner at (119,32), console switching, a line of UTF-8 read back through the
-             code page 437 font (▸ ≋ … café), the pager answered on the keyboard
+             hands that mode over. The console fills it with 160x45 cells of Spleen 12x24
+             (10/25/26; 120x33 at scale 2 in 8x16 before): a long line on one row, Backspace
+             back across a typed line that wrapped, `ansi` with its corner at (159,44), console
+             switching, a line of UTF-8 read back through the code page 437 font (▸ ≋ … café),
+             the pager answered on the keyboard, scrolling back at its question
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
@@ -122,6 +125,7 @@ import zlib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONT_C = os.path.join(REPO, 'driver', 'font8x16.c')
+FONT_FILE = os.path.join(REPO, 'driver', 'font%s.c')    # 10/25/26 (track A, A7): font8x16.c, font12x24.c, font16x32.c
 # The shell's prompt: the ring-0 shell's "SurfOS*> " of old, or the SurfOS prompt (10/6/26,
 # shell/prompt.c): breadcrumbs, the wave (~ in ASCII), a state character, "> ", with colour
 # sequences in between when the shell colours it. The space after ">" is not required: a
@@ -232,67 +236,97 @@ def find_firmware(code, vars_):
 
 # ---- the screen ----------------------------------------------------------------------------
 
-def load_font():
+def load_font(name='8x16'):
     """{glyph rows: character} from the console font. 10/6/26: the font holds code page 437
     (tools/bdf2c.py), and each entry's comment names its code point (/* U+25B8 ▸ */), which
     is the character a cell with that glyph shows. The blank glyphs (the empty cell, space,
     no-break space) read as a space; were two characters to share a glyph, ASCII would win,
-    then the lower index."""
+    then the lower index. 10/25/26 (track A, A7): any of the fonts (name 8x16, 12x24, 16x32);
+    each row is the cell's width in bits, the leftmost pixel highest, whatever the table's
+    bytes (one per row up to 8 pixels, two above)"""
     glyphs = {}
-    src = open(FONT_C, encoding='utf-8').read()
+    width, height = map(int, name.split('x'))
+    path = FONT_FILE % name
+    src = open(path, encoding='utf-8').read()
     entries = re.findall(r'\[0x([0-9a-fA-F]{2})\] = \{ ([^}]*) \}, /\* U\+([0-9A-Fa-f]{4,6})', src)
     if len(entries) != 256:
-        sys.exit(f'{FONT_C}: could not read the font table ({len(entries)} of 256 entries)')
+        sys.exit(f'{path}: could not read the font table ({len(entries)} of 256 entries)')
+    shift = (8 if width <= 8 else 16) - width
     for index, rows, code in sorted(entries, key=lambda e: (not 0x20 <= int(e[0], 16) <= 0x7e, int(e[0], 16))):
-        glyphs.setdefault(tuple(int(x, 16) for x in rows.split(',')), chr(int(code, 16)))
-    glyphs[(0,) * 16] = ' '
+        glyphs.setdefault(tuple(int(x, 16) >> shift for x in rows.split(',')), chr(int(code, 16)))
+    glyphs[(0,) * height] = ' '
     return glyphs
 
 
-GLYPHS = None
+GLYPHS = {}                                     # 10/25/26: per font
 
 
 FB_MAX_COLS, FB_MAX_ROWS = 240, 100            # include/sys/framebuffer.h
 
 
 class Screen:
-    """the console's text grid read back from a framebuffer screenshot (PPM)"""
-    def __init__(self, ppm):
-        global GLYPHS
-        if GLYPHS is None:
-            GLYPHS = load_font()
+    """the console's text grid read back from a framebuffer screenshot (PPM). 10/25/26 (track A, A7): drawn in the
+    font named (Vm.font), and read only when something asks for the text (rows, text(), colours, cursor): a test
+    that looks at pixels alone does not pay for 7,200 cells"""
+    def __init__(self, ppm, font='8x16'):
+        if font not in GLYPHS:
+            GLYPHS[font] = load_font(font)
+        self.glyphs = GLYPHS[font]
+        self.fw, self.fh = map(int, font.split('x'))
         m = re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', ppm)
         if not m:
             raise ValueError('not a PPM screenshot')
         self.w, self.h = int(m.group(1)), int(m.group(2))
         self.px = ppm[m.end():]
         self.ppm = ppm
-        # fb_setup(): the scale at which 80x25 cells fit, then as many cells as the mode holds
-        s = max(1, min(self.w // 640, self.h // 400))
+        # fb_setup_font(): the scale at which 80x25 cells fit, then as many cells as the mode holds
+        s = max(1, min(self.w // (80 * self.fw), self.h // (25 * self.fh)))
         self.scale = s
-        self.cols, self.nrows = min(self.w // (8 * s), FB_MAX_COLS), min(self.h // (16 * s), FB_MAX_ROWS)
-        self.ox, self.oy = (self.w - self.cols * 8 * s) // 2, (self.h - self.nrows * 16 * s) // 2
-        self.cursor = None
-        self.colours = {}                       # (col, row): (foreground, background) as RGB bytes
-        self.rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
-                     if self.w >= 640 else [])
+        self.cols, self.nrows = min(self.w // (self.fw * s), FB_MAX_COLS), min(self.h // (self.fh * s), FB_MAX_ROWS)
+        self.ox, self.oy = (self.w - self.cols * self.fw * s) // 2, (self.h - self.nrows * self.fh * s) // 2
+        self._rows = None
+        self._cursor = None
+        self._colours = {}                      # (col, row): (foreground, background) as RGB bytes
+
+    def _read(self):
+        if self._rows is None:
+            self._rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
+                          if self.w >= 640 else [])
+
+    @property
+    def rows(self):
+        self._read()
+        return self._rows
+
+    @property
+    def colours(self):
+        self._read()
+        return self._colours
+
+    @property
+    def cursor(self):
+        self._read()
+        return self._cursor
 
     def pixel(self, x, y):
         i = (y * self.w + x) * 3
         return self.px[i:i + 3]
 
     def cell(self, col, row):
-        s, x0, y0 = self.scale, self.ox + col * 8 * self.scale, self.oy + row * 16 * self.scale
-        grid = [[self.pixel(x0 + gx * s, y0 + gy * s) for gx in range(8)] for gy in range(16)]
+        s, fw, fh = self.scale, self.fw, self.fh
+        x0, y0 = self.ox + col * fw * s, self.oy + row * fh * s
+        grid = [[self.pixel(x0 + gx * s, y0 + gy * s) for gx in range(fw)] for gy in range(fh)]
         counts = collections.Counter(p for line in grid for p in line).most_common(2)
         bg = counts[0][0]
-        self.colours[(col, row)] = (counts[1][0] if len(counts) > 1 else None, bg)
-        bits = tuple(sum(0x80 >> gx for gx in range(8) if grid[gy][gx] != bg) for gy in range(16))
-        ch = GLYPHS.get(bits)
-        if ch is None and bits[14] == 0xFF and bits[15] == 0xFF:      # the underline cursor
-            ch = GLYPHS.get(bits[:14] + (0, 0))
+        self._colours[(col, row)] = (counts[1][0] if len(counts) > 1 else None, bg)
+        top = 1 << (fw - 1)
+        bits = tuple(sum(top >> gx for gx in range(fw) if grid[gy][gx] != bg) for gy in range(fh))
+        ch = self.glyphs.get(bits)
+        under, full = fh // 8, (1 << fw) - 1    # the underline cursor: the cell's bottom eighth (fbcore.c)
+        if ch is None and all(b == full for b in bits[fh - under:]):
+            ch = self.glyphs.get(bits[:fh - under] + (0,) * under)
             if ch is not None:
-                self.cursor = (col, row)
+                self._cursor = (col, row)
         return ch if ch is not None else '?'
 
     def text(self):
@@ -391,6 +425,11 @@ class Vm:
                 if serial else ['-serial', 'none'])
         cmd += list(extra) + args.extra.split()
         self.cmd = cmd
+        # 10/25/26 (track A, A7): the console's font, as driver/fbfont.c chooses it for these boots (profile=laptop):
+        # Spleen 12x24 at 1920x1080 or more, 8x16 below (OVMF's own mode is 1280x800)
+        xres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.xres=')]
+        yres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.yres=')]
+        self.font = '12x24' if xres and yres and xres[-1] >= 1920 and yres[-1] >= 1080 else '8x16'
         self.proc = subprocess.Popen(cmd, cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT)
         self.mon = Monitor(self.mon_path, self.proc)
@@ -481,7 +520,7 @@ class Vm:
                 break
             time.sleep(0.1)
         time.sleep(0.1)
-        scr = Screen(open(path, 'rb').read())
+        scr = Screen(open(path, 'rb').read(), self.font)
         if save and self.outdir:
             scr.png(os.path.join(self.outdir, save))
         return scr
@@ -896,7 +935,8 @@ def scenario_graphics(args, image, firmware, outdir):
 
 
 def scenario_fullhd(args, image, firmware, outdir):
-    """1920x1080, as on the laptop: more text, same letters (120x33 at scale 2, not 80x25 centred)"""
+    """1920x1080, as on the laptop: 10/25/26 (track A, A7) 160x45 cells of Spleen 12x24 at the font's own size (120x33
+    of 8x16 at scale 2 before, 80x25 centred before that)"""
     results = []
     vm = Vm('fullhd', args, image, firmware, mem='512', serial=False, outdir=outdir,
             extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
@@ -914,16 +954,16 @@ def scenario_fullhd(args, image, firmware, outdir):
             vm.screen('stuck.png')
             return results
         vm.screen('boot.png')
-        results.append(('1920x1080: 120x33 cells at scale 2, 12-pixel margins above and below, the prompt at the left edge',
-                        (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 2, 120, 33, 0, 12)
+        results.append(('1920x1080: 160x45 cells of Spleen 12x24 at scale 1, no margin, the prompt at the left edge',
+                        (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 1, 160, 45, 0, 0)
                         and not scr.rows[last_prompt_row(scr)].startswith(' ')))
-        got = typed('bootinfo\n', lambda s: '120x33 text at scale 2' in s.text())
-        results.append(('bootinfo: framebuffer 1920x1080, 120x33 text at scale 2', got is not None))
-        # a line longer than 80 columns: typed past the end of the row (the line editor wraps it),
-        # 6 x Backspace back across the wrap, and echoed on one row of 105 characters
-        long = 'abcdefghij' * 11
-        got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:104] + 'Z' in s.rows)
-        results.append(('a 105-character line on one row; Backspace erases back across a wrapped line', got is not None))
+        got = typed('bootinfo\n', lambda s: '160x45 text at scale 1 in Spleen 12x24' in s.text())
+        results.append(('bootinfo: framebuffer 1920x1080, 160x45 text at scale 1 in Spleen 12x24', got is not None))
+        # a line longer than the row: typed past its end (the line editor wraps it), 6 x Backspace back across the
+        # wrap, and echoed on one row of 145 characters
+        long = 'abcdefghij' * 15
+        got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:144] + 'Z' in s.rows)
+        results.append(('a 145-character line on one row; Backspace erases back across a wrapped line', got is not None))
         # 10/25/26 (track A): a TAB goes to the next multiple of 8 and leaves the cells it passes empty
         got = typed(r"printf '1\\t2\\n'" + '\n', lambda s: '1       2' in s.rows)
         results.append(('printf with a TAB: the 2 in column 8', got is not None))
@@ -950,12 +990,12 @@ def scenario_fullhd(args, image, firmware, outdir):
                         seen is not None and any(r.startswith('    die ') and r.endswith('processes use run)')
                                                  for s in seen for r in s.rows)))
         got = typed('ansi\n', lambda s: 'ANSI-TEST done' in s.text(), 30)
-        results.append(('ansi at 120x33: the pattern, Z in the corner (119,32), the size from TTY_GETSIZE', ansi_ok(got)))
+        results.append(('ansi at 160x45: the pattern, Z in the corner (159,44), the size from TTY_GETSIZE', ansi_ok(got)))
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'ANSI-TEST' not in s.text(), 20, interval=0.5)
         vm.keys('<f1>')
-        one = vm.wait_screen(lambda s: 'ANSI-TEST done, 120x33' in s.text(), 20, interval=0.5)
-        results.append(('F2 shows console 2 and F1 brings console 1 back, at 120x33', two is not None and one is not None))
+        one = vm.wait_screen(lambda s: 'ANSI-TEST done, 160x45' in s.text(), 20, interval=0.5)
+        results.append(('F2 shows console 2 and F1 brings console 1 back, at 160x45', two is not None and one is not None))
         # 10/6/26 (the console's character set, the pager): UTF-8 drawn as code page 437 cells,
         # read back through the rebuilt font (driver/font8x16.c), SurfOS's ▸ and ≋ included
         got = typed('run pagetest utf8\n', lambda s: UTF8_SAMPLE in s.rows)
@@ -964,8 +1004,8 @@ def scenario_fullhd(args, image, firmware, outdir):
         results.append(('UTF-8 on the framebuffer: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ read back through the font, € as ?',
                         got is not None))
 
-        # the pager (TTY_PAGE) on the keyboard: after `clear`, `pagetest 100` asks after 32 lines
-        # (120x33) in inverse video on the last row; Enter shows one more line, Space the next 32,
+        # the pager (TTY_PAGE) on the keyboard: after `clear`, `pagetest 100` asks after 44 lines
+        # (160x45) in inverse video on the last row; Enter shows one more line, Space the next 44,
         # Esc drops the rest
         def asking_after(last):
             return lambda s: (s.rows[-1].startswith('--More--') and s.colours.get((0, s.nrows - 1)) == (BLACK, GREY) and
@@ -973,33 +1013,33 @@ def scenario_fullhd(args, image, firmware, outdir):
         ok = typed('clear\n', lambda s: True) is not None
         if ok:
             vm.keys('run pagetest 100\n')
-            ok = vm.wait_screen(asking_after(32), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(44), 30, interval=0.5) is not None
         if ok:
             vm.keys('\n')
-            ok = vm.wait_screen(asking_after(33), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(45), 30, interval=0.5) is not None
         if ok:
             vm.keys(' ')
-            ok = vm.wait_screen(asking_after(65), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(89), 30, interval=0.5) is not None
         back = live = None
         if ok:
             vm.screen('pager.png')
             # 10/25/26 (track A, A6): Shift+PgUp at the question shows the rows that scrolled off the top (the view's top
-            # 32 rows), " -32 " in the top right corner in inverse video, and the question waits; Shift+PgDn brings the
+            # 44 rows), " -44 " in the top right corner in inverse video, and the question waits; Shift+PgDn brings the
             # live screen back, the question on it
             vm.keys('<shift-pgup>')
-            back = vm.wait_screen(lambda s: s.rows[0].startswith('pagetest line 002') and s.rows[0].rstrip().endswith(' -32')
+            back = vm.wait_screen(lambda s: s.rows[0].startswith('pagetest line 002') and s.rows[0].rstrip().endswith(' -44')
                                   and s.colours.get((s.cols - 2, 0)) == (BLACK, GREY) and s.rows[1] == 'pagetest line 003'
-                                  and s.rows[-1] == 'pagetest line 034', 30, interval=0.5)
+                                  and s.rows[-1] == 'pagetest line 046', 30, interval=0.5)
             if back is not None:
                 vm.screen('scrollback.png')
             vm.keys('<shift-pgdn>')
-            live = vm.wait_screen(asking_after(65), 30, interval=0.5)
+            live = vm.wait_screen(asking_after(89), 30, interval=0.5)
             vm.keys('<esc>')
             got = vm.wait_screen(lambda s: at_prompt(s), 30, interval=0.5)   # the rest, run's status line too, dropped
-            ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 066' not in got.text()
-        results.append(('pager on the keyboard at 120x33: --More-- after 32 lines, Enter one more, Space 32 more, '
+            ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 090' not in got.text()
+        results.append(('pager on the keyboard at 160x45: --More-- after 44 lines, Enter one more, Space 44 more, '
                         'Esc drops the rest', ok))
-        results.append(('scrollback at the question: Shift+PgUp shows the rows above, tagged -32, the question waits; '
+        results.append(('scrollback at the question: Shift+PgUp shows the rows above, tagged -44, the question waits; '
                         'Shift+PgDn the live screen and the question', back is not None and live is not None))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()

@@ -150,8 +150,12 @@ firmware version setup shows, for the hardware record.
    then the banner, *Brandon Burr's SurfOS* and *Version 1.0 on an x86, 2004-2026* in red
    and orange, and the shell's prompt, `SURF ≋>` (section 10).
 
-The text fills the screen: 120x33 characters on a 1920x1080 panel, with the letters
-drawn at twice the font's size, or 170x48 on a 1366x768 panel.
+The text fills the screen: 160x45 characters on the laptop's 1920x1080 panel, in Spleen
+12x24 at its own size (since 10/25/26; 120x33 of the 8x16 font at twice its size before),
+or 170x48 of 8x16 on a 1366x768 panel. To choose another font, add `font=8x16`, `font=12x24`
+or `font=16x32` (120x33 on 1920x1080, the biggest letters) to the GRUB entry's `multiboot2`
+line (press `e` in the menu); a font that 80x25 of its characters would not fit gives way to
+8x16, and `bootinfo` says so.
 
 The GRUB menu also has:
 
@@ -1390,7 +1394,7 @@ Limits:
 | Works on the laptop (verified under emulation) | Not supported yet |
 |---|---|
 | UEFI boot from USB, GRUB, Multiboot 2 | Secure Boot (GRUB is unsigned) |
-| Framebuffer console filling the screen (120x33 cells at 1920x1080), VGA colours, 4 consoles | USB keyboards and mice; USB hubs and docks |
+| Framebuffer console filling the screen (160x45 cells of Spleen 12x24 at 1920x1080, `font=` for another), VGA colours, 4 consoles, scrolling back | USB keyboards and mice; USB hubs and docks |
 | Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | Touchpad gestures such as two-finger scrolling (the touchpad works as a two-button mouse: [GUI](GUI.md)) |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
 | Delays calibrated on the PIT, the ACPI PM timer or the HPET | WPA3-only Wi-Fi networks, Bluetooth, sound, battery, suspend, ACPI power-off |
@@ -1420,7 +1424,8 @@ Limits:
 * **Screen.** `driver/framebuffer.c` draws the console's cells into the firmware's
   framebuffer with an 8x16 font, scaled by the largest whole number at which 640x400
   fits; the grid then takes as many cells as the screen holds (120x33 at 1920x1080), and
-  the console follows its size. A cell holds a code page 437 character, into which the
+  the console follows its size (10/25/26: under profile=laptop at 1920x1080 or more in
+  Spleen 12x24, 160x45 cells; `font=` chooses 8x16, 12x24 or 16x32). A cell holds a code page 437 character, into which the
   console decodes UTF-8; the font has those 256 characters, from Spleen, with SurfOS's
   `▸` and `≋` drawn for it. A framebuffer above 4 GB is reached with a
   4 MB page (PSE-36), write-combining through PAT.

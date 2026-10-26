@@ -239,6 +239,27 @@ The integrator's:
 - Check: SMOKE `@boot settingsdisk=` twice; the history survives the reboot.
 - Update the storage rule's text in CLAUDE.md: name the two files.
 
+## Interfaces fixed
+
+Recorded as each stage landed on `daily/main` (10/25/26); fields and functions are added, not changed.
+
+- **A3, the screen's presents** (`include/sys/framebuffer.h`): `framebuffer_present_lazy()` (at once when the last
+  present was 20 ms ago or more, otherwise by the `fbflush` thread), `framebuffer_flush()` (a pending present now;
+  `tty_getc()` calls it through `console_flush()`), and from A6 `framebuffer_present_soon()` (by the thread at once,
+  for an interrupt handler). Graphics sessions keep `framebuffer_present()`.
+- **A4, keys in raw mode** (`kernel/tty.c`, `include/surfos/tty.h`): xterm's, with m = 1 + Shift + 2·Alt + 4·Ctrl:
+  `ESC[1;mA`-`D`, `H`, `F`; `ESC[n;m~` for Insert, Delete, PgUp, PgDn and F5-F12 (`ESC[15~`-`ESC[24~` without
+  modifiers); Shift+Tab `ESC[Z`; Alt+key ESC then the key; Ctrl+Space 0x00, Ctrl+/ 0x1F. `tty_key(t, c, mods)` with
+  `KEY_SHIFT` 1, `KEY_ALT` 2, `KEY_CTRL` 4 (`include/surfos/keyboard.h`). Track C's `win_event.mods` is m - 1.
+- **A6, scrollback** (`include/surfos/console.h`): `console_scroll_key(key)` takes Shift+PgUp, PgDn, Home and End
+  from `keyboard.c` (1: the view's; 0: the tty's, in VGA text mode and under a graphics session, where the desktop
+  gets `ESC[5;2~` and the like: `framebuffer_graphics_on()`); `console_view_live()` before any other key.
+- **A7, fonts** (`include/sys/framebuffer.h`): `struct fb_font { name, width, height, rows8, rows16 }`, the 256 code
+  page 437 glyphs a row each (`u8` up to 8 pixels wide, `u16` up to 16, the most significant bit leftmost);
+  `fb_font_8x16`, `fb_font_12x24`, `fb_font_16x32` (`driver/font*.c`, from `tools/bdf2c.py`); `struct fb_surface`'s
+  `font`; `fb_setup_font(s, base, mode, font)` (`fb_setup()` is 8x16); `fb_font_named()` and `fb_font_choose()`
+  (`driver/fbfont.c`). The desktop keeps `font8x16`; track C's C9 draws its sharp text with these.
+
 ## Shared with the other tracks
 
 - **`tools/qemu-run.py`'s SMOKE table, the Makefile's program lists, `shell/selftest.c`'s `tests[]` and

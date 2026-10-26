@@ -56,6 +56,14 @@ take at most the screen width or height in iterations.
 | `fb_line_rgb(surface, x0, y0, x1, y1, rgb)` | Draw an inclusive line in either direction |
 | `fb_blit_rgb(surface, x, y, bitmap)` | Copy a clipped RGB image; return -1 for an invalid source |
 
+Text: `fb_draw_glyph(surface, col, row, ch, attr, cursor)` draws a console cell in the
+surface's font. Since 10/25/26 (track A, A7) that is `surface->font`, a `struct fb_font`
+(`include/sys/framebuffer.h`: name, cell width and height, the 256 code page 437 glyphs'
+rows in `rows8` or `rows16`): the session's surface carries the text console's font,
+Spleen 12x24 on the laptop's 1920x1080 (160x45 cells) or 8x16. `fb_font_8x16`,
+`fb_font_12x24` and `fb_font_16x32` are there to draw in another. The desktop draws its
+own text with `font8x16` (`shell/guidraw.c`).
+
 `struct fb_bitmap` holds a pointer to 32-bit RGB pixels, width, height, stride
 **in pixels**, and the readable allocation size **in bytes**. Its source is
 ordinary RAM and must not overlap the framebuffer. The driver checks dimensions,

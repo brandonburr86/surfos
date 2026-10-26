@@ -80,7 +80,9 @@ mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ lar
 driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for lspci -v and wifiinfo), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console: 256 code page 437 glyphs made by tools/bdf2c.py from
-           fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences), cp437.c (the character set, the UTF-8 decoder)
+           fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences; 10/25/26 font12x24.c and font16x32.c
+           from Spleen 12x24 and 16x32, fbfont.c chooses: 12x24 on the laptop's 1920x1080, font= otherwise),
+           cp437.c (the character set, the UTF-8 decoder)
            The framebuffer also provides kernel-only software 2D drawing and revocable graphics sessions (docs/GRAPHICS.md).
            The `gui` desktop uses these sessions; `pointer.c`, `ps2mouse.c` and `usb/mouse.c` provide native mouse input (docs/GUI.md).
            usb/: xhci.c (USB 3 host controller, polled), usb.c (enumeration, the usb thread, lsusb),
@@ -252,7 +254,7 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   console's presents (batched by the `fbflush` thread, at most one per 20 ms while output
   pours in), and surfsh's `time cmd` says how long cmd took.
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
-  `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+  `clock=pmtmr`, `clock=hpet`, `usb=off`, `font=8x16|12x24|16x32` (10/25/26, the console's font). `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * The network manager: `settings` says where the settings came from, `wifi saved` what is
   saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
   and after (the keeper's repeated tries are written only there). `settings=off` on the kernel

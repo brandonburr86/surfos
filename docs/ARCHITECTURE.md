@@ -72,7 +72,8 @@ user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, pciinfo.c (lspci -v, wifiinfo), serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
              framebuffer.c + fbcore.c + font8x16.c (the UEFI console: the 256 code page 437 characters;
-             fonts/ has the Spleen source and surfos-symbols.bdf), cp437.c (the character set, the UTF-8
+             fonts/ has the Spleen source and surfos-symbols.bdf; 10/25/26 font12x24.c, font16x32.c, fbfont.c
+             which chooses), cp437.c (the character set, the UTF-8
              decoder),
              net/e1000.c, parport.c, dma/, floppy/, net/3c905b/ (2004, unwired),
              usb/ (xhci.c, usb.c, usbnet.c, usbdesc.c, msc.c: the USB stack, sections 15 and 16)
@@ -312,6 +313,23 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   keyboard interrupt. Under a graphics session the four keys are the session's (the desktop
   gets `ESC[5;2~` and the like, `framebuffer_graphics_on()`). VGA text mode keeps no rows and
   passes the keys on as before; so do the pseudo-terminals, whose terminals have their own.
+  **10/25/26** (track A, A7): **fonts**. The cells are drawn in a `struct fb_font`
+  (`include/sys/framebuffer.h`: a name, the cell's width and height, a row of each of the 256
+  glyphs in `u8` up to 8 pixels wide or `u16` up to 16): Spleen 8x16 as before, or Spleen 12x24
+  or 16x32 (`driver/font12x24.c`, `font16x32.c`, made by `tools/bdf2c.py`, which now reads the
+  cell's size from `FONTBOUNDINGBOX`, writes `u16` rows and doubles a font given as `x2:`).
+  `driver/fbfont.c` chooses once, in `framebuffer_init()`: Spleen 12x24 under `profile=laptop`
+  at 1920x1080 or more (160x45 cells, the font at its own size), the font that `font=8x16`,
+  `font=12x24` or `font=16x32` on the kernel command line names, and 8x16 otherwise, so a boot
+  without `profile=laptop` is as it was. A font is taken only where 80x25 of its cells fit, as
+  the console starts on that many; otherwise 8x16, and the screen's line in `bootinfo` says why.
+  The scale is the largest whole number at which 80x25 cells fit (`fb_setup_font()`; `fb_setup()`
+  is 8x16), and the cursor is the cell's bottom eighth. Spleen 12x24 lacks 41 of code page 437's
+  characters: `driver/fonts/surfos-symbols-12x24.bdf` draws SurfOS's four symbols, the arrows,
+  the triangles, ▬, ≡, ∞ and the integral's halves in its manner, and sets Spleen 8x16's own
+  glyphs for the other 25 (☺ ♣ ♪ ⌂ ₧ ƒ and the Greek letters) in the bigger cell. 16x32's four
+  SurfOS symbols are the 8x16 ones, each pixel two by two. The desktop keeps drawing in 8x16
+  (`shell/guidraw.c`); `struct fb_font` is the interface its sharp text (track C) uses later.
   Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
   from task context, `kprintf()` print on the calling task's console (`kprintf()`
   in yellow, boot code and interrupt handlers on the active console), so a shell
@@ -858,7 +876,8 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
   font's code-point comments say which character each glyph is, so `▸ ≋ …` and accents
   read back; `page_through()` answers the pager with Space on the keyboard). Twelve
   scenarios: serial, keyboard-only at 4 GB (raw mode and escape sequences included), the
-  IdeaPad's 1920x1080 panel filled with 120x33 cells (`fullhd`), 6 GB with `himem` checked
+  IdeaPad's 1920x1080 panel filled with 120x33 cells (`fullhd`; 10/25/26: 160x45 of Spleen
+  12x24, which the harness's `Screen` reads in the font `Vm.font` names), 6 GB with `himem` checked
   through the monitor, the troubleshooting entry, the kernel-shell entry (`shell=kernel`,
   section 17), no PIT, a USB Ethernet adapter (section 15), two USB storage scenarios
   (section 16), and images missing their initrd or kernel.

@@ -412,7 +412,9 @@ $(BUILD)/host/test_bootinfo: tests/host/test_bootinfo.c $(BUILD)/host/kernel/ker
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-$(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o \
+                                $(BUILD)/host/kernel/driver/fbfont.o $(BUILD)/host/kernel/driver/font12x24.o \
+                                $(BUILD)/host/kernel/driver/font16x32.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
@@ -441,7 +443,7 @@ $(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/p
 
 # the console's character set (10/6/26): code page 437, the UTF-8 decoder, the font in the same order
 $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/font8x16.o \
-                          $(HOSTLIB_OBJ)
+                          $(BUILD)/host/kernel/driver/font12x24.o $(BUILD)/host/kernel/driver/font16x32.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 

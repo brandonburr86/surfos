@@ -30,6 +30,10 @@ PRESENT_MS instead of one per line. The thread exists only with a framebuffer
 about to wait for a key presents first (framebuffer_flush(), from tty.c through
 console_flush()), so a prompt and --More-- show at once. A cell whose cursor alone came
 or went is drawn as its two underline rows (fb_draw_cursor()). gfxinfo shows the counts.
+
+10/25/26 (track A, A7): the cells' font is chosen here, once (driver/fbfont.c): Spleen 12x24 at
+its own size on the laptop's 1920x1080 (profile=laptop), font= on the kernel command line, 8x16
+otherwise, as before. The console starts on 80x25 cells of it, which the choice makes sure fit.
 */
 
 #include <surfos/types.h>
@@ -64,6 +68,8 @@ static surf_task *graphics_task;            /* a longer-lived graphics session, 
 static surf_console *graphics_console;
 static bool clear_text;                     /* remove graphics, including the text grid's margins */
 static const char *why_not = "the boot loader passed no framebuffer";
+static char font_word[16];                  /* 10/25/26 (A7): font= from the kernel command line, if any */
+static const char *font_why;                /* why that font was not taken (8x16 instead), or NULL */
 static volatile int pending;                /* 10/25/26: a present is due: draw_cell() and set_cursor() only record */
 static u_long last_present;                 /* uptime_ms() when the last present ended */
 static struct ktimer present_timer;         /* wakes the thread once a pending present is due */
@@ -75,6 +81,7 @@ int framebuffer_init(void) {
     struct fb_mode m;
     u64 bytes = 0;
     const char *why;
+    const struct fb_font *font;
     u8 *virt;
     u32 i;
 
@@ -93,7 +100,9 @@ int framebuffer_init(void) {
     virt = (u8 *)vmm_map_large(m.addr, bytes, VMM_WC, &why);
     if(!virt) { why_not = why; return -1; }
 
-    fb_setup(&fbs, virt, &m);
+    font = fb_font_choose(&m, bootinfo_arg(&bootinfo, "font", font_word, sizeof(font_word)) ? font_word : NULL,
+                          bootinfo.laptop, &font_why);
+    fb_setup_font(&fbs, virt, &m, font);
     full_cols = fbs.cols;
     full_rows = fbs.rows;
     fbs.cols = 80;                                            /* the console's 80x25 to begin with, */
@@ -415,8 +424,14 @@ const char *framebuffer_describe(char *buf, size_t size) {
         snprintf(buf, size, "none (%s)", why_not);
         return buf;
     }
-    snprintf(buf, size, "framebuffer %ux%u, %u bpp at 0x%llx, %ux%u text at scale %u, %s", fbs.mode.width,
-             fbs.mode.height, fbs.mode.bpp, fbs.mode.addr, fbs.cols, fbs.rows, fbs.scale,
-             cpu.pat_wc ? "write-combining" : "uncached");
+    /* 10/25/26 (A7): the font, and why font= was not taken where it was not */
+    if(font_why)
+        snprintf(buf, size, "framebuffer %ux%u, %u bpp at 0x%llx, %ux%u text at scale %u in Spleen %s (font=%s: %s), %s",
+                 fbs.mode.width, fbs.mode.height, fbs.mode.bpp, fbs.mode.addr, fbs.cols, fbs.rows, fbs.scale,
+                 fbs.font->name, font_word, font_why, cpu.pat_wc ? "write-combining" : "uncached");
+    else
+        snprintf(buf, size, "framebuffer %ux%u, %u bpp at 0x%llx, %ux%u text at scale %u in Spleen %s, %s",
+                 fbs.mode.width, fbs.mode.height, fbs.mode.bpp, fbs.mode.addr, fbs.cols, fbs.rows, fbs.scale,
+                 fbs.font->name, cpu.pat_wc ? "write-combining" : "uncached");
     return buf;
 }
