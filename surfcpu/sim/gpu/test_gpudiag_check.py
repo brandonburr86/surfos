@@ -33,9 +33,10 @@ scenes, 84 checks for a first run and 83 for a rerun:
     alone does not see a dirty build (B14), as documented;
   - --must-fail passes only a failing run that says what it must;
   - the cube (GPU2): its header and its lines a second after a whole run pass, and so does a capture
-    that ends inside one; a line with a torn frame, a missed one, one out of order or fewer than 30
-    frames drawn fails, also after an earlier run that a rerun follows; words after them fail; the
-    first cube's lines, without frames out of order, are not the cube's lines any more;
+    that ends inside one; a line with a torn frame, a missed one, one out of order, fewer than 30
+    frames drawn, or shown frames other than 58 to 61 (the review of 3fea963, L2: 0 shown, no frame
+    checked, passed) fails, also after an earlier run that a rerun follows; words after them fail;
+    the first cube's lines, without frames out of order, are not the cube's lines any more;
     --cube-seconds N wants N lines after the last run.
 Exit 0 when all pass.
 """
@@ -289,6 +290,13 @@ expect("the cube: a frame out of order", run() + ECHO + CUBE + cube(3, order=1, 
 expect("the cube: the first cube's line, without frames out of order, then one of today's", run() + ECHO + CUBE +
        "cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 60 drawn, 60 shown, 0 missed, 0 torn)\n" + cube(1),
        False)
+# L2: a second whose frames were not shown checked nothing; a second has 59 or 60 video frames
+expect("L2: the cube: 60 drawn, 0 shown", run() + ECHO + CUBE + cube(3, shown=0, at=2), False)
+expect("the cube: 57 shown", run() + ECHO + CUBE + cube(3, shown=57, at=2), False)
+expect("the cube: 58 shown", run() + ECHO + CUBE + cube(3, shown=58, at=2), True)
+expect("the cube: 59 shown (and 59 drawn)", run() + ECHO + CUBE + cube(3, shown=59, drawn=59, at=1), True)
+expect("the cube: 61 shown", run() + ECHO + CUBE + cube(3, shown=61, at=3), True)
+expect("the cube: 62 shown", run() + ECHO + CUBE + cube(3, shown=62, at=3), False)
 expect("the cube: the capture ends inside a line", run() + ECHO + CUBE + cube(2) + "cube    3 s:  6", True)
 expect("the cube: the capture ends inside the word cube", run() + ECHO + CUBE + cube(2) + "cu", True)
 expect("the cube: words after its lines", run() + ECHO + CUBE + cube(2) + "identity ok\n", False)
