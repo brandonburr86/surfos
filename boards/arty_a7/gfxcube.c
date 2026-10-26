@@ -187,11 +187,12 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     gpu_cube_display(&sink, 0);                         /* only its GPAL is kept: nothing reaches the hardware */
     gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, 0, 0);
     rc = gfx_keep_begin(g, &keep, SURF_VRAM_BYTES, r.pal, what);
-    /* frame 0 into picture A, and once its FLIP is done the display: mode 2, 320x240 doubled */
+    /* frame 0 into picture A, and once its FLIP is done the display: mode 2, 320x240 doubled (the
+       wait is gpu_sync()'s, whose FENCE asks for the interrupt: gpucube.c's does not, and a wait on
+       it could only end by its 10 ms steps) */
     if(!rc) rc = record(g, &r, 0, &v0, what);
     if(!rc) rc = gpu_put(g, r.w, r.n, what);
-    if(!rc) rc = gpu_fence_wait(g, v0, what);
-    if(!rc) rc = gpu_check(g, what);
+    if(!rc) rc = gpu_sync(g, what);
     shown.mode = GPU_MODE_GFX;
     shown.base = GPU_CUBE_A;
     shown.stride = 320;

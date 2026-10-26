@@ -1602,7 +1602,7 @@ static void t_cube(unsigned seed) {
     uint8_t *before;
     uint16_t pal[256];
     struct stub_disp reg;
-    unsigned long drawn, shown, checked;
+    unsigned long drawn, shown, checked, waits0, wakes0;
     char want[64];
     (void)seed;
     if(once_t_cube++) return;     /* nothing here depends on the seed: once */
@@ -1620,6 +1620,8 @@ static void t_cube(unsigned seed) {
     s->log_frames = 1;
     s->nflog = 0;
     snprintf(want, sizeof(want), "checked: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
+    waits0 = G.irq_waits;
+    wakes0 = G.irq_wakes;
     check(gfx(s, "gfx cube 2") == CMD_OK && said(s, "gfx cube: 2 s at 320x240 with depth, a FLIP a frame") &&
           said(s, "\n    cube 1 s: ") && said(s, "\n    cube 2 s: ") && said(s, want) && !said(s, "torn,") &&
           said(s, "display back as it was"), "gfx cube 2: a line a second, every frame checked whole, everything back");
@@ -1636,6 +1638,8 @@ static void t_cube(unsigned seed) {
           s->eng.th == 480 && s->eng.cy1 == 480 && !s->eng.zvalid && !(p_status(s) & 1),
           "  the target and clip back in the driver and the engine, no depth buffer, the engine idle");
     check(s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0, "  the FIFO rule kept, no error");
+    check(G.irq_waits > waits0 && G.irq_wakes - wakes0 == G.irq_waits - waits0,
+          "  each fence wait it slept on the interrupt woken by it (frame 0's FLIP waits for a blanking)");
     /* from a 320x240 picture with a depth buffer: it comes back too */
     gfx(s, "gfx mode gfx 2");
     gfx(s, "gfx zbuf 153600 640");
