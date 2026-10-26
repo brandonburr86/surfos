@@ -191,6 +191,10 @@ bool gpu_busy(struct gpu *g);
    is a stopped engine: said, ABORT, GPU_ETIMEOUT; Ctrl+C ABORTs: GPU_EINTR. When it took nothing,
    other tasks may run before it returns. */
 int gpu_pump(struct gpu *g, const u32 *w, u_int n, u_int *taken, u32 *fence, const char *what);
+/* As many of the n words as the FIFO has room for now (FIFO_FREE's rule), never waiting or yielding:
+   the words taken. From the timer interrupt too: gfx cube's tick sends its queued frames while its run
+   prints a line, and the run sends nothing itself meanwhile (gfxcube.c) */
+u_int gpu_push(struct gpu *g, const u32 *w, u_int n);
 
 /* drawing, in target coordinates (GPU.md section 5: signed x, y; the clip cuts) */
 int gpu_set_target(struct gpu *g, u32 base, u32 stride, u32 w, u32 h, const char *what);

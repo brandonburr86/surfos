@@ -597,25 +597,31 @@ int gpu_flip(struct gpu *g, u32 base, const char *what) {
     return gpu_put(g, cmd, 2, what);
 }
 
-/* gfx cube's pump (gpu.h): the FIFO_FREE rule as gpu_put() keeps it, never waiting */
-int gpu_pump(struct gpu *g, const u32 *w, u_int n, u_int *taken, u32 *fence, const char *what) {
-    u64 now;
-    u32 f, lim;
-    u_int k;
-    *taken = 0;
-    if(!g->present) return GPU_EABSENT;
-    if(n && !g->credit) {
+/* the words the FIFO takes now, by the FIFO_FREE rule as gpu_put() keeps it: never waiting, never
+   yielding, so from the timer interrupt as well (gpu.h) */
+u_int gpu_push(struct gpu *g, const u32 *w, u_int n) {
+    u_int k, i;
+    if(!g->present || !n) return 0;
+    if(!g->credit) {
         u32 room = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
         g->credit = room < g->fifo_depth ? room : g->fifo_depth;
     }
+    k = n < g->credit ? n : g->credit;
+    g->credit -= k;
+    g->words += k;
+    for(i = 0; i < k; i++) WR(g, SURF_GPU_CMD, w[i]);
+    return k;
+}
+
+/* gfx cube's pump (gpu.h): gpu_push(), and the progress it makes or does not */
+int gpu_pump(struct gpu *g, const u32 *w, u_int n, u_int *taken, u32 *fence, const char *what) {
+    u64 now;
+    u32 f, lim;
+    *taken = 0;
+    if(!g->present) return GPU_EABSENT;
     f = *fence = RD(g, SURF_GPU_FENCE);
     now = NOW(g);
-    if(n && g->credit) {
-        k = n < g->credit ? n : g->credit;
-        g->credit -= k;
-        g->words += k;
-        *taken = k;
-        while(k--) WR(g, SURF_GPU_CMD, *w++);
+    if(n && (*taken = gpu_push(g, w, n)) != 0) {
         g->pump_fence = f;
         g->pump_since = now ? now : 1;
         return GPU_OK;

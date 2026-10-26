@@ -1901,12 +1901,13 @@ static void t_cube_order(unsigned seed) {
 }
 TEST(t_cube_order)
 
-/* Each line printed costing the CPU 40 ms (on SurfCPU a console line costs about a frame or more:
-   the console compares its whole screen; a line printed just after a frame was seen loses one
-   once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
-   timer's tick every frame shown is checked all the same; on a port without the tick the run looks
-   from its loop, and frames pass unseen while it prints, which its lines say (missed), and then it
-   fails: a frame not looked at was not checked (the review of 58ac7b3's L1).
+/* Each line printed costing the CPU 80 ms (on SurfCPU a console line costs about three frames, up
+   to five: the console compares its whole screen, the UART takes its bytes): with the looks from
+   the timer's tick every frame shown is checked all the same, and with the frames recorded ahead
+   the tick keeps the engine fed meanwhile, so the cube turns on at a frame a frame (the re-review of
+   e655c39's low 1: a line held the picture four to five frames once a second). On a port without
+   the tick the run looks from its loop, and frames pass unseen while it prints, which its lines say
+   (missed), and then it fails: a frame not looked at was not checked (the review of 58ac7b3's L1).
    And test-gpuos's rule of the interrupt holds for a run as long (the review's L3): interrupts for
    half the fences that asked for one at least; the cube's frames' FENCEs, which ask for none, are
    counted in fences alone */
@@ -1921,15 +1922,16 @@ static void t_cube_look(unsigned seed) {
     (void)seed;
     if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
-    s->line_us = 40000;
+    s->line_us = 80000;
     s->log_frames = 1;
     irqs = s->interrupts_sent;
     asked = G.irq_fences;
     all = G.fences;
     check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &missed) && s->ticks_run > 250,
           "gfx cube 3 with a slow console and the timer's tick");
-    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at", drawn, shown, missed);
-    check(!missed && shown >= 170, line);
+    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at, a frame a frame drawn", drawn,
+             shown, missed);
+    check(!missed && shown >= 170 && drawn >= 177, line);
     cube_at_the_pins(s, "and at the pins", 170, 120);
     irqs = s->interrupts_sent - irqs;
     asked = G.irq_fences - asked;
