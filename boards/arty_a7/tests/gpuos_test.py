@@ -88,11 +88,11 @@ STEPS = [
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
     ('gfx mode text', r'display: mode 1, text', 'text'),
-    ('gfx crc', CRC_LINE.pattern, 'crc 5'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 6'),
     ('gfx mode overlay 1', r'display: mode 3, graphics with the text over it, 640x480', 'the overlay'),
     ('gfx clear 0x49', None, ''),
     ('gfx fill 320 240 320 240 0x92', None, ''),
-    ('gfx crc', CRC_LINE.pattern, 'crc 6'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 7'),
     ('echo the shell over the picture', r'the shell over the picture' + NL, 'a command over the picture'),
 ]
 NOGPU_STEPS = [
