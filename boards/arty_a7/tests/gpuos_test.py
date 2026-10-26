@@ -27,7 +27,9 @@ typed on the UART. Checked:
     text decoded from the pixels (surfsim --vga-dir) holds the last command and its output, every
     pixel where no character is is the picture's (gfxref's frame of it), and the rest are text;
   * nothing said a stopped engine, a GPU error, a missed blanking, an interrupt switched off for
-    staying pending (irq.c's +IRQ:), a panic.
+    staying pending (irq.c's "+IRQ: source N stays pending although its handler ran 32 times"), a
+    panic. FAIL_ON's entries are surfsim's --fail-on regular expressions as well as substrings here,
+    so they hold no regular expression's special characters.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present.
@@ -52,7 +54,7 @@ ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
-           'the GPU reports', 'no vertical blanking in', '+IRQ: ', 'Invalid command']
+           'the GPU reports', 'no vertical blanking in', 'stays pending although its handler ran', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must print for the first picture
@@ -159,9 +161,9 @@ def main():
         print('%s %s' % ('ok  ' if ok else 'FAIL', what), flush=True)
         return bool(ok)
 
-    ident, name = gpu_id(a.gpu_h)
+    ident, gpu_name = gpu_id(a.gpu_h)
     idhex = '0x%08x' % ident
-    steps = [(step[0], step[1].replace('@NAME@', name).replace('@ID@', idhex) if step[1] else step[1]) + step[2:]
+    steps = [(step[0], step[1].replace('@NAME@', gpu_name).replace('@ID@', idhex) if step[1] else step[1]) + step[2:]
              for step in STEPS]
     typed = [step[0] for step in steps if step[0].startswith('gfx')]
 
@@ -224,7 +226,7 @@ def main():
         sys.exit(1)
 
     # ---------------------------------------------------------------- the runs, side by side
-    boot = [('the GPU at boot', r'\+GPU: SurfGPU %s \(gpu\.ID %s\), VRAM 300 KiB at 0x30000000' % (name, idhex) + NL +
+    boot = [('the GPU at boot', r'\+GPU: SurfGPU %s \(gpu\.ID %s\), VRAM 300 KiB at 0x30000000' % (gpu_name, idhex) + NL +
                                 r'\+GPU: a 64-word command FIFO; fences wait on intc source 5 \(IE\.FENCE\)'),
             ('the prompt', PROMPT)]
     nogpu_boot = [('no GPU at boot', r'\+GPU: none: sysinfo\.FEATURES has no GPU \(a bitstream without one\)' + NL),
@@ -294,9 +296,10 @@ def main():
 
     # ---------------------------------------------------------------- the GPU run
     out = run_ok('gpu', 'SurfOS on the SoC with SurfGPU (surfsim_gpu)')
-    check(re.search(r'\+GPU: SurfGPU %s \(gpu\.ID %s\)' % (name, idhex), out) and
+    check(re.search(r'\+GPU: SurfGPU %s \(gpu\.ID %s\)' % (gpu_name, idhex), out) and
           re.search(r'Drivers: serial[^\n]* gpu\n', out),
-          'boot: the driver finds SurfGPU %s (sysinfo.FEATURES.GPU, gpu.ID %s as gpu.h has it) and starts' % (name, idhex))
+          'boot: the driver finds SurfGPU %s (sysinfo.FEATURES.GPU, gpu.ID %s as gpu.h has it) and starts'
+          % (gpu_name, idhex))
     check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
           re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
