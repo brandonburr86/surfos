@@ -83,7 +83,8 @@ test-gpuos: build-kernel-os $(FW)/surfboot.mem $(BUILD)/sim/surfsim_gpu $(BUILD)
 	@mkdir -p $(GPUOS_EVIDENCE)
 	$(Q)$(PYTHON) ../boards/arty_a7/tests/gpuos_test.py --surfsim-gpu $(BUILD)/sim/surfsim_gpu --surfsim $(BUILD)/sim/surfsim \
 	  --rom $(FW)/surfboot.mem --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN \
-	  --gfxscene $(GPUOS_OUT)/gfxscene --work $(GPUOS_OUT)/system --evidence $(GPUOS_EVIDENCE)/test-gpuos.txt
+	  --gfxscene $(GPUOS_OUT)/gfxscene --gpu-h firmware/include/surfcpu/gpu.h --work $(GPUOS_OUT)/system \
+	  --evidence $(GPUOS_EVIDENCE)/test-gpuos.txt
 else
 test-gpuos:
 	@echo "test-gpuos: skipped: this tree has no surfsim, mkcard.py or surfimg.py"
