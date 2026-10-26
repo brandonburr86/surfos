@@ -95,6 +95,8 @@ struct stub {
     int text_locks;                     /* text_lock() minus text_unlock() */
     int in_atomic;
     /* records */
+    unsigned long long op_px[64];       /* the pixels the engine wrote, by the opcode of the command */
+    unsigned cur_op;                    /* the command the engine is in */
     uint32_t *cmd;                      /* every CMD word that reached the FIFO, in order */
     unsigned ncmd, cmd_writes;          /* words logged; CMD writes made (dropped ones too) */
     unsigned writes_full;               /* CMD writes into a full FIFO (the driver's fault, not a knob's) */

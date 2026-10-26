@@ -400,7 +400,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
     char desc[64];
     u8 cells[32];
     i16 ends[256][4];
-    u32 w, h, seed = 2026, i, spin;
+    u32 w, h, seed = 2026, i, n, spin;
     u64 t0, px;
     int r = GPU_OK;
     (void)argv;
@@ -451,14 +451,24 @@ static int bench(struct gpu *g, int argc, char **argv) {
         r = gpu_line(g, ends[i][0], ends[i][1], ends[i][2], ends[i][3], (u8)(i * 37 + 1), what);
     if(!r) r = gpu_sync(g, what);
     if(!r) rate("line", "256 lines", px, gpu_now_us(g) - t0);
-    /* text: 64 lines of 32 cells */
-    for(i = 0; i < 32; i++) cells[i] = (u8)(0x41 + i % 26);
+    /* text: 64 strings of 32 cells, or of as many as the target's width holds, each wholly inside
+       the target, so that the pixels counted are the pixels drawn; the generator's numbers taken
+       one statement at a time, x, y, fg, bg (a call's arguments are evaluated in no set order) */
+    n = w / FONT_WIDTH < 32 ? w / FONT_WIDTH : 32;
+    for(i = 0; i < n; i++) cells[i] = (u8)(0x41 + i % 26);
     t0 = gpu_now_us(g);
-    for(i = 0; i < 64 && !r && !gpu_interrupted(g); i++)
-        r = gpu_text(g, (i32)(next(&seed) % (w - 32)), (i32)(next(&seed) % (h - 16)), (u8)next(&seed), (int)(next(&seed) & 0xFF),
-                     cells, 32, what);
+    for(i = 0; i < 64 && !r && !gpu_interrupted(g); i++) {
+        i32 x = (i32)(next(&seed) % (w - n * FONT_WIDTH + 1));
+        i32 y = (i32)(next(&seed) % (h - FONT_HEIGHT + 1));
+        u8 fg = (u8)next(&seed);
+        int bg = (int)(next(&seed) & 0xFF);
+        r = gpu_text(g, x, y, fg, bg, cells, n, what);
+    }
     if(!r) r = gpu_sync(g, what);
-    if(!r) rate("text", "64 x 32 cells", 64ull * 32 * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
+    if(!r) {
+        snprintf(desc, sizeof(desc), "64 x %lu cells", (u_long)n);
+        rate("text", desc, 64ull * n * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
+    }
     if(!r && gpu_interrupted(g)) r = GPU_EINTR;
     g->spin_us = spin;
     gpu_release(g);

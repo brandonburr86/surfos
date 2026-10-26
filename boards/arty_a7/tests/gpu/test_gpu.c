@@ -775,6 +775,68 @@ TEST(t_demo_stop)
 
 /**** bench, reset, the state, usage ****/
 
+/* the words of the command at c[i]: header, parameters, data (GPU.md section 5) */
+static unsigned cmd_len(const uint32_t *c, unsigned i) {
+    uint32_t wh = c[i + 2];
+    switch(c[i] >> 24) {
+    case GPU_OP_SET_TARGET: case GPU_OP_COPY_RECT: return 4;
+    case GPU_OP_SET_CLIP: case GPU_OP_FILL_RECT: case GPU_OP_LINE: return 3;
+    case GPU_OP_FENCE: return 2;
+    case GPU_OP_EXPAND: return 3 + ((wh & 0xFFFF) * (wh >> 16) + 31) / 32;
+    case GPU_OP_WRITE_RECT: return 3 + ((wh & 0xFFFF) * (wh >> 16) + 3) / 4;
+    }
+    return 1;
+}
+
+/* the pixels a rate line of gfx bench counts */
+static unsigned long long rate_px(struct stub *s, const char *name) {
+    char key[16];
+    const char *p;
+    unsigned long long n;
+    snprintf(key, sizeof(key), "\n    %-5s ", name);
+    if(!(p = strstr(s->out, key)) || !(p = strstr(p, ": ")) || sscanf(p + 2, "%llu pixels", &n) != 1) return ~0ull;
+    return n;
+}
+
+static uint32_t bench_next(uint32_t *s) {
+    *s = *s * 1664525u + 1013904223u;
+    return *s >> 8;
+}
+
+/* gfx bench on the target the driver has: what each rate counts is what the engine wrote (the
+   review's finding 10: strings past the target's right edge were counted whole), and its strings
+   are the generator's next numbers in the order x, y, fg, bg, after the lines' 1,024 */
+static void bench_on(struct stub *s, const char *name) {
+    uint32_t gen = 2026, w = G.t_w, h = G.t_h, n = w / 8 < 32 ? w / 8 : 32, x, y, fg, bg;
+    unsigned i, from, strings = 0, wrong = 0;
+    char line[300];
+    memset(s->op_px, 0, sizeof(s->op_px));
+    from = s->ncmd;
+    check(gfx(s, "gfx bench") == CMD_OK, name);
+    stub_drain(s, 1000000);
+    snprintf(line, sizeof(line), "  %s: pixels counted = written: fill %llu = %llu, copy %llu = %llu, line %llu = %llu, "
+             "text %llu = %llu", name, rate_px(s, "fill"), s->op_px[GPU_OP_FILL_RECT], rate_px(s, "copy"),
+             s->op_px[GPU_OP_COPY_RECT], rate_px(s, "line"), s->op_px[GPU_OP_LINE], rate_px(s, "text"),
+             s->op_px[GPU_OP_EXPAND]);
+    check(rate_px(s, "fill") == s->op_px[GPU_OP_FILL_RECT] && rate_px(s, "copy") == s->op_px[GPU_OP_COPY_RECT] &&
+          rate_px(s, "line") == s->op_px[GPU_OP_LINE] && rate_px(s, "text") == s->op_px[GPU_OP_EXPAND] &&
+          s->op_px[GPU_OP_EXPAND] == 64ull * n * 128, line);
+    for(i = 0; i < 1024; i++) bench_next(&gen);
+    for(i = from; i < s->ncmd; i += cmd_len(s->cmd, i)) {
+        if(s->cmd[i] >> 24 != GPU_OP_EXPAND) continue;
+        x = bench_next(&gen) % (w - 8 * n + 1);
+        y = bench_next(&gen) % (h - 16 + 1);
+        fg = bench_next(&gen) & 0xFF;
+        bg = bench_next(&gen) & 0xFF;
+        if(s->cmd[i] != GPU_HDR(GPU_OP_EXPAND, fg | bg << 8) || s->cmd[i + 1] != GPU_XY(x, y) || s->cmd[i + 2] != GPU_WH(8 * n, 16))
+            wrong++;
+        strings++;
+    }
+    snprintf(line, sizeof(line), "  %s: 64 strings of %lu cells, each the generator's x, y, fg, bg (%u strings, %u not)", name,
+             (unsigned long)n, strings, wrong);
+    check(strings == 64 && !wrong, line);
+}
+
 static void t_bench(unsigned seed) {
     struct stub *s = fresh(1);
     (void)seed;
@@ -783,6 +845,14 @@ static void t_bench(unsigned seed) {
           said(s, "line  256 lines") && said(s, "text  64 x 32 cells: 262144 pixels") && said(s, "million/s") &&
           G.spin_us == GPU_SPIN_US,
           "gfx bench: fills, copies, lines and text, each in pixels a second");
+    bench_on(s, "gfx bench at 640x480");
+    gfx(s, "gfx mode gfx 2");
+    bench_on(s, "gfx bench at 320x240");
+    check(gpu_set_target(&G, 0, 200, 200, 100, "gfx") == GPU_OK, "a target of 200x100");
+    bench_on(s, "gfx bench at 200x100 (25 cells a string)");
+    check(gpu_set_target(&G, 0, 64, 64, 32, "gfx") == GPU_OK, "a target of 64x32, the smallest the bench takes");
+    bench_on(s, "gfx bench at 64x32 (8 cells a string)");
+    gfx(s, "gfx mode gfx 1");
     s->intr_at = s->now + 5000;
     check(gfx(s, "gfx bench") == CMD_FAIL && said(s, "interrupted"), "gfx bench ends on Ctrl+C");
     s->intr_at = 0;

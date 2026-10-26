@@ -136,7 +136,9 @@ static void take(struct stub *s, uint32_t w) {
     }
     if(s->check_tearing) tearing(s);
     if(draws(&s->eng)) note(s, STUB_EV_ENGINE_DRAW, s->eng_cycles / 25);
+    if(gpu_engine_idle(&s->eng)) s->cur_op = (w >> 24) & 63;     /* a header */
     gpu_engine_word(&s->eng, w);
+    s->op_px[s->cur_op] += s->eng.writes - before;
     s->eng_cycles += 1 + s->slow + (s->eng.writes - before) / 4;
 }
 
