@@ -633,6 +633,20 @@ and its title says what it was last sent.
   it and takes its window away. A program that ends or crashes takes only its own window
   with it. Leaving the desktop with programs' windows open asks first; their windows close
   with the desktop, and the programs are told so (they are not stopped).
+* **The clipboard and asking to be seen** (*10/26/26*, for the applications moving out of
+  the kernel). While its window has the focus, a program may put text on the desktop's
+  clipboard (`gw_clip()`, up to the clipboard's 128 KB, to a NUL if one comes first; no
+  text is refused), as the desktop's own Copy does: Notepad and the Terminal paste it.
+  Without the focus it may not, so nothing in the background plants text to be pasted, and
+  text a window set as it lost the focus is dropped. A program may ask to be seen
+  (`gw_alert()`: a timer that ran out), once in five seconds at most, whichever of its
+  windows asks: its window comes to the front, shown again if it was tucked into the
+  taskbar, without the focus, its taskbar button marked until it has it, as a new
+  window's is. Nothing you type elsewhere reaches it. It never comes up under a click: a
+  click already on its way lands where it was aimed, the window waits while a mouse button
+  is down or a drag goes on, and for half a second after it came up a click on it does
+  nothing at all (click again to use it). In `wintest show`, x copies "echo wintest-clip"
+  and y asks to be seen once the window is tucked away.
 * **Limits.** 8 windows on a desktop, 32 in all. A window's content is at most the room
   below the menu bar (958 by 457 on a 1920x1080 screen), and a desktop keeps at most 8 MB
   of programs' pixels.

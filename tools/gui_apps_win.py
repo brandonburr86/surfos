@@ -9,6 +9,10 @@ a window comes in front without the focus (its title bar muted), and a key typed
 click on its title bar gives it the focus.
 (stage C8) The wheel over wdemo: a notch away from the user is WIN_EV_WHEEL -3, toward it 3 (QEMU's PS/2 mouse, a wheel
 mouse once the IntelliMouse handshake has found it).
+(stage C12) wintest, tucked into the taskbar after y, asks to be seen (WIN_ALERT) and comes back in front without the
+focus; with the focus again (a click once the half second in which a press on it is nobody's has passed), x puts
+"echo wintest-clip" on the desktop's clipboard (WIN_CLIP), and once the program has ended, Edit > Paste in the
+Terminal and Enter run it.
 (stage C7, the platform's whole check) wintest tty names the Terminal's pty; wintest pty in the Terminal is refused on
 a pty of its own while this desktop runs. wdemo echoes a press and a release of the button with where they were; F2
 shows a text console and F1 brings the desktop back with wdemo's window as it was; its corner dragged gives it a new
@@ -25,6 +29,7 @@ The checks leave the desktop as they found it (the windows, the dialogs and the 
 also when one fails."""
 import os
 import re
+import time
 
 import gui_apps_term as term
 from gui_apps_scenario import APPS, PAPER, INK, FOAM, TEAL, MUTED
@@ -38,6 +43,8 @@ BARS = (bytes.fromhex('ee906d'), bytes.fromhex('d0b056'), bytes.fromhex('7ed48c'
 CALC_KEYS = '789/456*123-C0=+'
 RUN_DIALOG = (220, 81, 520, 380)    # the launcher's chooser at 960x540 (shell/guidialog.c's layout)
 PARK = (900, 480)                   # the pointer clear of the windows and of the Terminal's text
+EDIT_X, PASTE_Y = 160, 149          # 10/26/26: the Edit menu's title, and its Paste item's middle (Undo, Redo, a line,
+                                    # Cut, Copy above it)
 ABOUT = ((960 - 432) // 2, (540 - 234) // 2)    # the About window's place at 960x540 (gui_init)
 ANSI = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
 
@@ -256,9 +263,27 @@ def checks(d):
         d.keys('a')
         d.visible('a key typed reaches the program: its title says "key 97"',
                   lambda s: titled(d, s, 'wintest: key 97'))
+        # 10/26/26 (stage C12): a window that asks to be seen (WIN_ALERT) comes back from the taskbar, in front and
+        # without the focus; with the focus, x puts text on the desktop's clipboard (WIN_CLIP)
+        d.keys('y')
+        d.visible('y: wintest is to ask to be seen once it is away', lambda s: titled(d, s, 'wintest: alert when away'))
+        d.click(x + 258, y + 14)                    # its _ button: tucked away, the focus elsewhere
+        d.visible('away, it asks to be seen: in front again, without the focus',
+                  lambda s: titled(d, s, 'wintest: alerted', False) and quadrants(d, s), 'guiapps-wintest-alert.png')
+        time.sleep(0.6)                             # a press on a window that came up by itself is nobody's for
+        d.click(x + 200, y + 14)                    # 500 ms; then its title bar, right of its title's text
+        d.visible('a click on its title bar gives it the focus again', lambda s: titled(d, s, 'wintest: focus 1'))
+        d.keys('x')
+        d.visible('x puts its text on the desktop\'s clipboard: "clip 0"', lambda s: titled(d, s, 'wintest: clip 0'))
         d.click(x + 322 - 16, y + 14)               # its close button
         d.visible('its close button ends the program, and its window goes',
                   lambda s: not quadrants(d, s) and not titled(d, s, 'wintest'), timeout=15)
+        d.click(EDIT_X, 14)                         # 10/26/26: the Terminal's Edit menu: Paste, then Enter
+        d.click(EDIT_X + 18, PASTE_Y)
+        d.move(*PARK)
+        d.key('ret')
+        d.require('the text the program left on the clipboard, pasted into the Terminal, runs there',
+                  term.wait_rows(d, grid, lambda rows: 'wintest-clip' in rows and term.prompted(rows)) is not None)
         # wdemo, through libgui
         d.move(*PARK)
         d.keys('wdemo &\n')

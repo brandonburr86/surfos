@@ -105,12 +105,16 @@ struct gui_sys {
        win_close it then. win_event: an event for its program (a full queue drops it, and counts it). win_close: this
        desktop is done with the window: its program's reads end and its presents fail. run (the launcher): the command
        line's program started on the desktop's console, its input /dev/null, detached (init collects it): its pid, or
-       -errno with the reason in msg */
+       -errno with the reason in msg. 10/26/26: win_clip: the text a program's window put on the clipboard (WIN_CLIP,
+       while it had the focus), the latest since the call before, taken: copied into out (at most n bytes) when it
+       came from window h, the one with the desktop's focus now (-1: none), dropped otherwise; how many bytes, 0 for
+       none */
     int (*win_accept)(void *ctx);
     int (*win_update)(void *ctx, int h, struct win_state *st, struct win_view *view);
     int (*win_event)(void *ctx, int h, const struct win_event *e);
     void (*win_close)(void *ctx, int h);
     int (*run)(void *ctx, const char *line, char *msg, size_t n);
+    int (*win_clip)(void *ctx, int h, char *out, size_t n);
 };
 
 const struct gui_sys *gui_kernel_sys(void);     /* shell/guisys.c: the kernel's (the kernel only) */

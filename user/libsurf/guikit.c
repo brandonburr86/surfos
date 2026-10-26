@@ -65,6 +65,22 @@ int guikit_text(void *kit, int x, int y, const char *utf8, unsigned color) {
     return x;
 }
 
+/* 10/26/26: the same at scale (each character's pixels scale x scale) */
+int guikit_text_scaled(void *kit, int x, int y, const char *utf8, unsigned color, int scale) {
+    struct guikit *k = (struct guikit *)kit;
+    u32 n = (u32)strlen(utf8), len;
+    u8 ch;
+    if(scale < 1) scale = 1;
+    while(n) {
+        ch = gd_char(utf8, n, &len);
+        gd_glyph(&k->d, x, y, ch, color, scale);
+        x += 8 * scale;
+        utf8 += len;
+        n -= len;
+    }
+    return x;
+}
+
 int guikit_cells(const char *utf8) {
     u32 n = (u32)strlen(utf8), len;
     int cells = 0;

@@ -47,11 +47,25 @@ not killed.
 The model's rules hold here: no allocation and no waiting; the system is called from the
 handlers and the tick only, never while drawing, and drawing reads only what the last update
 lent.
+
+10/26/26 (stage C12: the desktop's applications as programs). A window that asks to be seen
+(WIN_ALERT, its state's alerts counting up) comes to the front, shown again if it was tucked
+into the taskbar, without the focus: its taskbar button is marked until it has it, as a new
+window's is. It comes up after the pass's input (client_alerts(), from gui_input_done()), so a
+press already queued lands where it was aimed, and waits while a pointer button is down or a
+drag of the desktop's or a program's goes on, so that it never comes up under a click under
+way; for GUI_GRACE_MS after it came up, a press on it is nobody's (client_grace()): it neither
+focuses the window nor reaches the program, for it was meant for what was there. Text a window
+put on the clipboard while it had the focus (WIN_CLIP) is taken each tick, and is the desktop's
+clipboard from then on (Notepad pastes it) only if that window has the focus still.
 */
 #include "guipriv.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+/* 10/26/26: a program's text fits the clipboard */
+typedef char clip_fits[WIN_CLIP_MAX <= GUI_CLIP_MAX ? 1 : -1];
 
 /* the keys and buttons reach a program with the desktop's numbers */
 typedef char keys_are_the_desktops[WIN_KEY_UP == GUI_UP && WIN_KEY_PGDN == GUI_PGDN && WIN_KEY_INSERT == GUI_INSERT ? 1 : -1];
@@ -188,6 +202,7 @@ static void update(struct gui_state *g, int id) {
     if(g->sys->win_update(g->sys->ctx, c->handle, &st, &view) < 0) { drop(g, id); return; }
     resized = st.w != c->st.w || st.h != c->st.h;
     if(resized || st.serial != c->st.serial || view.pixels != c->view.pixels) g->dirty = true;
+    if(st.alerts != c->st.alerts) c->alerted = true;   /* 10/26/26: it asks to be seen: after the input */
     c->st = st;
     c->view = view;
     if(resized) {                                       /* pixels of another size: the frame follows them */
@@ -204,7 +219,7 @@ static void update(struct gui_state *g, int id) {
         c->sent_h = ch;
     }
     focus = g->focus == id && !win->min;
-    if(focus) c->waiting = false;                       /* 10/25/26: it has it now */
+    if(focus) c->waiting = c->raised = false;           /* 10/25/26: it has it now (10/26/26: given, no grace) */
     if(focus != c->focused) {
         c->focused = focus;
         send(g, c, WIN_EV_FOCUS, 0, 0, focus);
@@ -269,11 +284,39 @@ static void accept(struct gui_state *g) {
 }
 
 void client_tick(struct gui_state *g) {
-    int id;
+    struct gui_client *c;
+    int id, n;
     if(!g->sys || !g->sys->win_accept || !g->sys->win_update) return;
+    if(g->sys->win_clip) {                              /* 10/26/26: a program's Copy, from the window with the focus */
+        c = client_keys(g) ? client_of(g, g->focus) : NULL;
+        n = g->sys->win_clip(g->sys->ctx, c ? c->handle : -1, g->clip, GUI_CLIP_MAX);
+        if(n > 0) g->clip_len = (u32)n;
+    }
     grab_check(g);
     for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) if(client_of(g, id)) update(g, id);
     accept(g);
+}
+
+/* 10/26/26: after the pass's input, the windows that asked to be seen come to the front, shown again if they were
+   tucked into the taskbar, without the focus (their taskbar buttons marked), once nothing is held: no button down,
+   no drag of the desktop's, no grab of a program's */
+void client_alerts(struct gui_state *g) {
+    struct gui_client *c;
+    int id;
+    if((g->buttons & BUTTONS) || g->drag >= 0 || g->resize >= 0 || g->scroll >= 0 || g->app_drag >= 0 ||
+       g->note.selecting || g->drawing || g->clients.grab >= 0) return;
+    for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) {
+        c = client_of(g, id);
+        if(!c || !c->alerted) continue;
+        c->alerted = false;
+        if(g->focus == id && !g->win[id].min) continue; /* seen already */
+        g->win[id].min = false;
+        gui_raise(g, id);                               /* in front, the focus where it is */
+        c->waiting = true;
+        c->raised = true;
+        c->raised_at = g->now;
+        g->dirty = true;
+    }
 }
 
 void gui_client_room(const struct gui_state *g, int *w, int *h) {
@@ -330,6 +373,18 @@ static void leave(struct gui_state *g) {
     if(gui_inside(g->x, g->y, cx, cy, cw, ch)) c->px = c->py = -1;
     c->buttons = g->buttons & BUTTONS;
     send(g, c, WIN_EV_POINTER, c->px, c->py, c->buttons);
+}
+
+/* 10/26/26: a press, with any button, on a window that came up by itself less than GUI_GRACE_MS ago is nobody's: it
+   neither focuses the window nor reaches its program (the buttons held from it are nobody's either, as a press
+   elsewhere's are); one after that is the window's, and so is one once it was given the focus (its taskbar button,
+   Next window: update()) */
+bool client_grace(struct gui_state *g, unsigned old) {
+    struct gui_client *c;
+    if(!(g->buttons & ~old & BUTTONS) || g->clients.grab >= 0) return false;
+    c = client_of(g, under(g));
+    if(c && c->raised && g->now - c->raised_at >= GUI_GRACE_MS) c->raised = false;
+    return c && c->raised;
 }
 
 bool client_pointer(struct gui_state *g, unsigned old) {

@@ -53,6 +53,8 @@ struct fake_win {
 extern struct fake_win fake_wins[FAKE_WINS];
 extern char fake_run_line[256];
 extern int fake_run_count, fake_run_result;     /* run's calls; what it answers (a pid, or -errno) */
+extern char fake_clip[64];                      /* 10/26/26: text a program put on the clipboard, until taken, */
+extern int fake_clip_from;                      /* and the handle of its window */
 int fake_win_open(int w, int h, u32 flags, u32 background, const char *title, int pid);   /* its number; -1: no room */
 void fake_win_present(int i, u32 color);        /* its pixels all in color: it is ready */
 void fake_win_size(int i, int w, int h, u32 color);   /* pixels of a new size, in color */

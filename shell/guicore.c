@@ -726,6 +726,11 @@ void gui_tick(struct gui_state *g) {
     if(menu_stale(g)) { g->menu = 0; g->dirty = true; } /* 10/26/26: its window lost the focus */
 }
 
+/* 10/26/26 (stage C12): what waits for a pass's input to be in */
+void gui_input_done(struct gui_state *g) {
+    client_alerts(g);
+}
+
 void gui_finish(struct gui_state *g) {
     int id;
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
@@ -1077,6 +1082,7 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     }
     if(!(e->buttons&POINTER_LEFT)) gui_release(g);
     if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
+    if(!g->menu && client_grace(g,old)) return;         /* 10/26/26: a press on a window just come up by itself */
     if(client_pointer(g,old)) return;                   /* 10/25/26: a program's: over its content, or held for it */
     if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
         int top, bottom, nx, ny;

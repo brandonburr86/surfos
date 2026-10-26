@@ -161,6 +161,8 @@ int client_count(const struct gui_state *g);
 void client_tick(struct gui_state *g);                  /* windows come, are read again, go; RESIZE and FOCUS */
 void client_finish(struct gui_state *g);                /* the desktop closes: every window is let go */
 bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a program's (old: the buttons before) */
+void client_alerts(struct gui_state *g);                /* 10/26/26: after the input, windows that asked to be seen */
+bool client_grace(struct gui_state *g, unsigned old);   /* 10/26/26: true: a press on one just come up, nobody's */
 void client_wheel(struct gui_state *g, int id, int rows);
 bool client_keys(const struct gui_state *g);            /* the focused window is a program's: the keys are its own */
 bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened without the focus, not given it yet */

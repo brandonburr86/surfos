@@ -15,13 +15,18 @@
    arguments typed), run through struct gui_sys's run; a refusal shown. The window of a program the launcher just
    started takes the focus when it appears, and so does that of the focused Terminal's foreground job.
    10/26/26 (stage C8): a turn of the wheel alone is the window's last event, no pointer event after it; one in a
-   report that moves too is followed by where the pointer went. */
+   report that moves too is followed by where the pointer went.
+   10/26/26 (stage C12): a window that asks to be seen comes to the front, shown again from the taskbar, without the
+   focus, its taskbar button marked; a program's text for the clipboard is the desktop's clipboard. The review: it
+   comes up after a pass's input (a press, or a whole click, queued in that pass lands where it was aimed), never
+   while a button, a drag or a program's grab is held, and for GUI_GRACE_MS a press on it is nobody's; text from a
+   window that no longer has the focus is dropped. */
 #include "gui_fake.h"
 
 static struct gui_state g;
 static unsigned held;                   /* the buttons the next pointer event says are down */
 
-static void tick(void) { gui_tick(&g); }
+static void tick(void) { gui_tick(&g); gui_input_done(&g); }  /* a pass without input */
 
 static void at(int x, int y) {
     struct pointer_event e;
@@ -902,6 +907,157 @@ static void test_guards(int width, int height) {
     gui_finish(&g);
 }
 
+/* 10/26/26 (stage C12) */
+static void test_alert_clip(void) {
+    int a, b, ida, idb, n, nb, x, y;
+    fake_desktop(&g, 960, 540);
+    a = shown(200, 100, 0, "Asker", 41, 0x123456);
+    b = shown(200, 100, 0, "Other", 42, 0x654321);
+    ida = win_id(a);
+    idb = win_id(b);
+    gui_open(&g, ida);
+    gui_act(&g, ACT_MINIMIZE);
+    gui_open(&g, idb);
+    tick();
+    CHECK(g.win[ida].min && g.focus == idb);
+    n = count(b, WIN_EV_FOCUS);
+    fake_wins[a].st.alerts++;
+    tick();
+    CHECK(!g.win[ida].min && g.order[GUI_SLOTS - 1] == ida && g.focus == idb && client_waiting(&g, ida));
+    CHECK(count(b, WIN_EV_FOCUS) == n && last(b, WIN_EV_FOCUS)->value == 1);   /* the focus stayed where it was */
+    gui_open(&g, ida);
+    tick();
+    CHECK(g.focus == ida && !client_waiting(&g, ida));
+    fake_wins[a].st.alerts++;                           /* asked while in front with the focus: nothing to do */
+    tick();
+    CHECK(g.focus == ida && !client_waiting(&g, ida) && g.order[GUI_SLOTS - 1] == ida);
+    /* held while a button is down: no window comes up under a click under way; once it is let go, it does */
+    gui_open(&g, idb);
+    gui_open(&g, ida);
+    gui_act(&g, ACT_MINIMIZE);
+    gui_open(&g, idb);
+    tick();
+    held = 0;
+    at(900, 300);
+    hold(POINTER_LEFT);
+    fake_wins[a].st.alerts++;
+    tick();
+    CHECK(g.win[ida].min && g.order[GUI_SLOTS - 1] == idb);
+    hold(0);
+    tick();
+    CHECK(!g.win[ida].min && g.order[GUI_SLOTS - 1] == ida && g.focus == idb && client_waiting(&g, ida));
+    /* after the pass's input: a press queued in the pass that sees the alert lands where it was aimed, on Other in
+       front (x, y is on both windows); the window comes up once it is let go */
+    gui_open(&g, idb);
+    tick();
+    x = cx(idb) + 20;
+    y = cy(idb) + 10;
+    CHECK(gui_inside(x, y, g.win[ida].x, g.win[ida].y, g.win[ida].w, g.win[ida].h));
+    at(x, y);
+    fake_wins[a].st.alerts++;
+    gui_tick(&g);
+    hold(POINTER_LEFT);
+    gui_input_done(&g);
+    CHECK(g.order[GUI_SLOTS - 1] == idb && g.clients.grab == idb && last(b, WIN_EV_POINTER)->value == POINTER_LEFT);
+    hold(0);
+    tick();
+    CHECK(g.order[GUI_SLOTS - 1] == ida && g.focus == idb && client_waiting(&g, ida));
+    /* a whole click queued in that pass: Other's, and the window comes up after it */
+    gui_open(&g, idb);
+    tick();
+    n = count(a, WIN_EV_POINTER);
+    nb = count(b, WIN_EV_POINTER);
+    fake_wins[a].st.alerts++;
+    g.now = 10000;
+    gui_tick(&g);
+    hold(POINTER_LEFT);
+    hold(0);
+    gui_input_done(&g);
+    CHECK(g.order[GUI_SLOTS - 1] == ida && g.focus == idb && count(a, WIN_EV_POINTER) == n &&
+          count(b, WIN_EV_POINTER) == nb + 2);
+    /* for GUI_GRACE_MS a press on it, anywhere on it, is nobody's: no focus, no grab, no drag, nothing for its
+       program, nor the moves while it is held; the first after that is the window's */
+    g.now += GUI_GRACE_MS - 1;
+    hold(POINTER_LEFT);
+    at(x + 6, y + 4);
+    CHECK(g.focus == idb && g.clients.grab < 0 && count(a, WIN_EV_POINTER) == n);
+    hold(0);
+    CHECK(g.focus == idb && last(a, WIN_EV_POINTER)->value == 0);      /* a move over it, without buttons */
+    at(g.win[ida].x + 60, g.win[ida].y + 8);            /* its title bar */
+    hold(POINTER_LEFT);
+    at(g.x + 30, g.y + 20);
+    CHECK(g.drag < 0 && g.focus == idb && g.win[ida].x + 60 == g.x - 30);
+    hold(0);
+    g.now += 1;
+    at(x, y);
+    hold(POINTER_LEFT);
+    CHECK(g.focus == ida && g.clients.grab == ida && last(a, WIN_EV_POINTER)->value == POINTER_LEFT);
+    hold(0);
+    /* given the focus otherwise within that time (its taskbar button, Next window), it is the user's: a press is its */
+    gui_act(&g, ACT_MINIMIZE);
+    gui_open(&g, idb);
+    tick();
+    fake_wins[a].st.alerts++;
+    tick();
+    CHECK(g.order[GUI_SLOTS - 1] == ida && g.focus == idb);
+    gui_open(&g, ida);
+    tick();
+    hold(POINTER_LEFT);
+    CHECK(g.focus == ida && g.clients.grab == ida && last(a, WIN_EV_POINTER)->value == POINTER_LEFT);
+    hold(0);
+    /* held during a drag of the desktop's (Other's title bar) and during a program's grab, until each ends */
+    gui_act(&g, ACT_MINIMIZE);
+    gui_open(&g, idb);
+    tick();
+    at(g.win[idb].x + 60, g.win[idb].y + 8);
+    hold(POINTER_LEFT);
+    at(g.x + 30, g.y + 20);
+    CHECK(g.drag == idb);
+    fake_wins[a].st.alerts++;
+    tick();
+    CHECK(g.win[ida].min);
+    hold(0);
+    tick();
+    CHECK(!g.win[ida].min && g.order[GUI_SLOTS - 1] == ida && g.focus == idb);
+    gui_open(&g, ida);
+    gui_act(&g, ACT_MINIMIZE);
+    gui_open(&g, idb);
+    tick();
+    at(cx(idb) + 30, cy(idb) + 30);
+    hold(POINTER_LEFT);
+    CHECK(g.clients.grab == idb);
+    fake_wins[a].st.alerts++;
+    tick();
+    at(g.x + 300, g.y);                                 /* the grab goes on outside its window */
+    tick();
+    CHECK(g.win[ida].min && g.clients.grab == idb);
+    hold(0);
+    tick();
+    CHECK(!g.win[ida].min && g.order[GUI_SLOTS - 1] == ida && g.focus == idb);
+    /* a program's text is the clipboard's only from the window with the focus when the desktop takes it */
+    gui_open(&g, idb);
+    tick();
+    strlcpy(fake_clip, "from a program", sizeof(fake_clip));
+    fake_clip_from = fake_wins[b].handle;
+    tick();
+    CHECK(g.clip_len == 14 && !memcmp(g.clip, "from a program", 14));
+    tick();
+    CHECK(g.clip_len == 14);                            /* nothing new: the clipboard stays */
+    strlcpy(fake_clip, "too late", sizeof(fake_clip));  /* set as Other lost the focus, its FOCUS 0 not sent yet */
+    gui_open(&g, ida);
+    tick();
+    CHECK(g.clip_len == 14 && !memcmp(g.clip, "from a program", 14) && !fake_clip[0]);
+    strlcpy(fake_clip, "from Asker", sizeof(fake_clip));
+    fake_clip_from = fake_wins[a].handle;
+    gui_open(&g, GUI_NOTEPAD);                          /* the focus on a window of the desktop's: nobody's text */
+    tick();
+    CHECK(g.clip_len == 14 && !fake_clip[0]);
+    strlcpy(fake_clip, "from Asker", sizeof(fake_clip));
+    gui_open(&g, ida);
+    tick();
+    CHECK(g.clip_len == 10 && !memcmp(g.clip, "from Asker", 10));
+}
+
 int main(void) {
     test_appear();
     test_clip();
@@ -922,6 +1078,7 @@ int main(void) {
     test_no_system();
     test_launcher();
     test_asked_focus();
+    test_alert_clip();
     test_guards(640, 400);
     test_guards(960, 540);
     test_guards(1280, 800);

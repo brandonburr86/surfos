@@ -32,6 +32,23 @@ SYS_winctl (int fd, int op, void *arg): -EBADF, or -EINVAL for a descriptor that
     WIN_TITLE (const char *): a new title, cut as at the open.
     WIN_INFO (struct win_info *): the window's size; the desktop's logical screen and scale (0
         once the desktop let it go); whether it has the focus; how many events were lost.
+    WIN_CLIP (const struct win_clip *, 10/26/26): len bytes at text (1 to WIN_CLIP_MAX, the
+        desktop's clipboard's size; UTF-8 as a rule) for the desktop's clipboard, as its own Copy
+        puts text there (Notepad and the Terminal paste it): text only, so it ends at a NUL if one
+        comes first, and -EINVAL for none (len 0, or a NUL first); only while the window has the
+        focus, -EACCES otherwise, so that a program in the background plants nothing to be pasted,
+        and the desktop keeps it only if the window has its focus still when it takes the text;
+        -EINVAL past WIN_CLIP_MAX, -EFAULT for text that is not the caller's to read, -ENOMEM.
+    WIN_ALERT (10/26/26): the window asks to be seen (a timer that ran out): the desktop brings it
+        to the front, shown again if it was tucked away into the taskbar, and marks its taskbar
+        button until it has the focus. It never takes the focus or a key: nothing typed into
+        another window reaches it. Once in WIN_ALERT_MS a program, whichever of its windows asks
+        (-EAGAIN for another within them). The desktop acts on it after the pointer events it
+        already has, and holds it while a pointer button is down or a drag goes on, until it
+        ends, so that no window comes up under a click already under way; for the 500 ms after
+        it came up, a press on the window is nobody's (it neither focuses the window nor reaches
+        the program: a click meant for what was there). A kernel before these two ops says
+        -EINVAL for them: a program goes on without.
 read(): whole events, as many as fit in the buffer (-EINVAL for less than one) and are queued;
     it waits for one (a kill or Ctrl+C cuts the wait short: -EINTR), and returns 0 once the
     desktop let the window go and everything queued was read. WIN_EVENTS are queued at most:
@@ -71,16 +88,21 @@ The desktop's side at its end is seen only by a file that has the kernel's types
 #define WIN_MAX         32              /* windows in all */
 #define WIN_DESK_BYTES  (8u << 20)      /* their pixels, of one desktop */
 #define WIN_ALL_BYTES   (32u << 20)     /* and in all */
+#define WIN_CLIP_MAX    (128u << 10)    /* 10/26/26: bytes of text a window puts on the clipboard, at most */
+#define WIN_ALERT_MS    5000            /* 10/26/26: a window asks to be seen once in these, at most */
 
 struct win_open    { unsigned version; unsigned short w, h, min_w, min_h, max_w, max_h;
                      unsigned flags, background; char title[WIN_TITLE_MAX]; };                 /* 88 bytes */
 struct win_present { const unsigned *pixels; unsigned stride; unsigned short x, y, w, h; };  /* 16; 0x00RRGGBB */
 struct win_info    { unsigned version; unsigned short w, h, screen_w, screen_h, scale, focused; unsigned lost; };   /* 20 */
+struct win_clip    { const char *text; unsigned len; };                                       /* 8; 10/26/26 */
 
 #define WIN_PRESENT     1
 #define WIN_SETSIZE     2
 #define WIN_TITLE       3
 #define WIN_INFO        4
+#define WIN_CLIP        5               /* 10/26/26 */
+#define WIN_ALERT       6               /* 10/26/26 */
 
 struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /* 16 bytes */
 #define WIN_EV_KEY      1
@@ -113,13 +135,14 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
    size and title; the pid of the program that opened it; and (10/25/26, stage C6) whether that program is in the
    foreground job of a pty the desktop adopted, its Terminal's, a job that session's shell made (typed at its prompt
    without &, or started by one that was): the desktop gives such a window the focus when it appears and the Terminal
-   has it. */
+   has it. 10/26/26: how many times it asked to be seen (WIN_ALERT). */
 struct win_state {
     char title[WIN_TITLE_MAX];
     int w, h, min_w, min_h, max_w, max_h;
     u32 flags, background, serial;
     int pid;
     int foreground;
+    u32 alerts;
 };
 /* its pixels, 0x00RRGGBB in rows of w, lent to the desktop until its next update or close */
 struct win_view { const u32 *pixels; int w, h; };
@@ -135,7 +158,10 @@ struct win_view { const u32 *pixels; int w, h; };
    session on adopted pty number pty has the shell pid (the Terminal's surfsh), whose jobs alone count as its
    foreground for win_state.foreground (-EINVAL for a pty not adopted). win_accept,
    win_update, win_event, win_close: as struct gui_sys's (sys/gui_sys.h); -EINVAL for a handle that is not one of
-   the calling task's desktop's. */
+   the calling task's desktop's. win_clip_take (10/26/26): the text a window of the calling task's desktop put on
+   its clipboard (WIN_CLIP), the latest since the call before, taken: copied into out, at most size bytes, when it
+   came from window h, the one with the desktop's focus (h < 0: none has it), and dropped otherwise; how many bytes,
+   0 for none, -ENODEV for a task without a desktop. */
 #define WIN_DESKS 4
 struct win_desk { int width, height, max_w, max_h, scale; };
 int win_register(const struct win_desk *desk);
@@ -149,6 +175,7 @@ int win_accept(void);
 int win_update(int h, struct win_state *st, struct win_view *view);
 int win_event(int h, const struct win_event *e);
 void win_close(int h);
+int win_clip_take(int h, char *out, u32 size);
 #endif
 
 #endif

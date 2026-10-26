@@ -11,6 +11,7 @@ each call here is then the calling task's, whose desktop is the one it registere
 waits: win_update() lends the window's pixels until the next update or close, so drawing reads
 them without a call.
 10/25/26 (stage C6): run, the launcher (Apps > Run program...).
+10/26/26 (stage C12): win_clip, the text a program's window put on the clipboard.
 */
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +44,13 @@ int guisys_win_event(void *ctx, int h, const struct win_event *e) {
 void guisys_win_close(void *ctx, int h) {
     (void)ctx;
     win_close(h);
+}
+
+int guisys_win_clip(void *ctx, int h, char *out, size_t n) {
+    int r;
+    (void)ctx;
+    r = win_clip_take(h, out, (u32)n);
+    return r > 0 ? r : 0;
 }
 
 /* The launcher: the line's first word is a program (of /initrd/bin when it names no folder), the others its

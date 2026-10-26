@@ -18,6 +18,7 @@ void guikit_rect(void *kit, int x, int y, int w, int h, unsigned color);
 void guikit_frame(void *kit, int x, int y, int w, int h, unsigned color);
 void guikit_line(void *kit, int x0, int y0, int x1, int y1, unsigned color);
 int guikit_text(void *kit, int x, int y, const char *utf8, unsigned color);    /* x after it */
+int guikit_text_scaled(void *kit, int x, int y, const char *utf8, unsigned color, int scale);   /* 10/26/26 */
 int guikit_cells(const char *utf8);                                            /* characters it shows */
 void guikit_blit(void *kit, int x, int y, const unsigned *pixels, int w, int h, int stride);
 void guikit_button(void *kit, int x, int y, int w, int h, const char *label, unsigned bg, unsigned fg);

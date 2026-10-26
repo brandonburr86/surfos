@@ -234,6 +234,9 @@ void gui_request_quit(struct gui_state *g);
    the task list), and gui_finish() before it frees the state (a terminal session hangs up) */
 void gui_tick(struct gui_state *g);
 void gui_finish(struct gui_state *g);
+/* 10/26/26 (stage C12): and gui_input_done() once a pass's pointer events and keys are in: a program's window that
+   asked to be seen comes up then, never under a press of that pass */
+void gui_input_done(struct gui_state *g);
 /* 10/25/26: the largest content a program's window can have here, a maximized one's (shell/gui.c registers it) */
 void gui_client_room(const struct gui_state *g, int *w, int *h);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */

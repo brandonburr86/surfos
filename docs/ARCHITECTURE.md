@@ -2304,6 +2304,23 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
 * **Budgets.** 8 windows and 8 MB of pixels per desktop, 32 windows and 32 MB in all (EAGAIN, ENOMEM), counted
   from the buffers alive, the desktop's views too (a window its desktop let go keeps none, only its size); a buffer no larger than the desktop's largest content area
   (958x457 on a desktop of 960x540); and each window takes one of its program's 16 descriptors.
+* **The clipboard and asking to be seen** (10/26/26, stage C12: the desktop's applications as programs).
+  WIN_CLIP copies 1 to WIN_CLIP_MAX (128 KB, the desktop's clipboard) bytes of the program's text into the
+  kernel, to a NUL if one comes first (none at all is EINVAL), accepted only while the window has the focus
+  (the desktop's FOCUS events set it; asked before the copy, so a refusal copies nothing, and again after it),
+  and leaves it in its desktop's record with the window's handle, the latest in place of what waited. The
+  desktop takes it each tick (`win_clip_take()`, struct gui_sys's `win_clip`) naming the window that has its
+  focus then: text from any other is dropped, since FOCUS 0 reaches a window only after the desktop moved its
+  focus. A desktop's end frees what it never took. WIN_ALERT counts in the window's state
+  (`win_state.alerts`), once in WIN_ALERT_MS (5 s) at most for a program, whichever of its windows asks and
+  however often it opens one (EAGAIN; `alerters[]` remembers the programs that asked, the oldest making room).
+  The desktop then shows the window in front, out of the taskbar, without the focus and with its taskbar
+  button marked, as a new window: after the pass's pointer events and keys (`gui_input_done()`), never while
+  a pointer button is down, a drag goes on or a program holds a grab (it waits for their end), and for
+  GUI_GRACE_MS (500 ms) after it came up a press on it is nobody's (`client_grace()`: no focus, no drag,
+  nothing for the program). The ABI stays version 1, the ops appended: an older kernel says EINVAL; struct
+  win_clip's 8 bytes are checked at compile time, as the other structures are. `wintest show` copies on x and
+  asks to be seen on y.
 * **Locking.** kernel/win.c takes short interrupts-off sections and no mutex; memory is allocated, filled and
   freed with interrupts on. It never calls the framebuffer, and the desktop never calls it from inside a
   `framebuffer_graphics_draw()` callback.
