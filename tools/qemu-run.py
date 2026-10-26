@@ -1451,7 +1451,12 @@ class Qemu:
             base = '/tmp'
         self.workdir = tempfile.mkdtemp(prefix='surfos-', dir=base)
         self.mon_path = os.path.join(self.workdir, 'mon.sock')
-        self.ser_path = os.path.join(self.workdir, 'ser.sock')
+        # 10/26/26: the serial port over TCP on 127.0.0.1, no longer a UNIX socket. QEMU writes it a byte at a time,
+        # and a Linux UNIX socket holds only some 277 bytes unread so (each byte costs a buffer's overhead). While the
+        # harness looked elsewhere for a few hundred ms, QEMU stopped taking bytes, the guest's bounded wait for the
+        # UART gave up, and each byte after that overwrote the oldest of the 16 in its FIFO: a banner came out as
+        # "SurfOS#>" (B4's gate, @boot shell=kernel at -O2). A TCP connection keeps a hundred kilobytes and more
+        self.ser_port = free_port()
         boot = ['-cdrom', os.path.abspath(iso), '-boot', 'd'] if iso else ['-kernel', os.path.abspath(kernel)]
         modules = []
         if initrd and not iso:
@@ -1516,27 +1521,29 @@ class Qemu:
         cmd = [qemu, '-m', str(mem)] + boot + [
                '-display', 'none', '-no-reboot', '-no-shutdown',
                '-monitor', f'unix:{self.mon_path},server,nowait',
-               '-chardev', f'socket,id=ser0,path={self.ser_path},server=on,wait=off',
+               '-chardev', f'socket,id=ser0,host=127.0.0.1,port={self.ser_port},server=on,wait=off,nodelay=on',
                '-serial', 'chardev:ser0'] + list(extra)
         if int_log:
             cmd += ['-d', 'int,guest_errors,cpu_reset', '-D', os.path.abspath(int_log)]
         self.cmd = cmd
         self.proc = subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        self.ser = self._connect(self.ser_path)
+        self.ser = self._connect(self.ser_port)
         self.ser.setblocking(False)
         self.transcript = b''
         self.cursor = 0
         self.more_at, self.auto_more = 0, True
 
-    def _connect(self, path, timeout=10):
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    def _connect(self, port, timeout=10):
         deadline = time.time() + timeout
         while True:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                s.connect(path)
+                s.connect(('127.0.0.1', port))
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)     # keys go at once, as they did
                 return s
             except OSError:
+                s.close()
                 if self.proc.poll() is not None or time.time() > deadline:
                     raise RuntimeError('QEMU did not start: ' + ' '.join(self.cmd) + '\n' + self.qemu_output())
                 time.sleep(0.05)
@@ -1730,7 +1737,7 @@ def console_keep(q):
     byte at a time, and under Linux the socket holds only some hundred bytes unread (each byte costs a buffer's
     overhead); beyond that QEMU drops what the guest writes, and the guest's bounded wait for the UART gives up.
     macOS holds kilobytes, so a check that read the console only afterwards passed there and lost lines in Docker"""
-    q.pump(0)
+    q.pump(0)        # 10/26/26: still read early, though the serial port's TCP connection keeps far more now
 
 
 def free_port_range(n, avoid=()):
