@@ -1039,6 +1039,39 @@ SCENARIOS = [
         Step('echo status $?', 'status 1', wait=SH),
         Step('fetch -o - ' + H('/plain.txt'), 'Plain text, shown as it is.', wait=SH),
     ], boot='no-rdrand', browser=False),
+
+    # -- 10/25/26: wundertow, the browser in a window (user/wundertow/), on Undertow's transport and settings: its
+    # --layout mode shows a page as the window lays it out, with how it came, and refuses what Undertow refuses --
+    Scenario('wundertow', 'wundertow --layout: HTTPS verified with TLS 1.3 and 1.2, the page as the window lays it '
+                          'out (its heading twice the size, its links); a redirect followed; HTTP, not verified; '
+                          'refused as Undertow refuses: an unknown root, another name, expired (no request sent), '
+                          'HTTPS to HTTP', [
+        Step('wundertow --layout ' + url('tls13', '/about'), 'address: ' + url('tls13', '/about'),
+             'status: 200 verified TLSv1.3', 'title: About the fixtures', ' x2 b "About the fixtures"', 'link=0 "Home"',
+             wait=SH, check=fetched('tls13', '/about', tls='TLSv1.3')),
+        Step('echo status $?', 'status 0', wait=SH),
+        Step('wundertow --layout ' + url('tls12', '/about'), 'status: 200 verified TLSv1.2', wait=SH,
+             check=fetched('tls12', '/about', tls='TLSv1.2')),
+        Step('wundertow --layout ' + S('/redirect/relative'), 'address: ' + S('/about'), 'status: 200 verified TLSv1.',
+             'title: About the fixtures', wait=SH),
+        Step('wundertow --layout ' + H('/about'), 'address: ' + H('/about'), 'status: 200 ', 'title: About the fixtures',
+             wait=SH, absent=['verified']),
+        Step('wundertow --layout ' + url('unknown-ca', '/'), MSG['untrusted'], wait=SH, absent=['status: '],
+             check=no_http_on('unknown-ca')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('wundertow --layout ' + url('wrong-name', '/'), MSG['wrong-name'], wait=SH, absent=['status: '],
+             check=no_http_on('wrong-name')),
+        Step('wundertow --layout ' + url('expired', '/'), MSG['expired'], wait=SH, absent=['status: '],
+             check=no_http_on('expired')),
+        Step('wundertow --layout ' + S('/redirect/to-http'), 'redirected from HTTPS to unencrypted HTTP', wait=SH,
+             absent=['status: ']),
+    ], browser=False),
+    Scenario('wundertow-production', 'the normal initrd: wundertow does not trust the fixture CA either; HTTP works', [
+        Step('wundertow --layout https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, absent=['status: '],
+             check=no_http_on('https')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('wundertow --layout http://10.0.2.2:{http}/about', 'status: 200 ', 'title: About the fixtures', wait=SH),
+    ], boot='production', browser=False),
 ]
 
 # the guests: (initrd, CPU with RDRAND, the RTC, kernel words, a USB Ethernet adapter instead of the e1000, setup)
