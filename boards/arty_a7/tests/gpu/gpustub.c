@@ -304,6 +304,11 @@ static void tick(struct stub *s, uint64_t us) {
     run(s);
 }
 
+void stub_freeze_status(struct stub *s, uint64_t us) {
+    s->status_frozen_frame = (uint32_t)blankings(s, s->now);
+    s->status_frozen_until = s->now + us;
+}
+
 void stub_drain(struct stub *s, uint64_t max_us) {
     uint64_t end = s->now + max_us;
     while(s->now < end && (s->count || s->wait_vbl || s->eng_cycles > s->now * 25)) tick(s, 10);
@@ -398,7 +403,8 @@ static uint32_t p_vrd(void *c, uint32_t off) {
     tick(s, 1);
     b = blankings(s, s->now);
     if(off == SURF_VIDEO_STATUS) {
-        uint32_t v = (uint32_t)(b & 0xFFFF) << SURF_VIDEO_STATUS_FRAME_LSB;
+        uint32_t v = (uint32_t)((s->now < s->status_frozen_until ? s->status_frozen_frame : b) & 0xFFFF)
+                     << SURF_VIDEO_STATUS_FRAME_LSB;
         if(!s->frames_stop && s->now % STUB_FRAME_US >= STUB_VBLANK_US) v |= SURF_VIDEO_STATUS_VBLANK_MASK;
         if(b > blankings(s, s->ev_cleared)) v |= SURF_VIDEO_STATUS_VBLANK_EV_MASK;
         return v;

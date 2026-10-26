@@ -1869,6 +1869,15 @@ static void t_cube_end(unsigned seed) {
     check(gfx(s, "gfx cube 1") == CMD_OK && said(s, "no memory to keep the 307200 bytes of VRAM it draws on") &&
           s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.scale == reg.scale && !memcmp(s->gpal, pal, sizeof(pal)),
           "no memory to keep VRAM: said, it runs, the display and palette back");
+    s->no_memory = 0;
+    /* the display changed without a blanking caught (STATUS.FRAME frozen for a second while FRAME_COUNT
+       and the FLIPs go on): the time has no start it can stand behind, so no rate (the re-review of
+       e655c39's low 2: from the registers' write, FLIP 1 could come within a millisecond) */
+    stub_freeze_status(s, 1000000);
+    check(gfx(s, "gfx cube 1") == CMD_OK && said(s, "no vertical blanking in 250 ms") &&
+          said(s, "    gfx cube: no rate: its display changed without a blanking caught\n") && !said(s, " a second;") &&
+          said(s, "display back as it was") && said(s, "missed: all whole, in order"),
+          "gfx cube 1 whose display changed without a blanking caught: no rate, said why; the frames all checked");
     free(before);
     done(s);
     cube_error();

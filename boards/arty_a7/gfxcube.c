@@ -270,7 +270,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0, seen_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
-    bool stood = false;
+    bool stood = false, timed = false;
     u_int taken;
     int rc, r2;
     memset(cr, 0, sizeof(*cr));
@@ -305,7 +305,11 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         ran = true;
         /* the time counts from just before the blanking at which the cube's display began (the
            latch's last sample before it): FLIP k comes at the k-th blanking after it or later, so
-           the rate, the FLIPs done since frame 0's over that time, is never above the display's */
+           the rate, the FLIPs done since frame 0's over that time, is never above the display's.
+           Without a blanking caught (the registers written at once) the time has no such start: FLIP
+           1 may come a millisecond after the write, so no rate is said (the re-review of e655c39's
+           low 2) */
+        timed = g->latched;
         t0 = tick = g->latched ? g->latch_us : gpu_now_us(g);
         gpu_frame_next(g, 0x10000u, &count, &crc);     /* the frames after this one are the cube's */
         gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0, vbase);
@@ -404,9 +408,15 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     run = NULL;
     if(ran) {
         u64 us = now - t0, rate10 = us ? (u64)drawn * 10000000u / us : 0;
-        printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn, (u_long)(us / 1000000u),
-               (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10), (u_long)(rate10 % 10),
-               r2 ? "display NOT put back" : "display back as it was");
+        if(timed)
+            printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn,
+                   (u_long)(us / 1000000u), (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10),
+                   (u_long)(rate10 % 10), r2 ? "display NOT put back" : "display back as it was");
+        else
+            printf("    %s: %lu drawn in %lu.%02lu s; %s\n"
+                   "    %s: no rate: its display changed without a blanking caught\n", what, (u_long)drawn,
+                   (u_long)(us / 1000000u), (u_long)(us % 1000000u / 10000u),
+                   r2 ? "display NOT put back" : "display back as it was", what);
         if(stood)
             printf("    %s: the frames shown went %lu on for %lu FLIPs\n", what, c.advance, (u_long)drawn);
         printf("    %s: %lu shown, %lu missed: %s\n", what, c.shown, c.shown - c.checked,
