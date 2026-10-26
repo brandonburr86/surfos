@@ -433,10 +433,10 @@ static void gpu_registers(uint32_t unused)
 
 /* the VRAM words a refused TRIANGLE must leave as they were: two of the 64 x 64 target's at 4000 that
  * its triangle (0, 0) (64, 0) (0, 64) covers, pixels 0 to 3 of row 0 and 20 to 23 of row 20 (x + y <=
- * 62); and the depths of pixels 0 and 1 of those rows in the buffer at 0x20000, stride 128 (dropped by
- * the SET_TARGET before the second TRIANGLE). Each check sets the first n of them to 0x5A5A5A5A before
- * its TRIANGLE: as depths 0x5A5A, which the triangle's depth 100 would pass, so a TRIANGLE drawn with
- * that buffer would write them too */
+ * 62); and two of the buffer's at 0x20000, stride 128 (dropped by the SET_TARGET before the second
+ * TRIANGLE), the depths of pixels 0 and 1 of row 0 and of pixels 20 and 21 of row 20 (byte 40 of the
+ * row). Each check sets the first n of them to 0x5A5A5A5A before its TRIANGLE: as depths 0x5A5A, which
+ * the triangle's depth 100 would pass, so a TRIANGLE drawn with that buffer would write them too */
 static const uint32_t refused_view[4] = {4000, 4000 + 20 * 64 + 20, 0x20000u, 0x20000u + 20 * 128 + 40};
 
 static void refused_arm(uint32_t n)
