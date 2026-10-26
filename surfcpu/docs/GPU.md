@@ -462,7 +462,7 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 | G0 | this document, spec/soc.toml (soc_version 0.3.0), make gen, MODULES.md, SOC.md | `make check-generated` | | |
 | G1 | surf_vram, the graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, the C display model, gpudiag's window and CPU-drawn scenes, the gpudiag design | VRAM unit test with random CPU and engine traffic; surf_video's graphics modes captured and compared with the model, FRAME_CRC equal to the model's and to the captured pins' CRC; the old video tests unchanged; gpudiag on the RTL SoC (surfsim) prints the model's CRCs | gpudiag through the open flow, every gate; its netlist runs gpudiag as the RTL does | load the gpudiag bitstream: its UART transcript ends in PASS with the expected CRCs; the monitor shows the scenes (the owner looks) |
 | G2 | surf_gpu, its C model, the engine's scenes in gpudiag, both designs | directed tests of every command and edge case, randomized command streams compared with the model at every FENCE, mutants caught; gpudiag's engine scenes in surfsim | gpudiag and ddr_gpu through the open flow, every gate; dram_clk's margin recorded | gpudiag PASS with the engine scenes; ddr_gpu boots SurfOS from the card as the DDR design does |
-| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)** | the driver and `gfx` against the C model on the host (`test-gpuos-host`); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's; the overlay; the demo; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream | **pending** (section 15.6): the demo on the monitor; `gfx crc` equal to the model's |
+| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)**; then (2026-10-26, 15.8) GPU2's commands (`gfx tri`, `gfx zbuf`, `gfx zclear`, `gfx flip`, `gfx target`), `gfx cube` with every frame shown checked, and the re-review's three lows, **done in simulation and on the host** | the driver and `gfx` against the C model on the host (`test-gpuos-host`, with GPU2's commands against the GPU2 model and the cube's frames against their table); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's (GPU2's triangles worked out from section 16 alone); the overlay; the demo; `gfx cube 1`, every frame at the pins one of the table's; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream (GPU2's commands and the cube need G4's, 16.11) | **pending** (sections 15.6 and 15.8): the demo and the cube on the monitor; `gfx crc` equal to the model's |
 | G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag at bfaac48 through every gate, LVS proved in full (seed 3, sys_clk 44.71 MHz), and its netlist runs gpudiag to PASS (146 checks, 1.97 s simulated); ddr_gpu at bfaac48 through every gate but LVS, which is outstanding (dram_clk +1.04 ns; section 16.11). The review of 3fea963's fixes (16.12) changed gpudiag but no RTL: the gpudiag bitstream is to be built again with them | pending: gpudiag over JTAG with the cube on the monitor (30+ frames a second, no torn frame, from its UART lines), from the bitstream built after the review (bfaac48's lacks its checks: 16.12); SurfOS's boot stays on G2's ddr_gpu until G4's has its proof (section 14) |
 | G5 | optional: the GPU constrained to a region of the die, a faster GPU clock (50 MHz, its own clock domain and crossing on port A) | the crossing's tests at several clock ratios | placement in the region; timing of the faster clock | the G2 and G4 tests again at the faster clock |
 
@@ -1157,7 +1157,9 @@ are fixed, each with its test (section 15.7). Nothing here has run on a board: t
 (section 15.6) is the integrator's, with the owner.
 The brief is [plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md); the G3 commands use
 GPU1's command set only, on a GPU1 or a GPU2 (G4's superset). The cube and GPU2's commands in
-SurfOS (`gfx cube`, `gfx tri`, `gfx flip`) are the round after G3 and G4 merge.
+SurfOS (`gfx cube`, `gfx tri`, `gfx flip`, `gfx zbuf`, `gfx zclear`, and `gfx target`) came in the
+round after G3 and G4 merged, with the three lows of G3's re-review: section 15.8 (2026-10-26),
+done in simulation and on the host; their physical test is open too.
 
 ### 15.1 The driver
 
@@ -1166,9 +1168,10 @@ SurfOS (`gfx cube`, `gfx tri`, `gfx flip`) are the round after G3 and G4 merge.
 | `boards/arty_a7/gpu.h`, `gpu.c` | the driver: pure code over `struct gpu_port`, as `sdcard.c` is over its SPI host |
 | `boards/arty_a7/gpuhw.c` | the port on the board; the driver's entry in board.c's table; `gfx`'s kernel side |
 | `boards/arty_a7/gfx.c` | the `gfx` command, pure code over the driver |
+| `boards/arty_a7/gfxcube.c`, `gen/gfxcube_expect.c` | `gfx cube` and its expected frames' generator (15.8) |
 | `boards/arty_a7/textcon.c` | CTRL.MODE in the text console's copy of CTRL; a panic switches back to text |
 | `boards/arty_a7/board.c`, `arty.h` | `gpu` in the driver table, `gfx` in the board's commands, its line in `drivers` |
-| `arch/riscv32/kernel.mk` | `driver/font8x16.c` compiled into the Arty kernel, from where it is, unchanged |
+| `arch/riscv32/kernel.mk` | `driver/font8x16.c` compiled into the Arty kernel, from where it is, unchanged; since 15.8 gpudiag's `gpucube.c` too, and `gfx cube`'s table generated |
 | `arch/riscv32/kshell.c` | `gfx` on a board without one (QEMU virt): "no GPU on this board" |
 | `arch/riscv32/fbcon.c`, `include/arch/riscv32/riscv/board.h` | the display's panic hook |
 | `boards/arty_a7/tests/gpu/` | the host test (`test_gpu.c`), the stand-in for the hardware (`gpustub.c`), `gfxscene.c` (gfx lines through the driver in the model), `gfxref.c` (test-gpuos's pictures from this document alone) |
@@ -1205,19 +1208,22 @@ the interrupt), the values counted from the FENCE register read at the probe. Th
 for 2 ms (`spin_us`), yielding between reads, then sleeps on the GPU's interrupt in 10 ms steps
 (intc source 5, IE.FENCE: the handler clears FENCE_EV and sets an event) or, without an
 interrupt path (no FEATURES.IRQ), sleeps 1 ms at a time; two seconds in which neither FENCE nor
-FIFO_FREE moves is a stopped engine. The poll comes first because a task the interrupt wakes runs
-only at the next tick (the scheduler runs in trap context; up to 10 ms later), so every short
-command would otherwise take a tick. `gfx bench` polls its fences to the end and `gfx demo` for
-20 ms, so their times are the engine's, not the scheduler's.
+FIFO_FREE moves is a stopped engine (50 ms once Ctrl+C has come to a run putting things back:
+15.8's N1). The waits on the interrupt, and those it woke, are counted (15.8's N3). The poll
+comes first because a task the interrupt wakes runs only at the next tick (the scheduler runs in
+trap context; up to 10 ms later), so every short command would otherwise take a tick. `gfx bench`
+polls its fences to the end and `gfx demo` for 20 ms, so their times are the engine's, not the
+scheduler's.
 
 **Errors.** After every finished submission STATUS's OVERFLOW, BAD_OPCODE and BAD_PARAM are read;
 each one set is said on a line of its own in words, they are cleared (written 1), the engine is
 ABORTed and the driver's target and clip are queued again (SET_TARGET, SET_CLIP), ahead of
 anything sent after them: the known state. ABORT never waits for them (the FIFO is empty after
 it), so a stopped engine costs no second timeout and Ctrl+C is not held up. Ctrl+C (the task's
-interrupt flag) ends every wait the same way: ABORT, the target and clip queued again; where it
-ends a wait that has nothing to ABORT (gfx crc's wait for frames), it says only `interrupted
-(Ctrl+C)`.
+interrupt flag) ends every wait the same way: ABORT, the target and clip (and on a GPU2 the depth
+buffer) queued again; where it ends a wait that has nothing to ABORT (gfx crc's wait for frames),
+it says only `interrupted (Ctrl+C)`. The run's result says which (GPU_EINTR, GPU_ECANCEL: 15.8's
+N2).
 
 **The claim.** A mutex, taken for one `gfx` command's run (trylock, then 20 ms sleeps that Ctrl+C
 cuts short): a second console's command waits, saying who has the GPU, and the commands of two
@@ -1254,7 +1260,7 @@ FRAME_COUNT until it is two on (sleeping 5 ms between reads), then FRAME_CRC.
 
 | | |
 |---|---|
-| `gfx` | the GPU: ID, VRAM, the engine and FIFO, the display mode, GFX_BASE/STRIDE/SCALE, the palette, the target, the clip, the words and fences sent and FENCE, the interrupts taken, errors (and by kind), timeouts, ABORTs, display changes, FRAME_COUNT and FRAME_CRC |
+| `gfx` | the GPU: ID, VRAM, the engine and FIFO, the display mode, GFX_BASE/STRIDE/SCALE, the palette, the target, the clip, the depth buffer (GPU2, 15.8), the words and fences sent and FENCE, the interrupts taken and the fence waits that slept on the interrupt and were woken by it (15.8's N3), errors (and by kind), timeouts, ABORTs, display changes, FRAME_COUNT and FRAME_CRC |
 | `gfx mode text\|gfx\|overlay [1\|2]` | the display mode; for gfx and overlay the scale given (the current GFX_SCALE when not), GFX_BASE 0, GFX_STRIDE 640 or 320, and the target becomes that picture (640x480, or 320x240 at VRAM 0); text keeps the target and the picture |
 | `gfx clear [c]` | FILL_RECT of the target, colour c (0) |
 | `gfx fill x y w h c` | FILL_RECT |
@@ -1268,6 +1274,11 @@ FRAME_COUNT until it is two on (sleeping 5 ms between reads), then FRAME_CRC.
 | `gfx bench` | on the target: 8 fills of it, 8 copies of its left half onto its right half, 256 lines between points of it (chosen before the clock starts), 64 strings of 32 cells (as many as fit on a target narrower than 256), each wholly inside it; each from the first word to its fence, in pixels a second, the pixels counted those drawn |
 | `gfx demo [seconds]` | the animation below, 10 s when not given (1 to 3600); Ctrl+C ends it |
 | `gfx reset` | ABORT, the sticky bits cleared, the reset target and clip |
+| `gfx target base stride w h` | SET_TARGET: the target another picture of VRAM (15.8) |
+| `gfx zbuf base stride\|off`, `gfx zclear [b]` | GPU2: the depth buffer for the target, or none; every depth b * 257 (15.8) |
+| `gfx tri [how] ...` | GPU2: a triangle, flat or Gouraud, with depth or not, culled or not, vertices with sixteenths (15.8) |
+| `gfx flip [base]` | GPU2: FLIP, GFX_BASE written at the next vertical blanking (15.8) |
+| `gfx cube [seconds]` | GPU2: gpudiag's spinning cube, every frame shown checked against the model's (15.8) |
 | `gfx help` | the list |
 
 Coordinates and sizes are section 5's (x, y -32768 to 32767, w, h 0 to 65535, colours 0 to 255),
@@ -1296,8 +1307,10 @@ and the engine is idle. Whenever VRAM or GPAL changes on the way in or out, the 
 console (text mode, which shows neither): it switches to text, then keeps VRAM, loads RGB332 and
 draws its first page; on the way out VRAM and GPAL go back under the console, then the target and
 clip (queued: after a stopped engine, which was said and ABORTed once, nothing waits for the
-engine again), then the display from before. So no frame shows the old picture in the demo's palette or over its pages, or
-the demo's display while its pages are overwritten (the host test checks every CPU write of VRAM
+engine again), then the display from before (since 15.8 this is `gfx_keep_begin()` and
+`gfx_keep_end()`, which `gfx cube` uses too and which keep GPU2's depth buffer as well). So no
+frame shows the old picture in the demo's palette or over its pages, or the demo's display while
+its pages are overwritten (the host test checks every CPU write of VRAM
 and GPAL, and every engine word, against what the screen shows then). It prints a line a second and
 the frames a second at the end.
 
@@ -1346,7 +1359,8 @@ claimants only); `gfx` typed on the PS/2 keyboard (the UART was used); a real mo
 
 ### 15.5 Pending
 
-The physical test, the integrator's with the owner (15.6). Nothing else of G3 is open.
+The physical test, the integrator's with the owner (15.6; for GPU2's commands and `gfx cube`, step
+7, on a DDR+GPU bitstream with GPU2 once 16.11's proof is done). Nothing else of G3 is open.
 
 ### 15.6 Trying it on the board (for the owner)
 
@@ -1402,10 +1416,39 @@ nothing programs the flash.
    say); `gfx mode text` gives the plain console back. `gfx` prints the GPU's state; `gfx help` the
    commands.
 
-What to send back: the UART capture (with the boot lines, the `gfx crc` lines and the demo's
-summary) and what the monitor showed at steps 4 to 6. A CRC other than 039d507c, a line saying
-`a stopped engine` or `the GPU reports`, or a picture that tears is a FAIL to keep and look into,
-as section 14 says of the G1 and G2 tests.
+7. **GPU2's commands and the cube** (15.8), with a DDR+GPU bitstream that carries GPU2 (G4's,
+   section 16.11, once its proof is done: the boot line then says `+GPU: SurfGPU GPU2 (gpu.ID
+   0x32555047), ...`; on G2's GPU1 bitstream these commands say `needs GPU2`). Type:
+
+       gfx mode gfx 2
+       gfx pal ramps
+       gfx zbuf 153600 640
+       gfx zclear
+       gfx clear 0
+       gfx tri 8 8 120 16 40 100 0x3f
+       gfx tri cullcw 200 20 300 20 250 60 0xff
+       gfx tri cullccw 200 20 300 20 250 60 0x7f
+       gfx tri 20 140 60 140 60 180 0x5f
+       gfx tri 20 140 60 180 20 180 0x9f
+       gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28
+       gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50
+       gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0
+       gfx crc
+
+   It must print `gfx crc: frame N, crc 43e2d407`: the CRC of that picture as section 16 alone gives
+   it (gfxref), which SurfOS printed on the RTL system. The monitor shows, on black: a red triangle
+   top left, a blue one top right (the second of two with the same corners: the first, clockwise,
+   culled), a square split along its diagonal into green and yellow with no gap, two shaded
+   triangles, red and green, passing through each other, and a shaded magenta one at the bottom.
+   Then `gfx cube 10`: the cube spins for ten seconds; the UART says a line a second, `cube N s: 60
+   drawn, 60 shown, 60 checked: all whole, in order`, and at the end the frames drawn, the rate (60
+   a second or near it) and `display back as it was`; `gfx crc` then prints 43e2d407 again.
+
+What to send back: the UART capture (with the boot lines, the `gfx crc` lines, the demo's summary
+and, with GPU2, the cube's lines) and what the monitor showed at steps 4 to 7. A CRC other than
+039d507c (steps 4 and 5) or 43e2d407 (step 7), a line saying `a stopped engine` or `the GPU
+reports`, a cube line that is not `all whole, in order`, or a picture that tears is a FAIL to keep
+and look into, as section 14 says of the G1 and G2 tests.
 
 ### 15.7 The review (2026-10-25)
 
@@ -1438,6 +1481,161 @@ The stand-in grew with them: its CPU stalls come between atomic stretches, as an
 (4418ea7, after the probe's ABORT moved a stall into one), and it measures every line printed,
 counts the pixels the engine writes by opcode, logs the CPU's VRAM and GPAL writes and the engine's
 words with the display shown, and names a holder of any length.
+
+### 15.8 The cube in SurfOS, GPU2's commands and the re-review's lows (2026-10-26)
+
+The round after G3 and G4 merged (the brief's "After both: the cube in SurfOS"), on `sc/gpu-cube`
+from `sc/gpu-integ` 9b9b7b8, with G4's fix round (`sc/gpu-integ` 687b57e) merged in at c82a629:
+`gfx cube`, GPU2's commands in `gfx`, and the three lows the re-review of G3 left. It is done in
+simulation and on the host; nothing has run on a board.
+
+| File | What changed |
+|---|---|
+| `boards/arty_a7/gpu.c`, `gpu.h` | GPU2 in the driver: `gpu2` (gpu.ID "GPU2"), the depth buffer kept as the target is (an accepted SET_TARGET drops it; `gpu_abort()` sends it again after the target and clip), `gpu_zbuf_set/off/clear()`, `gpu_tri()`, `gpu_flip()` (FLIP; the CPU's store of GFX_BASE is now `gpu_set_base()`), `gpu_pump()`, `gpu_fence_next()`, `gpu_frame_next()` and the port's tick (`gpu_tick_start()`, `gpu_tick_stop()`) for the cube; on a GPU1 each GPU2 call is GPU_ENOGPU2 and sends nothing; N1, N2, N3 (below) |
+| `boards/arty_a7/gfx.c` | `gfx target`, `zbuf`, `zclear`, `tri`, `flip`, `cube`; the demo's way in and out as `gfx_keep_begin()` / `gfx_keep_end()`, which keep the depth buffer too; `gfx` prints the depth buffer, from a copy of the driver's state taken under the claim |
+| `boards/arty_a7/gfxcube.c` | the cube's run, its sink and its check of the frames shown |
+| `boards/arty_a7/gen/gfxcube_expect.c` | the expected table's generator, a host tool of the build |
+| `arch/riscv32/kernel.mk` | `surfcpu/firmware/diagnostics/gpucube.c` compiled into the Arty kernel from where it is; the generator built and run (`build/riscv32/arty_a7/gen/gfxcube_expect.h`) |
+| `boards/arty_a7/gpuhw.c` | `irq_wait()` says whether the interrupt came (N3); the port's tick, a periodic ktimer, for the cube's looks |
+| `boards/arty_a7/tests/gpu/` | the stand-in (GPU2 and a GPU1 that refuses its opcodes; FLIP at the blanking; no blanking without a pixel clock; FRAME_CRC of each frame as it ended; the port's tick every 10 ms; and knobs: another console's claim at an ABORT or a release, a handler that wakes nobody, a slow console, a spoiled byte of the picture shown, the pixel clock stopping), test_gpu.c's new tests, gfxref (section 16 from this document alone), gfxscene (the GPU gpu.h describes) |
+| `boards/arty_a7/tests/gpuos_test.py`, `surfcpu/mk/area-gpuos.mk` | GPU2's pictures and `gfx cube 1` on the RTL SoC; the host build of the cube and its table |
+| `boards/qemu_virt/test_os.py` | `gfx tri`, `flip` and `cube` say there is no GPU (as G3 added `gfx`'s check) |
+
+No contract and no shared kernel file changed (gpu.h of the firmware, spec/soc.toml, kernel/, fs/,
+driver/, mm/, lib/, shell/ and include/ outside include/arch/riscv32/ are as they were), and
+gpucube.c, the model and the RTL are G4's, used unchanged.
+
+**GPU2's commands** (GPU.md section 16), on a GPU2; on a GPU1 each says `needs GPU2 (SET_ZBUF,
+TRIANGLE, FLIP); this engine is GPU1` and fails (CMD_FAIL) with nothing sent. Every argument is
+checked first (a usage line, CMD_USAGE), as for G3's commands.
+
+| | |
+|---|---|
+| `gfx target base stride w h` | SET_TARGET (GPU1's command, which `gfx` lacked: without it nothing could be drawn into picture B to flip to): VRAM bytes, section 5's rule checked first; the clip becomes the whole target, and on a GPU2 the depth buffer goes |
+| `gfx zbuf base stride` | SET_ZBUF for the target the driver has, 16.2's rule checked first (refused with the target's size said) |
+| `gfx zbuf off` | SET_TARGET to the same target, which drops the depth buffer, then the clip as it was |
+| `gfx zclear [b]` | every depth b * 257 (0xff when not given: 65535, the farthest): 16.6's FILL_RECT of b over the depth bytes with a target set to them (2W bytes a line at the buffer's stride), then the target, the clip and SET_ZBUF again; without a depth buffer, or for a target 16,384 or more wide (whose depth bytes are no target), it says so and fails |
+| `gfx tri [how] x0 y0 x1 y1 x2 y2 c` | a flat triangle of colour c, depths 0 |
+| `gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2` | each vertex with its depth (0 near to 65535 far) and colour; without `gouraud` the triangle is c0's (the header's colour) |
+| `gfx flip [base]` | FLIP to base (a multiple of 4 up to 0x7fffc; the target's base when not given), done once the engine wrote GFX_BASE at the next blanking |
+| `gfx cube [seconds]` | below; 10 s when not given, 1 to 3600 |
+
+`how` is words joined by commas, in any order: `flat` (the default) or `gouraud`; `ztest` (draw where
+nearer: ZTEST, ZFUNC less) or `zle` (nearer or as near: ZTEST, ZFUNC less or equal); `zwrite`;
+`cullcw`, `cullccw`. A word twice, `flat` with `gouraud` or `ztest` with `zle` is refused, and the
+flat form refuses `gouraud`, `ztest`, `zle` and `zwrite` (they need each vertex's depth and colour).
+`ztest`, `zle` and `zwrite` without a depth buffer say so and fail. x and y are pixels with
+sixteenths, 12.4's range -2048 to 2047.9375: decimal with a fraction that is a whole number of
+sixteenths (`12`, `12.5`, `-3.0625`, `.25`; `0.3` is refused), or `0x` hex pixels. The 15-word
+limit of a `gfx` line (15.2) holds the longest form exactly.
+
+**`gfx cube [seconds]`** (`boards/arty_a7/gfxcube.c`) runs gpudiag's cube (16.9) in SurfOS:
+
+* **The frames** are gpucube.c's own: `gpu_cube_frame()`, compiled into the kernel from
+  `surfcpu/firmware/diagnostics/` unchanged, records each frame's 105 words through a `gpu_sink`
+  whose `cmd()` appends to the run's record; the run sends them through the driver with
+  `gpu_pump()`, the FIFO_FREE rule without waiting (between the words it empties the looks' ring,
+  below, and prints its lines). Frame k goes into picture A (k even) or B (k odd) of 16.6's layout
+  (A, B and the depth buffer: all of VRAM): the depth buffer cleared, the picture cleared,
+  SET_ZBUF, twelve Gouraud triangles with ZTEST and ZWRITE, a FLIP to it, and a FENCE whose value
+  is the driver's next (`gpu_fence_next()`), so that FENCE counts the frames drawn and the
+  driver's own fences stay after them.
+* **The display** goes through the driver and textcon, never through gpucube.c's writes:
+  CTRL.MODE 2 through textcon's copy of CTRL, GFX_STRIDE 320 and GFX_SCALE 2 at the frame latch
+  (15.1), GFX_BASE by the FLIPs, and the palette that `gpu_cube_display()` makes (six ramps of 32
+  and a dark blue background), taken from the GPAL writes it hands the sink (which reach nothing)
+  and loaded by the driver. Text RAM, the text palette, SCROLL and the cursor stay the console's:
+  the console keeps working (its output goes on to the UART and to text RAM, which mode 2 does not
+  show) and comes back whole. Mode 2 rather than 3, since the console's text, which changes every
+  second, would be part of every frame's CRC.
+* **The way in and out** is the demo's (`gfx_keep_begin()`, `gfx_keep_end()`): the display, the
+  palette, the target, the clip, the depth buffer and all 307,200 bytes of VRAM kept first (a copy
+  in the kernel heap; without memory it says so and runs anyway) and put back after, with the
+  console on the screen whenever VRAM or the palette changes. Frame 0 is drawn into A and its FLIP
+  waited for while the console is shown (with `gpu_sync()`, whose FENCE asks for the interrupt:
+  gpucube.c's does not); then the display changes, at the latch.
+* **The sink** has no context pointer and no error return: it only records, into the run's own
+  record on its stack, found through a static pointer that only the GPU's claimant sets and that
+  it clears before letting go (one `gfx cube` at a time, as heaptest and selftest claim theirs).
+  The driver's errors and Ctrl+C are handled where the run sends the words.
+* **The looks.** FRAME_COUNT is read from the timer interrupt, every tick (10 ms, less than a
+  frame's 16.7: no frame can end and the next begin between two looks), through the port's tick
+  (a periodic ktimer in gpuhw.c); a count that moved goes into a ring of 16 with that frame's
+  FRAME_CRC, which the run empties as it goes. A first version looked from the run's loop, between
+  its words: on the RTL SoC it missed two of 66 frames, after the line it printed at the end of
+  its first second, since a console line costs SurfCPU about a frame (the console compares its
+  whole screen of 2,400 cells from DDR). The stand-in shows the same with each line costing 40 ms
+  (`t_cube_look`: with the tick 184 of 184 frames checked, without it 183 of 186). On a port
+  without the tick the run still looks from its loop.
+* **The check.** Each FRAME_COUNT that moved has its FRAME_CRC (section 3's consistent pair: that
+  frame's) looked up in `gfx_cube_expect[]`. A CRC that is none of the turn's 128 frames is a torn
+  frame: not a whole drawn frame. When the turn's pictures all differ, their order is checked too:
+  frame f shown d frames after the last whole frame l must have (f - l) mod 128 <= d, since each
+  FLIP waits for a blanking (the same frame again, f = l, is a frame the CPU or the engine was late
+  for, and is in order); this is gpudiag's rule for its free run (16.9). Before G4's fix round
+  frames 9 and 73 of a turn were one picture (GFX_CUBE_PICTURES 127), and gfx cube said that it
+  checked only that each frame shown was one of the turn's; since that round the cube stands on a
+  corner and the 128 pictures differ: the table followed by itself (its frames 0 and 15 are
+  62bae657 and 7e872f01, gpudiag's checked frames), and the order is checked, with no change here.
+  The frames shown in a second are that second's video frames, as gpudiag counts them; the rate is
+  printed and not judged (SurfOS shares the CPU; test-gpuos wants 30 a second or more).
+* **The expected table** is worked out at build time by `boards/arty_a7/gen/gfxcube_expect.c`: the
+  same `gpu_cube_frame()` through the C model, each frame rendered as gfx cube shows it (MODE 2,
+  GFX_STRIDE 320, GFX_SCALE 2, the base its FLIP gives, `gpu_cube_display()`'s GPAL) and its
+  FRAME_CRC taken; nothing of the driver or gfx. `arch/riscv32/kernel.mk` builds and runs it for
+  the kernel (`build/riscv32/arty_a7/gen/gfxcube_expect.h`), `area-gpuos.mk` for the host test
+  (the two are the same file). It fails the build when a frame leaves the engine inside a command,
+  with an error, with its FLIP to the wrong picture or its FENCE not done, or when the model's clamp
+  or wide values were needed. Its first 16 CRCs are gpudiag's own MODE 2 frames
+  (`gpuscenes_expect.h`'s `gpu_cube_expect_check`), which the host test checks: the same display.
+* **What it says**: a line a second, printed just after frames were looked at, `    cube 1 s: 60
+  drawn, 60 shown, 60 checked: all whole, in order`, with drawn the FLIPs done, shown the video
+  frames, checked those looked at; `all whole` alone when the order is not checked; else `N torn,
+  M out of order`. At the end the frames drawn, the time and the rate, whether the display went
+  back, the frames shown and checked for the whole run, and the first torn frame's FRAME_COUNT and
+  FRAME_CRC if there was one; `ended by Ctrl+C` after Ctrl+C. It fails (CMD_FAIL) on a torn or
+  out-of-order frame, Ctrl+C, a stopped engine or an error.
+* **Ending it**: the time running out (the last frame's FLIP done and the frame showing it looked
+  at, 200 ms at most), Ctrl+C, a stopped engine (`gpu_pump()`: two seconds without a word taken or
+  FENCE moving, which a FLIP with no blanking also comes to) and an error after a frame (STATUS read
+  as FENCE moves) each end it with the engine idle and everything put back as the demo puts it back.
+
+**The re-review's three lows** (of G3 at 258182f, line numbers there), each fixed and tested; each
+test was run with the fix and with the bug put back (the driver's files at the commit before the
+fix, the new test kept):
+
+| Finding | Fix | Test: the bug put back / after |
+|---|---|---|
+| N1: gfx.c:677-680, Ctrl+C on a dead engine still cost an uncuttable 2 s `gpu_sync()`: the demo's way out waits through Ctrl+C (`keep_going`), so nothing could cut those two seconds | once Ctrl+C has come to a run with `keep_going`, a stopped engine is one that made no progress for GPU_QUICK_US, 50 ms (its ABORT emptied the FIFO; what was sent since takes a live engine microseconds); the message says which span (`for 2 s`, `for 50 ms`); a wait that Ctrl+C cuts short at once yields rather than spins (5a0a75e) | t_ctrlc_dead: the engine stops 0.5 s into `gfx demo 5`, Ctrl+C 0.1 s later: all over 2065 ms after the Ctrl+C, 705 of 711 / 113 ms, the stopped engine said once after 50 ms, everything back, 711 of 711; t_cube_end the same for `gfx cube` |
+| N2: gpu.c:104 and gfx.c:124, `intr_aborted` was cleared before the trylock (while another console's run may hold the GPU) and read after the release | the flag is gone: the run's result says it, GPU_EINTR when Ctrl+C ABORTed the engine, GPU_ECANCEL (new) when there was nothing to stop (the claim given up, gfx crc's wait for frames, the bench between steps); `gfx` prints the driver's state from a copy taken under the claim, and `gfx mode` the target it read under it (c70d5b7, 320ab49) | t_ctrlc_said: the stand-in runs an "other console" at an ABORT (its claim gives up) and at the release (its claim taken; in the second case its own Ctrl+C ABORTs): 687 of 693, both checks failing on each seed / 693 of 693 |
+| N3: gpuos_test.py:307-313, the interrupt check counted the handler's entries, not wake-ups: a handler that ran without waking anyone passed, every fence wait ending by its 10 ms step | the port's `irq_wait()` says whether the interrupt came; the driver counts the fence waits that slept on the interrupt and those it woke, a wait once however many 10 ms steps it slept (a FLIP waits up to a frame: on the RTL SoC with GPU2's commands, counting steps gave 6 and 2 woken); `gfx` says `fence waits that slept on it: W, woken by it: K`; test-gpuos wants, between the first `gfx` and the last, K > 0 and 2K >= W, as well as interrupts for half the fences (e7207f6, 662c14c). The one wait the interrupt still did not wake was `gfx cube`'s on its frame 0, whose FENCE (gpucube.c's) asks for no interrupt: it waits with `gpu_sync()` now (7cadace; t_cube: every fence wait of the cube woken, 1013 of 1014 with the old wait) | a trial kernel whose `gpu_isr` counts and does not call `event_set` (not kept), at e7207f6: `156 taken for the 156 fences sent ...; 1 waits on it, 0 of them woken by it`, 24 of 25 (the old check passes it: 156 taken for 156) / 25 of 25, `1 waits on it, 1 of them woken by it`; host: t_fences, three full-screen fills 3 waits 3 woken, a handler that wakes nobody 2 more waits none woken (`gfx` says so), a wait of two steps that the interrupt ends one wait woken |
+
+**Decisions, and where this deviates from the brief**
+
+| Point | Done | Why |
+|---|---|---|
+| The sink | records a frame's words into the run's record; the run sends them through `gpu_pump()` | the sink has no context pointer and no error return: recording needs neither, and the driver's errors and Ctrl+C are handled where the words are sent, under the claim |
+| Sending a frame | `gpu_pump()`, never waiting, not `gpu_put()` | a full FIFO behind a FLIP that waits for a blanking would hold the run for up to a frame; never waiting, it empties the looks' ring and prints its lines on time |
+| The looks | from the timer interrupt every tick, through the port (not asked) | looking from the run's loop lost frames while it printed (above); a tick (10 ms) comes more often than a frame (16.7 ms), whatever the task does |
+| The palette | `gpu_cube_display()`'s, taken from its GPAL writes and loaded by the driver | the cube's colours as gpudiag shows them, from gpucube.c itself rather than a copy; nothing else of `gpu_cube_display()` is used |
+| The cube's display | mode 2, not 3 | the console's text changes every second and would be part of every frame's CRC |
+| The order check | only when the turn's 128 pictures differ (the brief), which they do since G4's fix round; measured from the last whole frame shown | before that round frames 9 and 73 were one picture; after a torn frame the cube's place is not known, so the next whole frame may be two on |
+| `gfx target` | added | without it nothing could be drawn into picture B for `gfx flip` to show |
+| `gfx flip` without a base | the target's base | draw into a picture with `gfx target`, then show it |
+| `gfx zclear [b]` | any byte, 0xff by default | the brief's FILL_RECT 0xFF is the default; another byte gives depth b * 257, which the tests use |
+| `gfx tri`'s two forms | 7 numbers (flat, no depth) or 12 (each vertex's depth and colour) | a 2D triangle needs no depths; the 12-number form with a `how` word is 15 words, the most a `gfx` line holds |
+| N2 | the flag removed, Ctrl+C said by the result code | no state of the struct says what one run did, so no claimant can change another's |
+| The cube's host tests | run once, not once a seed | nothing in them depends on the seed: three runs would be the same run |
+| `boards/qemu_virt/test_os.py` | three more `gfx` lines checked | the brief asks QEMU virt to say there is no GPU for the new commands; G3 added `gfx`'s check to the same file |
+
+**What was tested** ([evidence](evidence/gpu-g3/cube-sim.txt)); simulation and the host only:
+
+| Test | Result |
+|---|---|
+| `make test-gpuos-host` | 1014 of 1014 checks, 31 tests (G3's 18 and 13 new), seeds 1, 7 and 123 (the cube's tests run once: nothing in them depends on the seed). New: t_ctrlc_said (N2), t_ctrlc_dead (N1), t_fences' wake-ups (N3); t_gpu2: each GPU2 command's VRAM, depth buffer included, equal to a second model fed section 16's words (zbuf, zclear with 0xff and 0x80, flat, culled both ways, the top-left rule's square with each of its 1,600 pixels drawn once, Gouraud with depth in front and behind, sixteenths, zbuf off, target, FLIP at the blanking); t_gpu2_random: 120 commands a seed, every flag, the whole 12.4 range, depth clears, against the reference; t_gpu2_rules: a full FIFO (no word into it), a stopped engine (the depth buffer sent again after the ABORT), a FLIP that never comes (no pixel clock: a stopped engine after 2 s), Ctrl+C while a FLIP waits, a refused SET_ZBUF (BAD_PARAM said, cleared, the depth buffer sent again), a GPU1 (each says it needs GPU2 and sends nothing); t_usage2: 47 usage errors with nothing sent, and what is taken (hex, fractions, the ends of 12.4, how's words); t_columns2; t_cube_table: 128 frames, 128 pictures, the first 16 gpudiag's own; t_cube_check: the check alone; t_cube: `gfx cube 2`, 122 drawn, 122 shown, 122 checked, all whole and in order, every frame logged at the stand-in's pins between the cube's first and last one of the turn's and in step, nothing drawn into the picture shown, VRAM, GPAL, display, target, clip and depth buffer back, every fence wait woken; t_cube_end: Ctrl+C, a stopped engine (said once), Ctrl+C on one (50 ms), the pixel clock stopping (a FLIP that never comes: bounded), a spoiled byte (1 torn, the run fails), no memory; t_cube_order: VRAM and GPAL written only with text on the screen; t_cube_look: the tick's looks with a slow console. Then gfxref: 11 `gfx crc`, its model's VRAM and its pixels computed directly (section 16's triangles too) equal, and the two frame CRCs |
+| `make test-gpuos` | 32 of 32 in 225 s (it was 156 s): the G3 steps as before, then GPU2 (15.6's step 7): `gfx zbuf`, `zclear` and eight `gfx tri` lines (flat, culled clockwise and drawn counter-clockwise, the split square, Gouraud with depth through each other with ztest and zle, Gouraud without depth, sixteenths), crc 6 43e2d407; picture B drawn with `gfx target` and a ninth `gfx tri`, and shown by `gfx flip`, crc 7 651474fa; `gfx flip 0`, crc 8 = crc 6; each a frame at the VGA pins and gfxref's, which works them out from section 16 alone; `gfx cube 1`: 62 drawn in 1.07 s, 57.4 a second, 66 shown, 66 checked, all whole and in order, its line a second `61 drawn, 60 shown, 60 checked: all whole, in order`, and at the VGA pins 71 frames of the turn in one run with no other frame between, each showing the cube's frame of the one before it or the next; crc 9 = crc 8 after it; the interrupt: 181 taken for the 243 fences sent, 4 fence waits slept on it and 4 woken; without a GPU, `gfx tri`, `flip` and `cube` say there is none. 507 million cycles (20.3 s simulated) in 224 s |
+| `make test-os-qemu` | 137 of 137 at -O2 and at -O0: `gfx tri`, `gfx flip` and `gfx cube` say there is no GPU on QEMU virt |
+| `make check` (big) | run on the commit that adds this record; its result is recorded in the commit after it |
 
 ## 16. GPU2: triangles, depth and page flips (G4)
 

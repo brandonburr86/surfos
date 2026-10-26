@@ -1,0 +1,13 @@
+test_arty: 1014 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+expect 1 039d507c mode 2
+expect 2 f345a76e mode 2
+expect 3 309c14df mode 2
+expect 4 309c14df mode 2
+expect 5 309c14df mode 2
+expect 6 43e2d407 mode 2
+expect 7 651474fa mode 2
+expect 8 43e2d407 mode 2
+expect 9 43e2d407 mode 2
+expect 10 - mode 1
+expect 11 - mode 3
+gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
