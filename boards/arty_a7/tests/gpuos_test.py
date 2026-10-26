@@ -72,6 +72,9 @@ import time
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
+# gfx cube's line when the frames shown did not go on with its FLIPs (GPU.md 15.9's M2): read, so that
+# a cube that failed is judged below rather than waited past
+CUBE_TURN = r'(?:\s+gfx cube: the frames shown went (\d+) on for (\d+) FLIPs' + NL + r')?'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
            'the GPU reports', 'no vertical blanking in', 'stays pending although its handler ran', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
@@ -140,7 +143,7 @@ STEPS = [
     ('gfx flip 0', r'display: GFX_BASE 0, written by FLIP at a vertical blanking', 'FLIP back to picture A'),
     ('gfx crc', CRC_LINE.pattern, 'crc 8'),
     ('gfx cube 1', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
-     r'\s+gfx cube: \d+ shown, \d+ missed: ', 'gfx cube'),
+     CUBE_TURN + r'\s+gfx cube: \d+ shown, \d+ missed: ', 'gfx cube'),
     ('gfx crc', CRC_LINE.pattern, 'crc 9'),
     ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
@@ -434,11 +437,13 @@ def main():
     want = 'all whole, in order' if pictures == len(crcs) else 'all whole'
     sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) missed: ([^\n]*)', out)
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
-                  r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
-    check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(5) == '0' and
-          m.group(6) == want and int(m.group(1)) < int(m.group(4)) and 30 <= float(m.group(3)) <= 59.94,
-          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s missed: %s; a line a '
-          'second: %s' % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
+                  CUBE_TURN + r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
+    check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(7) == '0' and not m.group(4) and
+          m.group(8) == want and int(m.group(1)) < int(m.group(6)) and 30 <= float(m.group(3)) <= 59.94,
+          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s%s shown, %s missed: %s; a line a '
+          'second: %s' % (m.group(1), m.group(2), m.group(3),
+                          'the frames shown %s on for %s FLIPs, ' % (m.group(4), m.group(5)) if m.group(4) else '',
+                          m.group(6), m.group(7), m.group(8),
                           '; '.join('%s drawn, %s shown, %s missed: %s' % x for x in sec)) if m else 'no summary'))
     check(re.search(r'gfx demo: \d+ frames in [12]\.\d\d s[^\n]*\n\s+gfx demo: ended by Ctrl\+C', out),
           'gfx demo 5: Ctrl+C typed after its first second ends it within the next')
