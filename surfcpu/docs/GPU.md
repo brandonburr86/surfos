@@ -947,15 +947,16 @@ cube), so GPU1's gpudiag bitstream of section 12.8 (317c8f4) is superseded and n
 **That bitstream carries gpudiag as it was at bfaac48, before the review of 3fea963** (section
 16.12): it lacks that review's checks (16.12 lists them: four of the top-left rule's six cases on
 the SoC, what the refused depth triangles would have drawn, the exact frame-rate rule, frames out
-of order in the free run, the cube's distinct frames), and gpudiag is to be built again with them
-after the re-review, when the integrator says (no RTL changed: only the boot ROM and the build id
-differ). Until then the steps below are those of the bfaac48 bitstream, with that commit's checker
-and expected values (step 4); where the gpudiag of the review's fixes differs, they say so. The
-SurfOS test (G2) stays on G2's DDR+GPU bitstream (e119a78, section 12.6), which every gate proved:
-G4's DDR+GPU bitstream (bfaac48) passed every gate but LVS, whose proof is outstanding (section
-16.11). Once it has one, it takes e119a78's place in steps 6 to 8, with its own build id, sha256
-and `SoC 0.4.0`, and SurfOS then boots with the GPU2 engine in the design. The table's two
-bitstreams come from two commits; section 14.2 builds both into one clone.
+of order in the free run, the cube's distinct frames; and, as its capture is judged with its own
+checker, a cube line's frames shown and the free run's rate frame by frame), and gpudiag is to be
+built again with them after the re-review, when the integrator says (no RTL changed: only the boot
+ROM and the build id differ). Until then the steps below are those of the bfaac48 bitstream, with
+that commit's checker and expected values (step 4); where the gpudiag of the review's fixes
+differs, they say so. The SurfOS test (G2) stays on G2's DDR+GPU bitstream (e119a78, section 12.6),
+which every gate proved: G4's DDR+GPU bitstream (bfaac48) passed every gate but LVS, whose proof is
+outstanding (section 16.11). Once it has one, it takes e119a78's place in steps 6 to 8, with its
+own build id, sha256 and `SoC 0.4.0`, and SurfOS then boots with the GPU2 engine in the design.
+The table's two bitstreams come from two commits; section 14.2 builds both into one clone.
 
 | Test | The bitstream, in surfcpu/build/fpga/arty_a7_100t/ | Built at, seed | sha256 | The build its banner must show |
 |---|---|---|---|---|
@@ -1005,10 +1006,13 @@ G1, G2 and G4, the diagnostic and the cube:
    full board test. `tools/uart.py console auto --log surfcpu/build/gpudiag-1.log` works too
    (Ctrl-] to close it after ten cube lines); `--log` appends raw bytes, so give each test its own
    file: runs of another build in it fail the check.
-4. Check the capture against the build:
+4. Check the capture against the build, with the checker and the expected values of the
+   bitstream's own commit, bfaac48 (the three commands as they are, from the same root):
 
-       python3 surfcpu/sim/gpu/gpudiag_check.py --uart surfcpu/build/gpudiag-1.txt --frames - \
-         --expect surfcpu/build/fw/gen/gpuscenes_expect.h --cube-seconds 10 \
+       git show bfaac48:surfcpu/sim/gpu/gpudiag_check.py > /tmp/gpudiag_check_bfaac48.py
+       git show f6e14c4:surfcpu/docs/evidence/gpu-g4/gpuscenes_expect-bfaac48.txt > /tmp/gpuscenes_expect_bfaac48.h
+       python3 /tmp/gpudiag_check_bfaac48.py --uart surfcpu/build/gpudiag-1.txt --frames - \
+         --expect /tmp/gpuscenes_expect_bfaac48.h --cube-seconds 10 \
          --manifest surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/manifest.txt
 
    It passes only when no line shows a failure, every run that ended passed, the capture ends with
@@ -1016,17 +1020,19 @@ G1, G2 and G4, the diagnostic and the cube:
    shows a build other than the manifest's (bfaac489) and one whole run at least shows that one, no
    run shows a dirty banner or bitstream line (the manifest says the tree was clean), and ten cube
    lines at least follow the last run, each with 30 or more frames drawn and none missed or torn.
-   **Use bfaac48's gpudiag_check.py for the bfaac48 bitstream**: the clone of section 14.2 has it,
-   or `git show bfaac48:surfcpu/sim/gpu/gpudiag_check.py > /tmp/gpudiag_check_bfaac48.py`. From the
-   review of 3fea963 on (section 16.12) the checker wants the cube's lines with their frames out of
-   order, which bfaac48's gpudiag does not print, and 58 to 61 frames shown a second.
-   The manifest must be a gpudiag build's that passed its checks. `--build-id bfaac489` names the
-   build without the manifest, but does not know whether it was clean. `--accept-rerun` would take
-   reruns alone, which is not this test. `--expect` must hold the expected values of the
-   bitstream's own commit, bfaac48: the clone of section 14.2 has them in build/fw/gen/ after its
-   last build-rom. From 32e1a86 on scene 13's value differs (a04d1e8a, section 16.11; 9368fe97 from
-   the review's fixes on, with the cube's), so a tree that has built a later gpudiag gives a false
-   FAIL on scene 13.
+   The first file is bfaac48's checker. The second is the gpuscenes_expect.h that bfaac48's build
+   writes (a generated file, so not in git at bfaac48): f6e14c4 keeps it byte for byte (sha256
+   6ad57705bb6ed81c0c66ad0c7e89f5f79ef62d893674726f8e0ade22f01c1779), and the clone of section 14.2
+   writes the same file into its build/fw/gen/ at its last build-rom. `git show` takes both from
+   the repository, whatever is checked out. **Not the tree's checker or the tree's expected
+   values**: they are those of the gpudiag after the review of 3fea963 (section 16.12) and fail a
+   bfaac48 capture that passes. That gpudiag makes 147 checks, so a run of 146 counts as a rerun;
+   its scene 13 is 9368fe97 (bfaac48's bbb6a4cb) and its cube's CRCs differ; and the tree's checker
+   wants cube lines with frames apart and out of order, which bfaac48's gpudiag does not print (the
+   re-review of b2c765d, low 1: with bfaac48's header and the tree's checker, `FAIL: 0 of the
+   cube's lines after the last run, 10 wanted`). The manifest must be a gpudiag build's that passed
+   its checks. `--build-id bfaac489` names the build without the manifest, but does not know whether
+   it was clean. `--accept-rerun` would take reruns alone, which is not this test.
 5. The monitor: each scene shows for about a twentieth of a second while it is checked (GPU2's four
    last: a fan and a mesh of flat triangles; eight Gouraud ramps; two triangles crossing in depth;
    a fan of Gouraud triangles with SURFGPU, flipped to), then the cube spins, one turn in about two
@@ -1710,11 +1716,15 @@ through pixel centres); edge 1's left case is the one only the free run's cube f
 torn frames).
 
 **What the bfaac48 bitstream lacks.** The gpudiag bitstream of section 14 carries gpudiag as it was
-at bfaac48 (146 checks, scene 13 bbb6a4cb, the first cube). Of this round's checks it lacks: on the
-SoC, the top-left rule's top cases of edges 0, 1 and 2 and the left case of edge 1 (the last would
-show in its free run's cube lines as torn frames); the VRAM halves of the depth refusals and the
-refused SET_ZBUF's own BAD_PARAM, so a TRIANGLE drawn without a depth buffer passes it; the frame
-by frame rate rule, so a cube at 28 frames a second passes it; frames out of order in the free run;
-and distinct cube frames (frame 73 stands for frame 9). No RTL changed, so its 146 checks pass on
-today's RTL SoC as they did. Today's gpudiag_check fails its free run's lines (they have no frames
-out of order): a capture of it goes to bfaac48's checker (section 14 step 4).
+at bfaac48 (146 checks, scene 13 bbb6a4cb, the first cube), and a capture of it is judged with
+bfaac48's checker and bfaac48's expected values (section 14 step 4: today's fail it, by its check
+count, its CRCs and its cube lines, which have no frames apart or out of order). Of this round's
+checks it lacks: on the SoC, the top-left rule's top cases of edges 0, 1 and 2 and the left case of
+edge 1 (the last would show in its free run's cube lines as torn frames); the VRAM halves of the
+depth refusals and the refused SET_ZBUF's own BAD_PARAM, so a TRIANGLE drawn without a depth buffer
+passes it; the frame by frame rate rule, so a cube at 28 frames a second passes its checks; frames
+out of order in the free run; and distinct cube frames (frame 73 stands for frame 9). Its checker
+lacks the rules for the cube's lines that came after it: 58 to 61 frames shown (L2: a line of 60
+drawn and 0 shown, nothing checked, passes it) and the frame by frame rule in the free run (the
+re-review's low 2, below: it wants 30 drawn in each second instead, which the cube's 60 a second in
+simulation meet). No RTL changed, so its 146 checks pass on today's RTL SoC as they did.
