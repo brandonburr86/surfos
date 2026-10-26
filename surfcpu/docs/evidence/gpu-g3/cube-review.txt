@@ -122,3 +122,16 @@ f3f5767, the code handed back (cube-review-test-gpuos.txt): test-gpuos 32 of 32 
     ok   gfx cube 1 by SurfOS's own check: 61 drawn in 1.02 s (59.5 a second), 65 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order
   at the pins: frame 0 for one video frame, frames 1 to 60 one each, frame 61 for five (until the
   display went back, after the run's last look)
+
+make check (SURFGPU_DOCKER_SIZE=big, through the capped wrapper) at b884c0b, the commit that added GPU.md
+15.9 and these files (the code of f3f5767), 14:05:58 to 14:42:37:
+    test_arty: 1043 of 1043 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (243 sent); 4 fence waits slept on it, 4 of them woken by it
+    ok   gfx cube 1 at the VGA pins: 66 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 62 pictures, 0 after more than two video frames
+    ok   gfx cube 1 by SurfOS's own check: 61 drawn in 1.02 s (59.5 a second), 65 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order
+    test-gpuos: 32 of 32 checks passed in 232 s (gpu 509781324 cycles = 20.391 s simulated in 231.4 s wall (2.20 M cycles/s); nogpu 158388067 cycles = 6.336 s simulated in 47.4 s wall (3.34 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541870 cycles)
+    check: all automated SurfCPU checks passed
