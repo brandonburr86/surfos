@@ -737,14 +737,22 @@ def scenario_serial(args, image, firmware, outdir):
     try:
         if boot_serial(vm, results, args.boot_timeout):
             vm.pump(1)
-            scr = vm.screen('boot.png')
             m = PROMPT_TEXT.search(vm.text())
             serial_boot = vm.text()[:m.end()] if m else vm.text()
-            results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
             # the last boot lines on the serial port must be the last ones on the screen too
             want = [drawn(l) for l in serial_boot.splitlines() if drawn(l)][-6:]
-            shown = [drawn(r) for r in scr.rows if drawn(r)]
-            results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
+
+            def agree(s):
+                return [drawn(r) for r in s.rows if drawn(r)][-len(want):] == want
+
+            # 10/26/26: the screen once it has settled, up to 5 s. On a loaded host a boot sometimes took no timer tick
+            # in the second before the screenshot (no present either, in K1's and A7's trees alike), and the one
+            # screenshot then came in the middle of the present that followed
+            scr = vm.wait_screen(lambda s: prompt_on(s) and agree(s) and banner_ok(s), 5) or vm.screen()
+            if vm.outdir:
+                scr.png(os.path.join(vm.outdir, 'boot.png'))
+            results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
+            results.append(('framebuffer and serial agree on the last boot stages', agree(scr)))
             results.append(('framebuffer shows the banner: Brandon Burr\'s SurfOS, the version and the years in their colours',
                             banner_ok(scr)))
             results.append(('GRUB found its own partition through $cmdpath, no disk search',
