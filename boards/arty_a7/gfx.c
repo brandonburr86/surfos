@@ -991,6 +991,20 @@ static int demo(struct gpu *g, int argc, char **argv) {
     return r ? status(g, r, what) : r2 ? CMD_FAIL : CMD_OK;
 }
 
+/**** gfx cube (boards/arty_a7/gfxcube.c; 10/26/26) ****/
+
+static int cube(struct gpu *g, int argc, char **argv) {
+    const char *what = "gfx cube";
+    long seconds = 10;
+    int r;
+    if(!gpu2(g, what)) return CMD_FAIL;
+    if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx cube [seconds]   (1-3600, 10 when not given)");
+    if(claim(g, what)) return CMD_FAIL;
+    r = gfx_cube_run(g, (u32)seconds, what);
+    gpu_release(g);
+    return r ? CMD_FAIL : CMD_OK;
+}
+
 /**** the command ****/
 
 static const struct {
@@ -1000,7 +1014,7 @@ static const struct {
     { "mode", mode }, { "clear", clear }, { "fill", fill }, { "rect", rect }, { "line", line }, { "copy", copy },
     { "text", text }, { "pal", pal }, { "put", put }, { "get", get }, { "crc", crc }, { "bench", bench },
     { "demo", demo }, { "reset", reset }, { "target", target }, { "zbuf", zbuf }, { "zclear", zclear }, { "tri", tri },
-    { "flip", flip },
+    { "flip", flip }, { "cube", cube },
 };
 
 int gfx_command(struct gpu *g, int argc, char **argv) {

@@ -68,20 +68,55 @@ static void log_write(struct stub *s, uint32_t reg, uint32_t v) { log_write_at(s
 
 /**** the picture ****/
 
-void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *frame) {
+static void render(const uint8_t *vram, const uint16_t *gpal, const struct stub_disp *d, uint16_t *frame) {
     struct gpu_display gd;
     gpu_display_reset(&gd, 1);
     gd.mode = (int)d->mode;
     gd.gfx_base = d->base;
     gd.gfx_stride = d->stride;
     gd.gfx_scale = d->scale;
-    memcpy(gd.gpal, s->gpal, sizeof(gd.gpal));
-    gpu_display_render(&gd, s->vram, NULL, font8x16, frame);
+    memcpy(gd.gpal, gpal, sizeof(gd.gpal));
+    gpu_display_render(&gd, vram, NULL, font8x16, frame);
+}
+
+void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *frame) {
+    render(s->vram, s->gpal, d, frame);
 }
 
 uint32_t stub_crc(const struct stub *s, const struct stub_disp *d) {
     stub_render(s, d, picture);
     return gpu_frame_crc(picture);
+}
+
+/* frame k's last line was sent: VRAM, GPAL and its display kept as they are now (FRAME_CRC is this
+   frame's, whatever the engine draws next), and with log_frames its CRC logged */
+static void frame_end(struct stub *s, uint64_t k) {
+    struct stub_frame *f = &s->frame[k % STUB_FRAMES];
+    f->k = k;
+    f->valid = 1;
+    f->d = stub_shown(s, k);
+    memcpy(f->gpal, s->gpal, sizeof(f->gpal));
+    memcpy(f->vram, s->vram, sizeof(f->vram));
+    if(s->log_frames && s->nflog < STUB_FRAME_LOG) {
+        render(f->vram, f->gpal, &f->d, picture);
+        s->flog[s->nflog].k = k;
+        s->flog[s->nflog].crc = gpu_frame_crc(picture);
+        s->flog[s->nflog].d = f->d;
+        s->nflog++;
+    }
+}
+
+/* FRAME_CRC of frame k: as it ended (the frame kept), or, when the clock jumped past it, of what is
+   there now */
+static uint32_t frame_crc(struct stub *s, uint64_t k) {
+    const struct stub_frame *f = &s->frame[k % STUB_FRAMES];
+    struct stub_disp d;
+    if(f->valid && f->k == k) {
+        render(f->vram, f->gpal, &f->d, picture);
+        return gpu_frame_crc(picture);
+    }
+    d = stub_shown(s, k);
+    return stub_crc(s, &d);
 }
 
 /* what the screen shows at t: during a frame's lines, what its latch took; in its blanking, what the
@@ -201,12 +236,38 @@ static void push(struct stub *s, uint32_t w) {
     s->count++;
 }
 
-/* time passes on the CPU's side */
+/* time passes on the CPU's side; each frame that ends on the way is kept as it ended, with the
+   engine's work up to then (10/26/26) */
 static void tick(struct stub *s, uint64_t us) {
-    s->now += us;
-    if(s->stall_at && s->now >= s->stall_at && !s->in_atomic) {    /* an interrupt or another task: */
-        s->now += s->stall_us;                                      /* never inside an atomic stretch */
+    uint64_t to = s->now + us, b;
+    if(s->stall_at && to >= s->stall_at && !s->in_atomic) {        /* an interrupt or another task: */
+        to += s->stall_us;                                          /* never inside an atomic stretch */
         s->stall_at = 0;
+    }
+    if(s->frames_stop_at && to >= s->frames_stop_at) {
+        if(s->frames_stop_at > s->now) {
+            s->now = s->frames_stop_at;
+            run(s);
+        }
+        s->frames_frozen = (uint32_t)blankings(s, s->now);
+        s->frames_stop = 1;
+        s->frames_stop_at = 0;
+    }
+    b = blankings(s, s->now);
+    if(!s->frames_stop && b > s->frames_seen + 2) s->frames_seen = b - 1;  /* the clock was moved on: the last */
+    while(!s->frames_stop && vblank_of(s->frames_seen) <= to) {
+        uint64_t vb = vblank_of(s->frames_seen);
+        if(vb > s->now) {
+            s->now = vb;
+            run(s);
+        }
+        frame_end(s, s->frames_seen++);
+    }
+    s->now = to;
+    if(s->poke_at && s->now >= s->poke_at) {                       /* a byte of the picture on the screen */
+        struct stub_disp d = stub_visible(s, s->now);
+        s->vram[(d.base + s->poke_off) % GPU_VRAM_BYTES] ^= 0xFF;
+        s->poke_at = 0;
     }
     if(s->stop_at && s->now >= s->stop_at) {
         s->stopped = 1;
@@ -337,12 +398,10 @@ static uint32_t p_vrd(void *c, uint32_t off) {
     }
     if(off == SURF_VIDEO_FRAME_CRC) {
         uint64_t n = s->kept ? s->kept_frame : b;   /* the kept frame, else the newest */
-        struct stub_disp d;
         s->kept = 0;
         if(!n) return 0;
-        d = stub_shown(s, n - 1);
         s->crc_frame = n - 1;
-        return stub_crc(s, &d);
+        return frame_crc(s, n - 1);
     }
     if(off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4 * 256) return s->gpal[(off - SURF_VIDEO_GPAL) / 4];
     return 0;
