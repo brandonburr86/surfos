@@ -37,11 +37,14 @@ int netman_set(int k, const char *value, char *why, size_t size);
 
 /* surfos-config/<name> into buf (max bytes and a NUL): 0 and *len; -ENOENT when there is none (or the settings are not
    used at this start: settings=off); -errno and why. Only NETCFG_SURFSHRC and NETCFG_HISTORY_FILE; while the boot
-   still looks for the stick (20 s at most), the caller waits for it */
-int netman_file_read(const char *name, char *buf, u_int max, u_int *len, char *why, size_t wsize);
+   still looks for the stick (20 s at most), the caller waits for it. 10/25/26 (the kernel review of track A, 4):
+   *gen, when not NULL, is the file's generation as it was read (it counts SurfOS's writes of it) */
+int netman_file_read(const char *name, char *buf, u_int max, u_int *len, u_int *gen, char *why, size_t wsize);
 /* data as surfos-config/<name>, by the settings' own way (a .new file synced, renamed, read back): 0, or -errno and
-   why. Only NETCFG_HISTORY_FILE, and only while the history setting is on */
-int netman_file_write(const char *name, const char *data, u_int len, char *why, size_t wsize);
+   why. Only NETCFG_HISTORY_FILE, only while the history setting is on and the stick may be written. 10/25/26 (4):
+   with gen, -EAGAIN when the file was written after that generation was read (another shell saved meanwhile: read
+   it again and merge), else *gen becomes the generation written */
+int netman_file_write(const char *name, const char *data, u_int len, u_int *gen, char *why, size_t wsize);
 bool netman_history_on(void);               /* history = on, and the settings are used at this start */
 /* the boot's read of the settings done (or given up: 30 s at most, said in the kernel log); at once when there is
    none (settings=off, no bootvol=, no netman thread). 10/25/26: true when the caller goes on without them while the

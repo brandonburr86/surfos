@@ -121,7 +121,8 @@ static int add(const char *word, size_t len) {
         status = 1;
         return 1;
     }
-    if(nargs > nfixed && (nargs == SPAWN_MAX_ARGS || bytes + len + 1 > SPAWN_ARG_BYTES) && run()) return 1;
+    /* 10/25/26 (the programs' review, U1): >=, as main() leaves room for a word at least (args[] holds the NULL too) */
+    if(nargs > nfixed && (nargs >= SPAWN_MAX_ARGS || bytes + len + 1 > SPAWN_ARG_BYTES) && run()) return 1;
     args[nargs] = malloc(len + 1);
     if(!args[nargs]) {
         fprintf(stderr, "xargs: out of memory\n");
@@ -204,8 +205,10 @@ int main(int argc, char **argv) {
     }
     if(i == argc) args[nargs++] = "echo";
     for(; i < argc && nargs < SPAWN_MAX_ARGS; i++) args[nargs++] = argv[i];
-    if(i < argc) {
-        fprintf(stderr, "xargs: more than %d arguments\n", SPAWN_MAX_ARGS);
+    if(i < argc || nargs >= SPAWN_MAX_ARGS) {           /* 10/25/26 (the review, U1): no room left for a word (the
+                                                           kernel gives a program 128 arguments, its name the first:
+                                                           a guard, should that change) */
+        fprintf(stderr, "xargs: the command takes all %d arguments a run has\n", SPAWN_MAX_ARGS);
         return 2;
     }
     nfixed = nargs;

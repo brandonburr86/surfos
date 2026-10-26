@@ -51,6 +51,12 @@ too), then the lines typed here since the last save, the last HIST_MAX of them i
 HIST_FILE_MAX bytes. A line that starts with a space was never kept. And it sets HOSTNAME, not
 exported, from /dev/config/hostname (the hostname setting), which a telnet session's prompt
 shows (≋@>, shell/prompt.c), when the environment has none and the kernel has one.
+The reviews' fixes (10/25/26): a save that another shell's came between (close says EAGAIN:
+the kernel refuses a file older than the stick's) reads the file again and merges, 8 times at
+most; after a periodic save that failed the next comes HIST_SAVE_EVERY lines later, and only
+the first failure is said. An exit in the startup file leaves the file, as return does, and a
+Ctrl+C stops the rest of it; a startup file that cannot be read is said; a CR before a line's
+end (a file written on Windows) is dropped there and in the history.
 */
 
 #include "surfsh.h"
@@ -173,8 +179,21 @@ static void read_conf(const char *path) {
 
 static int hist_saved;              /* history_count() when the file was last read or written: the lines after are new */
 static int hist_kept;               /* this shell keeps its history there (an interactive one) */
+static int hist_failed, hist_retry; /* 10/25/26 (the review, U4): the last periodic save failed; the count for the next */
 
-static int fd_get(struct source *s, struct sbuf *out, int more);
+#define HIST_SAVE_TRIES 8           /* 10/25/26 (the review, 4): saves another shell's came between, read again and merged */
+
+static int text_get(struct source *s, struct sbuf *out, int more);
+
+/* 10/25/26 (the programs' review, U8): a CR before a line's end dropped in place, as netcfg does (a file written on
+   Windows): the new length */
+static int drop_crs(char *s, int len) {
+    int i, j;
+    for(i = j = 0; i < len; i++)
+        if(s[i] != '\r' || (i + 1 < len && s[i + 1] != '\n')) s[j++] = s[i];
+    s[j] = 0;
+    return j;
+}
 
 /* a line more for lines (n of cap): 0, -1 without memory */
 static int add_line(const char ***lines, int *n, int *cap, const char *l) {
@@ -188,24 +207,19 @@ static int add_line(const char ***lines, int *n, int *cap, const char *l) {
     return 0;
 }
 
-/* the file's lines (other sessions' too), then the new ones, the last HIST_MAX in at most HIST_FILE_MAX bytes: as the
-   file again. 0; -1, said when say (history -w), as it is when nothing new needs saving */
-int history_save(int say) {
+/* one save: the file's lines (other sessions' too), then the new ones, the last HIST_MAX in at most HIST_FILE_MAX bytes,
+   as the file again. The lines it holds now; -1 and errno (10/25/26, the kernel review's 4: EAGAIN when another shell
+   saved after this one read the file) */
+static int save_once(void) {
     struct sbuf out = { NULL, 0, 0 };
     char *old = NULL;
     const char **lines = NULL;
-    int fd, n = 0, cap = 0, i, first, bytes = 0, r = 0, short_of = 0;
+    int fd, n = 0, cap = 0, i, first, bytes = 0, r = 0, short_of = 0, e;
     ssize_t got, len = 0;
-    if(!hist_kept || (!say && hist_saved >= history_count())) return 0;
-    fd = open(HISTORY_FILE, O_RDWR);
-    if(fd < 0) {
-        if(say) fprintf(stderr, "surfsh: history: %s\n", errno == ENOENT ? "not kept on the stick: the history setting "
-                        "is off (settings history on), or SurfOS was not started from one" : strerror(errno));
-        return -1;
-    }
+    if((fd = open(HISTORY_FILE, O_RDWR)) < 0) return -1;
     old = malloc(HIST_FILE_MAX + 1);
     while(old && len < HIST_FILE_MAX && (got = read(fd, old + len, HIST_FILE_MAX - len)) > 0) len += got;
-    if(old) old[len] = 0;
+    if(old) len = drop_crs(old, (int)len);         /* 10/25/26 (the review, U8) */
     for(i = 0; old && i < len && !short_of; ) {     /* the file's lines */
         char *nl = memchr(old + i, '\n', (size_t)(len - i));
         if(nl) *nl = 0;
@@ -233,17 +247,35 @@ int history_save(int say) {
               ftruncate(fd, out.len) < 0) {
         r = -1;
     }
-    if(close(fd) < 0 && !r) r = -1;                 /* the stick written: EIO when not (dmesg says why) */
-    if(r && say) fprintf(stderr, "surfsh: history: not saved on the stick: %s%s\n", strerror(errno),
-                         errno == EIO ? " (dmesg says why)" : "");
-    if(!r) {
-        hist_saved = history_count();
-        if(say) printf("history: %d line%s in surfos-config/history on the stick\n", n - first, n - first == 1 ? "" : "s");
-    }
+    if(close(fd) < 0 && !r) r = -1;                 /* the stick written: EIO when not (dmesg says why), EAGAIN */
+    e = errno;
     free(lines);
     free(old);
     sb_free(&out);
-    return r;
+    errno = e;
+    return r ? -1 : n - first;
+}
+
+/* the history on the stick, again and merged while other shells' saves come between (8 tries). 0; -1, said when say:
+   1 history -w (its outcome said), 2 a failure said (10/25/26, U4: the first periodic save that fails); a save not asked
+   for when nothing new needs one is none */
+int history_save(int say) {
+    int kept, tries = 0;
+    if(!hist_kept || (say != 1 && hist_saved >= history_count())) return 0;
+    do kept = save_once();                          /* EAGAIN: read again, merged again */
+    while(kept < 0 && errno == EAGAIN && ++tries < HIST_SAVE_TRIES);
+    if(kept < 0) {
+        if(say && errno == ENOENT) fprintf(stderr, "surfsh: history: not kept on the stick: the history setting is off "
+                                           "(settings history on), or SurfOS was not started from one\n");
+        else if(say) fprintf(stderr, "surfsh: history: not saved on the stick: %s%s%s\n",
+                             errno == EAGAIN ? "other shells saved it each time it was merged" : strerror(errno),
+                             errno == EIO ? " (dmesg says why)" : "",
+                             say == 2 ? "; tried again after more lines" : "");
+        return -1;
+    }
+    hist_saved = history_count();
+    if(say == 1) printf("history: %d line%s in surfos-config/history on the stick\n", kept, kept == 1 ? "" : "s");
+    return 0;
 }
 
 /* the history the stick keeps, as lines typed before this shell's */
@@ -257,7 +289,7 @@ static void history_load(void) {
     while(buf && len < HIST_FILE_MAX && (got = read(fd, buf + len, HIST_FILE_MAX - len)) > 0) len += got;
     close(fd);
     if(!buf) return;
-    buf[len] = 0;
+    len = drop_crs(buf, (int)len);                  /* 10/25/26 (the review, U8) */
     for(i = 0; i < len; ) {
         char *nl = memchr(buf + i, '\n', (size_t)(len - i));
         if(nl) *nl = 0;
@@ -281,21 +313,41 @@ static void hostname_load(void) {
     var_set("HOSTNAME", name, 0);
 }
 
-/* the owner's startup file, run as a . file is */
+/* the owner's startup file, run as a . file is (return leaves it). 10/25/26 (the programs' review): an exit there leaves
+   the file, as return does, and is said, for it would end every interactive shell as it starts (a console's shell
+   started again and again, a telnet session closed at once), and the first Ctrl+C stops the rest of it (U5); a file
+   that is there but cannot be read is said, the reason in the kernel log, and a CR before a line's end is dropped
+   (U8). It is read whole (16 KB at most, the kernel's limit), so no descriptor of it is left for its commands */
 static void run_rc(void) {
+    struct sbuf text = { NULL, 0, 0 };
     struct source s;
-    int fd = open(SURFSHRC, O_RDONLY), high;
-    if(fd < 0) return;
-    if((high = fd_copy_high(fd)) >= 0) {
-        close(fd);
-        fd = high;
+    char buf[1024];
+    ssize_t got;
+    int fd = open(SURFSHRC, O_RDONLY);
+    if(fd < 0) {                                /* none, or no stick to read it from (ENODEV), are no mistake: the */
+        if(errno != ENOENT && errno != ENODEV)  /* kernel says it on this console when a USB stick was not ready */
+            fprintf(stderr, "surfsh: %s: %s: not run (dmesg says why)\n", SURFSHRC, strerror(errno));
+        return;
     }
-    memset(&s, 0, sizeof(s));
-    s.fd = fd;
-    s.get = fd_get;
-    s.name = SURFSHRC;
-    run_source(&s);
+    while((got = read(fd, buf, sizeof(buf))) > 0) sb_put(&text, buf, (int)got);
     close(fd);
+    if(text.len) text.len = drop_crs(text.s, text.len);
+    memset(&s, 0, sizeof(s));
+    s.get = text_get;
+    s.text = sb_str(&text);
+    s.name = SURFSHRC;
+    s.rc = 1;
+    dot_depth++;
+    run_source(&s);
+    dot_depth--;
+    returning = 0;
+    if(exit_requested) {
+        exit_requested = 0;
+        fprintf(stderr, "surfsh: %s: exit leaves the startup file, as return does; the shell goes on\n", SURFSHRC);
+    } else if(s.rc == 2) {
+        fprintf(stderr, "surfsh: %s: the rest of the startup file was skipped (Ctrl+C)\n", SURFSHRC);
+    }
+    sb_free(&text);
 }
 
 /**** the sources of lines ****/
@@ -334,7 +386,12 @@ static int editor_get(struct source *s, struct sbuf *out, int more) {
     }
     if(!blank(line) && line[0] != ' ') {        /* 10/25/26: not one that starts with a space */
         history_add(line);
-        if(hist_kept && history_count() - hist_saved >= HIST_SAVE_EVERY) history_save(0);   /* (A10) */
+        /* (A10) a save every HIST_SAVE_EVERY lines; 10/25/26 (the programs' review, U4): after one that failed, the next
+           try HIST_SAVE_EVERY lines later, not at every line, and only the first failure said */
+        if(hist_kept && history_count() - hist_saved >= HIST_SAVE_EVERY && history_count() >= hist_retry) {
+            hist_failed = history_save(hist_failed ? 0 : 2) < 0;
+            if(hist_failed) hist_retry = history_count() + HIST_SAVE_EVERY;
+        }
     }
     s->lines++;
     sb_put(out, line, n);
@@ -424,6 +481,8 @@ int run_source(struct source *s) {
     struct parser p;
     struct node *n;
     int used = 0, more = 0, ended = 0, first = 1, r, top = interactive && !source_depth, ran = 0;
+    /* 10/25/26: the startup file (run_rc()) runs as the prompt's commands do, each its own (top): paged, Ctrl+C reaching
+       surfsh's own commands */
     source_depth++;
     while(!exit_requested && (top || !stopping())) {
         if(used >= buf.len && !more) {          /* all of it ran: start again empty */
@@ -484,11 +543,13 @@ int run_source(struct source *s) {
             }
             if(interrupted) last_status = STATUS_INTERRUPTED;
             if(suspended) last_status = STATUS_STOPPED;     /* 10/25/26: a job stopped (jobs.c) */
+            if(interrupted && s->rc) s->rc = 2;     /* 10/25/26 (the review, U5): the startup file goes no further */
             interrupted = interrupt_said = suspended = 0;
         }
         arena_free(&mem);
         fflush(stdout);
         if(s->get == fd_get) jobs_collect(0);   /* after each command of a file, as surfsh did after each line */
+        if(s->rc == 2 || (s->rc && returning)) break;   /* 10/25/26 (U5): a Ctrl+C or return in the startup file */
     }
     source_depth--;
     sb_free(&buf);

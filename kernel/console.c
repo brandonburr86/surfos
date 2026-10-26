@@ -31,6 +31,7 @@ Shift+PgUp shows it ("scrollback" below).
 #include <surfos/klog.h>
 
 #include <mm/kalloc.h>
+#include <mm/pmm.h>
 #include <surfos/irq.h>
 
 #include <blibc_common.h>
@@ -214,6 +215,7 @@ bool isConsoleValid(surf_console *con) {
     the pseudo-terminals keep no rows.
 */
 #define SCROLLBACK_BYTES (512 * 1024)
+#define SCROLLBACK_SPARE 512                    /* 10/25/26 (the review): frames left free after a ring is made */
 #define VIEW_TAG_ATTR 0x70                      /* " -N ": black on light grey, as the pager's question */
 
 /* is con on the screen as it is now (the active console, not a view back)? */
@@ -602,7 +604,10 @@ static void ansi_restore(surf_console *con, bool colours) {
 /* 10/25/26 (A8): ESC[?1049h, the alternate screen: the main screen's cells and cursor kept (a stream's far
    terminal keeps its own: the console follows the column), the screen blank, the cursor where it was, as xterm
    has it; ESC[?1049l puts the main screen back. Without memory for the copy the sequence does nothing. A new
-   screenful for the pager either way, and the scrollback takes nothing while the alternate screen shows. */
+   screenful for the pager either way, and the scrollback takes nothing while the alternate screen shows.
+   The kernel review (10/25/26, 2): the copy's pages are mapped as they are first touched, from whatever prints,
+   and a page with no frame for it panics: so the copy is made only while its frames and SCROLLBACK_SPARE more are
+   free (a program at its memory's end), else the sequence does nothing, as without memory. */
 static void alt_enter(surf_console *con, TEXTCOLOR attr) {
     u_char *keep;
     u_int i;
@@ -614,6 +619,7 @@ static void alt_enter(surf_console *con, TEXTCOLOR attr) {
         con->alt_on = 1;
         return;
     }
+    if(pmm_free_frames() < SCREEN_BYTES / 4096 + 1 + SCROLLBACK_SPARE) return;   /* 10/25/26 (the review) */
     keep = (u_char *)kalloc(SCREEN_BYTES);
     if(!keep) return;
     KCRIT_ENTER

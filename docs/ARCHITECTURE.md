@@ -1295,11 +1295,17 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   entry for it ("SurfOS (kernel shell)").
 * **The startup file and the history on the stick** (10/25/26, track A, A10; the kernel's side
   is section 19). An interactive surfsh runs `/dev/config/surfshrc`, the owner's
-  `surfos-config/surfshrc`, after `surfsh.conf`, as a `.` file runs (an `exit` there ends the
-  shell). It loads `/dev/config/history` (there only while `settings history on`) into its
-  history, and saves when it ends, on `history -w` and after every 25 lines typed: the file as
-  it is by then (another session's lines kept), then its own lines since the last save, the
-  last 1,000 in at most 256 KB; a line that starts with a space was never kept. `~` alone or
+  `surfos-config/surfshrc`, after `surfsh.conf`, as a `.` file runs (`return` leaves it; since
+  the reviews' fixes, 10/25/26, an `exit` there leaves it too, said, rather than end every
+  shell as it starts, and the first Ctrl+C stops the rest of it; a file that cannot be read is
+  said, and a CR before a line's end is dropped, there and in the history). It loads
+  `/dev/config/history` (there only while `settings history on`) into its history, and saves
+  when it ends, on `history -w` and after every 25 lines typed: the file as it is by then
+  (another session's lines kept), then its own lines since the last save, the last 1,000 in at
+  most 256 KB; a line that starts with a space was never kept. A save that another shell's came
+  between (close says `EAGAIN`, section 19) reads the file again and merges, 8 times at most;
+  after a periodic save that failed the next comes 25 lines later, and only the first failure is
+  said. `~` alone or
   before a `/` at a word's start (also of an assignment's value and a redirection's file) is
   `$HOME`, quoted; vars.c sets `HOME=/` when the environment has none, and surfshrc may set
   another. An interactive surfsh sets `HOSTNAME` (not exported) from `/dev/config/hostname`,
@@ -1689,7 +1695,12 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   `fs/devfs.c`'s `/dev/config/surfshrc` and `/dev/config/history` (`netman_file_read()`,
   `netman_file_write()`) are read from the stick when looked up, so when opened, and history
   goes back when it is closed: the VFS's new vnode op `flush` (`fs/vfs.c` calls it at the last
-  close and at fsync), whose error is close's, `EIO` with the reason in the kernel log. A
+  close and at fsync), whose error is close's, `EIO` with the reason in the kernel log. Since the
+  kernel review (10/25/26): history has a generation, the count of SurfOS's writes of it, which
+  a lookup records; a close whose file was read before another save is refused, `EAGAIN` (nothing
+  logged), and its writer reads the file again and merges, so two shells saving at once never
+  write each other's lines away; and the file takes no write, `EROFS`, while the stick may not be
+  written (the flashed SURFOSUSB stick, `netman_can_save()`). A
   reader that comes while the boot still reads the settings waits for it (`netman_wait_boot()`,
   30 s at most, said in the kernel log), so surfsh's first prompt at boot follows the read; with
   nothing to read (`settings=off`, no `bootvol=`, no netman thread) it never waits, and while the

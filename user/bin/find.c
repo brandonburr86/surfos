@@ -62,6 +62,10 @@ static int match(const char *p, const char *s, int nocase) {
                 neg = 1;
                 q++;
             }
+            if(!*q) {                                   /* 10/25/26 (the review, U9): nothing after [ or [!: a plain */
+                if(*s != '[') return 0;                 /* '[', and the pattern is read no further than its end */
+                continue;
+            }
             do {                                        /* a ']' first is one of the set */
                 if(q[1] == '-' && q[2] && q[2] != ']') {
                     if(c >= fold((unsigned char)q[0], nocase) && c <= fold((unsigned char)q[2], nocase)) hit = 1;

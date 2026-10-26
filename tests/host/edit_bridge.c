@@ -17,7 +17,7 @@ void ed_start(const char *name) {
     msg[0] = 0;
     copied[0] = 0;
     forget_history();                           /* 10/25/26 (A9): undo's too */
-    saved_serial = 0;
+    saved_serial = serial_now();                /* the text as read is the saved one (the review's U2: a new base) */
     if(!shadow) {                               /* the screen, as main makes it, for a question */
         screen_size();
         shadow = calloc((size_t)rows, (size_t)ROW_BYTES);

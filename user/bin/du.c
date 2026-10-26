@@ -7,8 +7,9 @@ du [-s] [-a] [-h] [path...]: the space the files under each path take on the dis
 directory (after what is in it) and in all, in KB of 1024 bytes (track A, A9). A file takes
 its size rounded up to its file system's allocation unit (a FAT cluster, from statfs), as the
 disk spends it; directories themselves count nothing. -s only the total of each path; -a
-each file too; -h sizes as 512, 4.0K, 12K, 1.2M or 3.4G. Without a path: the current
-directory. A directory is read whole before du goes into it, so it holds one open at a time.
+each file too; -h sizes as 512, 4.0K, 12K, 1.2M or 3.4G, rounded up. Without a path: the
+current directory. A directory is read whole before du goes into it, so it holds one open
+at a time.
 The sums are kept in sectors of 512 bytes (2 TB at most), in 32-bit numbers.
 */
 
@@ -23,22 +24,26 @@ The sums are kept in sectors of 512 bytes (2 TB at most), in 32-bit numbers.
 static int summary, all, human;
 static int status;
 
-/* a size in sectors as du shows it: KB rounded up, or with -h in a unit */
+/* a size in sectors as du shows it: KB rounded up, or with -h in a unit. 10/25/26 (the programs' review, U10): -h
+   rounds up, as GNU du does (1.99M was 1.9M), to a tenth below 10 and to a whole unit from 10, and takes the next unit
+   once that comes to 1024 (1023.5K is 1.0M). The tenths are counted in 64 bits, shifted, never divided */
 static void show(unsigned long sectors, const char *path) {
     static const char units[] = "KMGT";
     char size[24];
-    unsigned long whole = sectors / 2, tenths = sectors % 2 * 5;
-    int u = 0;
+    unsigned long whole, part, tenths, up;
+    int u, shift;                                   /* a unit is 1 << shift sectors: K 1, M 11, G 21, T 31 */
     if(!human) snprintf(size, sizeof(size), "%lu", (sectors + 1) / 2);
     else if(sectors < 2) snprintf(size, sizeof(size), "%lu", sectors * 512);
     else {
-        while(whole >= 1024 && u < 3) {
-            tenths = whole % 1024 * 10 / 1024;
-            whole /= 1024;
-            u++;
+        for(u = 0, shift = 1; ; u++, shift += 10) {
+            whole = sectors >> shift;
+            part = sectors & ((1UL << shift) - 1);
+            tenths = whole * 10 + (unsigned long)(((unsigned long long)part * 10 + (1ULL << shift) - 1) >> shift);
+            up = whole + (part != 0);
+            if(up < 1024 || u == 3) break;
         }
-        if(whole >= 10) snprintf(size, sizeof(size), "%lu%c", whole + (tenths >= 5), units[u]);
-        else snprintf(size, sizeof(size), "%lu.%lu%c", whole, tenths, units[u]);
+        if(tenths < 100) snprintf(size, sizeof(size), "%lu.%lu%c", tenths / 10, tenths % 10, units[u]);
+        else snprintf(size, sizeof(size), "%lu%c", up, units[u]);
     }
     printf("%s\t%s\n", size, path);
 }

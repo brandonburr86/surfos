@@ -86,6 +86,7 @@ int sim_kept(void);
 void sim_fb_cursor(int *x, int *y);
 void sim_graphics(int on);
 void sim_heap_refuse(int on);
+void sim_free_frames(unsigned long n);      /* 10/25/26 (the review) */
 void sim_switch(int n);
 
 static int failures, checks;
@@ -992,6 +993,18 @@ static void t_alt_screen(void) {
           "ESC[?1049l: the main screen as it was, and its cursor");
     say(SHELL, "\033[?1049l");
     check(sim_cell(0, 24) == 'p', "ESC[?1049l on the main screen does nothing");
+
+    reset(0);                                   /* 10/25/26 (the kernel review, 2): the copy's frames */
+    say(SHELL, "main");
+    sim_free_frames(512);
+    say(SHELL, "\033[?1049hfull");
+    row(0, r);
+    check(!strcmp(r, "mainfull"), "too few free frames for the main screen's copy and 512 more: ESC[?1049h does nothing");
+    sim_free_frames(513);
+    say(SHELL, "\033[?1049h");
+    row(0, r);
+    check(!strcmp(r, ""), "with just enough: the alternate screen");
+    say(SHELL, "\033[?1049l");
 
     reset(0);
     say(SHELL, "main");

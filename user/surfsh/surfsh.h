@@ -136,6 +136,8 @@ struct source {
     int lines;                      /* lines read so far */
     int fd;                         /* a descriptor's lines: the descriptor */
     const char *text;               /* text's lines: what is left of the text */
+    int rc;                         /* 10/25/26 (the review, U5): the startup file (main.c), which an exit, a return or a
+                                       Ctrl+C ends (2 after the Ctrl+C) */
 };
 
 int run_source(struct source *s);   /* every command in it, each when it is complete: the last status */

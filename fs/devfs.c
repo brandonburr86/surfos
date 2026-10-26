@@ -19,7 +19,12 @@ with no system call of their own: surfshrc, the owner's startup file, which surf
 history, there only while the history setting is on. A file is read from the stick when its
 name is looked up, so when it is opened, into memory, which its reads and writes then use.
 History, once written, goes back to the stick when it is closed (fs/vfs.c calls the vnode's
-flush), and close says EIO when it could not be saved, the reason in the kernel log.
+flush), and close says EIO when it could not be saved, the reason in the kernel log. The
+review's fixes (10/25/26): history goes back only if no other open file of it was saved after
+this one read it (the generation netman_file_read() gave), else close says EAGAIN, and the
+writer (surfsh) reads it again and merges; it is not written at all, EROFS, while the stick
+may not be written (the flashed SURFOSUSB stick); a file that cannot be read says why in the
+kernel log.
 surfshrc is never written. And hostname, the name DHCP requests give (the hostname
 setting) and a newline, empty before the settings are read: surfsh's $HOSTNAME, which a
 telnet session's prompt shows (the system calls' structures keep their sizes, so netinfo
@@ -93,6 +98,7 @@ struct cfg_file {
     char *buf;                  /* the file as read, then as written: len bytes of cap */
     u32 len, cap;
     bool written;               /* to go back to the stick when it is closed */
+    u_int gen;                  /* 10/25/26 (the review): history's generation as read (netman_file_read()) */
 };
 
 static const struct vnode_ops cfg_dir_vops, cfg_vops;
@@ -122,8 +128,15 @@ static int cfg_lookup(struct vnode *dir, const char *name, struct vnode **out) {
         dhcp_hostname(f->buf, f->cap);
         f->len = (u32)strlen(f->buf);
         if(f->len) f->buf[f->len++] = '\n';
-    } else r = netman_file_read(name, f->buf, f->cap, &f->len, why, sizeof(why));
+    } else r = netman_file_read(name, f->buf, f->cap, &f->len, &f->gen, why, sizeof(why));
     if(r == -ENOENT && id == CFG_HISTORY) r = 0;        /* none yet: empty, to be written */
+    /* 10/25/26 (the review, U8): the reason, for surfsh's "dmesg"; not for no file, nor for no stick to read it from
+       (ENODEV: none was named, or it is not there yet, which netman's own look logs) */
+    if(r && r != -ENOENT && r != -ENODEV) {
+        char line[200];
+        snprintf(line, sizeof(line), "+NET: %s\n", why);
+        klog_write(line);
+    }
     v = r ? NULL : vnode_alloc(dir->sb, &cfg_vops, VN_FILE);
     if(!v) {
         kfree(f->buf);
@@ -158,6 +171,7 @@ static int cfg_read(struct vnode *v, u32 off, void *buf, u32 len) {
 static int cfg_write(struct vnode *v, u32 off, const void *buf, u32 len) {
     struct cfg_file *f = (struct cfg_file *)v->priv;
     if(v->ino != CFG_HISTORY) return -EROFS;               /* surfshrc is the owner's */
+    if(!netman_can_save()) return -EROFS;                  /* 10/25/26 (the review, U4): a stick only read */
     if(off > f->cap || len > f->cap - off) return -EFBIG;
     f->written = true;
     if(off > f->len) memset(f->buf + f->len, 0, off - f->len);
@@ -169,7 +183,7 @@ static int cfg_write(struct vnode *v, u32 off, const void *buf, u32 len) {
 
 static int cfg_truncate(struct vnode *v, u32 size) {
     struct cfg_file *f = (struct cfg_file *)v->priv;
-    if(v->ino != CFG_HISTORY) return -EROFS;
+    if(v->ino != CFG_HISTORY || !netman_can_save()) return -EROFS;
     if(size > f->cap) return -EFBIG;
     f->written = true;
     if(size > f->len) memset(f->buf + f->len, 0, size - f->len);
@@ -178,13 +192,17 @@ static int cfg_truncate(struct vnode *v, u32 size) {
 }
 
 /* the file closed (fs/vfs.c): history, when it was written, back to the stick; -EIO when it could not be saved, the
-   reason in the kernel log */
+   reason in the kernel log. 10/25/26 (the kernel review, 4): -EAGAIN, and nothing in the log, when another file of it
+   was saved after this one was read: its writer reads it again */
 static int cfg_flush(struct vnode *v) {
     struct cfg_file *f = (struct cfg_file *)v->priv;
     char why[160], line[220];
+    int r;
     if(!f || !f->written) return 0;
     f->written = false;
-    if(!netman_file_write(NETCFG_HISTORY_FILE, f->buf, f->len, why, sizeof(why))) return 0;
+    r = netman_file_write(NETCFG_HISTORY_FILE, f->buf, f->len, &f->gen, why, sizeof(why));
+    if(!r) return 0;
+    if(r == -EAGAIN) return -EAGAIN;
     snprintf(line, sizeof(line), "+NET: %s/%s was not saved: %s\n", NETCFG_DIR, NETCFG_HISTORY_FILE, why);
     klog_write(line);
     return -EIO;

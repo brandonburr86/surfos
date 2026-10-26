@@ -94,6 +94,9 @@ void klog_dump(void) {}
 static char heap[3 << 20] __attribute__((aligned(16)));
 static size_t heap_used;
 static int heap_refuse;
+static u_long free_frames;                  /* 10/25/26 (the review): what pmm_free_frames() says (sim_init(): plenty) */
+u_long pmm_free_frames(void) { return free_frames; }
+void sim_free_frames(u_long n) { free_frames = n; }
 void *kalloc(size_t n) {
     void *p;
     n = (n + 15) & ~(size_t)15;
@@ -175,6 +178,7 @@ void sim_init(int ascii) {
     ascii_word = ascii;
     heap_used = 0;                                                  /* 10/25/26 (A6) */
     heap_refuse = 0;
+    free_frames = 1 << 20;
     graphics_on = 0;
     memset(T, 0, sizeof(T));
     memset(conArray, 0, sizeof(surf_console) * NUM_TTYS);         /* a scenario that ended at a question leaves nothing */

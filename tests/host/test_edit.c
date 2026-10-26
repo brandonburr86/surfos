@@ -513,6 +513,8 @@ static void undo_redo(void) {
     }
     for(i = 0; i < 1000; i++) ed_key(CTRL('z'));
     check((int)strlen(ed_line(0)) == 1, "1,000 changes undone: the first is kept no more");
+    check(ed_modified() && ed_quit() == 0, "... so the text is still modified, and ^Q asks before it quits (the "
+          "programs' review, U2)");
     ed_key(CTRL('z'));
     check(!strcmp(ed_msg(), "Nothing to undo"), "... and then nothing to undo");
 }

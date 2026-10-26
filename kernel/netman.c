@@ -67,6 +67,11 @@ history, read, and written only while the history setting is on; no other file. 
 neither is read or written. A reader that comes while the boot still reads the settings waits for it, 30 s at most
 (the kernel log says how long); with nothing to read (settings=off, no bootvol=, no netman thread) it never waits,
 and while the stick is still looked for only with a USB controller, until 8 s from the start (LOOK_GRACE_MS).
+10/25/26 (the kernel review of track A, 4): history has a generation, the count of SurfOS's writes of it
+(history_gen, under stick_lock): a reader gets the one it read, and a write made from an older one is refused
+(EAGAIN), so of two shells that read the file and then save it, the second reads it again and merges rather than
+writing the first one's lines away. A write is refused at once while the stick may not be written (the flashed
+SURFOSUSB stick: netman_can_save()).
 
 Locks: stick_lock around a mount of the stick and what is read and written under it, the change
 in RAM included (so the boot's read and a command's change never undo each other); nm_lock
@@ -160,6 +165,7 @@ static volatile u_int keeper_dhcp_fails;
 static volatile bool keeper_at_boot;    /* the keeper joins at once (the boot's); else only once a network is lost */
 static volatile bool boot_read_pending; /* 10/25/26: the boot has not read the settings yet (a file's reader waits) */
 static volatile bool boot_looking;      /* 10/25/26: the boot looks for the stick still (found: it reads it) */
+static u_int history_gen;               /* 10/25/26 (the kernel review, 4): history's writes so far, under stick_lock */
 static volatile bool keeper_resume;     /* wifi connect hands the card back: the keeper looks by itself again */
 static volatile bool telnetd_due;       /* telnetd = on: the server starts once there is a trusted address */
 
@@ -751,12 +757,13 @@ bool netman_history_on(void) {
     return on;
 }
 
-int netman_file_read(const char *name, char *buf, u_int max, u_int *len, char *why, size_t wsize) {
+int netman_file_read(const char *name, char *buf, u_int max, u_int *len, u_int *gen, char *why, size_t wsize) {
     struct stick st;
     char path[VFS_PATH_MAX];
     int r;
     *len = 0;
     buf[0] = 0;
+    if(gen) *gen = 0;
     if(!file_allowed(name, false)) {
         snprintf(why, wsize, "%s/%s is not one of surfsh's files", NETCFG_DIR, name);
         return -EACCES;
@@ -766,6 +773,7 @@ int netman_file_read(const char *name, char *buf, u_int max, u_int *len, char *w
         return -ENOENT;
     }
     mutex_lock(&stick_lock);
+    if(gen) *gen = history_gen;                         /* 10/25/26 (4): as this read finds it */
     r = stick_open(false, &st, why, wsize);
     if(!r) {
         if(!path_of(path, sizeof(path), st.root, name)) {
@@ -781,7 +789,7 @@ int netman_file_read(const char *name, char *buf, u_int max, u_int *len, char *w
     return r;
 }
 
-int netman_file_write(const char *name, const char *data, u_int len, char *why, size_t wsize) {
+int netman_file_write(const char *name, const char *data, u_int len, u_int *gen, char *why, size_t wsize) {
     struct stick st;
     int r;
     if(!file_allowed(name, true)) {
@@ -792,11 +800,19 @@ int netman_file_write(const char *name, const char *data, u_int len, char *why, 
         snprintf(why, wsize, "the history setting is off (settings history on)");
         return -EACCES;
     }
+    if(!netman_can_save()) {                            /* 10/25/26 (the programs' review, U4): not tried each time */
+        snprintf(why, wsize, "the stick SurfOS was started from may not be written");
+        return -EROFS;
+    }
     mutex_lock(&stick_lock);
-    r = stick_open(true, &st, why, wsize);
-    if(!r) {
+    if(gen && *gen != history_gen) {                    /* 10/25/26 (the kernel review, 4): saved since it was read */
+        snprintf(why, wsize, "%s/%s was saved again after it was read", NETCFG_DIR, name);
+        r = -EAGAIN;
+    } else if(!(r = stick_open(true, &st, why, wsize))) {
         r = write_file(st.root, name, data, len, why, wsize);
         stick_close(&st);
+        history_gen++;                                  /* written or not, what was read before may not be the file */
+        if(!r && gen) *gen = history_gen;
     }
     mutex_unlock(&stick_lock);
     return r;

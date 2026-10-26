@@ -706,9 +706,12 @@ static int nundo, nredo;
 static int open_kind;           /* the kind of key the open change holds */
 static int key_kind, key_changed;   /* the key being handled: its kind; it changed the text */
 static unsigned serials;
+static unsigned base_serial;    /* 10/25/26 (the programs' review, U2): the text with nothing left to undo, as a number: 0
+                                   as read, a change's when it was pushed out of the 1,000, a new one when the history
+                                   is forgotten; so undoing all that is left is the saved text only when it is */
 
 static unsigned serial_now(void) {
-    return nundo ? undos[nundo - 1].serial : 0;
+    return nundo ? undos[nundo - 1].serial : base_serial;
 }
 
 static void free_change(struct change *c) {
@@ -722,6 +725,7 @@ static void forget_history(void) {
     while(nundo) free_change(&undos[--nundo]);
     while(nredo) free_change(&redos[--nredo]);
     open_change = 0;
+    base_serial = ++serials;            /* 10/25/26 (U2): the text now, which no undo gives back */
 }
 
 static void set_modified(void) {
@@ -739,6 +743,7 @@ static void record(int kind, int y, int x, const char *s, int n) {
     if(!open_change) {
         while(nredo) free_change(&redos[--nredo]);      /* a new change: what was undone cannot be done again */
         if(nundo == UNDO_MAX) {
+            base_serial = undos[0].serial;      /* 10/25/26 (U2): undo stops at the text after it from now on */
             free_change(&undos[0]);
             memmove(undos, undos + 1, (UNDO_MAX - 1) * sizeof(struct change));
             nundo--;

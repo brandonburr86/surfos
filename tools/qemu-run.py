@@ -146,6 +146,10 @@ SETTINGS_FILES = {
     # 10/25/26 (track A, A10): surfsh's history kept, and the owner's startup file, which moves HOME for ~
     'history': {'surfos-config/settings.conf': b'history = on\n',
                 'surfos-config/surfshrc': b'# the owner\'s startup file\nHOME=/hda1\necho "surfshrc ran: HOME $HOME"\n'},
+    # 10/25/26 (the programs' review of track A, U5 and U8): a startup file written on Windows (CR LF) that sleeps when
+    # asked to (RC_SLEEP) and then exits
+    'rc': {'surfos-config/surfshrc': b'HOME=/hda1\r\necho "rc one: HOME $HOME."\r\n[ -n "$RC_SLEEP" ] && sleep 20000\r\n'
+                                     b'echo "rc two"\r\nexit 3\r\necho "rc not reached"\r\n'},
 }
 SURFSIM_PSK = hashlib.pbkdf2_hmac('sha1', WLANSIM_PASSPHRASE.encode(), b'SurfSimWPA', 4096, 32).hex()
 SETTINGS_DISKS = {}                                         # name: its image file, made the first time a boot asks
@@ -883,6 +887,14 @@ SMOKE = [
       (' echo kept-out', ['kept-out']),
       ('history -w', ['in surfos-config/history on the stick']),
       ('grep -c marker-one /hda1/surfos-config/history; grep -c kept-out /hda1/surfos-config/history', ['1\r\n0\r\n']),
+      # 10/25/26 (the kernel review of track A, 4): a file of history opened before a save (here by a background job,
+      # which writes to it after the save) is not written back over it: its close is refused (EAGAIN), and the
+      # save's lines stay
+      ('echo marker-two', ['marker-two']),
+      ("{ sleep 4000; echo stale-snapshot; } >> /dev/config/history & sleep 1500; history -w; wait",
+       ['in surfos-config/history on the stick']),
+      ("grep -c '^echo marker-two$' /hda1/surfos-config/history; grep -c '^stale-snapshot$' /hda1/surfos-config/history",
+       ['\r\n1\r\n0\r\n']),
       ('ls /dev/config', ['history', 'hostname', 'surfshrc']),
       ('echo host $HOSTNAME', ['host surfos']),
       ('umount /hda1', [])],
@@ -906,6 +918,18 @@ SMOKE = [
       ("dmesg | grep -c 'for the settings to be read'", ['\r\n0\r\n']),
       ('umount /hda1', [])],
      ['surfshrc ran']),
+    # 10/25/26 (the programs' review of track A, U5 and U8): a startup file with CR LF line ends runs as one with LF (HOME
+    # without a CR), and its exit leaves the file and is said, the shell going on (no restart, no recovery console); a
+    # surfsh started inside it runs the file again, and a Ctrl+C in its sleep skips the rest of the file
+    ('@boot settingsdisk=rc',
+     ['rc one: HOME /hda1.', 'rc two', 'exit leaves the startup file, as return does; the shell goes on', PROMPT],
+     [('echo alive $HOME', ['alive /hda1']),
+      ('RC_SLEEP=1 surfsh', [re.compile(rb'rc one: HOME /hda1\.')]),
+      ('@sleep 0.5', []),
+      (b'\x03', ['sleep cut short', 'the rest of the startup file was skipped (Ctrl+C)', PROMPT]),
+      ('exit', []),
+      ('umount /hda1', [])],
+     ['rc not reached', 'surfsh exited', 'recovery console']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -1241,6 +1265,16 @@ SMOKE = [
        ['/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
       ('echo 100 | xargs sleep; echo x | xargs nosuchcommand; echo status $?',
        ['slept 100 ms', 'xargs: nosuchcommand: not found', 'status 127', shown('SURF \u224b> ')]),
+      # 10/25/26 (the programs' review of track A): U1, a command of 127 words, the most a program is given (xargs's own
+      # name is the 128th), takes one word a run; U9, a pattern that ends in [ or [! takes the [ as it is; U10, du -h
+      # rounds up
+      ("echo x y | xargs echo $(seq 1 126) | cut -d' ' -f126-", ['\r\n126 x\r\n126 y\r\n', shown('SURF \u224b> ')]),
+      ("echo x > '/hda1/ss['; find /hda1 -maxdepth 1 -name 'ss['; find /hda1 -maxdepth 1 -name 's[!' | grep -c .; "
+       "rm '/hda1/ss['", ['\r\n/hda1/ss[\r\n0\r\n', shown('SURF \u224b> ')]),
+      # (22 copies of seq 10000, 48,894 bytes: 1,051 clusters of 1 KB, 1.03 MB: 1.1M, not 1.0M; a short line, as the
+      # serial line's input queue holds 256 bytes)
+      ('seq 10000 > /hda1/A.TXT; { for i in $(seq 22); do cat /hda1/A.TXT; done; } > /hda1/B.TXT; du -h /hda1/B.TXT; '
+       'rm /hda1/A.TXT /hda1/B.TXT', ['\r\n1.1M\t/hda1/B.TXT\r\n', shown('SURF \u224b> ')]),
       ("echo a:b:c | cut -d: -f2,3; echo h\u00e9llo | cut -c2-3; printf 'a\\tb\\tc\\n' | cut -f1,3; echo abcdef | cut -b-2,5-",
        ['b:c\r\n', '\u00e9l\r\n', 'a\tc\r\n', 'abef\r\n', shown('SURF \u224b> ')]),
       ('echo abc | sha256sum', ['edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb  -\r\n', shown('SURF \u224b> ')]),
