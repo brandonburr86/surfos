@@ -746,8 +746,14 @@ starts it (section 15) or a development build does (section 13).
 | `... in force until SurfOS restarts, but not saved: ...` | The setting changed for now, but the stick could not be written (the reason follows): a flashed SURFOSUSB stick, a write-protect switch, the stick mounted read-only. For `telnetd` and `telnetd.port`, which act at the next start, and for any setting under the entry without the settings, it says `nothing changes` instead. |
 | Telnet is on at startup and should not be | Start with **SurfOS (without the settings on the stick)** in the GRUB menu, then `settings telnetd off` (saved for the next start). The development entry starts telnetd for an Ethernet link whatever the settings say: on a network you do not trust, choose the entry without the settings (renaming `surfos-dev` on the Mac takes the development entry away). |
 
-SurfOS has no ACPI power-off: `reboot` restarts the laptop; to switch it off, hold the
-power button.
+`reboot` restarts the laptop. 10/25/26 (robustness, B4): it ends the programs and writes
+out and unmounts what is mounted read-write first, so the sticks stay marked cleanly
+unmounted (`reboot -f` restarts at once, as before), and `poweroff` does the same and then
+switches the laptop off through ACPI (S5). `poweroff -n` says what it would do: the
+programs it would end, the volumes it would unmount, and the values it would write. If the
+laptop stays on, SurfOS says "It is now safe to turn off your computer.": hold the power
+button then (and tell us, `docs/hardware/ideapad-3-15iil05.md`). Ctrl+Alt+Del restarts the
+same way; pressed again it restarts at once.
 
 ## 13. Development builds over the network
 
@@ -793,7 +799,7 @@ the rest of the stick is yours. `cat /initrd/etc/build-id` says which build runs
 source revision (`-dirty` when it had changes not yet committed) and when it was built.
 
 How it works, for Claude (`tools/devloop.py`, from the `06-restoration` folder; never
-with `reboot`, `mkfs` or `fdisk`'s changes, which it refuses):
+with `reboot`, `poweroff`, `crashstack`, `mkfs` or `fdisk`'s changes, which it refuses):
 
 ```sh
 tools/devloop.py find                 # the laptop's address: 10.0.0.4, else it searches 10.0.0.0/24

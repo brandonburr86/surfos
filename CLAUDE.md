@@ -30,7 +30,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 21 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -248,6 +248,15 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `ktimer_start()` (ktimer.h), `kalloc()`/`kcalloc()`/`kfree()`/`kalloc_dma()`
   (mm/kalloc.h), `vmm_map()`/`pmm_alloc()` (mm/paging.h, mm/pmm.h). The scheduler
   runs only in trap context; never call `schedule()` directly.
+* Shutting down (10/25/26, robustness, L20-L24): `reboot` and `poweroff` end the programs, write
+  out and unmount the read-write volumes and then reset or switch off (ACPI S5), each step a
+  `shutdown:` line on F1 (kernel/shutdown.c); `reboot -f` resets at once; `poweroff -n` says
+  what poweroff would do (the programs, the mounts, the S5 values: the legacy profile reads ACPI
+  then, quietly). Ctrl+Alt+Del starts the same (through init), again resets at once. In the
+  smoke test, -no-reboot and -no-shutdown make both a pause: the monitor's `info status` says
+  "paused (shutdown)". Anything new that must happen before the programs end goes through
+  `shutdown_hook()` (the network manager may still write the stick then); nothing spawns once
+  `shutdown_started()`, and the network manager mounts nothing once `shutdown_unmounting()`.
 * Every kernel stack must be fully mapped: a page fault on the stack itself cannot push its
   frame. Since 10/25/26 (robustness, L16-L18) the stacks are 16 KB at the top of 32 KB slots
   (0x90000000-0x93FFFFFF, kernel/task.c) over unmapped guards: an overflow is a double fault,
@@ -327,8 +336,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   host's own network. `tools/qemu-tcp.py --scenario mdns` plays the other hosts on the raw link
   (rawnet.py's `send_udp()`, `wait_udp()`), where nothing leaves the test.
 * The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
-  telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
-  `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under
+  telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `poweroff`,
+  `crashstack`, `mkfs`, `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under
   build/docker/build/O2 or O0, from `devenv/build-usb.sh`, pushed with `rx` onto the data stick's
   `/surfos-dev/`, then eject, reboot through GRUB's development entry, telnet again, `/initrd/etc/build-id`
   checked); `reboot`. The laptop (10.0.0.4) belongs to one track at a time, as the integrator assigns it; test

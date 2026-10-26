@@ -15,5 +15,6 @@ void halt();
 void sleep(u_long usec);
 void BUG();
 void reboot();
+void reset(void);   /* 10/25/26: the machine reset at once (kernel/sys.c): reboot -f, and the shutdown's last step */
 
 #endif

@@ -52,6 +52,7 @@ them at once (about 20 ms) and checks nothing then.
 #include <mm/pmm.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
+#include <surfos/shutdown.h>
 #include "shell.h"
 
 static int fails;
@@ -97,12 +98,35 @@ static void unclaim(void) {
 
 /* Random allocate/free with a byte pattern per block, then everything freed and the
    heap walked and compared with the starting point. 10/6/26: the tables are the run's
-   own, from the heap, allocated before the starting point is taken. */
+   own, from the heap, allocated before the starting point is taken.
+   10/25/26 (the review of B1, the flake daily's usbnet run met: 282496 -> 280864 bytes):
+   the whole heap's use before and after moved with whatever else the kernel did meanwhile
+   (a network letting go of a connection's buffers). Each kalloc() and kfree() of the run
+   is counted on its own instead: interrupts off around the call (kalloc() runs with them
+   off itself), so the heap's counts change by that block alone: one block more and its
+   payload (the request, aligned, or 16 bytes more when the rest was too small to split
+   off), then one block fewer and the same bytes. A block that was not given back, or
+   counted wrong, fails it; so does a heap that does not walk (kheap_check()). */
+static void *counted(void *free_this, u_int size, long *bytes, long *blocks) {
+    struct heap_stats a, b;
+    u_long flags = irq_save();
+    void *p = NULL;
+    kheap_stats(&a);
+    if(free_this) kfree(free_this);
+    else p = kalloc(size);
+    kheap_stats(&b);
+    irq_restore(flags);
+    *bytes = (long)(b.bytes_used - a.bytes_used);
+    *blocks = (long)(b.blocks_used - a.blocks_used);
+    return p;
+}
+
 static int heap_round(void) {
     enum { SLOTS = 192, ROUNDS = 20000 };
-    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; } *s = kcalloc(1, sizeof(*s));
+    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; long held[SLOTS]; } *s = kcalloc(1, sizeof(*s));
     struct heap_stats before, after;
-    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
+    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0, miscounted = 0;
+    long bytes, blocks;
 
     if(!s) {
         printf("heaptest: no memory for its tables: HEAPTEST FAIL\n");
@@ -116,28 +140,35 @@ static int heap_round(void) {
             u_char *p = s->ptrs[i];
             u_int k;
             for(k = 0; k < s->sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
-            kfree(s->ptrs[i]);
+            counted(s->ptrs[i], 0, &bytes, &blocks);
+            if(blocks != -1 || bytes != -s->held[i]) miscounted++;
             s->ptrs[i] = NULL;
             frees++; live--;
         } else {
-            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
-            u_char *p = kalloc(sz);
-            u_int k;
+            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512, k;
+            long want = sz < 16 ? 16 : (long)((sz + 15) & ~15u);
+            u_char *p = counted(NULL, sz, &bytes, &blocks);
             if(!p) { bad++; continue; }
+            if(blocks != 1 || bytes < want || bytes > want + 16) miscounted++;
             for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
-            s->ptrs[i] = p; s->sizes[i] = sz;
+            s->ptrs[i] = p; s->sizes[i] = sz; s->held[i] = bytes;
             allocs++; live++;
             if(live > maxlive) maxlive = live;
         }
     }
-    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) { kfree(s->ptrs[i]); s->ptrs[i] = NULL; frees++; }
+    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) {
+        counted(s->ptrs[i], 0, &bytes, &blocks);
+        if(blocks != -1 || bytes != -s->held[i]) miscounted++;
+        s->ptrs[i] = NULL;
+        frees++;
+    }
     kheap_stats(&after);
     if(!kheap_check()) bad++;
-    if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
     kfree(s);
-    printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
-           allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
-    return bad ? 1 : 0;
+    printf("heaptest: %u allocs, %u frees, %u live at peak, each counted%s; the heap used %lu -> %lu bytes, %lu free "
+           "blocks: %s\n", allocs, frees, maxlive, miscounted ? " WRONG" : " right", before.bytes_used, after.bytes_used,
+           after.blocks_free, bad || miscounted ? "HEAPTEST FAIL" : "HEAPTEST PASS");
+    return bad || miscounted ? 1 : 0;
 }
 
 int heaptest() {
@@ -579,6 +610,21 @@ static void test_kill_memory(void) {
         printf("        (%d and %d of 16 killed; %s and %s freed; heap bytes %lu, then %lu; frames left %lu, then %lu; "
                "the heap grew %lu KB)\n", ok1, ok2, gone1 ? "all" : "not all", gone2 ? "all" : "not all", h0.bytes_used,
                h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
+}
+
+/* 10/25/26 (L23; the review of B4): the Delete key's codes as the keyboard sends them, Ctrl+Alt+Del held down: a press
+   is a make after a break, never the keyboard's repeats (a repeat used to be a second press: a reset in the middle of
+   the shutdown's unmounts); the Delete key alone repeats as editing wants. A state of the test's own: nothing shuts
+   down */
+static void test_del_key(void) {
+    struct del_key k = { false };
+    int held = del_key_event(&k, true, true), r1 = del_key_event(&k, true, true), r2 = del_key_event(&k, true, true);
+    int up = del_key_event(&k, false, true), again = del_key_event(&k, true, true);
+    int lift = del_key_event(&k, false, false), del = del_key_event(&k, true, false), rdel = del_key_event(&k, true, false);
+    int late = del_key_event(&k, true, true);           /* Ctrl+Alt pressed while Delete is held: still no press */
+    check(held == DEL_PRESS && r1 == DEL_NOTHING && r2 == DEL_NOTHING && up == DEL_NOTHING && again == DEL_PRESS &&
+          lift == DEL_NOTHING && del == DEL_DELETE && rdel == DEL_DELETE && late == DEL_NOTHING,
+          "Ctrl+Alt+Del: a key held down is one press, a press after its break another; Delete repeats");
 }
 
 /* 10/25/26 (L17): a kernel thread's look at its own stack: every page mapped, and the guard below it (the rest of its
@@ -1657,7 +1703,7 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
+    test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_del_key, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
     test_event_fn, test_libc, test_tty
 };
 

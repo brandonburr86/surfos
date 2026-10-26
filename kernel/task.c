@@ -25,6 +25,8 @@ address space is destroyed by task_exit(), or, for a task killed on the spot, by
 thread, which become_zombie() hands it to. schedule() compares with the directory loaded.
 10/25/26 (robustness, L17): kernel stacks live in a window of their own, each over a guard left
 unmapped (kstack_alloc()), so an overflow is a double fault that kernel/panic.c reports.
+10/25/26 (robustness, L22, L23): the shutdown (kernel/shutdown.c) ends the processes and ring-0
+shells (task_end_users()), and init starts no shell then; Ctrl+Alt+Del wakes init to start it.
 */
 
 #include <surfos/types.h>
@@ -54,6 +56,7 @@ unmapped (kstack_alloc()), so an overflow is a double fault that kernel/panic.c 
 #include <mm/pmm.h>
 #include <surfos/proc.h>
 #include <surfos/fpu.h>
+#include <surfos/shutdown.h>
 
 #include <blibc_common.h>
 
@@ -909,6 +912,45 @@ static void reap(surf_task *t) {
     kfree(t);
 }
 
+/* 10/25/26 (robustness, L22): kill_task_patient() for every process and ring-0 shell but the caller (task.h). Under
+   interrupts off: a killed task's record stays on the list until it is collected, so the walk goes on. */
+u_int task_end_users(void) {
+    surf_task *t;
+    u_int n = 0;
+    u_long flags = irq_save();
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t == curTask || t->state == TS_DEAD || !task_user_may_kill(t)) continue;
+        kill_task_patient(t);
+        n++;
+    }
+    irq_restore(flags);
+    return n;
+}
+
+u_int task_users_left(char *list, size_t len) {
+    surf_task *t;
+    u_int n = 0;
+    size_t used = 0;
+    u_long flags = irq_save();
+    if(len) list[0] = 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->state == TS_DEAD || !task_user_may_kill(t)) continue;
+        n++;
+        if(len && used < len)
+            used += snprintf(list + used, len - used, "%s'%s' (pid %lu)", used ? ", " : "", t->name, t->pid);
+    }
+    irq_restore(flags);
+    return n;
+}
+
+/* 10/25/26 (robustness, L23): Ctrl+Alt+Del (kernel/shutdown.c), interrupts off: init's wait for its children is cut
+   short (TI_INT), and init starts the shutdown */
+void task_wake_init(void) {
+    if(!init_task_ptr || init_task_ptr->state == TS_DEAD) return;
+    init_task_ptr->intr |= TI_INT;
+    wake_intr(init_task_ptr);
+}
+
 /* the children of the calling task (10/6/26: the self test asks before it waits for any) */
 u_int task_child_count(void) {
     surf_task *t;
@@ -1232,6 +1274,10 @@ static void recovery_console(int i) {
 static void start_surfsh(int i) {
     char *argv[] = { "surfsh", "-l" }, line[96];
     int pid = process_spawn(SURFSH_PATH, 2, argv, &conArray[i], TF_SHELL);
+    if(pid == -EAGAIN) {                                    /* 10/25/26 (the review of B4): SurfOS is shutting down */
+        cshell[i].pid = 0;
+        return;
+    }
     if(pid == -ENOMEM || pid == -EIO) {                     /* it may work in a moment: init's loop tries again */
         cshell[i].pid = 0;
         if(!cshell[i].waiting) {
@@ -1348,16 +1394,24 @@ static void init_main(void *arg) {
         u_int flags = 0;
         surf_console *con = NULL;
         bool missing = false;
-        for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) missing = true;
-        pid = wait_for(WAIT_ANY, 0, &status, &flags, &con, missing ? WNOHANG : 0, NULL, NULL);
+        for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid && !shutdown_started()) missing = true;
+        /* 10/25/26 (L23): the wait may be cut short by Ctrl+Alt+Del (task_wake_init()) */
+        pid = wait_for(WAIT_ANY, 0, &status, &flags, &con, (missing ? WNOHANG : 0) | WINTR | WCTRLC, NULL, NULL);
+        if(curTask->intr & TI_INT) {
+            u_long irqf = irq_save();
+            curTask->intr &= ~TI_INT;
+            irq_restore(irqf);
+            if(shutdown_key_take()) shutdown_start(SHUT_REBOOT);
+        }
         if(pid <= 0) {
             /* 10/6/26: a console without a shell (no memory a moment ago): another try. No
                children at all should not happen, but never spin. */
             sleep_ms(missing ? SHELL_RETRY_MS : 100);
-            for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) start_shell(i);
+            for(i = 0; i < NUM_CONSOLES && !shutdown_started(); i++) if(!cshell[i].pid) start_shell(i);
             continue;
         }
         if(!(flags & TF_SHELL) || !con) continue;           /* an orphan: collected, that is all */
+        if(shutdown_started()) continue;                    /* 10/25/26 (L22): no new shell while SurfOS shuts down */
         for(i = 0; i < NUM_CONSOLES; i++) {
             if(con == &conArray[i] && cshell[i].pid == (u_long)pid) shell_ended(i, status, flags);
         }

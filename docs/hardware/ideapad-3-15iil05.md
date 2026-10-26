@@ -356,3 +356,19 @@ Build `784b294ab7d9 2026-10-15T22:47:22Z` (O0, development entry, pushed with
 Not covered: multi-touch gestures (two-finger scrolling) and tap-to-click
 behaviour in this mode, both decided by the device's firmware unless SurfOS
 switches it to the Precision Touchpad collection (report 3).
+
+### Power off: to be checked by the owner (robustness, B4, 2026-10-25)
+
+`poweroff` (track B's B4) ends the programs, writes out and unmounts the volumes mounted
+read-write, and then asks the firmware for soft off (ACPI S5): SLP_TYP from the DSDT's
+`\_S5_` (Intel firmware usually gives 7) into the FADT's PM1a/PM1b control blocks, after
+switching the machine into ACPI mode through SMI_CMD when SCI_EN is clear. Under QEMU and
+OVMF it powers off. Not yet tried on this laptop. Firmware may want `_PTS` run first, or
+trap the sleep write in SMM. To check:
+
+- `poweroff -n`: what it would write, and where. Copy its lines here.
+- `poweroff`: does the laptop switch off (the power LED out)? If it stays on, SurfOS says
+  "It is now safe to turn off your computer." after 3 s: write that down here, then hold
+  the power button.
+- After `reboot` with the stick mounted read-write: the next mount says `(FSInfo)`, and the
+  Mac reads the stick without asking to repair it.

@@ -285,6 +285,22 @@ ever left, each class's refusals, and what programs hold; `memhog` takes all a p
   of its stack's bottom halts it earlier, with "nearly full". The idle task keeps the 16 KB boot
   stack, which has no guard. The 2004 stacks were kernel-heap blocks with nothing below them but
   other blocks (M10). `crashstack` overflows the stack of the task that runs it.
+* 10/25/26 (robustness, L22-L24): the shutdown. `reboot` and `poweroff` (kernel commands) and
+  Ctrl+Alt+Del (through init: the keyboard's interrupt handler only wakes it) start the
+  `shutdown` kernel thread (`kernel/shutdown.c`). It moves to `/`; from then on init starts no
+  shell and a spawn says EAGAIN (`shutdown_started()`); it runs the hooks (`shutdown_hook()`, for
+  track A's history), which may still write the stick, and ends every process and ring-0 shell
+  with the kill that waits for the end of the call each is in (`task_end_users()`,
+  `kill_task_patient()`), again on each pass of its wait so that a task a spawn under way makes
+  meanwhile goes too, 10 s at most, naming any left. Then the network manager mounts nothing
+  more (`shutdown_unmounting()`) and what it is doing on the stick ends (`netman_stick_idle()`),
+  and the volumes mounted read-write, however many, are written out and unmounted, the last
+  mounted first, all in a worker it waits for 15 s at most (a busy one tried again every
+  250 ms), so a volume lock held for ever cannot hang it; one it cannot unmount is written out
+  (`vfs_sync()`) and left marked not cleanly unmounted. Ctrl+Alt+Del held down is one press
+  (`del_key_event()`). Then `reset()`, or ACPI S5 (section 14); when neither
+  works it says "It is now safe to turn off your computer." and halts. Every step is a line on
+  F1 beginning `shutdown:`.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -378,7 +394,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   never takes.
 * Keyboard (`kernel/keyboard.c`, roadmap C2): scan-code set 1 with the E0 prefix
   (arrows, Home/End, PgUp/PgDn, Insert/Delete), shift, caps lock on letters, num
-  lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots.
+  lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots (10/25/26:
+  through the shutdown, which init starts; pressed again it resets at once).
   Special keys arrive in the tty as codes above 0x80 (`include/surfos/keyboard.h`).
   The ISR does nothing but decode and queue; the 2004 debug hooks are gone.
 * **Escape sequences and raw mode** (**ai-dev**, for the text editor; `include/surfos/tty.h`
@@ -779,9 +796,10 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 | `help`, `clear`, `echo`, `tick`, `uptime`, `date`, `ps`, `kill`, `sleep`, `memstat`, `dmesg`, `irqstat`, `bootinfo`, `lpstat`, `test` | Work |
 | `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
 | `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task (from surfsh: the surfsh process); the first three kill it and init restarts it, the last is reported and ignored |
+| `crashstack [near]` | 10/25/26: overflows the task's kernel stack, or traps 512 bytes above its bottom: the double fault's report, then SYSTEM HALTED (section 6) |
 | `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
-| `reboot` | Pulses the keyboard controller reset line |
+| `reboot [-f]`, `poweroff [-n]` | 10/25/26: the shutdown (section 5): the programs end, the read-write volumes are written out and unmounted, then the machine resets or turns off (ACPI S5); `reboot -f` resets at once, as the 2004 command did; `poweroff -n` says what poweroff would do |
 | `lsblk [-s]` | **ai-dev**: disks and partitions as `NAME SIZE BUS RM TYPE MODEL/LABEL STATUS`, the status `mounted`, `boot drive: protected`, `internal: never formatted` or `read-only`; `-s` the blocks each device has moved |
 | `fdisk <disk>` | **ai-dev**: the partition table, the free space and whether the disk may be changed; with `new mbr` or `new gpt`, `add [size] [type]`, `delete <n>` or `type <n> <type>`, a change (section 16) |
 | `mkfs [-t fat16 or fat32] <dev> [label]` | **ai-dev**: a new FAT volume; a partition gets the matching type, a whole disk loses its old partitions |
@@ -878,6 +896,17 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
   transfer path. Both feed the [desktop pointer queue](GUI.md). Only the
   initrd is mounted. Debug words: `timer=lapic`, `kbd=poll`, `kbd=irq`, `clock=pmtmr`,
   `clock=hpet`.
+* **Soft off** (10/25/26, robustness, L20, L21). `poweroff` takes from the FADT the PM1a and
+  PM1b control blocks (their extended forms when those name I/O ports), SMI_CMD with
+  ACPI_ENABLE, and for hardware-reduced ACPI the sleep control register, and the SLP_TYP
+  values of `\_S5_` from a copy of the DSDT: `aml_sleep_type()` (`driver/amlfield.c`, beside
+  the field reader, host-tested) finds the Name at the root, declared once and outside any If,
+  and reads its package of numbers without running AML (one element: ACPICA's two bytes).
+  `acpi_s5_enter()` then, with interrupts off and the caches written back, switches the machine
+  to ACPI mode through SMI_CMD if SCI_EN is clear (300 ms at most), writes SLP_TYP into PM1a
+  and PM1b and then SLP_TYP with SLP_EN, and gives up after 3 s. The legacy profile reads the
+  ACPI tables only then, quietly (`acpi_read(true)`; the BIOS data area through the firmware
+  window, since page 0 is unmapped by then); its boot reads none. `poweroff -n` shows the values.
 * **The framebuffer lock.** Whoever draws holds a busy flag and cannot be preempted until
   it lets go (a task killed while drawing would keep it, and the screen would freeze);
   a task killed by an exception gives it back, and `panic()` and the wipeout path take

@@ -18,6 +18,8 @@ also polled on every timer tick in case IRQ 1 never reaches the CPU. The handler
 reads port 0x60 when the status register says a byte is waiting, so the interrupt and
 the poll never take the same byte twice. 10/10/26: the same controller also supplies
 standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
+10/25/26 (robustness, L23): Ctrl-Alt-Del starts the shutdown, through init (kernel/shutdown.c),
+and pressed again it resets the machine at once.
 */
 
 #include <surfos/keyboard.h>
@@ -31,12 +33,14 @@ standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
 #include <surfos/kernel.h>
 #include <surfos/timer.h>
 #include <surfos/multiboot.h>
+#include <surfos/shutdown.h>
 #include <blibc_common.h>
 #include <sys/pointer.h>
 #include <sys/ps2mouse.h>
 
 static u_char led_status = NUM_LED;
 static bool shift_l, shift_r, ctrl, alt, e0;
+static struct del_key del_key;      /* 10/25/26 (the review of B4): Delete held down, for Ctrl+Alt+Del's presses */
 static u_long irqs, polled;
 
 /* status register bits */
@@ -137,10 +141,11 @@ static void handle_e0(u_char code) {
     case 0x50: if(!brk) deliver(DOWN); return;
     case 0x51: if(!brk) deliver(PGDN); return;
     case 0x52: if(!brk) deliver(INS); return;
-    case 0x53:
-        if(brk) return;
-        if(ctrl && alt) { reboot(); return; }  /* never returns; spins its delays in ISR context */
-        deliver(DEL);
+    case 0x53:                                /* 10/25/26 (L23): Ctrl+Alt+Del: init starts the shutdown; again: a reset */
+        switch(del_key_event(&del_key, !brk, ctrl && alt)) {
+        case DEL_PRESS: shutdown_key(); break;
+        case DEL_DELETE: deliver(DEL); break;
+        }
         return;
     default: return;                          /* print screen, pause, media keys */
     }
@@ -193,7 +198,7 @@ static void keyboard_byte(u_char code) {
 static void i8042_byte(u_char status, u_char byte) {
     if(status & KBD_ERROR) {
         if(status & KBD_AUX) ps2mouse_reset(&mouse);
-        else { e0 = shift_l = shift_r = ctrl = alt = false; }
+        else { e0 = shift_l = shift_r = ctrl = alt = false; del_key.down = false; }
         return;
     }
     if(status & KBD_AUX) {

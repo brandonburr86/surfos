@@ -183,6 +183,81 @@ static void advanced(void) {
     }
 }
 
+/* 10/25/26 (robustness, L20): \_S5_, soft off's SLP_TYP values, as poweroff reads them */
+static int sleep(u8 *a, u8 *b) {
+    finish(); return aml_sleep_type(table, used, "_S5_", a, b);
+}
+static void s5(const u8 *bytes, u32 count) {          /* Name (_S5_, ...) with bytes for its value */
+    byte(0x08); name("_S5_");
+    memcpy(table + used, bytes, count); used += count;
+}
+static void sleep_types(void) {
+    static const u8 ovmf[] = { 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00 };
+    static const u8 intel[] = { 0x12, 0x08, 0x04, 0x0a, 0x07, 0x0a, 0x07, 0x00, 0x00 };
+    static const u8 one[] = { 0x12, 0x05, 0x01, 0x0b, 0x05, 0x07 };
+    static const u8 short_pkg[] = { 0x12, 0x04, 0x04, 0x0a, 0x05 };
+    static const u8 named[] = { 0x12, 0x07, 0x02, 'S', 'L', 'P', 'A', 0x00 };
+    static const u8 empty[] = { 0x12, 0x02, 0x00 };
+    static const u8 integer_only[] = { 0x0a, 0x05 };
+    static const u8 scope_root[] = { '\\', 0 };
+    static const u8 scope_sb[] = { '_', 'S', 'B', '_' };
+    static const u8 cond[] = { 1 };
+    static const u8 method[] = { '_', 'S', '5', '_', 0 };
+    u8 a = 9, b = 9, valid[256];
+    u32 i, j, length, seed = 4321;
+
+    begin(); s5(ovmf, sizeof(ovmf));
+    check(sleep(&a, &b) == 0 && a == 0 && b == 0, "OVMF's _S5_: Package (4) { Zero, Zero, Zero, Zero }");
+    begin(); s5(intel, sizeof(intel));
+    check(sleep(&a, &b) == 0 && a == 7 && b == 7, "Intel's _S5_: Package (4) { 7, 7, Zero, Zero }");
+    begin(); byte(0x08); byte('\\'); name("_S5_"); memcpy(table + used, intel, sizeof(intel)); used += sizeof(intel);
+    check(sleep(&a, &b) == 0 && a == 7 && b == 7, "a root-prefixed name (\\_S5_)");
+    begin(); s5(intel, sizeof(intel)); wrap(0x10, scope_root, 2);
+    check(sleep(&a, &b) == 0 && a == 7, "inside Scope (\\)");
+    begin(); s5(one, sizeof(one));
+    check(sleep(&a, &b) == 0 && a == 5 && b == 7, "one element: its low byte is SLP_TYPa, the next SLP_TYPb");
+    begin(); s5(short_pkg, sizeof(short_pkg));
+    check(sleep(&a, &b) == 0 && a == 5 && b == 0, "NumElements claims 4, one is there: that one counts");
+    begin(); region(); field(); byte(0x14); byte(6); name("MTHD"); byte(0); s5(intel, sizeof(intel));
+    check(sleep(&a, &b) == 0 && a == 7, "other declarations around it are walked past");
+
+    begin(); s5(intel, sizeof(intel)); wrap(0x10, scope_sb, 4);
+    a = b = 9; check(sleep(&a, &b) == AML_FIELD_NOT_FOUND && !a && !b, "_S5_ in \\_SB_ is another name: not found, both 0");
+    begin(); s5(intel, sizeof(intel)); wrap(0xa0, cond, 1);
+    check(sleep(&a, &b) == AML_FIELD_UNSUPPORTED, "inside If: refused, never guessed");
+    begin(); s5(intel, sizeof(intel)); s5(ovmf, sizeof(ovmf));
+    check(sleep(&a, &b) == AML_FIELD_AMBIGUOUS, "declared twice: refused");
+    begin(); s5(named, sizeof(named));
+    check(sleep(&a, &b) == AML_FIELD_UNSUPPORTED, "an element that is a name: refused (nothing evaluates it)");
+    begin(); s5(empty, sizeof(empty));
+    check(sleep(&a, &b) == AML_FIELD_INVALID, "an empty package: invalid");
+    begin(); s5(integer_only, sizeof(integer_only));
+    check(sleep(&a, &b) == AML_FIELD_UNSUPPORTED, "a bare integer is not the package");
+    begin(); byte(0x14); byte(9); memcpy(table + used, method, 5); used += 5; byte(0xa4); byte(0x0a); byte(5);
+    check(sleep(&a, &b) == AML_FIELD_NOT_FOUND, "a Method called _S5_ is not the Name");
+    begin(); byte(0x06); name("SLP5"); name("_S5_"); s5(intel, sizeof(intel));
+    check(sleep(&a, &b) == AML_FIELD_UNSUPPORTED, "an Alias that makes another _S5_: refused");
+    begin(); s5(intel, sizeof(intel)); finish();
+    check(aml_sleep_type(table, used, "_S5_", &a, 0) == AML_FIELD_INVALID &&
+          aml_sleep_type(table, used, "5S5_", &a, &b) == AML_FIELD_INVALID &&
+          aml_sleep_type(table, used - 1, "_S5_", &a, &b) == AML_FIELD_INVALID, "bad arguments refused");
+    memcpy(table, "SSDT", 4);
+    check(sleep(&a, &b) == 0 && a == 7, "an SSDT is read the same way");
+
+    begin(); s5(intel, sizeof(intel)); length = used;
+    for(i = 36; i < length; i++) {
+        used = i;
+        check(sleep(&a, &b) != 0 && !a && !b, "every truncated _S5_ fails and says 0");
+    }
+    begin(); region(); field(); s5(intel, sizeof(intel)); length = used; memcpy(valid, table, used);
+    for(i = 0; i < 5000; i++) {
+        memcpy(table, valid, length); used = length;
+        seed = seed * 1664525U + 1013904223U; j = 36 + seed % (length - 36);
+        seed = seed * 1664525U + 1013904223U; table[j] = seed >> 24;
+        if(sleep(&a, &b) != 0) check(!a && !b, "a refused mutation says 0 for both");
+    }
+}
+
 /* Optional captured, ignored fixture checks. These addresses describe the
    October 12 capture only, never assumptions in the production reader. */
 int open(const char *, int, ...);
@@ -245,6 +320,7 @@ int main(int argc, char **argv) {
     begin(); field(); expect_fail(AML_FIELD_NOT_FOUND, "field alone supplies no region");
     begin(); region(); expect_fail(AML_FIELD_NOT_FOUND, "region alone supplies no field");
     advanced();
+    sleep_types();
     if(argc == 3) native(argv[1], argv[2]);
     printf("AML FIELD UNIT TESTS %s: %u checks, %u failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;

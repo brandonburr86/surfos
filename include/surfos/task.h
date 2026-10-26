@@ -230,6 +230,12 @@ void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames 
 /* 10/25/26 (L17): the task whose kernel stack's slot holds addr, and whether addr is in the guard below that stack
    (the double fault's report) */
 surf_task *task_stack_owner(u_long addr, bool *guard);
+/* 10/25/26 (L22, L23): shutdown (kernel/shutdown.c): the kill that waits for the end of the call (kill_task_patient()) for
+   every process and ring-0 shell but the caller, how many; those still alive, how many, and the first of them in list as
+   'name' (pid n), up to len bytes; init woken (Ctrl+Alt+Del, from the keyboard's interrupt) */
+u_int task_end_users(void);
+u_int task_users_left(char *list, size_t len);
+void task_wake_init(void);
 #define task_stack_bottom(t) ((t)->stack_top - KSTACK_SIZE)     /* every task's, the idle task's boot stack too */
 
 void yield(void);

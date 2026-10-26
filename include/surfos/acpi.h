@@ -9,6 +9,11 @@ MADT (local APIC address, whether there are 8259s, the I/O APICs and the ISA
 interrupt overrides) and the HPET table. Every table is checked (signature, length,
 checksum) before anything in it is used. No AML: SurfOS never switches the machine
 into ACPI mode, so the firmware keeps handling power events itself.
+10/25/26 (robustness, L20, L21): poweroff, the one exception. Soft off (S5) takes the
+FADT's PM1 control blocks (or the sleep control register), \_S5_'s SLP_TYP values read
+from the DSDT without running AML (driver/amlfield.c), and, when the machine is not in
+ACPI mode yet, the switch through SMI_CMD, just before the sleep is entered. The legacy
+profile reads the tables only then, and quietly: its boot stays as it was.
 */
 
 #ifndef _SURFOS_ACPI_H
@@ -68,6 +73,10 @@ struct acpi_info {
     struct acpi_gas reset_reg;
     u8 reset_value;
     bool reset_ok;
+    u16 smi_cmd;                /* 10/25/26 (L21): the port that switches the machine to ACPI mode (0: none) */
+    u8 acpi_enable;             /* the value written there */
+    u16 pm1a_cnt, pm1b_cnt;     /* the PM1 control blocks (I/O ports; 0: none) */
+    struct acpi_gas sleep_ctl;  /* hardware-reduced ACPI: the sleep control register */
 
     bool madt;
     u32 lapic_addr;
@@ -87,6 +96,17 @@ extern struct acpi_info acpi;
 int init_acpi(void);            /* 0, or 1 when there are no usable tables */
 void acpi_print(void);
 u32 acpi_isa_gsi(u8 irq);       /* where ISA IRQ n arrives on the I/O APICs (interrupt overrides) */
+
+/* 10/25/26 (robustness, L20, L21): soft off */
+struct acpi_s5 {
+    bool ok;                    /* all that S5 needs was found; else why says what is missing */
+    const char *why;
+    bool hw_reduced;            /* the sleep control register, not the PM1 control blocks */
+    u8 typa, typb;              /* SLP_TYP for PM1a and PM1b, from \_S5_ in the DSDT */
+};
+int acpi_s5_find(struct acpi_s5 *s);        /* task context (it reads the DSDT); 0, or -1 and s->why */
+int acpi_s5_enter(const struct acpi_s5 *s); /* interrupts off; it returns (-1) only if the machine is still on 3 s later */
+void acpi_s5_print(const struct acpi_s5 *s);  /* what S5 would write, and where (poweroff -n) */
 
 enum acpi_copy_result {
     ACPI_COPY_OK = 0,

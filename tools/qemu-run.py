@@ -143,6 +143,8 @@ SETTINGS_FILES = {
     'ether': {'surfos-config/settings.conf': b'ethernet = dhcp\n'},
     # a hidden network saved by hand: no security line (and nothing else not understood), so open
     'hidden': {'surfos-config/networks.conf': b'network = "SurfSimHidden"\nhidden = yes\n'},
+    # 10/25/26 (robustness, L22-L24): a stick for the shutdown boots, mounted read-write as SurfOS's own volume
+    'shutdown': {'notes.txt': OWNER_NOTE},
 }
 SURFSIM_PSK = hashlib.pbkdf2_hmac('sha1', WLANSIM_PASSPHRASE.encode(), b'SurfSimWPA', 4096, 32).hex()
 SETTINGS_DISKS = {}                                         # name: its image file, made the first time a boot asks
@@ -295,11 +297,20 @@ SMOKE = [
     # have (the kernel keeps its reserve) and gives it back; with its stack unable to grow it is ended, and says why
     ('memhog', ['blocks of 64 KB before malloc failed', 'memhog: given back']),
     ('memhog stack', ['KB taken; now a stack that cannot grow', 'killed by "out of memory: its stack could not grow"']),
+    # acpi and acpidump DSDT check that this legacy boot read no ACPI tables: poweroff -n (below) reads them, so it
+    # must stay after these two
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('acpidump DSDT', ['not found']),
     ('acpidump MSDM', ['usage: acpidump']),
     ('acpidump SSDT -1', ['usage: acpidump']),
     ('acpidump DSDT 1', ['usage: acpidump']),
+    # 10/25/26 (robustness, L20-L24): what poweroff would do: end the shells, write out and unmount /hda1, and soft
+    # off with \_S5_'s values from QEMU's DSDT. It must stay after acpi and acpidump above: it reads the ACPI tables
+    # now, quietly (this boot read none), and from then on acpi lists them and acpidump finds the DSDT, so moved
+    # before them it makes both fail
+    ('poweroff -n', ['poweroff -n: what poweroff would do now', 'end 4 programs and shells: ', "'surfsh' (pid ",
+                     'write out and unmount /hda1 (fat on hda1)',
+                     'soft off (ACPI S5): SLP_TYPa 0 and SLP_TYPb 0 from \\_S5_, into PM1a at port 0x']),
     ('acpinvs 0 16', ['refused']),
     ('acpinvs 1000 257', ['usage: acpinvs']),
     ('himem',   ['no RAM above 4 GB']),
@@ -413,6 +424,7 @@ SMOKE = [
                   "ok   refused writes: a save's new file goes into the cache, and its close says EIO",
                   'ok   refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted',
                   "ok   kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected",
+                  'ok   Ctrl+Alt+Del: a key held down is one press, a press after its break another; Delete repeats',
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
@@ -571,7 +583,10 @@ SMOKE = [
     # started again twice, then the recovery console; one that is not an executable: the recovery console at once;
     # one that runs (sh): an exit after 2 s with status 3 is said, with 0 not, a kill is said ('@sleep n' waits)
     # 10/6/26: Ctrl+C there cuts a command short with status 130: a sleep, and a program it runs (killed)
-    ('@boot profile=laptop mouse=off', [PROMPT], [('pointerinfo', ['disabled (mouse=off)', 'pointing devices: 0']), ('echo keyboard-survives', ['keyboard-survives'])], []),
+    # 10/25/26 (robustness, L21): and poweroff there, the ACPI tables read at boot: ACPI S5 stops QEMU (no disk: the
+    # laptop profile skips ATA)
+    ('@boot profile=laptop mouse=off', [PROMPT], [('pointerinfo', ['disabled (mouse=off)', 'pointing devices: 0']), ('echo keyboard-survives', ['keyboard-survives']),
+                                                  ('shutdown-laptop', CHECK)], ['still on 3 s', 'safe to turn off']),
     ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')]),
                                                           (b'sleep 10000\r', []), ('@sleep 2', []),
                                                           (b'\x03', ['sleep cut short', surf_prompt(b'bin', b'#')]),
@@ -619,6 +634,19 @@ SMOKE = [
      [('crashstack near', ["Kernel panic: the kernel stack of 'surfsh' (pid ", 'is nearly full: a trap frame ',
                            'vector 64 (yield)', 'crash_near', re.compile(rb'SYSTEM HALTED')])],
      ['Kernel Wipeout', 'stack overflow', 'did not stop it']),
+    # 10/25/26 (robustness, L22-L24): three boots with the same stick (settingsdisk=shutdown), mounted read-write on
+    # /hda1 as SurfOS's own volume, each writing a file there and then shutting down: reboot; poweroff (settings=off:
+    # the network manager leaves the stick alone); Ctrl+Alt+Del through the keyboard's interrupt (the monitor's
+    # sendkey; kbd=irq only names that boot: the legacy profile's keyboard is on its IRQ anyway). Each says its steps
+    # and stops QEMU (shutdown_boot_check()); the next boot's mount finds the volume cleanly unmounted, and
+    # @shutdown-disk reads the stick after the last. poweroff under profile=laptop: '@boot profile=laptop' above
+    ('@boot settingsdisk=shutdown', [PROMPT], [('shutdown-reboot', CHECK)],
+     ['not unmounted cleanly', 'still on 3 s', 'safe to turn off']),
+    ('@boot settingsdisk=shutdown settings=off', [PROMPT], [('shutdown-poweroff', CHECK)],
+     ['not unmounted cleanly', 'still on 3 s', 'safe to turn off']),
+    ('@boot settingsdisk=shutdown kbd=irq', [PROMPT], [('shutdown-key', CHECK)],
+     ['not unmounted cleanly', 'still on 3 s', 'safe to turn off']),
+    ('@shutdown-disk', []),
     # 10/9/26 (Wi-Fi, track S): the station layer, the wifi command and two interfaces on one network, with the simulated
     # chip (`wlansim`, driver/wifi/wlansim.c) and QEMU's user network (`net`: eth0, which the simulated access points are
     # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
@@ -5183,6 +5211,74 @@ def link_bounce_check(q):
     return ok
 
 
+# ---- 10/25/26 (robustness, L22-L24): a clean reboot and poweroff -------------------------------------------------
+
+SHUTDOWN_FILES = {'reboot': 'REBOOT.TXT', 'poweroff': 'POWEROFF.TXT', 'key': 'CADEL.TXT'}
+
+
+def shutdown_boot_check(q, how):
+    """a file written on the stick, then reboot, poweroff or Ctrl+Alt+Del (the monitor's sendkey): the shutdown says
+    each step (the shells ended, /hda1 written out and unmounted, the reset or ACPI S5) and QEMU stops: -no-reboot and
+    -no-shutdown make a reset and a power-off alike a pause, \"paused (shutdown)\". 'laptop': poweroff with no disk"""
+    ok = True
+    if how != 'laptop':
+        q.send(f'echo {how} > /hda1/{SHUTDOWN_FILES[how]}\n')
+        ok = q.expect(PROMPT, 10)
+    start = len(q.transcript)
+    if how == 'key':
+        q.monitor('sendkey ctrl-alt-delete')
+        ok = ok and q.expect('Ctrl+Alt+Del: SurfOS shuts down, then resets the machine', 10)
+    else:
+        q.send(('poweroff' if how == 'laptop' else how) + '\n')
+    what = 'poweroff' if how in ('poweroff', 'laptop') else 'reboot'
+    # the last line ("resetting the machine", "turning the machine off (ACPI S5)") may be cut by the reset or the
+    # power-off itself (QEMU drops what its UART still holds): QEMU's stop, and no failure line, say it worked
+    ok = (ok and q.expect(f'shutdown: {what}: the programs end, the volumes are written out', 10) and
+          q.expect('programs and shells ended', 20) and
+          (how == 'laptop' or q.expect('shutdown: /hda1 written out and unmounted', 20)))
+    stopped, deadline = False, time.time() + 15
+    while ok and not stopped and time.time() < deadline:
+        q.pump(0.3)
+        stopped = 'VM status: paused (shutdown)' in q.monitor('info status')
+    text = q.transcript[start:].decode(errors='replace')
+    good = ok and stopped and not any(s in text for s in ('still running after', 'could not', 'not cleanly', 'busy',
+                                                         'still on 3 s', 'safe to turn off'))
+    if not good:
+        print(f'\nshutdown-{how}: {"QEMU stopped" if stopped else "QEMU did not stop"}:\n' + tail(q.text(), 25))
+    return good
+
+
+def shutdown_disk_check(q):
+    """after the three shutdown boots, the stick read here: FAT[1] says cleanly unmounted, the file each boot wrote
+    is there, the owner's file as it was, and fsck.fat (if the host has it) finds no error"""
+    import mkusb
+    path = SETTINGS_DISKS.get('shutdown')
+    what = 'shutdown: the stick after reboot, poweroff and Ctrl+Alt+Del: cleanly unmounted, every file there'
+    if not path:
+        return (what, False)
+    try:
+        with open(path, 'rb') as f:
+            f.seek(2048 * 512)
+            bpb = f.read(512)
+            bps, reserved = struct.unpack_from('<H', bpb, 11)[0], struct.unpack_from('<H', bpb, 14)[0]
+            f.seek(2048 * 512 + reserved * bps)
+            fat1 = struct.unpack_from('<I', f.read(8), 4)[0]
+            fat = mkusb.Fat32(f, 2048 * 512)
+            files = {how: fat.read(name) for how, name in SHUTDOWN_FILES.items()}
+            note = fat.read('notes.txt')
+    except Exception as e:
+        print(f'\n@shutdown-disk: {e}')
+        return (what, False)
+    ok = bool(fat1 & 0x08000000) and all(files[how] == how.encode() + b'\n' for how in files) and note == OWNER_NOTE
+    if not ok:
+        print(f'\n@shutdown-disk: FAT[1] 0x{fat1:08x}, files {files}, notes.txt {note!r}')
+    fsck = fsck_check(path, 2048 * 512, (40 << 20) - 2048 * 512)
+    return (what, ok and all(r for _, r in fsck))
+
+
+CONSOLE_CHECKS['@shutdown-disk'] = shutdown_disk_check
+
+
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
                'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
@@ -5191,7 +5287,11 @@ BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wp
                'dhcp-one-at-a-time': dhcp_one_at_a_time_check, 'keeper-skips-open': keeper_skips_open_check,
                'keeper-joins-open': keeper_joins_open_check, 'renewed-again': renewed_again_check,
                'hidden-no-address': hidden_no_address_check,
-               'link-bounce': link_bounce_check}
+               'link-bounce': link_bounce_check,
+               'shutdown-reboot': lambda q: shutdown_boot_check(q, 'reboot'),         # 10/25/26 (L22-L24)
+               'shutdown-poweroff': lambda q: shutdown_boot_check(q, 'poweroff'),
+               'shutdown-key': lambda q: shutdown_boot_check(q, 'key'),
+               'shutdown-laptop': lambda q: shutdown_boot_check(q, 'laptop')}
 
 
 def tail(text, n=40):

@@ -532,7 +532,8 @@ at mount; a kill that has waited 2 s still kills a task at once inside the block
 cache or a FAT operation (`kernel/task.c`'s `kill_escalate()`), leaving what it held
 behind (SurfCPU's B39 puts the kill off until the task is out, on its own kill model);
 `reboot` does not write the mounts out first, so a volume mounted read-write then stays
-marked as not cleanly unmounted (B42 keeps it so until it is checked); and SurfCPU's later
+marked as not cleanly unmounted (B42 keeps it so until it is checked; 10/25/26: track B's
+B4 does, `docs/CODE-AUDIT.md` L22); and SurfCPU's later
 rounds (B46-B82, but for B58 and eject's part of B46: kills and Ctrl+C inside umount and
 eject, mkfs and fdisk holding their device, mutex hand-over).
 

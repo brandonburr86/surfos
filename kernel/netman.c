@@ -91,6 +91,7 @@ and connect_lock come before nm_lock, never after it.
 #include <net/ieee80211.h>
 #include <net/netcfg.h>
 #include <net/netman.h>
+#include <surfos/shutdown.h>
 #include <blibc_common.h>
 
 #define BOOTVOL_WAIT_MS  20000          /* how long the stick may take to be found at boot */
@@ -232,6 +233,10 @@ static int stick_open(bool write, struct stick *st, char *why, size_t wsize) {
     st->root[0] = 0;
     st->held = NULL;
     st->ours = false;
+    if(shutdown_unmounting()) {                         /* 10/25/26 (L22): its volumes are being unmounted */
+        snprintf(why, wsize, "SurfOS is shutting down");
+        return -EAGAIN;
+    }
     if(!v) {
         snprintf(why, wsize, "%s", bdev_boot_vol_named() ? "the stick SurfOS was started from is not there (lsblk)" :
                  "SurfOS was not started from a stick GRUB named (no bootvol= on the kernel command line)");
@@ -599,6 +604,19 @@ void netman_settings(struct netcfg_settings *out) {
 
 bool netman_settings_off(void) {
     return where_state == WHERE_OFF;
+}
+
+/* 10/25/26 (the review of B4): the shutdown's, once shutdown_unmounting() refuses every new stick_open(): the stick's
+   lock taken and let go, so a read or write under way has ended and the short mount of it is gone before the
+   shutdown lists what to unmount. ms at most (a lock held for ever cannot hang the shutdown); false then */
+bool netman_stick_idle(u_long ms) {
+    u_long waited;
+    for(waited = 0; !mutex_trylock(&stick_lock); waited += 50) {
+        if(waited >= ms) return false;
+        sleep_ms(50);
+    }
+    mutex_unlock(&stick_lock);
+    return true;
 }
 
 bool netman_can_save(void) {

@@ -31,4 +31,9 @@ enum aml_field_result {
    Failure clears the result. */
 int aml_field_find(const u8 *table, u32 bytes, const char region[4],
                    const char field[4], struct aml_field *out);
+/* 10/25/26 (robustness, L20): the SLP_TYP values for PM1a and PM1b of a sleep state
+   (name "_S5_": soft off), from its Name at the root of the namespace, declared once,
+   outside any If, Else or While: Package { SLP_TYPa, SLP_TYPb, ... } of integer
+   constants. Same input as above; failure leaves both 0. */
+int aml_sleep_type(const u8 *table, u32 bytes, const char name[4], u8 *typa, u8 *typb);
 #endif

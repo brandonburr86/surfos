@@ -61,6 +61,7 @@ for programs, which could not even load it.
 #include <mm/kalloc.h>
 #include <mm/uvm.h>
 #include <mm/pmm.h>
+#include <surfos/shutdown.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
@@ -292,6 +293,7 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     size_t used = 0;
     int i, r, kind, nhead = 0, nargs = argc, job;
 
+    if(shutdown_started()) return -EAGAIN;                      /* 10/25/26 (L22): SurfOS is shutting down */
     if(pmm_room(PMM_USER) < SPAWN_MIN_FRAMES) return -ENOMEM;   /* 10/25/26 (L8): it could not even load */
     r = vfs_stat(path, &st);
     if(r) return r;

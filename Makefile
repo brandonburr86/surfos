@@ -1063,7 +1063,8 @@ unittest: unittest-mouse
 .PHONY: unittest-mouse
 
 # Read-only firmware AML export, including runtime mapping ownership.
-$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o \
+                             $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)   # 10/25/26: acpi.c reads \_S5_ (B4)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 $(BUILD)/host/test_acpidump $(BUILD)/host/kernel/kernel/acpi.o: HOSTKERN_FLAGS += -fgnu89-inline
 unittest-acpi: $(BUILD)/host/test_acpidump

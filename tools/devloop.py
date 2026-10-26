@@ -28,7 +28,8 @@ the newer of build/docker/build/O2 and O0, or build/O2 and O0 on Linux) and, in 
   3. eject, reboot, telnet again within 3 minutes (--net is searched when the address changed), and the new
      system's /initrd/etc/build-id must be the pushed initrd's (uptime says it really restarted).
 It never formats or partitions anything: a data stick without a FAT file system stops it with what to do. run
-refuses reboot (use reboot or deploy: they wait for the laptop and check it), mkfs and fdisk's changes.
+refuses reboot (use reboot or deploy: they wait for the laptop and check it), poweroff, crashstack, mkfs and fdisk's
+changes.
 
 Exit status 0; 1 with the reason. Nothing here writes on this computer.
 """
@@ -111,6 +112,10 @@ def clean(data):
 # and telnetd stays on (without it nobody but the owner, at the laptop, could start it again)
 REFUSED = [(re.compile(r'^(?:run\s+|spawn\s+)?reboot\b'), 'reboot: use tools/devloop.py reboot (or deploy), which wait '
                                                          'for the laptop and check it'),
+           (re.compile(r'^(?:run\s+|spawn\s+)?poweroff\b(?!\s+-n\b)'),             # 10/25/26 (robustness, B4)
+            'poweroff: it would end this loop until someone at the laptop turns it on (poweroff -n only looks)'),
+           (re.compile(r'^(?:run\s+|spawn\s+)?crashstack\b'),                        # 10/25/26 (the review of B3)
+            'crashstack: it halts the laptop; only the owner, at the laptop, can start it again'),
            (re.compile(r'^(?:run\s+|spawn\s+)?mkfs\b'), 'mkfs: devloop never formats a disk'),
            (re.compile(r'^(?:run\s+|spawn\s+)?fdisk\s+\S+\s+\S'), 'fdisk with a change: devloop never partitions a disk'),
            (re.compile(r'^(?:run\s+|spawn\s+)?(?:/initrd/bin/)?telnetd\s+off\b'),

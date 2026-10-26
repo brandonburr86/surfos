@@ -7,13 +7,18 @@ See include/surfos/acpi.h. The root pointer comes from the boot loader (GRUB cop
 into the Multiboot 2 block on UEFI); on a BIOS machine it is looked for in the EBDA and
 at 0xE0000-0xFFFFF. Tables are read one at a time through vmm_temp_map() and every
 length is checked before it is used, so a broken table is listed and skipped.
+10/25/26 (robustness, L20, L21): soft off (S5) for poweroff, from the FADT and \_S5_.
 */
 
+#include <asm/io.h>
 #include <surfos/types.h>
 #include <surfos/acpi.h>
 #include <surfos/multiboot.h>
 #include <surfos/console.h>
 #include <surfos/task.h>
+#include <surfos/irq.h>
+#include <surfos/timer.h>
+#include <sys/amlfield.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
 #include <mm/kalloc.h>
@@ -70,12 +75,11 @@ static bool rsdp_at(const u8 *p, struct boot_acpi *a) {
     return true;
 }
 
-/* the BIOS data area through a pointer GCC cannot see as a constant: it takes any
-   constant address below 4 KB for a zero-sized object (-Warray-bounds) */
+/* the BIOS data area, through the firmware window: page 0 is unmapped once the drivers
+   have read it (kernel/main.c), and since 10/25/26 poweroff may read the tables later */
 static u16 bda_word(u_long addr) {
-    volatile u16 *p;
-    asm("" : "=r"(p) : "0"(addr));
-    return *p;
+    const u8 *p = (const u8 *)vmm_temp_map(addr, 2);
+    return p ? rd16(p) : 0;
 }
 
 static bool find_rsdp_bios(struct boot_acpi *a) {
@@ -104,8 +108,27 @@ static void parse_fadt(const u8 *t, u32 len) {
         read_gas(t + 116, &acpi.reset_reg);
         acpi.reset_value = t[128];
         acpi.reset_ok = (acpi.fadt_flags & ACPI_FADT_RESET_REG_SUP) && acpi.reset_reg.addr &&
-                        (acpi.reset_reg.space == 0 || acpi.reset_reg.space == 1);
+                        (acpi.reset_reg.space == 0 || (acpi.reset_reg.space == 1 && acpi.reset_reg.addr < 0x10000));
+                                                        /* 10/25/26 (the review of B4): a port is 16 bits */
     }
+    /* 10/25/26 (L21): soft off's registers: SMI_CMD and ACPI_ENABLE, the PM1 control blocks (their extended forms when
+       those name I/O ports), PM1_CNT_LEN at least 2, and the sleep control register of hardware-reduced ACPI */
+    if(len >= 53 && rd32(t + 48) < 0x10000) {
+        acpi.smi_cmd = (u16)rd32(t + 48);
+        acpi.acpi_enable = t[52];
+    }
+    if(len >= 90 && t[89] >= 2) {
+        if(rd32(t + 64) < 0x10000) acpi.pm1a_cnt = (u16)rd32(t + 64);
+        if(rd32(t + 68) < 0x10000) acpi.pm1b_cnt = (u16)rd32(t + 68);
+    }
+    if(len >= 196) {
+        struct acpi_gas x;
+        read_gas(t + 172, &x);
+        if(x.space == 1 && x.addr && x.addr < 0x10000) acpi.pm1a_cnt = (u16)x.addr;
+        read_gas(t + 184, &x);
+        if(x.space == 1 && x.addr && x.addr < 0x10000) acpi.pm1b_cnt = (u16)x.addr;
+    }
+    if(len >= 256) read_gas(t + 244, &acpi.sleep_ctl);
     if(len >= 220) {                                  /* X_PM_TMR_BLK overrides PM_TMR_BLK when given */
         struct acpi_gas x;
         read_gas(t + 208, &x);
@@ -170,7 +193,11 @@ static void parse_hpet(const u8 *t, u32 len) {
     acpi.hpet_addr = g.addr;
 }
 
-int init_acpi(void) {
+/* the tables, read once: at boot with profile=laptop (said on the console), or quietly when poweroff first needs
+   them (10/25/26: the legacy profile's boot reads none) */
+static bool acpi_read_done;
+
+static int acpi_read(bool quiet) {
     struct boot_acpi rsdp = bootinfo.acpi;
     u64 entries[ACPI_MAX_TABLES];
     u_int i, n, esize;
@@ -178,11 +205,12 @@ int init_acpi(void) {
     u32 len;
     bool ok;
 
+    acpi_read_done = true;
     memset(&acpi, 0, sizeof(acpi));
-    kprintf("\nACPI\n");
+    if(!quiet) kprintf("\nACPI\n");
     if(!rsdp.present && !bootinfo.efi) find_rsdp_bios(&rsdp);
     if(!rsdp.present) {
-        kprintf("*no ACPI root pointer\n");
+        if(!quiet) kprintf("*no ACPI root pointer\n");
         return 1;
     }
     acpi.revision = rsdp.revision;
@@ -193,14 +221,14 @@ int init_acpi(void) {
     t = map_table(acpi.root, &len, &ok);
     if(!ok || memcmp(t, acpi.xsdt ? "XSDT" : "RSDT", 4)) {
         if(!acpi.xsdt || !rsdp.rsdt) {
-            kprintf("*the root table at 0x%llx is not valid\n", acpi.root);
+            if(!quiet) kprintf("*the root table at 0x%llx is not valid\n", acpi.root);
             return 1;
         }
         acpi.xsdt = false;                            /* a bad XSDT: the RSDT lists the same tables */
         acpi.root = rsdp.rsdt;
         t = map_table(acpi.root, &len, &ok);
         if(!ok || memcmp(t, "RSDT", 4)) {
-            kprintf("*no valid XSDT or RSDT\n");
+            if(!quiet) kprintf("*no valid XSDT or RSDT\n");
             return 1;
         }
     }
@@ -228,6 +256,7 @@ int init_acpi(void) {
         else if(!memcmp(t, "HPET", 4) && !acpi.hpet) parse_hpet(t, len);
     }
 
+    if(quiet) return 0;
     kprintf("*%s at 0x%llx, OEM \"%s\", %u tables", acpi.xsdt ? "XSDT" : "RSDT", acpi.root, acpi.oem, acpi.ntables);
     for(i = 0; i < acpi.ntables; i++) kprintf("%s%s%s", i ? " " : ": ", acpi.tables[i].sig, acpi.tables[i].ok ? "" : "(bad)");
     kprintf("\n");
@@ -243,6 +272,10 @@ int init_acpi(void) {
                 acpi.ncpus_enabled, acpi.nioapics, acpi.nisos);
     if(acpi.hpet) kprintf("*HPET at 0x%llx\n", acpi.hpet_addr);
     return 0;
+}
+
+int init_acpi(void) {
+    return acpi_read(false);
 }
 
 u32 acpi_isa_gsi(u8 irq) {
@@ -380,4 +413,111 @@ void acpi_print(void) {
             printf("      ISA IRQ %u -> GSI %u, flags 0x%x\n", acpi.iso[i].source, acpi.iso[i].gsi, acpi.iso[i].flags);
     }
     if(acpi.hpet) printf("    HPET at 0x%llx\n", acpi.hpet_addr);
+}
+
+/**** 10/25/26 (robustness, L20, L21): soft off ****/
+
+#define PM1_SCI_EN   0x0001
+#define PM1_SLP_TYP  0x1c00     /* bits 10-12 */
+#define PM1_SLP_EN   0x2000
+#define SLPCTL_SLP_EN 0x20      /* the sleep control register: SLP_TYP in bits 2-4, SLP_EN bit 5 */
+
+/* Task context: the registers from the FADT, and \_S5_'s SLP_TYP values from the DSDT (read, never run). The legacy
+   profile reads the tables the first time this is asked, quietly, with no other task using the firmware window. */
+int acpi_s5_find(struct acpi_s5 *s) {
+    u8 *dsdt;
+    u32 len;
+    int r;
+    memset(s, 0, sizeof(*s));
+    if(!acpi_read_done) {
+        kcritical_enter();
+        acpi_read(true);
+        kcritical_leave();
+    }
+    if(!acpi.present) s->why = "no ACPI tables were found";
+    else if(!acpi.fadt) s->why = "the ACPI tables have no FADT";
+    else {
+        s->hw_reduced = (acpi.fadt_flags & ACPI_FADT_HW_REDUCED) ? true : false;
+        if(s->hw_reduced && !(acpi.sleep_ctl.addr && ((acpi.sleep_ctl.space == 0 && acpi.sleep_ctl.addr < 0x100000000ULL) ||
+                                                      (acpi.sleep_ctl.space == 1 && acpi.sleep_ctl.addr < 0x10000))))
+            s->why = "the FADT names no sleep control register SurfOS can write (hardware-reduced ACPI)";
+        else if(!s->hw_reduced && !acpi.pm1a_cnt) s->why = "the FADT names no PM1 control block";
+    }
+    if(s->why) return -1;
+    r = acpi_aml_copy("DSDT", 0, &dsdt, &len);
+    if(r) {
+        s->why = r == ACPI_COPY_NOMEM ? "there was no memory to read the DSDT" : "the DSDT could not be read";
+        return -1;
+    }
+    r = aml_sleep_type(dsdt, len, "_S5_", &s->typa, &s->typb);
+    kfree(dsdt);
+    if(r) {
+        s->why = r == AML_FIELD_NOT_FOUND ? "the DSDT declares no \\_S5_" :
+                 r == AML_FIELD_UNSUPPORTED ? "the DSDT's \\_S5_ is not a package of numbers at the root, outside any If" :
+                 "the DSDT's \\_S5_ could not be read";
+        return -1;
+    }
+    /* 10/25/26 (the review of B4): SLP_TYP is 3 bits; a larger value is refused, never cut to 3 bits (0x0D would be 5,
+       which is S3 on Intel's: the machine would suspend, not turn off) */
+    if(s->typa > 7 || (!s->hw_reduced && acpi.pm1b_cnt && s->typb > 7)) {
+        s->why = "\\_S5_'s SLP_TYP is out of range";
+        return -1;
+    }
+    s->ok = true;
+    return 0;
+}
+
+static void sleep_ctl_write(u8 value) {
+    if(acpi.sleep_ctl.space == 1) outb((u_short)acpi.sleep_ctl.addr, value);
+    else {
+        volatile u8 *r = (volatile u8 *)ioremap((u_long)acpi.sleep_ctl.addr, 1, false);
+        if(r) *r = value;
+    }
+}
+
+/* Interrupts off, caches written back. Not yet in ACPI mode (SCI_EN clear): the switch through SMI_CMD, waited for
+   300 ms at most. Then SLP_TYP into the PM1a and PM1b control blocks, and SLP_TYP with SLP_EN (as ACPICA does), or
+   the sleep control register's one write. The machine is off before the 3 s are up; if not, -1. */
+int acpi_s5_enter(const struct acpi_s5 *s) {
+    u16 a = 0, b = 0;
+    u_long ms;
+    if(!s->ok) return -1;
+    irq_disable();
+    asm volatile("wbinvd" ::: "memory");
+    if(s->hw_reduced) sleep_ctl_write((u8)((s->typa << 2) | SLPCTL_SLP_EN));
+    else {
+        if(!(inw(acpi.pm1a_cnt) & PM1_SCI_EN) && acpi.smi_cmd && acpi.acpi_enable) {
+            outb(acpi.smi_cmd, acpi.acpi_enable);
+            for(ms = 0; ms < 300 && !(inw(acpi.pm1a_cnt) & PM1_SCI_EN); ms++) mdelay(1);
+        }
+        a = (inw(acpi.pm1a_cnt) & ~(PM1_SLP_TYP | PM1_SLP_EN)) | (s->typa << 10);     /* 0-7: acpi_s5_find() */
+        if(acpi.pm1b_cnt) b = (inw(acpi.pm1b_cnt) & ~(PM1_SLP_TYP | PM1_SLP_EN)) | (s->typb << 10);
+        outw(acpi.pm1a_cnt, a);
+        if(acpi.pm1b_cnt) outw(acpi.pm1b_cnt, b);
+        asm volatile("wbinvd" ::: "memory");
+        outw(acpi.pm1a_cnt, a | PM1_SLP_EN);
+        if(acpi.pm1b_cnt) outw(acpi.pm1b_cnt, b | PM1_SLP_EN);
+    }
+    for(ms = 0; ms < 3000; ms++) mdelay(1);
+    return -1;
+}
+
+void acpi_s5_print(const struct acpi_s5 *s) {
+    if(!s->ok) {
+        printf("    soft off (ACPI S5): not possible, %s\n", s->why);
+        return;
+    }
+    if(s->hw_reduced) {
+        printf("    soft off (ACPI S5): SLP_TYP %u from \\_S5_, into the sleep control register (%s 0x%llx)\n", s->typa,
+               acpi.sleep_ctl.space ? "port" : "memory", acpi.sleep_ctl.addr);
+        return;
+    }
+    printf("    soft off (ACPI S5): SLP_TYPa %u and SLP_TYPb %u from \\_S5_, into PM1a at port 0x%x", s->typa,
+           s->typb, acpi.pm1a_cnt);
+    if(acpi.pm1b_cnt) printf(" and PM1b at port 0x%x", acpi.pm1b_cnt);
+    else printf(" (no PM1b)");
+    printf("\n    ACPI mode: %s\n", (inw(acpi.pm1a_cnt) & PM1_SCI_EN) ? "on already" :
+           acpi.smi_cmd ? "off, switched on first (SMI_CMD)" : "off, and the FADT names no way to switch it on");
+    if(!(inw(acpi.pm1a_cnt) & PM1_SCI_EN) && acpi.smi_cmd)
+        printf("    SMI_CMD port 0x%x, value 0x%02x\n", acpi.smi_cmd, acpi.acpi_enable);
 }
