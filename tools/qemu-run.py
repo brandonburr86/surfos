@@ -1541,8 +1541,12 @@ class Qemu:
     def send(self, text):
         self.ser.sendall(text.encode())
 
-    def text(self):
-        t = self.transcript.decode(errors='replace').replace('\r', '')
+    def text(self, skip=()):
+        """the transcript as text; 10/25/26: without the byte ranges in skip (boot_expect()'s look at dmesg)"""
+        t = self.transcript
+        for a, b in sorted(skip, reverse=True):
+            t = t[:a] + t[b:]
+        t = t.decode(errors='replace').replace('\r', '')
         return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', t)
 
     # --- monitor --------------------------------------------------------
@@ -5165,6 +5169,29 @@ def fill_ports(line, ports):
     return re.sub(r'\{(\w+)\}', lambda m: str(ports[m.group(1)]) if m.group(1) in ports else m.group(0), line)
 
 
+def boot_expect(q, text, timeout):
+    """10/25/26: text in a boot's serial output; a kernel message from the network manager (+NET:) not seen there whole
+    is looked for in the kernel log (dmesg) instead. kprintf puts a message out a character at a time with no lock, and
+    surfsh's banner, printed at about the same moment, can cut it in two on the console (the banner race: the line is
+    missed, every later step of that boot runs without waiting, and the boots after it fail too); the kernel log holds
+    it whole. The cursor stays where it was, so what follows is looked for from there as before, and the strings that
+    must not appear are looked for without dmesg's output (q.dmesg_spans): the kernel log has lines the console never
+    showed (the keeper's repeated tries)"""
+    if q.expect(text, timeout):
+        return True
+    if not (isinstance(text, str) and text.startswith('+NET:')) or not q.alive():
+        return False
+    cursor = q.cursor
+    q.cursor = start = len(q.transcript)
+    q.send('dmesg\n')
+    found = q.expect(PROMPT, 30) and text.encode() in q.transcript[start:]
+    q.__dict__.setdefault('dmesg_spans', []).append((start, len(q.transcript)))
+    q.cursor = cursor
+    if found:
+        print(f'\n(boot: "{text[:50]}..." was cut on the console; whole in dmesg)')
+    return found
+
+
 def boot_step(reboot, entry, timeout):
     """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
@@ -5177,7 +5204,7 @@ def boot_step(reboot, entry, timeout):
         print(f'{cmd}: {e}')
         return (cmd, False)
     try:
-        ok = all(q2.expect(e, timeout) for e in expects)
+        ok = all(boot_expect(q2, e, timeout) for e in expects)
         for line, exp in follow:
             if exp is CHECK:                                 # 10/9/26: a check of its own (BOOT_CHECKS)
                 ok = BOOT_CHECKS[line](q2) and ok
@@ -5199,7 +5226,7 @@ def boot_step(reboot, entry, timeout):
                 continue
             ok = ok and q2.expect(PROMPT, 10)
         q2.pump(0.5)
-        text = q2.text()
+        text = q2.text(getattr(q2, 'dmesg_spans', ()))
         ok = ok and not any(a in text for a in absent) and not any(bad in text for bad in BAD) and q2.alive()
         if not ok:
             print(f'\n---- {cmd}: serial transcript (tail) ----\n' + tail(text, 25))
