@@ -178,14 +178,30 @@ MUTANTS = [
      "(void)0;                                /* the depth buffer belonged", "model"),
 ]
 
-# mutants that change nothing a test can see, by a proof in docs/GPU.md: their test must pass
+# mutants that change nothing a test can see, by a proof in docs/GPU.md: their test must pass.
+# The common step (16.4): at a covered pixel's centre c, V = 2^20 P(c) - ex (cx - X0) - ey (cy - Y0)
+# with 0 <= ex, ey < 1 (the gradients' floors) and |cx - X0|, |cy - Y0| <= 65,535 (c lies in the
+# closed triangle, so within the vertices' 16-bit range), so |V - 2^20 P(c)| < 2^17 = 2^20 / 8; and
+# P(c), the exact plane, lies between the smallest and the largest vertex value (c is in the closed
+# triangle). So t = floor((V + 2^19) / 2^20) is in [vmin, vmax] (2^19 - 2^17 > 0, 2^19 + 2^17 < 2^20),
+# and a clamp to [vmin, vmax] returns t unchanged: at a covered pixel it never acts.
 EQUIVALENT = [
-    # 16.4: a covered pixel's value is within 1/8 of the exact plane, so rounding lands inside the
-    # vertices' range and the clamp never changes it
+    # zround's clamp only acts when t is outside [zmin, zmax], the vertices' depths. A lane's zval
+    # reaches VRAM only as a depth word of a passing lane (zbe0/zbe1 are built from pass) and the
+    # depth test only for a covered lane (pass = cov && zok); at a covered lane the true V fits the
+    # 37 bits (16.4's widths), t is in [zmin, zmax] by the common step, so zval is t either way. No
+    # input changes a depth word written or a depth test's outcome.
     ("tri-depth-clamp-removed", TRI,
      "zround = (t < $signed({2'b00, lo})) ? lo : (t > $signed({2'b00, hi})) ? hi : t[15:0];", "zround = t[15:0];", "gpu"),
+    # cround's likewise with [cmin, cmax]: cval reaches VRAM only in a passing lane's byte (m_be is
+    # pass), with GOURAUD only (without it cval is the header's colour); at a covered lane the true V
+    # fits the 29 bits and t is in [cmin, cmax]. No input changes a pixel written.
     ("tri-colour-clamp-removed", TRI,
      "cround = (t < $signed({2'b00, lo})) ? lo : (t > $signed({2'b00, hi})) ? hi : t[7:0];", "cround = t[7:0];", "gpu"),
+    # The model calls gpu_plane_value only for covered pixels (gpu_engine_triangle skips a lane
+    # whose cov is 0) and computes V exactly (128 bits), so t is in [vmin, vmax] by the common step
+    # and c = t with or without the clamp; its count tri_clamped (c != t), which the tests require
+    # to be 0, is the same claim checked on 27.6 million random pixels.
     ("model-clamp-removed", MODEL, "const int64_t c = t < p->vmin ? p->vmin : t > p->vmax ? p->vmax : t;",
      "const int64_t c = t;", "model"),
 ]
