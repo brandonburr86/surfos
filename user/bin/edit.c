@@ -37,6 +37,17 @@ ends with a line end. The terminal is used only through ttyctl(TTY_RAW),
 ttyctl(TTY_GETSIZE), the key sequences of raw mode and the ANSI subset that
 include/surfos/tty.h lists, so the editor works on the screen and over the
 serial line alike. Each refresh rewrites only the rows that changed.
+
+10/25/26 (track A, A9): ^Z undoes the last change and ^Y does it again. A run of typing,
+of Backspace or of Delete is one change (it ends when the cursor goes elsewhere or another
+key changes the text), and so are a run of ^K, a paste and an Enter; the last 1,000 changes
+are kept, a save keeps them too, and the text as it was saved counts as unmodified again
+when undo or redo comes back to it. UTF-8 is text: a character is one cell, drawn as it is
+where the console draws UTF-8 (TTY_CAP_UTF8) and as '?' elsewhere, and the arrows,
+Backspace and Delete take a whole character; a byte that is not UTF-8 is a '?' of its own.
+The rows of the screen are kept at 4 bytes a cell. The help line has no room for ^Z and ^Y.
+edit draws on the alternate screen (TTY_CAP_ALTSCREEN, A8) and gives the shell's screen back
+when it ends; a terminal without one is left clear, as before.
 */
 
 #include <stdio.h>
@@ -78,12 +89,17 @@ static int no_rename;           /* rename said ENOSYS once: write in place from 
 static int unsure;              /* a rename may have half happened: the file and its .tmp may share their clusters */
 static char copied[PATH_MAX];   /* since then: the last copy of the text beside the file */
 static unsigned changes, copied_changes;    /* edits so far, and when that copy was made */
+static unsigned saved_serial;   /* 10/25/26: the text as it was saved, as undo numbers the texts (below) */
+static int open_change;         /* the last change undo keeps takes the next edit (below) */
+static unsigned serial_now(void);
 
 static int cy, cx;              /* cursor: line, byte in the line */
 static int want_col = -1;       /* the screen column up and down aim for */
 static int top;                 /* first line on the screen */
 static int left, left_line = -1;    /* first column shown of the cursor's line, and that line */
 static int rows, cols, text_rows;
+static int utf8;                /* 10/25/26: the console draws UTF-8 (TTY_CAPS) */
+#define ROW_BYTES (4 * cols + 1)    /* a row of the screen as kept: 4 bytes a cell (UTF-8) and its end */
 
 static char msg[200];           /* for the status line until the next key */
 static const char *prompt_label;    /* while asking: the question and the answer so far */
@@ -133,8 +149,8 @@ static void move_to(int row, int col) {         /* 0-based */
 
 static int raw_mode;
 
-static void restore_terminal(void) {
-    static const char bye[] = "\x1b[0m\x1b[2J\x1b[H\x1b[?25h";
+static void restore_terminal(void) {   /* 10/25/26: the alternate screen cleared, then left */
+    static const char bye[] = "\x1b[0m\x1b[2J\x1b[H\x1b[?25h\x1b[?1049l";
     if(!raw_mode) return;
     raw_mode = 0;
     write(1, bye, sizeof(bye) - 1);
@@ -266,17 +282,63 @@ static void delete_line(int at) {
     nlines--;
 }
 
-/* the screen column where byte i of line l starts */
+/* 10/25/26 (A9): the bytes of the UTF-8 character at s (n bytes there); 1 for ASCII and for a byte that does not
+   start one */
+static int utf8_len(const unsigned char *s, int n) {
+    int len, k;
+    if(n < 2 || s[0] < 0xC2 || s[0] > 0xF4) return 1;
+    len = s[0] < 0xE0 ? 2 : s[0] < 0xF0 ? 3 : 4;
+    if(len > n) return 1;
+    for(k = 1; k < len; k++)
+        if((s[k] & 0xC0) != 0x80) return 1;
+    if((s[0] == 0xE0 && s[1] < 0xA0) || (s[0] == 0xED && s[1] >= 0xA0) ||   /* too long a form; a surrogate */
+       (s[0] == 0xF0 && s[1] < 0x90) || (s[0] == 0xF4 && s[1] >= 0x90)) return 1;   /* too long; past U+10FFFF */
+    return len;
+}
+
+/* the bytes of the character at byte i of l */
+static int char_len(const struct line *l, int i) {
+    return utf8_len((const unsigned char *)l->s + i, l->len - i);
+}
+
+/* where the character before byte i (> 0) of l starts */
+static int char_before(const struct line *l, int i) {
+    int k = i - 1, n = 0;
+    while(k > 0 && n < 3 && ((unsigned char)l->s[k] & 0xC0) == 0x80) {
+        k--;
+        n++;
+    }
+    return k + char_len(l, k) == i ? k : i - 1;
+}
+
+/* how many bytes of the string s its first max cells take; *cells: how many cells that is */
+static int cells_bytes(const char *s, int max, int *cells) {
+    int k = 0, c = 0, n = (int)strlen(s);
+    while(k < n && c < max) {
+        k += utf8_len((const unsigned char *)s + k, n - k);
+        c++;
+    }
+    if(cells) *cells = c;
+    return k;
+}
+
+static int cells_of(const char *s) {
+    int c;
+    cells_bytes(s, 1 << 30, &c);
+    return c;
+}
+
+/* the screen column where byte i of line l starts (10/25/26: a UTF-8 character is one cell) */
 static int col_of(const struct line *l, int i) {
     int k, col = 0;
-    for(k = 0; k < i && k < l->len; k++) col = l->s[k] == '\t' ? (col / TAB + 1) * TAB : col + 1;
+    for(k = 0; k < i && k < l->len; k += char_len(l, k)) col = l->s[k] == '\t' ? (col / TAB + 1) * TAB : col + 1;
     return col;
 }
 
-/* the byte whose cell covers screen column col (or the end of the line) */
+/* the byte where the character whose cell covers screen column col starts (or the end of the line) */
 static int index_of(const struct line *l, int col) {
     int k, c = 0;
-    for(k = 0; k < l->len; k++) {
+    for(k = 0; k < l->len; k += char_len(l, k)) {
         int next = l->s[k] == '\t' ? (c / TAB + 1) * TAB : c + 1;
         if(next > col) return k;
         c = next;
@@ -483,6 +545,8 @@ static int save(void) {
     if(write_file(filename, O_TRUNC, NULL) < 0) { e = errno; goto fail; }
 done:
     modified = 0;
+    saved_serial = serial_now();                /* 10/25/26: undo back to here is the saved text again */
+    open_change = 0;                            /* and typing on starts a change of its own */
     snprintf(msg, sizeof(msg), "Wrote %d line%s", text_lines(), text_lines() == 1 ? "" : "s");
     return 0;
 fail:                                           /* the reason first: a long name is cut off at the right */
@@ -505,39 +569,46 @@ static unsigned char *shadow_inv;
 static int shadow_ok;
 
 static void draw_row(int row, const char *text, int inverse) {
-    char *old = shadow + row * (cols + 1);
-    int len = (int)strlen(text), width = row == rows - 1 ? cols - 1 : cols;    /* never the last cell: no scrolling */
-    if(len > width) len = width;
+    char *old = shadow + row * ROW_BYTES;
+    int used, width = row == rows - 1 ? cols - 1 : cols;    /* never the last cell: no scrolling */
+    int len = cells_bytes(text, width, &used);              /* 10/25/26: cells, not bytes (UTF-8) */
     if(shadow_ok && shadow_inv[row] == inverse && (int)strlen(old) == len && !memcmp(old, text, (size_t)len)) return;
     move_to(row, 0);
     if(inverse) {                                       /* a bar across the screen */
         int k;
         out_str("\x1b[7m");
         out_add(text, (size_t)len);
-        for(k = len; k < width; k++) out_add(" ", 1);
+        for(k = used; k < width; k++) out_add(" ", 1);
         out_str("\x1b[0m");
     } else {
         out_add(text, (size_t)len);
-        if(len < width) out_str("\x1b[K");
+        if(used < width) out_str("\x1b[K");
     }
     memcpy(old, text, (size_t)len);
     old[len] = 0;
     shadow_inv[row] = (unsigned char)inverse;
 }
 
-/* the cells of line l from screen column from on; '>' in the last one when it goes on */
+/* the cells of line l from screen column from on; '>' in the last one when it goes on. 10/25/26: a UTF-8 character
+   as its bytes where the console draws them, '?' where not, as for a control character, a C1 control (U+0080 to
+   U+009F, which the console never draws) and a byte that is not UTF-8; dst holds 4 bytes a cell */
 static void render_line(const struct line *l, char *dst, int from) {
-    int k, col = 0, n = 0, width = cols - 1;
-    for(k = 0; k < l->len && col < from + width; k++) {
+    int k, col = 0, n = 0, len, used = 0, width = cols - 1;
+    for(k = 0; k < l->len && col < from + width; k += len) {
         unsigned char c = (unsigned char)l->s[k];
         int next = c == '\t' ? (col / TAB + 1) * TAB : col + 1;
+        len = char_len(l, k);
         for(; col < next; col++) {
             if(col < from || col >= from + width) continue;
-            dst[n++] = c == '\t' ? ' ' : (c >= 32 && c < 127) ? (char)c : '?';
+            if(len > 1 && utf8 && !(c == 0xC2 && (unsigned char)l->s[k + 1] < 0xA0)) {
+                memcpy(dst + n, l->s + k, (size_t)len);
+                n += len;
+            } else dst[n++] = c == '\t' ? ' ' : (c >= 32 && c < 127) ? (char)c : '?';
+            used++;
         }
     }
     if(k < l->len || col > from + width) {      /* more to the right */
-        while(n < width) dst[n++] = ' ';
+        while(used++ < width) dst[n++] = ' ';
         dst[n++] = '>';
     }
     while(n > 0 && dst[n - 1] == ' ') n--;      /* trailing blanks are what ESC[K leaves anyway */
@@ -554,17 +625,17 @@ static void scroll_into_view(void) {
 }
 
 static void refresh(void) {
-    char *row = malloc((size_t)cols + 2), info[64];
-    int r, n, crow, ccol;
+    char *row = malloc((size_t)ROW_BYTES + 1), info[64];
+    int r, n, c, crow, ccol;
     if(!row) return;
     scroll_into_view();
     out_str("\x1b[?25l");
     if(!shadow_ok) out_str("\x1b[0m\x1b[2J");
 
-    n = snprintf(row, (size_t)cols + 1, " SurfOS edit  %s%s", filename, crlf ? "  (CRLF)" : "");
+    snprintf(row, (size_t)ROW_BYTES, " SurfOS edit  %s%s", filename, crlf ? "  (CRLF)" : "");
     if(modified) {                                      /* "Modified" at the right, over a long name if need be */
-        if(n > cols - 10) n = cols - 10;
-        while(n < cols - 10) row[n++] = ' ';
+        n = cells_bytes(row, cols - 10, &c);
+        while(c++ < cols - 10) row[n++] = ' ';
         strcpy(row + n, "Modified");
     }
     draw_row(0, row, 1);
@@ -576,25 +647,26 @@ static void refresh(void) {
     }
 
     if(prompt_label) {
-        snprintf(row, (size_t)cols + 1, "%s%s", prompt_label, prompt_buf);
+        snprintf(row, (size_t)ROW_BYTES, "%s%s", prompt_label, prompt_buf);
         draw_row(rows - 2, row, 0);
     } else {
         snprintf(info, sizeof(info), "Ln %d/%d  Col %d", cy + 1, nlines, col_of(&lines[cy], cx) + 1);
-        n = snprintf(row, (size_t)cols + 1, " %s", msg);
-        if(n > cols) n = cols;
-        if(n + (int)strlen(info) + 2 <= cols - 1) {
-            while(n < cols - 1 - (int)strlen(info)) row[n++] = ' ';
+        snprintf(row, (size_t)ROW_BYTES, " %s", msg);
+        n = cells_bytes(row, cols, &c);
+        row[n] = 0;
+        if(c + (int)strlen(info) + 2 <= cols - 1) {
+            while(c++ < cols - 1 - (int)strlen(info)) row[n++] = ' ';
             strcpy(row + n, info);
         }
         draw_row(rows - 2, row, 0);
     }
-    snprintf(row, (size_t)cols + 1, "%s", unsure ? UNSURE : HELP);
+    snprintf(row, (size_t)ROW_BYTES, "%s", unsure ? UNSURE : HELP);
     draw_row(rows - 1, row, unsure);
     shadow_ok = 1;
 
     if(prompt_label) {
         crow = rows - 2;
-        ccol = (int)(strlen(prompt_label) + strlen(prompt_buf));
+        ccol = cells_of(prompt_label) + cells_of(prompt_buf);
         if(ccol > cols - 1) ccol = cols - 1;
     } else {
         crow = 1 + cy - top;
@@ -606,26 +678,229 @@ static void refresh(void) {
     free(row);
 }
 
-/**** editing ****/
+/**** the text's changes, and undoing them (10/25/26, track A, A9) ****/
+
+/* Every change of the text is one of these, kept with what it took or gave, so that it can be undone and done again:
+   bytes into a line or out of it, a line split in two or two joined, a whole line in or out (a paste, ^K) */
+enum { OP_INS, OP_DEL, OP_SPLIT, OP_JOIN, OP_LINE_INS, OP_LINE_DEL };
+
+struct op {
+    int kind, y, x;             /* the line and the byte (OP_JOIN: where the second line begins in the first) */
+    char *s;                    /* the bytes put in or taken out */
+    int n;
+};
+
+struct change {                 /* what ^Z undoes: the ops of a key or a run of keys */
+    struct op *ops;
+    int nops, cap;
+    int y0, x0, y1, x1;         /* the cursor before and after */
+    unsigned serial;            /* the text after it, as a number: the saved text is saved_serial */
+};
+
+#define UNDO_MAX 1000
+
+enum { K_NONE, K_TYPE, K_BACK, K_DEL, K_CUT, K_OTHER };    /* the change a key makes: runs of the same go together */
+
+static struct change undos[UNDO_MAX], redos[UNDO_MAX];
+static int nundo, nredo;
+static int open_kind;           /* the kind of key the open change holds */
+static int key_kind, key_changed;   /* the key being handled: its kind; it changed the text */
+static unsigned serials;
+
+static unsigned serial_now(void) {
+    return nundo ? undos[nundo - 1].serial : 0;
+}
+
+static void free_change(struct change *c) {
+    int i;
+    for(i = 0; i < c->nops; i++) free(c->ops[i].s);
+    free(c->ops);
+    memset(c, 0, sizeof(*c));
+}
+
+static void forget_history(void) {
+    while(nundo) free_change(&undos[--nundo]);
+    while(nredo) free_change(&redos[--nredo]);
+    open_change = 0;
+}
 
 static void set_modified(void) {
     modified = 1;
     changes++;
 }
 
+/* an op of the key being handled, with its bytes: into the open change, joined to its last op when it goes on from
+   it (typing at its end, Backspace before it, Delete where it was), or into a new change; when memory runs out, the
+   history is forgotten rather than kept with a gap */
+static void record(int kind, int y, int x, const char *s, int n) {
+    struct change *c;
+    struct op *last;
+    char *p;
+    if(!open_change) {
+        while(nredo) free_change(&redos[--nredo]);      /* a new change: what was undone cannot be done again */
+        if(nundo == UNDO_MAX) {
+            free_change(&undos[0]);
+            memmove(undos, undos + 1, (UNDO_MAX - 1) * sizeof(struct change));
+            nundo--;
+            memset(&undos[nundo], 0, sizeof(struct change));
+        }
+        c = &undos[nundo++];
+        memset(c, 0, sizeof(*c));
+        c->y0 = cy;
+        c->x0 = cx;
+        c->serial = ++serials;
+        open_change = 1;
+        open_kind = key_kind;
+    }
+    c = &undos[nundo - 1];
+    key_changed = 1;
+    last = c->nops ? &c->ops[c->nops - 1] : NULL;
+    if(last && last->y == y && n > 0 &&
+       ((kind == OP_INS && last->kind == OP_INS && last->x + last->n == x) ||
+        (kind == OP_DEL && last->kind == OP_DEL && (x + n == last->x || x == last->x)))) {
+        p = realloc(last->s, (size_t)(last->n + n));
+        if(!p) goto out_of_memory;
+        if(kind == OP_DEL && x + n == last->x) {        /* Backspace: before what it took */
+            memmove(p + n, p, (size_t)last->n);
+            memcpy(p, s, (size_t)n);
+            last->x = x;
+        } else memcpy(p + last->n, s, (size_t)n);
+        last->s = p;
+        last->n += n;
+        return;
+    }
+    if(c->nops == c->cap) {
+        int cap = c->cap ? c->cap * 2 : 4;
+        struct op *o = realloc(c->ops, (size_t)cap * sizeof(struct op));
+        if(!o) goto out_of_memory;
+        c->ops = o;
+        c->cap = cap;
+    }
+    p = n > 0 ? malloc((size_t)n) : NULL;
+    if(n > 0 && !p) goto out_of_memory;
+    if(n > 0) memcpy(p, s, (size_t)n);
+    c->ops[c->nops].kind = kind;
+    c->ops[c->nops].y = y;
+    c->ops[c->nops].x = x;
+    c->ops[c->nops].s = p;
+    c->ops[c->nops++].n = n;
+    return;
+out_of_memory:
+    forget_history();
+    snprintf(msg, sizeof(msg), "Out of memory: what ^Z could undo is forgotten");
+}
+
+/* the text itself, changed and nothing recorded; -1 without memory */
+static int text_insert(int y, int x, const char *s, int n) {
+    struct line *l = &lines[y];
+    if(line_room(l, l->len + n)) return -1;
+    memmove(l->s + x + n, l->s + x, (size_t)(l->len - x));
+    memcpy(l->s + x, s, (size_t)n);
+    l->len += n;
+    return 0;
+}
+
+static void text_delete(int y, int x, int n) {
+    struct line *l = &lines[y];
+    memmove(l->s + x, l->s + x + n, (size_t)(l->len - x - n));
+    l->len -= n;
+}
+
+static int text_split(int y, int x) {
+    if(insert_line(y + 1, lines[y].s + x, lines[y].len - x)) return -1;
+    lines[y].len = x;
+    return 0;
+}
+
+static int text_join(int y) {
+    struct line *a = &lines[y], *b = &lines[y + 1];
+    if(line_room(a, a->len + b->len)) return -1;
+    memcpy(a->s + a->len, b->s, (size_t)b->len);
+    a->len += b->len;
+    delete_line(y + 1);
+    return 0;
+}
+
+/* an op done again (undo 0) or undone (undo 1) */
+static int replay(const struct op *o, int undo) {
+    switch(o->kind) {
+    case OP_INS: if(!undo) return text_insert(o->y, o->x, o->s, o->n); text_delete(o->y, o->x, o->n); return 0;
+    case OP_DEL: if(undo) return text_insert(o->y, o->x, o->s, o->n); text_delete(o->y, o->x, o->n); return 0;
+    case OP_SPLIT: return undo ? text_join(o->y) : text_split(o->y, o->x);
+    case OP_JOIN: return undo ? text_split(o->y, o->x) : text_join(o->y);
+    case OP_LINE_INS: if(!undo) return insert_line(o->y, o->s, o->n); delete_line(o->y); return 0;
+    case OP_LINE_DEL: if(undo) return insert_line(o->y, o->s, o->n); delete_line(o->y); return 0;
+    }
+    return 0;
+}
+
+/* ^Z (undo 1) and ^Y (undo 0) */
+static void undo_redo(int undo) {
+    struct change c;
+    int i, failed = 0;
+    if(undo ? !nundo : !nredo) {
+        snprintf(msg, sizeof(msg), undo ? "Nothing to undo" : "Nothing to redo (^Y does again what ^Z undid)");
+        return;
+    }
+    if(undo) {
+        c = undos[--nundo];
+        memset(&undos[nundo], 0, sizeof(c));
+    } else {
+        c = redos[--nredo];
+        memset(&redos[nredo], 0, sizeof(c));
+    }
+    for(i = 0; i < c.nops && !failed; i++)
+        failed = replay(&c.ops[undo ? c.nops - 1 - i : i], undo) < 0;
+    if(failed) {                                /* the text is no longer what the history says */
+        free_change(&c);
+        forget_history();
+        snprintf(msg, sizeof(msg), "Out of memory: what ^Z could undo is forgotten");
+        set_modified();
+        return;
+    }
+    if(undo) redos[nredo++] = c;
+    else undos[nundo++] = c;
+    cy = undo ? c.y0 : c.y1;
+    cx = undo ? c.x0 : c.x1;
+    if(cy >= nlines) cy = nlines - 1;
+    if(cx > lines[cy].len) cx = lines[cy].len;
+    open_change = 0;
+    changes++;                                  /* the text is another (a copy beside the file is not it) */
+    modified = serial_now() != saved_serial;
+    snprintf(msg, sizeof(msg), "%s (%d more to undo, %d to redo)", undo ? "Undone" : "Done again", nundo, nredo);
+}
+
+/* before a key: does what it changes go with the change before (a run of the same keys, the cursor where that
+   one left it)? */
+static void key_begins(int kind) {
+    key_kind = kind;
+    key_changed = 0;
+    if(!(open_change && kind != K_NONE && kind != K_OTHER && kind == open_kind && nundo &&
+         cy == undos[nundo - 1].y1 && cx == undos[nundo - 1].x1)) open_change = 0;
+}
+
+/* after it: where the cursor ended, for the next key and for ^Y */
+static void key_ends(void) {
+    if(key_changed && nundo) {
+        undos[nundo - 1].y1 = cy;
+        undos[nundo - 1].x1 = cx;
+    }
+    if(key_kind == K_OTHER) open_change = 0;    /* an Enter, a paste: a change of its own */
+}
+
+/**** editing ****/
+
 static void insert_char(int c) {
-    struct line *l = &lines[cy];
-    if(line_room(l, l->len + 1)) return;
-    memmove(l->s + cx + 1, l->s + cx, (size_t)(l->len - cx));
-    l->s[cx++] = (char)c;
-    l->len++;
+    char ch = (char)c;
+    if(text_insert(cy, cx, &ch, 1)) return;
+    record(OP_INS, cy, cx, &ch, 1);
+    cx++;
     set_modified();
 }
 
 static void enter(void) {
-    struct line *l = &lines[cy];
-    if(insert_line(cy + 1, l->s + cx, l->len - cx)) return;
-    lines[cy].len = cx;
+    if(text_split(cy, cx)) return;
+    record(OP_SPLIT, cy, cx, NULL, 0);
     cy++;
     cx = 0;
     set_modified();
@@ -633,20 +908,18 @@ static void enter(void) {
 
 /* line y gets line y + 1 appended */
 static void join(int y) {
-    struct line *a = &lines[y], *b = &lines[y + 1];
-    if(line_room(a, a->len + b->len)) return;
-    memcpy(a->s + a->len, b->s, (size_t)b->len);
-    a->len += b->len;
-    delete_line(y + 1);
+    int at = lines[y].len;
+    if(text_join(y)) return;
+    record(OP_JOIN, y, at, NULL, 0);
     set_modified();
 }
 
 static void backspace(void) {
-    if(cx > 0) {
-        struct line *l = &lines[cy];
-        memmove(l->s + cx - 1, l->s + cx, (size_t)(l->len - cx));
-        l->len--;
-        cx--;
+    if(cx > 0) {                                /* 10/25/26: a whole character */
+        int from = char_before(&lines[cy], cx);
+        record(OP_DEL, cy, from, lines[cy].s + from, cx - from);
+        text_delete(cy, from, cx - from);
+        cx = from;
         set_modified();
     } else if(cy > 0) {
         int at = lines[cy - 1].len;
@@ -658,8 +931,9 @@ static void backspace(void) {
 static void delete_char(void) {
     struct line *l = &lines[cy];
     if(cx < l->len) {
-        memmove(l->s + cx, l->s + cx + 1, (size_t)(l->len - cx - 1));
-        l->len--;
+        int n = char_len(l, cx);
+        record(OP_DEL, cy, cx, l->s + cx, n);
+        text_delete(cy, cx, n);
         set_modified();
     } else if(cy < nlines - 1) {
         join(cy);
@@ -683,8 +957,13 @@ static void cut_line(void) {
     memcpy(cut[ncut].s, l->s, (size_t)l->len);
     cut[ncut].len = cut[ncut].cap = l->len;
     ncut++;
-    if(nlines > 1) delete_line(cy);
-    else lines[0].len = 0;
+    if(nlines > 1) {
+        record(OP_LINE_DEL, cy, 0, l->s, l->len);
+        delete_line(cy);
+    } else {                                    /* the only line: emptied */
+        record(OP_DEL, 0, 0, l->s, l->len);
+        lines[0].len = 0;
+    }
     if(cy >= nlines) cy = nlines - 1;
     cx = 0;
     set_modified();
@@ -696,6 +975,7 @@ static void paste(void) {
     if(!ncut) { snprintf(msg, sizeof(msg), "Nothing cut yet (^K cuts a line)"); return; }
     for(i = 0; i < ncut; i++) {
         if(insert_line(cy, cut[i].s, cut[i].len)) break;
+        record(OP_LINE_INS, cy, 0, cut[i].s, cut[i].len);
         cy++;
     }
     cx = 0;
@@ -715,8 +995,13 @@ static int ask(const char *label) {
         k = get_key();
         if(k == '\r' || k == '\n') break;
         if(k == CTRL('c') || k == KEY_ESC || k == KEY_EOF) { prompt_label = NULL; snprintf(msg, sizeof(msg), "Cancelled"); return 0; }
-        if((k == 0x7f || k == 0x08) && n > 0) prompt_buf[--n] = 0;
-        else if(k >= 32 && k < 127 && n < (int)sizeof(prompt_buf) - 1) { prompt_buf[n++] = (char)k; prompt_buf[n] = 0; }
+        if((k == 0x7f || k == 0x08) && n > 0) {         /* 10/25/26: a whole UTF-8 character */
+            do n--; while(n > 0 && ((unsigned char)prompt_buf[n] & 0xC0) == 0x80);
+            prompt_buf[n] = 0;
+        } else if(k >= 32 && k < 0x100 && k != 0x7f && n < (int)sizeof(prompt_buf) - 1) {
+            prompt_buf[n++] = (char)k;
+            prompt_buf[n] = 0;
+        }
     }
     prompt_label = NULL;
     return 1;
@@ -803,17 +1088,20 @@ static void vertical(int dy) {
 
 static int handle(int k) {
     int keep_col = 0, was_cut = 0;
+    key_begins(k == 0x7f || k == 0x08 ? K_BACK : k == KEY_DEL ? K_DEL : k == CTRL('k') ? K_CUT :
+               k == '\r' || k == '\n' || k == CTRL('u') ? K_OTHER :
+               k == '\t' || (k >= 32 && k < 0x100 && k != 0x7f) ? K_TYPE : K_NONE);
     switch(k) {
     case KEY_UP:    vertical(-1); keep_col = 1; break;
     case KEY_DOWN:  vertical(1); keep_col = 1; break;
     case KEY_PGUP:  vertical(-(text_rows > 1 ? text_rows - 1 : 1)); keep_col = 1; break;
     case KEY_PGDN:  vertical(text_rows > 1 ? text_rows - 1 : 1); keep_col = 1; break;
-    case KEY_LEFT:
-        if(cx > 0) cx--;
+    case KEY_LEFT:                                      /* 10/25/26: a whole UTF-8 character */
+        if(cx > 0) cx = char_before(&lines[cy], cx);
         else if(cy > 0) { cy--; cx = lines[cy].len; }
         break;
     case KEY_RIGHT:
-        if(cx < lines[cy].len) cx++;
+        if(cx < lines[cy].len) cx += char_len(&lines[cy], cx);
         else if(cy < nlines - 1) { cy++; cx = 0; }
         break;
     case KEY_HOME:  cx = 0; break;
@@ -829,6 +1117,8 @@ static int handle(int k) {
     case CTRL('k'): cut_line(); was_cut = 1; break;
     case CTRL('u'): paste(); break;
     case CTRL('g'): go_to_line(); break;
+    case CTRL('z'): undo_redo(1); break;               /* 10/25/26 (A9) */
+    case CTRL('y'): undo_redo(0); break;
     case CTRL('c'):
         snprintf(msg, sizeof(msg), "Line %d of %d, column %d", cy + 1, nlines, col_of(&lines[cy], cx) + 1);
         break;
@@ -841,6 +1131,7 @@ static int handle(int k) {
     }
     if(!keep_col) want_col = -1;
     cutting = was_cut;
+    key_ends();
     return 0;
 }
 
@@ -855,16 +1146,19 @@ int main(int argc, char **argv) {
     }
     look_beside();
     screen_size();
+    r = ttyctl(TTY_CAPS, 0);                    /* 10/25/26: UTF-8 drawn as it is where the console draws it */
+    utf8 = r > 0 && (r & TTY_CAP_UTF8);
     r = ttyctl(TTY_RAW, 1);
     if(r < 0) {
         fprintf(stderr, "edit: the console has no raw mode (%s)\n", strerror(errno));
         return 1;
     }
     raw_mode = 1;
+    write(1, "\x1b[?1049h", 8);            /* 10/25/26 (A9): the alternate screen; the first refresh clears it */
     atexit(restore_terminal);               /* every way out goes through exit() */
     for(;;) {
         if(!shadow) {
-            shadow = calloc((size_t)rows, (size_t)cols + 1);
+            shadow = calloc((size_t)rows, (size_t)ROW_BYTES);
             shadow_inv = calloc((size_t)rows, 1);
             if(!shadow || !shadow_inv) {
                 free(shadow);

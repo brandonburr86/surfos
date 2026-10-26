@@ -16,9 +16,11 @@ void ed_start(const char *name) {
     cy = cx = 0;
     msg[0] = 0;
     copied[0] = 0;
+    forget_history();                           /* 10/25/26 (A9): undo's too */
+    saved_serial = 0;
     if(!shadow) {                               /* the screen, as main makes it, for a question */
         screen_size();
-        shadow = calloc((size_t)rows, (size_t)cols + 1);
+        shadow = calloc((size_t)rows, (size_t)ROW_BYTES);
         shadow_inv = calloc((size_t)rows, 1);
     }
     shadow_ok = 0;
@@ -55,4 +57,49 @@ const char *ed_copied(void) {
 
 int ed_quit(void) {
     return quit();
+}
+
+/* 10/25/26 (track A, A9) */
+const int ed_left = KEY_LEFT, ed_right = KEY_RIGHT, ed_up = KEY_UP, ed_down = KEY_DOWN, ed_home = KEY_HOME,
+          ed_end = KEY_END, ed_del = KEY_DEL;
+
+void ed_key(int k) {
+    msg[0] = 0;
+    handle(k);
+}
+
+const char *ed_line(int y) {
+    static char buf[4096];
+    int n = y < nlines ? lines[y].len : 0;
+    if(n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+    memcpy(buf, y < nlines ? lines[y].s : "", (size_t)n);
+    buf[n] = 0;
+    return buf;
+}
+
+int ed_nlines(void) {
+    return nlines;
+}
+
+void ed_cursor(int *y, int *x) {
+    *y = cy;
+    *x = cx;
+}
+
+int ed_col(void) {
+    return col_of(&lines[cy], cx);
+}
+
+void ed_utf8(int on) {
+    utf8 = on;
+}
+
+const char *ed_render(int y, int from) {
+    static char buf[4 * 512 + 2];
+    render_line(&lines[y], buf, from);
+    return buf;
+}
+
+int ed_cells(const char *s, int max, int *cells) {
+    return cells_bytes(s, max, cells);
 }

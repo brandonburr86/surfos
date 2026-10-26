@@ -919,6 +919,17 @@ SMOKE = [
      [(b'\x1b[F!\x13', ['Wrote 2 lines']),
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
+    # 10/25/26 (track A, A9): ^Z and ^Y in edit (a run of typing is one change), and UTF-8 typed over the serial line
+    # as a terminal sends it: one character, one column, and Backspace takes all of it
+    ('run edit /hda1/UNDO.TXT', ['New file', '^S Save'],
+     [(b'one two', ['Col 8']),
+      (b'\x1a', ['Undone (0 more to undo, 1 to redo)', 'Col 1']),
+      (b'\x19', ['Done again (1 more to undo, 0 to redo)', 'Col 8']),
+      (b' caf\xc3\xa9', ['Col 13']),
+      (b'\x7f', ['Col 12']),
+      (b'\x13', ['Wrote 1 line']),
+      (b'\x11', ['exit status 0'])]),
+    ('cat /hda1/UNDO.TXT; rm /hda1/UNDO.TXT', ['one two caf\r\n']),
     # 10/6/26: surfsh, the SurfOS shell, started inside the one init runs on F1. Raw mode passes the bytes on as
     # they are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, $?, Tab for a command (the kernel's too) and a
     # path (a second Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue

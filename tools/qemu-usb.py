@@ -831,6 +831,13 @@ def scenario_keyboard(args, image, firmware, outdir):
         back = vm.wait_screen(lambda s: 'standard input' not in s.text() and prompt_on(s), 20, interval=0.5)
         results.append(('less on the framebuffer: a pipeline\'s text a screenful at a time, and q gives the shell\'s '
                         'screen back', shown is not None and shown.rows[0] == '1' and ansi_ok(back)))
+        # and edit: its screen, then ^Q (nothing typed: no question) and the shell's screen as it was
+        vm.keys('edit /nothing.txt\n')
+        shown = vm.wait_screen(lambda s: 'SurfOS edit  /nothing.txt' in s.text(), 20, interval=0.5)
+        vm.keys('<ctrl-q>')
+        back = vm.wait_screen(lambda s: 'SurfOS edit' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('edit on the framebuffer, and ^Q gives the shell\'s screen back', shown is not None and
+                        ansi_ok(back)))
         # 10/6/26: surfsh's line editor on the PS/2 keyboard, as on the laptop: Tab, Up and Enter ('\r') in raw
         # mode, in a surfsh started inside the one on F1 (its prompt is on a row below the typed command)
         def nested(s):

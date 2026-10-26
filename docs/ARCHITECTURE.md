@@ -696,7 +696,13 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   sideways and a `>` in the last column says a line goes on. Keys: the arrows, Home, End,
   PgUp, PgDn, Backspace, Delete, Tab; ^S save, ^Q quit (asking when there are unsaved
   changes), ^F find, ^K cut the line, ^U paste, ^G go to a line, ^C where the cursor is,
-  ^L redraw. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
+  ^L redraw. **10/25/26** (track A, A9): ^Z undoes and ^Y redoes the last 1,000 changes (a run
+  of typing, Backspace, Delete or ^K is one change, an Enter or a paste one alone; each is kept
+  as its operations on lines with the bytes they took or gave, and the saved text is
+  unmodified again when undo or redo comes back to it), and UTF-8 is text: a character is one
+  cell (`col_of()`, `index_of()`, `render_line()`; the screen's rows are kept at 4 bytes a
+  cell), drawn as it is where `TTY_CAPS` has UTF-8 and as `?` elsewhere, and the arrows,
+  Backspace and Delete take whole characters. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
   writes in place where a file system cannot rename), keeping the file's line ends (LF,
   or CR LF when its first line has one). Since 10/17/26 it saves as the desktop's Notepad
   does (`shell/guifs.c`): the new file is made with `O_EXCL`, as `<file>.1.tmp` and so on
