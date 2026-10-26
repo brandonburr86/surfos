@@ -24,7 +24,8 @@ dropping the depth buffer (nothing drawn, no depth written where the buffer was)
 for the blanking; four scenes draw triangles (flat, Gouraud, depth) and FLIP; then the
 cube (gpucube.c) draws 16 frames at full rate, double-buffered with FLIP, while the CPU checks the
 FRAME_CRC of every frame shown against the model's CRCs of the cube's frames (a torn frame, a
-frame missed or out of order fails), and the first and last as still pictures.
+frame missed or out of order, or one more than two video frames after the one before fails), and
+the first and last as still pictures.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)" and the LEDs (LD0 green or red).
 After a PASS the cube spins on under a result bar (MODE 3), a line a second on the UART with the
 frames drawn, shown, missed, torn and out of order; after a FAIL the result shows in the top text
@@ -606,6 +607,9 @@ struct cube_run {
     uint32_t out_of_order;                              /* frames shown that cannot follow the last one shown */
     int32_t last_frame;                                 /* the frame index of the last cube frame shown */
     uint32_t last_at;                                   /* FRAME_COUNT when it was looked at */
+    uint32_t new_frames;                                /* frames shown that were not the last one again */
+    uint32_t new_at;                                    /* FRAME_COUNT when the last of them was first shown */
+    uint32_t gap;                                       /* the most video frames between two of them */
     uint32_t seen_lo, seen_hi;                          /* frames 0..63 seen (the checked run) */
 };
 
@@ -635,8 +639,14 @@ static void cube_look(struct cube_run *c)
         return;
     }
     const uint32_t step = (uint32_t)(f - c->last_frame + (int32_t)c->ncrcs) % c->ncrcs;
-    if (step > ((count - c->last_at) & 0xFFFFu))
+    if (step > ((count - c->last_at) & 0xFFFFu)) {
         c->out_of_order++;
+    } else if (step != 0) {                             /* a new frame: the video frames since the last new one */
+        const uint32_t gap = (count - c->new_at) & 0xFFFFu;
+        if (c->new_frames++ != 0 && gap > c->gap)
+            c->gap = gap;
+        c->new_at = count;
+    }
     c->last_frame = f;
     c->last_at = count;
     if (f < 32)
@@ -657,6 +667,15 @@ static void cube_step(struct cube_run *c, uint32_t until)
     } else if (c->next < until) {
         cube_n = cube_pos = 0;
         gpu_cube_frame(&rec_sink, c->next, c->next & 1u, CUBE_FENCE + c->next + 1u);
+#ifdef GPUDIAG_TEST_SLOW
+        /* make test-gpu-soc only (build/fw/gpudiag-slow.mem): in the checks, each frame lets the next one
+         * start a blanking later, frames 5 and 9 two blankings later, so that frames 6 and 10 come three
+         * video frames after the one before and the rest two: 28 a second in all, which the rate check must
+         * fail (the review of 3fea963, L3: its first form passed it) */
+        if (until == GPU_CUBE_CHECK_FRAMES)
+            for (uint32_t n = (c->next == 5u || c->next == 9u) ? 2u : 1u; n; n--)
+                rec_cmd(GPU_HDR(GPU_OP_WAIT_VBLANK, 0));
+#endif
         c->next++;
     }
 }
@@ -673,8 +692,8 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
     const int still = wait_still();
     *crc = VREG(SURF_VIDEO_FRAME_CRC);
     c->next = 1;
-    c->last_count = c->last_at = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
-    c->shown = c->missed = c->torn = c->out_of_order = 0;
+    c->last_count = c->last_at = c->new_at = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
+    c->shown = c->missed = c->torn = c->out_of_order = c->new_frames = c->gap = 0;
     c->last_frame = 0;
     c->seen_lo = 1;
     c->seen_hi = 0;
@@ -682,7 +701,9 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
 }
 
 /* the checks: frame 0 as a still picture, frames 1 .. 15 at full rate (every frame shown one of the
- * cube's, in order, each of them shown, none missed, at least 30 a second), frame 15 as a still */
+ * cube's, in order, each of them shown, none missed, each of frames 2 .. 15 at most two video frames
+ * after the one before: 30 a second, which on a 59.94 Hz display is a frame every second video
+ * frame or sooner), frame 15 as a still */
 static void cube_check(uint32_t unused)
 {
     (void)unused;
@@ -710,10 +731,8 @@ static void cube_check(uint32_t unused)
     }
     const uint32_t video_frames = ((VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu) - frames0) & 0xFFFFu;
     const uint32_t all = (1u << GPU_CUBE_CHECK_FRAMES) - 1u;
-    diag_check(!late && video_frames <= 2u * (GPU_CUBE_CHECK_FRAMES - 1u) + 2u,
-               "frames 1 to %u shown within %u video frames%s (30 a second or more: at most %u)",
-               GPU_CUBE_CHECK_FRAMES - 1u, video_frames, late ? ", stopped after a second" : "",
-               2u * (GPU_CUBE_CHECK_FRAMES - 1u) + 2u);
+    diag_check(!late && c.gap <= 2u, "frames 2 to %u each at most 2 video frames after the one before (30 a second "
+               "or more): up to %u%s", GPU_CUBE_CHECK_FRAMES - 1u, c.gap, late ? ", stopped after a second" : "");
     diag_check(c.torn == 0, "%u of the %u frames shown were none of the cube's (torn)", c.torn, c.shown);
     diag_check(c.seen_lo == all && c.out_of_order == 0, "the frames shown: %08x (every one of 0..%u: %08x), %u out of order",
                c.seen_lo, GPU_CUBE_CHECK_FRAMES - 1u, all, c.out_of_order);
@@ -723,7 +742,7 @@ static void cube_check(uint32_t unused)
     diag_check(still && crc == gpu_cube_expect_check[GPU_CUBE_CHECK_FRAMES - 1u],
                "frame %u, a still picture: FRAME_CRC 0x%08x, the model's 0x%08x", GPU_CUBE_CHECK_FRAMES - 1u, crc,
                gpu_cube_expect_check[GPU_CUBE_CHECK_FRAMES - 1u]);
-    con_printf("(%u video frames, %u shown) ", video_frames, c.shown);
+    con_printf("(%u video frames, %u shown, %u apart at most) ", video_frames, c.shown, c.gap);
     diag_section_end();
 }
 
