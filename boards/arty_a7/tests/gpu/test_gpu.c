@@ -12,7 +12,8 @@ stays full, a stopped engine), the sticky errors said in words, cleared, ABORTed
 and clip sent again, the fence waits (interrupt and sleeps), two claimants, the frame latch rule
 of a display change, FRAME_CRC of a still picture, the palettes, the demo (never drawing into
 the page on the screen; Ctrl+C; the display, palette, target and VRAM back as they were), the
-bench, and every usage error refused before a word is sent.
+bench, and every usage error refused before a word is sent. Every line printed, in every test,
+is measured: none may pass the console's 80 columns (t_columns has each message at its widest).
 
   make -C surfcpu test-gpuos-host     (seeds 1 7 123; GPU_TEST_VERBOSE=1 prints what gfx says)
 */
@@ -40,7 +41,12 @@ static struct stub *fresh(int irq) {
     return s;
 }
 
+/* every test ends here: what it printed was measured line by line (GPU.md 15.2's 80 columns) */
 static void done(struct stub *s) {
+    const char *wide;
+    unsigned n = stub_too_wide(&wide);
+    if(n) printf("    (%u lines past 80 columns, the first: \"%s\")\n", n, wide);
+    check(!n, "every line printed fits the console's 80 columns");
     stub_free(s);
     free(s);
 }
@@ -123,7 +129,14 @@ static void t_probe(unsigned seed) {
     check(gpu_probe(&G, &s->port, FEAT & ~SURF_SYSINFO_FEATURES_VIDEO_MASK) == GPU_EABSENT, "probe: no video block, no GPU");
     s->id = 0x31555048u;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_EABSENT && strstr(G.why, "gpu.ID"), "probe: another gpu.ID is no GPU");
-    check(gfx(s, "gfx") == CMD_FAIL && said(s, "it reads 0x31555048"), "gfx names the ID it found");
+    check(gfx(s, "gfx") == CMD_FAIL && said(s, "gfx: no GPU: its gpu.ID reads 0x31555048, neither GPU1 nor GPU2"),
+          "gfx names the ID it found");
+    s->id = GPUDRV_ID_GPU1;
+    s->info = 300u << 16;
+    check(gpu_probe(&G, &s->port, FEAT) == GPU_EABSENT && gfx(s, "gfx") == CMD_FAIL &&
+          said(s, "gfx: no GPU: gpu.INFO reads 0x012c0000: no FIFO, or not 300 KiB of VRAM"),
+          "probe: an INFO without a FIFO is no GPU, with INFO's value");
+    s->info = 64u | 300u << 16;
     s->id = GPUDRV_ID_GPU2;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.present && !strcmp(gpu_id_name(G.id), "GPU2"),
           "probe: GPU2 (G4's superset) is a GPU");
@@ -131,16 +144,19 @@ static void t_probe(unsigned seed) {
           gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU2 (gpu.ID 0x32555047)"), "  and gfx draws on it with GPU1's commands");
     s->id = GPUDRV_ID_GPU1;
     a0 = s->aborts;
+    s->abort_at = s->fence_read_at = 0;
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.fifo_depth == 64 && G.vram_bytes == 307200 && G.irq,
           "probe: GPU1, a 64-word FIFO, 300 KiB, fences on the interrupt");
     check(s->ie == SURF_GPU_IE_FENCE_MASK, "probe: IE.FENCE set (and IE.ERR not)");
     check(s->eng.base == 0 && s->eng.stride == 640 && s->eng.tw == 640 && s->eng.th == 480 && s->eng.cx1 == 640 &&
           s->eng.cy1 == 480 && G.t_w == 640 && G.c_y1 == 480, "probe: the engine at the reset target and clip, as the driver knows them");
-    check(s->aborts == a0 + 1 && !(p_status(s) & 0x1E), "probe: one ABORT, the sticky bits clear");
+    check(s->aborts == a0 + 2 && !(p_status(s) & 0x1E), "probe: two ABORTs (before FENCE is read, the reset), the sticky bits clear");
+    check(s->abort_at && s->fence_read_at && s->abort_at < s->fence_read_at,
+          "probe: ABORT before FENCE is read (a FENCE a warm restart left queued cannot complete after it)");
     stub_init(s, 0);
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && !G.irq && s->ie == 0,
           "probe: a port without the interrupt: fences with sleeps, IE 0");
-    check(gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU1 (gpu.ID 0x31555047)") && said(s, "waited for with sleeps (no interrupt)"),
+    check(gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU1 (gpu.ID 0x31555047)") && said(s, "interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n"),
           "gfx says what it found");
     done(s);
 }
@@ -327,14 +343,14 @@ static void t_fifo(unsigned seed) {
     /* the engine stops: the words fit, the fence never comes */
     s->stopped = 1;
     t0 = s->now;
-    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: the GPU finished nothing for 2 seconds") &&
+    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: the GPU finished nothing for 2 s") &&
           said(s, "a stopped engine; ABORT"), "a stopped engine: said, ABORT, failed");
     check(s->now - t0 >= 2000000 && s->now - t0 < 2400000, "  after 2 seconds (simulated), not much more");
     check(G.timeouts >= 1 && s->aborts >= 2, "  counted, and the engine ABORTed");
     /* a FIFO that stays full: more words than fit */
     t0 = s->now;
-    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 seconds"),
-          "a FIFO that stays full: 'took no command word for 2 seconds'");
+    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 s"),
+          "a FIFO that stays full: 'took no command word for 2 s'");
     check(s->now - t0 >= 2000000 && s->now - t0 < 2400000 && s->writes_full == 0, "  2 seconds; still no word into a full FIFO");
     s->stopped = 0;
     check(gfx(s, "gfx fill 1 1 2 2 9") == CMD_OK && s->vram[641] == 9, "the engine back: drawing works again");
@@ -349,6 +365,20 @@ static void t_fifo(unsigned seed) {
     s->intr_at = 0;
     s->stopped = 0;
     check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK, "  and the next command works");
+    /* a word lost (OVERFLOW), then the FIFO stays full: the error said and cleared with the stopped
+       engine, not left for the next command (the review's finding 7) */
+    s->stopped = 1;
+    s->drop_word = s->cmd_writes + 1;
+    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 s") &&
+          said(s, "OVERFLOW: a command word found the FIFO full and was dropped") && !s->overflow,
+          "a lost word and a FIFO that stays full: the stopped engine and the OVERFLOW said, OVERFLOW cleared");
+    s->stopped = 0;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && !s->nout, "  the next command works and finds no old error");
+    /* Ctrl+C where nothing was ABORTed (waiting for frames) says so without an ABORT */
+    s->intr_at = s->now + 10000;
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "gfx crc: interrupted (Ctrl+C)") && !said(s, "ABORT"),
+          "Ctrl+C while gfx crc waits for frames: interrupted, no ABORT claimed");
+    s->intr_at = 0;
     done(s);
 }
 TEST(t_fifo)
@@ -446,8 +476,8 @@ static void t_claims(unsigned seed) {
     s->other_n = 3;
     mine0 = s->ncmd;
     t0 = s->now;
-    check(gfx(s, "gfx fill 4 4 8 8 0x55") == CMD_OK && said(s, "gfx fill: the GPU is in use ('Shell 2', pid 9): waiting;"
-          " Ctrl+C gives up"), "a second claimant waits, and says who has it");
+    check(gfx(s, "gfx fill 4 4 8 8 0x55") == CMD_OK && said(s, "gfx fill: the GPU is in use: waiting (Ctrl+C gives up)\n"
+          "    held by 'Shell 2', pid 9\n"), "a second claimant waits, and says who has it");
     check(s->now - t0 >= 100000 && s->other_done, "  until the first lets go (100 ms)");
     first_mine = s->ncmd;
     for(i = mine0; i < s->ncmd; i++)
@@ -496,7 +526,7 @@ static int latched_together(struct stub *s, unsigned from, uint64_t *when) {
 static void t_latch(unsigned seed) {
     struct stub *s = fresh(1);
     unsigned from;
-    uint64_t vb, next;
+    uint64_t vb = 0, next;
     (void)seed;
     from = s->nw;
     check(gfx(s, "gfx mode gfx 2") == CMD_OK && G.latched && latched_together(s, from, &vb),
@@ -506,19 +536,20 @@ static void t_latch(unsigned seed) {
     check(stub_shown(s, stub_frame_of(vb) + 1).scale == 2 && stub_shown(s, stub_frame_of(vb)).scale == 1 &&
           stub_shown(s, stub_frame_of(vb) + 1).mode == 2 && stub_shown(s, stub_frame_of(vb) + 1).stride == 320,
           "  the frame after that latch shows all of it, the frame before none");
-    /* the CPU stalled for 2 ms just as the next blanking begins: that pair is not used */
+    /* the CPU stalled for 2 ms (an interrupt, another task: between two samples, never inside one)
+       just before the next blanking begins: the pair across it is not used */
     next = (stub_frame_of(s->now) + 1) * STUB_FRAME_US + STUB_VBLANK_US;
     if(next < s->now + 3000) next += STUB_FRAME_US;
-    s->stall_at = next;
+    s->stall_at = next - 10;
     s->stall_us = 2000;
     from = s->nw;
-    check(gfx(s, "gfx mode gfx 1") == CMD_OK && latched_together(s, from, &vb) && vb > next, "a stall across a blanking: "
-          "the next blanking caught instead");
+    check(gfx(s, "gfx mode gfx 1") == CMD_OK && !s->stall_at && latched_together(s, from, &vb) && vb > next,
+          "a stall across a blanking: the next blanking caught instead");
     /* no frames at all */
     s->frames_stop = 1;
     from = s->nw;
     check(gfx(s, "gfx mode overlay") == CMD_OK && !G.latched && G.latch_misses == 1 &&
-          said(s, "no vertical blanking seen in 250 ms: the registers written at once"),
+          said(s, "no vertical blanking in 250 ms: the registers written at once"),
           "a frame counter that stays: written after 250 ms, and said");
     check(s->reg.mode == 3 && s->nw == from + 4, "  the mode and the registers written all the same");
     done(s);
@@ -639,7 +670,172 @@ static void t_demo(unsigned seed) {
 }
 TEST(t_demo)
 
+/* The demo's way in and out (the G3 review's finding 2): whenever the CPU writes VRAM or GPAL during
+   it the screen shows text, and whenever the engine draws, text or the demo's own pages; so no frame
+   shows the picture from before over the demo's pages or palette, or the demo's pages being
+   overwritten. "Shows" is what a frame's lines show, a change in a blanking counting for the frame
+   after it (stub_visible()). */
+static int demo_layout(const struct stub_disp *d) {
+    return d->mode == 2 && d->stride == 320 && d->scale == 2 && (d->base == 0 || d->base == 76800);
+}
+
+static void demo_order(struct stub *s, const char *what, unsigned gpal_writes) {
+    unsigned i, cpu = 0, gpal = 0, eng = 0, bad_cpu = 0, bad_eng = 0;
+    char line[160];
+    for(i = 0; i < s->nev; i++) {
+        struct stub_disp d = stub_visible(s, s->ev[i].t);
+        if(s->ev[i].kind == STUB_EV_ENGINE_DRAW) {
+            eng++;
+            bad_eng += d.mode != 1 && !demo_layout(&d);
+        } else {
+            gpal += s->ev[i].kind == STUB_EV_GPAL;
+            cpu += s->ev[i].kind == STUB_EV_CPU_VRAM;
+            bad_cpu += d.mode != 1;
+        }
+    }
+    snprintf(line, sizeof(line), "  %s: VRAM put back (%u words), GPAL written %u times (%u expected), the engine drew", what,
+             cpu, gpal, gpal_writes);
+    check(cpu >= 39680 && gpal == gpal_writes && eng > 0, line);
+    check(!bad_cpu, "  every CPU write of VRAM or GPAL while the screen showed text");
+    check(!bad_eng, "  the engine drew while the screen showed text or the demo's own pages");
+    s->nev = 0;
+}
+
+static void t_demo_order(unsigned seed) {
+    struct stub *s = fresh(1);
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    s->watch = 1;
+    check(gfx(s, "gfx demo 1") == CMD_OK && s->reg.mode == 2 && s->reg.stride == 640, "gfx demo 1 from a 640x480 picture");
+    s->watch = 0;
+    demo_order(s, "gfx demo 1", 512);
+    gfx(s, "gfx mode overlay 2");
+    s->watch = 1;
+    s->intr_at = s->now + 400000;
+    check(gfx(s, "gfx demo 3") == CMD_FAIL && s->reg.mode == 3 && s->reg.scale == 2, "gfx demo 3 from the overlay, Ctrl+C");
+    s->intr_at = 0;
+    s->watch = 0;
+    demo_order(s, "Ctrl+C", 512);
+    done(s);
+}
+TEST(t_demo_order)
+
+/* The engine stops in the middle of a demo (the G3 review's finding 3): said once, no second
+   timeout, and the display, the driver's target and clip, VRAM and GPAL all put back. */
+static unsigned count(const char *hay, const char *needle) {
+    unsigned n = 0;
+    for(; (hay = strstr(hay, needle)) != NULL; hay++) n++;
+    return n;
+}
+
+static void t_demo_stop(unsigned seed) {
+    int from_gfx;
+    (void)seed;
+    for(from_gfx = 0; from_gfx < 2; from_gfx++) {
+        struct stub *s = fresh(1);
+        uint8_t *before = malloc(GPU_VRAM_BYTES);
+        uint16_t pal[256];
+        struct stub_disp reg;
+        uint64_t t0;
+        if(from_gfx) {
+            gfx(s, "gfx mode gfx 1");
+            gfx(s, "gfx clear 0x92");
+            gfx(s, "gfx pal grey");
+        } else {
+            gfx(s, "gfx mode text");
+        }
+        stub_drain(s, 100000);
+        memcpy(before, s->vram, GPU_VRAM_BYTES);
+        memcpy(pal, s->gpal, sizeof(pal));
+        reg = s->reg;
+        s->watch = 1;
+        s->stop_at = s->now + 500000;
+        t0 = s->now;
+        check(gfx(s, "gfx demo 3") == CMD_FAIL && count(s->out, "a stopped engine") == 1 && said(s, "display back as it was"),
+              from_gfx ? "the engine stops 0.5 s into a demo begun on a 640x480 picture: said once" :
+                         "the engine stops 0.5 s into a demo begun in text mode: said once");
+        check(s->now - t0 < 3000000, "  no second timeout (0.5 s, then one 2 s wait, and the put-back)");
+        check(s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale,
+              "  the display registers back");
+        check(G.t_base == 0 && G.t_stride == 640 && G.t_w == 640 && G.t_h == 480 && G.c_x1 == 640 && G.c_y1 == 480,
+              "  the driver's target and clip back");
+        check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)), "  VRAM and GPAL back");
+        s->watch = 0;
+        demo_order(s, "a stopped engine", from_gfx ? 512 : 0);
+        s->stopped = 0;
+        check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && s->eng.tw == 640 && s->eng.th == 480 && s->eng.stride == 640,
+              "  the engine back: its target is the driver's, and drawing works");
+        free(before);
+        done(s);
+    }
+}
+TEST(t_demo_stop)
+
 /**** bench, reset, the state, usage ****/
+
+/* the words of the command at c[i]: header, parameters, data (GPU.md section 5) */
+static unsigned cmd_len(const uint32_t *c, unsigned i) {
+    uint32_t wh = c[i + 2];
+    switch(c[i] >> 24) {
+    case GPU_OP_SET_TARGET: case GPU_OP_COPY_RECT: return 4;
+    case GPU_OP_SET_CLIP: case GPU_OP_FILL_RECT: case GPU_OP_LINE: return 3;
+    case GPU_OP_FENCE: return 2;
+    case GPU_OP_EXPAND: return 3 + ((wh & 0xFFFF) * (wh >> 16) + 31) / 32;
+    case GPU_OP_WRITE_RECT: return 3 + ((wh & 0xFFFF) * (wh >> 16) + 3) / 4;
+    }
+    return 1;
+}
+
+/* the pixels a rate line of gfx bench counts */
+static unsigned long long rate_px(struct stub *s, const char *name) {
+    char key[16];
+    const char *p;
+    unsigned long long n;
+    snprintf(key, sizeof(key), "\n    %-5s ", name);
+    if(!(p = strstr(s->out, key)) || !(p = strstr(p, ": ")) || sscanf(p + 2, "%llu pixels", &n) != 1) return ~0ull;
+    return n;
+}
+
+static uint32_t bench_next(uint32_t *s) {
+    *s = *s * 1664525u + 1013904223u;
+    return *s >> 8;
+}
+
+/* gfx bench on the target the driver has: what each rate counts is what the engine wrote (the
+   review's finding 10: strings past the target's right edge were counted whole), and its strings
+   are the generator's next numbers in the order x, y, fg, bg, after the lines' 1,024 */
+static void bench_on(struct stub *s, const char *name) {
+    uint32_t gen = 2026, w = G.t_w, h = G.t_h, n = w / 8 < 32 ? w / 8 : 32, x, y, fg, bg;
+    unsigned i, from, strings = 0, wrong = 0;
+    char line[300];
+    memset(s->op_px, 0, sizeof(s->op_px));
+    from = s->ncmd;
+    check(gfx(s, "gfx bench") == CMD_OK, name);
+    stub_drain(s, 1000000);
+    snprintf(line, sizeof(line), "  %s: pixels counted = written: fill %llu = %llu, copy %llu = %llu, line %llu = %llu, "
+             "text %llu = %llu", name, rate_px(s, "fill"), s->op_px[GPU_OP_FILL_RECT], rate_px(s, "copy"),
+             s->op_px[GPU_OP_COPY_RECT], rate_px(s, "line"), s->op_px[GPU_OP_LINE], rate_px(s, "text"),
+             s->op_px[GPU_OP_EXPAND]);
+    check(rate_px(s, "fill") == s->op_px[GPU_OP_FILL_RECT] && rate_px(s, "copy") == s->op_px[GPU_OP_COPY_RECT] &&
+          rate_px(s, "line") == s->op_px[GPU_OP_LINE] && rate_px(s, "text") == s->op_px[GPU_OP_EXPAND] &&
+          s->op_px[GPU_OP_EXPAND] == 64ull * n * 128, line);
+    for(i = 0; i < 1024; i++) bench_next(&gen);
+    for(i = from; i < s->ncmd; i += cmd_len(s->cmd, i)) {
+        if(s->cmd[i] >> 24 != GPU_OP_EXPAND) continue;
+        x = bench_next(&gen) % (w - 8 * n + 1);
+        y = bench_next(&gen) % (h - 16 + 1);
+        fg = bench_next(&gen) & 0xFF;
+        bg = bench_next(&gen) & 0xFF;
+        if(s->cmd[i] != GPU_HDR(GPU_OP_EXPAND, fg | bg << 8) || s->cmd[i + 1] != GPU_XY(x, y) || s->cmd[i + 2] != GPU_WH(8 * n, 16))
+            wrong++;
+        strings++;
+    }
+    snprintf(line, sizeof(line), "  %s: 64 strings of %lu cells, each the generator's x, y, fg, bg (%u strings, %u not)", name,
+             (unsigned long)n, strings, wrong);
+    check(strings == 64 && !wrong, line);
+}
 
 static void t_bench(unsigned seed) {
     struct stub *s = fresh(1);
@@ -649,6 +845,14 @@ static void t_bench(unsigned seed) {
           said(s, "line  256 lines") && said(s, "text  64 x 32 cells: 262144 pixels") && said(s, "million/s") &&
           G.spin_us == GPU_SPIN_US,
           "gfx bench: fills, copies, lines and text, each in pixels a second");
+    bench_on(s, "gfx bench at 640x480");
+    gfx(s, "gfx mode gfx 2");
+    bench_on(s, "gfx bench at 320x240");
+    check(gpu_set_target(&G, 0, 200, 200, 100, "gfx") == GPU_OK, "a target of 200x100");
+    bench_on(s, "gfx bench at 200x100 (25 cells a string)");
+    check(gpu_set_target(&G, 0, 64, 64, 32, "gfx") == GPU_OK, "a target of 64x32, the smallest the bench takes");
+    bench_on(s, "gfx bench at 64x32 (8 cells a string)");
+    gfx(s, "gfx mode gfx 1");
     s->intr_at = s->now + 5000;
     check(gfx(s, "gfx bench") == CMD_FAIL && said(s, "interrupted"), "gfx bench ends on Ctrl+C");
     s->intr_at = 0;
@@ -680,11 +884,82 @@ static void t_state(unsigned seed) {
           said(s, "engine idle, STATUS 0x0, FIFO 64 words, 64 free\n") &&
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
-          said(s, "target: VRAM 0, stride 320, 320x240; clip (0, 0)-(320, 240)") && said(s, "interrupts (intc source 5") &&
-          said(s, "errors 0") && said(s, "frames: FRAME_COUNT"), "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
+          said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n") && said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
+          said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
+          "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
     done(s);
 }
 TEST(t_state)
+
+/* Every line gfx and the driver print fits the console's 80 columns (GPU.md 15.2; the review's
+   finding 8), here with each message at its widest: the counts at 10 digits (32 bits on the
+   board), the registers and the target at their widest, the longest names. done() measures each
+   line printed, as it does after every test. */
+static void t_columns(unsigned seed) {
+    static const char *const lines[] = {
+        "gfx", "gfx help", "gfx frobnicate", "gfx clear x", "gfx fill", "gfx rect", "gfx rect 32000 0 1000 1 1", "gfx line",
+        "gfx copy", "gfx text", "gfx pal", "gfx pal x", "gfx put", "gfx get", "gfx crc x", "gfx bench x", "gfx demo x",
+        "gfx reset x", "gfx mode", "gfx mode foo", "gfx a b c d e f g h i j k l m n o p q r",
+        "gfx put 32767 32767 1", "gfx get 32767 32767", "gfx bench", "gfx pal 255 0xfff",
+        "gfx get 9999 29", NULL
+    };
+    struct stub *s = fresh(1);
+    char word[220], buf[160];
+    unsigned i;
+    (void)seed;
+    s->reg.mode = 3;                                    /* the longest mode's name, the widest GFX_ registers */
+    s->reg.base = SURF_VIDEO_GFX_BASE_BASE_MASK & ~3u;
+    s->reg.stride = SURF_VIDEO_GFX_STRIDE_STRIDE_MASK & ~3u;
+    s->reg.scale = 3;
+    check(gpu_set_target(&G, 307196, 65532, 4, 1, "gfx") == GPU_OK &&
+          gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "the widest target (VRAM 307196, stride 65532) and clip");
+    G.words = G.fences = G.irqs = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
+    G.fifo_depth = 65535;
+    G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */
+    s->frames_stop = 1;
+    s->frames_frozen = 65535;                           /* FRAME_COUNT's 16 bits */
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    sent: 4294967295 words, 4294967295 fences; FENCE 4294967290\n") &&
+          said(s, "    clip: (65535, 65535)-(65535, 65535)\n") && said(s, "FRAME_COUNT 65535"),
+          "gfx with every count at 10 digits");
+    snprintf(buf, sizeof(buf), "    gpu       ");
+    gpu_describe(&G, buf + strlen(buf), (u_int)(sizeof(buf) - strlen(buf)));
+    check(strlen(buf) <= STUB_COLUMNS && strstr(buf, "SurfGPU GPU1, 300 KiB VRAM; 4294967295 fences, 4294967295 errors"),
+          "drivers' gpu line with the counts at 10 digits");
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "FRAME_COUNT stayed at 65535"), "  no frames, FRAME_COUNT at 65535");
+    s->frames_stop = 0;
+    for(i = 0; i < 200; i++) word[i] = (char)('a' + i % 26);
+    word[200] = 0;
+    check(gfx(s, "gfx %s", word) == CMD_USAGE && said(s, "no such subcommand: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv\n"),
+          "a subcommand of 200 letters: its first 48 said");
+    check(gpu_set_target(&G, 0, 10000, 10000, 30, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "the target 10000x30: the widest pair of sizes a target can have");
+    for(i = 0; lines[i]; i++) gfx(s, "%s", lines[i]);
+    /* the claim's wait with the longest name and pid, all three errors at once, a stopped engine with
+       a 9-letter command and FENCE at 10 digits */
+    gfx(s, "gfx mode gfx 1");
+    s->holder = "'abcdefghijklmnopqrstuvwxyz01234', pid 4294967295";
+    s->other_holds = 1;
+    s->other_until = s->now + 50000;
+    check(gfx(s, "gfx clear 1") == CMD_OK && said(s, "    held by 'abcdefghijklmnopqrstuvwxyz01234', pid 4294967295\n"),
+          "the claim's wait names the longest holder");
+    s->holder = NULL;
+    s->overflow = GPU_ST_OVERFLOW;
+    s->eng.sticky |= GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM;
+    check(gfx(s, "gfx clear 2") == CMD_FAIL && said(s, "      BAD_PARAM:") && said(s, "      OVERFLOW:"), "all three errors said");
+    stub_drain(s, 1000);
+    G.fence_sent = s->eng.fence = 4294967290u;
+    s->stopped = 1;
+    check(gfx(s, "gfx bench") == CMD_FAIL && said(s, "gfx bench: the GPU finished nothing for 2 s: a stopped engine; ABORT\n") &&
+          said(s, ", FENCE 4294967290, waiting for 4294967291\n"), "a stopped engine, its FENCE at 10 digits");
+    s->stopped = 0;
+    s->now += 50000ull * STUB_FRAME_US;                 /* FRAME_COUNT at 5 digits */
+    check(gfx(s, "gfx crc") == CMD_OK && said(s, "gfx crc: frame 5"), "gfx crc with FRAME_COUNT at 5 digits");
+    done(s);
+}
+TEST(t_columns)
 
 static void t_usage(unsigned seed) {
     static const char *const bad[] = {
@@ -693,7 +968,9 @@ static void t_usage(unsigned seed) {
         "gfx text 0 0 1", "gfx text 0 0 1 x hello", "gfx mode", "gfx mode foo", "gfx mode text 2", "gfx mode gfx 3",
         "gfx pal", "gfx pal blue", "gfx pal 256 0", "gfx pal 0 0x1000", "gfx put 640 0 1", "gfx put 0 0", "gfx get 0 480",
         "gfx clear 1 2", "gfx clear 0x100", "gfx crc 1", "gfx reset now", "gfx bench 3", "gfx demo x", "gfx frobnicate",
-        "gfx fill 0x 0 1 1 1", "gfx fill 99999999999999 0 1 1 1", NULL
+        "gfx fill 0x 0 1 1 1", "gfx fill 99999999999999 0 1 1 1",
+        "gfx text 0 0 255 0 one two three four five six seven eight nine ten eleven twelve",
+        "gfx text 0 0 1 2 a b c d e f g h i j", NULL
     };
     struct stub *s = fresh(1);
     unsigned i, n0, bad_ones = 0;
@@ -707,6 +984,19 @@ static void t_usage(unsigned seed) {
     }
     check(!bad_ones, "usage errors: CMD_USAGE, a usage line, and not a word sent");
     check(!s->locked, "  the claim never left held");
+    /* numbers: decimal (a leading zero too) or 0x hex (the review's finding 9) */
+    check(gfx(s, "gfx clear 0") == CMD_OK && gfx(s, "gfx fill 010 0 1 1 7") == CMD_OK && px(s, 10, 0) == 7 && px(s, 8, 0) == 0 &&
+          gfx(s, "gfx fill 08 1 1 1 0x1F") == CMD_OK && px(s, 8, 1) == 0x1F && gfx(s, "gfx fill 0 2 1 1 012") == CMD_OK &&
+          px(s, 0, 2) == 12 && gfx(s, "gfx fill -0x2 3 3 1 0XfF") == CMD_OK && px(s, 0, 3) == 255 && px(s, 1, 3) == 0,
+          "  numbers: 010 is ten, 08 eight, 012 twelve, -0x2 and 0XfF hex");
+    check(gfx(s, "gfx fill 0 0 4294967297 1 1") == CMD_USAGE && gfx(s, "gfx fill 0 0 1 1 -") == CMD_USAGE &&
+          gfx(s, "gfx fill 0 0 0x 1 1") == CMD_USAGE && gfx(s, "gfx fill 0 0 1 1 1x") == CMD_USAGE,
+          "  a number past 32 bits, a sign alone, 0x alone and a stray letter are refused");
+    check(gfx(s, "gfx text 0 0 255 0 one two three four five six seven eight nine ten eleven twelve") == CMD_USAGE &&
+          said(s, "a gfx line holds 15 words at most, gfx text 9 of text"),
+          "  a line the shell may have cut (it keeps 16 words) is refused, saying why");
+    check(gfx(s, "gfx clear 0x25") == CMD_OK && gfx(s, "gfx text 0 0 1 2 a b c d e f g h i") == CMD_OK &&
+          px(s, 8 * 16, 0) == 2 && px(s, 8 * 17, 0) == 0x25, "  15 words (9 of text) draw all 17 cells");
     done(s);
 }
 TEST(t_usage)

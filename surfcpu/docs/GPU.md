@@ -1068,9 +1068,11 @@ root as section 14 says, its step 1 first. A second build to compare was not mad
 **Status (2026-10-25).** G3 is done in simulation and on the host: the driver and the `gfx`
 command run against the C model on the host, and SurfOS on the RTL SoC with SurfGPU prints, for
 every `gfx crc`, the CRC of a frame captured at the VGA pins and, where the display shows graphics
-alone, the CRC the C model computes for the same commands; the overlay, the demo, the bench and
-the two "no GPU" systems (QEMU virt, the SoC with HAS_GPU = 0) pass too (section 15.4). Nothing
-here has run on a board: the physical test (section 15.6) is the integrator's, with the owner.
+alone, the CRC worked out for the same commands from this document alone (gfxref); the GPU's
+interrupt, the overlay, the demo, the bench and the two "no GPU" systems (QEMU virt, the SoC with
+HAS_GPU = 0) pass too (section 15.4). An independent review's six medium and seven low findings
+are fixed, each with its test (section 15.7). Nothing here has run on a board: the physical test
+(section 15.6) is the integrator's, with the owner.
 The brief is [plans/2026-10-25-gpu-g3-g4.md](plans/2026-10-25-gpu-g3-g4.md); the G3 commands use
 GPU1's command set only, on a GPU1 or a GPU2 (G4's superset). The cube and GPU2's commands in
 SurfOS (`gfx cube`, `gfx tri`, `gfx flip`) are the round after G3 and G4 merge.
@@ -1087,9 +1089,9 @@ SurfOS (`gfx cube`, `gfx tri`, `gfx flip`) are the round after G3 and G4 merge.
 | `arch/riscv32/kernel.mk` | `driver/font8x16.c` compiled into the Arty kernel, from where it is, unchanged |
 | `arch/riscv32/kshell.c` | `gfx` on a board without one (QEMU virt): "no GPU on this board" |
 | `arch/riscv32/fbcon.c`, `include/arch/riscv32/riscv/board.h` | the display's panic hook |
-| `boards/arty_a7/tests/gpu/` | the host test (`test_gpu.c`), the stand-in for the hardware (`gpustub.c`), `gfxscene.c` |
+| `boards/arty_a7/tests/gpu/` | the host test (`test_gpu.c`), the stand-in for the hardware (`gpustub.c`), `gfxscene.c` (gfx lines through the driver in the model), `gfxref.c` (test-gpuos's pictures from this document alone) |
 | `boards/arty_a7/tests/gpuos_test.py` | SurfOS with `gfx` on the RTL SoC (`test-gpuos`) |
-| `surfcpu/mk/area-gpuos.mk` | `test-gpuos-host` (on test-os and check), `test-gpuos` (on check), `gfxscene`, `evidence-gpuos` |
+| `surfcpu/mk/area-gpuos.mk` | `test-gpuos-host` (on test-os and check), `test-gpuos` (on check), `gfxscene`, `gfxref`, `evidence-gpuos` |
 
 No shared kernel file changed (kernel/, fs/, driver/, mm/, lib/, shell/, include/ outside
 include/arch/riscv32/): the x86 kernel is as it was.
@@ -1104,13 +1106,17 @@ FEATURES.GPU the gpu window (unmapped then) is never touched. Said once at boot:
 +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
 ```
 
-or `+GPU: none: sysinfo.FEATURES has no GPU (a bitstream without one)`; `drivers` lists `gpu` (ok
-or not present) and a line of counts. The probe ends with the engine reset: ABORT, the sticky bits
-cleared, the reset target (640x480 at 0, stride 640) and its clip.
+or `+GPU: none: sysinfo.FEATURES has no GPU (a bitstream without one)` (an unknown gpu.ID or an
+INFO without a FIFO or 300 KiB is said with the value read); `drivers` lists `gpu` (ok or not
+present) and its fences and errors. The probe ABORTs before it reads FENCE, the value fences are
+counted from (a FENCE that a warm restart left in the FIFO cannot complete after that read), and
+ends with the engine reset: ABORT, the sticky bits cleared, the reset target (640x480 at 0,
+stride 640) and its clip.
 
 **Command words** go to CMD only while FIFO_FREE says there is room: FIFO_FREE is read, that many
 words are written, then it is read again. Two seconds in which FIFO_FREE stays 0 is a stopped
-engine: said (with STATUS, FIFO_FREE and FENCE), ABORT, the command fails.
+engine: said (with STATUS, FIFO_FREE and FENCE), ABORT, the command fails; the sticky errors found
+then (an OVERFLOW is often why) are said and cleared with it, not left for the next command.
 
 **Fences.** A submission that must be finished ends with `FENCE value` (with IRQ when the port has
 the interrupt), the values counted from the FENCE register read at the probe. The wait polls FENCE
@@ -1127,7 +1133,9 @@ each one set is said on a line of its own in words, they are cleared (written 1)
 ABORTed and the driver's target and clip are queued again (SET_TARGET, SET_CLIP), ahead of
 anything sent after them: the known state. ABORT never waits for them (the FIFO is empty after
 it), so a stopped engine costs no second timeout and Ctrl+C is not held up. Ctrl+C (the task's
-interrupt flag) ends every wait the same way: ABORT, the target and clip queued again.
+interrupt flag) ends every wait the same way: ABORT, the target and clip queued again; where it
+ends a wait that has nothing to ABORT (gfx crc's wait for frames), it says only `interrupted
+(Ctrl+C)`.
 
 **The claim.** A mutex, taken for one `gfx` command's run (trylock, then 20 ms sleeps that Ctrl+C
 cuts short): a second console's command waits, saying who has the GPU, and the commands of two
@@ -1164,7 +1172,7 @@ FRAME_COUNT until it is two on (sleeping 5 ms between reads), then FRAME_CRC.
 
 | | |
 |---|---|
-| `gfx` | the GPU: ID, VRAM, the engine and FIFO, the display mode, GFX_BASE/STRIDE/SCALE, the palette, the target and clip, fences and interrupts, words, errors, timeouts, ABORTs, FRAME_COUNT and FRAME_CRC |
+| `gfx` | the GPU: ID, VRAM, the engine and FIFO, the display mode, GFX_BASE/STRIDE/SCALE, the palette, the target, the clip, the words and fences sent and FENCE, the interrupts taken, errors (and by kind), timeouts, ABORTs, display changes, FRAME_COUNT and FRAME_CRC |
 | `gfx mode text\|gfx\|overlay [1\|2]` | the display mode; for gfx and overlay the scale given (the current GFX_SCALE when not), GFX_BASE 0, GFX_STRIDE 640 or 320, and the target becomes that picture (640x480, or 320x240 at VRAM 0); text keeps the target and the picture |
 | `gfx clear [c]` | FILL_RECT of the target, colour c (0) |
 | `gfx fill x y w h c` | FILL_RECT |
@@ -1175,16 +1183,20 @@ FRAME_COUNT until it is two on (sleeping 5 ms between reads), then FRAME_CRC.
 | `gfx pal rgb332\|grey\|ramps`, `gfx pal n rgb444` | a palette, or entry n |
 | `gfx put x y c`, `gfx get x y` | one pixel of the target through the window at 0x3000_0000 |
 | `gfx crc` | `gfx crc: frame N, crc XXXXXXXX (a frame begun after the last change)` |
-| `gfx bench` | on the target: 8 fills of it, 8 copies of its left half onto its right half, 256 lines between points of it (chosen before the clock starts), 64 strings of 32 cells; each from the first word to its fence, in pixels a second |
+| `gfx bench` | on the target: 8 fills of it, 8 copies of its left half onto its right half, 256 lines between points of it (chosen before the clock starts), 64 strings of 32 cells (as many as fit on a target narrower than 256), each wholly inside it; each from the first word to its fence, in pixels a second, the pixels counted those drawn |
 | `gfx demo [seconds]` | the animation below, 10 s when not given (1 to 3600); Ctrl+C ends it |
 | `gfx reset` | ABORT, the sticky bits cleared, the reset target and clip |
 | `gfx help` | the list |
 
 Coordinates and sizes are section 5's (x, y -32768 to 32767, w, h 0 to 65535, colours 0 to 255),
-in decimal or 0x hex, in the target's pixels; the clip cuts, nothing wraps. Every argument is
-checked before a word is sent (a usage line, CMD_USAGE); a drawing command prints nothing when it
-worked and returns once its fence came and no error was found (CMD_OK), else CMD_FAIL with what
-went wrong. Every line `gfx` prints fits the console's 80 columns.
+in decimal or 0x hex (a leading zero is still decimal: 012 is twelve), in the target's pixels; the
+clip cuts, nothing wraps. Every argument is checked before a word is sent (a usage line,
+CMD_USAGE); a drawing command prints nothing when it worked and returns once its fence came and no
+error was found (CMD_OK), else CMD_FAIL with what went wrong. A line of 16 words or more is
+refused: the kernel shell hands a command 16 words and drops the rest without a word, so a `gfx`
+line holds 15 (`gfx text` 9 of text). Every line `gfx` and the driver print fits the console's 80
+columns, whatever the counts in it (the host test measures every line it sees, and prints each
+message at its widest).
 
 **The demo.** One target 320 wide and 496 high holds two pages of 320x240 (A at VRAM 0, B at 76,800)
 and a row of sprites below them (a ball made with EXPAND and the font's ☻, on the key colour 0xE3).
@@ -1196,9 +1208,16 @@ sprite row with the key, a line of text; then a FENCE, and once it came GFX_BASE
 single register, which the next frame latch takes whole. No frame ever shows a page being drawn
 (the host test checks every engine word against the page on the screen). Before it starts the demo
 keeps the display (mode, GFX_ registers), GPAL (it draws in RGB332), the target and clip, and the
-158,720 bytes of VRAM it draws on (a copy in the kernel heap; without memory it says so and runs
-anyway); when it ends, also on Ctrl+C, it puts them all back and the engine is idle. It prints a
-line a second and the frames a second at the end.
+158,720 bytes of VRAM it draws on (a copy in the kernel heap, four words a loop; without memory it
+says so and runs anyway); when it ends, also on Ctrl+C or a stopped engine, it puts them all back
+and the engine is idle. Whenever VRAM or GPAL changes on the way in or out, the display shows the
+console (text mode, which shows neither): it switches to text, then keeps VRAM, loads RGB332 and
+draws its first page; on the way out VRAM and GPAL go back under the console, then the target and
+clip (queued: after a stopped engine, which was said and ABORTed once, nothing waits for the
+engine again), then the display from before. So no frame shows the old picture in the demo's palette or over its pages, or
+the demo's display while its pages are overwritten (the host test checks every CPU write of VRAM
+and GPAL, and every engine word, against what the screen shows then). It prints a line a second and
+the frames a second at the end.
 
 ### 15.3 Decisions, and where this deviates from the brief
 
@@ -1215,6 +1234,10 @@ line a second and the frames a second at the end.
 | `gfx put`, `gfx get` | in target coordinates | what `gfx fill` and the others use |
 | The IDs | `GPUDRV_ID_GPU1`, `GPUDRV_ID_GPU2` | G4 changes `GPU_ID_VALUE` to GPU2's; the driver keeps accepting both whichever gpu.h it builds against |
 | The host test's summary line | `test_arty: N of N checks passed` | it links boards/arty_a7/tests/harness.c, whose main() prints that name |
+| A `gfx` line of 16 words or more | refused (usage) | the kernel shell drops the words past 16 without a word (arch/riscv32/kshell.c is not this track's); a picture drawn short would pass for a good one |
+| The demo's way in and out | the console on the screen while VRAM and GPAL change | no frame shows a display over pixels or a palette not its own; the price is the console for a frame or two at each end |
+| test-gpuos's expected CRCs | gfxref, from this document alone; gfxscene must agree with it | a mistake in gpu.c or gfx.c would be in gfxscene too, which runs them; gfxscene stays the owner's tool for other pictures |
+| The review's finding 12, in kernel/sync.c's event_wait_timeout() | not changed | shared kernel code, not this track's. Its window (an event set between its check and its sleep wakes nobody) costs a fence wait at most one 10 ms step, after which FENCE is read again; the driver keeps its order (the event cleared, FENCE read, then the wait), so a FENCE done before the check is never waited for |
 
 The host test's stand-in uses the C model's `struct gpu_engine` fields `base`, `stride`, `tw`, `th`,
 `cx0`..`cy1`, `fence`, `sticky`, `writes`, `in_cmd`, `np`, `need`, `hdr` and `data_left`, and
@@ -1224,10 +1247,10 @@ The host test's stand-in uses the C model's `struct gpu_engine` fields `base`, `
 
 | Test | Result |
 |---|---|
-| `make test-gpuos-host` (boards/arty_a7/tests/gpu/test_gpu.c, seeds 1, 7, 123) | 429 of 429 checks, 15 tests: every `gfx` drawing command's VRAM equal to a second model fed GPU.md's words (clear, fill clipped, line, copy with and without a key, overlapping, text opaque, transparent and UTF-8, rect pixel by pixel, put and get, both scales) and 120 random commands a seed; the FIFO rule (no word into a full FIFO or past the room read, with a slow engine that fills it); a stopped engine and a FIFO that stays full (said, ABORT, after 2 s of simulated time and not much more), recovery, Ctrl+C in a wait; BAD_OPCODE, BAD_PARAM and OVERFLOW said in words, cleared, ABORTed, the target and clip sent again; fences on the interrupt and with sleeps; two claimants (the second waits, its words all after the first's; Ctrl+C gives up the wait); the frame latch rule (the four stores within 1.3 ms after a blanking, all in the frame after; a 2 ms stall's pair not used; no frames: written at once and said); FRAME_CRC the model's, of a frame begun after the command; the palettes; the demo (no drawing into the page shown, about 60 flips a second, VRAM, GPAL, display, target and clip back, Ctrl+C, no memory); the bench; reset; 31 usage errors refused with nothing sent; GPU1 and GPU2 |
-| `make test-gpuos` (boards/arty_a7/tests/gpuos_test.py) | 23 of 23 checks: SurfBoot boots the kernel from a card in build/sim/surfsim_gpu; 38 commands typed: the seven `gfx crc` FRAME_CRCs are each the CRC of a frame captured at the VGA pins, and the five in mode 2 the C model's (`gfxscene`); the picture's CRC after `gfx demo 1`, and after a `gfx demo 5` that the Ctrl+C typed after its first second ended, is the one before them; the demo's 60 frames in about 1.06 s of simulated time; the bench's four rates; the last frame at the pins in mode 3: the console's text decoded from the pixels over the picture, every blank cell the model's picture exactly; side by side, build/sim/surfsim (HAS_GPU = 0): `+GPU: none`, `gfx` and `drivers` say there is no GPU. About 415 million cycles (16.6 s simulated) in under 3 minutes |
+| `make test-gpuos-host` (boards/arty_a7/tests/gpu/test_gpu.c, seeds 1, 7, 123; then gfxref) | 678 of 678 checks, 18 tests: every `gfx` drawing command's VRAM equal to a second model fed GPU.md's words (clear, fill clipped, line, copy with and without a key, overlapping, text opaque, transparent and UTF-8, rect pixel by pixel, put and get, both scales) and 120 random commands a seed; the FIFO rule (no word into a full FIFO or past the room read, with a slow engine that fills it); a stopped engine and a FIFO that stays full (said, ABORT, after 2 s of simulated time and not much more; a lost word's OVERFLOW said and cleared with it), recovery, Ctrl+C in a wait (an ABORT named only when there was one); BAD_OPCODE, BAD_PARAM and OVERFLOW said in words, cleared, ABORTed, the target and clip sent again; fences on the interrupt and with sleeps; two claimants (the second waits, saying who has the GPU, its words all after the first's; Ctrl+C gives up the wait); the probe (ABORT before FENCE is read; no GPU said with the value read); the frame latch rule (the four stores within 1.3 ms after a blanking, all in the frame after; a 2 ms stall's pair not used; no frames: written at once and said); FRAME_CRC the model's, of a frame begun after the command; the palettes; the demo (no drawing into the page shown, about 60 flips a second, VRAM, GPAL, display, target and clip back, Ctrl+C, no memory; every CPU write of VRAM and GPAL and every engine word made while the screen shows the console or the demo's other page; an engine stopped 0.5 s in: said once, everything back without a second timeout); the bench at four sizes (each rate's pixels those the engine wrote, each string the generator's x, y, fg, bg); reset; 33 usage errors refused with nothing sent, among them a line the shell may have cut; numbers in decimal and hex; GPU1 and GPU2; every line printed within 80 columns, each message also at its widest (t_columns). Then gfxref: its model's VRAM equal to its directly computed pixels, its CRCs to the model's display path |
+| `make test-gpuos` (boards/arty_a7/tests/gpuos_test.py) | 25 of 25 checks: first gfxref, which works the test's pictures out from this document alone: its 37 gfx lines are the test's, crc 1 is 15.6's 039d507c, and gfxscene (the same lines through gfx.c and gpu.c in the model) gives its modes, CRCs and pictures; then SurfBoot boots the kernel from a card in build/sim/surfsim_gpu, the gpu.ID expected the one gpu.h gives (GPU1 here); 39 commands typed: the seven `gfx crc` FRAME_CRCs are each the CRC of a frame captured at the VGA pins, and the five in mode 2 gfxref's; the GPU's interrupt: 156 taken for the 156 fences sent between the first `gfx` and the last; the picture's CRC after `gfx demo 1`, and after a `gfx demo 5` that the Ctrl+C typed after its first second ended, is the one before them; the demo's 60 frames in about 1.06 s of simulated time; the bench's four rates; the last frame at the pins in mode 3: the console's text decoded from the pixels over the picture, every blank cell gfxref's picture exactly; side by side, build/sim/surfsim (HAS_GPU = 0): `+GPU: none`, `gfx` and `drivers` say there is no GPU. About 385 million cycles (15.4 s simulated) in 153 s |
 | `make test-os-qemu` | 136 of 136 checks at -O2 and at -O0, the new one `gfx: no GPU on this board (qemu_virt)` |
-| `make check` (big) | "check: all automated SurfCPU checks passed" at 4aa4c8f, the last commit with code (the one after it adds this evidence); at 398bb6d, before test-gpuos's Ctrl+C step, in about 36 minutes ([evidence](evidence/gpu-g3/g3-sim.txt)) |
+| `make check` (big) | "check: all automated SurfCPU checks passed" at 2310338, the review round's last commit with code (the one after it adds this record), in about 34 minutes; before the round, at 4aa4c8f ([evidence](evidence/gpu-g3/g3-sim.txt)) |
 
 What the RTL run measured (simulation, 25 MHz; the board's numbers may differ): FILL_RECT about
 88 million pixels a second (the engine's 4 pixels a cycle, 100 million, less the commands' own
@@ -1261,8 +1284,8 @@ nothing programs the flash.
        make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS
 
 3. **Boot**: the card in the Pmod MicroSD, `make -C surfcpu uart-console`, press RESET. Among the
-   boot lines: `+GPU: SurfGPU GPU1 (gpu.ID 0x31555047), VRAM 300 KiB at 0x30000000` and
-   `Drivers: serial gpio ps2kbd sdcard gpu`.
+   boot lines: `+GPU: SurfGPU GPU1 (gpu.ID 0x31555047), VRAM 300 KiB at 0x30000000` (GPU2 and
+   0x32555047 with G4's bitstream) and `Drivers: serial gpio ps2kbd sdcard gpu`.
 4. **A picture whose CRC is known**: type these at the prompt (the first line switches the monitor
    to the picture; the console is then on the UART only):
 
@@ -1280,7 +1303,10 @@ nothing programs the flash.
        gfx put 639 479 0x92
        gfx crc
 
-   It must print `gfx crc: frame N, crc 039d507c`: the C model's CRC of that picture (any N). The
+   It must print `gfx crc: frame N, crc 039d507c` (any N): the CRC of that picture as this
+   document alone gives it (gfxref: the command words written from section 5 and fed to the C
+   model, and the pixels computed directly, without SurfOS's code), which SurfOS printed on the
+   RTL system and the frame at its VGA pins had. The
    monitor shows a dark blue screen, a red box in a white frame with its copy lower right and part
    of it again in the middle, a green and a yellow diagonal, white text and blue text on yellow,
    and one light pixel in the bottom right corner.
@@ -1298,3 +1324,35 @@ What to send back: the UART capture (with the boot lines, the `gfx crc` lines an
 summary) and what the monitor showed at steps 4 to 6. A CRC other than 039d507c, a line saying
 `a stopped engine` or `the GPU reports`, or a picture that tears is a FAIL to keep and look into,
 as section 14 says of the G1 and G2 tests.
+
+### 15.7 The review (2026-10-25)
+
+An independent review of G3 at 484f1f7 found six medium and seven low findings, and found sound
+the FIFO credit, ABORT with the target and clip queued, the wrap-safe fence comparison and the
+interrupt's acknowledgement, the frame latch sampler, the page flips, the claim and Ctrl+C,
+textcon's interrupts-off read-modify-writes, the bounds and the board side. The fixes are
+84296c3..2310338 and this record (2310338 mends two slips of this round's own test-gpuos commits
+that its first run found: a FAIL_ON entry surfsim could not take as a regular expression, and the
+GPU's name overwritten by a loop variable). Each host-test fix was checked by putting its bug back
+into today's code alone and running test_gpu (seeds 1, 7 and 123):
+
+| Finding | Fix | Test: the bug put back / after |
+|---|---|---|
+| 1 medium: `gfx text` lost every word after the tenth without a word: the kernel shell hands a command 16 words and drops the rest | a line that fills the 16 is refused, saying why (CMD_USAGE); the stand-in splits a line as kshell does (c4121fe) | t_usage: a 12-word text refused, 9 words of text drawing all 17 cells: 2 checks fail / pass |
+| 2 medium: the demo put the display back before VRAM and GPAL, and on the way in loaded GPAL and copied VRAM under the display from before | the console on the screen whenever VRAM or GPAL changes, on the way in and out (336b58a; VRAM kept and put back four words a loop) | t_demo_order and t_demo_stop log every CPU write of VRAM and GPAL and every engine word with what the screen shows then: 484f1f7's way in and out, 51 of 678 checks fail / all pass |
+| 3 medium: an engine that stopped during the demo left graphics on the screen and the target at 320x496 (the put-back's own wait timed out) | after a stopped engine, said and ABORTed once, nothing waits for it again: display, palette, VRAM, target and clip back at once (391cae5) | t_demo_stop, the engine stopped 0.5 s in (from text, and from a picture): 484f1f7's end of the demo alone, 42 checks fail (a second timeout; display, target and clip not back) / pass |
+| 4 medium: test-gpuos passed with the GPU's interrupt dead | `gfx` typed again after the demos and the bench; between the first `gfx` and that one, the interrupts taken must be more than none and at least half the fences sent (each FENCE asks for one); irq.c's line for a source switched off for staying pending fails the run (fa736af, 2310338) | a trial kernel whose probe writes IE = 0 (not kept), test-gpuos: 24 of 25, `FAIL the GPU interrupt (intc source 5, IE.FENCE): 0 taken for the 156 fences sent between the first gfx and the last`; the old test passed such a kernel (the reviewer's p_noirq) / 25 of 25, 156 taken for 156 |
+| 5 medium: the mode-2 CRCs expected, and 039d507c, came from gfxscene, which runs gpu.c and gfx.c | gfxref works the test's pictures out from this document alone; its lines are checked to be the test's, and gfxscene must agree with it (1537776) | a gfx.c that joins the words of `gfx text` without their space: SurfOS and gfxscene agree on its CRCs (814667fb for crc 1), so the old test passed; now its gfxscene check fails before the RTL run / gfxref gives 039d507c, f345a76e and 309c14df, what SurfOS printed before: 039d507c stands |
+| 6 medium: test-gpuos expected GPU1, and G4's surf_gpu.v reads GPU2 | the ID it expects is gpu.h's GPU_ID_VALUE (6a9c411, 2310338) | its reading of this branch's gpu.h gives GPU1, 0x31555047, of sc/gpu-g4's GPU2, 0x32555047 (G4 not merged) |
+| 7 low: after a submission ended early (a FIFO that stayed full), the next command reported its sticky error | the errors are said and cleared at the stopped engine and at Ctrl+C (f575b07) | t_fifo, a lost word then a FIFO that stays full: 2 checks fail / pass |
+| 8 low: lines of 81 to 92 columns (usage lines, the stopped engine's, drivers' gpu line, gfx's fences) | every line laid out for its widest case: the counts at 10 digits, FENCE, FIFO_FREE's and FRAME_COUNT's widest, the widest target and clip, the longest names; drivers' line from gpu_describe() (6d2bd5a) | every test measures each line printed, t_columns prints each message at its widest: with the old gfx.c and gpu.c, 15 lines past 80 in t_columns alone, and t_usage, t_fifo and t_demo_stop fail / none |
+| 9 low: strtol's base 0 read 010 as octal | numbers are decimal (a leading zero too) or 0x hex (702ddd5) | t_usage, 010, 08, 012, -0x2, 0XfF: 1 check fails / passes |
+| 10 low: the bench counted text pixels past the target's right edge, and took a call's four arguments from its generator in no set order | each string wholly inside the target; the four numbers taken one statement at a time (85bae18) | t_bench at 640x480, 320x240, 200x100 and 64x32, every rate against the pixels the engine wrote for its opcode, every string the generator's x, y, fg, bg: 228,800 written of 262,144 counted at 640x480 / equal at every size |
+| 11 low: the probe read FENCE before its ABORT | ABORT first (0fd2047) | t_probe: 1 check fails / passes |
+| 12 low: in kernel/sync.c's event_wait_timeout() | not changed (15.3) | none |
+| 13 low: (a) Ctrl+C in `gfx crc` said "the engine stopped (ABORT)"; (b) at boot, gpuhw.c printed the ID after its complaint about INFO; (c) two steps labelled crc 5; (d) test_gpu.c's `vb` read uninitialised (clang) | (a) an ABORT is named only after one (f575b07); (b) one line, `+GPU: none:` with the value read (0fd2047); (c) crc 6 and crc 7 (8e850ee); (d) set (84296c3) | (a) t_fifo: 1 check fails / passes; (b) t_probe checks the line; (c) none; (d) test_gpu.c builds with clang -Werror, as with gcc |
+
+The stand-in grew with them: its CPU stalls come between atomic stretches, as an interrupt does
+(4418ea7, after the probe's ABORT moved a stall into one), and it measures every line printed,
+counts the pixels the engine writes by opcode, logs the CPU's VRAM and GPAL writes and the engine's
+words with the display shown, and names a holder of any length.

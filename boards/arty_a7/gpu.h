@@ -79,8 +79,9 @@ struct gpu_port {
     void (*wr)(void *ctx, u32 off, u32 v);
     u32 (*vrd)(void *ctx, u32 off);                     /* a video register */
     void (*vwr)(void *ctx, u32 off, u32 v);
-    u32 (*vram_rd)(void *ctx, u32 off);                 /* a VRAM word through the CPU's window */
-    void (*vram_wr)(void *ctx, u32 off, u32 v);
+    /* words of VRAM through the CPU's window, in a tight loop (off and the length multiples of 4) */
+    void (*vram_read)(void *ctx, u32 off, u32 *dst, u32 words);
+    void (*vram_write)(void *ctx, u32 off, const u32 *src, u32 words);
     u8 (*vram_rd8)(void *ctx, u32 off);                 /* a VRAM byte */
     void (*vram_wr8)(void *ctx, u32 off, u8 v);
     u64 (*us)(void *ctx);                               /* microseconds, from any start */
@@ -113,6 +114,7 @@ struct gpu {
     bool present;                       /* FEATURES.GPU and a known gpu.ID */
     bool irq;                           /* fences wait on the GPU's interrupt */
     const char *why;                    /* why there is no GPU */
+    char why_buf[72];                   /* (with the value read) */
     u32 features;                       /* sysinfo.FEATURES */
     u32 id, fifo_depth, vram_bytes;
     u32 credit;                         /* FIFO words known to be free */
@@ -125,6 +127,7 @@ struct gpu {
     bool latched;                       /* the last display change caught the frame latch */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back) */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
+    bool intr_aborted;                  /* this command's Ctrl+C stopped the engine (ABORT) */
     /* what happened, for gfx */
     u_long words, fences, irqs, irq_waits, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
@@ -134,6 +137,7 @@ struct gpu {
 /* the driver: FEATURES is sysinfo.FEATURES; GPU_OK when there is a GPU, else GPU_EABSENT with why set */
 int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features);
 const char *gpu_id_name(u32 id);        /* "GPU1", "GPU2" or NULL */
+const char *gpu_describe(const struct gpu *g, char *buf, u_int size);   /* drivers' line */
 
 int gpu_claim(struct gpu *g, const char *what);    /* GPU_OK, or GPU_EINTR (said) */
 void gpu_release(struct gpu *g);
@@ -190,8 +194,8 @@ void gpu_state_read(struct gpu *g, struct gpu_state *s);
 u64 gpu_now_us(struct gpu *g);
 bool gpu_interrupted(struct gpu *g);               /* Ctrl+C, unless keep_going */
 void gpu_flip(struct gpu *g, u32 base);            /* GFX_BASE alone: the next frame latch takes it whole */
-u32 gpu_vram_rd(struct gpu *g, u32 off);
-void gpu_vram_wr(struct gpu *g, u32 off, u32 v);
+int gpu_vram_read(struct gpu *g, u32 off, u32 *dst, u32 words);      /* GPU_EARG outside VRAM */
+int gpu_vram_write(struct gpu *g, u32 off, const u32 *src, u32 words);
 void *gpu_alloc(struct gpu *g, u32 bytes);         /* NULL when there is none */
 void gpu_free(struct gpu *g, void *p);
 

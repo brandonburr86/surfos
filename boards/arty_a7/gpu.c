@@ -44,6 +44,14 @@ const char *gpu_id_name(u32 id) {
     return NULL;
 }
 
+/* drivers' line, after its "    gpu       ": 66 columns at most, the counts at 10 digits each */
+const char *gpu_describe(const struct gpu *g, char *buf, u_int size) {
+    if(!g->present) snprintf(buf, size, "none: %s", g->why ? g->why : "not probed");
+    else snprintf(buf, size, "SurfGPU %s, %lu KiB VRAM; %lu fences, %lu errors", gpu_id_name(g->id),
+                  (u_long)(g->vram_bytes / 1024), g->fences, g->errors);
+    return buf;
+}
+
 static bool interrupted(struct gpu *g) {
     return !g->keep_going && P(g)->interrupted(CTX(g));
 }
@@ -65,18 +73,23 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
     }
     g->id = RD(g, SURF_GPU_ID);
     if(!gpu_id_name(g->id)) {
-        g->why = "its gpu.ID is not GPU1 or GPU2";
+        snprintf(g->why_buf, sizeof(g->why_buf), "its gpu.ID reads 0x%08lx, neither GPU1 nor GPU2", (u_long)g->id);
+        g->why = g->why_buf;
         return GPU_EABSENT;
     }
     info = RD(g, SURF_GPU_INFO);
     g->fifo_depth = (info & SURF_GPU_INFO_FIFO_DEPTH_MASK) >> SURF_GPU_INFO_FIFO_DEPTH_LSB;
     g->vram_bytes = ((info & SURF_GPU_INFO_VRAM_KIB_MASK) >> SURF_GPU_INFO_VRAM_KIB_LSB) * 1024u;
     if(!g->fifo_depth || g->vram_bytes != SURF_VRAM_BYTES) {
-        g->why = "gpu.INFO gives no FIFO, or not the map's 300 KiB of VRAM";
+        snprintf(g->why_buf, sizeof(g->why_buf), "gpu.INFO reads 0x%08lx: no FIFO, or not 300 KiB of VRAM", (u_long)info);
+        g->why = g->why_buf;
         return GPU_EABSENT;
     }
     g->irq = port->irq_arm && port->irq_wait;
     g->spin_us = GPU_SPIN_US;
+    /* ABORT before FENCE is read: a FENCE a warm restart left queued cannot complete after the read,
+       so the values sent from here on are new ones */
+    WR(g, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
     g->fence_sent = RD(g, SURF_GPU_FENCE);
     WR(g, SURF_GPU_IE, g->irq ? SURF_GPU_IE_FENCE_MASK : 0);
     g->present = true;
@@ -88,9 +101,10 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
 int gpu_claim(struct gpu *g, const char *what) {
     char who[64];
     bool said = false;
+    g->intr_aborted = false;
     while(!P(g)->trylock(CTX(g))) {
         if(!said) {
-            printf("    %s: the GPU is in use (%s): waiting; Ctrl+C gives up\n", what,
+            printf("    %s: the GPU is in use: waiting (Ctrl+C gives up)\n    held by %s\n", what,
                    P(g)->holder(CTX(g), who, sizeof(who)));
             said = true;
         }
@@ -130,30 +144,9 @@ int gpu_abort(struct gpu *g, const char *what) {
     return r;
 }
 
-static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
-    char buf[48];
-    u32 st = RD(g, SURF_GPU_STATUS), ff = RD(g, SURF_GPU_FIFO_FREE), fence = RD(g, SURF_GPU_FENCE);
-    g->timeouts++;
-    if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
-    else buf[0] = 0;
-    printf("    %s: the GPU %s for 2 seconds: a stopped engine; ABORT\n"
-           "    (STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s)\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
-    gpu_abort(g, what);
-    return GPU_ETIMEOUT;
-}
-
-static int stop_intr(struct gpu *g, const char *what) {
-    g->ctrl_c++;
-    gpu_abort(g, what);
-    return GPU_EINTR;
-}
-
-int gpu_check(struct gpu *g, const char *what) {
+/* the sticky errors in st said in words, counted and cleared (written 1); the caller ABORTs */
+static void say_errors(struct gpu *g, const char *what, u32 st) {
     char msg[300];
-    u32 st;
-    if(!g->present) return GPU_EABSENT;
-    st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
-    if(!st) return GPU_OK;
     g->errors++;
     g->last_error = st;
     if(st & SURF_GPU_STATUS_OVERFLOW_MASK) g->overflows++;
@@ -166,6 +159,44 @@ int gpu_check(struct gpu *g, const char *what) {
     printf("    %s: the GPU reports:\n%s    %s: cleared; the engine ABORTed, its target and clip sent again\n", what, msg,
            what);
     WR(g, SURF_GPU_STATUS, st);
+}
+
+/* after an ABORT that ended a submission early (a stopped engine, Ctrl+C): the sticky errors are
+   said and cleared now, not left for the next command to find (an OVERFLOW is often why) */
+static void after_abort(struct gpu *g, const char *what) {
+    u32 st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
+    if(st) say_errors(g, what, st);
+}
+
+/* (80 columns with every number at its widest: STATUS 8 hex digits, FIFO_FREE's 16 bits, FENCE 10 digits) */
+static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
+    char buf[48];
+    u32 st = RD(g, SURF_GPU_STATUS), fence = RD(g, SURF_GPU_FENCE);
+    u32 ff = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
+    g->timeouts++;
+    if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
+    else buf[0] = 0;
+    printf("    %s: the GPU %s for 2 s: a stopped engine; ABORT\n"
+           "    STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
+    gpu_abort(g, what);
+    after_abort(g, what);
+    return GPU_ETIMEOUT;
+}
+
+static int stop_intr(struct gpu *g, const char *what) {
+    g->ctrl_c++;
+    g->intr_aborted = true;
+    gpu_abort(g, what);
+    after_abort(g, what);
+    return GPU_EINTR;
+}
+
+int gpu_check(struct gpu *g, const char *what) {
+    u32 st;
+    if(!g->present) return GPU_EABSENT;
+    st = RD(g, SURF_GPU_STATUS) & ST_ERRORS;
+    if(!st) return GPU_OK;
+    say_errors(g, what, st);
     gpu_abort(g, what);
     return GPU_EERROR;
 }
@@ -484,7 +515,7 @@ int gpu_screen_set(struct gpu *g, const struct gpu_screen *d, const char *what) 
     g->latched = caught;
     if(!caught) {
         g->latch_misses++;
-        printf("    %s: no vertical blanking seen in %lu ms: the registers written at once\n"
+        printf("    %s: no vertical blanking in %lu ms: the registers written at once\n"
                "    (the change may take two frames)\n", what, (u_long)(GPU_LATCH_LIMIT_US / 1000));
     }
     return GPU_OK;
@@ -602,7 +633,20 @@ void gpu_state_read(struct gpu *g, struct gpu_state *s) {
 u64 gpu_now_us(struct gpu *g) { return NOW(g); }
 bool gpu_interrupted(struct gpu *g) { return interrupted(g); }
 void gpu_flip(struct gpu *g, u32 base) { VWR(g, SURF_VIDEO_GFX_BASE, base & SURF_VIDEO_GFX_BASE_BASE_MASK); }
-u32 gpu_vram_rd(struct gpu *g, u32 off) { return P(g)->vram_rd(CTX(g), off); }
-void gpu_vram_wr(struct gpu *g, u32 off, u32 v) { P(g)->vram_wr(CTX(g), off, v); }
+static bool vram_span(u32 off, u32 words) {
+    return !(off & 3) && off <= SURF_VRAM_BYTES && words <= (SURF_VRAM_BYTES - off) / 4;
+}
+
+int gpu_vram_read(struct gpu *g, u32 off, u32 *dst, u32 words) {
+    if(!vram_span(off, words)) return GPU_EARG;
+    P(g)->vram_read(CTX(g), off, dst, words);
+    return GPU_OK;
+}
+
+int gpu_vram_write(struct gpu *g, u32 off, const u32 *src, u32 words) {
+    if(!vram_span(off, words)) return GPU_EARG;
+    P(g)->vram_write(CTX(g), off, src, words);
+    return GPU_OK;
+}
 void *gpu_alloc(struct gpu *g, u32 bytes) { return P(g)->alloc ? P(g)->alloc(CTX(g), bytes) : NULL; }
 void gpu_free(struct gpu *g, void *p) { if(p && P(g)->free) P(g)->free(CTX(g), p); }

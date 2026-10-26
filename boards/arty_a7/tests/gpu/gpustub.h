@@ -39,6 +39,14 @@ struct stub_disp {                      /* the display registers as one value */
     uint32_t mode, base, stride, scale;
 };
 
+struct stub_event {                     /* what changed what a picture shows (stub.watch) */
+    uint64_t t;
+    unsigned kind;
+};
+#define STUB_EV_CPU_VRAM    1           /* the CPU wrote VRAM through the window */
+#define STUB_EV_GPAL        2           /* a GPAL entry was written */
+#define STUB_EV_ENGINE_DRAW 3           /* the engine took a word that draws */
+
 struct stub_write {                     /* a display register write */
     uint64_t t;
     uint32_t reg, value;                /* reg: SURF_VIDEO_GFX_* or 0xFFFF for CTRL.MODE */
@@ -57,8 +65,9 @@ struct stub {
     uint64_t vbl_until;
     /* the CPU's time */
     uint64_t now;
-    uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us */
+    uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us (outside atomic stretches) */
     int frames_stop;                    /* the frame counter does not move (no pixel clock) */
+    uint32_t frames_frozen;             /* where it stays then (7 when 0) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];
@@ -70,6 +79,7 @@ struct stub {
     unsigned nw;
     /* knobs */
     int stopped;                        /* the engine takes no word */
+    uint64_t stop_at;                   /* it stops when now passes this (0: never) */
     unsigned slow;                      /* extra engine cycles for every word it takes */
     int irq_path;                       /* the port has the interrupt */
     unsigned drop_word;                 /* the CMD write with this number (1, 2, ...) is lost: OVERFLOW */
@@ -85,6 +95,8 @@ struct stub {
     int text_locks;                     /* text_lock() minus text_unlock() */
     int in_atomic;
     /* records */
+    unsigned long long op_px[64];       /* the pixels the engine wrote, by the opcode of the command */
+    unsigned cur_op;                    /* the command the engine is in */
     uint32_t *cmd;                      /* every CMD word that reached the FIFO, in order */
     unsigned ncmd, cmd_writes;          /* words logged; CMD writes made (dropped ones too) */
     unsigned writes_full;               /* CMD writes into a full FIFO (the driver's fault, not a knob's) */
@@ -101,10 +113,21 @@ struct stub {
     unsigned bad_vram;                  /* window accesses outside VRAM or unaligned */
     unsigned mode_unlocked;             /* set_mode() without the console lock or outside an atomic stretch */
     unsigned claims, claimed_twice, unlocked_free;
+    uint64_t abort_at, fence_read_at;   /* the first ABORT, the first read of FENCE */
     int no_memory;                      /* alloc() fails */
+    int watch;                          /* keep the events below */
+    struct stub_event *ev;
+    unsigned nev, ev_cap;
+    const char *holder;                 /* the other claimant as the port names it ('Shell 2', pid 9 when NULL) */
     char out[1 << 16];                  /* what the driver and gfx printed */
     unsigned nout;
+    unsigned col, line_start;           /* the line being printed: its columns so far, where it began in out */
+    unsigned widest;                    /* the widest line printed */
 };
+
+#define STUB_COLUMNS 80                 /* the console's line (GPU.md 15.2) */
+/* the lines printed wider than that since the last call (any stub), and the first of them */
+unsigned stub_too_wide(const char **first);
 
 /* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values */
 void stub_init(struct stub *s, int irq_path);
@@ -112,6 +135,7 @@ void stub_free(struct stub *s);
 /* the display a frame shows that began at frame k's start (what latch k - 1 took) */
 struct stub_disp stub_shown(const struct stub *s, uint64_t frame);
 uint64_t stub_frame_of(uint64_t t);     /* the frame t is in */
+struct stub_disp stub_visible(const struct stub *s, uint64_t t);    /* what the screen shows at t */
 /* the RGB444 picture the display shows now (a still picture), and its FRAME_CRC */
 void stub_render(const struct stub *s, const struct stub_disp *d, uint16_t *frame);
 uint32_t stub_crc(const struct stub *s, const struct stub_disp *d);
@@ -121,7 +145,8 @@ void stub_drain(struct stub *s, uint64_t max_us);
 /* gt_printf (the driver's and gfx's printf in this build) writes into the stub that is current */
 void stub_current(struct stub *s);
 int gt_printf(const char *fmt, ...);
-/* gfx with a line of words, on driver g over stub s; the output in s->out (cleared first) */
+/* gfx with a line of words, split as the kernel shell splits them, on driver g over stub s; the
+   output in s->out (cleared first) */
 int stub_gfx(struct stub *s, struct gpu *g, const char *line);
 
 #endif

@@ -13,6 +13,7 @@ register answers, when the engine takes a word, when a frame latch takes the dis
 #include <string.h>
 #include "surfcpu/soc.h"
 #include "gpustub.h"
+#include "../../../../shell/shell.h"
 
 extern const uint8_t font8x16[256][16];        /* driver/font8x16.c */
 
@@ -30,7 +31,7 @@ static uint64_t latch_of(uint64_t k) { return k * STUB_FRAME_US + STUB_LATCH_US;
 /* how many blankings have begun at time t: STATUS.FRAME and FRAME_COUNT (a frame's CRC is taken as
    its blanking begins) */
 static uint64_t blankings(const struct stub *s, uint64_t t) {
-    if(s->frames_stop) return 7;
+    if(s->frames_stop) return s->frames_frozen ? s->frames_frozen : 7;
     return t >= STUB_VBLANK_US ? (t - STUB_VBLANK_US) / STUB_FRAME_US + 1 : 0;
 }
 
@@ -80,6 +81,27 @@ uint32_t stub_crc(const struct stub *s, const struct stub_disp *d) {
     return gpu_frame_crc(picture);
 }
 
+/* what the screen shows at t: during a frame's lines, what its latch took; in its blanking, what the
+   next frame will show (a change then is seen first in that one) */
+struct stub_disp stub_visible(const struct stub *s, uint64_t t) {
+    uint64_t k = stub_frame_of(t);
+    return stub_shown(s, t % STUB_FRAME_US < STUB_VBLANK_US ? k : k + 1);
+}
+
+static void note(struct stub *s, unsigned kind, uint64_t t) {
+    if(!s->watch) return;
+    if(s->nev == s->ev_cap) {
+        unsigned cap = s->ev_cap ? 2 * s->ev_cap : 4096;
+        struct stub_event *e = realloc(s->ev, cap * sizeof(*e));
+        if(!e) return;
+        s->ev = e;
+        s->ev_cap = cap;
+    }
+    s->ev[s->nev].t = t;
+    s->ev[s->nev].kind = kind;
+    s->nev++;
+}
+
 /**** the engine ****/
 
 /* does this word make the engine draw (the last parameter of a FILL, COPY or LINE, or data)? */
@@ -113,7 +135,10 @@ static void take(struct stub *s, uint32_t w) {
         s->vbl_until = next_vblank(s->eng_cycles / 25);
     }
     if(s->check_tearing) tearing(s);
+    if(draws(&s->eng)) note(s, STUB_EV_ENGINE_DRAW, s->eng_cycles / 25);
+    if(gpu_engine_idle(&s->eng)) s->cur_op = (w >> 24) & 63;     /* a header */
     gpu_engine_word(&s->eng, w);
+    s->op_px[s->cur_op] += s->eng.writes - before;
     s->eng_cycles += 1 + s->slow + (s->eng.writes - before) / 4;
 }
 
@@ -149,9 +174,13 @@ static void push(struct stub *s, uint32_t w) {
 /* time passes on the CPU's side */
 static void tick(struct stub *s, uint64_t us) {
     s->now += us;
-    if(s->stall_at && s->now >= s->stall_at) {
-        s->now += s->stall_us;
+    if(s->stall_at && s->now >= s->stall_at && !s->in_atomic) {    /* an interrupt or another task: */
+        s->now += s->stall_us;                                      /* never inside an atomic stretch */
         s->stall_at = 0;
+    }
+    if(s->stop_at && s->now >= s->stop_at) {
+        s->stopped = 1;
+        s->stop_at = 0;
     }
     if(s->other_holds && !s->other_done && s->now + 1000 >= s->other_until) {
         unsigned i;
@@ -197,7 +226,10 @@ static uint32_t p_rd(void *c, uint32_t off) {
         s->free_said = v;
         if(!v) s->full_seen++;
         break;
-    case SURF_GPU_FENCE: v = s->eng.fence; break;
+    case SURF_GPU_FENCE:
+        v = s->eng.fence;
+        if(!s->fence_read_at) s->fence_read_at = s->now;
+        break;
     case SURF_GPU_INFO: v = s->info; break;
     }
     return v;
@@ -219,6 +251,7 @@ static void p_wr(void *c, uint32_t off, uint32_t v) {
             gpu_engine_abort(&s->eng);
             s->eng_cycles = s->now * 25;
             s->aborts++;
+            if(!s->abort_at) s->abort_at = s->now;
         }
         break;
     case SURF_GPU_CMD:
@@ -279,31 +312,42 @@ static void p_vwr(void *c, uint32_t off, uint32_t v) {
     tick(s, 1);
     if(off == SURF_VIDEO_STATUS && (v & SURF_VIDEO_STATUS_VBLANK_EV_MASK)) s->ev_cleared = s->now;
     else if(off == SURF_VIDEO_GFX_BASE || off == SURF_VIDEO_GFX_STRIDE || off == SURF_VIDEO_GFX_SCALE) log_write(s, off, v);
-    else if(off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4 * 256) s->gpal[(off - SURF_VIDEO_GPAL) / 4] = v & 0xFFF;
+    else if(off >= SURF_VIDEO_GPAL && off < SURF_VIDEO_GPAL + 4 * 256) {
+        note(s, STUB_EV_GPAL, s->now);
+        s->gpal[(off - SURF_VIDEO_GPAL) / 4] = v & 0xFFF;
+    }
 }
 
-static uint32_t p_vram_rd(void *c, uint32_t off) {
+/* a word a microsecond, as through the window */
+static void p_vram_read(void *c, uint32_t off, uint32_t *dst, uint32_t words) {
     struct stub *s = c;
-    tick(s, 1);
-    if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
-        s->bad_vram++;
-        return 0;
+    for(; words; words--, off += 4) {
+        tick(s, 1);
+        if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
+            s->bad_vram++;
+            *dst++ = 0;
+            continue;
+        }
+        *dst++ = (uint32_t)s->vram[off] | (uint32_t)s->vram[off + 1] << 8 | (uint32_t)s->vram[off + 2] << 16 |
+                 (uint32_t)s->vram[off + 3] << 24;
     }
-    return (uint32_t)s->vram[off] | (uint32_t)s->vram[off + 1] << 8 | (uint32_t)s->vram[off + 2] << 16 |
-           (uint32_t)s->vram[off + 3] << 24;
 }
 
-static void p_vram_wr(void *c, uint32_t off, uint32_t v) {
+static void p_vram_write(void *c, uint32_t off, const uint32_t *src, uint32_t words) {
     struct stub *s = c;
-    tick(s, 1);
-    if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
-        s->bad_vram++;
-        return;
+    for(; words; words--, off += 4) {
+        uint32_t v = *src++;
+        tick(s, 1);
+        if(off + 4 > GPU_VRAM_BYTES || (off & 3)) {
+            s->bad_vram++;
+            continue;
+        }
+        note(s, STUB_EV_CPU_VRAM, s->now);
+        s->vram[off] = (uint8_t)v;
+        s->vram[off + 1] = (uint8_t)(v >> 8);
+        s->vram[off + 2] = (uint8_t)(v >> 16);
+        s->vram[off + 3] = (uint8_t)(v >> 24);
     }
-    s->vram[off] = (uint8_t)v;
-    s->vram[off + 1] = (uint8_t)(v >> 8);
-    s->vram[off + 2] = (uint8_t)(v >> 16);
-    s->vram[off + 3] = (uint8_t)(v >> 24);
 }
 
 static uint8_t p_vram_rd8(void *c, uint32_t off) {
@@ -323,6 +367,7 @@ static void p_vram_wr8(void *c, uint32_t off, uint8_t v) {
         s->bad_vram++;
         return;
     }
+    note(s, STUB_EV_CPU_VRAM, s->now);
     s->vram[off] = v;
 }
 
@@ -379,10 +424,12 @@ static u_long p_atomic_begin(void *c) {
     return 1;
 }
 
+/* interrupts on again: a stall that came meanwhile (an interrupt, another task) happens now */
 static void p_atomic_end(void *c, u_long flags) {
     struct stub *s = c;
     (void)flags;
     s->in_atomic--;
+    if(!s->in_atomic) tick(s, 0);
 }
 
 static int p_text_lock(void *c) {
@@ -428,8 +475,8 @@ static void p_unlock(void *c) {
 }
 
 static const char *p_holder(void *c, char *buf, u_int size) {
-    (void)c;
-    snprintf(buf, size, "'Shell 2', pid 9");
+    struct stub *s = c;
+    snprintf(buf, size, "%s", s->holder ? s->holder : "'Shell 2', pid 9");
     return buf;
 }
 
@@ -445,12 +492,13 @@ static void p_free(void *c, void *p) {
 
 void stub_init(struct stub *s, int irq_path) {
     static const struct gpu_port port = {
-        NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_rd, p_vram_wr, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
+        NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
         p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
         p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
     };
     unsigned n;
     uint32_t *log = s->cmd ? s->cmd : malloc(STUB_CMD_LOG * sizeof(uint32_t));
+    free(s->ev);
     memset(s, 0, sizeof(*s));
     s->cmd = log;
     s->port = port;
@@ -478,14 +526,50 @@ void stub_init(struct stub *s, int irq_path) {
 void stub_free(struct stub *s) {
     free(s->cmd);
     s->cmd = NULL;
+    free(s->ev);
+    s->ev = NULL;
+    s->nev = s->ev_cap = 0;
 }
 
 /**** gfx with a line ****/
 
+/* every line printed is measured in the console's columns (a UTF-8 sequence is one) */
+static unsigned too_wide;
+static char wide_first[240];
+
+unsigned stub_too_wide(const char **first) {
+    unsigned n = too_wide;
+    if(first) *first = wide_first;
+    too_wide = 0;
+    return n;
+}
+
+static void measure(struct stub *s, unsigned from) {
+    unsigned i;
+    if(s->line_start > from) {                  /* out was cleared */
+        s->line_start = from;
+        s->col = 0;
+    }
+    for(i = from; i < s->nout; i++) {
+        unsigned char ch = (unsigned char)s->out[i];
+        if(ch != '\n') {
+            if((ch & 0xC0) != 0x80) s->col++;
+            continue;
+        }
+        if(s->col > s->widest) s->widest = s->col;
+        if(s->col > STUB_COLUMNS && !too_wide++)
+            snprintf(wide_first, sizeof(wide_first), "%.*s", (int)(i - s->line_start), s->out + s->line_start);
+        s->col = 0;
+        s->line_start = i + 1;
+    }
+}
+
 int gt_printf(const char *fmt, ...) {
     va_list ap;
     int n = 0;
+    unsigned from;
     if(!cur) return 0;
+    from = cur->nout;
     va_start(ap, fmt);
     if(cur->nout < sizeof(cur->out) - 1) {
         n = vsnprintf(cur->out + cur->nout, sizeof(cur->out) - cur->nout, fmt, ap);
@@ -493,6 +577,7 @@ int gt_printf(const char *fmt, ...) {
         if(cur->nout > sizeof(cur->out) - 1) cur->nout = sizeof(cur->out) - 1;
     }
     va_end(ap);
+    measure(cur, from);
     if(getenv("GPU_TEST_VERBOSE")) {
         va_start(ap, fmt);
         vprintf(fmt, ap);
@@ -501,15 +586,18 @@ int gt_printf(const char *fmt, ...) {
     return n;
 }
 
+/* the words as the kernel shell splits them (arch/riscv32/kshell.c's split_args(): spaces and tabs,
+   SHELL_MAX_ARGS words at most, the rest dropped) */
 int stub_gfx(struct stub *s, struct gpu *g, const char *line) {
-    char buf[512], *argv[64], *save = NULL, *t;
+    char buf[SHELL_LINE_LEN + 1], *argv[SHELL_MAX_ARGS + 1], *save = NULL, *t;
     int argc = 0;
     snprintf(buf, sizeof(buf), "%s", line);
-    for(t = strtok_r(buf, " ", &save); t && argc < 63; t = strtok_r(NULL, " ", &save)) argv[argc++] = t;
+    for(t = strtok_r(buf, " \t", &save); t && argc < SHELL_MAX_ARGS; t = strtok_r(NULL, " \t", &save)) argv[argc++] = t;
     argv[argc] = NULL;
     cur = s;
     s->nout = 0;
     s->out[0] = 0;
+    s->col = s->line_start = 0;
     if(getenv("GPU_TEST_VERBOSE")) printf("> %s\n", line);
     return gfx_command(g, argc, argv);
 }

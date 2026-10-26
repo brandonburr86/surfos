@@ -31,7 +31,9 @@ the VRAM it drew on back as they were.
 
 Pure code over the driver: the host test runs this file against the C model of the engine
 (boards/arty_a7/tests/gpu/), and gfxscene.c there replays a list of these commands in the model
-to know the FRAME_CRCs SurfOS must print on the RTL system (make test-gpuos).
+to know the FRAME_CRCs SurfOS must print for them; test-gpuos checks SurfOS's, and gfxscene's,
+against gfxref.c's, which are worked out from GPU.md without this file or the driver. Every
+line printed fits the console's 80 columns, whatever the numbers in it (the host test measures).
 */
 
 #include <surfos/types.h>
@@ -78,14 +80,31 @@ static int usage(const char *line) {
     return CMD_USAGE;
 }
 
-/* a whole number in [lo, hi], decimal or 0x hex, with a sign */
+/* a whole number in [lo, hi]: decimal (a leading zero is still decimal: 012 is twelve), or hex
+   after 0x; an optional sign. Read here rather than with strtol(), whose base 0 takes a leading
+   zero for octal and whose overflow differs between the kernel's library and the host's. */
 static bool num(const char *s, long lo, long hi, long *out) {
-    char *end;
-    long v;
-    if(!s || !*s || strlen(s) > 12) return false;
-    v = strtol(s, &end, 0);
-    if(*end || v < lo || v > hi) return false;
-    *out = v;
+    u32 v = 0, base = 10, d, digits = 0;
+    bool neg = false;
+    long n;
+    if(!s) return false;
+    if(*s == '-' || *s == '+') neg = *s++ == '-';
+    if(s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+        s += 2;
+    }
+    for(; *s; s++, digits++) {
+        if(*s >= '0' && *s <= '9') d = (u32)(*s - '0');
+        else if(base == 16 && *s >= 'a' && *s <= 'f') d = (u32)(*s - 'a' + 10);
+        else if(base == 16 && *s >= 'A' && *s <= 'F') d = (u32)(*s - 'A' + 10);
+        else return false;
+        if(v > (0x7FFFFFFFu - d) / base) return false;          /* past any range here */
+        v = v * base + d;
+    }
+    if(!digits) return false;
+    n = neg ? -(long)v : (long)v;
+    if(n < lo || n > hi) return false;
+    *out = n;
     return true;
 }
 
@@ -100,11 +119,11 @@ static bool nums(char **argv, int first, const char *kinds, long *out) {
 }
 
 /* the driver's result as the command's status; GPU_EINTR is said here, the rest by the driver */
-static int status(int r, const char *what) {
+static int status(struct gpu *g, int r, const char *what) {
     if(r == GPU_OK) return CMD_OK;
-    if(r == GPU_EINTR) printf("    %s: interrupted: the engine stopped (ABORT)\n", what);
+    if(r == GPU_EINTR) printf("    %s: interrupted%s\n", what, g->intr_aborted ? ": the engine stopped (ABORT)" : " (Ctrl+C)");
     if(r == GPU_EARG) {
-        printf("    %s: refused: a coordinate outside -32768..32767 or a size outside 0..65535\n", what);
+        printf("    %s: refused: a coordinate past -32768..32767 or a size past 0..65535\n", what);
         return CMD_USAGE;
     }
     return CMD_FAIL;
@@ -120,7 +139,7 @@ static int claim(struct gpu *g, const char *what) {
 static int finish(struct gpu *g, int r, const char *what) {
     if(!r) r = gpu_sync(g, what);
     gpu_release(g);
-    return status(r, what);
+    return status(g, r, what);
 }
 
 /**** gfx: the state ****/
@@ -128,14 +147,14 @@ static int finish(struct gpu *g, int r, const char *what) {
 static int show(struct gpu *g) {
     struct gpu_screen d;
     struct gpu_state s;
-    char pal[64], irqs[64];
+    char pal[64];
     if(claim(g, "gfx")) return CMD_FAIL;
-    if(g->irq) snprintf(irqs, sizeof(irqs), "%lu interrupts (intc source 5, IE.FENCE)", g->irqs);
-    else snprintf(irqs, sizeof(irqs), "waited for with sleeps (no interrupt)");
     gpu_screen_get(g, &d);
     gpu_state_read(g, &s);
     gpu_pal_describe(g, pal, sizeof(pal));
     gpu_release(g);
+    /* 80 columns a line with every count at 10 digits (32 bits on the board) and every register at
+       its widest */
     printf("    SurfGPU %s (gpu.ID 0x%08lx), VRAM %lu KiB at 0x%08lx\n"
            "    engine %s, STATUS 0x%lx, FIFO %lu words, %lu free\n"
            "    display: mode %lu, %s\n"
@@ -145,14 +164,18 @@ static int show(struct gpu *g) {
            (s.status & SURF_GPU_STATUS_BUSY_MASK) ? "busy" : "idle", (u_long)s.status, (u_long)g->fifo_depth,
            (u_long)s.fifo_free, (u_long)d.mode, gpu_mode_name(d.mode), (u_long)d.base, (u_long)d.stride, (u_long)d.scale,
            d.scale == 2 ? "320x240 doubled" : "640x480", pal);
-    printf("    target: VRAM %lu, stride %lu, %lux%lu; clip (%lu, %lu)-(%lu, %lu)\n"
-           "    fences: %lu sent, FENCE %lu; %s\n"
-           "    %lu words sent; errors %lu (overflow %lu, bad opcode %lu, bad parameters %lu)\n"
-           "    timeouts %lu, ABORTs %lu; display changes %lu, %lu without a blanking\n"
-           "    frames: FRAME_COUNT %lu, FRAME_CRC %08lx (that frame's)\n",
+    printf("    target: VRAM %lu, stride %lu, %lux%lu\n"
+           "    clip: (%lu, %lu)-(%lu, %lu)\n"
+           "    sent: %lu words, %lu fences; FENCE %lu\n",
            (u_long)g->t_base, (u_long)g->t_stride, (u_long)g->t_w, (u_long)g->t_h, (u_long)g->c_x0, (u_long)g->c_y0,
-           (u_long)g->c_x1, (u_long)g->c_y1, g->fences, (u_long)s.fence, irqs, g->words,
-           g->errors, g->overflows, g->bad_opcodes, g->bad_params, g->timeouts, g->aborts, g->display_changes,
+           (u_long)g->c_x1, (u_long)g->c_y1, g->words, g->fences, (u_long)s.fence);
+    if(g->irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n", g->irqs);
+    else printf("    interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n");
+    printf("    errors %lu, timeouts %lu, ABORTs %lu\n"
+           "    by kind: OVERFLOW %lu, BAD_OPCODE %lu, BAD_PARAM %lu\n"
+           "    display changes %lu, %lu without a blanking\n"
+           "    frames: FRAME_COUNT %lu, FRAME_CRC %08lx (that frame's)\n",
+           g->errors, g->timeouts, g->aborts, g->overflows, g->bad_opcodes, g->bad_params, g->display_changes,
            g->latch_misses, (u_long)s.frame_count, (u_long)s.frame_crc);
     return CMD_OK;
 }
@@ -185,7 +208,7 @@ static int mode(struct gpu *g, int argc, char **argv) {
     d.mode = m;
     if(!r) r = gpu_screen_set(g, &d, "gfx mode");
     gpu_release(g);
-    if(r) return status(r, "gfx mode");
+    if(r) return status(g, r, "gfx mode");
     if(m == GPU_MODE_TEXT) printf("    display: mode 1, text (the picture stays in VRAM)\n");
     else printf("    display: mode %lu, %s, %s\n    the target is that picture: %lux%lu at VRAM 0, stride %lu\n",
                 (u_long)m, gpu_mode_name(m), scale == 2 ? "320x240 doubled" : "640x480", (u_long)g->t_w,
@@ -214,7 +237,7 @@ static int rect(struct gpu *g, int argc, char **argv) {
     long v[5];
     if(argc != 6 || !nums(argv, 1, "xxwwc", v)) return usage("gfx rect x y w h c");
     if(v[0] + v[2] - 1 > 32767 || v[1] + v[3] - 1 > 32767)
-        return usage("gfx rect x y w h c   (the far corner, x + w - 1 and y + h - 1, at most 32767)");
+        return usage("gfx rect x y w h c   (x + w - 1 and y + h - 1 at most 32767)");
     if(claim(g, "gfx rect")) return CMD_FAIL;
     return finish(g, gpu_rect(g, v[0], v[1], v[2], v[3], (u8)v[4], "gfx rect"), "gfx rect");
 }
@@ -229,7 +252,7 @@ static int line(struct gpu *g, int argc, char **argv) {
 static int copy(struct gpu *g, int argc, char **argv) {
     long v[7];
     if((argc != 7 && argc != 8) || !nums(argv, 1, "xxxxww", v) || (argc == 8 && !num(argv[7], 0, 255, &v[6])))
-        return usage("gfx copy sx sy dx dy w h [key]   (key: a colour 0-255 that is not copied)");
+        return usage("gfx copy sx sy dx dy w h [key]   (key: a colour not copied)");
     if(claim(g, "gfx copy")) return CMD_FAIL;
     return finish(g, gpu_copy(g, v[0], v[1], v[2], v[3], v[4], v[5], argc == 8 ? (int)v[6] : -1, "gfx copy"), "gfx copy");
 }
@@ -257,7 +280,7 @@ static u_int cells_of(int argc, char **argv, int first, u8 *cells, u_int max) {
 }
 
 static int text(struct gpu *g, int argc, char **argv) {
-    static const char *use = "gfx text x y fg bg|- words...   (bg -: transparent; the console's 8x16 font)";
+    static const char *use = "gfx text x y fg bg|- words...   (bg -: transparent)";
     long v[3], bg = -1;
     u8 cells[TEXT_MAX];
     u_int n;
@@ -268,7 +291,7 @@ static int text(struct gpu *g, int argc, char **argv) {
 }
 
 static int pal(struct gpu *g, int argc, char **argv) {
-    static const char *use = "gfx pal rgb332|grey|ramps   or   gfx pal <n> <rgb444>   (n 0-255, rgb444 0-0xfff)";
+    static const char *use = "gfx pal rgb332|grey|ramps, or gfx pal n rgb444 (0-255, 0-0xfff)";
     u16 p[256];
     char name[64];
     long n, rgb;
@@ -302,14 +325,13 @@ static int put(struct gpu *g, int argc, char **argv) {
         return usage("gfx put x y c   (a pixel of the target)");
     if(claim(g, "gfx put")) return CMD_FAIL;
     if((u32)x >= g->t_w || (u32)y >= g->t_h) {
-        printf("    gfx put: (%ld, %ld) is outside the target (%lux%lu); usage: gfx put x y c\n", x, y, (u_long)g->t_w,
-               (u_long)g->t_h);
+        printf("    gfx put: (%ld, %ld) is outside the target, %lux%lu\n", x, y, (u_long)g->t_w, (u_long)g->t_h);
         gpu_release(g);
-        return CMD_USAGE;
+        return usage("gfx put x y c   (a pixel of the target)");
     }
     r = gpu_pixel_put(g, (u32)x, (u32)y, (u8)c, "gfx put");
     gpu_release(g);
-    return status(r, "gfx put");
+    return status(g, r, "gfx put");
 }
 
 static int get(struct gpu *g, int argc, char **argv) {
@@ -320,15 +342,14 @@ static int get(struct gpu *g, int argc, char **argv) {
     if(argc != 3 || !num(argv[1], 0, 32767, &x) || !num(argv[2], 0, 32767, &y)) return usage("gfx get x y   (a pixel of the target)");
     if(claim(g, "gfx get")) return CMD_FAIL;
     if((u32)x >= g->t_w || (u32)y >= g->t_h) {
-        printf("    gfx get: (%ld, %ld) is outside the target (%lux%lu); usage: gfx get x y\n", x, y, (u_long)g->t_w,
-               (u_long)g->t_h);
+        printf("    gfx get: (%ld, %ld) is outside the target, %lux%lu\n", x, y, (u_long)g->t_w, (u_long)g->t_h);
         gpu_release(g);
-        return CMD_USAGE;
+        return usage("gfx get x y   (a pixel of the target)");
     }
     off = g->t_base + (u32)y * g->t_stride + (u32)x;
     r = gpu_pixel_get(g, (u32)x, (u32)y, &c, "gfx get");
     gpu_release(g);
-    if(r) return status(r, "gfx get");
+    if(r) return status(g, r, "gfx get");
     printf("    (%ld, %ld) = %u (0x%02x), VRAM byte %lu (0x%08lx)\n", x, y, c, c, (u_long)off, (u_long)(SURF_VRAM_BASE + off));
     return CMD_OK;
 }
@@ -341,7 +362,7 @@ static int crc(struct gpu *g, int argc, char **argv) {
     if(claim(g, "gfx crc")) return CMD_FAIL;
     r = gpu_still_crc(g, &count, &value, "gfx crc");
     gpu_release(g);
-    if(r) return status(r, "gfx crc");
+    if(r) return status(g, r, "gfx crc");
     printf("    gfx crc: frame %lu, crc %08lx (a frame begun after the last change)\n",
            (u_long)count, (u_long)value);
     return CMD_OK;
@@ -354,7 +375,7 @@ static int reset(struct gpu *g, int argc, char **argv) {
     if(claim(g, "gfx reset")) return CMD_FAIL;
     r = gpu_reset(g, "gfx reset");
     gpu_release(g);
-    if(r) return status(r, "gfx reset");
+    if(r) return status(g, r, "gfx reset");
     printf("    gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640\n");
     return CMD_OK;
 }
@@ -381,7 +402,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
     char desc[64];
     u8 cells[32];
     i16 ends[256][4];
-    u32 w, h, seed = 2026, i, spin;
+    u32 w, h, seed = 2026, i, n, spin;
     u64 t0, px;
     int r = GPU_OK;
     (void)argv;
@@ -390,7 +411,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
     w = g->t_w;
     h = g->t_h;
     if(w < 64 || h < 32) {
-        printf("    gfx bench: the target (%lux%lu) is too small; gfx mode gfx makes it the picture\n", (u_long)w, (u_long)h);
+        printf("    gfx bench: the target, %lux%lu, is too small (gfx mode gfx: 640x480)\n", (u_long)w, (u_long)h);
         gpu_release(g);
         return CMD_FAIL;
     }
@@ -432,18 +453,28 @@ static int bench(struct gpu *g, int argc, char **argv) {
         r = gpu_line(g, ends[i][0], ends[i][1], ends[i][2], ends[i][3], (u8)(i * 37 + 1), what);
     if(!r) r = gpu_sync(g, what);
     if(!r) rate("line", "256 lines", px, gpu_now_us(g) - t0);
-    /* text: 64 lines of 32 cells */
-    for(i = 0; i < 32; i++) cells[i] = (u8)(0x41 + i % 26);
+    /* text: 64 strings of 32 cells, or of as many as the target's width holds, each wholly inside
+       the target, so that the pixels counted are the pixels drawn; the generator's numbers taken
+       one statement at a time, x, y, fg, bg (a call's arguments are evaluated in no set order) */
+    n = w / FONT_WIDTH < 32 ? w / FONT_WIDTH : 32;
+    for(i = 0; i < n; i++) cells[i] = (u8)(0x41 + i % 26);
     t0 = gpu_now_us(g);
-    for(i = 0; i < 64 && !r && !gpu_interrupted(g); i++)
-        r = gpu_text(g, (i32)(next(&seed) % (w - 32)), (i32)(next(&seed) % (h - 16)), (u8)next(&seed), (int)(next(&seed) & 0xFF),
-                     cells, 32, what);
+    for(i = 0; i < 64 && !r && !gpu_interrupted(g); i++) {
+        i32 x = (i32)(next(&seed) % (w - n * FONT_WIDTH + 1));
+        i32 y = (i32)(next(&seed) % (h - FONT_HEIGHT + 1));
+        u8 fg = (u8)next(&seed);
+        int bg = (int)(next(&seed) & 0xFF);
+        r = gpu_text(g, x, y, fg, bg, cells, n, what);
+    }
     if(!r) r = gpu_sync(g, what);
-    if(!r) rate("text", "64 x 32 cells", 64ull * 32 * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
+    if(!r) {
+        snprintf(desc, sizeof(desc), "64 x %lu cells", (u_long)n);
+        rate("text", desc, 64ull * n * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
+    }
     if(!r && gpu_interrupted(g)) r = GPU_EINTR;
     g->spin_us = spin;
     gpu_release(g);
-    return status(r, what);
+    return status(g, r, what);
 }
 
 /**** gfx demo ****/
@@ -560,13 +591,13 @@ static int demo_frame(struct gpu *g, struct demo *s, u32 page, const char *what)
 
 static int demo(struct gpu *g, int argc, char **argv) {
     const char *what = "gfx demo";
-    struct gpu_screen before, shown;
+    struct gpu_screen before, text, shown;
     struct demo s;
     u16 pal_before[256], rgb[256];
-    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, i, spin;
+    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, spin;
     u64 t0, tick, now, secs;
     long seconds = 10;
-    bool pal_changed = false, interrupted = false;
+    bool pal_changed = false, interrupted = false, dead;
     int r, r2;
     if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx demo [seconds]   (1-3600, 10 when not given)");
     if(claim(g, what)) return CMD_FAIL;
@@ -576,15 +607,21 @@ static int demo(struct gpu *g, int argc, char **argv) {
     t_base = g->t_base; t_stride = g->t_stride; t_w = g->t_w; t_h = g->t_h;
     c_x0 = g->c_x0; c_y0 = g->c_y0; c_x1 = g->c_x1; c_y1 = g->c_y1;
     r = gpu_sync(g, what);
+    /* The console is on the screen whenever the palette and VRAM change, before and after: no frame
+       shows the picture from before over the demo's pages or palette, or the demo's pages being
+       overwritten (text mode shows neither VRAM nor GPAL). */
+    text = before;
+    text.mode = GPU_MODE_TEXT;
+    if(!r && before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &text, what);
     if(!r) {
         kept = (u32 *)gpu_alloc(g, DBYTES);
-        if(kept) for(i = 0; i < DBYTES / 4; i++) kept[i] = gpu_vram_rd(g, 4 * i);
+        if(kept) gpu_vram_read(g, 0, kept, DBYTES / 4);
         else printf("    gfx demo: no memory to keep the %lu bytes of VRAM it draws on;\n"
                     "    they stay as the demo leaves them\n", (u_long)DBYTES);
     }
     /* RGB332, the sprites, both pages, the first frame on page A, then the display */
     gpu_pal_make(GPU_PAL_RGB332, rgb);
-    if(memcmp(rgb, pal_before, sizeof(rgb))) {
+    if(!r && memcmp(rgb, pal_before, sizeof(rgb))) {
         gpu_pal_write(g, rgb);
         pal_changed = true;
     }
@@ -632,19 +669,26 @@ static int demo(struct gpu *g, int argc, char **argv) {
     if(r == GPU_EINTR) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
-    /* the display back as it was, also after Ctrl+C */
+    /* Back as it was, also after Ctrl+C or a stopped engine: the console on the screen while VRAM and
+       the palette go back, the driver's target and clip as before (queued for the engine), then the
+       display from before. None of it needs the engine: one that stopped was said and ABORTed once,
+       and nothing here waits for it again (its FIFO is empty after the ABORT, so the queued words
+       fit). */
     g->keep_going = true;
+    dead = r == GPU_ETIMEOUT;
     if(interrupted) gpu_abort(g, what);
-    r2 = gpu_sync(g, what);
-    if(!r2) r2 = gpu_screen_set(g, &before, what);
+    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
+    r2 = gpu_screen_set(g, &text, what);
     if(kept) {
-        for(i = 0; i < DBYTES / 4; i++) gpu_vram_wr(g, 4 * i, kept[i]);
+        gpu_vram_write(g, 0, kept, DBYTES / 4);
         gpu_free(g, kept);
     }
     if(pal_changed) gpu_pal_write(g, pal_before);
-    if(!r2) r2 = gpu_set_target(g, t_base, t_stride, t_w, t_h, what);
-    if(!r2 && (c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h)) r2 = gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what);
-    if(!r2) r2 = gpu_sync(g, what);
+    if(gpu_set_target(g, t_base, t_stride, t_w, t_h, what) == GPU_ETIMEOUT) dead = true;
+    if((c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h) && gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what) == GPU_ETIMEOUT)
+        dead = true;
+    if(!dead) gpu_sync(g, what);
+    if(!r2 && before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &before, what);
     g->keep_going = false;
     gpu_release(g);
     if(frames) {
@@ -657,7 +701,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
         printf("    gfx demo: ended by Ctrl+C\n");
         return CMD_FAIL;
     }
-    return r ? status(r, what) : r2 ? CMD_FAIL : CMD_OK;
+    return r ? status(g, r, what) : r2 ? CMD_FAIL : CMD_OK;
 }
 
 /**** the command ****/
@@ -673,18 +717,25 @@ static const struct {
 
 int gfx_command(struct gpu *g, int argc, char **argv) {
     u_int i;
+    /* The kernel shell hands a command SHELL_MAX_ARGS words at most and drops the rest without a
+       word (arch/riscv32/kshell.c's split_args(), as shell/main.c's): a line that filled them may
+       have lost some, so it is refused rather than drawn short. */
+    if(argc >= SHELL_MAX_ARGS) {
+        printf("    usage: a gfx line holds %d words at most, gfx text 9 of text: the shell\n"
+               "    passes a command %d and drops the rest\n", SHELL_MAX_ARGS - 1, SHELL_MAX_ARGS);
+        return CMD_USAGE;
+    }
     if(argc >= 2 && (!strcmp(argv[1], "help") || !strcmp(argv[1], "-h"))) {
         usage(NULL);
         return CMD_OK;
     }
     if(!g->present) {
-        if(g->why && g->id) printf("    gfx: no GPU: %s (it reads 0x%08lx)\n", g->why, (u_long)g->id);
-        else printf("    gfx: no GPU: %s\n", g->why ? g->why : "none found");
+        printf("    gfx: no GPU: %s\n", g->why ? g->why : "none found");
         return CMD_FAIL;
     }
     if(argc < 2) return show(g);
     for(i = 0; i < sizeof(subs) / sizeof(subs[0]); i++)
         if(!strcmp(argv[1], subs[i].name)) return subs[i].fn(g, argc - 1, argv + 1);
-    printf("    gfx: no such subcommand: %s\n", argv[1]);
+    printf("    gfx: no such subcommand: %.48s\n", argv[1]);   /* 80 columns, whatever was typed */
     return usage(NULL);
 }

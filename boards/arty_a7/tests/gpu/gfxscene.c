@@ -17,6 +17,8 @@ the CRC the C model computes for the picture shown (n counts the gfx crc lines f
 display mode then): what SurfOS must print for the same commands on the RTL system, where the
 picture is graphics alone (mode 2; in modes 1 and 3 the console's text is part of the frame,
 which the model here has not got). With --ppm each of those frames is written as DIR/crc-<n>.ppm.
+Since it runs the same gfx.c and gpu.c as SurfOS, test-gpuos takes its expectation from gfxref.c
+(the pictures from GPU.md alone) and checks that gfxscene agrees.
 Everything gfx says goes to the output too, after "> " and the line. Exit status 0 when every
 command returned CMD_OK.
 */

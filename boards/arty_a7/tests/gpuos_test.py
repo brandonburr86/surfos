@@ -9,25 +9,35 @@ graphics modes) and the C++ models at its pins; SurfBoot (build/fw/surfboot.mem)
 kernel package (SURFOS.BIN) from a tools/mkcard.py card, and the commands of STEPS below are
 typed on the UART. Checked:
 
-  * the driver found the GPU at boot (+GPU: line), drivers lists it, gfx describes it;
+  * the driver found the GPU at boot (+GPU: line), drivers lists it, gfx describes it, all with
+    the gpu.ID that firmware/include/surfcpu/gpu.h gives the RTL (GPU_ID_VALUE: "GPU1", or G4's
+    "GPU2");
   * every `gfx crc` printed a FRAME_CRC that is the CRC of a frame captured at the VGA pins
-    (surfsim --vga-crc), and, where the display shows graphics alone (mode 2), the CRC the C
-    model computes for the same commands: boards/arty_a7/tests/gpu/gfxscene replays them in
-    sim/models/gpu_model.c through the same gfx.c and gpu.c;
+    (surfsim --vga-crc), and, where the display shows graphics alone (mode 2), the CRC that
+    boards/arty_a7/tests/gpu/gfxref works out for the same lines without SurfOS's code (command
+    words written from GPU.md, fed to sim/models/gpu_model.c, and the pixels computed directly);
+    gfxref's lines must be this test's, and gfxscene (the same lines through gfx.c and gpu.c in
+    the model, the owner's tool for other pictures) must agree with gfxref;
+  * the GPU's interrupt works: between the first gfx and the last, interrupts (intc source 5,
+    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one);
   * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
     typed after its first second, and after each the picture's CRC is the CRC before them (the
     display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
   * gfx mode overlay: the last frame at the pins shows the console's text over the picture: the
     text decoded from the pixels (surfsim --vga-dir) holds the last command and its output, every
-    pixel where no character is is the picture's (gfxscene's frame of it), and the rest are text;
-  * nothing said a stopped engine, a GPU error, a missed blanking, a panic.
+    pixel where no character is is the picture's (gfxref's frame of it), and the rest are text;
+  * nothing said a stopped engine, a GPU error, a missed blanking, an interrupt switched off for
+    staying pending (irq.c's "+IRQ: source N stays pending although its handler ran 32 times"), a
+    panic. FAIL_ON's entries are surfsim's --fail-on regular expressions as well as substrings here,
+    so they hold no regular expression's special characters.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present.
 
   gpuos_test.py --surfsim-gpu build/sim/surfsim_gpu --surfsim build/sim/surfsim --rom build/fw/surfboot.mem
                 --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN
-                --gfxscene build/gpuos/gfxscene [--work DIR] [--evidence FILE] [--keep] [--seed N]
+                --gfxscene build/gpuos/gfxscene --gfxref build/gpuos/gfxref [--gpu-h FILE]
+                [--work DIR] [--evidence FILE] [--keep] [--seed N]
 
 The card image is deleted at the end unless --keep. Exit status 0 when every check passed.
 """
@@ -44,16 +54,17 @@ ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
-           'the GPU reports', 'no vertical blanking seen', 'Invalid command']
+           'the GPU reports', 'no vertical blanking in', 'stays pending although its handler ran', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
+OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must print for the first picture
 
 # (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
-# which Ctrl+C is typed])
+# which Ctrl+C is typed]); @NAME@ and @ID@ become the gpu.ID of gpu.h ("GPU1", 0x31555047)
+STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'[\s\S]*frames: FRAME_COUNT \d+')
 STEPS = [
-    ('gfx', r'SurfGPU GPU1 \(gpu\.ID 0x31555047\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*'
-            r'frames: FRAME_COUNT \d+', 'the state'),
-    ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU GPU1, 300 KiB VRAM, FIFO 64; \d+ words, \d+ fences, 0 errors',
+    ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*' + STATE, 'the state'),
+    ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU @NAME@, 300 KiB VRAM; \d+ fences, 0 errors',
      'the driver table'),
     ('gfx mode gfx 1', r'display: mode 2, graphics, 640x480' + NL + r'\s+the target is that picture: 640x480 at VRAM 0, '
      r'stride 640', 'graphics at 640x480'),
@@ -87,12 +98,13 @@ STEPS = [
     ('gfx crc', CRC_LINE.pattern, 'crc 5'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
+    ('gfx', STATE, 'the state after the demos and the bench'),
     ('gfx mode text', r'display: mode 1, text', 'text'),
-    ('gfx crc', CRC_LINE.pattern, 'crc 5'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 6'),
     ('gfx mode overlay 1', r'display: mode 3, graphics with the text over it, 640x480', 'the overlay'),
     ('gfx clear 0x49', None, ''),
     ('gfx fill 320 240 320 240 0x92', None, ''),
-    ('gfx crc', CRC_LINE.pattern, 'crc 6'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 7'),
     ('echo the shell over the picture', r'the shell over the picture' + NL, 'a command over the picture'),
 ]
 NOGPU_STEPS = [
@@ -104,6 +116,14 @@ NOGPU_STEPS = [
 def rx(text):
     """text as an ECMAScript regular expression: only its special characters escaped"""
     return re.sub(r'([\\^$.|?*+()\[\]{}])', r'\\\1', text)
+
+
+def gpu_id(path):
+    """gpu.h's GPU_ID_VALUE (what gpu.ID reads on the RTL it describes) and its name: the ID's four bytes,
+    lowest first, are ASCII ("GPU1" is 0x31555047)"""
+    m = re.search(r'^#define\s+GPU_ID_VALUE\s+(0x[0-9A-Fa-f]+)u?\b', open(path).read(), re.M)
+    value = int(m.group(1), 16)
+    return value, value.to_bytes(4, 'little').decode('ascii')
 
 
 def read_ppm(path):
@@ -123,6 +143,9 @@ def main():
     ap.add_argument('--mkcard', required=True)
     ap.add_argument('--package', required=True)
     ap.add_argument('--gfxscene', required=True)
+    ap.add_argument('--gfxref', required=True)
+    ap.add_argument('--gpu-h', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+                                                    'surfcpu', 'firmware', 'include', 'surfcpu', 'gpu.h'))
     ap.add_argument('--work', default='build/gpuos/system')
     ap.add_argument('--evidence')
     ap.add_argument('--keep', action='store_true')
@@ -138,29 +161,56 @@ def main():
         print('%s %s' % ('ok  ' if ok else 'FAIL', what), flush=True)
         return bool(ok)
 
+    ident, gpu_name = gpu_id(a.gpu_h)
+    idhex = '0x%08x' % ident
+    steps = [(step[0], step[1].replace('@NAME@', gpu_name).replace('@ID@', idhex) if step[1] else step[1]) + step[2:]
+             for step in STEPS]
+    typed = [step[0] for step in steps if step[0].startswith('gfx')]
+
     w = a.work
     os.makedirs(w, exist_ok=True)
     for old in os.listdir(w):
         p = os.path.join(w, old)
         shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
 
-    # ---------------------------------------------------------------- the model's pictures
+    # ---------------------------------------------------------------- the pictures expected
+    # gfxref: the same lines worked out from GPU.md alone (not SurfOS's gfx.c and gpu.c), the expectation
+    os.makedirs(os.path.join(w, 'ref'))
+    r = subprocess.run([a.gfxref, '--ppm', os.path.join(w, 'ref')], capture_output=True, text=True)
+    with open(os.path.join(w, 'gfxref.txt'), 'w') as f:
+        f.write(r.stdout + r.stderr)
+    expect = {int(n): (crc, int(mode)) for n, crc, mode in re.findall(r'^expect (\d+) ([0-9a-f]{8}|-) mode (\d+)$',
+                                                                       r.stdout, re.M)}
+    ncrc = sum(1 for step in steps if step[0] == 'gfx crc')
+    ref_lines = re.findall(r'^line (.*)$', r.stdout, re.M)
+    shown = ', '.join('crc %d %s' % (n, c) for n, (c, m) in sorted(expect.items()) if m == 2)
+    if not check(r.returncode == 0 and len(expect) == ncrc and ref_lines == typed and expect.get(1, ('',))[0] == OWNER_CRC,
+                 'gfxref: this test\'s %d gfx lines (%d said by gfxref, %s), the pictures from GPU.md\'s words fed to '
+                 'the C model and from the pixels computed directly, the two equal: %s (GPU.md 15.6\'s %s first)'
+                 % (len(typed), len(ref_lines), 'the same' if ref_lines == typed else 'NOT the same', shown, OWNER_CRC)):
+        print(r.stdout[-3000:] + r.stderr[-2000:])
+        sys.exit(1)
+    # gfxscene: the lines through gfx.c and gpu.c in the model (the owner's tool) must agree with gfxref
     script = os.path.join(w, 'gfx-script.txt')
     with open(script, 'w') as f:
         f.write('# the gfx commands typed in the RTL run, replayed in the C model (gfxscene)\n')
-        for step in STEPS:
-            if step[0].startswith('gfx'):
-                f.write(step[0] + '\n')
+        for line in typed:
+            f.write(line + '\n')
     os.makedirs(os.path.join(w, 'model'))
     r = subprocess.run([a.gfxscene, '--ppm', os.path.join(w, 'model'), script], capture_output=True, text=True)
     with open(os.path.join(w, 'gfxscene.txt'), 'w') as f:
         f.write(r.stdout + r.stderr)
-    expect = {int(n): (crc, int(mode)) for n, crc, mode in re.findall(r'^expect (\d+) ([0-9a-f]{8}) mode (\d+)$',
-                                                                       r.stdout, re.M)}
-    ncrc = sum(1 for step in STEPS if step[0] == 'gfx crc')
-    if not check(r.returncode == 0 and len(expect) == ncrc,
-                 'gfxscene: the %d gfx commands replayed in the C model (sim/models/gpu_model.c), %d FRAME_CRCs'
-                 % (sum(1 for step in STEPS if step[0].startswith('gfx')), len(expect))):
+    scene = {int(n): (crc, int(mode)) for n, crc, mode in re.findall(r'^expect (\d+) ([0-9a-f]{8}) mode (\d+)$',
+                                                                      r.stdout, re.M)}
+
+    def same_picture(n):
+        ours, ref = os.path.join(w, 'model', 'crc-%d.ppm' % n), os.path.join(w, 'ref', 'crc-%d.ppm' % n)
+        return os.path.exists(ours) and os.path.exists(ref) and open(ours, 'rb').read() == open(ref, 'rb').read()
+    same_pics = all(same_picture(n) for n, (c, m) in expect.items() if m in (2, 3))
+    if not check(r.returncode == 0 and len(scene) == ncrc and same_pics and
+                 all(scene[n][1] == m and (m != 2 or scene[n][0] == c) for n, (c, m) in expect.items() if n in scene),
+                 'gfxscene: the %d lines through gfx.c and gpu.c in the C model give gfxref\'s modes, CRCs and pictures'
+                 % len(typed)):
         print(r.stdout[-3000:] + r.stderr[-2000:])
         sys.exit(1)
 
@@ -176,7 +226,7 @@ def main():
         sys.exit(1)
 
     # ---------------------------------------------------------------- the runs, side by side
-    boot = [('the GPU at boot', r'\+GPU: SurfGPU GPU1 \(gpu\.ID 0x31555047\), VRAM 300 KiB at 0x30000000' + NL +
+    boot = [('the GPU at boot', r'\+GPU: SurfGPU %s \(gpu\.ID %s\), VRAM 300 KiB at 0x30000000' % (gpu_name, idhex) + NL +
                                 r'\+GPU: a 64-word command FIFO; fences wait on intc source 5 \(IE\.FENCE\)'),
             ('the prompt', PROMPT)]
     nogpu_boot = [('no GPU at boot', r'\+GPU: none: sysinfo\.FEATURES has no GPU \(a bitstream without one\)' + NL),
@@ -196,7 +246,7 @@ def main():
         return e, sends
 
     runs = {}
-    e, s = plan(STEPS, boot)
+    e, s = plan(steps, boot)
     os.makedirs(os.path.join(w, 'vga'))
     runs['gpu'] = dict(sim=a.surfsim_gpu, expects=e, sends=s,
                        extra=['--vga-crc', os.path.join(w, 'frames.txt'), '--vga-dir', os.path.join(w, 'vga'),
@@ -246,13 +296,23 @@ def main():
 
     # ---------------------------------------------------------------- the GPU run
     out = run_ok('gpu', 'SurfOS on the SoC with SurfGPU (surfsim_gpu)')
-    check(re.search(r'\+GPU: SurfGPU GPU1 \(gpu\.ID 0x31555047\)', out) and re.search(r'Drivers: serial[^\n]* gpu\n', out),
-          'boot: the driver finds SurfGPU GPU1 (sysinfo.FEATURES.GPU, gpu.ID "GPU1") and starts')
-    check('palette: rgb332 (as the configuration leaves it)' in out and 'fences: ' in out and
-          'interrupts (intc source 5, IE.FENCE)' in out,
+    check(re.search(r'\+GPU: SurfGPU %s \(gpu\.ID %s\)' % (gpu_name, idhex), out) and
+          re.search(r'Drivers: serial[^\n]* gpu\n', out),
+          'boot: the driver finds SurfGPU %s (sysinfo.FEATURES.GPU, gpu.ID %s as gpu.h has it) and starts'
+          % (gpu_name, idhex))
+    check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
+          re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
+    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead
+    st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5', out)
+    if len(st) >= 2:
+        fences, irqs = int(st[-1][0]) - int(st[0][0]), int(st[-1][1]) - int(st[0][1])
+        check(irqs > 0 and 2 * irqs >= fences, 'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences '
+              'sent between the first gfx and the last' % (irqs, fences))
+    else:
+        check(False, 'the GPU interrupt: gfx said its fences and interrupts %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
-          'no stopped engine, no GPU error, no blanking missed, no usage error, no panic')
+          'no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic')
     got = [crc for _, crc in CRC_LINE.findall(out)]
     frames = {}
     fp = os.path.join(w, 'frames.txt')
@@ -264,8 +324,8 @@ def main():
         model, mode = expect.get(i, ('?', -1))
         pins = crc in frames
         if mode == 2:
-            check(crc == model and pins, 'crc %d (graphics, mode 2): FRAME_CRC %s; the C model %s; a frame at the VGA pins %s'
-                  % (i, crc, model, 'has it (frame %d)' % frames[crc] if pins else 'does not'))
+            check(crc == model and pins, 'crc %d (graphics, mode 2): FRAME_CRC %s; gfxref (GPU.md alone) %s; a frame at the '
+                  'VGA pins %s' % (i, crc, model, 'has it (frame %d)' % frames[crc] if pins else 'does not'))
         else:
             check(pins, 'crc %d (mode %d, the console\'s text in the picture): FRAME_CRC %s; a frame at the VGA pins %s'
                   % (i, mode, crc, 'has it (frame %d)' % frames[crc] if pins else 'does not'))
@@ -281,7 +341,7 @@ def main():
     check(len(rates) == 4, 'gfx bench: %s' % ', '.join('%s %s Mpx/s' % (r_[0], r_[3]) for r_ in rates))
     # the last frame at the pins: the console's text over the picture
     sp, pp = os.path.join(w, 'vga', 'screen.txt'), os.path.join(w, 'vga', 'screen.ppm')
-    model_pic = os.path.join(w, 'model', 'crc-%d.ppm' % ncrc)
+    model_pic = os.path.join(w, 'ref', 'crc-%d.ppm' % ncrc)
     rows, head = [], ''
     if os.path.exists(sp) and os.path.exists(pp) and os.path.exists(model_pic):
         head, _, body = open(sp, errors='replace').read().partition('\n')
@@ -309,7 +369,7 @@ def main():
         check(', 0 unmatched cells' in head, 'overlay: every 8x16 cell reads as a glyph over the picture (%s)'
               % head.split(', ')[-1] if head else 'overlay: no screen')
         check(text_px > 2000 and bad_space == 0 and bad_text == 0,
-              'overlay: where no character is, the pixels are the picture\'s (the C model\'s frame of it); %d pixels '
+              'overlay: where no character is, the pixels are the picture\'s (gfxref\'s frame of it); %d pixels '
               'differ, all text colours inside characters (%d in blank cells, %d not a text colour)'
               % (text_px, bad_space, bad_text))
     else:
@@ -336,11 +396,11 @@ def main():
             for ok, what in results:
                 f.write('%s %s\n' % ('ok  ' if ok else 'FAIL', what))
             f.write('\nthe gfx commands typed, and what SurfOS printed for each gfx crc:\n')
-            for step in STEPS:
+            for step in steps:
                 f.write('  %s%s\n' % (step[0], ' (Ctrl+C after its first second)' if len(step) > 3 else ''))
             for i, crc in enumerate(got, 1):
                 model, mode = expect.get(i, ('?', -1))
-                f.write('  crc %d: SurfOS %s, mode %d%s\n' % (i, crc, mode, ', the C model %s' % model if mode == 2 else ''))
+                f.write('  crc %d: SurfOS %s, mode %d%s\n' % (i, crc, mode, ', gfxref %s' % model if mode == 2 else ''))
             if rows:
                 f.write('\nthe last frame at the pins, its text decoded from the pixels (over the picture):\n%s\n' % head)
                 f.write(''.join('  |%s|\n' % x for x in rows))

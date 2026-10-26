@@ -1,27 +1,29 @@
-# test-gpuos: 23 of 23 checks passed in 166 s (gpu 415386681 cycles = 16.615 s simulated in 165.7 s wall (2.51 M cycles/s); nogpu 144379603 cycles = 5.775 s simulated in 43.8 s wall (3.30 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
-# 2026-10-25 22:07:42 UTC
-ok   gfxscene: the 36 gfx commands replayed in the C model (sim/models/gpu_model.c), 7 FRAME_CRCs
+# test-gpuos: 25 of 25 checks passed in 153 s (gpu 384500606 cycles = 15.380 s simulated in 152.2 s wall (2.53 M cycles/s); nogpu 146294428 cycles = 5.852 s simulated in 44.2 s wall (3.31 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+# 2026-10-26 03:42:25 UTC
+ok   gfxref: this test's 37 gfx lines (37 said by gfxref, the same), the pictures from GPU.md's words fed to the C model and from the pixels computed directly, the two equal: crc 1 039d507c, crc 2 f345a76e, crc 3 309c14df, crc 4 309c14df, crc 5 309c14df (GPU.md 15.6's 039d507c first)
+ok   gfxscene: the 37 lines through gfx.c and gpu.c in the C model give gfxref's modes, CRCs and pictures
 ok   card: mkcard.py makes it (/BOOT/SURFOS.BIN, /BOOT/CMDLINE.TXT "ascii")
-ok   SurfOS on the SoC with SurfGPU (surfsim_gpu): every expected line in order (output matched after 415386681 cycles (16.615 s simulated) in 165.7 s wall (2.51 M cycles/s); UART 732 bytes in, 8092 out, 0 framing errors; DDR calibrated, 5768362 reads 3297433 writes 32840827 fetches 0 errors; exit 0)
-ok   boot: the driver finds SurfGPU GPU1 (sysinfo.FEATURES.GPU, gpu.ID "GPU1") and starts
+ok   SurfOS on the SoC with SurfGPU (surfsim_gpu): every expected line in order (output matched after 384500606 cycles (15.380 s simulated) in 152.2 s wall (2.53 M cycles/s); UART 736 bytes in, 8775 out, 0 framing errors; DDR calibrated, 4995392 reads 2776674 writes 30505865 fetches 0 errors; exit 0)
+ok   boot: the driver finds SurfGPU GPU1 (sysinfo.FEATURES.GPU, gpu.ID 0x31555047 as gpu.h has it) and starts
 ok   gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames
-ok   no stopped engine, no GPU error, no blanking missed, no usage error, no panic
+ok   the GPU interrupt (intc source 5, IE.FENCE): 156 taken for the 156 fences sent between the first gfx and the last
+ok   no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic
 ok   gfx crc printed 7 FRAME_CRCs (7 typed)
-ok   crc 1 (graphics, mode 2): FRAME_CRC 039d507c; the C model 039d507c; a frame at the VGA pins has it (frame 454)
-ok   crc 2 (graphics, mode 2): FRAME_CRC f345a76e; the C model f345a76e; a frame at the VGA pins has it (frame 509)
-ok   crc 3 (graphics, mode 2): FRAME_CRC 309c14df; the C model 309c14df; a frame at the VGA pins has it (frame 504)
-ok   crc 4 (graphics, mode 2): FRAME_CRC 309c14df; the C model 309c14df; a frame at the VGA pins has it (frame 504)
-ok   crc 5 (graphics, mode 2): FRAME_CRC 309c14df; the C model 309c14df; a frame at the VGA pins has it (frame 504)
-ok   crc 6 (mode 1, the console's text in the picture): FRAME_CRC b28932cc; a frame at the VGA pins has it (frame 941)
-ok   crc 7 (mode 3, the console's text in the picture): FRAME_CRC 84222d11; a frame at the VGA pins has it (frame 972)
+ok   crc 1 (graphics, mode 2): FRAME_CRC 039d507c; gfxref (GPU.md alone) 039d507c; a frame at the VGA pins has it (frame 462)
+ok   crc 2 (graphics, mode 2): FRAME_CRC f345a76e; gfxref (GPU.md alone) f345a76e; a frame at the VGA pins has it (frame 517)
+ok   crc 3 (graphics, mode 2): FRAME_CRC 309c14df; gfxref (GPU.md alone) 309c14df; a frame at the VGA pins has it (frame 512)
+ok   crc 4 (graphics, mode 2): FRAME_CRC 309c14df; gfxref (GPU.md alone) 309c14df; a frame at the VGA pins has it (frame 512)
+ok   crc 5 (graphics, mode 2): FRAME_CRC 309c14df; gfxref (GPU.md alone) 309c14df; a frame at the VGA pins has it (frame 512)
+ok   crc 6 (mode 1, the console's text in the picture): FRAME_CRC b1b98a3d; a frame at the VGA pins has it (frame 867)
+ok   crc 7 (mode 3, the console's text in the picture): FRAME_CRC 8c2a1be8; a frame at the VGA pins has it (frame 898)
 ok   after gfx demo 1, and after gfx demo 5 ended by Ctrl+C, the picture is the one before them (crc 4 = crc 5 = crc 3: the display, the palette and VRAM back)
 ok   gfx demo 5: Ctrl+C typed after its first second ends it within the next
 ok   gfx demo 1: 60 frames in 1.06 s of simulated time (56.3 a second), two pages flipped
-ok   gfx bench: fill 86.7 Mpx/s, copy 42.5 Mpx/s, line 1.2 Mpx/s, text 0.7 Mpx/s
+ok   gfx bench: fill 87.6 Mpx/s, copy 42.4 Mpx/s, line 1.2 Mpx/s, text 0.7 Mpx/s
 ok   overlay: the console's text decoded from the pixels over the picture: the commands typed and their output
 ok   overlay: every 8x16 cell reads as a glyph over the picture (0 unmatched cells)
-ok   overlay: where no character is, the pixels are the picture's (the C model's frame of it); 31301 pixels differ, all text colours inside characters (0 in blank cells, 0 not a text colour)
-ok   SurfOS on the SoC without SurfGPU (surfsim, HAS_GPU = 0): every expected line in order (output matched after 144379603 cycles (5.775 s simulated) in 43.8 s wall (3.30 M cycles/s); UART 12 bytes in, 3252 out, 0 framing errors; DDR calibrated, 1475422 reads 1018239 writes 8358931 fetches 0 errors; exit 0)
+ok   overlay: where no character is, the pixels are the picture's (gfxref's frame of it); 29853 pixels differ, all text colours inside characters (0 in blank cells, 0 not a text colour)
+ok   SurfOS on the SoC without SurfGPU (surfsim, HAS_GPU = 0): every expected line in order (output matched after 146294428 cycles (5.852 s simulated) in 44.2 s wall (3.31 M cycles/s); UART 12 bytes in, 3270 out, 0 framing errors; DDR calibrated, 1513886 reads 1043526 writes 8510327 fetches 0 errors; exit 0)
 ok   without a GPU: said once at boot (+GPU: none), by gfx, and by drivers (not present); nothing else changes
 
 the gfx commands typed, and what SurfOS printed for each gfx crc:
@@ -56,6 +58,7 @@ the gfx commands typed, and what SurfOS printed for each gfx crc:
   gfx crc
   gfx bench
   gfx reset
+  gfx
   gfx mode text
   gfx crc
   gfx mode overlay 1
@@ -63,43 +66,43 @@ the gfx commands typed, and what SurfOS printed for each gfx crc:
   gfx fill 320 240 320 240 0x92
   gfx crc
   echo the shell over the picture
-  crc 1: SurfOS 039d507c, mode 2, the C model 039d507c
-  crc 2: SurfOS f345a76e, mode 2, the C model f345a76e
-  crc 3: SurfOS 309c14df, mode 2, the C model 309c14df
-  crc 4: SurfOS 309c14df, mode 2, the C model 309c14df
-  crc 5: SurfOS 309c14df, mode 2, the C model 309c14df
-  crc 6: SurfOS b28932cc, mode 1
-  crc 7: SurfOS 84222d11, mode 3
+  crc 1: SurfOS 039d507c, mode 2, gfxref 039d507c
+  crc 2: SurfOS f345a76e, mode 2, gfxref f345a76e
+  crc 3: SurfOS 309c14df, mode 2, gfxref 309c14df
+  crc 4: SurfOS 309c14df, mode 2, gfxref 309c14df
+  crc 5: SurfOS 309c14df, mode 2, gfxref 309c14df
+  crc 6: SurfOS b1b98a3d, mode 1
+  crc 7: SurfOS 8c2a1be8, mode 3
 
 the last frame at the pins, its text decoded from the pixels (over the picture):
-# surfsim VGA capture: 993 frames; line 800 pixels (sync 96 negative), frame 525 lines (sync 2 negative), 59.9372 Hz at 25173611 Hz; text 80x30, cursor at column 9 row 29 (dark in the last frame, its blink; seen in frame 990), 0 unmatched cells
-  |    gfx crc: frame 701, crc 309c14df (a frame begun after the last change)      |
-  |SURF ~#> gfx demo 5                                                             |
-  |    gfx demo: 5 s at 320x240, two pages flipped at blanking (Ctrl+C ends)       |
-  |    1 s: 60 frames, 60 in the last second                                       |
-  |    gfx demo: 60 frames in 1.06 s, 56.3 a second; display back as it was        |
-  |    gfx demo: ended by Ctrl+C                                                   |
-  |SURF ~#> gfx crc                                                                |
-  |    gfx crc: frame 870, crc 309c14df (a frame begun after the last change)      |
-  |SURF ~#> gfx bench                                                              |
-  |    gfx bench on the target (320x240 at VRAM 0), first word to fence:           |
-  |    fill  8 x 320x240: 614400 pixels in 7.083 ms, 86.7 million/s                |
-  |    copy  8 x 160x240: 307200 pixels in 7.222 ms, 42.5 million/s                |
-  |    line  256 lines: 34229 pixels in 26.430 ms, 1.2 million/s                   |
-  |    text  64 x 32 cells: 262144 pixels in 364.545 ms, 0.7 million/s             |
+# surfsim VGA capture: 919 frames; line 800 pixels (sync 96 negative), frame 525 lines (sync 2 negative), 59.9372 Hz at 25173611 Hz; text 80x30, cursor at column 9 row 29, 0 unmatched cells
   |SURF ~#> gfx reset                                                              |
   |    gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640      |
+  |SURF ~#> gfx                                                                    |
+  |    SurfGPU GPU1 (gpu.ID 0x31555047), VRAM 300 KiB at 0x30000000                |
+  |    engine idle, STATUS 0x0, FIFO 64 words, 64 free                             |
+  |    display: mode 2, graphics                                                   |
+  |    GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)                   |
+  |    palette: rgb332 (as the configuration leaves it)                            |
+  |    target: VRAM 0, stride 640, 640x480                                         |
+  |    clip: (0, 0)-(640, 480)                                                     |
+  |    sent: 46727 words, 157 fences; FENCE 157                                    |
+  |    interrupts: 157 (intc source 5, IE.FENCE)                                   |
+  |    errors 0, timeouts 0, ABORTs 1                                              |
+  |    by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0                              |
+  |    display changes 10, 0 without a blanking                                    |
+  |    frames: FRAME_COUNT 809, FRAME_CRC d7f57b04 (that frame's)                  |
   |SURF ~#> gfx mode text                                                          |
   |    display: mode 1, text (the picture stays in VRAM)                           |
   |SURF ~#> gfx crc                                                                |
-  |    gfx crc: frame 944, crc b28932cc (a frame begun after the last change)      |
+  |    gfx crc: frame 870, crc b1b98a3d (a frame begun after the last change)      |
   |SURF ~#> gfx mode overlay 1                                                     |
   |    display: mode 3, graphics with the text over it, 640x480                    |
   |    the target is that picture: 640x480 at VRAM 0, stride 640                   |
   |SURF ~#> gfx clear 0x49                                                         |
   |SURF ~#> gfx fill 320 240 320 240 0x92                                          |
   |SURF ~#> gfx crc                                                                |
-  |    gfx crc: frame 974, crc 84222d11 (a frame begun after the last change)      |
+  |    gfx crc: frame 900, crc 8c2a1be8 (a frame begun after the last change)      |
   |SURF ~#> echo the shell over the picture                                        |
   |the shell over the picture                                                      |
   |SURF ~#>                                                                        |
