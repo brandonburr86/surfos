@@ -1,0 +1,13 @@
+page 640x224
+text 8,24 128x16 "int main(void) {"
+text 8,40 280x16 "        return 0;       /* a tab */"
+text 8,56 8x16 "}"
+text 8,88 16x16 "  "
+text 24,88 32x16 b "bold"
+text 56,88 104x16 " and   spaces"
+text 8,104 176x16 "        <tags> as text"
+text 8,136 72x16 "a listing"
+text 8,168 224x16 "<p>xmp shows <b>tags</b></p>"
+text 8,200 48x16 "After "
+text 56,200 120x16 "code collapses "
+text 176,200 96x16 "outside pre."

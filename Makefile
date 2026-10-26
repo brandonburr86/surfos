@@ -807,6 +807,16 @@ test-wundertow-doc: $(BUILD)/host/test_wundertow_doc
 unittest: test-wundertow-doc
 .PHONY: test-wundertow-doc
 
+$(BUILD)/host/test_wundertow_layout: tests/host/test_wundertow_layout.c $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-layout: $(BUILD)/host/test_wundertow_layout
+	$(BUILD)/host/test_wundertow_layout tests/fixtures
+unittest: test-wundertow-layout
+.PHONY: test-wundertow-layout
+
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
 $(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
