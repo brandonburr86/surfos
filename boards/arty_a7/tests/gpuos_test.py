@@ -40,8 +40,9 @@ typed on the UART. Checked:
     VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
     one contiguous run of them, each the same frame as the one before or the next; SurfOS's own
     lines say every frame shown was checked (none missed: the review of 58ac7b3's L1) and whole
-    (in order too when the turn's 128 pictures differ) and a frame rate of 30 or more; after it the
-    picture is the one before it.
+    (in order too when the turn's 128 pictures differ), fewer frames drawn (FLIPs after frame 0's)
+    than video frames shown, and a frame rate of 30 or more and at most the display's 59.94 (the
+    review's M1: one FENCE too many was counted as drawn); after it the picture is the one before it.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present, and gfx tri, flip and cube say there
@@ -417,7 +418,7 @@ def main():
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
                   r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
     check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(5) == '0' and
-          m.group(6) == want and float(m.group(3)) >= 30,
+          m.group(6) == want and int(m.group(1)) < int(m.group(4)) and 30 <= float(m.group(3)) <= 59.94,
           'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s missed: %s; a line a '
           'second: %s' % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
                           '; '.join('%s drawn, %s shown, %s missed: %s' % x for x in sec)) if m else 'no summary'))

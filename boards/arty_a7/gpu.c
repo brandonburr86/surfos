@@ -683,6 +683,7 @@ int gpu_screen_set(struct gpu *g, const struct gpu_screen *d, const char *what) 
             VWR(g, SURF_VIDEO_GFX_SCALE, d->scale);
             p->set_mode(p->ctx, d->mode);
             p->atomic_end(p->ctx, flags);
+            g->latch_us = caught ? prev_t : t;      /* before the blanking began (its last sample), or now */
             break;
         }
         p->atomic_end(p->ctx, flags);

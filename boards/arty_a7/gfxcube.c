@@ -32,10 +32,12 @@ drawn frame. When the turn's 128 pictures all differ their order is checked as w
 d frames after frame l must have (f - l) mod 128 <= d, since a FLIP waits for a blanking. A frame
 shown that no look saw (FRAME_COUNT moved by more than one between two looks) was not checked: it
 is missed (the review of 58ac7b3's L1), and no verdict of all whole is given while any is. A line
-a second says the frames drawn (FLIPs done), shown (video frames) and missed, and whether all were
-whole (and in order); at the end the frame rate and the same for the whole run. Ctrl+C, the time
-running out, a stopped engine and an error each end it with the engine idle and everything put
-back; it fails when a frame shown was torn, out of order or missed.
+a second says the frames drawn (FLIPs done after frame 0's), shown (video frames) and missed, and
+whether all were whole (and in order); at the end the frame rate (the frames drawn over the time
+since the blanking at which the cube's display began: never above the display's 59.94, the
+review's M1) and the same for the whole run. Ctrl+C, the time running out, a stopped engine and an
+error each end it with the engine idle and everything put back; it fails when a frame shown was
+torn, out of order or missed.
 
 The sink has no context pointer and no error return: it only records, into the run's own record,
 which `rec` points to while the run holds the driver's claim (one gfx cube at a time, as heaptest
@@ -180,7 +182,8 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     struct cube_looks looks;
     struct gpu_screen shown;
     char buf[48];
-    u32 k = 1, pos = 0, v0 = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0, ends_done = 0;
+    u32 k = 1, pos = 0, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0;
+    u32 ends_done = 0;
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
@@ -193,10 +196,21 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     rc = gfx_keep_begin(g, &keep, SURF_VRAM_BYTES, r.pal, what);
     /* frame 0 into picture A, and once its FLIP is done the display: mode 2, 320x240 doubled (the
        wait is gpu_sync()'s, whose FENCE asks for the interrupt: gpucube.c's does not, and a wait on
-       it could only end by its 10 ms steps) */
+       it could only end by its 10 ms steps). That FENCE comes after frame 0's, so frame k's is
+       vbase + k and the FLIPs done since frame 0's are FENCE - vbase (the review of 58ac7b3's M1:
+       counted from frame 0's own FENCE, the sync's was one more). The first lines are said before
+       the display changes, while the console is on the screen, so that no frame waits for them */
     if(!rc) rc = record(g, &r, 0, &v0, what);
     if(!rc) rc = gpu_put(g, r.w, r.n, what);
     if(!rc) rc = gpu_sync(g, what);
+    vbase = g->fence_sent;
+    if(!rc) {
+        printf("    %s: %lu s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)\n", what, (u_long)seconds);
+        if(!ordered)
+            printf("    %s: %lu of a turn's %lu frames are pictures of their own: each\n"
+                   "    frame shown is checked to be one of them, not their order\n", what, (u_long)GFX_CUBE_PICTURES,
+                   (u_long)GFX_CUBE_FRAMES);
+    }
     shown.mode = GPU_MODE_GFX;
     shown.base = GPU_CUBE_A;
     shown.stride = 320;
@@ -204,11 +218,10 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     if(!rc) rc = gpu_screen_set(g, &shown, what);
     if(!rc) {
         ran = true;
-        printf("    %s: %lu s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)\n", what, (u_long)seconds);
-        if(!ordered)
-            printf("    %s: %lu of a turn's %lu frames are pictures of their own: each\n"
-                   "    frame shown is checked to be one of them, not their order\n", what, (u_long)GFX_CUBE_PICTURES,
-                   (u_long)GFX_CUBE_FRAMES);
+        /* the time counts from just before the blanking at which the cube's display began (the
+           latch's last sample before it): FLIP k comes at the k-th blanking after it or later, so
+           the rate, the FLIPs done since frame 0's over that time, is never above the display's */
+        t0 = tick = g->latched ? g->latch_us : gpu_now_us(g);
         gpu_frame_next(g, 0x10000u, &count, &crc);     /* the frames after this one are the cube's */
         gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0);
         skip = !g->latched;                             /* the display changed off the latch: a mixed frame */
@@ -216,9 +229,8 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         looks.g = g;
         looks.count = c.count;
         ticking = gpu_tick_start(g, look_tick, &looks);
-        vlast = fence = v0;
+        vlast = fence = vbase;
         r.n = 0;
-        t0 = tick = gpu_now_us(g);
     }
     while(!rc) {
         bool seen = false;
@@ -239,7 +251,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
             if(!ticking) break;
         }
         now = gpu_now_us(g);
-        drawn = (i32)(fence - v0) > 0 ? fence - v0 : 0;     /* FLIPs done since frame 0 was shown */
+        drawn = (i32)(fence - vbase) > 0 ? fence - vbase : 0;   /* FLIPs done since frame 0's */
         if(seen && now - tick >= 1000000u) {            /* a line a second, just after a frame was looked at */
             tick += 1000000u;
             sec++;
@@ -276,6 +288,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         }
         if(!rc && fence != f0) rc = gpu_check(g, what);    /* a frame done: the engine's errors */
     }
+    drawn = (i32)(fence - vbase) > 0 ? fence - vbase : 0;   /* as FENCE last read */
     if(ticking) gpu_tick_stop(g);                       /* before `looks` goes */
     if(rc == GPU_EINTR || rc == GPU_ECANCEL) intr = true;
     if(ran) now = done_at ? done_at : gpu_now_us(g);  /* the rate up to the last FLIP seen done */

@@ -148,6 +148,9 @@ struct gpu {
     u32 z_base, z_stride;
     u32 spin_us;                        /* a fence is polled this long before the wait sleeps (GPU_SPIN_US) */
     bool latched;                       /* the last display change caught the frame latch */
+    u64 latch_us;                       /* and the time just before that blanking began (the latch's
+                                           last sample before STATUS.FRAME moved; without one, when it
+                                           wrote): gfx cube's rate counts from it */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back),
                                            a stopped engine given GPU_QUICK_US once Ctrl+C came */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */

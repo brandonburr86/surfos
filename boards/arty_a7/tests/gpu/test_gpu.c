@@ -1532,15 +1532,36 @@ static void cube_at_the_pins(struct stub *s, const char *what, unsigned want) {
     check(cube >= want && !not_cube && !bad_steps, line);
 }
 
-/* gfx cube's summary: the frames drawn, shown and missed (shown, never looked at) */
+/* gfx cube's summary: the frames drawn, shown and missed (shown, never looked at); %n says that
+   the whole pattern matched (sscanf counts the conversions only: "N shown" passed for "N drawn") */
 static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *missed) {
     const char *p;
-    int n = 0;
+    unsigned long a, b;
+    int n = 0, end;
     for(p = s->out; (p = strstr(p, "    gfx cube: ")) != NULL; p++) {
-        if(sscanf(p, "    gfx cube: %lu drawn in", drawn) == 1) n |= 1;
-        if(sscanf(p, "    gfx cube: %lu shown, %lu missed:", shown, missed) == 2) n |= 2;
+        end = 0;
+        if(sscanf(p, "    gfx cube: %lu drawn in%n", &a, &end) == 1 && end) {
+            *drawn = a;
+            n |= 1;
+        }
+        end = 0;
+        if(sscanf(p, "    gfx cube: %lu shown, %lu missed:%n", &a, &b, &end) == 2 && end) {
+            *shown = a;
+            *missed = b;
+            n |= 2;
+        }
     }
     return n == 3;
+}
+
+/* gfx cube's rate, in tenths of a frame a second (-1: not said) */
+static long cube_rate(struct stub *s) {
+    const char *p = strstr(s->out, "    gfx cube: ");
+    unsigned long d, sec, hund, whole, tenth;
+    for(; p; p = strstr(p + 1, "    gfx cube: "))
+        if(sscanf(p, "    gfx cube: %lu drawn in %lu.%lu s, %lu.%lu a second", &d, &sec, &hund, &whole, &tenth) == 5)
+            return (long)(whole * 10 + tenth);
+    return -1;
 }
 
 /* the expected table itself: its 128 frames, GFX_CUBE_PICTURES of them distinct, and its first 16
@@ -1602,8 +1623,9 @@ static void t_cube(unsigned seed) {
     uint8_t *before;
     uint16_t pal[256];
     struct stub_disp reg;
-    unsigned long drawn, shown, missed, waits0, wakes0;
-    char want[64];
+    unsigned long drawn, shown, missed, waits0, wakes0, flips0;
+    long rate;
+    char want[64], line[160];
     (void)seed;
     if(once_t_cube++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
@@ -1622,13 +1644,21 @@ static void t_cube(unsigned seed) {
     snprintf(want, sizeof(want), " 0 missed: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
     waits0 = G.irq_waits;
     wakes0 = G.irq_wakes;
+    flips0 = s->flips_done;
     check(gfx(s, "gfx cube 2") == CMD_OK && said(s, "gfx cube: 2 s at 320x240 with depth, a FLIP a frame") &&
           said(s, "\n    cube 1 s: ") && said(s, "\n    cube 2 s: ") && said(s, want) && !said(s, "torn,") &&
           said(s, "display back as it was"), "gfx cube 2: a line a second, every frame checked whole, everything back");
     check(GFX_CUBE_PICTURES == GFX_CUBE_FRAMES || said(s, "of a turn's 128 frames are pictures of their own"),
           "  with repeated pictures in the turn, it says that their order is not checked");
-    check(cube_summary(s, &drawn, &shown, &missed) && drawn >= 110 && drawn <= 125 && shown >= drawn && !missed,
+    check(cube_summary(s, &drawn, &shown, &missed) && drawn >= 115 && drawn < shown && !missed,
           "  about 60 frames drawn a second (one a blanking), each shown and checked (none missed)");
+    /* drawn: the FLIPs done after frame 0's (the review of 58ac7b3's M1: the FENCE frame 0's wait
+       sent was counted as one); the video frames shown are more (the first shows frame 0); and the
+       rate, timed from the blanking at which the cube's display began, at most the display's 59.94 */
+    rate = cube_rate(s);
+    snprintf(line, sizeof(line), "  %lu drawn: the FLIPs the engine did after frame 0's (%lu); %lu shown; %ld.%ld a second",
+             drawn, s->flips_done - flips0 - 1, shown, rate / 10, rate % 10);
+    check(drawn == s->flips_done - flips0 - 1 && rate >= 590 && rate <= 599, line);
     cube_at_the_pins(s, "the frames as they ended", 110);
     check(s->shown_draws == 0, "  no engine word drew into the picture on the screen while it was shown");
     check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && s->reg.mode == reg.mode &&
