@@ -43,6 +43,7 @@ struct uvm {
 
 struct uvm *uvm_create(void);
 void uvm_destroy(struct uvm *m);                 /* frees every user frame; m must not be active */
+u_long uvm_freeing(void);                        /* 10/25/26: frames uvm_destroy() has started on and not freed yet */
 void uvm_switch(struct uvm *m);                  /* load the directory (NULL: the kernel's) */
 struct uvm *uvm_current(void);
 int uvm_map_page(struct uvm *m, u_long virt, u_long flags);       /* a zeroed frame at virt (PTE_W to write):

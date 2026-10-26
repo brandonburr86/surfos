@@ -238,7 +238,7 @@ int pmm_commit(u_long n, int cls) {
         committed += n;
         note_lowest();
     } else {
-        refused[cls]++;
+        refused[cls] += n;                      /* 10/25/26 (the review of B1): pages, as pmm_alloc_as() counts */
         r = -1;
     }
     irq_restore(flags);

@@ -1074,11 +1074,9 @@ static void uvmreap_thread(void *arg) {
         m = uvms_dead;
         uvms_dead = m->reap_next;
         held = m->pages + m->table_pages;
+        uvms_dead_pages -= held;                /* 10/25/26 (the review of B1): uvm_freeing() counts them now */
         irq_restore(flags);
         uvm_destroy(m);
-        flags = irq_save();
-        uvms_dead_pages -= held;
-        irq_restore(flags);
     }
 }
 
@@ -1090,7 +1088,7 @@ void task_mem_held(u_long *programs, u_long *dying) {
         if(t->flags & TF_PROCESS) n += KSTACK_PAGES;        /* 10/25/26 (L17): its kernel stack, of their class too */
     }
     *programs = n;
-    *dying = uvms_dead_pages;
+    *dying = uvms_dead_pages + uvm_freeing();   /* 10/25/26 (the review of B1): handed to uvmreap, or being freed */
     irq_restore(flags);
 }
 
@@ -1184,6 +1182,8 @@ static u_long *yield_trap(struct trapframe *tf) {
 #define SHELL_WINDOW_MS   30000         /* ...within this long: the recovery console */
 #define SHELL_QUICK_MS    2000          /* a surfsh that ends sooner did not get going */
 #define SHELL_RETRY_MS    1000          /* a console left without a shell: the next try */
+#define SHELL_LOW_FRAMES  256           /* 10/25/26 (the review of B1): fewer left for programs, and surfsh's ends
+                                           are memory's: they do not count toward the recovery console */
 
 static struct console_shell {
     u_long pid;                         /* the shell there now, 0: none yet (init tries again) */
@@ -1289,6 +1289,15 @@ static void shell_ended(int i, int status, u_int flags) {
         start_kernel_shell(i);
         return;
     }
+    if(!killed && (flags & TF_LOADNOMEM)) {                /* 10/25/26 (the review of B1): it may load in a moment */
+        c->pid = 0;                                         /* init's loop tries again, as for a spawn's ENOMEM */
+        if(!c->waiting) {
+            snprintf(line, sizeof(line), "init: %s: %s; trying again\n", SURFSH_PATH, strerror(-ENOMEM));
+            init_say(i, line);
+            c->waiting = true;
+        }
+        return;
+    }
     if(!killed && !(flags & TF_LOADED)) {                  /* not an executable: trying again will not help */
         snprintf(c->why, sizeof(c->why), "init: %s could not be loaded; recovery console", SURFSH_PATH);
         recovery_console(i);
@@ -1300,6 +1309,14 @@ static void shell_ended(int i, int status, u_int flags) {
             init_say(i, line);
         }
         start_surfsh(i);
+        return;
+    }
+    if(pmm_room(PMM_USER) < SHELL_LOW_FRAMES) {             /* 10/25/26 (the review of B1): memory's end, not the */
+        c->pid = 0;                                         /* shell's: not counted; a new one a second later */
+        if(!c->waiting) {
+            init_say(i, "init: surfsh ended while memory is short; trying again\n");
+            c->waiting = true;
+        }
         return;
     }
     if(c->nends == SHELL_FAILS - 1 && now - c->ends[0] <= SHELL_WINDOW_MS) {

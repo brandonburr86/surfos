@@ -590,6 +590,11 @@ SMOKE = [
                             surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
     ('@boot surfsh=etc/version', ['init: /initrd/bin/surfsh could not be loaded; recovery console', surf_prompt(b'SURF', b'?')],
      [], ['restarted the shell']),
+    # 10/25/26 (the review of B1): a shell whose loading fails for want of memory (toobig: 1000 MB of data) is tried
+    # again every second, never given up for the recovery console as one that is no program is
+    ('@boot surfsh=toobig', ['/initrd/bin/surfsh: out of memory for a segment',
+                             'init: /initrd/bin/surfsh: Out of memory; trying again'],
+     [('@sleep 6', [])], ['recovery console', 'toobig: loaded', 'could not be loaded']),
     # 10/9/26 (the development loop, track D): the kernel word autonet, in a boot with QEMU's network (the word gives
     # the boot a network): the link, a lease, telnetd started on F1 with nobody typing; a telnet session gets in
     ('@boot autonet', ['+AUTONET: waiting up to 90 s for a network link', '+AUTONET: eth0: link up after',
@@ -2534,8 +2539,18 @@ def telnet_no_sessions(q, timeout=20):
 
 
 def memstat_free(raw):
-    """10/25/26: (free, total) pages from each memstat in this part of the transcript (bytes)"""
-    return [(int(a), int(b)) for a, b in re.findall(rb'Free physical pages: (\d+) of (\d+)', raw)]
+    """10/25/26: (free, total) pages from each memstat in this part of the transcript (bytes); 10/25/26 (the review of
+    B1): free less those promised to the kernel heap (memstat's Reserve line), which the heap may take any time"""
+    free = re.findall(rb'Free physical pages: (\d+) of (\d+)', raw)
+    promised = re.findall(rb'; (\d+) promised to the heap;', raw)
+    if len(promised) != len(free):
+        return []
+    return [(int(a) - int(p), int(b)) for (a, b), p in zip(free, promised)]
+
+
+# 10/25/26 (the review of B1): surfsh's own prompt on the console, after a command that worked or one that failed;
+# never a recovery console's (?) or the ring-0 shell's (#)
+SURFSH_PROMPT = re.compile(rb' \xe2\x89\x8b' + _SGR + rb'!?' + _SGR + rb'>')
 
 
 def memhog_hold_check(q):
@@ -2547,13 +2562,17 @@ def memhog_hold_check(q):
     q.send('memstat\n')
     ok = q.expect(PROMPT, 30)
     before = memstat_free(q.transcript[start:])
+    held = len(q.transcript)
     q.send('memhog hold 3000 &\n')
     ok = ok and q.expect('started (pid', 20) and q.expect('KB taken; holding them 3000 ms', 60)
     q.send('/initrd/bin/ls /initrd\n')
-    ok = ok and q.expect(re.compile(rb'motd|Out of memory'), 20) and q.expect(PROMPT, 20)
+    ok = ok and q.expect(re.compile(rb'motd|surfsh: /initrd/bin/ls: Out of memory'), 20) and q.expect(SURFSH_PROMPT, 20)
     q.send('ps\n')
-    ok = ok and q.expect('Kernel Idle Task', 20) and q.expect(PROMPT, 20)
+    ok = ok and q.expect('Kernel Idle Task', 20) and q.expect(SURFSH_PROMPT, 20)
     ok = ok and q.expect('memhog hold: given back', 60)
+    if b'init:' in q.transcript[held:]:                  # the shells lived on: init started none, said nothing
+        print('  memhog hold: init spoke while memory was held')
+        ok = False
     if ok:
         t = Telnet(q.ports['telnet'])
         try:

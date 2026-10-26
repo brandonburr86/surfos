@@ -462,15 +462,30 @@ static void test_fpu(void) {
     if(saves < 2) printf("        (%lu saves of a program's registers for another's)\n", saves);
 }
 
-/* 10/25/26 (L7): n hellos started at once (their output to /dev/null), each waited for; how many ended with 42 */
-static int spawn_round(struct file *null, int n) {
-    char *hello[] = { "hello", "quiet" };
-    struct file *files[3] = { NULL, null, null };
+/* 10/25/26 (L7; the review of B1): n cats started at once, each reading a pipe whose writing end the test holds, so
+   that all of them are there together (their output to /dev/null); once all are, the end closes, each reads the end
+   of its input and exits 0. How many were there at once, and how many ended with 0 */
+static int spawn_round(struct file *null, int n, int *together) {
+    char *cat[] = { "cat" };
+    struct file *pipe[2], *files[3] = { NULL, null, null };
     int pid[64], i, ok = 0, status;
-    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/hello", 2, hello, curTask->con, 0, files);
+    u_long flags;
+    *together = 0;
+    if(pipe_files(pipe)) return 0;
+    files[0] = pipe[0];
+    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/cat", 1, cat, curTask->con, 0, files);
+    vfs_close(pipe[0]);                          /* the children have it now */
+    sleep_ms(200);
+    flags = irq_save();
     for(i = 0; i < n; i++) {
-        status = 0;
-        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == 42) ok++;
+        surf_task *t = pid[i] > 0 ? task_find((u_long)pid[i]) : NULL;
+        if(t && t->state != TS_DEAD) (*together)++;
+    }
+    irq_restore(flags);
+    vfs_close(pipe[1]);                          /* the end of their input */
+    for(i = 0; i < n; i++) {
+        status = 99;
+        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == 0) ok++;
     }
     return ok;
 }
@@ -478,29 +493,92 @@ static int spawn_round(struct file *null, int n) {
 /* 10/25/26 (L7): 64 programs at once, and their memory back as they end. A first round lets the kernel heap grow to
    what 64 tasks take (it never shrinks); after a second, the heap's bytes in use are where they were, and so are the
    frames left (free, less those promised), but for the frames the heap grew by meanwhile: each process's pages,
-   page tables and kernel objects went back at its end */
+   page tables, kernel stack and kernel objects went back at its end */
 static void test_spawn64(void) {
     struct heap_stats h0, h1;
     struct file *null;
     struct stat st;
     u_long a0, a1;
-    int ok1, ok2;
-    if(vfs_stat("/initrd/bin/hello", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
-        printf("  skip 64 programs at once (no /initrd/bin/hello or /dev/null)\n");
+    int ok1, ok2, all1, all2;
+    if(vfs_stat("/initrd/bin/cat", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
+        printf("  skip 64 programs at once (no /initrd/bin/cat or /dev/null)\n");
         return;
     }
-    ok1 = spawn_round(null, 64);
+    ok1 = spawn_round(null, 64, &all1);
     kheap_stats(&h0);
     a0 = pmm_room(PMM_KERNEL);
-    ok2 = spawn_round(null, 64);
+    ok2 = spawn_round(null, 64, &all2);
     kheap_stats(&h1);
     a1 = pmm_room(PMM_KERNEL);
     vfs_close(null);
-    check(ok1 == 64 && ok2 == 64 && h1.bytes_used == h0.bytes_used && a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
-          "64 programs at once, twice: all end with 42, and their frames and heap bytes come back");
-    if(ok1 != 64 || ok2 != 64 || h1.bytes_used != h0.bytes_used || a0 - a1 != (h1.brk - h0.brk) / PAGE_SIZE)
-        printf("        (%d and %d of 64; heap bytes %lu, then %lu; frames left %lu, then %lu; the heap grew %lu KB)\n",
-               ok1, ok2, h0.bytes_used, h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
+    check(ok1 == 64 && ok2 == 64 && all1 == 64 && all2 == 64 && h1.bytes_used == h0.bytes_used &&
+          a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
+          "64 programs at once, twice: all there together, all end with 0, and their frames and heap bytes come back");
+    if(ok1 != 64 || ok2 != 64 || all1 != 64 || all2 != 64 || h1.bytes_used != h0.bytes_used ||
+       a0 - a1 != (h1.brk - h0.brk) / PAGE_SIZE)
+        printf("        (%d and %d of 64 together, %d and %d ended with 0; heap bytes %lu, then %lu; frames left %lu, "
+               "then %lu; the heap grew %lu KB)\n", all1, all2, ok1, ok2, h0.bytes_used, h1.bytes_used, a0, a1,
+               (h1.brk - h0.brk) / 1024);
+}
+
+/* 10/25/26 (the review of B1): programs killed while they run their own code (crash loop) die on the spot, and their
+   address spaces go to uvmreap; once nothing is left being freed (task_mem_held()), the frames left and the heap's
+   bytes in use are where they were, but for what the heap grew by. A first round lets the heap grow */
+static int kill_round(struct file *null, int n) {
+    char *loop[] = { "crash", "loop" };
+    struct file *files[3] = { NULL, null, null };
+    int pid[16], i, ok = 0, status;
+    u_long flags;
+    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/crash", 2, loop, curTask->con, 0, files);
+    sleep_ms(300);                               /* loaded by now, and in their loops */
+    flags = irq_save();
+    for(i = 0; i < n; i++) if(pid[i] > 0) kill_task(task_find((u_long)pid[i]));
+    irq_restore(flags);
+    for(i = 0; i < n; i++) {
+        status = 0;
+        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == -1) ok++;
+    }
+    return ok;
+}
+
+static bool nothing_dying(void) {
+    u_long programs, dying, waited;
+    for(waited = 0; waited < 3000; waited += 20) {
+        task_mem_held(&programs, &dying);
+        if(!dying) return true;
+        sleep_ms(20);
+    }
+    return false;
+}
+
+static void test_kill_memory(void) {
+    struct heap_stats h0, h1;
+    struct file *null;
+    struct stat st;
+    u_long a0, a1;
+    int ok1, ok2;
+    bool gone1, gone2;
+    if(vfs_stat("/initrd/bin/crash", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
+        printf("  skip memory of killed programs (no /initrd/bin/crash or /dev/null)\n");
+        return;
+    }
+    ok1 = kill_round(null, 16);
+    gone1 = nothing_dying();
+    kheap_stats(&h0);
+    a0 = pmm_room(PMM_KERNEL);
+    ok2 = kill_round(null, 16);
+    gone2 = nothing_dying();
+    kheap_stats(&h1);
+    a1 = pmm_room(PMM_KERNEL);
+    vfs_close(null);
+    check(ok1 == 16 && ok2 == 16 && gone1 && gone2 && h1.bytes_used == h0.bytes_used &&
+          a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
+          "16 programs killed in their own code, twice: uvmreap frees them, and frames and heap bytes come back");
+    if(!(ok1 == 16 && ok2 == 16 && gone1 && gone2 && h1.bytes_used == h0.bytes_used &&
+         a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE))
+        printf("        (%d and %d of 16 killed; %s and %s freed; heap bytes %lu, then %lu; frames left %lu, then %lu; "
+               "the heap grew %lu KB)\n", ok1, ok2, gone1 ? "all" : "not all", gone2 ? "all" : "not all", h0.bytes_used,
+               h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
 }
 
 /* 10/25/26 (L17): a kernel thread's look at its own stack: every page mapped, and the guard below it (the rest of its
@@ -1579,7 +1657,7 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_fpu, test_spawn64, test_kstack, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
+    test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
     test_event_fn, test_libc, test_tty
 };
 

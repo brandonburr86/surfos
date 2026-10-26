@@ -59,6 +59,7 @@ USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by ha
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point, and two programs' at once
 USER_PROGS  += memhog        # 10/25/26 (robustness): a program that takes all the memory it can
+USER_PROGS  += toobig        # 10/25/26 (the review of B1): a program too big to load under QEMU (init retries it)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)

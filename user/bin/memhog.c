@@ -5,7 +5,10 @@ File: memhog.c  Date: 10/25/26 (robustness, track B: L1-L9)
 --------------------
 memhog: takes memory in 64 KB blocks, every page of each written, until malloc() fails; says how
 much it got, gives it all back and exits 0. What stops it is the reserve the kernel keeps from
-programs (mm/pmm.h), not the machine: everything else goes on.
+programs (mm/pmm.h), not the machine: everything else goes on. 10/25/26 (the review of B1): that
+is so where programs may have less than about 1 GB (QEMU's 256 MB, OVMF's 512 MB). A program's
+heap ends below its 4 MB of stack in its 1 GB address space (mm/uvm.h), so on a machine with more
+(the laptop's 8 GB) one memhog stops there instead: several at once reach the reserve.
 
 memhog stack: the same, then a recursion that needs a stack that can no longer grow. The kernel
 ends it with "out of memory: its stack could not grow", and nothing else breaks.

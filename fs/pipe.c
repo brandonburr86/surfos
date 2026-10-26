@@ -200,18 +200,16 @@ bool pipe_file(const struct file *f) {
     return f && f->v && (f->v->ops == &read_ops || f->v->ops == &write_ops);
 }
 
-/* surfos/pipe.h: the reading end as fds[0], the writing end as fds[1] */
-int sys_pipe(int *fds) {
+/* 10/25/26 (the review of B1): a pipe for the kernel, its reading end in f[0] and its writing end in f[1], a reference
+   each (vfs_close() lets go of one): 0, -ENFILE or -ENOMEM. SYS_pipe's, and the self test's for its children's input */
+int pipe_files(struct file *f[2]) {
     struct pipe *p;
     struct vnode *v[2] = { NULL, NULL };
-    struct file *f[2] = { NULL, NULL };
-    int k[2], i, spare = 0;
+    int i;
     u_long flags;
     u32 ino;
 
-    if(!user_buf(fds, sizeof(k), true)) return -EFAULT;
-    for(i = 0; i < NR_OPEN; i++) if(!curTask->files[i]) spare++;
-    if(spare < 2) return -EMFILE;
+    f[0] = f[1] = NULL;
     flags = irq_save();
     if(npipes == PIPE_MAX) {
         irq_restore(flags);
@@ -246,9 +244,23 @@ int sys_pipe(int *fds) {
             if(f[i]) vfs_close(f[i]);                   /* releases its end */
             else if(v[i]) vput(v[i]);                   /* the same */
             else end_closed(p, i);                      /* an end that never had a vnode */
+            f[i] = NULL;
         }
         return -ENOMEM;
     }
+    return 0;
+}
+
+/* surfos/pipe.h: the reading end as fds[0], the writing end as fds[1] */
+int sys_pipe(int *fds) {
+    struct file *f[2];
+    int k[2], i, spare = 0, r;
+
+    if(!user_buf(fds, sizeof(k), true)) return -EFAULT;
+    for(i = 0; i < NR_OPEN; i++) if(!curTask->files[i]) spare++;
+    if(spare < 2) return -EMFILE;
+    r = pipe_files(f);
+    if(r) return r;
     k[0] = fd_install(f[0]);                            /* two descriptors are free: this task alone */
     k[1] = fd_install(f[1]);                            /* changes its table */
     memcpy(fds, k, sizeof(k));

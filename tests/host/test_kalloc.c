@@ -147,6 +147,31 @@ static void least_growth(void) {
     check(kheap_check(), "the heap checks out");
 }
 
+/* 10/25/26 (the review of B1): a free block at the top is merged with the growth, so only what it lacks is promised.
+   Everything freed, the heap is that one block; a request 40 KB larger promises GROW_CHUNK (16 pages), or 10 when 16
+   are refused, never the request's own size */
+static void free_tail_growth(void) {
+    struct heap_stats s = stats();
+    u_long before, top = kheap_top();
+    void *p;
+    check(s.blocks_used == 0 && s.blocks_free == 1, "everything freed: the heap is one free block");
+    before = promised;
+    p = kalloc(s.bytes_free + 40960);
+    check(p != NULL && promised - before == 16 && kheap_top() == top + 65536 && all_promised(),
+          "a request 40 KB over the free top: 64 KB grown and promised, not the request's size");
+    kfree(p);
+    top = kheap_top();
+    s = stats();
+    before = promised;
+    refuse_over = 12;
+    p = kalloc(s.bytes_free + 40960);
+    refuse_over = ~0UL;
+    check(p != NULL && promised - before == 10 && kheap_top() == top + 40960 && all_promised(),
+          "with 12 pages to promise: the 10 it lacks are enough, and kalloc() succeeds");
+    kfree(p);
+    check(kheap_check(), "the heap checks out");
+}
+
 /* a random workload whose promises are refused now and then: each block keeps its bytes, no two overlap, every
    failure is a NULL with the heap whole, and the heap checks out after every step */
 static unsigned rnd_state = 20261025;
@@ -200,6 +225,7 @@ int main(void) {
     bulk_growth();
     refused();
     least_growth();
+    free_tail_growth();
     workload();
     printf("KALLOC UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;

@@ -95,9 +95,12 @@ static void fl_remove(struct heap *h, struct hblock *b) {
    is free). Touching the new header maps the page in the kernel heap. 10/25/26 (L2): the
    kernel heap's new pages have their frames promised first (GROW_CHUNK, or just what the
    request needs when that much cannot be), and the top moves before anything is touched:
-   the page fault maps pages below it only. */
+   the page fault maps pages below it only. 10/25/26 (the review of B1): a free last block
+   is merged with the growth, so only what it lacks is grown and promised (a 100 KB request
+   over a free 60 KB top promised 26 pages for 11). */
 static struct hblock *heap_grow(struct heap *h, u_long need) {
-    u_long chunk = need + HEAP_HDR, least = (need + HEAP_HDR + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    u_long more = h->last && h->last->magic == MAGIC_FREE ? need - h->last->size : need + HEAP_HDR;
+    u_long chunk = more, least = (more + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     int cls = need > GROW_CHUNK ? PMM_BULK : PMM_KERNEL;
     struct hblock *b;
 

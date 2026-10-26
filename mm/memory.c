@@ -92,7 +92,7 @@ void printMemInfo() {
         task_mem_held(&programs, &dying);
         printf("Reserve: %lu pages programs leave the kernel (big buffers half); %lu promised to the heap; fewest left %lu\n",
                ps.reserve, ps.committed, ps.lowest);
-        printf("Refused: %lu pages to programs, %lu to big buffers, %lu to the kernel; programs hold %lu, uvmreap %lu\n",
+        printf("Refused: %lu pages to programs, %lu to big buffers, %lu to the kernel; programs hold %lu, being freed %lu\n",
                ps.refused[PMM_USER], ps.refused[PMM_BULK], ps.refused[PMM_KERNEL], programs, dying);
     }
     pmm_print_reserved();

@@ -43,6 +43,8 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
 #define TF_PROCESS  0x100 /* 10/25/26 (L15): a process, from its creation (process_spawn_ex()): a process carries
                              TF_KTHREAD too, and TF_USER only once its loading starts */
+#define TF_LOADNOMEM 0x200 /* 10/25/26 (the review of B1): a process whose loading failed for want of memory, which init
+                              tries again for a console's shell instead of giving the console up (task.c) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -223,8 +225,8 @@ struct procinfo;
 int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
 int task_info_all(struct procinfo *out, int max); /* 10/18/26: the list in one go, the newest max; how many */
 int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
-void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames programs hold, and those uvmreap has
-                                                          still to free (memstat) */
+void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames programs hold, and those of ended ones
+                                                          not freed yet: uvmreap's, and any being freed (memstat) */
 /* 10/25/26 (L17): the task whose kernel stack's slot holds addr, and whether addr is in the guard below that stack
    (the double fault's report) */
 surf_task *task_stack_owner(u_long addr, bool *guard);
