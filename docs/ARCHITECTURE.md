@@ -443,7 +443,11 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   descended from it (the parent chain; 10/25/26: through the programs of its foreground,
   `TF_FOREGROUND`, so a job surfsh started with `&` is not paged with its next command) print
   there in task context is paged. The console
-  counts the rows that start, by a newline or a VT100 wrap; once LINES - 1 rows have been
+  counts the rows that start, by a newline or a VT100 wrap (10/26/26: those of the paged
+  tasks only; a row that a job in the background or a kernel thread starts counts toward no
+  screenful, so a shell no longer stops at the question behind its job's output, and with a
+  job flooding the screen meanwhile some of a paged command's rows may scroll away before its
+  question); once LINES - 1 rows have been
   shown and a paged task is about to draw on, or start, another, that task first waits at
   `TTY_MORE`, `--More-- (Space: next page, Enter: next line, q: skip the rest)`, in inverse
   video on that row (the serial terminal gets it too), reads one key and takes the question
@@ -1416,7 +1420,13 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   master's 8 KB output ring instead of drawing cells (no UTF-8 decoding, the remote
   terminal does it; a kernel message's colour becomes an ANSI SGR sequence), and the pager
   counts the rows and columns that `PTY_SETSIZE` gave (80x24 at first), asking its question
-  in the stream. `SYS_openpty` (39) gives the master side as a descriptor, `SYS_spawnpty`
+  in the stream. 10/26/26: a writer that may wait finds room in the ring first
+  (`pty_room()`, `pty_wait_room()`), then the byte, what it does to the column, rows and
+  escape parser, a question taken away before it and brought back after a newline are one
+  step with interrupts off (`stream_put()`): what the console has counted is in the ring, so
+  the pager's question (written as `PTY_OUT_URGENT`, into the room kept for it) never lands in
+  the middle of a line a waiting writer has not finished (CODE-AUDIT C10). Two writers on a
+  full ring still take turns a byte at a time (C11). `SYS_openpty` (39) gives the master side as a descriptor, `SYS_spawnpty`
   (40) starts a program whose terminal is the pty (its descriptors 0-2, `/dev/console`,
   `curTask->con` and `->tty`, so the kernel's commands it runs print there too), and
   `SYS_ptyctl` (41) sets the size (`PTY_SETSIZE`) or names the pty (`PTY_INDEX`). Reading

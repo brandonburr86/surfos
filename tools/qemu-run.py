@@ -2768,6 +2768,10 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
             m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
+            # 10/26/26: said as what it is: the shell's line about the job did not come, and nothing below was tried
+            # (it was "the send buffer never filled": the shell stopped at --More-- behind the job's rows, until
+            # kernel/console.c's page_row())
+            why = '' if ok else " (the job's start line never came within 10 s)"
         # 10/25/26: 120 s, was 45: before the guest's buffer fills, hexdump fills QEMU's and the host's socket buffers
         # through a slow guest, and on a loaded machine (two suites at once, builds) that took longer than 45 s
         stalled, deadline = False, time.time() + 120    # seconds here; the server ends no session for a stall
@@ -2778,7 +2782,7 @@ def telnet_stalled_check(q):
             stalled = full.search(q.transcript[start:]) is not None
             if not stalled:
                 q.wait(1)
-        why = '' if stalled else ' (the send buffer never filled)'
+        why = why or ('' if stalled else ' (the send buffer never filled)')
         ok = ok and stalled
         if ok:
             b = Telnet(q.ports['telnet'])

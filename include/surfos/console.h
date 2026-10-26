@@ -140,6 +140,10 @@ void console_panic(void);                         /* also takes the screen back 
 #define PTY_OUT_WAIT   1
 #define PTY_OUT_URGENT 2
 int pty_out(surf_console *con, const char *s, u_int n, int how);
+/* 10/26/26: the room in con's master buffer for a writer that may wait (interrupts off), and the wait for n bytes of
+   it: 0, or -EINTR when the call is cut short. Nobody reading (no master) is room: pty_out() drops those bytes. */
+u_int pty_room(surf_console *con);
+int pty_wait_room(surf_console *con, u_int n);
 void console_stream_reset(surf_console *con);    /* a pty's console as new: 80x24, plain, not paging */
 void console_stream_resize(surf_console *con, u_int cols, u_int rows);  /* PTY_SETSIZE: a question with room goes */
 

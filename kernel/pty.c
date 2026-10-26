@@ -34,7 +34,11 @@ hangup when it is the last reference. The system calls share their code and keep
 
 Output: a writer that may wait (console.c says when) waits while the buffer is full, and
 gives up when its call is cut short (a kill, the hangup, Ctrl+C); the bytes of one that
-may not are dropped then, and counted. The last PTY_OUT_KEEP bytes of room are kept for
+may not are dropped then, and counted. 10/26/26: a stream console waits for room before it
+decides anything about a byte (pty_room(), pty_wait_room()): what such a writer counted into
+the column and rows is in the buffer, so the console's own sequences never land in a waiting
+writer's line. A writer that may not wait (a mutex holder, the echo of a master's write with
+interrupts off, a call cut short) still counts bytes that pty_out() then drops. The last PTY_OUT_KEEP bytes of room are kept for
 the pager's question and the console's own sequences (PTY_OUT_URGENT). Input: a write on
 the master never waits (a server polling many masters must not stall on one): it hands the
 bytes to the serial line's rules while each fits in the tty's input queue (TTY_INPUT_SIZE
@@ -141,6 +145,41 @@ int pty_out(surf_console *con, const char *s, u_int n, int how) {
             return 0;
         }
         wait_prepare_intr(&p->room);                    /* the master's next read makes room */
+        irq_restore(flags);
+        yield();
+    }
+}
+
+/* console.h, 10/26/26: the room a writer that may wait finds (interrupts off): the buffer but the room kept for
+   PTY_OUT_URGENT; when nobody reads, any (pty_out() drops what it is given then) */
+u_int pty_room(surf_console *con) {
+    int i = (int)(con - conArray) - NUM_CONSOLES;
+    struct pty *p;
+    if(i < 0 || i >= PTY_MAX) return PTY_OUT_SIZE;
+    p = &ptys[i];
+    if(!p->master) return PTY_OUT_SIZE;
+    return p->out_len < PTY_OUT_SIZE - PTY_OUT_KEEP ? PTY_OUT_SIZE - PTY_OUT_KEEP - p->out_len : 0;
+}
+
+/* console.h, 10/26/26: wait until n bytes fit (the master's next read makes room), before the console decides
+   anything about the byte that needs them (console.c's stream_put()); -EINTR when the call is cut short */
+int pty_wait_room(surf_console *con, u_int n) {
+    int i = (int)(con - conArray) - NUM_CONSOLES;
+    struct pty *p;
+    u_long flags;
+    if(i < 0 || i >= PTY_MAX) return 0;
+    p = &ptys[i];
+    for(;;) {
+        flags = irq_save();
+        if(pty_room(con) >= n) {
+            irq_restore(flags);
+            return 0;
+        }
+        if(task_interrupted()) {
+            irq_restore(flags);
+            return -EINTR;
+        }
+        wait_prepare_intr(&p->room);
         irq_restore(flags);
         yield();
     }
