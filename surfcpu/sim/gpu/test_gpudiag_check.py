@@ -33,11 +33,13 @@ scenes, 84 checks for a first run and 83 for a rerun:
     alone does not see a dirty build (B14), as documented;
   - --must-fail passes only a failing run that says what it must;
   - the cube (GPU2): its header and its lines a second after a whole run pass, and so does a capture
-    that ends inside one; a line with a torn frame, a missed one, one out of order, fewer than 30
-    frames drawn, or shown frames other than 58 to 61 (the review of 3fea963, L2: 0 shown, no frame
-    checked, passed) fails, also after an earlier run that a rerun follows; words after them fail;
-    the first cube's lines, without frames out of order, are not the cube's lines any more;
-    --cube-seconds N wants N lines after the last run.
+    that ends inside one; a line with a torn frame, a missed one, one out of order, shown frames
+    other than 58 to 61 (the review of 3fea963, L2: 0 shown, no frame checked, passed), a new frame
+    more than 2 video frames after the one before (the re-review of b2c765d, low 2: the rule of
+    gpudiag's checks; 29 drawn in a second, which a frame every second video frame gives, failed),
+    or fewer than 29 frames drawn fails, also after an earlier run that a rerun follows; words after
+    them fail; the first cube's lines, without frames out of order, and b2c765d's, without frames
+    apart, are not the cube's lines any more; --cube-seconds N wants N lines after the last run.
 Exit 0 when all pass.
 """
 
@@ -98,20 +100,22 @@ def run(crcs=("11111111", "22222222"), summary=None, skip=False, rerun=False, bu
     return "\n".join(lines + ["", summary, ""])
 
 
-CUBE = ("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not "
-        "checked), torn (frames that were none of the cube's 128), out of order (frames that did not follow the one "
-        "before)\n")
+CUBE = ("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), apart (the most video "
+        "frames from a new frame of the cube to the next: 2 is one every second video frame, 29.97 a second), missed "
+        "(frames not checked), torn (frames that were none of the cube's 128), out of order (frames that did not "
+        "follow the one before)\n")
 
 
-def cube(n, drawn=60, missed=0, torn=0, at=None, shown=60, order=0):
-    """n of the cube's lines a second, the one numbered `at` with the given drawn, shown, missed, torn and out of
-    order"""
-    out, td, ts, tm, tt, to = "", 0, 0, 0, 0, 0
+def cube(n, drawn=60, missed=0, torn=0, at=None, shown=60, order=0, apart=1, rest=(60, 1)):
+    """n of the cube's lines a second, the one numbered `at` with the given drawn, shown, apart, missed, torn and
+    out of order, the others with rest's frames drawn and apart and none missed, torn or out of order"""
+    out, td, ts, ta, tm, tt, to = "", 0, 0, 0, 0, 0, 0
     for k in range(1, n + 1):
-        d, s, m, t, o = (drawn, shown, missed, torn, order) if (at is None or at == k) else (60, 60, 0, 0, 0)
-        td, ts, tm, tt, to = td + d, ts + s, tm + m, tt + t, to + o
-        out += ("cube %4d s: %3d drawn, %3d shown, %d missed, %d torn, %d out of order (in all %d drawn, %d shown, %d "
-                "missed, %d torn, %d out of order)\n" % (k, d, s, m, t, o, td, ts, tm, tt, to))
+        d, s, a, m, t, o = (drawn, shown, apart, missed, torn, order) if (at is None or at == k) else \
+            (rest[0], 60, rest[1], 0, 0, 0)
+        td, ts, ta, tm, tt, to = td + d, ts + s, max(ta, a), tm + m, tt + t, to + o
+        out += ("cube %4d s: %3d drawn, %3d shown, %d apart, %d missed, %d torn, %d out of order (in all %d drawn, %d "
+                "shown, %d apart, %d missed, %d torn, %d out of order)\n" % (k, d, s, a, m, t, o, td, ts, ta, tm, tt, to))
     return out
 
 
@@ -284,7 +288,19 @@ expect("--build-id and --manifest that disagree", run() + ECHO, False, "--build-
 expect("a whole run, the echo, the cube's header and three seconds", run() + ECHO + CUBE + cube(3), True)
 expect("the cube: a torn frame", run() + ECHO + CUBE + cube(3, torn=1, at=2), False)
 expect("the cube: a frame not checked", run() + ECHO + CUBE + cube(3, missed=1, at=3), False)
-expect("the cube: 29 frames drawn in a second", run() + ECHO + CUBE + cube(3, drawn=29, at=1), False)
+# the re-review of b2c765d, low 2: the free run judged by the rule of gpudiag's checks, a new frame at most 2 video
+# frames after the one before; at exactly 2 a second has 29 or 30 (29.97 on average), so 29 drawn passes there
+expect("low 2: the cube at a frame every second video frame, 29 drawn in a second", run() + ECHO + CUBE +
+       cube(4, drawn=29, apart=2, at=3, rest=(30, 2)), True)
+expect("low 2: the cube: 29 drawn, 2 apart", run() + ECHO + CUBE + cube(3, drawn=29, apart=2, at=2), True)
+expect("low 2: the cube: 30 drawn, but a new frame 3 video frames after the one before", run() + ECHO + CUBE +
+       cube(3, drawn=30, apart=3, at=2), False)
+expect("low 2: the cube: 3 apart in its first second", run() + ECHO + CUBE + cube(3, drawn=59, apart=3, at=1), False)
+expect("low 2: the cube: 28 drawn in a second, 2 apart", run() + ECHO + CUBE + cube(3, drawn=28, apart=2, at=3), False)
+expect("low 2: the cube stopped: 0 drawn, 60 apart", run() + ECHO + CUBE + cube(3, drawn=0, apart=60, at=2), False)
+expect("low 2: b2c765d's line, without frames apart, then one of today's", run() + ECHO + CUBE +
+       "cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 60 shown, 0 missed, 0 "
+       "torn, 0 out of order)\n" + cube(1), False)
 # the review of 3fea963: frames out of order (L1: printed and judged since), and the first cube's lines, without them
 expect("the cube: a frame out of order", run() + ECHO + CUBE + cube(3, order=1, at=2), False)
 expect("the cube: the first cube's line, without frames out of order, then one of today's", run() + ECHO + CUBE +

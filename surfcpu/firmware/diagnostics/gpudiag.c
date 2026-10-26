@@ -610,6 +610,7 @@ struct cube_run {
     uint32_t new_frames;                                /* frames shown that were not the last one again */
     uint32_t new_at;                                    /* FRAME_COUNT when the last of them was first shown */
     uint32_t gap;                                       /* the most video frames between two of them */
+    uint32_t gap_line;                                  /* the same since the free run's last line */
     uint32_t seen_lo, seen_hi;                          /* frames 0..63 seen (the checked run) */
 };
 
@@ -643,8 +644,12 @@ static void cube_look(struct cube_run *c)
         c->out_of_order++;
     } else if (step != 0) {                             /* a new frame: the video frames since the last new one */
         const uint32_t gap = (count - c->new_at) & 0xFFFFu;
-        if (c->new_frames++ != 0 && gap > c->gap)
-            c->gap = gap;
+        if (c->new_frames++ != 0) {
+            if (gap > c->gap)
+                c->gap = gap;
+            if (gap > c->gap_line)
+                c->gap_line = gap;
+        }
         c->new_at = count;
     }
     c->last_frame = f;
@@ -654,6 +659,41 @@ static void cube_look(struct cube_run *c)
     else if (f < 64)
         c->seen_hi |= 1u << (f - 32);
 }
+
+/* the most video frames from one new frame to the next: `most`, or more if the last new one was
+ * first shown longer ago than that (a cube that stopped is not 0 apart) */
+static uint32_t cube_apart(const struct cube_run *c, uint32_t most)
+{
+    const uint32_t since = (c->last_count - c->new_at) & 0xFFFFu;
+    return since > most ? since : most;
+}
+
+#if defined(GPUDIAG_TEST_SLOW) || defined(GPUDIAG_TEST_HALF) || defined(GPUDIAG_TEST_SLOW_FREE)
+/* make test-gpu-soc only: the cube drawn slower, by WAIT_VBLANKs after a frame's FLIP, each of which
+ * lets the next frame start a blanking later. GPUDIAG_TEST_SLOW (build/fw/gpudiag-slow.mem): in the
+ * checks one after each frame, two after frames 5 and 9, so that frames 6 and 10 come three video
+ * frames after the one before and the rest two, 28 a second in all, which the rate check must fail
+ * (the review of 3fea963, L3: its first form passed it). GPUDIAG_TEST_HALF (gpudiag-half.mem): one
+ * after every frame of the checks and of the free run, every frame two video frames after the one
+ * before, 29.97 a second, which the checks and gpudiag_check's judgement of the free run must both
+ * pass (the re-review of b2c765d, low 2: 29 drawn in a second failed it). GPUDIAG_TEST_SLOW_FREE
+ * (gpudiag-slowfree.mem): the checks at full rate, then in the free run one after each frame and two
+ * after every 32nd (5, 37, ...), a frame three video frames after the one before about once a second
+ * with 29 or 30 drawn in each, which gpudiag_check must fail */
+static uint32_t cube_test_waits(uint32_t until, uint32_t frame)
+{
+    const int checks = until == GPU_CUBE_CHECK_FRAMES;
+#if defined(GPUDIAG_TEST_SLOW)
+    return checks ? ((frame == 5u || frame == 9u) ? 2u : 1u) : 0u;
+#elif defined(GPUDIAG_TEST_HALF)
+    (void)checks;
+    (void)frame;
+    return 1u;
+#else
+    return checks ? 0u : ((frame & 31u) == 5u ? 2u : 1u);
+#endif
+}
+#endif
 
 /* one step: a look at the frame counter, then the next frame's words as FIFO_FREE allows; a new
  * frame is recorded when the last one's words are all in the FIFO, until frame `until` */
@@ -667,14 +707,9 @@ static void cube_step(struct cube_run *c, uint32_t until)
     } else if (c->next < until) {
         cube_n = cube_pos = 0;
         gpu_cube_frame(&rec_sink, c->next, c->next & 1u, CUBE_FENCE + c->next + 1u);
-#ifdef GPUDIAG_TEST_SLOW
-        /* make test-gpu-soc only (build/fw/gpudiag-slow.mem): in the checks, each frame lets the next one
-         * start a blanking later, frames 5 and 9 two blankings later, so that frames 6 and 10 come three
-         * video frames after the one before and the rest two: 28 a second in all, which the rate check must
-         * fail (the review of 3fea963, L3: its first form passed it) */
-        if (until == GPU_CUBE_CHECK_FRAMES)
-            for (uint32_t n = (c->next == 5u || c->next == 9u) ? 2u : 1u; n; n--)
-                rec_cmd(GPU_HDR(GPU_OP_WAIT_VBLANK, 0));
+#if defined(GPUDIAG_TEST_SLOW) || defined(GPUDIAG_TEST_HALF) || defined(GPUDIAG_TEST_SLOW_FREE)
+        for (uint32_t n = cube_test_waits(until, c->next); n; n--)
+            rec_cmd(GPU_HDR(GPU_OP_WAIT_VBLANK, 0));
 #endif
         c->next++;
     }
@@ -693,7 +728,7 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
     *crc = VREG(SURF_VIDEO_FRAME_CRC);
     c->next = 1;
     c->last_count = c->last_at = c->new_at = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
-    c->shown = c->missed = c->torn = c->out_of_order = c->new_frames = c->gap = 0;
+    c->shown = c->missed = c->torn = c->out_of_order = c->new_frames = c->gap = c->gap_line = 0;
     c->last_frame = 0;
     c->seen_lo = 1;
     c->seen_hi = 0;
@@ -702,8 +737,9 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
 
 /* the checks: frame 0 as a still picture, frames 1 .. 15 at full rate (every frame shown one of the
  * cube's, in order, each of them shown, none missed, each of frames 2 .. 15 at most two video frames
- * after the one before: 30 a second, which on a 59.94 Hz display is a frame every second video
- * frame or sooner), frame 15 as a still */
+ * after the one before: a frame every second video frame or sooner, 29.97 a second on this 59.94 Hz
+ * display, the brief's 30 or more; the free run's lines are judged by the same rule), frame 15 as a
+ * still */
 static void cube_check(uint32_t unused)
 {
     (void)unused;
@@ -731,8 +767,9 @@ static void cube_check(uint32_t unused)
     }
     const uint32_t video_frames = ((VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu) - frames0) & 0xFFFFu;
     const uint32_t all = (1u << GPU_CUBE_CHECK_FRAMES) - 1u;
-    diag_check(!late && c.gap <= 2u, "frames 2 to %u each at most 2 video frames after the one before (30 a second "
-               "or more): up to %u%s", GPU_CUBE_CHECK_FRAMES - 1u, c.gap, late ? ", stopped after a second" : "");
+    diag_check(!late && c.gap <= 2u, "frames 2 to %u each at most 2 video frames after the one before (29.97 a "
+               "second on this 59.94 Hz display, the 30+ of the brief): up to %u%s", GPU_CUBE_CHECK_FRAMES - 1u, c.gap,
+               late ? ", stopped after a second" : "");
     diag_check(c.torn == 0, "%u of the %u frames shown were none of the cube's (torn)", c.torn, c.shown);
     diag_check(c.seen_lo == all && c.out_of_order == 0, "the frames shown: %08x (every one of 0..%u: %08x), %u out of order",
                c.seen_lo, GPU_CUBE_CHECK_FRAMES - 1u, all, c.out_of_order);
@@ -782,9 +819,10 @@ static void ring_drain(void)
 static void cube_free_run(void)
 {
     con_puts("\nUART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again.\n");
-    con_printf("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames "
-               "not checked), torn (frames that were none of the cube's %u), out of order (frames that did not "
-               "follow the one before)\n", GPU_CUBE_PERIOD);
+    con_printf("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), apart (the most "
+               "video frames from a new frame of the cube to the next: 2 is one every second video frame, 29.97 a "
+               "second), missed (frames not checked), torn (frames that were none of the cube's %u), out of order "
+               "(frames that did not follow the one before)\n", GPU_CUBE_PERIOD);
     struct cube_run c = {.crcs = gpu_cube_expect_run, .ncrcs = GPU_CUBE_PERIOD};
     uint32_t crc0 = 0;
     if (!cube_start(&c, 1, &crc0) || crc0 != gpu_cube_expect_run[0])
@@ -801,10 +839,12 @@ static void cube_free_run(void)
             sec++;
             REG(SURF_GPIO_BASE, SURF_GPIO_LED) ^= 0x8u;     /* heartbeat on LD7 */
             const uint32_t drawn = GREG(SURF_GPU_FENCE) - CUBE_FENCE;
-            ring_printf("cube %4u s: %3u drawn, %3u shown, %u missed, %u torn, %u out of order (in all %u drawn, %u "
-                        "shown, %u missed, %u torn, %u out of order)\n", sec, drawn - drawn_base, c.shown - shown_base,
-                        c.missed - missed_base, c.torn - torn_base, c.out_of_order - order_base, drawn, c.shown,
-                        c.missed, c.torn, c.out_of_order);
+            ring_printf("cube %4u s: %3u drawn, %3u shown, %u apart, %u missed, %u torn, %u out of order (in all %u "
+                        "drawn, %u shown, %u apart, %u missed, %u torn, %u out of order)\n", sec, drawn - drawn_base,
+                        c.shown - shown_base, cube_apart(&c, c.gap_line), c.missed - missed_base, c.torn - torn_base,
+                        c.out_of_order - order_base, drawn, c.shown, cube_apart(&c, c.gap), c.missed, c.torn,
+                        c.out_of_order);
+            c.gap_line = 0;
             drawn_base = drawn;
             shown_base = c.shown;
             missed_base = c.missed;
