@@ -828,6 +828,10 @@ void gpu_tick_stop(struct gpu *g) {
     if(P(g)->tick_stop) P(g)->tick_stop(CTX(g));
 }
 
+u_long gpu_input_count(struct gpu *g) {
+    return P(g)->input_count ? P(g)->input_count(CTX(g)) : 0;
+}
+
 void gpu_state_read(struct gpu *g, struct gpu_state *s) {
     s->status = RD(g, SURF_GPU_STATUS);
     s->ie = RD(g, SURF_GPU_IE);

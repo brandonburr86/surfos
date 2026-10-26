@@ -125,6 +125,10 @@ struct gpu_port {
        when there is no such timer (the run looks from its loop) */
     void (*tick_start)(void *ctx, void (*fn)(void *arg), void *arg);
     void (*tick_stop)(void *ctx);
+    /* 10/26/26: bytes the console's serial line has received so far, from the timer interrupt too
+       (on SurfCPU its receive path holds the tick off while a paste comes: gfx cube tells the
+       frames it missed then apart); NULL: no such count */
+    u_long (*input_count)(void *ctx);
 };
 
 struct gpu {
@@ -257,6 +261,7 @@ u32 gpu_fence_now(struct gpu *g);                  /* FENCE as it reads now (gfx
 /* the port's tick (above): false when it has none */
 bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg);
 void gpu_tick_stop(struct gpu *g);
+u_long gpu_input_count(struct gpu *g);             /* the port's input_count, 0 without one */
 
 /* for the command's longer runs (gfx.c: bench, demo; gfxcube.c) */
 u64 gpu_now_us(struct gpu *g);
@@ -290,7 +295,8 @@ int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal,
 int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what);
 
 /* boards/arty_a7/gfxcube.c: gfx cube's run on a claimed GPU2 (it says what it does; GPU_OK, or
-   GPU_EERROR when a frame shown was torn, out of order or missed, or the driver's error), and its
+   GPU_EERROR when a frame shown was torn, out of order or missed (but while the serial line took
+   input: said, no fail), or the driver's error), and its
    check of the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC and FENCE read just
    before and just after the two (frame k's FENCE is fence0 + k: FENCE - fence0 is the FLIPs done
    after frame 0's) */
@@ -304,11 +310,13 @@ struct gfx_cube_check {
     u32 last_count;                     /* FRAME_COUNT then */
     u32 fence0;
     u_long shown, checked, torn, disorder;  /* shown - checked: missed (shown, never looked at) */
+    u_long missed_input;                /* of those, missed while the serial line took input */
     u_long advance;                     /* how far the whole frames shown went on, in frames */
     u32 torn_count, torn_crc;           /* the first torn frame's FRAME_COUNT and FRAME_CRC */
 };
 void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first,
                           u32 fence0);
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after);
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after,
+                          bool input);    /* input: the serial line took bytes since the look before */
 
 #endif

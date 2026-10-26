@@ -39,7 +39,12 @@ whether all were whole (and in order); at the end the frame rate (the frames dra
 since the blanking at which the cube's display began: never above the display's 59.94, the
 review's M1) and the same for the whole run. Ctrl+C, the time running out, a stopped engine and an
 error each end it with the engine idle and everything put back; it fails when a frame shown was
-torn, out of order or missed.
+torn, out of order or missed. Frames missed while the serial line took input are said apart and
+fail nothing: on SurfCPU the line's receive path takes longer for a byte (about 97 us) than the
+line does to send one (87 us at 115200 baud), and the external interrupt outranks the timer's, so
+a paste holds the tick, and the looks, off for as long as it lasts (the re-review of e655c39's
+question: 3,000 bytes held them 261 ms, 16 frames, on the RTL SoC); the GPU and the run did
+nothing wrong then.
 
 The sink has no context pointer and no error return: it only records, into the run's own state,
 which `run` points to while the run holds the driver's claim (one gfx cube at a time, as heaptest
@@ -123,6 +128,7 @@ static const struct gpu_sink sink = { rec_cmd, rec_sync, rec_vram, rec_vram, rec
 
 struct cube_look {
     u32 count, crc, fb, fa;             /* FRAME_COUNT, FRAME_CRC; FENCE before and after them */
+    u32 rx;                             /* the serial line's bytes received by then (gpu_input_count()) */
     u64 t;                              /* when */
 };
 
@@ -138,6 +144,7 @@ static bool look(struct gpu *g, u32 since, struct cube_look *l) {
     l->fb = gpu_fence_now(g);
     if(!gpu_frame_next(g, since, &l->count, &l->crc)) return false;
     l->fa = gpu_fence_now(g);
+    l->rx = (u32)gpu_input_count(g);
     l->t = gpu_now_us(g);
     return true;
 }
@@ -169,6 +176,7 @@ static void look_tick(void *arg) {
     ls->l[ls->head % LOOKS].crc = l.crc;
     ls->l[ls->head % LOOKS].fb = l.fb;
     ls->l[ls->head % LOOKS].fa = l.fa;
+    ls->l[ls->head % LOOKS].rx = l.rx;
     ls->l[ls->head % LOOKS].t = l.t;
     ls->head++;
 }
@@ -204,13 +212,18 @@ static bool in_step(const struct gfx_cube_check *c, u32 f, u32 fb, u32 fa) {
 
 /* frame f of the turn shown d frames after the last whole one, l: in order when (f - l) mod n <= d
    (a FLIP waits for a blanking, so the turn moves on a frame a frame at most) and f is in step with
-   the FLIPs (above) */
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after) {
+   the FLIPs (above). The d - 1 frames before it passed unseen: missed, and missed while the serial
+   line took input when it took bytes since the look before (the re-review of e655c39's question:
+   on SurfCPU its receive path costs more than a byte's time on the line, so a paste holds the
+   timer's tick off, and the looks with it) */
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after,
+                          bool input) {
     u32 d = (count - c->count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, dl = (count - c->last_count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, f;
     if(!d) return;
     c->count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
     c->shown += d;
     c->checked++;
+    if(input) c->missed_input += d - 1;
     for(f = 0; f < c->n && c->crcs[f] != crc; f++) {}
     if(f == c->n) {                                     /* none of the turn's frames: torn */
         if(!c->torn++) {
@@ -265,7 +278,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     struct cube_look lk;
     struct gpu_screen shown;
     char buf[48];
-    u32 k = 1, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0;
+    u32 k = 1, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0, last_rx = 0;
     u32 ends_done = 0;
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0, seen_at = 0;
@@ -314,6 +327,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         gpu_frame_next(g, 0x10000u, &count, &crc);     /* the frames after this one are the cube's */
         gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0, vbase);
         skip = !g->latched;                             /* the display changed off the latch: a mixed frame */
+        last_rx = (u32)gpu_input_count(g);
         memset(&looks, 0, sizeof(looks));
         looks.g = g;
         looks.count = c.count;
@@ -329,13 +343,15 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
                 lk.crc = looks.l[looks.tail % LOOKS].crc;
                 lk.fb = looks.l[looks.tail % LOOKS].fb;
                 lk.fa = looks.l[looks.tail % LOOKS].fa;
+                lk.rx = looks.l[looks.tail % LOOKS].rx;
                 lk.t = looks.l[looks.tail % LOOKS].t;
                 looks.tail++;
             } else if(!look(g, c.count, &lk)) {
                 break;
             }
             if(skip) c.count = c.last_count = lk.count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
-            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa);
+            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa, lk.rx != last_rx);
+            last_rx = lk.rx;
             if(!seen_at && (i32)(lk.fa - vlast) >= 0) seen_at = lk.t;      /* the last frame recorded, done */
             skip = false;
             seen = true;
@@ -421,6 +437,9 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
             printf("    %s: the frames shown went %lu on for %lu FLIPs\n", what, c.advance, (u_long)drawn);
         printf("    %s: %lu shown, %lu missed: %s\n", what, c.shown, c.shown - c.checked,
                verdict(&c, c.shown - c.checked, c.torn, c.disorder, buf, sizeof(buf)));
+        if(c.missed_input)
+            printf("    %s: %lu of the %lu missed came while the serial line took input\n", what, c.missed_input,
+                   c.shown - c.checked);
         if(c.torn)
             printf("    %s: the first torn: frame %lu, FRAME_CRC %08lx, none of the turn's\n", what,
                    (u_long)c.torn_count, (u_long)c.torn_crc);
@@ -430,5 +449,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         return GPU_EINTR;
     }
     if(rc) return rc;
-    return c.torn || c.disorder || c.shown != c.checked || r2 ? GPU_EERROR : GPU_OK;
+    /* frames missed while the serial line took input are said, and fail nothing: the looks were held
+       off, not the GPU or the run; torn and out-of-order frames, and any other missed, fail */
+    return c.torn || c.disorder || c.shown - c.checked > c.missed_input || r2 ? GPU_EERROR : GPU_OK;
 }

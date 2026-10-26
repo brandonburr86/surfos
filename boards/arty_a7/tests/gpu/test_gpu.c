@@ -1619,50 +1619,58 @@ static void t_cube_check(unsigned seed) {
     u32 k;
     (void)seed;
     gfx_cube_check_start(&c, t, 8, true, 100, 0, 1000);
-    gfx_cube_check_frame(&c, 101, 10, 1000, 1000);  /* frame 0 again, nothing FLIPped since */
-    gfx_cube_check_frame(&c, 102, 11, 1001, 1001);  /* 1 */
-    gfx_cube_check_frame(&c, 104, 13, 1003, 1003);  /* 3, two frames on: one passed unseen */
-    gfx_cube_check_frame(&c, 104, 99, 1003, 1003);  /* FRAME_COUNT did not move: nothing */
+    gfx_cube_check_frame(&c, 101, 10, 1000, 1000, false);  /* frame 0 again, nothing FLIPped since */
+    gfx_cube_check_frame(&c, 102, 11, 1001, 1001, false);  /* 1 */
+    gfx_cube_check_frame(&c, 104, 13, 1003, 1003, false);  /* 3, two frames on: one passed unseen */
+    gfx_cube_check_frame(&c, 104, 99, 1003, 1003, false);  /* FRAME_COUNT did not move: nothing */
     check(c.shown == 4 && c.checked == 3 && !c.torn && !c.disorder && c.last == 3 && c.advance == 3,
           "the same frame again, the next, two on in two frames: whole, in order; 4 shown, 3 checked, 3 on");
-    gfx_cube_check_frame(&c, 105, 15, 1005, 1005);  /* 5: two on in one frame (a FLIP a blanking at most) */
-    gfx_cube_check_frame(&c, 106, 14, 1005, 1005);  /* 4: backwards */
+    gfx_cube_check_frame(&c, 105, 15, 1005, 1005, false);  /* 5: two on in one frame (a FLIP a blanking at most) */
+    gfx_cube_check_frame(&c, 106, 14, 1005, 1005, false);  /* 4: backwards */
     check(c.disorder == 2 && !c.torn, "two on in one frame, and backwards: out of order");
-    gfx_cube_check_frame(&c, 107, 99, 1006, 1006);  /* none of them */
+    gfx_cube_check_frame(&c, 107, 99, 1006, 1006, false);  /* none of them */
     check(c.torn == 1 && c.torn_count == 107 && c.torn_crc == 99 && c.last == 4, "a CRC of none of them: torn, the first kept");
-    gfx_cube_check_frame(&c, 109, 16, 1006, 1006);  /* 6, two on in two frames (from 4) */
-    gfx_cube_check_frame(&c, 110, 17, 1007, 1007);
-    gfx_cube_check_frame(&c, 111, 10, 1008, 1008);  /* the turn wraps: 7, then 0 (frame 8) */
+    gfx_cube_check_frame(&c, 109, 16, 1006, 1006, false);  /* 6, two on in two frames (from 4) */
+    gfx_cube_check_frame(&c, 110, 17, 1007, 1007, false);
+    gfx_cube_check_frame(&c, 111, 10, 1008, 1008, false);  /* the turn wraps: 7, then 0 (frame 8) */
     check(c.disorder == 2 && c.torn == 1 && c.last == 0, "after it, in order again across the turn's wrap");
     gfx_cube_check_start(&c, t, 8, true, 0xFFFE, 2, 998);
-    gfx_cube_check_frame(&c, 0xFFFF, 13, 1001, 1001);
-    gfx_cube_check_frame(&c, 0x10001, 14, 1002, 1002);  /* FRAME_COUNT is 16 bits: 0xFFFF to 1 is two */
+    gfx_cube_check_frame(&c, 0xFFFF, 13, 1001, 1001, false);
+    gfx_cube_check_frame(&c, 0x10001, 14, 1002, 1002, false);  /* FRAME_COUNT is 16 bits: 0xFFFF to 1 is two */
     check(c.shown == 3 && !c.disorder && !c.torn, "FRAME_COUNT's 16-bit wrap counted as the frames it is");
     gfx_cube_check_start(&c, dup, 8, false, 0, 2, 1000);
-    gfx_cube_check_frame(&c, 1, 10, 1000, 1000);    /* 0 or 3: the order is not checked */
-    gfx_cube_check_frame(&c, 2, 17, 1000, 1000);
-    gfx_cube_check_frame(&c, 3, 11, 1000, 1000);
+    gfx_cube_check_frame(&c, 1, 10, 1000, 1000, false);    /* 0 or 3: the order is not checked */
+    gfx_cube_check_frame(&c, 2, 17, 1000, 1000, false);
+    gfx_cube_check_frame(&c, 3, 11, 1000, 1000, false);
     check(!c.disorder && !c.torn && c.checked == 3, "a turn with repeated pictures: only whole or torn, no order");
     /* the cube standing still while its FLIPs go on (frame 0 drawn every time, the review's M2):
        frame 0 again is in order while at most one FLIP has come since, not after */
     gfx_cube_check_start(&c, t, 8, true, 200, 0, 1000);
-    for(k = 1; k <= 6; k++) gfx_cube_check_frame(&c, 200 + k, 10, 1000 + k - 1, 1000 + k - 1);
+    for(k = 1; k <= 6; k++) gfx_cube_check_frame(&c, 200 + k, 10, 1000 + k - 1, 1000 + k - 1, false);
     check(c.checked == 6 && c.disorder == 4 && !c.advance, "frame 0 shown again and again as FLIPs 0 to 5 are done: "
           "in order for two looks, then out of order");
     /* behind its FLIPs by two, though a frame a frame: out of order; one behind (the frame FLIPped
        last not yet shown) and one ahead (a FLIP done whose FENCE is still the CPU's) are in step */
     gfx_cube_check_start(&c, t, 8, true, 300, 0, 1000);
-    gfx_cube_check_frame(&c, 301, 11, 1002, 1002);  /* 1 shown, 2 FLIPped last: in step */
-    gfx_cube_check_frame(&c, 302, 12, 1004, 1004);  /* 2 shown, 4 FLIPped: behind by two */
-    gfx_cube_check_frame(&c, 303, 13, 1002, 1002);  /* 3 shown, FENCE says 2: its FENCE not yet sent */
+    gfx_cube_check_frame(&c, 301, 11, 1002, 1002, false);  /* 1 shown, 2 FLIPped last: in step */
+    gfx_cube_check_frame(&c, 302, 12, 1004, 1004, false);  /* 2 shown, 4 FLIPped: behind by two */
+    gfx_cube_check_frame(&c, 303, 13, 1002, 1002, false);  /* 3 shown, FENCE says 2: its FENCE not yet sent */
     check(c.disorder == 1 && c.advance == 3, "a frame two behind the FLIPs: out of order; one behind, one ahead: in step");
-    gfx_cube_check_frame(&c, 304, 14, 1002, 1002);  /* 4 shown, FENCE says 2: two ahead */
+    gfx_cube_check_frame(&c, 304, 14, 1002, 1002, false);  /* 4 shown, FENCE says 2: two ahead */
     check(c.disorder == 2, "a frame two ahead of the FENCEs read: out of order");
     /* a blanking between the two reads of FENCE: the window is fb - 1 to fa + 1 */
     gfx_cube_check_start(&c, t, 8, true, 400, 0, 1000);
-    gfx_cube_check_frame(&c, 401, 11, 1002, 1003);  /* 1 shown, FLIPs 2 then 3 done: in step (fb - 1) */
-    gfx_cube_check_frame(&c, 402, 12, 1002, 1003);
+    gfx_cube_check_frame(&c, 401, 11, 1002, 1003, false);  /* 1 shown, FLIPs 2 then 3 done: in step (fb - 1) */
+    gfx_cube_check_frame(&c, 402, 12, 1002, 1003, false);
     check(!c.disorder, "a FLIP between the two FENCE reads: the frame shown may be fb - 1 to fa + 1");
+    /* frames that passed unseen while the serial line took input are counted apart (the re-review of
+       e655c39's question: a paste holds SurfCPU's tick off) */
+    gfx_cube_check_start(&c, t, 8, true, 500, 0, 1000);
+    gfx_cube_check_frame(&c, 501, 11, 1001, 1001, false);
+    gfx_cube_check_frame(&c, 505, 15, 1005, 1005, true);   /* 3 passed unseen while bytes came */
+    gfx_cube_check_frame(&c, 508, 10, 1008, 1008, false);  /* 2 passed unseen, none came */
+    check(c.shown == 8 && c.checked == 3 && c.missed_input == 3 && !c.disorder && !c.torn,
+          "frames missed while the serial line took input: counted apart from the others");
 }
 TEST(t_cube_check)
 
@@ -1952,6 +1960,32 @@ static void t_cube_look(unsigned seed) {
     /* the rate with the slow console: its time ends at the look that saw the last FLIP done, not
        after the line the run was printing then (on the RTL SoC the second's line ends a 1 s run,
        and the rate read 56.8 for a FLIP every blanking) */
+    /* a paste on the serial line in the middle of a run (the re-review of e655c39's question): on
+       SurfCPU its receive path takes longer for a byte than the line does to send one, and outranks
+       the timer, so the tick is held off for the paste's length (3000 bytes take 261 ms at 115200
+       baud); the frames missed meanwhile are said and fail nothing, while the tick held off with no
+       bytes coming fails as before */
+    s = fresh2(1);
+    s->stall_at = s->now + 1300000;
+    s->stall_us = 261000;
+    s->stall_holds_tick = 1;
+    s->stall_paste = 3000;
+    r = gfx(s, "gfx cube 2");
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    snprintf(line, sizeof(line), "gfx cube 2 with a paste of 3000 bytes 1.3 s in: %lu shown, %lu missed, all of them while it came; "
+             "it passes", shown, missed);
+    snprintf(want, sizeof(want), "    gfx cube: %lu of the %lu missed came while the serial line took input\n", missed, missed);
+    check(r == CMD_OK && ok && missed >= 12 && said(s, want) && said(s, " missed: 0 torn, 0 out of order\n"), line);
+    done(s);
+    s = fresh2(1);
+    s->stall_at = s->now + 1300000;
+    s->stall_us = 261000;
+    s->stall_holds_tick = 1;
+    r = gfx(s, "gfx cube 2");
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    snprintf(line, sizeof(line), "  the tick held off as long with no bytes coming: %lu missed, it fails", missed);
+    check(r == CMD_FAIL && ok && missed >= 12 && !said(s, "while the serial line took input"), line);
+    done(s);
     s = fresh2(1);
     s->line_us = 40000;
     r = gfx(s, "gfx cube 1");

@@ -19,6 +19,7 @@ board without one, from a kernel timer every 10 ms.
 #include <surfos/ktimer.h>
 #include <sys/serial.h>
 #include <riscv/board.h>
+#include <riscv/arch.h>
 #include <blibc_common.h>
 
 static bool serial_up;
@@ -28,6 +29,13 @@ static u_long rx_bytes;
 
 bool serial_present(void) {
     return serial_up;
+}
+
+/* 10/26/26: what the receive path has taken so far (gfx cube tells apart the frames it missed while
+   bytes came: on SurfCPU each byte costs that path longer than the line takes to send one, so a
+   paste holds the timer's tick off, boards/arty_a7/gfxcube.c) */
+u_long serial_rx_count(void) {
+    return rx_bytes;
 }
 
 void init_serial(void) {

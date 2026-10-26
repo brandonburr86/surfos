@@ -114,6 +114,11 @@ struct stub {
     int in_tick, no_tick;
     unsigned ticks_run;
     uint64_t line_us;                   /* each line printed costs the CPU this long (SurfCPU's console) */
+    unsigned long input_bytes;          /* the serial line's bytes received (the port's input_count) */
+    int stall_holds_tick;               /* the stall (stall_at, stall_us) holds the timer's tick off too, */
+    unsigned stall_paste;               /* and the serial line takes this many bytes meanwhile: a paste,
+                                           whose receive path outranks the tick (10/26/26) */
+    uint64_t tick_held_until;
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];

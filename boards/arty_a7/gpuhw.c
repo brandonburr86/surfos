@@ -32,6 +32,7 @@ sleeps on a queue (nothing may run before the drivers are up), it spins on the m
 #include <asm/io.h>
 #include <surfcpu/soc.h>
 #include <riscv/board.h>
+#include <riscv/arch.h>                         /* serial_rx_count() */
 #include "arty.h"
 #include "gpu.h"
 #include "../../shell/shell.h"
@@ -175,16 +176,21 @@ static void p_tick_stop(void *c) {
     ktimer_cancel(&look_timer);
 }
 
+static u_long p_input_count(void *c) {
+    (void)c;
+    return serial_rx_count();
+}
+
 static const struct gpu_port port_irq = {
     NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
+    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop, p_input_count
 };
 
 static const struct gpu_port port_poll = {             /* no interrupt path: fences with sleeps */
     NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, NULL, NULL, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
+    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop, p_input_count
 };
 
 /* the GPU's interrupt: only IE.FENCE is enabled, so it is a FENCE with its IRQ flag; clearing
