@@ -420,9 +420,12 @@ static void scene_flat(const struct gpu_sink *s)
                 flat(s, c + 1, px[1][0], py[1][0], px[0][1], py[0][1], px[1][1], py[1][1]);
             }
         }
-    /* culling: each pair drawn in both windings, one culled; then two culled outright */
+    /* culling: each pair drawn in both windings, one culled; then two culled outright. The pairs
+     * stand half a pixel down, so the drawn clockwise triangle's first edge, horizontal and to the
+     * right, is a top edge through the centres of row 260: the top-left rule's top case decides
+     * whether that row is drawn (a scene without such an edge never tests it) */
     for (int k = 0; k < 4; k++) {
-        const int x = GPU_FX(30 + 70 * k), y = GPU_FX(260);
+        const int x = GPU_FX(30 + 70 * k), y = GPU_FX(260) + 8;
         flat(s, 0xE0, x, y, x + GPU_FX(50), y, x, y + GPU_FX(40));                      /* clockwise */
         tri(s, GPU_TRI_CULL_CW | 0x1C, x, y, 0, x + GPU_FX(50), y, 0, x + GPU_FX(25), y + GPU_FX(60), 0);
         tri(s, GPU_TRI_CULL_CW | 0x1F, x + GPU_FX(50), y + GPU_FX(60), 0, x + GPU_FX(50), y + GPU_FX(10), 0,
