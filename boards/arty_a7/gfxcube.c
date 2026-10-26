@@ -103,6 +103,7 @@ static const struct gpu_sink sink = { rec_cmd, rec_sync, rec_vram, rec_vram, rec
 
 struct cube_look {
     u32 count, crc, fb, fa;             /* FRAME_COUNT, FRAME_CRC; FENCE before and after them */
+    u64 t;                              /* when */
 };
 
 struct cube_looks {
@@ -117,6 +118,7 @@ static bool look(struct gpu *g, u32 since, struct cube_look *l) {
     l->fb = gpu_fence_now(g);
     if(!gpu_frame_next(g, since, &l->count, &l->crc)) return false;
     l->fa = gpu_fence_now(g);
+    l->t = gpu_now_us(g);
     return true;
 }
 
@@ -133,6 +135,7 @@ static void look_tick(void *arg) {
     ls->l[ls->head % LOOKS].crc = l.crc;
     ls->l[ls->head % LOOKS].fb = l.fb;
     ls->l[ls->head % LOOKS].fa = l.fa;
+    ls->l[ls->head % LOOKS].t = l.t;
     ls->head++;
 }
 
@@ -226,7 +229,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     u32 k = 1, pos = 0, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0;
     u32 ends_done = 0;
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
-    u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0;
+    u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0, seen_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
     bool stood = false;
     u_int taken;
@@ -283,12 +286,14 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
                 lk.crc = looks.l[looks.tail % LOOKS].crc;
                 lk.fb = looks.l[looks.tail % LOOKS].fb;
                 lk.fa = looks.l[looks.tail % LOOKS].fa;
+                lk.t = looks.l[looks.tail % LOOKS].t;
                 looks.tail++;
             } else if(!look(g, c.count, &lk)) {
                 break;
             }
             if(skip) c.count = c.last_count = lk.count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
             else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa);
+            if(!seen_at && (i32)(lk.fa - vlast) >= 0) seen_at = lk.t;      /* the last frame recorded, done */
             skip = false;
             seen = true;
             ends++;
@@ -319,6 +324,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
             pos += taken;
         } else if(now - t0 < secs) {                    /* the next frame */
             rc = record(g, &r, k++, &vlast, what);
+            seen_at = 0;
             pos = 0;
         } else if((i32)(fence - vlast) < 0) {           /* time is up: the last frame's FLIP and FENCE */
             rc = gpu_pump(g, r.w, 0, &taken, &fence, what);
@@ -339,7 +345,12 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
        frames as the FLIPs done (so, none missed, each of them was shown: the review's M2) */
     stood = ran && !rc && !intr && ordered && c.advance != drawn;
     if(stood) c.disorder++;
-    if(ran) now = done_at ? done_at : gpu_now_us(g);  /* the rate up to the last FLIP seen done */
+    /* the rate's time ends where the last FLIP was first seen done, by the run or by a look (FENCE read
+       just after it, within a tick: the run may have been printing its line then) */
+    if(ran) {
+        now = done_at ? done_at : gpu_now_us(g);
+        if(seen_at && seen_at < now) now = seen_at;
+    }
     r2 = gfx_keep_end(g, &keep, rc, intr, what);
     rec = NULL;
     if(ran) {

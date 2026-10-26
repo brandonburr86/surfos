@@ -1915,6 +1915,7 @@ static void t_cube_look(unsigned seed) {
     struct stub *s;
     unsigned long drawn = 0, shown = 0, missed = 0, asked, all;
     unsigned irqs;
+    long rate = 0;
     char line[200], want[80];
     int r, ok;
     (void)seed;
@@ -1936,6 +1937,18 @@ static void t_cube_look(unsigned seed) {
     snprintf(line, sizeof(line), "  the interrupt: %u taken for the %lu fences that asked for one (of %lu sent: the cube's "
              "%lu frames' FENCEs ask for none)", irqs, asked, all, drawn + 1);
     check(asked > 0 && 2 * irqs >= asked && all >= asked + drawn + 1, line);
+    done(s);
+    /* the rate with the slow console: its time ends at the look that saw the last FLIP done, not
+       after the line the run was printing then (on the RTL SoC the second's line ends a 1 s run,
+       and the rate read 56.8 for a FLIP every blanking) */
+    s = fresh2(1);
+    s->line_us = 40000;
+    r = gfx(s, "gfx cube 1");
+    rate = cube_rate(s);
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    snprintf(line, sizeof(line), "gfx cube 1 with the slow console: %lu drawn, %ld.%ld a second (59.0 to 59.9 wanted)", drawn,
+             rate / 10, rate % 10);
+    check(r == CMD_OK && ok && drawn >= 58 && rate >= 590 && rate <= 599, line);
     done(s);
     s = fresh2(-1);
     s->line_us = 40000;
