@@ -15,7 +15,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the thirteenth storage review's findings, being fixed in fs-fix-13) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
-| GPU SurfGPU ([GPU.md](GPU.md) section 11) | G0-G2: the graphics modes and the 2D engine against their C models, gpudiag on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 12.1); G3: SurfOS's driver and `gfx` against the model on the host and on the RTL SoC, every `gfx crc` equal to the frame at the VGA pins ([evidence](evidence/gpu-g3/)) | gpudiag and the DDR+GPU design through the open flow, every gate PASS ([GPU.md](GPU.md) 12.2) | not run: the G2 bitstreams and the G3 kernel wait for the owner ([GPU.md](GPU.md) sections 14 and 15.6) | G0-G2 done in simulation and synthesis (six reviews); G3 done in simulation (reviewed and re-reviewed: three lows left for the cube round); G4 being built; every board test outstanding |
+| GPU SurfGPU ([GPU.md](GPU.md) section 11) | G0-G2: the graphics modes and the 2D engine against their C models, gpudiag on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 12.1); G3: SurfOS's driver and `gfx` against the model on the host and on the RTL SoC, every `gfx crc` equal to the frame at the VGA pins ([evidence](evidence/gpu-g3/)); G4: GPU2 (SET_ZBUF, TRIANGLE, FLIP) against its C model at every FENCE, mutants, gpudiag with the spinning cube on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 16.10, [evidence](evidence/gpu-g4/)) | gpudiag and the DDR+GPU design through the open flow, every gate PASS ([GPU.md](GPU.md) 12.2); G4 at bfaac48: gpudiag every gate, LVS proved; DDR+GPU every gate but LVS, which is outstanding ([GPU.md](GPU.md) 16.11) | not run: the G2 bitstreams, the G3 kernel and G4's gpudiag wait for the owner ([GPU.md](GPU.md) sections 14 and 15.6) | G0-G2 done in simulation and synthesis (six reviews); G3 done in simulation (reviewed and re-reviewed: three lows left for the cube round); G4 done in simulation, and in synthesis but for the DDR+GPU proof, its review under way; every board test outstanding |
 
 ## Log
 
@@ -1167,3 +1167,44 @@ ddr-3 built five candidates, every gate passing on each
 
   They go into the `gfx cube` round.
 * G3 is done in simulation. Its board test ([GPU.md](GPU.md) 15.6) is outstanding.
+
+### 2026-10-26: G4 merged
+
+* G4 handed back at 3fea963 (`sc/gpu-g4`) and is merged as af748fd. The command set is now GPU2,
+  and soc_version is 0.4.0 ([GPU.md](GPU.md) section 16). GPU2 adds:
+  * SET_ZBUF, a 16-bit depth buffer in VRAM;
+  * TRIANGLE: flat or Gouraud, 12.4 vertices, the top-left rule, a depth test and culling;
+  * FLIP, which changes the shown page at vertical blanking.
+  * gpudiag also gains GPU2's checks, four scenes and a spinning cube. Every frame of the cube is
+    checked with FRAME_CRC.
+* Simulation:
+  * The engine against the model at every FENCE: seeds 1 to 3, 1,120 checks each, with ABORTs
+    landing inside TRIANGLE.
+  * gpudiag on the RTL SoC: 146 checks. In a free run the cube drew 60 frames and showed 59, none
+    missed or torn.
+  * The netlist of the bfaac48 gpudiag ran gpudiag to PASS (146 checks) in 1.974 s of simulated
+    time, which took 3 h 19 min.
+  * Mutants: outside the SoC, 56 of 56 caught. The three that survive are clamps shown to be
+    equivalent, with the reason beside each. On the SoC, 20 of 20 are caught since 32e1a86; before
+    it, one triangle-edge mutant got through.
+  * G4's own `make check` passed. The integrator's on 296c104 passed in 40 minutes
+    (07:10 to 07:51).
+* Synthesis (the open flow; nextpnr's timing is an estimate):
+  * gpudiag at bfaac48 passed every gate, with LVS proved in full (16,212). sys_clk reaches
+    44.71 MHz, using 12,034 LUTs. Only one of three placement seeds routed: seeds 1 and 2 hit the
+    1,800 s limit.
+  * DDR+GPU at bfaac48 passed every gate but LVS. Its proof was killed at the 3.5 GB memory cap,
+    with 8,606 proved and none different. The full proof, by `--solver` (15 to 20 h), is done once,
+    on the bitstream that goes to the board after the review. Until then SurfOS's boot stays on
+    G2's DDR+GPU bitstream.
+  * The bfaac48 gpudiag has scene 13 as it was before 32e1a86, so on the board it does not check
+    the top-left rule's top edge. The engine tests check it.
+* G4 found that devenv/run.sh counts untracked files as dirty and the flow's manifest did not.
+  5fd27ce settled it ([BOARD.md](BOARD.md) section 8).
+  * `tools/fpga-build.sh` refuses a boot ROM of another build, or one older than its build
+    identity.
+  * It counts a ROM built dirty as a dirty bitstream.
+* Physical: nothing has run. The first test is gpudiag at bfaac48 over JTAG, with the cube on the
+  monitor, with the owner ([GPU.md](GPU.md) section 14).
+* An independent review of G4 at 3fea963 is under way. After it comes the `gfx cube` round for
+  SurfOS.
