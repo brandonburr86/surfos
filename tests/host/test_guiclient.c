@@ -20,7 +20,9 @@
    focus, its taskbar button marked; a program's text for the clipboard is the desktop's clipboard. The review: it
    comes up after a pass's input (a press, or a whole click, queued in that pass lands where it was aimed), never
    while a button, a drag or a program's grab is held, and for GUI_GRACE_MS a press on it is nobody's; text from a
-   window that no longer has the focus is dropped. */
+   window that no longer has the focus is dropped. An application that is a program now (the Clock): run from its
+   tile, its window at the application's place, brought back when chosen again; Edit > Copy for a program's
+   window. */
 #include "gui_fake.h"
 
 static struct gui_state g;
@@ -751,6 +753,48 @@ static void dialog_row(int row) {
     fake_click(&g, x + 100, y + 64 + row * ROW_H + 9);
 }
 
+/* 10/26/26 (stage C12): an application that is a program now (the Clock): its tile and the Apps menu run it, its
+   window takes the focus and stands at the application's place; chosen again, its window comes to the front; once it
+   has ended, it runs again; a program that cannot start is said, and nothing kept. Edit > Copy for a program's window
+   is its Ctrl+C */
+static void test_app_program(void) {
+    int a, id, x, y, k = GUI_CLOCK - GUI_FIRST_APP;
+    fake_desktop(&g, 960, 540);
+    x = g.win[GUI_CLOCK].x;
+    y = g.win[GUI_CLOCK].y;
+    CHECK(gui_app_of(GUI_CLOCK)->program && !strcmp(gui_app_of(GUI_CLOCK)->program, "/initrd/bin/wclock"));
+    fake_run_result = 57;
+    gui_act(&g, ACT_WINDOW + GUI_CLOCK);                /* its tile, or Apps > Clock */
+    CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "/initrd/bin/wclock") && !g.win[GUI_CLOCK].open &&
+          g.app_pid[k] == 57);
+    g.now += GUI_START_MS - 1;                          /* pressed again before its window came: a double-click */
+    gui_act(&g, ACT_WINDOW + GUI_CLOCK);
+    CHECK(fake_run_count == 1);
+    a = fake_win_open(378, 271, 0, 0xF4F1E6, "Clock", 57);
+    fake_win_present(a, 0xF4F1E6);
+    tick();
+    id = win_id(a);
+    CHECK(id >= 0 && g.focus == id && g.win[id].x == x && g.win[id].y == y && g.win[id].w == 380 &&
+          g.win[id].h == 300 && !client_waiting(&g, id));
+    gui_open(&g, GUI_NOTEPAD);
+    gui_act(&g, ACT_WINDOW + GUI_CLOCK);                /* again: its window to the front, nothing run */
+    CHECK(fake_run_count == 1 && g.focus == id && g.order[GUI_SLOTS - 1] == id);
+    CHECK(gui_menu_on(&g, 3, ACT_CLIENT_COPY));
+    fake_win_forget(a);
+    gui_act(&g, ACT_CLIENT_COPY);
+    CHECK(count(a, WIN_EV_KEY) == 1 && last(a, WIN_EV_KEY)->value == 3);
+    fake_win_end(a);
+    tick();
+    CHECK(win_id(a) < 0);
+    gui_act(&g, ACT_WINDOW + GUI_CLOCK);                /* ended: it runs again */
+    CHECK(fake_run_count == 2 && g.app_pid[k] == 57);
+    fake_run_result = -2;
+    g.now += GUI_START_MS;
+    gui_act(&g, ACT_WINDOW + GUI_CLOCK);                /* 57 came with no window in that time: run, which fails */
+    CHECK(fake_run_count == 3 && g.dialog.kind && !strcmp(g.dialog.title, "Not started") && g.app_pid[k] == 0);
+    gui_key(&g, 27);
+}
+
 static void test_launcher(void) {
     fake_desktop(&g, 960, 540);
     programs();
@@ -895,12 +939,13 @@ static void test_guards(int width, int height) {
     CHECK(client_count(&g) == GUI_CLIENTS);
     gui_act(&g, ACT_WINDOW + GUI_FIRST_CLIENT + 1);
     gui_act(&g, ACT_MAXIMIZE);                          /* one maximized */
-    for(id = 0; id < GUI_WINDOWS; id++) gui_open(&g, id);
+    for(id = 0; id < GUI_WINDOWS; id++) if(!gui_app_of(id) || !gui_app_of(id)->program) gui_open(&g, id);
     tick();
     draw(width, height);
     CHECK(fake_guards(width, height));
     for(id = 0; id < GUI_SLOTS; id++) {
         const struct gui_window *w = &g.win[id];
+        if(gui_app_of(id) && gui_app_of(id)->program) continue;     /* 10/26/26: a program now (the Clock) */
         CHECK(w->open);
         CHECK(w->x >= 0 && w->y >= MENU_H && w->x + w->w <= width && w->y + w->h <= height - TASK_H);
     }
@@ -1077,6 +1122,7 @@ int main(void) {
     test_leave();
     test_no_system();
     test_launcher();
+    test_app_program();
     test_asked_focus();
     test_alert_clip();
     test_guards(640, 400);

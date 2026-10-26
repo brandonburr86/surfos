@@ -35,6 +35,12 @@ the keys); a program's content keeps every button for its program. It is for its
 when the focus leaves that window (a program's window arriving with the focus, the window gone), and
 an item is never run on another. With a menu open, a right press in it does nothing and one
 elsewhere only closes it, as a left click does. In Files a right-click selects the row first.
+10/26/26 (stage C12): an application of the suite may be a program now (struct gui_app's program:
+the Clock, user/wclock/). Its slot never opens: gui_open() runs the program through the launcher,
+or brings its window to the front when the program it started last has one (app_program(); a
+press before that window came, within GUI_START_MS, starts nothing: a double-click), and
+guiclient.c puts that window where the slot's stands. Edit > Copy for a program's window is its
+Ctrl+C.
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -293,9 +299,12 @@ void gui_raise(struct gui_state *g, int id) {
     g->dirty=true;
 }
 
+static void app_program(struct gui_state *g, int app);
+
 void gui_open(struct gui_state *g, int app) {
     bool was;
     if(app<0 || app>=GUI_SLOTS) return;
+    if(gui_app_of(app) && gui_app_of(app)->program) { app_program(g, app); return; }  /* 10/26/26 (C12) */
     if(app>=GUI_FIRST_CLIENT && !g->win[app].open) return;     /* 10/25/26: a program's slot opens only with its window */
     was = g->win[app].open;
     gui_raise(g, app);
@@ -460,6 +469,10 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Close window", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
         break;
     case 3:
+        if(client_keys(g)) {                            /* 10/26/26 (C12): a program's window: its Ctrl+C */
+            ITEM("Copy", "Ctrl+C", ACT_CLIENT_COPY, true);
+            break;
+        }
         if(edit_app(g)) {                               /* 10/17/26: the focused application's */
             const struct gui_app *app = edit_app(g);
             ITEM("Undo", "Ctrl+Z", ACT_UNDO, app->can_edit(g, ACT_UNDO));
@@ -814,6 +827,7 @@ void gui_act(struct gui_state *g, int act) {
     case ACT_MINIMIZE: minimize(g, g->focus); break;
     case ACT_MAXIMIZE: maximize(g, g->focus); break;
     case ACT_HELP: gui_open(g, GUI_HELP); break;
+    case ACT_CLIENT_COPY: client_key(g, 3); break;      /* 10/26/26 (C12): a program's window copies itself */
     case ACT_RUN:                                       /* 10/25/26: the launcher: /initrd/bin's programs, a line to run */
         if(g->sys && g->sys->run) dialog_chooser(g, GUI_DLG_RUN, ACT_DLG_RUN, "/initrd/bin", "wcalc");
         break;
@@ -822,15 +836,39 @@ void gui_act(struct gui_state *g, int act) {
 
 /* 10/25/26: the launcher: the line started on the desktop's console (struct gui_sys's run), its first window to
    take the focus as it appears; or why not */
-static void run_program(struct gui_state *g, const char *line) {
+static int run_program(struct gui_state *g, const char *line) {
     char msg[80];
     int pid;
     msg[0] = 0;
-    if(!g->sys || !g->sys->run) return;
+    if(!g->sys || !g->sys->run) return -1;
     pid = g->sys->run(g->sys->ctx, line, msg, sizeof(msg));
     if(pid > 0) client_launched(g, pid);
-    if(pid >= 0) return;
+    if(pid >= 0) return pid;
     dialog_message(g, "Not started", msg[0] ? msg : "The program could not be started.", "");
+    return pid;                                         /* 10/26/26: its pid, for an application's launcher */
+}
+
+/* 10/26/26 (stage C12): an application that is a program now: the window of the program its launcher started last
+   to the front, or the program started, its window to take the focus as it appears (the launcher's rule) and to
+   stand at the application's place (guiclient.c's accept()); but nothing while the one just started has no window
+   yet (GUI_START_MS: the second press of a double-click) */
+static void app_program(struct gui_state *g, int app) {
+    int k = app - GUI_FIRST_APP, id = client_of_pid(g, g->app_pid[k]), pid;
+    g->menu = 0;
+    g->dirty = true;
+    if(id >= 0) { gui_open(g, id); return; }
+    if(g->app_starting[k] && g->now - g->app_at[k] < GUI_START_MS) return;
+    pid = run_program(g, gui_app_of(app)->program);
+    g->app_pid[k] = pid > 0 ? pid : 0;
+    g->app_at[k] = g->now;
+    g->app_starting[k] = pid > 0;
+}
+
+/* 10/26/26: the application whose launcher started pid, its slot; -1 */
+int gui_app_slot_of(const struct gui_state *g, int pid) {
+    int k;
+    for(k = 0; pid > 0 && k < SUITE; k++) if(g->app_pid[k] == pid) return GUI_FIRST_APP + k;
+    return -1;
 }
 
 void gui_answer(struct gui_state *g, int act, int button, const char *text, const char *target) {

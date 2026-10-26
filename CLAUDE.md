@@ -115,7 +115,9 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            docs/USB-BOOT.md section 17, ARCHITECTURE.md section 22),
            fetch/ (10/25/26, downloads over HTTP and HTTPS: main the download, fetchhttp the response read as
            Undertow reads it, host-tested; linked with Undertow's url, config, util and transport, the last with
-           one accessor added: ut_transport_eof_clean(), whether TLS ended with close_notify)
+           one accessor added: ut_transport_eof_clean(), whether TLS ended with close_notify),
+           wclock/ (10/26/26, the desktop's Clock as a program, stage C12: clock.c the model, host-tested by
+           test_wclock; main.c its window through libgui; the desktop's Apps > Clock starts it)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
@@ -132,7 +134,8 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
            model, host-tested by test_gui: guicore.c (windows, menus, the small apps), guinote.c (Notepad), guifiles.c
            (Files), guidialog.c, guidraw.c; 10/17/26 the suite (docs/superpowers/plans/2026-10-17-gui-suite.md):
            applications in files of their own behind struct gui_app's table (guiterm.c + guivt.c, guimon.c,
-           guidisks.c + guimeter.c, guilog.c, guiclock.c, guiview.c + guibmp.c, guihex.c, guichar.c), the kernel's
+           guidisks.c + guimeter.c, guilog.c, guiclock.c (10/26/26: only the entry that starts the program wclock),
+           guiview.c + guibmp.c, guihex.c, guichar.c), the kernel's
            side struct gui_sys (guisys*.c),
            host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario;
            10/25/26 programs' windows in the desktop (docs/superpowers/plans/2026-10-25-app-windows.md): guiclient.c,
@@ -280,7 +283,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * Programs' windows (10/25/26): `wintest show`, `wdemo [hang | crash]` and `wcalc` in the desktop's Terminal, or
-  from Apps > Run program... (`dmesg` then has `gui: started <name> (pid N)`); `gfxinfo` gives the desktop's
+  from Apps > Run program... (`dmesg` then has `gui: started <name> (pid N)`; 10/26/26: Apps > Clock starts
+  `wclock`, or brings its window back); `gfxinfo` gives the desktop's
   frame times. `GUIAPPS_ONLY=gui_apps_win python3 tools/qemu-usb.py --image ... --test --scenario guiapps` runs
   only their screen checks (its last one leaves the desktop and starts it again).
 * The network manager: `settings` says where the settings came from, `wifi saved` what is

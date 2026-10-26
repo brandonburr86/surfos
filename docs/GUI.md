@@ -452,7 +452,10 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
 
 ### Clock
 
-**Clock** has four pages, chosen in its toolbar or with the keys 1 to 4.
+**Clock** has four pages, chosen in its toolbar or with the keys 1 to 4. *10/26/26:* it is a
+program now, `wclock` (`user/wclock/`), out of the kernel: Apps > Clock and its tile start it,
+or bring its window back when it runs already, and the window opens where the desktop's Clock
+stood, looking the same. A fault in it costs only its window.
 
 * **Clock.** The time, large, from the PC's clock (the CMOS clock, as the taskbar's
   clock), the weekday and the date ("Saturday", "October 17, 2026") and the day of the
@@ -473,21 +476,22 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
   * Start, Pause and Resume with Space or the button. Reset (R) sets it back to the time
     set.
   * While it runs, the title counts down ("Clock - 04:59"), in the taskbar too.
-  * At zero the title says "Time's up!", in the taskbar too. A message comes up in front
-    of everything, even when the Clock is tucked away or behind another window.
-  * If a question is open (Notepad's unsaved changes, say), the message waits until that
-    is answered. If another dialog takes its place before it is answered, it comes back
-    afterwards.
-  * OK (or Enter, or Esc) sets the timer back to its time.
+  * At zero the title says "Time's up!", in the taskbar too, and the timer's page shows it
+    in coral. *10/26/26:* the window comes back in front of the others, even when it was
+    tucked away, but without the focus, its taskbar button marked: what you type elsewhere
+    stays where it goes (the desktop's message in front of everything is gone with the
+    move out of the kernel).
+  * A key or a click in the window answers it: the timer is set back to its time.
 * **In the background.** The stopwatch and the timer keep running while the window is
   minimized or behind another window, and the status bar of the other pages shows them
   (the stopwatch in whole seconds there).
-  Closing the window ends both. While one is running, closing it or leaving the desktop
-  asks first.
+  Closing the window ends both. While one is running, closing it (the close button, Esc or
+  Ctrl+W) asks first, in the window, Cancel first; leaving the desktop asks, as it does
+  about every program's window.
 * **Copy.** Ctrl+C (Edit > Copy) copies what the page shows: the date and time, the month
   as `cal` prints it (its title centred over the weeks), the stopwatch's time and the laps
   it keeps (up to eight), or the timer's time. On the clock's page with no date known,
-  Copy is off and the clipboard is left as it was.
+  nothing is copied (the status bar says so) and the clipboard is left as it was.
 
 ### Character Map
 

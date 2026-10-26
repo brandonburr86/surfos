@@ -57,7 +57,9 @@ drag of the desktop's or a program's goes on, so that it never comes up under a 
 way; for GUI_GRACE_MS after it came up, a press on it is nobody's (client_grace()): it neither
 focuses the window nor reaches the program, for it was meant for what was there. Text a window
 put on the clipboard while it had the focus (WIN_CLIP) is taken each tick, and is the desktop's
-clipboard from then on (Notepad pastes it) only if that window has the focus still.
+clipboard from then on (Notepad pastes it) only if that window has the focus still. The window
+of a program an application's launcher started (the Clock's, guicore.c) stands where that
+application's window stood, not in the cascade.
 */
 #include "guipriv.h"
 #include <string.h>
@@ -226,6 +228,14 @@ static void update(struct gui_state *g, int id) {
     }
 }
 
+/* 10/26/26 (stage C12): a window of the program pid, its number; -1 for none */
+int client_of_pid(const struct gui_state *g, int pid) {
+    int id;
+    for(id = GUI_FIRST_CLIENT; pid > 0 && id < GUI_SLOTS; id++)
+        if(client_at(g, id) && client_at(g, id)->st.pid == pid) return id;
+    return -1;
+}
+
 /* 10/25/26 (stage C6): the launcher started a program: its first window takes the focus (the oldest record makes
    room) */
 void client_launched(struct gui_state *g, int pid) {
@@ -251,7 +261,7 @@ static bool takes_focus(struct gui_state *g, const struct gui_client *c) {
 static void accept(struct gui_state *g) {
     struct gui_client *c;
     struct gui_window *win;
-    int k, h, id, step, menu;
+    int k, h, id, step, menu, slot;
     for(k = 0; k < GUI_CLIENTS; k++) {
         c = &g->clients.slot[k];
         if(c->used) continue;
@@ -268,9 +278,15 @@ static void accept(struct gui_state *g) {
         }
         win = &g->win[id];
         memset(win, 0, sizeof(*win));
-        step = g->clients.opened++ % 8;
-        win->x = 72 + step * 24;
-        win->y = MENU_H + 24 + step * 20;
+        if((slot = gui_app_slot_of(g, c->st.pid)) >= 0) {   /* 10/26/26: an application's: at its place */
+            win->x = g->win[slot].x;
+            win->y = g->win[slot].y;
+            g->app_starting[slot - GUI_FIRST_APP] = false;  /* come: its tile brings it back from now on */
+        } else {
+            step = g->clients.opened++ % 8;
+            win->x = 72 + step * 24;
+            win->y = MENU_H + 24 + step * 20;
+        }
         fit(g, id, c->st.w, c->st.h);
         win->open = true;                               /* gui_open() opens no closed slot of a program's */
         menu = g->menu;

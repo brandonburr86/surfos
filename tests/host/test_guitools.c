@@ -1,5 +1,7 @@
 /* Host tests for Log, Clock and Character Map (track TOOLS of docs/superpowers/plans/2026-10-17-gui-suite.md), against the
    in-memory file system and system of tests/host/gui_fake.c. Built and run by `make unittest` (unittest-gui).
+   10/26/26 (stage C12 of docs/superpowers/plans/2026-10-25-app-windows.md): the Clock is a program now (user/wclock/):
+   its tests went with it to tests/host/test_wclock.c and tools/gui_apps_tools.py; its Help lines stay here.
    The Log reads a kernel log of its own here: a stream of everything "written", of which it gets the last 16 KB, as
    klog_copy() gives them, so that the log can wrap around. And kernel/klog.c itself, klog_copy() with an interrupt
    that logs while it copies. */
@@ -42,7 +44,7 @@ static void irq_restore(u_long flags) { (void)flags; }
 static struct gui_state g;
 static struct fb_surface screen;
 static int W, H;                                /* the screen's size */
-static const int ids[] = { GUI_LOG, GUI_CLOCK, GUI_CHARMAP };
+static const int ids[] = { GUI_LOG, GUI_CHARMAP };    /* 10/26/26: the Clock is a program */
 #define IDS (int)(sizeof(ids) / sizeof(ids[0]))
 
 /**** the screen ****/
@@ -88,12 +90,6 @@ static void wheel_at(int x, int y, int dz) {
     memset(&e, 0, sizeof(e));
     e.x = x; e.y = y; e.wheel = dz;
     gui_pointer(&g, &e);
-}
-
-static void title(int id, char *out, size_t n) {
-    const struct gui_app *a = gui_app_of(id);
-    if(a->title_of) a->title_of(&g, out, n);
-    else strlcpy(out, a->title, n);
 }
 
 /**** a kernel log that wraps around ****/
@@ -528,351 +524,6 @@ static void log_drawing(void) {
     CHECK(fake_guards(W, H) && !g.logview.any);
 }
 
-/**** Clock ****/
-
-static void calendar_arithmetic(void) {
-    static const struct { u32 y, m, d; int weekday; } dates[] = {
-        { 1970, 1, 1, 4 }, { 2000, 1, 1, 6 }, { 2026, 10, 17, 6 }, { 2024, 2, 29, 4 }, { 2100, 3, 1, 1 },
-        { 1900, 1, 1, 1 }, { 2026, 10, 1, 4 }, { 2027, 1, 1, 5 }, { 2000, 2, 29, 2 }, { 1, 1, 1, 1 },
-        { 9999, 12, 31, 5 }, { 1582, 10, 15, 5 }, { 2038, 1, 19, 2 },
-    };
-    /* in 2026 the months begin on every day of the week */
-    static const u32 firsts[7] = { 2, 6, 9, 4, 1, 5, 8 };      /* Feb Sunday, Jun Monday, ..., Aug Saturday */
-    int i;
-    CHECK(clock_leap(2000) && clock_leap(2024) && clock_leap(2400) && clock_leap(1600));
-    CHECK(!clock_leap(1900) && !clock_leap(2026) && !clock_leap(2100) && !clock_leap(2023));
-    CHECK(clock_days(2024, 2) == 29 && clock_days(2026, 2) == 28 && clock_days(1900, 2) == 28 && clock_days(2000, 2) == 29);
-    CHECK(clock_days(2026, 4) == 30 && clock_days(2026, 12) == 31 && clock_days(2026, 1) == 31 && clock_days(2026, 0) == 0);
-    for(i = 0; i < (int)(sizeof(dates) / sizeof(dates[0])); i++)
-        CHECK(clock_weekday(dates[i].y, dates[i].m, dates[i].d) == dates[i].weekday);
-    for(i = 0; i < 7; i++) CHECK(clock_weekday(2026, firsts[i], 1) == i && clock_cell(2026, firsts[i], 1) == i);
-    CHECK(clock_yday(2026, 10, 17) == 290 && clock_yday(2024, 12, 31) == 366 && clock_yday(2026, 12, 31) == 365);
-    CHECK(clock_yday(2026, 3, 1) == 60 && clock_yday(2024, 3, 1) == 61 && clock_yday(2026, 1, 1) == 1);
-    CHECK(clock_cell(2026, 10, 17) == 20 && clock_cell(2026, 2, 28) == 27 && clock_cell(2026, 8, 31) == 36);
-    /* a month that needs six weeks, and one that fits in four */
-    CHECK(clock_cell(2026, 8, 31) / 7 == 5 && clock_cell(2026, 2, 28) / 7 == 3);
-    /* day by day from 1970: the weekdays follow on, the days of the year add up */
-    {
-        u32 y, m, d;
-        int wd = 4, ok = 1, yd;
-        for(y = 1970; y < 2101; y++) {
-            yd = 0;
-            for(m = 1; m <= 12; m++) for(d = 1; d <= (u32)clock_days(y, m); d++) {
-                if(clock_weekday(y, m, d) != wd || clock_yday(y, m, d) != ++yd) ok = 0;
-                wd = (wd + 1) % 7;
-            }
-            if(yd != (clock_leap(y) ? 366 : 365)) ok = 0;
-        }
-        CHECK(ok);
-    }
-}
-
-/* the calendar's cell of a day, on the screen */
-static void day_cell(u32 year, u32 month, u32 day, int *x, int *y) {
-    const struct gui_window *w = &g.win[GUI_CLOCK];
-    int cell = clock_cell(year, month, day);
-    *x = w->x + (w->w - 7 * 48) / 2 + cell % 7 * 48;
-    *y = w->y + TITLE_H + BAR_H + 4 + 62 + cell / 7 * 24;
-}
-
-static void calendar(void) {
-    const struct gui_window *w;
-    struct gui_clock *c = &g.clockapp;
-    int x, y;
-    desktop(960, 540);
-    gui_open(&g, GUI_CLOCK);
-    w = &g.win[GUI_CLOCK];
-    /* the clock's page: the time large and the date, the weekday worked out (not the CMOS clock's) */
-    g.time.weekday = 3;
-    draw();
-    CHECK(shows(w->x + (w->w - 8 * 32) / 2, w->y + TITLE_H + BAR_H + 4 + 10, "14:05:30", INK, 4));
-    CHECK(shows(w->x + (w->w - 8 * 16) / 2, w->y + TITLE_H + BAR_H + 4 + 88, "Saturday", TEAL, 2));
-    CHECK(shows(w->x + (w->w - 16 * 16) / 2, w->y + TITLE_H + BAR_H + 4 + 124, "October 17, 2026", INK, 2));
-    CHECK(shows(w->x + (w->w - 14 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 168, "Day 290 of 365", MUTED, 1));
-    key('2');
-    CHECK(c->page == GUI_CALENDAR_PAGE);
-    draw();
-    CHECK(shows(w->x + 70 + (w->w - 72 - 4 - 70 - 12 * 16) / 2, w->y + TITLE_H + BAR_H + 4 + 5, "October 2026", INK, 2));
-    day_cell(2026, 10, 17, &x, &y);
-    CHECK(fake_pixel(W, x + 8, y + 3) == TEAL && shows(x + 16, y + 4, "17", PAPER, 1));   /* today: marked */
-    day_cell(2026, 10, 16, &x, &y);
-    CHECK(fake_pixel(W, x + 8, y + 3) != TEAL && shows(x + 16, y + 4, "16", INK, 1));
-    day_cell(2026, 10, 1, &x, &y);
-    CHECK(shows(x + 20, y + 4, "1", INK, 1));            /* Thursday: the fifth column */
-    CHECK(x == w->x + (w->w - 7 * 48) / 2 + 4 * 48);
-    /* the next month and back, a year, Home */
-    key(GUI_RIGHT);
-    CHECK(c->year == 2026 && c->month == 11);
-    draw();
-    day_cell(2026, 11, 17, &x, &y);
-    CHECK(fake_pixel(W, x + 8, y + 3) != TEAL);         /* not this month: no day marked */
-    CHECK(shows(w->x + 70 + (w->w - 72 - 4 - 70 - 13 * 16) / 2, w->y + TITLE_H + BAR_H + 4 + 5, "November 2026", INK, 2));
-    key(GUI_PGDN);
-    key(GUI_PGDN);
-    CHECK(c->year == 2027 && c->month == 1);
-    key(GUI_LEFT);
-    CHECK(c->year == 2026 && c->month == 12);
-    key(GUI_UP);
-    CHECK(c->year == 2025 && c->month == 12);
-    key(GUI_DOWN);
-    key(GUI_DOWN);
-    CHECK(c->year == 2027 && c->month == 12);
-    key(GUI_HOME);
-    CHECK(c->year == 0);
-    draw();
-    day_cell(2026, 10, 17, &x, &y);
-    CHECK(fake_pixel(W, x + 8, y + 3) == TEAL);
-    /* the buttons: <, >, Today; a click on a day says which it is */
-    click(w->x + 40 + 10, w->y + TITLE_H + BAR_H + 4 + 8 + 10);
-    CHECK(c->month == 11);
-    click(w->x + 10 + 10, w->y + TITLE_H + BAR_H + 4 + 8 + 10);
-    click(w->x + 10 + 10, w->y + TITLE_H + BAR_H + 4 + 8 + 10);
-    CHECK(c->month == 9 && c->year == 2026);
-    click(w->x + w->w - 72 + 20, w->y + TITLE_H + BAR_H + 4 + 8 + 10);
-    CHECK(c->year == 0);
-    day_cell(2026, 10, 1, &x, &y);
-    click(x + 20, y + 10);
-    CHECK(!strcmp(c->status, "Thursday, October 1, 2026: day 274"));
-    /* February 2024 (a leap year) and the limits */
-    c->year = 2024; c->month = 2;
-    draw();
-    day_cell(2024, 2, 29, &x, &y);
-    CHECK(shows(x + 16, y + 4, "29", INK, 1) && fake_guards(W, H));
-    c->year = 9999; c->month = 12;
-    key(GUI_RIGHT);
-    CHECK(c->year == 9999 && c->month == 12);
-    c->year = 1; c->month = 1;
-    key(GUI_LEFT);
-    key(GUI_UP);
-    CHECK(c->year == 1 && c->month == 1);
-    draw();
-    CHECK(fake_guards(W, H));
-    /* the date not known: the pages say so */
-    memset(&g.time, 0, sizeof(g.time));
-    key(GUI_HOME);
-    key('1');
-    draw();
-    CHECK(shows(w->x + (w->w - 32 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 60, "The date and time are not known.", MUTED, 1));
-    key('2');
-    draw();
-    CHECK(shows(w->x + 70 + (w->w - 72 - 4 - 70 - 12 * 16) / 2, w->y + TITLE_H + BAR_H + 4 + 5, "January 2000", INK, 2));
-    /* Ctrl+C copies the month as cal prints it */
-    g.time.year = 2026; g.time.month = 10; g.time.date = 17;
-    key(3);
-    CHECK(!g.quit && g.clip_len > 0);
-    g.clip[g.clip_len] = 0;
-    {
-        const char *cal = "    October 2026\nSu Mo Tu We Th Fr Sa\n             1  2  3\n 4  5  6  7  8  9 10\n";
-        CHECK(!strncmp(g.clip, cal, strlen(cal)) && !strcmp(g.clip + g.clip_len - 9, "\n25 26 27 28 29 30 31\n" + 13));
-    }
-}
-
-static void stopwatch(void) {
-    const struct gui_window *w;
-    struct gui_clock *c = &g.clockapp;
-    int y;
-    desktop(960, 540);
-    gui_open(&g, GUI_CLOCK);
-    w = &g.win[GUI_CLOCK];
-    y = w->y + TITLE_H + BAR_H + 4 + 8;
-    key('3');
-    draw();
-    CHECK(shows(w->x + (w->w - 7 * 32) / 2, y, "00:00.0", INK, 4));
-    g.now = 10000;
-    key(' ');
-    CHECK(c->watch_on);
-    tick_ms(1234);
-    CHECK(clock_watch(&g) == 1234);
-    g.dirty = false;
-    gui_tick(&g);
-    CHECK(!g.dirty);                                    /* the same tenth: nothing to draw */
-    tick_ms(70);
-    CHECK(g.dirty);
-    draw();
-    CHECK(shows(w->x + (w->w - 7 * 32) / 2, y, "00:01.3", TEAL, 4));
-    key('l');
-    CHECK(c->laps == 1 && c->lap[0] == 1304);
-    tick_ms(1000);
-    key('L');
-    CHECK(c->laps == 2 && c->lap[1] == 2304);
-    draw();
-    CHECK(shows(w->x + (w->w - 34 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 124, "Lap 2      00:02.3   +00:01.0", INK, 1));
-    CHECK(shows(w->x + (w->w - 34 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 142, "Lap 1      00:01.3   +00:01.3", MUTED, 1));
-    /* minimized, or another page: it keeps counting */
-    gui_act(&g, ACT_MINIMIZE);
-    CHECK(g.win[GUI_CLOCK].min);
-    tick_ms(60000);
-    CHECK(clock_watch(&g) == 62304);
-    gui_open(&g, GUI_CLOCK);
-    key('1');
-    draw();
-    CHECK(shows(w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Stopwatch: 01:02", INK, 1) &&
-          !glyph_at(w->x + 10 + 16 * 8, w->y + w->h - STATUS_H - 1 + 3, '.', INK));
-    gui_tick(&g);
-    g.dirty = false;
-    tick_ms(500);
-    CHECK(!g.dirty);                                    /* its seconds, there */
-    tick_ms(200);
-    CHECK(g.dirty);
-    key('3');
-    key(' ');                                           /* stop */
-    CHECK(!c->watch_on);
-    tick_ms(5000);
-    CHECK(clock_watch(&g) == 63004);
-    /* an hour on, the hours show */
-    key(' ');
-    tick_ms(3600000);
-    draw();
-    CHECK(shows(w->x + (w->w - 9 * 32) / 2, y, "1:01:03.0", TEAL, 4));
-    /* nine laps: the newest five shown, eight kept */
-    for(c->laps = 0; c->laps < 9;) { tick_ms(100); key('l'); }
-    CHECK(c->laps == 9 && c->lap[8 % GUI_LAPS] == clock_watch(&g));
-    draw();
-    CHECK(shows(w->x + (w->w - 34 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 124, "Lap 9 ", INK, 1));
-    CHECK(fake_guards(W, H));
-    /* busy while it runs: closing asks first, and Cancel keeps it */
-    gui_close(&g, GUI_CLOCK);
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.win[GUI_CLOCK].open && !strcmp(g.dialog.title, "Close the window?"));
-    CHECK(!strncmp(g.dialog.text[0], "The stopwatch is running: 1:01:03.9", 35));
-    key(27);
-    CHECK(!g.dialog.kind && g.win[GUI_CLOCK].open && c->watch_on);
-    key('r');
-    CHECK(!c->watch_on && clock_watch(&g) == 0 && c->laps == 0);
-    key(' ');
-    key(23);                                            /* Ctrl+W: asks, Close ends it */
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM);
-    key('\r');
-    CHECK(!g.win[GUI_CLOCK].open && !c->watch_on && clock_watch(&g) == 0);
-}
-
-static bool taskbar_shows(const char *text) {
-    int n, i;
-    for(n = 1; n <= GUI_WINDOWS; n++) {                 /* wherever the button is: n buttons, the i-th */
-        int bw = (W - 96) / n - 4;
-        if(bw > 156) bw = 156;
-        for(i = 0; i < n; i++)                          /* a window tucked away: its title muted */
-            if(shows(6 + i * (bw + 4) + 24, H - TASK_H + 5, text, FOAM, 1) ||
-               shows(6 + i * (bw + 4) + 24, H - TASK_H + 5, text, MUTED, 1)) return true;
-    }
-    return false;
-}
-
-static void timer(void) {
-    const struct gui_window *w;
-    struct gui_clock *c = &g.clockapp;
-    char b[64];
-    int y;
-    desktop(960, 540);
-    gui_open(&g, GUI_CLOCK);
-    w = &g.win[GUI_CLOCK];
-    y = w->y + TITLE_H + BAR_H + 4 + 8;
-    key('4');
-    draw();
-    CHECK(c->timer_set == 300 && shows(w->x + (w->w - 5 * 32) / 2, y, "05:00", INK, 4));
-    /* setting it: the keys and the buttons, within 0:00 and 99:59 */
-    key(GUI_HOME);
-    CHECK(c->timer_set == 0);
-    key(GUI_DOWN);
-    key(GUI_LEFT);
-    CHECK(c->timer_set == 0);
-    key(' ');
-    CHECK(!c->timer_on && !strncmp(c->status, "Set a time first", 16));
-    key(GUI_UP); key(GUI_PGUP); key(GUI_RIGHT); key(GUI_RIGHT);
-    CHECK(c->timer_set == 72);
-    key(GUI_PGDN);
-    CHECK(c->timer_set == 62);
-    click(w->x + (w->w - 4 * 76 - 24) / 2 + 84 + 10, w->y + TITLE_H + BAR_H + 4 + 100 + 10);    /* +1 min */
-    click(w->x + (w->w - 4 * 76 - 24) / 2 + 3 * 84 + 10, w->y + TITLE_H + BAR_H + 4 + 100 + 10);   /* +10 s */
-    CHECK(c->timer_set == 132);
-    click(w->x + (w->w - 4 * 76 - 24) / 2 + 10, w->y + TITLE_H + BAR_H + 4 + 100 + 10);        /* -1 min */
-    click(w->x + (w->w - 4 * 76 - 24) / 2 + 2 * 84 + 10, w->y + TITLE_H + BAR_H + 4 + 100 + 10);   /* -10 s */
-    CHECK(c->timer_set == 62);
-    for(y = 0; y < 120; y++) key(GUI_UP);
-    CHECK(c->timer_set == GUI_TIMER_MAX);
-    draw();
-    CHECK(shows(w->x + (w->w - 5 * 32) / 2, w->y + TITLE_H + BAR_H + 4 + 8, "99:59", INK, 4));
-    y = w->y + TITLE_H + BAR_H + 4 + 8;
-    /* five seconds; then the window is tucked away and the alarm still comes */
-    key(GUI_HOME);
-    for(int i = 0; i < 5; i++) key(GUI_RIGHT);
-    CHECK(c->timer_set == 5);
-    key(' ');
-    CHECK(c->timer_on);
-    title(GUI_CLOCK, b, sizeof(b));
-    CHECK(!strcmp(b, "Clock - 00:05"));
-    key(GUI_UP);                                        /* not while it runs */
-    CHECK(c->timer_set == 5 && !strncmp(c->status, "Reset the timer", 15));
-    gui_act(&g, ACT_MINIMIZE);
-    CHECK(g.win[GUI_CLOCK].min && g.focus != GUI_CLOCK);
-    tick_ms(4000);
-    title(GUI_CLOCK, b, sizeof(b));
-    CHECK(!strcmp(b, "Clock - 00:01") && !c->alarm && !g.dialog.kind);
-    tick_ms(999);
-    CHECK(!c->alarm);
-    tick_ms(1);
-    CHECK(c->alarm && !c->timer_on && g.win[GUI_CLOCK].min);
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Timer") && !strcmp(g.dialog.text[0], "Time's up!"));
-    CHECK(!strcmp(g.dialog.text[1], "The 00:05 timer has finished."));
-    title(GUI_CLOCK, b, sizeof(b));
-    CHECK(!strcmp(b, "Time's up! - Clock"));
-    draw();
-    CHECK(taskbar_shows("Time's up!") && fake_guards(W, H));
-    key('\r');                                          /* OK: the timer is ready again */
-    CHECK(!g.dialog.kind && !c->alarm);
-    title(GUI_CLOCK, b, sizeof(b));
-    CHECK(!strcmp(b, "Clock") && clock_left(&g) == 5000);
-    tick_ms(100);
-    CHECK(!g.dialog.kind);
-    /* pause and resume; and an alarm never takes the place of a question already asked */
-    gui_open(&g, GUI_CLOCK);
-    key(' ');
-    tick_ms(2000);
-    key(' ');
-    CHECK(c->timer_paused && clock_left(&g) == 3000);
-    draw();
-    CHECK(shows(w->x + (w->w - 5 * 32) / 2, y, "00:03", INK, 4) &&
-          shows(w->x + (w->w - 6 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 78, "Paused", MUTED, 1));
-    tick_ms(10000);
-    CHECK(clock_left(&g) == 3000 && !c->alarm);
-    key(' ');
-    CHECK(c->timer_on);
-    dialog_message(&g, "Another", "A question asked first", "");
-    tick_ms(3000);
-    CHECK(c->alarm && !strcmp(g.dialog.title, "Another"));
-    key('\r');
-    CHECK(!g.dialog.kind);
-    gui_tick(&g);
-    CHECK(!strcmp(g.dialog.title, "Timer"));
-    key(27);                                            /* Esc answers it too */
-    CHECK(!c->alarm && !g.dialog.kind);
-    /* Reset; busy while it runs: leaving the desktop asks */
-    key(' ');
-    tick_ms(1500);
-    key('r');
-    CHECK(!c->timer_on && clock_left(&g) == 5000);
-    key(' ');
-    gui_request_quit(&g);
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Leave the desktop?") && !g.quit);
-    CHECK(!strcmp(g.dialog.text[0], "The timer is running: 00:05 left."));
-    key(27);
-    /* the timer elsewhere: the status bar says so */
-    key('1');
-    draw();
-    CHECK(shows(w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Timer: 00:05 left", INK, 1));
-    /* closing ends it */
-    gui_close(&g, GUI_CLOCK);
-    key('\r');
-    CHECK(!g.win[GUI_CLOCK].open && !c->timer_on);
-    tick_ms(10000);
-    CHECK(!c->alarm && !g.dialog.kind);
-    gui_open(&g, GUI_CLOCK);
-    CHECK(c->page == GUI_CLOCK_PAGE && c->timer_set == 5 && clock_left(&g) == 5000);
-    /* Ctrl+C on the timer's page copies what it shows */
-    key('4');
-    key(3);
-    CHECK(!g.quit && g.clip_len == 6 && !memcmp(g.clip, "00:05\n", 6));
-}
-
 /**** Character Map ****/
 
 static void charmap_codes(void) {
@@ -1212,120 +863,6 @@ static void log_review(void) {
     CHECK(row_is(rows - 1, "line 0705"));
 }
 
-/* the Clock: what the review found */
-static void clock_review(void) {
-    const struct gui_window *w;
-    struct gui_clock *c = &g.clockapp;
-    char t[64];
-    int i, redraws;
-    /* Copy with no date that can be used: the clipboard is left alone, and Copy is off */
-    desktop(960, 540);
-    memcpy(g.clip, "hello", 5);
-    g.clip_len = 5;
-    gui_open(&g, GUI_CLOCK);
-    w = &g.win[GUI_CLOCK];
-    g.time.month = 165;
-    CHECK(!gui_menu_on(&g, 3, ACT_COPY));
-    key(3);
-    CHECK(!g.quit && g.clip_len == 5 && !memcmp(g.clip, "hello", 5));
-    g.time.month = 0;
-    key(3);
-    CHECK(g.clip_len == 5 && !memcmp(g.clip, "hello", 5));
-    g.time.month = 10;
-    CHECK(gui_menu_on(&g, 3, ACT_COPY));
-    key(3);
-    g.clip[g.clip_len] = 0;
-    CHECK(!strcmp(g.clip, "Saturday, October 17, 2026, 14:05:30\n") && !strcmp(c->status, "Copied"));
-    /* the stopwatch's Copy: its time and the eight laps kept */
-    key('3');
-    key(' ');
-    for(i = 0; i < 10; i++) { tick_ms(1000); key('l'); }
-    key(' ');
-    key(3);
-    g.clip[g.clip_len] = 0;
-    CHECK(!strncmp(g.clip, "00:10.0\nLap 3  00:03.0\n", 23) && !strcmp(g.clip + g.clip_len - 16, "Lap 10  00:10.0\n"));
-    key('r');
-    /* its tenths do not redraw the desktop while a window in front hides them: a maximized one, not a smaller one */
-    key(' ');
-    gui_open(&g, GUI_NOTEPAD);
-    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
-    CHECK(redraws >= 9);                                /* Notepad leaves some of the digits in sight */
-    gui_act(&g, ACT_MAXIMIZE);
-    tick_ms(10);
-    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
-    CHECK(redraws == 0);
-    gui_act(&g, ACT_MAXIMIZE);
-    gui_open(&g, GUI_CLOCK);
-    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
-    CHECK(redraws >= 9);
-    key(' ');
-    key('r');
-    gui_close(&g, GUI_NOTEPAD);
-    /* the alarm's message replaced by another dialog before it was answered: it comes back after that one */
-    gui_open(&g, GUI_CLOCK);
-    key('4');
-    key(GUI_HOME);
-    key(GUI_RIGHT);
-    key(' ');
-    tick_ms(1000);
-    CHECK(c->alarm && !strcmp(g.dialog.title, "Timer"));
-    dialog_message(&g, "Cannot show the picture", "x.bmp", "It could not be read to its end.");
-    tick_ms(100);
-    CHECK(!strcmp(g.dialog.title, "Cannot show the picture"));
-    key('\r');
-    tick_ms(100);
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Timer") && c->alarm);
-    key('\r');
-    CHECK(!g.dialog.kind && !c->alarm);
-    /* closed with the alarm pending (its message waiting for another dialog): it goes with the window */
-    key(' ');
-    dialog_message(&g, "Another", "asked first", "");
-    tick_ms(1000);
-    CHECK(c->alarm && !strcmp(g.dialog.title, "Another"));
-    gui_close(&g, GUI_CLOCK);
-    CHECK(!g.win[GUI_CLOCK].open && !c->alarm);
-    key('\r');
-    tick_ms(100);
-    CHECK(!g.dialog.kind);
-    /* and with its message up when the desktop closes: answering it then changes nothing */
-    gui_open(&g, GUI_CLOCK);
-    key('4');
-    key(' ');
-    tick_ms(1000);
-    CHECK(!strcmp(g.dialog.title, "Timer"));
-    gui_finish(&g);
-    CHECK(!c->alarm && !c->timer_on);
-    key('\r');
-    CHECK(!g.dialog.kind && !c->alarm);
-    gui_close(&g, GUI_CLOCK);
-    /* gui_state.now passing 2^32: the stopwatch and the timer count on */
-    gui_open(&g, GUI_CLOCK);
-    g.now = 0xFFFFFFFFu - 2000;
-    key('3');
-    key(' ');
-    tick_ms(5000);
-    CHECK(clock_watch(&g) == 5000);
-    key(' ');
-    key('r');
-    key('4');
-    key(GUI_HOME);
-    key(GUI_PGUP);                                      /* ten seconds */
-    g.now = 0xFFFFFFFFu - 3000;
-    key(' ');
-    tick_ms(2000);
-    key(' ');                                           /* paused with 8 s left, across 2^32 */
-    tick_ms(100000);
-    key(' ');
-    tick_ms(7000);
-    CHECK(clock_left(&g) == 1000 && !c->alarm);
-    gui_app_clock.title_of(&g, t, sizeof(t));
-    CHECK(!strcmp(t, "Clock - 00:01"));
-    tick_ms(1000);
-    CHECK(c->alarm && !strcmp(g.dialog.title, "Timer"));
-    key('\r');
-    (void)w;
-}
-
 /* the Character Map: what the review found */
 static void charmap_review(void) {
     const struct gui_window *w;
@@ -1389,7 +926,7 @@ static void charmap_review(void) {
 /* every window at 640x400: what it shows above its status bar, nothing under it */
 static void small_screen(void) {
     const struct gui_window *w;
-    int sy, gy = 45, ch = 16, i, ty, first, rows, total;
+    int sy, gy = 45, ch = 16, ty, first, rows, total;
     desktop(640, 400);
     /* the Character Map, 326 pixels high there: its cells 16 high, the last row and the Copy button whole */
     gui_open(&g, GUI_CHARMAP);
@@ -1418,29 +955,6 @@ static void small_screen(void) {
     CHECK(g.clip_len == 2 && !memcmp(g.clip, "\xCE\x93", 2));    /* Γ */
     CHECK(fake_guards(W, H));
     gui_close(&g, GUI_CHARMAP);
-    /* the Clock fits as it is: each page's last line above its status bar */
-    gui_open(&g, GUI_CLOCK);
-    w = &g.win[GUI_CLOCK];
-    sy = w->y + w->h - STATUS_H - 1;
-    CHECK(w->h == 300);
-    g.clockapp.year = 2026;                             /* August 2026 takes six weeks */
-    g.clockapp.month = 8;
-    key('2');
-    draw();
-    CHECK(shows(w->x + (w->w - 7 * 48) / 2 + 1 * 48 + 16, w->y + TITLE_H + BAR_H + 4 + 62 + 5 * 24 + 4, "31", INK, 1));
-    CHECK(w->y + TITLE_H + BAR_H + 4 + 62 + 6 * 24 <= sy);
-    key('3');
-    key(' ');
-    for(i = 0; i < 6; i++) { tick_ms(1000); key('l'); }
-    draw();
-    CHECK(shows(w->x + (w->w - 34 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 124 + 4 * 18, "Lap 2 ", MUTED, 1));
-    CHECK(w->y + TITLE_H + BAR_H + 4 + 124 + 5 * 18 <= sy);
-    key(' ');
-    key('4');
-    draw();
-    CHECK(shows(w->x + (w->w - 2 * 88 - 8) / 2 + 88 + 8 + (88 - 40) / 2, w->y + TITLE_H + BAR_H + 4 + 136 + 6, "Reset", MUTED, 1));
-    CHECK(fake_guards(W, H));
-    gui_close(&g, GUI_CLOCK);
     /* the Log, 326 pixels high: its last row above the status bar, and with the find bar its buttons */
     log_desktop();
     desktop(640, 400);
@@ -1588,10 +1102,10 @@ static void log_round3(void) {
 
 /**** every window, inside the screen ****/
 
-/* each window opens, ticks, draws inside the screen (also maximized and hanging off the edge) and closes; the Clock's
-   every page, the Log with its find bar, a selection and long lines */
+/* each window opens, ticks, draws inside the screen (also maximized and hanging off the edge) and closes; the Log with
+   its find bar, a selection and long lines */
 static void windows(int width, int height) {
-    int i, k, page;
+    int i, k;
     desktop(width, height);
     stream_len = 0;
     sys = fake_sys;
@@ -1605,24 +1119,17 @@ static void windows(int width, int height) {
         CHECK(g.win[ids[i]].w <= width && g.win[ids[i]].y + g.win[ids[i]].h <= height - TASK_H);
         for(k = 0; k < 3; k++) { g.now += 1000; gui_tick(&g); }
         if(ids[i] == GUI_LOG) { key(1); gui_act(&g, ACT_FIND); fake_type(&g, "wrap"); key('\r'); }
-        for(page = 0; page < (ids[i] == GUI_CLOCK ? 4 : 1); page++) {
-            if(ids[i] == GUI_CLOCK) {
-                key('1' + page);
-                key(' ');                               /* the stopwatch and the timer run */
-                g.now += 3723456;
-            }
-            draw();
-            CHECK(fake_guards(width, height));
-            gui_act(&g, ACT_MAXIMIZE);
-            draw();
-            CHECK(fake_guards(width, height));
-            g.win[ids[i]].x = width - 10;
-            g.win[ids[i]].y = height - 10;
-            draw();
-            CHECK(fake_guards(width, height));
-            gui_act(&g, ACT_MAXIMIZE);
-            gui_place(&g, ids[i]);
-        }
+        draw();
+        CHECK(fake_guards(width, height));
+        gui_act(&g, ACT_MAXIMIZE);
+        draw();
+        CHECK(fake_guards(width, height));
+        g.win[ids[i]].x = width - 10;
+        g.win[ids[i]].y = height - 10;
+        draw();
+        CHECK(fake_guards(width, height));
+        gui_act(&g, ACT_MAXIMIZE);
+        gui_place(&g, ids[i]);
         CHECK(g.win[ids[i]].x >= 0 && g.win[ids[i]].x + g.win[ids[i]].w <= width);
     }
     gui_open(&g, GUI_HELP);                             /* Help, with the suite's lines */
@@ -1630,7 +1137,6 @@ static void windows(int width, int height) {
     draw();
     CHECK(fake_guards(width, height));
     gui_finish(&g);
-    CHECK(!g.clockapp.watch_on && !g.clockapp.timer_on);
     for(i = 0; i < IDS; i++) {
         gui_open(&g, ids[i]);
         gui_act(&g, ACT_CLOSE);
@@ -1655,16 +1161,11 @@ int main(void) {
     log_wrap();
     log_selection();
     log_drawing();
-    calendar_arithmetic();
-    calendar();
-    stopwatch();
-    timer();
     charmap_codes();
     charmap();
     help();
     klog_storms();
     log_review();
-    clock_review();
     charmap_review();
     small_screen();
     klog_lengths();

@@ -200,7 +200,6 @@ struct gui_state {
     struct gui_monitor monitor;
     struct gui_disks disks;
     struct gui_logview logview;
-    struct gui_clock clockapp;
     struct gui_charmap charmap;
     struct gui_viewer viewer;
     struct gui_hex hex;
@@ -213,7 +212,13 @@ struct gui_state {
     struct gui_clients clients;         /* 10/25/26: programs' windows (shell/guiclient.c) */
     int menu_x, menu_y;                 /* 10/26/26 (stage C8): where a right-click opened the menu; menu_y 0: the bar's */
     int menu_win;                       /* and the window it is for, whose focus it lasts while; -1: the desktop's */
+    int app_pid[GUI_WINDOWS - GUI_FIRST_APP];  /* 10/26/26 (stage C12): the program an application's launcher started
+                                                 last, its pid (0: none): its window is the application's; */
+    u32 app_at[GUI_WINDOWS - GUI_FIRST_APP];   /* and when (now); */
+    bool app_starting[GUI_WINDOWS - GUI_FIRST_APP];    /* its window has not come yet: the tile pressed again within
+                                                         GUI_START_MS starts no second one (a double-click) */
 };
+#define GUI_START_MS 2000
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);
 void gui_pointer(struct gui_state *g, const struct pointer_event *e);

@@ -2363,12 +2363,25 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   `guisys_win_run()` spawns that line on the desktop's console, its input `/dev/null` (it never takes the
   desktop's keys), detached so that init collects it: it outlives the Terminal and ends with the desktop,
   whose end hangs its windows up (libgui's `gw_next()` then fails with EPIPE).
+  10/26/26 (stage C12): `wclock`, the Clock, is the first of the suite's applications to move out: its model
+  (`user/wclock/clock.c`: the pages, the calendar's arithmetic, the stopwatch, the timer, the keys and buttons,
+  with the time handed in, host-tested by `test_wclock`) and its window (`main.c`: drawing as `shell/guiclock.c`
+  drew, the time from `localtime_r()`, `gw_alert()` at zero, `gw_clip()` for Copy). The suite keeps the
+  application's entry as a launcher (`struct gui_app`'s `program`): its tile, Apps > Clock and Next window's
+  list start the program, or bring its window back (`app_program()` in `guicore.c` keeps the pid it started,
+  `client_of_pid()` finds its window; pressed again within GUI_START_MS, 2 s, before that window came, it
+  starts no second program: a double-click on the tile), and the window opens where the application's window
+  stood
+  (`accept()` with `gui_app_slot_of()`), not in the cascade. Edit > Copy sends a program's window Ctrl+C
+  (`ACT_CLIENT_COPY`).
 * **On the screen** (`tools/gui_apps_win.py`, the guiapps scenario of `tools/qemu-usb.py`): wintest show and
   wdemo at 2x, keys, a press and a release echoed with where they were, F2 and F1 keeping a window's content,
   a corner resize answered, the close button ending a program (and `ps`), `wdemo hang` ended through the
   question, `wdemo crash` losing only its window, `wintest pty` refused in the Terminal, `wdemo` typed
   without `&` taking the focus as the Terminal's foreground job, wcalc from the launcher counting by keys and
-  clicks, and a launched wcalc outliving the Terminal and ending with the
+  clicks, the Clock as a program read by the checks the desktop's Clock had (`tools/gui_apps_tools.py`; its
+  alarm is its window back in front without the focus, a click answering it), and a launched wcalc outliving
+  the Terminal and ending with the
   desktop (ps on the serial console once the desktop has closed); once the Terminal has closed, a
   `wintest pty` started by the desktop takes the Terminal's pty number (`wintest tty` named it) and is
   refused there.

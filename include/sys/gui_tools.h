@@ -5,6 +5,8 @@ File: gui_tools.h Date: 10/17/26
 --------------------
 Their state in gui_state (shell/guilog.c, shell/guiclock.c, shell/guichar.c). Included by
 sys/gui.h; owned by track TOOLS of docs/superpowers/plans/2026-10-17-gui-suite.md.
+10/26/26 (stage C12 of docs/superpowers/plans/2026-10-25-app-windows.md): the Clock is a program
+(user/wclock/), with no state here.
 */
 #ifndef _SYS_GUI_TOOLS_H
 #define _SYS_GUI_TOOLS_H
@@ -31,30 +33,7 @@ struct gui_logview {
     char status[GUI_STATUS];
 };
 
-/* Clock: four pages. The stopwatch and the timer count on gui_state.now, so they keep running while the window
-   is minimized or behind another; closing the window ends them (it asks first while one runs). */
-#define GUI_CLOCK_PAGE 0
-#define GUI_CALENDAR_PAGE 1
-#define GUI_STOPWATCH_PAGE 2
-#define GUI_TIMER_PAGE 3
-#define GUI_LAPS 8                      /* the stopwatch's last laps, kept */
-#define GUI_TIMER_MAX (100 * 60 - 1)    /* the timer's longest: 99:59 */
-struct gui_clock {
-    int page;
-    u32 month, year;                    /* the month the calendar shows (year 0: not chosen yet, today's) */
-    u32 watch_ms, watch_at;             /* the stopwatch: what it counted before it last started; since when it runs */
-    bool watch_on;
-    int laps;                           /* laps taken; the last GUI_LAPS of them in lap[] (the total at each) */
-    u32 lap[GUI_LAPS];
-    u32 timer_set;                      /* the timer: the seconds set */
-    u32 timer_left;                     /* milliseconds left when it last paused (or was set) */
-    u32 timer_end;                      /* when it reaches zero, while it runs (gui_state.now) */
-    bool timer_on, timer_paused;
-    bool alarm;                         /* it reached zero: the title says so until the alarm is answered */
-    bool alarm_asked;                   /* the alarm's dialog has been put up */
-    u32 shown_watch, shown_left;        /* what was last drawn of what counts (the tick redraws when it changes) */
-    char status[GUI_STATUS];
-};
+/* 10/26/26 (stage C12): the Clock is a program now, user/wclock/; its state went with it */
 
 /* Character Map: the 256 characters of code page 437 that the console draws */
 struct gui_charmap {

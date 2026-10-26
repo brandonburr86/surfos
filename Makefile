@@ -61,6 +61,7 @@ USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point
 USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
 USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
 USER_PROGS  += wcalc         # 10/25/26: the desktop's Calculator as a program
+USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -81,6 +82,10 @@ FTPD_OBJ     = $(FTPD_SRC:user/ftpd/%.c=$(BUILD)/user/ftpd/%.o)
 FETCH_SRC    = $(wildcard user/fetch/*.c)
 FETCH_OBJ    = $(FETCH_SRC:user/fetch/%.c=$(BUILD)/user/fetch/%.o)
 FETCH_UT_OBJ = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
+# wclock, the desktop's Clock as a program (10/26/26, stage C12): user/wclock/, its model host-tested too
+# (tests/host/test_wclock.c)
+WCLOCK_SRC   = $(wildcard user/wclock/*.c)
+WCLOCK_OBJ   = $(WCLOCK_SRC:user/wclock/%.c=$(BUILD)/user/wclock/%.o)
 
 
 CC         = gcc
@@ -125,7 +130,7 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
-             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d)
+             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d) $(WCLOCK_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -290,6 +295,17 @@ $(BUILD)/user/bin/surfsh: $(SURFSH_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(SURFSH_OBJ) $(USER_LIB)
+
+# wclock likewise (10/26/26)
+$(BUILD)/user/wclock/%.o: user/wclock/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/wclock: $(WCLOCK_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCLOCK_OBJ) $(USER_LIB)
 
 # telnetd likewise
 $(BUILD)/user/telnetd/%.o: user/telnetd/%.c
@@ -576,11 +592,17 @@ $(BUILD)/host/test_fetch: tests/host/test_fetch.c user/fetch/fetchhttp.c user/fe
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/fetch tests/host/test_fetch.c user/fetch/fetchhttp.c -o $@
 
+# 10/26/26 (stage C12): the Clock's model, user/wclock/clock.c as it is (it makes no system calls)
+$(BUILD)/host/test_wclock: tests/host/test_wclock.c user/wclock/clock.c user/wclock/clock.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wclock tests/host/test_wclock.c user/wclock/clock.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
           $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp \
-          $(BUILD)/host/test_fetch
+          $(BUILD)/host/test_fetch $(BUILD)/host/test_wclock
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -599,6 +621,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_httpd
 	$(BUILD)/host/test_ftp
 	$(BUILD)/host/test_fetch
+	$(BUILD)/host/test_wclock
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py

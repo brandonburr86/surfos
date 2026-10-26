@@ -199,15 +199,19 @@ static void test_sketch_guarded(void) {
     CHECK(fake_data("/home/other.bmp", &len) && len == GUI_SKETCH_FILE);
 }
 
+/* a window of the desktop's own, not an application that is a program now (10/26/26, stage C12: the Clock) */
+static bool own(int id) { return !gui_app_of(id) || !gui_app_of(id)->program; }
+
 /* every window open at once, in front in turn, drawn inside the screen; then nothing is left running */
 static void test_all_windows(int width, int height) {
     int id, front;
     fake_desktop(&g, width, height);
     fake_screen(&screen, width, height);
-    for(id = 0; id < GUI_WINDOWS; id++) gui_open(&g, id);
+    for(id = 0; id < GUI_WINDOWS; id++) if(own(id)) gui_open(&g, id);
     ticks(3);
-    for(id = 0; id < GUI_WINDOWS; id++) CHECK(g.win[id].open);
+    for(id = 0; id < GUI_WINDOWS; id++) CHECK(g.win[id].open == own(id));
     for(front = 0; front < GUI_WINDOWS; front++) {
+        if(!own(front)) continue;
         gui_open(&g, front);
         CHECK(g.focus == front);
         gui_render(&g, &screen);
