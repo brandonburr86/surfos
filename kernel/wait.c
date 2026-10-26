@@ -56,11 +56,21 @@ static void wait_timeout_fn(void *arg) {
    waits: a task killed at once in the middle of it takes the timer off the list as it dies (task.c),
    since the timer lives on the stack that goes with the task */
 int wait_on_timeout(wait_queue_t *q, u_long ms) {
+    return wait_on_timeout_unless(q, ms, NULL);
+}
+
+/* 10/25/26 (the review of B4): the same, unless *ready is true, looked at under the irq_save that queues the task, so a
+   wake-up that comes between the look and the wait is never lost (event_wait_timeout()): 0 at once then */
+int wait_on_timeout_unless(wait_queue_t *q, u_long ms, volatile bool *ready) {
     struct ktimer timer;
     u_long flags;
 
     ktimer_init(&timer, wait_timeout_fn, curTask);
     flags = irq_save();
+    if(ready && *ready) {
+        irq_restore(flags);
+        return 0;
+    }
     if(curTask->intr) {
         irq_restore(flags);
         return -EINTR;

@@ -275,6 +275,7 @@ void fatfs_init(void);
 void devfs_init(void);
 bool devfs_is_console(const struct file *f);     /* 10/6/26: /dev/console or /dev/tty */
 bool pipe_file(const struct file *f);            /* 10/24/26: an end of a pipe (fs/pipe.c, surfos/pipe.h) */
+int pipe_files(struct file *f[2]);               /* 10/25/26: a pipe for the kernel: its two ends, a reference each */
 
 /* 10/6/26: poll() (surfos/poll.h). Whatever may change a descriptor's readiness (data
    arriving, a connection made or closed, room to write, a session's output or end) calls

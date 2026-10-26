@@ -29,6 +29,7 @@ void netman_settings(struct netcfg_settings *out);     /* a copy of those in for
 void netman_where(char *buf, size_t size);
 bool netman_settings_off(void);             /* the kernel word settings=off: nothing was read at this start */
 bool netman_can_save(void);                 /* the stick SurfOS was started from is there and may be written */
+bool netman_stick_idle(u_long ms);          /* 10/25/26: the shutdown's: what is done on the stick ended (ms at most) */
 /* key k = value, now and in settings.conf on the stick: 0 saved; 1 in force but not saved (why says why);
    -1 refused (why) */
 int netman_set(int k, const char *value, char *why, size_t size);

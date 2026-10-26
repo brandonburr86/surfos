@@ -6,6 +6,9 @@ File: amlfield.c Date: 10/12/26
 Original bounded reader for static declarations, not an AML interpreter.
 Buffers, packages and method bodies are opaque. Conditional declarations are
 never accepted. Integer encodings and FieldList follow ACPI chapter 20.
+
+10/25/26 (robustness, L20): aml_sleep_type(), a sleep state's SLP_TYP values from
+its Name (\_S5_ for poweroff), found the same way: at the root, unconditional, once.
 */
 #include <sys/amlfield.h>
 #include <string.h>
@@ -382,5 +385,136 @@ int aml_field_find(const u8 *table, u32 bytes, const char region[4],
     if(status) return status;
     result.address = r.address.number; result.region_length = r.length.number;
     *out = result;
+    return 0;
+}
+
+/**** 10/25/26 (robustness, L20): a sleep state's package ****/
+
+struct hunt { const char *name; struct cursor value; u32 found; };
+
+/* The Name of hunt->name at the root of the namespace: its value's cursor. The walk is walk()'s, with only the
+   declarations that hold names: scopes and devices are entered, If/Else/While bodies too (a match there is refused),
+   method bodies, buffers and packages stay opaque. */
+static int hunt_walk(struct hunt *h, struct cursor c, const struct path *scope, u32 depth, bool conditional) {
+    struct cursor body, saved;
+    struct name n, ignored;
+    struct path child;
+    u32 op, extra;
+    int result;
+    if(depth == DEPTH) return AML_FIELD_INVALID;
+    while(c.p < c.end) {
+        saved = c; op = *c.p++;
+        if(op == 0x5b) {
+            if(!take(&c, 1)) return AML_FIELD_INVALID;
+            op = 0x5b00 | c.p[-1];
+        }
+        switch(op) {
+            case 0x08:
+                if(!read_name(&c, &n) || !extend(&child, scope, &n)) return AML_FIELD_INVALID;
+                if(child.count == 1 && !memcmp(child.part, h->name, 4)) {
+                    if(++h->found != 1) return AML_FIELD_AMBIGUOUS;
+                    if(conditional) return AML_FIELD_UNSUPPORTED;
+                    h->value = c;
+                }
+                result = expression(&c, 0);
+                if(result) return result;
+                break;
+            case 0x06:
+                if(!read_name(&c, &n) || !read_name(&c, &ignored)) return AML_FIELD_INVALID;
+                if(matches(&ignored, h->name)) return AML_FIELD_UNSUPPORTED;    /* an alias may stand for it */
+                break;
+            case 0x15:
+                if(!read_name(&c, &n) || !take(&c, 2)) return AML_FIELD_INVALID;
+                break;
+            case 0x10: case 0x5b82: case 0x5b83: case 0x5b84: case 0x5b85:
+                if(!package(&c, &body) || !read_name(&body, &n) || !extend(&child, scope, &n))
+                    return AML_FIELD_INVALID;
+                extra = op == 0x5b83 ? 6 : op == 0x5b84 ? 3 : 0;
+                if(!take(&body, extra)) return AML_FIELD_INVALID;
+                result = hunt_walk(h, body, &child, depth + 1, conditional);
+                if(result) return result;
+                break;
+            case 0xa0: case 0xa1: case 0xa2:
+                if(!package(&c, &body)) return AML_FIELD_INVALID;
+                if(op != 0xa1 && (result = expression(&body, 0))) return result;
+                result = hunt_walk(h, body, scope, depth + 1, true);
+                if(result) return result;
+                break;
+            case 0x14:
+                if(!package(&c, &body) || !read_name(&body, &n) || !take(&body, 1)) return AML_FIELD_INVALID;
+                break;
+            case 0x5b01: case 0x5b02:
+                if(!read_name(&c, &n) || (op == 0x5b01 && !take(&c, 1))) return AML_FIELD_INVALID;
+                break;
+            case 0x5b80:
+                if(!read_name(&c, &n) || !take(&c, 1)) return AML_FIELD_INVALID;
+                result = expression(&c, 0);
+                if(!result) result = expression(&c, 0);
+                if(result) return result;
+                break;
+            case 0x5b81: case 0x5b86: case 0x5b87:
+                if(!package(&c, &body)) return AML_FIELD_INVALID;
+                break;
+            case 0x5b88:
+                if(!read_name(&c, &n)) return AML_FIELD_INVALID;
+                for(extra = 0; extra < 3; extra++) {
+                    result = expression(&c, 0);
+                    if(result) return result;
+                }
+                break;
+            default:
+                c = saved;
+                result = expression(&c, 0);
+                if(result) return result;
+                break;
+        }
+    }
+    return 0;
+}
+
+/* Package { SLP_TYPa, SLP_TYPb, ... } of integer constants, as ACPICA reads one: with a single element, its low byte
+   is SLP_TYPa and the next one SLP_TYPb; with more, the first two. NumElements may claim more than the package holds:
+   the elements there count. */
+static int sleep_package(struct cursor c, u8 *typa, u8 *typb) {
+    struct cursor body;
+    u64 value[2];
+    u32 count, n = 0;
+    int result;
+    if(c.p == c.end || *c.p != 0x12) return AML_FIELD_UNSUPPORTED;    /* not a Package: a Method, say */
+    c.p++;
+    if(!package(&c, &body) || !take(&body, 1)) return AML_FIELD_INVALID;
+    count = body.p[-1];
+    while(n < 2 && n < count && body.p < body.end) {
+        result = literal(&body, &value[n]);
+        if(result) return result;                   /* a name or an expression: nothing evaluates it here */
+        n++;
+    }
+    if(!n) return AML_FIELD_INVALID;
+    *typa = (u8)value[0];
+    *typb = n == 1 ? (u8)(value[0] >> 8) : (u8)value[1];
+    return 0;
+}
+
+int aml_sleep_type(const u8 *table, u32 bytes, const char name[4], u8 *typa, u8 *typb) {
+    struct hunt h;
+    struct path root;
+    struct cursor c;
+    u32 size;
+    u8 a, b;
+    int status;
+    if(typa) *typa = 0;
+    if(typb) *typb = 0;
+    if(!typa || !typb || !table || !name || !nameseg((const u8 *)name) || bytes < 36 || bytes > AML_FIELD_MAX_TABLE)
+        return AML_FIELD_INVALID;
+    memcpy(&size, table + 4, 4);
+    if(size != bytes || (memcmp(table, "DSDT", 4) && memcmp(table, "SSDT", 4))) return AML_FIELD_INVALID;
+    memset(&h, 0, sizeof(h)); memset(&root, 0, sizeof(root));
+    h.name = name; c.p = table + 36; c.end = table + bytes;
+    status = hunt_walk(&h, c, &root, 0, false);
+    if(status) return status;
+    if(!h.found) return AML_FIELD_NOT_FOUND;
+    status = sleep_package(h.value, &a, &b);
+    if(status) return status;
+    *typa = a; *typb = b;
     return 0;
 }

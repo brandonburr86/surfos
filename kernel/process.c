@@ -43,7 +43,8 @@ detached one (init's) is in none.
 10/25/26 (robustness, L15): a process is TF_PROCESS from its creation, which a user's kill
 looks for (task_user_may_kill()): a kernel thread is never killed by one. L10, L12: it gets
 floating-point registers of its own with that flag (task_alloc(), kernel/fpu.c), and its stack
-is 16-aligned at _start.
+is 16-aligned at _start. L8: a spawn fails at once (ENOMEM) when fewer than 16 frames are left
+for programs, which could not even load it.
 */
 
 #include <surfos/types.h>
@@ -59,12 +60,15 @@ is 16-aligned at _start.
 #include <mm/paging.h>
 #include <mm/kalloc.h>
 #include <mm/uvm.h>
+#include <mm/pmm.h>
+#include <surfos/shutdown.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
 #define USER_STACK_INIT 0x4000          /* mapped before the program starts; the rest on demand */
 #define EXIT_LOAD_FAILED 127
 #define SCRIPT_LINE 256                 /* 10/25/26: a script's #! line, at most */
+#define SPAWN_MIN_FRAMES 16             /* 10/25/26 (L8): fewer left for programs, and a spawn fails at once */
 
 struct spawn_args {
     char path[VFS_PATH_MAX];
@@ -87,8 +91,14 @@ static void release_files(struct spawn_args *sa) {
     }
 }
 
-static void load_failed(struct spawn_args *sa, struct file *f, const char *why) {
+/* 10/25/26 (the review of B1): nomem, the loading failed for want of memory (TF_LOADNOMEM: it may work in a moment) */
+static void load_failed(struct spawn_args *sa, struct file *f, const char *why, bool nomem) {
     if(f) vfs_close(f);
+    if(nomem) {
+        u_long irqf = irq_save();
+        curTask->flags |= TF_LOADNOMEM;
+        irq_restore(irqf);
+    }
     kprintf("%s: %s\n", sa->path, why);
     release_files(sa);
     kfree(sa);
@@ -121,47 +131,52 @@ static void user_entry(void *arg) {
     u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1], env_user[SPAWN_ENV_MAX + 1];
     int i, r, fd;
 
-    m = uvm_create();
-    if(!m) load_failed(sa, f, "out of memory for the address space");
-    curTask->uvm = m;
     {
-        u_long irqf = irq_save();               /* 10/25/26: Ctrl+Z changes the flags from an interrupt (job control) */
-        curTask->flags |= TF_USER;
+        /* 10/25/26: Ctrl+Z changes the flags from an interrupt (job control); and (the review of B1) the address space
+           is the task's before interrupts come back on: one killed on the spot meanwhile (kill_escalate()) leaves
+           uvmreap nothing to miss */
+        u_long irqf = irq_save();
+        m = uvm_create();
+        curTask->uvm = m;
+        if(m) curTask->flags |= TF_USER;
         irq_restore(irqf);
     }
+    if(!m) load_failed(sa, f, "out of memory for the address space", true);
     uvm_switch(m);                                        /* schedule() keeps it loaded for this task */
 
     r = vfs_open(sa->path, O_RDONLY, &f);
-    if(r) { f = NULL; load_failed(sa, f, strerror(r)); }
+    if(r) { f = NULL; load_failed(sa, f, strerror(r), r == -ENOMEM); }
     if(vfs_read(f, &eh, sizeof(eh)) != (int)sizeof(eh) || memcmp(eh.e_ident, ELF_MAGIC, 4) ||
        eh.e_ident[4] != ELFCLASS32 || eh.e_ident[5] != ELFDATA2LSB || eh.e_type != ET_EXEC || eh.e_machine != EM_386 ||
-       eh.e_phentsize != sizeof(ph) || !eh.e_phnum) load_failed(sa, f, "not a static i386 ELF executable");
-    if(eh.e_entry < USER_START || eh.e_entry >= USER_END) load_failed(sa, f, "entry point outside user memory");
+       eh.e_phentsize != sizeof(ph) || !eh.e_phnum) load_failed(sa, f, "not a static i386 ELF executable", false);
+    if(eh.e_entry < USER_START || eh.e_entry >= USER_END) load_failed(sa, f, "entry point outside user memory", false);
 
     for(i = 0; i < eh.e_phnum; i++) {
         u_long end;
         if(vfs_lseek(f, (i32)(eh.e_phoff + i * sizeof(ph)), SEEK_SET) < 0 || vfs_read(f, &ph, sizeof(ph)) != (int)sizeof(ph))
-            load_failed(sa, f, "cannot read the program headers");
+            load_failed(sa, f, "cannot read the program headers", false);
         if(ph.p_type != PT_LOAD || !ph.p_memsz) continue;
         end = ph.p_vaddr + ph.p_memsz;
         if(ph.p_vaddr < USER_START || end > USER_END - USER_STACK_MAX || end < ph.p_vaddr || ph.p_filesz > ph.p_memsz)
-            load_failed(sa, f, "segment outside user memory");
-        if(uvm_map_range(m, ph.p_vaddr, ph.p_memsz, PTE_W) != 0) load_failed(sa, f, "out of memory for a segment");
+            load_failed(sa, f, "segment outside user memory", false);
+        r = uvm_map_range(m, ph.p_vaddr, ph.p_memsz, PTE_W);
+        if(r) load_failed(sa, f, r == -ENOMEM ? "out of memory for a segment" : "a segment could not be mapped", r == -ENOMEM);
         if(ph.p_filesz) {
             if(vfs_lseek(f, (i32)ph.p_offset, SEEK_SET) < 0 || vfs_read(f, (void *)ph.p_vaddr, ph.p_filesz) != (int)ph.p_filesz)
-                load_failed(sa, f, "cannot read a segment");
+                load_failed(sa, f, "cannot read a segment", false);
         }
         if(end > top) top = end;
     }
     vfs_close(f);
     f = NULL;
-    if(!top) load_failed(sa, f, "nothing to load");
+    if(!top) load_failed(sa, f, "nothing to load", false);
     m->brk_start = m->brk = PAGE_ALIGN_UP(top);
 
     /* the stack: strings at the top (the environment's, then argv's), then the envp and argv arrays,
        then argc, argv and envp for _start (10/24/26: envp; at most SPAWN_ARG_BYTES + SPAWN_ENV_BYTES
        of strings and both arrays, well inside the pages mapped here) */
-    if(uvm_map_range(m, USER_END - USER_STACK_INIT, USER_STACK_INIT, PTE_W) != 0) load_failed(sa, f, "out of memory for the stack");
+    if(uvm_map_range(m, USER_END - USER_STACK_INIT, USER_STACK_INIT, PTE_W) != 0)
+        load_failed(sa, f, "out of memory for the stack", true);
     m->stack_low = USER_END - USER_STACK_INIT;
     sp = USER_END;
     for(i = sa->envc - 1; i >= 0; i--) {
@@ -278,6 +293,8 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     size_t used = 0;
     int i, r, kind, nhead = 0, nargs = argc, job;
 
+    if(shutdown_started()) return -EAGAIN;                      /* 10/25/26 (L22): SurfOS is shutting down */
+    if(pmm_room(PMM_USER) < SPAWN_MIN_FRAMES) return -ENOMEM;   /* 10/25/26 (L8): it could not even load */
     r = vfs_stat(path, &st);
     if(r) return r;
     if(st.type != VN_FILE || !strcmp(st.fs, "devfs")) return -EACCES;      /* 10/25/26: a device is read by no #! check */

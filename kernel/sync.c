@@ -120,16 +120,13 @@ void event_wait(event_t *e) {
     irq_restore(flags);
 }
 
+/* 10/25/26 (the review of B4): e->set looked at and the task queued under one irq_save (wait_on_timeout_unless()): an
+   event set in between used to leave the waiter asleep for the whole time, and say it never came */
 int event_wait_timeout(event_t *e, u_long ms) {
+    int rc = wait_on_timeout_unless(&e->waiters, ms, &e->set);
     u_long flags = irq_save();
-    int rc = 0;
-    if(!e->set) {
-        irq_restore(flags);
-        rc = wait_on_timeout(&e->waiters, ms);
-        flags = irq_save();
-        if(rc == -EINTR && e->set) rc = 0;  /* 10/6/26: cut short, but it came */
-        if(rc == 0 && !e->set) rc = -1; /* woken but not set: treat as no event */
-    }
+    if(e->set) rc = 0;                  /* 10/6/26: cut short or timed out, but it came */
+    else if(rc == 0) rc = -1;           /* woken but not set: treat as no event */
     irq_restore(flags);
     return rc;
 }

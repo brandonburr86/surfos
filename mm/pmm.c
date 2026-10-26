@@ -17,6 +17,11 @@ the boot loader's map calls available: under QEMU's loader the old fixed 2-15 MB
 always free, but OVMF keeps ACPI NVS data at 8 MB and real firmware may do anything
 there. RAM accounting is 64-bit, so a machine with more than 4 GB reports its size
 correctly; the frames themselves stop below 4 GB (no PAE).
+
+10/25/26 (robustness, L1): frame classes and promises (mm/pmm.h). A program that allocates until
+malloc() fails stops at the kernel's reserve; the kernel heap promises its frames when it grows,
+so its page faults never find the stack empty, and out of memory is a failed allocation, never
+a panic. The refusals of each class and the fewest frames ever left are counted (memstat).
 */
 
 #include <surfos/types.h>
@@ -36,6 +41,7 @@ static u_long *sp;                           /* next free slot */
 static u_long total_frames, free_frames, highest;
 static u64 ram_bytes, ram_high_bytes;
 static bool overflowed;
+static u_long reserve, committed, lowest = ~0UL, refused[PMM_CLASSES];   /* 10/25/26 (L1): mm/pmm.h */
 static const char *image_problem;            /* reported by pmm_report() once there is a screen */
 
 static struct mem_range reserved[PMM_MAX_RESERVED];
@@ -182,6 +188,8 @@ void pmm_init(void) {
                              push_piece, NULL);
     }
     free_frames = total_frames;
+    reserve = pmm_kernel_reserve(total_frames);
+    lowest = free_frames;
     kprintf("*%llu KB of RAM", ram_bytes / 1024);
     if(ram_high_bytes) kprintf(" (%llu KB of it above 4 GB, not addressable without PAE)", ram_high_bytes / 1024);
     kprintf("\n*%lu free frames (%lu KB), top 0x%08lx\n", free_frames, free_frames * (PAGE_SIZE / 1024), highest);
@@ -196,15 +204,75 @@ const char *pmm_problem(void) {
     return image_problem;
 }
 
-u_long pmm_alloc(void) {
+/* frames that are neither handed out nor promised; interrupts off */
+static u_long avail(void) {
+    return free_frames - committed;
+}
+
+static void note_lowest(void) {
+    if(avail() < lowest) lowest = avail();
+}
+
+u_long pmm_alloc_as(int cls) {
     u_long flags = irq_save();
     u_long frame = 0;
-    if(sp > stack_bottom) {
+    if(sp > stack_bottom && pmm_class_may(cls, avail(), 1, reserve)) {
+        frame = *--sp;
+        free_frames--;
+        note_lowest();
+    } else {
+        refused[cls]++;
+    }
+    irq_restore(flags);
+    return frame;
+}
+
+u_long pmm_alloc(void) {
+    return pmm_alloc_as(PMM_KERNEL);
+}
+
+int pmm_commit(u_long n, int cls) {
+    u_long flags = irq_save();
+    int r = 0;
+    if(pmm_class_may(cls, avail(), n, reserve)) {
+        committed += n;
+        note_lowest();
+    } else {
+        refused[cls] += n;                      /* 10/25/26 (the review of B1): pages, as pmm_alloc_as() counts */
+        r = -1;
+    }
+    irq_restore(flags);
+    return r;
+}
+
+u_long pmm_take_committed(void) {
+    u_long flags = irq_save();
+    u_long frame = 0;
+    if(committed && sp > stack_bottom) {        /* free_frames >= committed always: the stack has one */
+        committed--;
         frame = *--sp;
         free_frames--;
     }
     irq_restore(flags);
     return frame;
+}
+
+u_long pmm_room(int cls) {
+    u_long flags = irq_save();
+    u_long keep = cls == PMM_USER ? reserve : cls == PMM_BULK ? reserve / 2 : 0, room;
+    room = avail() > keep ? avail() - keep : 0;
+    irq_restore(flags);
+    return room;
+}
+
+void pmm_stats(struct pmm_stats *st) {
+    u_long flags = irq_save();
+    u_int i;
+    st->reserve = reserve;
+    st->committed = committed;
+    st->lowest = lowest;
+    for(i = 0; i < PMM_CLASSES; i++) st->refused[i] = refused[i];
+    irq_restore(flags);
 }
 
 void pmm_free(u_long frame) {

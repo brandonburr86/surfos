@@ -20,6 +20,13 @@ task_kill_user()): a process is marked TF_PROCESS from its creation.
 10/25/26 (robustness, L10): a process has floating-point registers of its own, switched lazily
 (kernel/fpu.c): an area made with the task and freed with it, the FPU no longer its own when it
 dies, and CR0.TS set by schedule() for whoever does not own it.
+10/25/26 (robustness, L7): a process's memory goes when it ends, not when it is collected: its
+address space is destroyed by task_exit(), or, for a task killed on the spot, by the uvmreap
+thread, which become_zombie() hands it to. schedule() compares with the directory loaded.
+10/25/26 (robustness, L17): kernel stacks live in a window of their own, each over a guard left
+unmapped (kstack_alloc()), so an overflow is a double fault that kernel/panic.c reports.
+10/25/26 (robustness, L22, L23): the shutdown (kernel/shutdown.c) ends the processes and ring-0
+shells (task_end_users()), and init starts no shell then; Ctrl+Alt+Del wakes init to start it.
 */
 
 #include <surfos/types.h>
@@ -44,8 +51,12 @@ dies, and CR0.TS set by schedule() for whoever does not own it.
 #include <sys/framebuffer.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
+#include <mm/memory.h>
+#include <mm/paging.h>
+#include <mm/pmm.h>
 #include <surfos/proc.h>
 #include <surfos/fpu.h>
+#include <surfos/shutdown.h>
 
 #include <blibc_common.h>
 
@@ -75,6 +86,9 @@ static wait_queue_t zombie_wq;           /* parents waiting in task_wait() */
 static surf_task *all_tasks, *all_tasks_tail; /* in pid order */
 static u_long next_pid;
 static u_int ntasks;
+static struct uvm *uvms_dead;            /* 10/25/26 (L7): address spaces of tasks killed on the spot, for uvmreap */
+static u_long uvms_dead_pages;           /* the frames they hold until uvmreap frees them (memstat) */
+static wait_queue_t uvmreap_wq;
 
 static const u_int quantum_for[NUM_PRIO] = { 0, 4, 2, 1 };   /* FIFO: no slice */
 static const prio_level pick_order[8] = { PL_FIFO, PL_HIGH, PL_NORMAL, PL_LOW, PL_FIFO, PL_HIGH, PL_NORMAL, PL_HIGH };
@@ -193,22 +207,93 @@ static void kill_escalate(void *arg);
 static void kill_hangup(surf_task *t);
 static void fill_info(surf_task *t, struct procinfo *pi);
 
+/**** Kernel stacks (10/25/26, robustness, L17) ****/
+
+/* The window (include/mm/memory.h) is cut into slots of KSTACK_SLOT. A stack is the top KSTACK_SIZE of its slot,
+   mapped from frames when its task is made: a process's from the programs' class (PMM_USER), which leaves the
+   kernel its reserve, a kernel thread's from the kernel's. The rest of the slot is never mapped, so a stack that
+   overflows faults there; that fault cannot push its own frame, and the double fault's task gate reports it
+   (kernel/panic.c). The 2004 stacks were heap blocks, with whatever lay below them to run into (M10). */
+#define KSTACK_SLOTS ((KSTACK_WIN_END - KSTACK_WIN_START) / KSTACK_SLOT)
+#define KSTACK_PAGES (KSTACK_SIZE / PAGE_SIZE)
+static u32 kstack_used[KSTACK_SLOTS / 32];
+static u_long kstack_next;
+
+static u_char *kstack_alloc(int cls) {
+    u_long frame[KSTACK_PAGES], slot = 0, i, flags, base;
+    u_int n;
+    for(n = 0; n < KSTACK_PAGES; n++) {
+        frame[n] = pmm_alloc_as(cls);
+        if(!frame[n]) {
+            while(n--) pmm_free(frame[n]);
+            return NULL;
+        }
+    }
+    flags = irq_save();
+    for(i = 0; i < KSTACK_SLOTS; i++) {
+        slot = (kstack_next + i) % KSTACK_SLOTS;
+        if(!(kstack_used[slot / 32] & (1u << (slot % 32)))) break;
+    }
+    if(i == KSTACK_SLOTS) {                     /* 2048 tasks: memory runs out first */
+        irq_restore(flags);
+        for(n = 0; n < KSTACK_PAGES; n++) pmm_free(frame[n]);
+        return NULL;
+    }
+    kstack_used[slot / 32] |= 1u << (slot % 32);
+    kstack_next = slot + 1;
+    irq_restore(flags);
+    /* in the kernel's tables, which every address space shares */
+    base = KSTACK_WIN_START + slot * KSTACK_SLOT + KSTACK_SLOT - KSTACK_SIZE;
+    for(n = 0; n < KSTACK_PAGES; n++) vmm_map(base + n * PAGE_SIZE, frame[n], PTE_W);
+    return (u_char *)base;
+}
+
+/* never the stack the caller runs on: reap() frees a zombie's, in its waiter */
+static void kstack_free(u_char *stack) {
+    u_long base = (u_long)stack, slot = (base - KSTACK_WIN_START) / KSTACK_SLOT, flags;
+    u_int n;
+    for(n = 0; n < KSTACK_PAGES; n++) {
+        u_long frame = vmm_get_phys(base + n * PAGE_SIZE) & PTE_FRAME;
+        vmm_unmap(base + n * PAGE_SIZE);
+        pmm_free(frame);
+    }
+    flags = irq_save();
+    kstack_used[slot / 32] &= ~(1u << (slot % 32));
+    irq_restore(flags);
+}
+
+/* The task whose stack's slot holds addr (the guard below the stack included), and in *guard whether addr is in
+   that guard. For the double fault's report: interrupts are off, and nothing is taken or changed. */
+surf_task *task_stack_owner(u_long addr, bool *guard) {
+    u_long slot, base;
+    surf_task *t;
+    u_int n = 0;
+    *guard = false;
+    if(addr < KSTACK_WIN_START || addr >= KSTACK_WIN_END) return NULL;
+    slot = (addr - KSTACK_WIN_START) / KSTACK_SLOT;
+    base = KSTACK_WIN_START + slot * KSTACK_SLOT + KSTACK_SLOT - KSTACK_SIZE;
+    *guard = addr < base;
+    if(curTask && (u_long)curTask->stackmem == base) return curTask;
+    for(t = all_tasks; t && n < 4 * KSTACK_SLOTS; t = t->all_next, n++) if((u_long)t->stackmem == base) return t;
+    return NULL;
+}
+
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
     u_long irqf;
     if(!t) return NULL;
-    t->stackmem = (u_char *)kalloc(KSTACK_SIZE);
+    t->stackmem = kstack_alloc((flags & TF_PROCESS) ? PMM_USER : PMM_KERNEL);  /* 10/25/26 (L17) */
     if(!t->stackmem) {
         kfree(t);
         return NULL;
     }
     if((flags & TF_PROCESS) && fpu_task_new(t)) {         /* 10/25/26 (L10): its floating-point registers */
-        kfree(t->stackmem);
+        kstack_free(t->stackmem);
         kfree(t);
         return NULL;
     }
-    /* Touch every page now: a kernel stack must never be demand paged, because the CPU
-       pushes the page fault frame onto that very stack and faults again (double fault). */
+    /* A kernel stack is mapped in full before it is used (kstack_alloc()): the CPU pushes a page fault's frame onto
+       that very stack, so a fault there could not be taken. */
     memset(t->stackmem, 0, KSTACK_SIZE);
     strlcpy(t->name, name, TASK_NAME_LEN);
     t->prio = prio;
@@ -359,6 +444,13 @@ static void become_zombie(surf_task *t, int code) {
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
     fpu_task_gone(t);                         /* 10/25/26 (L10): what the FPU holds is nobody's now */
+    if(t->uvm) {                              /* 10/25/26 (L7): killed on the spot: uvmreap frees its memory now */
+        t->uvm->reap_next = uvms_dead;
+        uvms_dead = t->uvm;
+        uvms_dead_pages += t->uvm->pages + t->uvm->table_pages;
+        t->uvm = NULL;
+        wake_up(&uvmreap_wq);
+    }
     jobs_shell_gone(t);                       /* 10/25/26: the jobs it made */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
@@ -368,6 +460,7 @@ static void become_zombie(surf_task *t, int code) {
 
 void task_exit(int code) {
     u_long flags;
+    struct uvm *m;
     if(curTask == idle_task) panic("the idle task tried to exit");
     /* 10/6/26 (review of the network connections): the task ends by itself now. Closing its files
        (a socket's close takes net_lock, a file's may write) must not be cut by a kill at once (a
@@ -381,6 +474,14 @@ void task_exit(int code) {
     /* 10/6/26: its files close now, in its own context, not when someone waits for it: a
        background program's file is written out and its volume can be unmounted at once */
     fd_close_all(curTask);
+    /* 10/25/26 (L7): and its memory goes now, whoever collects it and when: detached, and the kernel's directory
+       loaded, with interrupts off (uvm_destroy() never frees the directory that is loaded) */
+    flags = irq_save();
+    m = curTask->uvm;
+    curTask->uvm = NULL;
+    if(m) uvm_switch(NULL);
+    irq_restore(flags);
+    if(m) uvm_destroy(m);
     flags = irq_save();
     become_zombie(curTask, code);
     irq_restore(flags);
@@ -807,8 +908,47 @@ static void reap(surf_task *t) {
     kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
     fpu_task_free(t);               /* 10/25/26 (L10) */
-    kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
+    kstack_free(t->stackmem);       /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
+}
+
+/* 10/25/26 (robustness, L22): kill_task_patient() for every process and ring-0 shell but the caller (task.h). Under
+   interrupts off: a killed task's record stays on the list until it is collected, so the walk goes on. */
+u_int task_end_users(void) {
+    surf_task *t;
+    u_int n = 0;
+    u_long flags = irq_save();
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t == curTask || t->state == TS_DEAD || !task_user_may_kill(t)) continue;
+        kill_task_patient(t);
+        n++;
+    }
+    irq_restore(flags);
+    return n;
+}
+
+u_int task_users_left(char *list, size_t len) {
+    surf_task *t;
+    u_int n = 0;
+    size_t used = 0;
+    u_long flags = irq_save();
+    if(len) list[0] = 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->state == TS_DEAD || !task_user_may_kill(t)) continue;
+        n++;
+        if(len && used < len)
+            used += snprintf(list + used, len - used, "%s'%s' (pid %lu)", used ? ", " : "", t->name, t->pid);
+    }
+    irq_restore(flags);
+    return n;
+}
+
+/* 10/25/26 (robustness, L23): Ctrl+Alt+Del (kernel/shutdown.c), interrupts off: init's wait for its children is cut
+   short (TI_INT), and init starts the shutdown */
+void task_wake_init(void) {
+    if(!init_task_ptr || init_task_ptr->state == TS_DEAD) return;
+    init_task_ptr->intr |= TI_INT;
+    wake_intr(init_task_ptr);
 }
 
 /* the children of the calling task (10/6/26: the self test asks before it waits for any) */
@@ -959,6 +1099,41 @@ int sleep_intr(u_long ms) {
     }
 }
 
+/* 10/25/26 (L7): frees the address spaces of tasks killed on the spot (a fault, Ctrl+C in a program's own code, a
+   kill that waited too long), which become_zombie() hands over: it may run in an interrupt, where nothing is freed.
+   This is a kernel thread, so schedule() has the kernel's directory loaded when it runs: none of them is loaded. */
+static void uvmreap_thread(void *arg) {
+    struct uvm *m;
+    u_long flags, held;
+    for(;;) {
+        flags = irq_save();
+        while(!uvms_dead) {
+            wait_prepare(&uvmreap_wq);
+            irq_restore(flags);
+            yield();
+            flags = irq_save();
+        }
+        m = uvms_dead;
+        uvms_dead = m->reap_next;
+        held = m->pages + m->table_pages;
+        uvms_dead_pages -= held;                /* 10/25/26 (the review of B1): uvm_freeing() counts them now */
+        irq_restore(flags);
+        uvm_destroy(m);
+    }
+}
+
+void task_mem_held(u_long *programs, u_long *dying) {
+    surf_task *t;
+    u_long flags = irq_save(), n = 0;
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->uvm) n += t->uvm->pages + t->uvm->table_pages;
+        if(t->flags & TF_PROCESS) n += KSTACK_PAGES;        /* 10/25/26 (L17): its kernel stack, of their class too */
+    }
+    *programs = n;
+    *dying = uvms_dead_pages + uvm_freeing();   /* 10/25/26 (the review of B1): handed to uvmreap, or being freed */
+    irq_restore(flags);
+}
+
 /**** The scheduler ****/
 
 static surf_task *pick_next(void) {
@@ -995,7 +1170,8 @@ u_long *schedule(struct trapframe *tf) {
         next->switches++;
         curTask = next;
         tss_set_kernel_stack(next->stack_top);
-        if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
+        if(next->uvm != uvm_current()) uvm_switch(next->uvm);   /* another process: its page directory (10/25/26: against
+                                                       the one loaded: a dying task's may have gone to uvmreap) */
         fpu_switch(next);                                   /* 10/25/26 (L10): CR0.TS unless it owns the FPU */
     }
     return next->esp;
@@ -1048,6 +1224,8 @@ static u_long *yield_trap(struct trapframe *tf) {
 #define SHELL_WINDOW_MS   30000         /* ...within this long: the recovery console */
 #define SHELL_QUICK_MS    2000          /* a surfsh that ends sooner did not get going */
 #define SHELL_RETRY_MS    1000          /* a console left without a shell: the next try */
+#define SHELL_LOW_FRAMES  256           /* 10/25/26 (the review of B1): fewer left for programs, and surfsh's ends
+                                           are memory's: they do not count toward the recovery console */
 
 static struct console_shell {
     u_long pid;                         /* the shell there now, 0: none yet (init tries again) */
@@ -1096,6 +1274,10 @@ static void recovery_console(int i) {
 static void start_surfsh(int i) {
     char *argv[] = { "surfsh", "-l" }, line[96];
     int pid = process_spawn(SURFSH_PATH, 2, argv, &conArray[i], TF_SHELL);
+    if(pid == -EAGAIN) {                                    /* 10/25/26 (the review of B4): SurfOS is shutting down */
+        cshell[i].pid = 0;
+        return;
+    }
     if(pid == -ENOMEM || pid == -EIO) {                     /* it may work in a moment: init's loop tries again */
         cshell[i].pid = 0;
         if(!cshell[i].waiting) {
@@ -1153,6 +1335,15 @@ static void shell_ended(int i, int status, u_int flags) {
         start_kernel_shell(i);
         return;
     }
+    if(!killed && (flags & TF_LOADNOMEM)) {                /* 10/25/26 (the review of B1): it may load in a moment */
+        c->pid = 0;                                         /* init's loop tries again, as for a spawn's ENOMEM */
+        if(!c->waiting) {
+            snprintf(line, sizeof(line), "init: %s: %s; trying again\n", SURFSH_PATH, strerror(-ENOMEM));
+            init_say(i, line);
+            c->waiting = true;
+        }
+        return;
+    }
     if(!killed && !(flags & TF_LOADED)) {                  /* not an executable: trying again will not help */
         snprintf(c->why, sizeof(c->why), "init: %s could not be loaded; recovery console", SURFSH_PATH);
         recovery_console(i);
@@ -1164,6 +1355,14 @@ static void shell_ended(int i, int status, u_int flags) {
             init_say(i, line);
         }
         start_surfsh(i);
+        return;
+    }
+    if(pmm_room(PMM_USER) < SHELL_LOW_FRAMES) {             /* 10/25/26 (the review of B1): memory's end, not the */
+        c->pid = 0;                                         /* shell's: not counted; a new one a second later */
+        if(!c->waiting) {
+            init_say(i, "init: surfsh ended while memory is short; trying again\n");
+            c->waiting = true;
+        }
         return;
     }
     if(c->nends == SHELL_FAILS - 1 && now - c->ends[0] <= SHELL_WINDOW_MS) {
@@ -1195,16 +1394,24 @@ static void init_main(void *arg) {
         u_int flags = 0;
         surf_console *con = NULL;
         bool missing = false;
-        for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) missing = true;
-        pid = wait_for(WAIT_ANY, 0, &status, &flags, &con, missing ? WNOHANG : 0, NULL, NULL);
+        for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid && !shutdown_started()) missing = true;
+        /* 10/25/26 (L23): the wait may be cut short by Ctrl+Alt+Del (task_wake_init()) */
+        pid = wait_for(WAIT_ANY, 0, &status, &flags, &con, (missing ? WNOHANG : 0) | WINTR | WCTRLC, NULL, NULL);
+        if(curTask->intr & TI_INT) {
+            u_long irqf = irq_save();
+            curTask->intr &= ~TI_INT;
+            irq_restore(irqf);
+            if(shutdown_key_take()) shutdown_start(SHUT_REBOOT);
+        }
         if(pid <= 0) {
             /* 10/6/26: a console without a shell (no memory a moment ago): another try. No
                children at all should not happen, but never spin. */
             sleep_ms(missing ? SHELL_RETRY_MS : 100);
-            for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) start_shell(i);
+            for(i = 0; i < NUM_CONSOLES && !shutdown_started(); i++) if(!cshell[i].pid) start_shell(i);
             continue;
         }
         if(!(flags & TF_SHELL) || !con) continue;           /* an orphan: collected, that is all */
+        if(shutdown_started()) continue;                    /* 10/25/26 (L22): no new shell while SurfOS shuts down */
         for(i = 0; i < NUM_CONSOLES; i++) {
             if(con == &conArray[i] && cshell[i].pid == (u_long)pid) shell_ended(i, status, flags);
         }
@@ -1243,6 +1450,9 @@ void init_task() {
     init_task_ptr = kthread_create("init", init_main, NULL, PL_HIGH, TF_KTHREAD);
     if(!init_task_ptr) panic("init_task: no memory for init");
     init_task_ptr->parent = NULL;
+    wq_init(&uvmreap_wq);                   /* 10/25/26 (L7) */
+    if(!kthread_create("uvmreap", uvmreap_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED))
+        panic("init_task: no memory for uvmreap");
 }
 
 /**** ps ****/

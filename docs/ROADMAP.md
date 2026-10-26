@@ -203,9 +203,10 @@ Each module: why, what exists, what to build, how to prove it, size
   `mm_lookup_linear`), `invlpg`; page 0 unmapped so NULL dereferences fault; the
   page-fault handler checks the error code and the address range: kernel-heap
   ranges are demand-mapped, everything else is a bug (K3 backtrace); guard pages
-  below task stacks.
+  below task stacks (10/25/26: done by track B, stage B3, behind a double-fault task gate:
+  `docs/CODE-AUDIT.md` L16-L18).
 * Prove: `*(int*)0 = 1` in the shell produces a page-fault panic with a backtrace;
-  a recursion test hits the guard page instead of corrupting the heap.
+  a recursion test hits the guard page instead of corrupting the heap (`crashstack`).
 
 **M3. Kernel heap v2** (M1-M5, M11, M12, T5) - size M - deps M2 (soft) - **done on `ai-dev`**
 
@@ -532,7 +533,8 @@ at mount; a kill that has waited 2 s still kills a task at once inside the block
 cache or a FAT operation (`kernel/task.c`'s `kill_escalate()`), leaving what it held
 behind (SurfCPU's B39 puts the kill off until the task is out, on its own kill model);
 `reboot` does not write the mounts out first, so a volume mounted read-write then stays
-marked as not cleanly unmounted (B42 keeps it so until it is checked); and SurfCPU's later
+marked as not cleanly unmounted (B42 keeps it so until it is checked; 10/25/26: track B's
+B4 does, `docs/CODE-AUDIT.md` L22); and SurfCPU's later
 rounds (B46-B82, but for B58 and eject's part of B46: kills and Ctrl+C inside umount and
 eject, mkfs and fdisk holding their device, mutex hand-over).
 

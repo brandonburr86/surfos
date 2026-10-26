@@ -31,7 +31,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
                   # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 21 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -102,7 +102,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), fputest (10/25/26:
            floating point, two programs' registers at once, printf's %f %e %g), wintest (the window calls; wintest tty
-           names its terminal), wdemo and wcalc (windows through libgui), env, the filters grep
+           names its terminal), wdemo and wcalc (windows through libgui), memhog (10/25/26: all the memory a program
+           may have; stack, hold MS), toobig (10/25/26: too big to load under QEMU, for init's retry), env, the filters grep
            sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
@@ -246,6 +247,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
   `kprintf()` in the kernel and `printf()` in task code.
+* Memory (10/25/26, robustness B1): programs stop at the kernel's reserve, and the kernel heap promises its
+  frames when it grows, so `kalloc()` returns NULL when memory is short, never a panic: every caller checks it.
+  Frames have classes (`pmm_alloc_as()`, mm/pmm.h): `PMM_USER` for anything a program's memory takes, `PMM_KERNEL`
+  (`pmm_alloc()`) otherwise; a kalloc() over 64 KB that grows the heap counts as `PMM_BULK` by itself. A process's
+  memory goes when it ends (`task_exit()`, or the `uvmreap` thread after a kill on the spot); `memstat` shows the
+  reserve and who was refused.
 * The kernel never uses floating point (10/25/26): it is built with `-mno-80387 -mno-sse`,
   so a float in kernel code fails to link, and a #NM in ring 0 panics. The FPU is the
   programs': `kernel/fpu.c` keeps each process's registers and switches them on first use.
@@ -259,7 +266,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   QEMU delivers (`-d int`); `grep "v=0d"` finds general protection faults.
 * A killed task or a panic prints a symbolized backtrace; `build/O<level>/surfos.sym`
   is the sorted symbol table for anything else. `dmesg` in the shell shows the kernel log.
-* Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose.
+* Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose; `crashstack`
+  overflows its task's kernel stack and halts the machine (`crashstack near`: the trap frame check).
 * The screen dump works even when the serial console does not.
 * `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
   `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.
@@ -268,8 +276,21 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `ktimer_start()` (ktimer.h), `kalloc()`/`kcalloc()`/`kfree()`/`kalloc_dma()`
   (mm/kalloc.h), `vmm_map()`/`pmm_alloc()` (mm/paging.h, mm/pmm.h). The scheduler
   runs only in trap context; never call `schedule()` directly.
-* Every kernel stack must be fully mapped (task_alloc pre-faults it): a page fault on
-  the stack itself is a double fault.
+* Shutting down (10/25/26, robustness, L20-L24): `reboot` and `poweroff` end the programs, write
+  out and unmount the read-write volumes and then reset or switch off (ACPI S5), each step a
+  `shutdown:` line on F1 (kernel/shutdown.c); `reboot -f` resets at once; `poweroff -n` says
+  what poweroff would do (the programs, the mounts, the S5 values: the legacy profile reads ACPI
+  then, quietly). Ctrl+Alt+Del starts the same (through init), again resets at once. In the
+  smoke test, -no-reboot and -no-shutdown make both a pause: the monitor's `info status` says
+  "paused (shutdown)". Anything new that must happen before the programs end goes through
+  `shutdown_hook()` (the network manager may still write the stick then); nothing spawns once
+  `shutdown_started()`, and the network manager mounts nothing once `shutdown_unmounting()`.
+* Every kernel stack must be fully mapped: a page fault on the stack itself cannot push its
+  frame. Since 10/25/26 (robustness, L16-L18) the stacks are 16 KB at the top of 32 KB slots
+  (0x90000000-0x93FFFFFF, kernel/task.c) over unmapped guards: an overflow is a double fault,
+  which a task gate takes to a stack of its own ("kernel stack overflow in 'name'", a
+  backtrace, SYSTEM HALTED), and a trap frame within 1 KB of a stack's bottom halts the
+  machine with "nearly full".
 * `selftest` in the shell (shell/selftest.c) is where kernel-level tests go; add a
   check there and a line to `SMOKE` in tools/qemu-run.py for new features.
 * On the laptop (or under OVMF): `bootinfo`, `drivers`, `cpuinfo`, `acpi`, `memstat` say
@@ -350,8 +371,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   host's own network. `tools/qemu-tcp.py --scenario mdns` plays the other hosts on the raw link
   (rawnet.py's `send_udp()`, `wait_udp()`), where nothing leaves the test.
 * The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
-  telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
-  `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under
+  telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `poweroff`,
+  `crashstack`, `mkfs`, `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under
   build/docker/build/O2 or O0, from `devenv/build-usb.sh`, pushed with `rx` onto the data stick's
   `/surfos-dev/`, then eject, reboot through GRUB's development entry, telnet again, `/initrd/etc/build-id`
   checked); `reboot`. The laptop (10.0.0.4) belongs to one track at a time, as the integrator assigns it; test

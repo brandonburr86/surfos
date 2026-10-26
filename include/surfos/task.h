@@ -16,7 +16,8 @@ File: task.h    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 
 #define DEF_EFLAGS_0 0x202   /* IF, plus bit 1 which is always set */
 #define DEF_EFLAGS_3 0x3202  /* the same with IOPL 3 */
-#define KSTACK_SIZE 0x4000   /* 16 KB kernel stack per task */
+#define KSTACK_SIZE 0x4000   /* 16 KB kernel stack per task (10/25/26: over a guard, kernel/task.c; so is the boot stack's size) */
+#define KSTACK_LOW  0x400    /* 10/25/26 (L18): a trap frame this close to its stack's bottom halts the machine */
 #define TASK_NAME_LEN 32
 #define TASK_CWD_LEN 256
 #define NR_OPEN 16
@@ -42,6 +43,8 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
 #define TF_PROCESS  0x100 /* 10/25/26 (L15): a process, from its creation (process_spawn_ex()): a process carries
                              TF_KTHREAD too, and TF_USER only once its loading starts */
+#define TF_LOADNOMEM 0x200 /* 10/25/26 (the review of B1): a process whose loading failed for want of memory, which init
+                              tries again for a console's shell instead of giving the console up (task.c) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -222,6 +225,18 @@ struct procinfo;
 int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
 int task_info_all(struct procinfo *out, int max); /* 10/18/26: the list in one go, the newest max; how many */
 int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
+void task_mem_held(u_long *programs, u_long *dying);   /* 10/25/26 (L9): frames programs hold, and those of ended ones
+                                                          not freed yet: uvmreap's, and any being freed (memstat) */
+/* 10/25/26 (L17): the task whose kernel stack's slot holds addr, and whether addr is in the guard below that stack
+   (the double fault's report) */
+surf_task *task_stack_owner(u_long addr, bool *guard);
+/* 10/25/26 (L22, L23): shutdown (kernel/shutdown.c): the kill that waits for the end of the call (kill_task_patient()) for
+   every process and ring-0 shell but the caller, how many; those still alive, how many, and the first of them in list as
+   'name' (pid n), up to len bytes; init woken (Ctrl+Alt+Del, from the keyboard's interrupt) */
+u_int task_end_users(void);
+u_int task_users_left(char *list, size_t len);
+void task_wake_init(void);
+#define task_stack_bottom(t) ((t)->stack_top - KSTACK_SIZE)     /* every task's, the idle task's boot stack too */
 
 void yield(void);
 void sleep_ms(u_long ms);

@@ -42,6 +42,7 @@ void wait_on(wait_queue_t *q);
 
 /* 0 when woken, -1 when ms passed first; 10/6/26: -EINTR when cut short (task_interrupted()) */
 int wait_on_timeout(wait_queue_t *q, u_long ms);
+int wait_on_timeout_unless(wait_queue_t *q, u_long ms, volatile bool *ready);   /* 10/25/26: 0 at once when *ready */
 
 void wake_up(wait_queue_t *q);       /* the first waiter */
 void wake_up_all(wait_queue_t *q);

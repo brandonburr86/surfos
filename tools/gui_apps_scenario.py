@@ -20,6 +20,7 @@ runs only those modules' checks and readbacks; the stick still holds every modul
 """
 import importlib
 import os
+import re
 import shutil
 import tempfile
 
@@ -119,6 +120,21 @@ class Driver:
         self.click(x + w - 16, y + 14)
 
 
+def kernel_heap_used(vm, PROMPT):
+    """10/25/26 (robustness, B1): the kernel heap's bytes in use, as memstat on the serial line says them, or None. The
+    console drops what is typed until a pause after the desktop gives the keyboard back (TTY_SKIP): a quiet second
+    first, and memstat once more if its lines did not come"""
+    for _ in range(2):
+        vm.pump(1)
+        start = len(vm.transcript)
+        vm.send('memstat\n')
+        if vm.expect('kernel heap:', 15) and vm.expect(PROMPT, 30):
+            m = re.search(rb'kernel heap: [^\n]*\n\s*used: (\d+) bytes', vm.transcript[start:])
+            if m:
+                return int(m.group(1))
+    return None
+
+
 def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
     results = []
     font = base._font()
@@ -146,6 +162,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         d.check('guiapps boot reaches the shell', ok)
         if not ok:
             return results
+        heap_before = kernel_heap_used(vm, PROMPT)  # 10/25/26 (B1): the desktop gives back all it took
         vm.send('gui\n')
         d.require('the desktop draws its menu bar and the suite\'s tiles',
                   d.vm.wait_screen(lambda s: (s.w, s.h) == (1920, 1080) and d.pixel(s, 0, 0) == PAPER and
@@ -167,6 +184,10 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
             vm.send('\r')
             left = vm.expect('text console restored', 20) and vm.expect(PROMPT, 15)
         d.check('the desktop closes and the text console comes back', left)
+        if left:
+            heap_after = kernel_heap_used(vm, PROMPT)
+            d.check(f'the kernel heap holds what it held before gui ({heap_before} bytes in use, then {heap_after})',
+                    heap_before is not None and heap_after == heap_before)
     except AssertionError:
         pass
     finally:

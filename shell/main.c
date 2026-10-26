@@ -51,6 +51,7 @@ a ping) gives up when that happens (task_interrupted()), along its usual way out
 #include <surfos/system.h>
 #include <surfos/klog.h>
 #include <surfos/interrupt.h>
+#include <surfos/shutdown.h>
 #include <surfos/irq.h>
 #include <surfos/multiboot.h>
 #include <surfos/cpu.h>
@@ -135,10 +136,30 @@ static int cmd_echo(int argc, char **argv) {
     return CMD_OK;
 }
 
+/* 10/25/26 (robustness, L22, L24): the shutdown thread ends the programs (this shell too, once this command has
+   returned) and writes out and unmounts the volumes, then resets the machine (kernel/shutdown.c); -f resets it at
+   once, as reboot always did. poweroff turns it off the same way (ACPI S5); -n only says what it would do. */
+static int start_shutdown(int how, const char *what) {
+    int r = shutdown_start(how);
+    if(r) {
+        printf("%s: %s\n", what, r == -EBUSY ? "SurfOS is shutting down already" : strerror(r));
+        return CMD_FAIL;
+    }
+    printf("\n    Please wait... %s: the programs end, the volumes are written out\n",
+           how == SHUT_REBOOT ? "rebooting" : "powering off");
+    return CMD_OK;
+}
 static int cmd_reboot(int argc, char **argv) {
+    if(argc > 2 || (argc == 2 && strcmp(argv[1], "-f"))) return CMD_USAGE;
+    if(argc == 1) return start_shutdown(SHUT_REBOOT, "reboot");
     printf("\n    Please wait... rebooting...");
     reboot();
     return CMD_FAIL;                    /* not reached: reset() halts when nothing resets the machine */
+}
+static int cmd_poweroff(int argc, char **argv) {
+    if(argc > 2 || (argc == 2 && strcmp(argv[1], "-n"))) return CMD_USAGE;
+    if(argc == 2) return shutdown_dry_run() ? CMD_FAIL : CMD_OK;
+    return start_shutdown(SHUT_POWEROFF, "poweroff");
 }
 
 static int cmd_tick(int argc, char **argv) {
@@ -972,6 +993,36 @@ static int cmd_crashint(int argc, char **argv) {
 }
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
 
+/* 10/25/26 (robustness, L17, L18): this task's kernel stack used up, 256 bytes a call, until it runs into the guard
+   below it: the double fault's task gate says "kernel stack overflow" and halts the machine (kernel/panic.c).
+   Interrupts are off on the way down, so the overflow, not a trap frame near the bottom, is what stops it. With
+   near: down to half of KSTACK_LOW above the bottom, where a trap (yield's) halts the machine with "nearly full". */
+static int crash_down(volatile const char *up, u_long left) {
+    volatile char here[256];
+    here[0] = up[0] + 1;
+    if(!left) return here[0];
+    return crash_down(here, left - 1) + here[0];       /* not a tail call: each frame stays */
+}
+static int crash_near(volatile const char *up) {
+    volatile char here[64];
+    here[0] = up[0] + 1;
+    if((u_long)here - task_stack_bottom(curTask) < KSTACK_LOW / 2) {
+        asm volatile("int $0x40");                      /* its trap frame lands within KSTACK_LOW of the bottom */
+        return here[0];
+    }
+    return crash_near(here) + here[0];
+}
+static int cmd_crashstack(int argc, char **argv) {
+    volatile char top = 0;
+    if(argc > 2 || (argc == 2 && strcmp(argv[1], "near"))) return CMD_USAGE;
+    irq_disable();
+    if(argc == 2) crash_near(&top);
+    else crash_down(&top, KSTACK_SIZE);                 /* KSTACK_SIZE calls: far more than fit */
+    irq_enable();
+    printf("crashstack: the stack check did not stop it\n");
+    return CMD_FAIL;
+}
+
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
     { "clear",     "",          "clear the console", cmd_clear },
@@ -1051,7 +1102,9 @@ static const struct command commands[] = {
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
-    { "reboot",    "",          "reboot the machine", cmd_reboot },
+    { "crashstack", "[near]",   "overflow this task's kernel stack, or trap near its bottom (halts the machine)", cmd_crashstack },
+    { "reboot",    "[-f]",      "end the programs, write out the volumes, reset the machine (-f: at once)", cmd_reboot },
+    { "poweroff",  "[-n]",      "the same, then turn the machine off (-n: say what it would do)", cmd_poweroff },
 };
 static const u_int ncommands = sizeof(commands) / sizeof(commands[0]);
 

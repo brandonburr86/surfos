@@ -49,6 +49,10 @@ them at once (about 20 ms) and checks nothing then.
 #include <surfos/proc.h>
 #include <surfos/sysimpl.h>
 #include <surfos/fpu.h>
+#include <mm/pmm.h>
+#include <mm/memory.h>
+#include <mm/paging.h>
+#include <surfos/shutdown.h>
 #include "shell.h"
 
 static int fails;
@@ -94,12 +98,35 @@ static void unclaim(void) {
 
 /* Random allocate/free with a byte pattern per block, then everything freed and the
    heap walked and compared with the starting point. 10/6/26: the tables are the run's
-   own, from the heap, allocated before the starting point is taken. */
+   own, from the heap, allocated before the starting point is taken.
+   10/25/26 (the review of B1, the flake daily's usbnet run met: 282496 -> 280864 bytes):
+   the whole heap's use before and after moved with whatever else the kernel did meanwhile
+   (a network letting go of a connection's buffers). Each kalloc() and kfree() of the run
+   is counted on its own instead: interrupts off around the call (kalloc() runs with them
+   off itself), so the heap's counts change by that block alone: one block more and its
+   payload (the request, aligned, or 16 bytes more when the rest was too small to split
+   off), then one block fewer and the same bytes. A block that was not given back, or
+   counted wrong, fails it; so does a heap that does not walk (kheap_check()). */
+static void *counted(void *free_this, u_int size, long *bytes, long *blocks) {
+    struct heap_stats a, b;
+    u_long flags = irq_save();
+    void *p = NULL;
+    kheap_stats(&a);
+    if(free_this) kfree(free_this);
+    else p = kalloc(size);
+    kheap_stats(&b);
+    irq_restore(flags);
+    *bytes = (long)(b.bytes_used - a.bytes_used);
+    *blocks = (long)(b.blocks_used - a.blocks_used);
+    return p;
+}
+
 static int heap_round(void) {
     enum { SLOTS = 192, ROUNDS = 20000 };
-    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; } *s = kcalloc(1, sizeof(*s));
+    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; long held[SLOTS]; } *s = kcalloc(1, sizeof(*s));
     struct heap_stats before, after;
-    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
+    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0, miscounted = 0;
+    long bytes, blocks;
 
     if(!s) {
         printf("heaptest: no memory for its tables: HEAPTEST FAIL\n");
@@ -113,28 +140,35 @@ static int heap_round(void) {
             u_char *p = s->ptrs[i];
             u_int k;
             for(k = 0; k < s->sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
-            kfree(s->ptrs[i]);
+            counted(s->ptrs[i], 0, &bytes, &blocks);
+            if(blocks != -1 || bytes != -s->held[i]) miscounted++;
             s->ptrs[i] = NULL;
             frees++; live--;
         } else {
-            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
-            u_char *p = kalloc(sz);
-            u_int k;
+            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512, k;
+            long want = sz < 16 ? 16 : (long)((sz + 15) & ~15u);
+            u_char *p = counted(NULL, sz, &bytes, &blocks);
             if(!p) { bad++; continue; }
+            if(blocks != 1 || bytes < want || bytes > want + 16) miscounted++;
             for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
-            s->ptrs[i] = p; s->sizes[i] = sz;
+            s->ptrs[i] = p; s->sizes[i] = sz; s->held[i] = bytes;
             allocs++; live++;
             if(live > maxlive) maxlive = live;
         }
     }
-    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) { kfree(s->ptrs[i]); s->ptrs[i] = NULL; frees++; }
+    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) {
+        counted(s->ptrs[i], 0, &bytes, &blocks);
+        if(blocks != -1 || bytes != -s->held[i]) miscounted++;
+        s->ptrs[i] = NULL;
+        frees++;
+    }
     kheap_stats(&after);
     if(!kheap_check()) bad++;
-    if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
     kfree(s);
-    printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
-           allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
-    return bad ? 1 : 0;
+    printf("heaptest: %u allocs, %u frees, %u live at peak, each counted%s; the heap used %lu -> %lu bytes, %lu free "
+           "blocks: %s\n", allocs, frees, maxlive, miscounted ? " WRONG" : " right", before.bytes_used, after.bytes_used,
+           after.blocks_free, bad || miscounted ? "HEAPTEST FAIL" : "HEAPTEST PASS");
+    return bad || miscounted ? 1 : 0;
 }
 
 int heaptest() {
@@ -457,6 +491,172 @@ static void test_fpu(void) {
     check(pid[0] > 0 && pid[1] > 0 && status[0] == 0 && status[1] == 0 && saves >= 2,
           "floating point: two programs at once keep their registers (two fputest races)");
     if(saves < 2) printf("        (%lu saves of a program's registers for another's)\n", saves);
+}
+
+/* 10/25/26 (L7; the review of B1): n cats started at once, each reading a pipe whose writing end the test holds, so
+   that all of them are there together (their output to /dev/null); once all are, the end closes, each reads the end
+   of its input and exits 0. How many were there at once, and how many ended with 0 */
+static int spawn_round(struct file *null, int n, int *together) {
+    char *cat[] = { "cat" };
+    struct file *pipe[2], *files[3] = { NULL, null, null };
+    int pid[64], i, ok = 0, status;
+    u_long flags;
+    *together = 0;
+    if(pipe_files(pipe)) return 0;
+    files[0] = pipe[0];
+    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/cat", 1, cat, curTask->con, 0, files);
+    vfs_close(pipe[0]);                          /* the children have it now */
+    sleep_ms(200);
+    flags = irq_save();
+    for(i = 0; i < n; i++) {
+        surf_task *t = pid[i] > 0 ? task_find((u_long)pid[i]) : NULL;
+        if(t && t->state != TS_DEAD) (*together)++;
+    }
+    irq_restore(flags);
+    vfs_close(pipe[1]);                          /* the end of their input */
+    for(i = 0; i < n; i++) {
+        status = 99;
+        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == 0) ok++;
+    }
+    return ok;
+}
+
+/* 10/25/26 (L7): 64 programs at once, and their memory back as they end. A first round lets the kernel heap grow to
+   what 64 tasks take (it never shrinks); after a second, the heap's bytes in use are where they were, and so are the
+   frames left (free, less those promised), but for the frames the heap grew by meanwhile: each process's pages,
+   page tables, kernel stack and kernel objects went back at its end */
+static void test_spawn64(void) {
+    struct heap_stats h0, h1;
+    struct file *null;
+    struct stat st;
+    u_long a0, a1;
+    int ok1, ok2, all1, all2;
+    if(vfs_stat("/initrd/bin/cat", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
+        printf("  skip 64 programs at once (no /initrd/bin/cat or /dev/null)\n");
+        return;
+    }
+    ok1 = spawn_round(null, 64, &all1);
+    kheap_stats(&h0);
+    a0 = pmm_room(PMM_KERNEL);
+    ok2 = spawn_round(null, 64, &all2);
+    kheap_stats(&h1);
+    a1 = pmm_room(PMM_KERNEL);
+    vfs_close(null);
+    check(ok1 == 64 && ok2 == 64 && all1 == 64 && all2 == 64 && h1.bytes_used == h0.bytes_used &&
+          a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
+          "64 programs at once, twice: all there together, all end with 0, and their frames and heap bytes come back");
+    if(ok1 != 64 || ok2 != 64 || all1 != 64 || all2 != 64 || h1.bytes_used != h0.bytes_used ||
+       a0 - a1 != (h1.brk - h0.brk) / PAGE_SIZE)
+        printf("        (%d and %d of 64 together, %d and %d ended with 0; heap bytes %lu, then %lu; frames left %lu, "
+               "then %lu; the heap grew %lu KB)\n", all1, all2, ok1, ok2, h0.bytes_used, h1.bytes_used, a0, a1,
+               (h1.brk - h0.brk) / 1024);
+}
+
+/* 10/25/26 (the review of B1): programs killed while they run their own code (crash loop) die on the spot, and their
+   address spaces go to uvmreap; once nothing is left being freed (task_mem_held()), the frames left and the heap's
+   bytes in use are where they were, but for what the heap grew by. A first round lets the heap grow */
+static int kill_round(struct file *null, int n) {
+    char *loop[] = { "crash", "loop" };
+    struct file *files[3] = { NULL, null, null };
+    int pid[16], i, ok = 0, status;
+    u_long flags;
+    for(i = 0; i < n; i++) pid[i] = process_spawn_files("/initrd/bin/crash", 2, loop, curTask->con, 0, files);
+    sleep_ms(300);                               /* loaded by now, and in their loops */
+    flags = irq_save();
+    for(i = 0; i < n; i++) if(pid[i] > 0) kill_task(task_find((u_long)pid[i]));
+    irq_restore(flags);
+    for(i = 0; i < n; i++) {
+        status = 0;
+        if(pid[i] > 0 && task_wait((u_long)pid[i], &status) == pid[i] && status == -1) ok++;
+    }
+    return ok;
+}
+
+static bool nothing_dying(void) {
+    u_long programs, dying, waited;
+    for(waited = 0; waited < 3000; waited += 20) {
+        task_mem_held(&programs, &dying);
+        if(!dying) return true;
+        sleep_ms(20);
+    }
+    return false;
+}
+
+static void test_kill_memory(void) {
+    struct heap_stats h0, h1;
+    struct file *null;
+    struct stat st;
+    u_long a0, a1;
+    int ok1, ok2;
+    bool gone1, gone2;
+    if(vfs_stat("/initrd/bin/crash", &st) != 0 || vfs_open("/dev/null", O_WRONLY, &null) != 0) {
+        printf("  skip memory of killed programs (no /initrd/bin/crash or /dev/null)\n");
+        return;
+    }
+    ok1 = kill_round(null, 16);
+    gone1 = nothing_dying();
+    kheap_stats(&h0);
+    a0 = pmm_room(PMM_KERNEL);
+    ok2 = kill_round(null, 16);
+    gone2 = nothing_dying();
+    kheap_stats(&h1);
+    a1 = pmm_room(PMM_KERNEL);
+    vfs_close(null);
+    check(ok1 == 16 && ok2 == 16 && gone1 && gone2 && h1.bytes_used == h0.bytes_used &&
+          a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE,
+          "16 programs killed in their own code, twice: uvmreap frees them, and frames and heap bytes come back");
+    if(!(ok1 == 16 && ok2 == 16 && gone1 && gone2 && h1.bytes_used == h0.bytes_used &&
+         a0 - a1 == (h1.brk - h0.brk) / PAGE_SIZE))
+        printf("        (%d and %d of 16 killed; %s and %s freed; heap bytes %lu, then %lu; frames left %lu, then %lu; "
+               "the heap grew %lu KB)\n", ok1, ok2, gone1 ? "all" : "not all", gone2 ? "all" : "not all", h0.bytes_used,
+               h1.bytes_used, a0, a1, (h1.brk - h0.brk) / 1024);
+}
+
+/* 10/25/26 (L23; the review of B4): the Delete key's codes as the keyboard sends them, Ctrl+Alt+Del held down: a press
+   is a make after a break, never the keyboard's repeats (a repeat used to be a second press: a reset in the middle of
+   the shutdown's unmounts); the Delete key alone repeats as editing wants. A state of the test's own: nothing shuts
+   down */
+static void test_del_key(void) {
+    struct del_key k = { false };
+    int held = del_key_event(&k, true, true), r1 = del_key_event(&k, true, true), r2 = del_key_event(&k, true, true);
+    int up = del_key_event(&k, false, true), again = del_key_event(&k, true, true);
+    int lift = del_key_event(&k, false, false), del = del_key_event(&k, true, false), rdel = del_key_event(&k, true, false);
+    int late = del_key_event(&k, true, true);           /* Ctrl+Alt pressed while Delete is held: still no press */
+    check(held == DEL_PRESS && r1 == DEL_NOTHING && r2 == DEL_NOTHING && up == DEL_NOTHING && again == DEL_PRESS &&
+          lift == DEL_NOTHING && del == DEL_DELETE && rdel == DEL_DELETE && late == DEL_NOTHING,
+          "Ctrl+Alt+Del: a key held down is one press, a press after its break another; Delete repeats");
+}
+
+/* 10/25/26 (L17): a kernel thread's look at its own stack: every page mapped, and the guard below it (the rest of its
+   slot) not; 1 in *arg when so */
+static void kstack_look(void *arg) {
+    u_long bottom = task_stack_bottom(curTask), a;
+    int ok = curTask->stack_top - bottom == KSTACK_SIZE;
+    for(a = bottom; a < curTask->stack_top; a += PAGE_SIZE) ok = ok && vmm_is_mapped(a);
+    for(a = bottom - (KSTACK_SLOT - KSTACK_SIZE); a < bottom; a += PAGE_SIZE) ok = ok && !vmm_is_mapped(a);
+    *(int *)arg = ok;
+}
+
+/* 10/25/26 (L17): kernel stacks over their guards: the self test's own, and a new kernel thread's, unmapped once the
+   thread is collected (a slot is used again only after all the others) */
+static void test_kstack(void) {
+    u_long bottom = task_stack_bottom(curTask), a, other = 0;
+    bool mine = true, gone;
+    int seen = 0, status;
+    surf_task *t;
+    for(a = bottom; a < curTask->stack_top; a += PAGE_SIZE) mine = mine && vmm_is_mapped(a);
+    mine = mine && !vmm_is_mapped(bottom - 1) && !vmm_is_mapped(bottom - (KSTACK_SLOT - KSTACK_SIZE));
+    t = kthread_create("kstack", kstack_look, &seen, PL_NORMAL, 0);
+    if(t) {
+        other = task_stack_bottom(t);
+        task_wait(t->pid, &status);
+    }
+    gone = other && !vmm_is_mapped(other) && !vmm_is_mapped(other + KSTACK_SIZE - 1);
+    check(mine && seen == 1 && other != bottom && gone,
+          "kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected");
+    if(!(mine && seen == 1 && other != bottom && gone))
+        printf("        (this task's %s; the thread's %s, then %s)\n", mine ? "right" : "wrong",
+               seen ? "right" : (t ? "wrong" : "not made"), gone ? "unmapped" : "still mapped");
 }
 
 static bool same_info(const struct procinfo *a, const struct procinfo *b) {
@@ -1503,7 +1703,8 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks, test_kills,
-    test_user_kill, test_fpu, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_del_key, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
+    test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

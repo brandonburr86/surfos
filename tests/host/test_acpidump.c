@@ -35,6 +35,9 @@ static void check(bool ok, const char *what) {
 void kcritical_enter(void) { critical++; }
 void kcritical_leave(void) { check(critical == 1, "balanced non-nested mapping critical section"); critical--; }
 void kprintf(const char *format, ...) { (void)format; }
+/* 10/25/26 (robustness, B4): soft off's entry (kernel/acpi.c) is built with the rest and never run here */
+void mdelay(u_long ms) { (void)ms; }
+void *ioremap(u_long physical, u_long size, bool cached) { (void)physical; (void)size; (void)cached; return NULL; }
 static void put32(u8 *p, u32 value) { memcpy(p, &value, 4); }
 static void put64(u8 *p, u64 value) { memcpy(p, &value, 8); }
 static void checksum(u8 *p, u32 size) {
@@ -128,6 +131,79 @@ static void setup(u32 fadt_length, u64 extended, u32 legacy) {
     bootinfo.acpi.xsdt = regions[0].address;
     check(init_acpi() == 0, "real ACPI discovery accepts the valid root");
     exporting = true;
+}
+
+/* 10/25/26 (robustness, B4; the review of B4): soft off's values from a FADT and a DSDT built here (the FADT's other
+   fields zero, so nothing but what is set reads as a register): the PM1 control blocks, SMI_CMD, the flags (bit 20:
+   hardware-reduced) and the sleep control register; the DSDT is the header and aml */
+static void s5_setup(u32 flags, u16 pm1a, u16 pm1b, const u8 *aml, u32 aml_len, u8 sleep_space, u64 sleep_addr) {
+    unsigned i;
+    exporting = false;
+    allocation_failed = change_length = change_signature = interrupt_allocation = false;
+    fail_after = mutate_header_after = corrupt_after = 0;
+    task.intr = 0;
+    for(i = 0; i < 5; i++) regions[i].address = (i + 1) * 0x100000;
+    table(0, "XSDT", 60);
+    table(1, "DSDT", 36 + aml_len);
+    memcpy(regions[1].data + 36, aml, aml_len);
+    checksum(regions[1].data, 36 + aml_len);
+    table(2, "SSDT", 48);
+    table(3, "FACP", 268);
+    table(4, "SSDT", 52);
+    memset(regions[3].data + 36, 0, 268 - 36);
+    put64(regions[3].data + 140, regions[1].address);  /* X_DSDT */
+    put32(regions[3].data + 48, 0xb2);                  /* SMI_CMD, ACPI_ENABLE */
+    regions[3].data[52] = 0xf1;
+    put32(regions[3].data + 64, pm1a);
+    put32(regions[3].data + 68, pm1b);
+    regions[3].data[89] = 2;                            /* PM1_CNT_LEN */
+    put32(regions[3].data + 112, flags);
+    regions[3].data[244] = sleep_space;                 /* SLEEP_CONTROL_REG: space, width, offset, access, address */
+    put64(regions[3].data + 248, sleep_addr);
+    checksum(regions[3].data, 268);
+    put64(regions[0].data + 36, regions[3].address);
+    put64(regions[0].data + 44, regions[2].address);
+    put64(regions[0].data + 52, regions[4].address);
+    checksum(regions[0].data, 60);
+    memset(&bootinfo, 0, sizeof(bootinfo));
+    bootinfo.efi = true;
+    bootinfo.acpi.present = true;
+    bootinfo.acpi.revision = 2;
+    bootinfo.acpi.xsdt = regions[0].address;
+    check(init_acpi() == 0, "soft off's tables: the root is accepted");
+}
+
+static void expect_s5(bool ok, u8 a, u8 b, const char *why, const char *what) {
+    struct acpi_s5 s5;
+    int r = acpi_s5_find(&s5);
+    check(r == (ok ? 0 : -1) && s5.ok == ok && (!ok || (s5.typa == a && s5.typb == b)) &&
+          (ok || (s5.why && strstr(s5.why, why))), what);
+    check(!critical && !live, "soft off's look leaks no mapping critical section or allocation");
+}
+
+static void test_s5(void) {
+    static const u8 ovmf[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00 };
+    static const u8 intel[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x08, 0x04, 0x0a, 0x07, 0x0a, 0x07, 0x00, 0x00 };
+    static const u8 wide[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x08, 0x04, 0x0a, 0x0d, 0x0a, 0x0d, 0x00, 0x00 };
+    static const u8 s4[] = { 0x08, '_', 'S', '4', '_', 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00 };
+    s5_setup(0, 0x604, 0, ovmf, sizeof(ovmf), 0, 0);
+    check(acpi.pm1a_cnt == 0x604 && !acpi.pm1b_cnt && acpi.smi_cmd == 0xb2 && acpi.acpi_enable == 0xf1,
+          "the FADT's PM1a control block, SMI_CMD and ACPI_ENABLE");
+    expect_s5(true, 0, 0, NULL, "OVMF's \\_S5_: SLP_TYP 0 and 0");
+    s5_setup(0, 0x1804, 0x1904, intel, sizeof(intel), 0, 0);
+    expect_s5(true, 7, 7, NULL, "Intel's: 7 and 7, with a PM1b");
+    s5_setup(0, 0x1804, 0x1904, wide, sizeof(wide), 0, 0);
+    expect_s5(false, 0, 0, "out of range", "SLP_TYP 0x0D is refused, never cut to 5 (S3 on Intel's)");
+    s5_setup(0, 0, 0, intel, sizeof(intel), 0, 0);
+    expect_s5(false, 0, 0, "no PM1 control block", "no PM1a control block: no soft off");
+    s5_setup(0, 0x604, 0, s4, sizeof(s4), 0, 0);
+    expect_s5(false, 0, 0, "declares no", "a DSDT without \\_S5_: no soft off");
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 1, 0x404);
+    expect_s5(true, 7, 7, NULL, "hardware-reduced ACPI: the sleep control register at a port");
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 1, 0x10060);
+    expect_s5(false, 0, 0, "can write", "a sleep control register past port 0xFFFF is refused (it would be port 0x60)");
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 0, 0xfed01000);
+    expect_s5(true, 7, 7, NULL, "hardware-reduced ACPI: the sleep control register in memory");
 }
 
 static void expect_copy(const char *signature, unsigned instance, int wanted, u32 size) {
@@ -250,6 +326,7 @@ int main(void) {
     char *overflow[] = { "acpidump", "SSDT", "4294967296" };
     char *second[] = { "acpidump", "DSDT", "1" };
 
+    test_s5();
     setup(148, 0x200000, 0xdead0000);
     check(acpi.dsdt_addr == 0x200000, "X_DSDT wins over the legacy address");
     expect_copy("DSDT", 0, ACPI_COPY_OK, 64);

@@ -66,10 +66,11 @@ class SessionOutputTests(unittest.TestCase):
     def test_refused(self):
         for cmd in ('reboot', ' reboot', 'echo a; reboot', 'run reboot', 'spawn reboot', 'mkfs usb1p1',
                     'mkfs -t fat32 usb1p1 X', 'fdisk usb1 new mbr', 'fdisk usb1 add', 'ls & fdisk usb1 delete 1',
-                    'telnetd off', '/initrd/bin/telnetd off'):
+                    'telnetd off', '/initrd/bin/telnetd off', 'poweroff', 'echo a; poweroff', 'run poweroff',
+                    'poweroff -nx', 'crashstack', 'crashstack near', 'echo a; crashstack'):
             self.assertIsNotNone(devloop.refused(cmd), cmd)
         for cmd in ('lsblk', 'fdisk usb1', 'fdisk', 'echo reboot', 'dmesg', 'cat /initrd/etc/build-id', 'rebooted',
-                    'telnetd', 'telnetd status'):
+                    'telnetd', 'telnetd status', 'poweroff -n', 'echo poweroff'):
             self.assertIsNone(devloop.refused(cmd), cmd)
 
 

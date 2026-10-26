@@ -32,22 +32,40 @@ static void print_frame(u_long eip) {
 }
 
 /* Walk the saved-EBP chain (the kernel is built with frame pointers). Every frame is
-   checked against the page tables first so a bad pointer cannot fault inside a panic. */
+   checked against the page tables first so a bad pointer cannot fault inside a panic.
+   10/25/26 (robustness, L17): a frame that repeats the one above it (a recursion, as in a
+   kernel stack overflow) is counted, not printed, and the walk goes on past it, so the
+   report shows who started the recursion and still fits on the screen: 24 lines at most. */
 void backtrace(u_long ebp, u_long eip) {
-    int depth;
-    u_long prev = 0;
+    int depth, lines = 0;
+    u_long prev = 0, last = 0, same = 0;
 
     kprintf("Backtrace:\n");
-    if(eip) print_frame(eip);
-    for(depth = 0; depth < 24; depth++) {
+    if(eip) {
+        print_frame(eip);
+        lines++;
+        last = eip;
+    }
+    for(depth = 0; depth < 1024 && lines < 24; depth++) {
         u_long *frame = (u_long *)ebp;
         if(ebp < 0x1000 || (ebp & 3) || ebp <= prev) break;
         if(!vmm_is_mapped(ebp) || !vmm_is_mapped(ebp + 4)) break;
         if(!frame[1]) break;
-        print_frame(frame[1]);
+        if(frame[1] == last) same++;
+        else {
+            if(same) {
+                kprintf("  (the same %lu more times)\n", same);
+                lines++;
+                same = 0;
+            }
+            print_frame(frame[1]);
+            lines++;
+            last = frame[1];
+        }
         prev = ebp;
         ebp = frame[0];
     }
+    if(same) kprintf("  (the same %lu more times)\n", same);
 }
 
 void backtrace_here(void) {

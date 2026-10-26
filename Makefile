@@ -61,6 +61,8 @@ USER_PROGS  += fputest       # 10/25/26 (robustness): a program's floating point
 USER_PROGS  += wintest       # 10/25/26: the window calls from user space (surfos/win.h)
 USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
 USER_PROGS  += wcalc         # 10/25/26: the desktop's Calculator as a program
+USER_PROGS  += memhog        # 10/25/26 (robustness): a program that takes all the memory it can
+USER_PROGS  += toobig        # 10/25/26 (the review of B1): a program too big to load under QEMU (init retries it)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -490,6 +492,23 @@ test-fatfs: $(BUILD)/host/test_fatfs
 	$(BUILD)/host/test_fatfs
 unittest: test-fatfs
 .PHONY: test-fatfs
+
+# 10/25/26 (robustness, B1): the kernel heap, mm/kalloc.c as it is, in a static array of the test whose frame
+# allocator refuses on demand (tests/host/kalloc_host.h, test_kalloc.c), and the rule of the frame classes (mm/pmm.h)
+KALLOC_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+$(BUILD)/host/kalloc/mm/kalloc.o: mm/kalloc.c tests/host/kalloc_host.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (kalloc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) -include tests/host/kalloc_host.h -c $< -o $@
+
+$(BUILD)/host/test_kalloc: tests/host/test_kalloc.c tests/host/kalloc_host.h $(BUILD)/host/kalloc/mm/kalloc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) $(filter %.c %.o,$^) -o $@
+
+test-kalloc: $(BUILD)/host/test_kalloc
+	$(BUILD)/host/test_kalloc
+unittest: test-kalloc
+.PHONY: test-kalloc
 
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
@@ -1057,7 +1076,8 @@ unittest: unittest-mouse
 .PHONY: unittest-mouse
 
 # Read-only firmware AML export, including runtime mapping ownership.
-$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o \
+                             $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)   # 10/25/26: acpi.c reads \_S5_ (B4)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 $(BUILD)/host/test_acpidump $(BUILD)/host/kernel/kernel/acpi.o: HOSTKERN_FLAGS += -fgnu89-inline
 unittest-acpi: $(BUILD)/host/test_acpidump

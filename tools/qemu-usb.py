@@ -169,9 +169,12 @@ PORTABLE = [
     # 10/25/26 (robustness, L10, L11): a program's floating point after the firmware and GRUB (the kernel sets CR4's
     # OSFXSR and OSXMMEXCPT from CPUID whatever they left)
     ('fputest', ['control words at the start: x87 0x037f, MXCSR 0x1f80', 'SSE2: 1.5 + 2.25 = 3.75', 'FPUTEST PASS']),
+    # 10/25/26 (robustness, L1-L9): a program that takes all a program may have, on real (OVMF) memory: it stops at
+    # the kernel's reserve, the machine goes on
+    ('memhog', ['blocks of 64 KB before malloc failed', 'memhog: given back']),
     ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),
 ]
-TIMEOUTS = {'selftest': 180, 'heaptest': 60}
+TIMEOUTS = {'selftest': 180, 'heaptest': 60, 'memhog': 120}
 
 # (keys to type, strings that must be on the screen afterwards) - keyboard and framebuffer only
 KEYBOARD = [
@@ -1024,6 +1027,96 @@ def scenario_kernel_shell(args, image, firmware, outdir):
         check_bad(vm, results, vm.text())
     finally:
         vm.close()
+    return results
+
+
+def scenario_crashstack(args, image, firmware, outdir):
+    """10/25/26 (robustness, L16, L17): on the laptop's path (UEFI, the framebuffer console, the local APIC), crashstack
+    uses up surfsh's kernel stack until it runs into the guard below it. The double fault's task gate reports it on the
+    serial line and on the screen (the laptop has no serial line), and the machine halts: QEMU runs on (-no-reboot
+    would end it at a reset)"""
+    results = []
+    vm = Vm('crashstack', args, image, firmware, mem='512', serial=True, outdir=outdir)
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            vm.send('crashstack\n')
+            ok = vm.expect("kernel stack overflow in 'surfsh' (pid ", 30) and vm.expect('crash_down', 30) and \
+                vm.expect('cmd_crashstack+0x', 30) and vm.expect('SYSTEM HALTED', 30)
+            results.append(('crashstack: a kernel stack overflow reported, with a backtrace, and the machine halted', ok))
+            # the screen may still be catching up (the report scrolls it, and each scroll repaints every cell) when the
+            # serial line has its last word, more so on a loaded host: screens are taken until both are there
+            scr = vm.wait_screen(lambda s: any('kernel stack overflow' in r for r in s.rows) and
+                                 any('SYSTEM HALTED' in r for r in s.rows), 20)
+            vm.screen('crashstack.png')
+            results.append(('the report is on the screen too', scr is not None))
+        text = vm.text()
+        for bad in BAD:
+            if bad != 'SYSTEM HALTED':                  # this one is the point here
+                results.append((f'no "{bad}"', bad not in text))
+        results.append(('QEMU still running: halted, not reset', vm.proc.poll() is None))
+    finally:
+        vm.close()
+    return results
+
+
+def scenario_shutdown(args, image, firmware, outdir):
+    """10/25/26 (robustness, L22-L24): a clean reboot and poweroff on the laptop's path. A copy of the stick from another
+    computer (foreign-fat32.img) mounted read-write and written; reboot ends the programs, writes the stick out and
+    unmounts it, and resets: GRUB comes back, and the stick mounts again trusting its free count ("(FSInfo)", which only
+    a volume unmounted cleanly gets). poweroff then turns the machine off with ACPI S5 from the DSDT OVMF hands over:
+    QEMU ends. Read here: fsck_msdos and fsck.fat on the stick, and the file SurfOS wrote"""
+    results = []
+    foreign_src = find_image('foreign-fat32.img')
+    if not foreign_src:
+        return [('the foreign FAT32 image exists (make images)', False)]
+    tmpd = tempfile.mkdtemp(prefix='surfos-shutdown-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'stick.img')
+    shutil.copyfile(foreign_src, stick)
+    vm = Vm('shutdown', args, image, firmware, mem='512', serial=True, outdir=outdir, reboot=True,
+            extra=['-drive', f'if=none,id=d1,format=raw,file={stick}',
+                   '-device', 'usb-storage,bus=xhci.0,drive=d1,removable=on'])
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            ok = run_cmd(vm, 'mount usb1p1 /stick', [])[0] and run_cmd(vm, 'echo shutdown-test > /stick/SHUTDOWN.TXT', [])[0]
+            results.append(('the stick mounted read-write and written', ok))
+            mark, tmark = len(vm.transcript), len(vm.text())
+            vm.send('reboot\n')
+            # (the last line, "resetting the machine", may be cut by the reset: GRUB coming back says it)
+            ok = ok and in_order(vm, ['shutdown: reboot: the programs end, the volumes are written out',
+                                      'programs and shells ended', 'shutdown: /stick written out and unmounted'],
+                                 60, tmark)
+            results.append(('reboot: the programs ended, the stick written out and unmounted, then the reset', ok))
+            ok = ok and vm.expect("Booting `SurfOS'", args.boot_timeout) and vm.expect(PROMPT, args.boot_timeout)
+            results.append(('GRUB again, and SurfOS boots', ok))
+            if ok:
+                good, out = run_cmd(vm, 'mount usb1p1 /stick', [])
+                again = vm.transcript[mark:].decode(errors='replace')
+                results.append(('the stick mounts again trusting its free count: (FSInfo), no "not unmounted cleanly"',
+                                good and '(FSInfo)' in again.split("Booting `SurfOS'")[-1] and
+                                'not unmounted cleanly' not in again))
+                results.append(('and the file is there', run_cmd(vm, 'cat /stick/SHUTDOWN.TXT', ['shutdown-test'])[0]))
+                tmark = len(vm.text())
+                vm.send('poweroff\n')
+                ok = in_order(vm, ['shutdown: poweroff: the programs end, the volumes are written out',
+                                   'shutdown: /stick written out and unmounted'], 60, tmark)    # then QEMU ends
+                deadline = time.time() + 20
+                while vm.proc.poll() is None and time.time() < deadline:
+                    vm.pump(0.3)
+                results.append(('poweroff: the stick written out and unmounted, ACPI S5, and QEMU ends',
+                                ok and vm.proc.poll() is not None))
+        text = vm.text()
+        for bad in BAD:
+            results.append((f'no "{bad}"', bad not in text))
+        results.append(('no "safe to turn off" (soft off worked)', 'safe to turn off' not in text))
+    finally:
+        vm.close()
+    for what, ok, text in fat_checks(stick, 'stick after the shutdown'):
+        results.append((what, ok))
+        if not ok:
+            print(text, flush=True)
+    results.append(('the file SurfOS wrote reads back elsewhere (a FAT32 reader)',
+                    read_fat32(stick, 'SHUTDOWN.TXT') == b'shutdown-test\n'))
+    shutil.rmtree(tmpd, ignore_errors=True)
     return results
 
 
@@ -2236,7 +2329,7 @@ def scenario_settings(args, image, firmware, outdir):
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
-             'no-pit': scenario_nopit,
+             'no-pit': scenario_nopit, 'crashstack': scenario_crashstack, 'shutdown': scenario_shutdown,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
              'settings': scenario_settings,
@@ -2342,7 +2435,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
+                               'crashstack', 'shutdown', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None

@@ -10,6 +10,13 @@ merged in both directions; free blocks keep their list links in the payload. Fir
 splitting, 16 byte alignment, poisoning on free, and a bad pointer panics instead of
 corrupting the lists. The 2004 allocator never merged, leaked its descriptors and read
 address 4 when its free list was empty (audit M1-M4, M11).
+
+10/25/26 (robustness, L2): the kernel heap stays demand-paged, and out of memory is a NULL from
+kalloc(), never a panic in the page fault. Growing the heap promises the frames its new pages
+will take (pmm_commit()): as PMM_BULK for a request over GROW_CHUNK (the desktop's buffers, a
+copy of the DSDT), as PMM_KERNEL otherwise. When they cannot be promised the growth fails, and
+so does the allocation; the page fault (mm/paging.c) takes a promised frame, below the heap's
+top only.
 */
 
 #include <surfos/types.h>
@@ -18,6 +25,7 @@ address 4 when its free list was empty (audit M1-M4, M11).
 #include <surfos/console.h>
 #include <mm/memory.h>
 #include <mm/kalloc.h>
+#include <mm/pmm.h>
 #include <blibc_common.h>
 
 #define HEAP_ALIGN 16
@@ -84,24 +92,35 @@ static void fl_remove(struct heap *h, struct hblock *b) {
 }
 
 /* Add room at the top of the heap as one free block (merged with the last block if that
-   is free). Touching the new header maps the page in the kernel heap. */
+   is free). Touching the new header maps the page in the kernel heap. 10/25/26 (L2): the
+   kernel heap's new pages have their frames promised first (GROW_CHUNK, or just what the
+   request needs when that much cannot be), and the top moves before anything is touched:
+   the page fault maps pages below it only. 10/25/26 (the review of B1): a free last block
+   is merged with the growth, so only what it lacks is grown and promised (a 100 KB request
+   over a free 60 KB top promised 26 pages for 11). */
 static struct hblock *heap_grow(struct heap *h, u_long need) {
-    u_long chunk = need + HEAP_HDR;
+    u_long more = h->last && h->last->magic == MAGIC_FREE ? need - h->last->size : need + HEAP_HDR;
+    u_long chunk = more, least = (more + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    int cls = need > GROW_CHUNK ? PMM_BULK : PMM_KERNEL;
     struct hblock *b;
 
     if(chunk < GROW_CHUNK) chunk = GROW_CHUNK;
     chunk = (chunk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if(h->brk + chunk > h->limit) {
-        chunk = (need + HEAP_HDR + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        chunk = least;
         if(h->brk + chunk > h->limit) return NULL;
+    }
+    if(h == &kheap && pmm_commit(chunk / PAGE_SIZE, cls)) {
+        if(chunk == least || pmm_commit(least / PAGE_SIZE, cls)) return NULL;
+        chunk = least;
     }
 
     b = (struct hblock *)h->brk;
+    h->brk += chunk;
     b->magic = MAGIC_FREE;
     b->size = chunk - HEAP_HDR;
     b->prev_size = h->last ? h->last->size : 0;
     b->heapid = h->id;
-    h->brk += chunk;
     h->grows++;
 
     if(h->last && h->last->magic == MAGIC_FREE) { /* merge into the free block below */
@@ -264,6 +283,7 @@ void *kalloc_dma(size_t size) { return heap_alloc(&dmaheap, size); }
 void kfree_dma(void *mem) { heap_free(&dmaheap, mem); }
 
 void kheap_stats(struct heap_stats *st) { heap_fill_stats(&kheap, st); }
+u_long kheap_top(void) { return kheap.brk; }     /* 10/25/26 (L2): the page fault maps the heap below this only */
 void dmaheap_stats(struct heap_stats *st) { heap_fill_stats(&dmaheap, st); }
 bool kheap_check(void) { return heap_check(&kheap) && heap_check(&dmaheap); }
 

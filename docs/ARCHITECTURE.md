@@ -17,7 +17,7 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | CPU mode | 32-bit protected mode, paging on, single CPU; **ai-dev**: CR0/CR4 set explicitly, x87 initialised |
 | Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB; **ai-dev**: also Multiboot 2 (GRUB on UEFI, the USB image, section 14) |
 | Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80`; **ai-dev** (10/6/26): the shell is a ring-3 program, surfsh, on every console, and the ring-0 shell is the recovery console (section 17) |
-| Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack |
+| Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack; 10/25/26: a second TSS (0x30), the double fault's task (section 6) |
 | Memory | Identity map of the low 16 MB, demand-paged kernel heap at 0xB0000000, a page directory per process with the user range 0x40000000-0x7FFFFFFF |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task; **ai-dev** `profile=laptop`: the 8259s reach the CPU through the local APIC (virtual wire), whose timer is the fallback tick |
@@ -173,6 +173,8 @@ defined in `include/mm/memory.h` and `include/sys/dma.h`.
 | placed at boot (**ai-dev**) | DMA heap | 5 MB, `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
 | the rest of RAM below 4 GB | Free page frames | From the memory map, minus the reserved ranges (low memory and the kernel, modules, framebuffer, arenas) |
 | 0x40000000 - 0x7FFFFFFF | User range (per process) | ELF image from 0x40000000, sbrk heap above it, stack growing down from 0x80000000 (up to 4 MB); `mm/uvm.c` |
+| 0x80000000 - 0x8FFFFFFF | Page-table window (10/25/26) | The processes' page directories and tables, in frames of the programs' class, mapped for the kernel (`UVMWIN`, `mm/uvm.c`) |
+| 0x90000000 - 0x93FFFFFF | Kernel stacks (10/25/26) | 2048 slots of 32 KB: a task's 16 KB stack mapped from frames at the top of its slot, the 16 KB below left unmapped as its guard (`KSTACK_WIN_START`, `kernel/task.c`) |
 | 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
 | 0xC0000000 - 0xCFFDFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
 | 0xCFFE0000 - 0xCFFFFFFF | `vmm_temp_map()` (**ai-dev**) | One read-only view of a firmware table at a time (ACPI) |
@@ -192,6 +194,19 @@ the page fault handler maps kernel-heap pages on demand and reports every other 
 with address and cause. `mm/kalloc.c` is a first-fit allocator with 16-byte headers,
 splitting, merging in both directions, poisoning and bad-pointer panics, instantiated
 twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` churns it.
+
+10/25/26 (robustness, L1-L9): out of memory is a program's, never the machine's. Each frame is
+asked for by a class (`mm/pmm.h`): programs (`PMM_USER`: their pages, page tables and
+directories) stop while the kernel's reserve is left, a 32nd of the frames between 2 and 16 MB;
+large kernel buffers (`PMM_BULK`) stop at half of it; the kernel (`PMM_KERNEL`, `pmm_alloc()`)
+may take the last frame. The kernel heap stays demand-paged, but growing it promises the frames
+its new pages will take (`pmm_commit()`, as BULK for a request over 64 KB), and a growth that
+cannot be promised makes `kalloc()` return NULL; the page fault takes a promised frame below the
+heap's top, and a fault above it is a stray pointer. A program meets a full machine as malloc()
+returning NULL, a spawn refused with ENOMEM (fewer than 16 frames left for programs), or, when
+its stack cannot grow, its end with "out of memory: its stack could not grow". Its memory goes
+when it ends (section 5). `memstat` adds the reserve, the frames promised to the heap, the fewest
+ever left, each class's refusals, and what programs hold; `memhog` takes all a program may have.
 
 ## 5. Tasks and scheduling (`kernel/task.c`)
 
@@ -218,7 +233,8 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   at the end of its call, section 17);
   init (pid 1) collects detached and orphaned tasks and restarts a shell when one
   dies. Nothing frees a stack that may still be running, and every kernel stack is
-  pre-faulted at creation (a stack page fault would double-fault). **ai-dev** (10/6/26):
+  mapped in full at creation (a fault on the stack could not push its own frame).
+  **ai-dev** (10/6/26):
   `task_exit()` closes the task's descriptors first, in its own context, so a background
   program's file is written and its volume can be unmounted before anyone collects it (a
   killed task's are closed at `reap()`, as before); `task_wait_opts(pid, &status,
@@ -251,6 +267,40 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   kernel never uses the FPU: it is built with `-mno-80387` (a float in kernel code fails to
   link), and a #NM in ring 0 panics. CR4.OSFXSR and OSXMMEXCPT follow CPUID
   (`kernel/cpu.c`), `cpuinfo` has an FPU line, and `fputest` checks it all.
+* 10/25/26 (robustness, L7): a process's memory goes when it ends, not when it is collected.
+  `task_exit()` destroys the address space after closing the files (detached, the kernel's
+  directory loaded first, with interrupts off). A task killed on the spot (a fault, Ctrl+C in a
+  program's own code, a kill that waited too long) may die inside an interrupt, where nothing is
+  freed: `become_zombie()` hands its address space to the `uvmreap` kernel thread (pid 2), which
+  frees it. `schedule()` compares the next task's address space with the one loaded
+  (`uvm_current()`), so a dying task's directory is never left loaded under a kernel thread.
+* 10/25/26 (robustness, L16-L18): kernel stacks have guards. A task's 16 KB stack is the top of
+  a 32 KB slot in a window of its own (0x90000000-0x93FFFFFF, `kstack_alloc()` from
+  `task_alloc()`, `kstack_free()` from `reap()`, after `kcmd_task_gone()` has read it), mapped
+  from frames when the task is made: a process's from the programs' class (`PMM_USER`), a kernel
+  thread's from the kernel's. The 16 KB below it stay unmapped. A stack that overflows faults
+  there, the page fault cannot push its frame on that stack, and the double fault that follows
+  comes through a task gate to a stack of its own (section 6), which says "kernel stack overflow
+  in 'name' (pid n)" with a backtrace and halts the machine. A trap frame that lands within 1 KB
+  of its stack's bottom halts it earlier, with "nearly full". The idle task keeps the 16 KB boot
+  stack, which has no guard. The 2004 stacks were kernel-heap blocks with nothing below them but
+  other blocks (M10). `crashstack` overflows the stack of the task that runs it.
+* 10/25/26 (robustness, L22-L24): the shutdown. `reboot` and `poweroff` (kernel commands) and
+  Ctrl+Alt+Del (through init: the keyboard's interrupt handler only wakes it) start the
+  `shutdown` kernel thread (`kernel/shutdown.c`). It moves to `/`; from then on init starts no
+  shell and a spawn says EAGAIN (`shutdown_started()`); it runs the hooks (`shutdown_hook()`, for
+  track A's history), which may still write the stick, and ends every process and ring-0 shell
+  with the kill that waits for the end of the call each is in (`task_end_users()`,
+  `kill_task_patient()`), again on each pass of its wait so that a task a spawn under way makes
+  meanwhile goes too, 10 s at most, naming any left. Then the network manager mounts nothing
+  more (`shutdown_unmounting()`) and what it is doing on the stick ends (`netman_stick_idle()`),
+  and the volumes mounted read-write, however many, are written out and unmounted, the last
+  mounted first, all in a worker it waits for 15 s at most (a busy one tried again every
+  250 ms), so a volume lock held for ever cannot hang it; one it cannot unmount is written out
+  (`vfs_sync()`) and left marked not cleanly unmounted. Ctrl+Alt+Del held down is one press
+  (`del_key_event()`). Then `reset()`, or ACPI S5 (section 14); when neither
+  works it says "It is now safe to turn off your computer." and halts. Every step is a line on
+  F1 beginning `shutdown:`.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -276,6 +326,19 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   and not acknowledged. IRQ masking is under `irq_save()`.
 * `init_interrupt()` populates all 256 IDT entries (int 0x80 with DPL 3 for the
   future syscall gate), remaps the PICs to 0x20/0x28 and enables the cascade.
+* 10/25/26 (robustness, L16, L18): the double fault (8) is a task gate, the only one. It
+  switches to a second TSS (selector 0x30, `kernel/gdt.c`) with its own 8 KB stack, the
+  kernel's page directory and interrupts off, so a fault whose frame could not be pushed (a
+  kernel stack that ran into its guard, section 5) is reported instead of becoming a triple
+  fault, a silent reset. The interrupted state is what the task switch saved in the main TSS
+  (`tss_main()`); `double_fault_task()` (`kernel/panic.c`) names the task whose guard holds the
+  fault's address (CR2) or the stack pointer ("kernel stack overflow in ..."), or says "Double
+  Fault", prints the registers and a backtrace on the console shown and the serial line, and
+  halts: an interrupt may have been in progress and locks may be held. `trap_dispatch()` also
+  halts the machine when a trap frame lands within `KSTACK_LOW` (1 KB) of the running task's
+  stack bottom; its report would not fit there, so it is made from the same task (`int $8`,
+  which ring 3 cannot reach). Backtraces fold a frame that repeats the one above it into one
+  line, so a recursion's report shows where it started and fits on the screen.
 * Backtraces: `tools/gensyms.py` turns the link map into a `.ksyms` table (the
   kernel is linked twice; the table sits after the code so nothing moves) and
   `kernel/ksym.c` walks the frame-pointer chain, checking each frame against the
@@ -332,7 +395,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   never takes.
 * Keyboard (`kernel/keyboard.c`, roadmap C2): scan-code set 1 with the E0 prefix
   (arrows, Home/End, PgUp/PgDn, Insert/Delete), shift, caps lock on letters, num
-  lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots.
+  lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots (10/25/26:
+  through the shutdown, which init starts; pressed again it resets at once).
   Special keys arrive in the tty as codes above 0x80 (`include/surfos/keyboard.h`).
   The ISR does nothing but decode and queue; the 2004 debug hooks are gone.
 * **Escape sequences and raw mode** (**ai-dev**, for the text editor; `include/surfos/tty.h`
@@ -556,7 +620,11 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   everything mapped into them later, heap pages included) are shared; the user range
   0x40000000-0x7FFFFFFF is built from per-process page tables kept in kernel heap
   pages. User frames come from `pmm_alloc()` and are zeroed through their user
-  mapping, which is why a process builds its own image inside its own task.
+  mapping, which is why a process builds its own image inside its own task. 10/25/26
+  (L1, L4-L6): user frames, page tables and directories are all frames of the programs' class;
+  the tables and directories are mapped for the kernel in the window at 0x80000000; mapping
+  says -ENOMEM when no frame may be had, and `sbrk()` gives back what a growth it could not
+  finish mapped.
   `schedule()` reloads CR3 only when the next task belongs to another address space;
   kernel threads run in whichever directory is loaded. The user stack grows from a
   page fault (`uvm_grow_stack()`, up to 4 MB below 0x80000000), `sbrk()` grows a heap
@@ -733,9 +801,10 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 | `help`, `clear`, `echo`, `tick`, `uptime`, `date`, `ps`, `kill`, `sleep`, `memstat`, `dmesg`, `irqstat`, `bootinfo`, `lpstat`, `test` | Work |
 | `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
 | `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task (from surfsh: the surfsh process); the first three kill it and init restarts it, the last is reported and ignored |
+| `crashstack [near]` | 10/25/26: overflows the task's kernel stack, or traps 512 bytes above its bottom: the double fault's report, then SYSTEM HALTED (section 6) |
 | `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
-| `reboot` | Pulses the keyboard controller reset line |
+| `reboot [-f]`, `poweroff [-n]` | 10/25/26: the shutdown (section 5): the programs end, the read-write volumes are written out and unmounted, then the machine resets or turns off (ACPI S5); `reboot -f` resets at once, as the 2004 command did; `poweroff -n` says what poweroff would do |
 | `lsblk [-s]` | **ai-dev**: disks and partitions as `NAME SIZE BUS RM TYPE MODEL/LABEL STATUS`, the status `mounted`, `boot drive: protected`, `internal: never formatted` or `read-only`; `-s` the blocks each device has moved |
 | `fdisk <disk>` | **ai-dev**: the partition table, the free space and whether the disk may be changed; with `new mbr` or `new gpt`, `add [size] [type]`, `delete <n>` or `type <n> <type>`, a change (section 16) |
 | `mkfs [-t fat16 or fat32] <dev> [label]` | **ai-dev**: a new FAT volume; a partition gets the matching type, a whole disk loses its old partitions |
@@ -832,6 +901,17 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
   transfer path. Both feed the [desktop pointer queue](GUI.md). Only the
   initrd is mounted. Debug words: `timer=lapic`, `kbd=poll`, `kbd=irq`, `clock=pmtmr`,
   `clock=hpet`.
+* **Soft off** (10/25/26, robustness, L20, L21). `poweroff` takes from the FADT the PM1a and
+  PM1b control blocks (their extended forms when those name I/O ports), SMI_CMD with
+  ACPI_ENABLE, and for hardware-reduced ACPI the sleep control register, and the SLP_TYP
+  values of `\_S5_` from a copy of the DSDT: `aml_sleep_type()` (`driver/amlfield.c`, beside
+  the field reader, host-tested) finds the Name at the root, declared once and outside any If,
+  and reads its package of numbers without running AML (one element: ACPICA's two bytes).
+  `acpi_s5_enter()` then, with interrupts off and the caches written back, switches the machine
+  to ACPI mode through SMI_CMD if SCI_EN is clear (300 ms at most), writes SLP_TYP into PM1a
+  and PM1b and then SLP_TYP with SLP_EN, and gives up after 3 s. The legacy profile reads the
+  ACPI tables only then, quietly (`acpi_read(true)`; the BIOS data area through the firmware
+  window, since page 0 is unmapped by then); its boot reads none. `poweroff -n` shows the values.
 * **The framebuffer lock.** Whoever draws holds a busy flag and cannot be preempted until
   it lets go (a task killed while drawing would keep it, and the screen would freeze);
   a task killed by an exception gives it back, and `panic()` and the wipeout path take

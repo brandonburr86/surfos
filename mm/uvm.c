@@ -4,6 +4,8 @@ SurfOS User Address Spaces
 File: uvm.c     Date: 10/3/26 (roadmap P1)
 --------------------
 See include/mm/uvm.h.
+10/25/26 (robustness, L4-L6): directories and tables in programs' frames in the window, user
+frames of the programs' class, -ENOMEM said, and sbrk() takes back what it could not finish.
 */
 
 #include <surfos/types.h>
@@ -15,10 +17,12 @@ See include/mm/uvm.h.
 #include <mm/pmm.h>
 #include <mm/kalloc.h>
 #include <mm/uvm.h>
+#include <fs/vfs.h>
 #include <blibc_common.h>
 
 extern u_long *page_directory;                  /* mm/paging.c: the kernel's */
 static struct uvm *current_uvm;                 /* NULL while the kernel directory is loaded */
+static u_long freeing;                          /* 10/25/26 (the review of B1): frames uvm_destroy() has still to free */
 
 static inline void invlpg(u_long virt) {
     asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
@@ -32,43 +36,90 @@ u_long kernel_pdir_phys(void) {
     return (u_long)page_directory;              /* in .bss, inside the identity map */
 }
 
-/* a page-aligned, zeroed, mapped 4 KB block from the heap; *raw is what to kfree() */
-static u_long *alloc_table_page(void **raw) {
-    u8 *p = (u8 *)kalloc(2 * PAGE_SIZE);
-    u_long *aligned;
-    if(!p) return NULL;
-    aligned = (u_long *)PAGE_ALIGN_UP((u_long)p);
-    memset(aligned, 0, PAGE_SIZE);              /* also faults the heap page in, so it has a frame */
-    *raw = p;
-    return aligned;
+#define WIN_SLOTS ((UVMWIN_END - UVMWIN_START) / PAGE_SIZE)
+static u32 win_used[WIN_SLOTS / 32];            /* 10/25/26 (L4): the window's pages in use */
+static u_long win_next;                         /* where the next search for a free one starts */
+
+/* 10/25/26 (L4): a page for a directory or a table: a frame of the programs' class (PMM_USER), mapped for the
+   kernel in the window and zeroed; its frame in *phys. NULL when there is none. A program's tables never come out
+   of the kernel heap (they took 8 KB of it each), so no program drains the kernel through them. */
+static u_long *table_page_alloc(u_long *phys) {
+    u_long frame = pmm_alloc_as(PMM_USER), slot = 0, i, flags, va;
+    if(!frame) return NULL;
+    flags = irq_save();
+    for(i = 0; i < WIN_SLOTS; i++) {
+        slot = (win_next + i) % WIN_SLOTS;
+        if(!(win_used[slot / 32] & (1u << (slot % 32)))) break;
+    }
+    if(i == WIN_SLOTS) {                        /* 256 MB of tables: RAM runs out first */
+        irq_restore(flags);
+        pmm_free(frame);
+        return NULL;
+    }
+    win_used[slot / 32] |= 1u << (slot % 32);
+    win_next = slot + 1;
+    irq_restore(flags);
+    va = UVMWIN_START + slot * PAGE_SIZE;
+    vmm_map(va, frame, PTE_W);                  /* the kernel's tables: every address space sees it */
+    memset((void *)va, 0, PAGE_SIZE);
+    *phys = frame;
+    return (u_long *)va;
+}
+
+static void table_page_free(u_long *page) {
+    u_long va = (u_long)page, slot = (va - UVMWIN_START) / PAGE_SIZE, frame = vmm_get_phys(va) & PTE_FRAME, flags;
+    vmm_unmap(va);
+    pmm_free(frame);
+    flags = irq_save();
+    win_used[slot / 32] &= ~(1u << (slot % 32));
+    irq_restore(flags);
 }
 
 struct uvm *uvm_create(void) {
     struct uvm *m = (struct uvm *)kcalloc(1, sizeof(struct uvm));
     u_int i;
     if(!m) return NULL;
-    m->pdir = alloc_table_page(&m->pdir_raw);
+    m->pdir = table_page_alloc(&m->pdir_phys);
     if(!m->pdir) { kfree(m); return NULL; }
+    m->table_pages = 1;
     memcpy(m->pdir, page_directory, PAGE_SIZE); /* kernel mappings: the same tables */
     for(i = 0; i < USER_PDE_COUNT; i++) m->pdir[USER_PDE_FIRST + i] = 0;
-    m->pdir_phys = vmm_get_phys((u_long)m->pdir);
     m->stack_low = USER_END;
     return m;
 }
 
+/* 10/25/26 (the review of B1): its frames count as being freed (uvm_freeing()) from the start until each is free again */
+static void freed_one(void) {
+    u_long flags = irq_save();
+    freeing--;
+    irq_restore(flags);
+}
+
 void uvm_destroy(struct uvm *m) {
     u_int i, j;
+    u_long flags;
     if(!m) return;
     if(m == current_uvm) panic("uvm_destroy: the address space is in use");
+    flags = irq_save();
+    freeing += m->pages + m->table_pages;
+    irq_restore(flags);
     for(i = 0; i < USER_PDE_COUNT; i++) {
         if(!m->tables[i]) continue;
         for(j = 0; j < 1024; j++) {
-            if(m->tables[i][j] & PTE_P) pmm_free(m->tables[i][j] & PTE_FRAME);
+            if(!(m->tables[i][j] & PTE_P)) continue;
+            pmm_free(m->tables[i][j] & PTE_FRAME);
+            freed_one();
         }
-        kfree(m->tables_raw[i]);
+        table_page_free(m->tables[i]);
+        freed_one();
     }
-    kfree(m->pdir_raw);
+    table_page_free(m->pdir);
+    freed_one();
     kfree(m);
+}
+
+u_long uvm_freeing(void) {
+    return freeing;
 }
 
 void uvm_switch(struct uvm *m) {
@@ -80,40 +131,67 @@ struct uvm *uvm_current(void) {
     return current_uvm;
 }
 
+/* 10/25/26 (the review of B1): a page taken for m is recorded in m before interrupts come back on, here and in
+   uvm_map_page(): a kill that has waited 2 s ends the task on the spot from the timer (kill_escalate()), and
+   uvm_destroy() frees only what m records */
 static u_long *table_for(struct uvm *m, u_long virt, bool create) {
     u_int pde = virt >> 22, i;
     if(virt < USER_START || virt >= USER_END) return NULL;
     i = pde - USER_PDE_FIRST;
     if(!m->tables[i]) {
+        u_long phys, flags;
         if(!create) return NULL;
-        m->tables[i] = alloc_table_page(&m->tables_raw[i]);
+        flags = irq_save();                     /* the table's zeroing too: 4 KB */
+        m->tables[i] = table_page_alloc(&phys);
+        if(m->tables[i]) {
+            m->table_pages++;
+            m->pdir[pde] = phys | PTE_P | PTE_W | PTE_U;
+        }
+        irq_restore(flags);
         if(!m->tables[i]) return NULL;
-        m->pdir[pde] = vmm_get_phys((u_long)m->tables[i]) | PTE_P | PTE_W | PTE_U;
     }
     return m->tables[i];
 }
 
 int uvm_map_page(struct uvm *m, u_long virt, u_long flags) {
-    u_long *tbl, frame;
+    u_long *tbl, frame, irqf;
     virt = PAGE_ALIGN_DOWN(virt);
-    if(m != current_uvm) return -1;             /* zeroing needs the mapping to be live */
+    if(m != current_uvm || virt < USER_START || virt >= USER_END) return -EINVAL;   /* zeroing needs it live */
     tbl = table_for(m, virt, true);
-    if(!tbl) return -1;
+    if(!tbl) return -ENOMEM;
     if(tbl[(virt >> 12) & 1023] & PTE_P) return 0;   /* already there */
-    frame = pmm_alloc();
-    if(!frame) return -1;
-    tbl[(virt >> 12) & 1023] = frame | PTE_P | PTE_U | (flags & PTE_W);
+    irqf = irq_save();                          /* 10/25/26: taken and recorded at once (table_for()) */
+    frame = pmm_alloc_as(PMM_USER);             /* 10/25/26 (L1): a program's frame leaves the kernel's reserve */
+    if(frame) {
+        tbl[(virt >> 12) & 1023] = frame | PTE_P | PTE_U | (flags & PTE_W);
+        m->pages++;
+    }
+    irq_restore(irqf);
+    if(!frame) return -ENOMEM;
     invlpg(virt);
     memset((void *)virt, 0, PAGE_SIZE);
-    m->pages++;
     return 0;
+}
+
+/* 10/25/26 (L5): the page at virt given back (sbrk()'s growth that could not be finished) */
+static void unmap_page(struct uvm *m, u_long virt) {
+    u_long *tbl = table_for(m, virt, false), *pte = tbl ? &tbl[(virt >> 12) & 1023] : NULL, frame, flags;
+    if(!pte || !(*pte & PTE_P)) return;
+    flags = irq_save();                         /* 10/25/26: out of m and freed at once, never freed twice */
+    frame = *pte & PTE_FRAME;
+    *pte = 0;
+    m->pages--;
+    pmm_free(frame);
+    irq_restore(flags);
+    invlpg(virt);
 }
 
 int uvm_map_range(struct uvm *m, u_long start, u_long len, u_long flags) {
     u_long a, end = PAGE_ALIGN_UP(start + len);
-    if(start >= end || end > USER_END || start < USER_START) return -1;
+    int r;
+    if(start >= end || end > USER_END || start < USER_START) return -EINVAL;
     for(a = PAGE_ALIGN_DOWN(start); a < end; a += PAGE_SIZE) {
-        if(uvm_map_page(m, a, flags) != 0) return -1;
+        if((r = uvm_map_page(m, a, flags)) != 0) return r;
     }
     return 0;
 }
@@ -130,7 +208,7 @@ int uvm_grow_stack(struct uvm *m, u_long addr) {
     u_long a;
     if(addr < USER_END - USER_STACK_MAX || addr >= m->stack_low) return -1;
     for(a = PAGE_ALIGN_DOWN(addr); a < m->stack_low; a += PAGE_SIZE) {
-        if(uvm_map_page(m, a, PTE_W) != 0) return -1;
+        if(uvm_map_page(m, a, PTE_W) != 0) return -ENOMEM;   /* 10/25/26 (L3): the program is ended, and told why */
     }
     m->stack_low = PAGE_ALIGN_DOWN(addr);
     return 0;
@@ -173,7 +251,13 @@ u_long uvm_sbrk(struct uvm *m, long incr) {
     nb = old + incr;
     if(nb < old || nb > USER_END - USER_STACK_MAX) return 0;
     if(PAGE_ALIGN_UP(nb) > PAGE_ALIGN_UP(old)) {
-        if(uvm_map_range(m, PAGE_ALIGN_UP(old), PAGE_ALIGN_UP(nb) - PAGE_ALIGN_UP(old), PTE_W) != 0) return 0;
+        u_long from = PAGE_ALIGN_UP(old), a;
+        for(a = from; a < PAGE_ALIGN_UP(nb); a += PAGE_SIZE) {
+            if(uvm_map_page(m, a, PTE_W) != 0) {    /* 10/25/26 (L5): what this call mapped goes back */
+                while(a > from) unmap_page(m, a -= PAGE_SIZE);
+                return 0;
+            }
+        }
     }
     m->brk = nb;
     return old;
