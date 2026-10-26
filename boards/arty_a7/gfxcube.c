@@ -27,13 +27,15 @@ driver). The looks are made from the timer interrupt, every tick (10 ms, less th
 16.7): each FRAME_COUNT that moved, with its FRAME_CRC, goes into a small ring that the run
 empties as it goes, so no frame passes unseen while the run prints its line (a line costs SurfCPU
 about a frame: the console compares its whole screen) or other tasks run. On a port without the
-tick the run looks from its loop. A frame whose CRC is none of the turn's is torn: not a whole drawn frame. When the turn's
-128 pictures all differ their order is checked as well: frame f shown d frames after frame l must
-have (f - l) mod 128 <= d, since a FLIP waits for a blanking. A line a second says the frames drawn
-(FLIPs done), shown (video frames) and checked (looked at), and whether all were whole (and in
-order); at the end the frame rate and the same for the whole run. Ctrl+C, the time running out, a
-stopped engine and an error each end it with the engine idle and everything put back; it fails
-when a frame shown was torn or out of order.
+tick the run looks from its loop. A frame whose CRC is none of the turn's is torn: not a whole
+drawn frame. When the turn's 128 pictures all differ their order is checked as well: frame f shown
+d frames after frame l must have (f - l) mod 128 <= d, since a FLIP waits for a blanking. A frame
+shown that no look saw (FRAME_COUNT moved by more than one between two looks) was not checked: it
+is missed (the review of 58ac7b3's L1), and no verdict of all whole is given while any is. A line
+a second says the frames drawn (FLIPs done), shown (video frames) and missed, and whether all were
+whole (and in order); at the end the frame rate and the same for the whole run. Ctrl+C, the time
+running out, a stopped engine and an error each end it with the engine idle and everything put
+back; it fails when a frame shown was torn, out of order or missed.
 
 The sink has no context pointer and no error return: it only records, into the run's own record,
 which `rec` points to while the run holds the driver's claim (one gfx cube at a time, as heaptest
@@ -147,9 +149,11 @@ void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc) {
     c->last_count = c->count;
 }
 
-/* all whole (and in order), or how many were not */
-static const char *verdict(const struct gfx_cube_check *c, u_long torn, u_long disorder, char *buf, u_int size) {
-    if(!torn && !disorder) return c->ordered ? "all whole, in order" : "all whole";
+/* all whole (and in order), or how many were not; frames missed (shown, not looked at) were not
+   checked, so with any the verdict is the counts */
+static const char *verdict(const struct gfx_cube_check *c, u_long missed, u_long torn, u_long disorder, char *buf,
+                           u_int size) {
+    if(!missed && !torn && !disorder) return c->ordered ? "all whole, in order" : "all whole";
     snprintf(buf, size, "%lu torn, %lu out of order", torn, disorder);
     return buf;
 }
@@ -177,7 +181,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     struct gpu_screen shown;
     char buf[48];
     u32 k = 1, pos = 0, v0 = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0, ends_done = 0;
-    u_long last_drawn = 0, last_shown = 0, last_checked = 0, last_torn = 0, last_dis = 0;
+    u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
     u_int taken;
@@ -239,12 +243,13 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         if(seen && now - tick >= 1000000u) {            /* a line a second, just after a frame was looked at */
             tick += 1000000u;
             sec++;
-            printf("    cube %lu s: %lu drawn, %lu shown, %lu checked: %s\n", (u_long)sec, (u_long)drawn - last_drawn,
-                   c.shown - last_shown, c.checked - last_checked,
-                   verdict(&c, c.torn - last_torn, c.disorder - last_dis, buf, sizeof(buf)));
+            printf("    cube %lu s: %lu drawn, %lu shown, %lu missed: %s\n", (u_long)sec, (u_long)drawn - last_drawn,
+                   c.shown - last_shown, c.shown - c.checked - last_missed,
+                   verdict(&c, c.shown - c.checked - last_missed, c.torn - last_torn, c.disorder - last_dis, buf,
+                           sizeof(buf)));
             last_drawn = drawn;
             last_shown = c.shown;
-            last_checked = c.checked;
+            last_missed = c.shown - c.checked;
             last_torn = c.torn;
             last_dis = c.disorder;
         }
@@ -281,8 +286,8 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn, (u_long)(us / 1000000u),
                (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10), (u_long)(rate10 % 10),
                r2 ? "display NOT put back" : "display back as it was");
-        printf("    %s: %lu shown, %lu checked: %s\n", what, c.shown, c.checked,
-               verdict(&c, c.torn, c.disorder, buf, sizeof(buf)));
+        printf("    %s: %lu shown, %lu missed: %s\n", what, c.shown, c.shown - c.checked,
+               verdict(&c, c.shown - c.checked, c.torn, c.disorder, buf, sizeof(buf)));
         if(c.torn)
             printf("    %s: the first torn: frame %lu, FRAME_CRC %08lx, none of the turn's\n", what,
                    (u_long)c.torn_count, (u_long)c.torn_crc);
@@ -292,5 +297,5 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         return GPU_EINTR;
     }
     if(rc) return rc;
-    return c.torn || c.disorder || r2 ? GPU_EERROR : GPU_OK;
+    return c.torn || c.disorder || c.shown != c.checked || r2 ? GPU_EERROR : GPU_OK;
 }

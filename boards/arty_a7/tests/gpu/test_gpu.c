@@ -1532,13 +1532,13 @@ static void cube_at_the_pins(struct stub *s, const char *what, unsigned want) {
     check(cube >= want && !not_cube && !bad_steps, line);
 }
 
-/* gfx cube's summary: the frames drawn, shown and checked */
-static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *checked) {
+/* gfx cube's summary: the frames drawn, shown and missed (shown, never looked at) */
+static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *missed) {
     const char *p;
     int n = 0;
     for(p = s->out; (p = strstr(p, "    gfx cube: ")) != NULL; p++) {
         if(sscanf(p, "    gfx cube: %lu drawn in", drawn) == 1) n |= 1;
-        if(sscanf(p, "    gfx cube: %lu shown, %lu checked:", shown, checked) == 2) n |= 2;
+        if(sscanf(p, "    gfx cube: %lu shown, %lu missed:", shown, missed) == 2) n |= 2;
     }
     return n == 3;
 }
@@ -1602,7 +1602,7 @@ static void t_cube(unsigned seed) {
     uint8_t *before;
     uint16_t pal[256];
     struct stub_disp reg;
-    unsigned long drawn, shown, checked, waits0, wakes0;
+    unsigned long drawn, shown, missed, waits0, wakes0;
     char want[64];
     (void)seed;
     if(once_t_cube++) return;     /* nothing here depends on the seed: once */
@@ -1619,7 +1619,7 @@ static void t_cube(unsigned seed) {
     s->check_tearing = 1;
     s->log_frames = 1;
     s->nflog = 0;
-    snprintf(want, sizeof(want), "checked: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
+    snprintf(want, sizeof(want), " 0 missed: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
     waits0 = G.irq_waits;
     wakes0 = G.irq_wakes;
     check(gfx(s, "gfx cube 2") == CMD_OK && said(s, "gfx cube: 2 s at 320x240 with depth, a FLIP a frame") &&
@@ -1627,8 +1627,8 @@ static void t_cube(unsigned seed) {
           said(s, "display back as it was"), "gfx cube 2: a line a second, every frame checked whole, everything back");
     check(GFX_CUBE_PICTURES == GFX_CUBE_FRAMES || said(s, "of a turn's 128 frames are pictures of their own"),
           "  with repeated pictures in the turn, it says that their order is not checked");
-    check(cube_summary(s, &drawn, &shown, &checked) && drawn >= 110 && drawn <= 125 && shown >= drawn && checked == shown,
-          "  about 60 frames drawn a second (one a blanking), each shown and checked (none passed unseen)");
+    check(cube_summary(s, &drawn, &shown, &missed) && drawn >= 110 && drawn <= 125 && shown >= drawn && !missed,
+          "  about 60 frames drawn a second (one a blanking), each shown and checked (none missed)");
     cube_at_the_pins(s, "the frames as they ended", 110);
     check(s->shown_draws == 0, "  no engine word drew into the picture on the screen while it was shown");
     check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && s->reg.mode == reg.mode &&
@@ -1776,30 +1776,34 @@ TEST(t_cube_order)
    the console compares its whole screen; a line printed just after a frame was seen loses one
    once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
    timer's tick every frame shown is checked all the same; on a port without the tick the run looks
-   from its loop, and frames pass unseen while it prints, which its lines say (checked fewer than
-   shown) */
+   from its loop, and frames pass unseen while it prints, which its lines say (missed), and then it
+   fails: a frame not looked at was not checked (the review of 58ac7b3's L1) */
 static int once_t_cube_look;
 static void t_cube_look(unsigned seed) {
     struct stub *s;
-    unsigned long drawn = 0, shown = 0, checked = 0;
-    char line[160];
+    unsigned long drawn = 0, shown = 0, missed = 0;
+    char line[160], want[80];
+    int r, ok;
     (void)seed;
     if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
     s->line_us = 40000;
     s->log_frames = 1;
-    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && s->ticks_run > 250,
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &missed) && s->ticks_run > 250,
           "gfx cube 3 with a slow console and the timer's tick");
-    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu checked: every frame looked at", drawn, shown, checked);
-    check(checked == shown && shown >= 170, line);
+    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at", drawn, shown, missed);
+    check(!missed && shown >= 170, line);
     cube_at_the_pins(s, "and at the pins", 170);
     done(s);
     s = fresh2(-1);
     s->line_us = 40000;
-    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && !s->ticks_run,
-          "the same on a port without the tick: the run looks from its loop");
-    snprintf(line, sizeof(line), "  %lu shown, %lu checked: frames passed unseen while its lines printed, said", shown, checked);
-    check(checked + 2 <= shown, line);
+    r = gfx(s, "gfx cube 3");
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    check(r == CMD_FAIL && ok && !s->ticks_run, "the same on a port without the tick: the run looks from its loop, and fails");
+    snprintf(want, sizeof(want), "    gfx cube: %lu shown, %lu missed: 0 torn, 0 out of order\n", shown, missed);
+    snprintf(line, sizeof(line), "  %lu shown, %lu missed: frames passed unseen while its lines printed, said, no whole verdict",
+             shown, missed);
+    check(missed >= 2 && said(s, want), line);
     done(s);
 }
 TEST(t_cube_look)

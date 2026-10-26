@@ -280,8 +280,8 @@ int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal,
 int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what);
 
 /* boards/arty_a7/gfxcube.c: gfx cube's run on a claimed GPU2 (it says what it does; GPU_OK, or
-   GPU_EERROR when a frame shown was torn or out of order, or the driver's error), and its check of
-   the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC */
+   GPU_EERROR when a frame shown was torn, out of order or missed, or the driver's error), and its
+   check of the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC */
 int gfx_cube_run(struct gpu *g, u32 seconds, const char *what);
 struct gfx_cube_check {
     const u32 *crcs;                    /* the model's FRAME_CRC of each frame of a turn */
@@ -290,7 +290,7 @@ struct gfx_cube_check {
     u32 count;                          /* FRAME_COUNT at the last look */
     i32 last;                           /* the turn's frame shown last that was whole (-1: none known) */
     u32 last_count;                     /* FRAME_COUNT then */
-    u_long shown, checked, torn, disorder;
+    u_long shown, checked, torn, disorder;  /* shown - checked: missed (shown, never looked at) */
     u32 torn_count, torn_crc;           /* the first torn frame's FRAME_COUNT and FRAME_CRC */
 };
 void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first);

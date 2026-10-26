@@ -39,8 +39,9 @@ typed on the UART. Checked:
     by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 1: every frame it showed at the
     VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
     one contiguous run of them, each the same frame as the one before or the next; SurfOS's own
-    lines say every frame shown was checked and whole (in order too when the turn's 128 pictures
-    differ) and a frame rate of 30 or more; after it the picture is the one before it.
+    lines say every frame shown was checked (none missed: the review of 58ac7b3's L1) and whole
+    (in order too when the turn's 128 pictures differ) and a frame rate of 30 or more; after it the
+    picture is the one before it.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present, and gfx tri, flip and cube say there
@@ -134,7 +135,7 @@ STEPS = [
     ('gfx flip 0', r'display: GFX_BASE 0, written by FLIP at a vertical blanking', 'FLIP back to picture A'),
     ('gfx crc', CRC_LINE.pattern, 'crc 8'),
     ('gfx cube 1', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
-     r'\s+gfx cube: \d+ shown, \d+ checked: ', 'gfx cube'),
+     r'\s+gfx cube: \d+ shown, \d+ missed: ', 'gfx cube'),
     ('gfx crc', CRC_LINE.pattern, 'crc 9'),
     ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
@@ -412,14 +413,14 @@ def main():
           'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step'
           % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad))
     want = 'all whole, in order' if pictures == len(crcs) else 'all whole'
-    sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) checked: ([^\n]*)', out)
+    sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) missed: ([^\n]*)', out)
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
-                  r'\s+gfx cube: (\d+) shown, (\d+) checked: ([^\n]*)', out)
-    check(m and sec and all(c == sh and v == want for _, sh, c, v in sec) and m.group(4) == m.group(5) and
+                  r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
+    check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(5) == '0' and
           m.group(6) == want and float(m.group(3)) >= 30,
-          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s checked: %s; a line a '
+          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s missed: %s; a line a '
           'second: %s' % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
-                          '; '.join('%s drawn, %s shown, %s checked: %s' % x for x in sec)) if m else 'no summary'))
+                          '; '.join('%s drawn, %s shown, %s missed: %s' % x for x in sec)) if m else 'no summary'))
     check(re.search(r'gfx demo: \d+ frames in [12]\.\d\d s[^\n]*\n\s+gfx demo: ended by Ctrl\+C', out),
           'gfx demo 5: Ctrl+C typed after its first second ends it within the next')
     m = re.search(r'gfx demo: (\d+) frames in (\d+\.\d\d) s, (\d+\.\d) a second', out)
