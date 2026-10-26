@@ -28,12 +28,15 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh),
                   # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
-                  # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
+                  # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
+                  # the web browser's window: its page model, its layout and painting, the browser itself
+                  # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
+                  # (10/25/26: and wundertow --layout over HTTPS and HTTP, refused as Undertow refuses)
 make test-tcp     # the TCP stack against hand-made segments: tools/qemu-tcp.py (+ rawnet.py), QEMU 7.2 or later
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
@@ -103,6 +106,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
            Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
+           wundertow/ (10/25/26: the web browser in a window: doc the page as boxes, font, layout, paint, browser the
+           window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window"),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
            ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
@@ -358,3 +363,11 @@ O0/O2, plus the normal smoke/Files and USB tests. Public interoperability is a
 separate online check (`tools/qemu-web.py --public`), never a deterministic CI gate.
 On the Undertow worktree use `SURFOS_VOLUME=surfos-undertow-build` for every Docker
 build, and keep O0/O2 exports separate because `build/images` is shared by levels.
+
+The browser in a window (`user/wundertow/`, `wundertow`, 10/25/26) uses Undertow's
+network, TLS and settings, and its HTML scanner (`user/undertow/html_scan.c`): a change
+there keeps Undertow's text byte-identical (test_undertow_html) and the window's trees
+(test_wundertow_doc), and runs test-web too. Its pages can be looked at anywhere with
+`wundertow --layout ADDRESS` and `wundertow --render ADDRESS FILE.bmp` (the Image Viewer
+opens it), and on the host with `test_wundertow_layout --render FILE OUT.ppm [WIDTH]`.
+Layout and painting are integer-only, as programs with windows must be.
