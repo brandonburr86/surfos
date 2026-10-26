@@ -68,7 +68,8 @@ outside the ISA of [ISA.md](ISA.md). Words written as data in code (`.word`) are
 any other: only the output section `.text.probes` (input section `.probes`, placed by
 `rom.ld` and `ram.ld`) may hold data words, which is where the diagnostics' probes and the
 test kernel keep their deliberately illegal instructions. The build identity (first 8 hex digits of the commit,
-dirty flag) is generated into `build/fw/gen/fw_build.h` only when it changes.
+dirty flag) is generated into `build/fw/gen/fw_build.h` only when it changes; a bitstream build
+reads it there to check that the ROM it puts in is this commit's ([BOARD.md](BOARD.md) section 8).
 
 The `.mem` files follow [MODULES.md](MODULES.md) section 5: exactly 16,384 lines of 8
 lowercase hex digits, line *i* = bytes 4*i*..4*i*+3 little-endian, zero padded

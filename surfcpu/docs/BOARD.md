@@ -386,7 +386,12 @@ surfcpu/boards/arty_a7/vivado/build.tcl -tclargs params.tcl` there: over ssh (co
 stage with tar, fetching `out/` back without checkpoints), or in an amd64 container
 (`docker run --platform linux/amd64`). `--dry-run` stages and prints every command, contacting
 nothing. A new build removes the previous bitstream and results first. The build counts as
-dirty if a tracked file changed or a file it stages is not in git.
+dirty if a tracked file changed or a file it stages is not in git. Its boot ROM is part of it:
+a design's own ROM image (not `ROM=`) must be this commit's `make build-rom` (the build ID
+in `build/fw/gen/fw_build.h` beside it, which must not be newer than the image), or the build
+stops before it starts; and a ROM built from a dirty tree (devenv/run.sh counts any change
+or untracked file in the repository) makes the bitstream dirty too, so SurfBoot's banner and
+the bitstream's flags always agree.
 
 Over ssh, every connection gives up after 20 s to connect or two minutes of silence
 (`ConnectTimeout=20`, `ServerAliveInterval=30`, `ServerAliveCountMax=4`), and Vivado runs

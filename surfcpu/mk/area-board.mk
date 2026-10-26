@@ -165,8 +165,9 @@ board-cdc-xdc:
 
 # tools/fpga-build.sh and tools/program.sh against fake ssh, docker, vivado (running the real
 # build.tcl with stubbed Vivado commands), openxc7-build.sh and openFPGALoader, with a temporary
-# HOME; and boards/arty_a7/digilent/fetch.sh on made-up manuals
-board-tools:
+# HOME; and boards/arty_a7/digilent/fetch.sh on made-up manuals. Its dry run of the full top reads
+# the real boot ROM, which must be this build's (build-rom)
+board-tools: build-rom
 	@mkdir -p $(BSIM)
 	$(Q)sh sim/board/tools/test_tools.sh > $(BSIM)/test_tools.txt 2>&1 || { grep -v '^ok' $(BSIM)/test_tools.txt; exit 1; }
 	@tail -1 $(BSIM)/test_tools.txt

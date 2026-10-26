@@ -24,7 +24,8 @@
 # output in build/fpga/BOARD/DESIGN/openxc7. Either way it writes build/fpga/BOARD/DESIGN/
 # manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga; its kernel_sha256 is of SURFCPU_KERNEL, by
 # default the last make build-kernel's SURFOS.BIN, for the record only; ROM= replaces the design's
-# boot ROM image and PLACER_SEEDS= its placer seeds, both recorded). A design may read generated files from
+# boot ROM image and PLACER_SEEDS= its placer seeds, both recorded; the design's own boot ROM must
+# be this commit's make build-rom, and one from a dirty tree makes the build dirty). A design may read generated files from
 # build/ (the LiteDRAM core of the DDR designs): its "generated" lists (ip/litedram/arty.sha256)
 # give their SHA-256, and the build counts as clean only if they match. Exit 0 only with a bitstream whose checks passed; a new build first removes the
 # previous one's bitstream and results. --dry-run prints every command it would run, without
@@ -565,6 +566,26 @@ case "$rev" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) build_id=$(printf '%.8s' "$rev") ;;
     *) build_id=00000000 ;;
 esac
+# The design's own boot ROM (not ROM=) is part of the bitstream, so it is part of its identity.
+# make writes the build ID and dirty flag it compiles into the ROMs to gen/fw_build.h beside them
+# (devenv/run.sh's rule: dirty is a changed file, or one git does not track, anywhere in the
+# repository) and rebuilds the ROMs when it changes. A ROM of another build, or older than that
+# file, is refused before the long part of the build; one from a dirty tree makes the bitstream
+# dirty too, so SurfBoot's banner and the bitstream's flags never disagree.
+if [ -n "$rom" ] && [ -z "${ROM:-}" ]; then
+    fwh=${romsrc%/*}/gen/fw_build.h
+    fwh_rel=${fwh#"$root"/}
+    [ -f "$fwh" ] || die "the boot ROM $rom_image has no build identity beside it ($fwh_rel): make build-rom"
+    ! [ "$fwh" -nt "$romsrc" ] ||
+        die "the boot ROM $rom_image is older than $fwh_rel, the build identity make compiled in last: make build-rom"
+    rom_id=$(sed -n 's/^#define FW_BUILD_ID 0x\([0-9a-f]*\)U$/\1/p' "$fwh")
+    [ "$rom_id" = "$build_id" ] ||
+        die "the boot ROM $rom_image is build ${rom_id:-unknown}, this tree is build $build_id: make build-rom"
+    if [ "$dirty" = 0 ] && ! grep -q '^#define FW_BUILD_DIRTY 0$' "$fwh"; then
+        dirty=1
+        echo "$me: the boot ROM $rom_image was built from a dirty tree (devenv/run.sh: a changed file, or one git does not track, anywhere in the repository), so the bitstream counts as dirty too; for a clean one, commit or remove those files (git status) and make build-rom again"
+    fi
+fi
 run_id="$design-$board-$build_id-$(date -u +%Y%m%dT%H%M%SZ)"
 
 # ------------------------------------------------------------------------------ manifest (this side)
