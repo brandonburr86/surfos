@@ -462,7 +462,7 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 | G0 | this document, spec/soc.toml (soc_version 0.3.0), make gen, MODULES.md, SOC.md | `make check-generated` | | |
 | G1 | surf_vram, the graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, the C display model, gpudiag's window and CPU-drawn scenes, the gpudiag design | VRAM unit test with random CPU and engine traffic; surf_video's graphics modes captured and compared with the model, FRAME_CRC equal to the model's and to the captured pins' CRC; the old video tests unchanged; gpudiag on the RTL SoC (surfsim) prints the model's CRCs | gpudiag through the open flow, every gate; its netlist runs gpudiag as the RTL does | load the gpudiag bitstream: its UART transcript ends in PASS with the expected CRCs; the monitor shows the scenes (the owner looks) |
 | G2 | surf_gpu, its C model, the engine's scenes in gpudiag, both designs | directed tests of every command and edge case, randomized command streams compared with the model at every FENCE, mutants caught; gpudiag's engine scenes in surfsim | gpudiag and ddr_gpu through the open flow, every gate; dram_clk's margin recorded | gpudiag PASS with the engine scenes; ddr_gpu boots SurfOS from the card as the DDR design does |
-| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)**; then (2026-10-26, 15.8) GPU2's commands (`gfx tri`, `gfx zbuf`, `gfx zclear`, `gfx flip`, `gfx target`), `gfx cube` with every frame shown checked, and the re-review's three lows, **done in simulation and on the host**, with the review of that round's fixes (15.9) | the driver and `gfx` against the C model on the host (`test-gpuos-host`, with GPU2's commands against the GPU2 model and the cube's frames against their table); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's (GPU2's triangles worked out from section 16 alone); the overlay; the demo; `gfx cube 1`, every frame at the pins one of the table's; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream (GPU2's commands and the cube need G4's, 16.11) | **pending** (sections 15.6 and 15.8): the demo and the cube on the monitor; `gfx crc` equal to the model's |
+| G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)**; then (2026-10-26, 15.8) GPU2's commands (`gfx tri`, `gfx zbuf`, `gfx zclear`, `gfx flip`, `gfx target`), `gfx cube` with every frame shown checked, and the re-review's three lows, **done in simulation and on the host**, with the fixes of that round's review and re-review (15.9) | the driver and `gfx` against the C model on the host (`test-gpuos-host`, with GPU2's commands against the GPU2 model and the cube's frames against their table); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's (GPU2's triangles worked out from section 16 alone); the overlay; the demo; `gfx cube 1`, every frame at the pins one of the table's; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream (GPU2's commands and the cube need G4's, 16.11) | **pending** (sections 15.6 and 15.8): the demo and the cube on the monitor; `gfx crc` equal to the model's |
 | G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag at bfaac48 through every gate, LVS proved in full (seed 3, sys_clk 44.71 MHz), and its netlist runs gpudiag to PASS (146 checks, 1.97 s simulated); ddr_gpu at bfaac48 through every gate but LVS, which is outstanding (dram_clk +1.04 ns; section 16.11). The review of 3fea963's fixes (16.12) changed gpudiag but no RTL: the gpudiag bitstream is to be built again with them | pending: gpudiag over JTAG with the cube on the monitor (30+ frames a second, no torn frame, from its UART lines), from the bitstream built after the review (bfaac48's lacks its checks: 16.12); SurfOS's boot stays on G2's ddr_gpu until G4's has its proof (section 14) |
 | G5 | optional: the GPU constrained to a region of the die, a faster GPU clock (50 MHz, its own clock domain and crossing on port A) | the crossing's tests at several clock ratios | placement in the region; timing of the faster clock | the G2 and G4 tests again at the faster clock |
 
@@ -1445,7 +1445,12 @@ nothing programs the flash.
    drawn, 60 shown, 0 missed: all whole, in order` (59 or 61 here and there: the display makes
    59.94 frames a second, and a frame can fall by the second's edge), and at the end the frames
    drawn, the rate (59.9 a second or a little less, never more) and `display back as it was`, then
-   `N shown, 0 missed: all whole, in order`; `gfx crc` then prints 43e2d407 again.
+   `N shown, 0 missed: all whole, in order`; `gfx crc` then prints 43e2d407 again. Type nothing on
+   the UART while the cube runs: SurfCPU takes longer for each byte it receives than the line takes
+   to send one, so a paste holds its timer off and the frames shown meanwhile go unchecked (the
+   cube then says how many, `N of the M missed came while the serial line took input`, and does not
+   fail for them), and after a long paste a command sent at once is lost (15.9's addendum): wait a
+   moment, or type it.
 
 What to send back: the UART capture (with the boot lines, the `gfx crc` lines, the demo's summary
 and, with GPU2, the cube's lines) and what the monitor showed at steps 4 to 7. A CRC other than
@@ -1597,16 +1602,20 @@ limit of a `gfx` line (15.2) holds the longest form exactly.
   with an error, with its FLIP to the wrong picture or its FENCE not done, or when the model's clamp
   or wide values were needed. Its first 16 CRCs are gpudiag's own MODE 2 frames
   (`gpuscenes_expect.h`'s `gpu_cube_expect_check`), which the host test checks: the same display.
-* **What it says** (as since 15.9): a line a second, printed just after frames were looked at,
-  `    cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order`, with drawn the FLIPs done after
-  frame 0's, shown the video frames, missed those that no look saw; `all whole` alone when the
-  order is not checked; else `N torn, M out of order`. At the end the frames drawn, the time (from
+* **What it says** (as since 15.9, and its addendum's two lines): a line a second, printed just
+  after frames were looked at, `    cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order`,
+  with drawn the FLIPs done after frame 0's, shown the video frames, missed those that no look saw;
+  `all whole` alone when the order is not checked; else `N torn, M out of order`. At the end the
+  frames drawn, the time (from
   just before the blanking at which the cube's display began to the first sighting of the last
   FLIP done) and the rate, whether the display went back, the frames shown and missed for the whole
   run, and the first torn frame's FRAME_COUNT and FRAME_CRC if there was one; `ended by Ctrl+C`
   after Ctrl+C. It fails (CMD_FAIL) on a torn, out-of-order or missed frame, Ctrl+C, a stopped
   engine or an error. Until 15.9 the lines said `N checked` (those looked at) in place of missed,
-  and drawn counted one FENCE too many.
+  and drawn counted one FENCE too many. Since the addendum, frames missed while the serial line
+  took input are said apart (`N of the M missed came while the serial line took input`) and fail
+  nothing, and without a blanking caught at the display change there is no rate (`no rate: its
+  display changed without a blanking caught`).
 * **Ending it**: the time running out (the last frame's FLIP done and the frame showing it looked
   at, 200 ms at most), Ctrl+C, a stopped engine (`gpu_pump()`: two seconds without a word taken or
   FENCE moving, which a FLIP with no blanking also comes to) and an error after a frame (STATUS read
@@ -1686,6 +1695,45 @@ host test built as `make test-gpuos-host` builds it, in the toolchain container 
 | the host test, each fix and its bug put back | the table above: 16 variants in the toolchain container, and the same counts on the Mac |
 | `make test-gpuos` | at f3f5767, 32 of 32 in 229 s ([evidence](evidence/gpu-g3/cube-review-test-gpuos.txt)): `gfx cube 1` 61 drawn in 1.02 s, 59.5 a second, 65 shown, 0 missed, all whole and in order, its line a second `60 drawn, 60 shown, 0 missed: all whole, in order`; at the VGA pins 66 frames of the turn in one run, 62 pictures (frame 0 for one video frame, each of 1 to 60 for one, 61 for five, until the display went back), 0 out of step, none more than two video frames after the one before; the interrupt 181 taken for the 181 fences that asked for one (243 sent), 4 fence waits slept on it, 4 woken. At fba05d5, before f3f5767: `61 drawn in 1.07 s (56.6 a second)`, and 4 waits slept, 3 woken: one wait ended by its 10 ms step, which kernel/sync.c's event_wait_timeout() gap allows (15.3, finding 12; a trial kernel that reports a wait timed out with its event set, a few instructions longer, had 4 of 4 and none: the timing moves with the code). On a kernel with M2's mutant: above ([evidence](evidence/gpu-g3/cube-review-test-gpuos-m2-mutant.txt)) |
 | `make check` (big) | passed on b884c0b, the commit that added this record (the code of f3f5767), 14:06 to 14:43: `check: all automated SurfCPU checks passed`. In it: test-gpuos-host 1043 of 1043 and gfxref's 11 CRCs; test-gpuos 32 of 32 in 232 s, the same run as at f3f5767 to the cycle (509,781,324): `gfx cube 1` 61 drawn in 1.02 s, 59.5 a second, 65 shown, 0 missed, all whole and in order, 66 frames of the turn at the pins, 62 pictures, the interrupt's 4 fence waits all woken; test-os-qemu 137 of 137 at -O2 and -O0; G4's gpudiag_check PASS |
+
+**Addendum: the re-review of e655c39 (2026-10-26).** The independent re-review found the six fixed,
+nothing new above low, two new lows and an open question; it also saw a console matter. Each is
+dealt with below, each with a test that fails with the bug put back and passes with the fix (the
+host test in the toolchain container as above; the RTL system where it says so)
+([evidence](evidence/gpu-g3/cube-rereview.txt)).
+
+| Finding | Fix (commit) | Test: the bug put back / the fix |
+|---|---|---|
+| **Low 1**: the line a second stalled the cube four to five frames: the run printed it itself, a console line costs SurfCPU three frames or more (the whole-screen compare, the UART's bytes), and meanwhile the engine ran out of words (`gfx cube 3` with 70 ms lines on the stand-in; on the board `gfx cube 10` would hitch once a second). `gfx cube 1`, whose line comes after its last frame, hid it | the run records its frames ahead into a queue of eight (static, under the claim) and sends them as the FIFO takes them; while it prints its line the tick sends them (`gpu_push()`: FIFO_FREE's rule, never waiting or yielding, which `gpu_pump()` is built on now), and the run sends nothing itself; a frame is recorded only while it would be shown within the run's time (925fe02). test-gpuos runs `gfx cube 2`, whose first line comes in the middle, and wants 110 pictures at the VGA pins (94f5c3f) | t_cube_look: `gfx cube 3` with each line costing 80 ms must draw 177 frames and show each new one within two video frames at the pins: with e655c39's driver files 1041 of 1043 (`173 drawn`, `3 after more than two video frames`) / 1043 of 1043 (181 drawn in 3.02 s, each frame for one video frame). On the RTL SoC at 94f5c3f: `gfx cube 2` 121 drawn in 2.02 s, 59.6 a second, 125 shown, 0 missed, its two lines `60 drawn, 60 shown, 0 missed`; 122 pictures at the pins, none more than two video frames after the one before |
+| **Low 2**: without a blanking caught at the display change (the registers written at once after 250 ms), the rate's time began at that write, and FLIP 1 can come a millisecond after it: up to K/(K-1) above the display's | no rate then: `N drawn in T s` and `no rate: its display changed without a blanking caught` (4649e44) | t_cube_end: `gfx cube 1` with STATUS.FRAME, which the latch watches, frozen for a second while FRAME_COUNT and the FLIPs go on (the stand-in's new `stub_freeze_status()`): with 925fe02's gfxcube.c 1043 of 1044 (`59.9 a second`, timed from the write) / 1044 of 1044 |
+| **The question**: does console input hold the tick off? Settled on the RTL SoC: 3,000 bytes at the UART after `gfx cube 2`'s first line (261 ms at 115200 baud) gave `cube 2 s: 44 drawn, 60 shown, 16 missed: 0 torn, 0 out of order`: the line's receive path costs SurfCPU about 97 us a byte against the line's 87 us, and the external interrupt outranks the timer's, so neither the tick (its looks) nor the run ran while the paste came, and the cube stood | the rule that keeps it honest: each look also reads how many bytes the serial line has received (the port's new `input_count`, `serial_rx_count()` in arch/riscv32/serial.c); frames that passed unseen while some came are counted apart, the run says `N of the M missed came while the serial line took input`, and they fail nothing; torn and out-of-order frames, and any other frame missed, still fail (4696b70). 15.6's step 7 tells the owner to type nothing while it runs | t_cube_look: `gfx cube 2` with a paste of 3,000 bytes held 261 ms (the stand-in's stall can now hold the tick off and bring bytes): 14 missed, all said as input's, CMD_OK; the tick held as long with no bytes: CMD_FAIL; with the result failing on any frame missed, as before, 1052 of 1053 / 1053 of 1053. On the RTL SoC at 4696b70: `15 of the 15 missed came while the serial line took input` |
+| **The console matter**: after the reviewer's 3,000 backspaces the shell never echoed the next command | not changed: the cause is in the shared kernel (below) | the RTL runs above, as described below |
+
+The question's other answer, keeping the tick from being starved, was not taken: what holds the tick
+off is the receive path's cost (kernel/tty.c's `tty_term_input()` and `tty_input()`, the latter's
+`wake_up()` and `poll_wake()` for every byte, at kernel/tty.c:130-131), not code of this track; doing
+the timer's work inside the external interrupt would change the riscv32 interrupt core's dispatch
+and its storm guard (arch/riscv32/irq.c's 32 rounds) for every driver, and the cube would still
+stand still, since the run gets no CPU while bytes come faster than they are taken.
+
+**The console matter** is no hang. The paste leaves the tty's input queue full: 256 bytes
+(TTY_INPUT_SIZE, include/surfos/tty.h:21), the rest dropped. When the prompt comes back, the shell
+reads them, but a command sent at line speed at once (the test's next send) arrives while the
+receive path takes all of SurfCPU's time, so the shell cannot empty the queue meanwhile and every
+byte of the command finds it full and is dropped (kernel/tty.c:122-125, `tty_input()`); nothing is
+echoed and the shell waits. Keys typed at a keyboard's pace from the prompt on are echoed and run,
+and so is a UART command sent after them (the third run in the evidence: `irqstat`, then `echo uart
+works`). In the shared kernel, then, and not changed here; a fix would be the receive path's
+(dropping a byte without the wake-ups when the queue is full, kernel/tty.c:122-131) or a larger
+queue. To reproduce: on the RTL SoC (surfsim_gpu), run a command that takes a second or more
+(`gfx cube 2`), send 3,000 bytes at the UART while it runs, and send the next command at line speed
+as soon as the prompt shows: it is not echoed; typed at the PS/2 keyboard from the prompt, it is.
+On the board: after a long paste, wait a moment before the next command, or type it.
+
+**What was tested in the addendum's round**: the host test 1053 of 1053 at 4696b70 (31 tests, seeds
+1, 7 and 123); test-gpuos 32 of 32 at 94f5c3f in 237 s
+([evidence](evidence/gpu-g3/cube-rereview-test-gpuos.txt)); make check (big) is run on the commit
+that adds this addendum, its result recorded in the commit after it.
 
 ## 16. GPU2: triangles, depth and page flips (G4)
 
