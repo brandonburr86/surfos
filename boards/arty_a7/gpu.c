@@ -13,6 +13,9 @@ struct gpu_port, so boards/arty_a7/tests/gpu/ runs this file against the C model
 What it prints (on the console of the command that called it, as every kernel command does) is
 what went wrong at the engine: a stopped engine, the sticky errors in words, a display change
 that found no vertical blanking. The caller says what it was doing.
+
+10/26/26 (SurfGPU, the cube in SurfOS; GPU.md 15.8): GPU2's depth buffer (kept, sent again after an
+ABORT, cleared as GPU.md 16.6 says), TRIANGLE and FLIP, refused on a GPU1; gpu_pump() for gfx cube.
 */
 
 #include <surfos/types.h>
@@ -81,6 +84,7 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
         return GPU_EABSENT;
     }
     g->id = RD(g, SURF_GPU_ID);
+    g->gpu2 = g->id == GPUDRV_ID_GPU2;
     if(!gpu_id_name(g->id)) {
         snprintf(g->why_buf, sizeof(g->why_buf), "its gpu.ID reads 0x%08lx, neither GPU1 nor GPU2", (u_long)g->id);
         g->why = g->why_buf;
@@ -121,6 +125,7 @@ int gpu_claim(struct gpu *g, const char *what) {
         }
         if(P(g)->sleep(CTX(g), 20) == GPU_EINTR || P(g)->interrupted(CTX(g))) return GPU_ECANCEL;
     }
+    g->pump_since = 0;                  /* this run's: gpu_pump() has seen no progress yet */
     return GPU_OK;
 }
 
@@ -134,9 +139,11 @@ void gpu_release(struct gpu *g) {
 /* ABORT, then the target and clip the driver set queued again (an ABORT keeps the engine's, but
    it may have cut a SET_TARGET or SET_CLIP short): they reach the engine before anything sent
    after them. Nothing waits here (the FIFO is empty after an ABORT), so a stopped engine costs no
-   second timeout and Ctrl+C is not held up. */
+   second timeout and Ctrl+C is not held up. GPU2: the depth buffer after them, when the driver has
+   one (the SET_TARGET drops the engine's; 10/26/26). */
 int gpu_abort(struct gpu *g, const char *what) {
-    u32 w[7];
+    u32 w[10];
+    u_int n = 7;
     int r;
     WR(g, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
     g->credit = 0;
@@ -150,7 +157,12 @@ int gpu_abort(struct gpu *g, const char *what) {
     w[4] = GPU_HDR(GPU_OP_SET_CLIP, 0);
     w[5] = GPU_XY(g->c_x0, g->c_y0);
     w[6] = GPU_XY(g->c_x1, g->c_y1);
-    r = gpu_put(g, w, 7, what);
+    if(g->z_valid) {
+        w[n++] = GPU_HDR(GPU_OP_SET_ZBUF, 0);
+        w[n++] = g->z_base;
+        w[n++] = g->z_stride;
+    }
+    r = gpu_put(g, w, n, what);
     g->restoring = false;
     return r;
 }
@@ -166,7 +178,9 @@ static void say_errors(struct gpu *g, const char *what, u32 st) {
     snprintf(msg, sizeof(msg), "%s%s%s",
              (st & SURF_GPU_STATUS_OVERFLOW_MASK) ? "      OVERFLOW: a command word found the FIFO full and was dropped\n" : "",
              (st & SURF_GPU_STATUS_BAD_OPCODE_MASK) ? "      BAD_OPCODE: a command word had an unknown opcode\n" : "",
-             (st & SURF_GPU_STATUS_BAD_PARAM_MASK) ? "      BAD_PARAM: a command's parameters were refused (SET_TARGET)\n" : "");
+             !(st & SURF_GPU_STATUS_BAD_PARAM_MASK) ? "" : g->gpu2 ?
+             "      BAD_PARAM: parameters refused (SET_TARGET, SET_ZBUF, a TRIANGLE's depth)\n" :
+             "      BAD_PARAM: a command's parameters were refused (SET_TARGET)\n");
     printf("    %s: the GPU reports:\n%s    %s: cleared; the engine ABORTed, its target and clip sent again\n", what, msg,
            what);
     WR(g, SURF_GPU_STATUS, st);
@@ -263,6 +277,13 @@ int gpu_put(struct gpu *g, const u32 *w, u_int n, const char *what) {
     return GPU_OK;
 }
 
+/* a FENCE value of the driver's count for a FENCE the caller writes in its own words (gfx cube's
+   frames end with one): later fences are after it */
+u32 gpu_fence_next(struct gpu *g) {
+    g->fences++;
+    return ++g->fence_sent;
+}
+
 int gpu_fence_send(struct gpu *g, const char *what, u32 *value) {
     u32 w[2];
     w[0] = GPU_HDR(GPU_OP_FENCE, g->irq ? GPU_FENCE_IRQ : 0);
@@ -333,7 +354,7 @@ int gpu_sync(struct gpu *g, const char *what) {
 /**** drawing ****/
 
 /* SET_TARGET's own rule (GPU.md section 5): every pixel in VRAM, no two lines in one word */
-static bool target_ok(u32 base, u32 stride, u32 w, u32 h) {
+bool gpu_target_fits(u32 base, u32 stride, u32 w, u32 h) {
     if((base & 3) || (stride & 3) || base >= SURF_VRAM_BYTES || stride >= 65536u || w >= 32768u || h >= 32768u)
         return false;
     if(!w || !h) return true;
@@ -343,7 +364,7 @@ static bool target_ok(u32 base, u32 stride, u32 w, u32 h) {
 int gpu_set_target(struct gpu *g, u32 base, u32 stride, u32 w, u32 h, const char *what) {
     u32 cmd[4];
     if(!g->present) return GPU_EABSENT;
-    if(!target_ok(base, stride, w, h)) return GPU_EARG;
+    if(!gpu_target_fits(base, stride, w, h)) return GPU_EARG;
     cmd[0] = GPU_HDR(GPU_OP_SET_TARGET, 0);
     cmd[1] = base;
     cmd[2] = stride;
@@ -355,6 +376,7 @@ int gpu_set_target(struct gpu *g, u32 base, u32 stride, u32 w, u32 h, const char
     g->c_x0 = g->c_y0 = 0;
     g->c_x1 = w;
     g->c_y1 = h;
+    g->z_valid = false;                 /* GPU2: an accepted SET_TARGET drops the depth buffer */
     return gpu_put(g, cmd, 4, what);
 }
 
@@ -474,6 +496,134 @@ int gpu_text(struct gpu *g, i32 x, i32 y, u8 fg, int bg, const u8 *cells, u_int 
 int gpu_wait_vblank(struct gpu *g, const char *what) {
     u32 cmd = GPU_HDR(GPU_OP_WAIT_VBLANK, 0);
     return gpu_put(g, &cmd, 1, what);
+}
+
+/**** GPU2: the depth buffer, triangles, flips (GPU.md section 16) ****/
+
+static int need_gpu2(struct gpu *g) {
+    return !g->present ? GPU_EABSENT : !g->gpu2 ? GPU_ENOGPU2 : GPU_OK;
+}
+
+/* SET_ZBUF's rule (16.2): every pixel of a w x h target has its depth in VRAM, two lines never in
+   one word */
+bool gpu_zbuf_fits(u32 base, u32 stride, u32 w, u32 h) {
+    if((base & 3) || (stride & 3) || base >= SURF_VRAM_BYTES || stride >= 65536u) return false;
+    if(!w || !h) return true;
+    return ((u64)2 * w <= stride || h == 1) && (u64)base + (u64)(h - 1) * stride + (u64)2 * w <= SURF_VRAM_BYTES;
+}
+
+int gpu_zbuf_set(struct gpu *g, u32 base, u32 stride, const char *what) {
+    u32 cmd[3];
+    int r = need_gpu2(g);
+    if(r) return r;
+    if(!gpu_zbuf_fits(base, stride, g->t_w, g->t_h)) return GPU_EARG;
+    cmd[0] = GPU_HDR(GPU_OP_SET_ZBUF, 0);
+    cmd[1] = base;
+    cmd[2] = stride;
+    g->z_valid = true;
+    g->z_base = base;
+    g->z_stride = stride;
+    return gpu_put(g, cmd, 3, what);
+}
+
+/* SET_TARGET to the target it is, which drops the depth buffer, then the clip as it was */
+int gpu_zbuf_off(struct gpu *g, const char *what) {
+    u32 x0 = g->c_x0, y0 = g->c_y0, x1 = g->c_x1, y1 = g->c_y1;
+    int r = need_gpu2(g);
+    if(r) return r;
+    r = gpu_set_target(g, g->t_base, g->t_stride, g->t_w, g->t_h, what);
+    if(!r && (x0 || y0 || x1 != g->t_w || y1 != g->t_h)) r = gpu_set_clip(g, x0, y0, x1, y1, what);
+    return r;
+}
+
+/* GPU.md 16.6: a FILL_RECT over the depth bytes, with a target set to them (2W bytes a line, the
+   buffer's stride), then the target back and the depth buffer again (the SET_TARGETs dropped it) */
+int gpu_zbuf_clear(struct gpu *g, u8 byte, const char *what) {
+    u32 cmd[17], w2 = 2 * g->t_w;
+    u_int n = 0;
+    int r = need_gpu2(g);
+    if(r) return r;
+    if(!g->z_valid || !gpu_target_fits(g->z_base, g->z_stride, w2, g->t_h)) return GPU_EARG;
+    if(!g->t_w || !g->t_h) return GPU_OK;                       /* no pixels, no depths */
+    cmd[n++] = GPU_HDR(GPU_OP_SET_TARGET, 0);
+    cmd[n++] = g->z_base;
+    cmd[n++] = g->z_stride;
+    cmd[n++] = GPU_WH(w2, g->t_h);
+    cmd[n++] = GPU_HDR(GPU_OP_FILL_RECT, byte);
+    cmd[n++] = GPU_XY(0, 0);
+    cmd[n++] = GPU_WH(w2, g->t_h);
+    cmd[n++] = GPU_HDR(GPU_OP_SET_TARGET, 0);
+    cmd[n++] = g->t_base;
+    cmd[n++] = g->t_stride;
+    cmd[n++] = GPU_WH(g->t_w, g->t_h);
+    if(g->c_x0 || g->c_y0 || g->c_x1 != g->t_w || g->c_y1 != g->t_h) {
+        cmd[n++] = GPU_HDR(GPU_OP_SET_CLIP, 0);
+        cmd[n++] = GPU_XY(g->c_x0, g->c_y0);
+        cmd[n++] = GPU_XY(g->c_x1, g->c_y1);
+    }
+    cmd[n++] = GPU_HDR(GPU_OP_SET_ZBUF, 0);
+    cmd[n++] = g->z_base;
+    cmd[n++] = g->z_stride;
+    return gpu_put(g, cmd, n, what);
+}
+
+int gpu_tri(struct gpu *g, u32 bits, const i32 *x, const i32 *y, const u32 *z, const u32 *c, const char *what) {
+    u32 cmd[7];
+    int i, r = need_gpu2(g);
+    if(r) return r;
+    if((bits & ~(0xFFu | GPU_TRI_FLAGS)) || ((bits & (GPU_TRI_ZTEST | GPU_TRI_ZWRITE)) && !g->z_valid)) return GPU_EARG;
+    cmd[0] = GPU_HDR(GPU_OP_TRIANGLE, bits);
+    for(i = 0; i < 3; i++) {
+        if(!xy_ok(x[i]) || !xy_ok(y[i]) || z[i] > 0xFFFFu || c[i] > 0xFFu) return GPU_EARG;
+        cmd[1 + 2 * i] = GPU_XY(x[i], y[i]);
+        cmd[2 + 2 * i] = GPU_ZC(z[i], c[i]);
+    }
+    return gpu_put(g, cmd, 7, what);
+}
+
+int gpu_flip(struct gpu *g, u32 base, const char *what) {
+    u32 cmd[2];
+    int r = need_gpu2(g);
+    if(r) return r;
+    if((base & 3) || base > SURF_VIDEO_GFX_BASE_BASE_MASK) return GPU_EARG;
+    cmd[0] = GPU_HDR(GPU_OP_FLIP, 0);
+    cmd[1] = base;
+    return gpu_put(g, cmd, 2, what);
+}
+
+/* gfx cube's pump (gpu.h): the FIFO_FREE rule as gpu_put() keeps it, never waiting */
+int gpu_pump(struct gpu *g, const u32 *w, u_int n, u_int *taken, u32 *fence, const char *what) {
+    u64 now;
+    u32 f, lim;
+    u_int k;
+    *taken = 0;
+    if(!g->present) return GPU_EABSENT;
+    if(n && !g->credit) {
+        u32 room = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
+        g->credit = room < g->fifo_depth ? room : g->fifo_depth;
+    }
+    f = *fence = RD(g, SURF_GPU_FENCE);
+    now = NOW(g);
+    if(n && g->credit) {
+        k = n < g->credit ? n : g->credit;
+        g->credit -= k;
+        g->words += k;
+        *taken = k;
+        while(k--) WR(g, SURF_GPU_CMD, *w++);
+        g->pump_fence = f;
+        g->pump_since = now ? now : 1;
+        return GPU_OK;
+    }
+    if(!g->pump_since || f != g->pump_fence) {
+        g->pump_fence = f;
+        g->pump_since = now ? now : 1;
+    } else if(now - g->pump_since >= (lim = limit_us(g))) {
+        g->pump_since = 0;
+        return stopped(g, what, n ? "took no command word" : "finished nothing", 0, lim);
+    }
+    if(interrupted(g)) return stop_intr(g, what);
+    P(g)->relax(CTX(g));
+    return GPU_OK;
 }
 
 /**** the display ****/
@@ -646,6 +796,13 @@ int gpu_pixel_get(struct gpu *g, u32 x, u32 y, u8 *c, const char *what) {
 
 /**** the rest of what the command needs ****/
 
+bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc) {
+    *count = VRD(g, SURF_VIDEO_FRAME_COUNT) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
+    if(*count == last) return false;
+    *crc = VRD(g, SURF_VIDEO_FRAME_CRC);                /* the frame that read counted (GPU.md section 3) */
+    return true;
+}
+
 void gpu_state_read(struct gpu *g, struct gpu_state *s) {
     s->status = RD(g, SURF_GPU_STATUS);
     s->ie = RD(g, SURF_GPU_IE);
@@ -657,7 +814,7 @@ void gpu_state_read(struct gpu *g, struct gpu_state *s) {
 
 u64 gpu_now_us(struct gpu *g) { return NOW(g); }
 bool gpu_interrupted(struct gpu *g) { return interrupted(g); }
-void gpu_flip(struct gpu *g, u32 base) { VWR(g, SURF_VIDEO_GFX_BASE, base & SURF_VIDEO_GFX_BASE_BASE_MASK); }
+void gpu_set_base(struct gpu *g, u32 base) { VWR(g, SURF_VIDEO_GFX_BASE, base & SURF_VIDEO_GFX_BASE_BASE_MASK); }
 static bool vram_span(u32 off, u32 words) {
     return !(off & 3) && off <= SURF_VRAM_BYTES && words <= (SURF_VRAM_BYTES - off) / 4;
 }

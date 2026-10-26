@@ -29,6 +29,12 @@ lock), in the host test a stand-in that hands the command words to the C model o
     the console lock through the port; GFX_BASE, GFX_STRIDE, GFX_SCALE and the mode are written
     together within a millisecond after a vertical blanking began (GPU.md section 3's frame latch
     rule), so the picture changes in one frame.
+
+10/26/26 (SurfGPU, the cube in SurfOS; GPU.md 15.8): GPU2's commands (GPU.md section 16) on a
+GPU2 only (GPU_ENOGPU2 on a GPU1, nothing sent): the depth buffer, which the driver keeps as it
+keeps the target (an accepted SET_TARGET drops it; sent again after an ABORT) and clears with
+FILL_RECT over its bytes as section 16.6 says, TRIANGLE and FLIP; and gpu_pump() for a run that
+looks at every frame between its words (gfx cube, gfxcube.c).
 */
 
 #ifndef _ARTY_GPU_H
@@ -39,7 +45,7 @@ lock), in the host test a stand-in that hands the command words to the C model o
 /* the two IDs, under names of the driver's own: surfcpu/gpu.h's GPU_ID_VALUE is the newest command
    set's ID, which G4 changes to "GPU2" */
 #define GPUDRV_ID_GPU1  0x31555047u     /* gpu.ID "GPU1": GPU.md's command set (G2) */
-#define GPUDRV_ID_GPU2  0x32555047u     /* "GPU2": G4's, a superset; the driver uses GPU1's commands */
+#define GPUDRV_ID_GPU2  0x32555047u     /* "GPU2": G4's, a superset: SET_ZBUF, TRIANGLE, FLIP */
 
 #define GPU_OK          0
 #define GPU_EABSENT    -1               /* no GPU in this bitstream */
@@ -48,6 +54,7 @@ lock), in the host test a stand-in that hands the command words to the C model o
 #define GPU_EERROR     -4               /* the engine reported an error (said, cleared, ABORTed) */
 #define GPU_EARG       -5               /* refused before anything was sent */
 #define GPU_ENOMEM     -6
+#define GPU_ENOGPU2    -7               /* a GPU2 command on a GPU1: refused before anything was sent */
 #define GPU_ECANCEL    -8               /* Ctrl+C or a kill where nothing needed stopping (no ABORT) */
 
 #define GPU_TIMEOUT_US  2000000u        /* without a word taken or a command finished: stopped */
@@ -118,22 +125,30 @@ struct gpu_port {
 struct gpu {
     const struct gpu_port *port;
     bool present;                       /* FEATURES.GPU and a known gpu.ID */
+    bool gpu2;                          /* gpu.ID "GPU2": SET_ZBUF, TRIANGLE and FLIP as well */
     bool irq;                           /* fences wait on the GPU's interrupt */
     const char *why;                    /* why there is no GPU */
     char why_buf[72];                   /* (with the value read) */
     u32 features;                       /* sysinfo.FEATURES */
     u32 id, fifo_depth, vram_bytes;
     u32 credit;                         /* FIFO words known to be free */
-    u32 fence_sent;                     /* the last FENCE value sent */
+    u32 fence_sent;                     /* the last FENCE value sent (or given out: gpu_fence_next()) */
     /* the engine's target and clip as the driver last set them: an ABORT keeps them, and they are
        sent again after one in case it cut a SET_TARGET or SET_CLIP short */
     u32 t_base, t_stride, t_w, t_h;
     u32 c_x0, c_y0, c_x1, c_y1;
+    /* GPU2: the depth buffer, likewise (an accepted SET_TARGET drops it, so after one it is sent
+       again when there is one) */
+    bool z_valid;
+    u32 z_base, z_stride;
     u32 spin_us;                        /* a fence is polled this long before the wait sleeps (GPU_SPIN_US) */
     bool latched;                       /* the last display change caught the frame latch */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back),
                                            a stopped engine given GPU_QUICK_US once Ctrl+C came */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
+    /* gpu_pump(): FENCE when the engine last made progress, and when that was (0: not yet seen) */
+    u32 pump_fence;
+    u64 pump_since;
     /* what happened, for gfx */
     u_long words, fences, irqs, irq_waits, irq_wakes, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
@@ -154,10 +169,17 @@ int gpu_put(struct gpu *g, const u32 *w, u_int n, const char *what);
 int gpu_sync(struct gpu *g, const char *what);
 int gpu_fence_send(struct gpu *g, const char *what, u32 *value);
 int gpu_fence_wait(struct gpu *g, u32 value, const char *what);
+u32 gpu_fence_next(struct gpu *g);                 /* the value for a FENCE the caller writes itself */
 int gpu_check(struct gpu *g, const char *what);    /* the sticky errors: GPU_OK or GPU_EERROR */
-int gpu_abort(struct gpu *g, const char *what);    /* ABORT, then the target and clip queued again */
+int gpu_abort(struct gpu *g, const char *what);    /* ABORT, then the target, clip and depth buffer queued again */
 int gpu_reset(struct gpu *g, const char *what);    /* ABORT, sticky bits cleared, the reset target */
 bool gpu_busy(struct gpu *g);
+/* For a run that looks at every frame between its words (gfx cube): as many of the n words as the
+   FIFO has room for now (*taken; n may be 0), never waiting, and FENCE as it reads now (*fence).
+   Two seconds without progress (a word taken, FENCE moving) since the claim or the last progress
+   is a stopped engine: said, ABORT, GPU_ETIMEOUT; Ctrl+C ABORTs: GPU_EINTR. When it took nothing,
+   other tasks may run before it returns. */
+int gpu_pump(struct gpu *g, const u32 *w, u_int n, u_int *taken, u32 *fence, const char *what);
 
 /* drawing, in target coordinates (GPU.md section 5: signed x, y; the clip cuts) */
 int gpu_set_target(struct gpu *g, u32 base, u32 stride, u32 w, u32 h, const char *what);
@@ -170,6 +192,25 @@ int gpu_expand(struct gpu *g, i32 x, i32 y, u32 w, u32 h, u8 fg, int bg, const u
 int gpu_text(struct gpu *g, i32 x, i32 y, u8 fg, int bg, const u8 *cells, u_int n, const char *what);  /* code page 437 cells */
 int gpu_wait_vblank(struct gpu *g, const char *what);
 u32 gpu_text_width(u_int n);           /* pixels of n cells */
+bool gpu_target_fits(u32 base, u32 stride, u32 w, u32 h);   /* SET_TARGET would take it (GPU.md section 5) */
+
+/* GPU2 (GPU.md section 16): GPU_ENOGPU2 on a GPU1, and GPU_EARG where the engine would refuse
+   it; then nothing is sent. The depth buffer, for the target the driver has: set (SET_ZBUF, 16.2's
+   rule), off (SET_TARGET again, which drops it; the clip sent again after it), clear (every depth
+   byte * 0x101: FILL_RECT of byte over its bytes as a target, 16.6; 0xFF gives 0xFFFF, the farthest;
+   refused for a target 16,384 or more wide, whose depth bytes are no target) */
+bool gpu_zbuf_fits(u32 base, u32 stride, u32 w, u32 h);     /* SET_ZBUF would take it for a w x h target */
+int gpu_zbuf_set(struct gpu *g, u32 base, u32 stride, const char *what);
+int gpu_zbuf_off(struct gpu *g, const char *what);
+int gpu_zbuf_clear(struct gpu *g, u8 byte, const char *what);
+/* TRIANGLE: bits the header's (7:0 the flat colour, GPU_TRI_*); vertex i at (x[i], y[i]) in 12.4
+   (sixteenths of a pixel, -32768 to 32767), depth z[i] (0 near to 0xFFFF far), colour c[i]; ZTEST
+   or ZWRITE without a depth buffer is refused */
+#define GPU_TRI_FLAGS (GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE | GPU_TRI_ZWRITE | GPU_TRI_CULL_CW | GPU_TRI_CULL_CCW)
+int gpu_tri(struct gpu *g, u32 bits, const i32 *x, const i32 *y, const u32 *z, const u32 *c, const char *what);
+/* FLIP: the engine writes GFX_BASE = base at the next vertical blanking (base a multiple of 4, at
+   most 0x7FFFC, GFX_BASE's bits): the frame after it shows the picture there, whole (16.7) */
+int gpu_flip(struct gpu *g, u32 base, const char *what);
 
 /* the display */
 int gpu_screen_get(struct gpu *g, struct gpu_screen *d);
@@ -195,11 +236,13 @@ struct gpu_state {
     u32 status, ie, fifo_free, fence, frame_count, frame_crc;
 };
 void gpu_state_read(struct gpu *g, struct gpu_state *s);
+/* FRAME_COUNT (*count); when it is not last, also FRAME_CRC, of the frame it counts (*crc): true */
+bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc);
 
-/* for the command's longer runs (gfx.c: bench, demo) */
+/* for the command's longer runs (gfx.c: bench, demo; gfxcube.c) */
 u64 gpu_now_us(struct gpu *g);
 bool gpu_interrupted(struct gpu *g);               /* Ctrl+C, unless keep_going */
-void gpu_flip(struct gpu *g, u32 base);            /* GFX_BASE alone: the next frame latch takes it whole */
+void gpu_set_base(struct gpu *g, u32 base);        /* GFX_BASE alone, by the CPU: the next frame latch takes it whole */
 int gpu_vram_read(struct gpu *g, u32 off, u32 *dst, u32 words);      /* GPU_EARG outside VRAM */
 int gpu_vram_write(struct gpu *g, u32 off, const u32 *src, u32 words);
 void *gpu_alloc(struct gpu *g, u32 bytes);         /* NULL when there is none */

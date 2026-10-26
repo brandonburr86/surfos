@@ -20,6 +20,10 @@ moment, a frame counter that stops, Ctrl+C at a moment, another claimant holding
 It records what the tests check: every CMD word (and whether the FIFO had room and the driver
 had read FIFO_FREE for it), the display registers' writes with their times and the frame latch
 each one reached, ABORTs, engine words that drew into the page on the screen while it was shown.
+
+10/26/26 (GPU2): with gpu.ID "GPU2" the engine takes SET_ZBUF, TRIANGLE and FLIP (a GPU1 calls
+them unknown opcodes); FLIP writes GFX_BASE at the next vertical blanking, as surf_gpu does; and
+without a pixel clock (frames_stop) no blanking ever begins, so WAIT_VBLANK and FLIP wait for ever.
 */
 
 #ifndef _GPUSTUB_H
@@ -34,6 +38,7 @@ each one reached, ABORTs, engine words that drew into the page on the screen whi
 #define STUB_LATCH_US   16651u          /* line 524: the frame latch takes CTRL and the GFX_ registers */
 #define STUB_CMD_LOG    (1u << 20)
 #define STUB_DISP_LOG   4096u
+#define STUB_NEVER      (1ull << 40)    /* a blanking that never comes (us) */
 
 struct stub_disp {                      /* the display registers as one value */
     uint32_t mode, base, stride, scale;
@@ -61,12 +66,15 @@ struct stub {
     unsigned head, count, depth;
     uint32_t id, info, ie, overflow;
     uint64_t eng_cycles;                /* the engine's own clock (25 per us) */
-    int wait_vbl;                       /* a WAIT_VBLANK holds the engine */
+    int wait_vbl;                       /* a WAIT_VBLANK or a FLIP holds the engine */
     uint64_t vbl_until;
+    int flip_pending;                   /* the wait is a FLIP's: GFX_BASE = flip_value when it ends */
+    uint32_t flip_value;
+    unsigned flips_done, gpu2_on_gpu1;  /* FLIPs that wrote GFX_BASE; GPU2 opcodes a GPU1 refused */
     /* the CPU's time */
     uint64_t now;
     uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us (outside atomic stretches) */
-    int frames_stop;                    /* the frame counter does not move (no pixel clock) */
+    int frames_stop;                    /* no pixel clock: the frame counter stays, no blanking begins */
     uint32_t frames_frozen;             /* where it stays then (7 when 0) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */

@@ -41,6 +41,15 @@ static struct stub *fresh(int irq) {
     return s;
 }
 
+/* a GPU2 (G4's engine): SET_ZBUF, TRIANGLE, FLIP too */
+static struct stub *fresh2(int irq) {
+    struct stub *s = calloc(1, sizeof(*s));
+    stub_init(s, irq);
+    s->id = GPUDRV_ID_GPU2;
+    check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.present && G.gpu2, "probe: the stand-in is a GPU2");
+    return s;
+}
+
 /* every test ends here: what it printed was measured line by line (GPU.md 15.2's 80 columns) */
 static void done(struct stub *s) {
     const char *wide;
@@ -84,6 +93,9 @@ static struct ref *ref_of(struct stub *s) {
     r->e.cy0 = s->eng.cy0;
     r->e.cx1 = s->eng.cx1;
     r->e.cy1 = s->eng.cy1;
+    r->e.zvalid = s->eng.zvalid;                /* GPU2: and its depth buffer */
+    r->e.zbase = s->eng.zbase;
+    r->e.zstride = s->eng.zstride;
     return r;
 }
 
@@ -322,6 +334,294 @@ static void t_random(unsigned seed) {
     done(s);
 }
 TEST(t_random)
+
+/**** GPU2's commands (GPU.md section 16; 10/26/26) ****/
+
+/* a vertex coordinate in 12.4 as gfx tri takes it: pixels with sixteenths in decimal */
+static void fx_str(char *b, size_t n, int v16) {
+    unsigned a = (unsigned)(v16 < 0 ? -v16 : v16);
+    if(a % 16) snprintf(b, n, "%s%u.%04u", v16 < 0 ? "-" : "", a / 16, (a % 16) * 625);
+    else snprintf(b, n, "%s%u", v16 < 0 ? "-" : "", a / 16);
+}
+
+/* GPU.md 16.2's words of a TRIANGLE: the header, then each vertex's X | Y << 16 (12.4) and Z | C << 16 */
+static void ref_tri(struct ref *r, uint32_t hdr_bits, const int *x16, const int *y16, const unsigned *z, const unsigned *c) {
+    int i;
+    w(r, GPU_HDR(GPU_OP_TRIANGLE, hdr_bits));
+    for(i = 0; i < 3; i++) {
+        w(r, ((uint32_t)x16[i] & 0xFFFFu) | ((uint32_t)y16[i] & 0xFFFFu) << 16);
+        w(r, (z[i] & 0xFFFFu) | (c[i] & 0xFFu) << 16);
+    }
+}
+
+/* GPU.md 16.6: the depth bytes as a target, FILL_RECT of b, the target back, SET_ZBUF again */
+static void ref_zclear(struct ref *r, uint32_t zb, uint32_t zs, uint32_t tb, uint32_t ts, uint32_t tw, uint32_t th, uint8_t b) {
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, zb); w(r, zs); w(r, GPU_WH(2 * tw, th));
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, b)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(2 * tw, th));
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, tb); w(r, ts); w(r, GPU_WH(tw, th));
+    w(r, GPU_HDR(GPU_OP_SET_ZBUF, 0)); w(r, zb); w(r, zs);
+}
+
+static int depth_bytes_are(struct stub *s, uint8_t b) {
+    unsigned i;
+    for(i = 153600; i < GPU_VRAM_BYTES; i++)
+        if(s->vram[i] != b) return 0;
+    return 1;
+}
+
+static void t_gpu2(unsigned seed) {
+    static const unsigned c200[3] = { 200, 200, 200 };
+    struct stub *s = fresh2(1);
+    struct ref *r;
+    uint8_t *was = malloc(GPU_VRAM_BYTES);
+    int x[3], y[3], i, ok;
+    unsigned z[3], c[3], nw0, culled;
+    unsigned long long zfail, covered;
+    uint64_t t0, vb;
+    (void)seed;
+    check(gfx(s, "gfx mode gfx 2") == CMD_OK && G.t_w == 320 && G.t_h == 240, "gfx mode gfx 2: the target 320x240 at VRAM 0");
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    depth buffer: none\n"), "gfx on a GPU2: no depth buffer yet");
+    r = ref_of(s);
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_OK && said(s, "depth buffer: VRAM 153600, stride 640, for the target's 320x240") &&
+          s->eng.zvalid && s->eng.zbase == 153600 && s->eng.zstride == 640 && G.z_valid,
+          "gfx zbuf 153600 640: SET_ZBUF, GPU.md 16.6's layout (the depth after pictures A and B)");
+    w(r, GPU_HDR(GPU_OP_SET_ZBUF, 0)); w(r, 153600); w(r, 640);
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    depth buffer: VRAM 153600, stride 640\n"), "  and gfx says so");
+    check(gfx(s, "gfx zclear") == CMD_OK && !s->nout, "gfx zclear: done, nothing said");
+    ref_zclear(r, 153600, 640, 0, 320, 320, 240, 0xFF);
+    check(same(s, r) && depth_bytes_are(s, 0xFF) && s->eng.zvalid && s->eng.base == 0 && s->eng.tw == 320 && s->eng.cx1 == 320,
+          "  every depth 0xFFFF: FILL_RECT 0xFF over the depth bytes, then the target and the depth buffer again (16.6)");
+    check(gfx(s, "gfx clear 0") == CMD_OK, "gfx clear 0");
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, 0)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+    /* a flat triangle, clockwise on the screen (16.3: A > 0), drawn, then culled */
+    x[0] = GPU_FX(10); y[0] = GPU_FX(10); x[1] = GPU_FX(100); y[1] = GPU_FX(20); x[2] = GPU_FX(50); y[2] = GPU_FX(90);
+    z[0] = z[1] = z[2] = 0;
+    c[0] = c[1] = c[2] = 77;
+    check(gfx(s, "gfx tri 10 10 100 20 50 90 77") == CMD_OK && !s->nout, "gfx tri 10 10 100 20 50 90 77: a flat triangle");
+    ref_tri(r, 77, x, y, z, c);
+    check(same(s, r) && px(s, 50, 40) == 77 && px(s, 5, 5) == 0 && px(s, 100, 90) == 0, "  TRIANGLE (16.2), as the model draws it");
+    memcpy(was, s->vram, GPU_VRAM_BYTES);
+    culled = (unsigned)s->eng.tri_culled;
+    check(gfx(s, "gfx tri cullcw 10 10 100 20 50 90 200") == CMD_OK && s->eng.tri_culled == culled + 1, "gfx tri cullcw on it: culled");
+    ref_tri(r, 200 | GPU_TRI_CULL_CW, x, y, z, c200);
+    check(same(s, r) && !memcmp(s->vram, was, GPU_VRAM_BYTES), "  nothing drawn");
+    check(gfx(s, "gfx tri cullccw 10 10 100 20 50 90 200") == CMD_OK, "gfx tri cullccw on it: drawn");
+    ref_tri(r, 200 | GPU_TRI_CULL_CCW, x, y, z, c200);
+    check(same(s, r) && px(s, 50, 40) == 200, "  in colour 200");
+    /* two triangles that share an edge through pixel centres (the top-left rule): every pixel of
+       their square drawn exactly once (16.3) */
+    memset(s->op_px, 0, sizeof(s->op_px));
+    check(gfx(s, "gfx tri 20 100 60 100 60 140 1") == CMD_OK && gfx(s, "gfx tri 20 100 60 140 20 140 2") == CMD_OK,
+          "a square of 40x40 as two triangles along its diagonal");
+    x[0] = GPU_FX(20); y[0] = GPU_FX(100); x[1] = GPU_FX(60); y[1] = GPU_FX(100); x[2] = GPU_FX(60); y[2] = GPU_FX(140);
+    c[0] = c[1] = c[2] = 1;
+    ref_tri(r, 1, x, y, z, c);
+    x[1] = GPU_FX(60); y[1] = GPU_FX(140); x[2] = GPU_FX(20); y[2] = GPU_FX(140);
+    c[0] = c[1] = c[2] = 2;
+    ref_tri(r, 2, x, y, z, c);
+    for(ok = 1, i = 0; i < 1600; i++) ok &= px(s, 20 + i % 40, 100 + i / 40) == 1 || px(s, 20 + i % 40, 100 + i / 40) == 2;
+    check(same(s, r) && ok && s->op_px[GPU_OP_TRIANGLE] == 1600 && px(s, 59, 100) == 1 && px(s, 20, 139) == 2,
+          "  each of its 1,600 pixels drawn once (no gap, no pixel twice), as the model");
+    /* Gouraud with depth, vertices with sixteenths: two triangles crossing in depth */
+    check(gfx(s, "gfx tri gouraud,ztest,zwrite 150.5 30.25 1000 32 300.0625 60 60000 63 200 200.75 30000 40") == CMD_OK,
+          "gfx tri gouraud,ztest,zwrite with sixteenths: drawn");
+    x[0] = 2408; y[0] = 484; x[1] = 4801; y[1] = GPU_FX(60); x[2] = GPU_FX(200); y[2] = 3212;
+    z[0] = 1000; z[1] = 60000; z[2] = 30000;
+    c[0] = 32; c[1] = 63; c[2] = 40;
+    ref_tri(r, 32 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE, x, y, z, c);
+    check(same(s, r) && s->vram[153600 + 100 * 640 + 2 * 200] != 0xFF, "  as the model, its depths written (16.4)");
+    zfail = s->eng.tri_zfail;
+    covered = s->eng.tri_pixels;
+    check(gfx(s, "gfx tri gouraud,zle,zwrite 140 200 30000 64 310 190 30000 95 250 20 30000 80") == CMD_OK,
+          "gfx tri gouraud,zle,zwrite: a second one at depth 30000, through the first");
+    x[0] = GPU_FX(140); y[0] = GPU_FX(200); x[1] = GPU_FX(310); y[1] = GPU_FX(190); x[2] = GPU_FX(250); y[2] = GPU_FX(20);
+    z[0] = z[1] = z[2] = 30000;
+    c[0] = 64; c[1] = 95; c[2] = 80;
+    ref_tri(r, 64 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE | GPU_TRI_ZWRITE, x, y, z, c);
+    zfail = s->eng.tri_zfail - zfail;
+    covered = s->eng.tri_pixels - covered;
+    check(same(s, r) && zfail > 0 && covered > zfail && s->eng.tri_clamped == 0 && s->eng.tri_wide == 0,
+          "  as the model: in front of the first in part, behind it (dropped by the depth test) in part");
+    /* zclear with another byte, the depth buffer off, another target, FLIP */
+    check(gfx(s, "gfx zclear 0x80") == CMD_OK, "gfx zclear 0x80");
+    ref_zclear(r, 153600, 640, 0, 320, 320, 240, 0x80);
+    check(same(s, r) && depth_bytes_are(s, 0x80), "  every depth 0x8080");
+    check(gfx(s, "gfx zbuf off") == CMD_OK && said(s, "depth buffer: none") && !s->eng.zvalid && !G.z_valid &&
+          s->eng.base == 0 && s->eng.tw == 320 && s->eng.cx1 == 320, "gfx zbuf off: SET_TARGET again, the depth buffer gone");
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, 0); w(r, 320); w(r, GPU_WH(320, 240));
+    check(gfx(s, "gfx tri ztest 0 0 0 1 10 0 0 1 0 10 0 1") == CMD_FAIL && said(s, "need a depth buffer"),
+          "  then ztest is refused (nothing sent), saying why");
+    check(gfx(s, "gfx target 76800 320 320 240") == CMD_OK && said(s, "target: VRAM 76800, stride 320, 320x240") &&
+          s->eng.base == 76800 && G.t_base == 76800, "gfx target 76800 320 320 240: picture B");
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, 76800); w(r, 320); w(r, GPU_WH(320, 240));
+    check(gfx(s, "gfx clear 0x55") == CMD_OK && gfx(s, "gfx tri 0 0 319 0 0 239 9") == CMD_OK, "  drawn into");
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, 0x55)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+    x[0] = 0; y[0] = 0; x[1] = GPU_FX(319); y[1] = 0; x[2] = 0; y[2] = GPU_FX(239);
+    z[0] = z[1] = z[2] = 0;
+    c[0] = c[1] = c[2] = 9;
+    ref_tri(r, 9, x, y, z, c);
+    check(same(s, r) && s->vram[76800] == 9 && s->vram[76800 + 239 * 320 + 319] == 0x55, "  as the model, in B");
+    nw0 = s->nw;
+    t0 = s->now;
+    check(gfx(s, "gfx flip") == CMD_OK && said(s, "display: GFX_BASE 76800, written by FLIP at a vertical blanking") &&
+          s->reg.base == 76800 && s->nw == nw0 + 1 && s->wlog[nw0].reg == SURF_VIDEO_GFX_BASE,
+          "gfx flip: FLIP to the target's base, GFX_BASE written once");
+    vb = s->wlog[nw0].t;
+    check(vb % STUB_FRAME_US == STUB_VBLANK_US && vb > t0 && vb - t0 <= STUB_FRAME_US + 100 && s->flips_done == 1,
+          "  at the next vertical blanking (16.7), the command done once it was written");
+    check(gfx(s, "gfx flip 0") == CMD_OK && s->reg.base == 0 && s->flips_done == 2, "gfx flip 0: back to picture A");
+    check(s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0 && s->gpu2_on_gpu1 == 0,
+          "GPU2's commands: the FIFO rule kept, no error, no timeout");
+    free(was);
+    free(r);
+    done(s);
+}
+TEST(t_gpu2)
+
+/* random triangles with every flag, vertices on the target, past it and over the whole 12.4 range,
+   with the depth buffer, depth clears and fills between: each against the reference */
+static void t_gpu2_random(unsigned seed) {
+    struct stub *s = fresh2(1);
+    struct ref *r;
+    int i, bad = 0, drawn = 0;
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    gfx(s, "gfx zclear");
+    r = ref_of(s);
+    for(i = 0; i < 120; i++) {
+        unsigned k = rnd() % 20;
+        if(k == 0) {
+            unsigned b = rnd() & 0xFF;
+            gfx(s, "gfx zclear %u", b);
+            ref_zclear(r, 153600, 640, 0, 320, 320, 240, (uint8_t)b);
+        } else if(k == 1) {
+            unsigned c = rnd() & 0xFF;
+            gfx(s, "gfx clear %u", c);
+            w(r, GPU_HDR(GPU_OP_FILL_RECT, c)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+        } else {
+            char how[64] = "", xs[3][16], ys[3][16];
+            uint32_t bits = 0;
+            int x[3], y[3], v;
+            unsigned z[3], c[3];
+            for(v = 0; v < 3; v++) {
+                if(rnd() % 12 == 0) {                   /* anywhere in the 12.4 range */
+                    x[v] = (int)(rnd() % 65536) - 32768;
+                    y[v] = (int)(rnd() % 65536) - 32768;
+                } else {                                /* on the target or a little past it */
+                    x[v] = (int)(rnd() % (360 * 16)) - 20 * 16;
+                    y[v] = (int)(rnd() % (280 * 16)) - 20 * 16;
+                }
+                z[v] = rnd() & 0xFFFF;
+                c[v] = rnd() & 0xFF;
+                fx_str(xs[v], sizeof(xs[v]), x[v]);
+                fx_str(ys[v], sizeof(ys[v]), y[v]);
+            }
+            if(rnd() & 1) bits |= GPU_TRI_GOURAUD;
+            switch(rnd() % 3) {
+            case 1: bits |= GPU_TRI_ZTEST; break;
+            case 2: bits |= GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE; break;
+            }
+            if(rnd() & 1) bits |= GPU_TRI_ZWRITE;
+            if(rnd() % 10 == 0) bits |= GPU_TRI_CULL_CW;
+            if(rnd() % 10 == 0) bits |= GPU_TRI_CULL_CCW;
+            if(bits & GPU_TRI_GOURAUD) strcat(how, "gouraud,");
+            if(bits & GPU_TRI_ZFUNC_LE) strcat(how, "zle,");
+            else if(bits & GPU_TRI_ZTEST) strcat(how, "ztest,");
+            if(bits & GPU_TRI_ZWRITE) strcat(how, "zwrite,");
+            if(bits & GPU_TRI_CULL_CW) strcat(how, "cullcw,");
+            if(bits & GPU_TRI_CULL_CCW) strcat(how, "cullccw,");
+            if(how[0]) how[strlen(how) - 1] = ' ';
+            if(gfx(s, "gfx tri %s%s %s %u %u %s %s %u %u %s %s %u %u", how, xs[0], ys[0], z[0], c[0], xs[1], ys[1], z[1], c[1],
+                   xs[2], ys[2], z[2], c[2]) != CMD_OK && !bad++)
+                printf("    (seed %u, triangle %d: %s)\n", seed, i, s->out);
+            ref_tri(r, bits | c[0], x, y, z, c);
+            drawn++;
+        }
+        if(!same(s, r) && !bad++) printf("    (seed %u, command %d: %s)\n", seed, i, s->out);
+    }
+    check(!bad && drawn > 90, "random triangles (every flag, sixteenths, past the edges, the whole 12.4 range) with "
+          "depth clears and fills: VRAM and the depth buffer the model's");
+    check(s->eng.tri_drawn > 20 && s->eng.tri_zfail > 0 && s->eng.tri_clamped == 0 && s->eng.tri_wide == 0 &&
+          s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0,
+          "  triangles walked and depths that failed among them; the FIFO rule kept, no error");
+    free(r);
+    done(s);
+}
+TEST(t_gpu2_random)
+
+/* the driver's rules with GPU2's commands: the FIFO, a stopped engine (the depth buffer sent again
+   after the ABORT), a FLIP that never comes (no pixel clock), Ctrl+C while a FLIP waits, an error,
+   and a GPU1, on which each says that it needs GPU2 and sends nothing */
+static void t_gpu2_rules(unsigned seed) {
+    struct stub *s = fresh2(1);
+    unsigned i, n0, f0;
+    uint64_t t0;
+    char line[160];
+    int ok;
+    (void)seed;
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    s->slow = 300;                              /* 12 us a word: the FIFO fills */
+    ok = gpu_claim(&G, "gfx tri") == GPU_OK;    /* one submission of 630 words, as gfx cube's frames are long */
+    for(i = 0; i < 30 && ok; i++) {
+        int x[3] = { (int)i * 16, 300 * 16, 0 }, y[3] = { 0, (int)i * 160, 239 * 16 };
+        unsigned z[3] = { 100 * i, 9, 400 }, c[3] = { 1, 2, 3 };
+        ok = gpu_tri(&G, 1 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE, x, y, z, c, "gfx tri") == GPU_OK &&
+             gpu_zbuf_clear(&G, 0xFF, "gfx tri") == GPU_OK;
+    }
+    ok = ok && gpu_sync(&G, "gfx tri") == GPU_OK;
+    gpu_release(&G);
+    check(ok && s->full_seen > 0 && s->writes_full == 0 && s->writes_blind == 0 && !s->overflow && G.errors == 0,
+          "a slow engine, 30 triangles and 30 depth clears in one go: no word into a full FIFO or past the room said");
+    s->slow = 0;
+    /* a stopped engine: said, ABORT, and the target, clip and depth buffer sent again */
+    s->stopped = 1;
+    t0 = s->now;
+    check(gfx(s, "gfx tri ztest 0 0 0 1 100 0 0 1 0 100 0 1") == CMD_FAIL && said(s, "gfx tri: the GPU finished nothing for 2 s"),
+          "a stopped engine under gfx tri: said, ABORT, failed");
+    check(s->now - t0 >= 2000000 && s->now - t0 < 2400000, "  after 2 seconds, not much more");
+    s->stopped = 0;
+    stub_drain(s, 1000);
+    check(s->eng.zvalid && s->eng.zbase == 153600 && s->eng.zstride == 640 && s->eng.base == 0 && s->eng.tw == 320 &&
+          G.z_valid, "  the engine back: its target, clip and depth buffer the driver's (sent again after the ABORT)");
+    check(gfx(s, "gfx tri ztest,zwrite 0 0 0 1 100 0 0 1 0 100 0 1") == CMD_OK, "  and a triangle with depth works");
+    /* a FLIP that never comes: no pixel clock, no blanking */
+    s->frames_stop = 1;
+    f0 = s->flips_done;
+    t0 = s->now;
+    check(gfx(s, "gfx flip 76800") == CMD_FAIL && said(s, "gfx flip: the GPU finished nothing for 2 s: a stopped engine; ABORT"),
+          "a FLIP with no blanking to wait for: a stopped engine after 2 s, ABORT, failed");
+    snprintf(line, sizeof(line), "  a bounded wait: %llu ms, the FLIP's write dropped by the ABORT",
+             (unsigned long long)((s->now - t0) / 1000));
+    check(s->now - t0 >= 2000000 && s->now - t0 < 2400000 && s->flips_done == f0 && s->reg.base == 0, line);
+    s->intr_at = s->now + 100000;
+    t0 = s->now;
+    check(gfx(s, "gfx flip 76800") == CMD_FAIL && said(s, "gfx flip: interrupted: the engine stopped (ABORT)") &&
+          s->now - t0 < 200000 && s->flips_done == f0 && s->reg.base == 0, "Ctrl+C while a FLIP waits: ABORT, said, at once");
+    s->intr_at = 0;
+    s->frames_stop = 0;
+    check(gfx(s, "gfx flip 76800") == CMD_OK && s->reg.base == 76800, "  with blankings again, the FLIP works");
+    /* an error: SET_ZBUF's base arrives unaligned */
+    s->corrupt_value_at = s->cmd_writes + 2;
+    s->corrupt_value = 153602;
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_FAIL && said(s, "BAD_PARAM"), "BAD_PARAM (a refused SET_ZBUF): said in words");
+    stub_drain(s, 1000);
+    check(!(s->eng.sticky & GPU_ST_BAD_PARAM) && s->eng.zvalid && s->eng.zbase == 153600 && G.z_valid,
+          "  cleared, ABORT, and the depth buffer sent again with the target: the engine's is the driver's");
+    done(s);
+    /* a GPU1 */
+    s = fresh(1);
+    gfx(s, "gfx mode gfx 2");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_FAIL && said(s, "gfx zbuf: needs GPU2 (SET_ZBUF, TRIANGLE, FLIP); this engine is GPU1") &&
+          gfx(s, "gfx zclear") == CMD_FAIL && said(s, "needs GPU2") && gfx(s, "gfx tri 0 0 9 0 0 9 1") == CMD_FAIL &&
+          said(s, "needs GPU2") && gfx(s, "gfx flip") == CMD_FAIL && said(s, "needs GPU2"),
+          "on a GPU1, zbuf, zclear, tri and flip say they need GPU2");
+    check(s->ncmd == n0 && s->gpu2_on_gpu1 == 0 && !s->locked, "  and send nothing");
+    check(gfx(s, "gfx target 76800 320 320 240") == CMD_OK && s->eng.base == 76800, "  gfx target is GPU1's too");
+    done(s);
+}
+TEST(t_gpu2_rules)
 
 /**** the FIFO rule, a stopped engine ****/
 
@@ -1102,3 +1402,75 @@ static void t_usage(unsigned seed) {
     done(s);
 }
 TEST(t_usage)
+
+/* GPU2's commands: every argument checked before a word is sent (a usage line, CMD_USAGE); x and
+   y in pixels with sixteenths; how's words */
+static void t_usage2(unsigned seed) {
+    static const char *const bad[] = {
+        "gfx tri", "gfx tri 1 2 3", "gfx tri 0 0 10 0 0 10", "gfx tri 0 0 10 0 0 10 256", "gfx tri 0.3 0 10 0 0 10 1",
+        "gfx tri 2048 0 10 0 0 10 1", "gfx tri -2048.0625 0 10 0 0 10 1", "gfx tri gouraud 0 0 10 0 0 10 1",
+        "gfx tri zwrite 0 0 10 0 0 10 1", "gfx tri zle 0 0 10 0 0 10 1", "gfx tri frob 0 0 10 0 0 10 1",
+        "gfx tri flat,gouraud 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri ztest,zle 0 0 0 1 9 0 0 1 0 9 0 1",
+        "gfx tri gouraud,,zwrite 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri gouraud, 0 0 0 1 9 0 0 1 0 9 0 1",
+        "gfx tri ,gouraud 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri cullcw,cullcw 0 0 9 0 0 9 1",
+        "gfx tri 0 0 70000 1 9 0 0 1 0 9 0 1", "gfx tri 0 0 0 1 9 0 0 1 0 9 0 256", "gfx tri 0 0 0 1 9 0 0 1 0 9 0",
+        "gfx tri 0x 0 9 0 0 9 1", "gfx tri 1.2.3 0 9 0 0 9 1", "gfx tri 12. 0 9 0 0 9 1", "gfx tri 0x10.5 0 9 0 0 9 1",
+        "gfx tri 1.000000001 0 9 0 0 9 1", "gfx tri - 0 9 0 0 9 1", "gfx tri 1e3 0 9 0 0 9 1",
+        "gfx zbuf", "gfx zbuf 1 640", "gfx zbuf 153600 320", "gfx zbuf 300000 640", "gfx zbuf 0 x", "gfx zbuf on",
+        "gfx zbuf 153600 640 1", "gfx zclear 256", "gfx zclear 1 2", "gfx zclear x", "gfx flip 2", "gfx flip 0x80000",
+        "gfx flip 1 2", "gfx flip x", "gfx target 1 320 320 240", "gfx target 0 320 321 240", "gfx target 0 640 640 481",
+        "gfx target 0 320 320", "gfx target 0 32768 32768 1", NULL
+    };
+    struct stub *s = fresh2(1);
+    unsigned i, n0, bad_ones = 0;
+    (void)seed;
+    gfx(s, "gfx mode gfx 2");
+    n0 = s->ncmd;
+    for(i = 0; bad[i]; i++) {
+        if(gfx(s, "%s", bad[i]) != CMD_USAGE || s->ncmd != n0 || !said(s, "usage")) {
+            if(!bad_ones++) printf("    (%s: %s)\n", bad[i], s->out);
+        }
+    }
+    check(!bad_ones, "GPU2's usage errors (tri, zbuf, zclear, flip) and gfx target's: CMD_USAGE, a usage line, not a word sent");
+    check(!s->locked && !G.z_valid && G.t_w == 320, "  the claim never left held, nothing changed");
+    /* what is taken: sixteenths in decimal, hex pixels, a fraction alone, the extremes of 12.4 */
+    gfx(s, "gfx zbuf 153600 640");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx tri 0x10 .5 -2048 2047.9375 +3.0625 -0.0625 7") == CMD_OK && s->ncmd == n0 + 7 + 2 &&
+          s->cmd[n0] == GPU_HDR(GPU_OP_TRIANGLE, 7) && s->cmd[n0 + 1] == GPU_XY(256, 8) && s->cmd[n0 + 2] == GPU_ZC(0, 7) &&
+          s->cmd[n0 + 3] == GPU_XY(-32768, 32767) && s->cmd[n0 + 5] == GPU_XY(49, -1),
+          "  0x10 is 16 pixels, .5 half of one, -2048 and 2047.9375 the ends of 12.4, +3.0625 and -0.0625 in sixteenths");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx tri zle,cullccw,gouraud,zwrite 1 2 3 4 5 6 65535 255 7 8 0 0") == CMD_OK &&
+          s->cmd[n0] == GPU_HDR(GPU_OP_TRIANGLE, 4 | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE | GPU_TRI_CULL_CCW | GPU_TRI_GOURAUD |
+                                                 GPU_TRI_ZWRITE) && s->cmd[n0 + 4] == GPU_ZC(65535, 255),
+          "  how's words in any order: zle is ZTEST and ZFUNC; vertex 0's colour the header's (flat)");
+    check(gfx(s, "gfx tri flat,cullcw,cullccw 0 0 9 0 0 9 1") == CMD_OK, "  flat, and both culls (nothing is drawn)");
+    done(s);
+}
+TEST(t_usage2)
+
+/* GPU2's lines at their widest (80 columns): a refused depth buffer for the widest target, the
+   target, the depth buffer, a FLIP at the widest base, the usage of tri */
+static void t_columns2(unsigned seed) {
+    struct stub *s = fresh2(1);
+    (void)seed;
+    check(gpu_set_target(&G, 0, 10000, 10000, 30, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "a target of 10000x30 (the widest pair of sizes a target can have)");
+    check(gfx(s, "gfx zbuf 4 4") == CMD_USAGE && said(s, "refused for the target (10000x30)"), "gfx zbuf refused for it");
+    check(gfx(s, "gfx zclear") == CMD_FAIL && said(s, "no depth buffer"), "gfx zclear without one");
+    check(gfx(s, "gfx target 307196 65532 4 1") == CMD_OK && said(s, "target: VRAM 307196, stride 65532, 4x1"),
+          "gfx target at the widest base and stride");
+    check(gfx(s, "gfx target 0 16384 16384 2") == CMD_OK && gfx(s, "gfx zbuf 0 32768") == CMD_OK &&
+          gfx(s, "gfx zclear") == CMD_FAIL && said(s, "16384 or more wide"), "gfx zclear for a target 16384 wide: refused, said");
+    check(gfx(s, "gfx target 0 9996 9996 30") == CMD_OK && gfx(s, "gfx zbuf 0 19992") == CMD_USAGE &&
+          gfx(s, "gfx target 0 9996 9996 15") == CMD_OK && gfx(s, "gfx zbuf 0 19992") == CMD_OK &&
+          said(s, "depth buffer: VRAM 0, stride 19992, for the target's 9996x15"), "gfx zbuf, said with a wide target");
+    check(gfx(s, "gfx flip 0x7fffc") == CMD_OK && said(s, "GFX_BASE 524284"), "gfx flip at the widest base");
+    gfx(s, "gfx tri");
+    gfx(s, "gfx zbuf");
+    gfx(s, "gfx zbuf off");
+    gfx(s, "gfx help");
+    done(s);
+}
+TEST(t_columns2)

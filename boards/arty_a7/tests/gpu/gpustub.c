@@ -35,9 +35,10 @@ static uint64_t blankings(const struct stub *s, uint64_t t) {
     return t >= STUB_VBLANK_US ? (t - STUB_VBLANK_US) / STUB_FRAME_US + 1 : 0;
 }
 
-/* the first blanking that begins after t */
-static uint64_t next_vblank(uint64_t t) {
+/* the first blanking that begins after t; none without a pixel clock (10/26/26) */
+static uint64_t next_vblank(const struct stub *s, uint64_t t) {
     uint64_t k = stub_frame_of(t);
+    if(s->frames_stop) return STUB_NEVER;
     return vblank_of(k) > t ? vblank_of(k) : vblank_of(k + 1);
 }
 
@@ -57,11 +58,13 @@ struct stub_disp stub_shown(const struct stub *s, uint64_t k) {
     return d;
 }
 
-static void log_write(struct stub *s, uint32_t reg, uint32_t v) {
-    struct stub_write w = { s->now, reg, v };
+static void log_write_at(struct stub *s, uint64_t t, uint32_t reg, uint32_t v) {
+    struct stub_write w = { t, reg, v };
     if(s->nw < STUB_DISP_LOG) s->wlog[s->nw++] = w;
     apply(&s->reg, &w);
 }
+
+static void log_write(struct stub *s, uint32_t reg, uint32_t v) { log_write_at(s, s->now, reg, v); }
 
 /**** the picture ****/
 
@@ -104,42 +107,64 @@ static void note(struct stub *s, unsigned kind, uint64_t t) {
 
 /**** the engine ****/
 
-/* does this word make the engine draw (the last parameter of a FILL, COPY or LINE, or data)? */
+/* does this word make the engine draw (the last parameter of a FILL, COPY, LINE or TRIANGLE, or
+   data)? */
 static int draws(const struct gpu_engine *e) {
     unsigned op;
     if(e->data_left) return 1;
     if(!e->in_cmd) return 0;
     op = e->hdr >> 24;
-    return (op == GPU_OP_FILL_RECT || op == GPU_OP_COPY_RECT || op == GPU_OP_LINE) && e->np + 1 == e->need;
+    return (op == GPU_OP_FILL_RECT || op == GPU_OP_COPY_RECT || op == GPU_OP_LINE || op == GPU_OP_TRIANGLE) &&
+           e->np + 1 == e->need;
 }
 
-/* the demo's layout (320 x 240 pages at 0 and 76,800, stride 320, doubled): a word that draws
-   while a page is on the screen must not reach that page's rows */
+/* the 320 x 240 double-buffered layouts (the demo's and the cube's: pages at 0 and 76,800, stride
+   320, doubled): a word that draws while a page is on the screen must not reach that page's bytes,
+   the bytes of the rows the clip lets it reach in its target (10/26/26: by bytes, so a target of
+   another layout, the cube's depth buffer, is judged too) */
 static void tearing(struct stub *s) {
-    uint64_t t = s->eng_cycles / 25, k = stub_frame_of(t);
+    uint64_t t = s->eng_cycles / 25, k = stub_frame_of(t), lo, hi;
     struct stub_disp d;
-    uint32_t page, y0, y1;
+    uint32_t y0, y1, x1;
     if(t % STUB_FRAME_US >= STUB_VBLANK_US || !draws(&s->eng)) return;   /* blanking: nothing is shown */
     d = stub_shown(s, k);
     if(d.mode != 2 || d.stride != 320 || d.scale != 2 || (d.base != 0 && d.base != 76800)) return;
-    page = d.base / 76800;
     y0 = s->eng.cy0;
     y1 = s->eng.cy1 < s->eng.th ? s->eng.cy1 : s->eng.th;
-    if(y0 < 240 * page + 240 && y1 > 240 * page) s->shown_draws++;
+    x1 = s->eng.cx1 < s->eng.tw ? s->eng.cx1 : s->eng.tw;
+    if(y0 >= y1 || s->eng.cx0 >= x1) return;
+    lo = s->eng.base + (uint64_t)y0 * s->eng.stride + s->eng.cx0;
+    hi = s->eng.base + (uint64_t)(y1 - 1) * s->eng.stride + x1;
+    if(lo < d.base + 76800ull && hi > d.base) s->shown_draws++;
 }
 
 static void take(struct stub *s, uint32_t w) {
-    unsigned long long before = s->eng.writes;
-    if(gpu_engine_idle(&s->eng) && (w >> 24) == GPU_OP_WAIT_VBLANK) {
+    unsigned long long before = s->eng.writes, tri_px = s->eng.tri_pixels, tri_cmds = s->eng.tri_cmds;
+    unsigned flips = s->eng.flips, op = w >> 24;
+    if(gpu_engine_idle(&s->eng) && op >= GPU_OP_SET_ZBUF && op <= GPU_OP_FLIP && s->id != GPUDRV_ID_GPU2) {
+        s->eng.sticky |= GPU_ST_BAD_OPCODE;             /* a GPU1 has no such command: the word is dropped */
+        s->gpu2_on_gpu1++;
+        s->eng_cycles += 1;
+        return;
+    }
+    if(gpu_engine_idle(&s->eng) && op == GPU_OP_WAIT_VBLANK) {
         s->wait_vbl = 1;
-        s->vbl_until = next_vblank(s->eng_cycles / 25);
+        s->vbl_until = next_vblank(s, s->eng_cycles / 25);
     }
     if(s->check_tearing) tearing(s);
     if(draws(&s->eng)) note(s, STUB_EV_ENGINE_DRAW, s->eng_cycles / 25);
-    if(gpu_engine_idle(&s->eng)) s->cur_op = (w >> 24) & 63;     /* a header */
+    if(gpu_engine_idle(&s->eng)) s->cur_op = op & 63;  /* a header */
     gpu_engine_word(&s->eng, w);
     s->op_px[s->cur_op] += s->eng.writes - before;
     s->eng_cycles += 1 + s->slow + (s->eng.writes - before) / 4;
+    if(s->eng.tri_cmds != tri_cmds)                     /* GPU.md 16.5 and 16.8: a setup, then a cycle */
+        s->eng_cycles += 247 + (s->eng.tri_pixels - tri_px) * 6 / 4;   /* a group, six with depth: about */
+    if(s->eng.flips != flips) {                         /* FLIP: GFX_BASE at the next blanking, then on */
+        s->wait_vbl = 1;
+        s->vbl_until = next_vblank(s, s->eng_cycles / 25);
+        s->flip_pending = 1;
+        s->flip_value = s->eng.flip_base;
+    }
 }
 
 /* the engine's work until the CPU's now: a word a cycle when it is free */
@@ -150,6 +175,11 @@ static void run(struct stub *s) {
             if(s->vbl_until * 25 > limit) break;
             if(s->eng_cycles < s->vbl_until * 25) s->eng_cycles = s->vbl_until * 25;
             s->wait_vbl = 0;
+            if(s->flip_pending) {                       /* the cycle after the blanking's pulse */
+                log_write_at(s, s->vbl_until, SURF_VIDEO_GFX_BASE, s->flip_value);
+                s->flip_pending = 0;
+                s->flips_done++;
+            }
         }
         if(!s->count || s->stopped || s->eng_cycles >= limit) break;
         take(s, s->fifo[s->head]);
@@ -257,6 +287,7 @@ static void p_wr(void *c, uint32_t off, uint32_t v) {
         if(v & SURF_GPU_CTRL_ABORT_MASK) {
             s->count = 0;
             s->wait_vbl = 0;
+            s->flip_pending = 0;                        /* a FLIP waiting for its blanking writes nothing */
             gpu_engine_abort(&s->eng);
             s->eng_cycles = s->now * 25;
             s->aborts++;
