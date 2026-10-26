@@ -2641,7 +2641,9 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\] started \(pid (\d+)\)'), 10)     # a reads nothing more from here on
             m = re.search(rb'\] started \(pid (\d+)\)', a.data)     # 10/24/26: "[1] started (pid 42)"
             pid = int(m.group(1)) if m else 0
-        stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
+        # 10/25/26: 120 s, was 45: before the guest's buffer fills, hexdump fills QEMU's and the host's socket buffers
+        # through a slow guest, and on a loaded machine (two suites at once, builds) that took longer than 45 s
+        stalled, deadline = False, time.time() + 120    # seconds here; the server ends no session for a stall
         while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
             start = len(q.transcript)
             q.send('netstat\n')
