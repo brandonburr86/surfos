@@ -19,10 +19,12 @@ typed on the UART. Checked:
     gfxref's lines must be this test's, and gfxscene (the same lines through gfx.c and gpu.c in
     the model, the owner's tool for other pictures) must agree with gfxref;
   * the GPU's interrupt works: between the first gfx and the last, interrupts (intc source 5,
-    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one), and it
-    woke the fence waits that slept on it: one at least, and at least half of them, a wait counted
-    once however many 10 ms steps it slept (10/26/26, the re-review's N3: a handler that ran
-    without waking anyone passed the count of interrupts alone);
+    IE.FENCE) were taken for at least half of the fences that asked for one (the driver's own; gfx
+    cube's frames end with FENCEs of gpucube.c's that ask for none, counted apart since the review
+    of 58ac7b3's L3: a longer cube would have failed the rule), and it woke the fence waits that
+    slept on it: one at least, and at least half of them, a wait counted once however many 10 ms
+    steps it slept (10/26/26, the re-review's N3: a handler that ran without waking anyone passed
+    the count of interrupts alone);
   * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
     typed after its first second, and after each the picture's CRC is the CRC before them (the
     display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
@@ -38,9 +40,13 @@ typed on the UART. Checked:
     gfx crc equal to gfxref's, which works it out from section 16 alone; picture B drawn and shown
     by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 1: every frame it showed at the
     VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
-    one contiguous run of them, each the same frame as the one before or the next; SurfOS's own
-    lines say every frame shown was checked and whole (in order too when the turn's 128 pictures
-    differ) and a frame rate of 30 or more; after it the picture is the one before it.
+    one contiguous run of them, each the same frame as the one before or the next, and the cube
+    turning (50 of its pictures or more, each new one within two video frames of the one before:
+    the review of 58ac7b3's M2, a cube that stood still while it FLIPped passed); SurfOS's own
+    lines say every frame shown was checked (none missed: the review of 58ac7b3's L1) and whole
+    (in order too when the turn's 128 pictures differ), fewer frames drawn (FLIPs after frame 0's)
+    than video frames shown, and a frame rate of 30 or more and at most the display's 59.94 (the
+    review's M1: one FENCE too many was counted as drawn); after it the picture is the one before it.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present, and gfx tri, flip and cube say there
@@ -66,6 +72,9 @@ import time
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
+# gfx cube's line when the frames shown did not go on with its FLIPs (GPU.md 15.9's M2): read, so that
+# a cube that failed is judged below rather than waited past
+CUBE_TURN = r'(?:\s+gfx cube: the frames shown went (\d+) on for (\d+) FLIPs' + NL + r')?'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
            'the GPU reports', 'no vertical blanking in', 'stays pending although its handler ran', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
@@ -74,8 +83,8 @@ OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must pr
 
 # (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
 # which Ctrl+C is typed]); @NAME@ and @ID@ become the gpu.ID of gpu.h ("GPU1", 0x31555047)
-STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'\s+fence waits that slept on it: \d+, woken by it: \d+' +
-         NL + r'[\s\S]*frames: FRAME_COUNT \d+')
+STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'\s+fences that asked for it: \d+[^\n]*' + NL +
+         r'\s+fence waits that slept on it: \d+, woken by it: \d+' + NL + r'[\s\S]*frames: FRAME_COUNT \d+')
 STEPS = [
     ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*' + STATE, 'the state'),
     ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU @NAME@, 300 KiB VRAM; \d+ fences, 0 errors',
@@ -134,7 +143,7 @@ STEPS = [
     ('gfx flip 0', r'display: GFX_BASE 0, written by FLIP at a vertical blanking', 'FLIP back to picture A'),
     ('gfx crc', CRC_LINE.pattern, 'crc 8'),
     ('gfx cube 1', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
-     r'\s+gfx cube: \d+ shown, \d+ checked: ', 'gfx cube'),
+     CUBE_TURN + r'\s+gfx cube: \d+ shown, \d+ missed: ', 'gfx cube'),
     ('gfx crc', CRC_LINE.pattern, 'crc 9'),
     ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
@@ -357,16 +366,19 @@ def main():
     check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
           re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
-    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead; and
-    # it must wake the fence waits that sleep on it (a handler that runs and wakes nobody leaves each such
-    # wait to its 10 ms and still counts its interrupts: the re-review's N3)
+    # the interrupt: each of the driver's FENCEs asks for one (IRQ), so the count grows with them unless it is
+    # dead (gfx cube's frames' FENCEs ask for none: counted apart, the review of 58ac7b3's L3); and it must
+    # wake the fence waits that sleep on it (a handler that runs and wakes nobody leaves each such wait to its
+    # 10 ms and still counts its interrupts: the re-review's N3)
     st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5, IE\.FENCE\)' +
-                    NL + r'\s+fence waits that slept on it: (\d+), woken by it: (\d+)', out)
+                    NL + r'\s+fences that asked for it: (\d+)[^\n]*' + NL +
+                    r'\s+fence waits that slept on it: (\d+), woken by it: (\d+)', out)
     if len(st) >= 2:
-        fences, irqs, waits, woken = (int(st[-1][i]) - int(st[0][i]) for i in range(4))
-        check(irqs > 0 and 2 * irqs >= fences and woken > 0 and 2 * woken >= waits,
-              'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences sent between the first gfx and '
-              'the last; %d fence waits slept on it, %d of them woken by it' % (irqs, fences, waits, woken))
+        fences, irqs, asked, waits, woken = (int(st[-1][i]) - int(st[0][i]) for i in range(5))
+        check(irqs > 0 and 2 * irqs >= asked and woken > 0 and 2 * woken >= waits,
+              'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences that asked for one between the '
+              'first gfx and the last (%d sent); %d fence waits slept on it, %d of them woken by it'
+              % (irqs, asked, fences, waits, woken))
     else:
         check(False, 'the GPU interrupt: gfx said its fences, interrupts and waits %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
@@ -393,33 +405,46 @@ def main():
     if len(got) >= 9:
         check(got[7] == got[5] and got[8] == got[7], 'after gfx flip 0, picture A again, and after gfx cube 1 the picture '
               'before it (crc 8 = crc 6, crc 9 = crc 8: the display, the palette, the depth buffer and VRAM back)')
-    # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step; SurfOS's own check said
+    # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step, and turning (the review of
+    # 58ac7b3's M2: a cube that stood still passed): 50 of the turn's pictures at least in its second, each new
+    # one at most two video frames after the one before from frame 2 on (30 a second, gpudiag's rule; frame 1
+    # follows frame 0's still picture); SurfOS's own check said
     crcs, pictures = cube_table(a.cube_expect)
     seq = []
     fp = os.path.join(w, 'frames.txt')
     if os.path.exists(fp):
         seq = [crc for _, crc in re.findall(r'^frame (\d+) crc ([0-9a-f]{8})$', open(fp).read(), re.M)]
     at = [i for i, crc in enumerate(seq) if crc in crcs]
-    steps_bad, prev = 0, -1
+    steps_bad, slow, prev, run, seen = 0, 0, -1, 0, set()
     for i in at:
         cand = [f for f, crc in enumerate(crcs) if crc == seq[i]]
         f = next((f for f in cand if prev >= 0 and (f - prev) % len(crcs) <= 1), cand[0])
-        if prev >= 0 and (f - prev) % len(crcs) > 1:
-            steps_bad += 1
+        seen.add(f)
+        if prev >= 0 and f != prev:
+            if (f - prev) % len(crcs) > 1:
+                steps_bad += 1
+            if len(seen) > 2 and run > 2:
+                slow += 1
+            run = 0
+        run += 1
         prev = f
     whole_run = bool(at) and at == list(range(at[0], at[-1] + 1))
-    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad,
-          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step'
-          % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad))
+    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad and len(seen) >= 50 and not slow,
+          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step; '
+          '%d pictures, %d after more than two video frames'
+          % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad,
+             len(seen), slow))
     want = 'all whole, in order' if pictures == len(crcs) else 'all whole'
-    sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) checked: ([^\n]*)', out)
+    sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) missed: ([^\n]*)', out)
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
-                  r'\s+gfx cube: (\d+) shown, (\d+) checked: ([^\n]*)', out)
-    check(m and sec and all(c == sh and v == want for _, sh, c, v in sec) and m.group(4) == m.group(5) and
-          m.group(6) == want and float(m.group(3)) >= 30,
-          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s checked: %s; a line a '
-          'second: %s' % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
-                          '; '.join('%s drawn, %s shown, %s checked: %s' % x for x in sec)) if m else 'no summary'))
+                  CUBE_TURN + r'\s+gfx cube: (\d+) shown, (\d+) missed: ([^\n]*)', out)
+    check(m and sec and all(mi == '0' and v == want for _, _, mi, v in sec) and m.group(7) == '0' and not m.group(4) and
+          m.group(8) == want and int(m.group(1)) < int(m.group(6)) and 30 <= float(m.group(3)) <= 59.94,
+          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s%s shown, %s missed: %s; a line a '
+          'second: %s' % (m.group(1), m.group(2), m.group(3),
+                          'the frames shown %s on for %s FLIPs, ' % (m.group(4), m.group(5)) if m.group(4) else '',
+                          m.group(6), m.group(7), m.group(8),
+                          '; '.join('%s drawn, %s shown, %s missed: %s' % x for x in sec)) if m else 'no summary'))
     check(re.search(r'gfx demo: \d+ frames in [12]\.\d\d s[^\n]*\n\s+gfx demo: ended by Ctrl\+C', out),
           'gfx demo 5: Ctrl+C typed after its first second ends it within the next')
     m = re.search(r'gfx demo: (\d+) frames in (\d+\.\d\d) s, (\d+\.\d) a second', out)

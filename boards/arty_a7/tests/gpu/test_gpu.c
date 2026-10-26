@@ -1307,7 +1307,8 @@ static void t_state(unsigned seed) {
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
           said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
-          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fences that asked for it: ") &&
+          said(s, " (gfx cube's frames' do not)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
           said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
           said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
           "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
@@ -1339,12 +1340,14 @@ static void t_columns(unsigned seed) {
           gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
           "the widest target (VRAM 307196, stride 65532) and clip");
     G.words = G.fences = G.irqs = G.irq_waits = G.irq_wakes = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.irq_fences = 4294967295ul;
     G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
     G.fifo_depth = 65535;
     G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */
     s->frames_stop = 1;
     s->frames_frozen = 65535;                           /* FRAME_COUNT's 16 bits */
     check(gfx(s, "gfx") == CMD_OK && said(s, "    sent: 4294967295 words, 4294967295 fences; FENCE 4294967290\n") &&
+          said(s, "    fences that asked for it: 4294967295 (gfx cube's frames' do not)\n") &&
           said(s, "    clip: (65535, 65535)-(65535, 65535)\n") && said(s, "FRAME_COUNT 65535"),
           "gfx with every count at 10 digits");
     snprintf(buf, sizeof(buf), "    gpu       ");
@@ -1467,6 +1470,11 @@ static void t_usage2(unsigned seed) {
                                                  GPU_TRI_ZWRITE) && s->cmd[n0 + 4] == GPU_ZC(65535, 255),
           "  how's words in any order: zle is ZTEST and ZFUNC; vertex 0's colour the header's (flat)");
     check(gfx(s, "gfx tri flat,cullcw,cullccw 0 0 9 0 0 9 1") == CMD_OK, "  flat, and both culls (nothing is drawn)");
+    /* and gfx help and gfx tri's usage say the same of how (the review of 58ac7b3's L4: the help said
+       cullcw|cullccw, one or the other, where both are taken) */
+    check(gfx(s, "gfx help") == CMD_OK && said(s, "how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw (commas between)") &&
+          gfx(s, "gfx tri") == CMD_USAGE && said(s, "how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw joined by commas"),
+          "  gfx help and gfx tri's usage give how's words alike: flat or gouraud, ztest or zle, the rest each or not");
     done(s);
 }
 TEST(t_usage2)
@@ -1511,11 +1519,16 @@ static int cube_frame_of(uint32_t crc, int prev) {
 }
 
 /* the frames the stand-in logged as they ended: from the first of the cube's to the last, every
-   one a whole frame of the turn, each the same as the one before it or the next (a FLIP a blanking) */
-static void cube_at_the_pins(struct stub *s, const char *what, unsigned want) {
-    unsigned i, first = 0, last = 0, cube = 0, not_cube = 0, bad_steps = 0;
+   one a whole frame of the turn, each the same as the one before it or the next (a FLIP a
+   blanking), and the cube turning (the review of 58ac7b3's M2): `pictures` of the turn's frames at
+   least, each new one at most two video frames after the one before from frame 2 on (30 a second
+   or more: gpudiag's rule; frame 1 follows frame 0's still picture, whose wait is no rate) */
+static void cube_at_the_pins(struct stub *s, const char *what, unsigned want, unsigned pictures) {
+    unsigned i, first = 0, last = 0, cube = 0, not_cube = 0, bad_steps = 0, distinct = 0, slow = 0, run = 0;
+    unsigned char seen[GFX_CUBE_FRAMES];
     int prev = -1, f;
-    char line[200];
+    char line[240];
+    memset(seen, 0, sizeof(seen));
     for(i = 0; i < s->nflog; i++)
         if(cube_frame_of(s->flog[i].crc, -1) >= 0) {
             if(!cube++) first = i;
@@ -1523,24 +1536,58 @@ static void cube_at_the_pins(struct stub *s, const char *what, unsigned want) {
         }
     for(i = first; cube && i <= last; i++) {
         f = cube_frame_of(s->flog[i].crc, prev);
-        if(f < 0) not_cube++;
-        else if(prev >= 0 && (f - prev + (int)GFX_CUBE_FRAMES) % (int)GFX_CUBE_FRAMES > 1) bad_steps++;
-        if(f >= 0) prev = f;
+        if(f < 0) {
+            not_cube++;
+            continue;
+        }
+        if(!seen[f]) {
+            seen[f] = 1;
+            distinct++;
+        }
+        if(prev >= 0 && f != prev) {
+            if((f - prev + (int)GFX_CUBE_FRAMES) % (int)GFX_CUBE_FRAMES > 1) bad_steps++;
+            if(distinct > 2 && run > 2) slow++;         /* the frame before shown for three video frames or more */
+            run = 0;
+        }
+        run++;
+        prev = f;
     }
-    snprintf(line, sizeof(line), "  %s: %u frames shown of the cube (%u wanted), %u between them not the turn's, %u out of step",
-             what, cube, want, not_cube, bad_steps);
-    check(cube >= want && !not_cube && !bad_steps, line);
+    snprintf(line, sizeof(line), "  %s: %u frames shown of the cube (%u wanted), %u pictures (%u wanted), %u between them not "
+             "the turn's, %u out of step, %u after more than two video frames", what, cube, want, distinct, pictures, not_cube,
+             bad_steps, slow);
+    check(cube >= want && distinct >= pictures && !not_cube && !bad_steps && !slow, line);
 }
 
-/* gfx cube's summary: the frames drawn, shown and checked */
-static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *checked) {
+/* gfx cube's summary: the frames drawn, shown and missed (shown, never looked at); %n says that
+   the whole pattern matched (sscanf counts the conversions only: "N shown" passed for "N drawn") */
+static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *missed) {
     const char *p;
-    int n = 0;
+    unsigned long a, b;
+    int n = 0, end;
     for(p = s->out; (p = strstr(p, "    gfx cube: ")) != NULL; p++) {
-        if(sscanf(p, "    gfx cube: %lu drawn in", drawn) == 1) n |= 1;
-        if(sscanf(p, "    gfx cube: %lu shown, %lu checked:", shown, checked) == 2) n |= 2;
+        end = 0;
+        if(sscanf(p, "    gfx cube: %lu drawn in%n", &a, &end) == 1 && end) {
+            *drawn = a;
+            n |= 1;
+        }
+        end = 0;
+        if(sscanf(p, "    gfx cube: %lu shown, %lu missed:%n", &a, &b, &end) == 2 && end) {
+            *shown = a;
+            *missed = b;
+            n |= 2;
+        }
     }
     return n == 3;
+}
+
+/* gfx cube's rate, in tenths of a frame a second (-1: not said) */
+static long cube_rate(struct stub *s) {
+    const char *p = strstr(s->out, "    gfx cube: ");
+    unsigned long d, sec, hund, whole, tenth;
+    for(; p; p = strstr(p + 1, "    gfx cube: "))
+        if(sscanf(p, "    gfx cube: %lu drawn in %lu.%lu s, %lu.%lu a second", &d, &sec, &hund, &whole, &tenth) == 5)
+            return (long)(whole * 10 + tenth);
+    return -1;
 }
 
 /* the expected table itself: its 128 frames, GFX_CUBE_PICTURES of them distinct, and its first 16
@@ -1562,37 +1609,60 @@ static void t_cube_table(unsigned seed) {
 TEST(t_cube_table)
 
 /* the check of the frames shown, by itself: in order, the same again, frames passed unseen, one too
-   far for the frames counted, backwards, torn, FRAME_COUNT's wrap, a turn's wrap, repeated pictures */
+   far for the frames counted, backwards, torn, FRAME_COUNT's wrap, a turn's wrap, repeated pictures;
+   and in step with the FLIPs (the review of 58ac7b3's M2): each look's FENCE before and after it, as
+   FLIPs done after frame 0's (fence0 + k is frame k's), here 1000 + the frame FLIPped last */
 static void t_cube_check(unsigned seed) {
     static const u32 t[8] = { 10, 11, 12, 13, 14, 15, 16, 17 };
     static const u32 dup[8] = { 10, 11, 12, 10, 14, 15, 16, 17 };
     struct gfx_cube_check c;
+    u32 k;
     (void)seed;
-    gfx_cube_check_start(&c, t, 8, true, 100, 0);
-    gfx_cube_check_frame(&c, 101, 10);          /* frame 0 again */
-    gfx_cube_check_frame(&c, 102, 11);          /* 1 */
-    gfx_cube_check_frame(&c, 104, 13);          /* 3, two frames on: one passed unseen */
-    gfx_cube_check_frame(&c, 104, 99);          /* FRAME_COUNT did not move: nothing */
-    check(c.shown == 4 && c.checked == 3 && !c.torn && !c.disorder && c.last == 3,
-          "the same frame again, the next, two on in two frames: whole, in order; 4 shown, 3 checked");
-    gfx_cube_check_frame(&c, 105, 15);          /* 5: two on in one frame (a FLIP a blanking at most) */
-    gfx_cube_check_frame(&c, 106, 14);          /* 4: backwards */
+    gfx_cube_check_start(&c, t, 8, true, 100, 0, 1000);
+    gfx_cube_check_frame(&c, 101, 10, 1000, 1000);  /* frame 0 again, nothing FLIPped since */
+    gfx_cube_check_frame(&c, 102, 11, 1001, 1001);  /* 1 */
+    gfx_cube_check_frame(&c, 104, 13, 1003, 1003);  /* 3, two frames on: one passed unseen */
+    gfx_cube_check_frame(&c, 104, 99, 1003, 1003);  /* FRAME_COUNT did not move: nothing */
+    check(c.shown == 4 && c.checked == 3 && !c.torn && !c.disorder && c.last == 3 && c.advance == 3,
+          "the same frame again, the next, two on in two frames: whole, in order; 4 shown, 3 checked, 3 on");
+    gfx_cube_check_frame(&c, 105, 15, 1005, 1005);  /* 5: two on in one frame (a FLIP a blanking at most) */
+    gfx_cube_check_frame(&c, 106, 14, 1005, 1005);  /* 4: backwards */
     check(c.disorder == 2 && !c.torn, "two on in one frame, and backwards: out of order");
-    gfx_cube_check_frame(&c, 107, 99);          /* none of them */
+    gfx_cube_check_frame(&c, 107, 99, 1006, 1006);  /* none of them */
     check(c.torn == 1 && c.torn_count == 107 && c.torn_crc == 99 && c.last == 4, "a CRC of none of them: torn, the first kept");
-    gfx_cube_check_frame(&c, 109, 16);          /* 6, two on in two frames (from 4) */
-    gfx_cube_check_frame(&c, 110, 17);
-    gfx_cube_check_frame(&c, 111, 10);          /* the turn wraps: 7, then 0 */
+    gfx_cube_check_frame(&c, 109, 16, 1006, 1006);  /* 6, two on in two frames (from 4) */
+    gfx_cube_check_frame(&c, 110, 17, 1007, 1007);
+    gfx_cube_check_frame(&c, 111, 10, 1008, 1008);  /* the turn wraps: 7, then 0 (frame 8) */
     check(c.disorder == 2 && c.torn == 1 && c.last == 0, "after it, in order again across the turn's wrap");
-    gfx_cube_check_start(&c, t, 8, true, 0xFFFE, 2);
-    gfx_cube_check_frame(&c, 0xFFFF, 13);
-    gfx_cube_check_frame(&c, 0x10001, 14);       /* FRAME_COUNT is 16 bits: 0xFFFF to 1 is two */
+    gfx_cube_check_start(&c, t, 8, true, 0xFFFE, 2, 998);
+    gfx_cube_check_frame(&c, 0xFFFF, 13, 1001, 1001);
+    gfx_cube_check_frame(&c, 0x10001, 14, 1002, 1002);  /* FRAME_COUNT is 16 bits: 0xFFFF to 1 is two */
     check(c.shown == 3 && !c.disorder && !c.torn, "FRAME_COUNT's 16-bit wrap counted as the frames it is");
-    gfx_cube_check_start(&c, dup, 8, false, 0, 2);
-    gfx_cube_check_frame(&c, 1, 10);            /* 0 or 3: the order is not checked */
-    gfx_cube_check_frame(&c, 2, 17);
-    gfx_cube_check_frame(&c, 3, 11);
+    gfx_cube_check_start(&c, dup, 8, false, 0, 2, 1000);
+    gfx_cube_check_frame(&c, 1, 10, 1000, 1000);    /* 0 or 3: the order is not checked */
+    gfx_cube_check_frame(&c, 2, 17, 1000, 1000);
+    gfx_cube_check_frame(&c, 3, 11, 1000, 1000);
     check(!c.disorder && !c.torn && c.checked == 3, "a turn with repeated pictures: only whole or torn, no order");
+    /* the cube standing still while its FLIPs go on (frame 0 drawn every time, the review's M2):
+       frame 0 again is in order while at most one FLIP has come since, not after */
+    gfx_cube_check_start(&c, t, 8, true, 200, 0, 1000);
+    for(k = 1; k <= 6; k++) gfx_cube_check_frame(&c, 200 + k, 10, 1000 + k - 1, 1000 + k - 1);
+    check(c.checked == 6 && c.disorder == 4 && !c.advance, "frame 0 shown again and again as FLIPs 0 to 5 are done: "
+          "in order for two looks, then out of order");
+    /* behind its FLIPs by two, though a frame a frame: out of order; one behind (the frame FLIPped
+       last not yet shown) and one ahead (a FLIP done whose FENCE is still the CPU's) are in step */
+    gfx_cube_check_start(&c, t, 8, true, 300, 0, 1000);
+    gfx_cube_check_frame(&c, 301, 11, 1002, 1002);  /* 1 shown, 2 FLIPped last: in step */
+    gfx_cube_check_frame(&c, 302, 12, 1004, 1004);  /* 2 shown, 4 FLIPped: behind by two */
+    gfx_cube_check_frame(&c, 303, 13, 1002, 1002);  /* 3 shown, FENCE says 2: its FENCE not yet sent */
+    check(c.disorder == 1 && c.advance == 3, "a frame two behind the FLIPs: out of order; one behind, one ahead: in step");
+    gfx_cube_check_frame(&c, 304, 14, 1002, 1002);  /* 4 shown, FENCE says 2: two ahead */
+    check(c.disorder == 2, "a frame two ahead of the FENCEs read: out of order");
+    /* a blanking between the two reads of FENCE: the window is fb - 1 to fa + 1 */
+    gfx_cube_check_start(&c, t, 8, true, 400, 0, 1000);
+    gfx_cube_check_frame(&c, 401, 11, 1002, 1003);  /* 1 shown, FLIPs 2 then 3 done: in step (fb - 1) */
+    gfx_cube_check_frame(&c, 402, 12, 1002, 1003);
+    check(!c.disorder, "a FLIP between the two FENCE reads: the frame shown may be fb - 1 to fa + 1");
 }
 TEST(t_cube_check)
 
@@ -1602,8 +1672,9 @@ static void t_cube(unsigned seed) {
     uint8_t *before;
     uint16_t pal[256];
     struct stub_disp reg;
-    unsigned long drawn, shown, checked, waits0, wakes0;
-    char want[64];
+    unsigned long drawn, shown, missed, waits0, wakes0, flips0;
+    long rate;
+    char want[64], line[160];
     (void)seed;
     if(once_t_cube++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
@@ -1619,17 +1690,25 @@ static void t_cube(unsigned seed) {
     s->check_tearing = 1;
     s->log_frames = 1;
     s->nflog = 0;
-    snprintf(want, sizeof(want), "checked: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
+    snprintf(want, sizeof(want), " 0 missed: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
     waits0 = G.irq_waits;
     wakes0 = G.irq_wakes;
+    flips0 = s->flips_done;
     check(gfx(s, "gfx cube 2") == CMD_OK && said(s, "gfx cube: 2 s at 320x240 with depth, a FLIP a frame") &&
           said(s, "\n    cube 1 s: ") && said(s, "\n    cube 2 s: ") && said(s, want) && !said(s, "torn,") &&
           said(s, "display back as it was"), "gfx cube 2: a line a second, every frame checked whole, everything back");
     check(GFX_CUBE_PICTURES == GFX_CUBE_FRAMES || said(s, "of a turn's 128 frames are pictures of their own"),
           "  with repeated pictures in the turn, it says that their order is not checked");
-    check(cube_summary(s, &drawn, &shown, &checked) && drawn >= 110 && drawn <= 125 && shown >= drawn && checked == shown,
-          "  about 60 frames drawn a second (one a blanking), each shown and checked (none passed unseen)");
-    cube_at_the_pins(s, "the frames as they ended", 110);
+    check(cube_summary(s, &drawn, &shown, &missed) && drawn >= 115 && drawn < shown && !missed,
+          "  about 60 frames drawn a second (one a blanking), each shown and checked (none missed)");
+    /* drawn: the FLIPs done after frame 0's (the review of 58ac7b3's M1: the FENCE frame 0's wait
+       sent was counted as one); the video frames shown are more (the first shows frame 0); and the
+       rate, timed from the blanking at which the cube's display began, at most the display's 59.94 */
+    rate = cube_rate(s);
+    snprintf(line, sizeof(line), "  %lu drawn: the FLIPs the engine did after frame 0's (%lu); %lu shown; %ld.%ld a second",
+             drawn, s->flips_done - flips0 - 1, shown, rate / 10, rate % 10);
+    check(drawn == s->flips_done - flips0 - 1 && rate >= 590 && rate <= 599, line);
+    cube_at_the_pins(s, "the frames as they ended", 110, 110);
     check(s->shown_draws == 0, "  no engine word drew into the picture on the screen while it was shown");
     check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && s->reg.mode == reg.mode &&
           s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale,
@@ -1656,8 +1735,8 @@ static void t_cube(unsigned seed) {
 TEST(t_cube)
 
 /* how it ends: Ctrl+C, an engine that stops (and Ctrl+C before 2 s could say so, N1), the pixel
-   clock gone (a FLIP that never comes), a torn frame, no memory for VRAM: each with everything put
-   back and the engine idle */
+   clock gone (a FLIP that never comes), a torn frame, no memory for VRAM, an engine error (L2): each
+   with everything put back and the engine idle */
 static void cube_end(struct stub *s, const char *what, const uint8_t *before, const uint16_t *pal, const struct stub_disp *reg) {
     char line[160];
     snprintf(line, sizeof(line), "  %s: VRAM, GPAL, the display, the target and the clip back, the engine idle", what);
@@ -1670,6 +1749,55 @@ static void cube_end(struct stub *s, const char *what, const uint8_t *before, co
         check(s->eng.tw == 640 && s->eng.th == 480 && s->eng.cy1 == 480 && !(p_status(s) & 1),
               "  the engine back: the target and clip it was sent are the driver's, and it is idle");
     }
+}
+
+/* the error ending (the review of 58ac7b3's L2: with the STATUS check after each frame gone, the
+   host test still passed): frame 30's SET_ZBUF stride arriving as 642, which the engine refuses
+   (BAD_PARAM). The word is found in one run and spoiled in a second, the same up to it */
+static struct stub *cube_error_setup(void) {
+    struct stub *s = fresh2(1);
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    return s;
+}
+
+static void cube_error(void) {
+    struct stub *s = cube_error_setup();
+    unsigned i, n0 = s->ncmd, w0 = s->cmd_writes, seen = 0, at = 0;
+    unsigned long drawn = 0, shown = 0, missed = 0;
+    uint8_t *before = malloc(GPU_VRAM_BYTES);
+    uint16_t pal[256];
+    struct stub_disp reg;
+    char line[200];
+    int r, sum;
+    gfx(s, "gfx cube 1");
+    for(i = n0; i + 2 < s->ncmd; i++)
+        if(s->cmd[i] == GPU_HDR(GPU_OP_SET_ZBUF, 0) && s->cmd[i + 1] == 153600u && s->cmd[i + 2] == 640u && ++seen == 31) {
+            at = i + 2 - n0 + 1;                        /* frame 30's stride: the run's at-th CMD word */
+            break;
+        }
+    check(at && s->cmd_writes - w0 == s->ncmd - n0, "gfx cube 1: frame 30's SET_ZBUF found among its words");
+    done(s);
+    s = cube_error_setup();
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    s->corrupt_value_at = s->cmd_writes + at;
+    s->corrupt_value = 642;
+    r = gfx(s, "gfx cube 1");
+    sum = cube_summary(s, &drawn, &shown, &missed);
+    check(r == CMD_FAIL && count(s->out, "the GPU reports:") == 1 && said(s, "BAD_PARAM: parameters refused") &&
+          said(s, "the engine ABORTed") && said(s, "display back as it was") && G.errors == 1,
+          "frame 30's SET_ZBUF refused (BAD_PARAM): said once, the run fails");
+    snprintf(line, sizeof(line), "  it ends at that frame: %lu drawn (the FLIPs after frame 0's), none after, no frame torn", drawn);
+    check(sum && drawn >= 29 && drawn <= 31 && !said(s, "torn,") && !said(s, "cube 1 s:"), line);
+    cube_end(s, "an engine error", before, pal, &reg);
+    check(!G.z_valid && !s->eng.zvalid && !(s->eng.sticky & (GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM)),
+          "  no depth buffer left, the sticky error cleared");
+    free(before);
+    done(s);
 }
 
 static int once_t_cube_end;
@@ -1743,6 +1871,7 @@ static void t_cube_end(unsigned seed) {
           "no memory to keep VRAM: said, it runs, the display and palette back");
     free(before);
     done(s);
+    cube_error();
 }
 TEST(t_cube_end)
 
@@ -1776,30 +1905,60 @@ TEST(t_cube_order)
    the console compares its whole screen; a line printed just after a frame was seen loses one
    once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
    timer's tick every frame shown is checked all the same; on a port without the tick the run looks
-   from its loop, and frames pass unseen while it prints, which its lines say (checked fewer than
-   shown) */
+   from its loop, and frames pass unseen while it prints, which its lines say (missed), and then it
+   fails: a frame not looked at was not checked (the review of 58ac7b3's L1).
+   And test-gpuos's rule of the interrupt holds for a run as long (the review's L3): interrupts for
+   half the fences that asked for one at least; the cube's frames' FENCEs, which ask for none, are
+   counted in fences alone */
 static int once_t_cube_look;
 static void t_cube_look(unsigned seed) {
     struct stub *s;
-    unsigned long drawn = 0, shown = 0, checked = 0;
-    char line[160];
+    unsigned long drawn = 0, shown = 0, missed = 0, asked, all;
+    unsigned irqs;
+    long rate = 0;
+    char line[200], want[80];
+    int r, ok;
     (void)seed;
     if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
     s = fresh2(1);
     s->line_us = 40000;
     s->log_frames = 1;
-    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && s->ticks_run > 250,
+    irqs = s->interrupts_sent;
+    asked = G.irq_fences;
+    all = G.fences;
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &missed) && s->ticks_run > 250,
           "gfx cube 3 with a slow console and the timer's tick");
-    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu checked: every frame looked at", drawn, shown, checked);
-    check(checked == shown && shown >= 170, line);
-    cube_at_the_pins(s, "and at the pins", 170);
+    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at", drawn, shown, missed);
+    check(!missed && shown >= 170, line);
+    cube_at_the_pins(s, "and at the pins", 170, 120);
+    irqs = s->interrupts_sent - irqs;
+    asked = G.irq_fences - asked;
+    all = G.fences - all;
+    snprintf(line, sizeof(line), "  the interrupt: %u taken for the %lu fences that asked for one (of %lu sent: the cube's "
+             "%lu frames' FENCEs ask for none)", irqs, asked, all, drawn + 1);
+    check(asked > 0 && 2 * irqs >= asked && all >= asked + drawn + 1, line);
+    done(s);
+    /* the rate with the slow console: its time ends at the look that saw the last FLIP done, not
+       after the line the run was printing then (on the RTL SoC the second's line ends a 1 s run,
+       and the rate read 56.8 for a FLIP every blanking) */
+    s = fresh2(1);
+    s->line_us = 40000;
+    r = gfx(s, "gfx cube 1");
+    rate = cube_rate(s);
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    snprintf(line, sizeof(line), "gfx cube 1 with the slow console: %lu drawn, %ld.%ld a second (59.0 to 59.9 wanted)", drawn,
+             rate / 10, rate % 10);
+    check(r == CMD_OK && ok && drawn >= 58 && rate >= 590 && rate <= 599, line);
     done(s);
     s = fresh2(-1);
     s->line_us = 40000;
-    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && !s->ticks_run,
-          "the same on a port without the tick: the run looks from its loop");
-    snprintf(line, sizeof(line), "  %lu shown, %lu checked: frames passed unseen while its lines printed, said", shown, checked);
-    check(checked + 2 <= shown, line);
+    r = gfx(s, "gfx cube 3");
+    ok = cube_summary(s, &drawn, &shown, &missed);
+    check(r == CMD_FAIL && ok && !s->ticks_run, "the same on a port without the tick: the run looks from its loop, and fails");
+    snprintf(want, sizeof(want), "    gfx cube: %lu shown, %lu missed: 0 torn, 0 out of order\n", shown, missed);
+    snprintf(line, sizeof(line), "  %lu shown, %lu missed: frames passed unseen while its lines printed, said, no whole verdict",
+             shown, missed);
+    check(missed >= 2 && said(s, want), line);
     done(s);
 }
 TEST(t_cube_look)

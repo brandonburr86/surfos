@@ -278,7 +278,7 @@ int gpu_put(struct gpu *g, const u32 *w, u_int n, const char *what) {
 }
 
 /* a FENCE value of the driver's count for a FENCE the caller writes in its own words (gfx cube's
-   frames end with one): later fences are after it */
+   frames end with one, without IRQ: counted in fences, not in irq_fences): later fences are after it */
 u32 gpu_fence_next(struct gpu *g) {
     g->fences++;
     return ++g->fence_sent;
@@ -290,6 +290,7 @@ int gpu_fence_send(struct gpu *g, const char *what, u32 *value) {
     w[1] = ++g->fence_sent;
     *value = w[1];
     g->fences++;
+    if(g->irq) g->irq_fences++;
     return gpu_put(g, w, 2, what);
 }
 
@@ -683,6 +684,7 @@ int gpu_screen_set(struct gpu *g, const struct gpu_screen *d, const char *what) 
             VWR(g, SURF_VIDEO_GFX_SCALE, d->scale);
             p->set_mode(p->ctx, d->mode);
             p->atomic_end(p->ctx, flags);
+            g->latch_us = caught ? prev_t : t;      /* before the blanking began (its last sample), or now */
             break;
         }
         p->atomic_end(p->ctx, flags);
@@ -807,6 +809,8 @@ bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc) {
     *crc = VRD(g, SURF_VIDEO_FRAME_CRC);                /* the frame that read counted (GPU.md section 3) */
     return true;
 }
+
+u32 gpu_fence_now(struct gpu *g) { return RD(g, SURF_GPU_FENCE); }
 
 bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg) {
     if(!P(g)->tick_start || !P(g)->tick_stop) return false;

@@ -148,6 +148,9 @@ struct gpu {
     u32 z_base, z_stride;
     u32 spin_us;                        /* a fence is polled this long before the wait sleeps (GPU_SPIN_US) */
     bool latched;                       /* the last display change caught the frame latch */
+    u64 latch_us;                       /* and the time just before that blanking began (the latch's
+                                           last sample before STATUS.FRAME moved; without one, when it
+                                           wrote): gfx cube's rate counts from it */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back),
                                            a stopped engine given GPU_QUICK_US once Ctrl+C came */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
@@ -157,6 +160,8 @@ struct gpu {
     /* what happened, for gfx */
     u_long words, fences, irqs, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long irq_waits, irq_wakes;        /* fence waits that slept on the interrupt, and those it woke */
+    u_long irq_fences;                  /* the fences sent that asked for the interrupt (IRQ): gfx cube's
+                                           frames' own do not (the review of 58ac7b3's L3) */
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
     u32 last_error;                     /* the sticky bits of the last error */
 };
@@ -244,6 +249,7 @@ struct gpu_state {
 void gpu_state_read(struct gpu *g, struct gpu_state *s);
 /* FRAME_COUNT (*count); when it is not last, also FRAME_CRC, of the frame it counts (*crc): true */
 bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc);
+u32 gpu_fence_now(struct gpu *g);                  /* FENCE as it reads now (gfx cube's looks) */
 /* the port's tick (above): false when it has none */
 bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg);
 void gpu_tick_stop(struct gpu *g);
@@ -280,8 +286,10 @@ int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal,
 int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what);
 
 /* boards/arty_a7/gfxcube.c: gfx cube's run on a claimed GPU2 (it says what it does; GPU_OK, or
-   GPU_EERROR when a frame shown was torn or out of order, or the driver's error), and its check of
-   the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC */
+   GPU_EERROR when a frame shown was torn, out of order or missed, or the driver's error), and its
+   check of the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC and FENCE read just
+   before and just after the two (frame k's FENCE is fence0 + k: FENCE - fence0 is the FLIPs done
+   after frame 0's) */
 int gfx_cube_run(struct gpu *g, u32 seconds, const char *what);
 struct gfx_cube_check {
     const u32 *crcs;                    /* the model's FRAME_CRC of each frame of a turn */
@@ -290,10 +298,13 @@ struct gfx_cube_check {
     u32 count;                          /* FRAME_COUNT at the last look */
     i32 last;                           /* the turn's frame shown last that was whole (-1: none known) */
     u32 last_count;                     /* FRAME_COUNT then */
-    u_long shown, checked, torn, disorder;
+    u32 fence0;
+    u_long shown, checked, torn, disorder;  /* shown - checked: missed (shown, never looked at) */
+    u_long advance;                     /* how far the whole frames shown went on, in frames */
     u32 torn_count, torn_crc;           /* the first torn frame's FRAME_COUNT and FRAME_CRC */
 };
-void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first);
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc);
+void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first,
+                          u32 fence0);
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after);
 
 #endif
