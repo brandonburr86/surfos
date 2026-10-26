@@ -54,6 +54,7 @@ USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of 
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
 USER_PROGS  += less          # 10/25/26 (track A, A9): a file or a pipeline's text a screenful at a time
+USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256sum links Mbed TLS (below)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -902,6 +903,15 @@ $(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+
+# 10/25/26 (track A, A9): sha256sum sees Mbed TLS's headers and links its SHA-256 and libgcc before libsurf (as fetch)
+$(BUILD)/user/obj/sha256sum.o: USER_CFLAGS += $(MBEDTLS_CONF)
+$(BUILD)/user/obj/sha256sum.o: $(MBEDTLS_STAMP)
+$(BUILD)/user/bin/sha256sum: $(BUILD)/user/obj/sha256sum.o $(MBEDTLS_LIB) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(MBEDTLS_LIB) $(UT_LIBGCC) \
+		$(USER_LIB)
 
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also

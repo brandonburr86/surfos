@@ -1175,6 +1175,32 @@ SMOKE = [
        ['      3 ', '1\r\n2\r\n3\r\n', shown('SURF \u224b> ')]),
       ('dmesg | grep -i "fat16: hda1" | head -1', ['+FAT16: hda1: label SURFOS', shown('SURF \u224b> ')]),
       ('exit', [])]),
+    # 10/25/26 (track A, A9): find (-name -iname -type -maxdepth -print0, a path that is not there), du (-a -s -h),
+    # xargs (-n, quotes, -0, a kernel command, a command that is nowhere), cut (-d -f, -c with UTF-8, -b) and
+    # sha256sum (and -c: OK, FAILED)
+    ('surfsh', [shown('SURF \u224b> ')],
+     [("find /initrd -name '*.conf'", ['/initrd/etc/surfsh.conf\r\n/initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
+      ('find /initrd -maxdepth 1 -type f', ['/initrd/README\r\n/initrd/files-help.txt\r\n/initrd/motd\r\n',
+                                            shown('SURF \u224b> ')]),
+      ("find /initrd/etc -type d -iname 'S*'; find /nowhere; echo status $?",
+       ['/initrd/etc/ssl\r\n', 'find: /nowhere: No such file or directory', 'status 1', shown('SURF \u224b> ')]),
+      ('du -a /initrd/etc/ssl; du -sh /initrd/bin', [re.compile(rb'\n[0-9]+\t/initrd/etc/ssl/README\r'),
+                                                    re.compile(rb'\n[0-9]+\t/initrd/etc/ssl\r'),
+                                                    re.compile(rb'\n[0-9.]+M\t/initrd/bin\r'), shown('SURF \u224b> ')]),
+      ('echo a b c | xargs -n 2 echo x', ['x a b\r\nx c\r\n', shown('SURF \u224b> ')]),
+      ('echo "\'a b\' c" | xargs -n 1 echo got', ['got a b\r\ngot c\r\n', shown('SURF \u224b> ')]),
+      ("find /initrd/etc -name '*.conf' -print0 | xargs -0 echo",
+       ['/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
+      ('echo 100 | xargs sleep; echo x | xargs nosuchcommand; echo status $?',
+       ['slept 100 ms', 'xargs: nosuchcommand: not found', 'status 127', shown('SURF \u224b> ')]),
+      ("echo a:b:c | cut -d: -f2,3; echo h\u00e9llo | cut -c2-3; printf 'a\\tb\\tc\\n' | cut -f1,3; echo abcdef | cut -b-2,5-",
+       ['b:c\r\n', '\u00e9l\r\n', 'a\tc\r\n', 'abef\r\n', shown('SURF \u224b> ')]),
+      ('echo abc | sha256sum', ['edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb  -\r\n', shown('SURF \u224b> ')]),
+      ('sha256sum /initrd/motd > /hda1/SUMS.TXT; sha256sum -c /hda1/SUMS.TXT; rm /hda1/SUMS.TXT',
+       ['/initrd/motd: OK\r\n', shown('SURF \u224b> ')]),
+      ("printf '%064d  /initrd/motd\\n' 0 | sha256sum -c; echo status $?",
+       ['/initrd/motd: FAILED\r\n', 'status 1', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two

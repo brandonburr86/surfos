@@ -2030,6 +2030,15 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   `/` and `?` find text (case counts only when it has capitals), the line found goes to the
   top and every match on the screen shows in inverse video; `n`, `N`, `g`, `G`, Space, `b`,
   `d`, `u`, `h` for the keys, `q`. With no terminal on its output it copies the text, as `cat`.
+* **Tools** (10/25/26, track A, A9; `user/bin/`): `find` (paths, then `-name`/`-iname` wildcards
+  on the last part, `-type f|d`, `-maxdepth`, `-mindepth`, `-print0`; a directory is read whole
+  before find goes into it), `du` (`-s -a -h`; each file's size rounded up to its file system's
+  allocation unit from `statfs`, sums in 512-byte sectors), `xargs` (`-n -t -0`; words split at
+  blanks with quotes and backslashes; as many as a spawn takes, `SPAWN_MAX_ARGS` in
+  `SPAWN_ARG_BYTES`; a program on PATH, or else a kernel command through `kcmd()`, as surfsh
+  finds them; the programs' standard input is `/dev/null`; no words, no run), `cut` (`-b`, `-c`
+  in UTF-8 characters, `-f` with `-d` and `-s`) and `sha256sum` (and `-c`), which links Mbed
+  TLS's SHA-256 from the library Undertow is built with.
 * **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
   `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
   lists, pipelines, groups, redirections and here-documents parsed and written back,
