@@ -22,8 +22,9 @@
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
 #                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py), the cube's
-#                          16 checked frames and its first second of free run (none torn or missed);
-#                          SurfBoot's monitor reports features 1ff
+#                          16 checked frames and its first second of free run (none torn, missed or
+#                          out of order); a cube slower than 30 frames a second must fail
+#                          (gpudiag-slow.mem); SurfBoot's monitor reports features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
@@ -193,6 +194,19 @@ $(FW)/gpudiag-leftover.elf: $(GPUDIAG_LEFT_OBJ) firmware/diagnostics/gpudiag.ld 
 
 .SECONDARY: $(FW)/gpudiag-leftover.bin
 
+# gpudiag with GPUDIAG_TEST_SLOW, for test-gpu-soc only: in the cube's checks each frame lets the next one
+# start a blanking late and two of them two blankings late, about 28 frames a second, which the rate check
+# must fail (the review of 3fea963, L3)
+GPUDIAG_SLOW_OBJ := $(subst $(FW_OBJ)/diagnostics/gpudiag.c.o,$(FW_OBJ)/diagnostics/gpudiag-slow.c.o,$(GPUDIAG_OBJ))
+$(FW_OBJ)/diagnostics/gpudiag-slow.c.o: firmware/diagnostics/gpudiag.c $(FW_GEN)/gpuscenes_expect.h | $(FW_GEN)/fw_build.h
+	@mkdir -p $(dir $@)
+	$(Q)$(RV_CC) $(FW_CFLAGS) -DGPUDIAG_TEST_SLOW -c $< -o $@
+
+$(FW)/gpudiag-slow.elf: $(GPUDIAG_SLOW_OBJ) firmware/diagnostics/gpudiag.ld $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/diagnostics/gpudiag.ld $(GPUDIAG_SLOW_OBJ) $(RV_LIBGCC) -o $@
+
+.SECONDARY: $(FW)/gpudiag-slow.bin
+
 gpu-scenes: $(FW)/host/gpuscenes_expect
 	@mkdir -p $(FW)/gpuscenes
 	$(Q)$< --font $(GPU_FONT) --ppm $(FW)/gpuscenes --list
@@ -220,7 +234,8 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS) $(GPU_ID_STAMP)
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
 GPU_ENGINE_SCENES ?= 10
-test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem
+test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem \
+              $(FW)/gpudiag-slow.mem
 	@mkdir -p $(GPU_BUILD)/soc
 	@# gpudiag, its cube's first second of free run, then Ctrl-R (as GPU.md section 14 and
 	@# tools/board-test.py's late port type it), then the rerun: the first run alone must pass, and the
@@ -249,6 +264,15 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	@printf '  [a rerun after a target and clip were left] '
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/leftover-uart.txt --frames - \
 	  --expect $(FW_GEN)/gpuscenes_expect.h
+	@# the cube slower than 30 frames a second (gpudiag-slow.mem: frames two video frames apart, two of them
+	@# three): the run must fail the rate check, and no other (the review of 3fea963, L3)
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-slow.mem --quiet --max-cycles 900000000 \
+	  --transcript $(GPU_BUILD)/soc/slow-uart.txt --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/slow.txt 2>&1 \
+	  || { tail -30 $(GPU_BUILD)/soc/slow.txt; tail -30 $(GPU_BUILD)/soc/slow-uart.txt; exit 1; }
+	@printf '  [the cube at 28 frames a second] '
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/slow-uart.txt --frames - \
+	  --expect $(FW_GEN)/gpuscenes_expect.h \
+	  --must-fail 'FAIL frames 2 to 15 each at most 2 video frames after the one before \(30 a second or more\): up to 3\b[\s\S]*GPUDIAG: FAIL \(1 of'
 	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
 	@# and reports the GPU among the features (info: features 1ff)
 	$(Q)printf 'help\rinfo\r' > $(GPU_BUILD)/soc/help.txt

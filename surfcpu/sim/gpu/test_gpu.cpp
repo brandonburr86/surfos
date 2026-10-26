@@ -18,13 +18,17 @@ writing a part of it the engine never draws on, so the engine is stalled in ever
 GPU2 (docs/GPU.md section 16): SET_ZBUF's refusals and SET_TARGET dropping the depth buffer,
 depth without a buffer refused; TRIANGLE at every lane alignment and sub-pixel offset in both
 windings, the four kinds of edges through pixel centres, culling, zero areas, the clip's edges,
-huge and far triangles; Gouraud and every combination of the depth flags, depth buffers
-overlapping the target; FLIP against the blanking pulse; ABORT inside a TRIANGLE at random
-moments (what it drew must be a prefix of the walk, its last group possibly without its colour);
-the walk's cycles; then triangles, depth buffers, depth clears and FLIPs in the random streams.
-Every FLIP write the engine makes must come in the cycle after a blanking pulse, in every test.
+huge and far triangles; the top-left rule's six cases (edge 0, 1 or 2 a top or a left edge, as the
+triangle is walked) in both windings, in diamonds of four triangles sharing those edges, each
+pixel drawn exactly once on the engine's VRAM; Gouraud and every combination of the depth flags,
+depth buffers overlapping the target; FLIP against the blanking pulse; ABORT inside a TRIANGLE at
+random moments (what it drew must be a prefix of the walk, its last group possibly without its
+colour); the walk's cycles; then triangles (a third of them on the half-pixel grid, with edges
+through pixel centres), depth buffers, depth clears and FLIPs in the random streams, where each of
+the top-left rule's six cases must take pixels too (in a run of 100 chunks or more). Every FLIP
+write the engine makes must come in the cycle after a blanking pulse, in every test.
 
-    Vtb_gpu [--seed N] [--chunks N]
+    Vtb_gpu [--seed N] [--chunks N] [--random-only]
 */
 #include "Vtb_gpu.h"
 #include "verilated.h"
@@ -104,6 +108,7 @@ static uint64_t g_words = 0, g_cmds = 0, g_compares = 0, g_cpu_noise = 0;
 static bool g_noise = false;
 static uint64_t g_trace = 0;
 static bool g_only_fill = false;
+static bool g_random_only = false;
 
 static uint32_t rd(Bus &b, uint32_t off) { return b.rd(G + off); }
 static void wr(Bus &b, uint32_t off, uint32_t v) { b.wr(G + off, v); }
@@ -536,6 +541,60 @@ static void test_errors_and_fences(Tb &tb, Bus &bus) {
 
 static uint32_t zcw(int z, int c) { return GPU_ZC((unsigned)z, (unsigned)c); }
 
+// the pixels each case of the top-left rule took (docs/GPU.md 16.3: a covered centre that lies on edge
+// e, which is then a top or a left edge), with the edges numbered as the triangle is walked, for each
+// winding the vertices came in: [given counter-clockwise][edge][left]. A mutant of one case loses
+// exactly these pixels (where the depth test lets them through)
+struct TlCases {
+    uint64_t n[2][3][2] = {};
+    unsigned none() const {                             // the cases of the twelve that took no pixel
+        unsigned z = 0;
+        for (auto &w : n) for (auto &e : w) for (uint64_t k : e) z += k == 0;
+        return z;
+    }
+    unsigned none6() const {                            // ... of the six, in neither winding
+        unsigned z = 0;
+        for (int e = 0; e < 3; e++) for (int k = 0; k < 2; k++) z += n[0][e][k] + n[1][e][k] == 0;
+        return z;
+    }
+    std::string str() const {
+        char s[256];
+        std::snprintf(s, sizeof s, "edge 0 top %llu / %llu, left %llu / %llu; edge 1 top %llu / %llu, left %llu / %llu; "
+                      "edge 2 top %llu / %llu, left %llu / %llu", (unsigned long long)n[0][0][0],
+                      (unsigned long long)n[1][0][0], (unsigned long long)n[0][0][1], (unsigned long long)n[1][0][1],
+                      (unsigned long long)n[0][1][0], (unsigned long long)n[1][1][0], (unsigned long long)n[0][1][1],
+                      (unsigned long long)n[1][1][1], (unsigned long long)n[0][2][0], (unsigned long long)n[1][2][0],
+                      (unsigned long long)n[0][2][1], (unsigned long long)n[1][2][1]);
+        return s;
+    }
+};
+static TlCases g_tl_directed, g_tl_random;
+
+// add a TRIANGLE's pixels to tc, as the model stands before it is drawn: nothing when it is refused
+// (depth without a depth buffer), of zero area or culled, and only centres inside the effective clip
+static void count_tl(TlCases &tc, uint32_t flags, const int v[3][4]) {
+    if ((flags & (GPU_TRI_ZTEST | GPU_TRI_ZWRITE)) && !g_eng.zvalid) return;
+    int32_t vx[3], vy[3];
+    for (int i = 0; i < 3; i++) { vx[i] = (int16_t)v[i][0]; vy[i] = (int16_t)v[i][1]; }
+    struct gpu_tri t;
+    if (!gpu_tri_setup(&t, vx, vy)) return;
+    if ((t.area2 > 0 && (flags & GPU_TRI_CULL_CW)) || (t.area2 < 0 && (flags & GPU_TRI_CULL_CCW))) return;
+    auto fl16 = [](int64_t a) { return a >= 0 ? a / 16 : -((-a + 15) / 16); };
+    const int64_t ex1 = std::min(g_eng.cx1, g_eng.tw), ey1 = std::min(g_eng.cy1, g_eng.th);   // the clip, 16.3's box
+    const int64_t x0 = std::max<int64_t>(fl16(std::min({vx[0], vx[1], vx[2]}) + 7), g_eng.cx0);
+    const int64_t x1 = std::min<int64_t>(fl16(std::max({vx[0], vx[1], vx[2]}) - 8), ex1 - 1);
+    const int64_t y0 = std::max<int64_t>(fl16(std::min({vy[0], vy[1], vy[2]}) + 7), g_eng.cy0);
+    const int64_t y1 = std::min<int64_t>(fl16(std::max({vy[0], vy[1], vy[2]}) - 8), ey1 - 1);
+    for (int64_t y = y0; y <= y1; y++)
+        for (int64_t x = x0; x <= x1; x++) {
+            if (!gpu_tri_inside(&t, x, y)) continue;
+            const int64_t cx = 16 * x + 8, cy = 16 * y + 8;
+            for (int e = 0; e < 3; e++)
+                if ((int64_t)t.ex[e] * (cy - t.y[e]) - (int64_t)t.ey[e] * (cx - t.x[e]) == 0)
+                    tc.n[t.area2 < 0][e][t.ey[e] < 0]++;
+        }
+}
+
 // one TRIANGLE: its header bits, then (x, y in 12.4, depth, colour) for each vertex
 static void tri(Bus &bus, uint32_t flags, const int v[3][4]) {
     cmd(bus, {GPU_HDR(GPU_OP_TRIANGLE, flags), xy(v[0][0], v[0][1]), zcw(v[0][2], v[0][3]), xy(v[1][0], v[1][1]),
@@ -635,6 +694,82 @@ static void test_tri_coverage(Tb &tb, Bus &bus) {
     tri3(bus, 0x56, GPU_FX(2) + 3, GPU_FX(60), GPU_FX(250), GPU_FX(61) + 2, GPU_FX(2) + 5, GPU_FX(60) + 1);  // sliver
     tri3(bus, 0x57, GPU_FX(200) + 8, GPU_FX(100) + 8, GPU_FX(201) + 8, GPU_FX(100) + 8, GPU_FX(200) + 8, GPU_FX(101) + 8);
     fence_check(tb, bus, "TRIANGLE: the clip's edges, huge, far, slivers, one pixel");
+}
+
+// all of VRAM through the pixel port
+static std::vector<uint8_t> dump_vram(Tb &tb, Bus &bus);
+
+// The top-left rule at each edge (the review of 3fea963, M1). The edges are numbered as the triangle is
+// walked (clockwise: v1 and v2 exchanged when the vertices come counter-clockwise), so whether a top or a
+// left edge is edge 0, 1 or 2 depends on the order and the winding the vertices come in. A diamond of four
+// right triangles around a pixel centre P, their legs along P's row and column, gives each triangle a top
+// and a left leg through pixel centres, shared with a neighbour for which it is a bottom or a right edge
+// (test_gpu_model.c's diamonds). Six diamonds, every triangle's vertices taken from 0, 1 or 2 on and in
+// both windings, each triangle in its own colour: every one of the six cases takes pixels in each winding.
+// Then each of the 24 triangles drawn alone into a cleared target of its own, and the engine's VRAM read:
+// every pixel of each diamond (worked out here from the diamond's own edges) is drawn by exactly one of its
+// four triangles, and none outside it, so a gap or a double draw on a leg fails even where the model would
+// make the same mistake
+static void test_tri_top_left(Tb &tb, Bus &bus) {
+    const uint32_t T = 0x10000, TS = 320, S = 48, SB = 0x20000;     // the six together; each alone, 48 x 48
+    set_target(bus, T, TS, 320, 48);
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0), xy(0, 0), wh(320, 48)});
+    struct Diamond { int a, b, d; };                        // P (12.4), the half-diagonal; local in the 48 x 48
+    Diamond local[6];
+    int v[3][4] = {};
+    auto make = [&](int w, int r, int a, int b, int d, int k) {   // triangle k of the diamond, as walked from r
+        const int p[5][2] = {{a, b}, {a + d, b}, {a, b + d}, {a - d, b}, {a, b - d}};  // P, right, down, left, up
+        static const int t[4][3] = {{0, 1, 2}, {0, 4, 1}, {0, 2, 3}, {0, 3, 4}};      // each clockwise, P first
+        for (int i = 0; i < 3; i++) {                       // from vertex r on; counter-clockwise: v0, v2, v1
+            const int j = t[k][(r + (w && i ? 3 - i : i)) % 3];
+            v[i][0] = p[j][0];
+            v[i][1] = p[j][1];
+            v[i][2] = 0;
+            v[i][3] = 0;
+        }
+    };
+    for (int w = 0; w < 2; w++)
+        for (int r = 0; r < 3; r++) {
+            const int i = 3 * w + r;
+            // P on a pixel centre at every lane, legs of 5 to 13 pixels ending on a centre or half a pixel past one
+            const int d = GPU_FX(5 + 4 * r) + 8 * w;
+            local[i] = {GPU_FX(20 + i % 4) + 8, GPU_FX(23) + 8, d};
+            for (int k = 0; k < 4; k++) {
+                make(w, r, GPU_FX(25 + 51 * i) + 8, GPU_FX(24) + 8, d, k);
+                const uint32_t f = 0x10 + (uint32_t)(4 * i + k) * 9;
+                count_tl(g_tl_directed, f, v);
+                tri(bus, f, v);
+            }
+        }
+    fence_check(tb, bus, "TRIANGLE: the top-left rule at each edge, in diamonds");
+    for (int i = 0; i < 6; i++)
+        for (int k = 0; k < 4; k++) {
+            const uint32_t base = SB + (uint32_t)(4 * i + k) * S * S;
+            set_target(bus, base, S, S, S);
+            cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0), xy(0, 0), wh(S, S)});
+            make(i / 3, i % 3, local[i].a, local[i].b, local[i].d, k);
+            tri(bus, 0x80 + (uint32_t)k, v);
+        }
+    fence_check(tb, bus, "TRIANGLE: the diamonds' triangles one by one");
+    const std::vector<uint8_t> got = dump_vram(tb, bus);
+    int bad = 0;
+    for (int i = 0; i < 6; i++)
+        for (uint32_t y = 0; y < S; y++)
+            for (uint32_t x = 0; x < S; x++) {
+                int n = 0;
+                for (int k = 0; k < 4; k++) n += got[SB + (uint32_t)(4 * i + k) * S * S + y * S + x] != 0;
+                // inside the diamond, or on one of its two left edges (going up the screen) but not at its
+                // top or bottom corner (each also on a right edge): |u| + |v| < d, or = d with u < 0
+                const int u = (int)(16 * x + 8) - local[i].a, vv = (int)(16 * y + 8) - local[i].b;
+                const int m = std::abs(u) + std::abs(vv);
+                const int want = m < local[i].d || (m == local[i].d && u < 0);
+                if (n != want && bad++ < 4)
+                    std::printf("  diamond %d (%s, from vertex %d on): pixel (%u, %u) drawn %d times, want %d\n", i,
+                                i < 3 ? "clockwise" : "counter-clockwise", i % 3, x, y, n, want);
+            }
+    CHECK(bad == 0, "the diamonds' triangles drawn one by one: %d pixels not drawn exactly once", bad);
+    CHECK(g_tl_directed.none() == 0, "the diamonds: %u of the top-left rule's 12 cases took no pixel (%s)",
+          g_tl_directed.none(), g_tl_directed.str().c_str());
 }
 
 static void test_tri_depth(Tb &tb, Bus &bus) {
@@ -864,33 +999,57 @@ static uint32_t g_rt_base = 0, g_rt_stride = 640;           // the random part's
 
 static int clamp16(int v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : v; }
 
-// three random vertices (12.4) for a target of tw x th: near it, tiny, huge, of zero area, far
-// beyond one of its edges, or slivers
+// three random vertices (12.4) for a target of tw x th: on the half-pixel grid with edges along rows
+// and columns through pixel centres, near the target, tiny, huge, of zero area, far beyond one of its
+// edges, or slivers
 static void random_vertices(int v[3][4], unsigned tw, unsigned th) {
     const int mode = rnd(0, 99), W = (int)tw, H = (int)th;
     for (int i = 0; i < 3; i++) {
         v[i][0] = rnd(-GPU_FX(40), GPU_FX(W + 40));
         v[i][1] = rnd(-GPU_FX(40), GPU_FX(H + 40));
     }
-    if (mode < 40) {
+    if (mode < 35) {
+        // a third on the half-pixel grid (the review of 3fea963, M1: vertices anywhere on the 1/16 grid
+        // practically never put an edge through pixel centres, where the top-left rule decides). A corner
+        // P inside the effective clip (the target when the clip is empty), mostly on a pixel centre, and
+        // legs along its row and its column of 1/2 to 40 pixels either way; now and then the third vertex
+        // moved off the column or the second off the row; the three in any of their six orders, so that a
+        // leg is any edge, top, left, bottom or right, in both windings
+        int x0 = (int)g_eng.cx0, x1 = (int)std::min(g_eng.cx1, g_eng.tw), y0 = (int)g_eng.cy0;
+        int y1 = (int)std::min(g_eng.cy1, g_eng.th);
+        if (x0 >= x1 || y0 >= y1) { x0 = -4; x1 = W + 4; y0 = -4; y1 = H + 4; }
+        const int cx = rnd(x0, x1 - 1), cy = rnd(y0, y1 - 1), on_x = rnd(0, 3), on_y = rnd(0, 3);  // in this order
+        const int lx = 8 * rnd(1, 80), ly = 8 * rnd(1, 80), left = rnd(0, 1), up = rnd(0, 1);
+        const int px = GPU_FX(cx) + (on_x ? 8 : 0), py = GPU_FX(cy) + (on_y ? 8 : 0);    // 3 in 4 on a centre
+        int p[3][2] = {{px, py}, {px + (left ? -lx : lx), py}, {px, py + (up ? -ly : ly)}};
+        const int k = rnd(0, 3);
+        if (k == 1) p[2][0] += 8 * rnd(-20, 20);
+        if (k == 2) p[1][1] += 8 * rnd(-20, 20);
+        const int a = rnd(0, 2), rev = rnd(0, 1);
+        for (int i = 0; i < 3; i++) {
+            const int j = (a + (rev && i ? 3 - i : i)) % 3;
+            v[i][0] = p[j][0];
+            v[i][1] = p[j][1];
+        }
+    } else if (mode < 61) {
         // near the target, as drawn above
-    } else if (mode < 58) {                             // tiny: within three pixels of a point
+    } else if (mode < 73) {                             // tiny: within three pixels of a point
         const int cx = rnd(-GPU_FX(4), GPU_FX(W + 4)), cy = rnd(-GPU_FX(4), GPU_FX(H + 4));
         for (int i = 0; i < 3; i++) {
             v[i][0] = cx + rnd(-48, 48);
             v[i][1] = cy + rnd(-48, 48);
         }
-    } else if (mode < 68) {                             // huge: anywhere in the 12.4 range
+    } else if (mode < 79) {                             // huge: anywhere in the 12.4 range
         for (int i = 0; i < 3; i++) {
             v[i][0] = rnd(-32768, 32767);
             v[i][1] = rnd(-32768, 32767);
         }
-    } else if (mode < 78) {                             // zero area: on a line, or two the same
+    } else if (mode < 86) {                             // zero area: on a line, or two the same
         const int k = rnd(-1, 2);
         v[2][0] = v[0][0] + k * (v[1][0] - v[0][0]);
         v[2][1] = v[0][1] + k * (v[1][1] - v[0][1]);
         if (rnd(0, 3) == 0) { v[1][0] = v[0][0]; v[1][1] = v[0][1]; }
-    } else if (mode < 88) {                             // beyond one edge of the target
+    } else if (mode < 92) {                             // beyond one edge of the target
         const int side = rnd(0, 3);
         for (int i = 0; i < 3; i++) {
             if (side == 0) v[i][0] = rnd(-GPU_FX(300), -1);
@@ -928,6 +1087,7 @@ static void random_gpu2(Bus &bus, unsigned &tw, unsigned &th) {
         if (g_rng() % 6 == 0) f |= GPU_TRI_CULL_CW;
         if (g_rng() % 6 == 0) f |= GPU_TRI_CULL_CCW;
         f |= (g_rng() & 0x3FFu) << 14;                  // header bits TRIANGLE ignores
+        count_tl(g_tl_random, f, v);
         tri(bus, f, v);
     } else if (r < 82) {                                // a depth buffer for this target, or a refused one
         const unsigned zs = ((2 * tw + 3) & ~3u) + 4 * (unsigned)rnd(0, 6);
@@ -1017,6 +1177,7 @@ int main(int argc, char **argv) {
         else if (!std::strcmp(argv[i], "--chunks") && i + 1 < argc) chunks = (unsigned)std::strtoul(argv[++i], nullptr, 0);
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) g_trace = std::strtoull(argv[++i], nullptr, 0);
         else if (!std::strcmp(argv[i], "--only-fill")) g_only_fill = true;
+        else if (!std::strcmp(argv[i], "--random-only")) g_random_only = true;
     }
     g_rng.seed(seed);
     auto top = std::make_unique<Vtb_gpu>();
@@ -1043,21 +1204,24 @@ int main(int argc, char **argv) {
         return failures ? 1 : 0;
     }
 
-    test_registers(tb, bus);
-    test_reset_target(tb, bus);                         // before anything sets a target
-    test_fill(tb, bus);
-    test_target(tb, bus);
-    test_copy(tb, bus);
-    test_line(tb, bus);
-    test_expand(tb, bus);
-    test_write_rect(tb, bus);
-    test_errors_and_fences(tb, bus);
-    test_zbuf(tb, bus);
-    test_tri_coverage(tb, bus);
-    test_tri_depth(tb, bus);
-    test_flip(tb, bus);
-    test_abort_triangle(tb, bus);
-    test_tri_timing(tb, bus);
+    if (!g_random_only) {                                   // --random-only, a debugging aid: the random part alone
+        test_registers(tb, bus);
+        test_reset_target(tb, bus);                         // before anything sets a target
+        test_fill(tb, bus);
+        test_target(tb, bus);
+        test_copy(tb, bus);
+        test_line(tb, bus);
+        test_expand(tb, bus);
+        test_write_rect(tb, bus);
+        test_errors_and_fences(tb, bus);
+        test_zbuf(tb, bus);
+        test_tri_coverage(tb, bus);
+        test_tri_top_left(tb, bus);
+        test_tri_depth(tb, bus);
+        test_flip(tb, bus);
+        test_abort_triangle(tb, bus);
+        test_tri_timing(tb, bus);
+    }
     const uint64_t directed = g_compares;
 
     // randomized streams, with the CPU on VRAM meanwhile
@@ -1075,13 +1239,18 @@ int main(int argc, char **argv) {
         if (failures > 20) break;
     }
     CHECK(bus.problems.empty(), "SurfBus protocol: %s", bus.problems.empty() ? "" : bus.problems[0].c_str());
+    // (before the verdict: the clamp's check came after it until the review of 3fea963, so it could not fail)
+    CHECK(g_eng.tri_clamped == 0 && g_eng.tri_wide == 0, "the model's clamp changed %llu values, %llu were wide",
+          g_eng.tri_clamped, g_eng.tri_wide);
+    CHECK(chunks < 100 || failures > 20 || g_tl_random.none6() == 0, "the random part: %u of the top-left rule's six "
+          "cases took no pixel in either winding (%s)", g_tl_random.none6(), g_tl_random.str().c_str());
     top->final();
+    std::printf("test_gpu: the top-left rule's cases (seed %u), the pixels each took given clockwise / counter-"
+                "clockwise: directed %s; random %s\n", seed, g_tl_directed.str().c_str(), g_tl_random.str().c_str());
     if (failures) {
         std::printf("test_gpu: FAIL (%d of %d checks, seed %u)\n", failures, checks, seed);
         return 1;
     }
-    CHECK(g_eng.tri_clamped == 0 && g_eng.tri_wide == 0, "the model's clamp changed %llu values, %llu were wide",
-          g_eng.tri_clamped, g_eng.tri_wide);
     std::printf("test_gpu: PASS (seed %u: %d checks; %llu commands, %llu words, %llu pixel writes in the model; "
                 "VRAM compared %llu times (%llu directed, %u random chunks); engine %llu grants, %llu cycles waiting "
                 "for the CPU (%llu CPU accesses meanwhile); %llu cycles)\n",

@@ -1,7 +1,7 @@
 /*
 SurfGPU diagnostics: the scenes' expected CRCs
 --------------------
-File: gpuscenes_expect.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
+File: gpuscenes_expect.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2), 10/26/26 (the review of 3fea963)
 --------------------
 A host tool of the firmware build: runs gpudiag's scenes (firmware/diagnostics/gpuscenes.c) in
 order through the C model (sim/models/gpu_model.c), as SurfCPU runs them through the hardware,
@@ -13,7 +13,10 @@ GPU2: a FLIP the engine takes becomes the display's GFX_BASE, as surf_video take
 frame latch; and the cube's frames (firmware/diagnostics/gpucube.c) are drawn too: the 16 of
 gpudiag's checks in MODE 2 (gpu_cube_expect_check) and all 128 of a turn under the result bar in
 MODE 3 (gpu_cube_expect_run, the free run after a PASS), each frame's CRC as shown after its FLIP
-(with --ppm also cube-NNN.ppm, the free run's).
+(with --ppm also cube-NNN.ppm, the free run's). It fails, and writes no header, when two frames of
+either table have the same CRC (gpudiag knows a frame by its CRC: the first cube's frames 9 and 73
+were the same picture, the review of 3fea963's L1) or when a frame of the turn shows fewer than two
+of the cube's faces (gpucube.c says why that would let two frames be the same picture).
 
     gpuscenes_expect --font driver/font8x16.c --out FILE [--ppm DIR] [--list]
 */
@@ -191,6 +194,7 @@ int main(int argc, char **argv)
     /* the cube: the checked frames (MODE 2), then a turn's frames under the bar (MODE 3), each
      * drawn into the buffer gpudiag draws it into and shown by its FLIP */
     uint32_t cube_check[GPU_CUBE_CHECK_FRAMES], cube_run[GPU_CUBE_PERIOD];
+    unsigned faces_seen[4] = {0, 0, 0, 0};              /* frames of the turn showing 0 .. 3 faces */
     for (int pass = 0; pass < 2; pass++) {
         gpu_cube_display(&model_sink, pass);
         const uint32_t frames = pass ? GPU_CUBE_PERIOD : GPU_CUBE_CHECK_FRAMES;
@@ -201,15 +205,41 @@ int main(int argc, char **argv)
                 fprintf(stderr, "gpuscenes_expect: cube frame %u leaves the engine wrong\n", k);
                 problems++;
             }
+            if (pass) {                                 /* the faces in the picture: ramp n / 32 of 0 .. 5 */
+                const uint8_t *pic = vram + ((k & 1u) ? GPU_CUBE_B : GPU_CUBE_A);
+                unsigned n[6] = {0, 0, 0, 0, 0, 0}, faces = 0;
+                for (uint32_t i = 0; i < 320u * 240u; i++)
+                    if (pic[i] < 192u)
+                        n[pic[i] / 32u]++;
+                for (unsigned f = 0; f < 6; f++)
+                    faces += n[f] != 0;
+                faces_seen[faces > 3 ? 3 : faces]++;
+                if (faces < 2) {
+                    fprintf(stderr, "gpuscenes_expect: cube frame %u shows %u of the cube's faces, not two or three\n",
+                            k, faces);
+                    problems++;
+                }
+            }
             gpu_display_render(&disp, vram, textram, (const uint8_t(*)[16])font, frame);
             (pass ? cube_run : cube_check)[k] = gpu_frame_crc(frame);
             if (ppm && pass && k % 16 == 0)
                 write_ppm(ppm, "cube", k);
         }
+        const uint32_t *crcs = pass ? cube_run : cube_check;
+        for (uint32_t i = 0; i < frames; i++)
+            for (uint32_t j = i + 1; j < frames; j++)
+                if (crcs[i] == crcs[j]) {
+                    fprintf(stderr, "gpuscenes_expect: cube frames %u and %u (%s) are the same picture, CRC %08x\n", i, j,
+                            pass ? "under the bar" : "checked", crcs[i]);
+                    problems++;
+                }
         if (list)
             printf("cube %s: %u frames, the first %08x, the last %08x\n", pass ? "under the bar" : "checked", frames,
-                   pass ? cube_run[0] : cube_check[0], pass ? cube_run[frames - 1] : cube_check[frames - 1]);
+                   crcs[0], crcs[frames - 1]);
     }
+    if (list)
+        printf("cube: of the %u frames of a turn, %u show three faces, %u two, %u one or none\n", GPU_CUBE_PERIOD,
+               faces_seen[3], faces_seen[2], faces_seen[0] + faces_seen[1]);
     if (eng.tri_clamped || eng.tri_wide) {
         fprintf(stderr, "gpuscenes_expect: the model's clamp changed %llu values, %llu were wide\n", eng.tri_clamped,
                 eng.tri_wide);

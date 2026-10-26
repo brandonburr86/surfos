@@ -34,7 +34,7 @@ extern const struct gpu_scene gpu_scenes[];
 extern const unsigned gpu_scene_count;
 
 /* The checks of a complete gpudiag run: identity 5, the VRAM window 59, the video registers 4,
- * the engine's registers and errors 14, GPU2's commands 4, the scene count 1 and the FRAME pair 2
+ * the engine's registers and errors 14, GPU2's commands 5, the scene count 1 and the FRAME pair 2
  * (with scene 1), the cube 6, then 3 for each scene. One of the video registers' (the GFX_ values a
  * reset leaves) is made only by the
  * first run after a reset: a rerun (Ctrl-R) cannot see reset values, says so, and makes one check
@@ -42,7 +42,7 @@ extern const unsigned gpu_scene_count;
  * short), and gpuscenes_expect.c writes both totals into gpuscenes_expect.h (GPUDIAG_CHECKS,
  * GPUDIAG_RERUN_CHECKS), which gpudiag_check.py wants in the PASS line. Change these with the
  * checks. */
-#define GPUDIAG_SECTION_CHECKS (5u + 59u + 4u + 14u + 4u + 1u + 2u + 6u)
+#define GPUDIAG_SECTION_CHECKS (5u + 59u + 4u + 14u + 5u + 1u + 2u + 6u)
 #define GPUDIAG_SCENE_CHECKS 3u
 #define GPUDIAG_FIRST_RUN_CHECKS 1u
 
