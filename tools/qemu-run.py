@@ -322,7 +322,10 @@ SMOKE = [
     # before them it makes both fail
     ('poweroff -n', ['poweroff -n: what poweroff would do now', 'end 4 programs and shells: ', "'surfsh' (pid ",
                      'write out and unmount /hda1 (fat on hda1)',
-                     'soft off (ACPI S5): SLP_TYPa 0 and SLP_TYPb 0 from \\_S5_, into PM1a at port 0x']),
+                     'soft off (ACPI S5): SLP_TYPa 0 and SLP_TYPb 0 from \\_S5_, into PM1a at port 0x',
+                     # 10/26/26 (L21b): and before it, as ACPICA does, PIIX4's GPE0 off and cleared and its PM1 status
+                     'before the sleep, as ACPICA does: GPE0 at port 0xafe0 off and cleared (2 bytes each); '
+                     'the PM1 status cleared at port 0x600']),
     ('acpinvs 0 16', ['refused']),
     ('acpinvs 1000 257', ['usage: acpinvs']),
     ('himem',   ['no RAM above 4 GB']),

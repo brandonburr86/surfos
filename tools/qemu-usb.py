@@ -1095,6 +1095,10 @@ def scenario_shutdown(args, image, firmware, outdir):
                                 good and '(FSInfo)' in again.split("Booting `SurfOS'")[-1] and
                                 'not unmounted cleanly' not in again))
                 results.append(('and the file is there', run_cmd(vm, 'cat /stick/SHUTDOWN.TXT', ['shutdown-test'])[0]))
+                # 10/26/26 (L21b): what soft off clears first on ICH9, as ACPICA does; the poweroff below makes those writes
+                results.append(('poweroff -n: the GPEs off and the PM1 and GPE status cleared before the sleep (ICH9)',
+                                run_cmd(vm, 'poweroff -n', ['before the sleep, as ACPICA does: GPE0 at port 0x620 off and '
+                                                            'cleared (8 bytes each); the PM1 status cleared at port 0x600'])[0]))
                 tmark = len(vm.text())
                 vm.send('poweroff\n')
                 ok = in_order(vm, ['shutdown: poweroff: the programs end, the volumes are written out',

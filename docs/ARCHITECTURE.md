@@ -912,6 +912,12 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
   and PM1b and then SLP_TYP with SLP_EN, and gives up after 3 s. The legacy profile reads the
   ACPI tables only then, quietly (`acpi_read(true)`; the BIOS data area through the firmware
   window, since page 0 is unmapped by then); its boot reads none. `poweroff -n` shows the values.
+  10/26/26 (L21b): before the SLP_TYP writes, as ACPICA does, `acpi_s5_clear()` disables the GPEs
+  (each enable byte of GPE0_BLK and GPE1_BLK zeroed), clears the PM1 status (the fixed status bits,
+  WAK_STS among them, at PM1a_EVT_BLK and PM1b_EVT_BLK) and then each GPE status byte; hardware-
+  reduced ACPI clears WAK_STS in its sleep status register. A block is used only when it is an I/O
+  port with all of it below 0x10000 (a GPE block's length even, PM1_EVT_LEN at least 4). The
+  wakeup GPEs are not enabled again (that needs the DSDT run): the power button turns it back on.
 * **The framebuffer lock.** Whoever draws holds a busy flag and cannot be preempted until
   it lets go (a task killed while drawing would keep it, and the screen would freeze);
   a task killed by an exception gives it back, and `panic()` and the wipeout path take

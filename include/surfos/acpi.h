@@ -14,6 +14,9 @@ FADT's PM1 control blocks (or the sleep control register), \_S5_'s SLP_TYP value
 from the DSDT without running AML (driver/amlfield.c), and, when the machine is not in
 ACPI mode yet, the switch through SMI_CMD, just before the sleep is entered. The legacy
 profile reads the tables only then, and quietly: its boot stays as it was.
+10/26/26 (L21b): before the sleep, as ACPICA does, the GPEs are disabled and the PM1 and
+GPE status cleared (WAK_STS among it), from the FADT's event and GPE blocks; hardware-
+reduced ACPI clears WAK_STS in its sleep status register.
 */
 
 #ifndef _SURFOS_ACPI_H
@@ -77,6 +80,11 @@ struct acpi_info {
     u8 acpi_enable;             /* the value written there */
     u16 pm1a_cnt, pm1b_cnt;     /* the PM1 control blocks (I/O ports; 0: none) */
     struct acpi_gas sleep_ctl;  /* hardware-reduced ACPI: the sleep control register */
+    u16 pm1a_evt, pm1b_evt;     /* 10/26/26 (L21b): the PM1 event blocks (I/O ports; 0: none): status, then enable */
+    u8 pm1_evt_len;             /* their length (4 bytes at least, or they are not used) */
+    u16 gpe_blk[2];             /* GPE0 and GPE1 (I/O ports; 0: none): status bytes, then as many enable bytes */
+    u8 gpe_len[2];              /* their lengths (even), from GPE0_BLK_LEN and GPE1_BLK_LEN */
+    struct acpi_gas sleep_sts;  /* hardware-reduced ACPI: the sleep status register (WAK_STS) */
 
     bool madt;
     u32 lapic_addr;
@@ -107,6 +115,13 @@ struct acpi_s5 {
 int acpi_s5_find(struct acpi_s5 *s);        /* task context (it reads the DSDT); 0, or -1 and s->why */
 int acpi_s5_enter(const struct acpi_s5 *s); /* interrupts off; it returns (-1) only if the machine is still on 3 s later */
 void acpi_s5_print(const struct acpi_s5 *s);  /* what S5 would write, and where (poweroff -n) */
+/* 10/26/26 (L21b): what acpi_s5_enter() writes before the sleep, in ACPICA's order: each GPE enable byte zeroed, the
+   PM1 status cleared (ACPI_PM1_STS_FIXED, written to clear), then each GPE status byte; hardware-reduced ACPI: WAK_STS
+   in the sleep status register. out() gets each write (space 0 memory, 1 I/O port; 8 or 16 bits); the count. */
+#define ACPI_PM1_STS_FIXED 0xC731   /* TMR, BM, GBL, PWRBTN, SLPBTN, RTC, PCIEXP_WAKE and WAK_STS, as ACPICA's */
+#define ACPI_SLEEP_WAK_STS 0x80     /* the sleep status register's WAK_STS */
+typedef void (*acpi_write_fn)(void *arg, u8 space, u64 addr, u8 bits, u16 value);
+u_int acpi_s5_clear(acpi_write_fn out, void *arg);
 
 enum acpi_copy_result {
     ACPI_COPY_OK = 0,

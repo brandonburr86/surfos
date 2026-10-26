@@ -8,6 +8,7 @@ into the Multiboot 2 block on UEFI); on a BIOS machine it is looked for in the E
 at 0xE0000-0xFFFFF. Tables are read one at a time through vmm_temp_map() and every
 length is checked before it is used, so a broken table is listed and skipped.
 10/25/26 (robustness, L20, L21): soft off (S5) for poweroff, from the FADT and \_S5_.
+10/26/26 (L21b): and before it, the GPEs disabled and the PM1 and GPE status cleared.
 */
 
 #include <asm/io.h>
@@ -93,8 +94,13 @@ static bool find_rsdp_bios(struct boot_acpi *a) {
 
 /**** the three tables the laptop profile uses ****/
 
+/* 10/26/26 (L21b): a block of n bytes at an I/O port, all of it below 0x10000; else 0 */
+static u16 io_block(u64 port, u32 n) {
+    return port && port + n <= 0x10000 ? (u16)port : 0;
+}
+
 static void parse_fadt(const u8 *t, u32 len) {
-    u32 pm = 0, pmlen = 0;
+    u32 pm = 0, pmlen = 0, g;
     acpi.fadt = true;
     acpi.fadt_revision = t[8];
     if(len >= 44) acpi.dsdt_addr = rd32(t + 40);
@@ -129,6 +135,33 @@ static void parse_fadt(const u8 *t, u32 len) {
         if(x.space == 1 && x.addr && x.addr < 0x10000) acpi.pm1b_cnt = (u16)x.addr;
     }
     if(len >= 256) read_gas(t + 244, &acpi.sleep_ctl);
+    /* 10/26/26 (L21b): the PM1 event blocks (PM1_EVT_LEN bytes: the status half, then the enable half) and the two
+       GPE blocks (status bytes, then as many enable bytes), whose status soft off clears first, as ACPICA does; their
+       extended forms when those name I/O ports. Each is used only when it is a port with all of it below 0x10000,
+       PM1_EVT_LEN at least 4 and a GPE block's length even; the sleep status register of hardware-reduced ACPI */
+    if(len >= 89 && t[88] >= 4) acpi.pm1_evt_len = t[88];
+    if(len >= 64 && acpi.pm1_evt_len) {
+        acpi.pm1a_evt = io_block(rd32(t + 56), acpi.pm1_evt_len);
+        acpi.pm1b_evt = io_block(rd32(t + 60), acpi.pm1_evt_len);
+    }
+    for(g = 0; g < 2 && len >= 94; g++) {
+        if(t[92 + g] < 2 || (t[92 + g] & 1)) continue;
+        acpi.gpe_len[g] = t[92 + g];
+        acpi.gpe_blk[g] = io_block(rd32(t + 80 + 4 * g), acpi.gpe_len[g]);
+    }
+    if(len >= 172 && acpi.pm1_evt_len) {
+        struct acpi_gas x;
+        read_gas(t + 148, &x);
+        if(x.space == 1 && io_block(x.addr, acpi.pm1_evt_len)) acpi.pm1a_evt = (u16)x.addr;
+        read_gas(t + 160, &x);
+        if(x.space == 1 && io_block(x.addr, acpi.pm1_evt_len)) acpi.pm1b_evt = (u16)x.addr;
+    }
+    for(g = 0; g < 2 && len >= 244; g++) {
+        struct acpi_gas x;
+        read_gas(t + 220 + 12 * g, &x);
+        if(acpi.gpe_len[g] && x.space == 1 && io_block(x.addr, acpi.gpe_len[g])) acpi.gpe_blk[g] = (u16)x.addr;
+    }
+    if(len >= 268) read_gas(t + 256, &acpi.sleep_sts);
     if(len >= 220) {                                  /* X_PM_TMR_BLK overrides PM_TMR_BLK when given */
         struct acpi_gas x;
         read_gas(t + 208, &x);
@@ -475,21 +508,71 @@ static void sleep_ctl_write(u8 value) {
     }
 }
 
+/* 10/26/26 (L21b): hardware-reduced ACPI's sleep status register, where SurfOS can write it */
+static bool sleep_sts_ok(void) {
+    const struct acpi_gas *r = &acpi.sleep_sts;
+    return r->addr && ((r->space == 0 && r->addr < 0x100000000ULL) || (r->space == 1 && r->addr < 0x10000));
+}
+
+/* 10/26/26 (L21b): ACPICA's preparation for a sleep (AcpiHwLegacySleep(), AcpiHwExtendedSleep()), for soft off: the
+   GPEs disabled first, so that none wakes the machine straight up again, then the fixed status bits of PM1a and PM1b
+   cleared (written as ones), WAK_STS among them, then each GPE status byte. Hardware-reduced ACPI: WAK_STS in the
+   sleep status register (a port below 0x10000, or memory below 4 GB). The wakeup GPEs ACPICA then enables are
+   unknown here (the DSDT is not run): a soft off by the power button alone. The blocks were checked by parse_fadt(). */
+u_int acpi_s5_clear(acpi_write_fn out, void *arg) {
+    u_int n = 0, g, i, half;
+    if(acpi.fadt_flags & ACPI_FADT_HW_REDUCED) {
+        if(!sleep_sts_ok()) return 0;
+        out(arg, acpi.sleep_sts.space, acpi.sleep_sts.addr, 8, ACPI_SLEEP_WAK_STS);
+        return 1;
+    }
+    for(g = 0; g < 2; g++)                                  /* each GPE enable byte: the second half of its block */
+        for(half = acpi.gpe_blk[g] ? acpi.gpe_len[g] / 2 : 0, i = 0; i < half; i++, n++)
+            out(arg, 1, acpi.gpe_blk[g] + half + i, 8, 0);
+    if(acpi.pm1a_evt) {                                     /* the PM1 status: the first half of the event block */
+        out(arg, 1, acpi.pm1a_evt, 16, ACPI_PM1_STS_FIXED);
+        n++;
+    }
+    if(acpi.pm1b_evt) {
+        out(arg, 1, acpi.pm1b_evt, 16, ACPI_PM1_STS_FIXED);
+        n++;
+    }
+    for(g = 0; g < 2; g++)                                  /* each GPE status byte: the first half */
+        for(half = acpi.gpe_blk[g] ? acpi.gpe_len[g] / 2 : 0, i = 0; i < half; i++, n++)
+            out(arg, 1, acpi.gpe_blk[g] + i, 8, 0xFF);
+    return n;
+}
+
+/* acpi_s5_clear()'s writes, made: a register in memory is mapped then, as the sleep control register is */
+static void s5_write(void *arg, u8 space, u64 addr, u8 bits, u16 value) {
+    (void)arg;
+    if(space == 1 && bits == 16) outw((u_short)addr, value);
+    else if(space == 1) outb((u_short)addr, (u8)value);
+    else {
+        volatile u8 *r = (volatile u8 *)ioremap((u_long)addr, 1, false);
+        if(r) *r = (u8)value;
+    }
+}
+
 /* Interrupts off, caches written back. Not yet in ACPI mode (SCI_EN clear): the switch through SMI_CMD, waited for
-   300 ms at most. Then SLP_TYP into the PM1a and PM1b control blocks, and SLP_TYP with SLP_EN (as ACPICA does), or
-   the sleep control register's one write. The machine is off before the 3 s are up; if not, -1. */
+   300 ms at most. 10/26/26 (L21b): the GPEs disabled and the PM1 and GPE status cleared (acpi_s5_clear()). Then
+   SLP_TYP into the PM1a and PM1b control blocks, and SLP_TYP with SLP_EN (as ACPICA does), or, after WAK_STS, the
+   sleep control register's one write. The machine is off before the 3 s are up; if not, -1. */
 int acpi_s5_enter(const struct acpi_s5 *s) {
     u16 a = 0, b = 0;
     u_long ms;
     if(!s->ok) return -1;
     irq_disable();
     asm volatile("wbinvd" ::: "memory");
-    if(s->hw_reduced) sleep_ctl_write((u8)((s->typa << 2) | SLPCTL_SLP_EN));
-    else {
+    if(s->hw_reduced) {
+        acpi_s5_clear(s5_write, NULL);
+        sleep_ctl_write((u8)((s->typa << 2) | SLPCTL_SLP_EN));
+    } else {
         if(!(inw(acpi.pm1a_cnt) & PM1_SCI_EN) && acpi.smi_cmd && acpi.acpi_enable) {
             outb(acpi.smi_cmd, acpi.acpi_enable);
             for(ms = 0; ms < 300 && !(inw(acpi.pm1a_cnt) & PM1_SCI_EN); ms++) mdelay(1);
         }
+        acpi_s5_clear(s5_write, NULL);
         a = (inw(acpi.pm1a_cnt) & ~(PM1_SLP_TYP | PM1_SLP_EN)) | (s->typa << 10);     /* 0-7: acpi_s5_find() */
         if(acpi.pm1b_cnt) b = (inw(acpi.pm1b_cnt) & ~(PM1_SLP_TYP | PM1_SLP_EN)) | (s->typb << 10);
         outw(acpi.pm1a_cnt, a);
@@ -502,6 +585,29 @@ int acpi_s5_enter(const struct acpi_s5 *s) {
     return -1;
 }
 
+/* 10/26/26 (L21b): what acpi_s5_clear() would write first, said (poweroff -n) */
+static void s5_print_clear(void) {
+    u_int g, said = 0;
+    printf("    before the sleep, as ACPICA does: ");
+    if(acpi.fadt_flags & ACPI_FADT_HW_REDUCED) {
+        if(sleep_sts_ok())
+            printf("WAK_STS cleared in the sleep status register (%s 0x%llx)\n", acpi.sleep_sts.space ? "port" : "memory",
+                   acpi.sleep_sts.addr);
+        else printf("nothing (the FADT names no sleep status register SurfOS can write)\n");
+        return;
+    }
+    for(g = 0; g < 2; g++) {
+        if(!acpi.gpe_blk[g]) continue;
+        printf("%sGPE%u at port 0x%x off and cleared (%u bytes each)", said++ ? "; " : "", g, acpi.gpe_blk[g],
+               acpi.gpe_len[g] / 2);
+    }
+    if(acpi.pm1a_evt) {
+        printf("%sthe PM1 status cleared at port 0x%x", said++ ? "; " : "", acpi.pm1a_evt);
+        if(acpi.pm1b_evt) printf(" and 0x%x", acpi.pm1b_evt);
+    }
+    printf("%s\n", said ? "" : "nothing (the FADT names no PM1 event block or GPE block SurfOS can write)");
+}
+
 void acpi_s5_print(const struct acpi_s5 *s) {
     if(!s->ok) {
         printf("    soft off (ACPI S5): not possible, %s\n", s->why);
@@ -510,6 +616,7 @@ void acpi_s5_print(const struct acpi_s5 *s) {
     if(s->hw_reduced) {
         printf("    soft off (ACPI S5): SLP_TYP %u from \\_S5_, into the sleep control register (%s 0x%llx)\n", s->typa,
                acpi.sleep_ctl.space ? "port" : "memory", acpi.sleep_ctl.addr);
+        s5_print_clear();
         return;
     }
     printf("    soft off (ACPI S5): SLP_TYPa %u and SLP_TYPb %u from \\_S5_, into PM1a at port 0x%x", s->typa,
@@ -520,4 +627,5 @@ void acpi_s5_print(const struct acpi_s5 *s) {
            acpi.smi_cmd ? "off, switched on first (SMI_CMD)" : "off, and the FADT names no way to switch it on");
     if(!(inw(acpi.pm1a_cnt) & PM1_SCI_EN) && acpi.smi_cmd)
         printf("    SMI_CMD port 0x%x, value 0x%02x\n", acpi.smi_cmd, acpi.acpi_enable);
+    s5_print_clear();
 }
