@@ -63,3 +63,18 @@ At 7cadace (the code handed back):
     test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
     test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
     ok   gfx tri, gfx flip, gfx cube: no GPU on this board either
+
+make check (SURFGPU_DOCKER_SIZE=big, through the capped wrapper) at 9160aad, the commit that added
+GPU.md 15.8 and these files (the code of 7cadace), 10:55:25 to 11:33:48 with the wait for the slots:
+    test_arty: 1014 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 243 fences sent between the first gfx and the last; 4 fence waits slept on it, 4 of them woken by it
+    ok   crc 6 (graphics, mode 2): FRAME_CRC 43e2d407; gfxref (GPU.md alone) 43e2d407; a frame at the VGA pins has it (frame 845)
+    ok   crc 7 (graphics, mode 2): FRAME_CRC 651474fa; gfxref (GPU.md alone) 651474fa; a frame at the VGA pins has it (frame 879)
+    ok   gfx cube 1 at the VGA pins: 70 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step
+    ok   gfx cube 1 by SurfOS's own check: 62 drawn in 1.01 s (60.9 a second), 64 shown, 64 checked: all whole, in order; a line a second: 62 drawn, 61 shown, 61 checked: all whole, in order
+    test-gpuos: 32 of 32 checks passed in 224 s (gpu 506709026 cycles = 20.268 s simulated in 223.7 s wall (2.26 M cycles/s); nogpu 158262749 cycles = 6.331 s simulated in 46.9 s wall (3.37 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541870 cycles)
+    check: all automated SurfCPU checks passed
