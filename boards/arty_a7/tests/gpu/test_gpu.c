@@ -1727,8 +1727,8 @@ static void t_cube(unsigned seed) {
 TEST(t_cube)
 
 /* how it ends: Ctrl+C, an engine that stops (and Ctrl+C before 2 s could say so, N1), the pixel
-   clock gone (a FLIP that never comes), a torn frame, no memory for VRAM: each with everything put
-   back and the engine idle */
+   clock gone (a FLIP that never comes), a torn frame, no memory for VRAM, an engine error (L2): each
+   with everything put back and the engine idle */
 static void cube_end(struct stub *s, const char *what, const uint8_t *before, const uint16_t *pal, const struct stub_disp *reg) {
     char line[160];
     snprintf(line, sizeof(line), "  %s: VRAM, GPAL, the display, the target and the clip back, the engine idle", what);
@@ -1741,6 +1741,55 @@ static void cube_end(struct stub *s, const char *what, const uint8_t *before, co
         check(s->eng.tw == 640 && s->eng.th == 480 && s->eng.cy1 == 480 && !(p_status(s) & 1),
               "  the engine back: the target and clip it was sent are the driver's, and it is idle");
     }
+}
+
+/* the error ending (the review of 58ac7b3's L2: with the STATUS check after each frame gone, the
+   host test still passed): frame 30's SET_ZBUF stride arriving as 642, which the engine refuses
+   (BAD_PARAM). The word is found in one run and spoiled in a second, the same up to it */
+static struct stub *cube_error_setup(void) {
+    struct stub *s = fresh2(1);
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    return s;
+}
+
+static void cube_error(void) {
+    struct stub *s = cube_error_setup();
+    unsigned i, n0 = s->ncmd, w0 = s->cmd_writes, seen = 0, at = 0;
+    unsigned long drawn = 0, shown = 0, missed = 0;
+    uint8_t *before = malloc(GPU_VRAM_BYTES);
+    uint16_t pal[256];
+    struct stub_disp reg;
+    char line[200];
+    int r, sum;
+    gfx(s, "gfx cube 1");
+    for(i = n0; i + 2 < s->ncmd; i++)
+        if(s->cmd[i] == GPU_HDR(GPU_OP_SET_ZBUF, 0) && s->cmd[i + 1] == 153600u && s->cmd[i + 2] == 640u && ++seen == 31) {
+            at = i + 2 - n0 + 1;                        /* frame 30's stride: the run's at-th CMD word */
+            break;
+        }
+    check(at && s->cmd_writes - w0 == s->ncmd - n0, "gfx cube 1: frame 30's SET_ZBUF found among its words");
+    done(s);
+    s = cube_error_setup();
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    s->corrupt_value_at = s->cmd_writes + at;
+    s->corrupt_value = 642;
+    r = gfx(s, "gfx cube 1");
+    sum = cube_summary(s, &drawn, &shown, &missed);
+    check(r == CMD_FAIL && count(s->out, "the GPU reports:") == 1 && said(s, "BAD_PARAM: parameters refused") &&
+          said(s, "the engine ABORTed") && said(s, "display back as it was") && G.errors == 1,
+          "frame 30's SET_ZBUF refused (BAD_PARAM): said once, the run fails");
+    snprintf(line, sizeof(line), "  it ends at that frame: %lu drawn (the FLIPs after frame 0's), none after, no frame torn", drawn);
+    check(sum && drawn >= 29 && drawn <= 31 && !said(s, "torn,") && !said(s, "cube 1 s:"), line);
+    cube_end(s, "an engine error", before, pal, &reg);
+    check(!G.z_valid && !s->eng.zvalid && !(s->eng.sticky & (GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM)),
+          "  no depth buffer left, the sticky error cleared");
+    free(before);
+    done(s);
 }
 
 static int once_t_cube_end;
@@ -1814,6 +1863,7 @@ static void t_cube_end(unsigned seed) {
           "no memory to keep VRAM: said, it runs, the display and palette back");
     free(before);
     done(s);
+    cube_error();
 }
 TEST(t_cube_end)
 
