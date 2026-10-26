@@ -20,7 +20,7 @@
 [soc]
 name = "SurfCPU SoC"
 map_version = 2
-soc_version = "0.3.0"
+soc_version = "0.4.0"
 isa = "rv32im_zicsr_zifencei"
 abi = "ilp32"
 reset_pc = 0x0000_0000
@@ -641,7 +641,7 @@ fields = [
 name = "GFX_BASE"
 offset = 0x80
 access = "rw"
-desc = "Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU."
+desc = "Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. The gpu engine's FLIP command writes it too, at the start of a vertical blanking, as a CPU store would (a CPU store in the same cycle wins: docs/GPU.md section 16). Only with sysinfo.FEATURES.GPU."
 fields = [
   { name = "BASE", bits = "18:0", desc = "byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0" },
 ]
@@ -797,14 +797,14 @@ desc = "Build time, seconds since 1970-01-01 UTC (0 if unknown)."
 
 [[periph]]
 name = "gpu"
-desc = "GPU drawing engine (docs/GPU.md): software writes commands, word by word, to CMD; the engine runs them in order on VRAM, four 8-bit pixels per access, with lower priority than the CPU's own VRAM accesses: SET_TARGET, SET_CLIP, FILL_RECT, COPY_RECT, LINE, EXPAND, WRITE_RECT, FENCE, WAIT_VBLANK (formats in docs/GPU.md and firmware/include/surfcpu/gpu.h). Nothing orders the CPU's VRAM accesses against queued commands: wait for a FENCE or for STATUS.BUSY = 0. Present only with sysinfo.FEATURES.GPU."
+desc = "GPU drawing engine (docs/GPU.md): software writes commands, word by word, to CMD; the engine runs them in order on VRAM, four 8-bit pixels per access, with lower priority than the CPU's own VRAM accesses: SET_TARGET, SET_CLIP, FILL_RECT, COPY_RECT, LINE, EXPAND, WRITE_RECT, FENCE, WAIT_VBLANK, and since GPU2 SET_ZBUF, TRIANGLE (flat or Gouraud, with a 16-bit depth buffer in VRAM) and FLIP (video GFX_BASE written at the next vertical blanking) (formats in docs/GPU.md and firmware/include/surfcpu/gpu.h). Nothing orders the CPU's VRAM accesses against queued commands: wait for a FENCE or for STATUS.BUSY = 0. Present only with sysinfo.FEATURES.GPU."
 irq = "gpu"
 
 [[periph.reg]]
 name = "ID"
 offset = 0x00
 access = "ro"
-desc = "0x31555047, the bytes \"GPU1\" in memory order: the command set of docs/GPU.md version 1."
+desc = "0x32555047, the bytes \"GPU2\" in memory order: the command set of docs/GPU.md version 2 (GPU1's, 0x31555047, unchanged, plus SET_ZBUF, TRIANGLE and FLIP: docs/GPU.md section 16)."
 
 [[periph.reg]]
 name = "STATUS"
@@ -815,7 +815,7 @@ fields = [
   { name = "BUSY", bits = "0", desc = "commands are queued or running; 0: every command written so far is done and its writes are in VRAM" },
   { name = "OVERFLOW", bits = "1", desc = "sticky: a CMD write found the FIFO full and was dropped" },
   { name = "BAD_OPCODE", bits = "2", desc = "sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command)" },
-  { name = "BAD_PARAM", bits = "3", desc = "sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large)" },
+  { name = "BAD_PARAM", bits = "3", desc = "sticky: a command had invalid parameters and did nothing (SET_TARGET or SET_ZBUF outside VRAM, unaligned or too large; a TRIANGLE that tests or writes depth without a depth buffer)" },
   { name = "FENCE_EV", bits = "4", desc = "sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE)" },
 ]
 

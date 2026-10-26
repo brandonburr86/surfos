@@ -1,7 +1,7 @@
 /*
 SurfCPU SoC
 --------------------
-File: surfcpu_soc.v Date: 10/16/26 (SurfCPU), 10/18/26 (SurfGPU: HAS_GPU)
+File: surfcpu_soc.v Date: 10/16/26 (SurfCPU), 10/18/26 (SurfGPU: HAS_GPU), 10/25/26 (GPU2: FLIP)
 --------------------
 The system around SurfCPU (docs/MODULES.md section 4, docs/SOC.md): the core, the SurfBus
 interconnect of docs/SURFBUS.md section 6, the boot ROM, scratch RAM and text RAM, and the
@@ -20,8 +20,9 @@ Interrupts: mip.MTIP and mip.MSIP from the timer, mip.MEIP from the interrupt co
 whose sources are numbered by spec/soc.toml [irqs].
 With HAS_GPU (docs/GPU.md section 7) the gpu and vram windows are surf_gpu and surf_vram: VRAM's
 port A serves the CPU's window first and the engine in the other cycles, its port B the video
-scan-out (surf_video with HAS_GFX); sysinfo.FEATURES has GPU. Without, both windows are the D
-decoder's errors and none of it is built.
+scan-out (surf_video with HAS_GFX), and the engine's FLIP writes video's GFX_BASE (GPU2, docs/GPU.md
+section 16.7); sysinfo.FEATURES has GPU. Without, both windows are the D decoder's errors and none
+of it is built.
 */
 `include "surf_bus_targets.vh"
 `include "surfcpu_rvfi.vh"
@@ -191,6 +192,8 @@ module surfcpu_soc #(
     wire [31:0] vram_pix_data;
     wire        video_vblank;
     wire        gpu_irq;
+    wire        gfx_base_we;                // the engine's FLIP into video's GFX_BASE
+    wire [16:0] gfx_base_val;
     generate
         if (HAS_GPU != 0) begin : g_gpu
             wire        g_req, g_we, g_gnt, g_rvalid;
@@ -204,7 +207,7 @@ module surfcpu_soc #(
                 .pix_clk(pix_clk), .pix_addr(vram_pix_addr), .pix_data(vram_pix_data));
             surf_gpu #(.VRAM_BYTES(VRAM_BYTES)) u_gpu (
                 .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_GPU),
-                .irq(gpu_irq), .vblank(video_vblank),
+                .irq(gpu_irq), .vblank(video_vblank), .gfx_base_we(gfx_base_we), .gfx_base_out(gfx_base_val),
                 .m_req(g_req), .m_we(g_we), .m_be(g_be), .m_addr(g_addr), .m_wdata(g_wdata),
                 .m_gnt(g_gnt), .m_rvalid(g_rvalid), .m_rdata(g_rdata));
         end else begin : g_nogpu
@@ -219,6 +222,8 @@ module surfcpu_soc #(
             assign dt_rsp_err[`SURF_DT_VRAM]            = 1'b0;
             assign vram_pix_data                        = 32'h0;
             assign gpu_irq                              = 1'b0;
+            assign gfx_base_we                          = 1'b0;
+            assign gfx_base_val                         = 17'd0;
             wire unused_gpu = &{1'b0, dt_req_valid[`SURF_DT_GPU], dt_req_valid[`SURF_DT_VRAM],
                                 vram_pix_addr, video_vblank};
         end
@@ -269,6 +274,7 @@ module surfcpu_soc #(
         .irq(video_irq), .pix_clk(pix_clk), .pix_rst(pix_rst),
         .text_addr(text_addr), .text_data(text_data),
         .vram_addr(vram_pix_addr), .vram_data(vram_pix_data), .vblank(video_vblank),
+        .gfx_base_we(gfx_base_we), .gfx_base_in(gfx_base_val),
         .vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b), .vga_hs(vga_hs), .vga_vs(vga_vs));
 
     surf_sysinfo #(

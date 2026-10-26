@@ -49,6 +49,9 @@ pixel's colour as chosen in S3 (what S4 puts on the pins) goes into zlib's CRC-3
 bytes, low first, from pixel (0, 0) to (639, 479); the result and a frame count cross to the
 sys domain together, about 160 pixel clocks before the frame's vertical blanking starts, and a
 FRAME_COUNT read keeps its frame's CRC for the next FRAME_CRC read.
+GFX_BASE also takes the gpu engine's FLIP (10/25/26, GPU2, docs/GPU.md section 16.7): with
+gfx_base_we for one clk cycle, gfx_base_in (GFX_BASE bits 18:2) is written as a CPU store would
+write it, and a CPU store to GFX_BASE in the same cycle wins.
 */
 module surf_video #(
     parameter integer PIX_HZ  = 25173611,
@@ -76,6 +79,8 @@ module surf_video #(
     output wire [16:0] vram_addr,    // a VRAM word, to surf_vram's pixel port (0 without HAS_GFX)
     input  wire [31:0] vram_data,    // that word, two pix_clk edges after vram_addr
     output wire        vblank,       // one clk pulse as each vertical blanking interval begins
+    input  wire        gfx_base_we,  // the gpu engine's FLIP: GFX_BASE <= gfx_base_in (clk domain)
+    input  wire [16:0] gfx_base_in,  // GFX_BASE bits 18:2
     output wire [3:0]  vga_r,
     output wire [3:0]  vga_g,
     output wire [3:0]  vga_b,
@@ -384,6 +389,7 @@ module surf_video #(
             gstride_q <= GSTRIDE_RESET[13:0];
             gscale_q  <= 2'd1;
         end else begin
+            if (gfx_base_we) gbase_q <= gfx_base_in;              // FLIP; a CPU store below wins
             if (wr && hit_gbas) gbase_q   <= s_req_wdata[18:2];
             if (wr && hit_gstr) gstride_q <= s_req_wdata[15:2];
             if (wr && hit_gscl) gscale_q  <= s_req_wdata[SURF_VIDEO_GFX_SCALE_SCALE_LSB +: 2];
@@ -544,7 +550,7 @@ module surf_video #(
             assign gfx3       = 12'h000;
             assign crc_sys    = 32'd0;
             assign fcount_sys = 16'd0;
-            wire unused_gfx = &{1'b0, vram_data, gpal_idx, gbase_q, gstride_q, gscale_q};
+            wire unused_gfx = &{1'b0, vram_data, gpal_idx, gbase_q, gstride_q, gscale_q, gfx_base_we, gfx_base_in};
         end
     endgenerate
 

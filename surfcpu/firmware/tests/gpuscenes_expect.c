@@ -1,7 +1,7 @@
 /*
 SurfGPU diagnostics: the scenes' expected CRCs
 --------------------
-File: gpuscenes_expect.c Date: 10/18/26 (SurfGPU)
+File: gpuscenes_expect.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
 --------------------
 A host tool of the firmware build: runs gpudiag's scenes (firmware/diagnostics/gpuscenes.c) in
 order through the C model (sim/models/gpu_model.c), as SurfCPU runs them through the hardware,
@@ -9,10 +9,16 @@ and writes the FRAME_CRC each must give as a C header for gpudiag (build/fw/gen/
 gpuscenes_expect.h). The text modes need the font: driver/font8x16.c, which tools/fontrom.py
 check keeps equal to the video block's font ROM. With --ppm DIR it also writes each scene's
 frame as DIR/scene-NN.ppm (what the monitor should show).
+GPU2: a FLIP the engine takes becomes the display's GFX_BASE, as surf_video takes it at the next
+frame latch; and the cube's frames (firmware/diagnostics/gpucube.c) are drawn too: the 16 of
+gpudiag's checks in MODE 2 (gpu_cube_expect_check) and all 128 of a turn under the result bar in
+MODE 3 (gpu_cube_expect_run, the free run after a PASS), each frame's CRC as shown after its FLIP
+(with --ppm also cube-NNN.ppm, the free run's).
 
     gpuscenes_expect --font driver/font8x16.c --out FILE [--ppm DIR] [--list]
 */
 #include "gpu_model.h"
+#include "gpucube.h"
 #include "gpuscenes.h"
 #include "surfcpu/soc.h"
 
@@ -55,7 +61,15 @@ static int load_font(const char *path)
 
 /* ------------------------------------------------------------------ the model as a sink */
 
-static void m_cmd(uint32_t w) { gpu_engine_word(&eng, w); }
+static unsigned flips_seen;
+static void m_cmd(uint32_t w)
+{
+    gpu_engine_word(&eng, w);
+    if (eng.flips != flips_seen) {                      /* FLIP: GFX_BASE from the next frame on */
+        flips_seen = eng.flips;
+        disp.gfx_base = eng.flip_base;
+    }
+}
 static void m_sync(void) {}
 
 static void m_vram32(uint32_t off, uint32_t v)
@@ -118,10 +132,10 @@ static void m_text(uint32_t cell, uint32_t v)
 
 static const struct gpu_sink model_sink = {m_cmd, m_sync, m_vram32, m_vram8, m_video, m_text};
 
-static void write_ppm(const char *dir, unsigned n)
+static void write_ppm(const char *dir, const char *kind, unsigned n)
 {
     char path[1024];
-    snprintf(path, sizeof path, "%s/scene-%02u.ppm", dir, n);
+    snprintf(path, sizeof path, "%s/%s-%02u.ppm", dir, kind, n);
     FILE *f = fopen(path, "wb");
     if (!f) {
         fprintf(stderr, "gpuscenes_expect: cannot write %s\n", path);
@@ -170,9 +184,36 @@ int main(int argc, char **argv)
         gpu_display_render(&disp, vram, textram, (const uint8_t(*)[16])font, frame);
         crc[n] = gpu_frame_crc(frame);
         if (ppm)
-            write_ppm(ppm, n);
+            write_ppm(ppm, "scene", n);
         if (list)
             printf("scene %2u %-36s crc %08x\n", n, gpu_scenes[n].name, crc[n]);
+    }
+    /* the cube: the checked frames (MODE 2), then a turn's frames under the bar (MODE 3), each
+     * drawn into the buffer gpudiag draws it into and shown by its FLIP */
+    uint32_t cube_check[GPU_CUBE_CHECK_FRAMES], cube_run[GPU_CUBE_PERIOD];
+    for (int pass = 0; pass < 2; pass++) {
+        gpu_cube_display(&model_sink, pass);
+        const uint32_t frames = pass ? GPU_CUBE_PERIOD : GPU_CUBE_CHECK_FRAMES;
+        for (uint32_t k = 0; k < frames; k++) {
+            gpu_cube_frame(&model_sink, k, k & 1u, k + 1);
+            if (!gpu_engine_idle(&eng) || (eng.sticky & (GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM)) ||
+                eng.flip_base != ((k & 1u) ? GPU_CUBE_B : GPU_CUBE_A)) {
+                fprintf(stderr, "gpuscenes_expect: cube frame %u leaves the engine wrong\n", k);
+                problems++;
+            }
+            gpu_display_render(&disp, vram, textram, (const uint8_t(*)[16])font, frame);
+            (pass ? cube_run : cube_check)[k] = gpu_frame_crc(frame);
+            if (ppm && pass && k % 16 == 0)
+                write_ppm(ppm, "cube", k);
+        }
+        if (list)
+            printf("cube %s: %u frames, the first %08x, the last %08x\n", pass ? "under the bar" : "checked", frames,
+                   pass ? cube_run[0] : cube_check[0], pass ? cube_run[frames - 1] : cube_check[frames - 1]);
+    }
+    if (eng.tri_clamped || eng.tri_wide) {
+        fprintf(stderr, "gpuscenes_expect: the model's clamp changed %llu values, %llu were wide\n", eng.tri_clamped,
+                eng.tri_wide);
+        problems++;
     }
     if (problems)
         return 1;
@@ -185,7 +226,14 @@ int main(int argc, char **argv)
                 gpu_scene_count);
         for (unsigned n = 0; n < gpu_scene_count; n++)
             fprintf(f, "    0x%08xu,   /* %2u %s */\n", crc[n], n, gpu_scenes[n].name);
-        fprintf(f, "};\n/* the checks of a complete gpudiag run, a first one and a rerun (gpuscenes.h) */\n"
+        fprintf(f, "};\n/* the cube (gpucube.c): its checked frames in MODE 2, and a turn under the bar in MODE 3 */\n");
+        fprintf(f, "static const uint32_t gpu_cube_expect_check[%u] = {\n", GPU_CUBE_CHECK_FRAMES);
+        for (unsigned k = 0; k < GPU_CUBE_CHECK_FRAMES; k++)
+            fprintf(f, "    0x%08xu,%s", cube_check[k], k % 6 == 5 ? "\n" : "");
+        fprintf(f, "\n};\nstatic const uint32_t gpu_cube_expect_run[%u] = {\n", GPU_CUBE_PERIOD);
+        for (unsigned k = 0; k < GPU_CUBE_PERIOD; k++)
+            fprintf(f, "    0x%08xu,%s", cube_run[k], k % 6 == 5 ? "\n" : "");
+        fprintf(f, "\n};\n/* the checks of a complete gpudiag run, a first one and a rerun (gpuscenes.h) */\n"
                    "#define GPUDIAG_CHECKS %uu\n#define GPUDIAG_RERUN_CHECKS %uu\n",
                 GPUDIAG_SECTION_CHECKS + GPUDIAG_SCENE_CHECKS * gpu_scene_count,
                 GPUDIAG_SECTION_CHECKS + GPUDIAG_SCENE_CHECKS * gpu_scene_count - GPUDIAG_FIRST_RUN_CHECKS);

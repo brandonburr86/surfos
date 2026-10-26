@@ -21,8 +21,9 @@
 #                          about an hour; not part of check)
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
-#                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py); SurfBoot's
-#                          monitor reports features 1ff
+#                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py), the cube's
+#                          16 checked frames and its first second of free run (none torn or missed);
+#                          SurfBoot's monitor reports features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
@@ -46,7 +47,8 @@ GPU_MODEL    = sim/models/gpu_model.c
 GPU_MODEL_H  = sim/models/gpu_model.h firmware/include/surfcpu/gpu.h
 
 VRAM_RTL     = rtl/soc/surf_vram.v rtl/soc/surf_vram_bank.v
-GPU_RTL      = rtl/peripherals/surf_gpu.v rtl/lib/surf_fifo.v
+GPU_ENG_RTL  = rtl/peripherals/surf_gpu.v rtl/peripherals/surf_gpu_tri.v rtl/peripherals/surf_gpu_div.v
+GPU_RTL      = $(GPU_ENG_RTL) rtl/lib/surf_fifo.v
 GVIDEO_RTL   = rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v rtl/lib/surf_sync.v \
                rtl/lib/surf_pulse_sync.v rtl/lib/surf_cdc_word.v
 
@@ -65,6 +67,7 @@ GPU_SOC_RTL = rtl/soc/surfcpu_soc.v $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(VRAM_RTL) $(
 lint-gpu:
 	$(Q)$(GPU_VLINT) --top-module surf_vram $(VRAM_RTL)
 	$(Q)$(GPU_VLINT) --top-module surf_gpu $(GPU_RTL)
+	$(Q)$(GPU_VLINT) --top-module surf_gpu_tri rtl/peripherals/surf_gpu_tri.v rtl/peripherals/surf_gpu_div.v
 	$(Q)$(IVERILOG) -g2005 -Wall -Irtl/generated -Irtl/lib -o /dev/null $(GPU_RTL)
 	$(Q)for g in 0 1; do $(GPU_VLINT) --top-module surf_video -GHAS_GFX=$$g $(GVIDEO_RTL) || exit 1; done
 	$(Q)for g in 0 1; do $(GPU_VLINT) --top-module surfcpu_soc -GHAS_GPU=$$g $(GPU_SOC_RTL) || exit 1; done
@@ -73,7 +76,7 @@ lint-gpu:
 	  -Psurfcpu_soc.HAS_GPU=1 -o /dev/null $(GPU_SOC_RTL)
 	$(Q)$(BOARD_VLINT) $(TOP_INCS) -DARTY_HAS_GPU --top-module surfcpu_arty_a7_top $(TOP_SRC) $(BOARD_PRIMS)
 	$(Q)$(BOARD_VLINT) $(TOP_INCS) -DARTY_HAS_GPU -DARTY_HAS_DDR --top-module surfcpu_arty_a7_top $(DDR_TOP_SRC) $(BOARD_PRIMS)
-	@echo "lint-gpu: surf_vram, surf_gpu, surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles"
+	@echo "lint-gpu: surf_vram, surf_gpu (with surf_gpu_tri and surf_gpu_div), surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles"
 
 test-gpu: test-gpu-model test-gpu-encodings test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-engine \
           test-gpu-soc test-gpu-noengine
@@ -122,7 +125,7 @@ $(GPU_BUILD)/video/Vtb_video: $(GPU_VIDEO_DEPS) sim/io/test_video.cpp
 
 $(GPU_BUILD)/video_gfx/Vtb_video: $(GPU_VIDEO_DEPS) sim/gpu/test_video_gfx.cpp
 	@mkdir -p $(dir $@)
-	$(Q)$(GPU_VERILATE) --top-module tb_video -GHAS_GFX=1 -Mdir $(GPU_BUILD)/video_gfx/obj -o ../Vtb_video \
+	$(Q)$(GPU_VERILATE) --top-module tb_video -GHAS_GFX=1 -GFLIP_PORT=1 -Mdir $(GPU_BUILD)/video_gfx/obj -o ../Vtb_video \
 	  sim/io/tb_video.v $(CURDIR)/sim/gpu/test_video_gfx.cpp $(CURDIR)/sim/models/vga_capture.cpp \
 	  $(CURDIR)/$(GPU_MODEL) > $(GPU_BUILD)/video_gfx/build.txt 2>&1 \
 	  || { tail -30 $(GPU_BUILD)/video_gfx/build.txt; exit 1; }
@@ -151,15 +154,16 @@ test-gpu-interconnect: $(GPU_BUILD)/tb_interconnect_gpu.vvp
 	  grep -h "PASS" $(GPU_BUILD)/tb_interconnect_gpu.$$s.txt | sed "s/^/  [seed $$s] /"; done
 
 # ---------------------------------------------------------------- gpudiag and its expected CRCs
-GPUDIAG_SRC := diagnostics/gpudiag.c diagnostics/gpuscenes.c diagnostics/report.c diagnostics/probes.S
+GPUDIAG_SRC := diagnostics/gpudiag.c diagnostics/gpuscenes.c diagnostics/gpucube.c diagnostics/report.c diagnostics/probes.S
 GPUDIAG_OBJ := $(FW_OBJ)/common/start_rom.o $(patsubst %,$(FW_OBJ)/%.o,$(GPUDIAG_SRC)) $(FW_COMMON_OBJ)
 GPU_FONT    := ../driver/font8x16.c
 
 $(FW)/host/gpuscenes_expect: firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c \
-                             firmware/diagnostics/gpuscenes.h $(GPU_MODEL) $(GPU_MODEL_H) firmware/include/surfcpu/soc.h
+                             firmware/diagnostics/gpuscenes.h firmware/diagnostics/gpucube.c firmware/diagnostics/gpucube.h \
+                             $(GPU_MODEL) $(GPU_MODEL_H) firmware/include/surfcpu/soc.h
 	@mkdir -p $(dir $@)
 	$(Q)$(FW_HOST_CC) -std=gnu11 -O2 -g -Wall -Wextra -Werror -Isim/models -Ifirmware/include -Ifirmware/diagnostics \
-	  -o $@ firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c $(GPU_MODEL)
+	  -o $@ firmware/tests/gpuscenes_expect.c firmware/diagnostics/gpuscenes.c firmware/diagnostics/gpucube.c $(GPU_MODEL)
 
 $(FW_GEN)/gpuscenes_expect.h: $(FW)/host/gpuscenes_expect $(GPU_FONT)
 	@mkdir -p $(dir $@)
@@ -211,18 +215,19 @@ $(GPU_ID_STAMP):
 $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS) $(GPU_ID_STAMP)
 	@mkdir -p $(BUILD)/sim/obj_surfsim_gpu
 	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(BUILD)/sim/obj_surfsim_gpu -o surfsim \
-	  $(SOC_TOP_RTL) $(VRAM_RTL) rtl/peripherals/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim_gpu.txt 2>&1 \
+	  $(SOC_TOP_RTL) $(VRAM_RTL) $(GPU_ENG_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim_gpu.txt 2>&1 \
 	  || { tail -40 $(BUILD)/sim/obj_surfsim_gpu.txt; exit 1; }
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
-GPU_ENGINE_SCENES ?= 6
+GPU_ENGINE_SCENES ?= 10
 test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem
 	@mkdir -p $(GPU_BUILD)/soc
-	@# gpudiag, then Ctrl-R (as GPU.md section 14 and tools/board-test.py's late port type it), then the
-	@# rerun: the first run alone must pass, and the whole capture, whose final run is the rerun
+	@# gpudiag, its cube's first second of free run, then Ctrl-R (as GPU.md section 14 and
+	@# tools/board-test.py's late port type it), then the rerun: the first run alone must pass, and the
+	@# whole capture, whose final run is the rerun
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 900000000 \
 	  --vga-crc $(GPU_BUILD)/soc/frames.txt --transcript $(GPU_BUILD)/soc/uart.txt \
-	  --send 'Ctrl-R runs the diagnostic again\.\r\n=\x12' \
+	  --send 'cube +1 s:[^\n]*\n=\x12' \
 	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/surfsim.txt 2>&1; \
 	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/surfsim.txt; tail -30 $(GPU_BUILD)/soc/uart.txt; exit 1; }
 	$(Q)awk '{ print } /GPUDIAG: / { exit }' $(GPU_BUILD)/soc/uart.txt > $(GPU_BUILD)/soc/uart-first.txt
@@ -233,6 +238,8 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
 	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES) --build-id $(BUILD_ID_HEX)
 	$(Q)grep -q 'a rerun (Ctrl-R)' $(GPU_BUILD)/soc/uart.txt || { echo "test-gpu-soc: the rerun did not say it is one"; exit 1; }
+	@echo "  [the cube] $$(grep -a -o 'cube: 16 frames at full rate.*' $(GPU_BUILD)/soc/uart.txt | head -1 | tr -s ' ')"
+	@echo "  [the cube's free run] $$(grep -a -o 'cube  *1 s:[^)]*)' $(GPU_BUILD)/soc/uart.txt | head -1)"
 	@# a rerun after a run that left the engine's target and clip set (gpudiag-leftover.mem), as one
 	@# abandoned inside an engine scene would: the rerun sets its own, and passes (the third review, C4)
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-leftover.mem --quiet --max-cycles 900000000 \
@@ -282,7 +289,8 @@ test-gpu-system-boot:
 # gpudiag must fail where the engine is missing (the first GPU review, finding 1): on the
 # HAS_GPU = 0 SoC (build/sim/surfsim: no FEATURES.GPU, no gpu or vram window) and on a HAS_GPU = 1
 # SoC whose engine answers gpu.ID 0x31555048 instead of "GPU1" (build/sim/surfsim_gpu_noengine,
-# from a copy of surf_gpu.v with that line changed by sim/gpu/noengine.py). Each run must end in
+# from a copy of surf_gpu.v with that line changed by sim/gpu/noengine.py; gpu.ID 0x32555048, not
+# "GPU2", since GPU2). Each run must end in
 # GPUDIAG: FAIL saying why, and gpudiag_check.py must fail it too (--must-fail).
 GPU_NOENG = $(GPU_BUILD)/noengine
 $(GPU_NOENG)/surf_gpu.v: rtl/peripherals/surf_gpu.v sim/gpu/noengine.py
@@ -292,7 +300,8 @@ $(GPU_NOENG)/surf_gpu.v: rtl/peripherals/surf_gpu.v sim/gpu/noengine.py
 $(BUILD)/sim/surfsim_gpu_noengine: $(GPU_SIM_DEPS) $(GPU_NOENG)/surf_gpu.v $(GPU_ID_STAMP)
 	@mkdir -p $(GPU_NOENG)/obj
 	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(GPU_NOENG)/obj -o surfsim \
-	  $(SOC_TOP_RTL) $(VRAM_RTL) $(GPU_NOENG)/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(GPU_NOENG)/build.txt 2>&1 \
+	  $(SOC_TOP_RTL) $(VRAM_RTL) $(GPU_NOENG)/surf_gpu.v rtl/peripherals/surf_gpu_tri.v rtl/peripherals/surf_gpu_div.v \
+	  $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(GPU_NOENG)/build.txt 2>&1 \
 	  || { tail -40 $(GPU_NOENG)/build.txt; exit 1; }
 	$(Q)cp $(GPU_NOENG)/obj/surfsim $@ && rm -rf $(GPU_NOENG)/obj
 
@@ -309,7 +318,7 @@ test-gpu-noengine: $(BUILD)/sim/surfsim $(BUILD)/sim/surfsim_gpu_noengine build-
 	$(Q)$(PYTHON) sim/gpu/test_gpudiag_check.py
 	@mkdir -p $(GPU_NOENG)
 	$(call gpu_noeng,$(BUILD)/sim/surfsim,no-gpu,100000000,FEATURES has no GPU[\s\S]*checks ran; a complete run makes)
-	$(call gpu_noeng,$(BUILD)/sim/surfsim_gpu_noengine,wrong-id,600000000,no engine: gpu.ID reads 0x31555048[\s\S]*skipped: no engine[\s\S]*checks ran; a complete run makes)
+	$(call gpu_noeng,$(BUILD)/sim/surfsim_gpu_noengine,wrong-id,600000000,no engine: gpu.ID reads 0x32555048[\s\S]*skipped: no engine[\s\S]*checks ran; a complete run makes)
 
 # ---------------------------------------------------------------- the engine
 test-gpu-encodings:

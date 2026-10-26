@@ -1,14 +1,18 @@
 /*
 SurfGPU diagnostics: the scenes
 --------------------
-File: gpuscenes.c Date: 10/18/26 (SurfGPU)
+File: gpuscenes.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
 --------------------
 gpudiag's pictures (gpuscenes.h). The first ones need only VRAM and the graphics scan-out (the
 CPU draws through the VRAM window): the test pattern, text, 640x480 graphics through the default
 and a grey palette, a 320x240 page shown doubled, text over graphics, a black picture. The
 engine's scenes follow (docs/GPU.md section 5): every command, every alignment of x mod 4,
 clipping at each edge, overlapping copies in every direction, the colour key, lines in every
-octant, bitmaps and pixel rectangles, and a page drawn by the engine and flipped to.
+octant, bitmaps and pixel rectangles, and a page drawn by the engine and flipped to. GPU2's
+(section 16): flat triangles (a fan and a mesh whose shared edges show a gap or a double draw
+as a wrong colour, culling, zero areas, the clip), Gouraud triangles in the palette's ramps,
+depth (triangles crossing, ZFUNC, a test without a write), and a page drawn behind the one shown,
+then shown by FLIP.
 Plain C for both RV32 and the host: no library calls, no division in the hot loops.
 */
 #include "gpuscenes.h"
@@ -338,6 +342,164 @@ static void scene_demo(const struct gpu_sink *s)
     show640(s);
 }
 
+/* ------------------------------------------------------------------ GPU2's scenes */
+
+/* 16384 sin(2 pi i / 64), i = 0 .. 16: the fan's points */
+static const int16_t s16[17] = {0, 1606, 3196, 4756, 6270, 7723, 9102, 10394, 11585, 12665, 13623, 14449, 15137,
+                                15679, 16069, 16305, 16384};
+static int32_t sin64(uint32_t a)
+{
+    a &= 63u;
+    if (a <= 16u) return s16[a];
+    if (a <= 32u) return s16[32u - a];
+    if (a <= 48u) return -s16[a - 32u];
+    return -s16[64u - a];
+}
+
+/* one TRIANGLE, flat (colour in the header) or with each vertex's depth and colour */
+static void tri(const struct gpu_sink *s, uint32_t flags, int x0, int y0, uint32_t zc0, int x1, int y1, uint32_t zc1,
+                int x2, int y2, uint32_t zc2)
+{
+    s->cmd(HDR(TRIANGLE, flags));
+    s->cmd(GPU_XY(x0, y0));
+    s->cmd(zc0);
+    s->cmd(GPU_XY(x1, y1));
+    s->cmd(zc1);
+    s->cmd(GPU_XY(x2, y2));
+    s->cmd(zc2);
+}
+
+static void flat(const struct gpu_sink *s, uint32_t colour, int x0, int y0, int x1, int y1, int x2, int y2)
+{
+    tri(s, colour & 0xFFu, x0, y0, 0, x1, y1, 0, x2, y2, 0);
+}
+
+/* eight ramps of 32 shades (black to a colour), the SurfOS driver's "ramps" (GPU.md section 16) */
+static void gpal_ramps(const struct gpu_sink *s)
+{
+    static const uint8_t rgb[8][3] = {{1, 1, 1}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}, {0, 1, 1}, {1, 0, 1}, {1, 1, 0}};
+    for (uint32_t n = 0; n < 256; n++) {
+        const uint32_t r = n >> 5, lv = ((n & 31u) * 15u + 15u) / 31u, w = r == 7 ? lv / 2u : 0u;
+        s->video(SURF_VIDEO_GPAL + 4 * n, (rgb[r][0] * lv | w) << 8 | (rgb[r][1] * lv | w) << 4 | (rgb[r][2] * lv | w));
+    }
+}
+
+/* flat triangles: a fan of 32 around the centre and a jittered mesh, every triangle its own
+ * colour, so a gap or a pixel drawn twice on a shared edge changes the picture; both windings
+ * with the other winding culled, the culled ones (nothing), zero areas (nothing), a clip */
+static void scene_flat(const struct gpu_sink *s)
+{
+    gpal_rgb332(s);
+    target(s, 0, 640, 640, 480);
+    fill(s, 0x01, 0, 0, 640, 480);
+    const int cx = GPU_FX(470) + 5, cy = GPU_FX(250) + 11, r = GPU_FX(150);
+    for (uint32_t i = 0; i < 32; i++) {                 /* the fan: points on a circle, in 12.4 */
+        const uint32_t a = 2 * i, b = 2 * i + 2;
+        const int ax = cx + r * sin64(a + 16) / 16384, ay = cy + r * sin64(a) / 16384;
+        const int bx = cx + r * sin64(b + 16) / 16384, by = cy + r * sin64(b) / 16384;
+        if (i & 1)
+            flat(s, 0x20 + 7 * i, cx, cy, ax, ay, bx, by);
+        else
+            flat(s, 0x20 + 7 * i, cx, cy, bx, by, ax, ay);              /* the other winding */
+    }
+    for (int j = 0; j < 8; j++)                         /* the mesh: 10 x 8 cells, the inner points moved */
+        for (int i = 0; i < 10; i++) {
+            int px[2][2], py[2][2];
+            for (int dj = 0; dj < 2; dj++)
+                for (int di = 0; di < 2; di++) {
+                    const int gi = i + di, gj = j + dj, inner = gi > 0 && gi < 10 && gj > 0 && gj < 8;
+                    px[dj][di] = GPU_FX(20 + 26 * gi) + (inner ? (gi * 7 + gj * 3) % 11 - 5 : 0);
+                    py[dj][di] = GPU_FX(30 + 26 * gj) + (inner ? (gi * 5 + gj * 9) % 13 - 6 : 0);
+                }
+            const uint32_t c = (uint32_t)(0x40 + 3 * (i + 10 * j));
+            if ((i + j) & 1) {
+                flat(s, c, px[0][0], py[0][0], px[0][1], py[0][1], px[1][1], py[1][1]);
+                flat(s, c + 1, px[0][0], py[0][0], px[1][1], py[1][1], px[1][0], py[1][0]);
+            } else {
+                flat(s, c, px[0][0], py[0][0], px[0][1], py[0][1], px[1][0], py[1][0]);
+                flat(s, c + 1, px[1][0], py[1][0], px[0][1], py[0][1], px[1][1], py[1][1]);
+            }
+        }
+    /* culling: each pair drawn in both windings, one culled; then two culled outright. The pairs
+     * stand half a pixel down, so the drawn clockwise triangle's first edge, horizontal and to the
+     * right, is a top edge through the centres of row 260: the top-left rule's top case decides
+     * whether that row is drawn (a scene without such an edge never tests it) */
+    for (int k = 0; k < 4; k++) {
+        const int x = GPU_FX(30 + 70 * k), y = GPU_FX(260) + 8;
+        flat(s, 0xE0, x, y, x + GPU_FX(50), y, x, y + GPU_FX(40));                      /* clockwise */
+        tri(s, GPU_TRI_CULL_CW | 0x1C, x, y, 0, x + GPU_FX(50), y, 0, x + GPU_FX(25), y + GPU_FX(60), 0);
+        tri(s, GPU_TRI_CULL_CW | 0x1F, x + GPU_FX(50), y + GPU_FX(60), 0, x + GPU_FX(50), y + GPU_FX(10), 0,
+            x + GPU_FX(10), y + GPU_FX(60), 0);                                       /* counter-clockwise: drawn */
+    }
+    tri(s, GPU_TRI_CULL_CW | GPU_TRI_CULL_CCW | 0xFF, GPU_FX(300), GPU_FX(300), 0, GPU_FX(340), GPU_FX(300), 0,
+        GPU_FX(300), GPU_FX(340), 0);
+    flat(s, 0xFF, GPU_FX(300), GPU_FX(360), GPU_FX(320), GPU_FX(380), GPU_FX(340), GPU_FX(400));   /* zero area */
+    /* a clip; a huge triangle across it, and one past the screen's corner */
+    c3(s, HDR(SET_CLIP, 0), GPU_XY(40, 360), GPU_XY(260, 470));
+    flat(s, 0x92, -32768, 32767, GPU_FX(150), -GPU_FX(500), 32767, 32767);
+    c3(s, HDR(SET_CLIP, 0), GPU_XY(0, 0), GPU_XY(640, 480));
+    flat(s, 0x6D, GPU_FX(600) + 9, GPU_FX(440) + 3, GPU_FX(700), GPU_FX(460), GPU_FX(610), GPU_FX(530));
+    show640(s);
+}
+
+/* Gouraud: in each of the eight ramps a triangle from its dark end to its bright one, and one
+ * across ramps (0 .. 255); vertices at sub-pixel positions */
+static void scene_gouraud(const struct gpu_sink *s)
+{
+    gpal_ramps(s);
+    target(s, 0, 640, 640, 480);
+    fill(s, 0x00, 0, 0, 640, 480);
+    for (uint32_t r = 0; r < 8; r++) {
+        const int x = GPU_FX(20 + 76 * (int)r), y = GPU_FX(20);
+        tri(s, GPU_TRI_GOURAUD, x + 3, y + 5, GPU_ZC(0, 32 * r), x + GPU_FX(70) + 9, y + GPU_FX(30), GPU_ZC(0, 32 * r + 31),
+            x + GPU_FX(20), y + GPU_FX(200) + 7, GPU_ZC(0, 32 * r + 15));
+    }
+    tri(s, GPU_TRI_GOURAUD, GPU_FX(30), GPU_FX(240), GPU_ZC(0, 0), GPU_FX(610), GPU_FX(260) + 8, GPU_ZC(0, 255),
+        GPU_FX(320) + 4, GPU_FX(470) + 12, GPU_ZC(0, 128));
+    show640(s);
+}
+
+/* depth at 320 x 240 (page A, the depth buffer of section 16.6): two Gouraud triangles crossing,
+ * each in front on one side; a third tested but not written; then the first again in another
+ * ramp with less or equal, which passes exactly where the first is in front (the third did not
+ * write its depth); then shown doubled */
+static void scene_depth(const struct gpu_sink *s)
+{
+    target(s, 153600, 640, 640, 240);                   /* every depth 0xFFFF */
+    fill(s, 0xFF, 0, 0, 640, 240);
+    target(s, 0, 320, 320, 240);
+    fill(s, 0x00, 0, 0, 320, 240);
+    c3(s, HDR(SET_ZBUF, 0), 153600, 640);
+    const uint32_t D = GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE;
+    tri(s, D, GPU_FX(10), GPU_FX(20), GPU_ZC(1000, 32 + 31), GPU_FX(310), GPU_FX(60), GPU_ZC(60000, 32 + 4),
+        GPU_FX(30), GPU_FX(220), GPU_ZC(30000, 32 + 16));
+    tri(s, D, GPU_FX(300), GPU_FX(10), GPU_ZC(62000, 96 + 2), GPU_FX(290), GPU_FX(230), GPU_ZC(2000, 96 + 31),
+        GPU_FX(15), GPU_FX(120), GPU_ZC(31000, 96 + 14));
+    tri(s, GPU_TRI_ZTEST | 0xA8, GPU_FX(100), GPU_FX(100), GPU_ZC(20000, 0), GPU_FX(220), GPU_FX(100), GPU_ZC(20000, 0),
+        GPU_FX(160), GPU_FX(200), GPU_ZC(20000, 0));                               /* tested, not written */
+    tri(s, GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE, GPU_FX(10), GPU_FX(20), GPU_ZC(1000, 128 + 31),
+        GPU_FX(310), GPU_FX(60), GPU_ZC(60000, 128 + 4), GPU_FX(30), GPU_FX(220), GPU_ZC(30000, 128 + 16));
+    placement(s, 0, 320, 2);
+    s->video(SURF_VIDEO_CTRL, CTRL_ON(2));
+}
+
+/* page B drawn by the engine behind page A (shown), then FLIP to it: the CPU never writes GFX_BASE */
+static void scene_flip(const struct gpu_sink *s)
+{
+    target(s, 76800, 320, 320, 240);
+    fill(s, 0x08, 0, 0, 320, 240);
+    for (int k = 0; k < 12; k++)
+        tri(s, GPU_TRI_GOURAUD, GPU_FX(160), GPU_FX(120), GPU_ZC(0, 32 * (k & 7)),
+            GPU_FX(160) + 150 * sin64(4u * (uint32_t)k + 16u) / 1024, GPU_FX(120) + 110 * sin64(4u * (uint32_t)k) / 1024,
+            GPU_ZC(0, 32 * (k & 7) + 31), GPU_FX(160) + 150 * sin64(4u * (uint32_t)k + 20u) / 1024,
+            GPU_FX(120) + 110 * sin64(4u * (uint32_t)k + 4u) / 1024, GPU_ZC(0, 32 * (k & 7) + 20));
+    for (unsigned k = 0; k < 7; k++)
+        letter(s, word_surfgpu[k], 30 + 38 * (int)k, 200, 4, 0xFF | GPU_EXPAND_TRANSP);
+    c2(s, HDR(FLIP, 0), 76800);
+    c2(s, HDR(FENCE, 0), 0xF11Bu);
+    s->sync();
+}
+
 /* ------------------------------------------------------------------ the scene list */
 
 const struct gpu_scene gpu_scenes[] = {
@@ -354,5 +516,9 @@ const struct gpu_scene gpu_scenes[] = {
     {"engine: EXPAND letters, sprites", 1, scene_bitmaps},
     {"engine: 320x240 page, flipped", 1, scene_page_flip},
     {"engine: demo", 1, scene_demo},
+    {"engine: flat triangles, culling", 1, scene_flat},
+    {"engine: Gouraud triangles, ramps", 1, scene_gouraud},
+    {"engine: depth, 320x240", 1, scene_depth},
+    {"engine: page B drawn, FLIP", 1, scene_flip},
 };
 const unsigned gpu_scene_count = sizeof gpu_scenes / sizeof gpu_scenes[0];

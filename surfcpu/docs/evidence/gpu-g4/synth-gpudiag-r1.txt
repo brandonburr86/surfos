@@ -1,0 +1,40 @@
+SurfGPU G4: the first gpudiag build through the open flow (not routed), 2026-10-25
+Built as docs/GPU.md 14.2 describes: make build-rom, then make build-fpga FLOW=openxc7
+BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag on the Mac (docker surfcpu-openxc7:2026-10-15:
+Yosys 0.69, nextpnr-himbaechel 1.0.0, Project X-Ray), SOURCE_DATE_EPOCH the commit's time, LC_ALL=C,
+TZ=UTC, the flow's settings unset (placer seeds 1 to 8 from the design list, the flow's 1,800 s limit
+per seed). Nothing here was loaded on a board.
+
+source 804127d09e64, dirty = false; build id 804127d0; defines ["ARTY_HAS_GPU", ]
+run_id surfcpu_arty_a7_gpudiag-arty_a7_100t-804127d0-20261025T222010Z
+boot ROM build/fw/gpudiag.mem sha256 fb5482867d605667acdf4a89ddf86a942768395d14224ac3ae2c8aee87caef74
+
+steps (times.txt): presynth 5.72 s ok, synth 45.06 s ok, check-srl 0.19 s ok, check-synth 0.22 s ok,
+chipdb-sha 0.03 s ok, pnr 1800.08 s FAILED (124: the time limit)
+netlist check of the synthesized netlist: PASS (every RTL memory in RAM cells as in G2; 30 DSP48E1, 4 of
+them the CPU's multiplier)
+
+nextpnr, seed 1:
+  utilisation  SLICE_LUTX 23,772 of 126,800 (18 %), SLICE_FFX 6,886 (5 %), CARRY4 1,628 (10 %),
+               RAMB36E1 112 + RAMB18E1 1, DSP48E1 30
+               (G2 at 95d0bd1: 12,029 LUT positions, 3,950 flip-flops, 620 CARRY4, 4 DSP48E1)
+  placement    HeAP 308.57 s, simulated annealing 54.14 s; estimate sys_clk 42.95 MHz, pix_clk 99.47 MHz
+  router2      iter=1 wires=618375 overused=36147 overuse=39556 archfail=NA
+               iter=2 wires=646969 overused=16921 overuse=17346 archfail=NA
+               iter=3 wires=659371 overused=9944 overuse=10128 archfail=NA
+               iter=4 wires=666601 overused=7852 overuse=7973 archfail=NA
+               iter=5 wires=671757 overused=7334 overuse=7452 archfail=NA
+               about three minutes an iteration; stopped by the flow's limit (1,800 s) during iteration 6
+               (G2's seed 2 at c217f27, evidence/gpu/synth-gpudiag-r1.txt: 19,897 overused at iteration
+               1, none at 29, 176 s in all)
+
+Seed 2 had started its placement when the build was stopped by hand (its container only, by its id,
+after checking its mount was this worktree; exit 137), since every seed would run the same design for
+up to 30 minutes. The engine was then made smaller and the build run again:
+  1987e0a  the setup on one 37 x 18 multiplier and one divider (26 DSP48E1 to 2)
+  bfaac48  the walk keeps lane 0 in registers and makes the other lanes as sums
+surf_gpu alone in Yosys synth_xilinx -flatten (Yosys 0.52 of the toolchain image surfcpu-toolchain:2026-10-15,
+not the flow's 0.69; an estimate of the engine's cells, nothing else):
+  804127d  9,542 LUT, 3,730 flip-flops, 1,284 CARRY4, 26 DSP48E1
+  1987e0a  9,248 LUT, 3,778 flip-flops, 1,169 CARRY4,  2 DSP48E1
+  bfaac48  6,994 LUT, 3,004 flip-flops,   965 CARRY4,  2 DSP48E1

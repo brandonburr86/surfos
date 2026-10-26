@@ -838,8 +838,9 @@ region Vivado offers on a 35T, which AMD does not document as usable (OPEN-FLOW.
 `surfcpu_arty_a7_bramdiag` lines below exactly, but for the build id and with SoC 0.2.0 in the
 identity line, at SoC 0.2.0 (e3961772, `docs/evidence/physical/ddr-bramdiag-fault-2026-10-16.txt`);
 SurfBoot without DDR ran on it only at SoC 0.1.0 (SurfBoot 1.0.0, `surfboot-no-ddr-2026-10-16.txt`).
-Since SoC 0.3.0 (the GPU's registers, 2026-10-18) every design's identity line reads 0.3.0, as
-below; nothing else in these lines changed with it.
+Since SoC 0.3.0 (the GPU's registers, 2026-10-18) every design's identity line reads 0.3.0, and
+since SoC 0.4.0 (the GPU's command set GPU2, 2026-10-25) 0.4.0, as below; nothing else in these
+lines changed with either.
 These come from `make board-uart-expect BOARD=arty_a7_100t` (sim/board/uart_expect.sh): the soc
 track's surfsim with `surfcpu_soc` configured exactly as `surfcpu_arty_a7_top` configures it on
 that board, running the same ROM images; the full transcripts for both boards are in
@@ -853,7 +854,7 @@ the bitstream's build time replaces `time 0`.
 ```
 
 SurfCPU BRAM diagnostics 1.0.0 (build <id>)
-board Arty A7-100T (0x100), SoC 0.3.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+board Arty A7-100T (0x100), SoC 0.4.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
 bitstream build <id> flags 0, features 7f, DDR status 0 size 0 MiB
 identity                           ok (7 checks)
 ALU, immediates, x0                ok (33 checks)
@@ -879,7 +880,7 @@ card answers with its own:
 ```
 
 SurfBoot 1.1.0 (build <id>), the SurfCPU boot ROM
-soc: Arty A7-100T (0x100), SoC 0.3.0, memory map 2, 25000000 Hz; bitstream <id>
+soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream <id>
 ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
 
 SurfBoot stopped: no DDR controller (DDR_ABSENT)
@@ -989,7 +990,7 @@ is the simulation's card model's; 4.2 s in all). On the board the lanes, the
 ```
 
 SurfBoot 1.1.0 (build <id>), the SurfCPU boot ROM
-soc: Arty A7-100T (0x100), SoC 0.3.0, memory map 2, 25000000 Hz; bitstream <id>
+soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream <id>
 ddr: initialized by SurfBoot, read leveling lane 0: bitslip 3, delay 16 (window +-10); lane 1: bitslip 5, delay 15 (window +-5)
 ddr: calibrated after 240 ms, 256 MiB, quick test passed (data, address, byte lanes)
 sd: SDHC/SDXC, 64 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked

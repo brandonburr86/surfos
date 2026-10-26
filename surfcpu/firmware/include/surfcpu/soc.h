@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 2, SoC version 0.3.0.
+ * SurfCPU memory map version 2, SoC version 0.4.0.
  */
 
 #ifndef SURFCPU_SOC_H
@@ -10,7 +10,7 @@
 #define SURF_REG(base, off) (*(volatile unsigned int *)((base) + (off)))
 
 #define SURF_MAP_VERSION 2 /* memory map version */
-#define SURF_SOC_VERSION 0x00000300u /* SoC version 0.3.0 */
+#define SURF_SOC_VERSION 0x00000400u /* SoC version 0.4.0 */
 #define SURF_RESET_PC 0x00000000u /* reset vector */
 #define SURF_HART_ID 0 /* mhartid */
 #define SURF_OSC_HZ 100000000 /* Hz */
@@ -334,7 +334,7 @@
 #define SURF_VIDEO_PALETTE_R_LSB 8 /* red */
 #define SURF_VIDEO_PALETTE_R_WIDTH 4
 #define SURF_VIDEO_PALETTE_R_MASK 0x00000F00u /* in place */
-#define SURF_VIDEO_GFX_BASE 0x00000080u /* rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_GFX_BASE 0x00000080u /* rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. The gpu engine's FLIP command writes it too, at the start of a vertical blanking, as a CPU store would (a CPU store in the same cycle wins: docs/GPU.md section 16). Only with sysinfo.FEATURES.GPU. */
 #define SURF_VIDEO_GFX_BASE_BASE_LSB 0 /* byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0 */
 #define SURF_VIDEO_GFX_BASE_BASE_WIDTH 19
 #define SURF_VIDEO_GFX_BASE_BASE_MASK 0x0007FFFFu /* in place */
@@ -423,7 +423,7 @@
 #define SURF_SYSINFO_PIX_HZ 0x00000028u /* ro: Pixel clock in Hz (0 without video). */
 #define SURF_SYSINFO_SCRATCH 0x0000002Cu /* rw: Free read/write word for bus tests (reset 0). */
 #define SURF_SYSINFO_BUILD_TIME 0x00000030u /* ro: Build time, seconds since 1970-01-01 UTC (0 if unknown). */
-#define SURF_GPU_ID 0x00000000u /* ro: 0x31555047, the bytes "GPU1" in memory order: the command set of docs/GPU.md version 1. */
+#define SURF_GPU_ID 0x00000000u /* ro: 0x32555047, the bytes "GPU2" in memory order: the command set of docs/GPU.md version 2 (GPU1's, 0x31555047, unchanged, plus SET_ZBUF, TRIANGLE and FLIP: docs/GPU.md section 16). */
 #define SURF_GPU_STATUS 0x00000004u /* w1c: Engine state and sticky events; write 1 to clear a sticky bit. */
 #define SURF_GPU_STATUS_BUSY_LSB 0 /* commands are queued or running; 0: every command written so far is done and its writes are in VRAM */
 #define SURF_GPU_STATUS_BUSY_WIDTH 1
@@ -434,7 +434,7 @@
 #define SURF_GPU_STATUS_BAD_OPCODE_LSB 2 /* sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command) */
 #define SURF_GPU_STATUS_BAD_OPCODE_WIDTH 1
 #define SURF_GPU_STATUS_BAD_OPCODE_MASK 0x00000004u /* in place */
-#define SURF_GPU_STATUS_BAD_PARAM_LSB 3 /* sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large) */
+#define SURF_GPU_STATUS_BAD_PARAM_LSB 3 /* sticky: a command had invalid parameters and did nothing (SET_TARGET or SET_ZBUF outside VRAM, unaligned or too large; a TRIANGLE that tests or writes depth without a depth buffer) */
 #define SURF_GPU_STATUS_BAD_PARAM_WIDTH 1
 #define SURF_GPU_STATUS_BAD_PARAM_MASK 0x00000008u /* in place */
 #define SURF_GPU_STATUS_FENCE_EV_LSB 4 /* sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE) */

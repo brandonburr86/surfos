@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 2, SoC version 0.3.0.
+ * SurfCPU memory map version 2, SoC version 0.4.0.
  */
 
 /* Symbols for every region, reservation and hole; INCLUDE this before SECTIONS. */

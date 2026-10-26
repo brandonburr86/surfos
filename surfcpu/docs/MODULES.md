@@ -2,7 +2,7 @@
 
 The interfaces between the parts that are built in parallel: RTL module port lists, the
 simulation models' C++ APIs, file formats and command lines. Each part is free inside; these
-edges are fixed (version 3, 2026-10-18; what changed from versions 1 and 2, and the
+edges are fixed (version 4, 2026-10-25; what changed from versions 1 to 3, and the
 clarifications, in section 8) so the parts plug together without rework. A needed change is
 proposed to the integrator, not made unilaterally.
 
@@ -60,9 +60,9 @@ A master port is the same list with `m_` and directions reversed.
 | `surf_textram` | soc | | `input pix_clk`, `input [11:0] pix_addr`, `output [31:0] pix_data` (registered: the word for `pix_addr` appears after one `pix_clk` edge) |
 | `surf_spi` | io | `SYS_HZ` | `output irq`, `output sclk`, `output mosi`, `input miso`, `output cs_n`, `input cd_n` (card detect, low = card present; tie 0 without one) |
 | `surf_ps2` | io | `SYS_HZ` | `output irq`, `input ps2_clk_i`, `input ps2_data_i`, `output ps2_clk_oe`, `output ps2_data_oe` (open drain: `_oe` = 1 pulls the line low, 0 releases it) |
-| `surf_video` | io | `PIX_HZ`, `HAS_GFX` (0: no graphics; 1: MODE 2..3, the GFX_, FRAME_ and GPAL registers, docs/GPU.md) | `output irq`; `input pix_clk`, `input pix_rst`; `output [11:0] text_addr`, `input [31:0] text_data` (to `surf_textram`'s pixel port); `output [16:0] vram_addr`, `input [31:0] vram_data` (to `surf_vram`'s pixel port; with `HAS_GFX` 0 the address stays 0 and the data are unused); `output vblank` (one `clk` pulse at the start of each vertical blanking interval, for `surf_gpu`); `output [3:0] vga_r`, `vga_g`, `vga_b`, `output vga_hs`, `vga_vs` (registered in the `pix_clk` domain) |
+| `surf_video` | io | `PIX_HZ`, `HAS_GFX` (0: no graphics; 1: MODE 2..3, the GFX_, FRAME_ and GPAL registers, docs/GPU.md) | `output irq`; `input pix_clk`, `input pix_rst`; `output [11:0] text_addr`, `input [31:0] text_data` (to `surf_textram`'s pixel port); `output [16:0] vram_addr`, `input [31:0] vram_data` (to `surf_vram`'s pixel port; with `HAS_GFX` 0 the address stays 0 and the data are unused); `output vblank` (one `clk` pulse at the start of each vertical blanking interval, for `surf_gpu`); `input gfx_base_we`, `input [16:0] gfx_base_in` (`surf_gpu`'s FLIP: GFX_BASE bits 18:2 written in that `clk` cycle, a CPU store in the same cycle winning; tie to 0 without a GPU); `output [3:0] vga_r`, `vga_g`, `vga_b`, `output vga_hs`, `vga_vs` (registered in the `pix_clk` domain) |
 | `surf_vram` | gpu | `BYTES` = 307200 | `<slave>` (the CPU window: offset `s_req_addr[18:0]`, an error at or above `BYTES`); the engine's side of port A: `input g_req`, `g_we`, `input [3:0] g_be`, `input [16:0] g_addr` (word), `input [31:0] g_wdata`, `output g_gnt` (= `g_req` and no CPU request this cycle), `output g_rvalid`, `output [31:0] g_rdata` (a granted read's word, the next cycle); `input pix_clk`, `input [16:0] pix_addr`, `output [31:0] pix_data` (the word two `pix_clk` edges later; 0 at or above `BYTES`) |
-| `surf_gpu` | gpu | `FIFO_LOG2` = 6, `VRAM_BYTES` = 307200 | `output irq`; `input vblank` (`surf_video`'s pulse); a master on `surf_vram`'s engine side: `output m_req`, `m_we`, `output [3:0] m_be`, `output [16:0] m_addr`, `output [31:0] m_wdata`, `input m_gnt`, `m_rvalid`, `input [31:0] m_rdata` (docs/GPU.md section 6) |
+| `surf_gpu` | gpu | `FIFO_LOG2` = 6, `VRAM_BYTES` = 307200 | `output irq`; `input vblank` (`surf_video`'s pulse); `output gfx_base_we`, `output [16:0] gfx_base_out` (FLIP's write into `surf_video`'s GFX_BASE, one `clk` cycle; docs/GPU.md section 16.7); a master on `surf_vram`'s engine side: `output m_req`, `m_we`, `output [3:0] m_be`, `output [16:0] m_addr`, `output [31:0] m_wdata`, `input m_gnt`, `m_rvalid`, `input [31:0] m_rdata` (docs/GPU.md section 6) |
 | `surf_ddr_bridge` | ddr | `TIMEOUT_CYCLES`, `CALIB_TIMEOUT_CYCLES`, `APP_ADDR_WIDTH`, `APP_DATA_WIDTH`, `DQ_WIDTH` | `output calib_done`, `calib_fail`, `timeout` (sys domain); controller side in the `ui_clk` domain, as the ddr track documents in docs/DDR.md |
 | `surf_ddr_csr` | ddr | `ADDR_BITS`, `TIMEOUT_CYCLES`, `WB_TIMEOUT_CYCLES` | `<slave>` in the sys domain (the SoC's `ddrc_*` port); `wb_clk`, `wb_rst` and a Wishbone classic master (`wb_adr` [29:0] word address, `wb_dat_w`, `wb_dat_r`, `wb_sel`, `wb_cyc`, `wb_stb`, `wb_we`, `wb_cti`, `wb_bte`, `wb_ack`, `wb_err`) in the controller's domain (docs/DDR.md) |
 | `surfcpu_soc` | soc | section 4 | section 4 |
@@ -214,6 +214,14 @@ the run as `--max-cycles` would (so `--sd-flush` writes the card back: a power c
 takes the card out and SIGUSR2 puts it back. Without it surfsim behaves as before.
 
 ## 8. Changes and clarifications
+
+Version 4 (2026-10-25, the gpu-g4 track, docs/GPU.md section 16): `surf_video` has the inputs
+`gfx_base_we` and `gfx_base_in` and `surf_gpu` the outputs `gfx_base_we` and `gfx_base_out`, the
+engine's FLIP into video's GFX_BASE; `surf_gpu` instantiates `surf_gpu_tri`, which instantiates
+`surf_gpu_div` (rtl/peripherals, its TRIANGLE). A version 3 user ties the two `surf_video` inputs to 0 and nothing
+behaves differently. Every user was changed with it: `surfcpu_soc`, the io track's test tops
+(`sim/io/tb_video.v` with a `FLIP_PORT` parameter, default 0, that ties the port off;
+`sim/io/tb_io_icarus.v`), the soc track's `surf_video` stand-in and the gpu track's `sim/gpu/tb_gpu.v`.
 
 Version 3 (2026-10-18, the gpu track, docs/GPU.md): `surfcpu_soc` has the parameter `HAS_GPU`
 (default 0); `surf_video` has the parameter `HAS_GFX` (default 0) and the ports `vram_addr`,

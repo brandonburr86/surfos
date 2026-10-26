@@ -1,7 +1,7 @@
 /*
 SurfGPU engine testbench
 --------------------
-File: test_gpu.cpp Date: 10/18/26 (SurfGPU)
+File: test_gpu.cpp Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
 --------------------
 Verilator harness for surf_gpu with surf_vram (sim/gpu/tb_gpu.v) against the C model
 (sim/models/gpu_model.c): every command word written to CMD also goes to the model, and at every
@@ -15,7 +15,14 @@ transparency, WRITE_RECT's byte order, a full FIFO and OVERFLOW, an unknown opco
 their interrupt, WAIT_VBLANK, ABORT. Then randomized command streams (targets, clips, every
 command, coordinates near the edges and far outside) while the CPU keeps reading VRAM and
 writing a part of it the engine never draws on, so the engine is stalled in every state.
-A broken engine (sim/gpu/mutants.py) must fail here.
+GPU2 (docs/GPU.md section 16): SET_ZBUF's refusals and SET_TARGET dropping the depth buffer,
+depth without a buffer refused; TRIANGLE at every lane alignment and sub-pixel offset in both
+windings, the four kinds of edges through pixel centres, culling, zero areas, the clip's edges,
+huge and far triangles; Gouraud and every combination of the depth flags, depth buffers
+overlapping the target; FLIP against the blanking pulse; ABORT inside a TRIANGLE at random
+moments (what it drew must be a prefix of the walk, its last group possibly without its colour);
+the walk's cycles; then triangles, depth buffers, depth clears and FLIPs in the random streams.
+Every FLIP write the engine makes must come in the cycle after a blanking pulse, in every test.
 
     Vtb_gpu [--seed N] [--chunks N]
 */
@@ -26,6 +33,7 @@ A broken engine (sim/gpu/mutants.py) must fail here.
 #include "surfbus_master.h"
 #include "surfcpu/soc.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -59,12 +67,23 @@ struct Tb {
     uint64_t engine_grants = 0, engine_waits = 0;
     uint64_t trace = 0;                 // --trace N: print the engine's first N granted accesses
     bool pulse = false;
+    // FLIP's writes into video's GFX_BASE: each must come in the cycle after a blanking pulse
+    uint64_t flips = 0, flip_early = 0;
+    uint32_t flip_last = 0;
+    bool prev_vblank = false;
     void posedge() {
-        t->vblank = pulse || (vblank_every && cycles >= next_vblank);
+        const bool vb = pulse || (vblank_every && cycles >= next_vblank);
+        t->vblank = vb;
         if (vblank_every && cycles >= next_vblank) next_vblank = cycles + vblank_every;
         pulse = false;
         t->clk = 0;
         t->eval();
+        if (t->gfx_base_we) {
+            flips++;
+            flip_last = t->gfx_base_out;
+            if (!prev_vblank) flip_early++;
+        }
+        prev_vblank = vb;
         if (t->m_req) { if (t->m_gnt) engine_grants++; else engine_waits++; }
         if (trace && t->m_req && t->m_gnt) {
             trace--;
@@ -178,6 +197,10 @@ static void fence_check(Tb &tb, Bus &bus, const char *what) {
                                   SURF_GPU_STATUS_FENCE_EV_MASK);
     CHECK(sticky == g_eng.sticky, "%s: sticky STATUS %02x, model %02x", what, sticky, g_eng.sticky);
     CHECK(gpu_engine_idle(&g_eng), "%s: the model is inside a command", what);
+    CHECK(tb.flips == g_eng.flips && (g_eng.flips == 0 || tb.flip_last == g_eng.flip_base >> 2) && tb.flip_early == 0,
+          "%s: FLIP: %llu writes (last %05x, %llu not after a blanking pulse), the model %u (last %05x)", what,
+          (unsigned long long)tb.flips, tb.flip_last, (unsigned long long)tb.flip_early, g_eng.flips,
+          g_eng.flip_base >> 2);
     wr(bus, SURF_GPU_STATUS, 0x1E);
     g_eng.sticky = 0;
     compare_vram(tb, bus, what);
@@ -370,8 +393,8 @@ static void test_write_rect(Tb &tb, Bus &bus) {
 }
 
 static void test_errors_and_fences(Tb &tb, Bus &bus) {
-    // an unknown opcode: dropped, the next word is a command
-    push(bus, GPU_HDR(0x0A, 0x123456));
+    // an unknown opcode (the first after GPU2's three): dropped, the next word is a command
+    push(bus, GPU_HDR(0x0D, 0x123456));
     push(bus, GPU_HDR(0xFF, 0));
     fence_check(tb, bus, "unknown opcodes");
     // a full FIFO: WAIT_VBLANK holds the engine (no vblank comes), 64 words fill it, one more overflows
@@ -509,13 +532,435 @@ static void test_errors_and_fences(Tb &tb, Bus &bus) {
     fence_check(tb, bus, "WAIT_VBLANK");
 }
 
+// ------------------------------------------------------------------ GPU2: depth, triangles, flips
+
+static uint32_t zcw(int z, int c) { return GPU_ZC((unsigned)z, (unsigned)c); }
+
+// one TRIANGLE: its header bits, then (x, y in 12.4, depth, colour) for each vertex
+static void tri(Bus &bus, uint32_t flags, const int v[3][4]) {
+    cmd(bus, {GPU_HDR(GPU_OP_TRIANGLE, flags), xy(v[0][0], v[0][1]), zcw(v[0][2], v[0][3]), xy(v[1][0], v[1][1]),
+              zcw(v[1][2], v[1][3]), xy(v[2][0], v[2][1]), zcw(v[2][2], v[2][3])});
+}
+static void tri3(Bus &bus, uint32_t flags, int x0, int y0, int x1, int y1, int x2, int y2, int z = 0) {
+    const int v[3][4] = {{x0, y0, z, 0}, {x1, y1, z, 0}, {x2, y2, z, 0}};
+    tri(bus, flags, v);
+}
+static void set_zbuf(Bus &bus, uint32_t base, uint32_t stride) { cmd(bus, {GPU_HDR(GPU_OP_SET_ZBUF, 0), base, stride}); }
+
+// every depth 0xFFFF (docs/GPU.md 16.6): FILL_RECT 0xFF over the depth bytes of a w x h target, then
+// that target again and its depth buffer (an accepted SET_TARGET leaves none)
+static void clear_depth(Bus &bus, uint32_t tbase, uint32_t tstride, unsigned w, unsigned h, uint32_t zbase,
+                        uint32_t zstride) {
+    set_target(bus, zbase, zstride, 2 * w, h);
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0xFF), xy(0, 0), wh(2 * w, h)});
+    set_target(bus, tbase, tstride, w, h);
+    set_zbuf(bus, zbase, zstride);
+}
+
+static void test_zbuf(Tb &tb, Bus &bus) {
+    set_target(bus, 0x10000, 128, 64, 64);                  // 2W = 128
+    const uint32_t refused[][2] = {{0x20002, 128}, {0x20000, 130}, {307200, 128}, {0x20000, 0x10000}, {0x20000, 124},
+                                   {307200 - 63 * 128 - 124, 128}};
+    for (auto &z : refused) set_zbuf(bus, z[0], z[1]);
+    tri3(bus, GPU_TRI_ZTEST | 0x41, 0, 0, GPU_FX(9), 0, 0, GPU_FX(9));      // depth without a buffer: refused
+    tri3(bus, GPU_TRI_ZWRITE | 0x42, 0, 0, GPU_FX(9), 0, 0, GPU_FX(9));
+    tri3(bus, 0x43, GPU_FX(20), 0, GPU_FX(29), 0, GPU_FX(20), GPU_FX(9));   // without depth: drawn
+    fence_check(tb, bus, "SET_ZBUF's refusals, depth without a depth buffer");
+    set_zbuf(bus, 307200 - 63 * 128 - 128, 128);            // ends at VRAM's end: taken
+    tri3(bus, GPU_TRI_ZWRITE | 0x44, GPU_FX(30), GPU_FX(50), GPU_FX(64), GPU_FX(50), GPU_FX(64), GPU_FX(64), 0x2345);
+    set_target(bus, 2, 64, 16, 16);                         // refused: the depth buffer stays
+    tri3(bus, GPU_TRI_ZTEST | GPU_TRI_ZWRITE | 0x45, GPU_FX(40), GPU_FX(40), GPU_FX(64), GPU_FX(40), GPU_FX(40),
+         GPU_FX(64), 0x1000);
+    set_target(bus, 0x10000, 128, 64, 64);                  // accepted: no depth buffer any more
+    tri3(bus, GPU_TRI_ZWRITE | 0x46, 0, GPU_FX(30), GPU_FX(9), GPU_FX(30), 0, GPU_FX(39));
+    fence_check(tb, bus, "SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it");
+    set_target(bus, 0x10000, 64, 100, 1);                   // one line wider than its stride
+    set_zbuf(bus, 0x20000, 64);                             // and its depth: taken
+    tri3(bus, GPU_TRI_ZWRITE | 0x47, 0, 0, GPU_FX(100), 0, 0, GPU_FX(1), 0x3456);
+    set_target(bus, 0x10000, 64, 0, 5);                     // an empty target takes any aligned buffer
+    set_zbuf(bus, 307196, 4);
+    tri3(bus, GPU_TRI_ZWRITE | 0x48, 0, 0, GPU_FX(9), 0, 0, GPU_FX(9));
+    fence_check(tb, bus, "SET_ZBUF for a one-line and an empty target");
+}
+
+static void test_tri_coverage(Tb &tb, Bus &bus) {
+    set_target(bus, 0x8000, 256, 256, 120);
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0), xy(0, 0), wh(256, 120)});
+    // small triangles at every lane alignment and several sub-pixel offsets, in both windings
+    int k = 0;
+    for (int a = 0; a < 4; a++)
+        for (int sub = 0; sub < 16; sub += 5)
+            for (int size = 1; size <= 7; size += 2) {
+                const int x0 = GPU_FX(4 * (k % 24) + a) + sub, y0 = GPU_FX(40 * (k / 24)) + (15 - sub);
+                const int sz = GPU_FX(size);
+                if (k & 1) tri3(bus, (uint32_t)(k + 1) & 0xFF, x0, y0, x0 + sz, y0 + sub, x0 + (sub & 3), y0 + sz);
+                else       tri3(bus, (uint32_t)(k + 1) & 0xFF, x0, y0, x0 + (sub & 3), y0 + sz, x0 + sz, y0 + sub);
+                k++;
+            }
+    fence_check(tb, bus, "TRIANGLE at every lane and sub-pixel offset, both windings");
+    // edges through pixel centres: a top and a left edge cover them, a bottom and a right one not;
+    // a mesh of squares cut into triangles sharing those edges, alternating colours
+    for (int q = 0; q < 6; q++) {
+        const int x = GPU_FX(120 + 20 * q) + 8, y = GPU_FX(4) + 8, d = GPU_FX(3 + q);
+        tri3(bus, 0x80 + (uint32_t)q, x, y, x + d, y, x, y + d);              // top and left through centres
+        tri3(bus, 0x90 + (uint32_t)q, x + d, y, x + d, y + d, x, y + d);      // right and bottom through centres
+    }
+    for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 8; i++) {
+            const int x = GPU_FX(130 + 12 * i) + (i * 5) % 16, y = GPU_FX(30 + 12 * j) + (j * 7) % 16;
+            const int x2 = x + GPU_FX(12) + ((i + 1) * 5) % 16 - (i * 5) % 16, y2 = y + GPU_FX(12);
+            const uint32_t c = 0xA0 + (uint32_t)(i + 8 * j) * 2;
+            tri3(bus, c, x, y, x2, y, x2, y2);
+            tri3(bus, c + 1, x, y, x2, y2, x, y2);
+        }
+    fence_check(tb, bus, "TRIANGLE: edges through pixel centres, a shared-edge mesh");
+    // culling, zero areas
+    tri3(bus, GPU_TRI_CULL_CW | 0x31, GPU_FX(10), GPU_FX(90), GPU_FX(30), GPU_FX(90), GPU_FX(10), GPU_FX(110));
+    tri3(bus, GPU_TRI_CULL_CCW | 0x32, GPU_FX(40), GPU_FX(90), GPU_FX(60), GPU_FX(90), GPU_FX(40), GPU_FX(110));
+    tri3(bus, GPU_TRI_CULL_CW | 0x33, GPU_FX(70), GPU_FX(90), GPU_FX(70), GPU_FX(110), GPU_FX(90), GPU_FX(90));
+    tri3(bus, GPU_TRI_CULL_CCW | 0x34, GPU_FX(100), GPU_FX(90), GPU_FX(100), GPU_FX(110), GPU_FX(120), GPU_FX(90));
+    tri3(bus, GPU_TRI_CULL_CW | GPU_TRI_CULL_CCW | 0x35, GPU_FX(130), GPU_FX(90), GPU_FX(150), GPU_FX(90), GPU_FX(130), GPU_FX(110));
+    tri3(bus, 0x36, GPU_FX(160), GPU_FX(90), GPU_FX(170), GPU_FX(100), GPU_FX(180), GPU_FX(110));     // collinear
+    tri3(bus, 0x37, GPU_FX(190), GPU_FX(90), GPU_FX(190), GPU_FX(90), GPU_FX(200), GPU_FX(110));     // two the same
+    tri3(bus, 0x38, 3000, 1500, 3000, 1500, 3000, 1500);
+    fence_check(tb, bus, "TRIANGLE: culling, zero areas");
+    // the clip's four edges, huge triangles over the whole 12.4 range, far ones, slivers
+    cmd(bus, {GPU_HDR(GPU_OP_SET_CLIP, 0), xy(13, 7), xy(203, 101)});
+    tri3(bus, 0x51, GPU_FX(5), GPU_FX(2), GPU_FX(250), GPU_FX(60), GPU_FX(40), GPU_FX(118));
+    tri3(bus, 0x52, 32767, -32768, 32767, 32767, -32768, 32767);
+    cmd(bus, {GPU_HDR(GPU_OP_SET_CLIP, 0), xy(0, 0), xy(256, 120)});
+    tri3(bus, 0x53, -32768, -32768, 32767, -32768, -32768, 32767);    // the other half: misses the target
+    tri3(bus, 0x54, -GPU_FX(50), GPU_FX(10), -GPU_FX(1), GPU_FX(10), -GPU_FX(20), GPU_FX(50));    // left of it
+    tri3(bus, 0x55, GPU_FX(10), GPU_FX(121), GPU_FX(90), GPU_FX(130), GPU_FX(30), GPU_FX(200));  // below it
+    tri3(bus, 0x56, GPU_FX(2) + 3, GPU_FX(60), GPU_FX(250), GPU_FX(61) + 2, GPU_FX(2) + 5, GPU_FX(60) + 1);  // sliver
+    tri3(bus, 0x57, GPU_FX(200) + 8, GPU_FX(100) + 8, GPU_FX(201) + 8, GPU_FX(100) + 8, GPU_FX(200) + 8, GPU_FX(101) + 8);
+    fence_check(tb, bus, "TRIANGLE: the clip's edges, huge, far, slivers, one pixel");
+}
+
+static void test_tri_depth(Tb &tb, Bus &bus) {
+    const uint32_t T = 0, TS = 320, Z = 0x20000, ZS = 640;
+    set_target(bus, T, TS, 320, 200);
+    cmd(bus, {GPU_HDR(GPU_OP_FILL_RECT, 0x00), xy(0, 0), wh(320, 200)});
+    clear_depth(bus, T, TS, 320, 200, Z, ZS);
+    // every combination of GOURAUD, ZTEST, ZFUNC, ZWRITE and the culls, two triangles each, overlapping
+    for (unsigned f = 0; f < 64; f++) {
+        const uint32_t flags = (f & 1 ? GPU_TRI_GOURAUD : 0) | (f & 2 ? GPU_TRI_ZTEST : 0) |
+                               (f & 4 ? GPU_TRI_ZFUNC_LE : 0) | (f & 8 ? GPU_TRI_ZWRITE : 0) |
+                               (f & 16 ? GPU_TRI_CULL_CW : 0) | (f & 32 ? GPU_TRI_CULL_CCW : 0) | ((f * 3 + 1) & 0xFF);
+        const int cx = 20 + (int)(f % 8) * 38, cy = 20 + (int)(f / 8) * 22;
+        const int v[3][4] = {{GPU_FX(cx - 18) + 3, GPU_FX(cy - 15) + 11, (int)(f * 997 & 0xFFFF), (int)(f * 5 & 0xFF)},
+                             {GPU_FX(cx + 21) + 7, GPU_FX(cy - 2), (int)(f * 1997 & 0xFFFF), (int)(f * 11 & 0xFF)},
+                             {GPU_FX(cx - 5), GPU_FX(cy + 16) + 9, (int)(f * 2999 & 0xFFFF), (int)(f * 17 & 0xFF)}};
+        tri(bus, flags, v);
+        const int w[3][4] = {{v[0][0], v[0][1], 30000, 40}, {v[2][0], v[2][1], 32768, 47},
+                             {v[1][0] + 40, v[1][1] + 30, 29000, 33}};
+        tri(bus, flags ^ GPU_TRI_GOURAUD, w);                   // the other winding, over it
+    }
+    fence_check(tb, bus, "TRIANGLE: every combination of GOURAUD, ZTEST, ZFUNC, ZWRITE and the culls");
+    // two triangles crossing in depth, each in front on one side; Gouraud ramps at full range
+    clear_depth(bus, T, TS, 320, 200, Z, ZS);
+    const uint32_t D = GPU_TRI_ZTEST | GPU_TRI_ZWRITE | GPU_TRI_GOURAUD;
+    const int a[3][4] = {{GPU_FX(10), GPU_FX(10), 0, 32}, {GPU_FX(300), GPU_FX(30), 65535, 63}, {GPU_FX(40), GPU_FX(190), 30000, 40}};
+    const int b[3][4] = {{GPU_FX(310), GPU_FX(15), 0, 64}, {GPU_FX(290), GPU_FX(195), 40000, 95}, {GPU_FX(5), GPU_FX(100), 65535, 80}};
+    tri(bus, D, a);
+    tri(bus, D, b);
+    const int c[3][4] = {{0, 0, 65535, 0}, {GPU_FX(319) + 15, 0, 0, 255}, {0, GPU_FX(199) + 15, 32768, 128}};
+    tri(bus, D | GPU_TRI_ZFUNC_LE, c);
+    fence_check(tb, bus, "TRIANGLE: two triangles crossing in depth, full-range ramps");
+    // a depth buffer that overlaps the target itself (section 16.5's order decides)
+    set_target(bus, 0x30000, 256, 100, 50);
+    set_zbuf(bus, 0x30000 + 64, 256);
+    const int o[3][4] = {{GPU_FX(2), GPU_FX(1), 1000, 9}, {GPU_FX(97), GPU_FX(8), 50000, 200}, {GPU_FX(30), GPU_FX(49), 20000, 90}};
+    tri(bus, D, o);
+    tri(bus, D | GPU_TRI_ZFUNC_LE, o);
+    fence_check(tb, bus, "TRIANGLE: a depth buffer overlapping the target");
+}
+
+static void test_flip(Tb &tb, Bus &bus) {
+    tb.vblank_every = 0;
+    const uint64_t f0 = tb.flips;
+    cmd(bus, {GPU_HDR(GPU_OP_FLIP, 0), 0xFFF12C03u});       // GFX_BASE keeps bits 18:2: 0x12C00
+    cmd(bus, {GPU_HDR(GPU_OP_FENCE, 0), 0xF11});
+    bus.idle(300);
+    CHECK(tb.flips == f0 && rd(bus, SURF_GPU_FENCE) != 0xF11 && (rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK),
+          "FLIP did not wait for the vertical blanking: %llu writes", (unsigned long long)(tb.flips - f0));
+    tb.pulse = true;
+    bus.idle(30);
+    CHECK(tb.flips == f0 + 1 && tb.flip_last == (0x12C00u >> 2) && rd(bus, SURF_GPU_FENCE) == 0xF11,
+          "FLIP after the pulse: %llu writes, last %05x, FENCE %x", (unsigned long long)(tb.flips - f0), tb.flip_last,
+          rd(bus, SURF_GPU_FENCE));
+    cmd(bus, {GPU_HDR(GPU_OP_FLIP, 0), 0x100});            // two FLIPs: one each blanking
+    cmd(bus, {GPU_HDR(GPU_OP_FLIP, 0), 0x204});
+    bus.idle(50);
+    tb.pulse = true;
+    bus.idle(50);
+    CHECK(tb.flips == f0 + 2 && tb.flip_last == 0x40, "the first of two FLIPs: %llu writes, last %05x",
+          (unsigned long long)(tb.flips - f0), tb.flip_last);
+    tb.pulse = true;
+    bus.idle(50);
+    CHECK(tb.flips == f0 + 3 && tb.flip_last == 0x81, "the second of two FLIPs: %llu writes, last %05x",
+          (unsigned long long)(tb.flips - f0), tb.flip_last);
+    // ABORT while a FLIP waits: it never writes (the words go to the engine only, not the model)
+    wr(bus, SURF_GPU_CMD, GPU_HDR(GPU_OP_FLIP, 0));
+    wr(bus, SURF_GPU_CMD, 0x300);
+    bus.idle(20);
+    wr(bus, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
+    tb.pulse = true;
+    bus.idle(50);
+    CHECK(tb.flips == f0 + 3, "a FLIP aborted before the blanking wrote GFX_BASE");
+    tb.vblank_every = 5000;
+    tb.next_vblank = tb.cycles + 5000;
+    fence_check(tb, bus, "FLIP");
+}
+
+// all of VRAM through the pixel port
+static std::vector<uint8_t> dump_vram(Tb &tb, Bus &bus) {
+    bus.idle(0);
+    std::vector<uint8_t> v(GPU_VRAM_BYTES);
+    const uint32_t words = GPU_VRAM_BYTES / 4;
+    for (uint32_t w = 0; w < words + 1; w++) {
+        tb.t->pix_addr = w < words ? w : 0;
+        tb.posedge();
+        if (w >= 1)
+            for (int k = 0; k < 4; k++) v[4 * (w - 1) + k] = (uint8_t)(tb.t->pix_data >> (8 * k));
+    }
+    return v;
+}
+
+static int rnd(int lo, int hi);
+
+// ABORT inside a TRIANGLE at a random moment: every byte is as before the triangle or as the whole
+// triangle leaves it, and what was drawn is a prefix of the walk (docs/GPU.md 16.5: rows, then
+// groups), whose last group may have some or all of its depth written but not its colour (ABORT
+// stops between two accesses); the model then takes the engine's VRAM, as after any ABORT
+static void test_abort_triangle(Tb &tb, Bus &bus) {
+    const uint32_t T = 0, TS = 320, Z = 0x20000, ZS = 640;
+    set_target(bus, T, TS, 320, 200);
+    clear_depth(bus, T, TS, 320, 200, Z, ZS);
+    int bad = 0, partial = 0, mid = 0;
+    for (int n = 0; n < 24; n++) {
+        if (n % 6 == 0) clear_depth(bus, T, TS, 320, 200, Z, ZS);
+        fence_check(tb, bus, "before an aborted TRIANGLE");
+        const uint32_t flags = (uint32_t)rnd(1, 255) | (n & 1 ? GPU_TRI_GOURAUD : 0) |
+                               (n % 3 ? GPU_TRI_ZTEST | GPU_TRI_ZWRITE : 0) | (n % 5 == 0 ? GPU_TRI_ZWRITE : 0);
+        int v[3][4];
+        for (int i = 0; i < 3; i++) {
+            v[i][0] = rnd(-GPU_FX(40), GPU_FX(360));
+            v[i][1] = rnd(-GPU_FX(30), GPU_FX(230));
+            v[i][2] = rnd(0, 65535);
+            v[i][3] = rnd(0, 255);
+        }
+        const std::vector<uint8_t> before = g_vram;
+        tri(bus, flags, v);
+        const std::vector<uint8_t> after = g_vram;
+        bus.idle((uint64_t)rnd(0, 40000));
+        wr(bus, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
+        gpu_engine_abort(&g_eng);
+        CHECK(!(rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK), "ABORT inside a TRIANGLE: still busy");
+        const std::vector<uint8_t> got = dump_vram(tb, bus);
+        for (uint32_t a = 0; a < GPU_VRAM_BYTES; a++)
+            if (got[a] != before[a] && got[a] != after[a]) bad++;
+        // the walk's groups in order (the box of 16.3 in the target, no clip)
+        int32_t vx[3], vy[3];
+        for (int i = 0; i < 3; i++) { vx[i] = (int16_t)v[i][0]; vy[i] = (int16_t)v[i][1]; }
+        const int32_t mnx = std::min(vx[0], std::min(vx[1], vx[2])), mxx = std::max(vx[0], std::max(vx[1], vx[2]));
+        const int32_t mny = std::min(vy[0], std::min(vy[1], vy[2])), mxy = std::max(vy[0], std::max(vy[1], vy[2]));
+        auto fl16 = [](int32_t a) { return a >= 0 ? a / 16 : -((-a + 15) / 16); };
+        const int x0 = std::max(fl16(mnx + 7), 0), x1 = std::min(fl16(mxx - 8), 319);
+        const int y0 = std::max(fl16(mny + 7), 0), y1 = std::min(fl16(mxy - 8), 199);
+        bool cut = false;                                   // a group not (wholly) drawn came
+        for (int y = y0; y <= y1 && x0 <= x1; y++)
+            for (int g = x0 / 4; g <= x1 / 4; g++) {
+                bool c_after = true, c_before = true, d_after = true, d_before = true, d_each = true, any = false;
+                for (int L = 0; L < 4; L++) {
+                    const int x = 4 * g + L;
+                    if (x < x0 || x > x1) continue;
+                    const uint32_t ca = T + (uint32_t)y * TS + (uint32_t)x, za = Z + (uint32_t)y * ZS + 2 * (uint32_t)x;
+                    any |= before[ca] != after[ca] || before[za] != after[za] || before[za + 1] != after[za + 1];
+                    c_after &= got[ca] == after[ca];
+                    c_before &= got[ca] == before[ca];
+                    const bool la = got[za] == after[za] && got[za + 1] == after[za + 1];
+                    const bool lb = got[za] == before[za] && got[za + 1] == before[za + 1];
+                    d_after &= la;
+                    d_before &= lb;
+                    d_each &= la || lb;
+                }
+                if (!any) continue;                         // the triangle changes nothing here
+                if (!cut) {
+                    if (c_after && d_after) continue;        // drawn
+                    cut = true;
+                    mid++;
+                    if (c_before && d_each && !d_before) { partial++; continue; }   // depth, not yet colour
+                    if (c_before && d_before) continue;
+                    bad++;
+                } else if (!(c_before && d_before)) {
+                    bad++;                                  // drawn after a group that was not
+                }
+            }
+        g_vram = got;                                       // the model takes what the engine left
+    }
+    CHECK(bad == 0, "ABORT inside a TRIANGLE: %d bytes or groups outside the walk's prefix", bad);
+    std::printf("abort: 24 TRIANGLEs aborted at random moments, %d stopped inside their walk (%d with a group's "
+                "depth written, not its colour)\n", mid, partial);
+    fence_check(tb, bus, "after the aborted TRIANGLEs");
+}
+
+// the walk's cycles (docs/GPU.md 16.5): one big triangle each way, with the groups of its box counted
+static void test_tri_timing(Tb &tb, Bus &bus) {
+    const uint32_t T = 0, TS = 320, Z = 0x20000, ZS = 640;
+    set_target(bus, T, TS, 320, 200);
+    const int v[3][4] = {{GPU_FX(4) + 5, GPU_FX(3) + 2, 1000, 3}, {GPU_FX(310) + 9, GPU_FX(20), 64000, 30},
+                         {GPU_FX(30), GPU_FX(196) + 11, 30000, 17}};
+    int32_t vx[3] = {v[0][0], v[1][0], v[2][0]}, vy[3] = {v[0][1], v[1][1], v[2][1]};
+    struct gpu_tri t;
+    gpu_tri_setup(&t, vx, vy);
+    unsigned box = 0, covered = 0;
+    for (int y = 0; y < 200; y++)
+        for (int g = 0; g < 80; g++) {
+            bool c = false, in = false;
+            for (int L = 0; L < 4; L++) {
+                const int x = 4 * g + L;
+                c |= gpu_tri_inside(&t, x, y) != 0;
+                in |= 16 * x + 8 >= 4 * 16 + 5 && 16 * x + 8 <= 310 * 16 + 9;
+            }
+            if (in && 16 * y + 8 >= 3 * 16 + 2 && 16 * y + 8 <= 196 * 16 + 11) box++;
+            covered += c;
+        }
+    const struct { const char *what; uint32_t flags; } runs[] = {
+        {"flat", 0x21}, {"Gouraud", GPU_TRI_GOURAUD}, {"depth", GPU_TRI_ZTEST | GPU_TRI_ZWRITE | 0x22},
+        {"Gouraud and depth", GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE}, {"ZWRITE alone", GPU_TRI_ZWRITE | 0x23}};
+    for (auto &r : runs) {
+        clear_depth(bus, T, TS, 320, 200, Z, ZS);
+        wait_idle(bus);
+        const uint64_t c0 = tb.cycles;
+        tri(bus, r.flags, v);
+        wait_idle(bus);
+        const uint64_t n = tb.cycles - c0;
+        std::printf("tri timing: %s: %llu cycles; the box %u groups, %u of them covered: %.2f cycles a covered group "
+                    "beyond the 1 every group takes\n", r.what, (unsigned long long)n, box, covered,
+                    covered ? (double)((long long)n - (long long)box) / covered : 0.0);
+    }
+    // the setup (16.8): a culled triangle, then one of a single pixel (5, 5), flat and with Gouraud and depth;
+    // from the first word to idle as STATUS is polled (about 10 cycles apart)
+    const int px[3][4] = {{84, 84, 100, 10}, {94, 84, 200, 20}, {84, 94, 300, 30}};
+    const struct { const char *what; uint32_t flags; } small[] = {
+        {"culled", GPU_TRI_CULL_CW | 0x24}, {"one pixel, flat", 0x25},
+        {"one pixel, Gouraud and depth", GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE}};
+    for (auto &r : small) {
+        wait_idle(bus);
+        const uint64_t c0 = tb.cycles;
+        tri(bus, r.flags, px);
+        wait_idle(bus);
+        std::printf("tri timing: %s: %llu cycles\n", r.what, (unsigned long long)(tb.cycles - c0));
+    }
+    fence_check(tb, bus, "TRIANGLE timing");
+}
+
 // ------------------------------------------------------------------ randomized streams
 
 static int rnd(int lo, int hi) { return lo + (int)(g_rng() % (uint32_t)(hi - lo + 1)); }
 
+static uint32_t g_rt_base = 0, g_rt_stride = 640;           // the random part's target
+
+static int clamp16(int v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : v; }
+
+// three random vertices (12.4) for a target of tw x th: near it, tiny, huge, of zero area, far
+// beyond one of its edges, or slivers
+static void random_vertices(int v[3][4], unsigned tw, unsigned th) {
+    const int mode = rnd(0, 99), W = (int)tw, H = (int)th;
+    for (int i = 0; i < 3; i++) {
+        v[i][0] = rnd(-GPU_FX(40), GPU_FX(W + 40));
+        v[i][1] = rnd(-GPU_FX(40), GPU_FX(H + 40));
+    }
+    if (mode < 40) {
+        // near the target, as drawn above
+    } else if (mode < 58) {                             // tiny: within three pixels of a point
+        const int cx = rnd(-GPU_FX(4), GPU_FX(W + 4)), cy = rnd(-GPU_FX(4), GPU_FX(H + 4));
+        for (int i = 0; i < 3; i++) {
+            v[i][0] = cx + rnd(-48, 48);
+            v[i][1] = cy + rnd(-48, 48);
+        }
+    } else if (mode < 68) {                             // huge: anywhere in the 12.4 range
+        for (int i = 0; i < 3; i++) {
+            v[i][0] = rnd(-32768, 32767);
+            v[i][1] = rnd(-32768, 32767);
+        }
+    } else if (mode < 78) {                             // zero area: on a line, or two the same
+        const int k = rnd(-1, 2);
+        v[2][0] = v[0][0] + k * (v[1][0] - v[0][0]);
+        v[2][1] = v[0][1] + k * (v[1][1] - v[0][1]);
+        if (rnd(0, 3) == 0) { v[1][0] = v[0][0]; v[1][1] = v[0][1]; }
+    } else if (mode < 88) {                             // beyond one edge of the target
+        const int side = rnd(0, 3);
+        for (int i = 0; i < 3; i++) {
+            if (side == 0) v[i][0] = rnd(-GPU_FX(300), -1);
+            if (side == 1) v[i][1] = rnd(-GPU_FX(300), -1);
+            if (side == 2) v[i][0] = rnd(GPU_FX(W) + 8, GPU_FX(W + 300));
+            if (side == 3) v[i][1] = rnd(GPU_FX(H) + 8, GPU_FX(H + 300));
+        }
+    } else {                                            // a sliver along the first two
+        const int t16 = rnd(-8, 24);
+        v[2][0] = v[0][0] + (v[1][0] - v[0][0]) * t16 / 16 + rnd(-3, 3);
+        v[2][1] = v[0][1] + (v[1][1] - v[0][1]) * t16 / 16 + rnd(-3, 3);
+    }
+    for (int i = 0; i < 3; i++) {
+        v[i][0] = clamp16(v[i][0]);
+        v[i][1] = clamp16(v[i][1]);
+        v[i][2] = (g_rng() % 5 == 0) ? (g_rng() & 1 ? 0xFFFF : 0) : (int)(g_rng() & 0xFFFF);
+        v[i][3] = (g_rng() % 5 == 0) ? (g_rng() & 1 ? 0xFF : 0) : (int)(g_rng() & 0xFF);
+    }
+}
+
+// one GPU2 command (or a few): a TRIANGLE, a depth buffer, a depth clear, a FLIP, a new target
+// with its depth buffer. Every depth buffer the engine takes lies below SPARE
+static void random_gpu2(Bus &bus, unsigned &tw, unsigned &th) {
+    const uint32_t r = g_rng() % 100;
+    if (r < 72) {
+        int v[3][4];
+        random_vertices(v, tw, th);
+        uint32_t f = g_rng() & 0xFF;
+        if (g_rng() & 1) f |= GPU_TRI_GOURAUD;
+        if (g_eng.zvalid ? (g_rng() % 4 != 0) : (g_rng() % 20 == 0)) {     // without a buffer: refused
+            const uint32_t d = g_rng() % 3;
+            f |= d == 0 ? GPU_TRI_ZTEST : d == 1 ? GPU_TRI_ZWRITE : GPU_TRI_ZTEST | GPU_TRI_ZWRITE;
+            if (g_rng() & 1) f |= GPU_TRI_ZFUNC_LE;
+        }
+        if (g_rng() % 6 == 0) f |= GPU_TRI_CULL_CW;
+        if (g_rng() % 6 == 0) f |= GPU_TRI_CULL_CCW;
+        f |= (g_rng() & 0x3FFu) << 14;                  // header bits TRIANGLE ignores
+        tri(bus, f, v);
+    } else if (r < 82) {                                // a depth buffer for this target, or a refused one
+        const unsigned zs = ((2 * tw + 3) & ~3u) + 4 * (unsigned)rnd(0, 6);
+        const uint64_t need = (uint64_t)(th - 1) * zs + 2 * tw;
+        if (zs < 65536 && need <= SPARE && g_rng() % 8 != 0)
+            set_zbuf(bus, 4 * (uint32_t)(g_rng() % ((SPARE - need) / 4 + 1)), zs);
+        else
+            set_zbuf(bus, 4 * (g_rng() % 1000) + 2, zs);   // unaligned: refused
+    } else if (r < 90) {
+        if (g_eng.zvalid) clear_depth(bus, g_rt_base, g_rt_stride, tw, th, g_eng.zbase, g_eng.zstride);
+    } else if (r < 93) {
+        cmd(bus, {GPU_HDR(GPU_OP_FLIP, g_rng() & 0xFFFFFF), g_rng()});
+    } else {                                            // a small target and its depth buffer, cleared
+        const unsigned w = (unsigned)rnd(1, 200), h = (unsigned)rnd(1, 150);
+        const unsigned st = ((w + 3) & ~3u) + 4 * (unsigned)rnd(0, 8), zs = ((2 * w + 3) & ~3u) + 4 * (unsigned)rnd(0, 8);
+        const uint32_t tneed = (h - 1) * st + w, zneed = (h - 1) * zs + 2 * w;
+        const uint32_t tbase = 4 * (g_rng() % ((SPARE - tneed) / 4 + 1)), zbase = 4 * (g_rng() % ((SPARE - zneed) / 4 + 1));
+        set_target(bus, tbase, st, w, h);
+        tw = w;
+        th = h;
+        g_rt_base = tbase;
+        g_rt_stride = st;
+        clear_depth(bus, tbase, st, w, h, zbase, zs);
+    }
+}
+
 static void random_chunk(Bus &bus, unsigned &tw, unsigned &th) {
     const int n = rnd(1, 24);
     for (int i = 0; i < n; i++) {
+        if (g_rng() % 100 < 40) {
+            random_gpu2(bus, tw, th);
+            continue;
+        }
         const uint32_t r = g_rng() % 100;
         const int bx = (int)tw, by = (int)th;
         auto cx = [&] { return (g_rng() % 8 == 0) ? rnd(-32768, 32767) : rnd(-40, bx + 40); };
@@ -528,7 +973,7 @@ static void random_chunk(Bus &bus, unsigned &tw, unsigned &th) {
             uint32_t base = (room > 0x7FFFFFF) ? 0 : 4 * (g_rng() % (room / 4 + 1));
             if (g_rng() % 10 == 0) base += 2;               // refused
             set_target(bus, base, stride, w, h);
-            if (!(base & 3)) { tw = w; th = h; }
+            if (!(base & 3)) { tw = w; th = h; g_rt_base = base; g_rt_stride = stride; }
         } else if (r < 9) {
             cmd(bus, {GPU_HDR(GPU_OP_SET_CLIP, 0), xy(rnd(0, bx), rnd(0, by)), xy(rnd(0, bx + 20), rnd(0, by + 20))});
         } else if (r < 30) {
@@ -557,7 +1002,7 @@ static void random_chunk(Bus &bus, unsigned &tw, unsigned &th) {
         } else if (r < 97) {
             cmd(bus, {GPU_HDR(GPU_OP_WAIT_VBLANK, 0)});
         } else if (r < 98) {
-            push(bus, GPU_HDR(0x0A + g_rng() % 0xF0, g_rng() & 0xFFFFFF));   // unknown: dropped
+            push(bus, GPU_HDR(0x0D + g_rng() % 0xF3, g_rng() & 0xFFFFFF));   // unknown: dropped
         } else {
             cmd(bus, {GPU_HDR(GPU_OP_FENCE, g_rng() & 1), g_rng()});
         }
@@ -607,6 +1052,12 @@ int main(int argc, char **argv) {
     test_expand(tb, bus);
     test_write_rect(tb, bus);
     test_errors_and_fences(tb, bus);
+    test_zbuf(tb, bus);
+    test_tri_coverage(tb, bus);
+    test_tri_depth(tb, bus);
+    test_flip(tb, bus);
+    test_abort_triangle(tb, bus);
+    test_tri_timing(tb, bus);
     const uint64_t directed = g_compares;
 
     // randomized streams, with the CPU on VRAM meanwhile
@@ -614,6 +1065,8 @@ int main(int argc, char **argv) {
     unsigned tw = 640, th = 480;
     set_target(bus, 0, 640, 640, 473);                      // the random part stays below SPARE
     th = 473;
+    g_rt_base = 0;
+    g_rt_stride = 640;
     for (unsigned c = 0; c < chunks; c++) {
         random_chunk(bus, tw, th);
         char what[64];
@@ -627,6 +1080,8 @@ int main(int argc, char **argv) {
         std::printf("test_gpu: FAIL (%d of %d checks, seed %u)\n", failures, checks, seed);
         return 1;
     }
+    CHECK(g_eng.tri_clamped == 0 && g_eng.tri_wide == 0, "the model's clamp changed %llu values, %llu were wide",
+          g_eng.tri_clamped, g_eng.tri_wide);
     std::printf("test_gpu: PASS (seed %u: %d checks; %llu commands, %llu words, %llu pixel writes in the model; "
                 "VRAM compared %llu times (%llu directed, %u random chunks); engine %llu grants, %llu cycles waiting "
                 "for the CPU (%llu CPU accesses meanwhile); %llu cycles)\n",
@@ -634,5 +1089,8 @@ int main(int argc, char **argv) {
                 (unsigned long long)g_compares, (unsigned long long)directed, chunks,
                 (unsigned long long)tb.engine_grants, (unsigned long long)tb.engine_waits,
                 (unsigned long long)g_cpu_noise, (unsigned long long)tb.cycles);
+    std::printf("test_gpu: GPU2 (seed %u): %llu TRIANGLEs (%llu walked, %llu culled, %llu of zero area), %llu pixels "
+                "covered, %llu failing the depth test; %llu FLIPs\n", seed, g_eng.tri_cmds, g_eng.tri_drawn,
+                g_eng.tri_culled, g_eng.tri_zero, g_eng.tri_pixels, g_eng.tri_zfail, (unsigned long long)tb.flips);
     return 0;
 }

@@ -1,7 +1,7 @@
 /*
 SurfGPU surf_video graphics testbench
 --------------------
-File: test_video_gfx.cpp Date: 10/18/26 (SurfGPU)
+File: test_video_gfx.cpp Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2: the FLIP port)
 --------------------
 Verilator harness for surf_video built with HAS_GFX = 1 (inside sim/io/tb_video.v, which adds
 stand-ins for the text RAM and for surf_vram's pixel port), with VgaCapture on the pins and the
@@ -20,7 +20,11 @@ C model (sim/models/gpu_model.c) for what they should show. Checks (docs/GPU.md 
   * CTRL.MODE and GFX_BASE written together in the vertical blanking change the same frame;
     written on either side of the frame latch (line 524) they split for one frame (GPU.md 4.1);
   * a reset of the pixel domain alone: the count restarts, the settings come back over the
-    crossing.
+    crossing;
+  * GPU2's FLIP port (docs/GPU.md 16.7, tb_video built with FLIP_PORT = 1): a write through it reads
+    back as GFX_BASE; in mid-frame it shows from the next frame, wholly; at the start of a vertical
+    blanking, where FLIP writes, from the frame after that blanking; a CPU store to GFX_BASE in the
+    same cycle wins, and a port write a cycle later wins over the store.
 At the board's clocks or, by seed, other ratios for the crossings.
 
     Vtb_video --font driver/font8x16.c --out DIR [--seed N]
@@ -62,6 +66,11 @@ struct Tb {
     VgaCapture cap;
     uint64_t sys_half, pix_half, next_sys, next_pix;
     uint64_t sys_cycles = 0, pix_cycles = 0;
+    // the FLIP port: a write at the next clk edge (flip_pending), or at the edge of the CPU's next
+    // store to GFX_BASE (flip_with_store: the same cycle)
+    bool flip_pending = false, flip_with_store = false;
+    uint32_t flip_value = 0;
+    uint64_t flip_writes = 0;
     Tb(Vtb_video *t, uint64_t sys_ps, uint64_t pix_ps, uint64_t phase_ps)
         : top(t), sys_half(sys_ps / 2), pix_half(pix_ps / 2), next_sys(sys_ps / 2), next_pix(phase_ps + pix_ps / 2) {}
     void posedge() {
@@ -69,6 +78,15 @@ struct Tb {
             const uint64_t tn = std::min(next_sys, next_pix);
             bool sys_rise = false, pix_rise = false;
             if (next_sys == tn) {
+                if (!top->clk) {                          // a clk edge comes: the port's input for it
+                    const bool store = top->s_req_valid && top->s_req_write &&
+                                       (top->s_req_addr & 0xFFFu) == SURF_VIDEO_GFX_BASE;
+                    top->gfx_base_we = flip_pending || (flip_with_store && store);
+                    top->gfx_base_in = flip_value;
+                    if (top->gfx_base_we) flip_writes++;
+                    if (store) flip_with_store = false;
+                    flip_pending = false;
+                }
                 top->clk = !top->clk;
                 sys_rise = top->clk;
                 next_sys += sys_half;
@@ -444,6 +462,66 @@ static void test_mode_and_placement(Tb &tb, Bus &bus, std::mt19937 &rng) {
                 "one frame\n");
 }
 
+// GPU2's FLIP port (docs/GPU.md 16.7): the engine's write into GFX_BASE, one clk cycle
+static void flip_write(Tb &tb, Bus &bus, uint32_t word) {
+    bus.idle(0);
+    tb.flip_pending = true;
+    tb.flip_value = word;
+    tb.posedge();
+}
+
+static void test_flip_port(Tb &tb, Bus &bus, std::mt19937 &rng) {
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_GFX);
+    g_d.mode = 2;
+    g_d.cursor = 0;
+    set_gfx(bus, 0, 320, 2);
+    wait_frames(tb, bus, 2);
+    // in mid-frame: that frame keeps the old base, the next shows the FLIP's, wholly
+    const struct gpu_display old_d = g_d;
+    sync_to_line(tb, bus, 35 + 240);
+    flip_write(tb, bus, 76800 / 4);
+    CHECK(bus.rd(B + SURF_VIDEO_GFX_BASE) == 76800, "GFX_BASE after a FLIP port write: %x",
+          bus.rd(B + SURF_VIDEO_GFX_BASE));
+    uint64_t f0 = tb.cap.frames();
+    wait_frame_edge(tb, bus, f0 + 1);
+    g_d = old_d;
+    compare(tb, "the frame the FLIP port wrote GFX_BASE in");
+    wait_frame_edge(tb, bus, f0 + 2);
+    g_d.gfx_base = 76800;
+    compare(tb, "the next frame, from the FLIP's base");
+    // at the start of a vertical blanking, where FLIP writes: the frame after that blanking
+    for (int t = 0; t < 3; t++) {
+        const uint32_t base = 4 * (uint32_t)(rng() % 19000);
+        wait_vblank_ev(bus);
+        bus.idle((uint64_t)(rng() % 200));
+        flip_write(tb, bus, base / 4);
+        const uint64_t f1 = tb.cap.frames();
+        CHECK(tb.cap.line() >= 515, "the FLIP port write left the blanking's start (line %lld)", (long long)tb.cap.line());
+        wait_frame_edge(tb, bus, f1 + 1);
+        compare(tb, "the frame before the blanking the FLIP port wrote in");
+        wait_frame_edge(tb, bus, f1 + 2);
+        g_d.gfx_base = base;
+        compare(tb, "the frame after it, from the FLIP's base");
+    }
+    // a CPU store to GFX_BASE in the same cycle as a port write wins; a port write after it wins
+    const uint64_t w0 = tb.flip_writes;
+    tb.flip_with_store = true;
+    tb.flip_value = 0x1000;
+    bus.wr(B + SURF_VIDEO_GFX_BASE, 0x8000);
+    CHECK(tb.flip_writes == w0 + 1 && bus.rd(B + SURF_VIDEO_GFX_BASE) == 0x8000,
+          "a CPU store and a FLIP port write in one cycle: %llu port writes, GFX_BASE %x (want the store's 8000)",
+          (unsigned long long)(tb.flip_writes - w0), bus.rd(B + SURF_VIDEO_GFX_BASE));
+    flip_write(tb, bus, 0x1000);
+    CHECK(bus.rd(B + SURF_VIDEO_GFX_BASE) == 0x4000, "a FLIP port write after the store: GFX_BASE %x",
+          bus.rd(B + SURF_VIDEO_GFX_BASE));
+    wait_frames(tb, bus, 2);
+    g_d.gfx_base = 0x4000;
+    compare(tb, "after the same-cycle store and the port write");
+    set_gfx(bus, 0, 640, 1);
+    std::printf("flip port: GFX_BASE written by the port in mid-frame shows from the next frame, at a blanking's "
+                "start from the frame after it (3 times); a CPU store in the same cycle wins\n");
+}
+
 static void test_count_and_reset(Tb &tb, Bus &bus) {
     // FRAME_COUNT: one per frame over 5 frames
     const uint64_t f0 = tb.cap.frames();
@@ -489,6 +567,8 @@ int main(int argc, char **argv) {
     top->s_req_valid = 0;
     top->tram_we = 0;
     top->vram_we = 0;
+    top->gfx_base_we = 0;
+    top->gfx_base_in = 0;
     top->eval();
     for (int i = 0; i < 8; i++) tb.posedge();
     top->rst = 0;
@@ -508,6 +588,7 @@ int main(int argc, char **argv) {
     test_latch(tb, bus);
     test_pair(tb, bus);
     test_mode_and_placement(tb, bus, rng);
+    test_flip_port(tb, bus, rng);
     test_count_and_reset(tb, bus);
     CHECK(bus.problems.empty(), "SurfBus protocol: %s", bus.problems.empty() ? "" : bus.problems[0].c_str());
     top->final();

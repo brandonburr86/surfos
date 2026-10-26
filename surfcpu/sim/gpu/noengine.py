@@ -3,15 +3,15 @@
 
     noengine.py SRC DST
 
-Copies SRC (rtl/peripherals/surf_gpu.v) to DST with gpu.ID 0x31555048 instead of 0x31555047
-("GPU1"), the first GPU review's no-engine case: a SoC built with it has FEATURES.GPU, VRAM and a
+Copies SRC (rtl/peripherals/surf_gpu.v) to DST with gpu.ID 0x32555048 instead of 0x32555047
+("GPU2"), the first GPU review's no-engine case: a SoC built with it has FEATURES.GPU, VRAM and a
 gpu window, and gpudiag must still fail. Exit 1 when the ID line is not in SRC exactly once.
 """
 
 import sys
 
-OLD = "localparam [31:0]  ID_VALUE = 32'h3155_5047;"
-NEW = "localparam [31:0]  ID_VALUE = 32'h3155_5048;"
+OLD = "localparam [31:0]  ID_VALUE = 32'h3255_5047;"
+NEW = "localparam [31:0]  ID_VALUE = 32'h3255_5048;"
 
 
 def main() -> int:
