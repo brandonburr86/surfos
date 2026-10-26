@@ -28,5 +28,6 @@ int ed_pending(void);                       /* reads queued and not made */
 /* the history (editor.c's, kept from test to test): a line added, the history builtin's lines, expansion */
 void ed_history_add(const char *line);
 int ed_expand(const char *in, char *out, int size);
+int ed_expand_in(const char *in, char *out, int size, int *quote);    /* 10/25/26: with the command's quote */
 
 #endif

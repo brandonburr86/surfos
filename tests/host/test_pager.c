@@ -82,6 +82,8 @@ int sim_kept(void);
 void sim_fb_cursor(int *x, int *y);
 void sim_graphics(int on);
 void sim_heap_refuse(int on);
+void sim_free_frames(unsigned long n);      /* 10/25/26 (the review) */
+void sim_serial_preempt(int after);
 void sim_switch(int n);
 
 static int failures, checks;
@@ -933,6 +935,15 @@ static void t_scrollback(void) {
     run(SHELL, w_lines, 1, 40);
     check(sim_kept() == 0 && sim_scroll_key(S_PGUP) == 1 && sim_view() == 0 && screen_live(),
           "no memory for a ring: nothing kept, the keys do nothing");
+    reset(0);                                   /* 10/25/26 (the review): the ring is touched whole as it is made */
+    sim_free_frames(127 + 512);                 /* the ring of 80 columns: 524,160 bytes, 128 pages */
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 0 && screen_live(), "too few free frames for the whole ring and 512 to spare: no ring, "
+          "rather than a page fault with no frame later, from whatever prints");
+    reset(0);
+    sim_free_frames(128 + 512);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 16, "with just enough: the ring");
 
     reset(0);
     run(SHELL, w_lines, 1, 3400);
@@ -981,6 +992,35 @@ static void t_whole_kernel_lines(void) {
     sim_set_in_irq(0);
     check(screen_has("half irq"), "an interrupt handler's message goes at once, as before");
     run(SHELL, w_page, 0, 0);
+}
+
+/* 10/25/26 (the review): a kernel thread's line goes out with preemption on, the console held for it (line_owner) */
+static void t_line_owner(void) {
+    char ser[4096], r[256];
+    int st;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    say_text = "+NET: preempted half way\n";
+    sim_serial_preempt(6);
+    st = run(USB, w_kprintf, 0, 0);
+    check(st == BLOCKED, "a kernel thread's line can be preempted half way: preemption stays on (a slow serial port)");
+    say_text = "user line\n";
+    st = run(SHELL, w_say, 0, 0);
+    check(st == BLOCKED, "a program that writes on that console meanwhile waits for the line's end");
+    st = resume(USB);
+    check(st == DONE, "the kernel thread's line goes on and ends");
+    st = resume(SHELL);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(st == DONE && !strcmp(ser, "+NET: preempted half way\r\nuser line\r\n") && !strcmp(r, "+NET: preempted half way"),
+          "then the program's line, after it, whole on the screen and the serial line");
+    say_text = "+NET: two ";
+    sim_serial_preempt(3);
+    st = run(USB, w_kprintf, 0, 0);
+    sim_task_gone(USB);
+    say_text = "after\n";
+    st = run(SHELL, w_say, 0, 0);
+    check(st == DONE, "a task that ends holding the console lets it go");
 }
 
 static void t_stream_wrap_ask(void) {
@@ -1427,6 +1467,7 @@ int main(void) {
     t_tab();
     t_scrollback();
     t_whole_kernel_lines();
+    t_line_owner();
     t_stream_wrap_ask();
     t_stream_resize();
     t_stream_colour();

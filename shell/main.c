@@ -86,10 +86,13 @@ void shell_ask(const char *question, char *answer, size_t size) {
    for that one line (tty_readline_secret(), kernel/tty.c): no key typed is shown, on the
    screen, the serial line or a telnet session (telnetd leaves the echo to SurfOS: WILL ECHO),
    the line goes into no history, and each key is wiped from the input queue as it is read.
-   Nothing of it is printed or logged here; the caller wipes answer as soon as it is done. */
+   Nothing of it is printed or logged here; the caller wipes answer as soon as it is done.
+   10/25/26 (the programs' review of track A, U3): keys typed before the question shows are
+   dropped first, so the answer is only what was typed after it. */
 void shell_ask_secret(const char *question, char *answer, size_t size) {
     struct kcapture *kept = curTask->kcap;
     struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    tty_flush(tty);
     console_capture_end();
     if(console_paging(curTask->con)) console_page_new(curTask->con);
     printf("%s", question);

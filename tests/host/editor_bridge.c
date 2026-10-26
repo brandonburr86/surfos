@@ -405,3 +405,7 @@ void ed_history_add(const char *line) {
 int ed_expand(const char *in, char *buf, int size) {
     return history_expand(in, buf, size);
 }
+
+int ed_expand_in(const char *in, char *buf, int size, int *quote) {
+    return history_expand_in(in, buf, size, quote);
+}

@@ -296,6 +296,15 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   (`fb_draw_cursor()`), not as a whole glyph. The thread exists only with a framebuffer,
   started after `init_task()` (`framebuffer_start()`), so a VGA boot is as it was.
   `gfxinfo` shows the counts (presents, the slowest, the ones folded in, cells, cursor moves).
+  The review's fixes (10/25/26): presents are batched only once the thread has run and the
+  timer ticks, so the boot (which starts the timer last) draws at once, and a halt before the
+  first tick or a panic during the boot shows (`bootpanic`, a test word, checks it); a panic
+  owes nothing and ends the batching; with interrupts off or in an interrupt handler a
+  present is the thread's, never a whole screen drawn there. The scrollback's ring is touched
+  whole when it is made (only with that many frames and 512 more free), never written during
+  a panic, and a view's key and output are kept apart with interrupts off. A kernel thread's
+  whole line (`kprintf()`) goes out with preemption on, the console held for it
+  (`line_owner`): others wait for its end where they may wait.
   **10/25/26** (track A, A6; audit C9): **scrollback**. F1-F4 on a framebuffer keep the rows
   that go off the top in a ring of their own (512 KB from the kernel heap, made at the first
   such row once the grid is final: about 1,600 rows of 160 columns, 2 MB for the four);
@@ -336,8 +345,10 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   on console 3 sees its own `ps` and its own fault report. **10/25/26**: a kernel
   thread's `kprintf()` line comes out whole (`kernel_puts()`): when another writer's
   line is half written on that console (`line_by`, the cursor not at a row's start) it
-  waits up to 100 ms for that line to end, then goes out with preemption off, so a
-  program's output (surfsh's banner) no longer cuts netman's `+NET:` lines in two.
+  waits up to 100 ms for that line to end, then goes out with the console held for it
+  (`line_owner`; since the review, preemption stays on, and a task that writes there
+  meanwhile waits for the line's end, 1 s at most, where it may wait), so a program's
+  output (surfsh's banner) no longer cuts netman's `+NET:` lines in two.
   Processes, shells, paged tasks, pseudo-terminals and interrupt handlers print as before.
 * Serial console (`driver/serial.c`): `kputch()` mirrors everything written to the
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
@@ -1250,8 +1261,12 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   one); the line as it runs is shown first, as bash shows it, and a reference no line
   answers refuses the line (status 2). A `!` stays as typed before a blank, `=`, `(` or the
   end of the line, after a backslash, in `$!`, `${!` and `[!`, inside single quotes and,
-  unlike bash, inside double quotes (so `echo "#!/bin/sh"` works), and in a comment. A line
-  that starts with a space is not kept in the history (bash's `ignorespace`).
+  unlike bash, inside double quotes (so `echo "#!/bin/sh"` works), and in a comment; 10/25/26
+  (the programs' review of track A, U6) a quote opened on a line before goes on over a
+  command's next lines (`history_expand_in()`: `main.c` carries it, from none at each
+  command's first line). A line that starts with a space is not kept in the history (bash's
+  `ignorespace`). A line from the history (Up, Ctrl+R) longer than the limit is cut to it and
+  refuses Enter, as a typed one does (U7): a cut-off command never runs.
   It draws only on its own rows (and the search's row under the line). The cursor is a
   count of columns from the prompt's start, moved only with CR and `ESC[nA/B/C`, and never
   left in the console's pending wrap (CR LF where the prompt or the line ends exactly at a
@@ -1266,6 +1281,12 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   screen is written, and keys typed after Enter are dropped, as the console drops its queue
   when raw mode ends; 10/6/26: the rest of such a paste is then skipped until the input
   pauses (`TTY_SKIP`, section 18), so no part of a pasted line ever runs as a command.
+  Keys typed while a command runs wait in the line-mode queue and are the next prompt's
+  first keys (type-ahead, as in bash). 10/25/26 (the programs' review of track A, U3): only
+  the Wi-Fi password questions drop them: `shell_ask_secret()` drops what was typed before
+  its question shows, and `wifi join` and `wifi save` drop what was typed meanwhile on their
+  way out, so a password typed ahead of a question that never came neither runs nor goes
+  into the history.
 * **Supervision** (`kernel/task.c`, section 3): init starts `/initrd/bin/surfsh -l` on F1-F4
   (`TF_SHELL`) and starts it again when it ends, quietly after an exit with status 0 and
   with a line otherwise. Three abnormal ends within 30 seconds (killed, or ended within 2
@@ -1502,7 +1523,7 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
 * **Limits.** No security of any kind, by the owner's choice: anyone on the network who
   connects gets a shell with every kernel command, and telnet sends everything as plain
   text. The window size follows NAWS, but no terminal type (TTYPE) is asked for: a session
-  always speaks the console's ANSI subset. surfsh has no type-ahead (section 17), so a
+  always speaks the console's ANSI subset. surfsh drops the rest of a paste (section 17), so a
   pasted block of several lines runs only its first line.
 
 ## 19. The network manager and the settings on the stick (ai-dev, October 2026)

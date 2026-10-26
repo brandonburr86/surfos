@@ -316,6 +316,17 @@ static void test_fonts(void) {
     check(fb_font_choose(&m, "16x32", false, &why) == &fb_font_8x16 && why && strstr(why, "do not fit") &&
           fb_font_choose(&m, "12x24", false, &why) == &fb_font_12x24, "1024x768: 16x32 does not fit (8x16, and why), 12x24 does");
     check(fb_font_named("12x24") == &fb_font_12x24 && !fb_font_named("12") && !fb_font_named(NULL), "the fonts by name");
+    {   /* 10/25/26 (the review): font= as framebuffer_init() reads it, through bootinfo_arg() (it read "font" once) */
+        static struct boot_info bi;
+        char word[16];
+        m = mode(1920, 1080, 7680, 32, 1);
+        snprintf(bi.cmdline, sizeof(bi.cmdline), "profile=laptop font=16x32 bootvol=1234-ABCD");
+        check(bootinfo_arg(&bi, FB_FONT_KEY, word, sizeof(word)) && !strcmp(word, "16x32") &&
+              fb_font_choose(&m, word, true, &why) == &fb_font_16x32 && !why,
+              "profile=laptop font=16x32 on the command line: bootinfo_arg(FB_FONT_KEY) gives 16x32, which is taken");
+        snprintf(bi.cmdline, sizeof(bi.cmdline), "profile=laptop fontsize=9");
+        check(!bootinfo_arg(&bi, FB_FONT_KEY, word, sizeof(word)), "a word that only begins with font is no font=");
+    }
 }
 
 /* These assertions catch out-of-bounds writes, wrong RGB conversion, clipped

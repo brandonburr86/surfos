@@ -78,6 +78,7 @@ void fb_setup_font(struct fb_surface *s, u8 *base, const struct fb_mode *m, cons
 /* fbfont.c (10/25/26, A7): the font of a name (NULL: none); the console's font for mode m, word font='s value
    (NULL: none), laptop profile=laptop; *why, when not NULL, says why the font asked for was not taken (8x16 then) */
 const struct fb_font *fb_font_named(const char *name);
+#define FB_FONT_KEY "font="     /* 10/25/26: the kernel command line's word for it, as bootinfo_arg() takes a key */
 const struct fb_font *fb_font_choose(const struct fb_mode *m, const char *word, bool laptop, const char **why);
 u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b);
 void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel);  /* clipped to the surface */

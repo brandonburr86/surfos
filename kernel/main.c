@@ -111,6 +111,9 @@ void kmain(u_long magic, u_long addr) {
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 
+    if(bootinfo_has_arg(&bootinfo, "bootpanic")) //10/25/26 (track A, the review): a test word: a panic's report
+        panic("bootpanic: on purpose, before the timer starts (a test of the screen)"); //must reach the screen
+
     init_timer(); //start timer and go!!
     timer_confirm(); //no tick means nothing would ever run: try the local APIC timer, or say so
 

@@ -24,11 +24,16 @@ is refused with Enter, so a cut-off command never runs; once something is delete
 the line on the screen is what runs again. Keys that arrive together
 (a paste) are all handled before the screen is written, so the editor keeps up with
 the console's input queue (256 bytes; a faster paste over the serial line loses
-bytes in the kernel). Keys typed after Enter are dropped, as the console drops what
-it holds when raw mode ends: there is no type-ahead. 10/6/26: when the editor's own
+bytes in the kernel). Keys that come with the Enter (the rest of a paste) are dropped,
+as the console drops what it holds when raw mode ends. 10/6/26: when the editor's own
 buffer still held keys after the Enter (the rest of a paste; an LF right after the CR
 of the Enter does not count), it asks the terminal to skip the rest of the paste until
 the input pauses (TTY_SKIP), so a pasted block runs its first line and nothing else.
+Keys typed while a command runs wait in the console's line-mode queue and are the next
+prompt's first keys (type-ahead, as in bash). 10/25/26 (the programs' review, U3): only
+the Wi-Fi password questions drop what was typed before them (shell_ask_secret(); wifi
+join and wifi save on their way out too), so a password typed ahead of a question that
+never came neither runs nor goes into the history.
 
 Long lines wrap. The console wraps the VT100 way: writing the last column leaves the
 cursor there until the next character comes. So the editor keeps the cursor out of
@@ -570,10 +575,12 @@ static int reference(const char *in, int i, struct sbuf *b, int *missing) {
    inside quotes (double ones too, unlike bash: "#!/bin/sh" stays as typed) and in a comment (from
    a # that begins a word). Returns 1 with out holding the line expanded, 0 when nothing was
    (out untouched), -1 with out holding the reference no line answers, -2 when the line would be
-   longer than size - 1 bytes. out may be in. */
-int history_expand(const char *in, char *out, int size) {
+   longer than size - 1 bytes. out may be in. 10/25/26 (the programs' review, U6): *quote_state is the
+   quote a line before this one of the same command left open (0: none), and this line's end leaves it
+   there, so a quote opened on one line goes on over the next (main.c starts each command with 0). */
+int history_expand_in(const char *in, char *out, int size, int *quote_state) {
     struct sbuf b = { NULL, 0, 0 };
-    int i = 0, n = (int)strlen(in), quote = 0, changed = 0, end, r = 0;
+    int i = 0, n = (int)strlen(in), quote = quote_state ? *quote_state : 0, changed = 0, end, r = 0;
     while(i < n) {
         char c = in[i];
         int missing = 0;
@@ -602,6 +609,7 @@ int history_expand(const char *in, char *out, int size) {
         }
         sb_putc(&b, in[i++]);
     }
+    if(quote_state) *quote_state = quote;    /* the quote this line leaves open, for the next */
     if(changed && b.len >= size) {
         r = -2;
     } else if(changed) {
@@ -611,6 +619,10 @@ int history_expand(const char *in, char *out, int size) {
 done:
     sb_free(&b);
     return r;
+}
+
+int history_expand(const char *in, char *out, int size) {
+    return history_expand_in(in, out, size, NULL);
 }
 
 static void history_go(int to) {
@@ -628,9 +640,9 @@ static void history_go(int to) {
     } else {
         const char *s = hist[to % HIST_MAX];
         len = (int)strlen(s);
+        too_long = len > limit;                 /* 10/25/26 (the review, U7): a longer line never runs cut off */
         if(len > limit) len = limit;
         memcpy(line, s, (size_t)len);
-        too_long = 0;
     }
     pos = len;
     redraw(0);
@@ -695,12 +707,12 @@ static int find_back(int from, const char *text, const char *skip) {
    may grow over it */
 static void search_show(const char *s, int n, int p, int was_too_long) {
     status_clear();
-    if(n > limit) n = limit;
+    too_long = was_too_long || n > limit;       /* 10/25/26 (the review, U7): a line found that is longer than */
+    if(n > limit) n = limit;                    /* the limit refuses Enter, rather than run cut off */
     if(p > n) p = n;
     memmove(line, s, (size_t)n);
     len = n;
     pos = p;
-    too_long = was_too_long;
     redraw(0);
 }
 

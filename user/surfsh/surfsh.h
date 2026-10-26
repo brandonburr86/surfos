@@ -150,6 +150,9 @@ void history_state(struct sbuf *out);   /* the history as text a new surfsh runs
 /* 10/25/26: !! !n !-n !str !$ in a typed line: 1 expanded into out, 0 none, -1 a reference no line
    answers (in out), -2 longer than size - 1 bytes; out may be in */
 int history_expand(const char *in, char *out, int size);
+/* 10/25/26 (the review, U6): the same, with the quote that the command's lines before left open (*quote, 0 for a
+   command's first line), and this line's in it after */
+int history_expand_in(const char *in, char *out, int size, int *quote);
 
 /**** complete.c: Tab ****/
 

@@ -9,7 +9,9 @@
    line, Ctrl+R again an older line (never the same line twice), Backspace, a text no line holds, Esc and ^G
    putting the line back, Enter, another key ending the search where it stands, Up from the line found, Ctrl+R
    twice taking the last text, a narrow terminal, the foot of the screen, colours. Tab for commands and paths,
-   the line limit, ^C and ^D, a paste after Enter. Run by `make unittest`. */
+   the line limit, ^C and ^D, a paste after Enter. 10/25/26 (the programs' review of track A): a quote opened on
+   a command's line before (U6); a line from the history longer than the limit refusing Enter, from Up and from
+   Ctrl+R (U7). Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "editor_sim.h"
@@ -89,6 +91,49 @@ static void test_history(void) {
     check(ed_expand("!! !!", out, 1024) == -2 && ed_expand("!!", out, 1024) == 1, "a line expanded beyond 1,023 bytes: refused");
     strcpy(buf, "say !-2");
     check(ed_expand(buf, buf, sizeof(buf)) == 1 && !strcmp(buf, "say sleep 1 &"), "expanded in place");
+}
+
+/* 10/25/26 (the programs' review, U6): a command's quote goes over its lines */
+static void test_quote_lines(void) {
+    int q = 0;
+    add("echo carried");
+    check(ed_expand_in("echo 'Thanks,", out, sizeof(out), &q) == 0 && q == '\'' &&
+          ed_expand_in("great job!!'", out, sizeof(out), &q) == 0 && q == 0,
+          "a quote opened on the line before: a !! inside it stays as typed, and the quote ends there");
+    q = 0;
+    check(ed_expand_in("echo \"one", out, sizeof(out), &q) == 0 && q == '"' &&
+          ed_expand_in("two !!", out, sizeof(out), &q) == 0 && q == '"' &&
+          ed_expand_in("three\" !!", out, sizeof(out), &q) == 1 && q == 0 && !strcmp(out, "three\" echo carried"),
+          "double quotes over three lines; a !! after the closing one expands");
+    q = 0;
+    check(ed_expand_in("echo hi # it's", out, sizeof(out), &q) == 0 && q == 0 && expands("!!", 1, "echo carried"),
+          "a quote in a comment opens nothing; history_expand() starts with none");
+}
+
+/* 10/25/26 (the programs' review, U7): a line from the history longer than the limit is cut to it and refused */
+static void test_long_history(void) {
+    char longer[40];
+    ed_reset(80, 25, 0);
+    memset(longer, 'y', 30);
+    longer[30] = 0;
+    memcpy(longer, "echo ", 5);
+    add(longer);
+    ed_keys("\033[A");
+    ed_keys("\r");
+    check(ed_line(buf, 21, 0) == -2 && !strncmp(buf, longer, 20), "Up to a line longer than the limit: Enter refuses it");
+    ed_reset(80, 25, 0);
+    ed_keys("\022");
+    ed_keys("yyy");
+    ed_keys("\r");
+    check(ed_line(buf, 21, 0) == -2, "Ctrl+R finding a line longer than the limit: Enter refuses it");
+    ed_reset(80, 25, 0);
+    ed_keys("\033[A");
+    ed_keys("\177");
+    ed_keys("\r");
+    check(ed_line(buf, 21, 0) == 19 && !strncmp(buf, longer, 19), "once something is deleted, the line shown runs");
+    ed_reset(80, 25, 0);
+    line_of("\033[A", NULL, NULL);
+    check(!strcmp(buf, longer), "with room for it: the whole line");
 }
 
 static void test_typing(void) {
@@ -354,6 +399,8 @@ static void test_tab(void) {
 
 int main(void) {
     test_history();
+    test_quote_lines();
+    test_long_history();
     test_typing();
     test_words();
     test_esc();

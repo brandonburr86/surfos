@@ -30,6 +30,12 @@ PRESENT_MS instead of one per line. The thread exists only with a framebuffer
 about to wait for a key presents first (framebuffer_flush(), from tty.c through
 console_flush()), so a prompt and --More-- show at once. A cell whose cursor alone came
 or went is drawn as its two underline rows (fb_draw_cursor()). gfxinfo shows the counts.
+The review's fixes (10/25/26): presents batch only once fbflush has run and the timer ticks
+(batching()): the boot draws everything at once until init_timer(), so a halt before the
+first tick ("no timer interrupts at all") or a panic during the boot shows. A panic
+(framebuffer_panic()) owes nothing and ends the batching, so its report is drawn as it is
+printed. Nor is a whole screen drawn with interrupts off or in an interrupt handler: the
+thread does it (present_lazy(), as present_soon()).
 
 10/25/26 (track A, A7): the cells' font is chosen here, once (driver/fbfont.c): Spleen 12x24 at
 its own size on the laptop's 1920x1080 (profile=laptop), font= on the kernel command line, 8x16
@@ -75,6 +81,7 @@ static u_long last_present;                 /* uptime_ms() when the last present
 static struct ktimer present_timer;         /* wakes the thread once a pending present is due */
 static wait_queue_t present_wait;
 static surf_task *presenter;                /* fbflush: started once there are tasks (framebuffer_start()) */
+static volatile bool presenter_ran;         /* 10/25/26 (the review): it has run: the scheduler, and so the timer, work */
 static struct fb_counts counts;
 
 int framebuffer_init(void) {
@@ -100,8 +107,8 @@ int framebuffer_init(void) {
     virt = (u8 *)vmm_map_large(m.addr, bytes, VMM_WC, &why);
     if(!virt) { why_not = why; return -1; }
 
-    font = fb_font_choose(&m, bootinfo_arg(&bootinfo, "font", font_word, sizeof(font_word)) ? font_word : NULL,
-                          bootinfo.laptop, &font_why);
+    font = fb_font_choose(&m, bootinfo_arg(&bootinfo, FB_FONT_KEY, font_word, sizeof(font_word)) ? font_word : NULL,
+                          bootinfo.laptop, &font_why);   /* 10/25/26 (the review): "font=", not "font" */
     fb_setup_font(&fbs, virt, &m, font);
     full_cols = fbs.cols;
     full_rows = fbs.rows;
@@ -234,6 +241,8 @@ void framebuffer_panic(void) {
     busy = 0;
     dirty = 0;
     owner = NULL;
+    pending = 0;                                /* 10/25/26 (the review): nothing is owed, and from here on every */
+    presenter = NULL;                           /* present is drawn at once (interrupts are off: no thread runs) */
     prepare_text();
     for(i = 0; i < ncells; i++) shown[i] = SHOWN_UNKNOWN;
     for(i = 0; i < ncells; i++) draw(i);
@@ -285,15 +294,29 @@ static void present_due(void *arg) {
     wake_up(&present_wait);                     /* a timer callback, interrupts off: it draws nothing itself */
 }
 
+/* 10/25/26 (the review): presents are batched only once the thread has run and the timer ticks; before that
+   (the boot, which starts the timer last) every present is drawn at once */
+static bool batching(void) {
+    return presenter && presenter_ran && uptime_ms() != 0;
+}
+
 void framebuffer_present_lazy(void) {
     u_long flags, since;
-    if(!presenter) {
+    bool may_draw = irqs_enabled() && !in_interrupt();     /* 10/25/26 (the review): else the thread draws */
+    if(!batching()) {
         framebuffer_present();
         return;
     }
     flags = irq_save();
     if(pending) {
         counts.saved++;
+        irq_restore(flags);
+        return;
+    }
+    if(!may_draw) {                                 /* no whole screen drawn with interrupts off or in an */
+        pending = 1;                                /* interrupt handler: the thread draws it, at once */
+        counts.saved++;
+        wake_up(&present_wait);
         irq_restore(flags);
         return;
     }
@@ -313,7 +336,7 @@ void framebuffer_present_lazy(void) {
    another part of the scrollback (console.c) changes every cell, too long a draw for an interrupt handler */
 void framebuffer_present_soon(void) {
     u_long flags;
-    if(!presenter) {
+    if(!batching()) {
         framebuffer_present();
         return;
     }
@@ -332,6 +355,7 @@ void framebuffer_flush(void) {
 
 static void presenter_main(void *arg) {
     (void)arg;
+    presenter_ran = true;                       /* 10/25/26 (the review): presents may be batched from now on */
     for(;;) {
         u_long flags = irq_save();
         if(!pending) {

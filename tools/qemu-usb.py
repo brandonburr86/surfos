@@ -19,7 +19,7 @@ which every boot here has; Vm.font says which. That is how the keyboard-only boo
 serial port at all, like the laptop) is driven: keys go in through the emulated PS/2
 keyboard (monitor sendkey), text comes out of the framebuffer.
 
---test runs eighteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs twenty scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -47,6 +47,10 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              every console instead of the user shell, its prompt elevated (#), no recovery line
   no-pit     a machine without an 8254 (a chipset can gate its clock): the delays are
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
+  bootpanic  (10/25/26) a panic on purpose before the timer starts (the test word bootpanic, on a
+             stick whose menu entry is given it): its report reaches the framebuffer, to SYSTEM
+             HALTED (the kernel review of track A: before, nothing was drawn after the first
+             scroll until a timer tick that never came)
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
              controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
              this host (a small page and 1 MB), the self test's network checks, a telnet
@@ -819,10 +823,13 @@ def scenario_keyboard(args, image, firmware, outdir):
             return typed >= 0 and last_prompt_row(s) > typed
         vm.keys('surfsh\n')
         ok = vm.wait_screen(nested, 30, interval=0.5) is not None
-        if ok:
-            vm.keys('ech<tab>keyboard-ok\n<up>\n')
-            ok = vm.wait_screen(lambda s: [r.strip() for r in s.rows].count('keyboard-ok') == 2 and
-                                s.rows[last_prompt_row(s)].rstrip().endswith('\u224b>'), 30, interval=0.5) is not None
+        # 10/25/26 (the programs' review of track A, U3): Up only once the prompt is back, since surfsh drops the keys
+        # typed while a command runs
+        for keys, count in (('ech<tab>keyboard-ok\n', 1), ('<up>\n', 2)):
+            if ok:
+                vm.keys(keys)
+                ok = vm.wait_screen(lambda s: [r.strip() for r in s.rows].count('keyboard-ok') == count and
+                                    s.rows[last_prompt_row(s)].rstrip().endswith('\u224b>'), 30, interval=0.5) is not None
         if ok:
             vm.keys('exit 7\n')
             ok = vm.wait_screen(lambda s: 'exit status 7' in s.text() and ends_prompt(s.rows[last_prompt_row(s)]),
@@ -2210,6 +2217,44 @@ SET_SETTINGS = (b'# mine: written on the Mac\ntelnetd = on\n\nethernet = dhcp   
                 b'hostname = ideapad\n')
 
 
+def scenario_bootpanic(args, image, firmware, outdir):
+    """10/25/26 (track A, the kernel review's first finding): a stick made from the build's stick folder as the settings
+    scenario makes one (no development build: GRUB's first entry is SurfOS), that entry given the test word bootpanic,
+    which panics just before init_timer(). Its report must reach the framebuffer, as it does the serial line: until the
+    fbflush thread has run every present is drawn at once, and a panic draws everything after it at once too"""
+    results = []
+    mi = load_tool('mkimage', 'mkimage.py')
+    kit = stick_folder(image)
+    results.append(('the stick folder is beside the image (make usb-image writes it)', kit is not None))
+    if not kit:
+        return results
+    files = written_by_stick_tool(kit, skip=('surfos-dev/surfos.bin', 'surfos-dev/initrd.tar'))   # GRUB's SurfOS first
+    cfg = files.get('boot/grub/grub.cfg', b'')
+    plain = b'multiboot2 /boot/surfos.bin profile=laptop bootvol=$surfos_bootvol\n'
+    results.append(("the menu's SurfOS entry is there to be given the word", cfg.count(plain) == 1))
+    files['boot/grub/grub.cfg'] = cfg.replace(plain, b'multiboot2 /boot/surfos.bin profile=laptop bootpanic '
+                                                     b'bootvol=$surfos_bootvol\n')
+    tmpd = tempfile.mkdtemp(prefix='surfos-bootpanic-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'bootpanic.img')
+    try:
+        mi.make_fat32(stick, files, size_mb=1100, label='DATASTICK', cluster_bytes=16384, serial=0x0B0071C5)
+        vm = Vm('bootpanic', args, stick, firmware, mem='512', serial=True, outdir=outdir, copy_image=False)
+        try:
+            ok = vm.expect("Booting `SurfOS'", args.boot_timeout) and vm.expect('Kernel panic: bootpanic', args.boot_timeout)
+            ok = ok and vm.expect('SYSTEM HALTED', 30)
+            results.append(('the menu\'s entry with bootpanic: the panic before the timer, on the serial line', ok))
+            scr = vm.wait_screen(lambda s: 'Kernel panic: bootpanic' in s.text() and 'SYSTEM HALTED' in s.text(), 30,
+                                 interval=0.5) if ok else None
+            if outdir:
+                vm.screen('bootpanic.png')
+            results.append(('its report on the framebuffer too, to SYSTEM HALTED', scr is not None))
+        finally:
+            vm.close()
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def scenario_settings(args, image, firmware, outdir):
     """10/17/26 (the network manager, docs/USB-BOOT.md section 15): the owner's one stick with surfos-config/ on it,
     through GRUB's own menu. The SurfOS entry (no development build, so no autonet) reads the settings from the
@@ -2355,7 +2400,7 @@ def scenario_settings(args, image, firmware, outdir):
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
-             'no-pit': scenario_nopit,
+             'no-pit': scenario_nopit, 'bootpanic': scenario_bootpanic,     # 10/25/26
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
              'settings': scenario_settings,
@@ -2461,7 +2506,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
+                               'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None

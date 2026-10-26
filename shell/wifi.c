@@ -613,6 +613,14 @@ int cmd_wlansim(int argc, char **argv) {
 
 /**** the command ****/
 
+/* 10/25/26 (the programs' review of track A, U3): keys typed while a join or a save ran (during its scan) are
+   dropped on its way out, as shell_ask_secret() drops them before its question: a password typed ahead of a
+   question that never came is no command for the shell, nor a line of its history */
+static int typed_ahead_dropped(int r) {
+    if(curTask->tty) tty_flush(curTask->tty);
+    return r;
+}
+
 int cmd_wifi(int argc, char **argv) {
     struct wlan_dev *w;
     struct netdev *nd;
@@ -659,8 +667,8 @@ int cmd_wifi(int argc, char **argv) {
         }
         return wifi_scan(w);
     }
-    if(!strcmp(argv[1], "join")) return wifi_join(w, argc, argv);
-    if(!strcmp(argv[1], "save")) return wifi_save(w, argc, argv);
+    if(!strcmp(argv[1], "join")) return typed_ahead_dropped(wifi_join(w, argc, argv));
+    if(!strcmp(argv[1], "save")) return typed_ahead_dropped(wifi_save(w, argc, argv));
     if(!strcmp(argv[1], "forget")) return wifi_forget(argc, argv);
     if(!strcmp(argv[1], "saved")) return wifi_saved(w);
     if(!strcmp(argv[1], "connect")) return wifi_connect(w);

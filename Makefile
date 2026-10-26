@@ -414,7 +414,8 @@ $(BUILD)/host/test_bootinfo: tests/host/test_bootinfo.c $(BUILD)/host/kernel/ker
 
 $(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o \
                                 $(BUILD)/host/kernel/driver/fbfont.o $(BUILD)/host/kernel/driver/font12x24.o \
-                                $(BUILD)/host/kernel/driver/font16x32.o $(HOSTLIB_OBJ)
+                                $(BUILD)/host/kernel/driver/font16x32.o $(BUILD)/host/kernel/kernel/multiboot2.o \
+                                $(BUILD)/host/kernel/mm/memrange.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 

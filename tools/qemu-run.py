@@ -627,7 +627,9 @@ SMOKE = [
     # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
     # and coming back up on its own; leaving it forgets the address and the ARP entries; down. A telnet session to eth0's
     # address is held open from before that join to after wifi down and answers all along (eth0-held). The passphrases typed
-    # never show.
+    # never show. 10/25/26 (the programs' review of track A, U3): a password typed ahead during a join that never asks for
+    # one is dropped on the join's way out: it never runs nor shows, and the history holds no such line; a line typed
+    # ahead while a command (sleep) runs still runs after it, as in bash.
     ('@boot wlansim net', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('wifi status', ['wlan0: down (wifi up starts it)', 'wlan0: MAC 00:00:00:00:00:00, link down']),
       ('wifi scan', ['wifi: wlan0 is down (wifi up first)']),
@@ -639,6 +641,11 @@ SMOKE = [
       ('wifi join SurfSimWEP', ['SurfSimWEP uses WEP, which SurfOS does not support']),
       ('wifi join SurfSimSAE', ['SurfSimSAE is WPA3-Personal only (SAE): not supported yet']),
       ('wifi join NoSuchNetwork', ['no network named NoSuchNetwork in range']),
+      (b'wifi join NoSuchNetwork\r', []), ('@sleep 0.3', []),
+      (b'typed-ahead-secret\r', ['no network named NoSuchNetwork in range', PROMPT]),
+      (b'sleep 1500\r', []), ('@sleep 0.4', []),
+      (b'echo typed-ahead-ran\r', ['slept 1500 ms', '\r\ntyped-ahead-ran\r\n', PROMPT]),
+      ("history | grep -c 'typed-ahead-secre[t]'", ['\r\n0\r\n']),
       ('wifi join SurfSimHidden', ['link up: "SurfSimHidden" (02:53:49:4d:00:03), channel 11', 'joined SurfSimHidden']),
       ('wifi leave', ['wlan0: left "SurfSimHidden"', 'wlan0: not associated']),
       ('wifi join SurfSim 02:53:49:4d:00:09', ['no access point 02:53:49:4d:00:09 named SurfSim in range']),
@@ -693,7 +700,8 @@ SMOKE = [
       ('wifi down', ['wlan0: down']),
       ('wifi status', ['wlan0: down (wifi up starts it)']),
       ('eth0-held-end', CHECK)],
-     [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()', 'carries Ethernet padding']),
+     [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()', 'carries Ethernet padding',
+      'typed-ahead-secret']),
     # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
     # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo

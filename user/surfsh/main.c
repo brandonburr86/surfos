@@ -169,13 +169,15 @@ static int blank(const char *s) {
 /* the line editor: a line typed at the prompt (the jobs that ended reported first) */
 static int editor_get(struct source *s, struct sbuf *out, int more) {
     static char line[LINE_LIMIT + 1];
+    static int open_quote;
     int n;
     if(!more) jobs_collect(1);
     n = edit_line(line, sizeof(line), more);
     if(n == -1) return -1;                      /* Ctrl-D, or no more input */
     if(n == -3) return -2;                      /* Ctrl-C on a line that continued a command */
+    if(!more) open_quote = 0;                   /* 10/25/26 (the review, U6): a command's quote goes over its lines */
     if(n >= 0 && !blank(line)) {                /* 10/25/26: !! and the like (editor.c) */
-        int r = history_expand(line, line, sizeof(line));
+        int r = history_expand_in(line, line, sizeof(line), &open_quote);
         if(r == -1) {
             fprintf(stderr, "surfsh: %s: no such line in the history\n", line);
             last_status = STATUS_USAGE;

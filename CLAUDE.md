@@ -31,7 +31,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 20 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -221,8 +221,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
   `kprintf()` in the kernel and `printf()` in task code. 10/25/26: a kernel thread's `kprintf()`
-  line comes out whole (it waits up to 100 ms for another writer's half line, then prints with
-  preemption off): end a kernel thread's message with its newline in the same call.
+  line comes out whole (it waits up to 100 ms for another writer's half line, then prints holding the
+  console for the line: a task that writes there meanwhile waits for its end, 1 s at most): end a
+  kernel thread's message with its newline in the same call.
 * Keep the 2004 file headers and style where you touch old code; new files use the
   same header block with the current date.
 * Small commits, one topic each. Do not rewrite `master`.
@@ -256,7 +257,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   console's presents (batched by the `fbflush` thread, at most one per 20 ms while output
   pours in), and surfsh's `time cmd` says how long cmd took.
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
-  `clock=pmtmr`, `clock=hpet`, `usb=off`, `font=8x16|12x24|16x32` (10/25/26, the console's font). `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+  `clock=pmtmr`, `clock=hpet`, `usb=off`, `font=8x16|12x24|16x32` (10/25/26, the console's font),
+  `bootpanic` (10/25/26: a panic on purpose just before the timer starts, for the screen's test). `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * The network manager: `settings` says where the settings came from, `wifi saved` what is
   saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
   and after (the keeper's repeated tries are written only there). `settings=off` on the kernel
