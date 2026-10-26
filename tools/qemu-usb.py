@@ -24,7 +24,8 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
              switching, a set of commands and the escape sequences of `ansi`, all through
-             the keyboard and the screen; the alternate screen (10/25/26) given back as it was
+             the keyboard and the screen; the alternate screen (10/25/26) given back as it was,
+             by a program and by less
   fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
              hands that mode over. The console fills it with 160x45 cells of Spleen 12x24
              (10/25/26; 120x33 at scale 2 in 8x16 before): a long line on one row, Backspace
@@ -823,6 +824,13 @@ def scenario_keyboard(args, image, firmware, outdir):
         results.append(('the alternate screen on the framebuffer: the program\'s question on a blank screen, the shell\'s '
                         'screen as it was after it', alt is not None and alt.rows[0] == 'PAGETEST ALT-SCREEN' and
                         not any(alt.rows[2:]) and ansi_ok(back) and 'ALT-SCREEN' not in back.text()))
+        # 10/25/26 (track A, A9): less, the same: its screenful, then q and the shell's screen as it was
+        vm.keys('seq 1 100 | less\n')
+        shown = vm.wait_screen(lambda s: 'standard input  lines 1-' in s.text(), 20, interval=0.5)
+        vm.keys('q')
+        back = vm.wait_screen(lambda s: 'standard input' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('less on the framebuffer: a pipeline\'s text a screenful at a time, and q gives the shell\'s '
+                        'screen back', shown is not None and shown.rows[0] == '1' and ansi_ok(back)))
         # 10/6/26: surfsh's line editor on the PS/2 keyboard, as on the laptop: Tab, Up and Enter ('\r') in raw
         # mode, in a surfsh started inside the one on F1 (its prompt is on a row below the typed command)
         def nested(s):

@@ -2021,6 +2021,15 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   and `\`; `-i -v -n -c -l -q -F -e`), `sort` (`-r -n -f -u`), `uniq` (`-c -d -u -i`), `tail`
   (`-n N`), `tee` (`-a`), `tr` (ranges, `-d`, `-s`) and `seq`, the programs a pipeline wants
   after `cat`, `head` and `wc`; `lineutil.h` reads their lines of any length.
+* **less** (10/25/26, track A, A9; `user/bin/less.c`): a file or a pipeline's text a screenful at
+  a time. The text is read whole first (8 MB at most) and the keys come from `/dev/tty`, so
+  `dmesg | less` works. It draws on the alternate screen in raw mode and gives the shell's screen
+  back when it ends (the console does that for a killed less too, section 7). Long lines are cut
+  with a `>` in the last column and Right and Left move sideways; TABs, UTF-8 (one cell a
+  character), control characters as `^X` and bytes that are not UTF-8 as `?` in inverse video.
+  `/` and `?` find text (case counts only when it has capitals), the line found goes to the
+  top and every match on the screen shows in inverse video; `n`, `N`, `g`, `G`, Space, `b`,
+  `d`, `u`, `h` for the keys, `q`. With no terminal on its output it copies the text, as `cat`.
 * **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
   `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
   lists, pipelines, groups, redirections and here-documents parsed and written back,

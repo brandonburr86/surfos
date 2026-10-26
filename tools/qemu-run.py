@@ -391,6 +391,8 @@ SMOKE = [
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     # 10/25/26 (track A, A8): the alternate screen, left by the program or for it by the console when it is killed
     ('@alt-screen', []),
+    # 10/25/26 (track A, A9): less, on the alternate screen with the keys from /dev/tty
+    ('@less', []),
     # 10/25/26 (track A): a TAB reaches the serial terminal as it was printed (the screen: test_pager, qemu-usb's fullhd)
     ("printf 'a\\tb|\\n'", ['a\tb|']),
     # 10/25/26 (track A, A3): time, how long a command took (its status is the command's)
@@ -2384,6 +2386,61 @@ def alt_screen_check(q):
 
 
 CONSOLE_CHECKS['@alt-screen'] = alt_screen_check
+
+
+def less_check(q):
+    """10/25/26 (track A, A9): less on the alternate screen, its text from a pipe and its keys from /dev/tty: the first
+    screenful and where it is, Space, a search (the line found on top, its match in inverse video), G and (END), and q
+    giving the shell's screen back as it was; a file that fits on the screen, at its end at once; through a pipe, a
+    copy as cat makes"""
+    def rows():
+        q.wait(0.5)
+        d = q.vga_memory() or bytes(4000)
+        return d, [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
+    q.send('clear\n')
+    ok = q.expect(PROMPT, 10)
+    q.send('echo before less\n')
+    ok = ok and q.expect('before less\r\n', 10) and q.expect(PROMPT, 10)
+    q.send('seq 1 200 | less\n')
+    ok = ok and q.expect('lines 1-24 of 200', 15)
+    _, shown = rows()
+    ok = ok and shown[0] == '1' and shown[23] == '24' and shown[24] == 'standard input  lines 1-24 of 200  12%  h: keys'
+    q.ser.sendall(b' ')
+    ok = ok and q.expect('lines 25-48 of 200', 10)
+    q.ser.sendall(b'/150\r')
+    ok = ok and q.expect('lines 150-173 of 200', 10)
+    d, shown = rows()
+    ok = ok and shown[0] == '150' and [d[c * 2 + 1] for c in range(4)] == [0x70, 0x70, 0x70, 0x07] and d[161] == 0x07
+    q.ser.sendall(b'G')
+    ok = ok and q.expect('lines 177-200 of 200  (END)', 10)
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    _, shown = rows()
+    ok = ok and shown[1] == 'before less' and shown[2].endswith('seq 1 200 | less') and \
+        not any('standard input' in r for r in shown)
+    q.send('less /initrd/etc/ssl/README\n')
+    ok = ok and q.expect('/initrd/etc/ssl/README  lines 1-23 of 23  (END)', 15)
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send('pagetest utf8 | less\n')                     # UTF-8 as the console's characters, one cell each
+    ok = ok and q.expect('lines 1-1 of 1  (END)', 15)
+    _, shown = rows()
+    ok = ok and shown[0] == UTF8_SAMPLE
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send("printf 'a\\tb\\001c\\n' | less\n")             # a TAB to column 8, ^A in inverse video
+    ok = ok and q.expect('lines 1-1 of 1  (END)', 15)
+    d, shown = rows()
+    ok = ok and shown[0] == 'a       b^Ac' and [d[c * 2 + 1] for c in range(8, 12)] == [0x07, 0x70, 0x70, 0x07]
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send('echo through less | less | cat\n')
+    ok = ok and q.expect('through less\r\n', 10) and q.expect(PROMPT, 10)
+    return ('less: a pipeline\'s text with the keys from the terminal, Space, a search shown in inverse video, G, and q '
+            'giving the shell\'s screen back; a file that fits; UTF-8, a TAB and ^A; a copy into a pipe', ok)
+
+
+CONSOLE_CHECKS['@less'] = less_check
 CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
 CONSOLE_CHECKS['@surfsh-jobs'] = surfsh_jobs_check        # 10/25/26
 

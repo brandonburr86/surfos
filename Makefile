@@ -53,6 +53,7 @@ USER_PROGS  += grep sort uniq tail tee tr seq   # 10/25/26: the filters a pipeli
 USER_PROGS  += ftpd          # 10/24/26: the file transfer server, a program of several files in user/ftpd/
 USER_PROGS  += nc            # 10/24/26: the netcat of SurfOS: connections by hand, files to and from nc elsewhere
 USER_PROGS  += fetch         # 10/25/26: files from the web, http:// and https:// (Undertow's transport), user/fetch/
+USER_PROGS  += less          # 10/25/26 (track A, A9): a file or a pipeline's text a screenful at a time
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)

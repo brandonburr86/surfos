@@ -100,7 +100,7 @@ lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAN
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), env, the filters grep
-           sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
+           sort uniq tail tee tr seq (lineutil.h), less (10/25/26: a screenful at a time, on the alternate screen), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
