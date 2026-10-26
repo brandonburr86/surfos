@@ -31,7 +31,7 @@ static uint64_t latch_of(uint64_t k) { return k * STUB_FRAME_US + STUB_LATCH_US;
 /* how many blankings have begun at time t: STATUS.FRAME and FRAME_COUNT (a frame's CRC is taken as
    its blanking begins) */
 static uint64_t blankings(const struct stub *s, uint64_t t) {
-    if(s->frames_stop) return 7;
+    if(s->frames_stop) return s->frames_frozen ? s->frames_frozen : 7;
     return t >= STUB_VBLANK_US ? (t - STUB_VBLANK_US) / STUB_FRAME_US + 1 : 0;
 }
 
@@ -473,8 +473,8 @@ static void p_unlock(void *c) {
 }
 
 static const char *p_holder(void *c, char *buf, u_int size) {
-    (void)c;
-    snprintf(buf, size, "'Shell 2', pid 9");
+    struct stub *s = c;
+    snprintf(buf, size, "%s", s->holder ? s->holder : "'Shell 2', pid 9");
     return buf;
 }
 
@@ -531,10 +531,43 @@ void stub_free(struct stub *s) {
 
 /**** gfx with a line ****/
 
+/* every line printed is measured in the console's columns (a UTF-8 sequence is one) */
+static unsigned too_wide;
+static char wide_first[240];
+
+unsigned stub_too_wide(const char **first) {
+    unsigned n = too_wide;
+    if(first) *first = wide_first;
+    too_wide = 0;
+    return n;
+}
+
+static void measure(struct stub *s, unsigned from) {
+    unsigned i;
+    if(s->line_start > from) {                  /* out was cleared */
+        s->line_start = from;
+        s->col = 0;
+    }
+    for(i = from; i < s->nout; i++) {
+        unsigned char ch = (unsigned char)s->out[i];
+        if(ch != '\n') {
+            if((ch & 0xC0) != 0x80) s->col++;
+            continue;
+        }
+        if(s->col > s->widest) s->widest = s->col;
+        if(s->col > STUB_COLUMNS && !too_wide++)
+            snprintf(wide_first, sizeof(wide_first), "%.*s", (int)(i - s->line_start), s->out + s->line_start);
+        s->col = 0;
+        s->line_start = i + 1;
+    }
+}
+
 int gt_printf(const char *fmt, ...) {
     va_list ap;
     int n = 0;
+    unsigned from;
     if(!cur) return 0;
+    from = cur->nout;
     va_start(ap, fmt);
     if(cur->nout < sizeof(cur->out) - 1) {
         n = vsnprintf(cur->out + cur->nout, sizeof(cur->out) - cur->nout, fmt, ap);
@@ -542,6 +575,7 @@ int gt_printf(const char *fmt, ...) {
         if(cur->nout > sizeof(cur->out) - 1) cur->nout = sizeof(cur->out) - 1;
     }
     va_end(ap);
+    measure(cur, from);
     if(getenv("GPU_TEST_VERBOSE")) {
         va_start(ap, fmt);
         vprintf(fmt, ap);
@@ -561,6 +595,7 @@ int stub_gfx(struct stub *s, struct gpu *g, const char *line) {
     cur = s;
     s->nout = 0;
     s->out[0] = 0;
+    s->col = s->line_start = 0;
     if(getenv("GPU_TEST_VERBOSE")) printf("> %s\n", line);
     return gfx_command(g, argc, argv);
 }

@@ -44,7 +44,7 @@ ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
-           'the GPU reports', 'no vertical blanking seen', 'Invalid command']
+           'the GPU reports', 'no vertical blanking in', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 
@@ -53,7 +53,7 @@ CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 STEPS = [
     ('gfx', r'SurfGPU GPU1 \(gpu\.ID 0x31555047\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*'
             r'frames: FRAME_COUNT \d+', 'the state'),
-    ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU GPU1, 300 KiB VRAM, FIFO 64; \d+ words, \d+ fences, 0 errors',
+    ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU GPU1, 300 KiB VRAM; \d+ fences, 0 errors',
      'the driver table'),
     ('gfx mode gfx 1', r'display: mode 2, graphics, 640x480' + NL + r'\s+the target is that picture: 640x480 at VRAM 0, '
      r'stride 640', 'graphics at 640x480'),
@@ -248,8 +248,8 @@ def main():
     out = run_ok('gpu', 'SurfOS on the SoC with SurfGPU (surfsim_gpu)')
     check(re.search(r'\+GPU: SurfGPU GPU1 \(gpu\.ID 0x31555047\)', out) and re.search(r'Drivers: serial[^\n]* gpu\n', out),
           'boot: the driver finds SurfGPU GPU1 (sysinfo.FEATURES.GPU, gpu.ID "GPU1") and starts')
-    check('palette: rgb332 (as the configuration leaves it)' in out and 'fences: ' in out and
-          'interrupts (intc source 5, IE.FENCE)' in out,
+    check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
+          re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
           'no stopped engine, no GPU error, no blanking missed, no usage error, no panic')

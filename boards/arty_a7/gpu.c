@@ -44,6 +44,14 @@ const char *gpu_id_name(u32 id) {
     return NULL;
 }
 
+/* drivers' line, after its "    gpu       ": 66 columns at most, the counts at 10 digits each */
+const char *gpu_describe(const struct gpu *g, char *buf, u_int size) {
+    if(!g->present) snprintf(buf, size, "none: %s", g->why ? g->why : "not probed");
+    else snprintf(buf, size, "SurfGPU %s, %lu KiB VRAM; %lu fences, %lu errors", gpu_id_name(g->id),
+                  (u_long)(g->vram_bytes / 1024), g->fences, g->errors);
+    return buf;
+}
+
 static bool interrupted(struct gpu *g) {
     return !g->keep_going && P(g)->interrupted(CTX(g));
 }
@@ -96,7 +104,7 @@ int gpu_claim(struct gpu *g, const char *what) {
     g->intr_aborted = false;
     while(!P(g)->trylock(CTX(g))) {
         if(!said) {
-            printf("    %s: the GPU is in use (%s): waiting; Ctrl+C gives up\n", what,
+            printf("    %s: the GPU is in use: waiting (Ctrl+C gives up)\n    held by %s\n", what,
                    P(g)->holder(CTX(g), who, sizeof(who)));
             said = true;
         }
@@ -160,14 +168,16 @@ static void after_abort(struct gpu *g, const char *what) {
     if(st) say_errors(g, what, st);
 }
 
+/* (80 columns with every number at its widest: STATUS 8 hex digits, FIFO_FREE's 16 bits, FENCE 10 digits) */
 static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting_for) {
     char buf[48];
-    u32 st = RD(g, SURF_GPU_STATUS), ff = RD(g, SURF_GPU_FIFO_FREE), fence = RD(g, SURF_GPU_FENCE);
+    u32 st = RD(g, SURF_GPU_STATUS), fence = RD(g, SURF_GPU_FENCE);
+    u32 ff = (RD(g, SURF_GPU_FIFO_FREE) & SURF_GPU_FIFO_FREE_FREE_MASK) >> SURF_GPU_FIFO_FREE_FREE_LSB;
     g->timeouts++;
     if(waiting_for) snprintf(buf, sizeof(buf), ", waiting for %lu", (u_long)waiting_for);
     else buf[0] = 0;
-    printf("    %s: the GPU %s for 2 seconds: a stopped engine; ABORT\n"
-           "    (STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s)\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
+    printf("    %s: the GPU %s for 2 s: a stopped engine; ABORT\n"
+           "    STATUS 0x%lx, FIFO_FREE %lu, FENCE %lu%s\n", what, how, (u_long)st, (u_long)ff, (u_long)fence, buf);
     gpu_abort(g, what);
     after_abort(g, what);
     return GPU_ETIMEOUT;
@@ -505,7 +515,7 @@ int gpu_screen_set(struct gpu *g, const struct gpu_screen *d, const char *what) 
     g->latched = caught;
     if(!caught) {
         g->latch_misses++;
-        printf("    %s: no vertical blanking seen in %lu ms: the registers written at once\n"
+        printf("    %s: no vertical blanking in %lu ms: the registers written at once\n"
                "    (the change may take two frames)\n", what, (u_long)(GPU_LATCH_LIMIT_US / 1000));
     }
     return GPU_OK;

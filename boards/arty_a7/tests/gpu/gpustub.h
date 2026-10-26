@@ -67,6 +67,7 @@ struct stub {
     uint64_t now;
     uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us (outside atomic stretches) */
     int frames_stop;                    /* the frame counter does not move (no pixel clock) */
+    uint32_t frames_frozen;             /* where it stays then (7 when 0) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];
@@ -115,9 +116,16 @@ struct stub {
     int watch;                          /* keep the events below */
     struct stub_event *ev;
     unsigned nev, ev_cap;
+    const char *holder;                 /* the other claimant as the port names it ('Shell 2', pid 9 when NULL) */
     char out[1 << 16];                  /* what the driver and gfx printed */
     unsigned nout;
+    unsigned col, line_start;           /* the line being printed: its columns so far, where it began in out */
+    unsigned widest;                    /* the widest line printed */
 };
+
+#define STUB_COLUMNS 80                 /* the console's line (GPU.md 15.2) */
+/* the lines printed wider than that since the last call (any stub), and the first of them */
+unsigned stub_too_wide(const char **first);
 
 /* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values */
 void stub_init(struct stub *s, int irq_path);

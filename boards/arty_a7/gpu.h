@@ -137,6 +137,7 @@ struct gpu {
 /* the driver: FEATURES is sysinfo.FEATURES; GPU_OK when there is a GPU, else GPU_EABSENT with why set */
 int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features);
 const char *gpu_id_name(u32 id);        /* "GPU1", "GPU2" or NULL */
+const char *gpu_describe(const struct gpu *g, char *buf, u_int size);   /* drivers' line */
 
 int gpu_claim(struct gpu *g, const char *what);    /* GPU_OK, or GPU_EINTR (said) */
 void gpu_release(struct gpu *g);

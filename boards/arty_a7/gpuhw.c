@@ -211,13 +211,7 @@ int arty_gpu_init(void) {
 }
 
 const char *arty_gpu_describe(char *buf, size_t size) {
-    if(!gpu.present) {
-        snprintf(buf, size, "none: %s", gpu.why ? gpu.why : "not probed");
-        return buf;
-    }
-    snprintf(buf, size, "SurfGPU %s, %lu KiB VRAM, FIFO %lu; %lu words, %lu fences, %lu errors", gpu_id_name(gpu.id),
-             (u_long)(gpu.vram_bytes / 1024), (u_long)gpu.fifo_depth, gpu.words, gpu.fences, gpu.errors);
-    return buf;
+    return gpu_describe(&gpu, buf, (u_int)size);
 }
 
 /* gfx (boards/arty_a7/gfx.c) on this board's GPU */

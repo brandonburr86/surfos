@@ -121,7 +121,7 @@ static int status(struct gpu *g, int r, const char *what) {
     if(r == GPU_OK) return CMD_OK;
     if(r == GPU_EINTR) printf("    %s: interrupted%s\n", what, g->intr_aborted ? ": the engine stopped (ABORT)" : " (Ctrl+C)");
     if(r == GPU_EARG) {
-        printf("    %s: refused: a coordinate outside -32768..32767 or a size outside 0..65535\n", what);
+        printf("    %s: refused: a coordinate past -32768..32767 or a size past 0..65535\n", what);
         return CMD_USAGE;
     }
     return CMD_FAIL;
@@ -145,14 +145,14 @@ static int finish(struct gpu *g, int r, const char *what) {
 static int show(struct gpu *g) {
     struct gpu_screen d;
     struct gpu_state s;
-    char pal[64], irqs[64];
+    char pal[64];
     if(claim(g, "gfx")) return CMD_FAIL;
-    if(g->irq) snprintf(irqs, sizeof(irqs), "%lu interrupts (intc source 5, IE.FENCE)", g->irqs);
-    else snprintf(irqs, sizeof(irqs), "waited for with sleeps (no interrupt)");
     gpu_screen_get(g, &d);
     gpu_state_read(g, &s);
     gpu_pal_describe(g, pal, sizeof(pal));
     gpu_release(g);
+    /* 80 columns a line with every count at 10 digits (32 bits on the board) and every register at
+       its widest */
     printf("    SurfGPU %s (gpu.ID 0x%08lx), VRAM %lu KiB at 0x%08lx\n"
            "    engine %s, STATUS 0x%lx, FIFO %lu words, %lu free\n"
            "    display: mode %lu, %s\n"
@@ -162,14 +162,18 @@ static int show(struct gpu *g) {
            (s.status & SURF_GPU_STATUS_BUSY_MASK) ? "busy" : "idle", (u_long)s.status, (u_long)g->fifo_depth,
            (u_long)s.fifo_free, (u_long)d.mode, gpu_mode_name(d.mode), (u_long)d.base, (u_long)d.stride, (u_long)d.scale,
            d.scale == 2 ? "320x240 doubled" : "640x480", pal);
-    printf("    target: VRAM %lu, stride %lu, %lux%lu; clip (%lu, %lu)-(%lu, %lu)\n"
-           "    fences: %lu sent, FENCE %lu; %s\n"
-           "    %lu words sent; errors %lu (overflow %lu, bad opcode %lu, bad parameters %lu)\n"
-           "    timeouts %lu, ABORTs %lu; display changes %lu, %lu without a blanking\n"
-           "    frames: FRAME_COUNT %lu, FRAME_CRC %08lx (that frame's)\n",
+    printf("    target: VRAM %lu, stride %lu, %lux%lu\n"
+           "    clip: (%lu, %lu)-(%lu, %lu)\n"
+           "    sent: %lu words, %lu fences; FENCE %lu\n",
            (u_long)g->t_base, (u_long)g->t_stride, (u_long)g->t_w, (u_long)g->t_h, (u_long)g->c_x0, (u_long)g->c_y0,
-           (u_long)g->c_x1, (u_long)g->c_y1, g->fences, (u_long)s.fence, irqs, g->words,
-           g->errors, g->overflows, g->bad_opcodes, g->bad_params, g->timeouts, g->aborts, g->display_changes,
+           (u_long)g->c_x1, (u_long)g->c_y1, g->words, g->fences, (u_long)s.fence);
+    if(g->irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n", g->irqs);
+    else printf("    interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n");
+    printf("    errors %lu, timeouts %lu, ABORTs %lu\n"
+           "    by kind: OVERFLOW %lu, BAD_OPCODE %lu, BAD_PARAM %lu\n"
+           "    display changes %lu, %lu without a blanking\n"
+           "    frames: FRAME_COUNT %lu, FRAME_CRC %08lx (that frame's)\n",
+           g->errors, g->timeouts, g->aborts, g->overflows, g->bad_opcodes, g->bad_params, g->display_changes,
            g->latch_misses, (u_long)s.frame_count, (u_long)s.frame_crc);
     return CMD_OK;
 }
@@ -231,7 +235,7 @@ static int rect(struct gpu *g, int argc, char **argv) {
     long v[5];
     if(argc != 6 || !nums(argv, 1, "xxwwc", v)) return usage("gfx rect x y w h c");
     if(v[0] + v[2] - 1 > 32767 || v[1] + v[3] - 1 > 32767)
-        return usage("gfx rect x y w h c   (the far corner, x + w - 1 and y + h - 1, at most 32767)");
+        return usage("gfx rect x y w h c   (x + w - 1 and y + h - 1 at most 32767)");
     if(claim(g, "gfx rect")) return CMD_FAIL;
     return finish(g, gpu_rect(g, v[0], v[1], v[2], v[3], (u8)v[4], "gfx rect"), "gfx rect");
 }
@@ -246,7 +250,7 @@ static int line(struct gpu *g, int argc, char **argv) {
 static int copy(struct gpu *g, int argc, char **argv) {
     long v[7];
     if((argc != 7 && argc != 8) || !nums(argv, 1, "xxxxww", v) || (argc == 8 && !num(argv[7], 0, 255, &v[6])))
-        return usage("gfx copy sx sy dx dy w h [key]   (key: a colour 0-255 that is not copied)");
+        return usage("gfx copy sx sy dx dy w h [key]   (key: a colour not copied)");
     if(claim(g, "gfx copy")) return CMD_FAIL;
     return finish(g, gpu_copy(g, v[0], v[1], v[2], v[3], v[4], v[5], argc == 8 ? (int)v[6] : -1, "gfx copy"), "gfx copy");
 }
@@ -274,7 +278,7 @@ static u_int cells_of(int argc, char **argv, int first, u8 *cells, u_int max) {
 }
 
 static int text(struct gpu *g, int argc, char **argv) {
-    static const char *use = "gfx text x y fg bg|- words...   (bg -: transparent; the console's 8x16 font)";
+    static const char *use = "gfx text x y fg bg|- words...   (bg -: transparent)";
     long v[3], bg = -1;
     u8 cells[TEXT_MAX];
     u_int n;
@@ -285,7 +289,7 @@ static int text(struct gpu *g, int argc, char **argv) {
 }
 
 static int pal(struct gpu *g, int argc, char **argv) {
-    static const char *use = "gfx pal rgb332|grey|ramps   or   gfx pal <n> <rgb444>   (n 0-255, rgb444 0-0xfff)";
+    static const char *use = "gfx pal rgb332|grey|ramps, or gfx pal n rgb444 (0-255, 0-0xfff)";
     u16 p[256];
     char name[64];
     long n, rgb;
@@ -319,10 +323,9 @@ static int put(struct gpu *g, int argc, char **argv) {
         return usage("gfx put x y c   (a pixel of the target)");
     if(claim(g, "gfx put")) return CMD_FAIL;
     if((u32)x >= g->t_w || (u32)y >= g->t_h) {
-        printf("    gfx put: (%ld, %ld) is outside the target (%lux%lu); usage: gfx put x y c\n", x, y, (u_long)g->t_w,
-               (u_long)g->t_h);
+        printf("    gfx put: (%ld, %ld) is outside the target, %lux%lu\n", x, y, (u_long)g->t_w, (u_long)g->t_h);
         gpu_release(g);
-        return CMD_USAGE;
+        return usage("gfx put x y c   (a pixel of the target)");
     }
     r = gpu_pixel_put(g, (u32)x, (u32)y, (u8)c, "gfx put");
     gpu_release(g);
@@ -337,10 +340,9 @@ static int get(struct gpu *g, int argc, char **argv) {
     if(argc != 3 || !num(argv[1], 0, 32767, &x) || !num(argv[2], 0, 32767, &y)) return usage("gfx get x y   (a pixel of the target)");
     if(claim(g, "gfx get")) return CMD_FAIL;
     if((u32)x >= g->t_w || (u32)y >= g->t_h) {
-        printf("    gfx get: (%ld, %ld) is outside the target (%lux%lu); usage: gfx get x y\n", x, y, (u_long)g->t_w,
-               (u_long)g->t_h);
+        printf("    gfx get: (%ld, %ld) is outside the target, %lux%lu\n", x, y, (u_long)g->t_w, (u_long)g->t_h);
         gpu_release(g);
-        return CMD_USAGE;
+        return usage("gfx get x y   (a pixel of the target)");
     }
     off = g->t_base + (u32)y * g->t_stride + (u32)x;
     r = gpu_pixel_get(g, (u32)x, (u32)y, &c, "gfx get");
@@ -407,7 +409,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
     w = g->t_w;
     h = g->t_h;
     if(w < 64 || h < 32) {
-        printf("    gfx bench: the target (%lux%lu) is too small; gfx mode gfx makes it the picture\n", (u_long)w, (u_long)h);
+        printf("    gfx bench: the target, %lux%lu, is too small (gfx mode gfx: 640x480)\n", (u_long)w, (u_long)h);
         gpu_release(g);
         return CMD_FAIL;
     }
@@ -722,6 +724,6 @@ int gfx_command(struct gpu *g, int argc, char **argv) {
     if(argc < 2) return show(g);
     for(i = 0; i < sizeof(subs) / sizeof(subs[0]); i++)
         if(!strcmp(argv[1], subs[i].name)) return subs[i].fn(g, argc - 1, argv + 1);
-    printf("    gfx: no such subcommand: %s\n", argv[1]);
+    printf("    gfx: no such subcommand: %.48s\n", argv[1]);   /* 80 columns, whatever was typed */
     return usage(NULL);
 }

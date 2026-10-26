@@ -12,7 +12,8 @@ stays full, a stopped engine), the sticky errors said in words, cleared, ABORTed
 and clip sent again, the fence waits (interrupt and sleeps), two claimants, the frame latch rule
 of a display change, FRAME_CRC of a still picture, the palettes, the demo (never drawing into
 the page on the screen; Ctrl+C; the display, palette, target and VRAM back as they were), the
-bench, and every usage error refused before a word is sent.
+bench, and every usage error refused before a word is sent. Every line printed, in every test,
+is measured: none may pass the console's 80 columns (t_columns has each message at its widest).
 
   make -C surfcpu test-gpuos-host     (seeds 1 7 123; GPU_TEST_VERBOSE=1 prints what gfx says)
 */
@@ -40,7 +41,12 @@ static struct stub *fresh(int irq) {
     return s;
 }
 
+/* every test ends here: what it printed was measured line by line (GPU.md 15.2's 80 columns) */
 static void done(struct stub *s) {
+    const char *wide;
+    unsigned n = stub_too_wide(&wide);
+    if(n) printf("    (%u lines past 80 columns, the first: \"%s\")\n", n, wide);
+    check(!n, "every line printed fits the console's 80 columns");
     stub_free(s);
     free(s);
 }
@@ -150,7 +156,7 @@ static void t_probe(unsigned seed) {
     stub_init(s, 0);
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && !G.irq && s->ie == 0,
           "probe: a port without the interrupt: fences with sleeps, IE 0");
-    check(gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU1 (gpu.ID 0x31555047)") && said(s, "waited for with sleeps (no interrupt)"),
+    check(gfx(s, "gfx") == CMD_OK && said(s, "SurfGPU GPU1 (gpu.ID 0x31555047)") && said(s, "interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n"),
           "gfx says what it found");
     done(s);
 }
@@ -337,14 +343,14 @@ static void t_fifo(unsigned seed) {
     /* the engine stops: the words fit, the fence never comes */
     s->stopped = 1;
     t0 = s->now;
-    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: the GPU finished nothing for 2 seconds") &&
+    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: the GPU finished nothing for 2 s") &&
           said(s, "a stopped engine; ABORT"), "a stopped engine: said, ABORT, failed");
     check(s->now - t0 >= 2000000 && s->now - t0 < 2400000, "  after 2 seconds (simulated), not much more");
     check(G.timeouts >= 1 && s->aborts >= 2, "  counted, and the engine ABORTed");
     /* a FIFO that stays full: more words than fit */
     t0 = s->now;
-    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 seconds"),
-          "a FIFO that stays full: 'took no command word for 2 seconds'");
+    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 s"),
+          "a FIFO that stays full: 'took no command word for 2 s'");
     check(s->now - t0 >= 2000000 && s->now - t0 < 2400000 && s->writes_full == 0, "  2 seconds; still no word into a full FIFO");
     s->stopped = 0;
     check(gfx(s, "gfx fill 1 1 2 2 9") == CMD_OK && s->vram[641] == 9, "the engine back: drawing works again");
@@ -363,7 +369,7 @@ static void t_fifo(unsigned seed) {
        engine, not left for the next command (the review's finding 7) */
     s->stopped = 1;
     s->drop_word = s->cmd_writes + 1;
-    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 seconds") &&
+    check(gfx(s, "gfx text 0 0 1 2 %s", words) == CMD_FAIL && said(s, "took no command word for 2 s") &&
           said(s, "OVERFLOW: a command word found the FIFO full and was dropped") && !s->overflow,
           "a lost word and a FIFO that stays full: the stopped engine and the OVERFLOW said, OVERFLOW cleared");
     s->stopped = 0;
@@ -470,8 +476,8 @@ static void t_claims(unsigned seed) {
     s->other_n = 3;
     mine0 = s->ncmd;
     t0 = s->now;
-    check(gfx(s, "gfx fill 4 4 8 8 0x55") == CMD_OK && said(s, "gfx fill: the GPU is in use ('Shell 2', pid 9): waiting;"
-          " Ctrl+C gives up"), "a second claimant waits, and says who has it");
+    check(gfx(s, "gfx fill 4 4 8 8 0x55") == CMD_OK && said(s, "gfx fill: the GPU is in use: waiting (Ctrl+C gives up)\n"
+          "    held by 'Shell 2', pid 9\n"), "a second claimant waits, and says who has it");
     check(s->now - t0 >= 100000 && s->other_done, "  until the first lets go (100 ms)");
     first_mine = s->ncmd;
     for(i = mine0; i < s->ncmd; i++)
@@ -543,7 +549,7 @@ static void t_latch(unsigned seed) {
     s->frames_stop = 1;
     from = s->nw;
     check(gfx(s, "gfx mode overlay") == CMD_OK && !G.latched && G.latch_misses == 1 &&
-          said(s, "no vertical blanking seen in 250 ms: the registers written at once"),
+          said(s, "no vertical blanking in 250 ms: the registers written at once"),
           "a frame counter that stays: written after 250 ms, and said");
     check(s->reg.mode == 3 && s->nw == from + 4, "  the mode and the registers written all the same");
     done(s);
@@ -808,11 +814,82 @@ static void t_state(unsigned seed) {
           said(s, "engine idle, STATUS 0x0, FIFO 64 words, 64 free\n") &&
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
-          said(s, "target: VRAM 0, stride 320, 320x240; clip (0, 0)-(320, 240)") && said(s, "interrupts (intc source 5") &&
-          said(s, "errors 0") && said(s, "frames: FRAME_COUNT"), "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
+          said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n") && said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
+          said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
+          "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
     done(s);
 }
 TEST(t_state)
+
+/* Every line gfx and the driver print fits the console's 80 columns (GPU.md 15.2; the review's
+   finding 8), here with each message at its widest: the counts at 10 digits (32 bits on the
+   board), the registers and the target at their widest, the longest names. done() measures each
+   line printed, as it does after every test. */
+static void t_columns(unsigned seed) {
+    static const char *const lines[] = {
+        "gfx", "gfx help", "gfx frobnicate", "gfx clear x", "gfx fill", "gfx rect", "gfx rect 32000 0 1000 1 1", "gfx line",
+        "gfx copy", "gfx text", "gfx pal", "gfx pal x", "gfx put", "gfx get", "gfx crc x", "gfx bench x", "gfx demo x",
+        "gfx reset x", "gfx mode", "gfx mode foo", "gfx a b c d e f g h i j k l m n o p q r",
+        "gfx put 32767 32767 1", "gfx get 32767 32767", "gfx bench", "gfx pal 255 0xfff",
+        "gfx get 9999 29", NULL
+    };
+    struct stub *s = fresh(1);
+    char word[220], buf[160];
+    unsigned i;
+    (void)seed;
+    s->reg.mode = 3;                                    /* the longest mode's name, the widest GFX_ registers */
+    s->reg.base = SURF_VIDEO_GFX_BASE_BASE_MASK & ~3u;
+    s->reg.stride = SURF_VIDEO_GFX_STRIDE_STRIDE_MASK & ~3u;
+    s->reg.scale = 3;
+    check(gpu_set_target(&G, 307196, 65532, 4, 1, "gfx") == GPU_OK &&
+          gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "the widest target (VRAM 307196, stride 65532) and clip");
+    G.words = G.fences = G.irqs = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
+    G.fifo_depth = 65535;
+    G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */
+    s->frames_stop = 1;
+    s->frames_frozen = 65535;                           /* FRAME_COUNT's 16 bits */
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    sent: 4294967295 words, 4294967295 fences; FENCE 4294967290\n") &&
+          said(s, "    clip: (65535, 65535)-(65535, 65535)\n") && said(s, "FRAME_COUNT 65535"),
+          "gfx with every count at 10 digits");
+    snprintf(buf, sizeof(buf), "    gpu       ");
+    gpu_describe(&G, buf + strlen(buf), (u_int)(sizeof(buf) - strlen(buf)));
+    check(strlen(buf) <= STUB_COLUMNS && strstr(buf, "SurfGPU GPU1, 300 KiB VRAM; 4294967295 fences, 4294967295 errors"),
+          "drivers' gpu line with the counts at 10 digits");
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "FRAME_COUNT stayed at 65535"), "  no frames, FRAME_COUNT at 65535");
+    s->frames_stop = 0;
+    for(i = 0; i < 200; i++) word[i] = (char)('a' + i % 26);
+    word[200] = 0;
+    check(gfx(s, "gfx %s", word) == CMD_USAGE && said(s, "no such subcommand: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv\n"),
+          "a subcommand of 200 letters: its first 48 said");
+    check(gpu_set_target(&G, 0, 10000, 10000, 30, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "the target 10000x30: the widest pair of sizes a target can have");
+    for(i = 0; lines[i]; i++) gfx(s, "%s", lines[i]);
+    /* the claim's wait with the longest name and pid, all three errors at once, a stopped engine with
+       a 9-letter command and FENCE at 10 digits */
+    gfx(s, "gfx mode gfx 1");
+    s->holder = "'abcdefghijklmnopqrstuvwxyz01234', pid 4294967295";
+    s->other_holds = 1;
+    s->other_until = s->now + 50000;
+    check(gfx(s, "gfx clear 1") == CMD_OK && said(s, "    held by 'abcdefghijklmnopqrstuvwxyz01234', pid 4294967295\n"),
+          "the claim's wait names the longest holder");
+    s->holder = NULL;
+    s->overflow = GPU_ST_OVERFLOW;
+    s->eng.sticky |= GPU_ST_BAD_OPCODE | GPU_ST_BAD_PARAM;
+    check(gfx(s, "gfx clear 2") == CMD_FAIL && said(s, "      BAD_PARAM:") && said(s, "      OVERFLOW:"), "all three errors said");
+    stub_drain(s, 1000);
+    G.fence_sent = s->eng.fence = 4294967290u;
+    s->stopped = 1;
+    check(gfx(s, "gfx bench") == CMD_FAIL && said(s, "gfx bench: the GPU finished nothing for 2 s: a stopped engine; ABORT\n") &&
+          said(s, ", FENCE 4294967290, waiting for 4294967291\n"), "a stopped engine, its FENCE at 10 digits");
+    s->stopped = 0;
+    s->now += 50000ull * STUB_FRAME_US;                 /* FRAME_COUNT at 5 digits */
+    check(gfx(s, "gfx crc") == CMD_OK && said(s, "gfx crc: frame 5"), "gfx crc with FRAME_COUNT at 5 digits");
+    done(s);
+}
+TEST(t_columns)
 
 static void t_usage(unsigned seed) {
     static const char *const bad[] = {
