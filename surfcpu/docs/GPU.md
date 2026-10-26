@@ -1816,7 +1816,11 @@ source_dirty from the tracked files and the design's own sources only (false). A
 bitstream fails `gpudiag_check --manifest` (a dirty banner where the manifest says clean), so both
 were built again at the same commit with nothing untracked, and the build script used for this
 record now refuses an untracked file ([evidence](evidence/gpu-g4/synth-gpudiag-r2.txt)). The two
-rules are left as they are, for the flow's owner to settle.
+rules were left as they were here; the integration branch settled them in 5fd27ce (BOARD.md
+section 8): tools/fpga-build.sh now reads the build identity that make compiled into the design's
+own boot ROM (gen/fw_build.h), refuses a ROM of another build or one older than that file, and
+counts a ROM built from a dirty tree as a dirty bitstream (BUILD_FLAGS bit 0 and the manifest's
+source_dirty), so a build like these first two can no longer pass as clean.
 
 **The gpudiag design at bfaac48**, the bitstream to test
 ([evidence](evidence/gpu-g4/synth-gpudiag.txt)), 2 hours 31 minutes on the Mac; it placed and
