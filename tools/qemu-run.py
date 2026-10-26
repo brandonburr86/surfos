@@ -544,6 +544,17 @@ SMOKE = [
                           'killed: gone after', 'PTYTEST poll PASS', 'exit status 0']),
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
     ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
+    # 10/26/26 (CODE-AUDIT T14): a pty's session shell sets the foreground job; a program in no job that is no shell
+    # of the terminal (spawned so, or detached from a job in the background) may not
+    ('run ptytest jobfg', ["the session's shell sets the foreground job and gives it back", 'spawned so or detached: EACCES',
+                           'PTYTEST jobfg PASS', 'exit status 0']),
+    # on a console, neither may a program the kernel's run started for the login shell, nor a $( )'s (both in no job,
+    # their parent a shell that is a process)
+    ('run ptytest jobfg-try none', ['JOBFG none: EACCES', 'exit status 0']),
+    ('echo $(ptytest jobfg-try none)', ['JOBFG none: EACCES']),
+    # a surfsh whose shell above it ends (killed while it sits at its prompt) is in no job and no shell of the pty's:
+    # it goes on without job control, head -1 reads the pty
+    ('run ptytest jobstrand', ['goes on without job control', 'PTYTEST jobstrand PASS', 'exit status 0']),
     ('@kmsg', []),
     # 10/24/26 (pipelines and scripting in surfsh): the kernel's pipes from user space (user/bin/pipetest.c): bytes
     # through and the end of the input; a stream from a child and one write() to a child; a full pipe and POLLOUT; two
@@ -602,6 +613,20 @@ SMOKE = [
                                                           ('crashgp', ['General Protection Fault', 'init: restarted the shell',
                                                                        surf_prompt(b'SURF', b'#')])],
      ['recovery console']),
+    # 10/26/26 (CODE-AUDIT T14): a surfsh typed at the ring-0 shell, in no job, still makes its jobs the terminal's
+    # foreground (the ring-0 shell has no jobs of its own): head -1 reads the terminal, Ctrl+Z stops a count, fg brings
+    # it back, kill %1 ends it, exit returns to the ring-0 shell; nothing stops for reading from the background
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [(b'surfsh\r', [PROMPT]),
+                                                          (b'head -1\r', []), ('@sleep 1', []),
+                                                          (b'typed-at-head\r', ['typed-at-head', PROMPT]),
+                                                          (b'count 1000 100\r', [' 3 ']), (b'\x1a', ['stopped']),
+                                                          ('@sleep 1', []),
+                                                          (b'fg\r', ['count 1000 100']), ('@sleep 1', []),
+                                                          (b'\x1a', ['stopped']), ('@sleep 1', []),
+                                                          ('kill %1', []), ('@sleep 1', []),
+                                                          ('echo after-kill', ['after-kill']), ('@sleep 1', []),
+                                                          (b'exit\r', [surf_prompt(b'SURF', b'#')])],
+     ['reading the terminal']),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
     ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh exited at once (status 42); restarted the shell',
@@ -2079,7 +2104,9 @@ def surfsh_jobs_check(q):
     of a surfsh that exits is killed. A program waiting for a key stops off the terminal's queue of readers (the shell's
     next line is the shell's), also when a key comes in the same burst as the Ctrl+Z; a program that a kernel command
     starts (run, in a surfsh typed at the prompt) is in no job: Ctrl+Z leaves it alone. Two surfshs inside each other:
-    the inner one's job stopped, and its end, leave the middle one the terminal. Ctrl+Z leaves an until loop"""
+    the inner one's job stopped, and its end, leave the middle one the terminal. Ctrl+Z leaves an until loop. 10/26/26
+    (CODE-AUDIT T14): a surfsh that run started is no shell of the terminal's, so it runs without job control: head -1
+    reads the terminal, nothing stops, fg says so"""
     count = '/initrd/bin/count 100 100'
     stopped = shown('\u224b!> ')
 
@@ -2162,6 +2189,16 @@ def surfsh_jobs_check(q):
     ok = ok2 and b'stopped' not in out + out2
     ok = ok and step('exit', [PROMPT])[0]
     results.append(ok)
+    # 10/26/26 (T14): a surfsh that the kernel's run starts for the login shell may not move jobs into the foreground:
+    # it runs without job control, what it starts reads the terminal, and fg says there is none
+    start = len(q.transcript)
+    ok = step('run surfsh', [PROMPT])[0]
+    ok = ok and step('head -1', [])[0]
+    q.wait(0.5)
+    ok = ok and step('typed-at-head', ['typed-at-head\r\ntyped-at-head\r\n', PROMPT])[0]
+    ok = ok and step('fg', ['no job control in this shell', PROMPT])[0]
+    ok = ok and step('exit 0', ['exit status 0', PROMPT])[0]
+    results.append(ok and b'stopped' not in q.transcript[start:])
     return ('surfsh: job control: Ctrl+Z, jobs, bg, fg, kill %%1, a pipeline, a reader in the background, Ctrl+D '
             '(%d of %d)' % (sum(results), len(results)), all(results))
 

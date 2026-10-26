@@ -1307,13 +1307,15 @@ static void fill_info(surf_task *t, struct procinfo *pi) {
    started it. init becomes its parent (and collects it), it is no longer in the foreground (Ctrl+C
    there does not reach it, task_interrupt_job()) nor paged (the pager follows parents), and a pager
    it owns is let go (its shell takes paging back). A parent waiting for it looks again: it is not
-   its child any more. Its descriptors and its terminal stay. -EINVAL for a task that is no process. */
+   its child any more. Its descriptors and its terminal stay. -EINVAL for a task that is no process.
+   10/26/26 (CODE-AUDIT T14): nor is it its pty session's shell any more (TF_SESSION): a task that
+   detached may not set its terminal's foreground job (sys_job). */
 int task_detach(surf_task *t) {
     u_long flags;
     if(!t || !(t->flags & TF_USER) || !init_task_ptr) return -EINVAL;
     flags = irq_save();
     t->parent = init_task_ptr;
-    t->flags = (t->flags | TF_DETACHED) & ~TF_FOREGROUND;
+    t->flags = (t->flags | TF_DETACHED) & ~(TF_FOREGROUND | TF_SESSION);
     t->job = t->job_shell = 0;                  /* 10/25/26: out of its job too */
     if(t->con && t->con->page_owner == t) console_page_start(t->con, NULL);
     irq_restore(flags);

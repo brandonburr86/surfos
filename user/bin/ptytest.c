@@ -68,6 +68,14 @@ ptytest selftest-hangup   by hand (about 30 s): the hangup during the self test'
 ptytest session WORDS     by hand: surfsh on an 80x1024 pty runs the line WORDS; what the
                           master read is shown (ptytest session selftest)
 ptytest kmsg              a line written to /dev/kmsg (the harness finds it with dmesg)
+ptytest jobfg             10/26/26 (CODE-AUDIT T14): on a new pty, the session's program (in no
+                          job, its shell) sets the foreground job and gives it back; a program
+                          in no job that is no shell of the pty (spawned with SPAWN_JOB_NONE,
+                          or one that left a job in the background by detach()) may not: EACCES;
+                          nor may the session's program once it has detached
+ptytest jobstrand         10/26/26 (T14): surfsh on a new pty runs surfsh, and the session's shell
+                          is killed under it: the nested one, in no job now and no shell of the
+                          pty's, goes on without job control (head -1 reads the pty, fg says so)
 */
 
 #include <stdio.h>
@@ -77,6 +85,8 @@ ptytest kmsg              a line written to /dev/kmsg (the harness finds it with
 #include <fcntl.h>
 #include <unistd.h>
 #include <surf.h>
+#include <surfos/spawn.h>
+#include <surfos/job.h>
 
 #define KMSG_LINE "ptytest kmsg: a line for the kernel log"     /* the harness looks for it in dmesg */
 #define PROMPT "\xe2\x89\x8b"                                      /* the wave in surfsh's prompt (UTF-8 on a pty) */
@@ -1080,6 +1090,116 @@ static int mode_detach_child(void) {
     return 0;
 }
 
+/* 10/26/26 (T14): ptytest jobfg's programs. A child of this program in a job (SPAWN_JOB_NEW, a job it leads), or in
+   none, running ptytest with args */
+static int spawn_in(int job, char *const args[]) {
+    struct spawnx o;
+    memset(&o, 0, sizeof(o));
+    o.fds[0] = o.fds[1] = o.fds[2] = o.fds[3] = -1;
+    o.job = job;
+    return spawnx("/initrd/bin/ptytest", args, &o);
+}
+
+/* a job of its own in its terminal's foreground: what JOB_FG says, as text; the job ended again */
+static const char *take_terminal(void) {
+    char *sleeper[] = { "ptytest", "jobsleep", "5000", NULL };
+    const char *said;
+    int kid = spawn_in(SPAWN_JOB_NEW, sleeper), st;
+    if(kid < 0) return "spawnx failed";
+    if(jobctl(JOB_FG, kid) < 0) said = errno == EACCES ? "EACCES" : strerror(errno);
+    else said = jobctl(JOB_FG, 0) < 0 ? "the foreground set, but not given back" : "the foreground set and given back";
+    jobctl(JOB_KILL, kid);
+    wait(kid, &st);
+    return said;
+}
+
+static int mode_jobfg(void) {
+    char *argv[] = { "ptytest", "jobfg-session", NULL };
+    int m, pid, st, r;
+    m = start("/initrd/bin/ptytest", argv, 0, &pid);
+    if(m < 0) return fail("no session on a pty");
+    r = read_until(m, "JOBFG done", 0, 30000);
+    if(r == 1) r = read_until(m, NULL, 0, 10000);
+    close(m);
+    wait(pid, &st);
+    if(r != 1) return fail("the session did not end");
+    if(!strstr(out, "JOBFG session: the foreground set and given back")) return fail("the session's shell may not");
+    if(!strstr(out, "JOBFG none: EACCES")) return fail("a program in no job set the foreground");
+    if(!strstr(out, "JOBFG detach: EACCES")) return fail("a program that detached set the foreground");
+    if(!strstr(out, "JOBFG session detached: EACCES")) return fail("the session's shell set it after detach()");
+    printf("ptytest: the session's shell sets the foreground job and gives it back; a program in no job may not,\n"
+           "         spawned so or detached: EACCES\n");
+    return pass();
+}
+
+/* on the pty, the session's program (in no job): the foreground for a job of its own; then a child in no job, and one
+   that leaves a job in the background, try the same; then itself, detached from the session (its shell no more) */
+static int mode_jobfg_session(void) {
+    char *none[] = { "ptytest", "jobfg-try", "none", NULL };
+    char *leaver[] = { "ptytest", "jobfg-try", "detach", NULL };
+    struct procinfo pi;
+    unsigned int t0;
+    int pid, st;
+    printf("JOBFG session: %s\n", take_terminal());
+    pid = spawn_in(SPAWN_JOB_NONE, none);
+    if(pid > 0) wait(pid, &st);
+    pid = spawn_in(SPAWN_JOB_NEW, leaver);              /* a job in the background, which it leaves */
+    for(t0 = uptime(); pid > 0 && find_task(pid, &pi) && uptime() - t0 < 10000; msleep(20)) ;   /* init's, once */
+    if(detach() == 0) printf("JOBFG session detached: %s\n", take_terminal());  /* no shell of the pty's then */
+    printf("JOBFG done\n");                             /* it has detached: not waited for */
+    return 0;
+}
+
+/* a program in no job, spawned so (none) or by leaving its job (detach), tries the terminal's foreground */
+static int mode_jobfg_try(int argc, char **argv) {
+    const char *how = argc > 2 ? argv[2] : "none";
+    if(!strcmp(how, "detach") && detach() < 0) {
+        printf("JOBFG %s: detach: %s\n", how, strerror(errno));
+        return 1;
+    }
+    printf("JOBFG %s: %s\n", how, take_terminal());
+    return 0;
+}
+
+/* 10/26/26 (T14): the shell above a nested surfsh ends while the nested one sits at its prompt (killed here), which
+   takes the nested one out of its job: it may not set the pty's foreground job any more, so it goes on without job
+   control, and what it starts reads the pty (with job control, head -1 would stop, reading from the background) */
+static int mode_jobstrand(void) {
+    char *argv[] = { "surfsh", NULL };
+    int m, pid, st, at;
+    m = start("/initrd/bin/surfsh", argv, (80 << 16) | 24, &pid);
+    if(m < 0) return fail("surfsh did not start");
+    if(read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "surfsh\r");
+    if(read_until(m, PROMPT, at, 15000) != 1) return fail("no prompt from the nested surfsh");
+    at = after(PROMPT, at);
+    if(kill(pid) < 0 || wait(pid, &st) != pid) return fail("the session's shell was not killed");
+    type(m, "head -1\r");
+    msleep(1000);                                       /* head reads by then, in line mode: the line is echoed */
+    type(m, "stranded-line\r");
+    if(read_until(m, "stranded-line\nstranded-line\n", at, 5000) != 1) return fail("head -1 did not read the pty");
+    at = after("stranded-line\nstranded-line\n", at);
+    if(read_until(m, PROMPT, at, 10000) != 1) return fail("no prompt after head -1");
+    at = after(PROMPT, at);
+    type(m, "fg\r");
+    if(read_until(m, "no job control in this shell", at, 10000) != 1) return fail("fg did not say there is no job control");
+    at = after("no job control in this shell", at);
+    if(read_until(m, PROMPT, at, 10000) != 1) return fail("no prompt after fg");
+    type(m, "exit\r");
+    if(read_until(m, NULL, at, 10000) != 1) return fail("the master did not read 0 after exit");
+    close(m);
+    if(strstr(out, "stopped")) return fail("something stopped");
+    printf("ptytest: the session's shell killed under a nested surfsh: it goes on without job control, head -1\n"
+           "         read the pty, fg says so\n");
+    return pass();
+}
+
+static int mode_jobsleep(int argc, char **argv) {
+    msleep((unsigned int)(argc > 2 ? atoi(argv[2]) : 3000));
+    return 0;
+}
+
 static int mode_kmsg(void) {
     int fd = open("/dev/kmsg", O_WRONLY);
     if(fd < 0) return fail("cannot open /dev/kmsg");
@@ -1116,8 +1236,13 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach")) return mode_detach();
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
+    if(!strcmp(mode, "jobfg")) return mode_jobfg();
+    if(!strcmp(mode, "jobfg-session")) return mode_jobfg_session();
+    if(!strcmp(mode, "jobfg-try")) return mode_jobfg_try(argc, argv);
+    if(!strcmp(mode, "jobsleep")) return mode_jobsleep(argc, argv);
+    if(!strcmp(mode, "jobstrand")) return mode_jobstrand();
     fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
                     "       tcpecho [PORT] | reuse | fullqueue | paste | poll | ps | detach | detach-ctrlc | isolate | kmsg |\n"
-                    "       selftest-hangup | session WORDS\n");
+                    "       selftest-hangup | session WORDS | jobfg | jobstrand\n");
     return 2;
 }

@@ -44,6 +44,9 @@ detached one (init's) is in none.
 looks for (task_user_may_kill()): a kernel thread is never killed by one. L10, L12: it gets
 floating-point registers of its own with that flag (task_alloc(), kernel/fpu.c), and its stack
 is 16-aligned at _start.
+
+10/26/26 (CODE-AUDIT T14): TF_SESSION passes through as TF_SHELL does: the program a pty's
+session begins with (kernel/pty.c) carries it before it can run.
 */
 
 #include <surfos/types.h>
@@ -341,7 +344,7 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     job = (flags & TF_DETACHED) || (curTask && (curTask->in_call & TC_COMMAND)) ? SPAWN_JOB_NONE : more ? more->job : 0;
     /* 10/25/26 (L15): TF_PROCESS, so that a user's kill may end it (task_user_may_kill()) */
     r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL,
-                           (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL | TF_PROCESS, job);
+                           (flags & (TF_DETACHED | TF_SHELL | TF_SESSION | TF_FOREGROUND)) | TF_INCALL | TF_PROCESS, job);
     if(r < 0) { release_files(sa); kfree(sa); }
     return r;
 }

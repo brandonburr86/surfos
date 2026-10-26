@@ -42,6 +42,9 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_INTR     0x80 /* 10/25/26: a shell that looks for Ctrl+C itself while it owns the pager (tty.h, TTY_INTR) */
 #define TF_PROCESS  0x100 /* 10/25/26 (L15): a process, from its creation (process_spawn_ex()): a process carries
                              TF_KTHREAD too, and TF_USER only once its loading starts */
+#define TF_SESSION  0x200 /* 10/26/26 (CODE-AUDIT T14): the program a pseudo-terminal's session began with (kernel/pty.c),
+                             from its creation until a detach(): a shell of that terminal, as init's TF_SHELL is of a
+                             console (sys_job) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel

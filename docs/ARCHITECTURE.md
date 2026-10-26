@@ -1885,7 +1885,14 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   while it waits for one; a task of a job in the background may not (`-EACCES`), but the
   foreground job's shell (`fg_shell`) gives the terminal back to its own job (a surfsh typed at
   a surfsh's prompt), and when that shell ends the foreground is its own job, for the shell
-  above it to take back. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
+  above it to take back. Nor may a task in no job (10/26/26, CODE-AUDIT T14) unless it is a
+  shell of that terminal's: the foreground job's, the session's (init's surfsh on a console,
+  `TF_SHELL`; on a pty the program its session began with, `TF_SESSION` from its creation
+  until a `detach()`), or a program the ring-0 shell started (a surfsh typed at it). An
+  interactive surfsh in no job takes its terminal as it starts (`JOB_FG` 0), and again before
+  each command (a nested surfsh whose shell above ended is in no job from then on); one the
+  kernel refuses (a surfsh that `run` started) runs without job control: what it starts is in
+  no job, as a script's is, and `fg` and `bg` say there is no job control. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
   it is a key; over the serial line and a pty it passes a paste's skip and an escape
   sequence, as Ctrl+C does), and a task of another job that reads the terminal stops instead
   (`task_stop_reader()`: as `tty_read()` begins, before it looks at the mode, and in
@@ -2313,8 +2320,7 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   window gives it the focus. A window asked for takes it as it appears: the first of a program the launcher
   just started, and that of the focused Terminal's foreground job (the kernel's `win_state.foreground`: its
   program is in the foreground job of a pty the desktop adopted, a job that session's shell made, whose pid
-  `win_adopt_shell()` records; a task in no job may set a terminal's foreground, CODE-AUDIT T14, but not to a job
-  of that shell's). A frame is a pixel of border and the title bar, its content drawn with `gd_blit()` from the pixels
+  `win_adopt_shell()` records, not merely the terminal's foreground job). A frame is a pixel of border and the title bar, its content drawn with `gd_blit()` from the pixels
   `win_update()` lends it until the next update. Every event over a program's visible content is the
   program's: hover, the wheel and all three buttons; a press there brings the window to the front and holds
   the pointer for it until every button is up (a grab), while the corner grip stays the desktop's. A size

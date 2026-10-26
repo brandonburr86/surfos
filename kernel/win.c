@@ -748,8 +748,9 @@ int win_accept(void) {
 
 /* 10/25/26 (stage C6): the window's program is in the foreground job of a pty its desktop adopted (its Terminal's):
    typed at that Terminal's prompt without &, or started by such a program. The job must be one the session's shell
-   made (win_adopt_shell()): a task in no job may make a job of its own the terminal's foreground (sys_job, CODE-AUDIT
-   T14), which would give its window the focus; a surfsh started inside that shell loses the exception. Interrupts off */
+   made (win_adopt_shell()), not merely the terminal's foreground job: a surfsh started inside that shell loses the
+   exception. 10/26/26: a task in no job that is no shell of the pty's may not set its foreground job any more
+   (sys_job, CODE-AUDIT T14, closed); the rule stays as it was. Interrupts off */
 static bool in_foreground(const struct win *w) {
     surf_task *t = w->desk ? task_find(w->owner) : NULL;
     int k;
