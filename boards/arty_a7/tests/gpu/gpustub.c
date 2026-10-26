@@ -255,15 +255,30 @@ static void tick(struct stub *s, uint64_t us) {
     }
     b = blankings(s, s->now);
     if(!s->frames_stop && b > s->frames_seen + 2) s->frames_seen = b - 1;  /* the clock was moved on: the last */
-    while(!s->frames_stop && vblank_of(s->frames_seen) <= to) {
-        uint64_t vb = vblank_of(s->frames_seen);
-        if(vb > s->now) {
-            s->now = vb;
+    if(s->tick_fn && s->next_tick + 20000 < s->now) s->next_tick = s->now;   /* likewise for the tick */
+    /* in time order up to `to`: the frames that end (each kept as it ended, with the engine's work up
+       to then) and the ticks of the port's timer (never inside an atomic stretch, which defers them
+       as interrupts off would, or inside one) */
+    for(;;) {
+        uint64_t vb = s->frames_stop ? STUB_NEVER : vblank_of(s->frames_seen);
+        uint64_t tk = (s->tick_fn && !s->in_tick && !s->in_atomic) ? s->next_tick : STUB_NEVER;
+        uint64_t t = vb <= tk ? vb : tk;
+        if(t > to) break;
+        if(t > s->now) {
+            s->now = t;
             run(s);
         }
-        frame_end(s, s->frames_seen++);
+        if(t == vb) {
+            frame_end(s, s->frames_seen++);
+        } else {
+            s->next_tick += 10000;
+            s->in_tick = 1;
+            s->tick_fn(s->tick_arg);            /* its own register reads move the time on a little */
+            s->ticks_run++;
+            s->in_tick = 0;
+        }
     }
-    s->now = to;
+    if(s->now < to) s->now = to;
     if(s->poke_at && s->now >= s->poke_at) {                       /* a byte of the picture on the screen */
         struct stub_disp d = stub_visible(s, s->now);
         s->vram[(d.base + s->poke_off) % GPU_VRAM_BYTES] ^= 0xFF;
@@ -592,11 +607,23 @@ static void p_free(void *c, void *p) {
     free(p);
 }
 
+static void p_tick_start(void *c, void (*fn)(void *arg), void *arg) {
+    struct stub *s = c;
+    s->tick_fn = fn;
+    s->tick_arg = arg;
+    s->next_tick = (s->now / 10000 + 1) * 10000;
+}
+
+static void p_tick_stop(void *c) {
+    struct stub *s = c;
+    s->tick_fn = NULL;
+}
+
 void stub_init(struct stub *s, int irq_path) {
     static const struct gpu_port port = {
         NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
         p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-        p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
+        p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
     };
     unsigned n;
     uint32_t *log = s->cmd ? s->cmd : malloc(STUB_CMD_LOG * sizeof(uint32_t));
@@ -608,6 +635,10 @@ void stub_init(struct stub *s, int irq_path) {
     if(!irq_path) {
         s->port.irq_arm = NULL;
         s->port.irq_wait = NULL;
+    }
+    if(irq_path < 0) {                          /* 10/26/26: a port without the timer's tick too */
+        s->port.tick_start = NULL;
+        s->port.tick_stop = NULL;
     }
     s->irq_path = irq_path;
     gpu_engine_init(&s->eng, s->vram);
@@ -680,6 +711,7 @@ int gt_printf(const char *fmt, ...) {
     }
     va_end(ap);
     measure(cur, from);
+    if(cur->line_us && memchr(cur->out + from, '\n', cur->nout - from)) tick(cur, cur->line_us);   /* a slow console */
     if(getenv("GPU_TEST_VERBOSE")) {
         va_start(ap, fmt);
         vprintf(fmt, ap);

@@ -103,6 +103,14 @@ struct stub {
     unsigned nflog;
     uint64_t poke_at;                   /* then a byte of the page on the screen is spoiled (0: never) */
     uint32_t poke_off;                  /* its offset in the picture shown */
+    /* the port's tick: fn(arg) every 10 ms of the CPU's time, as the timer interrupt (never inside an
+       atomic stretch or inside itself); no_tick: a port without one */
+    void (*tick_fn)(void *arg);
+    void *tick_arg;
+    uint64_t next_tick;
+    int in_tick, no_tick;
+    unsigned ticks_run;
+    uint64_t line_us;                   /* each line printed costs the CPU this long (SurfCPU's console) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];
@@ -173,7 +181,9 @@ struct stub {
 /* the lines printed wider than that since the last call (any stub), and the first of them */
 unsigned stub_too_wide(const char **first);
 
-/* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values */
+/* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values;
+   irq_path 1 the port with the GPU's interrupt and the timer's tick, 0 without the interrupt,
+   -1 (10/26/26) with the interrupt and without the tick */
 void stub_init(struct stub *s, int irq_path);
 void stub_free(struct stub *s);
 /* the display a frame shows that began at frame k's start (what latch k - 1 took) */

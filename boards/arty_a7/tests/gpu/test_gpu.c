@@ -1767,3 +1767,35 @@ static void t_cube_order(unsigned seed) {
     done(s);
 }
 TEST(t_cube_order)
+
+/* Each line printed costing the CPU 40 ms (on SurfCPU a console line costs about a frame or more:
+   the console compares its whole screen; a line printed just after a frame was seen loses one
+   once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
+   timer's tick every frame shown is checked all the same; on a port without the tick the run looks
+   from its loop, and frames pass unseen while it prints, which its lines say (checked fewer than
+   shown) */
+static int once_t_cube_look;
+static void t_cube_look(unsigned seed) {
+    struct stub *s;
+    unsigned long drawn = 0, shown = 0, checked = 0;
+    char line[160];
+    (void)seed;
+    if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
+    s = fresh2(1);
+    s->line_us = 40000;
+    s->log_frames = 1;
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && s->ticks_run > 250,
+          "gfx cube 3 with a slow console and the timer's tick");
+    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu checked: every frame looked at", drawn, shown, checked);
+    check(checked == shown && shown >= 170, line);
+    cube_at_the_pins(s, "and at the pins", 170);
+    done(s);
+    s = fresh2(-1);
+    s->line_us = 40000;
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && !s->ticks_run,
+          "the same on a port without the tick: the run looks from its loop");
+    snprintf(line, sizeof(line), "  %lu shown, %lu checked: frames passed unseen while its lines printed, said", shown, checked);
+    check(checked + 2 <= shown, line);
+    done(s);
+}
+TEST(t_cube_look)

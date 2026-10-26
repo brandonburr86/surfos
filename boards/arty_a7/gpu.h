@@ -120,6 +120,11 @@ struct gpu_port {
     /* memory for the demo's copy of VRAM; NULL when there is none */
     void *(*alloc)(void *ctx, u32 bytes);
     void (*free)(void *ctx, void *p);
+    /* 10/26/26: fn(arg) from the timer interrupt every tick (10 ms) until tick_stop(), so that gfx
+       cube looks at every frame (16.7 ms) whatever its task is doing, printing a line say; NULL
+       when there is no such timer (the run looks from its loop) */
+    void (*tick_start)(void *ctx, void (*fn)(void *arg), void *arg);
+    void (*tick_stop)(void *ctx);
 };
 
 struct gpu {
@@ -239,6 +244,9 @@ struct gpu_state {
 void gpu_state_read(struct gpu *g, struct gpu_state *s);
 /* FRAME_COUNT (*count); when it is not last, also FRAME_CRC, of the frame it counts (*crc): true */
 bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc);
+/* the port's tick (above): false when it has none */
+bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg);
+void gpu_tick_stop(struct gpu *g);
 
 /* for the command's longer runs (gfx.c: bench, demo; gfxcube.c) */
 u64 gpu_now_us(struct gpu *g);

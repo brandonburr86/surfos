@@ -808,6 +808,16 @@ bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc) {
     return true;
 }
 
+bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg) {
+    if(!P(g)->tick_start || !P(g)->tick_stop) return false;
+    P(g)->tick_start(CTX(g), fn, arg);
+    return true;
+}
+
+void gpu_tick_stop(struct gpu *g) {
+    if(P(g)->tick_stop) P(g)->tick_stop(CTX(g));
+}
+
 void gpu_state_read(struct gpu *g, struct gpu_state *s) {
     s->status = RD(g, SURF_GPU_STATUS);
     s->ie = RD(g, SURF_GPU_IE);

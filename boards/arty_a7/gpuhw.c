@@ -10,7 +10,8 @@ interrupt (intc source 5, STATUS.FENCE_EV with IE.FENCE: a FENCE sent with its I
 the task that waits for a fence, interrupts off for the few stores of a display change, the text
 console's copy of CTRL (textcon.c) under the console lock, a mutex for the claim, and the kernel
 heap for the demo's copy of VRAM. A bitstream without FEATURES.IRQ gets the port without the
-interrupt: fences are then waited for with sleeps.
+interrupt: fences are then waited for with sleeps. 10/26/26: a periodic kernel timer (every tick,
+10 ms, from the timer interrupt) for gfx cube's looks at FRAME_COUNT.
 
 Also the driver's entry in board.c's table (the +GPU: lines at boot, said once, whether there is
 a GPU or not), its line in `drivers`, and the gfx command's kernel side (boards/arty_a7/gfx.c).
@@ -23,6 +24,8 @@ sleeps on a queue (nothing may run before the drivers are up), it spins on the m
 #include <surfos/console.h>
 #include <surfos/task.h>
 #include <surfos/sync.h>
+#include <surfos/ktimer.h>
+#include <surfos/timer.h>                       /* HZ */
 #include <surfos/irq.h>
 #include <surfos/interrupt.h>
 #include <mm/kalloc.h>
@@ -43,6 +46,7 @@ static mutex_t gpu_lock = MUTEX_INIT("gpu");
 static struct surf_task *volatile holder;      /* who has the claim (for the message only) */
 static event_t fence_event;
 static bool have_isr;
+static struct ktimer look_timer;               /* gfx cube's looks, under the claim (one run at a time) */
 
 /* a task the scheduler may switch away from (not the idle task while the drivers start) */
 static bool can_wait(void) {
@@ -159,16 +163,28 @@ static const char *p_holder(void *c, char *buf, u_int size) {
 static void *p_alloc(void *c, u32 bytes) { (void)c; return kalloc(bytes); }
 static void p_free(void *c, void *p) { (void)c; kfree(p); }
 
+/* fn from the timer interrupt every tick (ktimer.h: interrupts off; it reads two registers) */
+static void p_tick_start(void *c, void (*fn)(void *arg), void *arg) {
+    (void)c;
+    ktimer_init(&look_timer, fn, arg);
+    ktimer_start(&look_timer, 1000 / HZ, true);
+}
+
+static void p_tick_stop(void *c) {
+    (void)c;
+    ktimer_cancel(&look_timer);
+}
+
 static const struct gpu_port port_irq = {
     NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, p_irq_arm, p_irq_wait, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
+    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
 };
 
 static const struct gpu_port port_poll = {             /* no interrupt path: fences with sleeps */
     NULL, p_rd, p_wr, p_vrd, p_vwr, p_vram_read, p_vram_write, p_vram_rd8, p_vram_wr8, p_us, p_relax, p_sleep,
     p_interrupted, NULL, NULL, p_atomic_begin, p_atomic_end, p_text_lock, p_text_unlock, p_get_mode,
-    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free
+    p_set_mode, p_trylock, p_unlock, p_holder, p_alloc, p_free, p_tick_start, p_tick_stop
 };
 
 /* the GPU's interrupt: only IE.FENCE is enabled, so it is a FENCE with its IRQ flag; clearing
