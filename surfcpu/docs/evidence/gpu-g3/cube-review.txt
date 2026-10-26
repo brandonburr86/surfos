@@ -1,0 +1,124 @@
+SurfGPU, the review of 58ac7b3 (the cube in SurfOS, GPU.md 15.8): its fixes on sc/gpu-cube (GPU.md 15.9),
+2026-10-26, in the surfcpu-toolchain container (gcc 14.2.0, Verilator 5.032; Docker through the capped
+wrapper). Simulation and the host only: nothing here ran on a board.
+
+The host runs: the host test built as make test-gpuos-host builds it (surfcpu/build/review-fix/run-all.sh,
+not kept), seeds 1 7 123; each variant b/ (gpu.c gfx.c gpu.h gfxcube.c) and t/ (test_gpu.c gpustub.c
+gpustub.h) taken from the commits named, the bug put back as named. The same counts came from the Mac's
+clang build of the same files.
+
+  variant           driver files                        test        result
+  l1-fix            6ecf03a                             6ecf03a     1014 of 1014
+  l1-bug            6ecf03a, the verdict and result     6ecf03a     1012 of 1014
+                    ignoring frames missed
+  m1-fix            ba925bc                             ba925bc     1015 of 1015
+  m1-bug            6ecf03a                             ba925bc     1013 of 1015
+  m1end-fix         f3f5767                             f3f5767     1043 of 1043
+  m1end-bug         f3f5767, gfxcube.c of fba05d5       f3f5767     1042 of 1043
+  m2-fix            c484e14                             c484e14     1027 of 1027
+  m2-bug            c484e14, in_step() always true      c484e14     1018 of 1027
+                    and no end check
+  m2-mutant         c484e14 + the review's M2           c484e14     1017 of 1027
+  m2-mutant-before  ba925bc + the review's M2           ba925bc     1015 of 1015
+  l2-fix            ebd1b53                             ebd1b53     1036 of 1036
+  l2-m3             ebd1b53 + the review's M3           ebd1b53     1035 of 1036
+  l3-fix            fe100cf                             fe100cf     1037 of 1037
+  l3-bug            fe100cf, gpu_fence_next() counting  fe100cf     1036 of 1037
+                    the cube's FENCEs as asking
+  l4-fix            54a1451                             54a1451     1040 of 1040
+  l4-bug            54a1451, gfx.c of fe100cf           54a1451     1037 of 1040
+
+The container's output (FAIL lines counted over the three seeds):
+cc (Debian 14.2.0-19) 14.2.0
+== l1-fix
+test_arty: 1014 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+== l1-bug
+      1 FAIL t_cube_look:   186 shown, 3 missed: frames passed unseen while its lines printed, said, no whole verdict
+      1 FAIL t_cube_look: the same on a port without the tick: the run looks from its loop, and fails
+test_arty: 1012 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+== m1-fix
+test_arty: 1015 of 1015 checks passed, 31 tests x 3 seeds (1 7 123)
+== m1-bug
+      1 FAIL t_cube:   122 drawn: the FLIPs the engine did after frame 0's (121); 122 shown; 60.4 a second
+      1 FAIL t_cube:   about 60 frames drawn a second (one a blanking), each shown and checked (none missed)
+test_arty: 1013 of 1015 checks passed, 31 tests x 3 seeds (1 7 123)
+== m2-fix
+test_arty: 1027 of 1027 checks passed, 31 tests x 3 seeds (1 7 123)
+== m2-bug
+      3 FAIL t_cube_check: a frame two ahead of the FENCEs read: out of order
+      3 FAIL t_cube_check: a frame two behind the FLIPs: out of order; one behind, one ahead: in step
+      3 FAIL t_cube_check: frame 0 shown again and again as FLIPs 0 to 5 are done: in order for two looks, then out of order
+test_arty: 1018 of 1027 checks passed, 31 tests x 3 seeds (1 7 123)
+== m2-mutant
+      1 FAIL t_cube:   the frames as they ended: 123 frames shown of the cube (110 wanted), 1 pictures (110 wanted), 0 between them not the turn's, 0 out of step, 0 after more than two video frames
+      1 FAIL t_cube: gfx cube 1 from a 320x240 picture with a depth buffer: its depths and the depth buffer back
+      1 FAIL t_cube: gfx cube 2: a line a second, every frame checked whole, everything back
+      1 FAIL t_cube_end: a byte of the picture shown spoiled: one frame torn, said, the run fails
+      1 FAIL t_cube_end: no memory to keep VRAM: said, it runs, the display and palette back
+      1 FAIL t_cube_look:   0 drawn, 0 shown, 0 missed: every frame looked at
+      1 FAIL t_cube_look:   185 shown, 3 missed: frames passed unseen while its lines printed, said, no whole verdict
+      1 FAIL t_cube_look:   and at the pins: 185 frames shown of the cube (170 wanted), 1 pictures (120 wanted), 0 between them not the turn's, 0 out of step, 0 after more than two video frames
+      1 FAIL t_cube_look: gfx cube 3 with a slow console and the timer's tick
+      1 FAIL t_cube_order: gfx cube 1 from a 640x480 picture
+test_arty: 1017 of 1027 checks passed, 31 tests x 3 seeds (1 7 123)
+== m2-mutant-before
+test_arty: 1015 of 1015 checks passed, 31 tests x 3 seeds (1 7 123)
+== l2-fix
+test_arty: 1036 of 1036 checks passed, 31 tests x 3 seeds (1 7 123)
+== l2-m3
+      1 FAIL t_cube_end:   it ends at that frame: 61 drawn (the FLIPs after frame 0's), none after, no frame torn
+test_arty: 1035 of 1036 checks passed, 31 tests x 3 seeds (1 7 123)
+== l3-fix
+test_arty: 1037 of 1037 checks passed, 31 tests x 3 seeds (1 7 123)
+== l3-bug
+      1 FAIL t_cube_look:   the interrupt: 4 taken for the 184 fences that asked for one (of 184 sent: the cube's 180 frames' FENCEs ask for none)
+test_arty: 1036 of 1037 checks passed, 31 tests x 3 seeds (1 7 123)
+== l4-fix
+test_arty: 1040 of 1040 checks passed, 31 tests x 3 seeds (1 7 123)
+== l4-bug
+      3 FAIL t_usage2:   gfx help and gfx tri's usage give how's words alike: flat or gouraud, ztest or zle, the rest each or not
+test_arty: 1037 of 1040 checks passed, 31 tests x 3 seeds (1 7 123)
+== m1end-fix
+test_arty: 1043 of 1043 checks passed, 31 tests x 3 seeds (1 7 123)
+== m1end-bug
+      1 FAIL t_cube_look: gfx cube 1 with the slow console: 61 drawn, 58.2 a second (59.0 to 59.9 wanted)
+test_arty: 1042 of 1043 checks passed, 31 tests x 3 seeds (1 7 123)
+
+The RTL system (make test-gpuos; build/sim/surfsim_gpu, the RTL of surfcpu_soc with SurfGPU):
+
+M2's mutant, the run's bug-back: a kernel with gfxcube.c's gpu_cube_frame(&sink, 0, k & 1u, *fence)
+(54a1451 + the mutant, not kept)
+  make test-gpuos: exit 2, at its model replay (gfxscene, the same gfx lines through gfx.c, gpu.c and
+  gfxcube.c in the C model):
+    > gfx cube 1
+        gfx cube: 1 s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)
+        cube 1 s: 60 drawn, 60 shown, 0 missed: 0 torn, 59 out of order
+        gfx cube: 61 drawn in 1.01 s, 59.9 a second; display back as it was
+        gfx cube: the frames shown went 0 on for 61 FLIPs
+        gfx cube: 62 shown, 0 missed: 0 torn, 62 out of order
+    gfxscene: 'gfx cube 1' returned 1
+    FAIL gfxscene: the 61 lines through gfx.c and gpu.c in the C model give gfxref's modes, CRCs and pictures
+  past the replay (gfxscene's exit status ignored by build/review-fix/gfxscene-rc0.sh), on the RTL
+  system: 29 of 32 (cube-review-test-gpuos-m2-mutant.txt):
+    FAIL gfx cube 1 at the VGA pins: 67 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 1 pictures, 0 after more than two video frames
+    FAIL gfx cube 1 by SurfOS's own check: 61 drawn in 1.07 s (56.5 a second), the frames shown 0 on for 61 FLIPs, 66 shown, 0 missed: 0 torn, 66 out of order; a line a second: 60 drawn, 60 shown, 0 missed: 0 torn, 59 out of order
+    FAIL SurfOS on the SoC with SurfGPU (surfsim_gpu): every expected line in order (max-cycles reached ...)
+      (the state step's pattern lacked gfx's new line of fe100cf, "fences that asked for it": fixed in fba05d5)
+
+fba05d5, the fixes before f3f5767: test-gpuos 32 of 32 in 228 s
+    ok   gfx cube 1 at the VGA pins: 67 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 62 pictures, 0 after more than two video frames
+    ok   gfx cube 1 by SurfOS's own check: 61 drawn in 1.07 s (56.6 a second), 66 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (243 sent); 4 fence waits slept on it, 3 of them woken by it
+  a trial kernel (fba05d5 + a kprintf in gpuhw.c's irq_wait when a wait timed out with its event set,
+  not kept): 32 of 32; 4 fence waits slept, 4 woken, the trial's line never printed; at the pins frame 0
+  for one video frame (five at 9160aad), frames 1 to 60 one each; "61 drawn in 1.07 s, 56.8 a second":
+  the time ended when the run saw the last FENCE, after the second's line it printed as the run ended.
+  f3f5767 ends the time at the first sighting, a look's or the run's.
+
+f3f5767, the code handed back (cube-review-test-gpuos.txt): test-gpuos 32 of 32 in 229 s
+    ok   SurfOS on the SoC with SurfGPU (surfsim_gpu): every expected line in order (output matched after 509781324 cycles (20.391 s simulated) in 228.3 s wall (2.23 M cycles/s); UART 1392 bytes in, 11811 out, 0 framing errors; DDR calibrated, 6885266 reads 3836312 writes 41762604 fetches 0 errors; exit 0)
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (243 sent); 4 fence waits slept on it, 4 of them woken by it
+    ok   gfx cube 1 at the VGA pins: 66 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 62 pictures, 0 after more than two video frames
+    ok   gfx cube 1 by SurfOS's own check: 61 drawn in 1.02 s (59.5 a second), 65 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order
+  at the pins: frame 0 for one video frame, frames 1 to 60 one each, frame 61 for five (until the
+  display went back, after the run's last look)
