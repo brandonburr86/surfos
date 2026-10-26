@@ -26,6 +26,9 @@ is measured: none may pass the console's 80 columns (t_columns has each message 
 #include "harness.h"
 #include "gpustub.h"
 #include "../../../../shell/shell.h"
+#include "gpucube.h"
+#include "gfxcube_expect.h"             /* gfx cube's table, made at build time (boards/arty_a7/gen/) */
+#include "gpuscenes_expect.h"           /* gpudiag's (build/fw/gen/): its first 16 cube frames to compare */
 
 extern const uint8_t font8x16[256][16];
 
@@ -38,6 +41,15 @@ static struct stub *fresh(int irq) {
     struct stub *s = calloc(1, sizeof(*s));
     stub_init(s, irq);
     check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.present, "probe: the stand-in is a GPU1");
+    return s;
+}
+
+/* a GPU2 (G4's engine): SET_ZBUF, TRIANGLE, FLIP too */
+static struct stub *fresh2(int irq) {
+    struct stub *s = calloc(1, sizeof(*s));
+    stub_init(s, irq);
+    s->id = GPUDRV_ID_GPU2;
+    check(gpu_probe(&G, &s->port, FEAT) == GPU_OK && G.present && G.gpu2, "probe: the stand-in is a GPU2");
     return s;
 }
 
@@ -84,6 +96,9 @@ static struct ref *ref_of(struct stub *s) {
     r->e.cy0 = s->eng.cy0;
     r->e.cx1 = s->eng.cx1;
     r->e.cy1 = s->eng.cy1;
+    r->e.zvalid = s->eng.zvalid;                /* GPU2: and its depth buffer */
+    r->e.zbase = s->eng.zbase;
+    r->e.zstride = s->eng.zstride;
     return r;
 }
 
@@ -323,6 +338,294 @@ static void t_random(unsigned seed) {
 }
 TEST(t_random)
 
+/**** GPU2's commands (GPU.md section 16; 10/26/26) ****/
+
+/* a vertex coordinate in 12.4 as gfx tri takes it: pixels with sixteenths in decimal */
+static void fx_str(char *b, size_t n, int v16) {
+    unsigned a = (unsigned)(v16 < 0 ? -v16 : v16);
+    if(a % 16) snprintf(b, n, "%s%u.%04u", v16 < 0 ? "-" : "", a / 16, (a % 16) * 625);
+    else snprintf(b, n, "%s%u", v16 < 0 ? "-" : "", a / 16);
+}
+
+/* GPU.md 16.2's words of a TRIANGLE: the header, then each vertex's X | Y << 16 (12.4) and Z | C << 16 */
+static void ref_tri(struct ref *r, uint32_t hdr_bits, const int *x16, const int *y16, const unsigned *z, const unsigned *c) {
+    int i;
+    w(r, GPU_HDR(GPU_OP_TRIANGLE, hdr_bits));
+    for(i = 0; i < 3; i++) {
+        w(r, ((uint32_t)x16[i] & 0xFFFFu) | ((uint32_t)y16[i] & 0xFFFFu) << 16);
+        w(r, (z[i] & 0xFFFFu) | (c[i] & 0xFFu) << 16);
+    }
+}
+
+/* GPU.md 16.6: the depth bytes as a target, FILL_RECT of b, the target back, SET_ZBUF again */
+static void ref_zclear(struct ref *r, uint32_t zb, uint32_t zs, uint32_t tb, uint32_t ts, uint32_t tw, uint32_t th, uint8_t b) {
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, zb); w(r, zs); w(r, GPU_WH(2 * tw, th));
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, b)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(2 * tw, th));
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, tb); w(r, ts); w(r, GPU_WH(tw, th));
+    w(r, GPU_HDR(GPU_OP_SET_ZBUF, 0)); w(r, zb); w(r, zs);
+}
+
+static int depth_bytes_are(struct stub *s, uint8_t b) {
+    unsigned i;
+    for(i = 153600; i < GPU_VRAM_BYTES; i++)
+        if(s->vram[i] != b) return 0;
+    return 1;
+}
+
+static void t_gpu2(unsigned seed) {
+    static const unsigned c200[3] = { 200, 200, 200 };
+    struct stub *s = fresh2(1);
+    struct ref *r;
+    uint8_t *was = malloc(GPU_VRAM_BYTES);
+    int x[3], y[3], i, ok;
+    unsigned z[3], c[3], nw0, culled;
+    unsigned long long zfail, covered;
+    uint64_t t0, vb;
+    (void)seed;
+    check(gfx(s, "gfx mode gfx 2") == CMD_OK && G.t_w == 320 && G.t_h == 240, "gfx mode gfx 2: the target 320x240 at VRAM 0");
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    depth buffer: none\n"), "gfx on a GPU2: no depth buffer yet");
+    r = ref_of(s);
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_OK && said(s, "depth buffer: VRAM 153600, stride 640, for the target's 320x240") &&
+          s->eng.zvalid && s->eng.zbase == 153600 && s->eng.zstride == 640 && G.z_valid,
+          "gfx zbuf 153600 640: SET_ZBUF, GPU.md 16.6's layout (the depth after pictures A and B)");
+    w(r, GPU_HDR(GPU_OP_SET_ZBUF, 0)); w(r, 153600); w(r, 640);
+    check(gfx(s, "gfx") == CMD_OK && said(s, "    depth buffer: VRAM 153600, stride 640\n"), "  and gfx says so");
+    check(gfx(s, "gfx zclear") == CMD_OK && !s->nout, "gfx zclear: done, nothing said");
+    ref_zclear(r, 153600, 640, 0, 320, 320, 240, 0xFF);
+    check(same(s, r) && depth_bytes_are(s, 0xFF) && s->eng.zvalid && s->eng.base == 0 && s->eng.tw == 320 && s->eng.cx1 == 320,
+          "  every depth 0xFFFF: FILL_RECT 0xFF over the depth bytes, then the target and the depth buffer again (16.6)");
+    check(gfx(s, "gfx clear 0") == CMD_OK, "gfx clear 0");
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, 0)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+    /* a flat triangle, clockwise on the screen (16.3: A > 0), drawn, then culled */
+    x[0] = GPU_FX(10); y[0] = GPU_FX(10); x[1] = GPU_FX(100); y[1] = GPU_FX(20); x[2] = GPU_FX(50); y[2] = GPU_FX(90);
+    z[0] = z[1] = z[2] = 0;
+    c[0] = c[1] = c[2] = 77;
+    check(gfx(s, "gfx tri 10 10 100 20 50 90 77") == CMD_OK && !s->nout, "gfx tri 10 10 100 20 50 90 77: a flat triangle");
+    ref_tri(r, 77, x, y, z, c);
+    check(same(s, r) && px(s, 50, 40) == 77 && px(s, 5, 5) == 0 && px(s, 100, 90) == 0, "  TRIANGLE (16.2), as the model draws it");
+    memcpy(was, s->vram, GPU_VRAM_BYTES);
+    culled = (unsigned)s->eng.tri_culled;
+    check(gfx(s, "gfx tri cullcw 10 10 100 20 50 90 200") == CMD_OK && s->eng.tri_culled == culled + 1, "gfx tri cullcw on it: culled");
+    ref_tri(r, 200 | GPU_TRI_CULL_CW, x, y, z, c200);
+    check(same(s, r) && !memcmp(s->vram, was, GPU_VRAM_BYTES), "  nothing drawn");
+    check(gfx(s, "gfx tri cullccw 10 10 100 20 50 90 200") == CMD_OK, "gfx tri cullccw on it: drawn");
+    ref_tri(r, 200 | GPU_TRI_CULL_CCW, x, y, z, c200);
+    check(same(s, r) && px(s, 50, 40) == 200, "  in colour 200");
+    /* two triangles that share an edge through pixel centres (the top-left rule): every pixel of
+       their square drawn exactly once (16.3) */
+    memset(s->op_px, 0, sizeof(s->op_px));
+    check(gfx(s, "gfx tri 20 100 60 100 60 140 1") == CMD_OK && gfx(s, "gfx tri 20 100 60 140 20 140 2") == CMD_OK,
+          "a square of 40x40 as two triangles along its diagonal");
+    x[0] = GPU_FX(20); y[0] = GPU_FX(100); x[1] = GPU_FX(60); y[1] = GPU_FX(100); x[2] = GPU_FX(60); y[2] = GPU_FX(140);
+    c[0] = c[1] = c[2] = 1;
+    ref_tri(r, 1, x, y, z, c);
+    x[1] = GPU_FX(60); y[1] = GPU_FX(140); x[2] = GPU_FX(20); y[2] = GPU_FX(140);
+    c[0] = c[1] = c[2] = 2;
+    ref_tri(r, 2, x, y, z, c);
+    for(ok = 1, i = 0; i < 1600; i++) ok &= px(s, 20 + i % 40, 100 + i / 40) == 1 || px(s, 20 + i % 40, 100 + i / 40) == 2;
+    check(same(s, r) && ok && s->op_px[GPU_OP_TRIANGLE] == 1600 && px(s, 59, 100) == 1 && px(s, 20, 139) == 2,
+          "  each of its 1,600 pixels drawn once (no gap, no pixel twice), as the model");
+    /* Gouraud with depth, vertices with sixteenths: two triangles crossing in depth */
+    check(gfx(s, "gfx tri gouraud,ztest,zwrite 150.5 30.25 1000 32 300.0625 60 60000 63 200 200.75 30000 40") == CMD_OK,
+          "gfx tri gouraud,ztest,zwrite with sixteenths: drawn");
+    x[0] = 2408; y[0] = 484; x[1] = 4801; y[1] = GPU_FX(60); x[2] = GPU_FX(200); y[2] = 3212;
+    z[0] = 1000; z[1] = 60000; z[2] = 30000;
+    c[0] = 32; c[1] = 63; c[2] = 40;
+    ref_tri(r, 32 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE, x, y, z, c);
+    check(same(s, r) && s->vram[153600 + 100 * 640 + 2 * 200] != 0xFF, "  as the model, its depths written (16.4)");
+    zfail = s->eng.tri_zfail;
+    covered = s->eng.tri_pixels;
+    check(gfx(s, "gfx tri gouraud,zle,zwrite 140 200 30000 64 310 190 30000 95 250 20 30000 80") == CMD_OK,
+          "gfx tri gouraud,zle,zwrite: a second one at depth 30000, through the first");
+    x[0] = GPU_FX(140); y[0] = GPU_FX(200); x[1] = GPU_FX(310); y[1] = GPU_FX(190); x[2] = GPU_FX(250); y[2] = GPU_FX(20);
+    z[0] = z[1] = z[2] = 30000;
+    c[0] = 64; c[1] = 95; c[2] = 80;
+    ref_tri(r, 64 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE | GPU_TRI_ZWRITE, x, y, z, c);
+    zfail = s->eng.tri_zfail - zfail;
+    covered = s->eng.tri_pixels - covered;
+    check(same(s, r) && zfail > 0 && covered > zfail && s->eng.tri_clamped == 0 && s->eng.tri_wide == 0,
+          "  as the model: in front of the first in part, behind it (dropped by the depth test) in part");
+    /* zclear with another byte, the depth buffer off, another target, FLIP */
+    check(gfx(s, "gfx zclear 0x80") == CMD_OK, "gfx zclear 0x80");
+    ref_zclear(r, 153600, 640, 0, 320, 320, 240, 0x80);
+    check(same(s, r) && depth_bytes_are(s, 0x80), "  every depth 0x8080");
+    check(gfx(s, "gfx zbuf off") == CMD_OK && said(s, "depth buffer: none") && !s->eng.zvalid && !G.z_valid &&
+          s->eng.base == 0 && s->eng.tw == 320 && s->eng.cx1 == 320, "gfx zbuf off: SET_TARGET again, the depth buffer gone");
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, 0); w(r, 320); w(r, GPU_WH(320, 240));
+    check(gfx(s, "gfx tri ztest 0 0 0 1 10 0 0 1 0 10 0 1") == CMD_FAIL && said(s, "need a depth buffer"),
+          "  then ztest is refused (nothing sent), saying why");
+    check(gfx(s, "gfx target 76800 320 320 240") == CMD_OK && said(s, "target: VRAM 76800, stride 320, 320x240") &&
+          s->eng.base == 76800 && G.t_base == 76800, "gfx target 76800 320 320 240: picture B");
+    w(r, GPU_HDR(GPU_OP_SET_TARGET, 0)); w(r, 76800); w(r, 320); w(r, GPU_WH(320, 240));
+    check(gfx(s, "gfx clear 0x55") == CMD_OK && gfx(s, "gfx tri 0 0 319 0 0 239 9") == CMD_OK, "  drawn into");
+    w(r, GPU_HDR(GPU_OP_FILL_RECT, 0x55)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+    x[0] = 0; y[0] = 0; x[1] = GPU_FX(319); y[1] = 0; x[2] = 0; y[2] = GPU_FX(239);
+    z[0] = z[1] = z[2] = 0;
+    c[0] = c[1] = c[2] = 9;
+    ref_tri(r, 9, x, y, z, c);
+    check(same(s, r) && s->vram[76800] == 9 && s->vram[76800 + 239 * 320 + 319] == 0x55, "  as the model, in B");
+    nw0 = s->nw;
+    t0 = s->now;
+    check(gfx(s, "gfx flip") == CMD_OK && said(s, "display: GFX_BASE 76800, written by FLIP at a vertical blanking") &&
+          s->reg.base == 76800 && s->nw == nw0 + 1 && s->wlog[nw0].reg == SURF_VIDEO_GFX_BASE,
+          "gfx flip: FLIP to the target's base, GFX_BASE written once");
+    vb = s->wlog[nw0].t;
+    check(vb % STUB_FRAME_US == STUB_VBLANK_US && vb > t0 && vb - t0 <= STUB_FRAME_US + 100 && s->flips_done == 1,
+          "  at the next vertical blanking (16.7), the command done once it was written");
+    check(gfx(s, "gfx flip 0") == CMD_OK && s->reg.base == 0 && s->flips_done == 2, "gfx flip 0: back to picture A");
+    check(s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0 && s->gpu2_on_gpu1 == 0,
+          "GPU2's commands: the FIFO rule kept, no error, no timeout");
+    free(was);
+    free(r);
+    done(s);
+}
+TEST(t_gpu2)
+
+/* random triangles with every flag, vertices on the target, past it and over the whole 12.4 range,
+   with the depth buffer, depth clears and fills between: each against the reference */
+static void t_gpu2_random(unsigned seed) {
+    struct stub *s = fresh2(1);
+    struct ref *r;
+    int i, bad = 0, drawn = 0;
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    gfx(s, "gfx zclear");
+    r = ref_of(s);
+    for(i = 0; i < 120; i++) {
+        unsigned k = rnd() % 20;
+        if(k == 0) {
+            unsigned b = rnd() & 0xFF;
+            gfx(s, "gfx zclear %u", b);
+            ref_zclear(r, 153600, 640, 0, 320, 320, 240, (uint8_t)b);
+        } else if(k == 1) {
+            unsigned c = rnd() & 0xFF;
+            gfx(s, "gfx clear %u", c);
+            w(r, GPU_HDR(GPU_OP_FILL_RECT, c)); w(r, GPU_XY(0, 0)); w(r, GPU_WH(320, 240));
+        } else {
+            char how[64] = "", xs[3][16], ys[3][16];
+            uint32_t bits = 0;
+            int x[3], y[3], v;
+            unsigned z[3], c[3];
+            for(v = 0; v < 3; v++) {
+                if(rnd() % 12 == 0) {                   /* anywhere in the 12.4 range */
+                    x[v] = (int)(rnd() % 65536) - 32768;
+                    y[v] = (int)(rnd() % 65536) - 32768;
+                } else {                                /* on the target or a little past it */
+                    x[v] = (int)(rnd() % (360 * 16)) - 20 * 16;
+                    y[v] = (int)(rnd() % (280 * 16)) - 20 * 16;
+                }
+                z[v] = rnd() & 0xFFFF;
+                c[v] = rnd() & 0xFF;
+                fx_str(xs[v], sizeof(xs[v]), x[v]);
+                fx_str(ys[v], sizeof(ys[v]), y[v]);
+            }
+            if(rnd() & 1) bits |= GPU_TRI_GOURAUD;
+            switch(rnd() % 3) {
+            case 1: bits |= GPU_TRI_ZTEST; break;
+            case 2: bits |= GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE; break;
+            }
+            if(rnd() & 1) bits |= GPU_TRI_ZWRITE;
+            if(rnd() % 10 == 0) bits |= GPU_TRI_CULL_CW;
+            if(rnd() % 10 == 0) bits |= GPU_TRI_CULL_CCW;
+            if(bits & GPU_TRI_GOURAUD) strcat(how, "gouraud,");
+            if(bits & GPU_TRI_ZFUNC_LE) strcat(how, "zle,");
+            else if(bits & GPU_TRI_ZTEST) strcat(how, "ztest,");
+            if(bits & GPU_TRI_ZWRITE) strcat(how, "zwrite,");
+            if(bits & GPU_TRI_CULL_CW) strcat(how, "cullcw,");
+            if(bits & GPU_TRI_CULL_CCW) strcat(how, "cullccw,");
+            if(how[0]) how[strlen(how) - 1] = ' ';
+            if(gfx(s, "gfx tri %s%s %s %u %u %s %s %u %u %s %s %u %u", how, xs[0], ys[0], z[0], c[0], xs[1], ys[1], z[1], c[1],
+                   xs[2], ys[2], z[2], c[2]) != CMD_OK && !bad++)
+                printf("    (seed %u, triangle %d: %s)\n", seed, i, s->out);
+            ref_tri(r, bits | c[0], x, y, z, c);
+            drawn++;
+        }
+        if(!same(s, r) && !bad++) printf("    (seed %u, command %d: %s)\n", seed, i, s->out);
+    }
+    check(!bad && drawn > 90, "random triangles (every flag, sixteenths, past the edges, the whole 12.4 range) with "
+          "depth clears and fills: VRAM and the depth buffer the model's");
+    check(s->eng.tri_drawn > 20 && s->eng.tri_zfail > 0 && s->eng.tri_clamped == 0 && s->eng.tri_wide == 0 &&
+          s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0,
+          "  triangles walked and depths that failed among them; the FIFO rule kept, no error");
+    free(r);
+    done(s);
+}
+TEST(t_gpu2_random)
+
+/* the driver's rules with GPU2's commands: the FIFO, a stopped engine (the depth buffer sent again
+   after the ABORT), a FLIP that never comes (no pixel clock), Ctrl+C while a FLIP waits, an error,
+   and a GPU1, on which each says that it needs GPU2 and sends nothing */
+static void t_gpu2_rules(unsigned seed) {
+    struct stub *s = fresh2(1);
+    unsigned i, n0, f0;
+    uint64_t t0;
+    char line[160];
+    int ok;
+    (void)seed;
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    s->slow = 300;                              /* 12 us a word: the FIFO fills */
+    ok = gpu_claim(&G, "gfx tri") == GPU_OK;    /* one submission of 630 words, as gfx cube's frames are long */
+    for(i = 0; i < 30 && ok; i++) {
+        int x[3] = { (int)i * 16, 300 * 16, 0 }, y[3] = { 0, (int)i * 160, 239 * 16 };
+        unsigned z[3] = { 100 * i, 9, 400 }, c[3] = { 1, 2, 3 };
+        ok = gpu_tri(&G, 1 | GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE, x, y, z, c, "gfx tri") == GPU_OK &&
+             gpu_zbuf_clear(&G, 0xFF, "gfx tri") == GPU_OK;
+    }
+    ok = ok && gpu_sync(&G, "gfx tri") == GPU_OK;
+    gpu_release(&G);
+    check(ok && s->full_seen > 0 && s->writes_full == 0 && s->writes_blind == 0 && !s->overflow && G.errors == 0,
+          "a slow engine, 30 triangles and 30 depth clears in one go: no word into a full FIFO or past the room said");
+    s->slow = 0;
+    /* a stopped engine: said, ABORT, and the target, clip and depth buffer sent again */
+    s->stopped = 1;
+    t0 = s->now;
+    check(gfx(s, "gfx tri ztest 0 0 0 1 100 0 0 1 0 100 0 1") == CMD_FAIL && said(s, "gfx tri: the GPU finished nothing for 2 s"),
+          "a stopped engine under gfx tri: said, ABORT, failed");
+    check(s->now - t0 >= 2000000 && s->now - t0 < 2400000, "  after 2 seconds, not much more");
+    s->stopped = 0;
+    stub_drain(s, 1000);
+    check(s->eng.zvalid && s->eng.zbase == 153600 && s->eng.zstride == 640 && s->eng.base == 0 && s->eng.tw == 320 &&
+          G.z_valid, "  the engine back: its target, clip and depth buffer the driver's (sent again after the ABORT)");
+    check(gfx(s, "gfx tri ztest,zwrite 0 0 0 1 100 0 0 1 0 100 0 1") == CMD_OK, "  and a triangle with depth works");
+    /* a FLIP that never comes: no pixel clock, no blanking */
+    s->frames_stop = 1;
+    f0 = s->flips_done;
+    t0 = s->now;
+    check(gfx(s, "gfx flip 76800") == CMD_FAIL && said(s, "gfx flip: the GPU finished nothing for 2 s: a stopped engine; ABORT"),
+          "a FLIP with no blanking to wait for: a stopped engine after 2 s, ABORT, failed");
+    snprintf(line, sizeof(line), "  a bounded wait: %llu ms, the FLIP's write dropped by the ABORT",
+             (unsigned long long)((s->now - t0) / 1000));
+    check(s->now - t0 >= 2000000 && s->now - t0 < 2400000 && s->flips_done == f0 && s->reg.base == 0, line);
+    s->intr_at = s->now + 100000;
+    t0 = s->now;
+    check(gfx(s, "gfx flip 76800") == CMD_FAIL && said(s, "gfx flip: interrupted: the engine stopped (ABORT)") &&
+          s->now - t0 < 200000 && s->flips_done == f0 && s->reg.base == 0, "Ctrl+C while a FLIP waits: ABORT, said, at once");
+    s->intr_at = 0;
+    s->frames_stop = 0;
+    check(gfx(s, "gfx flip 76800") == CMD_OK && s->reg.base == 76800, "  with blankings again, the FLIP works");
+    /* an error: SET_ZBUF's base arrives unaligned */
+    s->corrupt_value_at = s->cmd_writes + 2;
+    s->corrupt_value = 153602;
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_FAIL && said(s, "BAD_PARAM"), "BAD_PARAM (a refused SET_ZBUF): said in words");
+    stub_drain(s, 1000);
+    check(!(s->eng.sticky & GPU_ST_BAD_PARAM) && s->eng.zvalid && s->eng.zbase == 153600 && G.z_valid,
+          "  cleared, ABORT, and the depth buffer sent again with the target: the engine's is the driver's");
+    done(s);
+    /* a GPU1 */
+    s = fresh(1);
+    gfx(s, "gfx mode gfx 2");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx zbuf 153600 640") == CMD_FAIL && said(s, "gfx zbuf: needs GPU2 (SET_ZBUF, TRIANGLE, FLIP); this engine is GPU1") &&
+          gfx(s, "gfx zclear") == CMD_FAIL && said(s, "needs GPU2") && gfx(s, "gfx tri 0 0 9 0 0 9 1") == CMD_FAIL &&
+          said(s, "needs GPU2") && gfx(s, "gfx flip") == CMD_FAIL && said(s, "needs GPU2"),
+          "on a GPU1, zbuf, zclear, tri and flip say they need GPU2");
+    check(s->ncmd == n0 && s->gpu2_on_gpu1 == 0 && !s->locked, "  and send nothing");
+    check(gfx(s, "gfx target 76800 320 320 240") == CMD_OK && s->eng.base == 76800, "  gfx target is GPU1's too");
+    done(s);
+}
+TEST(t_gpu2_rules)
+
 /**** the FIFO rule, a stopped engine ****/
 
 static void t_fifo(unsigned seed) {
@@ -453,6 +756,29 @@ static void t_fences(unsigned seed) {
         else check(s->sleeps > sleeps && s->irq_waits == 0 && s->interrupts_sent == 0 && !(s->ie & 1),
                    "long commands without the interrupt: sleeps, IE.FENCE off");
         check(s->now - t0 < 40000, "  done in time (3 x 3.1 ms of engine time, under 40 ms in all)");
+        if(irq) {
+            /* the re-review's N3: the interrupt must end the waits, not only reach its handler */
+            unsigned long w0 = G.irq_waits, k0 = G.irq_wakes;
+            check(G.irq_waits == 3 && G.irq_wakes == 3 && gfx(s, "gfx") == CMD_OK &&
+                  said(s, "    fence waits that slept on it: 3, woken by it: 3\n"),
+                  "  each of those waits woken by the interrupt, counted, and gfx says so");
+            s->isr_no_wake = 1;                 /* a handler that runs and wakes nobody */
+            t0 = s->now;
+            check(gfx(s, "gfx fill 0 0 640 480 4") == CMD_OK && gfx(s, "gfx fill 0 0 640 480 5") == CMD_OK &&
+                  s->interrupts_sent > 0 && G.irq_wakes == k0 && G.irq_waits == w0 + 2 && s->now - t0 >= 20000,
+                  "an interrupt that wakes nobody: the fences come all the same, each wait ended by its 10 ms");
+            check(gfx(s, "gfx") == CMD_OK && said(s, "    fence waits that slept on it: 5, woken by it: 3\n"),
+                  "  and gfx shows the waits it did not wake");
+            /* a wait of more than one 10 ms step (a FLIP waits up to a frame), woken: one wait, one woken */
+            s->isr_no_wake = 0;
+            s->slow = 7500;                     /* 300 us a word: a full FIFO is 19 ms of work at the wait */
+            w0 = G.irq_waits;
+            k0 = G.irq_wakes;
+            check(gfx(s, "gfx text 0 0 1 2 ABCDEFGHIJKLMNOPQRSTUVWXYZ") == CMD_OK && G.irq_waits == w0 + 1 && G.irq_wakes == k0 + 1 &&
+                  s->irq_waits >= 2, "  a wait of two 10 ms steps that the interrupt ends: one wait, woken");
+            s->slow = 0;
+            s->isr_no_wake = 0;
+        }
         done(s);
     }
 }
@@ -501,6 +827,53 @@ static void t_claims(unsigned seed) {
     done(s);
 }
 TEST(t_claims)
+
+/* The re-review's N2: what a run's Ctrl+C did (an ABORT or not) was a flag of the driver's struct,
+   cleared by every claim before its trylock and read after the release, so another console's claim
+   in between changed what this run said. Here the other console claims while this run's Ctrl+C is
+   handled (at its ABORT: the claim fails, this run holds the GPU) and as soon as this run lets go
+   (the claim taken; in the second case its own Ctrl+C ABORTs the engine). Now each run's result
+   says it. */
+static int other_aborts;
+static void other_console(struct stub *s, int where) {
+    if(where == STUB_AT_ABORT) {
+        gpu_claim(&G, "gfx fill");                      /* this run holds it: Ctrl+C gives up at once */
+        return;
+    }
+    if(gpu_claim(&G, "gfx fill") != GPU_OK) return;
+    if(other_aborts) {                                  /* its fence never comes: its Ctrl+C ABORTs */
+        s->stopped = 1;
+        if(gpu_fill(&G, 0, 0, 4, 4, 9, "gfx fill") == GPU_OK) gpu_sync(&G, "gfx fill");
+        s->stopped = 0;
+    }
+    gpu_release(&G);
+}
+
+static void t_ctrlc_said(unsigned seed) {
+    struct stub *s = fresh(1);
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    s->hook = other_console;
+    other_aborts = 0;
+    s->stopped = 1;
+    s->intr_at = s->now + 100000;
+    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: interrupted: the engine stopped (ABORT)\n") &&
+          !said(s, "gfx fill: interrupted (Ctrl+C)") && s->hooks_run >= 2,
+          "Ctrl+C ABORTs a stopped engine while another console claims: this run says it ABORTed");
+    s->stopped = 0;
+    s->intr_at = 0;
+    s->hooks_run = 0;
+    other_aborts = 1;
+    s->intr_at = s->now + 10000;
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "gfx crc: interrupted (Ctrl+C)\n") &&
+          !said(s, "gfx crc: interrupted: the engine stopped") && s->hooks_run >= 1 && G.ctrl_c >= 2,
+          "Ctrl+C with nothing to ABORT, the next console's Ctrl+C ABORTing: this run says it ABORTed nothing");
+    s->intr_at = 0;
+    s->hook = NULL;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && !s->locked, "  then the GPU is free and works");
+    done(s);
+}
+TEST(t_ctrlc_said)
 
 /**** the frame latch rule ****/
 
@@ -667,6 +1040,15 @@ static void t_demo(unsigned seed) {
     check(gfx(s, "gfx demo 0") == CMD_USAGE && gfx(s, "gfx demo 4000") == CMD_USAGE, "gfx demo 0 and 4000: usage");
     free(before);
     done(s);
+    /* GPU2: the depth buffer kept too (the demo's SET_TARGET drops the engine's; 10/26/26) */
+    s = fresh2(1);
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    gfx(s, "gfx zclear 0x12");
+    check(gfx(s, "gfx demo 1") == CMD_OK && G.z_valid && G.z_base == 153600 && G.z_stride == 640 && s->eng.zvalid &&
+          s->eng.zbase == 153600 && s->eng.zstride == 640 && s->eng.tw == 320 && s->vram[153600] == 0x12 &&
+          s->vram[GPU_VRAM_BYTES - 1] == 0x12, "gfx demo on a GPU2 with a depth buffer: it and its depths back after");
+    done(s);
 }
 TEST(t_demo)
 
@@ -679,7 +1061,7 @@ static int demo_layout(const struct stub_disp *d) {
     return d->mode == 2 && d->stride == 320 && d->scale == 2 && (d->base == 0 || d->base == 76800);
 }
 
-static void demo_order(struct stub *s, const char *what, unsigned gpal_writes) {
+static void demo_order(struct stub *s, const char *what, unsigned gpal_writes, unsigned words) {
     unsigned i, cpu = 0, gpal = 0, eng = 0, bad_cpu = 0, bad_eng = 0;
     char line[160];
     for(i = 0; i < s->nev; i++) {
@@ -695,7 +1077,7 @@ static void demo_order(struct stub *s, const char *what, unsigned gpal_writes) {
     }
     snprintf(line, sizeof(line), "  %s: VRAM put back (%u words), GPAL written %u times (%u expected), the engine drew", what,
              cpu, gpal, gpal_writes);
-    check(cpu >= 39680 && gpal == gpal_writes && eng > 0, line);
+    check(cpu >= words && gpal == gpal_writes && eng > 0, line);
     check(!bad_cpu, "  every CPU write of VRAM or GPAL while the screen showed text");
     check(!bad_eng, "  the engine drew while the screen showed text or the demo's own pages");
     s->nev = 0;
@@ -710,14 +1092,14 @@ static void t_demo_order(unsigned seed) {
     s->watch = 1;
     check(gfx(s, "gfx demo 1") == CMD_OK && s->reg.mode == 2 && s->reg.stride == 640, "gfx demo 1 from a 640x480 picture");
     s->watch = 0;
-    demo_order(s, "gfx demo 1", 512);
+    demo_order(s, "gfx demo 1", 512, 39680);
     gfx(s, "gfx mode overlay 2");
     s->watch = 1;
     s->intr_at = s->now + 400000;
     check(gfx(s, "gfx demo 3") == CMD_FAIL && s->reg.mode == 3 && s->reg.scale == 2, "gfx demo 3 from the overlay, Ctrl+C");
     s->intr_at = 0;
     s->watch = 0;
-    demo_order(s, "Ctrl+C", 512);
+    demo_order(s, "Ctrl+C", 512, 39680);
     done(s);
 }
 TEST(t_demo_order)
@@ -763,7 +1145,7 @@ static void t_demo_stop(unsigned seed) {
               "  the driver's target and clip back");
         check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)), "  VRAM and GPAL back");
         s->watch = 0;
-        demo_order(s, "a stopped engine", from_gfx ? 512 : 0);
+        demo_order(s, "a stopped engine", from_gfx ? 512 : 0, 39680);
         s->stopped = 0;
         check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && s->eng.tw == 640 && s->eng.th == 480 && s->eng.stride == 640,
               "  the engine back: its target is the driver's, and drawing works");
@@ -772,6 +1154,46 @@ static void t_demo_stop(unsigned seed) {
     }
 }
 TEST(t_demo_stop)
+
+/* The re-review's N1: Ctrl+C on an engine that has stopped, before two seconds could say so. The
+   demo's way out waits through Ctrl+C (keep_going) and gave the dead engine two seconds that a
+   second Ctrl+C could not cut short. Now, once Ctrl+C has come, a run putting things back gives a
+   stopped engine 50 ms (its ABORT emptied the FIFO; what is left takes a live engine microseconds). */
+static void t_ctrlc_dead(unsigned seed) {
+    struct stub *s = fresh(1);
+    uint8_t *before = malloc(GPU_VRAM_BYTES);
+    uint16_t pal[256];
+    struct stub_disp reg;
+    uint64_t intr;
+    char line[120];
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    s->stop_at = s->now + 500000;
+    s->intr_at = intr = s->now + 600000;
+    check(gfx(s, "gfx demo 5") == CMD_FAIL && said(s, "gfx demo: ended by Ctrl+C") && count(s->out, "a stopped engine") == 1 &&
+          said(s, "gfx demo: the GPU finished nothing for 50 ms: a stopped engine; ABORT\n") &&
+          said(s, "display back as it was"),
+          "Ctrl+C 0.1 s after the engine stopped: the demo ends, the stopped engine said once, after 50 ms");
+    snprintf(line, sizeof(line), "  all over %llu ms after the Ctrl+C: within 0.3 s, not another 2 s",
+             (unsigned long long)((s->now - intr) / 1000));
+    check(s->now - intr < 300000, line);
+    if(getenv("GPU_TEST_VERBOSE")) printf("%s\n", line);
+    check(s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale &&
+          !memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && G.t_w == 640 && G.t_h == 480 &&
+          G.c_x1 == 640 && G.c_y1 == 480, "  the display, VRAM, GPAL, the target and the clip back");
+    s->stopped = 0;
+    s->intr_at = 0;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && s->eng.tw == 640 && s->eng.th == 480, "  the engine back: drawing works");
+    free(before);
+    done(s);
+}
+TEST(t_ctrlc_dead)
 
 /**** bench, reset, the state, usage ****/
 
@@ -885,7 +1307,8 @@ static void t_state(unsigned seed) {
           said(s, "display: mode 3, graphics with the text over it\n") &&
           said(s, "GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)\n") &&
           said(s, "target: VRAM 0, stride 320, 320x240\n    clip: (0, 0)-(320, 240)\n") &&
-          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n") && said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
+          said(s, "interrupts: 0 (intc source 5, IE.FENCE)\n    fence waits that slept on it: 0, woken by it: 0\n") &&
+          said(s, "errors 0, timeouts 0, ABORTs 0\n") &&
           said(s, "by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0\n") && said(s, "frames: FRAME_COUNT"),
           "gfx: ID, VRAM, mode, base/stride/scale, FIFO, fences, errors, frames");
     done(s);
@@ -915,7 +1338,7 @@ static void t_columns(unsigned seed) {
     check(gpu_set_target(&G, 307196, 65532, 4, 1, "gfx") == GPU_OK &&
           gpu_set_clip(&G, 65535, 65535, 65535, 65535, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
           "the widest target (VRAM 307196, stride 65532) and clip");
-    G.words = G.fences = G.irqs = G.timeouts = G.aborts = G.errors = 4294967295ul;
+    G.words = G.fences = G.irqs = G.irq_waits = G.irq_wakes = G.timeouts = G.aborts = G.errors = 4294967295ul;
     G.overflows = G.bad_opcodes = G.bad_params = G.display_changes = G.latch_misses = 4294967295ul;
     G.fifo_depth = 65535;
     G.fence_sent = s->eng.fence = 4294967290u;          /* FENCE at 10 digits (the driver's and the engine's) */
@@ -1000,3 +1423,383 @@ static void t_usage(unsigned seed) {
     done(s);
 }
 TEST(t_usage)
+
+/* GPU2's commands: every argument checked before a word is sent (a usage line, CMD_USAGE); x and
+   y in pixels with sixteenths; how's words */
+static void t_usage2(unsigned seed) {
+    static const char *const bad[] = {
+        "gfx tri", "gfx tri 1 2 3", "gfx tri 0 0 10 0 0 10", "gfx tri 0 0 10 0 0 10 256", "gfx tri 0.3 0 10 0 0 10 1",
+        "gfx tri 2048 0 10 0 0 10 1", "gfx tri -2048.0625 0 10 0 0 10 1", "gfx tri gouraud 0 0 10 0 0 10 1",
+        "gfx tri zwrite 0 0 10 0 0 10 1", "gfx tri zle 0 0 10 0 0 10 1", "gfx tri frob 0 0 10 0 0 10 1",
+        "gfx tri flat,gouraud 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri ztest,zle 0 0 0 1 9 0 0 1 0 9 0 1",
+        "gfx tri gouraud,,zwrite 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri gouraud, 0 0 0 1 9 0 0 1 0 9 0 1",
+        "gfx tri ,gouraud 0 0 0 1 9 0 0 1 0 9 0 1", "gfx tri cullcw,cullcw 0 0 9 0 0 9 1",
+        "gfx tri 0 0 70000 1 9 0 0 1 0 9 0 1", "gfx tri 0 0 0 1 9 0 0 1 0 9 0 256", "gfx tri 0 0 0 1 9 0 0 1 0 9 0",
+        "gfx tri 0x 0 9 0 0 9 1", "gfx tri 1.2.3 0 9 0 0 9 1", "gfx tri 12. 0 9 0 0 9 1", "gfx tri 0x10.5 0 9 0 0 9 1",
+        "gfx tri 1.000000001 0 9 0 0 9 1", "gfx tri - 0 9 0 0 9 1", "gfx tri 1e3 0 9 0 0 9 1",
+        "gfx zbuf", "gfx zbuf 1 640", "gfx zbuf 153600 320", "gfx zbuf 300000 640", "gfx zbuf 0 x", "gfx zbuf on",
+        "gfx zbuf 153600 640 1", "gfx zclear 256", "gfx zclear 1 2", "gfx zclear x", "gfx flip 2", "gfx flip 0x80000",
+        "gfx flip 1 2", "gfx flip x", "gfx target 1 320 320 240", "gfx target 0 320 321 240", "gfx target 0 640 640 481",
+        "gfx target 0 320 320", "gfx target 0 32768 32768 1", NULL
+    };
+    struct stub *s = fresh2(1);
+    unsigned i, n0, bad_ones = 0;
+    (void)seed;
+    gfx(s, "gfx mode gfx 2");
+    n0 = s->ncmd;
+    for(i = 0; bad[i]; i++) {
+        if(gfx(s, "%s", bad[i]) != CMD_USAGE || s->ncmd != n0 || !said(s, "usage")) {
+            if(!bad_ones++) printf("    (%s: %s)\n", bad[i], s->out);
+        }
+    }
+    check(!bad_ones, "GPU2's usage errors (tri, zbuf, zclear, flip) and gfx target's: CMD_USAGE, a usage line, not a word sent");
+    check(!s->locked && !G.z_valid && G.t_w == 320, "  the claim never left held, nothing changed");
+    /* what is taken: sixteenths in decimal, hex pixels, a fraction alone, the extremes of 12.4 */
+    gfx(s, "gfx zbuf 153600 640");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx tri 0x10 .5 -2048 2047.9375 +3.0625 -0.0625 7") == CMD_OK && s->ncmd == n0 + 7 + 2 &&
+          s->cmd[n0] == GPU_HDR(GPU_OP_TRIANGLE, 7) && s->cmd[n0 + 1] == GPU_XY(256, 8) && s->cmd[n0 + 2] == GPU_ZC(0, 7) &&
+          s->cmd[n0 + 3] == GPU_XY(-32768, 32767) && s->cmd[n0 + 5] == GPU_XY(49, -1),
+          "  0x10 is 16 pixels, .5 half of one, -2048 and 2047.9375 the ends of 12.4, +3.0625 and -0.0625 in sixteenths");
+    n0 = s->ncmd;
+    check(gfx(s, "gfx tri zle,cullccw,gouraud,zwrite 1 2 3 4 5 6 65535 255 7 8 0 0") == CMD_OK &&
+          s->cmd[n0] == GPU_HDR(GPU_OP_TRIANGLE, 4 | GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE | GPU_TRI_CULL_CCW | GPU_TRI_GOURAUD |
+                                                 GPU_TRI_ZWRITE) && s->cmd[n0 + 4] == GPU_ZC(65535, 255),
+          "  how's words in any order: zle is ZTEST and ZFUNC; vertex 0's colour the header's (flat)");
+    check(gfx(s, "gfx tri flat,cullcw,cullccw 0 0 9 0 0 9 1") == CMD_OK, "  flat, and both culls (nothing is drawn)");
+    done(s);
+}
+TEST(t_usage2)
+
+/* GPU2's lines at their widest (80 columns): a refused depth buffer for the widest target, the
+   target, the depth buffer, a FLIP at the widest base, the usage of tri */
+static void t_columns2(unsigned seed) {
+    struct stub *s = fresh2(1);
+    (void)seed;
+    check(gpu_set_target(&G, 0, 10000, 10000, 30, "gfx") == GPU_OK && gpu_sync(&G, "gfx") == GPU_OK,
+          "a target of 10000x30 (the widest pair of sizes a target can have)");
+    check(gfx(s, "gfx zbuf 4 4") == CMD_USAGE && said(s, "refused for the target (10000x30)"), "gfx zbuf refused for it");
+    check(gfx(s, "gfx zclear") == CMD_FAIL && said(s, "no depth buffer"), "gfx zclear without one");
+    check(gfx(s, "gfx target 307196 65532 4 1") == CMD_OK && said(s, "target: VRAM 307196, stride 65532, 4x1"),
+          "gfx target at the widest base and stride");
+    check(gfx(s, "gfx target 0 16384 16384 2") == CMD_OK && gfx(s, "gfx zbuf 0 32768") == CMD_OK &&
+          gfx(s, "gfx zclear") == CMD_FAIL && said(s, "16384 or more wide"), "gfx zclear for a target 16384 wide: refused, said");
+    check(gfx(s, "gfx target 0 9996 9996 30") == CMD_OK && gfx(s, "gfx zbuf 0 19992") == CMD_USAGE &&
+          gfx(s, "gfx target 0 9996 9996 15") == CMD_OK && gfx(s, "gfx zbuf 0 19992") == CMD_OK &&
+          said(s, "depth buffer: VRAM 0, stride 19992, for the target's 9996x15"), "gfx zbuf, said with a wide target");
+    check(gfx(s, "gfx flip 0x7fffc") == CMD_OK && said(s, "GFX_BASE 524284"), "gfx flip at the widest base");
+    gfx(s, "gfx tri");
+    gfx(s, "gfx zbuf");
+    gfx(s, "gfx zbuf off");
+    gfx(s, "gfx help");
+    done(s);
+}
+TEST(t_columns2)
+
+/**** gfx cube (boards/arty_a7/gfxcube.c; 10/26/26) ****/
+
+/* the turn's frames a CRC is (several when pictures repeat): the one that follows prev by 0 or 1,
+   else any, else -1 */
+static int cube_frame_of(uint32_t crc, int prev) {
+    int f, any = -1;
+    for(f = 0; f < (int)GFX_CUBE_FRAMES; f++) {
+        if(gfx_cube_expect[f] != crc) continue;
+        if(prev >= 0 && ((f - prev + (int)GFX_CUBE_FRAMES) % (int)GFX_CUBE_FRAMES) <= 1) return f;
+        if(any < 0) any = f;
+    }
+    return any;
+}
+
+/* the frames the stand-in logged as they ended: from the first of the cube's to the last, every
+   one a whole frame of the turn, each the same as the one before it or the next (a FLIP a blanking) */
+static void cube_at_the_pins(struct stub *s, const char *what, unsigned want) {
+    unsigned i, first = 0, last = 0, cube = 0, not_cube = 0, bad_steps = 0;
+    int prev = -1, f;
+    char line[200];
+    for(i = 0; i < s->nflog; i++)
+        if(cube_frame_of(s->flog[i].crc, -1) >= 0) {
+            if(!cube++) first = i;
+            last = i;
+        }
+    for(i = first; cube && i <= last; i++) {
+        f = cube_frame_of(s->flog[i].crc, prev);
+        if(f < 0) not_cube++;
+        else if(prev >= 0 && (f - prev + (int)GFX_CUBE_FRAMES) % (int)GFX_CUBE_FRAMES > 1) bad_steps++;
+        if(f >= 0) prev = f;
+    }
+    snprintf(line, sizeof(line), "  %s: %u frames shown of the cube (%u wanted), %u between them not the turn's, %u out of step",
+             what, cube, want, not_cube, bad_steps);
+    check(cube >= want && !not_cube && !bad_steps, line);
+}
+
+/* gfx cube's summary: the frames drawn, shown and checked */
+static int cube_summary(struct stub *s, unsigned long *drawn, unsigned long *shown, unsigned long *checked) {
+    const char *p;
+    int n = 0;
+    for(p = s->out; (p = strstr(p, "    gfx cube: ")) != NULL; p++) {
+        if(sscanf(p, "    gfx cube: %lu drawn in", drawn) == 1) n |= 1;
+        if(sscanf(p, "    gfx cube: %lu shown, %lu checked:", shown, checked) == 2) n |= 2;
+    }
+    return n == 3;
+}
+
+/* the expected table itself: its 128 frames, GFX_CUBE_PICTURES of them distinct, and its first 16
+   gpudiag's own MODE 2 frames (gpuscenes_expect.h's gpu_cube_expect_check: the same display) */
+static int once_t_cube_table;
+static void t_cube_table(unsigned seed) {
+    unsigned k, j, pictures = 0, same16 = 1;
+    (void)seed;
+    if(once_t_cube_table++) return;     /* nothing here depends on the seed: once */
+    for(k = 0; k < GFX_CUBE_FRAMES; k++) {
+        for(j = 0; j < k && gfx_cube_expect[j] != gfx_cube_expect[k]; j++) {}
+        pictures += j == k;
+    }
+    for(k = 0; k < GPU_CUBE_CHECK_FRAMES; k++) same16 &= gfx_cube_expect[k] == gpu_cube_expect_check[k];
+    check(GFX_CUBE_FRAMES == GPU_CUBE_PERIOD && pictures == GFX_CUBE_PICTURES,
+          "gfx cube's table: a turn's 128 frames, GFX_CUBE_PICTURES of them pictures of their own");
+    check(same16, "  its first 16 are gpudiag's checked frames in MODE 2 (gpuscenes_expect.h): the same display");
+}
+TEST(t_cube_table)
+
+/* the check of the frames shown, by itself: in order, the same again, frames passed unseen, one too
+   far for the frames counted, backwards, torn, FRAME_COUNT's wrap, a turn's wrap, repeated pictures */
+static void t_cube_check(unsigned seed) {
+    static const u32 t[8] = { 10, 11, 12, 13, 14, 15, 16, 17 };
+    static const u32 dup[8] = { 10, 11, 12, 10, 14, 15, 16, 17 };
+    struct gfx_cube_check c;
+    (void)seed;
+    gfx_cube_check_start(&c, t, 8, true, 100, 0);
+    gfx_cube_check_frame(&c, 101, 10);          /* frame 0 again */
+    gfx_cube_check_frame(&c, 102, 11);          /* 1 */
+    gfx_cube_check_frame(&c, 104, 13);          /* 3, two frames on: one passed unseen */
+    gfx_cube_check_frame(&c, 104, 99);          /* FRAME_COUNT did not move: nothing */
+    check(c.shown == 4 && c.checked == 3 && !c.torn && !c.disorder && c.last == 3,
+          "the same frame again, the next, two on in two frames: whole, in order; 4 shown, 3 checked");
+    gfx_cube_check_frame(&c, 105, 15);          /* 5: two on in one frame (a FLIP a blanking at most) */
+    gfx_cube_check_frame(&c, 106, 14);          /* 4: backwards */
+    check(c.disorder == 2 && !c.torn, "two on in one frame, and backwards: out of order");
+    gfx_cube_check_frame(&c, 107, 99);          /* none of them */
+    check(c.torn == 1 && c.torn_count == 107 && c.torn_crc == 99 && c.last == 4, "a CRC of none of them: torn, the first kept");
+    gfx_cube_check_frame(&c, 109, 16);          /* 6, two on in two frames (from 4) */
+    gfx_cube_check_frame(&c, 110, 17);
+    gfx_cube_check_frame(&c, 111, 10);          /* the turn wraps: 7, then 0 */
+    check(c.disorder == 2 && c.torn == 1 && c.last == 0, "after it, in order again across the turn's wrap");
+    gfx_cube_check_start(&c, t, 8, true, 0xFFFE, 2);
+    gfx_cube_check_frame(&c, 0xFFFF, 13);
+    gfx_cube_check_frame(&c, 0x10001, 14);       /* FRAME_COUNT is 16 bits: 0xFFFF to 1 is two */
+    check(c.shown == 3 && !c.disorder && !c.torn, "FRAME_COUNT's 16-bit wrap counted as the frames it is");
+    gfx_cube_check_start(&c, dup, 8, false, 0, 2);
+    gfx_cube_check_frame(&c, 1, 10);            /* 0 or 3: the order is not checked */
+    gfx_cube_check_frame(&c, 2, 17);
+    gfx_cube_check_frame(&c, 3, 11);
+    check(!c.disorder && !c.torn && c.checked == 3, "a turn with repeated pictures: only whole or torn, no order");
+}
+TEST(t_cube_check)
+
+static int once_t_cube;
+static void t_cube(unsigned seed) {
+    struct stub *s;
+    uint8_t *before;
+    uint16_t pal[256];
+    struct stub_disp reg;
+    unsigned long drawn, shown, checked, waits0, wakes0;
+    char want[64];
+    (void)seed;
+    if(once_t_cube++) return;     /* nothing here depends on the seed: once */
+    s = fresh2(1);
+    before = malloc(GPU_VRAM_BYTES);
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx fill 0 0 320 240 0x1c");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    s->check_tearing = 1;
+    s->log_frames = 1;
+    s->nflog = 0;
+    snprintf(want, sizeof(want), "checked: %s\n", GFX_CUBE_PICTURES == GFX_CUBE_FRAMES ? "all whole, in order" : "all whole");
+    waits0 = G.irq_waits;
+    wakes0 = G.irq_wakes;
+    check(gfx(s, "gfx cube 2") == CMD_OK && said(s, "gfx cube: 2 s at 320x240 with depth, a FLIP a frame") &&
+          said(s, "\n    cube 1 s: ") && said(s, "\n    cube 2 s: ") && said(s, want) && !said(s, "torn,") &&
+          said(s, "display back as it was"), "gfx cube 2: a line a second, every frame checked whole, everything back");
+    check(GFX_CUBE_PICTURES == GFX_CUBE_FRAMES || said(s, "of a turn's 128 frames are pictures of their own"),
+          "  with repeated pictures in the turn, it says that their order is not checked");
+    check(cube_summary(s, &drawn, &shown, &checked) && drawn >= 110 && drawn <= 125 && shown >= drawn && checked == shown,
+          "  about 60 frames drawn a second (one a blanking), each shown and checked (none passed unseen)");
+    cube_at_the_pins(s, "the frames as they ended", 110);
+    check(s->shown_draws == 0, "  no engine word drew into the picture on the screen while it was shown");
+    check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && s->reg.mode == reg.mode &&
+          s->reg.base == reg.base && s->reg.stride == reg.stride && s->reg.scale == reg.scale,
+          "  VRAM (all of it), GPAL and the display back as they were");
+    check(G.t_w == 640 && G.t_h == 480 && G.t_stride == 640 && G.c_x1 == 640 && !G.z_valid && s->eng.tw == 640 &&
+          s->eng.th == 480 && s->eng.cy1 == 480 && !s->eng.zvalid && !(p_status(s) & 1),
+          "  the target and clip back in the driver and the engine, no depth buffer, the engine idle");
+    check(s->writes_full == 0 && s->writes_blind == 0 && G.errors == 0 && G.timeouts == 0, "  the FIFO rule kept, no error");
+    check(G.irq_waits > waits0 && G.irq_wakes - wakes0 == G.irq_waits - waits0,
+          "  each fence wait it slept on the interrupt woken by it (frame 0's FLIP waits for a blanking)");
+    /* from a 320x240 picture with a depth buffer: it comes back too */
+    gfx(s, "gfx mode gfx 2");
+    gfx(s, "gfx zbuf 153600 640");
+    gfx(s, "gfx zclear 0x33");
+    s->log_frames = 0;
+    check(gfx(s, "gfx cube 1") == CMD_OK && G.z_valid && G.z_base == 153600 && s->eng.zvalid && s->eng.zbase == 153600 &&
+          s->vram[153600] == 0x33 && s->vram[GPU_VRAM_BYTES - 1] == 0x33 && s->reg.scale == 2 && s->eng.tw == 320,
+          "gfx cube 1 from a 320x240 picture with a depth buffer: its depths and the depth buffer back");
+    check(gfx(s, "gfx cube 0") == CMD_USAGE && gfx(s, "gfx cube 4000") == CMD_USAGE && gfx(s, "gfx cube x") == CMD_USAGE &&
+          gfx(s, "gfx cube 1 2") == CMD_USAGE, "gfx cube 0, 4000, x, 1 2: usage");
+    free(before);
+    done(s);
+}
+TEST(t_cube)
+
+/* how it ends: Ctrl+C, an engine that stops (and Ctrl+C before 2 s could say so, N1), the pixel
+   clock gone (a FLIP that never comes), a torn frame, no memory for VRAM: each with everything put
+   back and the engine idle */
+static void cube_end(struct stub *s, const char *what, const uint8_t *before, const uint16_t *pal, const struct stub_disp *reg) {
+    char line[160];
+    snprintf(line, sizeof(line), "  %s: VRAM, GPAL, the display, the target and the clip back, the engine idle", what);
+    check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, 512) && s->reg.mode == reg->mode &&
+          s->reg.base == reg->base && s->reg.stride == reg->stride && s->reg.scale == reg->scale && G.t_w == 640 &&
+          G.c_y1 == 480 && (s->stopped || (s->eng.tw == 640 && s->eng.th == 480 && !(p_status(s) & 1))), line);
+    if(s->stopped) {                                    /* the engine back: the target and clip queued for it */
+        s->stopped = 0;
+        stub_drain(s, 1000);
+        check(s->eng.tw == 640 && s->eng.th == 480 && s->eng.cy1 == 480 && !(p_status(s) & 1),
+              "  the engine back: the target and clip it was sent are the driver's, and it is idle");
+    }
+}
+
+static int once_t_cube_end;
+static void t_cube_end(unsigned seed) {
+    struct stub *s;
+    uint8_t *before;
+    uint16_t pal[256];
+    struct stub_disp reg;
+    uint64_t t0, intr;
+    char line[160];
+    (void)seed;
+    if(once_t_cube_end++) return;     /* nothing here depends on the seed: once */
+    s = fresh2(1);
+    before = malloc(GPU_VRAM_BYTES);
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    stub_drain(s, 100000);
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    memcpy(pal, s->gpal, sizeof(pal));
+    reg = s->reg;
+    /* Ctrl+C */
+    s->intr_at = intr = s->now + 700000;
+    check(gfx(s, "gfx cube 5") == CMD_FAIL && said(s, "gfx cube: ended by Ctrl+C") && said(s, "display back as it was") &&
+          !said(s, "a stopped engine"), "gfx cube 5, Ctrl+C after 0.7 s: ends, says so");
+    snprintf(line, sizeof(line), "  over %llu ms after the Ctrl+C", (unsigned long long)((s->now - intr) / 1000));
+    check(s->now - intr < 200000, line);
+    cube_end(s, "Ctrl+C", before, pal, &reg);
+    s->intr_at = 0;
+    /* the engine stops */
+    s->stop_at = s->now + 800000;
+    t0 = s->now;
+    check(gfx(s, "gfx cube 5") == CMD_FAIL && count(s->out, "a stopped engine") == 1 &&
+          said(s, "took no command word for 2 s: a stopped engine") && said(s, "display back as it was"),
+          "the engine stops 0.8 s into gfx cube 5: said once (its FIFO stays full), it ends");
+    check(s->now - t0 < 3500000, "  no second timeout");
+    cube_end(s, "a stopped engine", before, pal, &reg);
+    s->stopped = 0;
+    /* the engine stops, Ctrl+C 0.1 s later (N1) */
+    s->stop_at = s->now + 800000;
+    s->intr_at = intr = s->now + 900000;
+    check(gfx(s, "gfx cube 5") == CMD_FAIL && said(s, "ended by Ctrl+C") && count(s->out, "a stopped engine") == 1 &&
+          said(s, "for 50 ms: a stopped engine"), "the engine stops, Ctrl+C 0.1 s later: the stopped engine said after 50 ms");
+    snprintf(line, sizeof(line), "  over %llu ms after the Ctrl+C, not 2 s", (unsigned long long)((s->now - intr) / 1000));
+    check(s->now - intr < 300000, line);
+    cube_end(s, "Ctrl+C on a stopped engine", before, pal, &reg);
+    s->stopped = 0;
+    s->intr_at = 0;
+    /* the pixel clock stops: no blanking, no FLIP done, FRAME_COUNT stays */
+    s->frames_stop_at = s->now + 800000;
+    t0 = s->now;
+    check(gfx(s, "gfx cube 5") == CMD_FAIL && said(s, "a stopped engine") && said(s, "no vertical blanking in 250 ms"),
+          "the pixel clock stops 0.8 s in: the FLIP never comes, a stopped engine, the display put back without a blanking");
+    snprintf(line, sizeof(line), "  a bounded wait: over %llu ms after it began", (unsigned long long)((s->now - t0) / 1000));
+    check(s->now - t0 < 4000000, line);
+    cube_end(s, "no pixel clock", before, pal, &reg);
+    s->frames_stop = 0;
+    check(gfx(s, "gfx fill 0 0 1 1 0x92") == CMD_OK, "  the engine back afterwards");
+    stub_drain(s, 100000);
+    memcpy(before, s->vram, GPU_VRAM_BYTES);
+    /* a byte of the picture on the screen spoiled 1 s in: a torn frame */
+    s->poke_at = s->now + 700000;
+    s->poke_off = 120 * 320 + 160;
+    check(gfx(s, "gfx cube 1") == CMD_FAIL && said(s, "1 torn, 0 out of order") && said(s, "gfx cube: the first torn: frame ") &&
+          said(s, "display back as it was"), "a byte of the picture shown spoiled: one frame torn, said, the run fails");
+    cube_end(s, "a torn frame", before, pal, &reg);
+    /* no memory to keep VRAM */
+    s->no_memory = 1;
+    check(gfx(s, "gfx cube 1") == CMD_OK && said(s, "no memory to keep the 307200 bytes of VRAM it draws on") &&
+          s->reg.mode == reg.mode && s->reg.base == reg.base && s->reg.scale == reg.scale && !memcmp(s->gpal, pal, sizeof(pal)),
+          "no memory to keep VRAM: said, it runs, the display and palette back");
+    free(before);
+    done(s);
+}
+TEST(t_cube_end)
+
+/* the way in and out (as t_demo_order for the demo): every CPU write of VRAM or GPAL while the
+   screen shows text, and every engine word that draws while it shows text or the cube's own pages */
+static int once_t_cube_order;
+static void t_cube_order(unsigned seed) {
+    struct stub *s;
+    (void)seed;
+    if(once_t_cube_order++) return;     /* nothing here depends on the seed: once */
+    s = fresh2(1);
+    gfx(s, "gfx mode gfx 1");
+    gfx(s, "gfx clear 0x92");
+    gfx(s, "gfx pal grey");
+    s->watch = 1;
+    check(gfx(s, "gfx cube 1") == CMD_OK && s->reg.mode == 2 && s->reg.stride == 640, "gfx cube 1 from a 640x480 picture");
+    s->watch = 0;
+    demo_order(s, "gfx cube 1", 512, 76800);
+    gfx(s, "gfx mode overlay 2");
+    s->watch = 1;
+    s->intr_at = s->now + 500000;
+    check(gfx(s, "gfx cube 3") == CMD_FAIL && s->reg.mode == 3 && s->reg.scale == 2, "gfx cube 3 from the overlay, Ctrl+C");
+    s->intr_at = 0;
+    s->watch = 0;
+    demo_order(s, "Ctrl+C", 512, 76800);
+    done(s);
+}
+TEST(t_cube_order)
+
+/* Each line printed costing the CPU 40 ms (on SurfCPU a console line costs about a frame or more:
+   the console compares its whole screen; a line printed just after a frame was seen loses one
+   once it costs more than two frames' 33.4 ms less the look's lag): with the looks from the
+   timer's tick every frame shown is checked all the same; on a port without the tick the run looks
+   from its loop, and frames pass unseen while it prints, which its lines say (checked fewer than
+   shown) */
+static int once_t_cube_look;
+static void t_cube_look(unsigned seed) {
+    struct stub *s;
+    unsigned long drawn = 0, shown = 0, checked = 0;
+    char line[160];
+    (void)seed;
+    if(once_t_cube_look++) return;     /* nothing here depends on the seed: once */
+    s = fresh2(1);
+    s->line_us = 40000;
+    s->log_frames = 1;
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && s->ticks_run > 250,
+          "gfx cube 3 with a slow console and the timer's tick");
+    snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu checked: every frame looked at", drawn, shown, checked);
+    check(checked == shown && shown >= 170, line);
+    cube_at_the_pins(s, "and at the pins", 170);
+    done(s);
+    s = fresh2(-1);
+    s->line_us = 40000;
+    check(gfx(s, "gfx cube 3") == CMD_OK && cube_summary(s, &drawn, &shown, &checked) && !s->ticks_run,
+          "the same on a port without the tick: the run looks from its loop");
+    snprintf(line, sizeof(line), "  %lu shown, %lu checked: frames passed unseen while its lines printed, said", shown, checked);
+    check(checked + 2 <= shown, line);
+    done(s);
+}
+TEST(t_cube_look)

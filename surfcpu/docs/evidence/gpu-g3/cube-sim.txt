@@ -1,0 +1,80 @@
+SurfGPU, the cube in SurfOS (GPU.md 15.8): gfx cube, GPU2's commands in gfx, and the three lows of G3's
+re-review, on sc/gpu-cube from sc/gpu-integ 9b9b7b8 (2026-10-26), in the surfcpu-toolchain container
+(gcc, Verilator 5.032; Docker through the capped wrapper). Simulation and the host only: nothing here ran
+on a board.
+
+The re-review's lows, each test run with the fix and with the bug put back (the driver's files at the
+commit before the fix, the new test kept); make test-gpuos-host is seeds 1 7 123:
+
+N2 (c70d5b7), t_ctrlc_said: another console's claim at this run's ABORT and at its release
+  the bug back (gpu.c, gfx.c, gpu.h at 9b9b7b8):
+    FAIL t_ctrlc_said: Ctrl+C ABORTs a stopped engine while another console claims: this run says it ABORTed
+    FAIL t_ctrlc_said: Ctrl+C with nothing to ABORT, the next console's Ctrl+C ABORTing: this run says it ABORTed nothing
+    test_arty: 687 of 693 checks passed, 19 tests x 3 seeds (1 7 123)
+  the fix: test_arty: 693 of 693 checks passed, 19 tests x 3 seeds (1 7 123)
+
+N1 (5a0a75e), t_ctrlc_dead: the engine stops 0.5 s into gfx demo 5, Ctrl+C 0.1 s later
+  the bug back (gpu.c, gpu.h at c70d5b7):
+    FAIL t_ctrlc_dead: Ctrl+C 0.1 s after the engine stopped: the demo ends, the stopped engine said once, after 50 ms
+    FAIL t_ctrlc_dead:   all over 2065 ms after the Ctrl+C: within 0.3 s, not another 2 s
+    test_arty: 705 of 711 checks passed, 20 tests x 3 seeds (1 7 123)
+  the fix: test_arty: 711 of 711 checks passed; "gfx demo: the GPU finished nothing for 50 ms: a stopped
+    engine; ABORT", all over 113 ms after the Ctrl+C
+
+N3 (e7207f6, refined in 662c14c), test-gpuos's interrupt check
+  e7207f6 on the RTL SoC (GPU2 since the G4 merge):
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 156 taken for the 156 fences sent between the first gfx and the last; 1 waits on it, 1 of them woken by it
+    test-gpuos: 25 of 25 checks passed in 173 s (gpu 386558628 cycles = 15.462 s simulated in 172.6 s wall (2.24 M cycles/s); nogpu 146419553 cycles = 5.857 s simulated in 44.1 s wall (3.32 M cycles/s))
+  the bug back: a trial kernel whose gpu_isr counts the interrupt and does not call event_set (not kept):
+    FAIL the GPU interrupt (intc source 5, IE.FENCE): 156 taken for the 156 fences sent between the first gfx and the last; 1 waits on it, 0 of them woken by it
+    test-gpuos: 24 of 25 checks passed in 176 s (the old check, interrupts for half the fences, passes this kernel: 156 for 156)
+  662c14c: a wait counted once however many 10 ms steps it slept (the first RTL run with GPU2's FLIPs had
+    "6 waits on it, 2 of them woken by it" counting steps); t_fences: 3 fills 3 waits 3 woken; a handler
+    that wakes nobody 2 more waits none woken; a wait of two steps that the interrupt ends one wait woken
+  7cadace: gfx cube's frame 0 waited for with gpu_sync() (gpucube.c's FENCE asks for no interrupt; it was
+    the one wait not woken: "4 fence waits slept on it, 3 of them woken", then 3 and 2 after the merge);
+    t_cube, every fence wait of the cube woken: with the old wait 1013 of 1014, now 1014 of 1014
+
+gfx cube's looks from the timer's tick (3d07414): the first RTL run, looking from the run's loop, checked
+64 of the 66 frames it showed (61 of 61 in its first second, then its line a second printed):
+    FAIL gfx cube 1 by SurfOS's own check: 61 drawn in 1.07 s (56.5 a second), 66 shown, 64 checked: all whole
+  t_cube_look, each printed line costing the stand-in's CPU 40 ms, gfx cube 3:
+    with the tick:    gfx cube: 184 shown, 184 checked: all whole, in order
+    without the tick: gfx cube: 186 shown, 183 checked: all whole, in order
+
+The merge of sc/gpu-integ 687b57e (G4's fix round: the cube stands on a corner) at c82a629: gfx cube's
+table followed by itself (boards/arty_a7/gen/gfxcube_expect.c, from gpucube.c and the model):
+    #define GFX_CUBE_PICTURES 128u (127 before: frames 9 and 73 were one picture)
+    frame 0 0x62bae657, frame 15 0x7e872f01: gpudiag's checked frames 0 and 15 (t_cube_table compares all 16)
+
+At 7cadace (the code handed back):
+  make test-gpuos-host (cube-test-gpuos-host.txt):
+    test_arty: 1014 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+  make test-gpuos (cube-test-gpuos.txt):
+    test-gpuos: 32 of 32 checks passed in 225 s (gpu 507207320 cycles = 20.288 s simulated in 224.0 s wall (2.26 M cycles/s); nogpu 158262649 cycles = 6.331 s simulated in 46.9 s wall (3.37 M cycles/s))
+    ok   crc 6 (graphics, mode 2): FRAME_CRC 43e2d407; gfxref (GPU.md alone) 43e2d407; a frame at the VGA pins has it (frame 845)
+    ok   crc 7 (graphics, mode 2): FRAME_CRC 651474fa; gfxref (GPU.md alone) 651474fa; a frame at the VGA pins has it (frame 879)
+    ok   gfx cube 1 at the VGA pins: 71 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step
+    ok   gfx cube 1 by SurfOS's own check: 62 drawn in 1.07 s (57.4 a second), 66 shown, 66 checked: all whole, in order; a line a second: 61 drawn, 60 shown, 60 checked: all whole, in order
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 243 fences sent between the first gfx and the last; 4 fence waits slept on it, 4 of them woken by it
+  make test-os-qemu (run with this round's QEMU check before the tick and the merge, which change nothing
+  of the QEMU kernel; make check runs it again):
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    ok   gfx tri, gfx flip, gfx cube: no GPU on this board either
+
+make check (SURFGPU_DOCKER_SIZE=big, through the capped wrapper) at 9160aad, the commit that added
+GPU.md 15.8 and these files (the code of 7cadace), 10:55:25 to 11:33:48 with the wait for the slots:
+    test_arty: 1014 of 1014 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 243 fences sent between the first gfx and the last; 4 fence waits slept on it, 4 of them woken by it
+    ok   crc 6 (graphics, mode 2): FRAME_CRC 43e2d407; gfxref (GPU.md alone) 43e2d407; a frame at the VGA pins has it (frame 845)
+    ok   crc 7 (graphics, mode 2): FRAME_CRC 651474fa; gfxref (GPU.md alone) 651474fa; a frame at the VGA pins has it (frame 879)
+    ok   gfx cube 1 at the VGA pins: 70 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step
+    ok   gfx cube 1 by SurfOS's own check: 62 drawn in 1.01 s (60.9 a second), 64 shown, 64 checked: all whole, in order; a line a second: 62 drawn, 61 shown, 61 checked: all whole, in order
+    test-gpuos: 32 of 32 checks passed in 224 s (gpu 506709026 cycles = 20.268 s simulated in 223.7 s wall (2.26 M cycles/s); nogpu 158262749 cycles = 6.331 s simulated in 46.9 s wall (3.37 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541870 cycles)
+    check: all automated SurfCPU checks passed

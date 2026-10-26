@@ -83,6 +83,9 @@ ifeq ($(KBOARD),arty_a7)
 # 10/25/26 (SurfGPU G3): the console's 8x16 font, for the GPU's text (boards/arty_a7/gfx.c, gfx text: the
 # console's own glyphs), compiled from where it is
 SHARED_C   += driver/font8x16.c
+# 10/26/26 (SurfGPU, gfx cube: surfcpu/docs/GPU.md 15.8): gpudiag's cube, compiled from where it is,
+# unchanged (boards/arty_a7/gfxcube.c sends its frames through the driver)
+GPU_C       = surfcpu/firmware/diagnostics/gpucube.c
 endif
 ARCH_C      = $(wildcard arch/riscv32/*.c)
 ARCH_S      = $(wildcard arch/riscv32/*.S)
@@ -96,8 +99,18 @@ endif
 BOARD_S     = $(wildcard boards/$(KBOARD)/*.S)
 
 OBJS        = $(ARCH_S:%.S=$(OBJ)/%.o) $(BOARD_S:%.S=$(OBJ)/%.o) \
-              $(ARCH_C:%.c=$(OBJ)/%.o) $(BOARD_C:%.c=$(OBJ)/%.o) $(SHARED_C:%.c=$(OBJ)/%.o)
+              $(ARCH_C:%.c=$(OBJ)/%.o) $(BOARD_C:%.c=$(OBJ)/%.o) $(SHARED_C:%.c=$(OBJ)/%.o) $(GPU_C:%.c=$(OBJ)/%.o)
 DEPS        = $(OBJS:.o=.d)
+
+ifeq ($(KBOARD),arty_a7)
+# 10/26/26: gfx cube's expected FRAME_CRCs (gfxcube_expect.h, the rules below), worked out at build time
+# by a host tool from the same gpucube.c and the C model of the engine with gfx cube's display, never
+# from the driver (boards/arty_a7/gen/gfxcube_expect.c); HOSTCC is the container's own compiler
+HOSTCC     ?= cc
+GEN         = $(OUT)/gen
+CFLAGS     += -I$(GEN)
+GFXCUBE_GEN = boards/arty_a7/gen/gfxcube_expect.c surfcpu/firmware/diagnostics/gpucube.c surfcpu/sim/models/gpu_model.c
+endif
 
 ELF         = $(OUT)/surfos.elf
 STAGE1      = $(OUT)/surfos.stage1
@@ -169,6 +182,20 @@ $(PACKAGE): $(ELF) $(PAYLOAD) $(SURFIMG) $(BUILD_ID_STAMP)
 	$(Q)cmp -s $(OUT)/surfimg.payload.bin $(PAYLOAD) || { echo "kernel.mk: surfimg.py packed other bytes than $(PAYLOAD)"; \
 	    rm -f $@; exit 1; }
 	@echo "built $@ ($(KBOARD), -O$(O))"
+
+ifeq ($(KBOARD),arty_a7)
+$(GEN)/gfxcube_expect: $(GFXCUBE_GEN) surfcpu/firmware/diagnostics/gpucube.h surfcpu/firmware/diagnostics/gpuscenes.h \
+                       surfcpu/sim/models/gpu_model.h surfcpu/firmware/include/surfcpu/gpu.h surfcpu/firmware/include/surfcpu/soc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $@"
+	$(Q)$(HOSTCC) -std=gnu11 -O2 -Wall -Wextra -Werror -Isurfcpu/sim/models -Isurfcpu/firmware/include \
+	    -Isurfcpu/firmware/diagnostics -o $@ $(GFXCUBE_GEN)
+
+$(GEN)/gfxcube_expect.h: $(GEN)/gfxcube_expect
+	$(Q)$< > $@.tmp && mv $@.tmp $@
+
+$(OBJ)/boards/arty_a7/gfxcube.o: $(GEN)/gfxcube_expect.h
+endif
 
 no-package: $(PAYLOAD)
 	@rm -f $(PACKAGE)

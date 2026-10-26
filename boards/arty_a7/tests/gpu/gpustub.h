@@ -20,6 +20,13 @@ moment, a frame counter that stops, Ctrl+C at a moment, another claimant holding
 It records what the tests check: every CMD word (and whether the FIFO had room and the driver
 had read FIFO_FREE for it), the display registers' writes with their times and the frame latch
 each one reached, ABORTs, engine words that drew into the page on the screen while it was shown.
+
+10/26/26 (GPU2, gfx cube): with gpu.ID "GPU2" the engine takes SET_ZBUF, TRIANGLE and FLIP (a GPU1
+calls them unknown opcodes); FLIP writes GFX_BASE at the next vertical blanking, as surf_gpu does;
+without a pixel clock (frames_stop) no blanking ever begins, so WAIT_VBLANK and FLIP wait for ever;
+FRAME_CRC is that of the frame as its last line was sent (VRAM, GPAL and the display kept as each
+frame ends), since gfx cube reads it while the engine redraws the page just shown; the frames'
+CRCs can be logged; a byte of the page on the screen can be spoiled at a moment.
 */
 
 #ifndef _GPUSTUB_H
@@ -34,6 +41,9 @@ each one reached, ABORTs, engine words that drew into the page on the screen whi
 #define STUB_LATCH_US   16651u          /* line 524: the frame latch takes CTRL and the GFX_ registers */
 #define STUB_CMD_LOG    (1u << 20)
 #define STUB_DISP_LOG   4096u
+#define STUB_FRAMES     8u              /* the last frames kept as they ended (FRAME_CRC's) */
+#define STUB_FRAME_LOG  4096u
+#define STUB_NEVER      (1ull << 40)    /* a blanking that never comes (us) */
 
 struct stub_disp {                      /* the display registers as one value */
     uint32_t mode, base, stride, scale;
@@ -52,6 +62,20 @@ struct stub_write {                     /* a display register write */
     uint32_t reg, value;                /* reg: SURF_VIDEO_GFX_* or 0xFFFF for CTRL.MODE */
 };
 
+struct stub_frame {                     /* a frame as its last line was sent */
+    uint64_t k;                         /* which (frame k ends as blanking k begins) */
+    int valid;
+    struct stub_disp d;                 /* what its latch took */
+    uint16_t gpal[256];
+    uint8_t vram[GPU_VRAM_BYTES];
+};
+
+struct stub_logged {                    /* a frame's FRAME_CRC, logged as it ended (log_frames) */
+    uint64_t k;
+    uint32_t crc;
+    struct stub_disp d;
+};
+
 struct stub {
     struct gpu_port port;
     /* the engine */
@@ -61,13 +85,32 @@ struct stub {
     unsigned head, count, depth;
     uint32_t id, info, ie, overflow;
     uint64_t eng_cycles;                /* the engine's own clock (25 per us) */
-    int wait_vbl;                       /* a WAIT_VBLANK holds the engine */
+    int wait_vbl;                       /* a WAIT_VBLANK or a FLIP holds the engine */
     uint64_t vbl_until;
+    int flip_pending;                   /* the wait is a FLIP's: GFX_BASE = flip_value when it ends */
+    uint32_t flip_value;
+    unsigned flips_done, gpu2_on_gpu1;  /* FLIPs that wrote GFX_BASE; GPU2 opcodes a GPU1 refused */
     /* the CPU's time */
     uint64_t now;
     uint64_t stall_at, stall_us;        /* once now passes stall_at, it jumps on by stall_us (outside atomic stretches) */
-    int frames_stop;                    /* the frame counter does not move (no pixel clock) */
+    int frames_stop;                    /* no pixel clock: the frame counter stays, no blanking begins */
     uint32_t frames_frozen;             /* where it stays then (7 when 0) */
+    uint64_t frames_stop_at;            /* the pixel clock stops when now passes this (0: never) */
+    uint64_t frames_seen;               /* the frames whose end has been kept */
+    struct stub_frame frame[STUB_FRAMES];
+    int log_frames;                     /* log each frame's CRC as it ends (flog) */
+    struct stub_logged flog[STUB_FRAME_LOG];
+    unsigned nflog;
+    uint64_t poke_at;                   /* then a byte of the page on the screen is spoiled (0: never) */
+    uint32_t poke_off;                  /* its offset in the picture shown */
+    /* the port's tick: fn(arg) every 10 ms of the CPU's time, as the timer interrupt (never inside an
+       atomic stretch or inside itself); no_tick: a port without one */
+    void (*tick_fn)(void *arg);
+    void *tick_arg;
+    uint64_t next_tick;
+    int in_tick, no_tick;
+    unsigned ticks_run;
+    uint64_t line_us;                   /* each line printed costs the CPU this long (SurfCPU's console) */
     /* the video block */
     struct stub_disp reg;               /* what the registers hold now */
     uint16_t gpal[256];
@@ -82,6 +125,7 @@ struct stub {
     uint64_t stop_at;                   /* it stops when now passes this (0: never) */
     unsigned slow;                      /* extra engine cycles for every word it takes */
     int irq_path;                       /* the port has the interrupt */
+    int isr_no_wake;                    /* the handler runs (FENCE_EV cleared) but wakes nobody */
     unsigned drop_word;                 /* the CMD write with this number (1, 2, ...) is lost: OVERFLOW */
     unsigned corrupt_word;              /* this CMD write arrives with opcode 0x0F instead */
     uint32_t corrupt_value;             /* or (corrupt_value_at) arrives as this word */
@@ -119,17 +163,27 @@ struct stub {
     struct stub_event *ev;
     unsigned nev, ev_cap;
     const char *holder;                 /* the other claimant as the port names it ('Shell 2', pid 9 when NULL) */
+    /* 10/26/26: another console's run at a moment of this one's (the test's function: what it does
+       with the driver), at STUB_AT_ABORT (an ABORT was written) and STUB_AT_UNLOCK (the claim let go) */
+    void (*hook)(struct stub *s, int where);
+    int in_hook;
+    unsigned hooks_run;
     char out[1 << 16];                  /* what the driver and gfx printed */
     unsigned nout;
     unsigned col, line_start;           /* the line being printed: its columns so far, where it began in out */
     unsigned widest;                    /* the widest line printed */
 };
 
+#define STUB_AT_ABORT   1
+#define STUB_AT_UNLOCK  2
+
 #define STUB_COLUMNS 80                 /* the console's line (GPU.md 15.2) */
 /* the lines printed wider than that since the last call (any stub), and the first of them */
 unsigned stub_too_wide(const char **first);
 
-/* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values */
+/* a fresh stand-in: GPU1, FEATURES with the GPU and IRQ, VRAM zero, GPAL RGB332, the reset values;
+   irq_path 1 the port with the GPU's interrupt and the timer's tick, 0 without the interrupt,
+   -1 (10/26/26) with the interrupt and without the tick */
 void stub_init(struct stub *s, int irq_path);
 void stub_free(struct stub *s);
 /* the display a frame shows that began at frame k's start (what latch k - 1 took) */

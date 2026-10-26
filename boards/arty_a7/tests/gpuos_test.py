@@ -19,7 +19,10 @@ typed on the UART. Checked:
     gfxref's lines must be this test's, and gfxscene (the same lines through gfx.c and gpu.c in
     the model, the owner's tool for other pictures) must agree with gfxref;
   * the GPU's interrupt works: between the first gfx and the last, interrupts (intc source 5,
-    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one);
+    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one), and it
+    woke the fence waits that slept on it: one at least, and at least half of them, a wait counted
+    once however many 10 ms steps it slept (10/26/26, the re-review's N3: a handler that ran
+    without waking anyone passed the count of interrupts alone);
   * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
     typed after its first second, and after each the picture's CRC is the CRC before them (the
     display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
@@ -30,13 +33,23 @@ typed on the UART. Checked:
     staying pending (irq.c's "+IRQ: source N stays pending although its handler ran 32 times"), a
     panic. FAIL_ON's entries are surfsim's --fail-on regular expressions as well as substrings here,
     so they hold no regular expression's special characters.
+  * 10/26/26, GPU2 (GPU.md section 16): gfx zbuf, zclear, tri (flat, culled both ways, a square split
+    through pixel centres, Gouraud with depth through each other, sixteenths) and their picture's
+    gfx crc equal to gfxref's, which works it out from section 16 alone; picture B drawn and shown
+    by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 1: every frame it showed at the
+    VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
+    one contiguous run of them, each the same frame as the one before or the next; SurfOS's own
+    lines say every frame shown was checked and whole (in order too when the turn's 128 pictures
+    differ) and a frame rate of 30 or more; after it the picture is the one before it.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
-gfx says there is no GPU, drivers says the gpu is not present.
+gfx says there is no GPU, drivers says the gpu is not present, and gfx tri, flip and cube say there
+is no GPU.
 
   gpuos_test.py --surfsim-gpu build/sim/surfsim_gpu --surfsim build/sim/surfsim --rom build/fw/surfboot.mem
                 --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN
                 --gfxscene build/gpuos/gfxscene --gfxref build/gpuos/gfxref [--gpu-h FILE]
+                --cube-expect ../build/riscv32/arty_a7/gen/gfxcube_expect.h
                 [--work DIR] [--evidence FILE] [--keep] [--seed N]
 
 The card image is deleted at the end unless --keep. Exit status 0 when every check passed.
@@ -61,7 +74,8 @@ OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must pr
 
 # (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
 # which Ctrl+C is typed]); @NAME@ and @ID@ become the gpu.ID of gpu.h ("GPU1", 0x31555047)
-STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'[\s\S]*frames: FRAME_COUNT \d+')
+STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'\s+fence waits that slept on it: \d+, woken by it: \d+' +
+         NL + r'[\s\S]*frames: FRAME_COUNT \d+')
 STEPS = [
     ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*' + STATE, 'the state'),
     ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU @NAME@, 300 KiB VRAM; \d+ fences, 0 errors',
@@ -96,6 +110,33 @@ STEPS = [
     ('gfx demo 5', r'gfx demo: \d+ frames in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
      r'\s+gfx demo: ended by Ctrl\+C', 'the demo ended by Ctrl+C', r'\n    1 s: \d+ frames'),
     ('gfx crc', CRC_LINE.pattern, 'crc 5'),
+    # GPU2 (10/26/26, GPU.md section 16): triangles in 320x240 with a depth buffer, picture B shown by FLIP,
+    # A again; gfx cube 1, after which the picture is the one before it
+    ('gfx mode gfx 2', r'display: mode 2, graphics, 320x240 doubled', 'graphics at 320x240 for GPU2'),
+    ('gfx pal ramps', r'palette: ramps \(8 hues of 32 shades\)', 'the ramps again'),
+    ('gfx zbuf 153600 640', r"depth buffer: VRAM 153600, stride 640, for the target's 320x240", 'the depth buffer'),
+    ('gfx zclear', None, ''),
+    ('gfx clear 0', None, ''),
+    ('gfx tri 8 8 120 16 40 100 0x3f', None, ''),
+    ('gfx tri cullcw 200 20 300 20 250 60 0xff', None, ''),
+    ('gfx tri cullccw 200 20 300 20 250 60 0x7f', None, ''),
+    ('gfx tri 20 140 60 140 60 180 0x5f', None, ''),
+    ('gfx tri 20 140 60 180 20 180 0x9f', None, ''),
+    ('gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28', None, ''),
+    ('gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50', None, ''),
+    ('gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0', None, ''),
+    ('gfx crc', CRC_LINE.pattern, 'crc 6'),
+    ('gfx target 76800 320 320 240', r'target: VRAM 76800, stride 320, 320x240', 'picture B the target'),
+    ('gfx clear 0x70', None, ''),
+    ('gfx tri 0 0 319.9375 0 0 239.9375 0x9f', None, ''),
+    ('gfx flip', r'display: GFX_BASE 76800, written by FLIP at a vertical blanking', 'FLIP to picture B'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 7'),
+    ('gfx flip 0', r'display: GFX_BASE 0, written by FLIP at a vertical blanking', 'FLIP back to picture A'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 8'),
+    ('gfx cube 1', r'gfx cube: \d+ drawn in \d+\.\d\d s, \d+\.\d a second; display back as it was' + NL +
+     r'\s+gfx cube: \d+ shown, \d+ checked: ', 'gfx cube'),
+    ('gfx crc', CRC_LINE.pattern, 'crc 9'),
+    ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
     ('gfx', STATE, 'the state after the demos and the bench'),
@@ -110,6 +151,9 @@ STEPS = [
 NOGPU_STEPS = [
     ('gfx', r'gfx: no GPU: sysinfo\.FEATURES has no GPU \(a bitstream without one\)', 'gfx'),
     ('drivers', r'gpu\s+not present[\s\S]*gpu       none: sysinfo\.FEATURES has no GPU', 'drivers'),
+    ('gfx tri 0 0 9 0 0 9 1', r'gfx: no GPU: sysinfo\.FEATURES has no GPU', 'gfx tri without a GPU'),
+    ('gfx flip', r'gfx: no GPU: sysinfo\.FEATURES has no GPU', 'gfx flip without a GPU'),
+    ('gfx cube 1', r'gfx: no GPU: sysinfo\.FEATURES has no GPU', 'gfx cube without a GPU'),
 ]
 
 
@@ -124,6 +168,14 @@ def gpu_id(path):
     m = re.search(r'^#define\s+GPU_ID_VALUE\s+(0x[0-9A-Fa-f]+)u?\b', open(path).read(), re.M)
     value = int(m.group(1), 16)
     return value, value.to_bytes(4, 'little').decode('ascii')
+
+
+def cube_table(path):
+    """gfxcube_expect.h: the FRAME_CRC of each frame of a turn of the cube, and how many pictures differ"""
+    text = open(path).read()
+    crcs = re.findall(r'0x([0-9a-f]{8})u', text.split('gfx_cube_expect[GFX_CUBE_FRAMES] = {', 1)[1])
+    pictures = int(re.search(r'#define GFX_CUBE_PICTURES (\d+)u', text).group(1))
+    return crcs, pictures
 
 
 def read_ppm(path):
@@ -146,6 +198,8 @@ def main():
     ap.add_argument('--gfxref', required=True)
     ap.add_argument('--gpu-h', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
                                                     'surfcpu', 'firmware', 'include', 'surfcpu', 'gpu.h'))
+    ap.add_argument('--cube-expect', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+                                                          'build', 'riscv32', 'arty_a7', 'gen', 'gfxcube_expect.h'))
     ap.add_argument('--work', default='build/gpuos/system')
     ap.add_argument('--evidence')
     ap.add_argument('--keep', action='store_true')
@@ -303,14 +357,18 @@ def main():
     check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
           re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
-    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead
-    st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5', out)
+    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead; and
+    # it must wake the fence waits that sleep on it (a handler that runs and wakes nobody leaves each such
+    # wait to its 10 ms and still counts its interrupts: the re-review's N3)
+    st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5, IE\.FENCE\)' +
+                    NL + r'\s+fence waits that slept on it: (\d+), woken by it: (\d+)', out)
     if len(st) >= 2:
-        fences, irqs = int(st[-1][0]) - int(st[0][0]), int(st[-1][1]) - int(st[0][1])
-        check(irqs > 0 and 2 * irqs >= fences, 'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences '
-              'sent between the first gfx and the last' % (irqs, fences))
+        fences, irqs, waits, woken = (int(st[-1][i]) - int(st[0][i]) for i in range(4))
+        check(irqs > 0 and 2 * irqs >= fences and woken > 0 and 2 * woken >= waits,
+              'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences sent between the first gfx and '
+              'the last; %d fence waits slept on it, %d of them woken by it' % (irqs, fences, waits, woken))
     else:
-        check(False, 'the GPU interrupt: gfx said its fences and interrupts %d times, not twice' % len(st))
+        check(False, 'the GPU interrupt: gfx said its fences, interrupts and waits %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
           'no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic')
     got = [crc for _, crc in CRC_LINE.findall(out)]
@@ -332,6 +390,36 @@ def main():
     if len(got) >= 5:
         check(got[3] == got[2] and got[4] == got[2], 'after gfx demo 1, and after gfx demo 5 ended by Ctrl+C, the picture '
               'is the one before them (crc 4 = crc 5 = crc 3: the display, the palette and VRAM back)')
+    if len(got) >= 9:
+        check(got[7] == got[5] and got[8] == got[7], 'after gfx flip 0, picture A again, and after gfx cube 1 the picture '
+              'before it (crc 8 = crc 6, crc 9 = crc 8: the display, the palette, the depth buffer and VRAM back)')
+    # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step; SurfOS's own check said
+    crcs, pictures = cube_table(a.cube_expect)
+    seq = []
+    fp = os.path.join(w, 'frames.txt')
+    if os.path.exists(fp):
+        seq = [crc for _, crc in re.findall(r'^frame (\d+) crc ([0-9a-f]{8})$', open(fp).read(), re.M)]
+    at = [i for i, crc in enumerate(seq) if crc in crcs]
+    steps_bad, prev = 0, -1
+    for i in at:
+        cand = [f for f, crc in enumerate(crcs) if crc == seq[i]]
+        f = next((f for f in cand if prev >= 0 and (f - prev) % len(crcs) <= 1), cand[0])
+        if prev >= 0 and (f - prev) % len(crcs) > 1:
+            steps_bad += 1
+        prev = f
+    whole_run = bool(at) and at == list(range(at[0], at[-1] + 1))
+    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad,
+          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step'
+          % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad))
+    want = 'all whole, in order' if pictures == len(crcs) else 'all whole'
+    sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) checked: ([^\n]*)', out)
+    m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +
+                  r'\s+gfx cube: (\d+) shown, (\d+) checked: ([^\n]*)', out)
+    check(m and sec and all(c == sh and v == want for _, sh, c, v in sec) and m.group(4) == m.group(5) and
+          m.group(6) == want and float(m.group(3)) >= 30,
+          'gfx cube 1 by SurfOS\'s own check: %s' % ('%s drawn in %s s (%s a second), %s shown, %s checked: %s; a line a '
+          'second: %s' % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
+                          '; '.join('%s drawn, %s shown, %s checked: %s' % x for x in sec)) if m else 'no summary'))
     check(re.search(r'gfx demo: \d+ frames in [12]\.\d\d s[^\n]*\n\s+gfx demo: ended by Ctrl\+C', out),
           'gfx demo 5: Ctrl+C typed after its first second ends it within the next')
     m = re.search(r'gfx demo: (\d+) frames in (\d+\.\d\d) s, (\d+\.\d) a second', out)
@@ -377,9 +465,10 @@ def main():
 
     # ---------------------------------------------------------------- the run without a GPU
     out2 = run_ok('nogpu', 'SurfOS on the SoC without SurfGPU (surfsim, HAS_GPU = 0)')
-    check('+GPU: none: sysinfo.FEATURES has no GPU' in out2 and 'gfx: no GPU: sysinfo.FEATURES has no GPU' in out2 and
+    check('+GPU: none: sysinfo.FEATURES has no GPU' in out2 and out2.count('gfx: no GPU: sysinfo.FEATURES has no GPU') == 4 and
           re.search(r'gpu\s+not present', out2) and not any(f_ in out2 for f_ in FAIL_ON),
-          'without a GPU: said once at boot (+GPU: none), by gfx, and by drivers (not present); nothing else changes')
+          'without a GPU: said once at boot (+GPU: none), by gfx, gfx tri, gfx flip and gfx cube, and by drivers (not '
+          'present); nothing else changes')
 
     # ---------------------------------------------------------------- the record
     passed = sum(1 for ok, _ in results if ok)

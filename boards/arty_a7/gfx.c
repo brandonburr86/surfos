@@ -19,6 +19,20 @@ The shell's way to SurfGPU (boards/arty_a7/gpu.c, surfcpu/docs/GPU.md):
   gfx bench                    fills, copies, lines and text: pixels per second
   gfx demo [seconds]           an animation at 320x240, two pages flipped at vertical blanking
   gfx reset                    ABORT, sticky bits cleared, the target and clip a reset leaves
+  gfx target base stride w h   SET_TARGET: the target another picture of VRAM (10/26/26)
+
+10/26/26 (SurfGPU, the cube in SurfOS; GPU.md 15.8), GPU2's commands (GPU.md section 16), which on
+a GPU1 say that they need GPU2 and fail:
+
+  gfx zbuf base stride | off   the depth buffer: SET_ZBUF for the target; off drops it
+  gfx zclear [b]               every depth b * 257 (FILL_RECT of b over its bytes; 0xff: 65535)
+  gfx tri [how] x0 y0 x1 y1 x2 y2 c                a flat triangle, no depth
+  gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2   each vertex with its depth and colour
+                               how: words joined by commas: gouraud, ztest (nearer) or zle
+                               (nearer or as near), zwrite, cullcw, cullccw; x and y in pixels
+                               with sixteenths (12, 12.5, -3.0625); flat: c0 for the whole
+  gfx flip [base]              FLIP: GFX_BASE at the next vertical blanking (the target's base)
+  gfx cube [seconds]           gpudiag's spinning cube, every frame shown checked (gfxcube.c)
 
 Coordinates are the target's (GPU.md section 5): x and y signed 16-bit, sizes unsigned 16-bit,
 colours 0-255 (palette indexes); the clip cuts, nothing wraps. gfx mode gfx and overlay make the
@@ -41,6 +55,7 @@ line printed fits the console's 80 columns, whatever the numbers in it (the host
 #include <stdlib.h>
 #include <string.h>
 #include <surfcpu/soc.h>
+#include <surfcpu/gpu.h>                /* TRIANGLE's header bits */
 #include <sys/framebuffer.h>            /* FONT_WIDTH, FONT_HEIGHT */
 #include <sys/cp437.h>                  /* the console's UTF-8 decoder */
 #include "gpu.h"
@@ -64,6 +79,15 @@ static const char *const usage_lines[] = {
     "gfx bench                    fills, copies, lines, text: pixels a second",
     "gfx demo [seconds]           an animation, two pages flipped (10 s)",
     "gfx reset                    ABORT, errors cleared, the reset target",
+    "gfx target base stride w h   the target: another picture in VRAM",
+    "GPU2's (GPU.md section 16):",
+    "gfx zbuf base stride | off   the depth buffer for the target, or none",
+    "gfx zclear [b]               every depth b * 257 (0xff when not given)",
+    "gfx tri [how] x0 y0 x1 y1 x2 y2 c              a flat triangle",
+    "gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2   with depths, colours",
+    "  how: gouraud,ztest|zle,zwrite,cullcw|cullccw (commas between)",
+    "gfx flip [base]              FLIP at the next blanking (the target's)",
+    "gfx cube [seconds]           gpudiag's cube, every frame checked (10 s)",
     NULL
 };
 
@@ -76,7 +100,8 @@ static int usage(const char *line) {
     printf("    usage:\n");
     for(i = 0; usage_lines[i]; i++) printf("    %s\n", usage_lines[i]);
     printf("    x, y -32768 to 32767, w, h 0 to 65535, colours 0 to 255 (palette indexes),\n"
-           "    in the target's pixels; numbers in decimal or 0x hex\n");
+           "    in the target's pixels; numbers in decimal or 0x hex; gfx tri's x, y with\n"
+           "    sixteenths (2.5, -0.0625), -2048 to 2047.9375, depths 0 (near) to 65535\n");
     return CMD_USAGE;
 }
 
@@ -118,10 +143,14 @@ static bool nums(char **argv, int first, const char *kinds, long *out) {
     return true;
 }
 
-/* the driver's result as the command's status; GPU_EINTR is said here, the rest by the driver */
+/* the driver's result as the command's status; Ctrl+C is said here, the rest by the driver (10/26/26,
+   the re-review's N2: from the result alone, which is this run's: GPU_EINTR when it ABORTed the
+   engine, GPU_ECANCEL when there was nothing to stop) */
 static int status(struct gpu *g, int r, const char *what) {
+    (void)g;
     if(r == GPU_OK) return CMD_OK;
-    if(r == GPU_EINTR) printf("    %s: interrupted%s\n", what, g->intr_aborted ? ": the engine stopped (ABORT)" : " (Ctrl+C)");
+    if(r == GPU_EINTR) printf("    %s: interrupted: the engine stopped (ABORT)\n", what);
+    if(r == GPU_ECANCEL) printf("    %s: interrupted (Ctrl+C)\n", what);
     if(r == GPU_EARG) {
         printf("    %s: refused: a coordinate past -32768..32767 or a size past 0..65535\n", what);
         return CMD_USAGE;
@@ -147,11 +176,13 @@ static int finish(struct gpu *g, int r, const char *what) {
 static int show(struct gpu *g) {
     struct gpu_screen d;
     struct gpu_state s;
+    struct gpu c;                       /* the driver's state, copied under the claim (10/26/26) */
     char pal[64];
     if(claim(g, "gfx")) return CMD_FAIL;
     gpu_screen_get(g, &d);
     gpu_state_read(g, &s);
     gpu_pal_describe(g, pal, sizeof(pal));
+    c = *g;
     gpu_release(g);
     /* 80 columns a line with every count at 10 digits (32 bits on the board) and every register at
        its widest */
@@ -160,23 +191,26 @@ static int show(struct gpu *g) {
            "    display: mode %lu, %s\n"
            "    GFX_BASE %lu, GFX_STRIDE %lu, GFX_SCALE %lu (%s)\n"
            "    palette: %s\n",
-           gpu_id_name(g->id), (u_long)g->id, (u_long)(g->vram_bytes / 1024), (u_long)SURF_VRAM_BASE,
-           (s.status & SURF_GPU_STATUS_BUSY_MASK) ? "busy" : "idle", (u_long)s.status, (u_long)g->fifo_depth,
+           gpu_id_name(c.id), (u_long)c.id, (u_long)(c.vram_bytes / 1024), (u_long)SURF_VRAM_BASE,
+           (s.status & SURF_GPU_STATUS_BUSY_MASK) ? "busy" : "idle", (u_long)s.status, (u_long)c.fifo_depth,
            (u_long)s.fifo_free, (u_long)d.mode, gpu_mode_name(d.mode), (u_long)d.base, (u_long)d.stride, (u_long)d.scale,
            d.scale == 2 ? "320x240 doubled" : "640x480", pal);
     printf("    target: VRAM %lu, stride %lu, %lux%lu\n"
-           "    clip: (%lu, %lu)-(%lu, %lu)\n"
-           "    sent: %lu words, %lu fences; FENCE %lu\n",
-           (u_long)g->t_base, (u_long)g->t_stride, (u_long)g->t_w, (u_long)g->t_h, (u_long)g->c_x0, (u_long)g->c_y0,
-           (u_long)g->c_x1, (u_long)g->c_y1, g->words, g->fences, (u_long)s.fence);
-    if(g->irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n", g->irqs);
+           "    clip: (%lu, %lu)-(%lu, %lu)\n",
+           (u_long)c.t_base, (u_long)c.t_stride, (u_long)c.t_w, (u_long)c.t_h, (u_long)c.c_x0, (u_long)c.c_y0,
+           (u_long)c.c_x1, (u_long)c.c_y1);
+    if(c.gpu2 && c.z_valid) printf("    depth buffer: VRAM %lu, stride %lu\n", (u_long)c.z_base, (u_long)c.z_stride);
+    else if(c.gpu2) printf("    depth buffer: none\n");
+    printf("    sent: %lu words, %lu fences; FENCE %lu\n", c.words, c.fences, (u_long)s.fence);
+    if(c.irq) printf("    interrupts: %lu (intc source 5, IE.FENCE)\n"
+                     "    fence waits that slept on it: %lu, woken by it: %lu\n", c.irqs, c.irq_waits, c.irq_wakes);
     else printf("    interrupts: none (no FEATURES.IRQ); fences waited for with sleeps\n");
     printf("    errors %lu, timeouts %lu, ABORTs %lu\n"
            "    by kind: OVERFLOW %lu, BAD_OPCODE %lu, BAD_PARAM %lu\n"
            "    display changes %lu, %lu without a blanking\n"
            "    frames: FRAME_COUNT %lu, FRAME_CRC %08lx (that frame's)\n",
-           g->errors, g->timeouts, g->aborts, g->overflows, g->bad_opcodes, g->bad_params, g->display_changes,
-           g->latch_misses, (u_long)s.frame_count, (u_long)s.frame_crc);
+           c.errors, c.timeouts, c.aborts, c.overflows, c.bad_opcodes, c.bad_params, c.display_changes,
+           c.latch_misses, (u_long)s.frame_count, (u_long)s.frame_crc);
     return CMD_OK;
 }
 
@@ -186,7 +220,7 @@ static int mode(struct gpu *g, int argc, char **argv) {
     static const char *use = "gfx mode text|gfx|overlay [1|2]   (2: 320x240, each pixel doubled)";
     struct gpu_screen d;
     long scale = 0;
-    u32 m;
+    u32 m, tw, th, ts;
     int r;
     if(argc < 2 || argc > 3) return usage(use);
     if(!strcmp(argv[1], "text")) m = GPU_MODE_TEXT;
@@ -207,12 +241,15 @@ static int mode(struct gpu *g, int argc, char **argv) {
     }
     d.mode = m;
     if(!r) r = gpu_screen_set(g, &d, "gfx mode");
+    tw = g->t_w;                        /* what is said is read under the claim */
+    th = g->t_h;
+    ts = g->t_stride;
     gpu_release(g);
     if(r) return status(g, r, "gfx mode");
     if(m == GPU_MODE_TEXT) printf("    display: mode 1, text (the picture stays in VRAM)\n");
     else printf("    display: mode %lu, %s, %s\n    the target is that picture: %lux%lu at VRAM 0, stride %lu\n",
-                (u_long)m, gpu_mode_name(m), scale == 2 ? "320x240 doubled" : "640x480", (u_long)g->t_w,
-                (u_long)g->t_h, (u_long)g->t_stride);
+                (u_long)m, gpu_mode_name(m), scale == 2 ? "320x240 doubled" : "640x480", (u_long)tw, (u_long)th,
+                (u_long)ts);
     if(m == GPU_MODE_GFX) printf("    the text console is hidden: gfx mode text or overlay shows it again\n");
     return CMD_OK;
 }
@@ -380,6 +417,223 @@ static int reset(struct gpu *g, int argc, char **argv) {
     return CMD_OK;
 }
 
+/**** the target, and GPU2's commands (GPU.md section 16; 10/26/26) ****/
+
+static int target(struct gpu *g, int argc, char **argv) {
+    static const char *use = "gfx target base stride w h   (VRAM bytes; the clip all of it)";
+    long v[4];
+    u32 b, st, w, h;
+    int r;
+    if(argc != 5 || !num(argv[1], 0, 0x7FFFFFFF, &v[0]) || !num(argv[2], 0, 0x7FFFFFFF, &v[1]) ||
+       !num(argv[3], 0, 0x7FFFFFFF, &v[2]) || !num(argv[4], 0, 0x7FFFFFFF, &v[3]))
+        return usage(use);
+    b = (u32)v[0];
+    st = (u32)v[1];
+    w = (u32)v[2];
+    h = (u32)v[3];
+    if(!gpu_target_fits(b, st, w, h)) {             /* SET_TARGET's rule (GPU.md section 5) */
+        printf("    gfx target: refused: base and stride multiples of 4, w and h below 32768,\n"
+               "    w at most the stride (or h 1), its h lines inside VRAM's 307200 bytes\n");
+        return usage(use);
+    }
+    if(claim(g, "gfx target")) return CMD_FAIL;
+    r = gpu_set_target(g, b, st, w, h, "gfx target");
+    if(!r) r = gpu_sync(g, "gfx target");
+    if(r) {
+        gpu_release(g);
+        return status(g, r, "gfx target");
+    }
+    gpu_release(g);
+    printf("    target: VRAM %lu, stride %lu, %lux%lu (the clip all of it)\n", (u_long)b, (u_long)st, (u_long)w, (u_long)h);
+    if(g->gpu2) printf("    depth buffer: none (an accepted SET_TARGET drops it)\n");
+    return CMD_OK;
+}
+
+/* a GPU2 command on a GPU1 (G2's engine): said, and nothing is sent */
+static bool gpu2(struct gpu *g, const char *what) {
+    if(g->gpu2) return true;
+    printf("    %s: needs GPU2 (SET_ZBUF, TRIANGLE, FLIP); this engine is %s\n", what, gpu_id_name(g->id));
+    return false;
+}
+
+static int zbuf(struct gpu *g, int argc, char **argv) {
+    static const char *use = "gfx zbuf base stride | off   (x, y's depth at base + y stride + 2x)";
+    long base, stride;
+    u32 tw, th;
+    int r;
+    if(!gpu2(g, "gfx zbuf")) return CMD_FAIL;
+    if(argc == 2 && !strcmp(argv[1], "off")) {
+        if(claim(g, "gfx zbuf")) return CMD_FAIL;
+        r = gpu_zbuf_off(g, "gfx zbuf");
+        if(!r) r = gpu_sync(g, "gfx zbuf");
+        gpu_release(g);
+        if(r) return status(g, r, "gfx zbuf");
+        printf("    depth buffer: none (SET_TARGET again; the target and clip as they were)\n");
+        return CMD_OK;
+    }
+    if(argc != 3 || !num(argv[1], 0, 0x7FFFFFFF, &base) || !num(argv[2], 0, 0x7FFFFFFF, &stride)) return usage(use);
+    if(claim(g, "gfx zbuf")) return CMD_FAIL;
+    tw = g->t_w;
+    th = g->t_h;
+    if(!gpu_zbuf_fits((u32)base, (u32)stride, tw, th)) {    /* SET_ZBUF's rule (GPU.md 16.2) */
+        gpu_release(g);
+        printf("    gfx zbuf: refused for the target (%lux%lu): base and stride must be\n"
+               "    multiples of 4, 2w at most the stride (or h 1), and h lines in VRAM\n", (u_long)tw, (u_long)th);
+        return usage(use);
+    }
+    r = gpu_zbuf_set(g, (u32)base, (u32)stride, "gfx zbuf");
+    if(!r) r = gpu_sync(g, "gfx zbuf");
+    gpu_release(g);
+    if(r) return status(g, r, "gfx zbuf");
+    printf("    depth buffer: VRAM %lu, stride %lu, for the target's %lux%lu\n", (u_long)base, (u_long)stride, (u_long)tw,
+           (u_long)th);
+    return CMD_OK;
+}
+
+static int zclear(struct gpu *g, int argc, char **argv) {
+    long b = 0xFF;
+    int why = 0;
+    if(!gpu2(g, "gfx zclear")) return CMD_FAIL;
+    if(argc > 2 || (argc == 2 && !num(argv[1], 0, 255, &b)))
+        return usage("gfx zclear [b]   (each depth b * 257; 0xff by default: 65535, far)");
+    if(claim(g, "gfx zclear")) return CMD_FAIL;
+    if(!g->z_valid) why = 1;
+    else if(2 * g->t_w >= 32768u) why = 2;
+    if(why) {
+        gpu_release(g);
+        if(why == 1) printf("    gfx zclear: no depth buffer (gfx zbuf base stride sets one)\n");
+        else printf("    gfx zclear: the target is 16384 or more wide: its depth bytes are no target\n");
+        return CMD_FAIL;
+    }
+    return finish(g, gpu_zbuf_clear(g, (u8)b, "gfx zclear"), "gfx zclear");
+}
+
+/* a vertex coordinate in pixels with sixteenths (12.4): decimal with a fraction that is a whole
+   number of sixteenths (12, 12.5, -3.0625, .25), or 0x hex pixels; -2048 to 2047.9375 */
+static bool fx(const char *s, i32 *out) {
+    u32 ip = 0, frac = 0, scale = 1, digits = 0, fd = 0, base = 10, d;
+    bool neg = false;
+    i32 v;
+    if(!s) return false;
+    if(*s == '-' || *s == '+') neg = *s++ == '-';
+    if(s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+        s += 2;
+    }
+    for(; *s && *s != '.'; s++, digits++) {
+        if(*s >= '0' && *s <= '9') d = (u32)(*s - '0');
+        else if(base == 16 && *s >= 'a' && *s <= 'f') d = (u32)(*s - 'a' + 10);
+        else if(base == 16 && *s >= 'A' && *s <= 'F') d = (u32)(*s - 'A' + 10);
+        else return false;
+        ip = ip * base + d;
+        if(ip > 2048) return false;
+    }
+    if(*s == '.') {
+        if(base == 16) return false;
+        for(s++; *s; s++, fd++) {
+            if(*s < '0' || *s > '9' || fd >= 8) return false;
+            frac = frac * 10 + (u32)(*s - '0');
+            scale *= 10;
+        }
+        if(!fd) return false;
+    }
+    if(!digits && !fd) return false;
+    if((u64)frac * 16 % scale) return false;        /* not a whole number of sixteenths */
+    v = (i32)(ip * 16 + (u32)((u64)frac * 16 / scale));
+    if(neg) v = -v;
+    if(v < -32768 || v > 32767) return false;
+    *out = v;
+    return true;
+}
+
+/* how: words joined by commas (flat is the default and the opposite of gouraud; ztest and zle
+   test depth, zle passing equal depths too; zwrite writes them; cullcw and cullccw draw nothing
+   when the vertices go that way round on the screen) */
+static bool tri_how(const char *s, u32 *bits) {
+    static const struct { const char *name; u32 bits; } how[] = {
+        { "flat", 0 }, { "gouraud", GPU_TRI_GOURAUD }, { "ztest", GPU_TRI_ZTEST }, { "zle", GPU_TRI_ZTEST | GPU_TRI_ZFUNC_LE },
+        { "zwrite", GPU_TRI_ZWRITE }, { "cullcw", GPU_TRI_CULL_CW }, { "cullccw", GPU_TRI_CULL_CCW },
+    };
+    u_int seen = 0;
+    *bits = 0;
+    for(;;) {
+        u_int n = 0, i;
+        while(s[n] && s[n] != ',') n++;
+        for(i = 0; i < sizeof(how) / sizeof(how[0]); i++)
+            if(strlen(how[i].name) == n && !strncmp(s, how[i].name, n)) break;
+        if(i == sizeof(how) / sizeof(how[0]) || (seen & (1u << i))) return false;
+        seen |= 1u << i;
+        *bits |= how[i].bits;
+        if(!s[n]) break;
+        s += n + 1;
+    }
+    /* flat with gouraud, ztest with zle: one or the other */
+    return (seen & 3u) != 3u && (seen & 12u) != 12u;
+}
+
+static int tri(struct gpu *g, int argc, char **argv) {
+    static const char *use =
+        "gfx tri [how] x0 y0 x1 y1 x2 y2 c   (a flat triangle), or\n"
+        "           gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2\n"
+        "           how: gouraud,ztest|zle,zwrite,cullcw,cullccw joined by commas;\n"
+        "           x, y pixels with sixteenths (2.5); z 0 (near) to 65535; c 0 to 255";
+    i32 x[3], y[3];
+    u32 z[3], c[3], bits = 0;
+    long v;
+    int first = 1, i;
+    bool depth;
+    if(!gpu2(g, "gfx tri")) return CMD_FAIL;
+    if(argc > 1 && argv[1][0] >= 'a' && argv[1][0] <= 'z') {
+        if(!tri_how(argv[1], &bits)) return usage(use);
+        first = 2;
+    }
+    if(argc - first == 7) {                             /* flat: no depths, one colour */
+        if(bits & (GPU_TRI_GOURAUD | GPU_TRI_ZTEST | GPU_TRI_ZWRITE)) return usage(use);
+        if(!num(argv[first + 6], 0, 255, &v)) return usage(use);
+        for(i = 0; i < 3; i++) {
+            if(!fx(argv[first + 2 * i], &x[i]) || !fx(argv[first + 2 * i + 1], &y[i])) return usage(use);
+            z[i] = 0;
+            c[i] = (u32)v;
+        }
+    } else if(argc - first == 12) {
+        for(i = 0; i < 3; i++) {
+            if(!fx(argv[first + 4 * i], &x[i]) || !fx(argv[first + 4 * i + 1], &y[i])) return usage(use);
+            if(!num(argv[first + 4 * i + 2], 0, 65535, &v)) return usage(use);
+            z[i] = (u32)v;
+            if(!num(argv[first + 4 * i + 3], 0, 255, &v)) return usage(use);
+            c[i] = (u32)v;
+        }
+    } else {
+        return usage(use);
+    }
+    bits |= c[0];                                       /* the flat colour: vertex 0's */
+    depth = (bits & (GPU_TRI_ZTEST | GPU_TRI_ZWRITE)) != 0;
+    if(claim(g, "gfx tri")) return CMD_FAIL;
+    if(depth && !g->z_valid) {
+        gpu_release(g);
+        printf("    gfx tri: ztest, zle and zwrite need a depth buffer (gfx zbuf base stride)\n");
+        return CMD_FAIL;
+    }
+    return finish(g, gpu_tri(g, bits, x, y, z, c, "gfx tri"), "gfx tri");
+}
+
+static int flip(struct gpu *g, int argc, char **argv) {
+    long base = -1;
+    u32 b;
+    int r;
+    if(!gpu2(g, "gfx flip")) return CMD_FAIL;
+    if(argc > 2 || (argc == 2 && (!num(argv[1], 0, SURF_VIDEO_GFX_BASE_BASE_MASK, &base) || (base & 3))))
+        return usage("gfx flip [base]   (a multiple of 4 to 0x7fffc; default the target's)");
+    if(claim(g, "gfx flip")) return CMD_FAIL;
+    b = base < 0 ? g->t_base : (u32)base;
+    r = gpu_flip(g, b, "gfx flip");
+    if(!r) r = gpu_sync(g, "gfx flip");                 /* done once the FLIP wrote it, at the blanking */
+    gpu_release(g);
+    if(r) return status(g, r, "gfx flip");
+    printf("    display: GFX_BASE %lu, written by FLIP at a vertical blanking\n", (u_long)b);
+    return CMD_OK;
+}
+
 /**** gfx bench ****/
 
 /* a little generator of its own, so a bench draws the same on every run */
@@ -471,10 +725,81 @@ static int bench(struct gpu *g, int argc, char **argv) {
         snprintf(desc, sizeof(desc), "64 x %lu cells", (u_long)n);
         rate("text", desc, 64ull * n * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
     }
-    if(!r && gpu_interrupted(g)) r = GPU_EINTR;
+    if(!r && gpu_interrupted(g)) r = GPU_ECANCEL;    /* seen between two steps: nothing left to stop */
     g->spin_us = spin;
     gpu_release(g);
     return status(g, r, what);
+}
+
+/**** a run that takes the whole display: its way in and out (gfx demo, gfx cube) ****/
+
+/* What is put back afterwards is kept first: the display (mode, GFX_ registers), the palette, the
+   target, the clip, the depth buffer and the first `bytes` of VRAM (a copy in the kernel heap, four
+   words a loop; without memory it says so and runs anyway). The console is on the screen whenever
+   VRAM or the palette changes, on the way in and out: no frame shows the picture from before over
+   the run's pages or palette, or the run's pages being overwritten (text mode shows neither VRAM
+   nor GPAL). pal (NULL: none) is loaded on the way in. */
+int gfx_keep_begin(struct gpu *g, struct gfx_keep *k, u32 bytes, const u16 *pal, const char *what) {
+    int r;
+    memset(k, 0, sizeof(*k));
+    gpu_screen_get(g, &k->before);
+    gpu_pal_read(g, k->pal);
+    k->t_base = g->t_base;
+    k->t_stride = g->t_stride;
+    k->t_w = g->t_w;
+    k->t_h = g->t_h;
+    k->c_x0 = g->c_x0;
+    k->c_y0 = g->c_y0;
+    k->c_x1 = g->c_x1;
+    k->c_y1 = g->c_y1;
+    k->z_valid = g->z_valid;
+    k->z_base = g->z_base;
+    k->z_stride = g->z_stride;
+    k->bytes = bytes;
+    r = gpu_sync(g, what);
+    k->text = k->before;
+    k->text.mode = GPU_MODE_TEXT;
+    if(!r && k->before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &k->text, what);
+    if(!r) {
+        k->vram = (u32 *)gpu_alloc(g, bytes);
+        if(k->vram) gpu_vram_read(g, 0, k->vram, bytes / 4);
+        else printf("    %s: no memory to keep the %lu bytes of VRAM it draws on;\n"
+                    "    they stay as it leaves them\n", what, (u_long)bytes);
+    }
+    if(!r && pal && memcmp(pal, k->pal, sizeof(k->pal))) {
+        gpu_pal_write(g, pal);
+        k->pal_changed = true;
+    }
+    return r;
+}
+
+/* Back as it was, also after Ctrl+C (intr: ABORT first), a stopped engine or an error: the console
+   on the screen while VRAM and the palette go back, the driver's target, clip and depth buffer as
+   before (queued for the engine), then the display from before. None of it needs the engine: one
+   that stopped (r) was said and ABORTed once, and nothing here waits for it again (its FIFO is
+   empty after the ABORT, so the queued words fit); after Ctrl+C a dead engine costs 50 ms (N1). */
+int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char *what) {
+    bool dead = r == GPU_ETIMEOUT;
+    int r2;
+    g->keep_going = true;
+    if(intr) gpu_abort(g, what);
+    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
+    r2 = gpu_screen_set(g, &k->text, what);
+    if(k->vram) {
+        gpu_vram_write(g, 0, k->vram, k->bytes / 4);
+        gpu_free(g, k->vram);
+        k->vram = NULL;
+    }
+    if(k->pal_changed) gpu_pal_write(g, k->pal);
+    if(gpu_set_target(g, k->t_base, k->t_stride, k->t_w, k->t_h, what) == GPU_ETIMEOUT) dead = true;
+    if((k->c_x0 || k->c_y0 || k->c_x1 != k->t_w || k->c_y1 != k->t_h) &&
+       gpu_set_clip(g, k->c_x0, k->c_y0, k->c_x1, k->c_y1, what) == GPU_ETIMEOUT)
+        dead = true;
+    if(k->z_valid && gpu_zbuf_set(g, k->z_base, k->z_stride, what) == GPU_ETIMEOUT) dead = true;
+    if(!dead) gpu_sync(g, what);
+    if(!r2 && k->before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &k->before, what);
+    g->keep_going = false;
+    return r2;
 }
 
 /**** gfx demo ****/
@@ -591,40 +916,22 @@ static int demo_frame(struct gpu *g, struct demo *s, u32 page, const char *what)
 
 static int demo(struct gpu *g, int argc, char **argv) {
     const char *what = "gfx demo";
-    struct gpu_screen before, text, shown;
+    struct gfx_keep keep;
+    struct gpu_screen shown;
     struct demo s;
-    u16 pal_before[256], rgb[256];
-    u32 *kept = NULL, t_base, t_stride, t_w, t_h, c_x0, c_y0, c_x1, c_y1, page = 1, frames = 0, last = 0, v, spin;
+    u16 rgb[256];
+    u32 page = 1, frames = 0, last = 0, v, spin;
     u64 t0, tick, now, secs;
     long seconds = 10;
-    bool pal_changed = false, interrupted = false, dead;
+    bool interrupted = false;
     int r, r2;
     if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx demo [seconds]   (1-3600, 10 when not given)");
     if(claim(g, what)) return CMD_FAIL;
-    /* what is put back afterwards */
-    gpu_screen_get(g, &before);
-    gpu_pal_read(g, pal_before);
-    t_base = g->t_base; t_stride = g->t_stride; t_w = g->t_w; t_h = g->t_h;
-    c_x0 = g->c_x0; c_y0 = g->c_y0; c_x1 = g->c_x1; c_y1 = g->c_y1;
-    r = gpu_sync(g, what);
-    /* The console is on the screen whenever the palette and VRAM change, before and after: no frame
-       shows the picture from before over the demo's pages or palette, or the demo's pages being
-       overwritten (text mode shows neither VRAM nor GPAL). */
-    text = before;
-    text.mode = GPU_MODE_TEXT;
-    if(!r && before.mode != GPU_MODE_TEXT) r = gpu_screen_set(g, &text, what);
-    if(!r) {
-        kept = (u32 *)gpu_alloc(g, DBYTES);
-        if(kept) gpu_vram_read(g, 0, kept, DBYTES / 4);
-        else printf("    gfx demo: no memory to keep the %lu bytes of VRAM it draws on;\n"
-                    "    they stay as the demo leaves them\n", (u_long)DBYTES);
-    }
-    /* RGB332, the sprites, both pages, the first frame on page A, then the display */
+    /* the display, palette, target, clip, depth buffer and the VRAM it draws on kept; the console on
+       the screen while RGB332 goes in */
     gpu_pal_make(GPU_PAL_RGB332, rgb);
-    if(!r && memcmp(rgb, pal_before, sizeof(rgb))) {
-        gpu_pal_write(g, rgb);
-        pal_changed = true;
-    }
+    r = gfx_keep_begin(g, &keep, DBYTES, rgb, what);
+    /* the sprites, both pages, the first frame on page A, then the display */
     demo_start(&s);
     if(!r) r = gpu_set_target(g, 0, DW, DW, DROWS, what);
     if(!r) r = demo_sheet(g, what);
@@ -649,7 +956,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
         if(!r) r = gpu_fence_wait(g, v, what);
         if(!r) r = gpu_check(g, what);
         if(r) break;
-        gpu_flip(g, page * DPAGE);                      /* the next frame latch shows it, whole */
+        gpu_set_base(g, page * DPAGE);                  /* the next frame latch shows it, whole */
         page ^= 1;
         frames++;
         now = gpu_now_us(g);
@@ -666,30 +973,10 @@ static int demo(struct gpu *g, int argc, char **argv) {
             break;
         }
     }
-    if(r == GPU_EINTR) interrupted = true;
+    if(r == GPU_EINTR || r == GPU_ECANCEL) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
-    /* Back as it was, also after Ctrl+C or a stopped engine: the console on the screen while VRAM and
-       the palette go back, the driver's target and clip as before (queued for the engine), then the
-       display from before. None of it needs the engine: one that stopped was said and ABORTed once,
-       and nothing here waits for it again (its FIFO is empty after the ABORT, so the queued words
-       fit). */
-    g->keep_going = true;
-    dead = r == GPU_ETIMEOUT;
-    if(interrupted) gpu_abort(g, what);
-    if(!dead) dead = gpu_sync(g, what) == GPU_ETIMEOUT;     /* the last frame's words done */
-    r2 = gpu_screen_set(g, &text, what);
-    if(kept) {
-        gpu_vram_write(g, 0, kept, DBYTES / 4);
-        gpu_free(g, kept);
-    }
-    if(pal_changed) gpu_pal_write(g, pal_before);
-    if(gpu_set_target(g, t_base, t_stride, t_w, t_h, what) == GPU_ETIMEOUT) dead = true;
-    if((c_x0 || c_y0 || c_x1 != t_w || c_y1 != t_h) && gpu_set_clip(g, c_x0, c_y0, c_x1, c_y1, what) == GPU_ETIMEOUT)
-        dead = true;
-    if(!dead) gpu_sync(g, what);
-    if(!r2 && before.mode != GPU_MODE_TEXT) r2 = gpu_screen_set(g, &before, what);
-    g->keep_going = false;
+    r2 = gfx_keep_end(g, &keep, r, interrupted, what);
     gpu_release(g);
     if(frames) {
         u64 us = now - t0, rate10 = us ? (u64)frames * 10000000u / us : 0;
@@ -704,6 +991,20 @@ static int demo(struct gpu *g, int argc, char **argv) {
     return r ? status(g, r, what) : r2 ? CMD_FAIL : CMD_OK;
 }
 
+/**** gfx cube (boards/arty_a7/gfxcube.c; 10/26/26) ****/
+
+static int cube(struct gpu *g, int argc, char **argv) {
+    const char *what = "gfx cube";
+    long seconds = 10;
+    int r;
+    if(!gpu2(g, what)) return CMD_FAIL;
+    if(argc > 2 || (argc == 2 && !num(argv[1], 1, 3600, &seconds))) return usage("gfx cube [seconds]   (1-3600, 10 when not given)");
+    if(claim(g, what)) return CMD_FAIL;
+    r = gfx_cube_run(g, (u32)seconds, what);
+    gpu_release(g);
+    return r ? CMD_FAIL : CMD_OK;
+}
+
 /**** the command ****/
 
 static const struct {
@@ -712,7 +1013,8 @@ static const struct {
 } subs[] = {
     { "mode", mode }, { "clear", clear }, { "fill", fill }, { "rect", rect }, { "line", line }, { "copy", copy },
     { "text", text }, { "pal", pal }, { "put", put }, { "get", get }, { "crc", crc }, { "bench", bench },
-    { "demo", demo }, { "reset", reset },
+    { "demo", demo }, { "reset", reset }, { "target", target }, { "zbuf", zbuf }, { "zclear", zclear }, { "tri", tri },
+    { "flip", flip }, { "cube", cube },
 };
 
 int gfx_command(struct gpu *g, int argc, char **argv) {

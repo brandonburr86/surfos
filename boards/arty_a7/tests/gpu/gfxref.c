@@ -26,6 +26,15 @@ shows where no character is). The lines that leave the picture as it was (gfx, g
 which put VRAM, GPAL, the display, the target and the clip back) only take their place; after
 gfx bench, which draws on the target, VRAM counts as unknown until a fill covers all of it.
 Exit status 0 when the model's VRAM and the direct pixels, and the two CRCs, agreed throughout.
+
+10/26/26 (GPU2, GPU.md section 16): the depth buffer (SET_ZBUF, and its clearing as 16.6 gives the
+words), TRIANGLE and FLIP the same way: their words written here from 16.2 and 16.6 and fed to the
+model, and the pixels and depths worked out directly from 16.3 (coverage: exact edge functions at
+the pixel centres, the top-left rule, the box), 16.4 (the planes: floor gradients with 20
+fractional bits, values relative to vertex 0, rounded to the nearest, clamped) and 16.5 (the depth
+test, then the depth, then the colour); gfx cube puts everything back, so it only takes its
+place, as the demos do. These have nothing of the model's code: a mistake in either shows as two
+VRAMs that differ.
 */
 
 #include <stdio.h>
@@ -45,6 +54,16 @@ extern const uint8_t font8x16[256][16];
 #define OP_EXPAND       0x06u
 #define COPY_KEY        (1u << 8)               /* COPY_RECT: 7:0 key, 8 KEY */
 #define EXPAND_TRANSP   (1u << 16)              /* EXPAND: 7:0 fg, 15:8 bg, 16 TRANSPARENT */
+/* GPU.md 16.2 */
+#define OP_SET_ZBUF     0x0Au
+#define OP_TRIANGLE     0x0Bu
+#define OP_FLIP         0x0Cu
+#define TRI_GOURAUD     (1u << 8)
+#define TRI_ZTEST       (1u << 9)
+#define TRI_ZFUNC_LE    (1u << 10)
+#define TRI_ZWRITE      (1u << 11)
+#define TRI_CULL_CW     (1u << 12)
+#define TRI_CULL_CCW    (1u << 13)
 
 static uint8_t vm[VRAM];                        /* the model engine's VRAM, fed the words */
 static uint8_t vp[VRAM];                        /* the pixels computed directly */
@@ -55,6 +74,8 @@ static int mode = 1;                            /* SurfOS starts in text mode, *
 static uint32_t gbase = 0, gstride = 640, gscale = 1;           /* GFX_ registers at their reset values */
 static uint16_t gpal[256];
 static int known, ncrc, bad;
+static int zvalid;                              /* GPU2: the depth buffer (16.2) */
+static uint32_t zbase, zstride;
 static const char *ppm;
 static uint16_t frame[640 * 480], mframe[640 * 480];
 
@@ -75,6 +96,7 @@ static void target(uint32_t base, uint32_t stride, uint32_t w, uint32_t h) {
     ts = stride;
     tw = w;
     th = h;
+    zvalid = 0;                                 /* 16.2: an accepted SET_TARGET leaves no depth buffer */
 }
 
 static void fill(int x, int y, int w, int h, uint8_t c) {
@@ -163,6 +185,161 @@ static void text(int x, int y, uint8_t fg, int bg, const char *s) {
 static void put(int x, int y, uint8_t c) {
     uint32_t a = tb + (uint32_t)y * ts + (uint32_t)x;
     vm[a] = vp[a] = c;
+}
+
+/**** GPU2: GPU.md section 16 ****/
+
+/* gfx zbuf base stride: SET_ZBUF (16.2) */
+static void zbuf(uint32_t base, uint32_t stride) {
+    word(OP_SET_ZBUF << 24);
+    word(base);
+    word(stride);
+    zvalid = 1;
+    zbase = base;
+    zstride = stride;
+}
+
+/* gfx zclear [b]: 16.6's words, a FILL_RECT of b over the depth bytes (2W of them a line) with a
+   target set to them, the target back, SET_ZBUF again; directly, every depth byte b */
+static void zclear(uint8_t b) {
+    uint32_t x, y;
+    word(OP_SET_TARGET << 24); word(zbase); word(zstride); word(pair((int)(2 * tw), (int)th));
+    word(OP_FILL_RECT << 24 | b); word(pair(0, 0)); word(pair((int)(2 * tw), (int)th));
+    word(OP_SET_TARGET << 24); word(tb); word(ts); word(pair((int)tw, (int)th));
+    word(OP_SET_ZBUF << 24); word(zbase); word(zstride);
+    for(y = 0; y < th; y++)
+        for(x = 0; x < 2 * tw; x++) vp[zbase + y * zstride + x] = b;
+}
+
+/* floor(n / d) for d > 0, whatever the sign of n */
+static __int128 floordiv(__int128 n, int64_t d) {
+    __int128 q = n / d;
+    return (n % d != 0 && n < 0) ? q - 1 : q;
+}
+
+/* 16.4: a vertex quantity's plane: GX, GY = floor(N * 2^20 / A), N's from the vertices in the order
+   given; the value at a centre: V = v0 2^20 + GX (cx - X0) + GY (cy - Y0), rounded to the nearest
+   (halves up), clamped to the vertices' smallest and largest */
+struct plane { __int128 gx, gy; int64_t v0, lo, hi; };
+
+static void plane_of(struct plane *p, const int32_t *X, const int32_t *Y, const int64_t *v, int64_t a) {
+    __int128 nx = (__int128)(v[1] - v[0]) * (Y[2] - Y[0]) - (__int128)(v[2] - v[0]) * (Y[1] - Y[0]);
+    __int128 ny = (__int128)(v[2] - v[0]) * (X[1] - X[0]) - (__int128)(v[1] - v[0]) * (X[2] - X[0]);
+    int i;
+    if(a < 0) {                                 /* the same floor for -N / -A */
+        a = -a;
+        nx = -nx;
+        ny = -ny;
+    }
+    p->gx = floordiv(nx * ((__int128)1 << 20), a);
+    p->gy = floordiv(ny * ((__int128)1 << 20), a);
+    p->v0 = v[0];
+    p->lo = p->hi = v[0];
+    for(i = 1; i < 3; i++) {
+        if(v[i] < p->lo) p->lo = v[i];
+        if(v[i] > p->hi) p->hi = v[i];
+    }
+}
+
+static int64_t value_at(const struct plane *p, const int32_t *X, const int32_t *Y, int64_t cx, int64_t cy) {
+    __int128 V = (__int128)p->v0 * ((__int128)1 << 20) + p->gx * (cx - X[0]) + p->gy * (cy - Y[0]);
+    int64_t t = (int64_t)floordiv(V + ((__int128)1 << 19), (int64_t)1 << 20);
+    return t < p->lo ? p->lo : t > p->hi ? p->hi : t;
+}
+
+/* gfx tri: TRIANGLE's words (16.2), and the pixels: those whose centres the triangle covers (16.3),
+   inside the box and the target (no clip here but SET_TARGET's), each with its depth tested, its
+   depth written and its colour written (16.5; this test's depth buffer never overlaps the target,
+   so a pixel at a time gives what a group at a time does) */
+static void tri(uint32_t bits, const int32_t *X, const int32_t *Y, const uint32_t *Z, const uint32_t *C) {
+    int64_t a = (int64_t)(X[1] - X[0]) * (Y[2] - Y[0]) - (int64_t)(Y[1] - Y[0]) * (X[2] - X[0]);
+    int32_t ex[3], ey[3], ax[3], ay[3], lox, hix, loy, hiy;
+    int64_t zv[3], cv[3], px, py, x0, x1, y0, y1;
+    int tl[3], i, j;
+    struct plane pz, pc;
+    word(OP_TRIANGLE << 24 | bits);
+    for(i = 0; i < 3; i++) {
+        word(pair(X[i], Y[i]));
+        word((Z[i] & 0xFFFFu) | (C[i] & 0xFFu) << 16);
+    }
+    if(!a || (a > 0 && (bits & TRI_CULL_CW)) || (a < 0 && (bits & TRI_CULL_CCW))) return;
+    for(i = 0; i < 3; i++) {                    /* clockwise: v1 and v2 swapped when A < 0 */
+        j = (a < 0 && i) ? 3 - i : i;
+        ax[i] = X[j];
+        ay[i] = Y[j];
+        zv[i] = Z[i];
+        cv[i] = C[i];
+    }
+    for(i = 0; i < 3; i++) {                    /* edge i, from vertex i to vertex i + 1 */
+        ex[i] = ax[(i + 1) % 3] - ax[i];
+        ey[i] = ay[(i + 1) % 3] - ay[i];
+        tl[i] = ey[i] < 0 || (ey[i] == 0 && ex[i] > 0);
+    }
+    plane_of(&pz, X, Y, zv, a);
+    plane_of(&pc, X, Y, cv, a);
+    lox = hix = X[0];
+    loy = hiy = Y[0];
+    for(i = 1; i < 3; i++) {
+        if(X[i] < lox) lox = X[i];
+        if(X[i] > hix) hix = X[i];
+        if(Y[i] < loy) loy = Y[i];
+        if(Y[i] > hiy) hiy = Y[i];
+    }
+    x0 = (int64_t)floordiv(lox + 7, 16);       /* the centres the box can hold, cut by the target */
+    x1 = (int64_t)floordiv(hix - 8, 16);
+    y0 = (int64_t)floordiv(loy + 7, 16);
+    y1 = (int64_t)floordiv(hiy - 8, 16);
+    if(x0 < 0) x0 = 0;
+    if(y0 < 0) y0 = 0;
+    if(x1 > (int64_t)tw - 1) x1 = (int64_t)tw - 1;
+    if(y1 > (int64_t)th - 1) y1 = (int64_t)th - 1;
+    for(py = y0; py <= y1; py++)
+        for(px = x0; px <= x1; px++) {
+            int64_t cx = 16 * px + 8, cy = 16 * py + 8, z = 0, c;
+            uint32_t za = zbase + (uint32_t)py * zstride + 2 * (uint32_t)px;
+            int in = 1;
+            for(i = 0; i < 3 && in; i++) {
+                int64_t e = (int64_t)ex[i] * (cy - ay[i]) - (int64_t)ey[i] * (cx - ax[i]);
+                in = e > 0 || (e == 0 && tl[i]);
+            }
+            if(!in) continue;
+            if(bits & (TRI_ZTEST | TRI_ZWRITE)) z = value_at(&pz, X, Y, cx, cy);
+            c = (bits & TRI_GOURAUD) ? value_at(&pc, X, Y, cx, cy) : (int64_t)(bits & 0xFFu);
+            if(bits & TRI_ZTEST) {
+                int64_t was = vp[za] | vp[za + 1] << 8;
+                if((bits & TRI_ZFUNC_LE) ? z > was : z >= was) continue;
+            }
+            if(bits & TRI_ZWRITE) {
+                vp[za] = (uint8_t)z;
+                vp[za + 1] = (uint8_t)(z >> 8);
+            }
+            plot((int)px, (int)py, (uint8_t)c);
+        }
+}
+
+/* gfx flip [base]: FLIP (16.2), GFX_BASE from the next frame (16.7) */
+static void flip(uint32_t base) {
+    word(OP_FLIP << 24);
+    word(base);
+    gbase = base;
+}
+
+/* a vertex in 12.4: pixels and sixteenths */
+#define FX(p) ((int32_t)((p) * 16))
+
+/* gfx tri's two forms: x0 y0 x1 y1 x2 y2 c (flat, depths 0), and each vertex with its depth and colour;
+   the header's colour is vertex 0's */
+static void tri7(uint32_t how, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, uint32_t c) {
+    const int32_t X[3] = { x0, x1, x2 }, Y[3] = { y0, y1, y2 };
+    const uint32_t Z[3] = { 0, 0, 0 }, C[3] = { c, c, c };
+    tri(how | c, X, Y, Z, C);
+}
+
+static void tri12(uint32_t how, int32_t x0, int32_t y0, uint32_t z0, uint32_t c0, int32_t x1, int32_t y1, uint32_t z1,
+                  uint32_t c1, int32_t x2, int32_t y2, uint32_t z2, uint32_t c2) {
+    const int32_t X[3] = { x0, x1, x2 }, Y[3] = { y0, y1, y2 };
+    const uint32_t Z[3] = { z0, z1, z2 }, C[3] = { c0, c1, c2 };
+    tri(how | c0, X, Y, Z, C);
 }
 
 /* GPU.md section 3: GPAL as the configuration leaves it: R = n[7:5], G = n[4:2], B = n[1:0], each
@@ -325,13 +502,48 @@ int main(int argc, char **argv) {
     say("gfx crc");                                                 crc();
     say("gfx demo 5");
     say("gfx crc");                                                 crc();
-    /* the bench draws on the target; the reset's target; text mode (crc 6: the console) */
+    /* GPU2 (GPU.md section 16): triangles in 320x240 with a depth buffer (crc 6): flat; one culled
+       (clockwise: A > 0) and drawn the other way; a square as two triangles along a diagonal through
+       pixel centres (the top-left rule); Gouraud with depth, two triangles through each other (ztest,
+       then zle), vertices with sixteenths; Gouraud without depth. Then picture B drawn and shown by
+       FLIP (crc 7), A again (crc 8); gfx cube puts everything back (crc 9) */
+    say("gfx mode gfx 2");                                          show(2, 2);
+    say("gfx pal ramps");                                           pal_ramps();
+    say("gfx zbuf 153600 640");                                     zbuf(153600, 640);
+    say("gfx zclear");                                              zclear(0xFF);
+    say("gfx clear 0");                                             fill(0, 0, 320, 240, 0);
+    say("gfx tri 8 8 120 16 40 100 0x3f");                          tri7(0, FX(8), FX(8), FX(120), FX(16), FX(40), FX(100), 0x3f);
+    say("gfx tri cullcw 200 20 300 20 250 60 0xff");
+    tri7(TRI_CULL_CW, FX(200), FX(20), FX(300), FX(20), FX(250), FX(60), 0xff);
+    say("gfx tri cullccw 200 20 300 20 250 60 0x7f");
+    tri7(TRI_CULL_CCW, FX(200), FX(20), FX(300), FX(20), FX(250), FX(60), 0x7f);
+    say("gfx tri 20 140 60 140 60 180 0x5f");                       tri7(0, FX(20), FX(140), FX(60), FX(140), FX(60), FX(180), 0x5f);
+    say("gfx tri 20 140 60 180 20 180 0x9f");                       tri7(0, FX(20), FX(140), FX(60), FX(180), FX(20), FX(180), 0x9f);
+    say("gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28");
+    tri12(TRI_GOURAUD | TRI_ZTEST | TRI_ZWRITE, 2408, 1124, 1000, 0x20, 4801, FX(100), 60000, 0x3f, FX(200), 3692, 30000, 0x28);
+    say("gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50");
+    tri12(TRI_GOURAUD | TRI_ZTEST | TRI_ZFUNC_LE | TRI_ZWRITE, FX(140), FX(230), 30000, 0x40, FX(310), FX(220), 30000, 0x5f,
+          FX(250), FX(60), 30000, 0x50);
+    say("gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0");
+    tri12(TRI_GOURAUD, FX(80), FX(200), 0, 0xc0, FX(140), FX(236), 0, 0xdf, FX(70), 3816, 0, 0xd0);
+    say("gfx crc");                                                 crc();
+    say("gfx target 76800 320 320 240");                            target(76800, 320, 320, 240);
+    say("gfx clear 0x70");                                          fill(0, 0, 320, 240, 0x70);
+    say("gfx tri 0 0 319.9375 0 0 239.9375 0x9f");                  tri7(0, 0, 0, 5119, 0, 0, 3839, 0x9f);
+    say("gfx flip");                                                flip(76800);
+    say("gfx crc");                                                 crc();
+    say("gfx flip 0");                                              flip(0);
+    say("gfx crc");                                                 crc();
+    say("gfx cube 1");
+    say("gfx crc");                                                 crc();
+    say("gfx pal rgb332");                                          pal_rgb332();
+    /* the bench draws on the target; the reset's target; text mode (crc 10: the console) */
     say("gfx bench");                                               known = 0;
     say("gfx reset");                                               target(0, 640, 640, 480);
     say("gfx");
     say("gfx mode text");                                           mode = 1;
     say("gfx crc");                                                 crc();
-    /* the overlay: the console over a picture (crc 7; its graphics for the pixels between characters) */
+    /* the overlay: the console over a picture (crc 11; its graphics for the pixels between characters) */
     say("gfx mode overlay 1");                                      show(3, 1);
     say("gfx clear 0x49");                                          fill(0, 0, 640, 480, 0x49);
     say("gfx fill 320 240 320 240 0x92");                           fill(320, 240, 320, 240, 0x92);
