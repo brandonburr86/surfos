@@ -83,8 +83,8 @@ OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must pr
 
 # (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
 # which Ctrl+C is typed]); @NAME@ and @ID@ become the gpu.ID of gpu.h ("GPU1", 0x31555047)
-STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'\s+fence waits that slept on it: \d+, woken by it: \d+' +
-         NL + r'[\s\S]*frames: FRAME_COUNT \d+')
+STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'\s+fences that asked for it: \d+[^\n]*' + NL +
+         r'\s+fence waits that slept on it: \d+, woken by it: \d+' + NL + r'[\s\S]*frames: FRAME_COUNT \d+')
 STEPS = [
     ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*' + STATE, 'the state'),
     ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU @NAME@, 300 KiB VRAM; \d+ fences, 0 errors',
