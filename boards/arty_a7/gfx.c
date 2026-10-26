@@ -85,7 +85,7 @@ static const char *const usage_lines[] = {
     "gfx zclear [b]               every depth b * 257 (0xff when not given)",
     "gfx tri [how] x0 y0 x1 y1 x2 y2 c              a flat triangle",
     "gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2   with depths, colours",
-    "  how: gouraud,ztest|zle,zwrite,cullcw|cullccw (commas between)",
+    "  how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw (commas between)",
     "gfx flip [base]              FLIP at the next blanking (the target's)",
     "gfx cube [seconds]           gpudiag's cube, every frame checked (10 s)",
     NULL
@@ -577,7 +577,7 @@ static int tri(struct gpu *g, int argc, char **argv) {
     static const char *use =
         "gfx tri [how] x0 y0 x1 y1 x2 y2 c   (a flat triangle), or\n"
         "           gfx tri [how] x0 y0 z0 c0 x1 y1 z1 c1 x2 y2 z2 c2\n"
-        "           how: gouraud,ztest|zle,zwrite,cullcw,cullccw joined by commas;\n"
+        "           how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw joined by commas;\n"
         "           x, y pixels with sixteenths (2.5); z 0 (near) to 65535; c 0 to 255";
     i32 x[3], y[3];
     u32 z[3], c[3], bits = 0;

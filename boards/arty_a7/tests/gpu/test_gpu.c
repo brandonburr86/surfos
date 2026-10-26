@@ -1470,6 +1470,11 @@ static void t_usage2(unsigned seed) {
                                                  GPU_TRI_ZWRITE) && s->cmd[n0 + 4] == GPU_ZC(65535, 255),
           "  how's words in any order: zle is ZTEST and ZFUNC; vertex 0's colour the header's (flat)");
     check(gfx(s, "gfx tri flat,cullcw,cullccw 0 0 9 0 0 9 1") == CMD_OK, "  flat, and both culls (nothing is drawn)");
+    /* and gfx help and gfx tri's usage say the same of how (the review of 58ac7b3's L4: the help said
+       cullcw|cullccw, one or the other, where both are taken) */
+    check(gfx(s, "gfx help") == CMD_OK && said(s, "how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw (commas between)") &&
+          gfx(s, "gfx tri") == CMD_USAGE && said(s, "how: flat|gouraud,ztest|zle,zwrite,cullcw,cullccw joined by commas"),
+          "  gfx help and gfx tri's usage give how's words alike: flat or gouraud, ztest or zle, the rest each or not");
     done(s);
 }
 TEST(t_usage2)
