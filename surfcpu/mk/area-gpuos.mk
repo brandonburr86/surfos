@@ -3,15 +3,18 @@
 #
 #   make test-gpuos-host   the driver and gfx built for the host against the C model of the engine
 #                          (sim/models/gpu_model.c) through a stand-in for the hardware
-#                          (boards/arty_a7/tests/gpu/: test_gpu.c, gpustub.c), seeds 1 7 123; on test-os
+#                          (boards/arty_a7/tests/gpu/: test_gpu.c, gpustub.c), seeds 1 7 123, and gfxref's
+#                          own agreement (its two ways to every picture); on test-os
 #   make test-gpuos        SurfOS booted by SurfBoot from a card on the RTL SoC with SurfGPU
-#                          (build/sim/surfsim_gpu): gfx commands, every gfx crc against the C model
-#                          (gfxscene) and the frames captured at the VGA pins, the overlay, gfx demo 1,
-#                          the bench; and on the SoC without one (build/sim/surfsim) gfx says there is
-#                          none (boards/arty_a7/tests/gpuos_test.py; two runs side by side, under three
-#                          minutes); on check
+#                          (build/sim/surfsim_gpu): gfx commands, every gfx crc against the frames
+#                          captured at the VGA pins and, in mode 2, against gfxref (the pictures worked
+#                          out from GPU.md, not from SurfOS's code), with which gfxscene must agree; the
+#                          GPU's interrupt, the overlay, gfx demo 1, the bench; and on the SoC without one
+#                          (build/sim/surfsim) gfx says there is none (boards/arty_a7/tests/gpuos_test.py;
+#                          two runs side by side, under three minutes); on check
 #   make gfxscene          build/gpuos/gfxscene: gfx command lines replayed in the C model, the
 #                          FRAME_CRCs SurfOS must print for them
+#   make gfxref            build/gpuos/gfxref: test-gpuos's pictures from GPU.md's words and pixels
 #   make evidence-gpuos    both, their summaries written to docs/evidence/gpu-g3/
 #
 # GPUOS_SEEDS chooses the host test's seeds. The host build sees the kernel's headers only after
@@ -34,7 +37,7 @@ GPUOS_OBJ       = $(GPUOS_OUT)/obj
 GPUOS_LINK      = $(GPUOS_OBJ)/gpu.o $(GPUOS_OBJ)/gfx.o $(GPUOS_OBJ)/gpustub.o $(GPUOS_OBJ)/gpu_model.o \
                   $(GPUOS_OBJ)/font8x16.o $(GPUOS_OBJ)/cp437.o
 
-.PHONY: test-gpuos-host test-gpuos gfxscene evidence-gpuos
+.PHONY: test-gpuos-host test-gpuos gfxscene gfxref evidence-gpuos
 test-os: test-gpuos-host
 check: test-gpuos-host test-gpuos
 
@@ -71,20 +74,30 @@ $(GPUOS_OUT)/gfxscene: $(GPUOS_TDIR)/gfxscene.c $(GPUOS_LINK) $(GPUOS_HDRS)
 
 gfxscene: $(GPUOS_OUT)/gfxscene
 
-test-gpuos-host: $(GPUOS_OUT)/test_gpu
+# without gpu.c and gfx.c: the C model's engine and display, and the console's font
+$(GPUOS_OUT)/gfxref: $(GPUOS_TDIR)/gfxref.c $(GPUOS_OBJ)/gpu_model.o $(GPUOS_OBJ)/font8x16.o sim/models/gpu_model.h \
+                     firmware/include/surfcpu/gpu.h
+	$(Q)$(GPUOS_CC) -std=c99 -O2 -g -Wall -Wextra -Werror -Isim/models -Ifirmware/include -o $@ $< \
+	  $(GPUOS_OBJ)/gpu_model.o $(GPUOS_OBJ)/font8x16.o
+
+gfxref: $(GPUOS_OUT)/gfxref
+
+test-gpuos-host: $(GPUOS_OUT)/test_gpu $(GPUOS_OUT)/gfxref
 	@mkdir -p $(GPUOS_EVIDENCE)
-	$(Q)$(GPUOS_OUT)/test_gpu $(GPUOS_SEEDS) > $(GPUOS_OUT)/host.txt; s=$$?; cat $(GPUOS_OUT)/host.txt; \
-	  cp $(GPUOS_OUT)/host.txt $(GPUOS_EVIDENCE)/test-gpuos-host.txt 2>/dev/null; exit $$s
+	$(Q)$(GPUOS_OUT)/test_gpu $(GPUOS_SEEDS) > $(GPUOS_OUT)/host.txt; s=$$?; \
+	  $(GPUOS_OUT)/gfxref > $(GPUOS_OUT)/gfxref.txt || s=1; grep -v '^line ' $(GPUOS_OUT)/gfxref.txt >> $(GPUOS_OUT)/host.txt; \
+	  cat $(GPUOS_OUT)/host.txt; cp $(GPUOS_OUT)/host.txt $(GPUOS_EVIDENCE)/test-gpuos-host.txt 2>/dev/null; exit $$s
 
 # SurfOS on the RTL system: needs the soc track's surfsim, the fw track's card tool and packer
 GPUOS_SYS_READY := $(and $(wildcard sim/soc/surfsim/surfsim.cpp),$(wildcard tools/mkcard.py),$(wildcard tools/surfimg.py))
 ifneq ($(GPUOS_SYS_READY),)
-test-gpuos: build-kernel-os $(FW)/surfboot.mem $(BUILD)/sim/surfsim_gpu $(BUILD)/sim/surfsim $(GPUOS_OUT)/gfxscene
+test-gpuos: build-kernel-os $(FW)/surfboot.mem $(BUILD)/sim/surfsim_gpu $(BUILD)/sim/surfsim $(GPUOS_OUT)/gfxscene \
+            $(GPUOS_OUT)/gfxref
 	@mkdir -p $(GPUOS_EVIDENCE)
 	$(Q)$(PYTHON) ../boards/arty_a7/tests/gpuos_test.py --surfsim-gpu $(BUILD)/sim/surfsim_gpu --surfsim $(BUILD)/sim/surfsim \
 	  --rom $(FW)/surfboot.mem --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN \
-	  --gfxscene $(GPUOS_OUT)/gfxscene --gpu-h firmware/include/surfcpu/gpu.h --work $(GPUOS_OUT)/system \
-	  --evidence $(GPUOS_EVIDENCE)/test-gpuos.txt
+	  --gfxscene $(GPUOS_OUT)/gfxscene --gfxref $(GPUOS_OUT)/gfxref --gpu-h firmware/include/surfcpu/gpu.h \
+	  --work $(GPUOS_OUT)/system --evidence $(GPUOS_EVIDENCE)/test-gpuos.txt
 else
 test-gpuos:
 	@echo "test-gpuos: skipped: this tree has no surfsim, mkcard.py or surfimg.py"
