@@ -38,7 +38,9 @@ typed on the UART. Checked:
     gfx crc equal to gfxref's, which works it out from section 16 alone; picture B drawn and shown
     by gfx flip (its CRC gfxref's), A again by gfx flip 0; gfx cube 1: every frame it showed at the
     VGA pins one of gfx cube's expected frames (gfxcube_expect.h, from the C model and gpucube.c),
-    one contiguous run of them, each the same frame as the one before or the next; SurfOS's own
+    one contiguous run of them, each the same frame as the one before or the next, and the cube
+    turning (50 of its pictures or more, each new one within two video frames of the one before:
+    the review of 58ac7b3's M2, a cube that stood still while it FLIPped passed); SurfOS's own
     lines say every frame shown was checked (none missed: the review of 58ac7b3's L1) and whole
     (in order too when the turn's 128 pictures differ), fewer frames drawn (FLIPs after frame 0's)
     than video frames shown, and a frame rate of 30 or more and at most the display's 59.94 (the
@@ -395,24 +397,35 @@ def main():
     if len(got) >= 9:
         check(got[7] == got[5] and got[8] == got[7], 'after gfx flip 0, picture A again, and after gfx cube 1 the picture '
               'before it (crc 8 = crc 6, crc 9 = crc 8: the display, the palette, the depth buffer and VRAM back)')
-    # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step; SurfOS's own check said
+    # the cube (GPU2): at the pins, every frame of its run one of the turn's, in step, and turning (the review of
+    # 58ac7b3's M2: a cube that stood still passed): 50 of the turn's pictures at least in its second, each new
+    # one at most two video frames after the one before from frame 2 on (30 a second, gpudiag's rule; frame 1
+    # follows frame 0's still picture); SurfOS's own check said
     crcs, pictures = cube_table(a.cube_expect)
     seq = []
     fp = os.path.join(w, 'frames.txt')
     if os.path.exists(fp):
         seq = [crc for _, crc in re.findall(r'^frame (\d+) crc ([0-9a-f]{8})$', open(fp).read(), re.M)]
     at = [i for i, crc in enumerate(seq) if crc in crcs]
-    steps_bad, prev = 0, -1
+    steps_bad, slow, prev, run, seen = 0, 0, -1, 0, set()
     for i in at:
         cand = [f for f, crc in enumerate(crcs) if crc == seq[i]]
         f = next((f for f in cand if prev >= 0 and (f - prev) % len(crcs) <= 1), cand[0])
-        if prev >= 0 and (f - prev) % len(crcs) > 1:
-            steps_bad += 1
+        seen.add(f)
+        if prev >= 0 and f != prev:
+            if (f - prev) % len(crcs) > 1:
+                steps_bad += 1
+            if len(seen) > 2 and run > 2:
+                slow += 1
+            run = 0
+        run += 1
         prev = f
     whole_run = bool(at) and at == list(range(at[0], at[-1] + 1))
-    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad,
-          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step'
-          % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad))
+    check(len(crcs) == 128 and whole_run and len(at) >= 50 and not steps_bad and len(seen) >= 50 and not slow,
+          'gfx cube 1 at the VGA pins: %d frames one of the turn\'s %d (%d pictures of their own), %s, %d out of step; '
+          '%d pictures, %d after more than two video frames'
+          % (len(at), len(crcs), pictures, 'one run with no other frame between' if whole_run else 'NOT one run', steps_bad,
+             len(seen), slow))
     want = 'all whole, in order' if pictures == len(crcs) else 'all whole'
     sec = re.findall(r'cube \d+ s: (\d+) drawn, (\d+) shown, (\d+) missed: ([^\n]*)', out)
     m = re.search(r'gfx cube: (\d+) drawn in (\d+\.\d\d) s, (\d+\.\d) a second; display back as it was' + NL +

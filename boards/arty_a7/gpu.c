@@ -809,6 +809,8 @@ bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc) {
     return true;
 }
 
+u32 gpu_fence_now(struct gpu *g) { return RD(g, SURF_GPU_FENCE); }
+
 bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg) {
     if(!P(g)->tick_start || !P(g)->tick_stop) return false;
     P(g)->tick_start(CTX(g), fn, arg);

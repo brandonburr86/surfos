@@ -247,6 +247,7 @@ struct gpu_state {
 void gpu_state_read(struct gpu *g, struct gpu_state *s);
 /* FRAME_COUNT (*count); when it is not last, also FRAME_CRC, of the frame it counts (*crc): true */
 bool gpu_frame_next(struct gpu *g, u32 last, u32 *count, u32 *crc);
+u32 gpu_fence_now(struct gpu *g);                  /* FENCE as it reads now (gfx cube's looks) */
 /* the port's tick (above): false when it has none */
 bool gpu_tick_start(struct gpu *g, void (*fn)(void *arg), void *arg);
 void gpu_tick_stop(struct gpu *g);
@@ -284,7 +285,9 @@ int gfx_keep_end(struct gpu *g, struct gfx_keep *k, int r, bool intr, const char
 
 /* boards/arty_a7/gfxcube.c: gfx cube's run on a claimed GPU2 (it says what it does; GPU_OK, or
    GPU_EERROR when a frame shown was torn, out of order or missed, or the driver's error), and its
-   check of the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC */
+   check of the frames shown: each FRAME_COUNT that moved, with its FRAME_CRC and FENCE read just
+   before and just after the two (frame k's FENCE is fence0 + k: FENCE - fence0 is the FLIPs done
+   after frame 0's) */
 int gfx_cube_run(struct gpu *g, u32 seconds, const char *what);
 struct gfx_cube_check {
     const u32 *crcs;                    /* the model's FRAME_CRC of each frame of a turn */
@@ -293,10 +296,13 @@ struct gfx_cube_check {
     u32 count;                          /* FRAME_COUNT at the last look */
     i32 last;                           /* the turn's frame shown last that was whole (-1: none known) */
     u32 last_count;                     /* FRAME_COUNT then */
+    u32 fence0;
     u_long shown, checked, torn, disorder;  /* shown - checked: missed (shown, never looked at) */
+    u_long advance;                     /* how far the whole frames shown went on, in frames */
     u32 torn_count, torn_crc;           /* the first torn frame's FRAME_COUNT and FRAME_CRC */
 };
-void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first);
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc);
+void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first,
+                          u32 fence0);
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after);
 
 #endif

@@ -29,8 +29,10 @@ empties as it goes, so no frame passes unseen while the run prints its line (a l
 about a frame: the console compares its whole screen) or other tasks run. On a port without the
 tick the run looks from its loop. A frame whose CRC is none of the turn's is torn: not a whole
 drawn frame. When the turn's 128 pictures all differ their order is checked as well: frame f shown
-d frames after frame l must have (f - l) mod 128 <= d, since a FLIP waits for a blanking. A frame
-shown that no look saw (FRAME_COUNT moved by more than one between two looks) was not checked: it
+d frames after frame l must have (f - l) mod 128 <= d, since a FLIP waits for a blanking, and the
+cube must turn with its FLIPs (the review of 58ac7b3's M2): each look also reads FENCE, and the
+frame shown must be the one FLIPped last or the one before (in_step(), below), and at the end the
+frames shown must have gone on as many frames as the FLIPs done. A frame shown that no look saw (FRAME_COUNT moved by more than one between two looks) was not checked: it
 is missed (the review of 58ac7b3's L1), and no verdict of all whole is given while any is. A line
 a second says the frames drawn (FLIPs done after frame 0's), shown (video frames) and missed, and
 whether all were whole (and in order); at the end the frame rate (the frames drawn over the time
@@ -93,46 +95,80 @@ static void rec_text(uint32_t cell, uint32_t v) {
 static const struct gpu_sink sink = { rec_cmd, rec_sync, rec_vram, rec_vram, rec_video, rec_text };
 
 /* The looks: FRAME_COUNT read every tick, from the timer interrupt; when it moved, it and that
-   frame's FRAME_CRC go into the ring, which the run empties (one writer, the interrupt, one reader,
-   the run, on one CPU: an entry is written before head moves on, read before tail does). A full
-   ring drops the look, which the check then counts as a frame not looked at. */
+   frame's FRAME_CRC go into the ring with FENCE as it read just before and just after the two (the
+   FLIPs done then: the check's in-step rule), which the run empties (one writer, the interrupt,
+   one reader, the run, on one CPU: an entry is written before head moves on, read before tail
+   does). A full ring drops the look, which the check then counts as a frame not looked at. */
 #define LOOKS 16
+
+struct cube_look {
+    u32 count, crc, fb, fa;             /* FRAME_COUNT, FRAME_CRC; FENCE before and after them */
+};
 
 struct cube_looks {
     struct gpu *g;
     u32 count;                          /* FRAME_COUNT at the last look (the interrupt's own) */
     volatile u32 head, tail, dropped;
-    volatile u32 c[LOOKS], crc[LOOKS];
+    volatile struct cube_look l[LOOKS];
 };
 
+/* a look: false when FRAME_COUNT has not moved from since */
+static bool look(struct gpu *g, u32 since, struct cube_look *l) {
+    l->fb = gpu_fence_now(g);
+    if(!gpu_frame_next(g, since, &l->count, &l->crc)) return false;
+    l->fa = gpu_fence_now(g);
+    return true;
+}
+
 static void look_tick(void *arg) {
-    struct cube_looks *l = arg;
-    u32 count, crc;
-    if(!gpu_frame_next(l->g, l->count, &count, &crc)) return;
-    l->count = count;
-    if(l->head - l->tail >= LOOKS) {
-        l->dropped++;
+    struct cube_looks *ls = arg;
+    struct cube_look l;
+    if(!look(ls->g, ls->count, &l)) return;
+    ls->count = l.count;
+    if(ls->head - ls->tail >= LOOKS) {
+        ls->dropped++;
         return;
     }
-    l->c[l->head % LOOKS] = count;
-    l->crc[l->head % LOOKS] = crc;
-    l->head++;
+    ls->l[ls->head % LOOKS].count = l.count;
+    ls->l[ls->head % LOOKS].crc = l.crc;
+    ls->l[ls->head % LOOKS].fb = l.fb;
+    ls->l[ls->head % LOOKS].fa = l.fa;
+    ls->head++;
 }
 
 /**** the frames shown ****/
 
-void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first) {
+void gfx_cube_check_start(struct gfx_cube_check *c, const u32 *crcs, u32 n, bool ordered, u32 count, i32 first,
+                          u32 fence0) {
     memset(c, 0, sizeof(*c));
     c->crcs = crcs;
     c->n = n;
     c->ordered = ordered;
     c->count = c->last_count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
     c->last = first;
+    c->fence0 = fence0;
+}
+
+/* Is frame f of the turn in step with the FLIPs? The frame a look counts showed what the latch
+   took after the blanking before it, the frame FLIPped last by then: of the FLIPs done (counted
+   after frame 0's) at the look, the last or the one before (a FLIP a blanking at most). FENCE read
+   before the pair, fb, can only be fewer; FENCE read after it, fa, at most one fewer (a FLIP done
+   whose FENCE the CPU had not yet sent, say while it printed a line). So f is one of fb - 1 to
+   fa + 1: the same frame again is in order only while at most one FLIP has come since (the review
+   of 58ac7b3's M2: a cube that stood still while its FLIPs went on was "all whole, in order") */
+static bool in_step(const struct gfx_cube_check *c, u32 f, u32 fb, u32 fa) {
+    i32 lo = (i32)(fb - c->fence0) - 1, hi = (i32)(fa - c->fence0) + 1, j;
+    if(lo < 0) lo = 0;
+    if(hi - lo + 1 >= (i32)c->n) return true;
+    for(j = lo; j <= hi; j++)
+        if((u32)j % c->n == f) return true;
+    return false;
 }
 
 /* frame f of the turn shown d frames after the last whole one, l: in order when (f - l) mod n <= d
-   (a FLIP waits for a blanking, so the turn moves on a frame a frame at most) */
-void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc) {
+   (a FLIP waits for a blanking, so the turn moves on a frame a frame at most) and f is in step with
+   the FLIPs (above) */
+void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after) {
     u32 d = (count - c->count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, dl = (count - c->last_count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, f;
     if(!d) return;
     c->count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
@@ -146,7 +182,11 @@ void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc) {
         }
         return;
     }
-    if(c->ordered && c->last >= 0 && (f + c->n - (u32)c->last) % c->n > dl) c->disorder++;
+    if(c->ordered && c->last >= 0) {
+        u32 step = (f + c->n - (u32)c->last) % c->n;
+        if(step > dl || !in_step(c, f, fence_before, fence_after)) c->disorder++;
+        c->advance += step;
+    }
     c->last = (i32)f;
     c->last_count = c->count;
 }
@@ -180,6 +220,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     struct gfx_keep keep;
     struct gfx_cube_check c;
     struct cube_looks looks;
+    struct cube_look lk;
     struct gpu_screen shown;
     char buf[48];
     u32 k = 1, pos = 0, v0 = 0, vbase = 0, vlast = 0, fence = 0, f0, count, crc, sec = 0, drawn = 0, ends = 0;
@@ -187,12 +228,13 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     u_long last_drawn = 0, last_shown = 0, last_missed = 0, last_torn = 0, last_dis = 0;
     u64 t0 = 0, tick = 0, now = 0, secs = (u64)seconds * 1000000u, done_at = 0;
     bool ordered = GFX_CUBE_PICTURES == GFX_CUBE_FRAMES, intr = false, skip = false, ran = false, ticking = false;
+    bool stood = false;
     u_int taken;
     int rc, r2;
     memset(&r, 0, sizeof(r));
     rec = &r;
     gpu_cube_display(&sink, 0);                         /* only its GPAL is kept: nothing reaches the hardware */
-    gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, 0, 0);
+    gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, 0, 0, 0);
     rc = gfx_keep_begin(g, &keep, SURF_VRAM_BYTES, r.pal, what);
     /* frame 0 into picture A, and once its FLIP is done the display: mode 2, 320x240 doubled (the
        wait is gpu_sync()'s, whose FENCE asks for the interrupt: gpucube.c's does not, and a wait on
@@ -223,7 +265,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
            the rate, the FLIPs done since frame 0's over that time, is never above the display's */
         t0 = tick = g->latched ? g->latch_us : gpu_now_us(g);
         gpu_frame_next(g, 0x10000u, &count, &crc);     /* the frames after this one are the cube's */
-        gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0);
+        gfx_cube_check_start(&c, gfx_cube_expect, GFX_CUBE_FRAMES, ordered, count, 0, vbase);
         skip = !g->latched;                             /* the display changed off the latch: a mixed frame */
         memset(&looks, 0, sizeof(looks));
         looks.g = g;
@@ -237,14 +279,16 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         for(;;) {                                       /* the frames looked at since: the tick's, or here */
             if(ticking) {
                 if(looks.tail == looks.head) break;
-                count = looks.c[looks.tail % LOOKS];
-                crc = looks.crc[looks.tail % LOOKS];
+                lk.count = looks.l[looks.tail % LOOKS].count;
+                lk.crc = looks.l[looks.tail % LOOKS].crc;
+                lk.fb = looks.l[looks.tail % LOOKS].fb;
+                lk.fa = looks.l[looks.tail % LOOKS].fa;
                 looks.tail++;
-            } else if(!gpu_frame_next(g, c.count, &count, &crc)) {
+            } else if(!look(g, c.count, &lk)) {
                 break;
             }
-            if(skip) c.count = c.last_count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
-            else gfx_cube_check_frame(&c, count, crc);
+            if(skip) c.count = c.last_count = lk.count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
+            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa);
             skip = false;
             seen = true;
             ends++;
@@ -291,6 +335,10 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
     drawn = (i32)(fence - vbase) > 0 ? fence - vbase : 0;   /* as FENCE last read */
     if(ticking) gpu_tick_stop(g);                       /* before `looks` goes */
     if(rc == GPU_EINTR || rc == GPU_ECANCEL) intr = true;
+    /* a run that ran its time saw the frame of its last FLIP: the frames shown went on as many
+       frames as the FLIPs done (so, none missed, each of them was shown: the review's M2) */
+    stood = ran && !rc && !intr && ordered && c.advance != drawn;
+    if(stood) c.disorder++;
     if(ran) now = done_at ? done_at : gpu_now_us(g);  /* the rate up to the last FLIP seen done */
     r2 = gfx_keep_end(g, &keep, rc, intr, what);
     rec = NULL;
@@ -299,6 +347,8 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
         printf("    %s: %lu drawn in %lu.%02lu s, %lu.%lu a second; %s\n", what, (u_long)drawn, (u_long)(us / 1000000u),
                (u_long)(us % 1000000u / 10000u), (u_long)(rate10 / 10), (u_long)(rate10 % 10),
                r2 ? "display NOT put back" : "display back as it was");
+        if(stood)
+            printf("    %s: the frames shown went %lu on for %lu FLIPs\n", what, c.advance, (u_long)drawn);
         printf("    %s: %lu shown, %lu missed: %s\n", what, c.shown, c.shown - c.checked,
                verdict(&c, c.shown - c.checked, c.torn, c.disorder, buf, sizeof(buf)));
         if(c.torn)
