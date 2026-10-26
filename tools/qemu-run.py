@@ -2701,7 +2701,11 @@ def telnet_stalled_check(q):
             shell = [i for i, _ in gaps
                      if re.search(rb'started \(pid [0-9]+\)|\xe2\x89\x8b', a.data[found[i].end():found[i + 1].start()])]
             ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i in shell and 16 < d <= 64 for i, d in gaps)
-            why = why or ('' if ok else ' (%d lines, gaps %s)' % (len(offsets), gaps[:3]))
+            # 10/26/26: and what came between the two lines of each of the first gaps: nothing (a line lost whole),
+            # part of a line (a piece of the stream lost: the next line is found inside it), or a line with something
+            # else in it (the regex finds the line after). A one-line gap was seen twice on 10/25/26, cause unknown
+            between = [bytes(a.data[found[i].end():found[i + 1].start()][:120]) for i, _ in gaps[:3]]
+            why = why or ('' if ok else ' (%d lines, gaps %s, between their lines %s)' % (len(offsets), gaps[:3], between))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
     finally:
