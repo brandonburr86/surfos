@@ -23,8 +23,10 @@
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
 #                          the pins, the tree's build id on both (sim/gpu/gpudiag_check.py), the cube's
 #                          16 checked frames and its first second of free run (none torn, missed or
-#                          out of order); a cube slower than 30 frames a second must fail
-#                          (gpudiag-slow.mem); SurfBoot's monitor reports features 1ff
+#                          out of order); the cube at a frame every second video frame must pass both
+#                          gpudiag's checks and gpudiag_check (gpudiag-half.mem), a slower one fail
+#                          them (gpudiag-slow.mem, gpudiag-slowfree.mem); SurfBoot's monitor reports
+#                          features 1ff
 #   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
 #                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
@@ -207,6 +209,30 @@ $(FW)/gpudiag-slow.elf: $(GPUDIAG_SLOW_OBJ) firmware/diagnostics/gpudiag.ld $(FW
 
 .SECONDARY: $(FW)/gpudiag-slow.bin
 
+# gpudiag with GPUDIAG_TEST_HALF and with GPUDIAG_TEST_SLOW_FREE, for test-gpu-soc only (the re-review of
+# b2c765d, low 2): the cube at a frame every second video frame in its checks and its free run (29.97 a
+# second), which both must pass; and the checks at full rate, then a free run with a frame three video
+# frames after the one before about once a second, which gpudiag_check must fail
+GPUDIAG_HALF_OBJ := $(subst $(FW_OBJ)/diagnostics/gpudiag.c.o,$(FW_OBJ)/diagnostics/gpudiag-half.c.o,$(GPUDIAG_OBJ))
+$(FW_OBJ)/diagnostics/gpudiag-half.c.o: firmware/diagnostics/gpudiag.c $(FW_GEN)/gpuscenes_expect.h | $(FW_GEN)/fw_build.h
+	@mkdir -p $(dir $@)
+	$(Q)$(RV_CC) $(FW_CFLAGS) -DGPUDIAG_TEST_HALF -c $< -o $@
+
+$(FW)/gpudiag-half.elf: $(GPUDIAG_HALF_OBJ) firmware/diagnostics/gpudiag.ld $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/diagnostics/gpudiag.ld $(GPUDIAG_HALF_OBJ) $(RV_LIBGCC) -o $@
+
+.SECONDARY: $(FW)/gpudiag-half.bin
+
+GPUDIAG_SLOWFREE_OBJ := $(subst $(FW_OBJ)/diagnostics/gpudiag.c.o,$(FW_OBJ)/diagnostics/gpudiag-slowfree.c.o,$(GPUDIAG_OBJ))
+$(FW_OBJ)/diagnostics/gpudiag-slowfree.c.o: firmware/diagnostics/gpudiag.c $(FW_GEN)/gpuscenes_expect.h | $(FW_GEN)/fw_build.h
+	@mkdir -p $(dir $@)
+	$(Q)$(RV_CC) $(FW_CFLAGS) -DGPUDIAG_TEST_SLOW_FREE -c $< -o $@
+
+$(FW)/gpudiag-slowfree.elf: $(GPUDIAG_SLOWFREE_OBJ) firmware/diagnostics/gpudiag.ld $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/diagnostics/gpudiag.ld $(GPUDIAG_SLOWFREE_OBJ) $(RV_LIBGCC) -o $@
+
+.SECONDARY: $(FW)/gpudiag-slowfree.bin
+
 gpu-scenes: $(FW)/host/gpuscenes_expect
 	@mkdir -p $(FW)/gpuscenes
 	$(Q)$< --font $(GPU_FONT) --ppm $(FW)/gpuscenes --list
@@ -235,7 +261,7 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS) $(GPU_ID_STAMP)
 
 GPU_ENGINE_SCENES ?= 10
 test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem \
-              $(FW)/gpudiag-slow.mem
+              $(FW)/gpudiag-slow.mem $(FW)/gpudiag-half.mem $(FW)/gpudiag-slowfree.mem
 	@mkdir -p $(GPU_BUILD)/soc
 	@# gpudiag, its cube's first second of free run, then Ctrl-R (as GPU.md section 14 and
 	@# tools/board-test.py's late port type it), then the rerun: the first run alone must pass, and the
@@ -272,7 +298,34 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	@printf '  [the cube at 28 frames a second] '
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/slow-uart.txt --frames - \
 	  --expect $(FW_GEN)/gpuscenes_expect.h \
-	  --must-fail 'FAIL frames 2 to 15 each at most 2 video frames after the one before \(30 a second or more\): up to 3\b[\s\S]*GPUDIAG: FAIL \(1 of'
+	  --must-fail 'FAIL frames 2 to 15 each at most 2 video frames after the one before \([^)]*\): up to 3\b[\s\S]*GPUDIAG: FAIL \(1 of'
+	@# the cube at a frame every second video frame (gpudiag-half.mem: 29.97 a second, 29 or 30 drawn in a
+	@# second): its checks and gpudiag_check's judgement of two seconds of its free run must both pass it, and
+	@# every frame of both must have been two video frames after the one before (the re-review of b2c765d, low 2)
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-half.mem --quiet --max-cycles 900000000 \
+	  --transcript $(GPU_BUILD)/soc/half-uart.txt --expect 'cube +2 s:[^\n]*\n' > $(GPU_BUILD)/soc/half.txt 2>&1 \
+	  || { tail -30 $(GPU_BUILD)/soc/half.txt; tail -30 $(GPU_BUILD)/soc/half-uart.txt; exit 1; }
+	$(Q)n=$$(grep -acE 's: +[0-9]+ drawn, +[0-9]+ shown, [0-9]+ apart, ' $(GPU_BUILD)/soc/half-uart.txt); \
+	  n2=$$(grep -acE 's: +[0-9]+ drawn, +[0-9]+ shown, 2 apart, ' $(GPU_BUILD)/soc/half-uart.txt); \
+	  grep -aq ' 2 apart at most) ok' $(GPU_BUILD)/soc/half-uart.txt && [ $$n -ge 2 ] && [ $$n2 = $$n ] || \
+	  { echo "test-gpu-soc: gpudiag-half.mem's cube was not two video frames a frame"; grep -a 'cube' $(GPU_BUILD)/soc/half-uart.txt; exit 1; }
+	@printf '  [the cube at 29.97 frames a second] '
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/half-uart.txt --frames - \
+	  --expect $(FW_GEN)/gpuscenes_expect.h --cube-seconds 2
+	@# the checks at full rate, then a free run with a frame three video frames after the one before about once a
+	@# second, 29 or 30 drawn in each (gpudiag-slowfree.mem): gpudiag passes, and gpudiag_check must fail the free
+	@# run by the rule of gpudiag's checks, and for nothing else
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-slowfree.mem --quiet --max-cycles 900000000 \
+	  --transcript $(GPU_BUILD)/soc/slowfree-uart.txt --expect 'cube +2 s:[^\n]*\n' > $(GPU_BUILD)/soc/slowfree.txt 2>&1 \
+	  || { tail -30 $(GPU_BUILD)/soc/slowfree.txt; tail -30 $(GPU_BUILD)/soc/slowfree-uart.txt; exit 1; }
+	@printf '  [a free run with a frame three video frames late] '
+	$(Q)! $(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/slowfree-uart.txt --frames - \
+	  --expect $(FW_GEN)/gpuscenes_expect.h --cube-seconds 2 > $(GPU_BUILD)/soc/slowfree-check.txt && \
+	  [ "$$(grep -c FAIL $(GPU_BUILD)/soc/slowfree-check.txt)" = 1 ] && \
+	  grep -q "FAIL: the cube's second [12]: .* (a new frame 3 video frames after the one before, 2 at most" \
+	    $(GPU_BUILD)/soc/slowfree-check.txt || \
+	  { cat $(GPU_BUILD)/soc/slowfree-check.txt; echo "test-gpu-soc: gpudiag_check did not fail that free run, or failed it for something else"; exit 1; }
+	@echo "$$(cat $(GPU_BUILD)/soc/slowfree-check.txt) (as it must)"
 	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
 	@# and reports the GPU among the features (info: features 1ff)
 	$(Q)printf 'help\rinfo\r' > $(GPU_BUILD)/soc/help.txt

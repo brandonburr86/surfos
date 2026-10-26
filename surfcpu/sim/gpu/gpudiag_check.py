@@ -33,8 +33,13 @@ only when:
     cube's), no missed one (shown but not checked), none out of order (one that cannot follow the
     frame shown before it), 58 to 61 frames shown (the video frames counted in its second, 59.94 a
     second: 59 or 60, one fewer or more where a look falls by the second's edge; so 0 shown, no
-    frame checked, fails) and at least 30 frames drawn; with --cube-seconds N at least N of them
-    follow the last whole run (the board test of the cube);
+    frame checked, fails), its new frames at most 2 video frames apart (the rule gpudiag's checks
+    apply to frames 2 to 15: a frame every second video frame or sooner, 29.97 a second on this
+    59.94 Hz display, the brief's 30 or more; "apart" also counts the video frames since the
+    second's last new frame, so a cube that stopped fails) and at least 29 frames drawn (which
+    that rule makes of any second: a frame 2 video frames after the one before gives 29 or 30 in
+    a second); with --cube-seconds N at least N of them follow the last whole run (the board test
+    of the cube);
   - every whole run has the checks of a complete first run or of a complete rerun (a run of the
     rerun's total is a rerun, whether or not its rerun line arrived; one whose rerun line arrived
     must have that total), and, with FRAMES, each scene's CRC is also a captured frame's (so
@@ -84,9 +89,12 @@ SCENE_FAILED = re.compile(r"^crc ([0-9a-f]{8}) +scene +(\d+): ")     # a scene w
 CUT_SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL)\b(?! \([^)]*\))")
 # the cube's free run after a PASS (gpudiag.c cube_free_run)
 CUBE_HEAD = re.compile(r"cube: a line a second: .*")
-CUBE_LINE = re.compile(r"cube +(\d+) s: +(\d+) drawn, +(\d+) shown, (\d+) missed, (\d+) torn, (\d+) out of order "
-                       r"\(in all (\d+) drawn, (\d+) shown, (\d+) missed, (\d+) torn, (\d+) out of order\)")
-CUBE_RATE = 30                                          # frames drawn a second, at least
+CUBE_LINE = re.compile(r"cube +(\d+) s: +(\d+) drawn, +(\d+) shown, (\d+) apart, (\d+) missed, (\d+) torn, "
+                       r"(\d+) out of order \(in all (\d+) drawn, (\d+) shown, (\d+) apart, (\d+) missed, (\d+) torn, "
+                       r"(\d+) out of order\)")
+CUBE_APART = 2                                          # video frames from a new frame to the next, at most
+CUBE_DRAWN = 29                                         # frames drawn a second, at least: what CUBE_APART makes of a
+                                                        # second (59.94 video frames: 29 or 30 a frame every two)
 CUBE_SHOWN = (58, 61)                                   # frames shown (counted) in a second: 59 or 60, give or take one
 
 
@@ -265,18 +273,21 @@ def main() -> int:
     if stray is not None:
         problems.append("a line outside any run shows a failure: %r" % stray[:80])
     # the cube's lines (outside the runs): no torn, missed or out-of-order frame, every video frame of the
-    # second counted and checked, 30 frames drawn a second or more
+    # second counted and checked, each new frame at most 2 video frames after the one before (gpudiag's own
+    # rule for its checked frames), and so 29 frames drawn a second or more
     for l in outside:
         m = CUBE_LINE.search(l)
         if not m:
             continue
-        sec, drawn, shown, missed, torn, order = (int(m.group(k)) for k in range(1, 7))
+        sec, drawn, shown, apart, missed, torn, order = (int(m.group(k)) for k in range(1, 8))
         why = ("a torn frame" if torn else "a frame not checked" if missed else "a frame out of order" if order else
                "the video frames of a second are 59 or 60" if not CUBE_SHOWN[0] <= shown <= CUBE_SHOWN[1] else
-               "fewer than %d frames a second" % CUBE_RATE if drawn < CUBE_RATE else None)
+               "a new frame %d video frames after the one before, %d at most: a frame every second video frame"
+               % (apart, CUBE_APART) if apart > CUBE_APART else
+               "fewer than %d frames a second" % CUBE_DRAWN if drawn < CUBE_DRAWN else None)
         if why:
-            problems.append("the cube's second %d: %d frames drawn, %d shown, %d missed, %d torn, %d out of order (%s)"
-                            % (sec, drawn, shown, missed, torn, order, why))
+            problems.append("the cube's second %d: %d frames drawn, %d shown, %d apart, %d missed, %d torn, %d out of "
+                            "order (%s)" % (sec, drawn, shown, apart, missed, torn, order, why))
             break
 
     def whole(r: Run) -> bool:
@@ -396,9 +407,11 @@ def main() -> int:
     cube = [m for l in outside for m in [CUBE_LINE.search(l)] if m]
     cube_desc = ""
     if cube:
-        cube_desc = "; the cube %d seconds, %d to %d frames drawn and %d to %d shown a second, none torn, missed or out " \
-                    "of order" % (len(cube), min(int(m.group(2)) for m in cube), max(int(m.group(2)) for m in cube),
-                                  min(int(m.group(3)) for m in cube), max(int(m.group(3)) for m in cube))
+        cube_desc = "; the cube %d seconds, %d to %d frames drawn and %d to %d shown a second, %d apart at most, " \
+                    "none torn, missed or out of order" % (
+                        len(cube), min(int(m.group(2)) for m in cube), max(int(m.group(2)) for m in cube),
+                        min(int(m.group(3)) for m in cube), max(int(m.group(3)) for m in cube),
+                        max(int(m.group(4)) for m in cube))
     print("gpudiag_check: PASS (%s; %d scenes%s, every FRAME_CRC the model's%s; %s%d frames captured, %d distinct%s%s)"
           % (desc, len(expect), " in each run" if len(judged) > 1 else "", " and a captured frame's" if frames else "",
              "%d run%s cut short, not judged; " % (cut, "" if cut == 1 else "s") if cut else "",
