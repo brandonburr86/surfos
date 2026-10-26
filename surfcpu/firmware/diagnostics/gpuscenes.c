@@ -434,6 +434,23 @@ static void scene_flat(const struct gpu_sink *s)
     tri(s, GPU_TRI_CULL_CW | GPU_TRI_CULL_CCW | 0xFF, GPU_FX(300), GPU_FX(300), 0, GPU_FX(340), GPU_FX(300), 0,
         GPU_FX(300), GPU_FX(340), 0);
     flat(s, 0xFF, GPU_FX(300), GPU_FX(360), GPU_FX(320), GPU_FX(380), GPU_FX(340), GPU_FX(400));   /* zero area */
+    /* the top-left rule at each edge (the review of 3fea963, M1): six diamonds of four right triangles
+     * around a pixel centre P, their legs along P's row and column through pixel centres (red right and
+     * down of P, green right and up, blue left and down, yellow left and up), each triangle's vertices
+     * from vertex 0, 1 or 2 on and in both windings. The engine walks a triangle clockwise and numbers
+     * its edges so, which puts a top and a left leg at every edge index (section 16.3): a case lost
+     * leaves the background on a leg, and a leg drawn twice shows the later triangle's colour */
+    static const uint8_t quarter[4] = {0xE0, 0x1C, 0x03, 0xFC};
+    static const uint8_t corner[4][3] = {{0, 1, 2}, {0, 4, 1}, {0, 2, 3}, {0, 3, 4}};   /* each clockwise, P first */
+    for (int i = 0; i < 6; i++) {
+        const int ccw = i / 3, r = i % 3, a = GPU_FX(318 + 52 * i) + 8, b = GPU_FX(48) + 8;
+        const int d = GPU_FX(10 + 5 * r) + 8 * ccw;                   /* ending on a centre, or half a pixel past */
+        const int p[5][2] = {{a, b}, {a + d, b}, {a, b + d}, {a - d, b}, {a, b - d}};      /* P, right, down, left, up */
+        for (int k = 0; k < 4; k++) {
+            const int j0 = corner[k][r], j1 = corner[k][(r + (ccw ? 2 : 1)) % 3], j2 = corner[k][(r + (ccw ? 1 : 2)) % 3];
+            flat(s, quarter[k], p[j0][0], p[j0][1], p[j1][0], p[j1][1], p[j2][0], p[j2][1]);
+        }
+    }
     /* a clip; a huge triangle across it, and one past the screen's corner */
     c3(s, HDR(SET_CLIP, 0), GPU_XY(40, 360), GPU_XY(260, 470));
     flat(s, 0x92, -32768, 32767, GPU_FX(150), -GPU_FX(500), 32767, 32767);

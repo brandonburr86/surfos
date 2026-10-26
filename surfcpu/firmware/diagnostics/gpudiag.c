@@ -1,7 +1,7 @@
 /*
 SurfGPU diagnostics: the GPU diagnostic
 --------------------
-File: gpudiag.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
+File: gpudiag.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2), 10/26/26 (the review of 3fea963)
 --------------------
 A boot ROM image (build/fw/gpudiag.mem) for the GPU designs (sysinfo.FEATURES.GPU; docs/GPU.md
 section 10), like bramdiag: it needs only the CPU, block RAM, the UART, the timer, VRAM and the
@@ -19,16 +19,18 @@ than a complete one (GPUDIAG_CHECKS) fails too, so PASS means every check ran an
 GFX_ values a reset leaves can only be seen by the first run after a reset: a rerun (Ctrl-R) says
 so in a line under its banner and is held to GPUDIAG_RERUN_CHECKS, one fewer.
 GPU2 (docs/GPU.md section 16): gpu.ID must read "GPU2"; a section checks SET_ZBUF's refusal, a
-TRIANGLE with depth but no depth buffer (refused), SET_TARGET dropping the depth buffer and FLIP
-waiting for the blanking; four scenes draw triangles (flat, Gouraud, depth) and FLIP; then the
+TRIANGLE with depth but no depth buffer (refused, and nothing drawn where it would draw), SET_TARGET
+dropping the depth buffer (nothing drawn, no depth written where the buffer was) and FLIP waiting
+for the blanking; four scenes draw triangles (flat, Gouraud, depth) and FLIP; then the
 cube (gpucube.c) draws 16 frames at full rate, double-buffered with FLIP, while the CPU checks the
 FRAME_CRC of every frame shown against the model's CRCs of the cube's frames (a torn frame, a
-frame missed or out of order fails), and the first and last as still pictures.
+frame missed or out of order, or one more than two video frames after the one before fails), and
+the first and last as still pictures.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)" and the LEDs (LD0 green or red).
 After a PASS the cube spins on under a result bar (MODE 3), a line a second on the UART with the
-frames drawn, shown, missed and torn; after a FAIL the result shows in the top text row over the
-last picture. Either way UART input is echoed, and Ctrl-R runs it all again. The text console is
-not used (the scenes own the screen): everything goes to the UART.
+frames drawn, shown, missed, torn and out of order; after a FAIL the result shows in the top text
+row over the last picture. Either way UART input is echoed, and Ctrl-R runs it all again. The text
+console is not used (the scenes own the screen): everything goes to the UART.
 */
 #include "diag.h"
 #include "gpucube.h"
@@ -429,9 +431,33 @@ static void gpu_registers(uint32_t unused)
     diag_section_end();
 }
 
-/* GPU2's commands (docs/GPU.md section 16): a refused SET_ZBUF and a TRIANGLE with depth but no
- * depth buffer (both BAD_PARAM, nothing drawn), an accepted SET_TARGET leaving no depth buffer, and
- * FLIP writing GFX_BASE only at the next vertical blanking */
+/* the VRAM words a refused TRIANGLE must leave as they were: two of the 64 x 64 target's at 4000 that
+ * its triangle (0, 0) (64, 0) (0, 64) covers, pixels 0 to 3 of row 0 and 20 to 23 of row 20 (x + y <=
+ * 62); and the depths of pixels 0 and 1 of those rows in the buffer at 0x20000, stride 128 (dropped by
+ * the SET_TARGET before the second TRIANGLE). Each check sets the first n of them to 0x5A5A5A5A before
+ * its TRIANGLE: as depths 0x5A5A, which the triangle's depth 100 would pass, so a TRIANGLE drawn with
+ * that buffer would write them too */
+static const uint32_t refused_view[4] = {4000, 4000 + 20 * 64 + 20, 0x20000u, 0x20000u + 20 * 128 + 40};
+
+static void refused_arm(uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++)
+        W(VRAM(refused_view[i])) = 0x5A5A5A5Au;
+}
+
+static uint32_t refused_changed(uint32_t n, uint32_t *at)
+{
+    uint32_t bad = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (W(VRAM(refused_view[i])) != 0x5A5A5A5Au && bad++ == 0)
+            *at = refused_view[i];
+    return bad;
+}
+
+/* GPU2's commands (docs/GPU.md section 16): a refused SET_ZBUF (BAD_PARAM, checked on its own), a
+ * TRIANGLE with depth but no depth buffer and one after an accepted SET_TARGET dropped the buffer
+ * (each BAD_PARAM of its own, nothing drawn where it would have drawn, no depth written where the
+ * dropped buffer was), and FLIP writing GFX_BASE only at the next vertical blanking */
 static void gpu2_commands(uint32_t unused)
 {
     (void)unused;
@@ -441,7 +467,6 @@ static void gpu2_commands(uint32_t unused)
         diag_section_end();
         return;
     }
-    W(VRAM(8000)) = 0x5A5A5A5Au;
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);              /* 64 x 64 at 4000 */
     GREG(SURF_GPU_CMD) = 4000;
     GREG(SURF_GPU_CMD) = 64;
@@ -449,16 +474,22 @@ static void gpu2_commands(uint32_t unused)
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_ZBUF, 0);                /* refused: not a multiple of 4 */
     GREG(SURF_GPU_CMD) = 0x20002u;
     GREG(SURF_GPU_CMD) = 128;
+    hw_sync();
+    uint32_t st = GREG(SURF_GPU_STATUS);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK, "a SET_ZBUF of an unaligned base: STATUS 0x%x", st);
+    GREG(SURF_GPU_STATUS) = GPU_STICKY;                             /* so that the TRIANGLE's BAD_PARAM is its own */
     static const uint32_t tri_words[6] = {GPU_XY(0, 0), GPU_ZC(100, 0), GPU_XY(GPU_FX(64), 0), GPU_ZC(100, 0),
                                           GPU_XY(0, GPU_FX(64)), GPU_ZC(100, 0)};
+    refused_arm(2);
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZWRITE | 0x77u);   /* no depth buffer: refused */
     for (int i = 0; i < 6; i++)
         GREG(SURF_GPU_CMD) = tri_words[i];
     hw_sync();
-    uint32_t st = GREG(SURF_GPU_STATUS);
-    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && W(VRAM(8000)) == 0x5A5A5A5Au,
-               "a refused SET_ZBUF, then a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x%x, VRAM word 0x%08x",
-               st, W(VRAM(8000)));
+    st = GREG(SURF_GPU_STATUS);
+    uint32_t at = 0, bad = refused_changed(2, &at);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && bad == 0,
+               "a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x%x; %u of the 2 target words it covers drawn "
+               "(byte %u reads 0x%08x)", st, bad, at, bad ? W(VRAM(at)) : 0x5A5A5A5Au);
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_ZBUF, 0);                /* taken ... */
     GREG(SURF_GPU_CMD) = 0x20000u;
@@ -467,14 +498,18 @@ static void gpu2_commands(uint32_t unused)
     GREG(SURF_GPU_CMD) = 4000;
     GREG(SURF_GPU_CMD) = 64;
     GREG(SURF_GPU_CMD) = GPU_WH(64, 64);
-    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZTEST | 0x77u);
+    hw_sync();
+    refused_arm(4);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZTEST | GPU_TRI_ZWRITE | 0x77u);
     for (int i = 0; i < 6; i++)
         GREG(SURF_GPU_CMD) = tri_words[i];
     hw_sync();
     st = GREG(SURF_GPU_STATUS);
-    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && W(VRAM(8000)) == 0x5A5A5A5Au,
-               "a TRIANGLE with ZTEST after SET_TARGET dropped the depth buffer: STATUS 0x%x, VRAM word 0x%08x", st,
-               W(VRAM(8000)));
+    bad = refused_changed(4, &at);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && bad == 0,
+               "a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped the depth buffer: STATUS 0x%x; %u of the "
+               "4 words it would write changed, 2 of the target's and 2 of the dropped buffer's (byte %u reads "
+               "0x%08x)", st, bad, at, bad ? W(VRAM(at)) : 0x5A5A5A5Au);
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     /* FLIP just after a blanking starts: GFX_BASE stays until the next one, then has the FLIP's base */
     VREG(SURF_VIDEO_GFX_BASE) = 0;
@@ -569,8 +604,12 @@ struct cube_run {
     uint32_t next;                                      /* the next frame to draw */
     uint32_t last_count;                                /* FRAME_COUNT at the last look */
     uint32_t shown, missed, torn;                       /* frames counted, not looked at, no cube frame's */
-    int32_t last_frame;                                 /* the frame index of the last frame shown */
-    uint32_t out_of_order;
+    uint32_t out_of_order;                              /* frames shown that cannot follow the last one shown */
+    int32_t last_frame;                                 /* the frame index of the last cube frame shown */
+    uint32_t last_at;                                   /* FRAME_COUNT when it was looked at */
+    uint32_t new_frames;                                /* frames shown that were not the last one again */
+    uint32_t new_at;                                    /* FRAME_COUNT when the last of them was first shown */
+    uint32_t gap;                                       /* the most video frames between two of them */
     uint32_t seen_lo, seen_hi;                          /* frames 0..63 seen (the checked run) */
 };
 
@@ -582,7 +621,9 @@ static int32_t cube_lookup(const struct cube_run *c, uint32_t crc)
     return -1;
 }
 
-/* the frame counter: every new frame's CRC must be one of the cube's frames */
+/* the frame counter: every frame counted must be one of the cube's frames, and it must follow the
+ * last one: a FLIP waits for a blanking, so after d frames counted the frame shown is the last one
+ * again or at most d frames on (frame 127 is followed by frame 0) */
 static void cube_look(struct cube_run *c)
 {
     const uint32_t count = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
@@ -597,9 +638,17 @@ static void cube_look(struct cube_run *c)
         c->torn++;
         return;
     }
-    if (f < c->last_frame && !(c->ncrcs == GPU_CUBE_PERIOD && c->last_frame - f > (int32_t)GPU_CUBE_PERIOD / 2))
-        c->out_of_order++;                               /* (the free run wraps from 127 to 0) */
+    const uint32_t step = (uint32_t)(f - c->last_frame + (int32_t)c->ncrcs) % c->ncrcs;
+    if (step > ((count - c->last_at) & 0xFFFFu)) {
+        c->out_of_order++;
+    } else if (step != 0) {                             /* a new frame: the video frames since the last new one */
+        const uint32_t gap = (count - c->new_at) & 0xFFFFu;
+        if (c->new_frames++ != 0 && gap > c->gap)
+            c->gap = gap;
+        c->new_at = count;
+    }
     c->last_frame = f;
+    c->last_at = count;
     if (f < 32)
         c->seen_lo |= 1u << f;
     else if (f < 64)
@@ -618,6 +667,15 @@ static void cube_step(struct cube_run *c, uint32_t until)
     } else if (c->next < until) {
         cube_n = cube_pos = 0;
         gpu_cube_frame(&rec_sink, c->next, c->next & 1u, CUBE_FENCE + c->next + 1u);
+#ifdef GPUDIAG_TEST_SLOW
+        /* make test-gpu-soc only (build/fw/gpudiag-slow.mem): in the checks, each frame lets the next one
+         * start a blanking later, frames 5 and 9 two blankings later, so that frames 6 and 10 come three
+         * video frames after the one before and the rest two: 28 a second in all, which the rate check must
+         * fail (the review of 3fea963, L3: its first form passed it) */
+        if (until == GPU_CUBE_CHECK_FRAMES)
+            for (uint32_t n = (c->next == 5u || c->next == 9u) ? 2u : 1u; n; n--)
+                rec_cmd(GPU_HDR(GPU_OP_WAIT_VBLANK, 0));
+#endif
         c->next++;
     }
 }
@@ -634,8 +692,8 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
     const int still = wait_still();
     *crc = VREG(SURF_VIDEO_FRAME_CRC);
     c->next = 1;
-    c->last_count = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
-    c->shown = c->missed = c->torn = c->out_of_order = 0;
+    c->last_count = c->last_at = c->new_at = VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu;
+    c->shown = c->missed = c->torn = c->out_of_order = c->new_frames = c->gap = 0;
     c->last_frame = 0;
     c->seen_lo = 1;
     c->seen_hi = 0;
@@ -643,7 +701,9 @@ static int cube_start(struct cube_run *c, int bar, uint32_t *crc)
 }
 
 /* the checks: frame 0 as a still picture, frames 1 .. 15 at full rate (every frame shown one of the
- * cube's, in order, each of them shown, none missed, at least 30 a second), frame 15 as a still */
+ * cube's, in order, each of them shown, none missed, each of frames 2 .. 15 at most two video frames
+ * after the one before: 30 a second, which on a 59.94 Hz display is a frame every second video
+ * frame or sooner), frame 15 as a still */
 static void cube_check(uint32_t unused)
 {
     (void)unused;
@@ -653,7 +713,7 @@ static void cube_check(uint32_t unused)
         diag_section_end();
         return;
     }
-    struct cube_run c = {gpu_cube_expect_check, GPU_CUBE_CHECK_FRAMES, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    struct cube_run c = {.crcs = gpu_cube_expect_check, .ncrcs = GPU_CUBE_CHECK_FRAMES};
     uint32_t crc0 = 0;
     const int ok0 = cube_start(&c, 0, &crc0);
     diag_check(ok0 && crc0 == gpu_cube_expect_check[0], "frame 0, a still picture: FRAME_CRC 0x%08x, the model's 0x%08x%s",
@@ -671,10 +731,8 @@ static void cube_check(uint32_t unused)
     }
     const uint32_t video_frames = ((VREG(SURF_VIDEO_FRAME_COUNT) & 0xFFFFu) - frames0) & 0xFFFFu;
     const uint32_t all = (1u << GPU_CUBE_CHECK_FRAMES) - 1u;
-    diag_check(!late && video_frames <= 2u * (GPU_CUBE_CHECK_FRAMES - 1u) + 2u,
-               "frames 1 to %u shown within %u video frames%s (30 a second or more: at most %u)",
-               GPU_CUBE_CHECK_FRAMES - 1u, video_frames, late ? ", stopped after a second" : "",
-               2u * (GPU_CUBE_CHECK_FRAMES - 1u) + 2u);
+    diag_check(!late && c.gap <= 2u, "frames 2 to %u each at most 2 video frames after the one before (30 a second "
+               "or more): up to %u%s", GPU_CUBE_CHECK_FRAMES - 1u, c.gap, late ? ", stopped after a second" : "");
     diag_check(c.torn == 0, "%u of the %u frames shown were none of the cube's (torn)", c.torn, c.shown);
     diag_check(c.seen_lo == all && c.out_of_order == 0, "the frames shown: %08x (every one of 0..%u: %08x), %u out of order",
                c.seen_lo, GPU_CUBE_CHECK_FRAMES - 1u, all, c.out_of_order);
@@ -684,7 +742,7 @@ static void cube_check(uint32_t unused)
     diag_check(still && crc == gpu_cube_expect_check[GPU_CUBE_CHECK_FRAMES - 1u],
                "frame %u, a still picture: FRAME_CRC 0x%08x, the model's 0x%08x", GPU_CUBE_CHECK_FRAMES - 1u, crc,
                gpu_cube_expect_check[GPU_CUBE_CHECK_FRAMES - 1u]);
-    con_printf("(%u video frames, %u shown) ", video_frames, c.shown);
+    con_printf("(%u video frames, %u shown, %u apart at most) ", video_frames, c.shown, c.gap);
     diag_section_end();
 }
 
@@ -725,15 +783,16 @@ static void cube_free_run(void)
 {
     con_puts("\nUART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again.\n");
     con_printf("cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames "
-               "not checked), torn (frames that were none of the cube's %u)\n", GPU_CUBE_PERIOD);
-    struct cube_run c = {gpu_cube_expect_run, GPU_CUBE_PERIOD, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+               "not checked), torn (frames that were none of the cube's %u), out of order (frames that did not "
+               "follow the one before)\n", GPU_CUBE_PERIOD);
+    struct cube_run c = {.crcs = gpu_cube_expect_run, .ncrcs = GPU_CUBE_PERIOD};
     uint32_t crc0 = 0;
     if (!cube_start(&c, 1, &crc0) || crc0 != gpu_cube_expect_run[0])
         con_printf("  FAIL cube frame 0 under the bar: FRAME_CRC 0x%08x, the model's 0x%08x\n", crc0,
                    gpu_cube_expect_run[0]);
     out_head = out_tail = 0;
     uint32_t sec = 0, beat = timer_now32(), echoes = 0;
-    uint32_t drawn_base = 0, shown_base = 0, missed_base = 0, torn_base = 0;
+    uint32_t drawn_base = 0, shown_base = 0, missed_base = 0, torn_base = 0, order_base = 0;
     for (;;) {
         cube_step(&c, 0xFFFFFFFFu);
         ring_drain();
@@ -742,13 +801,15 @@ static void cube_free_run(void)
             sec++;
             REG(SURF_GPIO_BASE, SURF_GPIO_LED) ^= 0x8u;     /* heartbeat on LD7 */
             const uint32_t drawn = GREG(SURF_GPU_FENCE) - CUBE_FENCE;
-            ring_printf("cube %4u s: %3u drawn, %3u shown, %u missed, %u torn (in all %u drawn, %u shown, %u missed, "
-                        "%u torn)\n", sec, drawn - drawn_base, c.shown - shown_base, c.missed - missed_base,
-                        c.torn - torn_base, drawn, c.shown, c.missed, c.torn);
+            ring_printf("cube %4u s: %3u drawn, %3u shown, %u missed, %u torn, %u out of order (in all %u drawn, %u "
+                        "shown, %u missed, %u torn, %u out of order)\n", sec, drawn - drawn_base, c.shown - shown_base,
+                        c.missed - missed_base, c.torn - torn_base, c.out_of_order - order_base, drawn, c.shown,
+                        c.missed, c.torn, c.out_of_order);
             drawn_base = drawn;
             shown_base = c.shown;
             missed_base = c.missed;
             torn_base = c.torn;
+            order_base = c.out_of_order;
         }
         const int ch = con_getc();
         if (ch == 0x12) {

@@ -397,20 +397,23 @@ hold VRAM, so the GPU designs are for the 100T only.
 **gpudiag** (`firmware/diagnostics/gpudiag.c`, a boot ROM image like bramdiag): checks the
 identity and FEATURES.GPU, the VRAM window (March C- over 300 KiB through the window, byte lanes,
 the error above 300 KiB, no fetch), the video registers and GPAL, the engine's registers and
-errors, GPU2's commands (section 16: a refused SET_ZBUF, depth without a depth buffer refused,
-SET_TARGET dropping the depth buffer, FLIP waiting for the blanking), then draws a list of scenes
+errors, GPU2's commands (section 16: a refused SET_ZBUF, depth without a depth buffer refused with
+nothing drawn where it would draw, SET_TARGET dropping the depth buffer with no depth written where
+it was, FLIP waiting for the blanking), then draws a list of scenes
 (`firmware/diagnostics/gpuscenes.c`) and, for each, prints the FRAME_CRC of a frame that started
 after the scene was complete and compares it with the value the C model computed for that scene at
 build time (`build/fw/gen/gpuscenes_expect.h`), and then the cube's 16 frames at full rate with
-every frame shown checked (section 16.9). It ends with `GPUDIAG: PASS (146 checks)` or `GPUDIAG:
+every frame shown checked (section 16.9). It ends with `GPUDIAG: PASS (147 checks)` or `GPUDIAG:
 FAIL (...)`; after a PASS the cube spins on under a result bar with a line a second, after a FAIL
 the last scene shows with a red result bar; either way it echoes the UART, and Ctrl-R runs it
 again. A rerun cannot see the GFX_ values a reset leaves (the run before changed them): it says so
-in a line under its banner ("a rerun (Ctrl-R): ...") and makes 145 checks, passing none it does not
+in a line under its banner ("a rerun (Ctrl-R): ...") and makes 146 checks, passing none it does not
 make. PASS means every check of the run's kind ran and passed: a missing FEATURES.GPU, a gpu window
 that traps or reads another ID than "GPU2", each engine scene that could not run, and a run with
-another number of checks than a complete one of its kind (GPUDIAG_CHECKS 146, GPUDIAG_RERUN_CHECKS
-145) all fail it. (GPU1's gpudiag made 124 and 123; section 14.1 has the scenes.)
+another number of checks than a complete one of its kind (GPUDIAG_CHECKS 147, GPUDIAG_RERUN_CHECKS
+146) all fail it. (GPU1's gpudiag made 124 and 123; GPU2's at bfaac48, the gpudiag bitstream of
+section 14, makes 146 and 145, before the review of 3fea963 added a check: section 16.12; section
+14.1 has the scenes.)
 `sim/gpu/gpudiag_check.py` judges a capture (sections 12.4 to 12.8): a run that ended with PASS and a passing CRC line for
 every scene is whole and judged (with the total of its kind); a run seen only in part (the console
 opened late, a line lost or garbled, a RESET before its end) is cut short and not judged, but
@@ -460,7 +463,7 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 | G1 | surf_vram, the graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, the C display model, gpudiag's window and CPU-drawn scenes, the gpudiag design | VRAM unit test with random CPU and engine traffic; surf_video's graphics modes captured and compared with the model, FRAME_CRC equal to the model's and to the captured pins' CRC; the old video tests unchanged; gpudiag on the RTL SoC (surfsim) prints the model's CRCs | gpudiag through the open flow, every gate; its netlist runs gpudiag as the RTL does | load the gpudiag bitstream: its UART transcript ends in PASS with the expected CRCs; the monitor shows the scenes (the owner looks) |
 | G2 | surf_gpu, its C model, the engine's scenes in gpudiag, both designs | directed tests of every command and edge case, randomized command streams compared with the model at every FENCE, mutants caught; gpudiag's engine scenes in surfsim | gpudiag and ddr_gpu through the open flow, every gate; dram_clk's margin recorded | gpudiag PASS with the engine scenes; ddr_gpu boots SurfOS from the card as the DDR design does |
 | G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)** | the driver and `gfx` against the C model on the host (`test-gpuos-host`); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's; the overlay; the demo; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream | **pending** (section 15.6): the demo on the monitor; `gfx crc` equal to the model's |
-| G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag at bfaac48 through every gate, LVS proved in full (seed 3, sys_clk 44.71 MHz), and its netlist runs gpudiag to PASS (146 checks, 1.97 s simulated); ddr_gpu at bfaac48 through every gate but LVS, which is outstanding (dram_clk +1.04 ns; section 16.11) | pending: gpudiag (bfaac48) over JTAG with the cube on the monitor (30+ frames a second, no torn frame, from its UART lines); SurfOS's boot stays on G2's ddr_gpu until G4's has its proof (section 14) |
+| G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag at bfaac48 through every gate, LVS proved in full (seed 3, sys_clk 44.71 MHz), and its netlist runs gpudiag to PASS (146 checks, 1.97 s simulated); ddr_gpu at bfaac48 through every gate but LVS, which is outstanding (dram_clk +1.04 ns; section 16.11). The review of 3fea963's fixes (16.12) changed gpudiag but no RTL: the gpudiag bitstream is to be built again with them | pending: gpudiag over JTAG with the cube on the monitor (30+ frames a second, no torn frame, from its UART lines), from the bitstream built after the review (bfaac48's lacks its checks: 16.12); SurfOS's boot stays on G2's ddr_gpu until G4's has its proof (section 14) |
 | G5 | optional: the GPU constrained to a region of the die, a faster GPU clock (50 MHz, its own clock domain and crossing on port A) | the crossing's tests at several clock ratios | placement in the region; timing of the faster clock | the G2 and G4 tests again at the faster clock |
 
 ## 12. Record
@@ -940,7 +943,14 @@ gpudiag. Every command runs from the root of the worktree whose build directory 
 bitstreams to test (section 14.2 rebuilds them elsewhere), as `make -C surfcpu` does. The scripts
 run with `python3`: they are not executable files. Since G4 the gpudiag bitstream to test is
 GPU2's (bfaac48, section 16.11): it makes every check GPU1's made (G1, G2) and GPU2's (G4, with the
-cube), so GPU1's gpudiag bitstream of section 12.8 (317c8f4) is superseded and needs no test. The
+cube), so GPU1's gpudiag bitstream of section 12.8 (317c8f4) is superseded and needs no test.
+**That bitstream carries gpudiag as it was at bfaac48, before the review of 3fea963** (section
+16.12): it lacks that review's checks (16.12 lists them: four of the top-left rule's six cases on
+the SoC, what the refused depth triangles would have drawn, the exact frame-rate rule, frames out
+of order in the free run, the cube's distinct frames), and gpudiag is to be built again with them
+after the re-review, when the integrator says (no RTL changed: only the boot ROM and the build id
+differ). Until then the steps below are those of the bfaac48 bitstream, with that commit's checker
+and expected values (step 4); where the gpudiag of the review's fixes differs, they say so. The
 SurfOS test (G2) stays on G2's DDR+GPU bitstream (e119a78, section 12.6), which every gate proved:
 G4's DDR+GPU bitstream (bfaac48) passed every gate but LVS, whose proof is outstanding (section
 16.11). Once it has one, it takes e119a78's place in steps 6 to 8, with its own build id, sha256
@@ -984,7 +994,9 @@ G1, G2 and G4, the diagnostic and the cube:
    its sections, one line per scene with its FRAME_CRC (each the one in section 14.1), the cube's
    section (`cube: 16 frames at full rate`, 6 checks), `GPUDIAG: PASS (146 checks)` as the
    synthesized netlist printed it in simulation (section 16.11), the echo line, the cube's header,
-   and a line a second like `cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all ...)`:
+   and a line a second like `cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all ...)`
+   (the gpudiag of the review's fixes makes 147 checks, and its line says `, 0 out of order` after
+   `0 torn`, in the second and in all):
    about 60 frames drawn and 60 shown each second (59.94 frames a second; 30 or more drawn is the
    goal), none missed (every frame shown was checked) and none torn (every frame shown was a whole
    frame of the cube, by its FRAME_CRC). If the console opened after that run began, press RESET
@@ -1003,19 +1015,25 @@ G1, G2 and G4, the diagnostic and the cube:
    shows a build other than the manifest's (bfaac489) and one whole run at least shows that one, no
    run shows a dirty banner or bitstream line (the manifest says the tree was clean), and ten cube
    lines at least follow the last run, each with 30 or more frames drawn and none missed or torn.
+   **Use bfaac48's gpudiag_check.py for the bfaac48 bitstream**: the clone of section 14.2 has it,
+   or `git show bfaac48:surfcpu/sim/gpu/gpudiag_check.py > /tmp/gpudiag_check_bfaac48.py`. From the
+   review of 3fea963 on (section 16.12) the checker wants the cube's lines with their frames out of
+   order, which bfaac48's gpudiag does not print, and 58 to 61 frames shown a second.
    The manifest must be a gpudiag build's that passed its checks. `--build-id bfaac489` names the
    build without the manifest, but does not know whether it was clean. `--accept-rerun` would take
    reruns alone, which is not this test. `--expect` must hold the expected values of the
    bitstream's own commit, bfaac48: the clone of section 14.2 has them in build/fw/gen/ after its
-   last build-rom. From 32e1a86 on scene 13's value differs (a04d1e8a, section 16.11), so a tree
-   that has built a later gpudiag gives a false FAIL on scene 13.
+   last build-rom. From 32e1a86 on scene 13's value differs (a04d1e8a, section 16.11; 9368fe97 from
+   the review's fixes on, with the cube's), so a tree that has built a later gpudiag gives a false
+   FAIL on scene 13.
 5. The monitor: each scene shows for about a twentieth of a second while it is checked (GPU2's four
    last: a fan and a mesh of flat triangles; eight Gouraud ramps; two triangles crossing in depth;
    a fan of Gouraud triangles with SURFGPU, flipped to), then the cube spins, one turn in about two
    seconds, under a green bar `GPUDIAG: PASS   the SurfGPU cube: Gouraud triangles, a depth buffer,
    page flips`. The owner confirms: up to three faces in their six colours, each shaded from dark
    to bright, the hidden faces hidden, smooth motion with no picture split across a line or
-   flickering, the bar steady. (After a FAIL there is no cube: the last scene stays with a red bar,
+   flickering, the bar steady. (The cube of the review's fixes stands on a corner and turns about
+   the vertical: two or three faces in every frame, all six colours over a turn; section 16.9.) (After a FAIL there is no cube: the last scene stays with a red bar,
    as GPU1's gpudiag did.) The cube lines are the frame-by-frame record: the CRC of every frame
    shown was one of the cube's.
 
@@ -1059,7 +1077,9 @@ G2, the DDR+GPU design with GPU1's engine (e119a78), which boots SurfOS from the
 The C model's values for gpudiag's scenes and the cube (`build/fw/gen/gpuscenes_expect.h`, written
 by `make build-rom`; `make gpu-scenes` writes each scene's frame as
 `build/fw/gpuscenes/scene-NN.ppm` and every 16th frame of the cube's free run as `cube-NN.ppm`).
-They do not depend on the build: the same numbers on every bitstream with this gpudiag.
+They do not depend on the build: the same numbers on every bitstream with this gpudiag. Where the
+gpudiag of the review of 3fea963's fixes (section 16.12) differs from bfaac48's, the gpudiag of the
+bitstream of section 14, both are given: bfaac48's in parentheses.
 
 | Scene | What the monitor shows | FRAME_CRC |
 |---|---|---|
@@ -1076,12 +1096,12 @@ They do not depend on the build: the same numbers on every bitstream with this g
 | 10 | engine: EXPAND letters (opaque, transparent, scaled), sprites | c957aa55 |
 | 11 | engine: the 320x240 page drawn, flipped to after WAIT_VBLANK | 2eb6a588 |
 | 12 | engine: the demo | f501eb46 |
-| 13 | engine: flat triangles, a fan and a mesh, culling, a clip (GPU2) | bbb6a4cb (a04d1e8a from 32e1a86 on, not in this bitstream: section 16.11) |
+| 13 | engine: flat triangles, a fan and a mesh, culling, a clip, six diamonds of four triangles (the top-left rule at each edge, 16.12) (GPU2) | 9368fe97 (bfaac48's, without the diamonds and with the culling pairs half a pixel higher: bbb6a4cb; a04d1e8a from 32e1a86 to the review's fixes, on no bitstream) |
 | 14 | engine: Gouraud triangles in eight ramps (GPU2) | f4bcafe0 |
 | 15 | engine: depth at 320x240, triangles crossing (GPU2) | bbe8cf82 |
 | 16 | engine: page B drawn behind, shown by FLIP (GPU2) | e82b76e5 |
-| cube 0, 15 | the cube's first and last checked frames (MODE 2) | f896539f, bac874e0 |
-| cube 0, 127 | the free run's first and last frames of a turn, under the bar | 17a65f96, 9b266b0c |
+| cube 0, 15 | the cube's first and last checked frames (MODE 2) | 62bae657, 7e872f01 (bfaac48's cube: f896539f, bac874e0) |
+| cube 0, 127 | the free run's first and last frames of a turn, under the bar | 8d8aea5e, d8ce830c (bfaac48's: 17a65f96, 9b266b0c) |
 
 Scenes 0 to 12 are GPU1's, unchanged. In simulation (2026-10-25, `make test-gpu-soc`) every scene's
 CRC was also that of a frame the VGA capture took at the RTL SoC's pins, and gpudiag printed each
@@ -1693,12 +1713,23 @@ ZWRITE that needs both depth words (4 with ZTEST alone); the measured figures ar
 
 ### 16.9 The cube (firmware/diagnostics/gpucube.c, gpudiag.c)
 
-The CPU turns the corners (+-1, +-1, +-1) of a cube (Q12) about y by k + 7 and about x by 2k + 11
+The cube stands on a corner: the CPU turns the corners (+-1, +-1, +-1) of a cube (Q12) so that
+(1, 1, 1) lies on the vertical axis (about z by 45 degrees, then about x by arctan(1 / sqrt 2) =
+35.26 degrees: Q14 cosines and sines 11585, 13377 and 9459), then for frame k about that axis by k
 steps of a 128-step turn (Q14 sines from a quarter-wave table), projects them from 4.5 units with a
 focal length of 160 pixels into 12.4 coordinates of a 320x240 picture, maps each corner's depth to
 0..65535 and gives it a shade (11..31) of its face's ramp of 32 that grows as it comes nearer. Only
 integer +, -, *, / and arithmetic >> of int32 values that never overflow: the same numbers on
-SurfCPU and on the host. A frame is 105 command words (16.6's layout): the depth buffer cleared
+SurfCPU and on the host. A face shows when its normal turns more than arcsin(1 / 4.5) = 12.8
+degrees towards the eye, so the eye, looking across the axis, sees two of the faces or three in
+every frame, never one alone, and all six over a turn: of the 128 frames, 66 show three faces and
+62 two, the second most shown face always 1,390 pixels or more. A turning cube cannot show three faces in
+every frame and all six over a turn (three faces always shown would be the same three), so the
+first cube's comment (three faces) could not hold; and a frame of one face alone is the same picture
+as that frame turned about the face's axis by a quarter or a half turn, which a turn about two axes
+reaches: the first cube, turned about y by k + 7 and about x by 2k + 11 steps, showed one face
+alone in 40 frames, and frames 9 and 73 were the same picture (the review of 3fea963's L1,
+section 16.12). A frame is 105 command words (16.6's layout): the depth buffer cleared
 (FILL_RECT 0xFF over its 640 x 240 bytes), the picture cleared to the background (entry 255), SET_ZBUF,
 twelve TRIANGLEs with GOURAUD, ZTEST (less) and ZWRITE, no culling (the depth buffer hides the far
 faces), FLIP to the picture drawn, and a FENCE that counts the frame. Frame k depends only on k mod
@@ -1707,18 +1738,28 @@ faces), FLIP to the picture drawn, and a FENCE that counts the frame. Frame k de
 **The expected CRCs.** gpuscenes_expect (the build's host tool) draws the frames through the C
 model and writes two tables into gpuscenes_expect.h: frames 0 to 15 shown in MODE 2
 (gpu_cube_expect_check) and frames 0 to 127 under the result bar in MODE 3 (gpu_cube_expect_run),
-each the FRAME_CRC of the picture its FLIP shows.
+each the FRAME_CRC of the picture its FLIP shows. It fails the build, writing no header, when two
+frames of either table have the same CRC (gpudiag knows a frame by its CRC, so the order of the
+frames shown would be unknowable) or when a frame of the turn shows fewer than two faces (pixels of
+fewer than two of the six ramps in the picture drawn).
 
 **In gpudiag's checks** (section "cube: 16 frames at full rate", 6 checks): frame 0 is drawn into A
 and shown by the CPU (MODE 2, GFX_STRIDE 320, GFX_SCALE 2) and its still picture's CRC compared;
 then frames 1 to 15 at full rate. The CPU records each frame's words and pushes them as FIFO_FREE
 allows (it never waits for the engine), and meanwhile reads FRAME_COUNT and, whenever it moved,
 FRAME_CRC (the pair of section 3: the CRC of the frame counted). Every frame shown must be one of the
-16 frames of the table (none torn), they must come in order, every one of them must have been shown,
-no frame may pass unseen (FRAME_COUNT moving by more than one), and frames 1 to 15 must take at most
-32 video frames (30 a second or more); frame 15's still picture is compared last. On the RTL SoC
-frames 1 to 15 were on the screen within 16 video frames (`(16 video frames, 16 shown)`, frame 0
-counted among those shown): a new cube frame every video frame, 59.94 a second.
+16 frames of the table (none torn); it must follow the frame shown before it (none out of order: a
+FLIP waits for a blanking, so after d video frames counted the frame shown is the same one again or
+at most d frames on); every one of the 16 must have been shown; no frame may pass unseen
+(FRAME_COUNT moving by more than one); and each of frames 2 to 15 must come at most two video frames
+after the one before it (the rate: 30 frames a second, which on this 59.94 Hz display means a new
+frame every second video frame or sooner, 29.97 a second; frame 1 follows the still picture of
+frame 0, so its own wait is not a rate); frame 15's still picture is compared last. The rate rule
+is per frame: until the review of 3fea963 (L3, section 16.12) the check wanted frames 1 to 15
+within 32 video frames, which a cube at 28 frames a second passed (two frames three video frames
+after the one before, the rest two: gpudiag-slow.mem, below). On the RTL SoC frames 1 to 15 were on
+the screen within 16 video frames, one video frame apart (`(16 video frames, 16 shown, 1 apart at
+most)`, frame 0 counted among those shown): a new cube frame every video frame, 59.94 a second.
 
 **After a PASS** the cube spins on under a fixed result bar (" GPUDIAG: PASS   the SurfGPU cube:
 ...", green, text row 0, MODE 3: the same for every passing run, first or rerun, so that its frames
@@ -1728,30 +1769,41 @@ loop drains as the UART takes it (a waiting printf of a line would stop the chec
 frame):
 
 ```
-cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not checked), torn (frames that were none of the cube's 128)
-cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 60 drawn, 60 shown, 0 missed, 0 torn)
+cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not checked), torn (frames that were none of the cube's 128), out of order (frames that did not follow the one before)
+cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 59 shown, 0 missed, 0 torn, 0 out of order)
 ```
 
-gpudiag_check.py judges every such line: a torn frame, a missed one or fewer than 30 frames drawn in
-a second fails the capture, and `--cube-seconds N` wants N of them after the last whole run (the
-board test, section 14). After a FAIL there is no cube: the red result bar shows over the last
-picture, as GPU1's gpudiag did.
+The frames out of order follow the rule of the checks above, the free run's frame 127 followed by
+frame 0; the count was kept by the first version and printed nowhere (the review's L1): it is
+printed since and judged. gpudiag_check.py judges every such line: a torn frame, a missed one, one
+out of order, fewer than 30 frames drawn, or a count of frames shown other than 58 to 61 fails the
+capture. Shown counts FRAME_COUNT's steps, the video frames of the second (59.94 a second: 59 or 60
+in a line, one fewer or more where a look falls by the second's edge), every one of them checked
+when none is missed: a line with 0 shown checked nothing, and passed until the review (L2).
+`--cube-seconds N` wants N such lines after the last whole run (the board test, section 14). After
+a FAIL there is no cube: the red result bar shows over the last picture, as GPU1's gpudiag did.
+
+**gpudiag-slow.mem** (test-gpu-soc only, built with GPUDIAG_TEST_SLOW): in the checks each frame's
+words end with a WAIT_VBLANK, frames 5 and 9's with two, so that frames 2 to 15 come two video
+frames apart and frames 6 and 10 three (15 frames in 32 video frames, 28 a second); gpudiag must fail
+the rate check and no other (`GPUDIAG: FAIL (1 of 147 checks failed)`, `up to 3`).
 
 ### 16.10 Tests (simulation)
 
 Each test was written from this section, not from the RTL; the RTL is compared with the C model,
-which is checked against hand-worked expectations ([evidence](evidence/gpu-g4/sim.txt)).
+which is checked against hand-worked expectations ([evidence](evidence/gpu-g4/sim.txt); the review of
+3fea963's additions, 16.12, [evidence](evidence/gpu-g4/review-fix.txt)).
 
 | Test | What and how many |
 |---|---|
-| `test-gpu-model` | 84 checks (G2's 38 and GPU2's): a 4x4 triangle pixel by pixel in both windings, the top-left rule with a top, a bottom, a left and a right edge through pixel centres, culling both ways, zero areas, a triangle over the whole 12.4 range clipped by the target and by a clip; Gouraud values x + 2y exactly, halves rounded up and down, an inexact gradient whose floor decides a pixel (truncation would give 1, the floor gives 0); SET_ZBUF's six refusals and its limits, SET_TARGET dropping it, the depth layout, the depth functions step by step, two triangles meeting in depth at a known column, FLIP's base. Properties in the counting mode: 400 squares split along either diagonal, 300 fans of 3 to 16 points round a point, 120 jittered triangulated grids of 2 to 9 cells a side (every triangle in a random vertex order) cover every pixel of their hull exactly once (the hull's pixels worked out separately: a half-open box, or a convex polygon's own edges); 300 random triangles cover the same pixels in all six vertex orders; 3,000 random Gouraud triangles with depth over the whole 12.4 range (27.6 million pixels) need the clamp nowhere and no value wider than the RTL keeps |
+| `test-gpu-model` | 86 checks (G2's 38 and GPU2's): a 4x4 triangle pixel by pixel in both windings, the top-left rule with a top, a bottom, a left and a right edge through pixel centres and in six diamonds of four triangles around a pixel centre (each triangle's vertices from 0, 1 or 2 on, in both windings: every diamond covered exactly once, and each of the rule's six cases, edge 0, 1 or 2 a top or a left edge, taking 14 to 38 pixels in each winding), culling both ways, zero areas, a triangle over the whole 12.4 range clipped by the target and by a clip; Gouraud values x + 2y exactly, halves rounded up and down, an inexact gradient whose floor decides a pixel (truncation would give 1, the floor gives 0); SET_ZBUF's six refusals and its limits, SET_TARGET dropping it, the depth layout, the depth functions step by step, two triangles meeting in depth at a known column, FLIP's base. Properties in the counting mode: 400 squares split along either diagonal, 300 fans of 3 to 16 points round a point, 120 jittered triangulated grids of 2 to 9 cells a side (every triangle in a random vertex order) cover every pixel of their hull exactly once (the hull's pixels worked out separately: a half-open box, or a convex polygon's own edges); 300 random triangles cover the same pixels in all six vertex orders; 3,000 random Gouraud triangles with depth over the whole 12.4 range (27.6 million pixels) need the clamp nowhere and no value wider than the RTL keeps |
 | `test-gpu-encodings` | 13 opcodes, 9 header bits and the ID agree in gpu.h, surf_gpu.v and surf_gpu_tri.v |
-| `test-gpu-engine` | seeds 1 to 3, 1,120 checks each: G2's tests, then SET_ZBUF's refusals and limits; triangles at every lane alignment and four sub-pixel offsets in both windings; edges through centres and a shared-edge mesh of different colours; culling and zero areas; the clip's edges, huge, far, slivers, one pixel; every combination of GOURAUD, ZTEST, ZFUNC, ZWRITE and the culls (64 x 2 triangles); triangles crossing in depth over full-range ramps; a depth buffer overlapping the target; FLIP against the blanking pulse (and ABORT while it waits); 24 TRIANGLEs a seed aborted at random moments (6, 7 and 10 of them inside their walk, one of them, in seed 1, between a group's depth and its colour write), each leaving a prefix of the walk; then 120 random chunks with GPU2 in them (751, 789 and 825 TRIANGLEs, 409, 457 and 448 walked, 0.78, 0.72 and 0.68 million pixels, 29, 23 and 19 FLIPs, depth buffers, depth clears, the CPU on port A meanwhile). VRAM compared with the model byte for byte 175 times a seed, and every FLIP write checked to come in the cycle after a blanking pulse |
-| the walk's cycles | a triangle with a box of 14,938 groups, 7,499 of them covered, over seeds 1 to 3: flat 14,991 to 15,002 cycles (one a group), Gouraud 15,211 to 15,221 (the divisions), ZWRITE alone 30,019 to 30,032 (3 a covered group), ZTEST and ZWRITE 52,326 to 52,334 (6 a covered group), each with the bus's few dozen cycles of writing the command and STATUS polled about 10 cycles apart; the setup: a culled triangle 30 to 47 cycles from its first word to idle, one of a single pixel 52 to 71 flat and 283 to 298 with Gouraud and depth |
+| `test-gpu-engine` | seeds 1 to 3, 1,135 checks each: G2's tests, then SET_ZBUF's refusals and limits; triangles at every lane alignment and four sub-pixel offsets in both windings; edges through centres and a shared-edge mesh of different colours; the top-left rule's six cases in both windings in the model test's diamonds (each triangle its own colour), then each of their 24 triangles alone in a target of its own, the engine's VRAM read back: every pixel of each diamond drawn exactly once; culling and zero areas; the clip's edges, huge, far, slivers, one pixel; every combination of GOURAUD, ZTEST, ZFUNC, ZWRITE and the culls (64 x 2 triangles); triangles crossing in depth over full-range ramps; a depth buffer overlapping the target; FLIP against the blanking pulse (and ABORT while it waits); 24 TRIANGLEs a seed aborted at random moments (6, 7 and 10 of them inside their walk, two of them, in seed 1, between a group's depth and its colour write), each leaving a prefix of the walk; then 120 random chunks with GPU2 in them (804, 830 and 785 TRIANGLEs, a third of them on the half-pixel grid with legs along a row and a column through pixel centres; 523, 518 and 485 walked, 0.80, 0.64 and 0.64 million pixels, 26, 17 and 18 FLIPs, depth buffers, depth clears, the CPU on port A meanwhile), where each of the top-left rule's six cases took 46 pixels or more (seeds 1 to 6; a run of 100 chunks or more fails when one takes none). VRAM compared with the model byte for byte 177 times a seed, and every FLIP write checked to come in the cycle after a blanking pulse |
+| the walk's cycles | a triangle with a box of 14,938 groups, 7,499 of them covered, over seeds 1 to 3: flat 14,987 to 14,995 cycles (one a group), Gouraud 15,213 to 15,219 (the divisions), ZWRITE alone 30,019 to 30,032 (3 a covered group), ZTEST and ZWRITE 52,329 to 52,342 (6 a covered group), each with the bus's few dozen cycles of writing the command and STATUS polled about 10 cycles apart; the setup: a culled triangle 29 to 41 cycles from its first word to idle, one of a single pixel 55 to 68 flat and 281 to 285 with Gouraud and depth (since the review of 3fea963's diamonds run before them, the bus's random gaps fall elsewhere: at bfaac48 the same engine took 14,991 to 15,002, 15,211 to 15,221, 30,019 to 30,032, 52,326 to 52,334, 30 to 47, 52 to 71 and 283 to 298) |
 | `test-gpu-video` | the io track's 122 checks a seed on the HAS_GFX build, and 90 graphics checks a seed (seeds 1 to 3), 15 of them the FLIP port: in mid-frame the next frame wholly, at a blanking's start the frame after it (three times), a CPU store in the same cycle winning |
-| `test-gpu-soc` | gpudiag on the RTL SoC: `GPUDIAG: PASS (146 checks)`, every scene's FRAME_CRC the model's and that of a frame captured at the VGA pins (17 scenes, G2's 13 unchanged), the cube's frames 1 to 15 within 16 video frames (16 frames shown), none torn or missed; its first second of free run `60 drawn, 59 shown, 0 missed, 0 torn`; then the Ctrl-R rerun (145 checks) and the earlier reruns, SurfBoot and bramdiag as before |
-| `test-gpu-noengine` | gpudiag_check's 86 self-test cases (13 of them the cube's lines); gpudiag fails without the GPU and with gpu.ID 0x32555048 |
-| `test-gpu-mutants` | all of them at bfaac48 (G1's and G2's too), in two halves side by side: 56 of 56 caught by test_gpu, test_vram, test_video_gfx and the model's tests (GPU2's: 19 of 19 engine mutants, 6 of 6 model mutants), and 19 of 20 by gpudiag on the RTL SoC (GPU2's: 5 of 6). soc-tri-top-edge-excluded (edge 0 without the top-left rule's top case) got past gpudiag: none of its triangles had a horizontal edge through pixel centres, where the rule decides; test_gpu catches the same rule's mutant. Scene 13's culling pairs now stand half a pixel down (32e1a86, after the bitstreams were built), so that the drawn triangle's first edge is such an edge: test-gpu-soc passes with it, and gpudiag then catches that mutant by scene 13's CRC (0x313fd79e, the model's a04d1e8a), 20 of 20 at SoC level. The three clamp mutants survive, as 16.4 proves they must (below) |
+| `test-gpu-soc` | gpudiag on the RTL SoC: `GPUDIAG: PASS (147 checks)`, every scene's FRAME_CRC the model's and that of a frame captured at the VGA pins (17 scenes, G2's 13 unchanged), the cube's frames 1 to 15 within 16 video frames, one video frame apart (16 frames shown), none torn, missed or out of order; its first second of free run `60 drawn, 59 shown, 0 missed, 0 torn, 0 out of order`; then the Ctrl-R rerun (146 checks) and the earlier reruns; gpudiag-slow.mem, the cube at 28 frames a second, fails the rate check alone (16.9); SurfBoot and bramdiag as before |
+| `test-gpu-noengine` | gpudiag_check's 94 self-test cases (21 of them the cube's lines); gpudiag fails without the GPU and with gpu.ID 0x32555048 |
+| `test-gpu-mutants` | all of them at db3e65c (G1's and G2's too), in two halves side by side: 69 of 69 caught by test_gpu, test_vram, test_video_gfx and the model's tests (GPU2's: 26 of 26 engine mutants, 12 of 12 model mutants), and 27 of 27 by gpudiag on the RTL SoC (GPU2's: 13 of 13); the three clamp mutants survive, as 16.4 proves they must (below). The review of 3fea963 (16.12) added the top-left rule's six per-edge cases for the engine, the SoC and the model (tri-top-edge-excluded and soc-tri-top-edge-excluded are tri-e0-top-excluded and soc-tri-e0-top-excluded now) and two of depth drawn without a depth buffer, for the engine and the SoC. At bfaac48 the run was 56 of 56 and 19 of 20: soc-tri-top-edge-excluded got past gpudiag, none of whose triangles then had a horizontal edge through pixel centres; scene 13's culling pairs half a pixel down (32e1a86) caught it, by scene 13's CRC (0x313fd79e, the model's a04d1e8a) |
 
 **The three survivors, and why each is equivalent** (also in sim/gpu/mutants.py, beside each). The
 common step is 16.4's: at a covered pixel's centre |V - 2^20 P(c)| < 2^17 and the exact plane P(c)
@@ -1795,7 +1847,8 @@ The gpudiag bitstream to test carries gpudiag as it was at bfaac48. That gpudiag
 top-left rule's top case for edge 0 only at engine level (test_gpu), not on the SoC: its scenes had
 no horizontal edge through pixel centres, and the SoC mutant of that rule got past it (16.10).
 Scene 13's fix came after the build (32e1a86) and changes scene 13's FRAME_CRC from bbb6a4cb to
-a04d1e8a; the next gpudiag bitstream, after the review, carries it.
+a04d1e8a; the review of 3fea963 then changed gpudiag further (16.12: scene 13 9368fe97, a new cube,
+147 checks), and lists what the bitstream lacks of it. The next gpudiag bitstream carries them.
 
 **The first build did not route.** At 804127d, with a multiplier for every product of the setup and
 four dividers at once ([evidence](evidence/gpu-g4/synth-gpudiag-r1.txt)), the gpudiag design took
@@ -1909,3 +1962,40 @@ manifest. It is the
 first evidence that synthesis made the triangle engine, the depth buffer and FLIP as the RTL says
 (LVS proves the bitstream equal to the synthesized netlist, not the netlist to the RTL), and it is
 redone once, on the bitstream that goes to the board.
+
+### 16.12 The review of 3fea963 (2026-10-26)
+
+An independent review of G4 at 3fea963 found nothing high. It agreed that the RTL and the C model
+are correct (a reference it wrote from this section alone, and an emulation of the RTL's bit widths,
+gave the model's pixels) and found two medium and three low gaps in the tests and in gpudiag. The
+fixes are cd523de to db3e65c and this record; no RTL and no model changed. Each fix was checked by
+putting its bug back into today's code alone and running the test again
+([evidence](evidence/gpu-g4/review-fix.txt)). The gpudiag runs used three boot ROMs on the same RTL
+SoC (surfsim with HAS_GPU = 1): gpudiag as at bfaac48 (the gpudiag bitstream's, 16.11), as at
+3fea963 (with scene 13's half-pixel shift, 32e1a86) and as fixed.
+
+| Finding | Fix | Test: the bug put back / after |
+|---|---|---|
+| M1 medium: only some of the top-left rule's six per-edge cases were tested (16.3 numbers the edges as the triangle is walked, so whether a top or a left edge is edge 0, 1 or 2 depends on the vertex order and the winding): three RTL mutants, edge 1 without its top case, edge 0 without its left one and edge 2 without its top one, passed test-gpu-engine on seeds 1 to 3; random vertices anywhere on the 1/16 grid practically never put an edge through pixel centres; gpudiag's scenes left four cases unseen | (1) diamonds of four right triangles around a pixel centre, their legs along its row and column through pixel centres, each triangle's vertices from 0, 1 or 2 on and in both windings (each diamond gives every triangle a top and a left leg shared with a neighbour, for which it is a bottom or a right edge): test_gpu_model counts every diamond covered exactly once and every one of the twelve cases (six, in both windings) taking pixels (cd523de); test_gpu draws them against the model, then each of the 24 triangles alone into a target of its own and reads the engine's VRAM back, every pixel of each diamond (worked out from the diamond's own edges) drawn exactly once (06bc0a1); (2) a third of the random stream's triangles on the half-pixel grid with legs along a row and a column through pixel centres, a corner inside the clip, the vertices in any of their six orders; test_gpu counts the pixels each case takes, and a run of 100 chunks or more fails when one of the six takes none (06bc0a1); (3) mutants.py has each case dropped alone for the engine, the SoC and the model (4154bd5; tri-top-edge-excluded and soc-tri-top-edge-excluded are tri-e0-top-excluded and soc-tri-e0-top-excluded now); (4) scene 13 draws six such diamonds, each quarter its own colour (a7174e5) | (1) the six engine mutants against 3fea963's test_gpu, seeds 1 to 3, 120 chunks: edge 0 left, edge 1 top and edge 2 top pass on every seed; edge 0 top (the shared-edge mesh), edge 1 left (a slanted left edge through centres, in the triangles crossing in depth) and edge 2 left (eleven directed FENCEs) fail / against today's all six fail on every seed, the first four at the diamonds' FENCE (10 to 53 words); with the model's rule broken for one edge alone, 3fea963's model tests already failed (their squares and grids in random vertex orders), and today's diamond checks fail too; (2) test_gpu --random-only with 3fea963's random vertices put back: no top case's mutant changes a chunk on seeds 1 to 3, the left cases' only on seed 2 (edge 2's also on seed 3), through slanted edges, and 6, 3 and 5 of the six cases take no pixel / today's random part alone fails each of the six mutants on every seed (first at chunk 0 to 44), each case taking 46 pixels or more (seeds 1 to 6); (3) all caught (16.10); (4) the six SoC mutants: gpudiag as at bfaac48 catches edge 0's and edge 2's left cases (scene 13, edge 2's also scene 15), as at 3fea963 also edge 0's top case; edge 1's top and left cases and edge 2's top case pass both / gpudiag as fixed fails all six, each by scene 13's CRC |
+| M2 medium: gpudiag's "depth without a depth buffer is refused" could not fail: the watched word (VRAM byte 8000) lay outside the triangle, and the misaligned SET_ZBUF's own BAD_PARAM stood for the TRIANGLE's; the second check's VRAM half was as vacuous | the refused SET_ZBUF checked on its own and the sticky bits cleared before the TRIANGLE; each check sets the words it watches to 0x5A5A5A5A before its TRIANGLE: two of the target's that the triangle covers, and for the second check (now with ZTEST and ZWRITE) also two depth words of the dropped buffer, a depth the triangle would pass, so that a triangle drawn with that buffer writes them; one check more, 147 in all (146 in a rerun) (6440fd1); two SoC (and engine) mutants, ZWRITE alone not refused, and the refusal's BAD_PARAM set while the triangle is drawn all the same (two lines: a mutant may carry several edits now) (6440fd1) | soc-tri-zwrite-alone-not-refused and soc-tri-refused-but-drawn pass gpudiag as at bfaac48 and as at 3fea963 / gpudiag as fixed fails them: the first `a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x0; 2 of the 2 target words it covers drawn` (1 of 147 checks), the other the same with STATUS 0x8 and `a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped the depth buffer: STATUS 0x8; 4 of the 4 words it would write changed` (2 of 147); soc-zbuf-kept-by-set-target fails all three (by its STATUS; as fixed, `STATUS 0x0; 4 of the 4 words`); test_gpu catches both engine mutants at test_zbuf's FENCE, which is as it was at 3fea963 |
+| L1 low: the cube's frames 9 and 73 were the same picture (one face showing; a half turn about y maps corner i onto corner i ^ 5), so the free run's order check was weakened; its out-of-order count was printed nowhere | the cube stands on a corner and turns about the vertical, two or three faces in every frame (16.9) (58a7f9c); gpuscenes_expect fails the build when two frames of either table have the same CRC, or a frame of the turn shows fewer than two faces (58a7f9c); a frame shown is out of order unless it is the last one shown or at most d frames on, d the video frames counted since; the free run's line prints the count, and gpudiag_check fails a line with one (21be632) | 3fea963's gpucube.c with today's gpuscenes_expect: `cube frames 9 and 73 (under the bar) are the same picture, CRC 7ceb422a`, and 40 frames of one face: exit 1, no header / today's cube: 128 distinct frames, 66 with three faces and 62 with two; gpudiag_check without its order rule: 1 of test_gpudiag_check's 94 cases fails (`the cube: a frame out of order`) / all pass |
+| L2 low: gpudiag_check ignored a cube line's frames shown: `60 drawn, 0 shown, 0 missed, 0 torn` passed with nothing checked | a line must show 58 to 61 frames, the video frames of its second (16.9) (6099f06) | gpudiag_check without the rule: 3 of the 94 cases fail (0, 57 and 62 shown pass) / all pass |
+| L3 low: the 16-frame rate check (frames 1 to 15 within 32 video frames) passed a cube at 28 frames a second | every one of frames 2 to 15 at most two video frames after the one before (16.9); gpudiag-slow.mem in test-gpu-soc must fail it, and nothing else (db3e65c) | gpudiag-slow with the old rule: `(32 video frames, 32 shown, 3 apart at most) ok (6 checks)`, `GPUDIAG: PASS (147 checks)` / with today's: `FAIL frames 2 to 15 each at most 2 video frames after the one before (30 a second or more): up to 3`, `GPUDIAG: FAIL (1 of 147 checks failed)` |
+
+Found on the way: test_gpu's check that the model's clamp changed no value and that no value was
+wider than the RTL keeps came after the run's verdict, so it could not fail a run; it comes before
+it now (e087dd4). And the review counted edge 0's left case among those gpudiag showed only in the
+free run's cube frames: on the SoC, gpudiag as at bfaac48 and as at 3fea963 already failed its
+mutant, by scene 13's CRC (at bfaac48 158 pixels of its mesh and its fan, whose slanted edges pass
+through pixel centres); edge 1's left case is the one only the free run's cube frames would have shown (as
+torn frames).
+
+**What the bfaac48 bitstream lacks.** The gpudiag bitstream of section 14 carries gpudiag as it was
+at bfaac48 (146 checks, scene 13 bbb6a4cb, the first cube). Of this round's checks it lacks: on the
+SoC, the top-left rule's top cases of edges 0, 1 and 2 and the left case of edge 1 (the last would
+show in its free run's cube lines as torn frames); the VRAM halves of the depth refusals and the
+refused SET_ZBUF's own BAD_PARAM, so a TRIANGLE drawn without a depth buffer passes it; the frame
+by frame rate rule, so a cube at 28 frames a second passes it; frames out of order in the free run;
+and distinct cube frames (frame 73 stands for frame 9). No RTL changed, so its 146 checks pass on
+today's RTL SoC as they did. Today's gpudiag_check fails its free run's lines (they have no frames
+out of order): a capture of it goes to bfaac48's checker (section 14 step 4).
