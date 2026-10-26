@@ -16,13 +16,16 @@ typed on the UART. Checked:
     (surfsim --vga-crc), and, where the display shows graphics alone (mode 2), the CRC the C
     model computes for the same commands: boards/arty_a7/tests/gpu/gfxscene replays them in
     sim/models/gpu_model.c through the same gfx.c and gpu.c;
+  * the GPU's interrupt works: between the first gfx and the last, interrupts (intc source 5,
+    IE.FENCE) were taken for at least half of the fences sent (each FENCE asks for one);
   * gfx get reads back what gfx put wrote; gfx demo 1 runs and ends, gfx demo 5 ends on the Ctrl+C
     typed after its first second, and after each the picture's CRC is the CRC before them (the
     display, the palette and VRAM back as they were); gfx bench reports its four rates; gfx reset;
   * gfx mode overlay: the last frame at the pins shows the console's text over the picture: the
     text decoded from the pixels (surfsim --vga-dir) holds the last command and its output, every
     pixel where no character is is the picture's (gfxscene's frame of it), and the rest are text;
-  * nothing said a stopped engine, a GPU error, a missed blanking, a panic.
+  * nothing said a stopped engine, a GPU error, a missed blanking, an interrupt switched off for
+    staying pending (irq.c's +IRQ:), a panic.
 
 And on build/sim/surfsim (HAS_GPU = 0), side by side: the kernel boots, says +GPU: none at boot,
 gfx says there is no GPU, drivers says the gpu is not present.
@@ -47,15 +50,15 @@ ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROMPT = r'SURF ~(?:\x1b\[[0-9;]*m)*#(?:\x1b\[[0-9;]*m)*>(?:\x1b\[[0-9;]*m)* '
 NL = r'\r?\n'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
-           'the GPU reports', 'no vertical blanking in', 'Invalid command']
+           'the GPU reports', 'no vertical blanking in', '+IRQ: ', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 
 # (what is typed, what its output must hold before the next prompt (a regex, or None), why[, a regex after
 # which Ctrl+C is typed]); @NAME@ and @ID@ become the gpu.ID of gpu.h ("GPU1", 0x31555047)
+STATE = (r'interrupts: \d+ \(intc source 5, IE\.FENCE\)' + NL + r'[\s\S]*frames: FRAME_COUNT \d+')
 STEPS = [
-    ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*'
-            r'frames: FRAME_COUNT \d+', 'the state'),
+    ('gfx', r'SurfGPU @NAME@ \(gpu\.ID @ID@\), VRAM 300 KiB at 0x30000000' + NL + r'[\s\S]*' + STATE, 'the state'),
     ('drivers', r'gpu\s+ok[\s\S]*gpu       SurfGPU @NAME@, 300 KiB VRAM; \d+ fences, 0 errors',
      'the driver table'),
     ('gfx mode gfx 1', r'display: mode 2, graphics, 640x480' + NL + r'\s+the target is that picture: 640x480 at VRAM 0, '
@@ -90,6 +93,7 @@ STEPS = [
     ('gfx crc', CRC_LINE.pattern, 'crc 5'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
+    ('gfx', STATE, 'the state after the demos and the bench'),
     ('gfx mode text', r'display: mode 1, text', 'text'),
     ('gfx crc', CRC_LINE.pattern, 'crc 6'),
     ('gfx mode overlay 1', r'display: mode 3, graphics with the text over it, 640x480', 'the overlay'),
@@ -270,8 +274,16 @@ def main():
     check('palette: rgb332 (as the configuration leaves it)' in out and 'fences; FENCE ' in out and
           re.search(r'interrupts: \d+ \(intc source 5, IE\.FENCE\)', out),
           'gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames')
+    # the interrupt: every FENCE asks for one (IRQ), so the count grows with the fences unless it is dead
+    st = re.findall(r'sent: \d+ words, (\d+) fences; FENCE \d+' + NL + r'\s+interrupts: (\d+) \(intc source 5', out)
+    if len(st) >= 2:
+        fences, irqs = int(st[-1][0]) - int(st[0][0]), int(st[-1][1]) - int(st[0][1])
+        check(irqs > 0 and 2 * irqs >= fences, 'the GPU interrupt (intc source 5, IE.FENCE): %d taken for the %d fences '
+              'sent between the first gfx and the last' % (irqs, fences))
+    else:
+        check(False, 'the GPU interrupt: gfx said its fences and interrupts %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
-          'no stopped engine, no GPU error, no blanking missed, no usage error, no panic')
+          'no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic')
     got = [crc for _, crc in CRC_LINE.findall(out)]
     frames = {}
     fp = os.path.join(w, 'frames.txt')
