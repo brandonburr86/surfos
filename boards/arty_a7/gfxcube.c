@@ -66,7 +66,10 @@ cube_run, below).
 #define REC_WORDS (GPU_CUBE_FRAME_WORDS + 16)
 #define QUEUE 8                         /* frames recorded ahead: 133 ms at a frame a blanking */
 #define FRAME_US 16683u                 /* a video frame, 800 x 525 pixel clocks at 25.17 MHz (for when the
-                                           frames recorded ahead will have been shown: no check uses it) */
+                                           frames recorded ahead will have been shown, and the input rule) */
+#define TICK_US 10000u                  /* the looks' tick (HZ 100) */
+#define RX_BYTE_US 100u                 /* the most a byte costs SurfCPU's serial receive path: about 97 us at
+                                           -O2 (the re-review of e655c39), rounded up */
 
 /* one frame's words as the sink records them */
 struct cube_frame {
@@ -210,20 +213,30 @@ static bool in_step(const struct gfx_cube_check *c, u32 f, u32 fb, u32 fa) {
     return false;
 }
 
+/* The bytes that can account for m frames missed. Between two looks a tick (10 ms) is the normal
+   gap; m frames pass unseen only when the gap is more than m frames (16.7 ms each) long, so the
+   tick was held off for m * 16.7 - 10 ms at least, and the serial line's receive path holds it off
+   for at most 100 us a byte: one frame needs 67 bytes, the 3,000-byte paste of the question's RTL run
+   (15 to 16 frames) at most 2,403 (the re-review of e811468's low 1: one keypress excused 14) */
+u32 gfx_cube_rx_needed(u32 m) {
+    u64 held = (u64)m * FRAME_US;
+    return held <= TICK_US ? 0 : (u32)((held - TICK_US + RX_BYTE_US - 1) / RX_BYTE_US);
+}
+
 /* frame f of the turn shown d frames after the last whole one, l: in order when (f - l) mod n <= d
    (a FLIP waits for a blanking, so the turn moves on a frame a frame at most) and f is in step with
    the FLIPs (above). The d - 1 frames before it passed unseen: missed, and missed while the serial
-   line took input when it took bytes since the look before (the re-review of e655c39's question:
-   on SurfCPU its receive path costs more than a byte's time on the line, so a paste holds the
-   timer's tick off, and the looks with it) */
+   line took input when the bytes it took since the look before can account for them (above: on
+   SurfCPU its receive path costs more than a byte's time on the line, and outranks the timer, so a
+   paste holds the tick off, and the looks with it: the re-review of e655c39's question) */
 void gfx_cube_check_frame(struct gfx_cube_check *c, u32 count, u32 crc, u32 fence_before, u32 fence_after,
-                          bool input) {
+                          u32 rx_bytes) {
     u32 d = (count - c->count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, dl = (count - c->last_count) & SURF_VIDEO_FRAME_COUNT_COUNT_MASK, f;
     if(!d) return;
     c->count = count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
     c->shown += d;
     c->checked++;
-    if(input) c->missed_input += d - 1;
+    if(d > 1 && rx_bytes >= gfx_cube_rx_needed(d - 1)) c->missed_input += d - 1;
     for(f = 0; f < c->n && c->crcs[f] != crc; f++) {}
     if(f == c->n) {                                     /* none of the turn's frames: torn */
         if(!c->torn++) {
@@ -350,7 +363,7 @@ int gfx_cube_run(struct gpu *g, u32 seconds, const char *what) {
                 break;
             }
             if(skip) c.count = c.last_count = lk.count & SURF_VIDEO_FRAME_COUNT_COUNT_MASK;
-            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa, lk.rx != last_rx);
+            else gfx_cube_check_frame(&c, lk.count, lk.crc, lk.fb, lk.fa, lk.rx - last_rx);
             last_rx = lk.rx;
             if(!seen_at && (i32)(lk.fa - vlast) >= 0) seen_at = lk.t;      /* the last frame recorded, done */
             skip = false;
