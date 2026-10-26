@@ -3,15 +3,17 @@
 
     mutants.py --work DIR [--only NAME,...] [--jobs N]
 
-Each mutant is a one-line change to a copy of surf_gpu.v, surf_gpu_tri.v, surf_gpu_div.v,
-surf_vram.v or surf_video.v: a bug of the kind the design could have (a copy in the wrong
+Each mutant is a one-line change (two for one of them, given as a pair of tuples) to a copy of
+surf_gpu.v, surf_gpu_tri.v, surf_gpu_div.v, surf_vram.v or surf_video.v: a bug of the kind the
+design could have (a copy in the wrong
 direction, a clip off by one, EXPAND's bits in the wrong order, the engine taking the port without
 its grant, an ABORT that keeps the FIFO, an interrupt without its enable, the overlay rule wrong,
 FRAME_CRC's bytes swapped, a placement change not waiting for the frame latch, a wrong target or
 clip after a reset; GPU2's: each of the top-left rule's six cases (edge 0, 1 or 2 without its top
 or its left case), a lane, the depth function, the cull sense, the gradient's rounding, the values'
-rounding, FLIP before the blanking, the depth buffer kept or refused wrongly, a depth word's lanes,
-ZWRITE ignored, the swap of a counter-clockwise triangle, a step, the clip, ABORT...). The
+rounding, FLIP before the blanking, the depth buffer kept or refused wrongly, depth without a depth
+buffer drawn, a depth word's lanes, ZWRITE ignored, the swap of a counter-clockwise triangle, a
+step, the clip, ABORT...). The
 test that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with
 Verilator and run on seed 1; it must fail. A "soc" mutant is judged by gpudiag on the RTL SoC instead
 (surfsim built with HAS_GPU = 1 from the copy, running build/fw/gpudiag.mem): gpudiag must say
@@ -43,8 +45,13 @@ VIDEO = "rtl/peripherals/surf_video.v"
 # the lines several mutants change
 TL = ["wire tl%d = ey%d[16] || (ey%d == 17'sd0 && ex%d > 17'sd0);" % (e, e, e, e) for e in range(3)]
 MODEL_TL = "t->tl[e] = t->ey[e] < 0 || (t->ey[e] == 0 && t->ex[e] > 0);"
+TRI_DEPTH = "wire        tri_depth = hdr[HDR_TRI_ZTEST] || hdr[HDR_TRI_ZWRITE];"
+REFUSED = ("wire        tri_start = (st == S_SETUP) && (op == OP_TRIANGLE) && !abort && !(tri_depth && !z_valid);",
+           "                                else\n                                    st <= S_TRI;")
+DRAWN = ("wire        tri_start = (st == S_SETUP) && (op == OP_TRIANGLE) && !abort;",
+         "                                st <= S_TRI;")
 
-# name, file, the line's text, its replacement, the test
+# name, file, the line's text, its replacement (or tuples of each, for several lines), the test
 MUTANTS = [
     ("copy-rows-always-down", GPU, "wire               k_up = by > ay;", "wire               k_up = 1'b0;", "gpu"),
     ("copy-never-right-to-left", GPU, "wire               k_rl = (by == ay) && (bx > ax);",
@@ -165,6 +172,10 @@ MUTANTS = [
     ("tri-depth-row-target-stride", TRI, "zrow <= zrow + {16'd0, z_stride};", "zrow <= zrow + {16'd0, t_stride};", "gpu"),
     ("tri-clip-left-ignored", TRI, "bx0_c = (bxa > ecx0) ? bxa : ecx0,", "bx0_c = bxa,", "gpu"),
     ("tri-ignores-abort", TRI, "if (rst || stop) begin", "if (rst) begin", "gpu"),
+    # depth without a depth buffer drawn (the review of 3fea963, M2): ZWRITE alone not refused; and the
+    # refusal's BAD_PARAM set while the triangle is drawn all the same (two lines)
+    ("tri-zwrite-alone-not-refused", GPU, TRI_DEPTH, "wire        tri_depth = hdr[HDR_TRI_ZTEST];", "gpu"),
+    ("tri-refused-but-drawn", GPU, REFUSED, DRAWN, "gpu"),
     # gpudiag on the RTL SoC must catch GPU2's too
     ("soc-flip-before-blanking", GPU, "S_FLIP: if (vblank) begin", "S_FLIP: if (1'b1) begin", "soc"),
     ("soc-zbuf-kept-by-set-target", GPU,
@@ -179,6 +190,8 @@ MUTANTS = [
     ("soc-tri-e1-left-excluded", TRI, TL[1], "wire tl1 = (ey1 == 17'sd0 && ex1 > 17'sd0);", "soc"),
     ("soc-tri-e2-top-excluded", TRI, TL[2], "wire tl2 = ey2[16];", "soc"),
     ("soc-tri-e2-left-excluded", TRI, TL[2], "wire tl2 = (ey2 == 17'sd0 && ex2 > 17'sd0);", "soc"),
+    ("soc-tri-zwrite-alone-not-refused", GPU, TRI_DEPTH, "wire        tri_depth = hdr[HDR_TRI_ZTEST];", "soc"),
+    ("soc-tri-refused-but-drawn", GPU, REFUSED, DRAWN, "soc"),
     ("soc-tri-gouraud-x-step-half", TRI, "scx <= {gcx[24:0], 4'd0};", "scx <= {gcx[25:0], 3'd0};", "soc"),
     # the C model's own tests catch a broken model (GPU2's rules)
     ("model-top-left-rule", MODEL, MODEL_TL, "t->tl[e] = t->ey[e] < 0;", "model"),
@@ -312,10 +325,12 @@ def run_one(name, path, old, new, test, work: Path) -> tuple[bool, str]:
         shutil.rmtree(w)
     (w / "rtl").mkdir(parents=True)
     src = (ROOT / path).read_text()
-    if src.count(old) != 1:
-        return False, "the line to mutate is not in %s exactly once" % path
+    for o, n in zip(*((old, new) if isinstance(old, tuple) else ((old,), (new,)))):
+        if src.count(o) != 1:
+            return False, "the line to mutate is not in %s exactly once" % path
+        src = src.replace(o, n, 1)
     mutated = w / "rtl" / Path(path).name
-    mutated.write_text(src.replace(old, new, 1))
+    mutated.write_text(src)
     if test == "soc":
         return soc_one(w, path, mutated)
     if test == "model":

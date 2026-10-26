@@ -1,7 +1,7 @@
 /*
 SurfGPU diagnostics: the GPU diagnostic
 --------------------
-File: gpudiag.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2)
+File: gpudiag.c Date: 10/18/26 (SurfGPU), 10/25/26 (GPU2), 10/26/26 (the review of 3fea963)
 --------------------
 A boot ROM image (build/fw/gpudiag.mem) for the GPU designs (sysinfo.FEATURES.GPU; docs/GPU.md
 section 10), like bramdiag: it needs only the CPU, block RAM, the UART, the timer, VRAM and the
@@ -19,8 +19,9 @@ than a complete one (GPUDIAG_CHECKS) fails too, so PASS means every check ran an
 GFX_ values a reset leaves can only be seen by the first run after a reset: a rerun (Ctrl-R) says
 so in a line under its banner and is held to GPUDIAG_RERUN_CHECKS, one fewer.
 GPU2 (docs/GPU.md section 16): gpu.ID must read "GPU2"; a section checks SET_ZBUF's refusal, a
-TRIANGLE with depth but no depth buffer (refused), SET_TARGET dropping the depth buffer and FLIP
-waiting for the blanking; four scenes draw triangles (flat, Gouraud, depth) and FLIP; then the
+TRIANGLE with depth but no depth buffer (refused, and nothing drawn where it would draw), SET_TARGET
+dropping the depth buffer (nothing drawn, no depth written where the buffer was) and FLIP waiting
+for the blanking; four scenes draw triangles (flat, Gouraud, depth) and FLIP; then the
 cube (gpucube.c) draws 16 frames at full rate, double-buffered with FLIP, while the CPU checks the
 FRAME_CRC of every frame shown against the model's CRCs of the cube's frames (a torn frame, a
 frame missed or out of order fails), and the first and last as still pictures.
@@ -429,9 +430,33 @@ static void gpu_registers(uint32_t unused)
     diag_section_end();
 }
 
-/* GPU2's commands (docs/GPU.md section 16): a refused SET_ZBUF and a TRIANGLE with depth but no
- * depth buffer (both BAD_PARAM, nothing drawn), an accepted SET_TARGET leaving no depth buffer, and
- * FLIP writing GFX_BASE only at the next vertical blanking */
+/* the VRAM words a refused TRIANGLE must leave as they were: two of the 64 x 64 target's at 4000 that
+ * its triangle (0, 0) (64, 0) (0, 64) covers, pixels 0 to 3 of row 0 and 20 to 23 of row 20 (x + y <=
+ * 62); and the depths of pixels 0 and 1 of those rows in the buffer at 0x20000, stride 128 (dropped by
+ * the SET_TARGET before the second TRIANGLE). Each check sets the first n of them to 0x5A5A5A5A before
+ * its TRIANGLE: as depths 0x5A5A, which the triangle's depth 100 would pass, so a TRIANGLE drawn with
+ * that buffer would write them too */
+static const uint32_t refused_view[4] = {4000, 4000 + 20 * 64 + 20, 0x20000u, 0x20000u + 20 * 128 + 40};
+
+static void refused_arm(uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++)
+        W(VRAM(refused_view[i])) = 0x5A5A5A5Au;
+}
+
+static uint32_t refused_changed(uint32_t n, uint32_t *at)
+{
+    uint32_t bad = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (W(VRAM(refused_view[i])) != 0x5A5A5A5Au && bad++ == 0)
+            *at = refused_view[i];
+    return bad;
+}
+
+/* GPU2's commands (docs/GPU.md section 16): a refused SET_ZBUF (BAD_PARAM, checked on its own), a
+ * TRIANGLE with depth but no depth buffer and one after an accepted SET_TARGET dropped the buffer
+ * (each BAD_PARAM of its own, nothing drawn where it would have drawn, no depth written where the
+ * dropped buffer was), and FLIP writing GFX_BASE only at the next vertical blanking */
 static void gpu2_commands(uint32_t unused)
 {
     (void)unused;
@@ -441,7 +466,6 @@ static void gpu2_commands(uint32_t unused)
         diag_section_end();
         return;
     }
-    W(VRAM(8000)) = 0x5A5A5A5Au;
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);              /* 64 x 64 at 4000 */
     GREG(SURF_GPU_CMD) = 4000;
     GREG(SURF_GPU_CMD) = 64;
@@ -449,16 +473,22 @@ static void gpu2_commands(uint32_t unused)
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_ZBUF, 0);                /* refused: not a multiple of 4 */
     GREG(SURF_GPU_CMD) = 0x20002u;
     GREG(SURF_GPU_CMD) = 128;
+    hw_sync();
+    uint32_t st = GREG(SURF_GPU_STATUS);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK, "a SET_ZBUF of an unaligned base: STATUS 0x%x", st);
+    GREG(SURF_GPU_STATUS) = GPU_STICKY;                             /* so that the TRIANGLE's BAD_PARAM is its own */
     static const uint32_t tri_words[6] = {GPU_XY(0, 0), GPU_ZC(100, 0), GPU_XY(GPU_FX(64), 0), GPU_ZC(100, 0),
                                           GPU_XY(0, GPU_FX(64)), GPU_ZC(100, 0)};
+    refused_arm(2);
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZWRITE | 0x77u);   /* no depth buffer: refused */
     for (int i = 0; i < 6; i++)
         GREG(SURF_GPU_CMD) = tri_words[i];
     hw_sync();
-    uint32_t st = GREG(SURF_GPU_STATUS);
-    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && W(VRAM(8000)) == 0x5A5A5A5Au,
-               "a refused SET_ZBUF, then a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x%x, VRAM word 0x%08x",
-               st, W(VRAM(8000)));
+    st = GREG(SURF_GPU_STATUS);
+    uint32_t at = 0, bad = refused_changed(2, &at);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && bad == 0,
+               "a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x%x; %u of the 2 target words it covers drawn "
+               "(byte %u reads 0x%08x)", st, bad, at, bad ? W(VRAM(at)) : 0x5A5A5A5Au);
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_ZBUF, 0);                /* taken ... */
     GREG(SURF_GPU_CMD) = 0x20000u;
@@ -467,14 +497,18 @@ static void gpu2_commands(uint32_t unused)
     GREG(SURF_GPU_CMD) = 4000;
     GREG(SURF_GPU_CMD) = 64;
     GREG(SURF_GPU_CMD) = GPU_WH(64, 64);
-    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZTEST | 0x77u);
+    hw_sync();
+    refused_arm(4);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_TRIANGLE, GPU_TRI_ZTEST | GPU_TRI_ZWRITE | 0x77u);
     for (int i = 0; i < 6; i++)
         GREG(SURF_GPU_CMD) = tri_words[i];
     hw_sync();
     st = GREG(SURF_GPU_STATUS);
-    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && W(VRAM(8000)) == 0x5A5A5A5Au,
-               "a TRIANGLE with ZTEST after SET_TARGET dropped the depth buffer: STATUS 0x%x, VRAM word 0x%08x", st,
-               W(VRAM(8000)));
+    bad = refused_changed(4, &at);
+    diag_check((st & GPU_STICKY) == SURF_GPU_STATUS_BAD_PARAM_MASK && bad == 0,
+               "a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped the depth buffer: STATUS 0x%x; %u of the "
+               "4 words it would write changed, 2 of the target's and 2 of the dropped buffer's (byte %u reads "
+               "0x%08x)", st, bad, at, bad ? W(VRAM(at)) : 0x5A5A5A5Au);
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     /* FLIP just after a blanking starts: GFX_BASE stays until the next one, then has the FLIP's base */
     VREG(SURF_VIDEO_GFX_BASE) = 0;
