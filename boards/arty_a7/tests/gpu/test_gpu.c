@@ -1590,6 +1590,29 @@ static long cube_rate(struct stub *s) {
     return -1;
 }
 
+/* gfx cube N against the N seconds asked (the final re-check of e811468's low 2): a frame is
+   recorded only while it would be shown within the run's time, so at a frame a blanking (59.94 a
+   second) the run draws N seconds' frames, two more at most (those in the FIFO and the engine when
+   recording stops) and three fewer at least, and ends within three frames (50 ms) of N s. Recording
+   while time is left without the queued frames' showing time, the run went on 7 frames longer */
+static void cube_in_time(struct stub *s, unsigned secs, const char *what) {
+    const char *p = strstr(s->out, "    gfx cube: ");
+    unsigned long d = 0, sec = 0, hund = 0, a, b, h, whole, tenth;
+    unsigned long want = secs * 59940ul;            /* thousandths of a frame */
+    int got = 0;
+    char line[200];
+    for(; p; p = strstr(p + 1, "    gfx cube: "))      /* (a partial match writes its first numbers too) */
+        if(sscanf(p, "    gfx cube: %lu drawn in %lu.%lu s, %lu.%lu a second", &a, &b, &h, &whole, &tenth) == 5) {
+            d = a;
+            sec = b;
+            hund = h;
+            got = 1;
+        }
+    snprintf(line, sizeof(line), "  %s: %lu drawn in %lu.%02lu s for %u s asked: %lu to %lu frames and %u.05 s at most wanted",
+             what, d, sec, hund, secs, (want - 3000) / 1000, (want + 2000) / 1000, secs);
+    check(got && d * 1000 >= want - 3000 && d * 1000 <= want + 2000 && sec * 100 + hund <= secs * 100 + 5, line);
+}
+
 /* the expected table itself: its 128 frames, GFX_CUBE_PICTURES of them distinct, and its first 16
    gpudiag's own MODE 2 frames (gpuscenes_expect.h's gpu_cube_expect_check: the same display) */
 static int once_t_cube_table;
@@ -1723,6 +1746,7 @@ static void t_cube(unsigned seed) {
     snprintf(line, sizeof(line), "  %lu drawn: the FLIPs the engine did after frame 0's (%lu); %lu shown; %ld.%ld a second",
              drawn, s->flips_done - flips0 - 1, shown, rate / 10, rate % 10);
     check(drawn == s->flips_done - flips0 - 1 && rate >= 590 && rate <= 599, line);
+    cube_in_time(s, 2, "gfx cube 2");
     cube_at_the_pins(s, "the frames as they ended", 110, 110);
     check(s->shown_draws == 0, "  no engine word drew into the picture on the screen while it was shown");
     check(!memcmp(s->vram, before, GPU_VRAM_BYTES) && !memcmp(s->gpal, pal, sizeof(pal)) && s->reg.mode == reg.mode &&
@@ -1742,6 +1766,7 @@ static void t_cube(unsigned seed) {
     check(gfx(s, "gfx cube 1") == CMD_OK && G.z_valid && G.z_base == 153600 && s->eng.zvalid && s->eng.zbase == 153600 &&
           s->vram[153600] == 0x33 && s->vram[GPU_VRAM_BYTES - 1] == 0x33 && s->reg.scale == 2 && s->eng.tw == 320,
           "gfx cube 1 from a 320x240 picture with a depth buffer: its depths and the depth buffer back");
+    cube_in_time(s, 1, "gfx cube 1");
     check(gfx(s, "gfx cube 0") == CMD_USAGE && gfx(s, "gfx cube 4000") == CMD_USAGE && gfx(s, "gfx cube x") == CMD_USAGE &&
           gfx(s, "gfx cube 1 2") == CMD_USAGE, "gfx cube 0, 4000, x, 1 2: usage");
     free(before);
@@ -1956,6 +1981,7 @@ static void t_cube_look(unsigned seed) {
     snprintf(line, sizeof(line), "  %lu drawn, %lu shown, %lu missed: every frame looked at, a frame a frame drawn", drawn,
              shown, missed);
     check(!missed && shown >= 170 && drawn >= 177, line);
+    cube_in_time(s, 3, "gfx cube 3 with the slow console");
     cube_at_the_pins(s, "and at the pins", 170, 120);
     irqs = s->interrupts_sent - irqs;
     asked = G.irq_fences - asked;
