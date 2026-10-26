@@ -502,6 +502,53 @@ static void t_claims(unsigned seed) {
 }
 TEST(t_claims)
 
+/* The re-review's N2: what a run's Ctrl+C did (an ABORT or not) was a flag of the driver's struct,
+   cleared by every claim before its trylock and read after the release, so another console's claim
+   in between changed what this run said. Here the other console claims while this run's Ctrl+C is
+   handled (at its ABORT: the claim fails, this run holds the GPU) and as soon as this run lets go
+   (the claim taken; in the second case its own Ctrl+C ABORTs the engine). Now each run's result
+   says it. */
+static int other_aborts;
+static void other_console(struct stub *s, int where) {
+    if(where == STUB_AT_ABORT) {
+        gpu_claim(&G, "gfx fill");                      /* this run holds it: Ctrl+C gives up at once */
+        return;
+    }
+    if(gpu_claim(&G, "gfx fill") != GPU_OK) return;
+    if(other_aborts) {                                  /* its fence never comes: its Ctrl+C ABORTs */
+        s->stopped = 1;
+        if(gpu_fill(&G, 0, 0, 4, 4, 9, "gfx fill") == GPU_OK) gpu_sync(&G, "gfx fill");
+        s->stopped = 0;
+    }
+    gpu_release(&G);
+}
+
+static void t_ctrlc_said(unsigned seed) {
+    struct stub *s = fresh(1);
+    (void)seed;
+    gfx(s, "gfx mode gfx 1");
+    s->hook = other_console;
+    other_aborts = 0;
+    s->stopped = 1;
+    s->intr_at = s->now + 100000;
+    check(gfx(s, "gfx fill 0 0 4 4 1") == CMD_FAIL && said(s, "gfx fill: interrupted: the engine stopped (ABORT)\n") &&
+          !said(s, "gfx fill: interrupted (Ctrl+C)") && s->hooks_run >= 2,
+          "Ctrl+C ABORTs a stopped engine while another console claims: this run says it ABORTed");
+    s->stopped = 0;
+    s->intr_at = 0;
+    s->hooks_run = 0;
+    other_aborts = 1;
+    s->intr_at = s->now + 10000;
+    check(gfx(s, "gfx crc") == CMD_FAIL && said(s, "gfx crc: interrupted (Ctrl+C)\n") &&
+          !said(s, "gfx crc: interrupted: the engine stopped") && s->hooks_run >= 1 && G.ctrl_c >= 2,
+          "Ctrl+C with nothing to ABORT, the next console's Ctrl+C ABORTing: this run says it ABORTed nothing");
+    s->intr_at = 0;
+    s->hook = NULL;
+    check(gfx(s, "gfx fill 0 0 1 1 1") == CMD_OK && !s->locked, "  then the GPU is free and works");
+    done(s);
+}
+TEST(t_ctrlc_said)
+
 /**** the frame latch rule ****/
 
 /* the display writes of the last display change: GFX_BASE, GFX_STRIDE, GFX_SCALE, the mode */

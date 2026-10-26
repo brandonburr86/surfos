@@ -98,17 +98,19 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features) {
 
 /**** the claim: one command's run at a time ****/
 
+/* 10/26/26 (the re-review's N2): nothing here touches the driver's state before the trylock, which
+   another console's run may be using; what a run's Ctrl+C did is in its return code (GPU_EINTR or
+   GPU_ECANCEL), never in a flag of the struct that a second claimant could change */
 int gpu_claim(struct gpu *g, const char *what) {
     char who[64];
     bool said = false;
-    g->intr_aborted = false;
     while(!P(g)->trylock(CTX(g))) {
         if(!said) {
             printf("    %s: the GPU is in use: waiting (Ctrl+C gives up)\n    held by %s\n", what,
                    P(g)->holder(CTX(g), who, sizeof(who)));
             said = true;
         }
-        if(P(g)->sleep(CTX(g), 20) == GPU_EINTR || P(g)->interrupted(CTX(g))) return GPU_EINTR;
+        if(P(g)->sleep(CTX(g), 20) == GPU_EINTR || P(g)->interrupted(CTX(g))) return GPU_ECANCEL;
     }
     return GPU_OK;
 }
@@ -185,7 +187,6 @@ static int stopped(struct gpu *g, const char *what, const char *how, u32 waiting
 
 static int stop_intr(struct gpu *g, const char *what) {
     g->ctrl_c++;
-    g->intr_aborted = true;
     gpu_abort(g, what);
     after_abort(g, what);
     return GPU_EINTR;
@@ -592,7 +593,7 @@ int gpu_still_crc(struct gpu *g, u32 *count, u32 *crc, const char *what) {
             printf("    %s: FRAME_COUNT stayed at %lu for 200 ms: no frames are being shown\n", what, (u_long)c);
             return GPU_ETIMEOUT;
         }
-        if(P(g)->sleep(CTX(g), 5) == GPU_EINTR && interrupted(g)) return GPU_EINTR;
+        if(P(g)->sleep(CTX(g), 5) == GPU_EINTR && interrupted(g)) return GPU_ECANCEL;   /* nothing to ABORT */
     }
     *count = c;
     *crc = VRD(g, SURF_VIDEO_FRAME_CRC);

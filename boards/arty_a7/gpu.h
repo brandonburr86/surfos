@@ -48,6 +48,7 @@ lock), in the host test a stand-in that hands the command words to the C model o
 #define GPU_EERROR     -4               /* the engine reported an error (said, cleared, ABORTed) */
 #define GPU_EARG       -5               /* refused before anything was sent */
 #define GPU_ENOMEM     -6
+#define GPU_ECANCEL    -8               /* Ctrl+C or a kill where nothing needed stopping (no ABORT) */
 
 #define GPU_TIMEOUT_US  2000000u        /* without a word taken or a command finished: stopped */
 #define GPU_SPIN_US     2000u           /* a fence is polled this long before the driver sleeps (spin_us) */
@@ -127,7 +128,6 @@ struct gpu {
     bool latched;                       /* the last display change caught the frame latch */
     bool keep_going;                    /* waits go on through Ctrl+C (the demo putting the display back) */
     bool restoring;                     /* inside gpu_abort()'s resend of the target and clip */
-    bool intr_aborted;                  /* this command's Ctrl+C stopped the engine (ABORT) */
     /* what happened, for gfx */
     u_long words, fences, irqs, irq_waits, sleeps, timeouts, aborts, errors, ctrl_c;
     u_long overflows, bad_opcodes, bad_params, display_changes, latch_misses;
@@ -139,7 +139,7 @@ int gpu_probe(struct gpu *g, const struct gpu_port *port, u32 features);
 const char *gpu_id_name(u32 id);        /* "GPU1", "GPU2" or NULL */
 const char *gpu_describe(const struct gpu *g, char *buf, u_int size);   /* drivers' line */
 
-int gpu_claim(struct gpu *g, const char *what);    /* GPU_OK, or GPU_EINTR (said) */
+int gpu_claim(struct gpu *g, const char *what);    /* GPU_OK, or GPU_ECANCEL (Ctrl+C: said) */
 void gpu_release(struct gpu *g);
 
 /* command words, by the FIFO_FREE rule; then a fence and the error check: what names the command

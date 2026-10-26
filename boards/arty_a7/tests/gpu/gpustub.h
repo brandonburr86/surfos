@@ -119,11 +119,19 @@ struct stub {
     struct stub_event *ev;
     unsigned nev, ev_cap;
     const char *holder;                 /* the other claimant as the port names it ('Shell 2', pid 9 when NULL) */
+    /* 10/26/26: another console's run at a moment of this one's (the test's function: what it does
+       with the driver), at STUB_AT_ABORT (an ABORT was written) and STUB_AT_UNLOCK (the claim let go) */
+    void (*hook)(struct stub *s, int where);
+    int in_hook;
+    unsigned hooks_run;
     char out[1 << 16];                  /* what the driver and gfx printed */
     unsigned nout;
     unsigned col, line_start;           /* the line being printed: its columns so far, where it began in out */
     unsigned widest;                    /* the widest line printed */
 };
+
+#define STUB_AT_ABORT   1
+#define STUB_AT_UNLOCK  2
 
 #define STUB_COLUMNS 80                 /* the console's line (GPU.md 15.2) */
 /* the lines printed wider than that since the last call (any stub), and the first of them */

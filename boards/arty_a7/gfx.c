@@ -118,10 +118,14 @@ static bool nums(char **argv, int first, const char *kinds, long *out) {
     return true;
 }
 
-/* the driver's result as the command's status; GPU_EINTR is said here, the rest by the driver */
+/* the driver's result as the command's status; Ctrl+C is said here, the rest by the driver (10/26/26,
+   the re-review's N2: from the result alone, which is this run's: GPU_EINTR when it ABORTed the
+   engine, GPU_ECANCEL when there was nothing to stop) */
 static int status(struct gpu *g, int r, const char *what) {
+    (void)g;
     if(r == GPU_OK) return CMD_OK;
-    if(r == GPU_EINTR) printf("    %s: interrupted%s\n", what, g->intr_aborted ? ": the engine stopped (ABORT)" : " (Ctrl+C)");
+    if(r == GPU_EINTR) printf("    %s: interrupted: the engine stopped (ABORT)\n", what);
+    if(r == GPU_ECANCEL) printf("    %s: interrupted (Ctrl+C)\n", what);
     if(r == GPU_EARG) {
         printf("    %s: refused: a coordinate past -32768..32767 or a size past 0..65535\n", what);
         return CMD_USAGE;
@@ -471,7 +475,7 @@ static int bench(struct gpu *g, int argc, char **argv) {
         snprintf(desc, sizeof(desc), "64 x %lu cells", (u_long)n);
         rate("text", desc, 64ull * n * FONT_WIDTH * FONT_HEIGHT, gpu_now_us(g) - t0);
     }
-    if(!r && gpu_interrupted(g)) r = GPU_EINTR;
+    if(!r && gpu_interrupted(g)) r = GPU_ECANCEL;    /* seen between two steps: nothing left to stop */
     g->spin_us = spin;
     gpu_release(g);
     return status(g, r, what);
@@ -666,7 +670,7 @@ static int demo(struct gpu *g, int argc, char **argv) {
             break;
         }
     }
-    if(r == GPU_EINTR) interrupted = true;
+    if(r == GPU_EINTR || r == GPU_ECANCEL) interrupted = true;
     now = gpu_now_us(g);
     g->spin_us = spin;
     /* Back as it was, also after Ctrl+C or a stopped engine: the console on the screen while VRAM and

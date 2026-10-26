@@ -207,6 +207,15 @@ static int interrupted(struct stub *s) {
     return s->intr_at && s->now >= s->intr_at;
 }
 
+/* the test's other console, never inside itself */
+static void hook(struct stub *s, int where) {
+    if(!s->hook || s->in_hook) return;
+    s->in_hook = 1;
+    s->hook(s, where);
+    s->hooks_run++;
+    s->in_hook = 0;
+}
+
 /**** the port ****/
 
 static uint32_t p_rd(void *c, uint32_t off) {
@@ -252,6 +261,7 @@ static void p_wr(void *c, uint32_t off, uint32_t v) {
             s->eng_cycles = s->now * 25;
             s->aborts++;
             if(!s->abort_at) s->abort_at = s->now;
+            hook(s, STUB_AT_ABORT);
         }
         break;
     case SURF_GPU_CMD:
@@ -472,6 +482,7 @@ static void p_unlock(void *c) {
     struct stub *s = c;
     if(!s->locked) s->unlocked_free++;
     s->locked = 0;
+    hook(s, STUB_AT_UNLOCK);
 }
 
 static const char *p_holder(void *c, char *buf, u_int size) {
