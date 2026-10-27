@@ -246,6 +246,12 @@ lvs_route_note() {   # what the manifest's "lvs solver" line says of the route (
 # The verdict. lvs_equiv (src/lvs/lvs_equiv.cpp) prints "  proved  ", "  DIFFER  " or "  unknown "
 # and a point's name for each question, then "N proved, D differ, U unknown (Ts)", and ends with:
 #   0  every point proved                                  PASS, if its count says 0 differ, 0 unknown
+#                                                          and at least 1 proved, and no point's line
+#                                                          says DIFFER; else FAIL. A count of 0 proved
+#                                                          means nothing was compared: each output of
+#                                                          a design is a point, every design the flow
+#                                                          builds has outputs, and a proof of none is
+#                                                          no proof
 #   1  a point differs, or is unknown                      FAIL (D differ) when one differs;
 #                                                          BLOCKED (U unknown, none differ) when the
 #                                                          solver decided all but U: not proved, but
@@ -264,9 +270,11 @@ lvs_verdict() {   # STATUS REPORT
   _ndiff=$(grep -c '^  DIFFER  ' "$2" 2>/dev/null) || _ndiff=${_ndiff:-0}
   # shellcheck disable=SC2086
   set -- "$1" $_sum
-  _st=$1 _differ=${3:-} _unknown=${4:-}
+  _st=$1 _proved=${2:-} _differ=${3:-} _unknown=${4:-}
   case "$_st" in
-    0) if [ "$_differ" = 0 ] && [ "$_unknown" = 0 ] && [ "$_ndiff" = 0 ]; then echo PASS
+    0) if [ "$_differ" = 0 ] && [ "$_unknown" = 0 ] && [ "$_ndiff" = 0 ]; then
+         if [ -n "$_proved" ] && [ "$_proved" != 0 ]; then echo PASS
+         else echo "FAIL (lvs_equiv ended 0 having proved no point: nothing was compared)"; fi
        else echo "FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)"; fi
        return 0 ;;
     1) if [ -n "$_differ" ] && [ "$_differ" != 0 ]; then echo "FAIL ($_differ differ)"

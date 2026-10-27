@@ -19,6 +19,8 @@
 #   3. a format 1 build whose netlist, FASM or placement is not the one it proved: the LVS inputs
 #      made again are not its bytes, refused (exit 4) before the proof, its manifest as it was
 #   4. a recheck of a recheck: the build's manifest and logs stay the build's
+#   5. lvs_verdict (tools/openxc7-steps.sh) on every way lvs_equiv can end, with the review's: exit 0
+#      with an unknown, with a DIFFER line, with no point proved
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -434,6 +436,28 @@ rc_run
 if passed && evidence_kept && grep -q "its record $b/out/manifest.build.txt (format 2)" "$t/run.txt"
 then ok "a recheck of a recheck reads the build's manifest and keeps the build's logs, not the first recheck's"
 else bad "a recheck of a recheck (exit $rc)"; cat "$t/run.txt"; fi
+
+# ---------------------------------------------------------------- 5. lvs_verdict
+verdict() {      # WHAT STATUS WANT REPORT: lvs_verdict on REPORT (printf's %b) for lvs_equiv's STATUS
+  printf '%b' "$4" > "$t/report.txt"
+  got=$(dry=0 out=$t; . tools/openxc7-steps.sh; lvs_verdict "$2" "$t/report.txt")
+  if [ "$got" = "$3" ]; then ok "verdict: $1: $3"; else bad "verdict: $1: '$got', wanted '$3'"; fi
+}
+verdict "every point proved" 0 PASS '  proved  r1\n  proved  r2\n\n2 proved, 0 differ, 0 unknown   (0.1s)\n'
+verdict "exit 0 with an unknown point in its count" 0 "FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)" \
+  '  proved  r1\n  unknown r2\n\n1 proved, 0 differ, 1 unknown   (0.1s)\n'
+verdict "exit 0 with a DIFFER line, its count 0 differ" 0 "FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)" \
+  '  proved  r1\n  DIFFER  r2\n\n2 proved, 0 differ, 0 unknown   (0.1s)\n'
+verdict "exit 0 with no point proved" 0 "FAIL (lvs_equiv ended 0 having proved no point: nothing was compared)" \
+  '0 proved, 0 differ, 0 unknown   (0.0s)\n'
+verdict "exit 0 without its count" 0 "FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)" '  proved  r1\n'
+verdict "a point differs" 1 "FAIL (1 differ)" '  proved  r1\n  DIFFER  r2\n\n1 proved, 1 differ, 0 unknown   (0.1s)\n'
+verdict "a point unknown, none differs" 1 "BLOCKED (1 unknown, none differ)" '  proved  r1\n  unknown r2\n\n1 proved, 0 differ, 1 unknown\n'
+verdict "killed by SIGKILL" 137 "BLOCKED (killed: SIGKILL, exit 137)" '  proved  r1\n'
+verdict "a difference, then killed" 137 "FAIL (1 differ before the proof stopped, exit 137)" '  proved  r1\n  DIFFER  r2\n'
+verdict "stopped at its limit" 124 "BLOCKED (timeout)" '  proved  r1\n'
+verdict "a setup fault" 2 "FAIL (lvs_equiv could not run the proof: exit 2, see check-lvs.txt)" 'parse error\n'
+verdict "a crash" 139 "FAIL (lvs_equiv crashed: signal 11, exit 139)" '  proved  r1\n'
 
 [ "$fails" = 0 ] || { echo "openxc7-recheck-test: FAIL ($fails of $checks checks)"; exit 1; }
 echo "openxc7-recheck-test: PASS ($checks checks; $SH, ${awk_is:-awk})"
