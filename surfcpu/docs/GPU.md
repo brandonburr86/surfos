@@ -46,9 +46,10 @@ Section 11 has the milestones.
 (flat and Gouraud, exact coverage with the top-left rule, a 16-bit depth buffer in VRAM) and FLIP
 (GFX_BASE at the next vertical blanking) to the engine, with the C model, its tests, the RTL tests
 against it, mutants, and gpudiag's GPU2 checks, scenes and spinning cube: done in simulation, and
-in synthesis as section 16.11 records: the gpudiag bitstream passed every gate of the open flow,
-while the DDR+GPU bitstream's LVS proof is outstanding. Its physical test (section 14: gpudiag
-with the cube) is open; SurfOS's boot stays on G2's DDR+GPU bitstream until G4's has its proof.
+in synthesis as section 16.11 records: the gpudiag bitstream with every check of the review
+(1620026) and the DDR+GPU bitstream at bfaac48 passed every gate of the open flow, the DDR+GPU
+bitstream's LVS proved in full by lvs_equiv's --solver route. Their physical tests (section 14:
+gpudiag with the cube, SurfOS with GPU2) are open.
 
 ## 1. Decisions and where this deviates from the brief
 
@@ -411,9 +412,9 @@ in a line under its banner ("a rerun (Ctrl-R): ...") and makes 146 checks, passi
 make. PASS means every check of the run's kind ran and passed: a missing FEATURES.GPU, a gpu window
 that traps or reads another ID than "GPU2", each engine scene that could not run, and a run with
 another number of checks than a complete one of its kind (GPUDIAG_CHECKS 147, GPUDIAG_RERUN_CHECKS
-146) all fail it. (GPU1's gpudiag made 124 and 123; GPU2's at bfaac48, the gpudiag bitstream of
-section 14, makes 146 and 145, before the review of 3fea963 added a check: section 16.12; section
-14.1 has the scenes.)
+146) all fail it. (GPU1's gpudiag made 124 and 123; GPU2's at bfaac48, before the review of
+3fea963 added a check (section 16.12), made 146 and 145; the gpudiag bitstream of section 14 is
+1620026's, with 147; section 14.1 has the scenes.)
 `sim/gpu/gpudiag_check.py` judges a capture (sections 12.4 to 12.8): a run that ended with PASS and a passing CRC line for
 every scene is whole and judged (with the total of its kind); a run seen only in part (the console
 opened late, a line lost or garbled, a RESET before its end) is cut short and not judged, but
@@ -463,7 +464,7 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 | G1 | surf_vram, the graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, the C display model, gpudiag's window and CPU-drawn scenes, the gpudiag design | VRAM unit test with random CPU and engine traffic; surf_video's graphics modes captured and compared with the model, FRAME_CRC equal to the model's and to the captured pins' CRC; the old video tests unchanged; gpudiag on the RTL SoC (surfsim) prints the model's CRCs | gpudiag through the open flow, every gate; its netlist runs gpudiag as the RTL does | load the gpudiag bitstream: its UART transcript ends in PASS with the expected CRCs; the monitor shows the scenes (the owner looks) |
 | G2 | surf_gpu, its C model, the engine's scenes in gpudiag, both designs | directed tests of every command and edge case, randomized command streams compared with the model at every FENCE, mutants caught; gpudiag's engine scenes in surfsim | gpudiag and ddr_gpu through the open flow, every gate; dram_clk's margin recorded | gpudiag PASS with the engine scenes; ddr_gpu boots SurfOS from the card as the DDR design does |
 | G3 | a SurfOS driver (boards/arty_a7) with shell commands (`gfx mode`, `gfx fill`, `gfx line`, `gfx text`, `gfx crc`) and a demo; **done in simulation and on the host (2026-10-25, section 15)**; then (2026-10-26, 15.8) GPU2's commands (`gfx tri`, `gfx zbuf`, `gfx zclear`, `gfx flip`, `gfx target`), `gfx cube` with every frame shown checked, and the re-review's three lows, **done in simulation and on the host**, with the fixes of that round's review and re-review (15.9) | the driver and `gfx` against the C model on the host (`test-gpuos-host`, with GPU2's commands against the GPU2 model and the cube's frames against their table); SurfOS on the RTL SoC with HAS_GPU (surfsim_gpu): every `gfx crc` the CRC of a frame at the VGA pins and, for graphics alone, the model's (GPU2's triangles worked out from section 16 alone); the overlay; the demo; `gfx cube 1`, every frame at the pins one of the table's; no GPU on QEMU virt and with HAS_GPU = 0 (`test-gpuos`, `test-os-qemu`) | none of its own: the kernel runs on section 14's DDR+GPU bitstream (GPU2's commands and the cube need G4's, 16.11) | **pending** (sections 15.6 and 15.8): the demo and the cube on the monitor; `gfx crc` equal to the model's |
-| G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag at bfaac48 through every gate, LVS proved in full (seed 3, sys_clk 44.71 MHz), and its netlist runs gpudiag to PASS (146 checks, 1.97 s simulated); ddr_gpu at bfaac48 through every gate but LVS, which is outstanding (dram_clk +1.04 ns; section 16.11). The review of 3fea963's fixes (16.12) changed gpudiag but no RTL; gpudiag built again with them at 2ff8b24 did not route with seed 3 (16.11), so the board's gpudiag stays bfaac48's | pending: gpudiag over JTAG with the cube on the monitor (a new frame every second video frame or sooner, the brief's 30+ a second on the 59.94 Hz monitor; no torn frame; from its UART lines), from the bfaac48 bitstream (it lacks the review's checks, which wait for a gpudiag build that routes: 16.11, 16.12); SurfOS's boot stays on G2's ddr_gpu until G4's has its proof (section 14) |
+| G4 | GPU2 (section 16, 2026-10-25): SET_ZBUF (a 16-bit z-buffer in VRAM), TRIANGLE (flat and Gouraud in the palette, exact coverage with the top-left rule, depth tests), FLIP at vertical blanking, the 320x240 double-buffered layout; gpudiag's GPU2 checks and scenes and a spinning cube (no 16-bit colour format: the G4 brief did not ask for one) | done (16.10): the model against hand-worked cases and properties, the RTL against the model at every FENCE (seeds 1 to 3, random streams, ABORT inside TRIANGLE, the CPU on port A), FLIP against the frame latch, mutants; gpudiag on the RTL SoC, every frame of the cube checked by FRAME_CRC | gpudiag with the review's checks at 1620026 through every gate, LVS proved in full (seed 2, sys_clk 43.31 MHz), and its netlist runs gpudiag to PASS (147 checks, 1.98 s simulated); bfaac48's gpudiag (146 checks), before the review, superseded; ddr_gpu at bfaac48 through every gate, LVS proved in full by the --solver route (20,971 proved, 0 differ; dram_clk +1.04 ns; section 16.11). The review of 3fea963's fixes (16.12) changed gpudiag but no RTL; built again with them, gpudiag did not route at 2ff8b24 with seed 3, nor at 1620026 with seed 1, and routed with seed 2 (16.11) | pending: gpudiag over JTAG with the cube on the monitor (a new frame every second video frame or sooner, the brief's 30+ a second on the 59.94 Hz monitor; no torn frame; from its UART lines), from the 1620026 bitstream; SurfOS with GPU2 (G3's `gfx cube`) on G4's ddr_gpu at bfaac48, whose build manifest still records the flow's killed LVS step (section 14) |
 | G5 | optional: the GPU constrained to a region of the die, a faster GPU clock (50 MHz, its own clock domain and crossing on port A) | the crossing's tests at several clock ratios | placement in the region; timing of the faster clock | the G2 and G4 tests again at the faster clock |
 
 ## 12. Record
@@ -942,36 +943,38 @@ with the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is
 gpudiag. Every command runs from the root of the worktree whose build directory holds the two
 bitstreams to test (section 14.2 rebuilds them elsewhere), as `make -C surfcpu` does. The scripts
 run with `python3`: they are not executable files. Since G4 the gpudiag bitstream to test is
-GPU2's (bfaac48, section 16.11): it makes every check GPU1's made (G1, G2) and GPU2's (G4, with the
-cube), so GPU1's gpudiag bitstream of section 12.8 (317c8f4) is superseded and needs no test.
-**The board's gpudiag is the bfaac48 build**, and the steps below are its own, step 4 with
-bfaac48's checker and expected values. It carries gpudiag as it was at bfaac48, before the review
-of 3fea963 (section 16.12), so it lacks that review's checks (16.12 lists them: four of the
-top-left rule's six cases on the SoC, what the refused depth triangles would have drawn, the exact
-frame-rate rule, frames out of order in the free run, the cube's distinct frames; and, as its
-capture is judged with its own checker, a cube line's frames shown and the free run's rate frame
-by frame). Those checks wait for a gpudiag build that routes: the build at 2ff8b24 that carries
-them did not route with seed 3 (section 16.11), and a search of other seeds may come later, when
-the integrator says. Where the gpudiag of the review's fixes differs, the steps say so. The SurfOS
-test (G2) stays on G2's DDR+GPU bitstream (e119a78, section 12.6), which every gate proved: G4's
-DDR+GPU bitstream (bfaac48) passed every gate but LVS, whose proof is outstanding (section 16.11).
-Once it has one, it takes e119a78's place in steps 6 to 8, with its own build id, sha256 and `SoC
-0.4.0`, and SurfOS then boots with the GPU2 engine in the design. The table's two bitstreams come
-from two commits; section 14.2 builds both into one clone.
+GPU2's: it makes every check GPU1's made (G1, G2) and GPU2's (G4, with the cube), so GPU1's gpudiag
+bitstream of section 12.8 (317c8f4) is superseded and needs no test. **The board's gpudiag is the
+build at 1620026** (section 16.11, seed 2), which carries gpudiag with every check of the review
+of 3fea963 and its re-review (section 16.12); the steps below are its own, step 4 with the tree's
+checker. bfaac48's gpudiag bitstream (f9a5ac9c...), before the review, is superseded: it lacks
+the checks 16.12 lists, and a capture of it is judged with bfaac48's own checker and expected
+values (the commands of step 4 as at 1620026: `git show 1620026:surfcpu/docs/GPU.md`). **The
+board's DDR+GPU bitstream is G4's, at bfaac48** (582570ab...): every gate passed and its LVS is
+proved in full (section 16.11), so it takes e119a78's place in steps 6 to 8, with its own build id
+(bfaac489) and `SoC 0.4.0`, and it is the one the owner loads for SurfOS with the GPU2 engine, G3's
+`gfx cube` among its commands. Its build manifest still says `result = "fail"`: the flow's own LVS
+step was killed at the memory cap, and the proof was made afterwards by another route, which the
+manifest does not record. tools/program.sh and board-test refuse a bitstream whose manifest says
+so (steps 6 and 7), so loading it waits for the integrator to settle how that proof is to be
+recorded where they look. G2's DDR+GPU bitstream (e119a78, section 12.6), which passed every gate
+in the flow, is the one they load as they stand, for SurfOS with GPU1. Both of the table's
+bitstreams come from two commits, 1620026 and bfaac48; section 14.2 builds both into one clone.
 
 | Test | The bitstream, in surfcpu/build/fpga/arty_a7_100t/ | Built at, seed | sha256 | The build its banner must show |
 |---|---|---|---|---|
-| G1, G2, G4 | `surfcpu_arty_a7_gpudiag/surfcpu_arty_a7_gpudiag.bit` | bfaac48 (section 16.11), seed 3 | `f9a5ac9cb2430ac938b861e08f1fc31bbb1df602414099998cd02aa9e0131c9f` | `SurfGPU diagnostic 1.0.0 (build bfaac489)`, then `bitstream build bfaac489 flags 0, ...` |
-| G2 (SurfOS) | `surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit` | e119a78 (section 12.6), seed 7 | `b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2` | `SurfBoot 1.1.0 (build e119a787), the SurfCPU boot ROM` |
+| G1, G2, G4 | `surfcpu_arty_a7_gpudiag/surfcpu_arty_a7_gpudiag.bit` | 1620026 (section 16.11), seed 2 | `082eb31a16ed1603c376f1d8f325f4ede34101939d1a94e4892bd4a3dcc4f679` | `SurfGPU diagnostic 1.0.0 (build 16200266)`, then `bitstream build 16200266 flags 0, ...` |
+| G2, G4 (SurfOS, and G3's gfx) | `surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit` | bfaac48 (section 16.11), seed 1 | `582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b` | `SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM` |
 
 **A FAIL is a result.** Any FAIL is the result of the test it came from: a FAIL line or `GPUDIAG:
-FAIL` from gpudiag (also in a run whose start the console missed), a cube line with a torn or a
-missed frame or fewer than 30 frames drawn, gpudiag_check's FAIL, a FAIL or INCOMPLETE from
-board-test, a build id other than the table's, or the owner's no about the picture. Keep its
-capture or evidence file as it is, record the FAIL, and find out why. A retry (RESET, a new capture
-file) is a new test: it does not replace the failed one. G1, G2 and G4 pass only when every capture
-and run made for them passed, or when each failure is explained (its cause found and shown to lie
-outside the design, for example a loose Pmod cable, and written down with the capture).
+FAIL` from gpudiag (also in a run whose start the console missed), a cube line with a torn, a missed
+or an out-of-order frame, a new frame more than 2 video frames after the one before, fewer than 29
+frames drawn or frames shown other than 58 to 61, gpudiag_check's FAIL, a FAIL or INCOMPLETE from
+board-test, a build id other than the table's, or the owner's no about the picture. Keep its capture
+or evidence file as it is, record the FAIL, and find out why. A retry (RESET, a new capture file) is
+a new test: it does not replace the failed one. G1, G2 and G4 pass only when every capture and run
+made for them passed, or when each failure is explained (its cause found and shown to lie outside
+the design, for example a loose Pmod cable, and written down with the capture).
 
 G1, G2 and G4, the diagnostic and the cube:
 
@@ -990,92 +993,89 @@ G1, G2 and G4, the diagnostic and the cube:
          --until 'cube +10 s:[^\n]*\n'
 
    It stops once the cube's tenth line is whole, about 13 seconds after RESET. The first run after
-   RESET is the board test. Its banner must read `SurfGPU diagnostic 1.0.0 (build bfaac489)` and
-   its identity line `bitstream build bfaac489 flags 0, features 17f`, after `board Arty A7-100T
+   RESET is the board test. Its banner must read `SurfGPU diagnostic 1.0.0 (build 16200266)` and its
+   identity line `bitstream build 16200266 flags 0, features 17f`, after `board Arty A7-100T
    (0x100), SoC 0.4.0`: another build id is another gpudiag or another bitstream, so stop. Then come
    its sections, one line per scene with its FRAME_CRC (each the one in section 14.1), the cube's
-   section (`cube: 16 frames at full rate`, 6 checks), `GPUDIAG: PASS (146 checks)` as the
+   section (`cube: 16 frames at full rate`, 6 checks), `GPUDIAG: PASS (147 checks)` as the
    synthesized netlist printed it in simulation (section 16.11), the echo line, the cube's header,
-   and a line a second like `cube    1 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all ...)`
-   (the gpudiag of the review's fixes makes 147 checks, and its line says `1 apart` after the
-   frames shown and `0 out of order` after `0 torn`, in the second and in all: section 16.9):
-   about 60 frames drawn and 60 shown each second (59.94 frames a second, a new frame every video
-   frame; the brief's goal is 30 or more, which bfaac48's checker takes as 30 drawn in each second),
-   none missed (every frame shown was checked) and none torn (every frame shown was a whole frame of
-   the cube, by its FRAME_CRC). If the console opened after that run began, press RESET
-   again, not Ctrl-R: a rerun (145 checks) does not check the values a reset leaves, so it is no
-   full board test. `tools/uart.py console auto --log surfcpu/build/gpudiag-1.log` works too
-   (Ctrl-] to close it after ten cube lines); `--log` appends raw bytes, so give each test its own
-   file: runs of another build in it fail the check.
-4. Check the capture against the build, with the checker and the expected values of the
-   bitstream's own commit, bfaac48 (the three commands as they are, from the same root):
+   and a line a second like
+   `cube    1 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all ...)`
+   (section 16.9): about 60 frames drawn and 60 shown each second (59.94 frames a
+   second, a new frame every video frame, `1 apart`; the brief's goal is 30 or more, a new frame
+   every second video frame or sooner, `2 apart` at most), none missed (every frame shown was
+   checked), none torn (every frame shown was a whole frame of the cube, by its FRAME_CRC) and none
+   out of order. If the console opened after that run began, press RESET again, not Ctrl-R: a rerun
+   (146 checks) does not check the values a reset leaves, so it is no full board test.
+   `tools/uart.py console auto --log surfcpu/build/gpudiag-1.log` works too (Ctrl-] to close it
+   after ten cube lines); `--log` appends raw bytes, so give each test its own file: runs of another
+   build in it fail the check.
+4. Check the capture against the build, with the tree's checker and expected values:
 
-       git show bfaac48:surfcpu/sim/gpu/gpudiag_check.py > /tmp/gpudiag_check_bfaac48.py
-       git show f6e14c4:surfcpu/docs/evidence/gpu-g4/gpuscenes_expect-bfaac48.txt > /tmp/gpuscenes_expect_bfaac48.h
-       python3 /tmp/gpudiag_check_bfaac48.py --uart surfcpu/build/gpudiag-1.txt --frames - \
-         --expect /tmp/gpuscenes_expect_bfaac48.h --cube-seconds 10 \
+       shasum -a 256 surfcpu/build/fw/gen/gpuscenes_expect.h
+       python3 surfcpu/sim/gpu/gpudiag_check.py --uart surfcpu/build/gpudiag-1.txt --frames - \
+         --expect surfcpu/build/fw/gen/gpuscenes_expect.h --cube-seconds 10 \
          --manifest surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/manifest.txt
 
-   It passes only when no line shows a failure, every run that ended passed, the capture ends with
-   one and its cube lines (the capture may end inside one), one at least is a first run, no run
-   shows a build other than the manifest's (bfaac489) and one whole run at least shows that one, no
-   run shows a dirty banner or bitstream line (the manifest says the tree was clean), and ten cube
-   lines at least follow the last run, each with 30 or more frames drawn and none missed or torn.
-   The first file is bfaac48's checker. The second is the gpuscenes_expect.h that bfaac48's build
-   writes (a generated file, so not in git at bfaac48): f6e14c4 keeps it byte for byte (sha256
-   6ad57705bb6ed81c0c66ad0c7e89f5f79ef62d893674726f8e0ade22f01c1779), and the clone of section 14.2
-   writes the same file into its build/fw/gen/ at its last build-rom. `git show` takes both from
-   the repository, whatever is checked out. **Not the tree's checker or the tree's expected
-   values**: they are those of the gpudiag after the review of 3fea963 (section 16.12) and fail a
-   bfaac48 capture that passes. That gpudiag makes 147 checks, so a run of 146 counts as a rerun;
-   its scene 13 is 9368fe97 (bfaac48's bbb6a4cb) and its cube's CRCs differ; and the tree's checker
-   wants cube lines with frames apart and out of order, which bfaac48's gpudiag does not print (the
-   re-review of b2c765d, low 1: with bfaac48's header and the tree's checker, `FAIL: 0 of the
-   cube's lines after the last run, 10 wanted`). The manifest must be a gpudiag build's that passed
-   its checks. `--build-id bfaac489` names the build without the manifest, but does not know whether
-   it was clean. `--accept-rerun` would take reruns alone, which is not this test.
+   The first must print `178d98eac5ed76f625aaae54165bff44d6ad3bf3f4dab8bc9f8cbca52547cbc9`, the
+   expected values of 1620026's gpudiag, which the bitstream carries (the same as 2ff8b24's);
+   another value means the tree has built another gpudiag since: then leave `--expect` out, and
+   gpudiag's own comparisons with the values its ROM carries are taken. The check passes only when
+   no line shows a failure, every run that ended passed, the capture ends with one and its cube
+   lines (the capture may end inside one), one at least is a first run, no run shows a build other
+   than the manifest's (16200266) and one whole run at least shows that one, no run shows a dirty
+   banner or bitstream line (the manifest says the tree was clean), and ten cube lines at least
+   follow the last run, each with no frame torn, missed or out of order, 58 to 61 frames shown,
+   its new frames at most 2 video frames apart and 29 or more drawn. The manifest must be a gpudiag
+   build's that passed its checks. `--build-id 16200266` names the build without the manifest, but
+   does not know whether it was clean. `--accept-rerun` would take reruns alone, which is not this
+   test.
 5. The monitor: each scene shows for about a twentieth of a second while it is checked (GPU2's four
    last: a fan and a mesh of flat triangles; eight Gouraud ramps; two triangles crossing in depth;
-   a fan of Gouraud triangles with SURFGPU, flipped to), then the cube spins, one turn in about two
-   seconds, under a green bar `GPUDIAG: PASS   the SurfGPU cube: Gouraud triangles, a depth buffer,
-   page flips`. The owner confirms: up to three faces in their six colours, each shaded from dark
-   to bright, the hidden faces hidden, smooth motion with no picture split across a line or
-   flickering, the bar steady. (The cube of the review's fixes stands on a corner and turns about
-   the vertical: two or three faces in every frame, all six colours over a turn; section 16.9.) (After a FAIL there is no cube: the last scene stays with a red bar,
-   as GPU1's gpudiag did.) The cube lines are the frame-by-frame record: the CRC of every frame
-   shown was one of the cube's.
+   a fan of Gouraud triangles with SURFGPU, flipped to), then the cube spins, standing on a corner
+   and turning about the vertical, one turn in about two seconds, under a green bar
+   `GPUDIAG: PASS   the SurfGPU cube: Gouraud triangles, a depth buffer, page flips`. The owner
+   confirms: two or three faces in every frame and all six colours over a turn (section 16.9), each
+   face shaded from dark to bright, the hidden faces hidden, smooth motion with no picture split
+   across a line or flickering, the bar steady. (After a FAIL there is no cube: the last scene stays
+   with a red bar, as GPU1's gpudiag did.) The cube lines are the frame-by-frame record: the CRC of
+   every frame shown was one of the cube's.
 
-G2, the DDR+GPU design with GPU1's engine (e119a78), which boots SurfOS from the card exactly as
-`surfcpu_arty_a7_ddr` does:
+G2 and G4 on the DDR+GPU design at bfaac48 (the GPU2 engine), which boots SurfOS from the card
+exactly as `surfcpu_arty_a7_ddr` does:
 
 6. Check its bitstream first: `shasum -a 256
-   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit` must print
-   the table's sha256; then load it with `make -C surfcpu program-volatile BOARD=arty_a7_100t
-   DESIGN=surfcpu_arty_a7_ddr_gpu`. Not a bitstream from `make build-fpga ...
-   DESIGN=surfcpu_arty_a7_ddr_gpu` at another commit: that is another placement (seed 1 at e119a78
-   gave +0.563 ns, other commits other placements).
+   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit` must
+   print the table's sha256 (fpga-build copies a bitstream out to `surfcpu_arty_a7_ddr_gpu.bit`
+   only when every check of the flow passed, and the flow's LVS step was killed: section 16.11).
+   **Loading it waits for the integrator**: `make -C surfcpu program-volatile BOARD=arty_a7_100t
+   DESIGN=surfcpu_arty_a7_ddr_gpu` finds no `surfcpu_arty_a7_ddr_gpu.bit`, and with `BIT=` naming
+   this file tools/program.sh refuses it, the manifest next to it saying `check LVS FAIL`. Not a
+   bitstream from `make build-fpga ... DESIGN=surfcpu_arty_a7_ddr_gpu` at another commit: that is
+   another netlist and another placement (section 16.11).
 7. Run m7 of PHYSICAL-TESTS.md with this design:
 
        make -C surfcpu board-test M=m7 DESIGN=surfcpu_arty_a7_ddr_gpu
 
    (`DESIGN=` reaches board-test as `--design`; `ARGS="--design surfcpu_arty_a7_ddr_gpu"` does the
    same.) It asks you to load that design and compares the bitstream with its build manifest,
-   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt (build_id e119a787,
-   source_dirty false); it refuses to start when that manifest is missing or is another design's.
+   surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt (build_id bfaac489,
+   source_dirty false); it refuses to start when that manifest is missing or is another design's,
+   and fails when it says `result = "fail"`, as this one does until the integrator settles step 6.
    Without `DESIGN=` it asks for `surfcpu_arty_a7_ddr`, whose manifest this build directory does not
    have, and refuses. The lines that show the identity: in the transcript, SurfBoot's `SurfBoot 1.1.0
-   (build e119a787), the SurfCPU boot ROM` and `soc: Arty A7-100T (0x100), SoC 0.3.0, memory map 2,
-   25000000 Hz; bitstream e119a787` (no `dirty`); in the evidence's identity section, `SurfBoot
-   1.1.0, ROM build e119a787`, `bitstream build e119a787, flags 0, board id 0x100` and `the
-   bitstream's build id e119a787 is the manifest's (e119a787, ...)`; and among its checks `ok the
-   bitstream's build id e119a787 is the manifest's` and `ok its dirty flag (0) matches the
+   (build bfaac489), the SurfCPU boot ROM` and `soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2,
+   25000000 Hz; bitstream bfaac489` (no `dirty`); in the evidence's identity section, `SurfBoot
+   1.1.0, ROM build bfaac489`, `bitstream build bfaac489, flags 0, board id 0x100` and `the
+   bitstream's build id bfaac489 is the manifest's (bfaac489, ...)`; and among its checks `ok the
+   bitstream's build id bfaac489 is the manifest's` and `ok its dirty flag (0) matches the
    manifest's source_dirty = false`.
 8. The GPU among the features, from SurfBoot's monitor. Open the console (`python3
    surfcpu/tools/uart.py console auto --log surfcpu/build/ddrgpu-info-1.log`), hold BTN1 down,
    press and release RESET, and keep holding BTN1 until `surfboot>` appears (SurfBoot first prints
    `BTN1 held: staying in the monitor`); release BTN1, type `info` and Enter. It must print `SurfBoot
-   1.1.0 build e119a787`, `sysinfo: magic 46525553, SoC 00000300, map 2, board 00000100, bitstream
-   build e119a787 flags 0, time 1792363017` and `clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel
+   1.1.0 build bfaac489`, `sysinfo: magic 46525553, SoC 00000400, map 2, board 00000100, bitstream
+   build bfaac489 flags 0, time 1792971531` and `clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel
    25173611 Hz; features 1ff (uart timer irq gpio spi ps2 video ddr)`: 1ff has the GPU bit (0x100),
    which the label list predates. Another build id is another bitstream or boot ROM. Press RESET
    (holding no button) to boot again.
@@ -1086,8 +1086,8 @@ The C model's values for gpudiag's scenes and the cube (`build/fw/gen/gpuscenes_
 by `make build-rom`; `make gpu-scenes` writes each scene's frame as
 `build/fw/gpuscenes/scene-NN.ppm` and every 16th frame of the cube's free run as `cube-NN.ppm`).
 They do not depend on the build: the same numbers on every bitstream with this gpudiag. Where the
-gpudiag of the review of 3fea963's fixes (section 16.12) differs from bfaac48's, the gpudiag of the
-bitstream of section 14, both are given: bfaac48's in parentheses.
+gpudiag of the review of 3fea963's fixes (section 16.12), the bitstream of section 14's, differs
+from bfaac48's (superseded), both are given: bfaac48's in parentheses.
 
 | Scene | What the monitor shows | FRAME_CRC |
 |---|---|---|
@@ -1128,30 +1128,46 @@ clone, from its root:
     git clone <the repository> surfos && cd surfos   # git status must show nothing at each checkout
     unset SURFCPU_FPGA_OUT ROM OPENXC7_PNR_TIMEOUT PLACER_SEEDS   # build/fpga, the lists' ROMs, 1800 s
     export LC_ALL=C TZ=UTC
-    git checkout e119a78                             # the DDR+GPU design, section 12.6
-    export SOURCE_DATE_EPOCH=1792363017              # git log -1 --format=%ct e119a78
-    make -C surfcpu build-rom
-    make -C surfcpu litedram-gen                     # its LiteDRAM core (fetches pinned sources once)
-    PLACER_SEEDS=7 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
-    git checkout bfaac48                             # gpudiag, section 16.11, last: its build/fw is the checker's
+    git checkout bfaac48                             # the DDR+GPU design, section 16.11
     export SOURCE_DATE_EPOCH=1792971531              # git log -1 --format=%ct bfaac48
     make -C surfcpu build-rom
-    PLACER_SEEDS=3 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
+    make -C surfcpu litedram-gen                     # its LiteDRAM core (fetches pinned sources once)
+    PLACER_SEEDS=1 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+    git checkout 1620026                             # gpudiag, section 16.11, last: its build/fw is the checker's
+    export SOURCE_DATE_EPOCH=1793107369              # git log -1 --format=%ct 1620026
+    make -C surfcpu build-rom
+    PLACER_SEEDS=2 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag
 
 on an Apple Silicon Mac (Darwin-arm64, the containers aarch64) with surfcpu-toolchain:2026-10-15
 (image sha256:e4389c3c6d93...) and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37...; its chip
-database's sha256 is checked against devenv/openxc7/chipdb.sha256). PLACER_SEEDS gives each
-build only the seed it was placed with (without it the lists' seeds are tried in turn, and a
-loaded machine could stop at the time limit a seed that routed here). Nothing may be untracked
-either: devenv/run.sh would build the boot ROM as dirty while the manifest says clean (section
-16.11). Expected: surfboot.mem
-cb83ad33c0f25c9dbd95880e758bd9e288139413bdb1964b7bb8977f3b176005 and `surfcpu_arty_a7_ddr_gpu.bit`
-b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2; gpudiag.mem
-aaee817dc8a0ad3c37d3fb95050cbe8504fc4dcda1cc3339820cae96cdc8947a and `surfcpu_arty_a7_gpudiag.bit`
-f9a5ac9cb2430ac938b861e08f1fc31bbb1df602414099998cd02aa9e0131c9f. Then test them from that clone's
-root as section 14 says, its step 1 first. gpudiag at bfaac48 was built twice, with a dirty and with
-a clean boot ROM (section 16.11), and the two placed and routed alike, seed for seed; a second build
-of the same inputs, to compare the sha256, was not made.
+database's sha256 is checked against devenv/openxc7/chipdb.sha256). PLACER_SEEDS gives each build
+only the seed it was placed with (without it the lists' seeds are tried in turn, and a loaded
+machine could stop at the time limit a seed that routed here). Nothing may be untracked either:
+devenv/run.sh would build the boot ROM as dirty while the manifest says clean (section 16.11). The
+DDR+GPU build ends in FAIL on LVS alone, the flow's proof killed at a 3.5 GB cap as in 16.11, and
+leaves its bitstream in openxc7/; its proof by the --solver route is that section's (its two scripts
+are in [lvs-ddr-gpu-bfaac48.txt](evidence/gpu-g4/lvs-ddr-gpu-bfaac48.txt), not in git as files).
+Expected: surfboot.mem 6da7c06a822ace3be43fb1a464346e554a54701db733c71c4bce65fbdc5ccc03 and
+`surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit`
+582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b; gpudiag.mem
+e2456fd314d661e2a909195a054588fde3f89c5b724dbac717ddc723637d19e6 and `surfcpu_arty_a7_gpudiag.bit`
+082eb31a16ed1603c376f1d8f325f4ede34101939d1a94e4892bd4a3dcc4f679. (bfaac48's gpudiag, superseded:
+`PLACER_SEEDS=3` at bfaac48, gpudiag.mem aaee817d... and bitstream f9a5ac9c...) G2's DDR+GPU
+bitstream (section 12.6), the one the tools load as they stand, for SurfOS with GPU1, shares the
+design's build directory, so it rebuilds in a clone of its own, with the same settings:
+
+    git checkout e119a78                             # G2's DDR+GPU design, section 12.6
+    export SOURCE_DATE_EPOCH=1792363017              # git log -1 --format=%ct e119a78
+    make -C surfcpu build-rom
+    make -C surfcpu litedram-gen
+    PLACER_SEEDS=7 make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+
+Expected: surfboot.mem cb83ad33c0f25c9dbd95880e758bd9e288139413bdb1964b7bb8977f3b176005 and
+`surfcpu_arty_a7_ddr_gpu.bit` b3c750cbe0caeaf867f541a73bcd038d92e41ac26130f3e6908f54491c2e68f2. Then
+test them from the clone's root as section 14 says, its step 1 first. gpudiag at bfaac48 was built
+twice, with a dirty and with a clean boot ROM (section 16.11), and the two placed and routed alike,
+seed for seed; a second build of the same inputs, to compare the sha256, was not made, of either
+commit.
 
 ## 15. SurfOS's driver and the `gfx` command (G3)
 
@@ -2160,14 +2176,15 @@ lies between the smallest and the largest vertex value, so the rounded t = floor
   `tri_clamped` of the values the clamp would change, which every test requires to be 0, is the
   same claim checked over 27.6 million random pixels.
 
-### 16.11 Synthesis and the netlist (2026-10-25 and 26)
+### 16.11 Synthesis and the netlist (2026-10-25 to 27)
 
 Every number from the open flow is nextpnr's estimate, not Vivado sign-off, and nothing was loaded
-on a board: the physical tests are section 14's. **Where the gates stand:** the gpudiag bitstream at
-bfaac48 passed every gate of the open flow, LVS proved in full, and it is the board's; gpudiag built
-again at 2ff8b24, with the review's checks, did not route with seed 3 (below); the DDR+GPU bitstream
-at bfaac48 passed every gate but LVS, whose proof is outstanding (below). Until it has one, SurfOS's
-gfx on the board can use G2's DDR+GPU bitstream (GPU1, section 12.6), which is proved.
+on a board: the physical tests are section 14's. **Where the gates stand:** gpudiag with the
+review's checks, built at 1620026, passed every gate of the open flow with seed 2, LVS proved in
+full, and its netlist runs gpudiag to PASS: it is the board's gpudiag (below; bfaac48's, before the
+review, also passed every gate and is superseded; at 2ff8b24 seed 3 did not route); the DDR+GPU
+bitstream at bfaac48 passed every gate, its LVS proved in full by lvs_equiv's --solver route after
+the flow's own proof was killed at the memory cap (below), and it is the board's DDR+GPU bitstream.
 
 **The bitstreams of this record** (each from a tree without changes to tracked files; "dirty" marks
 a boot ROM built while untracked files were in the tree):
@@ -2177,17 +2194,17 @@ a boot ROM built while untracked files were in the tree):
 | gpudiag | 804127d, seeds 1-2 tried | gpudiag.mem fb548286... | none | not routed (1,800 s a seed) | superseded |
 | gpudiag | bfaac48, seed 3 | gpudiag.mem 7b51212d..., dirty | 8ab254ac... | every gate | superseded: its banner says "dirty tree" |
 | ddr_gpu | bfaac48, seed 1 | surfboot.mem 6c8c8ea1..., dirty | 1914436b... | every gate but LVS | superseded: dirty boot ROM |
-| **gpudiag** | **bfaac48, seed 3** | gpudiag.mem aaee817d... | **f9a5ac9c...** | **every gate, LVS proved in full** | **the one to test (section 14)** |
-| ddr_gpu | bfaac48, seed 1 | surfboot.mem 6da7c06a... | 582570ab... | every gate but LVS (outstanding) | not to test until its proof |
-| gpudiag | 2ff8b24, seed 3 | gpudiag.mem e782217a... | none | not routed (1,800 s) | none: the review's checks wait for a build that routes |
+| gpudiag | bfaac48, seed 3 | gpudiag.mem aaee817d... | f9a5ac9c... | every gate, LVS proved in full | superseded by 1620026's: it lacks the review's checks (16.12) |
+| **ddr_gpu** | **bfaac48, seed 1** | surfboot.mem 6da7c06a... | **582570ab...** | **every gate, LVS proved in full by the --solver route** (the flow's own step killed: its manifest says FAIL) | **the board's (section 14)** |
+| gpudiag | 2ff8b24, seed 3 | gpudiag.mem e782217a... | none | not routed (1,800 s) | none |
+| **gpudiag** | **1620026, seed 2** (seed 1 not routed, 1,800 s) | gpudiag.mem e2456fd3... | **082eb31a...** | **every gate, LVS proved in full** | **the one to test (section 14)** |
 
-The gpudiag bitstream to test carries gpudiag as it was at bfaac48. That gpudiag checks the
-top-left rule's top case for edge 0 only at engine level (test_gpu), not on the SoC: its scenes had
-no horizontal edge through pixel centres, and the SoC mutant of that rule got past it (16.10).
-Scene 13's fix came after the build (32e1a86) and changes scene 13's FRAME_CRC from bbb6a4cb to
-a04d1e8a; the review of 3fea963 then changed gpudiag further (16.12: scene 13 9368fe97, a new cube,
-147 checks), and lists what the bitstream lacks of it. A gpudiag bitstream that carries them waits
-for a build that routes: the one at 2ff8b24 did not with seed 3 (below).
+The gpudiag bitstream to test is the 1620026 build: it carries gpudiag with every check of the
+review of 3fea963 and its re-review (16.12: scene 13 9368fe97, the corner-standing cube, 147 checks,
+the free run's lines with frames apart and out of order). bfaac48's, before them, is superseded:
+its gpudiag checked the top-left rule's top case for edge 0 only at engine level (test_gpu), not on
+the SoC (its scenes had no horizontal edge through pixel centres, and the SoC mutant of that rule
+got past it: 16.10), and 16.12 lists what else it lacks.
 
 **The first build did not route.** At 804127d, with a multiplier for every product of the setup and
 four dividers at once ([evidence](evidence/gpu-g4/synth-gpudiag-r1.txt)), the gpudiag design took
@@ -2214,7 +2231,7 @@ own boot ROM (gen/fw_build.h), refuses a ROM of another build or one older than 
 counts a ROM built from a dirty tree as a dirty bitstream (BUILD_FLAGS bit 0 and the manifest's
 source_dirty), so a build like these first two can no longer pass as clean.
 
-**The gpudiag design at bfaac48**, the bitstream to test
+**The gpudiag design at bfaac48**, the bitstream to test until 1620026's
 ([evidence](evidence/gpu-g4/synth-gpudiag.txt)), 2 hours 31 minutes on the Mac; it placed and
 routed exactly as the build with the dirty ROM:
 
@@ -2252,7 +2269,8 @@ did only at the same commit: the two builds of gpudiag at bfaac48, whose boot RO
 alike, seed for seed. At another commit the build id and the build time, which synthesis takes as
 design constants, give another netlist and another placement for every seed (section 14.2): the
 rebuild at 2ff8b24 below did not route with seed 3. So gpudiag sits near the open flow's routing
-edge: one seed in three routed at bfaac48, and seed 3 did not at 2ff8b24.
+edge: one seed in three routed at bfaac48, seed 3 did not at 2ff8b24, and at 1620026 seed 1 did not
+and seed 2 did (below): two placements in six routed, each a draw of its own.
 
 **The rebuild at 2ff8b24 did not route** ([evidence](evidence/gpu-g4/synth-gpudiag-r3-failed.txt)).
 gpudiag with the review's checks (16.12) was built as section 14.2 says, at 2ff8b24 from a clean
@@ -2268,9 +2286,33 @@ against 3,242, LUT3 1,982 against 1,997), 493 INV against 486, no MUXF7 against 
 placed otherwise (12,540 cells against 12,521; sys_clk estimated at 44.36 MHz against 49.05), and
 its router came down to 98 wires overused at iteration 67, then diverged, to 6,078 at iteration
 129, when the flow's limit of 1,800 s stopped it: `fpga-build: FAIL`, no bitstream. No other seed
-was tried (each holds both of the session's Docker slots for up to 30 minutes): the integrator's
-decision is that the board's gpudiag stays the bfaac48 build, and a seed search for one with the
-review's checks may come after the DDR+GPU proof, when the integrator says.
+was tried at 2ff8b24 (each holds both of the session's Docker slots for up to 30 minutes); the
+seed search came after the DDR+GPU proof, at 1620026 (below).
+
+**The gpudiag design at 1620026**, the bitstream to test
+([evidence](evidence/gpu-g4/synth-gpudiag-r4.txt)): gpudiag with the review's checks (2ff8b24's
+sources; 1620026 changed only GPU.md and evidence), built as section 14.2 says from a clean tree,
+with SOURCE_DATE_EPOCH 1793107369 and the design's own seed list (PLACER_SEEDS unset), 1 hour 26
+minutes on the Mac. Its netlist is another draw again: 19,713 cells (11,519 LUTs), against 19,739 at
+bfaac48 and 19,745 at 2ff8b24, from the same sources and constraints. Boot ROM gpudiag.mem
+e2456fd314d661e2a909195a054588fde3f89c5b724dbac717ddc723637d19e6 (build 16200266, clean); bitstream
+`surfcpu_arty_a7_gpudiag.bit` 082eb31a16ed1603c376f1d8f325f4ede34101939d1a94e4892bd4a3dcc4f679.
+
+| | Result |
+|---|---|
+| gates | **every gate PASS**: SRL cells, synthesis, bitstream, round trip, block RAM, LVS (16,212 proved, 0 differ, 0 unknown, in 43 minutes), clocks, the slack margin, the netlist check (every RTL memory in RAM cells; 6 DSP48E1, the CPU's 4 and the setup's 2) and the boot ROM check |
+| placement | seed 2 of 1 to 8: seed 1 placed (sys_clk estimated at 43.64 MHz), its router came down to 2,811 wires overused at iteration 11, then diverged, to 8,229 at iteration 28 when the flow's limit of 1,800 s stopped it; seed 2 (estimated 42.96 MHz) routed in 59 iterations (110 s of router2, 488 s of nextpnr in all) |
+| timing (nextpnr) | sys_clk 43.31 MHz (+16.913 ns at 25 MHz, the rule wanting 1.600 ns), pix_clk 87.23 MHz (+28.260 ns at 25.17 MHz); no hold violations; cross-domain paths 1.26 and 1.71 ns (reported, checked against nothing) |
+| sys_clk critical path | 23.09 ns (4.63 logic, 18.46 routing): GPU1's engine's column group `cg` (surf_gpu.v:201) into the enable of a block RAM of VRAM bank 3, as in the DDR+GPU design; the walker is not on it |
+| pix_clk critical path | 11.46 ns: S3's pixel to the FRAME_CRC update, as at bfaac48 and in G2 |
+| LUTs | 12,009 of 63,400 (18.9 %); 19,870 LUT positions |
+| flip-flops | 6,161 of 126,800 (4.9 %): surf_gpu 916, the walker 1,898, its divider 144, as at bfaac48 |
+| CARRY4 | 1,289 of 15,850 (8.1 %) |
+| block RAM | 112.5 of 135 RAMB36 (83.3 %) |
+| DSP48E1 | 6 of 240 |
+
+The integrator had said to stop the search after seed 2 if seed 2 did not route (the Docker slots
+were wanted for the flow's own LVS work); it routed, so seeds 3 to 8 were not needed.
 
 **The DDR+GPU design at bfaac48** ([evidence](evidence/gpu-g4/synth-ddr-gpu.txt)), SurfOS's design
 with GPU2, built again with the clean boot ROM as gpudiag was (the two builds placed, routed and
@@ -2278,7 +2320,7 @@ timed alike, and their LVS was killed at the same point), beside G2's (12.2):
 
 | | surfcpu_arty_a7_ddr_gpu at bfaac48 | at 32bffc8 (G2) |
 |---|---|---|
-| gates | every gate PASS but LVS, **outstanding**: the flow's proof was killed at this session's Docker cap of 3.5 GB (exit 137 after 3,058 s, 8,606 proved, 0 differ) | every gate PASS (LVS 18,760 proved) |
+| gates | every gate PASS; LVS **proved in full by the --solver route** (20,971 proved, 0 differ, 0 unknown, in 13 h 52 min), after the flow's own proof was killed at this session's Docker cap of 3.5 GB (exit 137 after 3,058 s, 8,606 proved, 0 differ) | every gate PASS (LVS 18,760 proved) |
 | placement | seed 1 of 1 to 8 routed (18 iterations, 54 s) | seed 1 |
 | dram_clk (80 MHz) | 87.24 MHz, **+1.037 ns** | 88.79 MHz, +1.237 ns |
 | sys_clk (25 MHz) | 43.44 MHz, +16.982 ns | 53.98 MHz, +21.476 ns |
@@ -2294,7 +2336,7 @@ dram_clk keeps its margin above the rule's 0.5 ns (+1.04 ns); its critical path 
 own (its ZQCS timer to a bank machine's read, 11.46 ns), and sys_clk's is GPU1's engine's column
 group `cg` (surf_gpu.v:201), both as in G2. One placement is one sample (12.2).
 
-**The DDR+GPU proof, outstanding, and its planned route.** The flow's LVS keeps one incremental Z3
+**The DDR+GPU proof, by lvs_equiv's --solver route.** The flow's LVS keeps one incremental Z3
 session (lvs_equiv's default, `--solver libz3`), whose memory grows with the questions: it was past
 3.5 GB at 41 % of them (8,606 proved of about 21,000, none differing), so a whole run would want
 about 8.5 GB, more than the Docker VM's 7.75 GiB. lvs_equiv's own `--solver <cmd>` route asks the
@@ -2306,23 +2348,51 @@ an error or any other answer counts as unknown, never as proved; it is self-test
 unsat, a known sat and a malformed question first), and `build/g4-lvs/lvs-solver.sh` runs it with
 the flow's arguments on a build's own files. A 15-minute trial on the first DDR+GPU build: 2,346
 proved, 0 differ, 0 unknown, with peaks of 1.13 GB (the largest process) and 2.09 GB (the container,
-page cache included); its question files grew from 3.2 MB to 11.4 MB. The whole proof by this route
-is expected to take 15 to 20 hours within the cap. It is planned once, on the DDR+GPU bitstream
-that goes to the board, after the review: a fix to the RTL would need another build and another
-proof.
+page cache included); its question files grew from 3.2 MB to 11.4 MB.
 
-**The gpudiag netlist in simulation** ([evidence](evidence/gpu-g4/netlist-sim.txt)): the
-synthesized netlist of the gpudiag bitstream to test, run from its pins with its boot ROM inside it
-(`make gpu-netlist-sim`, Verilator, NETLIST_MAX_MS=3000), printed `SurfGPU diagnostic 1.0.0 (build
-bfaac489)` and `bitstream build bfaac489 flags 0, features 17f`, every section with the model's
-CRCs (the 17 scenes, GPU2's four among them, and the cube's 16 frames at full rate in 16 video
-frames), and `GPUDIAG: PASS (146 checks)` at 1.974 s of simulated time, after 3 hours 19 minutes
-(165 microseconds simulated a second); gpudiag_check passed the transcript against the build's
-manifest. It is the
-first evidence that synthesis made the triangle engine, the depth buffer and FLIP as the RTL says
-(LVS proves the bitstream equal to the synthesized netlist, not the netlist to the RTL). That
-bitstream is the board's, so this is its netlist's run; a gpudiag build that routes later gets one
-of its own.
+**The DDR+GPU bitstream at bfaac48, proved in full**
+([evidence](evidence/gpu-g4/lvs-ddr-gpu-bfaac48.txt)). The integrator ran `lvs-solver.sh
+surfcpu_arty_a7_ddr_gpu 86400` in this worktree (HEAD 988b76a, the tree clean) through the capped
+Docker wrapper, both slots, on the build of bitstream
+582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b, from 2026-10-26T23:19:52Z to
+2026-10-27T13:12:19Z: `20971 proved, 0 differ, 0 unknown (49942.9s)`, `lvs-solver.sh: exit 0`, and
+every one of the 20,971 questions answered unsat. Registers 8,709 gold, 8,709 gate, all matched by
+name; memories 404 gold, 501 gate, 404 paired and checked at the boundary; of the 184 hard blocks,
+the 3 the tile model does not model (u_clocks.u_pix_mmcm, u_clocks.u_sys_pll and u_dram.IDELAYCTRL)
+are checked by nothing here (the clocks check compares the MMCM and PLL settings with XAPP888).
+libz3 4.13.3, its self-tests answering unsat, sat and an error as they should; 13 h 52 min 26 s of
+wall time; lvs_equiv's largest resident set (its own or a solver's) 2,599,464 kB. memory.peak and
+the highest memory.current sampled both equal memory.max, 3,670,016,000 bytes: the cgroup counts the
+file cache too, and the run wrote 800.8 GB of question files (3.2 to 48.3 MB each), so the cache
+filled the cgroup to its limit; the proof's processes stayed below it (2.6 GB at most), and the run
+ended with exit 0, no question killed or unknown. The build's manifest still says `check LVS FAIL`
+and `result = "fail"`, the flow's own step: section 14 says what that means for loading it.
+
+**The gpudiag netlist in simulation** ([evidence](evidence/gpu-g4/netlist-sim.txt)): the synthesized
+netlist of bfaac48's gpudiag bitstream (the one to test until 1620026's), run from its pins with its
+boot ROM inside it (`make gpu-netlist-sim`, Verilator, NETLIST_MAX_MS=3000), printed `SurfGPU
+diagnostic 1.0.0 (build bfaac489)` and `bitstream build bfaac489 flags 0, features 17f`, every
+section with the model's CRCs (the 17 scenes, GPU2's four among them, and the cube's 16 frames at
+full rate in 16 video frames), and `GPUDIAG: PASS (146 checks)` at 1.974 s of simulated time, after
+3 hours 19 minutes (165 microseconds simulated a second); gpudiag_check passed the transcript
+against the build's manifest. It is the first evidence that synthesis made the triangle engine, the
+depth buffer and FLIP as the RTL says (LVS proves the bitstream equal to the synthesized netlist,
+not the netlist to the RTL).
+
+**The netlist of the gpudiag bitstream to test, 1620026's**, in simulation
+([evidence](evidence/gpu-g4/netlist-sim-r2.txt)), as above (`make gpu-netlist-sim`,
+NETLIST_MAX_MS=3000), split in two containers: the target's own first run, in one small slot of
+the capped Docker wrapper (1,750 MB), ended with `Verilator threw signal 9`, its `-j 4` compile
+killed at that limit, so a copy of netlist_sim.sh (under the ignored build/, the tracked script
+unchanged) compiled in a big container (38 s) and another ran the same binary, with the same
+arguments and transcript, in a small one, gpudiag_check after it as the target runs it. It printed
+`SurfGPU diagnostic 1.0.0 (build 16200266)` and `bitstream build 16200266 flags 0, features 17f`,
+every section with the model's CRCs (the 17 scenes, scene 13 with its diamonds 9368fe97, and the
+cube's 16 frames at full rate in 16 video frames, `1 apart at most`), and `GPUDIAG: PASS (147
+checks)` at 1.975 s of simulated time, after 3 hours 10 minutes (173 microseconds simulated a
+second); gpudiag_check passed the transcript against the build's manifest, and against the tree's
+expected values (gpuscenes_expect.h 178d98ea..., 147 checks) too. It is that evidence for the
+bitstream that goes to the board.
 
 ### 16.12 The review of 3fea963 (2026-10-26)
 
@@ -2351,19 +2421,20 @@ mutant, by scene 13's CRC (at bfaac48 158 pixels of its mesh and its fan, whose 
 through pixel centres); edge 1's left case is the one only the free run's cube frames would have shown (as
 torn frames).
 
-**What the bfaac48 bitstream lacks.** The gpudiag bitstream of section 14 carries gpudiag as it was
-at bfaac48 (146 checks, scene 13 bbb6a4cb, the first cube), and a capture of it is judged with
-bfaac48's checker and bfaac48's expected values (section 14 step 4: today's fail it, by its check
-count, its CRCs and its cube lines, which have no frames apart or out of order). Of this round's
-checks it lacks: on the SoC, the top-left rule's top cases of edges 0, 1 and 2 and the left case of
-edge 1 (the last would show in its free run's cube lines as torn frames); the VRAM halves of the
-depth refusals and the refused SET_ZBUF's own BAD_PARAM, so a TRIANGLE drawn without a depth buffer
-passes it; the frame by frame rate rule, so a cube at 28 frames a second passes its checks; frames
-out of order in the free run; and distinct cube frames (frame 73 stands for frame 9). Its checker
-lacks the rules for the cube's lines that came after it: 58 to 61 frames shown (L2: a line of 60
-drawn and 0 shown, nothing checked, passes it) and the frame by frame rule in the free run (the
-re-review's low 2, below: it wants 30 drawn in each second instead, which the cube's 60 a second in
-simulation meet). No RTL changed, so its 146 checks pass on today's RTL SoC as they did.
+**What the bfaac48 bitstream lacks** (superseded since by the 1620026 build, which carries all of
+this round's checks: 16.11). It carries gpudiag as it was at bfaac48 (146 checks, scene 13 bbb6a4cb,
+the first cube), and a capture of it is judged with bfaac48's checker and bfaac48's expected values
+(section 14's step 4 as at 1620026: today's fail it, by its check count, its CRCs and its cube
+lines, which have no frames apart or out of order). Of this round's checks it lacks: on the SoC, the
+top-left rule's top cases of edges 0, 1 and 2 and the left case of edge 1 (the last would show in
+its free run's cube lines as torn frames); the VRAM halves of the depth refusals and the refused
+SET_ZBUF's own BAD_PARAM, so a TRIANGLE drawn without a depth buffer passes it; the frame by frame
+rate rule, so a cube at 28 frames a second passes its checks; frames out of order in the free run;
+and distinct cube frames (frame 73 stands for frame 9). Its checker lacks the rules for the cube's
+lines that came after it: 58 to 61 frames shown (L2: a line of 60 drawn and 0 shown, nothing
+checked, passes it) and the frame by frame rule in the free run (the re-review's low 2, below: it
+wants 30 drawn in each second instead, which the cube's 60 a second in simulation meet). No RTL
+changed, so its 146 checks pass on today's RTL SoC as they did.
 
 **The re-review of b2c765d** (2026-10-26) found the five findings above fixed and three new lows.
 The fixes are 3b9c8d0 to f14638e and this addendum; again no RTL and no model changed, and each fix

@@ -1,0 +1,71 @@
+SurfGPU G4: make gpu-netlist-sim (sim/board/netlist_sim.sh, Verilator 5.032) in the surfcpu-toolchain container,
+2026-10-27, NETLIST_MAX_MS=3000: the synthesized netlist of the gpudiag bitstream to test, built at 1620026 (every
+open-flow gate PASS; LVS proved the routed bitstream equal to this netlist; boot ROM gpudiag.mem e2456fd3...,
+bitstream 082eb31a...: synth-gpudiag-r4.txt), run from its pins with its boot ROM inside it, until the UART line
+GPUDIAG:. Then sim/gpu/gpudiag_check.py checks the transcript with the build's manifest (build id 16200266,
+source_dirty false), taking gpudiag's own comparisons with the C model's CRCs that the ROM carries, as the make
+target does; and, beyond the target, against the tree's expected values (build/fw/gen/gpuscenes_expect.h of
+1620026, sha256 178d98ea..., the same as 2ff8b24's) too.
+
+Split in two containers: the make target's first run, in one small slot of the capped Docker wrapper
+(--cpus=2 --memory=1750m), ended at once with "Verilator threw signal 9": netlist_sim.sh compiles with -j 4,
+and the compile does not fit 1,750 MB. So netlist_sim.sh ran as two copies under the worktree's ignored
+build/g4-fix/tools/ (the tracked script unchanged): its build half, the same commands up to the Verilator
+build, in a big container (both slots, 3,500 MB), and its run half, the same binary run with the same
+arguments (+stop=GPUDIAG: +max_ms=3000 +transcript=.../uart.txt) and the same report, in a small one, then
+gpudiag_check against the manifest as mk/area-gpu.mk runs it. The copies differ from the script only where
+it was cut: the build half writes the build's seconds and stops before the run; the run half keeps the
+variables, does not delete the output directory or build, and reads the build's seconds.
+
+the driver's log (build/g4-fix/tools/netlist-sim-split.sh):
+  netlist-sim-split at 1620026, the bitstream 082eb31a16ed1603c376f1d8f325f4ede34101939d1a94e4892bd4a3dcc4f679
+  build half (big), start 2026-10-27T14:58:34Z
+  netlist_sim: arty_a7_100t surfcpu_arty_a7_gpudiag: 19652 cells in build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/openxc7/surfcpu_arty_a7_top.netlist.v, verilator
+  netlist_sim: built in 38 s (the run follows in another container)
+  build half exit 0, end 2026-10-27T15:03:14Z
+  run half (small), start 2026-10-27T15:03:14Z
+  netlist_sim: arty_a7_100t surfcpu_arty_a7_gpudiag: 19652 cells in build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/openxc7/surfcpu_arty_a7_top.netlist.v, verilator
+  netlist_sim: tb_netlist: 408 us uart| 
+  netlist_sim: tb_netlist: 4140 us uart| SurfGPU diagnostic 1.0.0 (build 16200266)
+  netlist_sim: tb_netlist: 12386 us uart| board Arty A7-100T (0x100), SoC 0.4.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+  netlist_sim: tb_netlist: 16553 us uart| bitstream build 16200266 flags 0, features 17f
+  netlist_sim: tb_netlist: 20893 us uart| identity                           ok (5 checks)
+  netlist_sim: tb_netlist: 273821 us uart| VRAM window (March C-)             (300 KiB) ok (59 checks)
+  netlist_sim: tb_netlist: 328701 us uart| video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+  netlist_sim: tb_netlist: 407129 us uart| gpu registers and errors           ok (14 checks)
+  netlist_sim: tb_netlist: 433671 us uart| gpu2 commands                      ok (5 checks)
+  netlist_sim: tb_netlist: 438445 us uart| scenes                             17, engine present
+  netlist_sim: tb_netlist: 468159 us uart| scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+  netlist_sim: tb_netlist: 551579 us uart| scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (5 checks)
+  netlist_sim: tb_netlist: 901946 us uart| scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+  netlist_sim: tb_netlist: 935314 us uart| scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+  netlist_sim: tb_netlist: 1035419 us uart| scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+  netlist_sim: tb_netlist: 1068787 us uart| scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+  netlist_sim: tb_netlist: 1102155 us uart| scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+  netlist_sim: tb_netlist: 1135524 us uart| scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
+  netlist_sim: tb_netlist: 1168892 us uart| scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
+  netlist_sim: tb_netlist: 1202261 us uart| scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
+  netlist_sim: tb_netlist: 1285681 us uart| scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
+  netlist_sim: tb_netlist: 1352418 us uart| scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
+  netlist_sim: tb_netlist: 1452522 us uart| scene 12: engine: demo             crc f501eb46 ok (3 checks)
+  netlist_sim: tb_netlist: 1485891 us uart| scene 13: engine: flat triangles, culling crc 9368fe97 ok (3 checks)
+  netlist_sim: tb_netlist: 1519259 us uart| scene 14: engine: Gouraud triangles, ramps crc f4bcafe0 ok (3 checks)
+  netlist_sim: tb_netlist: 1552627 us uart| scene 15: engine: depth, 320x240   crc bbe8cf82 ok (3 checks)
+  netlist_sim: tb_netlist: 1619364 us uart| scene 16: engine: page B drawn, FLIP crc e82b76e5 ok (3 checks)
+  netlist_sim: tb_netlist: 1972507 us uart| cube: 16 frames at full rate       (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
+  netlist_sim: tb_netlist: 1972680 us uart| 
+  netlist_sim: tb_netlist: 1975111 us uart| GPUDIAG: PASS (147 checks)
+  netlist_sim: tb_netlist: 30 lines, 1774 characters, 0 framing errors, at 1975111 us of simulated time
+  netlist_sim: tb_netlist: LEDs 1111, RGB LEDs 000
+  netlist_sim: tb_netlist: VGA hsync every 31.779 us (62150), vsync every 16.684 ms (118)
+  netlist_sim: - sim/board/tb_netlist.v:113: Verilog $finish
+  netlist_sim: - S i m u l a t i o n   R e p o r t: Verilator 5.032 2025-01-01
+  netlist_sim: - Verilator: $finish at 2s; walltime 11411.484 s; speed 173.101 us/s
+  netlist_sim: - Verilator: cpu 11410.153 s on 1 threads; alloced 109 MB
+  netlist_sim: built in 38 s, ran 11411 s (exit 0)
+  gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  run half exit 0, end 2026-10-27T18:13:27Z
+
+the tree's checker with the tree's expected values too (on the Mac, after the run):
+  gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  (build/fw/gen/gpuscenes_expect.h: 178d98eac5ed76f625aaae54165bff44d6ad3bf3f4dab8bc9f8cbca52547cbc9)
