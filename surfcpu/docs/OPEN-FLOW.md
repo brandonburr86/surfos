@@ -104,10 +104,10 @@ parse, no solver, a database it cannot read), "not a verdict about the design". 
 
 | Result | When | Fails |
 |---|---|---|
-| `PASS` | every point proved: exit 0 and its count says 0 differ, 0 unknown | |
+| `PASS` | every point proved: exit 0, its count says 0 differ and 0 unknown and at least one point proved, and no point's line says DIFFER | |
 | `FAIL (D differ)` | a point differs, whatever else; also a DIFFER printed before the proof was stopped or killed | the build |
 | `FAIL (N block RAM write enable difference(s))` | `bramwe.py` found a pin that disagrees (section 6.5) | the build |
-| `FAIL (...)` | a setup fault (exit 2), a crash (SEGV, ABRT, BUS, ILL, FPE), a front end that failed its self-test, an exit status it does not know | the build |
+| `FAIL (...)` | a setup fault (exit 2), a crash (SEGV, ABRT, BUS, ILL, FPE), a front end that failed its self-test, an exit status it does not know; exit 0 without a count of 0 differ and 0 unknown, with a DIFFER line, or with no point proved (nothing was compared: each output of a design is a point, and every design the flow builds has outputs) | the build |
 | `BLOCKED (timeout)` | stopped at `--lvs-timeout` | `make build-fpga` and `program.sh` |
 | `BLOCKED (killed: SIGKILL, exit 137)` | ended by a signal from outside the proof: SIGKILL, as the memory cap's out-of-memory killer sends, TERM, INT, HUP, QUIT, XCPU, XFSZ | `make build-fpga` and `program.sh` |
 | `BLOCKED (U unknown, none differ)` | the solver did not decide U points and none differs (a z3cmd process the memory cap kills is read as unknown) | `make build-fpga` and `program.sh` |
@@ -115,10 +115,12 @@ parse, no solver, a database it cannot read), "not a verdict about the design". 
 
 BLOCKED is not proved, and is reported as such; as before, this script's exit status leaves it
 alone, while `tools/fpga-build.sh` fails a build whose LVS is anything but PASS (no bitstream is
-copied out), `tools/program.sh` refuses a flow manifest with it, and `make release` builds only
-with PASS. Until 2026-10-27 a proof the memory cap killed was labelled FAIL like a difference
-(the DDR+GPU build at bfaac48: "check LVS FAIL", nothing differing); tested with stand-in
-`lvs_equiv`s that end every way above (`tools/openxc7-flow-test.sh`).
+copied out), `tools/program.sh` refuses a flow manifest with it, `tools/openxc7-demo.sh` judges a
+build by its manifest (`--verdict DIR STATUS`), and `make release` builds only with PASS. Until
+2026-10-27 a proof the memory cap killed was labelled FAIL like a difference (the DDR+GPU build at
+bfaac48: "check LVS FAIL", nothing differing); tested with stand-in `lvs_equiv`s that end every way
+above (`tools/openxc7-flow-test.sh`) and on a table of endings, exit 0 with an unknown, a DIFFER
+line or no point proved among them (`tools/openxc7-recheck-test.sh`).
 
 **The recheck** (`--recheck --out DIR`; `make recheck-fpga BOARD=... DESIGN=...`, which runs
 `tools/fpga-build.sh --recheck`, BOARD.md section 8): the post-route checks of a routed build
@@ -126,25 +128,49 @@ again, without synthesis, placement or routing: the bitstream, the round trip, b
 (`gold.v` made again from the synthesized JSON, `fabric.v` extracted again from the FASM,
 `bramwe.py`, the proof by `--lvs-solver` within `--lvs-timeout`, else as the build ran it), the
 clocks, the slack rule on the placement the build kept, timing and utilization. First it checks
-the build against its manifest, and refuses (exit 3, nothing changed) when a file the checks read
-is missing, the bitstream or the XDC (in a format 2 manifest also the netlist, the FASM and the
-placement) is not the one recorded by SHA-256, a check it keeps did not pass (SRL cells and
-synthesis: made on the synthesized netlist before placement, which a recheck does not touch),
-the manifest is of a format it does not know, or the image's tools (`/etc/surfcpu-openxc7.txt`)
-are not the build's. Then it puts the build's manifest aside as `manifest.build.txt` (once: a
-later recheck reads that one, and one whose manifest is a recheck's without it is refused) and
-writes `manifest.txt` anew: the build's identity as its manifest has it (part, source revision,
-date, seed, rules, defines, XDC, sources, bitstream), the kept checks as `kept from the build`,
-the others as `run again`, and its own lines: `recheck` (when, by which commit's tools, in which
-image), `checks run again`, `checks kept`, `build manifest` (the build's, its SHA-256 and its LVS
-result) and `lvs inputs` (whether `gold.v` and `fabric.v` came out the same bytes as the
-build's). Its exit status is a build's. `--dry-run` makes every check of the first step but the
-image's tools (on the Mac) and prints the rest.
+the build against its manifest, and refuses (exit 3, nothing changed and nothing run) when a file
+the checks read is missing, the bitstream or the XDC (in a format 2 manifest also the netlist, the
+FASM and the placement, each line required) is not the one recorded by SHA-256, a format 1 build
+lacks the LVS inputs it made (`lvs/gold.v`, `lvs/fabric.v`: a format 1 manifest names neither the
+netlist nor the placement, and these tie them to it), a check it keeps did not pass (SRL cells and
+synthesis: made on the synthesized netlist before placement, which a recheck does not touch), the
+manifest is of a format it does not know, the image's tools (`/etc/surfcpu-openxc7.txt`) are not
+the build's, or a build's own `manifest.txt` that is not the kept one sits beside an earlier
+recheck's `manifest.build.txt` (a later build over its files).
+
+Then it keeps the build's: a copy of its manifest as `manifest.build.txt` (a later recheck reads
+that one, and one whose manifest is a recheck's without it is refused), and its own logs in
+`build-evidence/` (`check-lvs.txt` with the points it proved, the other checks' logs, `lvs/`'s
+logs, its step times) with `lvs-inputs.sha256`, the SHA-256 of the LVS inputs it made (`gold.v`,
+`fabric.raw.v`, `fabric.v`; the netlists themselves are not copied, the DDR+GPU build's are
+200 MB). Each is made once, written aside and renamed: whole or not at all. Between the inputs'
+extraction and the proof it makes the tie: unless `gold.v`, `fabric.raw.v` and `fabric.v` come out
+the build's bytes, the netlist, the FASM or the placement is not the one the build proved, and it
+refuses (exit 4) before anything is proved. Its own manifest is written aside (`manifest.txt.new`)
+and renamed over `manifest.txt` at the end: until then `manifest.txt` is what it was, the build's
+or an earlier recheck's, so a recheck stopped anywhere (killed, Ctrl-C, a Docker restart, a step
+that fails, exit 4) leaves what `tools/program.sh` read before it began, and can be run again. The
+new one has the build's identity as its manifest has it (part, source revision, date, seed, rules,
+defines, XDC, sources, bitstream), the kept checks as `kept from the build`, the others as `run
+again`, and its own lines: `recheck` (when, by which commit's tools and whether their tree was
+clean, in which image), `checks run again`, `checks kept`, `build manifest` (the build's, its
+SHA-256 and its LVS result), `lvs inputs` (each the same bytes as the build's) and `build
+evidence`. Its exit status is a build's. `--dry-run` makes every check of the first step but the
+image's tools (on the Mac) and prints the rest. A recheck from a dirty tree is recorded
+(`dirty=1`, and `tools_dirty` in `tools/fpga-build.sh`'s `[recheck]`) and shown by
+`tools/program.sh`, not refused, as a build from a dirty tree is; `make release` builds from a
+clean tree of its own and takes no recheck. Tested by `tools/openxc7-recheck-test.sh` (`make
+test-flow`; on the Mac too, under `/bin/sh` and dash): a recheck run for real with a stand-in for
+every program, killed at each of its 17 steps and copies (the build's manifest beside the
+bitstream at each, `program.sh` refusing it, a recheck afterwards passing), every refusal leaving
+the directory byte for byte as it was, and the tie refusing a netlist, FASM or placement that is
+not the build's.
 
 **The manifest's format** is 2 since 2026-10-27 (`manifest format 2`; none means 1): it records
 the synthesized netlist (`netlist`), the `routed FASM` and the `placement` by SHA-256, which a
 recheck then checks, and the LVS route (`lvs solver`); a recheck's adds its lines above.
 `tools/fpga-build.sh` reads it, and `tools/program.sh` refuses a format it does not know (BUILD-HOST.md).
+A format 2 manifest without one of those three lines is refused by a recheck, not read as format 1.
 
 **A list of placer seeds** (`--seed 1,2,3`; a design list's `seed 1 2 3` line): placement and
 routing run with each seed in turn until nextpnr succeeds, that is until routing converges and
@@ -214,8 +240,8 @@ hang, are killed, ignore TERM, route thinly or well, and one Ctrl-C through a pt
   2026-10-27 the LVS routes' command lines, `z3cmd.py`'s self-test on right and broken commands
   and the front end without libz3 (the toolchain image's Debian `z3` is a program linked
   statically; `tools/openxc7-lvs-test.sh` runs it on the openxc7 image's libz3), the verdict on
-  every way a stand-in `lvs_equiv` can end, and the recheck's checks of a build on made-up build
-  directories). No open
+  every way a stand-in `lvs_equiv` can end, and the recheck run for real on made-up build
+  directories with a stand-in for every program it runs, `tools/openxc7-recheck-test.sh`). No open
   flow build is part of `make check`. `make flow-xdc-check` regenerates the demos' XDC from
   Digilent's master files (fetched by `tools/openxc7-fetch.sh`, SHA-256 checked).
 * **`make build-fpga` with `FLOW=openxc7`**: `mk/host.mk` runs `tools/fpga-build.sh` (board
@@ -613,7 +639,8 @@ USB-UART at 115200 8N1:
 | `devenv/openxc7/demo/` | flow_demo and flow_features (RTL, testbenches, XDC) |
 | `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `bram_we_tdpb.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
 | `tools/openxc7-build.sh`, `openxc7-demo.sh`, `openxc7-checks-test.sh` | the build entry (and `--recheck`), the proof run, the checkers' regression (round ddr-3) |
-| `tools/openxc7-lvs-test.sh`, `devenv/openxc7/test/lvs_routes_inner.sh` | the LVS routes and the recheck through the real flow on a small probe, both routes on one planted difference ([evidence/flow/lvs-routes.txt](evidence/flow/lvs-routes.txt)) |
+| `tools/openxc7-lvs-test.sh`, `devenv/openxc7/test/lvs_routes_inner.sh` | the LVS routes and the recheck through the real flow on a small probe, both routes on one planted difference ([evidence/flow/lvs-routes.txt](evidence/flow/lvs-routes.txt)); `make test-lvs-routes` from the Mac (Docker and the openxc7 image, about a minute; not in `make check`, which runs inside the toolchain container) |
+| `tools/openxc7-recheck-test.sh` | `--recheck` run for real with a stand-in for every program it runs: stopped at each step, every refusal byte for byte, the LVS inputs' tie, `lvs_verdict`'s endings, `z3cmd.py --summary`, the demo's verdict (`make test-flow`; also on the Mac, `TEST_SH=dash dash tools/openxc7-recheck-test.sh`) |
 | `tools/openxc7-fetch.sh`, `openxc7-xdc.sh`, `openxc7-flow-test.sh` | Digilent's XDC (pinned), its conversion, the script tests |
 | `mk/area-flow.mk` | `lint-flow`, `test-flow`, `flow-xdc-check` |
 | `docs/evidence/flow/` | the measurements behind this page |

@@ -66,7 +66,8 @@ the same keys before format 2's. The open flow's own `openxc7/manifest.txt` says
 `lvs_timeout`, the LVS proof's route and limit; in the flow's manifest the synthesized netlist,
 the routed FASM and the placement by SHA-256 and an `lvs solver` line; and the records of a
 recheck (below). Every reader takes formats 1 and 2 and refuses another, which it could misread:
-`tools/program.sh`, `tools/board-test.py`, `tools/release.py` (a release's build records). A
+`tools/program.sh`, `tools/board-test.py`, `tools/release.py` (a release's build records),
+`sim/gpu/gpudiag_check.py` (the gpudiag board test's `--manifest`), and the open flow's recheck. A
 change to what a manifest says, or how, bumps the format and changes every reader with it.
 
 **A recheck's manifests.** `make recheck-fpga BOARD=... DESIGN=...` (`tools/fpga-build.sh
@@ -81,7 +82,13 @@ the others from the recheck, and adds a `[recheck]` table: `rechecked_at`, `tool
 `checks_run_again`, `checks_kept`, `build_result` and `build_reason` (what the build's own
 manifest said), and the build's own manifests, kept beside the new ones as `manifest.build.txt`
 and `openxc7/manifest.build.txt`, by path and SHA-256. `tools/program.sh` and `tools/board-test.py`
-take a recheck's passing manifest as a build's and say it is a recheck's.
+take a recheck's passing manifest as a build's and say it is a recheck's; `program.sh` also names
+the commit of its tools and whether their tree was clean. A recheck from a dirty tree is recorded
+and shown, not refused, as a build from one is (`source_dirty`); `make release` builds from a clean
+tree of its own and takes no recheck. While a recheck runs, and after one stopped anywhere (killed,
+Ctrl-C, a step that failed), both manifests are what they were: each new one replaces its old one
+only when it is complete, so `program.sh` reads the build's until the recheck has finished
+(OPEN-FLOW.md section 3), and the build's own logs stay in `openxc7/build-evidence/`.
 
 ## Programming stays on the Mac
 
