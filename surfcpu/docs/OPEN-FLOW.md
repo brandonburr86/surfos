@@ -58,8 +58,9 @@ into its manifest. Details: [evidence/flow/image.txt](evidence/flow/image.txt).
 surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t --xdc <file> \
     [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--pnr-timeout s] [--min-slack clock=ns]... \
     [--dsp safe|full|none] [--expect file] \
-    [--manifest-include file] [--out dir] [--lvs-timeout s] [--no-lvs] [--no-check] [--synth-only] \
-    [--dry-run] <source.v>...
+    [--manifest-include file] [--out dir] [--lvs-timeout s] [--lvs-solver libz3|z3cmd] [--no-lvs] \
+    [--no-check] [--synth-only] [--dry-run] <source.v>...
+surfcpu/tools/openxc7-build.sh --recheck --out <dir> [--lvs-solver libz3|z3cmd] [--lvs-timeout s] [--dry-run]
 ```
 
 It runs on the Mac and re-runs itself in the image with the repository at `/work` (paths must
@@ -73,9 +74,77 @@ time by `tools/bitfile.py`, so two builds of one commit are the same bytes: RELE
 models, and `manifest.txt` (source revision, part, hashes of the sources and the XDC, DSP mode,
 check results, timing, utilization against the device's documented capacity, step times, tool
 versions, and any `--manifest-include` file such as ROM hashes). The exit status is 0 only if
-every step and every check passed. LVS gives up after 1800 s (`--lvs-timeout`, or
-`OPENXC7_LVS_TIMEOUT` when the script is run directly), and a proof that times out fails the
-build; the whole SoC needs 9 to 12 minutes, and its design lists allow 7200 s.
+every step and every check passed, LVS BLOCKED aside (below). LVS gives up after 1800 s
+(`--lvs-timeout`, or `OPENXC7_LVS_TIMEOUT` when the script is run directly): a proof that times
+out is BLOCKED, and `tools/fpga-build.sh` fails the build on it; the whole SoC needs 9 to 12
+minutes, and its design lists allow 7200 s.
+
+**The LVS proof's two routes** (`--lvs-solver`; `LVS_SOLVER=` for `make build-fpga` and `make
+recheck-fpga`, which pass `LVS_TIMEOUT=` too, in place of the design list's `lvs-timeout`). Both
+run the image's `lvs_equiv` (fasm2netlist 0948889f) on the same files with the same arguments,
+so it asks the same questions in the same order: a miter for each register, output and memory
+boundary bit (`src/lvs/lvs_equiv.cpp`). They differ only in how a question reaches Z3
+(`src/lvs/solver.cpp`):
+
+| Route | How | Memory | Time |
+|---|---|---|---|
+| `libz3` (the default) | `lvs_equiv`'s own: the Z3 library it links, one incremental session for the whole run | grows with the run: the DDR+GPU design at bfaac48 passed the 3.5 GB cap at 41 % of its 21,000 questions (section 6.9) | the SoC 9 to 12 minutes, the DDR designs 17 to 19 |
+| `z3cmd` | `lvs_equiv --solver 'python3 -I devenv/openxc7/z3cmd.py' --format smt2`: each question written out with the whole network as SMT-LIB 2 and answered by a process of its own, `devenv/openxc7/z3cmd.py` over the image's libz3 (the image has no Z3 program) | a question's, given back after it: 2.6 GB at most for the DDR+GPU design | that design: 13 h 52 min |
+
+The z3cmd route first runs the front end's self-test as `lvs_equiv` will run it (`CMD FILE
+2>/dev/null` through the shell): a question it must prove, one it must not, and a malformed one
+it must not answer. A front end that fails it fails LVS (it could prove anything), and the proof
+does not run. Each question's line (bytes, seconds, Z3's error code and answer, the process's
+largest resident set) goes to `lvs/questions.log`, summed up at the end of `check-lvs.txt`. The
+manifest's LVS line names the route, and its `lvs solver` line says what it is.
+
+**What LVS's results mean.** `lvs_equiv` ends 0 when every point was proved; 1 when a point
+differs or is unknown, its last line counting them; 2 on a setup fault (a netlist it cannot
+parse, no solver, a database it cannot read), "not a verdict about the design". So:
+
+| Result | When | Fails |
+|---|---|---|
+| `PASS` | every point proved: exit 0 and its count says 0 differ, 0 unknown | |
+| `FAIL (D differ)` | a point differs, whatever else; also a DIFFER printed before the proof was stopped or killed | the build |
+| `FAIL (N block RAM write enable difference(s))` | `bramwe.py` found a pin that disagrees (section 6.5) | the build |
+| `FAIL (...)` | a setup fault (exit 2), a crash (SEGV, ABRT, BUS, ILL, FPE), a front end that failed its self-test, an exit status it does not know | the build |
+| `BLOCKED (timeout)` | stopped at `--lvs-timeout` | `make build-fpga` and `program.sh` |
+| `BLOCKED (killed: SIGKILL, exit 137)` | ended by a signal from outside the proof: SIGKILL, as the memory cap's out-of-memory killer sends, TERM, INT, HUP, QUIT, XCPU, XFSZ | `make build-fpga` and `program.sh` |
+| `BLOCKED (U unknown, none differ)` | the solver did not decide U points and none differs (a z3cmd process the memory cap kills is read as unknown) | `make build-fpga` and `program.sh` |
+| `BLOCKED (extraction: ...)` | the tile model lacks a primitive | `make build-fpga` and `program.sh` |
+
+BLOCKED is not proved, and is reported as such; as before, this script's exit status leaves it
+alone, while `tools/fpga-build.sh` fails a build whose LVS is anything but PASS (no bitstream is
+copied out), `tools/program.sh` refuses a flow manifest with it, and `make release` builds only
+with PASS. Until 2026-10-27 a proof the memory cap killed was labelled FAIL like a difference
+(the DDR+GPU build at bfaac48: "check LVS FAIL", nothing differing); tested with stand-in
+`lvs_equiv`s that end every way above (`tools/openxc7-flow-test.sh`).
+
+**The recheck** (`--recheck --out DIR`; `make recheck-fpga BOARD=... DESIGN=...`, which runs
+`tools/fpga-build.sh --recheck`, BOARD.md section 8): the post-route checks of a routed build
+again, without synthesis, placement or routing: the bitstream, the round trip, block RAM, LVS
+(`gold.v` made again from the synthesized JSON, `fabric.v` extracted again from the FASM,
+`bramwe.py`, the proof by `--lvs-solver` within `--lvs-timeout`, else as the build ran it), the
+clocks, the slack rule on the placement the build kept, timing and utilization. First it checks
+the build against its manifest, and refuses (exit 3, nothing changed) when a file the checks read
+is missing, the bitstream or the XDC (in a format 2 manifest also the netlist, the FASM and the
+placement) is not the one recorded by SHA-256, a check it keeps did not pass (SRL cells and
+synthesis: made on the synthesized netlist before placement, which a recheck does not touch),
+the manifest is of a format it does not know, or the image's tools (`/etc/surfcpu-openxc7.txt`)
+are not the build's. Then it puts the build's manifest aside as `manifest.build.txt` (once: a
+later recheck reads that one, and one whose manifest is a recheck's without it is refused) and
+writes `manifest.txt` anew: the build's identity as its manifest has it (part, source revision,
+date, seed, rules, defines, XDC, sources, bitstream), the kept checks as `kept from the build`,
+the others as `run again`, and its own lines: `recheck` (when, by which commit's tools, in which
+image), `checks run again`, `checks kept`, `build manifest` (the build's, its SHA-256 and its LVS
+result) and `lvs inputs` (whether `gold.v` and `fabric.v` came out the same bytes as the
+build's). Its exit status is a build's. `--dry-run` makes every check of the first step but the
+image's tools (on the Mac) and prints the rest.
+
+**The manifest's format** is 2 since 2026-10-27 (`manifest format 2`; none means 1): it records
+the synthesized netlist (`netlist`), the `routed FASM` and the `placement` by SHA-256, which a
+recheck then checks, and the LVS route (`lvs solver`); a recheck's adds its lines above.
+`tools/fpga-build.sh` reads it, and `tools/program.sh` refuses a format it does not know (BUILD-HOST.md).
 
 **A list of placer seeds** (`--seed 1,2,3`; a design list's `seed 1 2 3` line): placement and
 routing run with each seed in turn until nextpnr succeeds, that is until routing converges and
@@ -141,7 +210,12 @@ hang, are killed, ignore TERM, route thinly or well, and one Ctrl-C through a pt
   probe, the expected failures, gate-level simulation, a determinism rebuild; about 7 minutes).
 * `make lint` includes `lint-flow`, `make check` includes `test-flow` (about 10 s: the demos'
   RTL simulations, the self-tests of the bitstream inspector and the clock check, the build
-  script's argument handling, and the Yosys reproducer through the main image's Yosys). No open
+  script's argument handling, and the Yosys reproducer through the main image's Yosys; since
+  2026-10-27 the LVS routes' command lines, `z3cmd.py`'s self-test on right and broken commands
+  and the front end without libz3 (the toolchain image's Debian `z3` is a program linked
+  statically; `tools/openxc7-lvs-test.sh` runs it on the openxc7 image's libz3), the verdict on
+  every way a stand-in `lvs_equiv` can end, and the recheck's checks of a build on made-up build
+  directories). No open
   flow build is part of `make check`. `make flow-xdc-check` regenerates the demos' XDC from
   Digilent's master files (fetched by `tools/openxc7-fetch.sh`, SHA-256 checked).
 * **`make build-fpga` with `FLOW=openxc7`**: `mk/host.mk` runs `tools/fpga-build.sh` (board
@@ -173,7 +247,7 @@ hang, are killed, ignore TERM, route thinly or well, and one Ctrl-C through a pt
 | bitstream (`bitinfo.py`, no vendor or prjxray code) | the `.bit` against UG470: length, IDCODE against the device's JTAG IDCODE, whole frames, WCFG/START/DESYNC, every CRC check | a complete bitstream for that device | whether its frames mean what the tools intend |
 | round trip (`bit2fasm`, `fasmcheck.py`) | the bitstream decoded back against the routed FASM, bit by bit | the assembly wrote exactly what nextpnr chose; every difference is a connection without bits, an all-clear default or the STEPDOWN that `fasm2frames` spreads to a bank as Vivado does | anything the database itself gets wrong (same database both ways) |
 | block RAM (`fasm2netlist`, `bramcheck.py`) | initial contents decoded from the bitstream against the netlist, block for block | SurfBoot's ROM would arrive intact (as far as prjxray-db's bit positions are right) | |
-| LVS (`tileverilog`, `bramwe.py`, `lvs_equiv`) | the routed FASM read into a fabric netlist by an independent tile model, each RAMB18E1 byte write enable read from the site pins the silicon reads it from (with every other pin it ties to that enable checked), proved equal to the synthesized netlist register by register | place, route and FASM writing kept the logic | MMCM/PLL (not modelled), block RAM and DSP internals (cut at their pins), the clock tree (assumed) |
+| LVS (`tileverilog`, `bramwe.py`, `lvs_equiv`) | the routed FASM read into a fabric netlist by an independent tile model, each RAMB18E1 byte write enable read from the site pins the silicon reads it from (with every other pin it ties to that enable checked), proved equal to the synthesized netlist register by register, by `lvs_equiv`'s own libz3 session or one `z3cmd.py` process a question (section 3) | place, route and FASM writing kept the logic | MMCM/PLL (not modelled), block RAM and DSP internals (cut at their pins), the clock tree (assumed) |
 | clocks (`cmtcheck.py`, `gclkcheck.py`) | every MMCM/PLL divider field and every output's phase fields (DELAY_TIME, PHASE_MUX, MX) in the FASM against AMD's XAPP888 algorithm, itself checked against register values Vivado produced; the parameters read as Yosys writes them (a constant as its bits, at any width); and the routed FASM for any net on the global clock network: a clock line driven by an unconfigured BUFGCTRL, logic into one, a clock line into a data input (section 6.8) | the clock managers are configured as Vivado would; no ordinary net rides the clock network | duty cycles other than 50 % and phases of fractional dividers (reported unchecked) |
 | simulation (demo only) | the synthesized netlist with Yosys's `cells_sim.v` under the RTL testbench | synthesis kept the behaviour (the UART line, the reset) | |
 
@@ -440,6 +514,32 @@ site route-throughs: the clock rows' BUFHCE (every clock uses them), the I/O til
 OLOGIC, IDELAY and IOB pass-throughs (every pin uses them), PHASER_IN and BUFR; none was seen
 carrying an ordinary net. Evidence: [evidence/flow/bufg-routethrough.txt](evidence/flow/bufg-routethrough.txt).
 
+### 6.9 An LVS proof that outgrows its memory (2026-10-27)
+
+SurfGPU's DDR+GPU design at bfaac48 (docs/GPU.md 16.11) passed every gate but LVS: the proof's
+single incremental libz3 session grew with the run and was killed at the session's Docker cap of
+3.5 GB, exit 137 after 3,058 s, 8,606 points proved and none differing. The flow recorded `check
+LVS FAIL` and `result = "fail"`, the label of a proof that finds a difference, so the bitstream
+was never copied out and `tools/program.sh` refuses it. The same build's LVS files were then
+proved by hand by `lvs_equiv`'s own `--solver` route, a solver process a question through a
+Python front end to the image's libz3 4.13.3: `20971 proved, 0 differ, 0 unknown` in 13 h 52 min,
+at most 2.6 GB resident (docs/evidence/gpu-g4/lvs-ddr-gpu-bfaac48.txt on the G4 branch). The flow
+did not know of it, and its manifests may not be edited by hand.
+
+So the flow now has that route (`--lvs-solver z3cmd`, the front end in the tree as
+`devenv/openxc7/z3cmd.py`, from G4's with its self-test), labels a killed proof BLOCKED and
+not FAIL (section 3), and can check a routed build again without placing and routing it
+(`--recheck`, `make recheck-fpga`), keeping its identity: the bitstream carries its build id
+and time, so a rebuild would be another bitstream. The recheck of that build is
+
+```sh
+make -C surfcpu recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+```
+
+on a copy of it in `build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/` (both Docker slots for
+about 14 hours). Its dry run (`DRY_RUN=1`) and its first steps are in
+[evidence/flow/lvs-recheck.txt](evidence/flow/lvs-recheck.txt).
+
 ## 7. Option B: Vivado in an x86-64 container on this Mac
 
 Tested without Vivado ([evidence/flow/amd64-rosetta.txt](evidence/flow/amd64-rosetta.txt)).
@@ -505,12 +605,15 @@ USB-UART at 115200 8N1:
 | `devenv/openxc7/cmtcheck.py` | MMCM/PLL divider and phase check, with `--self-test` and `--table` |
 | `devenv/openxc7/synthcheck.py` | synthesis-against-RTL check, with `--self-test` |
 | `devenv/openxc7/bramwe.py` | the RAMB18E1 write enables of the LVS proof, with `--self-test` |
+| `devenv/openxc7/z3cmd.py` | the LVS proof's z3cmd route: a question's answer from the image's libz3, with `--self-test [CMD]` and `--summary LOG` (section 3) |
+| `tools/openxc7-steps.sh` | the step runner, the placer seeds, and the checks of a routed build (the build's and the recheck's), LVS by either route with its verdict |
 | `devenv/openxc7/chipdb-gen.py`, `chipdb.sha256` | the chip database without BUFGCTRL route-throughs and its SHA-256 (section 6.8) |
 | `devenv/openxc7/gclkcheck.py` | no ordinary net on the global clock network, with `--self-test` (section 6.8) |
 | `devenv/openxc7/report.py` | `timing.txt` and `utilization.txt` |
 | `devenv/openxc7/demo/` | flow_demo and flow_features (RTL, testbenches, XDC) |
 | `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `bram_we_tdpb.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
-| `tools/openxc7-build.sh`, `openxc7-demo.sh`, `openxc7-checks-test.sh` | the build entry, the proof run, the checkers' regression (round ddr-3) |
+| `tools/openxc7-build.sh`, `openxc7-demo.sh`, `openxc7-checks-test.sh` | the build entry (and `--recheck`), the proof run, the checkers' regression (round ddr-3) |
+| `tools/openxc7-lvs-test.sh`, `devenv/openxc7/test/lvs_routes_inner.sh` | the LVS routes and the recheck through the real flow on a small probe, both routes on one planted difference ([evidence/flow/lvs-routes.txt](evidence/flow/lvs-routes.txt)) |
 | `tools/openxc7-fetch.sh`, `openxc7-xdc.sh`, `openxc7-flow-test.sh` | Digilent's XDC (pinned), its conversion, the script tests |
 | `mk/area-flow.mk` | `lint-flow`, `test-flow`, `flow-xdc-check` |
 | `docs/evidence/flow/` | the measurements behind this page |
