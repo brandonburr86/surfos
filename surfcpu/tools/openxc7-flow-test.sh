@@ -5,7 +5,9 @@
 # (tools/openxc7-steps.sh) with stand-in nextpnrs that hang, are killed, ignore TERM, route too
 # thinly or well, and one Ctrl-C on a terminal stops, and the synthesis check
 # (devenv/openxc7/synthcheck.py) on the Yosys DSP-packing reproducer with this image's Yosys,
-# which must fail with DSP packing and pass with the safe mode and without DSPs.
+# which must fail with DSP packing and pass with the safe mode and without DSPs. Since 10/27/26:
+# devenv/openxc7/z3cmd.py, the LVS proof's solver front end: its self-test on right and broken
+# commands, itself without libz3, and its summary of the questions' log.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -329,6 +331,45 @@ EOF
 else
   bad "pnr: no timeout command here (coreutils)"
 fi
+
+# ---------------------------------------------------------------- devenv/openxc7/z3cmd.py
+# Its self-test (run as lvs_equiv runs a solver) must pass a command that answers the three questions
+# right and fail commands that answer nothing, prove anything or find a difference anywhere. With
+# the library (the openxc7 image) it passes itself; without it (this toolchain image: its Debian z3
+# is a program linked statically, no libz3.so.4) it answers nothing, so it can never prove, and its
+# own self-test fails. tools/openxc7-lvs-test.sh runs it on the openxc7 image's libz3.
+for a in right unsat sat; do      # stand-in solvers: no answer to the malformed question, and then
+  cat > "$t/solver-$a.sh" <<EOF
+#!/bin/sh
+if grep -q 'n9' "\$1"; then exit 1; fi
+case $a in right) if grep -q '(and n1 (not n1))' "\$1"; then echo unsat; else echo sat; fi ;; *) echo $a ;; esac
+EOF
+done                              # the right answers, unsat to all, sat to all
+if python3 -I devenv/openxc7/z3cmd.py --self-test "sh $t/solver-right.sh" > "$t/z3cmd-good.txt" 2>&1 &&
+   grep -q '^z3cmd self-test: PASS$' "$t/z3cmd-good.txt"
+then ok "z3cmd: its self-test passes a command that answers the three questions right"
+else bad "z3cmd: its self-test on a right command"; cat "$t/z3cmd-good.txt"; fi
+for c in "sh $t/solver-unsat.sh" "sh $t/solver-sat.sh" "false" "echo unsat; true" "echo unknown; true"; do
+  if python3 -I devenv/openxc7/z3cmd.py --self-test "$c" > "$t/z3cmd-bad.txt" 2>&1
+  then bad "z3cmd: its self-test passed the command '$c'"; cat "$t/z3cmd-bad.txt"
+  else ok "z3cmd: its self-test fails the command '$c' ($(grep -c 'WRONG$' "$t/z3cmd-bad.txt") of 3 wrong)"; fi
+done
+printf '(set-logic QF_UF)\n(declare-const n1 Bool)\n(define-fun n2 () Bool (and n1 (not n1)))\n(assert n2)\n(check-sat)\n' > "$t/q-unsat.smt2"
+if python3 -I -c 'import ctypes; ctypes.CDLL("libz3.so.4")' 2>/dev/null; then
+  if python3 -I devenv/openxc7/z3cmd.py --self-test > "$t/z3cmd-self.txt" 2>&1 && grep -q '^z3cmd self-test: PASS$' "$t/z3cmd-self.txt"
+  then ok "z3cmd: its own self-test passes on this image's libz3 ($(sed -n 's/^\(libz3 [0-9.]*\).*/\1/p' "$t/z3cmd-self.txt"))"
+  else bad "z3cmd: its own self-test on this image's libz3"; cat "$t/z3cmd-self.txt"; fi
+else
+  if a=$(python3 -I devenv/openxc7/z3cmd.py "$t/q-unsat.smt2" 2>/dev/null); then st=0; else st=$?; fi
+  if [ "$st" = 1 ] && [ -z "$a" ] && ! python3 -I devenv/openxc7/z3cmd.py --self-test > "$t/z3cmd-self.txt" 2>&1 &&
+     grep -q '^libz3: not found' "$t/z3cmd-self.txt"
+  then ok "z3cmd: without libz3.so.4 it answers nothing (exit 1: unknown, never proved), and its own self-test fails"
+  else bad "z3cmd: without its library (answer '$a', exit $st)"; cat "$t/z3cmd-self.txt"; fi
+fi
+printf '3224975 2.104 0 unsat 812345\n48347140 15.980 0 unsat 2599464\n100 0.050 0 sat 20000\n10 0.010 3 - 15000\n' > "$t/q.log"
+o=$(python3 -I devenv/openxc7/z3cmd.py --summary "$t/q.log")
+expect_in "z3cmd: --summary sums the questions' log up" "$o" "z3cmd: 4 questions (1 error 3, 1 sat, 2 unsat)" \
+  "question files of 10 to 48347140 bytes" "the longest 15.98 s (question 2)" "the largest solver process 2539 MiB (question 2)"
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }
 echo "openxc7-flow-test.sh: PASS"
