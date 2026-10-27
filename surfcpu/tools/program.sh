@@ -19,7 +19,7 @@
 #   manifest   the build manifest next to it (manifest.txt), if any, says every check passed and
 #              describes this file (SHA-256); flash needs one from tools/fpga-build.sh, for this
 #              board and part. A flow manifest (tools/openxc7-build.sh's own) must also show
-#              every clock meeting nextpnr's timing
+#              every clock meeting nextpnr's timing. A manifest format other than 1 or 2 is refused
 # OPENFPGALOADER overrides the program's path.
 set -eu
 
@@ -164,6 +164,21 @@ fi
 top_key() {           # KEY: a top-level string or number of the TOML manifest (before its first table)
     awk -v k="$1" '/^\[/ { exit } $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$manifest"
 }
+line_value() {        # LABEL: a flow manifest's line (its label in 20 columns, as tools/fpga-build.sh reads it)
+    awk -v n="$1" 'BEGIN { n = sprintf("%-20s", n) } /^## / { exit } substr($0, 1, 20) == n { print substr($0, 21); exit }' "$manifest"
+}
+# Its format (docs/BUILD-HOST.md): none means 1; 2 (2026-10-27) adds the LVS route and, in a flow
+# manifest, the netlist, FASM and placement by SHA-256. A later one may mean something this script
+# would misread, so it is refused.
+case "$kind" in
+    surfcpu) fmt=$(top_key manifest_format) ;;
+    openxc7) fmt=$(line_value "manifest format"); fmt=${fmt%% *} ;;
+    *)       fmt= ;;
+esac
+case "${fmt:-1}" in
+    1|2) ;;
+    *) die "$manifest is manifest format $fmt, which this script does not know (it reads 1 and 2); refusing" ;;
+esac
 case "$kind" in
     surfcpu)
         [ "$(top_key result)" = pass ] || die "$manifest does not say the build passed its checks; refusing"

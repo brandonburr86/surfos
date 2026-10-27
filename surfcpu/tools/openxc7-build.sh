@@ -39,6 +39,9 @@
 #   --no-check         skip every check after the bitstream
 #   --dry-run          print what would run, without the image
 #
+# The manifest's format is 2 (its "manifest format" line; none means 1): format 2 records the
+# synthesized netlist, the FASM and the placement by SHA-256, and the LVS solver.
+#
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
 # utilization.txt, slack-seed<n>.txt (the slack rule on each routed attempt), check-srl.txt (a
 # netlist with SRL cells stops here), check-synthesis.txt,
@@ -327,9 +330,11 @@ post_route_checks
 [ "$dry" = 1 ] && exit 0
 
 # ------------------------------------------------------------------ the manifest
+# Format 2 (docs/OPEN-FLOW.md section 3): the netlist, FASM and placement by SHA-256, the LVS solver.
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 {
   echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+  echo "manifest format     2 (docs/OPEN-FLOW.md section 3)"
   echo "top                 $top"
   echo "part                $part (device $device, chip database chipdb-$chipdie.bin)"
   echo "chip database       $chipdb sha256:$(sha "$chipdb") ($chipdb_from)"
@@ -346,6 +351,9 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "xdc                 $xdc sha256:$(sha "$xdc")"
   for s in $srcs; do echo "source              $s sha256:$(sha "$s")"; done
   echo "bitstream           $out/$top.bit sha256:$(sha "$out/$top.bit") $(wc -c < "$out/$top.bit" | tr -d ' ') bytes"
+  echo "netlist             $out/$top.json sha256:$(sha "$out/$top.json")"
+  echo "routed FASM         $out/$top.fasm sha256:$(sha "$out/$top.fasm")"
+  echo "placement           $out/placement.json sha256:$(sha "$out/placement.json")"
   echo "check SRL cells     $result_srl (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
   echo "check synthesis     $result_syn (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     $result_bit (IDCODE, frames, commands, CRC: check-bitstream.txt)"

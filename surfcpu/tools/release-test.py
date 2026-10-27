@@ -300,7 +300,8 @@ FAKE_FPGA = r"""#!/usr/bin/env python3
 # $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id;
 # the placer seed recorded ([openxc7] placer_seed, as fpga-build.sh writes it) is $PLACER_SEEDS's first, else
 # $FAKE_FPGA_SEEDS's for design/board (board/design=seed,...), else 1; $FAKE_FPGA_SEEDLOG gets a line
-# "board/design PLACER_SEEDS" per build; $FAKE_FPGA_THIN=d1,d2 records those designs' slack margin THIN.
+# "board/design PLACER_SEEDS" per build; $FAKE_FPGA_THIN=d1,d2 records those designs' slack margin THIN;
+# the record's manifest_format is 2, as fpga-build.sh writes it, or $FAKE_FPGA_FORMAT.
 import hashlib, os, re, subprocess, sys, time
 from pathlib import Path
 design, board = sys.argv[2], sys.argv[3]
@@ -336,7 +337,7 @@ kernel = Path(os.environ.get("SURFCPU_KERNEL") or root.parent / "build/riscv32/a
 kernel_sha = hashlib.sha256(kernel.read_bytes()).hexdigest() if kernel.is_file() else ""
 tag = re.search(r"^IMAGE_TAG=(\S+)$", (root / "tools/openxc7-build.sh").read_text(), re.M).group(1)
 when = os.environ.get("FAKE_RUN_ID_TIME") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-head = [f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
+head = [f'manifest_format = {os.environ.get("FAKE_FPGA_FORMAT", "2")}', f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
         f'part = "{part}"', f'source_revision = "{commit}"', "source_dirty = false",
         f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
         f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', f'kernel_sha256 = "{kernel_sha}"']
@@ -753,6 +754,23 @@ class TestCheckStrict(ScratchRelease):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("flash_boot_design 'dd'", r.stdout)
 
+    def test_record_format(self):
+        """a build record of a format this tool does not know fails the check; 2 (what tools/fpga-build.sh writes
+        since 10/27/26) and the older 1, with no manifest_format, are read (docs/BUILD-HOST.md)"""
+        rec = "fpga/arty_a7_100t/top/manifest.txt"
+        self.assertIn("\nmanifest_format = 2\n", (self.pre / rec).read_text())
+        for fmt, ok in (("3", False), ("1", True), (None, True)):
+            c = self.dir / f"copies-format-{fmt}" / self.pre.name
+            shutil.copytree(self.pre, c)
+            (c / rec).write_text((c / rec).read_text().replace(
+                "\nmanifest_format = 2\n", "\n" if fmt is None else f"\nmanifest_format = {fmt}\n"))
+            r = self.check(c)
+            if ok:
+                self.assertEqual(r.returncode, 0, f"format {fmt}: {r.stdout}")
+            else:
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"{rec}: manifest_format 3, which this tool does not know", r.stdout)
+
     def test_extra_in_new(self):
         n = self.copy(self.pre.name)
         (n / "extra.txt").write_text("x")
@@ -781,6 +799,13 @@ class TestEnvironment(ScratchRelease):
         r = self.make("--prerelease", "--skip-ddr", FAKE_OX_IMAGE="surfcpu-openxc7:other")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("built in the image 'surfcpu-openxc7:other'", r.stderr)
+
+    def test_record_of_a_format_it_does_not_know(self):
+        """refused as the build finishes, not only by the release's own check at its end"""
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_FORMAT="3")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("its build record is manifest_format 3, which this tool does not know", r.stderr)
+        self.assertNotIn("does not pass its own check", r.stderr)
 
     def test_settings_that_change_the_builds_are_refused(self):
         for var, val in (("DRY_RUN", "1"), ("SURFCPU_OPENXC7_IMAGE", "x:y"), ("SURFCPU_IMAGE", "x:y"),
@@ -1106,6 +1131,18 @@ class TestProgramFlash(FlashFixture):
         r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
         self.assertIn("does not say the build passed", r.stderr)
         self.assertNotIn(" -f ", calls)
+
+    def test_record_formats(self):
+        """tools/program.sh reads build records of format 1 (no manifest_format) and 2, and refuses another"""
+        ok = {"SURFCPU_FLASH_CONFIRM": "write-flash-arty_a7_100t"}
+        self.record(self.bit, manifest_format="3")
+        r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
+        self.assertIn("manifest format 3, which this script does not know", r.stderr)
+        self.assertNotIn(" -f ", calls)
+        self.record(self.bit, manifest_format="2")
+        r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t -f --verify {self.bit}", calls)
 
     def test_volatile_never_flash(self):
         r, calls = self.program("volatile", "arty_a7_100t", self.bit)

@@ -3,7 +3,7 @@
 #
 #   tools/fpga-build.sh [--dry-run] [--design NAME] BOARD
 #   tools/fpga-build.sh --fetch [--design NAME] BOARD    the results of the last vivado-ssh run
-#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline] [DRY_RUN=1]
+#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline] [DRY_RUN=1] [LVS_SOLVER=z3cmd] [LVS_TIMEOUT=s]
 #
 # BOARD is a line of boards/arty_a7/boards.txt (arty_a7_35t, arty_a7_100t). The design is
 # surfcpu_arty_a7_top unless --design or $DESIGN names another boards/arty_a7/designs/*.files.
@@ -34,6 +34,14 @@
 # up on a silent connection after two minutes. Vivado runs on the host under nohup, with its
 # own log and exit status in out/, so a dropped connection does not stop it: --fetch brings
 # back its results later (exit 3: connection lost, try --fetch; 4: still running).
+# The open flow's LVS (docs/OPEN-FLOW.md section 4): LVS_SOLVER=libz3|z3cmd chooses how its proof's
+# questions reach Z3 (libz3, the default: lvs_equiv's incremental session; z3cmd: one solver process
+# a question, slower, for a design whose proof outgrows the memory it may use) and LVS_TIMEOUT=S
+# replaces the design list's lvs-timeout for one build; the manifest records both ([openxc7]
+# lvs_solver, lvs_timeout). make release gives its builds neither (they take the design lists').
+# The manifest's format is 2 (manifest_format; none means 1): format 2 can carry [openxc7]
+# lvs_solver and lvs_timeout, and the flow's format 2 manifest; tools/program.sh,
+# tools/board-test.py and tools/release.py read both and refuse a format they do not know.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd -P)              # surfcpu/
@@ -54,13 +62,22 @@ while [ $# -gt 0 ]; do
         --dry-run) dry=1 ;;
         --fetch)   fetch=1 ;;
         --design)  [ $# -ge 2 ] || die "--design needs a name"; design=$2; shift ;;
-        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)        die "unknown option $1" ;;
         *)         [ -z "$board" ] || die "one BOARD only"; board=$1 ;;
     esac
     shift
 done
 [ -n "$board" ] || die "usage: $0 [--dry-run] [--design NAME] BOARD"
+case "${LVS_SOLVER:-}" in
+    ''|libz3|z3cmd) ;;
+    *) die "LVS_SOLVER must be libz3 or z3cmd, not '$LVS_SOLVER' (docs/OPEN-FLOW.md section 4)" ;;
+esac
+case "${LVS_TIMEOUT:-}" in
+    '') ;;
+    *[!0-9]*) die "LVS_TIMEOUT must be a number of seconds, not '$LVS_TIMEOUT'" ;;
+    *) [ "$LVS_TIMEOUT" -gt 0 ] || die "LVS_TIMEOUT must be more than 0 seconds (timeout takes 0 as no limit)" ;;
+esac
 
 # ------------------------------------------------------------------------------ board, design
 line=$(awk -v b="$board" '$1 == b { print }' "$root/boards/arty_a7/boards.txt")
@@ -118,6 +135,8 @@ case "$FLOW" in
     '') die "$conf: FLOW is not set (vivado-ssh, vivado-docker or openxc7)" ;;
     *)  die "unknown FLOW '$FLOW' from the $flow_from (vivado-ssh, vivado-docker or openxc7)" ;;
 esac
+[ "$FLOW" = openxc7 ] || [ -z "${LVS_SOLVER:-}${LVS_TIMEOUT:-}" ] ||
+    die "LVS_SOLVER and LVS_TIMEOUT are the open flow's (FLOW=openxc7), not $FLOW's"
 # Key authentication only, the host key must already be known (no trust on first use), and a
 # connection that goes quiet is given up after 20 s to connect or 4 x 30 s without an answer.
 ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=4"
@@ -245,6 +264,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
+    [ -z "${LVS_SOLVER:-}" ] || set -- "$@" --lvs-solver "$LVS_SOLVER"
     [ -z "$pnr_timeout" ] || set -- "$@" --pnr-timeout "$pnr_timeout"
     for w in $min_slack; do set -- "$@" --min-slack "$w"; done
     [ -z "$seed" ] || set -- "$@" --seed "$(echo "$seed" | tr ' ' ',')"
@@ -306,6 +326,17 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             echo "slack_margin = $(toml_str "${v%% *}")"
             [ -z "$v" ] || echo "slack_margin_note = $(toml_str "$(echo "$v" | sed -n 's/^[A-Z]* (\(.*\))$/\1/p')")"
             slack_state=${v%% *}
+            # a placement the rule cannot judge never reaches a manifest (its seed fails): anything but
+            # PASS or THIN fails
+            case "${slack_state:-missing}" in
+                PASS|THIN) ;;
+                *) problems="${problems:+$problems; }check slack margin ${slack_state:-missing}" ;;
+            esac
+            # the LVS route and its limit (format 2)
+            v=$(awk 'substr($0, 1, 20) == "lvs solver          " { print substr($0, 21); exit }' "$om")
+            [ -z "$v" ] || echo "lvs_solver = $(toml_str "${v%% *}")"
+            v=$(awk 'substr($0, 1, 20) == "lvs timeout         " { print substr($0, 21); exit }' "$om")
+            case "${v%% *}" in ''|*[!0-9]*) ;; *) echo "lvs_timeout = ${v%% *}" ;; esac
         fi
         for c in "SRL cells:check_srl" synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
                  "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
@@ -485,6 +516,7 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
+[ -z "${LVS_TIMEOUT:-}" ] || lvs_timeout=$LVS_TIMEOUT    # LVS_TIMEOUT= replaces it for one build
 pnr_timeout=$(items pnr-timeout)   # each placer seed's limit (default: openxc7-build.sh's, 1800 s)
 case "$pnr_timeout" in *[!0-9]*) die "$design: pnr-timeout must be a number of seconds" ;; esac
 [ -z "$pnr_timeout" ] || [ "$pnr_timeout" -gt 0 ] 2>/dev/null ||
@@ -597,6 +629,7 @@ write_head() {    # the keys known before the run, the same for every flow
     mkdir -p "$base"
     {
         echo "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh"
+        echo "manifest_format = 2"
         echo "run_id = \"$run_id\""
         echo "design = \"$design\""
         echo "top = \"$top\""

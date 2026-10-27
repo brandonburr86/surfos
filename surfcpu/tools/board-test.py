@@ -106,6 +106,9 @@ def package(path):
             'path': str(path)}
 
 
+MANIFEST_FORMATS = ('1', '2')         # tools/fpga-build.sh's manifest_format (none: 1); 2 since 10/27/26
+
+
 def manifest(path):
     """a bitstream build manifest's top keys (tools/fpga-build.sh), or None"""
     try:
@@ -1033,6 +1036,10 @@ def main(argv=None):
         ap.error('no build manifest at %s, so the bitstream loaded could not be identified and this run could not '
                  'pass. Name the design you load (make board-test DESIGN=..., or --design) or its build manifest '
                  '(--manifest FILE)' % r.manifest_path)
+    if str(r.manifest.get('manifest_format', '1')) not in MANIFEST_FORMATS:
+        ap.error('the build manifest %s is format %s, which this script does not know (it reads %s): use the tools of '
+                 'a commit that knows it' % (r.manifest_path, r.manifest.get('manifest_format'),
+                                            ' and '.join(MANIFEST_FORMATS)))
     if r.manifest.get('design') and r.manifest['design'] != design:
         ap.error('the build manifest %s is %s\'s, not that of the design this run asks you to load (%s): name the '
                  'design you load (make board-test DESIGN=..., or --design)' % (r.manifest_path,

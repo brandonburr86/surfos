@@ -84,6 +84,9 @@ FLOW_INPUTS = ("image", "yosys", "nextpnr", "dsp_mode", "placer_seed")
 # MANIFEST's format: 2 since the third GPU review (each design's placer_seed is the seed its bitstream was placed
 # with, from its build record's [openxc7] table; before, every design said 1; and slack_margin, THIN or PASS)
 MANIFEST_FORMAT = 2
+# the build records' own format (tools/fpga-build.sh's manifest_format; none means 1): 2 since 10/27/26, when a record
+# could be a recheck's ([recheck]) and name the LVS route; one this tool does not know is refused, never misread
+RECORD_FORMATS = (1, 2)
 # the tests' stand-ins for devenv/run.sh, tools/fpga-build.sh and docker: honoured only with SURFCPU_RELEASE_TEST=1
 TEST_MODE = os.environ.get("SURFCPU_RELEASE_TEST") == "1"
 HOOKS = ("SURFCPU_RELEASE_RUN", "SURFCPU_RELEASE_FPGA", "SURFCPU_RELEASE_DOCKER")
@@ -935,6 +938,10 @@ def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str
         except Exception as e:                              # noqa: BLE001
             problems.append(f"{rec}: cannot be read ({e})")
             continue
+        if m.get("manifest_format", 1) not in RECORD_FORMATS:
+            problems.append(f"{rec}: manifest_format {m.get('manifest_format')!r}, which this tool does not know "
+                            f"({', '.join(map(str, RECORD_FORMATS))})")
+            continue
         for k, v in (("result", "pass"), ("design", n), ("board", b), ("source_revision", commit),
                      ("source_dirty", False), ("build_time", man.get("source_date_epoch")),
                      ("bitstream_sha256", sums[bit])):
@@ -1294,6 +1301,9 @@ class Release:
             problems.append(m.get("reason") or f"tools/fpga-build.sh exit status {rc}")
         elif m.get("result") != "pass":
             problems.append(m.get("reason") or "its build record does not say pass")
+        elif m.get("manifest_format", 1) not in RECORD_FORMATS:
+            problems.append(f"its build record is manifest_format {m.get('manifest_format')!r}, which this tool does "
+                            "not know")
         else:
             checks = {"source_revision": self.commit, "source_dirty": False, "build_time": self.epoch,
                       "generated_files_match": True, "board": board, "design": design,

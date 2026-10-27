@@ -489,6 +489,25 @@ check "soc: ... and says which" grep -q "PROBLEM: memory u_soc.u_bootrom.rom" "$
 run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_100t
 check "soc: a missing ROM image refused" has "needs the boot ROM image"
 
+# ------------------------------------------------------------------------------ the LVS route
+# (make build-fpga LVS_SOLVER=... LVS_TIMEOUT=...) through the fake flow, on the bramdiag design
+rk() { run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" "$@"; }
+rkbuild() { rk "$@" tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+rkbuild LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "lvs route: LVS_SOLVER and LVS_TIMEOUT reach the open flow" logged "--lvs-timeout 86400 --lvs-solver z3cmd"
+check "lvs route: ... and its manifest records both" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+assert d['manifest_format']==2 and d['openxc7']['lvs_solver']=='z3cmd' and d['openxc7']['lvs_timeout']==86400, d
+" "$d/manifest.txt"
+for v in "LVS_SOLVER=cvc5:LVS_SOLVER must be libz3 or z3cmd" "LVS_TIMEOUT=0:LVS_TIMEOUT must be more than 0" \
+         "LVS_TIMEOUT=2h:LVS_TIMEOUT must be a number of seconds"; do
+    rkbuild "${v%%:*}"
+    check "lvs route: ${v%%:*} refused" test "$rc" -eq 1 -a -n "$(grep "${v#*:}" "$t/out.txt")"
+done
+run env FLOW=vivado-ssh LVS_SOLVER=z3cmd SURFCPU_BUILD_HOST_CONF="$t/conf.saved" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "lvs route: ... and so are the LVS words with a Vivado flow" has "LVS_SOLVER and LVS_TIMEOUT are the open flow's"
+
 # the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
 ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|arty_a7_ddr3_|surf_ddr_bridge|surf_ddr_csr|^lvs-timeout '
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"
