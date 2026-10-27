@@ -8,13 +8,32 @@
 # known nextpnr 1.0.0 defect), and runs the Yosys DSP-packing reproducer, which must fail the
 # synthesis check with full DSP packing and pass in the safe mode. Writes a summary to build/openxc7/demo-summary.txt; exit
 # status 0 only if everything came out as expected. Nothing here touches a board: the
-# bitstreams' behaviour on the hardware stays pending.
+# bitstreams' behaviour on the hardware stays pending. A build's verdict is its manifest's, not
+# only the build script's exit status: a check the flow reports as BLOCKED (LVS stopped at its
+# limit, or killed) leaves that status 0 but is not a pass.
 #
 #   tools/openxc7-demo.sh            both boards
 #   tools/openxc7-demo.sh arty_a7_35t
+#   tools/openxc7-demo.sh --verdict DIR STATUS   the verdict on one build (its directory and the
+#                                    build script's exit status), as the demo gives it
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
+
+verdict() {     # DIR STATUS: PASS when the build script ended 0 and its manifest names every check
+                # PASS (or none in the design); else FAIL, saying why
+  if [ "$2" != 0 ]; then echo "FAIL (exit $2)"; return 0; fi
+  if [ ! -f "$1/manifest.txt" ]; then echo "FAIL (no manifest)"; return 0; fi
+  grep -q '^check ' "$1/manifest.txt" || { echo "FAIL (the manifest names no check)"; return 0; }
+  v=$(awk '/^check / { l = substr($0, 7, 14); sub(/ +$/, "", l); r = substr($0, 21); sub(/ \([^()]*\)$/, "", r)
+                       if (r != "PASS" && r != "none in the design") printf "%s%s %s", n++ ? "; " : "", l, r }' "$1/manifest.txt")
+  if [ -z "$v" ]; then echo PASS; else echo "FAIL ($v)"; fi
+}
+if [ "${1:-}" = --verdict ]; then
+  [ $# = 3 ] || { echo "usage: $0 --verdict DIR STATUS" >&2; exit 2; }
+  verdict "$2" "$3"
+  exit 0
+fi
 boards=${*:-arty_a7_35t arty_a7_100t}
 summary=build/openxc7/demo-summary.txt
 mkdir -p build/openxc7
@@ -31,7 +50,9 @@ for board in $boards; do
   out=build/openxc7/flow_demo-$board
   t0=$(date +%s)
   # shellcheck disable=SC2086
-  if tools/openxc7-build.sh --top flow_demo --board "$board" --xdc "$xdc" --out "$out" $src; then r=PASS; else r=FAIL; fail=1; fi
+  if tools/openxc7-build.sh --top flow_demo --board "$board" --xdc "$xdc" --out "$out" $src; then st=0; else st=$?; fi
+  r=$(verdict "$out" "$st")
+  [ "$r" = PASS ] || fail=1
   t1=$(date +%s)
   {
     echo
@@ -82,7 +103,9 @@ for board in $boards; do
   t0=$(date +%s)
   # shellcheck disable=SC2086
   if tools/openxc7-build.sh --top flow_features --board "$board" --xdc "$fxdc" --out "$out" $fsrc > "$out.txt" 2>&1
-  then r=PASS; else r=FAIL; fail=1; fi
+  then st=0; else st=$?; fi
+  r=$(verdict "$out" "$st")
+  [ "$r" = PASS ] || fail=1
   t1=$(date +%s)
   {
     echo

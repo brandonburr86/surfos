@@ -22,6 +22,7 @@
 #   5. lvs_verdict (tools/openxc7-steps.sh) on every way lvs_equiv can end, with the review's: exit 0
 #      with an unknown, with a DIFFER line, with no point proved
 #   6. devenv/openxc7/z3cmd.py --summary on a line holding Z3's error text, and on one cut short
+#   7. tools/openxc7-demo.sh's verdict: a build whose LVS is BLOCKED is not a pass
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -467,6 +468,19 @@ if o=$(python3 -I devenv/openxc7/z3cmd.py --summary "$t/q.log" 2>&1) &&
    printf '%s\n' "$o" | grep -q '^z3cmd: 3 questions (1 error 4, 1 sat, 1 unsat); .*; 1 line unreadable$'
 then ok "z3cmd: --summary reads a line holding Z3's error text, and counts one cut short as unreadable"
 else bad "z3cmd: --summary on Z3's error text: $o"; fi
+
+# ---------------------------------------------------------------- 7. the demo's verdict
+mk_build 1
+rc_run
+d=$t/demo
+mkdir -p "$d/pass" "$d/blocked" "$d/none"
+cp "$b/out/manifest.txt" "$d/pass/manifest.txt"
+cp "$t/build-manifest.txt" "$d/blocked/manifest.txt"
+v() { "$SH" tools/openxc7-demo.sh --verdict "$1" "$2"; }
+if [ "$(v "$d/pass" 0)" = PASS ] && [ "$(v "$d/blocked" 0)" = "FAIL (LVS BLOCKED (killed: SIGKILL, exit 137))" ] &&
+   [ "$(v "$d/pass" 1)" = "FAIL (exit 1)" ] && [ "$(v "$d/none" 0)" = "FAIL (no manifest)" ]
+then ok "demo: a build is a pass by its manifest: LVS BLOCKED with the build script's exit 0 is not"
+else bad "demo: the verdict ('$(v "$d/pass" 0)', '$(v "$d/blocked" 0)', '$(v "$d/pass" 1)', '$(v "$d/none" 0)')"; fi
 
 [ "$fails" = 0 ] || { echo "openxc7-recheck-test: FAIL ($fails of $checks checks)"; exit 1; }
 echo "openxc7-recheck-test: PASS ($checks checks; $SH, ${awk_is:-awk})"
