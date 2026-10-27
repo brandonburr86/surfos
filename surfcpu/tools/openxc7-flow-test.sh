@@ -413,6 +413,7 @@ case "$PLAN" in
   killed)     printf '  proved  r1\n'; kill -KILL $$ ;;
   term)       printf '  proved  r1\n'; kill -TERM $$ ;;
   diffkilled) printf '  DIFFER  r1\n'; kill -KILL $$ ;;
+  midline)    printf '  proved  r1\n  proved  r'; exec sleep 600 ;;
   hang)       printf '  proved  r1\n'; exec sleep 600 ;;
   setup)      echo "parse error: line 1" >&2; exit 2 ;;
   segv)       kill -SEGV $$ ;;
@@ -471,6 +472,11 @@ EOF
   lvs_is "z3cmd: a point differs" differ z3cmd "FAIL (1 differ)" 1
   lvs_is "z3cmd: the proof killed by SIGKILL" killed z3cmd "BLOCKED (killed: SIGKILL, exit 137)" 0
   lvs_is "z3cmd: points the solver did not decide (a front end killed)" unknown z3cmd "BLOCKED (1 unknown, none differ)" 0
+  lvs_try midline z3cmd
+  if grep -qx 'result_lvs=BLOCKED (timeout)' "$l/run.txt" && [ "$(tail -n 1 "$l/out/check-lvs.txt" | cut -c1-23)" = "z3cmd: stand-in summary" ] &&
+     [ "$(tail -n 2 "$l/out/check-lvs.txt" | head -n 1)" = "  proved  r" ]
+  then ok "lvs: z3cmd: a proof stopped at its limit in the middle of a line: the questions' summary starts a line of its own"
+  else bad "lvs: z3cmd: the summary after a proof stopped mid-line"; cat "$l/run.txt" "$l/out/check-lvs.txt"; fi
 else
   bad "lvs: no timeout command here (coreutils)"
 fi

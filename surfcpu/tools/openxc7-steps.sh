@@ -48,6 +48,7 @@ run() {   # run <step> <log> <command...>: time it, keep its output, stop on fai
   if [ $status != 0 ]; then
     echo "openxc7-build.sh: $step failed (exit $status); the end of $out/$log:" >&2
     tail -n 25 "$out/$log" >&2
+    [ -z "$(tail -c 1 "$out/$log")" ] || echo >&2   # its last line left open (a proof stopped mid-line)
     return $status
   fi
 }
@@ -216,7 +217,10 @@ lvs_prove() {     # the proof by the route lvs_solver names, under lvs_timeout: 
            --placement "$out/placement.json" --gold-json "$out/$top.json" --db "$db" --device "$chipdie" \
            --solver "$solver" --format smt2
       then st=0; else st=$?; fi
-      [ "$dry" = 1 ] || python3 -I "$tools/z3cmd.py" --summary "$out/lvs/questions.log" >> "$out/check-lvs.txt" 2>&1 || true ;;
+      if [ "$dry" = 0 ]; then
+        endline "$out/check-lvs.txt"   # a proof stopped in the middle of a line leaves it open
+        python3 -I "$tools/z3cmd.py" --summary "$out/lvs/questions.log" >> "$out/check-lvs.txt" 2>&1 || true
+      fi ;;
     *)
       result_lvs="FAIL (no LVS solver $lvs_solver)" fail=1
       return 0 ;;
@@ -225,6 +229,10 @@ lvs_prove() {     # the proof by the route lvs_solver names, under lvs_timeout: 
   result_lvs=$(lvs_verdict "$st" "$out/check-lvs.txt")
   case "$result_lvs" in FAIL*) fail=1 ;; esac
   return 0
+}
+
+endline() {   # FILE: end it with a newline when it has text and does not (what is appended starts a line)
+  [ ! -s "$1" ] || [ -z "$(tail -c 1 "$1")" ] || echo >> "$1"
 }
 
 lvs_route_note() {   # what the manifest's "lvs solver" line says of the route (no parentheses)
@@ -336,6 +344,7 @@ post_route_checks() {   # the checks of a routed build in $out (see the top of t
     then
       lvs_prove
       if [ "$dry" = 0 ]; then
+        endline "$out/check-lvs.txt"
         cat "$out/lvs/bramwe.txt" >> "$out/check-lvs.txt"
         bram_diff=$(sed -n 's/^bramwe: .* \([0-9][0-9]*\) difference(s)$/\1/p' "$out/lvs/bramwe.txt")
         if [ "${bram_diff:-0}" != 0 ]; then result_lvs="FAIL ($bram_diff block RAM write enable difference(s))"; fail=1; fi
