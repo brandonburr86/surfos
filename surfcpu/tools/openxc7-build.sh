@@ -31,6 +31,11 @@
 #   --no-lvs           skip the LVS proof (it can take long on a large design)
 #   --lvs-timeout <s>  how long the LVS proof may run before it counts as BLOCKED (default
 #                      1800, or OPENXC7_LVS_TIMEOUT inside the image); the whole SoC needs more
+#   --lvs-solver libz3|z3cmd  how the proof's questions reach Z3 (tools/openxc7-steps.sh):
+#                      libz3 (default, or OPENXC7_LVS_SOLVER inside the image), lvs_equiv's own
+#                      incremental session, whose memory grows with the run; z3cmd, one solver
+#                      process a question (devenv/openxc7/z3cmd.py), slower, its memory a
+#                      question's. The same questions either way; the manifest says which ran
 #   --no-check         skip every check after the bitstream
 #   --dry-run          print what would run, without the image
 #
@@ -64,6 +69,7 @@ die_usage() { echo "openxc7-build.sh: $*" >&2; echo "usage: see the top of $0" >
 
 top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonly=0
 lvs_timeout=${OPENXC7_LVS_TIMEOUT:-1800}
+lvs_solver=${OPENXC7_LVS_SOLVER:-libz3}
 pnr_timeout=${OPENXC7_PNR_TIMEOUT:-1800}
 defs= incs= srcs= extras= min_slack=
 while [ $# -gt 0 ]; do
@@ -84,6 +90,7 @@ while [ $# -gt 0 ]; do
     --synth-only) synthonly=1; shift ;;
     --no-lvs)   lvs=0; shift ;;
     --lvs-timeout) [ $# -ge 2 ] || die_usage "--lvs-timeout needs a value"; lvs_timeout=$2; shift 2 ;;
+    --lvs-solver)  [ $# -ge 2 ] || die_usage "--lvs-solver needs a value"; lvs_solver=$2; shift 2 ;;
     --pnr-timeout) [ $# -ge 2 ] || die_usage "--pnr-timeout needs a value"; pnr_timeout=$2; shift 2 ;;
     --min-slack) [ $# -ge 2 ] || die_usage "--min-slack needs a value"; min_slack="$min_slack $2"; shift 2 ;;
     --no-check) check=0; shift ;;
@@ -100,6 +107,7 @@ case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none
 case "$seed" in ''|*[!0-9,]*|,*|*,|*,,*) die_usage "--seed must be a number or a list of numbers (2,3,4)" ;; esac
 seeds=$(echo "$seed" | tr ',' ' ')
 case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
+case "$lvs_solver" in libz3|z3cmd) ;; *) die_usage "--lvs-solver must be libz3 or z3cmd, not '$lvs_solver'" ;; esac
 case "$pnr_timeout" in ''|*[!0-9]*) die_usage "--pnr-timeout must be a number of seconds" ;; esac
 [ "$pnr_timeout" -gt 0 ] 2>/dev/null || die_usage "--pnr-timeout must be more than 0 seconds (timeout takes 0 as no limit)"
 slack_clocks=
@@ -155,7 +163,7 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
   for i in $incs; do set -- "$@" -I "$(rel "$i")"; done
   for e in $extras; do set -- "$@" --manifest-include "$(rel "$e")"; done
   [ "$lvs" = 0 ] && set -- "$@" --no-lvs
-  set -- "$@" --lvs-timeout "$lvs_timeout" --pnr-timeout "$pnr_timeout"
+  set -- "$@" --lvs-timeout "$lvs_timeout" --lvs-solver "$lvs_solver" --pnr-timeout "$pnr_timeout"
   for w in $min_slack; do set -- "$@" --min-slack "$w"; done
   [ "$check" = 0 ] && set -- "$@" --no-check
   for s in $srcs; do set -- "$@" "$(rel "$s")"; done
@@ -199,12 +207,8 @@ check_chipdb() {  # its SHA-256 must be the one devenv/openxc7/chipdb.sha256 giv
   [ -n "$want" ] && [ "$want" = "$got" ]
 }
 
-decode_bitstream() {   # Project X-Ray's bit2fasm: the finished bitstream back to FASM
-  PYTHONWARNINGS=ignore::RuntimeWarning bit2fasm --db-root "$db" --part "$part" \
-    --bitread "$(command -v bitread)" "$out/$top.bit" > "$out/$top.decoded.fasm"
-}
-
-# run (each step, timed and logged), place_and_route (the placer seeds, each under pnr_timeout)
+# run (each step, timed and logged), place_and_route (the placer seeds, each under pnr_timeout),
+# post_route_checks (the checks of a routed build, LVS by lvs_prove and lvs_verdict)
 . "$here/tools/openxc7-steps.sh"
 
 if [ "$dry" = 0 ]; then
@@ -315,73 +319,10 @@ run bit xc7frames2bit.log xc7frames2bit --part_file "$db/$part/part.yaml" --part
 run report report.out python3 -I $tools/report.py --device "$device" --report "$out/report.json" \
   --log "$out/nextpnr.log" --stat "$out/stat.json" --timing "$out/timing.txt" --utilization "$out/utilization.txt"
 
-# Checks without a board.
-result_bit=skipped result_rt=skipped result_lvs=skipped result_clk=skipped result_bram=skipped
+# Checks without a board (tools/openxc7-steps.sh: clocks, bitstream, round trip, block RAM, LVS).
 fail=0
 [ "$result_syn" = FAIL ] && fail=1
-if [ "$check" = 1 ]; then
-  # The clock managers' dividers against AMD's XAPP888 (LVS does not model MMCM/PLL).
-  if run check-clk check-clocks.txt python3 $tools/cmtcheck.py --json "$out/$top.json" \
-       --placement "$out/placement.json" --fasm "$out/$top.fasm"
-  then
-    if [ "$dry" = 0 ] && grep -q 'no MMCME2/PLLE2' "$out/check-clocks.txt"; then result_clk="none in the design"; else result_clk=PASS; fi
-  else result_clk=FAIL; fail=1; fi
-  # No ordinary net on the global clock network: no net through an unconfigured BUFGCTRL, no
-  # clock line into a data input (docs/OPEN-FLOW.md 6.8). Its report goes into check-clocks.txt.
-  if run check-gclk check-gclk.txt python3 -I $tools/gclkcheck.py --fasm "$out/$top.fasm"
-  then :
-  else result_clk=FAIL; fail=1; fi
-  [ "$dry" = 1 ] || { echo; cat "$out/check-gclk.txt"; } >> "$out/check-clocks.txt"
-  if run check-bit check-bitstream.txt python3 -I $tools/bitinfo.py --expect-device "$device" "$out/$top.bit"
-  then result_bit=PASS; else result_bit=FAIL; fail=1; fi
-  if run decode bit2fasm.log decode_bitstream &&
-     run roundtrip check-roundtrip.txt python3 $tools/fasmcheck.py --db-root "$db" --part "$part" \
-       "$out/$top.fasm" "$out/$top.decoded.fasm"
-  then result_rt=PASS; else result_rt=FAIL; fail=1; fi
-  # Block RAM contents: fasm2netlist reads them out of the decoded bitstream; they must be
-  # the synthesized netlist's, block for block (LVS checks block RAMs only at their pins).
-  if [ "$dry" = 1 ] || grep -Eq '"type": "RAMB(18|36)E1"' "$out/$top.json"; then
-    if run bram-extract bram-extract.log fasm2netlist --fasm "$out/$top.decoded.fasm" --db "$dbroot" \
-         --family "$family" --device "$chipdie" --out "$out/bram-extracted.v" &&
-       run check-bram check-bram.txt python3 -I $tools/bramcheck.py --netlist "$out/$top.json" --top "$top" \
-         --extracted "$out/bram-extracted.v"
-    then result_bram=PASS; else result_bram=FAIL; fail=1; fi
-  else
-    result_bram="none in the design"
-  fi
-  # LVS (openXC7's lvs-equiv flow): the routed FASM read back into a fabric netlist by
-  # fasm2netlist's tile model and proved equal to the synthesis, register by register. A
-  # primitive the tile model lacks, or a proof that runs out of time, leaves it BLOCKED:
-  # not proved, which is reported, but not a failure. Between extraction and proof,
-  # bramwe.py makes the netlist read each RAMB18E1 byte write enable from the site pins the
-  # silicon reads it from (the extractor reads them one to one; docs/OPEN-FLOW.md) and checks
-  # every pin it no longer reads: a difference it finds fails LVS like one the proof finds.
-  if [ "$lvs" = 1 ]; then
-    if run lvs-gold lvs/gold.log yosys -q -p "read_json $out/$top.json; hierarchy -top $top; splitnets; select $top; write_verilog -noattr -norename -selected $out/lvs/gold.v" &&
-       run lvs-extract lvs/tileverilog.log tileverilog --fasm "$out/$top.fasm" --db "$db" --device "$chipdie" \
-         --xdc "$xdc" --part "$part" --placement "$out/placement.json" --out "$out/lvs/fabric.v" \
-         --model-out "$out/lvs/tile_model.v" &&
-       run lvs-bramwe lvs/bramwe.log python3 -I $tools/bramwe.py --fabric "$out/lvs/fabric.v" \
-         --fasm "$out/$top.fasm" --report "$out/lvs/bramwe.txt"
-    then
-      if run lvs-prove check-lvs.txt timeout "$lvs_timeout" lvs_equiv --gold "$out/lvs/gold.v" \
-           --gold-top "$top" --gate "$out/lvs/fabric.v" --gate-top fabric --placement "$out/placement.json" \
-           --gold-json "$out/$top.json" --db "$db" --device "$chipdie"
-      then result_lvs=PASS
-      else
-        st=$?
-        if [ "$st" = 124 ]; then result_lvs="BLOCKED (timeout)"; else result_lvs=FAIL; fail=1; fi
-      fi
-      if [ "$dry" = 0 ]; then
-        cat "$out/lvs/bramwe.txt" >> "$out/check-lvs.txt"
-        bram_diff=$(sed -n 's/^bramwe: .* \([0-9][0-9]*\) difference(s)$/\1/p' "$out/lvs/bramwe.txt")
-        if [ "${bram_diff:-0}" != 0 ]; then result_lvs="FAIL ($bram_diff block RAM write enable difference(s))"; fail=1; fi
-      fi
-    else
-      result_lvs="BLOCKED (extraction: see lvs/tileverilog.log)"
-    fi
-  fi
-fi
+post_route_checks
 
 [ "$dry" = 1 ] && exit 0
 
@@ -410,7 +351,8 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check bitstream     $result_bit (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    $result_rt (bitstream decoded back to FASM: check-roundtrip.txt)"
   echo "check block RAM     $result_bram (contents decoded from the bitstream: check-bram.txt)"
-  echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
+  echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis, lvs_equiv by the $lvs_solver route: check-lvs.txt)"
+  echo "lvs solver          $lvs_solver ($(lvs_route_note))"
   echo "lvs timeout         $lvs_timeout s"
   echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)"
   echo "check slack margin  $slack_state ($slack_note: slack-seed$seed_used.txt)"
@@ -423,7 +365,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 } > "$out/manifest.txt"
 
 grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /'
-echo "openxc7-build.sh: checks: SRL cells $result_srl, synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk, slack margin $slack_state"
+echo "openxc7-build.sh: checks: SRL cells $result_srl, synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs ($lvs_solver), clocks $result_clk, slack margin $slack_state"
 [ "$slack_state" != THIN ] || echo "openxc7-build.sh: THIN: every placer seed met timing with less slack than the rule wants ($slack_note); make release refuses this bitstream without PRERELEASE=1" >&2
 echo "openxc7-build.sh: $out/$top.bit ($(wc -c < "$out/$top.bit" | tr -d ' ') bytes); manifest $out/manifest.txt"
 exit $fail
