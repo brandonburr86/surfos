@@ -45,13 +45,19 @@
 #                      fabric.v from the FASM made again, bramwe, the proof by --lvs-solver), clocks,
 #                      slack and timing. It first checks the build against its manifest and refuses
 #                      (exit 3, nothing changed) when a file is missing, the bitstream, the XDC (or,
-#                      format 2, the netlist, FASM or placement) is not the one recorded, a check it
-#                      keeps (SRL cells, synthesis) did not pass, or the image's tools are not the
-#                      build's. Then it puts the build's manifest aside as manifest.build.txt (once)
-#                      and writes manifest.txt anew: the build's identity and its kept checks as they
-#                      were, the checks run again, when, by which commit's tools, with which LVS
-#                      route. Without --lvs-solver and --lvs-timeout it takes the build's. Exit 0
-#                      only if every check passed (BLOCKED aside, as in a build)
+#                      format 2, the netlist, FASM or placement: each line required) is not the one
+#                      recorded, a format 1 build lacks the LVS inputs that tie its netlist and
+#                      placement to it, a check it keeps (SRL cells, synthesis) did not pass, or the
+#                      image's tools are not the build's. Then it keeps a copy of the build's
+#                      manifest as manifest.build.txt and of its logs in build-evidence/ (once),
+#                      runs the checks again, and refuses (exit 4) if the LVS inputs it makes again
+#                      are not the build's bytes, before the proof. Its manifest, written aside,
+#                      replaces manifest.txt by a rename at the end: until then manifest.txt is
+#                      what it was, so a recheck stopped anywhere leaves the build's. The new one
+#                      keeps the build's identity and its kept checks as they were, and says the
+#                      checks run again, when, by which commit's tools, with which LVS route.
+#                      Without --lvs-solver and --lvs-timeout it takes the build's. Exit 0 only
+#                      if every check passed (BLOCKED aside, as in a build)
 #
 # The manifest's format is 2 (its "manifest format" line; none means 1): format 2 records the
 # synthesized netlist, the FASM and the placement by SHA-256, the LVS solver, and a recheck's lines.
@@ -89,7 +95,7 @@ top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonl
 lvs_timeout=${OPENXC7_LVS_TIMEOUT:-1800}
 lvs_solver=${OPENXC7_LVS_SOLVER:-libz3}
 pnr_timeout=${OPENXC7_PNR_TIMEOUT:-1800}
-defs= incs= srcs= extras= min_slack= lvs_timeout_given= lvs_solver_given=
+defs= incs= srcs= extras= min_slack= lvs_timeout_given= lvs_solver_given= lvs_inputs_hook=
 for a in "$@"; do [ "$a" != --recheck ] || recheck=1; done
 if [ "$recheck" = 1 ]; then          # a recheck takes the build's own settings from its manifest
   while [ $# -gt 0 ]; do
@@ -242,21 +248,37 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasu
 . "$here/tools/openxc7-steps.sh"
 
 # ------------------------------------------------------------------ --recheck
-# The build's own record is its manifest: manifest.build.txt once a recheck has put it aside, else
-# manifest.txt (never a recheck's: one that is, with no manifest.build.txt beside it, is refused).
+# The build's own record is its manifest: manifest.build.txt once a recheck has kept a copy of it,
+# else manifest.txt (never a recheck's: one that is, with no manifest.build.txt beside it, is refused).
 # A line's value is what follows its label's 20 columns, as tools/fpga-build.sh and program.sh read it.
+# A manifest is beside the bitstream at every moment, and until the recheck's is complete it is the
+# one that was there (the build's, or an earlier recheck's): the recheck writes its own aside
+# (manifest.txt.new) and renames it over manifest.txt at the end, so a recheck stopped anywhere, by
+# a kill, Ctrl-C or a step that fails, leaves what tools/program.sh read before it began. Its
+# copies are made whole or not at all (written aside, then renamed): manifest.build.txt, and
+# build-evidence/, the build's own logs and lvs-inputs.sha256, the SHA-256 of the LVS inputs it
+# made (gold.v from the netlist, fabric.raw.v and fabric.v from the FASM and the placement; the
+# netlists themselves are not copied, the DDR+GPU build's are 200 MB): the inputs made again must
+# be those bytes before anything is proved of them (exit 4 otherwise, before the proof).
 if [ "$recheck" = 1 ]; then
   mfield() {      # LABEL FILE: the value of the LABEL line, among the lines before the first "## " section
     awk -v n="$1" 'BEGIN { n = sprintf("%-20s", n) } /^## / { exit } substr($0, 1, 20) == n { print substr($0, 21); exit }' "$2"
   }
   result_of() { mfield "check $1" "$2" | sed 's/ ([^()]*)$//'; }
   section() { awk -v h="## $1" '$0 == h || index($0, h " (") == 1 { on = 1; next } /^## / { on = 0 } on' "$2"; }
-  rec=$out/manifest.txt
-  [ ! -f "$out/manifest.build.txt" ] || rec=$out/manifest.build.txt
+  ev=$out/build-evidence
+  first=1 rec=$out/manifest.txt               # first: no recheck has kept the build's manifest yet
+  if [ -f "$out/manifest.build.txt" ]; then first=0 rec=$out/manifest.build.txt; fi
   [ -f "$rec" ] || die_recheck "no manifest in $out: not a finished build of this flow"
   case "$(head -n 1 "$rec")" in "# openXC7 build manifest"*) ;; *) die_recheck "$rec is not this flow's manifest" ;; esac
   [ -z "$(mfield recheck "$rec")" ] ||
     die_recheck "$rec is a recheck's manifest, and the build's own ($out/manifest.build.txt) is not beside it"
+  # beside a kept manifest.build.txt, manifest.txt is a recheck's, or the build's as it was (a recheck
+  # stopped before its own was written); a build's own that is not that one is a later build's
+  if [ "$first" = 0 ] && [ -f "$out/manifest.txt" ] && [ -z "$(mfield recheck "$out/manifest.txt")" ] &&
+     ! cmp -s "$out/manifest.txt" "$rec"; then
+    die_recheck "$out/manifest.txt is a build's own manifest, but not the one an earlier recheck kept as $rec: a later build over an earlier recheck's files? (to recheck the later build, remove $rec and $ev)"
+  fi
   fmt=$(mfield "manifest format" "$rec"); fmt=${fmt%% *}
   case "${fmt:-1}" in 1|2) ;; *) die_recheck "$rec is manifest format $fmt, which this script does not know (1, 2)" ;; esac
   top=$(mfield top "$rec") part=$(mfield part "$rec") board=$(mfield board "$rec")
@@ -284,8 +306,33 @@ if [ "$recheck" = 1 ]; then
   recorded bitstream "$out/$top.bit"
   recorded xdc "$xdc"
   for l in "netlist:$out/$top.json" "routed FASM:$out/$top.fasm" "placement:$out/placement.json"; do
-    [ -z "$(mfield "${l%%:*}" "$rec")" ] || recorded "${l%%:*}" "${l#*:}"   # format 2 records them
+    if [ -n "$(mfield "${l%%:*}" "$rec")" ]; then recorded "${l%%:*}" "${l#*:}"
+    elif [ "${fmt:-1}" = 2 ]; then      # format 2 records each of them: a line missing is refused
+      die_recheck "$rec is manifest format 2, which records the netlist, the FASM and the placement by SHA-256, but has no ${l%%:*} line"
+    fi
   done
+  # The LVS inputs the build made, by SHA-256: build-evidence/lvs-inputs.sha256 once a recheck has
+  # kept them, else (the first recheck) lvs/ as the build left it. A format 1 record names neither the
+  # netlist nor the placement, so these tie them to the build: gold.v is made from the netlist,
+  # fabric.v (through fabric.raw.v) from the FASM and the placement, and the recheck's must be the
+  # same bytes (recheck_lvs_tie, before the proof). Without them a format 1 build cannot be rechecked.
+  if [ -f "$ev/lvs-inputs.sha256" ]; then
+    lvs_sums=$(cat "$ev/lvs-inputs.sha256")
+  elif [ "$first" = 1 ]; then
+    lvs_sums=$(for f in gold.v fabric.raw.v fabric.v; do [ ! -f "$out/lvs/$f" ] || printf '%s  %s\n' "$(sha "$out/lvs/$f")" "$f"; done)
+  else
+    lvs_sums=        # an earlier recheck made them again without keeping the build's
+  fi
+  lvs_had() { printf '%s\n' "$lvs_sums" | awk -v f="$1" '$2 == f { print $1; exit }'; }
+  if [ "${fmt:-1}" = 1 ]; then
+    for f in gold.v fabric.v; do
+      [ -n "$(lvs_had $f)" ] && continue
+      if [ "$first" = 1 ]; then
+        die_recheck "$out/lvs/$f is missing: a format 1 build's manifest names neither its netlist nor its placement by SHA-256, and the LVS inputs it made are what tie them to it"
+      fi
+      die_recheck "the build's lvs/$f is not known (an earlier recheck made the LVS inputs again without keeping the build's), and a format 1 build's manifest names neither its netlist nor its placement by SHA-256: recheck a copy of the build as it was"
+    done
+  fi
   # the checks it keeps (pre-route: they read the synthesized netlist, which a recheck does not touch)
   for c in "SRL cells" synthesis; do
     v=$(result_of "$c" "$rec")
@@ -307,28 +354,71 @@ if [ "$recheck" = 1 ]; then
   case "$lvs_timeout" in ''|*[!0-9]*) die_recheck "no LVS time limit: $rec records none, and --lvs-timeout was not given" ;; esac
   # the image's tools are the build's: what each check runs is what the build's would have run
   r_tools=$(section "tools" "$rec")
+  img_tools=$(cat /etc/surfcpu-openxc7.txt 2>/dev/null || true)
   if [ "$dry" = 0 ]; then
-    [ "$r_tools" = "$(cat /etc/surfcpu-openxc7.txt 2>/dev/null)" ] ||
+    [ "$r_tools" = "$img_tools" ] ||
       die_recheck "the tools of this image (/etc/surfcpu-openxc7.txt) are not the ones the build ran with (its manifest's ## tools): recheck in the build's image"
   fi
   echo "openxc7-build.sh: --recheck of $out: $top for $part ($device), built $r_date with seed $r_seed; its record $rec (format ${fmt:-1})"
   echo "openxc7-build.sh: the bitstream, the XDC$( [ -z "$(mfield netlist "$rec")" ] || echo ", the netlist, the FASM, the placement") as recorded; kept: SRL cells PASS, synthesis PASS"
   echo "openxc7-build.sh: run again: bitstream, round trip, block RAM, LVS by $lvs_solver within $lvs_timeout s, clocks, slack margin, timing"
+  if [ -n "$lvs_sums" ]; then
+    echo "openxc7-build.sh: the LVS inputs made again must be the build's, before the proof: $(printf '%s\n' "$lvs_sums" | awk '{ printf "%s%s %s", n++ ? ", " : "", $2, substr($1, 1, 12) }')"
+  fi
   [ "$dry" = 0 ] || echo "openxc7-build.sh: --dry-run: the image's tools are compared with the record's in the image only; would run:"
-  lvs_was=
   if [ "$dry" = 0 ]; then
-    if [ "$rec" = "$out/manifest.txt" ]; then mv "$out/manifest.txt" "$out/manifest.build.txt"; rec=$out/manifest.build.txt; fi
-    for f in gold.v fabric.raw.v fabric.v; do
-      if [ -f "$out/lvs/$f" ]; then lvs_was="$lvs_was $f:$(sha "$out/lvs/$f")"; fi
-    done
-    for f in manifest.txt times.txt check-bitstream.txt check-roundtrip.txt check-bram.txt check-lvs.txt check-clocks.txt \
-             check-gclk.txt timing.txt utilization.txt report.out "$top.decoded.fasm" bit2fasm.log bram-extracted.v \
-             bram-extract.log; do
-      rm -f "${out:?}/$f"
-    done
-    rm -rf "${out:?}/lvs"
+    rm -f "$out/manifest.txt.new"
+    if [ "$first" = 1 ]; then
+      # the build's own logs, kept once (whole or not at all), before any step writes its log again
+      if [ ! -d "$ev" ]; then
+        rm -rf "${out:?}/build-evidence.tmp"
+        mkdir -p "$out/build-evidence.tmp/lvs"
+        for f in times.txt report.out timing.txt utilization.txt "slack-seed$r_seed.txt" "slack-seed$r_seed.err" \
+                 check-bitstream.txt check-roundtrip.txt check-bram.txt check-lvs.txt check-clocks.txt check-gclk.txt \
+                 bit2fasm.log bram-extract.log; do
+          [ ! -f "$out/$f" ] || cp -p "$out/$f" "$out/build-evidence.tmp/$f"
+        done
+        for f in "$out"/lvs/*; do
+          case "${f##*/}" in gold.v|fabric.raw.v|fabric.v) ;; *) [ ! -f "$f" ] || cp -p "$f" "$out/build-evidence.tmp/lvs/" ;; esac
+        done
+        printf '%s\n' "$lvs_sums" | grep . > "$out/build-evidence.tmp/lvs-inputs.sha256" || true
+        mv "$out/build-evidence.tmp" "$ev"
+      fi
+      cp -p "$out/manifest.txt" "$out/manifest.build.txt.tmp"
+      mv "$out/manifest.build.txt.tmp" "$out/manifest.build.txt"
+      rec=$out/manifest.build.txt
+    fi
+    rm -f "$out/times.txt"                     # this recheck's step times (the build's: build-evidence/)
     mkdir -p "$out/lvs"
   fi
+  # Between the LVS inputs' extraction and the proof (post_route_checks): the inputs made again must
+  # be the build's bytes, which ties its netlist, FASM and placement to it (a format 1 record names
+  # neither the netlist nor the placement); if not, the recheck refuses (exit 4) and its manifest is
+  # never written. A file the build did not make is only noted.
+  die_tie() {
+    echo "openxc7-build.sh: --recheck: $*; refusing (exit 4): the netlist, the FASM or the placement is not the build's. $out/manifest.txt is as it was; the checks run so far have written their logs again (the build's own are in $ev)" >&2
+    exit 4
+  }
+  recheck_lvs_tie() {
+    if [ "$dry" = 1 ]; then
+      [ -z "$lvs_sums" ] || echo "[lvs-tie] the LVS inputs made again compared with the build's ($ev/lvs-inputs.sha256)"
+      return 0
+    fi
+    lvs_same=
+    for f in gold.v fabric.raw.v fabric.v; do
+      was=$(lvs_had $f)
+      if [ -z "$was" ]; then
+        if [ -f "$out/lvs/$f" ]; then lvs_same="$lvs_same; $f made, the build left none"; else lvs_same="$lvs_same; $f not made"; fi
+        continue
+      fi
+      [ -f "$out/lvs/$f" ] || die_tie "lvs/$f was not made again (the build's: sha256 $was)"
+      now=$(sha "$out/lvs/$f")
+      [ "$now" = "$was" ] || die_tie "lvs/$f made again (sha256 $now) is not the build's (sha256 $was)"
+      lvs_same="$lvs_same; $f the same bytes as the build's"
+    done
+    lvs_tied=1
+  }
+  lvs_inputs_hook=recheck_lvs_tie lvs_tied= lvs_same=
   check=1 lvs=1 fail=0 seed_used=$r_seed
   run report report.out python3 -I $tools/report.py --device "$device" --report "$out/report.json" \
     --log "$out/nextpnr.log" --stat "$out/stat.json" --timing "$out/timing.txt" --utilization "$out/utilization.txt"
@@ -355,14 +445,8 @@ EOF
   fi
   post_route_checks
   [ "$dry" = 1 ] && exit 0
-  lvs_same=
-  for f in gold.v fabric.raw.v fabric.v; do
-    was=$(printf '%s\n' $lvs_was | sed -n "s/^$f://p")
-    if [ ! -f "$out/lvs/$f" ]; then lvs_same="$lvs_same; $f not made"
-    elif [ -z "$was" ]; then lvs_same="$lvs_same; $f made, the build left none"
-    elif [ "$was" = "$(sha "$out/lvs/$f")" ]; then lvs_same="$lvs_same; $f the same bytes as the build's"
-    else lvs_same="$lvs_same; $f differs from the build's, sha256 $was"; fi
-  done
+  # LVS inputs not compared (their extraction failed, so LVS is BLOCKED): say what there is
+  [ -n "$lvs_tied" ] || lvs_same="; not compared with the build's: their extraction did not finish"
   {
     echo "# openXC7 build manifest (tools/openxc7-build.sh), rechecked (--recheck); physical behaviour: pending (never on a board)"
     echo "manifest format     2 (docs/OPEN-FLOW.md section 3)"
@@ -386,15 +470,21 @@ EOF
     echo "checks run again    bitstream, round trip, block RAM, LVS, clocks, slack margin, timing and utilization"
     echo "checks kept         SRL cells, synthesis: the build's of $r_date"
     echo "build manifest      $rec sha256:$(sha "$rec") (the build's own: check LVS $(result_of LVS "$rec" | tr '()' '[]'))"
-    echo "lvs inputs          made again from the netlist and the FASM${lvs_same}"
+    echo "lvs inputs          made again from the netlist, the FASM and the placement${lvs_same}"
+    if [ -d "$ev" ]; then
+      echo "build evidence      $ev (the build's own logs; lvs-inputs.sha256, its LVS inputs by SHA-256)"
+    else
+      echo "build evidence      none (an earlier recheck ran before the build's logs were kept)"
+    fi
     echo "## placement attempts (the build's)"; section "placement attempts" "$rec"
     echo "## timing"; grep '^clock ' "$out/timing.txt" || true
     echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"
     echo "## step times (the build's)"; section "step times" "$rec"
     echo "## step times (this recheck)"; cat "$out/times.txt"
-    echo "## tools (/etc/surfcpu-openxc7.txt)"; cat /etc/surfcpu-openxc7.txt
+    echo "## tools (/etc/surfcpu-openxc7.txt)"; printf '%s\n' "$img_tools"
     sed -n '/^## included: /,$p' "$rec"
-  } > "$out/manifest.txt"
+  } > "$out/manifest.txt.new"
+  mv -f "$out/manifest.txt.new" "$out/manifest.txt"   # the build's, or an earlier recheck's, until here
   grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /' || true
   echo "openxc7-build.sh: recheck: kept SRL cells PASS, synthesis PASS; run again: bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs by $lvs_solver, clocks $result_clk, slack margin $slack_state"
   echo "openxc7-build.sh: $out/manifest.txt written anew; the build's own is $rec"

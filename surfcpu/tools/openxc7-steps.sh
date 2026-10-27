@@ -7,7 +7,8 @@
 # devenv/openxc7/test/lvs_routes_inner.sh, for lvs_verdict). Uses the flow's variables:
 # dry, out, top, part, chipdb, threads, xdc, tools, pnr_timeout and min_slack (the design's
 # "CLOCK=NS" words; may be empty); the checks also check, device, chipdie, family, db, dbroot,
-# lvs, lvs_timeout and lvs_solver.
+# lvs, lvs_timeout and lvs_solver, and lvs_inputs_hook (a recheck's: a function run between the
+# LVS inputs' extraction and the proof; unset in a build).
 #
 #   run <step> <log> <command...>   time a step, keep its output in $out/<log>, stop on failure
 #   place_and_route <seed>...       nextpnr with each seed in turn until one routes with every
@@ -342,6 +343,9 @@ post_route_checks() {   # the checks of a routed build in $out (see the top of t
        run lvs-bramwe lvs/bramwe.log python3 -I $tools/bramwe.py --fabric "$out/lvs/fabric.v" \
          --fasm "$out/$top.fasm" --report "$out/lvs/bramwe.txt"
     then
+      # a recheck's: the inputs made again must be the build's before anything is proved of them
+      # (tools/openxc7-build.sh --recheck sets lvs_inputs_hook, which stops the script when they are not)
+      [ -z "${lvs_inputs_hook:-}" ] || "$lvs_inputs_hook"
       lvs_prove
       if [ "$dry" = 0 ]; then
         endline "$out/check-lvs.txt"
