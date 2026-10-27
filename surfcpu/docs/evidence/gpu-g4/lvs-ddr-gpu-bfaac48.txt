@@ -1,0 +1,169 @@
+SurfGPU G4: the full LVS proof of the DDR+GPU bitstream at bfaac48, 2026-10-26/27: PROVED
+The bitstream: surfcpu_arty_a7_ddr_gpu at bfaac48, seed 1 (synth-ddr-gpu.txt), its routed build's
+build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit, sha256
+582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b. Its build's own LVS step (lvs_equiv with one
+incremental libz3 session) was killed at the Docker cap of 3.5 GB (exit 137, 8,606 proved, none differing), so
+the build's manifest says check LVS FAIL and result fail; this is the proof made afterwards, by lvs_equiv's
+--solver route (one solver process a question: GPU.md 16.11), on that build's own files: lvs/gold.v, lvs/fabric.v,
+placement.json and the synthesized JSON, with the flow's arguments.
+
+What ran: the integrator's launcher (06-restoration-gpu-integ, build/integ-tools/run-ddr-gpu-lvs.sh) in the
+gpu-g4 worktree, at HEAD 988b76a with a clean tree, through the capped Docker wrapper (the openxc7 image,
+both slots): docker run surfcpu-openxc7:2026-10-15 sh /work/surfcpu/build/g4-lvs/lvs-solver.sh
+surfcpu_arty_a7_ddr_gpu 86400. lvs-solver.sh and z3cmd.py are this worktree's build/g4-lvs/ (outside git; 16.11
+describes them); the outputs are in build/g4-lvs/surfcpu_arty_a7_ddr_gpu/, the 900 s trial's beside them in
+surfcpu_arty_a7_ddr_gpu-trial-900s/. The launcher's log:
+  start 2026-10-26T23:19:52Z
+  bitstream 582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b
+  g4 worktree HEAD 988b76a, status: 0 changes
+  06-restoration-gpu-integ/surfcpu/build/integ-tools/capped-bin/docker
+  docker exit 0, end 2026-10-27T13:12:19Z
+
+versions.txt (the tools in the image, the cgroup's limit, the solver front end's self-tests):
+  lvs-solver.sh surfcpu_arty_a7_ddr_gpu, limit 86400 s, start 2026-10-26T23:19:52Z
+  libz3 4.13.3.0
+  nextpnr e860c9c8360d8501a1b55df94e58f3dfe7bde958 1.0.0 meta:a4af910cac907f2cbd3a545f26f8e26573e860de fasm2netlist:0948889f6a5d53b529a55956e65649e208f9d357
+  Python 3.13.5
+  memory.max 3670016000
+  self-test unsat: answer 'unsat', exit 0
+  self-test sat: answer 'sat', exit 0
+  self-test error: answer '', exit 1
+
+check-lvs.txt (lvs_equiv's report: its first four lines, then its end):
+  memory map: 9985 read symbols from the placement
+  register map: 8709 from the placement (gold module surfcpu_arty_a7_top)
+  registers: 8709 gold, 8709 gate, 8709 matched by name
+  solver: python3 -I /work/surfcpu/build/g4-lvs/z3cmd.py (SMT-LIB2, one process per question)
+  ... 20971 lines "proved ...", 0 "differ" or "unknown" ...
+  memories: 404 gold, 501 gate, 404 paired and checked at the boundary
+  hard blocks: 184 placed by the synthesis (6x DSP48E1, 1x IDELAYCTRL, 16x ISERDESE2, 1x MMCME2_BASE, 45x OSERDESE2, 1x PLLE2_ADV, 1x PLLE2_BASE, 1x RAMB18E1, 112x RAMB36E1)
+    3 the tile model does not model, so nothing here checks them:
+      u_clocks.u_pix_mmcm (MMCME2_BASE at MMCME2_ADV_X1Y2)
+      u_clocks.u_sys_pll (PLLE2_BASE at PLLE2_ADV_X1Y2)
+      u_dram.IDELAYCTRL (IDELAYCTRL at IDELAYCTRL_X1Y1)
+  20971 proved, 0 differ, 0 unknown   (49942.9s)
+  lvs-solver.sh: exit 0, end 2026-10-27T13:12:19Z
+
+questions.log (z3cmd.py, a line a question: the question's bytes, its seconds, Z3's error code, the answer):
+  20971 questions with error code 0 unsat
+  question files of 3224975 to 48347140 bytes (800.8 GB written in all); the solver took 47343.3 s in all,
+  2.26 s a question, the longest 15.98 s (question 6161)
+
+time.txt (/usr/bin/time -v of lvs_equiv), its key lines:
+  User time (seconds): 43649.18
+  System time (seconds): 6265.21
+  Percent of CPU this job got: 99%
+  Elapsed (wall clock) time (h:mm:ss or m:ss): 13:52:26
+  Maximum resident set size (kbytes): 2599464
+  Exit status: 0
+
+memory: memory.peak (cgroup-peak.txt) 3670016000, and the highest memory.current sampled every 5 s
+(mem-peak.txt) 3670016000: both equal memory.max (3670016000, the 3.5 GB cap). The cgroup counts
+the file cache too, and the run wrote 800.8 GB of question files; the largest resident set of lvs_equiv
+and its solver processes (one at a time) was 2,599,464 kB, and the run ended with exit 0, every question
+answered (none killed, none unknown). So the peaks are the cache filling the cgroup to its limit, not the
+proof's own memory reaching it.
+
+The two scripts as they ran (build/g4-lvs/ of the gpu-g4 worktree, not in git as files): lvs-solver.sh runs
+lvs_equiv with the flow's arguments and --solver; z3cmd.py is the solver command. Unchanged since
+2026-10-26T02:49Z, before the 900 s trial; sha256:
+  da07b18a308657e3a6a6a54f808f7c57106beca16f75be3bce949bb9f382f00b  lvs-solver.sh
+  7a4282ade6e974ab1448ac2970586bdc0d487c494503ad942c73385a15f87dc0  z3cmd.py
+
+---------------------------------------------------------------- build/g4-lvs/lvs-solver.sh
+#!/bin/sh
+# The open flow's LVS proof of one build, run by hand with lvs_equiv's --solver route (one solver
+# process per question) instead of the flow's single incremental libz3 session, whose memory grows
+# with the run. The same arguments as tools/openxc7-build.sh's lvs-prove step, on that build's own
+# files (lvs/gold.v, lvs/fabric.v after bramwe, placement.json, the synthesized JSON), plus
+#   --solver 'python3 -I .../z3cmd.py' --format smt2
+# Run inside the openxc7 image, through the session's capped docker wrapper, from the worktree:
+#   docker run --rm -v "$PWD:/work" surfcpu-openxc7:2026-10-15 \
+#     sh /work/surfcpu/build/g4-lvs/lvs-solver.sh DESIGN [LIMIT_SECONDS]
+# Outputs in build/g4-lvs/DESIGN/: check-lvs.txt (lvs_equiv's report, then its exit status),
+# questions.log (one line a question: bytes, seconds, answer), time.txt (/usr/bin/time -v of
+# lvs_equiv), mem-peak.txt (the container's memory.current at its highest, sampled every 5 s),
+# cgroup-peak.txt (memory.peak), versions.txt.
+set -u
+design=$1
+limit=${2:-0}
+D=/work/surfcpu/build/fpga/arty_a7_100t/$design/openxc7
+O=/work/surfcpu/build/g4-lvs/$design
+mkdir -p "$O"
+export Z3CMD_LOG="$O/questions.log"
+: > "$Z3CMD_LOG"
+{
+  echo "lvs-solver.sh $design, limit $limit s, start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  python3 -I -c 'import ctypes; l = ctypes.CDLL("libz3.so.4"); a = [ctypes.c_uint() for _ in range(4)]; l.Z3_get_version(*[ctypes.byref(x) for x in a]); print("libz3 %d.%d.%d.%d" % tuple(x.value for x in a))'
+  cat /opt/openxc7/share/openxc7/source-nextpnr.txt
+  python3 --version
+  echo "memory.max $(cat /sys/fs/cgroup/memory.max 2>/dev/null)"
+} > "$O/versions.txt" 2>&1
+# the front end on three questions of known answers, before the proof
+t=$(mktemp -d)
+printf '(set-logic QF_UF)\n(declare-const n1 Bool)\n(define-fun n2 () Bool (and n1 (not n1)))\n(assert n2)\n(check-sat)\n' > "$t/unsat.smt2"
+printf '(set-logic QF_UF)\n(declare-const n1 Bool)\n(declare-const n2 Bool)\n(define-fun n3 () Bool (and n1 (not n2)))\n(assert n3)\n(check-sat)\n' > "$t/sat.smt2"
+printf '(set-logic QF_UF)\n(assert n9)\n(check-sat)\n' > "$t/error.smt2"
+for q in unsat sat error; do
+  a=$(Z3CMD_LOG= python3 -I /work/surfcpu/build/g4-lvs/z3cmd.py "$t/$q.smt2" 2>/dev/null); s=$?
+  echo "self-test $q: answer '${a}', exit $s" >> "$O/versions.txt"
+done
+rm -rf "$t"
+( peak=0; while :; do c=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || echo 0)
+    if [ "$c" -gt "$peak" ]; then peak=$c; echo "$peak" > "$O/mem-peak.txt"; fi; sleep 5; done ) &
+sampler=$!
+/usr/bin/time -v -o "$O/time.txt" timeout "$limit" lvs_equiv --gold "$D/lvs/gold.v" \
+  --gold-top surfcpu_arty_a7_top --gate "$D/lvs/fabric.v" --gate-top fabric \
+  --placement "$D/placement.json" --gold-json "$D/surfcpu_arty_a7_top.json" \
+  --db /opt/openxc7/share/prjxray-db/artix7 --device xc7a100t \
+  --solver "python3 -I /work/surfcpu/build/g4-lvs/z3cmd.py" --format smt2 > "$O/check-lvs.txt" 2>&1
+st=$?
+kill "$sampler" 2>/dev/null
+cat /sys/fs/cgroup/memory.peak > "$O/cgroup-peak.txt" 2>/dev/null || true
+echo "lvs-solver.sh: exit $st, end $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$O/check-lvs.txt"
+exit "$st"
+---------------------------------------------------------------- build/g4-lvs/z3cmd.py
+#!/usr/bin/env python3
+"""A solver command for lvs_equiv --solver (its one-process-per-question route), for the openxc7
+image, which has the Z3 library (libz3-4, the one lvs_equiv's default --solver libz3 links) but no
+solver program. lvs_equiv writes each question as an SMT-LIB 2 file (its whole network, the
+question asserted, check-sat) and passes the file's path; this hands the text to libz3's own
+SMT-LIB 2 front end (Z3_eval_smtlib2_string, through ctypes) and prints Z3's answer: sat, unsat or
+unknown. Anything else (a parse error, an API error, no answer) prints nothing and exits 1, which
+lvs_equiv counts as unknown, never as proved. With Z3CMD_LOG set, each question appends a line:
+the file's bytes, the seconds this took, the answer."""
+import ctypes
+import os
+import sys
+import time
+
+t0 = time.monotonic()
+lib = ctypes.CDLL("libz3.so.4")
+lib.Z3_mk_config.restype = ctypes.c_void_p
+lib.Z3_del_config.argtypes = [ctypes.c_void_p]
+lib.Z3_mk_context.restype = ctypes.c_void_p
+lib.Z3_mk_context.argtypes = [ctypes.c_void_p]
+lib.Z3_set_error_handler.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+lib.Z3_get_error_code.restype = ctypes.c_int
+lib.Z3_get_error_code.argtypes = [ctypes.c_void_p]
+lib.Z3_eval_smtlib2_string.restype = ctypes.c_char_p
+lib.Z3_eval_smtlib2_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+with open(sys.argv[1], "rb") as f:
+    text = f.read()
+cfg = lib.Z3_mk_config()
+ctx = lib.Z3_mk_context(cfg)
+lib.Z3_del_config(cfg)
+lib.Z3_set_error_handler(ctx, None)       # no handler: an error only sets the error code
+out = lib.Z3_eval_smtlib2_string(ctx, text)
+err = lib.Z3_get_error_code(ctx)
+ans = out.decode("utf-8", "replace").strip() if out is not None else ""
+
+log = os.environ.get("Z3CMD_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write("%d %.3f %s %s\n" % (len(text), time.monotonic() - t0, err, ans.split("\n")[0][:60] or "-"))
+if err != 0 or ans not in ("sat", "unsat", "unknown"):
+    sys.exit(1)
+print(ans)
+---------------------------------------------------------------- (end)
