@@ -1,8 +1,8 @@
 #!/bin/sh
 # SurfCPU: the LVS proof's two routes and the recheck through the real open flow (docs/OPEN-FLOW.md
-# section 3), from the Mac with Docker and the surfcpu-openxc7 image; not part of `make check`
-# (their tests with stand-ins are: make test-flow, make check-board). Writes
-# docs/evidence/flow/lvs-routes.txt.
+# section 3), from the Mac with Docker and the surfcpu-openxc7 image (make test-lvs-routes, about a
+# minute); not part of `make check`, which runs inside the toolchain container (their tests with
+# stand-ins are: make test-flow, make check-board). Writes docs/evidence/flow/lvs-routes.txt.
 #   1. devenv/openxc7/test/bram_we_sdp.v (a block RAM; 104 LVS points) through tools/openxc7-build.sh
 #      for the A7-100T by each route: LVS PASS both, the same points proved, z3cmd's self-test
 #      first and passing on the image's libz3;
