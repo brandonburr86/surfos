@@ -21,6 +21,7 @@
 #   4. a recheck of a recheck: the build's manifest and logs stay the build's
 #   5. lvs_verdict (tools/openxc7-steps.sh) on every way lvs_equiv can end, with the review's: exit 0
 #      with an unknown, with a DIFFER line, with no point proved
+#   6. devenv/openxc7/z3cmd.py --summary on a line holding Z3's error text, and on one cut short
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -458,6 +459,14 @@ verdict "a difference, then killed" 137 "FAIL (1 differ before the proof stopped
 verdict "stopped at its limit" 124 "BLOCKED (timeout)" '  proved  r1\n'
 verdict "a setup fault" 2 "FAIL (lvs_equiv could not run the proof: exit 2, see check-lvs.txt)" 'parse error\n'
 verdict "a crash" 139 "FAIL (lvs_equiv crashed: signal 11, exit 139)" '  proved  r1\n'
+
+# ---------------------------------------------------------------- 6. z3cmd.py --summary
+printf '%s\n' '3224975 2.104 0 unsat 812345' '310 0.020 4 (error "line 2 column 8: unknown constant n9") 15000' \
+  '100 0.050 0 sat 20000' '48347140 15.9' > "$t/q.log"
+if o=$(python3 -I devenv/openxc7/z3cmd.py --summary "$t/q.log" 2>&1) &&
+   printf '%s\n' "$o" | grep -q '^z3cmd: 3 questions (1 error 4, 1 sat, 1 unsat); .*; 1 line unreadable$'
+then ok "z3cmd: --summary reads a line holding Z3's error text, and counts one cut short as unreadable"
+else bad "z3cmd: --summary on Z3's error text: $o"; fi
 
 [ "$fails" = 0 ] || { echo "openxc7-recheck-test: FAIL ($fails of $checks checks)"; exit 1; }
 echo "openxc7-recheck-test: PASS ($checks checks; $SH, ${awk_is:-awk})"

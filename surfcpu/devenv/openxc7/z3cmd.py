@@ -25,7 +25,9 @@ which lvs_equiv counts as unknown, never as proved.
     python3 -I devenv/openxc7/z3cmd.py --summary LOG        the questions' log, summed up
 
 With Z3CMD_LOG set, each question appends a line to that file: the question's bytes, the seconds
-it took, Z3's error code, its answer (or -), and this process's largest resident set in KiB.
+it took, Z3's error code, its answer (or -; the first line of what Z3 printed, an error's text with
+its spaces), and this process's largest resident set in KiB. --summary reads the answer as what lies
+between the third field and the last, and counts a line it cannot read (cut short) as unreadable.
 
 --self-test runs CMD (default: this file under this Python) exactly as lvs_equiv runs its solver,
 `CMD FILE 2>/dev/null` through /bin/sh from the current directory, on three questions whose
@@ -128,15 +130,27 @@ def self_test(cmd: str) -> int:
 
 
 def summary(path: str) -> int:
-    """the questions' log (Z3CMD_LOG) summed up, one line"""
-    rows = []
-    with open(path) as f:
+    """the questions' log (Z3CMD_LOG) summed up, one line. A line is bytes, seconds, Z3's error code,
+    its answer and the largest resident set; the answer is the first line of what Z3 printed, and an
+    error's text has spaces, so it is whatever lies between the third field and the last. A line that
+    does not read so (cut short when its process was killed while writing it) is counted, never a crash."""
+    rows, unread = [], 0
+    with open(path, errors="replace") as f:
         for i, line in enumerate(f, 1):
             p = line.split()
-            if len(p) >= 4:
-                rows.append((i, int(p[0]), float(p[1]), p[2], p[3], int(p[4]) if len(p) > 4 else 0))
+            try:
+                if len(p) < 4:
+                    raise ValueError("too few fields")
+                size, secs, err = int(p[0]), float(p[1]), p[2]
+                int(err)
+                rss, answer = (int(p[-1]), " ".join(p[3:-1])) if len(p) >= 5 else (0, p[3])
+            except ValueError:
+                unread += 1
+                continue
+            rows.append((i, size, secs, err, answer, rss))
+    more = "; %d line%s unreadable" % (unread, "" if unread == 1 else "s") if unread else ""
     if not rows:
-        print("z3cmd: no question answered (%s is empty)" % path)
+        print("z3cmd: no question answered (%s %s)" % (path, "has only unreadable lines" if unread else "is empty"))
         return 0
     answers = {}
     for r in rows:
@@ -146,10 +160,10 @@ def summary(path: str) -> int:
     largest = max(rows, key=lambda r: r[5])
     total = sum(r[2] for r in rows)
     print("z3cmd: %d questions (%s); question files of %d to %d bytes; %.1f s in the solver, %.2f s a question, "
-          "the longest %.2f s (question %d); the largest solver process %.0f MiB (question %d)"
+          "the longest %.2f s (question %d); the largest solver process %.0f MiB (question %d)%s"
           % (len(rows), ", ".join("%d %s" % (n, a) for a, n in sorted(answers.items())), min(r[1] for r in rows),
              max(r[1] for r in rows), total, total / len(rows), longest[2], longest[0], largest[5] / 1024.0,
-             largest[0]))
+             largest[0], more))
     return 0
 
 
