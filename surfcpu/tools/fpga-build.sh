@@ -60,7 +60,8 @@
 # --dry-run makes every check of the first step, prints what would run and changes nothing.
 # The manifest's format is 2 (manifest_format; none means 1): format 2 can carry a [recheck] table,
 # [openxc7] lvs_solver and lvs_timeout, and the flow's format 2 manifest; tools/program.sh,
-# tools/board-test.py and tools/release.py read both and refuse a format they do not know.
+# tools/board-test.py, tools/release.py and sim/gpu/gpudiag_check.py read both and refuse a format
+# they do not know.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd -P)              # surfcpu/

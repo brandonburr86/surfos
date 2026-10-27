@@ -49,7 +49,9 @@ only when:
     names another build, and one whole run at least shows this one (a run whose identity lines were
     lost or garbled shows none, and is not held against it). --manifest is tools/fpga-build.sh's
     manifest.txt of the bitstream tested: it must be a gpudiag build's (its design gpudiag, its
-    boot ROM gpudiag.mem) that passed its build checks (result "pass"); it gives the build id, and,
+    boot ROM gpudiag.mem) that passed its build checks (result "pass"), of a manifest_format this
+    script reads (none or 1, or 2: a later one may mean something read wrongly here, and is refused,
+    as tools/program.sh refuses it); it gives the build id, and,
     when it says the tree was clean (source_dirty false), no run may show a dirty banner or
     bitstream line. --build-id alone gives only the id: it does not know whether the build was clean;
   - one complete run at least is a first run: a rerun does not check the GFX_ values a reset
@@ -214,6 +216,10 @@ def main() -> int:
         # one, built at the same commit, has the same build id) or a failed build is not the bitstream
         # this capture can be judged against (the sixth review's B6)
         top = man.split("\n[", 1)[0]
+        fmt = re.search(r'^manifest_format = (.*)$', top, re.M)
+        if fmt and fmt.group(1).strip().strip('"') not in ("1", "2"):
+            problems.append("%s is manifest_format %s, which this script does not know (it reads 1 and 2)"
+                            % (a.manifest, fmt.group(1).strip()))
         design = re.search(r'^design = "([^"]*)"', top, re.M)
         rom = re.search(r'^rom_image = "([^"]*)"', top, re.M)
         result = re.search(r'^result = "([^"]*)"', top, re.M)
