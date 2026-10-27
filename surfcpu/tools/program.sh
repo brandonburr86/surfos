@@ -20,8 +20,9 @@
 #              describes this file (SHA-256); flash needs one from tools/fpga-build.sh, for this
 #              board and part. A flow manifest (tools/openxc7-build.sh's own) must also show
 #              every clock meeting nextpnr's timing. Either may be a recheck's (tools/fpga-build.sh
-#              --recheck: the checks run again on the routed build), which is read like a build's;
-#              a manifest format other than 1 or 2 is refused
+#              --recheck: the checks run again on the routed build), which is read like a build's
+#              and named (when, the commit of its tools, a clean or dirty tree); a manifest format
+#              other than 1 or 2 is refused
 # OPENFPGALOADER overrides the program's path.
 set -eu
 
@@ -34,7 +35,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --ftdi-serial)   [ $# -ge 2 ] || die "--ftdi-serial needs the cable's serial number"; serial=$2; shift 2 ;;
         --ftdi-serial=*) serial=${1#*=}; shift ;;
-        -h|--help)       sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)       sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         -*)              die "unknown option $1" ;;
         *)               break ;;
     esac
@@ -205,10 +206,23 @@ case "$kind" in
         msha=$(sed -n 's/^bitstream .* sha256:\([0-9a-f]*\) .*/\1/p' "$manifest" | head -n 1)
         [ "$msha" = "$sha" ] || die "$manifest describes another bitstream (sha256 ${msha:-missing}, the file's is $sha); refusing" ;;
 esac
-case "$kind" in       # a recheck's manifest: say so (the checks passed when it ran them again)
+# A recheck's manifest: say so (the checks passed when it ran them again), with the commit of the
+# tools that ran them and whether its tree was clean. A dirty tree is recorded and shown, not
+# refused, as a build's is (source_dirty, which this script loads too); make release builds from a
+# clean tree of its own and takes no recheck (docs/BUILD-HOST.md).
+dirty_word() {        # true|false|1|0: the tree, in words
+    case "$1" in
+        false|0) echo "a clean tree" ;;
+        true|1)  echo "a dirty tree (recorded, not refused, as for a build)" ;;
+        *)       echo "a tree whose state was not recorded" ;;
+    esac
+}
+case "$kind" in
     surfcpu) [ -z "$(table_key recheck rechecked_at)" ] ||
-                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver) (the build's own: $(table_key recheck build_result))" ;;
-    openxc7) [ -z "$(line_value recheck)" ] || echo "$me: its manifest is a recheck's: $(line_value recheck | cut -d, -f1)" ;;
+                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver), the tools of $(table_key recheck tools_revision | cut -c1-12) in $(dirty_word "$(table_key recheck tools_dirty)") (the build's own: $(table_key recheck build_result))" ;;
+    openxc7) rl=$(line_value recheck)
+             [ -z "$rl" ] ||
+                 echo "$me: its manifest is a recheck's: $(echo "$rl" | cut -d, -f1), the tools of $(echo "$rl" | sed -n 's/.* at \([^ ,]*\).*/\1/p') in $(dirty_word "$(echo "$rl" | sed -n 's/.* dirty=\([^ ,]*\).*/\1/p')")" ;;
 esac
 
 # ------------------------------------------------------------------------------ load

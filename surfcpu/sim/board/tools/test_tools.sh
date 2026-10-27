@@ -564,9 +564,25 @@ assert ka==(kb|{'bitstream_sha256','bitstream_bytes'})-{'reason'}, ka ^ kb
 # tools/program.sh and tools/board-test.py take the rechecked manifests as a build's, and refuse the build's own
 run env FAKE_IDCODE=0x13631093 DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh volatile arty_a7_100t
 check "recheck: program.sh loads the rechecked bitstream (make program-volatile DESIGN=...)" logged "openFPGALoader -b arty_a7_100t $dbit"
-check "recheck: ... saying its manifest is a recheck's" has "its manifest is a recheck's: .*LVS by z3cmd (the build's own: fail)"
+check "recheck: ... saying its manifest is a recheck's" has "its manifest is a recheck's: .*LVS by z3cmd, the tools of .* in a .*tree.*(the build's own: fail)"
 run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh flash arty_a7_100t < /dev/null
 check "recheck: ... and writes it to the flash on the owner's confirmation (a pass for this file, board and part)" logged "openFPGALoader -b arty_a7_100t -f --verify $dbit"
+# the tools' tree: recorded and shown, not refused (as a build's source_dirty)
+mkdir -p "$t/dirty" "$t/clean" "$t/dirtyflow"
+for c in dirty:true clean:false; do
+    cp "$dbit" "$t/${c%%:*}/surfcpu_arty_a7_bramdiag.bit"
+    sed -e "s/^tools_dirty = .*/tools_dirty = ${c#*:}/" \
+        -e 's/^tools_revision = .*/tools_revision = "0123456789abcdef0123456789abcdef01234567"/' "$d/manifest.txt" > "$t/${c%%:*}/manifest.txt"
+done
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirty/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: program.sh names the commit of a recheck's tools and their dirty tree, and loads it (recorded, not refused)" \
+    eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a dirty tree (recorded, not refused, as for a build)' '$t/out.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/clean/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: ... or their clean one" eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a clean tree' '$t/out.txt'"
+cp "$d/openxc7/surfcpu_arty_a7_top.bit" "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+sed 's/ dirty=0,/ dirty=1,/' "$d/openxc7/manifest.txt" > "$t/dirtyflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+check "recheck: ... and from a flow manifest's recheck line (dirty=1)" eval "test $rc -eq 0 && grep -q 'the tools of fake in a dirty tree' '$t/out.txt'"
 mkdir -p "$t/old" "$t/oldflow"
 cp "$dbit" "$t/old/surfcpu_arty_a7_bramdiag.bit"
 cp "$t/blocked.txt" "$t/old/manifest.txt"
