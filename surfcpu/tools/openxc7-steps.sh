@@ -14,8 +14,9 @@
 #                                   clock meeting its constraint with the slack the rule wants;
 #                                   sets pnr_ok, seed_used, slack_state (PASS or THIN), slack_note
 #   post_route_checks               the checks of a routed build (clocks, bitstream, round trip,
-#                                   block RAM, LVS): sets result_clk, result_bit, result_rt,
-#                                   result_bram, result_lvs, and fail=1 on a FAIL
+#                                   block RAM, LVS), the build's and the recheck's (--recheck):
+#                                   sets result_clk, result_bit, result_rt, result_bram,
+#                                   result_lvs, and fail=1 on a FAIL
 #   lvs_prove                       the LVS proof by the route lvs_solver names (below)
 #   lvs_verdict <status> <report>   the LVS result for lvs_equiv's exit status and report
 #

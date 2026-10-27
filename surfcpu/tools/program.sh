@@ -19,7 +19,9 @@
 #   manifest   the build manifest next to it (manifest.txt), if any, says every check passed and
 #              describes this file (SHA-256); flash needs one from tools/fpga-build.sh, for this
 #              board and part. A flow manifest (tools/openxc7-build.sh's own) must also show
-#              every clock meeting nextpnr's timing. A manifest format other than 1 or 2 is refused
+#              every clock meeting nextpnr's timing. Either may be a recheck's (tools/fpga-build.sh
+#              --recheck: the checks run again on the routed build), which is read like a build's;
+#              a manifest format other than 1 or 2 is refused
 # OPENFPGALOADER overrides the program's path.
 set -eu
 
@@ -32,7 +34,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --ftdi-serial)   [ $# -ge 2 ] || die "--ftdi-serial needs the cable's serial number"; serial=$2; shift 2 ;;
         --ftdi-serial=*) serial=${1#*=}; shift ;;
-        -h|--help)       sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)       sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)              die "unknown option $1" ;;
         *)               break ;;
     esac
@@ -164,12 +166,16 @@ fi
 top_key() {           # KEY: a top-level string or number of the TOML manifest (before its first table)
     awk -v k="$1" '/^\[/ { exit } $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$manifest"
 }
+table_key() {         # TABLE KEY: a string or number of that table of the TOML manifest
+    awk -v t="[$1]" -v k="$2" '$0 == t { on = 1; next } /^\[/ { on = 0 }
+        on && $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$manifest"
+}
 line_value() {        # LABEL: a flow manifest's line (its label in 20 columns, as tools/fpga-build.sh reads it)
     awk -v n="$1" 'BEGIN { n = sprintf("%-20s", n) } /^## / { exit } substr($0, 1, 20) == n { print substr($0, 21); exit }' "$manifest"
 }
-# Its format (docs/BUILD-HOST.md): none means 1; 2 (2026-10-27) adds the LVS route and, in a flow
-# manifest, the netlist, FASM and placement by SHA-256. A later one may mean something this script
-# would misread, so it is refused.
+# Its format (docs/BUILD-HOST.md): none means 1; 2 (2026-10-27) adds a recheck's records, the LVS
+# route and, in a flow manifest, the netlist, FASM and placement by SHA-256. A later one may mean
+# something this script would misread, so it is refused.
 case "$kind" in
     surfcpu) fmt=$(top_key manifest_format) ;;
     openxc7) fmt=$(line_value "manifest format"); fmt=${fmt%% *} ;;
@@ -198,6 +204,11 @@ case "$kind" in
         [ -z "$late" ] || die "$manifest shows a clock missing its timing ($(echo "$late" | sed -e 's/: constraint .*, achieved/:/' -e 's/, slack.*$//' | tr '\n' ';')); refusing"
         msha=$(sed -n 's/^bitstream .* sha256:\([0-9a-f]*\) .*/\1/p' "$manifest" | head -n 1)
         [ "$msha" = "$sha" ] || die "$manifest describes another bitstream (sha256 ${msha:-missing}, the file's is $sha); refusing" ;;
+esac
+case "$kind" in       # a recheck's manifest: say so (the checks passed when it ran them again)
+    surfcpu) [ -z "$(table_key recheck rechecked_at)" ] ||
+                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver) (the build's own: $(table_key recheck build_result))" ;;
+    openxc7) [ -z "$(line_value recheck)" ] || echo "$me: its manifest is a recheck's: $(line_value recheck | cut -d, -f1)" ;;
 esac
 
 # ------------------------------------------------------------------------------ load

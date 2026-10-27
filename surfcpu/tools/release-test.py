@@ -1133,15 +1133,20 @@ class TestProgramFlash(FlashFixture):
         self.assertNotIn(" -f ", calls)
 
     def test_record_formats(self):
-        """tools/program.sh reads build records of format 1 (no manifest_format) and 2, and refuses another"""
+        """tools/program.sh reads build records of format 1 (no manifest_format) and 2, a recheck's among them
+        (tools/fpga-build.sh --recheck), and refuses another"""
         ok = {"SURFCPU_FLASH_CONFIRM": "write-flash-arty_a7_100t"}
         self.record(self.bit, manifest_format="3")
         r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
         self.assertIn("manifest format 3, which this script does not know", r.stderr)
         self.assertNotIn(" -f ", calls)
         self.record(self.bit, manifest_format="2")
+        rec = self.bit.parent / "manifest.txt"
+        rec.write_text(rec.read_text() + '\n[recheck]\nrechecked_at = "2026-10-28T00:00:00Z"\nlvs_solver = "z3cmd"\n'
+                                          'build_result = "fail"\n')
         r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("its manifest is a recheck's: 2026-10-28T00:00:00Z, LVS by z3cmd (the build's own: fail)", r.stdout)
         self.assertIn(f"openFPGALoader -b arty_a7_100t -f --verify {self.bit}", calls)
 
     def test_volatile_never_flash(self):

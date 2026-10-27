@@ -7,9 +7,10 @@
 # (devenv/openxc7/synthcheck.py) on the Yosys DSP-packing reproducer with this image's Yosys,
 # which must fail with DSP packing and pass with the safe mode and without DSPs. Since 10/27/26:
 # the LVS proof's two routes (their command lines, the z3cmd front end's self-test first, the
-# self-test of devenv/openxc7/z3cmd.py on right and broken commands), and the verdict on
+# self-test of devenv/openxc7/z3cmd.py on right and broken commands), the verdict on
 # every way a stand-in lvs_equiv can end (proved, a difference, unknowns, killed by SIGKILL or
-# TERM, stopped at the limit, a setup fault, a crash, a difference before it was killed).
+# TERM, stopped at the limit, a setup fault, a crash, a difference before it was killed), and
+# --recheck's checks of a build on synthetic build directories (its dry run, and each refusal).
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -473,6 +474,108 @@ EOF
 else
   bad "lvs: no timeout command here (coreutils)"
 fi
+
+# ---------------------------------------------------------------- --recheck: the build checked before anything runs
+# A routed build made up (a dry run reads only the files the checks read, and their SHA-256), with
+# its manifest as tools/openxc7-build.sh writes one; the lines of its sections (the tools' "fasm",
+# an included file's "placement") must not be taken for the build's own.
+r=$t/rc
+snap() { ( cd "$r" && find . -type f | sort | xargs sha256sum ) > "$r.sums"; }
+unchanged() { ( cd "$r" && find . -type f | sort | xargs sha256sum ) | cmp -s - "$r.sums"; }
+mk_build() {     # FORMAT LVS: a build in $r/out, its XDC in $r
+  rm -rf "$r"
+  mkdir -p "$r/out"
+  for m in t.bit t.fasm t.json placement.json report.json nextpnr.log stat.json seeds.txt check-srl.txt check-synthesis.txt; do
+    echo "made-up $m" > "$r/out/$m"
+  done
+  echo "set_property made-up" > "$r/x.xdc"
+  s() { sha256sum "$1" | cut -d' ' -f1; }
+  { echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+    [ "$1" = 1 ] || echo "manifest format     $1 (docs/OPEN-FLOW.md section 3)"
+    echo "top                 t"
+    echo "part                xc7a100tcsg324-1 (device xc7a100t, chip database chipdb-xc7a100t.bin)"
+    echo "board               arty_a7_100t"
+    echo "date (UTC)          2026-10-26T07:44:39Z"
+    echo "seed                1 (of 1 2: 1 tried, seeds.txt)"
+    echo "slack rule          each clock at least max(0.5 ns, 4 % of its period); the design list sets: dram_clk=0.5"
+    echo "defines             ARTY_BUILD_ID=32'h12345678"
+    echo "xdc                 $r/x.xdc sha256:$(s "$r/x.xdc")"
+    echo "bitstream           $r/out/t.bit sha256:$(s "$r/out/t.bit") 12 bytes"
+    if [ "$1" != 1 ]; then
+      echo "netlist             $r/out/t.json sha256:$(s "$r/out/t.json")"
+      echo "routed FASM         $r/out/t.fasm sha256:$(s "$r/out/t.fasm")"
+      echo "placement           $r/out/placement.json sha256:$(s "$r/out/placement.json")"
+    fi
+    echo "check SRL cells     PASS (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
+    echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
+    echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
+    echo "check LVS           $2 (routed netlist equivalent to the synthesis: check-lvs.txt)"
+    echo "lvs timeout         14400 s"
+    echo "check slack margin  PASS (least margin dram_clk +1.037 ns, wants 0.500: slack-seed1.txt)"
+    echo "## placement attempts"; echo "seed 1: pass, routed"
+    echo "## tools (/etc/surfcpu-openxc7.txt)"; echo "fasm                   0.0.2.post66"
+    echo "## included: $r/x.txt"; echo "placement           $r/elsewhere sha256:00 (a line of a file the build included)"
+  } > "$r/out/manifest.txt"
+  snap
+}
+rc_try() { if sh tools/openxc7-build.sh --recheck --dry-run --out "$r/out" "$@" > "$r.txt" 2>&1; then rc=0; else rc=$?; fi; }
+refused() {     # WHAT PATTERN: the last recheck refused, saying PATTERN, and changed nothing
+  if [ "$rc" = 3 ] && grep -q -- "$2" "$r.txt" && unchanged; then ok "recheck: refuses $1, changing nothing"
+  else bad "recheck: $1 (exit $rc)"; cat "$r.txt"; fi
+}
+mk_build 1 "FAIL"
+rc_try --lvs-solver z3cmd --lvs-timeout 86400
+if [ "$rc" = 0 ] && unchanged; then
+  expect_in "recheck: a build failed at LVS alone: its dry run checks it, would run every post-route check again, LVS by z3cmd within 86400 s" "$(cat "$r.txt")" \
+    "kept: SRL cells PASS, synthesis PASS" "[report] python3 -I devenv/openxc7/report.py --device xc7a100t --report $r/out/report.json" \
+    "[slack] python3 -I devenv/openxc7/slackcheck.py --report $r/out/report.json --min dram_clk=0.5 --out $r/out/slack-seed1.txt" \
+    "[check-clk] python3 devenv/openxc7/cmtcheck.py --json $r/out/t.json" "[check-gclk]" "[check-bit]" "[decode]" "[roundtrip]" \
+    "[bram-extract]" "[check-bram]" "[lvs-gold]" "[lvs-extract] tileverilog --fasm $r/out/t.fasm" "--xdc $r/x.xdc --part xc7a100tcsg324-1" \
+    "[lvs-bramwe]" "[lvs-selftest]" "timeout 86400 lvs_equiv" "--solver python3 -I devenv/openxc7/z3cmd.py --format smt2"
+else bad "recheck: the dry run of a build failed at LVS (exit $rc)"; cat "$r.txt"; fi
+rc_try
+if [ "$rc" = 0 ] && grep -q 'timeout 14400 lvs_equiv' "$r.txt" && ! grep -q -- '--solver' "$r.txt"
+then ok "recheck: without --lvs-solver and --lvs-timeout, LVS as the build ran it (libz3, its 14400 s)"
+else bad "recheck: the build's own LVS route and limit (exit $rc)"; cat "$r.txt"; fi
+mk_build 2 "BLOCKED (killed: SIGKILL, exit 137)"
+rc_try --lvs-solver z3cmd
+if [ "$rc" = 0 ] && grep -q 'the bitstream, the XDC, the netlist, the FASM, the placement as recorded' "$r.txt" && unchanged
+then ok "recheck: a format 2 build: its netlist, FASM and placement checked against their SHA-256 too"
+else bad "recheck: a format 2 build (exit $rc)"; cat "$r.txt"; fi
+mk_build 1 FAIL; printf 'x' >> "$r/out/t.bit"; snap; rc_try --lvs-solver z3cmd
+refused "a bitstream that is not the one its manifest records" "t.bit (sha256 [0-9a-f]*) is not the one"
+mk_build 1 FAIL; printf 'x' >> "$r/x.xdc"; snap; rc_try
+refused "constraints that are not the ones its manifest records" "x.xdc (sha256 [0-9a-f]*) is not the one"
+mk_build 2 FAIL; printf 'x' >> "$r/out/t.json"; snap; rc_try
+refused "a format 2 build whose netlist is not the one recorded" "t.json (sha256 [0-9a-f]*) is not the one"
+mk_build 2 FAIL; printf 'x' >> "$r/out/placement.json"; snap; rc_try
+refused "a format 2 build whose placement is not the one recorded" "placement.json (sha256 [0-9a-f]*) is not the one"
+mk_build 1 FAIL; sed -i 's/^check synthesis     PASS/check synthesis     FAIL/' "$r/out/manifest.txt"; snap; rc_try
+refused "a build whose kept synthesis check failed" "check synthesis is 'FAIL': a recheck keeps it, so it must have passed"
+mk_build 1 FAIL; sed -i 's/^check SRL cells     PASS/check SRL cells     skipped/' "$r/out/manifest.txt"; snap; rc_try
+refused "a build whose kept SRL check was skipped" "check SRL cells is 'skipped'"
+for gone in placement.json t.fasm report.json check-synthesis.txt; do
+  mk_build 1 FAIL; rm "$r/out/$gone"; snap; rc_try
+  refused "a build without its $gone" "out/$gone is missing"
+done
+mk_build 1 FAIL; rm "$r/x.xdc"; snap; rc_try
+refused "a build whose constraints are gone" "constraints $r/x.xdc are missing"
+mk_build 1 FAIL; sed -i "s|^bitstream           $r/out/t.bit|bitstream           build/elsewhere/t.bit|" "$r/out/manifest.txt"; snap; rc_try
+refused "a build whose manifest names a bitstream elsewhere (moved)" "names build/elsewhere/t.bit, not $r/out/t.bit"
+mk_build 3 FAIL; rc_try
+refused "a manifest format it does not know" "manifest format 3, which this script does not know"
+mk_build 1 FAIL; sed -i 's/^check slack margin  \(.*\)$/check slack margin  \1\nrecheck             2026-10-27T00:00:00Z, made up/' "$r/out/manifest.txt"; snap; rc_try
+refused "a recheck's manifest with the build's own not beside it" "is a recheck's manifest, and the build's own"
+mv "$r/out/manifest.txt" "$r/out/recheck.txt"; snap; rc_try
+refused "a directory without a manifest" "no manifest in"
+mk_build 1 FAIL; cp "$r/out/manifest.txt" "$r/out/manifest.build.txt"; echo "a recheck's" > "$r/out/manifest.txt"; snap; rc_try --lvs-solver z3cmd
+if [ "$rc" = 0 ] && grep -q "its record $r/out/manifest.build.txt" "$r.txt" && unchanged
+then ok "recheck: once a recheck has put the build's manifest aside, the next reads that one"
+else bad "recheck: the build's manifest put aside (exit $rc)"; cat "$r.txt"; fi
+if sh tools/openxc7-build.sh --recheck --out "$r/out" --top t > "$r.txt" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" = 2 ] && grep -q "takes the build's own settings from its manifest" "$r.txt"
+then ok "recheck: takes no build options (--top ...): the build's come from its manifest"
+else bad "recheck: accepted a build option (exit $rc)"; cat "$r.txt"; fi
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }
 echo "openxc7-flow-test.sh: PASS"

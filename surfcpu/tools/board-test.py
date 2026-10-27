@@ -110,20 +110,36 @@ MANIFEST_FORMATS = ('1', '2')         # tools/fpga-build.sh's manifest_format (n
 
 
 def manifest(path):
-    """a bitstream build manifest's top keys (tools/fpga-build.sh), or None"""
+    """a bitstream build manifest's top keys (tools/fpga-build.sh), or None; a recheck's (tools/fpga-build.sh
+    --recheck: the build's checks run again) has its [recheck] table as the key 'recheck'"""
     try:
         text = Path(path).read_text()
     except OSError:
         return None
     keys = {}
+    table = None
     for line in text.splitlines():
         if line.startswith('['):
-            break
+            table = line.strip()
+            if table == '[recheck]':
+                keys['recheck'] = {}
+            continue
         m = re.match(r'(\w+) = (.*)$', line)
-        if m:
+        if m and table in (None, '[recheck]'):
             v = m.group(2).strip()
-            keys[m.group(1)] = v[1:-1] if v.startswith('"') else {'true': True, 'false': False}.get(v, v)
+            v = v[1:-1] if v.startswith('"') else {'true': True, 'false': False}.get(v, v)
+            (keys if table is None else keys['recheck'])[m.group(1)] = v
     return keys
+
+
+def recheck_line(mf):
+    """what a recheck's manifest says of the recheck, for the evidence (or None)"""
+    rc = mf.get('recheck') if mf else None
+    if not isinstance(rc, dict):
+        return None
+    return ('the manifest is a recheck\'s (tools/fpga-build.sh --recheck): %s, tools at %s, LVS by %s; the build\'s own '
+            'result was %s' % (rc.get('rechecked_at'), str(rc.get('tools_revision', ''))[:12], rc.get('lvs_solver'),
+                               rc.get('build_result')))
 
 
 def tools_identity():
@@ -318,6 +334,8 @@ class Run:
         line = 'the bitstream\'s build id %s %s the manifest\'s (%s, %s)' % (
             build, 'is' if same else 'is NOT', mf.get('build_id'), self.manifest_path)
         self.ident('  ' + line)
+        if recheck_line(mf):
+            self.ident('  ' + recheck_line(mf))
         self.check(same, line)
         if flags is not None and isinstance(mf.get('source_dirty'), bool):
             self.check(bool(flags & 1) == mf['source_dirty'], 'its dirty flag (%d) matches the manifest\'s '
@@ -493,6 +511,8 @@ def m1(r):
             build, state, btime, name, 'match' if ok else 'do NOT match', mf.get('build_id'), mf.get('build_time'),
             str(mf.get('source_dirty')).lower(), mf.get('board'), r.manifest_path)
         r.ident('  ' + line)
+        if recheck_line(mf):
+            r.ident('  ' + recheck_line(mf))
         r.check(ok, line)
     else:
         r.ident('  not compared: no build manifest at %s' % r.manifest_path)

@@ -11,7 +11,7 @@
 PYTHON_HOST ?= python3
 BOARD       ?= arty_a7_100t
 
-.PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga \
+.PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga recheck-fpga \
         board-test board-test-selftest uart-list uart-console release release-verify release-check \
         fresh-checkout release-selftest
 
@@ -48,6 +48,16 @@ deploy-sd:
 
 build-fpga:
 	@tools/fpga-build.sh "$(BOARD)"
+
+# The post-route checks of the last open-flow build of DESIGN for BOARD again, without synthesis,
+# placement or routing (tools/fpga-build.sh --recheck; docs/OPEN-FLOW.md section 3): it refuses
+# unless the bitstream and both manifests match, writes both manifests anew and, on a pass, copies
+# the bitstream out as a passing build does. LVS_SOLVER=libz3|z3cmd and LVS_TIMEOUT=<s> choose
+# the LVS proof's route and limit (else the build's; build-fpga takes them too), DRY_RUN=1 makes
+# the checks of the first step and prints the rest.
+#   make recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+recheck-fpga:
+	@tools/fpga-build.sh --recheck "$(BOARD)"
 
 # The physical test kit (docs/PHYSICAL-TESTS.md), with the Mac's own python3 and nothing installed:
 #   make board-test M=m1 [DESIGN=...] [PORT=/dev/cu.usbserial-<serial>1] [ARGS="--lines 20"]
