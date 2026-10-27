@@ -181,7 +181,7 @@ decode_bitstream() {   # Project X-Ray's bit2fasm: the finished bitstream back t
     --bitread "$(command -v bitread)" "$out/$top.bit" > "$out/$top.decoded.fasm"
 }
 
-# The routes of the LVS proof (lvs_solver: --lvs-solver, docs/OPEN-FLOW.md section 4). Both run the
+# The routes of the LVS proof (lvs_solver: --lvs-solver, docs/OPEN-FLOW.md section 3). Both run the
 # image's lvs_equiv (fasm2netlist 0948889f) on the same files with the same arguments, so it asks
 # the same questions in the same order (a miter for each register, output and memory boundary bit,
 # src/lvs/lvs_equiv.cpp); they differ in how a question reaches Z3 (src/lvs/solver.cpp):

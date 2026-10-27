@@ -679,7 +679,7 @@ The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vi
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
 locally, a fake `openxc7-build.sh` writes the open flow's outputs (its dry runs use the real
 script), and a fake `openFPGALoader` answers like the real one, with a temporary HOME and
-output directory. 330 checks with fetch.sh's (2026-10-27): refusals, dry runs, all three flows, the staged
+output directory. 328 checks with fetch.sh's (2026-10-27): refusals, dry runs, all three flows, the staged
 files, `params.tcl`, the TOML manifest, each gate stopping the bitstream (a report format
 Vivado might change among them), the dropped ssh connection and `--fetch`, the dirty flag
 from a scratch git repository, the open flow's constraint subset and manifest, the SoC
@@ -781,7 +781,7 @@ flow builds them (section 8): about 7,600 LUTs and 5,214 flip-flops, 37 % of the
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (330 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists and the recheck among them) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (328 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists and the recheck among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
 | `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |

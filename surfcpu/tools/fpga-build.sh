@@ -36,7 +36,7 @@
 # up on a silent connection after two minutes. Vivado runs on the host under nohup, with its
 # own log and exit status in out/, so a dropped connection does not stop it: --fetch brings
 # back its results later (exit 3: connection lost, try --fetch; 4: still running).
-# The open flow's LVS (docs/OPEN-FLOW.md section 4): LVS_SOLVER=libz3|z3cmd chooses how its proof's
+# The open flow's LVS (docs/OPEN-FLOW.md section 3): LVS_SOLVER=libz3|z3cmd chooses how its proof's
 # questions reach Z3 (libz3, the default: lvs_equiv's incremental session; z3cmd: one solver process
 # a question, slower, for a design whose proof outgrows the memory it may use) and LVS_TIMEOUT=S
 # replaces the design list's lvs-timeout for one build; the manifest records both ([openxc7]
@@ -92,7 +92,7 @@ done
 [ "$fetch$recheck" != 11 ] || die "--fetch and --recheck do not go together"
 case "${LVS_SOLVER:-}" in
     ''|libz3|z3cmd) ;;
-    *) die "LVS_SOLVER must be libz3 or z3cmd, not '$LVS_SOLVER' (docs/OPEN-FLOW.md section 4)" ;;
+    *) die "LVS_SOLVER must be libz3 or z3cmd, not '$LVS_SOLVER' (docs/OPEN-FLOW.md section 3)" ;;
 esac
 case "${LVS_TIMEOUT:-}" in
     '') ;;
