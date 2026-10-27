@@ -519,6 +519,17 @@ recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 DRY_RUN=1
 check "recheck: its dry run checks the build and asks the flow for its own dry run" \
     test "$rc" -eq 0 -a -n "$(grep -- "openxc7-build.sh --recheck --out ${d#$root/}/openxc7 --lvs-solver z3cmd --lvs-timeout 86400 --dry-run" "$FAKE_LOG")"
 check "recheck: ... and changes nothing" eval "cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && test ! -e '$d/manifest.build.txt'"
+# a recheck stopped after it began (killed, or refused for LVS inputs made again that are not the
+# build's) leaves both manifests as they were, the build's, which refuse its bitstream
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=die
+check "recheck: killed after it began, it says so, and both manifests are still the build's" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 137) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit' && ! test -e '$d/manifest.build.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: ... and program.sh refuses the flow's bitstream by the build's manifest beside it (LVS BLOCKED)" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'check LVS BLOCKED (killed: SIGKILL, exit 137)' "$t/out.txt")"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
+check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
+    eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
 check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
     test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"
@@ -630,16 +641,18 @@ run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_OPENXC7_IMAGE=surf
 check "recheck: refuses a build made in another image than this tree's flow runs" eval "test $rc -eq 1 && grep -q \"was built in the image 'surfcpu-openxc7:2026-10-15'\" '$t/out.txt' && same"
 recheck FAKE_OX_RECHECK=refuse
 check "recheck: when the flow refuses (its own checks), nothing is changed" \
-    eval "test $rc -eq 1 && grep -q 'did not recheck (exit 3): nothing was changed' '$t/out.txt' && same"
+    eval "test $rc -eq 1 && grep -q 'refused (exit 3) before it began: nothing was changed' '$t/out.txt' && same"
 recheck FAKE_OX_LVS="BLOCKED (timeout)"
 check "recheck: a recheck whose proof is stopped at its limit fails, and no bitstream stays under the design's name" \
     eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q '^reason = \".*check LVS BLOCKED (timeout)' '$d/manifest.txt' && grep -q '^\[recheck\]$' '$d/manifest.txt'"
 check "recheck: ... the build's own manifest still the one kept" cmp -s "$d/manifest.build.txt" "$t/blocked.txt"
 recheck FAKE_OX_SLACK=FAIL
 check "recheck: a placement the slack rule now fails fails the recheck" eval "test $rc -eq 1 && grep -q '^reason = \".*check slack margin FAIL' '$d/manifest.txt'"
+cp "$d/manifest.txt" "$t/before-die.txt"
+cp "$d/openxc7/manifest.txt" "$t/before-die-flow.txt"
 recheck FAKE_OX_RECHECK=die
-check "recheck: a recheck killed after it began fails, its manifest saying what is missing" \
-    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q '^reason = \".*check LVS missing' '$d/manifest.txt' && grep -q '^build_result = \"fail\"' '$d/manifest.txt'"
+check "recheck: a recheck killed after it began leaves the manifests that were there (an earlier recheck's, a fail)" \
+    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q 'stopped (exit 137) before it wrote its manifest' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/before-die.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/before-die-flow.txt'"
 recheck
 check "recheck: then a recheck from the build's own manifests passes again" \
     eval "test $rc -eq 0 && test -f '$dbit' && cmp -s '$d/manifest.build.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.build.txt' '$t/blocked-flow.txt'"

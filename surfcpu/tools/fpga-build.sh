@@ -50,13 +50,14 @@
 # keeps passed: SRL cells and synthesis (the flow's), netlist and boot ROM (this script's), all
 # made on the synthesized netlist before placement; it refuses (exit 1, nothing changed) when a
 # file is missing or anything does not match. tools/openxc7-build.sh --recheck then checks the
-# flow's side again and runs the checks. Both manifests are written anew: the build's identity as
-# it was (run id, build id and time, source and constraint hashes, seed: the bitstream carries
-# the id and the time), the kept checks, the checks run again, and a [recheck] table saying when,
-# by which commit's tools, with which LVS route; the build's own manifests are kept beside them as
-# manifest.build.txt. On a pass the bitstream is copied out as a passing build's is; on a fail
-# none stays under the design's name. --dry-run makes every check of the first step, prints what
-# would run and changes nothing.
+# flow's side again and runs the checks. Both manifests are written anew, each replacing the one
+# that was there only when it is complete (until then they are as they were, so a recheck stopped
+# anywhere leaves the build's): the build's identity as it was (run id, build id and time, source
+# and constraint hashes, seed: the bitstream carries the id and the time), the kept checks, the
+# checks run again, and a [recheck] table saying when, by which commit's tools, with which LVS
+# route; the build's own manifests are kept beside them as manifest.build.txt. On a pass the
+# bitstream is copied out as a passing build's is; on a fail none stays under the design's name.
+# --dry-run makes every check of the first step, prints what would run and changes nothing.
 # The manifest's format is 2 (manifest_format; none means 1): format 2 can carry a [recheck] table,
 # [openxc7] lvs_solver and lvs_timeout, and the flow's format 2 manifest; tools/program.sh,
 # tools/board-test.py and tools/release.py read both and refuse a format they do not know.
@@ -82,7 +83,7 @@ while [ $# -gt 0 ]; do
         --fetch)   fetch=1 ;;
         --recheck) recheck=1 ;;
         --design)  [ $# -ge 2 ] || die "--design needs a name"; design=$2; shift ;;
-        -h|--help) sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         -*)        die "unknown option $1" ;;
         *)         [ -z "$board" ] || die "one BOARD only"; board=$1 ;;
     esac
@@ -576,11 +577,19 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
         exit 0
     fi
     rechecked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    # the flow refuses before it changes anything; once it has begun, its manifest is gone or new
+    # The flow refuses (exit 3) before it changes anything. Once it has begun, its manifest stays the
+    # one that was there until its own, complete, replaces it at the end; still the same, the flow
+    # stopped before that (a kill, a step that failed, or exit 4: the LVS inputs it made again are not
+    # the build's), and this one's stays as it was too: nothing new is written.
     was=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
     if "$OPENXC7" "$@"; then st=0; else st=$?; fi
     now=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
-    [ "$now" != "$was" ] || die "--recheck: tools/openxc7-build.sh did not recheck (exit $st): nothing was changed"
+    if [ "$now" = "$was" ]; then
+        [ "$st" != 3 ] || die "--recheck: tools/openxc7-build.sh refused (exit 3) before it began: nothing was changed"
+        kept="both manifests are as they were (${ox#"$root"/}/manifest.txt, ${manifest#"$root"/}); the checks it got to wrote their logs again in ${ox#"$root"/} (the build's own are kept in ${ox#"$root"/}/build-evidence)"
+        [ "$st" != 4 ] || die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        die "--recheck: tools/openxc7-build.sh stopped (exit $st) before it wrote its manifest: $kept"
+    fi
     # the build's own manifest is kept beside the new one, and the new one starts from its head
     [ -f "$base/manifest.build.txt" ] || cp "$manifest" "$base/manifest.build.txt"
     brec=$base/manifest.build.txt
