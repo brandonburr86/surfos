@@ -5,7 +5,12 @@
 # (tools/openxc7-steps.sh) with stand-in nextpnrs that hang, are killed, ignore TERM, route too
 # thinly or well, and one Ctrl-C on a terminal stops, and the synthesis check
 # (devenv/openxc7/synthcheck.py) on the Yosys DSP-packing reproducer with this image's Yosys,
-# which must fail with DSP packing and pass with the safe mode and without DSPs.
+# which must fail with DSP packing and pass with the safe mode and without DSPs. Since 10/27/26:
+# the LVS proof's two routes (their command lines, the z3cmd front end's self-test first, the
+# self-test of devenv/openxc7/z3cmd.py on right and broken commands), the verdict on
+# every way a stand-in lvs_equiv can end (proved, a difference, unknowns, killed by SIGKILL or
+# TERM, stopped at the limit, a setup fault, a crash, a difference before it was killed); --recheck's
+# checks are tools/openxc7-recheck-test.sh's.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -328,6 +333,152 @@ EOF
   else bad "pnr: Ctrl-C did not stop placement and routing at once"; fi
 else
   bad "pnr: no timeout command here (coreutils)"
+fi
+
+# ---------------------------------------------------------------- the LVS routes (--lvs-solver)
+o=$(dry --board arty_a7_100t --lvs-timeout 7200)
+if printf '%s\n' "$o" | grep -qE -- '--solver|z3cmd'
+then bad "lvs: the default route (libz3) still gives lvs_equiv a --solver"
+else expect_in "lvs: the default route (libz3) runs lvs_equiv as before: its own session, no --solver" "$o" \
+       "[lvs-prove] timeout 7200 lvs_equiv --gold build/openxc7/t-arty_a7_100t/lvs/gold.v --gold-top t --gate"; fi
+o=$(dry --board arty_a7_100t --lvs-solver z3cmd --lvs-timeout 86400)
+expect_in "lvs: --lvs-solver z3cmd: the front end's self-test, then lvs_equiv --solver it --format smt2 within the limit, a line a question" "$o" \
+  "[lvs-selftest] python3 -I devenv/openxc7/z3cmd.py --self-test python3 -I devenv/openxc7/z3cmd.py" \
+  "[lvs-prove] env Z3CMD_LOG=build/openxc7/t-arty_a7_100t/lvs/questions.log timeout 86400 lvs_equiv --gold build/openxc7/t-arty_a7_100t/lvs/gold.v" \
+  "--device xc7a100t --solver python3 -I devenv/openxc7/z3cmd.py --format smt2"
+if [ "$(printf '%s\n' "$o" | grep -n -e '^\[lvs-selftest\]' -e '^\[lvs-prove\]' | cut -d: -f2 | cut -c1-14 | tr '\n' ' ')" = "[lvs-selftest] [lvs-prove] en " ]
+then ok "lvs: z3cmd: the self-test comes before the proof"; else bad "lvs: z3cmd: the self-test is not before the proof"; fi
+o=$(OPENXC7_LVS_SOLVER=z3cmd sh tools/openxc7-build.sh --dry-run --top t --xdc x.xdc --board arty_a7_100t a.v)
+expect_in "lvs: OPENXC7_LVS_SOLVER=z3cmd (inside the image) chooses it too" "$o" "--solver python3 -I devenv/openxc7/z3cmd.py --format smt2"
+for v in cvc5 Z3CMD ""; do
+  if dry --board arty_a7_100t --lvs-solver "$v" > /dev/null 2>&1
+  then bad "lvs: accepted --lvs-solver '$v'"; else ok "lvs: refuses --lvs-solver '$v'"; fi
+done
+
+# ---------------------------------------------------------------- devenv/openxc7/z3cmd.py
+# Its self-test (run as lvs_equiv runs a solver) must pass a command that answers the three questions
+# right and fail commands that answer nothing, prove anything or find a difference anywhere. With
+# the library (the openxc7 image) it passes itself; without it (this toolchain image: its Debian z3
+# is a program linked statically, no libz3.so.4) it answers nothing, so it can never prove, and its
+# own self-test fails. tools/openxc7-lvs-test.sh runs it on the openxc7 image's libz3.
+for a in right unsat sat; do      # stand-in solvers: no answer to the malformed question, and then
+  cat > "$t/solver-$a.sh" <<EOF
+#!/bin/sh
+if grep -q 'n9' "\$1"; then exit 1; fi
+case $a in right) if grep -q '(and n1 (not n1))' "\$1"; then echo unsat; else echo sat; fi ;; *) echo $a ;; esac
+EOF
+done                              # the right answers, unsat to all, sat to all
+if python3 -I devenv/openxc7/z3cmd.py --self-test "sh $t/solver-right.sh" > "$t/z3cmd-good.txt" 2>&1 &&
+   grep -q '^z3cmd self-test: PASS$' "$t/z3cmd-good.txt"
+then ok "z3cmd: its self-test passes a command that answers the three questions right"
+else bad "z3cmd: its self-test on a right command"; cat "$t/z3cmd-good.txt"; fi
+for c in "sh $t/solver-unsat.sh" "sh $t/solver-sat.sh" "false" "echo unsat; true" "echo unknown; true"; do
+  if python3 -I devenv/openxc7/z3cmd.py --self-test "$c" > "$t/z3cmd-bad.txt" 2>&1
+  then bad "z3cmd: its self-test passed the command '$c'"; cat "$t/z3cmd-bad.txt"
+  else ok "z3cmd: its self-test fails the command '$c' ($(grep -c 'WRONG$' "$t/z3cmd-bad.txt") of 3 wrong)"; fi
+done
+printf '(set-logic QF_UF)\n(declare-const n1 Bool)\n(define-fun n2 () Bool (and n1 (not n1)))\n(assert n2)\n(check-sat)\n' > "$t/q-unsat.smt2"
+if python3 -I -c 'import ctypes; ctypes.CDLL("libz3.so.4")' 2>/dev/null; then
+  if python3 -I devenv/openxc7/z3cmd.py --self-test > "$t/z3cmd-self.txt" 2>&1 && grep -q '^z3cmd self-test: PASS$' "$t/z3cmd-self.txt"
+  then ok "z3cmd: its own self-test passes on this image's libz3 ($(sed -n 's/^\(libz3 [0-9.]*\).*/\1/p' "$t/z3cmd-self.txt"))"
+  else bad "z3cmd: its own self-test on this image's libz3"; cat "$t/z3cmd-self.txt"; fi
+else
+  if a=$(python3 -I devenv/openxc7/z3cmd.py "$t/q-unsat.smt2" 2>/dev/null); then st=0; else st=$?; fi
+  if [ "$st" = 1 ] && [ -z "$a" ] && ! python3 -I devenv/openxc7/z3cmd.py --self-test > "$t/z3cmd-self.txt" 2>&1 &&
+     grep -q '^libz3: not found' "$t/z3cmd-self.txt"
+  then ok "z3cmd: without libz3.so.4 it answers nothing (exit 1: unknown, never proved), and its own self-test fails"
+  else bad "z3cmd: without its library (answer '$a', exit $st)"; cat "$t/z3cmd-self.txt"; fi
+fi
+printf '3224975 2.104 0 unsat 812345\n48347140 15.980 0 unsat 2599464\n100 0.050 0 sat 20000\n10 0.010 3 - 15000\n' > "$t/q.log"
+o=$(python3 -I devenv/openxc7/z3cmd.py --summary "$t/q.log")
+expect_in "z3cmd: --summary sums the questions' log up" "$o" "z3cmd: 4 questions (1 error 3, 1 sat, 2 unsat)" \
+  "question files of 10 to 48347140 bytes" "the longest 15.98 s (question 2)" "the largest solver process 2539 MiB (question 2)"
+
+# ---------------------------------------------------------------- the LVS proof's verdict (lvs_prove, lvs_verdict)
+# tools/openxc7-steps.sh's lvs_prove as post_route_checks calls it, with a stand-in lvs_equiv that
+# ends as PLAN says, a stand-in front end in a tools directory of its own, and a 2 s limit.
+if command -v timeout > /dev/null 2>&1; then
+  l=$t/lvs
+  mkdir -p "$l/bin" "$l/tools" "$l/out/lvs"
+  cat > "$l/bin/lvs_equiv" <<'EOF'
+#!/bin/sh
+echo "lvs_equiv $* Z3CMD_LOG=${Z3CMD_LOG:-}" > "$LVS_ARGS"
+echo "registers: 2 gold, 2 gate, 2 matched by name"
+ulimit -c 0
+case "$PLAN" in
+  proved)     printf '  proved  r1\n  proved  r2\n\n2 proved, 0 differ, 0 unknown   (0.1s)\n'; exit 0 ;;
+  differ)     printf '  proved  r1\n  DIFFER  r2\n\n1 proved, 1 differ, 0 unknown   (0.1s)\n'; exit 1 ;;
+  unknown)    printf '  proved  r1\n  unknown r2\n\n1 proved, 0 differ, 1 unknown   (0.1s)\n'; exit 1 ;;
+  both)       printf '  DIFFER  r1\n  unknown r2\n\n0 proved, 1 differ, 1 unknown   (0.1s)\n'; exit 1 ;;
+  killed)     printf '  proved  r1\n'; kill -KILL $$ ;;
+  term)       printf '  proved  r1\n'; kill -TERM $$ ;;
+  diffkilled) printf '  DIFFER  r1\n'; kill -KILL $$ ;;
+  midline)    printf '  proved  r1\n  proved  r'; exec sleep 600 ;;
+  hang)       printf '  proved  r1\n'; exec sleep 600 ;;
+  setup)      echo "parse error: line 1" >&2; exit 2 ;;
+  segv)       kill -SEGV $$ ;;
+  quiet0)     printf '  proved  r1\n'; exit 0 ;;
+  *)          echo "no plan $PLAN" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$l/bin/lvs_equiv"
+  cat > "$l/tools/z3cmd.py" <<'EOF'
+import os, sys
+if sys.argv[1] == "--self-test":
+    print("stand-in self-test of %r" % sys.argv[2:])
+    open(os.environ["SELFTEST_RAN"], "w").write("ran\n")
+    sys.exit(0 if os.environ.get("SELFTEST", "pass") == "pass" else 1)
+if sys.argv[1] == "--summary":
+    print("z3cmd: stand-in summary of " + sys.argv[2])
+EOF
+  lvs_try() {   # PLAN SOLVER [SELFTEST]: one proof; its result and fail flag in $l/run.txt
+    rm -f "$l/args.txt" "$l/selftest-ran" "$l/out/check-lvs.txt" "$l/out/lvs/z3cmd-selftest.txt"
+    ( PATH="$l/bin:$PATH" PLAN=$1 SELFTEST=${3:-pass} LVS_ARGS=$l/args.txt SELFTEST_RAN=$l/selftest-ran
+      export PATH PLAN SELFTEST LVS_ARGS SELFTEST_RAN
+      dry=0 out=$l/out top=t chipdie=xc7a100t db=db tools=$l/tools lvs_timeout=2 lvs_solver=$2 fail=0
+      . tools/openxc7-steps.sh; lvs_prove; echo "result_lvs=$result_lvs"; echo "fail=$fail" ) > "$l/run.txt" 2>&1
+  }
+  lvs_is() {    # WHAT PLAN SOLVER RESULT FAIL: lvs_prove's verdict on that end
+    lvs_try "$2" "$3"
+    if grep -qxF "result_lvs=$4" "$l/run.txt" && grep -qx "fail=$5" "$l/run.txt"
+    then ok "lvs: $1: $4$( [ "$5" = 1 ] && echo ', a failure' || echo ', not a failure of the build script')"
+    else bad "lvs: $1: wanted '$4' and fail=$5"; cat "$l/run.txt"; fi
+  }
+  lvs_is "every point proved" proved libz3 "PASS" 0
+  lvs_is "a point differs" differ libz3 "FAIL (1 differ)" 1
+  lvs_is "a point unknown, none differs" unknown libz3 "BLOCKED (1 unknown, none differ)" 0
+  lvs_is "a point differs, one unknown" both libz3 "FAIL (1 differ)" 1
+  lvs_is "the proof killed by SIGKILL, as the memory cap's out-of-memory killer does" killed libz3 "BLOCKED (killed: SIGKILL, exit 137)" 0
+  lvs_is "the proof killed by SIGTERM" term libz3 "BLOCKED (killed: SIGTERM, exit 143)" 0
+  lvs_is "a difference printed before the proof was killed" diffkilled libz3 "FAIL (1 differ before the proof stopped, exit 137)" 1
+  lvs_is "the proof stopped at its limit" hang libz3 "BLOCKED (timeout)" 0
+  lvs_is "a setup fault, lvs_equiv's exit 2" setup libz3 "FAIL (lvs_equiv could not run the proof: exit 2, see check-lvs.txt)" 1
+  lvs_is "a crash (SIGSEGV)" segv libz3 "FAIL (lvs_equiv crashed: signal 11, exit 139)" 1
+  lvs_is "exit 0 without its count" quiet0 libz3 "FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)" 1
+  lvs_try proved libz3
+  if grep -q -- '--device xc7a100t Z3CMD_LOG=$' "$l/args.txt" && ! grep -q -- '--solver' "$l/args.txt" && [ ! -f "$l/selftest-ran" ]
+  then ok "lvs: libz3: lvs_equiv with its own session (no --solver), no front end, no self-test"
+  else bad "lvs: libz3's command line"; cat "$l/args.txt" "$l/run.txt"; fi
+  lvs_try proved z3cmd
+  if grep -q -- "--device xc7a100t --solver python3 -I $l/tools/z3cmd.py --format smt2 Z3CMD_LOG=$l/out/lvs/questions.log\$" "$l/args.txt" &&
+     [ -f "$l/selftest-ran" ] && grep -qF "stand-in self-test of ['python3 -I $l/tools/z3cmd.py']" "$l/out/lvs/z3cmd-selftest.txt" &&
+     grep -q '^z3cmd: stand-in summary' "$l/out/check-lvs.txt" && grep -qx 'result_lvs=PASS' "$l/run.txt"
+  then ok "lvs: z3cmd: the self-test of the very command lvs_equiv gets, then lvs_equiv --solver it --format smt2, a line a question, summed up"
+  else bad "lvs: z3cmd's command line"; cat "$l/args.txt" "$l/run.txt"; fi
+  lvs_try proved z3cmd fail
+  if grep -qx 'result_lvs=FAIL (the z3cmd self-test: lvs/z3cmd-selftest.txt)' "$l/run.txt" && grep -qx 'fail=1' "$l/run.txt" && [ ! -f "$l/args.txt" ]
+  then ok "lvs: z3cmd: a front end that fails its self-test fails LVS, and the proof does not run"
+  else bad "lvs: z3cmd's failing self-test"; cat "$l/run.txt"; fi
+  lvs_is "z3cmd: a point differs" differ z3cmd "FAIL (1 differ)" 1
+  lvs_is "z3cmd: the proof killed by SIGKILL" killed z3cmd "BLOCKED (killed: SIGKILL, exit 137)" 0
+  lvs_is "z3cmd: points the solver did not decide (a front end killed)" unknown z3cmd "BLOCKED (1 unknown, none differ)" 0
+  lvs_try midline z3cmd
+  if grep -qx 'result_lvs=BLOCKED (timeout)' "$l/run.txt" && [ "$(tail -n 1 "$l/out/check-lvs.txt" | cut -c1-23)" = "z3cmd: stand-in summary" ] &&
+     [ "$(tail -n 2 "$l/out/check-lvs.txt" | head -n 1)" = "  proved  r" ]
+  then ok "lvs: z3cmd: a proof stopped at its limit in the middle of a line: the questions' summary starts a line of its own"
+  else bad "lvs: z3cmd: the summary after a proof stopped mid-line"; cat "$l/run.txt" "$l/out/check-lvs.txt"; fi
+else
+  bad "lvs: no timeout command here (coreutils)"
 fi
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }

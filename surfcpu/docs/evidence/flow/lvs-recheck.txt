@@ -1,0 +1,345 @@
+SurfCPU flow evidence: an LVS proof that outgrows its memory, the label of a killed proof, and the recheck of a
+routed build (docs/OPEN-FLOW.md sections 3 and 6.9, docs/BUILD-HOST.md, docs/BOARD.md sections 8 and 9).
+Recorded 2026-10-27 by the flow track on sc/flow-lvs (made from sc/gpu-integ at ea3e42c), image
+surfcpu-openxc7:2026-10-15 and the toolchain image. Code: tools/openxc7-steps.sh (post_route_checks, lvs_prove,
+lvs_verdict), tools/openxc7-build.sh (--lvs-solver, --recheck), tools/fpga-build.sh (LVS_SOLVER, LVS_TIMEOUT,
+--recheck: make recheck-fpga), devenv/openxc7/z3cmd.py; the readers of the manifests: tools/program.sh,
+tools/board-test.py, tools/release.py.
+
+== 1. How lvs_equiv ends (fasm2netlist 0948889f, src/lvs/lvs_equiv.cpp and src/lvs/solver.cpp, read from a copy whose
+   git blob hashes are those of that commit's tree: lvs_equiv.cpp 1413c416, solver.cpp 1e6e967e, solver.hpp b0f2946e)
+  exit 0  every point proved: "return differ == 0 && unknown == 0 ? 0 : 1", after its last line
+          "N proved, D differ, U unknown   (Ts)"; each point is printed as "  proved  ", "  DIFFER  " or "  unknown "
+  exit 1  a point differs, or is unknown (the solver answered neither sat nor unsat); the same last line
+  exit 2  a usage error, a netlist it cannot parse, a module not found in both, or any exception (main: "A setup
+          fault -- no solver on the machine, an unreadable database -- is not a verdict about the design, and must
+          not be printed as one."); --solver CMD whose shell says 127 (no such command) throws, so exit 2
+  --solver CMD --format smt2: each question is written to $TMPDIR/lvs_miter_<pid>_<n>.smt2 (the whole network, the
+          miter asserted, check-sat) and run as "CMD FILE 2>/dev/null" through popen; output containing "unsat" is
+          proved, "sat" differs, anything else (nothing, a killed process) is unknown; the file is removed after
+  (a planted difference: exit 1 with "DIFFER ... WEBWE[3]", docs/evidence/flow/checkers.txt; through timeout,
+  exit 124 at the limit and 128+N for a process ended by signal N, which timeout passes on)
+  The flow's labels follow (tools/openxc7-steps.sh lvs_verdict): exit 0 with "0 differ, 0 unknown" PASS; a
+  difference FAIL (D differ), also one printed before the proof was stopped; only unknowns BLOCKED (U unknown, none
+  differ); exit 2 FAIL (could not run the proof); 124 BLOCKED (timeout); SIGKILL, TERM, INT, HUP, QUIT, XCPU, XFSZ
+  BLOCKED (killed: ...); a crash (SEGV, ABRT, BUS, ILL, FPE, ...) FAIL; anything else FAIL. The bfaac48 DDR+GPU
+  build's proof, exit 137 after 3,058 s with 8,606 proved and nothing differing, was "check LVS FAIL"; it is now
+  "BLOCKED (killed: SIGKILL, exit 137)". As before, BLOCKED leaves tools/openxc7-build.sh's exit status alone and
+  fails tools/fpga-build.sh's build; tools/program.sh takes only PASS.
+
+== 2. The tests (fast, stand-ins; all on make check)
+  tools/openxc7-flow-test.sh (make test-flow, toolchain image): PASS, 107 checks, 52 of them new:
+    the LVS routes' command lines (the default's unchanged, z3cmd's self-test before lvs_equiv --solver it
+    --format smt2, OPENXC7_LVS_SOLVER, nonsense refused); z3cmd.py's self-test on a right command and on five
+    wrong ones (unsat to every well-formed question, sat to every one, nothing, unsat to all three, unknown), the
+    front end without libz3 answering nothing and failing its own self-test (the toolchain image's Debian z3 is a
+    program linked statically: no libz3.so.4), its --summary; the verdict on every end of a stand-in lvs_equiv,
+    by both routes, and a proof stopped at its limit in the middle of a line (the questions' summary and the
+    echoed log each start a line of their own); --recheck's checks of a build on made-up build directories:
+    its dry run, the build's LVS route and limit by default, each refusal (bitstream, XDC, netlist, placement,
+    a kept check failed or skipped, four files missing, the XDC gone, the build moved, an unknown format, a
+    recheck's manifest without the build's, no manifest), changing nothing.
+  sim/board/tools/test_tools.sh (make board-tools): 328 passed, 0 failed; the new ones: LVS_SOLVER and
+    LVS_TIMEOUT reaching the flow and the manifest and refused when wrong; a build blocked only at LVS (the
+    fake flow's LVS "BLOCKED (killed: SIGKILL, exit 137)") rechecked into a pass, copied out, its manifests
+    (identity kept, [recheck], the build's own beside them), program.sh loading it (volatile and flash) and
+    refusing the build's own manifest and the flow's, board-test.py reading it and refusing format 3, each
+    refusal of the recheck before the flow is asked (bitstream, nextpnr.xdc missing, ROM copy missing or other,
+    head, build id, image, a recheck's manifest alone, a passing build's own record), the flow refusing (nothing
+    changed), a recheck stopped at its limit, failing the slack rule, or killed, a build that passed rechecked.
+  tools/release-test.py (make test-release; and the Mac's Python): 59 tests OK; the new ones: a build record of
+    format 3 fails release-check, formats 1 and 2 pass; make release refuses a build whose record is format 3 as
+    the build finishes; program.sh flash refuses format 3 and takes a recheck's record.
+
+== 3. Each new rule taken out (build/flow-lvs-work/mutate.py, outside git: the rule's text replaced once in a
+   copy of the tree, the test that guards it run, the file put back and checked; the release set on the Mac)
+ tools/openxc7-flow-test.sh:
+  caught: a proof killed by SIGKILL is BLOCKED (killed), not FAIL
+      first failing: FAIL  lvs: the proof killed by SIGKILL, as the memory cap's out-of-memory killer does: wanted 'BLOCKED (killed: SIGKILL, exit 137)' and fail=0
+  caught: a difference is FAIL (D differ)
+      first failing: FAIL  lvs: a point differs: wanted 'FAIL (1 differ)' and fail=1
+  caught: unknowns with no difference are BLOCKED, not FAIL
+      first failing: FAIL  lvs: a point unknown, none differs: wanted 'BLOCKED (1 unknown, none differ)' and fail=0
+  caught: a DIFFER printed before the proof was stopped is FAIL
+      first failing: FAIL  lvs: a difference printed before the proof was killed: wanted 'FAIL (1 differ before the proof stopped, exit 137)' and fail=1
+  caught: a setup fault (exit 2) is FAIL
+      first failing: FAIL  lvs: a setup fault, lvs_equiv's exit 2: wanted 'FAIL (lvs_equiv could not run the proof: exit 2, see check-lvs.txt)' and fail=1
+  caught: a crash is FAIL, not BLOCKED
+      first failing: FAIL  lvs: a crash (SIGSEGV): wanted 'FAIL (lvs_equiv crashed: signal 11, exit 139)' and fail=1
+  caught: exit 0 passes only with a count of 0 differ and 0 unknown
+      first failing: FAIL  lvs: exit 0 without its count: wanted 'FAIL (lvs_equiv ended 0 without a count of 0 differ and 0 unknown)' and fail=1
+  caught: a FAIL fails the build script (fail=1)
+      first failing: FAIL  lvs: a point differs: wanted 'FAIL (1 differ)' and fail=1
+  caught: BLOCKED leaves the build script's exit status alone, as a timeout did
+      first failing: FAIL  lvs: a point unknown, none differs: wanted 'BLOCKED (1 unknown, none differ)' and fail=0
+  caught: z3cmd: the self-test runs before the proof, and a failing one stops it
+      first failing: FAIL  lvs: --lvs-solver z3cmd: the front end's self-test, then lvs_equiv --solver it --format smt2 within the limit, a line a question: no '[lvs-selft
+  caught: z3cmd: lvs_equiv gets --solver with the front end and --format smt2
+      first failing: FAIL  lvs: --lvs-solver z3cmd: the front end's self-test, then lvs_equiv --solver it --format smt2 within the limit, a line a question: no '--device x
+  caught: z3cmd.py: the self-test fails a command that proves everything
+      first failing: FAIL  z3cmd: its self-test passed the command 'sh build/flow/test/solver-unsat.sh'
+  caught: recheck: the bitstream must be the one recorded
+      first failing: FAIL  recheck: a bitstream that is not the one its manifest records (exit 0)
+  caught: recheck: the XDC must be the one recorded
+      first failing: FAIL  recheck: constraints that are not the ones its manifest records (exit 0)
+  caught: recheck: a format 2 build's netlist, FASM and placement must be the ones recorded
+      first failing: FAIL  recheck: a format 2 build whose netlist is not the one recorded (exit 0)
+  caught: recheck: the checks it keeps must have passed
+      first failing: FAIL  recheck: a build whose kept synthesis check failed (exit 0)
+  caught: recheck: every file the checks read must be there
+      first failing: FAIL  recheck: a build without its placement.json (exit 0)
+  caught: recheck: a recheck's manifest without the build's own is refused
+      first failing: FAIL  recheck: a recheck's manifest with the build's own not beside it (exit 0)
+  caught: recheck: a manifest format it does not know is refused
+      first failing: FAIL  recheck: a manifest format it does not know (exit 0)
+  caught: recheck: the record's field lookup stops at the first ## section (the tools' fasm line)
+      first failing: FAIL  recheck: the dry run of a build failed at LVS (exit 3)
+  mutate flow: 20 of 20 rules caught when taken out
+ tools/openxc7-flow-test.sh (the two rules of b82e298, a proof stopped mid-line):
+  caught: a proof stopped mid-line: the questions' summary starts a line of its own
+      first failing: FAIL  lvs: z3cmd: the summary after a proof stopped mid-line
+  caught: a failed step's log, echoed, ends its open last line (mid-line)
+      first failing: FAIL  lvs: z3cmd: the summary after a proof stopped mid-line
+  mutate flow: 2 of 2 rules caught when taken out
+ sim/board/tools/test_tools.sh:
+  caught: fpga-build --recheck: the bitstream must be the one the flow's manifest records
+      first failing: FAIL recheck: refuses a bitstream that is not the one both manifests record, asking nothing of the flow, changing nothing
+  caught: fpga-build --recheck: the checks it keeps must have passed
+      first failing: FAIL recheck: refuses a build whose kept SRL check failed
+  caught: fpga-build --recheck: its own files must be there
+      first failing: FAIL recheck: refuses a build with a file missing (its nextpnr constraints)
+  caught: fpga-build --recheck: the boot ROM copy must be the one recorded
+      first failing: FAIL recheck: refuses a boot ROM copy that is not the one recorded
+  caught: fpga-build --recheck: the head must be the manifest's
+      first failing: FAIL recheck: refuses manifests that are not one build's (the head is not the manifest's)
+  caught: fpga-build --recheck: the build ran in this tree's image
+      first failing: FAIL recheck: refuses a build made in another image than this tree's flow runs
+  caught: fpga-build --recheck: the bitstream's build id is the manifest's
+      first failing: FAIL recheck: refuses a flow manifest whose bitstream carries another build id than the build's
+  caught: fpga-build --recheck: a recheck's manifest without the build's own is refused
+      first failing: FAIL recheck: refuses a recheck's manifest with the build's own not beside it
+  caught: fpga-build --recheck: nothing is written when the flow did not recheck
+      first failing: FAIL recheck: when the flow refuses (its own checks), nothing is changed
+  caught: fpga-build --recheck: a failed recheck leaves no bitstream under the design's name
+      first failing: FAIL recheck: a recheck whose proof is stopped at its limit fails, and no bitstream stays under the design's name
+  caught: fpga-build: a slack verdict other than PASS or THIN fails
+      first failing: FAIL recheck: a placement the slack rule now fails fails the recheck
+  caught: fpga-build: LVS_TIMEOUT must be more than 0
+      first failing: FAIL lvs route: LVS_TIMEOUT=0 refused
+  caught: fpga-build: LVS_SOLVER reaches the open flow
+      first failing: FAIL lvs route: LVS_SOLVER and LVS_TIMEOUT reach the open flow
+  caught: program.sh: a manifest format it does not know is refused
+      first failing: FAIL manifest format: program.sh refuses a format it does not know (3)
+  caught: board-test.py: a manifest format it does not know is refused
+      first failing: FAIL manifest format: board-test.py refuses a format it does not know (3), before anything
+  mutate tools: 15 of 15 rules caught when taken out
+ tools/release-test.py:
+  caught: release.py check: a build record of a format it does not know fails the check
+      first failing: FAIL: test_record_format (__main__.TestCheckStrict.test_record_format)
+  caught: release.py make: a build of a record format it does not know is refused
+      first failing: FAIL: test_record_of_a_format_it_does_not_know (__main__.TestEnvironment.test_record_of_a_format_it_does_not_know)
+  caught: program.sh (release flash path): a manifest format it does not know is refused
+      first failing: FAIL: test_record_formats (__main__.TestProgramFlash.test_record_formats)
+  mutate release: 3 of 3 rules caught when taken out
+  In all: 40 of 40 rules caught when taken out.
+  (Two rules were first not caught and their tests strengthened: z3cmd.py's self-test got past by a
+  stand-in that both proved everything and mishandled the malformed question, now one that differs from a
+  right solver only in its answers; the record's lookup stopping at its first section, now with an included
+  file whose line would otherwise be taken for the build's. make release's early refusal of a format it
+  does not know was masked by its final check, now asserted by its own message.)
+
+== 4. Through the real flow (tools/openxc7-lvs-test.sh, docs/evidence/flow/lvs-routes.txt: PASS)
+  Generated on 2026-10-27 at b82e2987e740, image surfcpu-openxc7:2026-10-15.
+  104 proved, 0 differ, 0 unknown   (0.00823813s)
+  ok    libz3: LVS PASS, the manifest naming the route
+  104 proved, 0 differ, 0 unknown   (2.00928s)
+  z3cmd: 104 questions (104 unsat); question files of 242 to 43916 bytes; 0.4 s in the solver, 0.00 s a question, the longest 0.01 s (question 89); the largest solver process 40 MiB (question 46)
+  ok    z3cmd: LVS PASS, the manifest naming the route
+  ok    the two routes prove the same 104 points
+  self-test unsat answer 'unsat', exit 0 (wants 'unsat', exit 0; lvs_equiv reads unsat): ok
+  self-test sat   answer 'sat', exit 0 (wants 'sat', exit 0; lvs_equiv reads sat): ok
+  self-test error answer '', exit 1 (wants '', exit 1; lvs_equiv reads unknown): ok
+  ok    z3cmd: its self-test ran first and passed, on the image's libz3
+  lvs inputs          made again from the netlist and the FASM; gold.v the same bytes as the build's; fabric.raw.v the same bytes as the build's; fabric.v the same bytes as the build's
+  ok    the recheck passes, LVS run again by z3cmd
+  ok    the build's manifest is put aside as it was
+  ok    the build's lines up to its bitstream are kept
+  ok    gold.v, fabric.raw.v and fabric.v made again are the build's bytes
+  ok    a second recheck reads the build's own manifest and passes by libz3
+  ok    the recheck refuses it (exit 3), changing nothing
+  ok    libz3 finds WEBWE[3] differing: FAIL (1 differ)
+  ok    z3cmd finds it too: FAIL (1 differ)
+
+== 5. The DDR+GPU build at bfaac48: its recheck's dry run and first steps
+  The backup /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/
+  board-bitstreams/bfaac48/surfcpu_arty_a7_ddr_gpu/ (70 files, 349 MB) copied with cp -Rp into
+  surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/ of this worktree: every file's SHA-256 the
+  backup's (build/flow-lvs-work/backup.sha256). The backup was only read.
+
+  make recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 DRY_RUN=1
+  (at b82e2987e740; nothing changed, the copy's SHA-256 the same after):
+  fpga-build: --recheck of surfcpu_arty_a7_ddr_gpu for arty_a7_100t: surfcpu_arty_a7_ddr_gpu-arty_a7_100t-bfaac489-20261026T064335Z, build bfaac489, result fail: tools/openxc7-build.sh exit status 1; check LVS FAIL
+  fpga-build: its bitstream build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit is the one the flow's manifest records (this one, of a failed build, records none), sha256 582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b
+  fpga-build: kept, all PASS: check_srl, check_synthesis, check_netlist, check_boot_rom; LVS by z3cmd, within 86400 s
+  fpga-build: --dry-run: would run:
+    tools/openxc7-build.sh --recheck --out build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7 --lvs-solver z3cmd --lvs-timeout 86400
+    | openxc7-build.sh: --recheck of build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7: surfcpu_arty_a7_top for xc7a100tcsg324-1 (xc7a100t), built 2026-10-26T07:44:39Z with seed 1; its record build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.txt (format 1)
+    | openxc7-build.sh: the bitstream, the XDC as recorded; kept: SRL cells PASS, synthesis PASS
+    | openxc7-build.sh: run again: bitstream, round trip, block RAM, LVS by z3cmd within 86400 s, clocks, slack margin, timing
+    | openxc7-build.sh: --dry-run: the image's tools are compared with the record's in the image only; would run:
+    | [report] python3 -I devenv/openxc7/report.py --device xc7a100t --report build/fpga/arty_a7_100t/surfcpu_arty_a7_dd ...
+    | [slack] python3 -I devenv/openxc7/slackcheck.py --report build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/r ...
+    | [check-clk] python3 devenv/openxc7/cmtcheck.py --json build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surf ...
+    | [check-gclk] python3 -I devenv/openxc7/gclkcheck.py --fasm build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7 ...
+    | [check-bit] python3 -I devenv/openxc7/bitinfo.py --expect-device xc7a100t build/fpga/arty_a7_100t/surfcpu_arty_a7_ ...
+    | [decode] decode_bitstream
+    | [roundtrip] python3 devenv/openxc7/fasmcheck.py --db-root /opt/openxc7/share/prjxray-db/artix7 --part xc7a100tcsg3 ...
+    | [bram-extract] fasm2netlist --fasm build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.dec ...
+    | [check-bram] python3 -I devenv/openxc7/bramcheck.py --netlist build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/open ...
+    | [lvs-gold] yosys -q -p read_json build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.json; ...
+    | [lvs-extract] tileverilog --fasm build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.fasm  ...
+    | [lvs-bramwe] python3 -I devenv/openxc7/bramwe.py --fabric build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/ ...
+    | [lvs-selftest] python3 -I devenv/openxc7/z3cmd.py --self-test python3 -I devenv/openxc7/z3cmd.py
+    | [lvs-prove] env Z3CMD_LOG=build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/lvs/questions.log timeout 86400 lvs_equiv --gold build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/lvs/gold.v --gold-top surfcpu_arty_a7_top --gate build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/lvs/fabric.v --gate-top fabric --placement build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/placement.json --gold-json build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.json --db /opt/openxc7/share/prjxray-db/artix7 --device xc7a100t --solver python3 -I devenv/openxc7/z3cmd.py --format smt2
+  fpga-build: --dry-run: nothing was changed
+
+  Its first steps, for real: the same with LVS_TIMEOUT=150, so the proof starts by the z3cmd route and
+  stops at 150 s (run 2026-10-27T18:28:23Z to 2026-10-27T18:34:09Z, at b82e2987e740, the tree clean; then the copy
+  put back from the backup, below; the run of lines the failed step's log echoes cut short here):
+  | fpga-build: --recheck of surfcpu_arty_a7_ddr_gpu for arty_a7_100t: surfcpu_arty_a7_ddr_gpu-arty_a7_100t-bfaac489-20261026T064335Z, build bfaac489, result fail: tools/openxc7-build.sh exit status 1; ch
+  | fpga-build: its bitstream build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit is the one the flow's manifest records (this one, of a failed build, records none), sha256 582
+  | fpga-build: kept, all PASS: check_srl, check_synthesis, check_netlist, check_boot_rom; LVS by z3cmd, within 150 s
+  | openxc7-build.sh: --recheck of build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7: surfcpu_arty_a7_top for xc7a100tcsg324-1 (xc7a100t), built 2026-10-26T07:44:39Z with seed 1; its record build/fp
+  | openxc7-build.sh: the bitstream, the XDC as recorded; kept: SRL cells PASS, synthesis PASS
+  | openxc7-build.sh: run again: bitstream, round trip, block RAM, LVS by z3cmd within 150 s, clocks, slack margin, timing
+  | openxc7-build.sh: lvs-prove failed (exit 124); the end of build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/check-lvs.txt:
+  |   proved  u_dram.builder_interface2_bank_bus_dat_w[14] = CLBLM_R_X49Y113_CLBLM_L_BQ
+  |   proved  u_dram.builder_interface2_bank_bus_dat_w[15] = CLBLM_R_X49Y113_CLBLM_M_CQ
+  |   ... (22 more lines "proved ...")
+  |   proved  u_dram.builder_interface2_bank_
+  | openxc7-build.sh: clock clk100_g: constraint 100.00 MHz, achieved 993.05 MHz, slack +8.993 ns  PASS
+  | openxc7-build.sh: clock dram_clk: constraint 80.00 MHz, achieved 87.24 MHz, slack +1.037 ns  PASS
+  | openxc7-build.sh: clock pix_clk: constraint 25.17 MHz, achieved 106.94 MHz, slack +30.373 ns  PASS
+  | openxc7-build.sh: clock sys_clk: constraint 25.00 MHz, achieved 43.44 MHz, slack +16.982 ns  PASS
+  | openxc7-build.sh: clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 345.78 MHz, slack +2.108 ns  PASS
+  | openxc7-build.sh: recheck: kept SRL cells PASS, synthesis PASS; run again: bitstream PASS, round trip PASS, block RAM PASS, LVS BLOCKED (timeout) by z3cmd, clocks PASS, slack margin PASS
+  | openxc7-build.sh: build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.txt written anew; the build's own is build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.build.txt
+  | fpga-build: FAIL: check LVS BLOCKED (timeout)
+  | fpga-build: logs and reports in build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7 (manifest build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.txt)
+  | exit 2
+
+  The flow's new manifest (openxc7/manifest.txt), its lines up to the sections:
+  | # openXC7 build manifest (tools/openxc7-build.sh), rechecked (--recheck); physical behaviour: pending (never on a board)
+  | manifest format     2 (docs/OPEN-FLOW.md section 3)
+  | top                 surfcpu_arty_a7_top
+  | part                xc7a100tcsg324-1 (device xc7a100t, chip database chipdb-xc7a100t.bin)
+  | chip database       build/openxc7/chipdb/2026-10-15/chipdb-xc7a100t.bin sha256:f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f (the image's generator without BUFGCTRL route-throughs,
+  | board               arty_a7_100t
+  | source revision     bfaac48905dc dirty=0
+  | build host          Darwin-arm64, container aarch64
+  | date (UTC)          2026-10-26T07:44:39Z
+  | seed                1 (of 1 2 3 4 5 6 7 8: 1 tried, seeds.txt)
+  | pnr timeout         1800 s (each seed's placement and routing)
+  | slack rule          each clock at least max(0.5 ns, 4 % of its period)
+  | DSP mode            safe (safe: multipliers in DSP48E1 without Yosys's register/adder packing)
+  | defines             ARTY_BUILD_BOARD="arty_a7_100t" ARTY_BUILD_ID=32'hbfaac489 ARTY_BUILD_FLAGS=32'h00000000 ARTY_BUILD_TIME=32'h6ade930b ARTY_BOOTROM_INIT="build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr
+  | xdc                 build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/nextpnr.xdc sha256:5ffc31a2837a7c13d1f8e794fbd31ff75d4e57904d9ff74cbb89a14f3fa9558f
+  | bitstream           build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.bit sha256:582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b 3825962 bytes
+  | netlist             build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.json sha256:36b5039666ef7044c2eaf88f7e75eb6f1a5a4724d9be7a6f7ebed0fafdfd82ca (as the recheck read it: th
+  | routed FASM         build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/surfcpu_arty_a7_top.fasm sha256:5599f4ce16cf1ff1e668cba5083ad7f7fa567592e9255ec162b2147e49ee706e (as the recheck read it: th
+  | placement           build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/placement.json sha256:1c0dfa585936642b9ea16f78584d8d8186cc4392d34f697b6b10dad7b707012b (as the recheck read it: the build re
+  | check SRL cells     PASS (kept from the build: none in the synthesized netlist, which LVS could not check: check-srl.txt)
+  | check synthesis     PASS (kept from the build: netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)
+  | check bitstream     PASS (run again: IDCODE, frames, commands, CRC: check-bitstream.txt)
+  | check round trip    PASS (run again: bitstream decoded back to FASM: check-roundtrip.txt)
+  | check block RAM     PASS (run again: contents decoded from the bitstream: check-bram.txt)
+  | check LVS           BLOCKED (timeout) (run again: routed netlist equivalent to the synthesis, lvs_equiv by the z3cmd route: check-lvs.txt)
+  | lvs solver          z3cmd (lvs_equiv --solver, one process a question: devenv/openxc7/z3cmd.py over the image's libz3)
+  | lvs timeout         150 s
+  | check clocks        PASS (run again: MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  | check slack margin  PASS (run again: least margin dram_clk +1.037 ns, wants 0.500: slack-seed1.txt)
+  | recheck             2026-10-27T18:34:09Z, tools/openxc7-build.sh --recheck at b82e2987e740 dirty=0, image surfcpu-openxc7:2026-10-15
+  | checks run again    bitstream, round trip, block RAM, LVS, clocks, slack margin, timing and utilization
+  | checks kept         SRL cells, synthesis: the build's of 2026-10-26T07:44:39Z
+  | build manifest      build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.build.txt sha256:c1c6e32bfd5a54d012030f1421c7f32d167aa247e51df1794f44aeac2d817bd2 (the build's own: check LVS FAIL)
+  | lvs inputs          made again from the netlist and the FASM; gold.v the same bytes as the build's; fabric.raw.v the same bytes as the build's; fabric.v the same bytes as the build's
+  (and its 44 source lines, as the build's)
+
+  Its step times (this recheck):
+  | report           0.05 s  ok
+  | check-clk       52.08 s  ok
+  | check-gclk       0.23 s  ok
+  | check-bit        2.24 s  ok
+  | decode          11.32 s  ok
+  | roundtrip       76.18 s  ok
+  | bram-extract    24.16 s  ok
+  | check-bram       0.62 s  ok
+  | lvs-gold         0.91 s  ok
+  | lvs-extract     24.46 s  ok
+  | lvs-bramwe       1.64 s  ok
+  | lvs-selftest     0.07 s  ok
+  | lvs-prove      150.03 s  FAILED (124)
+
+  check-lvs.txt (its first lines and its end):
+  | memory map: 9985 read symbols from the placement
+  | register map: 8709 from the placement (gold module surfcpu_arty_a7_top)
+  | registers: 8709 gold, 8709 gate, 8709 matched by name
+  | solver: python3 -I devenv/openxc7/z3cmd.py (SMT-LIB2, one process per question)
+  |
+  |   proved  $techmap616633$abc$608392$lut$aiger608391$41921.A[0] = CLBLM_L_X22Y140_CLBLM_L_AQ
+  | ...
+  |   proved  u_dram.builder_interface2_bank_bus_dat_w[5] = CLBLL_R_X45Y118_CLBLL_L_AMUX
+  |   proved  u_dram.builder_interface2_bank_bus_dat_w[6] = CLBLL_R_X45Y114_CLBLL_L_CQ
+  |   proved  u_dram.builder_interface2_bank_
+  | z3cmd: 658 questions (658 unsat); question files of 3224975 to 8096884 bytes; 127.4 s in the solver, 0.19 s a question, the longest 2.28 s (question 2); the largest solver process 1013 MiB (question 1)
+  | re-read BRAM_L_X38Y135_RAMB18_Y1 WEA[1] from pin 2 (BRAM_L_X38Y135_BRAM_RAMB18_WEA2), not BRAM_L_X38Y135_BRAM_RAMB18_WEA1 (write A 18, write B <=9)
+  | bramwe: 1 block RAM(s), 1 enable(s) re-read, 0 difference(s)
+
+  lvs/z3cmd-selftest.txt:
+  | z3cmd self-test: the command 'python3 -I devenv/openxc7/z3cmd.py', run as lvs_equiv runs it (CMD FILE 2>/dev/null, through /bin/sh)
+  | libz3 4.13.3.0 (this Python's)
+  | self-test unsat answer 'unsat', exit 0 (wants 'unsat', exit 0; lvs_equiv reads unsat): ok
+  | self-test sat   answer 'sat', exit 0 (wants 'sat', exit 0; lvs_equiv reads sat): ok
+  | self-test error answer '', exit 1 (wants '', exit 1; lvs_equiv reads unknown): ok
+  | z3cmd self-test: PASS
+
+  fpga-build's new manifest.txt: its result, reason and [recheck] table:
+  | manifest_format = 2
+  | run_id = "surfcpu_arty_a7_ddr_gpu-arty_a7_100t-bfaac489-20261026T064335Z"
+  | build_id = "bfaac489"
+  | build_time = 1792971531
+  | result = "fail"
+  | reason = "check LVS BLOCKED (timeout)"
+  | ...
+  | [recheck]
+  | rechecked_at = "2026-10-27T18:28:23Z"
+  | tools_revision = "b82e2987e7400030c3acc0478a37e3f9564c871c"
+  | tools_dirty = false
+  | image = "surfcpu-openxc7:2026-10-15"
+  | exit_status = 0
+  | lvs_solver = "z3cmd"
+  | lvs_timeout = 150
+  | checks_run_again = ["check_bitstream", "check_round_trip", "check_block_ram", "check_lvs", "check_clocks", "slack_margin", "timing"]
+  | checks_kept = ["check_srl", "check_synthesis", "check_netlist", "check_boot_rom"]
+  | build_result = "fail"
+  | build_reason = "tools/openxc7-build.sh exit status 1; check LVS FAIL"
+  | build_manifest = "build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.build.txt"
+  | build_manifest_sha256 = "8c18167064ea30744b301b53d54ad62d93fb0e433bbfb077672a71e48c425263"
+  | openxc7_build_manifest = "build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/openxc7/manifest.build.txt"
+  | openxc7_build_manifest_sha256 = "c1c6e32bfd5a54d012030f1421c7f32d167aa247e51df1794f44aeac2d817bd2"
+  | openxc7_recheck = "2026-10-27T18:34:09Z, tools/openxc7-build.sh --recheck at b82e2987e740 dirty=0, image surfcpu-openxc7:2026-10-15"
+
+  Then the copy was removed and copied again from the backup: restored: 70 files, every SHA-256 the backup's
+
+  The long run (the openxc7 image takes both Docker slots; the brief's estimate is about 14 hours, and
+  LVS_TIMEOUT=86400 gives the proof 24; the trial's first 658 questions took 0.19 s each in the solver,
+  the largest solver process 1013 MiB; the capped docker first on PATH):
+
+    cd "/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-flow-lvs/surfcpu" &&
+    PATH="/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/integ-tools/capped-bin:$PATH" \
+      make recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 \
+      > build/flow-lvs-work/recheck-ddr-gpu.log 2>&1
+
+  On a pass it writes build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit, the bitstream
+  582570ab..., with manifest.txt saying result = "pass" and [recheck], where tools/program.sh and board-test look
+  (make program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu).

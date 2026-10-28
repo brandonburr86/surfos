@@ -19,10 +19,65 @@
 #   FAKE_OX_THIN_SEEDS  the seeds whose placement meets every clock with less slack than the rule
 #                    wants (thin): the next seed is tried; with every seed thin the first is kept
 #                    and the manifest's slack margin says THIN, as the real script does
+#   FAKE_OX_SLACK    a recheck's slack margin (default PASS)
+# --recheck --out DIR [--lvs-solver S] [--lvs-timeout T] [--dry-run], as the real script's (format 2):
+# the build's manifest (manifest.build.txt once a recheck has kept a copy, else manifest.txt) must be
+# there; a copy is kept as manifest.build.txt (once), and the new manifest, written aside, replaces
+# manifest.txt at the end: the build's lines up to its bitstream and its SRL and synthesis results,
+# with the checks run again (FAKE_OX_LVS, FAKE_OX_CLOCKS as above) and the recheck's lines.
+# FAKE_OX_RECHECK=refuse refuses as the real one does (exit 3, nothing changed); =die stops after
+# keeping the copy (exit 137), =tie refuses after it began (exit 4: the LVS inputs made again are not
+# the build's): either way manifest.txt is as it was.
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
-top= board= xdc= out= dsp= dry=0 srcs= seeds=1 slack_clocks=
+top= board= xdc= out= dsp= dry=0 srcs= seeds=1 slack_clocks= solver=libz3 limit=1800 incs= defs=
+if [ "${1:-}" = --recheck ]; then
+    shift
+    limit= solver=
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --out) out=$2; shift 2 ;;
+            --lvs-solver) case "$2" in libz3|z3cmd) solver=$2 ;; *) echo "fake openxc7: --lvs-solver $2" >&2; exit 2 ;; esac; shift 2 ;;
+            --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; limit=$2; shift 2 ;;
+            --dry-run) dry=1; shift ;;
+            *) echo "fake openxc7: --recheck takes no $1" >&2; exit 2 ;;
+        esac
+    done
+    rec=$out/manifest.txt
+    [ ! -f "$out/manifest.build.txt" ] || rec=$out/manifest.build.txt
+    [ -f "$rec" ] || { echo "fake openxc7: --recheck: no manifest in $out; refusing (nothing was changed)" >&2; exit 3; }
+    [ "${FAKE_OX_RECHECK:-}" != refuse ] || { echo "fake openxc7: --recheck: refusing (nothing was changed)" >&2; exit 3; }
+    if [ "$dry" = 1 ]; then echo "[lvs-prove] fake recheck dry run, solver ${solver:-as built}"; exit 0; fi
+    [ "$rec" != "$out/manifest.txt" ] || { cp "$out/manifest.txt" "$out/manifest.build.txt"; rec=$out/manifest.build.txt; }
+    [ "${FAKE_OX_RECHECK:-}" != die ] || { echo "fake openxc7: killed while rechecking" >&2; exit 137; }
+    [ "${FAKE_OX_RECHECK:-}" != tie ] || { echo "fake openxc7: --recheck: lvs/gold.v made again is not the build's; refusing (exit 4)" >&2; exit 4; }
+    [ -n "$solver" ] || solver=$(sed -n 's/^lvs solver  *\([a-z0-9]*\).*/\1/p' "$rec"); solver=${solver:-libz3}
+    [ -n "$limit" ] || limit=$(sed -n 's/^lvs timeout  *\([0-9]*\).*/\1/p' "$rec")
+    top=$(sed -n 's/^top  *//p' "$rec" | head -n 1)
+    srl=$(awk 'substr($0, 1, 20) == "check SRL cells     " { print $4; exit }' "$rec")
+    syn=$(awk 'substr($0, 1, 20) == "check synthesis     " { print $3; exit }' "$rec")
+    { echo "# openXC7 build manifest (tools/openxc7-build.sh), rechecked (--recheck); physical behaviour: pending (never on a board)"
+      echo "manifest format     2 (docs/OPEN-FLOW.md section 3)"
+      awk 'NR > 1 && /^check / { exit } NR > 1' "$rec" | grep -v '^manifest format '
+      echo "check SRL cells     $srl (kept from the build: check-srl.txt)"
+      echo "check synthesis     $syn (kept from the build: check-synthesis.txt)"
+      echo "check bitstream     PASS (run again: IDCODE, frames, commands, CRC: check-bitstream.txt)"
+      echo "check round trip    PASS (run again: bitstream decoded back to FASM: check-roundtrip.txt)"
+      echo "check block RAM     none in the design (run again: contents decoded from the bitstream: check-bram.txt)"
+      echo "check LVS           ${FAKE_OX_LVS:-PASS} (run again: routed netlist equivalent to the synthesis, lvs_equiv by the $solver route: check-lvs.txt)"
+      echo "lvs solver          $solver (fake)"
+      echo "lvs timeout         $limit s"
+      echo "check clocks        ${FAKE_OX_CLOCKS:-PASS} (run again: MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+      echo "check slack margin  ${FAKE_OX_SLACK:-PASS} (run again: least margin dram_clk +1.513 ns, wants 0.500: slack-seed1.txt)"
+      echo "recheck             2026-10-27T12:00:00Z, tools/openxc7-build.sh --recheck at fake dirty=0, image fake"
+      echo "checks run again    bitstream, round trip, block RAM, LVS, clocks, slack margin, timing and utilization"
+      echo "checks kept         SRL cells, synthesis: the build's"
+      echo "## timing"; grep '^clock ' "$out/timing.txt"
+      sed -n '/^## tools/,$p' "$rec"; } > "$out/manifest.txt.new"
+    mv -f "$out/manifest.txt.new" "$out/manifest.txt"
+    exit "${FAKE_OX_RC:-0}"
+fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --top) top=$2; shift 2 ;;
@@ -30,9 +85,10 @@ while [ $# -gt 0 ]; do
         --xdc) xdc=$2; shift 2 ;;
         --out) out=$2; shift 2 ;;
         --dsp) dsp=$2; shift 2 ;;
-        --manifest-include) [ -f "$2" ] || { echo "fake openxc7: no $2" >&2; exit 2; }; shift 2 ;;
-        -D) shift 2 ;;
-        --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
+        --manifest-include) [ -f "$2" ] || { echo "fake openxc7: no $2" >&2; exit 2; }; incs="$incs $2"; shift 2 ;;
+        -D) defs="$defs $2"; shift 2 ;;
+        --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; limit=$2; shift 2 ;;
+        --lvs-solver) case "$2" in libz3|z3cmd) solver=$2 ;; *) echo "fake openxc7: --lvs-solver $2" >&2; exit 2 ;; esac; shift 2 ;;
         --pnr-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --pnr-timeout $2" >&2; exit 2 ;; esac
                        [ "$2" -gt 0 ] || { echo "fake openxc7: --pnr-timeout $2" >&2; exit 2; }; shift 2 ;;
         --min-slack) case "$2" in *=*=*|=*|*=|*[!a-zA-Z0-9_.=]*) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; *=*) ;;
@@ -122,24 +178,29 @@ tim=${FAKE_OX_TIMING:-PASS}
   echo "IDCODE written: $id"
   echo "check for $dev: PASS"; } > "$out/check-bitstream.txt"
 { echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+  echo "manifest format     2 (docs/OPEN-FLOW.md section 3)"
   echo "top                 $top"
   echo "part                $part (device $dev, chip database chipdb-fake.bin)"
   echo "board               $board"
   echo "seed                ${passed:-1} (of $seeds: $(grep -c '^seed ' "$out/seeds.txt" 2>/dev/null || echo 0) tried, seeds.txt)"
+  echo "defines            ${defs:- (none)}"
   echo "bitstream           $out/$top.bit sha256:$(shasum -a 256 "$out/$top.bit" | cut -d' ' -f1) 99 bytes"
   echo "check SRL cells     ${FAKE_OX_SRL:-PASS} (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
   echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"
   echo "check block RAM     none in the design (contents decoded from the bitstream: check-bram.txt)"
-  echo "check LVS           ${FAKE_OX_LVS:-PASS} (routed netlist equivalent to the synthesis: check-lvs.txt)"
+  echo "check LVS           ${FAKE_OX_LVS:-PASS} (routed netlist equivalent to the synthesis, lvs_equiv by the $solver route: check-lvs.txt)"
+  echo "lvs solver          $solver (fake)"
+  echo "lvs timeout         $limit s"
   echo "check clocks        ${FAKE_OX_CLOCKS:-PASS} (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
   echo "check slack margin  $slack"
   echo "## timing"
   grep '^clock ' "$out/timing.txt"
   echo "## tools (/etc/surfcpu-openxc7.txt)"
   echo "yosys                  Yosys 0.69+post (fake)"
-  echo "nextpnr                \"nextpnr-himbaechel\" -- Next Generation Place and Route (Version 1.0.0)"; } > "$out/manifest.txt"
+  echo "nextpnr                \"nextpnr-himbaechel\" -- Next Generation Place and Route (Version 1.0.0)"
+  for e in $incs; do echo "## included: $e"; cat "$e"; done; } > "$out/manifest.txt"
 : > "$out/cells_sim.v"
 if [ "$top" = surfcpu_arty_a7_top ]; then
     printf '{"modules": {"%s": {"cells": {"rom": {"type": "$mem_v2", "parameters": {"MEMID": "\\\\u_soc.u_bootrom.rom", "WIDTH": 32, "SIZE": 16384}, "connections": {}}}, "netnames": {}}}}\n' "$top" > "$out/pre.json"

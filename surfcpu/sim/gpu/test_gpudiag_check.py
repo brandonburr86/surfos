@@ -30,7 +30,8 @@ scenes, 84 checks for a first run and 83 for a rerun:
     whole runs show no build at all; the sixth review's: a manifest of another design (B6), of a
     gpudiag-named design with another boot ROM, of a failed build, or naming no design fails; a run
     whose banner was garbled but whose bitstream line shows the build passes (B12), and --build-id
-    alone does not see a dirty build (B14), as documented;
+    alone does not see a dirty build (B14), as documented; a manifest of manifest_format 2 passes,
+    one of a format it does not know (3) fails (the flow's review of 10/27/26, low 6);
   - --must-fail passes only a failing run that says what it must;
   - the cube (GPU2): its header and its lines a second after a whole run pass, and so does a capture
     that ends inside one; a line with a torn frame, a missed one, one out of order, shown frames
@@ -139,12 +140,13 @@ def ending(text, k):
 
 
 def manifest(build_id="12345678", dirty="false", design="surfcpu_arty_a7_gpudiag", rom="build/fw/gpudiag.mem",
-             result="pass"):
+             result="pass", fmt=None):
     """the lines of tools/fpga-build.sh's manifest.txt that gpudiag_check.py reads (and a section after them,
-    whose keys it must not take for the top's)"""
-    return ('# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n'
+    whose keys it must not take for the top's); fmt: its manifest_format line (none: format 1)"""
+    return ('# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n%s'
             'design = "%s"\nsource_dirty = %s\nbuild_id = "%s"\nrom_image = "%s"\nresult = "%s"\n\n'
-            '[openxc7]\nresult = "pass"\n' % (design, dirty, build_id, rom, result))
+            '[openxc7]\nresult = "pass"\n' % ("" if fmt is None else "manifest_format = %s\n" % fmt, design, dirty,
+                                               build_id, rom, result))
 
 
 def expect(name, transcript, want, *extra, man=None):
@@ -276,6 +278,9 @@ expect("--manifest: a build that failed its checks (its flow section's result pa
        man=manifest(result="fail"))
 expect("--manifest naming no design", run() + ECHO, False,
        man=manifest().replace('design = "surfcpu_arty_a7_gpudiag"\n', ''))
+# its manifest_format: 1 (none) and 2 are read, a later one is refused (it may mean something else)
+expect("--manifest of manifest_format 2", run() + ECHO, True, man=manifest(fmt=2))
+expect("--manifest of manifest_format 3", run() + ECHO, False, man=manifest(fmt=3))
 # B12, B14: what the build rule does not ask, as documented
 expect("B12: --manifest: the run's banner garbled, its bitstream line the build's",
        run().replace("(build 12345678)", "(bu\xffld 12345678)") + ECHO, True, man=manifest())

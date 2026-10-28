@@ -3,7 +3,9 @@
 #
 #   tools/fpga-build.sh [--dry-run] [--design NAME] BOARD
 #   tools/fpga-build.sh --fetch [--design NAME] BOARD    the results of the last vivado-ssh run
-#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline] [DRY_RUN=1]
+#   tools/fpga-build.sh --recheck [--dry-run] [--design NAME] BOARD   the last open-flow build's checks again
+#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline] [DRY_RUN=1] [LVS_SOLVER=z3cmd] [LVS_TIMEOUT=s]
+#   make recheck-fpga BOARD=arty_a7_100t DESIGN=... [DRY_RUN=1] [LVS_SOLVER=z3cmd] [LVS_TIMEOUT=s]
 #
 # BOARD is a line of boards/arty_a7/boards.txt (arty_a7_35t, arty_a7_100t). The design is
 # surfcpu_arty_a7_top unless --design or $DESIGN names another boards/arty_a7/designs/*.files.
@@ -34,6 +36,32 @@
 # up on a silent connection after two minutes. Vivado runs on the host under nohup, with its
 # own log and exit status in out/, so a dropped connection does not stop it: --fetch brings
 # back its results later (exit 3: connection lost, try --fetch; 4: still running).
+# The open flow's LVS (docs/OPEN-FLOW.md section 3): LVS_SOLVER=libz3|z3cmd chooses how its proof's
+# questions reach Z3 (libz3, the default: lvs_equiv's incremental session; z3cmd: one solver process
+# a question, slower, for a design whose proof outgrows the memory it may use) and LVS_TIMEOUT=S
+# replaces the design list's lvs-timeout for one build; the manifest records both ([openxc7]
+# lvs_solver, lvs_timeout). make release gives its builds neither (they take the design lists').
+# --recheck (make recheck-fpga): the post-route checks of the last open-flow build of DESIGN for
+# BOARD here, again, without synthesis, placement or routing: bitstream, round trip, block RAM, LVS
+# (by LVS_SOLVER, within LVS_TIMEOUT; else as the build ran it), clocks, slack, timing. First it
+# checks that the bitstream is the one both manifests record (the flow's, and this one's when it
+# records one), that the two manifests are one build's (the flow's includes this one's head), that
+# the build's image is this tree's and its ROM copy the one recorded, and that every check it
+# keeps passed: SRL cells and synthesis (the flow's), netlist and boot ROM (this script's), all
+# made on the synthesized netlist before placement; it refuses (exit 1, nothing changed) when a
+# file is missing or anything does not match. tools/openxc7-build.sh --recheck then checks the
+# flow's side again and runs the checks. Both manifests are written anew, each replacing the one
+# that was there only when it is complete (until then they are as they were, so a recheck stopped
+# anywhere leaves the build's): the build's identity as it was (run id, build id and time, source
+# and constraint hashes, seed: the bitstream carries the id and the time), the kept checks, the
+# checks run again, and a [recheck] table saying when, by which commit's tools, with which LVS
+# route; the build's own manifests are kept beside them as manifest.build.txt. On a pass the
+# bitstream is copied out as a passing build's is; on a fail none stays under the design's name.
+# --dry-run makes every check of the first step, prints what would run and changes nothing.
+# The manifest's format is 2 (manifest_format; none means 1): format 2 can carry a [recheck] table,
+# [openxc7] lvs_solver and lvs_timeout, and the flow's format 2 manifest; tools/program.sh,
+# tools/board-test.py, tools/release.py and sim/gpu/gpudiag_check.py read both and refuse a format
+# they do not know.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd -P)              # surfcpu/
@@ -49,18 +77,30 @@ esac
 design=${DESIGN:-surfcpu_arty_a7_top}
 board=
 fetch=0
+recheck=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) dry=1 ;;
         --fetch)   fetch=1 ;;
+        --recheck) recheck=1 ;;
         --design)  [ $# -ge 2 ] || die "--design needs a name"; design=$2; shift ;;
-        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         -*)        die "unknown option $1" ;;
         *)         [ -z "$board" ] || die "one BOARD only"; board=$1 ;;
     esac
     shift
 done
-[ -n "$board" ] || die "usage: $0 [--dry-run] [--design NAME] BOARD"
+[ -n "$board" ] || die "usage: $0 [--dry-run] [--fetch | --recheck] [--design NAME] BOARD"
+[ "$fetch$recheck" != 11 ] || die "--fetch and --recheck do not go together"
+case "${LVS_SOLVER:-}" in
+    ''|libz3|z3cmd) ;;
+    *) die "LVS_SOLVER must be libz3 or z3cmd, not '$LVS_SOLVER' (docs/OPEN-FLOW.md section 3)" ;;
+esac
+case "${LVS_TIMEOUT:-}" in
+    '') ;;
+    *[!0-9]*) die "LVS_TIMEOUT must be a number of seconds, not '$LVS_TIMEOUT'" ;;
+    *) [ "$LVS_TIMEOUT" -gt 0 ] || die "LVS_TIMEOUT must be more than 0 seconds (timeout takes 0 as no limit)" ;;
+esac
 
 # ------------------------------------------------------------------------------ board, design
 line=$(awk -v b="$board" '$1 == b { print }' "$root/boards/arty_a7/boards.txt")
@@ -82,7 +122,10 @@ conf_get() {      # KEY: the last KEY=value line, without comments or surroundin
     sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$conf" | tail -n 1 |
         sed -e 's/[[:space:]]*#.*$//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
-if [ -n "${FLOW:-}" ]; then flow_from=environment; else FLOW=$(conf_get FLOW); flow_from=$conf; fi
+if [ "$recheck" = 1 ]; then                             # a recheck is of an open-flow build (its manifest says so)
+    [ "${FLOW:-openxc7}" = openxc7 ] || die "--recheck rechecks an open-flow build; FLOW=$FLOW in the environment"
+    FLOW=openxc7 flow_from=--recheck
+elif [ -n "${FLOW:-}" ]; then flow_from=environment; else FLOW=$(conf_get FLOW); flow_from=$conf; fi
 if [ "$FLOW" != openxc7 ] && [ ! -f "$conf" ]; then      # the open flow needs no build host
     echo "$me: no build host configured ($conf): bitstream generation is pending." >&2
     echo "$me: docs/BUILD-HOST.md describes the options and the file; FLOW=openxc7 needs none." >&2
@@ -118,6 +161,8 @@ case "$FLOW" in
     '') die "$conf: FLOW is not set (vivado-ssh, vivado-docker or openxc7)" ;;
     *)  die "unknown FLOW '$FLOW' from the $flow_from (vivado-ssh, vivado-docker or openxc7)" ;;
 esac
+[ "$FLOW" = openxc7 ] || [ -z "${LVS_SOLVER:-}${LVS_TIMEOUT:-}" ] ||
+    die "LVS_SOLVER and LVS_TIMEOUT are the open flow's (FLOW=openxc7), not $FLOW's"
 # Key authentication only, the host key must already be known (no trust on first use), and a
 # connection that goes quiet is given up after 20 s to connect or 4 x 30 s without an answer.
 ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=4"
@@ -125,10 +170,11 @@ ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o 
 # ------------------------------------------------------------------------------ results (functions)
 sha() { shasum -a 256 "$@" | awk '{ print $1 }'; }
 # The manifest: the keys known before the run, the outcome (result, and the bitstream's SHA-256
-# and size, which tools/program.sh compares with the file), then the flow's own results.
+# and size, which tools/program.sh compares with the file), then the flow's own results; a
+# recheck's keys come from its own head (the build's, in format 2) and it adds its [recheck] table.
 finish() {        # RESULT REASON SECTION FILE: write the final manifest
     {
-        cat "$head"
+        cat "${finish_head:-$head}"
         echo "result = \"$1\""
         if [ "$1" = pass ]; then
             echo "bitstream_sha256 = \"$(sha "$base/$design.bit")\""
@@ -139,6 +185,7 @@ finish() {        # RESULT REASON SECTION FILE: write the final manifest
         echo
         echo "[$3]"
         cat "$4"
+        if [ -n "${finish_table:-}" ]; then echo; cat "$finish_table"; fi
     } > "$manifest.tmp"
     mv "$manifest.tmp" "$manifest"
 }
@@ -205,7 +252,8 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     notgiven="$base/nextpnr-not-checked.txt"
     mkdir -p "$base"
     if [ "$dry" = 0 ]; then                             # a new build replaces the last one's results
-        rm -rf "${base:?}/openxc7" "${base:?}/rom" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest"
+        rm -rf "${base:?}/openxc7" "${base:?}/rom" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest" \
+            "${base:?}/manifest.build.txt" "${base:?}/manifest-head.recheck.txt" "${base:?}/recheck.txt"
     fi
     # The constraints nextpnr applies (pins, the oscillator's clock), and a list of the rest.
     ( cd "$root" && awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$notgiven" $xdcs ) > "$xdc_nx" ||
@@ -245,6 +293,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
+    [ -z "${LVS_SOLVER:-}" ] || set -- "$@" --lvs-solver "$LVS_SOLVER"
     [ -z "$pnr_timeout" ] || set -- "$@" --pnr-timeout "$pnr_timeout"
     for w in $min_slack; do set -- "$@" --min-slack "$w"; done
     [ -z "$seed" ] || set -- "$@" --seed "$(echo "$seed" | tr ' ' ',')"
@@ -306,6 +355,17 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             echo "slack_margin = $(toml_str "${v%% *}")"
             [ -z "$v" ] || echo "slack_margin_note = $(toml_str "$(echo "$v" | sed -n 's/^[A-Z]* (\(.*\))$/\1/p')")"
             slack_state=${v%% *}
+            # a placement the rule cannot judge never reaches a build's manifest (its seed fails), but a
+            # recheck judges the kept placement again: anything but PASS or THIN fails
+            case "${slack_state:-missing}" in
+                PASS|THIN) ;;
+                *) problems="${problems:+$problems; }check slack margin ${slack_state:-missing}" ;;
+            esac
+            # the LVS route and its limit (format 2)
+            v=$(awk 'substr($0, 1, 20) == "lvs solver          " { print substr($0, 21); exit }' "$om")
+            [ -z "$v" ] || echo "lvs_solver = $(toml_str "${v%% *}")"
+            v=$(awk 'substr($0, 1, 20) == "lvs timeout         " { print substr($0, 21); exit }' "$om")
+            case "${v%% *}" in ''|*[!0-9]*) ;; *) echo "lvs_timeout = ${v%% *}" ;; esac
         fi
         for c in "SRL cells:check_srl" synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
                  "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
@@ -319,8 +379,12 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         done
         # The board's checks of the synthesized netlist: every RTL memory still in RAM cells,
         # the multiplier in its DSP48E1 (boards/arty_a7/netlist_check.py); the boot ROM's
-        # blocks hold its .mem (boards/arty_a7/romcheck.py).
-        if [ -f "$ox/pre.json" ] && [ -f "$ox/$top.json" ]; then
+        # blocks hold its .mem (boards/arty_a7/romcheck.py). A recheck keeps the build's (it
+        # checked they passed): they read only the synthesized netlist, which it does not touch.
+        if [ "$recheck" = 1 ]; then
+            echo "check_netlist = \"$(btable openxc7 check_netlist)\""
+            [ -z "$rom" ] || echo "check_boot_rom = \"$(btable openxc7 check_boot_rom)\""
+        elif [ -f "$ox/pre.json" ] && [ -f "$ox/$top.json" ]; then
             # shellcheck disable=SC2086
             if python3 boards/arty_a7/netlist_check.py --top "$top" --pre "$ox/pre.json" --post "$ox/$top.json" \
                    $dsp_args > "$ox/check-netlist.txt" 2>&1
@@ -328,8 +392,8 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         else
             v=missing; problems="${problems:+$problems; }check netlist missing"
         fi
-        echo "check_netlist = \"$v\""
-        if [ -n "$rom" ]; then
+        [ "$recheck" = 1 ] || echo "check_netlist = \"$v\""
+        if [ -n "$rom" ] && [ "$recheck" = 0 ]; then
             if [ -f "$ox/$top.json" ] && "$ROMCHECK" --rom "$rom_ox" --netlist "${ox#"$root"/}/$top.json" \
                    --top "$top" --instance "$rom_inst" --cells-sim "${ox#"$root"/}/cells_sim.v" \
                    --out "${ox#"$root"/}/romcheck" > "$ox/romcheck.out" 2>&1 && [ -f "$ox/romcheck/check-rom.txt" ]
@@ -389,21 +453,185 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         echo "openxc7_manifest = $(toml_str "${om#"$root"/}")"
     } > "$res"
     [ -f "$ox/$top.bit" ] || problems="${problems:+$problems; }no bitstream"
+    [ "$recheck" = 0 ] || recheck_table "$1"
     if [ -z "$problems" ]; then
         cp "$ox/$top.bit" "$base/$design.bit"
         echo "result = \"pass\"" >> "$res"
         finish pass "" openxc7 "$res"
         echo "$me: PASS: ${base#"$root"/}/$design.bit (open flow: nextpnr's timing is an estimate; the $n_not constraints above are not checked)"
+        [ "$recheck" = 0 ] || echo "$me: rechecked: ${manifest#"$root"/} and ${om#"$root"/} written anew; the build's own are beside them as manifest.build.txt"
         grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode|check_netlist|check_boot_rom|placer_seed|slack_margin) ' "$res" | sed "s/^/$me:   /"
         [ "${slack_state:-}" != THIN ] || echo "$me: THIN: every placer seed met timing with less slack than the rule wants (slack_margin_note in the manifest); make release refuses it without PRERELEASE=1" >&2
         exit 0
     fi
     echo "result = \"fail\"" >> "$res"
+    [ "$recheck" = 0 ] || rm -f "${base:?}/${design:?}.bit"   # a build that fails has none under its name
     finish fail "$problems" openxc7 "$res"
     echo "$me: FAIL: $problems" >&2
     echo "$me: logs and reports in ${ox#"$root"/}${om:+ (manifest ${om#"$root"/})}" >&2
     exit 1
 }
+
+# ------------------------------------------------------------------------------ --recheck (functions)
+# The build's own record is its manifest: manifest.build.txt once a recheck has put it aside,
+# else manifest.txt (never a recheck's). Its top-level keys and [openxc7] table are read as
+# tools/program.sh reads them (a key, " = ", its value without quotes).
+bkey() { awk -v k="$1" '/^\[/ { exit } $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$brec"; }
+btable() { awk -v t="[$1]" -v k="$2" '$0 == t { on = 1; next } /^\[/ { on = 0 }
+           on && $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$brec"; }
+refuse() { echo "$me: --recheck: $*; refusing (nothing was changed)" >&2; exit 1; }
+openxc7_recheck() {   # --recheck (the top of this file): check the build, recheck it, gate the results
+    case "$base/" in
+        "$root"/*) ;;
+        *) refuse "the open flow rechecks inside surfcpu/ (its container sees only the repository), but SURFCPU_FPGA_OUT=$fpga_out is outside it" ;;
+    esac
+    ox="$base/openxc7"
+    xdc_nx="$base/nextpnr.xdc"
+    notgiven="$base/nextpnr-not-checked.txt"
+    brec=$manifest
+    [ ! -f "$base/manifest.build.txt" ] || brec=$base/manifest.build.txt
+    [ -f "$brec" ] || refuse "no build of $design for $board here (${manifest#"$root"/} is missing): nothing to recheck"
+    [ "$(head -n 1 "$brec")" = "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh" ] ||
+        refuse "${brec#"$root"/} is not this script's manifest"
+    ! grep -q '^\[recheck\]$' "$brec" ||
+        refuse "${brec#"$root"/} is a recheck's manifest, and the build's own (manifest.build.txt) is not beside it"
+    fmt=$(bkey manifest_format)
+    case "${fmt:-1}" in 1|2) ;; *) refuse "${brec#"$root"/} is manifest format $fmt, which this script does not know (1, 2)" ;; esac
+    [ "$(bkey flow)" = openxc7 ] || refuse "${brec#"$root"/} is a $(bkey flow) build: --recheck is for the open flow's"
+    [ "$(bkey design)" = "$design" ] && [ "$(bkey board)" = "$board" ] && [ "$(bkey part)" = "$part" ] ||
+        refuse "${brec#"$root"/} is $(bkey design) for $(bkey board) ($(bkey part)), not $design for $board ($part)"
+    case "$(bkey result)" in
+        pass|fail) ;;
+        *) refuse "${brec#"$root"/} has no result: that build did not finish (a vivado-ssh one: --fetch)" ;;
+    esac
+    top=$(bkey top)
+    [ -n "$top" ] || refuse "${brec#"$root"/} names no top"
+    # the head, the keys known before the build: its manifest up to the result, manifest-head.txt
+    [ -f "$head" ] || refuse "${head#"$root"/} is missing"
+    hd=$(awk '/^result = / { exit } { print }' "$brec")
+    [ "$hd" = "$(cat "$head")" ] || refuse "${head#"$root"/} is not the head of ${brec#"$root"/}"
+    # the flow's record, one build's with this one: it includes this head
+    orec=$ox/manifest.txt
+    [ ! -f "$ox/manifest.build.txt" ] || orec=$ox/manifest.build.txt
+    [ -f "$orec" ] || refuse "${orec#"$root"/}, the open flow's manifest, is missing"
+    case "$(head -n 1 "$orec")" in "# openXC7 build manifest"*) ;; *) refuse "${orec#"$root"/} is not the open flow's manifest" ;; esac
+    ! grep -q '^recheck  ' "$orec" ||
+        refuse "${orec#"$root"/} is a recheck's manifest, and the flow's own (manifest.build.txt) is not beside it"
+    inc=$(awk -v h="## included: ${head#"$root"/}" '$0 == h { on = 1; next } /^## / { on = 0 } on' "$orec")
+    [ "$inc" = "$hd" ] || refuse "${orec#"$root"/} is not this build's: it does not include ${head#"$root"/} as it is"
+    # the bitstream: the one the flow's manifest records, and this one's if it records one
+    bit=$ox/$top.bit
+    [ -f "$bit" ] || refuse "the bitstream ${bit#"$root"/} is missing"
+    bsha=$(sha "$bit")
+    osha=$(sed -n 's/^bitstream  *[^ ]* sha256:\([0-9a-f]*\) .*/\1/p' "$orec" | head -n 1)
+    [ "$osha" = "$bsha" ] || refuse "the bitstream ${bit#"$root"/} (sha256 $bsha) is not the one ${orec#"$root"/} records (${osha:-none})"
+    msha=$(bkey bitstream_sha256)
+    [ -z "$msha" ] || [ "$msha" = "$bsha" ] ||
+        refuse "the bitstream ${bit#"$root"/} (sha256 $bsha) is not the one ${brec#"$root"/} records ($msha)"
+    # the build id and time it carries (the defines the flow synthesized it with) are this build's
+    defs=" $(awk 'substr($0, 1, 20) == "defines             " { print substr($0, 21); exit }' "$orec") "
+    case "$defs" in
+        *" ARTY_BUILD_ID="*) case "$defs" in *" ARTY_BUILD_ID=32'h$(bkey build_id) "*) ;;
+                                 *) refuse "the bitstream's build id (${orec#"$root"/}: defines) is not build_id $(bkey build_id)" ;; esac ;;
+    esac
+    case "$defs" in
+        *" ARTY_BUILD_TIME="*) case "$defs" in *" ARTY_BUILD_TIME=32'h$(printf '%08x' "$(bkey build_time)") "*) ;;
+                                   *) refuse "the bitstream's build time (${orec#"$root"/}: defines) is not build_time $(bkey build_time)" ;; esac ;;
+    esac
+    # the image it was built in is the one this tree's flow runs (the flow compares their tools)
+    [ "$(btable openxc7 image)" = "$ox_image" ] ||
+        refuse "${brec#"$root"/} was built in the image '$(btable openxc7 image)'; this tree's flow runs $ox_image"
+    # the boot ROM copy the build read is still the one recorded
+    rom=
+    if [ -n "$(bkey rom_sha256)" ]; then
+        rom=rom/$(basename "$(bkey rom_image)")
+        [ -f "$base/$rom" ] || refuse "${base#"$root"/}/$rom, the boot ROM the build read, is missing"
+        [ "$(sha "$base/$rom")" = "$(bkey rom_sha256)" ] ||
+            refuse "${base#"$root"/}/$rom is not the boot ROM ${brec#"$root"/} records (rom_sha256 $(bkey rom_sha256))"
+    fi
+    # the checks it keeps, made on the synthesized netlist before placement, passed
+    for k in check_srl check_synthesis check_netlist ${rom:+check_boot_rom}; do
+        v=$(btable openxc7 "$k")
+        [ "$v" = PASS ] || refuse "the build's $k is '${v:-missing}': a recheck keeps it, so it must have passed"
+    done
+    for f in "$xdc_nx" "$notgiven"; do [ -f "$f" ] || refuse "${f#"$root"/} is missing"; done
+    n_not=$(grep -c . "$notgiven" || true)
+    set --
+    [ -z "${LVS_SOLVER:-}" ] || set -- "$@" --lvs-solver "$LVS_SOLVER"
+    [ -z "${LVS_TIMEOUT:-}" ] || set -- "$@" --lvs-timeout "$LVS_TIMEOUT"
+    set -- --recheck --out "${ox#"$root"/}" "$@"
+    echo "$me: --recheck of $design for $board: $(bkey run_id), build $(bkey build_id), result $(bkey result)$( [ "$(bkey result)" = pass ] || echo ": $(bkey reason)")"
+    echo "$me: its bitstream ${bit#"$root"/} is the one $( [ -n "$msha" ] && echo "both manifests record" || echo "the flow's manifest records (this one, of a failed build, records none)"), sha256 $bsha"
+    route="the build's route" limit="the build's limit"
+    [ -z "${LVS_SOLVER:-}" ] || route=$LVS_SOLVER
+    [ -z "${LVS_TIMEOUT:-}" ] || limit="$LVS_TIMEOUT s"
+    echo "$me: kept, all PASS: check_srl, check_synthesis, check_netlist${rom:+, check_boot_rom}; LVS by $route, within $limit"
+    cd "$root"
+    if [ "$dry" = 1 ]; then
+        echo "$me: --dry-run: would run:"
+        echo "  ${OPENXC7#"$root"/} $*"
+        if "$OPENXC7" "$@" --dry-run > "$base/recheck.dry-run.txt" 2>&1; then st=0; else st=$?; fi
+        sed 's/^/  | /' "$base/recheck.dry-run.txt"
+        rm -f "$base/recheck.dry-run.txt"
+        [ "$st" = 0 ] || die "--recheck: tools/openxc7-build.sh refused (exit $st): nothing was changed"
+        echo "$me: --dry-run: nothing was changed"
+        exit 0
+    fi
+    rechecked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    # The flow refuses (exit 3) before it changes anything. Once it has begun, its manifest stays the
+    # one that was there until its own, complete, replaces it at the end; still the same, the flow
+    # stopped before that (a kill, a step that failed, or exit 4: the LVS inputs it made again are not
+    # the build's), and this one's stays as it was too: nothing new is written.
+    was=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    if "$OPENXC7" "$@"; then st=0; else st=$?; fi
+    now=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    if [ "$now" = "$was" ]; then
+        [ "$st" != 3 ] || die "--recheck: tools/openxc7-build.sh refused (exit 3) before it began: nothing was changed"
+        kept="both manifests are as they were (${ox#"$root"/}/manifest.txt, ${manifest#"$root"/}); the checks it got to wrote their logs again in ${ox#"$root"/} (the build's own are kept in ${ox#"$root"/}/build-evidence)"
+        [ "$st" != 4 ] || die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        die "--recheck: tools/openxc7-build.sh stopped (exit $st) before it wrote its manifest: $kept"
+    fi
+    # the build's own manifest is kept beside the new one, and the new one starts from its head
+    [ -f "$base/manifest.build.txt" ] || cp "$manifest" "$base/manifest.build.txt"
+    brec=$base/manifest.build.txt
+    finish_head=$base/manifest-head.recheck.txt
+    { sed -n 1p "$head"; echo "manifest_format = 2"; sed -n '2,$p' "$head" | grep -v '^manifest_format = ' || true; } > "$finish_head"
+    finish_table=$base/recheck.txt
+    openxc7_results "$st"
+}
+recheck_table() {     # STATUS: the [recheck] table of the new manifest (openxc7_results calls it)
+    om_line() { [ -f "$om" ] && awk -v n="$1" 'BEGIN { n = sprintf("%-20s", n) } /^## / { exit } substr($0, 1, 20) == n { print substr($0, 21); exit }' "$om"; }
+    if trev=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
+        if [ -n "$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null)" ]; then tdirty=true; else tdirty=false; fi
+    else
+        trev=unknown tdirty=true
+    fi
+    v=$(om_line "lvs solver" || true)
+    t=$(om_line "lvs timeout" || true)
+    {
+        echo "[recheck]"
+        echo "rechecked_at = \"$rechecked_at\""
+        echo "tools_revision = $(toml_str "$trev")"
+        echo "tools_dirty = $tdirty"
+        echo "image = $(toml_str "$ox_image")"
+        echo "exit_status = $1"
+        echo "lvs_solver = $(toml_str "${v%% *}")"
+        case "${t%% *}" in ''|*[!0-9]*) echo "lvs_timeout = 0" ;; *) echo "lvs_timeout = ${t%% *}" ;; esac
+        echo 'checks_run_again = ["check_bitstream", "check_round_trip", "check_block_ram", "check_lvs", "check_clocks", "slack_margin", "timing"]'
+        echo "checks_kept = [\"check_srl\", \"check_synthesis\", \"check_netlist\"${rom:+, \"check_boot_rom\"}]"
+        echo "build_result = $(toml_str "$(bkey result)")"
+        echo "build_reason = $(toml_str "$(bkey reason)")"
+        echo "build_manifest = $(toml_str "${brec#"$root"/}")"
+        echo "build_manifest_sha256 = \"$(sha "$brec")\""
+        if [ -f "$ox/manifest.build.txt" ]; then
+            echo "openxc7_build_manifest = $(toml_str "${ox#"$root"/}/manifest.build.txt")"
+            echo "openxc7_build_manifest_sha256 = \"$(sha "$ox/manifest.build.txt")\""
+        fi
+        echo "openxc7_recheck = $(toml_str "$(om_line recheck || true)")"
+    } > "$finish_table"
+}
+
+[ "$recheck" = 0 ] || openxc7_recheck                  # does not return
 
 # ------------------------------------------------------------------------------ the design's files
 items() {         # KIND: the lines of that kind, without the kind word (CRLF line ends are taken)
@@ -485,6 +713,7 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
+[ -z "${LVS_TIMEOUT:-}" ] || lvs_timeout=$LVS_TIMEOUT    # LVS_TIMEOUT= replaces it for one build
 pnr_timeout=$(items pnr-timeout)   # each placer seed's limit (default: openxc7-build.sh's, 1800 s)
 case "$pnr_timeout" in *[!0-9]*) die "$design: pnr-timeout must be a number of seconds" ;; esac
 [ -z "$pnr_timeout" ] || [ "$pnr_timeout" -gt 0 ] 2>/dev/null ||
@@ -597,6 +826,7 @@ write_head() {    # the keys known before the run, the same for every flow
     mkdir -p "$base"
     {
         echo "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh"
+        echo "manifest_format = 2"
         echo "run_id = \"$run_id\""
         echo "design = \"$design\""
         echo "top = \"$top\""

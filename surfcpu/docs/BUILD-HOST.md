@@ -59,6 +59,37 @@ part, constraint-file hash, ROM and kernel hashes, ISA/ABI versions, tool versio
 host, the timing summary and utilization. The DDR controller and clocking IP are generated
 from checked-in recipes (TCL and the MIG project file), never from a hand-made GUI project.
 
+**The manifests' format.** `build/fpga/BOARD/DESIGN/manifest.txt` (TOML, written by
+`tools/fpga-build.sh`) carries `manifest_format = 2` since 2026-10-27; one without it is format 1,
+the same keys before format 2's. The open flow's own `openxc7/manifest.txt` says `manifest format
+2` on its second line (OPEN-FLOW.md section 3). Format 2 adds: `[openxc7] lvs_solver` and
+`lvs_timeout`, the LVS proof's route and limit; in the flow's manifest the synthesized netlist,
+the routed FASM and the placement by SHA-256 and an `lvs solver` line; and the records of a
+recheck (below). Every reader takes formats 1 and 2 and refuses another, which it could misread:
+`tools/program.sh`, `tools/board-test.py`, `tools/release.py` (a release's build records),
+`sim/gpu/gpudiag_check.py` (the gpudiag board test's `--manifest`), and the open flow's recheck. A
+change to what a manifest says, or how, bumps the format and changes every reader with it.
+
+**A recheck's manifests.** `make recheck-fpga BOARD=... DESIGN=...` (`tools/fpga-build.sh
+--recheck`, BOARD.md section 8) checks a routed open-flow build again without synthesis,
+placement or routing, and writes both manifests anew; nobody edits a manifest by hand. The new
+`manifest.txt` keeps the build's own keys as they were (run id, revision, build id and time, the
+hashes of the sources, constraints and ROM, the placer seeds: the bitstream carries the id and the
+time), says `result` and, on a pass, the bitstream's SHA-256 as a build's does, takes the kept
+checks (`check_srl`, `check_synthesis`, `check_netlist`, `check_boot_rom`) from the build and
+the others from the recheck, and adds a `[recheck]` table: `rechecked_at`, `tools_revision` and
+`tools_dirty` (the commit whose tools ran it), `image`, `exit_status`, `lvs_solver`, `lvs_timeout`,
+`checks_run_again`, `checks_kept`, `build_result` and `build_reason` (what the build's own
+manifest said), and the build's own manifests, kept beside the new ones as `manifest.build.txt`
+and `openxc7/manifest.build.txt`, by path and SHA-256. `tools/program.sh` and `tools/board-test.py`
+take a recheck's passing manifest as a build's and say it is a recheck's; `program.sh` also names
+the commit of its tools and whether their tree was clean. A recheck from a dirty tree is recorded
+and shown, not refused, as a build from one is (`source_dirty`); `make release` builds from a clean
+tree of its own and takes no recheck. While a recheck runs, and after one stopped anywhere (killed,
+Ctrl-C, a step that failed), both manifests are what they were: each new one replaces its old one
+only when it is complete, so `program.sh` reads the build's until the recheck has finished
+(OPEN-FLOW.md section 3), and the build's own logs stay in `openxc7/build-evidence/`.
+
 ## Programming stays on the Mac
 
 Whichever host builds the bitstream, the board is programmed from the Mac over its USB

@@ -489,6 +489,208 @@ check "soc: ... and says which" grep -q "PROBLEM: memory u_soc.u_bootrom.rom" "$
 run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_100t
 check "soc: a missing ROM image refused" has "needs the boot ROM image"
 
+# ------------------------------------------------------------------------------ the LVS route, and --recheck
+# (make recheck-fpga): the post-route checks of a routed open-flow build again, through the fake
+# flow's --recheck. The build: the bramdiag design with its ROM, its LVS proof killed at the memory cap.
+rk() { run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" "$@"; }
+recheck() { rk "$@" tools/fpga-build.sh --recheck --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+rkbuild() { rk "$@" tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+dbit=$d/surfcpu_arty_a7_bramdiag.bit
+rkbuild LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "lvs route: LVS_SOLVER and LVS_TIMEOUT reach the open flow" logged "--lvs-timeout 86400 --lvs-solver z3cmd"
+check "lvs route: ... and its manifest records both" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+assert d['manifest_format']==2 and d['openxc7']['lvs_solver']=='z3cmd' and d['openxc7']['lvs_timeout']==86400, d
+" "$d/manifest.txt"
+for v in "LVS_SOLVER=cvc5:LVS_SOLVER must be libz3 or z3cmd" "LVS_TIMEOUT=0:LVS_TIMEOUT must be more than 0" \
+         "LVS_TIMEOUT=2h:LVS_TIMEOUT must be a number of seconds"; do
+    rkbuild "${v%%:*}"
+    check "lvs route: ${v%%:*} refused" test "$rc" -eq 1 -a -n "$(grep "${v#*:}" "$t/out.txt")"
+done
+run env FLOW=vivado-ssh LVS_SOLVER=z3cmd SURFCPU_BUILD_HOST_CONF="$t/conf.saved" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "lvs route: ... and so are the LVS words with a Vivado flow" has "LVS_SOLVER and LVS_TIMEOUT are the open flow's"
+rkbuild FAKE_OX_LVS="BLOCKED (killed: SIGKILL, exit 137)"
+check "recheck: the build blocked at LVS alone fails, with no bitstream under its name" \
+    test "$rc" -eq 1 -a ! -e "$dbit" -a -n "$(grep '^reason = ".*check LVS BLOCKED (killed: SIGKILL, exit 137)' "$d/manifest.txt")"
+cp "$d/manifest.txt" "$t/blocked.txt"
+cp "$d/openxc7/manifest.txt" "$t/blocked-flow.txt"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 DRY_RUN=1
+check "recheck: its dry run checks the build and asks the flow for its own dry run" \
+    test "$rc" -eq 0 -a -n "$(grep -- "openxc7-build.sh --recheck --out ${d#$root/}/openxc7 --lvs-solver z3cmd --lvs-timeout 86400 --dry-run" "$FAKE_LOG")"
+check "recheck: ... and changes nothing" eval "cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && test ! -e '$d/manifest.build.txt'"
+# a recheck stopped after it began (killed, or refused for LVS inputs made again that are not the
+# build's) leaves both manifests as they were, the build's, which refuse its bitstream
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=die
+check "recheck: killed after it began, it says so, and both manifests are still the build's" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 137) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit' && ! test -e '$d/manifest.build.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: ... and program.sh refuses the flow's bitstream by the build's manifest beside it (LVS BLOCKED)" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'check LVS BLOCKED (killed: SIGKILL, exit 137)' "$t/out.txt")"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
+check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
+    eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
+    test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"
+check "recheck: the copy is the flow's bitstream" cmp -s "$dbit" "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: the flow was asked to recheck with LVS_SOLVER and LVS_TIMEOUT, and nothing else ran (no synthesis, no romcheck)" \
+    test "$(cat "$FAKE_LOG")" = "openxc7-build.sh --recheck --out ${d#$root/}/openxc7 --lvs-solver z3cmd --lvs-timeout 86400"
+check "recheck: the new manifest passes, keeps the build's identity and its kept checks, and says what was rechecked" python3 -c "
+import tomllib,sys,hashlib
+n=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+assert n['result']=='pass' and n['manifest_format']==2, n
+for k in ('run_id','design','board','part','source_revision','source_dirty','build_id','build_time','placer_seeds',
+          'sources_sha256','constraints_sha256','rom_image','rom_sha256','defines'):
+    assert n[k]==b[k], k
+assert n['bitstream_sha256']==hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()
+o, r = n['openxc7'], n['recheck']
+assert o['placer_seed']==b['openxc7']['placer_seed'] and o['check_lvs']=='PASS' and o['lvs_solver']=='z3cmd' and o['lvs_timeout']==86400
+assert o['check_netlist']=='PASS' and o['check_boot_rom']=='PASS' and o['check_srl']=='PASS' and o['check_synthesis']=='PASS'
+assert r['build_result']=='fail' and 'check LVS BLOCKED (killed: SIGKILL, exit 137)' in r['build_reason']
+assert r['checks_kept']==['check_srl','check_synthesis','check_netlist','check_boot_rom'], r
+assert 'check_lvs' in r['checks_run_again'] and 'check_bitstream' in r['checks_run_again'] and r['lvs_solver']=='z3cmd' and r['lvs_timeout']==86400
+assert r['build_manifest'].endswith('/manifest.build.txt') and r['openxc7_recheck'].startswith('2026-10-27T12:00:00Z'), r
+assert len(r['rechecked_at'])==20 and r['exit_status']==0
+" "$d/manifest.txt" "$t/blocked.txt" "$dbit"
+check "recheck: the build's own manifests are kept beside the new ones, as they were" \
+    eval "cmp -s '$d/manifest.build.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.build.txt' '$t/blocked-flow.txt'"
+check "recheck: the manifest is TOML with the same top-level keys as a build's" python3 -c "
+import tomllib,sys
+a=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+ka={k for k,v in a.items() if not isinstance(v,dict)}; kb={k for k,v in b.items() if not isinstance(v,dict)}
+assert ka==(kb|{'bitstream_sha256','bitstream_bytes'})-{'reason'}, ka ^ kb
+" "$d/manifest.txt" "$t/blocked.txt"
+# tools/program.sh and tools/board-test.py take the rechecked manifests as a build's, and refuse the build's own
+run env FAKE_IDCODE=0x13631093 DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh volatile arty_a7_100t
+check "recheck: program.sh loads the rechecked bitstream (make program-volatile DESIGN=...)" logged "openFPGALoader -b arty_a7_100t $dbit"
+check "recheck: ... saying its manifest is a recheck's" has "its manifest is a recheck's: .*LVS by z3cmd, the tools of .* in a .*tree.*(the build's own: fail)"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh flash arty_a7_100t < /dev/null
+check "recheck: ... and writes it to the flash on the owner's confirmation (a pass for this file, board and part)" logged "openFPGALoader -b arty_a7_100t -f --verify $dbit"
+# the tools' tree: recorded and shown, not refused (as a build's source_dirty)
+mkdir -p "$t/dirty" "$t/clean" "$t/dirtyflow"
+for c in dirty:true clean:false; do
+    cp "$dbit" "$t/${c%%:*}/surfcpu_arty_a7_bramdiag.bit"
+    sed -e "s/^tools_dirty = .*/tools_dirty = ${c#*:}/" \
+        -e 's/^tools_revision = .*/tools_revision = "0123456789abcdef0123456789abcdef01234567"/' "$d/manifest.txt" > "$t/${c%%:*}/manifest.txt"
+done
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirty/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: program.sh names the commit of a recheck's tools and their dirty tree, and loads it (recorded, not refused)" \
+    eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a dirty tree (recorded, not refused, as for a build)' '$t/out.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/clean/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: ... or their clean one" eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a clean tree' '$t/out.txt'"
+cp "$d/openxc7/surfcpu_arty_a7_top.bit" "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+sed 's/ dirty=0,/ dirty=1,/' "$d/openxc7/manifest.txt" > "$t/dirtyflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+check "recheck: ... and from a flow manifest's recheck line (dirty=1)" eval "test $rc -eq 0 && grep -q 'the tools of fake in a dirty tree' '$t/out.txt'"
+mkdir -p "$t/old" "$t/oldflow"
+cp "$dbit" "$t/old/surfcpu_arty_a7_bramdiag.bit"
+cp "$t/blocked.txt" "$t/old/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/old/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: program.sh refuses the same bitstream with the build's own manifest" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'does not say the build passed its checks' "$t/out.txt")"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: program.sh takes the flow's rechecked manifest beside the flow's bitstream (every check PASS)" \
+    test "$rc" -eq 0 -a -n "$(grep -- " -b arty_a7_100t $d/openxc7/surfcpu_arty_a7_top.bit" "$FAKE_LOG")"
+cp "$d/openxc7/surfcpu_arty_a7_top.bit" "$t/oldflow/surfcpu_arty_a7_top.bit"
+cp "$t/blocked-flow.txt" "$t/oldflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/oldflow/surfcpu_arty_a7_top.bit"
+check "recheck: ... and refuses it with the flow's own manifest (LVS BLOCKED)" \
+    test "$rc" -eq 1 -a -n "$(grep 'check LVS BLOCKED (killed: SIGKILL, exit 137)' "$t/out.txt")"
+sed 's/^manifest_format = 2$/manifest_format = 3/' "$d/manifest.txt" > "$t/old/manifest.txt"
+cp "$dbit" "$t/old/surfcpu_arty_a7_bramdiag.bit"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/old/surfcpu_arty_a7_bramdiag.bit"
+check "manifest format: program.sh refuses a format it does not know (3)" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'manifest format 3, which this script does not know' "$t/out.txt")"
+sed 's/^manifest format     2/manifest format     3/' "$d/openxc7/manifest.txt" > "$t/oldflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/oldflow/surfcpu_arty_a7_top.bit"
+check "manifest format: ... a flow manifest's too" test "$rc" -eq 1 -a -n "$(grep 'manifest format 3' "$t/out.txt")"
+check "recheck: board-test.py reads the rechecked manifest: a pass, its [recheck] for the evidence" python3 -c "
+import importlib.util,sys
+s=importlib.util.spec_from_file_location('bt', 'tools/board-test.py'); bt=importlib.util.module_from_spec(s); s.loader.exec_module(bt)
+m=bt.manifest(sys.argv[1])
+assert m['result']=='pass' and m['manifest_format']=='2' and m['recheck']['build_result']=='fail' and m['recheck']['lvs_solver']=='z3cmd', m
+assert 'LVS by z3cmd' in bt.recheck_line(m) and bt.recheck_line(bt.manifest(sys.argv[2])) is None
+" "$d/manifest.txt" "$t/blocked.txt"
+run python3 tools/board-test.py m3 --board arty_a7_100t --design surfcpu_arty_a7_bramdiag --manifest "$t/old/manifest.txt" --port /nonexistent
+check "manifest format: board-test.py refuses a format it does not know (3), before anything" \
+    test "$rc" -eq 2 -a -n "$(grep 'is format 3, which this script does not know' "$t/out.txt")"
+# the refusals, each before the flow is asked, with nothing changed
+cp "$d/manifest.txt" "$t/rechecked.txt"
+same() { cmp -s "$d/manifest.txt" "$t/rechecked.txt" && [ -f "$dbit" ]; }
+cp "$dbit" "$t/bit.saved"
+printf 'x' >> "$d/openxc7/surfcpu_arty_a7_top.bit"
+recheck
+check "recheck: refuses a bitstream that is not the one both manifests record, asking nothing of the flow, changing nothing" \
+    eval "test $rc -eq 1 && grep -q 'is not the one ${d#$root/}/openxc7/manifest.build.txt records' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+cp "$t/bit.saved" "$d/openxc7/surfcpu_arty_a7_top.bit"
+mv "$d/nextpnr.xdc" "$t/xdc.saved"
+recheck
+check "recheck: refuses a build with a file missing (its nextpnr constraints)" \
+    eval "test $rc -eq 1 && grep -q 'nextpnr.xdc is missing' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+mv "$t/xdc.saved" "$d/nextpnr.xdc"
+mv "$d/rom/diag.mem" "$t/rom.saved"
+recheck
+check "recheck: ... (the boot ROM copy the build read)" eval "test $rc -eq 1 && grep -q 'the boot ROM the build read, is missing' '$t/out.txt' && same"
+printf '00000000\n' > "$d/rom/diag.mem"
+recheck
+check "recheck: refuses a boot ROM copy that is not the one recorded" eval "test $rc -eq 1 && grep -q 'is not the boot ROM' '$t/out.txt' && same"
+mv "$t/rom.saved" "$d/rom/diag.mem"
+cp "$d/manifest-head.txt" "$t/head.saved"
+sed -i 's/^build_time = .*/build_time = 1/' "$d/manifest-head.txt"
+recheck
+check "recheck: refuses manifests that are not one build's (the head is not the manifest's)" \
+    eval "test $rc -eq 1 && grep -q 'manifest-head.txt is not the head of' '$t/out.txt' && same"
+cp "$t/head.saved" "$d/manifest-head.txt"
+mv "$d/manifest.build.txt" "$t/build.saved"
+recheck
+check "recheck: refuses a recheck's manifest with the build's own not beside it" \
+    eval "test $rc -eq 1 && grep -q \"is a recheck's manifest, and the build's own\" '$t/out.txt' && same"
+mv "$t/build.saved" "$d/manifest.build.txt"
+cp "$d/openxc7/manifest.build.txt" "$t/flowrec.saved"
+sed -i "s/ARTY_BUILD_ID=32'h[0-9a-f]*/ARTY_BUILD_ID=32'hdeadbeef/" "$d/openxc7/manifest.build.txt"
+recheck
+check "recheck: refuses a flow manifest whose bitstream carries another build id than the build's" \
+    eval "test $rc -eq 1 && grep -q \"the bitstream's build id\" '$t/out.txt' && same"
+cp "$t/flowrec.saved" "$d/openxc7/manifest.build.txt"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_OPENXC7_IMAGE=surfcpu-openxc7:other tools/fpga-build.sh --recheck --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "recheck: refuses a build made in another image than this tree's flow runs" eval "test $rc -eq 1 && grep -q \"was built in the image 'surfcpu-openxc7:2026-10-15'\" '$t/out.txt' && same"
+recheck FAKE_OX_RECHECK=refuse
+check "recheck: when the flow refuses (its own checks), nothing is changed" \
+    eval "test $rc -eq 1 && grep -q 'refused (exit 3) before it began: nothing was changed' '$t/out.txt' && same"
+recheck FAKE_OX_LVS="BLOCKED (timeout)"
+check "recheck: a recheck whose proof is stopped at its limit fails, and no bitstream stays under the design's name" \
+    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q '^reason = \".*check LVS BLOCKED (timeout)' '$d/manifest.txt' && grep -q '^\[recheck\]$' '$d/manifest.txt'"
+check "recheck: ... the build's own manifest still the one kept" cmp -s "$d/manifest.build.txt" "$t/blocked.txt"
+recheck FAKE_OX_SLACK=FAIL
+check "recheck: a placement the slack rule now fails fails the recheck" eval "test $rc -eq 1 && grep -q '^reason = \".*check slack margin FAIL' '$d/manifest.txt'"
+cp "$d/manifest.txt" "$t/before-die.txt"
+cp "$d/openxc7/manifest.txt" "$t/before-die-flow.txt"
+recheck FAKE_OX_RECHECK=die
+check "recheck: a recheck killed after it began leaves the manifests that were there (an earlier recheck's, a fail)" \
+    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q 'stopped (exit 137) before it wrote its manifest' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/before-die.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/before-die-flow.txt'"
+recheck
+check "recheck: then a recheck from the build's own manifests passes again" \
+    eval "test $rc -eq 0 && test -f '$dbit' && cmp -s '$d/manifest.build.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.build.txt' '$t/blocked-flow.txt'"
+rkbuild FAKE_OX_SRL=FAIL
+recheck
+check "recheck: refuses a build whose kept SRL check failed" eval "test $rc -eq 1 && grep -q \"check_srl is 'FAIL': a recheck keeps it\" '$t/out.txt' && ! test -s '$FAKE_LOG'"
+rkbuild FAKE_OX_NETLIST=lost
+recheck
+check "recheck: refuses a build whose kept netlist check failed" eval "test $rc -eq 1 && grep -q \"check_netlist is 'FAIL'\" '$t/out.txt'"
+rkbuild
+check "recheck: a new build leaves no recheck's files behind" eval "test $rc -eq 0 && ! test -e '$d/manifest.build.txt' && ! test -e '$d/openxc7/manifest.build.txt' && ! grep -q '^\[recheck\]' '$d/manifest.txt'"
+recheck
+check "recheck: a build that passed rechecks to a pass, its own manifest kept beside, the same bitstream copied out" \
+    eval "test $rc -eq 0 && grep -q '^build_result = \"pass\"' '$d/manifest.txt' && grep -q '^result = \"pass\"' '$d/manifest.build.txt' && cmp -s '$dbit' '$d/openxc7/surfcpu_arty_a7_top.bit'"
+cp "$d/manifest.txt" "$t/rechecked.txt"
+cp "$d/manifest.build.txt" "$t/pass.saved"
+sed -i 's/^bitstream_sha256 = .*/bitstream_sha256 = "00"/' "$d/manifest.build.txt"
+recheck
+check "recheck: refuses a bitstream that is not the one this script's own manifest records (a passing build's)" \
+    eval "test $rc -eq 1 && grep -q 'is not the one ${d#$root/}/manifest.build.txt records (00)' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+cp "$t/pass.saved" "$d/manifest.build.txt"
+
 # the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
 ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|arty_a7_ddr3_|surf_ddr_bridge|surf_ddr_csr|^lvs-timeout '
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"

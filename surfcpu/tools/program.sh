@@ -19,7 +19,10 @@
 #   manifest   the build manifest next to it (manifest.txt), if any, says every check passed and
 #              describes this file (SHA-256); flash needs one from tools/fpga-build.sh, for this
 #              board and part. A flow manifest (tools/openxc7-build.sh's own) must also show
-#              every clock meeting nextpnr's timing
+#              every clock meeting nextpnr's timing. Either may be a recheck's (tools/fpga-build.sh
+#              --recheck: the checks run again on the routed build), which is read like a build's
+#              and named (when, the commit of its tools, a clean or dirty tree); a manifest format
+#              other than 1 or 2 is refused
 # OPENFPGALOADER overrides the program's path.
 set -eu
 
@@ -32,7 +35,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --ftdi-serial)   [ $# -ge 2 ] || die "--ftdi-serial needs the cable's serial number"; serial=$2; shift 2 ;;
         --ftdi-serial=*) serial=${1#*=}; shift ;;
-        -h|--help)       sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)       sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
         -*)              die "unknown option $1" ;;
         *)               break ;;
     esac
@@ -164,6 +167,25 @@ fi
 top_key() {           # KEY: a top-level string or number of the TOML manifest (before its first table)
     awk -v k="$1" '/^\[/ { exit } $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$manifest"
 }
+table_key() {         # TABLE KEY: a string or number of that table of the TOML manifest
+    awk -v t="[$1]" -v k="$2" '$0 == t { on = 1; next } /^\[/ { on = 0 }
+        on && $1 == k && $2 == "=" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/^"|"$/, "", v); print v; exit }' "$manifest"
+}
+line_value() {        # LABEL: a flow manifest's line (its label in 20 columns, as tools/fpga-build.sh reads it)
+    awk -v n="$1" 'BEGIN { n = sprintf("%-20s", n) } /^## / { exit } substr($0, 1, 20) == n { print substr($0, 21); exit }' "$manifest"
+}
+# Its format (docs/BUILD-HOST.md): none means 1; 2 (2026-10-27) adds a recheck's records, the LVS
+# route and, in a flow manifest, the netlist, FASM and placement by SHA-256. A later one may mean
+# something this script would misread, so it is refused.
+case "$kind" in
+    surfcpu) fmt=$(top_key manifest_format) ;;
+    openxc7) fmt=$(line_value "manifest format"); fmt=${fmt%% *} ;;
+    *)       fmt= ;;
+esac
+case "${fmt:-1}" in
+    1|2) ;;
+    *) die "$manifest is manifest format $fmt, which this script does not know (it reads 1 and 2); refusing" ;;
+esac
 case "$kind" in
     surfcpu)
         [ "$(top_key result)" = pass ] || die "$manifest does not say the build passed its checks; refusing"
@@ -183,6 +205,27 @@ case "$kind" in
         [ -z "$late" ] || die "$manifest shows a clock missing its timing ($(echo "$late" | sed -e 's/: constraint .*, achieved/:/' -e 's/, slack.*$//' | tr '\n' ';')); refusing"
         msha=$(sed -n 's/^bitstream .* sha256:\([0-9a-f]*\) .*/\1/p' "$manifest" | head -n 1)
         [ "$msha" = "$sha" ] || die "$manifest describes another bitstream (sha256 ${msha:-missing}, the file's is $sha); refusing" ;;
+esac
+# A recheck's manifest: say so (the checks passed when it ran them again), with the commit of the
+# tools that ran them and whether its tree was clean. A dirty tree is recorded and shown, not
+# refused, as a build's is (source_dirty, which this script loads too); make release builds from a
+# clean tree of its own and takes no recheck (docs/BUILD-HOST.md).
+tools_of() {          # REVISION: the commit of a recheck's tools, as the note names it
+    if [ -n "$1" ]; then printf '%s' "$1" | cut -c1-12; else echo "an unrecorded commit"; fi
+}
+dirty_word() {        # true|false|1|0: the tree, in words
+    case "$1" in
+        false|0) echo "a clean tree" ;;
+        true|1)  echo "a dirty tree (recorded, not refused, as for a build)" ;;
+        *)       echo "a tree whose state was not recorded" ;;
+    esac
+}
+case "$kind" in
+    surfcpu) [ -z "$(table_key recheck rechecked_at)" ] ||
+                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver), the tools of $(tools_of "$(table_key recheck tools_revision)") in $(dirty_word "$(table_key recheck tools_dirty)") (the build's own: $(table_key recheck build_result))" ;;
+    openxc7) rl=$(line_value recheck)
+             [ -z "$rl" ] ||
+                 echo "$me: its manifest is a recheck's: $(echo "$rl" | cut -d, -f1), the tools of $(tools_of "$(echo "$rl" | sed -n 's/.* at \([^ ,]*\).*/\1/p')") in $(dirty_word "$(echo "$rl" | sed -n 's/.* dirty=\([^ ,]*\).*/\1/p')")" ;;
 esac
 
 # ------------------------------------------------------------------------------ load

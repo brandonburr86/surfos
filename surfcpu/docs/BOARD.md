@@ -421,10 +421,47 @@ compression: the bitstream keeps its defaults) and every scoped CDC file (the
 `set_max_delay -datapath_only` bounds and `ASYNC_REG`): for the baseline, 11 entries; for the
 SoC, 24. The build passes only if `tools/openxc7-build.sh` exits 0, all six of its checks pass
 (synthesis, bitstream, round trip, block RAM, LVS, clocks; block RAM and clocks may be absent
-from a design, but an LVS that could not be proved fails), every clock meets nextpnr's timing
-estimate, and, for a design with a boot ROM or a `dsp` line, the board's two checks of the
-SoC builds pass (below). It is not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot
-show.
+from a design, but an LVS that could not be proved fails, BLOCKED as much as FAIL), every clock
+meets nextpnr's timing estimate, the slack rule's verdict is PASS or THIN, and, for a design
+with a boot ROM or a `dsp` line, the board's two checks of the SoC builds pass (below). It is
+not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot show.
+
+**The LVS proof's route and limit** (OPEN-FLOW.md section 3): `make build-fpga ...
+LVS_SOLVER=z3cmd` proves with one solver process a question instead of `lvs_equiv`'s own
+incremental libz3 session (`LVS_SOLVER=libz3`, the default), for a design whose proof outgrows
+the memory it may use; `LVS_TIMEOUT=<s>` replaces the design list's `lvs-timeout` for one build.
+Both reach `tools/openxc7-build.sh` as `--lvs-solver` and `--lvs-timeout`, and the manifest's
+`[openxc7]` table records them (`lvs_solver`, `lvs_timeout`); either is refused with a Vivado
+flow, and nonsense or a limit of 0 (which `timeout` takes as none) is refused. `make release`
+gives its builds neither: they take the design lists'.
+
+**Rechecking a routed open-flow build** (`make recheck-fpga BOARD=... DESIGN=... [LVS_SOLVER=...]
+[LVS_TIMEOUT=...] [DRY_RUN=1]`, that is `tools/fpga-build.sh --recheck`): the post-route checks
+of the last build of DESIGN for BOARD in `build/fpga/` again, without synthesis, placement or
+routing, as `tools/openxc7-build.sh --recheck` runs them (OPEN-FLOW.md section 3): the
+bitstream, round trip, block RAM, LVS (by `LVS_SOLVER` within `LVS_TIMEOUT`, else as the build
+ran it), clocks, the slack rule, timing. Before anything runs it checks, and refuses with nothing
+changed (exit 1) when anything does not hold: the bitstream `openxc7/<top>.bit` is the one the
+flow's manifest records and, if this one records one (a pass's does), this one's; the two
+manifests are one build's (the flow's includes this one's `manifest-head.txt`, which is this
+one's head); the build id and time in the flow's defines are this manifest's; the build ran in
+this tree's image; the boot ROM copy in `rom/` is the one `rom_sha256` names; the checks it keeps
+passed (`check_srl`, `check_synthesis`, and the board's `check_netlist` and `check_boot_rom`: all
+made on the synthesized netlist before placement, which a recheck does not touch); and the files
+it reads are there. Then it writes both manifests anew (BUILD-HOST.md: the build's identity as
+it was, a `[recheck]` table, the build's own manifests kept as `manifest.build.txt`), and on a
+pass copies the bitstream out as a passing build does; on a fail none stays under the design's
+name. When the flow refuses before it begins (its own checks, such as the image's tools being
+the build's: exit 3) nothing is changed. Each new manifest replaces its old one only when it is
+complete, so while a recheck runs, and after one stopped anywhere (killed, Ctrl-C, a step that
+failed, or the flow's exit 4: the LVS inputs it made again are not the build's), both manifests
+are what they were, the build's, which refuse its bitstream; this script then says the flow
+stopped before it wrote its manifest, writes nothing, and the next recheck starts again from the
+build's own manifests (the build's logs kept in `openxc7/build-evidence/`). Tested with the fake
+flow (below): a build blocked only at LVS rechecked into a pass and copied out, the manifests it
+writes, `program.sh` loading it and refusing the build's own, a recheck killed or refused after it
+began leaving both manifests as they were, and each refusal; the flow's side, killed at each of
+its steps, with `tools/openxc7-recheck-test.sh` (OPEN-FLOW.md section 3).
 
 **Milestone 1 bitstreams, open flow** (evidence `openxc7.txt`, 2026-10-16, source 10807ee1,
 clean): `make build-fpga FLOW=openxc7 DESIGN=arty_a7_baseline` for each board, with no
@@ -616,7 +653,8 @@ fails the build rather than reading as "no findings", and a row starting with Cr
 in any letter case.
 
 **The manifest** `build/fpga/<board>/<design>/manifest.txt` (TOML), the same keys for every
-flow: run id, design, top, board, part, flow, build host alias, Vivado binary (empty for the
+flow: its format (`manifest_format = 2` since 2026-10-27, BUILD-HOST.md), run id, design, top,
+board, part, flow, build host alias, Vivado binary (empty for the
 open flow), source revision and dirty state, build ID and time, SHA-256 of the sources, of
 the constraint files (in reading order), the ROM's source path and SHA-256 (`rom_image`,
 `rom_sha256`: of the copy the build read) and of the kernel package if present,
@@ -629,8 +667,9 @@ placed, the DSP mode, the six checks and the board's `check_netlist` and `check_
 nextpnr's timing per clock and the worst slack (or, when nextpnr stopped the flow,
 `nextpnr_fmax`, its last report per clock, and `nextpnr_routed`: a build stopped before routing
 converged has only the placer's estimates, and its reason says routing did not finish), use
-against the part's documented capacity, the IDCODE and part in the bitstream, and the
-constraints given and not checked).
+against the part's documented capacity, the IDCODE and part in the bitstream, the
+constraints given and not checked, and the LVS route and limit, `lvs_solver` and
+`lvs_timeout`); a recheck's adds `[recheck]` (BUILD-HOST.md).
 
 **To confirm on the first real Vivado run** (none of this can be run here):
 the generic syntax (`-generic BOARD="arty_a7_100t"`, `-generic BUILD_ID=32'h...`); the names
@@ -646,12 +685,18 @@ The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vi
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
 locally, a fake `openxc7-build.sh` writes the open flow's outputs (its dry runs use the real
 script), and a fake `openFPGALoader` answers like the real one, with a temporary HOME and
-output directory. 248 checks with fetch.sh's: refusals, dry runs, all three flows, the staged
+output directory. 334 checks with fetch.sh's (2026-10-27): refusals, dry runs, all three flows, the staged
 files, `params.tcl`, the TOML manifest, each gate stopping the bitstream (a report format
 Vivado might change among them), the dropped ssh connection and `--fetch`, the dirty flag
 from a scratch git repository, the open flow's constraint subset and manifest, the SoC
 designs' ROM selection, ROM copy and two board checks (a fake `romcheck`, a netlist that lost
-a memory), and `tools/program.sh`'s cable, IDCODE, header and manifest checks.
+a memory), `tools/program.sh`'s cable, IDCODE, header and manifest checks, the LVS route words,
+and the recheck: a build blocked only at LVS rechecked into a pass and copied out, its manifests,
+`program.sh` and `board-test.py` taking them and refusing the build's own, a manifest format
+they do not know refused, and each refusal of the recheck (a bitstream that is not the one
+recorded, a kept check that failed, a file missing, the head or build id not the build's,
+another image, the flow refusing, a recheck stopped or killed, before or after it began), and
+`program.sh` naming a recheck's tools and their clean or dirty tree.
 
 ## 9. Programming
 
@@ -681,7 +726,14 @@ exits 2 "pending" without it). Before loading anything it checks, and refuses on
 * **The manifest** next to the bitstream, if there is one: it must say every check passed and
   carry the file's SHA-256. `tools/openxc7-build.sh`'s own manifest (a flow track build) is
   accepted for a volatile load when every check line says PASS and every clock met nextpnr's
-  timing (a diagnostic run that let nextpnr finish has its checks but a late clock).
+  timing (a diagnostic run that let nextpnr finish has its checks but a late clock). Its format
+  must be one this script knows, 1 or 2 (BUILD-HOST.md). A recheck's manifest (`make
+  recheck-fpga`, section 8) is read as a build's: one that says pass for this file is taken,
+  for the flash too, and the script says it is a recheck's, when it ran, the commit of its tools
+  and whether their tree was clean (a dirty one is shown, not refused, as a dirty build is); the
+  build's own manifest of the same bitstream, kept as `manifest.build.txt`, still says what the
+  build said (a failed build's is refused wherever it is put). While a recheck runs, the manifest
+  beside the bitstream is the build's until the recheck's is complete.
 
 `volatile` runs `openFPGALoader -b arty_a7_100t <bit>`: configuration RAM, lost at power-off
 (PROG or a power cycle returns to the flash). `flash` (milestone 9) writes the configuration
@@ -738,7 +790,7 @@ flow builds them (section 8): about 7,600 LUTs and 5,214 flip-flops, 37 % of the
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (248 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists among them) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (334 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists and the recheck among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
 | `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |

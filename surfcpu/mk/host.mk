@@ -11,7 +11,7 @@
 PYTHON_HOST ?= python3
 BOARD       ?= arty_a7_100t
 
-.PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga \
+.PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga recheck-fpga test-lvs-routes \
         board-test board-test-selftest uart-list uart-console release release-verify release-check \
         fresh-checkout release-selftest
 
@@ -48,6 +48,26 @@ deploy-sd:
 
 build-fpga:
 	@tools/fpga-build.sh "$(BOARD)"
+
+# The post-route checks of the last open-flow build of DESIGN for BOARD again, without synthesis,
+# placement or routing (tools/fpga-build.sh --recheck; docs/OPEN-FLOW.md section 3): it refuses
+# unless the bitstream and both manifests match, writes both manifests anew and, on a pass, copies
+# the bitstream out as a passing build does. LVS_SOLVER=libz3|z3cmd and LVS_TIMEOUT=<s> choose
+# the LVS proof's route and limit (else the build's; build-fpga takes them too), DRY_RUN=1 makes
+# the checks of the first step and prints the rest.
+#   make recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+recheck-fpga:
+	@tools/fpga-build.sh --recheck "$(BOARD)"
+
+# The LVS proof's two routes and the recheck through the real open flow, on a small probe (a block
+# RAM, 104 LVS points) for the A7-100T: tools/openxc7-lvs-test.sh, which writes
+# docs/evidence/flow/lvs-routes.txt. It needs Docker and the surfcpu-openxc7 image, so it runs from
+# the Mac and is not part of make check (which runs inside the toolchain container; its tests of
+# the same scripts use stand-ins: make test-flow). About a minute (two builds of the probe, their
+# rechecks and a planted difference: 67 s on this Mac), and a minute more the first time, for the
+# chip database.
+test-lvs-routes:
+	@tools/openxc7-lvs-test.sh
 
 # The physical test kit (docs/PHYSICAL-TESTS.md), with the Mac's own python3 and nothing installed:
 #   make board-test M=m1 [DESIGN=...] [PORT=/dev/cu.usbserial-<serial>1] [ARGS="--lines 20"]

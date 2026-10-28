@@ -6,7 +6,8 @@
 #   make lint-flow        Verilator lint of the flow demo design
 #   make test-flow        the demos' RTL simulations, the self-tests of the bitstream inspector,
 #                         the MMCM/PLL divider check and the global clock network check, and
-#                         tests of the XDC and build scripts (dry runs)
+#                         tests of the XDC and build scripts (dry runs), and of --recheck run for
+#                         real with stand-ins (tools/openxc7-recheck-test.sh)
 #   make flow-xdc-check   regenerate the demo's XDC from Digilent's master files (fetched,
 #                         SHA-256 checked) and compare; needs the network the first time
 
@@ -76,6 +77,7 @@ test-flow-tools:
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/srlcheck.py --json $(FLOW_SIM)/srl_chain_reset.json --top srl_chain_reset > /dev/null
 	@echo "srlcheck: a shift chain without a reset refused ($$(grep -c '^  SRL' $(FLOW_SIM)/srl_chain.txt) SRL cells), with one passed"
 	$(Q)sh tools/openxc7-flow-test.sh
+	$(Q)sh tools/openxc7-recheck-test.sh
 	@echo "test-flow-tools: PASS"
 
 test-flow: lint-flow test-flow-sim test-flow-tools
