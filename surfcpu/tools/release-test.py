@@ -1142,12 +1142,22 @@ class TestProgramFlash(FlashFixture):
         self.assertNotIn(" -f ", calls)
         self.record(self.bit, manifest_format="2")
         rec = self.bit.parent / "manifest.txt"
-        rec.write_text(rec.read_text() + '\n[recheck]\nrechecked_at = "2026-10-28T00:00:00Z"\nlvs_solver = "z3cmd"\n'
-                                          'build_result = "fail"\n')
+        built = rec.read_text()
+        rec.write_text(built + '\n[recheck]\nrechecked_at = "2026-10-28T00:00:00Z"\nlvs_solver = "z3cmd"\n'
+                               'tools_revision = "2290bbc3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9"\ntools_dirty = false\n'
+                               'build_result = "fail"\n')
         r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("its manifest is a recheck's: 2026-10-28T00:00:00Z, LVS by z3cmd (the build's own: fail)", r.stdout)
+        self.assertIn("its manifest is a recheck's: 2026-10-28T00:00:00Z, LVS by z3cmd, the tools of 2290bbc3e4f5 in a "
+                      "clean tree (the build's own: fail)", r.stdout)
         self.assertIn(f"openFPGALoader -b arty_a7_100t -f --verify {self.bit}", calls)
+        # a recheck's table that does not name its tools (an older recheck's) is still read, and says so
+        rec.write_text(built + '\n[recheck]\nrechecked_at = "2026-10-28T00:00:00Z"\nlvs_solver = "z3cmd"\n'
+                               'build_result = "fail"\n')
+        r, calls = self.program("flash", "arty_a7_100t", self.bit, **ok)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("LVS by z3cmd, the tools of an unrecorded commit in a tree whose state was not recorded (the "
+                      "build's own: fail)", r.stdout)
 
     def test_volatile_never_flash(self):
         r, calls = self.program("volatile", "arty_a7_100t", self.bit)

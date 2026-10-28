@@ -210,6 +210,9 @@ esac
 # tools that ran them and whether its tree was clean. A dirty tree is recorded and shown, not
 # refused, as a build's is (source_dirty, which this script loads too); make release builds from a
 # clean tree of its own and takes no recheck (docs/BUILD-HOST.md).
+tools_of() {          # REVISION: the commit of a recheck's tools, as the note names it
+    if [ -n "$1" ]; then printf '%s' "$1" | cut -c1-12; else echo "an unrecorded commit"; fi
+}
 dirty_word() {        # true|false|1|0: the tree, in words
     case "$1" in
         false|0) echo "a clean tree" ;;
@@ -219,10 +222,10 @@ dirty_word() {        # true|false|1|0: the tree, in words
 }
 case "$kind" in
     surfcpu) [ -z "$(table_key recheck rechecked_at)" ] ||
-                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver), the tools of $(table_key recheck tools_revision | cut -c1-12) in $(dirty_word "$(table_key recheck tools_dirty)") (the build's own: $(table_key recheck build_result))" ;;
+                 echo "$me: its manifest is a recheck's: $(table_key recheck rechecked_at), LVS by $(table_key recheck lvs_solver), the tools of $(tools_of "$(table_key recheck tools_revision)") in $(dirty_word "$(table_key recheck tools_dirty)") (the build's own: $(table_key recheck build_result))" ;;
     openxc7) rl=$(line_value recheck)
              [ -z "$rl" ] ||
-                 echo "$me: its manifest is a recheck's: $(echo "$rl" | cut -d, -f1), the tools of $(echo "$rl" | sed -n 's/.* at \([^ ,]*\).*/\1/p') in $(dirty_word "$(echo "$rl" | sed -n 's/.* dirty=\([^ ,]*\).*/\1/p')")" ;;
+                 echo "$me: its manifest is a recheck's: $(echo "$rl" | cut -d, -f1), the tools of $(tools_of "$(echo "$rl" | sed -n 's/.* at \([^ ,]*\).*/\1/p')") in $(dirty_word "$(echo "$rl" | sed -n 's/.* dirty=\([^ ,]*\).*/\1/p')")" ;;
 esac
 
 # ------------------------------------------------------------------------------ load
