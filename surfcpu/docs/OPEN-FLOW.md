@@ -110,7 +110,7 @@ parse, no solver, a database it cannot read), "not a verdict about the design". 
 | `FAIL (...)` | a setup fault (exit 2), a crash (SEGV, ABRT, BUS, ILL, FPE), a front end that failed its self-test, an exit status it does not know; exit 0 without a count of 0 differ and 0 unknown, with a DIFFER line, or with no point proved (nothing was compared: each output of a design is a point, and every design the flow builds has outputs) | the build |
 | `BLOCKED (timeout)` | stopped at `--lvs-timeout` | `make build-fpga` and `program.sh` |
 | `BLOCKED (killed: SIGKILL, exit 137)` | ended by a signal from outside the proof: SIGKILL, as the memory cap's out-of-memory killer sends, TERM, INT, HUP, QUIT, XCPU, XFSZ | `make build-fpga` and `program.sh` |
-| `BLOCKED (U unknown, none differ)` | the solver did not decide U points and none differs (a z3cmd process the memory cap kills is read as unknown) | `make build-fpga` and `program.sh` |
+| `BLOCKED (U unknown, none differ)` | the solver did not decide U points and none differs (a z3cmd process the memory cap kills is read as unknown); by the z3cmd route, `; N got no answer from the solver: killed?` follows when N of them have no line in `lvs/questions.log`: their solver process ended before Z3 answered, and `check-lvs.txt` says so | `make build-fpga` and `program.sh` |
 | `BLOCKED (extraction: ...)` | the tile model lacks a primitive | `make build-fpga` and `program.sh` |
 
 BLOCKED is not proved, and is reported as such; as before, this script's exit status leaves it

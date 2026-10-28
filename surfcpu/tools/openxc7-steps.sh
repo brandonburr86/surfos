@@ -198,8 +198,10 @@ decode_bitstream() {   # Project X-Ray's bit2fasm: the finished bitstream back t
 #          front end's self-test (a question it must prove, one it must not, one it must not
 #          answer, run as lvs_equiv runs it) comes first: a front end that fails it fails LVS and
 #          the proof does not run. Each question's line goes to lvs/questions.log (Z3CMD_LOG),
-#          summed up at the end of check-lvs.txt.
+#          summed up at the end of check-lvs.txt, with the questions that have none: the solver
+#          never answered them (lvs_unanswered, below).
 lvs_prove() {     # the proof by the route lvs_solver names, under lvs_timeout: sets result_lvs, fail=1 on FAIL
+  lvs_noans=0
   case "$lvs_solver" in
     libz3)
       if run lvs-prove check-lvs.txt timeout "$lvs_timeout" lvs_equiv --gold "$out/lvs/gold.v" \
@@ -221,6 +223,7 @@ lvs_prove() {     # the proof by the route lvs_solver names, under lvs_timeout: 
       if [ "$dry" = 0 ]; then
         endline "$out/check-lvs.txt"   # a proof stopped in the middle of a line leaves it open
         python3 -I "$tools/z3cmd.py" --summary "$out/lvs/questions.log" >> "$out/check-lvs.txt" 2>&1 || true
+        lvs_unanswered
       fi ;;
     *)
       result_lvs="FAIL (no LVS solver $lvs_solver)" fail=1
@@ -228,8 +231,39 @@ lvs_prove() {     # the proof by the route lvs_solver names, under lvs_timeout: 
   esac
   if [ "$dry" = 1 ]; then result_lvs=PASS; return 0; fi
   result_lvs=$(lvs_verdict "$st" "$out/check-lvs.txt")
-  case "$result_lvs" in FAIL*) fail=1 ;; esac
+  case "$result_lvs" in
+    FAIL*) fail=1 ;;
+    "BLOCKED ("*" unknown, none differ)")      # how many of them the solver never answered
+      [ "$lvs_noans" = 0 ] || result_lvs="${result_lvs%)}; $lvs_noans got no answer from the solver: killed?)" ;;
+  esac
   return 0
+}
+
+# The questions the solver never answered (the z3cmd route). lvs_equiv counts a point unknown when
+# its solver command printed neither sat nor unsat, and a z3cmd.py process that is killed, by the
+# memory cap's out-of-memory killer say, prints nothing: z3cmd.py writes its line in
+# lvs/questions.log only once Z3 has answered. So of the points lvs_equiv counted at its end (each
+# one question), those without a line got no answer at all; check-lvs.txt says how many, and the
+# LVS result names them when they are among its unknowns, so that its reader needs no dmesg to see
+# that a solver process died (the DDR+GPU recheck at c10e0fa: 73 unknown, 73 without a line, the
+# cgroup's out-of-memory kills in dmesg; docs/evidence/flow/lvs-ddr-gpu-c10e0fa.txt). A proof
+# stopped before its count (a limit, a kill) is not counted: its last question had no time to be
+# answered. Sets lvs_noans (0 when none, or when the log has fewer lines than even the decided points).
+lvs_unanswered() {
+  lvs_noans=0
+  _c=$(sed -n 's/^\([0-9][0-9]*\) proved, \([0-9][0-9]*\) differ, \([0-9][0-9]*\) unknown.*/\1 \2 \3/p' "$out/check-lvs.txt" | tail -n 1)
+  [ -n "$_c" ] || return 0
+  # shellcheck disable=SC2086
+  set -- $_c
+  _asked=$(( $1 + $2 + $3 ))
+  _lines=$(awk 'NF >= 5 && $1 ~ /^[0-9]+$/ && $NF ~ /^[0-9]+$/ { n++ } END { print n + 0 }' "$out/lvs/questions.log" 2>/dev/null) || _lines=0
+  [ "$_asked" -gt "${_lines:-0}" ] || return 0
+  if [ $(( _asked - _lines )) -le "$3" ]; then
+    lvs_noans=$(( _asked - _lines ))
+    echo "z3cmd: $lvs_noans of the $_asked questions lvs_equiv asked got no answer from the solver: they have no line in lvs/questions.log, so its process ended before Z3 answered (killed? the memory cap's out-of-memory killer, if dmesg says so), and lvs_equiv counted them unknown" >> "$out/check-lvs.txt"
+  else
+    echo "z3cmd: lvs/questions.log has $_lines lines for the $_asked questions lvs_equiv asked, fewer than the $(( $1 + $2 )) it decided: the log is not complete" >> "$out/check-lvs.txt"
+  fi
 }
 
 endline() {   # FILE: end it with a newline when it has text and does not (what is appended starts a line)

@@ -23,6 +23,8 @@
 #      with an unknown, with a DIFFER line, with no point proved
 #   6. devenv/openxc7/z3cmd.py --summary on a line holding Z3's error text, and on one cut short
 #   7. tools/openxc7-demo.sh's verdict: a build whose LVS is BLOCKED is not a pass
+#   8. the z3cmd route with a solver process that dies before it answers (as the memory cap's
+#      out-of-memory killer ends one): its questions are counted, in check-lvs.txt and the result
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -481,6 +483,77 @@ if [ "$(v "$d/pass" 0)" = PASS ] && [ "$(v "$d/blocked" 0)" = "FAIL (LVS BLOCKED
    [ "$(v "$d/pass" 1)" = "FAIL (exit 1)" ] && [ "$(v "$d/none" 0)" = "FAIL (no manifest)" ]
 then ok "demo: a build is a pass by its manifest: LVS BLOCKED with the build script's exit 0 is not"
 else bad "demo: the verdict ('$(v "$d/pass" 0)', '$(v "$d/blocked" 0)', '$(v "$d/pass" 1)', '$(v "$d/none" 0)')"; fi
+
+# ---------------------------------------------------------------- 8. a solver process killed before it answered
+# lvs_prove (tools/openxc7-steps.sh) by the z3cmd route, with a stand-in lvs_equiv that asks its
+# solver command each of five questions as the real one does (CMD FILE 2>/dev/null, through the
+# shell; unsat proves, sat differs, anything else is unknown) and a stand-in z3cmd.py that answers
+# unsat, writing its line to the questions' log once it has, but kills itself (SIGKILL) before it
+# answers the questions that say KILLME, and answers unknown, with its line, to those that say GIVEUP.
+# (The questions' files are named relative to surfcpu/: the shell splits the command at spaces, as
+# lvs_equiv's popen does, and the real one writes them to $TMPDIR.)
+z=$t/z
+mkdir -p "$z/bin" "$z/tools" "$z/out/lvs"
+cat > "$z/bin/lvs_equiv" <<'EOF'
+#!/bin/sh
+solver=
+while [ $# -gt 0 ]; do [ "$1" = --solver ] && solver=$2; shift; done
+p=0 d=0 u=0
+for i in 1 2 3 4 5; do
+  q=$Z_DIR/q$i.smt2
+  { echo "(check-sat) ; point $i"; case " $Z_KILL " in *" $i "*) echo "; KILLME" ;; esac
+    case " $Z_GIVEUP " in *" $i "*) echo "; GIVEUP" ;; esac; } > "$q"
+  a=$(sh -c "$solver $q 2>/dev/null") || true
+  case "$a" in
+    *unsat*) echo "  proved  r$i"; p=$((p + 1)) ;;
+    *sat*)   echo "  DIFFER  r$i"; d=$((d + 1)) ;;
+    *)       echo "  unknown r$i"; u=$((u + 1)) ;;
+  esac
+done
+printf '\n%d proved, %d differ, %d unknown   (0.1s)\n' "$p" "$d" "$u"
+[ $((d + u)) = 0 ]
+EOF
+printf '#!/bin/sh\nshift\nexec "$@"\n' > "$z/bin/timeout"
+chmod +x "$z/bin/lvs_equiv" "$z/bin/timeout"
+cat > "$z/tools/z3cmd.py" <<'EOF'
+import os, signal, sys
+a = sys.argv[1:]
+if a[0] == "--self-test":
+    print("z3cmd self-test: PASS (stand-in)")
+    sys.exit(0)
+if a[0] == "--summary":
+    os.execv(sys.executable, [sys.executable, "-I", os.environ["Z_REAL_Z3CMD"], "--summary", a[1]])
+text = open(a[0]).read()
+if "KILLME" in text:
+    os.kill(os.getpid(), signal.SIGKILL)
+ans = "unknown" if "GIVEUP" in text else "unsat"
+if os.environ.get("Z3CMD_LOG"):
+    with open(os.environ["Z3CMD_LOG"], "a") as f:
+        f.write("%d 0.010 0 %s 15000\n" % (len(text), ans))
+print(ans)
+EOF
+z_prove() {      # KILL GIVEUP: the proof with those questions' solver killed, or giving up; its result in $z/run.txt
+  rm -f "$z/out/check-lvs.txt" "$z/out/times.txt"
+  ( PATH="$here/$z/bin:$PATH" Z_DIR=$z Z_KILL=$1 Z_GIVEUP=$2 Z_REAL_Z3CMD="$here/devenv/openxc7/z3cmd.py"
+    export PATH Z_DIR Z_KILL Z_GIVEUP Z_REAL_Z3CMD
+    dry=0 out=$z/out top=t chipdie=xc7a100t db=db tools=$z/tools lvs_timeout=60 lvs_solver=z3cmd fail=0
+    . tools/openxc7-steps.sh; lvs_prove; echo "result_lvs=$result_lvs"; echo "fail=$fail" ) > "$z/run.txt" 2>&1
+}
+z_prove "2 4" ""
+if grep -qx 'result_lvs=BLOCKED (2 unknown, none differ; 2 got no answer from the solver: killed?)' "$z/run.txt" &&
+   grep -qx 'fail=0' "$z/run.txt" &&
+   grep -q '^z3cmd: 2 of the 5 questions lvs_equiv asked got no answer from the solver: they have no line in lvs/questions.log' "$z/out/check-lvs.txt" &&
+   grep -q '^z3cmd: 3 questions (3 unsat); ' "$z/out/check-lvs.txt"
+then ok "z3cmd: two solver processes killed before they answered: 2 unknown, and check-lvs.txt and the result say the solver gave them no answer"
+else bad "z3cmd: solver processes killed before they answered"; cat "$z/run.txt" "$z/out/check-lvs.txt"; fi
+z_prove "" "3"
+if grep -qx 'result_lvs=BLOCKED (1 unknown, none differ)' "$z/run.txt" && ! grep -q 'got no answer' "$z/out/check-lvs.txt"
+then ok "z3cmd: a question the solver answered unknown (its line in the log) is no unanswered one"
+else bad "z3cmd: a question answered unknown"; cat "$z/run.txt" "$z/out/check-lvs.txt"; fi
+z_prove "" ""
+if grep -qx 'result_lvs=PASS' "$z/run.txt" && ! grep -q -e 'got no answer' -e 'not complete' "$z/out/check-lvs.txt"
+then ok "z3cmd: every question answered: PASS, nothing said of unanswered ones"
+else bad "z3cmd: every question answered"; cat "$z/run.txt" "$z/out/check-lvs.txt"; fi
 
 [ "$fails" = 0 ] || { echo "openxc7-recheck-test: FAIL ($fails of $checks checks)"; exit 1; }
 echo "openxc7-recheck-test: PASS ($checks checks; $SH, ${awk_is:-awk})"
