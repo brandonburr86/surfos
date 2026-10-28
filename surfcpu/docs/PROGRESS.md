@@ -15,7 +15,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the thirteenth storage review's findings, being fixed in fs-fix-13) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
-| GPU SurfGPU ([GPU.md](GPU.md) section 11) | G0-G2: the graphics modes and the 2D engine against their C models, gpudiag on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 12.1); G3: SurfOS's driver and `gfx` against the model on the host and on the RTL SoC, every `gfx crc` equal to the frame at the VGA pins ([evidence](evidence/gpu-g3/)); G4: GPU2 (SET_ZBUF, TRIANGLE, FLIP) against its C model at every FENCE, mutants, gpudiag with the spinning cube on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 16.10, 16.12, [evidence](evidence/gpu-g4/)); the cube round: `gfx cube` and GPU2's commands in SurfOS against the model on the host and on the RTL SoC, the cube's frames at the VGA pins ([GPU.md](GPU.md) 15.8) | gpudiag and the DDR+GPU design through the open flow, every gate PASS ([GPU.md](GPU.md) 12.2); G4 at bfaac48: gpudiag every gate, LVS proved; DDR+GPU every gate but LVS, which is outstanding ([GPU.md](GPU.md) 16.11) | not run: the G2 bitstreams, the G3 kernel and G4's gpudiag wait for the owner ([GPU.md](GPU.md) sections 14 and 15.6) | G0-G2 done in simulation and synthesis (six reviews); G3 done in simulation (reviewed and re-reviewed); G4 done in simulation (reviewed, fixed, re-reviewed), and in synthesis but for the DDR+GPU proof (running); the cube round done in simulation (reviewed, re-reviewed twice); every board test outstanding |
+| GPU SurfGPU ([GPU.md](GPU.md) section 11) | G0-G2: the graphics modes and the 2D engine against their C models, gpudiag on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 12.1); G3: SurfOS's driver and `gfx` against the model on the host and on the RTL SoC, every `gfx crc` equal to the frame at the VGA pins ([evidence](evidence/gpu-g3/)); G4: GPU2 (SET_ZBUF, TRIANGLE, FLIP) against its C model at every FENCE, mutants, gpudiag with the spinning cube on the RTL SoC and as its synthesized netlist ([GPU.md](GPU.md) 16.10, 16.12, [evidence](evidence/gpu-g4/)); the cube round: `gfx cube` and GPU2's commands in SurfOS against the model on the host and on the RTL SoC, the cube's frames at the VGA pins ([GPU.md](GPU.md) 15.8) | gpudiag and the DDR+GPU design through the open flow, every gate PASS ([GPU.md](GPU.md) 12.2); G4 at bfaac48: gpudiag every gate, LVS proved; DDR+GPU every gate but LVS, which is outstanding ([GPU.md](GPU.md) 16.11) | not run: the G2 bitstreams, the G3 kernel and G4's gpudiag wait for the owner ([GPU.md](GPU.md) sections 14 and 15.6) | G0-G2 done in simulation and synthesis (six reviews); G3 done in simulation (reviewed and re-reviewed); G4 done in simulation (reviewed, fixed, re-reviewed); gpudiag (1620026) through every gate with its netlist run; DDR+GPU (bfaac48) proved by a separate run, its flow recheck BLOCKED at the memory cap; the cube round done in simulation (reviewed, re-reviewed twice); every board test outstanding |
 
 ## Log
 
@@ -1289,3 +1289,42 @@ ddr-3 built five candidates, every gate passing on each
   * gpudiag with the cube ([GPU.md](GPU.md) section 14);
   * SurfOS's `gfx cube` on the DDR+GPU bitstream once its proof passes ([GPU.md](GPU.md) 15.6
     step 7).
+
+### 2026-10-27 and 28: the board's gpudiag, and the flow's LVS for the DDR+GPU design
+
+* **gpudiag for the board: the 1620026 build** (bitstream 082eb31a..., build 16200266). It
+  carries every check G4's review added, and the corner-standing cube.
+  * Seed 1 did not route. Seed 2 did, and passed every gate: LVS 16,212 proved, sys_clk
+    43.31 MHz.
+  * Its netlist runs gpudiag to `GPUDIAG: PASS (147 checks)`. The compile ran in two slots and
+    the 3 h 10 min run in one.
+  * An earlier rebuild at 2ff8b24 did not route with seed 3. The build id is a design constant,
+    so every commit draws a new placement ([GPU.md](GPU.md) 16.11).
+* **DDR+GPU (bfaac48, 582570ab...).**
+  * A separate run of lvs_equiv's `--solver` route, one Z3 process per question, proved it in
+    full: 20,971 proved, 0 differ, 0 unknown, in 13 h 52 min.
+  * Its flow manifest still said LVS FAIL. The flow's own proof had been killed at the 3.5 GB
+    memory cap, and the flow called any killed proof FAIL. So program.sh refused the bitstream,
+    and no manifest may be edited by hand.
+* **The flow track** (`sc/flow-lvs`, then `sc/flow-lvs-fix` after an independent review; merged
+  as ea6a1dd and 1ce2d03, `make check` passed on both). It adds:
+  * LVS by either route (`LVS_SOLVER=libz3|z3cmd`, `devenv/openxc7/z3cmd.py` with its
+    self-test);
+  * BLOCKED for a proof killed or left with unknowns, FAIL for a difference, and PASS needing
+    at least one point proved;
+  * a count of the questions the solver never answered;
+  * manifest format 2, with every reader updated;
+  * `make recheck-fpga`: a routed build's post-route checks run again, with its identity kept.
+    The build's refusing manifest stays beside the bitstream until the recheck's own replaces
+    it, and a format-1 build's LVS inputs must come out byte for byte.
+  * Every rule has a test that fails with the rule taken out ([OPEN-FLOW.md](OPEN-FLOW.md)
+    section 6.9).
+* **The DDR+GPU recheck** (c10e0fa's tools, 14.8 h) ended **BLOCKED**: 20,898 proved, 0 differ,
+  73 unknown.
+  * The 73 are block-RAM pins whose solver process the cgroup's OOM killer stopped: about
+    2.6 GB for the solver plus about 0.95 GB for lvs_equiv, against the 3.5 GB cap
+    ([evidence](evidence/flow/lvs-ddr-gpu-c10e0fa.txt)).
+  * A second recheck, with the fixed tools on a fresh copy of the build, waits for the owner's
+    word on 4.5 GB for that one run.
+* Physical: nothing has run on the board. gpudiag (1620026) is ready for its test
+  ([GPU.md](GPU.md) section 14).
