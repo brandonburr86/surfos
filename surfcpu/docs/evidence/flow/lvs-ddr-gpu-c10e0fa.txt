@@ -1,0 +1,74 @@
+SurfCPU flow evidence: the DDR+GPU bitstream at bfaac48 rechecked by the z3cmd route with the tools
+of c10e0fa. The route proved 20,898 of its 20,971 points and none differed; the other 73 got no answer,
+because the Docker memory cap's out-of-memory killer ended their solver processes. The cap made the
+unknowns, not the route. (docs/OPEN-FLOW.md sections 3 and 6.9.)
+Recorded 2026-10-28 by the flow track on sc/flow-lvs-fix. Sources: the integrator's run, in the
+copy of the build in 06-restoration-flow-lvs/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/
+(read only), and the integrator's capture of the Docker VM's kernel log.
+
+== The run
+  make recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+  tools of c10e0fab660b, a clean tree; image surfcpu-openxc7:2026-10-15; the capped docker gave both slots
+  (4 CPUs, 3.5 GB, swap off). Started 2026-10-27T19:19:57Z; the flow's manifest was written 2026-10-28T10:13:27Z.
+  Every other check run again passed: bitstream, round trip, block RAM, clocks, slack margin (dram_clk
+  +1.037 ns, wants 0.500). The LVS inputs made again were the build's bytes (gold.v, fabric.raw.v, fabric.v).
+  Step times: report 0.07 s, check-clk 54.83 s, decode 11.83 s, roundtrip 76.62 s, bram-extract 24.17 s,
+  lvs-extract 25.92 s, lvs-selftest 0.08 s, lvs-prove 53409.75 s FAILED (1: lvs_equiv's exit status for
+  unknowns).
+  The end of check-lvs.txt:
+  | 20898 proved, 0 differ, 73 unknown   (53406.4s)
+  | z3cmd: 20898 questions (20898 unsat); question files of 3224975 to 48347140 bytes; 50231.5 s in the solver, 2.40 s a question, the longest 18.41 s (question 6161); the largest solver process 2542 MiB (question 13101)
+  | bramwe: 1 block RAM(s), 1 enable(s) re-read, 0 difference(s)
+  The flow's manifest says: check LVS  BLOCKED (73 unknown, none differ).
+  fpga-build's manifest says: result "fail", reason "check LVS BLOCKED (73 unknown, none differ)". Nothing
+  was copied out.
+
+== The 73 unknown points
+  All are block RAM pins in 36 RAMB36 sites: 48 WEA, 21 ENARDEN, 4 DIADI.
+  lvs/questions.log has 20,898 lines, all unsat, and none for these 73. z3cmd.py writes a question's line
+  only once Z3 has answered. 1,483 of the answered questions took a solver process above 2 GiB.
+  | BRAM_L_X38Y0_RAMB36_Y0: WEA[1] WEA[2]          | BRAM_L_X6Y10_RAMB36_Y0: WEA[0]
+  | BRAM_L_X38Y120_RAMB36_Y0: ENARDEN[0]           | BRAM_L_X6Y105_RAMB36_Y0: ENARDEN[0]
+  | BRAM_L_X38Y140_RAMB36_Y0: WEA[2] WEA[3]        | BRAM_L_X6Y120_RAMB36_Y0: ENARDEN[0]
+  | BRAM_L_X38Y155_RAMB36_Y0: WEA[0]               | BRAM_L_X6Y135_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[3]
+  | BRAM_L_X38Y160_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[1] WEA[2] WEA[3]  | BRAM_L_X6Y145_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[2] WEA[3]
+  | BRAM_L_X38Y180_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[3]  | BRAM_L_X6Y15_RAMB36_Y0: ENARDEN[0]
+  | BRAM_L_X38Y25_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[1]   | BRAM_L_X6Y150_RAMB36_Y0: ENARDEN[0]
+  | BRAM_L_X38Y30_RAMB36_Y0: ENARDEN[0]            | BRAM_L_X6Y155_RAMB36_Y0: DIADI[3] WEA[1] WEA[2]
+  | BRAM_L_X38Y40_RAMB36_Y0: WEA[0] WEA[2]         | BRAM_L_X6Y170_RAMB36_Y0: WEA[1] WEA[2] WEA[3]
+  | BRAM_L_X38Y45_RAMB36_Y0: DIADI[1]              | BRAM_L_X6Y180_RAMB36_Y0: WEA[3]
+  | BRAM_L_X38Y5_RAMB36_Y0: ENARDEN[0]             | BRAM_L_X6Y20_RAMB36_Y0: WEA[1] WEA[2]
+  | BRAM_L_X38Y60_RAMB36_Y0: ENARDEN[0]            | BRAM_L_X6Y25_RAMB36_Y0: ENARDEN[0] WEA[2] WEA[3]
+  | BRAM_L_X38Y65_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[2] WEA[3]  | BRAM_L_X6Y30_RAMB36_Y0: WEA[2] WEA[3]
+  | BRAM_L_X38Y85_RAMB36_Y0: ENARDEN[0]            | BRAM_L_X6Y35_RAMB36_Y0: WEA[2] WEA[3]
+  | BRAM_L_X44Y25_RAMB36_Y0: ENARDEN[0]            | BRAM_L_X6Y40_RAMB36_Y0: ENARDEN[0] WEA[0]
+  | BRAM_L_X44Y30_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[1]   | BRAM_L_X6Y5_RAMB36_Y0: WEA[3]
+  |                                                | BRAM_L_X6Y55_RAMB36_Y0: DIADI[1] ENARDEN[0] WEA[0]
+  |                                                | BRAM_L_X6Y65_RAMB36_Y0: DIADI[3]
+  |                                                | BRAM_L_X6Y70_RAMB36_Y0: ENARDEN[0] WEA[0] WEA[1] WEA[2]
+  |                                                | BRAM_L_X6Y75_RAMB36_Y0: WEA[1] WEA[2]
+
+== Why: the memory cap
+  The integrator read the Docker VM's kernel log with
+  docker run --rm --cap-add SYSLOG surfcpu-toolchain:2026-10-15 dmesg. As they quoted it:
+  | Memory cgroup out of memory: Killed process ... (python3) total-vm:2629136kB, anon-rss:2581292kB
+  There were 25 such kills still in the buffer. The cgroup's task list at one kill: lvs_equiv 236,425 anon
+  pages (about 0.95 GB) and python3 645,307 (about 2.6 GB). The cgroup's anon memory was 3,612,012,544
+  bytes against its limit of 3,584,000 kB, and its file pages only 48 MB.
+  So on the largest questions the z3cmd process, with lvs_equiv's 0.95 GB beside it, went past the cap by
+  tens of MB and was killed. Its question got no answer, and lvs_equiv counted the point unknown. G4's run
+  of the same questions (20971 proved, 0 differ, 0 unknown in 13 h 52 min; OPEN-FLOW.md 6.9) fitted.
+
+== What it shows
+  The z3cmd route works on this design: 20,898 points proved, none differing, in 14 h 50 min within the
+  86,400 s limit, each solver process given back when its question was answered. Only memory left the
+  73 open, and the route keeps each question's memory its own. Whether one run may have more than the
+  3.5 GB cap is the integrator's question to the x86 lead, and it waits for the answer.
+  Since this run, lvs_prove counts the questions the solver never answered
+  (tools/openxc7-steps.sh lvs_unanswered). Run on copies of this run's check-lvs.txt and
+  lvs/questions.log, under /bin/sh and dash, it gives:
+  | BLOCKED (73 unknown, none differ; 73 got no answer from the solver: killed?)
+  | z3cmd: 73 of the 20971 questions lvs_equiv asked got no answer from the solver: they have no line in
+  |   lvs/questions.log, so its process ended before Z3 answered (killed? the memory cap's out-of-memory
+  |   killer, if dmesg says so), and lvs_equiv counted them unknown
+  The first line is the LVS result. The second is appended to check-lvs.txt.

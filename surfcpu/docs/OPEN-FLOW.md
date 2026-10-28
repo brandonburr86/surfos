@@ -566,6 +566,15 @@ on a copy of it in `build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/` (both Dock
 about 14 hours). Its dry run (`DRY_RUN=1`) and its first steps are in
 [evidence/flow/lvs-recheck.txt](evidence/flow/lvs-recheck.txt).
 
+It ran on 2026-10-27 and 28 with the tools of c10e0fa: `20898 proved, 0 differ, 73 unknown` in
+14 h 50 min, every other check run again passing, so LVS was BLOCKED and nothing was copied out.
+The 73 were block RAM pins (48 WEA, 21 ENARDEN, 4 DIADI) whose questions got no answer: the
+cgroup's out-of-memory killer ended their z3cmd processes, which needed up to 2.6 GB beside
+`lvs_equiv`'s 0.95 GB, tens of MB past the 3.5 GB cap. The route works; the cap made the unknowns
+([evidence/flow/lvs-ddr-gpu-c10e0fa.txt](evidence/flow/lvs-ddr-gpu-c10e0fa.txt)). Since then the
+LVS result says how many questions the solver never answered (section 3), so that needs no dmesg.
+Whether one run may have more memory is a question the integrator has put to the x86 lead.
+
 ## 7. Option B: Vivado in an x86-64 container on this Mac
 
 Tested without Vivado ([evidence/flow/amd64-rosetta.txt](evidence/flow/amd64-rosetta.txt)).
