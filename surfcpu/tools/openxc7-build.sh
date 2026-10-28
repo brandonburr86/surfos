@@ -273,6 +273,10 @@ if [ "$recheck" = 1 ]; then
   case "$(head -n 1 "$rec")" in "# openXC7 build manifest"*) ;; *) die_recheck "$rec is not this flow's manifest" ;; esac
   [ -z "$(mfield recheck "$rec")" ] ||
     die_recheck "$rec is a recheck's manifest, and the build's own ($out/manifest.build.txt) is not beside it"
+  # beside a kept manifest.build.txt there must be a manifest.txt (a recheck never leaves the bitstream
+  # without one; a recheck by older tools stopped after it moved the build's aside, or a deletion, does)
+  [ "$first" = 1 ] || [ -f "$out/manifest.txt" ] ||
+    die_recheck "$out/manifest.txt is missing beside $rec, so the bitstream has no manifest: put the build's back first (cp -p $rec $out/manifest.txt: it says what the build said), then recheck"
   # beside a kept manifest.build.txt, manifest.txt is a recheck's, or the build's as it was (a recheck
   # stopped before its own was written); a build's own that is not that one is a later build's
   if [ "$first" = 0 ] && [ -f "$out/manifest.txt" ] && [ -z "$(mfield recheck "$out/manifest.txt")" ] &&

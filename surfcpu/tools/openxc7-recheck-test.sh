@@ -15,7 +15,8 @@
 #      byte, and runs nothing: the files the record names by SHA-256, format 2's lines (each
 #      required), a format 1 build without the LVS inputs that tie its netlist and placement, a kept
 #      check that failed, a file missing, a format it does not know, a recheck's manifest alone,
-#      the image's tools not the build's, a later build over an earlier recheck's files
+#      the image's tools not the build's, a later build over an earlier recheck's files, its manifest
+#      missing beside a kept manifest.build.txt
 #   3. a format 1 build whose netlist, FASM or placement is not the one it proved: the LVS inputs
 #      made again are not its bytes, refused (exit 4) before the proof, its manifest as it was
 #   4. a recheck of a recheck: the build's manifest and logs stay the build's
@@ -420,6 +421,11 @@ mk_build 1; cp "$b/out/manifest.txt" "$b/out/manifest.build.txt"; edit "$b/out/m
 refused "a later build's manifest beside an earlier recheck's manifest.build.txt" "is a build's own manifest, but not the one an earlier recheck kept"
 mk_build 1; cp "$b/out/manifest.txt" "$b/out/manifest.build.txt"; add_after "$b/out/manifest.txt" '^lvs timeout ' 'recheck             2026-10-27T00:00:00Z, made up'
 refused "a format 1 build whose LVS inputs an earlier recheck made again without keeping them" "the build's lvs/gold.v is not known"
+for fmt in 2 1; do
+  mk_build $fmt; cp "$b/out/manifest.txt" "$b/out/manifest.build.txt"; rm "$b/out/manifest.txt"
+  refused "a format $fmt build whose manifest.txt is missing beside its manifest.build.txt (an older recheck stopped)" \
+    "manifest.txt is missing beside $b/out/manifest.build.txt, so the bitstream has no manifest: put the build's back first (cp -p "
+done
 
 # ---------------------------------------------------------------- 3. refused after it begins: the LVS inputs made again
 for f in t.json placement.json t.fasm; do

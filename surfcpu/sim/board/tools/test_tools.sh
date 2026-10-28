@@ -530,6 +530,20 @@ check "recheck: ... and program.sh refuses the flow's bitstream by the build's m
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
 check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
     eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
+# a manifest missing beside its manifest.build.txt (an older recheck stopped, or a deletion) is refused,
+# asking nothing of the flow and changing nothing, and named for what to put back
+/bin/mv "$d/openxc7/manifest.txt" "$t/flow-manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: refuses a flow manifest missing beside its manifest.build.txt, saying what to put back, asking nothing of the flow" \
+    eval "test $rc -eq 1 && grep -q 'openxc7/manifest.txt is missing beside its manifest.build.txt, so its bitstream has no manifest: put the build.s back first' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/openxc7/manifest.txt'"
+/bin/mv "$t/flow-manifest.aside" "$d/openxc7/manifest.txt"
+cp "$d/manifest.txt" "$d/manifest.build.txt"
+/bin/mv "$d/manifest.txt" "$t/manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: ... and this script's own manifest missing beside its manifest.build.txt" \
+    eval "test $rc -eq 1 && grep -q 'surfcpu_arty_a7_bramdiag/manifest.txt is missing beside its manifest.build.txt' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/manifest.txt'"
+/bin/mv "$t/manifest.aside" "$d/manifest.txt"
+rm "$d/manifest.build.txt"
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
 check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
     test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"

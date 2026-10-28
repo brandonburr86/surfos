@@ -491,6 +491,12 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
     brec=$manifest
     [ ! -f "$base/manifest.build.txt" ] || brec=$base/manifest.build.txt
     [ -f "$brec" ] || refuse "no build of $design for $board here (${manifest#"$root"/} is missing): nothing to recheck"
+    # beside a kept manifest.build.txt there is always a manifest.txt (each new one replaces the last
+    # by a rename): without it the bitstream has no manifest beside it, and a recheck would leave it so
+    for m in "$base" "$ox"; do
+        [ ! -f "$m/manifest.build.txt" ] || [ -f "$m/manifest.txt" ] ||
+            refuse "${m#"$root"/}/manifest.txt is missing beside its manifest.build.txt, so its bitstream has no manifest: put the build's back first (cp -p ${m#"$root"/}/manifest.build.txt ${m#"$root"/}/manifest.txt: it says what the build said), then recheck"
+    done
     [ "$(head -n 1 "$brec")" = "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh" ] ||
         refuse "${brec#"$root"/} is not this script's manifest"
     ! grep -q '^\[recheck\]$' "$brec" ||
