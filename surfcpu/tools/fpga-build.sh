@@ -253,7 +253,8 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     mkdir -p "$base"
     if [ "$dry" = 0 ]; then                             # a new build replaces the last one's results
         rm -rf "${base:?}/openxc7" "${base:?}/rom" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest" \
-            "${base:?}/manifest.build.txt" "${base:?}/manifest-head.recheck.txt" "${base:?}/recheck.txt"
+            "${base:?}/manifest.build.txt" "${base:?}/manifest.build.txt.tmp" "${base:?}/manifest-head.recheck.txt" \
+            "${base:?}/recheck.txt"
     fi
     # The constraints nextpnr applies (pins, the oscillator's clock), and a list of the rest.
     ( cd "$root" && awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$notgiven" $xdcs ) > "$xdc_nx" ||
@@ -491,6 +492,12 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
     brec=$manifest
     [ ! -f "$base/manifest.build.txt" ] || brec=$base/manifest.build.txt
     [ -f "$brec" ] || refuse "no build of $design for $board here (${manifest#"$root"/} is missing): nothing to recheck"
+    # beside a kept manifest.build.txt there is always a manifest.txt (each new one replaces the last
+    # by a rename): without it the bitstream has no manifest beside it, and a recheck would leave it so
+    for m in "$base" "$ox"; do
+        [ ! -f "$m/manifest.build.txt" ] || [ -f "$m/manifest.txt" ] ||
+            refuse "${m#"$root"/}/manifest.txt is missing beside its manifest.build.txt, so its bitstream has no manifest: put the build's back first (cp -p ${m#"$root"/}/manifest.build.txt ${m#"$root"/}/manifest.txt: it says what the build said), then recheck"
+    done
     [ "$(head -n 1 "$brec")" = "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh" ] ||
         refuse "${brec#"$root"/} is not this script's manifest"
     ! grep -q '^\[recheck\]$' "$brec" ||
@@ -582,17 +589,29 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
     # one that was there until its own, complete, replaces it at the end; still the same, the flow
     # stopped before that (a kill, a step that failed, or exit 4: the LVS inputs it made again are not
     # the build's), and this one's stays as it was too: nothing new is written.
-    was=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    # Exit 4 is the flow's refusal for LVS inputs made again that are not the build's only with its
+    # message in recheck-refused.txt: another program it runs may end 4 (GNU sed on a write error), so a
+    # marker left from before is removed first. The flow's new manifest replaces the last by a rename,
+    # a file of its own, so it shows by its inode even with the last one's bytes.
+    mstate() { if [ -f "$ox/manifest.txt" ]; then echo "$(ls -i "$ox/manifest.txt" | awk '{ print $1 }') $(sha "$ox/manifest.txt")"; else echo none; fi; }
+    was=$(mstate)
+    rm -f "$ox/recheck-refused.txt"
     if "$OPENXC7" "$@"; then st=0; else st=$?; fi
-    now=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    now=$(mstate)
     if [ "$now" = "$was" ]; then
         [ "$st" != 3 ] || die "--recheck: tools/openxc7-build.sh refused (exit 3) before it began: nothing was changed"
         kept="both manifests are as they were (${ox#"$root"/}/manifest.txt, ${manifest#"$root"/}); the checks it got to wrote their logs again in ${ox#"$root"/} (the build's own are kept in ${ox#"$root"/}/build-evidence)"
-        [ "$st" != 4 ] || die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        if [ "$st" = 4 ] && [ -f "$ox/recheck-refused.txt" ]; then
+            die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        fi
         die "--recheck: tools/openxc7-build.sh stopped (exit $st) before it wrote its manifest: $kept"
     fi
-    # the build's own manifest is kept beside the new one, and the new one starts from its head
-    [ -f "$base/manifest.build.txt" ] || cp "$manifest" "$base/manifest.build.txt"
+    # the build's own manifest is kept beside the new one (whole or not at all), and the new one starts
+    # from its head
+    if [ ! -f "$base/manifest.build.txt" ]; then
+        cp "$manifest" "$base/manifest.build.txt.tmp"
+        mv "$base/manifest.build.txt.tmp" "$base/manifest.build.txt"
+    fi
     brec=$base/manifest.build.txt
     finish_head=$base/manifest-head.recheck.txt
     { sed -n 1p "$head"; echo "manifest_format = 2"; sed -n '2,$p' "$head" | grep -v '^manifest_format = ' || true; } > "$finish_head"

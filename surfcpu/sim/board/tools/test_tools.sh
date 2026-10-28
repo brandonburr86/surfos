@@ -530,6 +530,41 @@ check "recheck: ... and program.sh refuses the flow's bitstream by the build's m
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
 check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
     eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
+# exit 4 without the flow's message (another program's 4: GNU sed's on a write error), the tie's message
+# of the run before still there: the flow stopped, it did not refuse
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=exit4
+check "recheck: exit 4 without the flow's refusal message is a stop, not the LVS inputs' refusal (an earlier run's message aside)" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 4) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && ! grep -q 'the LVS inputs it made again' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt'"
+# a manifest missing beside its manifest.build.txt (an older recheck stopped, or a deletion) is refused,
+# asking nothing of the flow and changing nothing, and named for what to put back
+/bin/mv "$d/openxc7/manifest.txt" "$t/flow-manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: refuses a flow manifest missing beside its manifest.build.txt, saying what to put back, asking nothing of the flow" \
+    eval "test $rc -eq 1 && grep -q 'openxc7/manifest.txt is missing beside its manifest.build.txt, so its bitstream has no manifest: put the build.s back first' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/openxc7/manifest.txt'"
+/bin/mv "$t/flow-manifest.aside" "$d/openxc7/manifest.txt"
+cp "$d/manifest.txt" "$d/manifest.build.txt"
+/bin/mv "$d/manifest.txt" "$t/manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: ... and this script's own manifest missing beside its manifest.build.txt" \
+    eval "test $rc -eq 1 && grep -q 'surfcpu_arty_a7_bramdiag/manifest.txt is missing beside its manifest.build.txt' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/manifest.txt'"
+/bin/mv "$t/manifest.aside" "$d/manifest.txt"
+rm "$d/manifest.build.txt"
+# this script keeps its own manifest's copy whole or not at all: killed while it writes it, the copy is
+# not taken for the build's, and the next recheck passes (a cp that writes half of it, then kills it)
+mkdir -p "$t/cpkill"
+cat > "$t/cpkill/cp" <<'EOF'
+#!/bin/sh
+for a in "$@"; do last=$a; done
+if [ "$last" = "$CPKILL_DEST" ]; then
+    head -n 3 "$1" > "$last"; echo killed > "$CPKILL_MARK"; kill -KILL "$PPID"; exit 1
+fi
+exec /bin/cp "$@"
+EOF
+chmod +x "$t/cpkill/cp"
+rm -f "$t/cpkill.mark"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 PATH="$t/cpkill:$PATH" CPKILL_DEST="$d/manifest.build.txt.tmp" CPKILL_MARK="$t/cpkill.mark"
+check "recheck: killed while it copies its own manifest aside: the copy is not the build's manifest.build.txt, its manifest as it was" \
+    eval "test -s '$t/cpkill.mark' && ! test -e '$d/manifest.build.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && ! test -e '$dbit'"
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
 check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
     test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"

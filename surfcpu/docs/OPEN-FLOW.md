@@ -135,18 +135,27 @@ lacks the LVS inputs it made (`lvs/gold.v`, `lvs/fabric.v`: a format 1 manifest 
 netlist nor the placement, and these tie them to it), a check it keeps did not pass (SRL cells and
 synthesis: made on the synthesized netlist before placement, which a recheck does not touch), the
 manifest is of a format it does not know, the image's tools (`/etc/surfcpu-openxc7.txt`) are not
-the build's, or a build's own `manifest.txt` that is not the kept one sits beside an earlier
-recheck's `manifest.build.txt` (a later build over its files).
+the build's, a build's own `manifest.txt` that is not the kept one sits beside an earlier
+recheck's `manifest.build.txt` (a later build over its files), or `manifest.txt` is missing beside
+it (a recheck by older tools stopped, or a deletion: the bitstream has no manifest, and the refusal
+says to put the build's back, `cp -p manifest.build.txt manifest.txt`). The format 1 tie holds
+against a file swapped by accident; it does not see a netlist that differs only in what `yosys
+write_verilog -noattr` drops, nor what `lvs_equiv` reads straight from `--gold-json` and
+`--placement`, both of which take a deliberate edit, and a format 2 manifest's SHA-256 lines
+close both.
 
 Then it keeps the build's: a copy of its manifest as `manifest.build.txt` (a later recheck reads
 that one, and one whose manifest is a recheck's without it is refused), and its own logs in
 `build-evidence/` (`check-lvs.txt` with the points it proved, the other checks' logs, `lvs/`'s
 logs, its step times) with `lvs-inputs.sha256`, the SHA-256 of the LVS inputs it made (`gold.v`,
 `fabric.raw.v`, `fabric.v`; the netlists themselves are not copied, the DDR+GPU build's are
-200 MB). Each is made once, written aside and renamed: whole or not at all. Between the inputs'
-extraction and the proof it makes the tie: unless `gold.v`, `fabric.raw.v` and `fabric.v` come out
-the build's bytes, the netlist, the FASM or the placement is not the one the build proved, and it
-refuses (exit 4) before anything is proved. Its own manifest is written aside (`manifest.txt.new`)
+200 MB). Each is made once, written aside and renamed: whole or not at all, and a copy that fails
+(a disk full) is refused, exit 3, nothing changed. Between the inputs' extraction and the proof it
+makes the tie: unless `gold.v`, `fabric.raw.v` and `fabric.v` come out the build's bytes, the
+netlist, the FASM or the placement is not the one the build proved, and it refuses (exit 4) before
+anything is proved, its message also in `recheck-refused.txt`: another program it runs may end 4
+(GNU sed on a write error), so `tools/fpga-build.sh` reads exit 4 as this refusal only with that
+file, written by this run. Its own manifest is written aside (`manifest.txt.new`)
 and renamed over `manifest.txt` at the end: until then `manifest.txt` is what it was, the build's
 or an earlier recheck's, so a recheck stopped anywhere (killed, Ctrl-C, a Docker restart, a step
 that fails, exit 4) leaves what `tools/program.sh` read before it began, and can be run again. The
@@ -163,8 +172,9 @@ clean tree of its own and takes no recheck. Tested by `tools/openxc7-recheck-tes
 test-flow`; on the Mac too, under `/bin/sh` and dash): a recheck run for real with a stand-in for
 every program, killed at each of its 17 steps and copies (the build's manifest beside the
 bitstream at each, `program.sh` refusing it, a recheck afterwards passing), every refusal leaving
-the directory byte for byte as it was, and the tie refusing a netlist, FASM or placement that is
-not the build's.
+the directory byte for byte as it was (a full disk while it keeps the build's logs among them), the
+tie refusing a netlist, FASM or placement that is not the build's, and a step that ends 4 leaving
+no refusal message.
 
 **The manifest's format** is 2 since 2026-10-27 (`manifest format 2`; none means 1): it records
 the synthesized netlist (`netlist`), the `routed FASM` and the `placement` by SHA-256, which a

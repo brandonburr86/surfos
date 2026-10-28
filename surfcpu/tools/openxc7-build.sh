@@ -48,10 +48,12 @@
 #                      format 2, the netlist, FASM or placement: each line required) is not the one
 #                      recorded, a format 1 build lacks the LVS inputs that tie its netlist and
 #                      placement to it, a check it keeps (SRL cells, synthesis) did not pass, or the
-#                      image's tools are not the build's. Then it keeps a copy of the build's
-#                      manifest as manifest.build.txt and of its logs in build-evidence/ (once),
-#                      runs the checks again, and refuses (exit 4) if the LVS inputs it makes again
-#                      are not the build's bytes, before the proof. Its manifest, written aside,
+#                      image's tools are not the build's, or manifest.txt is missing beside a kept
+#                      manifest.build.txt. Then it keeps a copy of the build's manifest as
+#                      manifest.build.txt and of its logs in build-evidence/ (once; a copy that
+#                      fails is refused, exit 3), runs the checks again, and refuses (exit 4, its
+#                      message in recheck-refused.txt) if the LVS inputs it makes again are not the
+#                      build's bytes, before the proof. Its manifest, written aside,
 #                      replaces manifest.txt by a rename at the end: until then manifest.txt is
 #                      what it was, so a recheck stopped anywhere leaves the build's. The new one
 #                      keeps the build's identity and its kept checks as they were, and says the
@@ -273,6 +275,10 @@ if [ "$recheck" = 1 ]; then
   case "$(head -n 1 "$rec")" in "# openXC7 build manifest"*) ;; *) die_recheck "$rec is not this flow's manifest" ;; esac
   [ -z "$(mfield recheck "$rec")" ] ||
     die_recheck "$rec is a recheck's manifest, and the build's own ($out/manifest.build.txt) is not beside it"
+  # beside a kept manifest.build.txt there must be a manifest.txt (a recheck never leaves the bitstream
+  # without one; a recheck by older tools stopped after it moved the build's aside, or a deletion, does)
+  [ "$first" = 1 ] || [ -f "$out/manifest.txt" ] ||
+    die_recheck "$out/manifest.txt is missing beside $rec, so the bitstream has no manifest: put the build's back first (cp -p $rec $out/manifest.txt: it says what the build said), then recheck"
   # beside a kept manifest.build.txt, manifest.txt is a recheck's, or the build's as it was (a recheck
   # stopped before its own was written); a build's own that is not that one is a later build's
   if [ "$first" = 0 ] && [ -f "$out/manifest.txt" ] && [ -z "$(mfield recheck "$out/manifest.txt")" ] &&
@@ -367,22 +373,29 @@ if [ "$recheck" = 1 ]; then
   fi
   [ "$dry" = 0 ] || echo "openxc7-build.sh: --dry-run: the image's tools are compared with the record's in the image only; would run:"
   if [ "$dry" = 0 ]; then
-    rm -f "$out/manifest.txt.new"
+    rm -f "$out/manifest.txt.new" "$out/recheck-refused.txt"
     if [ "$first" = 1 ]; then
-      # the build's own logs, kept once (whole or not at all), before any step writes its log again
-      if [ ! -d "$ev" ]; then
-        rm -rf "${out:?}/build-evidence.tmp"
-        mkdir -p "$out/build-evidence.tmp/lvs"
+      # the build's own logs, kept once (whole or not at all), before any step writes its log again; a
+      # copy that fails (a disk full) is refused with nothing changed
+      keep_evidence() {
+        rm -rf "${out:?}/build-evidence.tmp" && mkdir -p "$out/build-evidence.tmp/lvs" || return 1
         for f in times.txt report.out timing.txt utilization.txt "slack-seed$r_seed.txt" "slack-seed$r_seed.err" \
                  check-bitstream.txt check-roundtrip.txt check-bram.txt check-lvs.txt check-clocks.txt check-gclk.txt \
                  bit2fasm.log bram-extract.log; do
-          [ ! -f "$out/$f" ] || cp -p "$out/$f" "$out/build-evidence.tmp/$f"
+          [ ! -f "$out/$f" ] || cp -p "$out/$f" "$out/build-evidence.tmp/$f" || return 1
         done
         for f in "$out"/lvs/*; do
-          case "${f##*/}" in gold.v|fabric.raw.v|fabric.v) ;; *) [ ! -f "$f" ] || cp -p "$f" "$out/build-evidence.tmp/lvs/" ;; esac
+          case "${f##*/}" in
+            gold.v|fabric.raw.v|fabric.v) ;;
+            *) [ ! -f "$f" ] || cp -p "$f" "$out/build-evidence.tmp/lvs/" || return 1 ;;
+          esac
         done
-        printf '%s\n' "$lvs_sums" | grep . > "$out/build-evidence.tmp/lvs-inputs.sha256" || true
+        if [ -n "$lvs_sums" ]; then printf '%s\n' "$lvs_sums"; fi > "$out/build-evidence.tmp/lvs-inputs.sha256" || return 1
         mv "$out/build-evidence.tmp" "$ev"
+      }
+      if [ ! -d "$ev" ] && ! keep_evidence; then
+        rm -rf "${out:?}/build-evidence.tmp"
+        die_recheck "the build's own logs could not be kept in $ev (a disk full?)"
       fi
       cp -p "$out/manifest.txt" "$out/manifest.build.txt.tmp"
       mv "$out/manifest.build.txt.tmp" "$out/manifest.build.txt"
@@ -394,9 +407,13 @@ if [ "$recheck" = 1 ]; then
   # Between the LVS inputs' extraction and the proof (post_route_checks): the inputs made again must
   # be the build's bytes, which ties its netlist, FASM and placement to it (a format 1 record names
   # neither the netlist nor the placement); if not, the recheck refuses (exit 4) and its manifest is
-  # never written. A file the build did not make is only noted.
+  # never written. A file the build did not make is only noted. Other programs the recheck runs may
+  # end 4 too (GNU sed on a write error), which set -e passes on, so this refusal also leaves its
+  # message in recheck-refused.txt (removed when a recheck begins), which tools/fpga-build.sh reads.
   die_tie() {
-    echo "openxc7-build.sh: --recheck: $*; refusing (exit 4): the netlist, the FASM or the placement is not the build's. $out/manifest.txt is as it was; the checks run so far have written their logs again (the build's own are in $ev)" >&2
+    _m="openxc7-build.sh: --recheck: $*; refusing (exit 4): the netlist, the FASM or the placement is not the build's. $out/manifest.txt is as it was; the checks run so far have written their logs again (the build's own are in $ev)"
+    echo "$_m" >&2
+    printf '%s\n' "$_m" > "$out/recheck-refused.txt" || true   # without it fpga-build says the flow stopped
     exit 4
   }
   recheck_lvs_tie() {

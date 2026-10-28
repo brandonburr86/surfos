@@ -26,8 +26,9 @@
 # manifest.txt at the end: the build's lines up to its bitstream and its SRL and synthesis results,
 # with the checks run again (FAKE_OX_LVS, FAKE_OX_CLOCKS as above) and the recheck's lines.
 # FAKE_OX_RECHECK=refuse refuses as the real one does (exit 3, nothing changed); =die stops after
-# keeping the copy (exit 137), =tie refuses after it began (exit 4: the LVS inputs made again are not
-# the build's): either way manifest.txt is as it was.
+# keeping the copy (exit 137), =tie refuses after it began (exit 4, its message in recheck-refused.txt:
+# the LVS inputs made again are not the build's), =exit4 stops with exit 4 and no such message (another
+# program's 4, GNU sed's on a write error say): each way manifest.txt is as it was.
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
@@ -51,7 +52,11 @@ if [ "${1:-}" = --recheck ]; then
     if [ "$dry" = 1 ]; then echo "[lvs-prove] fake recheck dry run, solver ${solver:-as built}"; exit 0; fi
     [ "$rec" != "$out/manifest.txt" ] || { cp "$out/manifest.txt" "$out/manifest.build.txt"; rec=$out/manifest.build.txt; }
     [ "${FAKE_OX_RECHECK:-}" != die ] || { echo "fake openxc7: killed while rechecking" >&2; exit 137; }
-    [ "${FAKE_OX_RECHECK:-}" != tie ] || { echo "fake openxc7: --recheck: lvs/gold.v made again is not the build's; refusing (exit 4)" >&2; exit 4; }
+    if [ "${FAKE_OX_RECHECK:-}" = tie ]; then
+        echo "fake openxc7: --recheck: lvs/gold.v made again is not the build's; refusing (exit 4)" | tee "$out/recheck-refused.txt" >&2
+        exit 4
+    fi
+    [ "${FAKE_OX_RECHECK:-}" != exit4 ] || { echo "fake openxc7: sed: couldn't flush stdout: No space left on device" >&2; exit 4; }
     [ -n "$solver" ] || solver=$(sed -n 's/^lvs solver  *\([a-z0-9]*\).*/\1/p' "$rec"); solver=${solver:-libz3}
     [ -n "$limit" ] || limit=$(sed -n 's/^lvs timeout  *\([0-9]*\).*/\1/p' "$rec")
     top=$(sed -n 's/^top  *//p' "$rec" | head -n 1)
