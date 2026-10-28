@@ -453,11 +453,15 @@ it was, a `[recheck]` table, the build's own manifests kept as `manifest.build.t
 pass copies the bitstream out as a passing build does; on a fail none stays under the design's
 name. When the flow refuses before it begins (its own checks, such as the image's tools being
 the build's: exit 3) nothing is changed. Each new manifest replaces its old one only when it is
-complete, so while a recheck runs, and after one stopped anywhere (killed, Ctrl-C, a step that
-failed, or the flow's exit 4: the LVS inputs it made again are not the build's), both manifests
-are what they were, the build's, which refuse its bitstream; this script then says the flow
-stopped before it wrote its manifest, writes nothing, and the next recheck starts again from the
-build's own manifests (the build's logs kept in `openxc7/build-evidence/`). Tested with the fake
+complete (written aside and renamed, this script's copy of its own as `manifest.build.txt` too),
+so while a recheck runs, and after one stopped anywhere (killed, Ctrl-C, a step that failed, or
+the flow's exit 4 with its message in `openxc7/recheck-refused.txt`: the LVS inputs it made again
+are not the build's), both manifests are what they were, the build's, which refuse its bitstream;
+this script then says the flow stopped (or refused) before it wrote its manifest, writes nothing,
+and the next recheck starts again from the build's own manifests (the build's logs kept in
+`openxc7/build-evidence/`). A `manifest.txt` missing beside its `manifest.build.txt`, here or in
+`openxc7/` (an older recheck stopped, or a deletion), is refused before anything runs, saying what
+to put back. Tested with the fake
 flow (below): a build blocked only at LVS rechecked into a pass and copied out, the manifests it
 writes, `program.sh` loading it and refusing the build's own, a recheck killed or refused after it
 began leaving both manifests as they were, and each refusal; the flow's side, killed at each of
@@ -685,7 +689,7 @@ The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vi
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
 locally, a fake `openxc7-build.sh` writes the open flow's outputs (its dry runs use the real
 script), and a fake `openFPGALoader` answers like the real one, with a temporary HOME and
-output directory. 334 checks with fetch.sh's (2026-10-27): refusals, dry runs, all three flows, the staged
+output directory. 338 checks with fetch.sh's (2026-10-28): refusals, dry runs, all three flows, the staged
 files, `params.tcl`, the TOML manifest, each gate stopping the bitstream (a report format
 Vivado might change among them), the dropped ssh connection and `--fetch`, the dirty flag
 from a scratch git repository, the open flow's constraint subset and manifest, the SoC
@@ -790,7 +794,7 @@ flow builds them (section 8): about 7,600 LUTs and 5,214 flip-flops, 37 % of the
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (334 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists and the recheck among them) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the DDR bridges' mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (338 wrapper and fetch.sh checks, the DDR designs' defines, generated files and seed lists and the recheck among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
 | `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |

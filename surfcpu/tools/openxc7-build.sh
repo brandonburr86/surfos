@@ -48,10 +48,12 @@
 #                      format 2, the netlist, FASM or placement: each line required) is not the one
 #                      recorded, a format 1 build lacks the LVS inputs that tie its netlist and
 #                      placement to it, a check it keeps (SRL cells, synthesis) did not pass, or the
-#                      image's tools are not the build's. Then it keeps a copy of the build's
-#                      manifest as manifest.build.txt and of its logs in build-evidence/ (once),
-#                      runs the checks again, and refuses (exit 4) if the LVS inputs it makes again
-#                      are not the build's bytes, before the proof. Its manifest, written aside,
+#                      image's tools are not the build's, or manifest.txt is missing beside a kept
+#                      manifest.build.txt. Then it keeps a copy of the build's manifest as
+#                      manifest.build.txt and of its logs in build-evidence/ (once; a copy that
+#                      fails is refused, exit 3), runs the checks again, and refuses (exit 4, its
+#                      message in recheck-refused.txt) if the LVS inputs it makes again are not the
+#                      build's bytes, before the proof. Its manifest, written aside,
 #                      replaces manifest.txt by a rename at the end: until then manifest.txt is
 #                      what it was, so a recheck stopped anywhere leaves the build's. The new one
 #                      keeps the build's identity and its kept checks as they were, and says the
