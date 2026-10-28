@@ -371,7 +371,7 @@ if [ "$recheck" = 1 ]; then
   fi
   [ "$dry" = 0 ] || echo "openxc7-build.sh: --dry-run: the image's tools are compared with the record's in the image only; would run:"
   if [ "$dry" = 0 ]; then
-    rm -f "$out/manifest.txt.new"
+    rm -f "$out/manifest.txt.new" "$out/recheck-refused.txt"
     if [ "$first" = 1 ]; then
       # the build's own logs, kept once (whole or not at all), before any step writes its log again
       if [ ! -d "$ev" ]; then
@@ -398,9 +398,13 @@ if [ "$recheck" = 1 ]; then
   # Between the LVS inputs' extraction and the proof (post_route_checks): the inputs made again must
   # be the build's bytes, which ties its netlist, FASM and placement to it (a format 1 record names
   # neither the netlist nor the placement); if not, the recheck refuses (exit 4) and its manifest is
-  # never written. A file the build did not make is only noted.
+  # never written. A file the build did not make is only noted. Other programs the recheck runs may
+  # end 4 too (GNU sed on a write error), which set -e passes on, so this refusal also leaves its
+  # message in recheck-refused.txt (removed when a recheck begins), which tools/fpga-build.sh reads.
   die_tie() {
-    echo "openxc7-build.sh: --recheck: $*; refusing (exit 4): the netlist, the FASM or the placement is not the build's. $out/manifest.txt is as it was; the checks run so far have written their logs again (the build's own are in $ev)" >&2
+    _m="openxc7-build.sh: --recheck: $*; refusing (exit 4): the netlist, the FASM or the placement is not the build's. $out/manifest.txt is as it was; the checks run so far have written their logs again (the build's own are in $ev)"
+    echo "$_m" >&2
+    printf '%s\n' "$_m" > "$out/recheck-refused.txt" || true   # without it fpga-build says the flow stopped
     exit 4
   }
   recheck_lvs_tie() {

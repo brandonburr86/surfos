@@ -588,13 +588,21 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
     # one that was there until its own, complete, replaces it at the end; still the same, the flow
     # stopped before that (a kill, a step that failed, or exit 4: the LVS inputs it made again are not
     # the build's), and this one's stays as it was too: nothing new is written.
-    was=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    # Exit 4 is the flow's refusal for LVS inputs made again that are not the build's only with its
+    # message in recheck-refused.txt: another program it runs may end 4 (GNU sed on a write error), so a
+    # marker left from before is removed first. The flow's new manifest replaces the last by a rename,
+    # a file of its own, so it shows by its inode even with the last one's bytes.
+    mstate() { if [ -f "$ox/manifest.txt" ]; then echo "$(ls -i "$ox/manifest.txt" | awk '{ print $1 }') $(sha "$ox/manifest.txt")"; else echo none; fi; }
+    was=$(mstate)
+    rm -f "$ox/recheck-refused.txt"
     if "$OPENXC7" "$@"; then st=0; else st=$?; fi
-    now=$( [ -f "$ox/manifest.txt" ] && sha "$ox/manifest.txt" || echo none)
+    now=$(mstate)
     if [ "$now" = "$was" ]; then
         [ "$st" != 3 ] || die "--recheck: tools/openxc7-build.sh refused (exit 3) before it began: nothing was changed"
         kept="both manifests are as they were (${ox#"$root"/}/manifest.txt, ${manifest#"$root"/}); the checks it got to wrote their logs again in ${ox#"$root"/} (the build's own are kept in ${ox#"$root"/}/build-evidence)"
-        [ "$st" != 4 ] || die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        if [ "$st" = 4 ] && [ -f "$ox/recheck-refused.txt" ]; then
+            die "--recheck: tools/openxc7-build.sh refused (exit 4) after it began: the LVS inputs it made again are not the build's, so its netlist, FASM or placement is not the one recorded; $kept"
+        fi
         die "--recheck: tools/openxc7-build.sh stopped (exit $st) before it wrote its manifest: $kept"
     fi
     # the build's own manifest is kept beside the new one, and the new one starts from its head

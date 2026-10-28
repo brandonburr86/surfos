@@ -18,7 +18,8 @@
 #      the image's tools not the build's, a later build over an earlier recheck's files, its manifest
 #      missing beside a kept manifest.build.txt
 #   3. a format 1 build whose netlist, FASM or placement is not the one it proved: the LVS inputs
-#      made again are not its bytes, refused (exit 4) before the proof, its manifest as it was
+#      made again are not its bytes, refused (exit 4) before the proof, its manifest as it was, its
+#      message in recheck-refused.txt; a step that ends 4 leaves no such message
 #   4. a recheck of a recheck: the build's manifest and logs stay the build's
 #   5. lvs_verdict (tools/openxc7-steps.sh) on every way lvs_equiv can end, with the review's: exit 0
 #      with an unknown, with a DIFFER line, with no point proved
@@ -63,6 +64,7 @@ called "python3 $script $*"
 case "$script" in
   report.py)
     stop_here report
+    [ "${FAULT:-}" != report4 ] || { echo "stand-in report.py: ends 4, as GNU sed does on a write error" >&2; exit 4; }
     printf 'Timing (stand-in)\n\nclock sys_clk: constraint 25.00 MHz, achieved 43.44 MHz, slack +16.982 ns  PASS\n' > "$(arg --timing "$@")"
     printf "Against the xc7a100t's documented capacity (stand-in):\n  flip-flops   2 / 126800   0.0%%\n" > "$(arg --utilization "$@")" ;;
   slackcheck.py)
@@ -433,10 +435,18 @@ for f in t.json placement.json t.fasm; do
   rc_run
   if [ "$rc" = 4 ] && grep -q "made again (sha256 [0-9a-f]*) is not the build's (sha256 [0-9a-f]*); refusing (exit 4)" "$t/run.txt" &&
      cmp -s "$b/out/manifest.txt" "$t/build-manifest.txt" && ! grep -q '^lvs_equiv ' "$CALLS" && grep -q '^tileverilog ' "$CALLS" &&
-     evidence_kept && program_refuses
-  then ok "a format 1 build whose $f is not the one it proved: refused (exit 4) before the proof, its manifest as it was, program.sh refuses"
+     evidence_kept && program_refuses && grep -q "; refusing (exit 4): " "$b/out/recheck-refused.txt"
+  then ok "a format 1 build whose $f is not the one it proved: refused (exit 4) before the proof, its message in recheck-refused.txt, its manifest as it was, program.sh refuses"
   else bad "a format 1 build whose $f is not the one it proved (exit $rc)"; cat "$t/run.txt"; fi
 done
+# another program's exit 4 (a step that ends 4, as GNU sed on a write error): a stop, with no such message,
+# the message of an earlier refusal removed when the recheck began
+cp "$b/out/recheck-refused.txt" "$t/refused.saved"
+mk_build 1; cp "$t/refused.saved" "$b/out/recheck-refused.txt"
+rc_run FAULT=report4
+if [ "$rc" = 4 ] && [ ! -e "$b/out/recheck-refused.txt" ] && cmp -s "$b/out/manifest.txt" "$t/build-manifest.txt" && program_refuses
+then ok "a step that ends 4 stops the recheck with exit 4 and no refusal message (an earlier run's removed), its manifest as it was"
+else bad "a step that ends 4 (exit $rc)"; cat "$t/run.txt"; ls "$b/out"; fi
 
 # ---------------------------------------------------------------- 4. a recheck of a recheck
 mk_build 2

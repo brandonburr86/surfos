@@ -530,6 +530,11 @@ check "recheck: ... and program.sh refuses the flow's bitstream by the build's m
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
 check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
     eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
+# exit 4 without the flow's message (another program's 4: GNU sed's on a write error), the tie's message
+# of the run before still there: the flow stopped, it did not refuse
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=exit4
+check "recheck: exit 4 without the flow's refusal message is a stop, not the LVS inputs' refusal (an earlier run's message aside)" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 4) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && ! grep -q 'the LVS inputs it made again' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt'"
 # a manifest missing beside its manifest.build.txt (an older recheck stopped, or a deletion) is refused,
 # asking nothing of the flow and changing nothing, and named for what to put back
 /bin/mv "$d/openxc7/manifest.txt" "$t/flow-manifest.aside"
