@@ -1,12 +1,12 @@
 SurfCPU flow evidence: the LVS proof's two routes and the recheck through the real open flow
 (tools/openxc7-lvs-test.sh; tools/openxc7-steps.sh, devenv/openxc7/z3cmd.py; docs/OPEN-FLOW.md section 3).
-Generated on 2026-10-27 at b82e2987e740, image surfcpu-openxc7:2026-10-15.
+Generated on 2026-10-28 at 8a19554d74f8, image surfcpu-openxc7:2026-10-15.
 Result: PASS
 
 == 1. one design, both routes
 libz3: openxc7-build.sh exit 0; checks: SRL cells PASS, synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS (libz3), clocks none in the design, slack margin PASS
   solver: libz3 4.13.3 (linked, incremental)
-  104 proved, 0 differ, 0 unknown   (0.00823813s)
+  104 proved, 0 differ, 0 unknown   (0.0132822s)
   manifest format     2 (docs/OPEN-FLOW.md section 3)
   netlist             build/flow/lvs-routes/libz3/bram_we_sdp.json sha256:10d3c3650bce1fb3822089e2dd335268425b9de1b2ebe719c1de0ec66f54f40b
   routed FASM         build/flow/lvs-routes/libz3/bram_we_sdp.fasm sha256:31d029e379b9c564fa8bca5e99412076a465c2881c3233a5770b5326f53e0d4e
@@ -17,8 +17,8 @@ libz3: openxc7-build.sh exit 0; checks: SRL cells PASS, synthesis PASS, bitstrea
 ok    libz3: LVS PASS, the manifest naming the route
 z3cmd: openxc7-build.sh exit 0; checks: SRL cells PASS, synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS (z3cmd), clocks none in the design, slack margin PASS
   solver: python3 -I devenv/openxc7/z3cmd.py (SMT-LIB2, one process per question)
-  104 proved, 0 differ, 0 unknown   (2.00928s)
-  z3cmd: 104 questions (104 unsat); question files of 242 to 43916 bytes; 0.4 s in the solver, 0.00 s a question, the longest 0.01 s (question 89); the largest solver process 40 MiB (question 46)
+  104 proved, 0 differ, 0 unknown   (1.92672s)
+  z3cmd: 104 questions (104 unsat); question files of 242 to 43916 bytes; 0.4 s in the solver, 0.00 s a question, the longest 0.00 s (question 44); the largest solver process 40 MiB (question 46)
   manifest format     2 (docs/OPEN-FLOW.md section 3)
   netlist             build/flow/lvs-routes/z3cmd/bram_we_sdp.json sha256:10d3c3650bce1fb3822089e2dd335268425b9de1b2ebe719c1de0ec66f54f40b
   routed FASM         build/flow/lvs-routes/z3cmd/bram_we_sdp.fasm sha256:31d029e379b9c564fa8bca5e99412076a465c2881c3233a5770b5326f53e0d4e
@@ -49,11 +49,11 @@ recheck by z3cmd: exit 0; recheck: kept SRL cells PASS, synthesis PASS; run agai
   lvs timeout         1800 s
   check clocks        none in the design (run again: MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
   check slack margin  PASS (run again: least margin $techmap2799\mem.0.0.CLKARDCLK +7.831 ns, wants 0.500: slack-seed1.txt)
-  recheck             2026-10-27T18:36:13Z, tools/openxc7-build.sh --recheck at b82e2987e740 dirty=0, image surfcpu-openxc7:2026-10-15
+  recheck             2026-10-28T11:09:05Z, tools/openxc7-build.sh --recheck at 8a19554d74f8 dirty=0, image surfcpu-openxc7:2026-10-15
   checks run again    bitstream, round trip, block RAM, LVS, clocks, slack margin, timing and utilization
-  checks kept         SRL cells, synthesis: the build's of 2026-10-27T18:35:40Z
-  build manifest      build/flow/lvs-routes/libz3/manifest.build.txt sha256:caa14d9e16044e65a35c94badbd269d2051009e9977feb600eb1d35b8a5d1dfb (the build's own: check LVS PASS)
-  lvs inputs          made again from the netlist and the FASM; gold.v the same bytes as the build's; fabric.raw.v the same bytes as the build's; fabric.v the same bytes as the build's
+  checks kept         SRL cells, synthesis: the build's of 2026-10-28T11:08:34Z
+  build manifest      build/flow/lvs-routes/libz3/manifest.build.txt sha256:be74219fe1afdd2f28d75c65325208c639abfe44707c0dcf935a0c2ae6d0026b (the build's own: check LVS PASS)
+  lvs inputs          made again from the netlist, the FASM and the placement; gold.v the same bytes as the build's; fabric.raw.v the same bytes as the build's; fabric.v the same bytes as the build's
 ok    the recheck passes, LVS run again by z3cmd
 ok    the build's manifest is put aside as it was
 ok    the build's lines up to its bitstream are kept
@@ -62,7 +62,7 @@ recheck by libz3: exit 0; recheck: kept SRL cells PASS, synthesis PASS; run agai
 ok    a second recheck reads the build's own manifest and passes by libz3
 
 == 3. a bitstream changed after its build
-  openxc7-build.sh: --recheck: build/flow/lvs-routes/z3cmd/bram_we_sdp.bit (sha256 54f4effe78585ad6ecd9adcaf0c6b4898ea1ce9f79ba404405a25357f9e4590d) is not the one build/flow/lvs-routes/z3cmd/manifest.txt records (8a29c5f121db0767c4dd0a8283d954f4b1c004d1868d19193a8dd15b188284d0); refusing (nothing was changed)
+  openxc7-build.sh: --recheck: build/flow/lvs-routes/z3cmd/bram_we_sdp.bit (sha256 62985655c6cf2a62ac330ae8068effd13e3b07e48997170e4521f401b93db202) is not the one build/flow/lvs-routes/z3cmd/manifest.txt records (1a1c03f77767389aa64a40c758e9533786132619e5dbfbfb021e224ef0d8a26f); refusing (nothing was changed)
 ok    the recheck refuses it (exit 3), changing nothing
 
 == 4. a difference, by both routes
@@ -71,10 +71,10 @@ ok    the recheck refuses it (exit 3), changing nothing
   libz3: lvs_equiv exit 1, read as FAIL (1 differ)
   libz3:   solver: libz3 4.13.3 (linked, incremental)
   libz3:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
-  libz3:   103 proved, 1 differ, 0 unknown   (0.00807s)
+  libz3:   103 proved, 1 differ, 0 unknown   (0.00825454s)
   z3cmd: lvs_equiv exit 1, read as FAIL (1 differ)
   z3cmd:   solver: python3 -I devenv/openxc7/z3cmd.py (SMT-LIB2, one process per question)
   z3cmd:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
-  z3cmd:   103 proved, 1 differ, 0 unknown   (1.8839s)
+  z3cmd:   103 proved, 1 differ, 0 unknown   (1.82038s)
 ok    libz3 finds WEBWE[3] differing: FAIL (1 differ)
 ok    z3cmd finds it too: FAIL (1 differ)
