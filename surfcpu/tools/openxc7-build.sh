@@ -373,20 +373,27 @@ if [ "$recheck" = 1 ]; then
   if [ "$dry" = 0 ]; then
     rm -f "$out/manifest.txt.new" "$out/recheck-refused.txt"
     if [ "$first" = 1 ]; then
-      # the build's own logs, kept once (whole or not at all), before any step writes its log again
-      if [ ! -d "$ev" ]; then
-        rm -rf "${out:?}/build-evidence.tmp"
-        mkdir -p "$out/build-evidence.tmp/lvs"
+      # the build's own logs, kept once (whole or not at all), before any step writes its log again; a
+      # copy that fails (a disk full) is refused with nothing changed
+      keep_evidence() {
+        rm -rf "${out:?}/build-evidence.tmp" && mkdir -p "$out/build-evidence.tmp/lvs" || return 1
         for f in times.txt report.out timing.txt utilization.txt "slack-seed$r_seed.txt" "slack-seed$r_seed.err" \
                  check-bitstream.txt check-roundtrip.txt check-bram.txt check-lvs.txt check-clocks.txt check-gclk.txt \
                  bit2fasm.log bram-extract.log; do
-          [ ! -f "$out/$f" ] || cp -p "$out/$f" "$out/build-evidence.tmp/$f"
+          [ ! -f "$out/$f" ] || cp -p "$out/$f" "$out/build-evidence.tmp/$f" || return 1
         done
         for f in "$out"/lvs/*; do
-          case "${f##*/}" in gold.v|fabric.raw.v|fabric.v) ;; *) [ ! -f "$f" ] || cp -p "$f" "$out/build-evidence.tmp/lvs/" ;; esac
+          case "${f##*/}" in
+            gold.v|fabric.raw.v|fabric.v) ;;
+            *) [ ! -f "$f" ] || cp -p "$f" "$out/build-evidence.tmp/lvs/" || return 1 ;;
+          esac
         done
-        printf '%s\n' "$lvs_sums" | grep . > "$out/build-evidence.tmp/lvs-inputs.sha256" || true
+        if [ -n "$lvs_sums" ]; then printf '%s\n' "$lvs_sums"; fi > "$out/build-evidence.tmp/lvs-inputs.sha256" || return 1
         mv "$out/build-evidence.tmp" "$ev"
+      }
+      if [ ! -d "$ev" ] && ! keep_evidence; then
+        rm -rf "${out:?}/build-evidence.tmp"
+        die_recheck "the build's own logs could not be kept in $ev (a disk full?)"
       fi
       cp -p "$out/manifest.txt" "$out/manifest.build.txt.tmp"
       mv "$out/manifest.build.txt.tmp" "$out/manifest.build.txt"

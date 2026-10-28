@@ -16,7 +16,7 @@
 #      required), a format 1 build without the LVS inputs that tie its netlist and placement, a kept
 #      check that failed, a file missing, a format it does not know, a recheck's manifest alone,
 #      the image's tools not the build's, a later build over an earlier recheck's files, its manifest
-#      missing beside a kept manifest.build.txt
+#      missing beside a kept manifest.build.txt, the build's logs that cannot be kept (a full disk)
 #   3. a format 1 build whose netlist, FASM or placement is not the one it proved: the LVS inputs
 #      made again are not its bytes, refused (exit 4) before the proof, its manifest as it was, its
 #      message in recheck-refused.txt; a step that ends 4 leaves no such message
@@ -130,7 +130,16 @@ printf '  proved  r1\n  proved  r2\n\n2 proved, 0 differ, 0 unknown   (0.1s)\n'
 EOF
 standin cp <<'EOF'
 for a in "$@"; do last=$a; done
-case "$last" in */build-evidence.tmp/*) case " $* " in *"/check-lvs.txt "*) stop_here keep-evidence ;; esac ;; esac
+case "$last" in
+  */build-evidence.tmp/*)
+    case " $* " in
+      *"/check-lvs.txt "*)
+        # FAULT: a full disk for this copy, or for the SHA-256 file after it (a directory in its place)
+        [ "${FAULT:-}" != evidence-copy ] || { echo "cp: $last: No space left on device" >&2; exit 1; }
+        [ "${FAULT:-}" != evidence-sha ] || /bin/mkdir -p "${last%/*}/lvs-inputs.sha256"
+        stop_here keep-evidence ;;
+    esac ;;
+esac
 exec /bin/cp "$@"
 EOF
 standin mv <<'EOF'
@@ -428,6 +437,12 @@ for fmt in 2 1; do
   refused "a format $fmt build whose manifest.txt is missing beside its manifest.build.txt (an older recheck stopped)" \
     "manifest.txt is missing beside $b/out/manifest.build.txt, so the bitstream has no manifest: put the build's back first (cp -p "
 done
+mk_build 1; FAULT=evidence-copy; export FAULT
+refused "a build whose logs cannot be kept (a full disk for a copy)" "the build's own logs could not be kept in $b/out/build-evidence"
+FAULT=evidence-sha
+mk_build 1
+refused "a build whose LVS inputs' SHA-256 cannot be written (a full disk)" "the build's own logs could not be kept in $b/out/build-evidence"
+unset FAULT
 
 # ---------------------------------------------------------------- 3. refused after it begins: the LVS inputs made again
 for f in t.json placement.json t.fasm; do

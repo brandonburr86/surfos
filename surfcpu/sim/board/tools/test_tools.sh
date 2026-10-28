@@ -549,6 +549,22 @@ check "recheck: ... and this script's own manifest missing beside its manifest.b
     eval "test $rc -eq 1 && grep -q 'surfcpu_arty_a7_bramdiag/manifest.txt is missing beside its manifest.build.txt' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/manifest.txt'"
 /bin/mv "$t/manifest.aside" "$d/manifest.txt"
 rm "$d/manifest.build.txt"
+# this script keeps its own manifest's copy whole or not at all: killed while it writes it, the copy is
+# not taken for the build's, and the next recheck passes (a cp that writes half of it, then kills it)
+mkdir -p "$t/cpkill"
+cat > "$t/cpkill/cp" <<'EOF'
+#!/bin/sh
+for a in "$@"; do last=$a; done
+if [ "$last" = "$CPKILL_DEST" ]; then
+    head -n 3 "$1" > "$last"; echo killed > "$CPKILL_MARK"; kill -KILL "$PPID"; exit 1
+fi
+exec /bin/cp "$@"
+EOF
+chmod +x "$t/cpkill/cp"
+rm -f "$t/cpkill.mark"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 PATH="$t/cpkill:$PATH" CPKILL_DEST="$d/manifest.build.txt.tmp" CPKILL_MARK="$t/cpkill.mark"
+check "recheck: killed while it copies its own manifest aside: the copy is not the build's manifest.build.txt, its manifest as it was" \
+    eval "test -s '$t/cpkill.mark' && ! test -e '$d/manifest.build.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && ! test -e '$dbit'"
 recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
 check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
     test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"

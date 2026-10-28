@@ -253,7 +253,8 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     mkdir -p "$base"
     if [ "$dry" = 0 ]; then                             # a new build replaces the last one's results
         rm -rf "${base:?}/openxc7" "${base:?}/rom" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest" \
-            "${base:?}/manifest.build.txt" "${base:?}/manifest-head.recheck.txt" "${base:?}/recheck.txt"
+            "${base:?}/manifest.build.txt" "${base:?}/manifest.build.txt.tmp" "${base:?}/manifest-head.recheck.txt" \
+            "${base:?}/recheck.txt"
     fi
     # The constraints nextpnr applies (pins, the oscillator's clock), and a list of the rest.
     ( cd "$root" && awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$notgiven" $xdcs ) > "$xdc_nx" ||
@@ -605,8 +606,12 @@ openxc7_recheck() {   # --recheck (the top of this file): check the build, reche
         fi
         die "--recheck: tools/openxc7-build.sh stopped (exit $st) before it wrote its manifest: $kept"
     fi
-    # the build's own manifest is kept beside the new one, and the new one starts from its head
-    [ -f "$base/manifest.build.txt" ] || cp "$manifest" "$base/manifest.build.txt"
+    # the build's own manifest is kept beside the new one (whole or not at all), and the new one starts
+    # from its head
+    if [ ! -f "$base/manifest.build.txt" ]; then
+        cp "$manifest" "$base/manifest.build.txt.tmp"
+        mv "$base/manifest.build.txt.tmp" "$base/manifest.build.txt"
+    fi
     brec=$base/manifest.build.txt
     finish_head=$base/manifest-head.recheck.txt
     { sed -n 1p "$head"; echo "manifest_format = 2"; sed -n '2,$p' "$head" | grep -v '^manifest_format = ' || true; } > "$finish_head"
