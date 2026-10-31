@@ -89,6 +89,13 @@ void init_drivers() {
     init_wlansim();
 }
 
+int driver_status(const char *name) {
+    u_int i;
+    for(i = 0; i < NDRIVERS; i++)
+        if(!strcmp(drivers[i].name, name)) return drivers[i].status;
+    return -1;
+}
+
 void print_drivers() {
     char buf[160];
     u_int i;

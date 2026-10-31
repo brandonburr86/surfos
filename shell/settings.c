@@ -12,7 +12,8 @@ File: settings.c    Date: 10/17/26 (the network manager)
                                 start, and under settings=off (the menu's entry without the
                                 settings) nothing changes before the next start
 
-The keys and their values are net/netcfg.c's: telnetd, telnetd.port, wifi, ethernet, hostname.
+The keys and their values are net/netcfg.c's: telnetd, telnetd.port, wifi, ethernet, hostname, and since
+10/25/26 history (track A, A10: surfsh's history in surfos-config/history, fs/devfs.c's /dev/config/history).
 The file is changed one line at a time, so what the owner wrote there on another computer stays.
 
 A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in statics, asks nothing.
@@ -41,6 +42,11 @@ static const char *when(int k, const struct netcfg_settings *s) {
                                                "turns the card off)";
     case NETCFG_ETHERNET:     return s->ethernet_dhcp ? "now: an Ethernet link that comes up gets an address" :
                                                         "now: dhcp asks for an address by hand";
+    case NETCFG_HISTORY:      return s->history ? "from now on surfsh saves its history there (plain text: a line that "
+                                                  "starts with a space is never kept), and a surfsh started later "
+                                                  "recalls it" :
+                                                  "from now on surfsh saves no history (what is saved stays in "
+                                                  "surfos-config/history until it is deleted)";
     default:                  return "in the next DHCP request";
     }
 }

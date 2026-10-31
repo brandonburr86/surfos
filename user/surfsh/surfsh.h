@@ -21,7 +21,7 @@ ring-3 program in /initrd/bin; init starts it with -l on every console.
     run.c       one command: surfsh's own, then programs, then the kernel's (kcmd; 10/25/26)
     jobs.c      the jobs in the background: started, collected, reported
     builtins.c  cd, pwd, echo, exit, help, history, set, export, readonly, unset, shift, type
-    script.c    10/25/26: : true false break continue return local eval . source read kernel
+    script.c    10/25/26: : true false break continue return local eval . source read kernel time
     test.c      test and [;  printf.c  printf
 
 10/24/26: a line is parsed into a tree (parse.c) and run (exec.c). A stage of a pipeline
@@ -46,11 +46,15 @@ Anything but 0 makes the prompt's wave ≋!, and $? on the next command's line i
 #include <surfos/kcmd.h>
 
 #define SURFSH_CONF     "/initrd/etc/surfsh.conf"
+#define SURFSHRC        "/dev/config/surfshrc"      /* 10/25/26 (track A, A10): surfos-config/ on the stick (fs/devfs.c) */
+#define HISTORY_FILE    "/dev/config/history"       /* there only while the history setting is on */
+#define HIST_FILE_MAX   262144      /* the most the kernel keeps of it (NETCFG_HISTORY_MAX) */
+#define HIST_SAVE_EVERY 25          /* lines typed between saves */
 #define SURFSH_PATH     "/initrd/bin/surfsh"    /* a new surfsh: subshells, jobs of surfsh's own */
 #define PROGRAM_DIR     "/initrd/bin"
 
 #define LINE_LIMIT      1023        /* bytes of one typed line; the editor refuses a longer one */
-#define HIST_MAX        128         /* lines the history keeps */
+#define HIST_MAX        1000        /* lines the history keeps (10/25/26: 128 before) */
 #define MAX_WORDS       128         /* words of one command, its name included (SPAWN_MAX_ARGS) */
 #define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
 #define TEXT_LIMIT      (1024 * 1024)   /* bytes of a script, or of what a new surfsh is given */
@@ -132,6 +136,8 @@ struct source {
     int lines;                      /* lines read so far */
     int fd;                         /* a descriptor's lines: the descriptor */
     const char *text;               /* text's lines: what is left of the text */
+    int rc;                         /* 10/25/26 (the review, U5): the startup file (main.c), which an exit, a return or a
+                                       Ctrl+C ends (2 after the Ctrl+C) */
 };
 
 int run_source(struct source *s);   /* every command in it, each when it is complete: the last status */
@@ -147,6 +153,15 @@ void edit_fresh_row(void);          /* the cursor at the start of a fresh row, a
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 void history_state(struct sbuf *out);   /* the history as text a new surfsh runs (history -s lines) */
+int history_count(void);            /* 10/25/26 (A10): lines ever added */
+const char *history_line(int i);    /* line i of those (from 0), NULL when it is no longer kept */
+int history_save(int say);          /* main.c: the history on the stick (history -w): 0, -1 (said when say) */
+/* 10/25/26: !! !n !-n !str !$ in a typed line: 1 expanded into out, 0 none, -1 a reference no line
+   answers (in out), -2 longer than size - 1 bytes; out may be in */
+int history_expand(const char *in, char *out, int size);
+/* 10/25/26 (the review, U6): the same, with the quote that the command's lines before left open (*quote, 0 for a
+   command's first line), and this line's in it after */
+int history_expand_in(const char *in, char *out, int size, int *quote);
 
 /**** complete.c: Tab ****/
 
@@ -435,6 +450,7 @@ int b_eval(int argc, char **argv);
 int b_dot(int argc, char **argv);
 int b_read(int argc, char **argv);
 int b_kernel(int argc, char **argv);
+int b_time(int argc, char **argv);                 /* 10/25/26 */
 int b_test(int argc, char **argv);
 int test_eval(int n, char **v);                 /* test's arguments: 0 true, 1 false, 2 said */
 int b_printf(int argc, char **argv);

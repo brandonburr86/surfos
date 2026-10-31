@@ -15,6 +15,11 @@ cells fit, but the grid grows to fill the screen (1920x1080: 120x33 at scale 2),
 to FB_MAX_COLS x FB_MAX_ROWS; the pixels left over are split evenly as a margin.
 Until the kernel heap works the screen shows the top left 80x25 of that grid (from
 the console's static buffer); framebuffer_grow() then takes the whole of it.
+
+10/25/26 (track A, A7): fonts. The cells are drawn in a struct fb_font: Spleen 8x16 as before,
+or 12x24 or 16x32 (driver/fbfont.c chooses: 12x24 on the laptop's 1920x1080, font= on the
+kernel command line), at the largest whole scale at which 80x25 of its cells fit: 12x24 at its
+own size on 1920x1080, 160x45 cells. The desktop keeps drawing with font8x16.
 */
 
 #ifndef _SYS_FRAMEBUFFER_H
@@ -33,6 +38,18 @@ the console's static buffer); framebuffer_grow() then takes the whole of it.
 
 extern const u8 font8x16[256][FONT_HEIGHT];
 
+/* 10/25/26 (track A, A7): a console font: the 256 code page 437 glyphs of a width x height cell, one row
+   each, the most significant bit leftmost, in rows8 (width 8 or less) or rows16 (up to 16); tools/bdf2c.py
+   makes the tables (driver/font*.c) from BDF fonts. An interface between tracks (the desktop's sharp text
+   uses it later): fields are added, not changed. */
+struct fb_font {
+    const char *name;           /* "8x16", "12x24", "16x32": what font= on the kernel command line names */
+    u32 width, height;          /* pixels of a cell */
+    const u8 *rows8;            /* [256][height] for a width of 8 or less, else NULL */
+    const u16 *rows16;          /* [256][height] for a width of 9 to 16, else NULL */
+};
+extern const struct fb_font fb_font_8x16, fb_font_12x24, fb_font_16x32;
+
 /* a mode the renderer can draw into */
 struct fb_mode {
     u64 addr;                   /* physical (kept 64-bit: it may be above 4 GB) */
@@ -47,17 +64,28 @@ struct fb_surface {
     struct fb_mode mode;
     u32 bytespp;
     u32 palette[16];            /* the VGA colours in this pixel format */
-    u32 scale;                  /* a cell is 8*scale x 16*scale pixels (80x25 of them fit) */
+    u32 scale;                  /* a cell is font->width*scale x font->height*scale pixels (80x25 of them fit) */
     u32 cols, rows;             /* the text grid: as many cells as fit, at most FB_MAX_COLS x FB_MAX_ROWS */
     u32 ox, oy;                 /* top-left pixel of the text area: the margin left over, split evenly */
+    const struct fb_font *font; /* 10/25/26 (A7): the cells' font (fb_setup(): 8x16) */
 };
 
 /* fbcore.c: NULL when the mode is drawable, otherwise why not; *bytes = pitch * height */
 const char *fb_check_mode(const struct fb_mode *m, u64 *bytes);
 void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m);   /* m must have passed fb_check_mode */
+/* 10/25/26 (A7): the same in another font (fb_setup() is 8x16); 80x25 of its cells must fit (fb_font_choose()) */
+void fb_setup_font(struct fb_surface *s, u8 *base, const struct fb_mode *m, const struct fb_font *font);
+/* fbfont.c (10/25/26, A7): the font of a name (NULL: none); the console's font for mode m, word font='s value
+   (NULL: none), laptop profile=laptop; *why, when not NULL, says why the font asked for was not taken (8x16 then) */
+const struct fb_font *fb_font_named(const char *name);
+#define FB_FONT_KEY "font="     /* 10/25/26: the kernel command line's word for it, as bootinfo_arg() takes a key */
+const struct fb_font *fb_font_choose(const struct fb_mode *m, const char *word, bool laptop, const char **why);
 u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b);
 void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel);  /* clipped to the surface */
 void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor); /* ignored outside the grid */
+/* 10/25/26: the cursor's rows of a cell alone (its bottom eighth: two glyph rows of 8x16, A7: three of 12x24, four of
+   16x32): the underline, or the glyph's own rows again; the rest of the cell is left as drawn */
+void fb_draw_cursor(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor);
 
 /* 10/10/26: software 2D. Colours are 0x00RRGGBB, coordinates are signed;
    all drawing clips to the visible pixels and leaves pitch padding alone.
@@ -83,6 +111,7 @@ bool framebuffer_graphics_owned(void);
 int framebuffer_graphics_draw(void (*draw)(const struct fb_surface *, void *), void *arg);
 void framebuffer_graphics_end(void);
 void framebuffer_console_switched(void); /* console.c, after changing conActive */
+bool framebuffer_graphics_on(void);      /* 10/25/26 (A6): a session holds the screen of conActive (its keys are its own) */
 
 /* framebuffer.c: the console's screen */
 int framebuffer_init(void);     /* 0 when the boot loader's framebuffer is mapped and cleared */
@@ -92,6 +121,21 @@ int framebuffer_grow(const u8 *cells);    /* show that whole grid from this cols
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color);
 void framebuffer_present(void); /* redraw every cell that differs from the buffer */
 void framebuffer_set_cursor(u32 col, u32 row);
+/* 10/25/26 (track A, A3): a present that may wait up to 20 ms, batching a burst of output into one (scrolling,
+   erasing, a console switch); the immediate one stays for panics and graphics. framebuffer_flush(): a pending
+   present now (before a reader waits). framebuffer_start(): the thread that does them, once there are tasks. */
+void framebuffer_present_lazy(void);
+void framebuffer_flush(void);
+void framebuffer_start(void);
+void framebuffer_present_soon(void);    /* 10/25/26 (A6): by the thread at once: a whole new screen from an interrupt */
+struct fb_counts {
+    u32 presents;               /* passes over the whole grid */
+    u32 glyphs;                 /* cells drawn whole */
+    u32 cursors;                /* cursor moves drawn as two rows */
+    u32 saved;                  /* presents asked for while one was pending: folded into it */
+    u32 slowest_ms;             /* the longest present */
+};
+void framebuffer_counts(struct fb_counts *out);
 bool framebuffer_active(void);
 const char *framebuffer_describe(char *buf, size_t size);  /* the mode, or why there is none */
 void framebuffer_panic(void);   /* panic/wipeout: take the screen back from whoever was drawing */

@@ -21,7 +21,11 @@ gfxtest 15
 ```
 
 `gfxinfo` reports the actual boot framebuffer's resolution, depth, text scale and
-memory caching. `gfxtest` displays eight color bars, diagonal lines and a small
+memory caching. Since 10/25/26 it also says what the text console's screen has cost:
+how many presents (passes over the whole grid) there were and the slowest one, how many
+more were asked for while one was pending and folded into it, how many cells were drawn
+whole and how many cursor moves were drawn as their two underline rows alone
+(ARCHITECTURE.md section 7). `gfxtest` displays eight color bars, diagonal lines and a small
 RGB image for five seconds by default. The optional duration is 1–60 seconds.
 Ctrl+C ends the test early. Switching to another console with F1–F4 cancels it;
 returning to the original console shows its shell. Background text output is
@@ -62,6 +66,14 @@ take at most the screen width or height in iterations.
 | `fb_rect_rgb(surface, x, y, width, height, rgb)` | Fill a clipped rectangle; zero dimensions do nothing |
 | `fb_line_rgb(surface, x0, y0, x1, y1, rgb)` | Draw an inclusive line in either direction |
 | `fb_blit_rgb(surface, x, y, bitmap)` | Copy a clipped RGB image; return -1 for an invalid source |
+
+Text: `fb_draw_glyph(surface, col, row, ch, attr, cursor)` draws a console cell in the
+surface's font. Since 10/25/26 (track A, A7) that is `surface->font`, a `struct fb_font`
+(`include/sys/framebuffer.h`: name, cell width and height, the 256 code page 437 glyphs'
+rows in `rows8` or `rows16`): the session's surface carries the text console's font,
+Spleen 12x24 on the laptop's 1920x1080 (160x45 cells) or 8x16. `fb_font_8x16`,
+`fb_font_12x24` and `fb_font_16x32` are there to draw in another. The desktop draws its
+own text with `font8x16` (`shell/guidraw.c`).
 
 `struct fb_bitmap` holds a pointer to 32-bit RGB pixels, width, height, stride
 **in pixels**, and the readable allocation size **in bytes**. Its source is

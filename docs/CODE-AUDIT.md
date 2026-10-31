@@ -27,7 +27,7 @@ on switch, debug task hooks removed, idle only when nothing is runnable), **I11*
 (calibrated delays), **C8** (RTC modes and century), **D2** in part (`dma_alloc`).
 Closed by milestone M3 (devices): **C1, C2, C4, C6, C9** (ttys with a line editor and
 history, console switching that sticks, full keyboard decoding, bounded `gets()`, four
-consoles), **T9** (the input queue is filled under `irq_save()` and read the same way),
+consoles; C9's scrollback since 10/25/26, track A), **T9** (the input queue is filled under `irq_save()` and read the same way),
 **T11** (no task creation or floppy hooks in the keyboard ISR), **D3** (full PCI
 enumeration, BAR sizing with decoding off, device matching), **D6** (driver table with
 status), **D4** in part (the 3c905B probes through `pci_find_device()`; the rest of the
@@ -273,7 +273,7 @@ Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with
 | C6 | `kernel/keyboard.c:206` | No E0-prefixed keys (arrows alias the keypad), caps lock does not affect letters, no num lock, no key-release events to consumers, LED writes poll the controller while interrupts can interleave |
 | C7 | `kernel/console.c:162` | `itoa` treats `%d` as unsigned (negative numbers print as large values) and `%u` as decimal `d` |
 | C8 | `include/time.h:16` | `time_t` is a struct here (collides with the C type name); `get_time()` never checks CMOS status B for BCD/24-hour mode |
-| C9 | `kernel/console.c:26` | Console count is fixed at 3 (`NUM_CONSOLES`); the 2004 TODO notes odd output with more. No scrollback |
+| C9 | `kernel/console.c:26` | Console count is fixed at 3 (`NUM_CONSOLES`); the 2004 TODO notes odd output with more. No scrollback (**closed** 10/25/26, track A, A6: F1-F4 on a framebuffer keep what scrolls off, Shift+PgUp shows it) |
 
 ## D. Drivers
 

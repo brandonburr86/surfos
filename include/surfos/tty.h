@@ -78,11 +78,19 @@ void tty_switch(int index);
    at a time, not echoed or edited, Ctrl-C is just 0x03, and special keys come as escape
    sequences: arrows ESC[A ESC[B ESC[C ESC[D, Home ESC[H, End ESC[F, PgUp ESC[5~,
    PgDn ESC[6~, Insert ESC[2~, Delete ESC[3~, Backspace 0x7f, Enter '\r', Tab '\t',
-   Esc 0x1b, Ctrl+letter 0x01-0x1a (F1-F4 still switch consoles). TTY_RAW 0: lines again;
+   Esc 0x1b, Ctrl+letter 0x01-0x1a (F1-F4 still switch consoles). 10/25/26 (A4): xterm's
+   modifiers, m = 1 + Shift + 2 Alt + 4 Ctrl: ESC[1;mA ... ESC[1;mF, ESC[n;m~; F5-F12 ESC[15~
+   ESC[17~ ... ESC[24~; Shift+Tab ESC[Z; Alt+key ESC then the key; Ctrl+Space 0, Ctrl+/ 0x1f. TTY_RAW 0: lines again;
    raw mode also ends when the task that set it exits. TTY_GETSIZE: (columns << 16) | rows.
    The console draws this ANSI subset (and the serial port passes it through): ESC[H,
    ESC[row;colH (or f), ESC[nA/B/C/D, ESC[J ESC[0J ESC[2J, ESC[K ESC[0K ESC[2K, ESC[m ESC[0m,
-   ESC[1m (bright), ESC[7m (inverse), ESC[30-37m, ESC[40-47m, ESC[?25l / ESC[?25h (cursor). */
+   ESC[1m (bright), ESC[7m (inverse), ESC[30-37m, ESC[40-47m, ESC[?25l / ESC[?25h (cursor).
+   10/25/26 (track A, A8): also ESC[nG (column n), ESC[nd (row n), ESC[nX (n blanks, the cursor stays), ESC[s and
+   ESC[u (the cursor saved and put back), ESC 7 and ESC 8 (the same with the colours), ESC[22m ESC[27m ESC[39m ESC[49m
+   (bright, inverse, the colours off), ESC[90-97m and ESC[100-107m (bright colours; a text mode background has no
+   bright one), ESC[38;...m and ESC[48;...m read and dropped (256 colours, RGB), and the alternate screen,
+   ESC[?1049h / ESC[?1049l (TTY_CAP_ALTSCREEN): the main screen and its cursor come back as they were, and also
+   when the task that asked for it ends. */
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
@@ -147,13 +155,14 @@ void tty_switch(int index);
 #define TTY_SKIP_MS 200
 #define TTY_CAP_UTF8  1
 #define TTY_CAP_COLOR 2
+#define TTY_CAP_ALTSCREEN 4                 /* 10/25/26 (A8): ESC[?1049h / l, the alternate screen */
 #define TTY_MORE    "--More-- (Space: next page, Enter: next line, q: skip the rest)"
 int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -errno */
 
 /* the kernel's side of raw mode: keys from the keyboard (special keys become their escape
    sequences), read(2) on /dev/console, and the end of the task that set it (task.c) */
 struct surf_task;
-void tty_key(struct tty *t, u_char c);
+void tty_key(struct tty *t, u_char c, u_int mods);  /* 10/25/26: mods KEY_SHIFT/ALT/CTRL (keyboard.h) */
 int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
 /* 10/25/26: Ctrl+Z (0x1A) in line mode stops the terminal's foreground job, and a task of another job
    that reads the terminal stops first (surfos/job.h), in tty_getc(), off the queue of readers, as one

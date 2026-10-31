@@ -63,6 +63,8 @@ USER_PROGS  += wdemo         # 10/25/26: a window through libgui (gui.h)
 USER_PROGS  += wcalc         # 10/25/26: the desktop's Calculator as a program
 USER_PROGS  += memhog        # 10/25/26 (robustness): a program that takes all the memory it can
 USER_PROGS  += toobig        # 10/25/26 (the review of B1): a program too big to load under QEMU (init retries it)
+USER_PROGS  += less          # 10/25/26 (track A, A9): a file or a pipeline's text a screenful at a time
+USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256sum links Mbed TLS (below)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -165,6 +167,10 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@echo "CC   $<"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+
+# 10/25/26 (track A, A3): the screen's drawing code at -O2 at every level, as Mbed TLS is (below): the laptop runs
+# -O0 builds, and these loops draw every pixel of every glyph of the console and the desktop. The last -O wins.
+$(BUILD)/driver/fbcore.o $(BUILD)/driver/framebuffer.o $(BUILD)/shell/guidraw.o $(BUILD)/shell/gui.o: CFLAGS += -O2
 
 $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
@@ -420,7 +426,10 @@ $(BUILD)/host/test_bootinfo: tests/host/test_bootinfo.c $(BUILD)/host/kernel/ker
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-$(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o \
+                                $(BUILD)/host/kernel/driver/fbfont.o $(BUILD)/host/kernel/driver/font12x24.o \
+                                $(BUILD)/host/kernel/driver/font16x32.o $(BUILD)/host/kernel/kernel/multiboot2.o \
+                                $(BUILD)/host/kernel/mm/memrange.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
@@ -449,7 +458,7 @@ $(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/p
 
 # the console's character set (10/6/26): code page 437, the UTF-8 decoder, the font in the same order
 $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/font8x16.o \
-                          $(HOSTLIB_OBJ)
+                          $(BUILD)/host/kernel/driver/font12x24.o $(BUILD)/host/kernel/driver/font16x32.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
@@ -463,9 +472,9 @@ $(BUILD)/host/pager/%.o: %.c tests/host/surf_names.h
 	@echo "HOSTCC $< (pager test)"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(PAGER_FLAGS) -c $< -o $@
 
-$(BUILD)/host/test_pager: tests/host/test_pager.c $(PAGER_OBJ) $(HOSTLIB_OBJ)
+$(BUILD)/host/test_pager: tests/host/test_pager.c tests/host/vt_cases.h $(PAGER_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $(filter %.c %.o,$^) -o $@
 
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
@@ -563,6 +572,19 @@ test-surfsh: $(BUILD)/host/test_surfsh
 	$(BUILD)/host/test_surfsh
 unittest: test-surfsh
 .PHONY: test-surfsh
+
+# 10/25/26 (track A, A5): surfsh's line editor and Tab, user/surfsh/editor.c and complete.c as they are (with parse.c
+# and util.c), keys given a read at a time on a terminal whose screen is read back (tests/host/editor_bridge.c)
+EDITOR_HOST_OBJ = $(addprefix $(BUILD)/host/surfsh/,editor.o complete.o parse.o util.o)
+$(BUILD)/host/sim/editor_bridge.o: tests/host/editor_sim.h user/surfsh/surfsh.h
+$(BUILD)/host/test_editor: tests/host/test_editor.c tests/host/editor_sim.h $(BUILD)/host/sim/editor_bridge.o \
+                           $(EDITOR_HOST_OBJ) $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_editor.c $(filter %.o,$^) -o $@
+test-editor: $(BUILD)/host/test_editor
+	$(BUILD)/host/test_editor
+unittest: test-editor
+.PHONY: test-editor
 
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
@@ -911,6 +933,15 @@ $(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+
+# 10/25/26 (track A, A9): sha256sum sees Mbed TLS's headers and links its SHA-256 and libgcc before libsurf (as fetch)
+$(BUILD)/user/obj/sha256sum.o: USER_CFLAGS += $(MBEDTLS_CONF)
+$(BUILD)/user/obj/sha256sum.o: $(MBEDTLS_STAMP)
+$(BUILD)/user/bin/sha256sum: $(BUILD)/user/obj/sha256sum.o $(MBEDTLS_LIB) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(MBEDTLS_LIB) $(UT_LIBGCC) \
+		$(USER_LIB)
 
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also

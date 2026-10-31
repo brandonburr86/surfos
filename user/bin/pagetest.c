@@ -21,9 +21,14 @@ pagetest utf8   one line of UTF-8 samples: SurfOS's symbols, accented letters, s
                 box drawing, and the euro sign, which code page 437 lacks and the
                 console draws as '?'. The tests read the line back from the screen.
 pagetest caps   what TTY_CAPS says: UTF-8 and colour, or colour alone when the kernel
-                command line has the word `ascii`.
+                command line has the word `ascii`; 10/25/26: and the alternate screen.
 pagetest size   what TTY_GETSIZE says: "TTY_GETSIZE 80x25" (10/6/26: a pseudo-terminal
                 answers the size PTY_SETSIZE gave it; ptytest size).
+pagetest alt    10/25/26 (track A, A8): the alternate screen (ESC[?1049h) with "PAGETEST
+                ALT-SCREEN" at its top left and a question, then ESC[?1049l and the line
+                typed as the answer ("PAGETEST MAIN SCREEN: ...") where the cursor was on the
+                main screen. Ctrl+C at the question ends the program on the alternate
+                screen: the console gives the main screen back by itself.
 */
 
 #include <stdio.h>
@@ -54,7 +59,8 @@ int main(int argc, char **argv) {
             perror("pagetest: TTY_CAPS");
             return 1;
         }
-        printf("TTY_CAPS %d:%s%s\n", caps, (caps & TTY_CAP_UTF8) ? " UTF-8" : "", (caps & TTY_CAP_COLOR) ? " colour" : "");
+        printf("TTY_CAPS %d:%s%s%s\n", caps, (caps & TTY_CAP_UTF8) ? " UTF-8" : "", (caps & TTY_CAP_COLOR) ? " colour" : "",
+               (caps & TTY_CAP_ALTSCREEN) ? " alternate-screen" : "");
         return 0;
     }
     if(argc == 2 && !strcmp(argv[1], "size")) {
@@ -64,6 +70,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         printf("TTY_GETSIZE %dx%d\n", (n >> 16) & 0xffff, n & 0xffff);
+        return 0;
+    }
+    if(argc == 2 && !strcmp(argv[1], "alt")) {
+        printf("\033[?1049h\033[HPAGETEST ALT-SCREEN\nalternate question: ");
+        fflush(stdout);
+        if(!fgets(answer, sizeof(answer), stdin)) answer[0] = 0;
+        answer[strcspn(answer, "\r\n")] = 0;
+        printf("\033[?1049lPAGETEST MAIN SCREEN: %s\n", answer);
         return 0;
     }
     if(argc == 3 && !strcmp(argv[1], "ask")) {
@@ -93,6 +107,6 @@ int main(int argc, char **argv) {
         printf("PAGETEST DONE\n");
         return 0;
     }
-    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | hold <ms> | utf8 | caps | size\n");
+    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | hold <ms> | utf8 | caps | size | alt\n");
     return 2;
 }

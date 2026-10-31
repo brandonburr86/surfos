@@ -26,12 +26,13 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
                   # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg),
                   # httpd's HTTP protocol (test_httpd), surfsh's parser and expansions (test_surfsh),
+                  # surfsh's line editor: keys, Ctrl+R, history expansion, Tab (test_editor),
                   # ftpd's FTP protocol (test_ftp), fetch's reading of HTTP responses (test_fetch),
                   # multicast DNS messages (test_mdns), the block cache and FAT over RAM disks that refuse
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
                   # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 21 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -81,7 +82,9 @@ mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ lar
 driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for lspci -v and wifiinfo), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console: 256 code page 437 glyphs made by tools/bdf2c.py from
-           fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences), cp437.c (the character set, the UTF-8 decoder)
+           fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences; 10/25/26 font12x24.c and font16x32.c
+           from Spleen 12x24 and 16x32, fbfont.c chooses: 12x24 on the laptop's 1920x1080, font= otherwise),
+           cp437.c (the character set, the UTF-8 decoder)
            The framebuffer also provides kernel-only software 2D drawing and revocable graphics sessions (docs/GRAPHICS.md).
            The `gui` desktop uses these sessions; `pointer.c`, `ps2mouse.c` and `usb/mouse.c` provide native mouse input (docs/GUI.md).
            usb/: xhci.c (USB 3 host controller, polled), usb.c (enumeration, the usb thread, lsusb),
@@ -104,11 +107,13 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            floating point, two programs' registers at once, printf's %f %e %g), wintest (the window calls; wintest tty
            names its terminal), wdemo and wcalc (windows through libgui), memhog (10/25/26: all the memory a program
            may have; stack, hold MS), toobig (10/25/26: too big to load under QEMU, for init's retry), env, the filters grep
-           sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
+           sort uniq tail tee tr seq (lineutil.h), less (10/25/26: a screenful at a time, on the alternate screen), find du xargs cut
+           sha256sum (10/25/26; sha256sum links Mbed TLS), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
-           Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c),
+           Ctrl+Z), util, builtins, script (the builtins of scripts), test, printf; host-tested by tests/host/test_surfsh.c,
+           the editor (Ctrl+R, !!, Alt+.) and complete by tests/host/test_editor.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
@@ -172,7 +177,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   kernel/netman.c mounts the volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman`
   (read-only to read) for the moment it reads or writes `surfos-config/`, holds that mount
   or the owner's (`vfs_hold_mount()`) meanwhile, and unmounts its own again; never another
-  device.
+  device. 10/25/26 (track A, A10, approved by the owner): the same way, and only these two
+  files besides the settings: surfsh's `surfos-config/surfshrc` (only read) and
+  `surfos-config/history` (read, and written only while the owner's `history` setting is on),
+  through `/dev/config` (fs/devfs.c, `netman_file_read()`, `netman_file_write()`).
 * Network connections and terminals (milestone M11): a TCP connection or listening socket
   is a descriptor (`include/surfos/sock.h`, `net/sock.c`); a pseudo-terminal
   (`include/surfos/pty.h`, `kernel/pty.c`) is a tty whose console is a byte stream that
@@ -246,7 +254,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * Fix things the way the audit describes them and cite the audit ID (for example
   "A6", "T1") in the commit message; update `docs/CODE-AUDIT.md` when an item is closed.
 * Console output goes through `kputch()` (so the serial mirror sees it); use
-  `kprintf()` in the kernel and `printf()` in task code.
+  `kprintf()` in the kernel and `printf()` in task code. 10/25/26: a kernel thread's `kprintf()`
+  line comes out whole (it waits up to 100 ms for another writer's half line, then prints holding the
+  console for the line: a task that writes there meanwhile waits for its end, 1 s at most): end a
+  kernel thread's message with its newline in the same call.
 * Memory (10/25/26, robustness B1): programs stop at the kernel's reserve, and the kernel heap promises its
   frames when it grows, so `kalloc()` returns NULL when memory is short, never a panic: every caller checks it.
   Frames have classes (`pmm_alloc_as()`, mm/pmm.h): `PMM_USER` for anything a program's memory takes, `PMM_KERNEL`
@@ -269,6 +280,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose; `crashstack`
   overflows its task's kernel stack and halts the machine (`crashstack near`: the trap frame check).
 * The screen dump works even when the serial console does not.
+* Scrollback (10/25/26): Shift+PgUp/PgDn/Home/End on F1-F4 on a framebuffer (kernel/console.c, keys caught in
+  keyboard.c); VGA text mode has none, so `make test` never sees it: `test_pager` and qemu-usb's fullhd check it.
 * `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
   `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.
 * Kernel APIs: `kthread_create()`/`task_exit()`/`task_wait()`/`sleep_ms()` (task.h),
@@ -297,9 +310,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   what the firmware handed over and which console, timer and keyboard path was chosen.
   `lspci -v` gives every PCI function's ids, subsystem, power state, MSI/MSI-X and PCI
   Express link, `lspci bb:dd.f` one with its 256 bytes, and `wifiinfo` the Wi-Fi card
-  (its driver: driver/wifi/, docs/WIFI-PLANNING.md).
+  (its driver: driver/wifi/, docs/WIFI-PLANNING.md). 10/25/26: `gfxinfo` counts the
+  console's presents (batched by the `fbflush` thread, at most one per 20 ms while output
+  pours in), and surfsh's `time cmd` says how long cmd took.
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
-  `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+  `clock=pmtmr`, `clock=hpet`, `usb=off`, `font=8x16|12x24|16x32` (10/25/26, the console's font),
+  `bootpanic` (10/25/26: a panic on purpose just before the timer starts, for the screen's test). `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * Programs' windows (10/25/26): `wintest show`, `wdemo [hang | crash]` and `wcalc` in the desktop's Terminal, or
   from Apps > Run program... (`dmesg` then has `gui: started <name> (pid N)`); `gfxinfo` gives the desktop's
   frame times. `GUIAPPS_ONLY=gui_apps_win python3 tools/qemu-usb.py --image ... --test --scenario guiapps` runs
@@ -331,8 +347,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   says how many.
 * The shell: `shell=kernel` on the kernel command line gives the ring-0 shell on every
   console; a recovery console (`≋?>`) has a line from init saying why surfsh could not run.
-  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps` exercises
-  the pager and the character set, `kcmdtest` the kernel-command calls. The harnesses
+  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps|alt` exercises
+  the pager, the character set and the alternate screen, `kcmdtest` the kernel-command calls. The harnesses
   answer `--More--` with Space (`auto_more`), and `PROMPT` is a compiled pattern that
   matches every prompt state; a smoke step `@boot <words>` boots QEMU again with other
   kernel words (or `no-initrd`). 10/25/26: surfsh runs a program on PATH before a kernel
@@ -407,7 +423,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
-  `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides.
+  `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides. 10/25/26:
+  raw mode sends keys with Shift, Alt and Ctrl as xterm does (tty.h); the harnesses type them
+  as `<ctrl-left>`, `<shift-tab>`, `<alt-x>`, `<ctrl-spc>`, `<alt-ret>`.
 
 ## Undertow validation
 

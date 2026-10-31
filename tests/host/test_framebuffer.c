@@ -3,8 +3,9 @@
    scaling, the text grid and its margins (10/5/26: the grid fills the screen), the
    cursor, and that nothing is written outside the visible lines. 10/6/26: a cell is a
    code page 437 character (driver/cp437.c), so the whole font is drawn, not only ASCII.
-   The "framebuffer" is a buffer in memory with guard bytes around it. Run by
-   `make unittest`. */
+   10/25/26 (track A, A7): Spleen 12x24 and 16x32, the grids they make, their cursor, and
+   which font driver/fbfont.c chooses. The "framebuffer" is a buffer in memory with guard
+   bytes around it. Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -252,6 +253,82 @@ static void test_scaling(void) {
           "640x2000: capped at 100 rows, centred");
 }
 
+/* 10/25/26 (track A, A7): a fresh surface in another font */
+static void surface_font(struct fb_surface *s, const struct fb_mode *m, const struct fb_font *f) {
+    memset(mem, GUARD_BYTE, sizeof(mem));
+    fb_setup_font(s, mem + GUARD, m, f);
+}
+
+static void test_fonts(void) {
+    struct fb_surface s;
+    struct fb_mode m;
+    const char *why;
+    u32 ok, x, gx, gy;
+
+    m = mode(1920, 1080, 7680, 32, 1);
+    surface_font(&s, &m, &fb_font_12x24);
+    check(s.font == &fb_font_12x24 && s.scale == 1 && s.cols == 160 && s.rows == 45 && s.ox == 0 && s.oy == 0,
+          "1920x1080 in 12x24: 160x45 cells at the font's own size, no margin");
+    fb_draw_glyph(&s, 0, 0, 'A', 0x0F, 0);
+    for(ok = 1, gy = 0; gy < 24; gy++)
+        for(gx = 0; gx < 12; gx++)
+            if((pixel(&s, gx, gy) == s.palette[15]) != !!(fb_font_12x24.rows16['A' * 24 + gy] & (0x8000 >> gx))) ok = 0;
+    check(ok && pixel(&s, 12, 8) == 0xA5A5A5A5, "12x24: the glyph's pixels are its rows' top 12 bits, the next cell untouched");
+    fb_draw_glyph(&s, 159, 44, 'Z', 0x0F, 1);
+    check(pixel(&s, 159 * 12, 44 * 24 + 21) == s.palette[15] && pixel(&s, 1919, 1079) == s.palette[15] &&
+          pixel(&s, 159 * 12, 44 * 24 + 20) == s.palette[0] && guards_intact(&s),
+          "12x24: the last cell (159,44) inside the screen, the cursor its bottom three rows");
+    fb_draw_glyph(&s, 1, 0, 'A', 0x0F, 0);
+    fb_draw_cursor(&s, 1, 0, 'A', 0x0F, 1);
+    for(ok = 1, gy = 0; gy < 21; gy++)
+        for(gx = 0; gx < 12; gx++)
+            if((pixel(&s, 12 + gx, gy) == s.palette[15]) != !!(fb_font_12x24.rows16['A' * 24 + gy] & (0x8000 >> gx))) ok = 0;
+    check(ok && pixel(&s, 12, 21) == s.palette[15] && pixel(&s, 23, 23) == s.palette[15], "12x24: the cursor alone is its three rows");
+    surface_font(&s, &m, &fb_font_12x24);
+    fb_draw_glyph(&s, 160, 0, 'X', 0x0F, 0);
+    fb_draw_glyph(&s, 0, 45, 'X', 0x0F, 0);
+    for(ok = 1, x = 0; x < sizeof(mem); x++) if(mem[x] != GUARD_BYTE) ok = 0;
+    check(ok, "12x24: cells outside 160x45 draw nothing");
+
+    surface_font(&s, &m, &fb_font_16x32);
+    check(s.scale == 1 && s.cols == 120 && s.rows == 33 && s.ox == 0 && s.oy == 12,
+          "1920x1080 in 16x32: 120x33 cells, a 12-pixel margin above and below");
+    fb_draw_glyph(&s, 119, 32, 0xDB, 0x0F, 0);
+    check(pixel(&s, 1904, 12 + 32 * 32) == s.palette[15] && pixel(&s, 1919, 1067) == s.palette[15] &&
+          pixel(&s, 1919, 1068) == 0xA5A5A5A5 && guards_intact(&s), "16x32: a full block fills the last cell, 16 pixels wide");
+    m = mode(3840, 2160, 15360, 32, 1);
+    fb_setup_font(&s, mem, &m, &fb_font_12x24);
+    check(s.scale == 3 && s.cols == 106 && s.rows == 30, "3840x2160 in 12x24: scale 3, where 80x25 cells fit");
+
+    m = mode(1920, 1080, 7680, 32, 1);
+    check(fb_font_choose(&m, NULL, true, &why) == &fb_font_12x24 && !why, "the laptop's 1920x1080: 12x24 by default");
+    check(fb_font_choose(&m, NULL, false, &why) == &fb_font_8x16 && !why, "without profile=laptop: 8x16, as before");
+    check(fb_font_choose(&m, "16x32", true, &why) == &fb_font_16x32 && fb_font_choose(&m, "8x16", true, &why) == &fb_font_8x16
+          && !why, "font=16x32 and font=8x16 choose them");
+    check(fb_font_choose(&m, "huge", true, &why) == &fb_font_8x16 && why && strstr(why, "no such font"),
+          "font= with a name of no font: 8x16, and why");
+    m = mode(2560, 1440, 10240, 32, 1);
+    check(fb_font_choose(&m, NULL, true, &why) == &fb_font_12x24, "a bigger screen on the laptop: 12x24 too");
+    m = mode(1280, 800, 5120, 32, 1);
+    check(fb_font_choose(&m, NULL, true, &why) == &fb_font_8x16 && fb_font_choose(&m, "16x32", false, &why) == &fb_font_16x32,
+          "1280x800 on the laptop: 8x16 by default; 16x32 asked for fits exactly");
+    m = mode(1024, 768, 4096, 32, 1);
+    check(fb_font_choose(&m, "16x32", false, &why) == &fb_font_8x16 && why && strstr(why, "do not fit") &&
+          fb_font_choose(&m, "12x24", false, &why) == &fb_font_12x24, "1024x768: 16x32 does not fit (8x16, and why), 12x24 does");
+    check(fb_font_named("12x24") == &fb_font_12x24 && !fb_font_named("12") && !fb_font_named(NULL), "the fonts by name");
+    {   /* 10/25/26 (the review): font= as framebuffer_init() reads it, through bootinfo_arg() (it read "font" once) */
+        static struct boot_info bi;
+        char word[16];
+        m = mode(1920, 1080, 7680, 32, 1);
+        snprintf(bi.cmdline, sizeof(bi.cmdline), "profile=laptop font=16x32 bootvol=1234-ABCD");
+        check(bootinfo_arg(&bi, FB_FONT_KEY, word, sizeof(word)) && !strcmp(word, "16x32") &&
+              fb_font_choose(&m, word, true, &why) == &fb_font_16x32 && !why,
+              "profile=laptop font=16x32 on the command line: bootinfo_arg(FB_FONT_KEY) gives 16x32, which is taken");
+        snprintf(bi.cmdline, sizeof(bi.cmdline), "profile=laptop fontsize=9");
+        check(!bootinfo_arg(&bi, FB_FONT_KEY, word, sizeof(word)), "a word that only begins with font is no font=");
+    }
+}
+
 /* These assertions catch out-of-bounds writes, wrong RGB conversion, clipped
    source offsets, and line algorithms that overflow or walk billions of pixels. */
 static void test_graphics(void) {
@@ -334,6 +411,43 @@ static void test_graphics(void) {
     }
 }
 
+/* the pixels of one cell, row by row */
+static void cell_pixels(const struct fb_surface *s, u32 col, u32 row, u32 *out) {
+    u32 x0 = s->ox + col * FONT_WIDTH * s->scale, y0 = s->oy + row * FONT_HEIGHT * s->scale, x, y, n = 0;
+    for(y = 0; y < FONT_HEIGHT * s->scale; y++)
+        for(x = 0; x < FONT_WIDTH * s->scale; x++) out[n++] = pixel(s, x0 + x, y0 + y);
+}
+
+/* 10/25/26 (track A, A3): the cursor drawn alone (fb_draw_cursor()), as the console draws a move of it: given
+   to a cell it is that cell drawn with the cursor, taken away it is the cell without; above the bottom two
+   glyph rows nothing is written (at scale 2: 28 of the cell's 32 lines) */
+static void test_cursor_rows(void) {
+    static u32 with[2048], without[2048], got[2048];
+    struct fb_surface s;
+    struct fb_mode m = mode(1920, 1080, 1920 * 4, 32, 0);
+    u32 n, x0, y0, x, y, ok;
+    surface(&s, &m);
+    n = FONT_WIDTH * s.scale * FONT_HEIGHT * s.scale;
+    fb_draw_glyph(&s, 3, 2, 'g', 0x1E, 1);
+    cell_pixels(&s, 3, 2, with);
+    fb_draw_glyph(&s, 3, 2, 'g', 0x1E, 0);
+    cell_pixels(&s, 3, 2, without);
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 1);
+    cell_pixels(&s, 3, 2, got);
+    check(s.scale == 2 && !memcmp(got, with, n * sizeof(u32)), "fb_draw_cursor: the cursor given to a cell is that cell drawn with it");
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 0);
+    cell_pixels(&s, 3, 2, got);
+    check(!memcmp(got, without, n * sizeof(u32)), "fb_draw_cursor: the cursor taken away is the cell drawn without it");
+    x0 = s.ox + 3 * FONT_WIDTH * s.scale;
+    y0 = s.oy + 2 * FONT_HEIGHT * s.scale;
+    fb_fill(&s, x0, y0, FONT_WIDTH * s.scale, FONT_HEIGHT * s.scale, 0x123456);
+    fb_draw_cursor(&s, 3, 2, 'g', 0x1E, 1);
+    for(ok = 1, y = 0; y < FONT_HEIGHT * s.scale; y++)
+        for(x = 0; x < FONT_WIDTH * s.scale; x++)
+            if(pixel(&s, x0 + x, y0 + y) != (y < (FONT_HEIGHT - 2) * s.scale ? 0x123456 : s.palette[14])) ok = 0;
+    check(ok && guards_intact(&s), "fb_draw_cursor writes the bottom two glyph rows only, the underline in the foreground");
+}
+
 int main(void) {
     test_modes();
     test_colours();
@@ -341,6 +455,8 @@ int main(void) {
     test_cp437_cells();
     test_scaling();
     test_graphics();
+    test_cursor_rows();
+    test_fonts();
     printf("%s: %d checks, %d failures\n", failures ? "FRAMEBUFFER UNIT TESTS FAILED" : "FRAMEBUFFER UNIT TESTS PASSED",
            checks, failures);
     exit(failures ? 1 : 0);

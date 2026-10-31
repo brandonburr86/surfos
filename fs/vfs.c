@@ -691,6 +691,10 @@ int vfs_close(struct file *f) {
     sb = f->v->sb;
     if((f->flags & O_ACCMODE) != O_RDONLY) r = write_back(sb);   /* a written file reaches the disk when it is closed;
                                                                     10/24/26 (B10): and close says when it did not */
+    if(f->v->ops && f->v->ops->flush) {                          /* 10/25/26 (A10): a file kept in memory */
+        int fr = f->v->ops->flush(f->v);
+        if(!r) r = fr;
+    }
     vput(f->v);
     kfree(f);
     return r;
@@ -858,6 +862,7 @@ int vfs_fsync(struct file *f) {
     int r;
     if(!f) return -EBADF;
     sb = f->v->sb;
+    if(f->v->ops && f->v->ops->flush && (r = f->v->ops->flush(f->v)) != 0) return r;   /* 10/25/26 (A10) */
     if((r = write_back(sb)) != 0) return r;         /* 10/24/26 (B10): as close says it */
     if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;

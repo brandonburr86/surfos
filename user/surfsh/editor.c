@@ -24,11 +24,16 @@ is refused with Enter, so a cut-off command never runs; once something is delete
 the line on the screen is what runs again. Keys that arrive together
 (a paste) are all handled before the screen is written, so the editor keeps up with
 the console's input queue (256 bytes; a faster paste over the serial line loses
-bytes in the kernel). Keys typed after Enter are dropped, as the console drops what
-it holds when raw mode ends: there is no type-ahead. 10/6/26: when the editor's own
+bytes in the kernel). Keys that come with the Enter (the rest of a paste) are dropped,
+as the console drops what it holds when raw mode ends. 10/6/26: when the editor's own
 buffer still held keys after the Enter (the rest of a paste; an LF right after the CR
 of the Enter does not count), it asks the terminal to skip the rest of the paste until
 the input pauses (TTY_SKIP), so a pasted block runs its first line and nothing else.
+Keys typed while a command runs wait in the console's line-mode queue and are the next
+prompt's first keys (type-ahead, as in bash). 10/25/26 (the programs' review, U3): only
+the Wi-Fi password questions drop what was typed before them (shell_ask_secret(); wifi
+join and wifi save on their way out too), so a password typed ahead of a question that
+never came neither runs nor goes into the history.
 
 Long lines wrap. The console wraps the VT100 way: writing the last column leaves the
 cursor there until the next character comes. So the editor keeps the cursor out of
@@ -54,6 +59,17 @@ terminal this shell has (procinfo), once.
 10/24/26: a line that goes on with a command (more) has the continuation prompt, "… ≋> "
 (shell/prompt.c); there ^C drops the whole command, and so does ^D on an empty line, which
 does not leave the shell.
+
+10/25/26: words. Ctrl+Left and Ctrl+Right (Alt+Left, Alt+Right, and Alt+B, Alt+F as bash has
+them) move by words, letters and digits as bash counts them; Alt+D deletes to the end of the
+word after the cursor, Alt+Backspace to the start of the one before it (^W still takes
+everything back to a blank). Alt+. puts the last word of the line before at the cursor, and
+again at once the last word of the line before that in its place. A terminal's sequences keep
+their modifiers (xterm's ESC[1;5D, as the console sends them); ESC and another byte in the same
+read are Alt and that key, and an ESC alone is Esc. Ctrl+R searches the history as text is
+typed (search()), which keeps HIST_MAX lines (1,000). history_expand() does bash's history
+expansion in part (!! !n !-n !str !$) on a line main.c was given, before it is kept; a line
+that starts with a space is not kept (bash's ignorespace, main.c).
 */
 
 #include "surfsh.h"
@@ -63,8 +79,11 @@ does not leave the shell.
 #define BLANK(c) ((c) == ' ' || (c) == '\t')
 
 enum {
-    KEY_NONE = 0x100, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL, KEY_EOF
+    KEY_NONE = 0x100, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL, KEY_EOF,
+    KEY_ESC, KEY_WORD_LEFT, KEY_WORD_RIGHT
 };
+#define KEY_ALT  0x1000                 /* 10/25/26: with Alt (ESC and the key in one read, a sequence's modifier) */
+#define KEY_CTRL 0x2000                 /* with Ctrl: a sequence's modifier (ESC[1;5D) */
 
 /**** output: collected while keys are waiting, then one write ****/
 
@@ -178,6 +197,7 @@ static void make_prompt(void) {
     c.cwd = getcwd(cwd, sizeof(cwd)) ? cwd : NULL;
     c.last_status = last_status;
     c.remote = remote_session();
+    c.hostname = var_get("HOSTNAME");                  /* 10/25/26 (A10): a telnet session's prompt names the host */
     c.width = width;
     c.unicode = use_unicode();
     c.color = colour;
@@ -286,11 +306,12 @@ static int next_byte(void) {
 }
 
 /* The rest of ESC [ or ESC O: parameter and intermediate bytes (0x20-0x3F) up to the
-   final byte (0x40-0x7E). The first parameter is the key's number (ESC[3~, and ESC[3;5~
-   with Ctrl held: the key is what counts). A private sequence (ESC[?...) or one with
+   final byte (0x40-0x7E). The first parameter is the key's number (ESC[3~), the second its
+   modifiers, 1 + Shift + 2 Alt + 4 Ctrl as xterm sends them (ESC[1;5D, ESC[3;5~: with Ctrl;
+   10/25/26: Alt and Ctrl are kept, Shift is not). A private sequence (ESC[?...) or one with
    intermediate bytes is no key; another byte ends the sequence and is a key again. */
 static int sequence(void) {
-    int c, num = 0, first = 1, other = 0;
+    int c, num = 0, mods = 0, field = 0, other = 0, key = KEY_NONE;
     for(;;) {
         c = next_byte();
         if(c < 0) return KEY_EOF;
@@ -300,29 +321,33 @@ static int sequence(void) {
         }
         if(c >= 0x40) break;                        /* the final byte */
         if(c >= '0' && c <= '9') {
-            if(first && num < 1000) num = num * 10 + (c - '0');
+            if(field == 0 && num < 1000) num = num * 10 + (c - '0');
+            else if(field == 1 && mods < 1000) mods = mods * 10 + (c - '0');
         } else if(c == ';' || c == ':') {
-            first = 0;
+            field++;
         } else {
             other = 1;                              /* < = > ? or an intermediate byte */
         }
     }
     if(other) return KEY_NONE;
     switch(c) {
-    case 'A': return KEY_UP;
-    case 'B': return KEY_DOWN;
-    case 'C': return KEY_RIGHT;
-    case 'D': return KEY_LEFT;
-    case 'H': return KEY_HOME;
-    case 'F': return KEY_END;
+    case 'A': key = KEY_UP; break;
+    case 'B': key = KEY_DOWN; break;
+    case 'C': key = KEY_RIGHT; break;
+    case 'D': key = KEY_LEFT; break;
+    case 'H': key = KEY_HOME; break;
+    case 'F': key = KEY_END; break;
     case '~':
         switch(num) {
-        case 1: case 7: return KEY_HOME;
-        case 4: case 8: return KEY_END;
-        case 3: return KEY_DEL;
+        case 1: case 7: key = KEY_HOME; break;
+        case 4: case 8: key = KEY_END; break;
+        case 3: key = KEY_DEL; break;
         }
     }
-    return KEY_NONE;                            /* Insert, PgUp, PgDn, F keys: nothing here */
+    if(key == KEY_NONE) return KEY_NONE;        /* Insert, PgUp, PgDn, F keys: nothing here */
+    if(mods > 1 && ((mods - 1) & 2)) key |= KEY_ALT;
+    if(mods > 1 && ((mods - 1) & 4)) key |= KEY_CTRL;
+    return key;
 }
 
 static int get_key(void) {
@@ -337,12 +362,46 @@ static int get_key(void) {
     if(inpos == inlen) {                        /* nothing came with it: Esc, or a split sequence */
         lone_esc_at = uptime();
         if(!lone_esc_at) lone_esc_at = 1;
-        return KEY_NONE;
+        return KEY_ESC;
     }
     c = next_byte();
     if(c == '[' || c == 'O') return sequence();
-    inpos--;                                    /* ESC and another key: Esc (nothing), then that key */
-    return KEY_NONE;
+    if(c == 0x1b) {                             /* Esc twice: the first is Esc */
+        inpos--;
+        return KEY_ESC;
+    }
+    return c | KEY_ALT;                         /* 10/25/26: ESC and a key in the same read: Alt and the key */
+}
+
+/* 10/25/26: what a key with Alt or Ctrl does here: with Left or Right (and Alt+B, Alt+F) it moves
+   by a word; with another key of a sequence it is that key (Ctrl+Up is Up); Alt with a typed
+   key stays as it is (Alt+D, Alt+Backspace, Alt+.) */
+static int meaning(int key) {
+    int k = key & ~(KEY_ALT | KEY_CTRL);
+    if(k == key) return key;
+    if(k == KEY_LEFT || ((key & KEY_ALT) && (k == 'b' || k == 'B'))) return KEY_WORD_LEFT;
+    if(k == KEY_RIGHT || ((key & KEY_ALT) && (k == 'f' || k == 'F'))) return KEY_WORD_RIGHT;
+    return k >= KEY_NONE ? k : key;
+}
+
+/* 10/25/26: words as bash's Alt+B, Alt+F, Alt+D and Alt+Backspace see them: letters and digits
+   (and any character beyond ASCII); everything else parts them */
+static int is_word(char c) {
+    return isalnum((unsigned char)c) || (unsigned char)c >= 0x80;
+}
+
+/* the start of the word before p */
+static int word_left(int p) {
+    while(p > 0 && !is_word(line[p - 1])) p--;
+    while(p > 0 && is_word(line[p - 1])) p--;
+    return p;
+}
+
+/* the end of the word after p */
+static int word_right(int p) {
+    while(p < len && !is_word(line[p])) p++;
+    while(p < len && is_word(line[p])) p++;
+    return p;
 }
 
 /**** changing the line ****/
@@ -365,21 +424,27 @@ static void insert(const char *s, int n) {
     }
 }
 
-/* a character of more than one byte from a terminal: the lead byte and what follows it */
-static void insert_utf8(int lead) {
-    char ch[4];
+/* a character of more than one byte from a terminal: the lead byte and what follows it, in ch;
+   its bytes, 0 when it was broken */
+static int read_utf8(int lead, char *ch) {
     int need = lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2 : 1, n = 1;
     ch[0] = (char)lead;
     while(n <= need) {
         int c = next_byte();
-        if(c < 0) return;
+        if(c < 0) return 0;
         if(!is_cont(c)) {                       /* broken: dropped, and that byte is a key again */
             inpos--;
-            return;
+            return 0;
         }
         ch[n++] = (char)c;
     }
-    insert(ch, n);
+    return n;
+}
+
+static void insert_utf8(int lead) {
+    char ch[4];
+    int n = read_utf8(lead, ch);
+    if(n) insert(ch, n);
 }
 
 static void delete_range(int a, int b) {
@@ -428,6 +493,148 @@ int history_print(void) {
     return 0;
 }
 
+/* 10/25/26 (track A, A10): for main.c's history on the stick */
+int history_count(void) {
+    return hist_count;
+}
+
+const char *history_line(int i) {
+    return i >= hist_oldest() && i < hist_count ? hist[i % HIST_MAX] : NULL;
+}
+
+/**** 10/25/26: history expansion, and the last word of a line (!$, Alt+.) ****/
+
+static int is_meta(char c) {                    /* a character that ends a word without a blank */
+    return c && strchr(";&|<>()", c) != NULL;
+}
+
+/* The last word of a line as bash's history reads it: blanks part words, and so do ; & | < > ( ),
+   which make words of their own; quotes and a backslash keep what they hold in the word. Its
+   length, 0 for none; *start: where it begins */
+static int last_word(const char *s, int *start) {
+    int i = 0, n = (int)strlen(s), from = 0, wlen = 0;
+    while(i < n) {
+        int b = i;
+        if(BLANK(s[i])) {
+            i++;
+            continue;
+        }
+        if(is_meta(s[i])) {
+            while(i < n && is_meta(s[i])) i++;
+        } else {
+            while(i < n && !BLANK(s[i]) && !is_meta(s[i])) {
+                char q = s[i++];
+                if(q == '\\' && i < n) {
+                    i++;
+                } else if(q == '\'' || q == '"') {
+                    while(i < n && s[i] != q) i += (q == '"' && s[i] == '\\' && i + 1 < n) ? 2 : 1;
+                    if(i < n) i++;
+                }
+            }
+        }
+        from = b;
+        wlen = i - b;
+    }
+    *start = from;
+    return wlen;
+}
+
+/* The reference at in[i], a !: 0 when this ! stays itself; otherwise where the reference ends, with
+   what it stands for added to b, or *missing set when the history has no such line */
+static int reference(const char *in, int i, struct sbuf *b, int *missing) {
+    int k = i + 1, at, word = 0, start, wlen;
+    char c = in[k];
+    if(!c || BLANK(c) || c == '=' || c == '(') return 0;          /* a ! alone, != and !( */
+    if(i > 0 && (in[i - 1] == '$' || in[i - 1] == '[')) return 0;  /* $! and [!a] */
+    if(i > 1 && in[i - 1] == '{' && in[i - 2] == '$') return 0;   /* ${!name} */
+    if(c == '!' || c == '$') {                                     /* !! and !$: the line before */
+        at = hist_count - 1;
+        word = c == '$';
+        k++;
+    } else if(isdigit((unsigned char)c) || (c == '-' && isdigit((unsigned char)in[k + 1]))) {
+        int back = c == '-', num = 0;                              /* !n, and !-n back from the end */
+        if(back) k++;
+        for(; isdigit((unsigned char)in[k]); k++) if(num < 1000000) num = num * 10 + (in[k] - '0');
+        at = back ? hist_count - num : num - 1;
+    } else {                                                       /* !str: the newest that starts so */
+        int e = k;
+        while(in[e] && !BLANK(in[e]) && !is_meta(in[e]) && !strchr("'\"\\", in[e])) e++;
+        if(e == k) return 0;                                       /* !) !; !' and the like */
+        for(at = hist_count - 1; at >= hist_oldest(); at--)
+            if(!strncmp(hist[at % HIST_MAX], in + k, (size_t)(e - k))) break;
+        k = e;
+    }
+    if(at < hist_oldest() || at >= hist_count) {
+        *missing = 1;
+        return k;
+    }
+    if(!word) {
+        sb_puts(b, hist[at % HIST_MAX]);
+    } else if((wlen = last_word(hist[at % HIST_MAX], &start))) {
+        sb_put(b, hist[at % HIST_MAX] + start, wlen);
+    } else {
+        *missing = 1;
+    }
+    return k;
+}
+
+/* History expansion, bash's in part, of a line typed at the prompt: !! the line before, !n line n
+   (as history numbers them), !-n the n-th line back, !str the newest line that starts with str
+   (up to a blank, ; & | < > ( ), a quote or a backslash), !$ the last word of the line before. A !
+   stays itself before a blank, =, ( or the end of the line, after a backslash, in $!, ${! and [!,
+   inside quotes (double ones too, unlike bash: "#!/bin/sh" stays as typed) and in a comment (from
+   a # that begins a word). Returns 1 with out holding the line expanded, 0 when nothing was
+   (out untouched), -1 with out holding the reference no line answers, -2 when the line would be
+   longer than size - 1 bytes. out may be in. 10/25/26 (the programs' review, U6): *quote_state is the
+   quote a line before this one of the same command left open (0: none), and this line's end leaves it
+   there, so a quote opened on one line goes on over the next (main.c starts each command with 0). */
+int history_expand_in(const char *in, char *out, int size, int *quote_state) {
+    struct sbuf b = { NULL, 0, 0 };
+    int i = 0, n = (int)strlen(in), quote = quote_state ? *quote_state : 0, changed = 0, end, r = 0;
+    while(i < n) {
+        char c = in[i];
+        int missing = 0;
+        if(quote) {
+            if(c == quote) quote = 0;
+            else if(quote == '"' && c == '\\' && i + 1 < n) sb_putc(&b, in[i++]);
+        } else if(c == '\'' || c == '"') {
+            quote = c;
+        } else if(c == '\\' && i + 1 < n) {
+            sb_putc(&b, in[i++]);
+        } else if(c == '#' && (i == 0 || BLANK(in[i - 1]) || is_meta(in[i - 1]))) {
+            sb_put(&b, in + i, n - i);          /* a comment: the rest as it is */
+            break;
+        } else if(c == '!' && (end = reference(in, i, &b, &missing))) {
+            if(missing) {
+                struct sbuf ref = { NULL, 0, 0 };
+                sb_put(&ref, in + i, end - i);
+                snprintf(out, (size_t)size, "%s", sb_str(&ref));
+                sb_free(&ref);
+                r = -1;
+                goto done;
+            }
+            i = end;
+            changed = 1;
+            continue;
+        }
+        sb_putc(&b, in[i++]);
+    }
+    if(quote_state) *quote_state = quote;    /* the quote this line leaves open, for the next */
+    if(changed && b.len >= size) {
+        r = -2;
+    } else if(changed) {
+        memcpy(out, sb_str(&b), (size_t)b.len + 1);
+        r = 1;
+    }
+done:
+    sb_free(&b);
+    return r;
+}
+
+int history_expand(const char *in, char *out, int size) {
+    return history_expand_in(in, out, size, NULL);
+}
+
 static void history_go(int to) {
     if(to < hist_oldest() || to > hist_count || to == hist_pos) return;
     if(hist_pos == hist_count) {                /* keep what was being typed */
@@ -443,12 +650,170 @@ static void history_go(int to) {
     } else {
         const char *s = hist[to % HIST_MAX];
         len = (int)strlen(s);
+        too_long = len > limit;                 /* 10/25/26 (the review, U7): a longer line never runs cut off */
         if(len > limit) len = limit;
         memcpy(line, s, (size_t)len);
-        too_long = 0;
     }
     pos = len;
     redraw(0);
+}
+
+/**** 10/25/26: Ctrl+R and Alt+. ****/
+
+#define SEARCH_MAX 64                   /* bytes of the text Ctrl+R looks for */
+
+static int status_at = -1;              /* the search's row under the line: where it starts, in columns
+                                           from the prompt's start; -1 while there is none */
+static char last_search[SEARCH_MAX + 1];   /* the text of the last search, for Ctrl+R twice */
+static int yank_from, yank_to, yank_back;   /* what Alt+. put in the line, from how many lines back */
+
+/* The row under the line says s, in the plain colour and cut to its last width - 1 columns (no
+   pending wrap there); the cursor goes back into the line. Where the line ends inside a row, a
+   CR LF makes the row under it (the screen scrolls at its foot); where it ends at a row's end,
+   past_edge() made that row already. */
+static void status_show(const char *s) {
+    int n = (int)strlen(s);
+    while(display_cols(s, n) > width - 1) {
+        do {
+            s++;
+            n--;
+        } while(n > 0 && is_cont(*s));
+    }
+    move_to(drawn);
+    if(drawn % width) {
+        put("\r\n", 2);
+        cur = (drawn / width + 1) * width;
+    }
+    status_at = cur;
+    if(colour) puts_(SGR_RESET);
+    put(s, n);
+    puts_("\033[K");
+    if(colour) puts_(SGR_TYPED);
+    cur += display_cols(s, n);
+    move_to(col_of(pos));
+}
+
+/* the search's row emptied (it stays under the line, empty) */
+static void status_clear(void) {
+    if(status_at < 0) return;
+    move_to(status_at);
+    puts_("\033[K");
+    status_at = -1;
+    move_to(col_of(pos));
+}
+
+/* the newest line of the history at index from or before it that holds text, other than skip:
+   its index, -1 for none */
+static int find_back(int from, const char *text, const char *skip) {
+    int i;
+    for(i = from; i >= hist_oldest(); i--) {
+        const char *h = hist[i % HIST_MAX];
+        if(strstr(h, text) && (!skip || strcmp(h, skip))) return i;
+    }
+    return -1;
+}
+
+/* the line becomes s (n bytes), the cursor at p; the search's row is emptied first, as the line
+   may grow over it */
+static void search_show(const char *s, int n, int p, int was_too_long) {
+    status_clear();
+    too_long = was_too_long || n > limit;       /* 10/25/26 (the review, U7): a line found that is longer than */
+    if(n > limit) n = limit;                    /* the limit refuses Enter, rather than run cut off */
+    if(p > n) p = n;
+    memmove(line, s, (size_t)n);
+    len = n;
+    pos = p;
+    redraw(0);
+}
+
+/* Ctrl+R: the history searched backwards as text is typed, as bash's reverse-i-search does. The
+   line shows the newest line that holds the text, the cursor where the text begins, and the row
+   under the line says "search: text" (the prompt stays as prompt.c made it). Typing adds to the
+   text, Backspace takes from it, Ctrl+R again goes to an older line that holds it (another line,
+   not the same one again; on an empty text, the last search's text). Esc or ^G puts back the line
+   as it was. Any other key ends the search with the line found and is returned for the caller to
+   do as usual (Enter runs the line); 0 when the search used the key. */
+static int search(void) {
+    static char saved[LINE_LIMIT + 1];
+    char text[SEARCH_MAX + 1], say[SEARCH_MAX + 32];
+    int tlen = 0, found = -1, failed = 0, saved_len = len, saved_pos = pos, saved_too_long = too_long, key;
+    memcpy(saved, line, (size_t)len);
+    if(hist_pos == hist_count) {                /* what was typed, for Down after the search */
+        memcpy(typed, line, (size_t)len);
+        typed_len = len;
+        typed_too_long = too_long;
+    }
+    text[0] = 0;
+    for(;;) {
+        const char *h;
+        int at = -1;
+        snprintf(say, sizeof(say), failed ? "search: %s (not found)" : "search: %s", text);
+        status_show(say);
+        key = get_key();
+        if(key == CTRL('r')) {
+            if(!tlen && !last_search[0]) continue;
+            if(!tlen) {                         /* Ctrl+R twice: the last search again */
+                strcpy(text, last_search);
+                tlen = (int)strlen(text);
+                at = find_back(hist_count - 1, text, NULL);
+            } else {
+                at = find_back(found >= 0 ? found - 1 : hist_count - 1, text,
+                               found >= 0 ? hist[found % HIST_MAX] : NULL);
+            }
+        } else if(key == 0x7f || key == 0x08) {
+            if(!tlen) continue;
+            do tlen--; while(tlen > 0 && is_cont(text[tlen]));
+            text[tlen] = 0;
+            if(!tlen) {                         /* nothing to look for: the line as it was */
+                search_show(saved, saved_len, saved_pos, saved_too_long);
+                found = -1;
+                failed = 0;
+                continue;
+            }
+            at = find_back(hist_count - 1, text, NULL);
+        } else if((key >= 0x20 && key < 0x7f) || (key >= 0xC2 && key <= 0xF4)) {
+            char ch[4];
+            int k = 1;
+            ch[0] = (char)key;
+            if(key >= 0x80 && !(k = read_utf8(key, ch))) continue;
+            if(tlen + k > SEARCH_MAX) continue;
+            memcpy(text + tlen, ch, (size_t)k);
+            tlen += k;
+            text[tlen] = 0;
+            at = find_back(found >= 0 ? found : hist_count - 1, text, NULL);
+        } else if(key == KEY_ESC || key == CTRL('g')) {
+            search_show(saved, saved_len, saved_pos, saved_too_long);
+            return 0;
+        } else {                                /* the line found stays; the key is the caller's */
+            status_clear();
+            if(found >= 0) hist_pos = found;
+            if(tlen) strcpy(last_search, text);
+            return key;
+        }
+        if(at < 0) {                            /* no such line: the one found before stays */
+            failed = 1;
+            continue;
+        }
+        found = at;
+        failed = 0;
+        h = hist[at % HIST_MAX];
+        search_show(h, (int)strlen(h), (int)(strstr(h, text) - h), 0);
+    }
+}
+
+/* Alt+.: the last word of the line before, at the cursor, as bash's yank-last-arg does; again at
+   once, the last word of the line before that, in its place */
+static void last_arg(int again) {
+    int back = again ? yank_back + 1 : 1, at = hist_count - back, start, n;
+    const char *h;
+    if(at < hist_oldest()) return;
+    h = hist[at % HIST_MAX];
+    if(!(n = last_word(h, &start))) return;
+    if(again) delete_range(yank_from, yank_to);
+    yank_from = pos;
+    insert(h + start, n);
+    yank_to = pos;
+    yank_back = back;
 }
 
 /**** Tab ****/
@@ -508,7 +873,7 @@ static int plain_line(char *buf, int size) {
 }
 
 int edit_line(char *buf, int size, int more) {
-    int key, last_tab = 0, result;
+    int key, last_tab = 0, last_yank = 0, again = 0, result;
     continuing = more;
     if(raw_failed || ttyctl(TTY_RAW, 1) < 0) {
         raw_failed = 1;
@@ -524,14 +889,15 @@ int edit_line(char *buf, int size, int more) {
     draw_all();
     flush_out();
     for(;;) {
-        int was_tab = 0;
-        key = get_key();
+        int was_tab = 0, was_yank = 0;
+        key = again ? again : get_key();        /* again: the key that ended a search */
+        again = 0;
         if(key == '\n' && after_cr) {           /* the LF of a CR LF */
             after_cr = 0;
             continue;
         }
         after_cr = key == '\r';
-        switch(key) {
+        switch(meaning(key)) {
         case '\r':
         case '\n':
             leave_line(NULL);
@@ -585,6 +951,30 @@ int edit_line(char *buf, int size, int more) {
             pos = next_char(pos);
             move_to(col_of(pos));
             break;
+        case KEY_WORD_LEFT:                     /* 10/25/26: Ctrl+Left, Alt+B */
+            pos = word_left(pos);
+            move_to(col_of(pos));
+            break;
+        case KEY_WORD_RIGHT:                    /* Ctrl+Right, Alt+F */
+            pos = word_right(pos);
+            move_to(col_of(pos));
+            break;
+        case KEY_ALT | 'd':
+        case KEY_ALT | 'D':
+            delete_range(pos, word_right(pos));
+            break;
+        case KEY_ALT | 0x7f:
+        case KEY_ALT | 0x08:
+            delete_range(word_left(pos), pos);
+            break;
+        case KEY_ALT | '.':
+        case KEY_ALT | '_':
+            last_arg(last_yank);
+            was_yank = 1;
+            break;
+        case CTRL('r'):
+            again = search();
+            break;
         case 0x7f:
         case 0x08:
             delete_range(prev_char(pos), pos);
@@ -631,6 +1021,7 @@ int edit_line(char *buf, int size, int more) {
             break;                              /* other control characters and keys: nothing */
         }
         last_tab = was_tab;
+        last_yank = was_yank;
     }
 done:
     flush_out();

@@ -8,6 +8,7 @@ pixel with the channel positions the boot loader reports (RGB or BGR), and a pit
 that may be wider than the visible line. Never reads the framebuffer back (it may be
 uncached memory) and never writes outside the mode's visible lines. Pure code: no
 kernel state, so tests/host/test_framebuffer.c runs it against a buffer in memory.
+10/25/26 (track A, A7): in any struct fb_font up to 16 pixels wide (fb_setup_font()).
 */
 
 #include <surfos/types.h>
@@ -123,23 +124,30 @@ u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b) {
 /* The letters are as large as they were with a centred 80x25 screen: the largest whole
    scale at which 640x400 fits. 10/5/26: the grid then takes as many cells as the mode
    holds (more text, same letters), within FB_MAX_COLS x FB_MAX_ROWS, and the pixels left
-   over become an even margin. 1920x1080: 120x33 at scale 2; 1280x800: 80x25 as before. */
-void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m) {
-    u32 i, sx, sy;
+   over become an even margin. 1920x1080: 120x33 at scale 2; 1280x800: 80x25 as before.
+   10/25/26 (A7): the same in any font, the scale the largest at which 80x25 of its cells
+   fit: Spleen 12x24 on 1920x1080 at its own size, 160x45 cells. */
+void fb_setup_font(struct fb_surface *s, u8 *base, const struct fb_mode *m, const struct fb_font *font) {
+    u32 i, sx, sy, cw = font->width, ch = font->height;
     s->base = base;
     s->mode = *m;
+    s->font = font;
     s->bytespp = (m->bpp + 7) / 8;
     for(i = 0; i < 16; i++) s->palette[i] = fb_rgb(s, vga_rgb[i][0], vga_rgb[i][1], vga_rgb[i][2]);
-    sx = m->width / FB_MIN_WIDTH;
-    sy = m->height / FB_MIN_HEIGHT;
+    sx = m->width / (80 * cw);
+    sy = m->height / (25 * ch);
     s->scale = sx < sy ? sx : sy;
     if(s->scale < 1) s->scale = 1;
-    s->cols = m->width / (FONT_WIDTH * s->scale);
-    s->rows = m->height / (FONT_HEIGHT * s->scale);
+    s->cols = m->width / (cw * s->scale);
+    s->rows = m->height / (ch * s->scale);
     if(s->cols > FB_MAX_COLS) s->cols = FB_MAX_COLS;
     if(s->rows > FB_MAX_ROWS) s->rows = FB_MAX_ROWS;
-    s->ox = (m->width - s->cols * FONT_WIDTH * s->scale) / 2;
-    s->oy = (m->height - s->rows * FONT_HEIGHT * s->scale) / 2;
+    s->ox = (m->width - s->cols * cw * s->scale) / 2;
+    s->oy = (m->height - s->rows * ch * s->scale) / 2;
+}
+
+void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m) {
+    fb_setup_font(s, base, m, &fb_font_8x16);
 }
 
 /* one horizontal run of the same pixel */
@@ -174,20 +182,34 @@ void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel) 
     for(r = 0; r < h; r++) put_run(s, s->base + (u_long)(y + r) * s->mode.pitch + (u_long)x * s->bytespp, w, pixel);
 }
 
-void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+/* 10/25/26 (A7): the underline cursor's rows: the cell's bottom eighth (8x16: 2, 12x24: 3, 16x32: 4) */
+#define CURSOR_ROWS(f) ((f)->height / 8)
+
+/* glyph rows [from, height) of a cell; 10/25/26: the cursor alone is its last CURSOR_ROWS (fb_draw_cursor()) */
+static void glyph_rows(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor, u32 from) {
+    const struct fb_font *f = s->font;
     u32 fg = s->palette[attr & 0x0F], bg = s->palette[(attr >> 4) & 0x07];  /* bit 7 is blink in text mode */
-    u32 x0 = s->ox + col * FONT_WIDTH * s->scale, y0 = s->oy + row * FONT_HEIGHT * s->scale;
-    u32 gy, gx, k;
+    u32 x0 = s->ox + col * f->width * s->scale, y0 = s->oy + row * f->height * s->scale;
+    u32 gy, gx, k, left = 1u << (f->width - 1);
     if(col >= s->cols || row >= s->rows) return;
-    for(gy = 0; gy < FONT_HEIGHT; gy++) {
-        u8 bits = font8x16[ch][gy];
-        if(cursor && gy >= FONT_HEIGHT - 2) bits = 0xFF;    /* an underline cursor */
+    for(gy = from; gy < f->height; gy++) {
+        u32 bits = f->rows16 ? (u32)f->rows16[ch * f->height + gy] >> (16 - f->width)
+                             : (u32)f->rows8[ch * f->height + gy] >> (8 - f->width);
+        if(cursor && gy >= f->height - CURSOR_ROWS(f)) bits = ~0u;  /* an underline cursor */
         for(k = 0; k < s->scale; k++) {
             u8 *p = s->base + (u_long)(y0 + gy * s->scale + k) * s->mode.pitch + (u_long)x0 * s->bytespp;
-            for(gx = 0; gx < FONT_WIDTH; gx++) {
-                put_run(s, p, s->scale, (bits & (0x80 >> gx)) ? fg : bg);
+            for(gx = 0; gx < f->width; gx++) {
+                put_run(s, p, s->scale, (bits & (left >> gx)) ? fg : bg);
                 p += s->scale * s->bytespp;
             }
         }
     }
+}
+
+void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+    glyph_rows(s, col, row, ch, attr, cursor, 0);
+}
+
+void fb_draw_cursor(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor) {
+    glyph_rows(s, col, row, ch, attr, cursor, s->font->height - CURSOR_ROWS(s->font));
 }

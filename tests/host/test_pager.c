@@ -13,13 +13,20 @@
    secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
    serial line or a pty's stream, the history, or stays in the input queue. 10/25/26: a job in
    the background is not paged with its shell's command; TAB on the screen and the serial line,
-   and the pager at a row that starts with one. 10/26/26: a writer waiting for room in a pty's full
-   buffer has changed nothing on its console, so the shell's question never lands in its line. */
+   and the pager at a row that starts with one. 10/25/26 (track A, A6): the scrollback of a
+   framebuffer console: rows kept as they scroll off and by ESC[2J and a clear, Shift+PgUp, PgDn,
+   Home and End, the view's tag and hidden cursor, output that does not move the view, any other key,
+   a console switch, the pager's question, a graphics session, no memory, a full ring; a kernel
+   thread's message whole, after another writer's line. 10/25/26 (A8): the escape sequences of
+   tests/host/vt_cases.h (shared with the desktop's terminal), and the alternate screen on the
+   screen and on a pseudo-terminal, the scrollback left alone, a task that ends without leaving it. 10/26/26: a writer waiting for room in a pty's
+   full buffer has changed nothing on its console, so the shell's question never lands in its line. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "vt_cases.h"
 
 /* tasks (tests/host/pager_bridge.c): init's children are the shell and the usb thread; the
    shell's are a command (CHILD, which has GRAND) and a background job (BG) */
@@ -73,6 +80,18 @@ int sim_key_up(void);
 int sim_key_home(void);
 int sim_readline_secret(char *buf, int size);
 int sim_inq_has(const char *s);
+int sim_scroll_key(int which);              /* 10/25/26 (A6): 0 Shift+PgUp, 1 PgDn, 2 Home, 3 End */
+int sim_attr(int x, int y);                 /* 10/25/26 (A8) */
+void sim_view_live(void);
+void sim_screen_row(int r, char *out, int *attr_last);
+int sim_view(void);
+int sim_kept(void);
+void sim_fb_cursor(int *x, int *y);
+void sim_graphics(int on);
+void sim_heap_refuse(int on);
+void sim_free_frames(unsigned long n);      /* 10/25/26 (the review) */
+void sim_serial_preempt(int after);
+void sim_switch(int n);
 
 static int failures, checks;
 
@@ -698,9 +717,9 @@ static void t_echo_not_kept(void) {
 
 static void t_caps(void) {
     reset(0);
-    check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
+    check(sim_ttyctl(TTY_CAPS, 0) == 7, "TTY_CAPS: UTF-8, colour (10/25/26: and the alternate screen)");
     reset(1);
-    check(sim_ttyctl(TTY_CAPS, 0) == 2, "TTY_CAPS with `ascii` on the command line: colour only");
+    check(sim_ttyctl(TTY_CAPS, 0) == 6, "TTY_CAPS with `ascii` on the command line: colour (and the alternate screen)");
 }
 
 /**** 10/6/26: a pseudo-terminal: the stream console ****/
@@ -862,6 +881,264 @@ static void t_tab(void) {
     }
     check(st == DONE && stream_is(UNASKED "\tindented\n"), "and the TAB goes out after the question is taken away");
     run(SHELL, w_page, 0, 0);
+}
+
+/* 10/25/26 (track A, A6): the screen's row r starts with "line n" */
+static int screen_line(int r, int n) {
+    char s[256], want[32];
+    sim_screen_row(r, s, NULL);
+    snprintf(want, sizeof(want), "line %03d", n);
+    return !strncmp(s, want, 8);
+}
+
+/* the screen shows the console as it is (no view back): every row the same */
+static int screen_live(void) {
+    char a[256], b[256];
+    int i;
+    for(i = 0; i < sim_lines(); i++) {
+        row(i, a);
+        sim_screen_row(i, b, NULL);
+        if(strcmp(a, b)) return 0;
+    }
+    return 1;
+}
+
+enum { S_PGUP, S_PGDN, S_HOME, S_END };
+
+static void t_scrollback(void) {
+    char r[256];
+    int x, y, attr, st, ok, i;
+    reset(0);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 16 && screen_live(), "40 lines on 25 rows: the 16 that scrolled off are kept, the screen as ever");
+    check(sim_scroll_key(S_PGUP) == 1 && sim_view() == 16, "Shift+PgUp: back a screenful, or as far as there are rows");
+    sim_screen_row(0, r, &attr);
+    check(screen_line(0, 1) && screen_line(15, 16) && screen_line(16, 17) && screen_line(23, 24),
+          "the view: the kept rows, oldest first, then the console's own");
+    check(strlen(r) == 79 && !strcmp(r + 75, " -16") && attr == 0x70, "the view's tag in the top right corner, inverse");
+    sim_fb_cursor(&x, &y);
+    row(0, r);
+    check(y == 25 && !strcmp(r, "line 017"), "no cursor in the view; the console's own rows are as they were");
+    run(SHELL, w_lines, 41, 42);
+    check(screen_line(0, 1) && screen_line(16, 17) && sim_view() == 18 && sim_kept() == 18,
+          "output meanwhile: the console scrolls, the screen keeps what it shows, the view moves along");
+    check(sim_scroll_key(S_PGDN) == 1 && sim_view() == 0 && screen_live() && screen_line(0, 19),
+          "Shift+PgDn back past the live screen: the live screen");
+    sim_fb_cursor(&x, &y);
+    check(x == 0 && y == 24, "and the cursor where the console has it");
+    check(sim_scroll_key(S_HOME) == 1 && sim_view() == 18 && screen_line(0, 1), "Shift+Home: the oldest row at the top");
+    check(sim_scroll_key(S_END) == 1 && sim_view() == 0 && screen_live(), "Shift+End: the live screen");
+    sim_scroll_key(S_PGUP);
+    sim_view_live();
+    check(sim_view() == 0 && screen_live(), "any other key: the live screen");
+    sim_scroll_key(S_PGUP);
+    sim_switch(1);
+    sim_switch(0);
+    check(sim_view() == 0 && screen_live(), "a console switch: back live");
+
+    reset(0);
+    say(SHELL, "one\ntwo\nthree\n\033[2J\033[H");
+    check(sim_kept() == 3, "ESC[2J keeps the screen's rows, up to the last that shows anything");
+    sim_scroll_key(S_PGUP);
+    sim_screen_row(2, r, NULL);
+    check(sim_view() == 3 && !strcmp(r, "three"), "and Shift+PgUp shows them");
+    sim_scroll_key(S_END);
+    say(SHELL, "four\n");
+    sim_clear();
+    check(sim_kept() == 4, "a clear (clearConsole) keeps them too");
+
+    reset(0);
+    run(SHELL, w_lines, 1, 30);
+    st = paged_lines(31, 60);
+    check(st == BLOCKED && asking_after(54), "a paged command at the question");
+    ok = sim_scroll_key(S_PGUP) == 1 && sim_view() == 24 && screen_line(0, 7);
+    check(ok && asker() == CHILD && sim_on_list(CHILD), "Shift+PgUp at the question: the view moves, the question waits");
+    check(sim_scroll_key(S_END) == 1 && screen_live() && asking_after(54), "Shift+End: the question again");
+    if(st == BLOCKED) {
+        sim_input('q');
+        st = resume(CHILD);
+    }
+    check(st == DONE, "and a key answers it");
+    run(SHELL, w_page, 0, 0);
+
+    sim_graphics(1);
+    check(sim_scroll_key(S_PGUP) == 0 && sim_view() == 0, "under a graphics session the keys are the session's");
+    sim_graphics(0);
+
+    reset(0);
+    sim_heap_refuse(1);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 0 && sim_scroll_key(S_PGUP) == 1 && sim_view() == 0 && screen_live(),
+          "no memory for a ring: nothing kept, the keys do nothing");
+    reset(0);                                   /* 10/25/26 (the review): a ring only with its frames and 512 to spare */
+    sim_free_frames(127 + 512);                 /* the ring of 80 columns: 524,160 bytes, 128 pages */
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 0 && screen_live(), "too few free frames for the whole ring and 512 to spare: no ring");
+    reset(0);
+    sim_free_frames(128 + 512);
+    run(SHELL, w_lines, 1, 40);
+    check(sim_kept() == 16, "with just enough: the ring");
+
+    reset(0);
+    run(SHELL, w_lines, 1, 3400);
+    sim_scroll_key(S_HOME);
+    sim_screen_row(0, r, NULL);
+    check(sim_kept() == 3276 && sim_view() == 3276 && screen_line(0, 101) && !strcmp(r + 73, " -3276"),
+          "a full ring (512 KB: 3,276 rows of 80 columns) keeps the newest rows");
+    for(i = 0; i < 200 && sim_view(); i++) sim_scroll_key(S_PGDN);
+    check(sim_view() == 0 && screen_live(), "and Shift+PgDn comes back down to the live screen");
+}
+
+/* 10/25/26 (track A, A8): the cases of vt_cases.h on the console */
+static void t_vt_cases(void) {
+    char r[256], what[160];
+    int i, k, x, y, ok;
+    for(i = 0; i < VT_CASES; i++) {
+        const struct vt_case *c = &vt_cases[i];
+        reset(0);
+        say(SHELL, c->input);
+        for(ok = 1, k = 0; k < VT_ROWS_MAX && c->rows[k].text; k++) {
+            row(c->rows[k].row, r);
+            if(strcmp(r, c->rows[k].text)) ok = 0;
+        }
+        for(k = 0; k < VT_ATTRS_MAX && c->attrs[k].attr >= 0; k++)
+            if(sim_attr(c->attrs[k].col, c->attrs[k].row) != c->attrs[k].attr) ok = 0;
+        sim_cursor(&x, &y);
+        if(c->col >= 0 && (x != c->col || y != c->row)) ok = 0;
+        snprintf(what, sizeof(what), "escape sequences: %s", c->name);
+        check(ok, what);
+    }
+}
+
+static void t_alt_screen(void) {
+    char r[256], ser[4096], out[512];
+    int x, y, kept, i;
+    reset(0);
+    check(sim_ttyctl(TTY_CAPS, 0) & 4, "TTY_CAPS says the console has the alternate screen (TTY_CAP_ALTSCREEN)");
+    run(SHELL, w_lines, 1, 30);
+    say(SHELL, "prompt> ");
+    kept = sim_kept();
+    say(SHELL, "\033[?1049h");
+    sim_cursor(&x, &y);
+    row(0, r);
+    check(!strcmp(r, "") && x == 8 && y == 24, "ESC[?1049h: a blank screen, the cursor where it was");
+    say(SHELL, "\033[HALT");
+    for(i = 0; i < 30; i++) say(SHELL, "\n");
+    say(SHELL, "\033[2J");
+    check(sim_kept() == kept, "the alternate screen's rows never go into the scrollback, ESC[2J's neither");
+    say(SHELL, "\033[?1049l");
+    sim_cursor(&x, &y);
+    row(23, r);
+    check(!strcmp(r, "line 030") && x == 8 && y == 24 && sim_cell(0, 24) == 'p' && !screen_has("ALT"),
+          "ESC[?1049l: the main screen as it was, and its cursor");
+    say(SHELL, "\033[?1049l");
+    check(sim_cell(0, 24) == 'p', "ESC[?1049l on the main screen does nothing");
+
+    reset(0);                                   /* 10/25/26 (the kernel review, 2): the copy's frames */
+    say(SHELL, "main");
+    sim_free_frames(512);
+    say(SHELL, "\033[?1049hfull");
+    row(0, r);
+    check(!strcmp(r, "mainfull"), "too few free frames for the main screen's copy and 512 more: ESC[?1049h does nothing");
+    sim_free_frames(513);
+    say(SHELL, "\033[?1049h");
+    row(0, r);
+    check(!strcmp(r, ""), "with just enough: the alternate screen");
+    say(SHELL, "\033[?1049l");
+
+    reset(0);
+    say(SHELL, "main");
+    say_text = "\033[?1049hfull screen";
+    run(CHILD, w_say, 0, 0);
+    sim_serial(ser, sizeof(ser));
+    sim_task_gone(CHILD);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(!strcmp(r, "main") && strstr(ser, "\033[?1049l"), "a task that ends on the alternate screen: the main one back, "
+          "on the serial terminal too");
+
+    on_pty(80, 24, 0);
+    say(SHELL, "abc");
+    say(SHELL, "\033[?1049h\033[Hxyz");
+    say(SHELL, "\033[?1049l");
+    sim_stream_pos(&x, &y);
+    sim_stream(out, sizeof(out));
+    check(x == 3 && strstr(out, "\033[?1049h") && strstr(out, "\033[?1049l"),
+          "a pseudo-terminal: the sequences go to the far terminal, the column comes back with the main screen");
+    say_text = "\033[?1049h";
+    run(CHILD, w_say, 0, 0);
+    sim_stream(out, sizeof(out));
+    sim_task_gone(CHILD);
+    sim_stream(out, sizeof(out));
+    check(strstr(out, "\033[?1049l") != NULL, "and its far terminal leaves the alternate screen when the task that asked ends");
+}
+
+/* 10/25/26: a kernel thread's message comes out whole (kprintf): it waits for another writer's line to end */
+static void w_kprintf(int unused, int unused2) { (void)unused; (void)unused2; sim_kprintf_line(say_text); }
+
+static void t_whole_kernel_lines(void) {
+    char ser[4096], r[256];
+    int st, i;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    say(SHELL, "Brandon Burr");
+    say_text = "+NET: eth0 up\n";
+    st = run(USB, w_kprintf, 0, 0);
+    check(st == BLOCKED, "a kernel thread's message waits while a program's line is half written");
+    say(SHELL, "'s SurfOS\n");
+    st = resume(USB);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(st == DONE && !strcmp(ser, "Brandon Burr's SurfOS\r\n+NET: eth0 up\r\n") && !strcmp(r, "Brandon Burr's SurfOS"),
+          "then comes out whole after the line, on the screen and the serial line");
+    say_text = "+NET: lease ";
+    run(USB, w_kprintf, 0, 0);
+    say_text = "10.0.2.15\n";
+    st = run(USB, w_kprintf, 0, 0);
+    row(2, r);
+    check(st == DONE && !strcmp(r, "+NET: lease 10.0.2.15"), "its own half line does not make it wait");
+    say(SHELL, "SURF > ");
+    say_text = "+USB: plugged\n";
+    st = run(USB, w_kprintf, 0, 0);
+    for(i = 0; i < 10 && st == BLOCKED; i++) st = resume(USB);
+    row(3, r);
+    check(st == DONE && i == 10 && !strcmp(r, "SURF > +USB: plugged"), "a line that never ends (a prompt): after 100 ms, as before");
+    paged_lines(1, 3);
+    say(CHILD, "half ");
+    sim_set_in_irq(1);
+    sim_kprintf_line("irq\n");
+    sim_set_in_irq(0);
+    check(screen_has("half irq"), "an interrupt handler's message goes at once, as before");
+    run(SHELL, w_page, 0, 0);
+}
+
+/* 10/25/26 (the review): a kernel thread's line goes out with preemption on, the console held for it (line_owner) */
+static void t_line_owner(void) {
+    char ser[4096], r[256];
+    int st;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    say_text = "+NET: preempted half way\n";
+    sim_serial_preempt(6);
+    st = run(USB, w_kprintf, 0, 0);
+    check(st == BLOCKED, "a kernel thread's line can be preempted half way: preemption stays on (a slow serial port)");
+    say_text = "user line\n";
+    st = run(SHELL, w_say, 0, 0);
+    check(st == BLOCKED, "a program that writes on that console meanwhile waits for the line's end");
+    st = resume(USB);
+    check(st == DONE, "the kernel thread's line goes on and ends");
+    st = resume(SHELL);
+    sim_serial(ser, sizeof(ser));
+    row(0, r);
+    check(st == DONE && !strcmp(ser, "+NET: preempted half way\r\nuser line\r\n") && !strcmp(r, "+NET: preempted half way"),
+          "then the program's line, after it, whole on the screen and the serial line");
+    say_text = "+NET: two ";
+    sim_serial_preempt(3);
+    st = run(USB, w_kprintf, 0, 0);
+    sim_task_gone(USB);
+    say_text = "after\n";
+    st = run(SHELL, w_say, 0, 0);
+    check(st == DONE, "a task that ends holding the console lets it go");
 }
 
 static void t_stream_wrap_ask(void) {
@@ -1111,7 +1388,7 @@ static void t_stream_tty(void) {
     int st;
     reset(1);                                       /* `ascii` on the kernel command line */
     sim_term(0);
-    check(sim_ttyctl(TTY_CAPS, 0) == 3, "a pty's TTY_CAPS: UTF-8 and colour, whatever `ascii` says");
+    check(sim_ttyctl(TTY_CAPS, 0) == 7, "a pty's TTY_CAPS: UTF-8, colour and the alternate screen, whatever `ascii` says");
     check(sim_ttyctl(2, 0) == ((80 << 16) | 24), "TTY_GETSIZE: 80x24 at first");
     sim_stream_size(100, 30);
     check(sim_ttyctl(2, 0) == ((100 << 16) | 30), "TTY_GETSIZE: the size PTY_SETSIZE gave");
@@ -1419,6 +1696,11 @@ int main(void) {
     t_stream_screenful();
     t_stream_columns();
     t_tab();
+    t_scrollback();
+    t_whole_kernel_lines();
+    t_line_owner();
+    t_vt_cases();
+    t_alt_screen();
     t_stream_wrap_ask();
     t_stream_full_row();
     t_stream_background_rows();

@@ -9,6 +9,14 @@ Scan code set 1 with the E0 prefix: letters follow Caps Lock, the keypad follows
 Num Lock, arrows/Home/End/Del/PgUp/PgDn/Ins/F-keys become the codes in keyboard.h,
 Ctrl-letter becomes a control character. F1..F4 switch consoles, Ctrl-Alt-Del
 reboots. Everything else goes to the active tty.
+10/25/26 (track A, A4): each key goes with the modifiers held (KEY_SHIFT, KEY_ALT,
+KEY_CTRL), which raw mode sends as xterm does (kernel/tty.c); in raw mode Ctrl+Space
+is NUL, Ctrl+/ 0x1f, Shift+Tab ESC[Z, and Ctrl leaves Backspace, Enter and Tab alone.
+Line mode is as it was.
+10/25/26 (track A, A6): Shift+PgUp, PgDn, Home and End move the screen through the
+console's scrollback (console.c) before the tty sees them, unless a graphics session
+(the desktop) holds the screen or there is no framebuffer; any other key shows the
+live screen again first.
 
 10/5/26 (USB boot): a laptop's built-in keyboard sits behind an 8042 that the
 embedded controller emulates, and UEFI firmware may hand it over with its interrupt
@@ -116,12 +124,20 @@ u_long keyboard_irqs(void) {
 
 /**** translation ****/
 
+/* 10/25/26 (track A, A4): the modifiers held now, which raw mode sends with a key (tty.c) */
+static u_int mods_held(void) {
+    return (shift_l || shift_r ? KEY_SHIFT : 0) | (alt ? KEY_ALT : 0) | (ctrl ? KEY_CTRL : 0);
+}
+
 static void deliver(u_char c) {
+    u_int mods = mods_held();
     if(c >= F1 && c < F1 + NUM_CONSOLES) {      /* F1..Fn: switch console */
         tty_switch(c - F1);
         return;
     }
-    tty_key(tty_active, c);                     /* raw mode turns special keys into escape sequences */
+    if(mods == KEY_SHIFT && console_scroll_key(c)) return;     /* 10/25/26 (A6): the scrollback's keys */
+    console_view_live();
+    tty_key(tty_active, c, mods);               /* raw mode turns special keys into escape sequences */
 }
 
 static void handle_e0(u_char code) {
@@ -186,8 +202,12 @@ static void keyboard_byte(u_char code) {
     if(ctrl && c < 0x80) {
         if(c >= 'a' && c <= 'z') c -= 32;
         if(c >= '@' && c <= '_') c &= 0x1F;     /* Ctrl-C = 3, Ctrl-U = 21, ... */
-        else return;
+        else if(tty_active->raw && c == ' ') c = 0;         /* 10/25/26 (A4): Ctrl+Space is NUL, as xterm sends it, */
+        else if(tty_active->raw && c == '/') c = 0x1F;      /* and Ctrl+/ 0x1f */
+        else if(!tty_active->raw || (code != 0x0E && code != 0x1C && code != 0x0F)) return;
+                                                /* raw mode: Backspace, Enter and Tab stay themselves */
     }
+    if(tty_active->raw && code == 0x0F && shift) c = BACKTAB;   /* 10/25/26 (A4): Shift+Tab, ESC[Z (tty.c) */
     if(tty_active->raw && (code == 0x0E || code == 0x1C))
         c = code == 0x0E ? 0x7F : '\r';         /* raw mode: Backspace and Enter as a terminal sends them */
     deliver(c);

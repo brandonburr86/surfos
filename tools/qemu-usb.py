@@ -11,23 +11,27 @@ emulated USB stick (a copy of the image on an xHCI controller, usb-storage, remo
 and runs \\EFI\\BOOT\\BOOTX64.EFI from it, the same removable-media path a laptop takes.
 
 The screen is read back without OCR: the framebuffer is captured with the monitor's
-screendump and every 8x16 cell is matched against the console font (driver/font8x16.c),
-using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at scale 2;
-1920x1080: 120x33). That is how the keyboard-only boot (no serial port at all, like the
-laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
-comes out of the framebuffer.
+screendump and every cell is matched against the console font (driver/font8x16.c),
+using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at scale 2).
+10/25/26 (track A, A7): at 1920x1080 the console draws in Spleen 12x24 (driver/font12x24.c),
+160x45 cells at the font's own size, as driver/fbfont.c chooses it under profile=laptop,
+which every boot here has; Vm.font says which. That is how the keyboard-only boot (no
+serial port at all, like the laptop) is driven: keys go in through the emulated PS/2
+keyboard (monitor sendkey), text comes out of the framebuffer.
 
---test runs eighteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs twenty-two scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
              switching, a set of commands and the escape sequences of `ansi`, all through
-             the keyboard and the screen
+             the keyboard and the screen; the alternate screen (10/25/26) given back as it was,
+             by a program and by less
   fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
-             hands that mode over. The console fills it with 120x33 cells at scale 2: a long
-             line on one row, Backspace back across a typed line that wrapped, `ansi` with
-             its corner at (119,32), console switching, a line of UTF-8 read back through the
-             code page 437 font (▸ ≋ … café), the pager answered on the keyboard
+             hands that mode over. The console fills it with 160x45 cells of Spleen 12x24
+             (10/25/26; 120x33 at scale 2 in 8x16 before): a long line on one row, Backspace
+             back across a typed line that wrapped, `ansi` with its corner at (159,44), console
+             switching, a line of UTF-8 read back through the code page 437 font (▸ ≋ … café),
+             the pager answered on the keyboard, scrolling back at its question
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
@@ -44,6 +48,14 @@ comes out of the framebuffer.
              every console instead of the user shell, its prompt elevated (#), no recovery line
   no-pit     a machine without an 8254 (a chipset can gate its clock): the delays are
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
+  crashstack (10/25/26, robustness) a kernel stack overflow on purpose (crashstack): the double fault's
+             task gate reports it on the serial line and on the screen, and the machine halts
+  shutdown   (10/25/26, robustness) reboot and poweroff: the programs ended, a written stick unmounted
+             cleanly first (it mounts again trusting its free count), and ACPI S5 turns the machine off
+  bootpanic  (10/25/26) a panic on purpose before the timer starts (the test word bootpanic, on a
+             stick whose menu entry is given it): its report reaches the framebuffer, to SYSTEM
+             HALTED (the kernel review of track A: before, nothing was drawn after the first
+             scroll until a timer tick that never came)
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
              controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
              this host (a small page and 1 MB), the self test's network checks, a telnet
@@ -122,6 +134,7 @@ import zlib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONT_C = os.path.join(REPO, 'driver', 'font8x16.c')
+FONT_FILE = os.path.join(REPO, 'driver', 'font%s.c')    # 10/25/26 (track A, A7): font8x16.c, font12x24.c, font16x32.c
 # The shell's prompt: the ring-0 shell's "SurfOS*> " of old, or the SurfOS prompt (10/6/26,
 # shell/prompt.c): breadcrumbs, the wave (~ in ASCII), a state character, "> ", with colour
 # sequences in between when the shell colours it. The space after ">" is not required: a
@@ -150,7 +163,9 @@ PORTABLE = [
                   'MSI, 64-bit, up to 1 vector']),
     ('wifiinfo', ['chipset: 00:00.0 8086:29c0', 'none: no PCI device', 'QEMU USB HARDDRIVE', 'hold Option']),
     ('tick', ['Ticks:']),
-    ('ps', ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),
+    ('ps', ['Kernel Idle Task', 'init', 'fbflush', 'surfsh (ring 3)']),   # 10/25/26 (A3): the presents' thread
+    # 10/25/26 (track A, A3): what the console's screen has cost: presents, the slowest, the ones folded in
+    ('gfxinfo', ['software 2D', 'console: ', ' presents (the slowest ', ' more folded into them; ', ' cursor moves']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
     ('lsblk', ['rd0']),
     ('mount', ['rd0', '/initrd', 'tarfs']),
@@ -236,67 +251,97 @@ def find_firmware(code, vars_):
 
 # ---- the screen ----------------------------------------------------------------------------
 
-def load_font():
+def load_font(name='8x16'):
     """{glyph rows: character} from the console font. 10/6/26: the font holds code page 437
     (tools/bdf2c.py), and each entry's comment names its code point (/* U+25B8 ▸ */), which
     is the character a cell with that glyph shows. The blank glyphs (the empty cell, space,
     no-break space) read as a space; were two characters to share a glyph, ASCII would win,
-    then the lower index."""
+    then the lower index. 10/25/26 (track A, A7): any of the fonts (name 8x16, 12x24, 16x32);
+    each row is the cell's width in bits, the leftmost pixel highest, whatever the table's
+    bytes (one per row up to 8 pixels, two above)"""
     glyphs = {}
-    src = open(FONT_C, encoding='utf-8').read()
+    width, height = map(int, name.split('x'))
+    path = FONT_FILE % name
+    src = open(path, encoding='utf-8').read()
     entries = re.findall(r'\[0x([0-9a-fA-F]{2})\] = \{ ([^}]*) \}, /\* U\+([0-9A-Fa-f]{4,6})', src)
     if len(entries) != 256:
-        sys.exit(f'{FONT_C}: could not read the font table ({len(entries)} of 256 entries)')
+        sys.exit(f'{path}: could not read the font table ({len(entries)} of 256 entries)')
+    shift = (8 if width <= 8 else 16) - width
     for index, rows, code in sorted(entries, key=lambda e: (not 0x20 <= int(e[0], 16) <= 0x7e, int(e[0], 16))):
-        glyphs.setdefault(tuple(int(x, 16) for x in rows.split(',')), chr(int(code, 16)))
-    glyphs[(0,) * 16] = ' '
+        glyphs.setdefault(tuple(int(x, 16) >> shift for x in rows.split(',')), chr(int(code, 16)))
+    glyphs[(0,) * height] = ' '
     return glyphs
 
 
-GLYPHS = None
+GLYPHS = {}                                     # 10/25/26: per font
 
 
 FB_MAX_COLS, FB_MAX_ROWS = 240, 100            # include/sys/framebuffer.h
 
 
 class Screen:
-    """the console's text grid read back from a framebuffer screenshot (PPM)"""
-    def __init__(self, ppm):
-        global GLYPHS
-        if GLYPHS is None:
-            GLYPHS = load_font()
+    """the console's text grid read back from a framebuffer screenshot (PPM). 10/25/26 (track A, A7): drawn in the
+    font named (Vm.font), and read only when something asks for the text (rows, text(), colours, cursor): a test
+    that looks at pixels alone does not pay for 7,200 cells"""
+    def __init__(self, ppm, font='8x16'):
+        if font not in GLYPHS:
+            GLYPHS[font] = load_font(font)
+        self.glyphs = GLYPHS[font]
+        self.fw, self.fh = map(int, font.split('x'))
         m = re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', ppm)
         if not m:
             raise ValueError('not a PPM screenshot')
         self.w, self.h = int(m.group(1)), int(m.group(2))
         self.px = ppm[m.end():]
         self.ppm = ppm
-        # fb_setup(): the scale at which 80x25 cells fit, then as many cells as the mode holds
-        s = max(1, min(self.w // 640, self.h // 400))
+        # fb_setup_font(): the scale at which 80x25 cells fit, then as many cells as the mode holds
+        s = max(1, min(self.w // (80 * self.fw), self.h // (25 * self.fh)))
         self.scale = s
-        self.cols, self.nrows = min(self.w // (8 * s), FB_MAX_COLS), min(self.h // (16 * s), FB_MAX_ROWS)
-        self.ox, self.oy = (self.w - self.cols * 8 * s) // 2, (self.h - self.nrows * 16 * s) // 2
-        self.cursor = None
-        self.colours = {}                       # (col, row): (foreground, background) as RGB bytes
-        self.rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
-                     if self.w >= 640 else [])
+        self.cols, self.nrows = min(self.w // (self.fw * s), FB_MAX_COLS), min(self.h // (self.fh * s), FB_MAX_ROWS)
+        self.ox, self.oy = (self.w - self.cols * self.fw * s) // 2, (self.h - self.nrows * self.fh * s) // 2
+        self._rows = None
+        self._cursor = None
+        self._colours = {}                      # (col, row): (foreground, background) as RGB bytes
+
+    def _read(self):
+        if self._rows is None:
+            self._rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
+                          if self.w >= 640 else [])
+
+    @property
+    def rows(self):
+        self._read()
+        return self._rows
+
+    @property
+    def colours(self):
+        self._read()
+        return self._colours
+
+    @property
+    def cursor(self):
+        self._read()
+        return self._cursor
 
     def pixel(self, x, y):
         i = (y * self.w + x) * 3
         return self.px[i:i + 3]
 
     def cell(self, col, row):
-        s, x0, y0 = self.scale, self.ox + col * 8 * self.scale, self.oy + row * 16 * self.scale
-        grid = [[self.pixel(x0 + gx * s, y0 + gy * s) for gx in range(8)] for gy in range(16)]
+        s, fw, fh = self.scale, self.fw, self.fh
+        x0, y0 = self.ox + col * fw * s, self.oy + row * fh * s
+        grid = [[self.pixel(x0 + gx * s, y0 + gy * s) for gx in range(fw)] for gy in range(fh)]
         counts = collections.Counter(p for line in grid for p in line).most_common(2)
         bg = counts[0][0]
-        self.colours[(col, row)] = (counts[1][0] if len(counts) > 1 else None, bg)
-        bits = tuple(sum(0x80 >> gx for gx in range(8) if grid[gy][gx] != bg) for gy in range(16))
-        ch = GLYPHS.get(bits)
-        if ch is None and bits[14] == 0xFF and bits[15] == 0xFF:      # the underline cursor
-            ch = GLYPHS.get(bits[:14] + (0, 0))
+        self._colours[(col, row)] = (counts[1][0] if len(counts) > 1 else None, bg)
+        top = 1 << (fw - 1)
+        bits = tuple(sum(top >> gx for gx in range(fw) if grid[gy][gx] != bg) for gy in range(fh))
+        ch = self.glyphs.get(bits)
+        under, full = fh // 8, (1 << fw) - 1    # the underline cursor: the cell's bottom eighth (fbcore.c)
+        if ch is None and all(b == full for b in bits[fh - under:]):
+            ch = self.glyphs.get(bits[:fh - under] + (0,) * under)
             if ch is not None:
-                self.cursor = (col, row)
+                self._cursor = (col, row)
         return ch if ch is not None else '?'
 
     def text(self):
@@ -361,7 +406,9 @@ SHIFTED = dict(zip('!@#$%^&*()_+:"<>?{}|~', ['1', '2', '3', '4', '5', '6', '7', 
                                               'semicolon', 'apostrophe', 'comma', 'dot', 'slash', 'bracket_left',
                                               'bracket_right', 'backslash', 'grave_accent']))
 NAMED = {'esc': 'esc', 'bs': 'backspace', 'tab': 'tab', 'up': 'up', 'down': 'down', 'left': 'left',
-         'right': 'right', 'del': 'delete', 'home': 'home', 'end': 'end', 'ret': 'ret'}
+         'right': 'right', 'del': 'delete', 'home': 'home', 'end': 'end', 'ret': 'ret',
+         'pgup': 'pgup', 'pgdn': 'pgdn', 'ins': 'insert',   # 10/25/26 (A4): PgUp, PgDn, Insert,
+         'spc': 'spc', 'space': 'spc'}                      # and space for <ctrl-spc>
 NAMED.update({f'f{i}': f'f{i}' for i in range(1, 13)})
 
 
@@ -393,6 +440,11 @@ class Vm:
                 if serial else ['-serial', 'none'])
         cmd += list(extra) + args.extra.split()
         self.cmd = cmd
+        # 10/25/26 (track A, A7): the console's font, as driver/fbfont.c chooses it for these boots (profile=laptop):
+        # Spleen 12x24 at 1920x1080 or more, 8x16 below (OVMF's own mode is 1280x800)
+        xres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.xres=')]
+        yres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.yres=')]
+        self.font = '12x24' if xres and yres and xres[-1] >= 1920 and yres[-1] >= 1080 else '8x16'
         self.proc = subprocess.Popen(cmd, cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT)
         self.mon = Monitor(self.mon_path, self.proc)
@@ -457,8 +509,11 @@ class Vm:
     # keyboard and screen
     def keys(self, spec):
         for tok in re.findall(r'<[^>]+>|.', spec.encode().decode('unicode_escape'), re.S):
-            if tok.startswith('<'):
-                key = NAMED.get(tok[1:-1].lower())
+            if tok.startswith('<'):             # 10/25/26 (track A, A4): <ctrl-left>, <shift-tab>, <alt-x> too
+                *mods, name = tok[1:-1].lower().split('-')
+                key = NAMED.get(name) or KEYMAP.get(name)
+                if key and mods:
+                    key = '-'.join(mods + [key]) if set(mods) <= {'shift', 'ctrl', 'alt'} else None
             elif tok in SHIFTED:
                 key = 'shift-' + SHIFTED[tok]
             elif tok.isupper():
@@ -480,20 +535,34 @@ class Vm:
                 break
             time.sleep(0.1)
         time.sleep(0.1)
-        scr = Screen(open(path, 'rb').read())
+        scr = Screen(open(path, 'rb').read(), self.font)
         if save and self.outdir:
             scr.png(os.path.join(self.outdir, save))
         return scr
 
     def wait_screen(self, test, timeout, interval=1.0):
+        """the first screen that passes test and stays so: 10/25/26 (track A, A3) the console presents its changes in
+        batches, the whole grid in cell order, so a screenshot can come in the middle of a present (the prompt on row
+        13 drawn, the rows below it not yet); a screen that passes is taken again, and kept when no pixel changed. A
+        screen that keeps changing and passes each time (a running stopwatch) is kept after three passes in a row"""
         deadline = time.time() + timeout
+        streak = 0
         while True:
             scr = self.screen()
-            if test(scr):
-                return scr
+            passed = test(scr)
+            if passed:
+                again = self.screen()
+                if again.px == scr.px:
+                    return again
+                streak += 1
+                if streak >= 3 and test(again):
+                    return again
+            else:
+                streak = 0
             if time.time() > deadline or self.proc.poll() is not None:
                 return None
-            self.pump(interval)
+            if not passed:
+                self.pump(interval)
 
     def xp_bytes(self, phys, n):
         out = self.mon.cmd(f'xp /{n}xb 0x{phys:x}')
@@ -522,7 +591,9 @@ class Vm:
 # what the shell command `ansi` draws with escape sequences (row: text); the last line and the
 # corner depend on the grid
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
-             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED'}
+             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
+             # 10/25/26 (track A, A8): CHA and ECH; ESC 7/8, ESC[s/u and VPA; SGR 22, 92, 39, 44, 49, 38 dropped
+             5: '         COL       TWENTY    X   XX', 9: '         CB        FE        VPA', 11: '         BNGDU.S'}
 GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
 # 10/6/26: what `pagetest utf8` prints, as the console draws it (code page 437: no euro sign)
 UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
@@ -679,14 +750,22 @@ def scenario_serial(args, image, firmware, outdir):
     try:
         if boot_serial(vm, results, args.boot_timeout):
             vm.pump(1)
-            scr = vm.screen('boot.png')
             m = PROMPT_TEXT.search(vm.text())
             serial_boot = vm.text()[:m.end()] if m else vm.text()
-            results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
             # the last boot lines on the serial port must be the last ones on the screen too
             want = [drawn(l) for l in serial_boot.splitlines() if drawn(l)][-6:]
-            shown = [drawn(r) for r in scr.rows if drawn(r)]
-            results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
+
+            def agree(s):
+                return [drawn(r) for r in s.rows if drawn(r)][-len(want):] == want
+
+            # 10/26/26: the screen once it has settled, up to 5 s. On a loaded host a boot sometimes took no timer tick
+            # in the second before the screenshot (no present either, in K1's and A7's trees alike), and the one
+            # screenshot then came in the middle of the present that followed
+            scr = vm.wait_screen(lambda s: prompt_on(s) and agree(s) and banner_ok(s), 5) or vm.screen()
+            if vm.outdir:
+                scr.png(os.path.join(vm.outdir, 'boot.png'))
+            results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
+            results.append(('framebuffer and serial agree on the last boot stages', agree(scr)))
             results.append(('framebuffer shows the banner: Brandon Burr\'s SurfOS, the version and the years in their colours',
                             banner_ok(scr)))
             results.append(('GRUB found its own partition through $cmdpath, no disk search',
@@ -726,14 +805,24 @@ def scenario_keyboard(args, image, firmware, outdir):
         results.append(('keyboard: help, paged: its header, --More-- answered with Space, the end and the prompt',
                         seen is not None and len(seen) > 1 and 'surfsh 1.0, the SurfOS shell' in seen[0].text() and
                         '(C)2004-2026 Brandon Burr.' in seen[-1].text()))
-        # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them, F5 nothing
+        # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them; 10/25/26 (track A,
+        # A4): F5 as xterm sends it (it was dropped), then the modifiers: Ctrl+Left, Ctrl+PgUp, Shift+Tab, Alt+x; and
+        # (A6) Shift+PgUp, which on a framebuffer is the scrollback's and never reaches the program
         vm.keys('rawkeys\n')
         ok = vm.wait_screen(lambda s: 'q ends' in s.text(), 20, interval=0.5) is not None
         if ok:
             vm.keys('<up><bs>\n<f5>xq')
-            ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 78 71' in s.text() and
+            ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 1b 5b 31 35 7e 78 71' in s.text() and
                                 ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
-        results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter', ok))
+        results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter, ESC [ 1 5 ~ for F5', ok))
+        vm.keys('rawkeys\n')
+        ok = vm.wait_screen(lambda s: s.text().count('q ends') == 2, 20, interval=0.5) is not None
+        if ok:
+            vm.keys('<ctrl-left><shift-pgup><ctrl-pgup><shift-tab><alt-x>q')
+            ok = vm.wait_screen(lambda s: '1b 5b 31 3b 35 44 1b 5b 35 3b 35 7e 1b 5b 5a 1b 78 71' in s.text() and
+                                ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
+        results.append(('keyboard: raw mode sends the modifiers as xterm does: Ctrl+Left ESC[1;5D, Ctrl+PgUp ESC[5;5~, '
+                        'Shift+Tab ESC[Z, Alt+x ESC x; Shift+PgUp is the scrollback\'s', ok))
         # console switching: F2 shows another shell, F1 comes back
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'Hello World' not in s.text(), 20, interval=0.5)
@@ -748,6 +837,29 @@ def scenario_keyboard(args, image, firmware, outdir):
         scr = vm.wait_screen(lambda s: 'ANSI-TEST done' in s.text() and prompt_on(s), 20, interval=0.5)
         results.append(('escape sequences on the framebuffer: position, moves, erase, inverse, colours, the corner',
                         ansi_ok(scr)))
+        # 10/25/26 (track A, A8): the alternate screen on the framebuffer: pagetest's question on a blank screen, then
+        # the shell's screen as it was (the pattern above with its colours and the Z in its corner), the answer under it
+        vm.keys('run pagetest alt\n')
+        alt = vm.wait_screen(lambda s: 'alternate question:' in s.text(), 20, interval=0.5)
+        vm.keys('yes\n')
+        back = vm.wait_screen(lambda s: 'PAGETEST MAIN SCREEN: yes' in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('the alternate screen on the framebuffer: the program\'s question on a blank screen, the shell\'s '
+                        'screen as it was after it', alt is not None and alt.rows[0] == 'PAGETEST ALT-SCREEN' and
+                        not any(alt.rows[2:]) and ansi_ok(back) and 'ALT-SCREEN' not in back.text()))
+        # 10/25/26 (track A, A9): less, the same: its screenful, then q and the shell's screen as it was
+        vm.keys('seq 1 100 | less\n')
+        shown = vm.wait_screen(lambda s: 'standard input  lines 1-' in s.text(), 20, interval=0.5)
+        vm.keys('q')
+        back = vm.wait_screen(lambda s: 'standard input' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('less on the framebuffer: a pipeline\'s text a screenful at a time, and q gives the shell\'s '
+                        'screen back', shown is not None and shown.rows[0] == '1' and ansi_ok(back)))
+        # and edit: its screen, then ^Q (nothing typed: no question) and the shell's screen as it was
+        vm.keys('edit /nothing.txt\n')
+        shown = vm.wait_screen(lambda s: 'SurfOS edit  /nothing.txt' in s.text(), 20, interval=0.5)
+        vm.keys('<ctrl-q>')
+        back = vm.wait_screen(lambda s: 'SurfOS edit' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('edit on the framebuffer, and ^Q gives the shell\'s screen back', shown is not None and
+                        ansi_ok(back)))
         # 10/6/26: surfsh's line editor on the PS/2 keyboard, as on the laptop: Tab, Up and Enter ('\r') in raw
         # mode, in a surfsh started inside the one on F1 (its prompt is on a row below the typed command)
         def nested(s):
@@ -755,10 +867,13 @@ def scenario_keyboard(args, image, firmware, outdir):
             return typed >= 0 and last_prompt_row(s) > typed
         vm.keys('surfsh\n')
         ok = vm.wait_screen(nested, 30, interval=0.5) is not None
-        if ok:
-            vm.keys('ech<tab>keyboard-ok\n<up>\n')
-            ok = vm.wait_screen(lambda s: [r.strip() for r in s.rows].count('keyboard-ok') == 2 and
-                                s.rows[last_prompt_row(s)].rstrip().endswith('\u224b>'), 30, interval=0.5) is not None
+        # 10/25/26 (the programs' review of track A, U3): Up only once the prompt is back, since surfsh drops the keys
+        # typed while a command runs
+        for keys, count in (('ech<tab>keyboard-ok\n', 1), ('<up>\n', 2)):
+            if ok:
+                vm.keys(keys)
+                ok = vm.wait_screen(lambda s: [r.strip() for r in s.rows].count('keyboard-ok') == count and
+                                    s.rows[last_prompt_row(s)].rstrip().endswith('\u224b>'), 30, interval=0.5) is not None
         if ok:
             vm.keys('exit 7\n')
             ok = vm.wait_screen(lambda s: 'exit status 7' in s.text() and ends_prompt(s.rows[last_prompt_row(s)]),
@@ -825,7 +940,12 @@ def scenario_graphics(args, image, firmware, outdir):
         results.append(('background and image copy reach the actual display',
                         rgb(s, 0, 0) == (16, 32, 48) and rgb(s, s.w // 2, 3 * s.h // 4) == (255, 128, 0)))
         results.append(('normal completion restores the prompt', vm.expect('text console restored', 12) and vm.expect(PROMPT, 12)))
-        restored = vm.screen('graphics-restored.png')
+        # 10/25/26 (track A, A3): the console presents in batches, so the screen follows the serial line a little later
+        restored = vm.wait_screen(lambda s: 'text console restored' in s.text() and prompt_on(s), 10, interval=0.2)
+        if restored is None:
+            restored = vm.screen()
+        if outdir:
+            restored.png(os.path.join(outdir, 'graphics-restored.png'))
         results.append(('graphics margins cleared when text returns', rgb(restored, 0, 0) == (0, 0, 0)))
         results.append(('restored framebuffer contains shell text', 'text console restored' in restored.text() and prompt_on(restored)))
         active = start(30)
@@ -845,8 +965,10 @@ def scenario_graphics(args, image, firmware, outdir):
         vm.auto_more = False
         vm.send('kcmdtest gfxpager\n')
         more = vm.expect(MORE.decode(), 10)
-        s = vm.screen('graphics-pager.png')
-        results.append(('a full pager is visible before graphics takes ownership', more and '--More--' in s.text()))
+        s = vm.wait_screen(lambda s: '--More--' in s.text(), 10, interval=0.2) if more else None   # (A3: batched)
+        if s is not None and outdir:
+            s.png(os.path.join(outdir, 'graphics-pager.png'))
+        results.append(('a full pager is visible before graphics takes ownership', more and s is not None))
         vm.send(' ')
         results.append(('graphics finishes after the visible pager is answered',
                         vm.expect('GRAPHICS PAGER PASS', 12) and vm.expect(PROMPT, 12)))
@@ -864,7 +986,8 @@ def scenario_graphics(args, image, firmware, outdir):
 
 
 def scenario_fullhd(args, image, firmware, outdir):
-    """1920x1080, as on the laptop: more text, same letters (120x33 at scale 2, not 80x25 centred)"""
+    """1920x1080, as on the laptop: 10/25/26 (track A, A7) 160x45 cells of Spleen 12x24 at the font's own size (120x33
+    of 8x16 at scale 2 before, 80x25 centred before that)"""
     results = []
     vm = Vm('fullhd', args, image, firmware, mem='512', serial=False, outdir=outdir,
             extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
@@ -882,30 +1005,48 @@ def scenario_fullhd(args, image, firmware, outdir):
             vm.screen('stuck.png')
             return results
         vm.screen('boot.png')
-        results.append(('1920x1080: 120x33 cells at scale 2, 12-pixel margins above and below, the prompt at the left edge',
-                        (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 2, 120, 33, 0, 12)
+        results.append(('1920x1080: 160x45 cells of Spleen 12x24 at scale 1, no margin, the prompt at the left edge',
+                        (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 1, 160, 45, 0, 0)
                         and not scr.rows[last_prompt_row(scr)].startswith(' ')))
-        got = typed('bootinfo\n', lambda s: '120x33 text at scale 2' in s.text())
-        results.append(('bootinfo: framebuffer 1920x1080, 120x33 text at scale 2', got is not None))
-        # a line longer than 80 columns: typed past the end of the row (the line editor wraps it),
-        # 6 x Backspace back across the wrap, and echoed on one row of 105 characters
-        long = 'abcdefghij' * 11
-        got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:104] + 'Z' in s.rows)
-        results.append(('a 105-character line on one row; Backspace erases back across a wrapped line', got is not None))
+        got = typed('bootinfo\n', lambda s: '160x45 text at scale 1 in Spleen 12x24' in s.text())
+        results.append(('bootinfo: framebuffer 1920x1080, 160x45 text at scale 1 in Spleen 12x24', got is not None))
+        # a line longer than the row: typed past its end (the line editor wraps it), 6 x Backspace back across the
+        # wrap, and echoed on one row of 145 characters
+        long = 'abcdefghij' * 15
+        got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:144] + 'Z' in s.rows)
+        results.append(('a 145-character line on one row; Backspace erases back across a wrapped line', got is not None))
         # 10/25/26 (track A): a TAB goes to the next multiple of 8 and leaves the cells it passes empty
         got = typed(r"printf '1\\t2\\n'" + '\n', lambda s: '1       2' in s.rows)
         results.append(('printf with a TAB: the 2 in column 8', got is not None))
+        # 10/25/26 (track A, A3): a fast screen. 3000 lines from a job in the background (the pager leaves a job
+        # alone) are presented in batches: fewer presents than lines, and about 50 a second at most (gfxinfo's count
+        # before and after). How long the job took is said, not judged: QEMU's emulated CPU is no laptop.
+        def presents(s):
+            m = re.search(r'console: (\d+) presents', s.text()) if s else None
+            return int(m.group(1)) if m else None
+        # (each command typed once the prompt is back, the job's report too: surfsh drops keys typed ahead)
+        typed('clear\n', lambda s: last_prompt_row(s) == 0)
+        before = presents(typed('gfxinfo\n', lambda s: presents(s) is not None))
+        vm.keys('{ time seq 1 3000; } &\n')
+        done = vm.wait_screen(lambda s: '3000' in s.rows and re.search(r'real \d+\.\d\d s', s.text()), 120, interval=0.5)
+        took = re.search(r'real (\d+\.\d\d) s', done.text()).group(1) if done else '?'
+        typed('\n', lambda s: '] done' in s.text())
+        after = presents(typed('gfxinfo\n', lambda s: presents(s) is not None))
+        spent = after - before if before is not None and after is not None else None
+        results.append((f'3000 lines in {took} s from a job in the background: {spent} presents for them '
+                        '(fewer than the lines, at most about 50 a second)',
+                        spent is not None and took != '?' and spent < 3000 and spent <= 100 + 60 * float(took)))
         seen = page_through(vm, 'help\n')
         results.append(('help: its 104-character line on one row (paged)',
                         seen is not None and any(r.startswith('    die ') and r.endswith('processes use run)')
                                                  for s in seen for r in s.rows)))
         got = typed('ansi\n', lambda s: 'ANSI-TEST done' in s.text(), 30)
-        results.append(('ansi at 120x33: the pattern, Z in the corner (119,32), the size from TTY_GETSIZE', ansi_ok(got)))
+        results.append(('ansi at 160x45: the pattern, Z in the corner (159,44), the size from TTY_GETSIZE', ansi_ok(got)))
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'ANSI-TEST' not in s.text(), 20, interval=0.5)
         vm.keys('<f1>')
-        one = vm.wait_screen(lambda s: 'ANSI-TEST done, 120x33' in s.text(), 20, interval=0.5)
-        results.append(('F2 shows console 2 and F1 brings console 1 back, at 120x33', two is not None and one is not None))
+        one = vm.wait_screen(lambda s: 'ANSI-TEST done, 160x45' in s.text(), 20, interval=0.5)
+        results.append(('F2 shows console 2 and F1 brings console 1 back, at 160x45', two is not None and one is not None))
         # 10/6/26 (the console's character set, the pager): UTF-8 drawn as code page 437 cells,
         # read back through the rebuilt font (driver/font8x16.c), SurfOS's ▸ and ≋ included
         got = typed('run pagetest utf8\n', lambda s: UTF8_SAMPLE in s.rows)
@@ -914,8 +1055,8 @@ def scenario_fullhd(args, image, firmware, outdir):
         results.append(('UTF-8 on the framebuffer: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ read back through the font, € as ?',
                         got is not None))
 
-        # the pager (TTY_PAGE) on the keyboard: after `clear`, `pagetest 100` asks after 32 lines
-        # (120x33) in inverse video on the last row; Enter shows one more line, Space the next 32,
+        # the pager (TTY_PAGE) on the keyboard: after `clear`, `pagetest 100` asks after 44 lines
+        # (160x45) in inverse video on the last row; Enter shows one more line, Space the next 44,
         # Esc drops the rest
         def asking_after(last):
             return lambda s: (s.rows[-1].startswith('--More--') and s.colours.get((0, s.nrows - 1)) == (BLACK, GREY) and
@@ -923,20 +1064,34 @@ def scenario_fullhd(args, image, firmware, outdir):
         ok = typed('clear\n', lambda s: True) is not None
         if ok:
             vm.keys('run pagetest 100\n')
-            ok = vm.wait_screen(asking_after(32), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(44), 30, interval=0.5) is not None
         if ok:
             vm.keys('\n')
-            ok = vm.wait_screen(asking_after(33), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(45), 30, interval=0.5) is not None
         if ok:
             vm.keys(' ')
-            ok = vm.wait_screen(asking_after(65), 30, interval=0.5) is not None
+            ok = vm.wait_screen(asking_after(89), 30, interval=0.5) is not None
+        back = live = None
         if ok:
             vm.screen('pager.png')
+            # 10/25/26 (track A, A6): Shift+PgUp at the question shows the rows that scrolled off the top (the view's top
+            # 44 rows), " -44 " in the top right corner in inverse video, and the question waits; Shift+PgDn brings the
+            # live screen back, the question on it
+            vm.keys('<shift-pgup>')
+            back = vm.wait_screen(lambda s: s.rows[0].startswith('pagetest line 002') and s.rows[0].rstrip().endswith(' -44')
+                                  and s.colours.get((s.cols - 2, 0)) == (BLACK, GREY) and s.rows[1] == 'pagetest line 003'
+                                  and s.rows[-1] == 'pagetest line 046', 30, interval=0.5)
+            if back is not None:
+                vm.screen('scrollback.png')
+            vm.keys('<shift-pgdn>')
+            live = vm.wait_screen(asking_after(89), 30, interval=0.5)
             vm.keys('<esc>')
             got = vm.wait_screen(lambda s: at_prompt(s), 30, interval=0.5)   # the rest, run's status line too, dropped
-            ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 066' not in got.text()
-        results.append(('pager on the keyboard at 120x33: --More-- after 32 lines, Enter one more, Space 32 more, '
+            ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 090' not in got.text()
+        results.append(('pager on the keyboard at 160x45: --More-- after 44 lines, Enter one more, Space 44 more, '
                         'Esc drops the rest', ok))
+        results.append(('scrollback at the question: Shift+PgUp shows the rows above, tagged -44, the question waits; '
+                        'Shift+PgDn the live screen and the question', back is not None and live is not None))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:
@@ -1017,10 +1172,13 @@ def scenario_kernel_shell(args, image, firmware, outdir):
             ok = vm.expect('Loading SurfOS with shell=kernel', 30) and vm.expect(elevated, args.boot_timeout)
             results.append(('the kernel shell entry boots to the ring-0 shell, elevated: SURF \u224b#>', ok))
         if ok:
-            vm.pump(1)
-            scr = vm.screen('kernel-shell.png')
-            row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
-            results.append(('the framebuffer shows the banner and the elevated prompt', banner_ok(scr) and row.endswith('#>')))
+            def shown(scr):                     # 10/25/26 (track A, A3): the screen follows the serial line in batches
+                row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
+                return banner_ok(scr) and row.endswith('#>')
+            scr = vm.wait_screen(shown, 15, interval=0.5)
+            if scr is not None and outdir:
+                scr.png(os.path.join(outdir, 'kernel-shell.png'))
+            results.append(('the framebuffer shows the banner and the elevated prompt', scr is not None))
             results.append(('it was asked for: no recovery line', 'recovery console' not in vm.text()))
             ok, out = run_cmd(vm, 'ps', ['Shell 0', 'Shell 1', 'Shell 2', 'Shell 3'])
             results.append(('ps: the ring-0 shells on F1 to F4, no surfsh', ok and 'surfsh' not in out))
@@ -1350,6 +1508,15 @@ def scenario_usbnet(args, image, firmware, outdir):
             ok, _ = run_cmd(vm, f'fetch -o /dev/null http://10.0.2.2:{port}/big', ['fetch: 1.0 MB in ', '-> /dev/null'],
                             timeout=120)
             results.append(('fetch: 1 MB over the adapter, to /dev/null', ok))
+            # 10/25/26 (track A): fetch's connection is finished by the net thread a moment after fetch ends (the FINs,
+            # the last ACK, TIME_WAIT), which frees what it held, and selftest's heaptest compares the whole heap's
+            # use before and after its rounds: that free fell inside them each time at -O0 once the console got
+            # faster (A3), and heaptest failed. So selftest waits until netstat shows no connection but listeners
+            for _ in range(10):
+                _, out = run_cmd(vm, 'netstat', [])
+                if not re.search(r'\btcp  (?!LISTEN)', out):
+                    break
+                time.sleep(1)
             ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
             results.append(('selftest, with its network checks on the USB adapter', ok))
             results += telnet_session(vm, qr, telnet_port)
@@ -2188,6 +2355,44 @@ SET_SETTINGS = (b'# mine: written on the Mac\ntelnetd = on\n\nethernet = dhcp   
                 b'hostname = ideapad\n')
 
 
+def scenario_bootpanic(args, image, firmware, outdir):
+    """10/25/26 (track A, the kernel review's first finding): a stick made from the build's stick folder as the settings
+    scenario makes one (no development build: GRUB's first entry is SurfOS), that entry given the test word bootpanic,
+    which panics just before init_timer(). Its report must reach the framebuffer, as it does the serial line: until the
+    fbflush thread has run every present is drawn at once, and a panic draws everything after it at once too"""
+    results = []
+    mi = load_tool('mkimage', 'mkimage.py')
+    kit = stick_folder(image)
+    results.append(('the stick folder is beside the image (make usb-image writes it)', kit is not None))
+    if not kit:
+        return results
+    files = written_by_stick_tool(kit, skip=('surfos-dev/surfos.bin', 'surfos-dev/initrd.tar'))   # GRUB's SurfOS first
+    cfg = files.get('boot/grub/grub.cfg', b'')
+    plain = b'multiboot2 /boot/surfos.bin profile=laptop bootvol=$surfos_bootvol\n'
+    results.append(("the menu's SurfOS entry is there to be given the word", cfg.count(plain) == 1))
+    files['boot/grub/grub.cfg'] = cfg.replace(plain, b'multiboot2 /boot/surfos.bin profile=laptop bootpanic '
+                                                     b'bootvol=$surfos_bootvol\n')
+    tmpd = tempfile.mkdtemp(prefix='surfos-bootpanic-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'bootpanic.img')
+    try:
+        mi.make_fat32(stick, files, size_mb=1100, label='DATASTICK', cluster_bytes=16384, serial=0x0B0071C5)
+        vm = Vm('bootpanic', args, stick, firmware, mem='512', serial=True, outdir=outdir, copy_image=False)
+        try:
+            ok = vm.expect("Booting `SurfOS'", args.boot_timeout) and vm.expect('Kernel panic: bootpanic', args.boot_timeout)
+            ok = ok and vm.expect('SYSTEM HALTED', 30)
+            results.append(('the menu\'s entry with bootpanic: the panic before the timer, on the serial line', ok))
+            scr = vm.wait_screen(lambda s: 'Kernel panic: bootpanic' in s.text() and 'SYSTEM HALTED' in s.text(), 30,
+                                 interval=0.5) if ok else None
+            if outdir:
+                vm.screen('bootpanic.png')
+            results.append(('its report on the framebuffer too, to SYSTEM HALTED', scr is not None))
+        finally:
+            vm.close()
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def scenario_settings(args, image, firmware, outdir):
     """10/17/26 (the network manager, docs/USB-BOOT.md section 15): the owner's one stick with surfos-config/ on it,
     through GRUB's own menu. The SurfOS entry (no development build, so no autonet) reads the settings from the
@@ -2334,6 +2539,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit, 'crashstack': scenario_crashstack, 'shutdown': scenario_shutdown,
+             'bootpanic': scenario_bootpanic,     # 10/25/26 (track A)
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
              'settings': scenario_settings,
@@ -2440,7 +2646,7 @@ def main():
                'scenarios': {}}
     failed = 0
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
-                               'crashstack', 'shutdown', 'usbnet',
+                               'crashstack', 'shutdown', 'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None

@@ -97,6 +97,7 @@ void kmain(u_long magic, u_long addr) {
     if(bootinfo.laptop) init_apic(); //8259s through the local APIC's LINT0, I/O APICs masked
     init_delay(); //udelay() for the drivers, calibrated on whatever clock counts
     init_task(); //setup multitasking
+    framebuffer_start(); //10/25/26: the thread that batches the framebuffer's presents (none on VGA text)
 
     init_keyboard(); //get keyboard ready
 
@@ -109,6 +110,9 @@ void kmain(u_long magic, u_long addr) {
     init_netman(); //10/17/26: the settings on the stick: a saved Wi-Fi network, DHCP, telnetd (kernel/netman.c)
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
+
+    if(bootinfo_has_arg(&bootinfo, "bootpanic")) //10/25/26 (track A, the review): a test word: a panic's report
+        panic("bootpanic: on purpose, before the timer starts (a test of the screen)"); //must reach the screen
 
     init_timer(); //start timer and go!!
     timer_confirm(); //no tick means nothing would ever run: try the local APIC timer, or say so

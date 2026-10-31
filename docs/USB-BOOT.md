@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 19 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 22 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
@@ -71,7 +71,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 19 scenarios, several minutes
+devenv/test-usb.sh      # the automatic tests: 22 scenarios, several minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -150,8 +150,12 @@ firmware version setup shows, for the hardware record.
    then the banner, *Brandon Burr's SurfOS* and *Version 1.0 on an x86, 2004-2026* in red
    and orange, and the shell's prompt, `SURF ≋>` (section 10).
 
-The text fills the screen: 120x33 characters on a 1920x1080 panel, with the letters
-drawn at twice the font's size, or 170x48 on a 1366x768 panel.
+The text fills the screen: 160x45 characters on the laptop's 1920x1080 panel, in Spleen
+12x24 at its own size (since 10/25/26; 120x33 of the 8x16 font at twice its size before),
+or 170x48 of 8x16 on a 1366x768 panel. To choose another font, add `font=8x16`, `font=12x24`
+or `font=16x32` (120x33 on 1920x1080, the biggest letters) to the GRUB entry's `multiboot2`
+line (press `e` in the menu); a font that 80x25 of its characters would not fit gives way to
+8x16, and `bootinfo` says so.
 
 The GRUB menu also has:
 
@@ -502,13 +506,23 @@ SurfOS has no users and no home directories, so a shell starts at `/`.
 | Keys | What they do |
 |---|---|
 | Left, Right, Home, End (Ctrl+A, Ctrl+E) | move in the line |
+| Ctrl+Left, Ctrl+Right (Alt+B, Alt+F) | move by words |
 | Backspace, Delete | delete before or under the cursor |
-| Ctrl+U, Ctrl+K, Ctrl+W | delete the whole line, to its end, the word before the cursor |
-| Up, Down | the lines typed before (`history` lists them) |
+| Alt+Backspace, Alt+D | delete the word before the cursor, or the rest of the word after it |
+| Ctrl+U, Ctrl+K, Ctrl+W | delete the whole line, to its end, back to the last blank |
+| Up, Down | the lines typed before (`history` lists them; the last 1,000 are kept) |
+| Ctrl+R | search them: type part of a line and the newest one that has it shows; Ctrl+R again goes further back, Enter runs it, Esc puts back what you had |
+| Alt+. | put in the last word of the line before (press again for the line before that) |
 | Tab | complete the command or file name; a second Tab lists the choices |
 | Ctrl+L | clear the screen |
 | Ctrl+C | drop the line; while a command runs, stop it |
 | Ctrl+D | on an empty line: leave this shell |
+
+**Lines from the history** (as in bash): `!!` is the line before (`!! | head` runs it again
+into `head`), `!$` its last word (`mkdir /data/new` then `cd !$`), `!12` line 12 of
+`history`, `!-2` the line before the last, and `!ls` the last line that started with `ls`.
+The line is shown as it runs; a `!` that nothing follows, `!=`, and anything in quotes stay
+as typed. A line that starts with a space is not kept in the history.
 
 Tab completes the first word from the shell's commands, the kernel's and the programs, and
 any other word (or one with a `/` in it) as a file or directory name: one match is filled
@@ -518,6 +532,14 @@ are more than the screen holds).
 **Long output** stops when the screen is full, with `--More--` on the last row: Space
 shows the next screenful, Enter one more line, and q (or Esc, or Ctrl+C) leaves the rest
 unshown. `help` is long on purpose.
+
+**Scrolling back.** Shift+PgUp shows what scrolled off the top of the screen, a screenful
+at a time (each console keeps about 1,600 lines; `clear` and Ctrl+L keep the screen there
+too); Shift+PgDn goes forward again, Shift+Home to the oldest line, Shift+End back to the
+present. The top right corner says how many lines back you are (` -32 `). Anything printed
+meanwhile waits below; any other key brings the live screen back and does what it does.
+It works at `--More--` too, without answering it. (Not in the desktop, where the keys are
+the desktop's, nor on a VGA text screen.)
 
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
 `help`, `history`, `set`, `type`, ...), then a program in the directories of `PATH`
@@ -680,6 +702,9 @@ cannot do yet. A few differences:
   time. A paste into a program that reads what is typed, such as `edit`, arrives whole.
   Keys typed while a command runs are given to that command; Ctrl+C stops the command and
   drops what was typed ahead, so it never runs afterwards.
+* **Alt keys** (Alt+., Alt+B, Alt+D, ...) reach surfsh when the terminal sends the Option
+  key as Alt, an ESC before the key: in the Mac's Terminal, Settings, Profiles, Keyboard,
+  "Use Option as Meta key". Ctrl+R and the `!` references need nothing.
 * **Messages on the laptop's screen:** a background task that a command starts (such as
   `tcpecho`) prints on the laptop's F1 console, not in the session, and keeps running after
   the session ends.
@@ -1083,7 +1108,22 @@ the address.
 ```text
 surfos-config/settings.conf   the settings, "key = value", each explained in the file
 surfos-config/networks.conf   the saved networks
+surfos-config/surfshrc        10/25/26: your own commands, which surfsh runs at each prompt's start
+surfos-config/history         10/25/26: what you typed, kept while settings history is on
 ```
+
+`surfshrc` is a surfsh script of your own, made on the Mac (plain text, as below): every
+surfsh with a prompt runs it before its first one (on F1 to F4, a telnet session, a surfsh
+typed at a prompt), after `/initrd/etc/surfsh.conf`. `HOME=/data` there makes `~` stand for
+`/data`; it may set variables, define functions and print a line. SurfOS only reads it, and
+not under the menu's entry without the settings. `settings history on` makes surfsh keep the
+last 1,000 lines typed at its prompts in `history` and recall them at its next start (Up,
+Ctrl+R); it saves when surfsh ends, after every 25 lines and on `history -w`. The file is
+plain text on the stick: a password typed on a command line would be in it (a line that
+starts with a space is never kept). `settings history off` stops the saving; the file stays
+until you delete it. At startup a surfsh waits for the stick's settings to be read (30 seconds
+at most) before its first prompt; started without the settings, or not from a stick, it does not
+wait at all.
 
 On the Mac they open in TextEdit (*Open With* → *TextEdit*, as `.conf` files are not its
 own): keep them plain text (*Format* → *Make Plain Text*), and before typing turn off *Edit*
@@ -1375,7 +1415,7 @@ Limits:
 | Works on the laptop (verified under emulation) | Not supported yet |
 |---|---|
 | UEFI boot from USB, GRUB, Multiboot 2 | Secure Boot (GRUB is unsigned) |
-| Framebuffer console filling the screen (120x33 cells at 1920x1080), VGA colours, 4 consoles | USB keyboards and mice; USB hubs and docks |
+| Framebuffer console filling the screen (160x45 cells of Spleen 12x24 at 1920x1080, `font=` for another), VGA colours, 4 consoles, scrolling back | USB keyboards and mice; USB hubs and docks |
 | Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | Touchpad gestures such as two-finger scrolling (the touchpad works as a two-button mouse: [GUI](GUI.md)) |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
 | Delays calibrated on the PIT, the ACPI PM timer or the HPET | WPA3-only Wi-Fi networks, Bluetooth, sound, battery, suspend, ACPI power-off |
@@ -1383,7 +1423,7 @@ Limits:
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
 | USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
-| The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | Scrolling back, Ctrl+R, a startup file and saved history (in the works) |
+| The shell, surfsh: the SurfOS prompt, Tab completion, history (Ctrl+R, `!!`), scrolling back (Shift+PgUp), a pager, quotes and redirection, pipes, variables, wildcards, scripts and job control, the kernel's commands; UTF-8 on the screen | A startup file and saved history (in the works) |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |
@@ -1405,7 +1445,8 @@ Limits:
 * **Screen.** `driver/framebuffer.c` draws the console's cells into the firmware's
   framebuffer with an 8x16 font, scaled by the largest whole number at which 640x400
   fits; the grid then takes as many cells as the screen holds (120x33 at 1920x1080), and
-  the console follows its size. A cell holds a code page 437 character, into which the
+  the console follows its size (10/25/26: under profile=laptop at 1920x1080 or more in
+  Spleen 12x24, 160x45 cells; `font=` chooses 8x16, 12x24 or 16x32). A cell holds a code page 437 character, into which the
   console decodes UTF-8; the font has those 256 characters, from Spleen, with SurfOS's
   `▸` and `≋` drawn for it. A framebuffer above 4 GB is reached with a
   4 MB page (PSE-36), write-combining through PAT.
@@ -1492,7 +1533,7 @@ and, for the settings and saved networks, [superpowers/plans/2026-10-17-network-
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json, and build/usb/stick/
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image

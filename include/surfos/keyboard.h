@@ -35,6 +35,13 @@ File: keyboard.h    Date: 4/23/04, rebuilt 10/2026 (roadmap C2)
 #define UP    (LEFT + 1)
 #define DOWN  (UP + 1)
 #define RT    (DOWN + 1)
+#define BACKTAB (RT + 1)        /* 10/25/26: Shift+Tab, in raw mode only (line mode keeps its Tab) */
+
+/* 10/25/26 (track A, A4): the modifiers held with a key (tty_key()); in raw mode they become xterm's
+   parameter m = 1 + these on the special keys' sequences, and Alt on any other key an ESC before it */
+#define KEY_SHIFT 1
+#define KEY_ALT   2
+#define KEY_CTRL  4
 
 #define KBD_PORT    0x60
 #define KBD_STATUS  0x64

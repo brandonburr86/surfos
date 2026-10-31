@@ -4,7 +4,9 @@
    outside the set, overlong forms, surrogates, values above U+10FFFF, stray continuation
    bytes, sequences cut short by ASCII or ESC, 0xFF), and the framebuffer font in the same
    order (every character that is not blank has a glyph of its own, ▸ and ≋ have their
-   shapes). Built like the kernel objects and run by `make unittest`. */
+   shapes). 10/25/26 (track A, A7): the 12x24 and 16x32 tables likewise, 16x32's SurfOS
+   symbols the 8x16 ones doubled, 12x24's drawn ▸ and ≋. Built like the kernel objects and run
+   by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -262,11 +264,91 @@ static void test_font(void) {
     check(ink_rows(0xF9, &first, &last) == 1 && first >= 9, "font: … (0xF9) sits on the baseline");
 }
 
+/* 10/25/26 (track A, A7): the bigger fonts (driver/font12x24.c, font16x32.c, struct fb_font) */
+static u32 row_of(const struct fb_font *f, int i, int y) {
+    return f->rows16 ? f->rows16[i * f->height + y] : f->rows8[i * f->height + y];
+}
+
+static int blank_in(const struct fb_font *f, int i) {
+    u32 y;
+    for(y = 0; y < f->height; y++) if(row_of(f, i, y)) return 0;
+    return 1;
+}
+
+static int bands_in(const struct fb_font *f, int i, int *first, int *last) {
+    int y, bands = 0, prev = 0;
+    *first = *last = -1;
+    for(y = 0; y < (int)f->height; y++) {
+        int on = row_of(f, i, y) != 0;
+        if(on) {
+            if(*first < 0) *first = y;
+            *last = y;
+            if(!prev) bands++;
+        }
+        prev = on;
+    }
+    return bands;
+}
+
+static void test_big_fonts(void) {
+    static const struct fb_font *const fonts[] = { &fb_font_12x24, &fb_font_16x32 };
+    static const int symbols[] = { 0x10, 0x11, 0x1C, 0xF7 };
+    char what[96];
+    int f, i, j, y, x, ok, first, last, mid, w0, start;
+    for(f = 0; f < 2; f++) {
+        const struct fb_font *t = fonts[f];
+        for(ok = 1, i = 0; i < 256; i++) if(blank_in(t, i) != (i == 0x00 || i == 0x20 || i == 0xFF)) ok = 0;
+        snprintf(what, sizeof(what), "%s: every character that is not blank has a glyph", t->name);
+        check(ok && t->rows16 && !t->rows8 && t->width == (f ? 16u : 12u) && t->height == 2 * t->width, what);
+        for(ok = 1, i = 0; i < 256; i++)
+            for(j = i + 1; j < 256; j++) {
+                for(y = 0; y < (int)t->height && row_of(t, i, y) == row_of(t, j, y); y++);
+                if(!blank_in(t, i) && y == (int)t->height) ok = 0;
+            }
+        snprintf(what, sizeof(what), "%s: no two characters share a glyph", t->name);
+        check(ok, what);
+        for(ok = 1, i = 0; i < 256; i++)
+            for(y = 0; y < (int)t->height; y++) if(row_of(t, i, y) & ((1u << (16 - t->width)) - 1)) ok = 0;
+        snprintf(what, sizeof(what), "%s: each row in its top %u bits", t->name, t->width);
+        check(ok, what);
+    }
+    for(ok = 1, i = 0; i < 4; i++)
+        for(y = 0; y < 32; y++)
+            for(x = 0; x < 16; x++)
+                if(!!(fb_font_16x32.rows16[symbols[i] * 32 + y] & (0x8000 >> x)) !=
+                   !!(font8x16[symbols[i]][y / 2] & (0x80 >> (x / 2)))) ok = 0;
+    check(ok, "16x32: SurfOS's four symbols are the 8x16 ones, each pixel two by two");
+
+    /* 12x24's ▸, drawn: a solid triangle pointing right on the small letters' middle row (13), every row a run
+       from the same column, growing to the middle and shrinking again */
+    ok = bands_in(&fb_font_12x24, 0x10, &first, &last) == 1 && (first + last) / 2 == 13 && (last - first) % 2 == 0;
+    mid = (first + last) / 2;
+    for(start = -1, w0 = 99, i = 0; ok && i <= mid - first; i++) {
+        u32 a = row_of(&fb_font_12x24, 0x10, mid - i), b = row_of(&fb_font_12x24, 0x10, mid + i);
+        int s = 0, w = 0;
+        while(s < 16 && !(a & (0x8000 >> s))) s++;
+        while(s + w < 16 && (a & (0x8000 >> (s + w)))) w++;
+        if(a != b || (start >= 0 && s != start) || w > w0 || (u32)(a << (s + w)) & 0xFFFF) ok = 0;
+        start = s;
+        w0 = w;
+    }
+    check(ok, "12x24: ▸ (0x10) is a solid triangle pointing right, on the small letters' middle row");
+    /* ≋: three tildes, the same one three times, one row apart */
+    ok = bands_in(&fb_font_12x24, 0xF7, &first, &last) == 3 && last - first == 10;
+    for(i = 0; ok && i < 3; i++)
+        if(row_of(&fb_font_12x24, 0xF7, first + i) != row_of(&fb_font_12x24, 0xF7, first + 4 + i) ||
+           row_of(&fb_font_12x24, 0xF7, first + i) != row_of(&fb_font_12x24, 0xF7, first + 8 + i)) ok = 0;
+    check(ok, "12x24: ≋ (0xF7) is three tildes");
+    check(row_of(&fb_font_12x24, 'A', 4) == 0x1F80 && row_of(&fb_font_16x32, 0xDB, 0) == 0xFFFF,
+          "12x24 and 16x32: Spleen's A, and a full block across the whole cell");
+}
+
 int main(void) {
     test_tables();
     test_decoder();
     test_bad_states();
     test_font();
+    test_big_fonts();
     printf("%s: %d checks, %d failures\n", failures ? "CP437 UNIT TESTS FAILED" : "CP437 UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);
     return 0;

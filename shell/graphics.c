@@ -16,10 +16,17 @@ GRUB keeps the panel in the firmware's selected mode.
 
 int cmd_gfxinfo(int argc, char **argv) {
     char description[200];
+    struct fb_counts n;
     if(argc != 1) return CMD_USAGE;
     printf("    graphics: software 2D (pixels, rectangles, lines, RGB images)\n");
-    if(!framebuffer_active()) printf("    no framebuffer: boot the UEFI USB image for graphics\n");
-    else printf("    %s\n", framebuffer_describe(description, sizeof(description)));
+    if(!framebuffer_active()) {
+        printf("    no framebuffer: boot the UEFI USB image for graphics\n");
+        return CMD_OK;
+    }
+    printf("    %s\n", framebuffer_describe(description, sizeof(description)));
+    framebuffer_counts(&n);                     /* 10/25/26 (track A, A3): what the console's screen has cost */
+    printf("    console: %u presents (the slowest %u ms), %u more folded into them; %u cells drawn, %u cursor moves\n",
+           n.presents, n.slowest_ms, n.saved, n.glyphs, n.cursors);
     gui_frame_info();                   /* 10/25/26: each desktop that runs, with its frame times */
     return CMD_OK;
 }

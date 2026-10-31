@@ -144,6 +144,10 @@ struct vnode_ops {
        waits, and it must never call poll_wake(), or a task in poll() would never sleep (it looks
        again after every poll_wake(), fs/poll.c) */
     int (*poll)(struct vnode *v, struct file *f);
+    /* 10/25/26 (track A, A10): a file of this vnode is closed (its last descriptor), or fsynced: what it holds in
+       memory goes where it belongs (fs/devfs.c's /dev/config/history to the stick); NULL: nothing to do. Its error
+       is close's and fsync's */
+    int (*flush)(struct vnode *v);
 };
 
 struct vnode {

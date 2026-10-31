@@ -29,7 +29,7 @@ programs before the kernel's commands (ls, cat, cp, df); type says which runs.
                       program and its path, a kernel command) and what it hides; 1 for none
 
 10/25/26 (scripts): the builtins of script.c (: true false break continue return local eval
-. source read kernel), test.c (test and [) and printf.c are in the table too, and exec, which
+. source read kernel time), test.c (test and [) and printf.c are in the table too, and exec, which
 exec.c carries out itself. POSIX's special builtins (: . break continue eval exec exit export
 readonly return set shift unset) come before a function of the same name, the others after
 it. set also takes POSIX's options: set -e -u -x -f, +e ... to end them, -o NAME / +o NAME,
@@ -56,7 +56,7 @@ const struct builtin builtins[] = {
     { "cd",      "[dir]",         "change the directory (none: /, -: the one before)", b_cd, 0 },
     { "pwd",     "",              "print the current directory", b_pwd, 0 },
     { "echo",    "[-n] [-e] ...", "print the words (-n: no newline, -e: \\n \\r \\t \\\\)", b_echo, 0 },
-    { "history", "",              "the lines typed before (Up and Down recall them)", b_history, 0 },
+    { "history", "[-w]",          "the lines typed before (Up and Down recall them; -w: saved on the stick now)", b_history, 0 },
     { "set",     "[key [value]]", "show or change the settings (set alone: all, and the variables)", b_set, 1 },
     { "help",    "[command]",     "this list, or one command", b_help, 0 },
     { "type",    "name...",       "which command a name runs, and what it hides", b_type, 0 },
@@ -82,6 +82,7 @@ const struct builtin builtins[] = {
     { "source",  "file [args]",   "the same as .", b_dot, 0 },
     { "exec",    "[cmd [args]]",  "cmd, and then this shell ends; alone: its redirections stay", b_colon, 1 },
     { "kernel",  "name [args]",   "the kernel's command name, where surfsh or a program has its own", b_kernel, 0 },
+    { "time",    "cmd [args]",    "cmd, then how long it took (real n.nn s)", b_time, 0 },
     /* 10/25/26: job control (jobs.c) */
     { "jobs",    "",              "the jobs: running, stopped (Ctrl+Z), and their commands", b_jobs, 0 },
     { "fg",      "[%n]",          "job n (the last one) in the foreground again", b_fg, 0 },
@@ -207,8 +208,10 @@ static int b_history(int argc, char **argv) {
         history_add(argv[2]);
         return 0;
     }
+    if(argc == 2 && !strcmp(argv[1], "-w"))     /* 10/25/26 (A10): surfos-config/history now (main.c) */
+        return history_save(1) ? 1 : 0;
     if(argc > 1) {
-        fprintf(stderr, "usage: history\n");
+        fprintf(stderr, "usage: history [-w]\n");
         return STATUS_USAGE;
     }
     return history_print();
@@ -553,11 +556,16 @@ static int b_help(int argc, char **argv) {
            "    directories (%s), then the kernel's; a name with a / is a\n"
            "    program's path. type NAME says which runs; kernel NAME runs the kernel's.\n",
            use_unicode() ? "\xE2\x80\xA6 \xE2\x89\x8B>" : "... ~>", var_get("PATH") ? var_get("PATH") : PROGRAM_DIR);
-    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
-           "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
-           "    the history; Tab completes a command or a path, a second Tab lists the\n"
-           "    choices; ^L clears the screen, ^C drops the line, ^D on an empty line\n"
-           "    leaves surfsh.\n");
+    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; Ctrl+Left and\n"
+           "    Ctrl+Right (Alt+B, Alt+F) move by words, Alt+D and Alt+Backspace delete\n"
+           "    one; ^U clears the line, ^K deletes to its end, ^W back to a blank; Up and\n"
+           "    Down: the history, ^R searches it as you type (^R again: an older line,\n"
+           "    Esc: the line back), Alt+. puts in the last word of the line before; Tab\n"
+           "    completes a command or a path, a second Tab lists the choices; ^L clears\n"
+           "    the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n"
+           "    In a line: !! the line before, !$ its last word, !n line n of history,\n"
+           "    !-n the n-th line back, !str the last line that starts with str (the\n"
+           "    line is shown as it runs). A line that starts with a space is not kept.\n");
     printf("\n    The prompt shows the current directory and the wave; a ! after the wave\n"
            "    says that the last command failed, an @ that this is a telnet session\n"
            "    (another computer's terminal; there the @ shows instead of a !). set\n"

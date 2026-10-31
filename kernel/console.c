@@ -14,6 +14,8 @@ The pager (TTY_PAGE in tty.h) lives here too: kputch() counts the rows and asks 
 printed to the master side instead of drawing it, the writer's colour becomes an ANSI SGR
 sequence, and the pager counts the rows and columns of the size PTY_SETSIZE gave and asks
 its question in the stream (see "stream consoles" below).
+10/25/26 (track A, A6; audit C9): F1-F4 on a framebuffer keep what scrolls off their top, and
+Shift+PgUp shows it ("scrollback" below).
 */
 
 #include <asm/io.h>
@@ -27,8 +29,10 @@ its question in the stream (see "stream consoles" below).
 #include <sys/serial.h>
 #include <sys/framebuffer.h>
 #include <surfos/klog.h>
+#include <surfos/timer.h>
 
 #include <mm/kalloc.h>
+#include <mm/pmm.h>
 #include <surfos/irq.h>
 
 #include <blibc_common.h>
@@ -63,6 +67,8 @@ static void stream_reshow(surf_console *con);
 static int page_descends(struct surf_task *t, struct surf_task *owner);
 static void page_row(surf_console *con);
 static void stream_clear(surf_console *con);    /* 10/6/26: stream consoles (below) */
+static void line_wait(surf_console *con);       /* 10/25/26 (the review): a kernel thread's line (below) */
+static void alt_gone(surf_console *con);        /* 10/25/26 (A8): the alternate screen (below) */
 static void stream_csi(surf_console *con, int final);
 static int stream_how(void);
 static bool panicking;                          /* 10/6/26: console_panic() was called: the report goes to the screen */
@@ -108,22 +114,27 @@ void init_console(void) {
    after init_interrupt(); the boot messages so far are in the kernel log and are drawn
    again on the bigger grid. VGA text mode, and a mode that holds just 80x25, keep the
    static buffers. Without memory the screen stays at 80x25. */
+static bool scrollback_ok;                      /* 10/25/26 (A6): the grid is final: scrollback rings may be made */
+
 void init_console_grid(void) {
     u_int cols, rows, bytes, i;
     u_char *mem;
     u_long flags;
     if(video != VIDEO_FB) return;
     framebuffer_grid(&cols, &rows);
-    if(cols == COLUMNS && rows == LINES) return;
     bytes = cols * rows * 2;
-    mem = (u_char *)kalloc((NUM_CONSOLES + 1) * bytes);
-    if(!mem) return;
+    mem = cols == COLUMNS && rows == LINES ? NULL : (u_char *)kalloc((NUM_CONSOLES + 1) * bytes);
+    if(!mem) {                  /* 80x25 already, or no memory for more: the grid stays (10/25/26: and is final) */
+        scrollback_ok = true;
+        return;
+    }
     for(i = 0; i < (NUM_CONSOLES + 1) * bytes; i += 2) {   /* cleared cells, as clearConsole() leaves them */
         mem[i] = 0;
         mem[i + 1] = 7;
     }
     if(framebuffer_grow(mem + NUM_CONSOLES * bytes) != 0) {
         kfree(mem);
+        scrollback_ok = true;
         return;
     }
     flags = irq_save();
@@ -136,6 +147,7 @@ void init_console_grid(void) {
         setPoint(&conArray[i].loc, 0, 0);
         conArray[i].wrap = 0;
     }
+    scrollback_ok = true;       //10/25/26: the rings get rows of this grid, the boot replayed below among them
     irq_restore(flags);
     syncVideoConsole(true);     //the whole screen, blank
     console_replay_log();       //and the boot so far (the serial port has it already)
@@ -160,16 +172,30 @@ void console_replay_log(void) {
     mirror_serial = true;
 }
 
+/* 10/25/26 (track A, A3): what the framebuffer owes (framebuffer_present_lazy()), now: a reader is about
+   to wait for a key (tty.c), so the prompt or the pager's question shows at once */
+void console_flush(void) {
+    if(video == VIDEO_FB) framebuffer_flush();
+}
+
 void syncVideoConsole(bool memcopy) {
     surf_console *con = conActive;
+    u_long flags;
     if(!con) return;
     KCRIT_ENTER
+    flags = irq_save();                 /* 10/25/26 (the review): the view's keys come from an interrupt handler, */
+    if(con->view) {                     /* so the check and the copy are one (A6: a view back keeps the screen) */
+        irq_restore(flags);
+        KCRIT_LEAVE
+        return;
+    }
     conVideo.loc=con->loc;
     conVideo.txtColor=con->txtColor;
-    setpos(con);
     if(memcopy) memcpy(conVideo.vmem,con->vmem,SCREEN_BYTES);
+    irq_restore(flags);
+    setpos(con);
     KCRIT_LEAVE
-    if(memcopy && video == VIDEO_FB) framebuffer_present();
+    if(memcopy && video == VIDEO_FB) framebuffer_present_lazy();   /* 10/25/26: a scroll, a clear: batched */
 }
 
 bool isConsoleActive(surf_console *con) {
@@ -184,10 +210,169 @@ bool isConsoleValid(surf_console *con) {
 
 }
 
+/**** scrollback (10/25/26, track A, A6; audit C9) ****/
+
+/*
+    F1-F4 on a framebuffer keep the rows that go off the top of the screen in a ring of their
+    own, made from the kernel heap when the first row goes (SCROLLBACK_BYTES: about 1,600 rows of
+    160 columns, 2 MB for the four), once the grid is final (init_console_grid()). ESC[2J and
+    clearConsole() put the screen's rows in it too, up to the last that shows anything, so clear
+    and Ctrl+L lose nothing. Shift+PgUp and Shift+PgDn move the view back and forth a screenful
+    less a row, Shift+Home to the oldest row, Shift+End back to the live screen: keyboard.c gives
+    them here before the tty, so they work at the pager's question as well. A view back shows the
+    ring's rows, then the console's own, with " -N " (the rows back) in inverse video at the top
+    right and no cursor. What is printed meanwhile goes into the console's cells as ever, not onto
+    the screen (shows_live()), and a row that goes into the ring moves the view along, so the
+    screen keeps what it shows. Any other key, a console switch or a panic shows the live screen
+    again; under a graphics session (the desktop) the keys are the session's. VGA text mode and
+    the pseudo-terminals keep no rows.
+*/
+#define SCROLLBACK_BYTES (512 * 1024)
+#define SCROLLBACK_SPARE 512                    /* 10/25/26 (the review): frames left free after a ring is made */
+#define VIEW_TAG_ATTR 0x70                      /* " -N ": black on light grey, as the pager's question */
+
+/* is con on the screen as it is now (the active console, not a view back)? */
+static bool shows_live(surf_console *con) {
+    return con == conActive && !con->view;
+}
+
+/* row k of con's ring, 0 the oldest */
+static u_char *sb_row(surf_console *con, u_int k) {
+    return con->sb + ((con->sb_next + con->sb_cap - con->sb_count + k) % con->sb_cap) * COLUMNS * 2;
+}
+
+/* 10/25/26 (the review): con's ring, made: only while that many frames and SCROLLBACK_SPARE more are free (else no
+   scrollback, as when kalloc fails), and only where a big kalloc may take a while: once the timer runs, never in an
+   interrupt handler nor with interrupts off; before that, during the boot, anywhere. Elsewhere, and while another
+   writer makes it (sb_making), the row is not kept, and a later scroll makes the ring. Whether con has one now.
+   10/31/26: its pages are not touched here. The heap maps a page when it is first touched, and its growth promises
+   that page's frame (robustness, L2 and L3: mm/kalloc.c, mm/paging.c), so a row that reaches a new page from an
+   interrupt handler cannot run out of frames. Mapping all 128 pages in one go left every later present about 30 times
+   slower under QEMU, the same cells drawn: the serial scenario took 202 s instead of 20 */
+static u_char sb_making[NUM_CONSOLES];
+
+static bool sb_make(surf_console *con) {
+    u_int cap = SCROLLBACK_BYTES / (COLUMNS * 2), bytes = cap * COLUMNS * 2, i = (u_int)(con - conArray);
+    u_char *ring = NULL;
+    u_long flags;
+    if(con->sb) return true;
+    if(getticks() != 0 && (in_interrupt() || !irqs_enabled())) return false;
+    flags = irq_save();
+    if(con->sb || con->sb_none || sb_making[i]) {   /* made, refused, or being made: that writer's (no second ring) */
+        irq_restore(flags);
+        return con->sb != NULL;
+    }
+    sb_making[i] = 1;
+    irq_restore(flags);
+    if(pmm_free_frames() >= bytes / 4096 + 1 + SCROLLBACK_SPARE) ring = (u_char *)kalloc(bytes);
+    flags = irq_save();
+    if(ring) {
+        con->sb_cap = cap;
+        con->sb = ring;
+    } else {
+        con->sb_none = 1;                       /* no memory: no scrollback, and no asking again */
+    }
+    sb_making[i] = 0;
+    irq_restore(flags);
+    return ring != NULL;
+}
+
+/* one row of COLUMNS cells into con's ring, made with its first row; a view back stays on the rows
+   it shows. Interrupt handlers print too: with interrupts off. */
+static void sb_push(surf_console *con, const u_char *row) {
+    u_long flags;
+    /* 10/25/26 (the review): nothing at all from a panic's report, which must not fault in the ring's pages */
+    if(!scrollback_ok || panicking || con < conArray || con >= conArray + NUM_CONSOLES || con->stream ||
+       con->alt_on) return;
+    if(!con->sb && !sb_make(con)) return;
+    flags = irq_save();
+    if(con->sb) {
+        memcpy(con->sb + con->sb_next * COLUMNS * 2, row, COLUMNS * 2);
+        con->sb_next = (con->sb_next + 1) % con->sb_cap;
+        if(con->sb_count < con->sb_cap) con->sb_count++;
+        if(con->view && con->view < con->sb_count) con->view++;
+    }
+    irq_restore(flags);
+}
+
+/* the screen's rows up to the last that shows anything, into the ring (ESC[2J, clearConsole()) */
+static void sb_push_screen(surf_console *con) {
+    int last = -1;
+    u_int r, c;
+    if(!scrollback_ok || con->alt_on) return;           /* 10/25/26 (A8): not the alternate screen */
+    for(r = 0; r < LINES; r++)
+        for(c = 0; c < COLUMNS; c++) {
+            u_char ch = con->vmem[(r * COLUMNS + c) * 2];
+            if(ch && ch != ' ') {
+                last = (int)r;
+                break;
+            }
+        }
+    for(r = 0; (int)r <= last; r++) sb_push(con, con->vmem + r * COLUMNS * 2);
+}
+
+/* The screen shows con, the active console: as it is now, or its view back (the ring's rows, then
+   its own, the tag, no cursor); the fbflush thread presents it. Interrupts off. */
+static void view_draw(surf_console *con) {
+    u_int r, row = COLUMNS * 2;
+    char tag[16];
+    u_int n, i;
+    if(!con->view) {
+        memcpy(conVideo.vmem, con->vmem, SCREEN_BYTES);
+        conVideo.loc = con->loc;
+        setpos(con);
+        framebuffer_present_soon();
+        return;
+    }
+    for(r = 0; r < LINES; r++) {
+        u_int k = con->sb_count - con->view + r;
+        memcpy(conVideo.vmem + r * row, k < con->sb_count ? sb_row(con, k) : con->vmem + (k - con->sb_count) * row, row);
+    }
+    n = (u_int)snprintf(tag, sizeof(tag), " -%u ", con->view);
+    if(n > COLUMNS) n = COLUMNS;
+    for(i = 0; i < n; i++) {
+        conVideo.vmem[(COLUMNS - n + i) * 2] = (u_char)tag[i];
+        conVideo.vmem[(COLUMNS - n + i) * 2 + 1] = VIEW_TAG_ATTR;
+    }
+    framebuffer_set_cursor(0, LINES);           /* below the last row: no cursor */
+    framebuffer_present_soon();
+}
+
+/* Shift+PgUp, PgDn, Home, End (keyboard.c): 1 when the key was the view's, moved or not */
+int console_scroll_key(int key) {
+    surf_console *con = conActive;
+    u_int page = LINES > 1 ? LINES - 1 : 1, view;
+    u_long flags;
+    if(video != VIDEO_FB || !con || framebuffer_graphics_on()) return 0;
+    if(key != PGUP && key != PGDN && key != HOME && key != END) return 0;
+    flags = irq_save();
+    view = con->view;
+    if(key == PGUP) view = view + page < con->sb_count ? view + page : con->sb_count;
+    else if(key == PGDN) view = view > page ? view - page : 0;
+    else view = key == HOME ? con->sb_count : 0;
+    if(view != con->view) {
+        con->view = view;
+        view_draw(con);
+    }
+    irq_restore(flags);
+    return 1;
+}
+
+/* any other key (keyboard.c): the live screen again */
+void console_view_live(void) {
+    u_long flags = irq_save();
+    if(conActive && conActive->view) {
+        conActive->view = 0;
+        view_draw(conActive);
+    }
+    irq_restore(flags);
+}
+
 void switchConsole(u_int conNum) {
     if(conNum < 0 || conNum >= NUM_CONSOLES) return;
     if(isConsoleValid((surf_console*)&conArray[conNum]) == false) return;
     KCRIT_ENTER
+    if(conActive) conActive->view = 0;  //10/25/26 (A6): a console comes back live
     conActive = &conArray[conNum];
     framebuffer_console_switched();
     KCRIT_LEAVE
@@ -197,6 +382,7 @@ void clearConsole(surf_console *con) { //re-initializes a console
   int i;
   if(!con) return;
   if(con->stream) { stream_clear(con); return; } //10/6/26: a pseudo-terminal's: ESC[2J ESC[H to the far terminal
+  sb_push_screen(con); //10/25/26 (A6): what it showed stays in the scrollback
   for (i=0; i< SCREEN_BYTES; i+=2) {
         *(con->vmem + i) = 0;
        *(con->vmem + i + 1) = 7;
@@ -241,6 +427,7 @@ void sscroll(surf_console *con) { //scrolls the console
     u_char *vmem;
     if(!con) return;
     vmem=con->vmem;
+    sb_push(con, vmem); //10/25/26 (A6): the top row into the scrollback
 
     for(i=COLUMNS*2,j=0;i<SCREEN_BYTES;i++,j++) { //shift the console up
         *(vmem+j) = *(vmem+i);
@@ -260,11 +447,16 @@ int tX,tY;
 inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for the console
     u_int pos;
     if(!con) return;
-    if(isConsoleActive(con)==false) return;
+    if(!shows_live(con)) return; //10/25/26 (A6): not in a view back either
     tX=con->loc.x;
     tY=con->loc.y;
     if(con->cursor_off) { tX = 0; tY = LINES; } //ESC[?25l: just below the last line, where it never shows
-    if(video == VIDEO_FB) { framebuffer_set_cursor(tX, tY); return; } //a drawn cursor; no CRTC on a framebuffer
+    if(video == VIDEO_FB) { //a drawn cursor; no CRTC on a framebuffer
+        u_long flags = irq_save(); //10/25/26 (the review): not into a view a key showed meanwhile
+        if(shows_live(con)) framebuffer_set_cursor(tX, tY);
+        irq_restore(flags);
+        return;
+    }
     if(video == VIDEO_NONE) return;
     /* 10/5/26: the CRTC cursor location, low byte (register 0xF) then high byte (0xE). The
        2004 code did the same sum in inline assembly, with the width fixed at 80. */
@@ -281,6 +473,8 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
    cursor, without moving the cursor */
 static void cell_at(surf_console *con, u_int x, u_int y, TEXTCOLOR color, int c) {
     u_int off;
+    u_long flags;
+    bool live;
     /* 10/10/26: never outside the grid. Two tasks printing on one console at once are not kept
        apart (2004), so a cursor may be read while another writer moves it; a cell one row below
        the last would land past the grid: on a VGA console in its own fields after memBuf (the
@@ -291,11 +485,14 @@ static void cell_at(surf_console *con, u_int x, u_int y, TEXTCOLOR color, int c)
     KCRIT_ENTER
     *(con->vmem + off) = c & 0xFF;
     *(con->vmem + off + 1) = color;
-    if(isConsoleActive(con)) {
+    flags = irq_save();                         /* 10/25/26 (the review): the check and the copy as one, against */
+    live = shows_live(con);                     /* the view's keys (A6: a view back keeps the screen) */
+    if(live) {
         *(conVideo.vmem + off) = c & 0xFF;
         *(conVideo.vmem + off + 1) = color;
-        if(video == VIDEO_FB) framebuffer_draw_cell(x, y, c & 0xFF, color);
     }
+    irq_restore(flags);
+    if(live && video == VIDEO_FB) framebuffer_draw_cell(x, y, c & 0xFF, color);   /* draws what the cell holds now */
     KCRIT_LEAVE
 }
 
@@ -358,11 +555,13 @@ void console_task_gone(struct surf_task *task) {
     for(i = 0; i < NUM_TTYS; i++) {                     /* 10/6/26: the pseudo-terminals' too */
         con = &conArray[i];
         if(con->ansi_owner == task) console_reset_ansi(con);
+        if(con->alt_on && con->alt_owner == task) alt_gone(con);   /* 10/25/26 (A8): the main screen back */
         if(con->page_asker == task) {                   /* 10/6/26: killed at the question: it goes */
             page_unshow(con);
             con->page_asker = NULL;
             wake_up_all(&tty_for_console(con)->page_waiters);
         }
+        if(con->line_owner == task) con->line_owner = NULL;          /* 10/25/26 (the review) */
         if(con->page_owner == task) console_page_start(con, NULL);   /* 10/6/26: paging ends with it */
         else if(con->page_owner && page_descends(task, con->page_owner))
             console_page_new(con);                      /* a paged task's last words (a fault report) show */
@@ -372,6 +571,10 @@ void console_task_gone(struct surf_task *task) {
 /* panic and wipeout (kernel/panic.c): the report is plain text, whatever was half printed */
 void console_panic(void) {
     int i;
+    if(conActive && conActive->view) {                  /* 10/25/26 (A6): the live screen, for the report */
+        conActive->view = 0;
+        memcpy(conVideo.vmem, conActive->vmem, SCREEN_BYTES);
+    }
     for(i = 0; i < NUM_TTYS; i++) {
         console_reset_ansi(&conArray[i]);
         console_page_start(&conArray[i], NULL);         /* 10/6/26: nothing paged or dropped, no question */
@@ -401,9 +604,9 @@ static void ansi_blank(surf_console *con, u_int from, u_int to, TEXTCOLOR attr) 
         con->vmem[i * 2] = ' ';
         con->vmem[i * 2 + 1] = attr;
     }
-    if(isConsoleActive(con)) memcpy(conVideo.vmem + from * 2, con->vmem + from * 2, (to - from) * 2);
+    if(shows_live(con)) memcpy(conVideo.vmem + from * 2, con->vmem + from * 2, (to - from) * 2);
     KCRIT_LEAVE
-    if(isConsoleActive(con) && video == VIDEO_FB) framebuffer_present();
+    if(shows_live(con) && video == VIDEO_FB) framebuffer_present_lazy();   /* 10/25/26: batched (A6: not in a view back) */
 }
 
 static void ansi_sgr(surf_console *con) {
@@ -415,9 +618,109 @@ static void ansi_sgr(surf_console *con) {
         else if(p == 7) con->inverse = 1;
         else if(p >= 30 && p <= 37) con->fg = ansi_vga[p - 30] + 1;
         else if(p >= 40 && p <= 47) con->bg = ansi_vga[p - 40] + 1;
-        /* anything else (underline, blink, 256 colours, ...) is not drawn */
+        /* 10/25/26 (A8): bright and inverse off, the writer's colours again, bright colours (a text mode
+           background has no bright one), and 256 colours or RGB read and dropped, their numbers too */
+        else if(p == 22) con->bold = 0;
+        else if(p == 27) con->inverse = 0;
+        else if(p == 39) con->fg = 0;
+        else if(p == 49) con->bg = 0;
+        else if(p >= 90 && p <= 97) con->fg = (ansi_vga[p - 90] | 8) + 1;
+        else if(p >= 100 && p <= 107) con->bg = ansi_vga[p - 100] + 1;
+        else if(p == 38 || p == 48) i += i + 1 <= con->nparam && con->param[i + 1] == 2 ? 4 : 2;
+        /* anything else (underline, blink, ...) is not drawn */
     }
     ansi_owner(con);
+}
+
+/* 10/25/26 (A8): ESC 7, ESC 8 (with the colours) and ESC[s, ESC[u: the cursor saved and put back */
+static void ansi_save(surf_console *con, bool colours) {
+    con->saved_loc = con->loc;
+    if(!colours) return;
+    con->saved_fg = con->fg;
+    con->saved_bg = con->bg;
+    con->saved_bold = con->bold;
+    con->saved_inverse = con->inverse;
+}
+
+static void ansi_restore(surf_console *con, bool colours) {
+    if(colours) {
+        con->fg = con->saved_fg;
+        con->bg = con->saved_bg;
+        con->bold = con->saved_bold;
+        con->inverse = con->saved_inverse;
+        ansi_owner(con);
+    }
+    if(con->stream) {                                   /* the far terminal moves; the column is followed */
+        con->loc.x = con->saved_loc.x < con->cols ? con->saved_loc.x : con->cols - 1;
+        con->wrap = 0;
+        con->at_home = 0;
+        return;
+    }
+    ansi_moveto(con, (int)con->saved_loc.x, (int)con->saved_loc.y);
+}
+
+/* 10/25/26 (A8): ESC[?1049h, the alternate screen: the main screen's cells and cursor kept (a stream's far
+   terminal keeps its own: the console follows the column), the screen blank, the cursor where it was, as xterm
+   has it; ESC[?1049l puts the main screen back. Without memory for the copy the sequence does nothing. A new
+   screenful for the pager either way, and the scrollback takes nothing while the alternate screen shows.
+   The kernel review (10/25/26, 2): the copy's pages are mapped as they are first touched, from whatever prints,
+   and a page with no frame for it panics: so the copy is made only while its frames and SCROLLBACK_SPARE more are
+   free (a program at its memory's end), else the sequence does nothing, as without memory. */
+static void alt_enter(surf_console *con, TEXTCOLOR attr) {
+    u_char *keep;
+    u_int i;
+    if(con->alt_on) return;
+    con->alt_loc = con->loc;
+    con->alt_owner = in_interrupt() ? NULL : curTask;
+    con->page_rows = 0;
+    if(con->stream) {
+        con->alt_on = 1;
+        return;
+    }
+    if(pmm_free_frames() < SCREEN_BYTES / 4096 + 1 + SCROLLBACK_SPARE) return;   /* 10/25/26 (the review) */
+    keep = (u_char *)kalloc(SCREEN_BYTES);
+    if(!keep) return;
+    KCRIT_ENTER
+    memcpy(keep, con->vmem, SCREEN_BYTES);
+    con->alt = keep;
+    con->alt_on = 1;
+    for(i = 0; i < COLUMNS * LINES; i++) {
+        con->vmem[i * 2] = ' ';
+        con->vmem[i * 2 + 1] = attr;
+    }
+    KCRIT_LEAVE
+    con->wrap = 0;
+    if(shows_live(con)) syncVideoConsole(true);
+}
+
+static void alt_leave(surf_console *con) {
+    u_char *keep = con->alt;
+    if(!con->alt_on) return;
+    con->alt_on = 0;
+    con->alt_owner = NULL;
+    con->page_rows = 0;
+    if(con->stream) {
+        con->loc.x = con->alt_loc.x < con->cols ? con->alt_loc.x : con->cols - 1;
+        con->wrap = 0;
+        return;
+    }
+    KCRIT_ENTER
+    memcpy(con->vmem, keep, SCREEN_BYTES);
+    con->alt = NULL;
+    con->loc = con->alt_loc;
+    con->wrap = 0;
+    KCRIT_LEAVE
+    kfree(keep);
+    if(shows_live(con)) syncVideoConsole(true);
+    else setpos(con);
+}
+
+/* the task that showed the alternate screen ended without ESC[?1049l (console_task_gone(), interrupts off): the
+   main screen back, on the terminals too (the serial line's, a stream's far one) */
+static void alt_gone(surf_console *con) {
+    if(con->stream) PTY_OUT_LIT(con, "\033[?1049l", PTY_OUT_URGENT);
+    else if(con == conActive && mirror_serial) serial_puts("\033[?1049l");
+    alt_leave(con);
 }
 
 /* a whole CSI sequence has arrived: carry it out */
@@ -431,11 +734,15 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
         stream_csi(con, final);
         return;
     }
-    if(con->esc_mark == '?') {                           /* only ESC [ ? 25 l / h */
+    if(con->esc_mark == '?') {                           /* ESC [ ? 25 l / h; 10/25/26 (A8): ESC [ ? 1049 h / l */
         if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
             con->cursor_off = final == 'l';
             ansi_owner(con);
             setpos(con);
+        } else if(final == 'h' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_enter(con, attr);
+        } else if(final == 'l' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_leave(con);
         }
         return;
     }
@@ -449,11 +756,22 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
     case 'B': ansi_moveto(con, x, y + n); break;
     case 'C': ansi_moveto(con, x + n, y); break;
     case 'D': ansi_moveto(con, x - n, y); break;
+    case 'G': ansi_moveto(con, n - 1, y); break;       /* 10/25/26 (A8): the column, the row */
+    case 'd': ansi_moveto(con, x, n - 1); break;
+    case 's': if(!con->nparam) ansi_save(con, false); break;
+    case 'u': if(!con->nparam) ansi_restore(con, false); break;
+    case 'X':                                            /* n blanks from the cursor, which stays */
+        con->wrap = 0;
+        ansi_blank(con, here, here + (u_int)n < row + COLUMNS ? here + (u_int)n : row + COLUMNS, attr);
+        break;
     case 'J':                                            /* erase in display: 0 below, 1 above, 2 all */
         con->wrap = 0;
         if(con->param[0] == 0) ansi_blank(con, here, COLUMNS * LINES, attr);
         else if(con->param[0] == 1) ansi_blank(con, 0, here + 1, attr);
-        else if(con->param[0] == 2) ansi_blank(con, 0, COLUMNS * LINES, attr);
+        else if(con->param[0] == 2) {
+            sb_push_screen(con);                         /* 10/25/26 (A6): clear and Ctrl+L lose nothing */
+            ansi_blank(con, 0, COLUMNS * LINES, attr);
+        }
         if(con->param[0] == 2 || (con->param[0] == 0 && here == 0))
             con->page_rows = 0;                          /* 10/6/26: an empty screen, a new screenful for the pager */
         break;
@@ -494,7 +812,9 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
         }
         if(c == 0x1B || (c >= 0x20 && c <= 0x2F)) return 1;      /* ESC again, or ESC ( B and the like */
         con->esc = ESC_NONE;
-        return c >= 0x30 && c < 0x80;                           /* ESC 7, ESC c, ...: not ours; a UTF-8 byte is printed */
+        if(c == '7') ansi_save(con, true);                       /* 10/25/26 (A8): ESC 7, ESC 8 */
+        else if(c == '8') ansi_restore(con, true);
+        return c >= 0x30 && c < 0x80;                           /* ESC c, ...: not ours; a UTF-8 byte is printed */
     case ESC_CSI:
         if(c >= '0' && c <= '9') {
             if(con->nparam < ESC_PARAMS && con->param[con->nparam] < 1000)
@@ -606,6 +926,10 @@ static void stream_csi(surf_console *con, int final) {
         if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
             con->cursor_off = final == 'l';
             ansi_owner(con);
+        } else if(final == 'h' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_enter(con, WHITE_TXT);                   /* 10/25/26 (A8): the far terminal's alternate screen */
+        } else if(final == 'l' && con->nparam == 0 && con->param[0] == 1049) {
+            alt_leave(con);
         }
         return;
     }
@@ -620,7 +944,11 @@ static void stream_csi(surf_console *con, int final) {
     case 'D': x -= n; con->at_home = 0; break;
     case 'G': x = n - 1; con->at_home = 0; break;
     case 'A':
-    case 'B': con->at_home = 0; break;
+    case 'B':
+    case 'd': con->at_home = 0; break;                  /* 10/25/26 (A8): ESC[nd, another row */
+    case 's': if(!con->nparam) ansi_save(con, false); return;
+    case 'u': if(!con->nparam) ansi_restore(con, false); return;
+    case 'X': con->wrap = 0; return;
     case 'J':                                            /* an empty screen: a new screenful */
         con->wrap = 0;
         if(con->param[0] == 2 || (con->param[0] == 0 && con->at_home)) con->page_rows = 0;
@@ -1194,6 +1522,9 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     }
     /* 10/6/26: a panic's report goes to the screen, whichever console its task printed on */
     if(con && con->stream && panicking) con = conActive;
+    /* 10/25/26 (K1, the review): a kernel thread's line goes out whole, with preemption on: anyone else waits for its
+       end before writing here, where it may wait (line_wait()) */
+    if(con && con->line_owner && con->line_owner != curTask && !panicking) line_wait(con);
     /* 10/6/26: a pseudo-terminal's console: to its master side (stream consoles, above). 10/26/26: the pager's
        look and the byte go again after a wait for room in the master's buffer (stream_byte()) */
     if(con && con->stream) {
@@ -1212,6 +1543,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
     if(!con) return;
+    con->line_by = in_interrupt() ? NULL : curTask;     /* 10/25/26: whose line the cursor's row is (kprintf) */
     if(con->esc && ansi_byte(con, color, b)) return;
     /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
        it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
@@ -1267,9 +1599,54 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     return;
 }
 
+/* 10/25/26: a kernel thread's message comes out whole, no other task's output between its characters:
+   surfsh's banner used to cut netman's +NET: lines in two, on the screen and the serial line. From a
+   kernel thread (not a process, not a shell, not on a pseudo-terminal, not paged, free to wait) the
+   message first waits up to 100 ms for another writer's line to end (the cursor back at a row's start),
+   then goes out with the console held for it (line_owner). The review's fix (10/25/26): preemption stays
+   on (on a real serial port a long line took 45 ms, during which nothing else ran); a task that writes
+   on that console meanwhile waits in kputch() for the line's end, 1 s at most, where it may wait (in a
+   task, interrupts on, no critical section, no mutex), so the screen and the serial line both get the
+   line whole; an interrupt handler, or a task that may not wait, writes on as before. Another kernel
+   thread's message waits for the console the same way. A program's line that never ends (a prompt) gets
+   the message after it, as before. Anyone else's message goes out as before, a character at a time. */
+static void line_wait(surf_console *con) {
+  u_int i;
+  if(!curTask || in_interrupt() || !irqs_enabled() || curTask->crit || curTask->mutexes) return;
+  for(i = 0; i < 200 && con->line_owner && con->line_owner != curTask; i++) sleep_ms(5);
+}
+
+static bool whole_line_writer(surf_console *con) {
+  return con && curTask && curTask != idle_task && !in_interrupt() && irqs_enabled() && !curTask->crit &&
+         !curTask->mutexes && !(curTask->flags & (TF_USER | TF_SHELL)) && !con->stream && !console_paging(con);
+}
+
+static void kernel_puts(surf_console *con, const char *s) {
+  int i;
+  u_long flags;
+  if(whole_line_writer(con)) {
+    for(i = 0; i < 10 && con->loc.x && con->line_by != curTask; i++) sleep_ms(10);
+    for(i = 0; i < 200; i++) {                  /* 10/25/26 (the review): the console held for the line, */
+      flags = irq_save();                       /* after another kernel thread's (1 s at most) */
+      if(!con->line_owner || con->line_owner == curTask) {
+        con->line_owner = curTask;
+        irq_restore(flags);
+        break;
+      }
+      irq_restore(flags);
+      sleep_ms(5);
+    }
+    for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+    flags = irq_save();
+    if(con->line_owner == curTask) con->line_owner = NULL;
+    irq_restore(flags);
+    return;
+  }
+  for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+}
+
 void kprintf(const char *format, ...) {
   char buf[512];
-  char *p;
   surf_console *con;
   va_list ap;
   va_start(ap, format);
@@ -1279,15 +1656,14 @@ void kprintf(const char *format, ...) {
   /* a task's kernel messages (ps, lspci, a fault report) belong on that task's console;
      boot code and interrupt handlers print on whatever console is showing */
   con = (curTask && curTask->con && !in_interrupt()) ? curTask->con : conActive;
-  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
+  kernel_puts(con, buf);
 }
 
 void kcprintf(surf_console *con, const char *format, ...) {
   char buf[512];
-  char *p;
   va_list ap;
   va_start(ap, format);
   vsnprintf(buf, sizeof(buf), format, ap);
   va_end(ap);
-  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
+  kernel_puts(con, buf);
 }
