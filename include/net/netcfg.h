@@ -29,6 +29,11 @@ DHCP lease timers. It touches no device and keeps nothing, and is host-tested
 #define NETCFG_SSID_MAX      32
 #define NETCFG_KEY_LEN       32     /* a PSK (the PMK): 256 bits, 64 hex digits in the file */
 #define NETCFG_HOSTNAME_MAX  32
+/* 10/25/26 (track A, A10): surfsh's files beside them (kernel/netman.c, fs/devfs.c's /dev/config) */
+#define NETCFG_SURFSHRC      "surfshrc"     /* the owner's startup file: read */
+#define NETCFG_HISTORY_FILE  "history"      /* the lines typed at surfsh's prompts: read, and written while history = on */
+#define NETCFG_SURFSHRC_MAX  16384
+#define NETCFG_HISTORY_MAX   262144
 
 /**** settings.conf ****/
 
@@ -37,7 +42,8 @@ DHCP lease timers. It touches no device and keeps nothing, and is host-tested
 #define NETCFG_WIFI          2      /* on | off: join a saved network at startup and keep joined */
 #define NETCFG_ETHERNET      3      /* dhcp | off: an address whenever an Ethernet link comes up */
 #define NETCFG_HOSTNAME      4      /* the DHCP host name */
-#define NETCFG_NKEYS         5
+#define NETCFG_HISTORY       5      /* on | off: 10/25/26 (track A, A10): surfsh keeps its history on the stick */
+#define NETCFG_NKEYS         6
 
 struct netcfg_settings {
     bool telnetd;
@@ -45,6 +51,7 @@ struct netcfg_settings {
     bool wifi;
     bool ethernet_dhcp;
     char hostname[NETCFG_HOSTNAME_MAX + 1];
+    bool history;
     u32 set;                        /* bit k: key k was set by the file (else it has its default) */
 };
 

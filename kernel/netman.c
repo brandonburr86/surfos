@@ -61,6 +61,18 @@ wlan_station(); a password typed into networks.conf by hand is turned into it he
 kept in RAM for the keeper and wiped when a network is forgotten; nothing logs one, and
 netman_networks() gives the commands everything but the key.
 
+10/25/26 (track A, A10): surfsh's two files beside the settings take the same way (netman_file_read(),
+netman_file_write(), for fs/devfs.c's /dev/config): surfshrc, the owner's startup file, only read, and
+history, read, and written only while the history setting is on; no other file. Under settings=off
+neither is read or written. A reader that comes while the boot still reads the settings waits for it, 30 s at most
+(the kernel log says how long); with nothing to read (settings=off, no bootvol=, no netman thread) it never waits,
+and while the stick is still looked for only with a USB controller, until 8 s from the start (LOOK_GRACE_MS).
+10/25/26 (the kernel review of track A, 4): history has a generation, the count of SurfOS's writes of it
+(history_gen, under stick_lock): a reader gets the one it read, and a write made from an older one is refused
+(EAGAIN), so of two shells that read the file and then save it, the second reads it again and merges rather than
+writing the first one's lines away. A write is refused at once while the stick may not be written (the flashed
+SURFOSUSB stick: netman_can_save()).
+
 Locks: stick_lock around a mount of the stick and what is read and written under it, the change
 in RAM included (so the boot's read and a command's change never undo each other); nm_lock
 around the settings and the networks in RAM (never held across a wait); connect_lock around a
@@ -82,6 +94,7 @@ and connect_lock come before nm_lock, never after it.
 #include <surfos/proc.h>
 #include <mm/kalloc.h>
 #include <sys/bdev.h>
+#include <sys/driver.h>
 #include <fs/vfs.h>
 #include <net/net.h>
 #include <net/dhcp.h>
@@ -94,6 +107,7 @@ and connect_lock come before nm_lock, never after it.
 #include <blibc_common.h>
 
 #define BOOTVOL_WAIT_MS  20000          /* how long the stick may take to be found at boot */
+#define LOOK_GRACE_MS    8000           /* 10/25/26 (A10): how long from the start surfsh's files wait for it */
 #define TELNETD_PATH     "/initrd/bin/telnetd"
 #define TELNETD_DONE_MS  30000          /* telnetd on returns once its server runs (3 s at most) */
 #define NM_MOUNT         "/.netman"     /* the short mount of the stick */
@@ -149,6 +163,9 @@ static volatile u_int keeper_join;      /* the station's number of its join requ
 static volatile u_long keeper_dhcp_next;    /* ticks: its next DHCP while it has no address (0: at once) */
 static volatile u_int keeper_dhcp_fails;
 static volatile bool keeper_at_boot;    /* the keeper joins at once (the boot's); else only once a network is lost */
+static volatile bool boot_read_pending; /* 10/25/26: the boot has not read the settings yet (a file's reader waits) */
+static volatile bool boot_looking;      /* 10/25/26: the boot looks for the stick still (found: it reads it) */
+static u_int history_gen;               /* 10/25/26 (the kernel review, 4): history's writes so far, under stick_lock */
 static volatile bool keeper_resume;     /* wifi connect hands the card back: the keeper looks by itself again */
 static volatile bool telnetd_due;       /* telnetd = on: the server starts once there is a trusted address */
 
@@ -644,6 +661,7 @@ static void copy_key(struct netcfg_settings *to, const struct netcfg_settings *f
     case NETCFG_WIFI:         to->wifi = from->wifi; break;
     case NETCFG_ETHERNET:     to->ethernet_dhcp = from->ethernet_dhcp; break;
     case NETCFG_HOSTNAME:     strlcpy(to->hostname, from->hostname, sizeof(to->hostname)); break;
+    case NETCFG_HISTORY:      to->history = from->history; break;
     }
     to->set = (to->set & ~(1u << k)) | (from->set & (1u << k));
 }
@@ -702,6 +720,104 @@ int netman_set(int k, const char *value, char *why, size_t size) {
     return r ? 1 : 0;
 }
 
+/**** 10/25/26 (track A, A10): surfsh's files ****/
+
+static bool file_allowed(const char *name, bool write) {
+    return !strcmp(name, NETCFG_HISTORY_FILE) || (!write && !strcmp(name, NETCFG_SURFSHRC));
+}
+
+bool netman_wait_boot(void) {
+    u_int waited = 0;
+    bool usb = driver_status("usb") == 0, gave_up;
+    if(!boot_read_pending) return false;                /* nothing to read (settings=off, no bootvol=), or read */
+    /* while the stick is still looked for: without a USB controller no disk comes any more (the smoke test names a
+       volume that only its self test makes): not there now is never; with one the wait ends LOOK_GRACE_MS from the
+       start */
+    gave_up = !usb && !bdev_boot_vol();
+    while(!gave_up && boot_read_pending && waited < BOOTVOL_WAIT_MS + 10000) {
+        if(boot_looking && (!usb || uptime_ms() >= LOOK_GRACE_MS)) {
+            gave_up = true;
+            break;
+        }
+        sleep_ms(100);
+        waited += 100;
+    }
+    if(waited || gave_up)
+        klogf("+NET: %s (pid %lu) waited %u ms for the settings to be read%s\n", curTask ? curTask->name : "?",
+              curTask ? curTask->pid : 0UL, waited, gave_up ? ", and went on without them: the stick is not there yet" :
+              boot_read_pending ? ", and went on without them" : "");
+    return gave_up && usb;
+}
+
+bool netman_history_on(void) {
+    bool on;
+    mutex_lock(&nm_lock);
+    on = cfg.history && where_state != WHERE_OFF;
+    mutex_unlock(&nm_lock);
+    return on;
+}
+
+int netman_file_read(const char *name, char *buf, u_int max, u_int *len, u_int *gen, char *why, size_t wsize) {
+    struct stick st;
+    char path[VFS_PATH_MAX];
+    int r;
+    *len = 0;
+    buf[0] = 0;
+    if(gen) *gen = 0;
+    if(!file_allowed(name, false)) {
+        snprintf(why, wsize, "%s/%s is not one of surfsh's files", NETCFG_DIR, name);
+        return -EACCES;
+    }
+    if(where_state == WHERE_OFF) {                      /* (the caller has waited for the boot: netman_wait_boot()) */
+        snprintf(why, wsize, "this start does not use the stick's settings (settings=off)");
+        return -ENOENT;
+    }
+    mutex_lock(&stick_lock);
+    if(gen) *gen = history_gen;                         /* 10/25/26 (4): as this read finds it */
+    r = stick_open(false, &st, why, wsize);
+    if(!r) {
+        if(!path_of(path, sizeof(path), st.root, name)) {
+            snprintf(why, wsize, "the path of %s/%s is too long", NETCFG_DIR, name);
+            r = -ENAMETOOLONG;
+        } else if((r = read_file(path, buf, max, len)) != 0) {
+            snprintf(why, wsize, "%s/%s could not be read: %s", NETCFG_DIR, name,
+                     r == -EFBIG ? "it is too long" : strerror(r));
+        }
+        stick_close(&st);
+    }
+    mutex_unlock(&stick_lock);
+    return r;
+}
+
+int netman_file_write(const char *name, const char *data, u_int len, u_int *gen, char *why, size_t wsize) {
+    struct stick st;
+    int r;
+    if(!file_allowed(name, true)) {
+        snprintf(why, wsize, "%s/%s is not written by SurfOS", NETCFG_DIR, name);
+        return -EACCES;
+    }
+    if(!netman_history_on()) {
+        snprintf(why, wsize, "the history setting is off (settings history on)");
+        return -EACCES;
+    }
+    if(!netman_can_save()) {                            /* 10/25/26 (the programs' review, U4): not tried each time */
+        snprintf(why, wsize, "the stick SurfOS was started from may not be written");
+        return -EROFS;
+    }
+    mutex_lock(&stick_lock);
+    if(gen && *gen != history_gen) {                    /* 10/25/26 (the kernel review, 4): saved since it was read */
+        snprintf(why, wsize, "%s/%s was saved again after it was read", NETCFG_DIR, name);
+        r = -EAGAIN;
+    } else if(!(r = stick_open(true, &st, why, wsize))) {
+        r = write_file(st.root, name, data, len, why, wsize);
+        stick_close(&st);
+        history_gen++;                                  /* written or not, what was read before may not be the file */
+        if(!r && gen) *gen = history_gen;
+    }
+    mutex_unlock(&stick_lock);
+    return r;
+}
+
 /**** the boot ****/
 
 static void boot_note(void *arg, u_int line, const char *why) {
@@ -731,7 +847,11 @@ static void load_at_boot(void) {
         return;
     }
     where_state = WHERE_LOOKING;
-    for(waited = 0; !(v = bdev_boot_vol()) && waited < BOOTVOL_WAIT_MS; waited += 100) sleep_ms(100);
+    for(waited = 0; !(v = bdev_boot_vol()) && waited < BOOTVOL_WAIT_MS; waited += 100) {
+        boot_looking = true;                            /* 10/25/26 (A10): not there at once (a USB stick comes later) */
+        sleep_ms(100);
+    }
+    boot_looking = false;
     if(!v) {
         where_state = WHERE_NOT_FOUND;
         klogf("+NET: the volume GRUB was started from (bootvol=) was not found within %u s: no settings read\n",
@@ -790,11 +910,12 @@ static void load_at_boot(void) {
     set_saved(list, n, nk);
     mutex_unlock(&stick_lock);
     if(have_s || have_n)
-        kprintf("+NET: settings from %s (%s/): telnetd %s%s%s, wifi %s, ethernet %s, hostname %s; %i saved Wi-Fi "
+        kprintf("+NET: settings from %s (%s/): telnetd %s%s%s, wifi %s, ethernet %s, hostname %s%s; %i saved Wi-Fi "
                 "network%s%s\n", v->name, NETCFG_DIR, s.telnetd ? "on" : "off",
                 s.telnetd && s.telnetd_port != 23 ? " port " : "",
                 s.telnetd && s.telnetd_port != 23 ? netcfg_value(&s, NETCFG_TELNETD_PORT, a, sizeof(a)) : "",
-                s.wifi ? "on" : "off", netcfg_value(&s, NETCFG_ETHERNET, b, sizeof(b)), s.hostname, n, n == 1 ? "" : "s",
+                s.wifi ? "on" : "off", netcfg_value(&s, NETCFG_ETHERNET, b, sizeof(b)), s.hostname,
+                s.history ? ", history on" : "", n, n == 1 ? "" : "s",       /* 10/25/26 (A10): said when it is on */
                 boot_notes ? " (some lines were not understood: above)" : "");
     else
         klogf("+NET: no settings on %s (no %s/ folder there): the defaults\n", v->name, NETCFG_DIR);
@@ -1381,6 +1502,7 @@ static void netman_main(void *arg) {
     u16 port;
     netcfg_defaults(&boot_cfg);
     load_at_boot();
+    boot_read_pending = false;                          /* 10/25/26 (A10): surfsh's files may be read now */
     mutex_lock(&nm_lock);
     read = where_state == WHERE_READ;
     telnetd_due = read && boot_cfg.telnetd;             /* as the file said at boot: a later change is for the next */
@@ -1409,6 +1531,11 @@ static void netman_main(void *arg) {
 
 void init_netman(void) {
     netcfg_defaults(&cfg);
-    if(!kthread_create_on("netman", &conArray[0], netman_main, NULL, PL_NORMAL, TF_DETACHED))
+    /* 10/25/26 (A10): before any shell can ask, and only when there is something to read: a reader of surfsh's files
+       then waits for the boot's read (netman_wait_boot()), else never */
+    boot_read_pending = !bootinfo_has_arg(&bootinfo, "settings=off") && bdev_boot_vol_named();
+    if(!kthread_create_on("netman", &conArray[0], netman_main, NULL, PL_NORMAL, TF_DETACHED)) {
+        boot_read_pending = false;
         kprintf("+NET: no memory for the network manager: no settings from the stick\n");
+    }
 }

@@ -5,7 +5,11 @@
    have half happened: the text stays in the new file, and from then on nothing is renamed or written
    over the file, so neither name's data is freed under the other), the same care when the file is opened
    with such a name beside it, the file written in place where there is no rename or no room for such a
-   name, the kernel's limit on a path's length, and the line ends. Run by `make unittest`. */
+   name, the kernel's limit on a path's length, and the line ends. 10/25/26 (track A, A9): ^Z and ^Y (runs of
+   typing, Backspace, Delete and ^K as one change, an Enter and a paste alone, the cursor put back, the saved text
+   unmodified again, redo forgotten by a new change, 1,000 changes kept), and UTF-8 as characters (the arrows,
+   Backspace, Delete, columns up and down, typed byte by byte, drawn as it is or as '?', a long line cut at its
+   cells). Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "edit_sim.h"
@@ -375,6 +379,205 @@ static void line_ends(void) {
     check(ed_save() == 0 && is("new.txt", "hello\nworld\n") && sim_names() == 1, "a new file, with a line end at its end");
 }
 
+/**** 10/25/26 (track A, A9): ^Z and ^Y, UTF-8 ****/
+
+#define CTRL(c) ((c) & 0x1f)
+
+static void keys(const char *s) {
+    for(; *s; s++) ed_key((unsigned char)*s);
+}
+
+static int at(int y, int x) {
+    int cy, cx;
+    ed_cursor(&cy, &cx);
+    return cy == y && cx == x;
+}
+
+/* u.txt with "one" and "two", open, the cursor at the start */
+static void fresh(const char *text) {
+    sim_reset();
+    sim_put("u.txt", text);
+    ed_start("u.txt");
+}
+
+static void undo_redo(void) {
+    int i;
+    fresh("one\ntwo\n");
+    keys("abc");
+    check(!strcmp(ed_line(0), "abcone") && at(0, 3), "typing: abc at the start");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && at(0, 0) && !ed_modified(), "^Z: the run of typing undone at once, the cursor "
+          "back, the text as read again (not modified)");
+    ed_key(CTRL('y'));
+    check(!strcmp(ed_line(0), "abcone") && at(0, 3) && ed_modified(), "^Y: done again, the cursor after it");
+    ed_key(CTRL('y'));
+    check(!strncmp(ed_msg(), "Nothing to redo", 15), "^Y with nothing undone says so");
+
+    fresh("one\ntwo\n");
+    keys("ab");
+    ed_key(ed_right);
+    keys("c");
+    check(!strcmp(ed_line(0), "abocne"), "typing, Right, typing");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "abone") && at(0, 3), "^Z: only the run after the cursor moved");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && at(0, 0), "^Z: then the one before");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_msg(), "Nothing to undo"), "and then nothing, said");
+
+    fresh("one\ntwo\n");
+    keys("x\ry");
+    check(ed_nlines() == 4 && !strcmp(ed_line(0), "x") && !strcmp(ed_line(1), "yone"), "x, Enter, y");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(1), "one") && at(1, 0), "^Z: y");
+    ed_key(CTRL('z'));
+    check(ed_nlines() == 3 && !strcmp(ed_line(0), "xone") && at(0, 1), "^Z: the Enter, a change of its own");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && !ed_modified(), "^Z: x");
+    ed_key(CTRL('y'));
+    ed_key(CTRL('y'));
+    ed_key(CTRL('y'));
+    check(ed_nlines() == 4 && !strcmp(ed_line(0), "x") && !strcmp(ed_line(1), "yone") && at(1, 1),
+          "^Y three times: all of it again");
+
+    fresh("one\ntwo\n");
+    ed_key(ed_end);
+    ed_key(0x7f);
+    ed_key(0x7f);
+    check(!strcmp(ed_line(0), "o") && at(0, 1), "Backspace twice at the end");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && at(0, 3), "^Z: the run of Backspace at once");
+    ed_key(ed_home);
+    ed_key(ed_del);
+    ed_key(ed_del);
+    check(!strcmp(ed_line(0), "e"), "Delete twice at the start");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && at(0, 0), "^Z: the run of Delete at once");
+    ed_key(ed_down);
+    ed_key(ed_home);
+    ed_key(0x7f);
+    check(ed_nlines() == 2 && !strcmp(ed_line(0), "onetwo") && at(0, 3), "Backspace at a line's start joins the lines");
+    ed_key(CTRL('z'));
+    check(ed_nlines() == 3 && !strcmp(ed_line(0), "one") && !strcmp(ed_line(1), "two") && at(1, 0),
+          "^Z: apart again, the cursor where the Backspace was");
+
+    fresh("one\ntwo\nthree\n");
+    ed_key(CTRL('k'));
+    ed_key(CTRL('k'));
+    check(ed_nlines() == 2 && !strcmp(ed_line(0), "three"), "^K twice");
+    ed_key(CTRL('z'));
+    check(ed_nlines() == 4 && !strcmp(ed_line(0), "one") && !strcmp(ed_line(1), "two") && !strcmp(ed_line(2), "three"),
+          "^Z: both lines back, in their order");
+    ed_key(CTRL('y'));
+    ed_key(ed_down);
+    ed_key(CTRL('u'));
+    check(ed_nlines() == 4 && !strcmp(ed_line(0), "three") && !strcmp(ed_line(1), "one") && !strcmp(ed_line(2), "two"),
+          "^Y, then ^U pastes them");
+    ed_key(CTRL('z'));
+    check(ed_nlines() == 2 && !strcmp(ed_line(0), "three") && !strcmp(ed_line(1), ""), "^Z: the paste undone");
+
+    fresh("only\n");
+    ed_key(ed_down);
+    ed_key(CTRL('k'));
+    ed_key(ed_home);
+    ed_key(ed_up);
+    ed_key(CTRL('k'));
+    check(ed_nlines() == 1 && !strcmp(ed_line(0), ""), "^K of the last lines: one empty line left");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "only"), "^Z: the only line's text back");
+
+    fresh("one\n");
+    keys("a");
+    ed_key(CTRL('z'));
+    keys("b");
+    ed_key(CTRL('y'));
+    check(!strcmp(ed_line(0), "bone") && !strncmp(ed_msg(), "Nothing to redo", 15),
+          "a change after ^Z: what was undone cannot be done again");
+
+    fresh("one\n");
+    keys("a");
+    check(ed_save() == 0 && !ed_modified(), "typed and saved");
+    keys("b");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "aone") && !ed_modified(), "typing after a save is a change of its own: ^Z gives the "
+          "saved text, not modified");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "one") && ed_modified(), "^Z before the save: modified");
+    ed_key(CTRL('y'));
+    check(!strcmp(ed_line(0), "aone") && !ed_modified(), "^Y back to the saved text: not modified");
+
+    fresh("\n");
+    for(i = 0; i < 1001; i++) {                 /* 1,001 changes: each letter, then Home to end the run */
+        ed_key('a' + i % 26);
+        ed_key(ed_home);
+    }
+    for(i = 0; i < 1000; i++) ed_key(CTRL('z'));
+    check((int)strlen(ed_line(0)) == 1, "1,000 changes undone: the first is kept no more");
+    check(ed_modified() && ed_quit() == 0, "... so the text is still modified, and ^Q asks before it quits (the "
+          "programs' review, U2)");
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_msg(), "Nothing to undo"), "... and then nothing to undo");
+}
+
+static void utf8_text(void) {
+    const char *r;
+    int cells, i;
+    char line[512];
+    fresh("caf\xc3\xa9 \xc2\xb1\nab\n");
+    ed_utf8(1);
+    ed_key(ed_end);
+    check(at(0, 8) && ed_col() == 6, "End: after the line's 8 bytes, at column 6");
+    ed_key(ed_left);
+    ed_key(ed_left);
+    ed_key(ed_left);
+    check(at(0, 3) && ed_col() == 3, "Left three times: before the e with its accent (one character, two bytes)");
+    ed_key(ed_right);
+    check(at(0, 5) && ed_col() == 4, "Right over it: two bytes");
+    ed_key(0x7f);
+    check(!strcmp(ed_line(0), "caf \xc2\xb1") && at(0, 3), "Backspace takes the whole character");
+    ed_key(ed_end);
+    ed_key(ed_left);
+    ed_key(ed_del);
+    check(!strcmp(ed_line(0), "caf "), "Delete too");
+    ed_key(CTRL('z'));
+    ed_key(CTRL('z'));
+    check(!strcmp(ed_line(0), "caf\xc3\xa9 \xc2\xb1"), "^Z gives them back");
+    ed_key(ed_end);
+    ed_key(ed_down);
+    check(at(1, 2), "Down from column 6 to a shorter line: its end");
+    ed_key(ed_up);
+    check(at(0, 8), "Up again: the column the cursor had (6), the end, byte 8");
+    ed_key(ed_home);
+    ed_key(0xc3);
+    ed_key(0xbc);
+    check(!strncmp(ed_line(0), "\xc3\xbc" "caf", 5) && at(0, 2) && ed_col() == 1,
+          "UTF-8 typed a byte at a time (a terminal's): one character, one column");
+    ed_key(CTRL('z'));
+    check(!strncmp(ed_line(0), "caf", 3), "^Z: the character at once");
+
+    r = ed_render(0, 0);
+    check(!strcmp(r, "caf\xc3\xa9 \xc2\xb1"), "drawn as it is where the console draws UTF-8");
+    ed_utf8(0);
+    r = ed_render(0, 0);
+    check(!strcmp(r, "caf? ?"), "and as ? where it does not");
+    ed_utf8(1);
+
+    fresh("a\xff" "b\xc2\x85" "c\xe2\x82\n");
+    ed_utf8(1);
+    check(!strcmp(ed_render(0, 0), "a?b?c??"), "a byte that is not UTF-8, a C1 control and a sequence cut short: a ? each");
+    ed_key(ed_end);
+    check(ed_col() == 7, "... a column each");
+
+    for(i = 0; i < 100; i++) memcpy(line + 2 * i, "\xc3\xa9", 2);
+    memcpy(line + 200, "\n", 2);
+    fresh(line);
+    ed_utf8(1);
+    r = ed_render(0, 0);
+    check((int)strlen(r) == 79 * 2 + 1 && r[158] == '>' && ed_cells(r, 1000, &cells) == 159 && cells == 80,
+          "100 such characters on 80 columns: 79 of them and '>'");
+    check(ed_cells("a\xc3\xa9 b", 2, &cells) == 3 && cells == 2, "a row's cells counted in characters, not bytes");
+}
+
 int main(void) {
     plain();
     users_files();
@@ -383,6 +586,8 @@ int main(void) {
     twins();
     in_place();
     line_ends();
+    undo_redo();
+    utf8_text();
     printf("EDIT UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;
 }

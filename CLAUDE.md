@@ -100,7 +100,8 @@ lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAN
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno, the
            environment), include/ (the standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv,
            rm, mkdir, df, fstest, pagetest, kcmdtest, nettest, ptytest, pipetest (pipes, spawnx and waitx), env, the filters grep
-           sort uniq tail tee tr seq (lineutil.h), rx (one file from the network), nc (10/24/26: connections by hand, files to
+           sort uniq tail tee tr seq (lineutil.h), less (10/25/26: a screenful at a time, on the alternate screen), find du xargs cut
+           sha256sum (10/25/26; sha256sum links Mbed TLS), rx (one file from the network), nc (10/24/26: connections by hand, files to
            and from the Mac's nc), ...), surfsh/ (the SurfOS shell: main, editor, complete, parse (a tree), unparse, expand (parameters, $( ), splitting),
            vars (variables, the environment, functions), arith ($(( ))), glob (wildcards), exec (pipelines, redirections,
            a new surfsh for a subshell, compound commands, Ctrl+C), run (PATH), jobs (job control: jobs fg bg wait kill,
@@ -167,7 +168,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   kernel/netman.c mounts the volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman`
   (read-only to read) for the moment it reads or writes `surfos-config/`, holds that mount
   or the owner's (`vfs_hold_mount()`) meanwhile, and unmounts its own again; never another
-  device.
+  device. 10/25/26 (track A, A10, approved by the owner): the same way, and only these two
+  files besides the settings: surfsh's `surfos-config/surfshrc` (only read) and
+  `surfos-config/history` (read, and written only while the owner's `history` setting is on),
+  through `/dev/config` (fs/devfs.c, `netman_file_read()`, `netman_file_write()`).
 * Network connections and terminals (milestone M11): a TCP connection or listening socket
   is a descriptor (`include/surfos/sock.h`, `net/sock.c`); a pseudo-terminal
   (`include/surfos/pty.h`, `kernel/pty.c`) is a tty whose console is a byte stream that
@@ -286,8 +290,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   says how many.
 * The shell: `shell=kernel` on the kernel command line gives the ring-0 shell on every
   console; a recovery console (`≋?>`) has a line from init saying why surfsh could not run.
-  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps` exercises
-  the pager and the character set, `kcmdtest` the kernel-command calls. The harnesses
+  `ascii` takes UTF-8 out of TTY_CAPS (the ASCII prompt). `pagetest N|utf8|caps|alt` exercises
+  the pager, the character set and the alternate screen, `kcmdtest` the kernel-command calls. The harnesses
   answer `--More--` with Space (`auto_more`), and `PROMPT` is a compiled pattern that
   matches every prompt state; a smoke step `@boot <words>` boots QEMU again with other
   kernel words (or `no-initrd`). 10/25/26: surfsh runs a program on PATH before a kernel

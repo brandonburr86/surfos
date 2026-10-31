@@ -90,6 +90,7 @@ int msleep(unsigned int ms);
                            pager's owner it takes one that reaches nothing else; 0: no more */
 #define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
 #define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */
+#define TTY_CAP_ALTSCREEN 4 /* 10/25/26: ESC[?1049h shows the alternate screen, ESC[?1049l the main one as it was */
 int ttyctl(int op, unsigned int arg);
 
 /* the kernel's shell commands: lsblk, fdisk, mount, ps, ... (surfos/kcmd.h) */

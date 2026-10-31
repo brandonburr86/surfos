@@ -259,6 +259,20 @@ Recorded as each stage landed on `daily/main` (10/25/26); fields and functions a
   `fb_font_8x16`, `fb_font_12x24`, `fb_font_16x32` (`driver/font*.c`, from `tools/bdf2c.py`); `struct fb_surface`'s
   `font`; `fb_setup_font(s, base, mode, font)` (`fb_setup()` is 8x16); `fb_font_named()` and `fb_font_choose()`
   (`driver/fbfont.c`). The desktop keeps `font8x16`; track C's C9 draws its sharp text with these.
+- **A8, escapes** (`include/surfos/tty.h`, `tests/host/vt_cases.h`): the console draws `CSI G d X s u`, `ESC 7 8`,
+  SGR 22 27 39 49 90-97 100-107 (38 and 48 dropped with their numbers) and the alternate screen `CSI ? 1049 h/l`,
+  which `TTY_CAPS` announces as `TTY_CAP_ALTSCREEN` 4 on every console (`user/include/surf.h` too); a task that ends
+  on the alternate screen gets the main one back. `struct vt_case { name, input, rows[3], attrs[5], col, row }`:
+  cases on a blank screen of 40x8 cells or more, the writer's colour 0x07; `test_pager` runs them, `test_guiterm`
+  (track C's) can.
+- **A10, surfsh's files on the stick** (`include/net/netman.h`, `include/fs/vfs.h`, `fs/devfs.c`):
+  `netman_file_read(name, buf, max, &len, &gen, why, wsize)` and `netman_file_write(name, data, len, &gen, why, wsize)`
+  (10/25/26, the kernel review: `gen` the generation read, a write from an older one `-EAGAIN`) take only
+  `NETCFG_SURFSHRC` (read) and `NETCFG_HISTORY_FILE` (read; written while `netman_history_on()` and
+  `netman_can_save()`), `netman_wait_boot()`;
+  the setting `history` (`NETCFG_HISTORY`, on | off, off); `/dev/config/surfshrc`, `/dev/config/history` (there only
+  while history is on), `/dev/config/hostname` (the host name and a newline, "" before the settings are read); the
+  vnode op `flush` (`struct vnode_ops`' last field: at a file's last close and at fsync, its error theirs).
 
 ## Shared with the other tracks
 

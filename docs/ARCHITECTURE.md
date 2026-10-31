@@ -56,7 +56,8 @@ shell/       main.c (the ring-0 shell and the kernel's command table), prompt.c 
              built into libsurf), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
              selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, fat_mkfs.c (mkfs),
-             devfs.c (/dev, /dev/kmsg), poll.c (poll()), pipe.c (pipes, 10/24/26)
+             devfs.c (/dev, /dev/kmsg, 10/25/26 /dev/config: surfsh's files on the stick), poll.c (poll()),
+             pipe.c (pipes, 10/24/26)
 net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c,
              sock.c (TCP connections as descriptors)
 user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.c stdlib.c string.c ctype.c
@@ -386,7 +387,16 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 * **Escape sequences and raw mode** (**ai-dev**, for the text editor; `include/surfos/tty.h`
   is the contract). Each console parses the ANSI subset full-screen programs need: cursor
   position and moves (`CSI H f A B C D`), erase in display and line (`CSI J K`), bright,
-  inverse and the eight colours (`CSI m`), and hiding the cursor (`CSI ? 25 l/h`). Any
+  inverse and the eight colours (`CSI m`), and hiding the cursor (`CSI ? 25 l/h`).
+  **10/25/26** (track A, A8): also the column or the row alone (`CSI G d`), blanks from the
+  cursor (`CSI X`), the cursor saved and put back (`CSI s u`; `ESC 7 8` with its colours),
+  SGR 22, 27, 39 and 49 (bright, inverse and the colours off), the bright colours 90-97
+  (100-107 give the plain backgrounds), 38 and 48 read with their numbers and dropped, and
+  the alternate screen (`CSI ? 1049 h/l`, `TTY_CAP_ALTSCREEN`): the main screen's cells and
+  cursor are kept (a pty's far terminal keeps its own; the console follows its column) and
+  come back with `l`, or when the task that asked ends, as raw mode does; the scrollback
+  takes nothing from it. `tests/host/vt_cases.h` holds cases that the console's
+  `test_pager` and the desktop terminal's `test_guiterm` can both run. Any
   other sequence is read to its end and dropped, and a console with no attributes set
   prints in the writer's colour, so `kprintf()` and the older programs look as they did.
   Wrapping is VT100's: writing the last column leaves the cursor there and the next
@@ -422,7 +432,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   437 characters they are, as the programs of 2004 meant them. Each writer has its own
   decoder state (`surf_task.utf`; the interrupt handlers and early boot share one), so two
   tasks printing at once cannot mix the halves of their characters. `ttyctl(TTY_CAPS)`
-  answers `TTY_CAP_UTF8 | TTY_CAP_COLOR`; `ascii` on the kernel command line leaves UTF-8
+  answers `TTY_CAP_UTF8 | TTY_CAP_COLOR` (and since 10/25/26 `TTY_CAP_ALTSCREEN`, the
+  alternate screen); `ascii` on the kernel command line leaves UTF-8
   out, for a serial terminal that cannot show it (the shells then draw their prompt in
   ASCII). Input stays ASCII: in line mode the bytes above 0x7F are the keyboard's
   special keys.
@@ -497,7 +508,9 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 ## 9. File systems (`fs/`)
 
 * `include/fs/vfs.h`: a **vnode** is a file or directory handed out by a file system
-  (reference counted, `vget()`/`vput()`, released through `ops->release`); a
+  (reference counted, `vget()`/`vput()`, released through `ops->release`; since 10/25/26
+  `ops->flush`, when there is one, at a file's last close and at fsync: its error is theirs,
+  for `/dev/config/history`, which goes back to the stick then, section 19); a
   **superblock** is a mounted instance with its device, root vnode and a mutex that
   serializes metadata updates; a **file** is a vnode plus position and open flags.
   Errors are negative errno values (`strerror()`); open flags and `SEEK_*` use the
@@ -699,7 +712,13 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   sideways and a `>` in the last column says a line goes on. Keys: the arrows, Home, End,
   PgUp, PgDn, Backspace, Delete, Tab; ^S save, ^Q quit (asking when there are unsaved
   changes), ^F find, ^K cut the line, ^U paste, ^G go to a line, ^C where the cursor is,
-  ^L redraw. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
+  ^L redraw. **10/25/26** (track A, A9): ^Z undoes and ^Y redoes the last 1,000 changes (a run
+  of typing, Backspace, Delete or ^K is one change, an Enter or a paste one alone; each is kept
+  as its operations on lines with the bytes they took or gave, and the saved text is
+  unmodified again when undo or redo comes back to it), and UTF-8 is text: a character is one
+  cell (`col_of()`, `index_of()`, `render_line()`; the screen's rows are kept at 4 bytes a
+  cell), drawn as it is where `TTY_CAPS` has UTF-8 and as `?` elsewhere, and the arrows,
+  Backspace and Delete take whole characters. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
   writes in place where a file system cannot rename), keeping the file's line ends (LF,
   or CR LF when its first line has one). Since 10/17/26 it saves as the desktop's Notepad
   does (`shell/guifs.c`): the new file is made with `O_EXCL`, as `<file>.1.tmp` and so on
@@ -1297,6 +1316,24 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   its first prompt; a spawn that fails for want of memory is tried again every second.
   `shell=kernel` gives every console the ring-0 shell, and the USB image's GRUB menu has an
   entry for it ("SurfOS (kernel shell)").
+* **The startup file and the history on the stick** (10/25/26, track A, A10; the kernel's side
+  is section 19). An interactive surfsh runs `/dev/config/surfshrc`, the owner's
+  `surfos-config/surfshrc`, after `surfsh.conf`, as a `.` file runs (`return` leaves it; since
+  the reviews' fixes, 10/25/26, an `exit` there leaves it too, said, rather than end every
+  shell as it starts, and the first Ctrl+C stops the rest of it; a file that cannot be read is
+  said, and a CR before a line's end is dropped, there and in the history). It loads
+  `/dev/config/history` (there only while `settings history on`) into its history, and saves
+  when it ends, on `history -w` and after every 25 lines typed: the file as it is by then
+  (another session's lines kept), then its own lines since the last save, the last 1,000 in at
+  most 256 KB; a line that starts with a space was never kept. A save that another shell's came
+  between (close says `EAGAIN`, section 19) reads the file again and merges, 8 times at most;
+  after a periodic save that failed the next comes 25 lines later, and only the first failure is
+  said. `~` alone or
+  before a `/` at a word's start (also of an assignment's value and a redirection's file) is
+  `$HOME`, quoted; vars.c sets `HOME=/` when the environment has none, and surfshrc may set
+  another. An interactive surfsh sets `HOSTNAME` (not exported) from `/dev/config/hostname`,
+  which a telnet session's prompt shows before its breadcrumbs (`≋@>`). The save at shutdown
+  is track B's B4 (a shell that ends saves; a kill does not).
 * **Tests.** `make unittest`: `test_prompt` (the states and their priority, shortening by
   depth and by width, ASCII, colours, odd names, small buffers), `test_cp437` (the tables,
   the decoder's corner cases, the font's glyphs), 10/25/26 `test_editor` (`editor.c` and
@@ -1439,7 +1476,8 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   dropped whole instead of arriving at the next prompt in pieces. A Ctrl+C always gets
   through, a lone LF or NUL left behind by an Enter starts no skip, and the PS/2
   keyboard is never skipped. `TTY_GETSIZE` on a
-  pty answers its size, `TTY_CAPS` UTF-8 and colour; raw mode and the pager work as on a
+  pty answers its size, `TTY_CAPS` UTF-8 and colour (10/25/26: and the alternate screen, which the
+  far terminal draws); raw mode and the pager work as on a
   console, and a pty's output never reaches the screen or the serial mirror.
 * **Hangup.** Closing the last master descriptor hangs the pty up: each process whose
   terminal it is gets a kill that waits for the end of its call however long that takes
@@ -1672,6 +1710,29 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   link went down and up (QEMU's `set_link`); the disk read on the host afterwards. `make
   test-usb`'s `settings` scenario does it through GRUB's menu on a one-stick, under the laptop
   profile, and boots the menu's entry without the settings.
+* **surfsh's files** (10/25/26, track A, A10; the owner approved a startup file and saved history
+  on the stick). Beside the settings, by their way (the stick lock, the short mount or the
+  owner's held, a `.new` file synced, renamed and read back), and only these:
+  `surfos-config/surfshrc`, the owner's startup file, read, and `surfos-config/history`, read,
+  and written only while the new setting `history` is on (off by default). No system call:
+  `fs/devfs.c`'s `/dev/config/surfshrc` and `/dev/config/history` (`netman_file_read()`,
+  `netman_file_write()`) are read from the stick when looked up, so when opened, and history
+  goes back when it is closed: the VFS's new vnode op `flush` (`fs/vfs.c` calls it at the last
+  close and at fsync), whose error is close's, `EIO` with the reason in the kernel log. Since the
+  kernel review (10/25/26): history has a generation, the count of SurfOS's writes of it, which
+  a lookup records; a close whose file was read before another save is refused, `EAGAIN` (nothing
+  logged), and its writer reads the file again and merges, so two shells saving at once never
+  write each other's lines away; and the file takes no write, `EROFS`, while the stick may not be
+  written (the flashed SURFOSUSB stick, `netman_can_save()`). A
+  reader that comes while the boot still reads the settings waits for it (`netman_wait_boot()`,
+  30 s at most, said in the kernel log), so surfsh's first prompt at boot follows the read; with
+  nothing to read (`settings=off`, no `bootvol=`, no netman thread) it never waits, and while the
+  stick is still looked for it waits only with a USB controller (a disk can come no other way),
+  until 8 s from the start; a surfsh that goes on without them then says so on its console
+  ("the stick SurfOS was started from was not ready"), and the kernel log has a line for each wait. Under
+  `settings=off` neither is read or written. `/dev/config/hostname` gives the host name (the hostname
+  setting, from memory) for surfsh's `$HOSTNAME`; the system calls' structures keep their
+  sizes, so `SYS_netinfo` could not carry it. surfsh's side: section 17.
 * **Limits.** One Wi-Fi device; DHCP only (an address by hand is `ifconfig`, not a setting);
   no per-network priorities beyond the file's order; at most 16 saved networks; settings are
   read at boot, so a stick plugged in later is not read until the next start, and `telnetd`
@@ -2033,6 +2094,24 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   and `\`; `-i -v -n -c -l -q -F -e`), `sort` (`-r -n -f -u`), `uniq` (`-c -d -u -i`), `tail`
   (`-n N`), `tee` (`-a`), `tr` (ranges, `-d`, `-s`) and `seq`, the programs a pipeline wants
   after `cat`, `head` and `wc`; `lineutil.h` reads their lines of any length.
+* **less** (10/25/26, track A, A9; `user/bin/less.c`): a file or a pipeline's text a screenful at
+  a time. The text is read whole first (8 MB at most) and the keys come from `/dev/tty`, so
+  `dmesg | less` works. It draws on the alternate screen in raw mode and gives the shell's screen
+  back when it ends (the console does that for a killed less too, section 7). Long lines are cut
+  with a `>` in the last column and Right and Left move sideways; TABs, UTF-8 (one cell a
+  character), control characters as `^X` and bytes that are not UTF-8 as `?` in inverse video.
+  `/` and `?` find text (case counts only when it has capitals), the line found goes to the
+  top and every match on the screen shows in inverse video; `n`, `N`, `g`, `G`, Space, `b`,
+  `d`, `u`, `h` for the keys, `q`. With no terminal on its output it copies the text, as `cat`.
+* **Tools** (10/25/26, track A, A9; `user/bin/`): `find` (paths, then `-name`/`-iname` wildcards
+  on the last part, `-type f|d`, `-maxdepth`, `-mindepth`, `-print0`; a directory is read whole
+  before find goes into it), `du` (`-s -a -h`; each file's size rounded up to its file system's
+  allocation unit from `statfs`, sums in 512-byte sectors), `xargs` (`-n -t -0`; words split at
+  blanks with quotes and backslashes; as many as a spawn takes, `SPAWN_MAX_ARGS` in
+  `SPAWN_ARG_BYTES`; a program on PATH, or else a kernel command through `kcmd()`, as surfsh
+  finds them; the programs' standard input is `/dev/null`; no words, no run), `cut` (`-b`, `-c`
+  in UTF-8 characters, `-f` with `-d` and `-s`) and `sha256sum` (and `-c`), which links Mbed
+  TLS's SHA-256 from the library Undertow is built with.
 * **Tests.** `make unittest` adds `test_surfsh` (`parse.c`, `unparse.c`, `expand.c`, `vars.c`,
   `arith.c`, `glob.c` and `util.c` as they are on the host, `tests/host/surfsh_bridge.c`:
   lists, pipelines, groups, redirections and here-documents parsed and written back,

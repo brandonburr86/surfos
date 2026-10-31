@@ -36,6 +36,9 @@ that network is written anew without it. A kept part with a password line in it 
 since SurfOS never writes a password (kernel/netman.c then refuses to change the file), and
 netcfg_reads_back() checks that a file about to be written reads as the networks meant.
 
+10/25/26 (track A, A10): settings.conf's history key, surfsh's history kept on the stick; surfsh's own files
+beside these two (surfshrc, history) are only read and written as they are (kernel/netman.c).
+
 An SSID is up to 32 bytes of anything, so the file quotes it: "..." with \" and \\, and \xHH
 for every byte that is not printable ASCII. A bare name typed by hand is taken as it is.
 */
@@ -159,6 +162,8 @@ static const struct key_info keys[NETCFG_NKEYS] = {
     { "wifi", "on | off", "at startup, join the first saved Wi-Fi network in range, and again when it comes back", "on" },
     { "ethernet", "dhcp | off", "dhcp: an address whenever an Ethernet link comes up; off: the dhcp command", "off" },
     { "hostname", "letters, digits, -", "the name DHCP requests give, which the router lists", "surfos" },
+    { "history", "on | off", "surfsh keeps the lines typed at its prompts in surfos-config/history (plain text) and "
+      "recalls them at its next start", "off" },
 };
 
 static const char template_text[] =
@@ -190,7 +195,13 @@ static const char template_text[] =
     "\n"
     "# hostname: the name SurfOS gives in its DHCP requests, which the router shows in its\n"
     "# list of devices: letters, digits and - (not first or last), up to 32.\n"
-    "#hostname = surfos\n";
+    "#hostname = surfos\n"
+    "\n"
+    "# history: surfsh, the SurfOS shell, keeps the last 1,000 lines typed at its prompts in\n"
+    "# surfos-config/history beside this file and recalls them at its next start (Up, Ctrl+R).\n"
+    "# It is plain text: a password typed on a command line would be in it (a line that starts\n"
+    "# with a space is never kept). on or off.\n"
+    "#history = off\n";
 
 void netcfg_defaults(struct netcfg_settings *s) {
     memset(s, 0, sizeof(*s));
@@ -199,6 +210,7 @@ void netcfg_defaults(struct netcfg_settings *s) {
     s->wifi = true;
     s->ethernet_dhcp = false;
     strlcpy(s->hostname, keys[NETCFG_HOSTNAME].dflt, sizeof(s->hostname));
+    s->history = false;
 }
 
 int netcfg_key_find(const char *name) {
@@ -231,6 +243,7 @@ const char *netcfg_value(const struct netcfg_settings *s, int k, char *buf, size
     case NETCFG_WIFI:         strlcpy(buf, s->wifi ? "on" : "off", size); break;
     case NETCFG_ETHERNET:     strlcpy(buf, s->ethernet_dhcp ? "dhcp" : "off", size); break;
     case NETCFG_HOSTNAME:     strlcpy(buf, s->hostname, size); break;
+    case NETCFG_HISTORY:      strlcpy(buf, s->history ? "on" : "off", size); break;
     default:                  strlcpy(buf, "", size); break;
     }
     return buf;
@@ -260,9 +273,11 @@ int netcfg_set(struct netcfg_settings *s, int k, const char *value, char *why, s
     switch(k) {
     case NETCFG_TELNETD:
     case NETCFG_WIFI:
+    case NETCFG_HISTORY:
         if(on_off(value, &b)) break;
         if(k == NETCFG_TELNETD) s->telnetd = b;
-        else s->wifi = b;
+        else if(k == NETCFG_WIFI) s->wifi = b;
+        else s->history = b;
         s->set |= 1u << k;
         return 0;
     case NETCFG_TELNETD_PORT:

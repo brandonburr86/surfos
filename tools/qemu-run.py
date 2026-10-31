@@ -143,6 +143,13 @@ SETTINGS_FILES = {
     'ether': {'surfos-config/settings.conf': b'ethernet = dhcp\n'},
     # a hidden network saved by hand: no security line (and nothing else not understood), so open
     'hidden': {'surfos-config/networks.conf': b'network = "SurfSimHidden"\nhidden = yes\n'},
+    # 10/25/26 (track A, A10): surfsh's history kept, and the owner's startup file, which moves HOME for ~
+    'history': {'surfos-config/settings.conf': b'history = on\n',
+                'surfos-config/surfshrc': b'# the owner\'s startup file\nHOME=/hda1\necho "surfshrc ran: HOME $HOME"\n'},
+    # 10/25/26 (the programs' review of track A, U5 and U8): a startup file written on Windows (CR LF) that sleeps when
+    # asked to (RC_SLEEP) and then exits
+    'rc': {'surfos-config/surfshrc': b'HOME=/hda1\r\necho "rc one: HOME $HOME."\r\n[ -n "$RC_SLEEP" ] && sleep 20000\r\n'
+                                     b'echo "rc two"\r\nexit 3\r\necho "rc not reached"\r\n'},
 }
 SURFSIM_PSK = hashlib.pbkdf2_hmac('sha1', WLANSIM_PASSPHRASE.encode(), b'SurfSimWPA', 4096, 32).hex()
 SETTINGS_DISKS = {}                                         # name: its image file, made the first time a boot asks
@@ -389,6 +396,10 @@ SMOKE = [
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
+    # 10/25/26 (track A, A8): the alternate screen, left by the program or for it by the console when it is killed
+    ('@alt-screen', []),
+    # 10/25/26 (track A, A9): less, on the alternate screen with the keys from /dev/tty
+    ('@less', []),
     # 10/25/26 (track A): a TAB reaches the serial terminal as it was printed (the screen: test_pager, qemu-usb's fullhd)
     ("printf 'a\\tb|\\n'", ['a\tb|']),
     # 10/25/26 (track A, A3): time, how long a command took (its status is the command's)
@@ -398,7 +409,7 @@ SMOKE = [
     # was printed, and VGA memory as code page 437 cells
     ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
     ('@utf8-screen', []),
-    ('run pagetest caps', ['TTY_CAPS 3: UTF-8 colour', 'exit status 0']),     # no `ascii` on the command line
+    ('run pagetest caps', ['TTY_CAPS 7: UTF-8 colour alternate-screen', 'exit status 0']),   # no `ascii`; (A8) ESC[?1049h
     # the pager (TTY_PAGE): --More-- after a screenful less one row, 24 lines at 80x25; answered by the
     # harness with Space, then with Enter and q, then on the PS/2 keyboard and read back from VGA memory
     ('@pager-space', []),
@@ -412,7 +423,7 @@ SMOKE = [
     # what is typed for a kernel command whose output goes to a file is shown, and is not in the file
     ('@kcmd-echo', []),
     # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
-    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
+    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 6: colour alternate-screen'])], []),
     # 10/17/26 (one stick): test_boot_volume must run here (bootvol= and rd1), not print its skip line
     # 10/24/26 (storage, milestone 1): and test_fat_refused, a stick that refuses writes: close says EIO, umount gives up
     ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
@@ -512,7 +523,7 @@ SMOKE = [
     ('run ptytest surfsh', ['ptytest: typed "echo hello"', 'ptytest: Ctrl+C: sleep cut short, count killed',
                             'in the kernel\'s colour', 'ptytest: exit typed: the master read 0', 'PTYTEST surfsh PASS',
                             'exit status 0']),
-    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 3: UTF-8 colour',
+    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 7: UTF-8 colour alternate-screen',
                                  'PTYTEST size PASS', 'exit status 0']),
     ('run ptytest pager', ['the lines between them: 1-9 10-18 19-27 28-36 37-45 46-54 55-60', 'PTYTEST pager PASS',
                            'exit status 0']),
@@ -873,6 +884,60 @@ SMOKE = [
      ['given up', 'no lease']),
     # what those boots left on the owner's stick, read here
     ('@settings-disk', []),
+    # 10/25/26 (track A, A10): surfsh's startup file and history on the owner's stick (settingsdisk=history: history = on
+    # and a surfshrc), twice. 1: surfshrc runs at the interactive start (its HOME for ~, a quoted ~ left), the lines
+    # typed kept but the one that starts with a space, history -w, the file as written, /dev/config, $HOSTNAME
+    ('@boot settingsdisk=history',
+     ['+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos, history on; 0 '
+      'saved Wi-Fi networks', 'surfshrc ran: HOME /hda1'],
+     [('echo ~ ~/notes "~"', ['/hda1 /hda1/notes ~']),
+      ('echo history-marker-one', ['history-marker-one']),
+      (' echo kept-out', ['kept-out']),
+      ('history -w', ['in surfos-config/history on the stick']),
+      ('grep -c marker-one /hda1/surfos-config/history; grep -c kept-out /hda1/surfos-config/history', ['1\r\n0\r\n']),
+      # 10/25/26 (the kernel review of track A, 4): a file of history opened before a save (here by a background job,
+      # which writes to it after the save) is not written back over it: its close is refused (EAGAIN), and the
+      # save's lines stay
+      ('echo marker-two', ['marker-two']),
+      ("{ sleep 4000; echo stale-snapshot; } >> /dev/config/history & sleep 1500; history -w; wait",
+       ['in surfos-config/history on the stick']),
+      ("grep -c '^echo marker-two$' /hda1/surfos-config/history; grep -c '^stale-snapshot$' /hda1/surfos-config/history",
+       ['\r\n1\r\n0\r\n']),
+      ('ls /dev/config', ['history', 'hostname', 'surfshrc']),
+      ('echo host $HOSTNAME', ['host surfos']),
+      ('umount /hda1', [])],
+     ['was not saved']),
+    # 2: the same stick again: surfshrc again, the history recalled; history off: history -w says it is not kept, the
+    # file stays
+    ('@boot settingsdisk=history',
+     ['surfshrc ran: HOME /hda1'],
+     [("history | grep -c '^ *[0-9]*  echo history-marker-one'", ['\r\n1\r\n']),
+      ('settings history off', ['history = off, saved on hda1']),
+      ('history -w', ['history: not kept on the stick: the history setting is off']),
+      ('cat /hda1/surfos-config/history', ['echo history-marker-one']),
+      ('umount /hda1', [])],
+     ['was not saved']),
+    # 3: the same stick, started without the settings (settings=off): neither file is read (no surfshrc, ~ is /, no
+    # history), and no surfsh waited for the stick before its first prompt (the kernel log says when one does)
+    ('@boot settingsdisk=history settings=off',
+     ['+NET: settings=off: the settings on the stick are not read at this start'],
+     [('echo home ~', ['home /\r\n']),
+      ("history | grep -c '^ *[0-9]*  echo history-marker-one'", ['\r\n0\r\n']),
+      ("dmesg | grep -c 'for the settings to be read'", ['\r\n0\r\n']),
+      ('umount /hda1', [])],
+     ['surfshrc ran']),
+    # 10/25/26 (the programs' review of track A, U5 and U8): a startup file with CR LF line ends runs as one with LF (HOME
+    # without a CR), and its exit leaves the file and is said, the shell going on (no restart, no recovery console); a
+    # surfsh started inside it runs the file again, and a Ctrl+C in its sleep skips the rest of the file
+    ('@boot settingsdisk=rc',
+     ['rc one: HOME /hda1.', 'rc two', 'exit leaves the startup file, as return does; the shell goes on', PROMPT],
+     [('echo alive $HOME', ['alive /hda1']),
+      ('RC_SLEEP=1 surfsh', [re.compile(rb'rc one: HOME /hda1\.')]),
+      ('@sleep 0.5', []),
+      (b'\x03', ['sleep cut short', 'the rest of the startup file was skipped (Ctrl+C)', PROMPT]),
+      ('exit', []),
+      ('umount /hda1', [])],
+     ['rc not reached', 'surfsh exited', 'recovery console']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -923,6 +988,17 @@ SMOKE = [
      [(b'\x1b[F!\x13', ['Wrote 2 lines']),
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
+    # 10/25/26 (track A, A9): ^Z and ^Y in edit (a run of typing is one change), and UTF-8 typed over the serial line
+    # as a terminal sends it: one character, one column, and Backspace takes all of it
+    ('run edit /hda1/UNDO.TXT', ['New file', '^S Save'],
+     [(b'one two', ['Col 8']),
+      (b'\x1a', ['Undone (0 more to undo, 1 to redo)', 'Col 1']),
+      (b'\x19', ['Done again (1 more to undo, 0 to redo)', 'Col 8']),
+      (b' caf\xc3\xa9', ['Col 13']),
+      (b'\x7f', ['Col 12']),
+      (b'\x13', ['Wrote 1 line']),
+      (b'\x11', ['exit status 0'])]),
+    ('cat /hda1/UNDO.TXT; rm /hda1/UNDO.TXT', ['one two caf\r\n']),
     # 10/6/26: surfsh, the SurfOS shell, started inside the one init runs on F1. Raw mode passes the bytes on as
     # they are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, $?, Tab for a command (the kernel's too) and a
     # path (a second Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue
@@ -1178,6 +1254,42 @@ SMOKE = [
       ('seq 3 | tee /hda1/TEE.TXT | wc -l; cat /hda1/TEE.TXT; rm /hda1/TEE.TXT',
        ['      3 ', '1\r\n2\r\n3\r\n', shown('SURF \u224b> ')]),
       ('dmesg | grep -i "fat16: hda1" | head -1', ['+FAT16: hda1: label SURFOS', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 10/25/26 (track A, A9): find (-name -iname -type -maxdepth -print0, a path that is not there), du (-a -s -h),
+    # xargs (-n, quotes, -0, a kernel command, a command that is nowhere), cut (-d -f, -c with UTF-8, -b) and
+    # sha256sum (and -c: OK, FAILED)
+    ('surfsh', [shown('SURF \u224b> ')],
+     [("find /initrd -name '*.conf'", ['/initrd/etc/surfsh.conf\r\n/initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
+      ('find /initrd -maxdepth 1 -type f', ['/initrd/README\r\n/initrd/files-help.txt\r\n/initrd/motd\r\n',
+                                            shown('SURF \u224b> ')]),
+      ("find /initrd/etc -type d -iname 'S*'; find /nowhere; echo status $?",
+       ['/initrd/etc/ssl\r\n', 'find: /nowhere: No such file or directory', 'status 1', shown('SURF \u224b> ')]),
+      ('du -a /initrd/etc/ssl; du -sh /initrd/bin', [re.compile(rb'\n[0-9]+\t/initrd/etc/ssl/README\r'),
+                                                    re.compile(rb'\n[0-9]+\t/initrd/etc/ssl\r'),
+                                                    re.compile(rb'\n[0-9.]+M\t/initrd/bin\r'), shown('SURF \u224b> ')]),
+      ('echo a b c | xargs -n 2 echo x', ['x a b\r\nx c\r\n', shown('SURF \u224b> ')]),
+      ('echo "\'a b\' c" | xargs -n 1 echo got', ['got a b\r\ngot c\r\n', shown('SURF \u224b> ')]),
+      ("find /initrd/etc -name '*.conf' -print0 | xargs -0 echo",
+       ['/initrd/etc/surfsh.conf /initrd/etc/undertow.conf\r\n', shown('SURF \u224b> ')]),
+      ('echo 100 | xargs sleep; echo x | xargs nosuchcommand; echo status $?',
+       ['slept 100 ms', 'xargs: nosuchcommand: not found', 'status 127', shown('SURF \u224b> ')]),
+      # 10/25/26 (the programs' review of track A): U1, a command of 127 words, the most a program is given (xargs's own
+      # name is the 128th), takes one word a run; U9, a pattern that ends in [ or [! takes the [ as it is; U10, du -h
+      # rounds up
+      ("echo x y | xargs echo $(seq 1 126) | cut -d' ' -f126-", ['\r\n126 x\r\n126 y\r\n', shown('SURF \u224b> ')]),
+      ("echo x > '/hda1/ss['; find /hda1 -maxdepth 1 -name 'ss['; find /hda1 -maxdepth 1 -name 's[!' | grep -c .; "
+       "rm '/hda1/ss['", ['\r\n/hda1/ss[\r\n0\r\n', shown('SURF \u224b> ')]),
+      # (22 copies of seq 10000, 48,894 bytes: 1,051 clusters of 1 KB, 1.03 MB: 1.1M, not 1.0M; a short line, as the
+      # serial line's input queue holds 256 bytes)
+      ('seq 10000 > /hda1/A.TXT; { for i in $(seq 22); do cat /hda1/A.TXT; done; } > /hda1/B.TXT; du -h /hda1/B.TXT; '
+       'rm /hda1/A.TXT /hda1/B.TXT', ['\r\n1.1M\t/hda1/B.TXT\r\n', shown('SURF \u224b> ')]),
+      ("echo a:b:c | cut -d: -f2,3; echo h\u00e9llo | cut -c2-3; printf 'a\\tb\\tc\\n' | cut -f1,3; echo abcdef | cut -b-2,5-",
+       ['b:c\r\n', '\u00e9l\r\n', 'a\tc\r\n', 'abef\r\n', shown('SURF \u224b> ')]),
+      ('echo abc | sha256sum', ['edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb  -\r\n', shown('SURF \u224b> ')]),
+      ('sha256sum /initrd/motd > /hda1/SUMS.TXT; sha256sum -c /hda1/SUMS.TXT; rm /hda1/SUMS.TXT',
+       ['/initrd/motd: OK\r\n', shown('SURF \u224b> ')]),
+      ("printf '%064d  /initrd/motd\\n' 0 | sha256sum -c; echo status $?",
+       ['/initrd/motd: FAILED\r\n', 'status 1', shown('SURF \u224b> ')]),
       ('exit', [])]),
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
@@ -1814,7 +1926,9 @@ def host_echo_check(q):
 # what the shell command `ansi` draws with escape sequences (row: text), 80x25
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
              6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
-             12: 'ANSI-TEST done, 80x25'}
+             12: 'ANSI-TEST done, 80x25',
+             # 10/25/26 (track A, A8): CHA and ECH; ESC 7/8, ESC[s/u and VPA; SGR 22, 92, 39, 44, 49, 38 dropped
+             5: '         COL       TWENTY    X   XX', 9: '         CB        FE        VPA', 11: '         BNGDU.S'}
 
 
 def ansi_screen_check(q):
@@ -1828,7 +1942,10 @@ def ansi_screen_check(q):
         return d[(r * 80 + c) * 2 + 1]
     ok = all(row(r) == text for r, text in ANSI_ROWS.items()) and d[(24 * 80 + 79) * 2] == ord('Z')
     ok = ok and attr(9, 2) == 0x70 and attr(16, 2) == 0x07 and attr(9, 3) == 0x1E   # inverse, normal, bright yellow on blue
-    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
+    # 10/25/26 (A8): bright yellow, bright off, bright green, the writer's, blue behind, behind off, 38;5;1 not bold
+    ok = ok and [attr(c, 11) for c in range(9, 16)] == [0x0E, 0x06, 0x0A, 0x07, 0x17, 0x07, 0x07]
+    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner; '
+            'G d s u X, ESC 7 and 8, SGR 22 39 49 92 and 38', ok)
 
 
 # 10/6/26: the prompt in the root directory as a repaint draws it from a console's cells: a console that does not
@@ -2347,6 +2464,99 @@ def surfsh_corner_check(q):
 
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
+
+
+def alt_screen_check(q):
+    """10/25/26 (track A, A8): the alternate screen (ESC[?1049h and l) in VGA memory: `pagetest alt` asks its question
+    on a blank screen, and the shell's screen comes back after it with the cursor where it was; a program killed there
+    (Ctrl+C at its question) gets the main screen back from the console, which tells the serial terminal too"""
+    def rows():
+        q.wait(0.3)
+        d = q.vga_memory() or bytes(4000)
+        return [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
+
+    def alt_gone(screen):
+        return not any('ALT-SCREEN' in r or 'alternate question' in r for r in screen)
+    q.send('clear\n')
+    ok = q.expect(PROMPT, 10)
+    q.send('echo main screen kept\n')
+    ok = ok and q.expect('main screen kept\r\n', 10) and q.expect(PROMPT, 10)
+    q.send('run pagetest alt\n')
+    ok = ok and q.expect('alternate question: ', 10)
+    alt = rows()
+    ok = ok and alt[0] == 'PAGETEST ALT-SCREEN' and alt[1] == 'alternate question:' and not any(alt[2:])
+    q.send('yes\n')
+    ok = ok and q.expect('PAGETEST MAIN SCREEN: yes', 10) and q.expect(PROMPT, 10)
+    main = rows()
+    ok = ok and main[1] == 'main screen kept' and main[2].endswith('run pagetest alt') and \
+        main[3] == 'PAGETEST MAIN SCREEN: yes' and main[4].endswith('exit status 0]') and alt_gone(main)
+    q.send('run pagetest alt\n')
+    ok = ok and q.expect('alternate question: ', 10)
+    start = len(q.transcript)
+    q.ser.sendall(b'\x03')
+    ok = ok and q.expect('killed]', 10) and q.expect(PROMPT, 10) and b'\x1b[?1049l' in q.transcript[start:]
+    killed = rows()
+    ok = ok and killed[:5] == main[:5] and killed[5].endswith('run pagetest alt') and alt_gone(killed)
+    return ('the alternate screen: a program\'s question on a blank screen, the shell\'s screen back after it, and back '
+            'from the console when the program is killed there (the serial terminal told)', ok)
+
+
+CONSOLE_CHECKS['@alt-screen'] = alt_screen_check
+
+
+def less_check(q):
+    """10/25/26 (track A, A9): less on the alternate screen, its text from a pipe and its keys from /dev/tty: the first
+    screenful and where it is, Space, a search (the line found on top, its match in inverse video), G and (END), and q
+    giving the shell's screen back as it was; a file that fits on the screen, at its end at once; through a pipe, a
+    copy as cat makes"""
+    def rows():
+        q.wait(0.5)
+        d = q.vga_memory() or bytes(4000)
+        return d, [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
+    q.send('clear\n')
+    ok = q.expect(PROMPT, 10)
+    q.send('echo before less\n')
+    ok = ok and q.expect('before less\r\n', 10) and q.expect(PROMPT, 10)
+    q.send('seq 1 200 | less\n')
+    ok = ok and q.expect('lines 1-24 of 200', 15)
+    _, shown = rows()
+    ok = ok and shown[0] == '1' and shown[23] == '24' and shown[24] == 'standard input  lines 1-24 of 200  12%  h: keys'
+    q.ser.sendall(b' ')
+    ok = ok and q.expect('lines 25-48 of 200', 10)
+    q.ser.sendall(b'/150\r')
+    ok = ok and q.expect('lines 150-173 of 200', 10)
+    d, shown = rows()
+    ok = ok and shown[0] == '150' and [d[c * 2 + 1] for c in range(4)] == [0x70, 0x70, 0x70, 0x07] and d[161] == 0x07
+    q.ser.sendall(b'G')
+    ok = ok and q.expect('lines 177-200 of 200  (END)', 10)
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    _, shown = rows()
+    ok = ok and shown[1] == 'before less' and shown[2].endswith('seq 1 200 | less') and \
+        not any('standard input' in r for r in shown)
+    q.send('less /initrd/etc/ssl/README\n')
+    ok = ok and q.expect('/initrd/etc/ssl/README  lines 1-23 of 23  (END)', 15)
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send('pagetest utf8 | less\n')                     # UTF-8 as the console's characters, one cell each
+    ok = ok and q.expect('lines 1-1 of 1  (END)', 15)
+    _, shown = rows()
+    ok = ok and shown[0] == UTF8_SAMPLE
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send("printf 'a\\tb\\001c\\n' | less\n")             # a TAB to column 8, ^A in inverse video
+    ok = ok and q.expect('lines 1-1 of 1  (END)', 15)
+    d, shown = rows()
+    ok = ok and shown[0] == 'a       b^Ac' and [d[c * 2 + 1] for c in range(8, 12)] == [0x07, 0x70, 0x70, 0x07]
+    q.ser.sendall(b'q')
+    ok = ok and q.expect(PROMPT, 10)
+    q.send('echo through less | less | cat\n')
+    ok = ok and q.expect('through less\r\n', 10) and q.expect(PROMPT, 10)
+    return ('less: a pipeline\'s text with the keys from the terminal, Space, a search shown in inverse video, G, and q '
+            'giving the shell\'s screen back; a file that fits; UTF-8, a TAB and ^A; a copy into a pipe', ok)
+
+
+CONSOLE_CHECKS['@less'] = less_check
 CONSOLE_CHECKS['@surfsh-ctrl-c'] = surfsh_ctrl_c_check    # 10/25/26
 CONSOLE_CHECKS['@surfsh-jobs'] = surfsh_jobs_check        # 10/25/26
 

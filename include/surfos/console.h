@@ -91,6 +91,15 @@ typedef struct surf_console {
     u_char sb_none;             /* no memory for a ring: not asked again */
     struct surf_task *line_by;  /* 10/25/26: who wrote the cursor's row's last character (kprintf waits for another's line) */
     struct surf_task *line_owner;   /* 10/25/26 (the review): a kernel thread's line going out whole: others wait for it */
+    /* 10/25/26 (track A, A8): ESC 7 and ESC[s save the cursor (ESC 7 its colours too), ESC 8 and ESC[u put it back;
+       ESC[?1049h shows the alternate screen, the main one's cells kept in alt (a stream's far terminal keeps them,
+       the console only its column), until ESC[?1049l or the end of the task that asked (alt_owner) */
+    surf_point saved_loc;
+    u_char saved_fg, saved_bg, saved_bold, saved_inverse;
+    u_char *alt;                /* the main screen's cells while the alternate one shows (a screen console) */
+    u_char alt_on;              /* the alternate screen shows (a stream console too) */
+    surf_point alt_loc;         /* the cursor on the main screen */
+    struct surf_task *alt_owner;
 } surf_console;
 
 void sscroll(surf_console *con);

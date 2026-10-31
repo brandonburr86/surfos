@@ -281,6 +281,7 @@ void sim_row(int r, char *out, int *attr0) {
 }
 
 u_char sim_cell(int x, int y) { return conArray[0].vmem[(y * COLUMNS + x) * 2]; }
+int sim_attr(int x, int y) { return conArray[0].vmem[(y * COLUMNS + x) * 2 + 1]; }     /* 10/25/26 (A8) */
 
 /* 10/25/26 (track A, A6): the scrollback. which: 0 Shift+PgUp, 1 Shift+PgDn, 2 Shift+Home, 3 Shift+End, as
    keyboard.c gives them; row r of the screen (conVideo, what the framebuffer draws) as sim_row() reads a

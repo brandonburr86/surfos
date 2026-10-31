@@ -24,7 +24,8 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
              switching, a set of commands and the escape sequences of `ansi`, all through
-             the keyboard and the screen
+             the keyboard and the screen; the alternate screen (10/25/26) given back as it was,
+             by a program and by less
   fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
              hands that mode over. The console fills it with 160x45 cells of Spleen 12x24
              (10/25/26; 120x33 at scale 2 in 8x16 before): a long line on one row, Backspace
@@ -580,7 +581,9 @@ class Vm:
 # what the shell command `ansi` draws with escape sequences (row: text); the last line and the
 # corner depend on the grid
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
-             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED'}
+             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
+             # 10/25/26 (track A, A8): CHA and ECH; ESC 7/8, ESC[s/u and VPA; SGR 22, 92, 39, 44, 49, 38 dropped
+             5: '         COL       TWENTY    X   XX', 9: '         CB        FE        VPA', 11: '         BNGDU.S'}
 GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
 # 10/6/26: what `pagetest utf8` prints, as the console draws it (code page 437: no euro sign)
 UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
@@ -824,6 +827,29 @@ def scenario_keyboard(args, image, firmware, outdir):
         scr = vm.wait_screen(lambda s: 'ANSI-TEST done' in s.text() and prompt_on(s), 20, interval=0.5)
         results.append(('escape sequences on the framebuffer: position, moves, erase, inverse, colours, the corner',
                         ansi_ok(scr)))
+        # 10/25/26 (track A, A8): the alternate screen on the framebuffer: pagetest's question on a blank screen, then
+        # the shell's screen as it was (the pattern above with its colours and the Z in its corner), the answer under it
+        vm.keys('run pagetest alt\n')
+        alt = vm.wait_screen(lambda s: 'alternate question:' in s.text(), 20, interval=0.5)
+        vm.keys('yes\n')
+        back = vm.wait_screen(lambda s: 'PAGETEST MAIN SCREEN: yes' in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('the alternate screen on the framebuffer: the program\'s question on a blank screen, the shell\'s '
+                        'screen as it was after it', alt is not None and alt.rows[0] == 'PAGETEST ALT-SCREEN' and
+                        not any(alt.rows[2:]) and ansi_ok(back) and 'ALT-SCREEN' not in back.text()))
+        # 10/25/26 (track A, A9): less, the same: its screenful, then q and the shell's screen as it was
+        vm.keys('seq 1 100 | less\n')
+        shown = vm.wait_screen(lambda s: 'standard input  lines 1-' in s.text(), 20, interval=0.5)
+        vm.keys('q')
+        back = vm.wait_screen(lambda s: 'standard input' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('less on the framebuffer: a pipeline\'s text a screenful at a time, and q gives the shell\'s '
+                        'screen back', shown is not None and shown.rows[0] == '1' and ansi_ok(back)))
+        # and edit: its screen, then ^Q (nothing typed: no question) and the shell's screen as it was
+        vm.keys('edit /nothing.txt\n')
+        shown = vm.wait_screen(lambda s: 'SurfOS edit  /nothing.txt' in s.text(), 20, interval=0.5)
+        vm.keys('<ctrl-q>')
+        back = vm.wait_screen(lambda s: 'SurfOS edit' not in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('edit on the framebuffer, and ^Q gives the shell\'s screen back', shown is not None and
+                        ansi_ok(back)))
         # 10/6/26: surfsh's line editor on the PS/2 keyboard, as on the laptop: Tab, Up and Enter ('\r') in raw
         # mode, in a surfsh started inside the one on F1 (its prompt is on a row below the typed command)
         def nested(s):

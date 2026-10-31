@@ -298,7 +298,8 @@ static int mode_size(int argc, char **argv) {
     show(0);
     snprintf(want, sizeof(want), "TTY_GETSIZE %dx%d\n", cols, rows);
     if(!strstr(out, want)) return fail("TTY_GETSIZE on the pty is not PTY_SETSIZE's size");
-    if(!strstr(out, "TTY_CAPS 3: UTF-8 colour")) return fail("TTY_CAPS on the pty is not UTF-8 and colour");
+    if(!strstr(out, "TTY_CAPS 7: UTF-8 colour alternate-screen"))      /* 10/25/26: the alternate screen too */
+        return fail("TTY_CAPS on the pty is not UTF-8, colour and the alternate screen");
     return pass();
 }
 

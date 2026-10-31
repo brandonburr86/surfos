@@ -248,6 +248,19 @@ static void test_expand(void) {
     expands("$", "$|", "a $ alone is itself");
     expands("a$%b", "a$%b|", "a $ before what is no parameter is itself");
     expands("end\\", "end\\|", "a \\ at the very end is itself");
+    /* 10/25/26 (track A, A10): ~ */
+    sh_set_var("HOME", "/hda1");
+    expands("~", "/hda1|", "~ alone: $HOME");
+    expands("~/notes", "/hda1/notes|", "~ before a /: $HOME, then the rest");
+    expands("\"~\"", "~|", "a ~ in double quotes is itself");
+    expands("'~'/x", "~/x|", "... in single quotes too");
+    expands("\\~", "~|", "... and after a \\");
+    expands("a~", "a~|", "a ~ not first is itself");
+    expands("~x", "~x|", "~ before anything but a / is itself (there are no users)");
+    sh_set_var("HOME", "/a b*");
+    expands("~/c", "/a b*/c|", "what ~ gives is never split nor a pattern");
+    sh_set_var("HOME", NULL);
+    expands("~/c", "~/c|", "with HOME unset, ~ stays");
     check(sh_expand_doc("a $? \\$ \\\\ \\x \"q\" 'q'\nb\\\nc\n", out, sizeof(out)) == 0 &&
           !strcmp(out, "a 7 $ \\ \\x \"q\" 'q'\nbc\n"), "a here-document's text: $?, \\ before $ \\ and a newline");
 }
