@@ -2158,7 +2158,14 @@ SYS_pipe               fs/pipe.c: 8 KB between two descriptors, 32 pipes at most
   while it waits for one; a task of a job in the background may not (`-EACCES`), but the
   foreground job's shell (`fg_shell`) gives the terminal back to its own job (a surfsh typed at
   a surfsh's prompt), and when that shell ends the foreground is its own job, for the shell
-  above it to take back. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
+  above it to take back. Nor may a task in no job (10/26/26, CODE-AUDIT T14) unless it is a
+  shell of that terminal's: the foreground job's, the session's (init's surfsh on a console,
+  `TF_SHELL`; on a pty the program its session began with, `TF_SESSION` from its creation
+  until a `detach()`), or a program the ring-0 shell started (a surfsh typed at it). An
+  interactive surfsh in no job takes its terminal as it starts (`JOB_FG` 0), and again before
+  each command (a nested surfsh whose shell above ended is in no job from then on); one the
+  kernel refuses (a surfsh that `run` started) runs without job control: what it starts is in
+  no job, as a script's is, and `fg` and `bg` say there is no job control. Ctrl+Z in line mode stops the foreground job's tasks (at `--More--`
   it is a key; over the serial line and a pty it passes a paste's skip and an escape
   sequence, as Ctrl+C does), and a task of another job that reads the terminal stops instead
   (`task_stop_reader()`: as `tty_read()` begins, before it looks at the mode, and in
@@ -2588,6 +2595,23 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
 * **Budgets.** 8 windows and 8 MB of pixels per desktop, 32 windows and 32 MB in all (EAGAIN, ENOMEM), counted
   from the buffers alive, the desktop's views too (a window its desktop let go keeps none, only its size); a buffer no larger than the desktop's largest content area
   (958x457 on a desktop of 960x540); and each window takes one of its program's 16 descriptors.
+* **The clipboard and asking to be seen** (10/26/26, stage C12: the desktop's applications as programs).
+  WIN_CLIP copies 1 to WIN_CLIP_MAX (128 KB, the desktop's clipboard) bytes of the program's text into the
+  kernel, to a NUL if one comes first (none at all is EINVAL), accepted only while the window has the focus
+  (the desktop's FOCUS events set it; asked before the copy, so a refusal copies nothing, and again after it),
+  and leaves it in its desktop's record with the window's handle, the latest in place of what waited. The
+  desktop takes it each tick (`win_clip_take()`, struct gui_sys's `win_clip`) naming the window that has its
+  focus then: text from any other is dropped, since FOCUS 0 reaches a window only after the desktop moved its
+  focus. A desktop's end frees what it never took. WIN_ALERT counts in the window's state
+  (`win_state.alerts`), once in WIN_ALERT_MS (5 s) at most for a program, whichever of its windows asks and
+  however often it opens one (EAGAIN; `alerters[]` remembers the programs that asked, the oldest making room).
+  The desktop then shows the window in front, out of the taskbar, without the focus and with its taskbar
+  button marked, as a new window: after the pass's pointer events and keys (`gui_input_done()`), never while
+  a pointer button is down, a drag goes on or a program holds a grab (it waits for their end), and for
+  GUI_GRACE_MS (500 ms) after it came up a press on it is nobody's (`client_grace()`: no focus, no drag,
+  nothing for the program). The ABI stays version 1, the ops appended: an older kernel says EINVAL; struct
+  win_clip's 8 bytes are checked at compile time, as the other structures are. `wintest show` copies on x and
+  asks to be seen on y.
 * **Locking.** kernel/win.c takes short interrupts-off sections and no mutex; memory is allocated, filled and
   freed with interrupts on. It never calls the framebuffer, and the desktop never calls it from inside a
   `framebuffer_graphics_draw()` callback.
@@ -2604,8 +2628,7 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   window gives it the focus. A window asked for takes it as it appears: the first of a program the launcher
   just started, and that of the focused Terminal's foreground job (the kernel's `win_state.foreground`: its
   program is in the foreground job of a pty the desktop adopted, a job that session's shell made, whose pid
-  `win_adopt_shell()` records; a task in no job may set a terminal's foreground, CODE-AUDIT T14, but not to a job
-  of that shell's). A frame is a pixel of border and the title bar, its content drawn with `gd_blit()` from the pixels
+  `win_adopt_shell()` records, not merely the terminal's foreground job). A frame is a pixel of border and the title bar, its content drawn with `gd_blit()` from the pixels
   `win_update()` lends it until the next update. Every event over a program's visible content is the
   program's: hover, the wheel and all three buttons; a press there brings the window to the front and holds
   the pointer for it until every button is up (a grab), while the corner grip stays the desktop's. A size
@@ -2631,12 +2654,29 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   `guisys_win_run()` spawns that line on the desktop's console, its input `/dev/null` (it never takes the
   desktop's keys), detached so that init collects it: it outlives the Terminal and ends with the desktop,
   whose end hangs its windows up (libgui's `gw_next()` then fails with EPIPE).
+  10/26/26 (stage C12): `wclock`, the Clock, is the first of the suite's applications to move out: its model
+  (`user/wclock/clock.c`: the pages, the calendar's arithmetic, the stopwatch, the timer, the keys and buttons,
+  with the time handed in, host-tested by `test_wclock`) and its window (`main.c`: drawing as `shell/guiclock.c`
+  drew, the time from `localtime_r()`, `gw_alert()` at zero, `gw_clip()` for Copy). The suite keeps the
+  application's entry as a launcher (`struct gui_app`'s `program`): its tile, Apps > Clock and Next window's
+  list start the program, or bring its window back (`app_program()` in `guicore.c` keeps the pid it started,
+  `client_of_pid()` finds its window; pressed again within GUI_START_MS, 2 s, before that window came, it
+  starts no second program: a double-click on the tile), and the window opens where the application's window
+  stood
+  (`accept()` with `gui_app_slot_of()`), not in the cascade. Edit > Copy sends a program's window Ctrl+C
+  (`ACT_CLIENT_COPY`). `wcharmap`, the Character Map, followed (`user/wcharmap/charmap.c` the model with the
+  console's code page 437 from libsurf, host-tested by `test_wcharmap`; `main.c` the window, drawing each of the
+  256 characters with libgui's `gw_glyph()`); Go to code, which was the desktop's dialog, is a band of its own
+  window.
 * **On the screen** (`tools/gui_apps_win.py`, the guiapps scenario of `tools/qemu-usb.py`): wintest show and
   wdemo at 2x, keys, a press and a release echoed with where they were, F2 and F1 keeping a window's content,
   a corner resize answered, the close button ending a program (and `ps`), `wdemo hang` ended through the
   question, `wdemo crash` losing only its window, `wintest pty` refused in the Terminal, `wdemo` typed
   without `&` taking the focus as the Terminal's foreground job, wcalc from the launcher counting by keys and
-  clicks, and a launched wcalc outliving the Terminal and ending with the
+  clicks, the Clock and the Character Map as programs read by the checks the desktop's had
+  (`tools/gui_apps_tools.py`; the Clock's alarm is its window back in front without the focus, a click
+  answering it), and a launched wcalc outliving
+  the Terminal and ending with the
   desktop (ps on the serial console once the desktop has closed); once the Terminal has closed, a
   `wintest pty` started by the desktop takes the Terminal's pty number (`wintest tty` named it) and is
   refused there.

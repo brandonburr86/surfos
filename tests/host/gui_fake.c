@@ -324,6 +324,8 @@ static void wins_reset(void) {
     fake_run_line[0] = 0;
     fake_run_count = 0;
     fake_run_result = 77;
+    fake_clip[0] = 0;
+    fake_clip_from = -1;
 }
 
 static u32 *pixels_for(int w, int h, u32 color) {
@@ -437,9 +439,23 @@ static int s_run(void *ctx, const char *line, char *msg, size_t n) {
     return fake_run_result;
 }
 
+/* 10/26/26: the text a program put on the clipboard, taken once: the desktop's when it came from the window it names
+   (the one with its focus), dropped otherwise */
+char fake_clip[64];
+int fake_clip_from;
+static int s_win_clip(void *ctx, int h, char *out, size_t n) {
+    size_t len = strlen(fake_clip);
+    (void)ctx;
+    if(h < 0 || h != fake_clip_from) len = 0;
+    if(len > n) len = n;
+    memcpy(out, fake_clip, len);
+    fake_clip[0] = 0;
+    return (int)len;
+}
+
 const struct gui_sys fake_sys = { NULL, s_tasks, s_memory, s_machine, s_kill, s_disks, s_log,
                                   s_term_open, s_term_read, s_term_write, s_term_resize, s_term_close,
-                                  s_win_accept, s_win_update, s_win_event, s_win_close, s_run };
+                                  s_win_accept, s_win_update, s_win_event, s_win_close, s_run, s_win_clip };
 
 /**** a screen ****/
 

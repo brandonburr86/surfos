@@ -25,6 +25,22 @@ Window menu, the tick and the end; leaving the desktop with programs' windows op
 10/25/26 (stage C6): the Calculator's arithmetic is shell/guicalc.c's (the program wcalc shares it),
 and Apps > Run program... (the programs of /initrd/bin in a list, and the line to run: guidialog.c's
 GUI_DLG_RUN) starts one on the desktop's console (struct gui_sys's run).
+10/26/26 (stage C8): a turn of the wheel that moves nothing else (the mice send it in a report of its
+own) is only the wheel's: a program's window under the pointer gets WIN_EV_WHEEL and no pointer event
+after it, so the wheel is its last event. A right-click opens a menu where it was (context_press()):
+over a window, brought to the front, the menu of what it does there (Edit's for Notepad and the
+suite's applications that edit, File's for Files, Window's on a title bar and for the rest); over the
+desktop, Apps. It is the menu bar's own menu, chosen and run as from the bar (menu_hit(), menu_run(),
+the keys); a program's content keeps every button for its program. It is for its window: it closes
+when the focus leaves that window (a program's window arriving with the focus, the window gone), and
+an item is never run on another. With a menu open, a right press in it does nothing and one
+elsewhere only closes it, as a left click does. In Files a right-click selects the row first.
+10/26/26 (stage C12): an application of the suite may be a program now (struct gui_app's program:
+the Clock, user/wclock/). Its slot never opens: gui_open() runs the program through the launcher,
+or brings its window to the front when the program it started last has one (app_program(); a
+press before that window came, within GUI_START_MS, starts nothing: a double-click), and
+guiclient.c puts that window where the slot's stands. Edit > Copy for a program's window is its
+Ctrl+C.
 */
 #include "guipriv.h"
 #include "gui_media.h"
@@ -63,9 +79,15 @@ static void title_of(const struct gui_state *g, int id, char *out, size_t n) {
     else strlcpy(out, a ? a->title : titles[id], n);
 }
 
-static int icon_of(int id) {
+/* the icon in a window's title bar and its taskbar button; 10/26/26 (stage C12): an application's program's window
+   has the application's icon */
+int gui_window_icon(const struct gui_state *g, int id) {
     const struct gui_app *a = gui_app_of(id);
-    if(id >= GUI_FIRST_CLIENT) return ICON_PROGRAM;
+    int slot;
+    if(id >= GUI_FIRST_CLIENT) {
+        slot = client_at(g, id) ? gui_app_slot_of(g, client_at(g, id)->st.pid) : -1;
+        return slot >= 0 ? gui_app_of(slot)->icon : ICON_PROGRAM;
+    }
     return a ? a->icon : app_icons[id];
 }
 
@@ -93,6 +115,8 @@ static const char *const help[] = {
     "title bar, or its middle button) and resizes from it.",
     "The taskbar shows each open window: click one to bring",
     "it up, or to tuck it away when it is in front.",
+    "A right-click opens the menu for what is under the",
+    "pointer there: Edit, File, Window, or Apps.",
     "",
     "#Notepad",
     "Ctrl+N new, Ctrl+O open, Ctrl+S save. Save as is in the",
@@ -281,9 +305,12 @@ void gui_raise(struct gui_state *g, int id) {
     g->dirty=true;
 }
 
+static void app_program(struct gui_state *g, int app);
+
 void gui_open(struct gui_state *g, int app) {
     bool was;
     if(app<0 || app>=GUI_SLOTS) return;
+    if(gui_app_of(app) && gui_app_of(app)->program) { app_program(g, app); return; }  /* 10/26/26 (C12) */
     if(app>=GUI_FIRST_CLIENT && !g->win[app].open) return;     /* 10/25/26: a program's slot opens only with its window */
     was = g->win[app].open;
     gui_raise(g, app);
@@ -448,6 +475,10 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Close window", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
         break;
     case 3:
+        if(client_keys(g)) {                            /* 10/26/26 (C12): a program's window: its Ctrl+C */
+            ITEM("Copy", "Ctrl+C", ACT_CLIENT_COPY, true);
+            break;
+        }
         if(edit_app(g)) {                               /* 10/17/26: the focused application's */
             const struct gui_app *app = edit_app(g);
             ITEM("Undo", "Ctrl+Z", ACT_UNDO, app->can_edit(g, ACT_UNDO));
@@ -532,18 +563,33 @@ static int menu_width(const struct menu_item *it, int n) {
     return w;
 }
 
-static int item_top(const struct menu_item *it, int i) {
-    int y = MENU_H + 4, k;
+/* 10/26/26: an item's top, below the menu's top (MENU_H for the bar's) */
+static int item_top(const struct menu_item *it, int i, int top) {
+    int y = top + 4, k;
     for(k = 0; k < i; k++) y += it[k].label ? 24 : 9;
     return y;
+}
+
+/* 10/26/26 (stage C8): menu m's box of n items: under its title on the bar, or, opened by a right-click, from where
+   it was, kept on the screen above the taskbar */
+static void menu_place(const struct gui_state *g, int m, const struct menu_item *it, int n, int *x, int *y, int *w,
+                       int *h) {
+    *w = menu_width(it, n);
+    *h = item_top(it, n, 0) + 4;
+    *x = menu_left(m) - 4;
+    *y = MENU_H;
+    if(m != g->menu || !g->menu_y) return;
+    *x = gui_clamp(g->menu_x, 0, g->width - *w > 0 ? g->width - *w : 0);
+    *y = gui_clamp(g->menu_y, MENU_H, g->height - TASK_H - *h > MENU_H ? g->height - TASK_H - *h : MENU_H);
 }
 
 /* the item under x, y of the open menu: its number, or -1 */
 static int menu_hit(const struct gui_state *g, int x, int y) {
     struct menu_item it[MENU_MAX];
-    int n = menu_items(g, g->menu, it), left = menu_left(g->menu) - 4, i;
-    if(x < left || x >= left + menu_width(it, n)) return -1;
-    for(i = 0; i < n; i++) if(it[i].label && y >= item_top(it, i) && y < item_top(it, i) + 24) return i;
+    int n = menu_items(g, g->menu, it), left, top, w, h, i;
+    menu_place(g, g->menu, it, n, &left, &top, &w, &h);
+    if(x < left || x >= left + w) return -1;
+    for(i = 0; i < n; i++) if(it[i].label && y >= item_top(it, i, top) && y < item_top(it, i, top) + 24) return i;
     return -1;
 }
 
@@ -558,10 +604,7 @@ bool gui_menu_on(const struct gui_state *g, int m, int act) {
 void gui_menu_box(const struct gui_state *g, int m, int *x, int *y, int *w, int *h) {
     struct menu_item it[MENU_MAX];
     int n = menu_items(g, m, it);
-    *x = menu_left(m) - 4;
-    *y = MENU_H;
-    *w = menu_width(it, n);
-    *h = item_top(it, n) - MENU_H + 4;
+    menu_place(g, m, it, n, x, y, w, h);              /* 10/26/26: where a right-click opened it, when it did */
 }
 
 static int menu_step(const struct menu_item *it, int n, int from, int step) {
@@ -577,6 +620,7 @@ static void menu_open(struct gui_state *g, int m) {
     struct menu_item it[MENU_MAX];
     int n;
     g->menu = m;
+    g->menu_y = 0;                                      /* 10/26/26: under its title (context_press() moves it) */
     g->selection = 0;
     if(m) {
         n = menu_items(g, m, it);
@@ -585,12 +629,19 @@ static void menu_open(struct gui_state *g, int m) {
     g->dirty = true;
 }
 
+/* 10/26/26: a right-click menu whose window no longer has the focus (it acts on the focus) */
+static bool menu_stale(const struct gui_state *g) {
+    return g->menu && g->menu_y && g->menu_win >= 0 &&
+           (g->focus != g->menu_win || !g->win[g->menu_win].open || g->win[g->menu_win].min);
+}
+
 static void menu_run(struct gui_state *g, int i) {
     struct menu_item it[MENU_MAX];
     int n = menu_items(g, g->menu, it);
+    bool stale = menu_stale(g);                         /* 10/26/26: never on another window */
     g->menu = 0;
     g->dirty = true;
-    if(i >= 0 && i < n && it[i].label && it[i].on) gui_act(g, it[i].act);
+    if(!stale && i >= 0 && i < n && it[i].label && it[i].on) gui_act(g, it[i].act);
 }
 
 static void menu_key(struct gui_state *g, int key) {
@@ -691,6 +742,12 @@ void gui_tick(struct gui_state *g) {
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
     client_tick(g);                                     /* 10/25/26: programs' windows */
+    if(menu_stale(g)) { g->menu = 0; g->dirty = true; } /* 10/26/26: its window lost the focus */
+}
+
+/* 10/26/26 (stage C12): what waits for a pass's input to be in */
+void gui_input_done(struct gui_state *g) {
+    client_alerts(g);
 }
 
 void gui_finish(struct gui_state *g) {
@@ -776,6 +833,7 @@ void gui_act(struct gui_state *g, int act) {
     case ACT_MINIMIZE: minimize(g, g->focus); break;
     case ACT_MAXIMIZE: maximize(g, g->focus); break;
     case ACT_HELP: gui_open(g, GUI_HELP); break;
+    case ACT_CLIENT_COPY: client_key(g, 3); break;      /* 10/26/26 (C12): a program's window copies itself */
     case ACT_RUN:                                       /* 10/25/26: the launcher: /initrd/bin's programs, a line to run */
         if(g->sys && g->sys->run) dialog_chooser(g, GUI_DLG_RUN, ACT_DLG_RUN, "/initrd/bin", "wcalc");
         break;
@@ -784,15 +842,39 @@ void gui_act(struct gui_state *g, int act) {
 
 /* 10/25/26: the launcher: the line started on the desktop's console (struct gui_sys's run), its first window to
    take the focus as it appears; or why not */
-static void run_program(struct gui_state *g, const char *line) {
+static int run_program(struct gui_state *g, const char *line) {
     char msg[80];
     int pid;
     msg[0] = 0;
-    if(!g->sys || !g->sys->run) return;
+    if(!g->sys || !g->sys->run) return -1;
     pid = g->sys->run(g->sys->ctx, line, msg, sizeof(msg));
     if(pid > 0) client_launched(g, pid);
-    if(pid >= 0) return;
+    if(pid >= 0) return pid;
     dialog_message(g, "Not started", msg[0] ? msg : "The program could not be started.", "");
+    return pid;                                         /* 10/26/26: its pid, for an application's launcher */
+}
+
+/* 10/26/26 (stage C12): an application that is a program now: the window of the program its launcher started last
+   to the front, or the program started, its window to take the focus as it appears (the launcher's rule) and to
+   stand at the application's place (guiclient.c's accept()); but nothing while the one just started has no window
+   yet (GUI_START_MS: the second press of a double-click) */
+static void app_program(struct gui_state *g, int app) {
+    int k = app - GUI_FIRST_APP, id = client_of_pid(g, g->app_pid[k]), pid;
+    g->menu = 0;
+    g->dirty = true;
+    if(id >= 0) { gui_open(g, id); return; }
+    if(g->app_starting[k] && g->now - g->app_at[k] < GUI_START_MS) return;
+    pid = run_program(g, gui_app_of(app)->program);
+    g->app_pid[k] = pid > 0 ? pid : 0;
+    g->app_at[k] = g->now;
+    g->app_starting[k] = pid > 0;
+}
+
+/* 10/26/26: the application whose launcher started pid, its slot; -1 */
+int gui_app_slot_of(const struct gui_state *g, int pid) {
+    int k;
+    for(k = 0; pid > 0 && k < SUITE; k++) if(g->app_pid[k] == pid) return GUI_FIRST_APP + k;
+    return -1;
 }
 
 void gui_answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
@@ -899,6 +981,38 @@ static void taskbar_press(struct gui_state *g) {
     }
 }
 
+/* 10/26/26 (stage C8): a right-click opens, where it was, the menu bar's menu for what is under the pointer: over a
+   window (brought to the front, so the menu's items act on it) Edit's when it edits (Notepad, the suite's that
+   do), File's for Files, Window's on its title bar and for the rest; over the desktop, Apps. Nothing on the menu
+   bar and the taskbar */
+static void context_press(struct gui_state *g) {
+    int i, id, m = 4, target = -1;
+    struct gui_window *w;
+    if(g->y < MENU_H || g->y >= g->height - TASK_H) return;
+    for(i = GUI_SLOTS - 1; i >= 0; i--) {
+        id = g->order[i];
+        w = &g->win[id];
+        if(!w->open || w->min || !gui_inside(g->x, g->y, w->x, w->y, w->w, w->h)) continue;
+        gui_open(g, id);
+        target = id;
+        m = g->y - w->y < TITLE_H ? 5 : id == GUI_NOTEPAD || edit_app(g) ? 3 : id == GUI_FILES ? 2 : 5;
+        if(m == 2) files_select_at(g, g->x - w->x, g->y - w->y);   /* the row under it, for File's items */
+        break;
+    }
+    menu_open(g, m);
+    g->menu_x = g->x;
+    g->menu_y = g->y;
+    g->menu_win = target;
+}
+
+/* 10/26/26: x, y in the open menu's box */
+static bool in_menu(const struct gui_state *g, int x, int y) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, g->menu, it), mx, my, mw, mh;
+    menu_place(g, g->menu, it, n, &mx, &my, &mw, &mh);
+    return gui_inside(x, y, mx, my, mw, mh);
+}
+
 /* Help's text rows, its last useful first row, and its scroll bar (above the resize grip) */
 static int help_rows(const struct gui_window *w) { return (w->h - TITLE_H - 12) / 18; }
 static int help_max(const struct gui_window *w) { return HELP_LINES > help_rows(w) ? HELP_LINES - help_rows(w) : 0; }
@@ -969,6 +1083,8 @@ static void wheel(struct gui_state *g, int dz) {
     int i, id, lines = -dz * 3;                         /* the wheel turned away from the user: up */
     struct gui_window *w;
     if(g->dialog.kind) { dialog_wheel(g, lines); return; }
+    if(g->menu) return;                                 /* 10/26/26 (C8): a menu open drops it */
+    if(g->clients.grab >= 0) { client_wheel(g, g->clients.grab, lines); return; }   /* a program's grab: its own */
     for(i = GUI_SLOTS - 1; i >= 0; i--) {
         id = g->order[i];
         w = &g->win[id];
@@ -998,13 +1114,19 @@ void gui_release(struct gui_state *g) {
 
 void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     bool press=(e->buttons&POINTER_LEFT) && !(g->buttons&POINTER_LEFT);
+    bool right=(e->buttons&POINTER_RIGHT) && !(g->buttons&POINTER_RIGHT);  /* 10/26/26 (C8): a right-click */
     unsigned old=g->buttons;
-    int i,id,x,y;
+    int i,id,x,y,oldx=g->x,oldy=g->y;
     struct gui_window *w;
     g->x=gui_clamp(e->x,0,g->width-1); g->y=gui_clamp(e->y,0,g->height-1); g->buttons=e->buttons;
-    if(e->wheel) wheel(g,e->wheel);
+    if(e->wheel) {                                      /* 10/26/26 (C8): a turn alone is the wheel's, but a drag */
+        wheel(g,e->wheel);                              /* under way goes on after the scroll (a selection's end) */
+        if(g->x==oldx && g->y==oldy && g->buttons==old && g->drag<0 && g->resize<0 && g->scroll<0 &&
+           g->app_drag<0 && !g->note.selecting && !g->drawing) return;
+    }
     if(!(e->buttons&POINTER_LEFT)) gui_release(g);
     if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
+    if(!g->menu && client_grace(g,old)) return;         /* 10/26/26: a press on a window just come up by itself */
     if(client_pointer(g,old)) return;                   /* 10/25/26: a program's: over its content, or held for it */
     if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
         int top, bottom, nx, ny;
@@ -1048,15 +1170,20 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
         } else g->last_x=-1;
         return;
     }
+    if(right && !press) {                               /* 10/26/26 (C8): with a menu open, in it nothing, */
+        if(!g->menu) context_press(g);                  /* elsewhere it closes as a left click does */
+        else if(!in_menu(g, g->x, g->y)) { g->menu = 0; g->dirty = true; }
+        return;
+    }
     if(g->menu && !press) {                             /* the item under the pointer is the one chosen */
-        id=g->y<MENU_H?menu_at(g->x):0;
+        id=g->y<MENU_H && !g->menu_y?menu_at(g->x):0;   /* 10/26/26: the bar's titles, for the bar's menus */
         if(id && id!=g->menu) { menu_open(g,id); return; }
         i=menu_hit(g,g->x,g->y);
         if(i>=0 && i!=g->selection) { g->selection=i; g->dirty=true; }
         return;
     }
     if(!press) return;
-    if(g->y<MENU_H) { id=menu_at(g->x); menu_open(g,g->menu==id?0:id); return; }
+    if(g->y<MENU_H) { id=menu_at(g->x); menu_open(g,g->menu==id && !g->menu_y?0:id); return; }   /* 10/26/26 */
     if(g->menu) {
         i=menu_hit(g,g->x,g->y);
         if(i>=0) menu_run(g,i);
@@ -1210,8 +1337,8 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
     gd_rect(d,x+5,y+6,w->w,w->h,SHADOW);
     gd_rect(d,x,y,w->w,w->h,INK); gd_rect(d,x+1,y+1,w->w-2,w->h-2,PAPER);
     gd_rect(d,x+1,y+1,w->w-2,27,bar);
-    if(icon_of(id)==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
-    else gd_icon(d,x+8,y+6,icon_of(id),1);
+    if(gui_window_icon(g,id)==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
+    else gd_icon(d,x+8,y+6,gui_window_icon(g,id),1);
     title_of(g,id,b,sizeof(b));
     gd_name(d,x+30,y+6,b,(w->w-38-buttons*24)/8,PAPER);
     title_button(d,x+w->w-26,y+4,0,knob);
@@ -1273,12 +1400,13 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
 
 static void menu_render(const struct gui_state *g, const struct gui_draw *d) {
     struct menu_item it[MENU_MAX];
-    int n = menu_items(g, g->menu, it), x = menu_left(g->menu) - 4, w = menu_width(it, n), h = item_top(it, n) - MENU_H + 4, i, y;
-    gd_rect(d, x + 4, MENU_H + 4, w, h, NAVY);
-    gd_rect(d, x, MENU_H, w, h, INK);
-    gd_rect(d, x + 1, MENU_H, w - 2, h - 1, PAPER);
+    int n = menu_items(g, g->menu, it), x, top, w, h, i, y;
+    menu_place(g, g->menu, it, n, &x, &top, &w, &h);    /* 10/26/26: where a right-click opened it, when it did */
+    gd_rect(d, x + 4, top + 4, w, h, NAVY);
+    gd_rect(d, x, top, w, h, INK);
+    gd_rect(d, x + 1, top + (g->menu_y ? 1 : 0), w - 2, h - (g->menu_y ? 2 : 1), PAPER);
     for(i = 0; i < n; i++) {
-        y = item_top(it, i);
+        y = item_top(it, i, top);
         if(!it[i].label) { gd_rect(d, x + 8, y + 4, w - 16, 1, LINE); continue; }
         if(i == g->selection && it[i].on) gd_rect(d, x + 3, y, w - 6, 24, TEAL);
         gd_text(d, x + 14, y + 4, it[i].label, !it[i].on ? 0xA3B4B3 : i == g->selection ? PAPER : INK);
@@ -1313,8 +1441,8 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
     gd_rect(&d,0,MENU_H-1,g->width,1,LINE);
     for(i=1;i<=MENUS;i++) {
         x=menu_left(i);
-        if(g->menu==i) gd_rect(&d,x-4,2,(int)strlen(menu_names[i-1])*8+16,MENU_H-4,TEAL);
-        gd_text(&d,x+4,6,menu_names[i-1],g->menu==i?PAPER:INK);
+        if(g->menu==i && !g->menu_y) gd_rect(&d,x-4,2,(int)strlen(menu_names[i-1])*8+16,MENU_H-4,TEAL);
+        gd_text(&d,x+4,6,menu_names[i-1],g->menu==i && !g->menu_y?PAPER:INK);
     }
     gd_text(&d,g->width-128,6,"Ride the wave.",TEAL);
     gd_rect(&d,0,g->height-TASK_H,g->width,TASK_H,NAVY);
@@ -1324,8 +1452,8 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
         x=6+i*(w+4);
         gd_rect(&d,x,g->height-TASK_H+3,w,TASK_H-6,g->focus==ids[i]?TEAL:win->min?0x1A3B48:INK);
         if(client_waiting(g,ids[i])) gd_rect(&d,x,g->height-6,w,3,CORAL);   /* 10/25/26: opened without the focus */
-        if(icon_of(ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
-        else gd_icon(&d,x+4,g->height-TASK_H+4,icon_of(ids[i]),1);
+        if(gui_window_icon(g,ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
+        else gd_icon(&d,x+4,g->height-TASK_H+4,gui_window_icon(g,ids[i]),1);
         title_of(g,ids[i],b,sizeof(b));
         gd_name(&d,x+24,g->height-TASK_H+5,b,(w-28)/8,win->min?MUTED:FOAM);
     }

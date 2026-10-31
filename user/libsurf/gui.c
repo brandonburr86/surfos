@@ -9,6 +9,7 @@ desktop. gw_next() reads the window's events GW_QUEUE at a time, after a poll() 
 wait for ever, and answers a new size itself: a new image of that size, all background, and
 WIN_SETSIZE, before the event is given (when there is no memory for it the image stays as it was,
 and so does the window). Milestone M12, stage C5 of docs/superpowers/plans/2026-10-25-app-windows.md.
+10/26/26 (stage C12): gw_clip() (WIN_CLIP), gw_alert() (WIN_ALERT) and text at scale.
 */
 
 #include <errno.h>
@@ -109,6 +110,18 @@ int gw_title(struct gw *win, const char *title) {
     return winctl(win->fd, WIN_TITLE, (void *)title);
 }
 
+/* 10/26/26 (stage C12) */
+int gw_clip(struct gw *win, const char *text, unsigned len) {
+    struct win_clip c;
+    c.text = text;
+    c.len = len;
+    return winctl(win->fd, WIN_CLIP, &c);
+}
+
+int gw_alert(struct gw *win) {
+    return winctl(win->fd, WIN_ALERT, (void *)0);
+}
+
 /* a new size: a new image, all background, then the window's (nothing changes when either cannot be had) */
 static void resize(struct gw *win, int w, int h) {
     unsigned *p;
@@ -179,6 +192,15 @@ void gw_line(struct gw *win, int x0, int y0, int x1, int y1, unsigned color) {
 
 int gw_text(struct gw *win, int x, int y, const char *utf8, unsigned color) {
     return guikit_text(win->kit, x, y, utf8, color);
+}
+
+int gw_text_scaled(struct gw *win, int x, int y, const char *utf8, unsigned color, int scale) {
+    return guikit_text_scaled(win->kit, x, y, utf8, color, scale);
+}
+
+/* 10/26/26 (stage C12) */
+void gw_glyph(struct gw *win, int x, int y, unsigned code, unsigned color, int scale) {
+    guikit_glyph(win->kit, x, y, code, color, scale);
 }
 
 int gw_text_width(const char *utf8) {

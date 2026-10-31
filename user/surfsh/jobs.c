@@ -33,6 +33,18 @@ terminal)  cmd"). The builtins of jobs:
 Commands in a pipeline whose last stage runs in surfsh, $( ) and here-documents' feeders are
 in no job of their own (Ctrl+Z does nothing to them), nor is what a script starts.
 
+10/26/26 (CODE-AUDIT T14): the kernel lets a task in no job set its terminal's foreground only if
+it is a shell of that terminal's (init's surfsh, the program a pty's session began with, one the
+ring-0 shell started). An interactive surfsh in no job takes its terminal as it starts (JOB_FG 0,
+no job in the foreground); one the kernel refuses, a surfsh that the kernel's run started, runs
+without job control, as bash does: what it starts is in no job, as a script's is, and reads the
+terminal; Ctrl+Z stops nothing; fg and bg say "no job control in this shell"; jobs, wait and
+kill %n work on the jobs started with &. A surfsh in a job (typed at a surfsh's prompt) has job
+control, as before: the kernel lets it while its job is the foreground one. A shell with job
+control that finds itself in no job before it starts a command, or at fg and bg (the shell above
+a nested surfsh ended, which takes it out of its job), takes its terminal again the same way, and
+goes on without job control when the kernel refuses.
+
 10/25/26: the reports go to the terminal (main.c's term_fd), not into a file the command's
 output goes to ({ ...; } > file). A shell that runs a script keeps a job that ended, without a
 word, until wait asks for it (sleep 1 & p=$!; ...; wait $p), or until the table needs its
@@ -87,9 +99,24 @@ void jobs_set_last(int pid) {
 
 /**** the kernel's jobs for what is started ****/
 
-/* what is started from here on, until job_close(), is one new job (an interactive shell's) */
+/* 10/26/26 (T14): job control for this interactive shell? One in a job has it. One in no job takes the terminal
+   (no job in the foreground: it and what it starts in no job read it), which the kernel lets only a shell of the
+   terminal's do; refused, it runs without job control */
+int jobs_take_terminal(void) {
+    if(jobctl(JOB_ID, 0) > 0) return 1;
+    return jobctl(JOB_FG, 0) >= 0;
+}
+
+/* 10/26/26 (T14): job control still? A shell in no job asks again (a nested surfsh whose shell above ended has
+   been taken out of its job, and the kernel may refuse it the terminal now); a shell in a job keeps it */
+static void job_control_again(void) {
+    if(job_control && jobctl(JOB_ID, 0) <= 0) job_control = jobctl(JOB_FG, 0) >= 0;
+}
+
+/* what is started from here on, until job_close(), is one new job (a shell with job control's) */
 void job_open(void) {
-    next_job = interactive ? SPAWN_JOB_NEW : 0;
+    job_control_again();
+    next_job = job_control ? SPAWN_JOB_NEW : 0;
     next_kid = 0;
 }
 
@@ -101,11 +128,11 @@ int job_close(void) {
 }
 
 /* spawnx's job for the next process; job_spawned() with its pid once it started. Outside job_open()
-   an interactive shell starts what it starts in no job (a $( ), a pipeline that ends in this shell):
+   a shell with job control starts what it starts in no job (a $( ), a pipeline that ends in this shell):
    inheriting its own (a surfsh typed at a surfsh's prompt is in one) would let Ctrl+Z stop them. */
 int job_spawn_value(void) {
     if(next_job) return next_job;
-    return interactive ? SPAWN_JOB_NONE : 0;
+    return job_control ? SPAWN_JOB_NONE : 0;
 }
 
 void job_spawned(int pid) {
@@ -407,12 +434,21 @@ static int foreground(struct job *j) {
     return status;
 }
 
+/* 10/26/26 (T14): an interactive shell the kernel would not let move its jobs into the foreground */
+static int no_job_control(const char *name) {
+    job_control_again();
+    if(!interactive || job_control) return 0;
+    fprintf(stderr, "surfsh: %s: no job control in this shell\n", name);
+    return 1;
+}
+
 int b_fg(int argc, char **argv) {
     struct job *j;
     if(argc > 2) {
         fprintf(stderr, "usage: fg [%%n]\n");
         return STATUS_USAGE;
     }
+    if(no_job_control("fg")) return STATUS_FAIL;
     if(!(j = find("fg", argc > 1 ? argv[1] : NULL))) return STATUS_FAIL;
     printf("%s\n", j->text);
     fflush(stdout);
@@ -425,6 +461,7 @@ int b_bg(int argc, char **argv) {
         fprintf(stderr, "usage: bg [%%n]\n");
         return STATUS_USAGE;
     }
+    if(no_job_control("bg")) return STATUS_FAIL;
     if(!(j = find("bg", argc > 1 ? argv[1] : NULL))) return STATUS_FAIL;
     if(j->kid && jobctl(JOB_BG, j->kid) < 0) {
         fprintf(stderr, "surfsh: bg: %%%d: %s\n", j->id, strerror(errno));

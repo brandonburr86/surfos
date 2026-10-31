@@ -111,6 +111,7 @@ int guisys_win_update(void *ctx, int h, struct win_state *st, struct win_view *v
 int guisys_win_event(void *ctx, int h, const struct win_event *e) { (void)ctx; (void)h; (void)e; return -EINVAL; }
 void guisys_win_close(void *ctx, int h) { (void)ctx; (void)h; }
 int guisys_win_run(void *ctx, const char *line, char *msg, size_t n) { (void)ctx; (void)line; (void)msg; (void)n; return -ENOSYS; }
+int guisys_win_clip(void *ctx, int h, char *out, size_t n) { (void)ctx; (void)h; (void)out; (void)n; return 0; }   /* 10/26/26 */
 
 /**** memory: an allocator that can fail ****/
 

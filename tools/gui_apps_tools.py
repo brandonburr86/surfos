@@ -2,11 +2,20 @@
 Character Map on the screen, driven only by the keyboard, the mouse and QEMU's monitor (a USB mouse plugged in and
 out, so that the kernel logs something while the Log follows), and read from the framebuffer's pixels. The Driver is
 gui_apps_scenario.py's. Each part leaves the desktop as it found it, also when one of its checks fails: its window
-closed, Notepad closed without saving, no dialog left open, the USB mouse it plugged in unplugged again."""
+closed, Notepad closed without saving, no dialog left open, the USB mouse it plugged in unplugged again.
+10/26/26 (stage C12 of docs/superpowers/plans/2026-10-25-app-windows.md): the Clock is a program (user/wclock/),
+started by the Apps menu, its window where the desktop's Clock's stood and drawn as it was, so the same checks read
+it. At zero its window comes back in front without the focus, "Time's up!" in its title and on its page, where a
+message of the desktop's came up before (a check changed with the behaviour); a click in it answers, once the half
+second in which a press on a window that came up by itself is nobody's has passed.
+10/26/26: the Character Map is a program too (user/wcharmap/), read by the same checks; Notepad comes from the Apps
+menu, for Ctrl+E is the program's key while its window has the focus (a check changed with the behaviour)."""
 import calendar
 import time
 
 from gui_apps_scenario import window, PAPER, INK, TEAL, MUTED, BAND, FOAM
+
+CORAL = bytes.fromhex('ee906d')         # 10/26/26: the Clock's alarm
 
 SHEET = bytes.fromhex('fffdf5')         # the Log's text and Notepad's
 MATCH = bytes.fromhex('e8d08a')         # the Log's match found
@@ -264,15 +273,15 @@ def clock(d):
         d.click(x + w - 40, y + 14)             # minimize: it keeps running, tucked away in the taskbar
         d.visible('Clock: the timer runs, the window tucked away: its taskbar button counts down',
                   lambda s: not d.title('Clock')(s) and _taskbar(d, s, 'Clock - 00:0', MUTED))
-        d.visible('Clock: at zero the alarm shows, the window still tucked away: a message, and its taskbar button',
-                  lambda s: _dialog(d, s) == 'Timer' and d.text(s, 245 + 16, 198 + 44, "Time's up!", INK) and
-                  d.text(s, 245 + 16, 198 + 66, 'The 00:20 timer has finished.', MUTED) and
-                  _taskbar(d, s, "Time's up!", MUTED), 'guiapps-clock-alarm.png', timeout=60)
-        d.key('ret')
-        d.visible('Clock: OK answers it', lambda s: _dialog(d, s) is None and _taskbar(d, s, 'Clock', MUTED) and
-                  not _taskbar(d, s, "Time's up!", MUTED))
-        d.open_app('Clock')
-        d.visible('Clock: the window comes back from the taskbar, the timer ready again',
+        # 10/26/26 (C12): the program asks to be seen (WIN_ALERT): its window in front, the focus where it was
+        d.visible("Clock: at zero the window comes back in front, without the focus: Time's up! in its title and on "
+                  "its page", lambda s: d.text(s, x + 30, y + 6, "Time's up! - Clock", PAPER, MUTED) and
+                  _big(d, s, x + _centred('00:00', 4), big_y, '00:00', CORAL, 4) and
+                  d.text(s, x + _centred("Time's up!", 1), y + TOP + 78, "Time's up!", CORAL),
+                  'guiapps-clock-alarm.png', timeout=60)
+        time.sleep(0.6)                         # a press on a window that came up by itself is nobody's for 500 ms;
+        d.click(x + 60, y + TOP + 180)          # then a click in it: the focus, and the alarm answered
+        d.visible('Clock: a click answers it, the timer ready again',
                   lambda s: d.title('Clock')(s) and _big(d, s, x + _centred('00:20', 4), big_y, '00:20', INK, 4))
         d.key('home')
         for _ in range(5):
@@ -286,7 +295,31 @@ def clock(d):
         s = d.vm.screen()
         if _dialog(d, s) or d.title('Clock')(s) or d.title('Clock', focused=False)(s) or \
                 _taskbar(d, s, 'Clock', MUTED) or _taskbar(d, s, 'Clock', FOAM) or _taskbar(d, s, "Time's up!", MUTED):
-            _shut(d, 'Clock')
+            _end_clock(d)
+
+
+def _end_clock(d):
+    """10/26/26: the Clock's program ended however it was left: its window brought up (Apps > Clock), its close
+    button, and when it asks (a timer or the stopwatch running) the close button again: the desktop's End"""
+    x, y, w, _ = CLOCK
+    for _ in range(2):
+        try:
+            _answer(d)
+            d.open_app('Clock')
+            d.vm.pump(1.0)
+            d.click(x + w - 16, y + 14)
+            d.vm.pump(1.0)
+            if _shown(d, d.vm.screen(), 'Clock'):       # it asked in its window: pressed again, the desktop asks
+                d.click(x + w - 16, y + 14)
+                d.vm.pump(0.5)
+                if _dialog(d, d.vm.screen()) == '?':      # "End the program?", Cancel first: End
+                    d.key('right')
+                    d.key('ret')
+            d.vm.pump(1.0)
+            if not _shown(d, d.vm.screen(), 'Clock'):
+                return
+        except Exception:
+            pass
 
 
 # ---- Character Map
@@ -311,9 +344,12 @@ def charmap(d):
         d.key('ctrl-c')
         d.visible('Character Map: Ctrl+C copies it as UTF-8 (the status bar says so)',
                   lambda s: d.text(s, x + 10, status_y, 'Copied \xf7 (3 bytes of UTF-8): Ctrl+V pastes it', INK, BAND))
-        d.key('ctrl-e')
+        d.key('ctrl-g')                         # 10/26/26: Apps > Notepad (Ctrl+E is the program's own key)
+        for _ in range(3):
+            d.key('right')
+        d.key('ret')
         notepad = True
-        d.visible('Character Map: Ctrl+E opens Notepad',
+        d.visible('Character Map: Apps > Notepad opens Notepad',
                   lambda s: d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, 'Untitled - Notepad', PAPER, TEAL))
         d.key('ctrl-v')
         d.visible('Character Map: Ctrl+V pastes ≋ in Notepad: one character (Col 2), three bytes',

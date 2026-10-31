@@ -78,6 +78,7 @@ typedef char win_open_layout_is_fixed[sizeof(struct win_open) == 88 ? 1 : -1];  
 typedef char win_present_layout_is_fixed[sizeof(struct win_present) == 16 ? 1 : -1];
 typedef char win_info_layout_is_fixed[sizeof(struct win_info) == 20 ? 1 : -1];
 typedef char win_event_layout_is_fixed[sizeof(struct win_event) == 16 ? 1 : -1];
+typedef char win_clip_layout_is_fixed[sizeof(struct win_clip) == 8 ? 1 : -1];    /* 10/26/26 */
 
 /* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
 bool user_str(const char *s) {
@@ -267,6 +268,24 @@ static int sys_waitx(int pid, struct waitx *w, int options) {
     return r;
 }
 
+/* 10/26/26 (CODE-AUDIT T14): may the calling task, in no job, set terminal t's foreground job? The foreground
+   job's shell (giving the terminal back), the terminal's session shell (init's shell on a console, TF_SHELL; the
+   program a pty's session began with, TF_SESSION), and a program the ring-0 shell started (a surfsh typed at it:
+   the ring-0 shell waits for it and has no jobs of its own). Not a task that called detach(), a child spawned
+   with SPAWN_JOB_NONE, or one a kernel command started for anyone else: such a task could take the terminal from
+   its shell, and with the terminal the keys, Ctrl+C and Ctrl+Z. Interrupts off while the parent is looked at: a
+   parent that ends hands its children to init (task.c) */
+static bool may_take_terminal(const struct tty *t) {
+    u_long flags = irq_save();
+    surf_task *p = curTask->parent;
+    bool may = t->fg_shell == curTask->pid ||
+               ((curTask->flags & (TF_SHELL | TF_SESSION)) && curTask->tty == t) ||
+               (!(curTask->flags & TF_DETACHED) && p && (p->flags & TF_SHELL) && !(p->flags & TF_PROCESS) &&
+                p->tty == t);
+    irq_restore(flags);
+    return may;
+}
+
 /* 10/25/26: job control for a shell (surfos/job.h): its terminal's foreground job, its jobs going on
    or killed */
 static int sys_job(int op, int arg) {
@@ -278,8 +297,10 @@ static int sys_job(int op, int arg) {
     if(op == JOB_FG) {
         /* a task of a job in the background may not, but the shell of the foreground job may give the
            terminal back to its own job (a surfsh typed at a surfsh's prompt). fg_shell is the shell of
-           the foreground job: the caller for a job it made, the one above it for its own */
-        if(curTask->job && curTask->job != t->fg_job && t->fg_shell != curTask->pid) return -EACCES;
+           the foreground job: the caller for a job it made, the one above it for its own. 10/26/26 (T14):
+           nor may a task in no job, but a shell of the terminal's (may_take_terminal()) */
+        if(curTask->job ? curTask->job != t->fg_job && t->fg_shell != curTask->pid : !may_take_terminal(t))
+            return -EACCES;
         if(arg && (u_long)arg != curTask->job && !task_job_made((u_long)arg, curTask->pid)) return -EINVAL;
         flags = irq_save();
         prev = t->fg_job;

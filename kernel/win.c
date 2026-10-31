@@ -48,6 +48,15 @@ opens no window; a pointer move is merged only into a move, never into the press
 before it; a window its desktop let go keeps no pixels (its size stays, for WIN_INFO); and a
 window belongs to the program that opened it: its death takes the window away at once, also
 when a child of it holds the descriptor.
+
+10/26/26 (stage C12: the desktop's applications as programs): WIN_CLIP puts a window's text on
+its desktop's clipboard, only while the window has the focus (asked before the text is copied
+and again after): the text waits in the desktop's record (struct desk's clip, the latest
+replacing the one before, with the handle of the window it came from) until the desktop takes
+it (win_clip_take()), which keeps it only when that window has its focus still; text only, it
+ends at a NUL, and empty text is refused. WIN_ALERT counts in the window's state
+(win_state.alerts), once in WIN_ALERT_MS at most for its program, whichever of its windows asks
+(struct alerter): the desktop shows the window in front of the others, without the focus.
 */
 
 #include <surfos/types.h>
@@ -76,6 +85,9 @@ struct desk {
     struct tty *ptys[DESK_PTYS];        /* its Terminal's */
     u_long shells[DESK_PTYS];           /* 10/25/26: the session shell on each (the Terminal's surfsh), 0: unknown */
     struct win_desk info;
+    char *clip;                         /* 10/26/26: text a window put on the clipboard, for the desktop to take */
+    u32 clip_len;
+    int clip_from;                      /* and the handle of that window */
 };
 
 struct win {
@@ -91,6 +103,7 @@ struct win {
     struct winbuf *view;                /* those its desktop draws, from its last update; NULL */
     int min_w, min_h, max_w, max_h;
     u32 flags, background, serial, presents;
+    u32 alerts;                         /* 10/26/26: how many times it asked to be seen (WIN_ALERT) */
     bool focused;
     int size_w, size_h;                 /* its size: buf's, and still once the buffers went at the hang-up */
     char title[WIN_TITLE_MAX];
@@ -103,6 +116,11 @@ struct win {
 static struct desk desks[WIN_DESKS];
 static struct win wins[WIN_MAX];
 static u_long opened_so_far;
+
+/* 10/26/26: the programs that asked to be seen lately (WIN_ALERT), and when: one record a program, the oldest making
+   room for a new one */
+struct alerter { u_long pid, at; };
+static struct alerter alerters[WIN_MAX];
 
 /* the windows' and the desktops' file system: no paths, nothing to sync, never mounted */
 static const struct fs_type winfs_type = { "winfs", NULL, NULL, NULL };
@@ -572,6 +590,75 @@ static int info(struct win *w, struct win_info *u) {
     return 0;
 }
 
+/* 10/26/26: whether the window may put text on its desktop's clipboard now (interrupts off): -EPIPE once it is let go,
+   -EACCES without the focus */
+static int clip_may(const struct win *w) {
+    if(w->hung || !w->desk) return -EPIPE;
+    return w->focused ? 0 : -EACCES;
+}
+
+/* 10/26/26: WIN_CLIP: the program's text for its desktop's clipboard, read with interrupts on, kept for the desktop
+   in place of what waited before, with the window it came from; only while the window has the focus, asked before
+   the copy (nothing is copied for a refusal) and again after it. Text: empty, or a NUL first, it is refused */
+static int set_clip(struct win *w, const struct win_clip *uc) {
+    struct win_clip c;
+    char *text, *old = NULL;
+    u_long flags;
+    int r;
+    if(!uc || !user_buf(uc, sizeof(c), false)) return -EFAULT;
+    memcpy(&c, uc, sizeof(c));
+    if(!c.len || c.len > WIN_CLIP_MAX) return -EINVAL;
+    if(!c.text || !user_buf(c.text, c.len, false)) return -EFAULT;
+    flags = irq_save();
+    r = clip_may(w);
+    irq_restore(flags);
+    if(r) return r;
+    text = (char *)kalloc(c.len);
+    if(!text) return -ENOMEM;
+    memcpy(text, c.text, c.len);
+    c.len = (unsigned)strnlen(text, c.len);             /* text only: to a NUL that comes first */
+    if(!c.len) { kfree(text); return -EINVAL; }
+    flags = irq_save();
+    r = clip_may(w);                                    /* the focus may have gone meanwhile */
+    if(!r) {
+        old = w->desk->clip;
+        w->desk->clip = text;
+        w->desk->clip_len = c.len;
+        w->desk->clip_from = handle_of(w);
+        text = NULL;
+    }
+    irq_restore(flags);
+    kfree(text);
+    kfree(old);
+    if(!r) poll_wake();                                 /* the desktop takes it */
+    return r;
+}
+
+/* 10/26/26: WIN_ALERT: counted in the window's state, which its desktop reads at its next update; once in
+   WIN_ALERT_MS for its program, whichever of its windows asks, opened again or not (its record in alerters[]; a
+   program without one takes the oldest) */
+static int alert(struct win *w) {
+    u_long flags = irq_save(), now = getticks();
+    int i, room = 0, r = 0;
+    if(w->hung) r = -EPIPE;
+    else {
+        for(i = 0; i < WIN_MAX; i++) {
+            if(alerters[i].pid == w->owner) { room = i; break; }
+            if(now - alerters[i].at > now - alerters[room].at) room = i;
+        }
+        if(i < WIN_MAX && now - alerters[i].at < (u_long)WIN_ALERT_MS * HZ / 1000) r = -EAGAIN;
+    }
+    if(!r) {
+        alerters[room].pid = w->owner;
+        alerters[room].at = now;
+        w->alerts++;
+        w->serial++;
+    }
+    irq_restore(flags);
+    if(!r) poll_wake();
+    return r;
+}
+
 int sys_winctl(int fd, int op, void *arg) {
     struct file *f = fd_get(fd);
     struct win *w;
@@ -583,6 +670,8 @@ int sys_winctl(int fd, int op, void *arg) {
     case WIN_SETSIZE: return set_size(w, (u32)(u_long)arg);
     case WIN_TITLE:   return set_title(w, (const char *)arg);
     case WIN_INFO:    return info(w, (struct win_info *)arg);
+    case WIN_CLIP:    return set_clip(w, (const struct win_clip *)arg);      /* 10/26/26 */
+    case WIN_ALERT:   return alert(w);
     }
     return -EINVAL;
 }
@@ -593,6 +682,7 @@ int sys_winctl(int fd, int op, void *arg) {
 static void desk_release(struct vnode *v) {
     struct desk *d = (struct desk *)v->priv;
     struct winbuf *dead[2 * WIN_MAX];
+    char *clip;
     u_long flags;
     int i, n = 0;
     if(!d) return;
@@ -602,9 +692,11 @@ static void desk_release(struct vnode *v) {
         hang_up(&wins[i], dead + n);
         n += 2;
     }
+    clip = d->clip;                                     /* 10/26/26: text nobody took */
     memset(d, 0, sizeof(*d));
     irq_restore(flags);
     for(i = 0; i < n; i++) buf_free(dead[i]);
+    kfree(clip);
     poll_wake();
 }
 
@@ -748,8 +840,9 @@ int win_accept(void) {
 
 /* 10/25/26 (stage C6): the window's program is in the foreground job of a pty its desktop adopted (its Terminal's):
    typed at that Terminal's prompt without &, or started by such a program. The job must be one the session's shell
-   made (win_adopt_shell()): a task in no job may make a job of its own the terminal's foreground (sys_job, CODE-AUDIT
-   T14), which would give its window the focus; a surfsh started inside that shell loses the exception. Interrupts off */
+   made (win_adopt_shell()), not merely the terminal's foreground job: a surfsh started inside that shell loses the
+   exception. 10/26/26: a task in no job that is no shell of the pty's may not set its foreground job any more
+   (sys_job, CODE-AUDIT T14, closed); the rule stays as it was. Interrupts off */
 static bool in_foreground(const struct win *w) {
     surf_task *t = w->desk ? task_find(w->owner) : NULL;
     int k;
@@ -783,6 +876,7 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
         st->serial = w->serial;
         st->pid = (int)w->owner;
         st->foreground = in_foreground(w);
+        st->alerts = w->alerts;                         /* 10/26/26 */
         if(w->view != w->buf) {                         /* the desktop draws the new pixels from now on */
             dead = buf_put(w->view);
             w->view = w->buf;
@@ -822,4 +916,30 @@ void win_close(int h) {
     buf_free(dead[0]);
     buf_free(dead[1]);
     if(w) poll_wake();
+}
+
+/* surfos/win.h, 10/26/26: the text waiting for the calling task's desktop's clipboard, taken (and freed): copied into
+   out when it came from window h, the one with the desktop's focus, dropped when it came from another */
+int win_clip_take(int h, char *out, u32 size) {
+    struct desk *d;
+    char *text = NULL;
+    u32 len = 0;
+    int from = -1;
+    u_long flags = irq_save();
+    d = own_desk();
+    if(d) {
+        text = d->clip;
+        len = d->clip_len;
+        from = d->clip_from;
+        d->clip = NULL;
+        d->clip_len = 0;
+    }
+    irq_restore(flags);
+    if(!d) return -ENODEV;
+    if(!text) return 0;
+    if(h < 0 || from != h) len = 0;                     /* set as its window lost the focus: not the clipboard's */
+    if(len > size) len = size;
+    memcpy(out, text, len);
+    kfree(text);
+    return (int)len;
 }

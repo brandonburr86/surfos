@@ -65,6 +65,8 @@ USER_PROGS  += memhog        # 10/25/26 (robustness): a program that takes all t
 USER_PROGS  += toobig        # 10/25/26 (the review of B1): a program too big to load under QEMU (init retries it)
 USER_PROGS  += less          # 10/25/26 (track A, A9): a file or a pipeline's text a screenful at a time
 USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256sum links Mbed TLS (below)
+USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
+USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -85,6 +87,14 @@ FTPD_OBJ     = $(FTPD_SRC:user/ftpd/%.c=$(BUILD)/user/ftpd/%.o)
 FETCH_SRC    = $(wildcard user/fetch/*.c)
 FETCH_OBJ    = $(FETCH_SRC:user/fetch/%.c=$(BUILD)/user/fetch/%.o)
 FETCH_UT_OBJ = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
+# wclock, the desktop's Clock as a program (10/26/26, stage C12): user/wclock/, its model host-tested too
+# (tests/host/test_wclock.c)
+WCLOCK_SRC   = $(wildcard user/wclock/*.c)
+WCLOCK_OBJ   = $(WCLOCK_SRC:user/wclock/%.c=$(BUILD)/user/wclock/%.o)
+# wcharmap, the desktop's Character Map as a program (10/26/26, stage C12): user/wcharmap/, its model host-tested
+# with the console's code page 437 (tests/host/test_wcharmap.c)
+WCHARMAP_SRC = $(wildcard user/wcharmap/*.c)
+WCHARMAP_OBJ = $(WCHARMAP_SRC:user/wcharmap/%.c=$(BUILD)/user/wcharmap/%.o)
 
 
 CC         = gcc
@@ -129,7 +139,8 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
-             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d)
+             $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d) $(WCLOCK_OBJ:.o=.d) \
+             $(WCHARMAP_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -298,6 +309,28 @@ $(BUILD)/user/bin/surfsh: $(SURFSH_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(SURFSH_OBJ) $(USER_LIB)
+
+# wclock likewise (10/26/26)
+$(BUILD)/user/wclock/%.o: user/wclock/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/wclock: $(WCLOCK_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCLOCK_OBJ) $(USER_LIB)
+
+# wcharmap likewise (10/26/26)
+$(BUILD)/user/wcharmap/%.o: user/wcharmap/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/wcharmap: $(WCHARMAP_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHARMAP_OBJ) $(USER_LIB)
 
 # telnetd likewise
 $(BUILD)/user/telnetd/%.o: user/telnetd/%.c
@@ -617,11 +650,26 @@ $(BUILD)/host/test_fetch: tests/host/test_fetch.c user/fetch/fetchhttp.c user/fe
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/fetch tests/host/test_fetch.c user/fetch/fetchhttp.c -o $@
 
+# 10/26/26 (stage C12): the Clock's model, user/wclock/clock.c as it is (it makes no system calls)
+$(BUILD)/host/test_wclock: tests/host/test_wclock.c user/wclock/clock.c user/wclock/clock.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wclock tests/host/test_wclock.c user/wclock/clock.c -o $@
+
+# 10/26/26 (stage C12): the Character Map's model, user/wcharmap/charmap.c as it is, with the console's real code
+# page 437 (driver/cp437.c, which libsurf builds); it finds surfos/cp437.h in user/include after the host's headers
+$(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c user/wcharmap/charmap.h \
+                             user/include/surfos/cp437.h $(BUILD)/host/kernel/driver/cp437.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
+	    $(BUILD)/host/kernel/driver/cp437.o -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
           $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp \
-          $(BUILD)/host/test_fetch
+          $(BUILD)/host/test_fetch $(BUILD)/host/test_wclock $(BUILD)/host/test_wcharmap
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -640,6 +688,8 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_httpd
 	$(BUILD)/host/test_ftp
 	$(BUILD)/host/test_fetch
+	$(BUILD)/host/test_wclock
+	$(BUILD)/host/test_wcharmap
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
@@ -1098,8 +1148,10 @@ unittest: unittest-win
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
-$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ) -o $@
+$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o \
+                             $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o \
+	    $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ) -o $@
 unittest-mouse: $(BUILD)/host/test_ps2mouse $(BUILD)/host/test_usbmouse
 	$(BUILD)/host/test_ps2mouse
 	$(BUILD)/host/test_usbmouse
@@ -1126,12 +1178,13 @@ unittest: unittest-i2c
 .PHONY: unittest-i2c
 
 # Bounded firmware fields and HID reports used by the native touchpad binding.
+# 10/26/26: their .d files (-MMD) make the headers prerequisites too, which gcc must not be given to compile
 $(BUILD)/host/test_amlfield: tests/host/test_amlfield.c $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 $(BUILD)/host/test_i2chid: tests/host/test_i2chid.c $(BUILD)/host/kernel/driver/i2chid.o
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 $(BUILD)/host/test_hidpointer: tests/host/test_hidpointer.c $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter-out %.h,$^) -o $@
 TOUCHPAD_TEST_OBJ = $(BUILD)/host/kernel/driver/amlfield.o $(BUILD)/host/kernel/driver/i2chid.o \
 	$(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
 $(BUILD)/host/test_touchpad: tests/host/test_touchpad.c driver/touchpad.c $(TOUCHPAD_TEST_OBJ)

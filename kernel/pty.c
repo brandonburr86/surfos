@@ -49,6 +49,9 @@ a cursor key's escape sequence). POLLOUT says a key fits; room appearing wakes p
 
 10/25/26: the hangup, and the pty's freeing, end a desktop's adoption of it (win_pty_gone(),
 kernel/win.c): the next session on the same pty opens no window where the Terminal's did.
+10/26/26 (CODE-AUDIT T14): the program a session begins with (spawn_on() on a pty nobody is on)
+carries TF_SESSION from its creation (until a detach()): the session's shell, which alone of the
+tasks in no job on the pty may set its foreground job (sys_job).
 */
 
 #include <surfos/types.h>
@@ -390,14 +393,16 @@ int sys_openpty(void) {
 static int spawn_on(struct pty *p, const char *path, int argc, char *const argv[]) {
     struct tty *t = pty_tty(p);
     u_long flags;
-    int r;
+    int r, fresh;
     flags = irq_save();
-    if(!task_count_tty(t)) {                            /* a new session on a pty nobody is on starts clean: */
+    fresh = !task_count_tty(t);
+    if(fresh) {                                         /* a new session on a pty nobody is on starts clean: */
         tty_flush(t);                                   /* keys written after the last one ended are not its */
         p->in_esc = 0;
     }
     irq_restore(flags);
-    r = process_spawn_files(path, argc, argv, pty_con(p), 0, NULL);
+    /* 10/26/26 (T14): the program a new session begins with is its shell (TF_SESSION), before it can run */
+    r = process_spawn_files(path, argc, argv, pty_con(p), fresh ? TF_SESSION : 0, NULL);
     /* It has begun now that its task exists, not before: the last task of an earlier session that
        ends meanwhile does not end this one. Begun or not, a pty nobody is on has ended (a program that
        could not be started, or one that is over already): the master reads 0, POLLHUP. */

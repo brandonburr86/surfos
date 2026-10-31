@@ -20,6 +20,9 @@ wintest show     a resizable window of four coloured quadrants, with the events 
                  ends it, and so does the desktop letting it go
 wintest tty      10/25/26: the terminal it runs on, as procinfo says ("WINTEST tty: pty0"): the
                  screen test's way to see a pty's number come back to a pty of its own
+10/26/26 (stage C12): in wintest show, x puts "echo wintest-clip" on the desktop's clipboard
+(WIN_CLIP: its title says "wintest: clip 0", or the error's name), and y asks to be seen once the
+window has lost the focus (WIN_ALERT 1.5 s after it: "wintest: alerted").
 */
 
 #include <stdio.h>
@@ -175,12 +178,19 @@ static void describe(const struct win_event *e, char *out, size_t n) {
     }
 }
 
+/* 10/26/26: an error's name for a title, as the screen test reads it */
+static const char *err_name(int r) {
+    return !r ? "0" : errno == EACCES ? "EACCES" : errno == EPIPE ? "EPIPE" : errno == EFAULT ? "EFAULT" : "error";
+}
+
 static int mode_show(void) {
+    static const char text[] = "echo wintest-clip";
     struct win_open o;
     struct win_info info;
     struct win_event ev[16];
+    struct win_clip clip;
     char title[WIN_TITLE_MAX];
-    int fd, n, i;
+    int fd, n, i, alert_away = 0;
     good(&o);
     o.w = 320;
     o.h = 200;
@@ -208,6 +218,21 @@ static int mode_show(void) {
             if(ev[i].type == WIN_EV_RESIZE && quadrants(ev[i].x, ev[i].y) == 0 &&
                winctl(fd, WIN_SETSIZE, (void *)(unsigned long)((ev[i].x << 16) | ev[i].y)) == 0)
                 present_all(fd);
+            if(ev[i].type == WIN_EV_KEY && ev[i].value == 'x') {         /* 10/26/26: the clipboard */
+                clip.text = text;
+                clip.len = sizeof(text) - 1;
+                snprintf(title, sizeof(title), "wintest: clip %s", err_name(winctl(fd, WIN_CLIP, &clip)));
+            }
+            if(ev[i].type == WIN_EV_KEY && ev[i].value == 'y') {         /* asked to be seen once it is away */
+                alert_away = 1;
+                snprintf(title, sizeof(title), "wintest: alert when away");
+            }
+            if(ev[i].type == WIN_EV_FOCUS && !ev[i].value && alert_away) {
+                alert_away = 0;
+                msleep(1500);
+                snprintf(title, sizeof(title), "wintest: alerted %s", err_name(winctl(fd, WIN_ALERT, NULL)));
+                if(!strcmp(title, "wintest: alerted 0")) strcpy(title, "wintest: alerted");
+            }
         }
         winctl(fd, WIN_TITLE, title);
     }

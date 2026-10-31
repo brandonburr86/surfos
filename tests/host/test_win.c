@@ -17,7 +17,9 @@
    allocation fails. test_present needs a 32-bit build (HOSTFLAGS' -m32, as every host test of kernel code has
    where the host can link one): present() takes the program's addresses to be below 4 GB, as they are in SurfOS,
    and the test presents from its own memory.
-   10/25/26 (stage C6): whether a window's program is in the foreground job of a pty its desktop adopted. */
+   10/25/26 (stage C6): whether a window's program is in the foreground job of a pty its desktop adopted.
+   10/26/26 (stage C12): WIN_CLIP only while the window has the focus, the desktop taking the latest text once, and
+   the text it never took going with it; WIN_ALERT counted in the window's state. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -177,6 +179,7 @@ static void as(surf_task *t) { curTask = t; }
 static void begin(void) {
     memset(desks, 0, sizeof(desks));
     memset(wins, 0, sizeof(wins));
+    memset(alerters, 0, sizeof(alerters));              /* 10/26/26 */
     nktasks = 0;
     now = 1000;
     fail_in = 0;
@@ -1002,6 +1005,116 @@ static void test_foreground(void) {
     end();
 }
 
+/* 10/26/26 (stage C12); the review: nothing copied for a refusal, text kept only from the window with the desktop's
+   focus at the take, empty text refused, exactly WIN_CLIP_MAX taken whole, one alert in WIN_ALERT_MS a program */
+static void test_clip_alert(void) {
+    static char big[WIN_CLIP_MAX], back[WIN_CLIP_MAX];
+    struct win_clip c;
+    struct win_state st;
+    struct win_view view;
+    surf_task *prog2;
+    char out[64];
+    int fd, fd2, fd3, h, h2, n;
+    begin();
+    prog2 = task_new(21, CONSOLE(1));
+    fd = open_as(prog, 40, 30);
+    h = shown(prog, fd);
+    CHECK(fd >= 0 && h >= 0);
+    c.text = "copied";
+    c.len = 6;
+    as(prog);
+    n = allocs;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EACCES && allocs == n);  /* no focus: nothing planted, nor copied */
+    as(desktop);
+    CHECK(win_clip_take(h, out, sizeof(out)) == 0);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);
+    c.text = "second";
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);           /* the latest takes its place */
+    as(desktop);
+    CHECK(win_clip_take(h, out, 3) == 3 && !memcmp(out, "sec", 3));    /* as much as fits */
+    CHECK(win_clip_take(h, out, sizeof(out)) == 0);     /* taken once */
+    as(prog);                                           /* set before its FOCUS 0 was sent, taken when the desktop's */
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);           /* focus is elsewhere: dropped, not kept for later */
+    as(desktop);
+    CHECK(win_clip_take(-1, out, sizeof(out)) == 0 && win_clip_take(h, out, sizeof(out)) == 0);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);
+    as(desktop);
+    CHECK(win_clip_take(h + WIN_MAX, out, sizeof(out)) == 0);  /* another window's handle (another generation) */
+    as(other);
+    CHECK(win_clip_take(h, out, sizeof(out)) == -ENODEV);   /* a task with no desktop */
+    as(prog);
+    c.len = WIN_CLIP_MAX + 1;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EINVAL);
+    memset(big, 'z', sizeof(big));                      /* exactly WIN_CLIP_MAX: all of it */
+    c.text = big;
+    c.len = WIN_CLIP_MAX;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);
+    as(desktop);
+    CHECK(win_clip_take(h, back, sizeof(back)) == (int)WIN_CLIP_MAX && !memcmp(back, big, sizeof(big)));
+    as(prog);
+    c.len = 0;                                          /* no text: refused */
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EINVAL);
+    c.text = "\0ab";
+    c.len = 3;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EINVAL);
+    as(desktop);
+    CHECK(win_clip_take(h, out, sizeof(out)) == 0);     /* nothing planted by them */
+    as(prog);
+    c.len = 6;
+    c.text = (const char *)16;                          /* not the program's to read */
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EFAULT);
+    CHECK(sys_winctl(fd, WIN_CLIP, NULL) == -EFAULT);
+    c.text = "x";
+    c.len = 1;
+    fail_in = 1;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -ENOMEM);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 0);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == -EACCES);     /* the focus gone */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.alerts == 0);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_ALERT, NULL) == 0);
+    CHECK(sys_winctl(fd, WIN_ALERT, NULL) == -EAGAIN);  /* once in WIN_ALERT_MS, */
+    fd2 = open_as(prog, 40, 30);                        /* for its program, whichever window asks */
+    h2 = shown(prog, fd2);
+    as(prog);
+    CHECK(h2 >= 0 && sys_winctl(fd2, WIN_ALERT, NULL) == -EAGAIN);
+    fd_close(fd2);                                      /* and opened again */
+    as(desktop);
+    win_close(h2);
+    fd2 = open_as(prog, 40, 30);
+    CHECK(fd2 >= 0 && sys_winctl(fd2, WIN_ALERT, NULL) == -EAGAIN);
+    fd3 = open_as(prog2, 40, 30);                       /* another program's is its own */
+    CHECK(fd3 >= 0 && sys_winctl(fd3, WIN_ALERT, NULL) == 0 && sys_winctl(fd3, WIN_ALERT, NULL) == -EAGAIN);
+    now += WIN_ALERT_MS * HZ / 1000 - 1;
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_ALERT, NULL) == -EAGAIN);
+    now += 1;
+    CHECK(sys_winctl(fd2, WIN_ALERT, NULL) == 0 && sys_winctl(fd, WIN_ALERT, NULL) == -EAGAIN);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.alerts == 1);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);                  /* text only: to a NUL that comes first */
+    c.text = "ab\0cd";
+    c.len = 5;
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);
+    as(desktop);
+    CHECK(win_clip_take(h, out, sizeof(out)) == 2 && !memcmp(out, "ab", 2));
+    as(prog);
+    c.text = "x";
+    c.len = 1;
+    CHECK(sys_winctl(fd, WIN_CLIP, &c) == 0);           /* left for the desktop, which never takes it */
+    as(desktop);
+    win_close(h);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_ALERT, NULL) == -EPIPE && sys_winctl(fd, WIN_CLIP, &c) == -EPIPE);
+    end();                                              /* the desktop's end frees the text it never took */
+}
+
 int main(void) {
     test_queue();
     test_titles();
@@ -1020,6 +1133,7 @@ int main(void) {
     test_outlives_resize();
     test_title_calls();
     test_foreground();
+    test_clip_alert();
     printf("test_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
 }

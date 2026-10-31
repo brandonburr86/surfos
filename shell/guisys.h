@@ -24,4 +24,5 @@ int guisys_win_update(void *ctx, int h, struct win_state *st, struct win_view *v
 int guisys_win_event(void *ctx, int h, const struct win_event *e);
 void guisys_win_close(void *ctx, int h);
 int guisys_win_run(void *ctx, const char *line, char *msg, size_t n);
+int guisys_win_clip(void *ctx, int h, char *out, size_t n);                    /* 10/26/26 */
 #endif

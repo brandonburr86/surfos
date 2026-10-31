@@ -57,6 +57,8 @@ most; after a periodic save that failed the next comes HIST_SAVE_EVERY lines lat
 the first failure is said. An exit in the startup file leaves the file, as return does, and a
 Ctrl+C stops the rest of it; a startup file that cannot be read is said; a CR before a line's
 end (a file written on Windows) is dropped there and in the history.
+10/26/26 (CODE-AUDIT T14): an interactive surfsh has job control only where the kernel lets it
+move its jobs into the terminal's foreground (jobs.c, jobs_take_terminal()).
 */
 
 #include "surfsh.h"
@@ -66,6 +68,7 @@ struct settings settings = { 1, 1, 5 };
 int last_status;
 int exit_requested, exit_code;
 int interactive;
+int job_control;
 int shell_pid;
 int term_fd = 1;
 
@@ -663,6 +666,7 @@ int main(int argc, char **argv) {
         close(s.fd);
     } else if(isatty(0) && isatty(1)) {
         interactive = 1;
+        job_control = jobs_take_terminal();         /* 10/26/26: none in a surfsh that run started */
         if((term_fd = fd_copy_high(1)) < 0) term_fd = 1;     /* 10/25/26: the prompt's and the reports' */
         broken_pipe_exit(0);
         history_load();                         /* 10/25/26 (A10): the stick's history and startup file */

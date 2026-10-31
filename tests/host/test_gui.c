@@ -522,6 +522,105 @@ static void windows(void) {
     key(3); CHECK(g.quit);
 }
 
+/* 10/26/26 (stage C8): a right-click opens the menu bar's menu for what is under the pointer, where it was: Apps on the
+   desktop, Edit for Notepad's text, File for Files, Window on a title bar and for the Calculator; its items run as
+   from the bar, on the window it brought to the front; Esc and a click elsewhere close it; it stays on the screen;
+   nothing on the menu bar and the taskbar, and the bar's titles do not take it over */
+static void right_click(int x, int y) {
+    struct pointer_event e = {x, y, 0, POINTER_RIGHT};
+    gui_pointer(&g, &e); e.buttons = 0; gui_pointer(&g, &e);
+}
+static void context_menus(void) {
+    struct pointer_event e = {0, 0, 0, 0};
+    struct gui_window *w;
+    int x, y, mw, mh, k;
+    populate();
+    gui_init(&g, 960, 540); g.fs = &fake_fs; g.now = 10000;
+    key(27); CHECK(!g.win[GUI_ABOUT].open);             /* About closed: the desktop is bare */
+    right_click(880, 60);
+    CHECK(g.menu == 4 && g.menu_y);
+    gui_menu_box(&g, 4, &x, &y, &mw, &mh);
+    CHECK(x == 960 - mw && y == 60 && y + mh <= 540 - TASK_H);   /* moved left to stay on the screen */
+    e.x = 20; e.y = 14; gui_pointer(&g, &e);           /* the bar's titles under the pointer: still this menu */
+    CHECK(g.menu == 4 && g.menu_y);
+    click(x + 20, y + 4 + 12);                          /* its first item */
+    CHECK(!g.menu && g.win[GUI_NOTEPAD].open && g.focus == GUI_NOTEPAD);
+    w = &g.win[GUI_NOTEPAD];
+    type("right");
+    right_click(w->x + 120, w->y + 150);                /* Notepad's text: Edit, whose Select all is the ninth item */
+    CHECK(g.menu == 3 && g.menu_y && g.focus == GUI_NOTEPAD);
+    gui_menu_box(&g, 3, &x, &y, &mw, &mh);
+    CHECK(x == w->x + 120 && y == w->y + 150);
+    click(x + 20, y + 4 + 6 * 24 + 2 * 9 + 12);
+    CHECK(!g.menu && note_has_selection(&g.note));
+    right_click(w->x + 120, w->y + 150);
+    key(27); CHECK(!g.menu);                            /* Esc closes it */
+    right_click(w->x + 120, w->y + 150);
+    click(30, 520 - 30); CHECK(!g.menu);                /* so does a click elsewhere */
+    gui_open(&g, GUI_CALC);
+    right_click(w->x + 200, w->y + 10);                 /* Notepad's title bar, behind the Calculator: Window's */
+    CHECK(g.menu == 5 && g.focus == GUI_NOTEPAD && g.order[GUI_SLOTS - 1] == GUI_NOTEPAD);
+    gui_menu_box(&g, 5, &x, &y, &mw, &mh);
+    click(x + 20, y + 4 + 24 + 12);                     /* Minimize */
+    CHECK(!g.menu && w->min);
+    gui_open(&g, GUI_CALC);
+    right_click(g.win[GUI_CALC].x + 120, g.win[GUI_CALC].y + 200);
+    CHECK(g.menu == 5);
+    key(27);
+    gui_open(&g, GUI_FILES);
+    k = g.files.count > 2 ? 2 : 0;                      /* 10/26/26: the row under it is selected first */
+    g.files.selected = 0;
+    right_click(g.win[GUI_FILES].x + 200, g.win[GUI_FILES].y + TITLE_H + BAR_H + 3 + 20 + (k - g.files.top) * ROW_H + 4);
+    CHECK(g.menu == 2 && g.files.selected == k && gui_menu_on(&g, 2, ACT_FILES_REFRESH));
+    key(27);
+    /* 10/26/26: the menu is its window's. Its window gone, the focus on another, no item is run on that one, and the
+       tick closes it */
+    gui_open(&g, GUI_CALC);
+    right_click(g.win[GUI_CALC].x + 120, g.win[GUI_CALC].y + 10);
+    CHECK(g.menu == 5 && g.menu_win == GUI_CALC);
+    gui_menu_box(&g, 5, &x, &y, &mw, &mh);
+    gui_close_now(&g, GUI_CALC);
+    k = g.focus;
+    CHECK(g.menu && k >= 0 && k != GUI_CALC);
+    click(x + 20, y + 4 + 3 * 24 + 12);                 /* Close */
+    CHECK(!g.menu && g.win[k].open);
+    right_click(g.win[GUI_FILES].x + 100, g.win[GUI_FILES].y + 10);
+    CHECK(g.menu == 5 && g.menu_win == GUI_FILES);
+    gui_close_now(&g, GUI_FILES);
+    gui_tick(&g);
+    CHECK(!g.menu);
+    /* with a menu open, a right press in it does nothing, and elsewhere only closes it; a click on the bar's Window
+       while Window is open as a right-click menu opens the bar's */
+    right_click(880, 60);
+    CHECK(g.menu == 4);
+    gui_menu_box(&g, 4, &x, &y, &mw, &mh);
+    right_click(x + 20, y + 40);
+    CHECK(g.menu == 4 && g.menu_y);
+    right_click(400, 300);
+    CHECK(!g.menu);
+    gui_open(&g, GUI_NOTEPAD);
+    right_click(g.win[GUI_NOTEPAD].x + 200, g.win[GUI_NOTEPAD].y + 10);
+    CHECK(g.menu == 5 && g.menu_y);
+    click(270, 14);
+    CHECK(g.menu == 5 && !g.menu_y);
+    key(27);
+    right_click(400, 10); CHECK(!g.menu);               /* the menu bar */
+    right_click(400, 540 - 10); CHECK(!g.menu);         /* the taskbar */
+    right_click(940, 520 - 30);                         /* the corner: still all on the screen */
+    CHECK(g.menu == 4);
+    for(k = 1; k <= 6; k++) {
+        if(g.menu != k) continue;
+        gui_menu_box(&g, k, &x, &y, &mw, &mh);
+        CHECK(x >= 0 && x + mw <= 960 && y >= MENU_H && y + mh <= 540 - TASK_H);
+    }
+    click(20, 14); CHECK(g.menu == 1 && !g.menu_y);     /* the bar's own menus open under their titles again */
+    key(27);
+    gui_init(&g, 640, 400); key(27);
+    right_click(600, 300);                              /* a menu taller than the room there starts below the bar */
+    gui_menu_box(&g, 4, &x, &y, &mw, &mh);
+    CHECK(g.menu == 4 && x >= 0 && x + mw <= 640 && y == MENU_H);
+    key(27);
+}
 
 /* everything opens inside the screen: windows between the bars (also maximized), menus and dialogs */
 static bool in_desk(const struct gui_window *w) {
@@ -655,6 +754,15 @@ static void notepad_review(void) {
     click(w->x+l.bar_x+5,w->y+l.find_y-4);
     CHECK(g.note.top==note_lines(&g.note)-l.rows);
     note_wheel(&g,1000); CHECK(g.note.top==note_lines(&g.note)-l.rows);
+    /* 10/26/26 (C8): a turn of the wheel during a drag-select scrolls, and the selection's end follows to the line now
+       under the pointer (the drag runs again after the scroll) */
+    g.note.top=0;
+    e.x=w->x+l.tx+8; e.y=w->y+l.ty+2; e.wheel=0; e.buttons=1; gui_pointer(&g,&e);    /* line 0 */
+    e.y=w->y+l.ty+2+2*16; gui_pointer(&g,&e);                                       /* line 2 */
+    i=(int)g.note.cursor;
+    e.wheel=-1; gui_pointer(&g,&e); e.wheel=0;          /* a notch toward the user, the pointer where it was */
+    CHECK(g.note.top==3 && (int)g.note.cursor==i+3*5 && note_has_selection(&g.note));
+    e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
     /* a drag past the right edge scrolls sideways only as far as the line goes */
     note_reset(&g.note); for(i=0;i<150;i++) type("x");
     note_layout(&g,&l); g.note.left=0;
@@ -943,6 +1051,7 @@ int main(void) {
     guard_paths();
     windows();
     windows_review();
+    context_menus();
     bounds(640,400); bounds(960,540); bounds(1280,800);
     rendering(640,400); rendering(960,540); rendering(1280,800);
     printf("gui: %d checks, %d failures\n",checks,failed);

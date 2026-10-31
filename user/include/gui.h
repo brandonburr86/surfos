@@ -17,6 +17,10 @@ characters (code page 437, '?' for any other), 8 by 16 pixels each.
 
 Until the kernel keeps a program's floating-point registers across task switches (track B's
 B2), a program with a window must not use floating point. Nothing here does.
+10/26/26 (stage C12, the desktop's applications as programs): text for the desktop's clipboard
+(gw_clip(), while the window has the focus), a window asking to be seen (gw_alert()), and text
+drawn at a scale (gw_text_scaled(): the Clock's large digits); one of the console's characters by
+its code (gw_glyph(): the Character Map's grid).
 */
 #ifndef _GUI_H
 #define _GUI_H
@@ -64,6 +68,12 @@ void gw_close(struct gw *win);
 int gw_present(struct gw *win, int x, int y, int w, int h);
 int gw_present_all(struct gw *win);
 int gw_title(struct gw *win, const char *title);                /* UTF-8, cut at 63 bytes between characters */
+/* 10/26/26: len bytes of text for the desktop's clipboard (1 to WIN_CLIP_MAX, up to a NUL: errno EINVAL for none),
+   while the window has the focus (errno EACCES otherwise); the window asks to be seen (in front, without the focus,
+   its taskbar button marked), once in WIN_ALERT_MS for the program (errno EAGAIN). 0, or -1 with errno (EINVAL from
+   a kernel without them: carry on without) */
+int gw_clip(struct gw *win, const char *text, unsigned len);
+int gw_alert(struct gw *win);
 
 /* the next event within ms milliseconds (ms < 0: as long as it takes): 1 with it in *ev, 0 when none came, -1 when
    the window has gone (errno EPIPE) or a call failed (errno; EINTR: a kill or Ctrl+C) */
@@ -75,7 +85,11 @@ void gw_rect(struct gw *win, int x, int y, int w, int h, unsigned color);
 void gw_frame(struct gw *win, int x, int y, int w, int h, unsigned color);
 void gw_line(struct gw *win, int x0, int y0, int x1, int y1, unsigned color);
 int gw_text(struct gw *win, int x, int y, const char *utf8, unsigned color);   /* x after it */
+int gw_text_scaled(struct gw *win, int x, int y, const char *utf8, unsigned color, int scale);   /* 10/26/26 */
 int gw_text_width(const char *utf8);                                           /* 8 pixels a character */
+/* 10/26/26: one of the console's characters by its code (code page 437, 0-255: 0x01 is ☺, 0xF7 ≋), scale x scale
+   pixels to each of its 8x16 */
+void gw_glyph(struct gw *win, int x, int y, unsigned code, unsigned color, int scale);
 void gw_blit(struct gw *win, int x, int y, const unsigned *pixels, int w, int h, int stride);
 void gw_button(struct gw *win, int x, int y, int w, int h, const char *label, unsigned bg, unsigned fg);
 

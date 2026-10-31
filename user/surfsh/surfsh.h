@@ -116,6 +116,7 @@ extern struct settings settings;
 extern int last_status;             /* the previous command's status: the prompt shows it */
 extern int exit_requested, exit_code;   /* the exit builtin, carried out by whoever runs the commands */
 extern int interactive;             /* commands typed at the prompt: reports, paging, ^C back to the prompt */
+extern int job_control;             /* 10/26/26: an interactive shell whose commands are jobs (jobs.c) */
 extern int term_fd;                 /* 10/25/26: where the prompt and the reports go: an interactive shell's own
                                        copy of its terminal (10-15, exec.c), whatever 1 is meanwhile; else 1 */
 extern int shell_pid;               /* $$: this shell's, or the one a new surfsh was started from */
@@ -412,6 +413,7 @@ void job_add(const char *text, const int *pids, int n, int kid);   /* "[n] start
 struct jobwin {
     int next, kid;
 };
+int jobs_take_terminal(void);       /* 10/26/26: job control for an interactive shell? 1 or 0 */
 void job_open(void);
 int job_close(void);
 int job_spawn_value(void);

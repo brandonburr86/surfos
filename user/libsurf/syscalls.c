@@ -40,6 +40,7 @@ typedef char win_open_layout_is_fixed[sizeof(struct win_open) == 88 ? 1 : -1];  
 typedef char win_present_layout_is_fixed[sizeof(struct win_present) == 16 ? 1 : -1];
 typedef char win_info_layout_is_fixed[sizeof(struct win_info) == 20 ? 1 : -1];
 typedef char win_event_layout_is_fixed[sizeof(struct win_event) == 16 ? 1 : -1];
+typedef char win_clip_layout_is_fixed[sizeof(struct win_clip) == 8 ? 1 : -1];    /* 10/26/26 */
 
 int errno;
 

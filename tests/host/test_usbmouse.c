@@ -1,5 +1,7 @@
 /* Boot mouse descriptor/report tests. Hand-built packets catch endpoint/interface
-   mixups, out-of-bounds descriptor reads, and treating report-mode bytes as a wheel. */
+   mixups, out-of-bounds descriptor reads, and treating report-mode bytes as a wheel.
+   10/26/26 (stage C8): the fourth byte is the wheel's only for a mouse whose report descriptor
+   puts its Wheel there (QEMU's usb-mouse's does); a mouse without one has no false wheel. */
 #include <stdio.h>
 #include <string.h>
 #include <sys/usbmouse.h>
@@ -14,6 +16,7 @@ static void irq_restore(u_long flags) { (void)flags; }
 
 void exit(int status);
 static int checks, failures;
+static int kalloc_fails;                                /* 10/26/26: kalloc returns NULL while set */
 static void check(int ok, const char *what) {
     checks++;
     if(!ok) { failures++; printf("FAIL: %s\n", what); }
@@ -38,7 +41,7 @@ static u_int end(void) { cfg[2] = (u8)used; cfg[3] = (u8)(used >> 8); return use
 static u_int mouse(void) {
     begin();
     iface(3, 0, 1, 2);
-    ADD(9, 0x21, 0x11, 1, 0, 1, 0x22, 50, 0);
+    ADD(9, 0x21, 0x11, 1, 0, 1, 0x22, 52, 0);          /* 10/26/26: its report descriptor, wheel_desc's 52 bytes */
     endpoint(0x82, USB_EP_INTR, 8);
     return end();
 }
@@ -46,18 +49,60 @@ static u_int mouse(void) {
 static void test_reports(void) {
     const u8 positive[] = { 1, 42, 17 };
     const u8 negative[] = { 0xff, 0x80, 0xff, 0x7f };
+    const u8 away[] = { 0, 0, 0, 1 }, toward[] = { 1, 3, 0, 0xff };
     const u8 extremes[] = { 2, 0x7f, 0x80 };
     struct usb_mouse_report r = { 99, 98, 97 };
-    check(usb_mouse_decode_boot(positive, 3, &r) && r.dx == 42 && r.dy == 17 && r.buttons == 1,
-          "three-byte report preserves positive movement and left button");
-    check(usb_mouse_decode_boot(negative, 4, &r) && r.dx == -128 && r.dy == -1 && r.buttons == 7,
-          "signed axes, three buttons only; additional bytes do not change boot report");
-    check(usb_mouse_decode_boot(extremes, 3, &r) && r.dx == 127 && r.dy == -128 && r.buttons == 2,
+    check(usb_mouse_decode_boot(positive, 3, true, &r) && r.dx == 42 && r.dy == 17 && r.buttons == 1 && r.wheel == 0,
+          "three-byte report preserves positive movement and left button, and has no wheel");
+    check(usb_mouse_decode_boot(negative, 4, false, &r) && r.dx == -128 && r.dy == -1 && r.buttons == 7 && r.wheel == 0,
+          "signed axes, three buttons only; additional bytes do not change a boot report without a wheel");
+    check(usb_mouse_decode_boot(negative, 4, true, &r) && r.dx == -128 && r.wheel == 127,
+          "10/26/26: a mouse whose report descriptor puts its wheel there: the fourth byte is the wheel's");
+    check(usb_mouse_decode_boot(away, 4, true, &r) && r.wheel == 1 && !r.dx && !r.buttons, "one notch away from the user");
+    check(usb_mouse_decode_boot(toward, 8, true, &r) && r.wheel == -1 && r.dx == 3 && r.buttons == 1,
+          "one notch toward the user; bytes past the fourth change nothing");
+    check(usb_mouse_decode_boot(extremes, 3, true, &r) && r.dx == 127 && r.dy == -128 && r.buttons == 2,
           "axis extrema and right button");
-    check(!usb_mouse_decode_boot(positive, 2, &r) && r.dx == 127 && r.dy == -128 && r.buttons == 2,
+    check(!usb_mouse_decode_boot(positive, 2, true, &r) && r.dx == 127 && r.dy == -128 && r.buttons == 2,
           "truncated packet does not release buttons or overwrite state");
-    check(!usb_mouse_decode_boot(NULL, 3, &r), "NULL packet rejected");
-    check(!usb_mouse_decode_boot(positive, 3, NULL), "NULL report rejected");
+    check(!usb_mouse_decode_boot(NULL, 3, true, &r), "NULL packet rejected");
+    check(!usb_mouse_decode_boot(positive, 3, true, NULL), "NULL report rejected");
+}
+
+/* 10/26/26 (C8): QEMU's usb-mouse's report descriptor (hw/usb/dev-hid.c): five buttons and padding, then X, Y and the
+   Wheel as signed bytes at bits 8, 16 and 24 */
+static const u8 wheel_desc[] = {
+    0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x09, 0x01, 0xa1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x05, 0x15, 0x00, 0x25, 0x01, 0x95, 0x05, 0x75, 0x01, 0x81, 0x02,
+    0x95, 0x01, 0x75, 0x03, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+    0xc0, 0xc0,
+};
+/* the same without the Wheel */
+static const u8 plain_desc[] = {
+    0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x09, 0x01, 0xa1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+    0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+    0xc0, 0xc0,
+};
+
+static void test_wheel_layout(void) {
+    u8 d[sizeof(wheel_desc) + 2];
+    check(usb_mouse_wheel(wheel_desc, sizeof(wheel_desc)), "a Wheel byte at bit 24: the fourth byte is the wheel's");
+    check(!usb_mouse_wheel(plain_desc, sizeof(plain_desc)), "no Wheel: no false wheel");
+    memcpy(d, wheel_desc, sizeof(wheel_desc));
+    d[45] = 0x10;                                       /* sixteen bits each: the Wheel at bit 40 */
+    check(!usb_mouse_wheel(d, sizeof(wheel_desc)), "a Wheel elsewhere is not the fourth byte");
+    memcpy(d, wheel_desc, 6);                           /* a Report ID before the first collection's fields */
+    d[6] = 0x85; d[7] = 0x01;
+    memcpy(d + 8, wheel_desc + 6, sizeof(wheel_desc) - 6);
+    check(!usb_mouse_wheel(d, sizeof(wheel_desc) + 2), "numbered reports: no wheel byte at a fixed place");
+    check(!usb_mouse_wheel(wheel_desc, sizeof(wheel_desc) - 1), "a truncated descriptor: no wheel");
+    check(!usb_mouse_wheel(NULL, 10), "no descriptor: no wheel");
+    kalloc_fails = 1;                                   /* the parser's layout is allocated: none, no wheel */
+    check(!usb_mouse_wheel(wheel_desc, sizeof(wheel_desc)), "no memory for the layout: no wheel");
+    kalloc_fails = 0;
 }
 
 static void test_descriptors(void) {
@@ -66,6 +111,10 @@ static void test_descriptors(void) {
     memset(&f, 0, sizeof(f));
     check(usb_mouse_find(cfg, n, &f) == 0 && f.iface == 3 && f.alt == 0 && f.in == (void *)(cfg + 27) && !f.comp,
           "boot mouse uses its interrupt IN endpoint and interface number");
+    check(f.report_len == 52, "10/26/26: its HID descriptor's report descriptor length");
+    begin(); iface(3, 0, 1, 2); endpoint(0x82, USB_EP_INTR, 8); n = end();
+    check(usb_mouse_find(cfg, n, &f) == 0 && f.report_len == 0, "without a HID descriptor: no report length");
+    n = mouse();
     for(i = 0; i < n; i++) check(usb_mouse_find(cfg, i, &f) < 0, "every truncated configuration rejected");
     check(usb_mouse_find(NULL, n, &f) < 0, "NULL configuration rejected");
     check(usb_mouse_find(cfg, n, NULL) < 0, "NULL function rejected");
@@ -126,6 +175,8 @@ void *kcalloc(size_t n, size_t size) {
     return p;
 }
 void kfree(void *p) { free(p); }
+void *kalloc(size_t n) { return kalloc_fails ? NULL : malloc(n); }  /* 10/26/26: the report descriptor's buffer,
+                                                                       usb_mouse_wheel()'s layout */
 void *kalloc_dma(size_t n) { dma_allocs++; retained_dma = malloc(n); return retained_dma; }
 void kfree_dma(void *p) { dma_frees++; free(p); }
 void kprintf(const char *format, ...) { (void)format; }
@@ -142,9 +193,17 @@ int usb_set_configuration(struct usb_device *d, u8 value) { (void)d; (void)value
 int usb_set_interface(struct usb_device *d, u8 iface_num, u8 alt) {
     (void)d; protocol_iface = iface_num; interface_alt = alt; return 0;
 }
+/* 10/26/26: the report descriptor the device gives (GET_DESCRIPTOR, type 0x22, on the interface) */
+static const u8 *report_desc = wheel_desc;
+static u_int report_desc_len = sizeof(wheel_desc);
 int usb_control(struct usb_device *d, u8 type, u8 req, u16 value, u16 index, void *data, u16 len) {
-    (void)d; (void)data;
+    (void)d;
     if(type == 0x21 && req == 11 && value == 0 && len == 0) { boot_selected = true; protocol_iface = index; }
+    if(type == 0x81 && req == 6 && value == 0x2200 && !control_error) {
+        u_int n = report_desc_len < len ? report_desc_len : len;
+        memcpy(data, report_desc, n);
+        return (int)n;
+    }
     return control_error;
 }
 struct usb_endpoint *usb_endpoint_add(struct usb_device *d, const struct usb_endpoint_descriptor *e,
@@ -186,12 +245,13 @@ static void test_driver(void) {
     if(!x) return;
     before = submissions; mouse_driver.service(&d[0]);
     check(submissions == before, "service does not duplicate an outstanding receive");
-    ((u8 *)x->buf)[0] = 5; ((u8 *)x->buf)[1] = 0xfe; ((u8 *)x->buf)[2] = 12; ((u8 *)x->buf)[3] = 99;
+    ((u8 *)x->buf)[0] = 5; ((u8 *)x->buf)[1] = 0xfe; ((u8 *)x->buf)[2] = 12; ((u8 *)x->buf)[3] = 0xff;
     x->status = USB_OK; x->actual = 4; before = submissions; x->done(x);
     source = report_source;
     check(reports == 1 && source == POINTER_USB_FIRST && report_dx == -2 && report_dy == 12 &&
-          report_buttons == 5 && report_wheel == 0 && submissions == before + 1,
-          "completion publishes motion without false wheel and immediately requeues");
+          report_buttons == 5 && report_wheel == -1 && submissions == before + 1,
+          "completion publishes motion and the wheel (10/26/26: the fourth byte) and immediately requeues");
+    check(strstr(d[0].status, "with a wheel") != NULL, "10/26/26: lsusb says it has a wheel");
     x->status = USB_OK; x->actual = 2; before = reports; x->done(x);
     check(reports == before, "short interrupt report is not published");
     x->status = USB_ESTALL; before = submissions; x->done(x);
@@ -204,6 +264,16 @@ static void test_driver(void) {
     check(devices == 0 && submissions == before, "quiesce releases source and prevents late callback requeue");
     before = dma_frees; remove_device(&d[0]);
     check(!d[0].driver_data && dma_frees == before + 1, "detach frees owned DMA after controller release");
+
+    /* 10/26/26: a mouse whose report descriptor has no Wheel: its fourth byte is no wheel */
+    setup_device(&d[0]); report_desc = plain_desc; report_desc_len = sizeof(plain_desc);
+    check(mouse_driver.attach(&d[0]) == 0 && !strstr(d[0].status, "wheel"), "a mouse without a Wheel attaches as before");
+    x = last_xfer;
+    ((u8 *)x->buf)[0] = 1; ((u8 *)x->buf)[1] = 3; ((u8 *)x->buf)[2] = 0; ((u8 *)x->buf)[3] = 0xff;
+    x->status = USB_OK; x->actual = 4; before = reports; x->done(x);
+    check(reports == before + 1 && report_dx == 3 && report_wheel == 0, "without false wheel");
+    report_desc = wheel_desc; report_desc_len = sizeof(wheel_desc);
+    remove_device(&d[0]);
 
     setup_device(&d[0]); control_error = USB_ESTALL;
     check(mouse_driver.attach(&d[0]) < 0 && !d[0].driver_data && devices == 0,
@@ -253,7 +323,7 @@ static void test_driver(void) {
 }
 
 int main(void) {
-    test_reports(); test_descriptors(); test_driver();
+    test_reports(); test_wheel_layout(); test_descriptors(); test_driver();
     printf("USB MOUSE UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);
     return 0;

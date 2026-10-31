@@ -4,6 +4,8 @@ SurfOS USB Boot Mouse
 File: mouse.c Date: 10/10/26
 --------------------
 HID boot mouse interrupt input, with one independent pointer source per device.
+10/26/26 (stage C8): the wheel, the report's fourth byte, for a mouse whose report descriptor puts
+it there (read once at attach; a mouse that does not give it is a three-button one).
 */
 #include <surfos/console.h>
 #include <surfos/irq.h>
@@ -13,8 +15,10 @@ HID boot mouse interrupt input, with one independent pointer source per device.
 #include <blibc_common.h>
 
 #define HID_SET_PROTOCOL 11
+#define HID_DT_REPORT 0x22              /* 10/26/26 */
 #define MOUSE_ERRORS 16
 #define MOUSE_DMA_SIZE 1024
+#define MOUSE_REPORT_MAX 512            /* 10/26/26: a report descriptor read, at most (mice have 50 to 100 bytes) */
 
 struct usb_mouse {
     struct usb_device *dev;
@@ -25,6 +29,7 @@ struct usb_mouse {
     volatile unsigned errors;
     volatile bool stopping, queued;
     bool reported;
+    bool wheel;                         /* 10/26/26: its report's fourth byte is its wheel's */
 };
 
 static struct usb_mouse *mice[POINTER_USB_COUNT];
@@ -52,9 +57,9 @@ static void mouse_done(struct usb_xfer *x) {
     m->queued = false;
     if(m->stopping || m->dev->gone) return;
     if(x->status == USB_OK && x->actual <= x->length &&
-       usb_mouse_decode_boot((const u8 *)x->buf, x->actual, &report)) {
+       usb_mouse_decode_boot((const u8 *)x->buf, x->actual, m->wheel, &report)) {
         m->errors = 0;
-        pointer_report(m->source, report.dx, report.dy, 0, report.buttons);
+        pointer_report(m->source, report.dx, report.dy, report.wheel, report.buttons);
     } else if(x->status == USB_ENODEV) {
         mouse_stop(m);
         return;
@@ -108,6 +113,17 @@ static int mouse_attach(struct usb_device *d) {
         stage = "selecting interface";
         if((r = usb_set_interface(d, fn.iface, fn.alt)) != 0) goto fail;
     }
+    /* 10/26/26 (C8): the report descriptor, for the wheel; a mouse that does not give it is used without one */
+    if(fn.report_len) {
+        u_int n = fn.report_len < MOUSE_REPORT_MAX ? fn.report_len : MOUSE_REPORT_MAX;
+        u8 *desc = (u8 *)kalloc(n);
+        if(desc) {
+            int got = usb_control(d, USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE, USB_REQ_GET_DESCRIPTOR,
+                                  HID_DT_REPORT << 8, fn.iface, desc, (u16)n);
+            m->wheel = got > 0 && usb_mouse_wheel(desc, (u_int)got);
+            kfree(desc);
+        }
+    }
     stage = "selecting boot protocol";
     r = usb_control(d, USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
                     HID_SET_PROTOCOL, 0, fn.iface, NULL, 0);
@@ -139,7 +155,8 @@ static int mouse_attach(struct usb_device *d) {
     }
     irq_restore(flags);
     if(r) goto fail;                      /* no submitted transfer owns this buffer */
-    snprintf(d->status, sizeof(d->status), "boot mouse, pointer %u", m->source);
+    snprintf(d->status, sizeof(d->status), m->wheel ? "boot mouse with a wheel, pointer %u" : "boot mouse, pointer %u",
+             m->source);
     return 0;
 fail:
     kprintf("+USB: port %u: mouse: %s failed (%d)\n", d->port, stage, r);

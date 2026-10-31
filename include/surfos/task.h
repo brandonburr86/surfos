@@ -45,6 +45,9 @@ typedef void (*kthread_fn)(void *arg);
                              TF_KTHREAD too, and TF_USER only once its loading starts */
 #define TF_LOADNOMEM 0x200 /* 10/25/26 (the review of B1): a process whose loading failed for want of memory, which init
                               tries again for a console's shell instead of giving the console up (task.c) */
+#define TF_SESSION  0x400 /* 10/26/26 (CODE-AUDIT T14): the program a pseudo-terminal's session began with (kernel/pty.c),
+                             from its creation until a detach(): a shell of that terminal, as init's TF_SHELL is of a
+                             console (sys_job) */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel

@@ -559,6 +559,20 @@ void files_scroll(struct gui_state *g, int y) {
     g->dirty = true;
 }
 
+/* 10/26/26 (stage C8): a right-click's row (x, y in the window): selected, nothing opened or expanded */
+void files_select_at(struct gui_state *g, int x, int y) {
+    struct gui_files *f = &g->files;
+    struct files_layout l;
+    int row;
+    layout(g, &l);
+    if(y < l.list_y || y >= l.list_y + l.rows * ROW_H || x >= l.bar_x) return;
+    row = f->top + (y - l.list_y) / ROW_H;
+    if(row >= f->count) return;
+    f->selected = row;
+    f->status[0] = 0;
+    g->dirty = true;
+}
+
 void files_press(struct gui_state *g, int x, int y) {
     struct gui_files *f = &g->files;
     struct files_layout l;

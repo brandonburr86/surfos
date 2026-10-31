@@ -30,6 +30,18 @@ and each item shows its shortcut.
 | **Window** | Next window, Minimize, Maximize (or Restore size), Close, then every open window |
 | **Help** | Keyboard and mouse (the Help window), About SurfOS |
 
+*10/26/26:* a right-click opens one of these menus where the pointer is, kept on the
+screen. Over a window, which comes to the front first so that the items act on it, it
+is the window's Edit menu when the window edits (Notepad, and the applications with an
+Edit menu of their own), File for Files, and Window on a title bar and anywhere else;
+over the desktop it is Apps; in Files the row under the pointer is selected first. Its
+items are chosen and run as from the bar: a click, or the arrows and Enter, and Esc or a
+click elsewhere closes it (a right-click elsewhere too; in the menu it does nothing). It
+belongs to its window: when the focus leaves that window (a program's window comes up
+with the focus, or the window goes) it closes, and its items never act on another.
+Nothing happens on the menu bar and the taskbar, and over a program's own content the
+right button stays the program's.
+
 Drag a title bar to move a window. Notepad, Files, Help and the applications (all
 but Clock and Character Map) also fill the screen (double-click the title bar, or
 press its middle button) and resize from their dotted corner, never narrower than
@@ -440,7 +452,10 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
 
 ### Clock
 
-**Clock** has four pages, chosen in its toolbar or with the keys 1 to 4.
+**Clock** has four pages, chosen in its toolbar or with the keys 1 to 4. *10/26/26:* it is a
+program now, `wclock` (`user/wclock/`), out of the kernel: Apps > Clock and its tile start it,
+or bring its window back when it runs already, and the window opens where the desktop's Clock
+stood, looking the same. A fault in it costs only its window.
 
 * **Clock.** The time, large, from the PC's clock (the CMOS clock, as the taskbar's
   clock), the weekday and the date ("Saturday", "October 17, 2026") and the day of the
@@ -461,36 +476,44 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
   * Start, Pause and Resume with Space or the button. Reset (R) sets it back to the time
     set.
   * While it runs, the title counts down ("Clock - 04:59"), in the taskbar too.
-  * At zero the title says "Time's up!", in the taskbar too. A message comes up in front
-    of everything, even when the Clock is tucked away or behind another window.
-  * If a question is open (Notepad's unsaved changes, say), the message waits until that
-    is answered. If another dialog takes its place before it is answered, it comes back
-    afterwards.
-  * OK (or Enter, or Esc) sets the timer back to its time.
+  * At zero the title says "Time's up!", in the taskbar too, and the timer's page shows it
+    in coral. *10/26/26:* the window comes back in front of the others, even when it was
+    tucked away, but without the focus, its taskbar button marked: what you type elsewhere
+    stays where it goes (the desktop's message in front of everything is gone with the
+    move out of the kernel).
+  * A key or a click in the window answers it: the timer is set back to its time.
 * **In the background.** The stopwatch and the timer keep running while the window is
   minimized or behind another window, and the status bar of the other pages shows them
   (the stopwatch in whole seconds there).
-  Closing the window ends both. While one is running, closing it or leaving the desktop
-  asks first.
+  Closing the window ends both. While one is running, closing it (the close button, Esc or
+  Ctrl+W) asks first, in the window, Cancel first; leaving the desktop asks, as it does
+  about every program's window.
 * **Copy.** Ctrl+C (Edit > Copy) copies what the page shows: the date and time, the month
   as `cal` prints it (its title centred over the weeks), the stopwatch's time and the laps
   it keeps (up to eight), or the timer's time. On the clock's page with no date known,
-  Copy is off and the clipboard is left as it was.
+  nothing is copied (the status bar says so) and the clipboard is left as it was.
 
 ### Character Map
 
 **Character Map** shows the console's 256 characters (code page 437, with SurfOS's ▸ ≋
 …) in a grid of 16 by 16. The code's last hexadecimal digit is along the top, and its
-first down the side.
+first down the side. *10/26/26:* it is a program now, `wcharmap` (`user/wcharmap/`), out of
+the kernel: Apps > Character Map and its tile start it, or bring its window back when it
+runs already, and the window opens where the desktop's Character Map stood, looking the
+same. A fault in it costs only its window.
 
 * **Choosing.** Click a character, or move with the arrows.
   * Home and End go to the start and the end of the row, Page Up and Page Down to the top
     and the bottom of the column.
   * A key typed chooses its own character (A, say).
-  * Edit > Go to code… (Ctrl+L) takes a code (247, three digits at most, or 0xF7), a
-    Unicode code point (U+224B, six hexadecimal digits at most), or a character other
-    than a digit or a space (é, pasted, say). Anything else, and a character the console
-    does not have (€), is refused in the status bar.
+  * Ctrl+L (Go to code) opens a band at the bottom of the window, with the chosen code in
+    it. It takes a code (247, three digits at most, or 0xF7), a Unicode code point
+    (U+224B, six hexadecimal digits at most), or a character other than a digit or a
+    space (é, typed on the serial line, say). The first key typed replaces what was put
+    there; Enter or Go goes there, Esc or Cancel leaves it. Anything else, and a
+    character the console does not have (€), is refused in the status bar. (*10/26/26:*
+    this was the desktop's Edit > Go to code… dialog, which a program's window does not
+    have; a character can no longer be pasted into it.)
 * **What it shows.** The chosen character large, with its code in decimal and hexadecimal,
   its Unicode code point and its UTF-8 bytes.
 * **Copy.** Enter, Ctrl+C, Edit > Copy, a double-click or the Copy button puts the
@@ -499,8 +522,9 @@ first down the side.
     pastes it in the Terminal.
   * The laptop's keyboard types nothing beyond ASCII, so this is how ≋, é, ½ or █ get
     into a note.
-* **Small screens.** On a 640x400 screen the window is shorter (326 pixels) and its cells
-  a pixel lower, so that the whole grid and the Copy button stay above the status bar.
+* **Small screens.** On a 640x400 screen the window is shorter (as tall as the room
+  between the menu bar and the taskbar lets it be) and its cells a pixel lower, so that
+  the whole grid and the Copy button stay above the status bar.
 * **Codes 0-31 and 127.** On the console these are symbols (☺, ♥, ♪, ▸, ← and the like,
   and ⌂), not control characters, and those symbols are what is copied (☺ is U+263A).
   0 is the console's empty cell, and copies nothing.
@@ -621,6 +645,20 @@ and its title says what it was last sent.
   it and takes its window away. A program that ends or crashes takes only its own window
   with it. Leaving the desktop with programs' windows open asks first; their windows close
   with the desktop, and the programs are told so (they are not stopped).
+* **The clipboard and asking to be seen** (*10/26/26*, for the applications moving out of
+  the kernel). While its window has the focus, a program may put text on the desktop's
+  clipboard (`gw_clip()`, up to the clipboard's 128 KB, to a NUL if one comes first; no
+  text is refused), as the desktop's own Copy does: Notepad and the Terminal paste it.
+  Without the focus it may not, so nothing in the background plants text to be pasted, and
+  text a window set as it lost the focus is dropped. A program may ask to be seen
+  (`gw_alert()`: a timer that ran out), once in five seconds at most, whichever of its
+  windows asks: its window comes to the front, shown again if it was tucked into the
+  taskbar, without the focus, its taskbar button marked until it has it, as a new
+  window's is. Nothing you type elsewhere reaches it. It never comes up under a click: a
+  click already on its way lands where it was aimed, the window waits while a mouse button
+  is down or a drag goes on, and for half a second after it came up a click on it does
+  nothing at all (click again to use it). In `wintest show`, x copies "echo wintest-clip"
+  and y asks to be seen once the window is tucked away.
 * **Limits.** 8 windows on a desktop, 32 in all. A window's content is at most the room
   below the menu bar (958 by 457 on a 1920x1080 screen), and a desktop keeps at most 8 MB
   of programs' pixels.
@@ -652,9 +690,20 @@ and its title says what it was last sent.
 The driver supports three-button PS/2 relative mice and PS/2-compatible touchpads,
 and USB HID **boot-protocol** mice connected directly to a supported xHCI root
 port. USB attach/unplug is supported; unplug releases that device's buttons.
-The existing USB stack does not enumerate devices behind hubs. Wheel reports,
-USB report-protocol-only devices and multi-touch gestures are not implemented.
+The existing USB stack does not enumerate devices behind hubs. USB
+report-protocol-only devices and multi-touch gestures are not implemented.
 `mouse=off` on the kernel command line disables PS/2 mouse probing for diagnostics.
+*10/26/26:* the wheel. A PS/2 mouse that answers the IntelliMouse handshake (sample
+rates 200, 100 and 80, then ID 3) sends four-byte packets, the fourth its wheel's, and
+`pointerinfo` calls it a wheel mouse; a USB boot mouse whose report descriptor puts its
+Wheel in the boot report's fourth byte (an 8-bit field at bit 24, with no report IDs) has
+it there, and lsusb says "boot mouse with a wheel". A notch scrolls the window under the
+pointer three rows (Notepad, Files, Help, the suite's applications), and a program's window
+gets it as WIN_EV_WHEEL (rows, + down: -3 for a notch away from the user). A turn that
+moves nothing else, as the mice report it, is the wheel's alone: no pointer event follows
+it, so the wheel is a program's last event. With a menu open the wheel does nothing, and
+while a program holds the pointer (a button pressed in its window and not let go) the
+wheel is that program's, wherever the pointer is.
 
 The PS/2 controller routes keyboard and auxiliary bytes separately. Its reset,
 ACK and self-test waits are bounded; an absent mouse leaves the keyboard usable.

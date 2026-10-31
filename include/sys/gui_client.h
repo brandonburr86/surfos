@@ -9,7 +9,8 @@ window numbers from GUI_FIRST_CLIENT on (shell/guiclient.c). A slot holds the sy
 (struct gui_sys's win_* calls), the window's state and pixels as its last update gave them, and
 what the desktop last told its program: the buttons and where the pointer was, the focus, the
 size it asked for, and whether the close button was pressed. 10/25/26 (the review): whether it
-waits for the focus it opened without.
+waits for the focus it opened without. 10/26/26 (stage C12): whether it asked to be seen, and
+when it came up for it (a press on it is nobody's for GUI_GRACE_MS after).
 */
 #ifndef _SYS_GUI_CLIENT_H
 #define _SYS_GUI_CLIENT_H
@@ -29,7 +30,12 @@ struct gui_client {
     bool closing;                       /* CLOSE was sent: the close button asks to end the program */
     bool waiting;                       /* 10/25/26: opened without the focus; its taskbar button is marked until
                                            it has it */
+    bool alerted;                       /* 10/26/26: it asked to be seen, held while a button or a drag is under way */
+    bool raised;                        /* 10/26/26: it came up for that, at raised_at (the desktop's now, ms) */
+    u32 raised_at;
 };
+
+#define GUI_GRACE_MS 500                /* 10/26/26: a window that came up by itself takes no press for this long */
 
 #define GUI_LAUNCHED 4                  /* 10/25/26: programs the launcher started lately, whose window takes the focus */
 struct gui_clients {

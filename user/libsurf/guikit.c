@@ -8,6 +8,7 @@ font8x16.c) on a window's image: a surface of 32-bit pixels, 0x00RRGGBB, as the 
 frame is (shell/gui.c), and a clip of the whole image. This file sees the kernel's headers and
 not the library's; gui.c reaches it through guikit.h's plain types. Text is UTF-8, shown with the
 console's characters (code page 437, '?' for a character it lacks), 8x16 pixels each.
+10/26/26 (stage C12): one of those characters by its code, at a scale (the Character Map's grid).
 */
 
 #include <surfos/types.h>
@@ -63,6 +64,27 @@ int guikit_text(void *kit, int x, int y, const char *utf8, unsigned color) {
         n -= len;
     }
     return x;
+}
+
+/* 10/26/26: the same at scale (each character's pixels scale x scale) */
+int guikit_text_scaled(void *kit, int x, int y, const char *utf8, unsigned color, int scale) {
+    struct guikit *k = (struct guikit *)kit;
+    u32 n = (u32)strlen(utf8), len;
+    u8 ch;
+    if(scale < 1) scale = 1;
+    while(n) {
+        ch = gd_char(utf8, n, &len);
+        gd_glyph(&k->d, x, y, ch, color, scale);
+        x += 8 * scale;
+        utf8 += len;
+        n -= len;
+    }
+    return x;
+}
+
+/* 10/26/26: the console's character code (code page 437, 0-255), its pixels scale x scale */
+void guikit_glyph(void *kit, int x, int y, unsigned code, unsigned color, int scale) {
+    gd_glyph(&((struct guikit *)kit)->d, x, y, (u8)code, color, scale < 1 ? 1 : scale);
 }
 
 int guikit_cells(const char *utf8) {

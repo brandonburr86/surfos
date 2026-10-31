@@ -4,6 +4,10 @@ SurfOS HID Pointer Reports
 File: hidpointer.h Date: 10/12/26
 --------------------
 Bounded report-descriptor parsing, independent of USB/I2C framing.
+10/26/26 (stage C8 of docs/superpowers/plans/2026-10-25-app-windows.md): a report's wheel, the first
+relative Generic Desktop Wheel field that can be bound, of the collection of the report's pointer
+fields (where a USB boot mouse's fourth byte is one: usbmouse.h). It never changes what the parse
+returns, and the decoder leaves it alone.
 */
 #ifndef _SYS_HIDPOINTER_H
 #define _SYS_HIDPOINTER_H
@@ -28,6 +32,7 @@ struct hid_pointer_report {
     u8 id;
     u32 input_bits, output_bits, feature_bits;
     struct hid_pointer_field x, y, button[3];
+    struct hid_pointer_field wheel;  /* 10/26/26: Generic Desktop Wheel (0x01:0x38), relative; a second skipped */
 };
 struct hid_pointer_mode {
     u8 report_id;

@@ -30,6 +30,8 @@ wakes meanwhile. An idle pass naps until something wakes it or 100 ms pass, but 
 within a frame of the one before waits out a frame first: wakes are the whole system's (a pipe, a
 TCP segment), so a flood of them gets two passes a frame, not one each. While another console has
 the screen the desktop looks for its own every frame (a switch wakes nobody).
+10/26/26 (stage C12): gui_input_done() once a pass's pointer events and keys are in: a program's
+window that asked to be seen comes up after them, never under a press of the same pass.
 */
 #include <stdio.h>
 #include <string.h>
@@ -416,6 +418,7 @@ int cmd_gui(int argc,char **argv) {
         }
         keys_left=n==32;                                /* 10/25/26: the rest in the next pass, a frame on */
         if(esc && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) gui_key(g,27); esc=0; }
+        gui_input_done(g);                              /* 10/26/26: a window that asked to be seen comes up now */
         gui_kernel_fs_idle(g->fs);                      /* 10/18/26: the frame's reads are done (the tick, the input) */
         if(g->quit) break;
         if(!framebuffer_graphics_owned()) continue;

@@ -68,6 +68,7 @@ enum {
     ACT_DLG_NEW_FILE, ACT_DLG_NEW_FOLDER, ACT_DLG_RENAME, ACT_DLG_DELETE, ACT_DLG_GOTO, ACT_DLG_OPEN,
     ACT_DLG_SAVE_AS, ACT_DLG_REPLACE, ACT_DLG_GUARD, ACT_DLG_READONLY,
     ACT_RUN, ACT_DLG_RUN,               /* 10/25/26: Run program..., and its answer */
+    ACT_CLIENT_COPY,                    /* 10/26/26 (stage C12): Edit > Copy for a program's window: its Ctrl+C */
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
 /* 10/17/26 (the suite): the answers to the suite's dialogs */
@@ -119,10 +120,16 @@ struct gui_app {
     /* 10/18/26: whether the arrow keys are its own just now (with nothing to move they move the pointer, as in
        Calculator); NULL: arrows says */
     bool (*wants_arrows)(const struct gui_state *g);
+    /* 10/26/26 (stage C12): the program this application is now (user/wclock/: /initrd/bin/wclock): its slot never
+       opens; its tile, the Apps menu and Next window's list start the program, or bring its window back, which
+       stands at the slot's place. Only title, icon, shortcut, w, h and the help lines count then */
+    const char *program;
 };
 extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gui_app_log, gui_app_clock,
                             gui_app_viewer, gui_app_hex, gui_app_charmap;
 const struct gui_app *gui_app_of(int id);       /* the table's, NULL for the desktop's own windows */
+int gui_app_slot_of(const struct gui_state *g, int pid);   /* 10/26/26: the application whose launcher started pid */
+int gui_window_icon(const struct gui_state *g, int id);   /* 10/26/26: its icon: an application's program's, its own */
 /* a dialog of application id: its answer comes to its answer hook with act (0-30) */
 static inline int gui_app_act(int id, int act) { return ACT_APP_DIALOG + 32 * (id - GUI_FIRST_APP) + act; }
 #define GUI_APP_CLOSE 31                /* the window manager's own: closing the window although it is busy */
@@ -161,10 +168,13 @@ int client_count(const struct gui_state *g);
 void client_tick(struct gui_state *g);                  /* windows come, are read again, go; RESIZE and FOCUS */
 void client_finish(struct gui_state *g);                /* the desktop closes: every window is let go */
 bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a program's (old: the buttons before) */
+void client_alerts(struct gui_state *g);                /* 10/26/26: after the input, windows that asked to be seen */
+bool client_grace(struct gui_state *g, unsigned old);   /* 10/26/26: true: a press on one just come up, nobody's */
 void client_wheel(struct gui_state *g, int id, int rows);
 bool client_keys(const struct gui_state *g);            /* the focused window is a program's: the keys are its own */
 bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened without the focus, not given it yet */
 void client_launched(struct gui_state *g, int pid);     /* 10/25/26 (C6): its first window takes the focus */
+int client_of_pid(const struct gui_state *g, int pid);  /* 10/26/26: a window of the program pid, its number; -1 */
 void client_key(struct gui_state *g, int key);
 void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
 void client_answer(struct gui_state *g, int slot, int button, const char *target);
@@ -215,6 +225,7 @@ void files_refresh(struct gui_state *g);                             /* read aga
 void files_reveal(struct gui_state *g, const char *path);            /* expand down to path and select it */
 void files_key(struct gui_state *g, int key);
 void files_press(struct gui_state *g, int x, int y);
+void files_select_at(struct gui_state *g, int x, int y);   /* 10/26/26: a right-click's row */
 void files_wheel(struct gui_state *g, int rows);
 void files_scroll(struct gui_state *g, int y);
 void files_render(const struct gui_state *g, const struct gui_draw *d);
