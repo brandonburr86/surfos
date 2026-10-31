@@ -6,7 +6,7 @@ File: gui_tools.h Date: 10/17/26
 Their state in gui_state (shell/guilog.c, shell/guiclock.c, shell/guichar.c). Included by
 sys/gui.h; owned by track TOOLS of docs/superpowers/plans/2026-10-17-gui-suite.md.
 10/26/26 (stage C12 of docs/superpowers/plans/2026-10-25-app-windows.md): the Clock is a program
-(user/wclock/), with no state here.
+(user/wclock/), with no state here, and so is the Character Map (user/wcharmap/).
 */
 #ifndef _SYS_GUI_TOOLS_H
 #define _SYS_GUI_TOOLS_H
@@ -33,13 +33,6 @@ struct gui_logview {
     char status[GUI_STATUS];
 };
 
-/* 10/26/26 (stage C12): the Clock is a program now, user/wclock/; its state went with it */
-
-/* Character Map: the 256 characters of code page 437 that the console draws */
-struct gui_charmap {
-    int selected;                       /* the code page 437 character, 0-255 */
-    u32 click_ms;                       /* the last click, for a double-click: when, and on which */
-    int click_code;
-    char status[GUI_STATUS];
-};
+/* 10/26/26 (stage C12): the Clock and the Character Map are programs now, user/wclock/ and user/wcharmap/; their
+   state went with them */
 #endif

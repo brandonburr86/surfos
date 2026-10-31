@@ -2373,14 +2373,18 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   starts no second program: a double-click on the tile), and the window opens where the application's window
   stood
   (`accept()` with `gui_app_slot_of()`), not in the cascade. Edit > Copy sends a program's window Ctrl+C
-  (`ACT_CLIENT_COPY`).
+  (`ACT_CLIENT_COPY`). `wcharmap`, the Character Map, followed (`user/wcharmap/charmap.c` the model with the
+  console's code page 437 from libsurf, host-tested by `test_wcharmap`; `main.c` the window, drawing each of the
+  256 characters with libgui's `gw_glyph()`); Go to code, which was the desktop's dialog, is a band of its own
+  window.
 * **On the screen** (`tools/gui_apps_win.py`, the guiapps scenario of `tools/qemu-usb.py`): wintest show and
   wdemo at 2x, keys, a press and a release echoed with where they were, F2 and F1 keeping a window's content,
   a corner resize answered, the close button ending a program (and `ps`), `wdemo hang` ended through the
   question, `wdemo crash` losing only its window, `wintest pty` refused in the Terminal, `wdemo` typed
   without `&` taking the focus as the Terminal's foreground job, wcalc from the launcher counting by keys and
-  clicks, the Clock as a program read by the checks the desktop's Clock had (`tools/gui_apps_tools.py`; its
-  alarm is its window back in front without the focus, a click answering it), and a launched wcalc outliving
+  clicks, the Clock and the Character Map as programs read by the checks the desktop's had
+  (`tools/gui_apps_tools.py`; the Clock's alarm is its window back in front without the focus, a click
+  answering it), and a launched wcalc outliving
   the Terminal and ending with the
   desktop (ps on the serial console once the desktop has closed); once the Terminal has closed, a
   `wintest pty` started by the desktop takes the Terminal's pty number (`wintest tty` named it) and is

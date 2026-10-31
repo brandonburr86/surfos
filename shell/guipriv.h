@@ -129,6 +129,7 @@ extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gu
                             gui_app_viewer, gui_app_hex, gui_app_charmap;
 const struct gui_app *gui_app_of(int id);       /* the table's, NULL for the desktop's own windows */
 int gui_app_slot_of(const struct gui_state *g, int pid);   /* 10/26/26: the application whose launcher started pid */
+int gui_window_icon(const struct gui_state *g, int id);   /* 10/26/26: its icon: an application's program's, its own */
 /* a dialog of application id: its answer comes to its answer hook with act (0-30) */
 static inline int gui_app_act(int id, int act) { return ACT_APP_DIALOG + 32 * (id - GUI_FIRST_APP) + act; }
 #define GUI_APP_CLOSE 31                /* the window manager's own: closing the window although it is busy */

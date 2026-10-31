@@ -758,7 +758,7 @@ static void dialog_row(int row) {
    has ended, it runs again; a program that cannot start is said, and nothing kept. Edit > Copy for a program's window
    is its Ctrl+C */
 static void test_app_program(void) {
-    int a, id, x, y, k = GUI_CLOCK - GUI_FIRST_APP;
+    int a, b, id, x, y, k = GUI_CLOCK - GUI_FIRST_APP;
     fake_desktop(&g, 960, 540);
     x = g.win[GUI_CLOCK].x;
     y = g.win[GUI_CLOCK].y;
@@ -776,6 +776,13 @@ static void test_app_program(void) {
     id = win_id(a);
     CHECK(id >= 0 && g.focus == id && g.win[id].x == x && g.win[id].y == y && g.win[id].w == 380 &&
           g.win[id].h == 300 && !client_waiting(&g, id));
+    CHECK(gui_window_icon(&g, id) == ICON_CLOCK);       /* the Clock's icon, as its window had */
+    b = fake_win_open(100, 80, 0, 0x203040, "Another", 99);
+    fake_win_present(b, 0x203040);
+    tick();
+    CHECK(win_id(b) >= 0 && gui_window_icon(&g, win_id(b)) == ICON_PROGRAM);  /* any other program's: a program's */
+    fake_win_end(b);
+    tick();
     gui_open(&g, GUI_NOTEPAD);
     gui_act(&g, ACT_WINDOW + GUI_CLOCK);                /* again: its window to the front, nothing run */
     CHECK(fake_run_count == 1 && g.focus == id && g.order[GUI_SLOTS - 1] == id);

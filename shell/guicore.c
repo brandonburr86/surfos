@@ -79,9 +79,15 @@ static void title_of(const struct gui_state *g, int id, char *out, size_t n) {
     else strlcpy(out, a ? a->title : titles[id], n);
 }
 
-static int icon_of(int id) {
+/* the icon in a window's title bar and its taskbar button; 10/26/26 (stage C12): an application's program's window
+   has the application's icon */
+int gui_window_icon(const struct gui_state *g, int id) {
     const struct gui_app *a = gui_app_of(id);
-    if(id >= GUI_FIRST_CLIENT) return ICON_PROGRAM;
+    int slot;
+    if(id >= GUI_FIRST_CLIENT) {
+        slot = client_at(g, id) ? gui_app_slot_of(g, client_at(g, id)->st.pid) : -1;
+        return slot >= 0 ? gui_app_of(slot)->icon : ICON_PROGRAM;
+    }
     return a ? a->icon : app_icons[id];
 }
 
@@ -1331,8 +1337,8 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
     gd_rect(d,x+5,y+6,w->w,w->h,SHADOW);
     gd_rect(d,x,y,w->w,w->h,INK); gd_rect(d,x+1,y+1,w->w-2,w->h-2,PAPER);
     gd_rect(d,x+1,y+1,w->w-2,27,bar);
-    if(icon_of(id)==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
-    else gd_icon(d,x+8,y+6,icon_of(id),1);
+    if(gui_window_icon(g,id)==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
+    else gd_icon(d,x+8,y+6,gui_window_icon(g,id),1);
     title_of(g,id,b,sizeof(b));
     gd_name(d,x+30,y+6,b,(w->w-38-buttons*24)/8,PAPER);
     title_button(d,x+w->w-26,y+4,0,knob);
@@ -1446,8 +1452,8 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
         x=6+i*(w+4);
         gd_rect(&d,x,g->height-TASK_H+3,w,TASK_H-6,g->focus==ids[i]?TEAL:win->min?0x1A3B48:INK);
         if(client_waiting(g,ids[i])) gd_rect(&d,x,g->height-6,w,3,CORAL);   /* 10/25/26: opened without the focus */
-        if(icon_of(ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
-        else gd_icon(&d,x+4,g->height-TASK_H+4,icon_of(ids[i]),1);
+        if(gui_window_icon(g,ids[i])==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
+        else gd_icon(&d,x+4,g->height-TASK_H+4,gui_window_icon(g,ids[i]),1);
         title_of(g,ids[i],b,sizeof(b));
         gd_name(&d,x+24,g->height-TASK_H+5,b,(w-28)/8,win->min?MUTED:FOAM);
     }

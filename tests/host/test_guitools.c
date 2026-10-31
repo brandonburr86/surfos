@@ -1,13 +1,13 @@
 /* Host tests for Log, Clock and Character Map (track TOOLS of docs/superpowers/plans/2026-10-17-gui-suite.md), against the
    in-memory file system and system of tests/host/gui_fake.c. Built and run by `make unittest` (unittest-gui).
    10/26/26 (stage C12 of docs/superpowers/plans/2026-10-25-app-windows.md): the Clock is a program now (user/wclock/):
-   its tests went with it to tests/host/test_wclock.c and tools/gui_apps_tools.py; its Help lines stay here.
+   its tests went with it to tests/host/test_wclock.c and tools/gui_apps_tools.py; its Help lines stay here. So is
+   the Character Map (user/wcharmap/), whose tests went to tests/host/test_wcharmap.c.
    The Log reads a kernel log of its own here: a stream of everything "written", of which it gets the last 16 KB, as
    klog_copy() gives them, so that the log can wrap around. And kernel/klog.c itself, klog_copy() with an interrupt
    that logs while it copies. */
 #include "gui_fake.h"
 #include "../../shell/gui_tools.h"
-#include <sys/cp437.h>
 #include <stdlib.h>
 
 /**** kernel/klog.c, on the host: its kernel headers' guards taken, and the little it uses of them here; irq_save()
@@ -44,7 +44,7 @@ static void irq_restore(u_long flags) { (void)flags; }
 static struct gui_state g;
 static struct fb_surface screen;
 static int W, H;                                /* the screen's size */
-static const int ids[] = { GUI_LOG, GUI_CHARMAP };    /* 10/26/26: the Clock is a program */
+static const int ids[] = { GUI_LOG };                 /* 10/26/26: the Clock and the Character Map are programs */
 #define IDS (int)(sizeof(ids) / sizeof(ids[0]))
 
 /**** the screen ****/
@@ -524,131 +524,6 @@ static void log_drawing(void) {
     CHECK(fake_guards(W, H) && !g.logview.any);
 }
 
-/**** Character Map ****/
-
-static void charmap_codes(void) {
-    char u[CP437_UTF8_MAX], v[CP437_UTF8_MAX];
-    u32 len;
-    int c, n, all = 1;
-    for(c = 1; c < 256; c++) {                          /* each pastes as itself: Notepad shows the same glyph */
-        n = charmap_utf8(c, u);
-        if(n != cp437_utf8((u8)c, v) || memcmp(u, v, n) || gd_char(u, n, &len) != c || len != (u32)n) all = 0;
-    }
-    CHECK(all);
-    CHECK(charmap_utf8(0, u) == 0 && charmap_utf8(256, u) == 0 && charmap_utf8(-1, u) == 0);
-    CHECK(charmap_utf8(0xF7, u) == 3 && !memcmp(u, "\xE2\x89\x8B", 3));          /* ≋ U+224B */
-    CHECK(charmap_utf8(0x01, u) == 3 && !memcmp(u, "\xE2\x98\xBA", 3));          /* ☺ U+263A, not ^A */
-    CHECK(charmap_utf8(0x14, u) == 2 && !memcmp(u, "\xC2\xB6", 2));              /* ¶ */
-    CHECK(charmap_utf8(0x7F, u) == 3 && !memcmp(u, "\xE2\x8C\x82", 3));          /* ⌂ */
-    CHECK(charmap_utf8('A', u) == 1 && u[0] == 'A');
-    CHECK(charmap_utf8(0xDB, u) == 3 && !memcmp(u, "\xE2\x96\x88", 3));          /* █ */
-    CHECK(charmap_utf8(0xFF, u) == 2 && !memcmp(u, "\xC2\xA0", 2));              /* no-break space */
-}
-
-static void charmap(void) {
-    const struct gui_window *w, *nw;
-    struct gui_charmap *m = &g.charmap;
-    int x, y;
-    desktop(960, 540);
-    gui_open(&g, GUI_CHARMAP);
-    w = &g.win[GUI_CHARMAP];
-    draw();
-    CHECK(m->selected == 0 && glyph_at(w->x + 26 + 7 * 17 + 5, w->y + 50 + 15 * 17 + 1, 0xF7, INK));   /* ≋ in its cell */
-    CHECK(shows(w->x + 312, w->y + 148, "Code", MUTED, 1) && shows(w->x + 312 + 64, w->y + 148 + 36, "U+0000", INK, 1));
-    CHECK(!gui_menu_on(&g, 3, ACT_COPY) && gui_menu_on(&g, 3, ACT_GOTO));
-    /* the keys */
-    key(GUI_RIGHT); key(GUI_RIGHT); key(GUI_DOWN);
-    CHECK(m->selected == 18);
-    key(GUI_END);
-    CHECK(m->selected == 31);
-    key(GUI_HOME);
-    CHECK(m->selected == 16);
-    key(GUI_PGDN);
-    CHECK(m->selected == 0xF0);
-    key(GUI_DOWN); key(GUI_PGUP);
-    CHECK(m->selected == 0);
-    key(GUI_LEFT); key(GUI_UP);
-    CHECK(m->selected == 0);
-    key('A');
-    CHECK(m->selected == 'A');
-    key(GUI_PGDN); key(GUI_END); key(GUI_RIGHT); key(GUI_DOWN);
-    CHECK(m->selected == 255);
-    /* a click chooses; the panel shows it large, with its code, code point and bytes */
-    click(w->x + 26 + 7 * 17 + 8, w->y + 50 + 15 * 17 + 8);
-    CHECK(m->selected == 0xF7 && !g.clip_len);
-    draw();
-    x = w->x + 312;
-    y = w->y + 148;
-    CHECK(shows(x + 64, y, "247", INK, 1) && shows(x + 64, y + 18, "0xF7", INK, 1));
-    CHECK(shows(x + 64, y + 36, "U+224B", INK, 1) && shows(x + 64, y + 54, "E2 89 8B", INK, 1));
-    CHECK(shows(x, y + 80, "One of SurfOS's", MUTED, 1));
-    CHECK(glyph_at(w->x + 26 + 7 * 17 + 5, w->y + 50 + 15 * 17 + 1, 0xF7, PAPER));       /* chosen: lit */
-    {
-        const u8 *gl = font8x16[0xF7];                  /* large: one of its lit pixels, six times over */
-        int row, col, ok = 0;
-        for(row = 0; row < 16 && !ok; row++) for(col = 0; col < 8 && !ok; col++)
-            if(gl[row] & (0x80 >> col))
-                ok = fake_pixel(W, w->x + 312 + (138 - 66) / 2 + 9 + col * 6 + 3, w->y + 34 + 5 + row * 6 + 3) == INK;
-        CHECK(ok);
-    }
-    /* Copy (Ctrl+C), then Notepad: Ctrl+V pastes ≋ as UTF-8, and Notepad shows its glyph */
-    key(3);
-    CHECK(!g.quit && g.clip_len == 3 && !memcmp(g.clip, "\xE2\x89\x8B", 3));
-    CHECK(!strcmp(m->status, "Copied \xE2\x89\x8B (3 bytes of UTF-8): Ctrl+V pastes it"));
-    draw();
-    CHECK(glyph_at(w->x + 10 + 7 * 8, w->y + w->h - STATUS_H - 1 + 3, 0xF7, INK));      /* in the status bar */
-    key(5);                                             /* Ctrl+E */
-    CHECK(g.focus == GUI_NOTEPAD);
-    key(22);                                            /* Ctrl+V */
-    CHECK(g.note.len == 3 && !memcmp(g.note.text, "\xE2\x89\x8B", 3) && g.note.modified);
-    draw();
-    nw = &g.win[GUI_NOTEPAD];
-    CHECK(glyph_at(nw->x + 44, nw->y + TITLE_H + BAR_H + 4, 0xF7, INK));
-    CHECK(note_column(&g.note, g.note.cursor) == 1);   /* one character, one cell */
-    gui_close(&g, GUI_NOTEPAD);                         /* closing without saving */
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Unsaved changes"));
-    key(9); key('\r');                                  /* Don't save */
-    CHECK(!g.win[GUI_NOTEPAD].open && !g.dialog.kind && g.focus == GUI_CHARMAP);
-    /* Enter and a double-click copy too; the empty cell copies nothing */
-    key(GUI_HOME); key(GUI_PGUP); key(GUI_RIGHT);
-    key('\r');
-    CHECK(g.clip_len == 3 && !memcmp(g.clip, "\xE2\x98\xBA", 3));                /* ☺ */
-    click(w->x + 26 + 11 * 17 + 8, w->y + 50 + 13 * 17 + 8);
-    click(w->x + 26 + 11 * 17 + 8, w->y + 50 + 13 * 17 + 8);
-    CHECK(m->selected == 0xDB && g.clip_len == 3 && !memcmp(g.clip, "\xE2\x96\x88", 3));   /* █ */
-    g.now += 1000;
-    click(w->x + 26 + 5, w->y + 50 + 5);
-    CHECK(m->selected == 0 && !gui_menu_on(&g, 3, ACT_COPY));
-    key('\r');
-    CHECK(g.clip_len == 3 && !strncmp(m->status, "0x00 is the console's empty cell", 32));
-    key(' ');
-    click(w->x + 312 + 10, w->y + w->h - STATUS_H - 1 - 34 + 10);   /* the Copy button, above the status bar */
-    CHECK(g.clip_len == 1 && g.clip[0] == ' ' && !strcmp(m->status, "Copied a space: Ctrl+V pastes it"));
-    /* Go to code (Ctrl+L): 0x41, 247, U+2588; what is not a code says so */
-    key(12);
-    CHECK(g.dialog.kind == GUI_DLG_INPUT && !strcmp(g.dialog.field.text, "0x20"));
-    fake_type(&g, "0x41\r");
-    CHECK(m->selected == 0x41);
-    key(12); fake_type(&g, "247\r");
-    CHECK(m->selected == 247);
-    key(12); fake_type(&g, "U+2588\r");
-    CHECK(m->selected == 0xDB);
-    key(12); fake_type(&g, "u+00e9\r");
-    CHECK(m->selected == 0x82);                         /* é */
-    key(12); fake_type(&g, "300\r");
-    CHECK(m->selected == 0x82 && !strcmp(m->status, "Not a code: 0-255, 0x00-0xFF, U+224B or a character"));
-    key(12); fake_type(&g, "U+1234\r");
-    CHECK(m->selected == 0x82 && !strcmp(m->status, "U+1234 is not one of the console's characters"));
-    key(12); fake_type(&g, "Z\r");
-    CHECK(m->selected == 'Z');
-    key(12); key(27);
-    CHECK(!g.dialog.kind && m->selected == 'Z');
-    draw();
-    CHECK(fake_guards(W, H));
-    key(27);                                            /* Esc closes the window */
-    CHECK(!g.win[GUI_CHARMAP].open);
-}
-
 /**** what the review found (10/18/26) ****/
 
 /* klog_copy(): storms of every size before each chunk, buffers that are no multiple of 1024, a storm that leaves
@@ -863,98 +738,10 @@ static void log_review(void) {
     CHECK(row_is(rows - 1, "line 0705"));
 }
 
-/* the Character Map: what the review found */
-static void charmap_review(void) {
-    const struct gui_window *w;
-    struct gui_charmap *m = &g.charmap;
-    int sy;
-    desktop(960, 540);
-    gui_open(&g, GUI_CHARMAP);
-    w = &g.win[GUI_CHARMAP];
-    sy = w->y + w->h - STATUS_H - 1;
-    /* Go to code takes only what it says it takes */
-    static const struct { const char *text; int code; const char *status; } cases[] = {
-        { "4294967361", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },   /* 2^32 + 65 */
-        { "U+100000041", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "U+41zz", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "65 66", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "0x", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "0x123", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "U+", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "1000", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { " ", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "AB", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "\xE2\x82\xAC", -2, "U+20AC is not one of the console's characters" },       /* € */
-        { "\xF0\x9F\x98\x80", -2, "U+1F600 is not one of the console's characters" },  /* an emoji */
-        { "U+FFFF", -2, "U+FFFF is not one of the console's characters" },
-        { "007", 7, "" }, { " 0x41 ", 'A', "" }, { "u+2588", 0xDB, "" }, { "U+00e9", 0x82, "" },
-        { "\xC3\xA9", 0x82, "" }, { "9", 9, "" }, { "255", 255, "" }, { "0xff", 255, "" }, { "~", '~', "" },
-        { "U+0010FFFF", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
-        { "U+10FFFF", -2, "U+10FFFF is not one of the console's characters" },
-    };
-    int i, ok = 1;
-    for(i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
-        key('Z');
-        key(12);
-        CHECK(g.dialog.kind == GUI_DLG_INPUT);
-        fake_type(&g, cases[i].text);
-        key('\r');
-        if(m->selected != (cases[i].code >= 0 ? cases[i].code : 'Z') || strcmp(m->status, cases[i].status)) {
-            ok = 0;
-            printf("Go to code \"%s\": 0x%02X, \"%s\"\n", cases[i].text, m->selected, m->status);
-        }
-    }
-    CHECK(ok);
-    key('Z');
-    key(12);
-    key(8);                                             /* empty */
-    key('\r');
-    CHECK(m->selected == 'Z' && !strcmp(m->status, "Not a code: 0-255, 0x00-0xFF, U+224B or a character"));
-    draw();                                             /* the message whole in the status bar */
-    CHECK(shows(w->x + 10, sy + 3, "Not a code: 0-255, 0x00-0xFF, U+224B or a character", INK, 1) &&
-          !glyph_at(w->x + 10 + 51 * 8, sy + 3, 0xF9, INK));
-    /* 0x10 is one of SurfOS's own characters, as 0xF7 and 0xF9 */
-    key(GUI_HOME); key(GUI_PGUP); key(GUI_DOWN);
-    CHECK(m->selected == 0x10);
-    draw();
-    CHECK(shows(w->x + 312, w->y + 148 + 80, "One of SurfOS's", MUTED, 1));
-    key(GUI_UP); key(GUI_RIGHT);
-    draw();
-    CHECK(m->selected == 1 && shows(w->x + 312, w->y + 148 + 80, "^A", MUTED, 1) && shows(w->x + 312, w->y + 148 + 98, "copies the symbol", MUTED, 1));
-}
-
 /* every window at 640x400: what it shows above its status bar, nothing under it */
 static void small_screen(void) {
     const struct gui_window *w;
-    int sy, gy = 45, ch = 16, ty, first, rows, total;
-    desktop(640, 400);
-    /* the Character Map, 326 pixels high there: its cells 16 high, the last row and the Copy button whole */
-    gui_open(&g, GUI_CHARMAP);
-    w = &g.win[GUI_CHARMAP];
-    CHECK(w->h == 400 - MENU_H - TASK_H - 20);
-    draw();
-    sy = w->y + w->h - STATUS_H - 1;
-    CHECK(w->y + gy + 16 * ch < sy && fake_pixel(W, w->x + 26 + 8, w->y + gy + 16 * ch) == LINE);   /* the grid's end, above */
-    CHECK(glyph_at(w->x + 26 + 7 * 17 + 5, w->y + gy + 15 * ch + 1, 0xF7, INK));        /* ≋ */
-    CHECK(glyph_at(w->x + 26 + 14 * 17 + 5, w->y + gy + 15 * ch + 1, 0xFE, INK));       /* ■ */
-    CHECK(fake_pixel(W, w->x + 26 + 15 * 17 + 8, w->y + gy + 15 * ch + 8) == 0xFFFDF5);  /* the 0xFF cell */
-    CHECK(shows(w->x + 26 - 16, w->y + gy + 15 * ch + 1, "F", MUTED, 1) && shows(w->x + 26 + 7 * 17 + 5, w->y + gy - 16, "7", MUTED, 1));
-    CHECK(shows(w->x + 312 + 32, sy - 34 + 5, "Copy", MUTED, 1) && sy - 34 + 26 <= sy);
-    CHECK(shows(w->x + 312 + 64, w->y + 148 + 54, "none", INK, 1) && shows(w->x + 312, w->y + 148 + 98, "nothing to copy", MUTED, 1));
-    click(w->x + 26 + 7 * 17 + 8, sy + 5);              /* the status bar chooses nothing */
-    CHECK(g.charmap.selected == 0);
-    click(w->x + 26 + 7 * 17 + 8, w->y + gy + 15 * ch + 8);
-    CHECK(g.charmap.selected == 0xF7);
-    click(w->x + 26 + 15 * 17 + 8, w->y + gy + 15 * ch + 14);
-    CHECK(g.charmap.selected == 0xFF);
-    click(w->x + 26 + 2 * 17 + 8, w->y + gy + 14 * ch + 15);    /* the last pixel row of row E */
-    CHECK(g.charmap.selected == 0xE2);
-    draw();
-    CHECK(glyph_at(w->x + 26 + 2 * 17 + 5, w->y + gy + 14 * ch + 1, 0xE2, PAPER) && shows(w->x + 312 + 32, sy - 34 + 5, "Copy", PAPER, 1));
-    click(w->x + 312 + 10, sy - 34 + 10);
-    CHECK(g.clip_len == 2 && !memcmp(g.clip, "\xCE\x93", 2));    /* Γ */
-    CHECK(fake_guards(W, H));
-    gui_close(&g, GUI_CHARMAP);
+    int sy, ty, first, rows, total;
     /* the Log, 326 pixels high: its last row above the status bar, and with the find bar its buttons */
     log_desktop();
     desktop(640, 400);
@@ -1161,12 +948,9 @@ int main(void) {
     log_wrap();
     log_selection();
     log_drawing();
-    charmap_codes();
-    charmap();
     help();
     klog_storms();
     log_review();
-    charmap_review();
     small_screen();
     klog_lengths();
     log_round3();

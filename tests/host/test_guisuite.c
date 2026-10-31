@@ -4,7 +4,9 @@
    10/17/26: Files' Open takes each kind of file to its application (a picture to the Image Viewer, a file Notepad
    would refuse to Hex, text to Notepad) and asks about Notepad's changes only for what Notepad opens; a character
    copied in the Character Map pastes into Notepad and into the Terminal's session as its UTF-8; and every window open
-   at once draws inside guard pixels at three sizes, and the desktop leaves no session behind. */
+   at once draws inside guard pixels at three sizes, and the desktop leaves no session behind.
+   10/26/26 (stage C12): the Character Map is a program (user/wcharmap/): its tile starts it, and its copy comes as a
+   program's window's text for the clipboard. */
 #include "gui_fake.h"
 #include "../../shell/gui_media.h"
 #include "../../shell/gui_tools.h"
@@ -87,10 +89,19 @@ static void test_files_open(void) {
 }
 
 static void test_charmap_paste(void) {
+    int i, id;
     fake_desktop(&g, 960, 540);
-    gui_open(&g, GUI_CHARMAP);
-    g.charmap.selected = 0xF7;                          /* the console's wave */
-    gui_act(&g, ACT_COPY);
+    gui_act(&g, ACT_WINDOW + GUI_CHARMAP);              /* its tile: the program started, its window to come */
+    CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "/initrd/bin/wcharmap"));
+    i = fake_win_open(458, 331, 0, 0xF4F1E6, "Character Map", fake_run_result);
+    fake_win_present(i, 0xF4F1E6);
+    ticks(1);
+    for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS && !(client_at(&g, id) && client_at(&g, id)->handle == fake_wins[i].handle);)
+        id++;
+    CHECK(id < GUI_SLOTS && g.focus == id && g.win[id].x == g.win[GUI_CHARMAP].x && g.win[id].y == g.win[GUI_CHARMAP].y);
+    strlcpy(fake_clip, "\xE2\x89\x8B", sizeof(fake_clip));  /* its Copy of the console's wave */
+    fake_clip_from = fake_wins[i].handle;
+    ticks(1);
     CHECK(g.clip_len == 3 && !memcmp(g.clip, "\xE2\x89\x8B", 3));
 
     /* into Notepad (Ctrl+V): its UTF-8 bytes */

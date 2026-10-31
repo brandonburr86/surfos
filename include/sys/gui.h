@@ -200,7 +200,6 @@ struct gui_state {
     struct gui_monitor monitor;
     struct gui_disks disks;
     struct gui_logview logview;
-    struct gui_charmap charmap;
     struct gui_viewer viewer;
     struct gui_hex hex;
     /* saves whose rename may have half happened, and pairs found that look so (note_guarded()): such a file

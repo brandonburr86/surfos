@@ -7,7 +7,9 @@ closed, Notepad closed without saving, no dialog left open, the USB mouse it plu
 started by the Apps menu, its window where the desktop's Clock's stood and drawn as it was, so the same checks read
 it. At zero its window comes back in front without the focus, "Time's up!" in its title and on its page, where a
 message of the desktop's came up before (a check changed with the behaviour); a click in it answers, once the half
-second in which a press on a window that came up by itself is nobody's has passed."""
+second in which a press on a window that came up by itself is nobody's has passed.
+10/26/26: the Character Map is a program too (user/wcharmap/), read by the same checks; Notepad comes from the Apps
+menu, for Ctrl+E is the program's key while its window has the focus (a check changed with the behaviour)."""
 import calendar
 import time
 
@@ -342,9 +344,12 @@ def charmap(d):
         d.key('ctrl-c')
         d.visible('Character Map: Ctrl+C copies it as UTF-8 (the status bar says so)',
                   lambda s: d.text(s, x + 10, status_y, 'Copied \xf7 (3 bytes of UTF-8): Ctrl+V pastes it', INK, BAND))
-        d.key('ctrl-e')
+        d.key('ctrl-g')                         # 10/26/26: Apps > Notepad (Ctrl+E is the program's own key)
+        for _ in range(3):
+            d.key('right')
+        d.key('ret')
         notepad = True
-        d.visible('Character Map: Ctrl+E opens Notepad',
+        d.visible('Character Map: Apps > Notepad opens Notepad',
                   lambda s: d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, 'Untitled - Notepad', PAPER, TEAL))
         d.key('ctrl-v')
         d.visible('Character Map: Ctrl+V pastes ≋ in Notepad: one character (Col 2), three bytes',

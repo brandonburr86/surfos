@@ -19,7 +19,8 @@ Until the kernel keeps a program's floating-point registers across task switches
 B2), a program with a window must not use floating point. Nothing here does.
 10/26/26 (stage C12, the desktop's applications as programs): text for the desktop's clipboard
 (gw_clip(), while the window has the focus), a window asking to be seen (gw_alert()), and text
-drawn at a scale (gw_text_scaled(): the Clock's large digits).
+drawn at a scale (gw_text_scaled(): the Clock's large digits); one of the console's characters by
+its code (gw_glyph(): the Character Map's grid).
 */
 #ifndef _GUI_H
 #define _GUI_H
@@ -86,6 +87,9 @@ void gw_line(struct gw *win, int x0, int y0, int x1, int y1, unsigned color);
 int gw_text(struct gw *win, int x, int y, const char *utf8, unsigned color);   /* x after it */
 int gw_text_scaled(struct gw *win, int x, int y, const char *utf8, unsigned color, int scale);   /* 10/26/26 */
 int gw_text_width(const char *utf8);                                           /* 8 pixels a character */
+/* 10/26/26: one of the console's characters by its code (code page 437, 0-255: 0x01 is ☺, 0xF7 ≋), scale x scale
+   pixels to each of its 8x16 */
+void gw_glyph(struct gw *win, int x, int y, unsigned code, unsigned color, int scale);
 void gw_blit(struct gw *win, int x, int y, const unsigned *pixels, int w, int h, int stride);
 void gw_button(struct gw *win, int x, int y, int w, int h, const char *label, unsigned bg, unsigned fg);
 

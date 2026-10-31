@@ -198,6 +198,11 @@ int gw_text_scaled(struct gw *win, int x, int y, const char *utf8, unsigned colo
     return guikit_text_scaled(win->kit, x, y, utf8, color, scale);
 }
 
+/* 10/26/26 (stage C12) */
+void gw_glyph(struct gw *win, int x, int y, unsigned code, unsigned color, int scale) {
+    guikit_glyph(win->kit, x, y, code, color, scale);
+}
+
 int gw_text_width(const char *utf8) {
     return guikit_cells(utf8) * 8;
 }

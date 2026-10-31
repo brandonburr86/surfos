@@ -497,16 +497,23 @@ stood, looking the same. A fault in it costs only its window.
 
 **Character Map** shows the console's 256 characters (code page 437, with SurfOS's ▸ ≋
 …) in a grid of 16 by 16. The code's last hexadecimal digit is along the top, and its
-first down the side.
+first down the side. *10/26/26:* it is a program now, `wcharmap` (`user/wcharmap/`), out of
+the kernel: Apps > Character Map and its tile start it, or bring its window back when it
+runs already, and the window opens where the desktop's Character Map stood, looking the
+same. A fault in it costs only its window.
 
 * **Choosing.** Click a character, or move with the arrows.
   * Home and End go to the start and the end of the row, Page Up and Page Down to the top
     and the bottom of the column.
   * A key typed chooses its own character (A, say).
-  * Edit > Go to code… (Ctrl+L) takes a code (247, three digits at most, or 0xF7), a
-    Unicode code point (U+224B, six hexadecimal digits at most), or a character other
-    than a digit or a space (é, pasted, say). Anything else, and a character the console
-    does not have (€), is refused in the status bar.
+  * Ctrl+L (Go to code) opens a band at the bottom of the window, with the chosen code in
+    it. It takes a code (247, three digits at most, or 0xF7), a Unicode code point
+    (U+224B, six hexadecimal digits at most), or a character other than a digit or a
+    space (é, typed on the serial line, say). The first key typed replaces what was put
+    there; Enter or Go goes there, Esc or Cancel leaves it. Anything else, and a
+    character the console does not have (€), is refused in the status bar. (*10/26/26:*
+    this was the desktop's Edit > Go to code… dialog, which a program's window does not
+    have; a character can no longer be pasted into it.)
 * **What it shows.** The chosen character large, with its code in decimal and hexadecimal,
   its Unicode code point and its UTF-8 bytes.
 * **Copy.** Enter, Ctrl+C, Edit > Copy, a double-click or the Copy button puts the
@@ -515,8 +522,9 @@ first down the side.
     pastes it in the Terminal.
   * The laptop's keyboard types nothing beyond ASCII, so this is how ≋, é, ½ or █ get
     into a note.
-* **Small screens.** On a 640x400 screen the window is shorter (326 pixels) and its cells
-  a pixel lower, so that the whole grid and the Copy button stay above the status bar.
+* **Small screens.** On a 640x400 screen the window is shorter (as tall as the room
+  between the menu bar and the taskbar lets it be) and its cells a pixel lower, so that
+  the whole grid and the Copy button stay above the status bar.
 * **Codes 0-31 and 127.** On the console these are symbols (☺, ♥, ♪, ▸, ← and the like,
   and ⌂), not control characters, and those symbols are what is copied (☺ is U+263A).
   0 is the console's empty cell, and copies nothing.
