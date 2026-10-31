@@ -186,21 +186,21 @@ static int cmd_sleep(int argc, char **argv) {
 static int cmd_ps(int argc, char **argv) { print_tasks(); return CMD_OK; }
 
 static int cmd_kill(int argc, char **argv) {
-    surf_task *t;
+    char name[TASK_NAME_LEN];
     u_long pid;
     char *end;
+    int r;
     if(argc < 2) { printf("    usage: kill <pid>\n"); return CMD_USAGE; }
     pid = strtoul(argv[1], &end, 10);
     if(!argv[1][0] || *end) { printf("    usage: kill <pid>   (a number: ps lists them)\n"); return CMD_USAGE; }
-    t = task_find(pid);
-    if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
-    if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
-    if(t->flags & TF_SYSTEM) {          /* 10/18/26 (audit B59): killed, it left its driver's lock held for good */
-        printf("    '%s' (pid %lu) is one of the kernel's own threads (a driver needs it): not killed\n", t->name, pid);
+    r = task_kill_user(pid, name);
+    if(r == -EINVAL) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
+    if(r && (pid == idle_task->pid || (init_task_ptr && pid == init_task_ptr->pid))) { printf("    not that one\n"); return CMD_FAIL; }
+    if(r) {                             /* 10/18/26 (audit B59): killed, it left its driver's lock held for good */
+        printf("    '%s' (pid %lu) is one of the kernel's own threads (a driver needs it): not killed\n", name, pid);
         return CMD_FAIL;
     }
-    printf("    killing '%s' (pid %lu)\n", t->name, pid);
-    kill_task(t);
+    printf("    killing '%s' (pid %lu)\n", name, pid);
     return CMD_OK;
 }
 

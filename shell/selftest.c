@@ -1741,6 +1741,9 @@ static void test_kill_system(void) {
     printf("        (kill said: %s)\n", out[0] ? out + 4 : "nothing");
     check(r == CMD_FAIL && strstr(out, "not killed") && ks_done && status == 0,
           "kill refuses one of the kernel's own threads (it would leave its lock held): the thread lives on and lets go");
+    /* 10/31/26 (review 14): the call kill and SYS_kill go through, which finds and kills with interrupts off */
+    check(task_kill_user(idle_task->pid, NULL) == -EACCES && task_kill_user(init_task_ptr->pid, NULL) == -EACCES &&
+          task_kill_user(999999, NULL) == -EINVAL, "kill: idle and init are refused, and a pid nobody has");
 }
 
 /* 10/18/26 (audit B52): fdisk killed while its commit writes, flushes and reads back (part_commit(), driver/part.c, holds

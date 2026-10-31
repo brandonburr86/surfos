@@ -418,6 +418,25 @@ void kill_task(surf_task *t) {
     irq_restore(flags);
 }
 
+/* 10/31/26 (review 14): the kill command's and SYS_kill's kill of pid, the call x86's line has had since its L15. Found
+   and killed with interrupts off: a task may end and be collected at any time and its record go to a new task, which a
+   pointer kept across a printf (on a full pty it waits) would then kill. 0; -EINVAL when there is no such task; -EACCES
+   for idle, init and the kernel's own threads (B59). Its name is copied into name (TASK_NAME_LEN bytes) when found. */
+int task_kill_user(u_long pid, char *name) {
+    surf_task *t;
+    u_long flags = irq_save();
+    int r = 0;
+    t = task_find(pid);
+    if(!t) r = -EINVAL;
+    else {
+        if(name) strlcpy(name, t->name, TASK_NAME_LEN);
+        if(t == idle_task || t == init_task_ptr || (t->flags & TF_SYSTEM)) r = -EACCES;
+        else kill_task(t);
+    }
+    irq_restore(flags);
+    return r;
+}
+
 /* 10/6/26: the kill of a pseudo-terminal's hangup (task_kill_tty(), kthread_create_on()). In its own
    code a process ends at once, as with kill_task(); inside a call it is marked and its waits that may
    be cut short are, but no escalation follows: it ends when the call does, however long that takes,

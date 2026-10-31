@@ -180,11 +180,8 @@ static int sys_wait(int pid, int *status, int options) {
 
 /* 10/6/26: the caller killing itself ends when this call does, like any task in a call */
 static int sys_kill(int pid) {
-    surf_task *t = task_find((u_long)pid);
-    if(!t || pid <= 1) return -EINVAL;
-    if(t->flags & TF_SYSTEM) return -EACCES; /* 10/18/26 (audit B59): one of the kernel's own threads (task.h) */
-    kill_task(t);
-    return 0;
+    if(pid <= 1) return -EINVAL;
+    return task_kill_user((u_long)pid, NULL);   /* 10/18/26 (audit B59): -EACCES for one of the kernel's own threads (task.h) */
 }
 
 /**** 10/5/26: calls 22-31 ****/

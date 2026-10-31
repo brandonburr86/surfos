@@ -230,6 +230,8 @@ int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once
                                       (10/17/26: once it is out of a file system) */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
+int task_kill_user(u_long pid, char *name);  /* 10/31/26 (review 14): SYS_kill's and the kill command's: 0, -EINVAL (no such
+                                                task), -EACCES (idle, init, TF_SYSTEM); name: TASK_NAME_LEN bytes or NULL */
 void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the current task */
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
