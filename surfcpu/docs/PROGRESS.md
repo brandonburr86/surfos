@@ -1328,3 +1328,36 @@ ddr-3 built five candidates, every gate passing on each
     word on 4.5 GB for that one run.
 * Physical: nothing has run on the board. gpudiag (1620026) is ready for its test
   ([GPU.md](GPU.md) section 14).
+
+### 2026-10-31: the fourteenth review, and storage done in simulation
+
+* The x86 test-all at a2958c7 and the fourteenth review were running when the session of
+  2026-10-19 stopped, and left no result. Both ran again at d3915ea, whose storage code is
+  a2958c7's:
+  * x86 test-all at O0 and O2: smoke 315 and files 51 each; unittest passes.
+* The review found nothing critical or major
+  ([evidence](evidence/os/bcache-review.txt), round review-14; `docs/CODE-AUDIT.md` B83-B87):
+  * **Minor, fixed (B83):** `kill` kept the task's pointer across its printf, which on a full
+    pty waits, so a kill could land on a new task that had taken a dead one's record. Shown
+    through the unmodified command.
+  * **Minor, open (B84-B86):** a second kill of a kernel thread skips its grace; tcpecho's port
+    stays taken after a kill; and B75's window, about 20 instructions, is still open. Each
+    meets only autonet or tcpecho, kernel threads of the x86 build. Neither exists on
+    SurfCPU, and x86's rule (L15: a user's kill never reaches a kernel thread) closes all
+    three when the two lines merge.
+  * **Cosmetic, open (B87):** four small ones, in the audit.
+
+  It confirmed that the rest holds: no kill stays stuck (4 storms, 1.8 M operations, 1,153
+  kills, every image fsck clean), the EINTR audit holds on both kernels, and 68 threaded and
+  fuzz runs were clean. It could not check the board, Wi-Fi or real USB hardware.
+* B83's fix is 98c8063: `task_kill_user()`, the call x86's line has had since L15, does the
+  look-up and the kill with interrupts off. R14a fails on d3915ea and passes on the fix. The
+  integrator's runs at 98c8063:
+  * x86 test-all at O0 and O2: smoke 315 and files 51 each; unittest passes;
+  * `make check` in 44 minutes: test-os 137/137 at O2 and O0, test_arty 204/204, the SD model
+    164/164, surfemu 18/18, persist 17/17, faults 25/25, kit 24/24, and the netlist checks.
+* The rule set on 2026-10-19 was: if a review finds nothing above cosmetic that can happen in
+  this tree, storage is done in simulation. On SurfCPU that now holds. In this tree's x86
+  build B84-B86 still can happen, until the merge. So storage is done in simulation for
+  SurfCPU, and the file test on the owner's card (m8) and milestone 9's board test come next.
+* Physical: nothing in this round ran on the board.

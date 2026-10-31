@@ -3096,3 +3096,38 @@ host:   the Mac (Apple clang, arm64), -O1 -g -DSURFOS_RISCV32 with and without -
   workloads is its layout's (rvtest's new step and fs/vfs.c's 356 bytes of code move the code after them) and the
   package's load; its own code costs 0.005-0.009 %. kill_escalate()'s rule and task_vfs_begin_slow() do not run in them
   (no kill)
+======================================================================================================================
+Round review-14 (10/31/26): the fourteenth independent review, on fs-fix-13 (d3915ea), and its one fix (audit B83)
+date:   2026-10-31 (local)
+why:    the x86 test-all at a2958c7 and this review were running when the session of 10/19/26 stopped, and left no
+        result. Both ran again at d3915ea, whose storage code is a2958c7's
+x86:    test-all at O0 and O2: smoke 315 and files 51 each; unittest passes
+review: by another agent on an instrumented copy (counters for every kill's path, checks of every count at every call's
+        end and task's death, stuck kills, kill latency, a hook in wait_for(), steps R14a-g of the kernel's self test),
+        with storms of kills, hangups, Ctrl+C, umount, eject, mount, mkfs and fdisk on real tasks, the threaded campaign
+        and the fuzz test under sanitizers, and a reading of the kill rule on both kernels. The storms:
+          4 runs, 168 rounds, 1.8 M operations, 1,153 kills, 1.36 M EINTR. No task killed holding anything, no ghost,
+          no volume left busy, no TI_* mark without a kill; all 4 images fsck clean. One O0 storm reported one flag,
+          requests 1, at a round's end (0 in every later round and the volume unmounted; put down to an orphan's close,
+          not proved). Kill latency: 5,046 within 100 ms, 557 within 2.1 s, 219 within 4.3 s, 42 within 6 s, none over;
+          the longest 5.52 s, within its bound
+        Threaded campaign with interrupts, umount and mkfs: 24 runs, 8 under ASan/UBSan. Fuzz: 44 runs under
+        sanitizers. All clean. Instrumented test-usb 310/310 at O0; rvtest 137/137 at both levels
+findings: nothing critical or major; four minor and four cosmetic, docs/CODE-AUDIT.md's B83-B87:
+  B83    kill kept the task's pointer across its printf (R14a through the unmodified cmd_kill(): the record went to a new
+         task, and that task died, status -1). Reachable. Fixed: task_kill_user(), x86's call since its L15
+  B84-86 a second kill of a kernel thread skips its grace (R14g); tcpecho's port stays taken after a kill (R14d); B75's
+         window, about 20 instructions (R14b, with a hook). Each meets only autonet or tcpecho, two kernel threads of the
+         x86 build. Neither exists on SurfCPU, and x86's L15 refuses a user's kill of a kernel thread, so they close at
+         the merge of the two lines
+  B87    the four cosmetic ones
+the fix, B83: R14a through the same instrumented copy, d3915ea and then 98c8063, both at -O0:
+  before  (R14a: 'kill 7' found the task; it ended and was reaped; its record went to the new task pid 10; the kill came
+          back: that task IS DEAD, status -1)
+          FAIL R14a: `kill <pid>` of a task that ended meanwhile leaves a new task alone
+  after   (R14a: 'kill 7' found the task; it ended and was reaped; its record went to the new task pid 10; the kill came
+          back: that task lives, status 0)
+          ok   R14a: `kill <pid>` of a task that ended meanwhile leaves a new task alone
+not checked by the review: the board, the RTL runs and make -C surfcpu check; Wi-Fi and real USB hardware; B74 and B75 by
+their old hooks (R11 and R12 are gone); windows of a few instructions without a hook; B48's hand-over beyond the self
+test (the storm met none); surfsh and telnet sessions beyond the suites
