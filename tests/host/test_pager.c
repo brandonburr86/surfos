@@ -935,11 +935,10 @@ static void t_scrollback(void) {
     run(SHELL, w_lines, 1, 40);
     check(sim_kept() == 0 && sim_scroll_key(S_PGUP) == 1 && sim_view() == 0 && screen_live(),
           "no memory for a ring: nothing kept, the keys do nothing");
-    reset(0);                                   /* 10/25/26 (the review): the ring is touched whole as it is made */
+    reset(0);                                   /* 10/25/26 (the review): a ring only with its frames and 512 to spare */
     sim_free_frames(127 + 512);                 /* the ring of 80 columns: 524,160 bytes, 128 pages */
     run(SHELL, w_lines, 1, 40);
-    check(sim_kept() == 0 && screen_live(), "too few free frames for the whole ring and 512 to spare: no ring, "
-          "rather than a page fault with no frame later, from whatever prints");
+    check(sim_kept() == 0 && screen_live(), "too few free frames for the whole ring and 512 to spare: no ring");
     reset(0);
     sim_free_frames(128 + 512);
     run(SHELL, w_lines, 1, 40);

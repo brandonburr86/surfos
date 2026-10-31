@@ -237,13 +237,14 @@ static u_char *sb_row(surf_console *con, u_int k) {
     return con->sb + ((con->sb_next + con->sb_cap - con->sb_count + k) % con->sb_cap) * COLUMNS * 2;
 }
 
-/* 10/25/26 (the review): con's ring, made. The heap maps a page when it is first touched, and a page with no frame for
-   it then panics, from whatever prints (an interrupt handler too): so the ring is touched whole as it is made, made
-   only while that many frames and SCROLLBACK_SPARE more are free (else no scrollback, as when kalloc fails), and made
-   only where touching 512 KB may take a while: once the timer runs, never in an interrupt handler nor with interrupts
-   off (a gate run lost timer ticks when it was made with them off); before that, during the boot, anywhere. Elsewhere,
-   and while another writer makes it (sb_making), the row is not kept, and a later scroll makes the ring. Whether con
-   has one now */
+/* 10/25/26 (the review): con's ring, made: only while that many frames and SCROLLBACK_SPARE more are free (else no
+   scrollback, as when kalloc fails), and only where a big kalloc may take a while: once the timer runs, never in an
+   interrupt handler nor with interrupts off; before that, during the boot, anywhere. Elsewhere, and while another
+   writer makes it (sb_making), the row is not kept, and a later scroll makes the ring. Whether con has one now.
+   10/31/26: its pages are not touched here. The heap maps a page when it is first touched, and its growth promises
+   that page's frame (robustness, L2 and L3: mm/kalloc.c, mm/paging.c), so a row that reaches a new page from an
+   interrupt handler cannot run out of frames. Mapping all 128 pages in one go left every later present about 30 times
+   slower under QEMU, the same cells drawn: the serial scenario took 202 s instead of 20 */
 static u_char sb_making[NUM_CONSOLES];
 
 static bool sb_make(surf_console *con) {
@@ -260,7 +261,6 @@ static bool sb_make(surf_console *con) {
     sb_making[i] = 1;
     irq_restore(flags);
     if(pmm_free_frames() >= bytes / 4096 + 1 + SCROLLBACK_SPARE) ring = (u_char *)kalloc(bytes);
-    if(ring) memset(ring, 0, bytes);
     flags = irq_save();
     if(ring) {
         con->sb_cap = cap;

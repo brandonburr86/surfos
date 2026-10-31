@@ -300,9 +300,11 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   timer ticks, so the boot (which starts the timer last) draws at once, and a halt before the
   first tick or a panic during the boot shows (`bootpanic`, a test word, checks it); a panic
   owes nothing and ends the batching; with interrupts off or in an interrupt handler a
-  present is the thread's, never a whole screen drawn there. The scrollback's ring is touched
-  whole when it is made (only with that many frames and 512 more free), never written during
-  a panic, and a view's key and output are kept apart with interrupts off. A kernel thread's
+  present is the thread's, never a whole screen drawn there. The scrollback's ring is made
+  only with that many frames and 512 more free, its pages mapped as rows reach them (the heap's
+  growth has promised their frames; 10/31/26: mapping them all in one go made every later
+  present about 30 times slower under QEMU), it is never written during a panic, and a view's
+  key and output are kept apart with interrupts off. A kernel thread's
   whole line (`kprintf()`) goes out with preemption on, the console held for it
   (`line_owner`): others wait for its end where they may wait.
   **10/25/26** (track A, A6; audit C9): **scrollback**. F1-F4 on a framebuffer keep the rows
