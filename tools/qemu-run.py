@@ -4805,8 +4805,15 @@ def rx_reset_check(q):
 def rx_busy_check(q):
     """rx on a port another program listens on (nettest echo): in use, status 1, nothing left behind; the host's
     connection to nettest then lets it end"""
+    start = len(q.transcript)
     q.send(f'nettest echo {RX_PORT} 1 &\n')
     ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    # 10/31/26: "started" and the prompt come before nettest has listened: rx could take the port first
+    listening = f'nettest: listening on port {RX_PORT}'.encode()
+    deadline = time.time() + 10
+    while ok and listening not in q.transcript[start:] and time.time() < deadline:
+        q.pump(0.1)
+    ok = ok and listening in q.transcript[start:]
     q.send(f'run rx {RX_PORT} /hda1/BUSY.BIN\n')
     ok = q.expect(f'rx: port {RX_PORT} is in use', 10) and q.expect('exit status 1', 10) and q.expect(PROMPT, 10) and ok
     q.send('ls /hda1/BUSY.BIN.part\n')
