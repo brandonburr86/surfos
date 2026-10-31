@@ -162,7 +162,14 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         d.check('guiapps boot reaches the shell', ok)
         if not ok:
             return results
-        heap_before = kernel_heap_used(vm, PROMPT)  # 10/25/26 (B1): the desktop gives back all it took
+        # 10/25/26 (B1): the desktop gives back all it took. 10/31/26: counted from two readings that agree: at -O2 the
+        # first prompt can come before the boot's last startup work is done, the heap 16-40 KB above where it settles
+        heap_before = kernel_heap_used(vm, PROMPT)
+        for _ in range(8):
+            again = kernel_heap_used(vm, PROMPT)
+            if again == heap_before:
+                break
+            heap_before = again
         vm.send('gui\n')
         d.require('the desktop draws its menu bar and the suite\'s tiles',
                   d.vm.wait_screen(lambda s: (s.w, s.h) == (1920, 1080) and d.pixel(s, 0, 0) == PAPER and
