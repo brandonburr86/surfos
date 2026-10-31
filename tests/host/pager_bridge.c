@@ -50,16 +50,34 @@ void serial_console_putc(int c) {           /* driver/serial.c's rules */
 void serial_console_clear(void) { serial_puts("\033[2J\033[H"); }
 
 /* 10/6/26: a stream console's bytes for its master (kernel/pty.c's pty_out()): recorded, for any
-   pseudo-terminal, as if the master read them at once */
+   pseudo-terminal, as if the master read them at once. 10/26/26: or the master's buffer full
+   (sim_stream_full()) as when a telnet client stops reading: a writer that may wait waits for room,
+   one that may not loses its bytes, and the console's own sequences (PTY_OUT_URGENT) still go in */
 static char stream_rec[1 << 16];
-static int stream_len, stream_drop;
+static int stream_len, stream_drop, stream_full;
+static wait_queue_t stream_room;
 int pty_out(surf_console *con, const char *s, u_int n, int how) {
     (void)con;
-    (void)how;
+    while(stream_full && !(how & PTY_OUT_URGENT)) {
+        if(!(how & PTY_OUT_WAIT)) return 0;
+        wait_prepare_intr(&stream_room);
+        yield();
+    }
     if(stream_drop || stream_len + (int)n > (int)sizeof(stream_rec)) return 0;   /* no room at all: dropped */
     memcpy(stream_rec + stream_len, s, n);
     stream_len += (int)n;
     return 1;
+}
+/* 10/26/26: kernel/pty.c's room for a writer that may wait (none while full), and its wait for it */
+u_int pty_room(surf_console *con) { (void)con; return stream_full ? 0 : 8192; }
+int pty_wait_room(surf_console *con, u_int n) {
+    (void)con;
+    (void)n;
+    while(stream_full) {
+        wait_prepare_intr(&stream_room);
+        yield();
+    }
+    return 0;
 }
 void pty_task_gone(struct surf_task *task) { (void)task; }
 static int poll_wakes;                  /* 10/6/26: poll_wake() calls, for the test */
@@ -145,6 +163,23 @@ void yield(void) {
     emu_block(id_of(curTask));
 }
 
+/* 10/26/26 (the review of the gap fix): a tick at a chosen point. sim_preempt_irq(task, n): that task yields to the
+   test at its n-th irq_save() from now that finds interrupts on (pager_shim/surfos/irq.h), before they go off,
+   as a timer interrupt there would hand the CPU to another task */
+int sim_preempt_armed;
+static int preempt_task = -1, preempt_left;
+void sim_preempt_check(void) {
+    if(id_of(curTask) != preempt_task || --preempt_left > 0) return;
+    sim_preempt_armed = 0;
+    preempt_task = -1;
+    yield();
+}
+void sim_preempt_irq(int task, int n) {
+    preempt_task = task;
+    preempt_left = n;
+    sim_preempt_armed = 1;
+}
+
 /**** the test's view ****/
 
 /* fresh consoles and terminals, and the family: init's children are the shell and the usb
@@ -177,6 +212,10 @@ void sim_init(int ascii) {
     serial_len = 0;
     stream_len = 0;
     stream_drop = 0;
+    stream_full = 0;
+    wq_init(&stream_room);
+    sim_preempt_armed = 0;
+    preempt_task = -1;
     term = 0;
     term_esc = 0;
 }
@@ -202,6 +241,10 @@ int sim_stream(char *out, int max) {
 }
 
 void sim_stream_drop(int on) { stream_drop = on; }   /* the master's buffer full: pty_out() drops everything */
+void sim_stream_full(int on) {                       /* 10/26/26: the master's buffer full; off: it read, room */
+    stream_full = on;
+    if(!on) wake_up_all(&stream_room);
+}
 void sim_stream_size(int cols, int rows) { console_stream_resize(&conArray[term], (u_int)cols, (u_int)rows); }
 void sim_stream_pos(int *x, int *wrap) { *x = (int)conArray[term].loc.x; *wrap = conArray[term].wrap; }
 void sim_term_input(int c) { tty_term_input(&ttys[term], &term_esc, (u_char)c); }

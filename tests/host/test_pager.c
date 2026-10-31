@@ -13,7 +13,8 @@
    secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
    serial line or a pty's stream, the history, or stays in the input queue. 10/25/26: a job in
    the background is not paged with its shell's command; TAB on the screen and the serial line,
-   and the pager at a row that starts with one. */
+   and the pager at a row that starts with one. 10/26/26: a writer waiting for room in a pty's full
+   buffer has changed nothing on its console, so the shell's question never lands in its line. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -59,6 +60,8 @@ void sim_term(int n);
 int sim_stream(char *out, int max);
 void sim_stream_size(int cols, int rows);
 void sim_stream_drop(int on);
+void sim_stream_full(int on);
+void sim_preempt_irq(int task, int n);
 void sim_stream_pos(int *x, int *wrap);
 void sim_term_input(int c);
 int sim_term_queues(int c);
@@ -392,15 +395,43 @@ static void t_capture(void) {
           "captured output is never paged, and never shown");
 }
 
+static void w_irq_line(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_set_in_irq(1);
+    sim_kprintf_line("an interrupt handler says hi\n");
+    sim_set_in_irq(0);
+}
+
 static void t_interrupt_rows(void) {
     int rows, drop, a, o;
     reset(0);
     paged_lines(1, 20);
-    sim_set_in_irq(1);
-    sim_kprintf_line("an interrupt handler says hi\n");
-    sim_set_in_irq(0);
+    run(USB, w_irq_line, 0, 0);             /* 10/26/26: come in on a task the pager does not cover */
     page_state(&rows, &drop, &a, &o);
-    check(rows == 21 && a < 0, "an interrupt handler's line takes a row of the screenful and never waits");
+    check(rows == 21 && a < 0,
+          "an interrupt handler's line takes a row of the screenful and never waits, whichever task it came in on");
+}
+
+/* 10/26/26 (the telnet stalled-client check's "never filled"): on the screen too, the rows that a job in the
+   background or a kernel thread starts count toward no screenful; the command asks after 24 rows of its own */
+static void t_background_rows(void) {
+    char r[256];
+    int rows, drop, a, o, st;
+    reset(0);
+    paged_lines(1, 20);
+    run(BG, w_lines, 101, 110);
+    run(USB, w_lines, 201, 210);
+    page_state(&rows, &drop, &a, &o);
+    check(rows == 20 && a < 0, "a job in the background and a kernel thread print 20 rows: none of them counts");
+    st = run(CHILD, w_lines, 21, 30);
+    sim_row(24, r, NULL);
+    check(st == BLOCKED && asker() == CHILD && !strncmp(r, "--More--", 8),
+          "the command asks after 4 more rows of its own");
+    row(23, r);
+    check(!strcmp(r, "line 024"), "its 24th row just above the question");
+    sim_input('q');
+    resume(CHILD);
 }
 
 static void t_owner(void) {
@@ -856,6 +887,118 @@ static void t_stream_wrap_ask(void) {
           "at 40 columns the question is cut to 39");
 }
 
+/* 10/26/26 (the telnet stalled-client check's lost line): with the master's buffer full, a job in the background
+   waits to print the newline that ends its line. Waiting, it has changed nothing on the console yet: a command
+   printing behind a screenful of its own rows finds the job's row unfinished and asks nothing there. Its question
+   used to land in the middle of the job's line ("job 1\033[7m--More--"), with the newline after it, and the CR ESC[K
+   that took it away cleared the job's next row instead. Once there is room the job's newline goes first, then the
+   command asks at the start of a row of its own. */
+static void t_stream_full_row(void) {
+    int st;
+    on_pty(80, 10, 1);                              /* the shell pages its command line */
+    run(CHILD, w_lines, 1, 9);                      /* the command: 9 rows; its next row asks first */
+    say(BG, "job 1");                               /* a job in the background starts a line, unpaged */
+    stream_now();
+    sim_stream_full(1);                             /* the client stopped reading */
+    say_text = "\n";
+    st = run(BG, w_say, 0, 0);
+    check(st == BLOCKED && stream_is(""), "the master's buffer full: the job waits to print its newline");
+    st = run(CHILD, w_lines, 10, 10);
+    check(st == BLOCKED && asker() < 0 && stream_is(""),
+          "the command waits for room too, and asks nothing: the job's row has not ended");
+    sim_stream_full(0);                             /* the master read: room */
+    st = resume(BG);
+    check(st == DONE && stream_is("\n"), "room: the job's newline goes first");
+    st = resume(CHILD);
+    check(st == BLOCKED && asker() == CHILD && stream_is(QUESTION),
+          "then the command's question, at the start of a row of its own");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && stream_is(UNASKED "line 010\n"), "and its line where the question was");
+}
+
+/* 10/26/26 (the telnet stalled-client check's "never filled"): a job's rows in the background fill no screenful of
+   its shell's. The shell, paging its command line, used to stop at --More-- when it printed "[1] started" behind a
+   screenful of the job's rows, and waited for a key nobody would type while the job printed on around the
+   question. The command's own output is paged after a screenful of its own rows. */
+static void t_stream_background_rows(void) {
+    int st;
+    on_pty(80, 10, 1);
+    run(BG, w_lines, 1, 30);                        /* three screenfuls of the job's rows */
+    stream_now();
+    say_text = "[1] started\n";
+    st = run(SHELL, w_say, 0, 0);
+    check(st == DONE && asker() < 0 && stream_is("[1] started\n"),
+          "the shell prints its line behind the job's rows and asks nothing: none of them were its own");
+    st = run(CHILD, w_lines, 1, 30);
+    check(st == BLOCKED && asker() == CHILD && stream_is(lines_text("", 1, 8, QUESTION)),
+          "its command is paged after a screenful of the shell's and its own rows");
+    sim_input('q');
+    st = resume(CHILD);
+    check(st == DONE, "q: the rest is dropped");
+}
+
+/* 10/26/26 (the review of the gap fix): a tick between the pager's look at a job's byte and the step that prints
+   it. A command asks meanwhile, at the row's start; the job's byte then takes the question away in its own step
+   before it goes in, instead of landing behind the question for the next CR ESC[K to erase */
+static void t_stream_question_tick(void) {
+    int st;
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 9);                      /* the command: its next row asks first */
+    stream_now();
+    sim_preempt_irq(BG, 2);                         /* the job, past page_hold()'s look, before stream_put()'s step */
+    say_text = "job 1\n";
+    st = run(BG, w_say, 0, 0);
+    check(st == BLOCKED && stream_is(""), "a tick: the job stops before its first byte goes in");
+    st = run(CHILD, w_lines, 10, 10);
+    check(st == BLOCKED && asker() == CHILD && stream_is(QUESTION), "meanwhile the command asks, at the row's start");
+    st = resume(BG);
+    check(st == DONE && stream_is(UNASKED "job 1\n" QUESTION),
+          "the job's byte takes the question away in its own step; the question comes back after its newline");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && stream_is(UNASKED "line 010\n"), "and the command goes on where it was");
+}
+
+/* 10/26/26 (the review of the gap fix): between a command's look at the row and its question, a job opens an escape
+   sequence there (ESC leaves the row's start as it was), or a program of the command's asks first. No question goes
+   into the job's sequence, and none is asked twice */
+static void t_stream_ask_again(void) {
+    int st;
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 9);
+    stream_now();
+    sim_preempt_irq(CHILD, 2);                      /* the command, past page_hold()'s look, before page_ask()'s step */
+    st = run(CHILD, w_lines, 10, 10);
+    check(st == BLOCKED && asker() < 0 && stream_is(""), "a tick before the command's question");
+    say(BG, "\033");                                /* the job opens a sequence at the row's start */
+    stream_now();
+    st = resume(CHILD);
+    check(st == BLOCKED && asker() == CHILD && stream_is("l" QUESTION),
+          "no question inside the job's sequence: the command's byte ends it (one parser), then it asks at the row start");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && stream_is(UNASKED "ine 010\n"), "a key: the command goes on");
+
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 9);
+    stream_now();
+    sim_preempt_irq(CHILD, 2);
+    st = run(CHILD, w_lines, 10, 10);
+    check(st == BLOCKED && asker() < 0, "again a tick before the command's question");
+    say_text = "grand\n";
+    st = run(GRAND, w_say, 0, 0);                   /* a program of the command's asks first */
+    check(st == BLOCKED && asker() == GRAND && stream_is(QUESTION), "its program asks first");
+    st = resume(CHILD);
+    check(st == BLOCKED && asker() == GRAND && stream_is(""),
+          "the command asks no second question and prints nothing through the program's: it waits for the answer");
+    sim_input(' ');
+    st = resume(GRAND);
+    check(st == DONE && stream_is(UNASKED "grand\n"), "a key: the program goes on");
+    st = resume(CHILD);
+    check(st == DONE && stream_is("line 010\n"), "and then the command, its line whole");
+}
+
 static void t_stream_resize(void) {
     int st;
     on_pty(80, 10, 1);
@@ -1258,6 +1401,7 @@ int main(void) {
     t_reader_first();
     t_capture();
     t_interrupt_rows();
+    t_background_rows();
     t_owner();
     t_utf8_writers();
     t_question_then_reader();
@@ -1276,6 +1420,10 @@ int main(void) {
     t_stream_columns();
     t_tab();
     t_stream_wrap_ask();
+    t_stream_full_row();
+    t_stream_background_rows();
+    t_stream_question_tick();
+    t_stream_ask_again();
     t_stream_resize();
     t_stream_colour();
     t_stream_backspace();

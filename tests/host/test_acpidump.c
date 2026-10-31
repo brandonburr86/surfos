@@ -133,6 +133,15 @@ static void setup(u32 fadt_length, u64 extended, u32 legacy) {
     exporting = true;
 }
 
+/* 10/26/26 (L21b): the FADT's event and GPE blocks for the next s5_setup(), as the tests set them: the legacy ports
+   and lengths, the extended forms of PM1a's event block and of GPE0 (space, address), and the sleep status register */
+static struct {
+    u32 pm1a, pm1b, gpe0, gpe1;
+    u8 pm1_len, gpe0_len, gpe1_len;
+    u8 x_pm1a_space, x_gpe0_space, sts_space;
+    u64 x_pm1a, x_gpe0, sts;
+} blocks;
+
 /* 10/25/26 (robustness, B4; the review of B4): soft off's values from a FADT and a DSDT built here (the FADT's other
    fields zero, so nothing but what is set reads as a register): the PM1 control blocks, SMI_CMD, the flags (bit 20:
    hardware-reduced) and the sleep control register; the DSDT is the header and aml */
@@ -160,6 +169,19 @@ static void s5_setup(u32 flags, u16 pm1a, u16 pm1b, const u8 *aml, u32 aml_len, 
     put32(regions[3].data + 112, flags);
     regions[3].data[244] = sleep_space;                 /* SLEEP_CONTROL_REG: space, width, offset, access, address */
     put64(regions[3].data + 248, sleep_addr);
+    put32(regions[3].data + 56, blocks.pm1a);           /* 10/26/26 (L21b): PM1a/PM1b_EVT_BLK, GPE0/GPE1_BLK */
+    put32(regions[3].data + 60, blocks.pm1b);
+    put32(regions[3].data + 80, blocks.gpe0);
+    put32(regions[3].data + 84, blocks.gpe1);
+    regions[3].data[88] = blocks.pm1_len;               /* PM1_EVT_LEN, GPE0_BLK_LEN, GPE1_BLK_LEN */
+    regions[3].data[92] = blocks.gpe0_len;
+    regions[3].data[93] = blocks.gpe1_len;
+    regions[3].data[148] = blocks.x_pm1a_space;         /* X_PM1a_EVT_BLK, X_GPE0_BLK, SLEEP_STATUS_REG */
+    put64(regions[3].data + 152, blocks.x_pm1a);
+    regions[3].data[220] = blocks.x_gpe0_space;
+    put64(regions[3].data + 224, blocks.x_gpe0);
+    regions[3].data[256] = blocks.sts_space;
+    put64(regions[3].data + 260, blocks.sts);
     checksum(regions[3].data, 268);
     put64(regions[0].data + 36, regions[3].address);
     put64(regions[0].data + 44, regions[2].address);
@@ -204,6 +226,113 @@ static void test_s5(void) {
     expect_s5(false, 0, 0, "can write", "a sleep control register past port 0xFFFF is refused (it would be port 0x60)");
     s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 0, 0xfed01000);
     expect_s5(true, 7, 7, NULL, "hardware-reduced ACPI: the sleep control register in memory");
+}
+
+/* 10/26/26 (L21b): soft off's preparation, as ACPICA's: the writes acpi_s5_clear() hands out, in order */
+static struct { unsigned n; struct { u8 space, bits; u64 addr; u16 value; } w[600]; } writes;
+static void record(void *arg, u8 space, u64 addr, u8 bits, u16 value) {
+    (void)arg;
+    if(writes.n < 600) {
+        writes.w[writes.n].space = space;
+        writes.w[writes.n].bits = bits;
+        writes.w[writes.n].addr = addr;
+        writes.w[writes.n].value = value;
+    }
+    writes.n++;
+}
+
+/* acpi_s5_clear() after s5_setup(): its count is the writes made; write k is (space, addr, bits, value) */
+static unsigned clear_writes(void) {
+    unsigned n;
+    memset(&writes, 0, sizeof(writes));
+    n = acpi_s5_clear(record, NULL);
+    check(n == writes.n, "acpi_s5_clear()'s count is the writes it made");
+    return n;
+}
+static bool wrote(unsigned k, u8 space, u64 addr, u8 bits, u16 value) {
+    return k < writes.n && writes.w[k].space == space && writes.w[k].addr == addr && writes.w[k].bits == bits &&
+           writes.w[k].value == value;
+}
+/* the writes from k on: each byte of n from port, 8 bits, value */
+static bool wrote_bytes(unsigned k, u16 port, unsigned n, u16 value) {
+    unsigned i;
+    for(i = 0; i < n; i++) if(!wrote(k + i, 1, port + i, 8, value)) return false;
+    return true;
+}
+
+static void test_s5_clear(void) {
+    static const u8 intel[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x08, 0x04, 0x0a, 0x07, 0x0a, 0x07, 0x00, 0x00 };
+    unsigned n;
+    /* an Intel PCH's: PM1a's event block at PMBASE 0x1800, GPE0's 32 bytes at 0x1860 (16 status, then 16 enables) */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x1800; blocks.pm1_len = 4;
+    blocks.gpe0 = 0x1860; blocks.gpe0_len = 32;
+    s5_setup(0, 0x1804, 0, intel, sizeof(intel), 0, 0);
+    check(acpi.pm1a_evt == 0x1800 && !acpi.pm1b_evt && acpi.gpe_blk[0] == 0x1860 && acpi.gpe_len[0] == 32 &&
+          !acpi.gpe_blk[1], "the FADT's PM1a event block and GPE0 block are read");
+    n = clear_writes();
+    check(n == 33 && wrote_bytes(0, 0x1870, 16, 0) && wrote(16, 1, 0x1800, 16, ACPI_PM1_STS_FIXED) &&
+          wrote_bytes(17, 0x1860, 16, 0xff),
+          "Intel's: GPE0's 16 enable bytes zeroed, then the PM1 status cleared (0xC731), then the 16 status bytes");
+    check(ACPI_PM1_STS_FIXED == 0xC731 && (ACPI_PM1_STS_FIXED & 0x8000), "the fixed status bits written include WAK_STS");
+    /* QEMU's PIIX4: PM1a's event block at 0x600, GPE0's 4 bytes at 0xafe0 */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x600; blocks.pm1_len = 4;
+    blocks.gpe0 = 0xafe0; blocks.gpe0_len = 4;
+    s5_setup(0, 0x604, 0, intel, sizeof(intel), 0, 0);
+    n = clear_writes();
+    check(n == 5 && wrote_bytes(0, 0xafe2, 2, 0) && wrote(2, 1, 0x600, 16, ACPI_PM1_STS_FIXED) &&
+          wrote_bytes(3, 0xafe0, 2, 0xff), "QEMU's PIIX4: 2 enable bytes, the PM1 status, 2 status bytes");
+    /* PM1b and GPE1 too: both GPE blocks' enables first, both PM1 statuses, then both GPE blocks' status */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x400; blocks.pm1b = 0x500; blocks.pm1_len = 4;
+    blocks.gpe0 = 0x420; blocks.gpe0_len = 8;
+    blocks.gpe1 = 0x430; blocks.gpe1_len = 4;
+    s5_setup(0, 0x404, 0x504, intel, sizeof(intel), 0, 0);
+    n = clear_writes();
+    check(n == 14 && wrote_bytes(0, 0x424, 4, 0) && wrote_bytes(4, 0x432, 2, 0) &&
+          wrote(6, 1, 0x400, 16, ACPI_PM1_STS_FIXED) && wrote(7, 1, 0x500, 16, ACPI_PM1_STS_FIXED) &&
+          wrote_bytes(8, 0x420, 4, 0xff) && wrote_bytes(12, 0x430, 2, 0xff),
+          "with PM1b and GPE1: the enables of both blocks, both PM1 statuses, then both blocks' status");
+    /* refused: a block running past port 0xFFFF, an odd GPE length, PM1_EVT_LEN under 4 */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0xfffe; blocks.pm1_len = 4;
+    blocks.gpe0 = 0xfff8; blocks.gpe0_len = 16;
+    blocks.gpe1 = 0x430; blocks.gpe1_len = 5;
+    s5_setup(0, 0x404, 0, intel, sizeof(intel), 0, 0);
+    check(!acpi.pm1a_evt && !acpi.gpe_blk[0] && !acpi.gpe_blk[1] && clear_writes() == 0,
+          "blocks past port 0xFFFF and an odd GPE length are refused: nothing written");
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x400; blocks.pm1_len = 2;
+    s5_setup(0, 0x404, 0, intel, sizeof(intel), 0, 0);
+    check(!acpi.pm1a_evt && clear_writes() == 0, "PM1_EVT_LEN under 4: no PM1 status write");
+    /* the extended forms: X_GPE0_BLK naming a port is taken where GPE0_BLK is 0; X_PM1a_EVT_BLK in memory is not,
+       PM1a_EVT_BLK stays; an extended block past 0xFFFF leaves the legacy one */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x1800; blocks.pm1_len = 4;
+    blocks.x_pm1a_space = 0; blocks.x_pm1a = 0xfed00000;
+    blocks.gpe0_len = 32; blocks.x_gpe0_space = 1; blocks.x_gpe0 = 0x1860;
+    s5_setup(0, 0x1804, 0, intel, sizeof(intel), 0, 0);
+    check(acpi.pm1a_evt == 0x1800 && acpi.gpe_blk[0] == 0x1860, "X_GPE0_BLK at a port is used; X_PM1a_EVT_BLK in memory is not");
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.gpe0 = 0x1860; blocks.gpe0_len = 32; blocks.x_gpe0_space = 1; blocks.x_gpe0 = 0xfff0;
+    s5_setup(0, 0x1804, 0, intel, sizeof(intel), 0, 0);
+    check(acpi.gpe_blk[0] == 0x1860, "an X_GPE0_BLK running past 0xFFFF leaves GPE0_BLK");
+    /* hardware-reduced ACPI: WAK_STS in the sleep status register, and nothing of the PM1 or GPE blocks */
+    memset(&blocks, 0, sizeof(blocks));
+    blocks.pm1a = 0x400; blocks.pm1_len = 4; blocks.gpe0 = 0x420; blocks.gpe0_len = 8;
+    blocks.sts_space = 1; blocks.sts = 0x405;
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 1, 0x404);
+    check(clear_writes() == 1 && wrote(0, 1, 0x405, 8, ACPI_SLEEP_WAK_STS),
+          "hardware-reduced ACPI: WAK_STS (0x80) in the sleep status register at a port, and nothing else");
+    blocks.sts_space = 0; blocks.sts = 0xfed01004;
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 0, 0xfed01000);
+    check(clear_writes() == 1 && wrote(0, 0, 0xfed01004, 8, ACPI_SLEEP_WAK_STS),
+          "hardware-reduced ACPI: the sleep status register in memory");
+    blocks.sts_space = 1; blocks.sts = 0x10405;
+    s5_setup(1u << 20, 0, 0, intel, sizeof(intel), 1, 0x404);
+    check(clear_writes() == 0, "a sleep status register past port 0xFFFF is refused");
+    memset(&blocks, 0, sizeof(blocks));
 }
 
 static void expect_copy(const char *signature, unsigned instance, int wanted, u32 size) {
@@ -327,6 +456,7 @@ int main(void) {
     char *second[] = { "acpidump", "DSDT", "1" };
 
     test_s5();
+    test_s5_clear();
     setup(148, 0x200000, 0xdead0000);
     check(acpi.dsdt_addr == 0x200000, "X_DSDT wins over the legacy address");
     expect_copy("DSDT", 0, ACPI_COPY_OK, 64);

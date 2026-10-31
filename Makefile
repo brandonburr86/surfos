@@ -455,7 +455,7 @@ $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp
 
 # the console and its pager (10/6/26): the real console.c, tty.c and cp437.c on the host, with pager_bridge.c for
 # the rest of the kernel and pager_shim/ for port I/O and the interrupt flag; the test runs every task as a thread
-PAGER_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+PAGER_FLAGS = -DSIM_PREEMPT -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
 PAGER_OBJ   = $(BUILD)/host/pager/kernel/console.o $(BUILD)/host/pager/kernel/tty.o $(BUILD)/host/pager/driver/cp437.o \
               $(BUILD)/host/pager/tests/host/pager_bridge.o
 $(BUILD)/host/pager/%.o: %.c tests/host/surf_names.h

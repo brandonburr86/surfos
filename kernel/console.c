@@ -58,7 +58,10 @@ u_int conColumns = 80, conLines = 25;
 
 static void page_show(surf_console *con);       /* 10/6/26: the pager's question (below) */
 static void page_unshow(surf_console *con);
+static int page_hold(surf_console *con, TEXTCOLOR color, u_char b);    /* 10/26/26: for stream_byte() */
+static void stream_reshow(surf_console *con);
 static int page_descends(struct surf_task *t, struct surf_task *owner);
+static void page_row(surf_console *con);
 static void stream_clear(surf_console *con);    /* 10/6/26: stream consoles (below) */
 static void stream_csi(surf_console *con, int final);
 static int stream_how(void);
@@ -545,7 +548,10 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
         none of them.
     A writer that may wait (a task with interrupts on, outside KCRIT_ENTER, holding no
     mutex, its call not cut short) waits while the master's buffer is full; the bytes of
-    anyone else are dropped then. The serial mirror, F1-F4 and the active console never
+    anyone else are dropped then. 10/26/26: it waits before anything is decided for its
+    byte, so what the console has counted is what the stream has (stream_put()). A writer
+    that may not wait (a mutex holder, the echo of a master's write with interrupts off, a
+    call cut short) still counts a byte that pty_out() then drops. The serial mirror, F1-F4 and the active console never
     involve a stream console.
 */
 #define STREAM_BASE WHITE_TXT           /* the console's own colour: the far terminal's default */
@@ -582,11 +588,12 @@ static u_int stream_sgr(TEXTCOLOR a, char *out) {
     return (u_int)(p - out);
 }
 
-/* a row starts on the far terminal */
+/* a row starts on the far terminal. 10/26/26: a row of the pager's screenful only when the writer is one the pager
+   covers (page_row()) */
 static void stream_row(surf_console *con) {
     con->wrap = 0;
     con->loc.x = 0;
-    con->page_rows++;
+    page_row(con);
     con->page_fresh = 1;
     con->at_home = 0;
 }
@@ -659,14 +666,31 @@ static u_int stream_lit(char *out, const char *s) {
     return n;
 }
 
-/* one byte printed on a stream console (kputch()) */
-static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
-    char out[24];
+#define STREAM_OUT_MAX 24               /* the most one byte becomes in the stream (an SGR sequence, then ESC[A ESC[999C ESC[K) */
+
+/* one byte printed on a stream console (stream_byte()): 1, or 0 when a writer that may wait finds no room in the
+   master's buffer for the most a byte may become. 10/26/26 (the telnet stalled-client check's lost line): then
+   nothing has changed, and it waits for room (pty_wait_room()) and comes again: the byte, what it does to the
+   console's column, rows and parser, and its place in the buffer are all one step, interrupts off. A writer
+   that waited holding a newline the console had already counted let another task find a row start that the
+   stream did not have yet: the pager's question (PTY_OUT_URGENT, which takes the room kept for it) went into
+   the middle of a program's line, and the CR ESC[K that took it away cleared the next row instead. wait 0: no
+   waiting at all (a writer whose call was cut short), its bytes dropped as pty_out() drops them. */
+static int stream_put(surf_console *con, TEXTCOLOR color, u_char b, int wait) {
+    char out[STREAM_OUT_MAX];
     u_int n = 0, sgr = 0;
-    int how = stream_how();
+    int how = wait ? stream_how() : 0;                 /* before irq_save(): it asks whether interrupts are on */
+    u_long flags = irq_save();
+    if((how & PTY_OUT_WAIT) && pty_room(con) < sizeof(out)) {
+        irq_restore(flags);
+        return 0;
+    }
+    how &= ~PTY_OUT_WAIT;                              /* there is room: nothing below waits, interrupts off */
+    if(con->page_shown) page_unshow(con);              /* a question gives way, in this same step (PTY_OUT_URGENT) */
     if(con->esc && ansi_byte(con, color, b)) {         /* part of a sequence: as it is; the parser follows */
         pty_out(con, (const char *)&b, 1, how);
-        return;
+        irq_restore(flags);
+        return 1;
     }
     if((b == 0x1B || (b >= 0x20 && b != 0x7F && (b & 0xC0) != 0x80)) && color != con->shown &&
        !con->fg && !con->bg && !con->bold && !con->inverse)
@@ -693,7 +717,8 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
             n += stream_lit(out + n, "\b \b");
             con->loc.x--;
         } else if(con->at_home) {
-            return;                                     /* the top left: nothing, as on the screen */
+            irq_restore(flags);
+            return 1;                                   /* the top left: nothing, as on the screen */
         } else {
             n += stream_lit(out + n, "\033[A\033[999C\033[K");
             con->loc.x = con->cols - 1;
@@ -709,7 +734,10 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         out[n++] = '\t';
         break;
     default:
-        if(b < 0x20 || b == 0x7F) return;               /* other control characters: nothing, as on the screen */
+        if(b < 0x20 || b == 0x7F) {                     /* other control characters: nothing, as on the screen */
+            irq_restore(flags);
+            return 1;
+        }
         if((b & 0xC0) != 0x80) {                        /* a character (ASCII, or a UTF-8 one's first byte): a column */
             if(con->wrap) stream_row(con);
             con->page_fresh = 0;
@@ -721,6 +749,24 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         break;
     }
     if(pty_out(con, out, n, how) && sgr) con->shown = color;
+    if(b == '\n') stream_reshow(con);                   /* a waiting question back on the row this newline began */
+    irq_restore(flags);
+    return 1;
+}
+
+/* 10/26/26: one byte on a stream console, from kputch(): the pager's look at it (page_hold()), then the byte
+   (stream_put(), which also takes a question away first and brings it back after a newline, in its one step); a
+   writer that found no room waits for it and does it all again, since another task may have printed or asked
+   meanwhile. A wait cut short (a kill, the hangup, Ctrl+C) drops the byte. */
+static void stream_byte(surf_console *con, TEXTCOLOR color, u_char b) {
+    for(;;) {
+        if(con->page_owner && page_hold(con, color, b)) return;
+        if(stream_put(con, color, b, 1)) return;
+        if(pty_wait_room(con, STREAM_OUT_MAX) < 0) {
+            stream_put(con, color, b, 0);
+            return;
+        }
+    }
 }
 
 /* a stream console's new size (PTY_SETSIZE, kernel/pty.c): the cursor stays in its row, and a
@@ -777,12 +823,12 @@ static struct utf8_dec *writer_utf(void) {
     return (curTask && !in_interrupt()) ? &curTask->utf : &shared_utf;
 }
 
-/* the next line, scrolling at the bottom. 10/6/26: a row starts, for the pager */
+/* the next line, scrolling at the bottom. 10/6/26: a row starts, for the pager (page_row()) */
 static void newline(surf_console *con) {
     u_int y = con->loc.y + 1;
     con->wrap = 0;
     con->loc.x = 0;
-    con->page_rows++;
+    page_row(con);
     con->page_fresh = 1;
     if(y >= LINES) {                    /* 10/10/26: loc.y is never one row below the last, not even */
         sscroll(con);                   /* between the increment and the scroll (cell_at() above) */
@@ -976,6 +1022,16 @@ static int page_descends(struct surf_task *t, struct surf_task *owner) {
     return 0;
 }
 
+/* 10/26/26 (the telnet stalled-client check): a row toward the pager's screenful, when paging is on, only from a
+   writer it covers, or from an interrupt handler (whichever task it came in on: its lines are few, and it never
+   waits). A job in the background printed rows that counted, so its shell, printing "[1] started" behind a
+   screenful of them, stopped at --More-- for a key nobody would type (the client of a session that runs the job,
+   or a user who never asked to page the job), while the job printed on around the question; a kernel thread's
+   rows count toward none either. Interrupts may be off */
+static void page_row(surf_console *con) {
+    if(!con->page_owner || in_interrupt() || console_paging(con)) con->page_rows++;
+}
+
 /* Is the current task the owner, or descended from it (its parent's parent, ...) through the
    programs of its foreground? With interrupts off: a parent that ends hands its children to
    init meanwhile. */
@@ -1000,16 +1056,27 @@ static int page_may_wait(struct tty *t) {
 static void page_ask(surf_console *con, struct tty *t) {
     u_long flags;
     int key, resized;
-    if(con->wrap) {
-        if(con->stream) {                               /* 10/6/26: the far terminal's next row */
+    if(con->stream) {
+        /* 10/26/26: another writer may have drawn on the row, opened an escape sequence (which leaves the row's start
+           as it was) or asked since page_hold() looked: then no question, it would land in the middle of that
+           writer's line or sequence, or be a second; the next row start asks. Looked at with the question's own
+           step, interrupts off, as stream_put() changes the row */
+        flags = irq_save();
+        if(!(con->page_fresh || con->wrap) || con->esc || con->page_asker) {
+            irq_restore(flags);
+            return;
+        }
+        if(con->wrap) {                                 /* 10/6/26: the far terminal's next row */
             stream_row(con);
             PTY_OUT_LIT(con, "\n", PTY_OUT_URGENT);
-        } else {
+        }
+    } else {
+        if(con->wrap) {
             newline(con);
             if(con == conActive && mirror_serial) serial_puts("\r\n");
         }
+        flags = irq_save();
     }
-    flags = irq_save();
     con->page_asker = curTask;
     con->page_cancel = 0;
     con->page_resized = 0;
@@ -1034,40 +1101,44 @@ static void page_ask(surf_console *con, struct tty *t) {
 /* For each byte a console gets while paging is on: 1 when it is dropped (q was pressed).
    Before a paged task's byte draws on, or starts, the row after a screenful, the task
    waits at the question first, where it may; while another task is at the question, it
-   waits for the answer first. */
+   waits for the answer first. 10/26/26: also when that task asked first in the moment
+   before this one's question (a stream's page_ask() asks no second one): then it looks again. */
 static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
     struct tty *t;
     u_long flags;
     if(in_interrupt() || !curTask || curTask == idle_task || !console_paging(con)) return 0;
     t = tty_for_console(con);
-    while(con->page_asker && con->page_asker != curTask && page_may_wait(t)) {
-        flags = irq_save();
-        if(con->page_asker) {
-            wait_prepare_intr(&t->page_waiters);        /* 10/6/26: a kill or Ctrl+C ends the wait */
-            irq_restore(flags);
-            yield();
-        } else {
-            irq_restore(flags);
+    for(;;) {
+        while(con->page_asker && con->page_asker != curTask && page_may_wait(t)) {
+            flags = irq_save();
+            if(con->page_asker) {
+                wait_prepare_intr(&t->page_waiters);    /* 10/6/26: a kill or Ctrl+C ends the wait */
+                irq_restore(flags);
+                yield();
+            } else {
+                irq_restore(flags);
+            }
+            if(!console_paging(con)) return 0;          /* paging ended meanwhile */
         }
-        if(!console_paging(con)) return 0;              /* paging ended meanwhile */
-    }
-    if(con->page_drop) {
-        page_keep(con, color, b);
-        return 1;
-    }
-    if(con->page_asker) return 0;                       /* it may not wait: it prints, the question gives way */
-    if(con->esc || (con->stream ? (b & 0xC0) == 0x80 : writer_utf()->have) ||
-       !(b == '\n' || (b == '\t' && !con->wrap) || (b >= 0x20 && b != 0x7F)))
-        return 0;                                       /* draws nothing, or not yet (10/6/26: the rest of a UTF-8 character;
+        if(con->page_drop) {
+            page_keep(con, color, b);
+            return 1;
+        }
+        if(con->page_asker) return 0;                   /* it may not wait: it prints, the question gives way */
+        if(con->esc || (con->stream ? (b & 0xC0) == 0x80 : writer_utf()->have) ||
+           !(b == '\n' || (b == '\t' && !con->wrap) || (b >= 0x20 && b != 0x7F)))
+            return 0;                                   /* draws nothing, or not yet (10/6/26: the rest of a UTF-8 character;
                                                            10/25/26: a TAB starts a row as a character does, except at a
                                                            pending wrap, where it does nothing) */
-    /* 10/6/26: on a stream a newline after a full row starts just one row, as on any terminal */
-    if((con->wrap && !(con->stream && b == '\n')) ? con->page_rows + 2 < con_rows(con)
-                                                  : !con->page_fresh || con->page_rows + 1 < con_rows(con))
-        return 0;                                       /* the screenful is not full yet */
-    if(!page_may_wait(t) || wq_count(&t->readers))
-        return 0;                                       /* no waiting here: at the next row */
-    page_ask(con, t);
+        /* 10/6/26: on a stream a newline after a full row starts just one row, as on any terminal */
+        if((con->wrap && !(con->stream && b == '\n')) ? con->page_rows + 2 < con_rows(con)
+                                                      : !con->page_fresh || con->page_rows + 1 < con_rows(con))
+            return 0;                                   /* the screenful is not full yet */
+        if(!page_may_wait(t) || wq_count(&t->readers))
+            return 0;                                   /* no waiting here: at the next row */
+        page_ask(con, t);
+        if(!con->page_asker || !page_may_wait(t)) break;    /* asked and answered, or not asked (page_ask()) */
+    }
     if(!con->page_drop) return 0;
     page_keep(con, color, b);
     return 1;
@@ -1089,6 +1160,14 @@ static void page_reshow(surf_console *con, u_char b) {
     flags = irq_save();
     if(con->page_asker && !con->page_shown && !con->wrap && !con->loc.x) page_show(con);
     irq_restore(flags);
+}
+
+/* 10/26/26: the same on a stream console, from stream_put(), in the step that put the newline in the stream,
+   interrupts off; only at a row's start with no escape sequence open (the review of the gap fix: the column alone
+   was looked at, outside the step) */
+static void stream_reshow(surf_console *con) {
+    if(con->page_asker && !con->page_shown && !con->page_cancel && con->page_fresh && !con->wrap && !con->esc)
+        page_show(con);
 }
 
 /* 10/6/26: typed input shown as it is typed (the line editor's echo, getchar()) goes to the
@@ -1115,6 +1194,12 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     }
     /* 10/6/26: a panic's report goes to the screen, whichever console its task printed on */
     if(con && con->stream && panicking) con = conActive;
+    /* 10/6/26: a pseudo-terminal's console: to its master side (stream consoles, above). 10/26/26: the pager's
+       look and the byte go again after a wait for room in the master's buffer (stream_byte()) */
+    if(con && con->stream) {
+        stream_byte(con, color, b);
+        return;
+    }
     /* 10/6/26: the pager (TTY_PAGE): a paged task waits at a full screen, and after q what
        it prints is dropped; the question gives way to anyone else who prints here */
     if(con && con->page_owner && page_hold(con, color, b)) return;
@@ -1122,12 +1207,6 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         u_long flags = irq_save();
         page_unshow(con);
         irq_restore(flags);
-    }
-    /* 10/6/26: a pseudo-terminal's console: to its master side (stream consoles, above) */
-    if(con && con->stream) {
-        stream_put(con, color, b);
-        page_reshow(con, b);
-        return;
     }
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
