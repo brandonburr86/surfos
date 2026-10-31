@@ -1070,7 +1070,9 @@ SMOKE = [
     ('surfsh', [shown('SURF \u224b> ')],
      [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
       ('kernel ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
-      ('dmesg | /initrd/bin/head -1', ['SurfOS: serial console on COM1', shown('SURF \u224b> ')]),
+      # 10/31/26: a line of its own at the log's end, not the boot's at its start: by here the steps before have filled
+      # the 16 KB ring (KLOG_SIZE), and the boot's first lines are gone
+      ("printf 'dmesg-%s\\n' piped > /dev/kmsg; dmesg | /initrd/bin/tail -n 1", ['dmesg-piped', shown('SURF \u224b> ')]),
       ('help | /initrd/bin/head -2', ['surfsh 1.0, the SurfOS shell', shown('SURF \u224b> ')]),
       ('echo one two | /initrd/bin/wc -w', ['      2 ', shown('SURF \u224b> ')]),
       ('echo abc | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/cat | /initrd/bin/wc -c', ['      4 ', shown('SURF \u224b> ')]),
