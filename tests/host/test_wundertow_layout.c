@@ -377,6 +377,34 @@ static void proportional(void) {
     check(pl_ok && nth(WI_TEXT, 1)->scale == WF_S32 && nth(WI_TEXT, 1)->w == wf_width("iiii", 4, WF_S32, 0) &&
           nth(WI_TEXT, 3)->scale == WF_S24, "sizes on one line, each in its widths");
 
+    /* text the colour of what is behind it */
+    {
+        static const struct { const char *html; unsigned int want; const char *what; } cases[] = {
+            { "<p style=color:#ffffff>l", 0x153d49, "white on the page's cream: the theme's colour" },
+            { "<p style=color:#fffdf5>l", 0x153d49, "the same colour as the page" },
+            { "<body bgcolor=#000000><p style=color:#000001>l", 0xffffff, "black on black: white" },
+            { "<div style=background:#102e3b><p style=color:#102e3c>l</div>", 0xffffff, "dark on a dark box" },
+            { "<div style=background:#ffffff><p style=color:#fffffe>l</div>", 0x153d49, "light on a light box" },
+            { "<p style=color:#ff0000>l", 0xff0000, "a colour that can be read stays" },
+            { "<div style=background:#102e3b><p style=color:#ffffff>l</div>", 0xffffff, "white on what is dark stays" },
+            { "<p style=color:#808080>l", 0x808080, "grey stays" },
+            { "<p style=background:#ffffff><span style=background:#000000;color:#ffffff>l</span>", 0xffffff, "on an inline background" }
+        };
+        size_t c;
+        wp_theme_default(&th);
+        for(c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+            page(cases[c].html, 64);
+            image_new(&im, 64, pl.height, 0);
+            t = target(&im, 0, 0, 64, pl.height);
+            wp_paint(&pl, &pd, &th, &t, 0, 0, -1);
+            a = text_item("l");
+            found = 0;
+            for(y = a->y; y < a->y + a->h; y++) for(x = a->x; x < a->x + a->w; x++) found += pixel(&im, x, y) == cases[c].want;
+            check(found > 4, cases[c].what);
+            free(im.px);
+        }
+    }
+
     /* the glyph's ink starts where the text does */
     wp_theme_default(&th);
     page("<body bgcolor=#ffffff text=#000000><p>l", 64);

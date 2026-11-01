@@ -15,6 +15,8 @@ font (font.h), at a whole scale.
 #include "layout.h"
 #include "paint.h"
 
+#define READABLE 32                     /* how far apart in brightness text and what is behind it must be, of 255 */
+
 void wp_theme_default(struct wp_theme *t) {
     t->bg = 0xfffdf5;                   /* the desktop's text background */
     t->fg = 0x153d49;                   /* INK */
@@ -132,6 +134,19 @@ static unsigned int text_color(const struct wd_document *d, const struct wp_them
     return d->fg != WD_NONE ? d->fg : th->fg;
 }
 
+static int luma(unsigned int c) { return (int)((c >> 16 & 255) * 299 + (c >> 8 & 255) * 587 + (c & 255) * 114) / 1000; }
+
+/* 11/01/26: text meant for a background that is not here (an image, a gradient, a colour by var()) may be the colour of
+   what is behind it now: white on the page's cream. Text no one can read helps nobody, so it takes the theme's colour,
+   or white on what is dark. What is behind it is what is painted there. */
+static unsigned int readable(const struct wp_target *t, const struct wp_theme *th, int x, int y, unsigned int c) {
+    int px = x < t->x ? t->x : x, py = y < t->y ? t->y : y, back;
+    if(px < 0 || py < 0 || px >= t->w || py >= t->h) return c;
+    back = luma(t->pixels[(long)py * t->stride + px]);
+    if(luma(c) - back < READABLE && back - luma(c) < READABLE) return back < 128 ? 0xffffff : th->fg;
+    return c;
+}
+
 /* A field's or an image's label inside its box, clipped to it */
 static void label_in(const struct wp_target *t, int x, int y, int w, int h, const char *s, size_t n, unsigned int color,
                      int center) {
@@ -209,6 +224,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             int s = it->scale;
             c = text_color(d, th, it, hover);
             if(it->style & WS_MARK) wp_fill(t, x, y, it->w, it->h, th->mark);
+            c = readable(t, th, x, y, c);
             run_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
             if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE)))
                 wp_fill(t, x, y + wf_under(s), it->w, wf_stroke(s), c);

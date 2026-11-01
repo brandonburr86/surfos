@@ -7,7 +7,8 @@ Any part of a layout (layout.h) into a 0x00RRGGBB image: the page's rectangle fr
 viewport of the image, everything clipped to it. Text in the console's font (font.h) at its scale, bold as a
 pixel's smear, italic as a slant, underlined and struck through by rows; links in the link colour and
 underlined; fields and images' boxes as the desktop draws its own (GUI.md's palette). The page's own colours
-(<body>, <font>, bgcolor) come first, the theme's where it gives none.
+(<body>, <font>, bgcolor) come first, the theme's where it gives none. Text that would be the colour of what is
+painted behind it is not: paint.c's readable().
 */
 
 #ifndef WUNDERTOW_PAINT_H
