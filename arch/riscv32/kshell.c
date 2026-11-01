@@ -223,6 +223,7 @@ static int cmd_irqstat(int argc, char **argv) {
     for(i = 0; i < NR_IRQS; i++) if(irq_count[i]) printf("    %3i  %lu\n", i, irq_count[i]);
     printf("    timer: %lu\n", timer_irq_count);
     printf("    spurious: %lu\n", spurious_irq_count);
+    if(irq_rests) printf("    rested until a tick: %lu\n", irq_rests);
     for(i = 0; i < NR_VECTORS; i++) if(trap_counts[i]) printf("    exception %i (%s): %lu\n", i, trap_name(i), trap_counts[i]);
     return CMD_OK;
 }

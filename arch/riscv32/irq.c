@@ -13,13 +13,15 @@ is told when one is done (the PLIC's complete; nothing on surf_intc, whose sourc
 levels that drop when the device is served).
 
 A source with no handler that still interrupts is switched off at the controller, so
-a level that nobody clears cannot hold the CPU in an interrupt storm.
+a level that nobody clears cannot hold the CPU in an interrupt storm. One whose handler
+runs and that is pending all the same rests until the next tick (irq_external()).
 */
 
 #include <surfos/types.h>
 #include <surfos/interrupt.h>
 #include <surfos/irq.h>
 #include <surfos/console.h>
+#include <surfos/klog.h>
 #include <surfos/panic.h>
 #include <mm/kalloc.h>
 #include <riscv/csr.h>
@@ -30,16 +32,28 @@ a level that nobody clears cannot hold the CPU in an interrupt storm.
 u_long irq_count[NR_IRQS];
 u_long spurious_irq_count;
 u_long timer_irq_count;
+u_long irq_rests;
 volatile int in_irq;
 
 static struct sIRQHandler IRQBaseHandlers[NR_IRQS];
+static u32 resting;                     /* 10/31/26: a bit for each source off until the next tick */
+static u32 rest_said;                   /* ... and for each the log has named */
 
 void _enable_irq(u_int irq) {
-    if(irq < NR_IRQS) board_irq_enable(irq, true);
+    u_long flags;
+    if(irq >= NR_IRQS) return;
+    flags = irq_save();                 /* the enable bits: irq_tick() changes them too */
+    board_irq_enable(irq, true);
+    irq_restore(flags);
 }
 
 void _disable_irq(u_int irq) {
-    if(irq < NR_IRQS) board_irq_enable(irq, false);
+    u_long flags;
+    if(irq >= NR_IRQS) return;
+    flags = irq_save();
+    resting &= ~(1u << irq);            /* and it stays off */
+    board_irq_enable(irq, false);
+    irq_restore(flags);
 }
 
 /* the machine software interrupt is not used: a stray one is cleared */
@@ -48,9 +62,13 @@ void arch_clear_soft_irq(void) {
 }
 
 /* The machine external interrupt (trap.c): every pending source, a bounded number of times. A
-   level source still pending after 32 rounds has a handler that does not clear it: it is
-   switched off, or it would hold the CPU here for good (the external interrupt outranks the
-   timer's), and the kernel log says which. */
+   level source still pending after 32 rounds has a handler that does not clear it, or a device
+   with more for it each time (the UART, a paste coming at the line's speed): either would hold
+   the CPU here (the external interrupt outranks the timer's). 10/31/26: it rests until the next
+   tick, and the kernel log says which, once. It used to be switched off for good, so a paste of
+   8 KB left the serial line dead until the next boot (32 rounds of serial_isr()'s 256 bytes, or
+   of a few each, once a full queue made dropping a byte cheaper than the line, kernel/tty.c).
+   So the tick always comes; a source that is stuck costs 32 rounds of it. */
 void irq_external(void) {
     int irq = -1, n;
     struct sIRQHandler *h;
@@ -77,9 +95,29 @@ void irq_external(void) {
     if(n == 32 && (irq = board_irq_claim()) >= 0) {
         board_irq_enable((u_int)irq, false);
         board_irq_complete((u_int)irq);
-        kprintf("\n+IRQ: source %d stays pending although its handler ran 32 times: switched off\n", irq);
+        if(irq < NR_IRQS) {
+            irq_rests++;
+            resting |= 1u << irq;
+            if(!(rest_said & (1u << irq))) {            /* the log, not the screen: a paste is no fault */
+                char line[96];
+                rest_said |= 1u << irq;
+                snprintf(line, sizeof(line), "+IRQ: source %d stays pending after 32 rounds: it rests until each tick\n", irq);
+                klog_write(line);
+            }
+        }
     }
     in_irq--;
+}
+
+/* the tick (trap.c, before timer_tick(): interrupts are off): what rested comes back */
+void irq_tick(void) {
+    u_int irq;
+    for(irq = 0; resting; irq++) {
+        if(resting & (1u << irq)) {
+            resting &= ~(1u << irq);
+            board_irq_enable(irq, true);
+        }
+    }
 }
 
 void init_interrupt(void) {

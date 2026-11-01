@@ -7,7 +7,7 @@ make test-soc-system-boot (docs/SOC.md section 9). build/sim/surfsim is the RTL 
 (HAS_DDR=1, the real core and peripherals) with the C++ models at its pins: the DDR model, the
 UART model, and the io track's SD card, PS/2 keyboard and VGA capture. It runs the real boot
 ROM (build/fw/surfboot.mem), which loads the Arty kernel package (SURFOS.BIN, packed by
-tools/surfimg.py) from a card image made by tools/mkcard.py. Two runs go side by side:
+tools/surfimg.py) from a card image made by tools/mkcard.py. Three runs go side by side:
 
   boot      card: the standard directories, /BOOT/SURFOS.BIN, /BOOT/CMDLINE.TXT ("ascii"),
             /USERS/DOCUMENTS/HELLO.TXT and an 8 KiB DATA.BIN there. In order on the UART:
@@ -20,6 +20,10 @@ tools/surfimg.py) from a card image made by tools/mkcard.py. Two runs go side by
   recovery  card: /BOOT/SURFOS.BIN with one payload byte flipped, and the good package as
             /BOOT/BACKUP.BIN. SurfBoot reports the bad CRC, tries BACKUP.BIN and starts it;
             the kernel boots to the prompt and its bootinfo says ", from BACKUP.BIN".
+  paste     10/31/26 (audit B88): the boot card; 10,000 bytes at the UART at the line's speed
+            while `sleep` runs, more than the 256-byte queue takes and 32 rounds of serial_isr().
+            A command typed on the PS/2 keyboard afterwards runs, and so does one at the UART:
+            the serial line is alive. irqstat says how often the UART rested until a tick.
 
 The expectations follow boards/arty_a7/tests/surfemu_test.py (the fw track's instruction-level
 emulator) where they fit. Two of its steps are left out of these runs for time: crc32 of the
@@ -214,6 +218,19 @@ def main():
             ('prompt', PROMPT)]
         runs['recovery'] = dict(card='recovery', expects=e, sends=[(PROMPT, 'bootinfo\\r')], ps2=[], max=600000000,
                                 extra=[])
+        e = boot_expects(pkg, payload_crc) + [
+            ('the shell sleeps', r'sleep 1200' + NL),
+            ('prompt', PROMPT),
+            ('typed on PS/2 after the paste', r'echo typed on ps2' + NL + r'typed on ps2' + NL),
+            ('prompt', PROMPT),
+            ('sent at the UART after that', r'echo sent at the uart' + NL + r'sent at the uart' + NL),
+            ('prompt', PROMPT),
+            ('irqstat', r'timer: \d+' + NL),
+            ('prompt', PROMPT)]
+        sends = [(PROMPT, 'sleep 1200\\r'), (r'sleep 1200' + NL, '\\x7f' * 10000),
+                 (rx('typed on ps2') + NL + r'[\s\S]*?' + PROMPT, 'echo sent at the uart\\r'), (PROMPT, 'irqstat\\r')]
+        ps2 = [(r'sleep 1200' + NL + r'[\s\S]*?' + PROMPT, 'echo typed on ps2\\n')]
+        runs['paste'] = dict(card='boot', expects=e, sends=sends, ps2=ps2, max=600000000, extra=[])
 
     procs = {}
     for name, r in runs.items():
@@ -326,6 +343,13 @@ def main():
         check(re.search(r'image 0x80000000 \+ \d+ bytes; boot device SD, FAT32 at LBA 2048, from BACKUP\.BIN', rout)
               and 'SURF ~#>' in rout, 'recovery: the kernel boots to the shell and bootinfo reports the backup')
         check(not any(f in rout for f in FAIL_ON), 'recovery: no panic, no boot problem')
+
+        pout = run_ok('paste')
+        rests = re.search(r'rested until a tick: (\d+)', pout)
+        check(re.search(r'^typed on ps2$', pout, re.M) and re.search(r'^sent at the uart$', pout, re.M),
+              'paste: after 10,000 bytes at the line\'s speed a command typed on PS/2 runs, and then one at the UART '
+              '(the UART rested until a tick %s times)' % (rests.group(1) if rests else 'no'))
+        check(not any(f in pout for f in FAIL_ON), 'paste: no panic, no killed task, no boot problem')
 
     # ---------------------------------------------------------------- the record
     passed = sum(1 for ok, _ in results if ok)

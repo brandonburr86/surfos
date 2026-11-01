@@ -40,13 +40,16 @@ void del_irq_handler(u_int irq, FuncIRQHandler fHandler, void *parameter);
 void enable_irq_handler(u_int irq, FuncIRQHandler fHandler, void *parameter);
 void disable_irq_handler(u_int irq, FuncIRQHandler fHandler, void *parameter);
 
-/* the machine external interrupt: every pending source's chain (arch/riscv32/irq.c) */
+/* the machine external interrupt: every pending source's chain (arch/riscv32/irq.c);
+   the tick: a source that would not stop comes back */
 void irq_external(void);
+void irq_tick(void);
 
 /* statistics and context */
 extern u_long irq_count[NR_IRQS];
 extern u_long spurious_irq_count;
 extern u_long timer_irq_count;      /* machine timer interrupts (they have no source number) */
+extern u_long irq_rests;            /* times a source was sent to the next tick */
 extern volatile int in_irq;
 #define in_interrupt() (in_irq > 0)
 

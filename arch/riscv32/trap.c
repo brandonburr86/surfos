@@ -196,6 +196,7 @@ static u_long *interrupt_dispatch(struct trapframe *tf) {
     switch(MCAUSE_CODE(tf->mcause)) {
     case IRQ_M_TIMER:
         timer_irq_count++;
+        irq_tick();
         return timer_tick(tf);              /* outside in_irq, as IRQ 0 on x86 */
     case IRQ_M_EXT:
         irq_external();

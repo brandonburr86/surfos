@@ -31,10 +31,10 @@ typed on the UART. Checked:
   * gfx mode overlay: the last frame at the pins shows the console's text over the picture: the
     text decoded from the pixels (surfsim --vga-dir) holds the last command and its output, every
     pixel where no character is is the picture's (gfxref's frame of it), and the rest are text;
-  * nothing said a stopped engine, a GPU error, a missed blanking, an interrupt switched off for
-    staying pending (irq.c's "+IRQ: source N stays pending although its handler ran 32 times"), a
-    panic. FAIL_ON's entries are surfsim's --fail-on regular expressions as well as substrings here,
-    so they hold no regular expression's special characters.
+  * nothing said a stopped engine, a GPU error, a missed blanking, a source sent to the next tick
+    for staying pending (irq.c, as irqstat counts it: nothing here pastes at the UART), a panic.
+    FAIL_ON's entries are surfsim's --fail-on regular expressions as well as substrings here, so
+    they hold no regular expression's special characters.
   * 10/26/26, GPU2 (GPU.md section 16): gfx zbuf, zclear, tri (flat, culled both ways, a square split
     through pixel centres, Gouraud with depth through each other, sixteenths) and their picture's
     gfx crc equal to gfxref's, which works it out from section 16 alone; picture B drawn and shown
@@ -78,7 +78,7 @@ NL = r'\r?\n'
 # a cube that failed is judged below rather than waited past
 CUBE_TURN = r'(?:\s+gfx cube: the frames shown went (\d+) on for (\d+) FLIPs' + NL + r')?'
 FAIL_ON = ['Kernel panic', 'Kernel Wipeout', 'BOOT PROBLEM', 'killed by', 'SurfBoot stopped', 'a stopped engine',
-           'the GPU reports', 'no vertical blanking in', 'stays pending although its handler ran', 'Invalid command']
+           'the GPU reports', 'no vertical blanking in', 'rested until a tick', 'Invalid command']
 CGA = {0x000, 0x00A, 0x0A0, 0x0AA, 0xA00, 0xA0A, 0xA50, 0xAAA, 0x555, 0x55F, 0x5F5, 0x5FF, 0xF55, 0xF5F, 0xFF5, 0xFFF}
 CRC_LINE = re.compile(r'gfx crc: frame (\d+), crc ([0-9a-f]{8})')
 OWNER_CRC = '039d507c'      # GPU.md 15.6 step 4: what the owner's board must print for the first picture
@@ -150,6 +150,7 @@ STEPS = [
     ('gfx pal rgb332', r'palette: rgb332', 'RGB332 for the rest'),
     ('gfx bench', r'text  64 x 32 cells: 262144 pixels in \d+\.\d+ ms, \d+\.\d million/s', 'the bench'),
     ('gfx reset', r'gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640', 'reset'),
+    ('irqstat', r'timer: \d+' + NL, 'irqstat: no source rested (FAIL_ON)'),
     ('gfx', STATE, 'the state after the demos and the bench'),
     ('gfx mode text', r'display: mode 1, text', 'text'),
     ('gfx crc', CRC_LINE.pattern, 'crc 6'),
@@ -384,7 +385,7 @@ def main():
     else:
         check(False, 'the GPU interrupt: gfx said its fences, interrupts and waits %d times, not twice' % len(st))
     check(not any(f_ in out for f_ in FAIL_ON) and 'usage:' not in out,
-          'no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic')
+          'no stopped engine, no GPU error, no blanking missed, no source rested, no usage error, no panic')
     got = [crc for _, crc in CRC_LINE.findall(out)]
     frames = {}
     fp = os.path.join(w, 'frames.txt')
