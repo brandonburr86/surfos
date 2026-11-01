@@ -6,6 +6,7 @@ File: stdlib.h  Date: 10/5/26
 malloc() keeps a free list over memory from sbrk(); freed blocks are reused and
 merged with free neighbours (user/libsurf/malloc.c). exit() runs the atexit()
 functions, flushes stdio and ends the process. 10/24/26: the environment (env.c).
+11/01/26: strtod() and atof() (strtod.c), correctly rounded.
 */
 
 #ifndef _STDLIB_H
@@ -30,6 +31,8 @@ int atoi(const char *s);
 long atol(const char *s);
 long strtol(const char *s, char **end, int base);
 unsigned long strtoul(const char *s, char **end, int base);
+double strtod(const char *s, char **end);       /* 11/01/26: also inf, nan, 0x1.8p3; ERANGE */
+double atof(const char *s);
 int abs(int v);
 long labs(long v);
 

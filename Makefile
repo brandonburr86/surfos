@@ -606,6 +606,7 @@ unittest: test-kalloc
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
                user/libsurf/time.c user/libsurf/malloc.c
+HOSTUSER_SRC += user/libsurf/strtod.c           # 11/01/26: sscanf's floating point
 HOSTUSER_OBJ = $(HOSTUSER_SRC:user/libsurf/%.c=$(BUILD)/host/libsurf/%.o)
 $(BUILD)/host/libsurf/%.o: user/libsurf/%.c tests/host/libsurf_names.h
 	@mkdir -p $(dir $@)
@@ -715,6 +716,18 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
+
+# 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
+# (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
+# i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
+$(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
+                           $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_strtod.c $(filter %.o,$^) -o $@
+unittest: unittest-text
+.PHONY: unittest-text
+unittest-text: $(BUILD)/host/test_strtod
+	$(BUILD)/host/test_strtod
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

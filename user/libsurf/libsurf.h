@@ -24,4 +24,11 @@ struct sink {
 
 int __format(struct sink *s, const char *fmt, va_list ap);
 
+/* 11/01/26: floating point without the FPU (strtod.c). __strtoflt() reads a number as strtod() does, in at most max
+   bytes, and gives a double's bits, or with single a float's. __flt_pack() rounds to the nearest, a tie to even:
+   m * 2^(e - 63), m's top bit set and sticky when anything was lost below it, into mant bits of mantissa with
+   exponents up to emax, in a number width bits wide; ERANGE when it overflows or underflows inexactly. */
+unsigned long long __strtoflt(const char *s, size_t max, char **end, int single);
+unsigned long long __flt_pack(int neg, unsigned long long m, int sticky, int e, int mant, int emax, int width);
+
 #endif

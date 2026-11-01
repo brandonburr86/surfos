@@ -8,7 +8,8 @@ buffered on the console and fully buffered when it goes to a file, stderr is
 unbuffered, files opened with fopen() are fully buffered (BUFSIZ). exit() and
 a return from main() flush every stream. The formatter knows the flags - 0 + space #,
 width and precision (numbers or *), the lengths hh h l ll z j t and the
-conversions d i u x X o c s p %; there is no floating point.
+conversions d i u x X o c s p %, and floating point since 10/25/26. 11/01/26: sscanf() reads it
+too.
 */
 
 #ifndef _STDIO_H
@@ -69,7 +70,8 @@ int vfprintf(FILE *f, const char *fmt, va_list ap) __printf(2, 0);
 int vdprintf(int fd, const char *fmt, va_list ap) __printf(2, 0);
 int vsprintf(char *s, const char *fmt, va_list ap) __printf(2, 0);
 int vsnprintf(char *s, size_t n, const char *fmt, va_list ap) __printf(3, 0);
-int sscanf(const char *s, const char *fmt, ...) __scanf(2, 3);    /* %d %i %u %x %o %s %c %n %%, widths, * */
+int sscanf(const char *s, const char *fmt, ...) __scanf(2, 3);    /* %d %i %u %x %o %s %c %n %%, widths, *;
+                                                                     11/01/26: %f %e %g %a, with l and L */
 int vsscanf(const char *s, const char *fmt, va_list ap) __scanf(2, 0);
 
 int fseek(FILE *f, long off, int whence);

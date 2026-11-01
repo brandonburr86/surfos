@@ -7,7 +7,10 @@ __format() is the kernel's vsnprintf (lib/blibc/vsnprintf.c) turned to write
 into a sink, so one formatter serves strings, streams and descriptors: flags
 - 0 + space #, width and precision (numbers or *), lengths hh h l ll z j t,
 conversions d i u x X o c s p %. sscanf() reads %d %i %u %x %o %s %c %n %%,
-with widths, * (no assignment) and the length letters.
+with widths, * (no assignment) and the length letters; 11/01/26 %f %e %g %a too,
+into a float (l: a double, L: a long double, which gets the nearest double), read
+through __strtoflt() in strtod.c. Where the text stops being a number is where strtod()
+stops: "100ergs" gives 100 and leaves "ergs", as the BSDs do.
 10/25/26 (robustness, L14): and floating point, f F e E g G (L: a long double,
 printed as the double nearest to it), now that every program's FPU registers
 are its own (kernel/fpu.c). The digits are the exact value's, as glibc's are.
@@ -545,6 +548,7 @@ int vsscanf(const char *str, const char *fmt, va_list ap) {
         else if(*fmt == 'l') { length = 1; fmt++; if(*fmt == 'l') { length = 2; fmt++; } }
         else if(*fmt == 'j') { length = 2; fmt++; }
         else if(*fmt == 'z' || *fmt == 't') { length = 1; fmt++; }
+        else if(*fmt == 'L') { length = 3; fmt++; }
         c = *fmt++;
         if(c == 'n') {
             if(!skip) *va_arg(ap, int *) = (int)(s - str);
@@ -586,6 +590,20 @@ int vsscanf(const char *str, const char *fmt, va_list ap) {
                 s++;
             }
             if(out) assigned++;
+            break;
+        }
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
+            char *end;
+            union { double d; u64 u; } v;
+            v.u = __strtoflt(s, width > 0 ? (size_t)width : (size_t)-1, &end, length <= 0);
+            if(end == s) return assigned;
+            s = end;
+            if(!skip) {
+                if(length == 3) *va_arg(ap, long double *) = v.d;
+                else if(length > 0) *va_arg(ap, u64 *) = v.u;
+                else *va_arg(ap, u32 *) = (u32)v.u;
+                assigned++;
+            }
             break;
         }
         default:
