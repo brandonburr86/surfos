@@ -133,7 +133,7 @@ static const char *lzw(struct gif *g, struct wimg *m) {
     unsigned char top = 0;
     if(g->pos >= g->len) return short_file;
     root = g->in[g->pos++];
-    if(root < 1 || root > 8) return "a GIF of a code size that is none";
+    if(root < 2 || root > 8) return "a GIF of a code size that is none";
     clear = 1 << root;
     stop = clear + 1;
     first = stop + 1;
@@ -161,7 +161,7 @@ static const char *lzw(struct gif *g, struct wimg *m) {
             prev = code;
             continue;
         }
-        if(code > avail || (code == avail && avail >= CODES)) return "a GIF with a code it has not made";
+        if(code > avail) return "a GIF with a code it has not made";
         c = code == avail ? prev : code;            /* KwKwK: the string just made, not yet in the table */
         n = g->length[c] + (code == avail ? 1 : 0);
         i = n;

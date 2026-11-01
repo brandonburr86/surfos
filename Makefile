@@ -993,8 +993,9 @@ unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: the picture decoders, on tests/fixtures/wundertow/images/ (tools/wundertow-images.py) and hostile files made
-# in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: sizes that
-# overflow only in 32 bits stop it
+# in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
+# arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
+# hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
 WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o
 WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
 $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \

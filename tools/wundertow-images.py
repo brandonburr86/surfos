@@ -219,9 +219,10 @@ def png_family():
     tr = chunk(b'tRNS', struct.pack('>HHH', *key))
     px2 = [solid(*pattern(xx, yy, W, H)) | (0xff000000 if pattern(xx, yy, W, H) == key else 0) for yy in range(H) for xx in range(W)]
     save('trns-rgb.png', png(sample, W, H, 2, 8, extra=tr), W, H, px2)
-    tr = chunk(b'tRNS', struct.pack('>H', 0x55))
+    grayed = 5 * 255 // (W - 1)                             # a value of the ramp
+    tr = chunk(b'tRNS', struct.pack('>H', grayed))
     gs = lambda x, y: [x * 255 // (W - 1)]
-    px2 = [((x * 255 // (W - 1)) * 0x010101) | (0xff000000 if x * 255 // (W - 1) == 0x55 else 0) for y in range(H) for x in range(W)]
+    px2 = [((x * 255 // (W - 1)) * 0x010101) | (0xff000000 if x == 5 else 0) for y in range(H) for x in range(W)]
     save('trns-gray.png', png(gs, W, H, 0, 8, extra=tr), W, H, px2)
     entries = [(i * 17, 255 - i * 17, 128) for i in range(16)]
     alphas = [255 - i * 17 for i in range(10)]              # fewer than the palette's: the rest are solid
@@ -489,10 +490,11 @@ class Bits:
 
 
 def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, restart=0, quant16=False, sof=0xc0, adobe=None,
-                pre=b''):
+                pre=b'', jfif=False, ink=None):
     """a baseline file: sampling, (h, v) of each component; scans: lists of component numbers (one scan of all by
-    default); every code 8 bits long, of the values the tables hold"""
-    sampling = sampling or [(1, 1)] * 3
+    default); every code 8 bits long, of the values the tables hold. ink: four components, stored as Adobe stores them,
+    inverted: 'cmyk' as they are, 'ycck' the CMY as YCC, libjpeg's C = 255 - R"""
+    sampling = sampling or [(1, 1)] * (4 if ink else 3)
     hmax, vmax = max(s[0] for s in sampling), max(s[1] for s in sampling)
     n = len(sampling)
 
@@ -500,7 +502,13 @@ def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, resta
         r, g, b = pattern(min(x, w - 1), min(y, h - 1), w, h)
         if n == 1:
             return r
-        if rgb:
+        if ink:
+            if c == 3:
+                return 255                                  # no black: all the paper shows
+            if ink == 'cmyk':
+                return (r, g, b)[c]
+            r, g, b = 255 - r, 255 - g, 255 - b
+        elif rgb:
             return (r, g, b)[c]
         return (0.299 * r + 0.587 * g + 0.114 * b, 128 - 0.168736 * r - 0.331264 * g + 0.5 * b,
                 128 + 0.5 * r - 0.418688 * g - 0.081312 * b)[c]
@@ -522,6 +530,8 @@ def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, resta
     def dht(tc, vals):
         return b'\xff\xc4' + struct.pack('>HB', 2 + 17 + len(vals), tc << 4) + bytes(7) + bytes([len(vals)]) + bytes(8) + bytes(vals)
     head = b'\xff\xd8'
+    if jfif:
+        head += b'\xff\xe0' + struct.pack('>H', 16) + b'JFIF\0\x01\x01\0\0\x01\0\x01\0\0'
     if adobe is not None:
         head += b'\xff\xee' + struct.pack('>H', 14) + b'Adobe' + bytes([0, 100, 0, 0, 0, 0, adobe])
     head += dqt
@@ -647,6 +657,18 @@ def jpeg_family():
     own('ownrestart.jpg', restart=2, sampling=[(2, 2), (1, 1), (1, 1)])
     own('ownrestartfill.jpg', restart=2, pre=b'\xff\xff')     # fill bytes before each marker
     own('ownadobe1.jpg', adobe=1)
+    own('ownjfifadobe0.jpg', jfif=True, adobe=0)            # JFIF says YCbCr, whatever Adobe's says
+    own('ownjfifnames.jpg', jfif=True, ids=(ord('R'), ord('G'), ord('B')))
+    own('ownycck.jpg', ink='ycck', adobe=2, ids=(1, 2, 3, 4))
+    own('ownycck1.jpg', ink='ycck', adobe=1, ids=(1, 2, 3, 4))     # libjpeg's reading of any other transform
+    own('ownycck420.jpg', ink='ycck', adobe=2, ids=(1, 2, 3, 4), sampling=[(2, 2), (1, 1), (1, 1), (2, 2)])
+    own('owncmyk.jpg', ink='cmyk', adobe=0, ids=(1, 2, 3, 4))
+    own('owncmyknoadobe.jpg', ink='cmyk', ids=(1, 2, 3, 4))
+    # a quantizer changed after the first scan: a component keeps the one at its own first scan
+    data = jpeg_encode(w, h, scans=[[0], [1], [2]])
+    at = data.index(b'\xff\xda')
+    at = data.index(b'\xff\xda', at + 2)                    # the second scan
+    save('ownquantlate.jpg', data[:at] + b'\xff\xdb' + struct.pack('>HB', 67, 1) + bytes([200] * 64) + data[at:], w, h, tolerance=t)
 
 
 def main():

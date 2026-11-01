@@ -226,7 +226,7 @@ static const char *rle(struct bmp *b, struct wimg *m) {
     int four = b->comp == BI_RLE4, x = 0, y = 0;
     size_t i, n = (size_t)m->w * m->h;
     for(i = 0; i < n; i++) m->px[i] = WIMG_GONE;
-#define PUT(v) do { if(x < b->w && y < b->h) m->px[(size_t)(b->h - 1 - y) * b->w + x] = b->palette[v]; x++; } while(0)
+#define PUT(v) do { if(x < b->w) { if(y < b->h) m->px[(size_t)(b->h - 1 - y) * b->w + x] = b->palette[v]; x++; } } while(0)
     for(;;) {
         unsigned int a, c;
         int k;
@@ -248,6 +248,7 @@ static const char *rle(struct bmp *b, struct wimg *m) {
         else if(c == 2) {                           /* a step */
             if(end - p < 2) return "a BMP whose RLE codes end too early";
             x += p[0];
+            if(x > b->w) x = b->w;
             y += p[1];
             p += 2;
         } else {                                    /* c pixels as they are, kept to whole words */
@@ -259,7 +260,7 @@ static const char *rle(struct bmp *b, struct wimg *m) {
             }
             p += bytes + pad;
         }
-        if(y > b->h) return NULL;                   /* past the top: nothing more can be drawn */
+        if(y >= b->h) return NULL;                  /* past the top: nothing more can be drawn */
     }
 #undef PUT
 }

@@ -4,18 +4,20 @@ SurfOS Undertow's window: JPEG pictures
 File: image_jpeg.c  Date: 11/1/26
 ----------------------
 JPEG (ITU T.81): baseline, extended sequential and progressive, Huffman coded, 8 bits, of 1 component (gray), 3 (YCbCr,
-or RGB by Adobe's marker or by the components' names) or 4 (CMYK, or YCCK, with Adobe's inversion), any sampling of 1
-to 4, restart intervals, several scans. Arithmetic coding, 12 bits, lossless and hierarchical files are refused.
-Chroma is widened by repeating it. The EXIF orientation is not looked at.
+or RGB by Adobe's marker or by the components' names, unless a JFIF marker says otherwise, libjpeg's rule) or 4 (CMYK
+or YCCK, by Adobe's marker, always read as Adobe writes them, inverted, as browsers do), any sampling of 1 to 4, restart
+intervals, several scans. Arithmetic coding, 12 bits, lossless and hierarchical files are refused. Chroma is widened by
+repeating it. The EXIF orientation is not looked at.
 
 A sequential block goes through the inverse DCT as it is read, into its component's plane; a progressive one is kept
 as coefficients (WIMG_COEFS_MAX bytes at most) until every scan is in. The planes are as large as the picture and
 are checked against its limits first.
 
 The file is hostile. The numbers its codes give are clamped before they are multiplied, so that no sum can overflow
-in 32 bits (dequant(), idct()): the limits lie well above what any picture of 8 bits can hold. The input ending is
-a corrupted file, which is found at the end of each block, so a scan's time is bounded by its bytes. Its scans are
-WIMG_SCANS_MAX at most, so that a file of many empty scans cannot keep the helper for long.
+in 32 bits (dequant(), idct()): the limits lie well above what any picture of 8 bits can hold. The input ending is a
+corrupted file, which is found at the end of each MCU. A scan's time is its picture's blocks at most, however few its
+bytes (a progressive EOB run covers many blocks in a few bits), and scans are WIMG_SCANS_MAX at most: a helper may take
+a second or more over a small file made to do that, and the window kills one that takes too long.
 */
 
 #include <stddef.h>
@@ -43,6 +45,7 @@ struct comp {
     int nw, nh;                                 /* those a scan of it alone covers */
     int pred;                                   /* the DC prediction */
     int scanned;
+    unsigned short q[64];                       /* its quantizer as it stood at its first scan, in zigzag order */
     unsigned char *plane;                       /* bw * 8 x bh * 8 samples */
     short *coef;                                /* progressive: bw * bh blocks of 64, in zigzag order */
 };
@@ -58,7 +61,7 @@ struct jpeg {
     unsigned char have_quant[4];
     struct table dc[4], ac[4];
     int restart;                                /* MCUs between restart markers, 0: none */
-    int adobe, transform;
+    int jfif, adobe, transform;
     /* the scan */
     int scans;
     int ss, se, ah, al;
@@ -359,7 +362,7 @@ static int dc_value(struct jpeg *j, struct comp *c, int *value) {
 /* A block of a sequential file, into its plane */
 static const char *sequential(struct jpeg *j, struct comp *c, int bx, int by) {
     static const char corrupt[] = "a JPEG whose data is corrupted";
-    const unsigned short *q = j->quant[c->tq];
+    const unsigned short *q = c->q;
     const struct table *ac = &j->ac[c->ac];
     int f[64], k, dc;
     if(dc_value(j, c, &dc)) return corrupt;
@@ -568,7 +571,10 @@ static const char *sos(struct jpeg *j, const unsigned char *d, size_t n) {
             if((!j->progressive || !j->ah) && !j->dc[c->dc].n) return "a JPEG with a Huffman table it does not define";
         }
         if((!j->progressive || j->ss) && !j->ac[c->ac].n) return "a JPEG with a Huffman table it does not define";
-        if(!j->progressive && !j->have_quant[c->tq]) return "a JPEG with a quantization table it does not define";
+        if(!c->scanned) {                       /* T.81: a component's quantizer is the one in force at its first scan */
+            if(!j->have_quant[c->tq]) return "a JPEG with a quantization table it does not define";
+            memcpy(c->q, j->quant[c->tq], sizeof(c->q));
+        }
         c->scanned = 1;
     }
     return scan_data(j, which, ns);
@@ -632,6 +638,9 @@ static const char *segments(struct jpeg *j, char *err, size_t cap, struct wimg *
             if(n < 2) return "a JPEG with a bad restart interval";
             j->restart = (int)be16(d);
             break;
+        case 0xe0:
+            if(n >= 5 && !memcmp(d, "JFIF", 5)) j->jfif = 1;
+            break;
         case 0xee:
             if(n >= 12 && !memcmp(d, "Adobe", 5)) {
                 j->adobe = 1;
@@ -650,8 +659,8 @@ static const char *progressive_planes(struct jpeg *j) {
     int i, x, y, k;
     for(i = 0; i < j->ncomp; i++) {
         struct comp *c = &j->comp[i];
-        const unsigned short *q = j->quant[c->tq];
-        if(!j->have_quant[c->tq]) return "a JPEG with a quantization table it does not define";
+        const unsigned short *q = c->q;
+        if(!c->scanned) return "a JPEG that ends too early";
         for(y = 0; y < c->bh; y++)
             for(x = 0; x < c->bw; x++) {
                 const short *b = c->coef + ((size_t)y * c->bw + x) * 64;
@@ -689,9 +698,9 @@ static void ycc(int y, int cb, int cr, int *r, int *g, int *b) {
 }
 
 static const char *pixels(struct jpeg *j, struct wimg *m) {
-    int rgb = j->ncomp == 3 && ((j->adobe && !j->transform) ||
+    int rgb = j->ncomp == 3 && !j->jfif && ((j->adobe && !j->transform) ||
               (!j->adobe && j->comp[0].id == 'R' && j->comp[1].id == 'G' && j->comp[2].id == 'B'));
-    int ycck = j->ncomp == 4 && j->adobe && j->transform == 2, x, y;
+    int ycck = j->ncomp == 4 && j->adobe && j->transform, x, y;
     for(x = 0; x < j->ncomp; x++) if(!j->comp[x].scanned) return "a JPEG that ends too early";
     for(y = 0; y < j->h; y++) {
         unsigned int *out = m->px + (size_t)y * j->w;
@@ -707,15 +716,19 @@ static const char *pixels(struct jpeg *j, struct wimg *m) {
                     e = c[x];
                 } else ycc(a[x], b[x], c[x], &r, &g, &e);
                 out[x] = (unsigned int)sat(r) << 16 | (unsigned int)sat(g) << 8 | sat(e);
-            } else {                            /* Adobe keeps CMYK inverted: each is how much of the paper shows */
-                int k = j->adobe ? d[x] : 255 - d[x];
-                if(ycck) ycc(a[x], b[x], c[x], &r, &g, &e);
-                else {
-                    r = j->adobe ? a[x] : 255 - a[x];
-                    g = j->adobe ? b[x] : 255 - b[x];
-                    e = j->adobe ? c[x] : 255 - c[x];
+            } else {                            /* inverted CMYK: each is how much of the paper shows */
+                int k = d[x];
+                if(ycck) {                      /* YCC of the CMY that are stored inverted: libjpeg's C = 255 - R */
+                    ycc(a[x], b[x], c[x], &r, &g, &e);
+                    r = 255 - sat(r);
+                    g = 255 - sat(g);
+                    e = 255 - sat(e);
+                } else {
+                    r = a[x];
+                    g = b[x];
+                    e = c[x];
                 }
-                out[x] = (unsigned int)(sat(r) * k / 255) << 16 | (unsigned int)(sat(g) * k / 255) << 8 | (unsigned int)(sat(e) * k / 255);
+                out[x] = (unsigned int)(r * k / 255) << 16 | (unsigned int)(g * k / 255) << 8 | (unsigned int)(e * k / 255);
             }
         }
     }

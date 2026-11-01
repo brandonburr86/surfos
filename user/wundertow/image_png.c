@@ -4,15 +4,17 @@ SurfOS Undertow's window: PNG pictures
 File: image_png.c  Date: 11/1/26
 ----------------------
 PNG, with an inflate of its own: every colour type and depth of the standard, a palette and tRNS, Adam7 interlacing,
-16 bits per sample kept to their high 8. An animated PNG shows its default image. Chunks are checked whole by their
-CRC when they are reached: IHDR first, PLTE, tRNS and IDAT are read, an unknown critical chunk stops the picture
-and any other is passed over unread.
+16 bits per sample kept to their high 8. An animated PNG shows its default image. A chunk is checked whole by its CRC
+when it is reached, if it is one that is read: IHDR first, PLTE, IDAT; an unknown critical chunk stops the picture, an
+ancillary one is passed over. Where libpng lets a file by, so does this, for what real files do and nothing is at risk:
+a palette longer than the depth holds is cut, a tRNS that is wrong or fails its CRC is ignored, and data past the last
+row is not read.
 
 Nothing is held of the file's data but what the format needs: the inflate's 32 KB window, and two rows. Bytes come
 out of inflate one at a time into the row being made; each whole row is unfiltered and turned into pixels. So a
 small file that says it inflates to gigabytes costs nothing: the bytes a picture of its size can hold are known from
-its header, and one more is a corrupted file. Inflate's input is the IDAT chunks one after the other, a byte at a
-time, however they are cut; the Adler-32 at its end is checked. What follows it in the file is not read.
+its header, and inflate stops at the last one. Inflate's input is the IDAT chunks one after the other, a byte at a
+time, however they are cut; the Adler-32 at its end is checked when it gets there.
 */
 
 #include <stddef.h>
@@ -28,7 +30,7 @@ time, however they are cut; the Adler-32 at its end is checked. What follows it 
 
 struct huff {
     unsigned short fast[1 << FAST];             /* the low bits of the input: length << 9 | symbol; 0: a longer code */
-    unsigned int limit[17];                     /* codes of s bits are below limit[s] << (16 - s), left aligned */
+    unsigned int limit[17];                     /* codes of s bits are below limit[s], left aligned to 16 bits */
     unsigned short first[16];                   /* the first code of each length */
     unsigned short index[16];                   /* its place in sym[] */
     unsigned short sym[LITS];
@@ -60,6 +62,7 @@ struct png {
     unsigned int bits;
     int nbits;
     int bad;                                    /* the data ended, or a row's filter is none */
+    int over;                                   /* data past the last row: inflate stops */
     unsigned int wpos;
     unsigned long long out;                     /* bytes made */
     unsigned int adler_a, adler_b;
@@ -94,17 +97,21 @@ static unsigned int crc_of(const struct png *p, const unsigned char *s, size_t n
     return c ^ 0xffffffffu;
 }
 
-/* The chunk at pos: its length and type, checked whole; pos moves to its data. 0, or -1 (the file ends, a bad CRC) */
+/* The chunk at pos: its length and type; pos moves to its data. 0, or -1 (the file ends first) */
 static int chunk(struct png *p, unsigned int *length, const unsigned char **type) {
     unsigned int n;
     if(p->len - p->pos < 12) return -1;
     n = be32(p->in + p->pos);
     if(n > 0x7fffffffu || n > p->len - p->pos - 12) return -1;
-    if(crc_of(p, p->in + p->pos + 4, (size_t)n + 4) != be32(p->in + p->pos + 8 + n)) return -1;
     *length = n;
     *type = p->in + p->pos + 4;
     p->pos += 8;
     return 0;
+}
+
+/* Is the CRC of the chunk just reached (of n bytes at pos) right? */
+static int crc_right(const struct png *p, unsigned int n) {
+    return crc_of(p, p->in + p->pos - 4, (size_t)n + 4) == be32(p->in + p->pos + n);
 }
 
 /* The next byte of the IDAT chunks, or -1 where they end */
@@ -114,7 +121,7 @@ static int next_byte(struct png *p) {
         const unsigned char *t;
         if(p->ended) return -1;
         p->pos += 4;                            /* the CRC of the one before: head() and chunk() saw it is there */
-        if(chunk(p, &n, &t) || memcmp(t, "IDAT", 4)) {
+        if(chunk(p, &n, &t) || memcmp(t, "IDAT", 4) || !crc_right(p, n)) {
             p->ended = 1;
             return -1;
         }
@@ -244,7 +251,7 @@ static void emit(struct png *p, unsigned int c) {
     p->adler_b += p->adler_a;
     if(p->adler_b >= 65521) p->adler_b -= 65521;
     if(p->done) {                               /* more than the picture holds */
-        p->bad = 1;
+        p->over = 1;
         return;
     }
     if(!p->fill) {
@@ -354,7 +361,7 @@ static const char *stored(struct png *p) {
     n = take(p, 16);
     nn = take(p, 16);
     if((n ^ nn) != 0xffff) return "a PNG whose data is corrupted";
-    while(n-- && !p->bad) emit(p, take(p, 8));
+    while(n-- && !p->bad && !p->over) emit(p, take(p, 8));
     return NULL;
 }
 
@@ -371,6 +378,7 @@ static const char *codes(struct png *p) {
         int s = symbol(p, &p->lit);
         unsigned int n, d;
         if(s < 0 || p->bad) return "a PNG whose data is corrupted";
+        if(p->over) return NULL;
         if(s < 256) {
             emit(p, (unsigned int)s);
             continue;
@@ -382,7 +390,7 @@ static const char *codes(struct png *p) {
         if(s < 0 || s > 29) return "a PNG whose data is corrupted";
         d = dbase[s] + take(p, dmore[s]);
         if(d > p->out || p->bad) return "a PNG whose data is corrupted";
-        while(n-- && !p->bad) emit(p, p->window[(p->wpos - d) & (WINDOW - 1)]);
+        while(n-- && !p->bad && !p->over) emit(p, p->window[(p->wpos - d) & (WINDOW - 1)]);
     }
 }
 
@@ -444,6 +452,7 @@ static const char *inflate(struct png *p) {
         if(p->bad) return "a PNG that ends too early";
         why = type == 0 ? stored(p) : type == 1 ? fixed(p) : type == 2 ? dynamic(p) : "a PNG whose data is corrupted";
         if(why) return why;
+        if(p->over) return NULL;
         if(p->bad) return "a PNG whose data is corrupted";
     } while(!final);
     if(!p->done) return "a PNG that ends too early";
@@ -474,8 +483,9 @@ static const char *ihdr(struct png *p, const unsigned char *d, unsigned int n) {
     case 6: if(depth != 8 && depth != 16) return "a PNG of a depth that is none"; p->channels = 4; break;
     default: return "a PNG of a colour type that is none";
     }
-    p->w = w > WIMG_SIDE_MAX ? WIMG_SIDE_MAX + 1 : (int)w;       /* wimg_alloc() says why not */
-    p->h = h > WIMG_SIDE_MAX ? WIMG_SIDE_MAX + 1 : (int)h;
+    if(w > WIMG_SIDE_MAX || h > WIMG_SIDE_MAX) return "a PNG over the limit of 4096 pixels a side";
+    p->w = (int)w;
+    p->h = (int)h;
     p->depth = depth;
     p->color = color;
     p->interlaced = d[12];
@@ -485,33 +495,34 @@ static const char *ihdr(struct png *p, const unsigned char *d, unsigned int n) {
 
 static const char *plte(struct png *p, const unsigned char *d, unsigned int n) {
     unsigned int i;
-    if(n % 3 || !n || n / 3 > 256) return "a PNG with a bad palette";
-    if(p->color == 3 && n / 3 > 1u << p->depth) return "a PNG with a bad palette";
+    if(n % 3 || !n) return "a PNG with a bad palette";
     if(p->color != 3) return NULL;              /* a suggestion for screens of few colours */
-    for(i = 0; i < n / 3; i++) p->palette[i] = (unsigned int)d[i * 3] << 16 | (unsigned int)d[i * 3 + 1] << 8 | d[i * 3 + 2];
-    p->colors = (int)(n / 3);
+    n /= 3;
+    if(n > 1u << p->depth) n = 1u << p->depth;  /* the rest no pixel can name */
+    for(i = 0; i < n; i++) p->palette[i] = (unsigned int)d[i * 3] << 16 | (unsigned int)d[i * 3 + 1] << 8 | d[i * 3 + 2];
+    p->colors = (int)n;
     return NULL;
 }
 
-static const char *trns(struct png *p, const unsigned char *d, unsigned int n) {
+/* Transparency is a nicety: a tRNS that makes no sense is passed over */
+static void trns(struct png *p, const unsigned char *d, unsigned int n) {
     unsigned int i;
     switch(p->color) {
     case 0:
-        if(n < 2) return "a PNG with a bad tRNS";
+        if(n < 2) return;
         p->key[0] = (unsigned int)d[0] << 8 | d[1];
         p->keyed = 1;
         break;
     case 2:
-        if(n < 6) return "a PNG with a bad tRNS";
+        if(n < 6) return;
         for(i = 0; i < 3; i++) p->key[i] = (unsigned int)d[i * 2] << 8 | d[i * 2 + 1];
         p->keyed = 1;
         break;
     case 3:
-        if(!p->colors || n > (unsigned int)p->colors) return "a PNG with a bad tRNS";
+        if(!p->colors || n > (unsigned int)p->colors) return;
         for(i = 0; i < n; i++) p->palette[i] |= (unsigned int)(255 - d[i]) << 24;
         break;
     }
-    return NULL;
 }
 
 /* The chunks up to the first IDAT; p->left is then its length */
@@ -522,12 +533,14 @@ static const char *head(struct png *p) {
     p->pos = 8;
     for(;;) {
         const char *why = NULL;
-        if(chunk(p, &n, &t)) return "a PNG that ends too early, or is corrupted";
+        if(chunk(p, &n, &t)) return "a PNG that ends too early";
         if(first != !memcmp(t, "IHDR", 4)) return "a PNG whose first chunk is not IHDR";
+        if(!(t[0] & 0x20) && !crc_right(p, n)) return "a corrupted PNG";
         if(!memcmp(t, "IHDR", 4)) why = ihdr(p, p->in + p->pos, n);
         else if(!memcmp(t, "PLTE", 4)) why = plte(p, p->in + p->pos, n);
-        else if(!memcmp(t, "tRNS", 4)) why = trns(p, p->in + p->pos, n);
-        else if(!memcmp(t, "IDAT", 4)) {
+        else if(!memcmp(t, "tRNS", 4)) {
+            if(crc_right(p, n)) trns(p, p->in + p->pos, n);
+        } else if(!memcmp(t, "IDAT", 4)) {
             if(p->color == 3 && !p->colors) return "a PNG of colours with no palette";
             p->left = n;
             return NULL;

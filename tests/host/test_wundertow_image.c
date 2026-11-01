@@ -8,11 +8,14 @@ user/wundertow/image*.c on the host, with Undertow's util.c and the test's alloc
 - every picture of tests/fixtures/wundertow/images/ (tools/wundertow-images.py made them; its manifest says what each
   holds): the lossless ones pixel for pixel, the JPEGs within a tolerance;
 - each of them cut short at every length up to 2 KB and at 200 lengths past that, and with bytes changed at random
-  (a fixed sequence): the decoder says no or gives a picture, never reads or writes outside, and holds nothing after;
+  (a fixed sequence; a PNG's CRCs made right again, so that the changes reach inflate): the decoder says no or gives a
+  picture, and holds nothing after. That it never reads or writes outside is seen only by AddressSanitizer: run this
+  file under it by hand (clang on the Mac; it hangs at -m32 under qemu-i386, so the Makefile has no such target);
 - every allocation failing in turn;
 - files made here of every format: over the limits, sizes that overflow 32 bits, headers that lie, tables that do not
   add up, a small PNG that inflates to far more than its size holds, a JPEG of many scans, coefficients at their
-  largest (the same test built with UndefinedBehaviorSanitizer at SurfOS's ABI stops at any overflow);
+  largest (the same test built with UndefinedBehaviorSanitizer at SurfOS's ABI stops at any signed overflow or bad
+  shift; the wrap of a size_t it does not see);
 - making pictures smaller.
 
 "test_wundertow_image FIXTURES" runs it all; "--dump FILE [RAW]" says what a file decodes to, and writes its pixels.
@@ -180,9 +183,9 @@ static void truncated(const struct entry *e) {
     char what[96];
     size_t step;
     if(!s) return;
-    step = len <= 2048 ? 1 : len / 200 + 1;
+    step = len <= 2048 ? 1 : (len - 2048) / 200 + 1;
     snprintf(what, sizeof(what), "%.63s cut short", e->name);
-    for(n = 0; n < len; n += step) {
+    for(n = 0; n < len; n += n < 2048 ? 1 : step) {
         struct wimg m;
         unsigned char *c = malloc(n ? n : 1);           /* so that a read past its end meets nothing of the file */
         memcpy(c, s, n);
@@ -190,6 +193,24 @@ static void truncated(const struct entry *e) {
         free(c);
     }
     free(s);
+}
+
+static unsigned int crc32_of(const unsigned char *p, size_t n);
+
+/* Every chunk of a changed PNG that still fits its file gets the CRC it now needs */
+static void fix_crcs(unsigned char *c, size_t len) {
+    size_t at = 8;
+    if(len < 8 || memcmp(c, "\x89PNG\r\n\x1a\n", 8)) return;
+    while(len - at >= 12) {
+        unsigned int n = (unsigned int)c[at] << 24 | (unsigned int)c[at + 1] << 16 | (unsigned int)c[at + 2] << 8 | c[at + 3], v;
+        if(n > len - at - 12) return;
+        v = crc32_of(c + at + 4, (size_t)n + 4);
+        c[at + 8 + n] = (unsigned char)(v >> 24);
+        c[at + 9 + n] = (unsigned char)(v >> 16);
+        c[at + 10 + n] = (unsigned char)(v >> 8);
+        c[at + 11 + n] = (unsigned char)v;
+        at += (size_t)n + 12;
+    }
 }
 
 static unsigned int seed = 12345;
@@ -214,6 +235,7 @@ static void flipped(const struct entry *e, int times) {
             size_t at = t & 1 ? rnd() % (len < 64 ? len : 64) : rnd() % len;   /* the headers often */
             c[at] = (unsigned char)(t & 2 ? rnd() : c[at] ^ (1u << (rnd() % 8)));
         }
+        fix_crcs(c, len);
         if(!decode(c, len, &m, what)) wimg_free(&m);
         free(c);
     }
@@ -433,10 +455,12 @@ static void far_match(void) {
     free(b.p);
 }
 
-/* A small file that says it is 1 x 1 and inflates to megabytes: stops at the sixth byte */
+/* A small file that says it is 1 x 1 and inflates to megabytes: inflate stops at its fourth byte, which the codes after
+   them show: a code that means nothing, and no end, would be its failure if it read them */
 static void png_bomb(void) {
     struct buf b = { NULL, 0, 0 }, z = { NULL, 0, 0 };
     struct bits s;
+    struct wimg m;
     int i;
     put8(&z, 0x78);
     put8(&z, 0x01);
@@ -450,12 +474,16 @@ static void png_bomb(void) {
         put_lit(&s, 285);
         put_code(&s, 0, 5);                         /* a distance of 1 */
     }
-    put_lit(&s, 256);
+    put_lit(&s, 286);
     flush_bits(&s);
-    put32be(&z, 1);
     png_start(&b, 1, 1, 8, 2, 0, 0, 0);
     finish_png(&b, &z);
-    refused(&b, "a PNG that inflates to more than its picture holds");
+    check(!decode(b.p, b.n, &m, "a PNG that inflates to far more than it holds"), "what is past the last row is not read");
+    if(m.px) {
+        check(m.w == 1 && m.h == 1 && m.px[0] == 0, "its picture");
+        wimg_free(&m);
+    }
+    free(b.p);
 }
 
 static void png_files(void) {
@@ -507,19 +535,100 @@ static void png_files(void) {
     put32be(&z, adler_of(raw, 2));
     finish_png(&b, &z);
     refused(&b, "colours with no palette");
-    png_start(&b, 1, 1, 1, 3, 0, 0, 0);
-    png_chunk(&b, "PLTE", raw, 9);
-    refused(&b, "three colours at 1 bit");
     png_start(&b, 1, 1, 8, 3, 0, 0, 0);
     png_chunk(&b, "PLTE", raw, 8);
     refused(&b, "a palette of 8 bytes");
     png_start(&b, 1, 1, 8, 3, 0, 0, 0);
-    png_chunk(&b, "PLTE", raw, 3);
-    png_chunk(&b, "tRNS", raw, 2);
-    refused(&b, "a tRNS longer than the palette");
-    png_start(&b, 1, 1, 8, 2, 0, 0, 0);
-    png_chunk(&b, "tRNS", raw, 2);
-    refused(&b, "a tRNS too short for RGB");
+    png_chunk(&b, "PLTE", NULL, 0);
+    refused(&b, "a palette of no bytes");
+    /* what libpng lets by: a palette past the depth (what no pixel can name is dropped), a tRNS that makes no sense, a
+       chunk that may be passed over whatever its CRC says */
+    {
+        static const unsigned char six[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+        struct wimg m;
+        png_start(&b, 2, 1, 1, 3, 0, 0, 0);
+        png_chunk(&b, "PLTE", six, 12);
+        raw[0] = 0;
+        raw[1] = 0x40;                              /* filter 0; pixels 0 and 1 */
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "a palette past its depth"), "a palette past its depth is cut");
+        if(m.px) {
+            check(m.px[0] == 0x010203 && m.px[1] == 0x040506, "to its first colours");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        png_start(&b, 2, 1, 1, 3, 0, 0, 0);
+        png_chunk(&b, "PLTE", six, 6);
+        png_chunk(&b, "tRNS", six, 3);              /* one more than the palette has */
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "a tRNS past the palette"), "a tRNS past the palette is passed over");
+        if(m.px) {
+            check(m.px[0] == 0x010203, "all solid");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        memset(raw, 0, 16);
+        png_start(&b, 1, 1, 8, 2, 0, 0, 0);
+        png_chunk(&b, "tRNS", raw, 2);              /* too short for RGB */
+        zlib_stored(&z, raw, 4);
+        put32be(&z, adler_of(raw, 4));
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "a tRNS too short"), "a tRNS too short for RGB is passed over");
+        if(m.px) {
+            check(m.px[0] == 0, "all solid");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        /* a bad CRC on tRNS, and on a chunk nobody reads: passed over; on PLTE: corrupted */
+        png_start(&b, 1, 1, 8, 2, 0, 0, 0);
+        png_chunk(&b, "tRNS", raw, 6);
+        b.p[b.n - 1] ^= 1;
+        png_chunk(&b, "teXt", raw, 3);
+        b.p[b.n - 1] ^= 1;
+        zlib_stored(&z, raw, 4);
+        put32be(&z, adler_of(raw, 4));
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "bad CRCs on chunks that can go"), "bad CRCs on chunks that can go");
+        if(m.px) {
+            check(m.px[0] == 0, "the tRNS with one is not used");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        png_start(&b, 1, 1, 8, 3, 0, 0, 0);
+        png_chunk(&b, "PLTE", six, 3);
+        b.p[b.n - 1] ^= 1;
+        refused(&b, "a bad CRC on PLTE");
+        /* a chunk of another kind while data is still needed */
+        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 3);
+        z.n -= 1;
+        png_chunk(&b, "IDAT", z.p, z.n);
+        png_chunk(&b, "tEXt", raw, 2);
+        png_chunk(&b, "IDAT", z.p, z.n);
+        free(z.p);
+        memset(&z, 0, sizeof(z));
+        refused(&b, "data that stops at another chunk");
+        /* the last row's bad CRC, a whole IDAT of it: chunk after chunk is checked */
+        png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
+        png_chunk(&b, "IDAT", z.p, 3);
+        png_chunk(&b, "IDAT", z.p + 3, z.n - 3);
+        b.p[b.n - 1] ^= 1;
+        free(z.p);
+        memset(&z, 0, sizeof(z));
+        png_chunk(&b, "IEND", NULL, 0);
+        refused(&b, "a bad CRC on a later IDAT");
+        /* a picture over the limit says so by itself */
+    }
     /* a chunk whose length lies */
     png_start(&b, 1, 1, 8, 2, 0, 0, 0);
     put32be(&b, 0xfffffff0u);
@@ -538,11 +647,17 @@ static void png_files(void) {
     put32be(&z, adler_of(raw, 5));
     finish_png(&b, &z);
     refused(&b, "data that ends a byte short");
-    png_start(&b, 1, 1, 8, 0, 0, 0, 0);
-    zlib_stored(&z, raw, 3);
-    put32be(&z, adler_of(raw, 3));
-    finish_png(&b, &z);
-    refused(&b, "data a byte too long");
+    {
+        struct wimg m;
+        png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 3);
+        put32be(&z, adler_of(raw, 3) ^ 1);
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "data a byte too long"), "data past the last row is not read, its Adler-32 neither");
+        if(m.px) wimg_free(&m);
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+    }
     png_start(&b, 1, 1, 8, 0, 0, 0, 0);
     zlib_stored(&z, raw, 2);
     put32be(&z, adler_of(raw, 2) ^ 1);
@@ -768,6 +883,10 @@ static void gif_files(void) {
     refused(&b, "a code size of 0");
     gif_start(&b, 1, 1, 1);
     gif_image(&b, 0, 0, 1, 1, 0);
+    gif_codes(&b, 1, some, 4);
+    refused(&b, "a code size of 1: the standard's least is 2");
+    gif_start(&b, 1, 1, 1);
+    gif_image(&b, 0, 0, 1, 1, 0);
     gif_codes(&b, 9, some, 4);
     refused(&b, "a code size of 9");
     gif_start(&b, 4, 4, 1);
@@ -884,6 +1003,50 @@ static void bmp_files(void) {
     put8(&b, 200);
     put8(&b, 1);
     refused(&b, "RLE ending in a literal run");
+    /* no offset to the pixels: right after the headers; BI_ALPHAFIELDS after the 40-byte header */
+    {
+        struct wimg m;
+        bmp_start(&b, 0, 40, 1, 1, 1, 32, 0, 0);
+        put32le(&b, 0x123456);
+        check(!decode(b.p, b.n, &m, "an offset of 0"), "pixels right after the headers when the offset is 0");
+        if(m.px) {
+            check(m.px[0] == 0x123456, "its pixel");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        bmp_start(&b, 70, 40, 1, 1, 1, 32, 6, 0);
+        put32le(&b, 0xff0000);
+        put32le(&b, 0xff00);
+        put32le(&b, 0xff);
+        put32le(&b, 0xff000000);
+        put32le(&b, 0x80102030);
+        check(!decode(b.p, b.n, &m, "alpha bit fields"), "BI_ALPHAFIELDS");
+        if(m.px) {
+            check(m.px[0] == 0x7f102030, "its pixel, half there");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        /* every row whole, and no end code */
+        bmp_start(&b, 58, 40, 2, 2, 1, 8, 1, 1);
+        put32le(&b, 0xabcdef);
+        put8(&b, 2);
+        put8(&b, 0);
+        put8(&b, 0);
+        put8(&b, 0);
+        put8(&b, 2);
+        put8(&b, 0);
+        put8(&b, 0);
+        put8(&b, 0);
+        check(!decode(b.p, b.n, &m, "RLE with no end code"), "RLE whose rows are all there needs no end code");
+        if(m.px) {
+            check(m.px[3] == 0xabcdef && m.px[0] == 0xabcdef, "its pixels");
+            wimg_free(&m);
+        }
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+    }
     /* runs and steps far past the picture write nothing */
     {
         struct wimg m;
@@ -911,6 +1074,30 @@ static void bmp_files(void) {
         free(b.p);
         memset(&b, 0, sizeof(b));
     }
+}
+
+/* A run of runs past any int, no row's end: 17 MB of RLE. A column of 32 bits must not wrap into the picture */
+static void bmp_long_run(void) {
+    struct buf b = { NULL, 0, 0 };
+    struct wimg m;
+    size_t i, n = 8421510;
+    bmp_start(&b, 62, 40, 4, 4, 1, 8, 1, 2);
+    put32le(&b, 0);
+    put32le(&b, 0xffffff);
+    b.cap = b.n + n * 2 + 2;
+    b.p = realloc(b.p, b.cap);
+    for(i = 0; i < n; i++) {
+        b.p[b.n++] = 0xff;
+        b.p[b.n++] = 1;
+    }
+    b.p[b.n++] = 0;
+    b.p[b.n++] = 1;
+    check(!decode(b.p, b.n, &m, "RLE of 2^31 pixels"), "RLE far past a row's end");
+    if(m.px) {
+        check(m.px[12] == 0xffffff && m.px[15] == 0xffffff && m.px[0] == WIMG_GONE && m.px[11] == WIMG_GONE, "only the bottom row is drawn");
+        wimg_free(&m);
+    }
+    free(b.p);
 }
 
 /**** JPEG ****/
@@ -987,6 +1174,17 @@ static void small_jpeg(struct buf *b, unsigned int quant, unsigned int dc_value,
     jpeg_sof(b, 0xc0, 8, 8, 8, 1, 0x11, 0);
     jpeg_huff(b, 0, dc_value);
     jpeg_huff(b, 1, ac_value);
+}
+
+/* Two codes, of 1 bit (0: dc's, 1: the next), for a table of two values */
+static void jpeg_huff2(struct buf *b, unsigned int tc, unsigned int v0, unsigned int v1) {
+    unsigned char d[19];
+    memset(d, 0, sizeof(d));
+    d[0] = (unsigned char)(tc << 4);
+    d[2] = 2;                                       /* two codes of 2 bits: 00, 01 */
+    d[17] = (unsigned char)v0;
+    d[18] = (unsigned char)v1;
+    seg(b, 0xc4, d, sizeof(d));
 }
 
 static void jpeg_files(void) {
@@ -1221,6 +1419,51 @@ static void jpeg_files(void) {
     put8(&b, 0);
     eoi(&b);
     refused(&b, "EOI where a restart marker belongs");
+    /* a progressive AC scan of ZRLs: 16 zeros each, a coefficient at the end; a sum past the block is corrupted */
+    soi(&b);
+    jpeg_quant(&b, 1);
+    jpeg_sof(&b, 0xc2, 8, 8, 8, 1, 0x11, 0);
+    jpeg_huff(&b, 0, 0);
+    jpeg_huff2(&b, 1, 0xf0, 0x01);
+    jpeg_sos(&b, 1, 0, 0, 0);
+    put8(&b, 0);
+    jpeg_sos(&b, 1, 1, 63, 0);
+    put8(&b, 0x05);                                 /* 00 00 00 01 and a 1: three ZRLs, a 1 at the 49th; then runs */
+    put8(&b, 0x00);
+    put8(&b, 0x00);
+    eoi(&b);
+    if(!decode(b.p, b.n, &m, "a scan of ZRLs")) wimg_free(&m);
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    /* a sequential scan the same way */
+    soi(&b);
+    jpeg_quant(&b, 8);
+    jpeg_sof(&b, 0xc0, 8, 8, 8, 1, 0x11, 0);
+    jpeg_huff(&b, 0, 0);
+    jpeg_huff2(&b, 1, 0xf0, 0x00);
+    jpeg_sos(&b, 1, 0, 63, 0);
+    put8(&b, 0x08);                                 /* (dc: 0) 00 00 01: two ZRLs, an end */
+    put8(&b, 0x00);
+    eoi(&b);
+    check(!decode(b.p, b.n, &m, "ZRLs and an end"), "ZRLs and an end of block");
+    if(m.px) wimg_free(&m);
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    /* progressive coefficients too many to hold: 4000 x 4000 of four components */
+    soi(&b);
+    jpeg_sof(&b, 0xc2, 8, 4000, 4000, 4, 0x11, 0);
+    eoi(&b);
+    refused(&b, "a progressive JPEG too large to hold");
+    /* a scan of one component of three: the others never come */
+    soi(&b);
+    jpeg_quant(&b, 1);
+    jpeg_sof(&b, 0xc0, 8, 8, 8, 3, 0x11, 0);
+    jpeg_huff(&b, 0, 0);
+    jpeg_huff(&b, 1, 0);
+    jpeg_sos(&b, 1, 0, 63, 0);
+    put8(&b, 0);
+    eoi(&b);
+    refused(&b, "components that never come");
     /* the numbers at their largest: the largest quantizer, the largest coefficients, every cell of the block, at
        every sign. A file of no sense decodes to whatever it decodes to; nothing overflows on the way */
     for(k = 0; k < 2; k++) {
@@ -1314,6 +1557,12 @@ static void sizes(void) {
     check(m.px[1] == WIMG_GONE, "none there: not there");
     check(m.px[2] == 0x303030, "the last, of one pixel");
     wimg_free(&m);
+    /* tall */
+    memset(&m, 0, sizeof(m));
+    wimg_alloc(&m, 1, 4, err, sizeof(err));
+    memcpy(m.px, (const unsigned int[]){ 0x10, 0x30, 0x50, 0x70 }, 4 * sizeof(unsigned int));
+    check(wimg_shrink(&m, 2) && m.w == 1 && m.h == 2 && m.px[0] == 0x20 && m.px[1] == 0x60, "a tall picture");
+    wimg_free(&m);
     /* to any size */
     wimg_scale(src, 3, 2, dst, 3, 2);
     check(!memcmp(src, dst, sizeof(src)), "the same size: the same");
@@ -1373,6 +1622,7 @@ int main(int argc, char **argv) {
     png_files();
     gif_files();
     bmp_files();
+    bmp_long_run();
     jpeg_files();
     check(ut_alloc_live == 0, "nothing held at the end");
     if(failures) {

@@ -60,11 +60,13 @@ int wimg_fail(struct wimg *m, char *err, size_t cap, const char *why) {
 /**** sizes ****/
 
 /* The average of n pixels whose channels are summed: transparency counts as a channel. Colours of pixels that are not
-   there at all do not count; a pixel half there counts in full, which is near enough for a picture's edge. */
+   there at all do not count; a pixel half there counts in full, which is near enough for a picture's edge. Each sum is
+   within an unsigned long of 32 bits: 255 x WIMG_PIXELS_MAX is 4.08e9 (16.8 million pixels would not be). */
 static unsigned int average(unsigned long a, unsigned long r, unsigned long g, unsigned long b, unsigned long n,
                             unsigned long shown) {
-    unsigned long t = (a + n / 2) / n;
+    unsigned long t;
     if(!shown) return WIMG_GONE;
+    t = (a + n / 2) / n;
     return (unsigned int)t << 24 | (unsigned int)((r + shown / 2) / shown) << 16 |
            (unsigned int)((g + shown / 2) / shown) << 8 | (unsigned int)((b + shown / 2) / shown);
 }
