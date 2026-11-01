@@ -155,7 +155,9 @@ static void selectors(void) {
     w[3] = 0;
     check(find(2, w) == 0 && c->sels[0].spec == (1u << 10 | 1), ":link counts as a class");
     sheet("a:visited { color: red }");
-    check(find(2, w) == 0, ":visited as :link");
+    check(!c->nsels, ":visited: every link counts as :link, so it matches nothing");
+    sheet("a:visited, a:link { color: red }");
+    check(c->nsels == 1 && find(2, w) == 0, ":link and :visited together");
 
     sheet("* { color: red }");
     check(c->nsels == 1 && c->sels[0].nparts == 0 && c->any == 0 && !c->sels[0].spec, "'*'");
@@ -209,6 +211,21 @@ static void selectors(void) {
     leaves("h2:: { color: blue }", 1, "two colons alone");
     leaves("[] { color: blue }", 1, "an empty attribute");
     leaves("[=x], h3 { color: blue }", 1, "an attribute without a name");
+    leaves("h2, td[colspan=2] { color: blue }", 1, "an attribute's number without quotes");
+    leaves("h2, [a=] { color: blue }", 1, "an attribute without a value");
+    leaves("h2, [a b] { color: blue }", 1, "two names");
+    leaves("h2, [a=b x] { color: blue }", 1, "a flag that is none");
+    leaves("h2, [a=b { color: blue }] { color: blue }", 1, "a block in one");
+    leaves("h2, :hover() { color: blue }", 1, "a pseudo-class written as a function");
+    leaves("h2, :not { color: blue }", 1, "a function written as a pseudo-class");
+    leaves("h2, :nth-child { color: blue }", 1, "and another");
+    leaves("h2, :left { color: blue }", 1, "@page's are not a selector's");
+    leaves("h2, :-webkit-foo { color: blue }", 1, "only pseudo-elements get -webkit-'s pass");
+    leaves("h2, ::before.x { color: blue }", 1, "a class after a pseudo-element");
+    leaves("h2, ::before p { color: blue }", 1, "a compound after one");
+    leaves("h2, ::before::after { color: blue }", 1, "two of them");
+    sheet("h2, ::before:hover, [a], [ a ], [a=b], [a~=\"b\"], [a|=b i], [a^=b], [a$=b], [a*=b S] { color: red }");
+    check(c->nsels == 1 && is(CP_COLOR, CU_RGB, 0xff0000), "those are well-formed");
     leaves("(h2) { color: blue }", 1, "brackets");
     leaves("h2(x) { color: blue }", 1, "a function");
     leaves("h2 ; h3 { color: blue }", 1, "a semicolon");
@@ -240,11 +257,17 @@ static void values(void) {
     sheet("p { COLOR: BLUE; ; ;; DISPLAY:NONE; }");
     check(c->ndecls == 2 && is(CP_COLOR, CU_RGB, 0x0000ff), "any case, empty declarations");
     sheet("p { color: red; a { color: blue } display: none }");
-    check(c->ndecls == 1 && is(CP_COLOR, CU_RGB, 0xff0000), "a nested block is read past, to its declaration's end");
+    check(c->ndecls == 2 && is(CP_DISPLAY, CU_NONE, CSS_D_NONE), "a nested rule ends with its block, the next stays");
+    sheet("p { color: red; .a { color: blue } display: none }");
+    check(c->ndecls == 2 && is(CP_DISPLAY, CU_NONE, CSS_D_NONE), "one of a class too");
+    sheet("p { color: red; @media screen { color: blue } display: none }");
+    check(c->ndecls == 2 && is(CP_DISPLAY, CU_NONE, CSS_D_NONE), "a nested at-rule too");
     sheet("p { color: red; --x: { a: b; c: d }; display: none }");
     check(c->ndecls == 2 && is(CP_DISPLAY, CU_NONE, CSS_D_NONE), "a custom property's block is read past");
     sheet("p { color: red; @media print { x: y } ; display: none }");
     check(c->ndecls == 2, "an at-rule among declarations");
+    sheet("p { --x: { a: b } display: none; color: red }");
+    check(c->ndecls == 1 && is(CP_COLOR, CU_RGB, 0xff0000), "a custom property's block does not end it");
     sheet("p { foo: bar }");
     check(!c->nsels && !c->rules, "a rule with nothing it knows is not kept");
 
@@ -261,10 +284,12 @@ static void values(void) {
     check(color_is("#abc", 0xaabbcc) && color_is("#AbCdEf", 0xabcdef), "#rgb, #rrggbb");
     check(color_is("#abcf", 0xaabbcc) && color_is("#abcdefff", 0xabcdef), "#rgba, #rrggbbaa, opaque");
     check(color_is("#00000080", 0x7f7f7f), "#rrggbbaa, half: over white");
+    sheet("p { color: inherit }");
+    check(is(CP_COLOR, CU_INHERIT, 0), "inherit");
     check(color_is("rgb(1,2,3)", 0x010203) && color_is("rgb(1 2 3)", 0x010203) && color_is("RGB( 1 , 2 , 3 )", 0x010203), "rgb()");
-    check(color_is("rgb(100%,0%,50%)", 0xff007f) && color_is("rgb(300,-20,0)", 0xff0000), "rgb(): percent, saturated");
+    check(color_is("rgb(100%,0%,50%)", 0xff0080) && color_is("rgb(300,-20,0)", 0xff0000), "rgb(): percent, saturated");
     check(color_is("rgba(0,0,0,1)", 0x000000) && color_is("rgb(0 0 0 / 100%)", 0x000000), "rgba(), opaque");
-    check(color_is("rgba(0,0,0,.5)", 0x808080), "rgba(): half");
+    check(color_is("rgba(0,0,0,.5)", 0x7f7f7f), "rgba(): half");
     check(color_is("hsl(0,100%,50%)", 0xff0000) && color_is("hsl(120, 100%, 50%)", 0x00ff00) &&
           color_is("hsl(240deg 100% 50%)", 0x0000ff) && color_is("hsl(0,0%,100%)", 0xffffff) &&
           color_is("hsl(-120,100%,50%)", 0x0000ff) && color_is("hsla(60,100%,50%,1)", 0xffff00), "hsl()");
@@ -279,7 +304,7 @@ static void values(void) {
     sheet("p { background-color: transparent }");
     check(is(CP_BACKGROUND, CU_TRANSPARENT, 0), "a transparent background");
     sheet("p { background-color: inherit }");
-    check(!c->nsels, "an inherited background is not kept");
+    check(is(CP_BACKGROUND, CU_REVERT, 0), "a background's inherit is read as revert: a parent's is not to hand");
 
     /* background */
     sheet("p { background: #fff url(x.png) no-repeat center / cover }");
@@ -290,8 +315,16 @@ static void values(void) {
     check(is(CP_BACKGROUND, CU_TRANSPARENT, 0), "background: no colour says so");
     sheet("p { background: none }");
     check(is(CP_BACKGROUND, CU_TRANSPARENT, 0), "background: none");
-    sheet("p { background: linear-gradient(red, blue) }");
-    check(is(CP_BACKGROUND, CU_TRANSPARENT, 0), "background: a gradient's colours are not the background's");
+    sheet("p { background: #123456; background: linear-gradient(red, blue) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "background: a gradient leaves the colour before it");
+    sheet("p { background: #123456; background: -webkit-repeating-linear-gradient(red, blue) }");
+    check(c->ndecls == 1, "a gradient by a long name too");
+    sheet("p { background: linear-gradient(red, blue) #123456 }");
+    check(is(CP_BACKGROUND, CU_RGB, 0x123456), "a gradient and a colour");
+    sheet("p { background: #123456; background: var(--x) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "background: var() leaves the colour before it");
+    sheet("p { background: #123456; background: rgb(1,2) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "background: a function it cannot read too");
     sheet("p { background: rgb(1,2,3) }");
     check(is(CP_BACKGROUND, CU_RGB, 0x010203), "background: rgb()");
     sheet("p { background: nonsense }");
@@ -303,7 +336,9 @@ static void values(void) {
     sheet("p { display: flex }");
     check(is(CP_DISPLAY, CU_NONE, CSS_D_BLOCK), "display: flex is a block's");
     sheet("p { display: table-cell }");
-    check(!c->nsels, "display: what it has no use for");
+    check(is(CP_DISPLAY, CU_NONE, CSS_D_ASIS), "display: what it has no use for still undoes an earlier none");
+    sheet("p { display: nonsense }");
+    check(!c->nsels, "display: what is none");
     sheet("p { display: block none }");
     check(!c->nsels, "display: two words");
 
@@ -443,9 +478,41 @@ static void values(void) {
     sheet("p { font: Georgia }");
     check(!c->nsels, "font: no size");
     sheet("p { font: inherit }");
-    check(!c->nsels, "font: inherit is not known");
+    check(is(CP_STYLE, CU_INHERIT, 0) && is(CP_WEIGHT, CU_INHERIT, 0) && is(CP_SIZE, CU_INHERIT, 0), "font: inherit");
     sheet("p { font: bold }");
     check(!c->nsels, "font: a weight alone");
+
+    /* the keywords every property has */
+    sheet("p { font-weight: inherit; font-style: unset; font-size: inherit; color: initial; text-align: inherit }");
+    check(is(CP_WEIGHT, CU_INHERIT, 0) && is(CP_STYLE, CU_INHERIT, 0) && is(CP_SIZE, CU_INHERIT, 0) &&
+          is(CP_COLOR, CU_INITIAL, 0) && is(CP_ALIGN, CU_INHERIT, 0), "inherit, unset, initial");
+    sheet("p { background-color: initial; display: initial; margin: initial; padding-top: unset }");
+    check(is(CP_BACKGROUND, CU_TRANSPARENT, 0) && is(CP_DISPLAY, CU_NONE, CSS_D_INLINE) && is(CP_MARGIN_LEFT, CU_PX, 0) &&
+          is(CP_PADDING_TOP, CU_PX, 0), "initial and unset of what is not inherited");
+    sheet("p { font-weight: initial; font-size: initial; text-align: initial; text-decoration: initial }");
+    check(is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_REM, 256) && is(CP_ALIGN, CU_NONE, CSS_A_LEFT) &&
+          is(CP_DECORATION, CU_NONE, 0), "initial of what is");
+    sheet("p { font: revert; margin: revert; background: inherit; display: inherit !important }");
+    check(is(CP_WEIGHT, CU_REVERT, 0) && is(CP_MARGIN_TOP, CU_REVERT, 0) && is(CP_BACKGROUND, CU_REVERT, 0) &&
+          is(CP_DISPLAY, CU_REVERT, 0) && decl(CP_DISPLAY)->important, "revert, and inherit of what is not inherited");
+    sheet("p { color: red inherit }");
+    check(!c->nsels, "they stand alone");
+
+    /* the end of a long value */
+    {
+        char s[400];
+        size_t n = (size_t)snprintf(s, sizeof(s), "p { font: 12px a");
+        int i;
+        for(i = 0; i < 20; i++) n += (size_t)snprintf(s + n, sizeof(s) - n, ",b");
+        snprintf(s + n, sizeof(s) - n, " !important }");
+        sheet(s);
+        check(is(CP_SIZE, CU_PX, 12 * 256) && decl(CP_SIZE)->important, "!important past the tokens looked at");
+        n = (size_t)snprintf(s, sizeof(s), "p { background: url(a)");
+        for(i = 0; i < 20; i++) n += (size_t)snprintf(s + n, sizeof(s) - n, ",url(b)");
+        snprintf(s + n, sizeof(s) - n, " red }");
+        sheet(s);
+        check(is(CP_BACKGROUND, CU_RGB, 0xff0000), "a colour past them");
+    }
 }
 
 static void syntax(void) {
@@ -499,7 +566,11 @@ static void syntax(void) {
     sheet("p { background: URL(a) red }");
     check(is(CP_BACKGROUND, CU_RGB, 0xff0000), "URL(): any case");
     sheet("p { background: url(a b) red; color: lime }");
-    check(is(CP_COLOR, CU_RGB, 0x00ff00), "a broken url() is still one token");
+    check(is(CP_COLOR, CU_RGB, 0x00ff00) && !decl(CP_BACKGROUND), "a broken url() is still one token, and takes its declaration");
+    sheet("p { background: url(a'b) red; color: lime }");
+    check(is(CP_COLOR, CU_RGB, 0x00ff00) && !decl(CP_BACKGROUND), "a quote in one");
+    sheet("p { background: url( a  ) red }");
+    check(is(CP_BACKGROUND, CU_RGB, 0xff0000), "spaces around its address are fine");
     sheet("p { background: url(");
     check(is(CP_BACKGROUND, CU_TRANSPARENT, 0), "url() at the sheet's end");
 
@@ -555,12 +626,26 @@ static void syntax(void) {
     check(c->nsels == 2 && is(CP_COLOR, CU_RGB, 0xff0000), "@media's } ends a rule without a block");
     sheet("@media screen { @foo } p { color: red }");
     check(c->nsels == 1 && c->rules == 1, "@media's } ends an at-rule");
+    sheet("@media [;p{color:red}]{} h2 { color: blue }");
+    check(c->nsels == 1 && is(CP_COLOR, CU_RGB, 0x0000ff), "a block in brackets in a media query");
+
+    /* a byte order mark */
+    sheet("\xef\xbb\xbfp { color: red }");
+    check(c->nsels == 1 && c->sels[0].key == T("p"), "a byte order mark is no name");
+    sheet("\xef\xbb\xbf@charset \"utf-8\"; p { color: red }");
+    check(c->rules == 1 && c->sels[0].key == T("p"), "before @charset too");
 
     /* escapes at every edge */
     sheet("p { color: re\\64 }");
     check(is(CP_COLOR, CU_RGB, 0xff0000), "an escape in a word");
     sheet("\\");
     check(!c->nsels, "a backslash last");
+    {
+        static const char zero[] = "p { color\0: red; margin-top: 4px\0; background: #abc\0def; display: none }";
+        css_free(c);
+        css_add(c, zero, sizeof(zero) - 1);
+        check(c->ndecls == 1 && is(CP_DISPLAY, CU_NONE, CSS_D_NONE), "a NUL is no word's end");
+    }
     sheet(".a\\\n{ color: red }");
     check(!c->nsels, "a line break after a backslash is no escape");
     sheet(".\\0 { color: red } .\\110000 { color: red } .\\d800 { color: red }");
@@ -765,7 +850,10 @@ static void media(void) {
         { "screen, print", 1 }, { "print, screen", 1 }, { "print, tv", 0 }, { "only screen", 1 }, { "not print", 1 },
         { "not screen", 0 }, { "not all", 0 }, { "screen and (min-width: 1px)", 0 }, { "(min-width: 1px)", 0 },
         { "(min-width: 1px), screen", 1 }, { "not screen and (color)", 0 }, { "screen,", 1 }, { ",", 0 }, { "12", 0 },
-        { "print ,, screen", 1 }, { "[", 0 }, { "screen (", 0 }
+        { "print ,, screen", 1 }, { "[", 0 }, { "screen (", 0 }, { "not", 0 }, { "only", 0 }, { "print screen", 0 },
+        { "tv all", 0 }, { "screen and", 0 }, { "and screen", 0 }, { "screen or print", 0 }, { "[,screen", 0 },
+        { "not print and", 0 }, { "not not print", 0 }, { "screen and print", 0 }, { "(color) (color)", 0 },
+        { "screen and(color)", 0 }, { "only print", 0 }, { "not (color)", 0 }
     };
     size_t i;
     char msg[100];
@@ -786,6 +874,10 @@ static void imports(void) {
           "@import: strings only, media kept to the screen, before the rules only");
     n = css_imports("@import \"a\"", 11, urls, CSS_IMPORTS_MAX);
     check(n == 1, "@import ended by the sheet's end");
+    n = css_imports("\xef\xbb\xbf@import \"a\";", 15, urls, CSS_IMPORTS_MAX);
+    check(n == 1, "after a byte order mark");
+    n = css_imports("@import \"a\0b\";", 14, urls, CSS_IMPORTS_MAX);
+    check(n == 1 && !strcmp(urls[0], "a\xef\xbf\xbd" "b"), "a NUL in an address is U+FFFD: nothing is cut there");
     n = css_imports("@import \"a\" {} @import \"b\";", 26, urls, CSS_IMPORTS_MAX);
     check(n == 0, "@import with a block is none");
     n = css_imports("@import 12; @import \"b\";", 24, urls, CSS_IMPORTS_MAX);

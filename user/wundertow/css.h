@@ -10,16 +10,17 @@ make the browser load anything; the one exception is css_imports(), which hands 
 load them.
 
 What is kept:
-- selectors: type, class, id, descendant, child, grouping, :link and :visited (the same, nothing here knows what
-  was visited), each with its specificity;
+- selectors: type, class, id, descendant, child, grouping, and :link, each with its specificity. Every link counts
+  as :link: a sheet is never told which were visited, so a :visited selector matches nothing, and a link gets its
+  page's unvisited look;
 - declarations: color, background-color, display, font-weight, font-style, text-decoration, margin-*, padding-*,
   text-align, font-size, and the shorthands background, font, margin and padding, each with its !important.
 
 What is not: anything else is skipped, as the standard says. A declaration it cannot read goes alone; a selector
 that is malformed takes its whole rule, and one that is well-formed but needs what is not here (:hover, [attr],
-a + b) matches nothing, the others of its list stay. @media blocks count for a screen, without looking at
-features: a query with one is a window of no known size, and does not match. Every other at-rule is skipped, its
-block with it. @import is css_imports()'s, and url() is never read at all.
+a + b) matches nothing, the others of its list stay. inherit, initial, unset and revert work on what is kept. @media
+blocks count for a screen, without looking at features: a query with one is a window of no known size, and does not
+match. Every other at-rule is skipped, its block with it. @import is css_imports()'s, and url() is never read at all.
 
 Bounded: a sheet's bytes, the rules, selectors and declarations of a page, a rule's selectors, how deep brackets
 open. Past a limit the sheet stops where it is and what came before it stays (truncated says so); every allocation
@@ -54,15 +55,17 @@ enum {
     CU_NONE,        /* a word's value: display, weight, style, decoration, alignment (CSS_*) */
     CU_RGB,         /* 0x00RRGGBB */
     CU_TRANSPARENT, /* no colour: value 0 */
-    CU_INHERIT,     /* color: the parent's (inherit, currentcolor) */
+    CU_INHERIT,     /* what the parent's is (inherit, unset, currentcolor): color, weight, style, size, alignment */
     CU_PX,          /* pixels, in 1/256ths */
     CU_EM,          /* the font's size: margins the element's, font-size the parent's, in 1/256ths */
     CU_REM,         /* the page's base size, in 1/256ths */
     CU_PCT,         /* percent, in 1/256ths: margins of the containing block's width, font-size of the parent's */
-    CU_AUTO         /* margin: auto */
+    CU_AUTO,        /* margin: auto */
+    CU_INITIAL,     /* color: the page's text colour (initial) */
+    CU_REVERT       /* what the page's rules say counts for nothing here: HTML's own look stands (revert) */
 };
 
-enum { CSS_D_NONE, CSS_D_BLOCK, CSS_D_INLINE };
+enum { CSS_D_NONE, CSS_D_BLOCK, CSS_D_INLINE, CSS_D_ASIS };    /* ASIS: shown, as HTML has it (display: table-cell) */
 enum { CSS_A_LEFT, CSS_A_CENTER, CSS_A_RIGHT };
 #define CSS_LINE_UNDER   1              /* text-decoration */
 #define CSS_LINE_THROUGH 2

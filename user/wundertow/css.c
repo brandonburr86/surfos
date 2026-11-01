@@ -68,7 +68,6 @@ struct tok {
     unsigned char type;                 /* T_* */
     unsigned char delim;                /* T_DELIM: the byte */
     unsigned char ident;                /* T_HASH: its name could be an identifier (an id) */
-    unsigned char integer;              /* T_NUMBER: written without a fraction or an exponent */
     int num;                            /* T_NUMBER, T_PERCENT, T_DIM: in 1/256ths, within +-(NUM_MAX * 256) */
     unsigned int hash, lhash;           /* a name as written; in lowercase, its first TYPE_CHARS bytes */
     unsigned int nlen;                  /* its bytes */
@@ -88,7 +87,7 @@ static void name_byte(struct tok *t, unsigned char c) {
     t->hash = (t->hash ^ c) * FNV_PRIME;
     if(t->nlen < TYPE_CHARS) t->lhash = (t->lhash ^ l) * FNV_PRIME;
     if(t->nlen + 1 < WORD_MAX) {
-        t->text[t->nlen] = (char)l;
+        t->text[t->nlen] = (char)(l ? l : 0xff);    /* (a NUL is U+FFFD: it ends no word) */
         t->text[t->nlen + 1] = 0;
     }
     if(t->nlen < WORD_MAX) t->nlen++;
@@ -158,10 +157,8 @@ static void number(struct lex *x, struct tok *t) {
     unsigned int whole = 0, frac = 0, scale = 1;
     int neg = 0, eneg = 0, e = 0, v;
     if(s[i] == '+' || s[i] == '-') neg = s[i++] == '-';
-    t->integer = 1;
     for(; i < n && digit(s[i]); i++) if(whole <= NUM_MAX) whole = whole * 10 + (s[i] - '0');
     if(i + 1 < n && s[i] == '.' && digit(s[i + 1])) {
-        t->integer = 0;
         for(i++; i < n && digit(s[i]); i++) {
             if(scale < 10000) {
                 frac = frac * 10 + (s[i] - '0');
@@ -172,18 +169,15 @@ static void number(struct lex *x, struct tok *t) {
     if(i < n && (s[i] | 0x20) == 'e') {
         k = i + 1;
         if(k < n && (s[k] == '+' || s[k] == '-')) eneg = s[k++] == '-';
-        if(k < n && digit(s[k])) {
-            t->integer = 0;
-            for(i = k; i < n && digit(s[i]); i++) if(e < 100) e = e * 10 + (s[i] - '0');
-        }
+        if(k < n && digit(s[k])) for(i = k; i < n && digit(s[i]); i++) if(e < 100) e = e * 10 + (s[i] - '0');
     }
     if(whole > NUM_MAX) whole = NUM_MAX;
     v = (int)(whole * ONE + frac * ONE / scale);
-    while(e-- > 0 && v) {
+    if(v > NUM_MAX * ONE) v = NUM_MAX * ONE;
+    while(e-- > 0 && v && (eneg || v < NUM_MAX * ONE)) {
         v = eneg ? v / 10 : v * 10;
         if(v > NUM_MAX * ONE) v = NUM_MAX * ONE;
     }
-    if(v > NUM_MAX * ONE) v = NUM_MAX * ONE;
     t->num = neg ? -v : v;
     x->i = i;
 }
@@ -200,6 +194,11 @@ static void numeric(struct lex *x, struct tok *t) {
 }
 
 static void str_add(struct lex *x, unsigned char c) {
+    if(!c) {                                        /* a NUL is U+FFFD */
+        str_add(x, 0xef);
+        str_add(x, 0xbf);
+        c = 0xbd;
+    }
     if(x->nstr < CSS_URL_MAX) {
         x->str[x->nstr++] = (char)c;
         x->str[x->nstr] = 0;
@@ -241,10 +240,12 @@ static void string(struct lex *x, struct tok *t, unsigned char quote) {
     x->i = n;
 }
 
-/* A name, and what it is by what follows. url(address) without quotes is one token, whose address is not kept. */
+/* A name, and what it is by what follows. url(address) without quotes is one token, whose address is not kept; a
+   malformed one (a space inside it, a quote, a bracket, a control) is that one token and a bad one. */
 static void ident_like(struct lex *x, struct tok *t) {
     const unsigned char *s = x->s;
     size_t n = x->n, i;
+    int bad = 0;
     name(x, t);
     t->type = T_IDENT;
     if(x->i >= n || s[x->i] != '(') return;
@@ -253,16 +254,29 @@ static void ident_like(struct lex *x, struct tok *t) {
     if(strcmp(t->text, "url")) return;
     for(i = x->i; i < n && ws(s[i]); i++) ;
     if(i < n && (s[i] == '"' || s[i] == '\'')) return;
-    while(i < n && s[i] != ')') i += s[i] == '\\' ? 2 : 1;
+    while(i < n && s[i] != ')') {
+        unsigned char c = s[i];
+        if(c == '\\') {
+            i += 2;
+            continue;
+        }
+        if(ws(c)) {
+            while(i < n && ws(s[i])) i++;
+            if(i < n && s[i] != ')') bad = 1;
+            continue;
+        }
+        if(c == '"' || c == '\'' || c == '(' || c < 0x20 || c == 0x7f) bad = 1;
+        i++;
+    }
     x->i = i < n ? i + 1 : n;
-    t->type = T_URL;
+    t->type = bad ? T_BAD : T_URL;
 }
 
 static void next(struct lex *x, struct tok *t) {
     const unsigned char *s = x->s;
     size_t n = x->n, i;
     unsigned char c;
-    t->delim = t->ident = t->integer = 0;
+    t->delim = t->ident = 0;
     t->num = 0;
     t->hash = t->lhash = FNV_BASIS;
     t->nlen = 0;
@@ -344,10 +358,11 @@ struct parser {
     struct tok vals[VALUES_MAX];        /* the value being read, its whitespace left out */
     int nvals;
     int bad;                            /* it has what no value here may have: a stray bracket, a broken string */
+    int custom;                         /* it is a custom property's (--name): a block is part of it */
     char url[CSS_URL_MAX + 1];          /* css_imports()'s: an @import's address */
 };
 
-static struct parser P_work;            /* 4 KB, off the stack; nothing here runs twice at once */
+static struct parser P_work;            /* 6 KB, off the stack; nothing here runs twice at once */
 
 static void start(struct parser *P, const char *s, size_t n, struct css *c, struct css_decl *out, size_t cap) {
     P->x.s = (const unsigned char *)s;
@@ -362,6 +377,9 @@ static void start(struct parser *P, const char *s, size_t n, struct css *c, stru
     P->cap = cap;
     P->stop = 0;
     P->media = 0;
+    P->custom = 0;
+    if(!c && out) return;
+    if(n >= 3 && !memcmp(s, "\xef\xbb\xbf", 3)) P->x.i = 3;       /* a sheet's byte order mark is no name */
 }
 
 static void fetch(struct parser *P) {
@@ -519,13 +537,13 @@ static unsigned int mixed(int r, int g, int b, int a) {
 }
 
 static int channel(const struct tok *t) {           /* of rgb(): 0-255, or 0-100% */
-    if(t->type == T_PERCENT) return clamp(t->num, 0, 100 * ONE) * 255 / (100 * ONE);
+    if(t->type == T_PERCENT) return (clamp(t->num, 0, 100 * ONE) * 255 + 50 * ONE) / (100 * ONE);
     return clamp((t->num + ONE / 2) / ONE, 0, 255);
 }
 
 static int alpha_of(const struct tok *t) {          /* 0-1, or 0-100% */
-    if(t->type == T_PERCENT) return clamp(t->num, 0, 100 * ONE) * 255 / (100 * ONE);
-    return clamp(t->num, 0, ONE) * 255 / ONE;
+    if(t->type == T_PERCENT) return (clamp(t->num, 0, 100 * ONE) * 255 + 50 * ONE) / (100 * ONE);
+    return (clamp(t->num, 0, ONE) * 255 + ONE / 2) / ONE;
 }
 
 static unsigned int from_hsl(int h, int s, int l) {  /* h in degrees, s and l in percent: in thousandths below */
@@ -682,8 +700,7 @@ static int font_size(const struct tok *t, int *unit, int *value) {
 
 static void r_color(struct parser *P, int prop, const struct tok *v, int n, int imp) {
     int i = 0, unit, rgb;
-    if(n == 1 && word(&v[0], "inherit")) unit = CU_INHERIT, rgb = 0;
-    else if(!color(v, n, &i, &unit, &rgb) || i != n) return;
+    if(!color(v, n, &i, &unit, &rgb) || i != n) return;
     if(prop == CP_COLOR ? unit == CU_TRANSPARENT : unit == CU_INHERIT) return;
     emit(P, prop, unit, rgb, imp);
 }
@@ -694,7 +711,7 @@ static void r_background(struct parser *P, int prop, const struct tok *v, int n,
     static const char *const words[] = { "none", "repeat", "repeat-x", "repeat-y", "no-repeat", "round", "space", "top",
                                          "bottom", "left", "right", "center", "cover", "contain", "fixed", "scroll",
                                          "local", "border-box", "padding-box", "content-box", "text", "auto", NULL };
-    int i = 0, depth = 0, unit = CU_TRANSPARENT, rgb = 0, found = 0;
+    int i = 0, depth = 0, unit = CU_TRANSPARENT, rgb = 0, found = 0, gradient = 0;
     (void)prop;
     while(i < n) {
         int j = i, u, c;
@@ -708,13 +725,19 @@ static void r_background(struct parser *P, int prop, const struct tok *v, int n,
             found = 1;
             i = j;
         } else {
-            if(v[i].type == T_FUNC || v[i].type == T_LPAREN) depth++;
-            else if(v[i].type == T_IDENT ? one_of(v[i].text, words) < 0
-                                         : v[i].type != T_URL && v[i].type != T_COMMA && !length(&v[i], &u, &c) &&
-                                           (v[i].type != T_DELIM || v[i].delim != '/')) return;
+            if(v[i].type == T_FUNC) {
+                if(strcmp(v[i].text, "url")) {      /* (a name is cut: strstr() finds repeating-linear-gradient's) */
+                    if(!strstr(v[i].text, "gradient")) return;  /* var() and the like: an earlier colour stands */
+                    gradient = 1;
+                }
+                depth++;
+            } else if(v[i].type == T_IDENT ? one_of(v[i].text, words) < 0
+                                           : v[i].type != T_URL && v[i].type != T_COMMA && !length(&v[i], &u, &c) &&
+                                             (v[i].type != T_DELIM || v[i].delim != '/')) return;
             i++;
         }
     }
+    if(gradient && !found) return;                  /* a gradient is not shown: the colour before it is its stand-in */
     emit(P, CP_BACKGROUND, unit, rgb, imp);
 }
 
@@ -722,10 +745,14 @@ static void r_display(struct parser *P, int prop, const struct tok *v, int n, in
     static const char *const none[] = { "none", NULL };
     static const char *const block[] = { "block", "flex", "grid", "table", "flow-root", "list-item", NULL };
     static const char *const inl[] = { "inline", "inline-block", "inline-flex", "inline-grid", "inline-table", NULL };
+    static const char *const keep[] = { "contents", "ruby", "ruby-text", "table-caption", "table-cell", "table-column",
+                                        "table-column-group", "table-footer-group", "table-header-group", "table-row",
+                                        "table-row-group", "-webkit-box", "-webkit-flex", NULL };
     if(n != 1 || v[0].type != T_IDENT) return;
     if(one_of(v[0].text, none) >= 0) emit(P, prop, CU_NONE, CSS_D_NONE, imp);
     else if(one_of(v[0].text, block) >= 0) emit(P, prop, CU_NONE, CSS_D_BLOCK, imp);
     else if(one_of(v[0].text, inl) >= 0) emit(P, prop, CU_NONE, CSS_D_INLINE, imp);
+    else if(one_of(v[0].text, keep) >= 0) emit(P, prop, CU_NONE, CSS_D_ASIS, imp);   /* shown, as HTML has it */
 }
 
 static int weight_of(const struct tok *t) {          /* 0 normal, 1 bold, -1 none */
@@ -838,11 +865,13 @@ static void r_sides(struct parser *P, int prop, const struct tok *v, int n, int 
     emit(P, prop + 3, unit[l], value[l], imp);
 }
 
-static const struct property {
+struct property {
     const char *name;
     int prop;
     void (*read)(struct parser *, int, const struct tok *, int, int);
-} properties[] = {
+};
+
+static const struct property properties[] = {
     { "background", CP_BACKGROUND, r_background }, { "background-color", CP_BACKGROUND, r_color },
     { "color", CP_COLOR, r_color }, { "display", CP_DISPLAY, r_display }, { "font", CP_SIZE, r_font },
     { "font-size", CP_SIZE, r_size }, { "font-style", CP_STYLE, r_fstyle }, { "font-weight", CP_WEIGHT, r_weight },
@@ -854,6 +883,33 @@ static const struct property {
     { "text-align", CP_ALIGN, r_align }, { "text-decoration", CP_DECORATION, r_decoration },
     { "text-decoration-line", CP_DECORATION, r_decoration }
 };
+
+/* inherit, initial, unset and revert, alone in a value, are every property's. inherit where this file has no parent's
+   value to give (a box's margin) is read as revert: the page's rules say nothing. */
+static void keyword(struct parser *P, int prop, const char *w, int imp) {
+    int inherited = prop == CP_COLOR || prop == CP_WEIGHT || prop == CP_STYLE || prop == CP_SIZE || prop == CP_ALIGN;
+    if(!strcmp(w, "unset")) w = inherited ? "inherit" : "initial";
+    if(!strcmp(w, "revert") || (!strcmp(w, "inherit") && !inherited)) emit(P, prop, CU_REVERT, 0, imp);
+    else if(!strcmp(w, "inherit")) emit(P, prop, CU_INHERIT, 0, imp);
+    else switch(prop) {                             /* initial */
+    case CP_COLOR: emit(P, prop, CU_INITIAL, 0, imp); break;
+    case CP_BACKGROUND: emit(P, prop, CU_TRANSPARENT, 0, imp); break;
+    case CP_DISPLAY: emit(P, prop, CU_NONE, CSS_D_INLINE, imp); break;
+    case CP_ALIGN: emit(P, prop, CU_NONE, CSS_A_LEFT, imp); break;
+    case CP_SIZE: emit(P, prop, CU_REM, ONE, imp); break;
+    case CP_WEIGHT: case CP_STYLE: case CP_DECORATION: emit(P, prop, CU_NONE, 0, imp); break;
+    default: emit(P, prop, CU_PX, 0, imp); break;   /* margins and paddings */
+    }
+}
+
+static void wide(struct parser *P, const struct property *p, const char *w, int imp) {
+    int i, n = p->read == r_sides ? 4 : 1;
+    if(p->read == r_font) {
+        keyword(P, CP_STYLE, w, imp);
+        keyword(P, CP_WEIGHT, w, imp);
+        keyword(P, CP_SIZE, w, imp);
+    } else for(i = 0; i < n; i++) keyword(P, p->prop + i, w, imp);
+}
 
 static const struct property *property_named(const char *s) {
     size_t i;
@@ -897,13 +953,21 @@ static int value(struct parser *P, int braces, int have) {
             break;
         case T_RBRACE:
             if(!depth && braces) return 1;
+            if(braces && depth == 1 && open[0] == T_RBRACE && !P->custom) { /* a nested rule ends with its block */
+                P->bad = 1;
+                return 0;
+            }
             /* fall through */
         case T_RBRACK: case T_RPAREN:
             if(depth && open[depth - 1] == t->type) depth--;
             else P->bad = 1;
             break;
         }
-        if(P->nvals < VALUES_MAX) P->vals[P->nvals++] = *t;
+        if(P->nvals == VALUES_MAX) {                /* its start, and its end: that is where !important is */
+            P->vals[VALUES_MAX - 2] = P->vals[VALUES_MAX - 1];
+            P->nvals--;
+        }
+        P->vals[P->nvals++] = *t;
     }
 }
 
@@ -911,17 +975,24 @@ static int value(struct parser *P, int braces, int have) {
 static int declaration(struct parser *P, int braces) {
     const struct property *p = property_named(P->t.text);
     struct tok *t = &P->t;
-    int n, important = 0, end;
+    int custom = P->t.text[0] == '-' && P->t.text[1] == '-', n, important = 0, end;
+    static const char *const words[] = { "inherit", "initial", "unset", "revert", NULL };
     fetch(P);
     while(t->type == T_WS) fetch(P);
     if(t->type != T_COLON) return value(P, braces, 1);
+    P->custom = custom;
     end = value(P, braces, 0);
+    P->custom = 0;
     n = P->nvals;
     if(n >= 2 && word(&P->vals[n - 1], "important") && P->vals[n - 2].type == T_DELIM && P->vals[n - 2].delim == '!') {
         important = 1;
         n -= 2;
     }
-    if(p && n && !P->bad && !P->stop) p->read(P, p->prop, P->vals, n, important);
+    if(p && n && !P->bad && !P->stop) {
+        if(n == 1 && P->vals[0].type == T_IDENT && one_of(P->vals[0].text, words) >= 0)
+            wide(P, p, P->vals[0].text, important);
+        else p->read(P, p->prop, P->vals, n, important);
+    }
     return end;
 }
 
@@ -947,12 +1018,13 @@ struct sel {
     int comb;                           /* a combinator waits for its compound, -1: none */
     int ws;                             /* whitespace came after the compound */
     int never;                          /* well-formed, but of what is not here: it matches nothing */
+    int element;                        /* a pseudo-element came: only pseudo-classes may follow it */
     int bad;                            /* malformed: the rule goes */
     unsigned int count;                 /* selectors of the list so far */
 };
 
 static void sel_reset(struct sel *S) {
-    S->n = S->over = S->ids = S->classes = S->types = S->compound = S->ws = S->never = 0;
+    S->n = S->over = S->ids = S->classes = S->types = S->compound = S->ws = S->never = S->element = 0;
     S->comb = -1;
 }
 
@@ -967,6 +1039,7 @@ static void add_part(struct sel *S, int kind, unsigned int hash) {
 
 /* A simple selector comes: after a combinator or whitespace it starts a new compound. A type or '*' must be first. */
 static void simple(struct sel *S, int first) {
+    if(S->element) S->bad = 1;
     if(S->comb >= 0 || S->ws) {
         add_part(S, S->comb >= 0 ? S->comb : CSS_DESCENDANT, 0);
         S->compound = 0;
@@ -978,7 +1051,7 @@ static void simple(struct sel *S, int first) {
 }
 
 static void combinator(struct sel *S, int kind) {
-    if(!S->compound || S->comb >= 0) S->bad = 1;
+    if(!S->compound || S->comb >= 0 || S->element) S->bad = 1;
     S->comb = kind;
     S->ws = 0;
 }
@@ -995,24 +1068,32 @@ static int known(const char *s, const char *const *sorted, size_t n) {
     return 0;
 }
 
-/* The standard's pseudo-classes and pseudo-elements: what is not here, not -webkit-'s, makes a selector invalid */
-static int known_pseudo(const char *s, int element) {
+/* The standard's pseudo-classes and pseudo-elements: what is not here, not -webkit-'s, makes a selector invalid, and
+   so does one written as a function that is none, or the other way round */
+static int known_pseudo(const char *s, int element, int func) {
     static const char *const classes[] = {
         "active", "any-link", "autofill", "blank", "checked", "current", "default", "defined", "dir", "disabled",
-        "empty", "enabled", "first", "first-child", "first-of-type", "focus", "focus-visible", "focus-within",
-        "fullscreen", "future", "has", "host", "hover", "in-range", "indeterminate", "invalid", "is", "lang",
-        "last-child", "last-of-type", "left", "link", "local-link", "modal", "muted", "not", "nth-child",
-        "nth-last-child", "nth-last-of-type", "nth-of-type", "only-child", "only-of-type", "open", "optional",
-        "out-of-range", "past", "paused", "picture-in-picture", "placeholder-shown", "playing", "popover-open",
-        "read-only", "read-write", "required", "right", "root", "scope", "stalled", "state", "target",
-        "target-within", "user-invalid", "user-valid", "valid", "visited", "volume-locked", "where"
+        "empty", "enabled", "first-child", "first-of-type", "focus", "focus-visible", "focus-within", "fullscreen",
+        "future", "has", "host", "hover", "in-range", "indeterminate", "invalid", "is", "lang", "last-child",
+        "last-of-type", "link", "local-link", "modal", "muted", "not", "nth-child", "nth-last-child",
+        "nth-last-of-type", "nth-of-type", "only-child", "only-of-type", "open", "optional", "out-of-range", "past",
+        "paused", "picture-in-picture", "placeholder-shown", "playing", "popover-open", "read-only", "read-write",
+        "required", "root", "scope", "stalled", "state", "target", "target-within", "user-invalid", "user-valid",
+        "valid", "visited", "volume-locked", "where"
     };
     static const char *const elements[] = {
         "after", "backdrop", "before", "cue", "details-content", "file-selector-button", "first-letter", "first-line",
         "grammar-error", "highlight", "marker", "part", "placeholder", "selection", "slotted", "spelling-error",
         "target-text", "view-transition"
     };
-    if(!strncmp(s, "-webkit-", 8)) return 1;
+    static const char *const functions[] = {            /* those that are only functions */
+        "dir", "has", "highlight", "is", "lang", "not", "nth-child", "nth-last-child", "nth-last-of-type",
+        "nth-of-type", "part", "slotted", "state", "where"
+    };
+    int fn_only = known(s, functions, sizeof(functions) / sizeof(functions[0]));
+    if(element && !strncmp(s, "-webkit-", 8)) return 1;
+    if(!fn_only && func && strcmp(s, "cue") && strcmp(s, "host")) return 0;
+    if(fn_only && !func) return 0;
     if(known(s, elements, sizeof(elements) / sizeof(elements[0])))
         return element || !strcmp(s, "after") || !strcmp(s, "before") || !strcmp(s, "first-letter") || !strcmp(s, "first-line");
     return !element && known(s, classes, sizeof(classes) / sizeof(classes[0]));
@@ -1032,28 +1113,44 @@ static void pseudo(struct parser *P, struct sel *S) {
         P->again = 1;
         return;
     }
-    simple(S, 0);
-    if(t->type == T_IDENT && !element && (!strcmp(t->text, "link") || !strcmp(t->text, "visited"))) {
+    if(!S->element) simple(S, 0);                   /* (pseudo-classes may follow a pseudo-element) */
+    if(t->type == T_IDENT && !element && !S->element && !strcmp(t->text, "link")) {
         add_part(S, CSS_LINK, 0);
         S->classes++;
         return;
     }
-    S->never = 1;
-    if(!known_pseudo(t->text, element)) S->bad = 1;
+    S->never = 1;                                   /* :visited with the rest: no link here is one */
+    if(!known_pseudo(t->text, element, t->type == T_FUNC) || (element && S->element)) S->bad = 1;
+    if(element || !strcmp(t->text, "after") || !strcmp(t->text, "before") || !strcmp(t->text, "first-letter") ||
+       !strcmp(t->text, "first-line")) S->element = 1;
     if(t->type == T_FUNC) skip_block(P, T_RPAREN);
 }
 
-/* The '[' was read: an attribute's selector matches nothing here, but it must be one */
+static void fetch_past_ws(struct parser *P) {
+    do fetch(P); while(P->t.type == T_WS);
+}
+
+/* The '[' was read: an attribute's selector matches nothing here, but it must be one: [a], [a=b], [a~="b" i] */
 static void attribute(struct parser *P, struct sel *S) {
     struct tok *t = &P->t;
     simple(S, 0);
     S->never = 1;
-    fetch(P);
-    while(t->type == T_WS) fetch(P);
-    if(t->type != T_IDENT) {
-        S->bad = 1;
-        P->again = 1;
+    fetch_past_ws(P);
+    if(t->type == T_IDENT) {
+        fetch_past_ws(P);
+        if(t->type == T_RBRACK) return;
+        if(t->type == T_DELIM && strchr("~|^$*", t->delim) && t->delim) fetch(P);
+        if(t->type == T_DELIM && t->delim == '=') {
+            fetch_past_ws(P);
+            if(t->type == T_IDENT || t->type == T_STRING) {
+                fetch_past_ws(P);
+                if(word(t, "i") || word(t, "s")) fetch_past_ws(P);
+                if(t->type == T_RBRACK) return;
+            }
+        }
     }
+    S->bad = 1;
+    P->again = 1;
     skip_block(P, T_RBRACK);
 }
 
@@ -1231,15 +1328,16 @@ rewind:
 struct mq {
     int any;                            /* a query of the list held */
     int queries;                        /* it has any */
-    int words, neg, type, feature, bad; /* the query now */
+    int state;                          /* the query now: 0 nothing yet, 1 not or only, 2 a type or a feature, 3 and */
+    int neg, type, feature, bad;
 };
 
 static void mq_end(struct mq *q) {
-    if(q->words) {
-        if(!q->bad && !q->feature && (q->neg ? !q->type : q->type)) q->any = 1;
+    if(q->state || q->bad) {
+        if(!q->bad && q->state == 2 && !q->feature && (q->neg ? !q->type : q->type)) q->any = 1;
         q->queries = 1;
     }
-    q->words = q->neg = q->type = q->feature = q->bad = 0;
+    q->state = q->neg = q->type = q->feature = q->bad = 0;
 }
 
 static void mq_token(struct parser *P, struct mq *q) {
@@ -1248,23 +1346,43 @@ static void mq_token(struct parser *P, struct mq *q) {
     case T_WS:
         return;
     case T_COMMA:
-        if(!q->words) q->bad = 1, q->words = 1;
+        if(!q->state) q->bad = 1;
         mq_end(q);
         return;
-    case T_LPAREN: case T_FUNC:
+    case T_LPAREN:
+        if(q->state == 2) q->bad = 1;
         q->feature = 1;
-        q->words++;
+        q->state = 2;
         skip_block(P, T_RPAREN);
         return;
+    case T_FUNC:
+        q->bad = 1;
+        skip_block(P, T_RPAREN);
+        return;
+    case T_LBRACK:
+        q->bad = 1;
+        skip_block(P, T_RBRACK);
+        return;
+    case T_LBRACE:
+        q->bad = 1;
+        skip_block(P, T_RBRACE);
+        return;
     case T_IDENT:
-        if(!strcmp(t->text, "not") && !q->words) q->neg = 1;
-        else if(!strcmp(t->text, "and") || (!strcmp(t->text, "only") && !q->words)) ;
-        else q->type = !strcmp(t->text, "screen") || !strcmp(t->text, "all");
-        q->words++;
+        if(!strcmp(t->text, "not") || !strcmp(t->text, "only")) {
+            if(q->state) q->bad = 1;
+            q->neg = t->text[0] == 'n';
+            q->state = 1;
+        } else if(!strcmp(t->text, "and")) {
+            if(q->state != 2) q->bad = 1;
+            q->state = 3;
+        } else {
+            if(q->state > 1) q->bad = 1;
+            q->type = !strcmp(t->text, "screen") || !strcmp(t->text, "all");
+            q->state = 2;
+        }
         return;
     }
     q->bad = 1;
-    q->words++;
 }
 
 int css_media(const char *s, size_t n) {
