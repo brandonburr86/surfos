@@ -273,6 +273,10 @@ static void emit_line(struct lay *L, int x, int w, int align, int empty_ok) {
         asc = wf_ascent(L->empty_scale);
         desc = wf_cell_h(L->empty_scale) - asc;
     }
+    if(L->marker_on) {                          /* its item's marker is on this line, so it holds that too */
+        if(asc < wf_ascent(L->base)) asc = wf_ascent(L->base);
+        if(desc < wf_cell_h(L->base) - wf_ascent(L->base)) desc = wf_cell_h(L->base) - wf_ascent(L->base);
+    }
     ytop = top(L);
     cx = x;
     if(align == WA_CENTER && used < w) cx = x + (w - used) / 2;

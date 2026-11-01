@@ -332,6 +332,12 @@ static void display(void) {
     check(d.run_count == 1 && run("y"), "a button");
     page("<select style=display:none><option>x</select>y");
     check(d.run_count == 1 && run("y"), "a select");
+    page("<p><select style=color:red><option>a</select> text");
+    check(color_of("text") == WD_NONE, "a <select>'s end leaves no style behind it");
+    page("<p><select style=display:block><option>a</select> text");
+    check(d.block_count == 2 && run("text") != NULL, "a <select> stays in its line");
+    page("<xmp style=background:#123456>x</xmp>");
+    check(box("x") && box("x")->bg == 0x123456, "<xmp>'s box");
     page("<textarea style=display:none>x</textarea>y");
     check(d.run_count == 1 && run("y"), "a text area");
     page("<div style=display:none><hr><img src=a alt=b><table><tr><td>x</table><ul><li>y</ul></div>z");

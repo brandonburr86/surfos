@@ -1047,7 +1047,7 @@ SCENARIOS = [
                           'refused as Undertow refuses: an unknown root, another name, expired (no request sent), '
                           'HTTPS to HTTP', [
         Step('wundertow --layout ' + url('tls13', '/about'), 'address: ' + url('tls13', '/about'),
-             'status: 200 verified TLSv1.3', 'title: About the fixtures', ' x2 b "About the fixtures"', 'link=0 "Home"',
+             'status: 200 verified TLSv1.3', 'title: About the fixtures', ' s32 b "About the fixtures"', 'link=0 "Home"',
              wait=SH, check=fetched('tls13', '/about', tls='TLSv1.3')),
         Step('echo status $?', 'status 0', wait=SH),
         Step('wundertow --layout ' + url('tls12', '/about'), 'status: 200 verified TLSv1.2', wait=SH,

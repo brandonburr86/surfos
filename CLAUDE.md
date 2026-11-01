@@ -40,7 +40,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
                   # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient),
                   # the web browser's window: its page model, its layout and painting, the browser itself
-                  # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser)
+                  # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser),
+                  # 11/01/26 style sheets against hostile bytes, and the cascade (test_wundertow_css, test_wundertow_style)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -127,7 +128,9 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            the editor (Ctrl+R, !!, Alt+.) and complete by tests/host/test_editor.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            wundertow/ (10/25/26: the web browser in a window: doc the page as boxes, font, layout, paint, browser the
-           window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window"),
+           window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window";
+           11/01/26 css the style sheet parser, docstyle the cascade onto boxes and runs, fontmetrics the width table
+           tools/fontmetrics.py makes for proportional text from the console's fonts),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
            ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
@@ -163,7 +166,8 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
-           hand-made segments), devloop.py (development builds onto the laptop over the network)
+           hand-made segments), devloop.py (development builds onto the laptop over the network),
+           fontmetrics.py (11/01/26: the browser's proportional widths from the console's fonts)
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
            protocol, telnetd's loop, the network manager's files), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
@@ -464,4 +468,9 @@ there keeps Undertow's text byte-identical (test_undertow_html) and the window's
 `wundertow --layout ADDRESS` and `wundertow --render ADDRESS FILE.bmp` (the Image Viewer
 opens it), and on the host with `test_wundertow_layout --render FILE OUT.ppm [WIDTH]`;
 its window on the screen is test-usb's guiapps (`tools/gui_apps_web.py`).
-Layout and painting are integer-only, as programs with windows must be.
+Layout and painting are integer-only, as programs with windows must be. A style sheet is as
+hostile as a page: css.c keeps its limits (docs/UNDERTOW.md "Style sheets"), checks every
+allocation, keeps no string of a sheet and never follows url(); test_wundertow_css has a sheet cut
+at every byte. Text is measured through font.h only: `wf_width()` for a page's runs, which are
+proportional, and cells (`wf_count() * WF_W`) for the chrome and fields, which are not. When
+driver/font*.c change, run tools/fontmetrics.py (test_wundertow_layout checks its table).

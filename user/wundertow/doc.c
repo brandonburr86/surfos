@@ -1196,6 +1196,7 @@ static int css_inline(struct bd *b, struct ut_html_tag *t, unsigned int fl) {
     b->css_at = css;
     if(b->none || no_style(t->el)) return 0;
     display = css_open(b, t->el, t);
+    if(t->el == E_SELECT && display == DS_BLOCK) display = DS_ASIS;    /* (select_tag() takes its end tag) */
     b->display = display;
     if(display != DS_NONE && display != DS_BLOCK) return 0;
     if(display == DS_NONE && (fl & F_VOID)) {
@@ -1207,10 +1208,17 @@ static int css_inline(struct bd *b, struct ut_html_tag *t, unsigned int fl) {
     return 0;
 }
 
-/* The tag has done what it does: its CSS goes on the box it made, and a void element ends here */
-static void css_done(struct bd *b, const struct ut_html_tag *t, unsigned int fl) {
+/* The tag's CSS goes on the box it made */
+static void css_box(struct bd *b) {
     if(b->css_box >= 0) ds_box(b->ds, &b->d.blocks[b->css_box], b->display);
     b->css_box = -1;
+}
+
+/* The tag has done what it does: so has a void element, and a <select> as far as text goes: its end tag is
+   select_tag()'s */
+static void css_done(struct bd *b, const struct ut_html_tag *t, unsigned int fl) {
+    css_box(b);
+    if(t->el == E_SELECT && !b->none) ds_close(b->ds, b->css_at);
     if(!(fl & F_VOID)) return;
     if(b->depth > 1 && b->st[b->depth - 1].made && b->st[b->depth - 1].el == t->el) pop(b);
     ds_close(b->ds, b->css_at);
@@ -1556,6 +1564,7 @@ static void raw(struct bd *b, int el, const char *name) {
         f = push(b, E_XMP, WB_BLOCK);
         if(!f) return;
         box_of(b, f)->flags = WBF_PARA | WBF_PRE;
+        css_box(b);
         b->pre++;
         b->col = 0;
         for(q = start; q < end && !b->stopped && !b->failed; ) text_char(b, next_char(b, &q, end));

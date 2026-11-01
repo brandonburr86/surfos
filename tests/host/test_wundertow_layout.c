@@ -553,6 +553,8 @@ static void made_pages(void) {
     a = text_item("a");
     b = text_item("b");
     check(pl_ok && a && b && a->scale == WF_S32 && b->y == a->y + 32 + 32, "a base of 32");
+    page("<ul><li><span style=font-size:16px>a</span></ul>", 640);
+    check(pl_ok && inside_page(&pl) && nth(WI_MARK, 0) && nth(WI_MARK, 0)->y >= 8, "a marker larger than its line's text: the line holds it");
     wd_base = 16;
 
     /* every font, every style, painted within its viewport */
