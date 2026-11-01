@@ -87,10 +87,11 @@ static int flush_out(FILE *f) {
     return 0;
 }
 
-/* forget what was read ahead, moving the descriptor back to where the reader is */
+/* forget what was read ahead, moving the descriptor back to where the reader is. 11/01/26: a pipe cannot go back, and what
+   it gave is nowhere else, so it stays: fflush(NULL) (system(), popen()) must not lose a popen() stream's input */
 static void drop_input(FILE *f) {
     off_t back = (off_t)(f->rend - f->rpos) + (f->ungot != EOF);
-    if(back) lseek(f->fd, -back, SEEK_CUR);
+    if(back && lseek(f->fd, -back, SEEK_CUR) < 0) return;
     f->rpos = f->rend = 0;
     f->ungot = EOF;
 }

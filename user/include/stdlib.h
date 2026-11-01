@@ -6,7 +6,7 @@ File: stdlib.h  Date: 10/5/26
 malloc() keeps a free list over memory from sbrk(); freed blocks are reused and
 merged with free neighbours (user/libsurf/malloc.c). exit() runs the atexit()
 functions, flushes stdio and ends the process. 10/24/26: the environment (env.c).
-11/01/26: strtod() and atof() (strtod.c), correctly rounded.
+11/01/26: strtod() and atof() (strtod.c), correctly rounded; system() (system.c).
 */
 
 #ifndef _STDLIB_H
@@ -44,5 +44,7 @@ int unsetenv(const char *name);
 int putenv(char *s);                            /* s ("name=value") becomes the entry itself */
 int rand(void);
 void srand(unsigned int seed);
+int system(const char *cmd);                    /* 11/01/26: through surfsh; the exit status, -1 when it could not
+                                                   start; cmd NULL: 1 when there is a shell */
 
 #endif

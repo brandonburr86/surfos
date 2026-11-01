@@ -9,7 +9,7 @@ unbuffered, files opened with fopen() are fully buffered (BUFSIZ). exit() and
 a return from main() flush every stream. The formatter knows the flags - 0 + space #,
 width and precision (numbers or *), the lengths hh h l ll z j t and the
 conversions d i u x X o c s p %, and floating point since 10/25/26. 11/01/26: sscanf() reads it
-too.
+too, and popen() and pclose() run a command (system.c).
 */
 
 #ifndef _STDIO_H
@@ -81,6 +81,9 @@ int feof(FILE *f);
 int ferror(FILE *f);
 void clearerr(FILE *f);
 int fileno(FILE *f);
+
+FILE *popen(const char *cmd, const char *mode);     /* 11/01/26: "r" reads its output, "w" writes its input */
+int pclose(FILE *f);                                /* the exit status, -1 for a stream popen() did not make */
 
 int remove(const char *path);                       /* a file or an empty directory */
 int rename(const char *from, const char *to);       /* ENOSYS where the file system cannot */
