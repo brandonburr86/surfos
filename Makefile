@@ -956,6 +956,7 @@ WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o allo
 WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
                $(BUILD)/host/kernel/driver/cp437.o
 WT_HOST_DRAW += $(addprefix $(BUILD)/host/wundertow/,docstyle.o css.o)     # 11/01/26: a page's CSS
+WT_HOST_DRAW += $(addprefix $(BUILD)/host/kernel/driver/,font12x24.o font16x32.o)    # and real sizes
 $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"

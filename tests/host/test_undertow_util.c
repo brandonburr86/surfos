@@ -242,6 +242,9 @@ static void config_tests(void) {
     check(ut_config_host(c, "fixture.tes", &ip) == -1 && ut_config_host(c, "other", &ip) == -1, "unknown hosts");
     check(ut_config_parse(c, "", 0, err, sizeof(err)) == 0 && c->host_count == 0 &&
           c->clock.rtc_offset_minutes == 0, "an empty file gives the defaults");
+    check(ut_config_parse(c, LIT("font=12x24"), err, sizeof(err)) == 0 && c->font == 24, "the window's font");
+    check(ut_config_parse(c, LIT("font=8x16\nfont=16x32"), err, sizeof(err)) == 0 && c->font == 32, "the last font says");
+    check(ut_config_parse(c, LIT("font=10x20"), err, sizeof(err)) < 0 && strstr(err, "font must be") != NULL, "a font there is none of");
     check(ut_config_parse(c, LIT("rtc_offset_minutes=+840\nrtc_offset_minutes=-840"), err, sizeof(err)) == 0 &&
           c->clock.rtc_offset_minutes == -840, "the limits, and the last setting wins");
     {

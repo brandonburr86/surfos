@@ -324,7 +324,7 @@ static void made_pages(void) {
     b = text_item("two");
     c = text_item("three");
     check(pl_ok && a && b && c && a->y == 8 + 16 && b->y == a->y + 16 + 16 && c->y == b->y + 16 + 16, "margins: the larger of two");
-    check(pl_ok && c && c->scale == 2 && c->h == 32 && c->w == 5 * 16 && (c->style & WS_BOLD), "h1: twice the size, bold");
+    check(pl_ok && c && c->scale == WF_S32 && c->h == 32 && c->w == 5 * 16 && (c->style & WS_BOLD), "h1: the 16x32 font, bold");
 
     page("<center>abc</center><p align=right>xyz", 640);
     a = text_item("abc");
@@ -397,6 +397,59 @@ static void made_pages(void) {
     for(y = 0; y < 16; y++) for(x = 8; x < 16; x++) found += pixel(&im, x, y) == th.fg;
     snprintf(msg, sizeof(msg), "painting: scrolled, the line at the top (%d lit)", found);
     check(found > 5, msg);
+    free(im.px);
+
+    /* real sizes */
+    page("<h1>a</h1><h2>b</h2><h3>c</h3><h4>d</h4><h5>e</h5><h6>f</h6><big>g</big><small>h</small>", 640);
+    a = text_item("b");
+    b = text_item("c");
+    check(pl_ok && a && b && a->scale == WF_S24 && a->h == 24 && a->w == 12 && b->scale == WF_S16 && b->h == 16 &&
+          text_item("f")->scale == WF_S16 && text_item("g")->scale == WF_S16, "h2 in 12x24, the others in 8x16");
+    page("<span style=font-size:14px>a</span><span style=font-size:20px>b</span><span style=font-size:21px>c</span>"
+         "<span style=font-size:28px>d</span><span style=font-size:29px>e</span><span style=font-size:200px>f</span>", 640);
+    check(pl_ok && text_item("a")->scale == WF_S16 && text_item("b")->scale == WF_S16 && text_item("c")->scale == WF_S24 &&
+          text_item("d")->scale == WF_S24 && text_item("e")->scale == WF_S32 && text_item("f")->scale == WF_S32,
+          "font-size: the nearest size there is");
+    page("<p>a <span style=font-size:32px>b</span> c", 640);
+    a = text_item("a");
+    b = text_item("b");
+    check(pl_ok && a && b && a->y + wf_ascent(WF_S16) == b->y + wf_ascent(WF_S32), "sizes on a line share a baseline");
+    page("x<sup>a</sup><h1>y<sub>b</sub></h1>", 640);
+    a = text_item("a");
+    b = text_item("x");
+    check(pl_ok && a && b && a->y == b->y - 4 && text_item("y")->y + 8 == text_item("b")->y, "sub and sup by a quarter of the size");
+    wd_base = 24;
+    page("<p>a<p>b<ul><li>c</ul><h1>d</h1><p><small>e</small>", 640);
+    a = text_item("a");
+    b = text_item("b");
+    c = nth(WI_MARK, 0);
+    check(pl_ok && a && b && c && a->scale == WF_S24 && a->h == 24 && b->y == a->y + 24 + 24 && c->h == 24 && c->scale == WF_S24 &&
+          text_item("d")->scale == WF_S32 && text_item("e")->scale == WF_S16, "a base of 24: text, margins, markers and sizes from it");
+    wd_base = 32;
+    page("<p>a<p>b", 640);
+    a = text_item("a");
+    b = text_item("b");
+    check(pl_ok && a && b && a->scale == WF_S32 && b->y == a->y + 32 + 32, "a base of 32");
+    wd_base = 16;
+
+    /* every font, every style, painted within its viewport */
+    page("<h1><b>a</b><i>b</i><u>c</u><s>d</s></h1><h2><b>e</b><i>f</i></h2><p><b><i>g</i></b>", 300);
+    check(pl_ok && paints_inside(&pl, &pd, 300, 300, 0, 0) && paints_inside(&pl, &pd, 40, 40, 4, 4) &&
+          paints_inside(&pl, &pd, 100, 20, -3, 9), "sizes and styles: only inside the viewport");
+    page("<h1>A</h1>", 300);
+    image_new(&im, 300, pl.height, 0);
+    t = target(&im, 0, 0, 300, pl.height);
+    wp_paint(&pl, &pd, &th, &t, 0, 0, -1);
+    a = text_item("A");
+    found = 0;
+    for(y = 0; y < 32; y++)
+        for(x = 0; x < 16; x++) {
+            unsigned int bits = wf_row(WF_S32, 'A', y);
+            bits |= bits >> 1;
+            bits |= bits >> 1;
+            if((pixel(&im, a->x + x, a->y + y) == th.fg) != !!(bits & (0x8000u >> x))) found++;
+        }
+    check(!found, "a heading's glyph is the 16x32 font's, bold by a smear of two");
     free(im.px);
 
     /* deep and narrow */

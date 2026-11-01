@@ -1,12 +1,13 @@
 """The guiapps scenario's checks of the web browser in a window (wundertow, docs/superpowers/plans/2026-10-25-browser.md;
 the Driver is gui_apps_scenario.py's). 10/25/26: started in the Terminal on a page of the data stick, wundertow opens a
 window in front titled after the page (without the focus, as a program started with & does); a click on its title bar
-gives it the focus; its text is where the layout puts it, in the page's colours, its heading at twice the size and
+gives it the focus; its text is where the layout puts it, in the page's colours, its heading in the 16x32 font and
 bold; a click on a link opens the next page, Backspace goes back to the first, Page Down scrolls a screen and Home
 goes back to the top; its corner dragged makes it smaller and the page is laid out again at the new width; the close
 button ends it. The pages are this module's own, on the stick (STICK); the stick is mounted in the Terminal and
 unmounted again, and the Terminal closed, also when a check fails."""
 import os
+import re
 
 import gui_apps_term as term
 from gui_apps_scenario import PAPER, TEAL, MUTED
@@ -67,18 +68,36 @@ def text_at(d, s, at, y, text, colour=INK, x=8):
     return d.text(s, at[0] + 1 + x, at[1] + TITLE_H + TOOLBAR + y, text, colour, SHEET if colour == INK else None)
 
 
+def font_rows(name):
+    """{character: its rows} of a console font, driver/font<name>.c, each row an integer whose top bit of 16 is the
+    leftmost pixel, as user/wundertow/font.c gives them"""
+    width = int(name.split('x')[0])
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'driver', f'font{name}.c')
+    rows = {}
+    with open(path, encoding='utf-8') as f:
+        for index, values in re.findall(r'\[0x([0-9a-fA-F]{2})\] = \{ ([^}]*) \}', f.read()):
+            rows[int(index, 16)] = [int(v, 16) << (8 if width == 8 else 0) for v in values.split(',')]
+    return rows
+
+
+FONT32 = font_rows('16x32')
+
+
 def heading_at(d, s, at, y, text, x=8):
-    """text at twice the size and bold on the page, as user/wundertow/paint.c draws it: each pixel of the font lit,
-    and the one after it in its row, as 2 x 2; every other pixel of its cells the page's"""
+    """h1 on the page as user/wundertow/paint.c draws it: the 16x32 font, bold as a smear of two pixels to the right,
+    the page's colour everywhere else in its cells"""
     x0, y0 = at[0] + 1 + x, at[1] + TITLE_H + TOOLBAR + y
-    for index, char in enumerate(text):
-        for row, bits in enumerate(d.font[ord(char)]):
+    for row in range(32):
+        line = 0
+        for index, char in enumerate(text):
+            bits = FONT32[ord(char)][row] << 2
             bits |= bits >> 1
-            for col in range(8):
-                colour = INK if bits & (0x80 >> col) else SHEET
-                px, py = x0 + index * 16 + col * 2, y0 + row * 2
-                if any(d.pixel(s, px + a, py + b) != colour for a in (0, 1) for b in (0, 1)):
-                    return False
+            bits |= bits >> 1
+            line |= bits << (16 * (len(text) - 1 - index))
+        for col in range(16 * len(text)):
+            lit = line & (1 << (16 * len(text) + 2 - 1 - col))
+            if d.pixel(s, x0 + col, y0 + row) != (INK if lit else SHEET):
+                return False
     return True
 
 
@@ -103,7 +122,7 @@ def checks(d):
         s = d.visible('a click on its title bar gives it the focus; its text is where the layout puts it',
                       lambda s: titled(d, s, at, 'One - Undertow', True) and
                       text_at(d, s, at, P1_Y, 'First paragraph with '), 'guiapps-web-one.png')
-        d.check('the heading at twice the size and bold', heading_at(d, s, at, H1_Y, 'Wave one'))
+        d.check('the heading in its real size and bold', heading_at(d, s, at, H1_Y, 'Wave one'))
         d.check('the link in the link colour', text_at(d, s, at, P1_Y, 'a link to page two', LINK, LINK_X))
         d.click(at[0] + 1 + LINK_X + 24, at[1] + TITLE_H + TOOLBAR + P1_Y + 8)
         d.move(*PARK)                                       # the pointer off the page: its arrow hides no text checked

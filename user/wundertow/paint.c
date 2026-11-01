@@ -59,36 +59,28 @@ void wp_frame(const struct wp_target *t, int x, int y, int w, int h, unsigned in
     wp_fill(t, x + w - 1, y, 1, h, color);
 }
 
-/* One cell of the font at (x, y), its lit pixels only */
-static void glyph(const struct wp_target *t, int x, int y, unsigned char g, int scale, unsigned int style,
+/* One cell of a size at (x, y), its lit pixels only: bold as a smear to the right, italic as a slant */
+static void glyph(const struct wp_target *t, int x, int y, unsigned char g, int size, unsigned int style,
                   unsigned int color) {
-    int row, col, inside, s = scale < 1 ? 1 : scale;
+    int row, col, inside, w = wf_cell_w(size), h = wf_cell_h(size), bold = style & WS_BOLD ? wf_bold(size) : 0;
+    int reach = w + bold + (style & WS_ITALIC ? h / 5 : 0);
     int cx0 = t->x, cy0 = t->y, cx1 = t->x + t->cw, cy1 = t->y + t->ch;
     if(cx1 > t->w) cx1 = t->w;
     if(cy1 > t->h) cy1 = t->h;
     if(cx0 < 0) cx0 = 0;
     if(cy0 < 0) cy0 = 0;
-    if(x >= cx1 || y >= cy1 || x + (WF_W + 4) * s <= cx0 || y + WF_H * s <= cy0) return;
-    inside = x >= cx0 && y >= cy0 && x + (WF_W + 4) * s <= cx1 && y + WF_H * s <= cy1;
-    for(row = 0; row < WF_H; row++) {
-        unsigned int bits = font8x16[g][row];
-        int shift = style & WS_ITALIC ? (WF_H - 1 - row) / 5 * s : 0;     /* 3 pixels at the top, 0 at the foot */
-        if(!bits) continue;
-        if(style & WS_BOLD) bits |= bits >> 1;
-        for(col = 0; col < WF_W; col++) {
-            int px, py, a, b;
-            if(!(bits & (0x80u >> col))) continue;
-            px = x + col * s + shift;
-            py = y + row * s;
-            for(b = 0; b < s; b++) {
-                unsigned int *line;
-                if(!inside && (py + b < cy0 || py + b >= cy1)) continue;
-                line = t->pixels + (long)(py + b) * t->stride;
-                for(a = 0; a < s; a++) {
-                    if(!inside && (px + a < cx0 || px + a >= cx1)) continue;
-                    line[px + a] = color;
-                }
-            }
+    if(x >= cx1 || y >= cy1 || x + reach <= cx0 || y + h <= cy0) return;
+    inside = x >= cx0 && y >= cy0 && x + reach <= cx1 && y + h <= cy1;
+    for(row = 0; row < h; row++) {
+        unsigned int bits = wf_row(size, g, row) << 16, *line;
+        int shift = style & WS_ITALIC ? (h - 1 - row) / 5 : 0;     /* 3 pixels at the top, 0 at the foot, at 16 */
+        if(!bits || (!inside && (y + row < cy0 || y + row >= cy1))) continue;
+        if(bold) bits |= bits >> 1;
+        if(bold > 1) bits |= bits >> 1;
+        line = t->pixels + (long)(y + row) * t->stride;
+        for(col = 0; col < w + bold; col++) {
+            int px = x + col + shift;
+            if((bits & (0x80000000u >> col)) && (inside || (px >= cx0 && px < cx1))) line[px] = color;
         }
     }
 }
@@ -98,14 +90,14 @@ int wp_text(const struct wp_target *t, int x, int y, const char *s, size_t n, in
     unsigned char cells[WF_CELLS_MAX];
     unsigned int cp;
     size_t i = 0;
-    int k, c, sc = scale < 1 ? 1 : scale;
+    int k, c, w = wf_cell_w(scale);
     while(i < n) {
         if((unsigned char)s[i] < 0x80) cp = (unsigned char)s[i++];
         else i += ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
         k = wf_cells(cp, cells);
         for(c = 0; c < k; c++) {
-            if(cells[c] != ' ' && cells[c] != 0xff) glyph(t, x, y, cells[c], sc, style, color);
-            x += WF_W * sc;
+            if(cells[c] != ' ' && cells[c] != 0xff) glyph(t, x, y, cells[c], scale, style, color);
+            x += w;
         }
     }
     return x;
@@ -185,7 +177,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             wp_fill(t, x, y + 1, it->w, 1, th->rule_light);
             break;
         case WI_MARK:
-            wp_text(t, x, y, l->marks + it->off, it->len, 1, 0, d->fg != WD_NONE ? d->fg : th->fg);
+            wp_text(t, x, y, l->marks + it->off, it->len, it->scale, 0, d->fg != WD_NONE ? d->fg : th->fg);
             break;
         case WI_FIELD:
             field(t, d, th, it, x, y);
@@ -200,8 +192,9 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             c = text_color(d, th, it, hover);
             if(it->style & WS_MARK) wp_fill(t, x, y, it->w, it->h, th->mark);
             wp_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
-            if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE))) wp_fill(t, x, y + WF_UNDER * s, it->w, s, c);
-            if(it->style & WS_STRIKE) wp_fill(t, x, y + 8 * s, it->w, s, c);
+            if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE)))
+                wp_fill(t, x, y + wf_under(s), it->w, wf_stroke(s), c);
+            if(it->style & WS_STRIKE) wp_fill(t, x, y + wf_strike(s), it->w, wf_stroke(s), c);
             break;
         }
         }

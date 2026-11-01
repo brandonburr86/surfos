@@ -194,6 +194,14 @@ static int add_host(struct ut_config *c, char *v, unsigned int line, char *err, 
     return 0;
 }
 
+static int set_font(struct ut_config *c, const char *value, unsigned int line, char *err, size_t cap) {
+    if(!strcmp(value, "8x16")) c->font = 16;
+    else if(!strcmp(value, "12x24")) c->font = 24;
+    else if(!strcmp(value, "16x32")) c->font = 32;
+    else return ut_error(err, cap, "undertow.conf line %u: font must be 8x16, 12x24 or 16x32", line);
+    return 0;
+}
+
 static int parse_line(struct ut_config *c, char *s, unsigned int line, char *err, size_t cap) {
     char *eq, *key, *value;
     s = trim(s);
@@ -205,6 +213,7 @@ static int parse_line(struct ut_config *c, char *s, unsigned int line, char *err
     value = trim(eq + 1);
     if(!strcmp(key, "rtc_offset_minutes")) return set_offset(c, value, line, err, cap);
     if(!strcmp(key, "host")) return add_host(c, value, line, err, cap);
+    if(!strcmp(key, "font")) return set_font(c, value, line, err, cap);
     return ut_error(err, cap, "undertow.conf line %u: unknown setting \"%.40s\"", line, key);
 }
 

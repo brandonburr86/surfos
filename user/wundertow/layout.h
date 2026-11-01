@@ -9,8 +9,9 @@ at its place on the page, with the link it belongs to. paint.c paints any part o
 under the pointer and the place of a fragment target in it. Whole pixels only, no floating point.
 
 The rules, as browsers have them by default: an 8-pixel margin around the page; paragraphs, headings, lists
-and quotes 16 pixels apart (two margins together are the larger of them); lists, definitions and quotes
-indented by 40; h1 and h2 at twice the font's size; lines broken at spaces, and a word too wide for a line
+and quotes 16 pixels apart (the base font's height; two margins together are the larger of them); lists,
+definitions and quotes indented by 40; headings in the sizes a browser gives them, at the nearest size there is
+(h1 32, h2 24, the others 16, over a base of 16); lines broken at spaces, and a word too wide for a line
 broken where the line ends; pre's lines kept, and broken only where they would leave the page; a list item's
 marker in its indentation, on its first line; tables sized to their cells' content within the room they have
 (their width attribute too), cells 2 pixels apart, with their padding and borders.
@@ -34,7 +35,7 @@ enum {
 
 struct wl_item {
     unsigned char kind;                 /* WI_* */
-    unsigned char scale;                /* the text's: 1 or 2 */
+    unsigned char scale;                /* the text's size: WF_S16, WF_S24, WF_S32 (font.h) */
     unsigned char sub;                  /* WI_FIELD: WF_*; WI_FIELD's checked */
     unsigned char checked;
     unsigned short style;               /* WS_* of the run */

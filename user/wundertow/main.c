@@ -357,6 +357,7 @@ int main(int argc, char **argv) {
     ut_config_init(&cfg);
     if(ut_config_load(&cfg, UT_CONF_PATH, err, sizeof(err)) < 0)
         fprintf(stderr, "wundertow: %s: %s (the defaults are used)\n", UT_CONF_PATH, err);
+    if(cfg.font) wd_base = cfg.font;
     if(argc >= 3 && argc <= 4 && !strcmp(argv[1], "--layout"))
         rc = (width = width_arg(argc > 3 ? argv[3] : NULL)) < 0 ? usage() : layout_mode(argv[2], width);
     else if(argc >= 4 && argc <= 5 && !strcmp(argv[1], "--render"))

@@ -50,24 +50,64 @@ size_t wf_count(const char *s, size_t n) {
     return total;
 }
 
-size_t wf_fit(const char *s, size_t n, int width, int scale, size_t *cells_out) {
+static const struct { unsigned char w, h, ascent, under, stroke, strike, bold; } fonts[] = {
+    { 0, 0, 0, 0, 0, 0, 0 },
+    { 8, 16, 12, 13, 1, 8, 1 },
+    { 12, 24, 19, 20, 2, 12, 1 },
+    { 16, 32, 26, 27, 2, 17, 2 }
+};
+
+static int known(int size) { return size < WF_S16 ? WF_S16 : size > WF_S32 ? WF_S32 : size; }
+
+int wf_size(int px) { return px <= 20 ? WF_S16 : px <= 28 ? WF_S24 : WF_S32; }
+int wf_cell_w(int size) { return fonts[known(size)].w; }
+int wf_cell_h(int size) { return fonts[known(size)].h; }
+int wf_ascent(int size) { return fonts[known(size)].ascent; }
+int wf_under(int size) { return fonts[known(size)].under; }
+int wf_stroke(int size) { return fonts[known(size)].stroke; }
+int wf_strike(int size) { return fonts[known(size)].strike; }
+int wf_bold(int size) { return fonts[known(size)].bold; }
+
+unsigned int wf_row(int size, unsigned char g, int row) {
+    switch(known(size)) {
+    case WF_S16: return (unsigned int)font8x16[g][row] << 8;
+    case WF_S24: return font12x24[g][row];
+    }
+    return font16x32[g][row];
+}
+
+/* The next character of s: its bytes, and its width */
+static size_t advance(const char *s, size_t n, int size, unsigned int style, int *w) {
     unsigned char cells[WF_CELLS_MAX];
-    unsigned int cp;
-    size_t i = 0, k, total = 0;
-    long room = width / (WF_W * (scale < 1 ? 1 : scale));
+    unsigned int cp = (unsigned char)s[0];
+    size_t k = 1;
+    int c, count;
+    (void)style;
+    if(cp >= 0x80) k = ut_utf8_decode((const unsigned char *)s, n, &cp);
+    count = wf_cells(cp, cells);
+    for(*w = 0, c = 0; c < count; c++) *w += wf_cell_w(size);
+    return k;
+}
+
+int wf_width(const char *s, size_t n, int scale, unsigned int style) {
+    size_t i = 0;
+    int total = 0, w;
     while(i < n) {
-        size_t c;
-        if((unsigned char)s[i] < 0x80) {
-            k = 1;
-            c = (unsigned char)s[i] >= 0x20 && s[i] != 0x7f ? 1 : (size_t)wf_cells((unsigned char)s[i], cells);
-        } else {
-            k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
-            c = (size_t)wf_cells(cp, cells);
-        }
-        if((long)(total + c) > room) break;
-        total += c;
+        i += advance(s + i, n - i, scale, style, &w);
+        total += w;
+    }
+    return total;
+}
+
+size_t wf_fit(const char *s, size_t n, int width, int scale, unsigned int style, int *used) {
+    size_t i = 0;
+    int total = 0, w;
+    while(i < n) {
+        size_t k = advance(s + i, n - i, scale, style, &w);
+        if(total + w > width) break;
+        total += w;
         i += k;
     }
-    if(cells_out) *cells_out = total;
+    if(used) *used = total;
     return i;
 }
