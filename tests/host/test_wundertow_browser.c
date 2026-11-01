@@ -106,6 +106,7 @@ static int has_request(const char *url) {
 }
 
 static unsigned int busy_bar[W * 31];
+static int has_color(unsigned int c, int y0, int y1);
 
 /* Pixels as a helper's answer brings them: the page owns them from then on */
 static unsigned int *pixels_of(int w, int h, unsigned int c) {
@@ -156,6 +157,18 @@ static void pictures(void) {
     check(p->doc.pics[4].state == WP_REFUSED && p->doc.pics[6].state == WP_REFUSED && p->doc.pics[7].state == WP_REFUSED, "they are refused");
     check(p->bytes >= p->doc.bytes + 8 + 4 && p->pic_bytes == 16 + 4, "its pixels are counted in the page's bytes");
     paint();
+
+    /* a second answer for one that has its own: dropped, and nothing changes */
+    wb_go(&b, "https://pics.test/twice");
+    serve("<img src=a.png>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    answer(&q, 2, 2, 0x111111);
+    before = ut_alloc_live;
+    wb_image(&b, q.page, q.item, 3, 3, 3, 3, pixels_of(3, 3, 0x222222));
+    check(ut_alloc_live == before && p->doc.pics[0].px[0] == 0x111111 && p->doc.pics[0].w == 2 && p->pic_bytes == 16, "pixels again: the first stay");
+    wb_image_failed(&b, q.page, q.item, 9, 9);
+    check(p->doc.pics[0].state == WP_DONE && p->doc.pics[0].w == 2 && !b.inflight, "a failure after them: nothing");
 
     /* the page left: an answer late for it is nobody's, and its pixels go */
     wb_go(&b, "https://pics.test/q");
@@ -240,6 +253,116 @@ static void pictures(void) {
     check(p->pic_bytes == (40 * 40 + 10 * 10) * 4, "and counted");
     paint();
     check(p->pic_bytes == (40 * 40 + 10 * 10) * 4, "once");
+    {
+        const unsigned int *made = m->scaled;
+        long calls = ut_alloc_calls;
+        paint();
+        check(m->scaled == made && ut_alloc_calls == calls, "and painting again makes nothing");
+    }
+    /* out of view it is not made */
+    {
+        char *e = tall;
+        e += snprintf(e, 64, "<p>Above");
+        for(i = 0; i < 60; i++) e += snprintf(e, 32, "<p>Line %d", i);
+        e += snprintf(e, 64, "<p><img src=l.png width=10 height=10>");
+    }
+    wb_go(&b, "https://pics.test/below");
+    serve(tall);
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    answer(&q, 40, 40, 0x808080);
+    paint();
+    m = &p->doc.pics[0];
+    check(!m->scaled && p->pic_bytes == 40 * 40 * 4, "below the view: not yet");
+    wb_key(&b, 0x105);
+    paint();
+    check(m->scaled != NULL, "in view: made");
+    /* a page's limit met exactly: nothing more is asked for */
+    wb_go(&b, "https://pics.test/exact");
+    serve("<img src=1.png alt=a><img src=2.png alt=b>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_image(&b, q.page, q.item, 2048, 4096, 2048, 4096, pixels_of(2048, 4096, 1));
+    check(p->pic_bytes == WB_PAGE_IMAGES, "as many pixels as a page may have");
+    check(!wb_take(&b, &q) && p->doc.pics[1].state == WP_FAILED && !wb_busy(&b), "the next is not asked for: its frame stays");
+    /* the place kept, where what is at the top of the view is a field */
+    {
+        char *e = tall;
+        e += snprintf(e, 64, "<img src=top.png alt=top>");
+        for(i = 0; i < 60; i++) e += snprintf(e, 40, "<p><input name=a value=f%d>", i);
+    }
+    wb_go(&b, "https://pics.test/fields");
+    serve(tall);
+    p = wb_current(&b);
+    paint();
+    wb_key(&b, 0x107);
+    wb_key(&b, 0x107);
+    s0 = p->scroll;
+    check(s0 > 300, "well down, among the fields");
+    wb_take(&b, &q);
+    answer(&q, 100, 300, 0x445566);
+    paint();
+    check(p->scroll > s0 + 200, "a picture above grew: the view with it");
+    /* the history: with pages behind and ahead, the oldest goes first */
+    wb_go(&b, "https://pics.test/h1");
+    serve("<img src=1.png>");
+    old = wb_current(&b);
+    wb_take(&b, &q);
+    answer(&q, 1000, 1000, 1);
+    wb_go(&b, "https://pics.test/h2");
+    serve("<img src=2.png>");
+    p = wb_current(&b);
+    wb_go(&b, "https://pics.test/h3");
+    serve("<p>Ahead");
+    wb_key(&b, 127);
+    wb_cancel(&b);
+    check(wb_current(&b) == p && b.cur >= 1 && b.cur + 1 < b.npages && b.page[b.cur - 1] == old, "a page behind, one ahead");
+    wb_take(&b, &q);
+    {
+        int cur = b.cur;
+        struct wb_page *ahead = b.page[b.cur + 1];
+        answer(&q, 1250, 1000, 7);
+        check(b.cur < cur && wb_current(&b) == p && b.page[0] != old, "over the history's bytes: what is behind goes first");
+        check(b.page[b.cur + 1] == ahead, "and the page ahead stays while one is behind");
+    }
+    /* a narrower window, a smaller box: the pixels of the size before go, and their bytes */
+    wb_go(&b, "https://pics.test/wide");
+    serve("<img src=w.png>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    answer(&q, 600, 60, 0x808080);
+    paint();
+    m = &p->doc.pics[0];
+    check(!m->scaled && p->pic_bytes == 600 * 60 * 4, "shown at its size: nothing made");
+    wb_resize(&b, 500, H);
+    paint();
+    i = m->sw;
+    check(m->scaled && i < 500 && p->pic_bytes == (size_t)(600 * 60 + m->sw * m->sh) * 4, "smaller: made");
+    wb_resize(&b, 400, H);
+    paint();
+    check(m->scaled && m->sw < i && p->pic_bytes == (size_t)(600 * 60 + m->sw * m->sh) * 4, "smaller again: those go, and their bytes");
+    wb_resize(&b, W, H);
+    paint();
+    check(m->scaled && p->pic_bytes == (size_t)(600 * 60 + m->sw * m->sh) * 4, "(its own size again: what was made stays)");
+    /* no room left for such pixels: paint.c's nearest does */
+    wb_go(&b, "https://pics.test/nobudget");
+    serve("<img src=1.png width=600 height=1000><img src=2.png width=600 height=1000>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_take(&b, &r);
+    wb_image(&b, q.page, q.item, 2000, 2000, 2000, 2000, pixels_of(2000, 2000, 0x515151));
+    wb_image(&b, r.page, r.item, 2000, 2000, 2000, 2000, pixels_of(2000, 2000, 0x515151));
+    paint();
+    check(p->pic_bytes == 32000000u && !p->doc.pics[0].scaled, "a page's pictures have its room: none is made");
+    check(has_color(0x515151, WB_TOOLBAR, H - WB_STATUS), "and the picture shows");
+    /* a shape from anywhere: a box stays within a page's sizes */
+    wb_go(&b, "https://pics.test/shape");
+    serve("<img src=s.png width=4000>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_image(&b, q.page, q.item, 1, 4096, 1, 1, pixels_of(1, 1, 3));
+    paint();
+    check(p->lay.count == 1 && p->lay.items[0].h <= WD_SIZE_MAX, "a tall picture shown wide: its height is cut at the limit of one");
     /* failing with a size: the frame takes it */
     wb_go(&b, "https://pics.test/big");
     serve("<img src=l.png alt=l><p>After");
@@ -695,6 +818,44 @@ static void reading(void) {
     check(b.tab_link == 1, "the second link");
     wb_key(&b, 13);
     check(!b.want && p->doc.visited[1], "a place on the same page, by Enter: visited, with no load");
+    /* a new width: what is being read stays what is at the top */
+    {
+        static char text[12000];
+        char *e = text;
+        size_t off, again;
+        int into, into2;
+        for(i = 0; i < 60; i++) e += snprintf(e, 180, "<p>Paragraph %d has words enough on it to take more than a line when the window is narrower than it is now, or so it is hoped here.", i);
+        wb_go(&b, "https://read.test/long");
+        serve(text);
+        p = wb_current(&b);
+        paint();
+        wb_key(&b, 0x107);
+        wb_key(&b, 0x107);
+        wb_key(&b, 0x107);
+        check(wl_place(&p->lay, p->scroll, &off, &into), "a place, well down");
+        wb_resize(&b, 400, H);
+        check(wl_place(&p->lay, p->scroll, &again, &into2) && again == off, "a window narrower: the same place at the top, before any paint");
+        wb_resize(&b, W, H);
+        check(wl_place(&p->lay, p->scroll, &again, &into2) && again == off, "wider again");
+        paint();
+    }
+    /* where a redirect started counts, as where it ended does */
+    wb_go(&b, "https://read.test/from");
+    wb_take(&b, &q);
+    wb_loaded(&b, page_at("https://read.test/to", "<p><a href=from>from</a> <a href=to>to</a> <a href=none>none</a>", 0), 0);
+    p = wb_current(&b);
+    check(p->doc.visited[0] && p->doc.visited[1] && !p->doc.visited[2], "both ends of a redirect");
+    /* Tab to a field while a page loads: the status bar goes on saying so */
+    wb_go(&b, "https://read.test/field");
+    serve("<form><input name=a></form>");
+    wb_go(&b, "https://read.test/slow");
+    wb_take(&b, &q);
+    check(strstr(b.status, "Loading") != NULL, "a load");
+    wb_key(&b, 9);
+    check(b.field == 0 && strstr(b.status, "Loading") != NULL, "Tab to a field: still loading");
+    wb_key(&b, 27);
+    wb_stop(&b);
+    wb_cancel(&b);
     /* a file page's links are known by their file: addresses */
     wb_go(&b, "/stick/a.html");
     wb_take(&b, &q);

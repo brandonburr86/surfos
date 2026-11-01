@@ -282,7 +282,9 @@ static int scroll_to(struct wb *b, int y) {
 
 static int scroll_by(struct wb *b, int dy) {
     struct wb_page *p = wb_current(b);
-    return p ? scroll_to(b, p->scroll + dy) : 0;
+    if(!p) return 0;
+    ensure_layout(b, p);                            /* a new width moves the place, before anything counts from it */
+    return scroll_to(b, p->scroll + dy);
 }
 
 /* A row of the page, h high, into the view: as little as it takes, with some of what is around it */
@@ -846,7 +848,7 @@ static int find_key(struct wb *b, unsigned int key) {
         return 1;
     case 127: case 8:
         if(!b->find_len) return 0;
-        while(b->find_len && (b->find[--b->find_len] & 0xc0) == 0x80) ;
+        b->find_len--;                              /* (what is typed is ASCII) */
         break;
     default:
         if(key < 0x20 || key > 0x7e || b->find_len + 1 >= sizeof(b->find)) return 0;
@@ -911,7 +913,7 @@ static void tab_move(struct wb *b, int back) {
         b->list = -1;
         if(field_item(p, it)) {
             focus_field(b, it->control);
-            if(b->npages) loaded_status(b, p);
+            if(!b->loading && b->npages) loaded_status(b, p);
             return;
         }
         b->tab_link = it->link;
