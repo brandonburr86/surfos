@@ -857,7 +857,9 @@ SMOKE = [
     # for it and then gets its lease (dhcp-one-at-a-time)
     ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('usbnet-plug', CHECK),
-      ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
+      # (11/1/26: QEMU's usb-net reports the address it was given, but with 40 as its first byte on some versions,
+      # as tools/qemu-usb.py's USBNET_MAC says)
+      ('ifconfig', ['wlan0: 00:00:00:00:00:00', re.compile(rb'eth0: (?:52|40):54:00:12:34:56'), PROMPT]),
       ('wifi up', ['bridged to eth0', 'wlan0: up, not associated']),
       ('wifi join SurfSim', ['joined SurfSim']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.15']),
