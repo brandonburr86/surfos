@@ -953,12 +953,13 @@ values (the commands of step 4 as at 1620026: `git show 1620026:surfcpu/docs/GPU
 board's DDR+GPU bitstream is G4's, at bfaac48** (582570ab...): every gate passed and its LVS is
 proved in full (section 16.11), so it takes e119a78's place in steps 6 to 8, with its own build id
 (bfaac489) and `SoC 0.4.0`, and it is the one the owner loads for SurfOS with the GPU2 engine, G3's
-`gfx cube` among its commands. Its build manifest still says `result = "fail"`: the flow's own LVS
-step was killed at the memory cap, and the proof was made afterwards by another route, which the
-manifest does not record. tools/program.sh and board-test refuse a bitstream whose manifest says
-so (steps 6 and 7), so loading it waits for the integrator to settle how that proof is to be
-recorded where they look. G2's DDR+GPU bitstream (e119a78, section 12.6), which passed every gate
-in the flow, is the one they load as they stand, for SurfOS with GPU1. Both of the table's
+`gfx cube` among its commands. Its build's manifest says `result = "fail"`: the flow's own LVS
+step was killed at the memory cap, and the proof was made afterwards by another route. tools/program.sh
+and board-test refuse a bitstream whose manifest says so (steps 6 and 7), so the flow's recheck
+proved it again on 2026-11-01 and wrote its manifests anew, `result = "pass"`, for the same bytes
+([evidence](evidence/flow/lvs-ddr-gpu-d543722.txt)): the copy to load is that recheck's, or a build
+rechecked the same way. G2's DDR+GPU bitstream (e119a78, section 12.6), which passed every gate
+in the flow, stays the one for SurfOS with GPU1. Both of the table's
 bitstreams come from two commits, 1620026 and bfaac48; section 14.2 builds both into one clone.
 
 | Test | The bitstream, in surfcpu/build/fpga/arty_a7_100t/ | Built at, seed | sha256 | The build its banner must show |
@@ -1442,7 +1443,7 @@ nothing programs the flash.
    commands.
 
 7. **GPU2's commands and the cube** (15.8), with a DDR+GPU bitstream that carries GPU2 (G4's,
-   section 16.11, once its proof is done: the boot line then says `+GPU: SurfGPU GPU2 (gpu.ID
+   section 16.11: the boot line then says `+GPU: SurfGPU GPU2 (gpu.ID
    0x32555047), ...`; on G2's GPU1 bitstream these commands say `needs GPU2`). Type:
 
        gfx mode gfx 2
@@ -2193,7 +2194,8 @@ review's checks, built at 1620026, passed every gate of the open flow with seed 
 full, and its netlist runs gpudiag to PASS: it is the board's gpudiag (below; bfaac48's, before the
 review, also passed every gate and is superseded; at 2ff8b24 seed 3 did not route); the DDR+GPU
 bitstream at bfaac48 passed every gate, its LVS proved in full by lvs_equiv's --solver route after
-the flow's own proof was killed at the memory cap (below), and it is the board's DDR+GPU bitstream.
+the flow's own proof was killed at the memory cap (below), then by the flow's recheck on 2026-11-01,
+and it is the board's DDR+GPU bitstream.
 
 **The bitstreams of this record** (each from a tree without changes to tracked files; "dirty" marks
 a boot ROM built while untracked files were in the tree):
@@ -2374,8 +2376,10 @@ wall time; lvs_equiv's largest resident set (its own or a solver's) 2,599,464 kB
 the highest memory.current sampled both equal memory.max, 3,670,016,000 bytes: the cgroup counts the
 file cache too, and the run wrote 800.8 GB of question files (3.2 to 48.3 MB each), so the cache
 filled the cgroup to its limit; the proof's processes stayed below it (2.6 GB at most), and the run
-ended with exit 0, no question killed or unknown. The build's manifest still says `check LVS FAIL`
-and `result = "fail"`, the flow's own step: section 14 says what that means for loading it.
+ended with exit 0, no question killed or unknown. The build's manifest says `check LVS FAIL` and
+`result = "fail"`, the flow's own step; the flow's recheck of 2026-11-01 proved the same bytes and its
+manifests say `result = "pass"` ([evidence](evidence/flow/lvs-ddr-gpu-d543722.txt)): section 14 says
+what that means for loading it.
 
 **The gpudiag netlist in simulation** ([evidence](evidence/gpu-g4/netlist-sim.txt)): the synthesized
 netlist of bfaac48's gpudiag bitstream (the one to test until 1620026's), run from its pins with its

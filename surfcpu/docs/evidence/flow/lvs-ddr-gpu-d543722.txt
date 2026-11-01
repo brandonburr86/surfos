@@ -1,0 +1,48 @@
+SurfCPU flow evidence: the DDR+GPU bitstream at bfaac48 rechecked by the z3cmd route with the tools of
+d543722, with 4.5 GB for the run. LVS PASS: 20,971 proved, 0 differ, 0 unknown, so the flow's own record
+now says what the separate proof of 2026-10-27 said. Nothing here has run on a board.
+(docs/OPEN-FLOW.md sections 3 and 6.9; the run before this one: lvs-ddr-gpu-c10e0fa.txt.)
+Recorded 2026-11-01 on ai-dev. Sources: the run's copy of the build in
+06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/ (read only) and the
+run's log.
+
+== The run
+  make -C surfcpu recheck-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+  tools of d543722b3351, a clean tree; image surfcpu-openxc7:2026-10-15; the capped docker gave it 4 CPUs,
+  4.5 GB, swap off (the owner's word of 2026-10-31, for this one run). Started 2026-10-31T22:39:43Z; the
+  flow's manifest was written 2026-11-01T12:20:53Z; exit status 0.
+  Step times: report 0.08 s, check-clk 51.59 s, check-gclk 0.20 s, check-bit 2.23 s, decode 11.59 s,
+  roundtrip 75.18 s, bram-extract 23.86 s, check-bram 0.60 s, lvs-gold 0.95 s, lvs-extract 25.53 s,
+  lvs-bramwe 1.61 s, lvs-selftest 0.10 s, lvs-prove 49074.22 s.
+  The end of check-lvs.txt:
+  | 20971 proved, 0 differ, 0 unknown   (49071.6s)
+  | z3cmd: 20971 questions (20971 unsat); question files of 3224975 to 48347140 bytes; 46371.6 s in the solver, 2.21 s a question, the longest 17.79 s (question 6161); the largest solver process 2548 MiB (question 13480)
+  | bramwe: 1 block RAM(s), 1 enable(s) re-read, 0 difference(s)
+  lvs/questions.log has 20,971 lines, all unsat: every question was answered, the 73 of c10e0fa's run too.
+
+== What was run again, and what was kept
+  Run again, each PASS: bitstream, round trip, block RAM, LVS, clocks, slack margin (dram_clk +1.037 ns,
+  wants 0.500), timing and utilization.
+  Kept from the build, each PASS: SRL cells, synthesis, netlist, boot ROM.
+  The LVS inputs made again were the build's bytes: gold.v 105b0d3cd825, fabric.raw.v fd91f0a277df,
+  fabric.v 6e4a74caa9e0.
+  Timing is nextpnr's estimate, not sign-off; the design's 34 constraints that nextpnr does not take are
+  not checked (nextpnr-not-checked.txt):
+  | clk100_g           100.00 MHz, achieved 993.05 MHz, slack  +8.993 ns
+  | dram_clk            80.00 MHz, achieved  87.24 MHz, slack  +1.037 ns
+  | pix_clk             25.17 MHz, achieved 106.94 MHz, slack +30.373 ns
+  | sys_clk             25.00 MHz, achieved  43.44 MHz, slack +16.982 ns
+  | u_dram.iodelay_clk 200.00 MHz, achieved 345.78 MHz, slack  +2.108 ns
+
+== The bitstream and its record
+  surfcpu_arty_a7_ddr_gpu.bit, the build's own bytes, not a rebuild: build bfaac489, seed 1, sha256
+  582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b.
+  fpga-build's and the flow's manifests were written anew: result "pass", check LVS PASS, lvs_solver z3cmd,
+  with recheck.txt saying when and with what. The build's own (result "fail", its proof killed at 3.5 GB)
+  stay beside them as manifest.build.txt, sha256 8c18167064ea3074... and, the flow's, c1c6e32bfd5a54d0....
+  git diff bfaac48 ai-dev (261e41b) changes nothing under surfcpu/rtl or surfcpu/spec.
+  The passing copy exists only in that ignored build folder.
+
+== Not shown
+  Nothing was loaded on a board, and neither tools/program.sh nor board-test was run. Physical behaviour
+  stays pending.

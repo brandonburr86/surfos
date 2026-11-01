@@ -583,7 +583,12 @@ cgroup's out-of-memory killer ended their z3cmd processes, which needed up to 2.
 `lvs_equiv`'s 0.95 GB, tens of MB past the 3.5 GB cap. The route works; the cap made the unknowns
 ([evidence/flow/lvs-ddr-gpu-c10e0fa.txt](evidence/flow/lvs-ddr-gpu-c10e0fa.txt)). Since then the
 LVS result says how many questions the solver never answered (section 3), so that needs no dmesg.
-Whether one run may have more memory is a question the integrator has put to the x86 lead.
+
+The owner gave that one run 4.5 GB on 2026-10-31. With the tools of d543722 it passed on 2026-11-01:
+`20971 proved, 0 differ, 0 unknown` in 13 h 38 min, the largest solver process 2,548 MiB, every
+other check run again passing, and both manifests written anew with `result = "pass"`
+([evidence/flow/lvs-ddr-gpu-d543722.txt](evidence/flow/lvs-ddr-gpu-d543722.txt)). The bitstream's
+bytes did not change.
 
 ## 7. Option B: Vivado in an x86-64 container on this Mac
 
