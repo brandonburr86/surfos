@@ -262,8 +262,8 @@ domain and the VGA capture cost about 1 %, so `pix_clk` always runs.
 
 `sim/soc/tools/system_boot_test.py` builds two cards with `tools/mkcard.py` (64 MiB, the standard
 directories, `/BOOT/CMDLINE.TXT` = `ascii`, `/USERS/DOCUMENTS/HELLO.TXT` and an 8 KiB `DATA.BIN`)
-and runs `surfsim` with `HAS_DDR=1`, the DDR model and SurfBoot (`build/fw/surfboot.mem`) twice,
-side by side; expectations follow `boards/arty_a7/tests/surfemu_test.py` where they fit:
+and runs `surfsim` with `HAS_DDR=1`, the DDR model and SurfBoot (`build/fw/surfboot.mem`) three
+times, side by side; expectations follow `boards/arty_a7/tests/surfemu_test.py` where they fit:
 
 * **boot** (card with `/BOOT/SURFOS.BIN` from `build-kernel`): in order on the UART, SurfBoot
   finds the package, loads it over `surf_spi` and checks its payload CRC (as read from the card
@@ -280,6 +280,11 @@ side by side; expectations follow `boards/arty_a7/tests/surfemu_test.py` where t
   `/BOOT/BACKUP.BIN`): SurfBoot reports the CRC mismatch, tries `BACKUP.BIN`, starts it ("boot:
   starting BACKUP.BIN at 0x80000000 ..."); the kernel boots to the prompt and `bootinfo` says
   "from BACKUP.BIN".
+* **paste** (10/31/26, the boot card, audit B88): 10,000 bytes at the UART at the line's speed while
+  `sleep 1200` runs, more than the input queue holds and more than 32 rounds of `serial_isr()`
+  take. A command typed on the PS/2 keyboard afterwards runs, then one at the UART, and `irqstat`
+  says how often the UART rested until a tick. With the old guard the UART's command never comes
+  back ([evidence/os/paste-2026-10-31.txt](evidence/os/paste-2026-10-31.txt)).
 
 Results (2026-10-16, in `make check` at b4717a6, SURFOS.BIN of 361,800 bytes): 21 of 21
 checks; boot 314.3 million cycles (12.57 s simulated) in 95 s, recovery 195.8 million cycles
