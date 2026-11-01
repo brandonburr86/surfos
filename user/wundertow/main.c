@@ -82,14 +82,15 @@ static int load_typed(const char *typed, struct wb *b, struct wb_page **out, cha
 
 /* The page laid out at width, as text */
 static int print_layout(struct wb_page *p, int width) {
-    char *s;
+    char *s, shown[WB_ADDR_MAX];
     wl_free(&p->lay);
     p->lay_w = 0;
     if(wl_layout(&p->doc, width, &p->lay)) {
         fprintf(stderr, "wundertow: out of memory laying out the page\n");
         return 1;
     }
-    printf("address: %s\nstatus: %d%s%s\ntitle: %s\n", p->url, p->status, p->verified ? " verified " : " ",
+    ut_safe_text(shown, sizeof(shown), p->url, strlen(p->url), 1);      /* it came from a server, or a helper */
+    printf("address: %s\nstatus: %d%s%s\ntitle: %s\n", shown, p->status, p->verified ? " verified " : " ",
            p->verified ? p->tls : "", p->doc.title);
     if(p->doc.notice[0]) printf("notice: %s\n", p->doc.notice);
     s = wl_dump(&p->lay, &p->doc);
@@ -247,6 +248,14 @@ static int render_mode(const char *typed, const char *file, int width) {
 
 /**** the window ****/
 
+/* The stack the window will want, while there is memory: a helper may take what is left later, and a program whose stack
+   cannot grow is ended, where a failed malloc is only a notice */
+static void stack_ready(void) {
+    volatile char room[64 * 1024];
+    size_t i;
+    for(i = 0; i < sizeof(room); i += 4096) room[i] = 0;
+}
+
 static int window_mode(const char *typed) {
     static struct wb b;
     struct win_open o;
@@ -258,6 +267,7 @@ static int window_mode(const char *typed) {
     int fd, w, h, n, i, ready, redraw = 1;
     memset(&o, 0, sizeof(o));
     o.version = WIN_VERSION;
+    stack_ready();
     o.w = 760;
     o.h = 460;
     o.min_w = WB_MIN_W;

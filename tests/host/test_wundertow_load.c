@@ -206,7 +206,7 @@ static void good_page(int bytewise) {
     ut_alloc_fill = -1;
     check(!R.failed && R.kind == WB_LOAD_PAGE && R.reload == 1 && R.page == 7 && !strcmp(R.asked, "https://a.test/asked"), "the answer says what was asked");
     check(!strcmp(R.url, "https://a.test/final") && R.len == 21 && !memcmp(R.body, "<title>T</title>Hello", 22), "the address it ended at, and the body with its NUL");
-    check(R.status == 200 && !strcmp(R.reason, "OK") && !strcmp(R.type, "text/html"), "its head");
+    check(R.status == 200 && !R.verified && !strcmp(R.reason, "OK") && !strcmp(R.type, "text/html"), "its head");
     check(!ld_response(&R, &r, err, sizeof(err)) && !strcmp(r.url.host, "a.test") && r.body == R.body && r.len == 21 && r.status == 200, "a response from it");
     check(!ld_busy(&L), "its slot is free");
     ut_test_free(R.body);
@@ -235,6 +235,27 @@ static void unsafe_strings(void) {
     check(!R.redirects, "a number of redirects that cannot be is none");
     ut_test_free(R.body);
     all_gone("escapes");
+}
+
+/* "Verified" is a word about https: a helper's for anything else is no word */
+static void verified(void) {
+    char err[200];
+    static const char *const urls[2] = { "http://a.t/", "https://a.t/" };
+    int i;
+    for(i = 0; i < 2; i++) {
+        struct ld_head h = head(LD_BODY, (unsigned int)strlen(urls[i]), 4);
+        h.verified = 1;
+        msg_len = 0;
+        add(&h, sizeof(h));
+        add(urls[i], strlen(urls[i]));
+        add("body", 4);
+        go(msg, msg_len);
+        ask(WB_LOAD_PAGE, urls[i]);
+        ld_start(&L, &Q, err, sizeof(err));
+        check(until_end(0) && !R.failed && R.verified == i, i ? "verified, over https" : "not over http, whatever a helper says");
+        ut_test_free(R.body);
+        all_gone("verified");
+    }
 }
 
 static void good_picture(void) {
@@ -384,6 +405,41 @@ static void lies(void) {
         t[n].url = "https://a.t/";
         t[n].rest = two;
         t[n].restlen = 8;
+        t[n++].kind = WB_LOAD_IMAGE;
+    }
+    {                                   /* the lengths agree: only the picture's own size can say no */
+        struct ld_head p = head(LD_PIXELS, 12, 12);
+        p.w = 2;
+        p.h = 1;
+        p.pw = 3;
+        p.ph = 1;
+        t[n].what = "wider pixels than the picture, the length right";
+        t[n].h = p;
+        t[n].url = "https://a.t/";
+        t[n].rest = two;
+        t[n].restlen = 8;
+        t[n++].kind = WB_LOAD_IMAGE;
+        p = head(LD_PIXELS, 12, 8);
+        p.w = 2;
+        p.h = 1;
+        p.pw = 1;
+        p.ph = 2;
+        t[n].what = "taller pixels than the picture, the length right";
+        t[n].h = p;
+        t[n].url = "https://a.t/";
+        t[n].rest = two;
+        t[n].restlen = 8;
+        t[n++].kind = WB_LOAD_IMAGE;
+        p = head(LD_PIXELS, 12, 4);
+        p.w = 0;
+        p.h = 1;
+        p.pw = 1;
+        p.ph = 1;
+        t[n].what = "a picture of no width, with a pixel";
+        t[n].h = p;
+        t[n].url = "https://a.t/";
+        t[n].rest = two;
+        t[n].restlen = 4;
         t[n++].kind = WB_LOAD_IMAGE;
     }
     base = head(LD_FAILED, 0, 4);
@@ -623,10 +679,10 @@ static void the_loop(void) {
     check(write(ev[1], &c, 1) == 1, "an event");
     ld_wait(&L, &B, ev[0], &win);
     check(win == 1 && wb_busy(&B), "the window has events");
-    (void)!read(ev[0], &c, 1);
     now_ms += LD_PAGE_MS + 1;
     check(ld_wait(&L, &B, ev[0], &win) == 1 && !win && !wb_busy(&B) && strstr(B.status, "too long") != NULL,
           "past the deadline: a failed load, and no word of events");
+    (void)!read(ev[0], &c, 1);
     now_ms += 10;
     /* Stop: the helper goes */
     wb_go(&B, "https://never.test/");
@@ -635,6 +691,27 @@ static void the_loop(void) {
     wb_stop(&B);
     ld_start_loads(&L, &B);
     check(!ld_busy(&L), "Stop: gone");
+    /* a new load takes the place of the one on its way */
+    go(msg, 0);
+    script_hang = 1;
+    wb_go(&B, "https://old.test/");
+    check(ld_start_loads(&L, &B) == 1, "a load that starts: something new to show");
+    wb_go(&B, "https://new.test/");
+    ld_start_loads(&L, &B);
+    check(L.job[0].state != LJ_FREE && !strcmp(L.job[0].asked, "https://new.test/") && wb_busy(&B), "a new load takes the place of the old");
+    wb_stop(&B);
+    ld_start_loads(&L, &B);
+    /* a file page is what was asked, never what a helper says */
+    body_answer("https://" WB_FILE_HOST "/etc/x", "<p>x");
+    go(msg, msg_len);
+    wb_go(&B, "https://a.test/claims");
+    loop(ev[0], 5);
+    check(!wb_current(&B)->file, "a helper's answer makes no file page");
+    body_answer("https://" WB_FILE_HOST "/some/page.html", "<p>x");
+    go(msg, msg_len);
+    wb_go(&B, "file:///some/page.html");
+    loop(ev[0], 5);
+    check(wb_current(&B)->file && !strcmp(wb_current(&B)->url, "file:///some/page.html"), "asked for a file, a file page");
     /* no helper to be had */
     spawn_fails = 1;
     wb_go(&B, "https://x.test/");
@@ -671,6 +748,7 @@ int main(void) {
     good_page(0);
     good_page(1);
     unsafe_strings();
+    verified();
     good_picture();
     failure_answer();
     dies();

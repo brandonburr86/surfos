@@ -138,7 +138,7 @@ static void finish(struct loader *l, int slot, struct ld_result *out, const char
     } else {
         snprintf(out->url, sizeof(out->url), "%s", j->url);
         out->status = h->status;
-        out->verified = h->verified != 0;
+        out->verified = h->verified != 0 && !strncmp(j->url, "https:", 6);
         out->redirects = h->redirects;
         out->w = (int)h->w;
         out->h = (int)h->h;

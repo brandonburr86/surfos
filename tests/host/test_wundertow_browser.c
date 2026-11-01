@@ -341,6 +341,7 @@ static void pictures(void) {
     wb_resize(&b, 400, H);
     paint();
     check(m->scaled && m->sw < i && p->pic_bytes == (size_t)(600 * 60 + m->sw * m->sh) * 4, "smaller again: those go, and their bytes");
+    check(p->bytes == p->doc.bytes + sizeof(*p) + p->pic_bytes, "and they go from the page's own count");
     wb_resize(&b, W, H);
     paint();
     check(m->scaled && p->pic_bytes == (size_t)(600 * 60 + m->sw * m->sh) * 4, "(its own size again: what was made stays)");
@@ -845,6 +846,34 @@ static void reading(void) {
     wb_loaded(&b, page_at("https://read.test/to", "<p><a href=from>from</a> <a href=to>to</a> <a href=none>none</a>", 0), 0);
     p = wb_current(&b);
     check(p->doc.visited[0] && p->doc.visited[1] && !p->doc.visited[2], "both ends of a redirect");
+    /* a load's end leaves all of the address field chosen, for the key that replaces it */
+    wb_go(&b, "https://read.test/chosen");
+    wb_take(&b, &q);
+    wb_key(&b, 12);
+    check(b.focus == WB_FOCUS_ADDR && b.chosen, "Ctrl+L while it loads");
+    wb_loaded(&b, page_at(q.url, "<p>Here", 0), 0);
+    check(b.chosen, "it ends");
+    wb_key(&b, 'x');
+    check(!strcmp(b.addr, "x"), "the key replaces it all");
+    wb_key(&b, 27);
+    /* Stop: the address field says what is shown */
+    p = wb_current(&b);
+    wb_go(&b, "https://never.test/");
+    wb_take(&b, &q);
+    check(!strcmp(b.addr, "https://never.test/"), "a load on its way");
+    wb_stop(&b);
+    wb_cancel(&b);
+    check(!strcmp(b.addr, p->url), "stopped: the page's address again");
+    /* a jump on the page while another page loads does not say Done */
+    wb_go(&b, "https://read.test/jump");
+    serve("<p><a href=#x>here</a><p id=x>x");
+    wb_go(&b, "https://read.test/slowly");
+    wb_take(&b, &q);
+    wb_key(&b, 9);
+    wb_key(&b, 13);
+    check(!strstr(b.status, "Done"), "a jump while a page loads: it is not done");
+    wb_stop(&b);
+    wb_cancel(&b);
     /* Tab to a field while a page loads: the status bar goes on saying so */
     wb_go(&b, "https://read.test/field");
     serve("<form><input name=a></form>");

@@ -227,7 +227,10 @@ static void set_addr(struct wb *b, const char *s) {
 
 /* A load ended while someone may be typing in the field: their keys are not taken from them */
 static void addr_after_load(struct wb *b, const char *s) {
-    if(!b->edited) set_addr(b, s);
+    int chosen = b->chosen;                         /* all of it chosen: the next key still replaces it */
+    if(b->edited) return;
+    set_addr(b, s);
+    b->chosen = chosen;
 }
 
 static void loaded_status(struct wb *b, const struct wb_page *p) {
@@ -558,11 +561,15 @@ int wb_busy(const struct wb *b) { return b->loading || b->inflight; }
 
 void wb_stop(struct wb *b) {
     struct wb_page *p = wb_current(b);
+    int page = b->loading;
     if(!wb_busy(b)) return;
     if(b->running) b->cancel |= WB_CANCEL_PAGE;
     b->running = b->loading = b->want = 0;
     resources_stop(b);
-    if(p && b->npages) p->halted = 1;
+    if(p && b->npages) {
+        p->halted = 1;
+        if(page) addr_after_load(b, p->url);        /* the page shown is the one its address names */
+    }
     status(b, "%s", "Stopped");
 }
 
@@ -650,7 +657,7 @@ static void follow(struct wb *b, int n) {
             set_addr(b, url);
             visit(b, url);
             mark_visited(b, p);
-            status(b, "%s", "Done");
+            if(!b->loading) status(b, "%s", "Done");
         } else status(b, "There is no place named \"%s\" on this page", hash + 1);
         return;
     }
