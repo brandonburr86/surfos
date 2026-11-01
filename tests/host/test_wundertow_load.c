@@ -47,8 +47,8 @@ time_t ut_sim_time(time_t *t) { if(t) *t = 0; return 0; }
 
 /**** the helper: a child writing the script ****/
 
-static const unsigned char *script;
-static size_t script_len, script_cut = (size_t)-1;
+static const unsigned char *script, *picture_script;
+static size_t script_len, picture_len, script_cut = (size_t)-1;
 static int script_bytewise, script_hang, script_faults, spawn_fails;
 static int held_fd = -1;                /* a faulted helper's write end: it stays open until the helper is collected */
 static char asked_kind[16], asked_url[WB_ADDR_MAX];
@@ -68,6 +68,10 @@ int ld_spawn(const char *kind, const char *url, int fd) {
     if(pid == 0) {
         size_t i, n = script_cut < script_len ? script_cut : script_len;
         signal(SIGPIPE, SIG_DFL);
+        if(picture_script && !strcmp(kind, "image")) {
+            script = picture_script;
+            n = picture_len;
+        }
         if(script_bytewise) {
             for(i = 0; i < n; i++) {
                 (void)!write(fd, script + i, 1);
@@ -557,6 +561,48 @@ static void the_loop(void) {
     wb_go(&B, "https://a.test/");
     loop(ev[0], 5);
     check(B.npages == 1 && !strcmp(wb_current(&B)->doc.title, "Loop") && !wb_busy(&B), "a page through the loop");
+    /* a page's pictures: the loop gives them to the browser, whose they are from then on */
+    {
+        static unsigned char pic[512];
+        static const unsigned int two[2] = { 0x112233, 0x445566 };
+        struct ld_head h = head(LD_PIXELS, 13, sizeof(two));
+        struct wb_page *p;
+        size_t n = 0;
+        h.w = 2;
+        h.h = 1;
+        h.pw = 2;
+        h.ph = 1;
+        memcpy(pic, &h, sizeof(h));
+        n = sizeof(h);
+        memcpy(pic + n, "https://a.t/p", 13);
+        n += 13;
+        memcpy(pic + n, two, sizeof(two));
+        n += sizeof(two);
+        picture_script = pic;
+        picture_len = n;
+        body_answer("https://a.test/pics", "<title>Pics</title><img src=1.png alt=a><img src=2.png alt=b>");
+        go(msg, msg_len);
+        wb_go(&B, "https://a.test/pics");
+        loop(ev[0], 5);
+        p = wb_current(&B);
+        check(!strcmp(p->doc.title, "Pics") && p->doc.pics[0].px && p->doc.pics[1].px && p->doc.pics[1].px[1] == 0x445566, "a page and its pictures through the loop");
+        check(p->doc.pics[0].w == 2 && p->pic_bytes == 16, "their sizes");
+        /* a picture that fails, and one with more than the page has room for */
+        msg_len = 0;
+        h = head(LD_FAILED, 0, 2);
+        memcpy(pic, &h, sizeof(h));
+        memcpy(pic + sizeof(h), "no", 2);
+        picture_len = sizeof(h) + 2;
+        body_answer("https://a.test/more", "<img src=3.png alt=c>");
+        go(msg, msg_len);
+        wb_go(&B, "https://a.test/more");
+        loop(ev[0], 5);
+        p = wb_current(&B);
+        check(p->doc.pics[0].state == WP_FAILED && !p->doc.pics[0].px && !wb_busy(&B), "a picture that fails: the frame stays, the page too");
+        picture_script = NULL;
+    }
+    while(ld_reap(&L)) usleep(1000);
+
     /* a helper that faults: nothing on the pipe, its write end open until it is collected, and nobody known to be owed
        a collecting: the page's helper has gone by now */
     while(ld_reap(&L)) usleep(1000);
@@ -568,7 +614,7 @@ static void the_loop(void) {
     loop(ev[0], 5);
     script_faults = 0;
     check(!wb_busy(&B) && strstr(B.status, "helper stopped") != NULL, "a helper that faults: said at once, not at its deadline");
-    check(B.npages == 1, "and the page stays");
+    check(B.npages == 3, "and the page stays");
     /* the window's events and a deadline: ld_wait() says the window has none when it comes by the deadline */
     go(msg, 0);
     script_hang = 1;

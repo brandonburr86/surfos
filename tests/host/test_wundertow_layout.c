@@ -12,7 +12,9 @@ and code page 437 from driver/) on the host:
   under the pointer, fragment targets' places; and the painting: the background, text in its colours and
   styles, underlined links, clipping to the viewport, scrolling;
 - every page of tests/fixtures/{wundertow,undertow}/ at widths from 64 to 1300 pixels: no item off the page's
-  left, every item within the page's size, the painting inside its viewport.
+  left, every item within the page's size, the painting inside its viewport;
+- 11/1/26, pictures: an image's box from its attributes and its own size, its pixels painted, clipped, blended, at
+  sizes other than their own; a place on a page found again in another layout of it.
 
 "test_wundertow_layout --render FILE OUT.ppm [WIDTH [URL]]" paints a whole page as an image (P6).
 */
@@ -23,10 +25,12 @@ and code page 437 from driver/) on the host:
 #include <string.h>
 #include <time.h>
 #include "undertow.h"
+#include "alloc.h"
 #include "url.h"
 #include "http.h"
 #include "doc.h"
 #include "font.h"
+#include "image.h"
 #include "layout.h"
 #include "paint.h"
 
@@ -416,6 +420,201 @@ static void made_pages(void) {
 }
 
 /* every page of both browsers' fixtures at widths from 64 to 1300 */
+/**** pictures (stage 2.4) ****/
+
+/* What the window does with an answer: pixels the document owns */
+static void give(struct wd_document *d, int i, int w, int h, const unsigned int *px, int pw, int ph) {
+    struct wd_picture *m = &d->pics[i];
+    m->w = w;
+    m->h = h;
+    m->pw = pw;
+    m->ph = ph;
+    m->state = WP_DONE;
+    if(px) {
+        m->px = ut_test_malloc((size_t)pw * ph * sizeof(*px));
+        memcpy(m->px, px, (size_t)pw * ph * sizeof(*px));
+    }
+}
+
+/* The size of the first image's box on a page, at 640 pixels, when the picture is w x h (0: not known) */
+static void box_of(const char *html, int w, int h, int width, int *bw, int *bh) {
+    struct wd_document d;
+    struct wl_layout l;
+    size_t i;
+    *bw = *bh = -1;
+    if(document(PAGE_URL, "text/html", html, strlen(html), &d)) return;
+    if(d.image_count) d.pics[0].w = w, d.pics[0].h = h;
+    if(!wl_layout(&d, width, &l)) {
+        for(i = 0; i < l.count; i++)
+            if(l.items[i].kind == WI_IMAGE) {
+                *bw = l.items[i].w;
+                *bh = l.items[i].h;
+                break;
+            }
+        wl_free(&l);
+    }
+    wd_free(&d);
+}
+
+static void sized(const char *html, int w, int h, int width, int bw, int bh, const char *what) {
+    int gw, gh;
+    char s[200];
+    box_of(html, w, h, width, &gw, &gh);
+    snprintf(s, sizeof(s), "%s: %dx%d (got %dx%d)", what, bw, bh, gw, gh);
+    check(gw == bw && gh == bh, s);
+}
+
+static void pictures(void) {
+    static const unsigned int two[4] = { 0xff0000, 0x00ff00, 0x0000ff, 0x808080 };
+    struct wd_document d;
+    struct wl_layout l;
+    struct wp_theme th;
+    struct image im;
+    struct wp_target t;
+    size_t off;
+    int into, y, i;
+    static char long_page[20000];
+    const char *html;
+
+    sized("<img src=a.png>", 0, 0, 640, 0, 0, "no alt, no size, not known: nothing shows");
+    sized("<img src=a.png>", 30, 20, 640, 30, 20, "known: its own size");
+    sized("<img src=a.png alt=Hi>", 0, 0, 640, 24, 24, "not known: its alt text in a frame");
+    sized("<img src=a.png alt=Hi>", 30, 20, 640, 30, 20, "known: the frame goes");
+    sized("<img src=a.png width=60 height=70>", 0, 0, 640, 60, 70, "both attributes, not known: their frame");
+    sized("<img src=a.png width=60 height=70>", 30, 20, 640, 60, 70, "both attributes, known: still theirs");
+    sized("<img src=a.png width=60>", 30, 20, 640, 60, 40, "a width: the height by its shape");
+    sized("<img src=a.png height=10>", 30, 20, 640, 15, 10, "a height: the width by its shape");
+    sized("<img src=a.png width=60>", 0, 0, 640, 8, 24, "a width, not known: a frame of no text");
+    sized("<img src=a.png>", 1000, 500, 640, 624, 312, "wider than the room: narrower, at its shape");
+    sized("<img src=a.png width=2000 height=1000>", 0, 0, 640, 624, 312, "attributes wider than the room, the same");
+    sized("<img src=a.png>", 4096, 1, 640, 624, 1, "a sliver stays a pixel high");
+    sized("<img src=a.png width=1>", 4096, 1, 640, 1, 1, "and a pixel of a sliver");
+    sized("<img src=a.png height=4096>", 1, 4096, 640, 1, 4096, "as tall as they come");
+    sized("<table><tr><td><img src=a.png></table>", 200, 50, 640, 200, 50, "in a cell: the cell holds it");
+
+    /* its pixels: at their place, as they are */
+    html = "<body bgcolor=#112233><img src=a.png>";
+    check(!document(PAGE_URL, "text/html", html, strlen(html), &d), "a page with a picture");
+    give(&d, 0, 2, 2, two, 2, 2);
+    check(!wl_layout(&d, 100, &l), "laid out");
+    wp_theme_default(&th);
+    image_new(&im, 100, 40, 0);
+    t = target(&im, 0, 0, 100, 40);
+    wp_paint(&l, &d, &th, &t, 0, 0, -1);
+    check(pixel(&im, 8, 8) == 0xff0000 && pixel(&im, 9, 8) == 0x00ff00 && pixel(&im, 8, 9) == 0x0000ff && pixel(&im, 9, 9) == 0x808080,
+          "its pixels where the layout puts them, top to bottom");
+    check(pixel(&im, 10, 8) == 0x112233 && pixel(&im, 8, 10) == 0x112233, "and nothing round them");
+    /* clipped by the viewport, and scrolled */
+    for(i = 0; i < 100 * 40; i++) im.px[i] = 0;
+    t = target(&im, 9, 8, 1, 2);
+    wp_paint(&l, &d, &th, &t, 9, 8, -1);
+    check(pixel(&im, 8, 8) == 0 && pixel(&im, 9, 8) == 0x00ff00 && pixel(&im, 9, 9) == 0x808080 && pixel(&im, 10, 8) == 0, "clipped to the viewport");
+    for(i = 0; i < 100 * 40; i++) im.px[i] = 0;
+    t = target(&im, 0, 0, 100, 40);
+    wp_paint(&l, &d, &th, &t, 1, 9, -1);
+    check(pixel(&im, 7, 0) == 0x0000ff && pixel(&im, 8, 0) == 0x808080, "scrolled: part of it");
+    wl_free(&l);
+    wd_free(&d);
+    free(im.px);
+
+    /* larger than it is kept: the nearest, 4 x 4 each */
+    html = "<img src=a.png width=8 height=8>";
+    document(PAGE_URL, "text/html", html, strlen(html), &d);
+    give(&d, 0, 2, 2, two, 2, 2);
+    wl_layout(&d, 100, &l);
+    image_new(&im, 100, 40, 0);
+    t = target(&im, 0, 0, 100, 40);
+    wp_paint(&l, &d, &th, &t, 0, 0, -1);
+    check(pixel(&im, 8, 8) == 0xff0000 && pixel(&im, 11, 11) == 0xff0000 && pixel(&im, 12, 8) == 0x00ff00 && pixel(&im, 15, 15) == 0x808080 &&
+          pixel(&im, 8, 12) == 0x0000ff, "shown larger: the nearest");
+    wl_free(&l);
+    wd_free(&d);
+    free(im.px);
+
+    /* smaller: pixels made to its size when there are any, else the nearest */
+    html = "<img src=a.png width=1 height=1>";
+    document(PAGE_URL, "text/html", html, strlen(html), &d);
+    give(&d, 0, 2, 2, two, 2, 2);
+    wl_layout(&d, 100, &l);
+    image_new(&im, 100, 40, 0);
+    t = target(&im, 0, 0, 100, 40);
+    wp_paint(&l, &d, &th, &t, 0, 0, -1);
+    check(pixel(&im, 8, 8) == 0xff0000 && pixel(&im, 9, 8) != 0xff0000, "shown smaller: the nearest, in its box");
+    d.pics[0].scaled = ut_test_malloc(sizeof(unsigned int));
+    d.pics[0].scaled[0] = 0xabcdef;
+    d.pics[0].sw = d.pics[0].sh = 1;
+    wp_paint(&l, &d, &th, &t, 0, 0, -1);
+    check(pixel(&im, 8, 8) == 0xabcdef, "pixels made to its size, when there are some");
+    d.pics[0].sw = 2;
+    wp_paint(&l, &d, &th, &t, 0, 0, -1);
+    check(pixel(&im, 8, 8) == 0xff0000, "not when they are of another size");
+    wl_free(&l);
+    wd_free(&d);
+    free(im.px);
+
+    /* what is not all there */
+    {
+        static const unsigned int a[3] = { WIMG_GONE | 0x123456, 0x80ffffffu, 0x00abcdef };
+        html = "<body bgcolor=#000000><img src=a.png>";
+        document(PAGE_URL, "text/html", html, strlen(html), &d);
+        give(&d, 0, 3, 1, a, 3, 1);
+        wl_layout(&d, 100, &l);
+        image_new(&im, 100, 40, 0);
+        t = target(&im, 0, 0, 100, 40);
+        wp_paint(&l, &d, &th, &t, 0, 0, -1);
+        check(pixel(&im, 8, 8) == 0 && pixel(&im, 9, 8) == 0x7f7f7f && pixel(&im, 10, 8) == 0xabcdef, "a pixel not there, half there, there");
+        wl_free(&l);
+        wd_free(&d);
+        free(im.px);
+    }
+
+    /* a link round a picture, a frame while there is none */
+    html = "<a href=x.html><img src=a.png alt=Hi></a>";
+    document(PAGE_URL, "text/html", html, strlen(html), &d);
+    wl_layout(&d, 100, &l);
+    check(wl_link_at(&l, 12, 12) == 0, "a link in a frame");
+    wl_free(&l);
+    give(&d, 0, 2, 2, two, 2, 2);
+    wl_layout(&d, 100, &l);
+    check(wl_link_at(&l, 9, 9) == 0 && wl_link_at(&l, 11, 11) == -1, "a link on a picture: its box");
+    wl_free(&l);
+    wd_free(&d);
+
+    /* a picture with nothing but its address has its number; one of another scheme is refused from the start */
+    html = "<img src=a.png><img src=data:image/png;base64,AAAA alt=x><img alt=y>";
+    document(PAGE_URL, "text/html", html, strlen(html), &d);
+    check(d.image_count == 2 && d.images[0] && !d.images[1] && d.pics[0].state == WP_WAIT && d.pics[1].state == WP_REFUSED, "what can be loaded, and what cannot");
+    wd_free(&d);
+
+    /* a place, from one layout to another */
+    {
+        char *e = long_page;
+        for(i = 0; i < 60; i++) e += snprintf(e, 200, "<p>Line number %d of a page that wraps when the page is narrow, as this one will.", i);
+        document(PAGE_URL, "text/html", long_page, strlen(long_page), &d);
+        wl_layout(&d, 640, &l);
+        for(y = 0; y < l.height; y += 37)
+            if(wl_place(&l, y, &off, &into)) check(wl_place_y(&l, off, into) == y, "a place found again");
+        check(!wl_place(&l, l.height + 100, &off, &into), "no place past the end");
+        check(wl_place(&l, 500, &off, &into), "a place");
+        {
+            struct wl_layout n;
+            int ny;
+            size_t i2;
+            const char *at = NULL;
+            wl_layout(&d, 200, &n);
+            ny = wl_place_y(&n, off, 0);
+            for(i2 = 0; i2 < n.count; i2++) if(n.items[i2].kind == WI_TEXT && n.items[i2].y == ny) {
+                at = d.text + n.items[i2].off;
+                break;
+            }
+            check(at != NULL && at <= d.text + off && d.text + off < at + 64, "in a narrower layout: the same words");
+            wl_free(&n);
+        }
+        wl_free(&l);
+        wd_free(&d);
+    }
+}
+
 static void every_page(const char *top) {
     static const char *const undertow[] = {
         "paragraphs", "headings", "lists", "pre", "tables", "images", "forms", "comments", "hidden",
@@ -458,6 +657,7 @@ int main(int argc, char **argv) {
     snprintf(dir, sizeof(dir), "%s/wundertow", top);
     for(i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); i++) fixture(dir, fixtures[i]);
     made_pages();
+    pictures();
     every_page(top);
     if(failures) {
         printf("WUNDERTOW LAYOUT TESTS FAILED: %d of %d checks\n", failures, checks);

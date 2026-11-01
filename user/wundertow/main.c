@@ -114,6 +114,18 @@ static int layout_mode(const char *typed, int width) {
     return rc;
 }
 
+/* What became of the page's pictures, and each one's colour at its middle, for the tests */
+static void print_pictures(const struct wb_page *p) {
+    static const char *const states[] = { "waits", "loading", "loaded", "failed", "refused" };
+    size_t i;
+    for(i = 0; i < p->doc.image_count; i++) {
+        const struct wd_picture *m = &p->doc.pics[i];
+        printf("picture %u %s %dx%d", (unsigned int)i, states[m->state], m->w, m->h);
+        if(m->px) printf(" kept %dx%d middle %08x", m->pw, m->ph, m->px[(size_t)(m->ph / 2) * m->pw + m->pw / 2]);
+        printf("\n");
+    }
+}
+
 /* --load: as the window loads, with no window: the tests see the helpers and the rules of what a page loads */
 static int load_mode(const char *typed, int width) {
     static struct wb b;
@@ -137,6 +149,7 @@ static int load_mode(const char *typed, int width) {
         return 1;
     }
     rc = print_layout(wb_current(&b), width);
+    print_pictures(wb_current(&b));
     while(ld_reap(&L)) msleep(20);
     wb_free(&b);
     return rc;

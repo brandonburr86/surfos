@@ -163,6 +163,51 @@ static void field(const struct wp_target *t, const struct wd_document *d, const 
     label_in(t, x, y, it->w, it->sub == WF_AREA ? WF_H + 8 : it->h, s, it->len, it->checked ? th->placeholder : th->field_fg, 0);
 }
 
+/* over what is there: a pixel half there is mixed with it */
+static unsigned int mix(unsigned int under, unsigned int c) {
+    unsigned int t = c >> 24, s = 255 - t;
+    unsigned int r = ((c >> 16 & 255) * s + (under >> 16 & 255) * t + 127) / 255;
+    unsigned int g = ((c >> 8 & 255) * s + (under >> 8 & 255) * t + 127) / 255;
+    unsigned int b = ((c & 255) * s + (under & 255) * t + 127) / 255;
+    return r << 16 | g << 8 | b;
+}
+
+/* An image's picture at its box (x, y) on the target: pixels made to its size when there are any, as they are when
+   they are its size, else the nearest (a picture shown larger than it is kept). 0 when there are no pixels. */
+static int picture(const struct wp_target *t, const struct wd_document *d, const struct wl_item *it, int x, int y) {
+    const struct wd_picture *m = it->image >= 0 ? &d->pics[it->image] : NULL;
+    const unsigned int *src;
+    int sw, sh, cx0, cy0, cx1, cy1, i, j;
+    if(!m || !m->px || it->w <= 0 || it->h <= 0) return 0;
+    if(m->scaled && m->sw == it->w && m->sh == it->h) {
+        src = m->scaled;
+        sw = m->sw;
+        sh = m->sh;
+    } else {
+        src = m->px;
+        sw = m->pw;
+        sh = m->ph;
+    }
+    cx0 = x > t->x ? x : t->x;
+    cy0 = y > t->y ? y : t->y;
+    cx1 = x + it->w < t->x + t->cw ? x + it->w : t->x + t->cw;
+    cy1 = y + it->h < t->y + t->ch ? y + it->h : t->y + t->ch;
+    if(cx0 < 0) cx0 = 0;
+    if(cy0 < 0) cy0 = 0;
+    if(cx1 > t->w) cx1 = t->w;
+    if(cy1 > t->h) cy1 = t->h;
+    for(j = cy0; j < cy1; j++) {
+        unsigned int *row = t->pixels + (long)j * t->stride;
+        const unsigned int *s = src + (size_t)(sh == it->h ? j - y : (int)((long long)(j - y) * sh / it->h)) * sw;
+        for(i = cx0; i < cx1; i++) {
+            unsigned int c = s[sw == it->w ? i - x : (int)((long long)(i - x) * sw / it->w)];
+            if(!(c >> 24)) row[i] = c;
+            else if((c >> 24) != 255) row[i] = mix(row[i], c);
+        }
+    }
+    return 1;
+}
+
 void wp_paint(const struct wl_layout *l, const struct wd_document *d, const struct wp_theme *th,
               const struct wp_target *t, int scroll_x, int scroll_y, int hover) {
     size_t i;
@@ -191,6 +236,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             field(t, d, th, it, x, y);
             break;
         case WI_IMAGE:
+            if(picture(t, d, it, x, y)) break;
             c = it->link >= 0 ? text_color(d, th, it, hover) : th->image_line;
             wp_frame(t, x, y, it->w, it->h, c);
             if(it->len) label_in(t, x, y, it->w, it->h, d->text + it->off, it->len, it->link >= 0 ? c : th->image_fg, 0);

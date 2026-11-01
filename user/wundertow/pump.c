@@ -36,6 +36,11 @@ static void ended(struct wb *b, struct ld_result *r) {
         else wb_loaded(b, p, r->reload);
     } else if(r->kind == WB_LOAD_TEXT)
         wb_text(b, r->page, r->item, r->failed ? NULL : (const char *)r->body, r->len, r->type, r->why);
+    else if(r->failed) wb_image_failed(b, r->page, r->item, r->w, r->h);
+    else {
+        wb_image(b, r->page, r->item, r->w, r->h, r->pw, r->ph, (unsigned int *)(void *)r->body);
+        r->body = NULL;                 /* the page's now */
+    }
     free(r->body);
     r->body = NULL;
 }

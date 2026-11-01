@@ -35,6 +35,11 @@ way, and a page that is left takes its pictures' loads with it. Stop (wb_stop())
 itself comes under may_load()'s rules, the rules of Undertow and of files: an https page loads nothing over http, an
 http(s) page reads no file, a file page's file addresses are files. wb_fetch() puts one more address on a page's
 list, for stage 3.3's stylesheets: a text, of a page's limits; its answer comes to wb_text().
+
+11/1/26, pictures (stage 2.4): the page shown loads its images after it has come, in the order of the page, a few at a
+time. An image's frame shows until its pixels are there. When a picture's size changes what the page looks like, the
+page is laid out again at the next paint, and the view keeps what was at its top (wl_place()). A page keeps WB_PAGE_IMAGES
+bytes of pixels at most: past that an image's frame stays, its pixels unasked for. They count in WB_HISTORY_BYTES.
 */
 
 #ifndef WUNDERTOW_BROWSER_H
@@ -58,6 +63,7 @@ list, for stage 3.3's stylesheets: a text, of a page's limits; its answer comes 
 #define WB_ADDR_MAX      (UT_URL_MAX + 16)
 #define WB_RESOURCES     3              /* loads at a time for what a page brings with it */
 #define WB_TEXTS_MAX     32             /* wb_fetch()es of a page */
+#define WB_PAGE_IMAGES   (32u << 20)    /* the bytes of pixels a page keeps */
 
 /* the keys that are no bytes: surfos/win.h's WIN_KEY_* */
 #define WB_KEY_UP        0x100
@@ -86,10 +92,10 @@ struct wb_page {
     struct wb_text *texts;              /* wb_fetch()'s list */
     int ntexts;
     int halted;                         /* Stop: it loads no more until it is loaded again */
+    size_t pic_bytes;                   /* of bytes: its pictures', at most WB_PAGE_IMAGES */
 };
 
 enum { WB_LOAD_PAGE, WB_LOAD_IMAGE, WB_LOAD_TEXT };     /* what a request is for */
-enum { WP_WAIT, WP_RUNNING, WP_DONE };                  /* what became of something a page wants */
 
 struct wb_text {                        /* a text a page wants */
     char url[WB_ADDR_MAX];              /* as the program loads it */
@@ -166,6 +172,11 @@ int wb_busy(const struct wb *b);                                    /* is anythi
    answer comes to wb_text(): the body (with a NUL after its len bytes) and its media type, or NULL and why. */
 int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag);
 void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why);
+
+/* Stage 2.4: the answers to a page's pictures. wb_image() owns px (pw x ph pixels) now; w x h is the picture's own size.
+   wb_image_failed(): none to be had; w x h its size if that is known, else 0. */
+void wb_image(struct wb *b, unsigned int page, int item, int w, int h, int pw, int ph, unsigned int *px);
+void wb_image_failed(struct wb *b, unsigned int page, int item, int w, int h);
 
 /* A page from a response: file 1 for a file page (its response's url is https://WB_FILE_HOST/path); NULL with
    why (out of memory) */

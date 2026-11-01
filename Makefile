@@ -981,8 +981,8 @@ test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wun
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
 
-$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUILD)/host/wundertow/browser.o $(WT_HOST_DRAW) \
-                                      $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUILD)/host/wundertow/browser.o \
+                                      $(BUILD)/host/wundertow/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -993,7 +993,8 @@ unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
-$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o) \
+$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o image_scale.o) \
                                    $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
@@ -1008,7 +1009,7 @@ unittest: test-wundertow-load
 # in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
 # arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
 # hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
-WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o
 WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
 $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
                                     $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)

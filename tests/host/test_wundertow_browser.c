@@ -107,6 +107,211 @@ static int has_request(const char *url) {
 
 static unsigned int busy_bar[W * 31];
 
+/* Pixels as a helper's answer brings them: the page owns them from then on */
+static unsigned int *pixels_of(int w, int h, unsigned int c) {
+    unsigned int *px = ut_test_malloc((size_t)w * h * sizeof(*px));
+    int i;
+    for(i = 0; i < w * h; i++) px[i] = c;
+    return px;
+}
+
+/* Answer the picture the program was told to load */
+static void answer(const struct wb_request *q, int w, int h, unsigned int c) {
+    wb_image(&b, q->page, q->item, w, h, w, h, pixels_of(w, h, c));
+}
+
+/* Stage 2.4 */
+static void pictures(void) {
+    struct wb_request q, r;
+    struct wb_page *p, *old;
+    struct wd_picture *m;
+    static char tall[20000];
+    int i, s0, top;
+    long before;
+
+    wb_cancel(&b);
+    /* a few at a time, in the order of the page, after the page */
+    wb_go(&b, "https://pics.test/p");
+    serve("<title>P</title><img src=1.png alt=one><img src=2.png><img src=3.png><img src=4.png>"
+          "<img src=http://plain.test/5.png alt=five><img src=/6.png>"
+          "<img src=https://" WB_FILE_HOST "/etc/7.png alt=seven><img src=mailto:a@b alt=eight>");
+    p = wb_current(&b);
+    check(p->doc.image_count == 8, "the images of a page");
+    for(i = 0; i < WB_RESOURCES; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "https://pics.test/%d.png", i + 1);
+        check(wb_take(&b, &q) && q.kind == WB_LOAD_IMAGE && q.item == i && q.page == p->serial && !strcmp(q.url, url) && q.budget == WB_PAGE_IMAGES, "the next picture");
+    }
+    check(!wb_take(&b, &q) && wb_busy(&b), "a few at a time: Stop in the toolbar meanwhile");
+    wb_image_failed(&b, p->serial, 1, 0, 0);
+    check(wb_take(&b, &q) && q.item == 3 && p->doc.pics[1].state == WP_FAILED, "one that failed: the next");
+    answer(&q, 2, 2, 0x123456);
+    check(p->doc.pics[3].state == WP_DONE && p->doc.pics[3].px && p->doc.pics[3].w == 2, "one that came");
+    /* http from https is passed over: not loaded, as Undertow refuses HTTPS to HTTP; a file likewise */
+    check(wb_take(&b, &q) && q.item == 5 && !strcmp(q.url, "https://pics.test/6.png"), "an http picture of an https page is not asked for, nor a file");
+    wb_image_failed(&b, p->serial, 0, 0, 0);
+    wb_image_failed(&b, p->serial, 2, 0, 0);
+    answer(&q, 1, 1, 0);
+    check(!wb_busy(&b) && !wb_take(&b, &q), "all answered");
+    check(p->doc.pics[4].state == WP_REFUSED && p->doc.pics[6].state == WP_REFUSED && p->doc.pics[7].state == WP_REFUSED, "they are refused");
+    check(p->bytes >= p->doc.bytes + 8 + 4 && p->pic_bytes == 16 + 4, "its pixels are counted in the page's bytes");
+    paint();
+
+    /* the page left: an answer late for it is nobody's, and its pixels go */
+    wb_go(&b, "https://pics.test/q");
+    serve("<img src=a.png alt=A><img src=b.png alt=B>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_take(&b, &r);
+    before = ut_alloc_live;
+    wb_image(&b, p->serial + 5, q.item, 2, 2, 2, 2, pixels_of(2, 2, 1));
+    check(ut_alloc_live == before && wb_busy(&b), "an answer for another page: dropped");
+    wb_image(&b, p->serial, 99, 2, 2, 2, 2, pixels_of(2, 2, 1));
+    wb_image(&b, p->serial, -1, 2, 2, 2, 2, pixels_of(2, 2, 1));
+    check(ut_alloc_live == before && wb_busy(&b), "for a picture it does not have: dropped");
+    wb_image_failed(&b, p->serial, 99, 0, 0);
+    check(b.inflight == 2, "a failure of one it does not have");
+    /* Back: what it was loading stops, and starts again on the way back */
+    wb_key(&b, 127);
+    check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !wb_busy(&b) && p->doc.pics[0].state == WP_WAIT, "left: its pictures wait");
+    wb_image(&b, p->serial, 0, 2, 2, 2, 2, pixels_of(2, 2, 1));
+    check(!p->doc.pics[0].px, "an answer after that is dropped");
+    check(!wb_take(&b, &q), "and the page shown wants nothing");
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 1);
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);
+    check(wb_current(&b) == p && wb_take(&b, &q) && q.item == 0 && wb_take(&b, &r) && r.item == 1, "back to it: it asks again");
+    /* Stop: the frames stay */
+    wb_stop(&b);
+    check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !wb_busy(&b) && !wb_take(&b, &q) && !p->doc.pics[0].px, "Stop: no more of them");
+
+    /* the page is laid out again, and what is being read stays */
+    {
+        char *e = tall;
+        e += snprintf(e, 64, "<img src=top.png alt=top><p>Under it");
+        for(i = 0; i < 100; i++) e += snprintf(e, 32, "<p>Line %d", i);
+    }
+    wb_go(&b, "https://pics.test/tall");
+    serve(tall);
+    p = wb_current(&b);
+    paint();
+    wb_key(&b, 0x107);
+    wb_key(&b, 0x107);
+    s0 = p->scroll;
+    check(s0 > 300, "well down the page");
+    wb_take(&b, &q);
+    answer(&q, 100, 300, 0x445566);
+    paint();
+    check(p->scroll == s0 + 300 - 24, "a picture above grew by 276 pixels: the view with it");
+    wb_key(&b, 0x104);
+    check(p->scroll == 0, "the top");
+    wb_go(&b, "https://pics.test/tall");
+    serve(tall);
+    p = wb_current(&b);
+    paint();
+    wb_take(&b, &q);
+    answer(&q, 100, 300, 0x445566);
+    paint();
+    check(p->scroll == 0, "read from the top: the page grows below");
+    top = p->lay.height;
+    check(top > 300, "with its picture's room");
+    wb_resize(&b, 400, H);
+    paint();
+    check(p->lay_w == 400 - WB_SCROLLBAR, "a new width with a picture");
+    wb_resize(&b, W, H);
+    paint();
+    /* a picture larger than it is kept: its own size counts, its pixels are fewer */
+    wb_go(&b, "https://pics.test/large");
+    serve("<img src=l.png>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_image(&b, q.page, q.item, 400, 200, 2, 1, pixels_of(2, 1, 0x777777));
+    paint();
+    check(p->doc.pics[0].w == 400 && p->lay.height >= 200, "laid out at its own size");
+    /* shown smaller than it is kept: pixels made to its size, once, and counted; a new size, again */
+    wb_go(&b, "https://pics.test/small");
+    serve("<img src=l.png width=10 height=10>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    answer(&q, 40, 40, 0x808080);
+    paint();
+    m = &p->doc.pics[0];
+    check(m->scaled && m->sw == 10 && m->sh == 10 && m->scaled[0] == 0x808080, "made to the size it is shown at");
+    check(p->pic_bytes == (40 * 40 + 10 * 10) * 4, "and counted");
+    paint();
+    check(p->pic_bytes == (40 * 40 + 10 * 10) * 4, "once");
+    /* failing with a size: the frame takes it */
+    wb_go(&b, "https://pics.test/big");
+    serve("<img src=l.png alt=l><p>After");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    paint();
+    wb_image_failed(&b, q.page, q.item, 300, 100);
+    paint();
+    check(p->doc.pics[0].w == 300 && !p->doc.pics[0].px && p->doc.pics[0].state == WP_FAILED && p->lay.height > 100, "too much for the page: its frame has its size");
+
+    /* a page's limit: past it the frames stay, and nothing more is asked for */
+    wb_go(&b, "https://pics.test/many");
+    serve("<img src=1.png alt=a><img src=2.png alt=b><img src=3.png alt=c><img src=4.png alt=d>");
+    p = wb_current(&b);
+    wb_take(&b, &q);
+    wb_take(&b, &r);
+    wb_image(&b, q.page, q.item, 2000, 2000, 2000, 2000, pixels_of(2000, 2000, 1));
+    wb_image(&b, r.page, r.item, 2000, 2000, 2000, 2000, pixels_of(2000, 2000, 2));
+    check(p->pic_bytes == WB_PAGE_IMAGES - (WB_PAGE_IMAGES - 2000 * 2000 * 8), "two of 16 MB");
+    check(b.npages == 1 && wb_current(&b) == p, "over the history's bytes: the older pages have gone, never this one");
+    check(wb_take(&b, &q) && q.budget == WB_PAGE_IMAGES - 32000000u, "what is left of 32 MB goes with the next");
+    wb_image(&b, q.page, q.item, 2000, 2000, 2000, 2000, pixels_of(2000, 2000, 3));
+    check(p->doc.pics[2].state == WP_FAILED && !p->doc.pics[2].px && p->doc.pics[2].w == 2000, "more than that: no pixels, its frame");
+    check(wb_take(&b, &q) && q.budget == WB_PAGE_IMAGES - 32000000u, "the small one may still come");
+    wb_image(&b, q.page, q.item, 1, 1, 1, 1, pixels_of(1, 1, 3));
+    paint();
+    /* the history: pictures count; forward pages go too, never the one shown */
+    wb_go(&b, "https://pics.test/one");
+    serve("<img src=1.png>");
+    old = wb_current(&b);
+    wb_take(&b, &q);
+    wb_go(&b, "https://pics.test/two");
+    serve("<p>two");
+    check(b.npages >= 2, "a page after it");
+    wb_key(&b, 127);
+    check(wb_current(&b) == old, "back");
+    wb_cancel(&b);
+    wb_take(&b, &q);
+    while(b.cur > 0) {                              /* to the oldest it has */
+        wb_key(&b, 127);
+        wb_cancel(&b);
+    }
+    p = wb_current(&b);
+    if(b.cur == 0 && p->doc.image_count && p->doc.pics[0].state != WP_DONE) {}
+    wb_go(&b, "https://pics.test/only");
+    serve("<img src=1.png><p>x");
+    wb_key(&b, 127);
+    wb_cancel(&b);
+    wb_key(&b, 127);
+    wb_cancel(&b);
+    /* one more big picture for the first page: the page after goes, the first stays */
+    wb_go(&b, "https://pics.test/first");
+    serve("<img src=f.png>");
+    wb_take(&b, &q);
+    {
+        struct wb_page *first = wb_current(&b);
+        wb_go(&b, "https://pics.test/second");
+        serve("<p>second");
+        wb_key(&b, 127);
+        wb_cancel(&b);
+        while(b.cur > 0 && wb_current(&b) != first) wb_key(&b, 127), wb_cancel(&b);
+        check(wb_current(&b) == first, "the first page");
+        wb_take(&b, &q);
+        if(b.cur == 0) {
+            int n = b.npages;
+            answer(&q, 2000, 1000, 9);
+            check(b.npages == 1 && n == 2 && wb_current(&b) == first, "over the history's bytes with only a page ahead: that page goes");
+        }
+    }
+    paint();
+}
+
 /* Stage 2.3: what the program is told to start and stop */
 static void loads(void) {
     struct wb_request q;
@@ -458,6 +663,7 @@ int main(void) {
     paint();
 
     loads();
+    pictures();
 
     wb_free(&b);
     check(ut_alloc_live == 0, "nothing held at the end");

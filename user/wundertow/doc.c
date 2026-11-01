@@ -962,7 +962,7 @@ static void image(struct bd *b, struct ut_html_tag *t) {
             i += k;
         }
     }
-    if(!n && !(w && h)) return;                     /* nothing to show until images are loaded */
+    if(!n && !(w && h) && !(t->seen[A_SRC] && sn)) return;      /* nothing to show, now or ever */
     r = atom(b, WR_IMAGE, b->scratch, n);
     if(!r) return;
     r->w = (unsigned short)w;
@@ -1587,6 +1587,11 @@ static int finish(struct bd *b) {
         free(work);
         return -1;
     }
+    d->pics = calloc(d->image_count ? d->image_count : 1, sizeof(*d->pics));
+    if(!d->pics) {
+        free(work);
+        return -1;
+    }
     for(i = 0; i < d->image_count; i++) {
         int usable = 0;
         char *u = address(b, b->srcs[i], 0, &usable, &work->u, work->safe);
@@ -1595,7 +1600,10 @@ static int finish(struct bd *b) {
             return -1;
         }
         if(usable) d->images[i] = u;
-        else free(u);
+        else {
+            free(u);
+            d->pics[i].state = WP_REFUSED;
+        }
     }
     free(work);
     if(!d->title && !(d->title = calloc(1, 1))) return -1;
@@ -1612,7 +1620,7 @@ static int finish(struct bd *b) {
     d->runs = shrink(d->runs, d->run_count, sizeof(*d->runs));
     d->text = shrink(d->text, d->text_len + 1, 1);
     d->bytes = d->block_count * sizeof(*d->blocks) + d->run_count * sizeof(*d->runs) + d->text_len + 1 +
-               strlen(d->title) + 1 + (d->image_count ? d->image_count : 1) * sizeof(*d->images);
+               strlen(d->title) + 1 + (d->image_count ? d->image_count : 1) * (sizeof(*d->images) + sizeof(*d->pics));
     if(d->link_count) d->bytes += b->links_cap * sizeof(*d->links);
     for(i = 0; i < d->link_count; i++) d->bytes += strlen(d->links[i].label) + 1 + strlen(d->links[i].url) + 1;
     if(d->anchor_count) d->bytes += b->anchors_cap * sizeof(*d->anchors);
@@ -1721,6 +1729,11 @@ void wd_free(struct wd_document *d) {
     free(d->anchors);
     for(i = 0; d->images && i < d->image_count; i++) free(d->images[i]);
     free(d->images);
+    for(i = 0; d->pics && i < d->image_count; i++) {
+        free(d->pics[i].px);
+        free(d->pics[i].scaled);
+    }
+    free(d->pics);
     free(d->blocks);
     free(d->runs);
     free(d->text);

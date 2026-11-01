@@ -363,6 +363,12 @@ def no_http_on(server):
     return check
 
 
+def no_picture_over_http(ctx):
+    """an https page's pictures: nothing asked of the http server (11/1/26, stage 2.4)"""
+    bad = [r for r in _recs(ctx) if r['request_line'] and r['server'] == 'http']
+    return (not bad, 'requests: ' + ', '.join(r['request_line'] for r in bad))
+
+
 def gave_up(server, path, low, high, since='requested'):
     """the client closed its latest connection for path (None: any) on server low..high seconds after the request
     (or the connection: since='connected'); that connection may have begun in an earlier step of the scenario"""
@@ -1075,6 +1081,16 @@ SCENARIOS = [
         Step('echo status $?', 'status 1', wait=SH),
         Step('wundertow --load ' + S('/redirect/to-http'), 'redirected from HTTPS to unencrypted HTTP', wait=SH,
              absent=['status: ']),
+        # 11/1/26 (stage 2.4): a page's pictures, each by a helper of its own, over verified HTTPS: one of each kind, by
+        # a redirect too; a broken file, a page, a 404 and a compressed one fail; the one over http is refused and asks
+        # the http server for nothing
+        Step('wundertow --load ' + S('/pictures'), 'status: 200 verified TLSv1.', 'title: Pictures',
+             'picture 0 loaded 4x3 kept 4x3 middle 00ff0000', 'picture 1 loaded 4x3 kept 4x3 middle 0000ff00',
+             'picture 2 loaded 4x3 kept 4x3 middle 000000ff', 'picture 3 loaded 40x30',
+             'picture 4 loaded 4x3 kept 4x3 middle 00ff0000', 'picture 5 failed', 'picture 6 failed', 'picture 7 failed',
+             'picture 8 refused', 'picture 9 failed', wait=SH, check=no_picture_over_http),
+        Step('wundertow --load ' + H('/pictures'), 'title: Pictures', 'picture 0 loaded 4x3', 'picture 8 loaded 4x3',
+             wait=SH),
     ], browser=False),
     Scenario('wundertow-production', 'the normal initrd: wundertow does not trust the fixture CA either; HTTP works', [
         Step('wundertow --layout https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, absent=['status: '],

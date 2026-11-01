@@ -16,6 +16,7 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #include "http.h"
 #include "doc.h"
 #include "font.h"
+#include "image.h"
 #include "layout.h"
 #include "paint.h"
 #include "browser.h"
@@ -178,9 +179,11 @@ static void loaded_status(struct wb *b, const struct wb_page *p) {
 
 static void ensure_layout(struct wb *b, struct wb_page *p) {
     struct geom g;
-    size_t off;
+    size_t off, top = 0;
+    int into = 0, place;
     geom(b, &g);
     if(p->lay_w == g.cw) return;
+    place = p->scroll > 0 && wl_place(&p->lay, p->scroll, &top, &into);     /* what is being read stays where it is */
     wl_free(&p->lay);
     p->lay_w = 0;
     if(wl_layout(&p->doc, g.cw, &p->lay)) {
@@ -188,6 +191,7 @@ static void ensure_layout(struct wb *b, struct wb_page *p) {
         return;
     }
     p->lay_w = g.cw;
+    if(place) p->scroll = wl_place_y(&p->lay, top, into);
     if(p->fragment[0]) {
         if(!wd_anchor_offset(&p->doc, p->fragment, &off)) p->scroll = wl_offset_y(&p->lay, off) - 4;
         else status(b, "There is no place named \"%s\" on this page", p->fragment);
@@ -266,6 +270,7 @@ static const char *may_load(const struct wb_page *p, const char *url, char *out,
 /* The next thing the page shown wants */
 static int next_resource(struct wb *b, struct wb_request *out) {
     struct wb_page *p = wb_current(b);
+    size_t n;
     int i;
     if(!b->npages || p->halted || b->inflight >= WB_RESOURCES) return 0;
     for(i = 0; i < p->ntexts; i++) {
@@ -280,17 +285,40 @@ static int next_resource(struct wb *b, struct wb_request *out) {
         b->inflight++;
         return 1;
     }
+    for(n = 0; n < p->doc.image_count; n++) {
+        struct wd_picture *m = &p->doc.pics[n];
+        if(m->state != WP_WAIT) continue;
+        if(p->pic_bytes >= WB_PAGE_IMAGES) {        /* its frame stays */
+            m->state = WP_FAILED;
+            continue;
+        }
+        memset(out, 0, sizeof(*out));
+        if(may_load(p, p->doc.images[n], out->url, sizeof(out->url))) {
+            m->state = WP_REFUSED;
+            continue;
+        }
+        out->kind = WB_LOAD_IMAGE;
+        out->page = p->serial;
+        out->item = (int)n;
+        out->budget = WB_PAGE_IMAGES - p->pic_bytes;
+        m->state = WP_RUNNING;
+        b->inflight++;
+        return 1;
+    }
     return 0;
 }
 
 /* The page shown has what it was loading stopped: it may ask again */
 static void resources_stop(struct wb *b) {
     struct wb_page *p = wb_current(b);
+    size_t n;
     int i;
     if(!b->inflight) return;
     b->cancel |= WB_CANCEL_RESOURCES;
     b->inflight = 0;
-    if(p) for(i = 0; i < p->ntexts; i++) if(p->texts[i].state == WP_RUNNING) p->texts[i].state = WP_WAIT;
+    if(!p) return;
+    for(i = 0; i < p->ntexts; i++) if(p->texts[i].state == WP_RUNNING) p->texts[i].state = WP_WAIT;
+    for(n = 0; n < p->doc.image_count; n++) if(p->doc.pics[n].state == WP_RUNNING) p->doc.pics[n].state = WP_WAIT;
 }
 
 int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag) {
@@ -306,6 +334,83 @@ int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag) {
     t->state = WP_WAIT;
     p->ntexts++;
     return 0;
+}
+
+static void trim_history(struct wb *b);
+
+static struct wd_picture *picture_of(struct wb *b, unsigned int page, int item) {
+    struct wb_page *p = wb_current(b);
+    if(!b->npages || p->serial != page || item < 0 || (size_t)item >= p->doc.image_count) return NULL;
+    return p->doc.pics[item].state == WP_RUNNING ? &p->doc.pics[item] : NULL;
+}
+
+/* A picture whose own size is known now: when the page has to change for that, it is laid out again */
+static void picture_size(struct wb_page *p, struct wd_picture *m, int w, int h) {
+    if(m->w == w && m->h == h) return;
+    m->w = w;
+    m->h = h;
+    p->lay_w = 0;
+}
+
+void wb_image(struct wb *b, unsigned int page, int item, int w, int h, int pw, int ph, unsigned int *px) {
+    struct wd_picture *m = picture_of(b, page, item);
+    struct wb_page *p = wb_current(b);
+    size_t bytes = (size_t)pw * ph * sizeof(*px);
+    if(!m || bytes > WB_PAGE_IMAGES - p->pic_bytes) {
+        free(px);
+        if(m) wb_image_failed(b, page, item, w, h);
+        return;
+    }
+    m->px = px;
+    m->pw = pw;
+    m->ph = ph;
+    m->state = WP_DONE;
+    p->pic_bytes += bytes;
+    p->bytes += bytes;
+    picture_size(p, m, w, h);
+    b->inflight--;
+    trim_history(b);
+}
+
+void wb_image_failed(struct wb *b, unsigned int page, int item, int w, int h) {
+    struct wd_picture *m = picture_of(b, page, item);
+    if(!m) return;
+    m->state = WP_FAILED;
+    if(w > 0 && h > 0) picture_size(wb_current(b), m, w, h);
+    b->inflight--;
+}
+
+/* Pixels made to the size pictures in view are shown at, where that is smaller than what is kept: an average of what
+   each stands for looks better than the nearest, which is what paint.c does else, and is too slow to do each paint */
+static void prepare_pictures(struct wb_page *p, int top, int bottom) {
+    size_t i;
+    for(i = 0; i < p->lay.count; i++) {
+        const struct wl_item *it = &p->lay.items[i];
+        struct wd_picture *m;
+        size_t bytes;
+        unsigned int *s;
+        if(it->kind != WI_IMAGE || it->image < 0 || it->y >= bottom || it->y + it->h <= top) continue;
+        m = &p->doc.pics[it->image];
+        if(!m->px || it->w <= 0 || it->h <= 0 || (it->w >= m->pw && it->h >= m->ph)) continue;
+        if(m->scaled && m->sw == it->w && m->sh == it->h) continue;
+        if(m->scaled) {
+            bytes = (size_t)m->sw * m->sh * sizeof(*m->scaled);
+            free(m->scaled);
+            m->scaled = NULL;
+            p->pic_bytes -= bytes;
+            p->bytes -= bytes;
+        }
+        bytes = (size_t)it->w * it->h * sizeof(*s);
+        if(bytes > WB_PAGE_IMAGES - p->pic_bytes) continue;         /* paint.c's nearest will do */
+        s = malloc(bytes);
+        if(!s) continue;
+        wimg_scale(m->px, m->pw, m->ph, s, it->w, it->h);
+        m->scaled = s;
+        m->sw = it->w;
+        m->sh = it->h;
+        p->pic_bytes += bytes;
+        p->bytes += bytes;
+    }
 }
 
 /* Stage 3.3's stylesheets are to be taken in here */
@@ -392,6 +497,18 @@ static size_t history_bytes(const struct wb *b) {
     return n;
 }
 
+/* Over WB_HISTORY_BYTES: the oldest pages go, then those ahead of the one shown, never that one */
+static void trim_history(struct wb *b) {
+    while(b->npages > 1 && history_bytes(b) > WB_HISTORY_BYTES) {
+        if(b->cur > 0) {
+            wb_page_free(b->page[0]);
+            memmove(b->page, b->page + 1, (size_t)(b->npages - 1) * sizeof(b->page[0]));
+            b->cur--;
+        } else wb_page_free(b->page[b->npages - 1]);
+        b->npages--;
+    }
+}
+
 void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
     int i;
     resources_stop(b);                              /* what the page before was loading */
@@ -414,12 +531,7 @@ void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
         }
         b->page[b->npages++] = p;
         b->cur = b->npages - 1;
-        while(b->npages > 1 && history_bytes(b) > WB_HISTORY_BYTES) {   /* the oldest go, never this one */
-            wb_page_free(b->page[0]);
-            memmove(b->page, b->page + 1, (size_t)(b->npages - 1) * sizeof(b->page[0]));
-            b->npages--;
-            b->cur--;
-        }
+        trim_history(b);
     }
     addr_after_load(b, p->url);
     loaded_status(b, p);
@@ -802,6 +914,7 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
         struct wp_target pg = t;
         ensure_layout(b, p);
         scroll_to(b, p->scroll);
+        prepare_pictures(p, p->scroll, p->scroll + g.ch);
         pg.x = 0;
         pg.y = g.cy;
         pg.cw = g.cw;

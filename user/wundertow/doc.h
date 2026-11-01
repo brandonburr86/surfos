@@ -4,8 +4,8 @@ SurfOS Undertow's window: a page as a tree of boxes
 File: doc.h  Date: 10/25/26
 ----------------------
 A response becomes a document the window lays out (layout.c) and paints (paint.c): a tree of block boxes,
-each holding either blocks or a range of inline runs, which are styled text, line breaks, images (their alt
-text, until images are loaded) and form fields (shown, not used). The tree follows the HTML standard as
+each holding either blocks or a range of inline runs, which are styled text, line breaks, images and form
+fields (shown, not used). The tree follows the HTML standard as
 Undertow's text does (html.c): the same scanner (html_scan.c), the same implied ends and scopes, the same
 charset rules, the same limits; html.h's link and anchor types, with links resolved as html.c resolves them.
 
@@ -97,6 +97,18 @@ struct wd_run {
                                            WR_FIELD the label (a value, a button's text, the first option) */
 };
 
+/* What the window has of an image, by the number in images[] (11/1/26, stage 2.4): the frame shows until px does */
+enum { WP_WAIT, WP_RUNNING, WP_DONE, WP_FAILED, WP_REFUSED };
+
+struct wd_picture {
+    unsigned char state;                /* WP_*: waiting, being loaded, here, not to be had, not allowed */
+    int w, h;                           /* its own size once known, else 0 */
+    int pw, ph;                         /* the pixels kept: smaller than w x h when it is large (image.h) */
+    unsigned int *px;                   /* image.h's 0xTTRRGGBB, or NULL */
+    int sw, sh;                         /* the pixels at the size it is shown at, where it is shown smaller */
+    unsigned int *scaled;
+};
+
 struct wd_document {
     char *text;                         /* every run's text, text_len bytes and a NUL */
     size_t text_len;
@@ -115,6 +127,8 @@ struct wd_document {
     size_t bytes;                       /* everything the document owns */
     int truncated;                      /* html.h's UT_TRUNC_*, and WD_TRUNC_BOXES */
     char notice[160];                   /* safe text for the status bar, "" when there is nothing */
+    /* 11/1/26 */
+    struct wd_picture *pics;            /* image_count of them: the window fills them in */
 };
 
 #define WD_TRUNC_BOXES 8                /* boxes or runs past WD_BLOCKS_MAX or WD_RUNS_MAX */
