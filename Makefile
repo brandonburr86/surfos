@@ -992,6 +992,35 @@ test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/w
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
+# 11/01/26 (Wundertow's milestone 3): the style sheet parser against sheets that are hostile, and the same test with
+# UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it
+$(BUILD)/host/test_wundertow_css: tests/host/test_wundertow_css.c $(BUILD)/host/wundertow/css.o \
+                                  $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-css: $(BUILD)/host/test_wundertow_css $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_css
+unittest: test-wundertow-css
+.PHONY: test-wundertow-css
+
+$(BUILD)/host/wundertow-ubsan/%.o: user/wundertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+
+$(BUILD)/host/test_wundertow_css_ubsan: tests/host/test_wundertow_css.c $(BUILD)/host/wundertow-ubsan/css.o \
+                                        $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -o $@
+
+test-wundertow-css-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_css_ubsan)
+	$(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_css_ubsan,@echo "test-wundertow-css-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")
+unittest: test-wundertow-css-ubsan
+.PHONY: test-wundertow-css-ubsan
+-include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
+
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
 $(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
