@@ -716,6 +716,20 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
 
+# Their host tests: libsurf's CRC-32, inflate and deflate alone (test_deflate), then each tool as it is on the simulated
+# FAT of tests/host/ar_sim.c, against SurfOS's headers with libsurf's names, as test_edit does. Plain flags only: the
+# sanitizer runs are tests/archive-sanitize.sh's, natively on the Mac. A -fsanitize build must never enter `make unittest`:
+# one hung at 99% CPU in the Docker image, under qemu-i386, and compiling is no test of that.
+$(BUILD)/host/test_deflate: tests/host/test_deflate.c user/libsurf/crc32.c user/libsurf/inflate.c user/libsurf/deflate.c \
+                            user/include/crc32.h user/include/inflate.h user/include/deflate.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -idirafter user/include $(filter %.c,$^) -o $@
+unittest: unittest-archive
+.PHONY: unittest-archive
+unittest-archive: $(BUILD)/host/test_deflate
+	$(BUILD)/host/test_deflate
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
