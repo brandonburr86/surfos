@@ -992,6 +992,39 @@ test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/w
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
+# 11/1/26: the picture decoders, on tests/fixtures/wundertow/images/ (tools/wundertow-images.py) and hostile files made
+# in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: sizes that
+# overflow only in 32 bits stop it
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o
+WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
+$(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
+                                    $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-image: $(BUILD)/host/test_wundertow_image $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_image tests/fixtures
+unittest: test-wundertow-image
+.PHONY: test-wundertow-image
+
+$(BUILD)/host/wundertow-ubsan/%.o: user/wundertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
+
+$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/wundertow-ubsan/,$(WT_IMAGE_NAMES)) \
+                                          $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -o $@
+
+test-wundertow-image-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan)
+	$(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan tests/fixtures,@echo "test-wundertow-image-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")
+unittest: test-wundertow-image-ubsan
+.PHONY: test-wundertow-image-ubsan
+
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
 $(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
