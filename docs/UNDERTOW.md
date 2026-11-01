@@ -363,10 +363,19 @@ The text is the console's fonts (code page 437); a character they do not have is
 stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, SVG, MathML, objects), this
 hides, and so the content of an element with the `hidden` attribute.
 
-**Style sheets** (11/01/26). A page's `<style>` elements, wherever they stand, and its `style=` attributes count, by
-the standard's cascade: specificity, order, `!important`, with HTML's own attributes (`bgcolor`, `align`, `<font
-color>`, ...) below them. Sheets are read tolerantly, as the standard says: what is not known is skipped, and a
-malformed sheet changes nothing but what it managed to say. Undertow's text does not change: it has no use for CSS.
+**Style sheets** (11/01/26). A page's `<style>` elements, wherever they stand, its `<link rel=stylesheet>`s and its
+`style=` attributes count, by the standard's cascade: specificity, order, `!important`, with HTML's own attributes
+(`bgcolor`, `align`, `<font color>`, ...) below them. Sheets are read tolerantly, as the standard says: what is not
+known is skipped, and a malformed sheet changes nothing but what it managed to say. Undertow's text does not change:
+it has no use for CSS.
+
+A page shows at once. Its linked sheets load behind it, in helpers as pictures do, and when the last has answered the
+page is built again where it was, so a slow sheet holds nothing up and one that fails is left out. A sheet has a page's
+limit, 1 MB, and is taken as `text/css` or with no type at all, so an error page is no sheet. The rules are the page's:
+from an https page or sheet nothing over http; an http(s) page never reads a file, and an `@import` never does, on a
+file page neither: only a file page's own `<link>` reaches a file beside it. `@import "x"` is followed one level, so an
+imported sheet's are not; `@import url(x)` is an `url()`, and those are never followed. 16 sheets a page, with their
+`@import`s.
 
 - Selectors: type, class, id, descendant, child, grouping, `*`, and `:link`. Every link counts as `:link`, so a
   `:visited` rule matches nothing: a sheet is never told what was visited. Any other selector that is well-formed
@@ -374,8 +383,10 @@ malformed sheet changes nothing but what it managed to say. Undertow's text does
 - Properties: `color`, `background-color` and `background` (its colour: no image is loaded, a gradient leaves the colour
   before it), `display` (none, block, inline: a table keeps its parts, but for none), `font-weight`, `font-style`,
   `text-decoration`, `margin-*`, `padding-*`, `text-align` (justified text is left-aligned), `font-size`, `font`, and
-  `inherit`, `initial`, `unset` and `revert`. Nothing else: `width`, `float`, `position`, `flex` and `list-style`
-  are not read, and a page laid out with them reads top to bottom.
+  `inherit`, `initial`, `unset` and `revert`. Nothing else: `width`, `float`, `position`, `flex`, `list-style`, `var()`
+  and `calc()` are not read, and a page laid out with them reads top to bottom.
+- Text the colour of what is behind it, as text meant for a background that is not shown here can be (an image, a
+  gradient, a colour by `var()`), takes the theme's colour instead, or white on what is dark.
 - Margins and padding are for block boxes, and table cells' padding. A negative margin stays at 0, `auto` is 0, and a
   percentage is of the width around the box.
 - Colours: every name, `#rgb` and its kin, `rgb()`, `hsl()`. Anything partly transparent is taken over white.
@@ -394,14 +405,15 @@ text is proportional: Spleen's glyphs trimmed to their ink by a table `tools/fon
 no new licence. `pre`, `code`, `tt`, `kbd` and `samp` stay monospaced, and so do the chrome and form fields.
 
 **Not yet** (the plan's later milestones): images, a Stop button and loading without waiting, finding in
-a page, links by keyboard, forms that send, sheets from `<link>`.
+a page, links by keyboard, forms that send.
 
 **Limits.** Undertow's (above), and 32,768 boxes and 131,072 runs of text a page; past any of them the page
 stops there and the status bar says so. History: 16 pages, 8 MB.
 
 **Its tests.** `make unittest` runs `test_wundertow_css` (the style sheet parser against malformed and hostile sheets,
 and its copy under UndefinedBehaviorSanitizer), `test_wundertow_style` (the cascade on pages made there, a malformed
-sheet changing nothing, a hostile one stopped, every allocation failing in turn), `test_wundertow_doc` (the page model: the fixtures in
+sheet changing nothing, a hostile one stopped, every allocation failing in turn), `test_wundertow_sheets` (linked sheets
+through the browser: what may and may not load, @import, Stop, leaving a page), `test_wundertow_doc` (the page model: the fixtures in
 `tests/fixtures/wundertow/`, `NAME.html` in, `NAME.tree` out, every page of Undertow's fixtures, the limits,
 every allocation failing in turn), `test_wundertow_layout` (`NAME.layout` at 640 pixels, lines, margins,
 lists, pre, tables, links under the pointer, painting and clipping, every page at widths from 64 to 1300)
@@ -413,7 +425,8 @@ certificate, HTTPS to HTTP; the normal initrd trusts no fixture CA). `make test-
 (`tools/gui_apps_web.py`) drives the window on the screen: started in the Terminal on pages of a data stick,
 the focus given by a click on its title bar, the text, the link colour and the heading in its size
 where the layout puts them, a link followed, Backspace, Page Down and Home, the corner dragged (the page
-laid out again at the new width) and the close button; then a page with style sheets, a malformed one among them.
+laid out again at the new width) and the close button; then a page with a `<style>`, a `style=`, a linked sheet and a
+malformed one. `test-web` loads a linked sheet and what it imports over HTTPS, and refuses one over http.
 `test_wundertow_layout --render FILE OUT.ppm [WIDTH]` paints any HTML file on the host.
 
 ## Updating the CA bundle and Mbed TLS

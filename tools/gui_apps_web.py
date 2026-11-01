@@ -7,9 +7,9 @@ goes back to the top; its corner dragged makes it smaller and the page is laid o
 button ends it. The pages are this module's own, on the stick (STICK); the stick is mounted in the Terminal and
 unmounted again, and the Terminal closed, also when a check fails.
 
-11/01/26 (Wundertow's milestone 3, styled()): a page with style sheets, and one malformed sheet among them: colours,
-display: none, weight, style, margins and alignment where they should be; headings in their real sizes; running text
-proportional and code monospaced."""
+11/01/26 (Wundertow's milestone 3, styled()): a page with a <style>, style= attributes, a linked sheet and a malformed
+sheet: colours, display: none, weight, style, margins and alignment where they should be; headings in their real
+sizes; running text proportional and code monospaced."""
 import os
 
 import fontmetrics
@@ -33,10 +33,12 @@ STICK = {
                         b' .box { background: #fff4c2; margin-left: 40px; padding: 4px } .right { text-align: right }'
                         b' .centre { text-align: center }</style>'
                         b'<style>p { color: } }}} {{{ .strong { color: red } ((( h1 { display: none </style>'
+                        b'<link rel=stylesheet href=styled.css>'
                         b'<h1>Styled</h1><h2>A second</h2><p>iii mmm <code>iii mmm</code><p class=gone>Never shown'
                         b'<p class=strong>Bold by a class<p class=slant>Italic by a class<p id=red>Red by an id'
                         b'<p style="color:#00701a">Green by an attribute<p class=box>In a box'
-                        b'<p class=right>At the right<p class=centre>In the middle'),
+                        b'<p class=right>At the right<p class=centre>In the middle<p class=linked>From the linked sheet'),
+    'web/styled.css': b'.linked { color: #7a00a0; font-weight: bold }\n',
 }
 PARK = (900, 480)           # the pointer clear of the text checked: right of the page's left 320 pixels wherever
                             # the window is (beside it when it is the desktop's first, 72 + 762 across)
@@ -142,9 +144,11 @@ def styled(d):
     at = find(d, s, 'Styled - Undertow')
     d.click(at[0] + 150, at[1] + 14)
     d.move(*PARK)
-    s = d.visible('its heading in its colour from a <style>, in the 16x32 font and bold, a malformed sheet or no',
-                  lambda s: page_text(d, s, at, 8, 'Styled', bytes.fromhex('0a58ca'), SHEET, 8, 32, True),
+    s = d.visible('a sheet from <link rel=stylesheet>, loaded after the page: colour and weight',
+                  lambda s: page_text(d, s, at, 280, 'From the linked sheet', bytes.fromhex('7a00a0'), SHEET, 8, 16, True),
                   'guiapps-web-styled.png', timeout=20)
+    d.check('its heading in its colour from a <style>, in the 16x32 font and bold, a malformed sheet or no',
+            page_text(d, s, at, 8, 'Styled', bytes.fromhex('0a58ca'), SHEET, 8, 32, True))
     d.check('h2 in the 12x24 font and bold', page_text(d, s, at, 48, 'A second', INK, SHEET, 8, 24, True))
     d.check('running text is proportional', text_at(d, s, at, 80, 'iii mmm '))
     d.check('and code stays monospaced', d.text(s, at[0] + 1 + 8 + text_width('iii mmm '), at[1] + TITLE_H + TOOLBAR + 80,

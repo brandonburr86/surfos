@@ -41,7 +41,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient),
                   # the web browser's window: its page model, its layout and painting, the browser itself
                   # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser),
-                  # 11/01/26 style sheets against hostile bytes, and the cascade (test_wundertow_css, test_wundertow_style)
+                  # 11/01/26 style sheets against hostile bytes, the cascade, linked sheets
+                  # (test_wundertow_css, test_wundertow_style, test_wundertow_sheets)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -129,8 +130,9 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            wundertow/ (10/25/26: the web browser in a window: doc the page as boxes, font, layout, paint, browser the
            window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window";
-           11/01/26 css the style sheet parser, docstyle the cascade onto boxes and runs, fontmetrics the width table
-           tools/fontmetrics.py makes for proportional text from the console's fonts),
+           11/01/26 css the style sheet parser, docstyle the cascade onto boxes and runs, sheets a page's linked
+           sheets through the loader, fontmetrics the width table tools/fontmetrics.py makes for proportional text
+           from the console's fonts),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
            ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
@@ -471,6 +473,6 @@ its window on the screen is test-usb's guiapps (`tools/gui_apps_web.py`).
 Layout and painting are integer-only, as programs with windows must be. A style sheet is as
 hostile as a page: css.c keeps its limits (docs/UNDERTOW.md "Style sheets"), checks every
 allocation, keeps no string of a sheet and never follows url(); test_wundertow_css has a sheet cut
-at every byte. Text is measured through font.h only: `wf_width()` for a page's runs, which are
+at every byte. No sheet ever loads a file: sheets.c keeps @import from one, on a file page too. Text is measured through font.h only: `wf_width()` for a page's runs, which are
 proportional, and cells (`wf_count() * WF_W`) for the chrome and fields, which are not. When
 driver/font*.c change, run tools/fontmetrics.py (test_wundertow_layout checks its table).

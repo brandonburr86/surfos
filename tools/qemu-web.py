@@ -1075,6 +1075,12 @@ SCENARIOS = [
         Step('echo status $?', 'status 1', wait=SH),
         Step('wundertow --load ' + S('/redirect/to-http'), 'redirected from HTTPS to unencrypted HTTP', wait=SH,
              absent=['status: ']),
+        # 11/01/26 (stage 3.3): a page's sheet from the network and what it imports, over HTTPS; one over http on an
+        # https page is never loaded
+        Step('wundertow --load ' + url('tls13', '/styled'), 'color=123456', 'color=654321', wait=SH,
+             check=fetched('tls13', '/styled2.css', tls='TLSv1.3')),
+        Step('wundertow --load ' + url('tls13', '/styled-http'), 'Not styled by a sheet over http.', wait=SH,
+             absent=['color=123456']),
     ], browser=False),
     Scenario('wundertow-production', 'the normal initrd: wundertow does not trust the fixture CA either; HTTP works', [
         Step('wundertow --layout https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, absent=['status: '],

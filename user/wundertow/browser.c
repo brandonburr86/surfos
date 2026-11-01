@@ -19,6 +19,7 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #include "layout.h"
 #include "paint.h"
 #include "browser.h"
+#include "sheets.h"
 
 /* the desktop's colours (docs/GUI.md) */
 #define C_INK    0x153d49
@@ -87,6 +88,7 @@ struct wb_page *wb_current(struct wb *b) { return b->npages ? b->page[b->cur] : 
 
 void wb_page_free(struct wb_page *p) {
     if(!p) return;
+    ws_free(p);
     wd_free(&p->doc);
     wl_free(&p->lay);
     free(p->texts);
@@ -122,6 +124,7 @@ struct wb_page *wb_page_new(const struct ut_response *r, int file, char *err, si
     snprintf(p->tls, sizeof(p->tls), "%s", r->tls);
     snprintf(p->reason, sizeof(p->reason), "%s", r->reason);
     p->bytes = sizeof(*p) + p->doc.bytes;
+    ws_keep(p, r);
     return p;
 }
 
@@ -307,15 +310,13 @@ int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag) {
 void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why) {
     struct wb_page *p = wb_current(b);
     int i;
-    (void)body;
-    (void)len;
-    (void)type;
     (void)why;
     if(!p || p->serial != page) return;             /* a page left: its load was stopped */
     for(i = 0; i < p->ntexts; i++)
         if(p->texts[i].tag == tag && p->texts[i].state == WP_RUNNING) {
             p->texts[i].state = WP_DONE;
             if(b->inflight) b->inflight--;
+            ws_answer(b, p, tag, body, len, type);
             return;
         }
 }
@@ -419,6 +420,7 @@ void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
     set_addr(b, p->url);
     loaded_status(b, p);
     b->focus = WB_FOCUS_PAGE;
+    ws_ask(b, p);
 }
 
 void wb_failed(struct wb *b, const char *url, const char *why) {

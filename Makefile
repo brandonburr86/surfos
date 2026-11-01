@@ -991,6 +991,8 @@ $(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUIL
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
 
+$(BUILD)/host/test_wundertow_browser: $(BUILD)/host/wundertow/sheets.o
+
 test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_browser
 unittest: test-wundertow-browser
@@ -1019,6 +1021,18 @@ test-wundertow-style: $(BUILD)/host/test_wundertow_style $(BUILD)/user/bin/wunde
 	$(BUILD)/host/test_wundertow_style
 unittest: test-wundertow-style
 .PHONY: test-wundertow-style
+
+# ... and a page's sheets from the network, the browser driven as for its other tests
+$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o sheets.o) \
+                                     $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-sheets: $(BUILD)/host/test_wundertow_sheets $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_sheets
+unittest: test-wundertow-sheets
+.PHONY: test-wundertow-sheets
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c $(BUILD)/host/wundertow/loader.o \

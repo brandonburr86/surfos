@@ -86,6 +86,7 @@ struct wb_page {
     struct wb_text *texts;              /* wb_fetch()'s list */
     int ntexts;
     int halted;                         /* Stop: it loads no more until it is loaded again */
+    struct ws_work *style;              /* 11/01/26: its style sheets are on their way (sheets.c) */
 };
 
 enum { WB_LOAD_PAGE, WB_LOAD_IMAGE, WB_LOAD_TEXT };     /* what a request is for */
