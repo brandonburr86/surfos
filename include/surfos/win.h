@@ -112,7 +112,7 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
 #define WIN_EV_RESIZE   5
 #define WIN_EV_CLOSE    6
 
-/* the keys that are no bytes (the desktop's GUI_UP .. GUI_INSERT, sys/gui.h) */
+/* the keys that are no bytes (the desktop's GUI_UP .. GUI_SHIFT_ENTER, sys/gui.h) */
 #define WIN_KEY_UP      0x100
 #define WIN_KEY_DOWN    0x101
 #define WIN_KEY_LEFT    0x102
@@ -123,6 +123,8 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
 #define WIN_KEY_PGDN    0x107
 #define WIN_KEY_DELETE  0x108
 #define WIN_KEY_INSERT  0x109
+#define WIN_KEY_BACKTAB 0x10a           /* 11/1/26: Shift+Tab */
+#define WIN_KEY_SHIFT_ENTER 0x10b       /* 11/1/26: Shift+Enter */
 
 #define WIN_BUTTON_LEFT   1
 #define WIN_BUTTON_RIGHT  2

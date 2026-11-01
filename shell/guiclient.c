@@ -70,7 +70,8 @@ application's window stood, not in the cascade.
 typedef char clip_fits[WIN_CLIP_MAX <= GUI_CLIP_MAX ? 1 : -1];
 
 /* the keys and buttons reach a program with the desktop's numbers */
-typedef char keys_are_the_desktops[WIN_KEY_UP == GUI_UP && WIN_KEY_PGDN == GUI_PGDN && WIN_KEY_INSERT == GUI_INSERT ? 1 : -1];
+typedef char keys_are_the_desktops[WIN_KEY_UP == GUI_UP && WIN_KEY_PGDN == GUI_PGDN && WIN_KEY_INSERT == GUI_INSERT &&
+                                   WIN_KEY_BACKTAB == GUI_BACKTAB && WIN_KEY_SHIFT_ENTER == GUI_SHIFT_ENTER ? 1 : -1];
 typedef char buttons_are_the_pointers[WIN_BUTTON_LEFT == POINTER_LEFT && WIN_BUTTON_RIGHT == POINTER_RIGHT &&
                                       WIN_BUTTON_MIDDLE == POINTER_MIDDLE ? 1 : -1];
 

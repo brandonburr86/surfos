@@ -1209,6 +1209,11 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     }
 }
 
+/* 11/1/26: do keys go to a program's window now? */
+bool gui_wants_shifted(const struct gui_state *g) {
+    return !g->dialog.kind && !g->menu && client_keys(g);
+}
+
 bool gui_wants_arrows(const struct gui_state *g) {
     const struct gui_app *a = gui_app_of(g->focus);
     if(!g->dialog.kind && !g->menu && client_keys(g)) return true;    /* 10/25/26: a program's window's */

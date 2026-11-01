@@ -43,6 +43,7 @@ window that asked to be seen comes up after them, never under a press of the sam
 #include <surfos/irq.h>
 #include <surfos/console.h>
 #include <surfos/cpu.h>
+#include <surfos/keyboard.h>
 #include <surfos/klog.h>
 #include <surfos/win.h>
 #include <fs/vfs.h>
@@ -190,6 +191,11 @@ static void pointer_keys_owned(int dx,int dy,unsigned buttons) {
     irq_restore(flags);
 }
 static void input_key(struct gui_state *g,int key,unsigned *keys_down) {
+    /* 11/1/26: Shift+Tab and Shift+Enter are a program's window's: raw mode says the one as ESC [ Z, and of the other
+       only the Enter, so its Shift is looked at here, while it is held. The desktop's own have no use for them. */
+    bool program=gui_wants_shifted(g);
+    if(key==GUI_BACKTAB && !program) return;
+    if(key=='\r' && program && (keyboard_mods()&KEY_SHIFT)) key=GUI_SHIFT_ENTER;
     if(key>=GUI_UP && key<=GUI_RIGHT && !gui_wants_arrows(g)) {
         int dx=key==GUI_LEFT?-8:key==GUI_RIGHT?8:0;
         int dy=key==GUI_UP?-8:key==GUI_DOWN?8:0;
@@ -213,6 +219,7 @@ static int sequence(int number,int final) {
     case 'D': return GUI_LEFT;
     case 'H': return GUI_HOME;
     case 'F': return GUI_END;
+    case 'Z': return GUI_BACKTAB;
     case '~':
         switch(number) {
         case 1: case 7: return GUI_HOME;

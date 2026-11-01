@@ -58,6 +58,8 @@ shell/guiclient.c), through struct gui_sys's win_* calls.
 #define GUI_PGDN 0x107
 #define GUI_DELETE 0x108
 #define GUI_INSERT 0x109
+#define GUI_BACKTAB 0x10a               /* 11/1/26: for a program's window only: the desktop's apps have no use for them, */
+#define GUI_SHIFT_ENTER 0x10b           /* shell/gui.c's input_key() keeps them from those */
 
 #define GUI_PATH_MAX 256
 #define GUI_NAME_MAX 256
@@ -228,6 +230,7 @@ void gui_cursor(const struct fb_surface *s, int x, int y, int scale);
 /* 10/17/26: the arrow keys belong to the model (Notepad, Files, a menu or a dialog has them),
    not to the pointer */
 bool gui_wants_arrows(const struct gui_state *g);
+bool gui_wants_shifted(const struct gui_state *g);
 /* 10/25/26 (the review): an application works without drawing every pass (a picture being read, a Hex search, a
    Terminal's output read but not drawn, keys its session has not taken): the desktop's next pass comes a frame
    later, not after its idle nap */

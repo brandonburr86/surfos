@@ -131,6 +131,8 @@ static u_int mods_held(void) {
     return (shift_l || shift_r ? KEY_SHIFT : 0) | (alt ? KEY_ALT : 0) | (ctrl ? KEY_CTRL : 0);
 }
 
+u_int keyboard_mods(void) { return mods_held(); }
+
 static void deliver(u_char c) {
     u_int mods = mods_held();
     if(c >= F1 && c < F1 + NUM_CONSOLES) {      /* F1..Fn: switch console */
