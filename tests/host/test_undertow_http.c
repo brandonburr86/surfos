@@ -14,7 +14,9 @@ and conflicting lengths, Transfer-Encoding ambiguity, the header and body
 limits at and one past them, media types and sniffing, Content-Encoding, the
 request's bytes, redirects (relative, five and six, loops, https to http,
 fragments), the load's one deadline, allocation failure at every allocation,
-and leaks (alloc.c counts what the modules hold).
+and leaks (alloc.c counts what the modules hold). 11/1/26: ut_fetch_any(), what
+is not text, at and past its limit, with the same refusals; and that ut_fetch()
+has none of it.
 */
 
 #include <stdio.h>
@@ -1754,6 +1756,126 @@ static void allocation_failures(void) {
     text_free(&want);
 }
 
+/**** ut_fetch_any(): what is not text ****/
+
+static int fetch_any(const struct ut_url *u, const char *data, size_t len, size_t max, struct ut_response *r, char *err, size_t cap) {
+    reset();
+    serve(NULL, data, len);
+    loads++;
+    return ut_fetch_any(u, &cfg, max, r, err, cap);
+}
+
+#define ANY(lit, max) fetch_any(u, lit, sizeof(lit) - 1, max, r, err, sizeof(err))
+
+static void any_type(void) {
+    struct ut_response *r = calloc(1, sizeof(*r));
+    struct ut_url *u = malloc(sizeof(*u)), *secure = malloc(sizeof(*secure));
+    struct text b = { 0 }, page = { 0 };
+    char err[UT_ERR_MAX];
+    size_t i;
+    check(!ut_url_parse(PAGE_ADDRESS, u, err, sizeof(err)) && !ut_url_parse("https://fixture.test/s", secure, err, sizeof(err)),
+          "the addresses");
+    for(i = 0; i < 4 * MB + 10; i++) {
+        char ch = (char)(i * 31 >> 3);              /* NULs and everything else */
+        add(&page, &ch, 1);
+    }
+    /* of any type, or none */
+    check(!ANY(OK_H "Content-Type: image/png\r\nContent-Length: 16\r\n\r\n" PNG, 1000) && r->len == 16 &&
+          !memcmp(r->body, PNG, 16) && !r->body[16] && !strcmp(r->content_type, "image/png") && r->status == 200,
+          "image/png: its bytes and its type");
+    ut_response_free(r);
+    check(!ANY(OK_H "Content-Length: 16\r\n\r\n" PNG, 1000) && r->len == 16 && !r->content_type[0], "no type, and binary");
+    ut_response_free(r);
+    check(!ANY(OK_H "\r\nabc\0def", 1000) && r->len == 7 && !memcmp(r->body, "abc\0def", 7), "no type, to the connection's end, a NUL");
+    ut_response_free(r);
+    check(!ANY(OK_H "Content-Type: application/octet-stream\r\n\r\n\x01\x02", 1000) && r->len == 2, "application/octet-stream");
+    ut_response_free(r);
+    check(!ANY(OK_H PLAIN "Content-Length: 5\r\n\r\nHello", 1000) && r->len == 5 && !strcmp(r->content_type, "text/plain"), "text too");
+    ut_response_free(r);
+    check(!ANY("HTTP/1.1 404 Not Found\r\nContent-Type: image/gif\r\nContent-Length: 3\r\n\r\nGIF", 1000) && r->status == 404 &&
+          r->len == 3, "a status that is not 200: the caller's to judge");
+    ut_response_free(r);
+    check(!ANY("HTTP/1.1 204 No Content\r\nContent-Type: image/gif\r\n\r\n", 1000) && r->status == 204 && r->len == 0 && r->body,
+          "no body");
+    ut_response_free(r);
+    check(!ANY(CHUNKED "3\r\n\0\1\2\r\n0\r\n\r\n", 1000) && r->len == 3, "chunked");
+    ut_response_free(r);
+    /* the limit it was given, every framing, one past it; the message says a file */
+    check(ANY(OK_H "Content-Length: 11\r\n\r\nHelloWorld!", 10) == -1 && strstr(err, "the file from fixture.test is over") && !strstr(err, "page"),
+          "Content-Length one past the limit");
+    check(!ANY(OK_H "Content-Length: 10\r\n\r\nHelloWorld", 10) && r->len == 10, "Content-Length at the limit");
+    ut_response_free(r);
+    check(!ANY(OK_H "\r\nHelloWorld", 10) && r->len == 10, "the connection's end at the limit");
+    ut_response_free(r);
+    check(ANY(OK_H "\r\nHelloWorld!", 10) == -1 && strstr(err, "is over"), "the connection's end one past it");
+    check(!ANY(CHUNKED "5\r\nHello\r\n5\r\nWorld\r\n0\r\n\r\n", 10) && r->len == 10, "chunked at the limit");
+    ut_response_free(r);
+    check(ANY(CHUNKED "5\r\nHello\r\n6\r\nWorld!\r\n0\r\n\r\n", 10) == -1 && strstr(err, "is over"), "chunked one past it");
+    check(ANY(CHUNKED "ffffffffffffffff\r\nHello\r\n", 10) == -1 && strstr(err, "is over"), "a chunk of 2^64 - 1");
+    check(ANY(OK_H "Content-Length: 99999999999999999999\r\n\r\nHello", 10) == -1 && strstr(err, "is over"), "a length past any number");
+    /* UT_ANY_MAX: it holds, and nobody may ask for more */
+    addf(&b, OK_H "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", UT_ANY_MAX);
+    add(&b, page.p, UT_ANY_MAX);
+    check(!fetch_any(u, b.p, b.len, UT_ANY_MAX, r, err, sizeof(err)) && r->len == UT_ANY_MAX && !memcmp(r->body, page.p, UT_ANY_MAX), "4 MiB");
+    ut_response_free(r);
+    b.len = 0;
+    addf(&b, OK_H "Content-Length: %u\r\n\r\n", UT_ANY_MAX + 1);
+    add(&b, page.p, UT_ANY_MAX + 1);
+    check(fetch_any(u, b.p, b.len, 0xffffffffu, r, err, sizeof(err)) == -1 && strstr(err, "over 4 MB"), "4 MiB + 1, however much is asked for");
+    b.len = 0;
+    adds(&b, OK_H "\r\n");
+    add(&b, page.p, UT_ANY_MAX);
+    check(!fetch_any(u, b.p, b.len, UT_ANY_MAX, r, err, sizeof(err)) && r->len == UT_ANY_MAX, "4 MiB to the connection's end, growing");
+    ut_response_free(r);
+    add(&b, page.p, 1);
+    check(fetch_any(u, b.p, b.len, UT_ANY_MAX, r, err, sizeof(err)) == -1 && strstr(err, "over 4 MB"), "and one more");
+    /* all else as it is */
+    check(ANY(OK_H "Content-Type: image/png\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\nab", 1000) == -1 &&
+          strstr(err, "compressed"), "compressed is refused");
+    check(ANY(OK_H "Content-Length: 2\r\nContent-Length: 3\r\n\r\nabc", 1000) == -1 && strstr(err, "two different"), "two lengths");
+    check(ANY(OK_H "Transfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\nabc", 1000) == -1 && strstr(err, "ambiguous"), "both framings");
+    check(ANY(OK_H "Content-Length: 9\r\n\r\nabc", 1000) == -1 && strstr(err, "before the end of the page"), "a body cut short");
+    reset();
+    moved("http://fixture.test/page", 302, "/pic");
+    serve("http://fixture.test/pic", LIT(OK_H "Content-Type: image/gif\r\nContent-Length: 3\r\n\r\nGIF"));
+    check(!ut_fetch_any(u, &cfg, 1000, r, err, sizeof(err)) && r->redirects == 1 && !strcmp(r->url.text, "http://fixture.test/pic"), "a redirect");
+    ut_response_free(r);
+    reset();
+    moved("https://fixture.test/s", 302, "http://fixture.test/pic");
+    check(ut_fetch_any(secure, &cfg, 1000, r, err, sizeof(err)) == -1 && strstr(err, "HTTPS to unencrypted HTTP") && opened == 1, "HTTPS to HTTP is refused");
+    /* the plain call has none of it */
+    reset();
+    serve(NULL, LIT(OK_H "Content-Type: image/png\r\nContent-Length: 16\r\n\r\n" PNG));
+    check(ut_fetch(u, &cfg, r, err, sizeof(err)) == -1 && !strcmp(err, "image/png is not text: Undertow shows HTML and plain text"),
+          "ut_fetch() still refuses what is not text");
+    reset();
+    serve(NULL, LIT(OK_H "Content-Length: 2000000\r\nContent-Length: 3000000\r\n\r\n"));
+    check(ut_fetch(u, &cfg, r, err, sizeof(err)) == -1 && !strcmp(err, "the page from fixture.test is over 1 MB, more than Undertow loads"),
+          "two lengths over its limit are too big, not different, as they were");
+    /* without memory */
+    {
+        long n;
+        int rc = -1, failed = 0;
+        for(n = 0; n < 50 && rc; n++) {
+            reset();
+            serve(NULL, LIT(OK_H "Content-Type: image/png\r\n\r\nabc"));
+            ut_alloc_fail_after = n;
+            rc = ut_fetch_any(u, &cfg, 1000, r, err, sizeof(err));
+            ut_alloc_fail_after = -1;
+            if(rc) failed++;
+            else ut_response_free(r);
+            check(!ut_alloc_live, "nothing held without memory");
+        }
+        check(!rc && failed >= 1, "every allocation failing in turn");
+    }
+    check(ut_alloc_live == 0 && live_conns == 0, "nothing held after what is not text");
+    text_free(&b);
+    text_free(&page);
+    free(u);
+    free(secure);
+    free(r);
+}
+
 /**** the rest of the interface ****/
 
 static void interface(void) {
@@ -1800,6 +1922,7 @@ int main(void) {
     chunk_line_limits();
     deadline_tests();
     allocation_failures();
+    any_type();
     interface();
     printf("%ld loads\n", loads);
     printf("UNDERTOW HTTP TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
