@@ -734,15 +734,36 @@ $(addprefix $(BUILD)/user/bin/,gzip gunzip zcat): $(BUILD)/user/bin/%: $(BUILD)/
 # FAT of tests/host/ar_sim.c, against SurfOS's headers with libsurf's names, as test_edit does. Plain flags only: the
 # sanitizer runs are tests/archive-sanitize.sh's, natively on the Mac. A -fsanitize build must never enter `make unittest`:
 # one hung at 99% CPU in the Docker image, under qemu-i386, and compiling is no test of that.
+AR_SIM_FLAGS = $(HOSTFLAGS) -Wno-main -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+               -include tests/host/ar_names.h -MMD -MP
+AR_HOST_FLAGS = $(HOSTFLAGS) -Wno-unused-function -Itests/host
+AR_TEST_OBJ = $(addprefix $(BUILD)/host/archive/,ar_sim.o ar_crc.o libsurf/crc32.o libsurf/inflate.o libsurf/deflate.o) \
+              $(filter-out %/malloc.o,$(HOSTUSER_OBJ))
+$(BUILD)/host/archive/%.o: user/%.c tests/host/libsurf_names.h tests/host/ar_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(AR_SIM_FLAGS) -c $< -o $@
+$(BUILD)/host/archive/tar/tar.o: AR_SIM_FLAGS += -Dmain=tar_main
+$(BUILD)/host/archive/unzip/unzip.o: AR_SIM_FLAGS += -Dmain=unzip_main
+$(BUILD)/host/archive/%.o: tests/host/%.c tests/host/ar_sim.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host -c $< -o $@
 $(BUILD)/host/test_deflate: tests/host/test_deflate.c user/libsurf/crc32.c user/libsurf/inflate.c user/libsurf/deflate.c \
                             user/include/crc32.h user/include/inflate.h user/include/deflate.h
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -idirafter user/include $(filter %.c,$^) -o $@
+$(BUILD)/host/test_gztool: tests/host/test_gztool.c tests/host/ar_host.h tests/host/ar_sim.h \
+                           $(addprefix $(BUILD)/host/archive/gzip/,tool.o gzfile.o) $(AR_TEST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
+-include $(wildcard $(BUILD)/host/archive/*/*.d)
 unittest: unittest-archive
 .PHONY: unittest-archive
-unittest-archive: $(BUILD)/host/test_deflate
+unittest-archive: $(BUILD)/host/test_deflate $(BUILD)/host/test_gztool
 	$(BUILD)/host/test_deflate
+	$(BUILD)/host/test_gztool
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
