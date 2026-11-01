@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 
 import gui_scenario as base
 
@@ -125,9 +126,13 @@ class Driver:
 def kernel_heap_used(vm, PROMPT):
     """10/25/26 (robustness, B1): the kernel heap's bytes in use, as memstat on the serial line says them, or None. The
     console drops what is typed until a pause after the desktop gives the keyboard back (TTY_SKIP): a quiet second
-    first, and memstat once more if its lines did not come"""
+    first, and memstat once more if its lines did not come. 10/31/26: a whole second, by the clock: pump() returns with
+    the first byte, so two readings could come 40 ms apart and agree while the other consoles' shells were still
+    starting (at -O0, 672880 twice, then the 656416 where every boot settles)"""
     for _ in range(2):
-        vm.pump(1)
+        end = time.time() + 1
+        while time.time() < end:
+            vm.pump(0.1)
         start = len(vm.transcript)
         vm.send('memstat\n')
         if vm.expect('kernel heap:', 15) and vm.expect(PROMPT, 30):
