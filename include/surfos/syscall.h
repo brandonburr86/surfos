@@ -18,6 +18,7 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 ends' addresses (surfos/sock.h).
 10/25/26 (windows for programs): 52 and 53 open a window on the desktop and drive it
 (surfos/win.h).
+11/01/26 (top): 54, the machine's clock and memory totals (surfos/proc.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -86,7 +87,9 @@ ends' addresses (surfos/sock.h).
 /* 10/25/26 (windows for programs): surfos/win.h */
 #define SYS_winopen  52  /* (const struct win_open *o): a window's descriptor */
 #define SYS_winctl   53  /* (int fd, int op, void *arg): WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO */
-#define NR_SYSCALLS 54
+/* 11/01/26 (top): surfos/proc.h */
+#define SYS_sysinfo  54  /* (struct sysinfo *si) */
+#define NR_SYSCALLS 55
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

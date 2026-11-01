@@ -8,6 +8,7 @@ call of full-screen programs, the uptime and the raw directory call. Since
 10/6/26 also the kernel's shell commands (kcmd), for the user shell surfsh.
 10/24/26: what a broken pipe does (broken_pipe_exit()).
 10/25/26: windows on the desktop (winopen(), winctl(); surfos/win.h).
+11/01/26: the machine's clock and memory totals (sysinfo(); surfos/proc.h).
 
 Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
 stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
@@ -125,6 +126,7 @@ int openpty(void);                                      /* a pseudo-terminal's m
 int spawnpty(const char *path, char *const argv[], int masterfd);   /* a program on that pty: its pid */
 int ptyctl(int masterfd, int op, unsigned int arg);     /* PTY_SETSIZE, PTY_INDEX */
 int procinfo(int index, struct procinfo *pi);           /* task number index; -1 ENOENT after the last */
+int sysinfo(struct sysinfo *si);                        /* 11/01/26: the clock, the memory totals */
 int detach(void);                                       /* init becomes this process's parent */
 
 /* 10/24/26: pipes (pipe() is in unistd.h; surfos/pipe.h has the rules). A write to a pipe nobody reads any more
