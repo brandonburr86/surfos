@@ -104,7 +104,7 @@ struct wd_control {
     int run;                            /* its box, -1: none */
     char *name;                         /* NULL: none */
     char *owner;                        /* its form= attribute */
-    char *formaction;                   /* a button's address, absolute, or NULL */
+    char *formaction;                   /* a button's address, absolute; NULL: none, or none it can use (action_cut) */
     char *value, *dflt;                 /* the value now, and as the page has it */
     size_t len, cap, caret;             /* of value: its bytes, the room for it, where typing goes */
     size_t first;                       /* the first byte shown (a field too short for its text) */
@@ -112,6 +112,7 @@ struct wd_control {
     int maxlength;                      /* -1: none */
     int rows, cols, size;               /* 0: none */
     unsigned int first_option, noptions;
+    unsigned char here;                 /* an empty formaction: the page's own address (until the page's end) */
 };
 
 #define WS_BOLD     0x0001

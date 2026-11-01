@@ -137,6 +137,10 @@ static void model(void) {
     check(c[2].noptions == 0 && fm_chosen(&d, 2) == -1, "no options");
     check(fm_chosen(&d, 3) == 1, "the first that can be chosen");
     wd_free(&d);
+    /* a table's cell ends a button left open in it */
+    check(!build("<table><tr><td><button>x</td><td>after</table>", &d), "a button left open");
+    check(d.runs[d.controls[0].run].len == 1, "its label ends with its cell");
+    wd_free(&d);
     /* a select's label as milestone 1 showed it stays */
     check(!build("<form action='' method=post><input name=a></form>", &d) && d.forms[0].method == WM_POST && !strcmp(d.forms[0].action, PAGE), "an empty action: the page's own address");
     wd_free(&d);
@@ -156,6 +160,18 @@ static void model(void) {
         check(!build(big, &d) && d.control_count == WD_CONTROLS_MAX && d.forms[0].too_much, "past the controls kept: the form is not sent");
         wd_free(&d);
         e = big;
+        e += snprintf(e, 32, "<form id=f action=/s></form>");
+        for(i = 0; i < (int)WD_CONTROLS_MAX; i++) e += snprintf(e, 32, "<input name=a>");
+        e += snprintf(e, 32, "<input name=z form=f>");
+        check(!build(big, &d) && d.control_count == WD_CONTROLS_MAX && d.forms[0].too_much, "one past them of a form elsewhere: that form");
+        wd_free(&d);
+        e = big;
+        e += snprintf(e, 32, "<form id=f action=/s></form>");
+        for(i = 0; i < (int)WD_CONTROLS_MAX; i++) e += snprintf(e, 32, "<input name=a>");
+        e += snprintf(e, 32, "<input name=z form=''>");
+        check(!build(big, &d) && d.control_count == WD_CONTROLS_MAX && !d.forms[0].too_much, "one of no form at all: no form's");
+        wd_free(&d);
+        e = big;
         for(i = 0; i < (int)WD_FORMS_MAX + 3; i++) e += snprintf(e, 32, "<form></form>");
         check(!build(big, &d) && d.form_count == WD_FORMS_MAX, "past the forms kept");
         wd_free(&d);
@@ -172,9 +188,102 @@ static void model(void) {
         memset(name, 'n', 1000);
         name[1000] = 0;
         e += snprintf(e, 32, "<form>");
-        for(i = 0; i < 700; i++) e += snprintf(e, 2100, "<input name=%s value=%s>", name, name);
-        check(!build(big, &d) && d.forms[0].too_much && d.control_count < 700, "past the bytes kept");
-        check(d.form_bytes <= 2 * WD_FORM_BYTES, "and no more kept than that");
+        for(i = 0; i < 360; i++) e += snprintf(e, 2100, "<input type=hidden name=%s value=%s>", name, name);
+        check(!build(big, &d) && !d.truncated && d.forms[0].too_much && d.control_count == 349, "past the bytes kept, on a page that did not stop");
+        check(d.form_bytes <= WD_FORM_BYTES + d.control_count * sizeof(*d.controls) + d.form_count * sizeof(*d.forms), "and no more kept than that");
+        wd_free(&d);
+        /* the same page within them */
+        e = big;
+        e += snprintf(e, 32, "<form>");
+        for(i = 0; i < 349; i++) e += snprintf(e, 2100, "<input type=hidden name=%s value=%s>", name, name);
+        check(!build(big, &d) && !d.forms[0].too_much && d.control_count == 349, "just within them");
+        wd_free(&d);
+        /* a name longer than is kept */
+        e = big;
+        e += snprintf(e, 40, "<form><input value=1 name=\"");
+        memset(e, 'n', 2000);
+        e += 2000;
+        snprintf(e, 16, "\"></form>");
+        check(!build(big, &d) && d.forms[0].too_much, "a name cut: the form is not sent");
+        wd_free(&d);
+        /* an option's value, and an option's text where that is its value */
+        e = big;
+        e += snprintf(e, 60, "<form><select name=s><option value=\"");
+        memset(e, 'v', 2000);
+        e += 2000;
+        snprintf(e, 40, "\">One</select></form>");
+        check(!build(big, &d) && d.forms[0].too_much, "an option's value cut");
+        wd_free(&d);
+        e = big;
+        e += snprintf(e, 60, "<form><select name=s><option>");
+        memset(e, 't', 2000);
+        e += 2000;
+        snprintf(e, 40, "</select></form>");
+        check(!build(big, &d) && d.forms[0].too_much, "an option's text cut, which it would send");
+        wd_free(&d);
+        e = big;
+        e += snprintf(e, 60, "<form><select name=s><option value=1>");
+        memset(e, 't', 2000);
+        e += 2000;
+        snprintf(e, 40, "</select></form>");
+        check(!build(big, &d) && !d.forms[0].too_much, "with a value, only what it shows is cut");
+        wd_free(&d);
+        e = big;
+        e += snprintf(e, 60, "<form><select name=s><option value=1>");
+        memset(e, 't', 2000);
+        e += 2000;
+        snprintf(e, 40, "<option>Two</select></form>");
+        check(!build(big, &d) && !d.forms[0].too_much, "and the next option's own text is whole");
+        wd_free(&d);
+        /* options past the bytes kept */
+        e = big;
+        e += snprintf(e, 60, "<form><select name=s>");
+        for(i = 0; i < 700; i++) e += snprintf(e, 2100, "<option value=%s>%s", name, name);
+        check(!build(big, &d) && !d.truncated && d.forms[0].too_much && d.option_count < 700, "options past the bytes kept");
+        wd_free(&d);
+        /* the page's own address past them: refused, not outside them */
+        {
+            char url[900];
+            size_t k = (size_t)snprintf(url, sizeof(url), "https://forms.test/");
+            memset(url + k, 'p', 700);
+            url[k + 700] = 0;
+            e = big;
+            for(i = 0; i < 349; i++) e += snprintf(e, 2100, "<input type=hidden name=%s value=%s>", name, name);
+            snprintf(e, 40, "<form><input type=hidden name=a></form>");
+            check(!build_as(url, big, "utf-8", &d) && !d.forms[0].action, "a form of the page's own address, with no room for it");
+            why = fm_submit(&d, 0, -1, 0, 0, sent, sizeof(sent));
+            check(why && strstr(why, "address"), "says so");
+            wd_free(&d);
+        }
+        e = big;
+        e += snprintf(e, 80, "<form id=f></form><select name=s form=f><option value=\"");
+        memset(e, 'v', 2000);
+        e += 2000;
+        snprintf(e, 40, "\">One</select>");
+        check(!build(big, &d) && d.forms[0].too_much, "one cut in a select of a form elsewhere: that form");
+        wd_free(&d);
+        /* a form= too long to be sure of */
+        e = big;
+        e += snprintf(e, 80, "<form id=f action=/s></form><input name=a form=\"");
+        memset(e, 'f', 2000);
+        e += 2000;
+        snprintf(e, 40, "\">");
+        check(!build(big, &d) && d.forms[0].too_much, "a form= cut: it could be any form");
+        wd_free(&d);
+        /* an id too long to be sure of */
+        e = big;
+        e += snprintf(e, 40, "<form id=\"");
+        memset(e, 'f', 2000);
+        e += 2000;
+        e += snprintf(e, 40, "\" action=/s></form>");
+        check(!build(big, &d) && d.forms[0].too_much, "an id cut: a form= could have meant it");
+        wd_free(&d);
+        /* a control that came first, naming a form whose id then does not fit */
+        e = big;
+        e += snprintf(e, 1100, "<input name=a value=1 form=%s>", name);
+        for(i = 0; i < 349; i++) e += snprintf(e, 2100, "<input type=hidden name=%s value=%s>", name, name);
+        snprintf(e, 1100, "<form id=%s action=/s></form>", name);
+        check(!build(big, &d) && d.form_count == 1 && !d.forms[0].id && d.forms[0].too_much, "an id that does not fit: its controls are not known, so it is not sent");
         wd_free(&d);
         /* a value longer than an attribute keeps, and a text area past its limit */
         e = big;
@@ -190,6 +299,56 @@ static void model(void) {
         e += 70000;
         snprintf(e, 32, "</textarea></form>");
         check(!build(big, &d) && d.forms[0].too_much && d.controls[0].len == WD_VALUE_MAX, "a text area cut: the form is not sent");
+        wd_free(&d);
+    }
+    /* deeper than the elements kept */
+    {
+        static char deep[4000];
+        char *e = deep;
+        int i;
+        for(i = 0; i < 140; i++) e += snprintf(e, 8, "<div>");
+        snprintf(e, 200, "<form action=/a id=f><input name=x></form><input name=y>");
+        check(!build(deep, &d) && d.controls[0].form == 0 && d.controls[1].form == -1, "a form too deep to keep ends at its </form>");
+        wd_free(&d);
+        e = deep;
+        e += snprintf(e, 30, "<form action=/a>");
+        for(i = 0; i < 140; i++) e += snprintf(e, 8, "<div>");
+        snprintf(e, 200, "<fieldset disabled><input name=x value=1></fieldset></form>");
+        check(!build(deep, &d) && d.forms[0].too_much && !d.controls[0].disabled, "a disabled fieldset too deep to keep: its form is not sent");
+        check(d.control_count == 1, "(its field)");
+        wd_free(&d);
+        e = deep;
+        e += snprintf(e, 30, "<form action=/a>");
+        for(i = 0; i < 140; i++) e += snprintf(e, 8, "<div>");
+        snprintf(e, 200, "<fieldset><input name=x value=1></fieldset></form>");
+        check(!build(deep, &d) && !d.forms[0].too_much, "one that is not disabled changes nothing");
+        wd_free(&d);
+    }
+    /* addresses are in the budget when they are made absolute */
+    check(!build("<form action=a></form>", &d) && d.form_bytes == sizeof(*d.forms) + strlen("https://forms.test/dir/a") + 1, "an address counts as it ends up, once");
+    wd_free(&d);
+    {
+        static char big[200000], url[2100];
+        char *e = big;
+        int i;
+        size_t n = (size_t)snprintf(url, sizeof(url), "https://forms.test/");
+        memset(url + n, 'p', 1800);
+        url[n + 1800] = '/';
+        url[n + 1801] = 0;
+        e += snprintf(e, 32, "<form action=/s>");
+        for(i = 0; i < 4000; i++) e += snprintf(e, 32, "<button formaction=z>");
+        check(!build_as(url, big, "utf-8", &d) && d.control_count == 4000, "4000 buttons with an address, on a page of a long one");
+        check(d.form_bytes <= WD_FORM_BYTES + d.control_count * sizeof(*d.controls) + d.form_count * sizeof(*d.forms), "their addresses stay in the budget");
+        check(d.controls[0].formaction && !d.controls[3999].formaction, "the first are kept, the last are not");
+        why = fm_submit(&d, 0, 3999, 0, 0, sent, sizeof(sent));
+        check(why && strstr(why, "address") && strstr(why, "nothing was sent"), "and a button with none says so, and does not use the form's");
+        wd_free(&d);
+        e = big;
+        for(i = 0; i < (int)WD_FORMS_MAX; i++) e += snprintf(e, 32, "<form></form>");
+        for(i = 0; i < 600; i++) e += snprintf(e, 32, "<form action=a></form>");
+        check(!build_as(url, big, "utf-8", &d) && d.form_count == WD_FORMS_MAX && d.forms[0].action, "forms of the page's own address");
+        check(d.form_bytes <= WD_FORM_BYTES + d.form_count * sizeof(*d.forms), "in the budget too");
+        check(!d.forms[WD_FORMS_MAX - 1].action || d.form_bytes > 900000, "(the budget or the forms' limit, whichever comes first)");
         wd_free(&d);
     }
     /* a page cut at its limit: nothing can be known of its forms */
@@ -250,7 +409,42 @@ static void encoding(void) {
     sends("<form action=/s><input name=a disabled value=1><fieldset disabled><input name=b value=2></fieldset><input name=c readonly value=3></form>", "https://forms.test/s?c=3", "disabled is not sent, read-only is");
     sends("<form action=/s><textarea name=t>one\ntwo\r\nthree\rfour</textarea></form>", "https://forms.test/s?t=one%0D%0Atwo%0D%0Athree%0D%0Afour", "a text area's lines end in CR LF");
     sends("<form action=/s><input type=file name=f></form>", "https://forms.test/s?f=", "a file field: empty, the standard's for no file");
+    sends("<form action=/s><input type=file name=f value=c:/secrets.txt></form>", "https://forms.test/s?f=", "whatever a page says its value is");
+    sends("<form action=/s><input type=hidden name=h value='x&#13;&#10;y&#13;z'></form>", "https://forms.test/s?h=x%0D%0Ay%0D%0Az", "a value's CR LF is one line end, a CR alone another");
     sends("<form action=/s><input type=submit name=go value=1><input name=a value=2><button name=b value=3></form>", "https://forms.test/s?a=2", "with no button: no button's value");
+    /* what surrounds an address, and what no address means */
+    sends("<form action=' /s\t'><input name=a value=1></form>", "https://forms.test/s?a=1", "an action's spaces at its ends go");
+    sends("<form action='   '><input name=a value=1></form>", "https://forms.test/dir/page.html?a=1", "only spaces: no action");
+    sends("<base href=https://other.test/x/><form action=''><input name=a value=1></form>", "https://forms.test/dir/page.html?a=1", "no action is the page's address, not the base's");
+    /* a text field's value is one line, as a browser has it; a hidden one's is as it is */
+    sends("<form action=/s><input name=a value='one&#10;two&#13;three'><input type=hidden name=h value='x&#10;y'></form>", "https://forms.test/s?a=onetwothree&h=x%0D%0Ay", "no line ends in a text field");
+    /* _charset_: a hidden field of that name, in any case, whatever its value */
+    sends("<form action=/s><input type=hidden name=_Charset_ value=zz><input name=_charset_ value=yy></form>", "https://forms.test/s?_Charset_=UTF-8&_charset_=yy", "_charset_: the standard's hidden field");
+    /* options */
+    sends("<form action=/s><select name=s><option>a&nbsp;b</select></form>", "https://forms.test/s?s=a%C2%A0b", "a no-break space in the text an option sends");
+    sends("<form action=/s><select name=s><option>  a \n b  </select></form>", "https://forms.test/s?s=a+b", "ASCII spaces collapse");
+    sends("<form action=/s><select name=s size=3><option>A<option>B</select></form>", "https://forms.test/s?", "a list of rows has nothing chosen by itself");
+    sends("<form action=/s><select name=s><option label=L>Text</select></form>", "https://forms.test/s?s=Text", "an option sends its text, not its label");
+    sends("<form action=/s><select name=s size=1><option>A<option>B</select></form>", "https://forms.test/s?s=A", "one of one row does");
+    /* what the hidden attribute hides is still the page's form */
+    sends("<form action=/s><div hidden><input type=hidden name=token value=abc></div><input name=a value=1></form>", "https://forms.test/s?token=abc&a=1", "a hidden field under the hidden attribute");
+    sends("<form action=/s><div hidden><div><p><input name=b value=2><input type=checkbox name=c checked></div></div><input name=a value=1></form>", "https://forms.test/s?b=2&c=on&a=1", "any field, however deep");
+    sends("<form action=/s><div hidden></form></div><input name=a value=1>", "https://forms.test/s?", "a form's end there is its end");
+    sends("<form action=/s><div hidden><textarea name=t>words</textarea></div><textarea hidden name=u>more</textarea></form>", "https://forms.test/s?t=words&u=more", "a text area there");
+    sends("<form action=/s><div hidden><template><input name=x value=1></template><input name=y value=2></div></form>", "https://forms.test/s?y=2", "a template there holds no fields");
+    sends("<form action=/s><div hidden><template><template></template><input name=x></template><input name=y value=2></div></form>", "https://forms.test/s?y=2", "nor one in one");
+    sends("<form action=/s><template><input name=x value=1></template><datalist><input name=z value=3></datalist><input name=y value=2></form>", "https://forms.test/s?y=2", "nor anywhere else");
+    sends("<form action=/s><svg><input name=x value=1></svg><input name=y value=2></form>", "https://forms.test/s?y=2", "nor svg");
+    sends("<div hidden></div><form action=/s><template><input name=x value=1></template><input name=y value=2></form>", "https://forms.test/s?y=2", "and after hidden content that has ended");
+    sends("<form action=/s><div hidden><template></div><div hidden><input name=y value=2></div></form>", "https://forms.test/s?y=2", "what was open in hidden content is not left over");
+    sends("<form action=/s><div hidden><fieldset><input name=a value=1></fieldset></div></form>", "https://forms.test/s?a=1", "a fieldset there that is not disabled");
+    sends("<form action=/s><div hidden><template><textarea name=t>x</textarea></template><input name=y value=2></div></form>", "https://forms.test/s?y=2", "a text area in a template there");
+    sends("<form action=/s><template><textarea name=t>x</textarea></template><input name=y value=2></form>", "https://forms.test/s?y=2", "or anywhere");
+    refuses("<form action=/s><div hidden><select name=s><option>One</select></div></form>", "more than", "a select there is not followed");
+    refuses("<form action=/s><select hidden name=s><option>One</select></form>", "more than", "a hidden select");
+    refuses("<form action=/s><div hidden><button name=b>B</button></div></form>", "more than", "a button there");
+    refuses("<form action=/s><div hidden><fieldset disabled><input name=x value=1></fieldset></div></form>", "more than", "a disabled fieldset there");
+    refuses("<form action=/s><fieldset hidden disabled><input name=x value=1></fieldset></form>", "more than", "a disabled fieldset hidden");
     /* on a page in windows-1252 */
     {
         struct wd_document d;
@@ -275,6 +469,61 @@ static void encoding(void) {
         check(!fm_submit(&d, 0, 2, 3, 4, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?i.x=3&i.y=4"), "an image button: where it was pressed");
         check(!fm_submit(&d, 0, 3, 5, 6, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?x=5&y=6"), "one with no name");
         check(fm_default_button(&d, 0) == 0, "the default button");
+        wd_free(&d);
+        build("<form action=/s><input name=a><input type=password name=p></form><form><input type=password name=q></form>", &d);
+        check(fm_default_button(&d, 0) == -2, "a password field is a field that takes text");
+        check(fm_default_button(&d, 1) == -1, "one, and no button");
+        wd_free(&d);
+    }
+    {
+        struct wd_document d;
+        /* a text field's one line is also what Reset gives back */
+        build("<form><input name=a value='x&#10;y'></form>", &d);
+        check(d.controls[0].len == 2 && !strcmp(d.controls[0].dflt, "xy"), "as the page gave it, one line");
+        d.controls[0].value[0] = 'z';
+        fm_reset(&d, 0);
+        check(!strcmp(d.controls[0].value, "xy") && d.controls[0].len == 2, "Reset");
+        wd_free(&d);
+        /* form= and formaction= with nothing in them */
+        build("<form action=/s id=f><input name=a value=1 form=''><input name=b value=2><button formaction=''>B</button></form>", &d);
+        check(d.controls[0].form == -1 && d.controls[1].form == 0, "form='': no form, not the one it is in");
+        check(!fm_submit(&d, 0, 2, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/dir/page.html?b=2"), "formaction='': the page's own address");
+        wd_free(&d);
+        build("<form action=/s><button formaction=' /z '>B</button><button formaction=mailto:a@b.test>C</button></form>", &d);
+        check(!fm_submit(&d, 0, 0, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/z?"), "a formaction's spaces at its ends go");
+        why = fm_submit(&d, 0, 1, 0, 0, sent, sizeof(sent));
+        check(why && strstr(why, "address"), "a formaction that cannot be used: nothing goes, nor to the form's address");
+        wd_free(&d);
+        build("<form method=post action=/s><button formmethod=bogus name=b value=1>B</button></form>", &d);
+        check(!fm_submit(&d, 0, 0, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?b=1"), "a formmethod that is none: GET, the standard's");
+        wd_free(&d);
+        /* only an input is an image button */
+        build("<form action=/s><button type=image name=b value=1>B</button></form>", &d);
+        check(!d.controls[0].image && !fm_submit(&d, 0, 0, 3, 4, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?b=1"), "a button of type=image is a button");
+        wd_free(&d);
+        /* a select elsewhere hidden */
+        build("<form id=f action=/s></form><form id=g action=/t><div hidden><select form=f name=s><option>One</select></div></form>", &d);
+        check(d.forms[0].too_much && d.forms[1].too_much, "what a form= sends elsewhere under the hidden attribute: which it is, is not looked at");
+        wd_free(&d);
+        /* controls under the hidden attribute have no box */
+        build("<form hidden id=f action=/s><input name=a value=1></form><button form=f name=b value=2>Go</button>", &d);
+        check(d.form_count == 1 && d.control_count == 2 && d.controls[0].form == 0 && d.controls[0].run == -1 && d.controls[1].run >= 0, "a hidden form, a button of it elsewhere");
+        check(!fm_submit(&d, 0, 1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=1&b=2"), "which sends it");
+        wd_free(&d);
+        /* the label of an option */
+        build("<form><select name=s><option label='  Shown  here ' value=1><option label='' value=2>Text<option>Three</select><select name=t><option value=9 selected label='Very long words'></select></form>", &d);
+        check(!strcmp(d.options[0].label, "Shown here") && !strcmp(d.options[0].value, "1"), "an option's label attribute is its label");
+        check(!strcmp(d.options[1].label, "Text"), "an empty one is none");
+        {
+            size_t n;
+            char stars[64];
+            const char *t = fm_shown(&d, &d.controls[1], stars, &n);
+            check(n == 15 && !memcmp(t, "Very long words", n), "its select shows it");
+            check(d.runs[d.controls[1].run].len == 15, "and is as wide as it");
+        }
+        wd_free(&d);
+        build("<form><select name=s><option label=A value=1><option value=2>Two</select></form>", &d);
+        check(!strcmp(d.options[1].label, "Two"), "a label is its own option's");
         wd_free(&d);
     }
     /* what is not sent */
@@ -322,7 +571,7 @@ static void encoding(void) {
 #define H 400
 
 static struct wb b;
-static unsigned int screen[W * H];
+static unsigned int screen[W * H], screen2[W * H];
 
 static struct wb_page *page_at(const char *url, const char *html, int file) {
     struct ut_response r;
@@ -396,6 +645,249 @@ static int has_color(unsigned int c, int x0, int y0, int w, int h) {
     return 0;
 }
 
+static int all_zero(const char *s, size_t n) {
+    size_t i;
+    for(i = 0; i < n; i++) if(s[i]) return 0;
+    return 1;
+}
+
+/* A block as free takes it, when it is the one watched */
+static const void *watched;
+static size_t watched_n;
+static int watched_gone, watched_clean;
+
+static void on_free(void *p) {
+    if(p != watched) return;
+    watched_gone = 1;
+    watched_clean = all_zero(p, watched_n);
+}
+
+static void watch(const char *block, size_t n) {
+    watched = block;
+    watched_n = n;
+    watched_gone = watched_clean = 0;
+    ut_alloc_on_free = on_free;
+}
+
+/* Editing, byte by byte: the text of these is of one, two, three and four bytes a character */
+#define MIXED "a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80z"
+
+static void editing(void) {
+    struct wb_page *p;
+    struct wd_control *c;
+    size_t n;
+    char stars[64];
+    const char *s;
+    int line, col, i, x, y;
+
+    /* by the keys */
+    p = open_page("https://forms.test/mb", "<form><input name=a size=20 value='" MIXED "'><textarea name=t rows=4 cols=3>" MIXED "</textarea>"
+                                           "<input name=r readonly value='" MIXED "'></form>");
+    c = &p->doc.controls[0];
+    check(c->len == 11 && c->caret == 11, "a text of 11 bytes, the caret at its end");
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    check(c->caret == 11, "End");
+    wb_key(&b, 0x102);
+    check(c->caret == 10, "Left: one byte");
+    wb_key(&b, 0x102);
+    check(c->caret == 6, "four");
+    wb_key(&b, 0x102);
+    check(c->caret == 3, "three");
+    wb_key(&b, 0x102);
+    check(c->caret == 1, "two");
+    wb_key(&b, 0x102);
+    check(c->caret == 0, "one");
+    check(!wb_key(&b, 0x102) && c->caret == 0, "the start");
+    wb_key(&b, 0x103);
+    check(c->caret == 1, "Right: one");
+    wb_key(&b, 0x103);
+    check(c->caret == 3, "two");
+    wb_key(&b, 0x103);
+    check(c->caret == 6, "three");
+    wb_key(&b, 0x103);
+    check(c->caret == 10, "four");
+    wb_key(&b, 0x103);
+    check(c->caret == 11, "one");
+    check(!wb_key(&b, 0x103) && c->caret == 11, "the end");
+    wb_key(&b, 0x102);
+    wb_key(&b, 127);
+    check(c->len == 7 && c->caret == 6 && !strcmp(c->value, "a\xc3\xa9\xe2\x82\xacz"), "Backspace: a character of four bytes");
+    wb_key(&b, 127);
+    check(c->len == 4 && c->caret == 3 && !strcmp(c->value, "a\xc3\xa9z"), "of three");
+    wb_key(&b, 0x104);
+    wb_key(&b, 0x108);
+    check(c->len == 3 && !c->caret && !strcmp(c->value, "\xc3\xa9z"), "Delete: one");
+    wb_key(&b, 0x108);
+    check(c->len == 1 && !c->caret && !strcmp(c->value, "z"), "of two");
+
+    /* read-only */
+    c = &p->doc.controls[2];
+    click_control(p, 2);
+    wb_key(&b, 0x104);
+    check(!wb_key(&b, 0x108) && c->len == 11, "Delete in a read-only field");
+    wb_key(&b, 0x105);
+    check(!wb_key(&b, 127) && c->len == 11, "Backspace");
+    check(!wb_key(&b, 'x') && c->len == 11 && !strcmp(c->value, MIXED), "typing");
+    wb_key(&b, 27);
+
+    /* an area of three columns: a line is three characters, whatever their bytes */
+    c = &p->doc.controls[1];
+    fm_where(c, 3, &line, &col);
+    check(!line && col == 2, "the third character of a line");
+    fm_where(c, 6, &line, &col);
+    check(line == 1 && !col, "its fourth starts the next line, at its first byte");
+    fm_where(c, 10, &line, &col);
+    check(line == 1 && col == 1, "past a character of four bytes: one column");
+    fm_where(c, 11, &line, &col);
+    check(line == 1 && col == 2, "and the text's end");
+    check(fm_at(c, 0, 0) == 0 && fm_at(c, 0, 1) == 1 && fm_at(c, 0, 2) == 3, "bytes of a line's columns");
+    check(fm_at(c, 0, 1 << 30) == 6 && fm_at(c, 1, 0) == 6 && fm_at(c, 1, 1) == 10, "a line's end, the next one's start, of three bytes before it");
+    check(fm_at(c, 5, 0) == 11, "a line past the last: the end");
+    click_control(p, 1);
+    wb_key(&b, 0x104);
+    wb_key(&b, 0x100);
+    wb_key(&b, 0x105);
+    check(c->caret == 3, "End on a full line stays on it, before its last character");
+    fm_where(c, c->caret, &line, &col);
+    check(!line && col == 2, "(there)");
+    wb_key(&b, 0x101);
+    check(c->caret == 11, "Down: the column kept");
+    wb_key(&b, 0x100);
+    check(c->caret == 3, "Up");
+    wb_key(&b, 0x105);
+    wb_key(&b, 0x101);
+    wb_key(&b, 0x105);
+    check(c->caret == 11, "End on the last line: the text's end");
+    wb_key(&b, 27);
+    /* a text that just fills a line is on it */
+    p = open_page("https://forms.test/mb1", "<form><textarea name=t rows=2 cols=3>abc</textarea></form>");
+    c = &p->doc.controls[0];
+    fm_where(c, 3, &line, &col);
+    check(!line && col == 3, "a full last line: the caret at its end, not on one more");
+    /* lines end at a line feed too, and a full line before it has no empty one after it */
+    p = open_page("https://forms.test/mb2", "<form><textarea name=t rows=3 cols=2>ab\ncd\n\nef</textarea></form>");
+    c = &p->doc.controls[0];
+    fm_where(c, 3, &line, &col);
+    check(line == 1 && !col, "a full line and its line feed: one line");
+    check(fm_at(c, 2, 0) == 6 && fm_at(c, 3, 0) == 7, "an empty line");
+    check(fm_at(c, 0, 1 << 30) == 2 && fm_at(c, 2, 1 << 30) == 6, "ends at the line feed");
+    /* a text area with cols and no rows has the box of one with neither: the two agree */
+    p = open_page("https://forms.test/mb3", "<form><textarea name=t cols=80>aaaaaaaaaaaaaaaaaaaaaaaaaa</textarea></form>");
+    c = &p->doc.controls[0];
+    fm_where(c, 20, &line, &col);
+    check(line == 1 && !col, "a text area's lines fit its box");
+
+    /* a person's way up an area, and Reset */
+    p = open_page("https://forms.test/mb31", "<form><textarea name=t rows=2 cols=4>a\nb\nc\nd\ne\nf</textarea><input name=a size=4 value='a long value'><input type=reset></form>");
+    c = &p->doc.controls[0];
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    for(i = 0; i < 6; i++) wb_key(&b, 0x101);
+    wb_paint(&b, screen, W);
+    check(c->top == 4, "the last lines in view");
+    for(i = 0; i < 5; i++) wb_key(&b, 0x100);
+    wb_paint(&b, screen, W);
+    check(c->top == 0, "the first again");
+    for(i = 0; i < 6; i++) wb_key(&b, 0x101);
+    wb_paint(&b, screen, W);
+    wb_key(&b, 9);
+    wb_key(&b, 0x105);
+    wb_paint(&b, screen, W);
+    check(p->doc.controls[1].first > 0, "a text shown from further on");
+    click_control(p, 2);
+    check(!c->top && !p->doc.controls[1].first, "Reset: from their starts");
+
+    /* the text of a short field, from where it is shown */
+    p = open_page("https://forms.test/mb4", "<form><input name=a size=4 value='\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9'></form>");
+    c = &p->doc.controls[0];
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    wb_paint(&b, screen, W);
+    check(c->first == 6, "two-byte characters: four cells hold three before the caret");
+    check(fm_byte_at(c, 1) == 8 && fm_byte_at(c, 2) == 10 && fm_byte_at(c, 99) == 12, "a cell's byte is a character's start");
+    /* the caret by the pointer */
+    {
+        long i0 = wl_control_item(&p->lay, 0);
+        x = p->lay.items[i0].x + 4 + 8 + 1;
+        y = p->lay.items[i0].y + 4 + WB_TOOLBAR;
+        click(x, y);
+        check(c->caret == 8, "a click: the caret at that character");
+        wb_key(&b, 'x');
+        check(c->len == 13 && !memcmp(c->value + 8, "x\xc3\xa9", 3), "where typing goes");
+    }
+    /* Backspace, with no paint between: what a field shows stays in it */
+    p = open_page("https://forms.test/mb5", "<form><input name=a size=4></form>");
+    c = &p->doc.controls[0];
+    click_control(p, 0);
+    for(i = 0; i < 30; i++) wb_key(&b, 'a');
+    wb_paint(&b, screen, W);
+    check(c->first > 20, "the end of a long text in view");
+    wb_key(&b, 0x104);
+    check(!c->first, "Home: from its start at once");
+    wb_key(&b, 0x105);
+    wb_paint(&b, screen, W);
+    for(i = 0; i < 30; i++) wb_key(&b, 127);
+    check(c->len == 0 && c->first == 0, "emptied by Backspace, with no paint between: it shows from its end");
+    s = fm_shown(&p->doc, c, stars, &n);
+    check(n == 0 && s == c->value, "nothing");
+    for(i = 0; i < 10; i++) wb_key(&b, 'b');
+    wb_paint(&b, screen, W);
+    check(c->first > 0, "typed again");
+    /* whatever first is, what is read stays in the text */
+    c->first = c->len + 5;
+    s = fm_shown(&p->doc, c, stars, &n);
+    check(n == 0 && s == c->value + c->len, "shown from past its end: nothing");
+    check(fm_byte_at(c, 3) == c->len, "a cell past its end: its end");
+    c->first = 0;
+
+    /* a field's limit, and what it takes */
+    p = open_page("https://forms.test/mb6", "<form><input name=a maxlength=2 value='\xc3\xa9'><input name=b></form>");
+    c = &p->doc.controls[0];
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    type("xy");
+    check(c->len == 3 && !strcmp(c->value, "\xc3\xa9x"), "maxlength counts characters");
+    c = &p->doc.controls[1];
+    wb_key(&b, 9);
+    for(i = 0; i < (int)WD_VALUE_MAX + 50; i++) wb_key(&b, 'q');
+    check(c->len == WD_VALUE_MAX && c->cap == WD_VALUE_MAX + 1 && !c->value[c->len], "a field holds what it may, and stops");
+    wb_key(&b, 27);
+
+    /* a password: more stars than are shown, and no old block keeps it */
+    p = open_page("https://forms.test/mb7", "<form><input type=password name=p value=preset></form>");
+    c = &p->doc.controls[0];
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    for(i = 0; i < 200; i++) wb_key(&b, 's');
+    s = fm_shown(&p->doc, c, stars, &n);
+    check(n == 64 && s == stars && stars[63] == '*', "more than 64 characters: 64 stars");
+    wb_paint(&b, screen, W);
+    {
+        int grew = 0, wiped = 1;
+        for(i = 0; i < 2000; i++) {
+            const char *old = c->value;
+            watch(old, c->cap);
+            wb_key(&b, 's');
+            if(c->value != old) {
+                grew++;
+                if(!watched_gone || !watched_clean) wiped = 0;
+            }
+        }
+        ut_alloc_on_free = NULL;
+        check(grew == 3 && wiped, "as it grows, each old block is emptied before it goes");
+    }
+    {
+        const char *value = c->value, *dflt = c->dflt;
+        size_t cap = c->cap, dn = strlen(c->dflt);
+        check(dn == 6, "what the page set in it stays until the page is left");
+        watch(value, cap);
+        open_page("https://forms.test/mb8", "<p>Next");
+        check(all_zero(value, cap) && all_zero(dflt, dn), "left: emptied, in place");
+        ut_alloc_on_free = NULL;
+    }
+}
+
 static void by_hand(void) {
     struct wb_page *p;
     int x, y;
@@ -437,6 +929,17 @@ static void by_hand(void) {
     check(b.focus == WB_FOCUS_ADDR, "Ctrl+L still goes to the address");
     wb_key(&b, 27);
 
+    /* Tab from a link to a field: the status bar no longer says the link's address */
+    {
+        struct wb_page *t = open_page("https://forms.test/a2", "<a href=/there>a link</a><form><input name=q></form>");
+        wb_key(&b, 9);
+        check(b.tab_link == 0 && strstr(b.status, "/there"), "a link's address");
+        wb_key(&b, 9);
+        check(b.field == 0 && !strstr(b.status, "/there"), "gone at the field");
+        wb_key(&b, 27);
+        (void)t;
+        p = open_page("https://forms.test/a", "<form action=/s><input name=q value='a xyz'><input type=submit></form>");
+    }
     /* a click on the button */
     click_control(p, 1);
     check(asks("https://forms.test/s?q=a+xyz"), "a click on its button");
@@ -589,13 +1092,13 @@ static void by_hand(void) {
     {
         struct wb_page *q = p;
         open_page("https://forms.test/g", "<p>Next");
-        check(q->doc.controls[1].len == 0 && q->doc.controls[1].value[0] == 0 && !q->doc.controls[1].caret, "a page left keeps no password");
+        check(q->doc.controls[1].len == 0 && all_zero(q->doc.controls[1].value, q->doc.controls[1].cap) && !q->doc.controls[1].caret && !q->doc.controls[1].first, "a page left keeps no password, in any byte");
+        check(!q->doc.controls[1].dflt[0], "nor what the page set in it");
         check(strlen(q->doc.controls[0].value) == 2, "its other fields stay");
         wb_key(&b, 127);
         wb_cancel(&b);
         wb_paint(&b, screen, W);
         check(wb_current(&b) == q && q->doc.controls[1].len == 0, "back: an empty field");
-        q->doc.controls[1].first = 0;
         click_control(q, 1);
         type("again");
         check(q->doc.controls[1].len == 5, "typed again");
@@ -689,6 +1192,10 @@ static void by_hand(void) {
     }
     /* the page shows what was typed, in the field's box */
     p = open_page("https://forms.test/q", "<form><input name=a placeholder=Words></form>");
+    {
+        const struct wl_item *it = &p->lay.items[wl_control_item(&p->lay, 0)];
+        check(has_color(b.theme.placeholder, it->x + 3, it->y + WB_TOOLBAR + 2, it->w - 6, it->h - 4), "an empty field shows its placeholder");
+    }
     click_control(p, 0);
     type("Mm");
     wb_key(&b, 27);
@@ -699,7 +1206,194 @@ static void by_hand(void) {
         check(has_color(b.theme.field_fg, it->x + 3, it->y + WB_TOOLBAR, 24, it->h), "typed text, in the field's colour");
         check(!has_color(b.theme.placeholder, it->x + 3, it->y + WB_TOOLBAR + 2, it->w - 6, it->h - 4), "not the placeholder");
     }
+    /* Enter on a button is that button */
+    p = open_page("https://forms.test/z", "<form action=/z><input type=submit name=one value=1><input type=submit name=two value=2></form>");
+    wb_key(&b, 9);
+    wb_key(&b, 9);
+    check(b.field == 1, "the second button");
+    wb_key(&b, 13);
+    check(asks("https://forms.test/z?two=2"), "Enter: it, not the form's first");
+    p = open_page("https://forms.test/z2", "<form action=/z><input name=a value=x><input type=reset><input type=submit></form>");
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    type("yy");
+    wb_key(&b, 9);
+    check(b.field == 1, "a reset button");
+    wb_key(&b, 13);
+    check(!b.want && !strcmp(p->doc.controls[0].value, "x"), "Enter: it resets, and nothing goes");
+    /* the list's edge */
+    p = open_page("https://forms.test/z3", "<form><select name=s multiple><option>A<option>B</select></form>");
+    click_control(p, 0);
+    check(b.list == 0, "a list");
+    {
+        long i = wl_control_item(&p->lay, 0);
+        int ly = p->lay.items[i].y + p->lay.items[i].h + WB_TOOLBAR - p->scroll;
+        click(p->lay.items[i].x + 8, ly + 2 * (16 + 2) + 1);
+        check(b.list == -1 && b.list_at == 0 && fm_chosen(&p->doc, 0) == -1, "a press on its frame, under its last option: no option, and it closes");
+    }
+    wb_key(&b, 27);
+    /* the caret in a text area, by the pointer */
+    p = open_page("https://forms.test/z4", "<form><textarea name=t rows=3 cols=10>abcdefghijklmn</textarea></form>");
+    {
+        long i = wl_control_item(&p->lay, 0);
+        const struct wl_item *it = &p->lay.items[i];
+        click(it->x + 4 + 2 * 8 + 1, it->y + WB_TOOLBAR + 4 + 1 * 16 + 2);
+        check(p->doc.controls[0].caret == 12, "a click on its second line");
+    }
+    wb_key(&b, 27);
+    /* a long password, left: nothing of where it was shown from */
+    p = open_page("https://forms.test/z5", "<form><input type=password size=4 name=p></form>");
+    click_control(p, 0);
+    type("a long enough password to scroll");
+    wb_paint(&b, screen, W);
+    check(p->doc.controls[0].first > 0, "a password longer than its field");
+    {
+        struct wb_page *q = p;
+        open_page("https://forms.test/z6", "<p>Next");
+        check(!q->doc.controls[0].first && !q->doc.controls[0].len, "left: shown from its start again");
+    }
+    /* an address too long: the browser's limit on an address, under what fits the form's buffer */
+    {
+        static char big[6000];
+        char *e = big;
+        int i;
+        e += snprintf(e, 40, "<form action=/s>");
+        for(i = 0; i < 145; i++) e += snprintf(e, 64, "<input name=aaaaa value=bbbbbbb>");
+        snprintf(e, 32, "<input type=submit>");
+        p = open_page("https://forms.test/z7", big);
+        check(!fm_submit(&p->doc, 0, -1, 0, 0, sent, WB_ADDR_MAX) && strlen(sent) > UT_URL_MAX, "(an address past the one, within the other)");
+        wb_key(&b, 9);
+        wb_key(&b, 13);
+        check(!b.want && strstr(b.status, "do not fit") && strstr(b.status, "nothing was sent"), "fields past an address's limit: nothing goes");
+    }
+    /* emptied by a person: not what the page had */
+    p = open_page("https://forms.test/r", "<form><input name=a value=abc></form>");
+    click_control(p, 0);
+    wb_key(&b, 0x105);
+    wb_key(&b, 127);
+    wb_key(&b, 127);
+    wb_key(&b, 127);
+    wb_key(&b, 27);
+    wb_paint(&b, screen, W);
+    {
+        const struct wl_item *it = &p->lay.items[wl_control_item(&p->lay, 0)];
+        check(!has_color(b.theme.field_fg, it->x + 2, it->y + WB_TOOLBAR + 2, it->w - 4, it->h - 4), "a field emptied by keys shows nothing");
+    }
+    /* what is typed shows at once: a paint leaves nothing for the next one to change */
+    p = open_page("https://forms.test/s", "<form><input name=a size=4><textarea name=t rows=2 cols=4></textarea></form>");
+    click_control(p, 0);
+    type("abcdefghij");
+    wb_paint(&b, screen, W);
+    memcpy(screen2, screen, sizeof(screen));
+    wb_paint(&b, screen, W);
+    check(!memcmp(screen, screen2, sizeof(screen)), "a short field's text is as typed at the first paint");
+    wb_key(&b, 9);
+    type("abcdefghijklmnopqrstuvwxyz");
+    wb_paint(&b, screen, W);
+    memcpy(screen2, screen, sizeof(screen));
+    wb_paint(&b, screen, W);
+    check(!memcmp(screen, screen2, sizeof(screen)) && p->doc.controls[1].top > 0, "an area's lines too");
+    /* an image button, where it was pressed */
+    p = open_page("https://forms.test/t", "<form action=/i><input type=image name=pic alt=Go></form>");
+    {
+        const struct wl_item *it = &p->lay.items[wl_control_item(&p->lay, 0)];
+        char want[96];
+        snprintf(want, sizeof(want), "https://forms.test/i?pic.x=%d&pic.y=%d", it->w / 2, it->h / 2);
+        click_control(p, 0);
+        check(asks(want), "a click on an image button: that place, in the button");
+    }
+    /* a disabled option is not chosen, by key or by the pointer */
+    p = open_page("https://forms.test/u", "<form><select name=s><option>One<option disabled>Two<option>Three</select></form>");
+    wb_key(&b, 9);
+    wb_key(&b, ' ');
+    wb_key(&b, 0x101);
+    wb_key(&b, 13);
+    check(b.list == -1 && fm_chosen(&p->doc, 0) == 0, "Enter on a disabled option");
+    click_control(p, 0);
+    check(b.list == 0, "its list");
+    {
+        long i = wl_control_item(&p->lay, 0);
+        click(p->lay.items[i].x + 8, p->lay.items[i].y + p->lay.items[i].h + WB_TOOLBAR - p->scroll + 1 + 1 * (16 + 2) + 4);
+        check(b.list == -1 && fm_chosen(&p->doc, 0) == 0, "a click on one");
+    }
+    wb_key(&b, 27);
+    p = open_page("https://forms.test/v", "<form><select name=s multiple><option disabled>One<option>Two</select></form>");
+    wb_key(&b, 9);
+    wb_key(&b, ' ');
+    wb_key(&b, ' ');
+    check(fm_chosen(&p->doc, 0) == -1, "Space on one in a multiple");
+    wb_key(&b, 27);
+    wb_key(&b, 27);
+    /* radio buttons: a group is of one form */
+    p = open_page("https://forms.test/w", "<form><input type=radio name=r value=1 checked></form><form><input type=radio name=r value=2 checked><input type=radio name=r value=3></form>");
+    check(p->doc.controls[0].checked && p->doc.controls[1].checked, "one name in two forms: two groups");
+    click_control(p, 2);
+    check(p->doc.controls[0].checked && !p->doc.controls[1].checked && p->doc.controls[2].checked, "a click: only in its own");
+    /* Reset gives back the one the page checked */
+    p = open_page("https://forms.test/x", "<form><input type=radio name=r value=1 checked><input type=radio name=r value=2 checked><input type=radio name=r value=3><input type=reset></form>");
+    click_control(p, 2);
+    check(p->doc.controls[2].checked && !p->doc.controls[1].checked, "another chosen");
+    click_control(p, 3);
+    check(!p->doc.controls[0].checked && p->doc.controls[1].checked && !p->doc.controls[2].checked, "Reset: the last the page checked, and that alone");
+    /* a page arrives while one is in use */
+    {
+        static const char same[] = "<form action=/s><select name=s><option>A<option>B</select><input name=a><input type=submit></form>";
+        struct wb_request q;
+        p = open_page("https://forms.test/y", same);
+        wb_go(&b, "https://forms.test/y2");
+        wb_take(&b, &q);
+        click_control(p, 1);
+        check(b.field == 1 && b.focus == WB_FOCUS_FIELD, "a person goes to a field meanwhile");
+        wb_loaded(&b, page_at(q.url, same, 0), 0);
+        wb_cancel(&b);
+        wb_paint(&b, screen, W);
+        p = wb_current(&b);
+        check(b.list == -1 && b.field == -1 && b.focus == WB_FOCUS_PAGE, "the page arrives: the keys are the page's");
+        wb_key(&b, 'x');
+        check(!p->doc.controls[1].len && !b.want, "and what is typed then goes into no field");
+        click_control(p, 0);
+        check(b.list == 0, "a list open");
+        wb_go(&b, "https://forms.test/y3");
+        wb_take(&b, &q);
+        wb_loaded(&b, page_at(q.url, same, 0), 0);
+        wb_cancel(&b);
+        wb_paint(&b, screen, W);
+        p = wb_current(&b);
+        check(b.list == -1, "it closes with its page");
+        spot(p, 2, &x, &y);
+        wb_pointer(&b, x, y, 0);
+        wb_pointer(&b, x, y, 1);
+        check(b.press_field == 2, "a button held");
+        wb_go(&b, "https://forms.test/y4");
+        wb_take(&b, &q);
+        wb_loaded(&b, page_at(q.url, same, 0), 0);
+        wb_cancel(&b);
+        wb_paint(&b, screen, W);
+        check(b.press_field == -1, "as a page arrives: let go of");
+        wb_pointer(&b, x, y, 0);
+        check(!b.want, "a button of the new page in the same place was not pressed");
+    }
+
+    editing();
     wb_free(&b);
+
+    /* a page's end: a password's blocks are empty as free takes them */
+    {
+        struct wd_document d;
+        check(!build("<form><input type=password name=p value=preset></form>", &d), "a password's page");
+        watch(d.controls[0].value, d.controls[0].cap);
+        wd_free(&d);
+        check(watched_gone && watched_clean, "its value goes empty");
+        build("<form><input type=password name=p value=preset></form>", &d);
+        watch(d.controls[0].dflt, strlen(d.controls[0].dflt));
+        wd_free(&d);
+        check(watched_gone && watched_clean, "what the page set in it too");
+        build("<form><input name=p value=preset></form>", &d);
+        watch(d.controls[0].value, d.controls[0].cap);
+        wd_free(&d);
+        check(watched_gone && !watched_clean, "(the test sees a text field's, which is no password)");
+        ut_alloc_on_free = NULL;
+    }
 }
 
 int main(void) {

@@ -181,6 +181,7 @@ static void field(const struct wp_target *t, const struct wd_document *d, const 
     char stars[64];
     int checked = c ? c->checked : it->checked;
     if(c && (it->sub == WF_SELECT || it->sub == WF_PASSWORD || ((it->sub == WF_TEXT) && c->len))) s = fm_shown(d, c, stars, &n);
+    else if(c && it->sub == WF_TEXT && !it->checked) n = 0;     /* emptied by a person: not the page's value again */
     switch(it->sub) {
     case WF_CHECKBOX: case WF_RADIO:
         wp_fill(t, x, y, it->w, it->h, th->field_bg);

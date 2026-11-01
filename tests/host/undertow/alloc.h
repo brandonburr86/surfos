@@ -17,6 +17,7 @@ extern long ut_alloc_live;          /* blocks allocated and not freed yet */
 extern long ut_alloc_calls;         /* allocations asked for since the start */
 extern long ut_alloc_fail_after;    /* >= 0: that many more allocations succeed, then all fail; -1: none fails */
 extern int ut_alloc_fill;           /* >= 0: what malloc gives starts as this byte (11/1/26) */
+extern void (*ut_alloc_on_free)(void *p);   /* when set: each block, as free takes it (11/1/26) */
 
 void *ut_test_malloc(size_t n);
 void *ut_test_calloc(size_t n, size_t size);

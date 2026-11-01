@@ -56,8 +56,12 @@ static char *keep(struct fm_build *f, const char *s, size_t n) {
     return p;
 }
 
-static void mark(struct wd_document *d, int form) {
-    if(form >= 0) d->forms[form].too_much = 1;
+/* A control is not kept, so its form says less than the page and is not sent. A form= attribute may name a form only the
+   page's end knows, or the one that follows: then it may be any. */
+void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner) {
+    if(owner) {
+        if(*owner) f->lost = 1;
+    } else if(f->open >= 0) d->forms[f->open].too_much = 1;
 }
 
 int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method) {
@@ -71,7 +75,7 @@ int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const cha
     else x->here = 1;                           /* an empty action: the page's own address */
     if(action && *action && !x->action) x->too_much = 1;
     x->action_cut = (unsigned char)action_cut;
-    if(id && *id) x->id = keep(f, id, strlen(id));
+    if(id && *id && !(x->id = keep(f, id, strlen(id)))) f->lost = 1;  /* a form= naming it would not find it */
     x->method = WM_GET;
     if(method && !fm_differs(method, "post")) x->method = WM_POST;
     else if(method && !fm_differs(method, "dialog")) x->method = WM_DIALOG;
@@ -86,12 +90,19 @@ int fm_differs(const char *s, const char *w) {
     return *s || *w;
 }
 
+/* A one-line field holds no line ends, as the standard's value sanitization has it: the length left */
+static size_t one_line(char *s) {
+    size_t i, n = 0;
+    for(i = 0; s[i]; i++) if(s[i] != '\n' && s[i] != '\r') s[n++] = s[i];
+    s[n] = 0;
+    return n;
+}
+
 int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n) {
     struct wd_control *c;
-    int form = f->open;
     size_t vlen = n->value ? strlen(n->value) : 0;
     if(d->control_count >= WD_CONTROLS_MAX) {
-        mark(d, form);
+        fm_lost(d, f, n->owner);
         return -1;
     }
     if(more(f, (void **)&d->controls, d->control_count, &f->controls_cap, sizeof(*d->controls))) return -1;
@@ -99,14 +110,14 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
     memset(c, 0, sizeof(*c));
     c->kind = (unsigned char)n->kind;
     c->role = (unsigned char)n->role;
-    c->form = form;
+    c->form = n->owner && !*n->owner ? -1 : f->open;
     c->run = -1;
     c->checked = c->dflt_checked = n->checked != 0;
     c->disabled = n->disabled || f->off;
     c->readonly = n->readonly != 0;
     c->multiple = n->multiple != 0;
     c->image = n->image != 0;
-    c->cut = n->value_cut != 0;
+    c->cut = n->cut != 0;
     c->maxlength = n->maxlength;
     c->rows = n->rows;
     c->cols = n->cols;
@@ -121,15 +132,18 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
         c->value = NULL;
         goto cut;
     }
-    c->len = c->caret = vlen;
     c->cap = vlen + 1;
+    if(n->kind == WF_TEXT || n->kind == WF_PASSWORD) {
+        vlen = one_line(c->value);
+        one_line(c->dflt);
+    }
+    c->len = c->caret = vlen;
     if(n->owner && *n->owner && !(c->owner = keep(f, n->owner, strlen(n->owner)))) goto drop;
     if(n->formaction && *n->formaction && !(c->formaction = keep(f, n->formaction, strlen(n->formaction)))) goto drop;
+    c->here = n->formaction && !*n->formaction;
     c->action_cut = n->formaction_cut != 0;
-    if(n->formmethod) {
-        c->formmethod = !fm_differs(n->formmethod, "post") ? WM_POST + 1 : !fm_differs(n->formmethod, "dialog") ? WM_DIALOG + 1 :
-                        !fm_differs(n->formmethod, "get") ? WM_GET + 1 : 0;
-    }
+    if(n->formmethod)                           /* of no such method: GET, the standard's for a method that is none */
+        c->formmethod = !fm_differs(n->formmethod, "post") ? WM_POST + 1 : !fm_differs(n->formmethod, "dialog") ? WM_DIALOG + 1 : WM_GET + 1;
     if(n->kind == WF_SELECT) f->select = (int)d->control_count;
     return (int)d->control_count++;
 drop:
@@ -140,29 +154,30 @@ cut:
     free(c->name);
     free(c->owner);
     c->name = c->owner = NULL;
-    mark(d, form);
+    fm_lost(d, f, n->owner);
     return -1;
 }
 
-void fm_option(struct wd_document *d, struct fm_build *f, const char *value, const char *label, int selected, int disabled) {
+void fm_option(struct wd_document *d, struct fm_build *f, const char *value, const char *text, const char *label, int selected,
+               int disabled, int cut) {
     struct wd_control *c;
     struct wd_option *o;
+    const char *shown = label && *label ? label : text, *sent = value ? value : text;
     if(f->select < 0) return;
-    c = &d->controls[f->select];
+    c = &d->controls[f->select];                /* (what is cut shows at the page's end: this control's form may be any) */
+    if(cut) c->cut = 1;
     if(d->option_count >= WD_OPTIONS_MAX ||
        more(f, (void **)&d->options, d->option_count, &f->options_cap, sizeof(*d->options))) {
-        mark(d, c->form);
         c->cut = 1;
         return;
     }
     o = &d->options[d->option_count];
     memset(o, 0, sizeof(*o));
-    o->label = keep(f, label, strlen(label));
-    o->value = value ? keep(f, value, strlen(value)) : o->label ? keep(f, label, strlen(label)) : NULL;
+    o->label = keep(f, shown, strlen(shown));
+    o->value = o->label ? keep(f, sent, strlen(sent)) : NULL;
     if(!o->label || !o->value) {
         free(o->label);
         free(o->value);
-        mark(d, c->form);
         c->cut = 1;
         return;
     }
@@ -177,10 +192,10 @@ void fm_option(struct wd_document *d, struct fm_build *f, const char *value, con
     d->option_count++;
 }
 
-/* A one-of-many with nothing chosen shows its first option that can be: the standard's "ask for a reset" */
+/* A one-of-many of one row with nothing chosen shows its first option that can be: the standard's "ask for a reset" */
 static void first_chosen(struct wd_document *d, struct wd_control *c) {
     unsigned int i;
-    if(c->multiple || !c->noptions) return;
+    if(c->multiple || c->size > 1 || !c->noptions) return;
     for(i = 0; i < c->noptions; i++) if(d->options[c->first_option + i].on) return;
     for(i = 0; i < c->noptions; i++)
         if(!d->options[c->first_option + i].disabled) {
@@ -219,9 +234,15 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
                 e->checked = e->dflt_checked = 0;
         }
     }
-    if(page_cut) for(k = 0; k < d->form_count; k++) d->forms[k].too_much = 1;
+    if(page_cut || f->lost) for(k = 0; k < d->form_count; k++) d->forms[k].too_much = 1;
     d->form_bytes = f->bytes + d->form_count * sizeof(*d->forms) + d->control_count * sizeof(*d->controls) +
                     d->option_count * sizeof(*d->options);
+}
+
+/* Nothing of a password stays in memory */
+static void wipe(struct wd_control *c) {
+    if(c->value) memset(c->value, 0, c->cap);
+    if(c->dflt) memset(c->dflt, 0, strlen(c->dflt));
 }
 
 void fm_free(struct wd_document *d) {
@@ -233,7 +254,7 @@ void fm_free(struct wd_document *d) {
     free(d->forms);
     for(i = 0; d->controls && i < d->control_count; i++) {
         struct wd_control *c = &d->controls[i];
-        if(c->kind == WF_PASSWORD && c->value) memset(c->value, 0, c->cap);
+        if(c->kind == WF_PASSWORD) wipe(c);
         free(c->name);
         free(c->value);
         free(c->dflt);
@@ -274,8 +295,11 @@ const char *fm_shown(const struct wd_document *d, const struct wd_control *c, ch
         memset(stars, '*', *n);
         return stars;
     }
-    *n = c->len - c->first;
-    return c->value + c->first;
+    {
+        size_t first = c->first > c->len ? c->len : c->first;
+        *n = c->len - first;
+        return c->value + first;
+    }
 }
 
 /**** a person's doing ****/
@@ -302,18 +326,10 @@ void fm_reset(struct wd_document *d, int form) {
         c->checked = c->dflt_checked;
         for(k = 0; k < c->noptions; k++) d->options[c->first_option + k].on = d->options[c->first_option + k].dflt;
         first_chosen(d, c);
-        if(c->kind == WC_HIDDEN || c->kind == WF_BUTTON || !c->value) continue;
-        {
-            size_t n = strlen(c->dflt);
-            char *p = n + 1 > c->cap ? realloc(c->value, n + 1) : c->value;
-            if(!p) continue;                    /* no memory: it keeps what it has */
-            if(n + 1 > c->cap) c->cap = n + 1;
-            c->value = p;
-            memcpy(c->value, c->dflt, n + 1);
-            c->len = c->caret = n;
-            c->first = 0;
-            c->top = 0;
-        }
+        c->len = c->caret = strlen(c->dflt);    /* (it came out of the value's first room, which only grows) */
+        memcpy(c->value, c->dflt, c->len + 1);
+        c->first = 0;
+        c->top = 0;
     }
 }
 
@@ -337,7 +353,13 @@ int fm_chosen(const struct wd_document *d, int control) {
 
 static int char_start(const char *s, size_t i) { return ((unsigned char)s[i] & 0xc0) != 0x80; }
 
-/* Room for one more byte */
+/* Where the character after the one at i starts */
+static size_t after(const struct wd_control *c, size_t i) {
+    for(i++; i < c->len && !char_start(c->value, i); i++) ;
+    return i;
+}
+
+/* Room for one more byte. The old block is emptied: of a password nothing stays behind. */
 static int room(struct wd_control *c) {
     char *p;
     size_t cap;
@@ -345,23 +367,33 @@ static int room(struct wd_control *c) {
     cap = c->cap * 2 + 16;
     if(cap > WD_VALUE_MAX + 1) cap = WD_VALUE_MAX + 1;
     if(c->len + 1 >= cap) return -1;
-    p = realloc(c->value, cap);
+    p = malloc(cap);
     if(!p) return -1;
+    memcpy(p, c->value, c->len + 1);
+    memset(c->value, 0, c->cap);
+    free(c->value);
     c->value = p;
     c->cap = cap;
     return 0;
 }
 
+/* maxlength counts characters */
+static size_t characters(const struct wd_control *c) {
+    size_t i, n = 0;
+    for(i = 0; i < c->len; i++) if(char_start(c->value, i)) n++;
+    return n;
+}
+
 static int insert(struct wd_control *c, char ch) {
-    if(c->readonly || (c->maxlength >= 0 && c->len >= (size_t)c->maxlength) || room(c)) return 0;
+    if(c->readonly || (c->maxlength >= 0 && characters(c) >= (size_t)c->maxlength) || room(c)) return 0;
     memmove(c->value + c->caret + 1, c->value + c->caret, c->len - c->caret + 1);
     c->value[c->caret++] = ch;
     c->len++;
     return 1;
 }
 
-int fm_key(struct wd_control *c, unsigned int key) {
-    int line, col;
+static int edit(struct wd_control *c, unsigned int key) {
+    int line, col, at;
     size_t k;
     switch(key) {
     case 127: case 8:
@@ -374,8 +406,7 @@ int fm_key(struct wd_control *c, unsigned int key) {
         return 1;
     case 0x108:                                 /* Delete */
         if(c->readonly || c->caret >= c->len) return 0;
-        k = c->caret + 1;
-        while(k < c->len && !char_start(c->value, k)) k++;
+        k = after(c, c->caret);
         memmove(c->value + c->caret, c->value + k, c->len - k + 1);
         c->len -= k - c->caret;
         return 1;
@@ -385,7 +416,7 @@ int fm_key(struct wd_control *c, unsigned int key) {
         return 1;
     case 0x103:                                 /* Right */
         if(c->caret >= c->len) return 0;
-        for(c->caret++; c->caret < c->len && !char_start(c->value, c->caret); c->caret++) ;
+        c->caret = after(c, c->caret);
         return 1;
     case 0x104:                                 /* Home: the line's start */
         if(c->kind == WF_AREA) {
@@ -397,6 +428,8 @@ int fm_key(struct wd_control *c, unsigned int key) {
         if(c->kind == WF_AREA) {
             fm_where(c, c->caret, &line, &col);
             c->caret = fm_at(c, line, 1 << 30);
+            fm_where(c, c->caret, &at, &col);
+            if(at != line) while(c->caret && !char_start(c->value, --c->caret)) ;   /* a full line: its last place */
         } else c->caret = c->len;
         return 1;
     case 0x100: case 0x101:                     /* Up, Down: a line of an area */
@@ -412,18 +445,24 @@ int fm_key(struct wd_control *c, unsigned int key) {
     return insert(c, (char)key);
 }
 
-/* An area's width in characters */
-static int area_cols(const struct wd_control *c) { return c->cols > 0 ? c->cols : 20; }
+int fm_key(struct wd_control *c, unsigned int key) {
+    int changed = edit(c, key);
+    if(c->first > c->caret) c->first = c->caret;    /* what a text shows from stays inside it */
+    return changed;
+}
+
+/* An area's width in characters: what layout.c gives its box */
+static int area_cols(const struct wd_control *c) { return c->rows && c->cols ? c->cols : 20; }
 
 void fm_where(const struct wd_control *c, size_t at, int *line, int *col) {
     int cols = area_cols(c), l = 0, n = 0;
-    size_t i;
-    for(i = 0; i < at && i < c->len; i++) {
-        if(!char_start(c->value, i)) continue;
+    size_t i, k;
+    for(i = 0; i < at && i < c->len; i = k) {
+        k = after(c, i);
         if(c->value[i] == '\n') {
             l++;
             n = 0;
-        } else if(++n == cols && i + 1 < c->len && c->value[i + 1] != '\n') {
+        } else if(++n == cols && k < c->len && c->value[k] != '\n') {
             l++;
             n = 0;
         }
@@ -434,15 +473,15 @@ void fm_where(const struct wd_control *c, size_t at, int *line, int *col) {
 
 size_t fm_at(const struct wd_control *c, int line, int col) {
     int cols = area_cols(c), l = 0, n = 0;
-    size_t i;
-    for(i = 0; i < c->len; i++) {
-        if(!char_start(c->value, i)) continue;
+    size_t i, k;
+    for(i = 0; i < c->len; i = k) {
         if(l == line && (n == col || c->value[i] == '\n')) return i;
+        k = after(c, i);
         if(c->value[i] == '\n') {
             l++;
             n = 0;
-        } else if(++n == cols && i + 1 < c->len && c->value[i + 1] != '\n') {
-            if(l == line) return i + 1;         /* (past the line's last character: the next line's start) */
+        } else if(++n == cols && k < c->len && c->value[k] != '\n') {
+            if(l == line) return k;             /* (past the line's last character: the next line's start) */
             l++;
             n = 0;
         }
@@ -451,12 +490,9 @@ size_t fm_at(const struct wd_control *c, int line, int col) {
 }
 
 size_t fm_byte_at(const struct wd_control *c, int cell) {
-    size_t i = c->first;
+    size_t i = c->first > c->len ? c->len : c->first;
     int n = 0;
-    while(i < c->len && n < cell) {
-        for(i++; i < c->len && !char_start(c->value, i); i++) ;
-        n++;
-    }
+    for(; i < c->len && n < cell; n++) i = after(c, i);
     return i;
 }
 
@@ -469,7 +505,7 @@ void fm_keep_in_view(struct wd_control *c, int cells) {
         n = 0;
         for(i = c->first; i < c->caret; i++) if(char_start(c->value, i)) n++;
         if(n < cells) break;
-        for(c->first++; c->first < c->len && !char_start(c->value, c->first); c->first++) ;
+        c->first = after(c, c->first);
     }
 }
 
@@ -585,7 +621,7 @@ static void entries(const struct wd_document *d, int form, int submitter, int x,
             q_entry(q, c->name, c->has_value ? c->value : "on");
             continue;
         }
-        if(c->kind == WC_HIDDEN && !c->has_value && !strcmp(c->name, "_charset_")) {
+        if(c->kind == WC_HIDDEN && !fm_differs(c->name, "_charset_")) {
             q_entry(q, c->name, q->cs == UT_CS_1252 ? "windows-1252" : "UTF-8");
             continue;
         }
@@ -608,7 +644,7 @@ const char *fm_submit(const struct wd_document *d, int form, int submitter, int 
     if(f->password) return "This form has a password field: nothing was sent, as a password must never go into an address";
     if(f->too_much) return "This form is more than this browser keeps of a form: nothing was sent";
     action = s && s->formaction ? s->formaction : f->action;
-    if(!action || (s && s->formaction ? s->action_cut : f->action_cut))
+    if(!action || (s && s->action_cut))
         return "This form's address is not one this browser can use: nothing was sent";
     mark = action + strcspn(action, "?#");      /* the query is the form's now; a fragment stays */
     base = (size_t)(mark - action);
@@ -648,7 +684,7 @@ void fm_forget(struct wd_document *d) {
     for(i = 0; i < d->control_count; i++) {
         struct wd_control *c = &d->controls[i];
         if(c->kind != WF_PASSWORD || !c->value) continue;
-        memset(c->value, 0, c->cap);
+        wipe(c);
         c->len = c->caret = c->first = 0;
     }
 }

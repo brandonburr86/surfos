@@ -1367,9 +1367,24 @@ static void mark_focus(struct wb *b, struct wb_page *p, const struct wp_target *
     }
 }
 
-/* The field with the keyboard's focus: a frame, and in a text its caret, with its text kept in view */
-static void mark_field(struct wb *b, struct wb_page *p, const struct wp_target *pg) {
+/* The text of the field with the keys keeps its caret in view: before the page is painted, which shows it from there */
+static void keep_caret(struct wb *b, struct wb_page *p) {
     struct wd_control *c = &p->doc.controls[b->field];
+    long i = wl_control_item(&p->lay, b->field);
+    const struct wl_item *it;
+    if(i < 0) return;
+    it = &p->lay.items[i];
+    if(c->kind == WF_AREA) {
+        int lines = (it->h - 8) / WF_H, line, col;
+        fm_where(c, c->caret, &line, &col);
+        if(line < c->top) c->top = line;
+        if(line >= c->top + lines) c->top = line - lines + 1;
+    } else if(c->kind == WF_TEXT || c->kind == WF_PASSWORD) fm_keep_in_view(c, (it->w - 8) / WF_W);
+}
+
+/* The field with the keyboard's focus: a frame, and in a text its caret */
+static void mark_field(struct wb *b, struct wb_page *p, const struct wp_target *pg) {
+    const struct wd_control *c = &p->doc.controls[b->field];
     long i = wl_control_item(&p->lay, b->field);
     const struct wl_item *it;
     int x, y;
@@ -1380,14 +1395,11 @@ static void mark_field(struct wb *b, struct wb_page *p, const struct wp_target *
     wp_frame(pg, x - 1, y - 1, it->w + 2, it->h + 2, C_TEAL);
     if(b->focus != WB_FOCUS_FIELD) return;
     if(c->kind == WF_AREA) {
-        int lines = (it->h - 8) / WF_H, line, col;
+        int line, col;
         fm_where(c, c->caret, &line, &col);
-        if(line < c->top) c->top = line;
-        if(line >= c->top + lines) c->top = line - lines + 1;
         wp_fill(pg, x + 4 + col * WF_W - 1, y + 4 + (line - c->top) * WF_H, 2, WF_H, C_INK);
     } else if(c->kind == WF_TEXT || c->kind == WF_PASSWORD) {
         size_t k, cells = 0;
-        fm_keep_in_view(c, (it->w - 8) / WF_W);
         for(k = c->first; k < c->caret; k++) if(((unsigned char)c->value[k] & 0xc0) != 0x80) cells++;
         wp_fill(pg, x + 4 + (int)cells * WF_W - 1, y + (it->h - WF_H) / 2, 2, WF_H, C_INK);
     }
@@ -1493,6 +1505,7 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
         ensure_layout(b, p);
         scroll_to(b, p->scroll);
         prepare_pictures(p, p->scroll, p->scroll + g.ch);
+        if(b->field >= 0) keep_caret(b, p);
         pg.x = 0;
         pg.y = g.cy;
         pg.cw = g.cw;

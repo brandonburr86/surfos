@@ -12,6 +12,7 @@ alloc.h. Built without the renames, so these are the host's own functions.
 
 long ut_alloc_live, ut_alloc_calls, ut_alloc_fail_after = -1;
 int ut_alloc_fill = -1;
+void (*ut_alloc_on_free)(void *p);
 
 static int refuse(void) {
     ut_alloc_calls++;
@@ -48,6 +49,7 @@ void *ut_test_realloc(void *p, size_t n) {
 }
 
 void ut_test_free(void *p) {
+    if(p && ut_alloc_on_free) ut_alloc_on_free(p);
     if(p) ut_alloc_live--;
     free(p);
 }

@@ -34,12 +34,12 @@ struct fm_new {                         /* a control as a page has it */
     int kind;                           /* WF_*, or WC_HIDDEN */
     int role;                           /* a button's: WC_SUBMIT, WC_RESET, WC_PUSH */
     const char *name, *value;           /* NULL: none */
-    int value_cut;                      /* its value was longer than was kept */
+    int cut;                            /* its name or value was longer than was kept */
     int checked, disabled, readonly, multiple, image;
     int maxlength;                      /* -1: none */
     int rows, cols, size;               /* 0: none */
-    const char *owner;                  /* its form= attribute, or NULL */
-    const char *formaction;             /* a button's, or NULL */
+    const char *owner;                  /* its form= attribute, or NULL; "": it is in no form */
+    const char *formaction;             /* a button's, or NULL; "": the page's own address */
     int formaction_cut;
     const char *formmethod;             /* a button's, or NULL */
 };
@@ -51,6 +51,7 @@ struct fm_build {                       /* doc.c's, while it reads */
     int select;                         /* the open select's control, -1: none */
     int failed;                         /* out of memory: the page fails */
     int off;                            /* open fieldsets that are disabled */
+    int lost;                           /* what was not kept could be any form's: none is sent */
 };
 
 void fm_begin(struct fm_build *f);
@@ -65,14 +66,19 @@ void fm_form_end(struct fm_build *f);
 /* A control: its number, or -1 when it is not kept (a limit: its form is marked, and is never sent) */
 int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n);
 
-/* An option of the open select, whose label is label (collapsed text); value NULL: the label */
-void fm_option(struct wd_document *d, struct fm_build *f, const char *value, const char *label, int selected, int disabled);
+/* A control the page has and no model holds: its form is not sent, as for a limit. owner: its form= attribute, or NULL. */
+void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner);
+
+/* An option of the open select: its text (collapsed), its value (NULL: the text), its label attribute (NULL or empty: the
+   text is its label). cut: what it sends is shorter than the page's, so its form is not sent. */
+void fm_option(struct wd_document *d, struct fm_build *f, const char *value, const char *text, const char *label, int selected,
+               int disabled, int cut);
 
 /* The open select's end: the first option is chosen when a one-of-many has none */
 void fm_select_end(struct wd_document *d, struct fm_build *f);
 
 /* The page's end: form= attributes, radio groups, what a form holds. page_cut: the page stopped at a limit, so that no
-   form can be known to be whole. */
+   form can be known to be whole. It comes after everything a form keeps has been counted in f->bytes. */
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut);
 
 /* doc.c's wd_free() */
@@ -89,12 +95,12 @@ int fm_chosen(const struct wd_document *d, int control);    /* the first chosen,
 int fm_key(struct wd_control *c, unsigned int key);     /* typing in a text field or area: 1 when something changed */
 
 /* An area's text as its box shows it: the line (from 0) and column of a byte, and the byte at a line and column; lines
-   end at a line feed and at cols characters */
+   end at a line feed and at cols characters. The two agree: the byte after a line's last character is on the next line. */
 void fm_where(const struct wd_control *c, size_t at, int *line, int *col);
 size_t fm_at(const struct wd_control *c, int line, int col);
 
-/* The byte in a text field at a pixel x from its text's start, with cells of cw pixels; and the first byte to show so
-   that the caret stays within cells cells */
+/* The byte in a text field at a cell from its text's start, and the first byte to show so that the caret stays within
+   cells cells */
 size_t fm_byte_at(const struct wd_control *c, int cell);
 void fm_keep_in_view(struct wd_control *c, int cells);
 
