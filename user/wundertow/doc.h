@@ -29,6 +29,7 @@ text has its whitespace collapsed (but in WS_PRE runs), so a run never starts a 
 #include "html.h"
 
 #define WD_NONE        0xff000000u      /* a colour the page did not give */
+#define WD_TEXT        0xfe000000u      /* a colour: the page's text colour, also for a link (CSS's inherit, initial) */
 
 #define WD_BLOCKS_MAX  32768u           /* boxes of a page, at most; past them the page stops (a notice says so) */
 #define WD_RUNS_MAX    131072u          /* runs of a page, at most */
@@ -61,9 +62,12 @@ struct wd_block {
     unsigned short padding;             /* WB_TABLE: cellpadding, 0-32 pixels (or 1 when not given) */
     short width;                        /* WB_TABLE, WB_CELL: pixels (> 0), percent (< 0, -1..-100), or 0 */
     long number;                        /* WB_ITEM with a counting marker: its number */
-    unsigned int bg;                    /* WB_TABLE, WB_ROW, WB_CELL: bgcolor, or WD_NONE */
+    unsigned int bg;                    /* its background: bgcolor (WB_TABLE, WB_ROW, WB_CELL), the page's CSS, or WD_NONE */
     int parent, first, last, next;      /* the tree: indices into blocks[], -1 for none; blocks[0] is the root */
     unsigned int run, nruns;            /* inline content (a block without children): runs[run .. run + nruns) */
+    short margin[4], pad[4];            /* the page's CSS, margins and paddings: top, right, bottom, left: pixels, or
+                                           percent of the width when negative, where given says so */
+    unsigned char given;                /* 1 << side: that margin is given; 16 << side: that padding */
 };
 
 enum { WR_TEXT, WR_BR, WR_IMAGE, WR_FIELD };
@@ -78,6 +82,7 @@ enum { WR_TEXT, WR_BR, WR_IMAGE, WR_FIELD };
 #define WS_PRE      0x0080              /* spaces kept (line breaks are WR_BR) */
 #define WS_NOWRAP   0x0100              /* nobr: no line break inside */
 #define WS_MARK     0x0200              /* mark: highlighted */
+#define WS_NOLINE   0x0400              /* a link without its underline (text-decoration: none) */
 
 enum { WZ_NORMAL, WZ_H1, WZ_H2, WZ_H3, WZ_H4, WZ_H5, WZ_H6, WZ_BIG, WZ_SMALL };
 
@@ -95,6 +100,8 @@ struct wd_run {
     int image;                          /* WR_IMAGE: images[image], or -1 */
     unsigned int off, len;              /* its text in text[]: WR_TEXT the text, WR_IMAGE the alt text,
                                            WR_FIELD the label (a value, a button's text, the first option) */
+    unsigned int bg;                    /* the page's CSS: the background behind the text, or WD_NONE */
+    unsigned short px;                  /* the page's CSS: the font's size in pixels, 0: by size */
 };
 
 struct wd_document {
@@ -116,6 +123,8 @@ struct wd_document {
     int truncated;                      /* html.h's UT_TRUNC_*, and WD_TRUNC_BOXES */
     char notice[160];                   /* safe text for the status bar, "" when there is nothing */
 };
+
+extern int wd_base;                     /* the base font size of the pages built, in pixels (16: the desktop's font) */
 
 #define WD_TRUNC_BOXES 8                /* boxes or runs past WD_BLOCKS_MAX or WD_RUNS_MAX */
 

@@ -30,6 +30,15 @@ baseline, and the pieces of one run next to each other become one item.
 #define BOX_PAD     4                   /* inside an image's or a field's box, each side */
 #define MIN_WIDTH   16                  /* the narrowest a box's content gets, however deep it is */
 
+/* A side of a box by the page's CSS, in pixels of a width w: margins 0 to 3, paddings 4 to 7, each top, right, bottom,
+   left. def where it gives none. */
+static int side(const struct wd_block *b, int i, int w, int def) {
+    int v;
+    if(!(b->given & (1 << i))) return def;
+    v = i < 4 ? b->margin[i] : b->pad[i - 4];
+    return v < 0 ? (int)((long)w * -v / 100) : v;
+}
+
 /**** pieces of inline content ****/
 
 struct piece {
@@ -231,6 +240,7 @@ static void emit_line(struct lay *L, int x, int w, int align, int empty_ok) {
     int asc = 0, desc = 0, used = L->line_w - L->line_trail, cx, ytop, last;
     size_t k, n = L->nline;
     struct wl_item *prev = NULL;
+    int fill = -1;
     while(n && L->line[n - 1].space) n--;       /* trailing spaces */
     if(!n && !empty_ok) {
         L->nline = 0;
@@ -280,12 +290,20 @@ static void emit_line(struct lay *L, int x, int w, int align, int empty_ok) {
                 it->len = u->len;
             }
             prev = NULL;
+            fill = -1;
         } else if(prev && last == p->run && prev->off + prev->len == p->off) {
             prev->w += p->w;                    /* the same run, next to it */
             prev->len += p->len;
+            if(fill >= 0) L->out->items[fill].w += p->w;
         } else {
             int s = run_scale(u);
             int y = ytop + asc - WF_ASCENT * s - (u->style & WS_SUP ? 4 * s : 0) + (u->style & WS_SUB ? 4 * s : 0);
+            struct wl_item *f = u->bg != WD_NONE ? add_item(L, WI_FILL, cx, y, p->w, WF_H * s) : NULL;
+            fill = -1;
+            if(f) {                             /* the page's CSS: a background behind this text */
+                f->color = u->bg;
+                fill = (int)L->out->count - 1;
+            }
             prev = add_item(L, WI_TEXT, cx, y, p->w, WF_H * s);
             if(prev) {
                 prev->scale = (unsigned char)s;
@@ -441,10 +459,9 @@ static void measure_inline(struct lay *L, int box, int *min, int *max) {
 }
 
 static int indent_of(const struct wd_block *b) {
-    int n = 0;
-    if(b->flags & (WBF_INDENT | WBF_LIST)) n += INDENT;
-    if(b->flags & WBF_QUOTE) n += 2 * INDENT;
-    return n;
+    int q = b->flags & WBF_QUOTE ? INDENT : 0;
+    return side(b, 3, 0, b->flags & WBF_INDENT ? INDENT : q) + side(b, 1, 0, q) + side(b, 5, 0, 0) +
+           side(b, 7, 0, b->flags & WBF_LIST ? INDENT : 0);
 }
 
 /* a table's grid: its rows, and the cell that starts at each row and column (-1: none, or a span's) */
@@ -576,6 +593,10 @@ static void measure(struct lay *L, int box, int *min, int *max) {
     }
     if(b->first < 0) {
         measure_inline(L, box, min, max);
+        if(b->given) {
+            *min += ind;
+            *max += ind;
+        }
         return;
     }
     for(c = b->first; c >= 0; c = L->d->blocks[c].next) {
@@ -750,10 +771,13 @@ static void lay_table(struct lay *L, int t, int x, int w, int align) {
             salign = d->blocks[cell].align != WA_INHERIT ? d->blocks[cell].align : rb->align != WA_INHERIT ? rb->align : align;
             {
                 const struct wd_block *cb = &d->blocks[cell];
-                int ix = cx + g.cellpad, iw = cw - 2 * g.cellpad, ch;
+                int pl = side(cb, 7, cw, 0), pr = side(cb, 5, cw, 0);
+                int ix = cx + g.cellpad + pl, iw = cw - 2 * g.cellpad - pl - pr, ch;
                 if(iw < 1) iw = 1;
+                L->y += side(cb, 4, cw, 0);
                 if(cb->first >= 0) for(ch = cb->first; ch >= 0; ch = d->blocks[ch].next) lay_box(L, ch, ix, iw, salign);
                 else if(cb->nruns) lay_inline(L, cell, ix, iw, salign);
+                L->y += side(cb, 6, cw, 0);
             }
             h = L->y - y + g.cellpad;
             if(h > rowh) rowh = h;
@@ -779,37 +803,50 @@ static void lay_table(struct lay *L, int t, int x, int w, int align) {
 
 static void lay_box(struct lay *L, int box, int x, int w, int align) {
     const struct wd_block *b = &L->d->blocks[box];
-    int ind, c, gap = b->flags & WBF_PARA ? GAP : 0;
+    int gap = b->flags & WBF_PARA ? GAP : 0, quote = b->flags & WBF_QUOTE ? INDENT : 0;
+    int ml = side(b, 3, w, b->flags & WBF_INDENT ? INDENT : quote), mr = side(b, 1, w, quote);
+    int mt = side(b, 0, w, gap), mb = side(b, 2, w, gap);
+    int pt = side(b, 4, w, 0), pb = side(b, 6, w, 0), pl = side(b, 7, w, 0), pr = side(b, 5, w, 0);
+    int c, fill = -1;
     if(L->failed) return;
+    if(!box) ml = mr = mt = mb = 0;             /* the root's margins are the page's: wl_layout()'s */
     if(b->align != WA_INHERIT && b->kind != WB_TABLE) align = b->align;
     if(b->kind == WB_HR) {
         int y;
-        wait_margin(L, RULE_GAP);
+        wait_margin(L, side(b, 0, w, RULE_GAP));
         y = top(L);
-        add_item(L, WI_RULE, x, y, w, 2);
+        ml = side(b, 3, w, 0);
+        mr = side(b, 1, w, 0);
+        add_item(L, WI_RULE, w - ml - mr > 0 ? x + ml : x, y, w - ml - mr > 0 ? w - ml - mr : w, 2);
         L->y = y + 2;
-        wait_margin(L, RULE_GAP);
+        wait_margin(L, side(b, 2, w, RULE_GAP));
         return;
     }
-    wait_margin(L, gap);
+    wait_margin(L, mt);
+    w -= mr;
+    if(w - ml < MIN_WIDTH) ml = w > MIN_WIDTH ? w - MIN_WIDTH : 0;
+    x += ml;
+    w -= ml;
+    if(w < MIN_WIDTH) w = MIN_WIDTH;
     if(b->kind == WB_TABLE) {
         lay_table(L, box, x, w, align);
-        wait_margin(L, gap);
+        wait_margin(L, mb);
         return;
     }
-    ind = 0;
-    if(b->flags & WBF_INDENT) ind = INDENT;
-    if(b->flags & WBF_QUOTE) {
-        ind = INDENT;
-        w -= INDENT;
+    if(b->bg != WD_NONE) {                      /* painted under what is in it, and sized after it */
+        struct wl_item *f = add_item(L, WI_FILL, x, pt ? top(L) : L->y + L->margin, w, 0);
+        if(f) {
+            f->color = b->bg;
+            fill = (int)L->out->count - 1;
+        }
     }
-    if(w - ind < MIN_WIDTH) ind = w > MIN_WIDTH ? w - MIN_WIDTH : 0;
-    x += ind;
-    w -= ind;
-    if(w < MIN_WIDTH) w = MIN_WIDTH;
+    if(pt) L->y = top(L) + pt;
+    if(w - pl - pr < MIN_WIDTH) pl = pr = 0;
+    x += pl;
+    w -= pl + pr;
     if(b->kind == WB_ITEM) marker(L, b, x - 8);
     if(b->flags & WBF_LIST) {                   /* its items in its indentation */
-        int li = w - INDENT < MIN_WIDTH ? 0 : INDENT;
+        int li = (b->given & (16 << 3)) || w - INDENT < MIN_WIDTH ? 0 : INDENT;
         for(c = b->first; c >= 0; c = L->d->blocks[c].next) lay_box(L, c, x + li, w - li, align);
     } else if(b->first >= 0) {
         for(c = b->first; c >= 0; c = L->d->blocks[c].next) lay_box(L, c, x, w, align);
@@ -819,11 +856,18 @@ static void lay_box(struct lay *L, int box, int x, int w, int align) {
         flush_marker(L);
         L->y = y + WF_H;
     }
-    wait_margin(L, gap);
+    if(pb) L->y = top(L) + pb;
+    if(fill >= 0) {                             /* the margins of what is in it meet outside it, as a browser has it */
+        struct wl_item *f = &L->out->items[fill];
+        if(!pt && L->out->count > (size_t)fill + 1) f->y = L->out->items[fill + 1].y;
+        f->h = L->y > f->y ? L->y - f->y : 0;
+    }
+    wait_margin(L, mb);
 }
 
 int wl_layout(const struct wd_document *d, int width, struct wl_layout *out) {
     struct lay L;
+    int ml, mr, bottom;
     if(width < 64) width = 64;
     if(width > WL_WIDTH_MAX) width = WL_WIDTH_MAX;
     memset(out, 0, sizeof(*out));
@@ -831,10 +875,18 @@ int wl_layout(const struct wd_document *d, int width, struct wl_layout *out) {
     L.d = d;
     L.out = out;
     out->width = width;
-    L.y = WL_MARGIN;
     L.empty_scale = 1;
-    if(d->block_count) lay_box(&L, 0, WL_MARGIN, width - 2 * WL_MARGIN, WA_LEFT);
-    out->height = (L.y > out->height ? L.y : out->height) + WL_MARGIN;
+    ml = mr = bottom = L.y = WL_MARGIN;
+    if(d->block_count) {                        /* the page's margins: the body's, as the page's CSS gives them */
+        const struct wd_block *r = &d->blocks[0];
+        L.y = side(r, 0, width, WL_MARGIN);
+        ml = side(r, 3, width, WL_MARGIN);
+        mr = side(r, 1, width, WL_MARGIN);
+        bottom = side(r, 2, width, WL_MARGIN);
+        if(width - ml - mr < MIN_WIDTH) ml = mr = 0;
+        lay_box(&L, 0, ml, width - ml - mr, WA_LEFT);
+    }
+    out->height = (L.y > out->height ? L.y : out->height) + bottom;
     free(L.line);
     free(L.group);
     if(L.failed) {
@@ -900,7 +952,8 @@ char *wl_dump(const struct wl_layout *l, const struct wd_document *d) {
         if(it->style & WS_BOLD) n += (size_t)snprintf(s + n, cap - n, " b");
         if(it->style & WS_ITALIC) n += (size_t)snprintf(s + n, cap - n, " i");
         if(it->style & WS_UNDER) n += (size_t)snprintf(s + n, cap - n, " u");
-        if(it->color != WD_NONE) n += (size_t)snprintf(s + n, cap - n, " color=%06x", it->color);
+        if(it->color == WD_TEXT) n += (size_t)snprintf(s + n, cap - n, " color=text");
+        else if(it->color != WD_NONE) n += (size_t)snprintf(s + n, cap - n, " color=%06x", it->color);
         if(it->link >= 0) n += (size_t)snprintf(s + n, cap - n, " link=%d", it->link);
         if(it->checked) n += (size_t)snprintf(s + n, cap - n, " checked");
         if(len) {

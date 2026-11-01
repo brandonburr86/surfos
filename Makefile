@@ -955,6 +955,7 @@ WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
 WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
 WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
                $(BUILD)/host/kernel/driver/cp437.o
+WT_HOST_DRAW += $(addprefix $(BUILD)/host/wundertow/,docstyle.o css.o)     # 11/01/26: a page's CSS
 $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
@@ -965,6 +966,8 @@ $(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+$(BUILD)/host/test_wundertow_doc: $(addprefix $(BUILD)/host/wundertow/,docstyle.o css.o)
 
 test-wundertow-doc: $(BUILD)/host/test_wundertow_doc $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_doc tests/fixtures
@@ -1004,6 +1007,17 @@ test-wundertow-css: $(BUILD)/host/test_wundertow_css $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_css
 unittest: test-wundertow-css
 .PHONY: test-wundertow-css
+
+# ... and the cascade, on pages made in the test
+$(BUILD)/host/test_wundertow_style: tests/host/test_wundertow_style.c $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-style: $(BUILD)/host/test_wundertow_style $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_style
+unittest: test-wundertow-style
+.PHONY: test-wundertow-style
 
 $(BUILD)/host/wundertow-ubsan/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)

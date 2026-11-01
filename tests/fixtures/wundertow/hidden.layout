@@ -1,5 +1,5 @@
 page 640x144
-text 8,24 56x16 "Shown 1"
-text 8,56 224x16 "Shown 2: no script runs here"
-text 8,88 184x16 "Shown 3 after a comment"
-text 8,120 200x16 "Shown 4: a p ends the svg"
+text 8,24 56x16 color=ff0000 "Shown 1"
+text 8,56 224x16 color=ff0000 "Shown 2: no script runs here"
+text 8,88 184x16 color=ff0000 "Shown 3 after a comment"
+text 8,120 200x16 color=ff0000 "Shown 4: a p ends the svg"

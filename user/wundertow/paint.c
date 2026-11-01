@@ -114,8 +114,8 @@ int wp_text(const struct wp_target *t, int x, int y, const char *s, size_t n, in
 /**** the page ****/
 
 static unsigned int text_color(const struct wd_document *d, const struct wp_theme *th, const struct wl_item *it, int hover) {
-    if(it->color != WD_NONE) return it->color;
-    if(it->link >= 0) {
+    if(it->color != WD_NONE && it->color != WD_TEXT) return it->color;
+    if(it->link >= 0 && it->color == WD_NONE) {
         if(it->link == hover) return th->hover;
         return d->link_color != WD_NONE ? d->link_color : th->link;
     }
@@ -200,7 +200,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             c = text_color(d, th, it, hover);
             if(it->style & WS_MARK) wp_fill(t, x, y, it->w, it->h, th->mark);
             wp_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
-            if((it->style & WS_UNDER) || it->link >= 0) wp_fill(t, x, y + WF_UNDER * s, it->w, s, c);
+            if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE))) wp_fill(t, x, y + WF_UNDER * s, it->w, s, c);
             if(it->style & WS_STRIKE) wp_fill(t, x, y + 8 * s, it->w, s, c);
             break;
         }
