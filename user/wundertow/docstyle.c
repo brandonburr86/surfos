@@ -28,8 +28,10 @@ static const struct ut_html_attr tag_attrs[A_COUNT] = {
     { "id", UT_FIELD_MAX + 1 }, { "class", ATTR_MAX }, { "style", ATTR_MAX }, { "href", 8 }
 };
 
-enum { C_TYPE, C_MEDIA, C_COUNT };
-static const struct ut_html_attr sheet_attrs[C_COUNT] = { { "type", 32 }, { "media", 1024 } };
+enum { C_TYPE, C_MEDIA, C_REL, C_HREF, C_COUNT };
+static const struct ut_html_attr sheet_attrs[C_COUNT] = {
+    { "type", 32 }, { "media", 1024 }, { "rel", 128 }, { "href", CSS_URL_MAX }
+};
 
 struct frame {
     /* who it is */
@@ -71,8 +73,14 @@ struct ds {
     int spent;                          /* past DS_WORK_MAX */
     struct pending box;
     struct ut_html_tag tag;             /* an element's own attributes */
-    char id[UT_FIELD_MAX + 2], cls[ATTR_MAX + 1], sty[ATTR_MAX + 1], href[9];
+    char id[UT_FIELD_MAX + 2], cls[ATTR_MAX + 1], sty[ATTR_MAX + 1], is_link[9];
     struct css_decl attr[STYLE_DECLS];
+    /* what the page links to */
+    char *href[WD_SHEETS_MAX];
+    int source[WD_SHEETS_MAX];
+    unsigned char imported[WD_SHEETS_MAX];
+    size_t found;
+    const struct wd_sheets *have;       /* what a loader brought */
     /* the page's root elements */
     struct pending root[2];
     unsigned int fg[2];
@@ -85,12 +93,45 @@ static int ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' |
 
 /**** the sheets of a page ****/
 
+static void found(struct ds *s, const char *href, int source, int imported) {
+    size_t n = strlen(href);
+    char *c;
+    if(s->found == WD_SHEETS_MAX || !n) return;
+    c = malloc(n + 1);
+    if(!c) {
+        s->failed = 1;
+        return;
+    }
+    memcpy(c, href, n + 1);
+    s->href[s->found] = c;
+    s->source[s->found] = source;
+    s->imported[s->found++] = (unsigned char)imported;
+}
+
+/* The sheets a loader brought for the page's sheet n: its imports first, then, for a <link>, the sheet itself */
+static void loaded(struct ds *s, int source, int imported) {
+    size_t i;
+    for(i = 0; s->have && i < s->have->count; i++) {
+        const struct wd_sheet *o = &s->have->sheet[i];
+        if(o->source == source && o->imported == imported && o->text && css_add(&s->css, o->text, o->len)) s->failed = 1;
+    }
+}
+
+/* The @imports of a sheet of the page */
+static void imports_of(struct ds *s, const char *text, size_t n, int source) {
+    static char urls[CSS_IMPORTS_MAX][CSS_URL_MAX + 1];
+    size_t k, count = css_imports(text, n, urls, CSS_IMPORTS_MAX);
+    for(k = 0; k < count; k++) found(s, urls[k], source, 1);
+}
+
 /* a <style> element's text as the sheet takes it: UTF-8 */
-static void add_style(struct ds *s, const unsigned char *in, size_t start, size_t end, int cs) {
+static void add_style(struct ds *s, const unsigned char *in, size_t start, size_t end, int cs, int source) {
     size_t i, o = 0;
     char *u;
     for(i = start; i < end && (cs == UT_CS_UTF8 || in[i] < 0x80); i++) ;
     if(i == end) {
+        imports_of(s, (const char *)in + start, end - start, source);
+        loaded(s, source, 1);
         if(css_add(&s->css, (const char *)in + start, end - start)) s->failed = 1;
         return;
     }
@@ -104,8 +145,30 @@ static void add_style(struct ds *s, const unsigned char *in, size_t start, size_
         return;
     }
     for(i = start; i < end; ) o += ut_utf8_encode(ut_html_char(in, cs, &i, end), (unsigned char *)u + o);
+    imports_of(s, u, o, source);
+    loaded(s, source, 1);
     if(css_add(&s->css, u, o)) s->failed = 1;
     free(u);
+}
+
+/* <link rel=stylesheet>: a word of rel says so, and alternate says it is not for now */
+static int is_sheet_link(const struct ut_html_tag *t) {
+    const char *r = t->val[C_REL];
+    int sheet = 0, alternate = 0;
+    while(*r) {
+        size_t n = 0, i;
+        char w[12];
+        while(ws(*r)) r++;
+        while(r[n] && !ws(r[n])) n++;
+        if(n && n < sizeof(w)) {
+            for(i = 0; i < n; i++) w[i] = (char)(r[i] >= 'A' && r[i] <= 'Z' ? r[i] + 32 : r[i]);
+            w[n] = 0;
+            sheet |= !strcmp(w, "stylesheet");
+            alternate |= !strcmp(w, "alternate");
+        }
+        r += n;
+    }
+    return sheet && !alternate;
 }
 
 static int is_css(const struct ut_html_tag *t) {
@@ -120,17 +183,20 @@ static int is_css(const struct ut_html_tag *t) {
     return 1;
 }
 
-/* Every <style> of the page, as doc.c will read the page: comments and raw text are no elements, what is in a
-   <template> is not the page's. That a hidden element's style counts is as in a browser. */
+/* Every <style> and <link> of the page, as doc.c will read the page: comments and raw text are no elements, what is
+   in a <template> is not the page's. That a hidden element's style counts is as in a browser. */
 static void collect(struct ds *s, const unsigned char *in, size_t len, int cs) {
     static struct ut_html_tag t;
-    static char type[33], media[1025];
+    static char type[33], media[1025], rel[129], href[CSS_URL_MAX + 1];
     size_t p = 0, next;
     unsigned int templates = 0;
+    int source = 0;
     t.attrs = sheet_attrs;
     t.nattrs = C_COUNT;
     t.val[C_TYPE] = type;
     t.val[C_MEDIA] = media;
+    t.val[C_REL] = rel;
+    t.val[C_HREF] = href;
     while(p < len && !s->failed) {
         const unsigned char *j = memchr(in + p, '<', len - p);
         unsigned char c;
@@ -149,10 +215,17 @@ static void collect(struct ds *s, const unsigned char *in, size_t len, int cs) {
             if(!ut_html_tag(in, len, cs, p + 1, 0, &t, &next)) break;
             p = next;
             if(t.el == E_TEMPLATE && !t.selfclose) templates++;
+            if(t.el == E_LINK && !templates && t.seen[C_REL] && t.seen[C_HREF] && !t.over[C_HREF] && is_sheet_link(&t) &&
+               is_css(&t) && (!t.seen[C_MEDIA] || css_media(t.val[C_MEDIA], t.len[C_MEDIA]))) {
+                found(s, t.val[C_HREF], source, 0);
+                loaded(s, source, 1);
+                loaded(s, source, 0);
+                source++;
+            }
             if(ut_html_flags(t.el) & (F_RAW | F_RCDATA)) {
                 size_t end = t.el == E_SCRIPT ? ut_html_script_end(in, len, p) : ut_html_raw_end(in, len, p, t.name);
                 if(t.el == E_STYLE && !templates && is_css(&t) &&
-                   (!t.seen[C_MEDIA] || css_media(t.val[C_MEDIA], t.len[C_MEDIA]))) add_style(s, in, p, end, cs);
+                   (!t.seen[C_MEDIA] || css_media(t.val[C_MEDIA], t.len[C_MEDIA]))) add_style(s, in, p, end, cs, source++);
                 p = end;
             }
         } else p++;
@@ -512,18 +585,19 @@ int ds_finish(struct ds *s, struct wd_document *d) {
     return s->spent || s->css.truncated;
 }
 
-struct ds *ds_new(const unsigned char *in, size_t len, int cs) {
+struct ds *ds_new(const unsigned char *in, size_t len, int cs, const struct wd_sheets *sheets) {
     struct ds *s = calloc(1, sizeof(*s));
     struct ds_element html;
     if(!s) return NULL;
     css_init(&s->css);
+    s->have = sheets;
     s->base = clamp(wd_base, 8, DS_PX_MAX);
     s->tag.attrs = tag_attrs;
     s->tag.nattrs = A_COUNT;
     s->tag.val[A_ID] = s->id;
     s->tag.val[A_CLASS] = s->cls;
     s->tag.val[A_STYLE] = s->sty;
-    s->tag.val[A_HREF] = s->href;
+    s->tag.val[A_HREF] = s->is_link;
     s->fg[0] = s->fg[1] = WD_NONE;
     collect(s, in, len, cs);
     if(s->failed || s->css.failed) {
@@ -538,8 +612,18 @@ struct ds *ds_new(const unsigned char *in, size_t len, int cs) {
     return s;
 }
 
+int ds_found(const struct ds *s, size_t n, const char **href, int *source, int *imported) {
+    if(n >= s->found) return 0;
+    *href = s->href[n];
+    *source = s->source[n];
+    *imported = s->imported[n];
+    return 1;
+}
+
 void ds_free(struct ds *s) {
+    size_t i;
     if(!s) return;
+    for(i = 0; i < s->found; i++) free(s->href[i]);
     css_free(&s->css);
     free(s);
 }

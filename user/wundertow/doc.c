@@ -27,6 +27,7 @@ doc.h's builder, in one pass over the body as html.c reads it, over the same sca
 #include "url.h"
 #include "html_scan.h"
 #include "doc.h"
+#include "css.h"
 #include "docstyle.h"
 
 #define STACK_MAX    128                /* open elements kept; deeper ones are only counted */
@@ -1733,6 +1734,85 @@ static void add_notice(char *notice, size_t cap, const char *part) {
     snprintf(notice + n, cap - n, "%s%s", n ? "; " : "", part);
 }
 
+static void sheet_free(struct wd_sheet *o) {
+    free(o->url);
+    free(o->text);
+}
+
+void wd_sheets_free(struct wd_sheets *s) {
+    size_t i;
+    if(!s) return;
+    for(i = 0; i < s->count; i++) sheet_free(&s->sheet[i]);
+    free(s);
+}
+
+/* One more sheet: 0, or -1 without memory; it is left out past the limit, and over http from what came by https */
+static int sheet_add(struct wd_sheets *q, const char *url, int source, int imported, int https) {
+    struct wd_sheet *o;
+    if(q->count == WD_SHEETS_MAX || (https && strncmp(url, "https:", 6))) return 0;
+    o = &q->sheet[q->count];
+    memset(o, 0, sizeof(*o));
+    o->url = malloc(strlen(url) + 1);
+    if(!o->url) return -1;
+    strcpy(o->url, url);
+    o->source = source;
+    o->imported = imported;
+    q->count++;
+    return 0;
+}
+
+/* What the page links to, resolved as its links are: in d->sheets when there is any. 0, or -1 out of memory */
+static int find_sheets(struct bd *b, struct ut_url *u, char *safe) {
+    const char *h;
+    int source, imported, usable = 0;
+    size_t i;
+    for(i = 0; ds_found(b->ds, i, &h, &source, &imported); i++) {
+        char *url = address(b, h, 0, &usable, u, safe);
+        int rc;
+        if(!url) return -1;
+        if(!b->d.sheets && !(b->d.sheets = calloc(1, sizeof(*b->d.sheets)))) {
+            free(url);
+            return -1;
+        }
+        b->d.sheets->https = b->r->verified;
+        rc = usable ? sheet_add(b->d.sheets, url, source, imported, b->r->verified) : 0;
+        free(url);
+        if(rc) return -1;
+    }
+    return 0;
+}
+
+int wd_sheets_imports(struct wd_sheets *s) {
+    struct { struct ut_url base, u; char urls[CSS_IMPORTS_MAX][CSS_URL_MAX + 1], err[128]; } *w = malloc(sizeof(*w));
+    size_t i, n = s->count, k;
+    int added = 0;
+    if(!w) return -1;
+    for(i = 0; i < n; i++) {
+        struct wd_sheet *o = &s->sheet[i];
+        size_t count;
+        if(!o->text || o->imported || ut_url_parse(o->url, &w->base, w->err, sizeof(w->err))) continue;
+        count = css_imports(o->text, o->len, w->urls, CSS_IMPORTS_MAX);
+        for(k = 0; k < count; k++) {
+            char *c = clean_href(w->urls[k]);
+            int rc;
+            if(!c) {
+                free(w);
+                return -1;
+            }
+            rc = other_scheme(c) || ut_url_resolve(&w->base, c, &w->u, w->err, sizeof(w->err)) || !safe_utf8(w->u.text);
+            free(c);
+            if(rc) continue;
+            if(sheet_add(s, w->u.text, o->source, 1, s->https || !strncmp(o->url, "https:", 6))) {
+                free(w);
+                return -1;
+            }
+            added++;
+        }
+    }
+    free(w);
+    return added;
+}
+
 /* The links' and images' addresses, the budget of the link strings, the notice; 0, or -1 out of memory */
 static int finish(struct bd *b) {
     struct wd_document *d = &b->d;
@@ -1764,6 +1844,10 @@ static int finish(struct bd *b) {
         }
         for(i = 0; i < d->run_count; i++) if(d->runs[i].link >= (int)keep) d->runs[i].link = -1;
         d->link_count = keep;
+    }
+    if(find_sheets(b, &work->u, work->safe)) {
+        free(work);
+        return -1;
     }
     d->images = calloc(d->image_count ? d->image_count : 1, sizeof(*d->images));
     if(!d->images) {
@@ -1819,7 +1903,7 @@ static void cleanup(struct bd *b, int given) {
     free(b);
 }
 
-int wd_build(const struct ut_response *r, struct wd_document *out, char *err, size_t cap) {
+int wd_build_with(const struct ut_response *r, const struct wd_sheets *sheets, struct wd_document *out, char *err, size_t cap) {
     struct bd *b;
     int html, rc;
     unsigned char *dec;
@@ -1883,7 +1967,7 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     html = b->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && ut_html_sniff(b->in, b->len));
     if(!b->decoded) b->cs = ut_html_charset(b->in, b->len, r->charset, html, &b->pos, b->charset, sizeof(b->charset));
     b->css_box = -1;
-    b->ds = ds_new(b->in, html ? b->len : 0, b->cs);
+    b->ds = ds_new(b->in, html ? b->len : 0, b->cs, sheets);
     if(!b->ds) {
         cleanup(b, 0);
         return ut_error(err, cap, "out of memory showing the page");
@@ -1895,15 +1979,24 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
         cleanup(b, 0);
         return ut_error(err, cap, "out of memory showing the page");
     }
+    if(sheets) {                                    /* (it has what it asked for) */
+        wd_sheets_free(b->d.sheets);
+        b->d.sheets = NULL;
+    }
     *out = b->d;
     memset(&b->d, 0, sizeof(b->d));
     cleanup(b, 1);
     return 0;
 }
 
+int wd_build(const struct ut_response *r, struct wd_document *out, char *err, size_t cap) {
+    return wd_build_with(r, NULL, out, err, cap);
+}
+
 void wd_free(struct wd_document *d) {
     size_t i;
     if(!d) return;
+    wd_sheets_free(d->sheets);
     for(i = 0; d->links && i < d->link_count; i++) {
         free(d->links[i].label);
         free(d->links[i].url);

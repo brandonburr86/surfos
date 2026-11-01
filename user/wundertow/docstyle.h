@@ -59,9 +59,14 @@ struct ds_element {
 
 struct ds;
 
-/* The page's cascade: the <style> elements of the page (len bytes, in charset cs). NULL without memory. */
-struct ds *ds_new(const unsigned char *in, size_t len, int cs);
+/* The page's cascade: its <style> elements (len bytes, in charset cs) and the sheets of a loader, in their places
+   (NULL: none yet). NULL without memory. */
+struct ds *ds_new(const unsigned char *in, size_t len, int cs, const struct wd_sheets *sheets);
 void ds_free(struct ds *s);
+
+/* What the page links to, as written: the n-th <link rel=stylesheet>'s or @import's, its place, whether it is an
+   @import. 0 when there are no more. */
+int ds_found(const struct ds *s, size_t n, const char **href, int *source, int *imported);
 
 /* The elements open now; closing to that many again closes what opened since */
 int ds_height(const struct ds *s);

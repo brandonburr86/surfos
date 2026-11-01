@@ -122,9 +122,37 @@ struct wd_document {
     size_t bytes;                       /* everything the document owns */
     int truncated;                      /* html.h's UT_TRUNC_*, and WD_TRUNC_BOXES */
     char notice[160];                   /* safe text for the status bar, "" when there is nothing */
+    struct wd_sheets *sheets;           /* the sheets the page links to, NULL when none or when built with them */
 };
 
 extern int wd_base;                     /* the base font size of the pages built, in pixels (16: the desktop's font) */
+
+/* A page's style sheets from the network (M3, stage 3.3). wd_build() lists them in d->sheets, in the order the page has
+   them, with the addresses a page may load: resolved like its links, http and https only, and from an https page never
+   http. A file page's addresses are its links', against WB_FILE_HOST: only a file page's loader makes files of them. The
+   loader loads each with a page's limits, fills in text and len, and wd_build_with() builds the page again with
+   them; wd_sheets_imports() first adds the @imports of the sheets loaded, one level: an imported sheet's are not
+   followed. A sheet never loads anything by itself, and what fails to load is left out. */
+#define WD_SHEETS_MAX 16u               /* sheets of a page with their @imports */
+
+struct wd_sheet {
+    char *url;                          /* where it is */
+    char *text;                         /* its bytes once loaded, malloc'ed: wd_sheets_free() frees them; NULL: none */
+    size_t len;
+    int source;                         /* the n-th sheet of the page it comes with, <style> or <link> */
+    int imported;                       /* it is that one's @import, and counts before it */
+};
+
+struct wd_sheets {
+    struct wd_sheet sheet[WD_SHEETS_MAX];
+    size_t count;
+    int https;                          /* the page came over HTTPS: nothing comes over http */
+};
+
+void wd_sheets_free(struct wd_sheets *s);
+
+/* The @imports of the sheets loaded that are no imports themselves, added after them: how many; -1 without memory */
+int wd_sheets_imports(struct wd_sheets *s);
 
 #define WD_TRUNC_BOXES 8                /* boxes or runs past WD_BLOCKS_MAX or WD_RUNS_MAX */
 
@@ -132,6 +160,9 @@ extern int wd_base;                     /* the base font size of the pages built
    the charset and base rules of html.h. 0 and *out (free it with wd_free()), or -1 with a message and *out
    unchanged (out of memory). */
 int wd_build(const struct ut_response *r, struct wd_document *out, char *err, size_t cap);
+
+/* The same, with the sheets a loader brought for this response (doc.h's wd_sheets) */
+int wd_build_with(const struct ut_response *r, const struct wd_sheets *sheets, struct wd_document *out, char *err, size_t cap);
 
 /* Free everything a document owns and zero it; a zeroed document, or NULL, is fine. */
 void wd_free(struct wd_document *d);

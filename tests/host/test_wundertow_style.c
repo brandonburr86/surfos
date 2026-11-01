@@ -622,6 +622,171 @@ static void sheets(void) {
     check(!d.notice[0], "no notice");
 }
 
+/* A loader, by hand: a page and what it links to, what the sheets say by their addresses */
+static const struct { const char *url, *text; } web[] = {
+    { "https://example.test/dir/a.css", "p{color:#0000a1} .a{color:#0000a2}" },
+    { "https://example.test/b.css", "p{color:#0000b1}" },
+    { "https://cdn.test/c.css", "@import \"c2.css\"; p{font-style:italic}" },
+    { "https://cdn.test/c2.css", "@import \"c3.css\"; p{font-weight:bold}" },
+    { "https://cdn.test/c3.css", "p{color:#0000c3}" },
+    { "https://example.test/dir/i.css", "p{color:#0000d1}" },
+};
+
+static struct wd_sheets *loader;
+
+static void load_all(struct wd_sheets *q) {
+    size_t i, k;
+    for(i = 0; i < q->count; i++)
+        for(k = 0; k < sizeof(web) / sizeof(web[0]); k++)
+            if(!q->sheet[i].text && !strcmp(q->sheet[i].url, web[k].url)) {
+                q->sheet[i].text = strdup(web[k].text);
+                q->sheet[i].len = strlen(web[k].text);
+            }
+}
+
+static int resp(const char *url, const char *html, int verified, struct ut_response *r) {
+    char err[UT_ERR_MAX];
+    memset(r, 0, sizeof(*r));
+    if(ut_url_parse(url, &r->url, err, sizeof(err))) return -1;
+    r->body = (unsigned char *)strdup(html);
+    r->len = strlen(html);
+    r->status = 200;
+    r->verified = verified;
+    snprintf(r->content_type, sizeof(r->content_type), "text/html");
+    return 0;
+}
+
+/* the page at url, with its sheets as a loader brings them; run() of "x" gives what came of it */
+static void linked_page(const char *url, const char *html, int verified) {
+    static struct ut_response r;
+    char err[UT_ERR_MAX];
+    if(have) wd_free(&d);
+    have = 0;
+    wd_sheets_free(loader);
+    loader = NULL;
+    if(resp(url, html, verified, &r)) return;
+    if(wd_build(&r, &d, err, sizeof(err))) return;
+    have = 1;
+    loader = d.sheets;
+    d.sheets = NULL;
+    if(loader) {
+        load_all(loader);
+        wd_sheets_imports(loader);
+        load_all(loader);
+        wd_free(&d);
+        have = !wd_build_with(&r, loader, &d, err, sizeof(err));
+    }
+    free(r.body);
+}
+
+static int listed(const char *url) {
+    size_t i;
+    for(i = 0; loader && i < loader->count; i++) if(!strcmp(loader->sheet[i].url, url)) return 1;
+    return 0;
+}
+
+static void linked(void) {
+    struct ut_response r;
+    char err[UT_ERR_MAX];
+
+    page("<p>x");
+    check(!d.sheets, "no sheets, no list");
+    page("<link rel=stylesheet href=a.css><p>x");
+    check(d.sheets && d.sheets->count == 1 && !strcmp(d.sheets->sheet[0].url, "https://example.test/dir/a.css") &&
+          !d.sheets->sheet[0].text && !d.sheets->sheet[0].imported, "a <link>: its address, resolved");
+    check(color_of("x") == WD_NONE, "the page stands without it");
+
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "the sheet a loader brought counts");
+    linked_page("https://example.test/dir/page.html", "<p>x<p class=a>y<link rel=stylesheet href=a.css>", 1);
+    check(color_of("y") == 0x0000a2, "a <link> after what it styles");
+    linked_page("https://example.test/dir/page.html", "<style>p{color:#111111}</style><link rel=stylesheet href=a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "a <link> after a <style>: in the page's order");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=a.css><style>p{color:#111111}</style><p>x", 1);
+    check(color_of("x") == 0x111111, "a <style> after a <link>");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=a.css><link rel=stylesheet href=/b.css><p>x", 1);
+    check(color_of("x") == 0x0000b1, "two <link>s in their order");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=/b.css><link rel=stylesheet href=a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "the other way round");
+    linked_page("https://example.test/dir/page.html", "<link rel=\"Preload StyleSheet\" href=a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "rel is words, in any case");
+    linked_page("https://example.test/dir/page.html", "<link rel=\"alternate stylesheet\" href=a.css><p>x", 1);
+    check(!loader && color_of("x") == WD_NONE, "an alternate sheet is not for now");
+    linked_page("https://example.test/dir/page.html", "<link rel=preload href=a.css><link rel=icon href=b.png><p>x", 1);
+    check(!loader, "a <link> of another kind");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet media=print href=a.css><p>x", 1);
+    check(!loader, "for print");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet media=\"screen\" href=a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "for a screen");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet type=text/less href=a.css><p>x", 1);
+    check(!loader, "of another type");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet><link rel=stylesheet href=><p>x", 1);
+    check(!loader, "with no address");
+    linked_page("https://example.test/dir/page.html", "<!-- <link rel=stylesheet href=a.css> --><template><link rel=stylesheet href=a.css></template><p>x", 1);
+    check(!loader, "in a comment, in a template");
+    linked_page("https://example.test/dir/page.html", "<base href=/x/><link rel=stylesheet href=b.css><p>x", 1);
+    check(listed("https://example.test/x/b.css"), "<base> counts");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=b.css><base href=/x/><p>x", 1);
+    check(listed("https://example.test/x/b.css"), "a late <base> too, as for a page's links");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=mailto:a@b.test><link rel=stylesheet href=data:text/css,p{}><p>x", 1);
+    check(loader && !loader->count, "no other scheme");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=file:///etc/passwd><link rel=stylesheet href=/etc/passwd.css><p>x", 1);
+    check(loader && loader->count == 1 && listed("https://example.test/etc/passwd.css"), "a web page's sheet is never a file");
+
+    /* never from HTTPS to HTTP */
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=http://example.test/dir/a.css><p>x", 1);
+    check(loader && !loader->count && color_of("x") == WD_NONE, "an https page's sheet over http is left out");
+    linked_page("http://example.test/dir/page.html", "<link rel=stylesheet href=https://example.test/dir/a.css><p>x", 0);
+    check(color_of("x") == 0x0000a1, "an http page's over https is fine");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=//example.test/dir/a.css><p>x", 1);
+    check(color_of("x") == 0x0000a1, "an address without a scheme takes the page's");
+    linked_page("http://example.test/dir/page.html", "<link rel=stylesheet href=//example.test/dir/a.css><p>x", 0);
+    check(listed("http://example.test/dir/a.css"), "an http page's too");
+
+    /* @import, one level */
+    linked_page("https://example.test/dir/page.html", "<style>@import \"i.css\"; p{font-style:italic}</style><p>x", 1);
+    check(color_of("x") == 0x0000d1 && (style_of("x") & WS_ITALIC), "@import in a <style>");
+    linked_page("https://example.test/dir/page.html", "<style>@import \"i.css\"; p{color:#111111}</style><p>x", 1);
+    check(color_of("x") == 0x111111, "before the sheet that imports it");
+    linked_page("https://example.test/dir/page.html", "<style>@import url(i.css); p{font-style:italic}</style><p>x", 1);
+    check(!listed("https://example.test/dir/i.css") && color_of("x") == WD_NONE, "@import url() is an url(): not followed");
+    linked_page("https://example.test/dir/page.html", "<link rel=stylesheet href=https://cdn.test/c.css><p>x", 1);
+    check(listed("https://cdn.test/c2.css") && (style_of("x") & WS_BOLD) && (style_of("x") & WS_ITALIC),
+          "a linked sheet's @import, against its own address");
+    check(!listed("https://cdn.test/c3.css") && color_of("x") == WD_NONE, "an imported sheet's @import is not followed: one level");
+
+    /* an http sheet of a sheet that came by https, an http page's https sheet */
+    {
+        static struct wd_sheets q;
+        memset(&q, 0, sizeof(q));
+        q.sheet[0].url = strdup("https://cdn.test/s.css");
+        q.sheet[0].text = strdup("@import \"http://cdn.test/t.css\"; @import \"u.css\"; @import \"mailto:a@b.test\"; @import \"file:///etc/x\";");
+        q.sheet[0].len = strlen(q.sheet[0].text);
+        q.count = 1;
+        check(wd_sheets_imports(&q) == 2 && q.count == 2 && !strcmp(q.sheet[1].url, "https://cdn.test/u.css") && q.sheet[1].imported,
+              "from a sheet that came by https: nothing over http, and no other scheme");
+        free(q.sheet[0].url);
+        free(q.sheet[0].text);
+        free(q.sheet[1].url);
+    }
+
+    /* limits */
+    {
+        char html[2000];
+        size_t n = 0, i;
+        for(i = 0; i < WD_SHEETS_MAX + 4; i++) n += (size_t)snprintf(html + n, sizeof(html) - n, "<link rel=stylesheet href=%u.css>", (unsigned int)i);
+        check(!resp("https://example.test/", html, 1, &r), "many sheets");
+        if(have) wd_free(&d);
+        have = !wd_build(&r, &d, err, sizeof(err));
+        check(have && d.sheets && d.sheets->count == WD_SHEETS_MAX, "no more than may be");
+        free(r.body);
+    }
+    wd_sheets_free(loader);
+    loader = NULL;
+    if(have) wd_free(&d);
+    have = 0;
+}
+
 /* the same page with and without a sheet that says nothing */
 static void same_tree(const char *body, const char *sheet, const char *what) {
     static char a[70000];
@@ -734,6 +899,7 @@ static void hostile(void) {
 static void allocations(void) {
     static const char html[] =
         "<style>p{color:red} .a{margin:1px} @media screen{b{font-weight:normal}}</style><html class=a><body class=b>"
+        "<link rel=stylesheet href=a.css><style>@import \"b.css\";</style>"
         "<p style=color:blue>x<span class=a>y</span><div style=display:none>z</div><table><tbody><tr><td>c</table>";
     long i, before = ut_alloc_live;
     int ok = 0;
@@ -758,6 +924,7 @@ int main(void) {
     boxes();
     sizes();
     sheets();
+    linked();
     malformed();
     hostile();
     allocations();
