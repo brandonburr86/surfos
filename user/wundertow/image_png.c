@@ -6,15 +6,16 @@ File: image_png.c  Date: 11/1/26
 PNG, with an inflate of its own: every colour type and depth of the standard, a palette and tRNS, Adam7 interlacing,
 16 bits per sample kept to their high 8. An animated PNG shows its default image. A chunk is checked whole by its CRC
 when it is reached, if it is one that is read: IHDR first, PLTE, IDAT; an unknown critical chunk stops the picture, an
-ancillary one is passed over. Where libpng lets a file by, so does this, for what real files do and nothing is at risk:
-a palette longer than the depth holds is cut, a tRNS that is wrong or fails its CRC is ignored, and data past the last
-row is not read.
+ancillary one is passed over. Three things a real file may do are let by, as browsers let them by, with nothing at risk:
+a palette longer than the depth holds is cut, a tRNS that makes no sense or fails its CRC is ignored, and inflate stops
+at the first byte past the last row. A stream that ends badly before that byte is refused, though: its blocks' ends
+and its Adler-32 are checked when rows and stream end together, as they do in any file that is whole.
 
 Nothing is held of the file's data but what the format needs: the inflate's 32 KB window, and two rows. Bytes come
 out of inflate one at a time into the row being made; each whole row is unfiltered and turned into pixels. So a
 small file that says it inflates to gigabytes costs nothing: the bytes a picture of its size can hold are known from
-its header, and inflate stops at the last one. Inflate's input is the IDAT chunks one after the other, a byte at a
-time, however they are cut; the Adler-32 at its end is checked when it gets there.
+its header, and inflate stops at the first one past them. Inflate's input is the IDAT chunks one after the other, a
+byte at a time, however they are cut.
 */
 
 #include <stddef.h>
@@ -27,6 +28,9 @@ time, however they are cut; the Adler-32 at its end is checked when it gets ther
 #define FAST     9                              /* bits of a code that the quick table covers */
 #define LITS     288
 #define DISTS    32
+#define WORDS(x) #x
+#define WORD(x)  WORDS(x)
+#define OVER_SIDE "a PNG over the limit of " WORD(WIMG_SIDE_MAX) " pixels a side"
 
 struct huff {
     unsigned short fast[1 << FAST];             /* the low bits of the input: length << 9 | symbol; 0: a longer code */
@@ -62,6 +66,7 @@ struct png {
     unsigned int bits;
     int nbits;
     int bad;                                    /* the data ended, or a row's filter is none */
+    int made_up;                                /* of nbits, how many are zeros made up past the data's end */
     int over;                                   /* data past the last row: inflate stops */
     unsigned int wpos;
     unsigned long long out;                     /* bytes made */
@@ -273,7 +278,7 @@ static void refill(struct png *p, int n) {
     while(p->nbits < n) {
         int c = next_byte(p);
         if(c < 0) {
-            p->bad = 1;
+            p->made_up += 8;
             c = 0;
         }
         p->bits |= (unsigned int)c << p->nbits;
@@ -281,13 +286,19 @@ static void refill(struct png *p, int n) {
     }
 }
 
+/* n bits used: a code looks further ahead than it is long, so it is the bits used that may run out, not those looked at */
+static void used(struct png *p, int n) {
+    p->bits >>= n;
+    p->nbits -= n;
+    if(p->nbits < p->made_up) p->bad = 1;
+}
+
 static unsigned int take(struct png *p, int n) {
     unsigned int v;
     if(!n) return 0;
     refill(p, n);
     v = p->bits & ((1u << n) - 1);
-    p->bits >>= n;
-    p->nbits -= n;
+    used(p, n);
     return v;
 }
 
@@ -341,8 +352,7 @@ static int symbol(struct png *p, const struct huff *h) {
     refill(p, 15);
     e = h->fast[p->bits & ((1u << FAST) - 1)];
     if(e) {
-        p->bits >>= e >> 9;
-        p->nbits -= (int)(e >> 9);
+        used(p, (int)(e >> 9));
         return (int)(e & 511);
     }
     k = reverse(p->bits & 0xffff, 16);
@@ -350,8 +360,7 @@ static int symbol(struct png *p, const struct huff *h) {
     if(s >= 16) return -1;
     i = (k >> (16 - s)) - h->first[s] + h->index[s];
     if(i >= LITS || h->len[i] != s) return -1;
-    p->bits >>= s;
-    p->nbits -= s;
+    used(p, s);
     return h->sym[i];
 }
 
@@ -375,10 +384,11 @@ static const char *codes(struct png *p) {
     static const unsigned char dmore[30] = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10,
                                              11, 11, 12, 12, 13, 13 };
     for(;;) {
-        int s = symbol(p, &p->lit);
         unsigned int n, d;
-        if(s < 0 || p->bad) return "a PNG whose data is corrupted";
+        int s;
         if(p->over) return NULL;
+        s = symbol(p, &p->lit);
+        if(s < 0 || p->bad) return "a PNG whose data is corrupted";
         if(s < 256) {
             emit(p, (unsigned int)s);
             continue;
@@ -483,7 +493,7 @@ static const char *ihdr(struct png *p, const unsigned char *d, unsigned int n) {
     case 6: if(depth != 8 && depth != 16) return "a PNG of a depth that is none"; p->channels = 4; break;
     default: return "a PNG of a colour type that is none";
     }
-    if(w > WIMG_SIDE_MAX || h > WIMG_SIDE_MAX) return "a PNG over the limit of 4096 pixels a side";
+    if(w > WIMG_SIDE_MAX || h > WIMG_SIDE_MAX) return OVER_SIDE;
     p->w = (int)w;
     p->h = (int)h;
     p->depth = depth;
@@ -495,8 +505,8 @@ static const char *ihdr(struct png *p, const unsigned char *d, unsigned int n) {
 
 static const char *plte(struct png *p, const unsigned char *d, unsigned int n) {
     unsigned int i;
-    if(n % 3 || !n) return "a PNG with a bad palette";
     if(p->color != 3) return NULL;              /* a suggestion for screens of few colours */
+    if(n % 3 || !n) return "a PNG with a bad palette";
     n /= 3;
     if(n > 1u << p->depth) n = 1u << p->depth;  /* the rest no pixel can name */
     for(i = 0; i < n; i++) p->palette[i] = (unsigned int)d[i * 3] << 16 | (unsigned int)d[i * 3 + 1] << 8 | d[i * 3 + 2];

@@ -25,6 +25,7 @@ user/wundertow/image*.c on the host, with Undertow's util.c and the test's alloc
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 #include "undertow.h"
 #include "alloc.h"
@@ -156,13 +157,19 @@ static void whole(const struct entry *e) {
             unsigned int want = (unsigned int)strtoul(e->value, NULL, 16);
             checkf(fnv(m.px, (size_t)m.w * m.h) == want, "%s: every pixel as made", e->name);
         } else {
-            int tol = atoi(e->value), gray = !strcmp(e->kind, "gray"), x, y;
+            int tol = atoi(e->value), gray = !strcmp(e->kind, "gray"), ink = !strcmp(e->kind, "ink"), x, y;
             for(y = 0; y < m.h; y++)
                 for(x = 0; x < m.w; x++) {
                     unsigned int c = m.px[(size_t)y * m.w + x];
                     int r, g, b, d;
                     pattern(x, y, m.w, m.h, &r, &g, &b);
                     if(gray) g = b = r;
+                    if(ink) {
+                        int k = 255 - x * 255 / (m.w - 1);
+                        r = r * k / 255;
+                        g = g * k / 255;
+                        b = b * k / 255;
+                    }
                     d = diff((int)(c >> 16 & 255), r);
                     if(diff((int)(c >> 8 & 255), g) > d) d = diff((int)(c >> 8 & 255), g);
                     if(diff((int)(c & 255), b) > d) d = diff((int)(c & 255), b);
@@ -455,8 +462,9 @@ static void far_match(void) {
     free(b.p);
 }
 
-/* A small file that says it is 1 x 1 and inflates to megabytes: inflate stops at its fourth byte, which the codes after
-   them show: a code that means nothing, and no end, would be its failure if it read them */
+/* A small file that says it is 1 x 1 and inflates to megabytes: inflate stops at its fifth byte (a filter and three
+   samples are what it holds), which the codes after them show: one that means nothing, and no end, would be its
+   failure if it read them */
 static void png_bomb(void) {
     struct buf b = { NULL, 0, 0 }, z = { NULL, 0, 0 };
     struct bits s;
@@ -519,7 +527,7 @@ static void png_files(void) {
     png_chunk(&b, "IHDR", raw, 12);
     refused(&b, "an IHDR of 12 bytes");
     png_start(&b, 1, 1, 8, 2, 0, 0, 0);
-    b.p[20] ^= 1;
+    b.p[32] ^= 1;                                   /* the CRC itself: the header is good */
     zlib_stored(&z, raw, 4);
     put32be(&z, adler_of(raw, 4));
     finish_png(&b, &z);
@@ -602,32 +610,93 @@ static void png_files(void) {
         }
         free(b.p);
         memset(&b, 0, sizeof(b));
+        /* each of these is whole and would show, but for the one CRC */
         png_start(&b, 1, 1, 8, 3, 0, 0, 0);
         png_chunk(&b, "PLTE", six, 3);
         b.p[b.n - 1] ^= 1;
+        raw[0] = raw[1] = 0;
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
+        finish_png(&b, &z);
         refused(&b, "a bad CRC on PLTE");
-        /* a chunk of another kind while data is still needed */
-        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
-        zlib_stored(&z, raw, 3);
-        z.n -= 1;
+        png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
         png_chunk(&b, "IDAT", z.p, z.n);
-        png_chunk(&b, "tEXt", raw, 2);
-        png_chunk(&b, "IDAT", z.p, z.n);
+        b.p[b.n - 1] ^= 1;
+        png_chunk(&b, "IEND", NULL, 0);
         free(z.p);
         memset(&z, 0, sizeof(z));
-        refused(&b, "data that stops at another chunk");
-        /* the last row's bad CRC, a whole IDAT of it: chunk after chunk is checked */
+        refused(&b, "a bad CRC on the first IDAT");
         png_start(&b, 1, 1, 8, 0, 0, 0, 0);
         zlib_stored(&z, raw, 2);
         put32be(&z, adler_of(raw, 2));
         png_chunk(&b, "IDAT", z.p, 3);
         png_chunk(&b, "IDAT", z.p + 3, z.n - 3);
         b.p[b.n - 1] ^= 1;
+        png_chunk(&b, "IEND", NULL, 0);
         free(z.p);
         memset(&z, 0, sizeof(z));
-        png_chunk(&b, "IEND", NULL, 0);
         refused(&b, "a bad CRC on a later IDAT");
-        /* a picture over the limit says so by itself */
+        /* one whole stream, cut across two IDATs with another chunk between: that chunk ends the data */
+        memset(raw, 0, 6);
+        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 6);
+        put32be(&z, adler_of(raw, 6));
+        png_chunk(&b, "IDAT", z.p, 5);
+        png_chunk(&b, "tEXt", raw, 2);
+        png_chunk(&b, "IDAT", z.p + 5, z.n - 5);
+        png_chunk(&b, "IEND", NULL, 0);
+        free(z.p);
+        memset(&z, 0, sizeof(z));
+        refused(&b, "data with another chunk in its middle");
+        /* a stored block that says it holds more than the rows and the file do: what is not there is not made up */
+        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
+        put8(&z, 0x78);
+        put8(&z, 0x01);
+        put8(&z, 1);
+        put16le(&z, 7);
+        put16le(&z, ~7u & 0xffff);
+        put(&z, raw, 3);
+        finish_png(&b, &z);
+        refused(&b, "a stored block longer than the data");
+        /* the same with nothing between: it shows, so it was that chunk */
+        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
+        zlib_stored(&z, raw, 6);
+        put32be(&z, adler_of(raw, 6));
+        png_chunk(&b, "IDAT", z.p, 5);
+        png_chunk(&b, "IDAT", z.p + 5, z.n - 5);
+        png_chunk(&b, "IEND", NULL, 0);
+        free(z.p);
+        memset(&z, 0, sizeof(z));
+        check(!decode(b.p, b.n, &m, "data in two IDATs"), "data in two IDATs");
+        if(m.px) wimg_free(&m);
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        /* a stream that ends at its first byte past the last row, in codes as in a stored block: the same picture */
+        {
+            struct bits t;
+            png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+            put8(&z, 0x78);
+            put8(&z, 0x01);
+            t.b = &z;
+            t.acc = 0;
+            t.n = 0;
+            put_bits(&t, 1, 1);
+            put_bits(&t, 1, 2);
+            put_lit(&t, 0);
+            put_lit(&t, 7);
+            put_lit(&t, 9);
+            flush_bits(&t);
+            finish_png(&b, &z);
+            check(!decode(b.p, b.n, &m, "codes that end one byte past the rows"), "codes that end one byte past the rows");
+            if(m.px) {
+                check(m.px[0] == 0x070707, "the row before them");
+                wimg_free(&m);
+            }
+            free(b.p);
+            memset(&b, 0, sizeof(b));
+        }
     }
     /* a chunk whose length lies */
     png_start(&b, 1, 1, 8, 2, 0, 0, 0);
@@ -1098,6 +1167,32 @@ static void bmp_long_run(void) {
         wimg_free(&m);
     }
     free(b.p);
+    /* the same by steps: 34 MB of them, 255 to the right each and none up */
+    memset(&b, 0, sizeof(b));
+    bmp_start(&b, 62, 40, 4, 4, 1, 8, 1, 2);
+    put32le(&b, 0);
+    put32le(&b, 0xffffff);
+    b.cap = b.n + n * 4 + 8;
+    b.p = realloc(b.p, b.cap);
+    for(i = 0; i < n; i++) {
+        b.p[b.n++] = 0;
+        b.p[b.n++] = 2;
+        b.p[b.n++] = 0xff;
+        b.p[b.n++] = 0;
+    }
+    b.p[b.n++] = 2;                                 /* two pixels: where a column that wrapped would put them */
+    b.p[b.n++] = 1;
+    b.p[b.n++] = 0;
+    b.p[b.n++] = 1;
+    check(!decode(b.p, b.n, &m, "RLE of 2^31 steps"), "RLE stepping far past a row's end");
+    if(m.px) {
+        size_t k;
+        int gone = 1;
+        for(k = 0; k < 16; k++) if(m.px[k] != WIMG_GONE) gone = 0;
+        check(gone, "draws nothing");
+        wimg_free(&m);
+    }
+    free(b.p);
 }
 
 /**** JPEG ****/
@@ -1176,15 +1271,29 @@ static void small_jpeg(struct buf *b, unsigned int quant, unsigned int dc_value,
     jpeg_huff(b, 1, ac_value);
 }
 
-/* Two codes, of 1 bit (0: dc's, 1: the next), for a table of two values */
-static void jpeg_huff2(struct buf *b, unsigned int tc, unsigned int v0, unsigned int v1) {
-    unsigned char d[19];
+/* Three codes of 2 bits: 00, 01, 10 */
+static void jpeg_huff3(struct buf *b, unsigned int tc, unsigned int v0, unsigned int v1, unsigned int v2) {
+    unsigned char d[20];
     memset(d, 0, sizeof(d));
     d[0] = (unsigned char)(tc << 4);
-    d[2] = 2;                                       /* two codes of 2 bits: 00, 01 */
+    d[2] = 3;
     d[17] = (unsigned char)v0;
     d[18] = (unsigned char)v1;
+    d[19] = (unsigned char)v2;
     seg(b, 0xc4, d, sizeof(d));
+}
+
+/* The block whose only coefficient, of the value v, is at zigzag place 33 (row 5, column 2), by T.81's formula */
+static int zrl_block(const struct wimg *m, int v) {
+    static const double pi = 3.14159265358979323846;
+    int x, y, ok = m->w == 8 && m->h == 8;
+    for(y = 0; ok && y < 8; y++)
+        for(x = 0; x < 8; x++) {
+            double f = 128 + v / 4.0 * cos((2 * x + 1) * 2 * pi / 16) * cos((2 * y + 1) * 5 * pi / 16);
+            int want = (int)floor(f + 0.5), got = (int)(m->px[y * 8 + x] & 255);
+            if(diff(want, got) > 1) ok = 0;
+        }
+    return ok;
 }
 
 static void jpeg_files(void) {
@@ -1419,34 +1528,39 @@ static void jpeg_files(void) {
     put8(&b, 0);
     eoi(&b);
     refused(&b, "EOI where a restart marker belongs");
-    /* a progressive AC scan of ZRLs: 16 zeros each, a coefficient at the end; a sum past the block is corrupted */
+    /* ZRLs: two of them, 16 zeros each, put the one coefficient at zigzag place 33: sequential, and progressive */
     soi(&b);
-    jpeg_quant(&b, 1);
-    jpeg_sof(&b, 0xc2, 8, 8, 8, 1, 0x11, 0);
-    jpeg_huff(&b, 0, 0);
-    jpeg_huff2(&b, 1, 0xf0, 0x01);
-    jpeg_sos(&b, 1, 0, 0, 0);
-    put8(&b, 0);
-    jpeg_sos(&b, 1, 1, 63, 0);
-    put8(&b, 0x05);                                 /* 00 00 00 01 and a 1: three ZRLs, a 1 at the 49th; then runs */
-    put8(&b, 0x00);
-    put8(&b, 0x00);
-    eoi(&b);
-    if(!decode(b.p, b.n, &m, "a scan of ZRLs")) wimg_free(&m);
-    free(b.p);
-    memset(&b, 0, sizeof(b));
-    /* a sequential scan the same way */
-    soi(&b);
-    jpeg_quant(&b, 8);
+    jpeg_quant(&b, 160);
     jpeg_sof(&b, 0xc0, 8, 8, 8, 1, 0x11, 0);
     jpeg_huff(&b, 0, 0);
-    jpeg_huff2(&b, 1, 0xf0, 0x00);
+    jpeg_huff3(&b, 1, 0xf0, 0x01, 0x00);
     jpeg_sos(&b, 1, 0, 63, 0);
-    put8(&b, 0x08);                                 /* (dc: 0) 00 00 01: two ZRLs, an end */
-    put8(&b, 0x00);
+    put8(&b, 0x03);                                 /* DC 0; 00 ZRL, 00 ZRL, 01 a 1 bit value, 1 +1, 10 the end, padded */
+    put8(&b, 0xbf);
     eoi(&b);
-    check(!decode(b.p, b.n, &m, "ZRLs and an end"), "ZRLs and an end of block");
-    if(m.px) wimg_free(&m);
+    check(!decode(b.p, b.n, &m, "sequential ZRLs"), "sequential ZRLs");
+    if(m.px) {
+        check(zrl_block(&m, 160), "they put the coefficient where T.81 says");
+        wimg_free(&m);
+    }
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    soi(&b);
+    jpeg_quant(&b, 160);
+    jpeg_sof(&b, 0xc2, 8, 8, 8, 1, 0x11, 0);
+    jpeg_huff(&b, 0, 0);
+    jpeg_huff3(&b, 1, 0xf0, 0x01, 0x00);
+    jpeg_sos(&b, 1, 0, 0, 0);
+    put8(&b, 0x7f);                                 /* DC 0, padded */
+    jpeg_sos(&b, 1, 1, 63, 0);
+    put8(&b, 0x07);                                 /* 00 ZRL, 00 ZRL, 01, 1 +1, 10 the end, padded */
+    put8(&b, 0x7f);
+    eoi(&b);
+    check(!decode(b.p, b.n, &m, "progressive ZRLs"), "progressive ZRLs");
+    if(m.px) {
+        check(zrl_block(&m, 160), "they put the coefficient where T.81 says");
+        wimg_free(&m);
+    }
     free(b.p);
     memset(&b, 0, sizeof(b));
     /* progressive coefficients too many to hold: 4000 x 4000 of four components */

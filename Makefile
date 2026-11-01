@@ -1002,7 +1002,7 @@ $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_
                                     $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -lm -o $@
 
 test-wundertow-image: $(BUILD)/host/test_wundertow_image $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_image tests/fixtures
@@ -1019,7 +1019,7 @@ $(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(ad
                                           $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -o $@
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -lm -o $@
 
 test-wundertow-image-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan)
 	$(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan tests/fixtures,@echo "test-wundertow-image-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")

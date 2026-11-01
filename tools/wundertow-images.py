@@ -4,6 +4,8 @@ tests/fixtures/wundertow/images/ and its manifest, one line a file:
 
     NAME WIDTH HEIGHT exact HASH     every pixel as image.h has them; HASH is FNV-1a of them, little-endian
     NAME WIDTH HEIGHT near TOLERANCE each channel within TOLERANCE of the pattern (JPEG is lossy)
+    NAME WIDTH HEIGHT gray TOLERANCE the same of the pattern's red in each channel
+    NAME WIDTH HEIGHT ink TOLERANCE  the same of the pattern under a ramp of black, from none at the left to all
 
 Everything but one family comes from this file, byte by byte, so that the fixtures hold what no ordinary encoder
 writes: PNG in every colour type and depth, each filter, stored, fixed and dynamic deflate, Adam7, tRNS, IDAT cut
@@ -44,7 +46,12 @@ def fnv(px):
 def save(name, data, w, h, px=None, tolerance=None):
     with open(os.path.join(OUT, name), 'wb') as f:
         f.write(data)
-    manifest.append(f'{name} {w} {h} exact {fnv(px):08x}' if px is not None else f'{name} {w} {h} near {tolerance}')
+    if px is not None:
+        manifest.append(f'{name} {w} {h} exact {fnv(px):08x}')
+    elif tolerance == 'ink':
+        manifest.append(f'{name} {w} {h} ink 12')
+    else:
+        manifest.append(f'{name} {w} {h} near {tolerance}')
 
 
 def solid(r, g, b, a=255):
@@ -490,10 +497,11 @@ class Bits:
 
 
 def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, restart=0, quant16=False, sof=0xc0, adobe=None,
-                pre=b'', jfif=False, ink=None):
+                pre=b'', jfif=False, ink=None, black=False):
     """a baseline file: sampling, (h, v) of each component; scans: lists of component numbers (one scan of all by
     default); every code 8 bits long, of the values the tables hold. ink: four components, stored as Adobe stores them,
-    inverted: 'cmyk' as they are, 'ycck' the CMY as YCC, libjpeg's C = 255 - R"""
+    inverted: 'cmyk' as they are, 'ycck' the CMY as YCC, libjpeg's C = 255 - R; black: K as a ramp across the picture,
+    255 at its left, 0 at its right (else no black at all)"""
     sampling = sampling or [(1, 1)] * (4 if ink else 3)
     hmax, vmax = max(s[0] for s in sampling), max(s[1] for s in sampling)
     n = len(sampling)
@@ -504,7 +512,7 @@ def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, resta
             return r
         if ink:
             if c == 3:
-                return 255                                  # no black: all the paper shows
+                return 255 - x * 255 // (w - 1) if black else 255   # 255: no black, all the paper shows
             if ink == 'cmyk':
                 return (r, g, b)[c]
             r, g, b = 255 - r, 255 - g, 255 - b
@@ -664,11 +672,15 @@ def jpeg_family():
     own('ownycck420.jpg', ink='ycck', adobe=2, ids=(1, 2, 3, 4), sampling=[(2, 2), (1, 1), (1, 1), (2, 2)])
     own('owncmyk.jpg', ink='cmyk', adobe=0, ids=(1, 2, 3, 4))
     own('owncmyknoadobe.jpg', ink='cmyk', ids=(1, 2, 3, 4))
-    # a quantizer changed after the first scan: a component keeps the one at its own first scan
-    data = jpeg_encode(w, h, scans=[[0], [1], [2]])
+    save('owncmykramp.jpg', jpeg_encode(w, h, ink='cmyk', adobe=0, ids=(1, 2, 3, 4), black=True), w, h, tolerance='ink')
+    save('ownyccramp.jpg', jpeg_encode(w, h, ink='ycck', adobe=2, ids=(1, 2, 3, 4), black=True), w, h, tolerance='ink')
+    # tables that change after a component's first scan: it keeps the one it began with (T.81, libjpeg)
+    with open(os.path.join(OUT, 'prog444.jpg'), 'rb') as f:
+        data = f.read()
     at = data.index(b'\xff\xda')
     at = data.index(b'\xff\xda', at + 2)                    # the second scan
-    save('ownquantlate.jpg', data[:at] + b'\xff\xdb' + struct.pack('>HB', 67, 1) + bytes([200] * 64) + data[at:], w, h, tolerance=t)
+    dqt = b''.join(b'\xff\xdb' + struct.pack('>HB', 67, n) + bytes([200] * 64) for n in (0, 1))
+    save('ownquantlate.jpg', data[:at] + dqt + data[at:], w, h, tolerance=t)
 
 
 def main():

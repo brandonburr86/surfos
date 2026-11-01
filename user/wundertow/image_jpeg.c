@@ -639,7 +639,7 @@ static const char *segments(struct jpeg *j, char *err, size_t cap, struct wimg *
             j->restart = (int)be16(d);
             break;
         case 0xe0:
-            if(n >= 5 && !memcmp(d, "JFIF", 5)) j->jfif = 1;
+            if(n >= 14 && !memcmp(d, "JFIF", 5)) j->jfif = 1;  /* as libjpeg: a marker too short to be one is none */
             break;
         case 0xee:
             if(n >= 12 && !memcmp(d, "Adobe", 5)) {
