@@ -470,7 +470,7 @@ static void values(void) {
     sheet("p { font-size: 150% }");
     check(is(CP_SIZE, CU_PCT, 150 * 256), "font-size in percent");
     sheet("p { font-size: x-large }");
-    check(is(CP_SIZE, CU_REM, 384), "font-size: x-large");
+    check(is(CP_SIZE, CU_BASE, 384), "font-size: x-large");
     sheet("p { font-size: larger }");
     check(is(CP_SIZE, CU_EM, 256 * 6 / 5), "font-size: larger");
     sheet("p { font-size: -1px }");
@@ -480,7 +480,7 @@ static void values(void) {
     sheet("p { font: 700 2em sans-serif }");
     check(is(CP_STYLE, CU_NONE, 0) && is(CP_WEIGHT, CU_NONE, 1) && is(CP_SIZE, CU_EM, 512), "font: a weight by number");
     sheet("p { font: x-small serif }");
-    check(is(CP_STYLE, CU_NONE, 0) && is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_REM, 192), "font: what it does not name is set back");
+    check(is(CP_STYLE, CU_NONE, 0) && is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_BASE, 192), "font: what it does not name is set back");
     sheet("p { font: 12px }");
     check(!c->nsels, "font: no family");
     sheet("p { font: Georgia }");
@@ -498,7 +498,7 @@ static void values(void) {
     check(is(CP_BACKGROUND, CU_TRANSPARENT, 0) && is(CP_DISPLAY, CU_NONE, CSS_D_INLINE) && is(CP_MARGIN_LEFT, CU_PX, 0) &&
           is(CP_PADDING_TOP, CU_PX, 0), "initial and unset of what is not inherited");
     sheet("p { font-weight: initial; font-size: initial; text-align: initial; text-decoration: initial }");
-    check(is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_REM, 256) && is(CP_ALIGN, CU_NONE, CSS_A_LEFT) &&
+    check(is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_BASE, 256) && is(CP_ALIGN, CU_NONE, CSS_A_LEFT) &&
           is(CP_DECORATION, CU_NONE, 0), "initial of what is");
     sheet("a { text-decoration: inherit }");
     check(is(CP_DECORATION, CU_INHERIT, 0), "text-decoration: inherit, not inherited but asked for");

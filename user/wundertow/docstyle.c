@@ -69,6 +69,7 @@ struct ds {
     struct frame f[DS_DEPTH];
     int n;
     int base;                           /* the page's base font size, in pixels */
+    int rem;                            /* the root element's: what rem counts from */
     unsigned int work;                  /* steps of matching so far */
     int spent;                          /* past DS_WORK_MAX */
     struct pending box;
@@ -94,15 +95,19 @@ static int ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' |
 /**** the sheets of a page ****/
 
 static void found(struct ds *s, const char *href, int source, int imported) {
-    size_t n = strlen(href);
+    size_t n;
     char *c;
+    while(ws(*href)) href++;                        /* as a link's, without the whitespace at its ends */
+    n = strlen(href);
+    while(n && ws(href[n - 1])) n--;
     if(s->found == WD_SHEETS_MAX || !n) return;
     c = malloc(n + 1);
     if(!c) {
         s->failed = 1;
         return;
     }
-    memcpy(c, href, n + 1);
+    memcpy(c, href, n);
+    c[n] = 0;
     s->href[s->found] = c;
     s->source[s->found] = source;
     s->imported[s->found++] = (unsigned char)imported;
@@ -342,12 +347,12 @@ static void read_classes(struct frame *f, const char *c) {
 }
 
 /* a margin's or padding's size in pixels, or percent as a negative number; in the 16-bit fields of a box */
-static int to_px(const struct css_decl *d, int em, int base) {
+static int to_px(const struct css_decl *d, int em, int rem) {
     long v;
     switch(d->unit) {
     case CU_PX: v = clamp(d->value, -(MARGIN_MAX << 8), MARGIN_MAX << 8) / 256; break;
     case CU_EM: v = (long)clamp(d->value, -(1 << 20), 1 << 20) * em / 256; break;
-    case CU_REM: v = (long)clamp(d->value, -(1 << 20), 1 << 20) * base / 256; break;
+    case CU_REM: v = (long)clamp(d->value, -(1 << 20), 1 << 20) * rem / 256; break;
     case CU_PCT: return d->value <= 0 ? 0 : -clamp(d->value / 256, 0, 100);
     default: return 0;                              /* auto: 0 here, boxes have no width of their own to centre */
     }
@@ -369,7 +374,8 @@ static void set_size(struct ds *s, struct frame *f, int parent, const struct css
     switch(d->unit) {
     case CU_PX: f->px = (unsigned short)px_of(v); break;
     case CU_EM: f->px = (unsigned short)px_of(parent * v); break;
-    case CU_REM: f->px = (unsigned short)px_of(s->base * v); break;
+    case CU_REM: f->px = (unsigned short)px_of(s->rem * v); break;
+    case CU_BASE: f->px = (unsigned short)px_of(s->base * v); break;
     case CU_PCT: f->px = (unsigned short)px_of(parent * v / 100); break;
     case CU_INHERIT: f->px = (unsigned short)parent; break;
     default: return;
@@ -405,7 +411,7 @@ static int apply(struct ds *s, struct frame *f, const struct frame *p, const str
     if((d = w[CP_COLOR].d) != NULL) {
         if(d->unit == CU_RGB) f->color = (unsigned int)d->value;
         else if(d->unit == CU_INITIAL) f->color = WD_TEXT;
-        else if(d->unit == CU_INHERIT) f->color = e->color != WD_NONE ? e->color : WD_TEXT;
+        else if(d->unit == CU_INHERIT) f->color = e->color != WD_NONE ? e->color : f->link ? WD_TEXT : WD_NONE;
     }
     if((d = w[CP_WEIGHT].d) != NULL && d->unit != CU_REVERT)
         f->bold = (signed char)(d->unit == CU_INHERIT ? (e->style & WS_BOLD) != 0 : d->value);
@@ -414,7 +420,7 @@ static int apply(struct ds *s, struct frame *f, const struct frame *p, const str
     if((d = w[CP_DECORATION].d) != NULL && d->unit != CU_REVERT) {
         unsigned int lines = (d->value & CSS_LINE_UNDER ? WS_UNDER : 0u) | (d->value & CSS_LINE_THROUGH ? WS_STRIKE : 0u);
         f->add |= (unsigned char)lines;             /* (inherit: none of its own, what is around it comes by itself) */
-        f->off |= (unsigned char)(e->words & (WS_UNDER | WS_STRIKE) & ~lines);
+        f->off |= (unsigned char)(e->words & (WS_UNDER | WS_STRIKE) & ~lines & ~e->style);
         if(f->link) f->noline = !(lines & WS_UNDER);
     }
     if((d = w[CP_ALIGN].d) != NULL && d->unit != CU_REVERT) {
@@ -429,11 +435,11 @@ static int apply(struct ds *s, struct frame *f, const struct frame *p, const str
     }
     for(i = 0; i < 4; i++) {
         if((d = w[CP_MARGIN_TOP + i].d) != NULL && d->unit != CU_REVERT) {
-            b->margin[i] = (short)to_px(d, f->size, s->base);
+            b->margin[i] = (short)to_px(d, f->size, s->rem);
             b->given |= (unsigned char)(1 << i);
         }
         if((d = w[CP_PADDING_TOP + i].d) != NULL && d->unit != CU_REVERT) {
-            b->padding[i] = (short)to_px(d, f->size, s->base);
+            b->padding[i] = (short)to_px(d, f->size, s->rem);
             b->given |= (unsigned char)(16 << i);
         }
     }
@@ -494,11 +500,15 @@ int ds_open(struct ds *s, const struct ds_element *e) {
 
 static void root_frame(struct ds *s, int which, const struct ds_element *e) {
     struct pending *b = &s->root[which];
+    int n = s->n;
+    if(which == DS_ROOT_HTML) s->rem = s->base;     /* (rem on the root itself counts from the base) */
     s->hidden[which] = open_frame(s, which, e) == DS_NONE;
     *b = s->box;
     s->fg[which] = s->f[which].color;               /* what is said of the page is said of its d->fg */
     s->f[which].color = WD_NONE;
     s->f[which].bg = WD_NONE;
+    if(which == DS_ROOT_HTML) s->rem = s->f[which].size;
+    if(n > s->n) s->n = n;                          /* what was open before the tag stays open */
 }
 
 void ds_root(struct ds *s, int which, const struct ds_element *e) {
@@ -514,15 +524,16 @@ void ds_root(struct ds *s, int which, const struct ds_element *e) {
 
 int ds_hidden(const struct ds *s) { return s->hidden[0] || s->hidden[1]; }
 
-void ds_end(struct ds *s, const char *name, int floor) {
+int ds_end(struct ds *s, const char *name, int floor) {
     unsigned int h = css_type(name, strlen(name));
     int i;
     if(floor < 2) floor = 2;
     for(i = s->n - 1; i >= floor; i--)
         if(s->f[i].name == h) {
             s->n = i;
-            return;
+            return 1;
         }
+    return 0;
 }
 
 int ds_named(const struct ds *s, int height, const char *name) {
@@ -581,7 +592,7 @@ int ds_finish(struct ds *s, struct wd_document *d) {
         x->pad[i] = m->padding[i];
     }
     x->given = m->given;
-    if(m->align_given) x->align = s->f[DS_ROOT_BODY].align;
+    if(m->align_given || s->root[0].align_given) x->align = s->f[DS_ROOT_BODY].align;
     return s->spent || s->css.truncated;
 }
 
@@ -591,7 +602,7 @@ struct ds *ds_new(const unsigned char *in, size_t len, int cs, const struct wd_s
     if(!s) return NULL;
     css_init(&s->css);
     s->have = sheets;
-    s->base = clamp(wd_base, 8, DS_PX_MAX);
+    s->base = s->rem = clamp(wd_base, 8, DS_PX_MAX);
     s->tag.attrs = tag_attrs;
     s->tag.nattrs = A_COUNT;
     s->tag.val[A_ID] = s->id;

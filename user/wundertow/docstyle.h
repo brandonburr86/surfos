@@ -83,8 +83,8 @@ void ds_root(struct ds *s, int which, const struct ds_element *e);
 /* Is the page's root display: none, and so all of the page? */
 int ds_hidden(const struct ds *s);
 
-/* An end tag of a name: the nearest open element of that name, down to floor, closes */
-void ds_end(struct ds *s, const char *name, int floor);
+/* An end tag of a name: the nearest open element of that name, down to floor, closes: 1, or 0 for none */
+int ds_end(struct ds *s, const char *name, int floor);
 
 /* Is that frame's element of this name? */
 int ds_named(const struct ds *s, int height, const char *name);

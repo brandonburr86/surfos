@@ -679,9 +679,9 @@ static int length(const struct tok *t, int *unit, int *value) {
 /* A font's size, a keyword too: 1, or 0 for none */
 static int font_size(const struct tok *t, int *unit, int *value) {
     static const struct { const char *name; int unit, value; } sizes[] = {
-        { "xx-small", CU_REM, ONE * 3 / 5 }, { "x-small", CU_REM, ONE * 3 / 4 }, { "small", CU_REM, ONE * 8 / 9 },
-        { "medium", CU_REM, ONE }, { "large", CU_REM, ONE * 6 / 5 }, { "x-large", CU_REM, ONE * 3 / 2 },
-        { "xx-large", CU_REM, ONE * 2 }, { "xxx-large", CU_REM, ONE * 3 }, { "smaller", CU_EM, ONE * 5 / 6 },
+        { "xx-small", CU_BASE, ONE * 3 / 5 }, { "x-small", CU_BASE, ONE * 3 / 4 }, { "small", CU_BASE, ONE * 8 / 9 },
+        { "medium", CU_BASE, ONE }, { "large", CU_BASE, ONE * 6 / 5 }, { "x-large", CU_BASE, ONE * 3 / 2 },
+        { "xx-large", CU_BASE, ONE * 2 }, { "xxx-large", CU_BASE, ONE * 3 }, { "smaller", CU_EM, ONE * 5 / 6 },
         { "larger", CU_EM, ONE * 6 / 5 }
     };
     size_t i;
@@ -900,7 +900,7 @@ static void keyword(struct parser *P, int prop, const char *w, int imp) {
     case CP_BACKGROUND: emit(P, prop, CU_TRANSPARENT, 0, imp); break;
     case CP_DISPLAY: emit(P, prop, CU_NONE, CSS_D_INLINE, imp); break;
     case CP_ALIGN: emit(P, prop, CU_NONE, CSS_A_LEFT, imp); break;
-    case CP_SIZE: emit(P, prop, CU_REM, ONE, imp); break;
+    case CP_SIZE: emit(P, prop, CU_BASE, ONE, imp); break;
     case CP_WEIGHT: case CP_STYLE: case CP_DECORATION: emit(P, prop, CU_NONE, 0, imp); break;
     default: emit(P, prop, CU_PX, 0, imp); break;   /* margins and paddings */
     }

@@ -397,6 +397,76 @@ static void display(void) {
     check(run("x") != NULL, "and undoes an earlier none");
 }
 
+/* What the review of 11/01/26 found, each with a page of its own */
+static void reviewed(void) {
+    page("<style>.h{display:none}</style><span class=h><span>x</span> secret</span>y");
+    check(!run("x") && !run("secret") && run("y"), "an inner element of the same name does not end a hidden one");
+    page("<span style=display:block><span>x</span> y</span>z");
+    check(box("x") == box("y") && box("y") != box("z"), "nor one made a block");
+    page("<span style=display:block><div>x</span>y</div>z");
+    check(run("xy") && box("xy") != box("z") && d.blocks[box("xy")->parent].first >= 0, "an end tag does not reach past a block inside");
+    page("<style>.r{color:#ff0000}</style><div class=r><select hidden></select>text</div>");
+    check(color_of("text") == 0xff0000, "<select hidden> closes nothing around it");
+    page("<xmp style=display:block>a</xmp><p>after   text");
+    check(run("after text") != NULL && !(style_of("after") & (WS_PRE | WS_MONO)), "<xmp> with a display leaves the page after it as it was");
+    page("<xmp style=display:none>secret</xmp><p>after   text");
+    check(!run("secret") && run("after text") != NULL && !(style_of("after") & (WS_PRE | WS_MONO)), "and hidden");
+    page("<body style=display:none><table><body><tr><td>x");
+    check(!d.run_count, "a second <body> shows nothing");
+    page("<body class=a><body class=b style=color:#ff0000>x");
+    check(d.fg == WD_NONE, "and says nothing: the first tag's attributes count");
+    page("<style>.c p{color:#ff0000}</style><div class=c><body><p>x</div>");
+    check(color_of("x") == 0xff0000, "a late <body> leaves what is open open");
+    page("<style>tbody{display:none}</style><table><thead><tr><td>a<tbody><tr><td>b<tr><td>c<tfoot><tr><td>d</table>e");
+    check(run("a") && !run("b") && !run("c") && run("d") && run("e"), "a table's section hidden");
+    page("<style>tbody{display:none}</style><table><tr><td>b<tr><td>c</table>e");
+    check(!run("b") && !run("c") && run("e"), "the section HTML implies, hidden");
+    page("<style>tbody td{color:#ff0000}</style><table><tr><td>x</table>");
+    check(color_of("x") == 0xff0000, "a tbody that was not written is there");
+    page("<style>table>tr>td{color:#ff0000}</style><table><tr><td>x</table>");
+    check(color_of("x") == WD_NONE, "so a row is not the table's child");
+    page("<style>tbody>tr>td{color:#ff0000}</style><table><tr><td>x<tr><td>y</table>");
+    check(color_of("x") == 0xff0000 && color_of("y") == 0xff0000, "and every row is in it");
+    page("<style>*{font-size:150%}</style><table><tr><td>x</table>");
+    check(run("x") && run("x")->px > 16 * 3 * 3 * 3 * 3 * 3 / 32, "and it counts for what inherits through it");
+    page("<table><caption>c</caption><tr><td>x</table>");
+    check(run("c") && run("x"), "a caption before it");
+    page("<style>a{display:block}</style><table><a name=n><th>x</table>");
+    check(box("x") && box("x")->kind == WB_CELL && d.blocks[d.blocks[box("x")->parent].parent].kind == WB_TABLE,
+          "a box CSS made in a table is no section: a row goes in the table");
+    page("<style>html{font-size:62.5%} body{font-size:1.6rem} h1{font-size:2.4rem;margin:1rem}</style><h1>a</h1><p>b");
+    check(run("a")->px == 24 && run("b")->px == 16 && box("a")->margin[0] == 10, "rem goes by the root element's size");
+    page("<style>html{font-size:50%} p{font-size:large} h1{font-size:initial}</style><p>a<h1>b</h1>");
+    check(run("a")->px == 19 && run("b")->px == 16, "a size's keywords, and initial, by the browser's");
+    page("<style>html{font-size:2rem}</style><p>a");
+    check(run("a")->px == 32, "rem on the root itself");
+    page("<label hidden>a</label><abbr hidden>b</abbr><foo hidden>c</foo><input hidden value=d><img hidden src=e alt=f>g");
+    check(!run("a") && !run("b") && !run("c") && d.run_count == 1 && run("g"), "the hidden attribute on what HTML gives no box, and on void elements");
+    page("<a href=x><span style=color:inherit>y</span></a>");
+    check(color_of("y") == WD_NONE, "inherit in a link: the link's colour");
+    page("<u>a<ins style=text-decoration:none>b</ins></u>");
+    check(style_of("b") & WS_UNDER, "none on <ins> leaves <u>'s line from around it");
+    page("<style>html{text-align:center}</style><p>x");
+    check(d.blocks[0].align == WA_CENTER, "html's text-align");
+    page("<button style=\"display:block;margin:5px\">x</button>y");
+    {
+        const struct wd_run *r = NULL;
+        size_t i;
+        for(i = 0; i < d.run_count; i++) if(d.runs[i].kind == WR_FIELD) r = &d.runs[i];
+        check(r && d.blocks[1].nruns == 1 && d.runs[d.blocks[1].run].kind == WR_FIELD && d.blocks[1].margin[0] == 5,
+              "a <button> in the box its CSS gave it");
+    }
+    {
+        char html[200];
+        struct wd_sheets *q;
+        snprintf(html, sizeof(html), "<link rel=stylesheet href=\"  a.css\n \"><p>x");
+        page(html);
+        q = d.sheets;
+        check(q && q->count == 1 && !strcmp(q->sheet[0].url, "https://example.test/dir/a.css"), "a sheet's address without the whitespace around it");
+        check(wd_sheets_imports(NULL) == 0, "wd_sheets_imports(NULL)");
+    }
+}
+
 static void boxes(void) {
     const struct wl_item *a, *b, *f;
 
@@ -763,7 +833,7 @@ static void linked(void) {
         q.sheet[0].text = strdup("@import \"http://cdn.test/t.css\"; @import \"u.css\"; @import \"mailto:a@b.test\"; @import \"file:///etc/x\";");
         q.sheet[0].len = strlen(q.sheet[0].text);
         q.count = 1;
-        check(wd_sheets_imports(&q) == 2 && q.count == 2 && !strcmp(q.sheet[1].url, "https://cdn.test/u.css") && q.sheet[1].imported,
+        check(wd_sheets_imports(&q) == 1 && q.count == 2 && !strcmp(q.sheet[1].url, "https://cdn.test/u.css") && q.sheet[1].imported,
               "from a sheet that came by https: nothing over http, and no other scheme");
         free(q.sheet[0].url);
         free(q.sheet[0].text);
@@ -921,6 +991,7 @@ int main(void) {
     cascade();
     html_below();
     display();
+    reviewed();
     boxes();
     sizes();
     sheets();

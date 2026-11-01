@@ -63,7 +63,8 @@ enum {
     CU_PCT,         /* percent, in 1/256ths: margins of the containing block's width, font-size of the parent's */
     CU_AUTO,        /* margin: auto */
     CU_INITIAL,     /* color: the page's text colour (initial) */
-    CU_REVERT       /* what the page's rules say counts for nothing here: HTML's own look stands (revert) */
+    CU_REVERT,      /* what the page's rules say counts for nothing here: HTML's own look stands (revert) */
+    CU_BASE         /* font-size: of the browser's base size, in 1/256ths: its keywords, initial; rem goes by the root's */
 };
 
 enum { CSS_D_NONE, CSS_D_BLOCK, CSS_D_INLINE, CSS_D_ASIS };    /* ASIS: shown, as HTML has it (display: table-cell) */

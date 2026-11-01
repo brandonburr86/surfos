@@ -161,6 +161,7 @@ struct bd {
     size_t tag_q;                       /* where the tag's name starts */
     int none;                           /* open elements that are display: none: what they hold makes nothing */
     int page_none;                      /* one of those is the page's root */
+    unsigned char root_seen[2];         /* the tag of <html>, of <body> came */
     int css_box;                        /* the box this tag made, -1: none */
     int css_at;                         /* docstyle's elements before this tag */
     int display;                        /* what the cascade said of this tag's element */
@@ -627,7 +628,7 @@ static int css_open(struct bd *b, int el, const struct ut_html_tag *t) {
     struct ds_element e;
     memset(&e, 0, sizeof(e));
     e.el = el;
-    e.name = el == E_TR ? "tr" : "pre";
+    e.name = el == E_TR ? "tr" : el == E_TBODY ? "tbody" : "pre";
     if(t) {
         e.in = b->in;
         e.len = b->len;
@@ -674,12 +675,13 @@ static struct frame *frame_of(struct bd *b, int el, int kind, int hides, int css
 }
 
 static struct frame *push(struct bd *b, int el, int kind) {
-    int css = ds_height(b->ds), display = DS_ASIS;
+    int css = ds_height(b->ds), display;
     if(b->depth == STACK_MAX) {
         b->over[el]++;
         return NULL;
     }
-    if(!b->none) display = css_open(b, el, b->tag.el == el && !b->tag.end ? &b->tag : NULL);
+    display = css_open(b, el, b->tag.el == el && !b->tag.end ? &b->tag : NULL);
+    if(b->none) display = DS_ASIS;                  /* (it goes on the stack all the same, for what ends it) */
     if(el == E_TABLE || el == E_TR || is_cell(el)) {    /* (a table keeps its parts, but for none) */
         if(display != DS_NONE) display = DS_ASIS;
     } else if(display == DS_INLINE) kind = -1;
@@ -842,11 +844,21 @@ static void item_start(struct bd *b, struct ut_html_tag *t) {
 
 /**** tables ****/
 
+/* A table's section opens in the cascade (t NULL: the tbody HTML implies), and display: none hides what it holds */
+static void section_open(struct bd *b, int el, const struct ut_html_tag *t) {
+    int css = ds_height(b->ds), display = css_open(b, el, t);
+    struct frame *f;
+    if(display == DS_NONE && !b->none && b->depth < STACK_MAX && (f = frame_of(b, el, -1, 1, css)) != NULL) f->made = 1;
+}
+
+static int is_section(int el) { return el == E_TBODY || el == E_THEAD || el == E_TFOOT; }
+
 static void row_start(struct bd *b, struct ut_html_tag *t) {
     int tb = table_at(b);
     struct frame *f;
     if(!tb) return;                                 /* a row outside a table is no row */
-    pop_to(b, tb + 1);
+    pop_to(b, tb + 1 + (b->depth > tb + 1 && is_section(b->st[tb + 1].el)));    /* (a section hidden by its CSS stays) */
+    if(ds_height(b->ds) == b->st[tb].css + 1) section_open(b, E_TBODY, NULL);
     f = push(b, E_TR, WB_ROW);
     if(f && t) {
         box_of(b, f)->bg = attr_color(t, A_BGCOLOR);
@@ -1184,7 +1196,7 @@ static unsigned int words_of(const struct ut_html_tag *t) {
 static int no_style(int el) {
     switch(el) {
     case E_HTML: case E_BODY: case E_HEAD: case E_TITLE: case E_STYLE: case E_SCRIPT: case E_META: case E_LINK:
-    case E_BASE: case E_TBODY: case E_THEAD: case E_TFOOT:
+    case E_BASE: case E_TBODY: case E_THEAD: case E_TFOOT: case E_XMP:
         return 1;
     }
     return 0;
@@ -1194,9 +1206,10 @@ static int no_style(int el) {
 static int css_inline(struct bd *b, struct ut_html_tag *t, unsigned int fl) {
     int css = ds_height(b->ds), display;
     struct frame *f;
-    b->css_at = css;
-    if(b->none || no_style(t->el)) return 0;
-    display = css_open(b, t->el, t);
+    if(no_style(t->el)) return 0;
+    display = css_open(b, t->el, t);                /* (also where nothing shows: its end tag must find it) */
+    if(b->none) return 0;
+    if(display == DS_ASIS && t->seen[A_HIDDEN]) display = DS_NONE;
     if(t->el == E_SELECT && display == DS_BLOCK) display = DS_ASIS;    /* (select_tag() takes its end tag) */
     b->display = display;
     if(display != DS_NONE && display != DS_BLOCK) return 0;
@@ -1228,22 +1241,21 @@ static void css_done(struct bd *b, const struct ut_html_tag *t, unsigned int fl)
 /* The end tag of an element HTML gives no box: one that CSS gave a box goes with it, else its place in the cascade */
 static void css_end(struct bd *b, const struct ut_html_tag *t) {
     int i;
-    if(b->open[t->el])
-        for(i = b->depth - 1; i > 0; i--) {
-            if(b->st[i].el == t->el && b->st[i].made && ds_named(b->ds, b->st[i].css, t->name)) {
-                pop_to(b, i);
-                return;
-            }
-            if(ut_html_flags(b->st[i].el) & F_SCOPE) break;
+    if(ds_end(b->ds, t->name, b->st[b->depth - 1].css + 1) || !b->open[t->el]) return;
+    for(i = b->depth - 1; i > 0; i--) {
+        if(b->st[i].el == t->el && b->st[i].made && ds_named(b->ds, b->st[i].css, t->name)) {
+            pop_to(b, i);
+            return;
         }
-    ds_end(b->ds, t->name, b->st[b->depth - 1].css + 1);
+        if(ut_html_flags(b->st[i].el) & (F_SCOPE | F_SPECIAL)) return;
+    }
 }
 
 /* Does the page's CSS show this element, for all its hidden attribute says? */
 static int css_shown(struct bd *b, const struct ut_html_tag *t) {
-    int css = ds_height(b->ds), display = b->none ? DS_ASIS : css_open(b, t->el, t);
+    int css = ds_height(b->ds), display = css_open(b, t->el, t);
     ds_close(b->ds, css);
-    return display == DS_BLOCK || display == DS_INLINE || display == DS_SHOWN;
+    return !b->none && (display == DS_BLOCK || display == DS_INLINE || display == DS_SHOWN);
 }
 
 static void css_root(struct bd *b, const struct ut_html_tag *t) {
@@ -1256,7 +1268,10 @@ static void css_root(struct bd *b, const struct ut_html_tag *t) {
     e.el = t->el;
     e.name = t->name;
     e.color = WD_NONE;
+    if(b->root_seen[t->el == E_BODY]) return;       /* a second one adds nothing here */
+    b->root_seen[t->el == E_BODY] = 1;
     ds_root(b->ds, t->el == E_BODY ? DS_ROOT_BODY : DS_ROOT_HTML, &e);
+    if(b->depth > 1 && !ds_hidden(b->ds)) return;   /* (what opened hidden has no boxes to go on in) */
     b->none += ds_hidden(b->ds) - b->page_none;
     b->page_none = ds_hidden(b->ds);
 }
@@ -1287,6 +1302,7 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     unsigned int fl = ut_html_flags(el);
     struct frame *f;
     struct wd_block *x;
+    b->css_at = ds_height(b->ds);
     if(t->seen[A_ID]) add_anchor(b, t->val[A_ID], t->len[A_ID], t->over[A_ID]);
     if(t->seen[A_HIDDEN] && !(fl & F_VOID) && el != E_OTHER && !css_shown(b, t)) {   /* <div hidden>: not shown, nor what is in it */
         start_hidden(b, t);
@@ -1398,7 +1414,7 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         if(table_at(b)) {
             pop_to(b, table_at(b) + 1);
             ds_close(b->ds, b->st[table_at(b)].css + 1);       /* the section before it ends with it */
-            if(!b->none) css_open(b, el, t);
+            section_open(b, el, t);
         }
         return;
     }
@@ -1420,6 +1436,7 @@ static void end_tag(struct bd *b, struct ut_html_tag *t) {
         b->over[el]--;
         return;
     }
+    if(el == E_BUTTON) field_close(b);              /* (in a box of its own, if its CSS gave it one) */
     if(!(fl & F_PUSH)) css_end(b, t);
     if((s = style_of(t)) >= 0) {
         if(b->is.sty[s]) b->is.sty[s]--;
@@ -1783,9 +1800,11 @@ static int find_sheets(struct bd *b, struct ut_url *u, char *safe) {
 }
 
 int wd_sheets_imports(struct wd_sheets *s) {
-    struct { struct ut_url base, u; char urls[CSS_IMPORTS_MAX][CSS_URL_MAX + 1], err[128]; } *w = malloc(sizeof(*w));
-    size_t i, n = s->count, k;
+    struct { struct ut_url base, u; char urls[CSS_IMPORTS_MAX][CSS_URL_MAX + 1], err[128]; } *w;
+    size_t i, n = s ? s->count : 0, k;
     int added = 0;
+    if(!s) return 0;
+    w = malloc(sizeof(*w));
     if(!w) return -1;
     for(i = 0; i < n; i++) {
         struct wd_sheet *o = &s->sheet[i];
@@ -1802,11 +1821,14 @@ int wd_sheets_imports(struct wd_sheets *s) {
             rc = other_scheme(c) || ut_url_resolve(&w->base, c, &w->u, w->err, sizeof(w->err)) || !safe_utf8(w->u.text);
             free(c);
             if(rc) continue;
-            if(sheet_add(s, w->u.text, o->source, 1, s->https || !strncmp(o->url, "https:", 6))) {
-                free(w);
-                return -1;
+            {
+                size_t before = s->count;
+                if(sheet_add(s, w->u.text, o->source, 1, s->https || !strncmp(o->url, "https:", 6))) {
+                    free(w);
+                    return -1;
+                }
+                added += s->count > before;
             }
-            added++;
         }
     }
     free(w);
