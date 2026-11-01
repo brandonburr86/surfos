@@ -96,8 +96,7 @@ void wb_page_free(struct wb_page *p) {
 static int file_url(const char *text, char *out, size_t cap) {     /* https://WB_FILE_HOST/x -> file:///x */
     static const char prefix[] = "https://" WB_FILE_HOST "/";
     if(strncmp(text, prefix, sizeof(prefix) - 1)) return 0;
-    snprintf(out, cap, "file:///%s", text + sizeof(prefix) - 1);
-    return 1;
+    return (size_t)snprintf(out, cap, "file:///%s", text + sizeof(prefix) - 1) < cap;
 }
 
 struct wb_page *wb_page_new(const struct ut_response *r, int file, char *err, size_t cap) {
@@ -158,6 +157,12 @@ static void set_addr(struct wb *b, const char *s) {
     b->addr_len = strlen(b->addr);
     b->caret = b->addr_len;
     b->chosen = 0;
+    b->edited = 0;
+}
+
+/* A load ended while someone may be typing in the field: their keys are not taken from them */
+static void addr_after_load(struct wb *b, const char *s) {
+    if(!b->edited) set_addr(b, s);
 }
 
 static void loaded_status(struct wb *b, const struct wb_page *p) {
@@ -416,15 +421,14 @@ void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
             b->cur--;
         }
     }
-    set_addr(b, p->url);
+    addr_after_load(b, p->url);
     loaded_status(b, p);
-    b->focus = WB_FOCUS_PAGE;
 }
 
 void wb_failed(struct wb *b, const char *url, const char *why) {
     b->loading = 0;
     b->running = 0;
-    set_addr(b, url);
+    addr_after_load(b, url);
     status(b, "%s", why);
 }
 
@@ -461,6 +465,8 @@ static void follow(struct wb *b, int n) {
 
 static void back_forward(struct wb *b, int d) {
     if(!b->npages || b->cur + d < 0 || b->cur + d >= b->npages) return;
+    if(b->running) b->cancel |= WB_CANCEL_PAGE;     /* a page on its way goes: as in any browser, and a reload's */
+    b->running = b->loading = b->want = 0;          /* place is the page it was asked on */
     resources_stop(b);
     b->cur += d;
     b->hover = b->pressed = -1;
@@ -528,9 +534,11 @@ static int addr_key(struct wb *b, unsigned int key) {
     case 127: case 8:
         if(b->chosen) {
             set_addr(b, "");
+            b->edited = 1;
             return 1;
         }
         if(!b->caret) return 0;
+        b->edited = 1;
         {
             size_t k = b->caret - 1;
             while(k && !char_start(b->addr, k)) k--;
@@ -542,10 +550,12 @@ static int addr_key(struct wb *b, unsigned int key) {
     case WB_KEY_DELETE:
         if(b->chosen) {
             set_addr(b, "");
+            b->edited = 1;
             return 1;
         }
         if(b->caret < b->addr_len) {
             size_t k = b->caret + 1;
+            b->edited = 1;
             while(k < b->addr_len && !char_start(b->addr, k)) k++;
             memmove(b->addr + b->caret, b->addr + k, b->addr_len - k + 1);
             b->addr_len -= k - b->caret;
@@ -570,6 +580,7 @@ static int addr_key(struct wb *b, unsigned int key) {
     }
     if(key < 0x20 || key > 0x7e) return 0;          /* the keyboard types ASCII */
     if(b->chosen) set_addr(b, "");
+    b->edited = 1;
     if(b->addr_len + 1 >= sizeof(b->addr)) return 0;
     memmove(b->addr + b->caret + 1, b->addr + b->caret, b->addr_len - b->caret + 1);
     b->addr[b->caret++] = (char)key;
@@ -672,6 +683,7 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
         for(i = 0; i < 4; i++)
             if(in(x, y, g.bx[i], BAR_Y, g.bw[i], BAR_H) && enabled(b, i)) {
                 b->button = i + 1;
+                b->stop_held = wb_busy(b);
                 return 1;
             }
         if(in(x, y, g.ax, BAR_Y, g.aw, BAR_H)) {     /* the address field: all of it, then the caret */
@@ -706,7 +718,7 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
         if(n && in(x, y, g.bx[n - 1], BAR_Y, g.bw[n - 1], BAR_H) && enabled(b, n - 1)) {
             if(n == 1) back_forward(b, -1);
             else if(n == 2) back_forward(b, 1);
-            else if(n == 3 && wb_busy(b)) wb_stop(b);
+            else if(n == 3 && b->stop_held) wb_stop(b);    /* what it said when pressed, if the load has ended since */
             else if(n == 3) reload(b);
             else wb_go(b, b->addr);
             return 1;

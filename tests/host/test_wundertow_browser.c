@@ -16,6 +16,7 @@ page loads for itself and the rules of that.
 #include <string.h>
 #include <time.h>
 #include "undertow.h"
+#include "alloc.h"
 #include "url.h"
 #include "http.h"
 #include "doc.h"
@@ -104,6 +105,8 @@ static int has_request(const char *url) {
     return ok;
 }
 
+static unsigned int busy_bar[W * 31];
+
 /* Stage 2.3: what the program is told to start and stop */
 static void loads(void) {
     struct wb_request q;
@@ -129,8 +132,94 @@ static void loads(void) {
     wb_take(&b, &q);
     wb_key(&b, 27);
     check(!wb_busy(&b) && (wb_cancel(&b) & WB_CANCEL_PAGE), "Escape in the page stops it too");
+    p->halted = 0;
+    snprintf(b.status, sizeof(b.status), "As it was");
     wb_key(&b, 27);
-    check(!wb_cancel(&b), "Escape with nothing loading stops nothing");
+    check(!wb_cancel(&b) && !p->halted && !strcmp(b.status, "As it was"), "Escape with nothing loading stops nothing");
+
+    /* Stop before the program took the load: nothing starts */
+    wb_go(&b, "https://never.test/");
+    wb_stop(&b);
+    check(!wb_take(&b, &q) && !wb_cancel(&b), "Stopped before it started");
+    p->halted = 0;
+
+    /* the third button is what it said when it was pressed, and says what will happen */
+    wb_go(&b, "https://slow.test/");
+    wb_take(&b, &q);
+    paint();
+    memcpy(busy_bar, screen, sizeof(busy_bar));
+    wb_pointer(&b, 7 + 82 + 4 + 106 + 4 + 8, 15, 0);
+    wb_pointer(&b, 7 + 82 + 4 + 106 + 4 + 8, 15, 1);
+    wb_failed(&b, "https://slow.test/", "over by itself");
+    wb_pointer(&b, 7 + 82 + 4 + 106 + 4 + 8, 15, 0);
+    check(!b.want && !wb_busy(&b), "pressed as Stop, let go after the load ended: no reload");
+    paint();
+    check(memcmp(busy_bar, screen, sizeof(busy_bar)) != 0, "the label is Stop while it loads, Reload after");
+    wb_cancel(&b);
+
+    /* Back and Forward end a page load, whichever it is, and history stays as it was */
+    wb_go(&b, "https://example.com/before");
+    serve("<title>B</title><p>Before");
+    wb_go(&b, "https://example.com/after");
+    serve("<title>A</title><p>After");
+    wb_cancel(&b);
+    {
+        struct wb_page *before = b.page[b.cur - 1], *after = wb_current(&b);
+        int n = b.npages;
+        wb_key(&b, 18);
+        wb_take(&b, &q);
+        wb_key(&b, 127);
+        check(wb_current(&b) == before && !wb_busy(&b) && (wb_cancel(&b) & WB_CANCEL_PAGE) && !wb_take(&b, &q), "Back during a reload: it ends");
+        check(b.npages == n && b.page[b.cur + 1] == after, "and the page after is still there");
+        wb_go(&b, "https://example.com/third");
+        wb_take(&b, &q);
+        wb_key(&b, 127);
+        check(!wb_busy(&b) && (wb_cancel(&b) & WB_CANCEL_PAGE), "Back during a new page's load: it ends");
+        wb_key(&b, 12);
+        wb_key(&b, 27);
+        wb_go(&b, "https://example.com/untaken");
+        check(b.want, "a load the program has not taken");
+        wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);
+        wb_pointer(&b, 7 + 82 + 4 + 40, 15, 1);
+        wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);
+        check(!b.want && !wb_busy(&b) && !wb_cancel(&b), "Forward: it does not start");
+    }
+
+    /* a load that ends does not take the field from someone typing in it */
+    wb_go(&b, "https://example.com/slow");
+    wb_take(&b, &q);
+    wb_key(&b, 12);
+    wb_key(&b, 'h');
+    wb_key(&b, 'i');
+    wb_loaded(&b, page_at(q.url, "<p>Slow", 0), 0);
+    check(!strcmp(b.addr, "hi") && b.focus == WB_FOCUS_ADDR && b.caret == 2, "the page came, and the keys typed stay");
+    wb_key(&b, '!');
+    check(!strcmp(b.addr, "hi!"), "and go on");
+    wb_key(&b, 27);
+    check(!strcmp(b.addr, "https://example.com/slow") && b.focus == WB_FOCUS_PAGE, "Escape: the page's address");
+    wb_go(&b, "https://nowhere.test/");
+    wb_take(&b, &q);
+    wb_key(&b, 12);
+    wb_key(&b, 'x');
+    wb_failed(&b, q.url, "no such host");
+    check(!strcmp(b.addr, "x") && b.focus == WB_FOCUS_ADDR && !strcmp(b.status, "no such host"), "the same when it fails: its reason in the status bar");
+    wb_key(&b, 27);
+    wb_go(&b, "https://example.com/again");
+    wb_take(&b, &q);
+    wb_key(&b, 12);                                 /* in the field, nothing typed */
+    wb_loaded(&b, page_at(q.url, "<p>Again", 0), 0);
+    check(!strcmp(b.addr, "https://example.com/again") && b.focus == WB_FOCUS_ADDR, "nothing typed: the new address, the focus where it was");
+    wb_key(&b, 27);
+    wb_cancel(&b);
+    p = wb_current(&b);
+    wb_failed(&b, "https://z.test/", "gone");
+    wb_go(&b, "https://z.test/");
+    wb_take(&b, &q);
+    wb_failed(&b, q.url, "gone");
+    wb_go(&b, "https://y.test/");
+    check(!wb_cancel(&b), "a load that failed leaves nothing to stop");
+    wb_take(&b, &q);
+    wb_failed(&b, q.url, "gone");
 
     /* a load takes another's place */
     wb_go(&b, "https://one.test/");
@@ -165,8 +254,16 @@ static void loads(void) {
     check(!wb_take(&b, &q), "once");
     wb_text(&b, serial + 99, 1, "a{}", 3, "text/css", NULL);
     check(wb_busy(&b), "an answer for another page is nobody's");
+    wb_text(&b, serial, 77, "a{}", 3, "text/css", NULL);
+    check(wb_busy(&b), "an answer of another tag is nobody's");
     wb_text(&b, serial, 1, "a{}", 3, "text/css", NULL);
     check(!wb_busy(&b) && !wb_take(&b, &q), "the answer: done");
+    wb_text(&b, serial, 1, "a{}", 3, "text/css", NULL);
+    check(!wb_busy(&b) && !b.inflight, "a second answer changes nothing");
+    check(!wb_fetch(&b, p, "https://cdn.test/b.css", 2) && wb_take(&b, &q), "another");
+    wb_text(&b, serial, 1, "a{}", 3, "text/css", NULL);
+    check(b.inflight == 1, "an answer again to the one that ended does not count for it");
+    wb_text(&b, serial, 2, "a{}", 3, "text/css", NULL);
 
     /* three at a time, and a page that is left takes its loads with it */
     for(i = 10; i < 15; i++) {
@@ -185,6 +282,13 @@ static void loads(void) {
     wb_key(&b, 127);
     check(wb_current(&b) == p, "back");
     check(wb_take(&b, &q) && (q.item == 11 || q.item == 12 || q.item == 13), "and what it had not got starts again");
+    check(wb_busy(&b) && b.inflight == 1, "one on its way");
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);        /* Forward: leaving it with a load running */
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 1);
+    wb_pointer(&b, 7 + 82 + 4 + 40, 15, 0);
+    check(wb_current(&b) != p && (wb_cancel(&b) & WB_CANCEL_RESOURCES) && !b.inflight && !wb_busy(&b), "left: its load stops");
+    wb_key(&b, 127);
+    check(wb_current(&b) == p && wb_take(&b, &q), "and back again it starts again");
     wb_key(&b, 27);
     check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !strcmp(b.status, "Stopped") && !wb_take(&b, &q), "Stop: it wants nothing more");
     wb_key(&b, 18);
@@ -356,6 +460,7 @@ int main(void) {
     loads();
 
     wb_free(&b);
+    check(ut_alloc_live == 0, "nothing held at the end");
     if(failures) {
         printf("WUNDERTOW BROWSER TESTS FAILED: %d of %d checks\n", failures, checks);
         return 1;

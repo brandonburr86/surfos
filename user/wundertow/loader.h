@@ -38,13 +38,12 @@ their stand-ins. helper.c is the helper's side.
 #define LD_RESOURCES  (LD_HELPERS - 1)  /* of them, for a page's pictures and sheets */
 #define LD_PAGE_MS    (UT_LOAD_MS + 10000u)    /* a helper that takes longer is killed: Undertow's minute, and some */
 #define LD_RES_MS     (UT_LOAD_MS + 30000u)    /* the same with a picture's decoding */
-#define LD_MAGIC      0x31444c57u       /* "WLD1" */
 #define LD_URL_ENV    "WUNDERTOW_URL"
-#define LD_SELF       "/initrd/bin/wundertow"
+#define LD_SELF       "/initrd/bin/wundertow"   /* the helper, unless the window was started by a path of its own */
 
 enum { LD_BODY = 1, LD_PIXELS, LD_FAILED };
 
-struct ld_head {                        /* what the pipe starts with: same program, same layout */
+struct ld_head {                        /* what the pipe starts with: the same program's, as a rule */
     unsigned int magic;                 /* LD_MAGIC */
     unsigned int what;                  /* LD_BODY, LD_PIXELS, LD_FAILED */
     int status, verified, redirects;    /* as in ut_response */
@@ -53,6 +52,8 @@ struct ld_head {                        /* what the pipe starts with: same progr
     unsigned int url_len, len;
     char tls[16], reason[64], type[64], charset[32];
 };
+
+#define LD_MAGIC      (0x31444c57u + (unsigned int)sizeof(struct ld_head))  /* "WLD1": another build's head is no answer */
 
 struct ld_result {                      /* a load that ended */
     int kind;                           /* as it was asked: WB_LOAD_* */
@@ -116,7 +117,7 @@ int ld_overdue(struct loader *l, unsigned int now, struct ld_result *out, int *w
 /* Is a helper at work? */
 int ld_busy(const struct loader *l);
 
-/* Collect what has ended; true while some are still to come */
+/* Collect what has ended; true while something may be still to come, so that the caller looks again soon */
 int ld_reap(struct loader *l);
 
 /* All of them, as the window goes */
@@ -126,9 +127,16 @@ void ld_stop_all(struct loader *l);
 int ld_response(const struct ld_result *r, struct ut_response *out, char *err, size_t cap);
 
 /* loadproc.c: SurfOS's own calls. The host tests have their own. */
+extern const char *ld_self;                                         /* the program to start: LD_SELF by default */
 int ld_spawn(const char *kind, const char *url, int out_fd);        /* the helper's pid, or -1 */
 void ld_kill(int pid);
 int ld_collect(void);                                               /* > 0: one more collected; 0: none has ended; < 0: none left */
+
+/* pump.c: the loads of a browser: what it wants started and stopped (1: the window has something new to show), and
+   the wait for a helper's bytes and, when winfd >= 0, for the window's events (1 likewise; *win: it has events) */
+struct wb;
+int ld_start_loads(struct loader *l, struct wb *b);
+int ld_wait(struct loader *l, struct wb *b, int winfd, int *win);
 
 /* helper.c: the helper's side, and what --layout and --render do by themselves */
 int ld_helper(const char *kind, const struct ut_config *cfg);       /* exit status */

@@ -60,7 +60,8 @@ static int load_file(const char *path, size_t max, struct ut_response *r, char *
         close(fd);
         free(r->body);
         r->body = NULL;
-        return ut_error(err, cap, "%s is over %u MB: Undertow shows pages of 1 MB at most", path, (unsigned int)(max >> 20));
+        if(max == UT_BODY_MAX) return ut_error(err, cap, "%s is over 1 MB: Undertow shows pages of 1 MB at most", path);
+        return ut_error(err, cap, "%s is over %u MB, more than is read for a picture", path, (unsigned int)(max >> 20));
     }
     close(fd);
     r->body[n] = 0;
@@ -179,6 +180,10 @@ int ld_helper(const char *kind, const struct ut_config *cfg) {
     char err[UT_ERR_MAX];
     const char *url = getenv(LD_URL_ENV);
     int image = !strcmp(kind, "image"), file = 0, rc;
+    if((!image && strcmp(kind, "page") && strcmp(kind, "text")) || isatty(1)) {
+        fprintf(stderr, "wundertow: --helper is for the window's own use\n");     /* a pipe's bytes are no terminal's */
+        return 2;
+    }
     if(!url) return answer_failed("the helper was given no address", 0, 0);
     err[0] = 0;
     if(fetch(url, cfg, image, &r, &file, err, sizeof(err))) return answer_failed(err[0] ? err : "the load failed", 0, 0);

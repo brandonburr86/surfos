@@ -23,6 +23,8 @@ sends is checked here before anything is done with it; see loader.h.
 
 #define CHUNK (64u * 1024)              /* read at a time: the window looks at its events between */
 
+typedef char enough_helpers[WB_RESOURCES <= LD_RESOURCES ? 1 : -1];     /* what the browser asks for has a slot */
+
 void ld_init(struct loader *l) {
     memset(l, 0, sizeof(*l));
 }
@@ -96,13 +98,18 @@ int ld_busy(const struct loader *l) {
     return 0;
 }
 
+/* Every look collects: a helper that was killed by a fault keeps its descriptors until it is collected (a kill's are
+   closed at the reap, a task's own exit closes them; docs/ARCHITECTURE.md), so its pipe says nothing until then. */
 int ld_reap(struct loader *l) {
     int r;
-    while(l->zombies && (r = ld_collect()) != 0) {
-        if(r < 0) l->zombies = 0;
-        else l->zombies--;
+    while((r = ld_collect()) != 0) {
+        if(r < 0) {
+            l->zombies = 0;
+            break;
+        }
+        if(l->zombies) l->zombies--;
     }
-    return l->zombies > 0;
+    return l->zombies > 0 || ld_busy(l);
 }
 
 /* The job ended: *out says how, why being why it was given up on. Whatever its helper does next, nobody looks. */
@@ -137,10 +144,10 @@ static void finish(struct loader *l, int slot, struct ld_result *out, const char
         out->h = (int)h->h;
         out->pw = (int)h->pw;
         out->ph = (int)h->ph;
-        memcpy(out->tls, h->tls, sizeof(out->tls));
-        memcpy(out->reason, h->reason, sizeof(out->reason));
-        memcpy(out->type, h->type, sizeof(out->type));
-        memcpy(out->charset, h->charset, sizeof(out->charset));
+        ut_safe_text(out->tls, sizeof(out->tls), h->tls, strlen(h->tls), 0);
+        ut_safe_text(out->reason, sizeof(out->reason), h->reason, strlen(h->reason), 1);
+        ut_safe_text(out->type, sizeof(out->type), h->type, strlen(h->type), 0);
+        ut_safe_text(out->charset, sizeof(out->charset), h->charset, strlen(h->charset), 0);
         out->body = j->body;
         out->len = h->len;
         j->body = NULL;
@@ -160,6 +167,7 @@ static const char *check_head(struct ld_job *j) {
     h->type[sizeof(h->type) - 1] = 0;
     h->charset[sizeof(h->charset) - 1] = 0;
     if(h->url_len > UT_URL_MAX) return "the helper's answer is no answer";
+    if(h->redirects < 0 || h->redirects > UT_REDIRECTS_MAX) h->redirects = 0;
     switch(h->what) {
     case LD_FAILED:
         if(h->len > UT_ERR_MAX || h->url_len) return "the helper's answer is no answer";
@@ -171,9 +179,10 @@ static const char *check_head(struct ld_job *j) {
         h->w = h->h = h->pw = h->ph = 0;
         break;
     case LD_PIXELS:
-        if(j->kind != WB_LOAD_IMAGE || !h->url_len) return "the helper's answer is no answer";
-        if(!h->w || !h->h || !h->pw || !h->ph || h->w > WIMG_SIDE_MAX || h->h > WIMG_SIDE_MAX || h->pw > h->w ||
-           h->ph > h->h) return "the helper's answer is no answer";
+        if(j->kind != WB_LOAD_IMAGE || !h->url_len || h->status < 100 || h->status > 599)
+            return "the helper's answer is no answer";
+        if(!h->pw || !h->ph || h->w > WIMG_SIDE_MAX || h->h > WIMG_SIDE_MAX || h->pw > h->w || h->ph > h->h)
+            return "the helper's answer is no answer";
         bytes = (unsigned long long)h->pw * h->ph * sizeof(unsigned int);
         if(bytes != h->len) return "the helper's answer is no answer";
         if(bytes > j->budget) return "the page holds as many pictures as it can";

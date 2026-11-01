@@ -133,6 +133,8 @@ struct wb {
     int running;                        /* a page's load was taken and has not ended */
     int inflight;                       /* resources' loads taken and not ended */
     int cancel;                         /* WB_CANCEL_* for the program to carry out */
+    int edited;                         /* the address was typed in since it was last set */
+    int stop_held;                      /* the toolbar's third button was pressed as Stop */
 };
 
 /* A browser in a window of w x h, with its start page; 0, or -1 without memory */

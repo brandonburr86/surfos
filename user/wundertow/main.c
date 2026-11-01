@@ -38,7 +38,6 @@ keep answering, load their page themselves.
 
 static struct ut_config cfg;            /* 4 KB: off the stack */
 static struct loader L;
-static struct ld_result R;              /* 6 KB */
 
 static int usage(void) {
     fprintf(stderr, "usage: wundertow [ADDRESS]\n"
@@ -69,75 +68,6 @@ static int load(const char *url, struct wb_page **out, char *err, size_t cap) {
     *out = wb_page_new(&r, file, err, cap);
     ld_fetch_free(&r, file);
     return *out ? 0 : -1;
-}
-
-/* A load that ended, to the browser. *r's body is let go of. */
-static void ended(struct wb *b, struct ld_result *r) {
-    static struct ut_response resp;
-    struct wb_page *p;
-    char path[UT_URL_MAX + 1], err[UT_ERR_MAX];
-    if(r->kind == WB_LOAD_PAGE) {
-        err[0] = 0;
-        if(r->failed) wb_failed(b, r->asked, r->why);
-        else if(ld_response(r, &resp, err, sizeof(err)) ||
-                !(p = wb_page_new(&resp, wb_file_path(r->asked, path, sizeof(path)), err, sizeof(err))))
-            wb_failed(b, r->asked, err);
-        else wb_loaded(b, p, r->reload);
-    } else if(r->kind == WB_LOAD_TEXT)
-        wb_text(b, r->page, r->item, r->failed ? NULL : (const char *)r->body, r->len, r->type, r->why);
-    free(r->body);
-    r->body = NULL;
-}
-
-/* What the browser wants stopped and started: 1 when a load could not start, so that the window has something new */
-static int start_loads(struct wb *b) {
-    static struct wb_request q;
-    char err[UT_ERR_MAX];
-    int c = wb_cancel(b), changed = 0;
-    if(c) ld_cancel(&L, c);
-    while(wb_take(b, &q)) {
-        if(!ld_start(&L, &q, err, sizeof(err))) continue;
-        memset(&R, 0, sizeof(R));       /* no helper: a failed load like another */
-        R.kind = q.kind;
-        R.page = q.page;
-        R.item = q.item;
-        R.reload = q.reload;
-        R.failed = 1;
-        snprintf(R.asked, sizeof(R.asked), "%s", q.url);
-        snprintf(R.why, sizeof(R.why), "%s", err);
-        ended(b, &R);
-        changed = 1;
-    }
-    return changed;
-}
-
-/* Waits for a helper's bytes, and for winfd when there is a window (else winfd < 0): 1 when something ended, so that
-   the window has something new to show; *win says the window has events */
-static int wait_loads(struct wb *b, int winfd, int *win) {
-    struct pollfd fds[LD_HELPERS + 1];
-    int slots[LD_HELPERS], base = 0, n, i, wait = -1, changed = 0;
-    while(ld_overdue(&L, ut_now(), &R, &wait)) {
-        ended(b, &R);
-        changed = 1;
-    }
-    if(changed) return 1;
-    if(ld_reap(&L) && (wait < 0 || wait > 250)) wait = 250;
-    if(winfd >= 0) {
-        fds[0].fd = winfd;
-        fds[0].events = POLLIN;
-        fds[0].revents = 0;
-        base = 1;
-    }
-    n = ld_fds(&L, fds + base, slots);
-    *win = 0;
-    if(poll(fds, (nfds_t)(base + n), wait) < 0) return 0;
-    if(base && fds[0].revents) *win = 1;
-    for(i = 0; i < n; i++)
-        if(fds[base + i].revents && ld_read(&L, slots[i], &R)) {
-            ended(b, &R);
-            changed = 1;
-        }
-    return changed;
 }
 
 /* An address as typed on the command line, as the window's address field takes it */
@@ -198,9 +128,9 @@ static int load_mode(const char *typed, int width) {
         return 1;
     }
     for(;;) {
-        start_loads(&b);
+        ld_start_loads(&L, &b);
         if(!ld_busy(&L)) break;
-        wait_loads(&b, -1, &win);
+        ld_wait(&L, &b, -1, &win);
     }
     if(!b.npages) {
         fprintf(stderr, "wundertow: %s\n", b.status);
@@ -357,11 +287,11 @@ static int window_mode(const char *typed) {
             }
             redraw = 0;
         }
-        if(start_loads(&b)) {
+        if(ld_start_loads(&L, &b)) {
             redraw = 1;
             continue;
         }
-        redraw |= wait_loads(&b, fd, &ready);
+        redraw |= ld_wait(&L, &b, fd, &ready);
         if(!ready) continue;
         n = (int)read(fd, ev, sizeof(ev));
         if(n == 0) break;                           /* the desktop let the window go */
@@ -407,6 +337,7 @@ int main(int argc, char **argv) {
     if(ut_config_load(&cfg, UT_CONF_PATH, err, sizeof(err)) < 0)
         fprintf(stderr, "wundertow: %s: %s (the defaults are used)\n", UT_CONF_PATH, err);
     ld_init(&L);
+    if(argc > 0 && strchr(argv[0], '/')) ld_self = argv[0];     /* a build run from elsewhere is its own helper */
     if(argc == 3 && !strcmp(argv[1], "--helper")) rc = ld_helper(argv[2], &cfg);
     else if(argc >= 3 && argc <= 4 && !strcmp(argv[1], "--load"))
         rc = (width = width_arg(argc > 3 ? argv[3] : NULL)) < 0 ? usage() : load_mode(argv[2], width);

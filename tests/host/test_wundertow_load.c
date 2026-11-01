@@ -3,12 +3,14 @@ SurfOS Undertow's window: tests of the loader
 ----------------------
 File: test_wundertow_load.c  Date: 11/1/26
 ----------------------
-user/wundertow/loader.c on the host, over real pipes and real processes: this file is loadproc.c, and each "helper" is
-a forked child that writes what the test scripted and ends, or hangs. Answers that arrive whole and a byte at a time;
-a helper that dies at every byte of its answer; a helper that says anything at all (the window reads its pipe as it
-reads the network): wrong magic, kinds and lengths, sizes that overflow, strings without their ends, a NUL in an
-address, more than a page may have; a helper that never answers, killed at its deadline, by Stop, by a new load;
-allocation failures; nothing held and no child left at the end of each.
+user/wundertow/loader.c and pump.c on the host, over real pipes and real processes: this file is loadproc.c, and each
+"helper" is a forked child that writes what the test scripted and ends, or hangs. Answers that arrive whole and a byte
+at a time; a helper that dies at every byte of its answer; one that faults, whose descriptors stay open until it is
+collected, as SurfOS has it; a helper that says anything at all (the window reads its pipe as it reads the network):
+wrong magic, kinds and lengths, sizes that overflow, strings without their ends, a NUL in an address, more than a
+page may have; a helper that never answers, killed at its deadline, by Stop, by a new load; allocation failures;
+nothing held, no child left and no descriptor open at the end of each. And the window's loop itself, with a browser
+and a pipe for its events.
 */
 
 #include <stdio.h>
@@ -17,6 +19,7 @@ allocation failures; nothing held and no child left at the end of each.
 #include <signal.h>
 #include <time.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
 #include <sys/wait.h>
@@ -46,8 +49,10 @@ time_t ut_sim_time(time_t *t) { if(t) *t = 0; return 0; }
 
 static const unsigned char *script;
 static size_t script_len, script_cut = (size_t)-1;
-static int script_bytewise, script_hang, spawn_fails;
+static int script_bytewise, script_hang, script_faults, spawn_fails;
+static int held_fd = -1;                /* a faulted helper's write end: it stays open until the helper is collected */
 static char asked_kind[16], asked_url[WB_ADDR_MAX];
+const char *ld_self = LD_SELF;
 
 int ld_spawn(const char *kind, const char *url, int fd) {
     pid_t pid;
@@ -58,12 +63,17 @@ int ld_spawn(const char *kind, const char *url, int fd) {
         return -1;
     }
     fflush(stdout);
+    if(script_faults) held_fd = dup(fd);
     pid = fork();
     if(pid == 0) {
         size_t i, n = script_cut < script_len ? script_cut : script_len;
         signal(SIGPIPE, SIG_DFL);
-        if(script_bytewise) for(i = 0; i < n; i++) (void)!write(fd, script + i, 1);
-        else {
+        if(script_bytewise) {
+            for(i = 0; i < n; i++) {
+                (void)!write(fd, script + i, 1);
+                usleep(50);             /* so that the window sees them apart */
+            }
+        } else {
             size_t done = 0;
             while(done < n) {
                 ssize_t k = write(fd, script + done, n - done);
@@ -81,6 +91,10 @@ void ld_kill(int pid) { kill(pid, SIGKILL); }
 
 int ld_collect(void) {
     int st, r = waitpid(-1, &st, WNOHANG);
+    if(r > 0 && held_fd >= 0) {         /* SurfOS: a killed task's descriptors close at its reap */
+        close(held_fd);
+        held_fd = -1;
+    }
     return r < 0 ? -1 : r > 0;
 }
 
@@ -113,12 +127,22 @@ static int until_end(int slot) {
     }
 }
 
+static int open_fds(void) {
+    int fd, n = 0;
+    for(fd = 0; fd < 128; fd++) if(fcntl(fd, F_GETFD) != -1) n++;
+    return n;
+}
+
+static int base_fds;
+
 static void all_gone(const char *what) {
     char s[200];
-    int tries;
+    int tries, st;
     for(tries = 0; tries < 2000 && ld_reap(&L); tries++) usleep(1000);
     snprintf(s, sizeof(s), "%s: every helper collected", what);
-    check(!L.zombies, s);
+    check(!L.zombies && waitpid(-1, &st, WNOHANG) == -1 && errno == ECHILD, s);
+    snprintf(s, sizeof(s), "%s: no descriptor left open", what);
+    check(open_fds() == base_fds, s);
     snprintf(s, sizeof(s), "%s: nothing held", what);
     check(ut_alloc_live == 0, s);
 }
@@ -173,7 +197,9 @@ static void good_page(int bytewise) {
     Q.reload = 1;
     check(!ld_start(&L, &Q, err, sizeof(err)) && ld_busy(&L), "a helper starts");
     check(!strcmp(asked_kind, "page") && !strcmp(asked_url, "https://a.test/asked"), "it is told the kind and the address");
+    ut_alloc_fill = 0x5a;               /* what it reads into is not zeroed for it */
     check(until_end(0), what);
+    ut_alloc_fill = -1;
     check(!R.failed && R.kind == WB_LOAD_PAGE && R.reload == 1 && R.page == 7 && !strcmp(R.asked, "https://a.test/asked"), "the answer says what was asked");
     check(!strcmp(R.url, "https://a.test/final") && R.len == 21 && !memcmp(R.body, "<title>T</title>Hello", 22), "the address it ended at, and the body with its NUL");
     check(R.status == 200 && !strcmp(R.reason, "OK") && !strcmp(R.type, "text/html"), "its head");
@@ -181,6 +207,30 @@ static void good_page(int bytewise) {
     check(!ld_busy(&L), "its slot is free");
     ut_test_free(R.body);
     all_gone(what);
+}
+
+/* A helper's strings come through as safe text, whatever they hold */
+static void unsafe_strings(void) {
+    char err[200];
+    struct ld_head h = head(LD_BODY, 12, 4);
+    snprintf(h.tls, sizeof(h.tls), "T\x1b[31m");
+    snprintf(h.reason, sizeof(h.reason), "R\x1b[2J\n");
+    snprintf(h.type, sizeof(h.type), "t/\x07");
+    snprintf(h.charset, sizeof(h.charset), "c\x1b");
+    h.redirects = 77;
+    msg_len = 0;
+    add(&h, sizeof(h));
+    add("https://a.t/", 12);
+    add("body", 4);
+    go(msg, msg_len);
+    ask(WB_LOAD_PAGE, "https://a.t/");
+    ld_start(&L, &Q, err, sizeof(err));
+    check(until_end(0) && !R.failed, "an answer with escapes in its strings");
+    check(!strchr(R.tls, 0x1b) && !strchr(R.reason, 0x1b) && !strchr(R.reason, '\n') && !strchr(R.type, 7) && !strchr(R.charset, 0x1b),
+          "they arrive safe");
+    check(!R.redirects, "a number of redirects that cannot be is none");
+    ut_test_free(R.body);
+    all_gone("escapes");
 }
 
 static void good_picture(void) {
@@ -262,7 +312,7 @@ struct lie { const char *what; struct ld_head h; const char *url; const void *re
 static void lies(void) {
     static const unsigned int two[2] = { 1, 2 };
     struct ld_head h, base = head(LD_BODY, 12, 4);
-    static struct lie t[32];
+    static struct lie t[48];
     int n = 0, i;
     char err[200];
 #define LIE(name, field, value, k) do { h = base; h.field; t[n].what = name; t[n].h = h; t[n].url = "https://a.t/"; t[n].rest = "body"; t[n].restlen = 4; t[n].kind = k; n++; (void)(value); } while(0)
@@ -282,12 +332,36 @@ static void lies(void) {
     base.w = base.pw = 2;
     base.h = base.ph = 1;
     LIE("pixels for a page", status = 200, 0, WB_LOAD_PAGE);
-    LIE("a picture of no width", w = 0, 0, WB_LOAD_IMAGE);
-    LIE("pixels of no height", ph = 0, 0, WB_LOAD_IMAGE);
     LIE("wider pixels than the picture", pw = 3, 0, WB_LOAD_IMAGE);
     LIE("taller pixels than the picture", ph = 2, 0, WB_LOAD_IMAGE);
     LIE("a picture of 5000 pixels", w = 5000, 0, WB_LOAD_IMAGE);
+    LIE("a picture 5000 high", h = 5000, 0, WB_LOAD_IMAGE);
     LIE("the wrong length for its pixels", len = 12, 0, WB_LOAD_IMAGE);
+    LIE("pixels with no address", url_len = 0, 0, WB_LOAD_IMAGE);
+    LIE("pixels of a status of 0", status = 0, 0, WB_LOAD_IMAGE);
+    /* no size: the lengths agree, so only the sizes themselves can say no */
+    base.len = 0;
+    LIE("a picture of no pixels across", pw = 0, 0, WB_LOAD_IMAGE);
+    LIE("a picture of no pixels down", ph = 0, 0, WB_LOAD_IMAGE);
+    {
+        h = base;
+        h.w = h.pw = 0;
+        t[n].what = "a picture of no width";
+        t[n].h = h;
+        t[n].url = "https://a.t/";
+        t[n].rest = two;
+        t[n].restlen = 0;
+        t[n++].kind = WB_LOAD_IMAGE;
+        h = base;
+        h.h = h.ph = 0;
+        t[n].what = "a picture of no height";
+        t[n].h = h;
+        t[n].url = "https://a.t/";
+        t[n].rest = two;
+        t[n].restlen = 0;
+        t[n++].kind = WB_LOAD_IMAGE;
+    }
+    base.len = 8;
     {                                   /* 2^16 x 2^16 x 4 is 0 in 32 bits */
         h = base;
         h.w = h.pw = h.h = h.ph = 0x10000;
@@ -309,8 +383,17 @@ static void lies(void) {
         t[n++].kind = WB_LOAD_IMAGE;
     }
     base = head(LD_FAILED, 0, 4);
-    LIE("a failure with an address", url_len = 3, 0, WB_LOAD_PAGE);
     LIE("a failure of 4 GB", len = 0xffffffffu, 0, WB_LOAD_PAGE);
+    {                                   /* only the address is wrong: the bytes that follow would be a good failure */
+        h = base;
+        h.url_len = 3;
+        t[n].what = "a failure with an address";
+        t[n].h = h;
+        t[n].url = "abc";
+        t[n].rest = "body";
+        t[n].restlen = 4;
+        t[n++].kind = WB_LOAD_PAGE;
+    }
     for(i = 0; i < n; i++) {
         msg_len = 0;
         add(&t[i].h, sizeof(t[i].h));
@@ -322,10 +405,34 @@ static void lies(void) {
         ut_alloc_fail_after = -1;
         check(!ld_start(&L, &Q, err, sizeof(err)), "a helper starts");
         check(until_end(t[i].kind == WB_LOAD_PAGE ? 0 : 1), t[i].what);
-        check(R.failed && !R.body && R.why[0], t[i].what);
+        check(R.failed && !R.body && (strstr(R.why, "no answer") || strstr(R.why, "as many pictures")), t[i].what);
         if(!R.failed) ut_test_free(R.body);
         all_gone(t[i].what);
     }
+    /* a failure's size is believed only within the limits; a picture too large for any frame gives none */
+    h = head(LD_FAILED, 0, 2);
+    h.w = 5000;
+    h.h = 4000;
+    msg_len = 0;
+    add(&h, sizeof(h));
+    add("no", 2);
+    go(msg, msg_len);
+    ask(WB_LOAD_IMAGE, "https://a.t/");
+    ld_start(&L, &Q, err, sizeof(err));
+    check(until_end(1) && R.failed && !R.w && !R.h, "a failure with a size past the limits");
+    h = head(LD_PIXELS, 12, 8);
+    h.w = 5000;
+    h.h = 1;
+    h.pw = 2;
+    h.ph = 1;
+    msg_len = 0;
+    add(&h, sizeof(h));
+    go(msg, msg_len);
+    script_hang = 1;
+    ask(WB_LOAD_IMAGE, "https://a.t/");
+    ld_start(&L, &Q, err, sizeof(err));
+    check(until_end(1) && R.failed && !R.w, "a picture past the limits has no frame's size to give");
+    all_gone("sizes past the limits");
     /* an address with a NUL in it */
     h = head(LD_BODY, 12, 4);
     msg_len = 0;
@@ -335,6 +442,7 @@ static void lies(void) {
     go(msg, msg_len);
     ask(WB_LOAD_PAGE, "https://a.t/");
     ld_start(&L, &Q, err, sizeof(err));
+    script_hang = 1;
     check(until_end(0) && R.failed, "a NUL inside an address");
     all_gone("a NUL");
     /* strings that do not end */
@@ -420,6 +528,78 @@ static void stuck(void) {
     all_gone("no process");
 }
 
+/**** the loop ****/
+
+static struct wb B;
+
+/* ld_start_loads() and ld_wait() as the window goes round, with fd for its events, until the browser is done or
+   seconds have passed: the passes it took */
+static int loop(int fd, int seconds) {
+    time_t end = (time)(NULL) + seconds;
+    int win, n = 0;
+    while((time)(NULL) < end) {
+        ld_start_loads(&L, &B);
+        if(!ld_busy(&L) && !wb_busy(&B)) break;
+        ld_wait(&L, &B, fd, &win);
+        n++;
+    }
+    return n;
+}
+
+static void the_loop(void) {
+    int ev[2], win = 1;
+    char c = 'k';
+    check(!pipe(ev), "a pipe for the window's events");
+    check(!wb_init(&B, 640, 400), "a browser");
+    /* a page */
+    body_answer("https://a.test/", "<title>Loop</title><p>Hello");
+    go(msg, msg_len);
+    wb_go(&B, "https://a.test/");
+    loop(ev[0], 5);
+    check(B.npages == 1 && !strcmp(wb_current(&B)->doc.title, "Loop") && !wb_busy(&B), "a page through the loop");
+    /* a helper that faults: nothing on the pipe, its write end open until it is collected, and nobody known to be owed
+       a collecting: the page's helper has gone by now */
+    while(ld_reap(&L)) usleep(1000);
+    check(!L.zombies, "nobody is owed a collecting");
+    go(msg, 0);
+    script_faults = 1;
+    wb_go(&B, "https://faults.test/");
+    now_ms = 500000;
+    loop(ev[0], 5);
+    script_faults = 0;
+    check(!wb_busy(&B) && strstr(B.status, "helper stopped") != NULL, "a helper that faults: said at once, not at its deadline");
+    check(B.npages == 1, "and the page stays");
+    /* the window's events and a deadline: ld_wait() says the window has none when it comes by the deadline */
+    go(msg, 0);
+    script_hang = 1;
+    wb_go(&B, "https://never.test/");
+    ld_start_loads(&L, &B);
+    check(write(ev[1], &c, 1) == 1, "an event");
+    ld_wait(&L, &B, ev[0], &win);
+    check(win == 1 && wb_busy(&B), "the window has events");
+    (void)!read(ev[0], &c, 1);
+    now_ms += LD_PAGE_MS + 1;
+    check(ld_wait(&L, &B, ev[0], &win) == 1 && !win && !wb_busy(&B) && strstr(B.status, "too long") != NULL,
+          "past the deadline: a failed load, and no word of events");
+    now_ms += 10;
+    /* Stop: the helper goes */
+    wb_go(&B, "https://never.test/");
+    ld_start_loads(&L, &B);
+    check(ld_busy(&L), "a helper at work");
+    wb_stop(&B);
+    ld_start_loads(&L, &B);
+    check(!ld_busy(&L), "Stop: gone");
+    /* no helper to be had */
+    spawn_fails = 1;
+    wb_go(&B, "https://x.test/");
+    check(ld_start_loads(&L, &B) == 1 && !wb_busy(&B) && strstr(B.status, "no helper") != NULL, "no helper: a failed load");
+    spawn_fails = 0;
+    wb_free(&B);
+    close(ev[0]);
+    close(ev[1]);
+    all_gone("the loop");
+}
+
 static void memory(void) {
     char err[200];
     long n, fails = 0;
@@ -441,13 +621,16 @@ static void memory(void) {
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
     ld_init(&L);
+    base_fds = open_fds();
     good_page(0);
     good_page(1);
+    unsafe_strings();
     good_picture();
     failure_answer();
     dies();
     lies();
     stuck();
+    the_loop();
     memory();
     if(failures) {
         printf("WUNDERTOW LOADER TESTS FAILED: %d of %d checks\n", failures, checks);

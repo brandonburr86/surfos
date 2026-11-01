@@ -993,8 +993,8 @@ unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
-$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c $(BUILD)/host/wundertow/loader.o \
-                                   $(addprefix $(BUILD)/host/undertow/,url.o util.o alloc.o)
+$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o) \
+                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@

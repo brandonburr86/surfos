@@ -16,6 +16,8 @@ for them.
 #include "browser.h"
 #include "loader.h"
 
+const char *ld_self = LD_SELF;
+
 int ld_spawn(const char *kind, const char *url, int out_fd) {
     static char env[sizeof(LD_URL_ENV) + WB_ADDR_MAX];
     char *argv[4], *envp[2];
@@ -33,7 +35,7 @@ int ld_spawn(const char *kind, const char *url, int out_fd) {
     o.fds[2] = SPAWN_CLOSED;
     o.fds[3] = -1;
     o.envp = envp;
-    return spawnx(LD_SELF, argv, &o);
+    return spawnx(ld_self, argv, &o);
 }
 
 void ld_kill(int pid) {

@@ -11,6 +11,7 @@ alloc.h. Built without the renames, so these are the host's own functions.
 #include "alloc.h"
 
 long ut_alloc_live, ut_alloc_calls, ut_alloc_fail_after = -1;
+int ut_alloc_fill = -1;
 
 static int refuse(void) {
     ut_alloc_calls++;
@@ -25,6 +26,7 @@ void *ut_test_malloc(size_t n) {
     if(refuse()) return NULL;
     p = malloc(n ? n : 1);
     if(p) ut_alloc_live++;
+    if(p && ut_alloc_fill >= 0) memset(p, ut_alloc_fill, n ? n : 1);
     return p;
 }
 
