@@ -782,13 +782,19 @@ $(BUILD)/host/test_tar: tests/host/test_tar.c tests/host/ar_host.h tests/host/ar
                         $(addprefix $(BUILD)/host/archive/,tar/tar.o tar/tarfile.o tar/arpath.o gzip/gzfile.o) $(AR_TEST_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
+$(BUILD)/host/test_unzip: tests/host/test_unzip.c tests/host/ar_host.h tests/host/ar_sim.h \
+                          $(addprefix $(BUILD)/host/archive/,unzip/unzip.o unzip/zipfile.o tar/arpath.o) \
+                          $(BUILD)/host/kernel/driver/cp437.o $(AR_TEST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
 -include $(wildcard $(BUILD)/host/archive/*/*.d)
 unittest: unittest-archive
 .PHONY: unittest-archive
-unittest-archive: $(BUILD)/host/test_deflate $(BUILD)/host/test_gztool $(BUILD)/host/test_tar
+unittest-archive: $(BUILD)/host/test_deflate $(BUILD)/host/test_gztool $(BUILD)/host/test_tar $(BUILD)/host/test_unzip
 	$(BUILD)/host/test_deflate
 	$(BUILD)/host/test_gztool
 	$(BUILD)/host/test_tar
+	$(BUILD)/host/test_unzip
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
