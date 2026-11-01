@@ -31,6 +31,7 @@ pagetest alt    10/25/26 (track A, A8): the alternate screen (ESC[?1049h) with "
                 screen: the console gives the main screen back by itself.
 */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,7 +97,12 @@ int main(int argc, char **argv) {
         return 0;
     }
     if(argc == 3 && !strcmp(argv[1], "hold")) {
-        if(ttyctl(TTY_PAGE, 1) < 0) perror("pagetest: TTY_PAGE");
+        /* 11/1/26: a job in the background can get here while its shell still holds the pager for the line that
+           started it, which is EBUSY (tty.h), and its message came below the shell's next prompt: the shell lets
+           go in a moment */
+        int r, tries = 200;
+        while((r = ttyctl(TTY_PAGE, 1)) < 0 && errno == EBUSY && --tries) msleep(10);
+        if(r < 0) perror("pagetest: TTY_PAGE");
         msleep((unsigned int)atoi(argv[2]));
         printf("PAGETEST HELD\n");
         return 0;
