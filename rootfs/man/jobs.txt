@@ -1,0 +1,30 @@
+jobs - the jobs of this shell
+
+SYNOPSIS
+    jobs
+    fg [%n]
+    bg [%n]
+    wait [%n|pid...]
+
+DESCRIPTION
+    A job is what one command started. cmd & starts one in the
+    background, and Ctrl+Z stops the one in the foreground. jobs lists
+    them: number, state, command. fg brings job n, or the last, to the
+    foreground again; bg lets it go on in the background. wait waits for
+    those to end, or all of them; Ctrl+C ends the wait.
+
+    %n is a job's number, %% and %+ the last job, %- the one before; a
+    job's pid works too. A job in the background that reads the terminal
+    stops until fg gives it the keys. When the shell ends, its stopped
+    jobs are killed.
+
+    A surfsh that run started in the ring-0 shell has no job control: fg
+    and bg say so.
+
+EXAMPLES
+    count 100 100 &
+    jobs
+    fg %1
+
+SEE ALSO
+    kill, ps, surfsh

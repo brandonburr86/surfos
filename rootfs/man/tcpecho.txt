@@ -1,0 +1,19 @@
+tcpecho - a TCP echo server
+
+SYNOPSIS
+    tcpecho [port]
+    tcpecho stop
+
+DESCRIPTION
+    Starts a server as a kernel thread that sends back what comes, on
+    port 7 unless given, a connection at a time. It says each connection
+    on the console that started it. A connection ends after a minute
+    without data. stop ends every server, waiting 3 seconds at most.
+    kill does not end it: kernel threads are not killed.
+
+EXAMPLES
+    tcpecho 2323
+    tcpecho stop
+
+SEE ALSO
+    nc, nettest, netstat

@@ -1,0 +1,19 @@
+rm - delete files and directories
+
+SYNOPSIS
+    rm [-rf] path...
+
+DESCRIPTION
+    Deletes files. There is no way back. kernel rm deletes files, with
+    no options.
+
+OPTIONS
+    -r, -R  Directories too, with everything in them.
+    -f      Say nothing about paths that do not exist.
+
+EXAMPLES
+    rm /hda1/OLD.TXT
+    rm -r /hda1/site
+
+SEE ALSO
+    rmdir, mv

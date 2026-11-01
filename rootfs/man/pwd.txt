@@ -1,0 +1,10 @@
+pwd - print the current directory
+
+SYNOPSIS
+    pwd
+
+DESCRIPTION
+    Prints the current directory, and kernel pwd the same, indented.
+
+SEE ALSO
+    cd

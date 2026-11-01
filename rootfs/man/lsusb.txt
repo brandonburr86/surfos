@@ -1,0 +1,11 @@
+lsusb - USB controllers and what is plugged in
+
+SYNOPSIS
+    lsusb
+
+DESCRIPTION
+    Lists the USB controller and every device, with what drives it.
+    +USB: lines in dmesg record plugging and errors.
+
+SEE ALSO
+    lspci, lsblk, drivers, dmesg

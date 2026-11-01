@@ -1,0 +1,17 @@
+mkdir - make directories
+
+SYNOPSIS
+    mkdir [-p] directory...
+
+DESCRIPTION
+    Makes each directory. kernel mkdir makes one, with no options.
+
+OPTIONS
+    -p  Make the missing parents too, and say nothing about a directory
+        that exists.
+
+EXAMPLES
+    mkdir -p /hda1/a/b/c
+
+SEE ALSO
+    rmdir, rm, cd

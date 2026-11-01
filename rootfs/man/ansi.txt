@@ -1,0 +1,19 @@
+ansi - the terminal's two sides, by hand
+
+SYNOPSIS
+    ansi
+    rawkeys
+
+DESCRIPTION
+    ansi draws a test pattern with the escape sequences the console
+    knows, laid out for the screen tests, and says the terminal's size
+    at the end. rawkeys puts the terminal in raw mode and shows the
+    bytes each key sends, in hexadecimal, until q; it reads the keyboard
+    as it goes, so its output cannot go to a file.
+
+EXAMPLES
+    ansi
+    rawkeys
+
+SEE ALSO
+    pagetest, clear

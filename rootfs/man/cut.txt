@@ -1,0 +1,31 @@
+cut - pick parts of each line
+
+SYNOPSIS
+    cut -b list [file...]
+    cut -c list [file...]
+    cut -f list [-d delim] [-s] [file...]
+
+DESCRIPTION
+    Prints parts of each line of the files, or of standard input without
+    one.
+
+    A list is numbers from 1 and ranges, separated by commas: 3, 2-4, 5-
+    (to the end), -3 (from the start). The parts come out in the line's
+    order, each once, whatever order the list has them in.
+
+    With -f, the chosen fields are joined by the delimiter again, and a
+    line with no delimiter comes out whole.
+
+OPTIONS
+    -b list   Count bytes.
+    -c list   Count characters: a UTF-8 sequence is one.
+    -f list   Count fields.
+    -d delim  The delimiter of -f, one character; a TAB without it.
+    -s        With -f, leave out lines that have no delimiter.
+
+EXAMPLES
+    echo a:b:c | cut -d: -f2,3
+    ls -l /hda1 | cut -c1-20
+
+SEE ALSO
+    tr, grep, sort

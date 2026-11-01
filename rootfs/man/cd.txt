@@ -1,0 +1,16 @@
+cd - change the directory
+
+SYNOPSIS
+    cd [dir]
+
+DESCRIPTION
+    Moves this shell to a directory. Alone it goes to /: SurfOS has no
+    users or home directories. cd - goes back to the directory before
+    and prints it. PWD and OLDPWD follow. kernel cd takes no -.
+
+EXAMPLES
+    cd /hda1
+    cd -
+
+SEE ALSO
+    pwd, ls, surfsh

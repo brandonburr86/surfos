@@ -1,0 +1,42 @@
+settings - the settings on the stick
+
+SYNOPSIS
+    settings
+    settings key
+    settings key value
+
+DESCRIPTION
+    Alone it lists every setting and where they are kept; with a key it
+    says that one's value, the values it takes and what it does; with a
+    value it changes it, also written settings key = value.
+
+    They are saved in surfos-config/settings.conf on the stick SurfOS
+    was started from, one line at a time, so what you wrote there on
+    another computer stays. Every start reads them. A change not saved
+    on the stick is a failure, and says why.
+
+    A key or a value it does not know is status 2, and a change not
+    saved is 1.
+
+KEYS
+    telnetd       on or off: the telnet server at startup, on Ethernet
+                  or a WPA2 network. No password: your own networks
+                  only.
+    telnetd.port  The port it listens on, 23 unless set.
+    wifi          on or off: join the first saved Wi-Fi network in range
+                  at startup, and again when it comes back. On unless
+                  set.
+    ethernet      dhcp: an address whenever an Ethernet link comes up.
+                  off, the default: the dhcp command.
+    hostname      Letters, digits and -: the name DHCP requests give,
+                  which the router lists. surfos unless set.
+    history       on or off: surfsh keeps the lines typed at its prompts
+                  in surfos-config/history, as plain text.
+
+EXAMPLES
+    settings
+    settings telnetd
+    settings hostname laptop
+
+SEE ALSO
+    wifi, telnetd, history, set

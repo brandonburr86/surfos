@@ -1,0 +1,23 @@
+cat - copy files to standard output
+
+SYNOPSIS
+    cat [file...]
+
+DESCRIPTION
+    Copies each file in turn to standard output, byte for byte. Without
+    a file it reads standard input, and - stands for standard input
+    among the files. It takes no options.
+
+    A file that cannot be read is said on standard error, the others
+    still go out, and the status is 1.
+
+    The kernel has a cat of its own, which kernel cat runs. It needs a
+    file, and it is for looking at text: a control character prints as a
+    dot and a CR is dropped.
+
+EXAMPLES
+    cat /initrd/motd
+    dmesg | cat - /hda1/NOTES.TXT
+
+SEE ALSO
+    head, tail, less, hexdump, tee

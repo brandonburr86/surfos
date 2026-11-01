@@ -1,0 +1,25 @@
+wundertow - the web browser in a window
+
+SYNOPSIS
+    wundertow [address]
+    wundertow --layout address [width]
+    wundertow --render address file [width]
+
+DESCRIPTION
+    A window on the desktop of the terminal it was started from. An
+    address is a web address, https:// when it names no scheme, or a
+    file on this computer, /path or file:///path. It uses Undertow's
+    network, HTTPS checks, settings and clock, and loading waits for the
+    page, a minute at most.
+
+    --layout prints the page laid out at a width in pixels, 640 unless
+    given, as text; --render paints it into a BMP picture. Neither needs
+    a window. Without a desktop, on a telnet session for one, a window
+    is refused.
+
+EXAMPLES
+    wundertow /hda1/index.html &
+    wundertow --render example.com /hda1/PAGE.BMP
+
+SEE ALSO
+    undertow, gui, fetch

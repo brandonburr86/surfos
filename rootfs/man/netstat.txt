@@ -1,0 +1,13 @@
+netstat - interfaces, sockets and the ARP table
+
+SYNOPSIS
+    netstat
+    arp
+
+DESCRIPTION
+    netstat shows the network interfaces, then the open UDP and TCP
+    sockets. arp shows the table of addresses learned on the local
+    network.
+
+SEE ALSO
+    ifconfig, ping, nc

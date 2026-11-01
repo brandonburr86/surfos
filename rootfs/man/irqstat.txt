@@ -1,0 +1,11 @@
+irqstat - interrupt counts
+
+SYNOPSIS
+    irqstat
+
+DESCRIPTION
+    Lists how many times each interrupt line has fired since boot, those
+    that have, and the spurious ones.
+
+SEE ALSO
+    drivers, uptime

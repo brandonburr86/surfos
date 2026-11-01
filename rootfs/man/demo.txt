@@ -1,0 +1,20 @@
+demo - the 2004 demonstrations
+
+SYNOPSIS
+    demo
+    hanoi
+    beep
+    funky
+
+DESCRIPTION
+    demo is the 2004 menu: exception handling, string comparison and a
+    colourful console, with q to leave. hanoi prints the moves of the
+    Towers of Hanoi for a number of discs, typed as one digit, until 0.
+    beep sounds the PC speaker at 2000 Hz for a second. funky plays a
+    tune in a task of its own and returns at once.
+
+    demo and hanoi read the keyboard as they go, so their output cannot
+    go to a file.
+
+SEE ALSO
+    tests, selftest

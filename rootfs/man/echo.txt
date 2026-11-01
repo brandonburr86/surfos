@@ -1,0 +1,21 @@
+echo - print words
+
+SYNOPSIS
+    echo [-n] [-e] [word...]
+
+DESCRIPTION
+    Prints the words with single spaces between them and a newline. In
+    surfsh this is its own command; the program /initrd/bin/echo does
+    the same, for where there is no shell to ask, and kernel echo prints
+    its words with no options.
+
+OPTIONS
+    -n  No newline at the end.
+    -e  Turn \n \r \t and \\ into the characters they name.
+
+EXAMPLES
+    echo hello > /hda1/HELLO.TXT
+    echo -n "no line end"
+
+SEE ALSO
+    printf, cat

@@ -1,0 +1,20 @@
+wc - count lines, words and bytes
+
+SYNOPSIS
+    wc [-l] [-w] [-c] [file...]
+
+DESCRIPTION
+    Prints the lines, words and bytes of each file, or of standard input
+    without files, and a total line for more than one file. It counts
+    bytes, not characters.
+
+OPTIONS
+    -l  Lines.
+    -w  Words.
+    -c  Bytes. With none of the three, all of them.
+
+EXAMPLES
+    ls /initrd/bin | wc -l
+
+SEE ALSO
+    cut, du

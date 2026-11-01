@@ -1,0 +1,33 @@
+xargs - run a command with words from standard input
+
+SYNOPSIS
+    xargs [-n N] [-t] [-0] [command [argument...]]
+
+DESCRIPTION
+    Runs the command, echo without one, with the words of standard input
+    after its own arguments, as many as one run takes, and again until
+    the words run out. A program takes 128 arguments in 8 KB, each at
+    most 255 bytes. No words: nothing runs.
+
+    Words are separated by blanks and newlines; '...' and "..." keep
+    blanks in a word and a backslash the next character.
+
+    The command is a program, or else a kernel command, as surfsh finds
+    them; surfsh's own commands are not. A program's standard input is
+    /dev/null.
+
+    The status is 0; 123 when a run failed; 124 when one was killed, and
+    xargs stops there; 126 when the command could not start; 127 when it
+    is nowhere.
+
+OPTIONS
+    -n N  N words at most in a run.
+    -t    Say each command on standard error before it runs.
+    -0    Words end with a NUL instead, and are taken as they are.
+
+EXAMPLES
+    find /hda1 -name '*.TMP' -print0 | xargs -0 rm
+    echo a b c | xargs -n 1 echo got
+
+SEE ALSO
+    find, surfsh

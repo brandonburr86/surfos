@@ -1,0 +1,21 @@
+eject - make a disk safe to pull out
+
+SYNOPSIS
+    eject disk
+
+DESCRIPTION
+    Writes out and unmounts all of a disk: disk is usb0, or one of its
+    partitions. Every mount is written out first, and none goes when one
+    cannot be, so a disk that refuses writes stays mounted, and eject
+    says so. Only when the disk has confirmed its own cache does eject
+    say safe to remove.
+
+    Ctrl+C before the unmounting starts leaves the disk mounted; once it
+    has started, it finishes. A disk already pulled out is only let go
+    of.
+
+EXAMPLES
+    eject usb1
+
+SEE ALSO
+    mount, sync, lsblk

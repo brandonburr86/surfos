@@ -1,0 +1,16 @@
+write - make a file of one line
+
+SYNOPSIS
+    write file text...
+
+DESCRIPTION
+    Writes the words, separated by blanks, and a newline into a file. A
+    file of that name is replaced: emptied first. It is for the ring-0
+    shell, which has no redirections; in surfsh, echo text > file does
+    the same.
+
+EXAMPLES
+    write /hda1/NOTE.TXT hello there
+
+SEE ALSO
+    echo, tee, edit

@@ -1,0 +1,32 @@
+telnetd - the telnet server
+
+SYNOPSIS
+    telnetd on [port]
+    telnetd off
+    telnetd [status]
+
+DESCRIPTION
+    Lets another computer telnet to this one and get surfsh on a
+    pseudo-terminal of its own. There is no login and no encryption:
+    whoever reaches the port has a shell with every kernel command, so
+    it runs only when it is turned on, on a network of your own. While
+    it runs the Wi-Fi keeper joins no open network by itself.
+
+    on starts it in the background, on port 23 unless given another. Not
+    in a telnet session: a server started there would end with that
+    session. off stops it, which ends every session. status says whether
+    it runs, its pid, and the shells of its sessions.
+
+    settings telnetd on starts it at every start, on Ethernet or a WPA2
+    network only.
+
+    The status is 0, 1 for a failure, such as a server that runs
+    already, and 2 for a mistake in the words.
+
+EXAMPLES
+    telnetd on
+    telnetd
+    telnetd off
+
+SEE ALSO
+    settings, httpd, ftpd, ifconfig

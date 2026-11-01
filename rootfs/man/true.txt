@@ -1,0 +1,17 @@
+true - do nothing, with a status
+
+SYNOPSIS
+    true
+    false
+    : [args]
+
+DESCRIPTION
+    true and : do nothing and answer 0, and false answers 1. : is a
+    special builtin, which comes before a function of its name.
+
+EXAMPLES
+    while true; do sleep 1000; done
+    if false; then echo never; fi
+
+SEE ALSO
+    test, break

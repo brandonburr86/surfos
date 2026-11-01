@@ -1,0 +1,43 @@
+wifi - Wi-Fi
+
+SYNOPSIS
+    wifi up | down | scan | status | leave
+    wifi join ssid [bssid]
+    wifi save [ssid]
+    wifi forget ssid
+    wifi saved | connect
+    wifiinfo
+    wlansim on|off ssid
+
+DESCRIPTION
+    Drives the first Wi-Fi device, wlan0. up starts the card and down
+    stops it. scan lists what is in range, strongest first, with its
+    security in words. join joins a network, open or WPA2, scanning
+    first when it is not in the list; an SSID may have spaces. A WPA2
+    password is asked for with no echo, turned into a key at once, and
+    never shown, kept or logged. status gives the state, the last
+    failure and the address, and leave leaves the network. An address
+    comes from dhcp wlan0.
+
+    Saved networks are kept on the stick SurfOS was started from, in
+    surfos-config/networks.conf, with their keys and never a password.
+    wifi save saves the network joined now, or asks for another's
+    password; forget removes one; saved lists them; connect does what a
+    start does. While telnetd or ftpd runs, SurfOS joins no open network
+    by itself.
+
+    wifiinfo prints what a Wi-Fi driver needs to know about this
+    machine's card, reading only. wlansim switches the simulated access
+    points that the kernel word wlansim makes, for tests.
+
+    Only the laptop's Intel 9560 has a driver. QEMU has no card without
+    wlansim.
+
+EXAMPLES
+    wifi up
+    wifi scan
+    wifi join "My Network"
+    wifi save
+
+SEE ALSO
+    settings, dhcp, ifconfig

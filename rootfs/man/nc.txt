@@ -1,0 +1,43 @@
+nc - a TCP connection by hand
+
+SYNOPSIS
+    nc [-v] [-c] [-w seconds] host port
+    nc [-v] [-c] [-w seconds] -l port
+    nc [-v] -z host port...
+
+DESCRIPTION
+    Makes a connection, or waits for one, to see what a server says, to
+    talk to it, or to send a file to another computer. What is typed, a
+    line at a time, or a file given with <, goes out; what comes back is
+    printed, or saved with >, byte for byte. When a file given with <
+    ends, nc says so to the other end with a half-close, and the answer
+    still comes back. It ends when both ways have ended, or at the other
+    end's close when the input is typed.
+
+    The console reads a line when its Enter comes, and has no key for
+    the end of the input: Ctrl+C ends nc. The Mac's nc works the same
+    way, so either one sends a file to the other.
+
+    The status is 0 when the connection ended both ways, or for -z every
+    port was open; 1 for an error or a port that is not open; 2 for a
+    mistake in the words.
+
+OPTIONS
+    -l port     Wait for one connection to the port, from anyone. Where
+                it listens and who connected go to standard error.
+    -z          Say whether each port is open: a connection made and
+                closed at once. A port may be a range, first-last, of
+                1000 ports at most.
+    -v          Say both ends of the connection and why it ended.
+    -c          Send CR LF for each line typed, for a mail or web server
+                talked to by hand.
+    -w seconds  End a connection silent that long, and nc -l when no
+                connection comes within it.
+
+EXAMPLES
+    nc -l 9000 > /hda1/FILE.BIN
+    nc 10.0.0.4 9000 < /hda1/FILE.BIN
+    nc -z 10.0.2.2 20-25
+
+SEE ALSO
+    ftpd, fetch, rx, httpget

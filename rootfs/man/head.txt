@@ -1,0 +1,18 @@
+head - the first lines
+
+SYNOPSIS
+    head [-n N | -N] [file...]
+
+DESCRIPTION
+    Prints the first 10 lines of each file, or of standard input without
+    one. With more than one file each gets a ==> name <== heading.
+
+OPTIONS
+    -n N, -N  N lines, not 10.
+
+EXAMPLES
+    dmesg | head -20
+    head -n 3 /initrd/motd
+
+SEE ALSO
+    tail, less, cat

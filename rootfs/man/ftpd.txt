@@ -1,0 +1,42 @@
+ftpd - the file transfer server
+
+SYNOPSIS
+    ftpd on [-r] [-a address] [folder] [port] [first-last]
+    ftpd serve [-r] [-a address] [folder] [port] [first-last]
+    ftpd off
+    ftpd [status]
+
+DESCRIPTION
+    Lets other computers copy files from and to a folder of SurfOS over
+    FTP: the Mac's Finder and curl, FileZilla and the like. Any user
+    name and password are taken: there are no logins and nothing is
+    encrypted, so use it only on a network of your own. While it runs
+    the Wi-Fi keeper joins no open network by itself. It never starts by
+    itself.
+
+    on starts it in the background: the folder (/, every mounted volume
+    at its own path) on the port (21), passive data connections on first
+    to last (50000-50999). The words come in any order: a word of digits
+    is the port, two numbers joined by a - the range, anything else the
+    folder. serve runs the same server on this console, printing each
+    command with its reply's code (passwords as ****) until Ctrl+C. off
+    stops the background server.
+
+    It reaches only the folder it was given, never /dev. A data
+    connection comes only from the client's own address, and it connects
+    out only to that, on ports from 1024.
+
+    The status is 0, 1 for a failure, and 2 for a mistake in the words.
+
+OPTIONS
+    -r          Read-only.
+    -a address  The address passive replies name, for clients that reach
+                this server through a router, or QEMU's user network.
+
+EXAMPLES
+    ftpd on /hda1
+    ftpd on -r /usb1p1 2121
+    ftpd off
+
+SEE ALSO
+    httpd, telnetd, nc, fetch

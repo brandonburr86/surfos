@@ -1,0 +1,42 @@
+undertow - a text web browser
+
+SYNOPSIS
+    undertow [address]
+    undertow --dump address
+    undertow --help
+
+DESCRIPTION
+    Reads pages on a terminal, one screen at a time, with a prompt under
+    them. It shows text and numbered links: no pictures, no JavaScript.
+    An address typed alone at the prompt opens too. Ctrl+C or Ctrl+D at
+    the prompt quits.
+
+    HTTPS checks the certificate chain, the name and the dates, with no
+    way to skip any of it; it needs a CPU with RDRAND and a clock that
+    is right. /initrd/etc/undertow.conf has its settings.
+
+    --dump prints the page's text and then its links on standard output,
+    and needs no terminal. The status is 0 for a 2xx response, 1 for any
+    other or a failure, and 2 for a mistake in the words.
+
+COMMANDS
+    open address   Open an address. o too.
+    NUMBER         Follow a link; go NUMBER too.
+    back, forward  Through the history; b and f.
+    reload         r.
+    Enter, next    The next screen.
+    prev, top      The one before, and the first.
+    links          List the links.
+    find words     Find text; findnext goes on.
+    history        The pages seen.
+    url            This page's address.
+    clock          See or set the time HTTPS checks against.
+    help           The commands; ? too.
+    quit           End; q too.
+
+EXAMPLES
+    undertow https://example.com/
+    undertow --dump example.com | head
+
+SEE ALSO
+    wundertow, fetch, httpget

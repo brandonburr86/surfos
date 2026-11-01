@@ -1,0 +1,17 @@
+ifconfig - show or set the network configuration
+
+SYNOPSIS
+    ifconfig
+    ifconfig interface address netmask [gateway] [dns]
+
+DESCRIPTION
+    Alone it shows the interfaces, their addresses and leases. With
+    words it sets an interface by hand, which ends any lease it had, and
+    announces the address on the network.
+
+EXAMPLES
+    ifconfig
+    ifconfig eth0 10.0.0.9 255.255.255.0 10.0.0.1
+
+SEE ALSO
+    dhcp, netstat, ping, wifi

@@ -1,0 +1,34 @@
+crash - misbehave on purpose
+
+SYNOPSIS
+    crash null|kernel|cli|hlt|io|int40|efault|stack|div|loop
+    crashdiv | crashgp | crashnull | crashint
+    crashstack [near]
+    crashfs | crashlock
+    die
+
+DESCRIPTION
+    Tests of what stops a fault. The program crash misbehaves in the way
+    it is told, and the kernel must survive with only that process gone.
+    efault and stack live through it and say so, and loop runs until it
+    is killed. Without a word it prints its usage.
+
+    The kernel commands do it in the kernel's own hands: crashdiv
+    divides by zero, crashgp loads a bad segment and crashnull writes
+    through a NULL pointer. Each kills the task that runs it, which at a
+    prompt is the shell, and init starts a new one. crashint raises an
+    unused vector, which is reported and survived. die starts a ring-3
+    task at a kernel address, which is killed at once.
+
+    crashstack overflows this task's kernel stack, or with near traps
+    close to its bottom, and HALTS THE MACHINE. crashfs and crashlock
+    fault inside a file system and holding a lock, which also stops the
+    system, and run only in the kernel shell (shell=kernel), not from a
+    program. Save your work first.
+
+EXAMPLES
+    crash null; echo $?
+    crashdiv
+
+SEE ALSO
+    tests, dmesg, selftest

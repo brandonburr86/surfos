@@ -1,0 +1,22 @@
+kill - end a job or a task
+
+SYNOPSIS
+    kill %n|pid...
+    kernel kill pid
+
+DESCRIPTION
+    In surfsh, kill %n kills job n's processes, the stopped ones too,
+    and a pid works as the kernel's kill does. %% and %+ are the last
+    job, %- the one before.
+
+    The kernel's kill ends a program or a ring-0 shell, never a kernel
+    thread, the idle task or init. There are no signals: a kill always
+    ends, and a program cannot catch it. Inside a system call or a
+    kernel command it waits for the end of that, then the task ends.
+
+EXAMPLES
+    kill %1
+    kill 42
+
+SEE ALSO
+    jobs, ps, top

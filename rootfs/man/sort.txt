@@ -1,0 +1,25 @@
+sort - sort lines
+
+SYNOPSIS
+    sort [-r] [-n] [-f] [-u] [file...]
+
+DESCRIPTION
+    Prints the lines of the files, or of standard input without them, in
+    order, byte by byte unless an option says otherwise. Every line is
+    held in memory, so what fits in memory can be sorted. There are no
+    keys or field options: cut first, or sort whole lines.
+
+OPTIONS
+    -r  The other way round.
+    -n  By the number each line begins with; blanks before it are
+        skipped, none counts as 0, and lines with the same number go
+        byte by byte.
+    -f  With case left out.
+    -u  Only the first of lines that compare equal.
+
+EXAMPLES
+    dmesg | sort
+    du -a /hda1 | sort -rn | head
+
+SEE ALSO
+    uniq, cut, tr

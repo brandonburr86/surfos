@@ -1,0 +1,14 @@
+sh - the first small user-mode shell
+
+SYNOPSIS
+    sh
+
+DESCRIPTION
+    A small shell from before surfsh. It runs programs from /initrd/bin
+    or by path and waits for them; takes < file, > file and >> file,
+    quotes, and a & at the end; and has cd, pwd, echo and exit of its
+    own. It has no pipelines, no variables and no kernel commands. Use
+    surfsh.
+
+SEE ALSO
+    surfsh

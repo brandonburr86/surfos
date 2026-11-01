@@ -1,0 +1,21 @@
+uniq - runs of equal lines, once
+
+SYNOPSIS
+    uniq [-c] [-d] [-u] [-i] [file]
+
+DESCRIPTION
+    Prints the lines of the file, or of standard input without one, each
+    run of equal lines next to each other once. Lines that are equal but
+    apart stay apart: sort first to count them all.
+
+OPTIONS
+    -c  With how many there were before each.
+    -d  Only the runs of more than one.
+    -u  Only the lines that stand alone.
+    -i  With case left out.
+
+EXAMPLES
+    sort /hda1/WORDS.TXT | uniq -c | sort -rn | head
+
+SEE ALSO
+    sort, wc

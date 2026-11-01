@@ -1,0 +1,14 @@
+clear - clear the screen
+
+SYNOPSIS
+    clear
+
+DESCRIPTION
+    Writes the escape sequences that reset the colours, show the cursor,
+    clear the screen and put the cursor at the top left, on this
+    terminal, not on the console that happens to show. clear > file puts
+    them in the file. Scrollback keeps what was on the screen, on a
+    framebuffer console.
+
+SEE ALSO
+    ansi
