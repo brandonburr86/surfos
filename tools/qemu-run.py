@@ -3063,7 +3063,9 @@ def memhog_hold_check(q):
     q.send('memhog hold 3000 &\n')
     ok = ok and q.expect('started (pid', 20) and q.expect('KB taken; holding them 3000 ms', 60)
     q.send('/initrd/bin/ls /initrd\n')
-    ok = ok and q.expect(re.compile(rb'motd|surfsh: /initrd/bin/ls: Out of memory'), 20) and q.expect(SURFSH_PROMPT, 20)
+    # (11/1/26: or it starts and then cannot load: "out of memory for a segment", "for the stack")
+    ok = ok and q.expect(re.compile(rb'motd|surfsh: /initrd/bin/ls: Out of memory|/initrd/bin/ls: out of memory for '), 20) \
+        and q.expect(SURFSH_PROMPT, 20)
     q.send('ps\n')
     ok = ok and q.expect('Kernel Idle Task', 20) and q.expect(SURFSH_PROMPT, 20)
     ok = ok and q.expect('memhog hold: given back', 60)
