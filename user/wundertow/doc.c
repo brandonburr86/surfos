@@ -1886,6 +1886,8 @@ static int finish(struct bd *b) {
     if(d->anchor_count) d->bytes += b->anchors_cap * sizeof(*d->anchors);
     for(i = 0; i < d->anchor_count; i++) d->bytes += strlen(d->anchors[i].name) + 1;
     for(i = 0; i < d->image_count; i++) if(d->images[i]) d->bytes += strlen(d->images[i]) + 1;
+    if(d->sheets) d->bytes += sizeof(*d->sheets);
+    for(i = 0; d->sheets && i < d->sheets->count; i++) d->bytes += strlen(d->sheets->sheet[i].url) + 1;
     return b->failed ? -1 : 0;
 }
 
