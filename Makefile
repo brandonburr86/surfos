@@ -68,7 +68,7 @@ USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256
 USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
-USER_PROGS  += top watch # 11/01/26 (the command-line suite, track sys)
+USER_PROGS  += top watch man # 11/01/26 (the command-line suite, track sys)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -730,11 +730,16 @@ $(BUILD)/host/test_watch: tests/host/test_watch.c user/bin/watchtext.h user/bin/
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_watch.c -o $@
+$(BUILD)/host/test_manutil: tests/host/test_manutil.c user/bin/manutil.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_manutil.c -o $@
 unittest: unittest-sys
 .PHONY: unittest-sys
-unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch
+unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch $(BUILD)/host/test_manutil
 	$(BUILD)/host/test_top
 	$(BUILD)/host/test_watch
+	$(BUILD)/host/test_manutil
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
