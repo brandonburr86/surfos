@@ -129,6 +129,7 @@ struct wd_document {
     char notice[160];                   /* safe text for the status bar, "" when there is nothing */
     /* 11/1/26 */
     struct wd_picture *pics;            /* image_count of them: the window fills them in */
+    unsigned char *visited;             /* link_count of them, or NULL: 1 for a link to where this window has been */
 };
 
 #define WD_TRUNC_BOXES 8                /* boxes or runs past WD_BLOCKS_MAX or WD_RUNS_MAX */

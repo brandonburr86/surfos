@@ -981,8 +981,8 @@ test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wun
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
 
-$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUILD)/host/wundertow/browser.o \
-                                      $(BUILD)/host/wundertow/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
+                                      $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -994,7 +994,7 @@ unittest: test-wundertow-browser
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
-                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o image_scale.o) \
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o) \
                                    $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"

@@ -15,6 +15,7 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #include "url.h"
 #include "http.h"
 #include "doc.h"
+#include "find.h"
 #include "font.h"
 #include "image.h"
 #include "layout.h"
@@ -31,6 +32,8 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #define C_LINE   0xc9cfc4
 #define C_PICK   0xbfe3dd
 #define C_SHEET  0xfffdf5
+#define C_FOUND  0xffd34d                       /* what find found: a highlight over the text */
+#define C_MISS   0xf3c9c0                       /* find's field, when the word is not there */
 
 #define BAR_Y    4                      /* the toolbar's buttons and field */
 #define BAR_H    22
@@ -47,7 +50,9 @@ static const char start_page[] =
     "<ul><li><b>Ctrl+L</b>: the address field"
     "<li><b>Page Up</b>, <b>Page Down</b>, <b>Space</b>, the <b>arrows</b>, <b>Home</b>, <b>End</b>: scroll"
     "<li><b>Backspace</b>: back"
-    "<li><b>Ctrl+R</b>: load the page again</ul>"
+    "<li><b>Ctrl+R</b>: load the page again"
+    "<li><b>Ctrl+F</b>: find a word on the page; <b>Enter</b>, the next place; <b>Shift+Enter</b>, the one before"
+    "<li><b>Tab</b>, <b>Shift+Tab</b>: from link to link; <b>Enter</b> follows one</ul>"
     "<p>HTTPS is checked as Undertow checks it in the console: a certificate must be valid for the name, "
     "signed by a known authority, and in date.";
 
@@ -145,6 +150,62 @@ int wb_file_path(const char *url, char *path, size_t cap) {
     return 1;
 }
 
+/**** where this window has been ****/
+
+/* FNV-1a in 64 bits: a place is its hash, so that no address stays in memory longer than its page does */
+static unsigned long long place_hash(const char *s) {
+    unsigned long long h = 14695981039346656037ull;
+    for(; *s; s++) h = (h ^ (unsigned char)*s) * 1099511628211ull;
+    return h ? h : 1;                               /* 0: an empty slot */
+}
+
+static void visit(struct wb *b, const char *url) {
+    unsigned long long h = place_hash(url);
+    unsigned int i = (unsigned int)h % WB_VISITED;
+    while(b->seen[i]) {
+        if(b->seen[i] == h) return;
+        i = (i + 1) % WB_VISITED;
+    }
+    if(b->seen_count >= WB_VISITED / 2) {           /* full: it starts again, as such a list may */
+        memset(b->seen, 0, sizeof(b->seen));
+        b->seen_count = 0;
+        i = (unsigned int)h % WB_VISITED;
+    }
+    b->seen[i] = h;
+    b->seen_count++;
+}
+
+static int visited(const struct wb *b, const char *url) {
+    unsigned long long h = place_hash(url);
+    unsigned int i = (unsigned int)h % WB_VISITED;
+    while(b->seen[i]) {
+        if(b->seen[i] == h) return 1;
+        i = (i + 1) % WB_VISITED;
+    }
+    return 0;
+}
+
+/* The address a link is known by: as the address field would show it */
+static void link_address(const struct wb_page *p, const struct ut_link *l, char *out, size_t cap) {
+    if(!(p->file && file_url(l->url, out, cap))) snprintf(out, cap, "%s", l->url);
+}
+
+/* Which of the page's links lead to where the window has been */
+static void mark_visited(struct wb *b, struct wb_page *p) {
+    char url[WB_ADDR_MAX];
+    size_t i;
+    if(!p->doc.link_count) return;
+    if(!p->doc.visited) {
+        p->doc.visited = calloc(p->doc.link_count, 1);
+        if(!p->doc.visited) return;                 /* no colours of their own: nothing else depends on them */
+        p->bytes += p->doc.link_count;
+    }
+    for(i = 0; i < p->doc.link_count; i++) {
+        link_address(p, &p->doc.links[i], url, sizeof(url));
+        p->doc.visited[i] = visited(b, url) ? 1 : 0;
+    }
+}
+
 /**** the status bar and the address field ****/
 
 static void status(struct wb *b, const char *fmt, const char *arg) {
@@ -221,6 +282,14 @@ static int scroll_by(struct wb *b, int dy) {
     return p ? scroll_to(b, p->scroll + dy) : 0;
 }
 
+/* A row of the page, h high, into the view: as little as it takes, with some of what is around it */
+static void show_rows(struct wb *b, struct wb_page *p, int y, int h) {
+    struct geom g;
+    geom(b, &g);
+    if(y < p->scroll) scroll_to(b, y - g.ch / 4);
+    else if(y + h > p->scroll + g.ch) scroll_to(b, y + h - g.ch + g.ch / 4);
+}
+
 /* the thumb's place and size in the scroll bar's track (cy .. cy + ch) */
 static void thumb(struct wb *b, int *ty, int *th) {
     struct wb_page *p = wb_current(b);
@@ -239,6 +308,8 @@ static void thumb(struct wb *b, int *ty, int *th) {
 }
 
 /**** loading ****/
+
+static void page_shown(struct wb *b, struct wb_page *p);
 
 static void request(struct wb *b, const char *url, int reload) {
     snprintf(b->req.url, sizeof(b->req.url), "%s", url);
@@ -533,6 +604,9 @@ void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
         b->cur = b->npages - 1;
         trim_history(b);
     }
+    visit(b, p->url);
+    if(b->req.kind == WB_LOAD_PAGE) visit(b, b->req.url);   /* where it was asked for, before any redirect */
+    page_shown(b, p);
     addr_after_load(b, p->url);
     loaded_status(b, p);
 }
@@ -568,6 +642,8 @@ static void follow(struct wb *b, int n) {
             scroll_to(b, wl_offset_y(&p->lay, off) - 4);
             snprintf(p->url, sizeof(p->url), "%s", url);
             set_addr(b, url);
+            visit(b, url);
+            mark_visited(b, p);
             status(b, "%s", "Done");
         } else status(b, "There is no place named \"%s\" on this page", hash + 1);
         return;
@@ -582,8 +658,18 @@ static void back_forward(struct wb *b, int d) {
     resources_stop(b);
     b->cur += d;
     b->hover = b->pressed = -1;
+    page_shown(b, b->page[b->cur]);
     set_addr(b, b->page[b->cur]->url);
     loaded_status(b, b->page[b->cur]);
+}
+
+/* A page comes into view: nothing of find or of the keyboard's focus was about it */
+static void page_shown(struct wb *b, struct wb_page *p) {
+    b->tab_link = -1;
+    b->find_open = 0;
+    b->find_hit = 0;
+    if(b->focus == WB_FOCUS_FIND) b->focus = WB_FOCUS_PAGE;
+    mark_visited(b, p);
 }
 
 static void reload(struct wb *b) {
@@ -599,6 +685,7 @@ int wb_init(struct wb *b, int w, int h) {
     b->w = w < WB_MIN_W ? WB_MIN_W : w;
     b->h = h < WB_MIN_H ? WB_MIN_H : h;
     b->hover = b->pressed = -1;
+    b->tab_link = -1;
     b->focus = WB_FOCUS_ADDR;
     wp_theme_default(&b->theme);
     r = calloc(1, sizeof(*r));
@@ -700,9 +787,114 @@ static int addr_key(struct wb *b, unsigned int key) {
     return 1;
 }
 
+/**** find, and links by keyboard ****/
+
+/* Where the text in view starts */
+static size_t top_offset(struct wb *b) {
+    struct wb_page *p = wb_current(b);
+    size_t off = 0;
+    int into;
+    if(p && p->scroll > 0 && !wl_place(&p->lay, p->scroll, &off, &into)) off = 0;
+    return off;
+}
+
+/* The word from from on (back: before it), round the page: its place in view, and what the field says */
+static void find_go(struct wb *b, size_t from, int back) {
+    struct wb_page *p = wb_current(b);
+    b->find_hit = 0;
+    b->find_index = b->find_total = 0;
+    if(!b->find_len || !p) return;
+    if(!fi_search(&p->doc, b->find, b->find_len, from, back, &b->find_at) &&
+       !fi_search(&p->doc, b->find, b->find_len, back ? (size_t)-1 : 0, back, &b->find_at)) return;
+    b->find_hit = 1;
+    b->find_total = fi_count(&p->doc, b->find, b->find_len, b->find_at, &b->find_index);
+    ensure_layout(b, p);
+    {
+        size_t i;
+        for(i = 0; i < p->lay.count; i++) {
+            const struct wl_item *it = &p->lay.items[i];
+            if(it->kind == WI_TEXT && it->off + it->len > b->find_at) {
+                show_rows(b, p, it->y, it->h);
+                break;
+            }
+        }
+    }
+}
+
+static int find_key(struct wb *b, unsigned int key) {
+    switch(key) {
+    case 13: case 10:
+        find_go(b, b->find_hit ? b->find_at + 1 : 0, 0);
+        return 1;
+    case WB_KEY_SHIFT_ENTER:
+        find_go(b, b->find_hit ? b->find_at : (size_t)-1, 1);
+        return 1;
+    case 27:
+        b->find_open = 0;
+        b->find_hit = 0;
+        b->focus = WB_FOCUS_PAGE;
+        return 1;
+    case 127: case 8:
+        if(!b->find_len) return 0;
+        while(b->find_len && (b->find[--b->find_len] & 0xc0) == 0x80) ;
+        break;
+    default:
+        if(key < 0x20 || key > 0x7e || b->find_len + 1 >= sizeof(b->find)) return 0;
+        b->find[b->find_len++] = (char)key;
+    }
+    b->find[b->find_len] = 0;
+    find_go(b, b->find_hit ? b->find_at : top_offset(b), 0);    /* as it is typed: from where it is */
+    return 1;
+}
+
+/* Tab: the next link in the page's order from the one that has the focus, or from what is in view */
+static void tab_move(struct wb *b, int back) {
+    struct wb_page *p = wb_current(b);
+    struct geom g;
+    size_t n, i, start = 0;
+    long k;
+    int found = 0;
+    if(!p) return;
+    geom(b, &g);
+    ensure_layout(b, p);
+    n = p->lay.count;
+    if(!n) return;
+    if(b->tab_link >= 0) {                          /* past all of its items, or before them */
+        for(i = 0; i < n; i++)
+            if(p->lay.items[i].link == b->tab_link) {
+                start = i;
+                found = 1;
+                if(back) break;
+            }
+    } else {
+        for(i = 0; i < n; i++) {
+            const struct wl_item *it = &p->lay.items[i];
+            if(it->y + it->h > p->scroll) break;
+        }
+        start = i;
+    }
+    for(k = 0; k < (long)n; k++) {
+        size_t at;
+        const struct wl_item *it;
+        if(back) at = (start + 2 * n - (size_t)k - 1) % n;
+        else at = (start + (size_t)k + (found ? 1 : 0)) % n;
+        it = &p->lay.items[at];
+        if(it->link < 0 || it->link == b->tab_link) continue;
+        b->tab_link = it->link;
+        show_rows(b, p, it->y, it->h);
+        {
+            char shown[WB_ADDR_MAX];
+            link_address(p, &p->doc.links[it->link], shown, sizeof(shown));
+            status(b, "%s", shown);
+        }
+        return;
+    }
+}
+
 int wb_key(struct wb *b, unsigned int key) {
     struct geom g;
     if(b->focus == WB_FOCUS_ADDR) return addr_key(b, key);
+    if(b->focus == WB_FOCUS_FIND) return find_key(b, key);
     geom(b, &g);
     switch(key) {
     case WB_KEY_UP: return scroll_by(b, -SCROLL_STEP);
@@ -722,8 +914,31 @@ int wb_key(struct wb *b, unsigned int key) {
     case 18:                                        /* Ctrl+R */
         reload(b);
         return 1;
-    case 27:                                        /* Escape: stops what is loading */
+    case 27:                                        /* Escape: closes find, or stops what is loading */
+        if(b->find_open) {
+            b->find_open = 0;
+            b->find_hit = 0;
+            return 1;
+        }
         wb_stop(b);
+        return 1;
+    case 6:                                         /* Ctrl+F */
+        b->find_open = 1;
+        b->focus = WB_FOCUS_FIND;
+        find_go(b, b->find_hit ? b->find_at : top_offset(b), 0);
+        return 1;
+    case 9:
+        tab_move(b, 0);
+        return 1;
+    case WB_KEY_BACKTAB:
+        tab_move(b, 1);
+        return 1;
+    case 13: case 10:
+        if(b->tab_link < 0) return 0;
+        {
+            int l = b->tab_link;
+            follow(b, l);
+        }
         return 1;
     }
     return 0;
@@ -783,8 +998,7 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
         b->hover = link;
         if(link >= 0) {
             char shown[WB_ADDR_MAX];
-            const struct ut_link *l = &p->doc.links[link];
-            if(!(p->file && file_url(l->url, shown, sizeof(shown)))) snprintf(shown, sizeof(shown), "%s", l->url);
+            link_address(p, &p->doc.links[link], shown, sizeof(shown));
             status(b, "%s", shown);
         } else if(!b->loading && p && b->npages) loaded_status(b, p);
         redraw = 1;
@@ -821,6 +1035,7 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
         if(in(x, y, 0, g.cy, g.cw, g.ch)) {
             b->focus = WB_FOCUS_PAGE;
             b->pressed = link;
+            b->tab_link = -1;
             return 1;
         }
     }
@@ -860,6 +1075,57 @@ int wb_resize(struct wb *b, int w, int h) {
 }
 
 /**** painting ****/
+
+/* The word found, over what is painted */
+static void mark_found(struct wb *b, struct wb_page *p, const struct wp_target *pg) {
+    size_t at = b->find_at, end = at + b->find_len, i;
+    for(i = 0; i < p->lay.count; i++) {
+        const struct wl_item *it = &p->lay.items[i];
+        size_t from, to;
+        int x0, x1, y;
+        if(it->kind != WI_TEXT || it->off >= end || it->off + it->len <= at) continue;
+        from = at > it->off ? at : it->off;
+        to = end < it->off + it->len ? end : it->off + it->len;
+        x0 = it->x + wf_width(p->doc.text + it->off, from - it->off, it->scale, it->style);
+        x1 = it->x + wf_width(p->doc.text + it->off, to - it->off, it->scale, it->style);
+        y = pg->y + it->y - p->scroll;
+        wp_tint(pg, x0, y, x1 - x0, it->h, C_FOUND);
+    }
+}
+
+/* A frame round each piece of the link with the keyboard's focus */
+static void mark_focus(struct wb *b, struct wb_page *p, const struct wp_target *pg) {
+    size_t i;
+    for(i = 0; i < p->lay.count; i++) {
+        const struct wl_item *it = &p->lay.items[i];
+        if(it->link == b->tab_link) wp_frame(pg, it->x - 1, pg->y + it->y - p->scroll - 1, it->w + 2, it->h + 2, C_INK);
+    }
+}
+
+/* find's field, in the status bar */
+static void paint_find(struct wb *b, const struct wp_target *t) {
+    static const char label[] = "Find:";
+    char count[32];
+    int y = b->h - WB_STATUS, fx = 9 + (int)sizeof(label) * WF_W, fw = b->w - fx - 120, cx;
+    wp_fill(t, 0, y, b->w, WB_STATUS, C_BAND);
+    wp_fill(t, 0, y, b->w, 1, C_LINE);
+    wp_text(t, 9, y + 3, label, sizeof(label) - 1, 1, 0, C_INK);
+    if(fw < 40) fw = 40;
+    wp_fill(t, fx, y + 2, fw, WB_STATUS - 3, b->find_len && !b->find_hit ? C_MISS : C_SHEET);
+    wp_frame(t, fx, y + 2, fw, WB_STATUS - 3, b->focus == WB_FOCUS_FIND ? C_TEAL : C_LINE);
+    {
+        struct wp_target f = *t;
+        f.x = fx + 2;
+        f.cw = fw - 4;
+        f.y = y + 3;
+        f.ch = WB_STATUS - 5;
+        cx = wp_text(&f, fx + 4, y + 3, b->find, b->find_len, 1, 0, C_INK);
+        if(b->focus == WB_FOCUS_FIND) wp_fill(&f, cx, y + 3, 2, WF_H, C_INK);
+    }
+    if(b->find_hit) snprintf(count, sizeof(count), "%d of %d", b->find_index, b->find_total);
+    else snprintf(count, sizeof(count), "%s", b->find_len ? "Not found" : "");
+    wp_text(t, b->w - 12 - (int)strlen(count) * WF_W, y + 3, count, strlen(count), 1, 0, C_MUTED);
+}
 
 void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
     struct wp_target t;
@@ -920,6 +1186,8 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
         pg.cw = g.cw;
         pg.ch = g.ch;
         wp_paint(&p->lay, &p->doc, &b->theme, &pg, 0, p->scroll, b->hover);
+        if(b->find_open && b->find_hit) mark_found(b, p, &pg);
+        if(b->tab_link >= 0) mark_focus(b, p, &pg);
     } else wp_fill(&t, 0, g.cy, g.cw, g.ch, C_SHEET);
     /* the scroll bar */
     wp_fill(&t, g.sx, g.cy, WB_SCROLLBAR, g.ch, C_BAND);
@@ -933,7 +1201,8 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
     if(p && b->npages && !p->file) snprintf(right, sizeof(right), "%s", p->verified ? "HTTPS verified " : "HTTP: not encrypted");
     if(p && b->npages && p->verified) snprintf(right + strlen(right), sizeof(right) - strlen(right), "%s", p->tls);
     if(p && b->npages && p->file) snprintf(right, sizeof(right), "%s", "File");
-    {
+    if(b->find_open) paint_find(b, &t);
+    else {
         struct wp_target s = t;
         int rw = (int)wf_count(right, strlen(right)) * WF_W;
         s.x = 9;

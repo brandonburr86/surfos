@@ -8,7 +8,7 @@ gives them, and the loads it asks for carried out here with pages made in the te
 followed (on the page, to a place on the same page, to a file from a file page, one that is not http), back
 and forward, the history's limit, scrolling by keys, the wheel and the scroll bar, a new size, the address
 field's editing, a load that fails, and the chrome painted. 11/1/26: Stop, a load that takes another's place, what a
-page loads for itself and the rules of that.
+page loads for itself and the rules of that; pictures; find, links by keyboard, visited links.
 */
 
 #include <stdio.h>
@@ -516,6 +516,202 @@ static void loads(void) {
     wb_cancel(&b);
 }
 
+#define FOUND ((0xff * 0xff / 255) << 16 | (0xfd * 0xd3 / 255) << 8 | 0xf5 * 0x4d / 255)  /* find's mark over the page */
+
+/* Is there a pixel of this colour in the rows of the page's area? */
+static int has_color(unsigned int c, int y0, int y1) {
+    int i;
+    for(i = y0 * W; i < y1 * W; i++) if(screen[i] == c) return 1;
+    return 0;
+}
+
+/* Stage 2.5 */
+static void reading(void) {
+    static char page[20000];
+    struct wb_request q;
+    struct wb_page *p;
+    size_t at;
+    char *e = page;
+    int i, s0;
+
+    wb_cancel(&b);
+    e += snprintf(e, 200, "<title>R</title><p>One word here<p>Second <b>wo</b>rd there, and a WoRd too<p><a href=a.html>a link</a>"
+                          "<img src=z.png alt=picture-word>");
+    for(i = 0; i < 80; i++) e += snprintf(e, 32, "<p>filler %d", i);
+    snprintf(e, 64, "<p>A last word at the bottom");
+    wb_go(&b, "https://read.test/");
+    serve(page);
+    while(wb_take(&b, &q)) wb_image_failed(&b, q.page, q.item, 0, 0);
+    p = wb_current(&b);
+    paint();
+
+    /* find: as it is typed, from where it is */
+    wb_key(&b, 6);
+    check(b.find_open && b.focus == WB_FOCUS_FIND && !b.find_hit, "Ctrl+F: the find field");
+    paint();
+    type("wor");
+    check(b.find_hit && b.find_total == 4 && b.find_index == 1 && !strncmp(p->doc.text + b.find_at, "word", 4), "found as it is typed");
+    type("d");
+    check(b.find_hit && b.find_total == 4 && b.find_index == 1, "the word: four places, and alt text is none of them");
+    at = b.find_at;
+    paint();
+    check(has_color(FOUND, WB_TOOLBAR, H - WB_STATUS), "the word shows, over the page's background");
+    wb_key(&b, 13);
+    check(b.find_index == 2 && b.find_at > at, "Enter: the next place, over two styles");
+    check(!strncmp(p->doc.text + b.find_at, "word", 4), "that place");
+    paint();
+    wb_key(&b, 13);
+    check(b.find_index == 3 && !strncmp(p->doc.text + b.find_at, "WoRd", 4), "either case");
+    check(p->scroll == 0, "in view already: no scrolling");
+    wb_key(&b, 13);
+    check(b.find_index == 4 && p->scroll > 500, "out of view: it comes into view");
+    s0 = p->scroll;
+    paint();
+    check(has_color(FOUND, WB_TOOLBAR, H - WB_STATUS), "and shows there");
+    wb_key(&b, 13);
+    check(b.find_index == 1 && p->scroll < s0, "round to the top");
+    wb_key(&b, WB_KEY_SHIFT_ENTER);
+    check(b.find_index == 4, "Shift+Enter: back round to the last");
+    wb_key(&b, WB_KEY_SHIFT_ENTER);
+    check(b.find_index == 3, "Shift+Enter again");
+    wb_key(&b, 127);
+    check(b.find_len == 3 && b.find_hit, "Backspace: a shorter word");
+    type("q");
+    check(!b.find_hit && !b.find_total, "a word that is not there");
+    paint();
+    check(has_color(0xf3c9c0, H - WB_STATUS, H), "the field says so");
+    for(i = 0; i < 4; i++) wb_key(&b, 127);
+    check(!b.find_len && !b.find_hit, "nothing to find");
+    for(i = 0; i < 400; i++) wb_key(&b, 'a');
+    check(b.find_len == WB_FIND_MAX - 1, "a word has its end");
+    for(i = 0; i < 400; i++) wb_key(&b, 127);
+    type("hereSecond");
+    check(!b.find_hit, "a word does not go from a box into the next");
+    while(b.find_len) wb_key(&b, 127);
+    type("Second word");
+    check(b.find_hit && b.find_total == 1, "a space is a space, over a style");
+    wb_key(&b, 27);
+    check(!b.find_open && b.focus == WB_FOCUS_PAGE && !b.find_hit, "Escape: closed, the page has the keys");
+    paint();
+    check(!has_color(FOUND, WB_TOOLBAR, H - WB_STATUS), "and the mark goes");
+    wb_key(&b, 6);
+    check(b.find_open && b.find_hit && b.find_len, "Ctrl+F again: the word as it was");
+    wb_pointer(&b, 300, 200, 0);
+    wb_pointer(&b, 300, 200, 1);
+    wb_pointer(&b, 300, 200, 0);
+    check(b.focus == WB_FOCUS_PAGE && b.find_open, "a click on the page: the keys are the page's, the field stays");
+    wb_key(&b, 27);
+    check(!b.find_open, "and Escape there closes it");
+    wb_key(&b, 6);
+    while(b.find_len) wb_key(&b, 127);
+    wb_key(&b, 27);
+    /* a new page ends it */
+    wb_key(&b, 6);
+    wb_go(&b, "https://read.test/2");
+    serve("<p>Other");
+    check(!b.find_open && b.focus == WB_FOCUS_PAGE, "a new page: find has gone");
+    wb_key(&b, 127);
+    wb_cancel(&b);
+    check(wb_current(&b) == p, "back");
+
+    /* links by keyboard: from what is in view, in the page's order, round again */
+    wb_go(&b, "https://read.test/links");
+    e = page;
+    e += snprintf(e, 200, "<title>L</title><p>Text <a href=a.html>first</a> and <a href=b.html>second link, long enough to go over the "
+                          "end of its line and on to the next line of the page, and still go on</a>.");
+    for(i = 0; i < 80; i++) e += snprintf(e, 32, "<p>filler %d", i);
+    snprintf(e, 64, "<p><a href=c.html>third</a>");
+    serve(page);
+    p = wb_current(&b);
+    paint();
+    wb_key(&b, 9);
+    check(b.tab_link == 0 && strstr(b.status, "a.html") != NULL, "Tab: the first link, its address in the status bar");
+    check(p->scroll == 0, "in view");
+    paint();
+    {
+        const struct wl_item *it = NULL;
+        size_t k;
+        for(k = 0; k < p->lay.count; k++) if(p->lay.items[k].link == 0) {
+            it = &p->lay.items[k];
+            break;
+        }
+        check(it && screen[(WB_TOOLBAR + it->y - 1) * W + it->x + 2] == 0x153d49, "drawn focused");
+    }
+    wb_key(&b, 9);
+    check(b.tab_link == 1, "the next: a link of two lines is one stop");
+    paint();
+    wb_key(&b, 9);
+    check(b.tab_link == 2 && p->scroll > 500, "the last: scrolled into view");
+    paint();
+    wb_key(&b, 9);
+    check(b.tab_link == 0 && p->scroll == 0, "and round");
+    wb_key(&b, WB_KEY_BACKTAB);
+    check(b.tab_link == 2 && p->scroll > 500, "Shift+Tab: back round");
+    wb_key(&b, WB_KEY_BACKTAB);
+    check(b.tab_link == 1 && p->scroll < 100, "Shift+Tab again: the one before");
+    wb_key(&b, WB_KEY_BACKTAB);
+    check(b.tab_link == 0, "and the first");
+    wb_pointer(&b, 500, H - WB_STATUS - 3, 0);
+    wb_pointer(&b, 500, H - WB_STATUS - 3, 1);
+    wb_pointer(&b, 500, H - WB_STATUS - 3, 0);
+    check(b.tab_link == -1, "a click on the page: nothing has the focus");
+    wb_key(&b, 0x105);
+    paint();
+    wb_key(&b, 9);
+    check(b.tab_link == 2, "nothing has it: Tab starts from what is in view");
+    wb_key(&b, 0x104);
+    wb_key(&b, 9);
+    /* Enter follows it */
+    wb_key(&b, 13);
+    check(has_request("https://read.test/a.html"), "Enter follows the link with the focus");
+    wb_stop(&b);
+    wb_cancel(&b);
+    p->halted = 0;
+
+    /* visited links, for as long as the window runs */
+    wb_go(&b, "https://read.test/visits");
+    serve("<body vlink=#123456 link=#654321><p><a href=one.html>one</a> <a href=two.html>two</a>");
+    p = wb_current(&b);
+    check(p->doc.visited && !p->doc.visited[0] && !p->doc.visited[1], "nothing visited yet");
+    paint();
+    check(has_color(0x654321, WB_TOOLBAR, H - WB_STATUS) && !has_color(0x123456, WB_TOOLBAR, H - WB_STATUS), "in the link colour");
+    wb_key(&b, 9);
+    wb_key(&b, 13);
+    serve("<p>One");
+    wb_key(&b, 127);
+    wb_cancel(&b);
+    check(wb_current(&b) == p && p->doc.visited[0] && !p->doc.visited[1], "where it went is visited");
+    paint();
+    check(has_color(0x123456, WB_TOOLBAR, H - WB_STATUS) && has_color(0x654321, WB_TOOLBAR, H - WB_STATUS), "in the visited colour, the other not");
+    /* a redirect: both ends count; the page's own: the theme's colour */
+    wb_go(&b, "https://read.test/other");
+    serve("<p><a href=one.html>one</a> <a href=#x>here</a><p id=x>x");
+    p = wb_current(&b);
+    check(p->doc.visited[0], "the same address on another page");
+    paint();
+    check(has_color(b.theme.vlink, WB_TOOLBAR, H - WB_STATUS), "the theme's colour for one");
+    wb_key(&b, 9);
+    wb_key(&b, 9);
+    check(b.tab_link == 1, "the second link");
+    wb_key(&b, 13);
+    check(!b.want && p->doc.visited[1], "a place on the same page, by Enter: visited, with no load");
+    /* a file page's links are known by their file: addresses */
+    wb_go(&b, "/stick/a.html");
+    wb_take(&b, &q);
+    wb_loaded(&b, page_at(q.url, "<p><a href=a.html>me</a> <a href=b.html>it</a>", 1), 0);
+    p = wb_current(&b);
+    check(p->doc.visited[0] && !p->doc.visited[1], "a file page's link to itself is visited");
+    /* many places: the table starts again, and goes on working */
+    for(i = 0; i < WB_VISITED; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "https://many.test/%d", i);
+        wb_go(&b, url);
+        serve("<p>a page");
+    }
+    check(b.seen_count > 0 && b.seen_count <= WB_VISITED / 2, "so many places: a bounded table");
+    wb_cancel(&b);
+}
+
 int main(void) {
     char tall[20000], msg[200];
     int x, y, i, s0;
@@ -664,6 +860,7 @@ int main(void) {
 
     loads();
     pictures();
+    reading();
 
     wb_free(&b);
     check(ut_alloc_live == 0, "nothing held at the end");

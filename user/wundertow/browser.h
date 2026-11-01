@@ -40,6 +40,12 @@ list, for stage 3.3's stylesheets: a text, of a page's limits; its answer comes 
 time. An image's frame shows until its pixels are there. When a picture's size changes what the page looks like, the
 page is laid out again at the next paint, and the view keeps what was at its top (wl_place()). A page keeps WB_PAGE_IMAGES
 bytes of pixels at most: past that an image's frame stays, its pixels unasked for. They count in WB_HISTORY_BYTES.
+
+11/1/26, reading (stage 2.5): Ctrl+F opens a find field in the status bar, and every key looks for the word from where
+it is; Enter goes to the next place and Shift+Enter to the one before, round the page; Escape closes it. Tab and
+Shift+Tab go from link to link in the page's order, scrolling each into view and drawing it focused, and Enter follows
+it. Links to where this window has been take the visited colour: that is kept here for as long as the window runs,
+as a hash of each address, and written nowhere.
 */
 
 #ifndef WUNDERTOW_BROWSER_H
@@ -75,6 +81,11 @@ bytes of pixels at most: past that an image's frame stays, its pixels unasked fo
 #define WB_KEY_PGUP      0x106
 #define WB_KEY_PGDN      0x107
 #define WB_KEY_DELETE    0x108
+#define WB_KEY_BACKTAB   0x10a          /* 11/1/26: Shift+Tab, Shift+Enter */
+#define WB_KEY_SHIFT_ENTER 0x10b
+
+#define WB_FIND_MAX      256            /* the bytes of a word to find */
+#define WB_VISITED       8192           /* places kept: hashes, in a table twice as large as they may fill */
 
 struct wb_page {
     struct wd_document doc;
@@ -112,7 +123,7 @@ struct wb_request {                     /* a load the program is to carry out */
     size_t budget;                      /* WB_LOAD_IMAGE: the bytes of pixels the page has room for */
 };
 
-enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR };
+enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR, WB_FOCUS_FIND };
 
 #define WB_CANCEL_PAGE       1          /* wb_cancel(): the page's load, */
 #define WB_CANCEL_RESOURCES  2          /* the loads of what the page shown wanted */
@@ -141,6 +152,15 @@ struct wb {
     int cancel;                         /* WB_CANCEL_* for the program to carry out */
     int edited;                         /* the address was typed in since it was last set */
     int stop_held;                      /* the toolbar's third button was pressed as Stop */
+    /* find in the page */
+    char find[WB_FIND_MAX];             /* the word */
+    size_t find_len, find_at;           /* its bytes; where it was found */
+    int find_open, find_hit;            /* the field is open; the word is there, at find_at */
+    int find_index, find_total;         /* which place of how many */
+    /* links by keyboard, and where the window has been */
+    int tab_link;                       /* the link with the keyboard's focus, or -1 */
+    unsigned long long seen[WB_VISITED];
+    int seen_count;
 };
 
 /* A browser in a window of w x h, with its start page; 0, or -1 without memory */

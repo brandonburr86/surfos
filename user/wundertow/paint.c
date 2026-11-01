@@ -59,6 +59,25 @@ void wp_frame(const struct wp_target *t, int x, int y, int w, int h, unsigned in
     wp_fill(t, x + w - 1, y, 1, h, color);
 }
 
+/* 11/1/26: each pixel multiplied by color: a highlight over what is painted, text and all */
+void wp_tint(const struct wp_target *t, int x, int y, int w, int h, unsigned int color) {
+    int x0 = x < t->x ? t->x : x, y0 = y < t->y ? t->y : y;
+    int x1 = x + w > t->x + t->cw ? t->x + t->cw : x + w, y1 = y + h > t->y + t->ch ? t->y + t->ch : y + h;
+    unsigned int cr = color >> 16 & 255, cg = color >> 8 & 255, cb = color & 255;
+    int i, j;
+    if(x1 > t->w) x1 = t->w;
+    if(y1 > t->h) y1 = t->h;
+    if(x0 < 0) x0 = 0;
+    if(y0 < 0) y0 = 0;
+    for(j = y0; j < y1; j++) {
+        unsigned int *row = t->pixels + (long)j * t->stride;
+        for(i = x0; i < x1; i++) {
+            unsigned int c = row[i];
+            row[i] = ((c >> 16 & 255) * cr / 255) << 16 | ((c >> 8 & 255) * cg / 255) << 8 | (c & 255) * cb / 255;
+        }
+    }
+}
+
 /* One cell of the font at (x, y), its lit pixels only */
 static void glyph(const struct wp_target *t, int x, int y, unsigned char g, int scale, unsigned int style,
                   unsigned int color) {
@@ -117,6 +136,7 @@ static unsigned int text_color(const struct wd_document *d, const struct wp_them
     if(it->color != WD_NONE) return it->color;
     if(it->link >= 0) {
         if(it->link == hover) return th->hover;
+        if(d->visited && d->visited[it->link]) return d->vlink_color != WD_NONE ? d->vlink_color : th->vlink;
         return d->link_color != WD_NONE ? d->link_color : th->link;
     }
     return d->fg != WD_NONE ? d->fg : th->fg;

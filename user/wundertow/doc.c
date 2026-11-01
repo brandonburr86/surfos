@@ -1734,6 +1734,7 @@ void wd_free(struct wd_document *d) {
         free(d->pics[i].scaled);
     }
     free(d->pics);
+    free(d->visited);
     free(d->blocks);
     free(d->runs);
     free(d->text);
