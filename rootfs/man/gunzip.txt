@@ -1,0 +1,39 @@
+gunzip - decompress gzip files
+
+SYNOPSIS
+    gunzip [-cfkt] [file...]
+
+DESCRIPTION
+    Each file.gz becomes file, and file.tgz becomes file.tar; the case
+    of the ending does not matter. With no files, or for -, standard
+    input is decompressed to standard output.
+
+    The .gz goes only after the output has been written and synced,
+    and the whole of it checked. A file of several members gives them
+    all, in turn. Each member's CRC and length are checked, and a bad
+    one, or a file cut short, or anything but zero bytes after the
+    last member, is an error: then the output is deleted and the input
+    stays. The zero bytes are allowed because GNU tar pads a compressed
+    archive it writes to a pipe.
+
+    The name and time kept in a .gz are not used: SurfOS cannot set a
+    file's time. A name without one of the two endings is refused,
+    though -c gets its data out.
+
+    An output that exists is left alone unless -f is given, which
+    replaces it only once the new file is whole. The status is 0, or 2
+    if anything went wrong with any file.
+
+OPTIONS
+    -c    Write to standard output and keep the input.
+    -f    Replace an output that exists; read compressed data from a
+          terminal.
+    -k    Keep the input.
+    -t    Only check the data.
+
+EXAMPLES
+    gunzip /hda1/LOG.TXT.gz
+    gunzip -t /usb0p1/BACKUP.TGZ
+
+SEE ALSO
+    gzip, zcat, tar

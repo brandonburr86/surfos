@@ -1,0 +1,37 @@
+gzip - compress files
+
+SYNOPSIS
+    gzip [-cdfkt] [-1..-9] [file...]
+
+DESCRIPTION
+    Each file becomes file.gz, in the gzip format every other system
+    reads. The name and time of the file go into the .gz, and the file
+    itself is deleted once the .gz has been written and synced to the
+    disk, not before. With no files, or for -, standard input is
+    compressed to standard output.
+
+    A .gz that already exists is left alone unless -f is given, and a
+    name that already ends in .gz is passed over. -f replaces a file
+    by writing a new one beside it and renaming it, so the old one
+    stands until the new one is whole. If anything fails, the input
+    stays and no partial output does; only being killed, by Ctrl+C or
+    otherwise, can leave a short .gz behind, beside the whole input.
+
+    The status is 0, or 2 if anything went wrong with any file. The
+    other files are still done.
+
+OPTIONS
+    -c    Write to standard output and keep the input.
+    -d    Decompress, as gunzip does.
+    -f    Replace an output that exists; compress a name that ends in
+          .gz; write compressed data to a terminal.
+    -k    Keep the input.
+    -t    Only check the data of compressed files.
+    -1    The fastest. -9 the smallest. 6 is the default.
+
+EXAMPLES
+    gzip /hda1/LOG.TXT
+    gzip -9 -c /hda1/LOG.TXT > /usb0p1/LOG.GZ
+
+SEE ALSO
+    gunzip, zcat, tar
