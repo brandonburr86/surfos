@@ -720,14 +720,26 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 # 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
 # (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
 # i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
+TEXT_HOST_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+                  -include tests/host/text_names.h -MMD -MP
+$(BUILD)/host/text/%.o: user/libsurf/%.c tests/host/libsurf_names.h tests/host/text_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(TEXT_HOST_FLAGS) -c $< -o $@
+$(BUILD)/host/text/math.o: user/include/math.h
 $(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
                            $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_strtod.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/host/text/math.o $(BUILD)/host/libsurf/strtod.o \
+                         $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
 unittest: unittest-text
 .PHONY: unittest-text
-unittest-text: $(BUILD)/host/test_strtod
+unittest-text: $(BUILD)/host/test_strtod $(BUILD)/host/test_libm
 	$(BUILD)/host/test_strtod
+	$(BUILD)/host/test_libm
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
