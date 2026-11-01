@@ -45,4 +45,9 @@ void _exit(int code) __attribute__((noreturn)); /* no stdio flush, no atexit han
 void *sbrk(intptr_t incr);                      /* (void *)-1 when there is no more memory */
 extern char **environ;                          /* 10/24/26: "name=value" strings, NULL-terminated (env.c) */
 
+/* 11/01/26: options (getopt.c) */
+int getopt(int argc, char *const argv[], const char *optstring);
+extern char *optarg;
+extern int optind, opterr, optopt;
+
 #endif

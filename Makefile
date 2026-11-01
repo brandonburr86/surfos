@@ -740,12 +740,17 @@ $(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/ho
                          $(BUILD)/host/libsurf/ctype.o
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
+$(BUILD)/host/test_getopt: tests/host/test_getopt.c $(BUILD)/host/text/getopt.o $(BUILD)/host/libsurf/string.o \
+                           $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_getopt.c $(filter %.o,$^) -o $@
 unittest: unittest-text
 .PHONY: unittest-text
-unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm
+unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm $(BUILD)/host/test_getopt
 	$(BUILD)/host/test_regex
 	$(BUILD)/host/test_strtod
 	$(BUILD)/host/test_libm
+	$(BUILD)/host/test_getopt
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
