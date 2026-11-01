@@ -650,6 +650,29 @@ static void png_files(void) {
         free(z.p);
         memset(&z, 0, sizeof(z));
         refused(&b, "data with another chunk in its middle");
+        /* a PLTE on a picture without a palette is not looked at, whatever its length */
+        png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+        png_chunk(&b, "PLTE", raw, 4);
+        memset(raw, 0, 2);
+        zlib_stored(&z, raw, 2);
+        put32be(&z, adler_of(raw, 2));
+        finish_png(&b, &z);
+        check(!decode(b.p, b.n, &m, "a PLTE of no use"), "a PLTE of no use, of a bad length");
+        if(m.px) wimg_free(&m);
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+        /* a stored block longer than the rows, its data ending exactly with the last one: in codes it is refused, and so
+           here: only a byte past the rows that is there lets inflate stop */
+        memset(raw, 0, 6);
+        png_start(&b, 2, 2, 8, 0, 0, 0, 0);
+        put8(&z, 0x78);
+        put8(&z, 0x01);
+        put8(&z, 1);
+        put16le(&z, 8);
+        put16le(&z, ~8u & 0xffff);
+        put(&z, raw, 6);
+        finish_png(&b, &z);
+        refused(&b, "a stored block that ends with the rows and says it goes on");
         /* a stored block that says it holds more than the rows and the file do: what is not there is not made up */
         png_start(&b, 2, 2, 8, 0, 0, 0, 0);
         put8(&z, 0x78);

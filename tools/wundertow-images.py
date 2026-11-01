@@ -538,7 +538,9 @@ def jpeg_encode(w, h, sampling=None, ids=(1, 2, 3), rgb=False, scans=None, resta
     def dht(tc, vals):
         return b'\xff\xc4' + struct.pack('>HB', 2 + 17 + len(vals), tc << 4) + bytes(7) + bytes([len(vals)]) + bytes(8) + bytes(vals)
     head = b'\xff\xd8'
-    if jfif:
+    if jfif == 'short':                                     # too short to be one: 13 bytes of its 14
+        head += b'\xff\xe0' + struct.pack('>H', 15) + b'JFIF\0\x01\x01\0\0\x01\0\x01\0'
+    elif jfif:
         head += b'\xff\xe0' + struct.pack('>H', 16) + b'JFIF\0\x01\x01\0\0\x01\0\x01\0\0'
     if adobe is not None:
         head += b'\xff\xee' + struct.pack('>H', 14) + b'Adobe' + bytes([0, 100, 0, 0, 0, 0, adobe])
@@ -667,6 +669,7 @@ def jpeg_family():
     own('ownadobe1.jpg', adobe=1)
     own('ownjfifadobe0.jpg', jfif=True, adobe=0)            # JFIF says YCbCr, whatever Adobe's says
     own('ownjfifnames.jpg', jfif=True, ids=(ord('R'), ord('G'), ord('B')))
+    own('ownjfifshort.jpg', jfif='short', rgb=True, ids=(ord('R'), ord('G'), ord('B')))
     own('ownycck.jpg', ink='ycck', adobe=2, ids=(1, 2, 3, 4))
     own('ownycck1.jpg', ink='ycck', adobe=1, ids=(1, 2, 3, 4))     # libjpeg's reading of any other transform
     own('ownycck420.jpg', ink='ycck', adobe=2, ids=(1, 2, 3, 4), sampling=[(2, 2), (1, 1), (1, 1), (2, 2)])

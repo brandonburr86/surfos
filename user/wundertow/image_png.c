@@ -370,7 +370,11 @@ static const char *stored(struct png *p) {
     n = take(p, 16);
     nn = take(p, 16);
     if((n ^ nn) != 0xffff) return "a PNG whose data is corrupted";
-    while(n-- && !p->bad && !p->over) emit(p, take(p, 8));
+    while(n-- && !p->over) {
+        unsigned int c = take(p, 8);
+        if(p->bad) break;
+        emit(p, c);
+    }
     return NULL;
 }
 
