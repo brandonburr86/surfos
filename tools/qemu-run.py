@@ -394,7 +394,7 @@ SMOKE = [
     ('wundertow --layout http://10.0.2.2:{http}/wundertow-layout', ['address: http://10.0.2.2:', 'status: 200',
                                                                     'SurfOS HTTP test OK: /wundertow-layout']),
     ('wundertow --layout /initrd/www/index.html', ['address: file:///initrd/www/index.html', 'title: SurfOS',
-                                                    ' x2 b "SurfOS"', ' x2 b "This page came from SurfOS."']),
+                                                    ' s32 b "SurfOS"', ' s24 b "This page came from SurfOS."']),
     ('wundertow --render /initrd/www/index.html /hda1/WEB.BMP', ['wundertow: /hda1/WEB.BMP: 640x',
                                                                  'pixels of file:///initrd/www/index.html ("SurfOS")']),
     ('rm /hda1/WEB.BMP', []),
@@ -407,8 +407,9 @@ SMOKE = [
     # as a sentence; no task is left of them
     ('wundertow --load http://10.0.2.2:{http}/wundertow-layout', ['address: http://10.0.2.2:', 'status: 200',
                                                                   'SurfOS HTTP test OK: /wundertow-layout']),
+    # 11/01/26: with its linked sheet, /initrd/www/style.css, as a page's sheets load behind it
     ('wundertow --load /initrd/www/index.html', ['address: file:///initrd/www/index.html', 'title: SurfOS',
-                                                 ' x2 b "SurfOS"']),
+                                                 ' s32 b color=ffffff "SurfOS"']),
     ('wundertow --load /initrd/nowhere.html', ['wundertow: /initrd/nowhere.html: ', '[exit status 1]']),
     ('wundertow --load http://10.0.2.2:1/', ['wundertow: 10.0.2.2', '[exit status 1]']),
     ('ps', ['surfsh (ring 3)'], [], ['wundertow']),

@@ -729,8 +729,8 @@ static void r_background(struct parser *P, int prop, const struct tok *v, int n,
         } else {
             if(v[i].type == T_FUNC) {
                 if(one_of(v[i].text, placed) < 0) { /* (a name is cut: "gradi" finds repeating-linear-gradient's) */
-                    if(!strstr(v[i].text, "gradi") && !strstr(v[i].text, "image-set")) return;  /* var() and the like:
-                                                                                                   an earlier colour stands */
+                    if(!strstr(v[i].text, "gradi") && !strstr(v[i].text, "repeating") && !strstr(v[i].text, "image-set"))
+                        return;                     /* var() and the like: an earlier colour stands */
                     gradient = 1;
                 }
                 depth++;

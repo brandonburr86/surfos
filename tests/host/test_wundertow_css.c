@@ -325,6 +325,8 @@ static void values(void) {
     check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "one whose name is cut in the token");
     sheet("p { background: #fff repeating-linear-gradient(red, blue) }");
     check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "that and a colour");
+    sheet("p { background: #fff -webkit-repeating-linear-gradient(red, blue) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "and one whose name is cut sooner");
     sheet("p { background: url(x) no-repeat calc(100% - 10px) 0 #fff }");
     check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "background: calc() in an image's place");
     sheet("p { background: #fff image-set('a.png' 1x) }");
