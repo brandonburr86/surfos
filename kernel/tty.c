@@ -129,11 +129,14 @@ void tty_input(struct tty *t, u_char c) {
     }
     next = (t->in_head + 1) % TTY_INPUT_SIZE;
     if(next == t->in_tail) {
+        /* 10/31/26: a byte dropped wakes nobody: its readers were woken when the queue filled, and on SurfCPU those
+           wake-ups held the timer off for as long as a paste came (audit B89, surfcpu/docs/GPU.md 15.9's addendum) */
         t->dropped++;
-    } else {
-        t->inq[t->in_head] = c;
-        t->in_head = next;
+        irq_restore(flags);
+        return;
     }
+    t->inq[t->in_head] = c;
+    t->in_head = next;
     irq_restore(flags);
     wake_up(&t->readers);
     poll_wake();                        /* 10/6/26: poll() on the console (fs/devfs.c) */
@@ -144,12 +147,13 @@ static void input_seq(struct tty *t, const char *s) {
     u_long flags = irq_save();
     u_int n = strlen(s), room = (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
     if(n > room) {
-        t->dropped += n;
-    } else {
-        for(; *s; s++) {
-            t->inq[t->in_head] = (u_char)*s;
-            t->in_head = (t->in_head + 1) % TTY_INPUT_SIZE;
-        }
+        t->dropped += n;                /* (10/31/26: wakes nobody, as tty_input()) */
+        irq_restore(flags);
+        return;
+    }
+    for(; *s; s++) {
+        t->inq[t->in_head] = (u_char)*s;
+        t->in_head = (t->in_head + 1) % TTY_INPUT_SIZE;
     }
     irq_restore(flags);
     wake_up(&t->readers);

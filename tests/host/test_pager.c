@@ -604,6 +604,35 @@ static void t_question_gives_way(void) {
     check(st == DONE && screen_has("line 102"), "and the waiting task prints");
 }
 
+/**** a full input queue (10/31/26) ****/
+
+/* a paste longer than the queue: the bytes past it are dropped and wake nobody, the reader still gets what is queued,
+   and what is typed once it has read goes in as ever */
+static void t_full_queue(void) {
+    int i, wakes, st;
+    reset(0);
+    st = run(CHILD, w_getc, 0, 0);
+    check(st == BLOCKED && sim_on_list(CHILD), "a reader waits for a key");
+    sim_input('a');
+    check(!sim_on_list(CHILD), "the first byte of a paste wakes it");
+    for(i = 0; i < 254; i++) sim_input('b');         /* the queue holds 255 */
+    wakes = sim_poll_wakes();
+    for(i = 0; i < 1000; i++) sim_input('c');
+    check(sim_poll_wakes() == wakes, "the bytes a full queue drops wake nobody");
+    st = resume(CHILD);
+    check(st == DONE && got_key == 'a', "the reader gets the queue's first byte");
+    for(i = 0; i < 254; i++) {
+        st = run(CHILD, w_getc, 0, 0);
+        if(st != DONE || got_key != 'b') break;
+    }
+    check(i == 254, "and the rest of what fitted, none of what was dropped");
+    st = run(CHILD, w_getc, 0, 0);
+    check(st == BLOCKED, "then it waits again");
+    sim_input('d');
+    st = resume(CHILD);
+    check(st == DONE && got_key == 'd', "and a key typed after the paste reaches it");
+}
+
 /**** the console lock (10/16/26, audit C10) ****/
 
 /* a task preempted inside its line holds the lock: another task's line waits, and both come out
@@ -1796,6 +1825,7 @@ int main(void) {
     t_stream_columns();
     t_tab();
     t_scrollback();
+    t_full_queue();
     t_whole_kernel_lines();
     t_line_owner();
     t_vt_cases();

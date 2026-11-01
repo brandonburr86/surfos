@@ -1754,6 +1754,15 @@ queue. To reproduce: on the RTL SoC (surfsim_gpu), run a command that takes a se
 as soon as the prompt shows: it is not echoed; typed at the PS/2 keyboard from the prompt, it is.
 On the board: after a long paste, wait a moment before the next command, or type it.
 
+**10/31/26, after the merge: the paragraph above is half right.** The fix it proposes was tried on the
+RTL SoC ([evidence/os/paste-2026-10-31.txt](evidence/os/paste-2026-10-31.txt)). Dropping a byte
+without the wake-ups does cut a paste's cost (B89: 3,000 bytes, 16 frames missed before, 4 now). On
+its own it left SurfCPU worse off, because `irq_external()`'s guard then switched the UART off for good
+at 3,000 bytes, as it already did at 8 KB (B88); a source that stays pending now rests until the next
+tick. And the lost command was never the receive path's doing: the paste ended 0.7 s before the
+prompt, so nothing was receiving. The queue holds the paste's first 255 bytes and the command takes
+1.9 ms to arrive, before the shell has read a key. So the note for the board stands.
+
 **What was tested in the addendum's round**: the host test 1053 of 1053 at 4696b70 (31 tests, seeds
 1, 7 and 123); test-gpuos 32 of 32 at 94f5c3f in 237 s
 ([evidence](evidence/gpu-g3/cube-rereview-test-gpuos.txt)); make check (big) passed on 6e04323, the

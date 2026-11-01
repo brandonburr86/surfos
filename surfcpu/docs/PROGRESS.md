@@ -1381,3 +1381,17 @@ ddr-3 built five candidates, every gate passing on each
   here too, and `test-os-qemu` has no display to see it), and the screen copy with interrupts off (J2).
 * Physical: nothing has run on the board since the merge. Files on the owner's card (m8) and
   milestone 9's board test come next, with a kernel built from `ai-dev`.
+
+### 2026-10-31: a paste at the UART
+
+* The finding left in shared code (`kernel/tty.c`, the 2026-10-26 entry) is settled, on the RTL SoC:
+  [evidence/os/paste-2026-10-31.txt](evidence/os/paste-2026-10-31.txt), `docs/CODE-AUDIT.md` B88 and B89.
+* A full queue's dropped bytes wake nobody now. That cost was real: a 3,000-byte paste during
+  `gfx cube 2` missed 16 frames before and 4 now.
+* That fix alone would have left this board worse off. `irq_external()`'s storm guard switched a source
+  off for good after 32 rounds, and a UART at the line's speed is pending again each round: 8 KB left
+  the serial line dead until the next boot, and with the cheaper drop 3,000 bytes did. A source that
+  stays pending now rests until the next tick. `test-soc-system-boot` has a paste run for it.
+* A command sent the moment the prompt shows, after a long paste, is still lost: the queue is full and
+  the command takes 1.9 ms. [GPU.md](GPU.md) 15.6's note for the board stays.
+* Physical: none of this has run on the board.
