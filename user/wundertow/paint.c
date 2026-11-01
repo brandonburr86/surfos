@@ -139,9 +139,10 @@ static int luma(unsigned int c) { return (int)((c >> 16 & 255) * 299 + (c >> 8 &
 /* 11/01/26: text meant for a background that is not here (an image, a gradient, a colour by var()) may be the colour of
    what is behind it now: white on the page's cream. Text no one can read helps nobody, so it takes the theme's colour,
    or white on what is dark. What is behind it is what is painted there, at (x, y) or the nearest of the viewport: the
-   top right of the text's box, where the ink of what came before it cannot reach (a slant, a smear). */
+   bottom right of the text's box, where the ink of what came before it cannot reach: a slant leans away from it. */
 static unsigned int readable(const struct wp_target *t, const struct wp_theme *th, int x, int y, unsigned int c) {
-    int px = x >= t->x + t->cw ? t->x + t->cw - 1 : x < t->x ? t->x : x, py = y < t->y ? t->y : y, back;
+    int px = x >= t->x + t->cw ? t->x + t->cw - 1 : x < t->x ? t->x : x;
+    int py = y >= t->y + t->ch ? t->y + t->ch - 1 : y < t->y ? t->y : y, back;
     if(px < 0 || py < 0 || px >= t->w || py >= t->h) return c;
     back = luma(t->pixels[(long)py * t->stride + px]);
     if(luma(c) - back < READABLE && back - luma(c) < READABLE) return back < 128 ? 0xffffff : th->fg;
@@ -211,7 +212,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             wp_fill(t, x, y + 1, it->w, 1, th->rule_light);
             break;
         case WI_MARK:
-            wp_text(t, x, y, l->marks + it->off, it->len, it->scale, 0, readable(t, th, x + it->w - 1, y, d->fg != WD_NONE ? d->fg : th->fg));
+            wp_text(t, x, y, l->marks + it->off, it->len, it->scale, 0, readable(t, th, x + it->w - 1, y + it->h - 1, d->fg != WD_NONE ? d->fg : th->fg));
             break;
         case WI_FIELD:
             field(t, d, th, it, x, y);
@@ -225,7 +226,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             int s = it->scale;
             c = text_color(d, th, it, hover);
             if(it->style & WS_MARK) wp_fill(t, x, y, it->w, it->h, th->mark);
-            c = readable(t, th, x + it->w - 1, y, c);
+            c = readable(t, th, x + it->w - 1, y + it->h - 1, c);
             run_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
             if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE)))
                 wp_fill(t, x, y + wf_under(s), it->w, wf_stroke(s), c);

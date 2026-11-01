@@ -408,7 +408,8 @@ static void proportional(void) {
     /* the ink of what comes before a text is not what is behind it */
     {
         static const char *const before[] = { "<p><sup><i>A</i></sup>word", "<p><i>\xc3\x96</i>word", "<p><b>\xe2\x96\x88</b>word",
-                                               "<p><sup><i>W</i></sup>word", "<p><i>\xe2\x94\x82</i>word" };
+                                               "<p><sup><i>W</i></sup>word", "<p><i>\xe2\x94\x82</i>word",
+                                               "<p><i>\xe2\x96\x88</i>word." };
         size_t c;
         for(c = 0; c < sizeof(before) / sizeof(before[0]); c++) {
             page(before[c], 200);
