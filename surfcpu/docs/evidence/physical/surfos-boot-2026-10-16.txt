@@ -1,0 +1,174 @@
+SurfOS boots on the board from the microSD card, out of DDR3L: the integrator's own capture, not a board-test run
+Board: Arty A7-100T (IDCODE 0x03631093), JP1 and JP2 off, the adapters on, the owner's 32 GB card with SurfOS 1.0.0 build
+fd374065 (deploy-sd). Design surfcpu_arty_a7_ddr built at 92a2b51 (clean, every open-flow gate passed, placer seed 1),
+loaded into configuration RAM with make program-volatile while tools/uart.py capture listened (seconds since the port opened):
+  +    4.859 | 
+  +    4.859 | SurfBoot 1.1.0 (build 92a2b510), the SurfCPU boot ROM
+  +    4.859 | soc: Arty A7-100T (0x100), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 92a2b510
+  +    5.067 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  +    5.067 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    5.099 | sd: SDHC/SDXC, 29.7 GiB; ready after 12 ms; SPI 6250 kHz, data CRC checked
+  +    5.099 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  +    5.117 | boot: /BOOT/SURFOS.BIN
+  +    5.117 | boot: loading 379 KiB .....
+  +    7.163 | boot: SurfOS 1.0.0 build fd374065: 388724 bytes in 8 fragments, read in 2052 ms
+  +    7.179 | boot: load 0x80000000, entry 0x80000000, mem_size 1242752, ISA IM_Zicsr_Zifencei; payload CRC 0x57de0d6c matches (card and DDR)
+  +    7.195 | boot: no /BOOT/CMDLINE.TXT; empty command line
+  +    7.195 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +    7.195 | 
+  +    7.755 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +    7.787 | Memory: kernel 0x80000000-0x8012f67f, DMA heap 0x80130000-0x8022ffff, kernel heap 0x80230000-0x8effffff (237 MB)
+  +    8.011 | Booting SurfOS Kernel.....
+  +    8.027 | 
+  +    8.027 | 
+  +    8.027 | Interrupt Initialization
+  +    8.043 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +    8.075 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  +    8.107 | *Interrupts Enabled
+  +    8.363 | 
+  +    8.363 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +    8.411 | 
+  +    8.411 | Serial Console
+  +    8.427 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +    8.459 | *receive interrupt, source 0
+  +    8.475 | *DONE
+  +    8.475 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +    8.507 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +    8.555 | +SD: out of range (ACMD41 failed)
+  +    8.587 | 
+  +    8.587 | Drivers: serial gpio ps2kbd sdcard(FAILED)
+  +    8.603 | 
+  +    8.603 | File Systems
+  +    8.987 | *DONE
+  +    8.987 | 
+  +    8.987 | Timer
+  +    8.987 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +    9.131 | 
+  +    9.179 | 
+  +    9.243 | Brandon Burr's SurfOS
+  +    9.307 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +    9.403 | SURF ≋#> 
+
+Then typed at the shell (115200 8N1, 3 ms between characters; ANSI colour codes as received):
+  === uptime
+      up 36.78 s (3678 ticks at 100 Hz), 8 tasks, 1 timers pending
+      mtime 41102688 at 1000000 Hz; heartbeat 74
+  [0;1;34mSURF ≋[1;33m#[0;1;34m>[0m === ps
+  
+  SurfOS Task List
+  --------------------------
+    PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME
+      0  ready     LOW           4425       313      -1  Kernel Idle Task
+      1  blocked   HIGH             4         2      -1  init
+      2  sleeping  LOW              0        91       1  heartbeat
+      3  sleeping  LOW              0       225       1  sdwatch
+      4  running   HIGH            85        13       1  Shell 0
+      5  blocked   HIGH             3         5       1  Shell 1
+      6  blocked   HIGH             4         5       1  Shell 2
+      7  blocked   HIGH             4         4       1  Shell 3
+  
+  8 tasks
+  [0;1;34mSURF ≋[1;33m#[0;1;34m>[0m === memstat
+  
+  SurfOS Memory Statistics
+  --------------------------
+  Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
+  Kernel: 0x80000000-0x8012f67f (BSS 0x8005ee40-0x8012f67f)
+  Memstart: 0x8012f680  Memend: 0x90000000
+  
+  kernel heap: 0x80230000-0x80260000 (192 KB grown in 3 steps, room to 0x8f000000)
+    used: 143392 bytes in 22 blocks   free: 52848 bytes in 1 blocks
+  dma heap: 0x80130000-0x80130000 (0 KB grown in 0 steps, room to 0x80230000)
+    used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
+  heap check: ok
+  
+  [0;1;34mSURF ≋[1;33m#[0;1;34m>[0m === tasks
+      started task A (pid 8) and task B (pid 9)
+      task A: round 1 of 4, tick 6142, sleeping 100 ms
+      task B: round 1 of 3, tick 6147, sleeping 170 ms
+      task A: round 2 of 4, tick 6166, sleeping 100 ms
+      task B: round 2 of 3, tick 6182, sleeping 170 ms
+      task A: round 3 of 4, tick 6185, sleeping 100 ms
+      task B: round 3 of 3, tick 6207, sleeping 170 ms
+      task A: round 4 of 4, tick 6210, sleeping 100 ms
+      task A ran 4 rounds, task B 3, in 99 ticks; both ended (status 0, 0)
+  [0;1;34mSURF ≋[1;33m#[0;1;34m>[0m === uptime
+      up 69.60 s (6960 ticks at 100 Hz), 8 tasks, 1 timers pending
+      mtime 73921408 at 1000000 Hz; heartbeat 138
+  [0;1;34mSURF ≋[1;33m#[0;1;34m>[0m 
+Found: the kernel's own SD driver failed on this card ('+SD: out of range (ACMD41 failed)'): it sent ACMD41 in the byte right
+after CMD55's response; fixed in 22cbdc9 (8 clocks between them, both card models now count the mistake).
+
+After the fix (22cbdc9): the owner installed SurfOS 1.0.0 build 22cbdc9a with deploy-sd and put the card back; the same
+bitstream was loaded again:
+  +    4.850 | 
+  +    4.850 | SurfBoot 1.1.0 (build 92a2b510), the SurfCPU boot ROM
+  +    4.866 | soc: Arty A7-100T (0x100), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 92a2b510
+  +    5.058 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  +    5.074 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    5.298 | sd: SDHC/SDXC, 29.7 GiB; ready after 216 ms; SPI 6250 kHz, data CRC checked
+  +    5.314 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  +    5.314 | boot: /BOOT/SURFOS.BIN
+  +    5.314 | boot: loading 379 KiB .....
+  +    7.378 | boot: SurfOS 1.0.0 build 22cbdc9a: 388740 bytes in 2 fragments, read in 2054 ms
+  +    7.378 | boot: load 0x80000000, entry 0x80000000, mem_size 1242768, ISA IM_Zicsr_Zifencei; payload CRC 0x2db948e5 matches (card and DDR)
+  +    7.394 | boot: no /BOOT/CMDLINE.TXT; empty command line
+  +    7.394 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +    7.410 | 
+  +    7.970 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +    7.986 | Memory: kernel 0x80000000-0x8012f68f, DMA heap 0x80130000-0x8022ffff, kernel heap 0x80230000-0x8effffff (237 MB)
+  +    8.226 | Booting SurfOS Kernel.....
+  +    8.242 | 
+  +    8.242 | 
+  +    8.242 | Interrupt Initialization
+  +    8.242 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +    8.274 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  +    8.306 | *Interrupts Enabled
+  +    8.578 | 
+  +    8.578 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +    8.610 | 
+  +    8.610 | Serial Console
+  +    8.626 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +    8.674 | *receive interrupt, source 0
+  +    8.674 | *DONE
+  +    8.690 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +    8.706 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +    8.786 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-only (sd=rw on the command line writes)
+  +    8.882 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  +    8.946 | 
+  +    8.946 | Drivers: serial gpio ps2kbd sdcard
+  +    8.962 | 
+  +    8.962 | File Systems
+  +    9.378 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973447 free (FSInfo)
+  +    9.490 | +VFS: sd0p1 mounted on /sd0p1 (fat, read-only)
+  +    9.570 | *DONE
+  +    9.618 | 
+  +    9.682 | Timer
+  +    9.746 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +    9.874 | 
+  +    9.938 | 
+  +    9.986 | Brandon Burr's SurfOS
+  +   10.066 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   10.146 | SURF ≋#> 
+
+Then typed at the shell:
+  === ls /sd0p1
+      d        0  2026-10-16 13:59:10  .Spotlight-V100/
+      d        0  2026-10-16 15:22:32  .fseventsd/
+      d        0  2026-10-16 13:59:56  BOOT/
+      d        0  2026-10-16 13:59:56  SYSTEM/
+      d        0  2026-10-16 13:59:56  PROGRAMS/
+      d        0  2026-10-16 13:59:56  USERS/
+      6 entries, 0 bytes
+  SURF ≋#> === ls /sd0p1/BOOT
+      -   388740  2026-10-16 15:22:30  SURFOS.BIN
+      -   388724  2026-10-16 15:22:30  BACKUP.BIN
+      2 entries, 777464 bytes
+  SURF ≋#> === cat /sd0p1/SYSTEM/SURFCARD.TXT
+  SurfOS card for SurfCPU (tools/deploy-sd.py)
+  id=4fa3ac5c67fa678c
+  created=2026-10-16T18:59:56Z
+  SURF ≋#> === df
+      Device  Type       Size     Used    Avail  Use%  Mounted on    Label
+      sd0p1   fat32    29.7 GB   4.2 MB  29.7 GB    1%  /sd0p1        SURFOS
+  SURF ≋#> 

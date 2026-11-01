@@ -1,0 +1,122 @@
+SurfGPU: the DDR+GPU design through the open flow at the second review's fixes (72ba06c), 2026-10-18
+make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu on the Mac (docker surfcpu-openxc7:2026-10-15:
+Yosys 0.69, nextpnr-himbaechel 1.0.0, Project X-Ray), 41 minutes. nextpnr's timing is an estimate, not
+Vivado sign-off. Nothing here was loaded on a board: the physical tests are the integrator's.
+
+The rebuild (the second review, finding 6). Built from a clean tree at 72ba06c, the final code
+commit of round gpu-fix-2 (sc/gpu), on an Apple Silicon Mac (Darwin-arm64, the containers aarch64):
+  export SOURCE_DATE_EPOCH=1792346703 LC_ALL=C TZ=UTC    # 72ba06c's commit time: git log -1 --format=%ct
+  make build-rom
+  make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+images surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d9349dd5270223947f4caf58aada608b7ba3e0fcf21b03ad85fef55)
+and surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac370d991addab18ddf9529d16e4bcaa93c457eb1941c59cb236b2f0);
+chip database sha256 f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f. The design list's
+seeds 1..8, each under the limit of 1800 s (pnr-timeout): seed 1 routed (274 s), the only one
+tried. The .bit header's date is the epoch (2026/10/18 18:05:03 UTC), as is the manifest's
+build_time; the build id 72ba06c4 is in the ROM and the bitstream, so only a checkout of 72ba06c
+rebuilds these bytes. dram_clk met its constraint with +0.087 ns, the least margin of the
+DDR+GPU builds so far (+1.24 ns at 32bffc8, +0.84 ns at c217f27). A second build to compare the
+sha256 was not made (optional).
+
+source 72ba06c4e434, dirty = false; build id 72ba06c4; defines ["ARTY_HAS_GPU", "ARTY_HAS_DDR", ]
+boot ROM build/fw/surfboot.mem sha256 be8aa3df6f4145905b61e27c577a294468cc3d4b506ee8695df0c22788754386
+bitstream sha256 0eaca07605799f90bd9528c14656554f4d972ddf3cbc067a6988388eae3592c3, 3825962 bytes
+
+checks (tools/openxc7-build.sh, then tools/fpga-build.sh's own):
+  check SRL cells     PASS (none in the synthesized netlist, which LVS could not check: check-srl.txt)
+  check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)
+  check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)
+  check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)
+  check block RAM     PASS (contents decoded from the bitstream: check-bram.txt)
+  check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)
+  check clocks        PASS (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  check_netlist = "PASS"
+  check_boot_rom = "PASS"
+  LVS: registers: 6531 gold, 6531 gate, 6531 matched by name
+  LVS: memories: 404 gold, 501 gate, 404 paired and checked at the boundary
+  LVS: 18793 proved, 0 differ, 0 unknown   (1921.15s)
+  memories and multiplier (boards/arty_a7/netlist_check.py):
+    memory (RTL)                                   bits   netlist cells
+    u_dram.storage                                  352   4 RAM32M
+    u_dram.storage_1                                352   4 RAM32M
+    u_dram.storage_2                                352   4 RAM32M
+    u_dram.storage_3                                352   4 RAM32M
+    u_dram.storage_4                                352   4 RAM32M
+    u_dram.storage_5                                352   4 RAM32M
+    u_dram.storage_6                                352   4 RAM32M
+    u_dram.storage_7                                352   4 RAM32M
+    u_dram_adapter.wdata_fifo.mem                   288   24 RAM32M
+    u_soc.g_gpu.u_gpu.u_fifo.mem                   2048   11 RAM64M
+    u_soc.g_gpu.u_vram.g_bank[0].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[1].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[2].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[3].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[4].u_bank.mem      360448   12 RAMB36E1
+    u_soc.u_bootrom.rom                          524288   15 RAMB36E1
+    u_soc.u_core.fetch.fifo.mem                     252   11 RAM32M
+    u_soc.u_core.regfile.regs                      1024   12 RAM32M
+    u_soc.u_ps2.u_fifo.mem                          128   2 RAM32M
+    u_soc.u_scratch.ram                          524288   16 RAMB36E1
+    u_soc.u_textram.mem                          131072   4 RAMB36E1
+    u_soc.u_uart.u_rxfifo.mem                       512   3 RAM64M
+    u_soc.u_uart.u_txfifo.mem                       128   2 RAM32M
+    u_soc.u_video.g_gfx.gpal                       3072   1 RAMB18E1
+    u_soc.u_video.u_font.rom                      32768   1 RAMB36E1
+    DSP48E1 in the netlist: 4
+    DSP48E1 taking operands from u_soc.u_core.muldiv: 4 (expected 4)
+    netlist_check: PASS
+
+placement attempts:
+  seed 1: pass, routed; 'clk100_g': 1013.17 MHz (PASS at 100.00 MHz), 'u_dram.iodelay_clk': 349.90 MHz (PASS at 200.00 MHz), 'dram_clk': 80.56 MHz (PASS at 80.00 MHz), 'pix_clk': 108.04 MHz (PASS at 25.17 MHz), 'sys_clk': 52.28 MHz (PASS at 25.00 MHz)
+timing (nextpnr):
+  clock clk100_g: constraint 100.00 MHz, achieved 1013.17 MHz, slack +9.013 ns  PASS
+  clock dram_clk: constraint 80.00 MHz, achieved 80.56 MHz, slack +0.087 ns  PASS
+  clock pix_clk: constraint 25.17 MHz, achieved 108.04 MHz, slack +30.468 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 52.28 MHz, slack +20.874 ns  PASS
+  clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 349.90 MHz, slack +2.142 ns  PASS
+  cross-domain paths (reported, not checked):
+    posedge dram_clk -> posedge sys_clk: 1.15 ns
+    posedge pix_clk  -> posedge sys_clk: 1.46 ns
+    posedge sys_clk  -> posedge dram_clk: 1.40 ns
+    posedge sys_clk  -> posedge pix_clk: 1.52 ns
+  critical paths:
+    clk100_g: 0.99 ns = 0.45 ns logic, 0.54 ns routing; from u_dram.builder_reset4 (build/litedram/arty/gateware/litedram_core.v:299) to u_dram.builder_reset4 (build/litedram/arty/gateware/litedram_core.v:299)
+    dram_clk: 12.41 ns = 3.15 ns logic, 9.26 ns routing; from u_dram.main_litedramcore_zqcs_timer_count0[22] (build/litedram/arty/gateware/litedram_core.v:2147) to u_dram.main_litedramcore_zqcs_timer_count0[22] (build/litedram/arty/gateware/litedram_core.v:2147)
+    pix_clk: 9.26 ns = 3.88 ns logic, 5.38 ns routing; from u_soc.u_video.gfx3[0] (rtl/peripherals/surf_video.v:341) to u_soc.u_video.g_gfx.crc_nxt[20] (rtl/peripherals/surf_video.v:496)
+    sys_clk: 19.13 ns = 4.29 ns logic, 14.83 ns routing; from u_soc.g_gpu.u_gpu.cg[1] (rtl/peripherals/surf_gpu.v:183) to u_soc.g_gpu.u_gpu.cg[1] (rtl/peripherals/surf_gpu.v:183)
+    u_dram.iodelay_clk: 2.86 ns = 1.41 ns logic, 1.45 ns routing; from u_dram.main_reset_counter[1] (build/litedram/arty/gateware/litedram_core.v:2154) to u_dram.main_reset_counter[1] (build/litedram/arty/gateware/litedram_core.v:2154)
+
+utilization:
+  Against the xc7a100t's documented capacity (AMD DS180):
+  LUTs (Yosys LUT1-6 and INV cells; packing can only reduce)    11355 / 63400    17.9%
+  LUT positions (nextpnr SLICE_LUTX, two per LUT6)              16771 / 126800   13.2%
+  flip-flops                                                     6531 / 126800    5.2%
+  carry chains (CARRY4, one per slice)                            744 / 15850     4.7%
+  36 Kb block RAMs (RAMB18 = 1/2)                               112.5 / 135      83.3%
+  DSP48E1                                                           4 / 240       1.7%
+  Yosys cells: BUFG 7, CARRY4 728, DSP48E1 4, FDCE 8, FDPE 10, FDRE 5893, FDSE 620, IBUF 17, IDELAYCTRL 1, IDELAYE2 16, INV 487, IOBUF 18, IOBUFDS 2, ISERDESE2 16, LUT1 6, LUT2 1952, LUT3 2255, LUT4 1731, LUT5 3336, LUT6 1588, MMCME2_BASE 1, MUXF7 12, MUXF8 5, OBUF 60, OBUFDS 1, OSERDESE2 45, PLLE2_ADV 1, PLLE2_BASE 1, RAM32M 83, RAM64M 14, RAMB18E1 1, RAMB36E1 112
+
+step times:
+  presynth         3.78 s  ok
+  synth           36.38 s  ok
+  check-srl        0.16 s  ok
+  models           0.00 s  ok
+  check-synth      0.22 s  ok
+  chipdb           0.00 s  ok
+  chipdb-sha       0.04 s  ok
+  pnr            274.08 s  ok
+  frames          48.79 s  ok
+  bit              0.07 s  ok
+  stamp            0.04 s  ok
+  report           0.04 s  ok
+  check-clk       33.02 s  ok
+  check-gclk       0.17 s  ok
+  check-bit        2.31 s  ok
+  decode          10.71 s  ok
+  roundtrip       59.33 s  ok
+  bram-extract    24.26 s  ok
+  check-bram       0.55 s  ok
+  lvs-gold         0.80 s  ok
+  lvs-extract     23.18 s  ok
+  lvs-bramwe       1.37 s  ok
+  lvs-prove     1925.03 s  ok

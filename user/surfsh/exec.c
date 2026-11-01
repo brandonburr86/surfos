@@ -187,11 +187,16 @@ static int restore(struct saved *s, int status) {
             if(!status) status = STATUS_FAIL;
         }
         if(s->fd[i] == 2) fflush(stderr);
+        /* 10/16/26 (audit B10): the file is closed first, on its own, so a write-back that fails at the close fails the
+           command too (dup2() would close it without a word) */
+        if(close(s->fd[i]) < 0 && errno == EIO) {
+            if(s->name[i]) fprintf(stderr, "surfsh: %s: %s\n", s->name[i], strerror(EIO));
+            else fprintf(stderr, "surfsh: %s\n", strerror(EIO));
+            if(!status) status = STATUS_FAIL;
+        }
         if(s->copy[i] >= 0) {
             dup2(s->copy[i], s->fd[i]);
             close(s->copy[i]);
-        } else {
-            close(s->fd[i]);
         }
         free(s->name[i]);
     }

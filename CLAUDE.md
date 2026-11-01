@@ -5,6 +5,14 @@ tasks, demand-paged kernel heaps) that was restored from printouts in 2026. Bran
 `master` is the restoration; `ai-dev` is where the kernel grows. Read `docs/README.md`
 first; it points to the architecture map, the code audit and the roadmap.
 
+`surfcpu/` holds SurfCPU (a RISC-V CPU and SoC for the Arty A7 FPGA) and `arch/riscv32/` +
+`boards/` the RISC-V port of SurfOS, on this branch since 10/31/26; read `surfcpu/CLAUDE.md` for
+that work. The x86 kernel stays at the top of the tree. The shared kernel (`kernel/`, `fs/`,
+`mm/`, `shell/`) builds for both: a change there passes the suites below and `make -C surfcpu
+test-os-qemu` (RISC-V QEMU: `boards/qemu_virt/test_os.py`, which has no display), and a change to
+the console also `make -C surfcpu test-soc-system-boot` (the Arty's VGA pins). What machine mode
+lacks is in `arch/riscv32/absent.c`.
+
 ## Build, run, test
 
 Requirements: `gcc` with 32-bit support (`gcc-multilib` on Debian/Ubuntu), `binutils`,
@@ -351,9 +359,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   Storage milestone 1 (10/24/26, docs/CODE-AUDIT.md): the cache writes a device's blocks in the
   order FAT gives them (data, tables, entries, FSInfo: `bdirty_order()`), and FAT syncs between
   the steps that need the reverse (`fat_order_point()`) holding the volume's lock, which every
-  FAT operation and `fat_sync()` hold: keep new code that frees or links clusters inside that
-  rule, and add a scenario to `tests/host/test_fatfs.c` (its oracle checks the image after every
-  write; `test_fatfs <name>` runs one, `FATFS_VERBOSE=1` says each check). A block whose write
+  FAT operation holds; a write out goes from a copy of a block (audit B12), so `fat_sync()` need
+  not hold it: keep new code that frees or links clusters inside that rule, and add a scenario to
+  `tests/host/test_fatfs.c` (its oracle checks the image after every write; `test_fatfs <name>`
+  runs one, `FATFS_VERBOSE=1` says each check; `test_fatsave.c` holds x86's scenarios). A block whose write
   failed stays dirty (`bcache: write of ... failed`): `sync` tries again, `umount` gives it up and
   says how many.
 * The shell: `shell=kernel` on the kernel command line gives the ring-0 shell on every

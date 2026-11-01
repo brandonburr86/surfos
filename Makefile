@@ -8,7 +8,7 @@
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
 #   make test-tcp     TCP against hand-made segments on a raw link (tools/qemu-tcp.py; the smoke test runs it too)
-#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs, the cache and FAT too)
+#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs, the block cache and FAT too)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
@@ -498,6 +498,17 @@ $(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/p
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
+# 10/18/26 (audit B60): cp (shell/cp.c, both kernels' shells) against a file layer the test scripts; its printf() and
+# strerror() renamed so that the test keeps the host's
+$(BUILD)/host/kernel/shell/cp_test.o: shell/cp.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (cp test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -Dprintf=cp_printf -Dstrerror=cp_strerror -c $< -o $@
+
+$(BUILD)/host/test_cp: tests/host/test_cp.c $(BUILD)/host/kernel/shell/cp_test.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
 # the console's character set (10/6/26): code page 437, the UTF-8 decoder, the font in the same order
 $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/font8x16.o \
                           $(BUILD)/host/kernel/driver/font12x24.o $(BUILD)/host/kernel/driver/font16x32.o $(HOSTLIB_OBJ)
@@ -518,16 +529,9 @@ $(BUILD)/host/test_pager: tests/host/test_pager.c tests/host/vt_cases.h $(PAGER_
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $(filter %.c %.o,$^) -o $@
 
-# mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
-# fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
-$(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
-$(BUILD)/host/test_mkfs: tests/host/test_mkfs.c $(BUILD)/host/kernel/fs/fat_mkfs.o $(HOSTLIB_OBJ)
-	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
-
-# 10/24/26 (storage, milestone 1): the block cache and FAT together, fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they
-# are, over RAM disks that refuse writes and are pulled out at every write (tests/host/test_fatfs.c, the SurfCPU
-# branch's harness); tests/host/pager_shim stands in for the interrupt flag
+# 10/16/26 (audit B5-B11): the block cache and FAT together, fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they are, over
+# RAM disks that refuse writes on request, with a check of the image after every write the disk stores
+# (tests/host/test_fatfs.c); tests/host/pager_shim stands in for the interrupt flag
 FATFS_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
 FATFS_OBJ   = $(BUILD)/host/fatfs/fs/bcache.o $(BUILD)/host/fatfs/fs/fat.o $(BUILD)/host/fatfs/fs/fat_mkfs.o
 $(BUILD)/host/fatfs/%.o: %.c tests/host/surf_names.h
@@ -539,10 +543,48 @@ $(BUILD)/host/test_fatfs: tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) $^ -o $@
 
-test-fatfs: $(BUILD)/host/test_fatfs
-	$(BUILD)/host/test_fatfs
-unittest: test-fatfs
-.PHONY: test-fatfs
+# 10/24/26 (storage, milestone 1 on x86): the same harness with x86's scenarios: a save pulled at every write it makes,
+# twins, a rename over a file in place, unmounts beside writes (tests/host/test_fatsave.c; test_fatfs.c until the two
+# lines were joined, 10/31/26)
+$(BUILD)/host/test_fatsave: tests/host/test_fatsave.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) $^ -o $@
+
+# 10/16/26 (round fs-fix-2, audit B12-B19): the randomized harness of the review of B5-B11, kept as a test: random
+# FAT operations over a disk that refuses writes, and reads, at random, with test_fatfs.c's oracle and checks of the
+# image (tests/host/test_fatfuzz.c: a fixed set of seeds, about 10 s in the devenv)
+$(BUILD)/host/test_fatfuzz: tests/host/test_fatfuzz.c tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fatfuzz.c $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
+
+# and its threaded one: the cache and FAT run by host threads at once with the kernel's waits made real
+# (tests/host/test_fatconc.c; its host side fatconc_host.c is built with the host's headers, fatconc_shim/ stands in
+# for the interrupt lock): four settings, 3 s each (10/16/26, round fs-fix-3: the fourth is the review of B12-B19's,
+# six writers on a small volume, which found trim_chain()'s window, B25); 10/17/26 (round fs-fix-7, audit B46): and
+# `umount`, an umount interrupted while another thread's write is in flight (about 1 s)
+FATCONC_FLAGS = -Itests/host/fatconc_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+# 10/16/26 (round fs-fix-3): in the cache and FAT, curTask stands for the calling thread's own task (fatconc_task(),
+# tests/host/test_fatconc.c): a block one thread's operation sets aside is the other threads' syncs' debt (audit B26)
+FATCONC_FSFLAGS = $(FATCONC_FLAGS) '-DcurTask=(*fatconc_task())'
+FATCONC_OBJ   = $(BUILD)/host/fatconc/fs/bcache.o $(BUILD)/host/fatconc/fs/fat.o $(BUILD)/host/fatconc/fs/fat_mkfs.o
+$(BUILD)/host/fatconc/fs/%.o: fs/%.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatconc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATCONC_FSFLAGS) -c $< -o $@
+$(BUILD)/host/fatconc/fatconc_host.o: tests/host/fatconc_host.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatconc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -c $< -o $@
+$(BUILD)/host/test_fatconc: tests/host/test_fatconc.c $(FATCONC_OBJ) $(BUILD)/host/fatconc/fatconc_host.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATCONC_FLAGS) -pthread $^ -o $@
+
+# mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
+# fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
+$(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
+$(BUILD)/host/test_mkfs: tests/host/test_mkfs.c $(BUILD)/host/kernel/fs/fat_mkfs.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
 # 10/25/26 (robustness, B1): the kernel heap, mm/kalloc.c as it is, in a static array of the test whose frame
 # allocator refuses on demand (tests/host/kalloc_host.h, test_kalloc.c), and the rule of the frame classes (mm/pmm.h)
@@ -675,10 +717,11 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
-          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
+          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
           $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_httpd $(BUILD)/host/test_ftp \
-          $(BUILD)/host/test_fetch $(BUILD)/host/test_wclock $(BUILD)/host/test_wcharmap
+          $(BUILD)/host/test_fetch $(BUILD)/host/test_wclock $(BUILD)/host/test_wcharmap \
+          $(BUILD)/host/test_fatfs $(BUILD)/host/test_fatsave $(BUILD)/host/test_fatfuzz $(BUILD)/host/test_fatconc
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -687,7 +730,17 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(PYTHON) tests/test_part_tools.py $(BUILD)/host/test_part
 	$(BUILD)/host/test_libc
 	$(BUILD)/host/test_mkfs
+	$(BUILD)/host/test_fatfs
+	$(BUILD)/host/test_fatsave
+	$(BUILD)/host/test_fatfuzz
+	$(BUILD)/host/test_fatconc 11 3 3 1 30 0
+	$(BUILD)/host/test_fatconc 12 3 4 1 0 1
+	$(BUILD)/host/test_fatconc 21 3 3 1 100 1 1 1 1 16384 0
+	$(BUILD)/host/test_fatconc 33 3 6 1 0 1 0 0 1 8192 0
+	$(BUILD)/host/test_fatconc umount
+	$(BUILD)/host/test_fatconc mutex
 	$(BUILD)/host/test_prompt
+	$(BUILD)/host/test_cp
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
 	$(BUILD)/host/test_telnet
@@ -699,6 +752,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_fetch
 	$(BUILD)/host/test_wclock
 	$(BUILD)/host/test_wcharmap
+	$(PYTHON) -m unittest discover -s tests -p test_qemu_ports.py
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
@@ -776,7 +830,7 @@ help:
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
-                           $(BUILD)/host/sim/*.d $(BUILD)/host/fatfs/fs/*.d \
+                           $(BUILD)/host/sim/*.d $(BUILD)/host/fatfs/fs/*.d $(BUILD)/host/fatconc/fs/*.d \
                            $(BUILD)/host/pager/tests/host/*.d)
 
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.

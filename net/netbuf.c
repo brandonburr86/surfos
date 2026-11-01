@@ -243,7 +243,7 @@ static void net_thread(void *arg) {
 void init_net(void) {
     event_init(&net_event);
     event_init(&rxq_room);
-    net_task = kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+    net_task = kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED | TF_SYSTEM);   /* (B59) */
 }
 
 /* 10/10/26: a driver's frames: never waiting (an interrupt handler, a completion with interrupts off) */

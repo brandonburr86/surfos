@@ -1,0 +1,66 @@
+SurfGPU G4: the gpudiag design rebuilt at 2ff8b24 (the review's checks), 2026-10-26: NOT ROUTED with seed 3
+Built as docs/GPU.md 14.2 describes, at 2ff8b24 from a clean tree (nothing modified, nothing untracked):
+SOURCE_DATE_EPOCH 1793033102 (the commit's time), LC_ALL=C, TZ=UTC, the flow's settings unset, make build-rom,
+then PLACER_SEEDS=3 make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag on the Mac
+(docker surfcpu-openxc7:2026-10-15 through the capped wrapper, both slots). Seed 3 was the one that routed at
+bfaac48 (synth-gpudiag.txt). It did not route here, and no other seed was tried: the integrator's decision is
+that the board's gpudiag stays the bfaac48 build. The whole build directory is kept outside git, in the gpu-g4
+worktree's build/g4-fpga-gpudiag-r3-2ff8b24/; the lines below are from it and from the build's log.
+
+manifest (written before the flow ran):
+  run_id = "surfcpu_arty_a7_gpudiag-arty_a7_100t-2ff8b249-20261026T202624Z"
+  source_revision = "2ff8b2495b7d91842c40920914aefbbebae0e350"
+  source_dirty = false
+  build_id = "2ff8b249"
+  build_time = 1793033102
+  placer_seeds = [3, ]
+  placer_seeds_from = "PLACER_SEEDS"
+  sources_sha256 = "60412e3861c50672abde6a7d7cf093a2aa62f1c4616e610503f08e0d423d64d7"
+  constraints_sha256 = "9569e413c6bf1dcb689947546f78692998abbcd1ce5e4404a9167eb26a1c50dc"
+  rom_sha256 = "e782217aada3159df4d259702dcdd059bb3711af8d208c307b117bbc50c03938"
+  (bfaac48's: build_id bfaac489, build_time 1792971531, rom_sha256 aaee817d...; sources_sha256 and
+  constraints_sha256 the same as here: the design's sources and constraints are bfaac48's byte for byte)
+
+the build's log:
+  build-fpga-r3.sh: surfcpu_arty_a7_gpudiag at 2ff8b24, SOURCE_DATE_EPOCH 1793033102, start 20:26:22 UTC
+  build-fpga-r3.sh: build-rom done 20:26:23 UTC
+  fpga-build: surfcpu_arty_a7_gpudiag for arty_a7_100t (xc7a100tcsg324-1), build 2ff8b249, flow openxc7 (surfcpu-openxc7:2026-10-15)
+  fpga-build: boot ROM build/fw/gpudiag.mem (as build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/rom/gpudiag.mem), sha256 e782217aada3159df4d259702dcdd059bb3711af8d208c307b117bbc50c03938
+  openxc7-build.sh: surfcpu_arty_a7_top for xc7a100tcsg324-1 (xc7a100t, chip database xc7a100t) in build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/openxc7
+  openxc7-build.sh: placement and routing, seed 3: timeout (nextpnr stopped at the limit of 1800 s, exit 124), not routed; router at iter=129, overused=6078
+  openxc7-build.sh: no placer seed of 3 placed and routed within its constraints
+  fpga-build: FAIL: tools/openxc7-build.sh exit status 1; check SRL cells missing; check synthesis missing; check bitstream missing; check round trip missing; check block RAM missing; check LVS missing; check clocks missing; nextpnr did not finish routing (router2 after 129 iterations, 6078 overused wires); no bitstream
+  build-fpga exit 2
+
+synthesis (the same Yosys 0.69 script as at bfaac48; only two defines differ):
+  2ff8b24: -DARTY_BUILD_ID=32'h2ff8b249 -DARTY_BUILD_TIME=32'h6adf838e
+  bfaac48: -DARTY_BUILD_ID=32'hbfaac489 -DARTY_BUILD_TIME=32'h6ade930b
+  (the boot ROM's contents differ too: block RAM initial values)
+  srlcheck: PASS: no SRL cell among 19745 cells
+  synthcheck: PASS (flip-flops as at bfaac48: surf_gpu 916, its walker u_tri 1898, the divider 144)
+  cells (Yosys stat.json), where the two netlists differ:
+    INV      bfaac48   486   2ff8b24   493
+    LUT2     bfaac48  3088   2ff8b24  3113
+    LUT3     bfaac48  1997   2ff8b24  1982
+    LUT4     bfaac48  1345   2ff8b24  1290
+    LUT5     bfaac48  3242   2ff8b24  3259
+    LUT6     bfaac48  1870   2ff8b24  1898
+    MUXF7    bfaac48     1   2ff8b24     0
+    all      bfaac48 19739   2ff8b24 19745   (LUT1 to LUT6: 11548 in both)
+
+placement and routing, seed 3 (nextpnr-himbaechel 1.0.0; nextpnr-seed3.log):
+  analytic placement of 12540 cells (bfaac48: 12521); HeAP 223.54 s, SA 44.67 s
+  placer estimates: sys_clk 44.36 MHz, pix_clk 102.85 MHz (bfaac48's seed 3: 49.05 and 107.57 MHz)
+  router2, overused wires at iterations 1 to 129: 1: 30270, 11: 688, 21: 255, 31: 215, 41: 138, 51: 124, 61: 124, 67: 98, 71: 121, 81: 145, 91: 242, 101: 388, 111: 1111, 121: 2928, 129: 6078
+  the fewest, 98, at iteration 67; then it diverged, and the flow stopped it at its limit of 1,800 s
+  (bfaac48's seed 3 routed in 91 iterations, 165 s of router2, 494 s of nextpnr in all)
+
+step times (times.txt):
+  presynth         5.11 s  ok
+  synth           39.96 s  ok
+  check-srl        0.16 s  ok
+  models           0.00 s  ok
+  check-synth      0.19 s  ok
+  chipdb           0.00 s  ok
+  chipdb-sha       0.03 s  ok
+  pnr           1800.03 s  FAILED (124)

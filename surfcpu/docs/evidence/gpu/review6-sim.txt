@@ -1,0 +1,82 @@
+SurfGPU, the sixth review's fixes (2026-10-19): gpudiag_check's --manifest must be a passing gpudiag
+build's; board-test refuses a run whose bitstream it cannot identify, and make board-test passes DESIGN;
+GPU.md 14's procedure (step 7 with DESIGN, step 8 the monitor's info, the FAIL rule, the build rule as
+the checker applies it). In the surfcpu-toolchain container and on the Mac's python3, on 4637857..2902a6a
+(sc/gpu). Nothing here ran on a board.
+
+make check at 2902a6a, from a clean tree: PASS in 1808 s; then test-os-kit-rtl: 3 of 3 checks passed in 183 s.
+Excerpts:
+  gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct, 71831931 cycles)
+  [after Ctrl-R] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct)
+  test_gpudiag_check: PASS (73 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth  ...
+  test-gpu: PASS
+  test_tools: 276 passed, 0 failed
+  slackcheck self-test: PASS (13 cases)
+  test-flow: PASS
+  ok   refuse-no-manifest: board-test m1 refused before asking anything (exit 2, no evidence): board-test.py: error: no build manifest at /work/surfcpu/build/os/kit/none/manifest.txt, so the bitstre ...
+  ok   refuse-other-design: board-test m3 refused before asking anything (exit 2, no evidence): board-test.py: error: the build manifest /work/surfcpu/build/os/kit/refuse-other-design/manifest.txt i ...
+  ok   edge-rtl-no-kernel: board-test m7 against the RTL system: FAIL in 1 s (0 checks seen by this script passed, 1 failed)
+  ok   edge-unplugged: board-test m1 against a fake board (vanish): FAIL in 3 s (0 checks seen by this script passed, 1 failed)
+  ok   edge-garbage: board-test m1 against a fake board (garbage): FAIL in 5 s (0 checks seen by this script passed, 1 failed)
+  ok   edge-silent: board-test m1 against a fake board (silent): FAIL in 6 s (0 checks seen by this script passed, 1 failed)
+  ok   edge-lost-second: board-test m1 against a fake board (skip): FAIL in 10 s (10 checks seen by this script passed, 1 failed; 1 not done or not compared)
+  ok   m3: board-test m3 against the RTL system: PASS in 20 s (25 checks seen by this script passed; 1 not done or not compared)
+  ok   edge-rtl-unplugged: board-test m5 against the RTL system: FAIL in 33 s (8 checks seen by this script passed, 1 failed)
+  ok   m7: board-test m7 against the RTL system: PASS in 59 s (10 checks seen by this script passed; 1 not done or not compared)
+  test-os-kit (check): 24 of 24 checks passed in 60 s
+  test-release: Ran 56 tests in 31.919s OK
+  check: all automated SurfCPU checks passed
+  ok   m5: board-test m5 against the RTL system: PASS in 47 s (11 checks seen by this script passed)
+  ok   m8: board-test m8 against the RTL system: PASS in 125 s (18 checks seen by this script passed)
+  ok   m9: board-test m9 against the RTL system: PASS in 183 s (9 checks seen by this script passed)
+
+each finding's tests on 9536fe3 and after:
+
+1. board-test and the m7 step. kit_test.py's two new refusals (fake boards a run would pass on), run
+   with 9536fe3's tools/board-test.py and with 2902a6a's:
+   refuse-no-manifest (m1, --manifest naming no file): 9536fe3 Verdict: PASS (10 checks seen by this script passed; 2 not done or not compared);
+     2902a6a refused, exit 2, no evidence
+   refuse-other-design (m3, the manifest of surfcpu_arty_a7_ddr_bramdiag, the same build id): 9536fe3
+     Verdict: PASS (27 checks seen by this script passed; 1 not done or not compared); 2902a6a refused, exit 2, no evidence
+   make -n -C surfcpu board-test M=m7 DESIGN=surfcpu_arty_a7_ddr_gpu (the review's m7_make_n.out, then now):
+     9536fe3: python3 tools/board-test.py m7 --port "auto" --board "arty_a7_100t"
+     2902a6a: python3 tools/board-test.py m7 --port "auto" --board "arty_a7_100t" --design "surfcpu_arty_a7_ddr_gpu"
+   board-test.py m7 with no design (what make passed at 9536fe3), its port a path that does not exist:
+     9536fe3: it runs, asking for surfcpu_arty_a7_ddr, whose manifest is missing (the review's probe:
+       "surfcpu_arty_a7_ddr/manifest.txt (MISSING: the build id is not compared)"); its first step: "Install SurfOS on the card (make -C surfcpu deploy-sd  ..."
+     2902a6a: board-test.py: error: no build manifest at surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr/
+       manifest.txt, so the bitstream loaded could not be identified and this run could not pass. Name the
+       design you load (make board-test DESIGN=..., or --design) or its build manifest (--manifest FILE);
+       exit 2
+   with --design surfcpu_arty_a7_ddr_gpu (its manifest present): both run, asking for that design.
+
+2. the FAIL rule: by reading (GPU.md section 14).
+
+3. gpudiag_check --manifest. The review's adversarial6.py (real transcripts, real manifests) with
+   9536fe3's checker and with 4637857's: every case alike but B6:
+   9536fe3: FALSE PASS PASS (right: FAIL (the manifest is not gpudiag's)) B6 a gpudiag run of build e119a787 judged with the DDR+GPU design's manifest (another de
+   4637857: ok         FAIL (right: FAIL (the manifest is not gpudiag's)) B6 a gpudiag run of build e119a787 judged with the DDR+GPU design's manifest (another de
+   test_gpudiag_check.py (73 cases) with 9536fe3's checker: 4 fail, the new cases of a manifest that is
+   not a passing gpudiag build's; with 4637857's, 73 of 73:
+     FAIL B6: --manifest: the DDR+GPU design's manifest (the same build id)
+     FAIL --manifest: a gpudiag-named design with another boot ROM
+     FAIL --manifest: a build that failed its checks (its flow section's result pass)
+     FAIL --manifest naming no design
+     test_gpudiag_check: FAIL (4 of 73 checks)
+   the review's sweeps with the new checker, the counts the review had on 9536fe3:
+     P1 uart.py capture of the 317c8f4b run ending at each character of the echo line (--manifest): 96 cuts, 0 not PASS
+     P2 raw CRLF log ending at each byte of the echo line (--manifest): 96 cuts, 0 not PASS
+     P3 raw LF log ending at each byte of the echo line: 94 cuts, 0 not PASS
+     P4 a first run, the echo, a rerun, ending at each byte of its echo line (raw): 96 cuts, 0 not PASS
+     P5 a FAILING run ending at each byte of the echo line (raw): 96 cuts, 0 not FAIL
+     P6 a FAILING run, uart.py capture form: 96 cuts, 0 not FAIL
+     P7 the GPUDIAG line itself cut (raw): a cut summary must not pass: 29 cuts, 3 not FAIL
+     S1m RESET at each of 1360 characters of a good 317c8f4b run, then a whole run, --manifest: 0 false fails
+     S2m the console opened at each of 1360 characters of a good run, then RESET and a whole run, --manifest: 0 false fails
+     S6 one byte garbled at each of 1360 positions of a whole run of ANOTHER build, then a 317c8f4b run, --manifest: 0 false passes
+     S7 one byte garbled at each of 1372 positions of a DIRTY 317c8f4b run, --manifest (clean): 0 false passes
+     (P7's three are cuts after the line's ")": the whole line)
+
+4. the build rule as documented: B12 (the banner garbled, the bitstream line intact, --manifest) and B14
+   (--build-id alone, a dirty build of that id) pass with both checkers, in adversarial6.py and in
+   test_gpudiag_check.py.

@@ -1,0 +1,75 @@
+The two failing DDR diagnostics placements, rebuilt without BUFGCTRL route-throughs: both pass on the board
+(the integrator's own captures). Cause found by ddr-3: nextpnr routed ordinary nets through unused BUFGCTRL I0->O
+route-through pips onto the global clock network; the FASM configures no buffer, so round trip and LVS see a wire,
+but on the silicon those nets did not arrive (92a2b51 seed 1: seven route-throughs into the EX stage; 69ee491 seed 3:
+one into the shifter's bits 20/21). The fix: a chip database without the 32 BUFGCTRL route-through pips, and gclkcheck,
+which fails any build that drives a global line from an unconfigured BUFGCTRL. Same netlists, placements, ROMs and seeds
+as the failing builds; only the routing database differs.
+
+== seed1-92a2b51-fixed (sha256 456f5ec78cbd4567...)
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 92a2b510)
+  board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 92a2b510 flags 0, features ff, DDR status 14 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  FENCE.I, code written to RAM       ok (2 checks)
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, delay 16 (window +-8)
+    lane 1: bitslip 2, delay 16 (window +-8)
+    229 ms
+  DDR initialization                 ok (3 checks)
+  DDR calibration                    ok (1 checks)
+  DDR data lines                     ok (192 checks)
+  DDR byte lanes                     ok (9 checks)
+  DDR address lines and aliases      ok (54 checks)
+  DDR boundaries                     ok (98 checks)
+  DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  DDR sustained copies               (4 x 256 KiB copied and checked, 719 KiB/s) ok (4 checks)
+  code running from DDR              ok (6 checks)
+  
+  BRAMDIAG: PASS (572 checks)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+
+== seed3-69ee491-fixed (sha256 9a48225457c35233...)
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 69ee4918)
+  board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 69ee4918 flags 0, features ff, DDR status 14 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  FENCE.I, code written to RAM       ok (2 checks)
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, delay 15 (window +-7)
+    lane 1: bitslip 2, delay 16 (window +-8)
+    230 ms
+  DDR initialization                 ok (3 checks)
+  DDR calibration                    ok (1 checks)
+  DDR data lines                     ok (192 checks)
+  DDR byte lanes                     ok (9 checks)
+  DDR address lines and aliases      ok (54 checks)
+  DDR boundaries                     ok (98 checks)
+  DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  DDR sustained copies               (4 x 256 KiB copied and checked, 719 KiB/s) ok (4 checks)
+  code running from DDR              ok (6 checks)
+  
+  BRAMDIAG: PASS (572 checks)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.

@@ -1,0 +1,96 @@
+SurfCPU release tooling: tools/release-test.py (docs/RELEASE.md section 9)
+2026-10-16, release track, after the review fixes (rel-2). make test-release (in the toolchain
+image, Python 3.13.5, on make check):
+  test_flash_cli (__main__.TestBitfile.test_flash_cli) ... ok
+  test_self_test (__main__.TestBitfile.test_self_test) ... ok
+  test_header_rule (__main__.TestBitfileStrict.test_header_rule) ... ok
+  test_info_on_an_incomplete_stream (__main__.TestBitfileStrict.test_info_on_an_incomplete_stream) ... ok
+  test_random_damage (__main__.TestBitfileStrict.test_random_damage) ... ok
+  test_dropped_design (__main__.TestCheckStrict.test_dropped_design) ... ok
+  test_empty_lists (__main__.TestCheckStrict.test_empty_lists) ... ok
+  test_extra_in_new (__main__.TestCheckStrict.test_extra_in_new) ... ok
+  test_intact (__main__.TestCheckStrict.test_intact) ... ok
+  test_planted_file (__main__.TestCheckStrict.test_planted_file) ... ok
+  test_reference_bytes (__main__.TestCheckStrict.test_reference_bytes) ... ok
+  test_renamed (__main__.TestCheckStrict.test_renamed) ... ok
+  review c3: check holds SURFOS.BIN's version and the flash designs MANIFEST names to the release ... ok
+  test_assume_unchanged (__main__.TestCleanTree.test_assume_unchanged) ... ok
+  test_global_excludes (__main__.TestCleanTree.test_global_excludes) ... ok
+  test_run_sh_dirty_flag (__main__.TestCleanTree.test_run_sh_dirty_flag) ... ok
+  test_show_untracked_no (__main__.TestCleanTree.test_show_untracked_no) ... ok
+  test_all_match (__main__.TestCompare.test_all_match) ... ok
+  test_causes (__main__.TestCompare.test_causes) ... ok
+  test_frames_and_records (__main__.TestCompare.test_frames_and_records) ... ok
+  test_not_rebuilt (__main__.TestCompare.test_not_rebuilt) ... ok
+  test_allow_listed_environment (__main__.TestEnvironment.test_allow_listed_environment) ... ok
+  test_record_from_another_image (__main__.TestEnvironment.test_record_from_another_image) ... ok
+  test_record_from_another_run (__main__.TestEnvironment.test_record_from_another_run) ... ok
+  test_settings_that_change_the_builds_are_refused (__main__.TestEnvironment.test_settings_that_change_the_builds_are_refused) ... ok
+  test_stale_results_never_shipped (__main__.TestEnvironment.test_stale_results_never_shipped) ... ok
+  test_stand_ins_only_for_the_tests (__main__.TestEnvironment.test_stand_ins_only_for_the_tests) ... ok
+  test_program_targets (__main__.TestHostQuoting.test_program_targets) ... ok
+  test_release_and_card_targets (__main__.TestHostQuoting.test_release_and_card_targets) ... ok
+  test_complete (__main__.TestMake.test_complete) ... ok
+  test_ddr_failure (__main__.TestMake.test_ddr_failure) ... ok
+  review c2: the MANIFEST does not claim LC_ALL/TZ reach the containers ... ok
+  test_other_failure (__main__.TestMake.test_other_failure) ... ok
+  test_refusals (__main__.TestMake.test_refusals) ... ok
+  review c3: release.txt's version and SURFOS.BIN's must agree ... ok
+  test_fresh_checkout_work (__main__.TestNoForeignDeletes.test_fresh_checkout_work) ... ok
+  test_logs (__main__.TestNoForeignDeletes.test_logs) ... ok
+  test_out_force (__main__.TestNoForeignDeletes.test_out_force) ... ok
+  test_verify_work (__main__.TestNoForeignDeletes.test_verify_work) ... ok
+  test_cycle (__main__.TestOddPaths.test_cycle) ... ok
+  test_confirmed_write (__main__.TestProgramFlash.test_confirmed_write) ... ok
+  test_refusals (__main__.TestProgramFlash.test_refusals) ... ok
+  test_volatile_never_flash (__main__.TestProgramFlash.test_volatile_never_flash) ... ok
+  test_parse_as_python_3_9 (__main__.TestPython39.test_parse_as_python_3_9) ... ok
+  test_new_commit_meanwhile (__main__.TestShippedIsChecked.test_new_commit_meanwhile) ... ok
+  test_one_release_at_a_time (__main__.TestShippedIsChecked.test_one_release_at_a_time) ... ok
+  test_other_bitstream_build_meanwhile (__main__.TestShippedIsChecked.test_other_bitstream_build_meanwhile) ... ok
+  test_other_software_build_meanwhile (__main__.TestShippedIsChecked.test_other_software_build_meanwhile) ... ok
+  test_staged_file_changed_meanwhile (__main__.TestShippedIsChecked.test_staged_file_changed_meanwhile) ... ok
+  test_fpga_manifest (__main__.TestToml.test_fpga_manifest) ... ok
+  test_round_trip (__main__.TestToml.test_round_trip) ... ok
+  test_scope (__main__.TestVerifyScope.test_scope) ... ok
+  Ran 52 tests in 27.945s
+  OK
+
+make release-selftest PYTHON_HOST=/usr/bin/python3 (the Mac's own Python 3.9.6):
+  Ran 52 tests in 57.189s
+  OK
+make release-selftest (python3 on this PATH: Homebrew's 3.14.7):
+  Ran 52 tests in 56.428s
+  OK
+  (the same 52 tests each time)
+
+tools/bitfile.py self-test (part of TestBitfile):
+  ok   header fields read
+  ok   field e is the stream length
+  ok   stamp keeps the length and the stream
+  ok   stamp writes the epoch's UTC date and time
+  ok   stamp is idempotent
+  ok   two builds at different times are the same bytes once stamped
+  ok   stamp refuses a file without a header
+  ok   a header with no field b is refused
+  ok   a header with field b twice is refused
+  ok   a header with field c twice is refused
+  ok   a header with b before a is refused
+  ok   a header with no field d is refused
+  ok   info finds a stream cut after its sync word incomplete
+  ok   info finds a whole stream complete
+  ok   sync word and packets parsed
+  ok   COR0 and the x1 default read
+  ok   TIMER and WBSTAR placeholders, no IPROG, no CRC check
+  ok   CTL0 0x501: ConfigFallback disabled
+  ok   commands up to DESYNC
+  ok   a BSPI x4 write is read
+  ok   the flash image is the stream after the header (what openFPGALoader -f writes)
+  ok   the image goes at address 0
+  ok   flash refuses another part
+  ok   flash refuses another IDCODE
+  ok   flash refuses no header
+  ok   the 35T takes the open flow's xc7a35tcsg324-1 header
+  ok   100T at x1, 3 MHz: 10.2 s
+  ok   100T at x4, 33 MHz: 0.23 s
+  bitfile self-test: PASS

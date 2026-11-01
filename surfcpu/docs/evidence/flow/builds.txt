@@ -1,0 +1,58 @@
+Open-flow builds of the flow track's designs (tools/openxc7-demo.sh, 6 min 45 s in all),
+2026-10-16; image surfcpu-openxc7:2026-10-15; default settings (seed 1, router2, hold-fix,
+placer timing weight 60, --dsp safe); revision 3002fe3 with docs/OPEN-FLOW.md uncommitted.
+Nothing here has been on a board: physical behaviour PENDING.
+
+flow_demo (LED heartbeat + "SurfCPU openXC7 flow demo #nnnn" at 115200 every second)
+                         Arty A7-35T (xc7a35tcsg324-1)   Arty A7-100T (xc7a100tcsg324-1)
+  chip database          chipdb-xc7a50t.bin             chipdb-xc7a100t.bin
+  timing (nextpnr)       200.60 MHz at 100 MHz, +5.015 ns  193.87 MHz at 100 MHz, +4.842 ns
+  Yosys cells            123 LUT (incl. 22 INV), 78 FF, 22 CARRY4, BUFG, 2 IBUF, 5 OBUF
+  nextpnr                279 LUT positions, 78 FF, 26 CARRY4, 1 BUFGCTRL, 7 pads (both parts)
+  bitstream              2,192,155 bytes                3,825,933 bytes
+                         (stream 17,536,096 bits)       (stream 30,606,304 bits)
+  checks                 synthesis, bitstream, round trip, LVS: PASS on both (no block RAM or
+                         clock managers to check)
+  LVS                    83 proved, 0 differ            83 proved, 0 differ
+  round trip             7086 common; 1279 no-bit       6811 common; 1252 no-bit pseudo-pips;
+                         pseudo-pips; 212 zero defaults 204 zero defaults
+  wall clock             9 s (container start incl.)    11 s
+  step times (35T)       presynth 0.02, synth 1.96, pnr 2.27, frames 0.89, bit 0.05, checks 3.4 s
+  gate-level simulation  the synthesized netlist (identical for both parts) with Yosys 0.69's
+                         cells_sim.v under flow_demo_tb -DNETLIST, real 100 MHz / 115200:
+                         PASS seed 1 (35T build) and seed 2 (100T build), each a full line and a
+                         RESET press at gate level, 286,041 cycles after the last release
+  determinism            a second 35T build: byte-identical FASM and frames (PASS)
+  testbench mutants      wrong text, divisor off by one, stuck line counter, stuck heartbeat:
+                         all four FAIL the RTL testbench (5, 448, 8 and 6 errors)
+
+flow_features (block RAM ROM, 32x32 DSP multiply, PLL + MMCM, IOBUF, two clock domains)
+                         Arty A7-35T                    Arty A7-100T
+  timing sys_clk         127.49 MHz at 25.00 MHz        113.74 MHz at 25.00 MHz
+  timing pix_clk         283.85 MHz at 25.17 MHz        287.94 MHz at 25.17 MHz
+                         (both constraints derived by nextpnr from the PLL/MMCM settings)
+  Yosys cells            507 LUT, 445 FF, 74 CARRY4, 4 DSP48E1, 29 RAMB18E1, MMCME2_BASE,
+                         PLLE2_BASE, 2 BUFG, IOBUF
+  capacity (35T)         2.4% LUTs, 1.1% FFs, 29.0% of the 50 RAMB36, 4.4% of the 90 DSP48E1
+  bitstream              2,192,163 bytes                3,825,941 bytes
+  checks                 synthesis, bitstream, round trip, block RAM (29 of 29 blocks'
+                         contents identical), LVS, clocks: PASS on both
+  LVS                    1494 proved, 0 differ; 29 block RAMs and 4 DSPs checked at their
+                         boundary (contents not compared); MMCM and PLL not modelled
+  clock check            DIVCLK 2, CLKFBOUT_MULT_F 18.125, CLKOUT0_DIVIDE_F 36, PLL 1/10/40:
+                         every field as XAPP888 computes it
+  wall clock             100 s / 109 s (presynth 34 s and synth 42 s: the 16384-word ROM
+                         initialization loop dominates; block RAM extraction 10 s)
+  RTL simulation         make test-flow: 3 lines, rom=1B79ECB1 (also computed in Python),
+                         products and pixel-clock counts as expected
+  Expected on a board: rom=1B79ECB1, mul = high word of 0x1B79ECB1 * {n, n},
+  pix=01801E6B (25,173,611 Hz) within a few counts and the oscillator's tolerance.
+
+flow_features -D FLOW_PIX_PLANNED (pixel clock 100 MHz x 8.875 / 35.25, the planned one):
+  synthesis, bitstream, round trip, block RAM and LVS PASS, clock check FAIL (expected):
+  CLKOUT0_DIVIDE_F 35.25: HIGH_TIME 16 (XAPP888: 17), FRAC_WF_R 1 (0), FRAC_WF_F 1 (0),
+  PHASE_MUX_F 1 (5). See mmcm.txt.
+
+dsp_counter (the Yosys DSP-packing reproducer), synthesis only:
+  --dsp full: synthesis check FAIL (expected): 0 of 10 flip-flops kept, cnt[9:0] and hs constant
+  --dsp safe: PASS, 10 of 10 flip-flops. See yosys-dsp.txt.

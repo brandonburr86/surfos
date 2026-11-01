@@ -1,0 +1,1043 @@
+#!/bin/sh
+# SurfCPU board track: tests of tools/fpga-build.sh, tools/program.sh and the Digilent fetch.sh.
+# (The DDR designs' generated files and defines: a scratch repository with stand-ins.)
+#
+# Fake ssh, docker, vivado, openxc7-build.sh and openFPGALoader (sim/board/tools/fake) stand in
+# for the build host, Docker, Vivado, the open flow and the board: the fake vivado runs the real
+# boards/arty_a7/vivado/build.tcl in Yosys's Tcl with stubbed Vivado commands (vivado_stub.tcl);
+# the open flow's dry runs use the real tools/openxc7-build.sh. HOME is a temporary directory, so
+# the build-host.conf files here are never the user's; the "remote" is a local directory.
+# Nothing leaves this machine and nothing is programmed. Run from surfcpu/ in the toolchain
+# container (mk/area-board.mk: board-tools). Prints one line per check and exits 1 on a failure.
+set -u
+
+root=$(pwd -P)
+t=$root/build/sim/board/tools_test
+rm -rf "$t"
+mkdir -p "$t/home/.config/surfcpu" "$t/remote"
+export HOME="$t/home" FAKE_LOG="$t/calls.log" FAKE_REMOTE="$t/remote" FAKE_HOST=builder
+export FAKE_STUB="$root/sim/board/tools/vivado_stub.tcl" SOURCE_DATE_EPOCH=1760560000
+export SURFCPU_FPGA_OUT="$t/fpga"                     # never the real build/fpga
+PATH="$root/sim/board/tools/fake:$PATH"
+export PATH
+unset DESIGN BIT FLOW CABLE_SERIAL SURFCPU_BUILD_HOST_CONF SURFCPU_FLASH_CONFIRM OPENFPGALOADER \
+      SURFCPU_OPENXC7_BUILD SURFCPU_OPENXC7_IMAGE 2>/dev/null || true
+conf="$HOME/.config/surfcpu/build-host.conf"
+
+pass=0
+failed=0
+check() {                                    # NAME COMMAND...: one test
+    name=$1
+    shift
+    if "$@" > /dev/null 2>&1; then
+        pass=$((pass + 1)); echo "ok   $name"
+    else
+        failed=$((failed + 1)); echo "FAIL $name"; echo "     last output:"; sed 's/^/     | /' "$t/out.txt" | tail -n 15
+    fi
+}
+run() {                                      # COMMAND...: run, keep output and status
+    : > "$FAKE_LOG"
+    "$@" > "$t/out.txt" 2>&1
+    rc=$?
+}
+has() { grep -q -- "$1" "$t/out.txt"; }
+logged() { grep -q -- "$1" "$FAKE_LOG"; }
+nolog() { ! [ -s "$FAKE_LOG" ]; }
+is() { [ "$1" = "$2" ]; }
+base=$SURFCPU_FPGA_OUT
+time_hex=$(printf '%08x' "$SOURCE_DATE_EPOCH")
+sshopts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=4"
+
+# ============================================================================== fpga-build.sh
+run tools/fpga-build.sh arty_a7_100t
+check "build: no build-host.conf -> pending, exit 2" is "$rc" 2
+check "build: says where to read about it" has "docs/BUILD-HOST.md"
+
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado   # the pinned Vivado\n' > "$conf"
+run tools/fpga-build.sh arty_a7_50t
+check "build: unknown BOARD refused" is "$rc" 1
+run tools/fpga-build.sh --design nosuch arty_a7_100t
+check "build: unknown design refused" is "$rc" 1
+if [ -f rtl/soc/surfcpu_soc.v ]; then
+    # the soc track is merged: the full top stages with the real SoC, never the stand-in
+    run tools/fpga-build.sh --dry-run arty_a7_100t
+    check "build: the full top stages with the real rtl/soc/surfcpu_soc.v (dry run)" is "$rc" 0
+    check "build: ... without the simulation stand-in" eval '! grep -rq "sim/board/stubs" "$t/out.txt" "$base"'
+    check "build: ... and nothing was contacted" nolog
+else
+    run tools/fpga-build.sh arty_a7_100t
+    check "build: the full top without rtl/soc/surfcpu_soc.v is refused" has "refusing to build"
+    check "build: ... and nothing was contacted" nolog
+fi
+
+printf 'FLOW=vivado-ssh\nHOST=builder;rm\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "build: a HOST with shell characters refused" has "characters outside"
+printf 'FLOW=vivado-scp\nHOST=builder\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "build: unknown FLOW refused" has "unknown FLOW"
+
+# ------------------------------------------------------------------------------ dry run (ssh)
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_100t
+check "dry run: exit 0" is "$rc" 0
+check "dry run: contacts nothing (no ssh/vivado call)" nolog
+check "dry run: prints the ssh commands, with the strict options" has "ssh $sshopts builder"
+check "dry run: Vivado under nohup, its pid and exit status in out/" has "nohup sh -c 'echo \$\$ > out/vivado.pid; vivado -mode batch"
+check "dry run: prints the Vivado command" has "vivado -mode batch"
+p=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
+check "dry run: params.tcl has the 100T part" grep -q "set part {xc7a100tcsg324-1}" "$p"
+check "dry run: params.tcl has the build identity generics" grep -q "BOARD {\"arty_a7_100t\"} BUILD_ID 32'h[0-9a-f]\{8\} BUILD_FLAGS 32'h0000000[01] BUILD_TIME 32'h$time_hex" "$p"
+check "dry run: params.tcl has the scoped CDC constraints" grep -q "{surf_cdc_word boards/arty_a7/xdc/cdc/surf_cdc_word.xdc}" "$p"
+check "dry run: leaves no real manifest" test ! -e "$base/arty_a7_100t/arty_a7_baseline/manifest.txt"
+check "dry run: sources staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/rtl/lib/surf_cdc_word.v"
+check "dry run: include files staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/rtl/generated/surfcpu_soc.vh"
+check "dry run: build.tcl staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/boards/arty_a7/vivado/build.tcl"
+run env DRY_RUN=1 tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "dry run: DRY_RUN=1 (make build-fpga DRY_RUN=1) is a dry run too" test "$rc" -eq 0 -a ! -s "$FAKE_LOG"
+run env DRY_RUN=yes tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "dry run: DRY_RUN other than 0 or 1 refused" has "DRY_RUN must be 0 or 1"
+
+# ------------------------------------------------------------------------------ ssh flow, passing build
+run tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+b=$base/arty_a7_35t/arty_a7_baseline
+check "ssh: passing build exits 0" is "$rc" 0
+check "ssh: made the remote directory" logged "ssh $sshopts builder mkdir -p surfcpu-build/arty_a7_baseline-arty_a7_35t-"
+check "ssh: every ssh call checks the host key, times out, keeps the connection alive" \
+    test "$(grep -c '^ssh ' "$FAKE_LOG")" -ge 4 -a "$(grep -c '^ssh ' "$FAKE_LOG")" -eq "$(grep -c "^ssh $sshopts builder " "$FAKE_LOG")"
+check "ssh: Vivado ran under nohup" logged "nohup sh -c"
+check "ssh: ran Vivado on the host" logged "vivado -mode batch -nojournal -log out/vivado.log -source surfcpu/boards/arty_a7/vivado/build.tcl -tclargs params.tcl"
+check "ssh: the bitstream came back" test -f "$b/arty_a7_baseline.bit"
+check "ssh: no checkpoint came back" test ! -e "$b/out/post_route.dcp"
+check "ssh: reports came back" test -f "$b/out/reports/timing_summary.rpt"
+check "ssh: ... with the run's own log and exit status" test -f "$b/out/vivado.nohup.txt" -a "$(cat "$b/out/vivado.exit")" = 0
+c=$b/out/calls.txt
+check "build.tcl: set_part with the 35T's -1L part" grep -q "^set_part xc7a35ticsg324-1L$" "$c"
+check "build.tcl: reads all four XDC files" test "$(grep -c '^read_xdc boards/arty_a7/xdc/arty_a7_' "$c")" -eq 4
+check "build.tcl: reads the CDC files scoped and late" grep -q "^read_xdc -ref surf_pulse_sync -unmanaged" "$c"
+check "build.tcl: CDC files processed late" grep -q "^set_property PROCESSING_ORDER LATE" "$c"
+check "build.tcl: synthesizes the top with the generics" grep -q "^synth_design -top arty_a7_baseline -part xc7a35ticsg324-1L .*-generic BOARD=\"arty_a7_35t\" -generic BUILD_ID=32'h" "$c"
+check "build.tcl: runs place and route" grep -q "^route_design" "$c"
+check "build.tcl: writes the CDC and clock-interaction reports" grep -q "^report_cdc -details" "$c"
+check "build.tcl: writes the bitstream last" test "$(tail -n 1 "$c" | cut -d' ' -f1)" = write_bitstream
+m=$b/manifest.txt
+check "manifest: is valid TOML" python3 -c "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))" "$m"
+for key in source_revision source_dirty part constraints_sha256 sources_sha256 isa abi map_version build_time; do
+    check "manifest: has $key" grep -q "^$key = " "$m"
+done
+check "manifest: Vivado's results (timing, utilization, version, host)" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+v=d['vivado']
+assert v['result']=='pass' and v['wns_ns']==10.0 and v['lut']=='312 / 63400' and v['vivado_version']=='2025.1' and 'build_host' in v
+assert d['isa']=='rv32im_zicsr_zifencei' and d['abi']=='ilp32' and d['part']=='xc7a35ticsg324-1L'
+" "$m"
+check "manifest: the bitstream's SHA-256" grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$m"
+
+# ------------------------------------------------------------------------------ ssh flow, lost connection and --fetch
+b=$base/arty_a7_35t/arty_a7_baseline
+run env FAKE_SSH_DROP=1 tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "drop: a connection lost during the run exits 3" is "$rc" 3
+check "drop: ... and says how to fetch the results later" has "tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t"
+check "drop: ... no bitstream yet, and a manifest without a result" \
+    test ! -e "$b/arty_a7_baseline.bit" -a -z "$(grep '^result' "$b/manifest.txt")"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: brings back the finished run, which passed" is "$rc" 0
+check "fetch: ... the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "fetch: ... without running Vivado again" test -z "$(grep '^vivado ' "$FAKE_LOG")"
+check "fetch: ... and a manifest with the result and the bitstream's SHA-256" \
+    grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$b/manifest.txt"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a second fetch gives the same manifest" test "$rc" -eq 0 -a "$(grep -c '^result = ' "$b/manifest.txt")" -eq 2
+rid=$(sed -n 's/^run_id = "\(.*\)"$/\1/p' "$b/manifest-head.txt")
+ro=$t/remote/surfcpu-build/$rid/out
+mv "$ro/vivado.exit" "$ro/vivado.exit.saved"
+sleep 60 &
+spid=$!
+echo "$spid" > "$ro/vivado.pid"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: Vivado still running exits 4" test "$rc" -eq 4 -a -n "$(grep 'still running' "$t/out.txt")"
+kill "$spid" 2>/dev/null
+wait "$spid" 2>/dev/null
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: no exit status and no Vivado running: start a new build" has "start a new build"
+mv "$ro/vivado.exit.saved" "$ro/vivado.exit"
+run env FAKE_SSH_DOWN=1 tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: host unreachable exits 3" test "$rc" -eq 3 -a -n "$(grep 'run --fetch again later' "$t/out.txt")"
+run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a dry run in between leaves the last run fetchable" is "$rc" 0
+run tools/fpga-build.sh --fetch --design surfcpu_arty_a7_top arty_a7_35t
+check "fetch: nothing started for that design" has "was started here"
+printf 'FLOW=vivado-ssh\nHOST=other\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a run on another host is not fetched from this one" has "ran on 'builder'"
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+
+# ------------------------------------------------------------------------------ failing checks stop the bitstream
+for case in "FAKE_WNS=-0.250:setup timing" "FAKE_WHS=-0.010:hold timing" "FAKE_DRC=2:DRC errors" \
+            "FAKE_CRIT=3:critical warnings" "FAKE_CDC=1:critical CDC" "FAKE_NO_INPUT_DELAY=4:check_timing" \
+            "FAKE_CT_FORMAT=renamed:no section 'checking no_input_delay'" \
+            "FAKE_CT_FORMAT=wording:a line without its number" \
+            "FAKE_CDC_FORMAT=noheader:cdc.rpt is not in the expected format" \
+            "FAKE_CDC_FORMAT=caps:2 critical CDC findings"; do
+    setting=${case%%:*}
+    why=${case#*:}
+    run env "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+    b=$base/arty_a7_100t/arty_a7_baseline
+    check "gate $setting: build fails" is "$rc" 1
+    check "gate $setting: no bitstream written" test ! -e "$b/out/arty_a7_baseline.bit" -a ! -e "$b/arty_a7_baseline.bit"
+    check "gate $setting: the reason names $why" grep -q "^reason = \".*$why" "$b/out/build-results.txt"
+done
+
+# ------------------------------------------------------------------------------ docker flow
+printf 'FLOW=vivado-docker\nVIVADO=/tools/Xilinx/Vivado/2025.1/bin/vivado\nIMAGE=surfcpu-vivado:2025.1\n' > "$conf"
+mkdir -p "$t/tools/Xilinx/Vivado/2025.1/bin"
+run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_100t
+check "docker dry run: exit 0, no docker call" test "$rc" -eq 0 -a ! -s "$FAKE_LOG"
+check "docker dry run: amd64 container with the stage mounted" has "run --rm --platform linux/amd64 -v $base/arty_a7_100t/arty_a7_baseline/stage:/build -w /build surfcpu-vivado:2025.1"
+printf 'FLOW=vivado-docker\nVIVADO=vivado\nIMAGE=surfcpu-vivado:2025.1\n' > "$conf"
+run tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "docker: passing build exits 0" is "$rc" 0
+check "docker: ran in an amd64 container" logged "docker run --rm --platform linux/amd64 -v"
+check "docker: the bitstream" test -f "$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit"
+
+# ------------------------------------------------------------------------------ build identity from git
+# A scratch repository with the files the baseline build reads (this container cannot use the
+# worktree's own git): clean, an unrelated untracked file, a file the build reads made untracked,
+# committed again, a tracked file changed.
+g=$t/gitrepo
+mkdir -p "$g"
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh boards/arty_a7 rtl/lib rtl/generated spec/soc.toml |
+    ( cd "$g" && tar xf - )
+gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
+gitq init -q && gitq add -A && gitq commit -q -m scratch
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+gm=$base/arty_a7_100t/arty_a7_baseline/manifest.dry-run.txt
+gp=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a clean scratch commit is clean" test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gm")"
+check "identity: ... BUILD_FLAGS 0 and the commit as BUILD_ID" \
+    grep -q "BUILD_ID 32'h$(git -C "$g" rev-parse HEAD | cut -c1-8) BUILD_FLAGS 32'h00000000" "$gp"
+printf 'notes\n' > "$g/notes.txt"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: an untracked file the build does not read leaves it clean" grep -q '^source_dirty = false' "$gm"
+gitq rm -q --cached rtl/lib/surf_sync.v
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a source git does not track makes it dirty" grep -q '^source_dirty = true' "$gm"
+check "identity: ... BUILD_FLAGS bit 0" grep -q "BUILD_FLAGS 32'h00000001" "$gp"
+check "identity: ... and the file is named" has "not in git, so the build counts as dirty: rtl/lib/surf_sync.v"
+gitq add rtl/lib/surf_sync.v && gitq commit -q -m again
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: committed again, clean" grep -q '^source_dirty = false' "$gm"
+printf '// changed\n' >> "$g/rtl/lib/surf_sync.v"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a changed tracked file makes it dirty" grep -q '^source_dirty = true' "$gm"
+rm -rf "$g"
+
+# ============================================================================== program.sh
+bit100=$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
+bit35=$base/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit
+m100=$base/arty_a7_100t/arty_a7_baseline/manifest.txt
+export DESIGN=arty_a7_baseline
+run env PATH=/usr/bin:/bin "$root/tools/program.sh" volatile arty_a7_100t
+check "program: no openFPGALoader -> pending, exit 2" is "$rc" 2
+run env FAKE_IDCODE= tools/program.sh volatile arty_a7_100t
+check "program: no cable/device refused" has "found no JTAG cable"
+
+# the IDCODE as the real openFPGALoader prints it: printf("0x%x"), so 7 digits for revision 0
+check "program: the fake prints IDCODEs like openFPGALoader (0x362d093)" \
+    test "$(FAKE_IDCODE=0x0362d093 sh sim/board/tools/fake/openFPGALoader --detect | sed -n 's/^.idcode //p')" = 0x362d093
+run env FAKE_IDCODE=0x0362d093 tools/program.sh detect arty_a7_35t
+check "program: detect reads 'idcode 0x362d093' as the 35T" has "IDCODE 0x0362D093 = BOARD arty_a7_35t"
+run env FAKE_IDCODE=0x03631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads 'idcode 0x3631093' as the 100T" has "IDCODE 0x03631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x13631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads the 100T with revision 1 (0x13631093)" has "IDCODE 0x13631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_100t
+check "program: 35T IDCODE with BOARD=arty_a7_100t refused" has "refusing"
+check "program: ... and nothing was loaded" test "$(grep -c -- ' -b ' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x13631093 FAKE_IDCODE2=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: two devices on the chain refused" has "refusing to guess"
+run env FAKE_IDCODE=0x1 FAKE_DETECT_TEXT="$(printf 'index 0:\n\tidcode 0x136310930')" tools/program.sh detect arty_a7_100t
+check "program: an IDCODE longer than 8 digits is not read as one" has "cannot read the IDCODE"
+
+# the cable: one FT2232H, or the one named by its serial number
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh volatile arty_a7_100t
+check "cable: two FT2232H cables refused" has "2 FT2232H cables"
+check "cable: ... after only listing them (no detect, no load)" test "$(grep -vc -- '--scan-usb' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" CABLE_SERIAL=210319B0C8A6 tools/program.sh volatile arty_a7_100t
+check "cable: CABLE_SERIAL chooses one, the load exits 0" is "$rc" 0
+check "cable: ... detect on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -c digilent --detect"
+check "cable: ... and the load on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -b arty_a7_100t $bit100"
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh --ftdi-serial 210319A28C7F detect arty_a7_100t
+check "cable: --ftdi-serial chooses one too" test "$rc" -eq 0 -a -n "$(grep -- '--ftdi-serial 210319A28C7F -c digilent --detect' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL=0123NOSUCH tools/program.sh detect arty_a7_100t
+check "cable: a serial number no cable has finds no cable" has "found no JTAG cable"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL='21;rm' tools/program.sh detect arty_a7_100t
+check "cable: a serial number with shell characters refused" test "$rc" -eq 1 -a ! -s "$FAKE_LOG"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 tools/program.sh detect arty_a7_100t
+check "cable: no USB list (--scan-usb failed) refused without a serial number" has "cannot be counted"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 CABLE_SERIAL=210319A28C7F tools/program.sh detect arty_a7_100t
+check "cable: ... and accepted with one" is "$rc" 0
+
+# the bitstream's header: device and package (UG470 .bit fields a and b, as Vivado writes them)
+mkbit() {     # FILE PART: a .bit header (fields a, b, c, d once each, then e: the length of the rest), then filler
+    n=$(( ${#2} + 1 ))
+    { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\016other_project\000b\000'
+      printf "\\$(printf '%03o' "$n")"
+      printf '%s\000c\000\01310/01/2026\000d\000\01112:00:00\000e\000\000\000\026 not a real bitstream\n' "$2"; } > "$1"
+}
+mkdir -p "$t/bits"
+for c in "7a35tcpg236:arty_a7_35t:refuse" "7a100tfgg484:arty_a7_100t:refuse" "7a50tcsg324:arty_a7_35t:refuse" \
+         "7a35ticsg324:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_100t:refuse" \
+         "xc7a100tcsg324-1:arty_a7_100t:load" "XC7A100TCSG324-1:arty_a7_100t:load"; do
+    bp=${c%%:*}; rest=${c#*:}; bb=${rest%%:*}; want=${rest#*:}
+    mkbit "$t/bits/$bp.bit" "$bp"
+    case "$bb" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
+    run env FAKE_IDCODE=$id tools/program.sh volatile "$bb" "$t/bits/$bp.bit"
+    if [ "$want" = load ]; then
+        check "header: $bp on $bb loads" test "$rc" -eq 0 -a -n "$(grep -- " -b $bb " "$FAKE_LOG")"
+    else
+        check "header: $bp on $bb refused" test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")"
+    fi
+done
+printf 'no header at all\n' > "$t/bits/raw.bit"
+run env FAKE_IDCODE=0x03631093 tools/program.sh volatile arty_a7_100t "$t/bits/raw.bit"
+check "header: a file without a .bit header refused" has "no .bit header"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$bit35"
+check "program: a 35T bitstream on the 100T refused" has "was built for 7a35t"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/nosuch.bit"
+check "program: missing bitstream refused" has "no bitstream"
+
+# loading, with the build manifest next to the bitstream
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: volatile load exits 0" is "$rc" 0
+check "program: loads configuration RAM with the board's name" logged "openFPGALoader -b arty_a7_100t $bit100"
+check "program: ... and never the flash" test "$(grep -c -- ' -f ' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t
+check "program: the 35T board with its own bitstream" is "$rc" 0
+run env FAKE_IDCODE=0x13631093 FAKE_PROGRAM_RC=1 tools/program.sh volatile arty_a7_100t
+check "program: a failing load exits 1" is "$rc" 1
+run env FAKE_IDCODE=0x13631093 tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: refused without confirmation" has "not confirmed"
+check "flash: ... nothing written" test "$(grep -c -- ' -f ' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_35t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: confirmation for another board refused" has "not confirmed"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: confirmed write exits 0" is "$rc" 0
+check "flash: writes and verifies the flash" logged "openFPGALoader -b arty_a7_100t -f --verify $bit100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t "$t/bits/xc7a100tcsg324-1.bit" < /dev/null
+check "flash: a bitstream without a build manifest refused" has "flash needs the bitstream's build manifest"
+
+# the manifest must describe this file, this board and its part
+cp "$bit100" "$t/bit100.saved"
+cp "$m100" "$t/m100.saved"
+printf 'x' >> "$bit100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a bitstream that is not the one the manifest describes refused" has "describes another bitstream"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: ... also for a volatile load" has "describes another bitstream"
+cp "$t/bit100.saved" "$bit100"
+sed -i 's/^board = "arty_a7_100t"/board = "arty_a7_35t"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another board refused" has "is for board 'arty_a7_35t'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^part = "xc7a100tcsg324-1"/part = "xc7a100tcsg324-2"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another part refused" has "is for part 'xc7a100tcsg324-2'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^result = "pass"/result = "fail"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a bitstream whose build failed its checks refused" has "does not say the build passed"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: ... also for a volatile load" has "does not say the build passed"
+cp "$t/m100.saved" "$m100"
+
+# tools/openxc7-build.sh's own manifest (a flow track build, docs/OPEN-FLOW.md section 8)
+ox=$t/openxc7/flow_demo-arty_a7_35t
+mkdir -p "$ox"
+mkbit "$ox/flow_demo.bit" xc7a35tcsg324-1
+oxmanifest() {   # BLOCK_RAM_RESULT: an openxc7-build.sh manifest for $ox/flow_demo.bit
+    { echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+      echo "top                 flow_demo"
+      echo "part                xc7a35tcsg324-1 (device xc7a35t, chip database chipdb-xc7a50t.bin)"
+      echo "bitstream           $ox/flow_demo.bit sha256:$(shasum -a 256 "$ox/flow_demo.bit" | cut -d' ' -f1) 99 bytes"
+      echo "check SRL cells     PASS (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
+      echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
+      echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
+      echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"
+      echo "check block RAM     $1 (contents decoded from the bitstream: check-bram.txt)"
+      echo "check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)"
+      echo "check clocks        none in the design (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+      echo "## timing"
+      echo "clock clk: constraint 100.00 MHz, achieved ${2:-200.00} MHz, slack +5.000 ns  ${3:-PASS}"; } > "$ox/manifest.txt"
+}
+oxmanifest "none in the design"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: every check passed, the volatile load exits 0" test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x0362d093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_35t tools/program.sh flash arty_a7_35t "$ox/flow_demo.bit" < /dev/null
+check "openxc7 manifest: ... but no flash without tools/fpga-build.sh's manifest" has "flash needs the bitstream's build manifest from tools/fpga-build.sh"
+oxmanifest "FAIL"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: a failed check refused" has "does not say the build passed its checks (check block RAM FAIL"
+oxmanifest "PASS" 80.50 FAIL
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: a clock that misses nextpnr's timing refused (a diagnostic run's bitstream)" \
+    has "shows a clock missing its timing (clock clk: 80.50 MHz"
+oxmanifest "PASS"
+printf 'x' >> "$ox/flow_demo.bit"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: another bitstream refused" has "describes another bitstream"
+
+# ============================================================================== open flow (FLOW=openxc7)
+b=$base/arty_a7_35t/arty_a7_baseline
+cp "$b/manifest.txt" "$t/vivado-manifest.txt"          # the 35T's last Vivado (ssh) build
+mv "$conf" "$t/conf.saved"                              # no build-host.conf at all
+run env FLOW=openxc7 tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7 dry run: needs no build-host.conf (FLOW from the environment)" is "$rc" 0
+check "openxc7 dry run: top, board, constraints, output directory, safe DSP mode" \
+    has "--top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc --out ${b#$root/}/openxc7 --dsp safe"
+check "openxc7 dry run: the build values as defines" has "-D ARTY_BUILD_BOARD=\"arty_a7_35t\" -D ARTY_BUILD_ID=32'h[0-9a-f]\{8\} -D ARTY_BUILD_FLAGS=32'h0000000[01] -D ARTY_BUILD_TIME=32'h$time_hex"
+check "openxc7 dry run: include directories, then the sources" has "-I rtl/generated -I boards/arty_a7/rtl rtl/lib/surf_sync.v"
+check "openxc7 dry run: the real script's dry run (nextpnr for the 35T's die)" has "nextpnr-himbaechel --device xc7a35tcsg324-1"
+check "openxc7 dry run: contacts nothing" nolog
+nx=$b/nextpnr.xdc
+check "nextpnr constraints: the 28 base pins and the oscillator's clock" \
+    test "$(grep -c 'PACKAGE_PIN' "$nx")" -eq 28 -a "$(grep -c '^create_clock -period 10.000 \[get_ports clk100\]$' "$nx")" -eq 1
+check "nextpnr constraints: no ';', comment, timing exception or design property" \
+    test -z "$(grep -E ';|#|current_design|false_path|generated_clock|max_delay' "$nx")"
+check "nextpnr constraints: 11 not checked (2 generated clocks, 2 false paths, 3 design properties, 4 CDC files)" \
+    test "$(grep -c . "$b/nextpnr-not-checked.txt")" -eq 11
+check "nextpnr constraints: ... and the build says so" has "it cannot check these 11, which only Vivado does"
+check "nextpnr constraints: ... naming the clock-crossing bounds" has "cdc/surf_cdc_word.xdc: scoped to every surf_cdc_word: 3 set_max_delay"
+awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$t/pmod-not.txt" boards/arty_a7/xdc/arty_a7_pmod_pins.xdc > "$t/pmod.xdc"
+check "nextpnr constraints: Vivado's PULLUP true becomes PULLTYPE PULLUP (DRIVE kept)" \
+    grep -q '^set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33 PULLTYPE PULLUP DRIVE 4} \[get_ports {ps2_data}\]$' "$t/pmod.xdc"
+check "nextpnr constraints: IOB TRUE is listed as not applied" test "$(grep -c 'IOB TRUE.*pin option nextpnr does not apply' "$t/pmod-not.txt")" -eq 2
+
+fake_ox=$root/sim/board/tools/fake/openxc7-build.sh
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "openxc7: a passing build exits 0" is "$rc" 0
+check "openxc7: the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "openxc7: the open flow ran on the nextpnr constraints" logged "openxc7-build.sh --top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc"
+check "openxc7: the manifest is TOML, with the result and the open flow's checks and numbers" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+o=d['openxc7']
+assert d['result']=='pass' and d['flow']=='openxc7' and d['part']=='xc7a35ticsg324-1L', d
+assert d['bitstream_bytes']>0 and len(d['bitstream_sha256'])==64
+assert o['part']=='xc7a35tcsg324-1' and o['check_lvs']=='PASS' and o['check_block_ram']=='none in the design'
+assert o['idcode']=='0x0362D093' and o['lut']=='285 / 20800' and o['wns_ns']==33.033 and len(o['timing'])==2
+assert len(o['constraints_not_checked'])==11 and o['constraints_given']==29 and o['dsp_mode']=='safe'
+" "$b/manifest.txt"
+check "openxc7: the same top-level manifest keys as the Vivado flow's" python3 -c "
+import tomllib,sys
+a=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+ka={k for k,v in a.items() if not isinstance(v,dict)}; kb={k for k,v in b.items() if not isinstance(v,dict)}
+assert ka==kb, ka ^ kb
+" "$t/vivado-manifest.txt" "$b/manifest.txt"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$b/arty_a7_baseline.bit"
+check "openxc7: program.sh loads its bitstream on the 35T (header xc7a35tcsg324-1)" \
+    test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+for case in "FAKE_OX_LVS=BLOCKED (timeout):check LVS BLOCKED (timeout)" "FAKE_OX_CLOCKS=FAIL:check clocks FAIL" \
+            "FAKE_OX_TIMING=FAIL:timing not met" "FAKE_OX_RC=1:exit status 1"; do
+    setting=${case%%:*}
+    why=${case#*:}
+    run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+    check "openxc7 gate ${setting%%=*}: build fails, no bitstream" test "$rc" -eq 1 -a ! -e "$b/arty_a7_baseline.bit"
+    check "openxc7 gate ${setting%%=*}: the manifest says fail and why" grep -q "^reason = \".*$why" "$b/manifest.txt"
+done
+# the whole SoC: two design lists that differ only in the boot ROM
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_top.files > "$t/top.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files > "$t/diag.list"
+check "soc designs: surfcpu_arty_a7_bramdiag is surfcpu_arty_a7_top but for its boot ROM" cmp -s "$t/top.list" "$t/diag.list"
+check "soc designs: SurfBoot in one, the BRAM diagnostics in the other" test \
+    "$(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_top.files) $(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files)" \
+    = "build/fw/surfboot.mem build/fw/bramdiag.mem"
+printf '00000013\n00000067\n' > "$t/diag.mem"
+d=$base/arty_a7_100t/surfcpu_arty_a7_bramdiag
+romfake=$root/sim/board/tools/fake/romcheck
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: the bramdiag design through the open flow (fake) passes" is "$rc" 0
+check "soc: ... its ROM (ROM=), copied beside the bitstream, as the boot ROM define" \
+    logged "-D ARTY_BOOTROM_INIT=\"${d#$root/}/rom/diag.mem\""
+check "soc: ... the copy is the ROM" cmp -s "$d/rom/diag.mem" "$t/diag.mem"
+check "soc: ... the design list's LVS limit" logged "--lvs-timeout 7200"
+check "soc: ... the boot ROM check on that file and the ROM's instance" \
+    logged "romcheck --rom ${d#$root/}/rom/diag.mem --netlist ${d#$root/}/openxc7/surfcpu_arty_a7_top.json --top surfcpu_arty_a7_top --instance u_soc.u_bootrom"
+check "soc: ... the bitstream under the design's name" test -f "$d/surfcpu_arty_a7_bramdiag.bit"
+check "soc: the manifest names the ROM and has the netlist and boot ROM checks" python3 -c "
+import tomllib,sys,hashlib
+d=tomllib.load(open(sys.argv[1],'rb'))
+o=d['openxc7']
+assert d['result']=='pass' and d['design']=='surfcpu_arty_a7_bramdiag' and d['top']=='surfcpu_arty_a7_top', d
+assert d['rom_image']==sys.argv[2] and d['rom_sha256']==hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()
+assert o['check_netlist']=='PASS' and o['check_boot_rom']=='PASS'
+" "$d/manifest.txt" "${t#$root/}/diag.mem" "$t/diag.mem"
+run env FAKE_IDCODE=0x13631093 DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh volatile arty_a7_100t
+check "soc: make program-volatile DESIGN=surfcpu_arty_a7_bramdiag finds and loads it" \
+    logged "openFPGALoader -b arty_a7_100t $d/surfcpu_arty_a7_bramdiag.bit"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_ROMCHECK=fail \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a boot ROM that is not its .mem fails the build" test "$rc" -eq 1 -a -n "$(grep '^reason = ".*check boot ROM FAIL' "$d/manifest.txt")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_NETLIST=lost \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a memory synthesis dropped fails the build (netlist check)" test "$rc" -eq 1 -a -n "$(grep '^reason = ".*check netlist FAIL' "$d/manifest.txt")"
+check "soc: ... and says which" grep -q "PROBLEM: memory u_soc.u_bootrom.rom" "$d/openxc7/check-netlist.txt"
+run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a missing ROM image refused" has "needs the boot ROM image"
+
+# ------------------------------------------------------------------------------ the LVS route, and --recheck
+# (make recheck-fpga): the post-route checks of a routed open-flow build again, through the fake
+# flow's --recheck. The build: the bramdiag design with its ROM, its LVS proof killed at the memory cap.
+rk() { run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" "$@"; }
+recheck() { rk "$@" tools/fpga-build.sh --recheck --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+rkbuild() { rk "$@" tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+dbit=$d/surfcpu_arty_a7_bramdiag.bit
+rkbuild LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "lvs route: LVS_SOLVER and LVS_TIMEOUT reach the open flow" logged "--lvs-timeout 86400 --lvs-solver z3cmd"
+check "lvs route: ... and its manifest records both" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+assert d['manifest_format']==2 and d['openxc7']['lvs_solver']=='z3cmd' and d['openxc7']['lvs_timeout']==86400, d
+" "$d/manifest.txt"
+for v in "LVS_SOLVER=cvc5:LVS_SOLVER must be libz3 or z3cmd" "LVS_TIMEOUT=0:LVS_TIMEOUT must be more than 0" \
+         "LVS_TIMEOUT=2h:LVS_TIMEOUT must be a number of seconds"; do
+    rkbuild "${v%%:*}"
+    check "lvs route: ${v%%:*} refused" test "$rc" -eq 1 -a -n "$(grep "${v#*:}" "$t/out.txt")"
+done
+run env FLOW=vivado-ssh LVS_SOLVER=z3cmd SURFCPU_BUILD_HOST_CONF="$t/conf.saved" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "lvs route: ... and so are the LVS words with a Vivado flow" has "LVS_SOLVER and LVS_TIMEOUT are the open flow's"
+rkbuild FAKE_OX_LVS="BLOCKED (killed: SIGKILL, exit 137)"
+check "recheck: the build blocked at LVS alone fails, with no bitstream under its name" \
+    test "$rc" -eq 1 -a ! -e "$dbit" -a -n "$(grep '^reason = ".*check LVS BLOCKED (killed: SIGKILL, exit 137)' "$d/manifest.txt")"
+cp "$d/manifest.txt" "$t/blocked.txt"
+cp "$d/openxc7/manifest.txt" "$t/blocked-flow.txt"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 DRY_RUN=1
+check "recheck: its dry run checks the build and asks the flow for its own dry run" \
+    test "$rc" -eq 0 -a -n "$(grep -- "openxc7-build.sh --recheck --out ${d#$root/}/openxc7 --lvs-solver z3cmd --lvs-timeout 86400 --dry-run" "$FAKE_LOG")"
+check "recheck: ... and changes nothing" eval "cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && test ! -e '$d/manifest.build.txt'"
+# a recheck stopped after it began (killed, or refused for LVS inputs made again that are not the
+# build's) leaves both manifests as they were, the build's, which refuse its bitstream
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=die
+check "recheck: killed after it began, it says so, and both manifests are still the build's" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 137) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit' && ! test -e '$d/manifest.build.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: ... and program.sh refuses the flow's bitstream by the build's manifest beside it (LVS BLOCKED)" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'check LVS BLOCKED (killed: SIGKILL, exit 137)' "$t/out.txt")"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=tie
+check "recheck: refused after it began (the LVS inputs made again are not the build's): says so, both manifests as they were" \
+    eval "test $rc -eq 1 && grep -q 'refused (exit 4) after it began: the LVS inputs it made again are not the build' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt' && ! test -e '$dbit'"
+# exit 4 without the flow's message (another program's 4: GNU sed's on a write error), the tie's message
+# of the run before still there: the flow stopped, it did not refuse
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 FAKE_OX_RECHECK=exit4
+check "recheck: exit 4 without the flow's refusal message is a stop, not the LVS inputs' refusal (an earlier run's message aside)" \
+    eval "test $rc -eq 1 && grep -q 'stopped (exit 4) before it wrote its manifest: both manifests are as they were' '$t/out.txt' && ! grep -q 'the LVS inputs it made again' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/blocked-flow.txt'"
+# a manifest missing beside its manifest.build.txt (an older recheck stopped, or a deletion) is refused,
+# asking nothing of the flow and changing nothing, and named for what to put back
+/bin/mv "$d/openxc7/manifest.txt" "$t/flow-manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: refuses a flow manifest missing beside its manifest.build.txt, saying what to put back, asking nothing of the flow" \
+    eval "test $rc -eq 1 && grep -q 'openxc7/manifest.txt is missing beside its manifest.build.txt, so its bitstream has no manifest: put the build.s back first' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/openxc7/manifest.txt'"
+/bin/mv "$t/flow-manifest.aside" "$d/openxc7/manifest.txt"
+cp "$d/manifest.txt" "$d/manifest.build.txt"
+/bin/mv "$d/manifest.txt" "$t/manifest.aside"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: ... and this script's own manifest missing beside its manifest.build.txt" \
+    eval "test $rc -eq 1 && grep -q 'surfcpu_arty_a7_bramdiag/manifest.txt is missing beside its manifest.build.txt' '$t/out.txt' && ! test -s '$FAKE_LOG' && ! test -e '$d/manifest.txt'"
+/bin/mv "$t/manifest.aside" "$d/manifest.txt"
+rm "$d/manifest.build.txt"
+# this script keeps its own manifest's copy whole or not at all: killed while it writes it, the copy is
+# not taken for the build's, and the next recheck passes (a cp that writes half of it, then kills it)
+mkdir -p "$t/cpkill"
+cat > "$t/cpkill/cp" <<'EOF'
+#!/bin/sh
+for a in "$@"; do last=$a; done
+if [ "$last" = "$CPKILL_DEST" ]; then
+    head -n 3 "$1" > "$last"; echo killed > "$CPKILL_MARK"; kill -KILL "$PPID"; exit 1
+fi
+exec /bin/cp "$@"
+EOF
+chmod +x "$t/cpkill/cp"
+rm -f "$t/cpkill.mark"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400 PATH="$t/cpkill:$PATH" CPKILL_DEST="$d/manifest.build.txt.tmp" CPKILL_MARK="$t/cpkill.mark"
+check "recheck: killed while it copies its own manifest aside: the copy is not the build's manifest.build.txt, its manifest as it was" \
+    eval "test -s '$t/cpkill.mark' && ! test -e '$d/manifest.build.txt' && cmp -s '$d/manifest.txt' '$t/blocked.txt' && ! test -e '$dbit'"
+recheck LVS_SOLVER=z3cmd LVS_TIMEOUT=86400
+check "recheck: the build blocked at LVS alone passes, its bitstream copied out" \
+    test "$rc" -eq 0 -a -f "$dbit" -a -n "$(grep '^fpga-build: PASS: ' "$t/out.txt")"
+check "recheck: the copy is the flow's bitstream" cmp -s "$dbit" "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: the flow was asked to recheck with LVS_SOLVER and LVS_TIMEOUT, and nothing else ran (no synthesis, no romcheck)" \
+    test "$(cat "$FAKE_LOG")" = "openxc7-build.sh --recheck --out ${d#$root/}/openxc7 --lvs-solver z3cmd --lvs-timeout 86400"
+check "recheck: the new manifest passes, keeps the build's identity and its kept checks, and says what was rechecked" python3 -c "
+import tomllib,sys,hashlib
+n=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+assert n['result']=='pass' and n['manifest_format']==2, n
+for k in ('run_id','design','board','part','source_revision','source_dirty','build_id','build_time','placer_seeds',
+          'sources_sha256','constraints_sha256','rom_image','rom_sha256','defines'):
+    assert n[k]==b[k], k
+assert n['bitstream_sha256']==hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()
+o, r = n['openxc7'], n['recheck']
+assert o['placer_seed']==b['openxc7']['placer_seed'] and o['check_lvs']=='PASS' and o['lvs_solver']=='z3cmd' and o['lvs_timeout']==86400
+assert o['check_netlist']=='PASS' and o['check_boot_rom']=='PASS' and o['check_srl']=='PASS' and o['check_synthesis']=='PASS'
+assert r['build_result']=='fail' and 'check LVS BLOCKED (killed: SIGKILL, exit 137)' in r['build_reason']
+assert r['checks_kept']==['check_srl','check_synthesis','check_netlist','check_boot_rom'], r
+assert 'check_lvs' in r['checks_run_again'] and 'check_bitstream' in r['checks_run_again'] and r['lvs_solver']=='z3cmd' and r['lvs_timeout']==86400
+assert r['build_manifest'].endswith('/manifest.build.txt') and r['openxc7_recheck'].startswith('2026-10-27T12:00:00Z'), r
+assert len(r['rechecked_at'])==20 and r['exit_status']==0
+" "$d/manifest.txt" "$t/blocked.txt" "$dbit"
+check "recheck: the build's own manifests are kept beside the new ones, as they were" \
+    eval "cmp -s '$d/manifest.build.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.build.txt' '$t/blocked-flow.txt'"
+check "recheck: the manifest is TOML with the same top-level keys as a build's" python3 -c "
+import tomllib,sys
+a=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+ka={k for k,v in a.items() if not isinstance(v,dict)}; kb={k for k,v in b.items() if not isinstance(v,dict)}
+assert ka==(kb|{'bitstream_sha256','bitstream_bytes'})-{'reason'}, ka ^ kb
+" "$d/manifest.txt" "$t/blocked.txt"
+# tools/program.sh and tools/board-test.py take the rechecked manifests as a build's, and refuse the build's own
+run env FAKE_IDCODE=0x13631093 DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh volatile arty_a7_100t
+check "recheck: program.sh loads the rechecked bitstream (make program-volatile DESIGN=...)" logged "openFPGALoader -b arty_a7_100t $dbit"
+check "recheck: ... saying its manifest is a recheck's" has "its manifest is a recheck's: .*LVS by z3cmd, the tools of .* in a .*tree.*(the build's own: fail)"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh flash arty_a7_100t < /dev/null
+check "recheck: ... and writes it to the flash on the owner's confirmation (a pass for this file, board and part)" logged "openFPGALoader -b arty_a7_100t -f --verify $dbit"
+# the tools' tree: recorded and shown, not refused (as a build's source_dirty)
+mkdir -p "$t/dirty" "$t/clean" "$t/dirtyflow"
+for c in dirty:true clean:false; do
+    cp "$dbit" "$t/${c%%:*}/surfcpu_arty_a7_bramdiag.bit"
+    sed -e "s/^tools_dirty = .*/tools_dirty = ${c#*:}/" \
+        -e 's/^tools_revision = .*/tools_revision = "0123456789abcdef0123456789abcdef01234567"/' "$d/manifest.txt" > "$t/${c%%:*}/manifest.txt"
+done
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirty/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: program.sh names the commit of a recheck's tools and their dirty tree, and loads it (recorded, not refused)" \
+    eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a dirty tree (recorded, not refused, as for a build)' '$t/out.txt'"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/clean/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: ... or their clean one" eval "test $rc -eq 0 && grep -q 'the tools of 0123456789ab in a clean tree' '$t/out.txt'"
+cp "$d/openxc7/surfcpu_arty_a7_top.bit" "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+sed 's/ dirty=0,/ dirty=1,/' "$d/openxc7/manifest.txt" > "$t/dirtyflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/dirtyflow/surfcpu_arty_a7_top.bit"
+check "recheck: ... and from a flow manifest's recheck line (dirty=1)" eval "test $rc -eq 0 && grep -q 'the tools of fake in a dirty tree' '$t/out.txt'"
+mkdir -p "$t/old" "$t/oldflow"
+cp "$dbit" "$t/old/surfcpu_arty_a7_bramdiag.bit"
+cp "$t/blocked.txt" "$t/old/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/old/surfcpu_arty_a7_bramdiag.bit"
+check "recheck: program.sh refuses the same bitstream with the build's own manifest" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'does not say the build passed its checks' "$t/out.txt")"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$d/openxc7/surfcpu_arty_a7_top.bit"
+check "recheck: program.sh takes the flow's rechecked manifest beside the flow's bitstream (every check PASS)" \
+    test "$rc" -eq 0 -a -n "$(grep -- " -b arty_a7_100t $d/openxc7/surfcpu_arty_a7_top.bit" "$FAKE_LOG")"
+cp "$d/openxc7/surfcpu_arty_a7_top.bit" "$t/oldflow/surfcpu_arty_a7_top.bit"
+cp "$t/blocked-flow.txt" "$t/oldflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/oldflow/surfcpu_arty_a7_top.bit"
+check "recheck: ... and refuses it with the flow's own manifest (LVS BLOCKED)" \
+    test "$rc" -eq 1 -a -n "$(grep 'check LVS BLOCKED (killed: SIGKILL, exit 137)' "$t/out.txt")"
+sed 's/^manifest_format = 2$/manifest_format = 3/' "$d/manifest.txt" > "$t/old/manifest.txt"
+cp "$dbit" "$t/old/surfcpu_arty_a7_bramdiag.bit"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/old/surfcpu_arty_a7_bramdiag.bit"
+check "manifest format: program.sh refuses a format it does not know (3)" \
+    test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")" -a -n "$(grep 'manifest format 3, which this script does not know' "$t/out.txt")"
+sed 's/^manifest format     2/manifest format     3/' "$d/openxc7/manifest.txt" > "$t/oldflow/manifest.txt"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/oldflow/surfcpu_arty_a7_top.bit"
+check "manifest format: ... a flow manifest's too" test "$rc" -eq 1 -a -n "$(grep 'manifest format 3' "$t/out.txt")"
+check "recheck: board-test.py reads the rechecked manifest: a pass, its [recheck] for the evidence" python3 -c "
+import importlib.util,sys
+s=importlib.util.spec_from_file_location('bt', 'tools/board-test.py'); bt=importlib.util.module_from_spec(s); s.loader.exec_module(bt)
+m=bt.manifest(sys.argv[1])
+assert m['result']=='pass' and m['manifest_format']=='2' and m['recheck']['build_result']=='fail' and m['recheck']['lvs_solver']=='z3cmd', m
+assert 'LVS by z3cmd' in bt.recheck_line(m) and bt.recheck_line(bt.manifest(sys.argv[2])) is None
+" "$d/manifest.txt" "$t/blocked.txt"
+run python3 tools/board-test.py m3 --board arty_a7_100t --design surfcpu_arty_a7_bramdiag --manifest "$t/old/manifest.txt" --port /nonexistent
+check "manifest format: board-test.py refuses a format it does not know (3), before anything" \
+    test "$rc" -eq 2 -a -n "$(grep 'is format 3, which this script does not know' "$t/out.txt")"
+# the refusals, each before the flow is asked, with nothing changed
+cp "$d/manifest.txt" "$t/rechecked.txt"
+same() { cmp -s "$d/manifest.txt" "$t/rechecked.txt" && [ -f "$dbit" ]; }
+cp "$dbit" "$t/bit.saved"
+printf 'x' >> "$d/openxc7/surfcpu_arty_a7_top.bit"
+recheck
+check "recheck: refuses a bitstream that is not the one both manifests record, asking nothing of the flow, changing nothing" \
+    eval "test $rc -eq 1 && grep -q 'is not the one ${d#$root/}/openxc7/manifest.build.txt records' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+cp "$t/bit.saved" "$d/openxc7/surfcpu_arty_a7_top.bit"
+mv "$d/nextpnr.xdc" "$t/xdc.saved"
+recheck
+check "recheck: refuses a build with a file missing (its nextpnr constraints)" \
+    eval "test $rc -eq 1 && grep -q 'nextpnr.xdc is missing' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+mv "$t/xdc.saved" "$d/nextpnr.xdc"
+mv "$d/rom/diag.mem" "$t/rom.saved"
+recheck
+check "recheck: ... (the boot ROM copy the build read)" eval "test $rc -eq 1 && grep -q 'the boot ROM the build read, is missing' '$t/out.txt' && same"
+printf '00000000\n' > "$d/rom/diag.mem"
+recheck
+check "recheck: refuses a boot ROM copy that is not the one recorded" eval "test $rc -eq 1 && grep -q 'is not the boot ROM' '$t/out.txt' && same"
+mv "$t/rom.saved" "$d/rom/diag.mem"
+cp "$d/manifest-head.txt" "$t/head.saved"
+sed -i 's/^build_time = .*/build_time = 1/' "$d/manifest-head.txt"
+recheck
+check "recheck: refuses manifests that are not one build's (the head is not the manifest's)" \
+    eval "test $rc -eq 1 && grep -q 'manifest-head.txt is not the head of' '$t/out.txt' && same"
+cp "$t/head.saved" "$d/manifest-head.txt"
+mv "$d/manifest.build.txt" "$t/build.saved"
+recheck
+check "recheck: refuses a recheck's manifest with the build's own not beside it" \
+    eval "test $rc -eq 1 && grep -q \"is a recheck's manifest, and the build's own\" '$t/out.txt' && same"
+mv "$t/build.saved" "$d/manifest.build.txt"
+cp "$d/openxc7/manifest.build.txt" "$t/flowrec.saved"
+sed -i "s/ARTY_BUILD_ID=32'h[0-9a-f]*/ARTY_BUILD_ID=32'hdeadbeef/" "$d/openxc7/manifest.build.txt"
+recheck
+check "recheck: refuses a flow manifest whose bitstream carries another build id than the build's" \
+    eval "test $rc -eq 1 && grep -q \"the bitstream's build id\" '$t/out.txt' && same"
+cp "$t/flowrec.saved" "$d/openxc7/manifest.build.txt"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_OPENXC7_IMAGE=surfcpu-openxc7:other tools/fpga-build.sh --recheck --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "recheck: refuses a build made in another image than this tree's flow runs" eval "test $rc -eq 1 && grep -q \"was built in the image 'surfcpu-openxc7:2026-10-15'\" '$t/out.txt' && same"
+recheck FAKE_OX_RECHECK=refuse
+check "recheck: when the flow refuses (its own checks), nothing is changed" \
+    eval "test $rc -eq 1 && grep -q 'refused (exit 3) before it began: nothing was changed' '$t/out.txt' && same"
+recheck FAKE_OX_LVS="BLOCKED (timeout)"
+check "recheck: a recheck whose proof is stopped at its limit fails, and no bitstream stays under the design's name" \
+    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q '^reason = \".*check LVS BLOCKED (timeout)' '$d/manifest.txt' && grep -q '^\[recheck\]$' '$d/manifest.txt'"
+check "recheck: ... the build's own manifest still the one kept" cmp -s "$d/manifest.build.txt" "$t/blocked.txt"
+recheck FAKE_OX_SLACK=FAIL
+check "recheck: a placement the slack rule now fails fails the recheck" eval "test $rc -eq 1 && grep -q '^reason = \".*check slack margin FAIL' '$d/manifest.txt'"
+cp "$d/manifest.txt" "$t/before-die.txt"
+cp "$d/openxc7/manifest.txt" "$t/before-die-flow.txt"
+recheck FAKE_OX_RECHECK=die
+check "recheck: a recheck killed after it began leaves the manifests that were there (an earlier recheck's, a fail)" \
+    eval "test $rc -eq 1 && ! test -e '$dbit' && grep -q 'stopped (exit 137) before it wrote its manifest' '$t/out.txt' && cmp -s '$d/manifest.txt' '$t/before-die.txt' && cmp -s '$d/openxc7/manifest.txt' '$t/before-die-flow.txt'"
+recheck
+check "recheck: then a recheck from the build's own manifests passes again" \
+    eval "test $rc -eq 0 && test -f '$dbit' && cmp -s '$d/manifest.build.txt' '$t/blocked.txt' && cmp -s '$d/openxc7/manifest.build.txt' '$t/blocked-flow.txt'"
+rkbuild FAKE_OX_SRL=FAIL
+recheck
+check "recheck: refuses a build whose kept SRL check failed" eval "test $rc -eq 1 && grep -q \"check_srl is 'FAIL': a recheck keeps it\" '$t/out.txt' && ! test -s '$FAKE_LOG'"
+rkbuild FAKE_OX_NETLIST=lost
+recheck
+check "recheck: refuses a build whose kept netlist check failed" eval "test $rc -eq 1 && grep -q \"check_netlist is 'FAIL'\" '$t/out.txt'"
+rkbuild
+check "recheck: a new build leaves no recheck's files behind" eval "test $rc -eq 0 && ! test -e '$d/manifest.build.txt' && ! test -e '$d/openxc7/manifest.build.txt' && ! grep -q '^\[recheck\]' '$d/manifest.txt'"
+recheck
+check "recheck: a build that passed rechecks to a pass, its own manifest kept beside, the same bitstream copied out" \
+    eval "test $rc -eq 0 && grep -q '^build_result = \"pass\"' '$d/manifest.txt' && grep -q '^result = \"pass\"' '$d/manifest.build.txt' && cmp -s '$dbit' '$d/openxc7/surfcpu_arty_a7_top.bit'"
+cp "$d/manifest.txt" "$t/rechecked.txt"
+cp "$d/manifest.build.txt" "$t/pass.saved"
+sed -i 's/^bitstream_sha256 = .*/bitstream_sha256 = "00"/' "$d/manifest.build.txt"
+recheck
+check "recheck: refuses a bitstream that is not the one this script's own manifest records (a passing build's)" \
+    eval "test $rc -eq 1 && grep -q 'is not the one ${d#$root/}/manifest.build.txt records (00)' '$t/out.txt' && ! test -s '$FAKE_LOG' && same"
+cp "$t/pass.saved" "$d/manifest.build.txt"
+
+# the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
+ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|arty_a7_ddr3_|surf_ddr_bridge|surf_ddr_csr|^lvs-timeout '
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_top.files | grep -Ev "$ddr_lines" > "$t/top2.list"
+check "ddr designs: surfcpu_arty_a7_ddr is surfcpu_arty_a7_top plus the DDR lines" cmp -s "$t/ddr.list" "$t/top2.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files > "$t/ddr2.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files > "$t/ddrdiag.list"
+check "ddr designs: surfcpu_arty_a7_ddr_bramdiag is surfcpu_arty_a7_ddr but for its boot ROM" cmp -s "$t/ddr2.list" "$t/ddrdiag.list"
+check "ddr designs: both define ARTY_HAS_DDR and read their generated files through ip/litedram/arty.sha256" test \
+    "$(grep -c -E '^define +ARTY_HAS_DDR|^generated +ip/litedram/arty.sha256' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files | awk -F: '{ s += $2 } END { print s }')" -eq 4
+
+# the GPU designs (docs/GPU.md; 10/18/26): bramdiag and the DDR boot design plus the GPU lines, for the
+# 100T only (a board line), gpudiag in the boot ROM of the first
+gpu_lines='^board |^define +ARTY_HAS_GPU|^rom |^lvs-timeout |^seed '
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files | grep -Ev "$gpu_lines" > "$t/gpudiag.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files | grep -Ev "$gpu_lines" > "$t/diag2.list"
+check "gpu designs: surfcpu_arty_a7_gpudiag is surfcpu_arty_a7_bramdiag plus the GPU lines" cmp -s "$t/gpudiag.list" "$t/diag2.list"
+check "gpu designs: ... with gpudiag as its boot ROM" test \
+    "$(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files)" = build/fw/gpudiag.mem
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr_gpu.files | grep -Ev '^board |^define +ARTY_HAS_GPU' > "$t/ddrgpu.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files > "$t/ddr3.list"
+check "gpu designs: surfcpu_arty_a7_ddr_gpu is surfcpu_arty_a7_ddr plus the GPU lines" cmp -s "$t/ddrgpu.list" "$t/ddr3.list"
+check "gpu designs: both build for the 100T only and define ARTY_HAS_GPU" test \
+    "$(grep -c -E '^board +arty_a7_100t +#|^define +ARTY_HAS_GPU' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files boards/arty_a7/designs/surfcpu_arty_a7_ddr_gpu.files | awk -F: '{ s += $2 } END { print s }')" -eq 4
+check "gpu designs: no other design has a board line" test \
+    "$(grep -l -E '^board ' boards/arty_a7/designs/*.files | wc -l | tr -d ' ')" -eq 2
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_gpudiag arty_a7_35t
+check "board line: the gpudiag design is refused for the 35T" test "$rc" -eq 1
+check "board line: ... saying why" has "builds for arty_a7_100t only, not arty_a7_35t"
+check "board line: ... before anything runs" nolog
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_ddr_gpu arty_a7_35t
+check "board line: the DDR+GPU design is refused for the 35T" has "builds for arty_a7_100t only, not arty_a7_35t"
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_gpudiag arty_a7_100t
+check "board line: ... and taken for the 100T (dry run)" is "$rc" 0
+check "board line: ... which defines ARTY_HAS_GPU for synthesis" has "-D ARTY_HAS_GPU"
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_35t
+check "board line: a design without one still builds for the 35T (dry run)" is "$rc" 0
+
+# ------------------------------------------------------------------------------ generated files and defines
+# A scratch repository with what the DDR design reads, but stand-ins for the generated LiteDRAM
+# files (the real ones need the pinned generator, make litedram-gen) and a scratch copy of
+# ip/litedram/arty.sha256 with their hashes. build/ is ignored there, as in the repository.
+g=$t/gitrepo-ddr
+mkdir -p "$g"
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh tools/openxc7-build.sh tools/program.sh boards/arty_a7 rtl spec/soc.toml |
+    ( cd "$g" && tar xf - )
+gv=build/litedram/arty/gateware
+gc=build/litedram/arty
+mkdir -p "$g/$gv" "$g/$gc/software/include/generated" "$g/ip/litedram"
+printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_core.v"
+printf 'set_false_path -quiet -to [get_cells -hierarchical -filter {mr_ff == TRUE}]\n' > "$g/$gv/litedram_core.xdc"
+printf 'csr_register,ddrctrl_init_done,0x00000000,1,rw\n' > "$g/$gc/csr.csv"
+printf '#define SDRAM_PHY_PHASES 4\n' > "$g/$gc/software/include/generated/sdram_phy.h"
+{ echo "# scratch: SHA-256 of the stand-ins"; echo "# generate: make litedram-gen"
+  for f in $gv/litedram_core.v $gv/litedram_core.xdc $gc/csr.csv $gc/software/include/generated/sdram_phy.h; do
+      echo "$(shasum -a 256 "$g/$f" | cut -d' ' -f1)  $f"; done; } > "$g/ip/litedram/arty.sha256"
+printf '/build/\n' > "$g/.gitignore"
+gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
+gitq init -q && gitq add -A && gitq commit -q -m scratch
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+# two board lines add up (the first GPU review: fpga-build.sh refused every board, release.py
+# merged them); a scratch design, removed again
+tb2="$g/boards/arty_a7/designs/twoboards.files"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" "$tb2"
+printf 'board arty_a7_100t   # one line\nboard arty_a7_35t    # and another\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_35t
+check "board line: two board lines add up: the second's 35T is taken (dry run)" is "$rc" 0
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: ... and the first's 100T" is "$rc" 0
+# CRLF line ends are read as release.py reads them, and a board line naming no board is refused
+# by both (the second review)
+tr -d '\r' < "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" | sed 's/$/\r/' > "$tb2"
+printf 'board arty_a7_100t\r\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: a design list with CRLF line ends: its board taken (dry run)" is "$rc" 0
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_35t
+check "board line: ... and the other refused" has "builds for arty_a7_100t only, not arty_a7_35t"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" "$tb2"
+printf 'board   # names none\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: a board line naming no board is refused" has "a board line in its design list names no board"
+rm -f "$tb2"
+gb=$base/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: generated files that match their list leave a clean commit clean" \
+    test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gb/manifest.dry-run.txt")"
+check "generated: ... and the build says they match" has "2 generated files match ip/litedram/arty.sha256"
+check "generated: the manifest names the list, the match and the design's defines" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+assert d['generated_lists']==['ip/litedram/arty.sha256'] and d['generated_files_match'] is True, d
+assert d['defines']==['ARTY_HAS_DDR'], d
+" "$gb/manifest.dry-run.txt"
+check "define: params.tcl gives Vivado the design's defines" grep -q '^set defines {ARTY_HAS_DDR}$' "$gb/stage/params.tcl"
+check "generated: Vivado's stage has the generated files" test -f "$gb/stage/surfcpu/$gv/litedram_core.xdc"
+printf '// changed\n' >> "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: a generated file that differs from its list makes the build dirty" \
+    test -n "$(grep '^source_dirty = true' "$gb/manifest.dry-run.txt")" -a -n "$(grep '^generated_files_match = false' "$gb/manifest.dry-run.txt")"
+check "generated: ... and the build names it and how to make it again" \
+    eval "grep -q 'so the build counts as dirty: $gv/litedram_core.v' '$t/out.txt' && grep -q 'regenerate them: make litedram-gen' '$t/out.txt'"
+rm "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: a missing generated file stops the build, saying how to make it" \
+    test "$rc" -eq 1 -a -n "$(grep "needs $gv/litedram_core.v, a generated file (make litedram-gen)" "$t/out.txt")"
+printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+c=$gb/out/calls.txt
+check "define: Vivado (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gb/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: build.tcl synthesizes with -verilog_define ARTY_HAS_DDR" grep -q "^synth_design -top surfcpu_arty_a7_top .*-verilog_define ARTY_HAS_DDR" "$c"
+check "define: build.tcl reads the generated core's constraints and both DDR crossings' scoped ones" \
+    eval "grep -q '^read_xdc .*$gv/litedram_core.xdc' '$c' && grep -q '^read_xdc -ref surf_ddr_bridge -unmanaged rtl/soc/ddr/surf_ddr_bridge.xdc' '$c' && grep -q '^read_xdc -ref surf_ddr_csr -unmanaged rtl/soc/ddr/surf_ddr_csr.xdc' '$c'"
+mv "$conf" "$t/conf.ddr"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+gd=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+check "define: the open flow (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: ... with -D ARTY_HAS_DDR, the generated sources, the design's LVS limit and seeds" \
+    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -Eq -- ' $gv/litedram_core.v( |\$)' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400 --seed 1,2,3,4,5,6,7,8' '$FAKE_LOG'"
+check "define: ... and the manifest has the seeds and the one used" \
+    eval "grep -q '^placer_seeds = \[1, 2, 3, 4, 5, 6, 7, 8, \]$' '$gd/manifest.txt' && grep -q '^placer_seed = 1$' '$gd/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_FAIL_SEEDS="1 2" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: placements that miss a clock are followed by the next seed, whose bitstream passes" \
+    test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^placer_seed = 3$' "$gd/manifest.txt")"
+check "seeds: ... and the manifest records every attempt" \
+    test "$(sed -n '/^placer_attempts = \[/,/^\]/p' "$gd/manifest.txt" | grep -c '"seed [0-9]*: ')" -eq 3 -a \
+         -n "$(grep '"seed 2: fail (nextpnr exit 1), routed; .dram_clk.: 72.98 MHz (FAIL at 80.00 MHz)' "$gd/manifest.txt")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_FAIL_SEEDS="5" \
+    PLACER_SEEDS="5,6" SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: PLACER_SEEDS replaces the design's list for one build, and the manifest says so" \
+    eval "test $rc -eq 0 && grep -q -- '--seed 5,6' '$FAKE_LOG' && grep -q '^placer_seeds = \[5, 6, \]$' '$gd/manifest.txt' && grep -q '^placer_seeds_from = \"PLACER_SEEDS\"$' '$gd/manifest.txt' && grep -q '^placer_seed = 6$' '$gd/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" PLACER_SEEDS="2;x" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: ... and refuses a PLACER_SEEDS that is not numbers" test "$rc" -ne 0
+# each placer seed's time limit (the second GPU review): a design's pnr-timeout line reaches the
+# open flow, and one that is not seconds is refused; without a line the flow's default holds
+tp="$g/boards/arty_a7/designs/pnrlimit.files"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'pnr-timeout 900\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: the design list's limit for each placer seed reaches the open flow" logged "--pnr-timeout 900"
+printf 'pnr-timeout 15m\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: ... and a limit that is not seconds is refused" has "pnr-timeout must be a number of seconds"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'pnr-timeout 00\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: ... and so is 00, which timeout takes as no limit" has "pnr-timeout must be more than 0 seconds"
+# the slack rule (the third GPU review): a design's min-slack lines reach the open flow, nonsense is
+# refused; the seed the flow used and its slack verdict reach the manifest, THIN kept but said
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'min-slack dram_clk 0.5\nmin-slack sys_clk 2\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "min-slack: the design list's least slack for a clock reaches the open flow" logged "--min-slack dram_clk=0.5 --min-slack sys_clk=2"
+printf 'min-slack dram_clk 0.5ns\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "min-slack: ... and a line that is not a clock and nanoseconds is refused" has "a min-slack line wants a clock and a number of nanoseconds"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'min-slack dram_clk 0.5\nmin-slack dram_clk 0.05\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "min-slack: ... and so is a clock named twice" has "min-slack names dram_clk twice"
+rm -f "$tp"
+gl=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_THIN_SEEDS="1" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "slack: a thin placement is followed by the next seed, whose bitstream passes the rule" \
+    eval "test $rc -eq 0 && grep -q '^placer_seed = 2$' '$gl/manifest.txt' && grep -q '^slack_margin = \"PASS\"$' '$gl/manifest.txt' && grep -q '\"seed 1: thin, routed; ' '$gl/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    FAKE_OX_THIN_SEEDS="1 2 3 4 5 6 7 8" SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "slack: with every seed thin the bitstream is kept, its seed the one kept, its manifest THIN, and the build says so" \
+    eval "test $rc -eq 0 && test -f '$gl/surfcpu_arty_a7_ddr_bramdiag.bit' && grep -q '^placer_seed = 1$' '$gl/manifest.txt' && grep -q '^slack_margin = \"THIN\"$' '$gl/manifest.txt' && grep -q '^slack_margin_note = \"dram_clk +0.087 ns, wants 0.500; every seed tried was thin or failed' '$gl/manifest.txt' && grep -q 'fpga-build: THIN: ' '$t/out.txt'"
+n_pnr=$(grep -c -- '--pnr-timeout' "$FAKE_LOG" || true)
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "pnr-timeout: ... and a design without one leaves the flow its default" \
+    test "$(grep -c -- '--pnr-timeout' "$FAKE_LOG" || true)" = "$n_pnr"
+check "define: nextpnr is given the DDR3L pins with their slew and termination" \
+    grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
+check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \
+    test "$(grep -c 'arty_a7_ddr3_timing.xdc' "$gd/nextpnr-not-checked.txt")" -eq 5
+run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: program.sh loads the DDR design's bitstream (fake openFPGALoader)" \
+    test "$rc" -eq 0 -a -n "$(grep -- "-b arty_a7_100t $gd/surfcpu_arty_a7_ddr_bramdiag.bit" "$FAKE_LOG")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_STOP=pnr \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "openxc7: a flow that stops at place and route (a clock missed) fails with a complete manifest" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
+check "openxc7: ... whose reason names the clock and nextpnr's figures" \
+    grep -q '^reason = ".*timing not met (nextpnr: dram_clk 72.98 MHz of 80.00 MHz)' "$gd/manifest.txt"
+check "openxc7: ... and records nextpnr's last report per clock" \
+    grep -q "^nextpnr_fmax = \[\"Max frequency for clock 'dram_clk': 72.98 MHz (FAIL at 80.00 MHz)\", \"Max frequency for clock 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)\", \]$" "$gd/manifest.txt"
+check "openxc7: ... and every seed it tried, none passing" \
+    test "$(sed -n '/^placer_attempts = \[/,/^\]/p' "$gd/manifest.txt" | grep -c '"seed [0-9]*: fail ')" -eq 8 -a \
+         -z "$(grep '^placer_seed = ' "$gd/manifest.txt")"
+check "openxc7: ... after routing" grep -q '^nextpnr_routed = true$' "$gd/manifest.txt"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_STOP=route \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "openxc7: a flow stopped before routing converged fails with a complete manifest" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
+check "openxc7: ... whose reason says routing did not finish, not that timing was missed" \
+    grep -q '^reason = ".*nextpnr did not finish routing (router2 after 101 iterations, 786 overused wires); the placer.s timing estimate misses too (dram_clk 84.07 MHz of 80.00 MHz)' "$gd/manifest.txt"
+check "openxc7: ... and marks nextpnr's figures as not routed" grep -q '^nextpnr_routed = false$' "$gd/manifest.txt"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_TIMING=FAIL \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "define: a DDR build that misses timing fails, with no bitstream under the design's name" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^reason = ".*timing not met' "$gd/manifest.txt")"
+cp "$gd/openxc7/surfcpu_arty_a7_top.bit" "$t/ddr-failed.bit"
+cp "$gd/manifest.txt" "$t/manifest.txt"
+run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$t/ddr-failed.bit"
+check "define: ... and program.sh refuses that run's bitstream (its manifest says fail)" \
+    test "$rc" -ne 0 -a -z "$(grep -- '-b arty_a7_100t' "$FAKE_LOG")"
+rm -f "$t/manifest.txt" "$t/ddr-failed.bit"
+# the design's own boot ROM is part of the bitstream's identity (10/26/26: a ROM built while an
+# untracked file was present said "dirty tree" in a bitstream whose manifest said clean): the build
+# reads what make compiled into it from gen/fw_build.h beside it
+gr=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_bramdiag
+gid=$(git -C "$g" rev-parse HEAD | cut -c1-8)
+mkdir -p "$g/build/fw/gen"
+cp "$t/diag.mem" "$g/build/fw/bramdiag.mem"
+fwh() {                                      # ID DIRTY: make's fw_build.h, older than the ROM
+    printf '/* generated by mk/area-fw.mk */\n#define FW_BUILD_ID 0x%sU\n#define FW_BUILD_DIRTY %s\n' "$1" "$2" \
+        > "$g/build/fw/gen/fw_build.h"
+    touch -t 202610260000 "$g/build/fw/gen/fw_build.h"
+    touch -t 202610260001 "$g/build/fw/bramdiag.mem"
+}
+romrun() { run env FLOW=openxc7 SURFCPU_FPGA_OUT="$g/build/fpga" "$@" "$g/tools/fpga-build.sh" --dry-run \
+               --design surfcpu_arty_a7_bramdiag arty_a7_100t; }
+fwh "$gid" 0
+romrun
+check "boot ROM: one this clean commit built leaves the build clean (dry run)" \
+    test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gr/manifest.dry-run.txt")"
+fwh "$gid" 1
+romrun
+check "boot ROM: one built from a dirty tree makes the build dirty, as SurfBoot's banner will say" \
+    eval "test $rc -eq 0 && grep -q '^source_dirty = true' '$gr/manifest.dry-run.txt' && grep -q \"ARTY_BUILD_FLAGS=32'h00000001\" '$t/out.txt'"
+check "boot ROM: ... and the build says why" has "the boot ROM build/fw/bramdiag.mem was built from a dirty tree"
+fwh 0badc0de 0
+romrun
+check "boot ROM: one of another build is refused" test "$rc" -eq 1
+check "boot ROM: ... saying which builds, and what to run" has "is build 0badc0de, this tree is build $gid: make build-rom"
+fwh "$gid" 0
+touch -t 202610260002 "$g/build/fw/gen/fw_build.h"
+romrun
+check "boot ROM: one older than the identity make compiled in last is refused" \
+    test "$rc" -eq 1 -a -n "$(grep 'is older than build/fw/gen/fw_build.h' "$t/out.txt")"
+rm "$g/build/fw/gen/fw_build.h"
+romrun
+check "boot ROM: ... and so is one with no identity beside it" \
+    test "$rc" -eq 1 -a -n "$(grep 'has no build identity beside it (build/fw/gen/fw_build.h)' "$t/out.txt")"
+fwh 0badc0de 1
+romrun ROM="$t/diag.mem"
+check "boot ROM: ROM= names an image the build does not judge" \
+    test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gr/manifest.dry-run.txt")"
+rm -rf "$g/build/fw"
+rm -f "$t/conf.ddr"                                     # no build-host.conf again
+rm -rf "$g"
+
+run env FLOW=openxc7 SURFCPU_FPGA_OUT=/nonexistent/fpga tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7: an output directory outside surfcpu/ refused (the container sees only the repository)" has "is outside it"
+mv "$t/conf.saved" "$conf"                              # FLOW=vivado-ssh in the file again
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "openxc7: FLOW from the environment overrides build-host.conf (no ssh)" test "$rc" -eq 0 -a -z "$(grep '^ssh ' "$FAKE_LOG")"
+run env FLOW=quartus tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "build: an unknown FLOW from the environment refused" has "unknown FLOW 'quartus' from the environment"
+
+# ============================================================================== digilent/fetch.sh
+# A copy of the digilent directory whose SHA256SUMS lists three made-up manuals: one saved
+# copy matches, one differs, one is not there. Nothing is downloaded.
+dd=$t/digilent
+mkdir -p "$dd/xdc" "$t/saved"
+cp boards/arty_a7/digilent/fetch.sh "$dd/"
+cp boards/arty_a7/digilent/xdc/* "$dd/xdc/"
+printf 'a schematic\n' > "$t/saved/arty_a7_sch.pdf"
+printf 'a manual, damaged\n' > "$t/saved/pmodps2_rm.pdf"
+{
+    grep -v ' manuals/' boards/arty_a7/digilent/SHA256SUMS
+    echo "$(shasum -a 256 "$t/saved/arty_a7_sch.pdf" | cut -d' ' -f1)  manuals/arty_a7_sch.pdf"
+    echo "$(printf 'a manual\n' | shasum -a 256 | cut -d' ' -f1)  manuals/pmodps2_rm.pdf"
+    echo "$(printf 'a reference\n' | shasum -a 256 | cut -d' ' -f1)  manuals/pmodvga_rm.pdf"
+} > "$dd/SHA256SUMS"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: no manuals fetched still passes (a fresh checkout)" is "$rc" 0
+check "digilent verify: ... and lists the manuals not fetched" has "not fetched (boards/arty_a7/digilent/fetch.sh fetch): manuals/arty_a7_sch.pdf manuals/pmodps2_rm.pdf manuals/pmodvga_rm.pdf"
+run sh "$dd/fetch.sh" fetch --from "$t/saved"
+check "digilent fetch: a copy that differs is reported, the run fails" test "$rc" -eq 1
+check "digilent fetch: the matching copy is installed" test -f "$dd/manuals/arty_a7_sch.pdf"
+check "digilent fetch: the differing copy is not installed" test ! -e "$dd/manuals/pmodps2_rm.pdf"
+check "digilent fetch: the missing one is named" has "absent  manuals/pmodvga_rm.pdf"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: counts the installed manual" has "manuals: 1 of 3 present and matching"
+printf 'changed\n' >> "$dd/manuals/arty_a7_sch.pdf"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: a present manual that changed fails" test "$rc" -eq 1
+rm "$dd/manuals/arty_a7_sch.pdf"
+printf '# edited\n' >> "$dd/xdc/Arty-A7-35-Master.xdc"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: a changed XDC file fails" test "$rc" -eq 1
+
+# ============================================================================== boards.txt
+check "boards.txt: every board is a spec/soc.toml board" python3 -c "
+import tomllib
+b=tomllib.load(open('spec/soc.toml','rb'))['boards']
+names=[l.split()[0] for l in open('boards/arty_a7/boards.txt') if l.strip() and not l.startswith('#')]
+assert names and all(n in b for n in names), names
+"
+
+echo "test_tools: $pass passed, $failed failed"
+[ "$failed" -eq 0 ]

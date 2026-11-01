@@ -1,0 +1,101 @@
+SurfCPU acceptance test m1: the baseline design (milestone 1): LEDs, clocks, reset and the UART
+Verdict: PASS (11 checks seen by this script passed; the owner confirmed 1)
+Source: the board, through /dev/cu.usbserial-210319C129C61 at 115200 8N1
+Date: 2026-10-16 16:11:24 UTC, 61 s
+Command: tools/board-test.py m1 --port auto --board arty_a7_100t
+Tools: board-test.py sha256 cf3a99d2fb49d5a6, uart.py sha256 dd6dda3bf7893ce1 (commit f85079e70897 with uncommitted changes); Python 3.14.7 on Darwin arm64
+
+Build identity read from the port, and what it was compared with:
+  baseline: board arty_a7_100t 0x00000100, build 2d1f32b2, clean, built at 1792165445
+    the line's build 2d1f32b2 clean, time 1792165445 and board arty_a7_100t match the manifest's (2d1f32b2, 1792165445, source_dirty false, arty_a7_100t; /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-surfcpu/surfcpu/build/fpga/arty_a7_100t/arty_a7_baseline/manifest.txt)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.5  program        done, answered at +3.0
+              | Load the baseline design, in another Terminal window:
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=arty_a7_baseline
+              | and press Enter here once it says done.
+  +    10.8  switches       done, answered at +20.7
+              | Set the switches to SW3 off, SW2 on, SW1 off, SW0 on (0101), then press Enter.
+  +    20.7  button         done, answered at +36.6
+              | Press and hold BTN0 for two seconds, release it, then press Enter.
+  +    36.6  leds           done, answered at +47.9
+              | Do LD0 and LD1 blink green together, once a second; do LD4..LD7 follow the switches; and did
+              | BTN0 light an RGB LED blue?
+  +    47.9  reset          done, answered at +58.9
+              | Press the RESET button once, then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /dev/cu.usbserial-210319C129C61 opened at 115200 8N1
+  ok       10 lines a second, each of the baseline's form ("SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up ...")
+  ok       the seconds since reset count up by one a line (472, 473, 474, 475, 476, 477, 478, 479, 480, 481)
+  ok       a line every second by the Mac's clock (0.99, 1.01, 0.99, 1.01, 0.99, 1.01, 0.99, 1.01, 0.99 s)
+  ok       the pixel clock measured 25,173,611 +- 1 Hz (25173611, 25173612)
+  ok       the board arty_a7_100t and its id 0x100 agree
+  ok       the design was built for arty_a7_100t, the board asked for (--board)
+  ok       the line's build 2d1f32b2 clean, time 1792165445 and board arty_a7_100t match the manifest's (2d1f32b2, 1792165445, source_dirty false, arty_a7_100t; /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-surfcpu/surfcpu/build/fpga/arty_a7_100t/arty_a7_baseline/manifest.txt)
+  ok       the FPGA's receive pin: the byte typed (S) shows as rx 53
+  ok       the switches: a line shows sw 0101 as the owner set them
+  ok       the buttons: a line shows BTN0 pressed (btn ...1)
+  owner    Do LD0 and LD1 blink green together, once a second; do LD4..LD7 follow the switches; and did BTN0 light an RGB LED blue?
+  ok       RESET restarts the count (up 000001 s)
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 7598 bytes received;
+"*": the port going away and coming back):
+  +    0.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000472 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    1.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000473 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    2.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000474 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    3.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000475 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    4.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000476 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    5.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000477 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    6.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000478 s | pix 25173612 Hz | sw 0000 btn 0000 rx --
+  +    7.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000479 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    8.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000480 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +    9.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000481 s | pix 25173611 Hz | sw 0000 btn 0000 rx --
+  +   10.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000482 s | pix 25173611 Hz | sw 0000 btn 0000 rx 53
+  +   11.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000483 s | pix 25173611 Hz | sw 0000 btn 0000 rx 53
+  +   12.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000484 s | pix 25173611 Hz | sw 0000 btn 0000 rx 53
+  +   13.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000485 s | pix 25173611 Hz | sw 0000 btn 0000 rx 53
+  +   14.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000486 s | pix 25173611 Hz | sw 0000 btn 0000 rx 53
+  +   15.808 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000487 s | pix 25173612 Hz | sw 0000 btn 0000 rx 53
+  +   16.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000488 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   17.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000489 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   18.816 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000490 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   19.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000491 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   20.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000492 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   21.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000493 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   22.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000494 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   23.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000495 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   24.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000496 s | pix 25173612 Hz | sw 0101 btn 0000 rx 53
+  +   25.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000497 s | pix 25173611 Hz | sw 0101 btn 0001 rx 53
+  +   26.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000498 s | pix 25173611 Hz | sw 0101 btn 0001 rx 53
+  +   27.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000499 s | pix 25173611 Hz | sw 0101 btn 0001 rx 53
+  +   28.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000500 s | pix 25173611 Hz | sw 0101 btn 0001 rx 53
+  +   29.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000501 s | pix 25173611 Hz | sw 0101 btn 0001 rx 53
+  +   30.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000502 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   31.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000503 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   32.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000504 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   33.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000505 s | pix 25173612 Hz | sw 0101 btn 0000 rx 53
+  +   34.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000506 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   35.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000507 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   36.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000508 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   37.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000509 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   38.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000510 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   39.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000511 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   40.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000512 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   41.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000513 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   42.815 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000514 s | pix 25173612 Hz | sw 0101 btn 0000 rx 53
+  +   43.807 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000515 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   44.814 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000516 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   45.806 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000517 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   46.814 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000518 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   47.806 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000519 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   48.814 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000520 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   49.806 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000521 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   50.814 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000522 s | pix 25173611 Hz | sw 0101 btn 0000 rx 53
+  +   51.806 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000523 s | pix 25173612 Hz | sw 0101 btn 0000 rx 53
+  +   53.870 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000001 s | pix 25173459 Hz | sw 0101 btn 0000 rx --
+  +   54.862 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000002 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+  +   55.870 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000003 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+  +   56.862 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000004 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+  +   57.870 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000005 s | pix 25173612 Hz | sw 0101 btn 0000 rx --
+  +   58.862 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000006 s | pix 25173611 Hz | sw 0101 btn 0000 rx --

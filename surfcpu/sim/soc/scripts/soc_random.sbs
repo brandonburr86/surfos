@@ -1,0 +1,43 @@
+# SurfCPU SoC test: random traffic on both core ports at once (sim/soc/scripts/soc_random.sbs).
+# The data port writes and reads bytes, halfwords and words in scratch RAM, text RAM and the
+# DDR test windows (the first and last MiB of DDR) while the fetch port reads the boot ROM and
+# windows the data port filled before; the compiler refuses any word both ports touch between
+# two syncs. Run with +gap=0 for back-to-back traffic. Needs --rom; define ddr.
+
+if ddr
+D poll    sysinfo.DDR_STATUS mask sysinfo.DDR_STATUS.CALIB_DONE equal sysinfo.DDR_STATUS.CALIB_DONE within 100000 every 8
+endif
+sync
+if ddr
+assume ddr=1
+endif
+
+# fill the windows the fetch port will read
+D random-rw scratch 300 span 0x800 offset 0x8000
+if ddr
+D random-rw ddr 300 span 0x800 offset 0x40000
+endif
+sync
+
+# both ports at once
+D random-rw scratch 1500 span 0x4000
+D random-rw textram 1000
+if ddr
+D random-rw ddr 1000 span 0x8000
+D random-rw ddr 400 span 0x8000 offset ddr.size-0x8000
+endif
+I random-fetch bootrom 1500
+I random-fetch scratch 800 span 0x800 offset 0x8000
+if ddr
+I random-fetch ddr 800 span 0x800 offset 0x40000
+endif
+sync
+
+# and the other way round: the data port reads back what it wrote while fetches continue
+D random-rw scratch 600 span 0x4000
+if ddr
+D random-rw ddr 600 span 0x8000
+endif
+I random-fetch bootrom 600
+I random-fetch scratch 600 span 0x800 offset 0x8000
+sync

@@ -1,0 +1,71 @@
+# surfcpu_core: riscv-tests rv32ui/rv32um/rv32mi p tests on surfcpu_tb
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: make --no-print-directory test-cpu-riscv-tests
+
+  rv32mi-p-breakpoint          not applicable: needs debug triggers (tselect/tdata), which SurfCPU does not have (fails as expected: surfcpu_tb: FAIL (test 2, tohost 0x00000005) after 173 cycles, 114 retired; seed 1 ilat 1:1 dlat 1:1; ibus 168 req 0 wait 0 err, dbus 1 req 0 wait 0 err; probes rd 0 wr 0)
+  rv32mi-p-csr                 PASS
+  rv32mi-p-illegal             PASS
+  rv32mi-p-instret_overflow    PASS
+  rv32mi-p-lh-misaligned       PASS
+  rv32mi-p-lw-misaligned       PASS
+  rv32mi-p-ma_addr             PASS
+  rv32mi-p-ma_fetch            PASS
+  rv32mi-p-mcsr                PASS
+  rv32mi-p-pmpaddr             not applicable: needs PMP entries; SurfCPU has none (pmpaddr reads 0) (fails as expected: surfcpu_tb: FAIL (test 1, tohost 0x00000003) after 145 cycles, 97 retired; seed 1 ilat 1:1 dlat 1:1; ibus 140 req 0 wait 0 err, dbus 1 req 0 wait 0 err; probes rd 0 wr 0)
+  rv32mi-p-sbreak              PASS
+  rv32mi-p-scall               PASS
+  rv32mi-p-sh-misaligned       PASS
+  rv32mi-p-shamt               PASS
+  rv32mi-p-sw-misaligned       PASS
+  rv32mi-p-zicntr              PASS
+  rv32ui-p-add                 PASS
+  rv32ui-p-addi                PASS
+  rv32ui-p-and                 PASS
+  rv32ui-p-andi                PASS
+  rv32ui-p-auipc               PASS
+  rv32ui-p-beq                 PASS
+  rv32ui-p-bge                 PASS
+  rv32ui-p-bgeu                PASS
+  rv32ui-p-blt                 PASS
+  rv32ui-p-bltu                PASS
+  rv32ui-p-bne                 PASS
+  rv32ui-p-fence_i             PASS
+  rv32ui-p-jal                 PASS
+  rv32ui-p-jalr                PASS
+  rv32ui-p-lb                  PASS
+  rv32ui-p-lbu                 PASS
+  rv32ui-p-ld_st               PASS
+  rv32ui-p-lh                  PASS
+  rv32ui-p-lhu                 PASS
+  rv32ui-p-lui                 PASS
+  rv32ui-p-lw                  PASS
+  rv32ui-p-ma_data             not applicable: needs misaligned loads and stores done in hardware; SurfCPU traps them (fails as expected: surfcpu_tb: FAIL (test 668, tohost 0x00000539) after 137 cycles, 89 retired; seed 1 ilat 1:1 dlat 1:1; ibus 132 req 0 wait 0 err, dbus 1 req 0 wait 0 err; probes rd 0 wr 0)
+  rv32ui-p-or                  PASS
+  rv32ui-p-ori                 PASS
+  rv32ui-p-sb                  PASS
+  rv32ui-p-sh                  PASS
+  rv32ui-p-simple              PASS
+  rv32ui-p-sll                 PASS
+  rv32ui-p-slli                PASS
+  rv32ui-p-slt                 PASS
+  rv32ui-p-slti                PASS
+  rv32ui-p-sltiu               PASS
+  rv32ui-p-sltu                PASS
+  rv32ui-p-sra                 PASS
+  rv32ui-p-srai                PASS
+  rv32ui-p-srl                 PASS
+  rv32ui-p-srli                PASS
+  rv32ui-p-st_ld               PASS
+  rv32ui-p-sub                 PASS
+  rv32ui-p-sw                  PASS
+  rv32ui-p-xor                 PASS
+  rv32ui-p-xori                PASS
+  rv32um-p-div                 PASS
+  rv32um-p-divu                PASS
+  rv32um-p-mul                 PASS
+  rv32um-p-mulh                PASS
+  rv32um-p-mulhsu              PASS
+  rv32um-p-mulhu               PASS
+  rv32um-p-rem                 PASS
+  rv32um-p-remu                PASS
+riscv-tests (d7e86f701b92, env 6de71edb142b): 63/63 applicable tests pass all 3 timings (zero, mixed, slow); 3 not applicable

@@ -1,0 +1,71 @@
+SurfGPU G4: the DDR+GPU design (GPU2) through the open flow, 2026-10-26: every gate but LVS, which is outstanding
+Built as docs/GPU.md 14.2 describes: make build-fpga FLOW=openxc7 BOARD=arty_a7_100t
+DESIGN=surfcpu_arty_a7_ddr_gpu on the Mac (docker surfcpu-openxc7:2026-10-15: Yosys 0.69,
+nextpnr-himbaechel 1.0.0, Project X-Ray), right after the gpudiag build of the same commit (whose
+make build-rom made the boot ROM, with nothing untracked in the tree), SOURCE_DATE_EPOCH the commit's
+time (1792971531), LC_ALL=C, TZ=UTC, the flow's settings unset; 06:43 to 07:45 UTC. It placed and routed
+exactly as the first build of this commit (synth-ddr-gpu-r1.txt: the router's iterations and the
+timing identical), whose boot ROM was dirty. The container ran under this session's Docker cap
+(--cpus=4 --memory=3500m, swap off, the cap the team's lead asked for on 2026-10-25). nextpnr's timing
+is an estimate, not Vivado sign-off. Nothing here was loaded on a board.
+
+source bfaac48905dc, dirty = false; build id bfaac489
+run_id surfcpu_arty_a7_ddr_gpu-arty_a7_100t-bfaac489-20261026T064335Z
+LiteDRAM: fpga-build: 2 generated files match ip/litedram/arty.sha256
+boot ROM build/fw/surfboot.mem sha256 6da7c06a822ace3be43fb1a464346e554a54701db733c71c4bce65fbdc5ccc03 (FW_BUILD_DIRTY 0)
+bitstream (openxc7/surfcpu_arty_a7_top.bit; fpga-build copies out only a build that passed) sha256
+582570abff06403eda57caeffe784e4d37cf8e413d74f37d1e6fa6dc5c70871b
+
+result: FAIL, on LVS alone:
+  check SRL cells     PASS (no SRL cell among 26044 cells)
+  check synthesis     PASS
+  check bitstream     PASS
+  check round trip    PASS
+  check block RAM     PASS
+  check LVS           FAIL, the proof outstanding: lvs-prove (lvs_equiv, one incremental libz3 session) ended by
+                      SIGKILL, exit 137, after 3057.83 s, with 8606 signals proved and none differing, as in
+                      the first build (the same questions in the same order: the kill comes at the same point) (registers: 8709 gold,
+                      8709 gate, 8709 matched by name); the step's limit (lvs-timeout 14400) was not reached,
+                      so the kill was the container's memory limit or the VM's, not the flow's timeout (124)
+  check clocks        PASS
+  slack margin        PASS (least margin dram_clk +1.037 ns, wants 0.500)
+  check_netlist = "PASS" (6 DSP48E1, the CPU's 4)
+  check_boot_rom = "PASS" (15 blocks identical, 16384 words on each port, 0 mismatches)
+
+placement: seed 1: pass, routed (HeAP 150.02 s, router2 53.50 s, 18 iterations)
+timing (nextpnr):
+  clock clk100_g: constraint 100.00 MHz, achieved 993.05 MHz, slack +8.993 ns  PASS
+  clock dram_clk: constraint 80.00 MHz, achieved 87.24 MHz, slack +1.037 ns  PASS
+  clock pix_clk: constraint 25.17 MHz, achieved 106.94 MHz, slack +30.373 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 43.44 MHz, slack +16.982 ns  PASS
+  clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 345.78 MHz, slack +2.108 ns  PASS
+  no hold violations; nextpnr warnings: 0
+  cross-domain paths (reported, not checked): dram_clk -> sys_clk 1.54 ns, pix_clk -> sys_clk 1.38 ns,
+  sys_clk -> dram_clk 1.39 ns
+  critical paths:
+    dram_clk: 11.46 ns = 3.14 logic, 8.29 routing; inside LiteDRAM, its ZQCS timer to bank machine 3's read
+              (litedram_core.v:2147 to :1081), as in G2
+    sys_clk: 23.02 ns = 5.71 logic, 17.24 routing; from GPU1's engine column group cg (surf_gpu.v:201), as in G2
+    pix_clk: 9.35 ns; S3's pixel to the FRAME_CRC update
+
+utilization:
+  LUTs (Yosys LUT1-6 and INV cells; packing can only reduce)    15467 / 63400    24.4%
+  LUT positions (nextpnr SLICE_LUTX, two per LUT6)              24629 / 126800   19.4%
+  flip-flops                                                     8709 / 126800    6.9%
+  carry chains (CARRY4, one per slice)                           1413 / 15850     8.9%
+  36 Kb block RAMs (RAMB18 = 1/2)                               112.5 / 135      83.3%
+  DSP48E1                                                           6 / 240       2.5%
+  against G2's DDR+GPU (32bffc8, evidence/gpu/synth-ddr-gpu.txt): dram_clk 88.79 MHz (+1.237 ns), sys_clk
+  53.98 MHz, 11,289 LUTs, 16,718 positions, 6,498 flip-flops, 4 DSP48E1, LVS 18,760 proved
+
+step times:
+  presynth 8.43 s, synth 53.55 s, check-srl 0.23 s, check-synth 0.27 s, pnr 267.76 s, frames 64.95 s,
+  check-clk 55.81 s, check-bit 2.24 s, decode 12.20 s, roundtrip 80.03 s, bram-extract 27.34 s,
+  check-bram 0.64 s, lvs-gold 0.96 s, lvs-extract 27.06 s, lvs-bramwe 1.53 s (1 enable re-read,
+  0 differences), lvs-prove 3057.83 s FAILED (137)
+
+the proof, outstanding: by lvs_equiv's --solver route (build/g4-lvs/lvs-solver.sh with z3cmd.py), once,
+on the DDR+GPU bitstream that goes to the board, after the review; expected 15 to 20 hours within the
+cap, from its 15-minute trial on the first build of this commit (synth-ddr-gpu-r1.txt: 2346 proved,
+0 differ, 0 unknown; peaks 1.13 GB and 2.09 GB). Until then this bitstream is not one to test
+(docs/GPU.md section 14).

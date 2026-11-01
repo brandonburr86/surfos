@@ -1,0 +1,25 @@
+# The SurfCPU release: what `make -C surfcpu release` builds (tools/release.py, docs/RELEASE.md).
+#
+#   version <x.y.z>                 the release's version; a pre-release is named <x.y.z>-pre
+#   board <name>                    a board of boards/arty_a7/boards.txt; every design is built for each
+#   design <name> <flash> <needs>   a design of boards/arty_a7/designs/<name>.files, in build order
+#       flash  boot: the standalone design, whose QSPI flash image the board starts from at power-on
+#              test: a flash image for trying the flash path on its own (it stops in SurfBoot's
+#                    monitor: no DDR)
+#              -:    no flash image (load it with make program-volatile)
+#       needs  ddr: a DDR3L design. If its build does not pass, a release without it is a
+#                   pre-release (PRERELEASE=1), never a complete one. (Both DDR designs pass every
+#                   gate since round ddr-3, LiteDRAM at 80 MHz, and LiteDRAM's generated files are
+#                   the same in every checkout since d6f3ef8; no release has been made with them yet)
+#              -:   always built; the release fails without it
+#   card-cmdline <text>             /BOOT/CMDLINE.TXT of the card (deploy-sd --cmdline): sd=rw lets
+#                                   SurfOS write the card (CARD.md section 8)
+version       1.0.0
+board         arty_a7_100t
+board         arty_a7_35t
+design        arty_a7_baseline              -      -
+design        surfcpu_arty_a7_bramdiag      -      -
+design        surfcpu_arty_a7_top           test   -
+design        surfcpu_arty_a7_ddr_bramdiag  -      ddr
+design        surfcpu_arty_a7_ddr           boot   ddr
+card-cmdline  sd=rw

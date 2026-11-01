@@ -463,7 +463,7 @@ int init_touchpad(void) {
        d->subsys_vendor != 0x17aa || d->subsys_id != 0x3818 || !h || h->vendor != 0x8086 ||
        h->device != 0x8a02 || h->subsys_vendor != 0x17aa || h->subsys_id != 0x3808) return 1;
     tp.found = true; tp.requested = true; tp.stage = "starting";
-    if(!kthread_create("touchpad", touchpad_thread, NULL, PL_NORMAL, TF_DETACHED)) {
+    if(!kthread_create("touchpad", touchpad_thread, NULL, PL_NORMAL, TF_DETACHED | TF_SYSTEM)) {   /* (B59) */
         tp.requested = false; tp.stage = "could not create input task"; return -1;
     }
     tp.thread = true;

@@ -1,0 +1,35 @@
+# surfcpu_arty_a7_top: the whole SoC on the board with SurfBoot in its boot ROM (docs/BOARD.md
+# section 6). Format: see arty_a7_baseline.files. The SoC, CPU and peripherals come from the
+# other tracks; the build refuses to start until the SoC exists (the simulation stand-in is never
+# built). surfcpu_arty_a7_bramdiag.files is the same design with the BRAM diagnostics as its ROM:
+# keep the two alike (sim/board/tools/test_tools.sh compares them).
+top      surfcpu_arty_a7_top
+require  rtl/soc/surfcpu_soc.v
+src      rtl/lib/*.v
+src      rtl/cpu/*.v
+src      rtl/soc/*.v
+src?     rtl/soc/ddr/*.v                  # the ddr track's bridge, when merged
+src      rtl/peripherals/*.v
+src      boards/arty_a7/rtl/arty_a7_clocks.v
+src      boards/arty_a7/rtl/surfcpu_arty_a7_top.v
+inc      rtl/generated
+inc      rtl/cpu
+inc      rtl/lib
+inc      rtl/soc
+inc      rtl/peripherals
+inc      boards/arty_a7/rtl
+mem      rtl/peripherals/*.mem
+xdc      boards/arty_a7/xdc/arty_a7_clocks.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_config.xdc
+cdc      surf_sync        boards/arty_a7/xdc/cdc/surf_sync.xdc
+cdc      surf_reset_sync  boards/arty_a7/xdc/cdc/surf_reset_sync.xdc
+cdc      surf_pulse_sync  boards/arty_a7/xdc/cdc/surf_pulse_sync.xdc
+cdc      surf_cdc_word    boards/arty_a7/xdc/cdc/surf_cdc_word.xdc
+generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME BOOTROM_INIT
+rom      build/fw/surfboot.mem   u_soc.u_bootrom     # SurfBoot (make build-rom)
+dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --dsp safe
+lvs-timeout 7200                                     # the SoC's 2666 registers take about 15 minutes

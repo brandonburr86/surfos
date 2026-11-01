@@ -355,18 +355,20 @@ static int sys_statfs(const char *path, struct statfs *st) {
     return r;
 }
 
-/* newfd becomes another descriptor for oldfd's open file (shared position), closing what it was */
+/* newfd becomes another descriptor for oldfd's open file (shared position), closing what it was. 10/18/26 (audit
+   B73): what it was is closed first, through fd_close(), which counts a volume's file from the table's letting go of it
+   (fs/vfs.c); the new reference goes into the table in the step that takes it: a kill at once in between leaves neither
+   in no table */
 static int sys_dup2(int oldfd, int newfd) {
-    struct file *f = fd_get(oldfd), *old;
+    struct file *f = fd_get(oldfd);
     u_long flags;
     if(!f || newfd < 0 || newfd >= NR_OPEN) return -EBADF;
     if(oldfd == newfd) return newfd;
+    if(curTask->files[newfd]) fd_close(newfd);
     flags = irq_save();                  /* the reference count is shared with other tasks after spawnfd */
     f->refs++;
-    irq_restore(flags);
-    old = curTask->files[newfd];
     curTask->files[newfd] = f;
-    if(old) vfs_close(old);
+    irq_restore(flags);
     return newfd;
 }
 
@@ -417,14 +419,17 @@ static void kcmd_track(struct kcmd_call *c) {
     irq_restore(flags);
 }
 
-/* let go of what c holds, each pointer cleared with its object */
+/* let go of what c holds, each pointer cleared with its object. 10/18/26 (audit B73): the task counted (fs_refs) from
+   the record's letting go of its file to the file's close, so that a kill at once never comes between */
 static void kcmd_release(struct kcmd_call *c) {
     struct file *f;
     u_long flags = irq_save();
     f = c->out;
     c->out = NULL;
+    if(f) fs_ref();
     if(f && f->refs > 1) {              /* not the last reference: that only counts down, at once */
         vfs_close(f);
+        fs_unref();
         f = NULL;
     }
     kfree(c->capture);
@@ -432,7 +437,10 @@ static void kcmd_release(struct kcmd_call *c) {
     kfree(c->args);
     c->args = NULL;
     irq_restore(flags);
-    if(f) vfs_close(f);                 /* the last one (descriptor 1 was closed meanwhile): it may write */
+    if(f) {
+        vfs_close(f);                   /* the last one (descriptor 1 was closed meanwhile): it may write */
+        fs_unref();
+    }
 }
 
 void kcmd_task_gone(surf_task *t) {

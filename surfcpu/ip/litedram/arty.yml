@@ -1,0 +1,52 @@
+# SurfCPU: LiteDRAM standalone core for the Arty A7's DDR3L, the open-source flow's alternative
+# to the MIG (docs/DDR.md). File: arty.yml Date: 10/16/26 (SurfCPU)
+# litedram/examples/arty.yml at tag 2026.08 (c454a440) with only one native user port, no CPU and
+# an 80 MHz controller clock; the memory, PHY and electrical settings are the example's (100 MHz
+# in; controller clock 80 MHz, DDR3 at 4 x 80 MHz = 320 MHz, 640 MT/s; IDELAY reference 200 MHz).
+#
+# No CPU: the core does not calibrate by itself. Its control and status registers are on its
+# Wishbone control port (wb_ctrl_*), through which SurfCPU runs LiteX's sdram_init and read
+# leveling (firmware/common/ddrinit.c, docs/DDR.md section 10) and then writes init_done (and
+# init_error on a failure). A CPU inside the core would run in the controller's clock domain,
+# where it made the critical paths nextpnr could not route in time (docs/DDR.md section 10.3).
+#
+# 80 MHz, not the example's 100 MHz: LiteDRAM's controller (the ZQ calibration timer, the
+# refresher and the bank machines) does not close at 100 MHz in nextpnr even without a CPU
+# (90.2 MHz at best over 20 placements and every setting tried; docs/DDR.md section 10.3). 80 MHz
+# closes with margin and keeps the DDR3L's DLL in its range (tCK at most 3.3 ns: a DDR clock of
+# at least 303 MHz, a controller clock of at least 76 MHz); the generator's timings follow the
+# clock, the mode registers stay as at 100 MHz (CL 6, CWL 5). The PLL runs its VCO at 1600 MHz:
+# 200 MHz (IDELAY reference), 80 MHz, and 320 MHz twice (the second at 90 degrees).
+{
+    # General ------------------------------------------------------------------
+    "speedgrade": -1,          # FPGA speed grade
+    "cpu":        None,        # no calibration CPU: SurfCPU initializes the DDR3L (wb_ctrl)
+    "memtype":    "DDR3",      # DRAM type
+
+    # PHY ----------------------------------------------------------------------
+    "cmd_latency":     0,             # command additional latency
+    "sdram_module":    "MT41K128M16", # the Arty's 2 Gbit x16 DDR3L
+    "sdram_module_nb": 2,             # byte groups (x16)
+    "sdram_rank_nb":   1,             # ranks
+    "sdram_phy":       "A7DDRPHY",    # Artix-7 PHY (ISERDESE2/OSERDESE2/IDELAYE2)
+
+    # Electrical ---------------------------------------------------------------
+    "rtt_nom": "60ohm",  # nominal termination
+    "rtt_wr":  "60ohm",  # write termination
+    "ron":     "34ohm",  # output driver impedance
+
+    # Frequency ----------------------------------------------------------------
+    "input_clk_freq":   100e6, # the board's oscillator
+    "sys_clk_freq":     80e6,  # controller and user-port clock (DDR clock = 4 x sys_clk)
+    "iodelay_clk_freq": 200e6, # IDELAYCTRL reference
+
+    # Core ---------------------------------------------------------------------
+    "cmd_buffer_depth": 16,
+
+    # User ports ---------------------------------------------------------------
+    "user_ports": {
+        "native_0": {
+            "type": "native",          # cmd/wdata/rdata streams, 128-bit data at 4:1 x16
+        },
+    },
+}

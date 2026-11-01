@@ -14,6 +14,7 @@ as the restoration; new work happens here.
 | [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the Terminal, System Monitor, Disks, Log, Clock, Character Map, Image Viewer and Hex, the menus and windows, mouse input and current touchpad limits |
 | [UNDERTOW.md](UNDERTOW.md) | The HTTP/HTTPS text browser: commands, certificate checks, limits, testing and interoperability |
 | [GRAPHICS.md](GRAPHICS.md) | Basic 2D framebuffer drawing, `gfxinfo`, `gfxtest`, the kernel interface and text-console recovery |
+| [../surfcpu/README.md](../surfcpu/README.md) | SurfCPU, our RV32IM RISC-V CPU for the Arty A7 FPGA, its SoC, the SurfBoot firmware and the RISC-V port of SurfOS |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
 | [superpowers/plans/…surfsh.md](superpowers/plans/2026-10-06-surfsh.md) | The brief for surfsh, the SurfOS shell: the prompt design, the pager, Tab completion, SurfOS 1.0 |

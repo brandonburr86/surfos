@@ -1,0 +1,34 @@
+SurfCPU io track: mutation checks after the integration review (simulation only)
+date: 2026-10-15 (local)
+RTL: the reviewed fix, logic as committed in 0f0feef (surf_ps2.v) and earlier (surf_spi.v, surf_video.v)
+method: each mutation applied alone to the RTL in the worktree, the named suite run with IO_SEEDS=1
+        (make -C surfcpu <target> IO_SEEDS=1), the file restored; the mutated RTL was never committed.
+        Every mutation is lint-clean, so it is caught by a failing test, not by a failing build.
+
+mutation                                              change                                                          suite          result
+original defect: a send cuts a frame                  TX_PEND ends at once; rx_on = ctrl_rx_en && !tx_busy            test-io-ps2    CAUGHT
+    FAIL test_ps2.cpp:578: the inhibit came 6 cycles after the write, want after the frame (2000 per bit)
+    FAIL test_ps2.cpp:583: the host interrupted a keyboard frame (1 resends)
+    (the committed pre-fix RTL in the race sweep: 52 of 407 timings lost the byte with the stop-edge
+     commit, 234 of 407 with IBM's parity-clock commit; with the fix 0 and 0)
+P1 an errored PS/2 DATA read pops the FIFO            pop = (rd || (accept && !s_req_write)) && hit_data && !f_empty  test-io-ps2    CAUGHT
+    FAIL test_ps2.cpp:412: refused accesses changed STATUS 0000000d (was 0000000f), ERRCOUNT or CTRL
+    FAIL test_ps2.cpp:421: after overflow got 17 18 19 1a 1b 1c 1d 1e 1f
+P2 an errored PS/2 STATUS write clears stickies       clr = accept && s_req_write && hit_stat                         test-io-ps2    CAUGHT
+    FAIL test_ps2.cpp:412: refused accesses changed STATUS 00000003 (was 0000000f), ERRCOUNT or CTRL
+P3 the 2 ms host-to-device frame limit never fires    if (1'b0 && tx_timer == TX_FRAME_M1)                            test-io-ps2    CAUGHT
+    FAIL test_ps2.cpp:184: TX_BUSY still set 40000 us after writing TXDATA f4 (run stopped: the port is stuck)
+S1 an errored SPI STATUS write clears DONE/OVR        accept && s_req_write && hit_status (both clears)              test-io-spi    CAUGHT
+    FAIL test_spi.cpp:226: refused writes changed STATUS 00000002 (was 0000000e), DIV 2 or CTRL 00000000
+S2 an errored SPI DIV write changes DIV               if (accept && s_req_write && hit_div)                           test-io-spi    CAUGHT
+    FAIL test_spi.cpp:226: refused writes changed STATUS 0000000e (was 0000000e), DIV 85 or CTRL 00000000
+V1 an errored video STATUS write clears VBLANK_EV     accept && s_req_write && hit_stat                               test-io-video  CAUGHT
+    FAIL test_video.cpp:455: a refused STATUS write cleared VBLANK_EV
+V2 CTRL/CURSOR/SCROLL apply at once                   if (frame_latch || !frame_latch)                                test-io-video  CAUGHT
+    FAIL test_video.cpp:166: the frame SCROLL, CURSOR and CTRL were written in: 15485 pixels differ, first at (41,242)
+    FAIL test_video.cpp:166: the frame MODE was changed in: 151088 pixels differ, first at (0,240)
+V3 an errored PALETTE write changes the palette       if (accept && s_req_write && hit_pal)                           test-io-video  CAUGHT
+    FAIL test_video.cpp:459: refused writes changed 1 registers (palette entry 3 now 000)
+
+earlier, during development: MISO sampled on the falling edge (test-io-spi, 222 checks failed);
+a 2-cycle PS/2 glitch filter (test-io-ps2, the glitch test failed).

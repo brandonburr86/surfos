@@ -1,0 +1,26 @@
+# SurfCPU: an unbounded proof of the DDR bridge's clock-crossing mailbox (mailbox_formal.sv)
+# File: mailbox.sby Date: 10/15/26 (SurfCPU)
+#   run from surfcpu/: sby -f -d build/ddr/formal_mailbox sim/ddr/formal/mailbox.sby   (make prove-ddr-mailbox)
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+cover: mode cover
+cover: depth 40
+multiclock on
+prove: aigsmt z3
+
+[engines]
+prove: abc pdr
+cover: smtbmc z3
+
+[script]
+read -formal surf_ddr_mailbox.v
+read -formal mailbox_formal.sv
+prep -top mailbox_formal
+
+[files]
+rtl/soc/ddr/surf_ddr_mailbox.v
+sim/ddr/formal/mailbox_formal.sv

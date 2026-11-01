@@ -1,0 +1,20 @@
+# surfcpu_core: the synthesized netlist simulated (Icarus, Yosys Xilinx cell models) on RAM-only tests, then a broken copy that must fail
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: make --no-print-directory synth-cpu-gate
+
+synth-cpu-gate: netlist with RESET_PC 0x80000000 (Yosys synth_xilinx -family xc7, estimate): 2769 LUTs logic + 92 LUTs as distributed RAM, 938 FFs, 151 CARRY4, 403 MUXF7 + 155 MUXF8, 4 DSP48E1, 0 BRAM36
+  access_fault           PASS
+  alu                    PASS
+  branch                 PASS
+  csr                    PASS
+  fencei                 PASS
+  flush                  PASS
+  hazards                PASS
+  illegal                PASS
+  ldst                   PASS
+  misaligned             PASS
+  muldiv                 PASS
+  muldiv_edges           PASS
+  traps                  PASS
+icarus, post-synthesis netlist build/cpu/gate/surfcpu_core_netlist.v: 13/13 tests pass with seeds 1
+gate_mutant: as expected, the mutant netlist (first DSP48E1 with PREG = 1) fails the multiply test (seed 1: tb_core_icarus: FAIL (test 11) after 228 cycles): the gate-level check is sensitive to the DSP mapping

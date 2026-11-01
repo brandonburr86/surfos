@@ -1,0 +1,139 @@
+SurfGPU, the third review's fixes (2026-10-18): the capture checker, gpudiag after an abandoned run,
+the open flow's seed loop (the slack rule, kills, Ctrl-C, a zero limit) and the release's seeds, in
+the surfcpu-toolchain container (surfcpu-openxc7 for the open flow), on 216a40c..e119a78 (sc/gpu).
+Nothing here ran on a board. The review could not run simulations (its container runs were
+refused), so its cases were run here.
+
+make check at e119a78, from a clean tree: PASS in 1809 s; then test-gpu-mutants: 33 of 33 in 302 s.
+Excerpts:
+  gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct, 71831938 cycles)
+    [after Ctrl-R] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 48 distinct)
+    [a rerun after a target and clip were left] gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+    [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3756487 cycles
+    [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  test_gpudiag_check: PASS (32 checks of gpudiag_check.py: every complete run's verdict and total, runs a reset cut short, the capture's end, reruns, one build, uart.py's layout, --must-fail)
+    [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 1 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+    [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (8 of 100 checks failed), 1 problems found, 'no engine: gpu.ID reads 0x31555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete
+  test-gpu: PASS
+  test_tools: 275 passed, 0 failed
+  slackcheck self-test: PASS (7 cases)
+  test-flow: PASS
+  test-release: Ran 56 tests in 30.930s OK 
+  check: all automated SurfCPU checks passed
+  ok    build: each seed's placement and routing runs under a time limit, 1800 s by default, in the terminal's process group, saying when it stops one; then the slack rul
+  ok    build: --pnr-timeout sets it, --min-slack a clock's least slack
+  ok    build: refuses --min-slack 'dram_clk'
+  ok    build: refuses --min-slack 'dram_clk='
+  ok    build: refuses --min-slack '=0.5'
+  ok    build: refuses --min-slack 'dram_clk=x'
+  ok    build: refuses --min-slack 'dram_clk=0.5.1'
+  ok    build: refuses --min-slack 'a=1=2'
+  ok    build: refuses --pnr-timeout '0'
+  ok    build: refuses --pnr-timeout '00'
+  ok    build: refuses --pnr-timeout '000'
+  ok    pnr: a seed whose nextpnr hangs is stopped at the limit (2 s), recorded as a timeout, and the next seed routes
+  ok    pnr: when every seed times out, none routed (pnr_ok 0) and each is recorded
+  ok    pnr: nextpnr killed by SIGKILL inside the limit is recorded as killed, not as a timeout, and the next seed routes
+  ok    pnr: a nextpnr that ignores the limit's TERM is killed after the grace and recorded as a timeout
+  ok    pnr: an attempt stopped at the limit after routing is recorded as routed, and not used
+  ok    pnr: a placement thinner than the rule (dram_clk +0.087 ns of 0.5) is recorded as thin and the next seed is tried
+  ok    pnr: when every seed is thin or failed, the thin placement with the most margin is kept (its outputs back in place), THIN
+  ok    pnr: a design's min-slack (dram_clk 0.05 ns) takes the placement the rule calls thin
+  ok    pnr: a min-slack naming a clock the design does not have fails the attempt, saying so
+  Ctrl-C: the build ended 0.0 s after it
+  ok    pnr: Ctrl-C on a terminal stops placement and routing at once (timeout --foreground)
+  openxc7-flow-test.sh: PASS
+
+the review's adversarial captures (scratchpad/gpurev3-tests/capture/adversarial.py, the real header,
+124 and 123 checks) against the new checker; "right" is the review's column:
+  ok         checker PASS (right: PASS) A first run, complete, PASS (124)
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         checker FAIL (right: FAIL) B a complete first run that FAILED (scene 9 CRC), then Ctrl-R and a PASS rerun
+             gpudiag_check: FAIL: run 1 of 2 says FAIL (1 of 124 checks failed): FAIL FRAME_CRC 0xdeadbeef, the model's 0xeeef382e
+  ok         checker FAIL (right: FAIL) C a complete first run that FAILED, then RESET and a PASS first run
+             gpudiag_check: FAIL: run 1 of 2 says FAIL (1 of 124 checks failed): FAIL FRAME_CRC 0xdeadbeef, the model's 0xeeef382e
+  ok         checker PASS (right: PASS) D a complete PASS run captured with uart.py capture (timestamped lines)
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         checker PASS (right: PASS) E a complete PASS rerun whose rerun line lost one byte on the wire
+             gpudiag_check: PASS (124 checks, then 123 checks, a rerun; 13 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         checker PASS (right: PASS) F a complete PASS run, then a 0x00 0xFF burst (board reprogrammed while the console is open)
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         checker PASS (right: PASS) G console opened mid-run (after the banner and identity), run PASS (124)
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  ok         checker PASS (right: PASS) H RESET during a rerun, then a complete first run
+             gpudiag_check: PASS (124 checks, then 124 checks; 13 scenes in each run, every FRAME_CRC the model's; 1 run cut short by a reset, not judged; 0 frames
+  ok         checker PASS (right: PASS) I RESET during a rerun, then a complete first run whose banner was garbled by the reset
+             gpudiag_check: PASS (124 checks, then 124 checks; 13 scenes in each run, every FRAME_CRC the model's; 1 run cut short by a reset, not judged; 0 frames
+  FALSE FAIL checker FAIL (right: FAIL or PASS (judgement)) J a complete PASS run, then the operator presses RESET and stops the capture during the next run
+             gpudiag_check: FAIL: a run after the last GPUDIAG line did not end (it printed 'SurfGPU diagnostic 1.0.0 (build 72ba06c1)')
+  FALSE FAIL checker FAIL (right: PASS (by design: one check fewer)) K a complete PASS rerun only (console opened late, Ctrl-R): the reset values never checked
+             gpudiag_check: FAIL: every complete run is a rerun (Ctrl-R, 123 checks): a rerun does not check the GFX_ values a reset leaves, so it is not a full bo
+  ok         checker PASS (right: PASS) D2 the same, the capture ending at the GPUDIAG line (uart.py capture --until stops there)
+             gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  FALSE FAIL checker FAIL (right: PASS) L a rerun whose start the console missed (opened after its banner and rerun line), PASS (123)
+             gpudiag_check: FAIL: every complete run is a rerun (Ctrl-R, 123 checks): a rerun does not check the GFX_ values a reset leaves, so it is not a full bo
+  J fails by choice: the capture does not show the board's last run end. K and L are reruns only:
+  no full board test (M3); with --accept-rerun both pass:
+  K with --accept-rerun -> gpudiag_check: PASS (123 checks, a rerun; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  L with --accept-rerun -> gpudiag_check: PASS (123 checks, a rerun; 13 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+
+this round's tests against f0a33e7's code (a git archive of f0a33e7, ROM build f0a33e72):
+  M1-M3: test_gpudiag_check.py (32 cases) with f0a33e7's gpudiag_check.py:
+    FAIL a failed run, then RESET and a good one: gpudiag_check passed, wanted fail:
+    FAIL a failed run, then Ctrl-R and a good rerun: gpudiag_check passed, wanted fail:
+    FAIL a run that printed a FAIL and was reset, then a good run: gpudiag_check passed, wanted fail:
+    FAIL a good run, then a 0x00 0xFF burst (the board reprogrammed while logging): gpudiag_check failed, wanted pass:
+    FAIL RESET during a rerun, then a first run whose banner was garbled: gpudiag_check failed, wanted pass:
+    FAIL the runs of two builds (an appended log): gpudiag_check passed, wanted fail:
+    FAIL a run, then a rerun whose rerun line was garbled: gpudiag_check failed, wanted pass:
+    FAIL a rerun alone: not a full board test: gpudiag_check passed, wanted fail:
+    FAIL a rerun alone, with --accept-rerun: gpudiag_check failed, wanted pass:
+    FAIL a rerun whose start the console missed, with --accept-rerun: gpudiag_check failed, wanted pass:
+    FAIL tools/uart.py capture's lines: gpudiag_check failed, wanted pass:
+    FAIL tools/uart.py capture's lines, cut at the GPUDIAG line: gpudiag_check failed, wanted pass:
+    test_gpudiag_check: FAIL (12 of 32 checks)
+  C4: f0a33e7's gpudiag with a target and clip left before its Ctrl-R rerun, as gpudiag-leftover.mem
+    leaves them (surfsim_gpu): the first run GPUDIAG: PASS (124 checks); the rerun:
+      FAIL after the refused target a fill at (0, 0) left VRAM words 0x00000000 0x00000000 at 0, 0x00000000 0x00000000 at 4000
+      FAIL WRITE_RECT waiting for its last data word: STATUS 0x1; with it 0x0, VRAM word 0x00000000
+      GPUDIAG: FAIL (2 of 123 checks failed)
+    (now: test-gpu-soc's "[a rerun after a target and clip were left] gpudiag_check: PASS (124 checks, then
+    123 checks, a rerun ...)")
+  M4, M6, C3, C1: f0a33e7's seed loop (tools/openxc7-steps.sh) with this round's stand-in nextpnrs, a 2 s limit:
+    == PLAN 1:kill 2:pass: pnr_ok=1, the bitstream from seed2
+       seed 1: timeout (nextpnr stopped after 2 s, exit 137), not routed;
+       seed 2: pass, routed; 'sys_clk': 45.61 MHz (PASS at 25.00 MHz), 'dram_clk': 90.00 MHz (PASS at 80.00 MHz)
+    == PLAN 1:routed-hang 2:pass: pnr_ok=1, the bitstream from seed2
+       seed 1: timeout (nextpnr stopped after 2 s, exit 124), not routed;
+       seed 2: pass, routed; 'sys_clk': 45.61 MHz (PASS at 25.00 MHz), 'dram_clk': 90.00 MHz (PASS at 80.00 MHz)
+    == PLAN 1:thin 2:pass: pnr_ok=1, the bitstream from seed1
+       seed 1: pass, routed; 'sys_clk': 45.61 MHz (PASS at 25.00 MHz), 'dram_clk': 80.56 MHz (PASS at 80.00 MHz)
+        Ctrl-C: the build ended 598.5 s after it
+       (ctrlc.py exit 1)
+    (now: killed (exit 137: SIGKILL, not from the time limit ...); routed, but stopped before nextpnr
+    finished; seed 1: thin, the next seed taken; Ctrl-C: the build ended 0.0 s after it)
+  C2: f0a33e7's openxc7-build.sh --dry-run --pnr-timeout 00: "[pnr] timeout -k 60 00 nextpnr-himbaechel ..." (taken)
+  C2, M4: this round's test_tools.sh with f0a33e7's fpga-build.sh: 269 passed, 6 failed:
+    FAIL build: the full top stages with the real rtl/soc/surfcpu_soc.v (dry run)
+    FAIL pnr-timeout: ... and so is 00, which timeout takes as no limit
+    FAIL min-slack: the design list's least slack for a clock reaches the open flow
+    FAIL min-slack: ... and a line that is not a clock and nanoseconds is refused
+    FAIL slack: a thin placement is followed by the next seed, whose bitstream passes the rule
+    FAIL slack: with every seed thin the bitstream is kept, its seed the one kept, its manifest THIN, and the build says so
+    (the first: the archive had no build/fw/surfboot.mem; the other five are this round's; now 275 of 275)
+  M5: release-test.py's TestSeedAndSlack with f0a33e7's release.py: 3 of 3 fail (no manifest_format,
+    no thin list, MANIFEST seed 1); now 3 of 3 pass (56 tests in all). Release 1.0.0-f791b8a1's
+    MANIFEST (left as it is) says placer_seed 1 for every design; its 100T
+    surfcpu_arty_a7_ddr_bramdiag's build record says 3 (the review's flow/seedrec.out).
+
+the slack rule against every design of release 1.0.0-f791b8a1 (its MANIFEST's timing lines, read):
+  arty_a7_baseline             arty_a7_100t  least margin: sys_clk +32.076 ns, wants 1.600: pass
+  arty_a7_baseline             arty_a7_35t   least margin: sys_clk +32.922 ns, wants 1.600: pass
+  surfcpu_arty_a7_bramdiag     arty_a7_100t  least margin: sys_clk +24.367 ns, wants 1.600: pass
+  surfcpu_arty_a7_bramdiag     arty_a7_35t   least margin: sys_clk +25.687 ns, wants 1.600: pass
+  surfcpu_arty_a7_top          arty_a7_100t  least margin: sys_clk +23.402 ns, wants 1.600: pass
+  surfcpu_arty_a7_top          arty_a7_35t   least margin: sys_clk +25.637 ns, wants 1.600: pass
+  surfcpu_arty_a7_ddr_bramdiag arty_a7_100t  least margin: dram_clk +1.602 ns, wants 0.500: pass
+  surfcpu_arty_a7_ddr_bramdiag arty_a7_35t   least margin: dram_clk +1.281 ns, wants 0.500: pass
+  surfcpu_arty_a7_ddr          arty_a7_100t  least margin: dram_clk +1.130 ns, wants 0.500: pass
+  surfcpu_arty_a7_ddr          arty_a7_35t   least margin: dram_clk +0.930 ns, wants 0.500: pass

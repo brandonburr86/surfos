@@ -1,0 +1,124 @@
+SurfGPU: the DDR+GPU design (G2) through the open flow, 2026-10-18
+make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu on the Mac (docker surfcpu-openxc7:2026-10-15:
+Yosys 0.69, nextpnr-himbaechel 1.0.0, Project X-Ray), 43 minutes. nextpnr's timing is an estimate, not
+Vivado sign-off. Nothing here was loaded on a board: the physical tests are the integrator's.
+
+source 32bffc823159, dirty = false; build id 32bffc82; defines ["ARTY_HAS_GPU", "ARTY_HAS_DDR", ]
+boot ROM build/fw/surfboot.mem sha256 3ea6e3026da725a6773837ea229d86866618245132b7bf4d3a75e10b095d85b9
+bitstream sha256 e616d4ea54d7a9ba91eae50f57dae96fbacb90068aa0c4bc053e40b67c6ba685, 3825962 bytes
+
+checks (tools/openxc7-build.sh, then tools/fpga-build.sh's own):
+  check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)
+  check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)
+  check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)
+  check block RAM     PASS (contents decoded from the bitstream: check-bram.txt)
+  check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)
+  check clocks        PASS (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  check_netlist = "PASS"
+  check_boot_rom = "PASS"
+  LVS: registers: 6498 gold, 6498 gate, 6498 matched by name
+  LVS: memories: 404 gold, 501 gate, 404 paired and checked at the boundary
+  LVS: 18760 proved, 0 differ, 0 unknown   (1942.32s)
+  memories and multiplier (boards/arty_a7/netlist_check.py):
+    memory (RTL)                                   bits   netlist cells
+    u_dram.storage                                  352   4 RAM32M
+    u_dram.storage_1                                352   4 RAM32M
+    u_dram.storage_2                                352   4 RAM32M
+    u_dram.storage_3                                352   4 RAM32M
+    u_dram.storage_4                                352   4 RAM32M
+    u_dram.storage_5                                352   4 RAM32M
+    u_dram.storage_6                                352   4 RAM32M
+    u_dram.storage_7                                352   4 RAM32M
+    u_dram_adapter.wdata_fifo.mem                   288   24 RAM32M
+    u_soc.g_gpu.u_gpu.u_fifo.mem                   2048   11 RAM64M
+    u_soc.g_gpu.u_vram.g_bank[0].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[1].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[2].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[3].u_bank.mem      524288   16 RAMB36E1
+    u_soc.g_gpu.u_vram.g_bank[4].u_bank.mem      360448   12 RAMB36E1
+    u_soc.u_bootrom.rom                          524288   15 RAMB36E1
+    u_soc.u_core.fetch.fifo.mem                     252   11 RAM32M
+    u_soc.u_core.regfile.regs                      1024   12 RAM32M
+    u_soc.u_ps2.u_fifo.mem                          128   2 RAM32M
+    u_soc.u_scratch.ram                          524288   16 RAMB36E1
+    u_soc.u_textram.mem                          131072   4 RAMB36E1
+    u_soc.u_uart.u_rxfifo.mem                       512   3 RAM64M
+    u_soc.u_uart.u_txfifo.mem                       128   2 RAM32M
+    u_soc.u_video.g_gfx.gpal                       3072   1 RAMB18E1
+    u_soc.u_video.u_font.rom                      32768   1 RAMB36E1
+    DSP48E1 in the netlist: 4
+    DSP48E1 taking operands from u_soc.u_core.muldiv: 4 (expected 4)
+    netlist_check: PASS
+
+placement attempts:
+  seed 1: pass, routed; 'clk100_g': 982.32 MHz (PASS at 100.00 MHz), 'u_dram.iodelay_clk': 299.76 MHz (PASS at 200.00 MHz), 'dram_clk': 88.79 MHz (PASS at 80.00 MHz), 'pix_clk': 104.45 MHz (PASS at 25.17 MHz), 'sys_clk': 53.98 MHz (PASS at 25.00 MHz)
+timing (nextpnr):
+  clock clk100_g: constraint 100.00 MHz, achieved 982.32 MHz, slack +8.982 ns  PASS
+  clock dram_clk: constraint 80.00 MHz, achieved 88.79 MHz, slack +1.237 ns  PASS
+  clock pix_clk: constraint 25.17 MHz, achieved 104.45 MHz, slack +30.150 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 53.98 MHz, slack +21.476 ns  PASS
+  clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 299.76 MHz, slack +1.664 ns  PASS
+  cross-domain paths (reported, not checked):
+    posedge dram_clk -> posedge sys_clk: 1.20 ns
+    posedge pix_clk  -> posedge sys_clk: 1.13 ns
+    posedge sys_clk  -> posedge dram_clk: 1.25 ns
+    posedge sys_clk  -> posedge pix_clk: 1.23 ns
+  critical paths:
+    clk100_g: 1.02 ns = 0.45 ns logic, 0.57 ns routing; from u_dram.builder_reset5 (build/litedram/arty/gateware/litedram_core.v:300) to u_dram.builder_reset5 (build/litedram/arty/gateware/litedram_core.v:300)
+    dram_clk: 11.26 ns = 2.99 ns logic, 8.27 ns routing; from u_dram.main_litedramcore_zqcs_timer_count0[0] (build/litedram/arty/gateware/litedram_core.v:2147) to u_dram.main_litedramcore_bankmachine2_do_read (build/litedram/arty/gateware/litedram_core.v:983)
+    pix_clk: 9.57 ns = 3.90 ns logic, 5.67 ns routing; from u_soc.u_video.gfx3[3] (rtl/peripherals/surf_video.v:340) to u_soc.u_video.g_gfx.crc_nxt[18] (rtl/peripherals/surf_video.v:495)
+    sys_clk: 18.52 ns = 5.24 ns logic, 13.28 ns routing; from u_soc.g_gpu.u_gpu.cg[0] (rtl/peripherals/surf_gpu.v:183) to u_soc.g_gpu.u_gpu.cg[0] (rtl/peripherals/surf_gpu.v:183)
+    u_dram.iodelay_clk: 3.34 ns = 1.37 ns logic, 1.97 ns routing; from u_dram.main_reset_counter[0] (build/litedram/arty/gateware/litedram_core.v:2154) to u_dram.main_reset_counter[0]$legal1091 ()
+
+utilization:
+  Against the xc7a100t's documented capacity (AMD DS180):
+  LUTs (Yosys LUT1-6 and INV cells; packing can only reduce)    11289 / 63400    17.8%
+  LUT positions (nextpnr SLICE_LUTX, two per LUT6)              16718 / 126800   13.2%
+  flip-flops                                                     6498 / 126800    5.1%
+  carry chains (CARRY4, one per slice)                            746 / 15850     4.7%
+  36 Kb block RAMs (RAMB18 = 1/2)                               112.5 / 135      83.3%
+  DSP48E1                                                           4 / 240       1.7%
+  Yosys cells: BUFG 7, CARRY4 728, DSP48E1 4, FDCE 8, FDPE 10, FDRE 5860, FDSE 620, IBUF 17, IDELAYCTRL 1, IDELAYE2 16, INV 480, IOBUF 18, IOBUFDS 2, ISERDESE2 16, LUT1 6, LUT2 1967, LUT3 2213, LUT4 1774, LUT5 3265, LUT6 1584, MMCME2_BASE 1, MUXF7 14, MUXF8 6, OBUF 60, OBUFDS 1, OSERDESE2 45, PLLE2_ADV 1, PLLE2_BASE 1, RAM32M 83, RAM64M 14, RAMB18E1 1, RAMB36E1 112
+
+step times:
+  presynth         4.07 s  ok
+  synth           41.03 s  ok
+  models           0.00 s  ok
+  check-synth      0.24 s  ok
+  chipdb           0.00 s  ok
+  chipdb-sha       0.04 s  ok
+  pnr            336.57 s  ok
+  frames          49.42 s  ok
+  bit              0.07 s  ok
+  report           0.04 s  ok
+  check-clk       32.86 s  ok
+  check-gclk       0.17 s  ok
+  check-bit        2.28 s  ok
+  decode          10.79 s  ok
+  roundtrip       60.66 s  ok
+  bram-extract    25.62 s  ok
+  check-bram       0.67 s  ok
+  lvs-gold         1.15 s  ok
+  lvs-extract     24.90 s  ok
+  lvs-bramwe       1.52 s  ok
+  lvs-prove     1950.55 s  ok
+
+placement (sim/gpu/placement.py; clock regions X0..X1, Y0 at the bottom of the die; grid_y 0 at the top):
+  vram   CARRY 3, FF 47, LUT 420, RAMB36 76, SELMUX2_1 2
+         clock regions: X0Y0 11, X0Y1 27, X0Y2 427, X0Y3 42, X1Y0 13, X1Y1 14, X1Y2 10, X1Y3 4
+         tiles x 19..108, y 5..207 (centre 67, 87)
+  engine CARRY 273, FF 832, LUT 3628, SELMUX2_1 18
+         clock regions: X0Y1 581, X0Y2 3962, X0Y3 42, X1Y2 166
+         tiles x 51..80, y 20..115 (centre 60, 86)
+  video  CARRY 50, FF 638, LUT 984, RAMB18 1, RAMB36 2
+         clock regions: X0Y1 1, X0Y2 464, X0Y3 1207, X1Y0 1, X1Y2 2
+         tiles x 19..103, y 17..183 (centre 60, 44)
+  cpu    CARRY 155, FF 937, LUT 3860, RAMB36 34
+         clock regions: X0Y1 1, X0Y2 137, X0Y3 1568, X1Y0 6, X1Y1 8, X1Y2 325, X1Y3 2941
+         tiles x 19..128, y 1..202 (centre 84, 26)
+  ddr    BUFGCTRL 4, CARRY 126, FF 2532, IDELAYCTRL_IDELAYCTRL 1, IDELAYE2_IDELAYE2 16, INVERTER 3, IO 40, ISERDESE2_ISERDESE2 16, LUT 4120, OSERDESE2_OSERDESE2 45, PLLE2_ADV_PLLE2_ADV 1
+         clock regions: ? 4, X0Y1 70, X0Y2 58, X0Y3 107, X1Y1 1272, X1Y2 4342, X1Y3 1051
+         tiles x 10..147, y 6..155 (centre 103, 79)
+  other  BUFGCTRL 3, CARRY 139, DSP 4, FF 1512, IO 182, LUT 3706, MMCME2_ADV_MMCME2_ADV 1, PLLE2_ADV_PLLE2_ADV 1, PSEUDO_GND 1, PSEUDO_VCC 1
+         clock regions: ? 5, X0Y1 30, X0Y2 1371, X0Y3 2523, X1Y1 170, X1Y2 411, X1Y3 1040
+         tiles x 0..147, y 0..155 (centre 73, 43)

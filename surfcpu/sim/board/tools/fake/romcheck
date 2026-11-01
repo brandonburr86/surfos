@@ -1,0 +1,18 @@
+#!/bin/sh
+# Fake boards/arty_a7/romcheck.py for the board track's wrapper tests (SURFCPU_ROMCHECK points
+# here): logs the call and writes OUT/check-rom.txt; FAKE_ROMCHECK=fail makes it fail. The real
+# check needs Docker and both images.
+echo "romcheck $*" >> "$FAKE_LOG"
+out=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out) out=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+mkdir -p "$out"
+if [ "${FAKE_ROMCHECK:-}" = fail ]; then
+    echo "romcheck: FAIL (fake)" > "$out/check-rom.txt"
+    exit 1
+fi
+echo "romcheck: PASS (fake)" > "$out/check-rom.txt"

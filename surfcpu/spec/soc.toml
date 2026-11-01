@@ -1,0 +1,1174 @@
+# SurfCPU SoC description: the one versioned source for the memory map, the peripheral
+# registers, the clocks, the board identifiers and the boot-ABI constants.
+#
+# tools/gen_soc.py turns it into (never edit those by hand):
+#   rtl/generated/surfcpu_soc.vh          Verilog localparams; `include it inside a module
+#   firmware/include/surfcpu/soc.h        C: SurfBoot, diagnostics, sim models, the SurfOS board HAL
+#   firmware/ld/surfcpu_soc.ld            linker symbols and the MEMORY regions
+#   docs/MEMORY-MAP.md                    the tables people read
+#
+# Change this file, run `make gen`, commit the outputs with it; `make check-generated` fails when
+# they differ. Bump soc.map_version on any change that moves, removes or redefines something
+# (adding a register or a field is not such a change). Addresses are byte addresses; every
+# register is 32 bits wide and must be accessed as an aligned 32-bit word unless its peripheral
+# says otherwise (SURFBUS.md section 5). Bits not listed read as 0 and are ignored on write.
+#
+# access: ro = read only (writes ignored), rw = read/write, wo = write only (reads 0),
+#         w1c = read; writing 1 clears the bit, rc = reading has a side effect, which the register's
+#         description gives (it pops a FIFO, or keeps or drops a copy).
+
+[soc]
+name = "SurfCPU SoC"
+map_version = 2
+soc_version = "0.4.0"
+isa = "rv32im_zicsr_zifencei"
+abi = "ilp32"
+reset_pc = 0x0000_0000
+hart_id = 0
+
+[clocks]
+osc_hz = 100_000_000        # the Arty's 100 MHz oscillator (pin E3)
+sys_hz = 25_000_000         # CPU and SurfBus clock: the conservative first target (brief section 5)
+timebase_hz = 1_000_000     # mtime counts microseconds
+pix_hz_nominal = 25_175_000 # VGA 640x480@60 standard pixel clock
+pix_hz = 25_173_611         # what the pixel MMCM makes: 100 MHz / 2 x 18.125 / 36 (board track verifies)
+
+[boards]
+# sysinfo.BOARD_ID values
+sim = 0x00F0          # Verilator/Icarus system simulation
+arty_a7_35t = 0x0135  # Digilent Arty A7-35T  (xc7a35ticsg324-1L)
+arty_a7_100t = 0x0100 # Digilent Arty A7-100T (xc7a100tcsg324-1)
+
+# ---------------------------------------------------------------------------------------------
+# Address regions decoded by the SoC. fetch = instruction fetch allowed; write = stores allowed;
+# bytes = the memory present from the base when the window is larger (the rest: errors).
+# Anything not listed is unmapped: an access returns a SurfBus error (an access fault).
+
+[[region]]
+name = "bootrom"
+base = 0x0000_0000
+size = 0x0001_0000
+kind = "rom"
+fetch = true
+write = false
+desc = "Boot ROM, 64 KiB of block RAM initialized from the SurfBoot build; reset vector at 0"
+
+[[region]]
+name = "scratch"
+base = 0x0001_0000
+size = 0x0001_0000
+kind = "ram"
+fetch = true
+write = true
+desc = "Scratch RAM, 64 KiB of block RAM: SurfBoot's data and stack, the boot info page, BRAM-only tests"
+
+[[region]]
+name = "uart"
+base = 0x1000_0000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "UART (115200 8N1 at reset)"
+
+[[region]]
+name = "timer"
+base = 0x1000_1000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "Machine timer: 64-bit mtime/mtimecmp, msip"
+
+[[region]]
+name = "intc"
+base = 0x1000_2000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "Interrupt controller: level sources masked into mip.MEIP"
+
+[[region]]
+name = "gpio"
+base = 0x1000_3000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "LEDs, RGB LEDs, switches, buttons"
+
+[[region]]
+name = "spi"
+base = 0x1000_4000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "SPI master for the microSD card"
+
+[[region]]
+name = "ps2"
+base = 0x1000_5000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "PS/2 keyboard port"
+
+[[region]]
+name = "video"
+base = 0x1000_6000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "VGA text display control, cursor, palette"
+
+[[region]]
+name = "sysinfo"
+base = 0x1000_7000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "Board and build identity, clocks, DDR status"
+
+[[region]]
+name = "eth"
+base = 0x1000_8000
+size = 0x1000
+kind = "reserved"
+fetch = false
+write = false
+desc = "Reserved for a later Ethernet MAC (decodes as unmapped until then)"
+
+[[region]]
+name = "gpu"
+base = 0x1000_9000
+size = 0x1000
+kind = "mmio"
+fetch = false
+write = true
+desc = "GPU drawing engine: command FIFO, status, fences (docs/GPU.md); present only with sysinfo.FEATURES.GPU, else unmapped (every access an error)"
+
+[[region]]
+name = "ddrc"
+base = 0x1000_A000
+size = 0x2000
+kind = "mmio"
+fetch = false
+write = true
+desc = "DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0"
+
+[[region]]
+name = "textram"
+base = 0x2000_0000
+size = 0x4000
+kind = "ram"
+fetch = false
+write = true
+desc = "Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col)"
+
+[[region]]
+name = "vram"
+base = 0x3000_0000
+size = 0x8_0000
+bytes = 0x4_B000              # the memory in the window (the linker region's length)
+kind = "ram"
+fetch = false
+write = true
+desc = "Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error)"
+
+[[region]]
+name = "ddr"
+base = 0x8000_0000
+size = 0x1000_0000
+kind = "ddr"
+fetch = true
+write = true
+desc = "256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS)"
+
+# ---------------------------------------------------------------------------------------------
+# Never mapped: no SurfCPU SoC decodes these, in any design or later map version, so every access
+# is an error. Tests that need an access fault probe here (bramdiag, SurfBoot's monitor tests,
+# the hello kernel), never at an address a later peripheral might take.
+
+[[hole]]
+name = "unmapped_probe"
+base = 0x4000_0000
+size = 0x1000_0000
+desc = "Never decoded, in any design or memory map version: every access is an error (the tests' access-fault probe)"
+
+# ---------------------------------------------------------------------------------------------
+# Software reservations inside the regions (not decoded by hardware).
+
+[[reserve]]
+name = "surfboot_data"
+base = 0x0001_0000
+size = 0x0000_F000
+desc = "SurfBoot .data/.bss, heap-free buffers and its stack (stack top = bootinfo base)"
+
+[[reserve]]
+name = "bootinfo"
+base = 0x0001_F000
+size = 0x0000_1000
+desc = "struct surf_boot_info from SurfBoot; preserved until the kernel has copied it"
+
+[[reserve]]
+name = "kernel"
+base = 0x8000_0000
+size = 0x0F00_0000
+desc = "Where SURFOS.BIN payloads load by default (the image header decides); the kernel owns the rest of DDR"
+
+[[reserve]]
+name = "ddr_top"
+base = 0x8F00_0000
+size = 0x0100_0000
+desc = "Top 16 MiB of DDR: kept free by SurfBoot (later display buffers, loader staging, crash records)"
+
+# ---------------------------------------------------------------------------------------------
+# Interrupt sources of the interrupt controller (bit numbers in irq.PENDING/ENABLE).
+# Each is a level held by its peripheral until software clears the cause there.
+
+[irqs]
+uart = 0
+ps2 = 1
+gpio = 2
+video = 3
+spi = 4
+gpu = 5
+
+# ---------------------------------------------------------------------------------------------
+# Peripheral registers. Field bits are "msb:lsb" or a single bit.
+
+[[periph]]
+name = "uart"
+desc = "8N1 UART. TX FIFO 16 bytes, RX FIFO 64 bytes. Reset divisor = round(sys_hz/115200)."
+irq = "uart"
+
+[[periph.reg]]
+name = "TXDATA"
+offset = 0x00
+access = "rw"
+desc = "Write: bits 7:0 go into the TX FIFO (dropped, setting STATUS.TX_OVF, when it is full). Read: bit 31 = TX FIFO full."
+fields = [
+  { name = "DATA", bits = "7:0", desc = "byte to send (write)" },
+  { name = "FULL", bits = "31", desc = "TX FIFO full (read)" },
+]
+
+[[periph.reg]]
+name = "RXDATA"
+offset = 0x04
+access = "rc"
+desc = "Read pops the RX FIFO. EMPTY = 1 means there was nothing (DATA is then 0)."
+fields = [
+  { name = "DATA", bits = "7:0", desc = "received byte" },
+  { name = "EMPTY", bits = "31", desc = "RX FIFO was empty" },
+]
+
+[[periph.reg]]
+name = "STATUS"
+offset = 0x08
+access = "w1c"
+desc = "Live state and sticky errors; write 1 to clear a sticky bit."
+fields = [
+  { name = "TX_FULL", bits = "0", desc = "TX FIFO full" },
+  { name = "TX_IDLE", bits = "1", desc = "TX FIFO empty and the shifter idle (everything sent)" },
+  { name = "RX_AVAIL", bits = "2", desc = "RX FIFO not empty" },
+  { name = "RX_FULL", bits = "3", desc = "RX FIFO full" },
+  { name = "RX_OVF", bits = "4", desc = "sticky: a byte arrived with the RX FIFO full and was lost" },
+  { name = "RX_FRAME", bits = "5", desc = "sticky: a stop bit was 0 (that byte was dropped)" },
+  { name = "TX_OVF", bits = "6", desc = "sticky: a write to TXDATA found the TX FIFO full" },
+  { name = "RX_BREAK", bits = "7", desc = "sticky: a break (all-zero frame) was seen" },
+]
+
+[[periph.reg]]
+name = "CTRL"
+offset = 0x0C
+access = "rw"
+desc = "Interrupt enables."
+fields = [
+  { name = "RX_IE", bits = "0", desc = "interrupt while RX_AVAIL" },
+  { name = "TX_IE", bits = "1", desc = "interrupt while the TX FIFO is empty" },
+  { name = "ERR_IE", bits = "2", desc = "interrupt while any sticky error bit is set" },
+]
+
+[[periph.reg]]
+name = "DIV"
+offset = 0x10
+access = "rw"
+desc = "Bit time in sys_clk cycles (minimum 16). Baud = sys_hz / DIV. Reset: round(sys_hz / 115200)."
+fields = [
+  { name = "DIV", bits = "15:0", desc = "cycles per bit" },
+]
+
+[[periph.reg]]
+name = "LEVEL"
+offset = 0x14
+access = "ro"
+desc = "FIFO fill levels."
+fields = [
+  { name = "TX", bits = "7:0", desc = "bytes waiting in the TX FIFO" },
+  { name = "RX", bits = "23:16", desc = "bytes waiting in the RX FIFO" },
+]
+
+[[periph]]
+name = "timer"
+desc = "Machine timer. mtime counts at timebase_hz from reset. MTIP = (mtime >= mtimecmp), unsigned 64-bit. 64-bit values are read hi/lo/hi (retry if hi changed); mtimecmp is written lo=0xFFFFFFFF, hi, lo (no spurious interrupt)."
+
+[[periph.reg]]
+name = "MTIME_LO"
+offset = 0x00
+access = "rw"
+desc = "mtime bits 31:0"
+
+[[periph.reg]]
+name = "MTIME_HI"
+offset = 0x04
+access = "rw"
+desc = "mtime bits 63:32"
+
+[[periph.reg]]
+name = "MTIMECMP_LO"
+offset = 0x08
+access = "rw"
+desc = "mtimecmp bits 31:0 (reset 0xFFFFFFFF)"
+
+[[periph.reg]]
+name = "MTIMECMP_HI"
+offset = 0x0C
+access = "rw"
+desc = "mtimecmp bits 63:32 (reset 0xFFFFFFFF)"
+
+[[periph.reg]]
+name = "MSIP"
+offset = 0x10
+access = "rw"
+desc = "Machine software interrupt pending: bit 0 drives mip.MSIP."
+fields = [
+  { name = "MSIP", bits = "0", desc = "software interrupt" },
+]
+
+[[periph.reg]]
+name = "TIMEBASE"
+offset = 0x14
+access = "ro"
+desc = "mtime frequency in Hz (timebase_hz)"
+
+[[periph]]
+name = "intc"
+desc = "Interrupt controller. mip.MEIP = OR of (PENDING & ENABLE). Sources are levels (see [irqs]); there is no claim/complete state."
+
+[[periph.reg]]
+name = "PENDING"
+offset = 0x00
+access = "ro"
+desc = "Raw level of every source, enabled or not."
+
+[[periph.reg]]
+name = "ENABLE"
+offset = 0x04
+access = "rw"
+desc = "Per-source enable (reset 0)."
+
+[[periph.reg]]
+name = "ACTIVE"
+offset = 0x08
+access = "ro"
+desc = "PENDING & ENABLE."
+
+[[periph.reg]]
+name = "NEXT"
+offset = 0x0C
+access = "ro"
+desc = "Number of the lowest active source, or 0xFFFFFFFF when none is active."
+
+[[periph]]
+name = "gpio"
+desc = "Arty LEDs, RGB LEDs, switches, buttons. Inputs are synchronized; buttons are debounced (about 10 ms) before edge detection. RGB LEDs are driven at a fixed 1/8 duty cycle (they are too bright at full drive)."
+irq = "gpio"
+
+[[periph.reg]]
+name = "LED"
+offset = 0x00
+access = "rw"
+desc = "Green LEDs LD4..LD7 (bit 0 = LD4)."
+fields = [
+  { name = "LED", bits = "3:0", desc = "1 = on" },
+]
+
+[[periph.reg]]
+name = "RGB"
+offset = 0x04
+access = "rw"
+desc = "RGB LEDs LD0..LD3: LED n uses bits 3n (red), 3n+1 (green), 3n+2 (blue)."
+fields = [
+  { name = "RGB", bits = "11:0", desc = "1 = on" },
+]
+
+[[periph.reg]]
+name = "SW"
+offset = 0x08
+access = "ro"
+desc = "Slide switches SW0..SW3 (bit 0 = SW0), 1 = up."
+fields = [
+  { name = "SW", bits = "3:0", desc = "switch state" },
+]
+
+[[periph.reg]]
+name = "BTN"
+offset = 0x0C
+access = "ro"
+desc = "Push buttons BTN0..BTN3, debounced, 1 = pressed."
+fields = [
+  { name = "BTN", bits = "3:0", desc = "button state" },
+]
+
+[[periph.reg]]
+name = "BTN_EDGE"
+offset = 0x10
+access = "w1c"
+desc = "Latched presses (debounced rising edges); write 1 to clear."
+fields = [
+  { name = "BTN", bits = "3:0", desc = "pressed since last cleared" },
+]
+
+[[periph.reg]]
+name = "IE"
+offset = 0x14
+access = "rw"
+desc = "Interrupt while a BTN_EDGE bit with its enable is set."
+fields = [
+  { name = "BTN", bits = "3:0", desc = "per-button enable" },
+]
+
+[[periph]]
+name = "spi"
+desc = "SPI master, mode 0 (CPOL=0, CPHA=0), MSB first, one byte per transfer, for the microSD card. Reading DATA while a transfer runs holds the bus until it ends (at most 16 x (DIV+1) sys_clk cycles), so write DATA then read DATA is the whole byte exchange."
+irq = "spi"
+
+[[periph.reg]]
+name = "DATA"
+offset = 0x00
+access = "rw"
+desc = "Write: start exchanging bits 7:0 (ignored, setting STATUS.OVR, if a transfer is running). Read: the last byte received (waits for a running transfer)."
+fields = [
+  { name = "DATA", bits = "7:0", desc = "byte" },
+]
+
+[[periph.reg]]
+name = "STATUS"
+offset = 0x04
+access = "w1c"
+desc = "State; write 1 to clear a sticky bit."
+fields = [
+  { name = "BUSY", bits = "0", desc = "a transfer is running" },
+  { name = "CARD", bits = "1", desc = "card present (from the socket's card-detect switch; 1 if the adapter has none)" },
+  { name = "DONE", bits = "2", desc = "sticky: a transfer finished (interrupt source when CTRL.DONE_IE)" },
+  { name = "OVR", bits = "3", desc = "sticky: DATA was written during a transfer" },
+]
+
+[[periph.reg]]
+name = "CTRL"
+offset = 0x08
+access = "rw"
+desc = "Chip select and interrupt enable."
+fields = [
+  { name = "CS", bits = "0", desc = "1 = assert the card's chip select (drive CS low)" },
+  { name = "DONE_IE", bits = "1", desc = "interrupt while STATUS.DONE" },
+]
+
+[[periph.reg]]
+name = "DIV"
+offset = 0x0C
+access = "rw"
+desc = "SCLK = sys_hz / (2 * (DIV + 1)). Reset: the smallest DIV giving at most 400 kHz (identification speed)."
+fields = [
+  { name = "DIV", bits = "7:0", desc = "clock divider" },
+]
+
+[[periph]]
+name = "ps2"
+desc = "PS/2 port (keyboard). Receives device-to-host frames into a 16-byte FIFO, checking start, odd parity and stop bits; a frame that stalls for 2 ms is abandoned. The host-to-device direction (TXDATA) drives clock and data only through open-drain outputs."
+irq = "ps2"
+
+[[periph.reg]]
+name = "DATA"
+offset = 0x00
+access = "rc"
+desc = "Read pops the FIFO. EMPTY = 1 means there was nothing."
+fields = [
+  { name = "DATA", bits = "7:0", desc = "received byte (scan code set 2 from a keyboard)" },
+  { name = "EMPTY", bits = "31", desc = "FIFO was empty" },
+]
+
+[[periph.reg]]
+name = "STATUS"
+offset = 0x04
+access = "w1c"
+desc = "State and sticky errors; write 1 to clear a sticky bit."
+fields = [
+  { name = "RX_AVAIL", bits = "0", desc = "FIFO not empty" },
+  { name = "RX_FULL", bits = "1", desc = "FIFO full" },
+  { name = "OVF", bits = "2", desc = "sticky: a byte was lost because the FIFO was full" },
+  { name = "PARITY", bits = "3", desc = "sticky: a frame failed odd parity (dropped)" },
+  { name = "FRAME", bits = "4", desc = "sticky: bad start or stop bit (dropped)" },
+  { name = "TIMEOUT", bits = "5", desc = "sticky: a partial frame was abandoned" },
+  { name = "TX_BUSY", bits = "6", desc = "a host-to-device byte is being sent" },
+  { name = "TX_NAK", bits = "7", desc = "sticky: the device did not acknowledge, or the send timed out" },
+]
+
+[[periph.reg]]
+name = "CTRL"
+offset = 0x08
+access = "rw"
+desc = "Receiver enable and interrupt enable."
+fields = [
+  { name = "RX_EN", bits = "0", desc = "1 = receive (reset 1); 0 ignores the lines (the keyboard is not inhibited)" },
+  { name = "RX_IE", bits = "1", desc = "interrupt while RX_AVAIL" },
+  { name = "ERR_IE", bits = "2", desc = "interrupt while a sticky error is set" },
+]
+
+[[periph.reg]]
+name = "TXDATA"
+offset = 0x0C
+access = "wo"
+desc = "Write bits 7:0 to send a command byte to the device (ignored while TX_BUSY)."
+fields = [
+  { name = "DATA", bits = "7:0", desc = "command byte" },
+]
+
+[[periph.reg]]
+name = "ERRCOUNT"
+offset = 0x10
+access = "ro"
+desc = "Saturating error counters since reset (diagnostics)."
+fields = [
+  { name = "PARITY", bits = "7:0", desc = "parity errors" },
+  { name = "FRAME", bits = "15:8", desc = "framing errors" },
+  { name = "TIMEOUT", bits = "23:16", desc = "abandoned frames" },
+  { name = "OVF", bits = "31:24", desc = "bytes lost to a full FIFO" },
+]
+
+[[periph]]
+name = "video"
+desc = "VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken once per frame, at the same point as CTRL (registers written one after the other change the same frame when written between STATUS.VBLANK_EV and 1.3 ms after it: docs/GPU.md section 4.1), GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error)."
+irq = "video"
+
+[[periph.reg]]
+name = "CTRL"
+offset = 0x00
+access = "rw"
+desc = "Display mode. Reset: ENABLE=1, MODE=0 (test pattern), so a monitor shows bars before any software runs."
+fields = [
+  { name = "ENABLE", bits = "0", desc = "0 = black picture (syncs keep running)" },
+  { name = "MODE", bits = "2:1", desc = "0 = color-bar test pattern, 1 = text, 2 = graphics (VRAM pixels through GPAL), 3 = graphics with the text layer over it (a set glyph pixel or the cursor shows the text foreground, else a cell background index other than 0 shows the text background, else the graphics pixel); 2 and 3 show black without a GPU (sysinfo.FEATURES.GPU = 0)" },
+  { name = "CURSOR_EN", bits = "3", desc = "show the cursor" },
+  { name = "CURSOR_BLINK", bits = "4", desc = "blink it (about 2 Hz)" },
+]
+
+[[periph.reg]]
+name = "STATUS"
+offset = 0x04
+access = "w1c"
+desc = "Frame state."
+fields = [
+  { name = "VBLANK", bits = "0", desc = "in vertical blanking now" },
+  { name = "VBLANK_EV", bits = "1", desc = "sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)" },
+  { name = "FRAME", bits = "31:16", desc = "frame counter (wraps); counts when vertical blanking begins" },
+]
+
+[[periph.reg]]
+name = "CURSOR"
+offset = 0x08
+access = "rw"
+desc = "Cursor position on the screen (display coordinates, after SCROLL)."
+fields = [
+  { name = "COL", bits = "6:0", desc = "column 0..79" },
+  { name = "ROW", bits = "12:8", desc = "row 0..29" },
+]
+
+[[periph.reg]]
+name = "SCROLL"
+offset = 0x0C
+access = "rw"
+desc = "First text row shown at the top of the screen."
+fields = [
+  { name = "ROW", bits = "4:0", desc = "0..29 (values 30..31 act as 0)" },
+]
+
+[[periph.reg]]
+name = "IE"
+offset = 0x10
+access = "rw"
+desc = "Interrupt enable."
+fields = [
+  { name = "VBLANK", bits = "0", desc = "interrupt while STATUS.VBLANK_EV" },
+]
+
+[[periph.reg]]
+name = "INFO"
+offset = 0x14
+access = "ro"
+desc = "Text geometry: 80 columns, 30 rows, 8x16 glyphs."
+fields = [
+  { name = "COLS", bits = "7:0", desc = "80" },
+  { name = "ROWS", bits = "15:8", desc = "30" },
+  { name = "GLYPH_W", bits = "19:16", desc = "8" },
+  { name = "GLYPH_H", bits = "28:24", desc = "16" },
+]
+
+[[periph.reg]]
+name = "PIXCLK"
+offset = 0x18
+access = "ro"
+desc = "Actual pixel clock in Hz (clocks.pix_hz)."
+
+[[periph.reg]]
+name = "PALETTE"
+offset = 0x40
+count = 16
+access = "rw"
+desc = "Palette entry n at 0x40 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue. Reset: the 16 CGA colors."
+fields = [
+  { name = "B", bits = "3:0", desc = "blue" },
+  { name = "G", bits = "7:4", desc = "green" },
+  { name = "R", bits = "11:8", desc = "red" },
+]
+
+[[periph.reg]]
+name = "GFX_BASE"
+offset = 0x80
+access = "rw"
+desc = "Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. The gpu engine's FLIP command writes it too, at the start of a vertical blanking, as a CPU store would (a CPU store in the same cycle wins: docs/GPU.md section 16). Only with sysinfo.FEATURES.GPU."
+fields = [
+  { name = "BASE", bits = "18:0", desc = "byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0" },
+]
+
+[[periph.reg]]
+name = "GFX_STRIDE"
+offset = 0x84
+access = "rw"
+desc = "Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU."
+fields = [
+  { name = "STRIDE", bits = "15:0", desc = "line pitch in bytes (bits 1:0 are 0)" },
+]
+
+[[periph.reg]]
+name = "GFX_SCALE"
+offset = 0x88
+access = "rw"
+desc = "Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU."
+fields = [
+  { name = "SCALE", bits = "1:0", desc = "1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1" },
+]
+
+[[periph.reg]]
+name = "FRAME_CRC"
+offset = 0x8C
+access = "rc"
+desc = "CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since) and drops that copy; otherwise the newest. Only with sysinfo.FEATURES.GPU."
+
+[[periph.reg]]
+name = "FRAME_COUNT"
+offset = 0x90
+access = "rc"
+desc = "How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU."
+fields = [
+  { name = "COUNT", bits = "15:0", desc = "frames (wraps)" },
+]
+
+[[periph.reg]]
+name = "GPAL"
+offset = 0x400
+count = 256
+access = "rw"
+desc = "Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU."
+fields = [
+  { name = "B", bits = "3:0", desc = "blue" },
+  { name = "G", bits = "7:4", desc = "green" },
+  { name = "R", bits = "11:8", desc = "red" },
+]
+
+[[periph]]
+name = "sysinfo"
+desc = "Identity of the board and the build, clock rates and the DDR state. All read only except SCRATCH."
+
+[[periph.reg]]
+name = "MAGIC"
+offset = 0x00
+access = "ro"
+desc = "0x46525553, the bytes \"SURF\" in memory order."
+
+[[periph.reg]]
+name = "SOC_VERSION"
+offset = 0x04
+access = "ro"
+desc = "soc.soc_version as major << 16 | minor << 8 | patch."
+
+[[periph.reg]]
+name = "MAP_VERSION"
+offset = 0x08
+access = "ro"
+desc = "soc.map_version: which version of this memory map the hardware implements."
+
+[[periph.reg]]
+name = "BOARD_ID"
+offset = 0x0C
+access = "ro"
+desc = "A value from [boards]."
+
+[[periph.reg]]
+name = "SYS_HZ"
+offset = 0x10
+access = "ro"
+desc = "sys_clk frequency in Hz."
+
+[[periph.reg]]
+name = "BUILD_ID"
+offset = 0x14
+access = "ro"
+desc = "First 8 hex digits of the source commit the bitstream was built from."
+
+[[periph.reg]]
+name = "BUILD_FLAGS"
+offset = 0x18
+access = "ro"
+desc = "Build properties."
+fields = [
+  { name = "DIRTY", bits = "0", desc = "the source tree had uncommitted changes" },
+  { name = "SIM", bits = "1", desc = "this is a simulation, not a bitstream" },
+]
+
+[[periph.reg]]
+name = "FEATURES"
+offset = 0x1C
+access = "ro"
+desc = "Which blocks were built in."
+fields = [
+  { name = "UART", bits = "0", desc = "" },
+  { name = "TIMER", bits = "1", desc = "" },
+  { name = "IRQ", bits = "2", desc = "" },
+  { name = "GPIO", bits = "3", desc = "" },
+  { name = "SPI", bits = "4", desc = "" },
+  { name = "PS2", bits = "5", desc = "" },
+  { name = "VIDEO", bits = "6", desc = "" },
+  { name = "DDR", bits = "7", desc = "" },
+  { name = "GPU", bits = "8", desc = "VRAM, the graphics modes of video and the gpu drawing engine (docs/GPU.md)" },
+]
+
+[[periph.reg]]
+name = "DDR_STATUS"
+offset = 0x20
+access = "ro"
+desc = "DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself."
+fields = [
+  { name = "CALIB_DONE", bits = "0", desc = "calibration succeeded; DDR is usable" },
+  { name = "CALIB_FAIL", bits = "1", desc = "sticky until reset: calibration had not succeeded within the bridge's limit (CALIB_TIMEOUT_CYCLES, counted from reset, software initialization included); CALIB_DONE then stays 0" },
+  { name = "PRESENT", bits = "2", desc = "a DDR controller is built in" },
+  { name = "TIMEOUT", bits = "3", desc = "sticky until reset: a DDR access was abandoned by the bridge's watchdog" },
+  { name = "SWINIT", bits = "4", desc = "the controller waits for software to initialize and calibrate the DDR3L through the ddrc registers (LiteDRAM without its own CPU); 0: it does so by itself (MIG, the simulation model)" },
+]
+
+[[periph.reg]]
+name = "DDR_SIZE"
+offset = 0x24
+access = "ro"
+desc = "Bytes of DDR behind the window (0 when not present)."
+
+[[periph.reg]]
+name = "PIX_HZ"
+offset = 0x28
+access = "ro"
+desc = "Pixel clock in Hz (0 without video)."
+
+[[periph.reg]]
+name = "SCRATCH"
+offset = 0x2C
+access = "rw"
+desc = "Free read/write word for bus tests (reset 0)."
+
+[[periph.reg]]
+name = "BUILD_TIME"
+offset = 0x30
+access = "ro"
+desc = "Build time, seconds since 1970-01-01 UTC (0 if unknown)."
+
+[[periph]]
+name = "gpu"
+desc = "GPU drawing engine (docs/GPU.md): software writes commands, word by word, to CMD; the engine runs them in order on VRAM, four 8-bit pixels per access, with lower priority than the CPU's own VRAM accesses: SET_TARGET, SET_CLIP, FILL_RECT, COPY_RECT, LINE, EXPAND, WRITE_RECT, FENCE, WAIT_VBLANK, and since GPU2 SET_ZBUF, TRIANGLE (flat or Gouraud, with a 16-bit depth buffer in VRAM) and FLIP (video GFX_BASE written at the next vertical blanking) (formats in docs/GPU.md and firmware/include/surfcpu/gpu.h). Nothing orders the CPU's VRAM accesses against queued commands: wait for a FENCE or for STATUS.BUSY = 0. Present only with sysinfo.FEATURES.GPU."
+irq = "gpu"
+
+[[periph.reg]]
+name = "ID"
+offset = 0x00
+access = "ro"
+desc = "0x32555047, the bytes \"GPU2\" in memory order: the command set of docs/GPU.md version 2 (GPU1's, 0x31555047, unchanged, plus SET_ZBUF, TRIANGLE and FLIP: docs/GPU.md section 16)."
+
+[[periph.reg]]
+name = "STATUS"
+offset = 0x04
+access = "w1c"
+desc = "Engine state and sticky events; write 1 to clear a sticky bit."
+fields = [
+  { name = "BUSY", bits = "0", desc = "commands are queued or running; 0: every command written so far is done and its writes are in VRAM" },
+  { name = "OVERFLOW", bits = "1", desc = "sticky: a CMD write found the FIFO full and was dropped" },
+  { name = "BAD_OPCODE", bits = "2", desc = "sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command)" },
+  { name = "BAD_PARAM", bits = "3", desc = "sticky: a command had invalid parameters and did nothing (SET_TARGET or SET_ZBUF outside VRAM, unaligned or too large; a TRIANGLE that tests or writes depth without a depth buffer)" },
+  { name = "FENCE_EV", bits = "4", desc = "sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE)" },
+]
+
+[[periph.reg]]
+name = "IE"
+offset = 0x08
+access = "rw"
+desc = "Interrupt enables."
+fields = [
+  { name = "FENCE", bits = "0", desc = "interrupt while STATUS.FENCE_EV" },
+  { name = "ERR", bits = "1", desc = "interrupt while STATUS.OVERFLOW, BAD_OPCODE or BAD_PARAM" },
+]
+
+[[periph.reg]]
+name = "CTRL"
+offset = 0x0C
+access = "wo"
+desc = "Engine control."
+fields = [
+  { name = "ABORT", bits = "0", desc = "write 1: empty the FIFO and stop the running command at once (its writes so far stay); target, clip, FENCE and the sticky bits are kept" },
+]
+
+[[periph.reg]]
+name = "CMD"
+offset = 0x10
+access = "wo"
+desc = "Write: the next command word goes into the FIFO; dropped, setting STATUS.OVERFLOW, when the FIFO is full (never a bus stall). Check FIFO_FREE first."
+
+[[periph.reg]]
+name = "FIFO_FREE"
+offset = 0x14
+access = "ro"
+desc = "Free words in the command FIFO."
+fields = [
+  { name = "FREE", bits = "15:0", desc = "0 .. INFO.FIFO_DEPTH" },
+]
+
+[[periph.reg]]
+name = "FENCE"
+offset = 0x18
+access = "ro"
+desc = "The value of the last FENCE command that completed (reset 0): every command written before it is done."
+
+[[periph.reg]]
+name = "INFO"
+offset = 0x1C
+access = "ro"
+desc = "Sizes."
+fields = [
+  { name = "FIFO_DEPTH", bits = "15:0", desc = "command FIFO words" },
+  { name = "VRAM_KIB", bits = "31:16", desc = "VRAM size in KiB (300)" },
+]
+
+[[periph]]
+name = "ddrc"
+desc = "LiteDRAM's control and status registers (litedram_core generated with cpu None from ip/litedram/arty.yml), reached through surf_ddr_csr across the controller's clock domain: each access takes about half a microsecond. Offsets are LiteDRAM's (make litedram-check compares them with the generator's csr.csv); only the DFII and init registers are LiteDRAM's simulation core's too (its PHY model has none of the PHY_ ones). Present only while sysinfo.DDR_STATUS.SWINIT is 1. The sequence that uses them is firmware/common/ddrinit.c (FIRMWARE.md, DDR.md)."
+
+[[periph.reg]]
+name = "INIT_DONE"
+offset = 0x000
+access = "rw"
+desc = "ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows."
+fields = [
+  { name = "DONE", bits = "0", desc = "initialization ended" },
+]
+
+[[periph.reg]]
+name = "INIT_ERROR"
+offset = 0x004
+access = "rw"
+desc = "ddrctrl.init_error: software writes 1 (with INIT_DONE) when initialization failed; the user port stays closed."
+fields = [
+  { name = "ERROR", bits = "0", desc = "initialization failed" },
+]
+
+[[periph.reg]]
+name = "PHY_RST"
+offset = 0x800
+access = "rw"
+desc = "ddrphy.rst: 1 holds the PHY in reset."
+
+[[periph.reg]]
+name = "PHY_DLY_SEL"
+offset = 0x804
+access = "rw"
+desc = "ddrphy.dly_sel: one bit per byte lane (bit 0 DQ7:0, bit 1 DQ15:8): the lanes the delay and bitslip strobes act on."
+
+[[periph.reg]]
+name = "PHY_HALF_SYS8X_TAPS"
+offset = 0x808
+access = "rw"
+desc = "ddrphy.half_sys8x_taps: delay taps of a quarter controller clock (write leveling; unused by the read-leveling sequence)."
+
+[[periph.reg]]
+name = "PHY_WLEVEL_EN"
+offset = 0x80C
+access = "rw"
+desc = "ddrphy.wlevel_en: write-leveling mode (unused: the Arty's PHY is not write-leveling capable)."
+
+[[periph.reg]]
+name = "PHY_WLEVEL_STROBE"
+offset = 0x810
+access = "rw"
+desc = "ddrphy.wlevel_strobe: write-leveling strobe (unused)."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_RST"
+offset = 0x814
+access = "rw"
+desc = "ddrphy.rdly_dq_rst: writing 1 sets the selected lanes' read delays (IDELAYE2) back to tap 0."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_INC"
+offset = 0x818
+access = "rw"
+desc = "ddrphy.rdly_dq_inc: writing 1 moves the selected lanes' read delays one tap up."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_BITSLIP_RST"
+offset = 0x81C
+access = "rw"
+desc = "ddrphy.rdly_dq_bitslip_rst: writing 1 sets the selected lanes' read bitslip back to 0."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_BITSLIP"
+offset = 0x820
+access = "rw"
+desc = "ddrphy.rdly_dq_bitslip: writing 1 moves the selected lanes' read bitslip one step on (8 steps, then round)."
+
+[[periph.reg]]
+name = "PHY_WDLY_DQ_BITSLIP_RST"
+offset = 0x824
+access = "rw"
+desc = "ddrphy.wdly_dq_bitslip_rst: writing 1 sets the selected lanes' write bitslip back to 0."
+
+[[periph.reg]]
+name = "PHY_WDLY_DQ_BITSLIP"
+offset = 0x828
+access = "rw"
+desc = "ddrphy.wdly_dq_bitslip: writing 1 moves the selected lanes' write bitslip one step on."
+
+[[periph.reg]]
+name = "PHY_RDPHASE"
+offset = 0x82C
+access = "rw"
+desc = "ddrphy.rdphase: the DFI phase reads are issued on (the generator's SDRAM_PHY_RDPHASE)."
+
+[[periph.reg]]
+name = "PHY_WRPHASE"
+offset = 0x830
+access = "rw"
+desc = "ddrphy.wrphase: the DFI phase writes are issued on (the generator's SDRAM_PHY_WRPHASE)."
+
+[[periph.reg]]
+name = "DFII_CONTROL"
+offset = 0x1000
+access = "rw"
+desc = "sdram.dfii_control: who drives the DRAM, and its control lines while software does."
+fields = [
+  { name = "SEL", bits = "0", desc = "1: the controller (hardware control); 0: software, through the phase injectors below" },
+  { name = "CKE", bits = "1", desc = "CKE while under software control" },
+  { name = "ODT", bits = "2", desc = "ODT while under software control" },
+  { name = "RESET_N", bits = "3", desc = "the DRAM's RESET# (1 = released) while under software control" },
+]
+
+[[periph.reg]]
+name = "DFII_P0_COMMAND"
+offset = 0x1004
+access = "rw"
+desc = "sdram.dfii_pi0_command: the command bits of phase 0's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P0_COMMAND_ISSUE"
+offset = 0x1008
+access = "rw"
+desc = "sdram.dfii_pi0_command_issue: writing 1 issues phase 0's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P0_ADDRESS"
+offset = 0x100C
+access = "rw"
+desc = "sdram.dfii_pi0_address: the row or column address (or mode register value) of phase 0's command."
+
+[[periph.reg]]
+name = "DFII_P0_BADDRESS"
+offset = 0x1010
+access = "rw"
+desc = "sdram.dfii_pi0_baddress: the bank address (or mode register number) of phase 0's command."
+
+[[periph.reg]]
+name = "DFII_P0_WRDATA"
+offset = 0x1014
+access = "rw"
+desc = "sdram.dfii_pi0_wrdata: phase 0's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P0_RDDATA"
+offset = 0x1018
+access = "ro"
+desc = "sdram.dfii_pi0_rddata: phase 0's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P1_COMMAND"
+offset = 0x101C
+access = "rw"
+desc = "sdram.dfii_pi1_command: the command bits of phase 1's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P1_COMMAND_ISSUE"
+offset = 0x1020
+access = "rw"
+desc = "sdram.dfii_pi1_command_issue: writing 1 issues phase 1's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P1_ADDRESS"
+offset = 0x1024
+access = "rw"
+desc = "sdram.dfii_pi1_address: the row or column address (or mode register value) of phase 1's command."
+
+[[periph.reg]]
+name = "DFII_P1_BADDRESS"
+offset = 0x1028
+access = "rw"
+desc = "sdram.dfii_pi1_baddress: the bank address (or mode register number) of phase 1's command."
+
+[[periph.reg]]
+name = "DFII_P1_WRDATA"
+offset = 0x102C
+access = "rw"
+desc = "sdram.dfii_pi1_wrdata: phase 1's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P1_RDDATA"
+offset = 0x1030
+access = "ro"
+desc = "sdram.dfii_pi1_rddata: phase 1's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P2_COMMAND"
+offset = 0x1034
+access = "rw"
+desc = "sdram.dfii_pi2_command: the command bits of phase 2's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P2_COMMAND_ISSUE"
+offset = 0x1038
+access = "rw"
+desc = "sdram.dfii_pi2_command_issue: writing 1 issues phase 2's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P2_ADDRESS"
+offset = 0x103C
+access = "rw"
+desc = "sdram.dfii_pi2_address: the row or column address (or mode register value) of phase 2's command."
+
+[[periph.reg]]
+name = "DFII_P2_BADDRESS"
+offset = 0x1040
+access = "rw"
+desc = "sdram.dfii_pi2_baddress: the bank address (or mode register number) of phase 2's command."
+
+[[periph.reg]]
+name = "DFII_P2_WRDATA"
+offset = 0x1044
+access = "rw"
+desc = "sdram.dfii_pi2_wrdata: phase 2's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P2_RDDATA"
+offset = 0x1048
+access = "ro"
+desc = "sdram.dfii_pi2_rddata: phase 2's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P3_COMMAND"
+offset = 0x104C
+access = "rw"
+desc = "sdram.dfii_pi3_command: the command bits of phase 3's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P3_COMMAND_ISSUE"
+offset = 0x1050
+access = "rw"
+desc = "sdram.dfii_pi3_command_issue: writing 1 issues phase 3's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P3_ADDRESS"
+offset = 0x1054
+access = "rw"
+desc = "sdram.dfii_pi3_address: the row or column address (or mode register value) of phase 3's command."
+
+[[periph.reg]]
+name = "DFII_P3_BADDRESS"
+offset = 0x1058
+access = "rw"
+desc = "sdram.dfii_pi3_baddress: the bank address (or mode register number) of phase 3's command."
+
+[[periph.reg]]
+name = "DFII_P3_WRDATA"
+offset = 0x105C
+access = "rw"
+desc = "sdram.dfii_pi3_wrdata: phase 3's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P3_RDDATA"
+offset = 0x1060
+access = "ro"
+desc = "sdram.dfii_pi3_rddata: phase 3's data from the last injected read, in WRDATA's layout."
+
+# ---------------------------------------------------------------------------------------------
+# Boot ABI constants (BOOT-ABI.md defines the structures; firmware/include/surfcpu/bootabi.h).
+
+[bootabi]
+image_magic = 0x474D_4953     # "SIMG" in memory order: SURFOS.BIN header
+image_header_version = 1
+image_header_size = 64
+bootinfo_magic = 0x4946_5253  # "SRFI" in memory order: struct surf_boot_info
+bootinfo_version = 1
+platform_abi = 1              # boot handoff ABI version (registers, state, boot info)
+isa_i = 0x0001                # SURF_ISA_* bits for the image header's isa field
+isa_m = 0x0002
+isa_zicsr = 0x0004
+isa_zifencei = 0x0008
+boot_device_sd = 1

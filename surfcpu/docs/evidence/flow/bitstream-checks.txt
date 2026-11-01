@@ -1,0 +1,53 @@
+Board-free checks of the open-flow bitstreams, and how far each one reaches (2026-10-15/16)
+
+1. Structure (devenv/openxc7/bitinfo.py, own parser of UG470's packet format, no prjxray code)
+   flow_demo, 35T: header part 'xc7a35tcsg324-1'; stream 2,192,012 bytes = 17,536,096 bits =
+     UG470 table 1-1's length for the XC7A35T/50T; IDCODE 0x0362D093 = the xc7a35t's JTAG
+     IDCODE (not the 50T's 0x0362C093); 5420 frames x 101 words; FAR 0x00000000; commands
+     NULL RCRC SWITCH WCFG RCRC GRESTORE LFRM START RCRC DESYNC; COR0 0x02003FE5 (Vivado's
+     default), CTL0 0x00000501; 400 NOPs after DESYNC: check for xc7a35t PASS, for xc7a100t
+     FAIL (length, IDCODE, part)
+   flow_demo, 100T: 3,825,788 bytes = 30,606,304 bits = UG470's XC7A100T length; IDCODE
+     0x03631093 = the xc7a100t (JTAG 0x13631093; bitstreams carry no revision nibble, as in
+     prjxray-db's part.yaml); 9464 frames; same command sequence: check PASS
+   No CRC check packets: prjxray's writer (like openXC7's fpga-assembler, whose committed demo
+   bitstreams were inspected too) resets the CRC with RCRC instead of checking it, so the FPGA
+   will not detect a corrupted transfer. The CRC code itself is validated: it reproduces
+   prjxray's known answers (icap_crc: 0, 0x82F63B78, 0xBF86D4DF, 0xC631E365) and every CRC
+   check in prjxray's Vivado 2016.3 test bitstreams: configuration_test.bit 2/2,
+   configuration_test.debug.bit 2/2 (LOUT left out of the CRC, headerless zero frames counted
+   as FDRI data), configuration_test.perframecrc.bit 5415/5415.
+
+2. Round trip (prjxray bit2fasm, then devenv/openxc7/fasmcheck.py)
+   The bitstream decoded back to FASM and compared bit by bit with the FASM nextpnr wrote:
+   35T demo 7086 feature bits in both; the 1279 only in nextpnr's FASM are pseudo-pips with no
+   configuration bits (1145 ALWAYS, 134 DEFAULT); the 212 only decoded are all-clear defaults.
+   100T demo 6811 / 1252 / 204; feature probe 35T 296,726 / 9568 / 1921: PASS, nothing
+   unexplained. This proves the assembly (fasm2frames, xc7frames2bit) wrote exactly what
+   nextpnr chose, as far as prjxray-db describes the bits; it uses the same database both ways.
+
+2b. Block RAM contents (fasm2netlist on the decoded FASM, then devenv/openxc7/bramcheck.py)
+   The initial contents of every RAMB18E1/RAMB36E1 read back out of the bitstream by
+   fasm2netlist (independent of nextpnr) must equal the synthesized netlist's, block for block:
+   feature probe 35T, 29 RAMB18E1, 29 identical (the 64 KiB ROM): PASS; with one INIT nibble
+   changed in the decoded netlist: FAIL (1 missing, 1 unexpected block). 10 s of extraction.
+
+3. LVS (openXC7's flow: fasm2netlist's tileverilog + lvs_equiv, Z3)
+   The routed FASM read back into a fabric netlist by an independent tile model and proved
+   equal to the synthesized netlist register by register: flow_demo 83 proved, 0 differ (both
+   parts); flow_features 1494 proved, 0 differ, block RAM and DSP cut at their boundary,
+   MMCM/PLL not modelled. On the FASM decoded from the bitstream it cannot work, because the
+   pseudo-pips of point 2 carry no bits (the demo's reset paths then show as 3 differences).
+   A one-bit vector port ([0:0] sw) made one false difference (sw against sw[0]): the probe
+   uses sw[1:0] instead.
+
+4. Clock managers (devenv/openxc7/cmtcheck.py): see mmcm.txt.
+5. Synthesis against the RTL (devenv/openxc7/synthcheck.py): see yosys-dsp.txt.
+6. Simulation: the synthesized netlist of flow_demo with Yosys's cells_sim.v under the RTL
+   testbench passes (builds.txt).
+
+Not covered by any of these: whether prjxray-db's bit meanings are right for this silicon,
+whether nextpnr's timing model holds, the clock tree (LVS assumes one), I/O electrical
+settings, and the 35T's use of 50T-die sites. Block RAM contents are checked as far as
+prjxray-db's bit positions are right; the probe's ROM checksum on a board would confirm them.
+Only a board can close these.

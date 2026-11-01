@@ -1,0 +1,43 @@
+# SurfCPU core: bounded model check of fv_top.sv (make formal-cpu)
+# File: fv.sby Date: 10/15/26 (SurfCPU)
+#
+# bmc: every assertion of fv_top.sv holds for DEPTH cycles from reset, for every program in
+# its 8-word instruction memory and every bus timing, data, error and interrupt pattern.
+# cover: the interesting situations of fv_top.sv are reachable (the checks are not vacuous).
+# make formal-cpu (run_formal.py) sets the depth and the timeout by rewriting those lines.
+# The cover task and the replay of a bmc counterexample into a trace use z3 (boolector 1.5.118
+# in the container fails with yosys-smtbmc, and yices is not installed).
+
+[tasks]
+bmc
+cover
+
+[options]
+bmc: mode bmc
+bmc: depth 14
+cover: mode cover
+cover: depth 14
+timeout 900
+bmc: aigsmt z3
+
+[engines]
+bmc: abc bmc3
+cover: smtbmc z3
+
+[script]
+read_verilog -DSURFCPU_RVFI -DSURFCPU_FV -DSYNTHESIS -I. surfcpu_alu.v surfcpu_core.v surfcpu_csr.v surfcpu_decode.v surfcpu_fetch.v surfcpu_muldiv.v surfcpu_regfile.v surf_fifo.v
+read_verilog -formal -sv -I. fv_top.sv
+prep -top fv_top
+
+[files]
+../../../rtl/cpu/surfcpu_alu.v
+../../../rtl/cpu/surfcpu_core.v
+../../../rtl/cpu/surfcpu_csr.v
+../../../rtl/cpu/surfcpu_decode.v
+../../../rtl/cpu/surfcpu_fetch.v
+../../../rtl/cpu/surfcpu_muldiv.v
+../../../rtl/cpu/surfcpu_regfile.v
+../../../rtl/lib/surf_fifo.v
+../../../rtl/cpu/surfcpu_defs.vh
+../../../rtl/cpu/surfcpu_rvfi.vh
+fv_top.sv

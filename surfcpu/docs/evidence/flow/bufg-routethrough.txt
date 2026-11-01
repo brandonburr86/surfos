@@ -1,0 +1,149 @@
+SurfCPU flow evidence: ordinary nets routed through unused global buffers (round ddr-4, docs/OPEN-FLOW.md 6.8)
+Builds of surfcpu_arty_a7_ddr_bramdiag (and the SoC builds without DDR) for the Arty A7-100T, all passing every gate
+of the open flow, compared after the integrator's board runs (docs/evidence/physical/ddr-candidates-2026-10-16.txt).
+Image surfcpu-openxc7:2026-10-15; the FASM of each build read by devenv/openxc7/gclkcheck.py. Recorded 2026-10-16 in
+round ddr-4 (worktree sc/ddr-3 at 69ee491 with this round's fix: tools/openxc7-build.sh, devenv/openxc7/chipdb-gen.py,
+gclkcheck.py); the head seeds re-placed for their FASM with the same netlist and seed (placement.json identical).
+
+== 1. The seven builds, their board results and gclkcheck
+build (placement)                  board                                      gclkcheck
+92a2b51 seed 1 (DDR diagnostics)   FAILS: trap at the first printed character 7 global buffer(s) configured, 7 route-through(s), 7 fabric input(s) into unconfigured buffers, 8 clock-to-data use(s)
+69ee491 seed 3 (DDR diagnostics)   FAILS: shifts via one ALU input            7 global buffer(s) configured, 1 route-through(s), 1 fabric input(s) into unconfigured buffers, 1 clock-to-data use(s)
+69ee491 seed 1 (DDR diagnostics)   passes, 572 checks                         7 global buffer(s) configured, 1 route-through(s), 1 fabric input(s) into unconfigured buffers, 1 clock-to-data use(s)
+69ee491 seed 2 (DDR diagnostics)   passes, 572 checks                         7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+92a2b51 seed 1 (SurfBoot DDR)      works: DDR calibrated, SurfOS boots        7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+e396177 (BRAM diagnostics, no DDR) passes, 203 checks                         2 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+e396177 (SurfBoot, no DDR)         works                                      2 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+
+A comparison of every FASM feature of the seven builds, tile coordinates removed: the features both failing builds
+use and none of the five working ones uses are all on the clock network: BUFGCTRL13 of the top clock-buffer tile
+fed from logic and driving GCLK29, that line's distribution (REBUF enables, the clock row's GCLK29_ACTIVE), and three
+horizontal clock indices those two builds' clock rows happen to use (BUFHCLK3 and 6 marked used in the
+clock-management rows, BUFHCLK3 in one row buffer). Nothing in the logic, block RAM, DSP or I/O tiles.
+
+== 2. Where the routes end (nets named from the synthesized netlist)
+92a2b51 seed 1, seven routes (BUFGCTRL 4, 10-15; GCLK 20, 26-31), eight data inputs, all in the CPU's EX stage:
+  INT_L_X40Y102.GFAN0 <- GCLK_L_B11_WEST: feeds IMUX_L0 -> IMUX_L0, CLB CLBLL_L_X40Y102
+  INT_L_X40Y116.GFAN1 <- GCLK_L_B5: feeds IMUX_L30 -> IMUX_L30, CLB CLBLL_L_X40Y116
+  INT_L_X40Y123.GFAN1 <- GCLK_L_B9_WEST: feeds IMUX_L46 -> IMUX_L46, CLB CLBLL_L_X40Y123
+  INT_L_X40Y133.GFAN0 <- GCLK_L_B8_WEST: feeds IMUX_L32 -> IMUX_L32, CLB CLBLL_L_X40Y133
+  INT_R_X41Y109.GFAN1 <- GCLK_B4_EAST: feeds IMUX38 -> IMUX38, CLB CLBLM_R_X41Y109
+  INT_R_X41Y110.GFAN0 <- GCLK_B3_EAST: feeds IMUX9 -> IMUX9, CLB CLBLM_R_X41Y110
+  INT_R_X41Y113.GFAN1 <- GCLK_B2_EAST: feeds IMUX30 -> IMUX30, CLB CLBLM_R_X41Y113
+  INT_R_X41Y113.GFAN0 <- GCLK_B5_EAST: feeds IMUX0 -> IMUX0, CLB CLBLM_R_X41Y113
+  (the CLB inputs feed: alu.op decode LUTs; ex_pc + ex_imm adder LUTs for bits 10 and 12; the ex_insn, mem_tval and
+   csr.trap_epc registers; ex_tval_all; muldiv.divisor)
+69ee491 seed 3, one route (BUFGCTRL13, GCLK29) into one input of the ALU shifter's first stage, bits 20 and 21:
+  INT_R_X39Y127.GFAN0 <- GCLK_B9: feeds IMUX41 -> IMUX41; CLB CLBLM_R_X39Y127
+          SLICE_X63Y127 D6LUT LUT5: I0=$techmap345761$auto$abc_ops_reintegrate.cc:611:rei I1=$techmap345758$auto$abc_ops_reintegrate.cc:611:rei I2=$techmap345958$abc$343725$lut$aiger343724$17685.A[ I3
+  The LUT5's inputs: alu_a[21], alu_a[20] (ex_a or ex_pc), the shift amount's bits 1:0 (ex_imm/ex_b), and the stage's
+  other half. Every symptom of that board run is a shift through it:
+    fmt_vformat: numeric = (0x121021 >> (c - 'd')) & 1, a shift by 20 for 'x' (ROM 0x5228-0x5234): %x took the
+      string path (digits least significant first, spaces for zeros: 'build 8194ef87', 'DDR status 41'); %u fine;
+    walking one: W(lo) = 1 << 20 failed, bits 0-19 passed, March C- and the address tests passed (the RAM is fine);
+    FENCE.I: the patch masks the instruction with slli 12; srli 12 (ROM 0xc40), its rd bits then wrong, so the
+      patched addi wrote another register and 7 * 3 = 0x15 came back;
+    DDR read leveling: lane 0's second byte is compared after t >> 16, lane 1's bytes after shifts by 8 and 24.
+69ee491 seed 1 (passes), one route (BUFGCTRL11, GCLK27) into the D input of the timer's MSIP flip-flop:
+  INT_L_X40Y106.GFAN0 <- GCLK_L_B9_WEST: feeds BYP_ALT0 -> BYP_L0; CLB CLBLL_L_X40Y106
+  which the interrupt test sets and clears (one software interrupt taken): that route passed its signal.
+
+== 3. Things the integrator asked about that are the same in failing and working builds
+constants by an unconfigured mux (prjxray 'default' pips: VCC_WIRE into IMUX, BYP_ALT, FAN_ALT):
+  92a2b51 seed 1 (fails)   IMUX  3770  BYP_ALT  144  FAN_ALT  885
+  69ee491 seed 3 (fails)   IMUX  3678  BYP_ALT  141  FAN_ALT  988
+  69ee491 seed 1           IMUX  3670  BYP_ALT  150  FAN_ALT  952
+  69ee491 seed 2           IMUX  3716  BYP_ALT  149  FAN_ALT  946
+  92a2b51 SurfBoot DDR     IMUX  3760  BYP_ALT  140  FAN_ALT  930
+  The block RAMs' RSTRAM/RSTREG pins tied to a constant (all but two pins in one build): in every build VCC through
+  BYP_ALT4 or FAN_ALT1 (default pip) with the pin inverted.
+scratch RAM (u_soc.u_scratch.ram.0.0-15): 16 RAMB36E1, TDP, 16K x 2 each (READ_WIDTH 2, port A writes, port B the
+  instruction fetch, read only), bit pair 2k+1:2k in ram.0.k; address bits 1-14 through the block RAM address
+  cascades (CASCINBOT/CASCINTOP, in every build), bit 0 GND, bit 15 VCC by default pip, WEA one net on 8 pins, WEBWE GND.
+  Bit 20 (seed 3): ram.0.10 at BRAM_L_X44Y115; bits 2, 5, 13 (the first dump): ram.0.1 X44Y110, ram.0.2 X44Y60,
+  ram.0.6 X44Y120. The same columns (X38, X44, X51) and tile types (BRAM_L, BRAM_R) in every build; the sites
+  differ by placement only, and working builds use those sites too.
+bramwe.py (the LVS write-enable re-reading): 'bramwe: 0 block RAM(s), 0 enable(s) re-read, 0 difference(s)' in these
+  designs: all their block RAMs are RAMB36E1, which it leaves alone; it is not involved.
+DDR PHY: its 199 cells (ISERDESE2, IDELAYE2, OSERDESE2, IOBs, IDELAYCTRL) sit at the same sites in seeds 1, 2 and 3.
+
+== 4. The fix: the chip database without BUFGCTRL route-throughs (devenv/openxc7/chipdb-gen.py)
+The image's generator, run again by the script: unchanged (--keep-bufg-rt) it writes the image's databases byte for byte;
+with the rule it leaves out 32 route-through pips (CLK_BUFG_BUFGCTRLn_O <- CLK_BUFG_BUFGCTRLn_I0, 16 per tile type):
+  b4098ce6982235f4d1cf4295708751b0a73241cb22ca57d9183b9d5f6d4c57d9  /opt/openxc7/share/chipdb/chipdb-xc7a100t.bin
+  b4098ce6982235f4d1cf4295708751b0a73241cb22ca57d9183b9d5f6d4c57d9  build/tmp/dbg/chipdb/chipdb-xc7a100t-same.bin
+  f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f  build/tmp/dbg/chipdb/chipdb-xc7a100t-nort.bin
+  675f4833276ee263d7c4ee17692eee7a9a62cfbdd0c80a0115147c49f471a727  build/tmp/dbg/chipdb/chipdb-xc7a50t-nort.bin
+  ec876fe0eb87f977a4d5781c5ae9dc03fadc3072f83bd89d31346485b78bc760  /opt/openxc7/share/chipdb/chipdb-xc7a50t.bin
+  ec876fe0eb87f977a4d5781c5ae9dc03fadc3072f83bd89d31346485b78bc760  build/tmp/dbg/chipdb/chipdb-xc7a50t-same.bin
+The route-through pips the generator keeps after the rule (by tile type and wire kind; numbers are instances per type):
+     12 CLK_HROW_BOT_R CLK_HROW_CK_HCLK_OUT_LN<-CLK_HROW_CK_MUX_OUT_LN
+     12 CLK_HROW_BOT_R CLK_HROW_CK_HCLK_OUT_RN<-CLK_HROW_CK_MUX_OUT_RN
+     12 CLK_HROW_TOP_R CLK_HROW_CK_HCLK_OUT_LN<-CLK_HROW_CK_MUX_OUT_LN
+     12 CLK_HROW_TOP_R CLK_HROW_CK_HCLK_OUT_RN<-CLK_HROW_CK_MUX_OUT_RN
+      1 CMT_TOP_L_LOWER_T CMT_PHASER_IN_CA_RCLK<-CMT_PHASER_IN_CA_PHASEREFCLK
+      1 CMT_TOP_L_LOWER_T CMT_PHASER_IN_DB_RCLK<-CMT_PHASER_IN_DB_PHASEREFCLK
+      1 CMT_TOP_L_UPPER_B CMT_PHASER_IN_CA_RCLK<-CMT_PHASER_IN_CA_PHASEREFCLK
+      1 CMT_TOP_L_UPPER_B CMT_PHASER_IN_DB_RCLK<-CMT_PHASER_IN_DB_PHASEREFCLK
+      1 CMT_TOP_R_LOWER_T CMT_PHASER_IN_CA_RCLK<-CMT_PHASER_IN_CA_PHASEREFCLK
+      1 CMT_TOP_R_LOWER_T CMT_PHASER_IN_DB_RCLK<-CMT_PHASER_IN_DB_PHASEREFCLK
+      1 CMT_TOP_R_UPPER_B CMT_PHASER_IN_CA_RCLK<-CMT_PHASER_IN_CA_PHASEREFCLK
+      1 CMT_TOP_R_UPPER_B CMT_PHASER_IN_DB_RCLK<-CMT_PHASER_IN_DB_PHASEREFCLK
+      4 HCLK_IOI3 HCLK_IOI_RCLK_OUTN<-HCLK_IOI_RCLK_BEFORE_DIVN
+      1 LIOB33 IOB_O_OUTN<-IOB_ON
+      1 LIOB33 IOB_PADOUTN<-IOB_DIFFO_INN
+      1 LIOB33 IOB_T_OUTN<-IOB_TN
+      2 LIOI3 IOI_ILOGICN_O<-LIOI_ILOGICN_D
+      2 LIOI3 IOI_ILOGICN_O<-LIOI_ILOGICN_DDLY
+      2 LIOI3 LIOI_IDELAYN_DATAOUT<-LIOI_IDELAYN_IDATAIN
+      2 LIOI3 LIOI_OLOGICN_OFB<-IOI_OLOGICN_DN
+      2 LIOI3 LIOI_OLOGICN_OFB<-LIOI_OLOGICN_OQ
+      2 LIOI3 LIOI_OLOGICN_OQ<-IOI_OLOGICN_DN
+      2 LIOI3 LIOI_OLOGICN_TQ<-IOI_OLOGICN_TN
+      1 RIOB33 IOB_O_OUTN<-IOB_ON
+      1 RIOB33 IOB_T_OUTN<-IOB_TN
+      2 RIOI3 IOI_ILOGICN_O<-RIOI_ILOGICN_D
+      2 RIOI3 IOI_ILOGICN_O<-RIOI_ILOGICN_DDLY
+      2 RIOI3 RIOI_IDELAYN_DATAOUT<-RIOI_IDELAYN_IDATAIN
+      2 RIOI3 RIOI_OLOGICN_OFB<-IOI_OLOGICN_DN
+      2 RIOI3 RIOI_OLOGICN_OFB<-RIOI_OLOGICN_OQ
+      2 RIOI3 RIOI_OLOGICN_OQ<-IOI_OLOGICN_DN
+      2 RIOI3 RIOI_OLOGICN_TQ<-IOI_OLOGICN_TN
+  (the clock rows' BUFHCE: every clock goes through them; the I/O tiles' ILOGIC/OLOGIC/IDELAY/IOB: every pin; none
+   carried an ordinary net in these builds)
+
+== 5. The two failing netlists rebuilt with it (their own commits, clean trees, the same build ID, time and ROM)
+92a2b51 seed 1: result pass; bitstream 456f5ec78cbd4567283ef8286817f048431f7b793458ba2fdb92d3ef9fd51171
+  check_synthesis = "PASS" check_bitstream = "PASS" check_round_trip = "PASS" check_block_ram = "PASS" check_lvs = "PASS" check_clocks = "PASS" check_netlist = "PASS" check_boot_rom = "PASS"
+  placement.json identical to the failing build; gclkcheck: 7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+  clock clk100_g: constraint 100.00 MHz, achieved 1013.17 MHz, slack +9.013 ns  PASS
+  clock dram_clk: constraint 80.00 MHz, achieved 81.72 MHz, slack +0.263 ns  PASS
+  clock pix_clk: constraint 25.17 MHz, achieved 135.03 MHz, slack +32.318 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 61.09 MHz, slack +23.632 ns  PASS
+  clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 352.11 MHz, slack +2.160 ns  PASS
+69ee491 seed 3: result pass; bitstream 9a48225457c35233a6233e4fac02cb0a91af5b476e130f0ac574a20a175e3ccc
+  check_synthesis = "PASS" check_bitstream = "PASS" check_round_trip = "PASS" check_block_ram = "PASS" check_lvs = "PASS" check_clocks = "PASS" check_netlist = "PASS" check_boot_rom = "PASS"
+  placement.json identical to the failing build; gclkcheck: 7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+  clock clk100_g: constraint 100.00 MHz, achieved 1030.93 MHz, slack +9.030 ns  PASS
+  clock dram_clk: constraint 80.00 MHz, achieved 80.85 MHz, slack +0.132 ns  PASS
+  clock pix_clk: constraint 25.17 MHz, achieved 157.48 MHz, slack +33.374 ns  PASS
+  clock sys_clk: constraint 25.00 MHz, achieved 60.51 MHz, slack +23.473 ns  PASS
+  clock u_dram.iodelay_clk: constraint 200.00 MHz, achieved 374.11 MHz, slack +2.327 ns  PASS
+
+== 6. The new flow on the flow demo (tools/openxc7-build.sh, both boards)
+The first build of each die built its database (chipdb 46.15 s for the 100T, 27.76 s for the 50T, peak about 3 GB);
+a second build found it there (chipdb 0.00 s). The second builds:
+arty_a7_100t: checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM none in the design, LVS PASS, clocks none in the design
+  chip database       build/openxc7/chipdb/2026-10-15/chipdb-xc7a100t.bin sha256:f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f (the image's generator without BUFGCTRL route-throughs, devenv/openxc7/chipdb-gen.py)
+  check clocks        none in the design (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  chipdb           0.00 s  ok
+  chipdb-sha       0.04 s  ok
+  check-gclk       0.02 s  ok
+  gclkcheck: 1 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+arty_a7_35t: checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM none in the design, LVS PASS, clocks none in the design
+  chip database       build/openxc7/chipdb/2026-10-15/chipdb-xc7a50t.bin sha256:675f4833276ee263d7c4ee17692eee7a9a62cfbdd0c80a0115147c49f471a727 (the image's generator without BUFGCTRL route-throughs, devenv/openxc7/chipdb-gen.py)
+  check clocks        none in the design (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)
+  chipdb           0.00 s  ok
+  chipdb-sha       0.03 s  ok
+  check-gclk       0.02 s  ok
+  gclkcheck: 1 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)

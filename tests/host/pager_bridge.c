@@ -48,7 +48,11 @@ void serial_putc(char c) {
 }
 void sim_serial_preempt(int after) { serial_preempt_at = serial_len + after; }
 void serial_puts(const char *s) { while(*s) serial_putc(*s++); }
+/* 10/16/26 (audit C10): the test's hook into kputch(), at each byte the serial mirror gets: the
+   task may stop there (a preemption, the console lock held) or an interrupt handler may print */
+void (*sim_serial_hook)(int c);
 void serial_console_putc(int c) {           /* driver/serial.c's rules */
+    if(sim_serial_hook) sim_serial_hook(c);
     switch(c) {
     case '\n': serial_putc('\r'); serial_putc('\n'); break;
     case 0x08: serial_putc('\b'); serial_putc(' '); serial_putc('\b'); break;

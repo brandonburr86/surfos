@@ -1,0 +1,20 @@
+# test-os-kit (fake): 18 of 18 checks passed in 15 s
+# 2026-10-17 03:58:50 UTC, kit_test.py --set fake, Python 3.9.6 on Darwin arm64 (the RTL system: surfsim --uart-pty; fake boards: pseudo-terminals in kit_test.py; the owner's steps answered by kit_test.py owner)
+ok   edge-garbage: board-test m1 against a fake board (garbage): FAIL in 5 s (0 checks seen by this script passed, 1 failed)
+ok   edge-lost-second: board-test m1 against a fake board (skip): FAIL in 10 s (9 checks seen by this script passed, 1 failed; 2 not done or not compared)
+ok   edge-silent: board-test m1 against a fake board (silent): FAIL in 5 s (0 checks seen by this script passed, 1 failed)
+ok   edge-unplugged: board-test m1 against a fake board (vanish): FAIL in 3 s (0 checks seen by this script passed, 1 failed)
+ok   m1-baseline: board-test m1 against a fake board (baseline): PASS in 10 s (11 checks seen by this script passed; 1 not done or not compared)
+ok   m1-slow-owner: board-test m1 against a fake board (baseline): PASS in 12 s (11 checks seen by this script passed; 1 not done or not compared)
+ok   m1-wrong-bitstream: board-test m1 against a fake board (baseline): FAIL in 9 s (10 checks seen by this script passed, 1 failed; 1 not done or not compared)
+ok   m3-ddr-status-hex: board-test m3 against a fake board (bramdiag): PASS in 1 s (27 checks seen by this script passed; 1 not done or not compared)
+ok   uart.py capture: --timeout ends it: exit 2 in 2.1 s
+ok   uart.py capture: a port that goes away ends it at once: exit 1 in 1.3 s, not at the 20 s limit
+ok   uart.py capture: baseline lines recorded with their times, ended by --until (exit 0, 2.2 s)
+ok   uart.py console: a port that goes away ends it: exit 1, "the port went away"
+ok   uart.py console: keys typed go out, what comes back is shown and logged, Ctrl-] quits (exit 0)
+ok   uart.py list runs here (exit 0: /dev/cu.usbserial-210319C129C60                  FT2232 channel A: JTAG (openFPGALoader), not the UART)
+ok   uart.py script: --fail-on ends it: exit 1 in 0.2 s
+ok   uart.py script: --send and --expect in order, typed with pacing: exit 0 in 0.2 s
+ok   uart.py script: its --timeout ends it: exit 2 in 2.1 s
+ok   uart.py: a port that is not there: exit 1, and why

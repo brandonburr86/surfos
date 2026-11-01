@@ -78,11 +78,7 @@ class Net:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('127.0.0.1', 0))
         self.port = self.sock.getsockname()[1]
-        s2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s2.bind(('127.0.0.1', 0))
-        self.qport = s2.getsockname()[1]           # QEMU's end: free when QEMU binds it (a small race, as free_port())
-        s2.close()
-        self.dst = ('127.0.0.1', self.qport)
+        self.qport = self.dst = None                # QEMU's end: set_qport(), once QEMU has bound it
         self.segs = []
         self.dgrams = []                            # 10/25/26: the guest's UDP datagrams (Dgram)
         self.servers = {}                           # peer port -> Server
@@ -96,9 +92,16 @@ class Net:
         self.th.start()
 
     def qemu_args(self):
-        return ['-netdev', f'dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port={self.qport},'
+        """10/18/26 (round fs-fix-11): QEMU's port is {port:dgram}, which the harness's Qemu fills, afresh for each try
+        when another program has taken one first (before, a port bound here and let go for QEMU to bind)"""
+        return ['-netdev', 'dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port={port:dgram},'
                            f'remote.type=inet,remote.host=127.0.0.1,remote.port={self.port}',
                 '-device', 'e1000,netdev=d0,mac=52:54:00:12:34:56']
+
+    def set_qport(self, port):
+        """the port QEMU bound (its Qemu's ports['dgram']): where the frames for the guest go"""
+        self.qport = port
+        self.dst = ('127.0.0.1', port)
 
     def now(self):
         return time.time() - self.t0
@@ -118,7 +121,7 @@ class Net:
             if et == 0x0806 and len(f) >= 42:
                 op = struct.unpack('!H', f[20:22])[0]
                 spa, tpa = f[28:32], f[38:42]
-                if op == 1 and tpa != GUEST_IP and tpa not in NO_ARP:
+                if op == 1 and tpa != GUEST_IP and tpa not in NO_ARP and self.dst:
                     rep = (f[6:12] + PEER_MAC + b'\x08\x06' + struct.pack('!HHBBH', 1, 0x0800, 6, 4, 2) +
                            PEER_MAC + tpa + f[22:28] + spa)
                     with self.lock:

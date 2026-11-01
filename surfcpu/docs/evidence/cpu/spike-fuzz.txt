@@ -1,0 +1,5 @@
+# random programs: surfcpu_tb traces against Spike's commit log, three timings
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: python3 sim/cpu/fuzz_spike.py --count 200 --seed 1000 --length 600
+
+fuzz_spike: 200 programs x 3 timings, 0 failing (seeds 1000..1199)

@@ -107,6 +107,10 @@ inline void setpos(surf_console *con);
 void kputch(surf_console* con,TEXTCOLOR color, int c);
 void kprintf(const char *format, ...);
 void kcprintf(surf_console *con, const char *format, ...);
+/* 10/16/26 (audit C10): a whole kprintf() or printf() call drawn as one, the console lock held for
+   it (kernel/console.c); begin returns what end takes, 0 when nothing was taken */
+int console_print_begin(surf_console *con);
+void console_print_end(int how);
 
 void clearScreen();
 void clearConsole(surf_console *con);
@@ -126,6 +130,8 @@ void console_flush(void);        /* 10/25/26: what the screen owes, now (a reade
    the cursor shown) when the task that changed them ends, and for a panic report. */
 void console_reset_ansi(surf_console *con);
 void console_task_gone(struct surf_task *task);   /* interrupts off */
+/* 10/18/26 (audit B62): does t hold the console lock (counted in its mutexes; given back when it dies, above) */
+bool console_holds(const struct surf_task *t);
 
 /* 10/6/26: a task's console output kept in memory instead of shown (the user shell's
    redirection of a kernel command, kernel/syscall.c). From console_capture_begin() until

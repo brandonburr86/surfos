@@ -1,0 +1,39 @@
+SurfCPU release: the two Docker images rebuilt from their pinned sources, and the release's artifacts
+built with them
+2026-10-16, release track, MacBook Pro M4 Max, Docker Desktop (14 CPUs, 7.7 GiB); docs/RELEASE.md
+section 8. The images in use were left alone: the rebuilds got tags of their own and were removed
+afterwards.
+
+1. surfcpu-toolchain (devenv/Dockerfile), with no build cache:
+     docker build --no-cache -t surfcpu-toolchain:rebuild-check surfcpu/devenv
+   218 s in all: Debian packages from snapshot.debian.org 20261005T000000Z 64.5 s, Spike at its
+   pinned commit 79.2 s, SymbiYosys 0.9 s, the image export 71.7 s; 6,063,358,541 bytes.
+   Image id sha256:5780514b2089265c... (the one in use: sha256:e4389c3c6d9349dd...): a new id, as
+   every rebuild gets (layer timestamps), but /etc/surfcpu-toolchain.txt, the record of every tool's
+   version, is identical, line for line.
+   The release's software built with it (a clone at bb066932, SOURCE_DATE_EPOCH=1792161214,
+   SURFCPU_IMAGE=surfcpu-toolchain:rebuild-check devenv/run.sh make build-rom build-kernel),
+   compared with the release 1.0.0-pre-bb066932 (built with the image in use):
+     match   SURFOS.BIN
+     match   DDRDIAG.BIN
+     match   rom/surfboot.mem
+     match   rom/bramdiag.mem
+     match   debug/surfboot.elf
+     match   debug/bramdiag.elf
+     match   debug/ddrdiag.elf
+     match   debug/surfos.elf
+
+2. surfcpu-openxc7 (devenv/openxc7/Dockerfile), with no build cache, 4 compile jobs:
+     docker buildx build --builder surfcpu-openxc7-builder --no-cache --load --build-arg JOBS=4 \
+         -t surfcpu-openxc7:rebuild-check surfcpu/devenv/openxc7
+   413 s in all (stages in parallel; Yosys 362 s, nextpnr 88 s, prjxray 45 s, the chip databases
+   82 s), while one of this track's bitstream builds ran; 660,718,691 bytes.
+   Image id sha256:ebd327ef14d2dfc4... (the one in use: sha256:b802ed1bac370d99...); its
+   /etc/surfcpu-openxc7.txt is identical to the one in use, the chip databases' SHA-256 included
+   (chipdb-xc7a100t.bin b4098ce6982235f4..., chipdb-xc7a50t.bin ec876fe0eb87f977...).
+   The release's baseline bitstreams built with it (the same clone, SOURCE_DATE_EPOCH=1792161214,
+   SURFCPU_OPENXC7_IMAGE=surfcpu-openxc7:rebuild-check FLOW=openxc7 tools/fpga-build.sh --design
+   arty_a7_baseline <board>; every gate passed, source_dirty = false), compared with the release:
+     match   fpga/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit  95390240c610c9b8...
+     match   fpga/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit   2e0b35f6efacea85...
+   (the SoC bitstreams were not rebuilt with this image: they take 10 to 17 minutes each.)

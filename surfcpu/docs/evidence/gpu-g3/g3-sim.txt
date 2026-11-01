@@ -1,0 +1,28 @@
+SurfGPU G3: SurfOS's driver and the gfx command, simulation and host tests (2026-10-25), in the
+surfcpu-toolchain container (gcc, Verilator 5.032), make check (SURFGPU_DOCKER_SIZE=big) at 2310338
+(sc/gpu-g3, after the review round). Nothing here ran on a board.
+
+make test-gpuos-host (boards/arty_a7/tests/gpu/test_gpu.c: gpu.c and gfx.c on the host against
+sim/models/gpu_model.c through gpustub.c; then gfxref, the test-gpuos pictures from GPU.md alone,
+its two ways to each picture compared; the whole output: test-gpuos-host.txt):
+  test_arty: 678 of 678 checks passed, 18 tests x 3 seeds (1 7 123)
+  gfxref: 7 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+
+make test-gpuos (boards/arty_a7/tests/gpuos_test.py; every check, the gfx crc lines and the last
+frame's decoded text: test-gpuos.txt):
+  test-gpuos: 25 of 25 checks passed in 153 s (gpu 384500606 cycles = 15.380 s simulated in 152.2 s wall (2.53 M cycles/s); nogpu 146294428 cycles = 5.852 s simulated in 44.2 s wall (3.31 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)
+
+make test-os-qemu (boards/qemu_virt/test_os.py), its gfx check at -O2 and -O0:
+  test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 136 of 136 checks passed in 49 s
+  test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 136 of 136 checks passed in 50 s
+  ok   gfx: there is no GPU on this board (SurfGPU is the Arty's)
+
+make check (SURFGPU_DOCKER_SIZE=big) at 2310338: check: all automated SurfCPU checks passed
+  (ran 22:20 to 22:54 CDT on 2026-10-25, about 34 minutes, after waiting for both Docker slots; the run of test-gpuos and test-os-qemu before it, at the same code, passed too)
+
+The review's finding 4, its check tried on a dead interrupt: a trial kernel whose probe writes
+IE = 0 (gpu.c, not kept), make test-gpuos:
+  ok   gfx: ID, VRAM, the display and its palette (RGB332 as configured), FIFO, fences on the interrupt, errors, frames
+  FAIL the GPU interrupt (intc source 5, IE.FENCE): 0 taken for the 156 fences sent between the first gfx and the last
+  ok   no stopped engine, no GPU error, no blanking missed, no interrupt switched off, no usage error, no panic
+  test-gpuos: 24 of 25 checks passed in 156 s (gpu 384490033 cycles = 15.380 s simulated in 155.7 s wall (2.47 M cycles/s); nogpu 146292755 cycles = 5.852 s simulated in 47.3 s wall (3.09 M cycles/s); the RTL of surfcpu_soc with SurfGPU and the C++ models, not the board)

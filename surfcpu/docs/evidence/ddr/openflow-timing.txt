@@ -1,0 +1,171 @@
+SurfCPU ddr track evidence: LiteDRAM's clock against nextpnr's timing, what was tried
+Recorded 2026-10-16 (round 2) from the open flow (surfcpu-openxc7:2026-10-15: Yosys 0.69, nextpnr-
+himbaechel 1.0.0) on surfcpu_arty_a7_ddr_bramdiag. The gated builds' own records are in
+docs/evidence/board/openxc7-ddr.txt; the runs below are experiments, made with a scratch script
+that is not kept (the same sources, defines and pin constraints as the design, a LiteDRAM core
+generated from ip/litedram/arty.yml with one setting changed, tools/openxc7-build.sh --no-check),
+recorded here for the reasoning.
+Each line is nextpnr's "Max frequency" after routing for dram_clk, LiteDRAM's core clock (the
+controller, the calibration CPU and its bus, the adapter and the bridge's controller side; its
+constraint is the PLL's 100 MHz output, or 80 MHz where the core was asked for 80).
+
+The DDR3L sets the floor: the MT41K128M16's DLL needs a clock period of at most 3.3 ns (at least
+303 MHz); LiteDRAM's A7 PHY runs the memory at 4 x its core clock, so the core clock cannot go
+below about 76 MHz.
+
+calibration CPU   board   seed  change                                      dram_clk
+standard          100T    1     none (the first build)                      80.50 MHz  FAIL at 100
+minimal           100T    1     none                                        80.55 MHz  FAIL at 100
+minimal           100T    2     none                                        80.26 MHz  FAIL at 100
+minimal           35T     1     none                                        77.60 MHz  FAIL at 100
+minimal           100T    1     cmd_buffer_depth 4, cmd_buffer_buffered     82.71 MHz  FAIL at 100
+minimal           100T    1     with_auto_precharge False                   80.87 MHz  FAIL at 100
+minimal           100T    1     sys_clk_freq 80e6 (DDR3 at 640 MT/s)        75.43 MHz  FAIL at 80
+lite              35T     1     none                                        (does not route: router2 at 300-500
+                                                                            overused wires past 300 iterations)
+lite              35T     2     none                                        71.70 MHz  FAIL at 100
+The gated builds (make build-fpga FLOW=openxc7), minimal CPU, seed 1, source c597a65b: 78.86 and
+75.59 MHz for ddr_bramdiag on the 100T and 35T, 75.00 and 81.21 MHz for ddr. Lite CPU, seed 2,
+source 383dba74: 72.98 and 81.03 MHz for ddr_bramdiag, 77.03 and 78.41 MHz for ddr (that run's
+records were not kept; its build directories were reused). Lite CPU, seed 2, source a338e7a3
+(docs/evidence/board/openxc7-ddr.txt): ddr_bramdiag on the 100T not routed (router2 at 750 to
+980 overused wires through 100 iterations, stopped; the placer estimated 84.07 MHz), 77.31 MHz
+on the 35T; 63.47 and 73.82 MHz for ddr. The same design but for its 32-bit build ID: the
+figure, and whether the design routes at all, move with the placement. With the minimal CPU the
+synthesis check passes; with standard and lite it reports the CPU's cache tag read registers as
+lost (docs/DDR.md 10.3).
+
+Where the time goes (nextpnr's critical path report for dram_clk; LUT levels counted from the
+report's O5/O6 sources; the first and the last named net on the path):
+  minimal, 100T, seed 2: 12.46 ns = 3.17 ns logic, 9.29 ns routing; 16 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[0] to u_dram.litedramcore_sdram_zqcs_timer_count0[0]$legal1585
+  minimal, 100T, 80 MHz: 13.26 ns = 2.89 ns logic, 10.36 ns routing; 14 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[0] to u_dram.litedramcore_sdram_bankmachine2_do_read
+  minimal, 100T, no auto-precharge: 12.36 ns = 2.53 ns logic, 9.84 ns routing; 13 LUT levels; from u_dram.VexRiscv._zz_dBus_cmd_payload_data[0] to u_dram.VexRiscv.when_Fetcher_l160
+  minimal, 100T, command buffers 4 buffered: 12.09 ns = 2.78 ns logic, 9.31 ns routing; 17 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[23] to u_dram.litedramcore_sdram_zqcs_timer_count0[23]
+  minimal, 35T: 12.89 ns = 3.22 ns logic, 9.67 ns routing; 17 LUT levels; from u_dram.grant to u_dram.VexRiscv.IBusSimplePlugin_pending_next[2]
+  lite, 35T, seed 2: 13.94 ns = 2.47 ns logic, 11.47 ns routing; from u_dram.litedramcore_ibus_adr[27]
+    through u_dram.interface0_adr[27] (LiteX's bus decoder) to u_dram.VexRiscv.when_Fetcher_l160
+    (the gated lite builds: the same family, openxc7-ddr.txt)
+
+Reading: the late paths are either inside LiteDRAM's controller (the ZQ-calibration timer
+through the refresher and the command multiplexer to a bank machine's counters) or between the
+calibration CPU and LiteX's bus inside the core; in both, routing is three quarters of the delay
+(long hops of 1 to 1.7 ns between distant placements) and the logic is 13 to 17 LUTs deep as
+Yosys maps it. No generator option touches either structure enough, and the clock cannot go
+below about 76 MHz (the DDR3L's DLL). The flow's rule is that a missed estimate fails the build,
+so the open flow gives the DDR designs no bitstream; nextpnr's delays are an estimate (OPEN-FLOW.md
+6.4) and Vivado routinely closes LiteDRAM at 100 MHz on the Arty, which only a Vivado run (or
+the board) can confirm.
+
+==================================================================================================
+Round ddr-3 (2026-10-16): the calibration CPU taken out of the controller's clock domain
+--------------------------------------------------------------------------------------------------
+LiteDRAM generated with cpu None (SurfCPU initializes it through surf_ddr_csr, docs/DDR.md
+section 10), then LiteDRAM's own settings and nextpnr's options, then the clock. Experiments on
+surfcpu_arty_a7_ddr_bramdiag through tools/openxc7-build.sh --no-check with a scratch script
+(not kept): a core generated from ip/litedram/arty.yml with cpu None and the change named;
+"scratch" is the board top of commit 08081cb with its control port tied off, "real" the top of
+this round with surf_ddr_csr. BUILD_ID 0 throughout; each seed is one placement. dram_clk is
+nextpnr's "Max frequency" after routing for LiteDRAM's core clock. The critical path is
+nextpnr's report for dram_clk: its delay, logic and routing, LUT levels (the O5/O6 sources on it)
+and the first net named on it (u_dram.main_litedramcore_ left out).
+
+  core   board seed top     nextpnr option           dram_clk after routing     critical path
+  e1     100t  1    scratch -                        74.26 MHz FAIL at 100      13.47 ns = 3.12 logic + 10.35 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  1    scratch --tmg-ripup              76.31 MHz FAIL at 100      13.10 ns = 3.12 logic + 9.98 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  2    scratch -                        87.43 MHz FAIL at 100      11.43 ns = 3.24 logic + 8.19 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  2    scratch congestion placement     86.57 MHz FAIL at 100      11.55 ns = 2.95 logic + 8.60 routing, 18 LUT levels, from zqcs_timer_count0[23]
+  e1     100t  2    scratch --tmg-ripup              90.24 MHz FAIL at 100      11.08 ns = 3.24 logic + 7.84 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  2    scratch timing weight 100        75.63 MHz FAIL at 100      13.22 ns = 3.12 logic + 10.10 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  3    scratch -                        77.42 MHz FAIL at 100      12.92 ns = 3.10 logic + 9.82 routing, 15 LUT levels, from zqcs_timer_count0[0]
+  e1     100t  4    scratch -                        78.80 MHz FAIL at 100      12.69 ns = 3.12 logic + 9.57 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  e2     100t  2    scratch -                        79.81 MHz FAIL at 100      12.53 ns = 3.12 logic + 9.41 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  e3     100t  2    scratch -                        81.69 MHz FAIL at 100      12.24 ns = 3.22 logic + 9.02 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  d8     100t  1    scratch -                        82.15 MHz FAIL at 100      12.17 ns = 2.90 logic + 9.27 routing, 18 LUT levels, from zqcs_timer_count0[23]
+  d8     100t  1    scratch --placer sa              not placed (see note)      
+  d8     100t  1    scratch --tmg-ripup, congestion  83.72 MHz FAIL at 100      11.95 ns = 3.30 logic + 8.65 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  d8     100t  2    scratch -                        84.02 MHz FAIL at 100      11.90 ns = 3.14 logic + 8.76 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  d8     100t  2    scratch --placer sa              not placed (see note)      
+  d8     100t  2    scratch --tmg-ripup, congestion  76.59 MHz FAIL at 100      13.05 ns = 3.12 logic + 9.93 routing, 19 LUT levels, from zqcs_timer_count0[21]
+  d8     100t  3    scratch --tmg-ripup              78.96 MHz FAIL at 100      12.67 ns = 3.37 logic + 9.30 routing, 18 LUT levels, from zqcs_timer_count0[0]
+  d8     100t  4    scratch --tmg-ripup              80.37 MHz FAIL at 100      12.44 ns = 3.42 logic + 9.02 routing, 18 LUT levels, from zqcs_timer_count0[0]
+  d4     100t  1    scratch -                        83.69 MHz FAIL at 100      11.94 ns = 2.62 logic + 9.32 routing, 16 LUT levels, from zqcs_timer_count0[23]
+  d4     100t  2    scratch -                        81.37 MHz FAIL at 100      12.29 ns = 3.27 logic + 9.02 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  cl1    100t  1    scratch -                        74.26 MHz FAIL at 100      13.47 ns = 3.12 logic + 10.35 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  cl1    100t  2    scratch -                        87.43 MHz FAIL at 100      11.43 ns = 3.24 logic + 8.19 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  cl1d8  100t  1    scratch -                        82.15 MHz FAIL at 100      12.17 ns = 2.90 logic + 9.27 routing, 18 LUT levels, from zqcs_timer_count0[23]
+  cl1d8  100t  2    scratch -                        84.02 MHz FAIL at 100      11.90 ns = 3.14 logic + 8.76 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  ap0    100t  1    scratch -                        87.45 MHz FAIL at 100      11.44 ns = 3.21 logic + 8.23 routing, 16 LUT levels, from zqcs_timer_count0[1]
+  ap0    100t  2    scratch -                        85.28 MHz FAIL at 100      11.72 ns = 2.62 logic + 9.10 routing, 16 LUT levels, from zqcs_timer_count0[21]
+  f875   100t  1    scratch -                        86.55 MHz FAIL at 87.5     11.55 ns = 3.19 logic + 8.36 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  f875   100t  2    scratch -                        84.62 MHz FAIL at 87.5     11.82 ns = 3.22 logic + 8.60 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  f80    100t  1    scratch -                        94.00 MHz PASS at 80       10.64 ns = 2.38 logic + 8.26 routing, 14 LUT levels, from bankmachine4_pipe_valid_source_payload_addr[8]
+  f80    100t  2    scratch -                        89.90 MHz PASS at 80       11.12 ns = 2.92 logic + 8.20 routing, 18 LUT levels, from zqcs_timer_count0[21]
+  f80    100t  3    real    -                        82.59 MHz PASS at 80       12.11 ns = 3.17 logic + 8.94 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  f80    100t  4    real    -                        81.91 MHz PASS at 80       12.21 ns = 2.90 logic + 9.31 routing, 18 LUT levels, from zqcs_timer_count0[23]
+  f80    100t  5    real    -                        82.92 MHz PASS at 80       12.06 ns = 3.00 logic + 9.06 routing, 19 LUT levels, from zqcs_timer_count0[23]
+  f80    100t  6    real    -                        75.54 MHz FAIL at 80       13.24 ns = 3.02 logic + 10.22 routing, 15 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   1    real    -                        74.35 MHz FAIL at 80       13.44 ns = 3.44 logic + 10.00 routing, 18 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   2    real    -                        87.60 MHz PASS at 80       11.41 ns = 3.24 logic + 8.17 routing, 17 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   3    real    -                        82.67 MHz PASS at 80       12.10 ns = 3.10 logic + 9.00 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   4    real    -                        76.13 MHz FAIL at 80       13.14 ns = 3.17 logic + 9.97 routing, 16 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   5    real    -                        82.18 MHz PASS at 80       12.16 ns = 2.94 logic + 9.22 routing, 15 LUT levels, from zqcs_timer_count0[0]
+  f80    35t   6    real    -                        87.48 MHz PASS at 80       11.43 ns = 3.37 logic + 8.06 routing, 18 LUT levels, from zqcs_timer_count0[0]
+  
+    e1     cpu None, as generated (100 MHz)
+    e2     cmd_buffer_depth 4, cmd_buffer_buffered True
+    e3     refresh_zqcs_freq 128
+    d8     cmd_buffer_depth 8
+    d4     cmd_buffer_depth 4
+    cl1    cmd_latency 1 (the same netlist as e1: the A7 PHY does not use it)
+    cl1d8  cmd_latency 1, cmd_buffer_depth 8 (the same netlist as d8)
+    ap0    with_auto_precharge False
+    f875   sys_clk_freq 87.5e6 (PLL VCO 1400 MHz: 200, 87.5, 350 MHz)
+    f80    sys_clk_freq 80e6 (PLL VCO 1600 MHz: 200, 80, 320 MHz), the configuration chosen
+
+  Option names: --tmg-ripup (timing-driven rip-up in the router), --placer-heap-congestion-spread
+  ("congestion"), --placer-heap-timingweight 100 (the flow's is 60), --placer sa (the simulated
+  annealing placer: it fails on this design with "post-placement validity check failed for Bel
+  'X17Y2/SLICE_X0Y0.A5FF' (no cell)" after 386 s, on both seeds).
+
+What the numbers say:
+  * Without the CPU the worst path is LiteDRAM's controller alone, every time: from the ZQ
+    calibration timer (zqcs_timer_count0, a 27-bit down-counter compared with 0) through the
+    refresher's state machine, the refresh request of the eight bank machines and the command
+    multiplexer's arbitration into a bank machine's state (a synchronous reset or clock enable),
+    15 to 19 LUT levels, 2.4 to 3.4 ns of logic and 7.8 to 10.4 ns of routing. At 100 MHz it
+    needs 10 ns; 20 distinct placements reached 74.3 to 90.2 MHz.
+  * LiteDRAM's settings move the structure little: command buffers of 8 or 4 entries, buffered,
+    ZQ calibration at 128 Hz instead of 1 Hz, no auto-precharge: 79.8 to 87.5 MHz, inside the
+    seeds' spread. cmd_latency is not used by the A7 PHY (the same netlist). The generated
+    Verilog was not edited.
+  * nextpnr's options alongside: rip-up gains 1 to 3 MHz on some placements and loses on others
+    (76.3, 90.2, 79.0, 80.4), congestion-driven placement 86.6 (and 83.7 / 76.6 with rip-up), a
+    higher timing weight loses (75.6), the annealing placer fails. None reaches 100 MHz; none is
+    used.
+  * 87.5 MHz (PLL VCO 1400: 200, 87.5 and 350 MHz) misses on both seeds (86.6, 84.6).
+  * 80 MHz (VCO 1600: 200, 80, 320 at 0 and 90 degrees) closes on 9 of 12 placements (the 100T 5 of
+    6, the 35T 4 of 6), the slowest 74.3 MHz. The DDR3L at 320 MHz (640 MT/s) is above its DLL's
+    floor (tCK at most 3.3 ns: 303 MHz, a controller clock of 76 MHz); the generator's timings
+    follow the clock and its mode registers stay as at 100 MHz (CL 6, CWL 5).
+
+Chosen: cpu None, sys_clk_freq 80e6 (ip/litedram/arty.yml), and in the DDR design lists placer
+seeds 1 to 8 tried in turn (tools/openxc7-build.sh --seed 1,2,...,8; the same gate for each, every
+attempt in the manifest). The gated builds of this round are in docs/evidence/board/openxc7-ddr.txt.
+
+The gated builds of round ddr-3 (make build-fpga FLOW=openxc7, the design lists' seeds 1 to 8 tried in
+turn with the same gate; dram_clk after routing, need 80 MHz; every other clock passed in every attempt):
+  source     design         board  attempts
+  0964f875   ddr_bramdiag   100T   seed 1 90.62 PASS
+  0964f875   ddr_bramdiag   35T    seed 1 82.81 PASS
+  595ab382   ddr_bramdiag   100T   seed 1 77.00 FAIL, seed 2 85.45 PASS
+  595ab382   ddr_bramdiag   35T    seed 1 84.66 PASS
+  595ab382   ddr            100T   seed 1 87.06 PASS
+  595ab382   ddr            35T    seed 1 76.05 FAIL, seed 2 76.55 FAIL, seed 3 84.73 PASS
+  92a2b510   ddr_bramdiag   100T   seed 1 81.72 PASS
+  92a2b510   ddr_bramdiag   35T    seed 1 84.94 PASS
+  92a2b510   ddr            100T   seed 1 88.04 PASS
+  92a2b510   ddr            35T    seed 1 93.35 PASS
+(595ab382's two SurfBoot builds were stopped in their checks once the generator fix of d6f3ef8 made a
+new set necessary; their placements are as listed. The generated core of 92a2b510 differs from the
+earlier ones only in LiteX's instance tree comment, but Yosys maps it slightly differently (2,665
+LUTs instead of 2,668 for the core alone), so its placements are new ones.)

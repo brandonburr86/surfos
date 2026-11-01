@@ -1,0 +1,3 @@
+# Digilent's reference manuals and schematics: (c) Digilent with no licence stated, so they stay
+# out of git. fetch.sh fetch fills this local cache with copies that match SHA256SUMS.
+/manuals/

@@ -20,7 +20,10 @@
    thread's message whole, after another writer's line. 10/25/26 (A8): the escape sequences of
    tests/host/vt_cases.h (shared with the desktop's terminal), and the alternate screen on the
    screen and on a pseudo-terminal, the scrollback left alone, a task that ends without leaving it. 10/26/26: a writer waiting for room in a pty's
-   full buffer has changed nothing on its console, so the shell's question never lands in its line. */
+   full buffer has changed nothing on its console, so the shell's question never lands in its line.
+   10/16/26 (audit C10): the console lock: a task stopped inside its line (a preemption) keeps another task's
+   line out of it, an interrupt handler's line is drawn after it, and a paged task's line
+   gives the lock back while it waits at the question. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -92,6 +95,7 @@ void sim_heap_refuse(int on);
 void sim_free_frames(unsigned long n);      /* 10/25/26 (the review) */
 void sim_serial_preempt(int after);
 void sim_switch(int n);
+extern void (*sim_serial_hook)(int c);
 
 static int failures, checks;
 
@@ -219,6 +223,27 @@ static void say(int id, const char *s) { say_text = s; run(id, w_say, 0, 0); }
 
 static int got_key;
 static void w_getc(int unused, int unused2) { (void)unused; (void)unused2; got_key = sim_getc(); }
+
+static const char *kp_text;
+static void w_kp_text(int unused, int unused2) { (void)unused; (void)unused2; sim_kprintf_line(kp_text); }
+static int kprintf_as(int id, const char *s) { kp_text = s; return run(id, w_kp_text, 0, 0); }
+
+/* 10/16/26: at the hook_n-th byte the serial mirror gets, the task stops there (a preemption in
+   the middle of its line), or with hook_irq an interrupt handler prints a line */
+static int hook_n, hook_irq, hook_busy;
+static void hook(int c) {
+    (void)c;
+    if(hook_busy || !hook_n || --hook_n) return;
+    hook_busy = 1;
+    if(hook_irq) {
+        sim_set_in_irq(1);
+        sim_kprintf_line("irq line\n");
+        sim_set_in_irq(0);
+    } else {
+        emu_block(sim_task());
+    }
+    hook_busy = 0;
+}
 
 /**** looking at the screen ****/
 
@@ -577,6 +602,80 @@ static void t_question_gives_way(void) {
     check(!strcmp(r, "[pid 3 killed]"), "the next line goes where the question was");
     st = resume(GRAND);
     check(st == DONE && screen_has("line 102"), "and the waiting task prints");
+}
+
+/**** the console lock (10/16/26, audit C10) ****/
+
+/* a task preempted inside its line holds the lock: another task's line waits, and both come out
+   whole, in order, on the screen and on the serial line */
+static void t_lock_preempted(void) {
+    char r0[256], r1[256], ser[4096];
+    int a, b, i;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    sim_serial_hook = hook;
+    hook_irq = 0;
+    hook_n = 6;                                 /* CHILD stops after "first" */
+    a = kprintf_as(CHILD, "first line, from the command\n");
+    b = kprintf_as(USB, "second line, from the usb thread\n");
+    for(i = 0; i < 210 && b == BLOCKED && !sim_on_list(USB); i++) b = resume(USB);   /* (10/25/26: a kernel thread's message
+                                                   waits 100 ms for the other's line to end and 1 s for it to hold
+                                                   the console, then for the lock) */
+    check(a == BLOCKED && b == BLOCKED && sim_on_list(USB), "a task stopped inside its line keeps the other task's line waiting");
+    a = resume(CHILD);
+    check(a == DONE && !sim_on_list(USB), "its line ends, and the waiting task is woken");
+    b = resume(USB);
+    sim_serial_hook = NULL;
+    row(0, r0);
+    row(1, r1);
+    sim_serial(ser, sizeof(ser));
+    check(b == DONE && !strcmp(r0, "first line, from the command") && !strcmp(r1, "second line, from the usb thread"),
+          "both lines whole on the screen, in that order");
+    check(strstr(ser, "first line, from the command\r\nsecond line, from the usb thread\r\n") != NULL,
+          "and on the serial line");
+}
+
+/* an interrupt handler's line while a task draws: on the serial line at once, on the screen when
+   the task lets go (after its line, not inside it) */
+static void t_lock_interrupt(void) {
+    char r0[256], r1[256], ser[4096];
+    int a;
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    sim_serial_hook = hook;
+    hook_irq = 1;
+    hook_n = 6;
+    a = kprintf_as(CHILD, "first line, from the command\n");
+    sim_serial_hook = NULL;
+    hook_irq = 0;
+    row(0, r0);
+    row(1, r1);
+    sim_serial(ser, sizeof(ser));
+    check(a == DONE && !strcmp(r0, "first line, from the command") && !strcmp(r1, "irq line"),
+          "an interrupt handler's line while a task draws its own: on the screen after it, not inside it");
+    check(strstr(ser, "firstirq line\r\n line, from the command\r\n") != NULL, "on the serial line at once");
+}
+
+/* a paged task's kprintf() line that meets the question gives the lock back while it waits:
+   another task prints meanwhile, and a paged task that waits for the answer does not hold it either */
+static void t_lock_question(void) {
+    int st, u, g, i;
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    run(CHILD, w_lines, 1, 24);
+    st = kprintf_as(CHILD, "line 025 in a kprintf call\n");
+    check(st == BLOCKED && asker() == CHILD, "a paged kprintf() line meets the question");
+    u = kprintf_as(USB, "+USB: a line meanwhile\n");
+    for(i = 0; i < 10 && u == BLOCKED; i++) u = resume(USB);   /* (10/25/26: 100 ms for the question's row, as for a prompt) */
+    check(u == DONE && screen_has("+USB: a line meanwhile"), "the lock was given back: another task prints while it waits");
+    g = kprintf_as(GRAND, "line 101 from the grandchild\n");
+    check(g == BLOCKED && asker() == CHILD, "a paged grandchild's kprintf() line waits for the answer");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 025 in a kprintf call") && !sim_on_list(GRAND),
+          "Space: the line goes on with the lock taken back, and the grandchild is woken");
+    g = resume(GRAND);
+    check(g == DONE && screen_has("line 101 from the grandchild"), "then the grandchild prints: nobody waited holding the lock");
 }
 
 /* after q: what a program prints before it reads, its question, still shows; so does its
@@ -1716,6 +1815,9 @@ int main(void) {
     t_paste_skip();
     t_paste_crlf();
     t_secret();
+    t_lock_preempted();
+    t_lock_interrupt();
+    t_lock_question();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);

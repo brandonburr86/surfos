@@ -1,0 +1,2 @@
+test_arty: 204 of 204 checks passed, 5 tests x 3 seeds (1 7 123)
+../build/riscv32/arty_a7/SURFOS.BIN: valid

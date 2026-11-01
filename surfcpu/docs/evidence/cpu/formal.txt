@@ -1,0 +1,5 @@
+# surfcpu_core: bounded model check (SymbiYosys, the review's harness) and its covers
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: make --no-print-directory formal-cpu
+
+formal-cpu: bmc depth 14 PASS (61 s); cover PASS: 4 of 4 cover statements reached (21 s)

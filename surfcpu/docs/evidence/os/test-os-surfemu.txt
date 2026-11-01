@@ -1,0 +1,20 @@
+# test-os-surfemu arty_a7 SURFOS.BIN: 18 of 18 checks passed in 2 s (the fw track's firmware emulator: not the RTL, not the board)
+# 2026-10-16 10:33:58 UTC
+ok   card: mkcard.py makes the card (standard directories, /BOOT/SURFOS.BIN, /BOOT/CMDLINE.TXT, /USERS/DOCUMENTS/HELLO.TXT)
+ok   the emulator saw every expected line, in order (all expected output seen after 94.097 s simulated (2352431714 cycles, 186760925 instructions, 11043 traps); pc 80001470; LEDs 1 RGB 000)
+ok   SurfBoot loads /BOOT/SURFOS.BIN from the card and checks it
+ok   SurfBoot hands over: entry 0x80000000, a0 = 0, a1 = 0x0001f000, a2 = the magic
+ok   the kernel boots to the shell, its console on surf_uart (ascii, from /BOOT/CMDLINE.TXT)
+ok   bootinfo: SurfBoot's block taken (its CRC checked), the handoff registers, the command line
+ok   the card through surf_spi: sd0, its FAT32 partition mounted on /sd0p1 (read-only)
+ok   /sd0p1/USERS/DOCUMENTS found by its long name (alias DOCUME~1), HELLO.TXT read
+ok   the package read back from the card through the SD driver has the file's CRC
+ok   tasks: two kernel tasks count, sleep and wake on the machine timer
+ok   drivers: serial, gpio, ps2kbd and sdcard started; surf_intc and the timer listed
+ok   selftest: SELFTEST PASS on the emulated SoC
+ok   scrolltest: two tasks printing at once while the console scrolls leave every row whole, each task's lines in order
+ok   scrolltest: the serial line got its 120 lines, each whole (120)
+ok   the kernel heap ends 16 MiB below the 256 MiB SurfBoot reports (0x8F000000, as before)
+ok   uptime: the tick counts at 100 Hz
+ok   no panic, no killed task, no boot problem
+ok   the text screen (surf_video's text RAM): scrolltest's rows whole and in order (25 rows), its result and the prompt; hardware scroll in use

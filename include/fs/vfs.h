@@ -200,6 +200,9 @@ struct file {
     u_long pid;                 /* 10/5/26: who opened it (0: before tasks), for umount's "busy" */
     char owner[16];
     struct file *onext, *oprev; /* every open file */
+    struct surf_task *holder;   /* 10/18/26 (audit B73): the task whose call holds it (a file of a mounted volume,
+                                   opened and neither installed in a descriptor table nor closed yet), counted in its
+                                   fs_refs meanwhile: a kill waits for its close (fs/vfs.c); NULL once a table's */
 };
 
 /* vnodes */
@@ -212,19 +215,38 @@ void init_fs(void);                                  /* register the file system
 int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
+/* 10/18/26 (audit B68): the same, *why saying what an -EBUSY is: VFS_BUSY_PATH (a mount at path already), or what keeps
+   the device busy (VFS_BUSY_*); the device is probed (fstype NULL) once it counts as being mounted */
+int vfs_mount_why(struct bdev *dev, const char *path, const char *fstype, int flags, const char **why);
+#define VFS_BUSY_PATH       "a mount there already"
 int vfs_umount(const char *path);
-/* 10/24/26 (B10): vfs_umount(), and in *lost how many changed blocks it gave up because they could not be written
-   (vfs_umount() says that on the console) */
-int vfs_umount_lost(const char *path, u_int *lost);
-/* 10/24/26 (B58): a disk and its partitions taken for an eject from its first step to its last (no mount, mkfs or
-   fdisk of them comes in): a slot for vfs_release_disk(), or -EBUSY while one is being mounted or unmounted */
-int vfs_claim_disk(struct bdev *disk);
-void vfs_release_disk(int slot);
+int vfs_umount_lost(const char *path, u_int *lost);  /* 10/16/26 (B10): and how many changed blocks it gave up */
 /* 10/17/26: the mount of dev held (its root vnode: umount says it is busy) until vfs_release_mount(root): 0, its path
    and whether it is read-only; -ENOENT when dev is not mounted */
 int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly);
 void vfs_release_mount(struct vnode *root);
-bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
+bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted, or being
+                                                        unmounted (10/18/26, audit B51), or being mounted, or in the
+                                                        middle of a request (10/18/26, B56, B58), or held by another
+                                                        task's mkfs or fdisk (10/18/26, B61) */
+const char *vfs_bdev_busy_why(struct bdev *d);       /* 10/18/26 (B56, B58): which of these, or NULL: */
+#define VFS_BUSY_MOUNTED    "mounted"
+#define VFS_BUSY_UNMOUNTING "being unmounted"
+#define VFS_BUSY_MOUNTING   "being mounted"
+#define VFS_BUSY_CHANGING   "being changed by mkfs or fdisk"
+#define VFS_BUSY_REQUEST    "in the middle of a request"
+/* 10/18/26 (audit B61): mkfs and fdisk hold their device from here to vfs_bdev_change_end(), counted inside meanwhile
+   (a kill waits): 0, or -EBUSY when it is busy (*why: which reason). Another task's requests to it, its disk or its
+   partitions are refused meanwhile (BDEV_EBUSY), mounts and ejects of them too; the same task may take it again */
+int vfs_bdev_change_begin(struct bdev *d, const char **why);
+void vfs_bdev_change_end(struct bdev *d);
+bool vfs_bdev_unmounting(struct bdev *d);            /* 10/18/26 (B51): d, its disk or one of its partitions is being
+                                                        unmounted (an umount's steps, eject's unmount: still writing) */
+int vfs_unmount_begin(struct bdev *d, const char **why);   /* 10/18/26 (B51): d is being unmounted from now on (B58:
+                                                        eject's whole disk, all of its run; -EBUSY when something of it is
+                                                        being mounted or unmounted already, B61: or changed by mkfs or
+                                                        fdisk; *why: which) ... */
+void vfs_unmount_end(struct bdev *d);                /*      ...until this */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
 bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
@@ -244,15 +266,20 @@ bool vfs_dev_mounted(const struct bdev *d);       /* 10/6/26: d itself is mounte
 
 /* paths */
 int vfs_normalize(const char *cwd, const char *path, char *out, size_t size);
-int vfs_lookup(const char *path, struct vnode **out);             /* relative to the current task's cwd */
+int vfs_lookup(const char *path, struct vnode **out);             /* relative to the current task's cwd; 10/18/26
+                                                                    (B73): let go of *out with vfs_put() */
+void vfs_put(struct vnode *v);                                   /* 10/18/26 (audit B73): a vnode vfs_lookup() gave */
 int vfs_stat(const char *path, struct stat *st);
 int vfs_chdir(const char *path);
 const char *vfs_getcwd(void);
 
 /* files */
+/* 10/18/26 (audit B73): a file of a mounted volume is held by the opening task's call (struct file's holder, counted
+   in its fs_refs: a kill waits) until fd_install() makes it the task's descriptor table's or vfs_close() closes it */
 int vfs_open(const char *path, int flags, struct file **out);
 int vfs_open_vnode(struct vnode *v, int flags, struct file **out);   /* 10/6/26: a vnode without a path (a socket) */
-int vfs_close(struct file *f);
+int vfs_close(struct file *f);                       /* a written file's volume written out: 0, -EIO (refused, or
+                                                        the device gone), 10/18/26 (B65): -EINTR (cut short) */
 int vfs_read(struct file *f, void *buf, u32 len);
 int vfs_write(struct file *f, const void *buf, u32 len);
 int vfs_lseek(struct file *f, i32 off, int whence);               /* new position, or < 0 */
@@ -263,7 +290,8 @@ int vfs_rmdir(const char *path);                                 /* an empty dir
 int vfs_rename(const char *from, const char *to);                /* one file system only (-EXDEV) */
 int vfs_statfs(const char *path, struct statfs *st);             /* the mount that holds path */
 int vfs_ftruncate(struct file *f, u32 size);
-int vfs_fsync(struct file *f);                                   /* its file system's dirty blocks to the device */
+int vfs_fsync(struct file *f);                                   /* its file system's dirty blocks to the device
+                                                                    (10/18/26, B65: errors as vfs_close()'s) */
 
 /* descriptors of the current task (the system call layer) */
 int fd_install(struct file *f);                                  /* fd, or -EMFILE */

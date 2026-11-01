@@ -27,11 +27,15 @@ from (its serial number is on the kernel command line, bootvol=); that volume
 alone may be mounted read-write (protect = bdev_boot_volume), because a stick
 made bootable by copying files onto it holds the owner's files too.
 
-10/24/26 (storage, milestone 1; SurfCPU's audit B9): a device carries the block
-cache's account of it (the bc_ fields, kept by fs/bcache.c alone): its dirty
-cached blocks by write order, those set aside, those whose last write failed,
-and whether the console was told it refuses writes. It goes with the device: a
-disk put in again is a new struct bdev with a fresh account.
+10/16/26 (audit B9): a device carries the block cache's account of it (the
+bc_ fields, kept by fs/bcache.c alone): its dirty cached blocks by write order,
+how many of them failed their last write, whether the console was told it
+refuses writes; since B12-B16 also the lists of its dirty blocks in the order of
+their first unwritten change, how many are set aside (10/16/26, B26: and by
+whose operation; a sync's count of the requests it refused and took, B13, is
+kept by each sync call now). It goes with the device: a disk put in again is a
+new struct bdev with a fresh account, and one that is gone has had its blocks
+dropped.
 */
 
 #ifndef _SYS_BDEV_H
@@ -43,6 +47,7 @@ disk put in again is a new struct bdev with a fresh account.
 #define BDEV_BLOCK_SIZE 512
 
 struct bdev;
+struct buf;                     /* fs/bcache.h */
 
 /* the bus a disk is on (a partition has its disk's); 0, what a driver that says
    nothing gets, is never formatted */
@@ -56,6 +61,8 @@ struct bdev;
 #define BDEV_EROFS  -2          /* read-only */
 #define BDEV_EIO    -3          /* the driver failed */
 #define BDEV_EGONE  -4          /* unplugged */
+#define BDEV_EBUSY  -6          /* 10/18/26 (audit B61): another task's mkfs or fdisk holds the device (-5 is the cache's
+                                   BCACHE_EINTR) */
 
 struct bdev_ops {
     int (*read)(struct bdev *d, u32 lba, u32 count, void *buf);         /* 0 ok, < 0 error */
@@ -86,14 +93,32 @@ struct bdev {
     const struct bdev_ops *ops; /* NULL for a partition (the parent's are used) */
     void *priv;                 /* driver data; not touched once gone */
     u_long reads, writes;       /* blocks moved, for lsblk */
-    /* 10/24/26 (B9): fs/bcache.c's account of this device (the header comment) */
-    u_int bc_dirty[4];          /* its dirty cached blocks by write order (BORDER_* in fs/bcache.h), set-aside ones not counted */
-    u_int bc_aside;             /* its dirty blocks set aside (baside()) */
-    u_int bc_failed;            /* its dirty blocks whose last write failed */
-    const void *bc_aside_by;    /* the task whose operation set them aside (its own syncs do not owe them) */
-    bool bc_said;               /* the console was told it refuses writes (until a write works again) */
+    /* 10/16/26 (audit B9): fs/bcache.c's account of this device (header comment) */
+    u_int bc_dirty[4];          /* its dirty cached blocks, by write order (BORDER_* in fs/bcache.h) */
+    u_int bc_failed;            /* of them, those whose last write failed */
+    bool bc_said;               /* the console was told it refuses writes (until one works again) */
+    struct buf *bc_head[4];     /* B12: its dirty blocks of each order, oldest first unwritten change first */
+    struct buf *bc_tail[4];
+    u_int bc_aside;             /* B16: of its dirty blocks, those a file system set aside */
+    const void *bc_aside_by;    /* B26: the task whose operation set them aside (B13's tally moved into each sync) */
+    u_int unmounting;           /* 10/18/26 (audit B51): umounts of it (and ejects of its disk) under way: it, its disk
+                                   and its partitions are busy until they end (vfs_bdev_busy(), fs/vfs.c). (B58) An eject
+                                   counts its disk from its first step to its last */
+    u_int mounting;             /* 10/18/26 (audit B58): mounts of it under way (vfs_mount_flags(): busy the same way) */
+    u_int requests;             /* 10/18/26 (audit B56): requests issued on it that have not ended (bdev_read(),
+                                   bdev_write(), bdev_flush()): it, its disk and its partitions are busy meanwhile */
+    u_int changing;             /* 10/18/26 (audit B61): an mkfs or fdisk holds it (vfs_bdev_change_begin(), fs/vfs.c),
+                                   this many times (mkfs, then the fdisk that sets its partition's type) ... */
+    const void *changing_by;    /*      ... the task whose they are: another task's requests to it, its disk or its
+                                   partitions are refused meanwhile (BDEV_EBUSY), and it is busy for mount and eject */
     struct bdev *next;
 };
+
+extern u_int bdev_changes;                  /* 10/18/26 (audit B61): devices an mkfs or fdisk holds now */
+/* (interrupts off) 10/18/26 (audit B61): is d, its disk or one of its partitions held by another task's mkfs or fdisk */
+bool bdev_changed_by_other(const struct bdev *d);
+/* 10/18/26 (audit B61): a reason vfs_bdev_busy_why() gives, in the words fdisk and mkfs say it */
+const char *bdev_busy_words(const char *busy);
 
 /* registry */
 int bdev_register(struct bdev *d);          /* 0, or -1 when the name is taken */
@@ -137,11 +162,14 @@ const char *bdev_part_type_name(u8 type);
    <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read.
    A disk with a FAT volume labelled SURFOSUSB gets protect = bdev_boot_drive, and so do its
    partitions. bdev_rescan() reads the table again after it was rewritten: the old partitions are
-   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted.
-   10/17/26: so does a disk with the FAT volume whose serial number GRUB passed (bootvol=), but that
-   volume gets protect = bdev_boot_volume */
+   unregistered, the new ones registered; -EBUSY while the disk or a partition is busy (vfs_bdev_busy(): mounted, a
+   request under way, held by another task's mkfs or fdisk). 10/17/26: so does a disk with the FAT volume whose serial
+   number GRUB passed (bootvol=), but that volume gets protect = bdev_boot_volume. 10/18/26 (audit B61): fdisk's commit
+   and mkfs of a whole disk call it holding the disk (vfs_bdev_change_begin()), so it is never busy for them, and say so
+   when it fails. */
 int bdev_scan_partitions(struct bdev *disk);
 int bdev_rescan(struct bdev *disk);
+const char *bdev_rescan_words(int r);       /* 10/18/26 (audit B61): why bdev_rescan() returned r < 0, in words */
 extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
 extern const char bdev_boot_volume[];       /* 10/17/26: "the volume SurfOS was started from" */
 

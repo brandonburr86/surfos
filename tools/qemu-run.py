@@ -172,6 +172,10 @@ SMOKE = [
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
+    # 10/18/26 (audit B56): a program cannot fault inside a file system, and crashfs does not give it a way (it stops
+    # the system: its own boot below, in the kernel shell)
+    ('crashfs', ['crashfs stops the system: only in the kernel shell (shell=kernel), not from a program']),
+    ('crashlock', ['crashlock stops the system: only in the kernel shell (shell=kernel), not from a program']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     # 10/7/26 (the Wi-Fi report): the ids with the subsystem, command, interrupt; one device in full, with its bytes
@@ -686,6 +690,18 @@ SMOKE = [
                                                           ('echo after-kill', ['after-kill']), ('@sleep 1', []),
                                                           (b'exit\r', [surf_prompt(b'SURF', b'#')])],
      ['reading the terminal']),
+    # 10/18/26 (audit B56): a fault in kernel mode while the task is inside a file system (crashfs: as in a device
+    # request) stops the system, saying why: nothing could give back what the task held there. The boot ends halted
+    # ('halts': its wipeout is what is checked, not the absence of one)
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')],
+     [('crashfs', ['Kernel Wipeout: Page Fault', 'inside a file system, the block cache or a device request',
+                   re.compile(rb'SYSTEM HALTED')])],
+     ['init: restarted the shell'], 'halts'),
+    # 10/18/26 (audit B62): so does one while the task holds a lock (crashlock: a mutex of its own), which would stay
+    # with the dead task for good
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')],
+     [('crashlock', ['Kernel Wipeout: Page Fault', 'holding a lock (1 held)', re.compile(rb'SYSTEM HALTED')])],
+     ['init: restarted the shell'], 'halts'),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
     ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh exited at once (status 42); restarted the shell',
@@ -1679,48 +1695,60 @@ class Qemu:
         # (10/6/26, the telnet server) 23 through forwarded ports, and the guest reaches a small HTTP
         # server on the host (10.0.2.2) whose port travels on the kernel command line. 10/9/26 (the
         # development loop): guest port RX_PORT too, where rx listens in the smoke test
+        # 10/18/26 (round fs-fix-11): a forwarded port is written {port:NAME} (here and in extra) and picked afresh for
+        # each try below: QEMU binds it, and a port free_port() found free may be taken before QEMU starts
         self.ports = {}
         self.http = None
         if net:
-            self.ports['echo'] = free_port()
-            self.ports['telnet'] = free_port()
-            self.ports['http'] = free_port()
-            self.ports['rx'] = free_port()
-            self.ports['telnet_wlan'] = free_port()          # 10/9/26: port 23 of 10.0.2.16, the simulated wlan0's lease
-            self.ports['www'] = free_port()                  # 10/17/26: httpd, the web server, on port 80
-            self.ports['www2'] = free_port()                 # ... and on port 8080
             # 10/24/26: ftpd, the file transfer server, on port 21, and its passive range: FTP_PASV_PORTS ports
             # forwarded to the same ports of the guest (EPSV gives a client the port alone), its first one
-            # ports['ftp_pasv'] ('ftpd on ... {ftp_pasv_range}' in a step)
-            self.ports['ftp'] = free_port()
-            self.ports['ftp_pasv'] = free_port_range(FTP_PASV_PORTS, set(self.ports.values()))
+            # ports['ftp_pasv'] ('ftpd on ... {ftp_pasv_range}' in a step). 10/9/26: telnet_wlan is port 23 of 10.0.2.16,
+            # the simulated wlan0's lease; 10/17/26: www and www2 are httpd, the web server, on ports 80 and 8080
+            self.ports['ftp_pasv'] = free_port_range(FTP_PASV_PORTS)
             self.ports['ftp_pasv_range'] = f"{self.ports['ftp_pasv']}-{self.ports['ftp_pasv'] + FTP_PASV_PORTS - 1}"
             pasv = ''.join(f",hostfwd=tcp:127.0.0.1:{p}-:{p}"
                            for p in range(self.ports['ftp_pasv'], self.ports['ftp_pasv'] + FTP_PASV_PORTS))
-            boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['rx']}-:{RX_PORT},"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['www']}-:80,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['www2']}-:8080,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['ftp']}-:21" + pasv,
+            boot += ['-netdev', "user,id=net0,hostfwd=tcp:127.0.0.1:{port:echo}-:7,"
+                                "hostfwd=tcp:127.0.0.1:{port:telnet}-:23,"
+                                "hostfwd=tcp:127.0.0.1:{port:rx}-:%d,"
+                                "hostfwd=tcp:127.0.0.1:{port:telnet_wlan}-10.0.2.16:23,"
+                                "hostfwd=tcp:127.0.0.1:{port:www}-:80,"
+                                "hostfwd=tcp:127.0.0.1:{port:www2}-:8080,"
+                                "hostfwd=tcp:127.0.0.1:{port:ftp}-:21" % RX_PORT + pasv,
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
+            # (10/9/26: telnet_wlan is port 23 of 10.0.2.16, the simulated wlan0's lease.) The test's HTTP server binds
+            # its port itself, so it keeps it (10/18/26: before, free_port()'s, which another program could take first)
+            self.http = http.server.HTTPServer(('127.0.0.1', 0), TestHandler)
+            self.ports['http'] = self.http.server_address[1]
             cmdline.append(f"httpport={self.ports['http']}")
-            self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
             threading.Thread(target=self.http.serve_forever, daemon=True).start()
         if cmdline and not iso:
             boot += ['-append', ' '.join(cmdline)]
-        cmd = [qemu, '-m', str(mem)] + boot + [
-               '-display', 'none', '-no-reboot', '-no-shutdown',
-               '-monitor', f'unix:{self.mon_path},server,nowait',
-               '-chardev', f'socket,id=ser0,host=127.0.0.1,port={self.ser_port},server=on,wait=off,nodelay=on',
-               '-serial', 'chardev:ser0'] + list(extra)
-        if int_log:
-            cmd += ['-d', 'int,guest_errors,cpu_reset', '-D', os.path.abspath(int_log)]
-        self.cmd = cmd
-        self.proc = subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        self.ser = self._connect(self.ser_port)
+        for attempt in range(1, PORT_TRIES + 1):
+            ports = dict(self.ports)
+            cmd = [qemu, '-m', str(mem)] + pick_ports(boot, ports) + [
+                   '-display', 'none', '-no-reboot', '-no-shutdown',
+                   '-monitor', f'unix:{self.mon_path},server,nowait',
+                   '-chardev', f'socket,id=ser0,host=127.0.0.1,port={self.ser_port},server=on,wait=off,nodelay=on',
+                   '-serial', 'chardev:ser0'] + pick_ports(list(extra), ports)
+            if int_log:
+                cmd += ['-d', 'int,guest_errors,cpu_reset', '-D', os.path.abspath(int_log)]
+            self.cmd = cmd
+            self.proc = subprocess.Popen(cmd, cwd=self.workdir, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            try:
+                self.ser = self._connect(self.ser_port)
+            except RuntimeError as e:
+                picked = {ports[n] for n in ports if n not in self.ports}   # (10/19/26, B78: not the caller's own)
+                if attempt < PORT_TRIES and picked_port_taken(str(e), picked):
+                    retry_note(attempt, str(e))
+                    self.proc.stdout.close()
+                    if os.path.exists(self.mon_path):
+                        os.remove(self.mon_path)
+                    continue
+                raise
+            self.ports = ports
+            break
         self.ser.setblocking(False)
         self.transcript = b''
         self.cursor = 0
@@ -1737,6 +1765,7 @@ class Qemu:
             except OSError:
                 s.close()
                 if self.proc.poll() is not None or time.time() > deadline:
+                    s.close()
                     raise RuntimeError('QEMU did not start: ' + ' '.join(self.cmd) + '\n' + self.qemu_output())
                 time.sleep(0.05)
 
@@ -1972,6 +2001,59 @@ FETCH_CUT = 100000
 FETCH_TEXT = b''.join(b'line %03d of the chunked text\n' % i for i in range(300))
 FETCH_CLOSE = b'the end of the connection ends this body\n'
 FETCH_SEEN = []
+
+
+# 10/18/26 (round fs-fix-11): free_port() lets its port go so that QEMU can bind it, and another program may take it
+# first: QEMU then stops at once ("Could not set up host forwarding rule ...", or for a socket of its own "Address
+# already in use"). A launch with ports written {port:NAME} (picked here) tries again with fresh ones, PORT_TRIES times
+# in all, and says so; every other failure to start stays fatal (tests/test_qemu_ports.py). 10/19/26 (audit B78): only
+# when the port QEMU names is one picked here: a port the caller wrote itself, taken, stays fatal at once, also in a
+# launch that has picked ones too (before, any taken port was tried again whenever the launch had picked ports)
+PORT_TRIES = 5
+PORT_TAKEN = ('Could not set up host forwarding rule', 'Address already in use')
+
+
+def pick_ports(args, ports):
+    """args with each {port:NAME} replaced by a port: the one in ports, or a fresh one (free_port()) put there"""
+    out = []
+    for a in args:
+        for name in re.findall(r'\{port:(\w+)\}', a):
+            if name not in ports:
+                ports[name] = free_port()
+            a = a.replace('{port:%s}' % name, str(ports[name]))
+        out.append(a)
+    return out
+
+
+def port_taken(output):
+    """did QEMU stop because a port it was to bind was taken?"""
+    return any(m in output for m in PORT_TAKEN)
+
+
+def taken_ports(output):
+    """10/19/26 (audit B78): the ports QEMU says it could not bind: the forwarding rule's ('tcp:127.0.0.1:PORT-...'),
+    or a datagram socket's (its -netdev, which QEMU's message quotes, says local.port=PORT)"""
+    found = []
+    for line in output.splitlines():
+        m = re.search(r"Could not set up host forwarding rule '[a-z]+:[0-9.]*:(\d+)-", line)
+        if m:
+            found.append(int(m.group(1)))
+        elif 'Address already in use' in line:
+            found += [int(p) for p in re.findall(r'local\.port=(\d+)', line)]
+    return found
+
+
+def picked_port_taken(output, picked):
+    """10/19/26 (audit B78): did QEMU stop because a port picked for it (in picked) was taken, and only such a one?"""
+    taken = taken_ports(output)
+    return bool(taken) and port_taken(output) and all(p in picked for p in taken)
+
+
+def retry_note(attempt, output):
+    """one line in the log for a launch tried again with fresh ports"""
+    why = next((l.strip() for l in output.splitlines() if port_taken(l)), 'a port was taken')
+    print(f'QEMU did not start: a port picked for it was taken by another program meanwhile ({why}); starting it '
+          f'again with fresh ports (try {attempt + 1} of {PORT_TRIES})', flush=True)
 
 
 class TestHandler(http.server.BaseHTTPRequestHandler):
@@ -4748,9 +4830,7 @@ class DnsPeer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('127.0.0.1', 0))
         self.port = self.sock.getsockname()[1]
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
-            reserve.bind(('127.0.0.1', 0))
-            self.qport = reserve.getsockname()[1]
+        self.qport = None           # 10/18/26 (round fs-fix-11): QEMU's end, its Qemu's ports['dns'] once it has started
         self.running = True
         self.pending = []
         self.ids = []
@@ -4760,7 +4840,7 @@ class DnsPeer:
         self.thread.start()
 
     def args(self):
-        return ['-netdev', f'dgram,id=dns,local.type=inet,local.host=127.0.0.1,local.port={self.qport},'
+        return ['-netdev', 'dgram,id=dns,local.type=inet,local.host=127.0.0.1,local.port={port:dns},'
                           f'remote.type=inet,remote.host=127.0.0.1,remote.port={self.port}',
                 '-device', 'e1000,netdev=dns,mac=52:54:00:12:34:56']
 
@@ -4804,7 +4884,7 @@ class DnsPeer:
                 continue
             except OSError:
                 break
-            if len(frame) < 42:
+            if len(frame) < 42 or not self.qport:
                 continue
             if frame[12:14] == b'\x08\x06':
                 if frame[20:22] == b'\0\x01':
@@ -4871,6 +4951,7 @@ def dns_bounded_check(q):
         kernel = q.cmd[q.cmd.index('-kernel') + 1]
         initrd = os.path.join(q.workdir, q.cmd[q.cmd.index('-initrd') + 1].split(',')[0])
         guest = Qemu(kernel, q.cmd[0], '128', peer.args(), initrd=initrd, net=False)
+        peer.qport = guest.ports['dns']
         ok = guest.expect(PROMPT, 60)
 
         def command(line, *expected, timeout=10):
@@ -5341,12 +5422,10 @@ def usbnet_later_boot(kernel, qemu, mem, extra, initrd, append):
     (QEMU's usb-net on its user network) is plugged in after boot (BOOT_CHECKS usbnet-plug), so that wlan0, which the
     simulated chip registers at boot, comes before eth0. Port 23 of 10.0.2.16 is forwarded as 'telnet' (eth0's lease
     here) and of 10.0.2.15 as 'telnet_wlan' (wlan0 asks first, and gets .15)"""
-    p_eth, p_wlan = free_port(), free_port()
-    q = Qemu(kernel, qemu, mem, list(extra) + ['-device', 'qemu-xhci,id=xhci', '-netdev',
-             f'user,id=n0,hostfwd=tcp:127.0.0.1:{p_eth}-10.0.2.16:23,hostfwd=tcp:127.0.0.1:{p_wlan}-10.0.2.15:23'],
-             None, None, None, initrd, False, False, ' '.join(append), 0)
-    q.ports.update({'telnet': p_eth, 'telnet_wlan': p_wlan})
-    return q
+    return Qemu(kernel, qemu, mem, list(extra) + ['-device', 'qemu-xhci,id=xhci', '-netdev',
+                'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-10.0.2.16:23,'
+                'hostfwd=tcp:127.0.0.1:{port:telnet_wlan}-10.0.2.15:23'],   # (10/18/26: ports picked by Qemu: fs-fix-11)
+                None, None, None, initrd, False, False, ' '.join(append), 0)
 
 
 def usbnet_plug_check(q):
@@ -5765,7 +5844,8 @@ def boot_step(reboot, entry, timeout):
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
     that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'; bytes are sent
     as they are, with no newline and no prompt waited for after them (Ctrl+C, a command that runs on)."""
-    cmd, expects, follow, absent = entry
+    cmd, expects, follow, absent = entry[:4]
+    halts = len(entry) > 4 and entry[4] == 'halts'         # 10/18/26 (B56): a boot that ends in a wipeout on purpose
     try:
         q2 = reboot(cmd.split()[1:])
     except Exception as e:
@@ -5800,7 +5880,7 @@ def boot_step(reboot, entry, timeout):
                  [e.pattern if isinstance(e, re.Pattern) else e for _, exp in follow if exp is not CHECK for e in exp]
         bad = [b for b in BAD if not any((b.encode() if isinstance(e, bytes) else b) in e for e in wanted
                                          if isinstance(e, (str, bytes)))]
-        ok = ok and not any(a in text for a in absent) and not any(b in text for b in bad) and q2.alive()
+        ok = ok and not any(a in text for a in absent) and (halts or (not any(b in text for b in bad) and q2.alive()))
         if not ok:
             print(f'\n---- {cmd}: serial transcript (tail) ----\n' + tail(text, 25))
     finally:

@@ -1,0 +1,34 @@
+# make -C surfcpu build-kernel: sizes, the ISA audit, the packages (2026-10-16, build b5d7fd29b08b)
+   text	   data	    bss	    dec	    hex	filename
+ 375929	    580	 796736	1173245	 11e6fd	../build/riscv32/arty_a7/surfos.elf
+ 375313	    528	 798880	1174721	 11ecc1	../build/riscv32/qemu_virt/surfos.elf
+ 431813	    528	 798896	1231237	 12c985	../build/riscv32/qemu_virt-O0/surfos.elf
+isacheck: ../build/riscv32/arty_a7/surfos.elf: 50877 instructions, 53 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+isacheck: ../build/riscv32/qemu_virt/surfos.elf: 51047 instructions, 51 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+isacheck: ../build/riscv32/qemu_virt-O0/surfos.elf: 65150 instructions, 50 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+fw tool tools/surfimg.py: sha256 c916b48aae271c8a99fd579b3fd200c7b40b3171d3514f889ba9c436fe568e6e
+fw tool tools/mkcard.py: sha256 b7235ac378379baf68f4dd1843b81b675d37d1c258ed21b67a7edcc84413c9b2
+../build/riscv32/arty_a7/SURFOS.BIN: 376596 bytes
+  magic        0x474d4953 b'SIMG'
+  version      1, header size 64
+  isa          0x0000000f (i m zicsr zifencei)
+  platform     1
+  load_addr    0x80000000
+  payload_size 376532
+  mem_size     1173280
+  entry        0x80000000
+  payload_crc  0x9794518d
+  flags        0x0
+  image        SurfOS 1.0.0 build b5d7fd29
+  header_crc   0x791f23d9
+checks (as SurfBoot, usable DDR [0x80000000, 0x8f000000)):
+  1 size, magic, version, header CRC ok
+  2 ISA and platform                 ok
+  3 file size = 64 + payload_size    ok
+  4 load range inside usable DDR     ok
+  5 entry inside the payload         ok
+  6 payload CRC                      ok
+valid
+../build/riscv32/arty_a7/SURFOS.BIN: valid
+../build/riscv32/qemu_virt/SURFOS.BIN: valid
+../build/riscv32/qemu_virt-O0/SURFOS.BIN: valid

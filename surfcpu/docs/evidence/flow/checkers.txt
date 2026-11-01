@@ -1,0 +1,71 @@
+SurfCPU flow evidence: the open flow's checks on the cases round ddr-3 found them misreading
+(tools/openxc7-checks-test.sh; devenv/openxc7/bramwe.py, synthcheck.py, cmtcheck.py; docs/OPEN-FLOW.md).
+Generated on 2026-10-17 at 5793b4f97754, image surfcpu-openxc7:2026-10-15.
+Result: PASS
+
+== 1. LVS and block RAM write enables
+bram_we_sdp: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS, clocks none in the design
+  104 proved, 0 differ, 0 unknown   (0.00860783s)
+  re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[1] from pin 2 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE2), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE1 (SDP 36-bit write)
+  re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[2] from pin 4 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE4), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE2 (SDP 36-bit write)
+  re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3] from pin 6 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE6), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE3 (SDP 36-bit write)
+  bramwe: 1 block RAM(s), 3 enable(s) re-read, 0 difference(s)
+ok    bram_we_sdp: LVS passes
+bram_we_tdp: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS, clocks none in the design
+  98 proved, 0 differ, 0 unknown   (0.00381558s)
+  re-read BRAM_L_X6Y175_RAMB18_Y1 WEA[1] from pin 2 (BRAM_L_X6Y175_BRAM_RAMB18_WEA2), not BRAM_L_X6Y175_BRAM_RAMB18_WEA1 (write A 18, write B <=9)
+  bramwe: 1 block RAM(s), 1 enable(s) re-read, 0 difference(s)
+ok    bram_we_tdp: LVS passes
+  raw: proof on the extractor's own netlist: exit 1
+  raw:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
+  raw:   103 proved, 1 differ, 0 unknown   (0.00889458s)
+  pair: lvs_bram_mutate: WEBWE7 now routed from INT_L_X6Y177_FAN_L5 (WEBWE0's route)
+  pair:   DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 7 (CLBLM_R_X3Y175_CLBLM_M_AMUX) is not pin 6's (INT_L_X6Y177_GND_WIRE): WEBWE[3] reaches the block on pins [6, 7] (SDP 36-bit write)
+  pair:   bramwe: 1 block RAM(s), 3 enable(s) re-read, 1 difference(s)
+  byte3: lvs_bram_mutate: WEBWE6, WEBWE7 now routed from INT_L_X6Y177_FAN_L5 (WEBWE0's route)
+  byte3:   bramwe: 1 block RAM(s), 3 enable(s) re-read, 0 difference(s)
+  byte3: proof on the corrected netlist: exit 1
+  byte3:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
+  byte3:   103 proved, 1 differ, 0 unknown   (0.00853404s)
+ok    the extractor's own one-to-one reading fails the proof on WEBWE[3]
+ok    a pin pair that disagrees is a difference
+ok    byte 3 really enabled while the netlist ties it to 0 fails the proof
+
+== 2. the synthesis check and registers merged into a memory read port
+VexRiscv (lite, synthesis only): openxc7-build.sh exit 0
+  IBusCachedPlugin_cache                         23           22                      0
+  whole design                                 1134         1090                      0
+  register bits already merged into memory read ports in the RTL (memory_dff; not counted): 22
+  memories of 16 Kbit or more in the RTL: 16384 bits; block RAM after synthesis: 73728 bits
+  synthcheck: PASS
+ok    VexRiscv passes, its 22 tag bits counted as merged
+
+== 3. the clock-tile check and Yosys's short bit strings
+pll_sized: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM none in the design, LVS skipped, clocks PASS
+  pll (PLLE2_ADV at CMT_TOP_L_UPPER_T_X139Y148):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 16: matches XAPP888
+    CLKOUT0_DIVIDE 8: matches XAPP888
+    CLKOUT1_DIVIDE 20: matches XAPP888
+    CLKOUT2_DIVIDE 5: matches XAPP888
+    CLKOUT3_DIVIDE 5, phase 90: matches XAPP888
+  cmtcheck: 39 fields compared, 0 counters differ from XAPP888, 0 unchecked: PASS
+  
+  gclkcheck: 4 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+ok    LiteDRAM's PLL dividers read as 16, 8, 20 and 5 and match XAPP888
+ok    the 90-degree output's phase is checked and matches XAPP888 (DELAY_TIME 1, PHASE_MUX 2)
+  phase-mux: cmtcheck exit 1; CLKOUT3_DIVIDE 5, phase 90: MISMATCH PHASE_MUX 3 (XAPP888: 2)
+  delay-time: cmtcheck exit 1; CLKOUT3_DIVIDE 5, phase 90: MISMATCH DELAY_TIME 0 (XAPP888: 1)
+ok    a PHASE_MUX an eighth of a VCO cycle late fails the check
+ok    a DELAY_TIME a whole cycle early fails the check
+
+== 4. nextpnr and the byte enables of an 18-bit port B in true dual port mode
+bram_we_tdpb: openxc7-build.sh exit 1; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS FAIL (2 block RAM write enable difference(s)), clocks none in the design
+    DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[1]
+    DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[2]
+    DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
+  117 proved, 3 differ, 0 unknown   (0.00442542s)
+  DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 1 (CLBLL_L_X4Y174_CLBLL_LL_AMUX) is not pin 0's (CLBLM_R_X3Y175_CLBLM_M_AQ): WEBWE[0] reaches the block on pins [0, 1] (write A 18, write B 18)
+  DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 3 (CLBLL_L_X4Y174_CLBLL_LL_AMUX) is not pin 2's (CLBLM_R_X3Y175_CLBLM_M_AQ): WEBWE[1] reaches the block on pins [2, 3] (write A 18, write B 18)
+  bramwe: 1 block RAM(s), 2 enable(s) re-read, 2 difference(s)
+ok    nextpnr's port-B pairing (we0, we1, we0, we1 on WEBWE0..3) is refused: LVS fails and bramwe names both pin pairs

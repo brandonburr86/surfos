@@ -48,6 +48,17 @@ for programs, which could not even load it.
 
 10/26/26 (CODE-AUDIT T14): TF_SESSION passes through as TF_SHELL does: the program a pty's
 session begins with (kernel/pty.c) carries it before it can run.
+10/18/26 (audit B73): the files it was handed go into its descriptor table first, before
+anything waits, and the console after them: a kill that has waited KILL_WAIT_MS comes at
+once outside a file system, and one put off while the program file was read (fs/vfs.c:
+a file of a volume the loading holds) comes right after its close; before, the files
+still in the spawn's record were left open then (a redirection's file on a stick kept it
+from being unmounted). The task's reap closes them, whatever ends it.
+
+10/19/26 (audit B74): and the parent's call counts itself (fs_refs) from the record's making
+until the child's task holds it: a kill of the parent put off by its spawn's walk of the
+program's path came at once in between, and the references taken for the child (a
+redirection's file on a stick) and the record were left for good.
 */
 
 #include <surfos/types.h>
@@ -134,6 +145,19 @@ static void user_entry(void *arg) {
     u_long top = 0, sp, argv_user[SPAWN_MAX_ARGS + 1], env_user[SPAWN_ENV_MAX + 1];
     int i, r, fd;
 
+    /* 0, 1, 2: the files the parent passed (10/18/26, audit B73: the descriptor table's before anything waits), else the
+       console (10/24/26: or nothing); 3 only when one was passed */
+    for(fd = 0; fd < 4; fd++) {
+        curTask->files[fd] = sa->files[fd];               /* the descriptor table owns the reference now */
+        sa->files[fd] = NULL;
+    }
+    for(fd = 0; fd < 3; fd++) {
+        struct file *cf;
+        if(!curTask->files[fd] && !(sa->closed & (1u << fd)) &&
+           vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) == 0)
+            curTask->files[fd] = cf;
+    }
+
     {
         /* 10/25/26: Ctrl+Z changes the flags from an interrupt (job control); and (the review of B1) the address space
            is the task's before interrupts come back on: one killed on the spot meanwhile (kill_escalate()) leaves
@@ -211,16 +235,6 @@ static void user_entry(void *arg) {
         ((u_long *)sp)[0] = (u_long)sa->argc;
         ((u_long *)sp)[1] = argv_addr;
         ((u_long *)sp)[2] = envp_addr;
-    }
-
-    /* 0, 1, 2: the files the parent passed, otherwise the console (10/24/26: or nothing); 3 only
-       when one was passed */
-    for(fd = 0; fd < 4; fd++) {
-        struct file *cf = sa->files[fd];
-        sa->files[fd] = NULL;                             /* the descriptor table owns the reference now */
-        if(!cf && (fd == 3 || (sa->closed & (1u << fd)) ||
-                   vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0)) continue;
-        curTask->files[fd] = cf;
     }
 
     kfree(sa);
@@ -317,24 +331,26 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
         if(nargs > SPAWN_MAX_ARGS) return -E2BIG;
         args++;                                         /* argv[0] gives way to the interpreter's */
     }
+    fs_ref();                                       /* 10/19/26 (audit B74): the record and the files it hands over are
+                                                       this call's until the child's task holds them, counted (below) */
     sa = (struct spawn_args *)kcalloc(1, sizeof(struct spawn_args));
-    if(!sa) return -ENOMEM;
+    if(!sa) { fs_unref(); return -ENOMEM; }
     r = vfs_normalize(vfs_getcwd(), kind == 1 ? interp : path, sa->path, sizeof(sa->path));
-    if(r) { kfree(sa); return r; }
+    if(r) { kfree(sa); fs_unref(); return r; }
     for(i = 0; i < nargs; i++) {
         const char *a = i < nhead ? head[i] : args[i - nhead];
         size_t n = strlen(a) + 1;
-        if(used + n > SPAWN_ARG_BYTES) { kfree(sa); return -E2BIG; }
+        if(used + n > SPAWN_ARG_BYTES) { kfree(sa); fs_unref(); return -E2BIG; }
         memcpy(sa->strs + used, a, n);
         sa->argv[i] = sa->strs + used;
         used += n;
     }
     sa->argc = nargs;
     if(more) {                                      /* 10/24/26: the environment */
-        if(more->envc < 0 || more->envc > SPAWN_ENV_MAX) { kfree(sa); return -E2BIG; }
+        if(more->envc < 0 || more->envc > SPAWN_ENV_MAX) { kfree(sa); fs_unref(); return -E2BIG; }
         for(i = 0, used = 0; i < more->envc; i++) {
             size_t n = strlen(more->envp[i]) + 1;
-            if(used + n > SPAWN_ENV_BYTES) { kfree(sa); return -E2BIG; }
+            if(used + n > SPAWN_ENV_BYTES) { kfree(sa); fs_unref(); return -E2BIG; }
             memcpy(sa->envstrs + used, more->envp[i], n);
             sa->envp[i] = sa->envstrs + used;
             used += n;
@@ -363,5 +379,6 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL,
                            (flags & (TF_DETACHED | TF_SHELL | TF_SESSION | TF_FOREGROUND)) | TF_INCALL | TF_PROCESS, job);
     if(r < 0) { release_files(sa); kfree(sa); }
+    fs_unref();                                     /* (the child's now: its reap closes them, whatever ends it) */
     return r;
 }

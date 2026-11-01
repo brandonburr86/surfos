@@ -1,0 +1,41 @@
+SurfGPU G1: simulation and host tests (2026-10-18), make test-gpu in the surfcpu-toolchain container
+(Verilator 5.032, Icarus 12.0, gcc), worktree 06-restoration-surfgpu, branch sc/gpu.
+
+test_gpu_model: PASS (38 checks against docs/GPU.md: display path, CRCs, every command)
+  frame CRCs computed independently with Python's zlib from GPU.md's definitions:
+  black c656b350, test pattern 2077db89, graphics 640x480 cfd3a84e, doubled 0a1e1539, past 300 KiB 3e8eb9b9
+
+test_vram: PASS (seed 1: 2667715 checks; 290144 CPU accesses, 16955 errors, all answered in one cycle;
+  engine 132239 grants (66253 reads, 65986 writes, 5362 past the end), 149620 waits for the CPU;
+  520911 pixel-port reads (26102 past the end); 76800 words read back)
+test_vram: PASS (seed 2: 2666275 checks; ...)    test_vram: PASS (seed 3: 2667828 checks; ...)
+
+[old tests, HAS_GFX=1] test_video: PASS (122 checks, seed 1, 108 frames, 46145504 pix cycles)
+[old tests, HAS_GFX=1] test_video: PASS (122 checks, seed 2 ...)  (seed 3 ...)
+test_video_gfx: PASS (53 checks, seed 1, 48 frames)   (seeds 2 and 3: the same)
+
+tb_interconnect: PASS (HAS_DDR=1 HAS_DDRC=0 HAS_GPU=1, 24932 accesses: 9965 answered by targets,
+  14967 errors expected and seen, ...; gpu 614, vram 455; ...)   (seeds 2 and 3: the same form)
+
+gpudiag on build/sim/surfsim_gpu (HAS_GPU=1):
+  SurfGPU diagnostic 1.0.0 (build 8d46f986, dirty tree)
+  board simulation (0xf0), SoC 0.3.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+  bitstream build 8d46f986 flags 3, features 1ff
+  identity                           ok (5 checks)
+  VRAM window (March C-)             (300 KiB) ok (59 checks)
+  video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+  scenes                             7, engine absent
+  scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+  scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (3 checks)
+  scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+  scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+  scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+  scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+  scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+  GPUDIAG: PASS (90 checks)
+gpudiag_check: PASS (90 checks; 7 scenes, every FRAME_CRC the model's and a captured frame's;
+  55 frames captured, 13 distinct, 23862872 cycles)
+
+Unchanged suites with the GPU code in the tree: lint-soc, lint-io, test-io-video (123 checks x 3 seeds),
+test-io-icarus, test-soc-units, test-soc-system, test-soc-surfsim, test-soc-boot (BRAMDIAG: PASS
+(569 checks)), board-tools (262 passed, 0 failed), board-wiring, test-release (Ran 53 tests, OK).

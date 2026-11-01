@@ -1,0 +1,118 @@
+# SurfCPU SoC test: the base peripherals through the SoC and their interrupt wires into the
+# core (sim/soc/scripts/soc_periph.sbs). The bench loops the UART's tx back to rx and the
+# green LEDs to the switches and buttons. Defines: ddr, build_id, build_flags, build_time.
+
+stall ddr+0x80                  # the DDR model's watchdog case (see the end)
+
+# ---- the interrupt inputs of the core after reset
+checkirq  ext=0 timer=0 soft=0
+
+# ---- sysinfo: identity, build, clocks, SCRATCH
+D read    sysinfo.MAGIC expect 0x46525553
+D read    sysinfo.SOC_VERSION expect soc.soc_version
+D read    sysinfo.MAP_VERSION expect soc.map_version
+D read    sysinfo.BOARD_ID expect boards.sim
+D read    sysinfo.SYS_HZ expect clocks.sys_hz
+D read    sysinfo.PIX_HZ expect clocks.pix_hz
+D read    sysinfo.BUILD_ID expect build_id
+D read    sysinfo.BUILD_FLAGS expect build_flags
+D read    sysinfo.BUILD_TIME expect build_time
+if ddr
+D read    sysinfo.FEATURES expect 0xFF
+D read    sysinfo.DDR_SIZE expect ddr.size
+else
+D read    sysinfo.FEATURES expect 0x7F
+D read    sysinfo.DDR_SIZE expect 0
+endif
+D write   sysinfo.SCRATCH 0xDEADBEEF
+D read    sysinfo.SCRATCH expect 0xDEADBEEF
+D write   sysinfo.MAGIC 0
+D read    sysinfo.MAGIC expect 0x46525553
+
+# ---- timer: the core's mtime input follows mtime; MSIP and MTIP reach the core
+D read    timer.MTIME_LO
+D mtime-near 3
+D write   timer.MSIP 1
+D checkirq soft=1
+D read    timer.MSIP expect 1
+D write   timer.MSIP 0
+D checkirq soft=0
+D write   timer.MTIMECMP_LO 0xFFFFFFFF
+D write   timer.MTIMECMP_HI 0
+D write   timer.MTIMECMP_LO 300
+D checkirq timer=0
+D waitirq timer=1 within 20000
+D read    timer.MTIME_LO
+D write   timer.MTIMECMP_HI 0xFFFFFFFF
+D checkirq timer=0
+D read    timer.MTIME_LO
+D mtime-near 3
+
+# ---- UART at 115200 baud, looped back
+D write   uart.TXDATA 0x55
+D poll    uart.STATUS mask uart.STATUS.RX_AVAIL equal uart.STATUS.RX_AVAIL within 10000 every 20
+D read    uart.RXDATA expect 0x55
+D read    uart.RXDATA expect uart.RXDATA.EMPTY
+D write   uart.TXDATA 0x53
+D write   uart.TXDATA 0x55
+D write   uart.TXDATA 0x52
+D write   uart.TXDATA 0x46
+D poll    uart.LEVEL mask uart.LEVEL.RX equal 4<<uart.LEVEL.RX.lsb within 20000 every 50
+D read    uart.RXDATA expect 0x53
+D read    uart.RXDATA expect 0x55
+D read    uart.RXDATA expect 0x52
+D read    uart.RXDATA expect 0x46
+D poll    uart.STATUS mask uart.STATUS.TX_IDLE equal uart.STATUS.TX_IDLE within 2000 every 10
+D read    uart.STATUS expect uart.STATUS.TX_IDLE
+
+# the UART's RX interrupt through the interrupt controller to mip.MEIP
+D write   intc.ENABLE 1<<irqs.uart
+D write   uart.CTRL uart.CTRL.RX_IE
+D checkirq ext=0
+D write   uart.TXDATA 0xA3
+D waitirq ext=1 within 20000
+D read    intc.PENDING expect 1<<irqs.uart mask 1<<irqs.uart
+D read    intc.ACTIVE expect 1<<irqs.uart
+D read    intc.NEXT expect irqs.uart
+D read    uart.RXDATA expect 0xA3
+D checkirq ext=0
+D read    intc.NEXT expect 0xFFFFFFFF
+D write   uart.CTRL uart.CTRL.TX_IE
+D checkirq ext=1
+D write   intc.ENABLE 0
+D checkirq ext=0
+D write   uart.CTRL 0
+
+# ---- GPIO, looped back: switches follow the LEDs at once, buttons after the 10 ms debounce
+D write   gpio.LED 0x5
+D idle    4
+D read    gpio.SW expect 0x5
+D read    gpio.BTN expect 0
+D write   gpio.IE 0xF
+D write   intc.ENABLE 1<<irqs.gpio
+D waitirq ext=1 within 300000
+D read    gpio.BTN expect 0x5
+D read    gpio.BTN_EDGE expect 0x5
+D read    intc.NEXT expect irqs.gpio
+D write   gpio.BTN_EDGE 0xF
+D checkirq ext=0
+D write   gpio.LED 0
+D write   gpio.IE 0
+D write   intc.ENABLE 0
+
+# ---- DDR: calibration, then an access the controller never finishes (the watchdog answers
+# with an error and DDR_STATUS.TIMEOUT stays set), and DDR still works afterwards
+if ddr
+D poll    sysinfo.DDR_STATUS mask sysinfo.DDR_STATUS.CALIB_DONE equal sysinfo.DDR_STATUS.CALIB_DONE within 100000 every 8
+endif
+sync
+if ddr
+assume ddr=1
+D read    sysinfo.DDR_STATUS expect 0 mask sysinfo.DDR_STATUS.TIMEOUT
+D write   ddr+0x84 0x600DF00D
+D read    ddr+0x80 error
+D read    sysinfo.DDR_STATUS expect sysinfo.DDR_STATUS.CALIB_DONE|sysinfo.DDR_STATUS.PRESENT|sysinfo.DDR_STATUS.TIMEOUT
+D read    ddr+0x84 expect mem
+D read    sysinfo.DDR_STATUS expect sysinfo.DDR_STATUS.TIMEOUT mask sysinfo.DDR_STATUS.TIMEOUT
+endif
+checkirq  ext=0 timer=0 soft=0

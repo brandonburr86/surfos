@@ -1,0 +1,85 @@
+SurfCPU acceptance test m3: the CPU on the board (milestone 3): the BRAM diagnostics
+Verdict: PASS (25 checks seen by this script passed; 1 not done or not compared)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/m3/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m3/state.json)
+Date: 2026-10-17 03:53:54 UTC, 20 s
+Command: /work/surfcpu/tools/board-test.py m3 --port /work/surfcpu/build/os/kit/m3/port --evidence-dir /work/surfcpu/build/os/kit/m3/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m3/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  BRAM diagnostics 1.0.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  program        done, answered at +0.0
+              | Load the CPU with its diagnostics, in another Terminal window:
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag
+              | and press Enter here once it says done.
+  +    19.9  leds           skipped, answered at +19.9
+              | Are LD4..LD6 lit, LD7 blinking about once a second (its heartbeat while it echoes), and LD0
+              | green (red would mean a failure)?
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/m3/port opened at 115200 8N1
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       the system clock is 25,000,000 Hz (25000000)
+  ok       identity: ok
+  ok       ALU, immediates, x0: ok
+  ok       M extension: ok
+  ok       branches and jumps: ok
+  ok       loads and stores: ok
+  ok       CSRs and counters: ok
+  ok       scratch RAM: ok (56 KiB)
+  ok       exceptions, each recovered: ok
+  ok       interrupts, timer and WFI: ok (10 timer ticks in 10186 us)
+  ok       FENCE.I, code written to RAM: ok
+  ok       the timer's progress: 10 timer ticks in 10186 us (1 ms a tick, +- 20 %)
+  ok       text RAM (cells 2400-4095): ok (1 checks)
+  ok       DDR calibration: ok (1 checks)
+  ok       DDR data lines: ok (192 checks)
+  ok       DDR byte lanes: ok (9 checks)
+  ok       DDR address lines and aliases: ok (54 checks)
+  ok       DDR boundaries: ok (98 checks)
+  ok       DDR patterns: ok (2 checks)
+  ok       DDR sustained copies: ok (4 checks)
+  ok       code running from DDR: ok (6 checks)
+  ok       BRAMDIAG: PASS (569 checks)
+  ok       the UART both ways: each byte typed (Arty7) came back with its code
+  skip     not observed: Are LD4..LD6 lit, LD7 blinking about once a second (its heartbeat while it echoes), and LD0 green (red would mean a failure)?
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 1521 bytes received;
+"*": the port going away and coming back):
+  +    0.113 | 
+  +    0.114 | SurfCPU BRAM diagnostics 1.0.0 (build 1e3a2e10)
+  +    0.146 | board simulation (0xf0), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  +    0.204 | bitstream build 1e3a2e10 flags 2, features ff, DDR status 5 size 256 MiB
+  +    0.253 | identity                           ok (7 checks)
+  +    0.285 | ALU, immediates, x0                ok (33 checks)
+  +    0.319 | M extension                        ok (23 checks)
+  +    0.352 | branches and jumps                 ok (9 checks)
+  +    0.384 | loads and stores                   ok (8 checks)
+  +    0.416 | CSRs and counters                  ok (30 checks)
+  +    0.450 | scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  +    0.964 | text RAM (cells 2400-4095)         ok (1 checks)
+  +    0.998 | exceptions, each recovered         ok (34 checks)
+  +    1.031 | interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  +    1.218 | FENCE.I, code written to RAM       ok (2 checks)
+  +    1.251 | DDR calibration                    ok (1 checks)
+  +    1.284 | DDR data lines                     ok (192 checks)
+  +    1.319 | DDR byte lanes                     ok (9 checks)
+  +    1.353 | DDR address lines and aliases      ok (54 checks)
+  +    1.387 | DDR boundaries                     ok (98 checks)
+  +    1.421 | DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  +    7.882 | DDR sustained copies               (4 x 256 KiB copied and checked, 805 KiB/s) ok (4 checks)
+  +   19.727 | code running from DDR              ok (6 checks)
+  +   19.762 | 
+  +   19.762 | BRAMDIAG: PASS (569 checks)
+  +   19.783 | 
+  +   19.783 | UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+  +   19.847 | echo   1: 'A' 0x41
+  +   19.860 | echo   2: 'r' 0x72
+  +   19.873 | echo   3: 't' 0x74
+  +   19.887 | echo   4: 'y' 0x79
+  +   19.900 | echo   5: '7' 0x37

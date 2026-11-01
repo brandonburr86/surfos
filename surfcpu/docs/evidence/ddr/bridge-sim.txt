@@ -1,0 +1,144 @@
+# DDR bridge and register bridge simulation, 2026-10-16 (round ddr-3, at 595ab38), surfcpu-toolchain:2026-10-15
+# (Verilator 5.032, Icarus 12.0): make test-ddr. The bridge with one request in flight (no request ids);
+# every line PASS. New in round ddr-3: the 40 : 12.5 ns pair (LiteDRAM at 80 MHz) in test-ddr-ratios, and
+# test-ddr-csr (surf_ddr_csr, the register bridge to LiteDRAM's control port).
+
+lint-ddr: surf_ddr_bridge, surf_ddr_mailbox, surf_ddr_csr clean (Verilator -Wall, Icarus -g2005)
+
+## make test-ddr-bridge: build/ddr/tb_ddr_bridge --test all --seed {1,2,3} (TIMEOUT_CYCLES=512, CALIB_TIMEOUT_CYCLES=20000; sys 40 ns, ui 12.308 ns)
+tb_ddr_bridge: basic           PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=6/10.2/15 ctrl_rd=3 ctrl_wr=2 cycles=164
+tb_ddr_bridge: lanes           PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/11.0/19 ctrl_rd=448 ctrl_wr=112 cycles=6923 beat_checks=448
+tb_ddr_bridge: bounds          PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=432 reads=324 writes=108 err=0 aborted=0 timeouts=0 lat=5/10.8/18 ctrl_rd=324 ctrl_wr=108 cycles=5214 addresses=108
+tb_ddr_bridge: alias           PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/9.2/15 ctrl_rd=54 ctrl_wr=54 cycles=1205 addresses=54
+tb_ddr_bridge: random          PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=20000 reads=9929 writes=10071 err=0 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=9929 ctrl_wr=10071 cycles=227372
+tb_ddr_bridge: stream          PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5120 reads=2560 writes=2560 err=0 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=2560 ctrl_wr=2560 cycles=52015 sys_cycles_per_write=6.85 per_read=13.42 per_raw_pair=20.33
+tb_ddr_bridge: precal          PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=576 reads=100 writes=101 err=375 aborted=0 timeouts=0 lat=5/9.2/18 ctrl_rd=100 ctrl_wr=101 cycles=2992 refused_before_calib=375
+tb_ddr_bridge: calfail         PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=22 reads=1 writes=1 err=20 aborted=0 timeouts=0 lat=5/7.0/9 ctrl_rd=1 ctrl_wr=1 cycles=20222 calib_fail_after=20001
+tb_ddr_bridge: watchdog-rdy-read PASS seed=31 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=177 writes=174 err=11 aborted=0 timeouts=1 lat=5/9.2/16 ctrl_rd=178 ctrl_wr=174 cycles=4611
+tb_ddr_bridge: watchdog-rdy-write PASS seed=38 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=184 writes=167 err=11 aborted=0 timeouts=1 lat=5/9.3/18 ctrl_rd=184 ctrl_wr=168 cycles=4592
+tb_ddr_bridge: watchdog-wdf-write PASS seed=45 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=175 writes=176 err=11 aborted=0 timeouts=1 lat=5/9.2/18 ctrl_rd=175 ctrl_wr=177 cycles=4674
+tb_ddr_bridge: watchdog-drop-read PASS seed=52 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=188 writes=163 err=11 aborted=0 timeouts=1 lat=5/9.4/17 ctrl_rd=189 ctrl_wr=163 cycles=4693
+tb_ddr_bridge: watchdog-uiclk-read PASS seed=59 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=176 writes=175 err=11 aborted=0 timeouts=1 lat=5/9.1/20 ctrl_rd=177 ctrl_wr=175 cycles=4525
+tb_ddr_bridge: watchdog-uiclk-write PASS seed=66 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=163 writes=188 err=11 aborted=0 timeouts=1 lat=5/8.9/19 ctrl_rd=163 ctrl_wr=189 cycles=4527
+tb_ddr_bridge: watchdog        PASS cases=18
+tb_ddr_bridge: abandon         PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=122 reads=61 writes=59 err=2 aborted=0 timeouts=2 lat=5/9.4/18 ctrl_rd=61 ctrl_wr=60 cycles=2590
+tb_ddr_bridge: wrap-13         PASS seed=114 sys=40.000ns ui=12.308ns jitter=0.00 accesses=67 reads=30 writes=23 err=14 aborted=0 timeouts=14 lat=5/9.7/22 ctrl_rd=31 ctrl_wr=23 cycles=7940
+tb_ddr_bridge: wrap            PASS cases=6 (k = 13..18 resets with the controller stuck)
+tb_ddr_bridge: sysreset        PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=10064 reads=4692 writes=4886 err=0 aborted=486 timeouts=0 lat=5/9.1/21 ctrl_rd=5017 ctrl_wr=5047 cycles=110415 resets=486 cut_before_ctrl=116 cut_in_ctrl=151 cut_after_ctrl=219 maybes=161
+tb_ddr_bridge: uireset         PASS seed=1 sys=40.000ns ui=12.308ns jitter=0.00 accesses=6264 reads=2968 writes=2991 err=305 aborted=0 timeouts=0 lat=5/9.1/20 ctrl_rd=3073 ctrl_wr=2995 cycles=75259 ui_resets=307 refused_at_once=55 answered_by_ui=250 watchdog=0 maybes=70
+tb_ddr_bridge: PASS (watchdog 512, calibration limit 20000 cycles)
+tb_ddr_bridge: basic           PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=6/9.4/15 ctrl_rd=3 ctrl_wr=2 cycles=160
+tb_ddr_bridge: lanes           PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/11.1/16 ctrl_rd=448 ctrl_wr=112 cycles=6989 beat_checks=448
+tb_ddr_bridge: bounds          PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=432 reads=324 writes=108 err=0 aborted=0 timeouts=0 lat=5/10.7/17 ctrl_rd=324 ctrl_wr=108 cycles=5166 addresses=108
+tb_ddr_bridge: alias           PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/9.1/16 ctrl_rd=54 ctrl_wr=54 cycles=1204 addresses=54
+tb_ddr_bridge: random          PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=20000 reads=9930 writes=10070 err=0 aborted=0 timeouts=0 lat=5/9.1/20 ctrl_rd=9930 ctrl_wr=10070 cycles=227016
+tb_ddr_bridge: stream          PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5120 reads=2560 writes=2560 err=0 aborted=0 timeouts=0 lat=5/9.1/20 ctrl_rd=2560 ctrl_wr=2560 cycles=51916 sys_cycles_per_write=6.83 per_read=13.42 per_raw_pair=20.21
+tb_ddr_bridge: precal          PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=567 reads=94 writes=107 err=366 aborted=0 timeouts=0 lat=5/9.0/16 ctrl_rd=94 ctrl_wr=107 cycles=2941 refused_before_calib=366
+tb_ddr_bridge: calfail         PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=22 reads=1 writes=1 err=20 aborted=0 timeouts=0 lat=6/9.0/12 ctrl_rd=1 ctrl_wr=1 cycles=20226 calib_fail_after=20001
+tb_ddr_bridge: watchdog-rdy-read PASS seed=62 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=169 writes=182 err=11 aborted=0 timeouts=1 lat=5/9.0/16 ctrl_rd=170 ctrl_wr=182 cycles=4664
+tb_ddr_bridge: watchdog-rdy-write PASS seed=69 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=177 writes=174 err=11 aborted=0 timeouts=1 lat=5/9.1/18 ctrl_rd=177 ctrl_wr=175 cycles=4624
+tb_ddr_bridge: watchdog-wdf-write PASS seed=76 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=162 writes=189 err=11 aborted=0 timeouts=1 lat=5/8.8/18 ctrl_rd=162 ctrl_wr=190 cycles=4475
+tb_ddr_bridge: watchdog-drop-read PASS seed=83 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=176 writes=175 err=11 aborted=0 timeouts=1 lat=5/9.1/16 ctrl_rd=177 ctrl_wr=175 cycles=4611
+tb_ddr_bridge: watchdog-uiclk-read PASS seed=90 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=172 writes=179 err=11 aborted=0 timeouts=1 lat=5/9.0/18 ctrl_rd=173 ctrl_wr=179 cycles=4652
+tb_ddr_bridge: watchdog-uiclk-write PASS seed=97 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=186 writes=165 err=11 aborted=0 timeouts=1 lat=5/9.3/18 ctrl_rd=186 ctrl_wr=166 cycles=4729
+tb_ddr_bridge: watchdog        PASS cases=18
+tb_ddr_bridge: abandon         PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=122 reads=59 writes=61 err=2 aborted=0 timeouts=2 lat=5/8.9/18 ctrl_rd=59 ctrl_wr=62 cycles=2535
+tb_ddr_bridge: wrap-13         PASS seed=215 sys=40.000ns ui=12.308ns jitter=0.00 accesses=67 reads=26 writes=27 err=14 aborted=0 timeouts=14 lat=5/8.9/23 ctrl_rd=27 ctrl_wr=27 cycles=7898
+tb_ddr_bridge: wrap            PASS cases=6 (k = 13..18 resets with the controller stuck)
+tb_ddr_bridge: sysreset        PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=10064 reads=4711 writes=4871 err=0 aborted=482 timeouts=0 lat=5/9.1/22 ctrl_rd=5026 ctrl_wr=5038 cycles=110583 resets=482 cut_before_ctrl=114 cut_in_ctrl=145 cut_after_ctrl=223 maybes=167
+tb_ddr_bridge: uireset         PASS seed=2 sys=40.000ns ui=12.308ns jitter=0.00 accesses=6264 reads=2995 writes=2967 err=302 aborted=0 timeouts=0 lat=5/9.2/20 ctrl_rd=3099 ctrl_wr=2968 cycles=75666 ui_resets=307 refused_at_once=46 answered_by_ui=256 watchdog=0 maybes=84
+tb_ddr_bridge: PASS (watchdog 512, calibration limit 20000 cycles)
+tb_ddr_bridge: basic           PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=6/9.2/13 ctrl_rd=3 ctrl_wr=2 cycles=159
+tb_ddr_bridge: lanes           PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/11.1/17 ctrl_rd=448 ctrl_wr=112 cycles=6972 beat_checks=448
+tb_ddr_bridge: bounds          PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=432 reads=324 writes=108 err=0 aborted=0 timeouts=0 lat=5/10.9/18 ctrl_rd=324 ctrl_wr=108 cycles=5246 addresses=108
+tb_ddr_bridge: alias           PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=54 ctrl_wr=54 cycles=1194 addresses=54
+tb_ddr_bridge: random          PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=20000 reads=9972 writes=10028 err=0 aborted=0 timeouts=0 lat=5/9.1/20 ctrl_rd=9972 ctrl_wr=10028 cycles=227323
+tb_ddr_bridge: stream          PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5120 reads=2560 writes=2560 err=0 aborted=0 timeouts=0 lat=5/9.1/20 ctrl_rd=2560 ctrl_wr=2560 cycles=52046 sys_cycles_per_write=6.82 per_read=13.47 per_raw_pair=20.28
+tb_ddr_bridge: precal          PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=571 reads=102 writes=99 err=370 aborted=0 timeouts=0 lat=5/9.0/18 ctrl_rd=102 ctrl_wr=99 cycles=2942 refused_before_calib=370
+tb_ddr_bridge: calfail         PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=22 reads=1 writes=1 err=20 aborted=0 timeouts=0 lat=5/7.0/9 ctrl_rd=1 ctrl_wr=1 cycles=20222 calib_fail_after=20001
+tb_ddr_bridge: watchdog-rdy-read PASS seed=93 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=155 writes=196 err=11 aborted=0 timeouts=1 lat=5/8.8/18 ctrl_rd=156 ctrl_wr=196 cycles=4524
+tb_ddr_bridge: watchdog-rdy-write PASS seed=100 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=180 writes=171 err=11 aborted=0 timeouts=1 lat=5/9.3/19 ctrl_rd=180 ctrl_wr=172 cycles=4594
+tb_ddr_bridge: watchdog-wdf-write PASS seed=107 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=159 writes=192 err=11 aborted=0 timeouts=1 lat=5/8.9/17 ctrl_rd=159 ctrl_wr=193 cycles=4515
+tb_ddr_bridge: watchdog-drop-read PASS seed=114 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=179 writes=172 err=11 aborted=0 timeouts=1 lat=5/9.2/18 ctrl_rd=180 ctrl_wr=172 cycles=4716
+tb_ddr_bridge: watchdog-uiclk-read PASS seed=121 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=179 writes=172 err=11 aborted=0 timeouts=1 lat=5/9.2/17 ctrl_rd=180 ctrl_wr=172 cycles=4631
+tb_ddr_bridge: watchdog-uiclk-write PASS seed=128 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=178 writes=173 err=11 aborted=0 timeouts=1 lat=5/9.1/16 ctrl_rd=178 ctrl_wr=174 cycles=4612
+tb_ddr_bridge: watchdog        PASS cases=18
+tb_ddr_bridge: abandon         PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=122 reads=56 writes=64 err=2 aborted=0 timeouts=2 lat=5/8.9/16 ctrl_rd=56 ctrl_wr=65 cycles=2536
+tb_ddr_bridge: wrap-13         PASS seed=316 sys=40.000ns ui=12.308ns jitter=0.00 accesses=67 reads=21 writes=32 err=14 aborted=0 timeouts=14 lat=5/8.6/26 ctrl_rd=22 ctrl_wr=32 cycles=7881
+tb_ddr_bridge: wrap            PASS cases=6 (k = 13..18 resets with the controller stuck)
+tb_ddr_bridge: sysreset        PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=10064 reads=4709 writes=4883 err=0 aborted=472 timeouts=0 lat=5/9.1/25 ctrl_rd=5016 ctrl_wr=5048 cycles=110425 resets=472 cut_before_ctrl=125 cut_in_ctrl=151 cut_after_ctrl=196 maybes=165
+tb_ddr_bridge: uireset         PASS seed=3 sys=40.000ns ui=12.308ns jitter=0.00 accesses=6264 reads=3009 writes=2949 err=306 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=3118 ctrl_wr=2955 cycles=75613 ui_resets=311 refused_at_once=36 answered_by_ui=270 watchdog=0 maybes=92
+tb_ddr_bridge: PASS (watchdog 512, calibration limit 20000 cycles)
+test-ddr-bridge: PASS (all tests, seeds 1 2 3)
+
+## make test-ddr-ratios: --count 3000, seeds 101..108
+tb_ddr_bridge: random          PASS seed=101 sys=40.000ns ui=10.000ns jitter=0.00 accesses=3000 reads=1457 writes=1543 err=0 aborted=0 timeouts=0 lat=5/7.8/16 ctrl_rd=1457 ctrl_wr=1543 cycles=30254
+tb_ddr_bridge: sysreset        PASS seed=101 sys=40.000ns ui=10.000ns jitter=0.00 accesses=3064 reads=1489 writes=1435 err=0 aborted=140 timeouts=0 lat=5/8.0/17 ctrl_rd=1579 ctrl_wr=1485 cycles=30232 resets=140 cut_before_ctrl=34 cut_in_ctrl=41 cut_after_ctrl=65 maybes=50
+tb_ddr_bridge: uireset         PASS seed=101 sys=40.000ns ui=10.000ns jitter=0.00 accesses=3264 reads=1554 writes=1577 err=133 aborted=0 timeouts=0 lat=5/7.9/15 ctrl_rd=1605 ctrl_wr=1577 cycles=34065 ui_resets=133 refused_at_once=12 answered_by_ui=121 watchdog=0 maybes=44
+tb_ddr_bridge: lanes           PASS seed=101 sys=40.000ns ui=10.000ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/9.7/15 ctrl_rd=448 ctrl_wr=112 cycles=6191 beat_checks=448
+tb_ddr_bridge: random          PASS seed=102 sys=40.000ns ui=12.500ns jitter=0.00 accesses=3000 reads=1473 writes=1527 err=0 aborted=0 timeouts=0 lat=5/9.2/20 ctrl_rd=1473 ctrl_wr=1527 cycles=34355
+tb_ddr_bridge: sysreset        PASS seed=102 sys=40.000ns ui=12.500ns jitter=0.00 accesses=3064 reads=1483 writes=1436 err=0 aborted=145 timeouts=0 lat=5/9.3/22 ctrl_rd=1576 ctrl_wr=1487 cycles=34206 resets=145 cut_before_ctrl=34 cut_in_ctrl=48 cut_after_ctrl=63 maybes=52
+tb_ddr_bridge: uireset         PASS seed=102 sys=40.000ns ui=12.500ns jitter=0.00 accesses=3264 reads=1550 writes=1569 err=145 aborted=0 timeouts=0 lat=5/9.2/20 ctrl_rd=1601 ctrl_wr=1572 cycles=39160 ui_resets=145 refused_at_once=29 answered_by_ui=116 watchdog=0 maybes=35
+tb_ddr_bridge: lanes           PASS seed=102 sys=40.000ns ui=12.500ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/11.1/18 ctrl_rd=448 ctrl_wr=112 cycles=7007 beat_checks=448
+tb_ddr_bridge: random          PASS seed=103 sys=40.000ns ui=40.000ns jitter=0.00 accesses=3000 reads=1483 writes=1517 err=0 aborted=0 timeouts=0 lat=10/21.5/55 ctrl_rd=1483 ctrl_wr=1517 cycles=71628
+tb_ddr_bridge: sysreset        PASS seed=103 sys=40.000ns ui=40.000ns jitter=0.00 accesses=3064 reads=1449 writes=1459 err=0 aborted=156 timeouts=0 lat=10/22.0/77 ctrl_rd=1558 ctrl_wr=1505 cycles=72513 resets=156 cut_before_ctrl=58 cut_in_ctrl=63 cut_after_ctrl=35 maybes=47
+tb_ddr_bridge: uireset         PASS seed=103 sys=40.000ns ui=40.000ns jitter=0.00 accesses=3264 reads=1524 writes=1602 err=138 aborted=0 timeouts=0 lat=10/21.2/54 ctrl_rd=1585 ctrl_wr=1604 cycles=88253 ui_resets=139 refused_at_once=15 answered_by_ui=123 watchdog=0 maybes=31
+tb_ddr_bridge: lanes           PASS seed=103 sys=40.000ns ui=40.000ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=10/27.8/49 ctrl_rd=448 ctrl_wr=112 cycles=16566 beat_checks=448
+tb_ddr_bridge: random          PASS seed=104 sys=40.000ns ui=37.300ns jitter=0.00 accesses=3000 reads=1467 writes=1533 err=0 aborted=0 timeouts=0 lat=9/20.2/50 ctrl_rd=1467 ctrl_wr=1533 cycles=67635
+tb_ddr_bridge: sysreset        PASS seed=104 sys=40.000ns ui=37.300ns jitter=0.00 accesses=3064 reads=1459 writes=1462 err=0 aborted=143 timeouts=0 lat=9/20.7/70 ctrl_rd=1553 ctrl_wr=1509 cycles=68582 resets=143 cut_before_ctrl=49 cut_in_ctrl=62 cut_after_ctrl=32 maybes=48
+tb_ddr_bridge: uireset         PASS seed=104 sys=40.000ns ui=37.300ns jitter=0.00 accesses=3264 reads=1526 writes=1608 err=130 aborted=0 timeouts=0 lat=9/20.3/48 ctrl_rd=1585 ctrl_wr=1612 cycles=83356 ui_resets=131 refused_at_once=10 answered_by_ui=120 watchdog=0 maybes=29
+tb_ddr_bridge: lanes           PASS seed=104 sys=40.000ns ui=37.300ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=9/26.5/48 ctrl_rd=448 ctrl_wr=112 cycles=15835 beat_checks=448
+tb_ddr_bridge: random          PASS seed=105 sys=40.000ns ui=97.000ns jitter=0.00 accesses=3000 reads=1500 writes=1500 err=0 aborted=0 timeouts=0 lat=18/47.4/133 ctrl_rd=1500 ctrl_wr=1500 cycles=149609
+tb_ddr_bridge: sysreset        PASS seed=105 sys=40.000ns ui=97.000ns jitter=0.00 accesses=3064 reads=1458 writes=1464 err=0 aborted=142 timeouts=0 lat=18/48.3/163 ctrl_rd=1567 ctrl_wr=1496 cycles=152503 resets=142 cut_before_ctrl=42 cut_in_ctrl=90 cut_after_ctrl=10 maybes=33
+tb_ddr_bridge: uireset         PASS seed=105 sys=40.000ns ui=97.000ns jitter=0.00 accesses=3264 reads=1518 writes=1622 err=124 aborted=0 timeouts=0 lat=18/46.9/127 ctrl_rd=1583 ctrl_wr=1628 cycles=189251 ui_resets=125 refused_at_once=6 answered_by_ui=118 watchdog=0 maybes=32
+tb_ddr_bridge: lanes           PASS seed=105 sys=40.000ns ui=97.000ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=18/62.4/120 ctrl_rd=448 ctrl_wr=112 cycles=36362 beat_checks=448
+tb_ddr_bridge: random          PASS seed=106 sys=10.000ns ui=12.308ns jitter=0.00 accesses=3000 reads=1516 writes=1484 err=0 aborted=0 timeouts=0 lat=11/26.0/66 ctrl_rd=1516 ctrl_wr=1484 cycles=85248
+tb_ddr_bridge: sysreset        PASS seed=106 sys=10.000ns ui=12.308ns jitter=0.00 accesses=3064 reads=1480 writes=1438 err=0 aborted=146 timeouts=0 lat=11/26.5/94 ctrl_rd=1586 ctrl_wr=1476 cycles=86551 resets=146 cut_before_ctrl=36 cut_in_ctrl=77 cut_after_ctrl=33 maybes=39
+tb_ddr_bridge: uireset         PASS seed=106 sys=10.000ns ui=12.308ns jitter=0.00 accesses=3264 reads=1547 writes=1573 err=144 aborted=0 timeouts=0 lat=11/25.8/68 ctrl_rd=1624 ctrl_wr=1577 cycles=107140 ui_resets=146 refused_at_once=11 answered_by_ui=133 watchdog=0 maybes=33
+tb_ddr_bridge: lanes           PASS seed=106 sys=10.000ns ui=12.308ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=11/33.8/62 ctrl_rd=448 ctrl_wr=112 cycles=20010 beat_checks=448
+tb_ddr_bridge: random          PASS seed=107 sys=40.000ns ui=12.308ns jitter=0.30 accesses=3000 reads=1512 writes=1488 err=0 aborted=0 timeouts=0 lat=5/9.2/19 ctrl_rd=1512 ctrl_wr=1488 cycles=34382
+tb_ddr_bridge: sysreset        PASS seed=107 sys=40.000ns ui=12.308ns jitter=0.30 accesses=3064 reads=1500 writes=1421 err=0 aborted=143 timeouts=0 lat=5/9.3/19 ctrl_rd=1600 ctrl_wr=1463 cycles=34111 resets=143 cut_before_ctrl=35 cut_in_ctrl=44 cut_after_ctrl=64 maybes=43
+tb_ddr_bridge: uireset         PASS seed=107 sys=40.000ns ui=12.308ns jitter=0.30 accesses=3264 reads=1551 writes=1574 err=139 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=1592 ctrl_wr=1575 cycles=38596 ui_resets=141 refused_at_once=32 answered_by_ui=107 watchdog=0 maybes=31
+tb_ddr_bridge: lanes           PASS seed=107 sys=40.000ns ui=12.308ns jitter=0.30 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/11.1/17 ctrl_rd=448 ctrl_wr=112 cycles=7025 beat_checks=448
+tb_ddr_bridge: random          PASS seed=108 sys=13.100ns ui=41.700ns jitter=0.30 accesses=3000 reads=1455 writes=1545 err=0 aborted=0 timeouts=0 lat=20/60.1/170 ctrl_rd=1455 ctrl_wr=1545 cycles=188067
+tb_ddr_bridge: sysreset        PASS seed=108 sys=13.100ns ui=41.700ns jitter=0.30 accesses=3064 reads=1450 writes=1467 err=0 aborted=147 timeouts=0 lat=20/63.2/210 ctrl_rd=1561 ctrl_wr=1499 cycles=197570 resets=147 cut_before_ctrl=42 cut_in_ctrl=89 cut_after_ctrl=16 maybes=34
+tb_ddr_bridge: uireset         PASS seed=108 sys=13.100ns ui=41.700ns jitter=0.30 accesses=3264 reads=1535 writes=1588 err=141 aborted=0 timeouts=0 lat=20/60.4/166 ctrl_rd=1612 ctrl_wr=1590 cycles=248012 ui_resets=141 refused_at_once=9 answered_by_ui=132 watchdog=0 maybes=35
+tb_ddr_bridge: lanes           PASS seed=108 sys=13.100ns ui=41.700ns jitter=0.30 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=21/83.2/162 ctrl_rd=448 ctrl_wr=112 cycles=48259 beat_checks=448
+test-ddr-ratios: PASS (40:10:0 40:12.5:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3)
+
+## make test-ddr-defaults: build/ddr/tb_ddr_bridge_defaults (TIMEOUT_CYCLES=4096, CALIB_TIMEOUT_CYCLES=37500000), seed 7
+tb_ddr_bridge: calfail-stopped PASS seed=7 sys=40.000ns ui=12.308ns jitter=0.00 accesses=22 reads=1 writes=1 err=20 aborted=0 timeouts=0 lat=6/10.0/14 ctrl_rd=1 ctrl_wr=1 cycles=37500228 calib_fail_after=37500001
+tb_ddr_bridge: watchdog-rdy-read PASS seed=217 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=189 writes=162 err=11 aborted=0 timeouts=1 lat=5/9.4/20 ctrl_rd=190 ctrl_wr=162 cycles=8304
+tb_ddr_bridge: watchdog-rdy-write PASS seed=224 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=196 writes=155 err=11 aborted=0 timeouts=1 lat=5/9.5/17 ctrl_rd=196 ctrl_wr=156 cycles=8307
+tb_ddr_bridge: watchdog-wdf-write PASS seed=231 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=175 writes=176 err=11 aborted=0 timeouts=1 lat=5/9.1/16 ctrl_rd=175 ctrl_wr=177 cycles=8248
+tb_ddr_bridge: watchdog-drop-read PASS seed=238 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=187 writes=164 err=11 aborted=0 timeouts=1 lat=5/9.3/16 ctrl_rd=188 ctrl_wr=164 cycles=8324
+tb_ddr_bridge: watchdog-uiclk-read PASS seed=245 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=183 writes=168 err=11 aborted=0 timeouts=1 lat=5/9.1/15 ctrl_rd=184 ctrl_wr=168 cycles=8174
+tb_ddr_bridge: watchdog-uiclk-write PASS seed=252 sys=40.000ns ui=12.308ns jitter=0.00 accesses=362 reads=178 writes=173 err=11 aborted=0 timeouts=1 lat=5/9.1/17 ctrl_rd=178 ctrl_wr=174 cycles=8158
+tb_ddr_bridge: watchdog        PASS cases=18
+tb_ddr_bridge: random          PASS seed=7 sys=40.000ns ui=12.308ns jitter=0.00 accesses=5000 reads=2461 writes=2539 err=0 aborted=0 timeouts=0 lat=5/9.1/19 ctrl_rd=2461 ctrl_wr=2539 cycles=56547
+test-ddr-defaults: PASS
+
+## make test-ddr-icarus
+tb_ddr_mailbox: PASS seed=1 src=40000ps dst=12307ps messages=5000 ignored_sends=10572 ignored_takes=3410 clock_stops=90
+tb_ddr_mailbox: PASS seed=2 src=12307ps dst=40000ps messages=5000 ignored_sends=53316 ignored_takes=745 clock_stops=100
+tb_ddr_mailbox: PASS seed=3 src=40000ps dst=40000ps messages=5000 ignored_sends=21469 ignored_takes=1481 clock_stops=152
+tb_ddr_mailbox: PASS seed=4 src=10000ps dst=97000ps messages=5000 ignored_sends=159917 ignored_takes=643 clock_stops=254
+tb_ddr_mailbox: PASS seed=5 src=41700ps dst=13100ps messages=5000 ignored_sends=10586 ignored_takes=3333 clock_stops=96
+tb_ddr_bridge_icarus: PASS seed=1 accesses=1094 controller reads=628 writes=457
+tb_ddr_bridge_icarus: PASS seed=2 accesses=1094 controller reads=629 writes=456
+tb_ddr_bridge_icarus: PASS seed=3 accesses=1094 controller reads=654 writes=431
+test-ddr-icarus: PASS
+
+## make test-ddr-csr: sim/ddr/tb_ddr_csr.v (Icarus) against a Wishbone slave model; short limits
+## (TIMEOUT 64, WB_TIMEOUT 16) at four clock pairs, the board's (1024, 256) at two
+tb_ddr_csr: PASS (sys 40000 ps, wb 12500 ps, jitter 0%, TIMEOUT 64, WB_TIMEOUT 16: 2547 reads, 2613 writes, 156 error answers, 200 refused at once, 7245 Wishbone cycles with 156 slave errors, 10 words left unknown by cut accesses)
+tb_ddr_csr: PASS (sys 40000 ps, wb 10000 ps, jitter 0%, TIMEOUT 64, WB_TIMEOUT 16: 2590 reads, 2570 writes, 136 error answers, 200 refused at once, 7240 Wishbone cycles with 136 slave errors, 20 words left unknown by cut accesses)
+tb_ddr_csr: PASS (sys 40000 ps, wb 40000 ps, jitter 30%, TIMEOUT 64, WB_TIMEOUT 16: 2585 reads, 2575 writes, 137 error answers, 200 refused at once, 7239 Wishbone cycles with 137 slave errors, 16 words left unknown by cut accesses)
+tb_ddr_csr: PASS (sys 13100 ps, wb 12500 ps, jitter 0%, TIMEOUT 64, WB_TIMEOUT 16: 2593 reads, 2567 writes, 134 error answers, 200 refused at once, 7242 Wishbone cycles with 134 slave errors, 22 words left unknown by cut accesses)
+tb_ddr_csr: PASS (sys 40000 ps, wb 12500 ps, jitter 0%, TIMEOUT 1024, WB_TIMEOUT 256: 2566 reads, 2594 writes, 158 error answers, 200 refused at once, 7240 Wishbone cycles with 158 slave errors, 12 words left unknown by cut accesses)
+tb_ddr_csr: PASS (sys 10000 ps, wb 41700 ps, jitter 30%, TIMEOUT 1024, WB_TIMEOUT 256: 2547 reads, 2613 writes, 139 error answers, 200 refused at once, 7245 Wishbone cycles with 139 slave errors, 14 words left unknown by cut accesses)
+test-ddr-csr: PASS
+test-ddr: PASS
+
+## the wrap test against the previous RTL (4-bit request ids, commit cbabe86): fails at k = 15
+FAIL wrap-15 (sys cycle 8429): read 80500040 (be f) returned 11111111, expected 22222222

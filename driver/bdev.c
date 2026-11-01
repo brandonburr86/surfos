@@ -13,11 +13,16 @@ the destructive tools.
 10/17/26 (the desktop's Disks): what lsblk says of a device (bdev_describe())
 and the order it lists them in (bdev_walk()) are for shell/guisys_disk.c too,
 so both say the same; lsblk prints what it printed before.
+10/17/26 (audit B47): the calling task is inside a device request while the
+driver works (surf_task.fs_hold, surfos/task.h): a kill that waited comes after
+the request. Killed at once inside it (a mkfs run by SYS_kcmd), a task left the
+driver's lock held and its transfer half done, and the card hung.
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/irq.h>
+#include <surfos/task.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -89,20 +94,34 @@ void bdev_part_name(const struct bdev *disk, u_int n, char *out, size_t size) {
 
 int bdev_may_format(struct bdev *d, char *why, size_t size) {
     struct bdev *disk = bdev_disk(d);
-    const char *no = NULL;
+    const char *no = NULL, *busy;
     if(!d || !disk) no = "no such device";
     else if(d->gone || disk->gone) no = "it was unplugged";
     else if(disk->protect) no = disk->protect;
     else if(d->readonly || disk->readonly) no = "it is read-only";
     else if(disk->bus != BDEV_BUS_USB && disk->bus != BDEV_BUS_RAM)
         no = "it is not a USB drive (internal disks are never repartitioned or formatted)";
-    else if(vfs_bdev_busy(d)) no = "it, its disk or one of its partitions is mounted (umount or eject first)";
+    else if((busy = vfs_bdev_busy_why(d)) != NULL)       /* 10/18/26 (audit B51, B56, B58, B61): and why */
+        no = bdev_busy_words(busy);
     if(no) {
         if(why && size) snprintf(why, size, "%s", no);
         return -1;
     }
     if(why && size) why[0] = 0;
     return 0;
+}
+
+const char *bdev_busy_words(const char *busy) {
+    if(!busy) return "";
+    if(!strcmp(busy, VFS_BUSY_MOUNTED)) return "it, its disk or one of its partitions is mounted (umount or eject first)";
+    if(!strcmp(busy, VFS_BUSY_UNMOUNTING))
+        return "it, its disk or one of its partitions is being unmounted (try again once that has finished)";
+    if(!strcmp(busy, VFS_BUSY_MOUNTING))
+        return "it, its disk or one of its partitions is being mounted (try again once that has finished)";
+    if(!strcmp(busy, VFS_BUSY_CHANGING))
+        return "it, its disk or one of its partitions is being changed by another mkfs or fdisk (try again once that "
+               "has finished)";
+    return "a request to it, its disk or one of its partitions has not ended yet (try again once it has)";
 }
 
 struct bdev *bdev_find(const char *name) {
@@ -130,13 +149,49 @@ static struct bdev *resolve(struct bdev *d, u32 *lba, u32 count) {
     return NULL;
 }
 
+/* 10/17/26 (audit B47): every request runs inside (fs_enter(), above): the cache counts its own as well, and this
+   covers the raw ones (mkfs, fdisk, dumps, the self test) */
+/* 10/18/26 (audit B56): a request issued on d and not ended yet keeps d, its disk and its partitions busy
+   (struct bdev's requests: vfs_bdev_busy()): no mount, mkfs or fdisk takes the device while a late write may land.
+   10/18/26 (audit B61): one to a device another task's mkfs or fdisk holds (or its disk, or a partition of it) is
+   refused at once (BDEV_EBUSY), not waited for: in the same step as the count, so that an mkfs or fdisk that found no
+   request under way meets none while it holds the device, its rescan at the end included */
+u_int bdev_changes;
+
+bool bdev_changed_by_other(const struct bdev *d) {
+    const struct bdev *p;
+    if(!bdev_changes) return false;
+    if(d->changing && d->changing_by != (const void *)curTask) return true;
+    if(d->parent && d->parent->changing && d->parent->changing_by != (const void *)curTask) return true;
+    if(!d->parent)
+        for(p = bdevs; p; p = p->next)
+            if(p->parent == d && p->changing && p->changing_by != (const void *)curTask) return true;
+    return false;
+}
+
+static int request_begin(struct bdev *d) {
+    u_long f = irq_save();
+    if(bdev_changed_by_other(d)) {
+        irq_restore(f);
+        return BDEV_EBUSY;
+    }
+    d->requests++;
+    irq_restore(f);
+    return 0;
+}
+static void request_end(struct bdev *d) { u_long f = irq_save(); if(d->requests) d->requests--; irq_restore(f); }
+
 int bdev_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     struct bdev *disk = resolve(d, &lba, count);
     int r;
     if(d->gone || (disk && disk->gone)) return BDEV_EGONE;
     if(!disk || !disk->ops || !disk->ops->read) return BDEV_ERANGE;
     if(!count) return 0;
+    fs_enter();
+    if((r = request_begin(d)) != 0) { fs_leave(); return r; }
     r = disk->ops->read(disk, lba, count, buf);
+    request_end(d);
+    fs_leave();
     if(r == 0) { d->reads += count; if(disk != d) disk->reads += count; }
     return r;
 }
@@ -148,16 +203,26 @@ int bdev_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     if(!disk || !disk->ops || !disk->ops->write) return BDEV_ERANGE;
     if(d->readonly || disk->readonly) return BDEV_EROFS;
     if(!count) return 0;
+    fs_enter();
+    if((r = request_begin(d)) != 0) { fs_leave(); return r; }
     r = disk->ops->write(disk, lba, count, buf);
+    request_end(d);
+    fs_leave();
     if(r == 0) { d->writes += count; if(disk != d) disk->writes += count; }
     return r;
 }
 
 int bdev_flush(struct bdev *d) {
     struct bdev *disk = bdev_disk(d);
+    int r;
     if(!disk || disk->gone) return BDEV_EGONE;
     if(!disk->ops || !disk->ops->flush) return 0;
-    return disk->ops->flush(disk);
+    fs_enter();
+    if((r = request_begin(d)) != 0) { fs_leave(); return r; }
+    r = disk->ops->flush(disk);
+    request_end(d);
+    fs_leave();
+    return r;
 }
 
 /* the MBR type byte's name (driver/parttab.c keeps the table) */
@@ -209,6 +274,9 @@ bool bdev_mount_readonly(struct bdev *d) {
    was started from says so also while it is mounted (tools/devloop.py looks for it), and when its stick's
    write-protect switch is on, that it cannot be written */
 static const char *status_of(struct bdev *d) {
+    if(d->unmounting || (d->parent && d->parent->unmounting)) return "being unmounted";   /* 10/18/26 (B51) */
+    if(d->mounting) return "being mounted";                                                /* 10/18/26 (B58) */
+    if(d->changing || (d->parent && d->parent->changing)) return "being changed";          /* 10/18/26 (B61) */
     if(d->protect == bdev_boot_volume && (d->readonly || bdev_disk(d)->readonly)) return "boot drive: read-only";
     if(d->protect == bdev_boot_volume) return mounted(d) ? "mounted (boot drive)" : "boot drive: writable";
     if(mounted(d)) return "mounted";

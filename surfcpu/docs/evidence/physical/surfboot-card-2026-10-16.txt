@@ -1,0 +1,44 @@
+SurfBoot reads the microSD card on the board: the integrator's own capture, not a board-test run
+Board: Arty A7-100T (IDCODE 0x03631093), JP1 and JP2 off; Pmod MicroSD in JA, Pmod VGA in JB+JC (J1 in JB),
+Pmod PS2 in JD (its JP1 on VB), a VGA monitor and a PS/2 keyboard attached; the owner's 32 GB card in the slot.
+The baseline was loaded first (it drives no Pmod pin) and ran normally with the adapters attached:
+  +    0.928 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000002 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+  +    1.936 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000003 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+  +    2.928 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 000004 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
+Then surfcpu_arty_a7_top (SurfBoot; built at d174d0f, clean, every flow check passed) was loaded into
+configuration RAM with make program-volatile while tools/uart.py capture listened:
+  +    4.881 | 
+  +    4.881 | SurfBoot 1.0.0 (build 6c89831a), the SurfCPU boot ROM
+  +    4.881 | soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream d174d0f8
+  +    4.896 | ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    4.912 | 
+  +    4.912 | SurfBoot stopped: no DDR controller (DDR_ABSENT)
+  +    4.912 |   this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    4.929 | The LEDs LD4-LD7 show code 1. Type help for the monitor's commands; inserting a card retries the boot.
+  +    4.929 | surfboot> 
+
+Then typed at the monitor (115200 8N1, 3 ms between characters; read-only commands):
+  === sd
+  sd: SDHC/SDXC, sector addressing, OCR c0ff8000, ready after 173 ms, data CRC on
+  sd: SPI 390 kHz for identification, 6250 kHz for data (DIV 1)
+  sd: CSD version 2, 62333952 sectors (30436 MiB)
+  sd: CID manufacturer 03, OEM SD, product SD32G rev 8.5, serial 67375102, made 2026-06
+  surfboot> === part
+    #  boot  type                    first sector    sectors        size
+    1       0x0c FAT32 (LBA)                8192     62325760    30432 MiB
+    2       0x00 empty                         0            0        0 MiB
+    3       0x00 empty                         0            0        0 MiB
+    4       0x00 empty                         0            0        0 MiB
+  surfboot> === fs
+  sd: SDHC/SDXC, 29.7 GiB; ready after 12 ms; SPI 6250 kHz, data CRC checked
+  fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "NO NAME"
+  fs: partition 1, type 0x0c, sectors 8192..62333951; OEM "        ", label "NO NAME", serial 32303135
+  fs: 62325760 sectors, 1170 reserved, 2 FATs of 7607 sectors (FAT 0 in use), 64 sectors per cluster
+  fs: 973584 clusters of 32768 bytes (2..973585), data from sector 24576, root directory at cluster 2
+  surfboot> === ls /
+    0 files (0 bytes), 0 directories
+  surfboot> === ls /BOOT
+  ls: /BOOT does not exist
+  surfboot> === ls /SYSTEM
+  ls: /SYSTEM does not exist
+  surfboot> 

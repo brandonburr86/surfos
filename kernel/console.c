@@ -16,6 +16,8 @@ sequence, and the pager counts the rows and columns of the size PTY_SETSIZE gave
 its question in the stream (see "stream consoles" below).
 10/25/26 (track A, A6; audit C9): F1-F4 on a framebuffer keep what scrolls off their top, and
 Shift+PgUp shows it ("scrollback" below).
+10/16/26 (SurfCPU, audit C10): one writer at a time on the grids, the screen and the serial
+mirror: the console lock (below). A scroll moves the grid a word at a time.
 */
 
 #include <asm/io.h>
@@ -34,6 +36,7 @@ Shift+PgUp shows it ("scrollback" below).
 #include <mm/kalloc.h>
 #include <mm/pmm.h>
 #include <surfos/irq.h>
+#include <surfos/wait.h>
 
 #include <blibc_common.h>
 #include <stdarg.h>
@@ -73,6 +76,192 @@ static void stream_csi(surf_console *con, int final);
 static int stream_how(void);
 static bool panicking;                          /* 10/6/26: console_panic() was called: the report goes to the screen */
 #define PTY_OUT_LIT(con, lit, how) pty_out(con, lit, sizeof(lit) - 1, how)     /* 10/6/26: a sequence of our own */
+static int con_lock(void);                      /* 10/16/26: the console lock (below) */
+static void con_unlock(int how);
+static void sync_screen(bool memcopy);
+static struct utf8_dec *writer_utf(void);
+static void con_put(surf_console *con, TEXTCOLOR color, u_char b, struct utf8_dec *utf);
+
+/**** the console lock (10/16/26, SurfCPU os track; audit C10) ****/
+
+/*
+    The grids of F1-F4, the screen (conVideo, and the framebuffer or text display behind it)
+    and the serial mirror have one writer at a time. Until now (2004) nothing kept two tasks
+    apart there: kputch() sent a character to the serial line, then changed the grid, and
+    sscroll() moved the grid up a byte at a time while the scheduler was free to run another
+    task, whose line landed in rows that the resumed scroll then moved or cleared. On SurfCPU
+    a scroll took about a timer tick, and the screen showed blank and half-written rows where
+    the serial line had whole ones (the RTL system boot and the fw emulator, during `tasks`);
+    on x86 a scroll takes microseconds, so the race was there too but seldom hit.
+
+    A task holds the lock while it draws: one character (kputch()), or a whole kprintf() or
+    printf() call (console_print_begin()), so its line is never split by another task's. A
+    task with interrupts on, outside KCRIT_ENTER and not the idle task waits for its turn on
+    a wait queue, with interrupts on: a scroll is long on a slow CPU, and the UART must still
+    be heard. The holder counts as holding a mutex (sync.c), so the pager does not ask, and a
+    stream console does not wait, in the middle of it.
+
+    Whoever may not wait (an interrupt handler, a trap, a task with interrupts off, in
+    KCRIT_ENTER or the idle task) draws at once when nobody draws. Otherwise its character
+    goes to the serial line at once and to the grid later: the holder draws it before letting
+    go (con_drain()), and makes then the screen copy a console switch asked for meanwhile. A
+    panic draws over everything. A task killed while it holds the lock gives it back
+    (console_task_gone()).
+*/
+enum { CON_NONE, CON_TASK, CON_QUIET, CON_BUSY };       /* how con_lock() let the caller in (CON_NONE: nothing taken) */
+#define CON_DEFER_MAX 512
+static struct surf_task *con_owner;             /* the task that draws, or NULL */
+static u_int con_depth;                         /* its entries (a printf() line, then each character) */
+static int con_quiet;                           /* one with interrupts off draws (an interrupt handler, the boot) */
+static wait_queue_t con_waiters = WAIT_QUEUE_INIT;
+static struct { surf_console *con; TEXTCOLOR color; u_char b; } con_defer[CON_DEFER_MAX];
+static u_int con_dhead, con_dtail;              /* what the holder draws before it lets go: [con_dtail, con_dhead) */
+static int con_dsync;                           /* and a screen copy asked meanwhile */
+static u_long con_dlost;                        /* characters the grid never got (the list was full) */
+
+/* what was left while the lock was held, drawn by its holder (or by the next to take it) */
+static void con_drain(void) {
+    surf_console *con;
+    TEXTCOLOR color;
+    u_char b;
+    u_long flags;
+    int sync;
+    for(;;) {
+        flags = irq_save();
+        if(con_dtail == con_dhead) {
+            sync = con_dsync;
+            con_dsync = 0;
+            irq_restore(flags);
+            if(sync) sync_screen(true);
+            return;
+        }
+        con = con_defer[con_dtail].con;
+        color = con_defer[con_dtail].color;
+        b = con_defer[con_dtail].b;
+        con_dtail = (con_dtail + 1) % CON_DEFER_MAX;
+        irq_restore(flags);
+        con_put(con, color, b, NULL);           /* decoded as an interrupt handler's (writer_utf()) */
+    }
+}
+
+static void con_defer_put(surf_console *con, TEXTCOLOR color, u_char b) {
+    u_long flags = irq_save();
+    u_int next = (con_dhead + 1) % CON_DEFER_MAX;
+    if(next == con_dtail) {
+        con_dlost++;
+    } else {
+        con_defer[con_dhead].con = con;
+        con_defer[con_dhead].color = color;
+        con_defer[con_dhead].b = b;
+        con_dhead = next;
+    }
+    irq_restore(flags);
+}
+
+/* Take the console lock; CON_BUSY when somebody else holds it and the caller may not wait
+   (then the caller leaves its character with con_defer_put()). */
+static int con_lock(void) {
+    bool on = irqs_enabled() && !in_interrupt();        /* the caller's own code, which the tick may preempt */
+    bool wait = on && curTask && curTask != idle_task && !curTask->crit;
+    u_long flags;
+    int how;
+    if(panicking) return CON_NONE;                      /* a panic draws over everything */
+    flags = irq_save();
+    if(on && curTask && con_owner == curTask) {         /* inside its own drawing: a character of its printf() line */
+        con_depth++;
+        irq_restore(flags);
+        return CON_TASK;
+    }
+    while(wait && (con_owner || con_quiet)) {           /* another task draws: it finishes first */
+        wait_prepare(&con_waiters);
+        irq_restore(flags);
+        yield();
+        flags = irq_save();
+    }
+    if(con_owner || con_quiet) {
+        how = CON_BUSY;                                 /* it interrupted the drawing, or it may not wait */
+    } else if(on && curTask) {
+        con_owner = curTask;
+        con_depth = 1;
+        curTask->mutexes++;
+        how = CON_TASK;
+    } else {
+        con_quiet = 1;                                  /* interrupts off: nobody comes in between */
+        how = CON_QUIET;
+    }
+    irq_restore(flags);
+    if(how != CON_BUSY) con_drain();
+    return how;
+}
+
+static void con_unlock(int how) {
+    u_long flags;
+    if(how == CON_TASK && con_depth > 1) {
+        con_depth--;
+        return;
+    }
+    if(how != CON_TASK && how != CON_QUIET) return;
+    con_drain();
+    flags = irq_save();
+    if(how == CON_TASK) {
+        con_owner = NULL;
+        con_depth = 0;
+        if(curTask && curTask->mutexes) curTask->mutexes--;
+    } else {
+        con_quiet = 0;
+    }
+    wake_up_all(&con_waiters);
+    irq_restore(flags);
+}
+
+/* The pager makes a paged task wait at a row (page_hold()), never holding the console lock:
+   it gives the lock back for the wait (all of its entries: a printf() line it is in) and takes
+   it again after (con_hand_back(), con_take_back()). */
+static u_int con_hand_back(void) {
+    u_int depth;
+    u_long flags;
+    if(!curTask || con_owner != curTask) return 0;
+    depth = con_depth;
+    con_drain();
+    flags = irq_save();
+    con_owner = NULL;
+    con_depth = 0;
+    if(curTask->mutexes) curTask->mutexes--;
+    wake_up_all(&con_waiters);
+    irq_restore(flags);
+    return depth;
+}
+
+static void con_take_back(u_int depth) {
+    if(!depth) return;
+    con_lock();                                         /* a task that may wait: it waits, then holds it once */
+    con_depth = depth;
+}
+
+/* One kprintf() or printf() call drawn whole (lib/blibc/printf.c): the console lock for all of
+   it, for a task that may wait, on a grid console. 0: nothing taken. */
+int console_print_begin(surf_console *con) {
+    if(!con || con->stream || panicking || !curTask || curTask == idle_task || in_interrupt() ||
+       !irqs_enabled() || curTask->crit || (curTask->kcap && con == curTask->con))
+        return 0;
+    return con_lock();
+}
+
+void console_print_end(int how) {
+    con_unlock(how);
+}
+
+/* 10/16/26: the grid copied a word at a time where it can be (one byte at a time a scroll took
+   about a timer tick on SurfCPU); every grid's row and size are multiples of 4 bytes */
+static void grid_copy(u_char *dst, const u_char *src, u_int n) {
+    if(!(((u_long)dst | (u_long)src | n) & 3)) {
+        u32 *d = (u32 *)dst;
+        const u32 *s = (const u32 *)src;
+        for(n /= 4; n; n--) *d++ = *s++;
+    } else {
+        memmove(dst, src, n);
+    }
+}
 
 /* 10/6/26: the size the pager counts: the grid's, or a stream console's own */
 static u_int con_cols(surf_console *con) { return con->stream ? con->cols : COLUMNS; }
@@ -178,9 +367,12 @@ void console_flush(void) {
     if(video == VIDEO_FB) framebuffer_flush();
 }
 
-void syncVideoConsole(bool memcopy) {
+/* the screen follows the active console: its cursor, and with memcopy every cell. 10/16/26: the
+   console lock is held (audit C10); syncVideoConsole() takes it */
+static void sync_screen(bool memcopy) {
     surf_console *con = conActive;
     u_long flags;
+    bool ring;
     if(!con) return;
     KCRIT_ENTER
     flags = irq_save();                 /* 10/25/26 (the review): the view's keys come from an interrupt handler, */
@@ -191,11 +383,28 @@ void syncVideoConsole(bool memcopy) {
     }
     conVideo.loc=con->loc;
     conVideo.txtColor=con->txtColor;
-    if(memcopy) memcpy(conVideo.vmem,con->vmem,SCREEN_BYTES);
-    irq_restore(flags);
+    ring = con->sb != NULL;
+    if(!ring) irq_restore(flags);       /* 10/31/26: no ring, no view: the long copy keeps interrupts on (on SurfCPU it
+                                           takes milliseconds, and the UART must be heard) */
+    if(memcopy) grid_copy(conVideo.vmem,con->vmem,SCREEN_BYTES);
+    if(ring) irq_restore(flags);
     setpos(con);
     KCRIT_LEAVE
     if(memcopy && video == VIDEO_FB) framebuffer_present_lazy();   /* 10/25/26: a scroll, a clear: batched */
+}
+
+void syncVideoConsole(bool memcopy) {
+    int how = con_lock();
+    if(how == CON_BUSY) {                       /* 10/16/26: a console switch while a task draws: the copy */
+        if(memcopy) {                           /* is made when it is done (con_drain()) */
+            u_long flags = irq_save();
+            con_dsync = 1;
+            irq_restore(flags);
+        }
+        return;
+    }
+    sync_screen(memcopy);
+    con_unlock(how);
 }
 
 bool isConsoleActive(surf_console *con) {
@@ -379,9 +588,10 @@ void switchConsole(u_int conNum) {
 }
 
 void clearConsole(surf_console *con) { //re-initializes a console
-  int i;
+  int i, how;
   if(!con) return;
   if(con->stream) { stream_clear(con); return; } //10/6/26: a pseudo-terminal's: ESC[2J ESC[H to the far terminal
+  how = con_lock(); //10/16/26: under the console lock (audit C10); one that may not wait clears all the same
   sb_push_screen(con); //10/25/26 (A6): what it showed stays in the scrollback
   for (i=0; i< SCREEN_BYTES; i+=2) {
         *(con->vmem + i) = 0;
@@ -396,7 +606,7 @@ void clearConsole(surf_console *con) { //re-initializes a console
   console_reset_ansi(con); //10/5/26: no escape sequence half read, plain colours, the cursor shown
   setpos(con);
   if(isConsoleActive(con)) {
-      syncVideoConsole(true);
+      sync_screen(true);
       serial_console_clear();
   }
   if(con->page_asker && !con->page_cancel) { //10/6/26: a task at the pager's question: it comes back at the top
@@ -404,6 +614,7 @@ void clearConsole(surf_console *con) { //re-initializes a console
       page_show(con);
       irq_restore(flags);
   }
+  if(how != CON_BUSY) con_unlock(how);
 }
 
 void clearScreen() {
@@ -423,22 +634,21 @@ void setPoint(surf_point *pt, u_int x, u_int y) { //sets the effective x and y o
 }
 
 void sscroll(surf_console *con) { //scrolls the console
-    int i,j;
+    int j;
     u_char *vmem;
     if(!con) return;
     vmem=con->vmem;
     sb_push(con, vmem); //10/25/26 (A6): the top row into the scrollback
 
-    for(i=COLUMNS*2,j=0;i<SCREEN_BYTES;i++,j++) { //shift the console up
-        *(vmem+j) = *(vmem+i);
-    }
+    //shift the console up; 10/16/26: a word at a time, and under the console lock (kputch(), audit C10)
+    grid_copy(vmem, vmem + COLUMNS*2, SCREEN_BYTES - COLUMNS*2);
 
-    for(;j<SCREEN_BYTES;j+=2) { //clean the last line
+    for(j=SCREEN_BYTES-COLUMNS*2;j<SCREEN_BYTES;j+=2) { //clean the last line
         *(vmem+j)=0; //char byte
         *(vmem+j+1)=7; //attrib byte
     }
 
-    syncVideoConsole(true);
+    sync_screen(true);
     return;
 }
 
@@ -552,12 +762,18 @@ void console_reset_ansi(surf_console *con) {
 void console_task_gone(struct surf_task *task) {
     surf_console *con;
     int i;
+    if(con_owner == task) {                             /* 10/16/26: killed while it drew (audit C10) */
+        con_owner = NULL;
+        con_depth = 0;
+        wake_up_all(&con_waiters);
+    }
     for(i = 0; i < NUM_TTYS; i++) {                     /* 10/6/26: the pseudo-terminals' too */
         con = &conArray[i];
         if(con->ansi_owner == task) console_reset_ansi(con);
         if(con->alt_on && con->alt_owner == task) alt_gone(con);   /* 10/25/26 (A8): the main screen back */
         if(con->page_asker == task) {                   /* 10/6/26: killed at the question: it goes */
-            page_unshow(con);
+            /* 10/16/26: unless somebody draws: the next character printed there takes it away */
+            if(con->stream || (!con_owner && !con_quiet)) page_unshow(con);
             con->page_asker = NULL;
             wake_up_all(&tty_for_console(con)->page_waiters);
         }
@@ -566,6 +782,12 @@ void console_task_gone(struct surf_task *task) {
         else if(con->page_owner && page_descends(task, con->page_owner))
             console_page_new(con);                      /* a paged task's last words (a fault report) show */
     }
+}
+
+/* 10/18/26 (audit B62): the one lock counted in a task's mutexes that its death gives back (above): a fault or a kill
+   at once while t holds it leaves nothing behind (kernel/task.c) */
+bool console_holds(const struct surf_task *t) {
+    return t && con_owner == t;
 }
 
 /* panic and wipeout (kernel/panic.c): the report is plain text, whatever was half printed */
@@ -591,7 +813,7 @@ static void ansi_moveto(surf_console *con, int x, int y) {
     con->loc.y = y < 0 ? 0 : (y >= (int)LINES ? LINES - 1 : (u_int)y);
     con->wrap = 0;
     con->page_fresh = 0;                                /* 10/6/26: the pager asks only at a row's start */
-    if(isConsoleActive(con)) syncVideoConsole(false);
+    if(isConsoleActive(con)) sync_screen(false);
 }
 
 /* cells [from, to) become blanks in the writer's colours (what ED and EL leave behind) */
@@ -1175,7 +1397,7 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
     con->page_fresh = 0;
     if(con->loc.x + 1 < COLUMNS) con->loc.x++;
     else con->wrap = 1;
-    if(isConsoleActive(con)) syncVideoConsole(false);
+    if(isConsoleActive(con)) sync_screen(false);
 }
 
 /**** the pager (10/6/26) ****/
@@ -1376,29 +1598,35 @@ int console_paging(surf_console *con) {
 /* may the current task wait here (for a key, or for another task's question)? 10/6/26: not
    when its call is cut short (a kill waits for its end, or Ctrl+C: surfos/task.h) */
 static int page_may_wait(struct tty *t) {
-    return irqs_enabled() && !curTask->crit && !curTask->mutexes && !t->raw && !curTask->intr;
+    /* 10/16/26: the console lock of its own printf() line does not count: it is given back for the wait */
+    return irqs_enabled() && !curTask->crit && curTask->mutexes == (con_owner == curTask ? 1u : 0u) &&
+           !t->raw && !curTask->intr;
 }
 
 /* Wait for a key at the question. The cursor's row has nothing drawn on it yet, or the row
    is full and the question takes the next one. */
 static void page_ask(surf_console *con, struct tty *t) {
     u_long flags;
-    int key, resized;
+    int key, resized, how;
+    u_int held;
+    how = con->stream ? CON_NONE : con_lock();          /* 10/16/26: drawn under the console lock (audit C10), */
+    /* 10/26/26: another writer may have drawn on the row, opened an escape sequence (which leaves the row's start
+       as it was) or asked since page_hold() looked: then no question, it would land in the middle of that
+       writer's line or sequence, or be a second; the next row start asks. Looked at with the question's own
+       step, interrupts off, as stream_put() changes the row. 10/31/26: on a grid too, where the wait is the lock's */
+    flags = irq_save();
+    if(!(con->page_fresh || con->wrap) || con->esc || con->page_asker) {
+        irq_restore(flags);
+        con_unlock(how);
+        return;
+    }
     if(con->stream) {
-        /* 10/26/26: another writer may have drawn on the row, opened an escape sequence (which leaves the row's start
-           as it was) or asked since page_hold() looked: then no question, it would land in the middle of that
-           writer's line or sequence, or be a second; the next row start asks. Looked at with the question's own
-           step, interrupts off, as stream_put() changes the row */
-        flags = irq_save();
-        if(!(con->page_fresh || con->wrap) || con->esc || con->page_asker) {
-            irq_restore(flags);
-            return;
-        }
         if(con->wrap) {                                 /* 10/6/26: the far terminal's next row */
             stream_row(con);
             PTY_OUT_LIT(con, "\n", PTY_OUT_URGENT);
         }
     } else {
+        irq_restore(flags);
         if(con->wrap) {
             newline(con);
             if(con == conActive && mirror_serial) serial_puts("\r\n");
@@ -1410,7 +1638,11 @@ static void page_ask(surf_console *con, struct tty *t) {
     con->page_resized = 0;
     page_show(con);
     irq_restore(flags);
+    con_unlock(how);                                      /* which is not held while it waits */
+    held = con_hand_back();
     key = tty_getc_unless(t, &con->page_cancel);          /* -1: called off, or the asker's call cut short */
+    con_take_back(held);
+    how = con->stream ? CON_NONE : con_lock();
     flags = irq_save();
     page_unshow(con);
     con->page_asker = NULL;
@@ -1418,6 +1650,7 @@ static void page_ask(surf_console *con, struct tty *t) {
     resized = con->page_resized;
     con->page_resized = 0;
     irq_restore(flags);
+    con_unlock(how);
     wake_up_all(&t->page_waiters);
     if(key == 'q' || key == 'Q' || key == 0x1B || key == 0x03 || (key < 0 && curTask->intr))
         con->page_drop = 1;                                /* q, Esc, Ctrl-C; 10/6/26: killed or interrupted there */
@@ -1438,6 +1671,7 @@ static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
     t = tty_for_console(con);
     for(;;) {
         while(con->page_asker && con->page_asker != curTask && page_may_wait(t)) {
+            u_int held = con_hand_back();               /* 10/16/26: never waiting holding the console lock */
             flags = irq_save();
             if(con->page_asker) {
                 wait_prepare_intr(&t->page_waiters);    /* 10/6/26: a kill or Ctrl+C ends the wait */
@@ -1446,6 +1680,7 @@ static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
             } else {
                 irq_restore(flags);
             }
+            con_take_back(held);
             if(!console_paging(con)) return 0;          /* paging ended meanwhile */
         }
         if(con->page_drop) {
@@ -1510,9 +1745,7 @@ void console_echo(surf_console *con, TEXTCOLOR color, int c) {
 
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
     u_char b = (u_char)c;           /* 10/6/26: a char above 0x7f may come signed */
-    u_char cells[UTF8_OUT_MAX];
-    struct utf8_dec *utf;
-    int n, i;
+    int how;
     /* 10/6/26: a redirected kernel command (console.h): its output goes to memory, not the screen */
     if(con && curTask && curTask->kcap && con == curTask->con && !in_interrupt()) {
         struct kcapture *k = curTask->kcap;
@@ -1534,6 +1767,14 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     /* 10/6/26: the pager (TTY_PAGE): a paged task waits at a full screen, and after q what
        it prints is dropped; the question gives way to anyone else who prints here */
     if(con && con->page_owner && page_hold(con, color, b)) return;
+    /* 10/16/26 (audit C10): the grid, the screen and the serial mirror under the console lock.
+       Busy, and the caller may not wait: the serial line now, the grid when the holder is done. */
+    how = con_lock();
+    if(how == CON_BUSY) {
+        if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
+        if(con) con_defer_put(con, color, b);
+        return;
+    }
     if(con && con->page_shown) {
         u_long flags = irq_save();
         page_unshow(con);
@@ -1542,13 +1783,27 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
-    if(!con) return;
-    con->line_by = in_interrupt() ? NULL : curTask;     /* 10/25/26: whose line the cursor's row is (kprintf) */
+    if(con) con_put(con, color, b, writer_utf());
+    con_unlock(how);
+}
+
+/* One byte on a grid console: what kputch() did after the serial mirror until 10/16/26, now
+   with the console lock held (audit C10). utf: the writer's UTF-8 decoder (NULL: the shared
+   one of interrupt handlers, for what they left while the lock was held). */
+static void con_put(surf_console *con, TEXTCOLOR color, u_char b, struct utf8_dec *utf) {
+    u_char cells[UTF8_OUT_MAX];
+    int n, i;
+    con->line_by = !utf || in_interrupt() ? NULL : curTask;     /* 10/25/26: whose line the cursor's row is (kprintf) */
+    if(!utf) utf = &shared_utf;
+    if(con->page_shown) {                       /* (kputch() took it away; a deferred character may find it) */
+        u_long flags = irq_save();
+        page_unshow(con);
+        irq_restore(flags);
+    }
     if(con->esc && ansi_byte(con, color, b)) return;
     /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
        it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
        below 0x80 that cuts a character short comes out last, and is handled below as ever. */
-    utf = writer_utf();
     if(b >= 0x80 || utf->have) {
         n = utf8_feed(utf, b, cells);
         if(b < 0x80) n--;
@@ -1565,12 +1820,12 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     case '\n':
         if(con->wrap) newline(con); //a full line still leaves an empty one, as it always did
         newline(con);
-        syncVideoConsole(false);
+        sync_screen(false);
         break;
     case '\r': //10/5/26: carriage return; after a full line it cancels the wrap, so "\r\n" is one line
         con->wrap = 0;
         con->loc.x = 0;
-        syncVideoConsole(false);
+        sync_screen(false);
         break;
     case 0x08:
         /* erase the cell just typed and stay there (the 2004 code stepped back twice);
@@ -1578,17 +1833,17 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         if(con->wrap) con->wrap = 0;
         else if(con->loc.x > 0) con->loc.x--;
         else if(con->loc.y > 0) { con->loc.y--; con->loc.x = COLUMNS - 1; }
-        else { syncVideoConsole(false); break; }
+        else { sync_screen(false); break; }
         putcell(con, ansi_attr(con, color), ' ');
         con->page_fresh = 0;
-        syncVideoConsole(false);
+        sync_screen(false);
         break;
     case '\t': /* 10/25/26: to the next multiple of 8, as on a terminal (and stream_put()): never past the
                   last column, nothing at a pending wrap, and the cells it passes stay as they are */
         if(!con->wrap) con->loc.x = (con->loc.x + 8) & ~7u;
         if(con->loc.x >= COLUMNS) con->loc.x = COLUMNS - 1;
         con->page_fresh = 0;
-        syncVideoConsole(false);
+        sync_screen(false);
         break;
     default:
         if(b >= 32 && b <= 126) put_char(con, color, b);   /* other control characters: nothing */
@@ -1622,7 +1877,7 @@ static bool whole_line_writer(surf_console *con) {
 }
 
 static void kernel_puts(surf_console *con, const char *s) {
-  int i;
+  int i, line;
   u_long flags;
   if(whole_line_writer(con)) {
     for(i = 0; i < 10 && con->loc.x && con->line_by != curTask; i++) sleep_ms(10);
@@ -1636,18 +1891,23 @@ static void kernel_puts(surf_console *con, const char *s) {
       irq_restore(flags);
       sleep_ms(5);
     }
+    line = console_print_begin(con);            /* 10/16/26: drawn whole (audit C10) */
     for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+    console_print_end(line);
     flags = irq_save();
     if(con->line_owner == curTask) con->line_owner = NULL;
     irq_restore(flags);
     return;
   }
+  line = console_print_begin(con);
   for(; *s; s++) kputch(con, KERN_TXT_COLOR, *s);
+  console_print_end(line);
 }
 
 void kprintf(const char *format, ...) {
   char buf[512];
   surf_console *con;
+  int line;
   va_list ap;
   va_start(ap, format);
   vsnprintf(buf, sizeof(buf), format, ap);

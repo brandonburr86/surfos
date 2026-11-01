@@ -1,0 +1,73 @@
+# SurfCPU as a UDB architecture configuration for riscv-arch-test 4.x (ACT4)
+# File: surfcpu.yaml Date: 10/15/26 (SurfCPU)
+#
+# docs/ISA.md version 1 in the parameter language of the RISC-V Unified Database, modelled on
+# the suite's config/cores/cve2/cv32e20.yaml and config/spike/*. NOT VALIDATED: the UDB gem
+# needs Ruby, which the toolchain container does not have, so tools/rvarch.py uses the
+# hand-written rvtest_config.h next to this file instead. It is here so that a later run of
+# ACT4's own framework (with Sail as the reference) can start from it; validate it first
+# (`udb validate`), and keep it and rvtest_config.h in step with ISA.md.
+---
+$schema: config_schema.json#
+kind: architecture configuration
+type: fully configured
+name: surfcpu
+description: SurfCPU, RV32IM + Zicsr + Zifencei, machine mode only, no PMP entries (docs/ISA.md)
+implemented_extensions:
+  - { name: I, version: "= 2.1" }
+  - { name: M, version: "= 2.0" }
+  - { name: Zmmul, version: "= 1.0.0" }
+  - { name: Zicsr, version: "= 2.0" }
+  - { name: Zifencei, version: "= 2.0.0" }
+  - { name: Zicntr, version: "= 2.0" }
+  - { name: Zihpm, version: "= 2.0" }       # counters hardwired to zero (ISA.md section 2)
+  - { name: Sm, version: "= 1.13.0" }
+
+params:
+  MXLEN: 32
+  PHYS_ADDR_WIDTH: 32
+  M_MODE_ENDIANNESS: little
+  MISA_CSR_IMPLEMENTED: true
+  MUTABLE_MISA_M: false                     # misa ignores writes
+  PRECISE_SYNCHRONOUS_EXCEPTIONS: true
+  TRAP_ON_ECALL_FROM_M: true
+  TRAP_ON_EBREAK: true
+  TRAP_ON_UNIMPLEMENTED_INSTRUCTION: true
+  TRAP_ON_RESERVED_INSTRUCTION: true
+  TRAP_ON_UNIMPLEMENTED_CSR: true
+  TRAP_ON_ILLEGAL_WLRL: false
+  REPORT_VA_IN_MTVAL_ON_BREAKPOINT: true    # mtval = the EBREAK's address
+  REPORT_VA_IN_MTVAL_ON_LOAD_MISALIGNED: true
+  REPORT_VA_IN_MTVAL_ON_STORE_AMO_MISALIGNED: true
+  REPORT_VA_IN_MTVAL_ON_INSTRUCTION_MISALIGNED: true
+  REPORT_VA_IN_MTVAL_ON_LOAD_ACCESS_FAULT: true
+  REPORT_VA_IN_MTVAL_ON_STORE_AMO_ACCESS_FAULT: true
+  REPORT_VA_IN_MTVAL_ON_INSTRUCTION_ACCESS_FAULT: true
+  REPORT_ENCODING_IN_MTVAL_ON_ILLEGAL_INSTRUCTION: true
+  MTVAL_WIDTH: 32
+  MISALIGNED_LDST: false                    # misaligned loads/stores trap
+  MISALIGNED_LDST_EXCEPTION_PRIORITY: high  # misaligned before access fault (ISA.md section 3)
+  MISALIGNED_MAX_ATOMICITY_GRANULE_SIZE: 0
+  MARCHID_IMPLEMENTED: false                # marchid reads 0
+  MIMPID_IMPLEMENTED: true
+  IMP_ID_VALUE: 0x100                       # SURF_SOC_VERSION
+  VENDOR_ID_BANK: 0x0                       # mvendorid reads 0
+  VENDOR_ID_OFFSET: 0x0
+  CONFIG_PTR_ADDRESS: 0
+  PMA_GRANULARITY: 2
+  MTVEC_ACCESS: rw
+  MTVEC_MODES: [0]                          # direct only, MODE fixed at 0
+  MTVEC_BASE_ALIGNMENT_DIRECT: 4
+  MTVEC_ILLEGAL_WRITE_BEHAVIOR: retain
+  TIME_CSR_IMPLEMENTED: true
+  MCOUNTINHIBIT_IMPLEMENTED: true
+  COUNTINHIBIT_EN: [true, false, true, false, false, false, false, false,
+                    false, false, false, false, false, false, false, false,
+                    false, false, false, false, false, false, false, false,
+                    false, false, false, false, false, false, false, false]
+  HPM_COUNTER_EN: [false, false, false, false, false, false, false, false,
+                   false, false, false, false, false, false, false, false,
+                   false, false, false, false, false, false, false, false,
+                   false, false, false, false, false, false, false, false]
+  HPM_EVENTS: [0]
+  NUM_PMP_ENTRIES: 0

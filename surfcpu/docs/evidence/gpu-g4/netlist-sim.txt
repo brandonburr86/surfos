@@ -1,0 +1,53 @@
+SurfGPU G4: make gpu-netlist-sim (sim/board/netlist_sim.sh, Verilator 5.032) in the surfcpu-toolchain
+container, 2026-10-26, NETLIST_MAX_MS=3000: the synthesized netlist of the gpudiag build to test at
+bfaac48 (every open-flow gate PASS; LVS proved the routed bitstream equal to this netlist; boot ROM
+gpudiag.mem aaee817d..., bitstream f9a5ac9c...: synth-gpudiag.txt) run from its pins with its boot ROM
+inside it, until the UART line GPUDIAG:. Then sim/gpu/gpudiag_check.py checks the transcript with the
+build's manifest (build id bfaac489, source_dirty false), taking gpudiag's own comparisons with the
+C model's CRCs that the ROM carries (no frames are captured from the netlist). This is the first
+evidence that synthesis made the triangle engine, the depth buffer and FLIP as the RTL says: LVS
+proves the placement and routing against the synthesized netlist, not the netlist against the RTL.
+It is to be redone once, on the bitstream that goes to the board after the review.
+
+netlist_sim: arty_a7_100t surfcpu_arty_a7_gpudiag: 19678 cells in build/fpga/arty_a7_100t/surfcpu_arty_a7_gpudiag/openxc7/surfcpu_arty_a7_top.netlist.v, verilator
+netlist_sim: tb_netlist: 408 us uart| 
+netlist_sim: tb_netlist: 4140 us uart| SurfGPU diagnostic 1.0.0 (build bfaac489)
+netlist_sim: tb_netlist: 12386 us uart| board Arty A7-100T (0x100), SoC 0.4.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+netlist_sim: tb_netlist: 16553 us uart| bitstream build bfaac489 flags 0, features 17f
+netlist_sim: tb_netlist: 20893 us uart| identity                           ok (5 checks)
+netlist_sim: tb_netlist: 273821 us uart| VRAM window (March C-)             (300 KiB) ok (59 checks)
+netlist_sim: tb_netlist: 328701 us uart| video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+netlist_sim: tb_netlist: 407129 us uart| gpu registers and errors           ok (14 checks)
+netlist_sim: tb_netlist: 433670 us uart| gpu2 commands                      ok (4 checks)
+netlist_sim: tb_netlist: 438444 us uart| scenes                             17, engine present
+netlist_sim: tb_netlist: 468158 us uart| scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+netlist_sim: tb_netlist: 551579 us uart| scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (5 checks)
+netlist_sim: tb_netlist: 901946 us uart| scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+netlist_sim: tb_netlist: 935314 us uart| scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+netlist_sim: tb_netlist: 1035419 us uart| scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+netlist_sim: tb_netlist: 1068787 us uart| scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+netlist_sim: tb_netlist: 1102155 us uart| scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+netlist_sim: tb_netlist: 1135524 us uart| scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
+netlist_sim: tb_netlist: 1168892 us uart| scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
+netlist_sim: tb_netlist: 1202261 us uart| scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
+netlist_sim: tb_netlist: 1285681 us uart| scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
+netlist_sim: tb_netlist: 1352417 us uart| scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
+netlist_sim: tb_netlist: 1452523 us uart| scene 12: engine: demo             crc f501eb46 ok (3 checks)
+netlist_sim: tb_netlist: 1485891 us uart| scene 13: engine: flat triangles, culling crc bbb6a4cb ok (3 checks)
+netlist_sim: tb_netlist: 1519259 us uart| scene 14: engine: Gouraud triangles, ramps crc f4bcafe0 ok (3 checks)
+netlist_sim: tb_netlist: 1552627 us uart| scene 15: engine: depth, 320x240   crc bbe8cf82 ok (3 checks)
+netlist_sim: tb_netlist: 1619364 us uart| scene 16: engine: page B drawn, FLIP crc e82b76e5 ok (3 checks)
+netlist_sim: tb_netlist: 1971031 us uart| cube: 16 frames at full rate       (16 video frames, 16 shown) ok (6 checks)
+netlist_sim: tb_netlist: 1971204 us uart| 
+netlist_sim: tb_netlist: 1973635 us uart| GPUDIAG: PASS (146 checks)
+netlist_sim: tb_netlist: 30 lines, 1757 characters, 0 framing errors, at 1973635 us of simulated time
+netlist_sim: tb_netlist: LEDs 1111, RGB LEDs 000
+netlist_sim: tb_netlist: VGA hsync every 31.779 us (62104), vsync every 16.684 ms (118)
+netlist_sim: - sim/board/tb_netlist.v:113: Verilog $finish
+netlist_sim: - S i m u l a t i o n   R e p o r t: Verilator 5.032 2025-01-01
+netlist_sim: - Verilator: $finish at 2s; walltime 11938.241 s; speed 165.369 us/s
+netlist_sim: - Verilator: cpu 11934.708 s on 1 threads; alloced 109 MB
+netlist_sim: built in 39 s, ran 11938 s (exit 0)
+gpudiag_check: PASS (146 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+
+make gpu-netlist-sim: 02:59 to 06:19 local (3 h 20 min)

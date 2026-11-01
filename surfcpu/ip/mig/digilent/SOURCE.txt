@@ -1,0 +1,18 @@
+Digilent's MIG 7-series project files for the Arty A7 (DDR3L), kept unchanged.
+
+Repository: https://github.com/Digilent/vivado-boards
+Commit:     d8d43ed9f3f7e367ee3de82782ed601d88305677 (2026-10-13, master)
+Licence:    MIT, Copyright (c) 2021 Digilent, Inc. (License.txt, from the repository root)
+Board:      Arty A7, board revision E.0 (board.xml: compatible_board_revisions E.0), board-file
+            version 1.1 (MIG 4.2: 100 MHz single-ended input on E3, 3077 ps = 325 MHz memory
+            clock, 4:1, MT41K128M16XX-15E timing, 16-bit, 256 MiB, AXI port)
+Fetched and checked by ip/mig/fetch-digilent.sh. Our derived project files are made from these
+by ip/mig/make_prj.py (docs/DDR.md lists every change).
+
+SHA-256 (file as kept here, upstream path):
+28a42137bb9c77a6aa931c5ca670134620f448051dbd708a05921280a7b277ba  License.txt
+3f72593b115e717bbc9a2e219cc321b36c2b7a5786ec32d9c6178390560862ec  arty-a7-100/mig.prj
+8c0922bb8e5723db8f5ac075cf4831c43ac74bb64b9313a6ac962171b2888f89  arty-a7-35/mig.prj
+
+Upstream paths: License.txt, new/board_files/arty-a7-100/E.0/1.1/mig.prj,
+new/board_files/arty-a7-35/E.0/1.1/mig.prj.

@@ -175,5 +175,6 @@ void tty_task_gone(struct surf_task *task);          /* interrupts off */
 /* 10/6/26: pseudo-terminals (kernel/pty.c): a task on one ended (from tty_task_gone()); when
    no task has the pty as its terminal any more, its session has ended */
 void pty_task_gone(struct surf_task *task);
+surf_console *pty_console_of(int fd);   /* 10/18/26 (B55): the console of the pty whose master is descriptor fd */
 
 #endif

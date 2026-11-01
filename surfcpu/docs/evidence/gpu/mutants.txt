@@ -1,0 +1,24 @@
+SurfGPU: make test-gpu-mutants (sim/gpu/mutants.py) in the surfcpu-toolchain container, 2026-10-18,
+at 95d0bd1 plus the clip mutant's pattern brought up to date (the line had changed). Each mutant is a
+one-line change to a copy of the RTL; the test named is built against the copy (Verilator) and run
+on seed 1; it must fail. 83 s in all.
+
+copy-rows-always-down          gpu    caught: test_gpu: FAIL (21 of 159 checks, seed 1)
+copy-never-right-to-left       gpu    caught: test_gpu: FAIL (21 of 159 checks, seed 1)
+clip-right-edge-inclusive      gpu    caught: test_gpu: FAIL (21 of 179 checks, seed 1)
+expand-bits-lsb-first          gpu    caught: test_gpu: FAIL (21 of 179 checks, seed 1)
+expand-transparency-ignored    gpu    caught: test_gpu: FAIL (21 of 179 checks, seed 1)
+write-rect-lanes-unaligned     gpu    caught: test_gpu: FAIL (21 of 184 checks, seed 1)
+line-tie-moves-x-late          gpu    caught: test_gpu: FAIL (21 of 274 checks, seed 1)
+copy-key-ignored               gpu    caught: test_gpu: FAIL (21 of 164 checks, seed 1)
+fill-ignores-grant             gpu    caught: test_gpu: FAIL (21 of 204 checks, seed 1)
+overflow-never-set             gpu    caught: test_gpu: FAIL (1 of 399 checks, seed 1)
+target-bound-off-by-one        gpu    caught: test_gpu: FAIL (21 of 119 checks, seed 1)
+copy-window-not-shifted        gpu    caught: test_gpu: FAIL (21 of 159 checks, seed 1)
+vram-engine-over-cpu           vram   caught: test_vram: FAIL (84246 of 1413138 checks, seed 1)
+vram-bound-inclusive           vram   caught: test_vram: FAIL (2 of 1413105 checks, seed 1)
+overlay-background-ignored     video  caught: test_video_gfx: FAIL (2 of 53 checks failed, seed 1)
+crc-bytes-swapped              video  caught: test_video_gfx: FAIL (5 of 53 checks failed, seed 1)
+gfx-placement-not-latched      video  caught: test_video_gfx: FAIL (1 of 53 checks failed, seed 1)
+gfx-scale-ignored              video  caught: test_video_gfx: FAIL (9 of 53 checks failed, seed 1)
+test-gpu-mutants: 18 of 18 caught

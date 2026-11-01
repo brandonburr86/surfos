@@ -374,6 +374,7 @@ class Monitor:
                 break
             except OSError:
                 if proc.poll() is not None or time.time() > deadline:
+                    self.s.close()
                     raise RuntimeError('QEMU did not start')
                 time.sleep(0.05)
         self.buf = b''
@@ -438,16 +439,36 @@ class Vm:
                '-monitor', f'unix:{self.mon_path},server,nowait']
         cmd += (['-chardev', f'socket,id=ser0,path={ser_path},server=on,wait=off', '-serial', 'chardev:ser0']
                 if serial else ['-serial', 'none'])
-        cmd += list(extra) + args.extra.split()
-        self.cmd = cmd
         # 10/25/26 (track A, A7): the console's font, as driver/fbfont.c chooses it for these boots (profile=laptop):
         # Spleen 12x24 at 1920x1080 or more, 8x16 below (OVMF's own mode is 1280x800)
-        xres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.xres=')]
-        yres = [int(w.split('=')[1]) for w in cmd if w.startswith('VGA.yres=')]
+        xres = [int(w.split('=')[1]) for w in cmd + list(extra) if w.startswith('VGA.xres=')]
+        yres = [int(w.split('=')[1]) for w in cmd + list(extra) if w.startswith('VGA.yres=')]
         self.font = '12x24' if xres and yres and xres[-1] >= 1920 and yres[-1] >= 1080 else '8x16'
-        self.proc = subprocess.Popen(cmd, cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT)
-        self.mon = Monitor(self.mon_path, self.proc)
+        # 10/18/26 (round fs-fix-11): forwarded ports are written {port:NAME} in extra and picked afresh for each try:
+        # QEMU binds them, and one found free may be taken by another program before it does (tools/qemu-run.py's
+        # pick_ports(), port_taken(), PORT_TRIES); any other failure to start stays fatal. 10/19/26 (audit B78): and so
+        # does a port the caller wrote itself, taken: tried again only when QEMU names a picked one
+        qr = load_smoke_harness()
+        self.ports = {}
+        for attempt in range(1, qr.PORT_TRIES + 1):
+            ports = {}
+            self.cmd = cmd + qr.pick_ports(list(extra) + args.extra.split(), ports)
+            self.proc = subprocess.Popen(self.cmd, cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT)
+            try:
+                self.mon = Monitor(self.mon_path, self.proc)
+            except RuntimeError:
+                out = self.proc.stdout.read().decode(errors='replace') if self.proc.poll() is not None else ''
+                if attempt < qr.PORT_TRIES and qr.picked_port_taken(out, set(ports.values())):
+                    qr.retry_note(attempt, out)
+                    self.proc.stdout.close()
+                    for p in (self.mon_path, ser_path):
+                        if os.path.exists(p):
+                            os.remove(p)
+                    continue
+                raise RuntimeError('QEMU did not start: ' + ' '.join(self.cmd) + '\n' + out)
+            self.ports = ports
+            break
         self.ser, self.transcript, self.cursor = None, b'', 0
         self.more_at, self.auto_more = 0, True
         if serial:
@@ -1452,11 +1473,9 @@ def scenario_usbnet(args, image, firmware, outdir):
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     qr = load_smoke_harness()
-    telnet_port = qr.free_port()
-    www_port = qr.free_port()
-    ftp_port, pasv = qr.free_port(), qr.free_port_range(4)     # 10/24/26: ftpd, its passive range to the same ports
-    ftp_fwd = f',hostfwd=tcp:127.0.0.1:{ftp_port}-:21' + ''.join(f',hostfwd=tcp:127.0.0.1:{p}-:{p}' for p in
-                                                                  range(pasv, pasv + 4))
+    pasv = qr.free_port_range(4)                    # 10/24/26: ftpd's passive range, to the same ports of the guest
+    ftp_fwd = ',hostfwd=tcp:127.0.0.1:{port:ftp}-:21' + ''.join(f',hostfwd=tcp:127.0.0.1:{p}-:{p}' for p in
+                                                                 range(pasv, pasv + 4))
     # QEMU limits injected tables to 65535 bytes. Exercise a large export here;
     # host tests cover multi-chunk tables up to 1 MiB. Noop AML has no side effects.
     large_table = bytearray(b'SSDT' + struct.pack('<I', 60 * 1024 + 37) +
@@ -1468,10 +1487,12 @@ def scenario_usbnet(args, image, firmware, outdir):
     table_file.write(large_table)
     table_file.flush()
     vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
-            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23,hostfwd=tcp:127.0.0.1:{www_port}-:80'
+            extra=['-netdev', 'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-:23,hostfwd=tcp:127.0.0.1:{port:www}-:80'
                    + ftp_fwd,
                    '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV,
                    '-acpitable', 'file=' + table_file.name])
+    telnet_port, www_port, ftp_port = vm.ports['telnet'], vm.ports['www'], vm.ports['ftp']   # (10/18/26: picked as QEMU
+                                                                                              # starts, fs-fix-11)
     try:
         if boot_serial(vm, results, args.boot_timeout):
             boot = vm.text()
@@ -1934,11 +1955,11 @@ def scenario_devloop(args, image, firmware, outdir):
     mi.make_devstick(stick, kernel, initrd)
     with open(blank, 'wb') as f:
         f.truncate(64 << 20)
-    tport, rport = qr.free_port(), qr.free_port()
-    net = ['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{tport}-:23,hostfwd=tcp:127.0.0.1:{rport}-:{rport}',
+    net = ['-netdev', 'user,id=n0,hostfwd=tcp:127.0.0.1:{port:telnet}-:23,hostfwd=tcp:127.0.0.1:{port:rx}-:{port:rx}',
            '-device', USBNET_DEV]
     vm = Vm('devloop', args, image, firmware, mem='512', serial=True, outdir=outdir, reboot=True,
             extra=data_stick_args(stick) + [a.format(blank=blank) for a in BLANK_STICK] + net)
+    tport, rport = vm.ports['telnet'], vm.ports['rx']   # (10/18/26: picked as QEMU starts, fs-fix-11)
     rx_data = os.urandom(200000)
     sessions = []
     try:

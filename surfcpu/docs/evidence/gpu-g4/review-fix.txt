@@ -1,0 +1,557 @@
+SurfGPU G4: the review of 3fea963, its fixes and the bug-back runs (2026-10-26). GPU.md 16.12 is the record;
+this file has the runs. In the surfcpu-toolchain container (Verilator 5.032, gcc), times UTC as it printed them.
+The fixes are cd523de to db3e65c (no RTL or model change). The runs below were made on db3e65c's sources (some
+just before they were committed, as said), with GPU.md and this file not yet committed: the builds say dirty.
+
+How the bug-back runs were made (scratch scripts under the worktree's build/g4-fix/tools, not committed):
+- engine: test_gpu built by Verilator exactly as sim/gpu/mutants.py builds it (the mutated copy of the RTL file,
+  the other files as they are), from a given test source: db3e65c's sim/gpu/test_gpu.cpp, 3fea963's, or db3e65c's
+  with 3fea963's random_vertices() put back; each seed run with --chunks 120 (and --random-only where said); per
+  run, the verdict, the FENCEs whose VRAM differed from the model, the first failing check's label.
+- SoC: surfsim with HAS_GPU = 1 built from the mutated copy as mutants.py's soc_one builds it, then each boot ROM run
+  to its first GPUDIAG line (at most 700 million cycles) and judged as soc_one judges (gpudiag, gpudiag_check in its
+  board and simulation forms). Three ROMs: gpudiag as at bfaac48 (3fea963 with bfaac48's gpuscenes.c: the only
+  firmware difference between the two), as at 3fea963 (both from git archives, build id 3fea963) and as fixed.
+- each rule of gpudiag_check taken out of a copy of it, test_gpudiag_check run against the copy;
+- the old rate rule put back into a copy of db3e65c's gpudiag.c, its gpudiag-slow.mem run on the RTL SoC.
+
+== M1: the top-left rule's six per-edge cases ==
+
+test_gpu, the six per-edge mutants of mutants.py (and the RTL as it is), seeds 1-3, 120 chunks (14:07 to 14:11):
+-- 3fea963's test_gpu.cpp (the bug put back):
+  none                       seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e0-top-excluded        seed 1: FAIL, VRAM differed at 3 directed FENCEs, 0 random chunks
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-top-excluded        seed 2: FAIL, VRAM differed at 3 directed FENCEs, 0 random chunks
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-top-excluded        seed 3: FAIL, VRAM differed at 3 directed FENCEs, 0 random chunks
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-left-excluded       seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e0-left-excluded       seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e0-left-excluded       seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e1-top-excluded        seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e1-top-excluded        seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e1-top-excluded        seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e1-left-excluded       seed 1: FAIL, VRAM differed at 4 directed FENCEs, 0 random chunks
+      first: TRIANGLE: two triangles crossing in depth, full-range ramps: 112 VRAM words differ from the model, first at byte 44600
+  tri-e1-left-excluded       seed 2: FAIL, VRAM differed at 4 directed FENCEs, 0 random chunks
+      first: TRIANGLE: two triangles crossing in depth, full-range ramps: 112 VRAM words differ from the model, first at byte 44600
+  tri-e1-left-excluded       seed 3: FAIL, VRAM differed at 4 directed FENCEs, 16 random chunks (from chunk 63)
+      first: TRIANGLE: two triangles crossing in depth, full-range ramps: 112 VRAM words differ from the model, first at byte 44600
+  tri-e2-top-excluded        seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e2-top-excluded        seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e2-top-excluded        seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e2-left-excluded       seed 1: FAIL, VRAM differed at 11 directed FENCEs, 0 random chunks
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+  tri-e2-left-excluded       seed 2: FAIL, VRAM differed at 11 directed FENCEs, 0 random chunks
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+  tri-e2-left-excluded       seed 3: FAIL, VRAM differed at 11 directed FENCEs, 0 random chunks
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+-- db3e65c's test_gpu.cpp (and M2's two engine mutants):
+  none                       seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e0-top-excluded        seed 1: FAIL, VRAM differed at 10 directed FENCEs, 9 random chunks (from chunk 18)
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-top-excluded        seed 2: FAIL, VRAM differed at 10 directed FENCEs, 9 random chunks (from chunk 13)
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-top-excluded        seed 3: FAIL, VRAM differed at 10 directed FENCEs, 9 random chunks (from chunk 26)
+      first: TRIANGLE: edges through pixel centres, a shared-edge mesh: 10 VRAM words differ from the model, first at byte 33912: 0
+  tri-e0-left-excluded       seed 1: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 12)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 70728: 00000
+  tri-e0-left-excluded       seed 2: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 0)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 70728: 00000
+  tri-e0-left-excluded       seed 3: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 3)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 70728: 00000
+  tri-e1-top-excluded        seed 1: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 13)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 14 VRAM words differ from the model, first at byte 73280: 00000
+  tri-e1-top-excluded        seed 2: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 24)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 14 VRAM words differ from the model, first at byte 73280: 00000
+  tri-e1-top-excluded        seed 3: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 27)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 14 VRAM words differ from the model, first at byte 73280: 00000
+  tri-e1-left-excluded       seed 1: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 0)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 69336: 00000
+  tri-e1-left-excluded       seed 2: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 1)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 69336: 00000
+  tri-e1-left-excluded       seed 3: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 20)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 53 VRAM words differ from the model, first at byte 69336: 00000
+  tri-e2-top-excluded        seed 1: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 28)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 10 VRAM words differ from the model, first at byte 73236: 00000
+  tri-e2-top-excluded        seed 2: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 64)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 10 VRAM words differ from the model, first at byte 73236: 00000
+  tri-e2-top-excluded        seed 3: FAIL, VRAM differed at 7 directed FENCEs, 12 random chunks (from chunk 5)
+      first: TRIANGLE: the top-left rule at each edge, in diamonds: 10 VRAM words differ from the model, first at byte 73236: 00000
+  tri-e2-left-excluded       seed 1: FAIL, VRAM differed at 13 directed FENCEs, 6 random chunks (from chunk 0)
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+  tri-e2-left-excluded       seed 2: FAIL, VRAM differed at 13 directed FENCEs, 6 random chunks (from chunk 41)
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+  tri-e2-left-excluded       seed 3: FAIL, VRAM differed at 13 directed FENCEs, 6 random chunks (from chunk 0)
+      first: SET_ZBUF at VRAM's end; a refused SET_TARGET keeps it, an accepted one drops it: 4 VRAM words differ from the model, f
+  tri-zwrite-alone-not-refused seed 1: FAIL, VRAM differed at 14 directed FENCEs, 6 random chunks (from chunk 0)
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  tri-zwrite-alone-not-refused seed 2: FAIL, VRAM differed at 14 directed FENCEs, 5 random chunks (from chunk 47)
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  tri-zwrite-alone-not-refused seed 3: FAIL, VRAM differed at 14 directed FENCEs, 0 random chunks
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  tri-refused-but-drawn      seed 1: FAIL, VRAM differed at 14 directed FENCEs, 6 random chunks (from chunk 0)
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  tri-refused-but-drawn      seed 2: FAIL, VRAM differed at 14 directed FENCEs, 6 random chunks (from chunk 23)
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  tri-refused-but-drawn      seed 3: FAIL, VRAM differed at 14 directed FENCEs, 0 random chunks
+      first: SET_ZBUF's refusals, depth without a depth buffer: 16 VRAM words differ from the model, first at byte 0: 00000000, mod
+  the pixels each case took (given clockwise / counter-clockwise), seed 1: directed edge 0 top 18 / 19, left 34 / 19; edge 1 top 22 / 23, left 30 / 23; edge 2 top 14 / 15, left 38 / 15; random edge 0 top 74 / 42, left 25 / 76; edge 1 top 71 / 21, left 34 / 33; edge 2 top 38 / 122, left 108 / 41
+  the pixels each case took (given clockwise / counter-clockwise), seed 2: directed edge 0 top 18 / 19, left 34 / 19; edge 1 top 22 / 23, left 30 / 23; edge 2 top 14 / 15, left 38 / 15; random edge 0 top 60 / 126, left 101 / 126; edge 1 top 146 / 123, left 84 / 82; edge 2 top 0 / 46, left 87 / 113
+  the pixels each case took (given clockwise / counter-clockwise), seed 3: directed edge 0 top 18 / 19, left 34 / 19; edge 1 top 22 / 23, left 30 / 23; edge 2 top 14 / 15, left 38 / 15; random edge 0 top 51 / 35, left 73 / 80; edge 1 top 88 / 46, left 60 / 84; edge 2 top 35 / 113, left 89 / 74
+
+The random part alone (--random-only), seeds 1-3, 120 chunks:
+-- 3fea963's random_vertices put back (the bug):
+  none                       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  none                       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 3 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 1 / 3; edg
+  none                       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e0-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e0-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 3 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 1 / 3; edg
+  tri-e0-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e0-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e0-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 82)
+      first: random chunk 82 (seed 2): 5 VRAM words differ from the model, first at byte 163984: 1c8a1c88, model 1c8a1c63
+  tri-e0-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e1-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e1-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 3 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 1 / 3; edg
+  tri-e1-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e1-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e1-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 1 random chunks (from chunk 82)
+      first: random chunk 82 (seed 2): 2 VRAM words differ from the model, first at byte 167024: f2f29e9d, model f2f2f39d
+  tri-e1-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e2-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e2-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 3 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 1 / 3; edg
+  tri-e2-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 5 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e2-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 0 random chunks
+      first: the random part: 6 of the top-left rule's six cases took no pixel in either winding (edge 0 top 0 / 0, left 0 / 0; edg
+  tri-e2-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 51)
+      first: random chunk 51 (seed 2): 1 VRAM words differ from the model, first at byte 5940: 476685e8, model 476685a3
+  tri-e2-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 5 random chunks (from chunk 32)
+      first: random chunk 32 (seed 3): 1 VRAM words differ from the model, first at byte 43236: 8f8f0000, model 8f8f8f00
+-- db3e65c's stream:
+  none                       seed 1: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 2: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  none                       seed 3: PASS, VRAM differed at 0 directed FENCEs, 0 random chunks
+  tri-e0-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 40)
+      first: random chunk 40 (seed 1): 3 VRAM words differ from the model, first at byte 270780: ffffffff, model fdfdfdfd
+  tri-e0-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 23)
+      first: random chunk 23 (seed 2): 5 VRAM words differ from the model, first at byte 240340: ffffffff, model 0f0fffff
+  tri-e0-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 3)
+      first: random chunk 3 (seed 3): 3 VRAM words differ from the model, first at byte 218736: 00000000, model cdc80000
+  tri-e0-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 0)
+      first: random chunk 0 (seed 1): 12 VRAM words differ from the model, first at byte 226272: 52520000, model 52525200
+  tri-e0-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 2)
+      first: random chunk 2 (seed 2): 2 VRAM words differ from the model, first at byte 26372: 0c000000, model 0c0c0000
+  tri-e0-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 35)
+      first: random chunk 35 (seed 3): 1 VRAM words differ from the model, first at byte 25048: 9293f7f7, model 929394f7
+  tri-e1-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 25)
+      first: random chunk 25 (seed 1): 6 VRAM words differ from the model, first at byte 276384: 62626262, model 110a0462
+  tri-e1-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 14)
+      first: random chunk 14 (seed 2): 1 VRAM words differ from the model, first at byte 160236: 00000052, model 000000da
+  tri-e1-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 7)
+      first: random chunk 7 (seed 3): 5 VRAM words differ from the model, first at byte 243336: d7d7d7d7, model fdd7d7d7
+  tri-e1-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 18)
+      first: random chunk 18 (seed 1): 6 VRAM words differ from the model, first at byte 181908: 7cffffff, model 7c7cffff
+  tri-e1-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 1)
+      first: random chunk 1 (seed 2): 1 VRAM words differ from the model, first at byte 26124: 78787800, model 78787878
+  tri-e1-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 0)
+      first: random chunk 0 (seed 3): 10 VRAM words differ from the model, first at byte 263952: 14000000, model 14140000
+  tri-e2-top-excluded        seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 7)
+      first: random chunk 7 (seed 1): 5 VRAM words differ from the model, first at byte 183752: ffffffff, model 9d9dffff
+  tri-e2-top-excluded        seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 2)
+      first: random chunk 2 (seed 2): 10 VRAM words differ from the model, first at byte 26404: 00000000, model 86800000
+  tri-e2-top-excluded        seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 44)
+      first: random chunk 44 (seed 3): 7 VRAM words differ from the model, first at byte 195264: ffffffff, model 3e3e3e3e
+  tri-e2-left-excluded       seed 1: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 40)
+      first: random chunk 40 (seed 1): 2 VRAM words differ from the model, first at byte 270780: fdfdfdff, model fdfdfdfd
+  tri-e2-left-excluded       seed 2: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 1)
+      first: random chunk 1 (seed 2): 1 VRAM words differ from the model, first at byte 26124: 78787800, model 78787878
+  tri-e2-left-excluded       seed 3: FAIL, VRAM differed at 0 directed FENCEs, 21 random chunks (from chunk 6)
+      first: random chunk 6 (seed 3): 53 VRAM words differ from the model, first at byte 284288: 005c0000, model 005c5c00
+
+test_gpu_model, each per-edge case dropped from a copy of the model (e != n in its one line), 3fea963's test against
+db3e65c's (gcc; the failing checks, shortened):
+  e0 top  old: a top edge through centres covers them|Gouraud x + 2y: 15 pixels wrong|halves round up: 0 0 0 0|downhill halves: 0 0 0 0 0|the gradient's floor: pixel (2, 0) is 0, want 0 (pixel (1, 0|dep
+  e0 top  new: a top edge through centres covers them|Gouraud x + 2y: 15 pixels wrong|halves round up: 0 0 0 0|downhill halves: 0 0 0 0 0|the gradient's floor: pixel (2, 0) is 0, want 0 (pixel (1, 0|dep
+  e0 left old: squares split in two: 8 of 400 not covered exactly once|fans around a point: 11 not covered exactly once|jittered triangulated grids: 28 not covered exactly once|random triangles: 14 vert
+  e0 left new: diamonds of four triangles sharing top and left edges throug|2 of the 12 cases (edge 0, 1 or 2 a top or a left edge, give|squares split in two: 8 of 400 not covered exactly once|fans arou
+  e1 top  old: squares split in two: 7 of 400 not covered exactly once|jittered triangulated grids: 8 not covered exactly once|random triangles: 8 vertex orders covered other pixels|test_gpu_model: FAIL
+  e1 top  new: diamonds of four triangles sharing top and left edges throug|2 of the 12 cases (edge 0, 1 or 2 a top or a left edge, give|squares split in two: 7 of 400 not covered exactly once|jittered 
+  e1 left old: squares split in two: 5 of 400 not covered exactly once|fans around a point: 13 not covered exactly once|jittered triangulated grids: 30 not covered exactly once|random triangles: 12 vert
+  e1 left new: diamonds of four triangles sharing top and left edges throug|2 of the 12 cases (edge 0, 1 or 2 a top or a left edge, give|squares split in two: 5 of 400 not covered exactly once|fans arou
+  e2 top  old: squares split in two: 7 of 400 not covered exactly once|jittered triangulated grids: 9 not covered exactly once|random triangles: 4 vertex orders covered other pixels|test_gpu_model: FAIL
+  e2 top  new: diamonds of four triangles sharing top and left edges throug|2 of the 12 cases (edge 0, 1 or 2 a top or a left edge, give|squares split in two: 7 of 400 not covered exactly once|jittered 
+  e2 left old: a left edge through centres covers them|Gouraud x + 2y: 15 pixels wrong|downhill halves: 0 8 7 7 6|depth meets at column 10/11: 11 22 11 22|squares split in two: 9 of 400 not covered exac
+  e2 left new: a left edge through centres covers them|Gouraud x + 2y: 15 pixels wrong|downhill halves: 0 8 7 7 6|depth meets at column 10/11: 11 22 11 22|diamonds of four triangles sharing top and left
+
+gpudiag on the RTL SoC, each per-edge SoC mutant with the three ROMs (13:45 to 13:58; the fixed ROM before its
+depth checks re-armed their words, which changes nothing here; the full SoC run at db3e65c below repeats them):
+  none                               bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  none                               3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  none                               new        NOT CAUGHT: GPUDIAG: PASS (147 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e0-top-excluded            bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e0-top-excluded            3fea963    caught: GPUDIAG: FAIL (1 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x313fd79e, the model's 0xa04d1e8a
+  soc-tri-e0-top-excluded            new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x3f91ddd8, the model's 0x9368fe97
+  soc-tri-e0-left-excluded           bfaac48    caught: GPUDIAG: FAIL (1 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x074918fd, the model's 0xbbb6a4cb
+  soc-tri-e0-left-excluded           3fea963    caught: GPUDIAG: FAIL (1 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x1cb2a2bc, the model's 0xa04d1e8a
+  soc-tri-e0-left-excluded           new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0xdae93f3b, the model's 0x9368fe97
+  soc-tri-e1-top-excluded            bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e1-top-excluded            3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e1-top-excluded            new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x92149754, the model's 0x9368fe97
+  soc-tri-e1-left-excluded           bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e1-left-excluded           3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e1-left-excluded           new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0xdecaba0d, the model's 0x9368fe97
+  soc-tri-e2-top-excluded            bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e2-top-excluded            3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-e2-top-excluded            new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0xb6cfe7bd, the model's 0x9368fe97
+  soc-tri-e2-left-excluded           bfaac48    caught: GPUDIAG: FAIL (2 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x1ec11707, the model's 0xbbb6a4cb
+  soc-tri-e2-left-excluded           3fea963    caught: GPUDIAG: FAIL (2 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x053aad46, the model's 0xa04d1e8a
+  soc-tri-e2-left-excluded           new        caught: GPUDIAG: FAIL (2 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL FRAME_CRC 0x43d1544c, the model's 0x9368fe97
+  (scene 13's expected CRC: bbb6a4cb at bfaac48, a04d1e8a at 3fea963, 9368fe97 at db3e65c; scene 15's bbe8cf82)
+
+== M2: depth without a depth buffer ==
+
+gpudiag on the RTL SoC with the three ROMs (13:45 to 13:58):
+  soc-tri-zwrite-alone-not-refused   bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-zwrite-alone-not-refused   3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-refused-but-drawn          bfaac48    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-refused-but-drawn          3fea963    NOT CAUGHT: GPUDIAG: PASS (146 checks); gpudiag_check board PASS, simulation PASS
+  soc-zbuf-kept-by-set-target        bfaac48    caught: GPUDIAG: FAIL (1 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+  soc-zbuf-kept-by-set-target        3fea963    caught: GPUDIAG: FAIL (1 of 146 checks failed); gpudiag_check board FAIL, simulation FAIL
+as fixed, each check arming its own words (db3e65c's gpudiag.c; 14:03 to 14:04):
+  none                               new        NOT CAUGHT: GPUDIAG: PASS (147 checks); gpudiag_check board PASS, simulation PASS
+  soc-tri-zwrite-alone-not-refused   new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x0; 2 of the 2 target words it covers drawn (byte 4000 reads 0x77777777)
+  soc-tri-refused-but-drawn          new        caught: GPUDIAG: FAIL (2 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x8; 2 of the 2 target words it covers drawn (byte 4000 reads 0x77777777)
+      FAIL a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped the depth buffer: STATUS 0x8; 4 of the 4 words it would write changed, 2 of the target's and 2 of the dropp
+  soc-zbuf-kept-by-set-target        new        caught: GPUDIAG: FAIL (1 of 147 checks failed); gpudiag_check board FAIL, simulation FAIL
+      FAIL a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped the depth buffer: STATUS 0x0; 4 of the 4 words it would write changed, 2 of the target's and 2 of the dropp
+test_gpu's two engine mutants: see M1 above (db3e65c's test; they fail at test_zbuf's FENCE, as at 3fea963).
+
+== L1: the cube's frames ==
+
+gpuscenes_expect (db3e65c's) with 3fea963's gpucube.c (the bug put back), then with db3e65c's:
+  exit 1; 40 frames of one face; gpuscenes_expect: cube frames 9 and 73 (under the bar) are the same picture, CRC 7ceb422a
+  (and no header written: the tool fails before it writes one)
+  cube checked: 16 frames, the first 62bae657, the last 7e872f01
+  cube under the bar: 128 frames, the first 8d8aea5e, the last d8ce830c
+  cube: of the 128 frames of a turn, 66 show three faces, 62 two, 0 one or none
+  exit 0
+Frames out of order: test_gpudiag_check against gpudiag_check without its order rule, then db3e65c's:
+  -- noorder
+  FAIL the cube: a frame out of order: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 60 to 60 frames drawn and 60
+  test_gpudiag_check: FAIL (1 of 94 checks)
+  -- db3e65c's
+  test_gpudiag_check: PASS (94 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, re
+
+== L2: a cube line's frames shown ==
+
+test_gpudiag_check against gpudiag_check without its shown rule (db3e65c's passes all 94, above):
+  -- noshown
+  FAIL L2: the cube: 60 drawn, 0 shown: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 60 to 60 frames drawn and 0 
+  FAIL the cube: 57 shown: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 60 to 60 frames drawn and 57
+  FAIL the cube: 62 shown: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 60 to 60 frames drawn and 60
+  test_gpudiag_check: FAIL (3 of 94 checks)
+
+== L3: the 16-frame rate check ==
+
+gpudiag-slow.mem (frames 2 video frames apart, frames 6 and 10 three) on the RTL SoC, the old rule put back, then
+db3e65c's:
+  -- the old rule:
+  cube: 16 frames at full rate       (32 video frames, 32 shown, 3 apart at most) ok (6 checks)
+  GPUDIAG: PASS (147 checks)
+  -- the new rule:
+  cube: 16 frames at full rate       
+    FAIL frames 2 to 15 each at most 2 video frames after the one before (30 a second or more): up to 3
+  (32 video frames, 32 shown, 3 apart at most)   cube: 16 frames at full rate: 1 of 6 checks failed
+  GPUDIAG: FAIL (1 of 147 checks failed)
+
+== The tests as committed ==
+
+make test-gpu-model test-gpu-engine (13:59, db3e65c's sources before they were committed):
+  test_gpu_model: PASS (86 checks against docs/GPU.md: display path, CRCs, every command, TRIANGLE's rules and properties)
+  test_gpu: GPU2 (seed 1): 804 TRIANGLEs (523 walked, 131 culled, 36 of zero area), 796255 pixels covered, 38936 failing the depth test; 26 FLIPs
+  test_gpu: GPU2 (seed 2): 830 TRIANGLEs (518 walked, 149 culled, 36 of zero area), 643938 pixels covered, 46499 failing the depth test; 17 FLIPs
+  test_gpu: GPU2 (seed 3): 785 TRIANGLEs (485 walked, 117 culled, 38 of zero area), 644521 pixels covered, 29566 failing the depth test; 18 FLIPs
+  test_gpudiag_check: PASS (94 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth to s
+make test-gpu-soc (13:59 to 14:04; the same):
+  gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 132 distinct, 126541877 cycles)
+  [after Ctrl-R] gpudiag_check: PASS (147 checks, then 146 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 132 distinct; the cube 1 secon
+  [the cube] cube: 16 frames at full rate (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
+  [the cube's free run] cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 59 shown, 0 missed, 0 torn, 0 out of order)
+  [a rerun after a target and clip were left] gpudiag_check: PASS (147 checks, then 146 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+  [the cube at 28 frames a second] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (1 of 147 checks failed), 1 problems found, 'FAIL frames 2 to 15 each at most 2 video frames after the one before \\(30
+  [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3773790 cycles
+  [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+
+The full mutant run (sim/gpu/mutants.py --only, in two halves side by side): all but the SoC's on db3e65c's sources
+before they were committed (13:52 to 13:57), the SoC's at db3e65c (14:07 to 14:21). The review's new ones, and the
+totals:
+  tri-e0-top-excluded            gpu    caught: test_gpu: FAIL (21 of 577 checks, seed 1)
+  tri-e0-left-excluded           gpu    caught: test_gpu: FAIL (21 of 559 checks, seed 1)
+  tri-e1-top-excluded            gpu    caught: test_gpu: FAIL (21 of 565 checks, seed 1)
+  tri-e1-left-excluded           gpu    caught: test_gpu: FAIL (21 of 487 checks, seed 1)
+  tri-e2-top-excluded            gpu    caught: test_gpu: FAIL (21 of 655 checks, seed 1)
+  tri-e2-left-excluded           gpu    caught: test_gpu: FAIL (21 of 451 checks, seed 1)
+  tri-zwrite-alone-not-refused   gpu    caught: test_gpu: FAIL (21 of 451 checks, seed 1)
+  tri-refused-but-drawn          gpu    caught: test_gpu: FAIL (21 of 451 checks, seed 1)
+  model-e0-top-excluded          model  caught: test_gpu_model: FAIL (12 of 86 checks)
+  model-e0-left-excluded         model  caught: test_gpu_model: FAIL (6 of 86 checks)
+  model-e1-top-excluded          model  caught: test_gpu_model: FAIL (5 of 86 checks)
+  model-e1-left-excluded         model  caught: test_gpu_model: FAIL (6 of 86 checks)
+  model-e2-top-excluded          model  caught: test_gpu_model: FAIL (5 of 86 checks)
+  model-e2-left-excluded         model  caught: test_gpu_model: FAIL (10 of 86 checks)
+  tri-depth-clamp-removed        gpu    survives (equivalent): test_gpu: GPU2 (seed 1): 573 TRIANGLEs (403 walked, 99 culled, 18 of zero area), 670881 pixels cove
+  tri-colour-clamp-removed       gpu    survives (equivalent): test_gpu: GPU2 (seed 1): 573 TRIANGLEs (403 walked, 99 culled, 18 of zero area), 670881 pixels cove
+  model-clamp-removed            model  survives (equivalent): test_gpu_model: PASS (86 checks against docs/GPU.md: display path, CRCs, every command, TRIANGLE's 
+  test-gpu-mutants: 69 of 69 caught; 3 of 3 equivalent ones survive, as docs/GPU.md says
+  soc-zbuf-kept-by-set-target    soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL a TRIANGLE with ZTEST and ZWRITE after SET_TARGET dropped th
+  soc-tri-e0-top-excluded        soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL FRAME_CRC 0x3f91ddd8, the model's 0x9368fe97); gpudiag_check
+  soc-tri-e0-left-excluded       soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL FRAME_CRC 0xdae93f3b, the model's 0x9368fe97); gpudiag_check
+  soc-tri-e1-top-excluded        soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL FRAME_CRC 0x92149754, the model's 0x9368fe97); gpudiag_check
+  soc-tri-e1-left-excluded       soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL FRAME_CRC 0xdecaba0d, the model's 0x9368fe97); gpudiag_check
+  soc-tri-e2-top-excluded        soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL FRAME_CRC 0xb6cfe7bd, the model's 0x9368fe97); gpudiag_check
+  soc-tri-e2-left-excluded       soc    caught: gpudiag: GPUDIAG: FAIL (2 of 147 checks failed) (FAIL FRAME_CRC 0x43d1544c, the model's 0x9368fe97); gpudiag_check
+  soc-tri-zwrite-alone-not-refused soc    caught: gpudiag: GPUDIAG: FAIL (1 of 147 checks failed) (FAIL a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x0; 2 
+  soc-tri-refused-but-drawn      soc    caught: gpudiag: GPUDIAG: FAIL (2 of 147 checks failed) (FAIL a TRIANGLE with ZWRITE and no depth buffer: STATUS 0x8; 2 of
+  test-gpu-mutants: 27 of 27 caught
+
+== The re-review of b2c765d: three lows (2026-10-26) ==
+
+The re-review of b2c765d found the five findings above fixed and three new lows (GPU.md 16.12, its addendum).
+The fixes are 3b9c8d0 (low 3), f6e14c4 and 6b58c41 (low 1), 50a152c and f14638e (low 2); no RTL or model
+change. Times UTC.
+
+-- low 1: the board test's step 4 on a capture of the bfaac48 gpudiag
+
+bfaac48 from a git archive (surfcpu/ and driver/font8x16.c) into build/g4-fix/tree-bfaac48, built and run in the
+toolchain container with SURFCPU_BUILD_ID=bfaac48905dc SURFCPU_BUILD_DIRTY=0 (its manifest says clean):
+  start 15:40:20
+  bin2mem: build/fw/gpudiag.mem: 29496 bytes of 65536 (45.0%)
+  build-gpu-rom: gpudiag.elf ROM 29496 of 65536 bytes (45.0%)
+  aaee817dc8a0ad3c37d3fb95050cbe8504fc4dcda1cc3339820cae96cdc8947a  build/fw/gpudiag.mem
+  6ad57705bb6ed81c0c66ad0c7e89f5f79ef62d893674726f8e0ade22f01c1779  build/fw/gen/gpuscenes_expect.h
+  surfsim exit 0
+  surfsim: output matched after 301081053 cycles (12.043 s simulated) in 130.2 s wall (2.31 M cycles/s); UART 0 bytes in, 3014 out, 0 framing errors; DDR calibrated, 0 reads 0 writes 0 fetches 0 errors; exit 0
+  surf_bootrom: loading build/fw/gpudiag.mem
+  SurfGPU diagnostic 1.0.0 (build bfaac489)
+  bitstream build bfaac489 flags 2, features 1ff
+  GPUDIAG: PASS (146 checks)
+  end 15:42:41
+  (aaee817d... is the manifest's rom_sha256, so this ROM is the bitstream's; f6e14c4's
+  docs/evidence/gpu-g4/gpuscenes_expect-bfaac48.txt is the header above byte for byte)
+  the capture's cube lines:
+    cube: 16 frames at full rate       (16 video frames, 16 shown) ok (6 checks)
+    cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), missed (frames not checked), torn (frames that were none of the cube's 128)
+    cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn (in all 60 drawn, 59 shown, 0 missed, 0 torn)
+    cube    2 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 120 drawn, 119 shown, 0 missed, 0 torn)
+    cube    3 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 180 drawn, 179 shown, 0 missed, 0 torn)
+    cube    4 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 240 drawn, 239 shown, 0 missed, 0 torn)
+    cube    5 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 300 drawn, 299 shown, 0 missed, 0 torn)
+    cube    6 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 360 drawn, 359 shown, 0 missed, 0 torn)
+    cube    7 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 420 drawn, 419 shown, 0 missed, 0 torn)
+    cube    8 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 480 drawn, 479 shown, 0 missed, 0 torn)
+    cube    9 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 540 drawn, 539 shown, 0 missed, 0 torn)
+    cube   10 s:  60 drawn,  60 shown, 0 missed, 0 torn (in all 600 drawn, 599 shown, 0 missed, 0 torn)
+
+b2c765d's step 4 (b2c765d's checker and the expected values a b2c765d build wrote, 178d98ea...), the bug put back:
+  gpudiag_check: FAIL: the run printed scene 13's FRAME_CRC bbb6a4cb, the model's 9368fe97
+  gpudiag_check: FAIL: after the last GPUDIAG line: 'cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn (in all ' (a run that did not end?)
+  gpudiag_check: FAIL: 0 of the cube's lines after the last run, 10 wanted (--cube-seconds): capture longer
+  gpudiag_check: FAIL: every complete run is a rerun (Ctrl-R, 146 checks): a rerun does not check the GFX_ values a reset leaves, so it is not a full board test; press RESET and capture the first run (--accept-rerun accepts a rerun)
+  exit 1
+the re-review's pair (bfaac48's header, b2c765d's checker):
+  gpudiag_check: FAIL: after the last GPUDIAG line: 'cube    1 s:  60 drawn,  59 shown, 0 missed, 0 torn (in all ' (a run that did not end?)
+  gpudiag_check: FAIL: 0 of the cube's lines after the last run, 10 wanted (--cube-seconds): capture longer
+bfaac48's checker with b2c765d's header:
+  gpudiag_check: FAIL: the run printed scene 13's FRAME_CRC bbb6a4cb, the model's 9368fe97
+  gpudiag_check: FAIL: every complete run is a rerun (Ctrl-R, 146 checks): a rerun does not check the GFX_ values a reset leaves, so it is not a full board test; press RESET and capture the first run (--accept-rerun accepts a rerun)
+step 4 as at 6b58c41, its three commands taken from GPU.md and run as they are from the worktree's root, the capture
+copied to surfcpu/build/gpudiag-1.txt:
+  gpudiag_check: PASS (146 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 10 seconds, 60 to 60 frames drawn a second, none torn or missed)
+  exit 0; the files it wrote: 40b053f9e151... /tmp/gpudiag_check_bfaac48.py, 6ad57705bb6e... /tmp/gpuscenes_expect_bfaac48.h
+what bfaac48's checker does not judge (16.12's list), one line of the same capture changed:
+  cube 3 s with 0 shown: PASS (146 checks; ...; the cube 10 seconds, 60 to 60 frames drawn a second, none torn or missed)
+  cube 3 s with 29 drawn: FAIL: the cube's second 3: 29 frames drawn, 0 missed, 0 torn (fewer than 30 frames a second)
+
+-- low 2: the free run judged by the rule of the checks
+
+test_gpudiag_check.py as at 50a152c (100 cases; six new for the rule), against b2c765d's gpudiag_check.py: today's
+cube lines are not its lines, so every case with them is lost on it:
+  FAIL a whole run, the echo, the cube's header and three seconds: gpudiag_check failed, wanted pass:
+  FAIL low 2: the cube at a frame every second video frame, 29 drawn in a second: gpudiag_check failed, wanted pass:
+  FAIL low 2: the cube: 29 drawn, 2 apart: gpudiag_check failed, wanted pass:
+  FAIL low 2: b2c765d's line, without frames apart, then one of today's: gpudiag_check passed, wanted fail:
+  FAIL the cube: 58 shown: gpudiag_check failed, wanted pass:
+  FAIL the cube: 59 shown (and 59 drawn): gpudiag_check failed, wanted pass:
+  FAIL the cube: 61 shown: gpudiag_check failed, wanted pass:
+  FAIL the cube: the capture ends inside a line: gpudiag_check failed, wanted pass:
+  FAIL the cube: the capture ends inside the word cube: gpudiag_check failed, wanted pass:
+  FAIL the cube: an echo among its lines: gpudiag_check failed, wanted pass:
+  FAIL the cube's torn frame after a run that a rerun follows: gpudiag_check passed, wanted fail:
+  FAIL --cube-seconds 3: three lines: gpudiag_check failed, wanted pass:
+  test_gpudiag_check: FAIL (12 of 100 checks)
+the same 100 cases with their cube lines in b2c765d's form (the same numbers, without "N apart"), against b2c765d's
+checker: the bug put back (the last case is about the form, which is b2c765d's in all of them here):
+  FAIL low 2: the cube at a frame every second video frame, 29 drawn in a second: gpudiag_check failed, wanted pass:
+  gpudiag_check: FAIL: the cube's second 3: 29 frames drawn, 60 shown, 0 missed, 0 torn, 0 out of order (fewer than 30 frames a second)
+  FAIL low 2: the cube: 29 drawn, 2 apart: gpudiag_check failed, wanted pass:
+  gpudiag_check: FAIL: the cube's second 2: 29 frames drawn, 60 shown, 0 missed, 0 torn, 0 out of order (fewer than 30 frames a second)
+  FAIL low 2: the cube: 30 drawn, but a new frame 3 video frames after the one before: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 30 to 60 frames drawn and 60 to 60 shown a second, none torn, missed or out of order)
+  FAIL low 2: the cube: 3 apart in its first second: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 3 seconds, 59 to 60 frames drawn and 60 to 60 shown a second, none torn, missed or out of order)
+  FAIL low 2: b2c765d's line, without frames apart, then one of today's: gpudiag_check passed, wanted fail:
+  gpudiag_check: PASS (84 checks; 2 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 2 seconds, 60 to 60 frames drawn and 60 to 60 shown a second, none torn, missed or out of order)
+  test_gpudiag_check: FAIL (5 of 100 checks)
+today's checker:
+  test_gpudiag_check: PASS (100 checks of gpudiag_check.py: every whole run's verdict and total, runs cut short and what they show, the capture's end, reruns, one build, uart.py's layout, the fourth to sixth reviews' cases, the build to test, --must-fail, the cube's lines)
+
+make test-gpu-soc on 50a152c's sources just before they were committed (15:52 to 15:57; the build dirty; new: the
+main run's free-run line with apart, gpudiag-half.mem and gpudiag-slowfree.mem):
+  gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541880 cycles)
+    [after Ctrl-R] gpudiag_check: PASS (147 checks, then 146 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct; the cube 1 seconds, 60 to 60 frames drawn and 59 to 59 shown a second, new ones 1 video frames apart at most, none torn, missed or out of order)
+    [the cube] cube: 16 frames at full rate (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
+    [the cube's free run] cube    1 s:  60 drawn,  59 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 59 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
+    [a rerun after a target and clip were left] gpudiag_check: PASS (147 checks, then 146 checks, a rerun; 17 scenes in each run, every FRAME_CRC the model's; 0 frames captured, 0 distinct)
+    [the cube at 28 frames a second] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (1 of 147 checks failed), 1 problems found, 'FAIL frames 2 to 15 each at most 2 video frames after the one before \\([^)]*\\): up to 3\\b[\\s\\S]*GPUDIAG: FAIL \\(1 of' said)
+    [the cube at 29.97 frames a second] gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 2 seconds, 30 to 31 frames drawn and 59 to 60 shown a second, new ones 2 video frames apart at most, none torn, missed or out of order)
+    [a free run with a frame three video frames late] gpudiag_check: FAIL: the cube's second 1: 30 frames drawn, 59 shown, 3 apart, 0 missed, 0 torn, 0 out of order (a new frame 3 video frames after the one before, 2 at most: a frame every second video frame) (as it must)
+    [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3773790 cycles
+    [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  gpudiag-half.mem's transcript (surfsim: output matched after 107448869 cycles (4.298 s simulated)):
+    cube: 16 frames at full rate       (30 video frames, 30 shown, 2 apart at most) ok (6 checks)
+    GPUDIAG: PASS (147 checks)
+    cube    1 s:  31 drawn,  59 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 31 drawn, 59 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    2 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 61 drawn, 119 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+  gpudiag-slowfree.mem's (surfsim: output matched after 101609301 cycles (4.064 s simulated)):
+    cube: 16 frames at full rate       (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
+    GPUDIAG: PASS (147 checks)
+    cube    1 s:  30 drawn,  59 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 30 drawn, 59 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    2 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 119 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+  gpudiag-slow.mem's, as before:
+      FAIL frames 2 to 15 each at most 2 video frames after the one before (29.97 a second on this 59.94 Hz display, the 30+ of the brief): up to 3
+    (32 video frames, 32 shown, 3 apart at most)   cube: 16 frames at full rate: 1 of 6 checks failed
+    GPUDIAG: FAIL (1 of 147 checks failed)
+
+the long runs at 50a152c (16:33 to 16:43, build/g4-fix/tools/lowtwo-long.sh; the header is b2c765d's, 178d98ea...):
+  start 16:33:51
+  build-gpu-rom: gpudiag.elf ROM 30828 of 65536 bytes (47.0%)
+  bin2mem: build/fw/gpudiag-half.mem: 30836 bytes of 65536 (47.1%)
+  bin2mem: build/fw/gpudiag-slowfree.mem: 30876 bytes of 65536 (47.1%)
+  178d98eac5ed76f625aaae54165bff44d6ad3bf3f4dab8bc9f8cbca52547cbc9  build/fw/gen/gpuscenes_expect.h
+  31c05367f7e4274653a44fd9bf1b56eec087f6559f10f0d5fa69fce58a80d221  build/fw/gpudiag-half.mem
+  18105ee79b1490c2f61318c747f29618b1346cca4b38a442d3713bab55a4d393  build/fw/gpudiag-slowfree.mem
+  half, 40 s: surfsim exit 0; surf_bootrom: loading build/fw/gpudiag-half.mem
+  slowfree, 10 s: surfsim exit 0; surf_bootrom: loading build/fw/gpudiag-slowfree.mem
+  end 16:43:36
+  gpudiag-half.mem, until the cube's 40th line (output matched after 1057455829 cycles (42.298 s simulated) in 448.1 s wall):
+    SurfGPU diagnostic 1.0.0 (build 50a152cb)
+    bitstream build 50a152cb flags 2, features 1ff
+    cube: 16 frames at full rate       (30 video frames, 30 shown, 2 apart at most) ok (6 checks)
+    GPUDIAG: PASS (147 checks)
+    cube    1 s:  31 drawn,  59 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 31 drawn, 59 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    2 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 61 drawn, 119 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    3 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 91 drawn, 179 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    4 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 121 drawn, 239 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    5 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 151 drawn, 299 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    6 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 181 drawn, 359 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    7 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 211 drawn, 419 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    8 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 241 drawn, 479 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube    9 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 271 drawn, 539 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   10 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 301 drawn, 599 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   11 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 331 drawn, 659 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   12 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 361 drawn, 719 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   13 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 391 drawn, 779 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   14 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 421 drawn, 839 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   15 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 451 drawn, 899 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   16 s:  29 drawn,  59 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 480 drawn, 958 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   17 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 510 drawn, 1018 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   18 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 540 drawn, 1078 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   19 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 570 drawn, 1138 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   20 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 600 drawn, 1198 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   21 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 630 drawn, 1258 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   22 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 660 drawn, 1318 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   23 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 690 drawn, 1378 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   24 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 720 drawn, 1438 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   25 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 750 drawn, 1498 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   26 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 780 drawn, 1558 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   27 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 810 drawn, 1618 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   28 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 840 drawn, 1678 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   29 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 870 drawn, 1738 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   30 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 900 drawn, 1798 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   31 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 930 drawn, 1858 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   32 s:  30 drawn,  59 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 960 drawn, 1917 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   33 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 990 drawn, 1977 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   34 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1020 drawn, 2037 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   35 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1050 drawn, 2097 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   36 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1080 drawn, 2157 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   37 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1110 drawn, 2217 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   38 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1140 drawn, 2277 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   39 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1170 drawn, 2337 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+    cube   40 s:  30 drawn,  60 shown, 2 apart, 0 missed, 0 torn, 0 out of order (in all 1200 drawn, 2397 shown, 2 apart, 0 missed, 0 torn, 0 out of order)
+  today's checker: gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's; 0 frames captured, 0 distinct; the cube 40 seconds, 29 to 31 frames drawn and 59 to 60 shown a second, 2 apart at most, none torn, missed or out of order)
+  the same capture with its cube lines in b2c765d's form (build/g4-fix/tools/to_b2c765d_form.py: "N apart, " taken
+  out of each line and the header's words for it), b2c765d's checker, the bug put back:
+    gpudiag_check: FAIL: the cube's second 16: 29 frames drawn, 59 shown, 0 missed, 0 torn, 0 out of order (fewer than 30 frames a second)
+  gpudiag-slowfree.mem, until the cube's 10th line (output matched after 301611761 cycles (12.064 s simulated) in 127.6 s wall):
+    cube: 16 frames at full rate       (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
+    GPUDIAG: PASS (147 checks)
+    cube    1 s:  30 drawn,  59 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 30 drawn, 59 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    2 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 119 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    3 s:  29 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 89 drawn, 179 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    4 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 119 drawn, 239 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    5 s:  29 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 148 drawn, 299 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    6 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 178 drawn, 359 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    7 s:  29 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 207 drawn, 419 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    8 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 237 drawn, 479 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube    9 s:  29 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 266 drawn, 539 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+    cube   10 s:  30 drawn,  60 shown, 3 apart, 0 missed, 0 torn, 0 out of order (in all 296 drawn, 599 shown, 3 apart, 0 missed, 0 torn, 0 out of order)
+  today's checker: gpudiag_check: FAIL: the cube's second 1: 30 frames drawn, 59 shown, 3 apart, 0 missed, 0 torn, 0 out of order (a new frame 3 video frames after the one before, 2 at most: a frame every second video frame)
+  in b2c765d's form, b2c765d's checker:
+    gpudiag_check: FAIL: the cube's second 3: 29 frames drawn, 60 shown, 0 missed, 0 torn, 0 out of order (fewer than 30 frames a second)
+  (it stops at the first failing second: seconds 1 and 2, 30 drawn and 3 apart, pass its rule)
+
+-- low 3: refused_view's comment (3b9c8d0), by reading: its words are 4000, 4000 + 20 * 64 + 20 (the target's, 8-bit
+pixels, stride 64), 0x20000 and 0x20000 + 20 * 128 + 40 (the depth buffer's, 16-bit depths, stride 128): the last holds
+the depths of pixels 20 and 21 of row 20, not 0 and 1.
+
+-- The tests as committed: make check with SURFGPU_DOCKER_SIZE=big runs on the hand-back commit (this file's), so its
+result is in the hand-back, not here; test-gpu-soc and the checker's self-tests above are on these sources.

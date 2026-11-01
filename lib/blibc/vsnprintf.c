@@ -38,10 +38,17 @@ static void pad(struct outbuf *b, int n, char c) {
 
 /* edx:eax / d with the quotient known to fit 32 bits (hi < d). No libgcc needed. */
 static inline u32 div64_32(u32 hi, u32 lo, u32 d, u32 *rem) {
+#ifdef SURFOS_RISCV32
+    /* 10/15/26 (SurfCPU): RV32 has no 64-by-32 divide; libgcc's rv32im __udivdi3 does it */
+    u64 n = ((u64)hi << 32) | lo;
+    *rem = (u32)(n % d);
+    return (u32)(n / d);
+#else
     u32 q, r;
     asm("divl %4" : "=a"(q), "=d"(r) : "a"(lo), "d"(hi), "r"(d));
     *rem = r;
     return q;
+#endif
 }
 
 /* 64-bit value divided by a small base, as two 32-bit steps */

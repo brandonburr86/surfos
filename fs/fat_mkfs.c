@@ -14,9 +14,22 @@ requests: the data area keeps whatever it held. The old boot sector goes
 first and the new one last, so an interrupted mkfs leaves no half volume
 that looks whole. The safety rule, bdev_may_format(), is checked here as
 well as by the shell. Also compiled into tests/host/test_mkfs.
+
+10/17/26 (audit B47): the formatting task is inside a file system while it
+writes (surf_task.fs_hold, surfos/task.h), so a kill that waited comes after
+mkfs has let go of its buffers and dropped the device's cached blocks; Ctrl+C
+or a kill stops it between two requests instead (-EINTR, and it says how far
+it got). Killed at once (SYS_kcmd's kill after its 2 s), it died inside a
+driver's request, its lock held, and the card hung.
+
+10/18/26 (audit B61): it holds the device from its check of the safety rule to
+its end (vfs_bdev_change_begin(), fs/vfs.c): no mount and no other task's request
+comes in between (a request under way refuses mkfs, B56's rule; one that comes
+later is refused); the shell's mkfs holds it longer, to the end of its rescan.
 */
 
 #include <surfos/types.h>
+#include <surfos/task.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
@@ -217,14 +230,19 @@ struct job {
     struct bdev *d;
     const u8 *zeros;                /* CHUNK sectors of zeros */
     bool failed;
-    u32 at;                         /* the sector that could not be written */
+    bool cut;                       /* 10/17/26 (B47): Ctrl+C or a kill stopped it (failed too) */
+    u32 at;                         /* the sector that could not be written (or was next, when cut) */
+    u32 written;                    /* sectors written */
 };
 
-/* count sectors at lba: buf's (one sector), or zeros when buf is NULL */
+/* count sectors at lba: buf's (one sector), or zeros when buf is NULL. 10/17/26 (audit B47): stopped before the next
+   request when the call is to end (Ctrl+C in a kernel command, a kill: fs_cut_short()) */
 static void put(struct job *j, u32 lba, u32 count, const u8 *buf) {
     while(count && !j->failed) {
         u32 k = buf ? 1 : (count < CHUNK ? count : CHUNK);
+        if(fs_cut_short()) { j->failed = j->cut = true; j->at = lba; break; }
         if(bdev_write(j->d, lba, k, buf ? buf : j->zeros) != 0) { j->failed = true; j->at = lba; }
+        else j->written += k;
         lba += k;
         count -= k;
     }
@@ -237,20 +255,32 @@ int fat_mkfs(struct bdev *d, const char *label, int fat_bits, char *msg, size_t 
     u32 serial, i, root, root_secs;
     u16 date, time;
     char why[96], name[12];
+    const char *busy;
     int r;
 
     if(bdev_may_format(d, why, sizeof(why)) != 0) { snprintf(msg, n, "%s", why); return -EACCES; }
+    if(vfs_bdev_change_begin(d, &busy) != 0) {      /* 10/18/26 (audit B61): the device is this mkfs's to its end */
+        snprintf(msg, n, "%s", bdev_busy_words(busy));
+        return -EACCES;
+    }
     r = fat_mkfs_plan(d, label, fat_bits, &l, msg, n);
-    if(r) return r;
+    if(r) { vfs_bdev_change_end(d); return r; }
     make_label(label, lab);
     zeros = (u8 *)kalloc(CHUNK * SECTOR);
     sec = (u8 *)kalloc(SECTOR);
-    if(!zeros || !sec) { kfree(zeros); kfree(sec); snprintf(msg, n, "out of memory"); return -ENOMEM; }
+    if(!zeros || !sec) {
+        kfree(zeros);
+        kfree(sec);
+        snprintf(msg, n, "out of memory");
+        vfs_bdev_change_end(d);
+        return -ENOMEM;
+    }
     memset(zeros, 0, CHUNK * SECTOR);
     j.d = d;
     j.zeros = zeros;
-    j.failed = false;
-    j.at = 0;
+    j.failed = j.cut = false;
+    j.at = j.written = 0;
+    fs_enter();                                             /* 10/17/26 (B47): inside until the buffers and blocks go */
     serial = volume_serial();
     fat_now(&date, &time);
     root = l.rsv + 2 * l.spf;                               /* FAT16's root directory, or FAT32's cluster 2 */
@@ -298,11 +328,15 @@ int fat_mkfs(struct bdev *d, const char *label, int fat_bits, char *msg, size_t 
     }
     boot_sector(sec, &l, lab, serial);                      /* and the boot sector last */
     put(&j, 0, 1, sec);
-    r = j.failed ? -EIO : bdev_flush(d) != 0 ? -EIO : 0;
+    r = j.cut ? -EINTR : j.failed ? -EIO : bdev_flush(d) != 0 ? -EIO : 0;
     kfree(zeros);
     kfree(sec);
     binvalidate(d);                                         /* nothing cached from before may be served */
     if(bdev_disk(d) != d) binvalidate(bdev_disk(d));
+    fs_leave();
+    vfs_bdev_change_end(d);
+    if(j.cut && !j.written) { snprintf(msg, n, "interrupted before it wrote anything: the device is as it was"); return r; }
+    if(j.cut) { snprintf(msg, n, "interrupted at sector %lu: the device holds no usable file system now", (u_long)j.at); return r; }
     if(j.failed) { snprintf(msg, n, "write failed at sector %lu: the device holds no usable file system now", (u_long)j.at); return r; }
     if(r) { snprintf(msg, n, "the device did not confirm that its write cache reached the medium"); return r; }
     memcpy(name, lab, 11);

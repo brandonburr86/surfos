@@ -1,0 +1,34 @@
+# surfcpu_core: directed tests on surfcpu_tb (Verilator), every timing and seed
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: make --no-print-directory test-cpu-directed
+
+  access_fault           14/14 PASS
+  alu                    14/14 PASS
+  branch                 14/14 PASS
+  c_cprogram             14/14 PASS
+  counters               14/14 PASS
+  csr                    14/14 PASS
+  csr_impl               14/14 PASS
+  divflush               14/14 PASS
+  fencei                 14/14 PASS
+  flush                  14/14 PASS
+  hazards                14/14 PASS
+  hazards_matrix         14/14 PASS
+  illegal                14/14 PASS
+  interrupts             14/14 PASS
+  irq_stress             14/14 PASS
+  ldst                   14/14 PASS
+  misaligned             14/14 PASS
+  mmio                   14/14 PASS
+  muldiv                 14/14 PASS
+  muldiv_edges           14/14 PASS
+  rv_ctrl                14/14 PASS
+  rv_excprio             14/14 PASS
+  rv_irq_mretwfi         14/14 PASS
+  rv_irq_wfi             14/14 PASS
+  rv_x0_divflush         14/14 PASS
+  traps                  14/14 PASS
+  wfi                    14/14 PASS
+  wrongpath              14/14 PASS
+surfcpu_tb: 28 tests, 392/392 runs passed (3.2 s)
+configurations: zero (ilat 1:1, dlat 1:1, seeds 1), short (ilat 1:3, dlat 1:3, seeds 2 12), mixed (ilat 1:12, dlat 1:12, seeds 3 13 23 33), dslow (ilat 1:2, dlat 4:40, seeds 4 14), islow (ilat 4:40, dlat 1:2, seeds 5 15), slow (ilat 6:30, dlat 6:30, seeds 6 16, --rand-reset), huge (ilat 20:100, dlat 20:100, seeds 7)

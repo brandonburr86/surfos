@@ -1,0 +1,35 @@
+linux/amd64 containers on this Mac (BUILD-HOST.md option B: Vivado in an x86-64 container)
+2026-10-15, flow track. Vivado was NOT downloaded or run; this only tests the container layer.
+
+Host: MacBook Pro Mac16,5, Apple M4 Max, macOS 15.1.1 (24B2091); Rosetta 2 installed
+(oahd running; /Library/Apple/usr/libexec/oah/RosettaLinux present).
+Docker Desktop 4.93.0, engine 29.8.1, Apple Virtualization framework
+(settings-store.json: UseVirtualizationFramework true; no UseVirtualizationFrameworkRosetta key,
+i.e. the default), Linux VM 7.0.14-linuxkit, 14 CPUs, 7.7 GiB RAM, virtual disk sparse with a
+926 GB ceiling (25 GB used): the Mac's free space (about 84 GiB) is the real limit.
+
+Command (probe scripts kept under build/flow/amd64/, not committed):
+  docker run --rm --platform linux/amd64 debian:trixie-slim@sha256:a29215f6... sh probe.sh
+Result:
+  uname -m x86_64, dpkg architecture amd64
+  /proc/self/maps of the x86-64 process maps /run/rosetta/rosetta: the binaries are translated
+  by Rosetta for Linux, not emulated by QEMU (no binfmt entries are visible in the container)
+  apt-get works; OpenJDK 21.0.12 (x86-64) runs and JIT-compiles (Vivado's installer is Java)
+  CPUID seen by translated code: "GenuineIntel", SSE4.1, SSE4.2, AES, PCLMULQDQ, POPCNT;
+  NOT present: AVX, AVX2, AVX-512, FMA, BMI1, BMI2, F16C, MOVBE, XSAVE
+  (the JVM agrees: UseSSE 4, UseAVX 0)
+Speed, same probe natively (linux/arm64) and translated (linux/amd64), wall clock:
+  gzip -6 of 256 MiB of text         3.22 s native   3.95 s translated   (0.82x)
+  sha256sum of 1 GiB of zeros         0.64 s native   2.45 s translated   (native uses the ARMv8
+                                                                           SHA-2 instructions)
+Clean-up: the amd64 variant of the Debian base pulled for the probe was removed again
+(docker image rm --force --platform linux/amd64 ...); the arm64 base and its tag are untouched.
+
+Third-party report (not verified here): github.com/ichi4096/vivado-on-silicon-mac (main at
+2426e5e, 2024-09-28) installs Vivado in a Rosetta Docker container on Apple Silicon and lists
+2021.1, 2022.2, 2023.1, 2023.2 and 2024.1 as working, tested on macOS 15, with most macOS 14
+versions failing; about 20 GB download for the web installer, one to two hours.
+
+Conclusion: the container layer of option B works here (Rosetta, not QEMU). Whether Vivado
+itself runs (its versions after 2024.1, the missing AVX, long runs, memory) is unproven until
+the owner downloads it; see docs/OPEN-FLOW.md, "Option B".

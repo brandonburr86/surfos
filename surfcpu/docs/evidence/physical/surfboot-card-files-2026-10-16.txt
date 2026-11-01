@@ -1,0 +1,56 @@
+SurfBoot reads SurfOS's files from the owner's card on the board: the integrator's own capture, not a board-test run
+The owner installed SurfOS on the card on the Mac (make deploy-sd MOUNT=/Volumes/SURFOS DEPLOY_ARGS="--new-card
+--image ../build/card/SURFOS.BIN": the package SurfOS 1.0.0 build fd374065, 388,724 bytes, surfimg verify: valid), put it
+back in the Pmod MicroSD and power-cycled the Arty; surfcpu_arty_a7_top (d174d0f) was loaded into configuration RAM.
+The owner confirmed that SurfBoot's text on the VGA monitor is readable and nothing is cut off.
+
+Boot (seconds since the port was opened):
+  +    4.991 | 
+  +    4.991 | SurfBoot 1.0.0 (build 6c89831a), the SurfCPU boot ROM
+  +    5.007 | soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream d174d0f8
+  +    5.007 | ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    5.023 | 
+  +    5.023 | SurfBoot stopped: no DDR controller (DDR_ABSENT)
+  +    5.023 |   this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    5.039 | The LEDs LD4-LD7 show code 1. Type help for the monitor's commands; inserting a card retries the boot.
+  +    5.039 | surfboot> 
+
+Typed at the monitor:
+  === ls /
+  sd: SDHC/SDXC, 29.7 GiB; ready after 177 ms; SPI 6250 kHz, data CRC checked
+  fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+    d-h--  SPOTLI~0           <dir>  cluster 3
+    d-h--  FSEVEN~3           <dir>  cluster 7
+    d----  BOOT               <dir>  cluster 17
+    d----  SYSTEM             <dir>  cluster 18
+    d----  PROGRAMS           <dir>  cluster 19
+    d----  USERS              <dir>  cluster 20
+    0 files (0 bytes), 6 directories
+  surfboot> === ls /BOOT
+    d-h--  .                  <dir>  cluster 17
+    d-h--  ..                 <dir>  cluster 0
+    ----a  SURFOS.BIN        388724  cluster 23
+    1 file (388724 bytes), 2 directories
+  surfboot> === ls /SYSTEM
+    d-h--  .                  <dir>  cluster 18
+    d-h--  ..                 <dir>  cluster 0
+    ----a  SURFCARD.TXT          94  cluster 120
+    1 file (94 bytes), 2 directories
+  surfboot> === chain /BOOT/SURFOS.BIN
+  chain: 23 65 78 80 83 92 113 115-119
+  chain: 12 clusters in 8 fragments; the size needs 12
+  surfboot> === cat /BOOT/SURFOS.BIN 64
+  SIMG..@.............4...........l.W........e@7.SurfOS......q...
+  (64 of 388724 bytes)
+  surfboot> 
+Then 'cat /BOOT/SURFOS.BIN 388724' (cat prints printable bytes, 
+ and 	 as they are, CR as CR, any other byte as
+'.'), compared with the Mac's copy rendered the same way (scratchpad catcompare.py):
+  cat reported 388724 of 388724 bytes in 36.0 s; 388095 characters received
+  the Mac copy: 388724 bytes, 92146 of them printable (compared exactly), 295949 shown as "." (compared as non-printable), 629 CR (dropped)
+  MATCH: every byte position agrees with the Mac copy (the file is in 8 fragments: clusters 23 65 78 80 83 92 113 115-119)
+
+The VGA test pattern: 'mw 0x10006000 0x1' (video CTRL: ENABLE=1, MODE=0, the colour bars), then 'mw 0x10006000 0x1b'
+back to text. The owner confirmed on the monitor: the one-pixel white border all round, the eight bars (white, yellow,
+cyan, green, magenta, red, blue, black) and the four bands of 16 steps (grey, red, green, blue): every level of each
+4-bit channel, both syncs and the picture's edges reach the monitor.

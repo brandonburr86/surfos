@@ -1,0 +1,1874 @@
+core   0: 0x00001000 (0x00000297) auipc   t0, 0x0
+core   0: 3 0x00001000 (0x00000297) x5  0x00001000
+core   0: 0x00001004 (0x02028593) addi    a1, t0, 32
+core   0: 3 0x00001004 (0x02028593) x11 0x00001020
+core   0: 0x00001008 (0xf1402573) csrr    a0, mhartid
+core   0: 3 0x00001008 (0xf1402573) x10 0x00000000
+core   0: 0x0000100c (0x0182a283) lw      t0, 24(t0)
+core   0: 3 0x0000100c (0x0182a283) x5  0x80000000 mem 0x00001018
+core   0: 0x00001010 (0x00028067) jr      t0
+core   0: 3 0x00001010 (0x00028067)
+core   0: 0x80000000 (0x00000093) li      ra, 0
+core   0: 3 0x80000000 (0x00000093) x1  0x00000000
+core   0: 0x80000004 (0x00000113) li      sp, 0
+core   0: 3 0x80000004 (0x00000113) x2  0x00000000
+core   0: 0x80000008 (0x00000193) li      gp, 0
+core   0: 3 0x80000008 (0x00000193) x3  0x00000000
+core   0: 0x8000000c (0x00000213) li      tp, 0
+core   0: 3 0x8000000c (0x00000213) x4  0x00000000
+core   0: 0x80000010 (0x00000293) li      t0, 0
+core   0: 3 0x80000010 (0x00000293) x5  0x00000000
+core   0: 0x80000014 (0x00000313) li      t1, 0
+core   0: 3 0x80000014 (0x00000313) x6  0x00000000
+core   0: 0x80000018 (0x00000393) li      t2, 0
+core   0: 3 0x80000018 (0x00000393) x7  0x00000000
+core   0: 0x8000001c (0x00000413) li      s0, 0
+core   0: 3 0x8000001c (0x00000413) x8  0x00000000
+core   0: 0x80000020 (0x00000493) li      s1, 0
+core   0: 3 0x80000020 (0x00000493) x9  0x00000000
+core   0: 0x80000024 (0x00000513) li      a0, 0
+core   0: 3 0x80000024 (0x00000513) x10 0x00000000
+core   0: 0x80000028 (0x00000593) li      a1, 0
+core   0: 3 0x80000028 (0x00000593) x11 0x00000000
+core   0: 0x8000002c (0x00000613) li      a2, 0
+core   0: 3 0x8000002c (0x00000613) x12 0x00000000
+core   0: 0x80000030 (0x00000693) li      a3, 0
+core   0: 3 0x80000030 (0x00000693) x13 0x00000000
+core   0: 0x80000034 (0x00000713) li      a4, 0
+core   0: 3 0x80000034 (0x00000713) x14 0x00000000
+core   0: 0x80000038 (0x00000793) li      a5, 0
+core   0: 3 0x80000038 (0x00000793) x15 0x00000000
+core   0: 0x8000003c (0x00000813) li      a6, 0
+core   0: 3 0x8000003c (0x00000813) x16 0x00000000
+core   0: 0x80000040 (0x00000893) li      a7, 0
+core   0: 3 0x80000040 (0x00000893) x17 0x00000000
+core   0: 0x80000044 (0x00000913) li      s2, 0
+core   0: 3 0x80000044 (0x00000913) x18 0x00000000
+core   0: 0x80000048 (0x00000993) li      s3, 0
+core   0: 3 0x80000048 (0x00000993) x19 0x00000000
+core   0: 0x8000004c (0x00000a13) li      s4, 0
+core   0: 3 0x8000004c (0x00000a13) x20 0x00000000
+core   0: 0x80000050 (0x00000a93) li      s5, 0
+core   0: 3 0x80000050 (0x00000a93) x21 0x00000000
+core   0: 0x80000054 (0x00000b13) li      s6, 0
+core   0: 3 0x80000054 (0x00000b13) x22 0x00000000
+core   0: 0x80000058 (0x00000b93) li      s7, 0
+core   0: 3 0x80000058 (0x00000b93) x23 0x00000000
+core   0: 0x8000005c (0x00000c13) li      s8, 0
+core   0: 3 0x8000005c (0x00000c13) x24 0x00000000
+core   0: 0x80000060 (0x00000c93) li      s9, 0
+core   0: 3 0x80000060 (0x00000c93) x25 0x00000000
+core   0: 0x80000064 (0x00000d13) li      s10, 0
+core   0: 3 0x80000064 (0x00000d13) x26 0x00000000
+core   0: 0x80000068 (0x00000d93) li      s11, 0
+core   0: 3 0x80000068 (0x00000d93) x27 0x00000000
+core   0: 0x8000006c (0x00000e13) li      t3, 0
+core   0: 3 0x8000006c (0x00000e13) x28 0x00000000
+core   0: 0x80000070 (0x00000e93) li      t4, 0
+core   0: 3 0x80000070 (0x00000e93) x29 0x00000000
+core   0: 0x80000074 (0x00000f13) li      t5, 0
+core   0: 3 0x80000074 (0x00000f13) x30 0x00000000
+core   0: 0x80000078 (0x00000f93) li      t6, 0
+core   0: 3 0x80000078 (0x00000f93) x31 0x00000000
+core   0: 0x8000007c (0x00000297) auipc   t0, 0x0
+core   0: 3 0x8000007c (0x00000297) x5  0x8000007c
+core   0: 0x80000080 (0x15c28293) addi    t0, t0, 348
+core   0: 3 0x80000080 (0x15c28293) x5  0x800001d8
+core   0: 0x80000084 (0x30529073) csrw    mtvec, t0
+core   0: 3 0x80000084 (0x30529073) c773_mtvec 0x800001d8
+core   0: 0x80000088 (0x00000293) li      t0, 0
+core   0: 3 0x80000088 (0x00000293) x5  0x00000000
+core   0: 0x8000008c (0x00002417) auipc   s0, 0x2
+core   0: 3 0x8000008c (0x00002417) x8  0x8000208c
+core   0: 0x80000090 (0xf7440413) addi    s0, s0, -140
+core   0: 3 0x80000090 (0xf7440413) x8  0x80002000
+core   0: 0x80000094 (0x400004b7) lui     s1, 0x40000
+core   0: 3 0x80000094 (0x400004b7) x9  0x40000000
+core   0: 0x80000098 (0x00000073) ecall
+core   0: exception trap_machine_ecall, epc 0x80000098
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002040 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x0000000b
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002040 0x0000000b
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000098
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002044 0x80000098
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00000000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002048 0x00000000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000204c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000204c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x0000000b
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000098
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000009c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000009c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000009c (0x00100073) ebreak
+core   0: exception trap_breakpoint, epc 0x8000009c
+core   0:           tval 0x8000009c
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000204c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000003
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000204c 0x00000003
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x8000009c
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002050 0x8000009c
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x8000009c
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002054 0x8000009c
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002058
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002058
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000003
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x8000009c
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000a0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000a0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: >>>>  $d
+core   0: 0x800000a0 (0x00000000) c.unimp
+core   0: exception trap_illegal_instruction, epc 0x800000a0
+core   0:           tval 0x00000000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002058 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002058 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000a0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000205c 0x800000a0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00000000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002060 0x00000000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002064
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002064
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000a0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000a4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000a4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000a4 (0x1ffffffff) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000a4
+core   0:           tval 0xffffffff
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002064 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002064 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000a4
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002068 0x800000a4
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0xffffffff
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x8000206c 0xffffffff
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002070
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002070
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000a4
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000a8
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000a8
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000a8 (0x00000001) c.nop
+core   0: exception trap_illegal_instruction, epc 0x800000a8
+core   0:           tval 0x00000001
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002070 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002070 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000a8
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002074 0x800000a8
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00000001
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002078 0x00000001
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000207c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000207c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000a8
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000ac
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000ac
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000ac (0x00004501) c.li    a0, 0
+core   0: exception trap_illegal_instruction, epc 0x800000ac
+core   0:           tval 0x00004501
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000207c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000207c 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000ac
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002080 0x800000ac
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00004501
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002084 0x00004501
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002088
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002088
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000ac
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000b0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000b0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000b0 (0x00008082) c.ret
+core   0: exception trap_illegal_instruction, epc 0x800000b0
+core   0:           tval 0x00008082
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002088 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002088 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000b0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000208c 0x800000b0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00008082
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002090 0x00008082
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002094
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002094
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000b0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000b4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000b4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000b4 (0x00001033) sll     zero, zero, zero
+core   0: 3 0x800000b4 (0x00001033)
+core   0: 0x800000b8 (0x02005033) divu    zero, zero, zero
+core   0: 3 0x800000b8 (0x02005033)
+core   0: 0x800000bc (0x40001033) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000bc
+core   0:           tval 0x40001033
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002094 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002094 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000bc
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002098 0x800000bc
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40001033
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x8000209c 0x40001033
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020a0
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020a0
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000bc
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000c0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000c0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000c0 (0x0000302b) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000c0
+core   0:           tval 0x0000302b
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020a0 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020a0 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000c0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020a4 0x800000c0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x0000302b
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020a8 0x0000302b
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020ac
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020ac
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000c0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000c4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000c4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000c4 (0x10200073) sret
+core   0: exception trap_illegal_instruction, epc 0x800000c4
+core   0:           tval 0x10200073
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020ac mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020ac 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000c4
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020b0 0x800000c4
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x10200073
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020b4 0x10200073
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020b8
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020b8
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000c4
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000c8
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000c8
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000c8 (0x00200073) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000c8
+core   0:           tval 0x00200073
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020b8 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020b8 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000c8
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020bc 0x800000c8
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00200073
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020c0 0x00200073
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020c4
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020c4
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000c8
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000cc
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000cc
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000cc (0x12000073) sfence.vma zero, zero
+core   0: exception trap_illegal_instruction, epc 0x800000cc
+core   0:           tval 0x12000073
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020c4 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020c4 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000cc
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020c8 0x800000cc
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x12000073
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020cc 0x12000073
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020d0
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020d0
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000cc
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000d0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000d0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000d0 (0x02059293) slli    t0, a1, 32
+core   0: exception trap_illegal_instruction, epc 0x800000d0
+core   0:           tval 0x02059293
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020d0 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020d0 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000d0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020d4 0x800000d0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x02059293
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020d8 0x02059293
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020dc
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020dc
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000d0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000d4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000d4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000d4 (0x0000300f) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000d4
+core   0:           tval 0x0000300f
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020dc mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020dc 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000d4
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020e0 0x800000d4
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x0000300f
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020e4 0x0000300f
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020e8
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020e8
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000d4
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000d8
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000d8
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000d8 (0x00003003) ld      zero, 0(zero)
+core   0: exception trap_illegal_instruction, epc 0x800000d8
+core   0:           tval 0x00003003
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020e8 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020e8 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000d8
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020ec 0x800000d8
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00003003
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020f0 0x00003003
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800020f4
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800020f4
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000d8
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000dc
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000dc
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000dc (0x00007023) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000dc
+core   0:           tval 0x00007023
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800020f4 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800020f4 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000dc
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800020f8 0x800000dc
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00007023
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800020fc 0x00007023
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002100
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002100
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000dc
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000e0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000e0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000e0 (0x00002063) beqi    zero, -1, pc + 0
+core   0: exception trap_illegal_instruction, epc 0x800000e0
+core   0:           tval 0x00002063
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002100 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002100 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000e0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002104 0x800000e0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00002063
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002108 0x00002063
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000210c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000210c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000e0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000e4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000e4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000e4 (0x00001067) unknown
+core   0: exception trap_illegal_instruction, epc 0x800000e4
+core   0:           tval 0x00001067
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000210c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000210c 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000e4
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002110 0x800000e4
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x00001067
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002114 0x00001067
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002118
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002118
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000e4
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000e8
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000e8
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000e8 (0x80100093) li      ra, -2047
+core   0: 3 0x800000e8 (0x80100093) x1  0xfffff801
+core   0: 0x800000ec (0x7c002573) csrr    a0, unknown_7c0
+core   0: exception trap_illegal_instruction, epc 0x800000ec
+core   0:           tval 0x7c002573
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002118 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002118 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000ec
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000211c 0x800000ec
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x7c002573
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002120 0x7c002573
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002124
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002124
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000ec
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000f0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000f0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000f0 (0xf1151073) csrw    mvendorid, a0
+core   0: exception trap_illegal_instruction, epc 0x800000f0
+core   0:           tval 0xf1151073
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002124 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002124 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000f0
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002128 0x800000f0
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0xf1151073
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x8000212c 0xf1151073
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002130
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002130
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000f0
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800000f4
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800000f4
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800000f4 (0xf1402573) csrr    a0, mhartid
+core   0: 3 0x800000f4 (0xf1402573) x10 0x00000000
+core   0: 0x800000f8 (0xf1406573) csrrsi  a0, mhartid, 0
+core   0: 3 0x800000f8 (0xf1406573) x10 0x00000000
+core   0: 0x800000fc (0xf140e573) csrrsi  a0, mhartid, 1
+core   0: exception trap_illegal_instruction, epc 0x800000fc
+core   0:           tval 0xf140e573
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002130 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000002
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002130 0x00000002
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x800000fc
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002134 0x800000fc
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0xf140e573
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002138 0xf140e573
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000213c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000213c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000002
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x800000fc
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000100
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000100
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000100 (0x000015b7) lui     a1, 0x1
+core   0: 3 0x80000100 (0x000015b7) x11 0x00001000
+core   0: 0x80000104 (0x11158593) addi    a1, a1, 273
+core   0: 3 0x80000104 (0x11158593) x11 0x00001111
+core   0: 0x80000108 (0x006005ef) jal     a1, pc + 0x6
+core   0: exception trap_instruction_address_misaligned, epc 0x80000108
+core   0:           tval 0x8000010e
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000213c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000000
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000213c 0x00000000
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000108
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002140 0x80000108
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x8000010e
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002144 0x8000010e
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002148
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002148
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000000
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000108
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000010c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000010c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000010c (0x00002e97) auipc   t4, 0x2
+core   0: 3 0x8000010c (0x00002e97) x29 0x8000210c
+core   0: 0x80000110 (0xf14e8e93) addi    t4, t4, -236
+core   0: 3 0x80000110 (0xf14e8e93) x29 0x80002020
+core   0: 0x80000114 (0x00bea023) sw      a1, 0(t4)
+core   0: 3 0x80000114 (0x00bea023) mem 0x80002020 0x00001111
+core   0: 0x80000118 (0x00000617) auipc   a2, 0x0
+core   0: 3 0x80000118 (0x00000617) x12 0x80000118
+core   0: 0x8000011c (0x01060613) addi    a2, a2, 16
+core   0: 3 0x8000011c (0x01060613) x12 0x80000128
+core   0: 0x80000120 (0x00260613) addi    a2, a2, 2
+core   0: 3 0x80000120 (0x00260613) x12 0x8000012a
+core   0: 0x80000124 (0x000605e7) jalr    a1, a2, 0
+core   0: exception trap_instruction_address_misaligned, epc 0x80000124
+core   0:           tval 0x8000012a
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002148 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000000
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002148 0x00000000
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000124
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000214c 0x80000124
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x8000012a
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002150 0x8000012a
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002154
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002154
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000000
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000124
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000128
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000128
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000128 (0x00002e97) auipc   t4, 0x2
+core   0: 3 0x80000128 (0x00002e97) x29 0x80002128
+core   0: 0x8000012c (0xef8e8e93) addi    t4, t4, -264
+core   0: 3 0x8000012c (0xef8e8e93) x29 0x80002020
+core   0: 0x80000130 (0x00bea223) sw      a1, 4(t4)
+core   0: 3 0x80000130 (0x00bea223) mem 0x80002024 0x00001111
+core   0: 0x80000134 (0x00000617) auipc   a2, 0x0
+core   0: 3 0x80000134 (0x00000617) x12 0x80000134
+core   0: 0x80000138 (0x01460613) addi    a2, a2, 20
+core   0: 3 0x80000138 (0x01460613) x12 0x80000148
+core   0: 0x8000013c (0x00160613) addi    a2, a2, 1
+core   0: 3 0x8000013c (0x00160613) x12 0x80000149
+core   0: 0x80000140 (0x000605e7) jalr    a1, a2, 0
+core   0: 3 0x80000140 (0x000605e7) x11 0x80000144
+core   0: 0x80000148 (0x00002e97) auipc   t4, 0x2
+core   0: 3 0x80000148 (0x00002e97) x29 0x80002148
+core   0: 0x8000014c (0xed8e8e93) addi    t4, t4, -296
+core   0: 3 0x8000014c (0xed8e8e93) x29 0x80002020
+core   0: 0x80000150 (0x00bea423) sw      a1, 8(t4)
+core   0: 3 0x80000150 (0x00bea423) mem 0x80002028 0x80000144
+core   0: 0x80000154 (0x00100693) li      a3, 1
+core   0: 3 0x80000154 (0x00100693) x13 0x00000001
+core   0: 0x80000158 (0x00d68363) beq     a3, a3, pc + 6
+core   0: exception trap_instruction_address_misaligned, epc 0x80000158
+core   0:           tval 0x8000015e
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002154 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000000
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002154 0x00000000
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000158
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002158 0x80000158
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x8000015e
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x8000215c 0x8000015e
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002160
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002160
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000000
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000158
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000015c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000015c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000015c (0x00d69163) bne     a3, a3, pc + 2
+core   0: 3 0x8000015c (0x00d69163)
+core   0: 0x80000160 (0x00141703) lh      a4, 1(s0)
+core   0: exception trap_load_address_misaligned, epc 0x80000160
+core   0:           tval 0x80002001
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002160 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000004
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002160 0x00000004
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000160
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002164 0x80000160
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002001
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002168 0x80002001
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000216c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000216c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000004
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000160
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000164
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000164
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000164 (0x00345703) lhu     a4, 3(s0)
+core   0: exception trap_load_address_misaligned, epc 0x80000164
+core   0:           tval 0x80002003
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000216c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000004
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000216c 0x00000004
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000164
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002170 0x80000164
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002003
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002174 0x80002003
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002178
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002178
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000004
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000164
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000168
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000168
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000168 (0x00142703) lw      a4, 1(s0)
+core   0: exception trap_load_address_misaligned, epc 0x80000168
+core   0:           tval 0x80002001
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002178 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000004
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002178 0x00000004
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000168
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000217c 0x80000168
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002001
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002180 0x80002001
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002184
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002184
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000004
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000168
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000016c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000016c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000016c (0x00242703) lw      a4, 2(s0)
+core   0: exception trap_load_address_misaligned, epc 0x8000016c
+core   0:           tval 0x80002002
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002184 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000004
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002184 0x00000004
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x8000016c
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002188 0x8000016c
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002002
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x8000218c 0x80002002
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002190
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002190
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000004
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x8000016c
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000170
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000170
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000170 (0x00342703) lw      a4, 3(s0)
+core   0: exception trap_load_address_misaligned, epc 0x80000170
+core   0:           tval 0x80002003
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002190 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000004
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002190 0x00000004
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000170
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002194 0x80000170
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002003
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002198 0x80002003
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x8000219c
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x8000219c
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000004
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000170
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000174
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000174
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000174 (0x00e410a3) sh      a4, 1(s0)
+core   0: exception trap_store_address_misaligned, epc 0x80000174
+core   0:           tval 0x80002001
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x8000219c mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000006
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x8000219c 0x00000006
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000174
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021a0 0x80000174
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002001
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021a4 0x80002001
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021a8
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021a8
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000006
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000174
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000178
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000178
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000178 (0x00e42123) sw      a4, 2(s0)
+core   0: exception trap_store_address_misaligned, epc 0x80000178
+core   0:           tval 0x80002002
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021a8 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000006
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021a8 0x00000006
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000178
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021ac 0x80000178
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002002
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021b0 0x80002002
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021b4
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021b4
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000006
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000178
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000017c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000017c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000017c (0x00e421a3) sw      a4, 3(s0)
+core   0: exception trap_store_address_misaligned, epc 0x8000017c
+core   0:           tval 0x80002003
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021b4 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000006
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021b4 0x00000006
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x8000017c
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021b8 0x8000017c
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80002003
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021bc 0x80002003
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021c0
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021c0
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000006
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x8000017c
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000180
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000180
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000180 (0x00140703) lb      a4, 1(s0)
+core   0: 3 0x80000180 (0x00140703) x14 0x00000033 mem 0x80002001
+core   0: 0x80000184 (0x00e401a3) sb      a4, 3(s0)
+core   0: 3 0x80000184 (0x00e401a3) mem 0x80002003 0x33
+core   0: 0x80000188 (0x0004a783) lw      a5, 0(s1)
+core   0: exception trap_load_access_fault, epc 0x80000188
+core   0:           tval 0x40000000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021c0 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000005
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021c0 0x00000005
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000188
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021c4 0x80000188
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40000000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021c8 0x40000000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021cc
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021cc
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000005
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000188
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x8000018c
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x8000018c
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x8000018c (0x0034c783) lbu     a5, 3(s1)
+core   0: exception trap_load_access_fault, epc 0x8000018c
+core   0:           tval 0x40000003
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021cc mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000005
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021cc 0x00000005
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x8000018c
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021d0 0x8000018c
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40000003
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021d4 0x40000003
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021d8
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021d8
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000005
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x8000018c
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000190
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000190
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000190 (0x00f4a023) sw      a5, 0(s1)
+core   0: exception trap_store_access_fault, epc 0x80000190
+core   0:           tval 0x40000000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021d8 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000007
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021d8 0x00000007
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000190
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021dc 0x80000190
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40000000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021e0 0x40000000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021e4
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021e4
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000007
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000190
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000194
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000194
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000194 (0x00f480a3) sb      a5, 1(s1)
+core   0: exception trap_store_access_fault, epc 0x80000194
+core   0:           tval 0x40000001
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021e4 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000007
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021e4 0x00000007
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80000194
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021e8 0x80000194
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40000001
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021ec 0x40000001
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021f0
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021f0
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000007
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x80000194
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x80000198
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x80000198
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x80000198 (0x80400837) lui     a6, 0x80400
+core   0: 3 0x80000198 (0x80400837) x16 0x80400000
+core   0: 0x8000019c (0x00082783) lw      a5, 0(a6)
+core   0: exception trap_load_access_fault, epc 0x8000019c
+core   0:           tval 0x80400000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021f0 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000005
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021f0 0x00000005
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x8000019c
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x800021f4 0x8000019c
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80400000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x800021f8 0x80400000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x800021fc
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x800021fc
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000005
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000218 (0x34102f73) csrr    t5, mepc
+core   0: 3 0x80000218 (0x34102f73) x30 0x8000019c
+core   0: 0x8000021c (0x004f0f13) addi    t5, t5, 4
+core   0: 3 0x8000021c (0x004f0f13) x30 0x800001a0
+core   0: 0x80000220 (0x341f1073) csrw    mepc, t5
+core   0: 3 0x80000220 (0x341f1073) c833_mepc 0x800001a0
+core   0: 0x80000224 (0x30200073) mret
+core   0: 3 0x80000224 (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800001a0 (0x000480e7) jalr    s1
+core   0: 3 0x800001a0 (0x000480e7) x1  0x800001a4
+core   0: exception trap_instruction_access_fault, epc 0x40000000
+core   0:           tval 0x40000000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x800021fc mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000001
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x800021fc 0x00000001
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x40000000
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x80002200 0x40000000
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x40000000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002204 0x40000000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002208
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002208
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000001
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000228 (0x34109073) csrw    mepc, ra
+core   0: 3 0x80000228 (0x34109073) c833_mepc 0x800001a4
+core   0: 0x8000022c (0x30200073) mret
+core   0: 3 0x8000022c (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800001a4 (0x00002e97) auipc   t4, 0x2
+core   0: 3 0x800001a4 (0x00002e97) x29 0x800021a4
+core   0: 0x800001a8 (0xe7ce8e93) addi    t4, t4, -388
+core   0: 3 0x800001a8 (0xe7ce8e93) x29 0x80002020
+core   0: 0x800001ac (0x001ea623) sw      ra, 12(t4)
+core   0: 3 0x800001ac (0x001ea623) mem 0x8000202c 0x800001a4
+core   0: 0x800001b0 (0x000800e7) jalr    a6
+core   0: 3 0x800001b0 (0x000800e7) x1  0x800001b4
+core   0: exception trap_instruction_access_fault, epc 0x80400000
+core   0:           tval 0x80400000
+core   0: >>>>  ref_trap
+core   0: 0x800001d8 (0x00002f97) auipc   t6, 0x2
+core   0: 3 0x800001d8 (0x00002f97) x31 0x800021d8
+core   0: 0x800001dc (0xe38f8f93) addi    t6, t6, -456
+core   0: 3 0x800001dc (0xe38f8f93) x31 0x80002010
+core   0: 0x800001e0 (0x000faf83) lw      t6, 0(t6)
+core   0: 3 0x800001e0 (0x000faf83) x31 0x80002208 mem 0x80002010
+core   0: 0x800001e4 (0x34202f73) csrr    t5, mcause
+core   0: 3 0x800001e4 (0x34202f73) x30 0x00000001
+core   0: 0x800001e8 (0x01efa023) sw      t5, 0(t6)
+core   0: 3 0x800001e8 (0x01efa023) mem 0x80002208 0x00000001
+core   0: 0x800001ec (0x34102f73) csrr    t5, mepc
+core   0: 3 0x800001ec (0x34102f73) x30 0x80400000
+core   0: 0x800001f0 (0x01efa223) sw      t5, 4(t6)
+core   0: 3 0x800001f0 (0x01efa223) mem 0x8000220c 0x80400000
+core   0: 0x800001f4 (0x34302f73) csrr    t5, mtval
+core   0: 3 0x800001f4 (0x34302f73) x30 0x80400000
+core   0: 0x800001f8 (0x01efa423) sw      t5, 8(t6)
+core   0: 3 0x800001f8 (0x01efa423) mem 0x80002210 0x80400000
+core   0: 0x800001fc (0x00cf8f93) addi    t6, t6, 12
+core   0: 3 0x800001fc (0x00cf8f93) x31 0x80002214
+core   0: 0x80000200 (0x00002f17) auipc   t5, 0x2
+core   0: 3 0x80000200 (0x00002f17) x30 0x80002200
+core   0: 0x80000204 (0xe10f0f13) addi    t5, t5, -496
+core   0: 3 0x80000204 (0xe10f0f13) x30 0x80002010
+core   0: 0x80000208 (0x01ff2023) sw      t6, 0(t5)
+core   0: 3 0x80000208 (0x01ff2023) mem 0x80002010 0x80002214
+core   0: 0x8000020c (0x34202f73) csrr    t5, mcause
+core   0: 3 0x8000020c (0x34202f73) x30 0x00000001
+core   0: 0x80000210 (0x00100f93) li      t6, 1
+core   0: 3 0x80000210 (0x00100f93) x31 0x00000001
+core   0: 0x80000214 (0x01ff0a63) beq     t5, t6, pc + 20
+core   0: 3 0x80000214 (0x01ff0a63)
+core   0: 0x80000228 (0x34109073) csrw    mepc, ra
+core   0: 3 0x80000228 (0x34109073) c833_mepc 0x800001b4
+core   0: 0x8000022c (0x30200073) mret
+core   0: 3 0x8000022c (0x30200073) c768_mstatus 0x00001880 c784_mstatush 0x00000000
+core   0: 0x800001b4 (0x00002e97) auipc   t4, 0x2
+core   0: 3 0x800001b4 (0x00002e97) x29 0x800021b4
+core   0: 0x800001b8 (0xe6ce8e93) addi    t4, t4, -404
+core   0: 3 0x800001b8 (0xe6ce8e93) x29 0x80002020
+core   0: 0x800001bc (0x001ea823) sw      ra, 16(t4)
+core   0: 3 0x800001bc (0x001ea823) mem 0x80002030 0x800001b4
+core   0: 0x800001c0 (0x0ff0000f) fence   iorw,iorw
+core   0: 3 0x800001c0 (0x0ff0000f)
+core   0: 0x800001c4 (0x00100293) li      t0, 1
+core   0: 3 0x800001c4 (0x00100293) x5  0x00000001
+core   0: 0x800001c8 (0x00001317) auipc   t1, 0x1
+core   0: 3 0x800001c8 (0x00001317) x6  0x800011c8
+core   0: 0x800001cc (0xe3830313) addi    t1, t1, -456
+core   0: 3 0x800001cc (0xe3830313) x6  0x80001000
+core   0: 0x800001d0 (0x00532023) sw      t0, 0(t1)
+core   0: 3 0x800001d0 (0x00532023) mem 0x80001000 0x00000001

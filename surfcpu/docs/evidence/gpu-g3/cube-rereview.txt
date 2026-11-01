@@ -1,0 +1,90 @@
+SurfGPU, the re-review of e655c39 (gfx cube, GPU.md 15.9's addendum): its two lows, its question and the console
+matter it saw, on sc/gpu-cube, 2026-10-26, in the surfcpu-toolchain container (gcc 14.2.0, Verilator 5.032;
+Docker through the capped wrapper). Simulation and the host only: nothing here ran on a board.
+
+The host runs: the host test built as make test-gpuos-host builds it (surfcpu/build/review-fix/run-all.sh, not
+kept), seeds 1 7 123; each variant's driver files (gpu.c gfx.c gpu.h gfxcube.c) and test (test_gpu.c gpustub.c
+gpustub.h) from the commits named, the bug put back as named. The Mac's clang gave the same counts.
+
+  variant      driver files                              test       result
+  low1-fix     925fe02                                   925fe02    1043 of 1043
+  low1-bug     e655c39                                   925fe02    1041 of 1043
+  low2-fix     4649e44                                   4649e44    1044 of 1044
+  low2-bug     4649e44, gfxcube.c of 925fe02             4649e44    1043 of 1044
+  input-fix    4696b70                                   4696b70    1053 of 1053
+  input-bug    4696b70, the result failing on any        4696b70    1052 of 1053
+               frame missed (the rule before)
+
+cc (Debian 14.2.0-19) 14.2.0
+== low1-fix
+test_arty: 1043 of 1043 checks passed, 31 tests x 3 seeds (1 7 123)
+== low1-bug
+      1 FAIL t_cube_look:   173 drawn, 186 shown, 0 missed: every frame looked at, a frame a frame drawn
+      1 FAIL t_cube_look:   and at the pins: 187 frames shown of the cube (170 wanted), 128 pictures (120 wanted), 0 between them not the turn's, 0 out of step, 3 after more than two video frames
+test_arty: 1041 of 1043 checks passed, 31 tests x 3 seeds (1 7 123)
+== low2-fix
+test_arty: 1044 of 1044 checks passed, 31 tests x 3 seeds (1 7 123)
+== low2-bug
+      1 FAIL t_cube_end: gfx cube 1 whose display changed without a blanking caught: no rate, said why; the frames all checked
+test_arty: 1043 of 1044 checks passed, 31 tests x 3 seeds (1 7 123)
+== input-fix
+test_arty: 1053 of 1053 checks passed, 31 tests x 3 seeds (1 7 123)
+== input-bug
+      1 FAIL t_cube_look: gfx cube 2 with a paste of 3000 bytes 1.3 s in: 122 shown, 14 missed, all of them while it came; it passes
+test_arty: 1052 of 1053 checks passed, 31 tests x 3 seeds (1 7 123)
+
+The RTL system (build/sim/surfsim_gpu, the RTL of surfcpu_soc with SurfGPU):
+
+test-gpuos at 94f5c3f (gfx cube 2: its first line a second comes while it runs): 32 of 32 in 237 s
+    ok   gfx cube 2 at the VGA pins: 126 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 122 pictures, 0 after more than two video frames
+    ok   gfx cube 2 by SurfOS's own check: 121 drawn in 2.02 s (59.6 a second), 125 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order; 60 drawn, 60 shown, 0 missed: all whole, in order
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (303 sent); 4 fence waits slept on it, 4 of them woken by it
+    test-gpuos: 32 of 32 checks passed in 237 s (gpu 535026646 cycles = 21.401 s simulated in 236.1 s wall (2.27 M cycles/s); nogpu 158284833 cycles = 6.331 s simulated in 47.0 s wall (3.37 M cycles/s))
+
+The question: a burst at the UART during gfx cube (one-off runs, build/review-fix/burst_rtl.py and burst3_rtl.py,
+not kept: surfsim_gpu with --send 'cube 1 s: [^\n]*\n=' followed by 3,000 x \x7f, sent at the line's 115200 baud,
+261 ms; then commands)
+  burst1, the kernel of 94f5c3f (any frame missed fails):
+    SURF ~#> gfx cube 2
+        gfx cube: 2 s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)
+        cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order
+        cube 2 s: 44 drawn, 60 shown, 16 missed: 0 torn, 0 out of order
+        gfx cube: 105 drawn in 2.02 s, 51.7 a second; display back as it was
+        gfx cube: 126 shown, 16 missed: 0 torn, 0 out of order
+    SURF ~#>
+    (the tick held off for the paste: 16 frames unseen, and the cube stood meanwhile, 44 drawn in its second second)
+  burst4, the kernel of 4696b70 (frames missed while the serial line took input said apart, no fail):
+        cube 2 s: 44 drawn, 60 shown, 15 missed: 0 torn, 0 out of order
+        gfx cube: 105 drawn in 2.02 s, 51.8 a second; display back as it was
+        gfx cube: 126 shown, 15 missed: 0 torn, 0 out of order
+        gfx cube: 15 of the 15 missed came while the serial line took input
+
+The console matter: in burst1 and burst4 "echo after the burst\r", sent at line speed as soon as the prompt came
+back, was never echoed; in burst2 keys typed on the PS/2 keyboard while the cube's summary printed were not
+either. The shell had not stopped: in burst3b, keys typed on the PS/2 keyboard from the prompt on, at the
+keyboard's pace, were echoed and run, and a UART command after them too:
+    SURF ~#> xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx                                        irqstat
+        IRQ  count
+          0  12
+          1  266
+          5  5
+        timer: 325
+        spurious: 0
+        exception 11 (environment call from M-mode): 3445
+    SURF ~#> echo uart works
+    uart works
+  (source 0, the UART: 12 interrupts for the 3,032 bytes received, each serial_isr() call taking its 256 bytes:
+  the receive path never caught up with the line while the burst came)
+
+make check (SURFGPU_DOCKER_SIZE=big, through the capped wrapper) at 6e04323, the commit that added the addendum
+(the code of 4696b70), 16:28:10 to 17:03:15:
+    test_arty: 1053 of 1053 checks passed, 31 tests x 3 seeds (1 7 123)
+    gfxref: 11 gfx crc, the model's VRAM, the direct pixels and the two frame CRCs agreed
+    ok   the GPU interrupt (intc source 5, IE.FENCE): 181 taken for the 181 fences that asked for one between the first gfx and the last (303 sent); 4 fence waits slept on it, 3 of them woken by it
+    ok   gfx cube 2 at the VGA pins: 127 frames one of the turn's 128 (128 pictures of their own), one run with no other frame between, 0 out of step; 122 pictures, 0 after more than two video frames
+    ok   gfx cube 2 by SurfOS's own check: 121 drawn in 2.01 s (59.9 a second), 126 shown, 0 missed: all whole, in order; a line a second: 60 drawn, 60 shown, 0 missed: all whole, in order; 60 drawn, 60 shown, 0 missed: all whole, in order
+    test-gpuos: 32 of 32 checks passed in 236 s (gpu 536828349 cycles = 21.473 s simulated in 235.5 s wall (2.28 M cycles/s); nogpu 158580218 cycles = 6.343 s simulated in 46.4 s wall (3.42 M cycles/s))
+    test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 137 of 137 checks passed in 49 s
+    test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 137 of 137 checks passed in 50 s
+    gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's and a captured frame's; 301 frames captured, 133 distinct, 126541870 cycles)
+    check: all automated SurfCPU checks passed

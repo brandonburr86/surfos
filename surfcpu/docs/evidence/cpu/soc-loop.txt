@@ -1,0 +1,10 @@
+# surfcpu_soc: no combinational path from a bus request to an interrupt input of the core
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
+# command: make --no-print-directory soc-loop-cpu
+
+soc_loop_check: irq_external: combinational cone of 54 nets, none of them an ibus_req_* or dbus_req_* net (it starts at registers such as u_gpio.edge_q, u_gpio.ie_q, u_intc.enable_q, u_uart.err_ie_q)
+soc_loop_check: irq_timer: combinational cone of 4 nets, none of them an ibus_req_* or dbus_req_* net (it starts at registers such as u_timer.mtime_q, u_timer.mtimecmp_q)
+soc_loop_check: irq_software: combinational cone of 2 nets, none of them an ibus_req_* or dbus_req_* net (it starts at registers such as u_timer.msip_q)
+soc_loop_check: sanity: dbus_req_valid's cone contains the cones of the three interrupt inputs (the core's own dependency is seen)
+soc_loop_check: yosys check: no logic loop in the flattened surfcpu_soc
+soc_loop_check: PASS (files: 32 RTL files of the SoC build; log build/cpu/soc-loop/loop.log)

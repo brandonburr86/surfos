@@ -1,0 +1,51 @@
+# surfcpu_arty_a7_ddr_bramdiag: the whole SoC with the DDR3L memory (milestone 4, docs/BOARD.md
+# section 12, docs/DDR.md): the top with ARTY_HAS_DDR, so HAS_DDR = 1 and the SoC's DDR port goes
+# through surf_ddr_bridge and surf_ddr_litedram_adapter to the LiteDRAM core generated from
+# ip/litedram/arty.yml, with the BRAM diagnostics in the boot ROM (they initialize the DDR3L and
+# level its read path through surf_ddr_csr, printing every lane's scan, then test it: data and
+# address lines, byte lanes, patterns, copies, code run from DDR). The same as
+# surfcpu_arty_a7_ddr.files but for the rom line, and as surfcpu_arty_a7_bramdiag.files plus the DDR
+# lines (sim/board/tools/test_tools.sh compares them). Format: arty_a7_baseline.files; the build/
+# files are generated (make litedram-gen) and checked against ip/litedram/arty.sha256.
+top      surfcpu_arty_a7_top
+define   ARTY_HAS_DDR                     # the top's DDR3L pins and memory controller (HAS_DDR = 1)
+require  rtl/soc/surfcpu_soc.v
+generated ip/litedram/arty.sha256        # the build/ files below: make litedram-gen, checked against it
+src      rtl/lib/*.v
+src      rtl/cpu/*.v
+src      rtl/soc/*.v
+src      rtl/soc/ddr/*.v                  # surf_ddr_bridge, surf_ddr_mailbox, surf_ddr_litedram_adapter, surf_ddr_csr
+src      rtl/peripherals/*.v
+src      boards/arty_a7/rtl/arty_a7_clocks.v
+src      boards/arty_a7/rtl/surfcpu_arty_a7_top.v
+src      build/litedram/arty/gateware/litedram_core.v
+inc      rtl/generated
+inc      rtl/cpu
+inc      rtl/lib
+inc      rtl/soc
+inc      rtl/peripherals
+inc      boards/arty_a7/rtl
+mem      rtl/peripherals/*.mem
+xdc      boards/arty_a7/xdc/arty_a7_clocks.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_config.xdc
+xdc      boards/arty_a7/xdc/arty_a7_ddr3_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_ddr3_timing.xdc
+xdc      build/litedram/arty/gateware/litedram_core.xdc       # LiteX's reset synchronizers
+cdc      surf_sync        boards/arty_a7/xdc/cdc/surf_sync.xdc
+cdc      surf_reset_sync  boards/arty_a7/xdc/cdc/surf_reset_sync.xdc
+cdc      surf_pulse_sync  boards/arty_a7/xdc/cdc/surf_pulse_sync.xdc
+cdc      surf_cdc_word    boards/arty_a7/xdc/cdc/surf_cdc_word.xdc
+cdc      surf_ddr_bridge  rtl/soc/ddr/surf_ddr_bridge.xdc
+cdc      surf_ddr_csr     rtl/soc/ddr/surf_ddr_csr.xdc
+generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME BOOTROM_INIT
+rom      build/fw/bramdiag.mem   u_soc.u_bootrom     # the BRAM diagnostics (make build-rom)
+dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --dsp safe
+lvs-timeout 14400                                    # the SoC and LiteDRAM: more than twice the registers
+# The open flow's placer seeds, tried in turn until a placement routes with every clock within
+# its constraint (the same gate for each; every attempt is in the manifest): at 80 MHz about three
+# placements in four meet dram_clk's (docs/DDR.md section 10.3, docs/evidence/ddr/openflow-timing.txt)
+seed     1 2 3 4 5 6 7 8

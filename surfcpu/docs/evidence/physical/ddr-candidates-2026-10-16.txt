@@ -1,0 +1,135 @@
+The DDR BRAM diagnostics: five candidate bitstreams on the board (the integrator's own captures)
+Board: Arty A7-100T, JP1/JP2 off, adapters on. Built by ddr-3 in its worktree (every open-flow gate passed on each);
+loaded into configuration RAM one after another, each captured from the load. Read-leveling scan lines omitted here.
+
+== the failing 92a2b51 placement, ROM with video_putc's remu replaced (sha256 fe28049a...)
+  
+  S
+  *
+  *** SurfBoot fault reporter: trap with no handler (after the handoff, or inside a trap handler)
+  mcause 00000000  mepc 00005880  mtval 00005451  sp 0001c850
+  ra 00004c50  gp 0001c840  tp 00000000  s0 0000000c  s1 00000004
+  a0 0000000c  a1 0000000c  a2 00005448  a3 00000000
+  a4 10000000  a5 00000000  a6 00000005  a7 00000000
+  s2 00005449  s3 00004c50  s4 10001000  s5 00000000
+  s6 00000014  s7 00000000  s8 00000000  s9 00000001
+  s10 00000000  s11 00000000
+  (t0..t6 were used by this report) stopped; LEDs blink code 8
+
+== the failing 92a2b51 placement, ROM with the video console off (sha256 d26333d0...)
+  
+  S
+  *
+  *** SurfBoot fault reporter: trap with no handler (after the handoff, or inside a trap handler)
+  mcause 00000000  mepc 00005880  mtval 00005451  sp 0001c850
+  ra 00004c50  gp 0001c840  tp 00000000  s0 0000000c  s1 00000004
+  a0 0000000c  a1 0000000c  a2 00005448  a3 00000000
+  a4 10000000  a5 00000000  a6 00000005  a7 00000000
+  s2 00005449  s3 00004c50  s4 10001000  s5 00000000
+  s6 00000014  s7 00000000  s8 00000000  s9 00000001
+  s10 00000000  s11 00000000
+  (t0..t6 were used by this report) stopped; LEDs blink code 8
+
+== head 69ee491, placer seed 1 (sha256 abc204ba...): all four multiplier DSPs in DSP_R tiles
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 69ee4918)
+  board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 69ee4918 flags 0, features ff, DDR status 14 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10058 us) ok (7 checks)
+  FENCE.I, code written to RAM       ok (2 checks)
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, delay 16 (window +-8)
+    lane 1: bitslip 2, delay 16 (window +-8)
+    229 ms
+  DDR initialization                 ok (3 checks)
+  DDR calibration                    ok (1 checks)
+  DDR data lines                     ok (192 checks)
+  DDR byte lanes                     ok (9 checks)
+  DDR address lines and aliases      ok (54 checks)
+  DDR boundaries                     ok (98 checks)
+  DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  DDR sustained copies               (4 x 256 KiB copied and checked, 720 KiB/s) ok (4 checks)
+  code running from DDR              ok (6 checks)
+  
+  BRAMDIAG: PASS (572 checks)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+
+== head 69ee491, placer seed 2 (sha256 835b4576...)
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 69ee4918)
+  board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 69ee4918 flags 0, features ff, DDR status 14 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  FENCE.I, code written to RAM       ok (2 checks)
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, delay 16 (window +-8)
+    lane 1: bitslip 2, delay 16 (window +-8)
+    229 ms
+  DDR initialization                 ok (3 checks)
+  DDR calibration                    ok (1 checks)
+  DDR data lines                     ok (192 checks)
+  DDR byte lanes                     ok (9 checks)
+  DDR address lines and aliases      ok (54 checks)
+  DDR boundaries                     ok (98 checks)
+  DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  DDR sustained copies               (4 x 256 KiB copied and checked, 719 KiB/s) ok (4 checks)
+  code running from DDR              ok (6 checks)
+  
+  BRAMDIAG: PASS (572 checks)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+
+== head 69ee491, placer seed 3 (sha256 daff31f0...)
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 8194ef87)
+  board Arty A7-100T (0x001), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 8194ef87 flags 0, features ff, DDR status 41 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             
+    FAIL walking one at 0x   00001 bit 20 reads 0x       0
+  (56 KiB)   scratch RAM (March C-): 1 of 38 checks failed
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  FENCE.I, code written to RAM       
+    FAIL after patching and FENCE.I it returned 0x      51
+    FENCE.I, code written to RAM: 1 of 2 checks failed
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, no working delay
+    lane 1: bitslip 2, delay 16 (window +-8)
+    229 ms
+  DDR initialization                 
+    FAIL lane 0: no read delay works at bitslip 2, the best
+    FAIL read leveling did not succeed: init_error written
+    DDR initialization: 2 of 3 checks failed
+  
+  BRAMDIAG: FAIL (4 of 195 checks failed)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+
+Summary: the same netlist placed five ways (two ROM variants of the failing placement, three seeds at head): two placements
+fail on the silicon (92a2b51 seed 1, 69ee491 seed 3), each differently; seeds 1 and 2 at head pass all 572 checks, DDR included.
