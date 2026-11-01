@@ -1132,11 +1132,12 @@ static void field_press(struct wb *b, struct wb_page *p, int control, int px, in
     if(c->kind == WF_TEXT || c->kind == WF_PASSWORD)
         c->caret = fm_byte_at(c, (px - p->lay.items[i].x - 4 + WF_W / 2) / WF_W);
     else if(c->kind == WF_AREA)
-        c->caret = fm_at(c, c->top + (py - p->lay.items[i].y - 4) / WF_H, (px - p->lay.items[i].x - 4 + WF_W / 2) / WF_W);
+        c->caret = fm_on_line(c, c->top + (py - p->lay.items[i].y - 4) / WF_H, (px - p->lay.items[i].x - 4 + WF_W / 2) / WF_W);
 }
 
 int wb_key(struct wb *b, unsigned int key) {
     struct geom g;
+    if(key == WB_KEY_SHIFT_ENTER && b->focus != WB_FOCUS_FIND) key = 13;
     if(b->focus == WB_FOCUS_ADDR) return addr_key(b, key);
     if(b->focus == WB_FOCUS_FIND) return find_key(b, key);
     if(b->focus == WB_FOCUS_FIELD && b->field >= 0) return field_key(b, key);

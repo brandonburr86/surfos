@@ -52,6 +52,8 @@ struct fm_build {                       /* doc.c's, while it reads */
     int failed;                         /* out of memory: the page fails */
     int off;                            /* open fieldsets that are disabled */
     int lost;                           /* what was not kept could be any form's: none is sent */
+    int around;                         /* the form around the next control by elements (</form> does not end what is
+                                           open in it), for when no form is open; -1: none */
 };
 
 void fm_begin(struct fm_build *f);
@@ -59,8 +61,9 @@ void fm_begin(struct fm_build *f);
 /* 0 when s is the lowercase word w, in any case */
 int fm_differs(const char *s, const char *w);
 
-/* <form>: 1 when it opened one, 0 for one inside another, which the standard ignores */
-int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method);
+/* <form>: 1 when it opened one, 0 past the limit. accept: its accept-charset, or NULL. */
+int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method,
+            const char *accept);
 void fm_form_end(struct fm_build *f);
 
 /* A control: its number, or -1 when it is not kept (a limit: its form is marked, and is never sent) */
@@ -98,6 +101,9 @@ int fm_key(struct wd_control *c, unsigned int key);     /* typing in a text fiel
    end at a line feed and at cols characters. The two agree: the byte after a line's last character is on the next line. */
 void fm_where(const struct wd_control *c, size_t at, int *line, int *col);
 size_t fm_at(const struct wd_control *c, int line, int col);
+
+/* The same for a caret, which stays on its line: at a full line's end it is before its last character */
+size_t fm_on_line(const struct wd_control *c, int line, int col);
 
 /* The byte in a text field at a cell from its text's start, and the first byte to show so that the caret stays within
    cells cells */

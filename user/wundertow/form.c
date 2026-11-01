@@ -23,6 +23,7 @@ void fm_begin(struct fm_build *f) {
     memset(f, 0, sizeof(*f));
     f->open = -1;
     f->select = -1;
+    f->around = -1;
 }
 
 /* Room for one more of an array: 0, or -1 (failed set) */
@@ -59,12 +60,28 @@ static char *keep(struct fm_build *f, const char *s, size_t n) {
 /* A control is not kept, so its form says less than the page and is not sent. A form= attribute may name a form only the
    page's end knows, or the one that follows: then it may be any. */
 void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner) {
+    int form = f->open >= 0 ? f->open : f->around;
     if(owner) {
         if(*owner) f->lost = 1;
-    } else if(f->open >= 0) d->forms[f->open].too_much = 1;
+    } else if(form >= 0) d->forms[form].too_much = 1;
 }
 
-int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method) {
+/* accept-charset, by its first label: a UT_CS_* + 1, where UT_CS_ASCII is a charset this browser does not write; 0: none */
+static int accept_of(const char *s) {
+    char label[UT_HTML_LABEL_MAX], unknown[UT_HTML_LABEL_MAX];
+    size_t n, start = 0;
+    if(!s) return 0;
+    s += strspn(s, " \t\n\f\r");
+    n = strcspn(s, " \t\n\f\r");
+    if(!n) return 0;
+    if(n >= sizeof(label)) return UT_CS_ASCII + 1;
+    memcpy(label, s, n);
+    label[n] = 0;
+    return ut_html_charset((const unsigned char *)"", 0, label, 0, &start, unknown, sizeof(unknown)) + 1;
+}
+
+int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method,
+            const char *accept) {
     struct wd_form *x;
     if(f->open >= 0) return 0;                  /* the standard: a form in a form is no form */
     if(d->form_count >= WD_FORMS_MAX) return 0;
@@ -79,6 +96,7 @@ int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const cha
     x->method = WM_GET;
     if(method && !fm_differs(method, "post")) x->method = WM_POST;
     else if(method && !fm_differs(method, "dialog")) x->method = WM_DIALOG;
+    x->accept = (unsigned char)accept_of(accept);
     f->open = (int)d->form_count++;
     return 1;
 }
@@ -110,7 +128,7 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
     memset(c, 0, sizeof(*c));
     c->kind = (unsigned char)n->kind;
     c->role = (unsigned char)n->role;
-    c->form = n->owner && !*n->owner ? -1 : f->open;
+    c->form = n->owner && !*n->owner ? -1 : f->open >= 0 ? f->open : f->around;
     c->run = -1;
     c->checked = c->dflt_checked = n->checked != 0;
     c->disabled = n->disabled || f->off;
@@ -209,6 +227,10 @@ void fm_select_end(struct wd_document *d, struct fm_build *f) {
     f->select = -1;
 }
 
+/* On a page in a charset this browser does not read every byte over 127 reads as '?': what holds one may not be what the
+   page says */
+static int unsure(const struct wd_document *d, const char *s) { return d->form_charset == UT_CS_ASCII && s && strchr(s, '?'); }
+
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
     size_t i, k;
     for(i = 0; i < d->control_count; i++) {
@@ -223,14 +245,15 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
         }
         if(c->form < 0) continue;
         if(c->kind == WF_PASSWORD) d->forms[c->form].password = 1;
-        if(c->cut) d->forms[c->form].too_much = 1;
+        if(c->cut || unsure(d, c->name) || unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
+        for(k = 0; k < c->noptions; k++) if(unsure(d, d->options[c->first_option + k].value)) d->forms[c->form].too_much = 1;
     }
     for(i = 0; i < d->control_count; i++) {     /* of a radio group, the last checked is the one */
         struct wd_control *c = &d->controls[i];
         if(c->kind != WF_RADIO || !c->checked) continue;
         for(k = 0; k < i; k++) {
             struct wd_control *e = &d->controls[k];
-            if(e->kind == WF_RADIO && e->form == c->form && e->name && c->name && !strcmp(e->name, c->name))
+            if(e->kind == WF_RADIO && e->checked && e->form == c->form && e->name && c->name && !strcmp(e->name, c->name))
                 e->checked = e->dflt_checked = 0;
         }
     }
@@ -393,7 +416,7 @@ static int insert(struct wd_control *c, char ch) {
 }
 
 static int edit(struct wd_control *c, unsigned int key) {
-    int line, col, at;
+    int line, col;
     size_t k;
     switch(key) {
     case 127: case 8:
@@ -427,16 +450,14 @@ static int edit(struct wd_control *c, unsigned int key) {
     case 0x105:                                 /* End: the line's end */
         if(c->kind == WF_AREA) {
             fm_where(c, c->caret, &line, &col);
-            c->caret = fm_at(c, line, 1 << 30);
-            fm_where(c, c->caret, &at, &col);
-            if(at != line) while(c->caret && !char_start(c->value, --c->caret)) ;   /* a full line: its last place */
+            c->caret = fm_on_line(c, line, 1 << 30);
         } else c->caret = c->len;
         return 1;
     case 0x100: case 0x101:                     /* Up, Down: a line of an area */
         if(c->kind != WF_AREA) return 0;
         fm_where(c, c->caret, &line, &col);
         if(key == 0x100 && !line) return 0;
-        c->caret = fm_at(c, key == 0x100 ? line - 1 : line + 1, col);
+        c->caret = fm_on_line(c, key == 0x100 ? line - 1 : line + 1, col);
         return 1;
     case 13: case 10:
         return c->kind == WF_AREA ? insert(c, '\n') : 0;
@@ -451,7 +472,7 @@ int fm_key(struct wd_control *c, unsigned int key) {
     return changed;
 }
 
-/* An area's width in characters: what layout.c gives its box */
+/* An area's width in characters: its cols where layout.c gives its box that many, else the least it gives it */
 static int area_cols(const struct wd_control *c) { return c->rows && c->cols ? c->cols : 20; }
 
 void fm_where(const struct wd_control *c, size_t at, int *line, int *col) {
@@ -487,6 +508,14 @@ size_t fm_at(const struct wd_control *c, int line, int col) {
         }
     }
     return c->len;
+}
+
+size_t fm_on_line(const struct wd_control *c, int line, int col) {
+    size_t at = fm_at(c, line, col);
+    int l, n;
+    fm_where(c, at, &l, &n);
+    if(l > line) while(at && !char_start(c->value, --at)) ;
+    return at;
 }
 
 size_t fm_byte_at(const struct wd_control *c, int cell) {
@@ -639,10 +668,12 @@ const char *fm_submit(const struct wd_document *d, int form, int submitter, int 
     if(form < 0 || (size_t)form >= d->form_count) return "This button belongs to no form: nothing was sent";
     f = &d->forms[form];
     method = s && s->formmethod ? s->formmethod - 1 : f->method;
+    q.cs = f->accept ? f->accept - 1 : d->form_charset;
     if(method == WM_POST) return "This form sends by POST, which this browser does not do: nothing was sent";
     if(method == WM_DIALOG) return "This form closes a dialog, which this browser does not have: nothing was sent";
     if(f->password) return "This form has a password field: nothing was sent, as a password must never go into an address";
     if(f->too_much) return "This form is more than this browser keeps of a form: nothing was sent";
+    if(f->accept == UT_CS_ASCII + 1) return "This form asks for a charset this browser does not write: nothing was sent";
     action = s && s->formaction ? s->formaction : f->action;
     if(!action || (s && s->action_cut))
         return "This form's address is not one this browser can use: nothing was sent";
@@ -655,7 +686,6 @@ const char *fm_submit(const struct wd_document *d, int form, int submitter, int 
     q.n = 0;
     q.cap = cap - base - 1;
     q.over = 0;
-    q.cs = d->form_charset;
     entries(d, form, submitter, x, y, &q);
     if(!q.over && action[base + strcspn(action + base, "#")]) {
         const char *hash = action + base + strcspn(action + base, "#");

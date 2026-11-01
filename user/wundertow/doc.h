@@ -88,6 +88,7 @@ struct wd_form {
     unsigned char too_much;             /* a limit took something of it: it is never sent */
     unsigned char here;                 /* no action: the page's own address (until the page's end) */
     unsigned char action_cut;           /* an action longer than was kept */
+    unsigned char accept;               /* its accept-charset, a UT_CS_* + 1 (UT_CS_ASCII: one not written), 0: none */
 };
 
 struct wd_option {

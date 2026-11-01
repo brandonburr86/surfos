@@ -76,7 +76,7 @@ rules as the rest of a page's addresses (may_load()). The form says why when it 
 #define WB_TEXTS_MAX     32             /* wb_fetch()es of a page */
 #define WB_PAGE_IMAGES   (32u << 20)    /* the bytes of pixels a page keeps */
 
-/* the keys that are no bytes: surfos/win.h's WIN_KEY_* */
+/* the keys that are no bytes: surfos/win.h's WIN_KEY_*, and Shift+Enter, which main.c makes of Enter with WIN_MOD_SHIFT */
 #define WB_KEY_UP        0x100
 #define WB_KEY_DOWN      0x101
 #define WB_KEY_LEFT      0x102
