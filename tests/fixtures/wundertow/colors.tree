@@ -1,0 +1,16 @@
+title "Colours"
+colors bg=fffff0 fg=202020 link=0000cc
+block
+  block para
+    text color=ff0000 "red "
+    text color=0000ff "blue"
+    text color=ff0000 " red again"
+    text " default"
+  block para
+    text "a colour that is none"
+  block para
+    text "a font without a colour"
+  table border=0 padding=1 bg=c0c0c0
+    row bg=aabbcc
+      cell bg=ffffff
+        text "cell"

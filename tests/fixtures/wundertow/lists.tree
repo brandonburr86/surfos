@@ -1,0 +1,50 @@
+title "Lists"
+block
+  block para list
+    item disc
+      text "Apples"
+    item disc
+      block anon
+        text "Oranges"
+      block list
+        item circle
+          text "Navel"
+        item circle
+          block anon
+            text "Blood"
+          block list
+            item square
+              text "Moro"
+    item disc
+      text "Pears"
+  block para list
+    item decimal 1
+      text "First"
+    item decimal 2
+      text "Second"
+    item decimal 7
+      text "Seventh"
+    item decimal 8
+      text "Eighth"
+  block para list
+    item decimal -1
+      text "minus one"
+    item decimal 0
+      text "zero"
+  block para list
+    item upper-alpha 1
+      text "A"
+    item upper-alpha 2
+      text "B"
+  block para list
+    item upper-roman 1
+      text "I"
+    item upper-roman 2
+      text "II"
+  block para list
+    item square
+      text "square"
+  block para
+    text "Text"
+  item indent disc
+    text "an item outside any list"

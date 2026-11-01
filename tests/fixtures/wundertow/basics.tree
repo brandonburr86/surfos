@@ -1,0 +1,44 @@
+title "The Basics & More"
+block
+  block h1 para
+    text b h1 "A Heading"
+  block para
+    text "First paragraph, with a"
+    br
+    text "line break and collapsed spaces."
+  block para
+    text "Second paragraph, closed by the next block"
+  block
+    block anon
+      text "A division"
+    block para
+      text "inside a paragraph inside it"
+    block anon
+      text "after the paragraph"
+  block h2 para
+    text b h2 "Heading 2"
+  block h3 para
+    text b h3 "Heading 3"
+  block h4 para
+    text b h4 "4"
+  block h5 para
+    text b h5 "5"
+  block h6 para
+    text b h6 "6"
+  block para quote
+    block para
+      text "A quotation."
+  hr
+  block center
+    text "Centred text"
+  block para right
+    text "Right-aligned"
+  block para
+    block
+      text "Term"
+    block indent
+      text "Definition"
+  block
+    text i "An address"
+  block para
+    text "Café — café — © 2026"

@@ -1,0 +1,10 @@
+title "Hidden content"
+block
+  block para
+    text "Shown 1"
+  block para
+    text "Shown 2: no script runs here"
+  block para
+    text "Shown 3 after a comment"
+  block para
+    text "Shown 4: a p ends the svg"

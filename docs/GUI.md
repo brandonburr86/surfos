@@ -673,6 +673,9 @@ and its title says what it was last sent.
 * **The Calculator as a program.** `wcalc` is the desktop's Calculator in a window of its
   own, looking and counting the same (they share their arithmetic, `shell/guicalc.c`): the
   first application to move out of the kernel, so that a fault in it costs only its window.
+* **The web browser.** `wundertow` (10/25/26) shows web pages and this computer's HTML files
+  in a window: Back, Forward, Reload, the address field, links to click and the page to
+  scroll (`docs/UNDERTOW.md`, "In a window: wundertow").
 * **Run program...** (in the Apps menu) lists the programs of `/initrd/bin` above a line
   to run: a program picked in the list takes the line, and arguments may be typed after
   it (`wcalc` is offered, selected in the list). Run starts it on the desktop's own

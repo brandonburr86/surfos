@@ -267,7 +267,9 @@ platform is C1–C7 (milestone M12); C8–C13 follow it.
 - **C12. Kernel apps to ring 3, one by one,** on wcalc's template: Clock, Character Map, Hex, the Image
   Viewer… Each one takes ring-0 code out of the crash path.
 - **C13. A graphical Undertow (XL),** on libgui after C9: proportional text layout, clickable links, and
-  image decoders (only BMP exists, in the kernel: `shell/guibmp.c`).
+  image decoders (only BMP exists, in the kernel: `shell/guibmp.c`). 10/25/26: handed to a brief of its
+  own, `2026-10-25-browser.md` (wundertow, drawn with its own painter rather than libgui); its first
+  milestone, pages, links and scrolling, came after M12.
 
 ## Shared with the other tracks
 

@@ -8,6 +8,10 @@ the VGA or framebuffer screen, the serial line and telnet sessions.
 It reads pages; it does not run them. There is no JavaScript, and no forms, logins,
 cookies, downloads, images or CSS layout (see [What pages work](#what-pages-work)).
 
+10/25/26: `wundertow` shows the same pages on the desktop, in a window, as a browser draws
+them: headings, styles, links to click, lists, tables, scrolling (see
+[In a window: wundertow](#in-a-window-wundertow)).
+
 This guide describes the integrated browser (`user/undertow/`), including the 2026-10-15
 review fixes (TLS time limits inside the TLS library's calls, a late `<base>`, random DNS
 query IDs and ports, bare IPv4 addresses at the prompt). The messages
@@ -290,6 +294,93 @@ Pages that build their content with JavaScript show only the HTML their server s
 | A read or write with no progress | 15 seconds |
 | One whole load, redirects included | 60 seconds |
 | History | 16 pages, 8 MiB |
+
+## In a window: wundertow
+
+`wundertow` (10/25/26) is Undertow on the desktop: the same pages, the same network and HTTPS, the same
+settings, shown as a web browser draws them rather than as text. It is a program of its own
+(`user/wundertow/`, `/initrd/bin/wundertow`): Undertow's HTTP, TLS, URLs and settings, and the same HTML
+scanner (`user/undertow/html_scan.c`), with a page model, a layout and a painter of its own. The plan it
+follows is `docs/superpowers/plans/2026-10-25-browser.md`.
+
+**Starting it.** Its window is one of SurfOS's windows for programs (M12, `include/surfos/win.h`). On
+the desktop (`gui`), type in its Terminal (Ctrl+T):
+
+    wundertow &                         the start page
+    wundertow example.com &             a page at once
+    wundertow /initrd/www/index.html &  a file: the sample web site
+
+or choose `wundertow` in Apps > Run program... (the launcher lists the programs in /initrd/bin). A window
+started with `&` comes in front without the focus, as every program's does: a click on its title bar gives
+it the focus. Typed without `&`, or started by the launcher, it has the focus at once.
+
+A window opens only on the desktop of the terminal it was started from: on the serial console or over
+telnet, `wundertow` says "no window". Anywhere, on any console, it does two things that need no window:
+
+    wundertow --layout ADDRESS [WIDTH]        the page laid out WIDTH pixels wide (640), as text
+    wundertow --render ADDRESS FILE [WIDTH]   the page painted as a BMP picture, for the Image Viewer
+
+WIDTH is 64 to 4096 pixels (640); a picture is 8000 rows at most.
+
+`wundertow --render https://example.com /data/example.bmp` on the laptop, then the picture opened in the
+desktop's Image Viewer, shows the page as the window does.
+
+**The window.** A toolbar (Back, Forward, Reload, the address field, Go), the page, a scroll bar and a
+status bar, in the desktop's colours. The status bar names the link under the pointer, says Loading... while
+a page loads, Done, or why a page failed, and at its right how the page came: "HTTPS verified TLSv1.3",
+"HTTP: not encrypted" or "File". The window's title is the page's. Loading waits for the page, up to
+Undertow's minute: the window says so first and goes on once the page is there.
+
+**Keys and the pointer.**
+
+| Key | |
+|---|---|
+| Ctrl+L | the address field, all of it chosen (typing replaces it) |
+| Enter, Escape, Tab | in the field: load the address; give the page's back; return to the page |
+| Up, Down | scroll 32 pixels |
+| Page Up, Page Down, Space | scroll a screen |
+| Home, End | the top, the bottom |
+| Backspace | back |
+| Ctrl+R | load the page again, at the same place |
+
+A link is followed when the button is let go over it; the scroll bar's thumb can be dragged, and a click
+above or below it scrolls a screen. The wheel scrolls once the desktop delivers it (track C's C8).
+
+**Files.** An address that starts with `/` or `file:` is a file on this computer, read whole (1 MB at
+most), HTML by its name (`.html`, `.htm`), text otherwise. A file page's links lead to files beside it; a
+web page's links never lead to a file, whatever they say.
+
+**What it shows.** Headings (h1 and h2 twice the size), paragraphs, bold, italic, underlined, struck-through
+and monospaced text, sub- and superscripts, highlighted text, links in the link colour and underlined,
+lists with bullets, numbers, letters or Roman numerals, quotations, preformatted text (its lines kept,
+broken only at the window's edge), rules, line breaks, centred and right-aligned text, the page's colours
+(`<body bgcolor text link>`, `<font color>`, the colours of tables, rows and cells), tables with their
+columns sized to their content, a width, borders, padding and cells that span columns, and forms' fields as
+boxes (shown, not used yet). Images are their alt text in a frame of their size until images are loaded.
+The text is the console's font (code page 437); a character it does not have is shown as Undertow's ASCII
+stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, SVG, MathML, objects), this
+hides, and so the content of an element with the `hidden` attribute.
+
+**Not yet** (the plan's later milestones): images, a Stop button and loading without waiting, finding in
+a page, links by keyboard, forms that send, CSS, other fonts.
+
+**Limits.** Undertow's (above), and 32,768 boxes and 131,072 runs of text a page; past any of them the page
+stops there and the status bar says so. History: 16 pages, 8 MB.
+
+**Its tests.** `make unittest` runs `test_wundertow_doc` (the page model: the fixtures in
+`tests/fixtures/wundertow/`, `NAME.html` in, `NAME.tree` out, every page of Undertow's fixtures, the limits,
+every allocation failing in turn), `test_wundertow_layout` (`NAME.layout` at 640 pixels, lines, margins,
+lists, pre, tables, links under the pointer, painting and clipping, every page at widths from 64 to 1300)
+and `test_wundertow_browser` (the window driven as a person drives it). The smoke test lays out a page over
+HTTP and the sample site from a file, and paints a page to a BMP. `make test-web`'s scenarios `wundertow` and
+`wundertow-production` lay out the fixture servers' pages over HTTPS (TLS 1.3 and 1.2, verified, a redirect
+followed) and HTTP, and check that it refuses what Undertow refuses (an unknown root, another name, an expired
+certificate, HTTPS to HTTP; the normal initrd trusts no fixture CA). `make test-usb`'s guiapps scenario
+(`tools/gui_apps_web.py`) drives the window on the screen: started in the Terminal on pages of a data stick,
+the focus given by a click on its title bar, the text, the link colour and the heading at twice the size
+where the layout puts them, a link followed, Backspace, Page Down and Home, the corner dragged (the page
+laid out again at the new width) and the close button. `test_wundertow_layout --render FILE OUT.ppm
+[WIDTH]` paints any HTML file on the host.
 
 ## Updating the CA bundle and Mbed TLS
 

@@ -1,0 +1,23 @@
+page 640x188
+text 292,8 56x16 "Results"
+fill 8,24 624x82 color=eeeeee
+frame 11,27 295x24
+text 142,31 32x16 b "Name"
+frame 308,27 321x24
+text 448,31 40x16 b "Score"
+frame 11,53 295x24
+text 15,57 24x16 "Ann"
+frame 308,53 321x24
+text 609,57 16x16 "10"
+fill 9,79 622x24 color=ffff00
+frame 11,79 618x24
+text 15,83 192x16 "A row with one wide cell"
+frame 8,24 624x82
+text 11,109 40x16 "outer"
+frame 58,112 60x20
+text 60,114 56x16 "inner 1"
+frame 120,112 60x20
+text 122,114 56x16 "inner 2"
+frame 55,109 128x26
+text 11,141 160x16 "a cell without a row"
+text 11,161 240x16 "text in the row, not in a cell"
