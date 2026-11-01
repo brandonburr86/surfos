@@ -3,12 +3,14 @@ SurfOS Undertow's window: the font
 ----------------------
 File: font.c  Date: 10/25/26
 ----------------------
-font.h's measuring: characters to the console's cells, as Undertow's text view shows them on the console.
+font.h's measuring: characters to the console's cells, as Undertow's text view shows them on the console, and
+those cells' widths.
 */
 
 #include <stddef.h>
 #include <surfos/cp437.h>
 #include "undertow.h"
+#include "doc.h"
 #include "font.h"
 
 /* Combining marks: drawn on the character before them by a real font; here they take no cell */
@@ -76,16 +78,27 @@ unsigned int wf_row(int size, unsigned char g, int row) {
     return font16x32[g][row];
 }
 
+/* Bold adds its smear to what has ink, and leaves what must meet its neighbours alone */
+static int smears(unsigned char g) { return g != ' ' && g && g != 0xff && !(g >= 0xb0 && g <= 0xdf); }
+
+int wf_advance(int size, unsigned char g, unsigned int style) {
+    if(style & WS_MONO) return wf_cell_w(size);
+    return wf_metrics[known(size) - 1][g].advance + (style & WS_BOLD && smears(g) ? wf_bold(size) : 0);
+}
+
+int wf_bearing(int size, unsigned char g, unsigned int style) {
+    return style & WS_MONO ? 0 : wf_metrics[known(size) - 1][g].bearing;
+}
+
 /* The next character of s: its bytes, and its width */
 static size_t advance(const char *s, size_t n, int size, unsigned int style, int *w) {
     unsigned char cells[WF_CELLS_MAX];
     unsigned int cp = (unsigned char)s[0];
     size_t k = 1;
     int c, count;
-    (void)style;
     if(cp >= 0x80) k = ut_utf8_decode((const unsigned char *)s, n, &cp);
     count = wf_cells(cp, cells);
-    for(*w = 0, c = 0; c < count; c++) *w += wf_cell_w(size);
+    for(*w = 0, c = 0; c < count; c++) *w += wf_advance(size, cells[c], style);
     return k;
 }
 

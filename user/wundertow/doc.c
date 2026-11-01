@@ -164,6 +164,9 @@ struct bd {
     int css_at;                         /* docstyle's elements before this tag */
     int display;                        /* what the cascade said of this tag's element */
     struct wd_block no_box;             /* what box_of() gives an element without a box of its own */
+    unsigned int space_bg;              /* a waiting space's look, from the CSS around it */
+    unsigned short space_px;
+    int space_now;                      /* that space is what is being written */
 };
 
 /**** small helpers ****/
@@ -444,8 +447,8 @@ static struct wd_run *run_for(struct bd *b, int kind, unsigned short style, unsi
     int t = target(b);
     struct wd_block *x;
     struct wd_run *r;
-    unsigned int bg = ds_bg(b->ds);
-    unsigned short px = ds_px(b->ds);
+    unsigned int bg = b->space_now ? b->space_bg : ds_bg(b->ds);
+    unsigned short px = b->space_now ? b->space_px : ds_px(b->ds);
     if(t < 0) return NULL;
     x = &b->d.blocks[t];
     if(kind == WR_TEXT && x->nruns) {
@@ -486,6 +489,16 @@ static int put_text(struct bd *b, const char *s, size_t n, unsigned short style,
     b->d.text[b->d.text_len] = 0;
     r->len += (unsigned int)n;
     return 0;
+}
+
+/* The space that waits, in the look it came in; 0, or -1 when it does not fit */
+static int put_space(struct bd *b) {
+    int rc;
+    b->space = 0;
+    b->space_now = 1;
+    rc = put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link);
+    b->space_now = 0;
+    return rc;
 }
 
 /* A label (a link's, a button's, a select's): collapsed, cut at LABEL_MAX */
@@ -555,16 +568,15 @@ static void text_char(struct bd *b, unsigned int cp) {
             b->space_size = size_now(b);
             b->space_color = color_now(b);
             b->space_link = b->link;
+            b->space_px = ds_px(b->ds);
+            b->space_bg = ds_bg(b->ds);
         }
         return;
     } else if(ut_html_hidden(cp)) return;
     style = style_now(b);
     size = size_now(b);
     color = color_now(b);
-    if(b->space) {
-        b->space = 0;
-        if(put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link)) return;
-    }
+    if(b->space && put_space(b)) return;
     k = ut_utf8_encode(cp, u);
     put_text(b, (const char *)u, k, style, size, color, b->link);
 }
@@ -573,10 +585,7 @@ static void text_char(struct bd *b, unsigned int cp) {
 static struct wd_run *atom(struct bd *b, int kind, const char *label, size_t n) {
     struct wd_run *r;
     if(b->stopped || b->failed || b->none) return NULL;
-    if(b->space) {
-        b->space = 0;
-        if(put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link)) return NULL;
-    }
+    if(b->space && put_space(b)) return NULL;
     if(room(b, n)) return NULL;
     r = run_for(b, kind, style_now(b), size_now(b), color_now(b), b->link);
     if(!r) return NULL;

@@ -1,24 +1,24 @@
 page 640x296
-text 8,28 64x16 "Search: "
-field text 72,24 168x24 checked "Words to find"
-text 240,28 8x16 " "
-field button 248,24 32x24 "Go"
+text 8,28 55x16 "Search: "
+field text 63,24 168x24 checked "Words to find"
+text 231,28 4x16 " "
+field button 235,24 32x24 "Go"
 field checkbox 8,64 14x14 checked
-text 22,64 72x16 " Checked "
-field checkbox 94,64 14x14
-text 108,64 96x16 " Not checked"
+text 22,64 64x16 " Checked "
+field checkbox 86,64 14x14
+text 100,64 87x16 " Not checked"
 field radio 8,96 14x14 checked
-text 22,96 40x16 " One "
-field radio 62,96 14x14
-text 76,96 32x16 " Two"
-text 8,132 80x16 "Password: "
-field password 88,128 168x24 "********"
-text 256,132 56x16 " File: "
-field file 312,128 168x24 "Choose a file"
+text 22,96 32x16 " One "
+field radio 54,96 14x14
+text 68,96 29x16 " Two"
+text 8,132 71x16 "Password: "
+field password 79,128 168x24 "********"
+text 247,132 37x16 " File: "
+field file 284,128 168x24 "Choose a file"
 field select 8,168 64x24 "Green"
 field area 8,208 168x40 "Some text in a box"
 field button 8,264 80x24 "A button"
-text 88,268 8x16 " "
-field button 96,264 56x24 "Reset"
-text 152,268 8x16 " "
-field button 160,264 48x24 "Send"
+text 88,268 4x16 " "
+field button 92,264 56x24 "Reset"
+text 148,268 4x16 " "
+field button 152,264 48x24 "Send"

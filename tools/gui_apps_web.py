@@ -7,12 +7,17 @@ goes back to the top; its corner dragged makes it smaller and the page is laid o
 button ends it. The pages are this module's own, on the stick (STICK); the stick is mounted in the Terminal and
 unmounted again, and the Terminal closed, also when a check fails."""
 import os
-import re
 
+import fontmetrics
 import gui_apps_term as term
 from gui_apps_scenario import PAPER, TEAL, MUTED
 
 LINES = 60
+# user/wundertow/font.c: a page's text is proportional, the console's fonts trimmed to their ink (tools/fontmetrics.py)
+FONTS = {16: '8x16', 24: '12x24', 32: '16x32'}
+CELL, BOLD = {16: 8, 24: 12, 32: 16}, {16: 1, 24: 1, 32: 2}
+METRICS = {size: fontmetrics.metrics(name) for size, name in FONTS.items()}
+ROWS = {size: fontmetrics.rows(name) for size, name in FONTS.items()}
 STICK = {
     'web/one.html': ('<!DOCTYPE html><title>One</title><h1>Wave one</h1>'
                      '<p>First paragraph with <a href="two.html">a link to page two</a>. It goes on, wrapped when '
@@ -30,13 +35,12 @@ INK, SHEET, LINK = bytes.fromhex('153d49'), bytes.fromhex('fffdf5'), bytes.fromh
 # where the layout puts the text (user/wundertow/layout.c at 748 pixels, the content less the scroll bar: an 8-pixel
 # margin, h1 32 high with 16 above and below, paragraphs 16 high and 16 apart)
 H1_Y = 8 + 16                           # 24: the heading
-P1_Y = H1_Y + 32 + 16                   # 72: the first paragraph, one line of 75 characters at 748 pixels
-LINK_X = 8 + len('First paragraph with ') * 8
+P1_Y = H1_Y + 32 + 16                   # 72: the first paragraph, one line of 516 pixels at 748 pixels
 SCREEN = CONTENT_H - TOOLBAR - STATUS   # 404: what Page Down scrolls is this less 32
 LINE10_Y = P1_Y + 32 * 10 - (SCREEN - 32)   # Line 10's place after one Page Down
-# the corner dragged 180 left and 100 up: 580 x 357, laid out at 568 pixels, 69 characters a line: the first
-# paragraph's last word goes to a line of its own
-DRAG = (180, 100)
+# the corner dragged 240 left and 100 up: 520 x 357, laid out at 508 pixels: the first paragraph's last word goes to a
+# line of its own
+DRAG = (240, 100)
 # a program's window has its top at the menu bar while it is as tall as the room, 6 pixels below it once it is less
 # tall (gui_place's top_limit, shell/guicore.c): where the drag leaves it when wundertow draws at the new size
 TOP, SHORT_TOP = 28, 28 + 6
@@ -68,37 +72,51 @@ def text_at(d, s, at, y, text, colour=INK, x=8):
     return d.text(s, at[0] + 1 + x, at[1] + TITLE_H + TOOLBAR + y, text, colour, SHEET if colour == INK else None)
 
 
-def font_rows(name):
-    """{character: its rows} of a console font, driver/font<name>.c, each row an integer whose top bit of 16 is the
-    leftmost pixel, as user/wundertow/font.c gives them"""
-    width = int(name.split('x')[0])
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'driver', f'font{name}.c')
-    rows = {}
-    with open(path, encoding='utf-8') as f:
-        for index, values in re.findall(r'\[0x([0-9a-fA-F]{2})\] = \{ ([^}]*) \}', f.read()):
-            rows[int(index, 16)] = [int(v, 16) << (8 if width == 8 else 0) for v in values.split(',')]
-    return rows
+def advance(char, size=16, bold=False):
+    """how far on the next character is in a page's proportional text, as user/wundertow/font.c has it"""
+    return METRICS[size][ord(char)][1] + (BOLD[size] if bold and char != ' ' else 0)
 
 
-FONT32 = font_rows('16x32')
+def text_width(text, size=16, bold=False):
+    return sum(advance(char, size, bold) for char in text)
+
+
+def ink(text, size=16, bold=False):
+    """the pixels a page's proportional text lights, from its top left, as user/wundertow/paint.c draws it: each cell
+    of its font drawn left of its place by its bearing, bold as a smear to the right"""
+    lit, pen = set(), 0
+    width, extra = CELL[size], BOLD[size] if bold else 0
+    for char in text:
+        bearing = METRICS[size][ord(char)][0]
+        for row, bits in enumerate(ROWS[size][ord(char)]):
+            for col in range(width):
+                if bits & (1 << (width - 1 - col)):
+                    lit.update((pen - bearing + col + k, row) for k in range(extra + 1))
+        pen += advance(char, size, bold)
+    return lit
+
+
+def page_text(d, s, at, y, text, colour, background, x, size=16, bold=False):
+    """the text's pixels in its colour, and with a background every other pixel of its width and height in that"""
+    x0, y0 = at[0] + 1 + x, at[1] + TITLE_H + TOOLBAR + y
+    lit = ink(text, size, bold)
+    if any(d.pixel(s, x0 + px, y0 + py) != colour for px, py in lit):
+        return False
+    return background is None or all(d.pixel(s, x0 + px, y0 + py) == background or (px, py) in lit
+                                     for px in range(text_width(text, size, bold)) for py in range(size))
+
+
+def text_at(d, s, at, y, text, colour=INK, x=8):
+    """text on the page, x and y from the page's top left (below the toolbar)"""
+    return page_text(d, s, at, y, text, colour, SHEET if colour == INK else None, x)
 
 
 def heading_at(d, s, at, y, text, x=8):
-    """h1 on the page as user/wundertow/paint.c draws it: the 16x32 font, bold as a smear of two pixels to the right,
-    the page's colour everywhere else in its cells"""
-    x0, y0 = at[0] + 1 + x, at[1] + TITLE_H + TOOLBAR + y
-    for row in range(32):
-        line = 0
-        for index, char in enumerate(text):
-            bits = FONT32[ord(char)][row] << 2
-            bits |= bits >> 1
-            bits |= bits >> 1
-            line |= bits << (16 * (len(text) - 1 - index))
-        for col in range(16 * len(text)):
-            lit = line & (1 << (16 * len(text) + 2 - 1 - col))
-            if d.pixel(s, x0 + col, y0 + row) != (INK if lit else SHEET):
-                return False
-    return True
+    """h1 on the page: the 16x32 font, bold, the page's colour everywhere else in its width"""
+    return page_text(d, s, at, y, text, INK, SHEET, x, 32, True)
+
+
+LINK_X = 8 + text_width('First paragraph with ')
 
 
 def checks(d):
@@ -147,7 +165,7 @@ def checks(d):
         frame_w = FRAME_W - DRAG[0]
         at = (at[0], SHORT_TOP)                             # less tall than the room now: its top 6 pixels lower
         d.move(*PARK)
-        d.visible('its corner dragged 180 left and 100 up: the page laid out again at the new width, the first '
+        d.visible('its corner dragged 240 left and 100 up: the page laid out again at the new width, the first '
                   'paragraph\'s last word on a line of its own',
                   lambda s: text_at(d, s, at, P1_Y, 'First paragraph with ') and text_at(d, s, at, P1_Y + 16, 'narrower.'),
                   'guiapps-web-resized.png', timeout=20)

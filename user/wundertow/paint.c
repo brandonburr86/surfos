@@ -103,6 +103,24 @@ int wp_text(const struct wp_target *t, int x, int y, const char *s, size_t n, in
     return x;
 }
 
+/* A run's text: proportional, by its cells' widths and bearings; WS_MONO text in its cells */
+static void run_text(const struct wp_target *t, int x, int y, const char *s, size_t n, int size, unsigned int style,
+                     unsigned int color) {
+    unsigned char cells[WF_CELLS_MAX];
+    unsigned int cp;
+    size_t i = 0;
+    int k, c;
+    while(i < n) {
+        if((unsigned char)s[i] < 0x80) cp = (unsigned char)s[i++];
+        else i += ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
+        k = wf_cells(cp, cells);
+        for(c = 0; c < k; c++) {
+            if(cells[c] != ' ' && cells[c] != 0xff) glyph(t, x - wf_bearing(size, cells[c], style), y, cells[c], size, style, color);
+            x += wf_advance(size, cells[c], style);
+        }
+    }
+}
+
 /**** the page ****/
 
 static unsigned int text_color(const struct wd_document *d, const struct wp_theme *th, const struct wl_item *it, int hover) {
@@ -191,7 +209,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             int s = it->scale;
             c = text_color(d, th, it, hover);
             if(it->style & WS_MARK) wp_fill(t, x, y, it->w, it->h, th->mark);
-            wp_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
+            run_text(t, x, y, d->text + it->off, it->len, s, it->style, c);
             if((it->style & WS_UNDER) || (it->link >= 0 && !(it->style & WS_NOLINE)))
                 wp_fill(t, x, y + wf_under(s), it->w, wf_stroke(s), c);
             if(it->style & WS_STRIKE) wp_fill(t, x, y + wf_strike(s), it->w, wf_stroke(s), c);

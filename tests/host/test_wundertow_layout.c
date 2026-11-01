@@ -299,6 +299,126 @@ static int paints_inside(const struct wl_layout *l, const struct wd_document *d,
     return ok;
 }
 
+/* Stage 3.5: a page's running text by the width table, monospaced text in its cells */
+static void proportional(void) {
+    static const char font_names[][8] = { "8x16", "12x24", "16x32" };
+    const struct wl_item *a, *b;
+    struct image im;
+    struct wp_target t;
+    struct wp_theme th;
+    char msg[200];
+    int size, g, wrong = 0, x, y, found;
+    size_t n, i;
+
+    /* the table is the fonts': the first column with ink, its width and a sixth of the cell */
+    for(size = WF_S16; size <= WF_S32; size++)
+        for(g = 0; g < 256; g++) {
+            unsigned int ink = 0;
+            int row, first = -1, last = -1, w = wf_cell_w(size), c;
+            for(row = 0; row < wf_cell_h(size); row++) ink |= wf_row(size, (unsigned char)g, row);
+            for(c = 0; c < w; c++) if(ink & (0x8000u >> c)) {
+                if(first < 0) first = c;
+                last = c;
+            }
+            if(g >= 0xb0 && g <= 0xdf) wrong += wf_bearing(size, (unsigned char)g, 0) != 0 || wf_advance(size, (unsigned char)g, 0) != w;
+            else if(first < 0) wrong += wf_bearing(size, (unsigned char)g, 0) != 0 || wf_advance(size, (unsigned char)g, 0) != w / 2;
+            else wrong += wf_bearing(size, (unsigned char)g, 0) != first ||
+                          wf_advance(size, (unsigned char)g, 0) != last - first + 1 + (w + 3) / 6;
+            if(wrong == 1) {
+                snprintf(msg, sizeof(msg), "the width table: %s cell %d", font_names[size - WF_S16], g);
+                check(0, msg);
+                wrong++;
+            }
+        }
+    check(!wrong, "the width table is the fonts': run tools/fontmetrics.py when they change");
+
+    /* widths */
+    check(wf_width("il", 2, WF_S16, 0) < wf_width("mw", 2, WF_S16, 0), "i and l are narrower than m and w");
+    check(wf_width("il", 2, WF_S16, WS_MONO) == 16 && wf_width("mw", 2, WF_S16, WS_MONO) == 16, "in cells they are not");
+    check(wf_width("il", 2, WF_S24, WS_MONO) == 24 && wf_width("il", 2, WF_S32, WS_MONO) == 32, "cells of each size");
+    check(wf_width("mi", 2, WF_S16, WS_BOLD) == wf_width("mi", 2, WF_S16, 0) + 2, "bold is wider by its smear, a pixel a glyph");
+    check(wf_width("mi", 2, WF_S32, WS_BOLD) == wf_width("mi", 2, WF_S32, 0) + 4, "two at 32");
+    check(wf_width("m i", 3, WF_S16, WS_BOLD) == wf_width("m i", 3, WF_S16, 0) + 2, "a space has no ink to smear");
+    check(wf_width("mi", 2, WF_S16, WS_ITALIC) == wf_width("mi", 2, WF_S16, 0), "italic is as wide");
+    check(wf_width("mi", 2, WF_S16, WS_MONO | WS_BOLD) == 16, "monospaced bold stays in its cells");
+    check(wf_width("", 0, WF_S16, 0) == 0, "nothing is no width");
+    check(wf_width("\xe2\x95\x90\xe2\x95\x90", 6, WF_S16, WS_BOLD) == 16, "box drawing stays in its cells, bold too: its lines meet");
+    check(wf_width("e\xcc\x81", 3, WF_S16, 0) == wf_width("e", 1, WF_S16, 0), "a combining mark takes no width");
+    check(wf_width("\xe2\x82\xac", 3, WF_S16, 0) == wf_width("EUR", 3, WF_S16, 0), "a stand-in is as wide as what it is");
+    check(wf_width("\xc3\xa9", 2, WF_S16, 0) > 0, "a letter the console has");
+    check(wf_width("\xff", 1, WF_S16, 0) > 0, "a byte that is no UTF-8 is drawn as U+FFFD's stand-in");
+
+    /* what fits */
+    {
+        static const char s[] = "illustrate";
+        int used = -1, w = wf_width(s, 4, WF_S16, 0);
+        check(wf_fit(s, 10, w, WF_S16, 0, &used) == 4 && used == w, "wf_fit: as many as fit, exactly");
+        check(wf_fit(s, 10, w - 1, WF_S16, 0, &used) == 3 && used == wf_width(s, 3, WF_S16, 0), "wf_fit: one fewer");
+        check(wf_fit(s, 10, 0, WF_S16, 0, &used) == 0 && !used, "wf_fit: no room");
+        check(wf_fit(s, 10, -5, WF_S16, 0, &used) == 0 && !used, "wf_fit: less than none");
+        check(wf_fit(s, 10, 1 << 30, WF_S16, 0, &used) == 10 && used == wf_width(s, 10, WF_S16, 0), "wf_fit: all of it");
+        check(wf_fit("\xc3\xa9\xc3\xa9", 4, wf_width("\xc3\xa9", 2, WF_S16, 0), WF_S16, 0, &used) == 2, "wf_fit: whole characters");
+        check(wf_fit("mm", 2, wf_width("mm", 2, WF_S16, 0), WF_S16, WS_BOLD, &used) == 1, "wf_fit: in the style's widths");
+    }
+
+    /* on the page */
+    page("<p>iii <code>iii</code> iii <b>iii</b>", 640);
+    a = text_item("iii ");
+    b = text_item("iii");
+    check(pl_ok && a && a->style == 0 && nth(WI_TEXT, 1) && nth(WI_TEXT, 1)->w == 3 * 8 && (nth(WI_TEXT, 1)->style & WS_MONO), "code stays in cells on a proportional line");
+    check(pl_ok && nth(WI_TEXT, 3) && nth(WI_TEXT, 3)->w == wf_width("iii", 3, WF_S16, WS_BOLD), "bold on the same line");
+    check(pl_ok && nth(WI_TEXT, 1)->x == a->x + wf_width("iii ", 4, WF_S16, 0), "each where the one before it ends");
+    (void)b;
+    page("<pre>iiii\nmmmm</pre>", 640);
+    check(pl_ok && nth(WI_TEXT, 0)->w == 32 && nth(WI_TEXT, 1)->w == 32, "pre stays monospaced: its columns line up");
+    page("<h1><code>iii</code></h1>", 640);
+    check(pl_ok && nth(WI_TEXT, 0)->w == 3 * 16, "code in a heading: in its size's cells");
+    page("<p>iiii <span style=font-size:32px>iiii</span> <span style=font-size:24px>iiii</span>", 640);
+    check(pl_ok && nth(WI_TEXT, 1)->scale == WF_S32 && nth(WI_TEXT, 1)->w == wf_width("iiii", 4, WF_S32, 0) &&
+          nth(WI_TEXT, 3)->scale == WF_S24, "sizes on one line, each in its widths");
+
+    /* the glyph's ink starts where the text does */
+    wp_theme_default(&th);
+    page("<body bgcolor=#ffffff text=#000000><p>l", 64);
+    image_new(&im, 64, pl.height, 0);
+    t = target(&im, 0, 0, 64, pl.height);
+    wp_paint(&pl, &pd, &th, &t, 0, 0, -1);
+    a = nth(WI_TEXT, 0);
+    found = 0;
+    for(y = a->y; y < a->y + a->h; y++) found += pixel(&im, a->x, y) == 0;
+    for(x = 0; x < a->x; x++) for(y = a->y; y < a->y + a->h; y++) found -= pixel(&im, x, y) == 0;
+    check(a && found > 0, "a trimmed glyph's ink starts at its place, nothing to its left");
+    free(im.px);
+
+    /* lines are filled by real widths: every line within the box, and the next word would not have fitted */
+    page("<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore "
+         "magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo.", 300);
+    found = 0;
+    for(i = 0; i < pl.count; i++) if(pl.items[i].kind == WI_TEXT && pl.items[i].x + pl.items[i].w > 300 - 8) found++;
+    check(pl_ok && !found && pl.count > 3, "no line runs past its box");
+    for(i = 0; i + 1 < pl.count; i++) {
+        const struct wl_item *p = &pl.items[i], *q = &pl.items[i + 1];
+        const char *w = pd.text + q->off;
+        n = 0;
+        while(n < q->len && w[n] != ' ') n++;
+        if(p->x + p->w + wf_width(" ", 1, WF_S16, 0) + wf_width(w, n, WF_S16, 0) <= 300 - 8) found++;
+    }
+    check(!found, "and no word stops short of the room it had");
+
+    /* a word too wide for any line, in a font wider than the line's narrowest: no hang, one glyph at least a line */
+    {
+        size_t cap = 300000;
+        char *big = malloc(cap + 16);
+        if(!big) exit(2);
+        memcpy(big, "<h1>", 4);
+        memset(big + 4, 'M', cap);
+        big[cap + 4] = 0;
+        page(big, 64);
+        check(pl_ok && pl.count >= 1 && inside_page(&pl), "a word as long as a page in the largest size, in the narrowest window");
+        free(big);
+    }
+}
+
 static void made_pages(void) {
     const struct wl_item *a, *b, *c;
     struct image im;
@@ -312,7 +432,8 @@ static void made_pages(void) {
     page("<p>aaa bbb ccc", 8 + 72 + 8);                         /* 9 cells */
     a = text_item("aaa");
     c = text_item("ccc");
-    check(pl_ok && a && c && a->len == 7 && a->w == 56 && c->x == a->x && c->y == a->y + 16, "lines: broken at a space");
+    check(pl_ok && a && c && a->len == 7 && a->w == wf_width("aaa bbb", 7, WF_S16, 0) && c->x == a->x && c->y == a->y + 16,
+          "lines: broken at a space");
 
     page("<p>abcdefghijklmnopqrstuvwxyz", 8 + 80 + 8);           /* a word of 26 in lines of 10 */
     found = 0;
@@ -324,7 +445,8 @@ static void made_pages(void) {
     b = text_item("two");
     c = text_item("three");
     check(pl_ok && a && b && c && a->y == 8 + 16 && b->y == a->y + 16 + 16 && c->y == b->y + 16 + 16, "margins: the larger of two");
-    check(pl_ok && c && c->scale == WF_S32 && c->h == 32 && c->w == 5 * 16 && (c->style & WS_BOLD), "h1: the 16x32 font, bold");
+    check(pl_ok && c && c->scale == WF_S32 && c->h == 32 && c->w == wf_width("three", 5, WF_S32, WS_BOLD) &&
+          (c->style & WS_BOLD), "h1: the 16x32 font, bold");
 
     page("<center>abc</center><p align=right>xyz", 640);
     a = text_item("abc");
@@ -403,7 +525,8 @@ static void made_pages(void) {
     page("<h1>a</h1><h2>b</h2><h3>c</h3><h4>d</h4><h5>e</h5><h6>f</h6><big>g</big><small>h</small>", 640);
     a = text_item("b");
     b = text_item("c");
-    check(pl_ok && a && b && a->scale == WF_S24 && a->h == 24 && a->w == 12 && b->scale == WF_S16 && b->h == 16 &&
+    check(pl_ok && a && b && a->scale == WF_S24 && a->h == 24 && a->w == wf_width("b", 1, WF_S24, WS_BOLD) &&
+          b->scale == WF_S16 && b->h == 16 &&
           text_item("f")->scale == WF_S16 && text_item("g")->scale == WF_S16, "h2 in 12x24, the others in 8x16");
     page("<span style=font-size:14px>a</span><span style=font-size:20px>b</span><span style=font-size:21px>c</span>"
          "<span style=font-size:28px>d</span><span style=font-size:29px>e</span><span style=font-size:200px>f</span>", 640);
@@ -447,10 +570,12 @@ static void made_pages(void) {
             unsigned int bits = wf_row(WF_S32, 'A', y);
             bits |= bits >> 1;
             bits |= bits >> 1;
-            if((pixel(&im, a->x + x, a->y + y) == th.fg) != !!(bits & (0x8000u >> x))) found++;
+            if((pixel(&im, a->x - wf_bearing(WF_S32, 'A', WS_BOLD) + x, a->y + y) == th.fg) != !!(bits & (0x8000u >> x))) found++;
         }
     check(!found, "a heading's glyph is the 16x32 font's, bold by a smear of two");
     free(im.px);
+
+    proportional();
 
     /* deep and narrow */
     {

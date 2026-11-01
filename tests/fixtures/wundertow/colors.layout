@@ -1,11 +1,11 @@
 page 640x150
-text 8,24 32x16 color=ff0000 "red "
-text 40,24 32x16 color=0000ff "blue"
-text 72,24 80x16 color=ff0000 " red again"
-text 152,24 64x16 " default"
-text 8,56 168x16 "a colour that is none"
-text 8,88 184x16 "a font without a colour"
-fill 8,120 38x22 color=c0c0c0
-fill 8,122 38x18 color=aabbcc
-fill 10,122 34x18 color=ffffff
-text 11,123 32x16 "cell"
+text 8,24 28x16 color=ff0000 "red "
+text 36,24 29x16 color=0000ff "blue"
+text 65,24 69x16 color=ff0000 " red again"
+text 134,24 55x16 " default"
+text 8,56 144x16 "a colour that is none"
+text 8,88 158x16 "a font without a colour"
+fill 8,120 32x22 color=c0c0c0
+fill 8,122 32x18 color=aabbcc
+fill 10,122 28x18 color=ffffff
+text 11,123 26x16 "cell"

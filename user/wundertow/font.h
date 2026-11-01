@@ -12,6 +12,10 @@ Layout and painting measure and draw through these calls only, so nothing else k
 one of the three fonts, and wf_size() gives the nearest to what a page asks for. A wl_item's "scale" holds a size.
 The base size, what text is without anything said of it, is doc.h's wd_base. The window's chrome and form fields
 stay in 8x16: WF_W, WF_H and WF_ASCENT are that font's, and wp_text() draws in cells of a size.
+
+11/01/26 (stage 3.5): a page's running text is proportional: the same glyphs trimmed to their ink, nearer together,
+by the table tools/fontmetrics.py makes (fontmetrics.c), so there is no new font and no new licence. WS_MONO text
+(code, pre) stays in its cells. Whole pixels only. Bold is wider by its smear, italic by nothing.
 */
 
 #ifndef WUNDERTOW_FONT_H
@@ -29,6 +33,9 @@ enum { WF_S16 = 1, WF_S24, WF_S32 };    /* the sizes: their fonts' heights in pi
 
 extern const unsigned char font8x16[256][16];
 extern const unsigned short font12x24[256][24], font16x32[256][32];
+
+struct wf_metric { unsigned char bearing, advance; };   /* a cell's first column with ink, how far on the next goes */
+extern const struct wf_metric wf_metrics[3][256];
 
 /* The cells (code page 437 indexes) that show the character cp: how many, in out (WF_CELLS_MAX room) */
 int wf_cells(unsigned int cp, unsigned char *out);
@@ -52,6 +59,10 @@ int wf_bold(int size);
 
 /* A row of a cell of a size: the leftmost pixel in the top bit of 16 */
 unsigned int wf_row(int size, unsigned char g, int row);
+
+/* In a style: how far on the next character goes, how far left of its place the cell is drawn */
+int wf_advance(int size, unsigned char g, unsigned int style);
+int wf_bearing(int size, unsigned char g, unsigned int style);
 
 /* The width in pixels of n bytes of UTF-8 at a size, in a style (WS_*) */
 int wf_width(const char *s, size_t n, int scale, unsigned int style);

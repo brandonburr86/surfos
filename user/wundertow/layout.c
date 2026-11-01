@@ -350,7 +350,7 @@ static void split_onto(struct lay *L, const struct piece *p, int x, int w, int a
     struct piece q = *p;
     while(q.len && !L->failed) {
         size_t n;
-        int used, room = w - (L->line_w - (p->pre ? 0 : L->line_trail));
+        int used, room = w - L->line_w;
         n = wf_fit(L->d->text + q.off, q.len, room, s, u->style, &used);
         if(!n && !L->nline) n = 1;              /* one at least */
         if(!n) {
@@ -379,11 +379,11 @@ static void split_onto(struct lay *L, const struct piece *p, int x, int w, int a
 static void place_group(struct lay *L, int x, int w, int align) {
     size_t k;
     if(!L->ngroup) return;
-    if(L->nline && L->line_w - L->line_trail + L->group_w > w) emit_line(L, x, w, align, 0);
+    if(L->nline && L->line_w + L->group_w > w) emit_line(L, x, w, align, 0);   /* (the space before it stays with it) */
     if(L->group_w > w) {
         for(k = 0; k < L->ngroup; k++) {
             const struct piece *p = &L->group[k];
-            if(L->nline && L->line_w - L->line_trail + p->w > w) emit_line(L, x, w, align, 0);
+            if(L->nline && L->line_w + p->w > w) emit_line(L, x, w, align, 0);
             if(p->w > w && !p->atom) split_onto(L, p, x, w, align);
             else on_line(L, p);
         }
