@@ -59,7 +59,7 @@ enum {
                        text-decoration */
     CU_PX,          /* pixels, in 1/256ths */
     CU_EM,          /* the font's size: margins the element's, font-size the parent's, in 1/256ths */
-    CU_REM,         /* the page's base size, in 1/256ths */
+    CU_REM,         /* the root element's font size, in 1/256ths */
     CU_PCT,         /* percent, in 1/256ths: margins of the containing block's width, font-size of the parent's */
     CU_AUTO,        /* margin: auto */
     CU_INITIAL,     /* color: the page's text colour (initial) */

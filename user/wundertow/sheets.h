@@ -27,6 +27,9 @@ void ws_ask(struct wb *b, struct wb_page *p);
 /* The answer to wb_fetch()'s tag: body and its length, or NULL when it failed; type its media type */
 void ws_answer(struct wb *b, struct wb_page *p, int tag, const char *body, size_t len, const char *type);
 
+/* Stop: the page takes what came, and waits for nothing more */
+void ws_stop(struct wb *b, struct wb_page *p);
+
 /* The page goes */
 void ws_free(struct wb_page *p);
 

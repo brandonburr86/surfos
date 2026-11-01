@@ -975,6 +975,18 @@ def styled_http(ex):
 <p class="linked">Not styled by a sheet over http.</p>''')
 
 
+@route('/styled-404', 'a page whose sheet is a 404, sent as a sheet: no error page is one')
+def styled_404(ex):
+    ex.page('Styled', '''
+<link rel="stylesheet" href="/styled-404.css">
+<p class="linked">Not styled by a 404.</p>''')
+
+
+@route('/styled-404.css', 'a 404 in text/css')
+def styled_404_css(ex):
+    ex.respond(404, 'Not Found', 'text/css', b'.linked { color: #123456 }\n')
+
+
 # Escape sequences a page might send to take over a terminal: none of them may reach it (tools/qemu-web.py
 # checks the raw serial bytes for ESCAPE_BYTES). The browser's own colours are other sequences.
 ESCAPE_TITLE = 'Escapes \x1b[2J\x1b]0;UT-PWNED-TITLE\x07 in the title'

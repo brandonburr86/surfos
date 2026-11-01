@@ -254,9 +254,15 @@ int main(void) {
     check(asked("https://a.test/d/a.css"), "a sheet on its way");
     wb_stop(&b);
     check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !wb_busy(&b) && !next(), "Stop ends it, and asks no more");
-    check(color_of("x") == WD_NONE, "the page stands");
+    check(color_of("x") == WD_NONE && !wb_current(&b)->style, "the page stands, and holds nothing more for it");
     answer("p{color:#ff0000}", "text/css");
     check(color_of("x") == WD_NONE, "an answer that comes late counts for nothing");
+    open_page("https://a.test/d/stop2.html", "<link rel=stylesheet href=a.css><link rel=stylesheet href=b.css><p>x");
+    check(asked("https://a.test/d/a.css"), "two sheets on their way");
+    answer("p{color:#ff0000}", "text/css");
+    check(asked("https://a.test/d/b.css") && color_of("x") == WD_NONE, "one answered, the other not");
+    wb_stop(&b);
+    check(color_of("x") == 0xff0000 && !wb_current(&b)->style, "Stop: the page takes what came");
     open_page("https://a.test/d/leave.html", "<link rel=stylesheet href=a.css><p>x");
     check(asked("https://a.test/d/a.css"), "another");
     open_page("https://a.test/d/next.html", "<p>y");
@@ -285,6 +291,32 @@ int main(void) {
         if(top > p->lay.height - (H - WB_TOOLBAR - WB_STATUS)) top = p->lay.height - (H - WB_TOOLBAR - WB_STATUS);
         check(p->scroll == top && top < before, "the page goes to where the target is now");
     }
+    open_page("https://a.test/d/tall.html#end", tall);
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a reader who scrolled while the sheet came");
+    p->scroll = 50;
+    answer(".gone{display:none} p{margin:0}", "text/css");
+    wb_paint(&b, screen, W);
+    check(p->scroll == 50, "keeps the place, and is not sent back to the target");
+    open_page("https://a.test/d/tall.html#end", tall);
+    check(asked("https://a.test/d/a.css"), "a sheet that answers before the page was ever laid out");
+    answer("p{margin:0}", "text/css");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(p->scroll > 0, "the target still counts");
+    p->scroll = 120;
+    wb_key(&b, 18);
+    {
+        struct wb_request one;
+        check(wb_take(&b, &one) && one.reload, "reloaded at a place");
+        wb_loaded(&b, page_at(one.url, tall, 0), one.reload);
+    }
+    check(asked("https://a.test/d/a.css"), "its sheet again");
+    answer("p{margin:0}", "text/css");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(p->scroll == 120, "keeps that place");
     open_page("https://a.test/d/keep.html", "<link rel=stylesheet href=a.css><p>x<p>y<p>z<p>w<p>v");
     p = wb_current(&b);
     check(asked("https://a.test/d/a.css"), "a page read a little way");

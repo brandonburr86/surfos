@@ -405,6 +405,44 @@ static void proportional(void) {
         }
     }
 
+    /* the ink of what comes before a text is not what is behind it */
+    {
+        static const char *const before[] = { "<p><sup><i>A</i></sup>word", "<p><i>\xc3\x96</i>word", "<p><b>\xe2\x96\x88</b>word",
+                                               "<p><sup><i>W</i></sup>word", "<p><i>\xe2\x94\x82</i>word" };
+        size_t c;
+        for(c = 0; c < sizeof(before) / sizeof(before[0]); c++) {
+            page(before[c], 200);
+            image_new(&im, 200, pl.height, 0);
+            t = target(&im, 0, 0, 200, pl.height);
+            wp_paint(&pl, &pd, &th, &t, 0, 0, -1);
+            a = text_item("word");
+            found = 0;
+            for(y = a->y; y < a->y + a->h; y++) for(x = a->x; x < a->x + a->w; x++) found += pixel(&im, x, y) == th.fg;
+            snprintf(msg, sizeof(msg), "text after a slanted or smeared glyph keeps its colour: %s", before[c]);
+            check(found > 8, msg);
+            free(im.px);
+        }
+        /* text scrolled half out of the viewport, and a list's marker */
+        page("<p style=color:#ffffff>A long line of white text", 300);
+        image_new(&im, 40, 16, 0);
+        t = target(&im, 0, 0, 40, 16);
+        a = text_item("A long");
+        wp_paint(&pl, &pd, &th, &t, 0, a->y, -1);
+        found = 0;
+        for(y = 0; y < 16; y++) for(x = 0; x < 40; x++) found += pixel(&im, x, y) == th.fg;
+        check(found > 8, "a text wider than the viewport: what is behind it, inside it");
+        free(im.px);
+        page("<body text=#fffdf5><ul><li>x</ul>", 200);
+        image_new(&im, 200, pl.height, 0);
+        t = target(&im, 0, 0, 200, pl.height);
+        wp_paint(&pl, &pd, &th, &t, 0, 0, -1);
+        a = nth(WI_MARK, 0);
+        found = 0;
+        for(y = a->y; y < a->y + a->h; y++) for(x = a->x; x < a->x + a->w; x++) found += pixel(&im, x, y) == th.fg;
+        check(found > 4, "a list's marker too");
+        free(im.px);
+    }
+
     /* the glyph's ink starts where the text does */
     wp_theme_default(&th);
     page("<body bgcolor=#ffffff text=#000000><p>l", 64);

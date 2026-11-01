@@ -53,21 +53,35 @@ void ws_free(struct wb_page *p) {
     p->style = NULL;
 }
 
+/* Is the page where its fragment target put it? It is laid out, and nobody has moved it since. */
+static int at_target(const struct wb *b, const struct wb_page *p, const char *fragment) {
+    int ch = b->h - WB_TOOLBAR - WB_STATUS, most = p->lay.height > ch ? p->lay.height - ch : 0, top;
+    size_t off;
+    if(!p->lay_w || !fragment[0] || wd_anchor_offset(&p->doc, fragment, &off)) return 0;
+    top = wl_offset_y(&p->lay, off) - 4;
+    return p->scroll == (top < 0 ? 0 : top > most ? most : top);
+}
+
 /* What the page has of the sheets is all it will get: built again with them, if there is any */
-static void restyle(struct wb_page *p) {
+static void restyle(struct wb *b, struct wb_page *p) {
     struct ws_work *w = p->style;
-    const struct wd_sheets *q = p->doc.sheets;
+    struct wd_sheets *q = p->doc.sheets;
     struct wd_document d;
     char err[UT_ERR_MAX];
     size_t i, old = p->doc.bytes;
+    int there = at_target(b, p, w->r.url.fragment);
     for(i = 0; i < q->count && !q->sheet[i].text; i++) ;
-    if(i < q->count && !wd_build_with(&w->r, q, &d, err, sizeof(err))) {
+    if(i == q->count) ;
+    else if(!wd_build_with(&w->r, q, &d, err, sizeof(err))) {
         wd_free(&p->doc);
         p->doc = d;
         p->bytes += d.bytes - old;
         wl_free(&p->lay);
         p->lay_w = 0;                           /* laid out again, at the same place; a fragment target at its own */
-        if(w->r.url.fragment[0]) snprintf(p->fragment, sizeof(p->fragment), "%s", w->r.url.fragment);
+        if(there) snprintf(p->fragment, sizeof(p->fragment), "%s", w->r.url.fragment);
+    } else for(i = 0; i < q->count; i++) {      /* (without memory, what came is given back) */
+        free(q->sheet[i].text);
+        q->sheet[i].text = NULL;
     }
     ws_free(p);
 }
@@ -90,7 +104,7 @@ static void settle(struct wb *b, struct wb_page *p) {
     struct ws_work *w = p->style;
     while(!w->waiting) {
         if(w->imports) {
-            restyle(p);
+            restyle(b, p);
             return;
         }
         w->imports = 1;
@@ -103,6 +117,10 @@ void ws_ask(struct wb *b, struct wb_page *p) {
     if(!p->style) return;
     ask(b, p);
     settle(b, p);
+}
+
+void ws_stop(struct wb *b, struct wb_page *p) {
+    if(p->style) restyle(b, p);
 }
 
 void ws_answer(struct wb *b, struct wb_page *p, int tag, const char *body, size_t len, const char *type) {

@@ -306,7 +306,7 @@ int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag) {
     return 0;
 }
 
-/* Stage 3.3's stylesheets are to be taken in here */
+/* A text a page asked for has come, or failed: stage 3.3's style sheets */
 void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why) {
     struct wb_page *p = wb_current(b);
     int i;
@@ -377,7 +377,10 @@ void wb_stop(struct wb *b) {
     if(b->running) b->cancel |= WB_CANCEL_PAGE;
     b->running = b->loading = b->want = 0;
     resources_stop(b);
-    if(p && b->npages) p->halted = 1;
+    if(p && b->npages) {
+        p->halted = 1;
+        ws_stop(b, p);
+    }
     status(b, "%s", "Stopped");
 }
 
