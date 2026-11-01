@@ -726,7 +726,12 @@ $(BUILD)/host/text/%.o: user/libsurf/%.c tests/host/libsurf_names.h tests/host/t
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(TEXT_HOST_FLAGS) -c $< -o $@
+$(BUILD)/host/text/regex.o: user/include/regex.h
 $(BUILD)/host/text/math.o: user/include/math.h
+$(BUILD)/host/test_regex: tests/host/test_regex.c user/include/regex.h $(BUILD)/host/text/regex.o $(BUILD)/host/libsurf/ctype.o \
+                          $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_regex.c $(filter %.o,$^) -o $@
 $(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
                            $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
 	@echo "HOSTLD $@"
@@ -737,7 +742,8 @@ $(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/ho
 	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
 unittest: unittest-text
 .PHONY: unittest-text
-unittest-text: $(BUILD)/host/test_strtod $(BUILD)/host/test_libm
+unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm
+	$(BUILD)/host/test_regex
 	$(BUILD)/host/test_strtod
 	$(BUILD)/host/test_libm
 

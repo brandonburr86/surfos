@@ -1,0 +1,65 @@
+regex - the regular expressions of grep, sed and awk
+
+DESCRIPTION
+    A regular expression describes text. SurfOS has POSIX's two kinds:
+    basic, the default in grep and sed, and extended, with grep -E,
+    sed -E and in awk. A match is the leftmost one and, among those,
+    the longest; each part in parentheses then takes the longest it can,
+    from the left, and a part that is repeated reports its last time.
+
+    A character is a whole UTF-8 sequence, so . takes one é and never
+    half of it. A byte that belongs to no sequence is a character of its
+    own. No match starts or ends inside a sequence.
+
+EITHER KIND
+    c        the character c, if it means nothing else here
+    .        any one character
+    [abc]    one of these; [a-z] a range, by code point
+    [^abc]   one character that is not one of these
+    [[:alpha:]]  a class: alpha digit alnum upper lower space blank
+             punct print graph cntrl xdigit
+    ^  $     the start and the end of the line
+    x*       x any number of times, none too
+    \c       the character c, when it would mean something else
+    \w \W    a character that is a letter, digit or _, one that is not
+    \s \S    a space character, one that is not
+    \< \>    the start of a word, the end of a word
+    \b \B    the edge of a word, anywhere but there
+
+BASIC
+    \( \)    a group, which \1 to \9 repeat
+    x\{m,n\} x from m to n times; \{m\} exactly, \{m,\} at least
+    x\+  x\? one or more times, at most once
+    a\|b     a or b
+    ^ is the start only at the very beginning, after \( or \|, and $ the
+    end only at the very end, or before \) or \|. Elsewhere they are
+    themselves, as is a * with nothing before it.
+
+EXTENDED
+    ( )      a group, which \1 to \9 repeat
+    x{m,n}   x from m to n times; {m} exactly, {m,} at least
+    x+  x?   one or more times, at most once
+    a|b      a or b
+    A { that does not start an interval is itself, so /{/ works in awk.
+
+WHAT SURFOS DOES DIFFERENTLY
+    There is no locale. Ranges go by code point, and the classes, \w
+    and ignoring case know only ASCII: é is in no class and is not the
+    same as É. A count may be up to 32767, and a pattern is refused
+    with a message when it comes to more than 65000 states, or nests
+    more than 64 groups deep.
+
+    Without a back-reference, the time a search takes is bounded by the
+    pattern's size times the text's, however the pattern is written.
+    With a back-reference a search can take much longer, so it stops
+    with the message "too many steps on this text". Then the
+    parts in parentheses are those of the first way found to match the
+    longest text, which may differ from what POSIX would choose.
+
+EXAMPLES
+    grep '^[[:space:]]*#' /hda1/CONFIG.TXT
+    grep -E '(error|warning): [0-9]+' /hda1/LOG.TXT
+    sed 's/\(.*\):\(.*\)/\2:\1/' /hda1/PAIRS.TXT
+
+SEE ALSO
+    grep, sed, awk
