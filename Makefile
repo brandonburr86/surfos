@@ -992,6 +992,18 @@ test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/w
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
+# 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
+$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c $(BUILD)/host/wundertow/loader.o \
+                                   $(addprefix $(BUILD)/host/undertow/,url.o util.o alloc.o)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-load: $(BUILD)/host/test_wundertow_load $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_load
+unittest: test-wundertow-load
+.PHONY: test-wundertow-load
+
 # 11/1/26: the picture decoders, on tests/fixtures/wundertow/images/ (tools/wundertow-images.py) and hostile files made
 # in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
 # arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer

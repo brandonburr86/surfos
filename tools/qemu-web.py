@@ -1065,6 +1065,16 @@ SCENARIOS = [
              check=no_http_on('expired')),
         Step('wundertow --layout ' + S('/redirect/to-http'), 'redirected from HTTPS to unencrypted HTTP', wait=SH,
              absent=['status: ']),
+        # 11/1/26 (stage 2.3): the same through a helper process, as the window loads: HTTPS verified, and refused with
+        # the same sentence
+        Step('wundertow --load ' + url('tls13', '/about'), 'address: ' + url('tls13', '/about'),
+             'status: 200 verified TLSv1.3', 'title: About the fixtures', wait=SH,
+             check=fetched('tls13', '/about', tls='TLSv1.3')),
+        Step('wundertow --load ' + url('unknown-ca', '/'), MSG['untrusted'], wait=SH, absent=['status: '],
+             check=no_http_on('unknown-ca')),
+        Step('echo status $?', 'status 1', wait=SH),
+        Step('wundertow --load ' + S('/redirect/to-http'), 'redirected from HTTPS to unencrypted HTTP', wait=SH,
+             absent=['status: ']),
     ], browser=False),
     Scenario('wundertow-production', 'the normal initrd: wundertow does not trust the fixture CA either; HTTP works', [
         Step('wundertow --layout https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, absent=['status: '],

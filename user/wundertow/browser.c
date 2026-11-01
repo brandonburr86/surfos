@@ -51,6 +51,7 @@ static const char start_page[] =
     "signed by a known authority, and in date.";
 
 static const char *const labels[4] = { "\xe2\x86\x90 Back", "Forward \xe2\x86\x92", "Reload", "Go" };
+static const char stop_label[] = "Stop";             /* in Reload's place while anything loads */
 
 /**** geometry ****/
 
@@ -88,6 +89,7 @@ void wb_page_free(struct wb_page *p) {
     if(!p) return;
     wd_free(&p->doc);
     wl_free(&p->lay);
+    free(p->texts);
     free(p);
 }
 
@@ -232,10 +234,90 @@ static void thumb(struct wb *b, int *ty, int *th) {
 static void request(struct wb *b, const char *url, int reload) {
     snprintf(b->req.url, sizeof(b->req.url), "%s", url);
     b->req.reload = reload;
+    b->req.kind = WB_LOAD_PAGE;
+    b->req.page = 0;
+    b->req.item = 0;
+    b->req.budget = 0;
+    if(b->running) b->cancel |= WB_CANCEL_PAGE;     /* a new load takes the place of the one on its way */
+    b->running = 0;
     b->want = 1;
     b->loading = 1;
     set_addr(b, url);
     status(b, "Loading %s...", url);
+}
+
+/* May page p load url for itself? The address to load in out (cap bytes). Undertow's rules: HTTPS never to HTTP, and
+   the rule of files: only a file page's addresses are files, and an http(s) page gets at none. NULL, or why not. */
+static const char *may_load(const struct wb_page *p, const char *url, char *out, size_t cap) {
+    static const char file_host[] = "https://" WB_FILE_HOST "/";
+    if(p->file && file_url(url, out, cap)) return NULL;
+    if(!strncmp(url, file_host, sizeof(file_host) - 1)) return "a web page's address never leads to a file";
+    if(strncmp(url, "https://", 8) && strncmp(url, "http://", 7)) return "not an http or https address";
+    if(!strncmp(p->url, "https:", 6) && !strncmp(url, "http:", 5)) return "an https page's address over http";
+    if((size_t)snprintf(out, cap, "%s", url) >= cap) return "too long an address";
+    return NULL;
+}
+
+/* The next thing the page shown wants */
+static int next_resource(struct wb *b, struct wb_request *out) {
+    struct wb_page *p = wb_current(b);
+    int i;
+    if(!b->npages || p->halted || b->inflight >= WB_RESOURCES) return 0;
+    for(i = 0; i < p->ntexts; i++) {
+        struct wb_text *t = &p->texts[i];
+        if(t->state != WP_WAIT) continue;
+        memset(out, 0, sizeof(*out));
+        memcpy(out->url, t->url, sizeof(out->url));
+        out->kind = WB_LOAD_TEXT;
+        out->page = p->serial;
+        out->item = t->tag;
+        t->state = WP_RUNNING;
+        b->inflight++;
+        return 1;
+    }
+    return 0;
+}
+
+/* The page shown has what it was loading stopped: it may ask again */
+static void resources_stop(struct wb *b) {
+    struct wb_page *p = wb_current(b);
+    int i;
+    if(!b->inflight) return;
+    b->cancel |= WB_CANCEL_RESOURCES;
+    b->inflight = 0;
+    if(p) for(i = 0; i < p->ntexts; i++) if(p->texts[i].state == WP_RUNNING) p->texts[i].state = WP_WAIT;
+}
+
+int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag) {
+    struct wb_text *t;
+    (void)b;
+    if(p->ntexts >= WB_TEXTS_MAX) return -1;
+    t = realloc(p->texts, ((size_t)p->ntexts + 1) * sizeof(*t));
+    if(!t) return -1;
+    p->texts = t;
+    t += p->ntexts;
+    if(may_load(p, url, t->url, sizeof(t->url))) return -1;
+    t->tag = tag;
+    t->state = WP_WAIT;
+    p->ntexts++;
+    return 0;
+}
+
+/* Stage 3.3's stylesheets are to be taken in here */
+void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why) {
+    struct wb_page *p = wb_current(b);
+    int i;
+    (void)body;
+    (void)len;
+    (void)type;
+    (void)why;
+    if(!p || p->serial != page) return;             /* a page left: its load was stopped */
+    for(i = 0; i < p->ntexts; i++)
+        if(p->texts[i].tag == tag && p->texts[i].state == WP_RUNNING) {
+            p->texts[i].state = WP_DONE;
+            if(b->inflight) b->inflight--;
+            return;
+        }
 }
 
 void wb_go(struct wb *b, const char *typed) {
@@ -273,10 +355,29 @@ void wb_go(struct wb *b, const char *typed) {
 }
 
 int wb_take(struct wb *b, struct wb_request *out) {
-    if(!b->want) return 0;
+    if(!b->want) return next_resource(b, out);
     *out = b->req;
     b->want = 0;
+    b->running = 1;
     return 1;
+}
+
+int wb_cancel(struct wb *b) {
+    int c = b->cancel;
+    b->cancel = 0;
+    return c;
+}
+
+int wb_busy(const struct wb *b) { return b->loading || b->inflight; }
+
+void wb_stop(struct wb *b) {
+    struct wb_page *p = wb_current(b);
+    if(!wb_busy(b)) return;
+    if(b->running) b->cancel |= WB_CANCEL_PAGE;
+    b->running = b->loading = b->want = 0;
+    resources_stop(b);
+    if(p && b->npages) p->halted = 1;
+    status(b, "%s", "Stopped");
 }
 
 static size_t history_bytes(const struct wb *b) {
@@ -288,8 +389,11 @@ static size_t history_bytes(const struct wb *b) {
 
 void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
     int i;
+    resources_stop(b);                              /* what the page before was loading */
     b->loading = 0;
+    b->running = 0;
     b->hover = b->pressed = -1;
+    p->serial = ++b->serial;
     if(reload && b->npages) {                       /* in place of the page, at its place */
         p->scroll = b->page[b->cur]->scroll;
         if(p->fragment[0] && p->scroll) p->fragment[0] = 0;
@@ -319,6 +423,7 @@ void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
 
 void wb_failed(struct wb *b, const char *url, const char *why) {
     b->loading = 0;
+    b->running = 0;
     set_addr(b, url);
     status(b, "%s", why);
 }
@@ -356,6 +461,7 @@ static void follow(struct wb *b, int n) {
 
 static void back_forward(struct wb *b, int d) {
     if(!b->npages || b->cur + d < 0 || b->cur + d >= b->npages) return;
+    resources_stop(b);
     b->cur += d;
     b->hover = b->pressed = -1;
     set_addr(b, b->page[b->cur]->url);
@@ -493,6 +599,9 @@ int wb_key(struct wb *b, unsigned int key) {
     case 18:                                        /* Ctrl+R */
         reload(b);
         return 1;
+    case 27:                                        /* Escape: stops what is loading */
+        wb_stop(b);
+        return 1;
     }
     return 0;
 }
@@ -502,7 +611,7 @@ static int in(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && 
 static int enabled(struct wb *b, int n) {
     if(n == 0) return b->npages && b->cur > 0;
     if(n == 1) return b->npages && b->cur < b->npages - 1;
-    if(n == 2) return b->npages && !b->loading;
+    if(n == 2) return wb_busy(b) || b->npages;
     return 1;
 }
 
@@ -597,6 +706,7 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
         if(n && in(x, y, g.bx[n - 1], BAR_Y, g.bw[n - 1], BAR_H) && enabled(b, n - 1)) {
             if(n == 1) back_forward(b, -1);
             else if(n == 2) back_forward(b, 1);
+            else if(n == 3 && wb_busy(b)) wb_stop(b);
             else if(n == 3) reload(b);
             else wb_go(b, b->addr);
             return 1;
@@ -647,9 +757,10 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
     wp_fill(&t, 0, WB_TOOLBAR - 1, b->w, 1, C_LINE);
     for(i = 0; i < 4; i++) {
         int on = enabled(b, i), down = b->button == i + 1;
+        const char *label = i == 2 && wb_busy(b) ? stop_label : labels[i];
         wp_fill(&t, g.bx[i], BAR_Y, g.bw[i], BAR_H, down ? C_PICK : on ? C_SHELL : C_BAND);
         if(on) wp_frame(&t, g.bx[i], BAR_Y, g.bw[i], BAR_H, C_LINE);
-        wp_text(&t, g.bx[i] + 7, BAR_Y + 3, labels[i], strlen(labels[i]), 1, 0, on ? C_INK : C_MUTED);
+        wp_text(&t, g.bx[i] + 7, BAR_Y + 3, label, strlen(label), 1, 0, on ? C_INK : C_MUTED);
     }
     /* the address field */
     {

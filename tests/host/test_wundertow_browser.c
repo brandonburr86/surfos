@@ -7,7 +7,8 @@ user/wundertow/browser.c on the host, with the rest of the window's modules: the
 gives them, and the loads it asks for carried out here with pages made in the test. An address typed, a link
 followed (on the page, to a place on the same page, to a file from a file page, one that is not http), back
 and forward, the history's limit, scrolling by keys, the wheel and the scroll bar, a new size, the address
-field's editing, a load that fails, and the chrome painted.
+field's editing, a load that fails, and the chrome painted. 11/1/26: Stop, a load that takes another's place, what a
+page loads for itself and the rules of that.
 */
 
 #include <stdio.h>
@@ -101,6 +102,109 @@ static int has_request(const char *url) {
     int ok = b.want && !strcmp(b.req.url, url);
     if(ok) wb_take(&b, &q);
     return ok;
+}
+
+/* Stage 2.3: what the program is told to start and stop */
+static void loads(void) {
+    struct wb_request q;
+    struct wb_page *p;
+    unsigned int serial;
+    int i;
+
+    /* a load, Stop in the toolbar, and the page stays */
+    wb_cancel(&b);                                  /* what the tests above left to say */
+    wb_go(&b, "https://example.com/start");
+    serve("<title>S</title><p>Stay");
+    p = wb_current(&b);
+    check(p->serial && !wb_busy(&b) && !wb_cancel(&b), "a page: nothing loading, nothing to stop");
+    wb_go(&b, "https://never.test/");
+    check(wb_busy(&b) && b.loading, "busy while a page loads");
+    check(wb_take(&b, &q) && q.kind == WB_LOAD_PAGE && !strcmp(q.url, "https://never.test/"), "the program is told to load it");
+    paint();
+    click(7 + 82 + 4 + 106 + 4 + 8, 4 + 11);       /* Reload's place: after Back (82) and Forward (106) */
+    check(!wb_busy(&b) && !strcmp(b.status, "Stopped") && (wb_cancel(&b) & WB_CANCEL_PAGE), "Stop in the toolbar: it ends the helper");
+    check(!wb_cancel(&b), "said once");
+    check(wb_current(&b) == p && !wb_take(&b, &q), "the page stays, and nothing starts");
+    wb_go(&b, "https://never.test/");
+    wb_take(&b, &q);
+    wb_key(&b, 27);
+    check(!wb_busy(&b) && (wb_cancel(&b) & WB_CANCEL_PAGE), "Escape in the page stops it too");
+    wb_key(&b, 27);
+    check(!wb_cancel(&b), "Escape with nothing loading stops nothing");
+
+    /* a load takes another's place */
+    wb_go(&b, "https://one.test/");
+    wb_take(&b, &q);
+    wb_go(&b, "https://two.test/");
+    check((wb_cancel(&b) & WB_CANCEL_PAGE) && wb_take(&b, &q) && !strcmp(q.url, "https://two.test/"), "a new load: the old one's helper goes, the new one starts");
+    wb_go(&b, "https://three.test/");
+    wb_go(&b, "https://four.test/");                /* one not started yet needs nothing stopped */
+    check((wb_cancel(&b) & WB_CANCEL_PAGE) && wb_take(&b, &q) && !strcmp(q.url, "https://four.test/"), "only the last");
+    wb_go(&b, "https://five.test/");
+    check((wb_cancel(&b) & WB_CANCEL_PAGE) && wb_take(&b, &q), "and the one that started goes in its turn");
+
+    /* a helper that dies, or failed to start, is a failed load */
+    wb_go(&b, "https://dies.test/");
+    wb_take(&b, &q);
+    wb_failed(&b, q.url, "the load ended before its end: its helper stopped");
+    check(!wb_busy(&b) && wb_current(&b) == p && strstr(b.status, "helper stopped"), "the window goes on, with the page it had");
+
+    /* what a page loads for itself: under the rules of Undertow and of files */
+    wb_go(&b, "https://example.com/rules");
+    serve("<p>Rules");
+    wb_cancel(&b);
+    p = wb_current(&b);
+    check(!wb_fetch(&b, p, "https://cdn.test/a.css", 1), "an https page: https");
+    check(wb_fetch(&b, p, "http://cdn.test/a.css", 2), "an https page: never over http");
+    check(wb_fetch(&b, p, "https://" WB_FILE_HOST "/etc/x.css", 3), "an http(s) page: never a file");
+    check(wb_fetch(&b, p, "file:///etc/x.css", 4), "nor by a file: address");
+    check(wb_fetch(&b, p, "ftp://cdn.test/x.css", 5), "nor another scheme");
+    serial = p->serial;
+    check(wb_take(&b, &q) && q.kind == WB_LOAD_TEXT && q.item == 1 && q.page == serial && !strcmp(q.url, "https://cdn.test/a.css") && wb_busy(&b),
+          "the program is told to load it, for this page");
+    check(!wb_take(&b, &q), "once");
+    wb_text(&b, serial + 99, 1, "a{}", 3, "text/css", NULL);
+    check(wb_busy(&b), "an answer for another page is nobody's");
+    wb_text(&b, serial, 1, "a{}", 3, "text/css", NULL);
+    check(!wb_busy(&b) && !wb_take(&b, &q), "the answer: done");
+
+    /* three at a time, and a page that is left takes its loads with it */
+    for(i = 10; i < 15; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "https://cdn.test/%d.css", i);
+        check(!wb_fetch(&b, p, url, i), "another");
+    }
+    for(i = 0; i < WB_RESOURCES; i++) check(wb_take(&b, &q) && q.item == 10 + i, "as many as there are helpers");
+    check(!wb_take(&b, &q), "the rest wait");
+    wb_text(&b, serial, 10, NULL, 0, "", "gone");
+    check(wb_take(&b, &q) && q.item == 13, "one ended, the next starts");
+    wb_go(&b, "https://next.test/");
+    check(wb_take(&b, &q) && q.kind == WB_LOAD_PAGE, "a page before what is waiting");
+    wb_loaded(&b, page_at(q.url, "<p>next", 0), 0);
+    check(wb_current(&b) != p && (wb_cancel(&b) & WB_CANCEL_RESOURCES) && !wb_busy(&b), "a new page: what the old one was loading stops");
+    wb_key(&b, 127);
+    check(wb_current(&b) == p, "back");
+    check(wb_take(&b, &q) && (q.item == 11 || q.item == 12 || q.item == 13), "and what it had not got starts again");
+    wb_key(&b, 27);
+    check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !strcmp(b.status, "Stopped") && !wb_take(&b, &q), "Stop: it wants nothing more");
+    wb_key(&b, 18);
+    check(wb_take(&b, &q) && q.reload && q.kind == WB_LOAD_PAGE, "until it is loaded again");
+    wb_failed(&b, q.url, "no");
+
+    /* the limit of a list */
+    for(i = 0; i < WB_TEXTS_MAX; i++) wb_fetch(&b, p, "https://cdn.test/more.css", 100 + i);
+    check(wb_fetch(&b, p, "https://cdn.test/more.css", 999) == -1, "a list has its end");
+
+    /* a file page: its file addresses are files */
+    wb_go(&b, "/stick/page.html");
+    wb_take(&b, &q);
+    wb_loaded(&b, page_at(q.url, "<p>file", 1), 0);
+    p = wb_current(&b);
+    check(p->file && !wb_fetch(&b, p, "https://" WB_FILE_HOST "/stick/a.css", 7), "a file page: a file");
+    check(wb_take(&b, &q) && !strcmp(q.url, "file:///stick/a.css"), "as a file");
+    check(!wb_fetch(&b, p, "http://cdn.test/a.css", 8), "and the web");
+    wb_stop(&b);
+    wb_cancel(&b);
 }
 
 int main(void) {
@@ -248,6 +352,8 @@ int main(void) {
     check(b.npages == WB_HISTORY && b.cur == WB_HISTORY - 1 && !strcmp(b.addr, "https://example.com/19"),
           "the history: 16 pages, the oldest gone");
     paint();
+
+    loads();
 
     wb_free(&b);
     if(failures) {

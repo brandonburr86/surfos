@@ -8,11 +8,13 @@ wundertow, the web browser in a window (docs/UNDERTOW.md):
     wundertow [ADDRESS]                       a window on the desktop of the terminal it was started from
     wundertow --layout ADDRESS [WIDTH]        the page laid out at WIDTH pixels (640), as text (the tests')
     wundertow --render ADDRESS FILE [WIDTH]   the page painted at WIDTH pixels, as a BMP picture in FILE
+    wundertow --load ADDRESS [WIDTH]          as --layout, loaded as the window loads: through a helper
 
 ADDRESS is a web address (https:// when it names no scheme) or a file on this computer (/path or
 file:///path). The web is Undertow's own: url.c, http.c and transport.c, with every HTTPS check, its limits,
-its settings and clock in /initrd/etc/undertow.conf. Loading waits for the page (at most Undertow's minute);
-the window says so first.
+its settings and clock in /initrd/etc/undertow.conf. 11/1/26 (stage 2.3): the window loads in helpers (loader.h),
+wundertow --helper KIND, which nobody types, and goes on answering meanwhile; --layout and --render, with no window to
+keep answering, load their page themselves.
 */
 
 #include <stdio.h>
@@ -30,15 +32,19 @@ the window says so first.
 #include "layout.h"
 #include "paint.h"
 #include "browser.h"
+#include "loader.h"
 #include <surf.h>
 #include <surfos/win.h>
 
 static struct ut_config cfg;            /* 4 KB: off the stack */
+static struct loader L;
+static struct ld_result R;              /* 6 KB */
 
 static int usage(void) {
     fprintf(stderr, "usage: wundertow [ADDRESS]\n"
                     "       wundertow --layout ADDRESS [WIDTH]\n"
                     "       wundertow --render ADDRESS FILE.bmp [WIDTH]\n"
+                    "       wundertow --load ADDRESS [WIDTH]\n"
                     "ADDRESS: a web address (example.com, https://...) or a file (/initrd/www/index.html)\n"
                     "WIDTH: 64 to %d pixels (640)\n", WL_WIDTH_MAX);
     return 2;
@@ -55,73 +61,83 @@ static int width_arg(const char *s) {
 
 /**** loading ****/
 
-static int ends_with(const char *s, const char *end) {
-    size_t n = strlen(s), k = strlen(end);
-    size_t i;
-    if(n < k) return 0;
-    for(i = 0; i < k; i++) if((s[n - k + i] | 0x20) != end[i]) return 0;
-    return 1;
-}
-
-/* A file's response: read whole (at most UT_BODY_MAX bytes), at https://WB_FILE_HOST/path, HTML by its name */
-static int load_file(const char *path, struct ut_response *r, char *err, size_t cap) {
-    char url[UT_URL_MAX + 64];
-    size_t n = 0, i, o;
-    ssize_t k;
-    int fd;
-    memset(r, 0, sizeof(*r));
-    o = (size_t)snprintf(url, sizeof(url), "https://" WB_FILE_HOST);
-    for(i = 0; path[i] && o + 4 < sizeof(url); i++) {      /* the path as an address: escaped */
-        unsigned char c = (unsigned char)path[i];
-        if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("/-._~", c)) url[o++] = (char)c;
-        else o += (size_t)snprintf(url + o, sizeof(url) - o, "%%%02X", c);
-    }
-    url[o] = 0;
-    if(ut_url_parse(url, &r->url, err, cap)) return -1;
-    fd = open(path, O_RDONLY);
-    if(fd < 0) return ut_error(err, cap, "%s: %s", path, strerror(errno));
-    r->body = malloc(UT_BODY_MAX + 1);
-    if(!r->body) {
-        close(fd);
-        return ut_error(err, cap, "out of memory reading %s", path);
-    }
-    while(n < UT_BODY_MAX && (k = read(fd, r->body + n, UT_BODY_MAX - n)) > 0) n += (size_t)k;
-    if(n == UT_BODY_MAX && read(fd, &k, 1) > 0) {
-        close(fd);
-        free(r->body);
-        r->body = NULL;
-        return ut_error(err, cap, "%s is over 1 MB: Undertow shows pages of 1 MB at most", path);
-    }
-    close(fd);
-    r->body[n] = 0;
-    r->len = n;
-    r->status = 200;
-    snprintf(r->content_type, sizeof(r->content_type), "%s",
-             ends_with(path, ".html") || ends_with(path, ".htm") ? "text/html" :
-             ends_with(path, ".xhtml") ? "application/xhtml+xml" : "text/plain");
-    return 0;
-}
-
 /* The page at url (http, https or file): 0 and *out, or -1 with why */
 static int load(const char *url, struct wb_page **out, char *err, size_t cap) {
-    struct ut_response r;
-    struct ut_url *u;
-    char path[UT_URL_MAX + 1];
-    int file = wb_file_path(url, path, sizeof(path)), rc;
-    memset(&r, 0, sizeof(r));
-    if(file) rc = load_file(path, &r, err, cap);
-    else {
-        u = malloc(sizeof(*u));
-        if(!u) return ut_error(err, cap, "out of memory");
-        rc = ut_url_parse(url, u, err, cap);
-        if(!rc) rc = ut_fetch(u, &cfg, &r, err, cap);
-        free(u);
-    }
-    if(rc) return -1;
+    static struct ut_response r;
+    int file = 0;
+    if(ld_fetch_page(url, &cfg, &r, &file, err, cap)) return -1;
     *out = wb_page_new(&r, file, err, cap);
-    if(file) free(r.body);
-    else ut_response_free(&r);
+    ld_fetch_free(&r, file);
     return *out ? 0 : -1;
+}
+
+/* A load that ended, to the browser. *r's body is let go of. */
+static void ended(struct wb *b, struct ld_result *r) {
+    static struct ut_response resp;
+    struct wb_page *p;
+    char path[UT_URL_MAX + 1], err[UT_ERR_MAX];
+    if(r->kind == WB_LOAD_PAGE) {
+        err[0] = 0;
+        if(r->failed) wb_failed(b, r->asked, r->why);
+        else if(ld_response(r, &resp, err, sizeof(err)) ||
+                !(p = wb_page_new(&resp, wb_file_path(r->asked, path, sizeof(path)), err, sizeof(err))))
+            wb_failed(b, r->asked, err);
+        else wb_loaded(b, p, r->reload);
+    } else if(r->kind == WB_LOAD_TEXT)
+        wb_text(b, r->page, r->item, r->failed ? NULL : (const char *)r->body, r->len, r->type, r->why);
+    free(r->body);
+    r->body = NULL;
+}
+
+/* What the browser wants stopped and started: 1 when a load could not start, so that the window has something new */
+static int start_loads(struct wb *b) {
+    static struct wb_request q;
+    char err[UT_ERR_MAX];
+    int c = wb_cancel(b), changed = 0;
+    if(c) ld_cancel(&L, c);
+    while(wb_take(b, &q)) {
+        if(!ld_start(&L, &q, err, sizeof(err))) continue;
+        memset(&R, 0, sizeof(R));       /* no helper: a failed load like another */
+        R.kind = q.kind;
+        R.page = q.page;
+        R.item = q.item;
+        R.reload = q.reload;
+        R.failed = 1;
+        snprintf(R.asked, sizeof(R.asked), "%s", q.url);
+        snprintf(R.why, sizeof(R.why), "%s", err);
+        ended(b, &R);
+        changed = 1;
+    }
+    return changed;
+}
+
+/* Waits for a helper's bytes, and for winfd when there is a window (else winfd < 0): 1 when something ended, so that
+   the window has something new to show; *win says the window has events */
+static int wait_loads(struct wb *b, int winfd, int *win) {
+    struct pollfd fds[LD_HELPERS + 1];
+    int slots[LD_HELPERS], base = 0, n, i, wait = -1, changed = 0;
+    while(ld_overdue(&L, ut_now(), &R, &wait)) {
+        ended(b, &R);
+        changed = 1;
+    }
+    if(changed) return 1;
+    if(ld_reap(&L) && (wait < 0 || wait > 250)) wait = 250;
+    if(winfd >= 0) {
+        fds[0].fd = winfd;
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        base = 1;
+    }
+    n = ld_fds(&L, fds + base, slots);
+    *win = 0;
+    if(poll(fds, (nfds_t)(base + n), wait) < 0) return 0;
+    if(base && fds[0].revents) *win = 1;
+    for(i = 0; i < n; i++)
+        if(fds[base + i].revents && ld_read(&L, slots[i], &R)) {
+            ended(b, &R);
+            changed = 1;
+        }
+    return changed;
 }
 
 /* An address as typed on the command line, as the window's address field takes it */
@@ -134,15 +150,11 @@ static int load_typed(const char *typed, struct wb *b, struct wb_page **out, cha
 
 /**** --layout and --render ****/
 
-static int layout_mode(const char *typed, int width) {
-    static struct wb b;
-    struct wb_page *p;
-    char err[UT_ERR_MAX], *s;
-    err[0] = 0;
-    if(wb_init(&b, 640, 400) || load_typed(typed, &b, &p, err, sizeof(err))) {
-        fprintf(stderr, "wundertow: %s\n", err[0] ? err : b.status);
-        return 1;
-    }
+/* The page laid out at width, as text */
+static int print_layout(struct wb_page *p, int width) {
+    char *s;
+    wl_free(&p->lay);
+    p->lay_w = 0;
     if(wl_layout(&p->doc, width, &p->lay)) {
         fprintf(stderr, "wundertow: out of memory laying out the page\n");
         return 1;
@@ -153,9 +165,51 @@ static int layout_mode(const char *typed, int width) {
     s = wl_dump(&p->lay, &p->doc);
     fputs(s ? s : "(out of memory)\n", stdout);
     free(s);
+    return 0;
+}
+
+static int layout_mode(const char *typed, int width) {
+    static struct wb b;
+    struct wb_page *p;
+    char err[UT_ERR_MAX];
+    int rc;
+    err[0] = 0;
+    if(wb_init(&b, 640, 400) || load_typed(typed, &b, &p, err, sizeof(err))) {
+        fprintf(stderr, "wundertow: %s\n", err[0] ? err : b.status);
+        return 1;
+    }
+    rc = print_layout(p, width);
     wb_page_free(p);
     wb_free(&b);
-    return 0;
+    return rc;
+}
+
+/* --load: as the window loads, with no window: the tests see the helpers and the rules of what a page loads */
+static int load_mode(const char *typed, int width) {
+    static struct wb b;
+    int win, rc;
+    if(wb_init(&b, 640, 400)) {
+        fprintf(stderr, "wundertow: out of memory\n");
+        return 1;
+    }
+    wb_go(&b, typed);
+    if(!b.want) {
+        fprintf(stderr, "wundertow: %s\n", b.status);
+        return 1;
+    }
+    for(;;) {
+        start_loads(&b);
+        if(!ld_busy(&L)) break;
+        wait_loads(&b, -1, &win);
+    }
+    if(!b.npages) {
+        fprintf(stderr, "wundertow: %s\n", b.status);
+        return 1;
+    }
+    rc = print_layout(wb_current(&b), width);
+    while(ld_reap(&L)) msleep(20);
+    wb_free(&b);
+    return rc;
 }
 
 static void put32(unsigned char *p, unsigned int v) {
@@ -256,10 +310,9 @@ static int window_mode(const char *typed) {
     struct win_info info;
     struct win_present pr;
     struct win_event ev[16];
-    struct wb_request q;
     unsigned int *px;
     char title[WIN_TITLE_MAX], shown[WIN_TITLE_MAX] = "";
-    int fd, w, h, n, i, redraw = 1;
+    int fd, w, h, n, i, ready, redraw = 1;
     memset(&o, 0, sizeof(o));
     o.version = WIN_VERSION;
     o.w = 760;
@@ -304,14 +357,12 @@ static int window_mode(const char *typed) {
             }
             redraw = 0;
         }
-        if(wb_take(&b, &q)) {                       /* the window says Loading... first */
-            struct wb_page *p;
-            char err[UT_ERR_MAX];
-            if(load(q.url, &p, err, sizeof(err))) wb_failed(&b, q.url, err);
-            else wb_loaded(&b, p, q.reload);
+        if(start_loads(&b)) {
             redraw = 1;
             continue;
         }
+        redraw |= wait_loads(&b, fd, &ready);
+        if(!ready) continue;
         n = (int)read(fd, ev, sizeof(ev));
         if(n == 0) break;                           /* the desktop let the window go */
         if(n < 0) {
@@ -337,14 +388,12 @@ static int window_mode(const char *typed) {
                 }
                 break;
             case WIN_EV_CLOSE:
-                close(fd);
-                free(px);
-                wb_free(&b);
-                ut_transport_cleanup();
-                return 0;
+                goto closed;
             }
         }
     }
+closed:
+    ld_stop_all(&L);
     close(fd);
     free(px);
     wb_free(&b);
@@ -357,7 +406,11 @@ int main(int argc, char **argv) {
     ut_config_init(&cfg);
     if(ut_config_load(&cfg, UT_CONF_PATH, err, sizeof(err)) < 0)
         fprintf(stderr, "wundertow: %s: %s (the defaults are used)\n", UT_CONF_PATH, err);
-    if(argc >= 3 && argc <= 4 && !strcmp(argv[1], "--layout"))
+    ld_init(&L);
+    if(argc == 3 && !strcmp(argv[1], "--helper")) rc = ld_helper(argv[2], &cfg);
+    else if(argc >= 3 && argc <= 4 && !strcmp(argv[1], "--load"))
+        rc = (width = width_arg(argc > 3 ? argv[3] : NULL)) < 0 ? usage() : load_mode(argv[2], width);
+    else if(argc >= 3 && argc <= 4 && !strcmp(argv[1], "--layout"))
         rc = (width = width_arg(argc > 3 ? argv[3] : NULL)) < 0 ? usage() : layout_mode(argv[2], width);
     else if(argc >= 4 && argc <= 5 && !strcmp(argv[1], "--render"))
         rc = (width = width_arg(argc > 4 ? argv[4] : NULL)) < 0 ? usage() : render_mode(argv[2], argv[3], width);
