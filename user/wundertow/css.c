@@ -257,6 +257,7 @@ static void ident_like(struct lex *x, struct tok *t) {
     while(i < n && s[i] != ')') {
         unsigned char c = s[i];
         if(c == '\\') {
+            if(i + 1 < n && nl(s[i + 1])) bad = 1;
             i += 2;
             continue;
         }
@@ -265,7 +266,7 @@ static void ident_like(struct lex *x, struct tok *t) {
             if(i < n && s[i] != ')') bad = 1;
             continue;
         }
-        if(c == '"' || c == '\'' || c == '(' || c < 0x20 || c == 0x7f) bad = 1;
+        if(c == '"' || c == '\'' || c == '(' || (c && c < 0x20) || c == 0x7f) bad = 1;
         i++;
     }
     x->i = i < n ? i + 1 : n;
@@ -711,6 +712,7 @@ static void r_background(struct parser *P, int prop, const struct tok *v, int n,
     static const char *const words[] = { "none", "repeat", "repeat-x", "repeat-y", "no-repeat", "round", "space", "top",
                                          "bottom", "left", "right", "center", "cover", "contain", "fixed", "scroll",
                                          "local", "border-box", "padding-box", "content-box", "text", "auto", NULL };
+    static const char *const placed[] = { "url", "calc", "min", "max", "clamp", NULL };
     int i = 0, depth = 0, unit = CU_TRANSPARENT, rgb = 0, found = 0, gradient = 0;
     (void)prop;
     while(i < n) {
@@ -726,8 +728,9 @@ static void r_background(struct parser *P, int prop, const struct tok *v, int n,
             i = j;
         } else {
             if(v[i].type == T_FUNC) {
-                if(strcmp(v[i].text, "url")) {      /* (a name is cut: strstr() finds repeating-linear-gradient's) */
-                    if(!strstr(v[i].text, "gradient")) return;  /* var() and the like: an earlier colour stands */
+                if(one_of(v[i].text, placed) < 0) { /* (a name is cut: "gradi" finds repeating-linear-gradient's) */
+                    if(!strstr(v[i].text, "gradi") && !strstr(v[i].text, "image-set")) return;  /* var() and the like:
+                                                                                                   an earlier colour stands */
                     gradient = 1;
                 }
                 depth++;
@@ -889,7 +892,8 @@ static const struct property properties[] = {
 static void keyword(struct parser *P, int prop, const char *w, int imp) {
     int inherited = prop == CP_COLOR || prop == CP_WEIGHT || prop == CP_STYLE || prop == CP_SIZE || prop == CP_ALIGN;
     if(!strcmp(w, "unset")) w = inherited ? "inherit" : "initial";
-    if(!strcmp(w, "revert") || (!strcmp(w, "inherit") && !inherited)) emit(P, prop, CU_REVERT, 0, imp);
+    if(!strcmp(w, "inherit") && prop == CP_DECORATION) emit(P, prop, CU_INHERIT, 0, imp);
+    else if(!strcmp(w, "revert") || (!strcmp(w, "inherit") && !inherited)) emit(P, prop, CU_REVERT, 0, imp);
     else if(!strcmp(w, "inherit")) emit(P, prop, CU_INHERIT, 0, imp);
     else switch(prop) {                             /* initial */
     case CP_COLOR: emit(P, prop, CU_INITIAL, 0, imp); break;
@@ -1376,7 +1380,7 @@ static void mq_token(struct parser *P, struct mq *q) {
             if(q->state != 2) q->bad = 1;
             q->state = 3;
         } else {
-            if(q->state > 1) q->bad = 1;
+            if(q->state > 1 || !strcmp(t->text, "or") || !strcmp(t->text, "layer")) q->bad = 1;
             q->type = !strcmp(t->text, "screen") || !strcmp(t->text, "all");
             q->state = 2;
         }

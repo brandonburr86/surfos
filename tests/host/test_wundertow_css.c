@@ -321,6 +321,14 @@ static void values(void) {
     check(c->ndecls == 1, "a gradient by a long name too");
     sheet("p { background: linear-gradient(red, blue) #123456 }");
     check(is(CP_BACKGROUND, CU_RGB, 0x123456), "a gradient and a colour");
+    sheet("p { background: #123456; background: repeating-linear-gradient(red, blue) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "one whose name is cut in the token");
+    sheet("p { background: #fff repeating-linear-gradient(red, blue) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "that and a colour");
+    sheet("p { background: url(x) no-repeat calc(100% - 10px) 0 #fff }");
+    check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "background: calc() in an image's place");
+    sheet("p { background: #fff image-set('a.png' 1x) }");
+    check(is(CP_BACKGROUND, CU_RGB, 0xffffff), "background: image-set()");
     sheet("p { background: #123456; background: var(--x) }");
     check(is(CP_BACKGROUND, CU_RGB, 0x123456) && c->ndecls == 1, "background: var() leaves the colour before it");
     sheet("p { background: #123456; background: rgb(1,2) }");
@@ -492,6 +500,10 @@ static void values(void) {
     sheet("p { font-weight: initial; font-size: initial; text-align: initial; text-decoration: initial }");
     check(is(CP_WEIGHT, CU_NONE, 0) && is(CP_SIZE, CU_REM, 256) && is(CP_ALIGN, CU_NONE, CSS_A_LEFT) &&
           is(CP_DECORATION, CU_NONE, 0), "initial of what is");
+    sheet("a { text-decoration: inherit }");
+    check(is(CP_DECORATION, CU_INHERIT, 0), "text-decoration: inherit, not inherited but asked for");
+    sheet("a { text-decoration: unset }");
+    check(is(CP_DECORATION, CU_NONE, 0), "text-decoration: unset");
     sheet("p { font: revert; margin: revert; background: inherit; display: inherit !important }");
     check(is(CP_WEIGHT, CU_REVERT, 0) && is(CP_MARGIN_TOP, CU_REVERT, 0) && is(CP_BACKGROUND, CU_REVERT, 0) &&
           is(CP_DISPLAY, CU_REVERT, 0) && decl(CP_DISPLAY)->important, "revert, and inherit of what is not inherited");
@@ -569,6 +581,14 @@ static void syntax(void) {
     check(is(CP_COLOR, CU_RGB, 0x00ff00) && !decl(CP_BACKGROUND), "a broken url() is still one token, and takes its declaration");
     sheet("p { background: url(a'b) red; color: lime }");
     check(is(CP_COLOR, CU_RGB, 0x00ff00) && !decl(CP_BACKGROUND), "a quote in one");
+    sheet("p { background: url(a\\\nb) red; color: lime }");
+    check(is(CP_COLOR, CU_RGB, 0x00ff00) && !decl(CP_BACKGROUND), "a line break after a backslash in one");
+    {
+        static const char zero[] = "p { background: url(a\0b) red }";
+        css_free(c);
+        css_add(c, zero, sizeof(zero) - 1);
+        check(is(CP_BACKGROUND, CU_RGB, 0xff0000), "a NUL in one is U+FFFD");
+    }
     sheet("p { background: url( a  ) red }");
     check(is(CP_BACKGROUND, CU_RGB, 0xff0000), "spaces around its address are fine");
     sheet("p { background: url(");
@@ -853,7 +873,7 @@ static void media(void) {
         { "print ,, screen", 1 }, { "[", 0 }, { "screen (", 0 }, { "not", 0 }, { "only", 0 }, { "print screen", 0 },
         { "tv all", 0 }, { "screen and", 0 }, { "and screen", 0 }, { "screen or print", 0 }, { "[,screen", 0 },
         { "not print and", 0 }, { "not not print", 0 }, { "screen and print", 0 }, { "(color) (color)", 0 },
-        { "screen and(color)", 0 }, { "only print", 0 }, { "not (color)", 0 }
+        { "screen and(color)", 0 }, { "only print", 0 }, { "not (color)", 0 }, { "not or", 0 }, { "not layer", 0 }
     };
     size_t i;
     char msg[100];

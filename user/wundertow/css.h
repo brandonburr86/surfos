@@ -55,7 +55,8 @@ enum {
     CU_NONE,        /* a word's value: display, weight, style, decoration, alignment (CSS_*) */
     CU_RGB,         /* 0x00RRGGBB */
     CU_TRANSPARENT, /* no colour: value 0 */
-    CU_INHERIT,     /* what the parent's is (inherit, unset, currentcolor): color, weight, style, size, alignment */
+    CU_INHERIT,     /* what the parent's is (inherit, unset, currentcolor): color, weight, style, size, alignment,
+                       text-decoration */
     CU_PX,          /* pixels, in 1/256ths */
     CU_EM,          /* the font's size: margins the element's, font-size the parent's, in 1/256ths */
     CU_REM,         /* the page's base size, in 1/256ths */
