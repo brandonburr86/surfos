@@ -10,16 +10,19 @@ on:
 jobs:
   build-and-boot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 11/1/26: Debian 12, what devenv/ builds the images with. test-usb cannot pass on Ubuntu's GRUB 2.12: it prints no
+    # "Booting `SurfOS'", and on a USB stick under OVMF its $cmdpath is empty
+    container: debian:12
+    timeout-minutes: 180    # 11/1/26: the suites have outgrown 60; the smoke test at -O0 takes 16 minutes here
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install toolchain, QEMU, GRUB and OVMF
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
             grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk openssl
+
+      - uses: actions/checkout@v4
 
       - name: Unit tests (host)
         run: make unittest
