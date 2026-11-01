@@ -504,6 +504,13 @@ static void test_keys(void) {
     gui_key(&g, 27);
     fake_type(&g, "b");
     CHECK(count(a, WIN_EV_KEY) == 9);
+    /* 11/1/26: Shift+Tab is a key of its own; Enter with Shift is Enter, to a program that does not look at mods */
+    gui_key(&g, GUI_BACKTAB);
+    CHECK(count(a, WIN_EV_KEY) == 10 && last(a, WIN_EV_KEY)->value == WIN_KEY_BACKTAB && !last(a, WIN_EV_KEY)->mods);
+    gui_key(&g, GUI_SHIFT_ENTER);
+    CHECK(count(a, WIN_EV_KEY) == 11 && last(a, WIN_EV_KEY)->value == '\r' && last(a, WIN_EV_KEY)->mods == WIN_MOD_SHIFT);
+    gui_key(&g, '\r');
+    CHECK(count(a, WIN_EV_KEY) == 12 && last(a, WIN_EV_KEY)->value == '\r' && !last(a, WIN_EV_KEY)->mods);
     /* minimized: its keys are no longer its own */
     click(g.win[id].x + g.win[id].w - 40, g.win[id].y + 14);
     CHECK(g.win[id].min && g.focus != id);

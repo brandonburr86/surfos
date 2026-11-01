@@ -314,7 +314,9 @@ static int window_mode(const char *typed) {
         }
         for(i = 0; i < n / (int)sizeof(ev[0]); i++) {
             switch(ev[i].type) {
-            case WIN_EV_KEY: redraw |= wb_key(&b, ev[i].value); break;
+            case WIN_EV_KEY:
+                redraw |= wb_key(&b, ev[i].value == '\r' && (ev[i].mods & WIN_MOD_SHIFT) ? WB_KEY_SHIFT_ENTER : ev[i].value);
+                break;
             case WIN_EV_POINTER: redraw |= wb_pointer(&b, ev[i].x, ev[i].y, ev[i].value); break;
             case WIN_EV_WHEEL: redraw |= wb_wheel(&b, (int)ev[i].value); break;
             case WIN_EV_RESIZE:

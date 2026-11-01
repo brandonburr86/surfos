@@ -71,7 +71,7 @@ typedef char clip_fits[WIN_CLIP_MAX <= GUI_CLIP_MAX ? 1 : -1];
 
 /* the keys and buttons reach a program with the desktop's numbers */
 typedef char keys_are_the_desktops[WIN_KEY_UP == GUI_UP && WIN_KEY_PGDN == GUI_PGDN && WIN_KEY_INSERT == GUI_INSERT &&
-                                   WIN_KEY_BACKTAB == GUI_BACKTAB && WIN_KEY_SHIFT_ENTER == GUI_SHIFT_ENTER ? 1 : -1];
+                                   WIN_KEY_BACKTAB == GUI_BACKTAB ? 1 : -1];
 typedef char buttons_are_the_pointers[WIN_BUTTON_LEFT == POINTER_LEFT && WIN_BUTTON_RIGHT == POINTER_RIGHT &&
                                       WIN_BUTTON_MIDDLE == POINTER_MIDDLE ? 1 : -1];
 
@@ -145,15 +145,20 @@ static void content(const struct gui_state *g, int id, int *x, int *y, int *w, i
     *h = win->h - FRAME_H;
 }
 
-static void send(struct gui_state *g, struct gui_client *c, int type, int x, int y, unsigned value) {
+static void send_mods(struct gui_state *g, struct gui_client *c, int type, int x, int y, unsigned value, int mods) {
     struct win_event e;
     if(!g->sys || !g->sys->win_event) return;
     memset(&e, 0, sizeof(e));
     e.type = (unsigned short)type;
+    e.mods = (unsigned short)mods;
     e.x = x;
     e.y = y;
     e.value = value;
     g->sys->win_event(g->sys->ctx, c->handle, &e);
+}
+
+static void send(struct gui_state *g, struct gui_client *c, int type, int x, int y, unsigned value) {
+    send_mods(g, c, type, x, y, value, 0);
 }
 
 /* the frame around pixels of w x h, kept on the screen */
@@ -467,7 +472,9 @@ bool client_keys(const struct gui_state *g) {
 
 void client_key(struct gui_state *g, int key) {
     struct gui_client *c = client_of(g, g->focus);
-    if(c) send(g, c, WIN_EV_KEY, 0, 0, (unsigned)key);
+    if(!c) return;
+    if(key == GUI_SHIFT_ENTER) send_mods(g, c, WIN_EV_KEY, 0, 0, '\r', WIN_MOD_SHIFT);     /* (11/1/26) to a program that does not look, Enter */
+    else send(g, c, WIN_EV_KEY, 0, 0, (unsigned)key);
 }
 
 void client_close(struct gui_state *g, int id) {
