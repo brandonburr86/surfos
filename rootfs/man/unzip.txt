@@ -1,0 +1,50 @@
+unzip - list, test and unpack zip archives
+
+SYNOPSIS
+    unzip [-l|-t|-p] [-o|-n] [-q] [-d dir] file.zip [name...]
+
+DESCRIPTION
+    Unpacks a zip into the current folder, or into dir, which is made
+    if need be. Options may come after the file's name. The names are
+    patterns that choose the members, with * and ?; * goes across a /,
+    and case does not matter.
+
+    Stored and deflated members are taken, and each one's CRC and
+    sizes are checked. Without -o or -n, a file that exists stays and
+    the status is 2. Names are read as UTF-8 or code page 437, whichever
+    the archive means, and written as UTF-8. Times and modes are not
+    kept: SurfOS cannot set them.
+
+    unzip refuses a name that is absolute or holds .., and one with a
+    character FAT does not allow (: * ? " < > | \), or that ends in a
+    space or a dot. Encrypted members, other methods, links and devices
+    are skipped. Each of those is said and the status is then 2; the
+    members around it are still taken. A member that holds more or
+    less than it claims is deleted. An archive whose members overlap,
+    or claim more than the file holds, is refused whole: that is how a
+    zip bomb is made. So is a central directory over 16 MB, and Zip64,
+    which is only for what FAT could not hold.
+
+    A zip is read from its end, so it cannot come through a pipe. Past
+    2 GB SurfOS can only read forward, so a large archive works, but
+    each member past 2 GB costs a read of what comes before it.
+
+    The status is 0, or 2 if anything was skipped or went wrong.
+
+OPTIONS
+    -l      List the members: size, date, name. Nothing is written.
+    -t      Check each member. Nothing is written.
+    -p      Write the members' data to standard output.
+    -o      Replace files that exist, each only once the new one is
+            whole.
+    -n      Leave files that exist, quietly.
+    -q      Say only what went wrong.
+    -d dir  Unpack into dir.
+
+EXAMPLES
+    unzip -l /usb0p1/PHOTOS.ZIP
+    unzip /usb0p1/SITE.ZIP -d /hda1/SITE
+    unzip -p /usb0p1/SITE.ZIP readme.txt | less
+
+SEE ALSO
+    tar, gunzip

@@ -70,6 +70,7 @@ USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
 USER_PROGS  += gzip gunzip zcat       # 11/01/26 (the command-line suite): one tool with three mains, user/gzip/
 USER_PROGS  += tar                    # 11/01/26: user/tar/
+USER_PROGS  += unzip                  # 11/01/26: user/unzip/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -722,11 +723,16 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 # reads and writes gzip itself, and unzip shares tar's rules for names (user/tar/arpath.c)
 GZTOOL_OBJ = $(addprefix $(BUILD)/user/gzip/,tool.o gzfile.o)
 TAR_OBJ    = $(addprefix $(BUILD)/user/tar/,tar.o tarfile.o arpath.o) $(BUILD)/user/gzip/gzfile.o
+UNZIP_OBJ  = $(addprefix $(BUILD)/user/unzip/,unzip.o zipfile.o) $(BUILD)/user/tar/arpath.o
 $(BUILD)/user/gzip/%.o: user/gzip/%.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
 	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
 $(BUILD)/user/tar/%.o: user/tar/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/unzip/%.o: user/unzip/%.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
 	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -738,7 +744,11 @@ $(BUILD)/user/bin/tar: $(TAR_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TAR_OBJ) $(USER_LIB)
--include $(wildcard $(BUILD)/user/gzip/*.d $(BUILD)/user/tar/*.d)
+$(BUILD)/user/bin/unzip: $(UNZIP_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(UNZIP_OBJ) $(USER_LIB)
+-include $(wildcard $(BUILD)/user/gzip/*.d $(BUILD)/user/tar/*.d $(BUILD)/user/unzip/*.d)
 
 # Their host tests: libsurf's CRC-32, inflate and deflate alone (test_deflate), then each tool as it is on the simulated
 # FAT of tests/host/ar_sim.c, against SurfOS's headers with libsurf's names, as test_edit does. Plain flags only: the
