@@ -12,6 +12,9 @@ a CR that does not end a line, whitespace before a colon, two different
 lengths, Transfer-Encoding with Content-Length or in an HTTP/1.0 response, and
 any transfer coding but chunked are refused. Bodies Undertow will not show
 (not text, compressed, too big) and the bodies of redirects are never read.
+11/1/26: ut_fetch_any() is the same load for what is not text (the browser in
+a window's pictures): f->any lets any type through and f->max is the body's
+limit; ut_fetch()'s, with UT_BODY_MAX, is what it always was.
 
 UT_HEADERS_MAX counts, for one request, every status line and header line
 with its line end and the empty lines that end the heads (interim responses'
@@ -44,7 +47,7 @@ struct head {                           /* what the head of one response says */
     char reason[64];                    /* safe text */
     int length_fields, lengths;         /* Content-Length lines, and the values in them */
     int length_bad, length_conflict;
-    size_t length;                      /* the value; anything over UT_BODY_MAX counts as UT_BODY_MAX + 1 */
+    size_t length;                      /* the value; anything over the load's limit counts as that limit + 1 */
     int codings;                        /* Transfer-Encoding lines */
     int chunked, other_coding;          /* how many "chunked"; anything else */
     int empty_coding;                   /* a Transfer-Encoding line without any coding */
@@ -65,6 +68,8 @@ struct body {
 };
 
 struct fetch {                          /* one load, on the heap */
+    int any;                            /* ut_fetch_any(): a body of any type is read */
+    size_t max;                         /* the most bytes a body may have */
     struct ut_transport *t;
     const char *host;                   /* the current address's, for messages */
     unsigned int deadline;
@@ -169,8 +174,8 @@ static int broken(struct fetch *f, char *err, size_t cap) {
 }
 
 static int too_big(struct fetch *f, char *err, size_t cap) {
-    return ut_error(err, cap, "the page from %s is over %u MB, more than Undertow loads", f->host,
-                    UT_BODY_MAX / (1024 * 1024));
+    return ut_error(err, cap, "the %s from %s is over %u MB, more than Undertow loads", f->any ? "file" : "page", f->host,
+                    (unsigned int)(f->max / (1024 * 1024)));
 }
 
 static int no_memory(struct fetch *f, char *err, size_t cap) {
@@ -285,7 +290,7 @@ static int parse_status(struct fetch *f, char *err, size_t cap) {
 
 /* Content-Length: digits, or a list of the same value (RFC 9110 8.6: "42, 42" is a duplicated
    field combined); two different values are a conflict, anything else is malformed. */
-static void add_length(struct head *h, const char *v) {
+static void add_length(struct head *h, const char *v, size_t max) {
     h->length_fields++;
     for(;;) {
         size_t value = 0;
@@ -293,7 +298,7 @@ static void add_length(struct head *h, const char *v) {
         while(ows(*v)) v++;
         for(; *v >= '0' && *v <= '9'; v++, digits++) {
             value = value * 10 + (size_t)(*v - '0');
-            if(value > UT_BODY_MAX) value = UT_BODY_MAX + 1;    /* too big is too big, whatever its digits */
+            if(value > max) value = max + 1;    /* too big is too big, whatever its digits */
         }
         while(ows(*v)) v++;
         if(!digits || (*v && *v != ',')) {
@@ -452,7 +457,7 @@ static int parse_header(struct fetch *f, int kind, char *err, size_t cap) {
     while(end > v && ows(end[-1])) end--;
     *end = 0;
     n = (size_t)(colon - s);
-    if(named(s, n, "content-length")) add_length(&f->h, v);
+    if(named(s, n, "content-length")) add_length(&f->h, v, f->max);
     else if(named(s, n, "transfer-encoding")) add_codings(&f->h, v);
     else if(named(s, n, "content-type")) set_type(&f->h, v);
     else if(named(s, n, "content-encoding")) add_encodings(&f->h, v);
@@ -547,7 +552,7 @@ static int room(struct fetch *f, struct body *b, size_t need, char *err, size_t 
     if(need < b->cap) return 0;
     want = b->cap ? b->cap : BODY_START;
     while(want <= need) want *= 2;
-    if(want > UT_BODY_MAX + 1) want = UT_BODY_MAX + 1;
+    if(want > f->max + 1) want = f->max + 1;
     p = realloc(b->p, want);
     if(!p) return no_memory(f, err, cap);
     b->p = p;
@@ -563,7 +568,7 @@ static int chunk_size(struct fetch *f, size_t *size, char *err, size_t cap) {
     if(!memchr(s, 0, f->line_len) && !memchr(s, '\r', f->line_len)) {
         for(; hexval((unsigned char)*s) >= 0; s++, digits++) {
             v = v * 16 + (size_t)hexval((unsigned char)*s);
-            if(v > UT_BODY_MAX) v = UT_BODY_MAX + 1;
+            if(v > f->max) v = f->max + 1;
         }
         while(ows(*s)) s++;
         if(digits && (!*s || *s == ';')) {
@@ -579,7 +584,7 @@ static int chunks(struct fetch *f, struct body *b, char *err, size_t cap) {
         size_t size = 0;
         if(read_line(f, L_CHUNK, err, cap) || chunk_size(f, &size, err, cap)) return -1;
         if(!size) break;
-        if(size > UT_BODY_MAX - b->len) return too_big(f, err, cap);
+        if(size > f->max - b->len) return too_big(f, err, cap);
         if(room(f, b, b->len + size, err, cap) || take(f, b->p + b->len, size, err, cap)) return -1;
         b->len += size;
         if(read_line(f, L_CHUNK, err, cap)) return -1;
@@ -601,7 +606,7 @@ static int until_close(struct fetch *f, struct body *b, char *err, size_t cap) {
             if(f->eof) return 0;
         }
         k = f->rend - f->rpos;
-        if(k > UT_BODY_MAX - b->len) return too_big(f, err, cap);
+        if(k > f->max - b->len) return too_big(f, err, cap);
         if(room(f, b, b->len + k, err, cap)) return -1;
         memcpy(b->p + b->len, f->rbuf + f->rpos, k);
         b->len += k;
@@ -643,11 +648,11 @@ static int page(struct fetch *f, char *err, size_t cap) {
     } else if(h->length_fields) {
         if(h->length_bad) return ut_error(err, cap, "%s sent a malformed Content-Length", f->host);
         if(h->length_conflict) return ut_error(err, cap, "%s sent two different Content-Length values", f->host);
-        if(h->length > UT_BODY_MAX) return too_big(f, err, cap);
+        if(h->length > f->max) return too_big(f, err, cap);
         framing = F_LENGTH;
     }
     /* a 204 or a 304 has no body: what its head says about one does not matter (RFC 9112 6.3) */
-    if(framing != F_NONE && h->typed && !h->text) {
+    if(framing != F_NONE && h->typed && !h->text && !f->any) {
         if(h->status == 200)
             return ut_error(err, cap, "%s is not text: Undertow shows HTML and plain text", h->type);
         return ut_error(err, cap, "HTTP %d %s: %s is not text: Undertow shows HTML and plain text", h->status,
@@ -673,7 +678,7 @@ static int page(struct fetch *f, char *err, size_t cap) {
         b.cap = 1;
     }
     b.p[b.len] = 0;
-    if(!h->typed && !looks_like_text(b.p, b.len)) {
+    if(!h->typed && !f->any && !looks_like_text(b.p, b.len)) {
         ut_error(err, cap, "the page from %s does not say what it is and does not look like text: Undertow shows "
                  "HTML and plain text", f->host);
         goto fail;
@@ -800,14 +805,16 @@ static int follow(struct fetch *f, int redirects, char *err, size_t cap) {
     return 0;
 }
 
-int ut_fetch(const struct ut_url *url, const struct ut_config *cfg, struct ut_response *out,
-             char *err, size_t cap) {
+static int load(const struct ut_url *url, const struct ut_config *cfg, int any, size_t max, struct ut_response *out,
+                char *err, size_t cap) {
     struct fetch *f;
     int redirects = 0, rc;
     size_t n;
     if(!url || !out) return ut_error(err, cap, "nothing to load");
     f = malloc(sizeof(*f));
     if(!f) return ut_error(err, cap, "out of memory for loading %s", url->host);
+    f->any = any;
+    f->max = max;
     f->deadline = ut_now() + UT_LOAD_MS;
     memcpy(&f->cur, url, sizeof(f->cur));
     n = unfragmented(&f->cur);
@@ -827,6 +834,16 @@ int ut_fetch(const struct ut_url *url, const struct ut_config *cfg, struct ut_re
     }
     free(f);
     return rc;
+}
+
+int ut_fetch(const struct ut_url *url, const struct ut_config *cfg, struct ut_response *out,
+             char *err, size_t cap) {
+    return load(url, cfg, 0, UT_BODY_MAX, out, err, cap);
+}
+
+int ut_fetch_any(const struct ut_url *url, const struct ut_config *cfg, size_t max, struct ut_response *out,
+                 char *err, size_t cap) {
+    return load(url, cfg, 1, max > UT_ANY_MAX ? UT_ANY_MAX : max, out, err, cap);
 }
 
 void ut_response_free(struct ut_response *r) {
