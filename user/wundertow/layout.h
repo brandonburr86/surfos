@@ -48,6 +48,7 @@ struct wl_item {
     unsigned int off, len;
     /* 11/1/26 */
     int image;                          /* WI_IMAGE: the document's pics[image], or -1 */
+    int control;                        /* WI_FIELD: the document's controls[control], or -1 */
 };
 
 struct wl_layout {
@@ -69,6 +70,10 @@ void wl_free(struct wl_layout *l);
 
 /* The link of what is at (x, y) on the page, or -1 */
 int wl_link_at(const struct wl_layout *l, int x, int y);
+
+/* 11/1/26: the control whose field is at (x, y), or -1; the item of a control, or -1 */
+int wl_control_at(const struct wl_layout *l, int x, int y);
+long wl_control_item(const struct wl_layout *l, int control);
 
 /* The top of the line where the document's text offset is (a fragment target's place), 0 when none */
 int wl_offset_y(const struct wl_layout *l, size_t offset);

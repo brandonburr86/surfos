@@ -12,6 +12,7 @@ font (font.h), at a whole scale.
 #include "undertow.h"
 #include "doc.h"
 #include "font.h"
+#include "form.h"
 #include "layout.h"
 #include "paint.h"
 
@@ -157,30 +158,52 @@ static void label_in(const struct wp_target *t, int x, int y, int w, int h, cons
     wp_text(&in, center && tw < w ? x + (w - tw) / 2 : x + 4, y + (h - WF_H) / 2, s, n, 1, 0, color);
 }
 
+/* A text area's lines, from its first shown, in its box */
+static void area_text(const struct wp_target *t, const struct wd_control *c, const struct wp_theme *th, int x, int y, int w, int h) {
+    int lines = (h - 2 * 4) / WF_H, cols = (w - 2 * 4) / WF_W, l;
+    if(cols < 1) cols = 1;
+    for(l = 0; l < lines; l++) {
+        size_t a = fm_at(c, c->top + l, 0), e = fm_at(c, c->top + l, 1 << 30);
+        int line, col;
+        if(a >= c->len && (c->top + l) > 0) {       /* past the last line: fm_at() says the end */
+            fm_where(c, c->len, &line, &col);
+            if(c->top + l > line) break;
+        }
+        if(e > a) label_in(t, x, y + l * WF_H, w, WF_H + 8, c->value + a, e - a, th->field_fg, 0);
+    }
+}
+
 static void field(const struct wp_target *t, const struct wd_document *d, const struct wp_theme *th,
                   const struct wl_item *it, int x, int y) {
+    const struct wd_control *c = it->control >= 0 ? &d->controls[it->control] : NULL;
     const char *s = d->text + it->off;
+    size_t n = it->len;
+    char stars[64];
+    int checked = c ? c->checked : it->checked;
+    if(c && (it->sub == WF_SELECT || it->sub == WF_PASSWORD || ((it->sub == WF_TEXT) && c->len))) s = fm_shown(d, c, stars, &n);
     switch(it->sub) {
     case WF_CHECKBOX: case WF_RADIO:
         wp_fill(t, x, y, it->w, it->h, th->field_bg);
         wp_frame(t, x, y, it->w, it->h, th->field_line);
-        if(it->checked) wp_fill(t, x + 4, y + 4, it->w - 8, it->h - 8, th->field_fg);
+        if(checked) wp_fill(t, x + 4, y + 4, it->w - 8, it->h - 8, th->field_fg);
         return;
     case WF_BUTTON: case WF_FILE:
         wp_fill(t, x, y, it->w, it->h, th->button_bg);
         wp_frame(t, x, y, it->w, it->h, th->button_line);
-        label_in(t, x, y, it->w, it->h, s, it->len, th->field_fg, 1);
+        label_in(t, x, y, it->w, it->h, s, n, th->field_fg, 1);
         return;
     case WF_SELECT:
         wp_fill(t, x, y, it->w, it->h, th->field_bg);
         wp_frame(t, x, y, it->w, it->h, th->field_line);
-        label_in(t, x, y, it->w - 16, it->h, s, it->len, th->field_fg, 0);
+        label_in(t, x, y, it->w - 16, it->h, s, n, th->field_fg, 0);
         wp_text(t, x + it->w - 13, y + (it->h - WF_H) / 2, "\xe2\x96\xbc", 3, 1, 0, th->field_fg);  /* U+25BC */
         return;
     }
     wp_fill(t, x, y, it->w, it->h, th->field_bg);
     wp_frame(t, x, y, it->w, it->h, th->field_line);
-    label_in(t, x, y, it->w, it->sub == WF_AREA ? WF_H + 8 : it->h, s, it->len, it->checked ? th->placeholder : th->field_fg, 0);
+    if(c && it->sub == WF_AREA) area_text(t, c, th, x, y, it->w, it->h);
+    else label_in(t, x, y, it->w, it->sub == WF_AREA ? WF_H + 8 : it->h, s, n,
+                  it->checked && !(c && c->len) ? th->placeholder : th->field_fg, 0);
 }
 
 /* over what is there: a pixel half there is mixed with it */

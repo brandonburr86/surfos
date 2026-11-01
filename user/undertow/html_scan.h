@@ -59,7 +59,7 @@ struct ut_html_attr {
     size_t cap;
 };
 
-#define UT_HTML_ATTRS_MAX 32
+#define UT_HTML_ATTRS_MAX 48
 
 /* A tag as ut_html_tag() reads it. The reader sets attrs, nattrs and val[] (buffers of attrs[i].cap + 1
    bytes) once; each read sets the rest. */

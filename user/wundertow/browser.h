@@ -46,6 +46,11 @@ it is; Enter goes to the next place and Shift+Enter to the one before, round the
 Shift+Tab go from link to link in the page's order, scrolling each into view and drawing it focused, and Enter follows
 it. Links to where this window has been take the visited colour: that is kept here for as long as the window runs,
 as a hash of each address, and written nowhere.
+
+11/1/26, forms (stage 2.6; form.h): a page's fields are used as a person uses them, by the pointer or by Tab and the keys:
+typing in text fields and text areas, Space for a checkbox, a radio button or a button, a select's list by Space or a
+click, or its Up and Down straight away. Enter in a field, or a submit button, submits its form as a GET, by the same
+rules as the rest of a page's addresses (may_load()). The form says why when it sends nothing.
 */
 
 #ifndef WUNDERTOW_BROWSER_H
@@ -123,7 +128,7 @@ struct wb_request {                     /* a load the program is to carry out */
     size_t budget;                      /* WB_LOAD_IMAGE: the bytes of pixels the page has room for */
 };
 
-enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR, WB_FOCUS_FIND };
+enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR, WB_FOCUS_FIND, WB_FOCUS_FIELD };
 
 #define WB_CANCEL_PAGE       1          /* wb_cancel(): the page's load, */
 #define WB_CANCEL_RESOURCES  2          /* the loads of what the page shown wanted */
@@ -161,6 +166,11 @@ struct wb {
     int tab_link;                       /* the link with the keyboard's focus, or -1 */
     unsigned long long seen[WB_VISITED];
     int seen_count;
+    /* forms */
+    int field;                          /* the control with the keyboard's focus (WB_FOCUS_FIELD), or -1 */
+    int press_field;                    /* the control the button went down on, or -1 */
+    int list;                           /* a select's list is open: this control's, or -1 */
+    int list_at, list_top;              /* the option marked, the first shown */
 };
 
 /* A browser in a window of w x h, with its start page; 0, or -1 without memory */

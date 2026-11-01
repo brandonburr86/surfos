@@ -27,6 +27,7 @@ doc.h's builder, in one pass over the body as html.c reads it, over the same sca
 #include "url.h"
 #include "html_scan.h"
 #include "doc.h"
+#include "form.h"
 
 #define STACK_MAX    128                /* open elements kept; deeper ones are only counted */
 #define HREF_MAX     4096               /* bytes of an address kept from an attribute (url.c takes 2048) */
@@ -41,7 +42,9 @@ static const char cut_notice[] = "the rest of this page is not shown: it is over
 enum {
     A_HREF, A_ID, A_NAME, A_ALT, A_VALUE, A_TYPE, A_START, A_SRC, A_WIDTH, A_HEIGHT, A_ALIGN, A_COLOR, A_BGCOLOR,
     A_TEXT, A_LINK, A_VLINK, A_BORDER, A_COLSPAN, A_CELLPADDING, A_CHECKED, A_PLACEHOLDER, A_HIDDEN, A_ARIA,
-    A_TITLE, A_SELECTED, A_COUNT
+    A_TITLE, A_SELECTED,
+    A_ACTION, A_METHOD, A_FORM, A_FORMACTION, A_FORMMETHOD, A_DISABLED, A_READONLY, A_MAXLENGTH, A_ROWS, A_COLS, A_SIZE,
+    A_MULTIPLE, A_LABEL, A_COUNT
 };
 
 static const struct ut_html_attr attr_info[A_COUNT] = {
@@ -50,7 +53,10 @@ static const struct ut_html_attr attr_info[A_COUNT] = {
     { "height", 32 }, { "align", 32 }, { "color", 64 }, { "bgcolor", 64 }, { "text", 64 }, { "link", 64 },
     { "vlink", 64 }, { "border", 32 }, { "colspan", 32 }, { "cellpadding", 32 }, { "checked", 32 },
     { "placeholder", UT_FIELD_MAX }, { "hidden", 32 }, { "aria-label", UT_FIELD_MAX }, { "title", UT_FIELD_MAX },
-    { "selected", 32 }
+    { "selected", 32 },
+    { "action", HREF_MAX }, { "method", 32 }, { "form", UT_FIELD_MAX }, { "formaction", HREF_MAX }, { "formmethod", 32 },
+    { "disabled", 32 }, { "readonly", 32 }, { "maxlength", 32 }, { "rows", 32 }, { "cols", 32 }, { "size", 32 },
+    { "multiple", 32 }, { "label", UT_FIELD_MAX }
 };
 
 typedef char attrs_fit[A_COUNT <= UT_HTML_ATTRS_MAX ? 1 : -1];
@@ -60,7 +66,8 @@ struct tag_bufs {                       /* the buffers of the tag's attributes: 
          value[UT_FIELD_MAX + 1], type[33], start[33], src[HREF_MAX + 1], width[33], height[33], align[33],
          color[65], bgcolor[65], text[65], link[65], vlink[65], border[33], colspan[33], cellpadding[33],
          checked[33], placeholder[UT_FIELD_MAX + 1], hidden[33], aria[UT_FIELD_MAX + 1], title[UT_FIELD_MAX + 1],
-         selected[33];
+         selected[33], action[HREF_MAX + 1], method[33], form[UT_FIELD_MAX + 1], formaction[HREF_MAX + 1], formmethod[33],
+         disabled[33], readonly[33], maxlength[33], rows[33], cols[33], size[33], multiple[33], label[UT_FIELD_MAX + 1];
 };
 
 /**** the builder's state ****/
@@ -80,6 +87,7 @@ struct frame {                          /* an open element that has a box */
     unsigned char depth;                /* a list: how many lists it is in, itself too */
     unsigned char saved_on;             /* a cell or caption: it saved the inline state */
     struct inline_state saved;
+    unsigned char off;                  /* a disabled fieldset */
 };
 
 struct bd {
@@ -138,6 +146,15 @@ struct bd {
     char flabel[LABEL_MAX + 1];         /* the open button's or select's label */
     size_t flabel_len;
     int flabel_gap;
+    int fcontrol;                       /* the open button's or select's control, -1: none */
+    int opt_open;                       /* an <option> is open: its text is its label */
+    int opt_selected, opt_disabled, group_disabled;
+    int opt_has_value;
+    char opt_value[UT_FIELD_MAX + 1];
+    char olabel[LABEL_MAX + 1];
+    size_t olabel_len;
+    int olabel_gap;
+    struct fm_build fb;                 /* the page's forms */
 
     /* the rest */
     int title_seen;
@@ -447,6 +464,7 @@ static struct wd_run *run_for(struct bd *b, int kind, unsigned short style, unsi
     r->color = color;
     r->link = link;
     r->image = -1;
+    r->control = -1;
     r->off = (unsigned int)b->d.text_len;
     x->nruns++;
     return r;
@@ -509,6 +527,7 @@ static void text_char(struct bd *b, unsigned int cp) {
     if(b->stopped || b->failed) return;
     if(b->button || b->select) {                    /* a field's label */
         if(!b->select || b->option == 1) label_add(b->flabel, &b->flabel_len, &b->flabel_gap, cp);
+        if(b->opt_open) label_add(b->olabel, &b->olabel_len, &b->olabel_gap, cp);
         return;
     }
     if(b->link_open) label_add(b->label, &b->label_len, &b->label_gap, cp);
@@ -558,6 +577,7 @@ static struct wd_run *atom(struct bd *b, int kind, const char *label, size_t n) 
     if(room(b, n)) return NULL;
     r = run_for(b, kind, style_now(b), size_now(b), color_now(b), b->link);
     if(!r) return NULL;
+    r->control = -1;
     memcpy(b->d.text + b->d.text_len, label, n);
     b->d.text_len += n;
     b->d.text[b->d.text_len] = 0;
@@ -586,6 +606,7 @@ static int is_cell(int el) { return el == E_TD || el == E_TH || el == E_CAPTION;
 
 static void link_close(struct bd *b);
 static void field_close(struct bd *b);
+static void option_end(struct bd *b);
 
 /* Open el on the stack with a box of kind (kind < 0: no box of its own); NULL when the stack is full (it is
    only counted) or the box cannot be made */
@@ -625,6 +646,7 @@ static void pop(struct bd *b) {
         field_close(b);
     }
     if(f->saved_on) b->is = f->saved;
+    if(f->off) b->fb.off--;
     if(el == E_PRE || el == E_LISTING || el == E_XMP) b->pre--;
     if(is_list(el)) b->lists--;
     if(el == E_TABLE) b->tables--;
@@ -980,54 +1002,118 @@ static void image(struct bd *b, struct ut_html_tag *t) {
     b->d.runs[b->d.run_count - 1].image = (int)b->d.image_count++;
 }
 
-static void field(struct bd *b, int kind, const char *label, size_t n, int checked) {
+/* A field's box, showing control */
+static void field(struct bd *b, int kind, const char *label, size_t n, int checked, int control) {
     struct wd_run *r = atom(b, WR_FIELD, label, n);
     if(r) {
         r->field = (unsigned char)kind;
         r->checked = (unsigned char)checked;
+        r->control = control;
+        if(control >= 0) b->d.controls[control].run = (int)(r - b->d.runs);
     }
+}
+
+/* A number attribute, as a width in cells or a limit; none when it is no number or out of range */
+static int count_attr(const struct ut_html_tag *t, int a, int lo, int hi, int none) {
+    long v;
+    if(!t->seen[a] || parse_int(t->val[a], &v) || v < lo) return none;
+    return v > hi ? hi : (int)v;
+}
+
+/* A control as this tag gives it: of kind, role, and value (NULL: the tag's value attribute); checked its own */
+static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, int checked) {
+    struct fm_new n;
+    memset(&n, 0, sizeof(n));
+    n.kind = kind;
+    n.role = role;
+    n.name = t->seen[A_NAME] ? t->val[A_NAME] : NULL;
+    n.value = t->seen[A_VALUE] ? t->val[A_VALUE] : NULL;
+    n.value_cut = t->seen[A_VALUE] && t->over[A_VALUE];
+    n.checked = checked;
+    n.disabled = t->seen[A_DISABLED];
+    n.readonly = t->seen[A_READONLY];
+    n.multiple = t->seen[A_MULTIPLE];
+    n.image = attr_is(t, A_TYPE, "image");
+    n.maxlength = count_attr(t, A_MAXLENGTH, 0, (int)WD_VALUE_MAX, -1);
+    n.rows = count_attr(t, A_ROWS, 1, 50, 0);
+    n.cols = count_attr(t, A_COLS, 1, 200, 0);
+    n.size = count_attr(t, A_SIZE, 1, 200, 0);
+    n.owner = t->seen[A_FORM] ? t->val[A_FORM] : NULL;
+    n.formaction = t->seen[A_FORMACTION] ? t->val[A_FORMACTION] : NULL;
+    n.formaction_cut = t->seen[A_FORMACTION] && t->over[A_FORMACTION];
+    n.formmethod = t->seen[A_FORMMETHOD] ? t->val[A_FORMMETHOD] : NULL;
+    return fm_control(&b->d, &b->fb, &n);
 }
 
 /* A button's or a select's label is the text inside it: the field is made at its end */
 static void field_close(struct bd *b) {
-    int kind = b->button ? WF_BUTTON : WF_SELECT;
+    int kind = b->button ? WF_BUTTON : WF_SELECT, control = b->fcontrol;
     char label[LABEL_MAX + 1];
     size_t n = b->flabel_len;
     if(!b->button && !b->select) return;
+    option_end(b);
+    if(b->select) fm_select_end(&b->d, &b->fb);
     memcpy(label, b->flabel, n);
-    b->button = b->select = b->option = b->selected_seen = 0;
+    b->button = b->select = b->option = b->selected_seen = b->group_disabled = 0;
     b->flabel_len = 0;
     b->flabel_gap = 0;
-    field(b, kind, label, n, 0);
+    b->fcontrol = -1;
+    field(b, kind, label, n, 0, control);
+}
+
+/* An option's end: its text is its label (or its label attribute's), and its value, its value attribute or its text */
+static void option_end(struct bd *b) {
+    if(!b->opt_open) return;
+    b->opt_open = 0;
+    b->olabel[b->olabel_len] = 0;
+    fm_option(&b->d, &b->fb, b->opt_has_value ? b->opt_value : NULL, b->olabel, b->opt_selected, b->opt_disabled);
+    b->olabel_len = 0;
+    b->olabel_gap = 0;
+}
+
+static void option_start(struct bd *b, struct ut_html_tag *t) {
+    option_end(b);
+    b->opt_open = 1;
+    b->opt_selected = t->seen[A_SELECTED];
+    b->opt_disabled = t->seen[A_DISABLED] || b->group_disabled;
+    b->opt_has_value = t->seen[A_VALUE];
+    if(b->opt_has_value) memcpy(b->opt_value, t->val[A_VALUE], t->len[A_VALUE] + 1);
 }
 
 static void input(struct bd *b, struct ut_html_tag *t) {
     size_t n;
     int image_button = attr_is(t, A_TYPE, "image");
-    if(attr_is(t, A_TYPE, "hidden")) return;
-    if(attr_is(t, A_TYPE, "checkbox") || attr_is(t, A_TYPE, "radio"))
-        field(b, attr_is(t, A_TYPE, "checkbox") ? WF_CHECKBOX : WF_RADIO, "", 0, t->seen[A_CHECKED]);
-    else if(attr_is(t, A_TYPE, "submit") || attr_is(t, A_TYPE, "reset") || attr_is(t, A_TYPE, "button") ||
+    if(attr_is(t, A_TYPE, "hidden")) {
+        control_of(b, t, WC_HIDDEN, 0, 0);
+        return;
+    }
+    if(attr_is(t, A_TYPE, "checkbox") || attr_is(t, A_TYPE, "radio")) {
+        int kind = attr_is(t, A_TYPE, "checkbox") ? WF_CHECKBOX : WF_RADIO;
+        field(b, kind, "", 0, t->seen[A_CHECKED], control_of(b, t, kind, 0, t->seen[A_CHECKED]));
+    } else if(attr_is(t, A_TYPE, "submit") || attr_is(t, A_TYPE, "reset") || attr_is(t, A_TYPE, "button") ||
             image_button) {
         int a = image_button ? A_ALT : A_VALUE;
+        int role = attr_is(t, A_TYPE, "reset") ? WC_RESET : attr_is(t, A_TYPE, "button") ? WC_PUSH : WC_SUBMIT;
+        int control = control_of(b, t, WF_BUTTON, role, 0);
         n = t->seen[a] ? collapse(b, t->val[a], t->len[a]) : 0;
         if(!n && !t->seen[a]) {
             const char *dflt = attr_is(t, A_TYPE, "reset") ? "Reset" : attr_is(t, A_TYPE, "button") ? "" : "Submit";
             n = strlen(dflt);
             memcpy(b->scratch, dflt, n + 1);
         }
-        field(b, WF_BUTTON, b->scratch, n, 0);
-    } else if(attr_is(t, A_TYPE, "file")) field(b, WF_FILE, "Choose a file", 13, 0);
+        field(b, WF_BUTTON, b->scratch, n, 0, control);
+    } else if(attr_is(t, A_TYPE, "file")) field(b, WF_FILE, "Choose a file", 13, 0, control_of(b, t, WF_FILE, 0, 0));
     else if(attr_is(t, A_TYPE, "password")) {
         n = t->seen[A_VALUE] && t->len[A_VALUE] ? (t->len[A_VALUE] > 32 ? 32 : t->len[A_VALUE]) : 0;
         memset(b->scratch, '*', n);
-        field(b, WF_PASSWORD, b->scratch, n, 0);
+        field(b, WF_PASSWORD, b->scratch, n, 0, control_of(b, t, WF_PASSWORD, 0, 0));
     } else {                                        /* text, search, email, url, number, ...: a text field */
+        int control = control_of(b, t, WF_TEXT, 0, 0);
         n = t->seen[A_VALUE] ? collapse(b, t->val[A_VALUE], t->len[A_VALUE]) : 0;
-        if(n) field(b, WF_TEXT, b->scratch, n, 0);
+        if(n) field(b, WF_TEXT, b->scratch, n, 0, control);
         else {
             n = t->seen[A_PLACEHOLDER] ? collapse(b, t->val[A_PLACEHOLDER], t->len[A_PLACEHOLDER]) : 0;
-            field(b, WF_TEXT, b->scratch, n, n > 0);     /* checked: the label is a placeholder */
+            field(b, WF_TEXT, b->scratch, n, n > 0, control);     /* checked: the label is a placeholder */
         }
     }
 }
@@ -1036,6 +1122,11 @@ static void input(struct bd *b, struct ut_html_tag *t) {
 static int select_tag(struct bd *b, struct ut_html_tag *t) {
     int el = t->el;
     if(el == E_OPTION || el == E_OPTGROUP) {
+        if(!t->end && el == E_OPTION) option_start(b, t);
+        else {
+            option_end(b);
+            if(el == E_OPTGROUP) b->group_disabled = !t->end && t->seen[A_DISABLED];
+        }
         if(!t->end && el == E_OPTION && t->seen[A_SELECTED] && !b->selected_seen) {   /* the one it shows */
             b->selected_seen = 1;
             b->flabel_len = 0;
@@ -1126,6 +1217,9 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         b->is.sty[s]++;
         return;
     }
+    if(el == E_FORM) fm_form(&b->d, &b->fb, t->seen[A_ID] ? t->val[A_ID] : NULL, t->seen[A_ACTION] ? t->val[A_ACTION] : NULL,
+                             t->seen[A_ACTION] && t->over[A_ACTION], t->seen[A_METHOD] ? t->val[A_METHOD] : NULL);
+    if(el == E_FIELDSET && t->seen[A_DISABLED]) b->fb.off++;   /* given back at its end (pop()), when it has a box */
     switch(el) {
     case E_A:
         if(t->seen[A_NAME]) add_anchor(b, t->val[A_NAME], t->len[A_NAME], t->over[A_NAME]);
@@ -1180,11 +1274,13 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     case E_BUTTON:
         field_close(b);
         b->button = 1;
+        b->fcontrol = control_of(b, t, WF_BUTTON, attr_is(t, A_TYPE, "reset") ? WC_RESET : attr_is(t, A_TYPE, "button") ? WC_PUSH : WC_SUBMIT, 0);
         return;
     case E_SELECT:
         field_close(b);
         b->select = 1;
         b->option = 0;
+        b->fcontrol = control_of(b, t, WF_SELECT, 0, 0);
         return;
     case E_BASE:
         if(!b->base && t->seen[A_HREF] && !t->over[A_HREF]) {
@@ -1227,7 +1323,11 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     }
     if(fl & F_PUSH) {
         f = push(b, el, kind_of(el));
-        if(!f) return;
+        if(!f) {
+            if(el == E_FIELDSET && t->seen[A_DISABLED]) b->fb.off--;   /* no frame to give it back */
+            return;
+        }
+        if(el == E_FIELDSET && t->seen[A_DISABLED]) f->off = 1;
         x = box_of(b, f);
         x->align = (unsigned char)(el == E_CENTER ? WA_CENTER : align_of(t));
         if(el == E_BLOCKQUOTE) x->flags = WBF_PARA | WBF_QUOTE;
@@ -1247,6 +1347,7 @@ static void end_tag(struct bd *b, struct ut_html_tag *t) {
         if(b->is.sty[s]) b->is.sty[s]--;
         return;
     }
+    if(el == E_FORM) fm_form_end(&b->fb);
     switch(el) {
     case E_A:
         link_close(b);
@@ -1366,6 +1467,44 @@ static void title_text(struct bd *b, size_t q, size_t end) {
     else memcpy(b->d.title, t, n + 1);
 }
 
+/* A text area's control, of the tag still in b->tag: its value is its text, characters decoded, in UTF-8, without the
+   line feed that may follow the start tag; cut at WD_VALUE_MAX, which marks its form */
+static int area_control(struct bd *b, size_t q, size_t end) {
+    struct ut_html_tag *t = &b->tag;
+    char *v = malloc(WD_VALUE_MAX + 1), *tag_value = t->val[A_VALUE];
+    size_t n = 0;
+    unsigned char u[4];
+    int control, first = 1;
+    if(!v) {
+        b->failed = 1;
+        return -1;
+    }
+    while(q < end) {
+        unsigned int cp = b->in[q] == '&' ? ut_html_ref(b->in, &q, end, 0) : next_char(b, &q, end);
+        size_t k;
+        if(first && cp == '\n') {
+            first = 0;
+            continue;
+        }
+        first = 0;
+        if(ut_unsafe_char(cp) && cp != '\n' && cp != '\t') continue;
+        k = ut_utf8_encode(cp, u);
+        if(n + k > WD_VALUE_MAX) {
+            t->over[A_VALUE] = 1;
+            break;
+        }
+        memcpy(v + n, u, k);
+        n += k;
+    }
+    v[n] = 0;
+    t->val[A_VALUE] = v;                        /* the tag's value for this one call: the next tag sets it afresh */
+    t->seen[A_VALUE] = 1;
+    control = control_of(b, t, WF_AREA, 0, 0);
+    t->val[A_VALUE] = tag_value;
+    free(v);
+    return control;
+}
+
 /* The content of a raw text element up to its own end tag: a title (the first one), an xmp's text (as pre)
    and a textarea's (as its field's label) are kept, when nothing hides them */
 static void raw(struct bd *b, int el, const char *name) {
@@ -1391,12 +1530,13 @@ static void raw(struct bd *b, int el, const char *name) {
         int gap = 0;
         char label[LABEL_MAX + 1];
         unsigned int cp;
+        int control = area_control(b, start, end);
         for(q = start; q < end && n < 40; ) {
             cp = b->in[q] == '&' ? ut_html_ref(b->in, &q, end, 0) : next_char(b, &q, end);
             label_add(label, &n, &gap, cp);
         }
         label[n] = 0;
-        field(b, WF_AREA, label, n, 0);
+        field(b, WF_AREA, label, n, 0, control);
     }
 }
 
@@ -1435,7 +1575,7 @@ static void run_html(struct bd *b) {
     while(b->pos < b->len && !b->failed) {
         unsigned char c = b->in[b->pos];
         if(c == '<') markup(b);
-        else if(b->skip_n || b->stopped || (b->select && b->option != 1)) {
+        else if(b->skip_n || b->stopped || (b->select && b->option != 1 && !b->opt_open)) {
             j = memchr(b->in + b->pos, '<', b->len - b->pos);      /* text nobody sees */
             b->pos = j ? (size_t)(j - b->in) : b->len;
         } else if(c == '&') text_char(b, ut_html_ref(b->in, &b->pos, b->len, 0));
@@ -1550,6 +1690,38 @@ static void add_notice(char *notice, size_t cap, const char *part) {
     snprintf(notice + n, cap - n, "%s%s", n ? "; " : "", part);
 }
 
+/* A form's address as written becomes absolute, or NULL when it is none that can be used: what *x points to */
+static int form_address(struct bd *b, char **x, int cut, char *safe, struct ut_url *u) {
+    int usable = 0;
+    char *a = address(b, *x, cut, &usable, u, safe);
+    if(!a) return -1;
+    free(*x);
+    *x = usable ? a : NULL;
+    if(!usable) free(a);
+    return 0;
+}
+
+/* The forms' addresses, by the base the page ended with, and what fm_finish() does; 0, or -1 out of memory */
+static int forms_finish(struct bd *b, char *safe, struct ut_url *u) {
+    struct wd_document *d = &b->d;
+    size_t i;
+    fm_finish(d, &b->fb, b->stopped);
+    d->form_charset = b->cs;
+    for(i = 0; i < d->form_count; i++) {
+        struct wd_form *f = &d->forms[i];
+        if(f->here) {                               /* the page's own address, as the standard has it, not the base's */
+            f->action = malloc(strlen(b->r->url.text) + 1);
+            if(!f->action) return -1;
+            memcpy(f->action, b->r->url.text, strlen(b->r->url.text) + 1);
+        } else if(f->action && form_address(b, &f->action, f->action_cut, safe, u)) return -1;
+    }
+    for(i = 0; i < d->control_count; i++) {
+        struct wd_control *c = &d->controls[i];
+        if(c->formaction && form_address(b, &c->formaction, c->action_cut, safe, u)) return -1;
+    }
+    return b->fb.failed ? -1 : 0;
+}
+
 /* The links' and images' addresses, the budget of the link strings, the notice; 0, or -1 out of memory */
 static int finish(struct bd *b) {
     struct wd_document *d = &b->d;
@@ -1584,6 +1756,10 @@ static int finish(struct bd *b) {
     }
     d->images = calloc(d->image_count ? d->image_count : 1, sizeof(*d->images));
     if(!d->images) {
+        free(work);
+        return -1;
+    }
+    if(forms_finish(b, work->safe, &work->u)) {
         free(work);
         return -1;
     }
@@ -1626,6 +1802,7 @@ static int finish(struct bd *b) {
     if(d->anchor_count) d->bytes += b->anchors_cap * sizeof(*d->anchors);
     for(i = 0; i < d->anchor_count; i++) d->bytes += strlen(d->anchors[i].name) + 1;
     for(i = 0; i < d->image_count; i++) if(d->images[i]) d->bytes += strlen(d->images[i]) + 1;
+    d->bytes += d->form_bytes;
     return b->failed ? -1 : 0;
 }
 
@@ -1658,6 +1835,8 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     b->target = -1;
     b->link = -1;
     b->skip_el = E_OTHER;
+    b->fcontrol = -1;
+    fm_begin(&b->fb);
     b->d.bg = b->d.fg = b->d.link_color = b->d.vlink_color = WD_NONE;
     b->tag.attrs = attr_info;
     b->tag.nattrs = A_COUNT;
@@ -1686,6 +1865,19 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     b->tag.val[A_ARIA] = b->tagbuf.aria;
     b->tag.val[A_TITLE] = b->tagbuf.title;
     b->tag.val[A_SELECTED] = b->tagbuf.selected;
+    b->tag.val[A_ACTION] = b->tagbuf.action;
+    b->tag.val[A_METHOD] = b->tagbuf.method;
+    b->tag.val[A_FORM] = b->tagbuf.form;
+    b->tag.val[A_FORMACTION] = b->tagbuf.formaction;
+    b->tag.val[A_FORMMETHOD] = b->tagbuf.formmethod;
+    b->tag.val[A_DISABLED] = b->tagbuf.disabled;
+    b->tag.val[A_READONLY] = b->tagbuf.readonly;
+    b->tag.val[A_MAXLENGTH] = b->tagbuf.maxlength;
+    b->tag.val[A_ROWS] = b->tagbuf.rows;
+    b->tag.val[A_COLS] = b->tagbuf.cols;
+    b->tag.val[A_SIZE] = b->tagbuf.size;
+    b->tag.val[A_MULTIPLE] = b->tagbuf.multiple;
+    b->tag.val[A_LABEL] = b->tagbuf.label;
     if(new_box(b, WB_BLOCK, -1) != 0) {             /* the root */
         cleanup(b, 0);
         return ut_error(err, cap, "out of memory showing the page");
@@ -1735,6 +1927,7 @@ void wd_free(struct wd_document *d) {
     }
     free(d->pics);
     free(d->visited);
+    fm_free(d);
     free(d->blocks);
     free(d->runs);
     free(d->text);

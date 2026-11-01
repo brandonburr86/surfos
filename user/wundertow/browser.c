@@ -17,6 +17,7 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #include "doc.h"
 #include "find.h"
 #include "font.h"
+#include "form.h"
 #include "image.h"
 #include "layout.h"
 #include "paint.h"
@@ -34,6 +35,8 @@ buttons, a text field, a scroll bar, a status bar), the page through layout.c an
 #define C_SHEET  0xfffdf5
 #define C_FOUND  0xffd34d                       /* what find found: a highlight over the text */
 #define C_MISS   0xf3c9c0                       /* find's field, when the word is not there */
+#define LIST_ROWS 10                            /* a select's list shows this many options at most */
+#define LIST_ROW  (WF_H + 2)
 
 #define BAR_Y    4                      /* the toolbar's buttons and field */
 #define BAR_H    22
@@ -583,6 +586,7 @@ static void trim_history(struct wb *b) {
 void wb_loaded(struct wb *b, struct wb_page *p, int reload) {
     int i;
     resources_stop(b);                              /* what the page before was loading */
+    if(b->npages) fm_forget(&b->page[b->cur]->doc); /* the history keeps no password */
     b->loading = 0;
     b->running = 0;
     b->hover = b->pressed = -1;
@@ -656,6 +660,7 @@ static void back_forward(struct wb *b, int d) {
     if(b->running) b->cancel |= WB_CANCEL_PAGE;     /* a page on its way goes: as in any browser, and a reload's */
     b->running = b->loading = b->want = 0;          /* place is the page it was asked on */
     resources_stop(b);
+    fm_forget(&b->page[b->cur]->doc);
     b->cur += d;
     b->hover = b->pressed = -1;
     page_shown(b, b->page[b->cur]);
@@ -666,9 +671,12 @@ static void back_forward(struct wb *b, int d) {
 /* A page comes into view: nothing of find or of the keyboard's focus was about it */
 static void page_shown(struct wb *b, struct wb_page *p) {
     b->tab_link = -1;
+    b->field = -1;
+    b->press_field = -1;
+    b->list = -1;
     b->find_open = 0;
     b->find_hit = 0;
-    if(b->focus == WB_FOCUS_FIND) b->focus = WB_FOCUS_PAGE;
+    if(b->focus == WB_FOCUS_FIND || b->focus == WB_FOCUS_FIELD) b->focus = WB_FOCUS_PAGE;
     mark_visited(b, p);
 }
 
@@ -685,7 +693,7 @@ int wb_init(struct wb *b, int w, int h) {
     b->w = w < WB_MIN_W ? WB_MIN_W : w;
     b->h = h < WB_MIN_H ? WB_MIN_H : h;
     b->hover = b->pressed = -1;
-    b->tab_link = -1;
+    b->tab_link = b->field = b->press_field = b->list = -1;
     b->focus = WB_FOCUS_ADDR;
     wp_theme_default(&b->theme);
     r = calloc(1, sizeof(*r));
@@ -787,6 +795,8 @@ static int addr_key(struct wb *b, unsigned int key) {
     return 1;
 }
 
+static int in(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && x < rx + rw && y >= ry && y < ry + rh; }
+
 /**** find, and links by keyboard ****/
 
 /* Where the text in view starts */
@@ -847,7 +857,24 @@ static int find_key(struct wb *b, unsigned int key) {
     return 1;
 }
 
-/* Tab: the next link in the page's order from the one that has the focus, or from what is in view */
+/* What Tab stops at: a link, or a control that can be used */
+static int field_item(const struct wb_page *p, const struct wl_item *it) {
+    return it->kind == WI_FIELD && it->control >= 0 && !p->doc.controls[it->control].disabled;
+}
+
+static int has_focus(const struct wb *b, const struct wb_page *p, const struct wl_item *it) {
+    if(b->tab_link >= 0) return it->link == b->tab_link;
+    return b->field >= 0 && field_item(p, it) && it->control == b->field;
+}
+
+/* A control gets the keyboard's keys */
+static void focus_field(struct wb *b, int control) {
+    b->field = control;
+    b->tab_link = -1;
+    b->focus = WB_FOCUS_FIELD;
+}
+
+/* Tab: the next stop in the page's order from the one that has the focus, or from what is in view */
 static void tab_move(struct wb *b, int back) {
     struct wb_page *p = wb_current(b);
     struct geom g;
@@ -859,9 +886,9 @@ static void tab_move(struct wb *b, int back) {
     ensure_layout(b, p);
     n = p->lay.count;
     if(!n) return;
-    if(b->tab_link >= 0) {                          /* past all of its items, or before them */
+    if(b->tab_link >= 0 || b->field >= 0) {         /* past all of its items, or before them */
         for(i = 0; i < n; i++)
-            if(p->lay.items[i].link == b->tab_link) {
+            if(has_focus(b, p, &p->lay.items[i])) {
                 start = i;
                 found = 1;
                 if(back) break;
@@ -879,9 +906,17 @@ static void tab_move(struct wb *b, int back) {
         if(back) at = (start + 2 * n - (size_t)k - 1) % n;
         else at = (start + (size_t)k + (found ? 1 : 0)) % n;
         it = &p->lay.items[at];
-        if(it->link < 0 || it->link == b->tab_link) continue;
-        b->tab_link = it->link;
+        if(it->link < 0 && !field_item(p, it)) continue;
         show_rows(b, p, it->y, it->h);
+        b->list = -1;
+        if(field_item(p, it)) {
+            focus_field(b, it->control);
+            if(b->npages) loaded_status(b, p);
+            return;
+        }
+        b->tab_link = it->link;
+        b->field = -1;
+        b->focus = WB_FOCUS_PAGE;
         {
             char shown[WB_ADDR_MAX];
             link_address(p, &p->doc.links[it->link], shown, sizeof(shown));
@@ -891,10 +926,211 @@ static void tab_move(struct wb *b, int back) {
     }
 }
 
+/* A person submits: control is what did it (-1: Enter with no button). The form goes as a GET, or the status bar says why
+   not. Only a key or a click comes here. */
+static void submit(struct wb *b, int form, int control, int x, int y) {
+    struct wb_page *p = wb_current(b);
+    char *url = malloc(WB_ADDR_MAX), *to = malloc(WB_ADDR_MAX);
+    struct ut_url *u = malloc(sizeof(*u));
+    char err[UT_ERR_MAX];
+    const char *why;
+    if(!url || !to || !u) why = "out of memory: nothing was sent";
+    else why = fm_submit(&p->doc, form, control, x, y, url, WB_ADDR_MAX);
+    if(!why && strlen(url) > UT_URL_MAX) why = "This form's fields do not fit in an address: nothing was sent";
+    if(!why && may_load(p, url, to, WB_ADDR_MAX)) why = !strncmp(url, "http:", 5) ?
+        "This form would go unencrypted from an encrypted page: nothing was sent" :
+        "This form's address is not one this browser can use: nothing was sent";
+    if(!why && strncmp(to, "file:", 5) && ut_url_parse(to, u, err, sizeof(err)))       /* wb_go()'s rule for an address */
+        why = "This form's address is not one this browser can use: nothing was sent";
+    if(why) status(b, "%s", why);
+    else {
+        b->field = -1;
+        b->focus = WB_FOCUS_PAGE;
+        request(b, strncmp(to, "file:", 5) ? u->text : to, 0);
+    }
+    free(url);
+    free(to);
+    free(u);
+}
+
+/* Enter in a field: its form's first button, or by itself where the standard lets it */
+static void implicit_submit(struct wb *b, const struct wd_control *c) {
+    struct wb_page *p = wb_current(b);
+    int button;
+    if(c->form < 0) return;
+    button = fm_default_button(&p->doc, c->form);
+    if(button != -2) submit(b, c->form, button, 0, 0);
+}
+
+/* A press and a release on a control, or Space or Enter on one */
+static void activate(struct wb *b, int control, int x, int y) {
+    struct wb_page *p = wb_current(b);
+    struct wd_control *c = &p->doc.controls[control];
+    if(c->disabled) return;
+    switch(c->kind) {
+    case WF_CHECKBOX: case WF_RADIO:
+        fm_click(&p->doc, control);
+        break;
+    case WF_BUTTON:
+        if(c->role == WC_RESET) {
+            if(c->form >= 0) fm_reset(&p->doc, c->form);
+        } else if(c->role == WC_SUBMIT) submit(b, c->form, control, x, y);
+        break;
+    case WF_SELECT:
+        if(c->noptions) {
+            int at = fm_chosen(&p->doc, control);
+            b->list = control;
+            b->list_at = at < 0 ? 0 : at;
+            b->list_top = b->list_at >= LIST_ROWS ? b->list_at - LIST_ROWS + 1 : 0;
+        }
+        break;
+    case WF_FILE:
+        status(b, "%s", "Choosing a file is not something this browser does");
+        break;
+    }
+}
+
+/* The keys of an open select's list */
+static int list_key(struct wb *b, unsigned int key) {
+    struct wb_page *p = wb_current(b);
+    struct wd_control *c = &p->doc.controls[b->list];
+    int n = (int)c->noptions;
+    switch(key) {
+    case WB_KEY_UP:
+        if(b->list_at > 0) b->list_at--;
+        break;
+    case WB_KEY_DOWN:
+        if(b->list_at < n - 1) b->list_at++;
+        break;
+    case ' ':
+        if(c->multiple) {
+            fm_pick(&p->doc, b->list, (unsigned int)b->list_at);
+            return 1;
+        }
+        /* fall through */
+    case 13: case 10:
+        if(!c->multiple) fm_pick(&p->doc, b->list, (unsigned int)b->list_at);
+        b->list = -1;
+        return 1;
+    case 27: case 9:
+        b->list = -1;
+        return 1;
+    default:
+        return 0;
+    }
+    if(b->list_at < b->list_top) b->list_top = b->list_at;
+    if(b->list_at >= b->list_top + LIST_ROWS) b->list_top = b->list_at - LIST_ROWS + 1;
+    return 1;
+}
+
+/* The keys of the control with the focus */
+static int field_key(struct wb *b, unsigned int key) {
+    struct wb_page *p = wb_current(b);
+    struct wd_control *c = &p->doc.controls[b->field];
+    int typing = c->kind == WF_TEXT || c->kind == WF_PASSWORD || c->kind == WF_AREA;
+    if(b->list >= 0) return list_key(b, key);
+    switch(key) {
+    case 9:
+        tab_move(b, 0);
+        return 1;
+    case WB_KEY_BACKTAB:
+        tab_move(b, 1);
+        return 1;
+    case 27:
+        b->field = -1;
+        b->focus = WB_FOCUS_PAGE;
+        return 1;
+    case 6: case 12: case 18:                       /* Ctrl+F, Ctrl+L, Ctrl+R: the window's */
+        b->focus = WB_FOCUS_PAGE;
+        b->field = -1;
+        return wb_key(b, key);
+    case 13: case 10:
+        if(c->kind == WF_AREA) break;
+        if(c->kind == WF_BUTTON) activate(b, b->field, 0, 0);
+        else implicit_submit(b, c);
+        return 1;
+    case ' ':
+        if(typing) break;
+        activate(b, b->field, 0, 0);
+        return 1;
+    case WB_KEY_UP: case WB_KEY_DOWN:
+        if(c->kind == WF_SELECT && !c->multiple && c->noptions) {
+            int at = fm_chosen(&p->doc, b->field) + (key == WB_KEY_DOWN ? 1 : -1);
+            while(at >= 0 && at < (int)c->noptions && p->doc.options[c->first_option + (unsigned int)at].disabled)
+                at += key == WB_KEY_DOWN ? 1 : -1;
+            if(at >= 0 && at < (int)c->noptions) fm_pick(&p->doc, b->field, (unsigned int)at);
+            return 1;
+        }
+        break;
+    }
+    if(!typing || c->disabled) return 0;
+    if(!fm_key(c, key)) return 0;
+    {
+        long i = wl_control_item(&p->lay, b->field);
+        if(i >= 0) show_rows(b, p, p->lay.items[i].y, p->lay.items[i].h);
+    }
+    return 1;
+}
+
+/* Where a select's open list is on the window; 0 when its field is not laid out */
+static int list_place(struct wb *b, struct wb_page *p, int *x, int *y, int *w, int *rows) {
+    struct geom g;
+    const struct wd_control *c = &p->doc.controls[b->list];
+    long i = wl_control_item(&p->lay, b->list);
+    const struct wl_item *it;
+    unsigned int k;
+    int most = 0;
+    if(i < 0) return 0;
+    geom(b, &g);
+    it = &p->lay.items[i];
+    for(k = 0; k < c->noptions; k++) {
+        const char *s = p->doc.options[c->first_option + k].label;
+        int cells = (int)wf_count(s, strlen(s));
+        if(cells > most) most = cells;
+    }
+    *w = most * WF_W + 16;
+    if(*w < it->w) *w = it->w;
+    if(*w > g.cw - 2) *w = g.cw - 2;
+    *rows = c->noptions > LIST_ROWS ? LIST_ROWS : (int)c->noptions;
+    *x = it->x + *w > g.cw ? g.cw - *w : it->x;
+    *y = g.cy + it->y - p->scroll + it->h;
+    if(*y + *rows * LIST_ROW + 2 > g.cy + g.ch) *y = g.cy + it->y - p->scroll - *rows * LIST_ROW - 2;
+    if(*y < g.cy) *y = g.cy;
+    return 1;
+}
+
+/* The pointer goes down on the open list: 1, an option taken; else it closes */
+static void list_press(struct wb *b, struct wb_page *p, int x, int y) {
+    int lx, ly, lw, rows;
+    if(list_place(b, p, &lx, &ly, &lw, &rows) && in(x, y, lx, ly, lw, rows * LIST_ROW + 2)) {
+        int at = b->list_top + (y - ly - 1) / LIST_ROW;
+        const struct wd_control *c = &p->doc.controls[b->list];
+        if(at >= 0 && at < (int)c->noptions) {
+            fm_pick(&p->doc, b->list, (unsigned int)at);
+            b->list_at = at;
+            if(c->multiple) return;
+        }
+    }
+    b->list = -1;
+}
+
+/* The pointer goes down on a control: the keys are its own, and in a text its caret goes there */
+static void field_press(struct wb *b, struct wb_page *p, int control, int px, int py) {
+    struct wd_control *c = &p->doc.controls[control];
+    long i = wl_control_item(&p->lay, control);
+    focus_field(b, control);
+    if(i < 0) return;
+    if(c->kind == WF_TEXT || c->kind == WF_PASSWORD)
+        c->caret = fm_byte_at(c, (px - p->lay.items[i].x - 4 + WF_W / 2) / WF_W);
+    else if(c->kind == WF_AREA)
+        c->caret = fm_at(c, c->top + (py - p->lay.items[i].y - 4) / WF_H, (px - p->lay.items[i].x - 4 + WF_W / 2) / WF_W);
+}
+
 int wb_key(struct wb *b, unsigned int key) {
     struct geom g;
     if(b->focus == WB_FOCUS_ADDR) return addr_key(b, key);
     if(b->focus == WB_FOCUS_FIND) return find_key(b, key);
+    if(b->focus == WB_FOCUS_FIELD && b->field >= 0) return field_key(b, key);
     geom(b, &g);
     switch(key) {
     case WB_KEY_UP: return scroll_by(b, -SCROLL_STEP);
@@ -944,7 +1180,6 @@ int wb_key(struct wb *b, unsigned int key) {
     return 0;
 }
 
-static int in(int x, int y, int rx, int ry, int rw, int rh) { return x >= rx && x < rx + rw && y >= ry && y < ry + rh; }
 
 static int enabled(struct wb *b, int n) {
     if(n == 0) return b->npages && b->cur > 0;
@@ -1006,6 +1241,10 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
     if(press) {
         b->pressed = -1;
         b->button = 0;
+        if(b->list >= 0 && p) {
+            list_press(b, p, x, y);
+            return 1;
+        }
         for(i = 0; i < 4; i++)
             if(in(x, y, g.bx[i], BAR_Y, g.bw[i], BAR_H) && enabled(b, i)) {
                 b->button = i + 1;
@@ -1033,9 +1272,16 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
             return 1;
         }
         if(in(x, y, 0, g.cy, g.cw, g.ch)) {
+            int control = p ? wl_control_at(&p->lay, x, y - g.cy + p->scroll) : -1;
+            if(control >= 0 && !p->doc.controls[control].disabled) {
+                b->press_field = control;
+                field_press(b, p, control, x, y - g.cy + p->scroll);
+                return 1;
+            }
             b->focus = WB_FOCUS_PAGE;
             b->pressed = link;
             b->tab_link = -1;
+            b->field = -1;
             return 1;
         }
     }
@@ -1050,6 +1296,15 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
             else wb_go(b, b->addr);
             return 1;
         }
+        if(b->press_field >= 0) {
+            int control = b->press_field;
+            b->press_field = -1;
+            if(p && in(x, y, 0, g.cy, g.cw, g.ch) && wl_control_at(&p->lay, x, y - g.cy + p->scroll) == control) {
+                long at = wl_control_item(&p->lay, control);
+                activate(b, control, x - p->lay.items[at].x, y - g.cy + p->scroll - p->lay.items[at].y);
+            }
+            return 1;
+        }
         if(b->pressed >= 0 && b->pressed == link) {
             int l = b->pressed;
             b->pressed = -1;
@@ -1062,7 +1317,15 @@ int wb_pointer(struct wb *b, int x, int y, unsigned int buttons) {
     return redraw;
 }
 
-int wb_wheel(struct wb *b, int rows) { return scroll_by(b, rows * WHEEL_ROW); }
+int wb_wheel(struct wb *b, int rows) {
+    if(b->list >= 0) {
+        const struct wd_control *c = &wb_current(b)->doc.controls[b->list];
+        int most = (int)c->noptions - LIST_ROWS, top = b->list_top + rows;
+        b->list_top = top > most ? (most > 0 ? most : 0) : top < 0 ? 0 : top;
+        return 1;
+    }
+    return scroll_by(b, rows * WHEEL_ROW);
+}
 
 int wb_resize(struct wb *b, int w, int h) {
     if(w < WB_MIN_W) w = WB_MIN_W;
@@ -1099,6 +1362,53 @@ static void mark_focus(struct wb *b, struct wb_page *p, const struct wp_target *
     for(i = 0; i < p->lay.count; i++) {
         const struct wl_item *it = &p->lay.items[i];
         if(it->link == b->tab_link) wp_frame(pg, it->x - 1, pg->y + it->y - p->scroll - 1, it->w + 2, it->h + 2, C_INK);
+    }
+}
+
+/* The field with the keyboard's focus: a frame, and in a text its caret, with its text kept in view */
+static void mark_field(struct wb *b, struct wb_page *p, const struct wp_target *pg) {
+    struct wd_control *c = &p->doc.controls[b->field];
+    long i = wl_control_item(&p->lay, b->field);
+    const struct wl_item *it;
+    int x, y;
+    if(i < 0) return;
+    it = &p->lay.items[i];
+    x = it->x;
+    y = pg->y + it->y - p->scroll;
+    wp_frame(pg, x - 1, y - 1, it->w + 2, it->h + 2, C_TEAL);
+    if(b->focus != WB_FOCUS_FIELD) return;
+    if(c->kind == WF_AREA) {
+        int lines = (it->h - 8) / WF_H, line, col;
+        fm_where(c, c->caret, &line, &col);
+        if(line < c->top) c->top = line;
+        if(line >= c->top + lines) c->top = line - lines + 1;
+        wp_fill(pg, x + 4 + col * WF_W - 1, y + 4 + (line - c->top) * WF_H, 2, WF_H, C_INK);
+    } else if(c->kind == WF_TEXT || c->kind == WF_PASSWORD) {
+        size_t k, cells = 0;
+        fm_keep_in_view(c, (it->w - 8) / WF_W);
+        for(k = c->first; k < c->caret; k++) if(((unsigned char)c->value[k] & 0xc0) != 0x80) cells++;
+        wp_fill(pg, x + 4 + (int)cells * WF_W - 1, y + (it->h - WF_H) / 2, 2, WF_H, C_INK);
+    }
+}
+
+/* A select's open list, over the page */
+static void paint_list(struct wb *b, struct wb_page *p, const struct wp_target *t) {
+    const struct wd_control *c = &p->doc.controls[b->list];
+    int x, y, w, rows, r;
+    if(!list_place(b, p, &x, &y, &w, &rows)) return;
+    wp_fill(t, x, y, w, rows * LIST_ROW + 2, C_SHEET);
+    wp_frame(t, x, y, w, rows * LIST_ROW + 2, C_INK);
+    for(r = 0; r < rows && (unsigned int)(b->list_top + r) < c->noptions; r++) {
+        const struct wd_option *o = &p->doc.options[c->first_option + (unsigned int)(b->list_top + r)];
+        struct wp_target f = *t;
+        int ry = y + 1 + r * LIST_ROW;
+        if(b->list_top + r == b->list_at) wp_fill(t, x + 1, ry, w - 2, LIST_ROW, C_PICK);
+        if(c->multiple && o->on) wp_fill(t, x + 3, ry + 5, 6, 6, C_TEAL);
+        f.x = x + 1;
+        f.y = ry;
+        f.cw = w - 2;
+        f.ch = LIST_ROW;
+        wp_text(&f, x + 12, ry + 1, o->label, strlen(o->label), 1, 0, o->disabled ? C_MUTED : C_INK);
     }
 }
 
@@ -1188,6 +1498,8 @@ void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
         wp_paint(&p->lay, &p->doc, &b->theme, &pg, 0, p->scroll, b->hover);
         if(b->find_open && b->find_hit) mark_found(b, p, &pg);
         if(b->tab_link >= 0) mark_focus(b, p, &pg);
+        if(b->field >= 0) mark_field(b, p, &pg);
+        if(b->list >= 0) paint_list(b, p, &pg);
     } else wp_fill(&t, 0, g.cy, g.cw, g.ch, C_SHEET);
     /* the scroll bar */
     wp_fill(&t, g.sx, g.cy, WB_SCROLLBAR, g.ch, C_BAND);

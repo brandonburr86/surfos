@@ -68,6 +68,52 @@ struct wd_block {
 
 enum { WR_TEXT, WR_BR, WR_IMAGE, WR_FIELD };
 
+/* Forms (11/1/26, stage 2.6; form.h has what they do). A run of kind WR_FIELD shows a control; a control's value is what
+   a person made of it, so everything here but the page's defaults changes while the page is shown. */
+#define WD_FORMS_MAX     512u           /* forms of a page */
+#define WD_CONTROLS_MAX  4096u          /* controls of a page */
+#define WD_OPTIONS_MAX   16384u         /* a select's options, all of a page's */
+#define WD_FORM_BYTES    (1u << 20)     /* the names, values and labels of a page's forms: a budget of their own */
+#define WD_VALUE_MAX     (64u << 10)    /* the bytes of what is in a field */
+
+#define WC_HIDDEN  8                    /* a control's kind, past the WF_*: <input type=hidden>, which has no box */
+enum { WC_SUBMIT = 1, WC_RESET, WC_PUSH };      /* what a button does */
+enum { WM_GET, WM_POST, WM_DIALOG };    /* a form's method */
+
+struct wd_form {
+    char *action;                       /* its address, absolute; NULL: not one that can be used */
+    char *id;
+    unsigned char method;               /* WM_* */
+    unsigned char password;             /* it has a password field */
+    unsigned char too_much;             /* a limit took something of it: it is never sent */
+    unsigned char here;                 /* no action: the page's own address (until the page's end) */
+    unsigned char action_cut;           /* an action longer than was kept */
+};
+
+struct wd_option {
+    char *value, *label;
+    unsigned char on, dflt, disabled;
+};
+
+struct wd_control {
+    unsigned char kind, role;           /* WF_*, WC_HIDDEN; a button's WC_* */
+    unsigned char checked, dflt_checked;
+    unsigned char disabled, readonly, multiple, image, cut, action_cut, has_value;
+    unsigned char formmethod;           /* a button's: WM_* + 1, 0: the form's */
+    int form;                           /* forms[form], or -1 */
+    int run;                            /* its box, -1: none */
+    char *name;                         /* NULL: none */
+    char *owner;                        /* its form= attribute */
+    char *formaction;                   /* a button's address, absolute, or NULL */
+    char *value, *dflt;                 /* the value now, and as the page has it */
+    size_t len, cap, caret;             /* of value: its bytes, the room for it, where typing goes */
+    size_t first;                       /* the first byte shown (a field too short for its text) */
+    int top;                            /* an area's first line shown */
+    int maxlength;                      /* -1: none */
+    int rows, cols, size;               /* 0: none */
+    unsigned int first_option, noptions;
+};
+
 #define WS_BOLD     0x0001
 #define WS_ITALIC   0x0002
 #define WS_MONO     0x0004              /* code, tt, kbd, samp, pre (every font is monospaced today) */
@@ -95,6 +141,7 @@ struct wd_run {
     int image;                          /* WR_IMAGE: images[image], or -1 */
     unsigned int off, len;              /* its text in text[]: WR_TEXT the text, WR_IMAGE the alt text,
                                            WR_FIELD the label (a value, a button's text, the first option) */
+    int control;                        /* WR_FIELD: controls[control], or -1 */
 };
 
 /* What the window has of an image, by the number in images[] (11/1/26, stage 2.4): the frame shows until px does */
@@ -130,6 +177,14 @@ struct wd_document {
     /* 11/1/26 */
     struct wd_picture *pics;            /* image_count of them: the window fills them in */
     unsigned char *visited;             /* link_count of them, or NULL: 1 for a link to where this window has been */
+    struct wd_form *forms;
+    size_t form_count;
+    struct wd_control *controls;
+    size_t control_count;
+    struct wd_option *options;
+    size_t option_count;
+    size_t form_bytes;                  /* what they hold */
+    int form_charset;                   /* what the page is in: what a form is sent in */
 };
 
 #define WD_TRUNC_BOXES 8                /* boxes or runs past WD_BLOCKS_MAX or WD_RUNS_MAX */

@@ -953,7 +953,7 @@ unittest: test-undertow-html-ubsan
 # browser.c driven as a person drives the window. Each test also builds the real program.
 WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
 WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
-WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
+WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o form.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
                $(BUILD)/host/kernel/driver/cp437.o
 $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
@@ -961,7 +961,7 @@ $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
 -include $(wildcard $(BUILD)/host/wundertow/*.d)
 
-$(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/wundertow/doc.o $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/wundertow/doc.o $(BUILD)/host/wundertow/form.o $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -991,6 +991,18 @@ test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/w
 	$(BUILD)/host/test_wundertow_browser
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
+
+# 11/1/26: forms: the model, what is sent to the byte, and the fields used as a person uses them
+$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
+                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-form: $(BUILD)/host/test_wundertow_form $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_form
+unittest: test-wundertow-form
+.PHONY: test-wundertow-form
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
