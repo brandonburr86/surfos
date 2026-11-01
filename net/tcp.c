@@ -670,6 +670,15 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
             seq = s->rcv_nxt;
         } else if(!datalen && !(flags & (TCP_SYN | TCP_FIN)) && SEQ_LT(s->rcv_nxt, seq) && SEQ_LT(seq, s->rcv_nxt + rcv_open(s))) {
             /* 10/6/26: a bare ACK ahead of us, in the window: acceptable (RFC 793); its ACK counts below */
+        } else if(s->peer_fin && (flags & TCP_FIN) && seq + datalen + 1 == s->rcv_nxt) {
+            /* 11/1/26 (audit B91): its FIN again, with nothing new in it but perhaps the ACK of ours (a BSD stack
+               repeats a FIN that crossed ours so, QEMU's user network too). That ACK counts: CLOSING goes to
+               TIME_WAIT now, where the socket can give its place up, not a second later when our FIN goes again.
+               The answer goes first: the ACK can end the socket */
+            send_ack(s);
+            flags &= (u8)~TCP_FIN;
+            datalen = 0;
+            seq = s->rcv_nxt;
         } else {
             /* out of order or old: say where we are. 10/6/26: to a bare ACK only when it is old (a keepalive, a probe) */
             if(datalen || (flags & (TCP_SYN | TCP_FIN)) || SEQ_LT(seq, s->rcv_nxt)) send_ack(s);
