@@ -732,6 +732,19 @@ unittest: unittest-fsck
 unittest-fsck: $(BUILD)/host/test_fsck
 	$(BUILD)/host/test_fsck
 
+# the command, shell/fsckcmd.c, over a device layer the test scripts; its printf() renamed so that the test keeps the host's
+$(BUILD)/host/kernel/shell/fsckcmd_test.o: shell/fsckcmd.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck command test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -Dprintf=fsck_printf -c $< -o $@
+$(BUILD)/host/test_fsckcmd: tests/host/test_fsckcmd.c $(BUILD)/host/kernel/shell/fsckcmd_test.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-fsckcmd
+.PHONY: unittest-fsckcmd
+unittest-fsckcmd: $(BUILD)/host/test_fsckcmd
+	$(BUILD)/host/test_fsckcmd
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
