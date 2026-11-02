@@ -745,6 +745,21 @@ unittest: unittest-fsckcmd
 unittest-fsckcmd: $(BUILD)/host/test_fsckcmd
 	$(BUILD)/host/test_fsckcmd
 
+# 11/02/26 (the third review): how far a look makes the kernel heap grow, fs/fat_check.c over mm/kalloc.c as it is, the
+# heap in the test's array as test_kalloc has it (tests/host/test_fsckheap.c)
+$(BUILD)/host/fsckheap/fs/fat_check.o: fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck heap test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) -c $< -o $@
+$(BUILD)/host/test_fsckheap: tests/host/test_fsckheap.c tests/host/kalloc_host.h include/fs/fat_check.h \
+                             $(BUILD)/host/fsckheap/fs/fat_check.o $(BUILD)/host/kalloc/mm/kalloc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) $(filter %.c %.o,$^) -o $@
+unittest: unittest-fsckheap
+.PHONY: unittest-fsckheap
+unittest-fsckheap: $(BUILD)/host/test_fsckheap
+	$(BUILD)/host/test_fsckheap
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \

@@ -3123,8 +3123,15 @@ static void deep_and_wide(int type) {
     struct superblock *sb;
     struct vnode *v, *w, *dir;
     char name[32], m[200];
-    u32 i;
+    u32 i, calls_plain;
     u8 *p, *q;
+    t_init(&t, x, 0);                                   /* what a look takes on the volume as it is made */
+    mem_fail_at = 0xFFFFFFFF;
+    mem_calls = 0;
+    (void)run(&t, 0, &r);
+    calls_plain = mem_calls;
+    mem_fail_at = 0;
+    t_done(&t);
     sb = mount(x);
     v = sb->root;
     v->refs++;
@@ -3154,29 +3161,29 @@ static void deep_and_wide(int type) {
     check(r.status == 0 && r.dirs >= 83 && r.files == 711, m);
     t_done(&t);
     {
-        /* each allocation refused, those of the table of names among them: it goes on without comparing names, and says so */
-        u32 calls, n, lost = 0;
+        /* 11/02/26 (the third review): a look takes all it takes at its start, the table of names too, so 80 levels and 700
+           names take as many pieces as the volume they were made on; and each refused in turn ends the look in words, status
+           2, never clean */
+        u32 calls, n;
         t_init(&t, x, 0);
         mem_fail_at = 0xFFFFFFFF;
         mem_calls = 0;
         (void)run(&t, 0, &r);
         calls = mem_calls;
         t_done(&t);
+        snprintf(m, sizeof(m), "FAT%d: a look takes %u pieces of memory, as many as on the volume it was made from (%u)", type, calls, calls_plain);
+        check(calls == calls_plain, m);
         for(n = 1; n <= calls; n++) {
             t_init(&t, x, 0);
             mem_calls = 0;
             mem_fail_at = n;
             (void)run(&t, FAT_CHECK_VERBOSE, &r);
-            if(strstr(t.log, "more names than a check may compare")) {
-                char m2[200];
-                lost++;
-                snprintf(m2, sizeof(m2), "FAT%d: the table of names refused at allocation %u: the look says it is not whole (status %d)", type, n, r.status);
-                check(r.status != FAT_CHECK_CLEAN && strstr(t.log, "not checked whole") && !strstr(t.log, "\nclean"), m2);
-            }
+            snprintf(m, sizeof(m), "FAT%d: allocation %u of %u refused: status %d, said, and not clean", type, n, calls, r.status);
+            check(r.status == FAT_CHECK_TROUBLE && (strstr(t.log, "not enough memory") || strstr(t.log, "out of memory")) &&
+                  !strstr(t.log, "\nclean"), m);
             t_done(&t);
         }
         mem_fail_at = 0;
-        check(lost > 0, "the table of names was refused at some allocation");
     }
     p = r_dir_slots(x, &g, "WIDE       ");
     q = dir_slot_n(x, &g, p, 700);
@@ -3399,6 +3406,49 @@ static void names_said(void) {
     }
 }
 
+/* 11/02/26 (the third review's round): the table of names is taken once, and a directory empties it by taking a new
+   mark, 255 of them before the marks are cleared. 300 directories, each with ONE.TXT and a name it shares with the
+   directory 255 before it and after it, and with none between (Mnnn, n its number less 255 when over): clean, as the
+   marks come round; a second ONE.TXT in the 290th: said, once */
+static void marks_wrap(void) {
+    struct ram *x = image(16);
+    struct geo3 g;
+    struct fat_check_result r;
+    struct tio t;
+    struct superblock *sb;
+    struct vnode *dir;
+    u32 i;
+    char name[16], m[400];
+    u8 *p;
+    sb = mount(x);
+    for(i = 0; i < 300; i++) {
+        snprintf(name, sizeof(name), "D%03u", i);
+        dir = mkdir_or_die(sb->root, name);
+        put_or_die(dir, "ONE.TXT", 0, 0);
+        snprintf(name, sizeof(name), "M%03u.TXT", i % 255);
+        put_or_die(dir, name, 0, 0);
+        vput(dir);
+    }
+    if(fsync_sb(sb)) die("marks: sync");
+    vput(sb->root);
+    sb->ops->unmount(sb);
+    binvalidate(&x->bd);
+    free(sb);
+    geo3(x->mem, &g);
+    t_init(&t, x, 0);
+    (void)run(&t, 0, &r);
+    snprintf(m, sizeof(m), "300 directories, a name shared with the one 255 away: clean (status %d, %u directories):\n%s", r.status, r.dirs, t.log);
+    check(r.status == FAT_CHECK_CLEAN && r.dirs >= 300, m);
+    t_done(&t);
+    p = r_dir_slots(x, &g, "D290       ");
+    memcpy(dir_slot_n(x, &g, p, 3), dir_slot_n(x, &g, p, 2), 11);   /* after "." and "..": M035.TXT becomes a second ONE.TXT */
+    t_init(&t, x, 0);
+    (void)run(&t, 0, &r);
+    snprintf(m, sizeof(m), "and a second ONE.TXT in the 290th: said, once (status %d, %u problems):\n%s", r.status, r.found, t.log);
+    check(r.status == FAT_CHECK_PROBLEMS && r.found == 1 && strstr(t.log, "/D290/ONE.TXT: a second entry with this short name"), m);
+    t_done(&t);
+}
+
 /* One image from a file, by hand: what a look says, what the repair does, and the yardstick over it. The file stays as it is */
 static void image_file(const char *path) {
     struct ram *x;
@@ -3522,7 +3572,8 @@ static void big_stick(void) {
     snprintf(m, sizeof(m), "118 GB (%u clusters): read in pieces of at most %u blocks, %ld KB of memory, %u requests; status %d, %u problems",
              big.n, big_max, mem_peak / 1024, big_req, r.status, r.found);
     printf("    %s\n", m);
-    check(big_max <= 128 && mem_peak < 2 * 1024 * 1024 && r.status == FAT_CHECK_PROBLEMS, m);   /* (and well inside the 4 MB a check may have) */
+    /* (the cap less what the heap may leave over above a check: tests/host/test_fsckheap.c measures the heap itself) */
+    check(big_max <= 128 && mem_peak < (4L << 20) - (68L << 10) && r.status == FAT_CHECK_PROBLEMS, m);
     check(r.found == 1, "and it finds the one thing wrong with it: a chain past its size");
     mem_now = 0;
     free(big_root);
@@ -3577,6 +3628,7 @@ static void big_refused(void) {
 static u8 cap_boot[1024];
 static struct geo3 cap;
 static u32 cap_names;
+static int cap_probing, cap_in_fat;            /* a look stopped at its first read of the FAT: what it took is all that is wanted */
 
 static int cap_read(void *ctx, u32 lba, u32 count, void *buf) {
     u32 i, k;
@@ -3585,6 +3637,7 @@ static int cap_read(void *ctx, u32 lba, u32 count, void *buf) {
     for(i = 0; i < count; i++) {
         u32 at = lba + i;
         u8 *o = (u8 *)buf + i * 512;
+        if(at >= cap.fat1 && at < cap.data_lba) cap_in_fat = 1;
         if(!at || at == 6) memcpy(o, cap_boot, 512);
         else if(at == 1) memcpy(o, cap_boot + 512, 512);
         else if(at >= cap.fat1 && at < cap.fat1 + 2 * cap.spf && (at - cap.fat1) % cap.spf == 0) {
@@ -3602,6 +3655,8 @@ static int cap_read(void *ctx, u32 lba, u32 count, void *buf) {
     }
     return 0;
 }
+
+static bool cap_stop(void *ctx) { (void)ctx; return cap_probing && cap_in_fat; }
 
 static int cap_run(u32 n, struct tio *log, struct fat_check_result *r) {
     u8 *bs = cap_boot;
@@ -3631,40 +3686,66 @@ static int cap_run(u32 n, struct tio *log, struct fat_check_result *r) {
     io.blocks = total;
     io.read = cap_read;
     io.say = t_say;
+    io.stop = cap_stop;
+    cap_in_fat = 0;
     mem_peak = 0;
     fat_check(&io, 0, r);
     mem_now = 0;
     return (int)r->status;
 }
 
-/* The table of a directory's names is the one thing a walk grows, and it stays within what a check may have too. The fixed
-   part of what a check takes comes from a small volume, measured; then a volume whose tables come within a few KB of 4 MB:
-   its root's 300 names would double the table past the cap. The names are then not compared, and the look says so */
+/* does a volume of n clusters fit under the cap? And what the look takes but for its three bitmaps */
+static int cap_fits(u32 n, long *rest) {
+    struct tio log;
+    struct fat_check_result r;
+    t_init(&log, work16, 0);
+    cap_probing = 1;
+    cap_run(n, &log, &r);
+    cap_probing = 0;
+    t_done(&log);
+    if(rest) *rest = mem_peak - 3L * (long)((((n + 2) + 31) >> 5) * 4);
+    return r.stopped;                           /* it began to read the FAT: everything was taken */
+}
+
+/* 11/02/26 (the third review): the table of names is taken once, at the start, so the cap bounds how far the heap grows. Of
+   FAT32 with 32 KB clusters, the largest volume that keeps the whole table (65536 names compared), and the largest that fits
+   at all, found by search; at that edge the table is the smallest, and 300 names in the root are more than it compares */
 static void names_at_cap(void) {
     struct tio log;
     struct fat_check_result r;
-    long fixed;
-    u32 n, bits, cap_bytes = 4u << 20;
+    long whole, rest;
+    u32 lo, hi, mid, n_whole, n_most;
     char m[300];
     cap_names = 10;
-    t_init(&log, work16, 0);
-    n = 1000000;
-    cap_run(n, &log, &r);
-    fixed = mem_peak - 3L * (long)((((n + 2) + 31) >> 5) * 4);
-    t_done(&log);
-    bits = (u32)((cap_bytes - (u32)fixed) / 12) * 4;   /* three bitmaps just within the cap, with the names' first table */
-    n = bits / 4 * 32 - 33;
+    check(cap_fits(1000000, &whole), "a volume of a million clusters of 32 KB fits under the cap");
+    for(lo = 1000000, hi = 1u << 26; hi - lo > 1; ) {
+        mid = lo + (hi - lo) / 2;
+        if(cap_fits(mid, &rest) && rest == whole) lo = mid;
+        else hi = mid;
+    }
+    n_whole = lo;
+    for(lo = n_whole, hi = 1u << 26; hi - lo > 1; ) {
+        mid = lo + (hi - lo) / 2;
+        if(cap_fits(mid, NULL)) lo = mid;
+        else hi = mid;
+    }
+    n_most = lo;
+    printf("    FAT32 with 32 KB clusters: %u clusters (%u GB) keep the whole table of names, %u (%u GB) fit at all\n", n_whole,
+           (u32)((unsigned long long)n_whole * 32768 / 1000000000), n_most, (u32)((unsigned long long)n_most * 32768 / 1000000000));
+    check(n_whole >= 3865664 && n_most > n_whole && !cap_fits(n_most + 1, NULL),
+          "the owner's 118 GB stick keeps the whole table, a volume past it a smaller one, and past the edge none fits");
     cap_names = 300;
     t_init(&log, work16, 0);
-    cap_run(n, &log, &r);
-    snprintf(m, sizeof(m), "a volume of %u clusters, its tables %ld bytes under the cap, 300 names in its root: status %d, %ld bytes at most:\n%s",
-             n, (long)cap_bytes - fixed - 3L * bits, r.status, mem_peak, log.log);
-    check(r.status == FAT_CHECK_TROUBLE && strstr(log.log, "not checked whole") && !strstr(log.log, "\nclean") && mem_peak <= (long)cap_bytes, m);
+    cap_run(n_most, &log, &r);
+    snprintf(m, sizeof(m), "a volume of %u clusters, at the edge, 300 names in its root: status %d, %ld bytes taken:\n%s",
+             n_most, r.status, mem_peak, log.log);
+    check(r.status == FAT_CHECK_TROUBLE && strstr(log.log, "not checked whole") && !strstr(log.log, "\nclean") &&
+          mem_peak <= (4L << 20) - (68L << 10), m);
     t_done(&log);
     cap_names = 10;
     t_init(&log, work16, 0);
-    cap_run(n, &log, &r);
-    check(r.status == FAT_CHECK_CLEAN && mem_peak <= (long)cap_bytes, "the same volume with 10 names: clean, within the cap");
+    cap_run(n_most, &log, &r);
+    check(r.status == FAT_CHECK_CLEAN, "the same volume with 10 names: clean");
     t_done(&log);
 }
 
@@ -3697,6 +3778,7 @@ int main(int argc, char **argv) {
             }
         }
         if(want("bad-reads")) bad_reads();
+        if(want("marks")) marks_wrap();
         if(want("names-said")) names_said();
         if(want("words")) words();
         if(want("many")) many();

@@ -7,9 +7,11 @@ File: fat_check.c  Date: 11/01/26 (the command-line suite, track fsck)
 still lose data, so shell/fsckcmd.c refuses -r, gives this no write function and never asks it
 to repair. The repairs stay, tested on the host (tests/host/test_fsck.c), for a later round: the
 account (docs/superpowers/plans/2026-11-01-cli-suite-fsck.md) lists what that round must fix.
-A check takes at most CHECK_MEM_MOST of the kernel heap, which keeps what it once grew to: a
-volume that needs more is refused before anything is taken. FAT_CHECK_PLAN: a look says what a
-repair would do; the kernel command does not ask for that.
+A check makes the kernel heap grow by CHECK_MEM_MOST at most, and the heap keeps what it once
+grew to: so everything a look takes is taken at its start, the table of names too, sized once for
+what the volume can hold (names_size()), and a volume that needs more is refused before anything is
+taken (the third review: a table that doubled left its old copies behind it). FAT_CHECK_PLAN: a
+look says what a repair would do; the kernel command does not ask for that.
 
 fsck: a FAT12, FAT16 or FAT32 volume checked, and on request repaired. Pure: its reads,
 writes, words and its one question go through struct fat_check_io (fs/fat_check.h), so
@@ -110,13 +112,18 @@ that crosses a FAT window at each step reads slowly. Both are bounded, and Ctrl+
 #define PASS_MAX    64              /* passes of one run */
 #define SAY_MAX     40              /* problems said without -v */
 #define DEPTH_MOST  128             /* levels of directories: a path of 256 bytes goes no deeper */
-#define NAMES_FIRST 512             /* slots of the table of a directory's short names, before it grows */
+#define NAMES_FIRST 512             /* slots of the table of a directory's short names, at the least */
 #define NAMES_MOST  (1UL << 17)     /* twice what a directory holds */
+#define NAME_SLOT   12              /* a slot of it: the 11 bytes of a short name and the mark of the directory it is of */
 #define ROOM_NAMES  1000            /* FOUND.000 to FOUND.999 */
-#define CHECK_MEM_MOST (4UL << 20)  /* of the kernel heap, which keeps what it grows to: twice what the owner's 118 GB stick
-                                       needs with its 32 KB clusters (1.8 MB), and room on it to compare a directory of
-                                       65536 names (2.2 MB while that table doubles). 10.1 million clusters fit: 330 GB with
-                                       32 KB clusters (tests/host/test_fsck.c, names_at_cap()) */
+#define CHECK_MEM_MOST (4UL << 20)  /* how far a check may make the kernel heap grow, which keeps what it grows to: the owner's
+                                       118 GB stick with its 32 KB clusters takes 1.8 MB, and the table of names for a
+                                       directory of 65536 of them 1.5 MB more. Of FAT32 with 32 KB clusters, 5.75 million
+                                       clusters (188 GB) have that table whole, and 9.93 million (325 GB) fit at all
+                                       (tests/host/test_fsck.c, names_at_cap(); tests/host/test_fsckheap.c, the heap itself) */
+#define PIECE_EXTRA 32              /* mm/kalloc.c: a block's 16-byte header, and its size rounded up to 16 */
+#define CHECK_HEAP_SLACK (68UL << 10)   /* mm/kalloc.c grows its heap 64 KB at least at a time, in whole 4 KB pages: what may
+                                       be left over above the last piece of a check */
 
 #define ATTR_LABEL   0x08
 #define ATTR_DIR     0x10
@@ -240,10 +247,10 @@ struct fck {
     u32 lfn_total, lfn_next;        /* parts of the set; the part it waits for */
     u8 lfn_sum;
     u8 *names;                      /* this directory's short names, an open hash table */
-    u32 names_slots, names_used;
+    u32 names_slots, names_used;    /* its slots, a power of two fixed for the check; the names of this directory in it */
+    u8 names_mark;                  /* this directory's mark: a slot with another is empty */
     bool names_off;
     u32 names_lost;                 /* directories whose names could not all be compared: the check is not whole */
-    u32 mem_fixed;                  /* what the check holds but for the names' table */
     bool plan_words;                /* FAT_CHECK_PLAN */
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
@@ -641,13 +648,18 @@ static bool short_name_bad(const u8 *p) {
     return false;
 }
 
-/* A short name seen before in this directory: an open hash table, kept to the directory's size. A directory is
-   read through once for names, and the table is its alone: the walk goes into the directories under it after that */
+/* A short name seen before in this directory: an open hash table, taken once for the whole check at the size this
+   volume's directories can need (names_size()). A directory is read through once for names, and the table is its alone:
+   the walk goes into the directories under it after that. Each slot has the mark of the directory that filled it, so a
+   new directory empties the table by taking a new mark; every 255 directories the marks are cleared */
 static void names_reset(struct fck *f) {
-    f->names_slots = NAMES_FIRST;
+    u32 i;
     f->names_used = 0;
     f->names_off = false;
-    memset(f->names, 0, NAMES_FIRST * 11);
+    if(++f->names_mark == 0) {
+        for(i = 0; i < f->names_slots; i++) f->names[i * NAME_SLOT + 11] = 0;
+        f->names_mark = 1;
+    }
 }
 
 static u32 names_hash(const u8 *p) {
@@ -656,25 +668,16 @@ static u32 names_hash(const u8 *p) {
     return h;
 }
 
-static bool names_put(u8 *t, u32 slots, const u8 *p) {
-    u32 i = names_hash(p) & (slots - 1);
-    while(t[i * 11]) {
-        if(!memcmp(t + i * 11, p, 11)) return false;
-        i = (i + 1) & (slots - 1);
+/* p into the table, which is never more than half full; false when the name is in it already */
+static bool names_put(struct fck *f, const u8 *p) {
+    u8 *t = f->names;
+    u32 i = names_hash(p) & (f->names_slots - 1);
+    while(t[i * NAME_SLOT + 11] == f->names_mark) {
+        if(!memcmp(t + i * NAME_SLOT, p, 11)) return false;
+        i = (i + 1) & (f->names_slots - 1);
     }
-    memcpy(t + i * 11, p, 11);
-    return true;
-}
-
-/* twice the slots, within what a check may take: the old table and the new one are held at once */
-static bool names_grow(struct fck *f) {
-    u32 slots = f->names_slots * 2, i;
-    u8 *t;
-    if(slots > NAMES_MOST || f->mem_fixed + (f->names_slots + slots) * 11 > CHECK_MEM_MOST || !(t = (u8 *)kcalloc(slots, 11))) return false;
-    for(i = 0; i < f->names_slots; i++) if(f->names[i * 11]) names_put(t, slots, f->names + i * 11);
-    kfree(f->names);
-    f->names = t;
-    f->names_slots = slots;
+    memcpy(t + i * NAME_SLOT, p, 11);
+    t[i * NAME_SLOT + 11] = f->names_mark;
     return true;
 }
 
@@ -947,13 +950,13 @@ static void slot_look(struct fck *f, struct frame *fr, const u8 *p, u32 lba) {
     if(fr->root) found_note(f, p);
     if(short_name_bad(p)) problem(f, true, "%s: a short name with forbidden characters", f->who);
     if(!f->names_off) {
-        if(f->names_used * 2 >= f->names_slots && !names_grow(f)) {
+        if(f->names_used * 2 >= f->names_slots) {           /* (only when the cap made the table smaller than the volume needs) */
             f->names_off = true;                             /* a second entry of one name is not looked for there */
             if(!f->naming) f->names_lost++;
             note(f, "%s/: more names than a check may compare", f->path);
         }
         if(!f->names_off) {
-            if(!names_put(f->names, f->names_slots, p)) problem(f, true, "%s: a second entry with this short name", f->who);
+            if(!names_put(f, p)) problem(f, true, "%s: a second entry with this short name", f->who);
             else f->names_used++;
         }
     }
@@ -1592,11 +1595,25 @@ static int boot_load(struct fck *f) {
     return -1;
 }
 
-/* what tables_make() and the fck take, in bytes, with the names' first table */
-static u32 tables_need(const struct fck *f) {
+/* what the fck and tables_make() take of the heap, in bytes, but for the table of names: each piece with its header */
+static u32 tables_fixed(const struct fck *f) {
     u32 bits = ((f->end + 31) >> 5) * 4;
-    return 3 * bits + (WINDOWS + 1) * CHUNK * SECTOR + f->cb + DIR_AHEAD * SECTOR + FIX_MAX * sizeof(struct fix) +
-           LOST_MAX * sizeof(struct lost) + DEPTH_MOST * sizeof(struct frame) + NAMES_FIRST * 11 + sizeof(struct fck);
+    return 3 * (bits + PIECE_EXTRA) + (WINDOWS + 1) * (CHUNK * SECTOR + PIECE_EXTRA) + f->cb + DIR_AHEAD * SECTOR +
+           FIX_MAX * sizeof(struct fix) + LOST_MAX * sizeof(struct lost) + DEPTH_MOST * sizeof(struct frame) + sizeof(struct fck) +
+           6 * PIECE_EXTRA;
+}
+
+/* The slots of the table of names, taken once: twice the entries one directory of this volume can hold (SLOTS_MAX at
+   most, as many as its data area holds, or the fixed root's), as a power of two; within room bytes, halved as far as
+   NAMES_FIRST. 0: not even that fits */
+static u32 names_size(const struct fck *f, u32 room) {
+    u32 most = SLOTS_MAX, per = f->cb / 32, slots = NAMES_FIRST;
+    if(f->nclusters < SLOTS_MAX / per) most = f->nclusters * per;
+    if(f->root_entries > most) most = f->root_entries;
+    if(most > SLOTS_MAX) most = SLOTS_MAX;
+    while(slots < NAMES_MOST && slots < 2 * most) slots <<= 1;
+    while(slots > NAMES_FIRST && slots * NAME_SLOT > room) slots >>= 1;
+    return slots * NAME_SLOT <= room ? slots : 0;
 }
 
 /* room for the walk; false when there is none */
@@ -1612,7 +1629,7 @@ static bool tables_make(struct fck *f) {
     f->fix = (struct fix *)kalloc(FIX_MAX * sizeof(struct fix));
     f->lost = (struct lost *)kalloc(LOST_MAX * sizeof(struct lost));
     f->stack = (struct frame *)kalloc(DEPTH_MOST * sizeof(struct frame));
-    f->names = (u8 *)kalloc(NAMES_FIRST * 11);
+    f->names = (u8 *)kcalloc(f->names_slots, NAME_SLOT);     /* every mark 0: no directory's */
     if(!f->reached || !f->dirhead || !f->aux || !f->chunk || !f->clus || !f->dbuf || !f->fix || !f->lost || !f->stack || !f->names) return false;
     for(i = 0; i < WINDOWS; i++) if(!(f->win[i].data = (u8 *)kalloc(CHUNK * SECTOR))) return false;
     return true;
@@ -1782,12 +1799,13 @@ int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result 
     f->plan_words = (flags & FAT_CHECK_PLAN) != 0;
     st = boot_load(f);
     if(st < 0) {
-        u32 need = tables_need(f);
-        f->mem_fixed = need - NAMES_FIRST * 11;
-        if(need > CHECK_MEM_MOST) {
+        /* every piece, the table of names among them, and what the heap may leave over above them: within the cap */
+        u32 fixed = tables_fixed(f) + PIECE_EXTRA + CHECK_HEAP_SLACK;
+        f->names_slots = fixed < CHECK_MEM_MOST ? names_size(f, CHECK_MEM_MOST - fixed) : 0;
+        if(!f->names_slots) {
             /* nothing is taken: the heap would keep it. (FAT32's largest volumes, and big ones with small clusters) */
             say(f, "a volume of %lu clusters takes %lu KB to check, more than the %lu KB a check may have: check it on another computer",
-                (u_long)f->nclusters, (u_long)(need >> 10), (u_long)(CHECK_MEM_MOST >> 10));
+                (u_long)f->nclusters, (u_long)((fixed + NAMES_FIRST * NAME_SLOT + 1023) >> 10), (u_long)(CHECK_MEM_MOST >> 10));
             st = FAT_CHECK_TROUBLE;
         } else if(!tables_make(f)) {
             say(f, "not enough memory for a volume of %lu clusters", (u_long)f->nclusters);
