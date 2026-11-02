@@ -399,7 +399,7 @@ def own_rules():
 
 
 def undecided():
-    """a line on which the search gave up matches no more than it fails to, whatever the options: status 2"""
+    """a line on which the search gave up matches no more than it fails to, whatever the options: status 2, unless -q finds a line"""
     big = b'abcdefghij' * 300000 + b'\n'
     pattern = '\\(.\\).*\\1'
     for options in ([], ['-q'], ['-v'], ['-qv'], ['-c'], ['-cv'], ['-l'], ['-lv'], ['-n']):
@@ -407,8 +407,10 @@ def undecided():
     expect(GREP, ['-cv', pattern, 'f'], files={'f': big}, status=2, out=b'0\n')
     expect(GREP, [pattern, 'f'], files={'f': big + b'xx\n'}, status=2, out=b'xx\n')    # the lines that were decided still count
     expect(GREP, ['-v', pattern, 'f'], files={'f': big + b'xy\n'}, status=2, out=b'xy\n')
-    expect(GREP, ['-q', pattern, 'f'], files={'f': big + b'xx\n'}, status=2)
-    expect(GREP, ['-q', pattern, 'f'], files={'f': b'xx\n' + big}, status=0)            # it stopped before that line
+    expect(GREP, ['-q', pattern, 'f'], files={'f': big + b'xx\n'}, status=0)            # with -q a line found counts more, as POSIX has it
+    expect(GREP, ['-qv', pattern, 'f'], files={'f': big + b'xy\n'}, status=0)
+    expect(GREP, ['-q', pattern, 'f'], files={'f': big + b'xy\n'}, status=2)            # none found: the trouble stands
+    expect(GREP, ['-q', pattern, 'f'], files={'f': b'xx\n' + big}, status=0)
     expect(GREP, ['-q', pattern, 'f', 'nosuch'], files={'f': b'xx\n'}, status=0)        # a file not there, as POSIX says for -q
 
 
