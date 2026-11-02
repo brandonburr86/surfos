@@ -69,6 +69,7 @@ USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a pr
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
 USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): the calculator, user/bc/
+USER_PROGS  += awk           # 11/01/26 (the command-line suite, track lang): the language, user/awk/
 USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
@@ -785,6 +786,40 @@ unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/
 	$(BUILD)/host/test_strtod
 	$(BUILD)/host/test_libm
 	$(BUILD)/host/test_getopt
+
+# 11/01/26 (the command-line suite, track lang): awk, a program of several files in user/awk/. tests/host/test_awk.c
+# runs all of them as they are, main.c too, each run in a fork of its own, with libsurf's regular expressions
+# (tests/host/awk/regex.h) and the test's memory and commands (tests/host/awk_host.h). No sanitizer build here: the test's
+# header says how to run them on the Mac.
+AWK_SRC      = $(wildcard user/awk/*.c)
+AWK_OBJ      = $(AWK_SRC:user/awk/%.c=$(BUILD)/user/awk/%.o)
+AWK_HOST_OBJ = $(AWK_SRC:user/awk/%.c=$(BUILD)/host/awk/%.o)
+DEPS        += $(AWK_OBJ:.o=.d)
+$(BUILD)/user/awk/%.o: user/awk/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/awk: $(AWK_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(AWK_OBJ) $(USER_LIB)
+
+$(BUILD)/host/awk/%.o: user/awk/%.c user/awk/awk.h tests/host/awk_host.h tests/host/awk/regex.h user/include/regex.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/awk -Iuser/awk -include tests/host/awk_host.h -c $< -o $@
+
+$(BUILD)/host/test_awk: tests/host/test_awk.c tests/host/awk/table.inc $(AWK_HOST_OBJ) $(BUILD)/host/text/regex.o \
+                        $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_awk.c $(filter %.o,$^) -lm -o $@
+
+unittest: unittest-lang-awk
+.PHONY: unittest-lang-awk
+unittest-lang-awk: $(BUILD)/host/test_awk
+	$(BUILD)/host/test_awk
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
