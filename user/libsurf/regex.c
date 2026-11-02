@@ -40,9 +40,9 @@ through, with its own stack, for the longest at the leftmost place that has one,
 and the first path to that length is the one reported: a star takes as much as it can first,
 an alternation its first branch first. Time can be exponential, so it counts steps
 and gives up with REG_ESTEPS; a step is about the cost of one state, and what costs more (a comparison,
-clearing groups, a new start) is charged as what it costs. scan() runs first with each back-reference taken
-as any text: most text that does not match is thrown out there without a single step, and the leftmost
-start is known not to be before scan()'s.
+clearing groups, a new start, the copy at a longer match) is charged as what it costs. scan() runs first
+with each back-reference taken as any text: most text that does not match is thrown out there without a
+single step, and the leftmost start is known not to be before scan()'s.
 
 Beyond POSIX, as GNU has them: \+ \? \| in basic syntax, \1 in extended, \w \W \s \S \< \> \b
 \B \` \'. Classes are ASCII: no character above 127 is in [:alpha:] or \w, and REG_ICASE folds only
@@ -195,7 +195,7 @@ static int is_word(int c) {
 
 /* the ranges are sorted and apart (set_sort()): a set of any size costs its logarithm */
 static int set_has(const struct rx *r, const struct rset *s, int c) {
-    const struct rrange *g = r->range + s->first;
+    const struct rrange *g = s->n ? r->range + s->first : NULL; /* a pattern of ASCII sets has no ranges at all */
     int lo = 0, hi = s->n;
     if(c < 128) return (int)(s->bits[c >> 5] >> (c & 31)) & 1;
     while(lo < hi) {
@@ -338,7 +338,7 @@ static void set_class(struct rset *s, int kind) {
 /* the set's ranges in order, those that touch made one. Shell sort with Ciura's gaps, as libsurf's qsort */
 static void set_sort(struct rx *r, struct rset *s) {
     static const int gaps[] = { 21223, 9433, 4193, 1750, 701, 301, 132, 57, 23, 10, 4, 1 };
-    struct rrange *a = r->range + s->first;
+    struct rrange *a = s->n ? r->range + s->first : NULL;
     int gi, i, j, n = 0;
     for(gi = 0; gi < (int)(sizeof(gaps) / sizeof(gaps[0])); gi++) {
         int gap = gaps[gi];
@@ -1621,6 +1621,7 @@ static int bt_try(struct exec *x, int start) {
             continue;
         case R_ACCEPT:
             if(!found || pos > x->me) {
+                x->steps += r->nslot;           /* the copy is work too, and a pattern may have 64000 slots */
                 found = 1;
                 x->me = pos;
                 memcpy(r->best, slot, (size_t)r->nslot * sizeof(int));

@@ -1181,6 +1181,18 @@ static void time_bounds(void) {
     }
     free(s);
     free(p);
+    /* a longer match copies every group's place: with 32000 empty groups that is 256 KB, and it comes at each byte */
+    p = repeated("\\(\\)", 32000, "\\(\\|a\\)*\\1");
+    s = repeated("a", 700000, "");
+    ms = one_run(p, 0, s, 2, S_ESTEPS, 1);
+    checks++;
+    if(ms > 10 * plain) {
+        char g[64];
+        snprintf(g, sizeof(g), "%.0f ms against %.0f", ms, plain);
+        fail("a longer match's copy is charged", "\\(\\)...\\(\\|a\\)*\\1", "...", g, "the same order");
+    }
+    free(s);
+    free(p);
     /* a bracket of 1000 ranges costs little more than one of 10 */
     {
         double few = 1, many = 0;
