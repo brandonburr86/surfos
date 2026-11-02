@@ -566,7 +566,8 @@ static void name_long(struct fck *f) {
             cp = 0x10000 + ((cp - 0xD800) << 10) + (f->lfn[i + 1] - 0xDC00);
             i++;
         } else if(cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;
-        if(cp < 0x20 || (cp >= 0x7F && cp < 0xA0)) cp = '?';
+        if(cp < 0x20 || (cp >= 0x7F && cp < 0xA0) || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2066 && cp <= 0x2069))
+            cp = '?';                                        /* (the last two: the bidirectional controls, which can turn a name round) */
         o += utf8_put(f->name + o, cp);
     }
     f->name[o] = 0;

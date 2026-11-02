@@ -3376,6 +3376,27 @@ static void names_said(void) {
     for(i = 0; i < t.logn; i++) if(t.log[i] == 0x1B) break;
     check(i == t.logn && strstr(t.log, "?[2J") != NULL, "an escape in a name comes out as '?'");
     t_done(&t);
+    {
+        /* a long name "a", U+202E, "b": the bidirectional controls turn what follows round on a terminal that honours them */
+        u8 *q = slot_free(x, &g, 0), sum = 0;
+        static const char shortname[] = "BIDI    TXT";
+        static const u8 pos[13] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+        static const u16 chars[13] = { 'a', 0x202E, 'b', 0x2066, 'c', 0, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+        for(i = 0; i < 11; i++) sum = (u8)(((sum & 1) << 7) + (sum >> 1) + (u8)shortname[i]);
+        memset(q, 0, 64);
+        q[0] = 0x41;
+        q[11] = 0x0F;
+        q[13] = sum;
+        for(i = 0; i < 13; i++) wr16(q + pos[i], chars[i]);
+        memcpy(q + 32, shortname, 11);
+        q[32 + 11] = 0x20;
+        wr32(q + 32 + 28, 3000);
+        t_init(&t, x, 0);
+        (void)run(&t, 0, &r);
+        check(!strstr(t.log, "\xe2\x80\xae") && !strstr(t.log, "\xe2\x81\xa6") && strstr(t.log, "/a?b?c: size 3000") != NULL,
+              "a bidirectional control in a long name comes out as '?'");
+        t_done(&t);
+    }
 }
 
 /* One image from a file, by hand: what a look says, what the repair does, and the yardstick over it. The file stays as it is */
