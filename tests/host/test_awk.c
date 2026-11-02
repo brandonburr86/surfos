@@ -756,6 +756,11 @@ static void language(void) {
     is("BEGIN { print \"ab\" ~ /^(a|b)+$/, \"a{2}\" ~ /a\\{2\\}/, \"aa\" ~ /^a{2}$/, \"{\" ~ /{/ }", NULL, "1 1 1 1\n");
     is("BEGIN { s = \"aaa\"; print gsub(\"a\", \"b\", s), s; t = \"a.b\"; gsub(\".\", \"x\", t); print t; gsub(/x/, \"\\\\\\\\&\", t); print t }", NULL, "3 bbb\nxxx\n\\x\\x\\x\n");
     is("BEGIN { s = \"a\"; sub(/a/, \"\\\\\\\\\\\\&\", s); print s; t = \"a\"; sub(/a/, \"\\\\q\", t); print t }", NULL, "\\&\n\\q\n");
+    /* a replacement by POSIX's text: & the match, \& a plain &, \\ a plain \, any other \ itself; each as mawk has it */
+    args_are("m\n", "\\q\n", 0, "{ sub(/m/, r); print }", "r=\\\\\\\\q", "-", NULL, NULL, NULL);
+    is("BEGIN { r[1] = \"\\\\q\"; r[2] = \"\\\\\\\\q\"; r[3] = \"\\\\\\\\\\\\q\"; r[4] = \"\\\\&\"; r[5] = \"\\\\\\\\&\"; r[6] = \"\\\\\\\\\\\\&\"; r[7] = \"\\\\\\\\\\\\\\\\&\";"
+       " r[8] = \"\\\\\"; r[9] = \"\\\\\\\\\"; r[10] = \"&&\"; r[11] = \"a\\\\\\\\b&\"; for(i = 1; i <= 11; i++) { s = \"m\"; sub(/m/, r[i], s); print s } }",
+       NULL, "\\q\n\\q\n\\\\q\n&\n\\m\n\\&\n\\\\m\n\\\n\\\n" "mm\na\\bm\n");
     is("{ sub(/$/, \"!\"); print; sub(/^/, \">\"); print }", "a\n", "a!\n>a!\n");
     is("{ $2 = \"x\"; gsub(/x/, \"y\"); print $2, NF }", "a b c\n", "y 3\n");
     is("{ sub(/b/, \"X Y\", $2); print; print NF }", "a b c\n", "a X Y c\n3\n");
