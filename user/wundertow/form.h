@@ -75,8 +75,9 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
 /* A control the page has and no model holds: its form is not sent, as for a limit. owner: its form= attribute, or NULL. */
 void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner);
 
-/* On a page in a charset this browser does not read: may this string not be what the page says? Its bytes over 127 read
-   as '?', and a reference to any character is no byte of that charset. */
+/* May this string not be what the page says? On a page in a charset this browser does not read, bytes over 127 read as
+   '?', and a reference to any character is no byte of that charset; on any page, a reference the scanner does not know
+   stays as it was written, and a browser may know it. */
 int fm_unsure(const struct wd_document *d, const char *s);
 
 /* An option of the open select: its text (collapsed), its value (NULL: the text), its label attribute (NULL or empty: the

@@ -479,12 +479,11 @@ static int meta_charset(const unsigned char *s, size_t n, size_t *i, char *label
     return pragma && charset_in_content(content, label, cap);
 }
 
-/* The first <meta charset> or <meta http-equiv=Content-Type> in the first PRESCAN bytes, outside comments */
-static int prescan(const unsigned char *s, size_t n, char *label, size_t cap) {
+/* The first <meta charset> or <meta http-equiv=Content-Type> in n bytes, outside comments */
+static int prescan_all(const unsigned char *s, size_t n, char *label, size_t cap) {
     const unsigned char *j;
     char name[16], val[256];
     size_t i = 0, k;
-    if(n > PRESCAN) n = PRESCAN;
     while(i < n && (j = memchr(s + i, '<', n - i)) != NULL) {
         i = (size_t)(j - s);
         if(n - i >= 4 && !memcmp(s + i, "<!--", 4)) {
@@ -503,6 +502,10 @@ static int prescan(const unsigned char *s, size_t n, char *label, size_t cap) {
         } else i++;
     }
     return 0;
+}
+
+static int prescan(const unsigned char *s, size_t n, char *label, size_t cap) {
+    return prescan_all(s, n > PRESCAN ? PRESCAN : n, label, cap);
 }
 
 /* Well-formed UTF-8; a character cut short by the end of the body is forgiven when a whole one came
@@ -589,7 +592,10 @@ int ut_html_charset(const unsigned char *in, size_t len, const char *label, int 
 
 int ut_html_declared(const unsigned char *in, size_t len) {
     char meta[UT_HTML_LABEL_MAX];
-    return prescan(in, len, meta, sizeof(meta));
+    size_t i;
+    if(len >= 5 && !memcmp(in, "<?xml", 5))
+        for(i = 5; i + 8 < len && in[i] != '>'; i++) if(!memcmp(in + i, "encoding", 8)) return 1;
+    return prescan_all(in, len, meta, sizeof(meta));
 }
 
 int ut_html_sniff(const unsigned char *s, size_t n) {

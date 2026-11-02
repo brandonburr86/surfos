@@ -127,6 +127,7 @@ struct bd {
     int inert_el;                       /* of which */
     int base_seen;                      /* a <base href> has come: for forms, the first is the only one that counts */
     int skip_off;                       /* in what is hidden, a disabled fieldset or a legend of one, not followed */
+    int skip_fields;                    /* fieldsets open in there, from the first disabled one on */
     int legends;                        /* legends of disabled fieldsets open: b->fb.off is not all that says what is in them */
     int undeclared;                     /* nothing says what charset the page is in */
 
@@ -1259,6 +1260,7 @@ static void start_hidden(struct bd *b, struct ut_html_tag *t) {
     b->skip_foreign = t->el == E_SVG || t->el == E_MATH;
     b->skip_inert = 0;
     b->skip_off = 0;
+    b->skip_fields = 0;
 }
 
 /* A form's start. Its address, as a link's, has no whitespace at its ends. */
@@ -1296,13 +1298,16 @@ static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
         return;
     }
     if(el == E_FORM && t->end) fm_form_end(&b->fb);
+    if(el == E_FIELDSET && t->end && b->skip_fields) b->skip_fields--;
     if(t->end) return;
     if(el == E_FORM) form_start(b, t);
     else if(el == E_INPUT) input(b, t);
     else if(el == E_SELECT || (el == E_BUTTON && !attr_is(t, A_TYPE, "button") && !attr_is(t, A_TYPE, "reset")))
         fm_lost(&b->d, &b->fb, t->seen[A_FORM] ? t->val[A_FORM] : NULL);
-    else if(el == E_FIELDSET && t->seen[A_DISABLED]) b->skip_off = 1;
-    else if(el == E_BASE && t->seen[A_HREF] && !b->base_seen) b->fb.lost = 1;
+    else if(el == E_FIELDSET && (t->seen[A_DISABLED] || b->skip_fields)) {
+        b->skip_off = 1;
+        if(!whole) b->skip_fields++;
+    } else if(el == E_BASE && t->seen[A_HREF] && !b->base_seen) b->fb.lost = 1;
 }
 
 static void start_tag(struct bd *b, struct ut_html_tag *t) {
@@ -1529,7 +1534,11 @@ static void hidden_tag(struct bd *b, struct ut_html_tag *t, int whole) {
     if(b->skip_inert && b->inert_el == E_TEMPLATE) return;     /* a template holds what ends what is around it */
     if(el != b->skip_el) return;
     if(t->end) {
-        if(!--b->skip_n) b->skip_el = E_OTHER;
+        if(!--b->skip_n) {
+            b->skip_el = E_OTHER;
+            b->skip_foreign = 0;
+            if(b->skip_fields) b->fb.lost = 1;      /* an end tag a browser need not take here: that fieldset may go on */
+        }
     } else if(!whole && el != E_FORM) b->skip_n++;             /* (a form in a form is no element) */
 }
 
@@ -1702,10 +1711,9 @@ static void markup(struct bd *b) {
         }
     } else if((c | 0x20) >= 'a' && (c | 0x20) <= 'z') {
         if(tag(b, p + 1, 0) && (ut_html_flags(t->el) & (F_RAW | F_RCDATA)) &&
-           !(t->selfclose && (b->xhtml || (b->skip_foreign && (b->skip_n || t->el != E_TEXTAREA)))) &&
-           (!b->select || b->skip_n || t->el == E_SCRIPT))
+           !(t->selfclose && (b->xhtml || b->skip_foreign)) && (!b->select || b->skip_n || t->el == E_SCRIPT))
             raw(b, t->el, t->name);
-        else if(t->el == E_TEXTAREA && t->selfclose && b->xhtml && !b->skip_n && !b->select)
+        else if(t->el == E_TEXTAREA && t->selfclose && b->xhtml && (!b->skip_n || (b->skip_live && !b->skip_inert)))
             field(b, WF_AREA, "", 0, 0, area_control(b, b->pos, b->pos));
     } else {
         text_char(b, '<');

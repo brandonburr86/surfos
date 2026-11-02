@@ -585,17 +585,32 @@ static void encoding(void) {
     refuses("<form action=/s><fieldset disabled><legend hidden><input name=a value=1></legend></fieldset></form>", "more than", "a hidden one too");
     sends("<form action=/s><fieldset disabled><legend>Words</legend><input name=b value=2></fieldset><input name=c value=3></form>", "https://forms.test/s?c=3", "a legend that is words is nothing");
     sends("<form action=/s><fieldset><legend><input name=a value=1></legend></fieldset></form>", "https://forms.test/s?a=1", "and one of a fieldset that is not disabled");
+    sends("<form action=/s><fieldset><legend hidden><input name=a value=1></legend></fieldset></form>", "https://forms.test/s?a=1", "hidden too");
     sends("<form action=/s><fieldset disabled><legend></legend></fieldset><legend><input name=c value=3></legend></form>", "https://forms.test/s?c=3", "nor one after it");
     /* a disabled fieldset where it is not followed: only what it may hold */
     sends("<form action=/s><input name=a value=1></form><div hidden><fieldset disabled><input name=x></fieldset></div>", "https://forms.test/s?a=1", "a form elsewhere goes");
     sends("<div hidden><fieldset disabled></fieldset></div><form action=/s><div hidden><input name=y value=2></div></form>", "https://forms.test/s?y=2", "and what comes in other hidden content");
     sends("<div hidden><fieldset disabled></fieldset></div><form action=/s><input name=y value=2></form>", "https://forms.test/s?y=2", "and what is not hidden");
+    refuses("<form action=/a><span hidden><fieldset disabled></span><input name=b value=1></fieldset></form>", "more than", "one that an end tag of what hides it may not end");
+    refuses("<form action=/a><span hidden><fieldset disabled><fieldset></fieldset></span><input name=b value=1></fieldset></form>", "more than", "with one inside it that ended");
+    sends("<form action=/a><div hidden><fieldset disabled></fieldset><fieldset></fieldset></div><input name=b value=1></form>", "https://forms.test/a?b=1", "one that ended is none");
+    sends("<svg></svg><form action=/a><script/><input name=x value=1></script><input name=b value=2></form>", "https://forms.test/a?b=2", "after svg, a script is raw text, ended or not");
     /* references this browser does not know are not what a browser sends */
     refuses("<form action=/s><input type=hidden name=h value='x&sum;y'></form>", "more than", "in a value");
     refuses("<form action=/s><input name='a&beta;' value=1></form>", "more than", "in a name");
     refuses("<form action=/s><select name=s><option value='&hearts;'>A</select></form>", "more than", "in an option's value");
     refuses("<form action=/s><select name=s><option>&spades;</select></form>", "more than", "in the text it sends");
     refuses("<form action=/s><textarea name=t>&check;</textarea></form>", "more than", "in a text area");
+    refuses("<form action=/s><input name=h value='&there4;'></form>", "more than", "with a digit in it");
+    refuses("<form action=/s><input name=h value='&Alpha;'></form>", "more than", "with a capital");
+    refuses("<form action=/s><input name=h value='a & b &sum;'></form>", "more than", "after another ampersand");
+    sends("<form action=/s><input name=q value=x><input type=submit value='Find &rArr;'></form>", "https://forms.test/s?q=x", "not in what cannot go: a label with no name");
+    sends("<form action=/s><input name=q value=x><input type=reset name=r value='&rArr;'><input type=button name=b value='&rArr;'><button type=reset name=c value='&rArr;'>C</button></form>", "https://forms.test/s?q=x", "a button that sends nothing");
+    sends("<form action=/s><input name=q value=x><input name=n value='&rArr;' disabled><input value='&rArr;'><input type=file name=f value='&rArr;'><input type=image name=i value='&rArr;'></form>", "https://forms.test/s?q=x&f=", "what is disabled, has no name, or never sends its value");
+    sends("<form action=/s><select name=s><option value='&rArr;' disabled>A<option value=1 selected>B</select></form>", "https://forms.test/s?s=1", "a disabled option");
+    refuses("<form action=/s><input type=submit name=go value='Find &rArr;'></form>", "more than", "a button with a name can go");
+    refuses("<form action='/a&sum;b'><input name=a value=1></form>", "more than", "in the address");
+    refuses("<form action=/s><button formaction='/a&sum;b'>B</button></form>", "more than", "in a button's");
     sends("<form action=/s><select name=s><option value=1>&spades;</select></form>", "https://forms.test/s?s=1", "not in what it only shows");
     sends("<form action=/s><input name=h value='a&b c&d'><input name=i value='&amp;&#38;&'></form>", "https://forms.test/s?h=a%26b+c%26d&i=%26%26%26", "an ampersand is one");
     sends("<form action=/s><input name=h value='&eacute;'></form>", "https://forms.test/s?h=%C3%A9", "one it knows is its character");
@@ -612,6 +627,10 @@ static void encoding(void) {
         check(!build("<form action='/a'><textarea name='t'/><input name='b' value='1'/></form>", &d), "a page of XHTML");
         check(d.control_count == 2 && d.controls[0].kind == WF_AREA && d.controls[0].run >= 0 && !d.controls[0].len, "<textarea/> is a text area with nothing in it");
         wd_free(&d);
+        check(!build("<form action='/a'><div hidden='hidden'><textarea name='t'/></div></form>", &d) && d.control_count == 1, "under the hidden attribute too");
+        wd_free(&d);
+        check(!build("<form action='/a'><div hidden='hidden'><template><textarea name='t'/></template></div></form>", &d) && !d.control_count, "not in a template");
+        wd_free(&d);
         content_type = "text/html";
     }
     /* what nothing says */
@@ -625,6 +644,20 @@ static void encoding(void) {
         check(!build_as(PAGE, "<form action=/a><input name=s value='\xc3\xbc'></form>", "", &d) && d.form_charset == UT_CS_UTF8, "with UTF-8 in it");
         wd_free(&d);
         check(!build_as(PAGE, "\xef\xbb\xbf<form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "with a byte order mark");
+        wd_free(&d);
+        {
+            static char big[3000];
+            char *e = big;
+            e += snprintf(e, 40, "<html><head><title>");
+            memset(e, 't', 1100);
+            e += 1100;
+            snprintf(e, 100, "</title><meta charset=utf-8></head><form action=/a><input name=s></form>");
+            check(!build_as(PAGE, big, "", &d) && d.form_charset == UT_CS_UTF8, "a meta after the first 1024 bytes: a browser's parser sees it");
+            wd_free(&d);
+        }
+        check(!build_as(PAGE, "<?xml version='1.0' encoding='UTF-8'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "an XML declaration");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "that says none");
         wd_free(&d);
         content_type = "application/xhtml+xml";
         check(!build_as(PAGE, "<form action='/a'><input name='s'/></form>", "", &d) && d.form_charset == UT_CS_UTF8, "XHTML is UTF-8");
@@ -678,7 +711,18 @@ static void encoding(void) {
         e += 5000;
         snprintf(e, 100, "/\"><form action=x><input name=a value=1></form>");
         sends(big, "https://forms.test/b/x?a=1", "one too long after the first");
+        {
+            struct wd_document d;
+            e = big;
+            e += snprintf(e, 80, "<base href=\"https://other.test/");
+            memset(e, 'a', 5000);
+            e += 5000;
+            snprintf(e, 100, "/\"><a href=z>z</a>");
+            check(!build(big, &d) && !strcmp(d.links[0].url, "https://forms.test/dir/z"), "one too long is no base for links");
+            wd_free(&d);
+        }
         refuses("<div hidden><base href=https://other.test/></div><form action=x><input name=a value=1></form>", "more than", "one in what is not followed");
+        sends("<base href=https://other.test/d/><div hidden><base href=/x/></div><form action=x><input name=a value=1></form>", "https://other.test/d/x?a=1", "not after the first");
         sends("<base href='https://other.test/d/?q'><form action=x><input name=a value=1></form>", "https://other.test/d/x?a=1", "a query in one is nothing");
     }
     /* accept-charset */
@@ -703,6 +747,9 @@ static void encoding(void) {
         check(!fm_submit(&d, 1, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%E9"), "HTML 4's UNKNOWN: the page's");
         check(!fm_submit(&d, 2, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%C3%A9"), "and on to the next");
         check(!fm_submit(&d, 3, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%C3%A9"), "UTF-16 goes as UTF-8");
+        wd_free(&d);
+        check(!build_as(PAGE, "<form accept-charset=utf-16le><input name=a></form><form accept-charset=UTF-16BE><input name=a></form>", "windows-1252", &d), "each byte order");
+        check(d.forms[0].accept == UT_CS_UTF8 + 1 && d.forms[1].accept == UT_CS_UTF8 + 1, "of it");
         wd_free(&d);
         {
             static char big[400];

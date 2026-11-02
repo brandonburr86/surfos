@@ -231,20 +231,27 @@ void fm_select_end(struct wd_document *d, struct fm_build *f) {
     f->select = -1;
 }
 
-int fm_unsure(const struct wd_document *d, const char *s) {
-    if(d->form_charset != UT_CS_ASCII || !s) return 0;
-    for(; *s; s++) if(*s == '?' || (unsigned char)*s >= 0x80) return 1;
-    return 0;
-}
-
-/* "&name;" left in a string: a reference the scanner does not know, and a browser may: what it says is not known */
+/* "&name;" left in a string */
 static int unread_ref(const char *s) {
     static const char word[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for(; s && (s = strchr(s, '&')); s++) {
+    for(; (s = strchr(s, '&')); s++) {
         size_t n = strspn(s + 1, word);
         if(n && s[1 + n] == ';') return 1;
     }
     return 0;
+}
+
+int fm_unsure(const struct wd_document *d, const char *s) {
+    if(!s) return 0;
+    if(unread_ref(s)) return 1;
+    if(d->form_charset != UT_CS_ASCII) return 0;
+    for(; *s; s++) if(*s == '?' || (unsigned char)*s >= 0x80) return 1;
+    return 0;
+}
+
+/* Can this control's name and value go, whatever is done with it? */
+static int may_go(const struct wd_control *c) {
+    return c->name && !c->disabled && !c->image && c->kind != WF_FILE && (c->kind != WF_BUTTON || c->role == WC_SUBMIT);
 }
 
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
@@ -262,11 +269,12 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
         }
         if(c->form < 0) continue;
         if(c->kind == WF_PASSWORD) d->forms[c->form].password = 1;
-        if(c->cut || fm_unsure(d, c->name) || fm_unsure(d, c->dflt) || unread_ref(c->name) || unread_ref(c->dflt))
-            d->forms[c->form].too_much = 1;
+        if(c->cut) d->forms[c->form].too_much = 1;
+        if(!may_go(c)) continue;
+        if(fm_unsure(d, c->name) || fm_unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
         for(k = 0; k < c->noptions; k++) {
-            const char *v = d->options[c->first_option + k].value;
-            if(fm_unsure(d, v) || unread_ref(v)) d->forms[c->form].too_much = 1;
+            const struct wd_option *o = &d->options[c->first_option + k];
+            if(!o->disabled && fm_unsure(d, o->value)) d->forms[c->form].too_much = 1;
         }
         if(d->form_charset == UT_CS_ASCII && c->kind == WC_HIDDEN && c->name && !fm_differs(c->name, "_charset_"))
             d->forms[c->form].too_much = 1;     /* it would name the page's charset */

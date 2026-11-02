@@ -96,7 +96,7 @@ int ut_html_utf16(const unsigned char *in, size_t len, const char *label, unsign
 int ut_html_charset(const unsigned char *in, size_t len, const char *label, int html, size_t *start,
                     char *unknown, size_t cap);
 
-/* Does a <meta> in the first 1024 bytes name a charset? (11/1/26: a form's bytes depend on whether anything said one) */
+/* Does a <meta> anywhere, or an <?xml encoding=...?> at the start, name a charset? (11/1/26: a form's bytes depend on it) */
 int ut_html_declared(const unsigned char *in, size_t len);
 
 /* No Content-Type: a body is HTML when it starts like HTML (the MIME sniffing standard's list) */
