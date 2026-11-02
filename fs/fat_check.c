@@ -251,6 +251,7 @@ struct fck {
     u8 names_mark;                  /* this directory's mark: a slot with another is empty */
     bool names_off;
     u32 names_lost;                 /* directories whose names could not all be compared: the check is not whole */
+    u32 backup_bad;                 /* the backup boot sector, when it cannot be read */
     bool plan_words;                /* FAT_CHECK_PLAN */
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
@@ -1180,6 +1181,7 @@ static void walk(struct fck *f, bool first_look) {
     f->nfix = f->nlost = 0;
     memset(f->found_used, 0, sizeof(f->found_used));
     if(f->boot_doubt) doubt(f, BAR_BOOT, "the boot sector: %s", f->boot_doubt);
+    if(f->backup_bad) problem(f, true, "the backup boot sector (block %lu) cannot be read", (u_long)f->backup_bad);
     if(f->fat_big) {
         note(f, "the FAT is far larger than its clusters need: the boot sector's cluster size may be wrong");
         bar(f, BAR_BOOT);
@@ -1587,7 +1589,10 @@ static int boot_load(struct fck *f) {
         f->fsi = fsi && fsi != 0xFFFF && fsi < f->rsv && fsi != bk ? fsi : 0;
         if(!f->fsi) note(f, "no usable FSInfo sector (the boot sector says %lu)", (u_long)fsi);
         if(bk && bk != 0xFFFF && bk < f->rsv) {
-            if(rd(f, bk, 1, f->sec2) != 0) { if(f->halt) return stopped_status(f); note(f, "the backup boot sector cannot be read"); }
+            if(rd(f, bk, 1, f->sec2) != 0) {                /* a problem, as FSInfo's would be: every look says it */
+                if(f->halt) return stopped_status(f);
+                f->backup_bad = bk;
+            }
             else if(memcmp(bs + 11, f->sec2 + 11, 13) || memcmp(bs + 32, f->sec2 + 32, 20)) f->boot_doubt = "its backup describes another shape of volume";
             else if(memcmp(bs, f->sec2, SECTOR)) say(f, "note: the backup boot sector (block %lu) differs from the boot sector", (u_long)bk);
         } else note(f, "no backup boot sector");

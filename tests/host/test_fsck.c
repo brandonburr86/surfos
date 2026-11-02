@@ -207,6 +207,7 @@ struct tio {
     u32 pull_at;                        /* gone at this write (0: never) */
     int tear, device;                   /* how it lands; FLUSH_* */
     u32 bad_read;                       /* this block + 1 cannot be read (0: none) */
+    u32 bad_hits;                       /* reads that met it */
     u32 dying_at;                       /* from this read on nothing can be (0: never) */
     u32 write_fail_at;                  /* this write is refused */
     u32 stop_at;                        /* stop() says so from this device request on (0: never) */
@@ -325,7 +326,7 @@ static int t_read(void *ctx, u32 lba, u32 count, void *buf) {
     t->reads++;
     t->read_blocks += count;
     if(count > t->max_read) t->max_read = count;
-    if(t->bad_read && lba < t->bad_read && t->bad_read <= lba + count) return BDEV_EIO;
+    if(t->bad_read && lba < t->bad_read && t->bad_read <= lba + count) { t->bad_hits++; return BDEV_EIO; }
     if(t->dying_at && t->reads >= t->dying_at) return BDEV_EIO;
     if(lba + count > t->r->bd.nblocks) die("a read past the device");
     memcpy(buf, t->r->mem + lba * 512, count * 512);
@@ -3449,6 +3450,41 @@ static void marks_wrap(void) {
     t_done(&t);
 }
 
+/* 11/02/26 (the third review): each block a look reads, unreadable in turn on a clean volume. The look says what it could
+   not read and is never "clean" (the page promises that): a backup boot sector that could not be read ended clean */
+static void unreadable(int type) {
+    struct ram *x = image(type);
+    struct geo3 g;
+    struct fat_check_result r;
+    struct tio t;
+    u32 lba, hit = 0, end;
+    char m[400];
+    geo3(x->mem, &g);
+    t_init(&t, x, 0);
+    (void)fat_check(&t.io, 0, &r);
+    mem_now = 0;
+    snprintf(m, sizeof(m), "FAT%d: the volume is clean to begin with:\n%s", type, t.log);
+    check(r.status == FAT_CHECK_CLEAN, m);
+    t_done(&t);
+    end = g.data_lba + 64 * g.spc;
+    for(lba = 0; lba < end && lba < x->bd.nblocks; lba += lba < 64 ? 1 : 3) {
+        t_init(&t, x, 0);
+        t.bad_read = lba + 1;
+        (void)fat_check(&t.io, 0, &r);
+        mem_now = 0;
+        if(t.bad_hits) {
+            hit++;
+            if(r.status == FAT_CHECK_CLEAN || strstr(t.log, "\nclean")) {
+                snprintf(m, sizeof(m), "FAT%d: block %u cannot be read, and the look ends clean:\n%s", type, lba, t.log);
+                check(0, m);
+            }
+        }
+        t_done(&t);
+    }
+    snprintf(m, sizeof(m), "FAT%d: %u blocks a look reads, each unreadable in turn: not one look clean", type, hit);
+    check(hit > 0, m);
+}
+
 /* One image from a file, by hand: what a look says, what the repair does, and the yardstick over it. The file stays as it is */
 static void image_file(const char *path) {
     struct ram *x;
@@ -3778,6 +3814,7 @@ int main(int argc, char **argv) {
             }
         }
         if(want("bad-reads")) bad_reads();
+        if(want("unreadable")) for(k = 0; k < 4; k++) unreadable(types[k]);
         if(want("marks")) marks_wrap();
         if(want("names-said")) names_said();
         if(want("words")) words();
