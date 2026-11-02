@@ -6,13 +6,15 @@
 
 #include <fcntl.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
 
-/* saveutil.h reads SurfOS's struct stat. The name stat is both a struct's and a function's, so one macro does for both. */
+/* saveutil.h and sed read SurfOS's struct stat. The name stat is both a struct's and a function's, so one macro does for both. */
 struct tool_stat {
-    unsigned int type, size, mtime;
+    unsigned int type, size, mtime, ino;
+    char fs[8], dev[24];
 };
 
 static int tool_stat(const char *path, struct tool_stat *out) {
@@ -22,6 +24,9 @@ static int tool_stat(const char *path, struct tool_stat *out) {
         out->type = (unsigned int)st.st_mode;
         out->size = (unsigned int)st.st_size;
         out->mtime = (unsigned int)st.st_mtime;
+        out->ino = (unsigned int)st.st_ino;
+        out->fs[0] = 0;
+        snprintf(out->dev, sizeof(out->dev), "%lu", (unsigned long)st.st_dev);
     }
     return r;
 }

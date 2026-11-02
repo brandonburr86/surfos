@@ -363,6 +363,15 @@ def own_rules():
     expect(SED, ['-e', '#nope', '-e', 'p'], b'a\n', out=twice)
     expect(SED, ['-f', 's'], b'a\n', {'s': b'#normalise\np\n'}, out=twice)
     expect(SED, ['-i', '-f', 's', 'f'], b'', {'s': b'#normalise line ends\ns/x/y/\n', 'f': b'axb\n'}, after={'s': b'#normalise line ends\ns/x/y/\n', 'f': b'ayb\n'})
+    # two names for one file are one output. GNU's opens it twice, each with its own place, and one overwrites the other
+    expect(SED, ['-n', '1w ./o\n2w o'], AB, after={'o': b'a\nb\n'})
+    expect(SED, ['-n', '1w o\n2w ./o\n3w .//o'], AB, after={'o': b'a\nb\nc\n'})
+    expect(SED, ['-n', '1w d/../o\n2w o'], AB, {'d/x': b''}, after={'o': b'a\nb\n'})
+    expect(SED, ['-n', '1w d/o\n2w d/./o\n3w o'], AB, {'d/x': b''}, after={'o': b'c\n'})     # and d/o is not o
+    expect(SED, ['-n', '1w o\n2w ./o'], AB, {'o': b'old\n'}, after={'o': b'a\nb\n'})
+    # a name that is the working name of another: one rename would undo the other
+    expect(SED, ['-n', '1w o\n2w o.tmp'], AB, status=2, after={}, said=b'o.tmp')
+    expect(SED, ['-n', '1w o.tmp\n2w o'], AB, after={'o': b'b\n', 'o.tmp': b'a\n'})
     # no case conversion: a sentence, not a letter in the file
     for replacement in ('\\U&', '\\L&', '\\u&', '\\l&', '&\\E'):
         expect(SED, ['-i', 's/b/%s/' % replacement, 'f'], b'', {'f': b'abc\n'}, status=2, after={'f': b'abc\n'}, said=b'case conversion')

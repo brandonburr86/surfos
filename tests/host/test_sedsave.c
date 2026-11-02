@@ -271,6 +271,24 @@ static void w_files(void) {
     sim_reset();
     sim_put("a.txt", "1\n2\n");
     check(sed("-n", "1w out.txt\n2w out.txt", "a.txt", NULL) == 0 && file_is("out.txt", "1\n2\n"), "w twice to one file");
+    /* FAT ignores case, as this file system does: two names, one file, one output */
+    sim_reset();
+    sim_put("a.txt", "1\n2\n");
+    check(sed("-n", "1w OUT.TXT\n2w out.txt", "a.txt", NULL) == 0 && file_is("out.txt", "1\n2\n") && sim_names() == 2, "w in two cases, a new file");
+    sim_reset();
+    sim_put("a.txt", "1\n2\n");
+    sim_put("out.txt", "old\n");
+    check(sed("-n", "1w out.txt\n2w OUT.TXT", "a.txt", NULL) == 0 && file_is("out.txt", "1\n2\n") && sim_names() == 2, "w in two cases, a file that is there");
+    sim_reset();
+    sim_put("a.txt", "1\n2\n");
+    check(sed("-n", "1s/1/x/w Out.Txt\n2w out.txt\n2w OUT.TXT", "a.txt", NULL) == 0 && file_is("out.txt", "x\n2\n2\n") && sim_names() == 2, "s's w and w");
+    /* one name that is another's working name would lose the other's lines at the end: refused */
+    sim_reset();
+    sim_put("a.txt", "1\n2\n");
+    check(sed("-n", "1w out\n2w out.tmp", "a.txt", NULL) == 2 && sim_names() == 1, "w to the name the other goes through");
+    sim_reset();
+    sim_put("a.txt", "1\n2\n");
+    check(sed("-n", "1w out.tmp\n2w out", "a.txt", NULL) == 0 && file_is("out.tmp", "1\n") && file_is("out", "2\n"), "the other way round is safe");
 }
 
 /* the memory comes back: a run frees all it took, in the simulated heap of 16 MB */

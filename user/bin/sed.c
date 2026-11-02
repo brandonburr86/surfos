@@ -340,6 +340,35 @@ static void put_line(struct sink *o, const char *p, size_t n, int nl) {
     line_done(o);
 }
 
+/**** names ****/
+
+static int same_id(const struct stat *a, const struct stat *b) {
+    return a->ino == b->ino && !strcmp(a->fs, b->fs) && !strcmp(a->dev, b->dev);
+}
+
+static void folder_of(char *out, size_t size, const char *path) {
+    const char *slash = strrchr(path, '/');
+    if(!slash) snprintf(out, size, ".");
+    else if(slash == path) snprintf(out, size, "/");
+    else snprintf(out, size, "%.*s", (int)(slash - path), path);
+}
+
+/* One file under two names? The names alone do not say: FAT ignores case, and ./o, o and d/../o are one. stat() does where the file
+   system gives a number and the files are there; a file not made yet is its folder and its last name with ASCII letters folded,
+   as FAT folds them. Only FAT is written here, so that a file system where case counts loses nothing by it. */
+static int same_file(const char *a, const char *b) {
+    struct stat sa, sb;
+    char fa[PATH_MAX], fb[PATH_MAX];
+    const char *la = strrchr(a, '/'), *lb = strrchr(b, '/');
+    if(!strcmp(a, b)) return 1;
+    if(!stat(a, &sa) && !stat(b, &sb) && sa.ino && sb.ino) return same_id(&sa, &sb);
+    if(strcasecmp(la ? la + 1 : a, lb ? lb + 1 : b)) return 0;
+    folder_of(fa, sizeof(fa), a);
+    folder_of(fb, sizeof(fb), b);
+    if(!stat(fa, &sa) && !stat(fb, &sb)) return same_id(&sa, &sb);
+    return !strcasecmp(fa, fb);
+}
+
 /**** the input ****/
 
 static void reset_ranges(void) {
@@ -880,10 +909,21 @@ static int make_re(char *s, size_t n, int icase, struct re **out) {
     return 0;
 }
 
+/* the output for a name of w. Two names for one file are one output: two would each be renamed over it, and the last one's lines stay.
+   A name that is another's working name would be renamed over that before it reaches its file. */
 static struct wfile *open_wfile(const char *name) {
     struct wfile *w;
     struct stat st;
-    for(w = g.wfiles; w; w = w->next) if(!strcmp(w->name, name)) return w;
+    int device = !strncmp(name, "/dev/", 5) || (stat(name, &st) == 0 && !S_ISREG(st.type));
+    for(w = g.wfiles; w; w = w->next) {
+        if(!strcmp(w->name, name)) return w;
+        if(device || !w->save) continue;
+        if(same_file(w->name, name)) return w;
+        if(same_file(w->save->tmp, name)) {
+            say("%s: %s is written through that name", name, w->name);
+            return NULL;
+        }
+    }
     w = alloc(sizeof(*w));
     if(!w) return NULL;
     w->name = strdup(name);
@@ -904,7 +944,7 @@ static struct wfile *open_wfile(const char *name) {
         w->o.unbuffered = 1;
         return w;
     }
-    if(!strncmp(name, "/dev/", 5) || (stat(name, &st) == 0 && !S_ISREG(st.type))) {     /* a device: there is nothing to keep */
+    if(device) {                                /* there is nothing to keep */
         w->o.fd = open(name, O_WRONLY);
         if(w->o.fd < 0) {
             say("%s: %s", name, strerror(errno));
