@@ -1731,25 +1731,29 @@ static size_t spelled_len(const char *p) {
 }
 
 /* l: the pattern space spelled out, then cut into lines of width - 1 columns and a backslash, at the edges of what was spelled. After
-   a cut one always goes, however narrow the width. */
+   a cut one always goes, however narrow the width. What was spelled, up to four times the line, goes when the line is out. */
 static void list_line(long width) {
+    struct str sp = { NULL, 0, 0, 0 };
     size_t room = width > 0 ? (size_t)width - 1 : (size_t)-1, i, at = 0;
     int cut = 0;
-    g.built.len = 0;
-    for(i = 0; i < g.line.len; i++) spell_byte(&g.built, (unsigned char)g.line.s[i]);
-    if(g.fatal) return;
-    line_start(g.cur);
-    for(;;) {
-        size_t n = cut ? spelled_len(g.built.s + at) : 0;
-        while(at + n < g.built.len && n + spelled_len(g.built.s + at + n) <= room) n += spelled_len(g.built.s + at + n);
-        put(g.cur, g.built.s + at, n);
-        at += n;
-        if(at == g.built.len) break;
-        put(g.cur, "\\\n", 2);
-        cut = 1;
+    if(str_room(&sp, g.line.len)) return;
+    sp.s[0] = 0;
+    for(i = 0; i < g.line.len; i++) spell_byte(&sp, (unsigned char)g.line.s[i]);
+    if(!g.fatal) {
+        line_start(g.cur);
+        for(;;) {
+            size_t n = cut ? spelled_len(sp.s + at) : 0;
+            while(at + n < sp.len && n + spelled_len(sp.s + at + n) <= room) n += spelled_len(sp.s + at + n);
+            put(g.cur, sp.s + at, n);
+            at += n;
+            if(at == sp.len) break;
+            put(g.cur, "\\\n", 2);
+            cut = 1;
+        }
+        put(g.cur, "$\n", 2);
+        line_done(g.cur);
     }
-    put(g.cur, "$\n", 2);
-    line_done(g.cur);
+    free(sp.s);
 }
 
 static int put_number(unsigned long v) {
