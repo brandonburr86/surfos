@@ -20,13 +20,15 @@ caller; task_detach() moves a process out of its shell's job.
 #include <mm/pmm.h>
 #include <blibc_common.h>
 
-/* task number index (0, 1, ...): pid, parent, state, flags, terminal, name; -ENOENT after the last */
-int sys_procinfo(int index, struct procinfo *pi) {
+/* task number index (0, 1, ...): pid, parent, state, flags, terminal, name; -ENOENT after the last. 11/01/26: only as much
+   as the caller has room for: a program built before struct procinfo grew passes no size (surfos/proc.h) */
+int sys_procinfo(int index, struct procinfo *pi, u32 size) {
     struct procinfo k;
+    u32 n = !size ? PROCINFO_SIZE_0 : size < sizeof(k) ? size : sizeof(k);
     int r;
-    if(!user_buf(pi, sizeof(*pi), true)) return -EFAULT;
+    if(!user_buf(pi, n, true)) return -EFAULT;
     r = task_info(index, &k);
-    if(r == 0) memcpy(pi, &k, sizeof(k));
+    if(r == 0) memcpy(pi, &k, n);
     return r;
 }
 

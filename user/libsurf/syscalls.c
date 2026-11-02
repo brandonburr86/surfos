@@ -206,7 +206,7 @@ int spawnpty(const char *path, char *const argv[], int masterfd) {
     return (int)ret(sc(SYS_spawnpty, (long)path, (long)argv, masterfd));
 }
 int ptyctl(int masterfd, int op, unsigned int arg) { return (int)ret(sc(SYS_ptyctl, masterfd, op, (long)arg)); }
-int procinfo(int index, struct procinfo *pi) { return (int)ret(sc(SYS_procinfo, index, (long)pi, 0)); }
+int procinfo(int index, struct procinfo *pi) { return (int)ret(sc(SYS_procinfo, index, (long)pi, sizeof(*pi))); }
 int sysinfo(struct sysinfo *si) { return (int)ret(sc(SYS_sysinfo, (long)si, 0, 0)); }     /* 11/01/26 */
 int detach(void) { return (int)ret(sc(SYS_detach, 0, 0, 0)); }
 /* 10/25/26: windows on the desktop (surfos/win.h) */

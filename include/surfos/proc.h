@@ -3,15 +3,17 @@ SurfOS processes, as programs see them
 ----------------------
 File: proc.h    Date: 10/6/26
 ----------------------
-SYS_procinfo (int index, struct procinfo *pi): task number index (0, 1, ...) of the task
-             list; -ENOENT after the last. For a ps program, and for telnetd to find its
-             own running server.
+SYS_procinfo (int index, struct procinfo *pi, u32 size): task number index (0, 1, ...) of the
+             task list; -ENOENT after the last. For a ps program, and for telnetd to find its
+             own running server. 11/01/26: size is how many bytes the caller's struct holds,
+             and no more than that is written; 0, which a program built before struct procinfo
+             grew passes without knowing it, means PROCINFO_SIZE_0: a telnetd on a stick, say,
+             with the 36 bytes on its stack.
 SYS_detach   (): the caller leaves its parent: init becomes its parent and collects it
              when it ends, and it is no longer part of the job of the shell that started
              it (Ctrl+C there does not reach it). It keeps its descriptors and its
              terminal. 0, or -EINVAL for a task that is not a user process.
-11/01/26 (top): struct procinfo gains each task's processor time and memory, appended; a
-             program and the kernel come from one build, so nothing old reads the shorter one.
+11/01/26 (top): struct procinfo gains each task's processor time and memory, appended.
 SYS_sysinfo  (struct sysinfo *si): what the whole machine has: the clock those times are on and
              the memory totals memstat prints. 0, or -EFAULT.
 
@@ -32,6 +34,8 @@ struct procinfo {
     unsigned int mem_pages;             /* the frames it holds (page_size bytes each): a program's pages, its tables
                                            and its kernel stack, as memstat counts them; 0 for a kernel thread */
 };
+
+#define PROCINFO_SIZE_0 36              /* the fields before cpu_ticks: all a program without a size knows of */
 
 #define PROC_READY    0
 #define PROC_RUNNING  1

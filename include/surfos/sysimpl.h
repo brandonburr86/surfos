@@ -51,7 +51,7 @@ int sys_spawnpty(const char *path, char *const argv[], int masterfd);
 int sys_ptyctl(int masterfd, int op, u32 arg);
 
 /* kernel/proc.c */
-int sys_procinfo(int index, struct procinfo *pi);
+int sys_procinfo(int index, struct procinfo *pi, u32 size);
 int sys_detach(void);
 int sys_sysinfo(struct sysinfo *si);                /* 11/01/26 */
 

@@ -71,7 +71,7 @@ ends' addresses (surfos/sock.h).
 #define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
 #define SYS_spawnpty 40  /* (const char *path, char *const argv[], int masterfd): pid of a program on the pty */
 #define SYS_ptyctl   41  /* (int masterfd, int op, u32 arg) */
-#define SYS_procinfo 42  /* (int index, struct procinfo *pi): 0, -ENOENT after the last (surfos/proc.h) */
+#define SYS_procinfo 42  /* (int index, struct procinfo *pi, u32 size): 0, -ENOENT after the last (surfos/proc.h) */
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
 #define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */

@@ -1413,6 +1413,7 @@ SMOKE = [
       ('sleep 300; ps | grep -c " cat"; true', ['\r\n0\r\n', shown('SURF \u224b> ')]),
       ('watch date | cat; watch; echo status $?', ['watch: standard output is no terminal', 'usage: watch [', 'status 2',
                                                    shown('SURF \u224b> ')]),
+      ('ptytest procsize', ['size 0 wrote 36 bytes', 'PTYTEST procsize PASS', shown('SURF \u224b> ')]),
       ('help | grep -c "man -k WORD"', ['\r\n1\r\n', shown('SURF \u224b> ')]),
       ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
