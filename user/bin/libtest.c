@@ -19,8 +19,10 @@ libtest system   the exit status; a kernel command; a pipeline; a command too lo
                  argument and one too long for a pipe; the environment reaching the command
 libtest popen    reading and writing; two at once; fflush(NULL) losing nothing that was read
                  ahead; a reader that stops early; no descriptor left behind in 40 rounds
+libtest closed   the same with descriptor 0, then 1, closed first: a command must not be given the far end
+                 of its own pipe as that descriptor
 libtest order    this program's output comes out before its commands' (run it through a pipe)
-libtest all      all of them but order
+libtest all      all of them but order and closed
 */
 
 #include <stdio.h>
@@ -225,6 +227,24 @@ static int mode_popen(void) {
         check(sum == 20100, "both whole");
         check(pclose(b) == 0 && pclose(a) == 0, "both ends");
     }
+    /* and so is what it keeps of a terminal's: lseek() does not refuse there, as it does on a pipe, but the bytes are gone all the same */
+    {
+        char *const argv[] = { "seq", "1", "50", NULL };
+        int master = openpty(), pid = master < 0 ? -1 : spawnpty("/initrd/bin/seq", argv, master);
+        check(pid >= 0, "a command on a pty");
+        if(pid >= 0) {
+            msleep(300);                        /* all its lines in the pty, so that one read takes many */
+            a = fdopen(master, "r");
+            check(a != NULL, "a stream on the pty");
+            if(a) {
+                check(fgets(line, sizeof(line), a) && atol(line) == 1, "the pty's first line");
+                fflush(NULL);
+                check(fgets(line, sizeof(line), a) && atol(line) == 2, "the pty's next line");
+                fclose(a);
+            }
+            wait(pid, NULL);
+        }
+    }
     /* a reader that stops early: the command ends, nobody waits for ever */
     a = popen("seq 1 100000", "r");
     if(a) {
@@ -232,12 +252,51 @@ static int mode_popen(void) {
         check(pclose(a) >= 0, "the end of a command nobody reads");
     }
     check(pclose(stdout) == -1 && errno == EINVAL, "a stream popen did not make");
+    check(pclose(NULL) == -1 && errno == EINVAL, "no stream at all");
+    /* what fflush() keeps of a pipe's input is safe from setvbuf() */
+    a = popen("seq 1 100", "r");
+    if(a) {
+        check(fgets(line, sizeof(line), a) && !strcmp(line, "1\n"), "the first line");
+        fflush(NULL);
+        check(setvbuf(a, NULL, _IONBF, 0) != 0, "setvbuf refused with input in the buffer");
+        check(fgets(line, sizeof(line), a) && !strcmp(line, "2\n"), "the next line");
+        while(fgets(line, sizeof(line), a));
+        check(pclose(a) == 0, "the end of it");
+    }
     check(!popen("true", "x") && errno == EINVAL, "a bad mode");
     for(i = 0; i < 40; i++) {
         a = popen("true", "r");
         check(a && pclose(a) == 0, "again and again");
     }
     return finish("popen");
+}
+
+/* one that reads its standard input would otherwise wait for its own output for ever */
+static int mode_closed(void) {
+    char line[64];
+    FILE *a;
+    close(0);
+    a = popen("cat; echo done", "r");
+    check(a != NULL, "popen with 0 closed");
+    if(a) {
+        check(fgets(line, sizeof(line), a) && !strcmp(line, "done\n"), "the command ends, with no input");
+        check(pclose(a) == 0, "its pclose");
+    }
+    check(system("true") == 0, "system with 0 closed");
+    fflush(stdout);
+    close(1);
+    a = popen("cat > /hda1/LIBTEST.TXT", "w");
+    if(!a) dprintf(2, "libtest: popen with 1 closed failed\n");
+    if(a) {
+        fputs("hello\n", a);
+        if(pclose(a) != 0) dprintf(2, "libtest: pclose with 1 closed failed\n");
+    }
+    a = fopen("/hda1/LIBTEST.TXT", "r");
+    bad |= !a || !fgets(line, sizeof(line), a) || strcmp(line, "hello\n");
+    if(a) fclose(a);
+    remove("/hda1/LIBTEST.TXT");
+    dprintf(2, "LIBTEST closed %s\n", bad ? "FAIL" : "PASS");
+    return bad;
 }
 
 static int mode_order(void) {
@@ -255,11 +314,12 @@ int main(int argc, char **argv) {
     if(!strcmp(m, "getopt")) return mode_getopt();
     if(!strcmp(m, "system")) return mode_system();
     if(!strcmp(m, "popen")) return mode_popen();
+    if(!strcmp(m, "closed")) return mode_closed();
     if(!strcmp(m, "order")) return mode_order();
     if(!strcmp(m, "all")) {
         int r = mode_regex() | mode_numbers() | mode_math() | mode_getopt() | mode_system() | mode_popen();
         return r;
     }
-    fprintf(stderr, "usage: libtest regex | numbers | math | getopt | system | popen | order | all\n");
+    fprintf(stderr, "usage: libtest regex | numbers | math | getopt | system | popen | closed | order | all\n");
     return 2;
 }

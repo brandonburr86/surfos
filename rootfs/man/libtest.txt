@@ -1,8 +1,8 @@
 libtest - checks of the C library's text, numbers and commands
 
 SYNOPSIS
-    libtest regex | numbers | math | getopt | system | popen | order
-    libtest all
+    libtest regex | numbers | math | getopt | system | popen | closed
+    libtest order | all
 
 DESCRIPTION
     A test program for what the command-line tools lean on in libsurf:

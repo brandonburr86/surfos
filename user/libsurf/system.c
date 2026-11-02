@@ -39,6 +39,27 @@ static int fd_or_closed(int fd) {
     return fstat(fd, &st) == 0 ? fd : SPAWN_CLOSED;
 }
 
+/* pipe(), with the ends clear of 0, 1 and 2: a program that closed one of those has the end there, and would hand it to its
+   command as that descriptor: a command reading the far end of its own output waits for ever */
+static int high_pipe(int p[2]) {
+    int i, k;
+    if(pipe(p) < 0) return -1;
+    for(i = 0; i < 2; i++) {
+        struct stat st;
+        if(p[i] > 2) continue;
+        for(k = 3; k < FOPEN_MAX; k++) if(fstat(k, &st) < 0) break;
+        if(k == FOPEN_MAX || dup2(p[i], k) < 0) {
+            close(p[0]);
+            close(p[1]);
+            errno = EMFILE;
+            return -1;
+        }
+        close(p[i]);
+        p[i] = k;
+    }
+    return 0;
+}
+
 /* surfsh on cmd, with in and out as its standard input and output (-1: this program's own): its pid, or -1 */
 static int start(const char *cmd, int in, int out) {
     char pid[16];
@@ -62,7 +83,7 @@ static int start(const char *cmd, int in, int out) {
             errno = E2BIG;
             return -1;
         }
-        if(pipe(p) < 0) return -1;
+        if(high_pipe(p) < 0) return -1;
         if(write(p[1], cmd, n) != (ssize_t)n) {
             e = errno;
             close(p[0]);
@@ -120,7 +141,7 @@ FILE *popen(const char *cmd, const char *mode) {
         errno = EMFILE;
         return NULL;
     }
-    if(pipe(p) < 0) return NULL;
+    if(high_pipe(p) < 0) return NULL;
     fflush(NULL);
     child = reading ? start(cmd, -1, p[1]) : start(cmd, p[0], -1);
     e = errno;
@@ -145,8 +166,8 @@ FILE *popen(const char *cmd, const char *mode) {
 
 int pclose(FILE *f) {
     int i, child;
-    for(i = 0; i < FOPEN_MAX && commands[i].f != f; i++);
-    if(i == FOPEN_MAX) {
+    for(i = 0; f && i < FOPEN_MAX && commands[i].f != f; i++);
+    if(!f || i == FOPEN_MAX) {
         errno = EINVAL;
         return -1;
     }

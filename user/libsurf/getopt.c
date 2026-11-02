@@ -8,7 +8,9 @@ is moved around. "a:b" in optstring: -a takes an argument, in the same word or t
 A leading : asks for silence, and for ':' instead of '?' when an argument is missing; a
 leading + is what happens anyway, and is skipped, for programs written with GNU's in mind.
 Messages go on standard error as tool: what: why, the tool being the last part of argv[0].
-A caller that wants to scan again sets optind to 1 (or 0, as with glibc).
+A caller that wants to scan again sets optind to 0, as with glibc. 1 does the same, but for a
+scan that stopped inside a word of letters such as -ab at argv[1]: there it is still where it was,
+and getopt() goes on with b.
 */
 
 #include <stddef.h>

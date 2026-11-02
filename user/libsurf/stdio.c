@@ -20,6 +20,7 @@ stdout first, so a prompt shows before the program waits for the line.
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "libsurf.h"
 
 #define F_READ   0x01
@@ -87,11 +88,10 @@ static int flush_out(FILE *f) {
     return 0;
 }
 
-/* forget what was read ahead, moving the descriptor back to where the reader is. 11/01/26: a pipe cannot go back, and what
-   it gave is nowhere else, so it stays: fflush(NULL) (system(), popen()) must not lose a popen() stream's input */
+/* forget what was read ahead, moving the descriptor back to where the reader is */
 static void drop_input(FILE *f) {
     off_t back = (off_t)(f->rend - f->rpos) + (f->ungot != EOF);
-    if(back && lseek(f->fd, -back, SEEK_CUR) < 0) return;
+    if(back) lseek(f->fd, -back, SEEK_CUR);
     f->rpos = f->rend = 0;
     f->ungot = EOF;
 }
@@ -216,6 +216,14 @@ int fclose(FILE *f) {
     return r;
 }
 
+/* 11/01/26: can what was read ahead be read again? Only from a file on a file system: from a pipe, a terminal or a connection
+   it is nowhere else, whatever lseek() says (only pipes refuse it), and fflush(NULL), which system() and popen() call, must not
+   lose it. fstat() calls all of those files; the name of their file system tells them apart (pipefs, ptyfs, sockfs, devfs). */
+static int reads_again(FILE *f) {
+    struct stat st;
+    return fstat(f->fd, &st) == 0 && S_ISREG(st.type) && (!strcmp(st.fs, "fat") || !strcmp(st.fs, "tarfs"));
+}
+
 int fflush(FILE *f) {
     int r = 0;
     if(!f) {
@@ -226,7 +234,10 @@ int fflush(FILE *f) {
         return r;
     }
     if(f->dir == 'w') r = flush_out(f);
-    else if(f->dir == 'r') drop_input(f);
+    else if(f->dir == 'r') {
+        if(!reads_again(f)) return 0;
+        drop_input(f);
+    }
     if(!r) f->dir = 0;
     return r;
 }
@@ -246,6 +257,7 @@ int fpurge(FILE *f) {
 int setvbuf(FILE *f, char *buf, int mode, size_t size) {
     if(mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return -1;
     fflush(f);
+    if(f->rpos < f->rend) return -1;                    /* 11/01/26: what fflush() kept is in the buffer */
     if(f->flags & F_OWNBUF) free(f->buf);
     f->flags &= ~F_OWNBUF;
     f->buf = mode == _IONBF ? NULL : (unsigned char *)buf;
