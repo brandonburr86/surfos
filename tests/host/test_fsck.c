@@ -3405,6 +3405,29 @@ static void names_said(void) {
               "a bidirectional control in a long name comes out as '?'");
         t_done(&t);
     }
+    {
+        /* 11/02/26 (the third review): the marks of direction (U+061C, U+200E, U+200F) and the separators of a line and a
+           paragraph (U+2028, U+2029) as well */
+        u8 *q = slot_free(x, &g, 0), sum = 0;
+        static const char shortname[] = "MARKS   TXT";
+        static const u8 pos[13] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+        static const u16 chars[13] = { 'd', 0x061C, 'e', 0x200E, 'f', 0x200F, 'g', 0x2028, 'h', 0x2029, 'i', 0, 0xFFFF };
+        for(i = 0; i < 11; i++) sum = (u8)(((sum & 1) << 7) + (sum >> 1) + (u8)shortname[i]);
+        memset(q, 0, 64);
+        q[0] = 0x41;
+        q[11] = 0x0F;
+        q[13] = sum;
+        for(i = 0; i < 13; i++) wr16(q + pos[i], chars[i]);
+        memcpy(q + 32, shortname, 11);
+        q[32 + 11] = 0x20;
+        wr32(q + 32 + 28, 3000);
+        t_init(&t, x, 0);
+        (void)run(&t, 0, &r);
+        check(!strstr(t.log, "\xd8\x9c") && !strstr(t.log, "\xe2\x80\x8e") && !strstr(t.log, "\xe2\x80\x8f") &&
+              !strstr(t.log, "\xe2\x80\xa8") && !strstr(t.log, "\xe2\x80\xa9") && strstr(t.log, "/d?e?f?g?h?i: size 3000") != NULL,
+              "the marks of direction and the separators of a line and a paragraph in a long name come out as '?'");
+        t_done(&t);
+    }
 }
 
 /* 11/02/26 (the third review's round): the table of names is taken once, and a directory empties it by taking a new
