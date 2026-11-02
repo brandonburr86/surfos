@@ -1940,6 +1940,52 @@ static void by_hand(void) {
 
 /**** display: none (11/02/26, the integration of milestones 2 and 3) ****/
 
+/* The run whose text holds t, and the block it is in */
+static const struct wd_run *run_with(const struct wd_document *d, const char *t) {
+    size_t i, n = strlen(t);
+    for(i = 0; i < d->run_count; i++) {
+        const struct wd_run *r = &d->runs[i];
+        const char *p;
+        if(r->kind != WR_TEXT) continue;
+        for(p = d->text + r->off; p + n <= d->text + r->off + r->len; p++) if(!memcmp(p, t, n)) return r;
+    }
+    return NULL;
+}
+
+static int block_with(const struct wd_document *d, const char *t) {
+    const struct wd_run *r = run_with(d, t);
+    size_t i;
+    for(i = 0; r && i < d->block_count; i++)
+        if(d->blocks[i].first < 0 && (size_t)(r - d->runs) >= d->blocks[i].run && (size_t)(r - d->runs) < d->blocks[i].run + d->blocks[i].nruns)
+            return (int)i;
+    return -1;
+}
+
+/* The list item the text t is in (the nearest), or 0 */
+static int in_item(const struct wd_document *d, const char *t) {
+    int i = block_with(d, t);
+    for(; i > 0; i = d->blocks[i].parent) if(d->blocks[i].kind == WB_ITEM) return i;
+    return 0;
+}
+
+/* All the text of the block t is in */
+static const char *text_of(const struct wd_document *d, const char *t) {
+    static char s[512];
+    int i = block_with(d, t);
+    unsigned int k;
+    size_t n = 0;
+    s[0] = 0;
+    for(k = 0; i >= 0 && k < d->blocks[i].nruns && n + 1 < sizeof(s); k++) {
+        const struct wd_run *r = &d->runs[d->blocks[i].run + k];
+        size_t m = r->len < sizeof(s) - 1 - n ? r->len : sizeof(s) - 1 - n;
+        if(r->kind != WR_TEXT) continue;
+        memcpy(s + n, d->text + r->off, m);
+        n += m;
+        s[n] = 0;
+    }
+    return s;
+}
+
 /* What display: none hides has no box, and is still its form's, as in a browser: it goes with it. Unlike what is
    disabled, and unlike what the hidden attribute holds, which this browser follows only so far (above). */
 static void hidden_by_css(void) {
@@ -1985,6 +2031,31 @@ static void hidden_by_css(void) {
     check(strstr(d.text, "Bee") && strstr(d.text, "why") && strstr(d.text, " more") && strstr(d.text, "yes") &&
           strstr(d.text, " after") && strstr(d.text, "two") && !strstr(d.text, "ex") && !strstr(d.text, "no") &&
           !strstr(d.text, "one"), "and what follows each shows, the hidden one does not");
+    wd_free(&d);
+    /* ... but an a or a nobr that holds a block of its own keeps it: the standard takes the block out of it, not ends it */
+    sends("<style>a.c{display:block}</style><form action=/s><a class=c href=x><fieldset disabled><a href=y>y</a>"
+          "<input name=q value=secret></fieldset></a><input name=z value=1></form>", "https://forms.test/s?z=1",
+          "an a made a block holding a disabled fieldset, and an a in that: what the fieldset holds stays disabled");
+    sends("<style>a.c{display:none}</style><form action=/s><a class=c href=x><fieldset disabled><a href=y>y</a>"
+          "<input name=q value=secret></fieldset></a><input name=z value=1></form>", "https://forms.test/s?z=1",
+          "the same, hidden");
+    check(!build("<style>a.c{display:block}</style><a class=c href=x><ul><li>one<a href=y>two</a><li>three</ul></a><p>after", &d),
+          "an a made a block holding a list, and an a in an item");
+    check(in_item(&d, "one") && in_item(&d, "two") && in_item(&d, "three") && !in_item(&d, "after") &&
+          d.blocks[in_item(&d, "two")].parent == d.blocks[in_item(&d, "three")].parent, "the list stays whole, and what follows is not in it");
+    wd_free(&d);
+    check(!build("<style>a.card{display:block}</style><a class=card href=/item><div><h3>Title</h3><p>Text <a href=/more>more</a>"
+                 " and the rest</p></div></a>", &d), "a card: an a made a block, with an a in its text");
+    check(!strcmp(text_of(&d, "Text"), "Text more and the rest"), "its paragraph stays one, its space too");
+    wd_free(&d);
+    check(!build("<style>a.c{display:block}</style><a class=c href=x><address>addr<a href=y>y</a></address></a><p>after", &d),
+          "an a made a block holding an address, and an a in it");
+    check(run_with(&d, "after") && !(run_with(&d, "after")->style & WS_ITALIC), "what follows the address is not italic");
+    wd_free(&d);
+    check(!build("<div><a style=display:none href=x>ex<div>in<a href=y>why</a> more</div></div><p>after", &d),
+          "a hidden a holding a block, and an a in that");
+    check(!strstr(d.text, "ex") && !strstr(d.text, "in") && strstr(d.text, "why") && strstr(d.text, " more") && strstr(d.text, "after"),
+          "what comes from the inner a on shows, as the standard has it out of the hidden one");
     wd_free(&d);
 
     /* none of them has a box, and the page goes on after them */

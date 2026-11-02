@@ -1521,17 +1521,26 @@ static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
 
 /* 11/02/26: HTML ends an open a, button or nobr where another of its kind starts, and an option at an option or optgroup
    when it is the current element. A frame the page's CSS made for it (display: none or block, css_inline()) ends with it:
-   else what display: none hid would go on hiding what follows, fields too. */
+   else what display: none hid would go on hiding what follows, fields too. A button ends with all it holds, as the
+   standard pops to it. An a or a nobr that holds a block of its own (a div, a list, a fieldset, ...) does not: the
+   standard's adoption agency keeps those open and takes them out of it, so here they stay as they are, and only what it
+   hid is hidden no more, as what follows is not in it; with no such block between, its frame goes. */
 static void end_made(struct bd *b, int el) {
-    int i;
+    int i, between = 0;
     if(el == E_BUTTON) field_close(b);              /* (its field in its own box, as at its end tag) */
     if(el == E_OPTGROUP) el = E_OPTION;
     for(i = b->depth - 1; i > 0; i--) {
-        if(b->st[i].el == el && b->st[i].made) {
-            pop_to(b, i);
+        struct frame *f = &b->st[i];
+        if(f->el == el && f->made) {
+            if(!between) pop_to(b, i);
+            else {
+                b->none -= f->hides;
+                f->hides = 0;
+            }
             return;
         }
-        if(el == E_OPTION || (ut_html_flags(b->st[i].el) & F_SCOPE)) return;
+        if(el == E_OPTION || (ut_html_flags(f->el) & F_SCOPE)) return;
+        if(el != E_BUTTON && (ut_html_flags(f->el) & F_SPECIAL)) between = 1;
     }
 }
 
