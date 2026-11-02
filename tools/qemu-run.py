@@ -1402,6 +1402,9 @@ SMOKE = [
       ('rm /hda1/F.BC', [shown('SURF \u224b> ')]),
       ("echo '1/0' | bc; echo status $?; echo '1+' | bc; echo status $?",
        ['divide by zero\r\n', 'status 2\r\n', 'unexpected end of line\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      # (a digit above the base counts at its own value, and else may stand after a ; or on a later line)
+      ("printf 'ibase=2\\n12\\nibase=1010\\n1E5\\nif(0)2;else 3\\nif(0)4\\nelse 5\\n' | bc; echo status $?",
+       ['\r\n4\r\n245\r\n3\r\n5\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
       ("echo '10^1000000000' | bc; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
       ('bc /hda1/NONE.BC; echo status $?', ['bc: /hda1/NONE.BC: No such file or directory\r\n', 'status 2\r\n',
                                             shown('SURF \u224b> ')]),

@@ -5,12 +5,18 @@ File: parse.c   Date: 11/01/26
 --------------------
 Reads bc's language a character at a time and writes code for vm.c as it goes, in one pass.
 
-The language is POSIX bc's, with what every other bc takes and a script from elsewhere is likely
-to use: names longer than a letter, else, relations anywhere an expression may stand, && || and
-!, # comments, continue, an empty part in for, return without brackets. The precedence is GNU's,
-chosen there so that POSIX programs keep their meaning; the odd results are POSIX's: -2^2 is 4,
-2*x=3 assigns first, and x=1<2 compares after assigning. An assignment is therefore taken up
-where its name is met, in primary(), as yacc's grammar takes it.
+The language is POSIX bc's, with what a script from elsewhere is likely to use: names longer than a
+letter, else, relations anywhere an expression may stand, && || and !, # comments, continue, an
+empty part in for, return without brackets. The precedence is GNU's, chosen there so that POSIX
+programs keep their meaning; the odd results are POSIX's: -2^2 is 4, 2*x=3 assigns first, and
+x=1<2 compares after assigning. An assignment is therefore taken up where its name is met, in
+primary(), as yacc's grammar takes it.
+
+else may follow its statement after ; and on a later line, as on the Mac's bc. So to know that
+an if is finished the next word has to be seen, and else_follows() looks at the characters for it
+and leaves everything else to be read as usual, so that a mistake further on stays with its own
+line. At a terminal, outside braces, it does not look past the line: the answer to an if would
+wait for the next line to be typed. There an else on a later line needs the braces round it all.
 
 quit is obeyed when it is read, even in if(0) quit or a function's body, as POSIX says: the
 statements of the line before it are run, and what it stands in is dropped.
@@ -56,7 +62,8 @@ struct parser {
     struct bc *b;
     int (*get)(void *);
     void *in;
-    int ahead;                          /* a character read and not used; -2, none */
+    unsigned char back[8];              /* characters read and not used, the next one last */
+    unsigned nback;
     int at_end;                         /* the input has ended, and a terminal must not be asked again */
     int newline;                        /* the last one read ended a line, which counts when the next is read */
     int tok;
@@ -72,6 +79,8 @@ struct parser {
     int in_function;
     int interactive;
     unsigned done;                      /* of the item's code, what is whole statements */
+    unsigned item_line;                 /* the line it ended on, if the look for an else went past that; or 0 */
+    unsigned blocks;                    /* braces open around here */
     int array_sym;                      /* the a of an a[] just read */
 };
 
@@ -110,20 +119,24 @@ static int unexpected(struct parser *p) {
 /**** characters and tokens ****/
 
 static int getch(struct parser *p) {
-    int c = p->ahead;
-    if(c == -2) c = p->at_end ? -1 : p->get(p->in);
-    p->ahead = -2;
+    int c;
+    if(p->nback) c = p->back[--p->nback];
+    else if(p->at_end) return -1;
+    else c = p->get(p->in);
     if(p->newline) {
         p->b->line++;
         p->newline = 0;
     }
-    if(c < 0) p->at_end = 1;
+    if(c < 0) {
+        p->at_end = 1;
+        return -1;
+    }
     if(c == '\n') p->newline = 1;
-    return c < 0 ? -1 : c;
+    return c;
 }
 
 static void ungetch(struct parser *p, int c) {
-    p->ahead = c;
+    p->back[p->nback++] = (unsigned char)c;
     if(c == '\n') p->newline = 0;
 }
 
@@ -686,18 +699,78 @@ static int skip_newlines(struct parser *p) {
 
 /* the statements up to the } */
 static int block(struct parser *p) {
+    p->blocks++;
     for(;;) {
         while(p->tok == '\n' || p->tok == ';') if(next(p)) return -1;
-        if(p->tok == '}') return 0;
+        if(p->tok == '}') break;
         if(statement(p)) return -1;
         if(p->tok != '\n' && p->tok != ';' && p->tok != '}') return unexpected(p);
     }
+    p->blocks--;
+    return 0;
+}
+
+/* c, and what follows it, is the word else; all of it is left to be read */
+static int word_is_else(struct parser *p, int c) {
+    static const char word[] = "else";
+    char t[5];
+    unsigned n = 0;
+    int same = 1;
+    t[n++] = (char)c;
+    while(same && n < 5) {
+        if((c = getch(p)) < 0) break;
+        t[n++] = (char)c;
+        same = n < 5 ? c == word[n - 1] : !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_');
+    }
+    if(n < 4) same = 0;
+    while(n) ungetch(p, (unsigned char)t[--n]);
+    return same;
+}
+
+/* Is the word after an if's statement else? 1, 0, or -1 for a comment that never ends. Up to it ; may stand, and then
+   newlines, as on the Mac's bc: blanks, comments, and those are all that is taken. p->tok is the ; or the newline that
+   stopped the statement, and is a newline once one has gone, which ends an item as it would have. */
+static int else_follows(struct parser *p) {
+    int to_line_end = p->interactive && !p->blocks;     /* no more than the line that was typed */
+    unsigned line = p->b->line;
+    int c, yes = 0;
+    if(to_line_end && p->tok == '\n') return 0;
+    for(;;) {
+        c = getch(p);
+        if(c == ' ' || c == '\t' || c == '\r') continue;
+        if(c == ';' && p->tok == ';') continue;
+        if(c == '#') do c = getch(p); while(c >= 0 && c != '\n');
+        if(c == '\\') {
+            int d = getch(p);
+            if(d == '\n') continue;
+            if(d >= 0) ungetch(p, d);
+        } else if(c == '/') {
+            int d = getch(p);
+            if(d == '*') {
+                if(skip_comment(p)) return -1;
+                continue;
+            }
+            if(d >= 0) ungetch(p, d);
+        } else if(c == '\n' && !to_line_end) {
+            p->tok = '\n';
+            continue;
+        } else if(c == 'e') {
+            yes = word_is_else(p, c);
+            break;
+        }
+        if(c >= 0) ungetch(p, c);
+        break;
+    }
+    if(!yes && !p->blocks && !p->item_line) p->item_line = line;
+    return yes;
 }
 
 static int st_if(struct parser *p) {
-    int to_else, to_end;
+    int to_else, to_end, rc = 0;
     if(next(p) || expect(p, '(') || expr(p) || expect(p, ')') || skip_newlines(p)) return -1;
     if(emit_jump(p, OP_JZ, &to_else) || statement(p)) return -1;
+    if(p->tok == ';' || p->tok == '\n') rc = else_follows(p);
+    if(rc < 0 || (rc && next(p))) return -1;
     if(p->tok != T_ELSE) {
         patch(p, to_else);
         return 0;
@@ -898,6 +971,8 @@ static int read_item(struct parser *p) {
     bc_func_clear(f);
     p->fn = f;
     p->done = 0;
+    p->item_line = 0;
+    p->blocks = 0;
     p->loop = NULL;
     p->depth = 0;
     p->nargs = 0;
@@ -924,13 +999,16 @@ static int read_item(struct parser *p) {
 /* what the item holds is run: its code ends here, at the last whole statement when quit cut it off */
 static int run_item(struct parser *p) {
     struct func *f = &p->b->main;
+    unsigned line = p->b->line;
     int rc;
     if(!p->done) return 0;
     f->ncode = p->done;
     p->fn = f;
     p->why = 0;
     if(emit(p, OP_END)) return -1;
+    if(p->item_line) p->b->line = p->item_line;         /* its messages are its own line's */
     rc = bc_exec(p->b, f);
+    p->b->line = line;
     if(p->interactive) p->b->host.flush(p->b->host.ctx);        /* POSIX: without delay; a script needs no write a line */
     return rc;
 }
@@ -957,7 +1035,6 @@ static int run_text(struct bc *b, int (*get)(void *), void *in, const char *name
     p.b = b;
     p.get = get;
     p.in = in;
-    p.ahead = -2;
     p.lib = lib;
     p.interactive = interactive;
     b->name = name;

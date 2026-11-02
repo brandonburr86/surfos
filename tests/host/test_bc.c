@@ -97,8 +97,12 @@ static void cap_error(void *ctx, const char *text) {
 
 struct bytes { const unsigned char *p, *end; };
 
+static const unsigned char *watch_at;       /* when the reader gets here, how much had been printed is noted */
+static size_t printed_then;
+
 static int get_bytes(void *in) {
     struct bytes *b = in;
+    if(b->p == watch_at) printed_then = nout;
     return b->p < b->end ? *b->p++ : -1;
 }
 
@@ -149,6 +153,17 @@ static void is(const char *src, const char *want) {
 static void is_lib(const char *src, const char *want) {
     run(src, 1, 0);
     said(src, want, 1);
+}
+
+/* and nothing was said */
+static void clean(const char *src, const char *want) {
+    int rc = run(src, 0, 0);
+    said(src, want, 0);
+    checks++;
+    if(rc != BC_END && rc != BC_QUIT) {
+        failed++;
+        printf("FAIL: %.300s\n  ended with trouble: %s\n", src, errtext);
+    }
 }
 
 /* the digits, wherever the lines broke */
@@ -958,6 +973,74 @@ static void statements(void) {
     fails("define f(a) { }\nf(a[])\n", "f: argument 1 should not be an array");
     fails("define f() { return 1/0 }\nf()\n", "f: divide by zero");
     fails("define g() { return 1/0 }\ndefine f() { return g() }\nf()\n", "g: divide by zero");
+    /* else after a ; and on a later line, as the Mac's bc takes it */
+    clean("if(0)2;else 3\n", "3\n");
+    clean("if(1)2;else 3\n", "2\n");
+    clean("if(0)2; ; else 3\n", "3\n");
+    clean("if(0)2;;else 3\n", "3\n");
+    clean("if(1)4\nelse 5\n", "4\n");
+    clean("if(0)4\nelse 5\n", "5\n");
+    clean("if(0)4\n\nelse 5\n", "5\n");
+    clean("if(0)4;\nelse 5\n", "5\n");
+    clean("if(0)4 # why\n/* so\n */\n\nelse 5\n", "5\n");
+    clean("if(0)4 \\\nelse 5\n", "5\n");
+    clean("if(0){4}\nelse{5}\n", "5\n");
+    clean("{if(0)6\nelse 7}\n", "7\n");
+    clean("if(1)if(0)1;else 2;else 3\n", "2\n");
+    clean("if(0)if(0)1;else 2;else 3\n", "3\n");
+    clean("if(1)if(0)1\nelse 2\nelse 3\n", "2\n");
+    clean("define f(x) { if(x) return 1\n else return 2 }\nf(0);f(1)\n", "2\n1\n");
+    clean("define f(x) { if(x) return; else return 2 }\nf(0)\n", "2\n");
+    clean("for(i=0;i<3;i++) if(i==1) 5; else 6\n", "6\n5\n6\n");
+    /* and what is no else is left as it stood */
+    clean("if(0)2;3\n", "3\n");
+    clean("if(1)2\n3\n", "2\n3\n");
+    clean("if(1)2;\n3\n", "2\n3\n");
+    clean("if(1)2\n\n\n", "2\n");
+    clean("if(1)2", "2\n");
+    clean("if(1)2;", "2\n");
+    clean("{if(1)2;}\n", "2\n");
+    clean("{if(1)2\n}\n", "2\n");
+    clean("elsewhere=1\nif(0)2\nelsewhere\n", "1\n");
+    clean("e=1\nif(0)2\ne\n", "1\n");
+    clean("els=1\nif(0)2\nels\n", "1\n");
+    clean("if(1)2\ndefine f() { return 7 }\nf()\n", "2\n7\n");
+    clean("if(1)2;\ndefine f() { return 7 }\nf()\n", "2\n7\n");
+    clean("if(1)2\n# a comment\n3\n", "2\n3\n");
+    clean("x=2\nif(1)x /* a */ /3\n", "0\n");
+    clean("if(1)4\n/* a */ 5\n", "4\n5\n");
+    clean("if(1)4\n5\nquit\n6\n", "4\n5\n");
+    clean("if(1)4\nquit\n6\n", "4\n");
+    fails_after("{if(0)6\n;else 7}\n", "", "syntax error near 'else'");
+    fails_after("if(0)2;\n;else 3\n", "", "syntax error near 'else'");
+    fails_after("if(0)2\n;else 3\n", "", "syntax error near 'else'");
+    /* a mistake after it is its own line's, and the if has run */
+    fails_after("if(1)4\n$\n", "4\n", "t: line 2:");
+    fails_after("if(1)4\n\n\n)\n", "4\n", "t: line 4:");
+    fails_after("1\nif(1)1/0\n\n2\n", "1\n", "t: line 2:");
+    fails_after("if(0)4\nelse 1/0\n\n2\n", "", "t: line 2:");
+    /* at a terminal it needs no line more than the one typed, or the answer would wait for the next */
+    {
+        static const char typed[] = "if(1)4\n5\n";
+        watch_at = (const unsigned char *)typed + 7;
+        at_terminal(typed, "4\n5\n", 0);
+        CHECK(printed_then == 2);
+        watch_at = (const unsigned char *)typed + 6;
+        at_terminal(typed, "4\n5\n", 0);
+        CHECK(!printed_then);           /* the line's newline is read first */
+        watch_at = NULL;
+    }
+    {
+        static const char typed[] = "if(1)4;\n5\n";
+        watch_at = (const unsigned char *)typed + 8;
+        at_terminal(typed, "4\n5\n", 0);
+        CHECK(printed_then == 2);
+        watch_at = NULL;
+    }
+    at_terminal("if(0)2;else 3\n", "3\n", 0);
+    at_terminal("if(0)4\nelse 5\n6\n", "6\n", 0);   /* the else is a line of its own there, and a mistake */
+    at_terminal("{if(0)4\nelse 5}\n6\n", "5\n6\n", 0);
+    at_terminal("define f(x) { if(x) return 1\n else return 2 }\nf(0)\n", "2\n", 0);
     /* a mistake's line */
     fails_after("1\n2\n+\n", "1\n2\n", "t: line 3:");
     fails_after("1\n2\n1/0\n", "1\n2\n", "t: line 3:");

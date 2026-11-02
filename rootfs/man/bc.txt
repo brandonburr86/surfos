@@ -34,6 +34,10 @@ DESCRIPTION
         "text"             printed as it stands, no newline
         /* a comment */    # to the end of the line
 
+    else may follow after a ; or on a later line. At a terminal,
+    outside braces, it must be on the same line, or the answer to the
+    if would wait for the next line to be typed.
+
     Mind three things that other languages do not do: -2^2 is 4, as
     minus binds tighter than ^; x=1<2 compares after assigning; and
     quit acts when it is read, so if(0) quit ends bc.
