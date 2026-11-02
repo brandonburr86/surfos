@@ -304,7 +304,7 @@ static void result_str(int nargs, struct str *s) {
    including to, and whatever is not a window is empty: a NaN starts at 1 as m and gives nothing as n. */
 static struct str *substring(struct str *s, double m, double n) {
     double chars = str_chars(s), from = trunc(m), to;
-    unsigned first, last, at = 0, k;
+    unsigned first, last;
     if(!(from >= 1)) from = 1;
     to = from + trunc(n);
     if(to > chars + 1) to = chars + 1;
@@ -312,21 +312,31 @@ static struct str *substring(struct str *s, double m, double n) {
     first = (unsigned)from - 1;
     last = (unsigned)to - 1;
     if(chars == s->len) return str_new(s->s + first, last - first);     /* all ASCII: no need to walk */
-    for(k = 0; k < first; k++) at += char_len(s->s + at, s->len - at);
-    first = at;
-    for(; k < last; k++) at += char_len(s->s + at, s->len - at);
-    return str_new(s->s + first, at - first);
+    first = char_at(s, first);
+    return str_new(s->s + first, char_at(s, last) - first);
 }
 
+/* The first place where t stands, in characters. It is made of whole characters there: bytes in the middle of one, or
+   the first of a longer one, are no match. All of s is walked unless every byte of it is a character. */
 static double index_of(struct str *s, struct str *t) {
-    unsigned i;
-    if(!t->len) return 1;               /* it stands at the start, as match(s, "") says too */
+    unsigned i, at = 0;
+    if(!t->len) return s->len ? 1 : 0;  /* it stands at the start of a text, as match(s, "") says too; "" has none */
     if(t->len > s->len) return 0;
-    for(i = 0; i + t->len <= s->len; i++) {
-        const char *p = memchr(s->s + i, t->s[0], s->len - t->len - i + 1);
-        if(!p) return 0;
-        i = (unsigned)(p - s->s);
-        if(!memcmp(p, t->s, t->len)) return (double)chars_in(s->s, i) + 1;
+    if(str_chars(s) == s->len) {
+        for(i = 0; i + t->len <= s->len; i++) {
+            const char *p = memchr(s->s + i, t->s[0], s->len - t->len - i + 1);
+            if(!p) return 0;
+            i = (unsigned)(p - s->s);
+            if(!memcmp(p, t->s, t->len)) return (double)i + 1;
+        }
+        return 0;
+    }
+    for(i = 0; i + t->len <= s->len; at++, i += char_len(s->s + i, s->len - i)) {
+        if(s->s[i] == t->s[0] && !memcmp(s->s + i, t->s, t->len)) {
+            unsigned e = i;
+            while(e < i + t->len) e += char_len(s->s + e, s->len - e);
+            if(e == i + t->len) return (double)at + 1;
+        }
     }
     return 0;
 }

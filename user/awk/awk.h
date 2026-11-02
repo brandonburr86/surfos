@@ -29,6 +29,7 @@ struct str {                            /* never changes once made, and is share
     unsigned refs;
     unsigned len;                       /* bytes; it may hold NULs */
     unsigned chars;                     /* characters, once counted */
+    unsigned *marks;                    /* once it is looked far into, where characters start: char_at() */
     char s[];                           /* with a NUL after the last, for the C library */
 };
 
@@ -192,6 +193,7 @@ static inline struct str *str_ref(struct str *s) {
 unsigned str_chars(struct str *s);                      /* how many characters */
 unsigned char_len(const char *s, unsigned n);           /* the bytes of the character at s */
 unsigned chars_in(const char *s, unsigned n);
+unsigned char_at(struct str *s, unsigned k);            /* the byte where character k, from 0, starts */
 void val_put(struct value *v);                          /* v's reference goes */
 void val_copy(struct value *to, const struct value *from);      /* a new reference */
 int looks_numeric(const char *s, unsigned n);

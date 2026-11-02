@@ -283,6 +283,22 @@ static void characters(void) {
     is("{ print substr($0, 2, 1) }", "a\377b\n", "\377\n");
     is("{ print }", "a\377b\n", "a\377b\n");
     is("{ print toupper($0) }", "a\377b\n", "A\377B\n");
+    /* index counts characters, and a match is of whole ones: never the middle of a sequence */
+    is("BEGIN { print index(\"\303\251\", \"\\251\") }", NULL, "0\n");
+    is("BEGIN { print index(\"\303\251\", \"\\303\") }", NULL, "0\n");
+    is("BEGIN { print index(\"\343\201\202\", \"\\201\\202\") }", NULL, "0\n");
+    is("BEGIN { print index(\"\343\201\202\", \"\\343\\201\") }", NULL, "0\n");
+    is("BEGIN { print index(\"a\303\251\", \"\303\251\"), index(\"\303\251\303\251x\", \"x\"), index(\"\303\251\303\251\", \"\303\251\") }", NULL, "2 3 1\n");
+    is("BEGIN { print index(\"\303x\", \"\\303\"), index(\"\377\303\251\", \"\303\251\"), index(\"a\377\", \"\\377\") }", NULL, "1 2 2\n");     /* a bad byte is a character */
+    is("BEGIN { print index(\"\", \"\"), index(\"a\", \"\"), index(\"\", \"a\"), index(\"\303\251\", \"\") }", NULL, "0 1 0 1\n");
+    /* substr on a long string of wide characters costs the same wherever it is asked, in any order */
+    is("BEGIN { s = \"\303\251\"; for(i = 0; i < 18; i++) s = s s; n = length(s); for(i = 1; i <= n; i++) if(substr(s, i, 1) == \"\303\251\") c++; print n, c }", NULL, "262144 262144\n");
+    is("BEGIN { s = \"\303\251\"; for(i = 0; i < 18; i++) s = s s; n = length(s); for(i = n; i > 0; i--) if(substr(s, i, 1) == \"\303\251\") c++; print n, c }", NULL, "262144 262144\n");
+    is("BEGIN { s = \"\303\251\"; for(i = 0; i < 18; i++) s = s s; n = length(s); for(i = 1; i <= 100000; i++) { if(substr(s, n - i, 1) == \"\303\251\") c++; if(substr(s, i, 2) == \"\303\251\303\251\") c++ } print c }", NULL, "200000\n");
+    /* and gives each character: a mixture of 1 to 4 bytes and bad ones, compared with one read character by character */
+    is("BEGIN { split(\"a \303\251 \343\201\202 \360\237\214\212 \377\", w); m = 5003; for(i = 1; i <= m; i++) { c[i] = w[(i * i) % 5 + 1]; s = s c[i] }"
+       " if(length(s) != m) print \"length\"; for(i = 1; i <= m; i++) { k = (i * 3571) % m + 1; if(substr(s, k, 1) != c[k]) bad++; if(k < m && substr(s, k, 2) != c[k] c[k + 1]) bad++ } print bad + 0 }", NULL, "0\n");
+    is("BEGIN { s = \"\303\251\"; for(i = 0; i < 10; i++) s = s s; print length(substr(s, 1000)), length(substr(s, 1, 1000)), length(substr(s, 1024)), length(substr(s, 1025)), length(substr(s, 500, 300)) }", NULL, "25 1000 1 0 300\n");
 }
 
 static void binary_data(void) {

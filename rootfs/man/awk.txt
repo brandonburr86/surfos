@@ -49,6 +49,9 @@ DESCRIPTION
 
     Functions: length substr index split sub gsub match sprintf
     tolower toupper sin cos atan2 exp log sqrt int rand srand.
+    substr(s, m, n) starts at 1 if m is lower and still gives up to n
+    characters: substr("hello", 0, 2) is he, and substr("hello", -1,
+    3) is hel, where mawk gives hell.
 
     Variables: NF NR FNR FS OFS ORS RS RSTART RLENGTH SUBSEP ENVIRON
     ARGC ARGV CONVFMT OFMT FILENAME.

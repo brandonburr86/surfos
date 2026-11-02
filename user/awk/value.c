@@ -9,7 +9,8 @@ A string knows its length, so that a NUL in the input does no harm, and has a NU
 the C library. A character is a UTF-8 sequence by the rule of libsurf's regex.c: overlong forms,
 surrogates and anything above U+10FFFF are no sequences, and a byte in none counts as one
 character. So that RSTART, which comes from the regular expression, and length() agree. The count
-is kept in the string: a loop of substr() over a long string would otherwise be quadratic.
+is kept in the string, and where characters start once a program looks far into one: a loop of
+substr() over a long string would otherwise be quadratic.
 
 A value from input, V_INPUT, is a number where it looks like one, decided when asked: most fields
 are never compared. What looks like a number is decimal only: strtod() also takes 0x10, inf and
@@ -25,6 +26,8 @@ delete what it likes. Nothing here recurses.
 #include <math.h>
 #include "awk.h"
 
+#define MARK_STEP 64                    /* characters between the marks of a string */
+
 /**** strings ****/
 
 struct str *str_alloc(unsigned len) {
@@ -34,6 +37,7 @@ struct str *str_alloc(unsigned len) {
     s->refs = 1;
     s->len = len;
     s->chars = NOT_COUNTED;
+    s->marks = NULL;
     s->s[len] = 0;
     return s;
 }
@@ -45,7 +49,10 @@ struct str *str_new(const char *p, unsigned len) {
 }
 
 void str_put(struct str *s) {
-    if(s && !--s->refs) free(s);
+    if(s && !--s->refs) {
+        free(s->marks);
+        free(s);
+    }
 }
 
 static int continues(const unsigned char *s, unsigned n, unsigned k) {
@@ -79,6 +86,26 @@ unsigned chars_in(const char *s, unsigned n) {
 unsigned str_chars(struct str *s) {
     if(s->chars == NOT_COUNTED) s->chars = chars_in(s->s, s->len);
     return s->chars;
+}
+
+/* The first look past MARK_STEP characters notes where every MARK_STEP-th one starts, once for the string, so that from
+   then on a look costs at most that many steps, in any order. Without the memory for that it walks, which only costs time. */
+unsigned char_at(struct str *s, unsigned k) {
+    unsigned i = 0;
+    if(k >= str_chars(s)) return s->len;
+    if(k >= MARK_STEP) {
+        if(!s->marks && (s->marks = malloc(((size_t)s->chars / MARK_STEP + 1) * sizeof(*s->marks)))) {
+            unsigned c = 0, at = 0;
+            for(; at < s->len; c++, at += char_len(s->s + at, s->len - at))
+                if(!(c % MARK_STEP)) s->marks[c / MARK_STEP] = at;
+        }
+        if(s->marks) {
+            i = s->marks[k / MARK_STEP];
+            k %= MARK_STEP;
+        }
+    }
+    for(; k; k--) i += char_len(s->s + i, s->len - i);
+    return i;
 }
 
 /**** values ****/
