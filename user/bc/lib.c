@@ -51,6 +51,17 @@ const char bc_library_text[] =
 "    _pv = 4 * (4 * _at(5) - _at(239)); _ps = s\n"
 "    return(_pv)\n"
 "}\n"
+/* d digits that a function will want at once, taken and given back before it starts, so that memory too
+   small for it is said at once and not after hours, as a power does it (power_fits()): a billion
+   digits to a number, as a scale holds a little over two */
+"define _room(d) {\n"
+"    auto t[], i\n"
+"    for(i = 0; d > 0; i++) {\n"
+"        if(d > 1000000000) scale = 1000000000 else scale = d\n"
+"        t[i] = 1 / 3; d -= scale\n"
+"    }\n"
+"    return(0)\n"
+"}\n"
 /* the arithmetic-geometric mean of 1 and b, at the current scale: the two means close in on each
    other, and the gap is squared at each turn, so one more mean after half the digits is all of them */
 "define _ag(b) {\n"
@@ -79,7 +90,7 @@ const char bc_library_text[] =
    twice as long as the last: e^f is the product of the e^r of the runs, each r is short, so a term of
    its series is cheap, and each is further out, so it has fewer terms (Brent's method). 1.4427 is
    1 / ln 2, near enough to count k's digits and 2^k's, of which there are under .31 k. A result under
-   10^-(scale+1) is 0. */
+   10^-(scale+1) is 0. What it keeps at once: about 7 numbers of w digits, a product among them. */
 "define e(x) {\n"
 "    auto s, w, k, f, p, r, t, u, v, i\n"
 "    if(x == 0) return(1)\n"
@@ -89,6 +100,7 @@ const char bc_library_text[] =
 "    k = x * 14427 / 10000; w = s + 14\n"
 "    if(k > 0) w += k * 31 / 100\n"
 "    w += length(k) + 2\n"
+"    t = _room(7 * w)\n"
 "    scale = w\n"
 "    t = _l2()\n"
 "    scale = 0\n"
@@ -110,7 +122,8 @@ const char bc_library_text[] =
    is log2 10 less 3.6e-13, so for the 2^31 digits a number can have at most, k is out by under a
    thousandth of a bit, and x / 2^k lies from .1 to 2. 2^m then makes it large: ln x =
    pi / (2 AGM(1, 4 / (x 2^(m-k)))) - (m - k) ln 2. Near x = 1 that is two long numbers that nearly
-   cancel, which costs nothing, as a scale counts digits after the point. */
+   cancel, which costs nothing, as a scale counts digits after the point. What it keeps at once: about
+   7 numbers of the mean's 1.5 w digits. */
 "define l(x) {\n"
 "    auto s, w, t, k, m, v\n"
 "    if(x <= 0) _fail \"not above zero\"\n"
@@ -119,6 +132,7 @@ const char bc_library_text[] =
 "    w = s + 14; t = w / 2 + length(w) + 2; m = t * 3321928094887 / 1000000000000 + 1\n"
 "    if(x < 1) k = length(x) - scale(x) - 1 else k = length(x / 1)\n"
 "    k = k * 3321928094887 / 1000000000000\n"
+"    v = _room(10 * w)\n"
 "    scale = w + t + length(w) + 2\n"
 "    if(k < 0) x *= 2 ^ -k else x /= 2 ^ k\n"
 "    v = _pi() / (2 * _ag(4 / (x * 2 ^ m)))\n"
@@ -179,18 +193,29 @@ const char bc_library_text[] =
 /* The Bessel function of the whole order n, by Miller's method. J(k-1) = 2k/x J(k) - J(k+1) is stable
    going down, where J grows, so from any start far enough above n it gives the values up to one
    factor, and 1 = J(0) + 2 J(2) + 2 J(4) + ... says what the factor is. Far enough: J(m) is at most
-   (x/2)^m / m!, t, so the value of J at m is below the digits wanted, and the first term there is
-   above them by as many: that is why whole numbers are enough for the way down. The signs:
-   J(-n) and J(n) at -x are each (-1)^n J(n). */
+   (x/2)^m / m!, t 10^e here, kept to 12 digits however small it gets, so the value of J at m is below
+   the digits wanted, and the first term there is above them by as many: that is why whole numbers
+   are enough for the way down. The steps grow with x, about 1.36 x of them: where the scale the series
+   of the library before this one needed for x, .45 x digits more, is too large, or 6 numbers of it do
+   not fit, this refuses as that one did. The signs: J(-n) and J(n) at -x are each (-1)^n J(n). */
 "define j(n, x) {\n"
-"    auto s, f, m, t, i, p, q, r, c, v\n"
+"    auto s, f, m, t, e, a, b, i, p, q, r, c, v\n"
 "    s = scale; scale = 0\n"
 "    n /= 1; f = 0\n"
 "    if(n < 0) { n = -n; f = n % 2 }\n"
 "    if(x < 0) { x = -x; if(n % 2) f = 1 - f }\n"
 "    if(x == 0) return(n == 0)\n"
-"    scale = s + 14; t = 1\n"
-"    while(t != 0) { m += 1; t = t * x / (2 * m) }\n"
+"    scale = s + 14 + x * 45 / 100\n"
+"    t = _room(6 * scale)\n"
+"    scale = 12; a = x; b = 0\n"
+"    while(a >= 10) { a /= 10; b += 1 }\n"
+"    while(a < 1) { a *= 10; b -= 1 }\n"
+"    t = 1; e = 0\n"
+"    while(e > -(s + 15) || m <= x) {\n"
+"        m += 1; t = t * a / (2 * m); e += b\n"
+"        while(t >= 10) { t /= 10; e += 1 }\n"
+"        while(t < 1) { t *= 10; e -= 1 }\n"
+"    }\n"
 "    if(m <= n) return(0)\n"
 "    scale = 0; p = 1\n"
 "    for(i = m; i > 0; i--) {\n"

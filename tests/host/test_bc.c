@@ -1203,6 +1203,17 @@ static void library_huge(void) {
     digits_are("x=3^2000000; scale=20; l(x)\n", "2197224.57733621938279049047\n");
 }
 
+/* inside the library, a run that fails names the function the program called, and says what the library before this
+   one said where it refused */
+static void fails_lib(const char *src, const char *why) {
+    int rc = run(src, 1, 0);
+    checks++;
+    if(rc != BC_TROUBLE || !strstr(errtext, why)) {
+        failed++;
+        printf("FAIL -l: %.300s\n  status %d, message [%s], wanted [%s]\n", src, rc, errtext, why);
+    }
+}
+
 static void library(void) {
     static const char *const es[] = { ".001", ".5", "1", "2.5", "10", "100", "-1", "-.5", "-20", "-46", "1000", ".00000000001" };
     static const char *const ls[] = { ".001", ".5", ".999", "1.001", "2", "10", "1000000", "1.0000001", "10^50",
@@ -1606,6 +1617,15 @@ static void memory(void) {
     limited("scale=2147483647\n1/3\n", 0, 1u << 20, "number too long");
     limited("x=.1^2147483647\n", 0, 1u << 20, "number too long");
     limited("scale=2000000000\nsqrt(2)\n", 0, 1u << 20, "number too long");
+    /* the library takes what it will need before it starts: under a program's 256 MB this is said at once, not after hours,
+       and by the function's own name, not a helper's */
+    limited("scale=100000000\ne(1)\n", 1, 1u << 28, "e: out of memory");
+    limited("scale=100000000\nl(2)\n", 1, 1u << 28, "l: out of memory");
+    limited("scale=100000000\nj(0,1)\n", 1, 1u << 28, "j: out of memory");
+    limited("scale=100000000\nx=e(1)\n", 1, 1u << 28, "e: out of memory");
+    limited("define f(x) { return e(x) }\nscale=100000000\nf(1)\n", 1, 1u << 28, "e: out of memory");
+    fails_lib("j(0, 5000000000)\n", "j: scale must be from 0 to 2147483647");      /* at once, as the one before it did */
+    fails_lib("j(0, -5000000000)\n", "j: scale must be from 0 to 2147483647");
     limited("scale=100000000\ne(1)\n", 1, 1u << 20, "out of memory");
     /* a sparse array costs little */
     peak_bytes = 0;

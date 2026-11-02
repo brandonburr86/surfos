@@ -37,6 +37,8 @@ void bc_say(struct bc *b, const char *what) {
 
 static void say_in(struct bc *b, const struct func *f, const char *what) {
     char line[160];
+    unsigned k = b->nframes;
+    while(f->lib && k && b->frames[k - 1].caller->lib) f = b->frames[--k].caller;   /* the library's helpers are its own business */
     if(f == &b->main) {
         bc_say(b, what);
         return;
