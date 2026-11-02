@@ -644,6 +644,14 @@ static void language(void) {
     is("BEGIN { a = 6; a /= 2; print a }", NULL, "3\n");
     is("{ print match($0, /=/) }", "a=b\n", "2\n");
     is("BEGIN { print length(\"a\" \"b\"), substr(\"abc\", 1 + 1) }", NULL, "2 bc\n");
+    /* a word that starts with getline is a name */
+    is("BEGIN { getline_cmd = \"cat\"; print \"hello\" | getline_cmd }", NULL, "hello\n");
+    is("BEGIN { getline2 = \"cat\"; print \"hello\" | getline2 }", NULL, "hello\n");
+    is("BEGIN { getlineX = \"cat\"; print \"hello\" | getlineX }", NULL, "hello\n");
+    is("BEGIN { \"echo a\" |getline; print }", NULL, "a\n");
+    is("BEGIN { \"echo a\" | getline\nprint }", NULL, "a\n");
+    is("BEGIN { \"echo a\" | getline x; print x }", NULL, "a\n");
+    is("BEGIN { while((\"echo a\" | getline) > 0) print }", NULL, "a\n");
     is("function f(a) { return a * 2 } BEGIN { print f(2) f(3), f(f(2)) }", NULL, "46 8\n");
     is("function f(a) { a = 1 } BEGIN { print f(2) \"x\" }", NULL, "x\n");
     /* lines */

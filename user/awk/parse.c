@@ -132,6 +132,10 @@ static void new_source_check(struct parser *p) {
     }
 }
 
+static int in_name(int c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
 static int two(struct parser *p, int second, int both, int one) {
     if(peek(p, 0) == second) {
         p->pos++;
@@ -260,12 +264,7 @@ static void lex_number(struct parser *p) {
 
 static void lex_name(struct parser *p) {
     unsigned s = p->pos, i, n;
-    int c;
-    for(;;) {
-        c = peek(p, 0);
-        if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) break;
-        p->pos++;
-    }
+    while(in_name(peek(p, 0))) p->pos++;
     n = p->pos - s;
     p->text.len = 0;
     buf_add(&p->text, p->src + s, n);
@@ -396,11 +395,11 @@ static void expect(struct parser *p, int tok) {
     next(p);
 }
 
-/* the text after a | says what it is for */
+/* the text after a | says what it is for: the word getline, and not a name that starts with it */
 static int getline_follows(struct parser *p) {
     unsigned k = 0;
     while(peek(p, k) == ' ' || peek(p, k) == '\t') k++;
-    return p->pos + k + 7 <= p->len && !memcmp(p->src + p->pos + k, "getline", 7);
+    return p->pos + k + 7 <= p->len && !memcmp(p->src + p->pos + k, "getline", 7) && !in_name(peek(p, k + 7));
 }
 
 /**** writing code ****/
