@@ -105,6 +105,11 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              the stick unmounted all along; a setting changed and a network saved through a short mount;
              then the menu's entry without the settings: nothing joined, no telnetd. Read here afterwards:
              the owner's line and comment kept, the key and never the password, fsck_msdos and fsck.fat
+  fsck       (11/01/26) fsck through the real kernel and USB stack: a copy of the foreign stick damaged here on
+             the host, looked at, repaired, and read back; every refusal, a look held under a read-only mount,
+             the plan on the console with the output elsewhere, keys typed ahead dropped. A second copy
+             interrupted, pulled at the question and pulled in a repair, then repaired. A third with two names
+             on a chain: no repair, and not a byte changed. Read here afterwards: fsck_msdos and fsck.fat
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
