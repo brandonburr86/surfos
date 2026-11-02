@@ -95,14 +95,26 @@ static TV_UNUSED unsigned int top_share(unsigned int ticks, unsigned int elapsed
 }
 
 /* each task's share of the elapsed ticks since the reading before, which is in pid order; with none (the first
-   report), of the time since boot. A task not in the reading before has run only since it. */
+   report), of the time since boot. Two readings in one tick tell nothing, so the shares stay as they were.
+
+   A task not in the reading before is new only if it can be. Pids only grow, so one at or below that reading's highest
+   was there and was missed (top_tidy()); so was one above it that has run for longer than the interval, which is that
+   reading's last task missed. What a missed task did in the interval is not known, and its whole life is not it: it
+   shows nothing until the next report, which knows. */
 static TV_UNUSED void top_shares(struct top_list *now, const struct top_list *before, unsigned int elapsed) {
-    int i;
+    int i, highest = before && before->n ? before->t[before->n - 1].pi.pid : -1;
     for(i = 0; i < now->n; i++) {
         struct top_task *t = &now->t[i];
         const struct top_task *was = before && before->n ?
             bsearch(t, before->t, (size_t)before->n, sizeof(before->t[0]), top_cmp_pid) : NULL;
-        t->tenths = top_share(was ? t->pi.cpu_ticks - was->pi.cpu_ticks : t->pi.cpu_ticks, elapsed);
+        unsigned int ran = t->pi.cpu_ticks;
+        if(before && !elapsed) {
+            t->tenths = was ? was->tenths : 0;
+            continue;
+        }
+        if(was) ran -= was->pi.cpu_ticks;
+        else if(before && (t->pi.pid <= highest || ran > elapsed)) ran = 0;
+        t->tenths = top_share(ran, elapsed);
     }
 }
 

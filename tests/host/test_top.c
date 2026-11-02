@@ -212,7 +212,8 @@ static void readings(void) {
     CHECK(top_share(4294968u, 4294968u * 2) == 500);                /* past what * 1000 can hold */
     CHECK(top_share(4000000000u, 4294967295u) == 931);
 
-    /* the second of two readings, 200 ticks later: 0 runs on, 1 ran all of it, 2's counter wrapped, 3 is new, 4 went */
+    /* the second of two readings, 200 ticks later: 0 runs on, 1 ran all of it, 2's counter wrapped, 4 went, 5 is new
+       (a new pid is above all the others': pids only grow) */
     add(&a, task(0, -1, PROC_RUNNING, 0, -1, "idle", 1000, 0));
     add(&a, task(1, 0, PROC_BLOCKED, 0, -1, "init", 100, 0));
     add(&a, task(2, 1, PROC_READY, PROC_USER, 0, "wrap", 0xfffffff0u, 10));
@@ -221,18 +222,76 @@ static void readings(void) {
     add(&b, task(0, -1, PROC_RUNNING, 0, -1, "idle", 1080, 0));
     add(&b, task(1, 0, PROC_BLOCKED, 0, -1, "init", 300, 0));
     add(&b, task(2, 1, PROC_READY, PROC_USER, 0, "wrap", 0x0000000cu, 10));
-    add(&b, task(3, 1, PROC_READY, PROC_USER, 0, "new", 40, 10));
+    add(&b, task(5, 1, PROC_READY, PROC_USER, 0, "new", 40, 10));
     top_tidy(&b);
     top_shares(&b, &a, 200);
-    CHECK(of(&b, 0)->tenths == 400 && of(&b, 1)->tenths == 1000 && of(&b, 2)->tenths == 140 && of(&b, 3)->tenths == 200);
+    CHECK(of(&b, 0)->tenths == 400 && of(&b, 1)->tenths == 1000 && of(&b, 2)->tenths == 140 && of(&b, 5)->tenths == 200);
     CHECK(!of(&b, 4));
     top_shares(&b, NULL, 4000);                                     /* the first report: since boot */
-    CHECK(of(&b, 0)->tenths == 270 && of(&b, 1)->tenths == 75 && of(&b, 3)->tenths == 10);
-    top_shares(&b, &a, 0);
-    CHECK(of(&b, 0)->tenths == 0);
+    CHECK(of(&b, 0)->tenths == 270 && of(&b, 1)->tenths == 75 && of(&b, 5)->tenths == 10);
     a.n = 0;
     top_shares(&b, &a, 100);                                        /* a reading before with nothing in it */
-    CHECK(of(&b, 3)->tenths == 400);
+    CHECK(of(&b, 5)->tenths == 400);
+    top_free(&a);
+    top_free(&b);
+}
+
+/* the review of 11/01/26: procinfo() goes by position, so a task can be missed by a reading (a task before it was
+   collected between two calls), and it was then taken for a new one with its whole life as one interval: 40 s of a task
+   that did not run showed 100.0 at the head of the list. Pids only grow, so one at or below the highest of the reading
+   before was there; one above it was there too if it has run for longer than the interval. */
+static void missed(void) {
+    struct top_list a, b;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    add(&a, task(0, -1, PROC_READY, 0, -1, "idle", 90000, 0));
+    add(&a, task(20, 1, PROC_BLOCKED, PROC_USER, 0, "surfsh", 6000, 40));
+    add(&a, task(40, 1, PROC_BLOCKED, PROC_USER, 0, "cat", 10, 40));
+    top_tidy(&a);
+    add(&b, task(0, -1, PROC_READY, 0, -1, "idle", 90150, 0));
+    add(&b, task(20, 1, PROC_BLOCKED, PROC_USER, 0, "surfsh", 6002, 40));
+    add(&b, task(30, 1, PROC_BLOCKED, PROC_USER, 0, "httpd", 4000, 40));    /* missed: below the highest, 40 */
+    add(&b, task(40, 1, PROC_BLOCKED, PROC_USER, 0, "cat", 12, 40));
+    add(&b, task(50, 1, PROC_BLOCKED, PROC_USER, 0, "ftpd", 4000, 40));     /* missed at the list's end: above it, but it has
+                                                                               run far longer than the 200 ticks between */
+    add(&b, task(60, 40, PROC_READY, PROC_USER, 0, "new", 44, 40));         /* new: above it, and no longer than that */
+    add(&b, task(61, 40, PROC_READY, PROC_USER, 0, "newer", 200, 40));      /* new, and it ran all the time there was */
+    top_tidy(&b);
+    top_shares(&b, &a, 200);
+    CHECK(of(&b, 0)->tenths == 750 && of(&b, 20)->tenths == 10 && of(&b, 40)->tenths == 10);
+    CHECK(of(&b, 30)->tenths == 0);
+    CHECK(of(&b, 50)->tenths == 0);
+    CHECK(of(&b, 60)->tenths == 220);
+    CHECK(of(&b, 61)->tenths == 1000);
+    top_order(&b, TOP_BY_CPU);                              /* what a person saw: not at the head of the list */
+    CHECK(b.t[0].pi.pid == 61 && b.t[1].pi.pid == 0);
+    top_free(&a);
+    top_free(&b);
+}
+
+/* two readings in one tick (Space held down): no time passed, so the shares stay as they were. They read 0 and the
+   summary then said the processor was 100.0% busy. */
+static void one_tick(void) {
+    struct top_list a, b;
+    struct sysinfo si;
+    char row[TOP_ROW_MAX];
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&si, 0, sizeof(si));
+    si.hz = 100;
+    si.ticks = 1000;
+    add(&a, task(0, -1, PROC_READY, 0, -1, "idle", 900, 0));
+    add(&a, task(5, 1, PROC_READY, PROC_USER, 0, "busy", 100, 40));
+    top_tidy(&a);
+    a.t[0].tenths = 968;
+    a.t[1].tenths = 32;
+    add(&b, task(0, -1, PROC_READY, 0, -1, "idle", 900, 0));
+    add(&b, task(5, 1, PROC_READY, PROC_USER, 0, "busy", 100, 40));
+    add(&b, task(7, 5, PROC_READY, PROC_USER, 0, "new", 0, 40));
+    top_tidy(&b);
+    top_shares(&b, &a, 0);
+    CHECK(of(&b, 0)->tenths == 968 && of(&b, 5)->tenths == 32 && of(&b, 7)->tenths == 0);
+    CHECK(top_summary(&b, &si, row, sizeof(row), 512) > 0 && strstr(row, "processor 3.2% busy"));
     top_free(&a);
     top_free(&b);
 }
@@ -415,6 +474,8 @@ int main(void) {
     characters();
     rows();
     readings();
+    missed();
+    one_tick();
     orders();
     text();
     random_tasks();
