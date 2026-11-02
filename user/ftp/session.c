@@ -5,12 +5,14 @@ File: session.c   Date: 11/01/26
 --------------------
 A session with an FTP server (ftpsession.h). The server is not trusted with anything:
 
-- Every wait has a limit: a reply within REPLY_MS, a byte of data within DATA_MS, a listing within
-  LIST_MS, a key of a password within SECRET_MS, and a write to the control connection only after
-  poll() says it will not wait. A reply is bounded in lines and bytes (ftpclient.c); what comes that
-  is no reply ends the connection. A file's transfer has no limit of its own: a byte every 59 s keeps
-  one alive for as long as the server likes, which any client of a slow link has to allow, and
-  Ctrl+C is the way out. Time a pager holds the output at --More-- is no time of the server's (s.held).
+- Every wait for the server has a limit: a reply within REPLY_MS, a byte of data within DATA_MS,
+  mget's listing of names within LIST_MS, and a write to the control connection only after poll()
+  says it will not wait. A reply is bounded in lines and bytes (ftpclient.c); what comes that is no
+  reply ends the connection. A file's transfer, or a listing shown (ls, dir), has no limit of its
+  own: a byte every 59 s keeps one alive for as long as the server likes, which any client of a slow
+  link has to allow, and Ctrl+C is the way out. Time a pager holds the output at --More-- is no time
+  of the server's (s.held). A password waits for its typist however long it takes: it is asked for
+  only by a process with a terminal of its own (own_terminal()).
 - A data connection is passive (EPSV, then PASV) and goes to the address the control connection
   reached, whatever a 227 reply names, and to a port from 1024.
 - A file is good only when the server said 2xx after its last byte, and, in binary mode, when at
@@ -26,10 +28,12 @@ A session with an FTP server (ftpsession.h). The server is not trusted with anyt
   from a pipe), goes straight to the connection and is wiped, and is scrubbed from what the server
   says in answer to PASS. Nothing here prints what it sends.
 
-Ctrl+C during a command (TTY_INTR): a transfer, once its command has gone, is aborted (ABOR, the
-local file cleaned up as for any failure) and the session goes on, or ends if the server does not
-answer; any other command has no way back in step with the server, so the connection is closed. A
-Ctrl+C that came outside any wait is counted all the same, and main.c reads it after each command.
+Ctrl+C during a command (TTY_INTR): one that comes before the command goes stops it there, with
+the session in step as it was (NOT_SENT); a transfer, once its command has gone, is aborted (ABOR,
+the local file cleaned up as for any failure) and the session goes on, or ends if the server does
+not answer; any other command has no way back in step with the server, so the connection is
+closed. A Ctrl+C that came outside any wait is counted all the same, and main.c reads it after each
+command.
 A kill leaves a partial file or a .tmp where it was: SurfOS has no way to tell a program.
 */
 
@@ -42,8 +46,7 @@ A kill leaves a partial file or a .tmp where it was: SurfOS has no way to tell a
 #define DATA_PIECE   16384              /* read from or written to a data connection at a time */
 #define REPLY_MS     120000             /* a whole reply; a server may sync a big file first */
 #define DATA_MS      60000              /* a data connection that moves no byte */
-#define LIST_MS      300000             /* a listing, start to end: the one thing a server can feed for ever with nothing to fill */
-#define SECRET_MS    120000             /* a key of a password: /dev/tty always opens, and a detached task's never answers */
+#define LIST_MS      300000             /* mget's listing, start to end: names a server can feed for ever, filling nothing */
 #define SEND_MS      30000              /* a command the server does not take */
 #define ABORT_MS     5000               /* each answer after ABOR */
 #define QUIT_MS      5000
@@ -53,6 +56,7 @@ A kill leaves a partial file or a .tmp where it was: SurfOS has no way to tell a
 #define ANON_USER    "anonymous"
 #define ANON_PASS    "anonymous@surfos"
 #define FILE_LIMIT   0xffffffffULL      /* the most a file may hold */
+#define NOT_SENT     (-4)               /* a Ctrl+C came before a command's first byte went: the session is in step */
 
 enum { L_STDOUT, L_NEW, L_SAVE, L_APPEND, L_DEVICE };   /* where a download goes */
 enum { TO_FILE, TO_SHOW, TO_NAMES };
@@ -204,9 +208,10 @@ static void drop(const char *why) {
     s.in_off = s.in_len = 0;
 }
 
-/* a reply wait that ended in r (reply_wait()): the status */
+/* a reply wait that ended in r (reply_wait()), or a command that did not go (NOT_SENT): the status */
 static int failed(int r) {
     if(r == -2) drop("stopped by Ctrl+C");
+    if(r == NOT_SENT) say("stopped\n");
     return FS_TROUBLE;
 }
 
@@ -293,8 +298,9 @@ static int final_reply(struct ftpc_reply *r, int show) {
     return -1;
 }
 
-/* what the server said on its own (421, going away) before a command, so that its answer is that command's */
-static void drain(void) {
+/* what the server said on its own (421, going away) before a command, so that its answer is that command's: 0, or
+   NOT_SENT for a Ctrl+C that its look found (counted once, and so the command must not go after it) */
+static int drain(void) {
     struct ftpc_reply r;
     int n;
     for(n = 0; n < DRAIN_MAX && s.ctl >= 0; n++) {
@@ -304,19 +310,22 @@ static void drain(void) {
             p.fd = s.ctl;
             p.events = POLLIN;
             p.revents = 0;
-            if(poll(&p, 1, 0) <= 0) return;
+            if(poll(&p, 1, 0) <= 0) return 0;
             v = read_more(0);
+            if(v == -2) return NOT_SENT;
             if(v == 0) drop("the server closed it");
-            if(v <= 0) return;
+            if(v <= 0) return 0;
         }
         ftpc_reply_init(&r);
         if(feed_lines(&r, 1) < 0) drop("what the server says is not FTP");
         else if(r.code == 421) drop("the server is going away");
     }
     if(s.ctl >= 0 && n == DRAIN_MAX) drop("the server will not stop talking");
+    return 0;
 }
 
-/* a command, written whole: 0; -1 said. What it sends is never shown or kept: a password may be in it */
+/* a command, written whole: 0; -1 said; NOT_SENT for a Ctrl+C before its first byte. What it sends is never shown or
+   kept: a password may be in it */
 static int send_cmd(const char *verb, const char *arg) {
     char out[2 * FTP_LINE_MAX + 16];
     int n = ftpc_command(out, sizeof(out), verb, arg), off = 0, r = 0;
@@ -331,8 +340,12 @@ static int send_cmd(const char *verb, const char *arg) {
         p.events = POLLOUT;
         p.revents = 0;
         r = wait_ready(&p, 1, SEND_MS);
+        if(r == -2 && !off) {
+            r = NOT_SENT;
+            break;
+        }
         if(r <= 0) {
-            if(r == -2) drop("stopped by Ctrl+C");
+            if(r == -2) drop("stopped by Ctrl+C");     /* a part went: no way back in step */
             else drop(r ? strerror(errno) : "the server takes no command");
             r = -1;
             break;
@@ -358,11 +371,17 @@ static int negative(const char *what, const struct ftpc_reply *r) {
     return FS_NO;
 }
 
-/* a command and its final reply: the code, -1 or -2 */
+/* a command, after what the server said on its own: 0 it went; -1 the connection is gone, said; NOT_SENT */
+static int start_cmd(const char *verb, const char *arg) {
+    int v = drain();
+    if(v < 0) return v;
+    return s.ctl < 0 ? -1 : send_cmd(verb, arg);
+}
+
+/* a command and its final reply: the code, -1, -2 or NOT_SENT */
 static int ask(const char *verb, const char *arg, struct ftpc_reply *r, int show) {
-    drain();
-    if(s.ctl < 0 || send_cmd(verb, arg) < 0) return -1;
-    return final_reply(r, show);
+    int v = start_cmd(verb, arg);
+    return v < 0 ? v : final_reply(r, show);
 }
 
 /* a command whose success is a 2xx, shown */
@@ -377,11 +396,26 @@ static int simple(const char *verb, const char *arg, const char *what) {
 
 /**** logging in ****/
 
-/* the password, from the terminal itself (the commands may come from a pipe): 0, -1 with nothing to send */
+/* has this process a terminal somebody types on for it? Not when procinfo() gives it none, nor when it is detached (the
+   desktop's Run program..., a ring-0 shell's &): /dev/tty then still opens, as its console's, whose keys go to others,
+   and a password asked for there would be waited for in vain. SurfOS's procinfo() gives a live task a tty always.
+   procinfo() counts tasks from the list's head at each call, so a task collected during a scan shifts the rest by one
+   and the scan can pass over this one (kernel/task.c says as much of task_info()): it is looked for again */
+static int own_terminal(void) {
+    struct procinfo pi;
+    int i, scan, me = getpid();
+    for(scan = 0; scan < 4; scan++)
+        for(i = 0; procinfo(i, &pi) == 0; i++)
+            if(pi.pid == me) return pi.tty >= 0 && !(pi.flags & PROC_DETACHED);
+    return 0;
+}
+
+/* the password, from the terminal itself (the commands may come from a pipe), however long it takes to type: 0, -1 with
+   nothing to send */
 static int ask_secret(struct ftpc_secret *sec, const char *user) {
     char prompt[100];
-    int fd, r = FTPC_S_MORE, late = 0;
-    if((fd = open("/dev/tty", O_RDWR)) < 0) {
+    int fd, r = FTPC_S_MORE;
+    if(!own_terminal() || (fd = open("/dev/tty", O_RDWR)) < 0) {
         say_err("%s: a password is needed, and there is no terminal to ask on", safe(user));
         return -1;
     }
@@ -396,20 +430,8 @@ static int ask_secret(struct ftpc_secret *sec, const char *user) {
     }
     memset(sec, 0, sizeof(*sec));
     while(r == FTPC_S_MORE) {
-        struct pollfd p;
         unsigned char c;
-        ssize_t n;
-        p.fd = fd;
-        p.events = POLLIN;
-        p.revents = 0;
-        n = poll(&p, 1, SECRET_MS);             /* a read would wait for ever on a terminal nobody is at */
-        if(n < 0 && errno == EINTR) continue;
-        if(n <= 0) {
-            late = !n;
-            r = FTPC_S_CANCEL;
-            break;
-        }
-        n = read(fd, &c, 1);
+        ssize_t n = read(fd, &c, 1);
         if(n < 0 && errno == EINTR) continue;
         r = n <= 0 ? FTPC_S_CANCEL : ftpc_secret_key(sec, c);
         c = 0;
@@ -420,7 +442,7 @@ static int ask_secret(struct ftpc_secret *sec, const char *user) {
     if(r == FTPC_S_DONE && !sec->over) return 0;
     r = sec->over;
     ftpc_wipe(sec, sizeof(*sec));
-    say_err("%s", r ? "that password is too long" : late ? "no password came in 2 minutes" : "no password was given");
+    say_err("%s", r ? "that password is too long" : "no password was given");
     return -1;
 }
 
@@ -496,8 +518,7 @@ int fs_close(void) {
     struct ftpc_reply r;
     int c;
     if(s.ctl < 0) return FS_OK;
-    drain();
-    if(s.ctl >= 0 && send_cmd("QUIT", NULL) == 0) {
+    if(start_cmd("QUIT", NULL) == 0) {          /* a Ctrl+C on the way: no QUIT, the connection just closes */
         ftpc_reply_init(&r);
         c = reply_wait(&r, QUIT_MS, 1);
         if(c < 0) return failed(c);
@@ -634,23 +655,27 @@ static int open_data(int *status) {
 
 /* the transfer stops here: ABOR first, as the end of the data connection alone would tell a server taking an upload
    that the file is whole; then the data connection goes, which frees a server waiting to write to it. How many replies
-   come then, and when, differs from server to server (a 150 that was on its way, 426, 225 or 226, sometimes late), and one
-   taken for the next command's answer would make a failed delete look done. A server answers in turn, so NOOP's
-   answer comes after all of them: everything up to it is passed over. One that does not get there is left */
+   come then, and when, differs from server to server (a 150 that was on its way, 426, 225 or 226, sometimes late, 500 or
+   502 from one with no ABOR), and one taken for the next command's answer would make a failed delete look done. A
+   server answers in turn, so NOOP's 200 comes after all of them: every reply up to it is the abort's. One that does not
+   get there is left. A server that answers NOOP before the abort's last reply, or twice, still hands one on to the next
+   command: nothing this side can tell those apart (the account says so) */
 static void abort_transfer(struct ftpc_reply *r, int dfd) {
-    int c = 0, i;
-    if(s.ctl < 0 || send_cmd("ABOR", NULL) < 0) {
-        close(dfd);
+    int c = s.ctl >= 0 ? send_cmd("ABOR", NULL) : -1, i;
+    if(c == NOT_SENT) drop("stopped by Ctrl+C");        /* no ABOR went: the connection's end has to tell the server */
+    close(dfd);
+    if(s.ctl < 0 || c < 0) return;
+    if((c = send_cmd("NOOP", NULL)) < 0) {
+        if(c == NOT_SENT) drop("stopped by Ctrl+C");
         return;
     }
-    close(dfd);
-    if(send_cmd("NOOP", NULL) < 0) return;
     for(i = 0; i < PRELIMS; i++) {
         ftpc_reply_init(r);
         c = reply_wait(r, ABORT_MS, 0);
-        if(c <= 0 || c == 200 || c == 500 || c == 502) break;   /* 500, 502: it knows no NOOP, which is an answer to it */
+        if(c <= 0 || c == 200 || c == 421) break;
     }
-    if(c == 0) drop("the server does not answer ABOR");
+    if(c == 0) drop("no answer to NOOP after ABOR");
+    else if(c == 421) drop("the server is going away");
     else if(c < 0) failed(c);
     else if(i == PRELIMS) drop("no end to its replies");
 }
@@ -707,18 +732,18 @@ static int names_add(struct sink *k, const char *line) {
     int n = (int)strlen(name);
     if(!n) return 0;
     if(l->count >= FS_NAMES_MAX || k->names_bytes + n + 1 > FS_NAMES_BYTES) {
-        l->cut = 1;
+        l->cut = FS_CUT_LONG;
         return -1;
     }
     if(!(l->count & 63)) {
         if(!(v = realloc(l->name, (size_t)(l->count + 64) * sizeof(char *)))) {
-            l->cut = 1;
+            l->cut = FS_CUT_LONG;
             return -1;
         }
         l->name = v;
     }
     if(!(copy = strdup(name))) {
-        l->cut = 1;
+        l->cut = FS_CUT_LONG;
         return -1;
     }
     l->name[l->count++] = copy;
@@ -813,7 +838,7 @@ static int pump_in(int dfd, struct sink *k, struct ftpc_reply *r, int *early) {
     for(;;) {
         struct pollfd p[2];
         int n = 1, left = DATA_MS - (int)(uptime() - last), v;
-        if(k->kind != TO_FILE && (int)(uptime() - began - (s.held - held)) > LIST_MS) {
+        if(k->kind == TO_NAMES && (int)(uptime() - began - (s.held - held)) > LIST_MS) {
             say_err("the listing took too long: %d minutes", LIST_MS / 60000);
             return -1;
         }
@@ -997,10 +1022,9 @@ static int transfer_in(const char *verb, const char *arg, struct sink *k, unsign
             return FS_NO;
         }
     }
-    drain();
-    if(s.ctl < 0 || send_cmd(verb, arg) < 0) {
+    if((c = start_cmd(verb, arg)) < 0) {
         close(dfd);
-        return FS_TROUBLE;
+        return failed(c);
     }
     c = reply(&r, 0);
     if(c == -2) return stopped_early(-2, dfd, &r, 0);   /* a transfer already, for the server: nothing was opened here */
@@ -1140,6 +1164,7 @@ int fs_names(const char *dir, struct fs_names *out) {
     k.kind = TO_NAMES;
     k.names = out;
     r = transfer_in("NLST", dir, &k, 0, dir ? dir : "the listing");
+    if(r != FS_OK && out->count && !out->cut) out->cut = FS_CUT_SHORT;     /* names of a listing that failed part-way */
     if(k.long_lines) {
         say_err("%d lines of the listing were too long: left out", k.long_lines);
         if(r == FS_OK) r = FS_NO;
@@ -1248,11 +1273,10 @@ int fs_put(const char *local, const char *remote) {
         close(fd);
         return status;
     }
-    drain();
-    if(s.ctl < 0 || send_cmd("STOR", remote) < 0) {
+    if((c = start_cmd("STOR", remote)) < 0) {
         close(dfd);
         close(fd);
-        return FS_TROUBLE;
+        return failed(c);
     }
     c = reply(&r, 0);
     if(c == -2) {
@@ -1270,6 +1294,10 @@ int fs_put(const char *local, const char *remote) {
     ftpc_reply_init(&r);
     v = pump_out(dfd, fd, &r, &early, &sent);
     close(fd);
+    if(!v && early && r.code >= 300) {          /* the server's no came part-way: that is what is said, not the size */
+        close(dfd);
+        return negative(remote, &r);
+    }
     if(!v && sent < st.size) {                  /* its end would tell the server that this is the whole file */
         say_err("%s: the file got shorter while it was read: %llu of %u bytes", safe(local), sent, st.size);
         v = 1;

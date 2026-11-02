@@ -62,11 +62,13 @@ COMMANDS
 PASSWORDS
     A password is asked for without echo, on the terminal itself,
     also when the commands come from a script: it is never read from
-    a line, a script or the command line. If nobody types it within 2
-    minutes, as where no terminal is attended, the login fails. It is
-    never kept, and is hidden if the server says it back in its answer
-    to PASS; if the server repeats it in a later reply, that is shown
-    like anything else it says. Anonymous never asks.
+    a line, a script or the command line, and ftp waits for it as
+    long as it takes. A program with no terminal of its own (one the
+    desktop's Run program started, say) has nobody to type it, and
+    there the login fails at once. A password is never kept, and is
+    hidden if the server says it back in its answer to PASS; if the
+    server repeats it in a later reply, that is shown like anything
+    else it says. Anonymous never asks.
 
 FILES
     get replaces a file through a new file beside it, renamed over
@@ -89,20 +91,22 @@ FILES
     never replaces a file unasked: at a terminal it asks, in a script
     it leaves the file and says so, which counts as a failure. * and
     ? do not match a leading dot. A listing of more than 4096 names
-    stops there, and mget then fetches nothing.
+    stops there, and mget then fetches nothing, as it does from a
+    listing that fails part-way or takes more than 5 minutes.
 
     A file on SurfOS holds less than 4 GB. File times are not kept.
 
 CTRL+C
     Ctrl+C stops the command that runs: a transfer is aborted and
-    its file cleaned up, and the prompt comes back. Stopping any other
-    command closes the connection. A script ends, with status 130. At
+    its file cleaned up, and the prompt comes back. Any other command
+    the server has already is stopped by closing the connection; one
+    not sent yet is not sent. A script ends, with status 130. At
     the prompt Ctrl+C leaves ftp, as it leaves any program. A kill
     leaves a partial file, or a .tmp, where it was.
 
-    Waits have limits, but a transfer that still moves does not: a
-    server that sends a byte a minute holds it for as long as it
-    likes. Ctrl+C is the way out.
+    Waits for the server have limits, but a transfer or a listing
+    that still moves does not: a server that sends a byte a minute
+    holds it for as long as it likes. Ctrl+C is the way out.
 
     Status 0 when every command worked, 1 when the server said no to
     one or mget left something out, 2 for anything worse, and that

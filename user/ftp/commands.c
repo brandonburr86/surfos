@@ -12,9 +12,9 @@ server's own idea of wildcards does not count and a name that does not match wha
 not taken, whatever the server lists. Each name is the last part of what the listing says, and
 must pass ftpc_safe_name() to become a local file: it is the server's word, while get's name is
 the user's. mget never replaces a file unasked: at a terminal it asks, in a script it leaves the
-file and says so. A listing cut short, by Ctrl+C or by being too long, is no list to go by: nothing
-is fetched from it. mput matches in the local folder, ignoring case as FAT does. What the commands
-say goes to standard error, as session.c's does.
+file and says so. A listing that did not come whole (Ctrl+C, too long, or failed part-way) is no
+list to go by: nothing is fetched from it. mput matches in the local folder, ignoring case as FAT
+does. What the commands say goes to standard error, as session.c's does.
 */
 
 #include <surf.h>
@@ -155,9 +155,10 @@ static int mget_one(const char *pattern, int *all, int *stop) {
         return worst;
     }
     if(names.cut) {
-        fprintf(stderr, "ftp: %s: the listing is too long: nothing was fetched\n", pattern);
+        int too_long = names.cut == FS_CUT_LONG;
+        fprintf(stderr, "ftp: %s: the listing %s: nothing was fetched\n", pattern, too_long ? "is too long" : "did not come whole");
         fs_names_free(&names);
-        return FS_TROUBLE;
+        return too_long ? FS_TROUBLE : worst;
     }
     for(i = 0; i < names.count && fs_connected(); i++) {
         const char *name = names.name[i];

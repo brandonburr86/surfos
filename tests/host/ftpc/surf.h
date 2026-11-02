@@ -44,6 +44,8 @@
 #undef strdup
 #define ferror      sim_ferror
 #define strdup      sim_strdup
+#define procinfo    sim_procinfo
+#define getpid      sim_getpid
 #define stat        sim_stat
 #define open        sim_open
 #define close       sim_close

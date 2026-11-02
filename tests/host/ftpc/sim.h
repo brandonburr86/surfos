@@ -45,4 +45,13 @@ int sim_fputc(int c, FILE *f);
 int sim_fflush(FILE *f);
 int sim_ferror(FILE *f);
 char *sim_strdup(const char *s);
+struct sim_procinfo {                   /* SurfOS's struct procinfo (include/surfos/proc.h): the fields the client reads */
+    int pid, ppid;
+    int state;
+    unsigned int flags;
+    int tty;                            /* -1: none */
+};
+#define PROC_DETACHED 0x2
+int sim_procinfo(int index, struct sim_procinfo *pi);
+int sim_getpid(void);
 #endif

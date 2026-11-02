@@ -19,10 +19,13 @@ into these calls. tests/host/test_ftpcs.c runs both against a scripted server.
 #define FS_NAMES_MAX  4096              /* names of one listing kept for mget */
 #define FS_NAMES_BYTES (256 * 1024)     /* their bytes */
 
+#define FS_CUT_LONG   1                 /* fs_names(): more came than is kept */
+#define FS_CUT_SHORT  2                 /* the listing failed part-way: what came is not all there is */
+
 struct fs_names {
     char **name;
     int count;
-    int cut;                            /* more came than is kept */
+    int cut;                            /* FS_CUT_*: not the whole listing, and nothing is to be taken from it */
 };
 
 void fs_init(void);                     /* no connection, binary mode */
