@@ -1009,6 +1009,50 @@ unittest-diff: $(BUILD)/host/test_diff $(BUILD)/host/test_diff_weak $(CLID_TOOLS
 	$(BUILD)/host/test_diff_weak
 	python3 tests/test_cli_diff.py $(BUILD)/host/cli
 
+# 11/01/26 (the command-line suite, track fsck): the checker, fs/fat_check.c as it is but for its allocator, which the test
+# counts and refuses, with the block cache, FAT and mkfs of test_fatfs (tests/host/test_fsck.c). No sanitizer here: they
+# run on the Mac, with clang (the account says how): a -fsanitize build under the devenv's qemu-i386 hangs
+FSCK_OBJ = $(BUILD)/host/fsck/fs/fat_check.o
+$(FSCK_OBJ): fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) -Dkalloc=fsck_kalloc -Dkcalloc=fsck_kcalloc -Dkfree=fsck_kfree -c $< -o $@
+$(BUILD)/host/test_fsck: tests/host/test_fsck.c tests/host/test_fatfs.c include/fs/fat_check.h $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fsck.c $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
+unittest: unittest-fsck
+.PHONY: unittest-fsck
+unittest-fsck: $(BUILD)/host/test_fsck
+	$(BUILD)/host/test_fsck
+
+# the command, shell/fsckcmd.c, over a device layer the test scripts; its printf() renamed so that the test keeps the host's
+$(BUILD)/host/kernel/shell/fsckcmd_test.o: shell/fsckcmd.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck command test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -Dprintf=fsck_printf -c $< -o $@
+$(BUILD)/host/test_fsckcmd: tests/host/test_fsckcmd.c $(BUILD)/host/kernel/shell/fsckcmd_test.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-fsckcmd
+.PHONY: unittest-fsckcmd
+unittest-fsckcmd: $(BUILD)/host/test_fsckcmd
+	$(BUILD)/host/test_fsckcmd
+
+# 11/02/26 (the third review): how far a look makes the kernel heap grow, fs/fat_check.c over mm/kalloc.c as it is, the
+# heap in the test's array as test_kalloc has it (tests/host/test_fsckheap.c)
+$(BUILD)/host/fsckheap/fs/fat_check.o: fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck heap test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) -c $< -o $@
+$(BUILD)/host/test_fsckheap: tests/host/test_fsckheap.c tests/host/kalloc_host.h include/fs/fat_check.h \
+                             $(BUILD)/host/fsckheap/fs/fat_check.o $(BUILD)/host/kalloc/mm/kalloc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) $(filter %.c %.o,$^) -o $@
+unittest: unittest-fsckheap
+.PHONY: unittest-fsckheap
+unittest-fsckheap: $(BUILD)/host/test_fsckheap
+	$(BUILD)/host/test_fsckheap
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
