@@ -7,10 +7,11 @@ tar and unzip take their file names from files anyone may have made. These funct
 system calls, so the rules are tested on their own (tests/host/test_tar.c).
 
 ar_safe_path() is the only way a name from an archive becomes a path: it refuses what is absolute
-or leaves the folder, and what FAT could not hold anyway, with a reason for the message.
-ar_show_name() is the only way one reaches the terminal: control characters in a name would
-otherwise be commands to it. ar_glob() is --exclude's matching and unzip's: * and ?, the case of
-ASCII letters ignored as FAT ignores it, a ? taking a whole UTF-8 sequence.
+or leaves the folder, what FAT could not hold anyway, and control characters, with a reason for
+the message. So a path it passed may be printed as it is, which outfile.h and saveutil.h do. Any
+other name from an archive reaches the terminal only through ar_show_name(): control characters
+in a name would otherwise be commands to it. ar_glob() is --exclude's matching and unzip's: * and
+?, the case of ASCII letters ignored as FAT ignores it, a ? taking a whole UTF-8 sequence.
 */
 
 #ifndef _ARPATH_H

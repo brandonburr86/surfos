@@ -401,7 +401,8 @@ static void test_names(void) {
     z_entry(&e);
     e.flags = 0;
     z_end();
-    check(run("") == 0 && !memchr(ars_stdout(NULL), 0x9b, 200), "a name with C1's CSI is made, and shown escaped");
+    check(run("") == 2 && ars_count() == 2 && !strstr(ars_stderr(), "\xc2\x9b"), "a name with C1's CSI is refused, and not shown bare");
+    check(run("-l") == 0 && !strchr((const char *)ars_stdout(NULL), 0x9b), "-l shows it escaped");
 }
 
 /**** refusals ****/

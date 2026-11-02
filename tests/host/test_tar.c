@@ -134,12 +134,14 @@ static void test_names(void) {
         { "./", "" }, { ".", "" }, { "", "" }, { "././.", "" }, { "...a", "...a" }, { "a..b", "a..b" }, { "..a", "..a" },
         { "a/..b/c", "a/..b/c" }, { "h\xc3\xa9llo", "h\xc3\xa9llo" }, { "\xe2\x89\x8b/x", "\xe2\x89\x8b/x" },
         { "\xf0\x9f\x8c\x8a", "\xf0\x9f\x8c\x8a" }, { "a b", "a b" }, { ".hidden", ".hidden" }, { "~/x", "~/x" },
+        { "\xc2\xa0", "\xc2\xa0" },                                              /* U+00A0, the first after C1 */
     };
     static const char *const bad[] = {
         "/etc/passwd", "//x", "..", "../x", "a/..", "a/../b", "a/b/../../..", "./../x", "..\\x", "a\\..\\b", "\\x",
         "C:\\x", "c:", "a:b", "a*", "a?", "a\"b", "a<b", "a>b", "a|b", "a\\b", "a\nb", "a\tb", "\x1b[2J", "a\x7f",
         "a.", "a ", "a /b", "a./b", "...", "a/...", ".. /x", "...\\x", "\xff", "a\xc3", "\xc0\xae\xc0\xae/x",
         "\xc0\xaf", "\xe0\x80\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf5\x80\x80\x80",
+        "\xc2\x80", "a\xc2\x9b" "2J", "\xc2\x9f", "\xc2\x85x/y",               /* C1's controls, U+0080 to U+009F */
     };
     char out[256], longer[600];
     unsigned i;
@@ -1268,6 +1270,22 @@ static void test_pax_entry(void) {
     check(unpack("") == 2 && has(ars_stderr(), "pax") && ars_is("/dest/a.txt", "x\n"), "a damaged pax header with no entry after it is said");
 }
 
+/**** what reaches the terminal through messages that take a path raw ****/
+
+static void test_c1(void) {
+    static const char c1[] = "\xc2\x9b" "2J\xc2\x9b" "31mowned";
+    char dir[64];
+    snprintf(dir, sizeof(dir), "%s/", c1);
+    /* of_say and su_say print a path as it is: such a path must never reach them */
+    a_start();
+    a_entry(dir, '5', NULL, 0, F_USTAR);
+    a_text(c1, "data\n");
+    a_text("after.txt", "after\n");
+    a_end();
+    check(unpack("") == 2 && ars_is("/dest/after.txt", "after\n") && ars_count() == 3, "a name with C1's CSI is refused, as a folder and as a file");
+    check(!strstr(ars_stderr(), "\xc2\x9b"), "and no message holds it bare");
+}
+
 /**** a member named like the archive ****/
 
 static void test_self(void) {
@@ -1564,6 +1582,7 @@ int main(void) {
     test_failures();
     test_old_archive();
     test_pax_entry();
+    test_c1();
     test_self();
     test_host_tar();
     free(A);

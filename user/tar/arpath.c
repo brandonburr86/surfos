@@ -3,7 +3,9 @@ SurfOS user programs: names from archives
 --------------------
 File: arpath.c  Date: 11/01/26
 --------------------
-What arpath.h says. ar_safe_path() takes both / and \ as separators when it looks for "..", though
+What arpath.h says. ar_safe_path() refuses C1's controls (U+0080 to U+009F) as well as C0's, though
+FAT could hold them: a path that passes it goes into saveutil.h's and outfile.h's messages as it is,
+and U+009B is an escape to a terminal. It takes both / and \ as separators when it looks for "..", though
 only / is one here: a \ is refused in any case, but a name from Windows that climbs out with
 ..\..\ should say so. The kernel checks the same things where it can (fs/fat.c's validate_name(), a
 ".." by vfs_normalize()), but that would be too late for the message, and on another file system
@@ -68,7 +70,8 @@ const char *ar_safe_path(const char *name, char *out, size_t size) {
         int k = utf8_len((const unsigned char *)p);
         unsigned char c = (unsigned char)*p;
         if(!k) return "the name is not valid UTF-8";
-        if(c < 0x20 || c == 0x7f || strchr(":*?\"<>|\\", c)) return "the name has a character FAT cannot hold";
+        if(c < 0x20 || c == 0x7f || (c == 0xC2 && (unsigned char)p[1] < 0xA0)) return "the name has a control character";
+        if(strchr(":*?\"<>|\\", c)) return "the name has a character FAT cannot hold";
         p += k;
     }
     for(p = name; *p;) {
