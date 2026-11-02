@@ -33,8 +33,8 @@ not here, so that this file is part of the tree that was tested.
    would leave it nothing to go on with. So `get` is all or nothing and `reget` is the explicit request to keep what comes, which
    the manual tells people to use on a connection that may break. The one thing `reget` undoes: if the server sends more than
    `SIZE` left room for, it ignored `REST`, and what it added is cut off with `ftruncate`.
-2. **The block has 30 rows, not about 25.** I merged it down from 48. It takes about 5 seconds, a fraction of a percent of
-   `test-all`. Each remaining row is something only the real kernel shows.
+2. **The block has 32 rows, not about 25.** I merged it down from 48, and the third review's detached script added two. It takes
+   a few seconds, a fraction of a percent of `test-all`. Each remaining row is something only the real kernel shows.
 3. **One line outside `SMOKE`:** `run_smoke` gained `if callable(line): line = line(q)`, so a follow line can be a function, as
    `boot_step` already allows. Without it a block's lines cannot name a forwarded port. It is an insertion, and no other block changes.
 4. **Sanitizers are not in `make unittest`,** by the coordinator's correction of the brief: a `-m32 -fsanitize` binary hung under
@@ -61,7 +61,8 @@ not here, so that this file is part of the tree that was tested.
   saved cursor at `?1049l` even with the main screen showing, which with nothing saved is the top left. It goes only to a terminal, never into a file or a pipe.
 - **The window has no signal,** so it is looked at once a second while NAWS is on.
 - **Input from a pipe** is a file somebody wants delivered, not keys: it is read only while it fits with room for a read of the server's to spare
-  (`TNC_KEYS_ROOM(PIECE) + TNC_ROOM(PIECE)`), and waits in the pipe, so nothing is dropped and the server is always read. That matters: a server whose
+  (`TNC_KEYS_ROOM(PIECE) + TNC_ROOM(PIECE)`), and waits in the pipe, so nothing is dropped and the pipe never keeps the server from being read:
+  only the server itself can, with negotiations whose answers it does not take (`TNC_ROOM`, above). That matters: a server whose
   output waits for us (a shell behind a telnetd, a router's command line, a long banner) may read nothing more until it has gone, and if we stopped
   reading it in turn the two would wait for each other. The first fix round read the pipe until 12358 bytes waited but the server only while 8231 did,
   and the review of `856c4d8` found that deadlock. Nobody is there to press Ctrl+], so a server that takes nothing for a minute ends the session with
@@ -102,7 +103,12 @@ not here, so that this file is part of the tree that was tested.
   without a terminal. I added a second condition, and this is why: on SurfOS as it is, `procinfo()` gives every live task a tty (`fill_info()` in
   `kernel/task.c`; `tty_for_console()` falls back to F1), so -1 alone never fires, while a detached task (the desktop's Run program..., a ring-0
   shell's `&`) still opens `/dev/tty` as its console's, whose keys go to someone else, and would wait in vain. So a detached task has no terminal
-  of its own either. Either way the login fails at once and says why; nothing is read and no `PASS` goes. `procinfo()` counts tasks from the
+  of its own either, nor has a program that such a task runs: the third review found that no spawn passes `TF_DETACHED` on (`kernel/syscall.c`,
+  `process.c`), so a script started by Run program..., or by the ring-0 shell's `spawn` or `&`, ran a `user` that opened the console's `/dev/tty`
+  and waited for ever. `own_terminal()` now walks up the parents while the tty stays the same, and any detached one means no terminal. It stops
+  where the tty changes, as telnetd is detached and its sessions' shells are on ptys of their own; a parent that ended has had its children given
+  to init (`orphan_children()`), so the walk always reaches the top. Either way the login fails at once and says why; nothing is read and no
+  `PASS` goes. `procinfo()` counts tasks from the
   list's head at each call, so a task collected during the scan moves the rest up one and the scan can pass over its own process (the kernel's
   comment on `task_info_all()` says so); then it would refuse a password for want of a terminal, as a `printf ... | ftp` whose `printf` is
   being reaped might. It scans again, four times at most.
@@ -113,7 +119,11 @@ not here, so that this file is part of the tree that was tested.
   session stays as it was, in step (`NOT_SENT`): nothing is sent and nothing is closed. That includes one that `drain()` meets while it reads what the
   server said on its own before a command; the first fix round used that one up and sent the command anyway. A second Ctrl+C gets out of a stuck
   ABOR; one before ABOR or `NOOP` has gone closes the connection, the control connection first, as the data connection's end alone would tell a
-  server taking an upload that the file is whole. Scripts end with status 130. A script keeps `TTY_INTR` on from start to end, and
+  server taking an upload that the file is whole. One exception to `NOT_SENT`: after reget's REST has been answered, a Ctrl+C before the
+  transfer's command goes closes the connection after all, as a server keeps REST for its next transfer (RFC 3659 5.4; SurfOS's ftpd does), and a
+  `put` after it would go on from the reget's offset: the third review's probe left the server 1000 old bytes and 3000 new, said as 3000 bytes with
+  status 0. Closing it is, rather than sending `REST 0`, because what a restart marker of 0 does to the next `STOR` differs from server to server.
+  Scripts end with status 130. A script keeps `TTY_INTR` on from start to end, and
   the count is read after each command, so a Ctrl+C that came in no wait (an fsync, between commands, in `open`) still stops the next command.
 - **After an abort, `NOOP`.** How many replies follow ABOR, and when, differs from server to server, and a late one taken for the next command's answer
   made a failed `delete` look done. A server answers in turn, so every reply before `NOOP`'s 200 belongs to the abort and is passed over: a 150 on its
@@ -123,8 +133,9 @@ not here, so that this file is part of the tree that was tested.
 - **What `NOOP` cannot do,** settled as the review asked: a server that answers `NOOP` before the abort's last reply (its 426 or 226 comes after the
   200), or answers `NOOP` twice, still hands a stale reply on to the next command, which then reports that reply as its own: the review's probes show
   `delete x` answered with the late 426, and with a second `200 NOOP again`. No `NOOP` scheme guards against that, this one included: replies carry no
-  tag, and no wait that a correct server never needs could tell a late reply from the next command's answer. A server that knows no `NOOP` (RFC 959
-  makes it part of the minimum) loses its connection after an abort.
+  tag, and no wait that a correct server never needs could tell a late reply from the next command's answer. Nor can it tell a server that answers
+  ABOR itself with 200, which is no reply RFC 959 gives ABOR: that 200 is taken for `NOOP`'s, and `NOOP`'s own 200 goes to the next command. A server
+  that knows no `NOOP` (RFC 959 makes it part of the minimum) loses its connection after an abort.
 - **A line cut by its length is refused,** not run: `delete` on what is left of a line could name another file.
 - **What is bounded, and what is not.** A reply 120 s, a stalled data connection 60 s, a command the server will not take 30 s, mget's listing 5 minutes; replies 1000 lines
   and 64 KB, 16 preliminary replies; a listing kept for mget 4096 names and 256 KB, where it is stopped, and nothing is fetched from it. Nothing is fetched
@@ -138,7 +149,10 @@ not here, so that this file is part of the tree that was tested.
 - **`get` in ascii mode** reports the bytes that came, not the bytes written.
 - **`put` from a file that gets shorter** while it is read is aborted, as its end would tell the server the file is whole. One that grows is sent as it is.
   A server that refuses part-way (552, its disk full) is reported as its refusal, with status 1: the size is looked at only when the file's own end
-  stopped the upload. The first fix round looked first, and said "the file got shorter" with status 2.
+  stopped the upload. The first fix round looked first, and said "the file got shorter" with status 2. A server may also end the data connection
+  first and say why only then (vsftpd's order on a full disk), so when the data connection ends early its reply is waited for, 5 s at most, before
+  anything else: a 4xx or 5xx is its refusal, status 1, and no ABOR follows; a 2xx there is no success, as the server has less than the whole file
+  (status 2); with no reply in time ABOR follows as before, and passes a later refusal over.
 
 ## Did any of this follow a specific program's source?
 
@@ -165,8 +179,8 @@ The standards used: RFC 854, 856, 857, 858, 1073, 1143 and 1123 for telnet; RFC 
 |---|---|---|
 | `test_telnetc` | 131206 | the module, telnetd's real module at every split, random bytes with exact buffers, the program |
 | `test_ftpc` | 297 | `ftpclient.c`, with `fnmatch(3)` on random pairs |
-| `test_ftpcs` | 28074 | the whole client against scripted servers, then 3000 rounds of hostile ones |
-| the block in `SMOKE` | 30 rows | the real kernel: `telnet` to telnetd by the hairpin (NAWS as the session sees it, `status`, `send ayt`, `quit` from `less`, a kill from another session); to a server speaking no telnet; `ftp` to ftpd byte for byte; to `ScriptedFtp`: the password from a real pipeline with no echo, PASV naming another address, a low port, escape sequences, Ctrl+C, names that climb, a reset |
+| `test_ftpcs` | 28144 | the whole client against scripted servers, then 3000 rounds of hostile ones |
+| the block in `SMOKE` | 32 rows | the real kernel: `telnet` to telnetd by the hairpin (NAWS as the session sees it, `status`, `send ayt`, `quit` from `less`, a kill from another session); to a server speaking no telnet; `ftp` to ftpd byte for byte; to `ScriptedFtp`: the password from a real pipeline with no echo, a script run by a detached task that must not ask, PASV naming another address, a low port, escape sequences, Ctrl+C, names that climb, a reset |
 
 **The fix round.** An independent review of `69203a8` found no memory-safety bug reachable from a server, but silent data loss with status 0. Each finding got a test first, and each test was run on the unchanged client and
 seen to fail, or to crash (the `strdup` use-after-free), before the fix. The review's own probes over real TCP then confirmed the fixes: its 240000 bytes through a pipe all arrive, `get x - > f` holds only the file, a failed `cd` sends no `DELE`. Two things in them needed
@@ -187,6 +201,20 @@ after 0 to 3 s; a password typed after 140 simulated seconds logs in and the nex
 `procinfo()` and `getpid()`. A mutant found that one check had gone empty with the first round's `NOOP`: it looked for `NLST ABOR EPSV NLST` in a
 row to prove that mget's next pattern was not listed after a Ctrl+C. It counts the `NLST`s now.
 
+**The third fix round.** The review of `790203e` found three more, one of them a narrow race in the second round's own `NOT_SENT`:
+a Ctrl+C as reget's REST was answered left REST at the server, so the next `put` went on from the reget's offset (the connection now
+closes); an upload whose data connection the server ended before it said why (vsftpd on a full disk) was reported as a lost data
+connection, ABOR and `NOOP` passing the 552 over (the reply is now awaited first); and a script run by a detached task asked for a
+password on the console and waited for ever (`own_terminal()` now walks up the parents). Three nits too: ABOR answered with 200 among
+the stale replies, the words "the server is always read", and the fuzz's upload floor with 9 rounds of slack. Each finding has tests
+that fail on `790203e`, 8 checks of `test_ftpcs` over partial writes, beside guards that pass on both: a Ctrl+C before REST went or
+while its answer was awaited; a 552 at once, none, or one past the bound; a telnetd session, whose detached server is on another
+terminal. In QEMU the block now spawns a script with the kernel's `spawn`, detached as Run program... would, and its `user` must fail
+at once: 12 of 12 in Docker, and with `790203e`'s ftp put into the initrd that check fails, and no other. The review's probes agree:
+reget, that Ctrl+C, then `put` or `get` leave the connection closed and the server's file as it was; the four orders of a data
+connection ended before a 552 all report the 552 with status 1 and no ABOR (`856c4d8`: status 2, ABOR sent); detached, tty -1 and four
+scans that pass over this process ask nothing, and the rest ask.
+
 **What the tests found earlier.** All of these were real bugs, fixed: `fs_put` closed its descriptors on a 150 (no upload ever worked); a reply read in one
 piece with the 150 was not seen during a transfer; one Ctrl+C also stopped the ABOR that followed it; keys typed after the prompt's line were lost;
 a too-long password said the wrong thing; `get x -` could put the file before what was said to it on a pipe; mget went on from a listing cut by Ctrl+C, and
@@ -202,12 +230,13 @@ and 6 at O0 with the O0 programs put into the initrd by hand, as `build/images` 
 
 **How far to believe them.**
 
-- *Mutation:* 75 defences were broken one at a time in a scratch copy (unsafe names, the short-file check, the scrub, the low port, PASV's address, reget's cut,
-  backpressure, raw mode, every fix of both reviews, and so on). All 75 are caught. Two survived in the first fix round at first, and got better tests;
+- *Mutation:* 82 defences were broken one at a time in a scratch copy (unsafe names, the short-file check, the scrub, the low port, PASV's address, reget's cut,
+  backpressure, raw mode, every fix of the three reviews, and so on). All 82 are caught. Two survived in the first fix round at first, and got better tests;
   one in the second (above). One survived before that: my flood test quit before any pressure built, and a new test closes that hole.
 - *Fuzz depth:* the first fuzz was clean and nearly worthless, with data flowing in 263 of 3000 rounds. It now reaches 1625 of 3000, with uploads tried in 759
   (the same as at `856c4d8`, whose own build gives these figures; this file said 1637 and 1000 until this round, which were stale), and
-  `test_ftpcs` fails if that falls below a quarter. Its invariants: the user's file is as it was or whole, never a part; no `.tmp` left; no connection but the
+  `test_ftpcs` fails if data flows in fewer than a quarter of the rounds, or uploads are tried in fewer than a fifth (a quarter left them 9 rounds
+  of slack, as the third review pointed out). Its invariants: the user's file is as it was or whole, never a part; no `.tmp` left; no connection but the
   server's; no control character shown; the password nowhere. Three rounds in four run at a prompt, as a script now stops at its first failure and would get nowhere.
 - *Line coverage* (clang, natively): `session.c` of ftp 96%, `commands.c` 99%, `main.c` 99%; telnet's `session.c` 97%, `tnclient.c` 99%. What is left is
   mostly a failed `read` of a local file, or an allocation failing in `names_add`.
