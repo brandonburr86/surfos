@@ -49,6 +49,13 @@ writes, and a rescan that fails is said, with what to do, and fails mkfs (it was
 over). eject says when mkfs or fdisk holds the disk. (B65) fsbench says EIO from a close
 the device refused as an I/O error, Ctrl+C or not (vfs_close() says EINTR when its
 write-out was cut short).
+
+11/01/26 (the command-line suite): fsck, the checker of fs/fat_check.c on a device. It is read
+whole and nothing else touches it meanwhile: a run holds its device (vfs_bdev_change_begin()) from
+before its first read to after its last write, the question included, so what it shows is what it
+repairs. A volume mounted read-only cannot be held and needs not be; one mounted read-write
+is refused. -r obeys bdev_may_format(), and is given a write function: a run without -r has none.
+Not on SurfCPU (riscv32 has no such command, and builds nothing of it).
 */
 
 #include <blibc_common.h>
@@ -61,6 +68,7 @@ write-out was cut short).
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <fs/fat.h>
+#include <fs/fat_check.h>
 #include <mm/kalloc.h>
 
 #include "shell.h"
@@ -238,6 +246,99 @@ int cmd_mkfs(int argc, char **argv) {
     vfs_bdev_change_end(d);
     return bad ? CMD_FAIL : CMD_OK;
 }
+
+/**** fsck ****/
+
+#ifndef SURFOS_RISCV32
+
+static int fsck_read(void *d, u32 lba, u32 count, void *buf) { return bdev_read((struct bdev *)d, lba, count, buf); }
+static int fsck_write(void *d, u32 lba, u32 count, const void *buf) { return bdev_write((struct bdev *)d, lba, count, buf); }
+static int fsck_flush(void *d) { return bdev_flush((struct bdev *)d); }
+static bool fsck_stop(void *d) { (void)d; return fs_cut_short(); }
+static void fsck_say(void *d, const char *line) { (void)d; printf("    %s\n", line); }
+
+/* the device's name typed, and the rule once more: the answer may have been a long time coming */
+static bool fsck_ask(void *v) {
+    struct bdev *d = (struct bdev *)v;
+    char line[SHELL_LINE_LEN + 1], question[64], why[128];
+    snprintf(question, sizeof(question), "    Type %s to repair %s: ", d->name, d->name);
+    shell_ask(question, line, sizeof(line));
+    if(strcmp(line, d->name)) { printf("    Cancelled\n"); return false; }
+    if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    fsck: %s: %s\n", d->name, why); return false; }
+    return true;
+}
+
+/* d, its disk or a partition of it among the mounts: 0 none, 1 read-only, -1 read-write, after saying so */
+static int fsck_mounts(struct bdev *d) {
+    struct vfs_mount_view *v;
+    int n, total, j, found = 0;
+    if(!(v = mounts_now(&n, &total))) return -1;
+    for(j = 0; j < n && found >= 0; j++) {
+        struct bdev *x = v[j].dev;
+        if(!x || (x != d && bdev_disk(x) != d && x != bdev_disk(d))) continue;
+        found = v[j].readonly ? 1 : -1;
+        if(found < 0) printf("    fsck: %s is mounted read-write on %s: a volume in use changes under a check (umount it, or mount it with -r)\n",
+                             x->name, v[j].path);
+    }
+    kfree(v);
+    return found;
+}
+
+int cmd_fsck(int argc, char **argv) {
+    struct fat_check_io io;
+    struct fat_check_result res;
+    struct bdev *d;
+    const char *name = NULL, *busy;
+    char why[128], size[16];
+    int flags = 0, i, mounted = 0, status;
+
+    for(i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if(a[0] != '-') {
+            if(name) { name = NULL; break; }
+            name = a;
+            continue;
+        }
+        while(*++a) {
+            if(*a == 'v') flags |= FAT_CHECK_VERBOSE;
+            else if(*a == 'r') flags |= FAT_CHECK_REPAIR;
+            else { name = NULL; i = argc; break; }
+        }
+    }
+    if(!name) { printf("    usage: fsck [-v] [-r] <device>   (-r repairs, and asks first; lsblk lists the devices)\n"); return CMD_USAGE; }
+    d = bdev_find(name);
+    if(!d) { printf("    fsck: no block device '%s' (lsblk lists them)\n", name); return CMD_USAGE; }
+    memset(&io, 0, sizeof(io));
+    io.ctx = d;
+    io.blocks = d->nblocks;
+    io.read = fsck_read;
+    io.flush = fsck_flush;
+    io.stop = fsck_stop;
+    io.say = fsck_say;
+    if(flags & FAT_CHECK_REPAIR) {
+        if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    fsck: %s: %s\n", d->name, why); return CMD_USAGE; }
+        io.write = fsck_write;
+        io.ask = fsck_ask;
+    } else if((mounted = fsck_mounts(d)) < 0) return CMD_USAGE;
+    fs_enter();                                              /* a kill waits until the buffers and the device are let go of */
+    if(!mounted && vfs_bdev_change_begin(d, &busy) != 0) {
+        fs_leave();
+        printf("    fsck: %s: %s\n", d->name, bdev_busy_words(busy));
+        return CMD_USAGE;
+    }
+    human(d->nblocks, size, sizeof(size));
+    printf("    %s: %s, %s\n", d->name, d->model[0] ? d->model : "no model name", size);
+    status = fat_check(&io, flags, &res);
+    if(res.wrote) {                                          /* nothing cached from before may be served */
+        binvalidate(d);
+        if(bdev_disk(d) != d) binvalidate(bdev_disk(d));
+    }
+    if(!mounted) vfs_bdev_change_end(d);
+    fs_leave();
+    return status;
+}
+
+#endif
 
 /**** mount, umount, eject ****/
 

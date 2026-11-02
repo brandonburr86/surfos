@@ -1,0 +1,65 @@
+fsck - check a FAT volume, and repair it on request
+
+SYNOPSIS
+    fsck [-v] <device>
+    fsck -r [-v] <device>
+
+DESCRIPTION
+    Checks a FAT12, FAT16 or FAT32 volume on a device lsblk lists,
+    such as usb1p1: the boot sector, FSInfo, whether the two FATs
+    agree, every directory, every chain of clusters, and the clusters
+    nothing reaches. Without -r it writes nothing.
+
+    fsck is a command of the kernel, because programs cannot read a
+    disk. It takes the device, not a path, and a volume mounted
+    read-write is refused: umount it first, or mount it with -r.
+
+    With -r it says what it will change and asks for the device's
+    name. Only what mkfs may change can be repaired: a USB drive or a
+    ramdisk, not mounted, and never the disk SurfOS started from.
+
+    Nothing is ever deleted. It frees no cluster. It repairs these:
+
+      - the second FAT, from a sound first one
+      - a chain cut at its first bad link, the size set to match
+      - a size longer than its chain
+      - a chain longer than its size: what is cut off is saved
+      - two names on one chain: the second gets its own copy,
+        when there is room
+      - clusters nothing reaches, saved as FOUND.000/FILE0000.CHK
+        (their true size is not known: whole clusters are saved)
+      - FSInfo, and last the mark that it was unmounted cleanly
+
+    The rest it only reports: the boot sector, its backup, the "." and
+    ".." entries, long names, short names, two names on one directory,
+    and a repair of a FAT12 entry that spans two sectors. The mark of
+    a clean unmount stays while any problem is left.
+
+    It repairs nothing at all when it cannot trust what it saw: a
+    directory that cannot be read, one whose chain runs into a free or
+    bad cluster, one without its "." and ".." (it may be a damaged
+    file), a size of 0 on what looks like a directory, two FATs that
+    differ where the first has bad links the second does not, or FATs
+    that are not mirrored. Copy off what you can, or look at it on
+    another computer.
+
+    A stick pulled out during a repair is left no worse. Plug it in
+    and run fsck -r again. Ctrl+C stops it between two steps.
+
+OPTIONS
+    -r    Repair, after asking.
+    -v    Say every problem and the counts, not just the first 40.
+
+EXIT STATUS
+    0     Clean, or all of it repaired.
+    1     Problems are left.
+    2     A wrong command, a device it may not use, no FAT volume, or
+          a device that failed.
+
+EXAMPLES
+    fsck usb1p1
+    umount /usb1p1
+    fsck -r usb1p1
+
+SEE ALSO
+    mkfs, mount, umount, eject, lsblk
