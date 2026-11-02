@@ -106,16 +106,19 @@ const char bc_library_text[] =
 "    if(k < 0) return(v / 2 ^ -k)\n"
 "    return(v * 2 ^ k)\n"
 "}\n"
-/* ln x. k is a power of 2 that brings x near 1, for which its digits are enough, and 2^m makes it
-   large: ln x = pi / (2 AGM(1, 4 / (x 2^(m-k)))) - (m - k) ln 2. Near x = 1 that is two long numbers
-   that nearly cancel, which costs nothing, as a scale counts digits after the point. */
+/* ln x. k is a power of 2 that brings x near 1, which its count of digits gives: 3321928094887 / 10^12
+   is log2 10 less 3.6e-13, so for the 2^31 digits a number can have at most, k is out by under a
+   thousandth of a bit, and x / 2^k lies from .1 to 2. 2^m then makes it large: ln x =
+   pi / (2 AGM(1, 4 / (x 2^(m-k)))) - (m - k) ln 2. Near x = 1 that is two long numbers that nearly
+   cancel, which costs nothing, as a scale counts digits after the point. */
 "define l(x) {\n"
 "    auto s, w, t, k, m, v\n"
 "    if(x <= 0) _fail \"not above zero\"\n"
 "    if(x == 1) return(0)\n"
 "    s = scale; scale = 0\n"
-"    w = s + 14; t = w / 2 + length(w) + 2; m = t * 3322 / 1000 + 1\n"
-"    if(x < 1) k = (length(x) - scale(x) - 1) * 3322 / 1000 else k = length(x / 1) * 3322 / 1000\n"
+"    w = s + 14; t = w / 2 + length(w) + 2; m = t * 3321928094887 / 1000000000000 + 1\n"
+"    if(x < 1) k = length(x) - scale(x) - 1 else k = length(x / 1)\n"
+"    k = k * 3321928094887 / 1000000000000\n"
 "    scale = w + t + length(w) + 2\n"
 "    if(k < 0) x *= 2 ^ -k else x /= 2 ^ k\n"
 "    v = _pi() / (2 * _ag(4 / (x * 2 ^ m)))\n"

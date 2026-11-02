@@ -1194,6 +1194,15 @@ static void library_edges(void) {
     is_lib("scale=50;x=l(2);scale=10;l(2);scale=50;l(2)-x\n", ".6931471805\n0\n");
 }
 
+/* l of numbers of up to a million digits, where x / 2^k must still come near 1: log2 10 to four digits had it 75 bits out
+   at a million. The true values from Python's decimal. Seconds each, so only in test_bc long. */
+static void library_huge(void) {
+    digits_are("x=10^500000; scale=20; l(x)\n", "1151292.54649702284200899572\n");
+    digits_are("x=10^1000000; scale=20; l(x)\n", "2302585.09299404568401799145\n");
+    digits_are("scale=1000000; x=10^-1000000; scale=20; l(x)\n", "-2302585.09299404568401799145\n");
+    digits_are("x=3^2000000; scale=20; l(x)\n", "2197224.57733621938279049047\n");
+}
+
 static void library(void) {
     static const char *const es[] = { ".001", ".5", "1", "2.5", "10", "100", "-1", "-.5", "-20", "-46", "1000", ".00000000001" };
     static const char *const ls[] = { ".001", ".5", ".999", "1.001", "2", "10", "1000000", "1.0000001", "10^50",
@@ -1791,6 +1800,7 @@ int main(int argc, char **argv) {
     statements();
     library();
     library_edges();
+    if(rounds > 3000) library_huge();
     against_bc();
     memory();
     damaged(rounds);
