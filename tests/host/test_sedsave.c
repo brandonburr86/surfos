@@ -225,6 +225,44 @@ static void backups(void) {
     sim_put("a.txt", "one\n");
     sim_fail(SIM_RENAME, "a.txt.bak.tmp", SIM_ENOSPC, SIM_NONE);
     check(sed("-i.bak", "s/one/1/", "a.txt", NULL) == 2 && file_is("a.txt", "one\n") && sim_names() == 1, "a backup's rename refused");
+    /* a backup named as the new contents' working name would be renamed over them, and the file would stay as it was, status 0 */
+    {
+        static const char *const taken[] = { "-i.tmp", "-i.TMP", "-i*.tmp", "-i*" };
+        int i;
+        for(i = 0; i < 4; i++) {
+            sim_reset();
+            sim_put("a.txt", "one\n");
+            check(sed(taken[i], "s/one/1/", "a.txt", NULL) == 2 && file_is("a.txt", "one\n") && sim_names() == 1, "a backup with the working name");
+        }
+    }
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("a.txt.tmp", "the user's\n");
+    check(sed("-i.1.tmp", "s/one/1/", "a.txt", NULL) == 2 && file_is("a.txt", "one\n") && file_is("a.txt.tmp", "the user's\n") && sim_names() == 2, "-i.1.tmp when .tmp is taken");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("c.txt", "one\n");
+    sim_put("c.txt.tmp", "the user's\n");
+    check(sed("-i.tmp", "s/one/1/", "a.txt", "c.txt", NULL) == 2, "-i.tmp, one refused: status");
+    check(file_is("a.txt", "one\n") && file_is("c.txt", "1\n") && file_is("c.txt.tmp", "one\n") && sim_names() == 3, "-i.tmp, one refused: the next is done");
+    /* the same file twice with a backup: the second pass's backup would hold the first's output, and the old file nowhere */
+    sim_reset();
+    sim_put("g.txt", "one\n");
+    check(sed("-i.bak", "s/$/x/", "g.txt", "g.txt", NULL) == 2 && file_is("g.txt", "one\n") && sim_names() == 1, "one file twice with a backup");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("h.txt", "one\n");
+    check(sed("-i.bak", "s/$/x/", "a.txt", "h.txt", "H.TXT", NULL) == 2, "one file in two cases with a backup: status");
+    check(file_is("a.txt", "one\n") && file_is("h.txt", "one\n") && sim_names() == 2, "one file in two cases with a backup: nothing has changed");
+    /* a name that is not there is said as ever, twice or not */
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("c.txt", "one\n");
+    check(sed("-i.bak", "s/$/x/", "a.txt", "nosuch", "c.txt", NULL) == 2 && file_is("a.txt", "onex\n") && file_is("c.txt", "onex\n"), "a missing file with a backup");
+    /* without a backup nothing is lost: it goes twice, as GNU's does */
+    sim_reset();
+    sim_put("g.txt", "one\n");
+    check(sed("-i", "s/$/x/", "g.txt", "g.txt", NULL) == 0 && file_is("g.txt", "onexx\n"), "one file twice");
 }
 
 static void w_files(void) {

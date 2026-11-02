@@ -379,8 +379,7 @@ static void reset_ranges(void) {
     }
 }
 
-/* the file's new contents are done with: they replace it, or if it held nothing, or could not be read to the end, do not.
-   The old file is copied to the backup before the rename, so that it is never gone from both names. */
+/* the name of path's backup: the suffix after it, or with each * being its last name */
 static void backup_name(char *out, size_t size, const char *path) {
     const char *base = strrchr(path, '/'), *s;
     size_t n = 0, dirlen = 0;
@@ -399,6 +398,17 @@ static void backup_name(char *out, size_t size, const char *path) {
     out[n] = 0;
 }
 
+/* A backup named as the new contents' working name would be renamed over them, and then that over the file: the old file back, no
+   backup, status 0. One named as the file is no backup. That depends on what is in the folder: su_begin() has chosen by now. */
+static int backup_collides(const char *path) {
+    char name[PATH_MAX];
+    backup_name(name, sizeof(name), path);
+    if(!same_file(name, path) && !same_file(name, g.save.tmp)) return 0;
+    say("%s: a backup named %s is in the way of the save", path, name);
+    return 1;
+}
+
+/* the old file is copied to the backup before the rename, so that it is never gone from both names */
 static int copy_to_backup(const char *path) {
     struct su_save b;
     char name[PATH_MAX];
@@ -444,6 +454,7 @@ static int copy_to_backup(const char *path) {
     return 0;
 }
 
+/* the file's new contents are done with: they replace it, or if it held nothing, or could not be read to the end, do not */
 static void finish_file(int keep) {
     int r;
     if(!g.saving) return;
@@ -498,6 +509,11 @@ static int next_file(void) {
                 errno = e;
                 su_say("sed", &g.save, -1);
                 g.status = STATUS_TROUBLE;
+                continue;
+            }
+            if(g.suffix && backup_collides(name)) {
+                close_input();
+                su_abort(&g.save);
                 continue;
             }
             g.file.fd = g.save.fd;
@@ -1900,6 +1916,20 @@ static void free_all(void) {
     free(g.file.buf);
 }
 
+/* with a backup, one file named twice would lose the old file: the second pass's backup is the first pass's output */
+static int named_twice(void) {
+    int i, j;
+    for(i = 0; i < g.nfiles; i++) {
+        for(j = i + 1; j < g.nfiles; j++) {
+            if(same_file(g.files[i], g.files[j])) {
+                say("%s and %s are one file: a backup needs it once", g.files[i], g.files[j]);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int usage(void) {
     fprintf(stderr, "usage: sed [-nEs] [-i[suffix]] [-e script] [-f file] [script] [file...]\n");
     g.status = STATUS_TROUBLE;
@@ -1969,6 +1999,7 @@ int main(int argc, char **argv) {
         say("-i needs files");
         goto done;
     }
+    if(g.inplace && g.suffix && named_twice()) goto done;
     if(!g.nfiles) {
         static char dash[] = "-";
         g.files[g.nfiles++] = dash;

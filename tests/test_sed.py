@@ -372,6 +372,12 @@ def own_rules():
     # a name that is the working name of another: one rename would undo the other
     expect(SED, ['-n', '1w o\n2w o.tmp'], AB, status=2, after={}, said=b'o.tmp')
     expect(SED, ['-n', '1w o.tmp\n2w o'], AB, after={'o': b'b\n', 'o.tmp': b'a\n'})
+    # with a backup, one file twice would leave the first pass's output in the backup. GNU's does that
+    expect(SED, ['-i.bak', 's/$/x/', 'f', './f'], b'', {'f': b'a\n'}, status=2, after={'f': b'a\n'}, said=b'one file')
+    expect(SED, ['-i.bak', 's/$/x/', 'f', 'd/../f'], b'', {'f': b'a\n', 'd/x': b''}, status=2, after={'f': b'a\n'})
+    expect(SED, ['-i.bak', 's/$/x/', 'f', 'd/f'], b'', {'f': b'a\n', 'd/f': b'b\n'}, after={'f': b'ax\n', 'f.bak': b'a\n'})
+    # a suffix that makes the backup the working name. GNU's has no such name
+    expect(SED, ['-i.tmp', 's/a/bb/', 'f'], b'', {'f': b'a\n'}, status=2, after={'f': b'a\n'}, said=b'f.tmp')
     # no case conversion: a sentence, not a letter in the file
     for replacement in ('\\U&', '\\L&', '\\u&', '\\l&', '&\\E'):
         expect(SED, ['-i', 's/b/%s/' % replacement, 'f'], b'', {'f': b'abc\n'}, status=2, after={'f': b'abc\n'}, said=b'case conversion')
