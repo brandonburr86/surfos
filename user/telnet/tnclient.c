@@ -11,7 +11,6 @@ library calls, so the host tests run this file as it is.
 #include "tnclient.h"
 
 enum { S_DATA, S_IAC, S_OPTION, S_SB, S_SB_IAC };
-enum { L_TEXT, L_ESC, L_CSI };          /* the watch on the terminal's look */
 
 static void put(struct tn_buf *b, unsigned char c) {
     if(b && b->len < b->size) b->p[b->len++] = c;
@@ -42,7 +41,6 @@ void tnc_init(struct tnc *t, int cols, int rows, int terminal) {
     unsigned int i;
     for(i = 0; i < sizeof(*t); i++) p[i] = 0;
     t->state = S_DATA;
-    t->look = L_TEXT;
     t->cols = cols;
     t->rows = rows;
     t->terminal = terminal;
@@ -141,6 +139,10 @@ static void send_line(struct tnc *t, struct tn_buf *net) {
     t->edit.len = 0;
 }
 
+void tnc_flush(struct tnc *t, struct tn_buf *net) {
+    send_line(t, net);
+}
+
 /* WILL, WONT, DO or DONT for opt (RFC 1143, without the queue: this end never changes its mind).
    An answer goes out only when the option's state changes. */
 static void option(struct tnc *t, int verb, int opt, struct tn_buf *net) {
@@ -174,57 +176,19 @@ static void option(struct tnc *t, int verb, int opt, struct tn_buf *net) {
     if(verb == TN_WILL && opt == TO_SGA && tnc_by_key(t)) send_line(t, net);  /* keys go as they come from now on */
 }
 
-/* the terminal's look: a sequence that leaves something on, watched as it goes by. The console's own
-   rule (kernel/console.c) is a CSI with one number for the private modes; anything else, a colour
-   that is not a reset, may leave a colour on */
-static void look(struct tnc *t, unsigned char c) {
-    switch(t->look) {
-    case L_ESC:
-        t->look = c == '[' ? L_CSI : c == 0x1b ? L_ESC : L_TEXT;
-        t->look_num = t->look_mark = t->look_more = 0;
-        break;
-    case L_CSI:
-        if(c == 0x1b) {
-            t->look = L_ESC;
-        } else if(c >= '0' && c <= '9') {
-            if(t->look_num < 100000) t->look_num = t->look_num * 10 + (c - '0');
-        } else if(c == '?') {
-            t->look_mark = 1;
-        } else if(c == ';') {
-            t->look_more = 1;
-        } else if(c >= 0x40 && c <= 0x7e) {
-            t->look = L_TEXT;
-            if(t->look_mark && !t->look_more) {
-                if(t->look_num == 1049 && (c == 'h' || c == 'l')) t->alt = c == 'h';
-                if(t->look_num == 25 && (c == 'h' || c == 'l')) t->cursor_off = c == 'l';
-            } else if(!t->look_mark && c == 'm') {
-                t->colours = t->look_num != 0 || t->look_more;
-            }
-        }
-        break;
-    default:
-        if(c == 0x1b) t->look = L_ESC;
-    }
-}
-
 int tnc_restore(struct tnc *t, char *out) {
     struct tn_buf b;
     b.p = (unsigned char *)out;
     b.len = 0;
     b.size = TNC_RESTORE_MAX;
-    if(t->colours) say(&b, "\033[m");
-    if(t->cursor_off) say(&b, "\033[?25h");
-    if(t->alt) say(&b, "\033[?1049l");
+    say(&b, "\033\\\033[m\033[?25h\0337\033[?1049l");       /* tnclient.h says why, and why all of it */
     if(!t->at_line_start) say(&b, "\r\n");
-    t->colours = t->cursor_off = t->alt = 0;
     t->at_line_start = 1;
-    t->look = L_TEXT;
     return b.len;
 }
 
 /* a data byte for the terminal */
 static void show(struct tnc *t, struct tn_buf *term, unsigned char c) {
-    look(t, c);
     t->at_line_start = c == '\n';
     put(term, c);
 }
@@ -350,7 +314,7 @@ int tnc_keys(struct tnc *t, const unsigned char *in, int n, struct tn_buf *net, 
     int i;
     for(i = 0; i < n; i++) {
         unsigned char c = in[i];
-        struct tn_buf *seen = tnc_remote_echo(t) ? (struct tn_buf *)0 : echo;
+        struct tn_buf *seen = tnc_remote_echo(t) || !t->terminal ? (struct tn_buf *)0 : echo;
         if(t->terminal && c == TNC_ESCAPE) {
             t->escaped = 1;
             return i + 1;

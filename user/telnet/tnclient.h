@@ -30,14 +30,19 @@ there on a terminal: it belongs to the caller, and is never sent. RFC 854's term
 ahead and a line at a time: until the server has agreed to SUPPRESS-GO-AHEAD, keys wait in a
 line being edited here (Backspace, Ctrl+U, Ctrl+C), which goes out at its Return or when that
 agreement comes; once it has, each key goes as it is typed. While the server does not ECHO,
-this end shows what is typed: the terminal is in raw mode and shows nothing by itself. A
-sequence of a special key is dropped in a line being edited, as the server would take it for
-text.
+this end shows what is typed: the terminal is in raw mode and shows nothing by itself; input from
+a pipe is not shown, for it is no terminal's and the output may be a file. A sequence of a special
+key is dropped in a line being edited, as the server would take it for text. What waits in a line
+when the input ends goes out by tnc_flush(), as it is.
 
-The terminal's look (tnc_restore): a server may leave its terminal on the alternate screen, with
-the cursor hidden, in colours. What the session printed is watched for those, and the bytes
-that undo them are given at the end, whatever way it ended. Hence a server gets no way to
-leave the shell's terminal unusable, and the last words of telnet appear on the main screen.
+The end (tnc_restore): a server may leave its terminal in any state: on the alternate screen, with
+the cursor hidden, in colours, inside a string or a sequence not finished, which would swallow
+telnet's last words. There are more forms of those than a watch on the stream would catch, and a far
+terminal's parser is not the console's, so the end is the same every time. ESC \ ends any string or
+sequence that is open: on the console from every state (kernel/console.c's ansi_byte()), and on
+terminals generally. Then colours, the cursor and the main screen are set. ESC 7 comes before
+?1049l because xterm restores a saved cursor there even with the main screen already showing,
+and with nothing saved that is the top left corner.
 
 Buffers: tnc_recv() writes at most n bytes to the terminal and, per TNC_ROOM(), answers that
 fit; tnc_keys() writes at most TNC_KEYS_ROOM(n) to the network and TNC_ECHO_ROOM(n) to the
@@ -81,16 +86,13 @@ struct tnc {
     int cr;                         /* the last data byte was CR: a NUL right after it goes */
     int speaks;                     /* this end has made its offers (tnc_opening(), or the server's first negotiation) */
     int key_cr;                     /* the last key was a CR: an LF right after it goes */
-    int terminal;                   /* keys come from a terminal: Ctrl+] is the caller's */
+    int terminal;                   /* keys come from a terminal: Ctrl+] is the caller's, and keys are shown */
     int escaped;                    /* tnc_keys() stopped at Ctrl+] */
     unsigned char us[256];          /* each option on this end's side (WILL/WONT): TN_NO ... */
     unsigned char him[256];         /* each option on the server's side (DO/DONT) */
     int cols, rows;                 /* the window */
     int told_cols, told_rows;       /* what NAWS said last; 0 until it has */
     struct tnc_edit edit;           /* the line waiting for the server's agreement */
-    int look;                       /* the watch on the terminal's look: where it is in a sequence */
-    int look_num, look_mark, look_more;   /* the number so far; '?' came; a ';' came */
-    int alt, cursor_off, colours;   /* what the session left on */
     int at_line_start;              /* what was printed ends with a line end */
 };
 
@@ -112,8 +114,11 @@ void tnc_size(struct tnc *t, int cols, int rows, struct tn_buf *net);
 /* IAC AYT: the server's answer comes as data */
 void tnc_ayt(struct tnc *t, struct tn_buf *net);
 
-/* the bytes that undo what the session left on the terminal, into out (TNC_RESTORE_MAX): their
-   count, and the terminal counts as restored */
+/* the input has ended: what waits in the line goes, with no Return (TNC_KEYS_ROOM(0) at most) */
+void tnc_flush(struct tnc *t, struct tn_buf *net);
+
+/* the bytes that leave a terminal as it should be, whatever the server left, and a line end if the
+   last line had none, into out (TNC_RESTORE_MAX): their count. For a terminal only */
 int tnc_restore(struct tnc *t, char *out);
 
 /* does the server echo? does it take keys one at a time? */

@@ -10,11 +10,12 @@ nothing until the other end negotiates, so it also serves to talk to a mail or w
 hand: a line typed then is edited here and goes out at Return (tnclient.h has the protocol).
 Ctrl+] gives a prompt: quit leaves, status says how things stand, send ayt asks whether the other
 end is there, an empty line goes back. Input from a pipe or a file goes out as lines (no raw mode
-and no prompt): when it ends, the session ends with the other end's close or after 2 seconds
-without a byte. The terminal is put back however the session ends: the server's alternate screen,
-hidden cursor and colours are undone (session.c), raw mode ends here, and a kill ends it in the
-kernel. Status 0 when quit or the other end ended it, 2 for a usage mistake or a connection that
-could not be made or was lost.
+and no prompt), all of it, waiting while the other end is slow: when it ends, the session ends with
+the other end's close or after 2 seconds without a byte. The terminal is put back however the
+session ends: whatever the server left open is ended and the screen set right (session.c), raw mode
+ends here, and a kill ends it in the kernel. Status 0 when quit or the other end ended it, 2 for a
+usage mistake, a connection that could not be made or was lost, or input from a pipe that did not
+all go: the other end closed first, or took nothing for a minute.
 */
 
 #include <surf.h>
@@ -63,6 +64,7 @@ int main(int argc, char **argv) {
     s.in = 0;
     s.out = 1;
     s.terminal = isatty(0);
+    s.out_terminal = isatty(1);
     s.speak_first = port == TELNET_PORT;
     s.where = where;
     fflush(stdout);
@@ -88,6 +90,12 @@ int main(int argc, char **argv) {
         return 2;
     case TNS_SCREEN:
         fprintf(stderr, "telnet: the output cannot be written: %s\n", strerror(errno));
+        return 2;
+    case TNS_STALLED:
+        fprintf(stderr, "telnet: the other end took nothing for a minute: the input did not all go\n");
+        return 2;
+    case TNS_UNSENT:
+        fprintf(stderr, "telnet: the other end closed before all the input went\n");
         return 2;
     }
     return 0;

@@ -8,15 +8,18 @@ may stop: the screen, which a write waits for, and the server's reading, which n
 for. What goes to the server waits in a buffer of ours and leaves when poll() says POLLOUT, so a
 server that stops reading never stops the loop. No more is read from it while that buffer may
 not hold the answers, which bounds a flood of negotiations: the server's own window fills
-instead. The keys are read all the time, for Ctrl+] is the way out of just such a session: while
-the server takes nothing, keys are dropped (it is said once) and only Ctrl+] counts.
+instead. A terminal's keys are read all the time, for Ctrl+] is the way out of just such a session:
+while the server takes nothing, they are dropped (it is said once) and only Ctrl+] counts. Input from
+a pipe is another matter: it is a file somebody wants delivered, so it is read only while it fits,
+and waits in the pipe. Nobody is there to press Ctrl+], so a server that takes nothing for STALL_MS
+ends the session with status 2, as does one that closes with input still to go.
 
 The prompt of Ctrl+] waits for its line and looks at nothing else: the server's bytes wait for
 it in the connection.
 
-The input's end (a pipe's): what is left goes out, then the session waits for the server to close
-and ends after QUIET_MS with no byte either way, as a server need not close for a client that has
-said all it will, and nobody is there to press Ctrl+].
+The input's end (a pipe's): what is left goes out, a last line with no end too, then the session
+waits for the server to close and ends after QUIET_MS with no byte either way, as a server need not
+close for a client that has said all it will.
 */
 
 #include <surf.h>
@@ -27,6 +30,7 @@ said all it will, and nobody is there to press Ctrl+].
 #define NET_OUT     (2 * TNC_ROOM(PIECE))
 #define WINDOW_MS   1000                /* how often the window's size is looked at: it comes with no signal */
 #define QUIET_MS    2000
+#define STALL_MS    60000               /* input from a pipe, and the server takes none of it */
 
 static const struct tn_session *ses;
 static struct tnc t;
@@ -217,19 +221,32 @@ static int take_net(int n) {
     return term.len ? screen_write(screen, term.len) : 0;
 }
 
-/* the end: the terminal as it was */
+/* the end: the terminal as it should be */
 static int finish(int why) {
     char undo[TNC_RESTORE_MAX];
-    int n = tnc_restore(&t, undo), e = errno;
-    if(n && why != TNS_SCREEN) screen_write(undo, n);
+    int e = errno;
+    if(ses->out_terminal && why != TNS_SCREEN) screen_write(undo, tnc_restore(&t, undo));
     errno = e;
     return why;
 }
 
+/* the server has closed: did input from a pipe not get there? lost: what waited was let go. The pipe may hold more, or
+   only its end, which is no loss: a server that closes on the last command is the usual way */
+static int closed(int keys_open, int lost) {
+    struct pollfd p;
+    if(ses->terminal) return TNS_CLOSED;
+    if(lost || out_len > out_off || t.edit.len) return TNS_UNSENT;
+    if(!keys_open) return TNS_CLOSED;
+    p.fd = ses->in;
+    p.events = POLLIN;
+    p.revents = 0;
+    return poll(&p, 1, 0) > 0 && read(ses->in, piece, 1) > 0 ? TNS_UNSENT : TNS_CLOSED;
+}
+
 int tn_session_run(const struct tn_session *s) {
     struct tn_buf b;
-    int keys_open = 1;
-    unsigned int quiet_since = 0;
+    int keys_open = 1, lost = 0;
+    unsigned int quiet_since = 0, sent_at = uptime();
     ses = s;
     out_off = out_len = warned = 0;
     bytes_in = bytes_out = 0;
@@ -248,12 +265,18 @@ int tn_session_run(const struct tn_session *s) {
         window();
         waiting = out_len - out_off;
         reading = room() >= TNC_ROOM(PIECE);
-        if(keys_open) {
+        if(!waiting) sent_at = uptime();
+        if(keys_open && (s->terminal || room() >= TNC_KEYS_ROOM(PIECE))) {
             p[n].fd = s->in;
             p[n].events = POLLIN;
             p[n].revents = 0;
             ki = n++;
-        } else {
+        }
+        if(!s->terminal && waiting) {
+            int left = STALL_MS - (int)(uptime() - sent_at);
+            if(left <= 0) return finish(TNS_STALLED);
+            timeout = left;
+        } else if(!keys_open) {
             int left = QUIET_MS - (int)(uptime() - quiet_since);
             if(left <= 0) return finish(TNS_ENDED);
             timeout = left;
@@ -275,6 +298,9 @@ int tn_session_run(const struct tn_session *s) {
                 if(s->terminal) return finish(TNS_ENDED);
                 keys_open = 0;
                 quiet_since = uptime();
+                net_buf(&b);                    /* what the line holds: the room to read this was there */
+                tnc_flush(&t, &b);
+                used(&b);
             } else if(m > 0) {
                 r = take_keys((int)m);
                 if(r < 0) return finish(TNS_SCREEN);
@@ -287,17 +313,20 @@ int tn_session_run(const struct tn_session *s) {
             if(w > 0) {
                 out_off += (int)w;
                 bytes_out += (unsigned long)w;
-                quiet_since = uptime();
+                quiet_since = sent_at = uptime();
             }
         }
         /* POLLHUP or POLLERR say so whether asked or not, and read() is how to learn what: what waits for
            a server that has gone waits for nothing, and leaving it there would have poll() answer at once for ever */
-        if((p[ni].revents & (POLLHUP | POLLERR | POLLNVAL)) && !reading) out_off = out_len = 0;
+        if((p[ni].revents & (POLLHUP | POLLERR | POLLNVAL)) && !reading) {
+            lost = 1;
+            out_off = out_len = 0;
+        }
         if(reading && (p[ni].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
             ssize_t m = read(s->sock, piece, sizeof(piece));
             if(m < 0 && errno == EINTR) continue;
             if(m < 0) return finish(TNS_LOST);
-            if(m == 0) return finish(TNS_CLOSED);
+            if(m == 0) return finish(closed(keys_open, lost));
             bytes_in += (unsigned long)m;
             quiet_since = uptime();
             if(take_net((int)m) < 0) return finish(TNS_SCREEN);

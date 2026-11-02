@@ -354,42 +354,22 @@ static void test_line_mode(void) {
 }
 
 static void test_restore(void) {
+    static const char end[] = "\x1b\\\x1b[m\x1b[?25h\x1b" "7\x1b[?1049l";
     struct tnc t;
     char undo[TNC_RESTORE_MAX];
-    int n;
-    static const char seq[] = "\x1b[?1049h\x1b[?25l\x1b[1;31mtext";
-    int step;
+    int n, e = (int)sizeof(end) - 1;
     tnc_init(&t, 80, 25, 1);
     RECV(&t, "plain text\r\n");
-    check(tnc_restore(&t, undo) == 0, "nothing left on: nothing to undo");
+    n = tnc_restore(&t, undo);
+    check(n == e && !memcmp(undo, end, (size_t)e), "the end is one and the same, whatever came: strings ended, then the screen set");
     RECV(&t, "no line end");
     n = tnc_restore(&t, undo);
-    check(n == 2 && !memcmp(undo, "\r\n", 2), "a line not ended: the next words start on their own");
-    RECV(&t, "\x1b[?1049h\x1b[?25l\x1b[31m\r\n");
+    check(n == e + 2 && !memcmp(undo, end, (size_t)e) && !memcmp(undo + e, "\r\n", 2), "a line not ended: the next words start on their own");
+    check(n <= TNC_RESTORE_MAX, "all of it fits");
+    RECV(&t, "\x1b]0;a title that goes on and on");
     n = tnc_restore(&t, undo);
-    check(n == 17 && !memcmp(undo, "\x1b[m\x1b[?25h\x1b[?1049l", 17), "colours, the cursor and the alternate screen are undone");
-    check(tnc_restore(&t, undo) == 0, "once");
-    RECV(&t, "\x1b[?1049h\x1b[?1049l\x1b[?25l\x1b[?25h\x1b[31m\x1b[m\x1b[1m\x1b[0m\r\n");
-    check(tnc_restore(&t, undo) == 0, "what the server undid itself stays undone");
-    for(step = 1; step < (int)sizeof(seq); step++) {
-        int off, l = (int)sizeof(seq) - 1;
-        tnc_init(&t, 80, 25, 1);
-        for(off = 0; off < l; off += step) {
-            clear_bufs();
-            tnc_recv(&t, (const unsigned char *)seq + off, l - off < step ? l - off : step, &T, &N);
-        }
-        check(t.alt && t.cursor_off && t.colours, "sequences split at every byte are seen");
-    }
-    tnc_init(&t, 80, 25, 1);
-    RECV(&t, "\x1b[?99999999999999999h\x1b[?1049;25h\x1b\x1b[?25l\r\n");
-    check(!t.alt && t.cursor_off, "a number with no end stays bounded; several numbers are no mode the console has; ESC ESC [");
-    tnc_init(&t, 80, 25, 1);
-    RECV(&t, IAC SB "\x1b[?1049h" IAC SE "\r\n");
-    check(!t.alt, "what a sub-negotiation holds is not printed, so does not count");
-    tnc_init(&t, 80, 25, 1);
-    t.colours = t.cursor_off = t.alt = 1;
-    t.at_line_start = 0;
-    check(tnc_restore(&t, undo) <= TNC_RESTORE_MAX, "all of it fits");
+    check(n == e + 2, "what the server left open changes nothing in it");
+    check(tnc_restore(&t, undo) == e, "and it counts as a line end from then on");
 }
 
 /**** against the server's own module ****/
@@ -589,7 +569,6 @@ static void test_random(int rounds) {
         {
             char *undo = malloc(TNC_RESTORE_MAX);
             check(tnc_restore(&t, undo) <= TNC_RESTORE_MAX, "the end fits");
-            check(!t.alt && !t.cursor_off && !t.colours, "and nothing is left on");
             free(undo);
         }
         if(failures) {
@@ -635,6 +614,7 @@ static int last_port;
 static unsigned int max_net_out;
 static size_t read_while_stalled;
 static size_t max_write;                /* a write to the connection queues at most this, as the kernel's may */
+static int stdout_tty = 1;              /* standard output is a terminal */
 
 static void grow(unsigned char **p, size_t *cap, size_t need) {
     if(need <= *cap) return;
@@ -721,14 +701,15 @@ int sim_poll(struct pollfd *p, unsigned int n, int timeout) {
                     printf("step %d of %d; keys %zu of %zu; server's bytes %zu of %zu; fin %d rst %d full %d ended %d; to the server %zu\n--- screen:\n%.600s\n---\n",
                            at_step, nsteps, key_off, key_len, in_off, in_len, peer_fin, peer_rst, peer_full, keys_ended, server_len, screen_text);
                     for(i = 0; i < n; i++) printf("poll %u: fd %d events %d\n", i, p[i].fd, p[i].events);
-                    exit(1);
+                    peer_rst = 1;               /* the test ends it, and goes on to the next */
+                    return 0;
                 }
                 now_ms += 1000;
             } else now_ms += (unsigned int)timeout;
-            if(at_step >= nsteps && ++idle_after > 200) {
+            if(at_step >= nsteps && ++idle_after == 200) {
                 failures++;
                 printf("FAIL: the session does not end\n");
-                exit(1);
+                peer_rst = 1;
             }
         }
     }
@@ -828,7 +809,7 @@ int sim_ttyctl(int op, unsigned int arg) {
 }
 
 int sim_isatty(int fd) {
-    return fd == 0 ? stdin_tty : 0;
+    return fd == 0 ? stdin_tty : fd == 1 ? stdout_tty : 0;
 }
 
 unsigned int sim_uptime(void) {
@@ -965,7 +946,7 @@ static void test_program(void) {
             { "screen", 0, 0, 0, 0, A_CLOSE, 0, 0 },
         };
         r = run("10.0.2.2", s, NSTEPS(s), 1);
-        check(r == 0 && on_screen("\x1b[m\x1b[?25h\x1b[?1049l"), "the server leaves full-screen and closes: the terminal is put back");
+        check(r == 0 && on_screen("\x1b\\\x1b[m\x1b[?25h\x1b" "7\x1b[?1049l"), "the server leaves full-screen and closes: the terminal is put back");
         check(said_err("closed"), "... and only then the last words");
     }
     {
@@ -1147,7 +1128,7 @@ static void test_program(void) {
     {
         static const struct step s[] = { { NULL, "hello\n", 0, 0, 0, A_STALL, 0, 0 }, { NULL, 0, 0, 0, 0, A_KEYS_END, 0, 0 } };
         r = run("10.0.2.2 7", s, NSTEPS(s), 0);
-        check(r == 0, "the input's end, and a server that takes nothing: the same");
+        check(r == 2 && said_err("took nothing"), "the input's end, and a server that takes nothing: it did not all go, status 2");
     }
     {
         static const struct step s[] = { { NULL, 0, 0, BYTES(GOOD_SERVER "x"), 0, 0, 0 }, { "x", 0, 0, "more", 0, A_SCREEN_BROKEN, 0, 0 } };
@@ -1174,6 +1155,93 @@ static void test_program(void) {
     r = run("10.0.2.2", NULL, 0, 1);
     connect_err = 0;
     check(r == 2 && said_err("10.0.2.2 port 23") && !was_raw, "a connection refused: the terminal never left line mode");
+}
+
+/**** the review of 69203a8: each of these failed before its fix ****/
+
+#define THE_END "\x1b\\\x1b[m\x1b[?25h\x1b" "7\x1b[?1049l"
+
+static void test_review(void) {
+    static char big[240000], want[260000];
+    size_t i, n = 0, k = 0;
+    int r, line = 0;
+
+    /* 1: input from a pipe is never dropped: it waits for room */
+    while(n + 60 < sizeof(big)) {
+        int m = snprintf(big + n, 60, "line %06d of the file being piped into telnet\n", line++);
+        n += (size_t)m;
+    }
+    for(i = 0; i < n; i++) {
+        if(big[i] == '\n') want[k++] = '\r';
+        want[k++] = big[i];
+    }
+    {
+        static struct step s[2];
+        memset(s, 0, sizeof(s));
+        s[0].keys = big;
+        s[0].keys_len = (int)n;
+        s[0].action = A_KEYS_END;
+        stdout_tty = 0;
+        max_write = 512;
+        r = run("10.0.2.2 2000", s, 1, 0);
+        max_write = 0;
+        stdout_tty = 1;
+        check(r == 0 && server_len == k && !memcmp(to_server, want, k), "240000 bytes from a pipe, a server taking 512 at a time: every byte, in order");
+        check(!said_err("dropped") && !on_screen("dropped"), "... and none dropped");
+    }
+    {   /* a server that stops reading for good, and nobody there to press Ctrl+] */
+        static struct step s[2];
+        memset(s, 0, sizeof(s));
+        s[0].keys = big;
+        s[0].keys_len = (int)n;
+        s[0].action = A_STALL;
+        stdout_tty = 0;
+        r = run("10.0.2.2 2000", s, 1, 0);
+        stdout_tty = 1;
+        check(r == 2 && said_err("took nothing") && now_ms < 200000, "a pipe into a server that stops reading: status 2, in a minute");
+    }
+    {   /* the server closes with input still to go */
+        static struct step s[2];
+        memset(s, 0, sizeof(s));
+        s[0].keys = big;
+        s[0].keys_len = (int)n;
+        s[0].action = A_CLOSE;
+        stdout_tty = 0;
+        r = run("10.0.2.2 2000", s, 1, 0);
+        stdout_tty = 1;
+        check(r == 2 && said_err("before all"), "the server closes before all the input went: said, status 2");
+    }
+
+    /* 3: what is left in the line goes out at the input's end */
+    {
+        static const struct step s[] = { { NULL, "a\nno newline", 0, 0, 0, A_KEYS_END, 0, 0, NULL, 0 } };
+        stdout_tty = 0;
+        r = run("10.0.2.2 2000", s, 1, 0);
+        stdout_tty = 1;
+        check(r == 0 && server_len == 13 && !memcmp(to_server, "a\r\nno newline", 13), "the input's end: a last line with no end goes too, as it is");
+        check(!screen_len, "... and telnet does not print its own input");
+    }
+
+    /* 13: the end is the same whatever the server left open */
+    {
+        static const struct step s[] = { { NULL, 0, 0, BYTES(GOOD_SERVER "hello\x1b]0;a title") , A_CLOSE, 0, 0, NULL, 0 } };
+        r = run("10.0.2.2", s, 1, 1);
+        check(r == 0 && on_screen(THE_END), "a server leaves a string open: it is ended, and the screen reset");
+    }
+    {
+        static const struct step s[] = { { NULL, 0, 0, BYTES(GOOD_SERVER "\x1b([?1049hX\x1b[?10490hY\x1b[3"), A_CLOSE, 0, 0, NULL, 0 } };
+        r = run("10.0.2.2", s, 1, 1);
+        check(r == 0 && on_screen(THE_END), "forms no tracker would see: the same end");
+    }
+    {
+        static const struct step s[] = { { NULL, 0, 0, BYTES(GOOD_SERVER "plain text\r\n"), A_CLOSE, 0, 0, NULL, 0 } };
+        r = run("10.0.2.2", s, 1, 1);
+        check(r == 0 && on_screen(THE_END), "and after a session that left nothing on");
+        stdout_tty = 0;
+        r = run("10.0.2.2", s, 1, 1);
+        stdout_tty = 1;
+        check(r == 0 && !strchr(screen_text, 0x1b), "but nothing of it goes into a file or a pipe");
+    }
 }
 
 /**** hostile sessions at random ****/
@@ -1230,6 +1298,7 @@ int main(int argc, char **argv) {
     test_against_server();
     test_random(rounds);
     test_program();
+    test_review();
     test_program_random(rounds);
     printf("test_telnetc: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

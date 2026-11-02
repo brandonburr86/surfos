@@ -22,14 +22,21 @@ DESCRIPTION
         send ayt    ask whether the other end is there
         (empty)     back to the session
 
-    Input from a pipe or a file goes out as lines, with no raw mode
-    and no prompt. When it ends, telnet waits for the other end to
-    close, and ends after 2 seconds with no byte either way.
+    Input from a pipe or a file goes out as lines, with no raw mode,
+    no prompt and no echo. All of it goes: telnet waits while the
+    other end is slow. When it ends, a last line with no end goes as
+    it is, telnet waits for the other end to close, and it ends after
+    2 seconds with no byte either way.
 
-    The terminal is put back however the session ends: a full-screen
-    program left on the other end, a hidden cursor and colours are
-    undone, and raw mode ends. On a terminal Ctrl+C goes to the other
-    end, not to telnet: Ctrl+] then quit is the way out.
+    The terminal is put back however the session ends: whatever the
+    other end left open is ended, the screen is set right, and raw
+    mode ends. On a terminal Ctrl+C goes to the other end, not to
+    telnet: Ctrl+] then quit is the way out.
+
+    The other end's output reaches your terminal as it comes, escape
+    sequences too, so a screen can be spoofed: what looks like your
+    own shell may be its text. Trust what you see only as far as you
+    trust that computer.
 
     There is no encryption and no login of telnet's own: anything
     typed, a password too, crosses the network as it is. Use it on a
@@ -38,7 +45,9 @@ DESCRIPTION
     not said.
 
     Status 0 when you quit or the other end ended the session, 2 for
-    a usage mistake, or a connection that failed or was lost.
+    a usage mistake, a connection that failed or was lost, or input
+    from a pipe that did not all go: the other end closed first, or
+    took nothing for a minute.
 
 EXAMPLES
     telnet 10.0.0.4
