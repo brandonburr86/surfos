@@ -30,6 +30,9 @@ DESCRIPTION
     Very different large files are compared with a limit on the
     search: the edit is then correct, but may not be the shortest.
 
+    With -i, -b, -w or -B the edit is only as exact as they ask: what
+    they leave out is not in it, so patch will not give file2 back.
+
 OPTIONS
     -u, -U n   Unified form, with n lines of context (3). -u 5 also
                works when two files follow it.

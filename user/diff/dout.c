@@ -62,8 +62,8 @@ static int ignorable(const struct dscript *s, const struct dopts *o, const struc
     return 1;
 }
 
-/* the group that starts at lines i and j; normal diffs have one change to a group */
-static int next_group(const struct dscript *s, const struct dopts *o, unsigned *i, unsigned *j, struct group *g) {
+/* the changes that belong together from lines i and j; normal diffs have one change to a group */
+static int changes_together(const struct dscript *s, const struct dopts *o, unsigned *i, unsigned *j, struct group *g) {
     struct change c;
     int last_ignored;
     if(!next_change(s, i, j, &c)) return 0;
@@ -90,6 +90,25 @@ static int next_group(const struct dscript *s, const struct dopts *o, unsigned *
         g->count++;
         last_ignored = ignored;
         if(!ignored) g->visible = 1;
+    }
+}
+
+/* The next group. A group that begins with a blank change under -B can start closer to the last group than two lots of
+   context: printed apart, the two would share lines, and a hunk would have to go back over lines the last one showed. Such
+   groups, both shown, are one hunk. A group not shown keeps those on each side of it apart by the rules above, so
+   nothing shown is ever skipped over. */
+static int next_group(const struct dscript *s, const struct dopts *o, unsigned *i, unsigned *j, struct group *g) {
+    if(!changes_together(s, o, i, j, g)) return 0;
+    if(o->style == 'n' || !o->blanks || !g->visible) return 1;
+    for(;;) {
+        unsigned ni = *i, nj = *j;
+        struct group h;
+        if(!changes_together(s, o, &ni, &nj, &h) || !h.visible) return 1;
+        if((unsigned long long)h.first.a0 - g->last.a1 > 2 * (unsigned long long)o->context) return 1;
+        g->last = h.last;
+        g->count += h.count;
+        *i = ni;
+        *j = nj;
     }
 }
 

@@ -5,8 +5,9 @@
    ends of the file, in order); and damaged patches, which must fail cleanly: flipped bytes, cut ends, numbers that
    lie. Built twice by `make unittest`: as it is, and with dfile.c's hashes cut to 2 bits (-DD_HASH_MASK=3,
    test_diff_weak), where nearly every pair of lines collides and only the last check keeps the edit correct, so
-   there the edit is checked as correct and not as shortest. tests/test_cli_diff.py runs the programs, beside real
-   tools. tests/host/cli/mac-sanitize.sh runs this under the sanitizers, on the Mac. */
+   there the edit is checked as correct and not as shortest. 11/01/26 (the review): every hunk read by its numbers against
+   both files, by a parser of its own, as a round trip cannot see a wrong hunk under -B. tests/test_cli_diff.py runs the
+   programs, beside real tools. tests/host/cli/mac-sanitize.sh runs this under the sanitizers, on the Mac. */
 #define _GNU_SOURCE
 #define _DARWIN_C_SOURCE
 #include <errno.h>
@@ -608,6 +609,236 @@ static void test_by_hand(void) {
     check(parses("1,2a3\n> a\n", "a\n") < 0, "an addition after two lines");
 }
 
+/**** every hunk, on its own numbers, against both files ****/
+
+/* A round trip cannot see a wrong hunk under -B, where the edit leaves things out on purpose. So this reads diff's text with
+   nothing of dout.c or phunk.c: each hunk's numbers say which lines of each file it shows, and each line it shows must be
+   that line. Hunks go forward and never overlap, and what lies between them is the same in both files, but for what the
+   options leave out. */
+struct lines {
+    const char **at;
+    unsigned *len;                      /* newline included */
+    unsigned n;
+};
+
+static void split_lines(const struct mem *m, struct lines *l) {
+    size_t i = 0;
+    l->at = malloc((m->n + 2) * sizeof(*l->at));
+    l->len = malloc((m->n + 2) * sizeof(*l->len));
+    l->n = 0;
+    while(i < m->n) {
+        const char *nl = memchr(m->p + i, '\n', m->n - i);
+        size_t k = nl ? (size_t)(nl - (m->p + i)) + 1 : m->n - i;
+        l->at[l->n] = m->p + i;
+        l->len[l->n++] = (unsigned)k;
+        i += k;
+    }
+}
+
+static void free_lines(struct lines *l) {
+    free(l->at);
+    free(l->len);
+}
+
+static int line_is(const struct lines *l, unsigned i, const char *text, size_t n, int no_newline) {
+    if(i >= l->n) return 0;
+    if(no_newline) return l->len[i] == n && !memcmp(l->at[i], text, n);
+    return l->len[i] == n + 1 && !memcmp(l->at[i], text, n) && l->at[i][n] == '\n';
+}
+
+/* what lies between hunks: the same lines in both, blank lines left out when they do not count */
+static int same_between(const struct lines *a, unsigned i, unsigned ie, const struct lines *b, unsigned j, unsigned je, int skip_blank) {
+    for(;;) {
+        while(skip_blank && i < ie && a->len[i] == 1) i++;
+        while(skip_blank && j < je && b->len[j] == 1) j++;
+        if(i == ie || j == je) break;
+        if(a->len[i] != b->len[j] || memcmp(a->at[i], b->at[j], a->len[i])) return 0;
+        i++;
+        j++;
+    }
+    return i == ie && j == je;
+}
+
+struct cursor {
+    const char *p, *end;
+    const char *line;
+    size_t len;
+};
+
+static int next_text(struct cursor *c) {
+    const char *nl;
+    if(c->p >= c->end) return 0;
+    nl = memchr(c->p, '\n', (size_t)(c->end - c->p));
+    if(!nl) return 0;
+    c->line = c->p;
+    c->len = (size_t)(nl - c->p);
+    c->p = nl + 1;
+    return 1;
+}
+
+static int is_marker(const struct cursor *c) {
+    return c->len && c->line[0] == '\\';
+}
+
+/* the shown line of c (its mark taken off) is line i of l; a marker after it says it has no newline */
+static int shown_is(struct cursor *c, const struct lines *l, unsigned i, size_t mark, int exact) {
+    struct cursor peek = *c;
+    const char *text = c->len > mark ? c->line + mark : "";
+    size_t n = c->len > mark ? c->len - mark : 0;
+    int no_newline = next_text(&peek) && is_marker(&peek);
+    if(no_newline) *c = peek;
+    return !exact || line_is(l, i, text, n, no_newline);
+}
+
+static int bad_hunk(const char *why, const struct mem *text) {
+    static int shown_one;
+    if(!shown_one++) printf("  a hunk that lies (%s), in:\n%.*s\n", why, (int)(text->n > 900 ? 900 : text->n), text->p);
+    return 0;
+}
+
+/* start and count as a unified header has them: the file's lines from 0, and how many */
+static int parse_unified_range(const char **s, unsigned *from, unsigned *count) {
+    char *end;
+    unsigned long v = strtoul(*s, &end, 10);
+    *count = 1;
+    if(*end == ',') {
+        *count = (unsigned)strtoul(end + 1, &end, 10);
+    }
+    *from = *count ? (unsigned)v - 1 : (unsigned)v;
+    *s = end;
+    return 1;
+}
+
+static int strict_unified(const struct mem *text, const struct lines *a, const struct lines *b, int exact_b, int blanks) {
+    struct cursor c = { text->p, text->p + text->n, NULL, 0 };
+    unsigned pa = 0, pb = 0;
+    if(!next_text(&c) || !next_text(&c)) return bad_hunk("no file lines", text);    /* --- and +++ */
+    while(next_text(&c)) {
+        const char *s = c.line;
+        unsigned oa, ca, ob, cb, i, j;
+        if(c.len < 4 || memcmp(s, "@@ -", 4)) return bad_hunk("no header", text);
+        s += 4;
+        parse_unified_range(&s, &oa, &ca);
+        if(*s++ != ' ' || *s++ != '+') return bad_hunk("a header's form", text);
+        parse_unified_range(&s, &ob, &cb);
+        if(oa < pa || ob < pb) return bad_hunk("it starts before the last one ended", text);
+        if(exact_b && !same_between(a, pa, oa, b, pb, ob, blanks)) return bad_hunk("what lies before it differs", text);
+        i = oa;
+        j = ob;
+        while(i < oa + ca || j < ob + cb) {
+            char m;
+            if(!next_text(&c)) return bad_hunk("it ends early", text);
+            m = c.len ? c.line[0] : 0;
+            if(m == ' ') {
+                if(i >= oa + ca || j >= ob + cb) return bad_hunk("too many context lines", text);
+                if(!shown_is(&c, a, i, 1, 1)) return bad_hunk("a context line is not the first file's", text);
+                i++;
+                j++;
+            } else if(m == '-') {
+                if(i >= oa + ca || !shown_is(&c, a, i, 1, 1)) return bad_hunk("a - line is not the first file's", text);
+                i++;
+            } else if(m == '+') {
+                if(j >= ob + cb || !shown_is(&c, b, j, 1, 1)) return bad_hunk("a + line is not the second file's", text);
+                j++;
+            } else return bad_hunk("a line of no kind", text);
+        }
+        pa = oa + ca;
+        pb = ob + cb;
+    }
+    if(exact_b && !same_between(a, pa, a->n, b, pb, b->n, blanks)) return bad_hunk("what lies after the last differs", text);
+    return 1;
+}
+
+/* *** 3,5 **** : from 0, and how many; a lone number is one line, or none when the side shows none */
+static void parse_context_range(const char *s, unsigned *from, unsigned *to) {
+    char *end;
+    unsigned long v = strtoul(s, &end, 10), w = v;
+    if(*end == ',') w = strtoul(end + 1, &end, 10);
+    *from = (unsigned)(v ? v - 1 : 0);
+    *to = (unsigned)w;
+}
+
+/* one side of a context hunk, up to the line that ends it */
+static int strict_side(struct cursor *c, const struct lines *l, unsigned from, unsigned to, const struct mem *text, const char *own) {
+    unsigned i = from;
+    for(;;) {
+        struct cursor peek = *c;
+        if(!next_text(&peek)) break;
+        if(peek.len >= 3 && (!memcmp(peek.line, "---", 3) || !memcmp(peek.line, "***", 3))) break;
+        *c = peek;
+        if(c->len < 2 || !strchr(own, c->line[0]) || c->line[1] != ' ') return bad_hunk("a line of no kind", text);
+        if(i >= to || !shown_is(c, l, i, 2, 1)) return bad_hunk("a line is not its file's", text);
+        i++;
+    }
+    return i == from || i == to ? 1 : bad_hunk("a side ends early", text);
+}
+
+static int strict_context(const struct mem *text, const struct lines *a, const struct lines *b) {
+    struct cursor c = { text->p, text->p + text->n, NULL, 0 };
+    unsigned last_a = 0, last_b = 0;
+    if(!next_text(&c) || !next_text(&c)) return bad_hunk("no file lines", text);
+    while(next_text(&c)) {
+        unsigned af, at, bf, bt;
+        if(c.len < 15 || memcmp(c.line, "***************", 15)) return bad_hunk("no hunk start", text);
+        if(!next_text(&c) || c.len < 4 || memcmp(c.line, "*** ", 4)) return bad_hunk("no old range", text);
+        parse_context_range(c.line + 4, &af, &at);
+        if(!strict_side(&c, a, af, at, text, " -!")) return 0;
+        if(!next_text(&c) || c.len < 4 || memcmp(c.line, "--- ", 4)) return bad_hunk("no new range", text);
+        parse_context_range(c.line + 4, &bf, &bt);
+        if(!strict_side(&c, b, bf, bt, text, " +!")) return 0;
+        if(af < last_a || bf < last_b) return bad_hunk("it starts before the last one ended", text);
+        last_a = at;
+        last_b = bt;
+    }
+    return 1;
+}
+
+static void strict_round(const struct mem *a, const struct mem *b, int style, unsigned context, int blanks, int space, int icase) {
+    struct dopts o;
+    struct mem text = { 0 };
+    struct lines la, lb;
+    int r, good = 1;
+    memset(&o, 0, sizeof(o));
+    o.style = style;
+    o.context = context;
+    o.blanks = blanks;
+    o.space = space;
+    o.icase = icase;
+    r = make_diff(a, b, &o, &text);
+    if(r == DIFF_DIFFER) {
+        split_lines(a, &la);
+        split_lines(b, &lb);
+        if(style == 'u') good = strict_unified(&text, &la, &lb, !space && !icase, blanks);
+        else good = strict_context(&text, &la, &lb);
+        free_lines(&la);
+        free_lines(&lb);
+    }
+    check(good, "every hunk's numbers and lines are those of both files");
+    free(text.p);
+}
+
+static void test_strict_hunks(unsigned rounds) {
+    struct mem a = { 0 }, b = { 0 };
+    unsigned r;
+    for(r = 0; r < rounds * 4; r++) {
+        unsigned kinds = 2 + rnd(5);
+        gen_file(&a, 3 + rnd(40), kinds);
+        gen_edit(&a, &b, kinds, 2 + rnd(6));
+        if(r % 5 == 1) drop_last_newline(&a);
+        if(r % 7 == 2) drop_last_newline(&b);
+        strict_round(&a, &b, r & 1 ? 'u' : 'c', rnd(5), 1, 0, 0);       /* -B, where the groups can meet */
+        strict_round(&a, &b, r & 1 ? 'c' : 'u', rnd(5), 0, 0, 0);
+        strict_round(&a, &b, 'u', rnd(5), r % 3 == 0, r % 3 == 1 ? 'b' : 'w', r & 1);
+    }
+    /* the one the review found: a blank change just after a hunk, and a real one just after that */
+    mem_set(&a, "A\nk\nm\nB\nz1\nz2\n");
+    mem_set(&b, "Z\nk\n\nm\nY\nz1\nz2\n");
+    strict_round(&a, &b, 'u', 1, 1, 0, 0);
+    strict_round(&a, &b, 'c', 1, 1, 0, 0);
+    free(a.p);
+    free(b.p);
+}
+
 /**** damage ****/
 
 static void test_damage(unsigned rounds) {
@@ -694,6 +925,7 @@ int main(int argc, char **argv) {
     test_by_hand();
     test_damage(rounds);
     test_long_lines();
+    test_strict_hunks(rounds);
     printf("test_diff%s: %d checks, %d failures\n",
 #ifdef D_HASH_MASK
            " (hashes of 2 bits)",
