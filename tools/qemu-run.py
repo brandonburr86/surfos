@@ -284,6 +284,22 @@ def net_script_line(q):
     return f"ftpd off; printf 'user bob\\nquit\\n' | ftp -n 10.0.2.2 {NET['script'].port}"
 
 
+def net_detached_line(q):
+    """a script that a detached task runs (the kernel's spawn, as the desktop's Run program... starts one): its ftp is not
+    detached itself, but nobody types for it, so it must not ask for a password on the console"""
+    NET['detached'] = ScriptedFtp({'USER': b'331 password please\r\n', 'QUIT': b'221 bye\r\n'})
+    return (f"echo \"printf 'user bob\\\\nquit\\\\n' | /initrd/bin/ftp -n 10.0.2.2 {NET['detached'].port} > /hda1/D.OUT 2>&1\" "
+            "> /hda1/D.SH; kernel spawn /initrd/bin/surfsh /hda1/D.SH")
+
+
+def net_detached_result(q):
+    """what that ftp said, once the server has its QUIT (had it asked, the line typed next would have been its password)"""
+    deadline = time.time() + 20
+    while b'QUIT' not in NET['detached'].got and time.time() < deadline:
+        q.pump(0.1)
+    return 'cat /hda1/D.OUT; rm /hda1/D.SH /hda1/D.OUT'
+
+
 def net_names(q):
     """the session lives on; mget's listing from then on: a name that climbs, and two that are not safe here"""
     NET['ftp'].transfers['NLST'] = (b'nice.txt\r\n../../climb.txt\r\nbad|name.txt\r\nx\x1b[2J.txt\r\n', 'ok')
@@ -305,11 +321,14 @@ def net_ftp_result(q):
     srv = NET['ftp']
     srv.close()
     NET['script'].close()
+    NET['detached'].close()
     bad = []
     if (b'PASS ' + NET_PASSWORD.encode()) not in NET['script'].got:
         bad.append('no PASS from the script')
     if (b'PASS ' + NET_PASSWORD.encode()) not in srv.got:
         bad.append('no PASS')
+    if any(line.startswith(b'PASS') for line in NET['detached'].got):
+        bad.append('the detached script asked for a password')
     if NET_PASSWORD.encode() in q.transcript:
         bad.append('the password was shown')
     if b'ABOR' not in srv.got:
@@ -1608,7 +1627,8 @@ SMOKE = [
     # the session's exit; quit from a full-screen program, the terminal back; a kill from another session, raw mode gone.
     # telnet to a scripted server that speaks no telnet: silent, a line typed sent whole, then a reset. ftp by the hairpin to
     # SurfOS's ftpd, scripted from standard input: folders, listings, put and get byte for byte, reget, mget, mput, text
-    # mode. ftp to a scripted server (ScriptedFtp): a password typed with no echo and shown nowhere; EPSV refused and a PASV
+    # mode. ftp to a scripted server (ScriptedFtp): a password typed with no echo and shown nowhere, and none asked for by a
+    # script that a detached task runs (the kernel's spawn); EPSV refused and a PASV
     # naming another address, the data still from the server's own; an escape sequence in a name, a low port refused;
     # Ctrl+C in a transfer, the session alive; names that climb or are not safe; a reset partway, nothing left behind
     ('surfsh', [shown('SURF \u224b> ')],
@@ -1638,6 +1658,8 @@ SMOKE = [
                       'the rest of the script does not run', 'status 1', re.compile(rb'\n +1 *\r'), shown('SURF \u224b> ')]),
       (net_script_line, ['ftpd: stopped', 'Password for bob: ']),
       (NET_PASSWORD.encode() + b'\r', ['230 in', '221 bye', shown('SURF \u224b> ')]),
+      (net_detached_line, ['started]', PROMPT]),
+      (net_detached_result, ['bob: a password is needed, and there is no terminal to ask on', PROMPT]),
       (net_login_line, ['220-scripted', '220 ready', 'ftp> ']),
       ('lcd /hda1\nuser alice', ['The local folder is /hda1', 'Password for alice: ']),
       (NET_PASSWORD.encode() + b'\r', ['230 in', 'ftp> ']),
