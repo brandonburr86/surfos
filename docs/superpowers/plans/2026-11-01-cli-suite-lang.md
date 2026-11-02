@@ -123,7 +123,8 @@ from memory, not from a run.
 
 ## The tests
 
-- **`tests/host/test_bc`, in `make unittest`:** 68,000 checks, in about 6 s under the Docker image's emulation.
+- **`tests/host/test_bc`, in `make unittest`:** 68,500 checks, in about 6 s under the Docker image's emulation. `test_bc long`
+  adds `l` of numbers of up to two million digits.
   - The numbers against the host's `long long` (4,000 cases of the four operations and the scales) and against identities
     (`a = q b + r`, `a (b + c) = a b + a c`, the root is the largest of its scale whose square is not above `a`) on patterns of
     0, 9 and 5000, at sizes on each side of the stack's columns and the carry rows. Knuth's step D6 by a worked case.
@@ -325,14 +326,14 @@ digits and mawk `2.14748e+09`.
   - Writes that fail, through an `fclose()` told to fail, and `/dev/full` where the system has one, as the Docker image does.
   - Records whichever way the input arrives, from a command that pauses and at the end of a read, and the bytes given to `regexec()`
     counted, in memory the run's fork shares.
-  Without `awk` on a machine the comparison says it is skipped. 1,236 checks in all.
+  Without `awk` on a machine the comparison says it is skipped. 1,240 checks in all.
 - **Under the sanitizers:** never in `make unittest`. `test_awk long` runs natively on the Mac with clang's
   `-fsanitize=address,undefined,float-cast-overflow`, by the command in the test's header, on 20,000 damaged programs and 5,000
   damaged inputs.
 - **Coverage, measured once with clang, before the fix round:** `io.c` and `main.c` every line, the others from 94 to 99%. What is
   left is mostly messages for what the parser already stops, such as an array reaching `to_num()`.
-- **The smoke block**, 27 steps, marker `echo cli-lang`, a block of its own after `bc`'s. Five of them show what a host cannot:
-  libsurf's `printf`, a write refused at the close, in `close()`, a command waited for after a mistake, and RS at a terminal.
+- **The smoke block**, 29 steps, marker `echo cli-lang`, a block of its own after `bc`'s. Seven of them show what a host cannot:
+  libsurf's `printf`, a write refused at the close, in `close()`, a command waited for after a mistake, and RS at a terminal, twice.
 
 **Not run:** on the laptop, as nothing of this track has been. No kernel file changed, so SurfCPU's check does not apply. `awk`'s
 floating point runs on x87 like the rest of SurfOS's programs: nothing here uses SSE.
@@ -398,35 +399,49 @@ the LCG constants of `rand()`, which are Knuth's MMIX. A Newton integer root. FN
 xorshift in the tests. awk's grammar and `getline` from POSIX, bc's scale rules from POSIX, and `test_bc.c` quotes POSIX's example `e(x)`
 as a test. I never recalled the source of mawk, gawk, plan9, OpenBSD's bc or dc, or Howard's bc: those I only ran.
 
+### The last round
+
+From the review of `1eb1f78`, which found no memory-safety issue and every fix of the first review holding.
+
+- **`l` of a number of half a million digits or more was wrong**, a regression of the rewrite. `k`, the power of 2 that brings `x` near
+  1, came from its count of digits times 3322/1000, which is log2 10 and 7.2e-5 more: at a million digits 75 bits too many, so `x / 2^k`
+  was nowhere near 1 and the mean's identity failed. `l(10^1000000)` gave 2302588.518954... for 2302585.092994.... It is now
+  3321928094887 / 10^12, 3.6e-13 below log2 10, and a number holds at most 2^31 digits (2^29 limbs of four), so `k` is out by under
+  a thousandth of a bit at any length. The review's four cases, `10^500000`, `10^1000000`, `10^-1000000` and `3^2000000`, are in
+  `test_bc long` with the true values from Python's `decimal`; each takes seconds natively and minutes under the image's emulation,
+  so they are not in `make unittest`. On `1eb1f78`'s library `l(10^500000)` came out ...200901239 for ...200899572.
+- **`j`'s work had no bound.** Its start loop worked at the full scale at every step, and had no limit on `x`: `j(0, 5000000000)` ran
+  without end. The bound on `J(m)` is now kept as twelve digits and a power of ten, so a step costs the same at any scale. And `j`
+  first sets the scale the library before this one worked at, `.45 x` digits more than asked: where that one refused, at once, with
+  `j: scale must be from 0 to 2147483647`, this one does too.
+- **Memory too small is said at once.** Under a program's 256 MB, `scale=100000000; j(0,1)` and `e(1)` ground on where the library
+  before ran out in 0.3 s and 26 s. Now `e`, `l` and `j` take what they will keep at once and give it back before they start, as a
+  power does (`_room()`, a third of a number in parts of up to a billion digits): about 7 numbers of the working scale for `e`, 10 for
+  `l`, whose mean works at half as many digits again, and 6 of the scale the old `j` used. "out of memory" comes at once.
+- **A message names the function the program called**, `e: out of memory` and not `_room` or `_lm`: the machine looks out through the
+  library's own calls to the one the program made.
+- **awk:** `getline` after `|`, a backslash and a newline is a pipe from a command, as on the Mac's awk, where it was a syntax error.
+  At a terminal a regex RS match that ends the line typed is taken then: with `[0-9\n]` the line's last record no longer waits for
+  the next line. A smoke step types it; on `1eb1f78`'s build it waited for `<b>` until the step gave up.
+
 ### What the last run covered
 
-This round's tree, with `l`, `e` and `j`, the two print functions and the two awk functions rewritten, and text's fixes (`7ebf1ed`) in
-it. `make unittest` passed on it: `test_bc` 68,030 checks and `test_awk` 1,238.
+This round's tree, on `1eb1f78`. `make unittest` passed on it: `test_bc` 68,516 checks and `test_awk` 1,240. `make test-all` passed
+at the first try: 547 smoke checks and 51 of the Files test, at -O0 and at -O2. This track's two smoke blocks, 22 and 29 steps, also passed
+alone at -O2 before it.
 
-`make test-all` ran four times through the lock. **The fourth passed whole:** 547 smoke checks and 51 of the Files test, at -O0 and
-at -O2, on exactly the tree committed. Before it:
+Under the sanitizers, natively on the Mac, on this tree: `test_awk long`, 26,659 checks, and `test_bc long`, 229,710, with the four
+huge `l` cases in it, with `-fsanitize=address,undefined,float-cast-overflow`. `regex.c` is still built with
+`-fno-sanitize=pointer-overflow`: its line 341, in text's `set_sort()`, adds 0 to a NULL, and `cli/text`'s newer commit guards that line
+(`s->n ? r->range + s->first : NULL`); by the coordinator's word it is not merged here, and the test header's command keeps the flag until
+it is.
 
-- The first two passed at -O0 and failed 13 of 542 at -O2, from the same first failure with the same numbers both times: the memhog
-  check (`free pages before [(37980, 42485)], after []`), and the telnet steps after it with it. While `memhog` holds the memory, `ls`
-  may be refused at the spawn, as the check expected, or start and then fail to load its stack, which is what this tree's memory
-  leaves: `/initrd/bin/ls: out of memory for the stack`. The gates had met it on the base tree (`ci-base-smoke0`), and `ai-dev`'s
-  `d119cbb` widened the check's pattern for it. That stretch alone passed 5 of 5 here. This branch has the same three lines now, its
-  own commit naming `d119cbb`, so that they merge as one: **a second existing line of the shared harness changed**, against the brief's
-  rule of pure insertion, as `a9caa20` did for the first.
-- The third passed at -O0 but for one check, `httpd: six places ... (5 of 6)`, and so never reached -O2. That is the race the gates logged
-  as `ci-places-unfixed` and `ai-dev` fixed in httpd's own code (`26017df`, B90), which is not this track's to take. The load was about
-  15 at that time.
+`e`, `l` and `j` against the Mac's bc at 40 more digits and Python's `decimal`, again on this tree: 3,874 values at 13 scales, twice with
+different random values, 4 differ each time, all the long-run limit the page states.
 
-Under the sanitizers, natively on the Mac, on this tree: `test_awk long`, 26,657 checks, and `test_bc long`, 229,216, with
-`-fsanitize=address,undefined,float-cast-overflow`. `regex.c` is still built with `-fno-sanitize=pointer-overflow`: its line 341, in
-text's `set_sort()`, adds 0 to a NULL. `cli/text`'s newer commit guards that line (`s->n ? r->range + s->first : NULL`); by the
-coordinator's word it is not merged here, and the test header's command keeps the flag until it is.
-
-The comparisons on this tree. `e`, `l` and `j`: 3,874 values at 13 scales against the Mac's bc at 40 more digits and Python's `decimal`,
-twice with different random values: 4 differ each time, all the long-run limit the page states. 17 more edges are pinned from
-`decimal`, and `j(0, 5000)` from Hankel's expansion. A fraction's digit count, against the rule `base^n >= 10^scale` on the Mac: 744
-cases over 24 bases. Digits in those bases: the same as the Mac's. Line breaks: 825 cases of text and digits, the same byte for byte.
-`sub`: 1,500 random replacements, the same as mawk's.
+The round before this one is in the history below: `test-all` took four runs then. Two failed at -O2 on the memhog check, as
+this tree's memory leaves `ls` refused at its stack; `d119cbb`'s three lines settled that (`30a584b`). One failed at -O0 on httpd's
+"six places", a race `ai-dev` fixed in httpd (`26017df`), not this track's to take. The fourth passed whole.
 
 **The history.** `cli/lang` from `be8094d` was rewritten with `git filter-branch`, so that each commit has these forms from the commit where
 its function first appears, and none of the recalled ones. The merges keep their second parents, `39f79ee` and `7ebf1ed`, and text's
