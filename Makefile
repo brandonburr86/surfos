@@ -72,6 +72,8 @@ USER_PROGS  += gzip gunzip zcat       # 11/01/26 (the command-line suite): one t
 USER_PROGS  += tar                    # 11/01/26: user/tar/
 USER_PROGS  += unzip                  # 11/01/26: user/unzip/
 USER_PROGS  += top watch man # 11/01/26 (the command-line suite, track sys): rootfs/man/ is the manual
+USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): the calculator, user/bc/
+USER_PROGS  += awk           # 11/01/26 (the command-line suite, track lang): the language, user/awk/
 USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
 USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): the stream editor
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
@@ -825,6 +827,38 @@ unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch $(BUILD)/host/test
 	$(BUILD)/host/test_manutil
 	$(PYTHON) -m unittest discover -s tests -p test_man.py
 
+# 11/01/26 (the command-line suite, track lang): bc, a program of several files in user/bc/. tests/host/test_bc.c runs
+# num.c, parse.c, vm.c and lib.c as they are, their memory through tests/host/bc_alloc.h; only main.c makes system calls.
+# No sanitizer build here: the test's header says how to run them on the Mac.
+BC_SRC       = $(wildcard user/bc/*.c)
+BC_OBJ       = $(BC_SRC:user/bc/%.c=$(BUILD)/user/bc/%.o)
+BC_HOST_OBJ  = $(addprefix $(BUILD)/host/bc/,num.o parse.o vm.o lib.o)
+DEPS        += $(BC_OBJ:.o=.d)
+$(BUILD)/user/bc/%.o: user/bc/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/bc: $(BC_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(BC_OBJ) $(USER_LIB)
+
+$(BUILD)/host/bc/%.o: user/bc/%.c user/bc/bc.h user/bc/num.h tests/host/bc_alloc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -include tests/host/bc_alloc.h -c $< -o $@
+
+$(BUILD)/host/test_bc: tests/host/test_bc.c $(BC_HOST_OBJ)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/bc tests/host/test_bc.c $(BC_HOST_OBJ) -o $@
+
+unittest: unittest-lang
+.PHONY: unittest-lang
+unittest-lang: $(BUILD)/host/test_bc
+	$(BUILD)/host/test_bc
+
 # 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
 # (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
 # i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
@@ -877,6 +911,40 @@ unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/
 	$(BUILD)/host/test_getopt
 	$(BUILD)/host/test_sedsave
 	$(PYTHON) tests/test_sed.py $(BUILD)/host/sed-host $(BUILD)/host/grep-host
+
+# 11/01/26 (the command-line suite, track lang): awk, a program of several files in user/awk/. tests/host/test_awk.c
+# runs all of them as they are, main.c too, each run in a fork of its own, with libsurf's regular expressions
+# (tests/host/awk/regex.h) and the test's memory and commands (tests/host/awk_host.h). No sanitizer build here: the test's
+# header says how to run them on the Mac.
+AWK_SRC      = $(wildcard user/awk/*.c)
+AWK_OBJ      = $(AWK_SRC:user/awk/%.c=$(BUILD)/user/awk/%.o)
+AWK_HOST_OBJ = $(AWK_SRC:user/awk/%.c=$(BUILD)/host/awk/%.o)
+DEPS        += $(AWK_OBJ:.o=.d)
+$(BUILD)/user/awk/%.o: user/awk/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/awk: $(AWK_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(AWK_OBJ) $(USER_LIB)
+
+$(BUILD)/host/awk/%.o: user/awk/%.c user/awk/awk.h tests/host/awk_host.h tests/host/awk/regex.h user/include/regex.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/awk -Iuser/awk -include tests/host/awk_host.h -c $< -o $@
+
+$(BUILD)/host/test_awk: tests/host/test_awk.c tests/host/awk/table.inc $(AWK_HOST_OBJ) $(BUILD)/host/text/regex.o \
+                        $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_awk.c $(filter %.o,$^) -lm -o $@
+
+unittest: unittest-lang-awk
+.PHONY: unittest-lang-awk
+unittest-lang-awk: $(BUILD)/host/test_awk
+	$(BUILD)/host/test_awk
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

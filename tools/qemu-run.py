@@ -1205,7 +1205,7 @@ SMOKE = [
     # pipeline, reported by its number. 10/25/26: the kernel's ls into a program as kernel ls (ls is the program)
     ('surfsh', [shown('SURF \u224b> ')],
      [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
-      ('kernel ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('kernel ls /initrd/bin | /initrd/bin/head -2', [re.compile(rb'  [a-z0-9]+\r\n[^\r\n]*  [a-z0-9]+\r\n'), shown('SURF \u224b> ')]),
       # 10/31/26: a line of its own at the log's end, not the boot's at its start: by here the steps before have filled
       # the 16 KB ring (KLOG_SIZE), and the boot's first lines are gone
       ("printf 'dmesg-%s\\n' piped > /dev/kmsg; dmesg | /initrd/bin/tail -n 1", ['dmesg-piped', shown('SURF \u224b> ')]),
@@ -1480,6 +1480,100 @@ SMOKE = [
                                                    shown('SURF \u224b> ')]),
       ('ptytest procsize', ['size 0 wrote 36 bytes', 'PTYTEST procsize PASS', shown('SURF \u224b> ')]),
       ('help | grep -c "man -k WORD"', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track lang): bc: numbers of any length, scale, the bases, a long number's lines; -l;
+    # a script in a file, and a file then standard input; a mistake at a terminal costs its line, and in a pipe the status
+    # is 2; a number the machine cannot hold is said at once; a file that is not there; a reader that goes away
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-lang', ['cli-lang\r\n', shown('SURF \u224b> ')]),
+      ("echo '2^100; 2^500' | bc", ['\r\n1267650600228229401496703205376\r\n',
+                                    '32733906078961418700131896968275991522166420460430647894832913680961\\\r\n',
+                                    '053328527589376\r\n', shown('SURF \u224b> ')]),
+      ("echo 'scale=20; 1/7; scale=2; 7.555*2; -7%3' | bc", ['.14285714285714285714\r\n', '15.110\r\n', '-.01\r\n',
+                                                             shown('SURF \u224b> ')]),
+      ("echo 'obase=16; 255; obase=2; 5.25; obase=25; 1024' | bc", ['FF\r\n', '101.0100000\r\n', ' 01 15 24\r\n',
+                                                                    shown('SURF \u224b> ')]),
+      ("echo 'ibase=16; FF.8; ibase=A; sqrt(10^40-1); length(1.50)' | bc",
+       ['255.5\r\n', '99999999999999999999\r\n', '3\r\n', shown('SURF \u224b> ')]),
+      ("echo 'e(1); 4*a(1); l(10); s(1); c(1); j(1,1)' | bc -l",
+       ['2.71828182845904523536\r\n', '3.14159265358979323844\r\n', '2.30258509299404568401\r\n',
+        '.84147098480789650665\r\n', '.54030230586813971740\r\n', '.44005058574493351595\r\n',
+        shown('SURF \u224b> ')]),
+      ("printf 'define f(n) { auto a[]; a[0]=n; if(n<2) return 1; return a[0]*f(n-1) }\\nf(25)\\nquit\\n' > /hda1/F.BC; "
+       "bc /hda1/F.BC", ['15511210043330985984000000\r\n', shown('SURF \u224b> ')]),
+      ("echo 'x=41' > /hda1/F.BC; echo 'x+1' | bc /hda1/F.BC", ['42\r\n', shown('SURF \u224b> ')]),
+      # (bc says nothing when it starts: the file's answer says that it has got to the terminal)
+      ("echo 'x+1' > /hda1/F.BC; bc /hda1/F.BC", ['\r\n1\r\n']),
+      ('x=6', []),
+      ('x*7', ['42\r\n']),
+      ('1/0', ['bc: (standard input): line 3: divide by zero\r\n']),
+      ('x', ['6\r\n']),
+      ('quit', [shown('SURF \u224b> ')]),
+      ('rm /hda1/F.BC', [shown('SURF \u224b> ')]),
+      ("echo '1/0' | bc; echo status $?; echo '1+' | bc; echo status $?",
+       ['divide by zero\r\n', 'status 2\r\n', 'unexpected end of line\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      # (a digit above the base counts at its own value, and else may stand after a ; or on a later line)
+      ("printf 'ibase=2\\n12\\nibase=1010\\n1E5\\nif(0)2;else 3\\nif(0)4\\nelse 5\\n' | bc; echo status $?",
+       ['\r\n4\r\n245\r\n3\r\n5\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ("echo '10^1000000000' | bc; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ('bc /hda1/NONE.BC; echo status $?', ['bc: /hda1/NONE.BC: No such file or directory\r\n', 'status 2\r\n',
+                                            shown('SURF \u224b> ')]),
+      ("echo 'while(1) 7' | bc | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF \u224b> ')]),
+      ('head -1 /initrd/man/bc.txt', ['bc - ', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track lang): awk: fields, patterns, -F and -v, UTF-8 counted as characters, printf,
+    # recursion, arrays and for-in through a pipe to sort, sub and match, getline from a command, system, a file written,
+    # added to and read back, exit, a mistake and a file that is not there, memory running out, a reader that goes away
+    ('surfsh', [shown('SURF ≋> ')],
+     [('echo cli-lang', ['cli-lang\r\n', shown('SURF ≋> ')]),
+      ("printf 'a b c\\nd e f\\n' | awk '{ print NF, $2; $2 = \"x\"; print }'",
+       ['\r\n3 b\r\n', 'a x c\r\n', '3 e\r\n', 'd x f\r\n', shown('SURF ≋> ')]),
+      ("seq 10 | awk '$1 % 2 == 0 { s += $1 } NR == 2, NR == 3 { n++ } END { print s, NR, n }'", ['30 10 2\r\n', shown('SURF ≋> ')]),
+      ("printf 'x:1\\ny:2\\n' | awk -F: -v n=10 '{ print $1, $2 * n }'", ['x 10\r\n', 'y 20\r\n', shown('SURF ≋> ')]),
+      ("echo héllo wörld | awk '{ print length($1), substr($2, 2, 2), index($0, \"o\"), toupper($1) }'",
+       ['5 ör 5 HéLLO\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { printf \"%5.2f|%-4d|%s|%c|%x\\n\", 3.14159, 42, \"s\", 65, 255; print 2 ^ 10, 1 / 3, int(3.9), 1e6 }'",
+       [' 3.14|42  |s|A|ff\r\n', '1024 0.333333 3 1000000\r\n', shown('SURF ≋> ')]),
+      # (libsurf's printf would put a sign on what has none, which a host's printf does not: only here does it show)
+      ("awk 'BEGIN { printf \"%+x|% o|%+u|% x|%+d\\n\", 255, 8, 3, 15, 5 }'", ['ff|10|3|f|+5\r\n', shown('SURF ≋> ')]),
+      ("awk 'function f(n) { return n < 2 ? 1 : n * f(n - 1) } BEGIN { print f(10), sqrt(16), exp(0), length(\"\") }'",
+       ['3628800 4 1 0\r\n', shown('SURF ≋> ')]),
+      ("printf 'a\\nb\\na\\n' | awk '{ c[$1]++ } END { for (k in c) print k, c[k] | \"sort\" }'",
+       ['a 2\r\n', 'b 1\r\n', shown('SURF ≋> ')]),
+      ("echo hello | awk '{ n = gsub(/l+/, \"[&]\"); print n, $0, match($0, /o/), RSTART, RLENGTH }'",
+       ['1 he[ll]o 7 7 1\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { while ((\"seq 3\" | getline x) > 0) s += x; print s, close(\"seq 3\"), system(\"exit 7\") }'",
+       ['6 0 7\r\n', shown('SURF ≋> ')]),
+      # (what awk has read of a command, a file or a pipe survives a system() and an fflush(), which flush stdio's streams)
+      ("awk 'BEGIN { c = \"seq 3000\"; while ((c | getline x) > 0) { n++; s += x; if (n == 10) system(\"true\"); "
+       "if (n == 20) fflush() } print n, s, close(c), close(c) }'", ['3000 4501500 0 -1\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 > /hda1/S.TXT; awk 'BEGIN { f = \"/hda1/S.TXT\"; while ((getline x < f) > 0) { n++; if (n == 10) "
+       "system(\"true\") } print n, close(f) }'; rm /hda1/S.TXT", ['3000 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 | awk 'NR == 10 { system(\"true\") } END { print NR }'", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
+      ("awk 'BEGIN { f = \"/hda1/A.TXT\"; print \"one\" > f; close(f); print \"two\" >> f }'; awk '{ print NR, $0 }' /hda1/A.TXT; rm /hda1/A.TXT",
+       ['1 one\r\n', '2 two\r\n', shown('SURF ≋> ')]),
+      ("dmesg | awk '/FAT16: hda1/ { print $2, (NF > 3) }' | head -1", ['hda1: 1\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { exit 5 }'; echo status $?; awk 'BEGIN { print 1 / 0 }'; echo status $?",
+       ['status 5\r\n', 'division by zero\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { print ) }'; echo status $?; awk '{ print }' /hda1/NONE.TXT; echo status $?",
+       ["syntax error near ')'\r\n", 'status 2\r\n', 'awk: /hda1/NONE.TXT: No such file or directory\r\n', 'status 2\r\n',
+        shown('SURF ≋> ')]),
+      ("awk 'BEGIN { s = \"x\"; while (1) s = s s }'; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a write that fails when the file is closed, as on a full stick: this file opens, and refuses every write)
+      ("awk 'BEGIN { print \"x\" >> \"/dev/config/hostname\" }'; echo status $?",
+       ['awk: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { f = \"/dev/config/hostname\"; print \"x\" >> f; close(f); print \"no\" }'; echo status $?",
+       ['awk: line 1: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a mistake waits for a command, as the end of a program does: what it writes comes before the prompt)
+      ("awk 'BEGIN { print \"sent\" | \"cat\"; print 1 / 0 }'; echo status $?", ['division by zero\r\n', 'sent\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (at a terminal a pattern as RS gives a record as soon as the next byte is there: the person does not type 64 KB)
+      ("awk 'BEGIN { RS = \"[0-9]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b2c', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
+      # (and when RS can match the newline, the line's last record comes with the line, not with the next one)
+      ("awk 'BEGIN { RS = \"[0-9\\n]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { while (1) print 7 }' | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF ≋> ')]),
+      ('head -1 /initrd/man/awk.txt', ['awk - ', shown('SURF ≋> ')]),
       ('exit', [])]),
     # 11/01/26 (the command-line suite, track text): what libsurf gained, inside SurfOS: libtest (user/bin/libtest.c) checks
     # regcomp and regexec, strtod, sscanf's floats, getopt, system, popen and pclose, and that the mathematical functions
