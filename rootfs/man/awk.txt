@@ -72,7 +72,9 @@ DESCRIPTION
 
 OPTIONS
     -F fs        Set FS. -Ft is a tab, and \t works too.
-    -v var=val   Assign before BEGIN runs.
+    -v var=val   Assign before BEGIN runs. An array, a function or a
+                 word of the language cannot take a value, here or
+                 among the arguments: that is a mistake.
     -f file      Read the program from a file. Several add up.
 
 EXAMPLES

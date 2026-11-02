@@ -410,6 +410,35 @@ static void command_line(void) {
     /* nextfile */
     args_are(NULL, "a1\nb1\n", 0, "FNR == 2 { nextfile } { print }", (char *)a, (char *)b, NULL, NULL, NULL);
     args_are(NULL, "a1\nb1\n", 0, "{ print; nextfile }", (char *)a, (char *)b, NULL, NULL, NULL);
+    /* a name that cannot take a value is refused */
+    args_are("in\n", "", 2, "{ print }", "ARGV=1", (char *)a, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "ARGV=1: that name cannot take a value") != NULL);
+    args_are("in\n", "", 2, "BEGIN { ARGV[1] = \"ARGV=1\" } { print }", "x", "y", NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are("in\n", "", 2, "{ print }", "ENVIRON=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are("in\n", "", 2, "function f() { } { print }", "f=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are("in\n", "", 2, "BEGIN { x[1] } { print }", "x=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are("in\n", "", 2, "{ print }", "length=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are("in\n", "", 2, "{ print }", "if=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are(NULL, "", 2, "-v", "ARGV=1", "BEGIN { }", NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are(NULL, "", 2, "-v", "ENVIRON=1", "BEGIN { }", NULL, NULL, NULL);
+    CHECK(strstr(R.err, "cannot take a value") != NULL);
+    args_are(NULL, "", 2, "-v", "x=1", "function x() { } BEGIN { }", NULL, NULL, NULL);
+    CHECK(strstr(R.err, "both a function and a variable") != NULL);
+    args_are(NULL, "", 2, "-v", "x=1", "BEGIN { x[1] = 2 }", NULL, NULL, NULL);
+    CHECK(strstr(R.err, "scalar used as an array") != NULL);
+    args_are("in\n", "", 2, "{ x[1] = 2 }", "x=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "scalar used as an array") != NULL);
+    args_are("in\n", "", 2, "function f(a) { getline; a[1] = 1 } BEGIN { f(x) }", "x=1", NULL, NULL, NULL, NULL);
+    CHECK(strstr(R.err, "scalar used as an array") != NULL);
+    args_are("in\n", "in 1 2\n", 0, "{ print $0, NF0, ARGC0 }", "NF0=1", "ARGC0=2", NULL, NULL, NULL);
+    args_are("in\n", "1 in\n", 0, "{ print NR, $0 }", "NR=0", NULL, NULL, NULL, NULL);
     /* the ways it refuses */
     args_are(NULL, "", 2, "{ print }", "/nonexistent/file", NULL, NULL, NULL, NULL);
     CHECK(strstr(R.err, "awk: /nonexistent/file: No such file") != NULL);

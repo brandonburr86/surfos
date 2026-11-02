@@ -187,11 +187,18 @@ static int is_assignment(const char *s) {
     return *p == '=';
 }
 
+/* A name that holds an array, a function's and a word of the language cannot take a value, and ENVIRON and ARGV are
+   arrays even before they are made, at -v. This is what keeps ARGV an array for open_next_file(), which takes it as one:
+   every other way to write to a name goes through check_scalar(). */
 void assign_operand(const char *s) {
     const char *eq = strchr(s, '=');
-    int id = global_id(s, (unsigned)(eq - s));
+    unsigned len = (unsigned)(eq - s), i;
+    int id, taken = is_reserved(s, len);
     struct buf b = { NULL, 0, 0 };
     struct value v;
+    for(i = 0; i < A.nfn; i++) taken |= !strncmp(A.fn[i].name, s, len) && !A.fn[i].name[len];
+    id = taken ? -1 : global_id(s, len);
+    if(taken || id == S_ENVIRON || id == S_ARGV || A.global[id].kind == V_ARRAY) fatal("%s: that name cannot take a value", s);
     parse_assign_value(eq + 1, (unsigned)strlen(eq + 1), &b);
     v.kind = V_INPUT;
     v.u.s = str_new(b.p ? b.p : "", b.len);

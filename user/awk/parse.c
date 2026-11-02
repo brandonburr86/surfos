@@ -1538,6 +1538,16 @@ void parse_program(const char *text, unsigned len, const unsigned *starts, unsig
     free(p->locals);
 }
 
+/* no variable can have such a name */
+int is_reserved(const char *s, unsigned n) {
+    unsigned i;
+    for(i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
+        if(!strncmp(keywords[i].word, s, n) && !keywords[i].word[n]) return 1;
+    for(i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++)
+        if(!strncmp(builtins[i].word, s, n) && !builtins[i].word[n]) return 1;
+    return 0;
+}
+
 /* The escapes of a value from the command line, as in a string. */
 void parse_assign_value(const char *s, unsigned n, struct buf *to) {
     unsigned i = 0;

@@ -256,6 +256,7 @@ int substitute(const struct value *re, struct str *repl, struct str *text, int g
 /* parse.c */
 void parse_program(const char *text, unsigned len, const unsigned *source_starts, unsigned nsources);
 void parse_assign_value(const char *s, unsigned n, struct buf *to);     /* a command line value's escapes */
+int is_reserved(const char *s, unsigned n);             /* a word of the language */
 
 /* vm.c */
 int run_code(unsigned pc);
