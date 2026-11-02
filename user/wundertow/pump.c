@@ -49,9 +49,10 @@ static void ended(struct wb *b, struct ld_result *r) {
 int ld_start_loads(struct loader *l, struct wb *b) {
     static struct wb_request q;
     char err[UT_ERR_MAX];
-    int c = wb_cancel(b), changed = 0;
-    if(c) ld_cancel(l, c);
-    while(wb_take(b, &q)) {
+    int c, changed = 0;
+    for(;;) {
+        if((c = wb_cancel(b)) != 0) ld_cancel(l, c);    /* 11/02/26: each time, as a load that could not start may */
+        if(!wb_take(b, &q)) break;                      /* end what is on its way (a sheet's: sheets.c, the pictures) */
         changed = 1;                    /* a load under way: Stop in the toolbar */
         if(!ld_start(l, &q, err, sizeof(err))) continue;
         memset(&R, 0, sizeof(R));       /* no helper: a failed load like another */

@@ -50,6 +50,9 @@ time_t ut_sim_time(time_t *t) { if(t) *t = 0; return 0; }
 static const unsigned char *script, *picture_script;
 static size_t script_len, picture_len, script_cut = (size_t)-1;
 static int script_bytewise, script_hang, script_faults, spawn_fails;
+static const unsigned char *text_script;    /* 11/02/26: what a helper for a text (a sheet) says, when not the page's */
+static size_t text_len;
+static int text_spawn_fails, picture_hang;  /* a text's helper cannot start; a picture's says nothing and hangs */
 static int held_fd = -1;                /* a faulted helper's write end: it stays open until the helper is collected */
 static char asked_kind[16], asked_url[WB_ADDR_MAX];
 const char *ld_self = LD_SELF;
@@ -58,7 +61,7 @@ int ld_spawn(const char *kind, const char *url, int fd) {
     pid_t pid;
     snprintf(asked_kind, sizeof(asked_kind), "%s", kind);
     snprintf(asked_url, sizeof(asked_url), "%s", url);
-    if(spawn_fails) {
+    if(spawn_fails || (text_spawn_fails && !strcmp(kind, "text"))) {
         errno = ENOMEM;
         return -1;
     }
@@ -71,6 +74,11 @@ int ld_spawn(const char *kind, const char *url, int fd) {
         if(picture_script && !strcmp(kind, "image")) {
             script = picture_script;
             n = picture_len;
+        }
+        if(picture_hang && !strcmp(kind, "image")) for(;;) pause();
+        if(text_script && !strcmp(kind, "text")) {
+            script = text_script;
+            n = text_len;
         }
         if(script_bytewise) {
             for(i = 0; i < n; i++) {
@@ -606,6 +614,50 @@ static int loop(int fd, int seconds) {
     return n;
 }
 
+
+/* 11/02/26 (milestones 2 and 3 together): the last sheet of a page has no helper to be had, so the page is built again with
+   the sheet that came inside ld_start_loads(), and its pictures' loads start again there (browser.c's wb_restyled()):
+   what that ends is ended before anything more starts, so the loads that start again are not the ones it ends */
+static void restyled_in_the_loop(int fd) {
+    static unsigned char css[1024];
+    static const char sheet[] = "@import \"b.css\"; .h{display:none}";
+    struct ld_head h = head(LD_BODY, 20, sizeof(sheet) - 1);
+    struct wb_page *p;
+    int i, n, alive = 0, win;
+    snprintf(h.type, sizeof(h.type), "text/css");
+    memcpy(css, &h, sizeof(h));
+    memcpy(css + sizeof(h), "https://a.test/a.css", 20);
+    memcpy(css + sizeof(h) + 20, sheet, sizeof(sheet) - 1);
+    text_script = css;
+    text_len = sizeof(h) + 20 + sizeof(sheet) - 1;
+    picture_hang = 1;
+    body_answer("https://a.test/restyle", "<title>R</title><link rel=stylesheet href=a.css><p class=h><img src=1.png alt=a></p>"
+                "<p><img src=2.png alt=b>");
+    go(msg, msg_len);
+    wb_go(&B, "https://a.test/restyle");
+    for(n = 0; n < 40 && !(B.npages && (p = wb_current(&B))->ntexts == 2); n++) {
+        ld_start_loads(&L, &B);
+        ld_wait(&L, &B, fd, &win);
+    }
+    p = wb_current(&B);
+    check(B.npages && !strcmp(p->doc.title, "R") && p->ntexts == 2 && p->texts[1].state == WP_WAIT && p->doc.image_count == 2 &&
+          p->doc.pics[0].state == WP_RUNNING && p->doc.pics[1].state == WP_RUNNING,
+          "a page whose sheet came and imports another, with two pictures on their way");
+    text_spawn_fails = 1;
+    ld_start_loads(&L, &B);
+    ld_start_loads(&L, &B);
+    text_spawn_fails = 0;
+    for(i = 1; i < LD_HELPERS; i++) if(L.job[i].state != LJ_FREE && L.job[i].kind == WB_LOAD_IMAGE && L.job[i].item == 0) alive++;
+    check(p->doc.image_count == 1 && p->doc.pics[0].state == WP_RUNNING && !strcmp(p->doc.images[0], "https://a.test/2.png"),
+          "the import has no helper: the page is built again, its first picture hidden, the other's load started again");
+    check(alive == 1 && B.inflight == 1, "and that load is on its way: the loads ended were the old ones");
+    picture_hang = 0;
+    text_script = NULL;
+    wb_stop(&B);
+    ld_start_loads(&L, &B);
+    check(!ld_busy(&L) && !wb_busy(&B), "Stop ends it");
+}
+
 static void the_loop(void) {
     int ev[2], win = 1;
     char c = 'k';
@@ -712,6 +764,7 @@ static void the_loop(void) {
     wb_go(&B, "file:///some/page.html");
     loop(ev[0], 5);
     check(wb_current(&B)->file && !strcmp(wb_current(&B)->url, "file:///some/page.html"), "asked for a file, a file page");
+    restyled_in_the_loop(ev[0]);
     /* no helper to be had */
     spawn_fails = 1;
     wb_go(&B, "https://x.test/");
