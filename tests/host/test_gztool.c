@@ -195,7 +195,7 @@ static void test_options(void) {
     /* levels */
     {
         static unsigned char text[200000];
-        size_t i, last = 0;
+        size_t i;
         const char *const levels[] = { "-1", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9" };
         unsigned r = 1;
         for(i = 0; i < sizeof(text); i++) {
@@ -218,10 +218,44 @@ static void test_options(void) {
             ars_put("/t.gz", z, n1);
             check(ars_cmd(zcat_main, "zcat /t.gz") == 0, "... that unpacks");
             check(!memcmp(ars_stdout(&n2), text, sizeof(text)) && n2 == sizeof(text), "... to the data");
-            if(i == 0) last = n1;
-            if(i == 8) check(n1 < last, "-9 is smaller than -1 here");
             free(z);
         }
+    }
+
+    /* Each level packs log lines no larger than the one before, and -9 a good deal smaller than -1. The data matters: with no
+       repeats beyond chance, as in random letters or words, a longer search only finds matches that cost more than what they
+       replace, so the level that finds fewest comes out smallest, and that says nothing about the levels. */
+    {
+        static char text[200000];
+        static const char *const words[12] = { "mount", "read", "write", "sync", "usb0", "hda1", "ok", "failed", "retry", "block",
+                                                "cluster", "chain" };
+        size_t at = 0, sizes[9];
+        unsigned r = 1, line = 0;
+        int i;
+        while(at < sizeof(text)) {
+            char one[64];
+            unsigned a, b;
+            size_t n;
+            r = r * 1103515245 + 12345;
+            a = (r >> 16) % 12;
+            r = r * 1103515245 + 12345;
+            b = (r >> 16) % 12;
+            r = r * 1103515245 + 12345;
+            n = (size_t)snprintf(one, sizeof(one), "%06u +FAT %s %s %u\n", line++, words[a], words[b], r >> 16);
+            if(n > sizeof(text) - at) n = sizeof(text) - at;
+            memcpy(text + at, one, n);
+            at += n;
+        }
+        for(i = 1; i <= 9; i++) {
+            char option[3] = { '-', (char)('0' + i), 0 };
+            const char *argv[] = { "gzip", option, "-c", "/t", NULL };
+            ars_reset();
+            ars_put("/t", text, sizeof(text));
+            check(ars_run(gzip_main, argv) == 0, "a level, on log lines");
+            ars_stdout(&sizes[i - 1]);
+            if(i > 1) check(sizes[i - 1] <= sizes[i - 2], "each level is no larger than the one before");
+        }
+        check(sizes[8] < sizes[0] - sizes[0] / 10, "-9 is at least a tenth smaller than -1");
     }
 }
 

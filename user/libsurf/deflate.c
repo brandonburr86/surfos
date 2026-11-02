@@ -3,6 +3,9 @@ SurfOS user library: deflate
 --------------------
 File: deflate.c Date: 11/01/26
 --------------------
+Methods: hash chains and lazy matching, as RFC 1951 section 4 describes them, following zlib's
+published design; no zlib text is included.
+
 Input goes into a window of 64 KB, of which the lower half is history once the upper half has been
 reached. Each position is put on a hash chain by its next 3 bytes, and a match is sought along that
 chain, as far as the level says; from level 4 a match is held back for one byte in case the next
@@ -34,7 +37,7 @@ of many long matches, for which stored is the worst form anyway.
 #define MAX_MATCH 258
 #define LOOKAHEAD (MAX_MATCH + 4)       /* a match is sought with this much ahead, or at the input's end */
 #define MAX_DIST  (WSIZE - 1)           /* so that a distance fits in 16 bits, with 0 for a literal */
-#define TOO_FAR   4096                  /* a 3-byte match further back costs more than three literals */
+#define TOO_FAR   3072                  /* a 3-byte match further back costs more than three literals */
 #define HASH_MUL  0x9E3779B1u
 #define MAX_BITS  15
 #define LENGTHS_LIMIT 7                 /* the code of the code lengths is limited to 7 bits */
@@ -42,15 +45,15 @@ of many long matches, for which stored is the worst form anyway.
 
 static const struct { unsigned short chain, lazy, nice, good; } levels[10] = {
     { 0, 0, 0, 0 },                     /* no level 0: nothing here stores without trying */
-    { 4, 0, 16, 4 },
-    { 8, 0, 32, 4 },
-    { 32, 0, 64, 8 },
-    { 16, 4, 32, 4 },
-    { 32, 8, 32, 8 },
-    { 128, 16, 128, 8 },
-    { 256, 32, 258, 16 },
-    { 1024, 128, 258, 32 },
-    { 4096, 258, 258, 32 },
+    { 2, 0, 258, 258 },
+    { 12, 0, 258, 258 },
+    { 32, 0, 258, 258 },
+    { 32, 16, 258, 4 },
+    { 64, 32, 258, 4 },
+    { 128, 32, 258, 4 },
+    { 512, 128, 258, 4 },
+    { 2048, 258, 258, 4 },
+    { 3072, 258, 258, 258 },
 };
 
 static const unsigned short length_base[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
