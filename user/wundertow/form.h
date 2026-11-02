@@ -46,6 +46,7 @@ struct fm_new {                         /* a control as a page has it */
     const char *formaction;             /* a button's, or NULL; "": the page's own address */
     int formaction_cut;
     const char *formmethod;             /* a button's, or NULL */
+    int shaped;                         /* type=range or color */
 };
 
 struct fm_build {                       /* doc.c's, while it reads */
@@ -63,7 +64,7 @@ void fm_begin(struct fm_build *f);
 /* 0 when s is the lowercase word w, in any case */
 int fm_differs(const char *s, const char *w);
 
-/* <form>: 1 when it opened one, 0 past the limit. accept: its accept-charset, or NULL. */
+/* <form>: 1 when it opened one, 0 in a form, or past the limit. accept: its accept-charset, or NULL. */
 int fm_form(struct wd_document *d, struct fm_build *f, const char *id, const char *action, int action_cut, const char *method,
             const char *accept);
 void fm_form_end(struct fm_build *f);

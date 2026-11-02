@@ -40,6 +40,8 @@ time_t ut_sim_time(time_t *t) { if(t) *t = 0; return 0; }
 
 #define PAGE "https://forms.test/dir/page.html?old=1"
 
+static const char *content_type = "text/html";
+
 static int build_as(const char *url, const char *html, const char *charset, struct wd_document *d) {
     struct ut_response r;
     char err[UT_ERR_MAX];
@@ -51,7 +53,7 @@ static int build_as(const char *url, const char *html, const char *charset, stru
     memcpy(r.body, html, n + 1);
     r.len = n;
     r.status = 200;
-    snprintf(r.content_type, sizeof(r.content_type), "text/html");
+    snprintf(r.content_type, sizeof(r.content_type), "%s", content_type);
     snprintf(r.charset, sizeof(r.charset), "%s", charset);
     rc = wd_build(&r, d, err, sizeof(err));
     free(r.body);
@@ -178,7 +180,6 @@ static void model(void) {
     check(!build("<table><tr><td><button>x</td><td>after</table>", &d), "a button left open");
     check(d.runs[d.controls[0].run].len == 1, "its label ends with its cell");
     wd_free(&d);
-    /* a select's label as milestone 1 showed it stays */
     check(!build("<form action='' method=post><input name=a></form>", &d) && d.forms[0].method == WM_POST && !strcmp(d.forms[0].action, PAGE), "an empty action: the page's own address");
     wd_free(&d);
     check(!build("<base href=https://other.test/x/><form action=y><button formaction=z formmethod=post></form>", &d), "a base");
@@ -578,12 +579,58 @@ static void encoding(void) {
     sends("<form action=/s><textarea name=t wrap=soft cols=3>abcdef</textarea></form>", "https://forms.test/s?t=abcdef", "wrap=soft adds none");
     sends("<form action=/s><input name=t wrap=hard value=1></form>", "https://forms.test/s?t=1", "and on an input it is nothing");
     refuses("<form action=/s><input type=range name=x value=''></form>", "more than", "a range with an empty value");
-    /* a disabled fieldset's first legend is not disabled by it */
-    sends("<form action=/s><fieldset disabled><legend><input name=a value=1></legend><input name=b value=2></fieldset></form>", "https://forms.test/s?a=1", "its first legend");
-    sends("<form action=/s><fieldset disabled><legend>x</legend><legend><input name=a value=1></legend></fieldset></form>", "https://forms.test/s?", "no other");
-    sends("<form action=/s><fieldset disabled><div><legend><input name=a value=1></legend></div></fieldset></form>", "https://forms.test/s?", "no deeper one");
-    sends("<form action=/s><fieldset disabled><fieldset disabled><legend><input name=a value=1></legend></fieldset></fieldset></form>", "https://forms.test/s?", "and another fieldset still disables it");
-    sends("<form action=/s><fieldset disabled><legend></legend></fieldset><input name=c value=3></form>", "https://forms.test/s?c=3", "what follows is as it was");
+    /* a disabled fieldset's first legend is not disabled by it: which one that is takes elements that are not kept */
+    refuses("<form action=/s><fieldset disabled><legend><input name=a value=1></legend><input name=b value=2></fieldset></form>", "more than", "a control in a legend of a disabled fieldset");
+    refuses("<form action=/s><fieldset disabled><font><legend><input name=a value=1></legend></font></fieldset></form>", "more than", "wherever it is");
+    refuses("<form action=/s><fieldset disabled><legend hidden><input name=a value=1></legend></fieldset></form>", "more than", "a hidden one too");
+    sends("<form action=/s><fieldset disabled><legend>Words</legend><input name=b value=2></fieldset><input name=c value=3></form>", "https://forms.test/s?c=3", "a legend that is words is nothing");
+    sends("<form action=/s><fieldset><legend><input name=a value=1></legend></fieldset></form>", "https://forms.test/s?a=1", "and one of a fieldset that is not disabled");
+    sends("<form action=/s><fieldset disabled><legend></legend></fieldset><legend><input name=c value=3></legend></form>", "https://forms.test/s?c=3", "nor one after it");
+    /* a disabled fieldset where it is not followed: only what it may hold */
+    sends("<form action=/s><input name=a value=1></form><div hidden><fieldset disabled><input name=x></fieldset></div>", "https://forms.test/s?a=1", "a form elsewhere goes");
+    sends("<div hidden><fieldset disabled></fieldset></div><form action=/s><div hidden><input name=y value=2></div></form>", "https://forms.test/s?y=2", "and what comes in other hidden content");
+    sends("<div hidden><fieldset disabled></fieldset></div><form action=/s><input name=y value=2></form>", "https://forms.test/s?y=2", "and what is not hidden");
+    /* references this browser does not know are not what a browser sends */
+    refuses("<form action=/s><input type=hidden name=h value='x&sum;y'></form>", "more than", "in a value");
+    refuses("<form action=/s><input name='a&beta;' value=1></form>", "more than", "in a name");
+    refuses("<form action=/s><select name=s><option value='&hearts;'>A</select></form>", "more than", "in an option's value");
+    refuses("<form action=/s><select name=s><option>&spades;</select></form>", "more than", "in the text it sends");
+    refuses("<form action=/s><textarea name=t>&check;</textarea></form>", "more than", "in a text area");
+    sends("<form action=/s><select name=s><option value=1>&spades;</select></form>", "https://forms.test/s?s=1", "not in what it only shows");
+    sends("<form action=/s><input name=h value='a&b c&d'><input name=i value='&amp;&#38;&'></form>", "https://forms.test/s?h=a%26b+c%26d&i=%26%26%26", "an ampersand is one");
+    sends("<form action=/s><input name=h value='&eacute;'></form>", "https://forms.test/s?h=%C3%A9", "one it knows is its character");
+    sends("<form action=/s><input name=h value='a&;b'></form>", "https://forms.test/s?h=a%26%3Bb", "an ampersand and a semicolon are two");
+    /* email, multiple */
+    refuses("<form action=/s><input type=email multiple name=e value='a@x.org, b@x.org'></form>", "more than", "addresses a browser would take apart");
+    sends("<form action=/s><input type=email multiple name=e value='a@x.org'></form>", "https://forms.test/s?e=a%40x.org", "one of them");
+    sends("<form action=/s><input type=email name=e value='a,b'></form>", "https://forms.test/s?e=a%2Cb", "and not multiple");
+    /* a whole text area */
+    sends("<form action=/c><math></math><textarea name=t />y</textarea><input name=b value=1></form>", "https://forms.test/c?t=y&b=1", "<textarea /> is a start tag, also after math");
+    {
+        struct wd_document d;
+        content_type = "application/xhtml+xml";
+        check(!build("<form action='/a'><textarea name='t'/><input name='b' value='1'/></form>", &d), "a page of XHTML");
+        check(d.control_count == 2 && d.controls[0].kind == WF_AREA && d.controls[0].run >= 0 && !d.controls[0].len, "<textarea/> is a text area with nothing in it");
+        wd_free(&d);
+        content_type = "text/html";
+    }
+    /* what nothing says */
+    {
+        struct wd_document d;
+        check(!build_as(PAGE, "<form action=/a><select name=s><option>Z&uuml;rich</select><input type=hidden name=_charset_></form>", "", &d) && d.form_charset == UT_CS_1252, "ASCII and no word of a charset");
+        check(!fm_submit(&d, 0, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/a?s=Z%FCrich&_charset_=windows-1252"), "a browser's default, in a form's bytes");
+        wd_free(&d);
+        check(!build_as(PAGE, "<meta charset=utf-8><form action=/a><input name=s value='&uuml;'></form>", "", &d) && d.form_charset == UT_CS_UTF8, "with a meta");
+        wd_free(&d);
+        check(!build_as(PAGE, "<form action=/a><input name=s value='\xc3\xbc'></form>", "", &d) && d.form_charset == UT_CS_UTF8, "with UTF-8 in it");
+        wd_free(&d);
+        check(!build_as(PAGE, "\xef\xbb\xbf<form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "with a byte order mark");
+        wd_free(&d);
+        content_type = "application/xhtml+xml";
+        check(!build_as(PAGE, "<form action='/a'><input name='s'/></form>", "", &d) && d.form_charset == UT_CS_UTF8, "XHTML is UTF-8");
+        wd_free(&d);
+        content_type = "text/html";
+    }
     /* a place on the page, with a base */
     refuses("<base href=https://other.test/d/><form action='#here'><input name=a value=1></form>", "address", "an action of a place only, with a base: links' rule is not a form's");
     sends("<form action='#here'><input name=a value=1></form>", "https://forms.test/dir/page.html?a=1#here", "with none, the page");
@@ -617,7 +664,20 @@ static void encoding(void) {
         refuses(big, "more than", "one too long to keep");
         refuses("<base href='http://[bad'><form action=x><input name=a value=1></form>", "more than", "one url.c does not take: a browser's rules are wider");
         refuses("<base href='http://[bad'><base href=https://other.test/><form action=x><input name=a value=1></form>", "more than", "the first is the one that counts");
-        sends("<base href=''><base href=https://other.test/><form action=x><input name=a value=1></form>", "https://forms.test/dir/x?a=1", "even an empty one");
+        refuses("<base href=''><base href=https://other.test/><form action=x><input name=a value=1></form>", "more than", "even an empty one: links go on to the next, a browser's forms do not");
+        {
+            struct wd_document d;
+            check(!build("<base href='http://[bad'><base href=/y/><a href=z>z</a>", &d) && !strcmp(d.links[0].url, "https://forms.test/y/z"), "links take the first that resolves, as Undertow's");
+            wd_free(&d);
+        }
+        sends("<base href=https://other.test/d/><base href=https://third.test/><form action=x><input name=a value=1></form>", "https://other.test/d/x?a=1", "a second one is nothing");
+        sends("<base href=''><base href='http://[bad'><form action=x><input name=a value=1></form>", "https://forms.test/dir/x?a=1", "an empty first, and one that is no address after it");
+        e = big;
+        e += snprintf(e, 80, "<base href=/b/><base href=\"https://other.test/");
+        memset(e, 'a', 5000);
+        e += 5000;
+        snprintf(e, 100, "/\"><form action=x><input name=a value=1></form>");
+        sends(big, "https://forms.test/b/x?a=1", "one too long after the first");
         refuses("<div hidden><base href=https://other.test/></div><form action=x><input name=a value=1></form>", "more than", "one in what is not followed");
         sends("<base href='https://other.test/d/?q'><form action=x><input name=a value=1></form>", "https://other.test/d/x?a=1", "a query in one is nothing");
     }
@@ -637,6 +697,12 @@ static void encoding(void) {
         wd_free(&d);
         check(!build_as(PAGE, "<form action=/s accept-charset=windows-1252><input name=a value='caf&eacute;'></form>", "utf-8", &d), "a page in UTF-8");
         check(!fm_submit(&d, 0, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%E9"), "and a form in windows-1252");
+        wd_free(&d);
+        check(!build_as(PAGE, "<form action=/s accept-charset='iso-8859-1,utf-8'><input name=a value='caf&eacute;'></form><form action=/s accept-charset='UNKNOWN'><input name=a value='caf&eacute;'></form><form action=/s accept-charset='unknown, utf-8'><input name=a value='caf&eacute;'></form><form action=/s accept-charset=UTF-16><input name=a value='caf&eacute;'></form>", "windows-1252", &d), "lists of charsets");
+        check(!fm_submit(&d, 0, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%E9"), "commas between them");
+        check(!fm_submit(&d, 1, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%E9"), "HTML 4's UNKNOWN: the page's");
+        check(!fm_submit(&d, 2, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%C3%A9"), "and on to the next");
+        check(!fm_submit(&d, 3, -1, 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?a=caf%C3%A9"), "UTF-16 goes as UTF-8");
         wd_free(&d);
         {
             static char big[400];
@@ -702,6 +768,9 @@ static void encoding(void) {
         build("<form action=/s><input name=a><input type=password name=p></form><form><input type=password name=q></form>", &d);
         check(fm_default_button(&d, 0) == -2, "a password field is a field that takes text");
         check(fm_default_button(&d, 1) == -1, "one, and no button");
+        wd_free(&d);
+        build("<form action=/s><input name=a><input type=range name=r value=2><input type=color name=c value=#000000></form>", &d);
+        check(fm_default_button(&d, 0) == -1, "a range and a colour take no text, as a browser has them");
         wd_free(&d);
     }
     {

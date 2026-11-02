@@ -87,8 +87,8 @@ struct frame {                          /* an open element that has a box */
     unsigned char depth;                /* a list: how many lists it is in, itself too */
     unsigned char saved_on;             /* a cell or caption: it saved the inline state */
     struct inline_state saved;
-    unsigned char off;                  /* a disabled fieldset: 1, and 2 from its first legend */
-    unsigned char on;                   /* that legend: what is in it is not disabled by it */
+    unsigned char off;                  /* a disabled fieldset */
+    unsigned char legend;               /* a legend in a disabled fieldset */
 };
 
 struct bd {
@@ -125,7 +125,10 @@ struct bd {
     int skip_live;                      /* the hidden attribute hid it: its forms are still the page's */
     unsigned int skip_inert;            /* elements open in it whose content is in no form */
     int inert_el;                       /* of which */
-    int base_seen;                      /* the first <base href>, the only one that counts */
+    int base_seen;                      /* a <base href> has come: for forms, the first is the only one that counts */
+    int skip_off;                       /* in what is hidden, a disabled fieldset or a legend of one, not followed */
+    int legends;                        /* legends of disabled fieldsets open: b->fb.off is not all that says what is in them */
+    int undeclared;                     /* nothing says what charset the page is in */
 
     /* inline content */
     int target;                         /* the box that takes inline content now, -1: none yet */
@@ -663,7 +666,7 @@ static void pop(struct bd *b) {
     }
     if(f->saved_on) b->is = f->saved;
     if(f->off) b->fb.off--;
-    if(f->on) b->fb.off++;
+    if(f->legend) b->legends--;
     if(el == E_PRE || el == E_LISTING || el == E_XMP) b->pre--;
     if(is_list(el)) b->lists--;
     if(el == E_TABLE) b->tables--;
@@ -1046,7 +1049,7 @@ static int count_attr(const struct ut_html_tag *t, int a, int lo, int hi, int no
     return v > hi ? hi : (int)v;
 }
 
-/* A control as this tag gives it: of kind, role, and value (NULL: the tag's value attribute); checked its own */
+/* A control as this tag gives it, of kind and role, checked its own, its value the tag's */
 static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, int checked) {
     struct fm_new n;
     memset(&n, 0, sizeof(n));
@@ -1056,7 +1059,9 @@ static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, i
     n.value = t->seen[A_VALUE] ? t->val[A_VALUE] : NULL;
     n.cut = (t->seen[A_VALUE] && t->over[A_VALUE]) || (t->seen[A_NAME] && t->over[A_NAME]) || t->seen[A_DIRNAME] ||
             (t->el == E_INPUT && (attr_is(t, A_TYPE, "range") || attr_is(t, A_TYPE, "color")) && !(t->seen[A_VALUE] && t->len[A_VALUE])) ||
-            (t->el == E_TEXTAREA && attr_is(t, A_WRAP, "hard"));
+            (t->el == E_INPUT && attr_is(t, A_TYPE, "email") && t->seen[A_MULTIPLE] && t->seen[A_VALUE] && strchr(t->val[A_VALUE], ',')) ||
+            (t->el == E_TEXTAREA && attr_is(t, A_WRAP, "hard")) || b->legends || (b->skip_n && b->skip_off);
+    n.shaped = t->el == E_INPUT && (attr_is(t, A_TYPE, "range") || attr_is(t, A_TYPE, "color"));
     n.checked = checked;
     n.disabled = t->seen[A_DISABLED];
     n.readonly = t->seen[A_READONLY];
@@ -1253,6 +1258,7 @@ static void start_hidden(struct bd *b, struct ut_html_tag *t) {
     b->skip_n = 1;
     b->skip_foreign = t->el == E_SVG || t->el == E_MATH;
     b->skip_inert = 0;
+    b->skip_off = 0;
 }
 
 /* A form's start. Its address, as a link's, has no whitespace at its ends. */
@@ -1270,7 +1276,8 @@ static int inert(int el) { return (ut_html_flags(el) & F_HIDE) && el != E_OBJECT
 
 /* A tag inside what the hidden attribute hides, which is still part of the page's forms: a form starts and ends there, an
    input is a control with no box, as a text area is (raw()). A select or a submit button would take more, and a disabled
-   fieldset and a <base> are not followed in there, so what holds one is not sent. What is inert (above) stays so. */
+   fieldset and a <base> are not followed in there, so a form that may hold what depends on them is not sent. What is
+   inert (above) stays so. */
 static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
     int el = t->el;
     if(b->skip_inert) {
@@ -1294,7 +1301,8 @@ static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
     else if(el == E_INPUT) input(b, t);
     else if(el == E_SELECT || (el == E_BUTTON && !attr_is(t, A_TYPE, "button") && !attr_is(t, A_TYPE, "reset")))
         fm_lost(&b->d, &b->fb, t->seen[A_FORM] ? t->val[A_FORM] : NULL);
-    else if((el == E_FIELDSET && t->seen[A_DISABLED]) || (el == E_BASE && t->seen[A_HREF] && !b->base_seen)) b->fb.lost = 1;
+    else if(el == E_FIELDSET && t->seen[A_DISABLED]) b->skip_off = 1;
+    else if(el == E_BASE && t->seen[A_HREF] && !b->base_seen) b->fb.lost = 1;
 }
 
 static void start_tag(struct bd *b, struct ut_html_tag *t) {
@@ -1307,6 +1315,7 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     if(t->seen[A_HIDDEN] && !(fl & F_VOID) && el != E_OTHER) {   /* <div hidden>: not shown, nor what is in it */
         start_hidden(b, t);
         b->skip_live = 1;
+        if(el == E_LEGEND && b->fb.off) b->skip_off = 1;
         hidden_forms(b, t, 0);
         return;
     }
@@ -1380,27 +1389,32 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         b->fcontrol = control_of(b, t, WF_SELECT, 0, 0);
         return;
     case E_BASE:
-        if(!b->base_seen && t->seen[A_HREF]) {      /* the first one counts, whatever it is */
-            size_t n = t->len[A_HREF];
+        if(t->seen[A_HREF]) {                       /* links take the first that resolves, as html.c's do; of a */
+            size_t n = t->len[A_HREF];              /* browser's forms the first there is: when they differ, none goes */
             const char *h = stripped(t->val[A_HREF], &n);
-            char *copy = n && !t->over[A_HREF] ? malloc(n + 1) : NULL;
-            struct ut_url *u = copy ? malloc(sizeof(*u)) : NULL;
-            char err[64];
+            int first = !b->base_seen;
             b->base_seen = 1;
-            if(t->over[A_HREF] || (b->cs == UT_CS_ASCII && memchr(h, '?', n))) b->fb.lost = 1;   /* where forms go is not known */
-            if(n && !t->over[A_HREF] && !u) b->failed = 1;
-            if(u) {
-                memcpy(copy, h, n);
-                copy[n] = 0;
-                err[0] = 0;
-                if(!ut_url_resolve(&b->r->url, copy, u, err, sizeof(err))) b->base = u;
-                else {
-                    free(u);
-                    if(strstr(err, "out of memory")) b->failed = 1;
-                    b->fb.lost = 1;                 /* a browser's rules for one are wider than url.c's */
+            if(first && (t->over[A_HREF] || (b->cs == UT_CS_ASCII && memchr(h, '?', n)))) b->fb.lost = 1;
+            if(!b->base && !t->over[A_HREF]) {
+                char *copy = n ? malloc(n + 1) : NULL;
+                struct ut_url *u = copy ? malloc(sizeof(*u)) : NULL;
+                char err[64];
+                if(n && !u) b->failed = 1;
+                if(u) {
+                    memcpy(copy, h, n);
+                    copy[n] = 0;
+                    err[0] = 0;
+                    if(!ut_url_resolve(&b->r->url, copy, u, err, sizeof(err))) {
+                        b->base = u;
+                        if(!first) b->fb.lost = 1;
+                    } else {
+                        free(u);
+                        if(strstr(err, "out of memory")) b->failed = 1;
+                        if(first) b->fb.lost = 1;   /* a browser's rules for one are wider than url.c's */
+                    }
                 }
+                free(copy);
             }
-            free(copy);
         }
         return;
     case E_BODY:
@@ -1426,7 +1440,6 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         return;
     }
     if(fl & F_PUSH) {
-        struct frame *up = &b->st[b->depth - 1];
         f = push(b, el, kind_of(el));
         if(!f) {
             if(el == E_FIELDSET && t->seen[A_DISABLED]) {           /* no frame to give it back, and nothing to end it */
@@ -1436,10 +1449,9 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
             return;
         }
         if(el == E_FIELDSET && t->seen[A_DISABLED]) f->off = 1;
-        if(el == E_LEGEND && up->el == E_FIELDSET && up->off == 1) {    /* a disabled fieldset's first: not disabled by it */
-            up->off = 2;
-            f->on = 1;
-            b->fb.off--;
+        if(el == E_LEGEND && b->fb.off) {           /* a browser's first legend of a fieldset is not disabled by it */
+            f->legend = 1;
+            b->legends++;
         }
         x = box_of(b, f);
         x->align = (unsigned char)(el == E_CENTER ? WA_CENTER : align_of(t));
@@ -1690,8 +1702,11 @@ static void markup(struct bd *b) {
         }
     } else if((c | 0x20) >= 'a' && (c | 0x20) <= 'z') {
         if(tag(b, p + 1, 0) && (ut_html_flags(t->el) & (F_RAW | F_RCDATA)) &&
-           !(t->selfclose && (b->xhtml || b->skip_foreign)) && (!b->select || b->skip_n || t->el == E_SCRIPT))
+           !(t->selfclose && (b->xhtml || (b->skip_foreign && (b->skip_n || t->el != E_TEXTAREA)))) &&
+           (!b->select || b->skip_n || t->el == E_SCRIPT))
             raw(b, t->el, t->name);
+        else if(t->el == E_TEXTAREA && t->selfclose && b->xhtml && !b->skip_n && !b->select)
+            field(b, WF_AREA, "", 0, 0, area_control(b, b->pos, b->pos));
     } else {
         text_char(b, '<');
         b->pos = p + 1;
@@ -1853,6 +1868,10 @@ static int forms_finish(struct bd *b, char *safe, struct ut_url *u) {
     struct wd_document *d = &b->d;
     size_t i;
     d->form_charset = b->cs;
+    if(b->cs == UT_CS_UTF8 && b->undeclared && !b->xhtml) { /* ASCII that says nothing: a browser's default, not UTF-8 */
+        for(i = 0; i < b->len && b->in[i] < 0x80; i++) ;
+        if(i == b->len) d->form_charset = UT_CS_1252;
+    }
     for(i = 0; i < d->form_count; i++) {
         struct wd_form *f = &d->forms[i];
         if(fm_unsure(d, f->action)) f->too_much = 1;
@@ -2051,6 +2070,7 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     b->xhtml = !strcmp(r->content_type, "application/xhtml+xml");
     html = b->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && ut_html_sniff(b->in, b->len));
     if(!b->decoded) b->cs = ut_html_charset(b->in, b->len, r->charset, html, &b->pos, b->charset, sizeof(b->charset));
+    b->undeclared = !b->decoded && !r->charset[0] && !(html && ut_html_declared(b->in, b->len));
     if(html) run_html(b);
     else run_plain(b);
     if(b->failed || finish(b)) {

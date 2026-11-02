@@ -587,6 +587,11 @@ int ut_html_charset(const unsigned char *in, size_t len, const char *label, int 
     return utf8_valid(in, len) ? UT_CS_UTF8 : UT_CS_1252;
 }
 
+int ut_html_declared(const unsigned char *in, size_t len) {
+    char meta[UT_HTML_LABEL_MAX];
+    return prescan(in, len, meta, sizeof(meta));
+}
+
 int ut_html_sniff(const unsigned char *s, size_t n) {
     static const char *const starts[] = {
         "!doctype html", "html", "head", "script", "iframe", "h1", "div", "font", "table", "a", "style", "title",

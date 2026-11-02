@@ -69,12 +69,17 @@ static int accept_of(const char *s) {
     char label[UT_HTML_LABEL_MAX], unknown[UT_HTML_LABEL_MAX];
     size_t n, start = 0;
     if(!s) return 0;
-    s += strspn(s, " \t\n\f\r");
-    n = strcspn(s, " \t\n\f\r");
-    if(!n) return 0;
-    if(n >= sizeof(label)) return UT_CS_ASCII + 1;
-    memcpy(label, s, n);
-    label[n] = 0;
+    for(;;) {                                   /* whitespace or commas: HTML 4's list, as browsers read it */
+        s += strspn(s, " \t\n\f\r,");
+        n = strcspn(s, " \t\n\f\r,");
+        if(!n) return 0;
+        if(n >= sizeof(label)) return UT_CS_ASCII + 1;
+        memcpy(label, s, n);
+        label[n] = 0;
+        if(fm_differs(label, "unknown")) break; /* HTML 4's word for the page's own */
+        s += n;
+    }
+    if(!fm_differs(label, "utf-16") || !fm_differs(label, "utf-16le") || !fm_differs(label, "utf-16be")) return UT_CS_UTF8 + 1;
     return ut_html_charset((const unsigned char *)"", 0, label, 0, &start, unknown, sizeof(unknown)) + 1;
 }
 
@@ -133,6 +138,7 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
     c->readonly = n->readonly != 0;
     c->multiple = n->multiple != 0;
     c->image = n->image != 0;
+    c->shaped = n->shaped != 0;
     c->cut = n->cut != 0;
     c->maxlength = n->maxlength;
     c->rows = n->rows;
@@ -231,6 +237,16 @@ int fm_unsure(const struct wd_document *d, const char *s) {
     return 0;
 }
 
+/* "&name;" left in a string: a reference the scanner does not know, and a browser may: what it says is not known */
+static int unread_ref(const char *s) {
+    static const char word[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for(; s && (s = strchr(s, '&')); s++) {
+        size_t n = strspn(s + 1, word);
+        if(n && s[1 + n] == ';') return 1;
+    }
+    return 0;
+}
+
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
     size_t i, k;
     for(i = 0; i < d->control_count; i++) {
@@ -246,8 +262,12 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
         }
         if(c->form < 0) continue;
         if(c->kind == WF_PASSWORD) d->forms[c->form].password = 1;
-        if(c->cut || fm_unsure(d, c->name) || fm_unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
-        for(k = 0; k < c->noptions; k++) if(fm_unsure(d, d->options[c->first_option + k].value)) d->forms[c->form].too_much = 1;
+        if(c->cut || fm_unsure(d, c->name) || fm_unsure(d, c->dflt) || unread_ref(c->name) || unread_ref(c->dflt))
+            d->forms[c->form].too_much = 1;
+        for(k = 0; k < c->noptions; k++) {
+            const char *v = d->options[c->first_option + k].value;
+            if(fm_unsure(d, v) || unread_ref(v)) d->forms[c->form].too_much = 1;
+        }
         if(d->form_charset == UT_CS_ASCII && c->kind == WC_HIDDEN && c->name && !fm_differs(c->name, "_charset_"))
             d->forms[c->form].too_much = 1;     /* it would name the page's charset */
     }
@@ -708,7 +728,7 @@ int fm_default_button(const struct wd_document *d, int form) {
         const struct wd_control *c = &d->controls[i];
         if(c->form != form) continue;
         if(c->kind == WF_BUTTON && c->role == WC_SUBMIT) return c->disabled ? -2 : (int)i;
-        if(c->kind == WF_TEXT || c->kind == WF_PASSWORD) fields++;
+        if((c->kind == WF_TEXT && !c->shaped) || c->kind == WF_PASSWORD) fields++;
     }
     return fields > 1 ? -2 : -1;
 }

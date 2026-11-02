@@ -5,7 +5,7 @@ File: doc.h  Date: 10/25/26
 ----------------------
 A response becomes a document the window lays out (layout.c) and paints (paint.c): a tree of block boxes,
 each holding either blocks or a range of inline runs, which are styled text, line breaks, images and form
-fields (shown, not used). The tree follows the HTML standard as
+fields (form.h). The tree follows the HTML standard as
 Undertow's text does (html.c): the same scanner (html_scan.c), the same implied ends and scopes, the same
 charset rules, the same limits; html.h's link and anchor types, with links resolved as html.c resolves them.
 
@@ -114,6 +114,7 @@ struct wd_control {
     int rows, cols, size;               /* 0: none */
     unsigned int first_option, noptions;
     unsigned char here;                 /* an empty formaction: the page's own address (until the page's end) */
+    unsigned char shaped;               /* a range or a colour: a text field here, but none that takes text */
 };
 
 #define WS_BOLD     0x0001
