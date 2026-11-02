@@ -28,17 +28,20 @@ backward from the end of its span, which says for each position which states can
 still reach the end; then fwd() runs one child forward among those states alone. Every thread
 there is one that finishes, so the child's run reads no further than the child's
 longest match, and the children of a node, or the iterations of a repetition, read the
-span once between them. That makes each level of the tree cost states times span, and
-levels are bounded by the nesting limit. The table takes a bit per state and position of
-that node, for as long as the node is being divided. A node with no subexpression in it is
-never looked at.
+span once between them. So a node costs its states times its span, and the nodes of one level
+have spans apart: per byte of text, walk() costs at most the sum of the states of the nodes with a
+subexpression in them. That sum has a limit of its own (MAX_WALK, four programs of the largest
+size): nesting and repeated operators could otherwise make it 1000 times the program. The table takes
+a bit per state and position of that node, for as long as the node is being divided. A node
+with no subexpression in it is never looked at.
 
 Back-references: no automaton can do them. bt_try() follows the program depth first, every way
 through, with its own stack, for the longest at the leftmost place that has one,
 and the first path to that length is the one reported: a star takes as much as it can first,
 an alternation its first branch first. Time can be exponential, so it counts steps
-and gives up with REG_ESTEPS. scan() runs first with each back-reference taken as any text: most
-text that does not match is thrown out there without a single step, and the leftmost
+and gives up with REG_ESTEPS; a step is about the cost of one state, and what costs more (a comparison,
+clearing groups, a new start) is charged as what it costs. scan() runs first with each back-reference taken
+as any text: most text that does not match is thrown out there without a single step, and the leftmost
 start is known not to be before scan()'s.
 
 Beyond POSIX, as GNU has them: \+ \? \| in basic syntax, \1 in extended, \w \W \s \S \< \> \b
@@ -60,6 +63,7 @@ typedef unsigned int u32;
 #define MAX_NEST    64                  /* parentheses inside each other: the recursion's limit */
 #define MAX_WRAPS   16                  /* repetition operators on one atom: a***, which also nest */
 #define MAX_WORK    (16 * MAX_STATES)   /* tree nodes emitted, with their copies */
+#define MAX_WALK    (4UL * MAX_STATES)  /* walk_cost() */
 #define BT_STEPS    20000000            /* steps of one regexec() with back-references, and BT_PER_BYTE per byte */
 #define BT_PER_BYTE 16
 #define BT_FRAMES   (1 << 22)           /* its stack */
@@ -189,12 +193,16 @@ static int is_word(int c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
+/* the ranges are sorted and apart (set_sort()): a set of any size costs its logarithm */
 static int set_has(const struct rx *r, const struct rset *s, int c) {
-    int i;
+    const struct rrange *g = r->range + s->first;
+    int lo = 0, hi = s->n;
     if(c < 128) return (int)(s->bits[c >> 5] >> (c & 31)) & 1;
-    for(i = 0; i < s->n; i++) {
-        const struct rrange *g = &r->range[s->first + i];
-        if(c >= g->lo && c <= g->hi) return !s->neg;
+    while(lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if(c < g[mid].lo) hi = mid;
+        else if(c > g[mid].hi) lo = mid + 1;
+        else return !s->neg;
     }
     return s->neg;
 }
@@ -327,9 +335,34 @@ static void set_class(struct rset *s, int kind) {
         if(class_has(kind, c)) s->bits[c >> 5] |= 1u << (c & 31);
 }
 
+/* the set's ranges in order, those that touch made one. Shell sort with Ciura's gaps, as libsurf's qsort */
+static void set_sort(struct rx *r, struct rset *s) {
+    static const int gaps[] = { 21223, 9433, 4193, 1750, 701, 301, 132, 57, 23, 10, 4, 1 };
+    struct rrange *a = r->range + s->first;
+    int gi, i, j, n = 0;
+    for(gi = 0; gi < (int)(sizeof(gaps) / sizeof(gaps[0])); gi++) {
+        int gap = gaps[gi];
+        for(i = gap; i < s->n; i++) {
+            struct rrange t = a[i];
+            for(j = i; j >= gap && a[j - gap].lo > t.lo; j -= gap) a[j] = a[j - gap];
+            a[j] = t;
+        }
+    }
+    for(i = 0; i < s->n; i++) {
+        if(n && a[i].lo <= a[n - 1].hi + 1) {
+            if(a[i].hi > a[n - 1].hi) a[n - 1].hi = a[i].hi;
+        } else {
+            a[n++] = a[i];
+        }
+    }
+    s->n = n;
+    r->nrange = s->first + n;                   /* the set being made is the last */
+}
+
 /* what ends a set, whichever way it was made */
 static void set_finish(struct parse *ps, struct rset *s, int neg) {
     int c;
+    set_sort(ps->r, s);
     if(ps->r->icase) {
         for(c = 'a'; c <= 'z'; c++) {
             int u = c - 32;
@@ -679,7 +712,7 @@ static int parse_piece(struct parse *ps, int atstart, int *assertion) {
 }
 
 static int parse_cat(struct parse *ps) {
-    int first = -1, cat = -1, n, atstart = 1, assertion;
+    int first = -1, cat = -1, n, atstart = 1, assertion = 0;
     while(ps->p < ps->end && !at_bar(ps)) {
         if(at_close(ps)) {
             if(!ps->depth) ps->err = REG_EPAREN;
@@ -687,7 +720,7 @@ static int parse_cat(struct parse *ps) {
         }
         n = parse_piece(ps, atstart, &assertion);
         if(ps->err) return -1;
-        atstart = assertion;                    /* basic syntax: ^* is ^ and a star */
+        atstart = 0;                            /* basic syntax: in ^^a the second ^ is itself, as with glibc */
         if(first < 0) first = n;
         else {
             if(cat < 0) {
@@ -889,6 +922,18 @@ static void emit(struct build *b, int n) {
     }
 }
 
+/* what walk() costs per byte of text at most: each node with a group in it goes through its states once. The nesting limit
+   alone would allow that to be 64 x 17 levels of the whole program, so it has a limit of its own. */
+static unsigned long walk_cost(const struct rx *r) {
+    unsigned long sum = 0;
+    int n;
+    for(n = 0; n < r->nnode; n++) {
+        const struct rnode *nd = &r->node[n];
+        if(nd->groups && nd->hi > nd->lo) sum += (unsigned long)(nd->hi - nd->lo);
+    }
+    return sum;
+}
+
 /* the counts walk() needs */
 static int count_groups(struct rx *r, int n) {
     struct rnode *nd = &r->node[n];
@@ -898,18 +943,68 @@ static int count_groups(struct rx *r, int n) {
     return g;
 }
 
-/* the states the search from state 0 can stand on before reading anything, to know the bytes a match can start with, and
-   whether all ways begin with ^ */
+/* the bytes a match can start with: what the search from state 0 can stand on before reading anything */
 static void find_first(struct rx *r) {
     int sp = 0, b, pc;
     int *stack = r->stack;
     r->use_first = !r->backref;
-    r->anchored = !r->newline;
     memset(r->first, 0, sizeof(r->first));
     memset(r->mark, 0, (size_t)(r->nstate + 1) * sizeof(*r->mark));
     r->gen = 1;
     stack[sp++] = 0;
     while(sp) {
+        const struct rstate *st;
+        pc = stack[--sp];
+        if(r->mark[pc]) continue;
+        r->mark[pc] = 1;
+        st = &r->st[pc];
+        switch(st->op) {
+        case R_SPLIT:
+            stack[sp++] = st->y;
+            stack[sp++] = st->x;
+            break;
+        case R_JMP:
+            stack[sp++] = st->x;
+            break;
+        case R_SAVE: case R_CLEAR: case R_MARK: case R_ASSERT:
+            stack[sp++] = pc + 1;
+            break;
+        case R_CHECK:
+            stack[sp++] = pc + 1;
+            stack[sp++] = st->y;
+            break;
+        case R_CHAR:
+            if(st->x < 0x80) {
+                r->first[st->x] = 1;
+                if(r->icase && st->x >= 'a' && st->x <= 'z') r->first[st->x - 32] = 1;
+            } else if(st->x >= BAD_BYTE) {
+                r->first[st->x - BAD_BYTE] = 1;
+                if(st->x < BAD_BYTE + 0xC0) r->use_first = 0;  /* such a byte can be inside a sequence */
+            } else {
+                r->first[st->x < 0x800 ? 0xC0 | st->x >> 6 : st->x < 0x10000 ? 0xE0 | st->x >> 12 : 0xF0 | st->x >> 18] = 1;
+            }
+            break;
+        case R_SET: {
+            const struct rset *s = &r->set[st->x];
+            if(s->neg || s->n) r->use_first = 0;
+            for(b = 0; b < 128; b++) if(s->bits[b >> 5] >> (b & 31) & 1) r->first[b] = 1;
+            break;
+        }
+        default:                                /* . or a match of nothing */
+            r->use_first = 0;
+        }
+    }
+}
+
+/* can a match start only at the start of the string? Whether a way from state 0 gets to reading anything, or to the end,
+   without passing a ^. With REG_NEWLINE every line has a start. */
+static void find_anchored(struct rx *r) {
+    int sp = 0, pc;
+    int *stack = r->stack;
+    r->anchored = !r->newline;
+    memset(r->mark, 0, (size_t)(r->nstate + 1) * sizeof(*r->mark));
+    stack[sp++] = 0;
+    while(sp && r->anchored) {
         const struct rstate *st;
         pc = stack[--sp];
         if(r->mark[pc]) continue;
@@ -931,54 +1026,13 @@ static void find_first(struct rx *r) {
             stack[sp++] = st->y;
             break;
         case R_ASSERT:
-            if(st->x != A_BOL && st->x != A_BUFBEG) r->anchored = 0;
-            stack[sp++] = pc + 1;
+            if(st->x != A_BOL && st->x != A_BUFBEG) stack[sp++] = pc + 1;
             break;
-        case R_CHAR:
+        default:
             r->anchored = 0;
-            if(st->x < 0x80) {
-                r->first[st->x] = 1;
-                if(r->icase && st->x >= 'a' && st->x <= 'z') r->first[st->x - 32] = 1;
-            } else if(st->x >= BAD_BYTE) {
-                r->first[st->x - BAD_BYTE] = 1;
-                if(st->x < BAD_BYTE + 0xC0) r->use_first = 0;  /* such a byte can be inside a sequence */
-            } else {
-                r->first[st->x < 0x800 ? 0xC0 | st->x >> 6 : st->x < 0x10000 ? 0xE0 | st->x >> 12 : 0xF0 | st->x >> 18] = 1;
-            }
-            break;
-        case R_SET: {
-            const struct rset *s = &r->set[st->x];
-            r->anchored = 0;
-            if(s->neg || s->n) r->use_first = 0;
-            for(b = 0; b < 128; b++) if(s->bits[b >> 5] >> (b & 31) & 1) r->first[b] = 1;
-            break;
-        }
-        default:                                /* . or a match of nothing */
-            r->anchored = 0;
-            r->use_first = 0;
         }
     }
-    /* ^ can be passed above: the thing to know is that no way avoids it, so go again from the top without passing it */
-    if(r->anchored) {
-        memset(r->mark, 0, (size_t)(r->nstate + 1) * sizeof(*r->mark));
-        sp = 0;
-        stack[sp++] = 0;
-        while(sp) {
-            const struct rstate *st;
-            pc = stack[--sp];
-            if(r->mark[pc]) continue;
-            r->mark[pc] = 1;
-            st = &r->st[pc];
-            if(st->op == R_SPLIT) {
-                stack[sp++] = st->y;
-                stack[sp++] = st->x;
-            } else if(st->op == R_JMP) {
-                stack[sp++] = st->x;
-            } else if(st->op != R_ASSERT) {
-                r->anchored = 0;
-            }
-        }
-    }
+    memset(r->mark, 0, (size_t)(r->nstate + 1) * sizeof(*r->mark));
 }
 
 /* for make_table(): the moves without a character, backward */
@@ -1078,7 +1132,14 @@ int regcomp(regex_t *preg, const char *pattern, int cflags) {
         goto fail;
     }
     find_first(r);
-    if(r->nsub && !r->nosub && !r->backref && (err = find_preds(r))) goto fail;
+    find_anchored(r);
+    if(r->nsub && !r->nosub && !r->backref) {
+        if(walk_cost(r) > MAX_WALK) {
+            err = REG_ESIZE;
+            goto fail;
+        }
+        if((err = find_preds(r))) goto fail;
+    }
     preg->re_nsub = (size_t)r->nsub;
     preg->re_g = r;
     return 0;
@@ -1223,7 +1284,7 @@ static int scan(struct exec *x, int from) {
     for(;;) {
         int len, c, cf;
         if(x->ms < 0) {
-            if(!cur->n && r->use_first) {       /* nothing under way: on to the next byte that could start */
+            if(!cur->n && r->use_first && !r->anchored) {       /* nothing under way: on to the next byte that could start */
                 while(p < x->end && !r->first[s[p]]) p++;
                 if(p >= x->end) break;
                 next_gen(r);
@@ -1491,10 +1552,21 @@ static int same_text(const struct exec *x, int a, int b, int n) {
     return 1;
 }
 
-/* from start: 1 when there is a match (r->best has it, x->me its end), 0 when not, or an error (negative) */
+/* the same bytes are not the same characters: \xC3 again may be the start of an e-acute. Does a character end at end? */
+static int ends_a_char(const struct exec *x, int p, int end) {
+    while(p < end) {
+        int c;
+        p += char_at(x->s + p, (size_t)(x->end - p), &c);
+    }
+    return p == end;
+}
+
+/* from start: 1 when there is a match (r->best has it, x->me its end), 0 when not, or an error (negative). A step is about
+   a state; what costs more is charged for what it costs: a comparison, clearing groups, starting over. */
 static int bt_try(struct exec *x, int start) {
     struct rx *r = x->r;
     int *slot = r->slot, pc = 0, pos = start, found = 0, i, err;
+    x->steps += r->nslot;
     for(i = 0; i < r->nslot; i++) slot[i] = -1;
     x->nfr = 0;
     for(;;) {
@@ -1512,8 +1584,9 @@ static int bt_try(struct exec *x, int start) {
         }
         case R_BACKREF: {
             int so = slot[2 * st->x], eo = slot[2 * st->x + 1];
-            if(so < 0 || eo < 0 || eo - so > x->end - pos || !same_text(x, so, pos, eo - so)) goto fail;
-            x->steps += (eo - so) / 16;
+            if(so < 0 || eo < 0 || eo - so > x->end - pos) goto fail;
+            x->steps += (eo - so) / 16;         /* before the comparison: most of them fail */
+            if(!same_text(x, so, pos, eo - so) || !ends_a_char(x, pos, pos + (eo - so))) goto fail;
             pos += eo - so;
             pc++;
             continue;
@@ -1535,6 +1608,7 @@ static int bt_try(struct exec *x, int start) {
             pc++;
             continue;
         case R_CLEAR:
+            x->steps += st->y;
             for(i = 0; i < st->y; i++) {
                 int g = 2 * (st->x + i);
                 if((err = push(x, ~g, slot[g])) || (err = push(x, ~(g + 1), slot[g + 1]))) return -err;

@@ -45,16 +45,19 @@ EXTENDED
 WHAT SURFOS DOES DIFFERENTLY
     There is no locale. Ranges go by code point, and the classes, \w
     and ignoring case know only ASCII: é is in no class and is not the
-    same as É. A count may be up to 32767, and a pattern is refused
-    with a message when it comes to more than 65000 states, or nests
-    more than 64 groups deep.
+    same as É. A count may be up to 32767. A pattern is refused with a
+    message when it comes to more than 65000 states, nests more than 64
+    groups deep, or has more than 16 repetition operators on one atom,
+    or when its groups would take more than 260000 states to report.
 
-    Without a back-reference, the time a search takes is bounded by the
-    pattern's size times the text's, however the pattern is written.
-    With a back-reference a search can take much longer, so it stops
-    with the message "too many steps on this text". Then the
-    parts in parentheses are those of the first way found to match the
-    longest text, which may differ from what POSIX would choose.
+    Without a back-reference, a search takes time in proportion to the
+    text, however the pattern is written: at most the pattern's states
+    for each character, and the same limit of 260000 more when the
+    groups are wanted. With a back-reference a search can take much
+    longer, so it stops with the message "too many steps on this text".
+    Then the parts in parentheses are those of the first way found to
+    match the longest text, which may differ from what POSIX would
+    choose.
 
 EXAMPLES
     grep '^[[:space:]]*#' /hda1/CONFIG.TXT
