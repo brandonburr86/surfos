@@ -1,0 +1,23 @@
+fold - break long lines
+
+SYNOPSIS
+    fold [-w width] [-s] [-b] [file...]
+
+DESCRIPTION
+    Breaks each line so that none is wider than width columns. A
+    character is a UTF-8 sequence, and is never split. A TAB goes on to
+    the next multiple of 8, a backspace goes one back, a carriage
+    return to the start.
+
+OPTIONS
+    -w width   The width: 80 without it.
+    -s         Break after the last blank that fits, if there is one.
+    -b         Count bytes, each one column. A sequence that does not
+               fit still goes whole to the next line, so a line may
+               come out shorter than width.
+
+EXAMPLES
+    fold -s -w 60 /hda1/NOTES.TXT
+
+SEE ALSO
+    cut, nl

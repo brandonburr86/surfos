@@ -1,0 +1,24 @@
+base64 - encode and decode base64
+
+SYNOPSIS
+    base64 [-d] [-w columns] [file]
+
+DESCRIPTION
+    Writes a file, or standard input, as base64 text in lines of 76
+    columns. With -d it goes the other way: line ends are passed over,
+    and anything else outside the alphabet is refused with status 2,
+    after what came before it. Both stream, so a file may be any size.
+
+OPTIONS
+    -d           Decode.
+    -w columns   The width of the lines. 0 makes one line, with no
+                 newline at its end.
+
+    --decode and --wrap=N are the same.
+
+EXAMPLES
+    base64 /hda1/LOGO.BMP > /hda1/LOGO.B64
+    base64 -d /hda1/LOGO.B64 > /hda1/LOGO.BMP
+
+SEE ALSO
+    od, sha256sum

@@ -1,0 +1,16 @@
+rev - reverse the characters of each line
+
+SYNOPSIS
+    rev [file...]
+
+DESCRIPTION
+    Writes each line with its characters in the other order. A
+    character is a UTF-8 sequence, whole; any other byte goes as one.
+    A last line without a newline stays without one. A line is held in
+    memory while it is reversed.
+
+EXAMPLES
+    echo stressed | rev
+
+SEE ALSO
+    tr, sort

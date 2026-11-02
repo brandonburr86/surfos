@@ -1,0 +1,27 @@
+paste - put the lines of files side by side
+
+SYNOPSIS
+    paste [-d list] [-s] [file...]
+
+DESCRIPTION
+    Writes the first lines of all the files on one line, then the
+    second lines, separated by a TAB. - is standard input, and may be
+    named several times to take a line from it for each.
+
+    A program has 16 descriptors, so side by side about a dozen files
+    can be open. With -s any number will do.
+
+OPTIONS
+    -d list   Take the separators from list in turn, starting again
+              on each line. An entry is one character, or \n, \t, \\
+              or \0, which means nothing.
+    -s        Put all of each file's lines on one line, a file at a
+              time.
+
+EXAMPLES
+    paste names.txt ages.txt
+    seq 6 | paste - - -
+    paste -s -d , list.txt
+
+SEE ALSO
+    cut, join

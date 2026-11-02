@@ -1,0 +1,29 @@
+nl - number the lines of files
+
+SYNOPSIS
+    nl [-b style] [-w width] [-s sep] [-v first] [-i step] [file...]
+
+DESCRIPTION
+    Writes the lines with numbers before them, counting on from file
+    to file. Lines not numbered are indented as far as the numbers.
+    A last line without a newline gets one.
+
+    Other systems' page sections, lines of \: and the like, are not
+    known here: they are lines like any other.
+
+OPTIONS
+    -b style   Which lines get a number: t those with text (the
+               default), a all, n none, pBRE those a basic regular
+               expression matches. pBRE needs libsurf's regular
+               expressions; a build without them says so.
+    -w width   The number's width: 6.
+    -s sep     What comes after the number: a TAB.
+    -v first   The first number: 1.
+    -i step    How much each goes up: 1.
+
+EXAMPLES
+    nl -b a /hda1/NOTES.TXT
+    nl -w 3 -s ': ' list.txt
+
+SEE ALSO
+    cat, wc, grep

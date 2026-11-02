@@ -1,0 +1,23 @@
+tree - show a directory and what is under it
+
+SYNOPSIS
+    tree [-a] [-d] [-L level] [-s] [directory...]
+
+DESCRIPTION
+    Draws what is in a directory (. without one) and in the directories
+    under it, then how many of each there were. Names come in the
+    order ls gives them, case not counting. On a console that does not
+    draw UTF-8 the lines are ASCII.
+
+OPTIONS
+    -a         Show names that start with a dot too.
+    -d         Show only directories.
+    -L level   Go that many levels down at most, from 1.
+    -s         Put each file's size in bytes before its name.
+
+EXAMPLES
+    tree -L 2 /hda1
+    tree -d /initrd
+
+SEE ALSO
+    ls, du, find

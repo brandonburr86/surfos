@@ -1,0 +1,15 @@
+basename - the last part of a path
+
+SYNOPSIS
+    basename string [suffix]
+
+DESCRIPTION
+    Writes the last part of string, without the slashes after it, and
+    without suffix when that is not the whole of it. The string is
+    only text: nothing looks at the disk.
+
+EXAMPLES
+    basename /hda1/www/index.html .html
+
+SEE ALSO
+    dirname

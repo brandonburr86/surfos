@@ -76,6 +76,7 @@ USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): th
 USER_PROGS  += awk           # 11/01/26 (the command-line suite, track lang): the language, user/awk/
 USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
 USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): the stream editor
+USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -945,6 +946,68 @@ unittest: unittest-lang-awk
 .PHONY: unittest-lang-awk
 unittest-lang-awk: $(BUILD)/host/test_awk
 	$(BUILD)/host/test_awk
+
+# 11/01/26 (the command-line suite, track diff): diff, patch and the small utilities. diff and patch are linked from
+# user/diff/, and cal with the Clock's arithmetic. Their tests: tests/host/test_diff.c, user/diff/ as it is, at SurfOS's ABI, and
+# again with hashes that collide (test_diff_weak); tests/test_cli_diff.py, each tool as it is, built over the host's C
+# library (tests/host/cli/cli_host.h), beside the real ones. Sanitized runs are tests/host/cli/mac-sanitize.sh, on the Mac.
+DIFF_LIB_OBJ  = $(addprefix $(BUILD)/user/diff/,dcore.o dinput.o dfile.o dout.o)
+PATCH_LIB_OBJ = $(addprefix $(BUILD)/user/diff/,dinput.o phunk.o papply.o)
+$(BUILD)/user/diff/%.o: user/diff/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/diff: $(BUILD)/user/obj/diff.o $(DIFF_LIB_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(DIFF_LIB_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/patch: $(BUILD)/user/obj/patch.o $(PATCH_LIB_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(PATCH_LIB_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/cal: $(BUILD)/user/obj/cal.o $(BUILD)/user/wclock/clock.o $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(BUILD)/user/wclock/clock.o $(USER_LIB)
+-include $(wildcard $(BUILD)/user/diff/*.d)
+
+CLID_TOOLS     = cmp comm join paste fold nl rev basename dirname od base64 strings file tree
+CLID_HOSTFLAGS = $(filter-out -m32,$(HOSTFLAGS)) -include tests/host/cli/cli_host.h -Itests/host/cli
+CLID_DEPS      = tests/host/cli/cli_host.h tests/host/cli/surf.h user/diff/cli.h user/bin/lineutil.h user/bin/fileutil.h user/bin/saveutil.h
+CLID_DIFF_SRC  = user/diff/dcore.c user/diff/dinput.c user/diff/dfile.c user/diff/dout.c
+CLID_PATCH_SRC = user/diff/dinput.c user/diff/phunk.c user/diff/papply.c
+$(CLID_TOOLS:%=$(BUILD)/host/cli/%): $(BUILD)/host/cli/%: user/bin/%.c $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) $< -o $@
+$(BUILD)/host/cli/cal: user/bin/cal.c user/wclock/clock.c user/wclock/clock.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/cal.c user/wclock/clock.c -o $@
+$(BUILD)/host/cli/diff: user/bin/diff.c $(CLID_DIFF_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/diff.c $(CLID_DIFF_SRC) -o $@
+$(BUILD)/host/cli/patch: user/bin/patch.c $(CLID_PATCH_SRC) user/diff/patch.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/patch.c $(CLID_PATCH_SRC) -o $@
+CLID_TEST_SRC  = tests/host/test_diff.c $(sort $(CLID_DIFF_SRC) $(CLID_PATCH_SRC))
+$(BUILD)/host/test_diff: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(CLID_TEST_SRC) -o $@
+$(BUILD)/host/test_diff_weak: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -DD_HASH_MASK=3 $(CLID_TEST_SRC) -o $@
+unittest: unittest-diff
+.PHONY: unittest-diff
+unittest-diff: $(BUILD)/host/test_diff $(BUILD)/host/test_diff_weak $(CLID_TOOLS:%=$(BUILD)/host/cli/%) $(BUILD)/host/cli/cal \
+               $(BUILD)/host/cli/diff $(BUILD)/host/cli/patch
+	$(BUILD)/host/test_diff
+	$(BUILD)/host/test_diff_weak
+	python3 tests/test_cli_diff.py $(BUILD)/host/cli
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
