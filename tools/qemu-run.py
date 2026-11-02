@@ -1371,6 +1371,43 @@ SMOKE = [
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 11/01/26 (the command-line suite, track lang): bc: numbers of any length, scale, the bases, a long number's lines; -l;
+    # a script in a file, and a file then standard input; a mistake at a terminal costs its line, and in a pipe the status
+    # is 2; a number the machine cannot hold is said at once; a file that is not there; a reader that goes away
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-lang', ['cli-lang\r\n', shown('SURF \u224b> ')]),
+      ("echo '2^100; 2^500' | bc", ['\r\n1267650600228229401496703205376\r\n',
+                                    '32733906078961418700131896968275991522166420460430647894832913680961\\\r\n',
+                                    '053328527589376\r\n', shown('SURF \u224b> ')]),
+      ("echo 'scale=20; 1/7; scale=2; 7.555*2; -7%3' | bc", ['.14285714285714285714\r\n', '15.110\r\n', '-.01\r\n',
+                                                             shown('SURF \u224b> ')]),
+      ("echo 'obase=16; 255; obase=2; 5.25; obase=25; 1024' | bc", ['FF\r\n', '101.0100000\r\n', ' 01 15 24\r\n',
+                                                                    shown('SURF \u224b> ')]),
+      ("echo 'ibase=16; FF.8; ibase=A; sqrt(10^40-1); length(1.50)' | bc",
+       ['255.5\r\n', '99999999999999999999\r\n', '3\r\n', shown('SURF \u224b> ')]),
+      ("echo 'e(1); 4*a(1); l(10); s(1); c(1); j(1,1)' | bc -l",
+       ['2.71828182845904523536\r\n', '3.14159265358979323844\r\n', '2.30258509299404568401\r\n',
+        '.84147098480789650665\r\n', '.54030230586813971740\r\n', '.44005058574493351595\r\n',
+        shown('SURF \u224b> ')]),
+      ("printf 'define f(n) { auto a[]; a[0]=n; if(n<2) return 1; return a[0]*f(n-1) }\\nf(25)\\nquit\\n' > /hda1/F.BC; "
+       "bc /hda1/F.BC", ['15511210043330985984000000\r\n', shown('SURF \u224b> ')]),
+      ("echo 'x=41' > /hda1/F.BC; echo 'x+1' | bc /hda1/F.BC", ['42\r\n', shown('SURF \u224b> ')]),
+      # (bc says nothing when it starts: the file's answer says that it has got to the terminal)
+      ("echo 'x+1' > /hda1/F.BC; bc /hda1/F.BC", ['\r\n1\r\n']),
+      ('x=6', []),
+      ('x*7', ['42\r\n']),
+      ('1/0', ['bc: (standard input): line 3: divide by zero\r\n']),
+      ('x', ['6\r\n']),
+      ('quit', [shown('SURF \u224b> ')]),
+      ('rm /hda1/F.BC', [shown('SURF \u224b> ')]),
+      ("echo '1/0' | bc; echo status $?; echo '1+' | bc; echo status $?",
+       ['divide by zero\r\n', 'status 2\r\n', 'unexpected end of line\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ("echo '10^1000000000' | bc; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ('bc /hda1/NONE.BC; echo status $?', ['bc: /hda1/NONE.BC: No such file or directory\r\n', 'status 2\r\n',
+                                            shown('SURF \u224b> ')]),
+      ("echo 'while(1) 7' | bc | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF \u224b> ')]),
+      ('head -1 /initrd/man/bc.txt', ['bc - ', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],
