@@ -495,6 +495,139 @@ static void prepare_pictures(struct wb_page *p, int top, int bottom) {
     }
 }
 
+/**** a page built again with its style sheets (sheets.c) ****/
+
+/* The pictures go over by their addresses, in the page's order, with their pixels, their size and a failure: two of an
+   address are the same picture. One the sheets hide now is let go, and one they show now is asked for. A hidden picture
+   is never loaded: nothing would show it. A load on its way keeps going when its picture keeps its number; else the
+   page's loads start again, as their answers would come to the wrong picture. */
+static void restyle_pictures(struct wb *b, struct wb_page *p, struct wd_document *old) {
+    struct wd_document *d = &p->doc;
+    size_t i, j, o = 0, bytes = 0;
+    int again = 0;
+    for(j = 0; j < d->image_count; j++) {
+        if(!d->images[j]) continue;
+        for(i = o; i < old->image_count; i++) if(old->images[i] && !strcmp(old->images[i], d->images[j])) break;
+        if(i == old->image_count) continue;
+        o = i + 1;
+        if(old->pics[i].state == WP_RUNNING && i != j) {
+            again = 1;
+            old->pics[i].state = WP_WAIT;
+        }
+        d->pics[j] = old->pics[i];
+        memset(&old->pics[i], 0, sizeof(old->pics[i]));     /* (its pixels are d's now) */
+    }
+    for(i = 0; i < old->image_count; i++) if(old->pics[i].state == WP_RUNNING) again = 1;   /* one the sheets hid */
+    for(j = 0; j < d->image_count; j++) {
+        const struct wd_picture *m = &d->pics[j];
+        if(m->px) bytes += (size_t)m->pw * m->ph * sizeof(*m->px);
+        if(m->scaled) bytes += (size_t)m->sw * m->sh * sizeof(*m->scaled);
+    }
+    p->bytes = p->bytes - p->pic_bytes + bytes;
+    p->pic_bytes = bytes;
+    if(again && p == wb_current(b)) resources_stop(b);
+}
+
+/* Is y of d the control x of old: of the same kind, name and form, with what the page gave it, options and all? */
+static int same_control(const struct wd_document *old, const struct wd_control *x, const struct wd_document *d,
+                        const struct wd_control *y) {
+    unsigned int k;
+    if(x->kind != y->kind || x->role != y->role || x->form != y->form || x->noptions != y->noptions ||
+       !x->name != !y->name || (x->name && strcmp(x->name, y->name)) || strcmp(x->dflt, y->dflt)) return 0;
+    for(k = 0; k < x->noptions; k++) {
+        const struct wd_option *a = &old->options[x->first_option + k], *e = &d->options[y->first_option + k];
+        if(a->dflt != e->dflt || a->disabled != e->disabled || strcmp(a->value, e->value) || strcmp(a->label, e->label))
+            return 0;
+    }
+    return 1;
+}
+
+/* What a person made of the controls goes over to the same controls of d, in the page's order: what is typed in them,
+   where its caret is, what is ticked and chosen. map[] (old's count) gets each one's number in d, or -1. A page's
+   forms do not depend on its sheets (display: none hides a control's box, not the control), so all of them go over;
+   the hidden attribute shown by a sheet can change a form, and then what is no longer the same stays as the page has it. */
+static void restyle_controls(struct wd_document *old, struct wd_document *d, int *map) {
+    size_t i, j, o = 0;
+    unsigned int k;
+    for(i = 0; i < old->control_count; i++) map[i] = -1;
+    for(j = 0; j < d->control_count; j++) {
+        struct wd_control *x, *y = &d->controls[j];
+        char *v;
+        size_t cap;
+        for(i = o; i < old->control_count && !same_control(old, &old->controls[i], d, y); i++) ;
+        if(i == old->control_count) continue;
+        o = i + 1;
+        map[i] = (int)j;
+        x = &old->controls[i];
+        v = y->value;                               /* the values change places: what goes with old is a password's */
+        cap = y->cap;                               /* default, wiped there with the rest (fm_free()) */
+        y->value = x->value;
+        y->cap = x->cap;
+        x->value = v;
+        x->cap = cap;
+        y->len = x->len;
+        y->caret = x->caret;
+        y->first = x->first;
+        y->top = x->top;
+        y->checked = x->checked;
+        for(k = 0; k < y->noptions; k++) d->options[y->first_option + k].on = old->options[x->first_option + k].on;
+    }
+    for(i = 0; i < old->control_count; i++) {      /* a radio button that was chosen is its group's only one */
+        const struct wd_control *x = &old->controls[i];
+        if(map[i] < 0 || x->kind != WF_RADIO || !x->checked || !x->name) continue;
+        for(j = 0; j < d->control_count; j++) {
+            struct wd_control *e = &d->controls[j];
+            if((int)j != map[i] && e->kind == WF_RADIO && e->form == x->form && e->name && !strcmp(e->name, x->name))
+                e->checked = 0;
+        }
+    }
+}
+
+/* old's link n in d: the same address, as many of them before it. -1 when there is none, or when nothing of it is on the
+   page: the sheets hid it, and Tab does not stop there. */
+static int same_link(const struct wd_document *old, const struct wd_document *d, int n) {
+    size_t i, k = 0;
+    if(n < 0 || (size_t)n >= old->link_count) return -1;
+    for(i = 0; i < (size_t)n; i++) if(!strcmp(old->links[i].url, old->links[n].url)) k++;
+    for(i = 0; i < d->link_count; i++) {
+        size_t r;
+        if(strcmp(d->links[i].url, old->links[n].url)) continue;
+        if(k) {
+            k--;
+            continue;
+        }
+        for(r = 0; r < d->run_count; r++) if(d->runs[r].link == (int)i) return (int)i;
+        return -1;
+    }
+    return -1;
+}
+
+/* old's control n in d, by map[]; -1 when none, or when the sheets hid it (it has no box: no keys go to it) */
+static int same_field(const struct wd_document *old, const struct wd_document *d, const int *map, int n) {
+    if(n < 0 || !map || (size_t)n >= old->control_count || map[n] < 0) return -1;
+    return d->controls[map[n]].run >= 0 ? map[n] : -1;
+}
+
+void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old) {
+    struct wd_document *d = &p->doc;
+    int *map = old->control_count ? malloc(old->control_count * sizeof(*map)) : NULL;
+    restyle_pictures(b, p, old);
+    if(map) restyle_controls(old, d, map);
+    if(old->visited) p->bytes -= old->link_count;  /* (they go with old; d's are made below, or when it is shown) */
+    if(p == wb_current(b) && b->npages) {
+        mark_visited(b, p);
+        b->hover = same_link(old, d, b->hover);
+        b->pressed = same_link(old, d, b->pressed);
+        b->tab_link = same_link(old, d, b->tab_link);
+        b->field = same_field(old, d, map, b->field);
+        b->press_field = same_field(old, d, map, b->press_field);
+        b->list = same_field(old, d, map, b->list);
+        if(b->focus == WB_FOCUS_FIELD && b->field < 0) b->focus = WB_FOCUS_PAGE;
+        b->find_hit = 0;                            /* (its place was old's text) */
+    }
+    free(map);
+}
+
 /* A text a page asked for has come, or failed: stage 3.3's style sheets */
 void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why) {
     struct wb_page *p = wb_current(b);

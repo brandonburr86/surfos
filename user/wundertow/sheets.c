@@ -73,9 +73,11 @@ static void restyle(struct wb *b, struct wb_page *p) {
     for(i = 0; i < q->count && !q->sheet[i].text; i++) ;
     if(i == q->count) ;
     else if(!wd_build_with(&w->r, q, &d, err, sizeof(err))) {
-        wd_free(&p->doc);
+        struct wd_document was = p->doc;
         p->doc = d;
         p->bytes += d.bytes - old;
+        wb_restyled(b, p, &was);                /* what the window keeps against the page goes over (browser.c) */
+        wd_free(&was);
         wl_free(&p->lay);
         p->lay_w = 0;                           /* laid out again, at the same place; a fragment target at its own */
         if(there) snprintf(p->fragment, sizeof(p->fragment), "%s", w->r.url.fragment);

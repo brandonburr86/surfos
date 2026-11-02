@@ -489,3 +489,7 @@ goes through `may_load()` in browser.c: an https page nothing over http, an http
 person's key or click calls `fm_submit()`, a POST or a password form is never sent, a form a limit touched neither, and
 `fm_forget()` empties password fields when a page is left. `GUIAPPS_ONLY=gui_apps_web` runs the browser's offline checks,
 `--scenario guiweb` those with a server.
+11/02/26 (milestones 2 and 3 together): when its sheets have come, sheets.c's `restyle()` gives a page a new document. What
+the window keeps against a document goes over in browser.c's `wb_restyled()`, by what it is (an address, a control's kind
+and name), never by its number: anything new kept against a document goes there too. What
+`display: none` hides has no box but is still its form's, so a page's forms do not depend on its CSS: keep that.

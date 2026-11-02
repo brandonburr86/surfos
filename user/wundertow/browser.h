@@ -204,6 +204,12 @@ int wb_busy(const struct wb *b);                                    /* is anythi
 int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag);
 void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why);
 
+/* 11/02/26 (the integration of milestones 2 and 3): page p was built again with its style sheets (sheets.c), old being the
+   document it had, which is still there, and p's layout old's. What the window keeps against a document goes over to the
+   new one, by what it is rather than by its number, as the sheets may have shown or hidden anything: what a person typed
+   and chose, the pictures, the visited links, the keyboard's focus. See browser.c. */
+void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old);
+
 /* Stage 2.4: the answers to a page's pictures. wb_image() owns px (pw x ph pixels) now; w x h is the picture's own size.
    wb_image_failed(): none to be had; w x h its size if that is known, else 0. */
 void wb_image(struct wb *b, unsigned int page, int item, int w, int h, int pw, int ph, unsigned int *px);

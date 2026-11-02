@@ -428,7 +428,10 @@ known is skipped, and a malformed sheet changes nothing but what it managed to s
 it has no use for CSS.
 
 A page shows at once. Its linked sheets load behind it, in helpers as pictures do, and when the last has answered the
-page is built again where it was, so a slow sheet holds nothing up and one that fails is left out. A sheet has a page's
+page is built again where it was, so a slow sheet holds nothing up and one that fails is left out. What you did on it
+goes over: what you typed and chose, the field or link with the keys (unless the sheet hid it), the pictures that came
+(one the sheet hides is let go, one it shows is loaded then: a picture CSS hides is not loaded), the visited links.
+A sheet has a page's
 limit, 1 MB, and is taken as `text/css` or with no type at all, so an error page is no sheet. The rules are the page's:
 from an https page or sheet nothing over http; an http(s) page never reads a file, and an `@import` never does, on a
 file page neither: only a file page's own `<link>` reaches a file beside it. `@import "x"` is followed one level, so an
