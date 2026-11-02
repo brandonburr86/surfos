@@ -149,7 +149,7 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
              $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d) $(WCLOCK_OBJ:.o=.d) \
-             $(WCHARMAP_OBJ:.o=.d)
+             $(WCHARMAP_OBJ:.o=.d) $(WUNDERTOW_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -953,7 +953,7 @@ unittest: test-undertow-html-ubsan
 # browser.c driven as a person drives the window. Each test also builds the real program.
 WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
 WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
-WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
+WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o form.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
                $(BUILD)/host/kernel/driver/cp437.o
 $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
@@ -961,7 +961,7 @@ $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
 -include $(wildcard $(BUILD)/host/wundertow/*.d)
 
-$(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/wundertow/doc.o $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/wundertow/doc.o $(BUILD)/host/wundertow/form.o $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -981,8 +981,8 @@ test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wun
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
 
-$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(BUILD)/host/wundertow/browser.o $(WT_HOST_DRAW) \
-                                      $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
+                                      $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -991,6 +991,65 @@ test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/w
 	$(BUILD)/host/test_wundertow_browser
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
+
+# 11/1/26: forms: the model, what is sent to the byte, and the fields used as a person uses them
+$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
+                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-form: $(BUILD)/host/test_wundertow_form $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_form
+unittest: test-wundertow-form
+.PHONY: test-wundertow-form
+
+# 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
+$(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o) \
+                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-load: $(BUILD)/host/test_wundertow_load $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_load
+unittest: test-wundertow-load
+.PHONY: test-wundertow-load
+
+# 11/1/26: the picture decoders, on tests/fixtures/wundertow/images/ (tools/wundertow-images.py) and hostile files made
+# in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
+# arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
+# hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o
+WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
+$(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
+                                    $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -lm -o $@
+
+test-wundertow-image: $(BUILD)/host/test_wundertow_image $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_image tests/fixtures
+unittest: test-wundertow-image
+.PHONY: test-wundertow-image
+
+$(BUILD)/host/wundertow-ubsan/%.o: user/wundertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
+
+$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/wundertow-ubsan/,$(WT_IMAGE_NAMES)) \
+                                          $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -lm -o $@
+
+test-wundertow-image-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan)
+	$(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_image_ubsan tests/fixtures,@echo "test-wundertow-image-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")
+unittest: test-wundertow-image-ubsan
+.PHONY: test-wundertow-image-ubsan
 
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)

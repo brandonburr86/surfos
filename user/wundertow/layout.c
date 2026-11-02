@@ -50,38 +50,74 @@ struct pieces {                         /* the pieces of a box, one at a time */
 
 static int run_scale(const struct wd_run *u) { return u->size == WZ_H1 || u->size == WZ_H2 ? 2 : 1; }
 
-static int field_width(const struct wd_run *u, int cells) {
+/* A text area with rows and cols both has their size, a field with size that many characters: else as they were before
+   forms were used, in the fixtures too, which keeps milestone 1's layouts as they are */
+static int field_width(const struct wd_document *d, const struct wd_run *u, int cells) {
+    const struct wd_control *c = u->control >= 0 ? &d->controls[u->control] : NULL;
     switch(u->field) {
     case WF_CHECKBOX: case WF_RADIO: return 14;
     case WF_BUTTON: return cells * WF_W + 4 * BOX_PAD;
     case WF_SELECT: return cells * WF_W + 2 * BOX_PAD + 16;
+    case WF_AREA:
+        if(c && c->rows && c->cols) return c->cols * WF_W + 2 * BOX_PAD;
+        break;
+    case WF_TEXT: case WF_PASSWORD:
+        if(c && c->size) return c->size * WF_W + 2 * BOX_PAD;
+        break;
     }
     return (cells > 20 ? (cells > 48 ? 48 : cells) : 20) * WF_W + 2 * BOX_PAD;
 }
 
-static int field_height(const struct wd_run *u) {
+static int field_height(const struct wd_document *d, const struct wd_run *u) {
+    const struct wd_control *c = u->control >= 0 ? &d->controls[u->control] : NULL;
     if(u->field == WF_CHECKBOX || u->field == WF_RADIO) return 14;
+    if(u->field == WF_AREA && c && c->rows && c->cols) return c->rows * WF_H + 2 * BOX_PAD;
     return u->field == WF_AREA ? 2 * WF_H + 2 * BOX_PAD : WF_H + 2 * BOX_PAD;
+}
+
+/* The other side of a picture of nw x nh when one side is v (at least a pixel): in 64 bits, 4096 x 4096 being no more
+   than fits but the sides of attributes and pictures coming from anywhere */
+static int side(int v, int to, int from) {
+    long long r = (long long)v * to / from;
+    return r < 1 ? 1 : r > WD_SIZE_MAX ? WD_SIZE_MAX : (int)r;
+}
+
+/* An image's box: see layout.h. Within max when max > 0. */
+static void image_size(const struct wd_document *d, const struct wd_run *u, int cells, int max, int *w, int *h) {
+    int nw = u->image >= 0 ? d->pics[u->image].w : 0, nh = u->image >= 0 ? d->pics[u->image].h : 0;
+    if(u->w && u->h) {
+        *w = u->w;
+        *h = u->h;
+    } else if(u->w && nw) {
+        *w = u->w;
+        *h = side(u->w, nh, nw);
+    } else if(u->h && nw) {
+        *h = u->h;
+        *w = side(u->h, nw, nh);
+    } else if(nw) {
+        *w = nw;
+        *h = nh;
+    } else if(cells || u->w || u->h) {          /* its alt text in a frame */
+        *w = cells * WF_W + 2 * BOX_PAD;
+        *h = WF_H + 2 * BOX_PAD;
+        return;
+    } else {                                    /* nothing to show */
+        *w = *h = 0;
+        return;
+    }
+    if(max > 0 && *w > max) {                   /* narrower, at its shape */
+        *h = side(*h, max, *w);
+        *w = max;
+    }
 }
 
 /* An atom's size; images with a size given keep it (within max) */
 static void atom_size(const struct wd_document *d, const struct wd_run *u, int max, int *w, int *h) {
     int cells = (int)wf_count(d->text + u->off, u->len);
     if(u->kind == WR_FIELD) {
-        *w = field_width(u, cells);
-        *h = field_height(u);
-    } else if(u->w && u->h) {
-        *w = u->w;
-        *h = u->h;
-        if(max > 0 && *w > max) {               /* narrower, at its shape */
-            *h = (int)((long)*h * max / *w);
-            *w = max;
-            if(*h < 1) *h = 1;
-        }
-    } else {
-        *w = cells * WF_W + 2 * BOX_PAD;
-        *h = WF_H + 2 * BOX_PAD;
-    }
+        *w = field_width(d, u, cells);
+        *h = field_height(d, u);
+    } else image_size(d, u, cells, max, w, h);
 }
 
 static int next_piece(struct pieces *it, struct piece *p, int max) {
@@ -174,6 +210,8 @@ static struct wl_item *add_item(struct lay *L, int kind, int x, int y, int w, in
     it->h = h;
     it->color = WD_NONE;
     it->link = -1;
+    it->image = -1;
+    it->control = -1;
     if(x + w > o->width) o->width = x + w;
     if(y + h > o->height) o->height = y + h;
     return it;
@@ -278,6 +316,8 @@ static void emit_line(struct lay *L, int x, int w, int align, int empty_ok) {
                 it->link = u->link;
                 it->off = u->off;
                 it->len = u->len;
+                it->image = u->image;
+                it->control = u->control;
             }
             prev = NULL;
         } else if(prev && last == p->run && prev->off + prev->len == p->off) {
@@ -866,6 +906,47 @@ int wl_offset_y(const struct wl_layout *l, size_t offset) {
         const struct wl_item *it = &l->items[i];
         if(it->kind != WI_MARK && it->kind != WI_FILL && it->kind != WI_FRAME && it->kind != WI_RULE &&
            it->off + it->len > offset) return it->y;
+    }
+    return 0;
+}
+
+int wl_control_at(const struct wl_layout *l, int x, int y) {
+    size_t i;
+    for(i = 0; i < l->count; i++) {
+        const struct wl_item *it = &l->items[i];
+        if(it->kind == WI_FIELD && it->control >= 0 && x >= it->x && x < it->x + it->w && y >= it->y && y < it->y + it->h)
+            return it->control;
+    }
+    return -1;
+}
+
+long wl_control_item(const struct wl_layout *l, int control) {
+    size_t i;
+    for(i = 0; i < l->count; i++) if(l->items[i].kind == WI_FIELD && l->items[i].control == control) return (long)i;
+    return -1;
+}
+
+/* Things with a place in the document's text */
+static int placed(const struct wl_item *it) { return it->kind == WI_TEXT || it->kind == WI_FIELD || it->kind == WI_IMAGE; }
+
+int wl_place(const struct wl_layout *l, int y, size_t *offset, int *into) {
+    size_t i;
+    for(i = 0; i < l->count; i++) {
+        const struct wl_item *it = &l->items[i];
+        if(placed(it) && it->y + it->h > y) {
+            *offset = it->off;
+            *into = y - it->y;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int wl_place_y(const struct wl_layout *l, size_t offset, int into) {
+    size_t i;
+    for(i = 0; i < l->count; i++) {
+        const struct wl_item *it = &l->items[i];
+        if(placed(it) && it->off + it->len >= offset + (it->len ? 1 : 0)) return it->y + into;
     }
     return 0;
 }

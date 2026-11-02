@@ -71,3 +71,8 @@ size_t wf_fit(const char *s, size_t n, int width, int scale, size_t *cells_out) 
     if(cells_out) *cells_out = total;
     return i;
 }
+
+int wf_width(const char *s, size_t n, int scale, unsigned int style) {
+    (void)style;                                    /* every style is as wide as the cells today */
+    return (int)wf_count(s, n) * WF_W * (scale < 1 ? 1 : scale);
+}

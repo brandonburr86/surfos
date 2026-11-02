@@ -69,7 +69,8 @@ the content says the pointer left it; value: the buttons held, WIN_BUTTON_*); th
 the content (x, y as for the pointer; value: rows, as an int, positive down, 3 a notch); the
 focus (value 1: the window came to the front, 0: it left it); a new size (x, y: the content
 size the user gave the window by its corner or by maximizing it: the program answers with an
-image of that size); and the close button. mods stays 0 for now.
+image of that size); and the close button. mods is 0, but for 11/1/26's WIN_MOD_SHIFT on an
+Enter typed with Shift: to a program that does not look, it is Enter.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/win.h.
 The desktop's side at its end is seen only by a file that has the kernel's types
@@ -111,8 +112,9 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
 #define WIN_EV_FOCUS    4
 #define WIN_EV_RESIZE   5
 #define WIN_EV_CLOSE    6
+#define WIN_MOD_SHIFT   1
 
-/* the keys that are no bytes (the desktop's GUI_UP .. GUI_INSERT, sys/gui.h) */
+/* the keys that are no bytes (the desktop's GUI_UP .. GUI_BACKTAB, sys/gui.h) */
 #define WIN_KEY_UP      0x100
 #define WIN_KEY_DOWN    0x101
 #define WIN_KEY_LEFT    0x102
@@ -123,6 +125,7 @@ struct win_event { unsigned short type, mods; int x, y; unsigned value; };     /
 #define WIN_KEY_PGDN    0x107
 #define WIN_KEY_DELETE  0x108
 #define WIN_KEY_INSERT  0x109
+#define WIN_KEY_BACKTAB 0x10a           /* 11/1/26: Shift+Tab */
 
 #define WIN_BUTTON_LEFT   1
 #define WIN_BUTTON_RIGHT  2

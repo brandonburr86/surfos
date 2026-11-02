@@ -12,6 +12,7 @@ font (font.h), at a whole scale.
 #include "undertow.h"
 #include "doc.h"
 #include "font.h"
+#include "form.h"
 #include "layout.h"
 #include "paint.h"
 
@@ -57,6 +58,25 @@ void wp_frame(const struct wp_target *t, int x, int y, int w, int h, unsigned in
     wp_fill(t, x, y + h - 1, w, 1, color);
     wp_fill(t, x, y, 1, h, color);
     wp_fill(t, x + w - 1, y, 1, h, color);
+}
+
+/* 11/1/26: each pixel multiplied by color: a highlight over what is painted, text and all */
+void wp_tint(const struct wp_target *t, int x, int y, int w, int h, unsigned int color) {
+    int x0 = x < t->x ? t->x : x, y0 = y < t->y ? t->y : y;
+    int x1 = x + w > t->x + t->cw ? t->x + t->cw : x + w, y1 = y + h > t->y + t->ch ? t->y + t->ch : y + h;
+    unsigned int cr = color >> 16 & 255, cg = color >> 8 & 255, cb = color & 255;
+    int i, j;
+    if(x1 > t->w) x1 = t->w;
+    if(y1 > t->h) y1 = t->h;
+    if(x0 < 0) x0 = 0;
+    if(y0 < 0) y0 = 0;
+    for(j = y0; j < y1; j++) {
+        unsigned int *row = t->pixels + (long)j * t->stride;
+        for(i = x0; i < x1; i++) {
+            unsigned int c = row[i];
+            row[i] = ((c >> 16 & 255) * cr / 255) << 16 | ((c >> 8 & 255) * cg / 255) << 8 | (c & 255) * cb / 255;
+        }
+    }
 }
 
 /* One cell of the font at (x, y), its lit pixels only */
@@ -117,6 +137,7 @@ static unsigned int text_color(const struct wd_document *d, const struct wp_them
     if(it->color != WD_NONE) return it->color;
     if(it->link >= 0) {
         if(it->link == hover) return th->hover;
+        if(d->visited && d->visited[it->link]) return d->vlink_color != WD_NONE ? d->vlink_color : th->vlink;
         return d->link_color != WD_NONE ? d->link_color : th->link;
     }
     return d->fg != WD_NONE ? d->fg : th->fg;
@@ -137,30 +158,98 @@ static void label_in(const struct wp_target *t, int x, int y, int w, int h, cons
     wp_text(&in, center && tw < w ? x + (w - tw) / 2 : x + 4, y + (h - WF_H) / 2, s, n, 1, 0, color);
 }
 
+/* A text area's lines, from its first shown, in its box */
+static void area_text(const struct wp_target *t, const struct wd_control *c, const struct wp_theme *th, int x, int y, int w, int h) {
+    int lines = (h - 2 * 4) / WF_H, cols = (w - 2 * 4) / WF_W, l;
+    if(cols < 1) cols = 1;
+    for(l = 0; l < lines; l++) {
+        size_t a = fm_at(c, c->top + l, 0), e = fm_at(c, c->top + l, 1 << 30);
+        int line, col;
+        if(a >= c->len && (c->top + l) > 0) {       /* past the last line: fm_at() says the end */
+            fm_where(c, c->len, &line, &col);
+            if(c->top + l > line) break;
+        }
+        if(e > a) label_in(t, x, y + l * WF_H, w, WF_H + 8, c->value + a, e - a, th->field_fg, 0);
+    }
+}
+
 static void field(const struct wp_target *t, const struct wd_document *d, const struct wp_theme *th,
                   const struct wl_item *it, int x, int y) {
+    const struct wd_control *c = it->control >= 0 ? &d->controls[it->control] : NULL;
     const char *s = d->text + it->off;
+    size_t n = it->len;
+    char stars[64];
+    int checked = c ? c->checked : it->checked;
+    if(c && (it->sub == WF_SELECT || it->sub == WF_PASSWORD || ((it->sub == WF_TEXT) && c->len))) s = fm_shown(d, c, stars, &n);
+    else if(c && it->sub == WF_TEXT && !it->checked) n = 0;     /* emptied by a person: not the page's value again */
     switch(it->sub) {
     case WF_CHECKBOX: case WF_RADIO:
         wp_fill(t, x, y, it->w, it->h, th->field_bg);
         wp_frame(t, x, y, it->w, it->h, th->field_line);
-        if(it->checked) wp_fill(t, x + 4, y + 4, it->w - 8, it->h - 8, th->field_fg);
+        if(checked) wp_fill(t, x + 4, y + 4, it->w - 8, it->h - 8, th->field_fg);
         return;
     case WF_BUTTON: case WF_FILE:
         wp_fill(t, x, y, it->w, it->h, th->button_bg);
         wp_frame(t, x, y, it->w, it->h, th->button_line);
-        label_in(t, x, y, it->w, it->h, s, it->len, th->field_fg, 1);
+        label_in(t, x, y, it->w, it->h, s, n, th->field_fg, 1);
         return;
     case WF_SELECT:
         wp_fill(t, x, y, it->w, it->h, th->field_bg);
         wp_frame(t, x, y, it->w, it->h, th->field_line);
-        label_in(t, x, y, it->w - 16, it->h, s, it->len, th->field_fg, 0);
+        label_in(t, x, y, it->w - 16, it->h, s, n, th->field_fg, 0);
         wp_text(t, x + it->w - 13, y + (it->h - WF_H) / 2, "\xe2\x96\xbc", 3, 1, 0, th->field_fg);  /* U+25BC */
         return;
     }
     wp_fill(t, x, y, it->w, it->h, th->field_bg);
     wp_frame(t, x, y, it->w, it->h, th->field_line);
-    label_in(t, x, y, it->w, it->sub == WF_AREA ? WF_H + 8 : it->h, s, it->len, it->checked ? th->placeholder : th->field_fg, 0);
+    if(c && it->sub == WF_AREA) area_text(t, c, th, x, y, it->w, it->h);
+    else label_in(t, x, y, it->w, it->sub == WF_AREA ? WF_H + 8 : it->h, s, n,
+                  it->checked && !(c && c->len) ? th->placeholder : th->field_fg, 0);
+}
+
+/* over what is there: a pixel half there is mixed with it */
+static unsigned int mix(unsigned int under, unsigned int c) {
+    unsigned int t = c >> 24, s = 255 - t;
+    unsigned int r = ((c >> 16 & 255) * s + (under >> 16 & 255) * t + 127) / 255;
+    unsigned int g = ((c >> 8 & 255) * s + (under >> 8 & 255) * t + 127) / 255;
+    unsigned int b = ((c & 255) * s + (under & 255) * t + 127) / 255;
+    return r << 16 | g << 8 | b;
+}
+
+/* An image's picture at its box (x, y) on the target: pixels made to its size when there are any, as they are when
+   they are its size, else the nearest (a picture shown larger than it is kept). 0 when there are no pixels. */
+static int picture(const struct wp_target *t, const struct wd_document *d, const struct wl_item *it, int x, int y) {
+    const struct wd_picture *m = it->image >= 0 ? &d->pics[it->image] : NULL;
+    const unsigned int *src;
+    int sw, sh, cx0, cy0, cx1, cy1, i, j;
+    if(!m || !m->px || it->w <= 0 || it->h <= 0) return 0;
+    if(m->scaled && m->sw == it->w && m->sh == it->h) {
+        src = m->scaled;
+        sw = m->sw;
+        sh = m->sh;
+    } else {
+        src = m->px;
+        sw = m->pw;
+        sh = m->ph;
+    }
+    cx0 = x > t->x ? x : t->x;
+    cy0 = y > t->y ? y : t->y;
+    cx1 = x + it->w < t->x + t->cw ? x + it->w : t->x + t->cw;
+    cy1 = y + it->h < t->y + t->ch ? y + it->h : t->y + t->ch;
+    if(cx0 < 0) cx0 = 0;
+    if(cy0 < 0) cy0 = 0;
+    if(cx1 > t->w) cx1 = t->w;
+    if(cy1 > t->h) cy1 = t->h;
+    for(j = cy0; j < cy1; j++) {
+        unsigned int *row = t->pixels + (long)j * t->stride;
+        const unsigned int *s = src + (size_t)(sh == it->h ? j - y : (int)((long long)(j - y) * sh / it->h)) * sw;
+        for(i = cx0; i < cx1; i++) {
+            unsigned int c = s[sw == it->w ? i - x : (int)((long long)(i - x) * sw / it->w)];
+            if(!(c >> 24)) row[i] = c;
+            else if((c >> 24) != 255) row[i] = mix(row[i], c);
+        }
+    }
+    return 1;
 }
 
 void wp_paint(const struct wl_layout *l, const struct wd_document *d, const struct wp_theme *th,
@@ -191,6 +280,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
             field(t, d, th, it, x, y);
             break;
         case WI_IMAGE:
+            if(picture(t, d, it, x, y)) break;
             c = it->link >= 0 ? text_color(d, th, it, hover) : th->image_line;
             wp_frame(t, x, y, it->w, it->h, c);
             if(it->len) label_in(t, x, y, it->w, it->h, d->text + it->off, it->len, it->link >= 0 ? c : th->image_fg, 0);

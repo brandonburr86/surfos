@@ -319,8 +319,10 @@ telnet, `wundertow` says "no window". Anywhere, on any console, it does two thin
 
     wundertow --layout ADDRESS [WIDTH]        the page laid out WIDTH pixels wide (640), as text
     wundertow --render ADDRESS FILE [WIDTH]   the page painted as a BMP picture, for the Image Viewer
+    wundertow --load ADDRESS [WIDTH]          as --layout, loaded as the window loads: by helpers, with its pictures
 
-WIDTH is 64 to 4096 pixels (640); a picture is 8000 rows at most.
+WIDTH is 64 to 4096 pixels (640); a picture is 8000 rows at most. --layout and --render show a page without its
+pictures (their frames); --load ends with a line for each picture, what became of it and its size.
 
 `wundertow --render https://example.com /data/example.bmp` on the laptop, then the picture opened in the
 desktop's Image Viewer, shows the page as the window does.
@@ -328,8 +330,13 @@ desktop's Image Viewer, shows the page as the window does.
 **The window.** A toolbar (Back, Forward, Reload, the address field, Go), the page, a scroll bar and a
 status bar, in the desktop's colours. The status bar names the link under the pointer, says Loading... while
 a page loads, Done, or why a page failed, and at its right how the page came: "HTTPS verified TLSv1.3",
-"HTTP: not encrypted" or "File". The window's title is the page's. Loading waits for the page, up to
-Undertow's minute: the window says so first and goes on once the page is there.
+"HTTP: not encrypted" or "File". The window's title is the page's.
+
+**Loading.** The window goes on answering while a page loads: a helper does the loading (11/1/26, `user/wundertow/
+loader.h`). A helper is wundertow itself, started for one load, with its answer on a pipe; it alone handles TLS,
+HTTP and pictures' files, so that a server that kills it costs one load, never the window. While anything loads
+Reload says Stop, and Stop or Escape ends it. A new address takes the place of a load on its way, and Back and
+Forward end it. Each load has Undertow's minute, and a helper still at work some seconds after that is stopped.
 
 **Keys and the pointer.**
 
@@ -342,9 +349,24 @@ Undertow's minute: the window says so first and goes on once the page is there.
 | Home, End | the top, the bottom |
 | Backspace | back |
 | Ctrl+R | load the page again, at the same place |
+| Escape | stop what is loading (or close the find field) |
+| Ctrl+F | find a word on the page: as it is typed |
+| Enter, Shift+Enter, Escape | in the find field: the next place, the one before, close it |
+| Tab, Shift+Tab | from link to link and field to field, in the page's order |
+| Enter | follow the link with the focus |
 
 A link is followed when the button is let go over it; the scroll bar's thumb can be dragged, and a click
 above or below it scrolls a screen. The wheel scrolls once the desktop delivers it (track C's C8).
+
+**Finding.** Ctrl+F opens a field in the status bar. Each key looks for the word from the place you are at; the field says
+which place of how many, and goes pink when the word is not there. As in Undertow, ASCII letters match in either
+case. A match goes over styles, but not from one paragraph into the next, and not into what a page does not show as
+text. The place comes into view and is marked.
+
+**Links by keyboard, and visited links.** Tab goes from what is in view to the next link, scrolling it into view and
+drawing a frame round it, with its address in the status bar. A link you have been to takes the page's `vlink`
+colour, or the window's own. That is known only to this window, for as long as it is open: what it keeps is a
+hash of each address, and nothing is written anywhere.
 
 **Files.** An address that starts with `/` or `file:` is a file on this computer, read whole (1 MB at
 most), HTML by its name (`.html`, `.htm`), text otherwise. A file page's links lead to files beside it; a
@@ -355,14 +377,59 @@ and monospaced text, sub- and superscripts, highlighted text, links in the link 
 lists with bullets, numbers, letters or Roman numerals, quotations, preformatted text (its lines kept,
 broken only at the window's edge), rules, line breaks, centred and right-aligned text, the page's colours
 (`<body bgcolor text link>`, `<font color>`, the colours of tables, rows and cells), tables with their
-columns sized to their content, a width, borders, padding and cells that span columns, and forms' fields as
-boxes (shown, not used yet). Images are their alt text in a frame of their size until images are loaded.
+columns sized to their content, a width, borders, padding and cells that span columns, forms and pictures (below).
 The text is the console's font (code page 437); a character it does not have is shown as Undertow's ASCII
 stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, SVG, MathML, objects), this
 hides, and so the content of an element with the `hidden` attribute.
 
-**Not yet** (the plan's later milestones): images, a Stop button and loading without waiting, finding in
-a page, links by keyboard, forms that send, CSS, other fonts.
+**Pictures.** PNG (with its own inflate), JPEG (baseline and progressive), GIF (its first frame) and BMP, whatever the
+server calls them, read in integers by `user/wundertow/image_*.c` in the helper. They load after the page, three at
+a time, in the page's order. An image's frame is as big as its `width` and `height` say, or by its shape when only one
+of them is there, else the picture's own size once it is known, and the page is laid out again then, keeping what
+you are reading where it is. Until then, and if it never comes, the frame shows its alt text. A picture is never
+wider than the room it has. Shown larger than it is kept it takes the nearest pixel, shown smaller an average of the
+pixels it stands for. An https page's picture over http is not loaded, as Undertow refuses HTTPS to HTTP, and an
+http(s) page never reads a file: a file page's pictures beside it are files. The same goes for a broken or
+truncated file: no part of it is shown, and the frame stays. Limits: a file of 4 MB, 4096 pixels a side and 16
+megapixels, 64 MB of a progressive JPEG's coefficients and 128 scans; anything over 2048 a side is kept smaller, by a
+whole factor; a page keeps 32 MB of pixels, and past that the frames stay. Pictures count in the history's 8 MB: the
+oldest pages go first, then the pages ahead of the one shown, never that one.
+
+**Forms.** Fields work as a person expects, by the pointer or by Tab: typing in text fields and text areas, Space for a
+checkbox, a radio button or a button, a list for a select by Space or a click, or Up and Down in it at once. Enter in a
+field submits its form, by its first button; Reset puts it back. Only a person's key or click submits: a page cannot.
+A submit is a GET in the HTML standard's encoding (UTF-8; on a windows-1252 page, that), by the rules of any address
+on the page: the address field shows it and history keeps it. What is not sent says so in the status bar, and nothing
+leaves the computer:
+
+- a form that POSTs, or a button with `formmethod=post`, or `method=dialog`;
+- a form with a password field, whatever the scheme: a password never goes into an address or the history. Password
+  fields show stars, and what was typed in one goes when you leave its page;
+- a form on an https page that would go over http, and a web page's form that leads to a file;
+- a form a limit took something from (2,048 bytes of address, 512 forms, 4,096 controls and 16,384 options a page, 1 MB
+  of their names, values, labels and addresses a page, 1 KB a value and 64 KB in a text area): another form than the
+  page's;
+- a form that holds what this browser does not follow, for the same reason: a select or a submit button under the
+  `hidden` attribute or in an `<object>` (hidden fields and text areas there are followed, but not after a disabled
+  fieldset), a control in a legend of a disabled fieldset, a `<base>` this browser cannot use, an action of `#place` with
+  a `<base>`, `dirname`, `wrap=hard`, a range or a colour with no value, an email list of `multiple`, a character
+  reference this browser does not know in a value or a name, an option's text that a browser would send with characters
+  this one does not show, and on a page in a charset this browser cannot read, any value, name or address that
+  is not plain ASCII, or holds a `?`, which is what its bytes read as;
+- a form whose `accept-charset` is neither UTF-8 nor windows-1252.
+
+**Not yet:** file uploads, `<label>` as a place to click, drawing the EXIF orientation, `srcset`, animated GIFs, `data:`
+addresses, form validation (`required`, `pattern`), CSS and other fonts (the plan's milestone 3).
+
+A form here runs from its tag to its end tag, or holds what names it by `form=`. A page whose elements nest as they
+should sees no difference from a browser. On one that does not, a browser also has in a form what comes after its
+`</form>` inside an element left open in it, by a tree of elements this page model does not keep: here that control is in
+no form. Also not yet: controls inside svg's `foreignObject` and math's text (no controls), a number's, a date's, a range's
+or a colour's value that a browser would change (it goes as the page has it), a `form=` naming an id that an earlier
+element holds (it finds the form of that id), `<noframes>` content (shown), `<plaintext>`, a table's stray entries (in the
+order of the source), a submit button with a name and no value (it goes empty, as the standard says; browsers send
+their label), a field with a value and a placeholder (no placeholder once it is emptied), and a character shown as
+several cells (one for the caret).
 
 **Limits.** Undertow's (above), and 32,768 boxes and 131,072 runs of text a page; past any of them the page
 stops there and the status bar says so. History: 16 pages, 8 MB.
@@ -381,6 +448,18 @@ the focus given by a click on its title bar, the text, the link colour and the h
 where the layout puts them, a link followed, Backspace, Page Down and Home, the corner dragged (the page
 laid out again at the new width) and the close button. `test_wundertow_layout --render FILE OUT.ppm
 [WIDTH]` paints any HTML file on the host.
+
+11/1/26, milestone 2: `make unittest` also runs `test_wundertow_image` (125 pictures of `tests/fixtures/wundertow/
+images/`, made by `tools/wundertow-images.py`, each cut short and with bytes changed, every allocation failing,
+hand-made hostile files of each format, and a copy under UndefinedBehaviorSanitizer at SurfOS's ABI; AddressSanitizer
+hangs at -m32 under the toolchain's emulation, so it is run by hand on the Mac), `test_wundertow_load` (the loader over
+real pipes and processes: a helper that dies at every byte of its answer, one that faults, one that says anything at
+all, and the window's loop itself) and `test_wundertow_form` (the page model of forms, what is sent to the byte, and
+the fields used by keys and pointer). `make test-web` has `wundertow --load`: every kind of picture over verified HTTPS,
+those that fail, and one over http that asks the http server for nothing. `make test-usb`'s guiapps has the pictures on the
+screen, pixel by pixel, find, Tab, a visited link and the thumb dragged; its guiweb scenario (`tools/gui_apps_webnet.py`),
+a boot of its own with a USB Ethernet adapter and a server in the test, has Stop on a load that never ends, a GET form
+reaching the server with the right query, and a POST form and a password form that do not.
 
 ## Updating the CA bundle and Mbed TLS
 

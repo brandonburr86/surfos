@@ -403,6 +403,15 @@ SMOKE = [
                                                                        '[exit status 2]']),
     ('wundertow --layout /initrd/nowhere.html', ['wundertow: /initrd/nowhere.html: ', '[exit status 1]']),
     ('wundertow /initrd/www/index.html', ["wundertow: no window: this terminal is no desktop's", '[exit status 1]']),
+    # 11/1/26 (stage 2.3): as the window loads, through a helper process and a pipe; what it could not load comes back
+    # as a sentence; no task is left of them
+    ('wundertow --load http://10.0.2.2:{http}/wundertow-layout', ['address: http://10.0.2.2:', 'status: 200',
+                                                                  'SurfOS HTTP test OK: /wundertow-layout']),
+    ('wundertow --load /initrd/www/index.html', ['address: file:///initrd/www/index.html', 'title: SurfOS',
+                                                 ' x2 b "SurfOS"']),
+    ('wundertow --load /initrd/nowhere.html', ['wundertow: /initrd/nowhere.html: ', '[exit status 1]']),
+    ('wundertow --load http://10.0.2.2:1/', ['wundertow: 10.0.2.2', '[exit status 1]']),
+    ('ps', ['surfsh (ring 3)'], [], ['wundertow']),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
     ('@nettest-host', []),
     ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),

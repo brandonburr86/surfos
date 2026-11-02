@@ -46,6 +46,7 @@ void wp_paint(const struct wl_layout *l, const struct wd_document *d, const stru
    it) at scale, clipped to the target's viewport; text returns the x after it */
 void wp_fill(const struct wp_target *t, int x, int y, int w, int h, unsigned int color);
 void wp_frame(const struct wp_target *t, int x, int y, int w, int h, unsigned int color);
+void wp_tint(const struct wp_target *t, int x, int y, int w, int h, unsigned int color);    /* what is there, through a colour */
 int wp_text(const struct wp_target *t, int x, int y, const char *s, size_t n, int scale, unsigned int style,
             unsigned int color);
 

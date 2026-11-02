@@ -35,6 +35,7 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
+  guiweb     (11/1/26) the web browser in a window with a server: Stop, a GET form, what is not sent (gui_apps_webnet.py)
   guiapps    (10/17/26) the desktop's applications (Terminal, System Monitor, Disks, Log, Clock,
              Character Map, Image Viewer, Hex) at 1920x1080, each track's checks in a file of its
              own (tools/gui_apps_*.py), with a FAT32 data stick whose files are read back here and
@@ -923,6 +924,16 @@ def scenario_guiapps(args, image, firmware, outdir):
     from gui_apps_scenario import run
     helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
     return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
+
+
+def scenario_guiweb(args, image, firmware, outdir):
+    """11/1/26 (milestone 2 of the web browser in a window, stage 2.7): what it does with a server, on the screen: Stop,
+    a GET form that reaches it, a POST form and a password form that do not (tools/gui_apps_webnet.py). A boot of its
+    own, with a USB Ethernet adapter: guiapps has no network, and holds the kernel's heap to the byte."""
+    from gui_apps_scenario import run
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers, tracks=('gui_apps_webnet',),
+               more=['-netdev', 'user,id=n0', '-device', USBNET_DEV], first=('dhcp',), name='guiweb')
 
 
 def scenario_graphics(args, image, firmware, outdir):
@@ -2561,7 +2572,7 @@ def scenario_settings(args, image, firmware, outdir):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
-             'guiapps': scenario_guiapps,
+             'guiapps': scenario_guiapps, 'guiweb': scenario_guiweb,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit, 'crashstack': scenario_crashstack, 'shutdown': scenario_shutdown,
              'bootpanic': scenario_bootpanic,     # 10/25/26 (track A)
@@ -2670,7 +2681,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'guiweb', 'highmem', 'fallback', 'kernel-shell',
+                               'no-pit',
                                'crashstack', 'shutdown', 'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'no-kernel']:

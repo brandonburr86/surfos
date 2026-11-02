@@ -59,7 +59,7 @@ struct ut_html_attr {
     size_t cap;
 };
 
-#define UT_HTML_ATTRS_MAX 32
+#define UT_HTML_ATTRS_MAX 48
 
 /* A tag as ut_html_tag() reads it. The reader sets attrs, nattrs and val[] (buffers of attrs[i].cap + 1
    bytes) once; each read sets the rest. */
@@ -95,6 +95,11 @@ int ut_html_utf16(const unsigned char *in, size_t len, const char *label, unsign
    UT_CS_1252, or UT_CS_ASCII with the name to give in a notice in unknown (cap bytes). */
 int ut_html_charset(const unsigned char *in, size_t len, const char *label, int html, size_t *start,
                     char *unknown, size_t cap);
+
+/* The charset a page names anywhere, past what ut_html_charset() reads: by an <?xml encoding=...?> at its start, or a <meta>
+   in all of it: a UT_CS_*, with UT_CS_ASCII for one this browser does not read, or -1 when it names none (11/1/26: a form's
+   bytes depend on it, on a page whose bytes do not say) */
+int ut_html_declared(const unsigned char *in, size_t len);
 
 /* No Content-Type: a body is HTML when it starts like HTML (the MIME sniffing standard's list) */
 int ut_html_sniff(const unsigned char *in, size_t len);

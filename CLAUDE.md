@@ -40,9 +40,10 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # writes or are pulled out at every write, with a save pulled at each of its writes (test_fatfs),
                   # programs' windows: the kernel's window object (test_win) and the desktop's side (test_guiclient),
                   # the web browser's window: its page model, its layout and painting, the browser itself
-                  # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser)
+                  # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser), and 11/1/26 its pictures,
+                  # its helpers and its forms (test_wundertow_image, test_wundertow_load, test_wundertow_form)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 23 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -127,7 +128,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            the editor (Ctrl+R, !!, Alt+.) and complete by tests/host/test_editor.c),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            wundertow/ (10/25/26: the web browser in a window: doc the page as boxes, font, layout, paint, browser the
-           window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window"),
+           window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window"; 11/1/26 image*
+           the picture decoders, form forms, find, loader, loadproc and pump the window's helpers, helper a helper),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
            httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 16),
            ftpd/ (10/24/26, the file transfer server: main the commands, server the poll loop, ftp the protocol;
@@ -465,3 +467,14 @@ there keeps Undertow's text byte-identical (test_undertow_html) and the window's
 opens it), and on the host with `test_wundertow_layout --render FILE OUT.ppm [WIDTH]`;
 its window on the screen is test-usb's guiapps (`tools/gui_apps_web.py`).
 Layout and painting are integer-only, as programs with windows must be.
+
+11/1/26 (milestone 2): the window never waits and never parses a server's bytes itself but its HTML: a helper
+(`wundertow --helper`, `user/wundertow/loader.h`) loads each page and picture, and what it sends down its pipe is read as
+hostile, since its process has parsed a server's. A process killed by a fault keeps its descriptors until its parent
+collects it, so `ld_reap()` looks while any helper runs: keep that. Picture decoders (`image*.c`) take hostile bytes: sizes in
+64 bits, memory bounded before it is asked for, every allocation checked, a whole picture or none; a new format gets a
+family in `tools/wundertow-images.py`, and `test_wundertow_image` cuts and damages every file. What a page loads for itself
+goes through `may_load()` in browser.c: an https page nothing over http, an http(s) page no file. Forms (`form.h`): only a
+person's key or click calls `fm_submit()`, a POST or a password form is never sent, a form a limit touched neither, and
+`fm_forget()` empties password fields when a page is left. `GUIAPPS_ONLY=gui_apps_web` runs the browser's offline checks,
+`--scenario guiweb` those with a server.

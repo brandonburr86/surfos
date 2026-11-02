@@ -8,7 +8,7 @@ What the window shows and what its keys and pointer do, with no window and no ne
 (or why they failed). So all of it runs in the host tests.
 
     +----------------------------------------------------------------------+
-    | [<- Back] [Forward ->] [Reload] [ https://example.com/       ] [Go] |   toolbar, 30 + 1
+    | [<- Back] [Forward ->] [Reload] [ https://example.com/       ] [Go] |   toolbar, 30 + 1 (Reload is Stop meanwhile)
     |----------------------------------------------------------------------|
     | the page, laid out at the window's width less the scroll bar     |##|
     |                                                                  |##|
@@ -18,15 +18,39 @@ What the window shows and what its keys and pointer do, with no window and no ne
 
 Keys (the desktop's: a byte as typed, or WB_KEY_* for those that are none, as surfos/win.h numbers them):
 in the page, the arrows (32 pixels), Page Up and Page Down, Space, Home and End scroll, Backspace goes
-back, Ctrl+L goes to the address field (all of it chosen) and Ctrl+R loads the page again; in the address
-field, typing edits, Enter loads, Escape gives the page's address back, Tab returns to the page. The
-wheel scrolls 16 pixels a row. A link is followed when the button is let go over the link it was pressed
-on; its address shows in the status bar while the pointer is over it.
+back, Ctrl+L goes to the address field (all of it chosen), Ctrl+R loads the page again and Escape stops
+what is loading; in the address field, typing edits, Enter loads, Escape gives the page's address back, Tab
+returns to the page. The wheel scrolls 16 pixels a row. A link is followed when the button is let go over
+the link it was pressed on; its address shows in the status bar while the pointer is over it.
 
 Pages come from http, https and file. A file page (file:///path, typed, or a link on a file page) is read
 by the program; its links resolve against the host WB_FILE_HOST, which only a file page's links lead back
 to files: an http(s) page never opens one. History: WB_HISTORY pages and WB_HISTORY_BYTES at most, each
 with the place it was read at; back and forward load nothing.
+
+11/1/26, loads (stage 2.3): the browser asks and the program carries out, a helper for each load (loader.h), while
+the window goes on answering. wb_take() gives what is to start: a page first, then what the page shown wants, at
+most WB_RESOURCES of those at a time. wb_cancel() says what is to stop: a new page takes the place of the one on its
+way, and a page that is left takes its pictures' loads with it. Stop (wb_stop()) ends them all. What a page loads for
+itself comes under may_load()'s rules, the rules of Undertow and of files: an https page loads nothing over http, an
+http(s) page reads no file, a file page's file addresses are files. wb_fetch() puts one more address on a page's
+list, for stage 3.3's stylesheets: a text, of a page's limits; its answer comes to wb_text().
+
+11/1/26, pictures (stage 2.4): the page shown loads its images after it has come, in the order of the page, a few at a
+time. An image's frame shows until its pixels are there. When a picture's size changes what the page looks like, the
+page is laid out again at the next paint, and the view keeps what was at its top (wl_place()). A page keeps WB_PAGE_IMAGES
+bytes of pixels at most: past that an image's frame stays, its pixels unasked for. They count in WB_HISTORY_BYTES.
+
+11/1/26, reading (stage 2.5): Ctrl+F opens a find field in the status bar, and every key looks for the word from where
+it is; Enter goes to the next place and Shift+Enter to the one before, round the page; Escape closes it. Tab and
+Shift+Tab go from link to link in the page's order, scrolling each into view and drawing it focused, and Enter follows
+it. Links to where this window has been take the visited colour: that is kept here for as long as the window runs,
+as a hash of each address, and written nowhere.
+
+11/1/26, forms (stage 2.6; form.h): a page's fields are used as a person uses them, by the pointer or by Tab and the keys:
+typing in text fields and text areas, Space for a checkbox, a radio button or a button, a select's list by Space or a
+click, or its Up and Down straight away. Enter in a field, or a submit button, submits its form as a GET, by the same
+rules as the rest of a page's addresses (may_load()). The form says why when it sends nothing.
 */
 
 #ifndef WUNDERTOW_BROWSER_H
@@ -48,8 +72,11 @@ with the place it was read at; back and forward load nothing.
 #define WB_MIN_H         160
 #define WB_FILE_HOST     "local.file.invalid"   /* a file page's base: https://local.file.invalid/path */
 #define WB_ADDR_MAX      (UT_URL_MAX + 16)
+#define WB_RESOURCES     3              /* loads at a time for what a page brings with it */
+#define WB_TEXTS_MAX     32             /* wb_fetch()es of a page */
+#define WB_PAGE_IMAGES   (32u << 20)    /* the bytes of pixels a page keeps */
 
-/* the keys that are no bytes: surfos/win.h's WIN_KEY_* */
+/* the keys that are no bytes: surfos/win.h's WIN_KEY_*, and Shift+Enter, which main.c makes of Enter with WIN_MOD_SHIFT */
 #define WB_KEY_UP        0x100
 #define WB_KEY_DOWN      0x101
 #define WB_KEY_LEFT      0x102
@@ -59,6 +86,11 @@ with the place it was read at; back and forward load nothing.
 #define WB_KEY_PGUP      0x106
 #define WB_KEY_PGDN      0x107
 #define WB_KEY_DELETE    0x108
+#define WB_KEY_BACKTAB   0x10a          /* 11/1/26: Shift+Tab, Shift+Enter */
+#define WB_KEY_SHIFT_ENTER 0x10b
+
+#define WB_FIND_MAX      256            /* the bytes of a word to find */
+#define WB_VISITED       8192           /* places kept: hashes, in a table twice as large as they may fill */
 
 struct wb_page {
     struct wd_document doc;
@@ -71,14 +103,35 @@ struct wb_page {
     int status, verified;
     char tls[16], reason[64];
     size_t bytes;
+    /* 11/1/26 */
+    unsigned int serial;                /* which page: every load of one gets a new one */
+    struct wb_text *texts;              /* wb_fetch()'s list */
+    int ntexts;
+    int halted;                         /* Stop: it loads no more until it is loaded again */
+    size_t pic_bytes;                   /* of bytes: its pictures', at most WB_PAGE_IMAGES */
+};
+
+enum { WB_LOAD_PAGE, WB_LOAD_IMAGE, WB_LOAD_TEXT };     /* what a request is for */
+
+struct wb_text {                        /* a text a page wants */
+    char url[WB_ADDR_MAX];              /* as the program loads it */
+    int tag, state;                     /* the caller's number for it; WP_* */
 };
 
 struct wb_request {                     /* a load the program is to carry out */
     char url[WB_ADDR_MAX];              /* https://..., http://..., file:///path */
     int reload;                         /* it takes the place of the page shown, at its place */
+    /* 11/1/26 */
+    int kind;                           /* WB_LOAD_* */
+    unsigned int page;                  /* WB_LOAD_IMAGE, WB_LOAD_TEXT: the page it is for: wb_page's serial */
+    int item;                           /* which picture; wb_fetch()'s tag */
+    size_t budget;                      /* WB_LOAD_IMAGE: the bytes of pixels the page has room for */
 };
 
-enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR };
+enum { WB_FOCUS_PAGE, WB_FOCUS_ADDR, WB_FOCUS_FIND, WB_FOCUS_FIELD };
+
+#define WB_CANCEL_PAGE       1          /* wb_cancel(): the page's load, */
+#define WB_CANCEL_RESOURCES  2          /* the loads of what the page shown wanted */
 
 struct wb {
     struct wb_page *page[WB_HISTORY];
@@ -97,6 +150,27 @@ struct wb {
     int want;                           /* a request waits for the program */
     struct wb_request req;
     struct wp_theme theme;
+    /* 11/1/26 */
+    unsigned int serial;                /* the last page's */
+    int running;                        /* a page's load was taken and has not ended */
+    int inflight;                       /* resources' loads taken and not ended */
+    int cancel;                         /* WB_CANCEL_* for the program to carry out */
+    int edited;                         /* the address was typed in since it was last set */
+    int stop_held;                      /* the toolbar's third button was pressed as Stop */
+    /* find in the page */
+    char find[WB_FIND_MAX];             /* the word */
+    size_t find_len, find_at;           /* its bytes; where it was found */
+    int find_open, find_hit;            /* the field is open; the word is there, at find_at */
+    int find_index, find_total;         /* which place of how many */
+    /* links by keyboard, and where the window has been */
+    int tab_link;                       /* the link with the keyboard's focus, or -1 */
+    unsigned long long seen[WB_VISITED];
+    int seen_count;
+    /* forms */
+    int field;                          /* the control with the keyboard's focus (WB_FOCUS_FIELD), or -1 */
+    int press_field;                    /* the control the button went down on, or -1 */
+    int list;                           /* a select's list is open: this control's, or -1 */
+    int list_at, list_top;              /* the option marked, the first shown */
 };
 
 /* A browser in a window of w x h, with its start page; 0, or -1 without memory */
@@ -112,10 +186,27 @@ int wb_resize(struct wb *b, int w, int h);
 /* An address as if typed and Enter pressed: a request, or the status says why not */
 void wb_go(struct wb *b, const char *typed);
 
-/* The program's side: the request that waits (1, and it no longer waits), then its page or why it failed */
+/* The program's side: the next load to start (1), then its page or why it failed. wb_cancel() first: what must end
+   before that (WB_CANCEL_*, said once). */
 int wb_take(struct wb *b, struct wb_request *out);
+int wb_cancel(struct wb *b);
 void wb_loaded(struct wb *b, struct wb_page *p, int reload);        /* the browser owns p now */
 void wb_failed(struct wb *b, const char *url, const char *why);
+
+/* Stop: everything loading ends here, and the page shown wants nothing more until it is loaded again */
+void wb_stop(struct wb *b);
+int wb_busy(const struct wb *b);                                    /* is anything loading? */
+
+/* For stage 3.3: one more address for page p (usually the one shown), which load through a helper with a page's
+   limits: url as the document has it, resolved, and under may_load()'s rules. 0, or -1 (not allowed, or too many). The
+   answer comes to wb_text(): the body (with a NUL after its len bytes) and its media type, or NULL and why. */
+int wb_fetch(struct wb *b, struct wb_page *p, const char *url, int tag);
+void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t len, const char *type, const char *why);
+
+/* Stage 2.4: the answers to a page's pictures. wb_image() owns px (pw x ph pixels) now; w x h is the picture's own size.
+   wb_image_failed(): none to be had; w x h its size if that is known, else 0. */
+void wb_image(struct wb *b, unsigned int page, int item, int w, int h, int pw, int ph, unsigned int *px);
+void wb_image_failed(struct wb *b, unsigned int page, int item, int w, int h);
 
 /* A page from a response: file 1 for a file page (its response's url is https://WB_FILE_HOST/path); NULL with
    why (out of memory) */

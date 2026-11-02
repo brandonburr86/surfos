@@ -50,6 +50,14 @@ struct ut_response {
 int ut_fetch(const struct ut_url *url, const struct ut_config *cfg, struct ut_response *out,
              char *err, size_t cap);
 
+/* 11/1/26: the same load for a response that need not be text (the browser in a window's pictures), a body of at most
+   max bytes (UT_ANY_MAX at most): a body of any Content-Type, or of none, is a success, and out->content_type says what
+   it said; nothing else changes: the same redirects and framing rules, HTTPS as checked, no redirect from https: to
+   http:, a Content-Encoding other than identity refused. */
+#define UT_ANY_MAX (4u * 1024 * 1024)
+int ut_fetch_any(const struct ut_url *url, const struct ut_config *cfg, size_t max, struct ut_response *out,
+                 char *err, size_t cap);
+
 /* Free what a response owns and zero it; a zeroed response, or NULL, is fine. */
 void ut_response_free(struct ut_response *r);
 

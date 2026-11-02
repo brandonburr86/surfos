@@ -4,9 +4,13 @@ SurfOS Undertow's window: a page laid out at a width
 File: layout.h  Date: 10/25/26
 ----------------------
 A document (doc.h) at a width in pixels becomes a list of things to paint, top to bottom as the page reads:
-text, backgrounds, frames, rules, list markers, fields and images (their boxes until images are loaded), each
-at its place on the page, with the link it belongs to. paint.c paints any part of it; the window finds links
-under the pointer and the place of a fragment target in it. Whole pixels only, no floating point.
+text, backgrounds, frames, rules, list markers, fields and images, each at its place on the page, with the link
+it belongs to. paint.c paints any part of it; the window finds links under the pointer and the place of a
+fragment target in it. Whole pixels only, no floating point.
+
+An image's box has the size its width and height attributes give it, from the picture's own shape when only one
+of them is there; else, once the picture is known (doc.h's pics), the picture's size; until then its alt text in a
+frame, or nothing when it has no alt text. It is never wider than the room it has, and keeps its shape.
 
 The rules, as browsers have them by default: an 8-pixel margin around the page; paragraphs, headings, lists
 and quotes 16 pixels apart (two margins together are the larger of them); lists, definitions and quotes
@@ -42,6 +46,9 @@ struct wl_item {
     unsigned int color;                 /* its colour, or WD_NONE: the page's (text, link, frame) */
     int link;                           /* the link it belongs to, or -1 */
     unsigned int off, len;
+    /* 11/1/26 */
+    int image;                          /* WI_IMAGE: the document's pics[image], or -1 */
+    int control;                        /* WI_FIELD: the document's controls[control], or -1 */
 };
 
 struct wl_layout {
@@ -64,8 +71,17 @@ void wl_free(struct wl_layout *l);
 /* The link of what is at (x, y) on the page, or -1 */
 int wl_link_at(const struct wl_layout *l, int x, int y);
 
+/* 11/1/26: the control whose field is at (x, y), or -1; the item of a control, or -1 */
+int wl_control_at(const struct wl_layout *l, int x, int y);
+long wl_control_item(const struct wl_layout *l, int control);
+
 /* The top of the line where the document's text offset is (a fragment target's place), 0 when none */
 int wl_offset_y(const struct wl_layout *l, size_t offset);
+
+/* 11/1/26: what is at the top of a view that starts at y, so that the same can be there after the page is laid out
+   again: its text offset and how far into it y is (1), or 0 when nothing is. wl_place_y() is that place in a layout. */
+int wl_place(const struct wl_layout *l, int y, size_t *offset, int *into);
+int wl_place_y(const struct wl_layout *l, size_t offset, int into);
 
 /* The layout as text, one line per item (the host tests' fixtures): malloc'ed, NULL without memory */
 char *wl_dump(const struct wl_layout *l, const struct wd_document *d);

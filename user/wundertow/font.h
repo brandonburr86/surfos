@@ -32,4 +32,8 @@ size_t wf_count(const char *s, size_t n);
 /* How many of the n bytes of s fit in width pixels at scale (whole characters; *cells gets their cells) */
 size_t wf_fit(const char *s, size_t n, int width, int scale, size_t *cells);
 
+/* 11/1/26: the width in pixels of n bytes of UTF-8 of a laid-out item, given its scale and style: anything that needs
+   a place inside a text item (a match of find, a focus box) measures it through this */
+int wf_width(const char *s, size_t n, int scale, unsigned int style);
+
 #endif

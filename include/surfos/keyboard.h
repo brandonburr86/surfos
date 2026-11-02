@@ -53,6 +53,7 @@ File: keyboard.h    Date: 4/23/04, rebuilt 10/2026 (roadmap C2)
 void init_keyboard(void);
 int keyboard_handler(u_int irq, void *param);
 void keyboard_poll(void);       /* from the timer tick; does nothing unless profile=laptop turned polling on */
+u_int keyboard_mods(void);      /* 11/1/26: KEY_SHIFT, KEY_ALT, KEY_CTRL held now */
 const char *keyboard_describe(char *buf, size_t size);
 
 int testLED(u_char ledStatus);

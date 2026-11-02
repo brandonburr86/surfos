@@ -1295,6 +1295,114 @@ def redirect_relative(ex):
     redirect(ex, 302, '../about')
 
 
+# 11/1/26: pictures for the browser in a window (stage 2.4): a page with one of each kind, made here: a tiny PNG, a GIF
+# and a BMP of one colour each, a JPEG of the same small baseline file the host tests use. /pictures on the https server
+# also asks for one over http, which must not reach the http server.
+def little_png(rgb):
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    raw = b''.join(b'\0' + bytes(rgb) * 4 for _ in range(3))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 4, 3, 8, 2, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+
+
+def little_bmp(rgb):
+    row = bytes((rgb[2], rgb[1], rgb[0])) * 4
+    body = row * 3
+    return (b'BM' + struct.pack('<IHHI', 54 + len(body), 0, 0, 54) +
+            struct.pack('<IiiHHIIiiII', 40, 4, 3, 1, 24, 0, 0, 0, 0, 0, 0) + body)
+
+
+def little_gif_bytes(rgb):
+    # LZW by the book, as tools/wundertow-images.py has it: a colour table of two, twelve pixels of the first
+    out, acc, n, size = bytearray(), 0, 0, 3
+    next_code = 6
+
+    def put(code):
+        nonlocal acc, n
+        acc |= code << n
+        n += size
+        while n >= 8:
+            out.append(acc & 255)
+            acc >>= 8
+            n -= 8
+    table, prefix = {}, None
+    put(4)
+    for v in [0] * 12:
+        if prefix is None:
+            prefix = (v,)
+            continue
+        s = prefix + (v,)
+        if s in table:
+            prefix = s
+            continue
+        put(prefix[0] if len(prefix) == 1 else table[prefix])
+        table[s] = next_code
+        next_code += 1
+        if next_code == (1 << size) + 1 and size < 12:
+            size += 1
+        prefix = (v,)
+    put(prefix[0] if len(prefix) == 1 else table[prefix])
+    put(5)
+    if n:
+        out.append(acc & 255)
+    return (b'GIF89a' + struct.pack('<HHBBB', 4, 3, 0xf1, 0, 0) + bytes(rgb) + bytes(9) +
+            b'\x2c' + struct.pack('<HHHHB', 0, 0, 4, 3, 0) + b'\x02' + bytes([len(out)]) + bytes(out) + b'\0\x3b')
+
+
+@route('/pic/red.png', 'a PNG of 4 x 3 pixels, all red')
+def pic_png(ex):
+    ex.respond(200, 'OK', 'image/png', little_png((255, 0, 0)))
+
+
+@route('/pic/green.gif', 'a GIF of 4 x 3 pixels, all green')
+def pic_gif(ex):
+    ex.respond(200, 'OK', 'image/gif', little_gif_bytes((0, 255, 0)))
+
+
+@route('/pic/blue.bmp', 'a BMP of 4 x 3 pixels, all blue, with no Content-Type')
+def pic_bmp(ex):
+    ex.respond(200, 'OK', None, little_bmp((0, 0, 255)))
+
+
+@route('/pic/gray.jpg', 'a JPEG of 16 x 16 pixels, by the host tests\' fixtures')
+def pic_jpg(ex):
+    path = Path(__file__).resolve().parent.parent / 'tests/fixtures/wundertow/images/own444.jpg'
+    ex.respond(200, 'OK', 'image/jpeg', path.read_bytes())
+
+
+@route('/pic/moved.png', 'a redirect to the PNG')
+def pic_moved(ex):
+    redirect(ex, 302, '/pic/red.png')
+
+
+@route('/pic/broken.png', 'a PNG cut in half')
+def pic_broken(ex):
+    body = little_png((255, 0, 0))
+    ex.respond(200, 'OK', 'image/png', body[:len(body) // 2])
+
+
+@route('/pic/page.html', 'text/html where a picture was asked for')
+def pic_page(ex):
+    ex.respond(200, 'OK', 'text/html', b'<p>Not a picture.')
+
+
+@route('/pictures', 'a page of pictures of each kind, a broken one, a missing one, one over http')
+def pictures(ex):
+    body = ('<!DOCTYPE html><title>Pictures</title><img src="/pic/red.png"><img src="/pic/green.gif">'
+            '<img src="/pic/blue.bmp"><img src="/pic/gray.jpg"><img src="/pic/moved.png">'
+            '<img src="/pic/broken.png" alt="broken"><img src="/pic/page.html" alt="a page">'
+            '<img src="/no/such/picture.png" alt="missing">'
+            f'<img src="{ex.url("/pic/red.png", "http")}" alt="over http">'
+            '<img src="/pic/gzip.png" alt="gzip">').encode()
+    ex.respond(200, 'OK', 'text/html', body)
+
+
+@route('/pic/gzip.png', 'a PNG sent compressed, which is refused')
+def pic_gzip(ex):
+    ex.respond(200, 'OK', 'image/png', gzip.compress(little_png((255, 0, 0))), extra=(('Content-Encoding', 'gzip'),))
+
+
 @route('/redirect/to-http', 'a redirect to the http server\'s /about (from https: a downgrade, refused)')
 def redirect_to_http(ex):
     redirect(ex, 302, ex.url('/about', 'http'))

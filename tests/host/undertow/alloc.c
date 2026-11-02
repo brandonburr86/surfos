@@ -10,10 +10,13 @@ alloc.h. Built without the renames, so these are the host's own functions.
 #include <string.h>
 #include "alloc.h"
 
-long ut_alloc_live, ut_alloc_calls, ut_alloc_fail_after = -1;
+long ut_alloc_live, ut_alloc_calls, ut_alloc_fail_after = -1, ut_alloc_fail_one = -1;
+int ut_alloc_fill = -1;
+void (*ut_alloc_on_free)(void *p);
 
 static int refuse(void) {
     ut_alloc_calls++;
+    if(ut_alloc_fail_one >= 0 && ut_alloc_fail_one-- == 0) return 1;
     if(ut_alloc_fail_after < 0) return 0;
     if(ut_alloc_fail_after == 0) return 1;
     ut_alloc_fail_after--;
@@ -25,6 +28,7 @@ void *ut_test_malloc(size_t n) {
     if(refuse()) return NULL;
     p = malloc(n ? n : 1);
     if(p) ut_alloc_live++;
+    if(p && ut_alloc_fill >= 0) memset(p, ut_alloc_fill, n ? n : 1);
     return p;
 }
 
@@ -46,6 +50,7 @@ void *ut_test_realloc(void *p, size_t n) {
 }
 
 void ut_test_free(void *p) {
+    if(p && ut_alloc_on_free) ut_alloc_on_free(p);
     if(p) ut_alloc_live--;
     free(p);
 }
