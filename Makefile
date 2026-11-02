@@ -68,6 +68,7 @@ USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256
 USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
+USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): the calculator, user/bc/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -715,6 +716,38 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
+
+# 11/01/26 (the command-line suite, track lang): bc, a program of several files in user/bc/. tests/host/test_bc.c runs
+# num.c, parse.c, vm.c and lib.c as they are, their memory through tests/host/bc_alloc.h; only main.c makes system calls.
+# No sanitizer build here: the test's header says how to run them on the Mac.
+BC_SRC       = $(wildcard user/bc/*.c)
+BC_OBJ       = $(BC_SRC:user/bc/%.c=$(BUILD)/user/bc/%.o)
+BC_HOST_OBJ  = $(addprefix $(BUILD)/host/bc/,num.o parse.o vm.o lib.o)
+DEPS        += $(BC_OBJ:.o=.d)
+$(BUILD)/user/bc/%.o: user/bc/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/bc: $(BC_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(BC_OBJ) $(USER_LIB)
+
+$(BUILD)/host/bc/%.o: user/bc/%.c user/bc/bc.h user/bc/num.h tests/host/bc_alloc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -include tests/host/bc_alloc.h -c $< -o $@
+
+$(BUILD)/host/test_bc: tests/host/test_bc.c $(BC_HOST_OBJ)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/bc tests/host/test_bc.c $(BC_HOST_OBJ) -o $@
+
+unittest: unittest-lang
+.PHONY: unittest-lang
+unittest-lang: $(BUILD)/host/test_bc
+	$(BUILD)/host/test_bc
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
