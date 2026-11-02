@@ -89,8 +89,6 @@ struct frame {                          /* an open element that has a box */
     struct inline_state saved;
     unsigned char off;                  /* a disabled fieldset: 1, and 2 from its first legend */
     unsigned char on;                   /* that legend: what is in it is not disabled by it */
-    unsigned char holds_form;           /* the open form's element */
-    unsigned int unframed;              /* b->unframed at its start */
 };
 
 struct bd {
@@ -127,14 +125,6 @@ struct bd {
     int skip_live;                      /* the hidden attribute hid it: its forms are still the page's */
     unsigned int skip_inert;            /* elements open in it whose content is in no form */
     int inert_el;                       /* of which */
-    int skip_html;                      /* in svg or math, HTML came back: see foreign_tag() */
-    int form_open;                      /* a form's element is open (the standard's form element pointer; b->fb.open is
-                                           which, -1 past the limit of forms) */
-    unsigned int unframed;              /* elements open that have no frame: inline ones, those too deep to keep */
-    unsigned int form_unframed;         /* how many at the open form's start */
-    int tail;                           /* a form that ended with elements left open in it, -1: none: see form_end() */
-    int tail_floor;                     /* what is left of it are the frames from here up, -1: none */
-    int tail_unframed;                  /* and elements with no frame, over this many, -1: none */
     int base_seen;                      /* the first <base href>, the only one that counts */
 
     /* inline content */
@@ -634,14 +624,6 @@ static void link_close(struct bd *b);
 static void field_close(struct bd *b);
 static void option_end(struct bd *b);
 
-/* Is anything still open of what a form's end left open? */
-static void tail_check(struct bd *b) {
-    if(b->tail < 0) return;
-    if(b->depth <= b->tail_floor) b->tail_floor = -1;
-    if((int)b->unframed <= b->tail_unframed) b->tail_unframed = -1;
-    if(b->tail_floor < 0 && b->tail_unframed < 0) b->tail = -1;     /* (not looked at in hidden content, which is left too) */
-}
-
 /* Open el on the stack with a box of kind (kind < 0: no box of its own); NULL when the stack is full (it is
    only counted) or the box cannot be made */
 static struct frame *push(struct bd *b, int el, int kind) {
@@ -649,20 +631,17 @@ static struct frame *push(struct bd *b, int el, int kind) {
     int box;
     if(b->depth == STACK_MAX) {
         b->over[el]++;
-        b->unframed++;
         return NULL;
     }
     box = kind >= 0 ? add_box(b, kind, box_now(b)) : box_now(b);
     if(box < 0) {
         b->over[el]++;
-        b->unframed++;
         return NULL;
     }
     f = &b->st[b->depth];
     memset(f, 0, sizeof(*f));
     f->el = (unsigned char)el;
     f->box = box;
-    f->unframed = b->unframed;
     b->open[el]++;
     b->depth++;
     if(kind >= 0) b->target = -1;
@@ -689,12 +668,10 @@ static void pop(struct bd *b) {
     if(is_list(el)) b->lists--;
     if(el == E_TABLE) b->tables--;
     if(el >= E_H1 && el <= E_H6) b->headings--;
-    b->unframed = f->unframed;
     b->depth--;
     b->open[el]--;
     b->target = -1;
     b->space = 0;
-    tail_check(b);
 }
 
 static void pop_to(struct bd *b, int i) {           /* close st[i] and everything inside it */
@@ -1069,16 +1046,9 @@ static int count_attr(const struct ut_html_tag *t, int a, int lo, int hi, int no
     return v > hi ? hi : (int)v;
 }
 
-/* A control while no form is open and something is left open from one that ended: a browser may have it in that form, by
-   elements that are not followed here that far, so that form does not go. (With a form= of its own, it is that form's.) */
-static void left_open(struct bd *b, const struct ut_html_tag *t) {
-    if(b->tail >= 0 && !b->form_open && !t->seen[A_FORM]) b->d.forms[b->tail].too_much = 1;
-}
-
 /* A control as this tag gives it: of kind, role, and value (NULL: the tag's value attribute); checked its own */
 static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, int checked) {
     struct fm_new n;
-    left_open(b, t);
     memset(&n, 0, sizeof(n));
     n.kind = kind;
     n.role = role;
@@ -1283,14 +1253,10 @@ static void start_hidden(struct bd *b, struct ut_html_tag *t) {
     b->skip_n = 1;
     b->skip_foreign = t->el == E_SVG || t->el == E_MATH;
     b->skip_inert = 0;
-    b->skip_html = 0;
 }
 
-/* A form's start. Its address, as a link's, has no whitespace at its ends. In a form, no form starts. */
+/* A form's start. Its address, as a link's, has no whitespace at its ends. */
 static void form_start(struct bd *b, struct ut_html_tag *t) {
-    if(b->form_open) return;
-    b->form_open = 1;
-    b->form_unframed = b->unframed;
     if(t->seen[A_ACTION]) strip_attr(t, A_ACTION);
     if(t->seen[A_ID] && t->over[A_ID]) b->fb.lost = 1;          /* a form= could name it, or another of its start */
     fm_form(&b->d, &b->fb, t->seen[A_ID] ? t->val[A_ID] : NULL, t->seen[A_ACTION] ? t->val[A_ACTION] : NULL,
@@ -1298,67 +1264,9 @@ static void form_start(struct bd *b, struct ut_html_tag *t) {
             !t->seen[A_ACCEPT] ? NULL : t->over[A_ACCEPT] ? "too-long" : t->val[A_ACCEPT]);
 }
 
-/* What </form> ends: the form, not what is open in it, which stays open, as the standard has it (the element is taken off
-   the stack). What a browser then has in that form is left to its elements, which are not followed that far: what is left
-   open is remembered, a control in it marks the form (left_open()), and nothing is ever added to a form that ended. So a
-   page whose elements nest as they should has no such thing, and a form that goes holds only what was inside it. */
-static void form_end(struct bd *b, int hidden) {
-    int i, form = b->fb.open, left = -1;
-    unsigned int unframed = b->unframed;            /* they stay open through what ends here */
-    b->form_open = 0;
-    fm_form_end(&b->fb);
-    for(i = b->depth - 1; i > 0 && !b->st[i].holds_form; i--) ;
-    if(i > 0) {                                     /* (its element may have gone, with what held it) */
-        b->st[i].holds_form = 0;
-        if(in_scope(b, E_FORM, SCOPE) != i) left = i;   /* behind a table's cell, say: it stays open, and all above it */
-        else {
-            int e;
-            while(b->depth - 1 > i && ((e = b->st[b->depth - 1].el) == E_P || e == E_LI || e == E_DD || e == E_DT)) pop(b);
-            if(b->depth - 1 == i) pop(b);
-            else {
-                memmove(&b->st[i], &b->st[i + 1], (size_t)(b->depth - 1 - i) * sizeof(b->st[0]));
-                b->depth--;
-                b->open[E_FORM]--;
-                left = i;
-            }
-        }
-    }
-    b->unframed = unframed;
-    if(form < 0 || (left < 0 && !hidden && unframed <= b->form_unframed)) return;
-    if(b->tail >= 0) b->d.forms[b->tail].too_much = 1;  /* one is remembered: of two, the one before does not go */
-    b->tail = form;
-    b->tail_floor = left;
-    b->tail_unframed = unframed > b->form_unframed ? (int)b->form_unframed : -1;
-}
-
 /* Elements whose content is in no form, even under the hidden attribute: not object and applet, whose content is what shows
    when they cannot, and a browser's form holds what is in them */
 static int inert(int el) { return (ut_html_flags(el) & F_HIDE) && el != E_OBJECT && el != E_APPLET; }
-
-static int control_tag(int el) { return el == E_INPUT || el == E_SELECT || el == E_TEXTAREA || el == E_BUTTON; }
-
-/* A tag in svg or math, whose controls are none, but for what is HTML again inside these: not followed, so that a form
-   that may hold such a control is not sent */
-static void foreign_tag(struct bd *b, const struct ut_html_tag *t) {
-    static const char *const html[] = { "foreignobject", "desc", "title", "mi", "mo", "mn", "ms", "mtext", "annotation-xml" };
-    size_t i;
-    if(t->end) return;
-    for(i = 0; i < sizeof(html) / sizeof(html[0]); i++) if(!strcmp(t->name, html[i])) b->skip_html = 1;
-    if(b->skip_html && control_tag(t->el)) {
-        left_open(b, t);
-        fm_lost(&b->d, &b->fb, t->seen[A_FORM] ? t->val[A_FORM] : NULL);
-    }
-}
-
-/* Does this tag end svg or math, as the standard's list has it? (html.c's rule) */
-static int leaves_foreign(const struct ut_html_tag *t) {
-    return t->end ? t->el == E_P || t->el == E_BR : (ut_html_flags(t->el) & F_OUT) != 0;
-}
-
-/* Is the tag just read in svg or math? */
-static int in_foreign(const struct bd *b) {
-    return b->skip_foreign || (b->skip_inert && (b->inert_el == E_SVG || b->inert_el == E_MATH));
-}
 
 /* A tag inside what the hidden attribute hides, which is still part of the page's forms: a form starts and ends there, an
    input is a control with no box, as a text area is (raw()). A select or a submit button would take more, and a disabled
@@ -1366,33 +1274,27 @@ static int in_foreign(const struct bd *b) {
 static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
     int el = t->el;
     if(b->skip_inert) {
-        int foreign = b->inert_el == E_SVG || b->inert_el == E_MATH;
-        if(!foreign || !leaves_foreign(t)) {
-            if(el == b->inert_el) {
-                if(t->end) b->skip_inert--;
-                else if(!whole) b->skip_inert++;
-            }
-            if(foreign) foreign_tag(b, t);
-            if(el == E_FORM && t->end && b->inert_el != E_TEMPLATE) form_end(b, 1);
-            return;
+        if(el == b->inert_el) {
+            if(t->end) b->skip_inert--;
+            else if(!whole) b->skip_inert++;
         }
-        b->skip_inert = 0;
-    } else if(inert(el) && !t->end) {
+        if(el == E_FORM && t->end && b->inert_el != E_TEMPLATE) fm_form_end(&b->fb);
+        return;
+    }
+    if(inert(el) && !t->end) {
         if(!whole) {
             b->skip_inert = 1;
             b->inert_el = el;
-            b->skip_html = 0;
         }
         return;
     }
-    if(el == E_FORM && t->end) form_end(b, 1);
+    if(el == E_FORM && t->end) fm_form_end(&b->fb);
     if(t->end) return;
     if(el == E_FORM) form_start(b, t);
     else if(el == E_INPUT) input(b, t);
-    else if(el == E_SELECT || (el == E_BUTTON && !attr_is(t, A_TYPE, "button") && !attr_is(t, A_TYPE, "reset"))) {
-        left_open(b, t);
+    else if(el == E_SELECT || (el == E_BUTTON && !attr_is(t, A_TYPE, "button") && !attr_is(t, A_TYPE, "reset")))
         fm_lost(&b->d, &b->fb, t->seen[A_FORM] ? t->val[A_FORM] : NULL);
-    } else if((el == E_FIELDSET && t->seen[A_DISABLED]) || (el == E_BASE && t->seen[A_HREF] && !b->base_seen)) b->fb.lost = 1;
+    else if((el == E_FIELDSET && t->seen[A_DISABLED]) || (el == E_BASE && t->seen[A_HREF] && !b->base_seen)) b->fb.lost = 1;
 }
 
 static void start_tag(struct bd *b, struct ut_html_tag *t) {
@@ -1400,7 +1302,7 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     unsigned int fl = ut_html_flags(el);
     struct frame *f;
     struct wd_block *x;
-    if(el == E_FORM && b->form_open) return;        /* the standard: a form in a form is no element at all */
+    if(el == E_FORM && b->fb.open >= 0) return;     /* the standard: a form in a form is no element at all */
     if(t->seen[A_ID]) add_anchor(b, t->val[A_ID], t->len[A_ID], t->over[A_ID]);
     if(t->seen[A_HIDDEN] && !(fl & F_VOID) && el != E_OTHER) {   /* <div hidden>: not shown, nor what is in it */
         start_hidden(b, t);
@@ -1534,7 +1436,6 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
             return;
         }
         if(el == E_FIELDSET && t->seen[A_DISABLED]) f->off = 1;
-        if(el == E_FORM) f->holds_form = 1;
         if(el == E_LEGEND && up->el == E_FIELDSET && up->off == 1) {    /* a disabled fieldset's first: not disabled by it */
             up->off = 2;
             f->on = 1;
@@ -1551,15 +1452,9 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
 static void end_tag(struct bd *b, struct ut_html_tag *t) {
     int el = t->el, i, s;
     unsigned int fl = ut_html_flags(el);
+    if(el == E_FORM) fm_form_end(&b->fb);
     if((fl & F_PUSH) && b->over[el]) {             /* one that was too deep to keep */
-        if(el == E_FORM) form_end(b, 0);
         b->over[el]--;
-        if(b->unframed) b->unframed--;
-        tail_check(b);
-        return;
-    }
-    if(el == E_FORM) {
-        form_end(b, 0);
         return;
     }
     if((s = style_of(t)) >= 0) {
@@ -1606,18 +1501,11 @@ static void end_tag(struct bd *b, struct ut_html_tag *t) {
 
 static void dispatch(struct bd *b, struct ut_html_tag *t);
 
-/* An element that stays open with no frame here: which of them are open is only counted */
-static int unframed(int el) {
-    if(ut_html_flags(el) & (F_PUSH | F_VOID | F_RAW | F_RCDATA | F_HIDE)) return 0;
-    return !(el == E_HTML || el == E_HEAD || el == E_BODY || el == E_TBODY || el == E_THEAD || el == E_TFOOT || el == E_COLGROUP ||
-             el == E_FRAMESET || el == E_SELECT || el == E_OPTION || el == E_OPTGROUP);
-}
-
 /* A tag inside content that is not shown: only what ends that content matters. In svg and math, the HTML
    elements of the standard's list (p, div, b, ...) end them, as in browsers (html.c's rule). */
 static void hidden_tag(struct bd *b, struct ut_html_tag *t, int whole) {
     int el = t->el;
-    if(b->skip_foreign && (leaves_foreign(t) || (t->end && (ut_html_flags(el) & F_PUSH) && in_scope(b, el, SCOPE)))) {
+    if(b->skip_foreign && (t->end ? el == E_P || el == E_BR : (ut_html_flags(el) & F_OUT) != 0)) {
         b->skip_el = E_OTHER;
         b->skip_n = 0;
         b->skip_foreign = 0;
@@ -1625,16 +1513,12 @@ static void hidden_tag(struct bd *b, struct ut_html_tag *t, int whole) {
         return;
     }
     if(b->skip_live) hidden_forms(b, t, whole);
-    else if(el == E_FORM && t->end && b->skip_el != E_TEMPLATE) form_end(b, 0);
-    if(b->skip_foreign) foreign_tag(b, t);
+    else if(el == E_FORM && t->end && b->skip_el != E_TEMPLATE) fm_form_end(&b->fb);
     if(b->skip_inert && b->inert_el == E_TEMPLATE) return;     /* a template holds what ends what is around it */
     if(el != b->skip_el) return;
     if(t->end) {
-        if(!--b->skip_n) {
-            b->skip_el = E_OTHER;
-            tail_check(b);
-        }
-    } else if(!whole && el != E_FORM) b->skip_n++;
+        if(!--b->skip_n) b->skip_el = E_OTHER;
+    } else if(!whole && el != E_FORM) b->skip_n++;             /* (a form in a form is no element) */
 }
 
 static void dispatch(struct bd *b, struct ut_html_tag *t) {
@@ -1648,10 +1532,6 @@ static void dispatch(struct bd *b, struct ut_html_tag *t) {
     if(b->select && select_tag(b, t)) return;
     if(t->end) {
         end_tag(b, t);
-        if(unframed(el) && b->unframed) {
-            b->unframed--;
-            tail_check(b);
-        }
         return;
     }
     if(fl & F_HIDE) {
@@ -1663,7 +1543,6 @@ static void dispatch(struct bd *b, struct ut_html_tag *t) {
     }
     start_tag(b, t);
     if(whole && !(fl & F_VOID)) end_tag(b, t);
-    else if(unframed(el)) b->unframed++;
 }
 
 /**** the loop over the page ****/
@@ -1811,7 +1690,7 @@ static void markup(struct bd *b) {
         }
     } else if((c | 0x20) >= 'a' && (c | 0x20) <= 'z') {
         if(tag(b, p + 1, 0) && (ut_html_flags(t->el) & (F_RAW | F_RCDATA)) &&
-           !(t->selfclose && (b->xhtml || b->skip_foreign)) && (!b->select || b->skip_n || t->el == E_SCRIPT) && !in_foreign(b))
+           !(t->selfclose && (b->xhtml || b->skip_foreign)) && (!b->select || b->skip_n || t->el == E_SCRIPT))
             raw(b, t->el, t->name);
     } else {
         text_char(b, '<');
@@ -2109,7 +1988,6 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     b->skip_el = E_OTHER;
     b->fcontrol = -1;
     fm_begin(&b->fb);
-    b->tail = -1;
     b->d.bg = b->d.fg = b->d.link_color = b->d.vlink_color = WD_NONE;
     b->tag.attrs = attr_info;
     b->tag.nattrs = A_COUNT;

@@ -501,93 +501,46 @@ static void encoding(void) {
     refuses("<form action=/s><div hidden><button name=b>B</button></div></form>", "more than", "a button there");
     refuses("<form action=/s><div hidden><fieldset disabled><input name=x value=1></fieldset></div></form>", "more than", "a disabled fieldset there");
     refuses("<form action=/s><fieldset hidden disabled><input name=x value=1></fieldset></form>", "more than", "a disabled fieldset hidden");
-    /* </form> ends the form, not what is open in it. A browser has what comes next in there in that form: nothing is added
-       to a form that ended, so that it does not go at all. A page whose elements nest as they should never gets here. */
-    sends("<form action=/s><input name=q value=1></form><font size=2><input name=t value=2></font>", "https://forms.test/s?q=1", "valid: an inline element after a form");
-    sends("<form action=/s><input name=q value=1></form><b><select name=s><option>A</select><textarea name=t>x</textarea><button name=c>C</button></b>", "https://forms.test/s?q=1", "and every kind of control in one");
-    sends("<table><tr><th><form action=/s><input name=q value=1></form></th><td><address><input name=t value=2></address></table>", "https://forms.test/s?q=1", "after one in a table's head");
-    sends("<form action=/s><div><p><b>x</b><span>y</span></div></form><p><input name=t value=2>", "https://forms.test/s?", "what ended inside it is nothing to it");
-    refuses("<form action=/s><div><input name=q value=1><input type=submit></form><input type=hidden name=t value=2></div>", "more than", "a control after </form>, in a div still open from inside it");
-    refuses("<form action=/s><table><tr><td><input name=q value=1></td></tr></form><tr><td><input name=b value=2></td></tr></table>", "more than", "in a table still open");
-    sends("<form action=/s><div></form></div><input name=t value=2>", "https://forms.test/s?", "after that div has ended: no");
-    refuses("<form action=/s><div><p>x<li>y</form><input name=t value=2>", "more than", "what is ended by itself ends, what is not stays");
-    sends("<form action=/s><p>x</form><input name=t value=2>", "https://forms.test/s?", "a paragraph ends with its form");
-    refuses("<form action=/s><ul><li>x</form><input name=t value=2>", "more than", "a list goes on");
-    sends("<form action=/s><li>x</form><input name=t value=2>", "https://forms.test/s?", "an item alone ends with its form");
-    sends("<form action=/s><dd>x</form><input name=t value=2>", "https://forms.test/s?", "a definition");
-    sends("<form action=/s><dt>x</form><input name=t value=2>", "https://forms.test/s?", "its term");
-    refuses("<form action=/s><div></form><select hidden name=s><option>A</select></div>", "more than", "a control it does not follow, there");
-    refuses("<form action=/s><div></form><div><span><input name=t value=2></span></div></div>", "more than", "in what is new in there");
-    sends("<form action=/s><div></form><div></div></div><input name=t value=2>", "https://forms.test/s?", "after all of it");
-    sends("<section><form action=/s><div></form></section><input name=t value=2>", "https://forms.test/s?", "the end of what holds them all");
-    sends("<form action=/s><div></form></div><div><input name=t value=2></div>", "https://forms.test/s?", "a new element where the old one ended is none of it");
-    refuses("<form action=/s><font size=2><input name=q value=1></form><input name=t value=2></font>", "more than", "a control in an inline element still open");
-    refuses("<form action=/s><b><input name=q value=1></form><input name=t value=2></b>", "more than", "b too");
-    refuses("<form action=/s><span><input name=q value=1></form><input name=t value=2></span>", "more than", "and an element nothing here looks at");
-    refuses("<form action=/s><span><input name=q value=1></form><input type=password name=t></span>", "more than", "a password would have made it none that goes at all");
-    refuses("<form action=/s><p><b>x</form><input name=t value=2></b>", "more than", "one left in what its end ends");
-    refuses("<form action=/s><b><div></form></div><input name=x value=1></b>", "more than", "in the order of its frames");
-    refuses("<form action=/a><b></form><form action=/b></form><input name=x value=1></b>", "more than", "a form after it leaves it so");
-    sends("<form action=/s><font size=2><input name=q value=1></font></form><input name=t value=2>", "https://forms.test/s?q=1", "an inline element that ended is none");
-    sends("<form action=/s><b><input name=q value=1></form></b><input name=t value=2>", "https://forms.test/s?q=1", "nor one that ended after it");
-    sends("<form action=/s><b></form></b><b><input name=t value=2></b>", "https://forms.test/s?", "nor does one with its name come back");
-    sends("<b><form action=/s><input name=q value=1></form><input name=t value=2></b>", "https://forms.test/s?q=1", "one that holds the form is no part of it");
-    sends("<div><form action=/s><font><input name=q value=1></font></form></div><input name=t value=2>", "https://forms.test/s?q=1", "what held them all ended");
+    /* a form runs from its tag to its end tag, whatever the elements around them do */
+    sends("<form action=/s><input name=q value=1></form><font size=2><input name=t value=2></font>", "https://forms.test/s?q=1", "a control after a form is in no form");
+    sends("<form action=/s><input name=q value=1></form><b><select name=s><option>A</select><textarea name=t>x</textarea><button name=c>C</button></b>", "https://forms.test/s?q=1", "of any kind");
+    sends("<table><tr><td><form action=/s></td><td><input name=q value=1></form></td><td><input name=t value=2></table>", "https://forms.test/s?q=1", "from the tag to the end tag, over what ended between them");
+    sends("<table><form action=/s><tr><td><input name=q value=1></td></tr></form><tr><td><input name=t value=2></table>", "https://forms.test/s?q=1", "as an old table has it");
+    sends("<div><form action=/s></div><div><input name=q value=1></div></form><input name=t value=2>", "https://forms.test/s?q=1", "and a div");
     sends("<form action=/s><input name=q value=1></form></form><input name=t value=2>", "https://forms.test/s?q=1", "a second </form> is nothing");
-    refuses("<form action=/s><table><tr><td></form></td></tr></table></form><input name=b value=2>", "more than", "</form> behind a cell: the form's element stays open, and a second </form> is still nothing");
-    refuses("<form action=/s><b><input name=q value=1></form></form><input name=t value=2></b>", "more than", "nor does one end what was left");
-    refuses("<table><form action=/s><div></form><input name=x value=1></div></table>", "more than", "a form in a table with a div left: not sent, not sent with x either");
-    {
-        static char deep[4000];
-        char *e = deep;
-        int i;
-        for(i = 0; i < 127; i++) e += snprintf(e, 8, "<div>");
-        snprintf(e, 200, "<form action=/s><div></form><input name=x value=1></div>");
-        refuses(deep, "more than", "an element too deep to keep, left open");
-        e = deep;
-        for(i = 0; i < 126; i++) e += snprintf(e, 8, "<div>");
-        snprintf(e, 200, "<form action=/s><div></form><input name=x value=1></div>");
-        refuses(deep, "more than", "and the last one that is kept");
-    }
-    {
-        static char deep[4000];
-        char *e = deep;
-        int i;
-        for(i = 0; i < 127; i++) e += snprintf(e, 8, "<div>");
-        snprintf(e, 200, "<form action=/s><div></div></form><input name=x value=1>");
-        sends(deep, "https://forms.test/s?", "one too deep that ended is none");
-    }
-    sends("<form action=/s><select name=s><option>A</select></form><input name=t value=2>", "https://forms.test/s?s=A", "a select that ended");
-    sends("<form action=/s><body></form><input name=t value=2>", "https://forms.test/s?", "a body tag is no element");
-    sends("<form action=/s><div><span></div></form><input name=t value=2>", "https://forms.test/s?", "an element ended by what holds it");
-    refuses("<form action=/s><b><div hidden><form action=/x></div></form><input name=t value=2></b>", "more than", "a form in a form, in hidden content, changes nothing");
-    refuses("<form action=/a><table><tr><td></form></td></tr></table><div hidden><form action=/b></div></form><input name=z value=1>", "more than", "the </form> of another is not this one's");
-    {
-        struct wd_document d;
-        build("<form action=/a><b></form><form action=/b><input name=x value=1></form></b>", &d);
-        check(d.form_count == 2 && d.controls[0].form == 1 && !d.forms[0].too_much && !d.forms[1].too_much, "with another form open, a control is that form's, and nothing else's");
-        wd_free(&d);
-        build("<form id=g action=/g></form><form action=/a><b></form><input name=x form=g></b>", &d);
-        check(d.controls[0].form == 0 && !d.forms[1].too_much, "with a form= of its own too");
-        wd_free(&d);
-        build("<form action=/a><b></form><form action=/b><i></form><input name=x value=1></i></b>", &d);
-        check(d.forms[0].too_much && d.forms[1].too_much, "two forms with things left open: neither goes");
-        wd_free(&d);
-    }
-    sends("<form action=/s><marquee></form></marquee><input name=y value=2>", "https://forms.test/s?", "a marquee, ended");
-    refuses("<form action=/s><marquee></form><input name=x value=1></marquee><input name=y value=2>", "more than", "open");
-    /* </form> in hidden content */
-    refuses("<form action=/s><div hidden></form><input name=a value=1></div>", "more than", "in hidden content that goes on");
-    sends("<form action=/s><div hidden></form></div><input name=a value=1>", "https://forms.test/s?", "and when it has ended");
-    refuses("<div hidden><form action=/s><div></form><input name=a value=1></div></div>", "more than", "all of it in hidden content");
-    refuses("<form action=/s><object></form><input name=x value=1></object><input name=y value=2>", "more than", "in an object");
-    refuses("<form action=/s><div hidden><svg></form></svg><input name=b value=2></div>", "more than", "in svg in hidden content");
-    sends("<form action=/s><div hidden><template></form></template><input name=b value=2></div></form>", "https://forms.test/s?b=2", "in a template there it is nothing");
-    sends("<form hidden action=/s><form action=/x></form>the rest<input name=b value=2>", "https://forms.test/s?", "a form in a hidden form is nothing, and its </form> is the first's");
-    /* </form> in what holds no control still ends the form, but in a template */
+    /* what a browser has in a form by an element left open past its end is not followed: docs/UNDERTOW.md, Not yet */
+    sends("<form action=/s><div><input name=q value=1></form><input name=t value=2></div>", "https://forms.test/s?q=1", "a control in a div left open");
+    sends("<form action=/s><font><input name=q value=1></form><input type=password name=t></font>", "https://forms.test/s?q=1", "a password there is in no form, and goes nowhere");
+    /* </form> where elements are not followed */
+    sends("<form action=/s><div hidden></form></div><input name=a value=1>", "https://forms.test/s?", "in hidden content");
+    sends("<form action=/s><div hidden></form><input name=a value=1></div>", "https://forms.test/s?", "and a control after it there");
+    sends("<form action=/s><object></form><input name=x value=1></object><input name=y value=2>", "https://forms.test/s?", "in an object");
+    sends("<form hidden action=/s><form action=/x></form>the rest<input name=b value=2>", "https://forms.test/s?", "a form in a hidden form is nothing, and the </form> is the first's");
     sends("<form action=/s><input name=a value=1><svg></form></svg><input name=b value=2>", "https://forms.test/s?a=1", "in svg");
     sends("<form action=/s><input name=a value=1><datalist></form></datalist><input name=b value=2>", "https://forms.test/s?a=1", "in a datalist");
     sends("<form action=/s><input name=a value=1><template></form></template><input name=b value=2></form>", "https://forms.test/s?a=1&b=2", "not in a template");
+    sends("<form action=/s><div hidden><svg></form></svg><input name=b value=2></div>", "https://forms.test/s?", "in svg in hidden content");
+    sends("<form action=/s><div hidden><template></form></template><input name=b value=2></div></form>", "https://forms.test/s?b=2", "not in a template there");
+    {
+        static char deep[4000];
+        char *e = deep;
+        int i;
+        for(i = 0; i < 140; i++) e += snprintf(e, 8, "<div>");
+        snprintf(e, 200, "<form action=/s><input name=q value=1></form><input name=x value=1>");
+        sends(deep, "https://forms.test/s?q=1", "too deep to keep, a form still ends");
+    }
+    {
+        struct wd_document d;
+        build("<form action=/a><b></form><form action=/b><input name=x value=1></form></b>", &d);
+        check(d.form_count == 2 && d.controls[0].form == 1 && !d.forms[0].too_much && !d.forms[1].too_much, "a control is the open form's");
+        wd_free(&d);
+        build("<form id=g action=/g></form><form action=/a><input name=x form=g></form>", &d);
+        check(d.controls[0].form == 0, "or the one it names");
+        wd_free(&d);
+        build("<form hidden action=/s><form action=/x></form><input name=b>", &d);
+        check(d.control_count == 1 && d.controls[0].run >= 0, "after a form in a hidden form, the page goes on: it was one element");
+        wd_free(&d);
+    }
     /* what falls back when it cannot be shown is still the page's form */
     sends("<form action=/s><object data=a.swf><input type=hidden name=token value=t></object><input name=q value=1></form>", "https://forms.test/s?token=t&q=1", "object");
     sends("<form action=/s><applet code=a><input type=hidden name=token value=t></applet><input name=q value=1></form>", "https://forms.test/s?token=t&q=1", "applet");
@@ -595,27 +548,19 @@ static void encoding(void) {
     sends("<form action=/s><div hidden><object><input name=q value=1></object></div></form>", "https://forms.test/s?q=1", "and under the hidden attribute");
     sends("<form action=/s><object><template><input name=x value=1></template></object><input name=y value=2></form>", "https://forms.test/s?y=2", "a template is none, there too");
     refuses("<form action=/s><object><select name=s><option>One</select></object></form>", "more than", "what takes more than an input there");
-    /* in svg and math: no controls, but inside what is HTML there */
+    /* in svg and math there are no controls */
     sends("<form action=/s><svg><input name=x value=1></svg><input name=y value=2></form>", "https://forms.test/s?y=2", "svg holds no control");
-    refuses("<form action=/s><svg><foreignObject><input name=x value=1></foreignObject></svg></form>", "more than", "but for its foreignObject");
-    refuses("<form action=/s><svg><desc><input name=x value=1></desc></svg></form>", "more than", "and desc");
-    refuses("<form action=/s><math><mtext><input name=x value=1></mtext></math></form>", "more than", "and math's text");
-    refuses("<form action=/s><div hidden><svg><foreignObject><input name=x value=1></foreignObject></svg></div></form>", "more than", "under the hidden attribute too");
-    sends("<form action=/s><div hidden><svg><div><input name=a value=1></div></svg></div></form>", "https://forms.test/s?a=1", "a tag that ends svg there, as anywhere");
-    sends("<form action=/s><svg><div><input name=a value=1></div></svg></form>", "https://forms.test/s?a=1", "anywhere");
-    refuses("<form action=/s><svg><title><input name=x value=1></title></svg></form>", "more than", "and its title, which is no raw text here");
-    refuses("<form action=/s><b></form><svg><desc><input name=x value=1></desc></svg></b>", "more than", "with something left open from a form that ended");
-    sends("<form action=/s><div><svg></div><input name=x value=1></form>", "https://forms.test/s?x=1", "the end of an element around it ends svg");
-    sends("<form action=/s><svg><g></div></g><input name=x value=1></svg></form>", "https://forms.test/s?", "the end of one that is not open does not");
-    sends("<form action=/s><svg><textarea></svg><input name=x value=1></form>", "https://forms.test/s?x=1", "no raw text in svg, so it ends");
-    sends("<form action=/s><svg></desc><input name=x value=1></svg></form>", "https://forms.test/s?", "the end of something that was not there brings no HTML back");
-    sends("<form action=/s><div hidden><svg><svg/></svg><input name=y value=2></div></form>", "https://forms.test/s?y=2", "an svg ended by itself in one");
-    /* <svg/> and an element of no content there */
+    sends("<form action=/s><svg><div><input name=a value=1></div></svg></form>", "https://forms.test/s?a=1", "what ends it, as a page's text has it");
+    /* <svg/> and an element of no content in hidden content */
     sends("<!DOCTYPE html><form action=/s><div hidden><svg/><input name=y value=2></div></form>", "https://forms.test/s?y=2", "an svg ended by itself under the hidden attribute");
+    sends("<form action=/s><div hidden><svg><svg/></svg><input name=y value=2></div></form>", "https://forms.test/s?y=2", "an svg ended by itself in one");
     sends("<form action=/s><div hidden><datalist><input name=x value=1></datalist><input name=y value=2></div></form>", "https://forms.test/s?y=2", "a datalist there");
     sends("<form action=/s><div hidden><svg><input name=x value=1></svg><input name=y value=2></div></form>", "https://forms.test/s?y=2", "svg there");
     sends("<form action=/s><div hidden><template></object><input name=x value=1></template><input name=y value=2></div></form>", "https://forms.test/s?y=2", "an end tag of another element ends no template");
     sends("<form action=/s><div hidden><button type=button name=b>B</button><button type=reset>R</button><input name=y value=2></div></form>", "https://forms.test/s?y=2", "a button that sends nothing, there");
+    /* svg closed, the page goes on as before: raw text is raw */
+    sends("<form action=/s><svg></svg><textarea name=a><input name=b value=2></textarea></form>", "https://forms.test/s?a=%3Cinput+name%3Db+value%3D2%3E", "a text area after svg");
+    sends("<form action=/s><div hidden><svg></div><textarea name=a>x</textarea></form>", "https://forms.test/s?a=x", "after svg left open in hidden content");
     /* what a text area and an option hold */
     sends("<form action=/s><textarea name=t>a&#13;&#10;b&#13;\nc&#13;&#13;d</textarea></form>", "https://forms.test/s?t=a%0D%0Ab%0D%0Ac%0D%0A%0D%0Ad", "a CR and its LF, written any way: one line end");
     sends("<form action=/s><select name=s><option>A<template><textarea></template><option selected>B</textarea></template></select></form>", "https://forms.test/s?s=A", "a template in a select: what is in it is not read");
@@ -718,6 +663,8 @@ static void encoding(void) {
         check(!d.forms[6].too_much, "(a form with nothing in it)");
         wd_free(&d);
         check(!build_as(PAGE, "<base href='/\x93\xfa/'><form action=x><input name=a></form>", "shift_jis", &d) && d.forms[0].too_much, "a base that held them");
+        wd_free(&d);
+        check(!build_as(PAGE, "<form id='caf\xe9' action=/s></form><input name=secret form='caf\xe8'>", "shift_jis", &d) && d.forms[0].too_much, "a form= that held them: which id it says is not known");
         wd_free(&d);
     }
     /* windows-1252's holes stand for themselves */

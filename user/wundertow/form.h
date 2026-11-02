@@ -7,6 +7,10 @@ What doc.h's forms do: the building of them, which doc.c calls as it reads a pag
 what is sent when a person submits. Nothing here sends anything by itself: fm_submit() makes an address, and only
 browser.c's handling of a key or a click calls it. No page can: there are no scripts.
 
+A control is in the form open when it comes, from a <form> to its </form> whatever the elements around them do, or in the
+one its form= attribute names. (A browser also has in a form what comes after its </form> inside an element left open in
+it. That needs its elements, which this page model does not keep as a tree. Pages that nest as they should have none.)
+
 A submit is a GET, encoded as the HTML standard's application/x-www-form-urlencoded (UTF-8, or windows-1252 on a page
 in it, where a character it does not have goes as a numeric reference, as browsers do), with the entries of the
 standard's list: not what is disabled, not a box not ticked, not a button but the one that submitted. What it does not

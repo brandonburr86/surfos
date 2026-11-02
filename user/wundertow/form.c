@@ -236,6 +236,7 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
     for(i = 0; i < d->control_count; i++) {
         struct wd_control *c = &d->controls[i];
         if(c->owner) {                          /* form=: the form of that id, or none */
+            if(fm_unsure(d, c->owner)) f->lost = 1;
             c->form = -1;
             for(k = 0; k < d->form_count; k++)
                 if(d->forms[k].id && !strcmp(d->forms[k].id, c->owner)) {
