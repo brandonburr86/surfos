@@ -267,6 +267,7 @@ def net_login_line(q):
     good = b'227 ok (10,0,2,3,{pasv})\r\n'
     NET['ftp'] = ScriptedFtp(
         {'USER': b'331 password please\r\n', 'PASS': b'230 in\r\n', 'TYPE': b'200 ok\r\n', 'SIZE': b'550 unknown\r\n',
+         'NOOP': b'200 ok\r\n',
          'PASV': [good, b'227 ok (10,0,2,2,0,25)\r\n', good], 'QUIT': b'221 bye\r\n'},
         {'NLST': (b'nice.txt\r\n\x1b[31mred\x1b[0m\r\n', 'ok'),
          'RETR big.bin': (b'x' * 20000, 'hold'),
