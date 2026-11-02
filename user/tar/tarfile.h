@@ -16,6 +16,11 @@ from a function, so tests/host/ runs this over memory and tar over a file, a pip
 tar_next() returns 1 for an entry, 0 at the end of the archive (t.no_end when the two zero blocks
 were missing) and -1 when it can go no further: t.why says why, NULL meaning the source failed and
 errno says how. tar_data() returns bytes, 0 at the end of the entry's data, -1 in the same way.
+
+A pax header that cannot be read is judged for the entry after it alone. If only that entry's name
+is in doubt, it comes with t.e.pax_bad and the caller writes nothing of it. If its size is in doubt
+nobody knows where the next entry starts, so tar_next() returns -1 with t.lost_entry set and t.e
+naming it.
 Everything reads forward, so a pipe will do; what is skipped is read and dropped.
 
 ustar, GNU and old (v7) headers are read, GNU long names ('L', 'K'), pax 'path' and 'size' records
@@ -49,6 +54,7 @@ struct tar_entry {
     int name_bad;                       /* it was too long for name, or held a zero byte: no file may be made from it */
     int type;
     int sparse;                         /* GNU.sparse.* in its pax header: the data is not the file's */
+    int pax_bad;                        /* a pax header before it could not be read: its name may not be its name */
     unsigned long long size;            /* of its data in the archive */
     unsigned int mode;
     unsigned int mtime;
@@ -58,7 +64,8 @@ struct tar_reader {
     struct tar_entry e;
     const char *why;
     int no_end;                         /* the input ended without the two zero blocks */
-    int pax_bad;                        /* a pax header that could not be read wholly: its entry may have the wrong name */
+    int pax_stray;                      /* a pax header that could not be read, with no entry after it */
+    int lost_entry;                     /* -1 from tar_next() is about t.e: its size cannot be read */
 
     /* the rest is tarfile.c's */
     gz_source source;
@@ -69,6 +76,7 @@ struct tar_reader {
     unsigned int pad;                   /* zeros after it, to the block's end */
     char long_name[TAR_NAME_MAX];       /* what 'L' or an 'x' path said of the next entry */
     int have_long, long_bad, have_size, next_sparse;
+    int next_bad, size_lost;            /* of the pax header before the next entry: see read_pax() */
     unsigned long long pax_size;
     char scratch[TAR_RECORD_KEEP];      /* a pax record, a long link name */
     unsigned char block[TAR_BLOCK];

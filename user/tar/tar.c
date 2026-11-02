@@ -45,6 +45,7 @@ stop the archive being read.
 #define BUF_SIZE  32768
 #define SHOW_SIZE 1024                  /* a name as printed */
 #define GZ_LEVEL  6
+#define PAX_BAD   "the pax header before it could not be read, so this may not be its name: skipped"
 
 struct item { const char *chdir_to, *name; };   /* -C and names, in the order given */
 
@@ -101,6 +102,10 @@ static int archive_write(const void *p, unsigned int n) {
 /* Reading stopped: why, once. The source failed is either gzip's reason or errno's. */
 static void archive_trouble(void) {
     const char *why = reader->why;
+    if(reader->lost_entry) {
+        member_say(reader->e.name, why);
+        return;
+    }
     if(!why && gzipped) why = gz_in->why;
     fprintf(stderr, "tar: %s: %s\n", archive, why ? why : strerror(errno));
     trouble = 1;
@@ -415,7 +420,8 @@ static const char *kind_of(const struct tar_entry *e) {
 static int extract_entry(void) {
     const struct tar_entry *e = &reader->e;
     char path[PATH_MAX];
-    const char *why = e->name_bad ? "the name is too long, or has a zero byte in it" : ar_safe_path(e->name, path, sizeof(path));
+    const char *why = e->name_bad ? "the name is too long, or has a zero byte in it" :
+                      e->pax_bad ? PAX_BAD : ar_safe_path(e->name, path, sizeof(path));
     if(!taken(why ? NULL : path, e->name)) return 0;
     if(e->type == TAR_DIR && !why) say_name(e->name);
     if(why) {
@@ -483,7 +489,10 @@ static int do_read(int listing) {
         if(listing) {
             char path[PATH_MAX];
             const char *why = reader->e.name_bad ? "bad" : ar_safe_path(reader->e.name, path, sizeof(path));
-            if(taken(why ? NULL : path, reader->e.name)) list_entry(&reader->e);
+            if(taken(why ? NULL : path, reader->e.name)) {
+                list_entry(&reader->e);
+                if(reader->e.pax_bad) member_say(reader->e.name, PAX_BAD);
+            }
         } else if(extract_entry() < 0) {
             r = -1;
             break;
@@ -498,8 +507,8 @@ static int do_read(int listing) {
         }
         read_to_end();
     }
-    if(reader->pax_bad) {
-        fprintf(stderr, "tar: %s: a pax header could not be read: a name may be wrong\n", archive);
+    if(reader->pax_stray) {
+        fprintf(stderr, "tar: %s: a pax header with no entry after it could not be read\n", archive);
         trouble = 1;
     }
     for(i = 0; i < nitems; i++) {

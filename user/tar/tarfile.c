@@ -139,7 +139,7 @@ static void pax_record(struct tar_reader *t, const char *rec, size_t n, int whol
     const char *eq = memchr(rec, '=', n), *value;
     size_t key, len, i;
     if(!eq) {
-        t->pax_bad = 1;
+        t->next_bad = 1;
         return;
     }
     key = (size_t)(eq - rec);
@@ -153,10 +153,10 @@ static void pax_record(struct tar_reader *t, const char *rec, size_t n, int whol
         t->long_name[len] = 0;
     } else if(key == 4 && !memcmp(rec, "size", 4)) {
         unsigned long long v = 0;
-        if(!len) t->pax_bad = 1;
+        if(!len || !whole) t->size_lost = 1;
         for(i = 0; i < len; i++) {
             if(value[i] < '0' || value[i] > '9' || v > (NUMBER_MAX - 9) / 10) {
-                t->pax_bad = 1;
+                t->size_lost = 1;
                 return;
             }
             v = v * 10 + (unsigned int)(value[i] - '0');
@@ -168,39 +168,65 @@ static void pax_record(struct tar_reader *t, const char *rec, size_t n, int whol
     }
 }
 
+/* is "size=" in these n bytes? *at says how much of it the bytes before them ended on */
+static void find_size_key(struct tar_reader *t, const char *p, size_t n, unsigned int *at) {
+    static const char key[] = "size=";
+    size_t i;
+    for(i = 0; i < n; i++) {
+        *at = p[i] == key[*at] ? *at + 1 : p[i] == key[0];
+        if(!key[*at]) {
+            t->size_lost = 1;
+            *at = 0;
+        }
+    }
+}
+
+/* A record whose frame cannot be read: nothing after it in the header can be told apart. The entry goes unwritten, since
+   its name may be in what was lost. Whether it can be read past depends on the size: a "size=" in what is left says it
+   cannot. If there was one that this does not see, the header after the entry will not add up, and that stops it too. */
+static int pax_damaged(struct tar_reader *t, unsigned long long left, unsigned long long size, unsigned int at) {
+    t->next_bad = 1;
+    while(left) {
+        unsigned int k = left < sizeof(t->scratch) ? (unsigned int)left : (unsigned int)sizeof(t->scratch);
+        if(must_read(t, (unsigned char *)t->scratch, k) < 0) return -1;
+        find_size_key(t, t->scratch, k, &at);
+        left -= k;
+    }
+    return skip(t, padding(size));
+}
+
 /* the records of a pax header of this size, and the padding after them */
 static int read_pax(struct tar_reader *t, unsigned long long size) {
     char *keep = t->scratch;
     unsigned long long left = size;
     while(left) {
         unsigned long long len = 0;
-        unsigned int digits = 0, have;
+        unsigned int digits = 0, have, at = 0;
         unsigned char c = 0;
         for(;;) {                                       /* the length, up to its space */
-            if(!left) {
-                t->pax_bad = 1;
-                return skip(t, padding(size));
-            }
+            if(!left) return pax_damaged(t, 0, size, 0);
             if(must_read(t, &c, 1) < 0) return -1;
             left--;
             if(c == ' ') break;
             if(c < '0' || c > '9' || ++digits > 18) {
-                t->pax_bad = 1;
-                return skip(t, left + padding(size));
+                find_size_key(t, (const char *)&c, 1, &at);
+                return pax_damaged(t, left, size, at);
             }
             len = len * 10 + (unsigned int)(c - '0');
         }
         if(!digits || len < digits + 2ULL || len - digits - 1 > left) { /* "N k=v\n": at least the newline follows */
-            t->pax_bad = 1;
-            return skip(t, left + padding(size));
+            return pax_damaged(t, left, size, 0);
         }
         len -= digits + 1;                              /* key=value\n */
         have = len < TAR_RECORD_KEEP ? (unsigned int)len : TAR_RECORD_KEEP;
         if(must_read(t, (unsigned char *)keep, have) < 0) return -1;
         if(skip(t, len - have) < 0) return -1;
         left -= len;
-        if(have == len && keep[have - 1] != '\n') t->pax_bad = 1;
-        else pax_record(t, keep, have == len ? have - 1 : have, have == len);
+        if(have == len && keep[have - 1] != '\n') {     /* its length is wrong: so is where the next one starts */
+            find_size_key(t, keep, have, &at);
+            return pax_damaged(t, left, size, at);
+        }
+        pax_record(t, keep, have == len ? have - 1 : have, have == len);
     }
     return skip(t, padding(size));
 }
@@ -223,6 +249,7 @@ static int take_entry(struct tar_reader *t, unsigned long long size, unsigned lo
     size_t n = field_len(b + O_NAME, N_NAME);
     e->name_bad = 0;
     e->sparse = t->next_sparse;
+    e->pax_bad = t->next_bad;
     if(t->have_long) {
         memcpy(e->name, t->long_name, strlen(t->long_name) + 1);
         e->name_bad = t->long_bad;
@@ -249,7 +276,7 @@ static int take_entry(struct tar_reader *t, unsigned long long size, unsigned lo
     if(type == TAR_SPARSE && skip_sparse_map(t, b) < 0) return -1;
     t->left = e->size;
     t->pad = padding(e->size);
-    t->have_long = t->long_bad = t->have_size = t->next_sparse = 0;
+    t->have_long = t->long_bad = t->have_size = t->next_sparse = t->next_bad = 0;
     return 1;
 }
 
@@ -270,11 +297,15 @@ int tar_next(struct tar_reader *t) {
         if(r < 0) return bad(t, NULL);
         if(!r) {
             t->no_end = !zeros;
+            t->pax_stray = t->next_bad || t->size_lost;
             return 0;
         }
         if(r < TAR_BLOCK) return bad(t, CUT_SHORT);
         if(all_zero(t->block)) {
-            if(++zeros == 2) return 0;
+            if(++zeros == 2) {
+                t->pax_stray = t->next_bad || t->size_lost;
+                return 0;
+            }
             continue;
         }
         zeros = 0;
@@ -303,6 +334,12 @@ int tar_next(struct tar_reader *t) {
         if(t->have_size) size = t->pax_size;
         if(number(t->block + O_MTIME, 12, &mtime) < 0) mtime = 0;       /* for show: not worth stopping for */
         if(number(t->block + O_MODE, 8, &mode) < 0) mode = 0;
+        if(t->size_lost) {                              /* a name for the message, and no further */
+            t->size_lost = 0;
+            t->lost_entry = 1;
+            take_entry(t, 0, mtime, mode);
+            return bad(t, "its pax size cannot be read, so where the next entry starts is not known: stopping here");
+        }
         return take_entry(t, size, mtime, mode);
     }
 }

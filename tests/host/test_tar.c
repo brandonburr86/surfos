@@ -828,14 +828,17 @@ static void test_formats(void) {
     a_end();
     check(unpack("") == 2 && has(ars_stderr(), "sparse") && !ars_exists("/dest/hole.txt"), "a pax sparse file is skipped: its data is not the file's");
     {
+        /* a record that makes no sense: nothing about the next entry can be trusted, and it goes unwritten; the one after is taken */
         static const char *const bad[] = { "x\n", "99999 path=a\n", "5 ab\n", "3 \n", "0 =\n", "12345678901234567890123 path=x\n", " path=x\n",
-                                           "9 path=x", "14 size=12x45\n" };
+                                           "9 path=x" };
         for(i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
             a_start();
             a_entry("x", 'x', bad[i], strlen(bad[i]), F_USTAR);
-            a_text("name.txt", "still here\n");
+            a_text("name.txt", "its own name may not be its name\n");
+            a_text("after.txt", "after\n");
             a_end();
-            check(unpack("") == 2 && ars_is("/dest/name.txt", "still here\n") && has(ars_stderr(), "pax"), "a pax record that makes no sense: said, and the entry keeps its own name");
+            check(unpack("") == 2 && !ars_exists("/dest/name.txt") && ars_is("/dest/after.txt", "after\n") && has(ars_stderr(), "pax") && has(ars_stderr(), "name.txt"),
+                  "a pax record that makes no sense: its entry is named and skipped, and the next is taken");
         }
     }
     {
@@ -1165,6 +1168,100 @@ static void test_failures(void) {
     check(ars_cmd(tar_main, "tar tf /a.tar") == 141, "a listing whose reader goes");
 }
 
+/**** a pax header that cannot be read ****/
+
+static void pax_fixture(const char *raw, size_t rawn, const char *key, const char *value, size_t vlen, unsigned header_size, size_t data) {
+    static char body[4000];
+    unsigned char b[512];
+    memset(body, 'A', sizeof(body));
+    a_start();
+    if(key) a_pax(key, value, vlen);
+    else a_entry("PaxHeaders/x", 'x', raw, rawn, F_USTAR);
+    header(b, "important.txt", '0', header_size, F_USTAR);
+    a_raw(b, 512);
+    a_data(body, data);
+    a_text("next.txt", "next\n");
+    a_end();
+}
+
+/* x over a file the user has: its status */
+static int over_mine(void) {
+    ars_reset();
+    ars_put("/a.tar", A, An);
+    ars_puts("/dest/important.txt", "the user's good file\n");
+    ars_mark();
+    return ars_cmd(tar_main, "tar xf /a.tar -C /dest");
+}
+
+static int mine_stands(void) {
+    return ars_is("/dest/important.txt", "the user's good file\n") && !has(ars_list(), ".tmp");
+}
+
+static void test_pax_entry(void) {
+    static const char *const values[] = { "20x0", "-5", "", "2000 ", "99999999999999999999999", "0x7d0" };
+    static char digits[6000];
+    unsigned i;
+    /* a size that cannot be read: where the next entry starts is not known */
+    for(i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        pax_fixture(NULL, 0, "size", values[i], strlen(values[i]), 512, 2000);
+        check(over_mine() == 2, "an unreadable pax size: status 2");
+        check(mine_stands(), "an unreadable pax size: the user's file stands");
+        check(!ars_exists("/dest/next.txt"), "an unreadable pax size: nothing after it is believed");
+        check(has(ars_stderr(), "important.txt") && has(ars_stderr(), "size"), "an unreadable pax size: the entry is named, and the reason");
+    }
+    pax_fixture(NULL, 0, "size", "20x0", 4, 512, 2000);
+    ars_reset();
+    ars_put("/a.tar", A, An);
+    check(ars_cmd(tar_main, "tar tf /a.tar") == 2 && has(ars_stderr(), "size") && !has((const char *)ars_stdout(NULL), "next.txt"), "t stops there too");
+    {
+        static const char raw[] = "xx size=2000\n";
+        pax_fixture(raw, sizeof(raw) - 1, NULL, NULL, 0, 512, 2000);
+        check(over_mine() == 2 && mine_stands() && !ars_exists("/dest/next.txt"), "a size in a record that cannot be framed: the same");
+    }
+    memset(digits, '1', sizeof(digits));
+    pax_fixture(NULL, 0, "size", digits, 5000, 512, 2000);
+    check(over_mine() == 2 && mine_stands() && !ars_exists("/dest/next.txt"), "a size longer than is kept of a record: the same");
+
+    /* a path that cannot be read: the entry's own name is a stand-in, and it may be a file the user has */
+    {
+        static const char *const raws[] = { "xx path=long/new.txt\n", "9 path=x", "99999 path=long/new.txt\n", "path=long/new.txt\n", "5 ab\n" };
+        for(i = 0; i < sizeof(raws) / sizeof(raws[0]); i++) {
+            pax_fixture(raws[i], strlen(raws[i]), NULL, NULL, 0, 20, 20);
+            check(over_mine() == 2, "an unreadable pax path: status 2");
+            check(mine_stands(), "an unreadable pax path: the user's file stands");
+            check(ars_is("/dest/next.txt", "next\n"), "an unreadable pax path: the next entry is taken");
+            check(has(ars_stderr(), "important.txt") && has(ars_stderr(), "pax"), "an unreadable pax path: the entry is named");
+        }
+    }
+    pax_fixture(NULL, 0, "path", "good.txt\0../x", 13, 20, 20);
+    check(over_mine() == 2 && mine_stands() && ars_is("/dest/next.txt", "next\n") && !ars_exists("/dest/good.txt"), "a zero byte in a pax path: the same");
+    memset(digits, 'p', sizeof(digits));
+    pax_fixture(NULL, 0, "path", digits, 5000, 20, 20);
+    check(over_mine() == 2 && mine_stands() && ars_is("/dest/next.txt", "next\n"), "a pax path longer than is kept: the same");
+
+    /* it is per entry: what follows is judged on its own */
+    a_start();
+    a_entry("PaxHeaders/x", 'x', "5 ab\n", 5, F_USTAR);
+    a_text("skipped.txt", "skipped\n");
+    a_pax("path", "really.txt", 10);
+    a_text("stand-in", "fine\n");
+    a_text("plain.txt", "plain\n");
+    a_end();
+    check(unpack("") == 2 && !ars_exists("/dest/skipped.txt") && ars_is("/dest/really.txt", "fine\n") && ars_is("/dest/plain.txt", "plain\n"),
+          "a good pax header after a bad one is taken, and so is a plain entry");
+    {
+        const char *e = ars_stderr();
+        const char *first = strstr(e, "skipped.txt");
+        check(first && !strstr(first + 1, "skipped.txt") && !has(e, "a name may be wrong"), "the bad one is named once, and nothing general is said of the rest");
+    }
+    /* a damaged header with no entry after it */
+    a_start();
+    a_text("a.txt", "x\n");
+    a_entry("PaxHeaders/x", 'x', "5 ab\n", 5, F_USTAR);
+    a_end();
+    check(unpack("") == 2 && has(ars_stderr(), "pax") && ars_is("/dest/a.txt", "x\n"), "a damaged pax header with no entry after it is said");
+}
+
 /**** an archive that exists ****/
 
 /* It is replaced only by one that went right: the old one may be the only copy of what the new one could not read. */
@@ -1406,6 +1503,7 @@ int main(void) {
     test_damage();
     test_failures();
     test_old_archive();
+    test_pax_entry();
     test_host_tar();
     free(A);
     return report("test_tar");
