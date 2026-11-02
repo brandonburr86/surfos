@@ -118,6 +118,7 @@ REFUSED = [(re.compile(r'^(?:run\s+|spawn\s+)?reboot\b'), 'reboot: use tools/dev
             'crashstack: it halts the laptop; only the owner, at the laptop, can start it again'),
            (re.compile(r'^(?:run\s+|spawn\s+)?mkfs\b'), 'mkfs: devloop never formats a disk'),
            (re.compile(r'^(?:run\s+|spawn\s+)?fdisk\s+\S+\s+\S'), 'fdisk with a change: devloop never partitions a disk'),
+           (re.compile(r'^(?:run\s+|spawn\s+)?fsck\s+(?:\S+\s+)*-[a-z]*r'), 'fsck -r: devloop never repairs a disk'),
            (re.compile(r'^(?:run\s+|spawn\s+)?(?:/initrd/bin/)?telnetd\s+off\b'),
             'telnetd off: it would end this loop until someone at the laptop types telnetd on')]
 

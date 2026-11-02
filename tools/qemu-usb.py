@@ -2556,6 +2556,217 @@ def scenario_settings(args, image, firmware, outdir):
     return results
 
 
+# 11/01/26 (the command-line suite, track fsck): fsck through the real kernel and its real USB stack. A guest cannot damage a
+# volume, so a copy of the foreign FAT32 stick is damaged here, the way a stick gets damaged, and plugged in as an emulated one.
+# tests/host/test_fsck.c proves what a repair does to a volume; this proves the command around it. macOS's fsck_msdos and
+# fsck.fat judge what is left.
+
+def fsck_layout(buf):
+    """partition 1's FAT32 layout, from its boot sector"""
+    start = struct.unpack_from('<I', buf, 446 + 8)[0] * 512
+    spc, rsv, nfats = buf[start + 13], struct.unpack_from('<H', buf, start + 14)[0], buf[start + 16]
+    spf, total = struct.unpack_from('<I', buf, start + 36)[0], struct.unpack_from('<I', buf, start + 32)[0]
+    fat1 = start + rsv * 512
+    return dict(spc=spc, spf=spf, fat1=fat1, fat2=fat1 + spf * 512, data=fat1 + nfats * spf * 512,
+                root=struct.unpack_from('<I', buf, start + 44)[0], end=(total - rsv - nfats * spf) // spc + 2,
+                fsi=start + struct.unpack_from('<H', buf, start + 48)[0] * 512)
+
+
+def fsck_fat_get(buf, g, c):
+    return struct.unpack_from('<I', buf, g['fat1'] + c * 4)[0] & 0x0FFFFFFF
+
+
+def fsck_fat_set(buf, g, c, v):
+    struct.pack_into('<I', buf, g['fat1'] + c * 4, v)
+    struct.pack_into('<I', buf, g['fat2'] + c * 4, v)
+
+
+def fsck_root_slots(buf, g):
+    c = g['root']
+    while True:
+        at = g['data'] + (c - 2) * g['spc'] * 512
+        for i in range(g['spc'] * 16):
+            yield at + i * 32
+        c = fsck_fat_get(buf, g, c)
+        if c >= 0x0FFFFFF8:
+            return
+
+
+def fsck_damage(path, twin):
+    """not unmounted cleanly, FSInfo wrong, a lost chain of three clusters and README.TXT's size past its chain. Without
+    twin the second FAT is blank too, which is sectors of it to copy: the time to pull. With twin, BIG.BIN has a second
+    name, as an interrupted rename leaves one: no repair at all"""
+    with open(path, 'rb') as f:
+        buf = bytearray(f.read())
+    g = fsck_layout(buf)
+    big = readme = free = None
+    for p in fsck_root_slots(buf, g):
+        if buf[p] == 0 and free is None:
+            free = p
+        if buf[p:p + 11] == b'BIG     BIN':
+            big = p
+        if buf[p:p + 11] == b'README  TXT':
+            readme = p
+    if big is None or readme is None or free is None:
+        raise RuntimeError('the foreign stick is not as this scenario knows it')
+    fsck_fat_set(buf, g, 1, 0x07FFFFFF)
+    struct.pack_into('<I', buf, g['fsi'] + 488, 12345)
+    size = struct.unpack_from('<I', buf, readme + 28)[0]
+    struct.pack_into('<I', buf, readme + 28, size + 5 * g['spc'] * 512)
+    made, c = [], g['end']
+    while len(made) < 3:
+        c -= 1
+        if fsck_fat_get(buf, g, c) == 0:
+            made.append(c)
+            at = g['data'] + (c - 2) * g['spc'] * 512
+            buf[at:at + g['spc'] * 512] = b'L' * (g['spc'] * 512)
+    for a, b in zip(made, made[1:]):
+        fsck_fat_set(buf, g, a, b)
+    fsck_fat_set(buf, g, made[-1], 0x0FFFFFFF)
+    if twin:
+        buf[free:free + 32] = buf[big:big + 32]
+        buf[free:free + 11] = b'TWIN    BIN'
+    else:
+        buf[g['fat2']:g['fat2'] + g['spf'] * 512] = bytes(g['spf'] * 512)
+    with open(path, 'wb') as f:
+        f.write(buf)
+    return g['spc'] * 512
+
+
+FSCK_ASK = 'Type usb1p1 to repair usb1p1: '
+
+
+def fsck_outdir(outdir, name):
+    """each of the three boots keeps its own transcript"""
+    if not outdir:
+        return None
+    path = os.path.join(outdir, name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def scenario_fsck(args, image, firmware, outdir):
+    results = []
+    src = find_image('foreign-fat32.img')
+    if not src:
+        return [('the foreign FAT32 image exists (make images)', False)]
+    tmpd = tempfile.mkdtemp(prefix='surfos-fsck-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    whole, pulled, twin = os.path.join(tmpd, 'whole.img'), os.path.join(tmpd, 'pulled.img'), os.path.join(tmpd, 'twin.img')
+    for path, t in ((whole, False), (pulled, False), (twin, True)):
+        shutil.copyfile(src, path)
+        cluster = fsck_damage(path, t)
+    try:
+        # a repair, whole, and everything that stands before it
+        vm = Vm('fsck-whole', args, image, firmware, mem='512', serial=True, outdir=fsck_outdir(outdir, 'whole'), extra=data_stick_args(whole))
+        try:
+            if boot_serial(vm, results, args.boot_timeout):
+                run_steps(vm, results, [
+                    ('fsck usb1p1; echo status $?', ['not unmounted cleanly', 'FSInfo says 12345', 'the two FATs differ', 'README.TXT: size',
+                                                    'no name reaches', 'fsck -r would:', 'status 1'], [], 'a look finds it all, status 1'),
+                    ('fsck -r usb1p1; echo status $?', ['It will:', FSCK_ASK], [('nope', ['Cancelled', 'status 1'])], 'a wrong answer: no'),
+                    ('fsck -r usb1p1; echo status $?', [FSCK_ASK], [(b'\x03', ['Cancelled'])], 'Ctrl+C at the question: no'),
+                    ('lsblk', ['usb1p1'], [], 'the device is let go of after Ctrl+C'),
+                    ('mount usb1p1 /x', ['/x: fat32'], [], 'mounted read-write'),
+                    ('fsck -r usb1p1; echo status $?', ['is mounted', 'status 2'], [], 'mounted: -r refused'),
+                    ('fsck usb1p1; echo status $?', ['mounted read-write', 'status 2'], [], 'mounted read-write: a look refused, with the reason'),
+                    ('umount /x', []),
+                    ('mount -r usb1p1 /x', ['/x: fat32'], [], 'mounted read-only'),
+                    ('fsck usb1p1; echo status $?', ['fsck -r would:', 'status 1'], [], 'a read-only mount: a look runs'),
+                    ('umount /x', [], [], 'and the mount it held is let go of'),
+                ], timeout=120)
+                # the output in a file, or nowhere, and the answer typed before the question: the plan shows, and the keys go
+                vm.send('fsck -r usb1p1 > /dev/null; echo status $?\nusb1p1\n')
+                results.append(('the plan on the console with the output elsewhere', vm.expect('It will:', 120)))
+                results.append(('and the question', vm.expect(FSCK_ASK, 120)))
+                time.sleep(2)
+                vm.send('nope\n')
+                results.append(('keys typed ahead did not answer it', vm.expect('status 1', 60)))  # ('Cancelled' went to /dev/null too)
+                results.append(('the prompt comes back', vm.expect(PROMPT, 60)))
+                run_steps(vm, results, [
+                    ('fsck -r usb1p1; echo status $?', ['copy the first FAT over the second', 'in a new FOUND directory', FSCK_ASK],
+                     [('usb1p1', ['saved in FOUND.000', 'repaired: clean', 'status 0'])], 'the repair, status 0'),
+                    ('fsck usb1p1; echo status $?', ['clean', 'status 0'], [], 'a look says clean'),
+                    ('fsck -r usb1p1; echo status $?', ['clean', 'status 0'], [], 'a repair of a clean volume asks nothing'),
+                    ('mount usb1p1 /x', ['/x: fat32'], [], 'mounted again'),
+                    ('run wc -l /x/BIG.BIN', ['16384'], [], 'BIG.BIN whole'),
+                    ('cat /x/README.TXT', ['A plain 8.3 name.'], [], 'README.TXT as it was'),
+                    ('ls /x/FOUND.000', ['FILE0000.CHK'], [], 'the lost chain has a name'),
+                    ('run wc -c /x/FOUND.000/FILE0000.CHK', [str(3 * cluster)], [], 'all three clusters of it'),
+                    ('eject usb1', ['safe to remove'], [], 'ejected'),
+                ], timeout=120)
+            check_bad(vm, results, vm.text())
+        finally:
+            vm.close()
+        for what, ok, text in fat_checks(whole, 'repaired stick'):
+            results.append((what, ok))
+            if not ok:
+                print(text, flush=True)
+
+        # Ctrl+C in a repair, a pull at the question, a pull in a repair: plugged in again, repaired again
+        vm = Vm('fsck-pulled', args, image, firmware, mem='512', serial=True, outdir=fsck_outdir(outdir, 'pulled'), extra=data_stick_args(pulled))
+        try:
+            if boot_serial(vm, results, args.boot_timeout):
+                vm.send('fsck -r usb1p1; echo status $?\n')
+                results.append(('the question, for Ctrl+C', vm.expect(FSCK_ASK, 120)))
+                vm.send('usb1p1\n')
+                time.sleep(0.04)
+                vm.ser.sendall(b'\x03')
+                results.append(('Ctrl+C in a repair: it ends', vm.expect(PROMPT, 120)))       # (and the line's echo with it)
+                run_steps(vm, results, [('fsck usb1p1; echo status $?', ['status '], [], 'a look after it')], timeout=120)
+                vm.send('fsck -r usb1p1; echo status $?\n')
+                results.append(('the question, for a pull', vm.expect(FSCK_ASK, 120)))
+                vm.mon.cmd('device_del stick1')
+                time.sleep(2)
+                vm.send('usb1p1\n')
+                results.append(('pulled at the question: nothing is said to be repaired', vm.expect('status ', 120) and 'repaired' not in vm.text()[-400:]))
+                results.append(('and the prompt comes back', vm.expect(PROMPT, 60)))
+                time.sleep(1)
+                vm.mon.cmd('device_add ' + DATA_STICK)
+                run_steps(vm, results, [('sleep 3000', []), ('lsblk', ['usb1p1'], [], 'plugged in again')], timeout=120)
+                vm.send('fsck -r usb1p1; echo status $?\n')
+                results.append(('the question, for a pull in a repair', vm.expect(FSCK_ASK, 120)))
+                vm.send('usb1p1\n')
+                time.sleep(0.15)
+                vm.mon.cmd('device_del stick1')
+                results.append(('pulled in a repair: it ends', vm.expect('status ', 120) and vm.expect(PROMPT, 60)))
+                time.sleep(1)
+                vm.mon.cmd('device_add ' + DATA_STICK)
+                run_steps(vm, results, [
+                    ('sleep 3000', []),
+                    ('lsblk', ['usb1p1'], [], 'plugged in once more'),
+                    ('fsck -r usb1p1; echo status $?', [FSCK_ASK], [('usb1p1', ['repaired: clean', 'status 0'])], 'repaired after the pulls'),
+                    ('fsck usb1p1; echo status $?', ['clean', 'status 0'], [], 'clean after the pulls'),
+                    ('mount usb1p1 /x', ['/x: fat32'], [], 'mounts'),
+                    ('run wc -l /x/BIG.BIN', ['16384'], [], 'BIG.BIN whole after the pulls'),
+                    ('ls /x', ['BIG.BIN', 'FOUND.000'], [], 'nothing gone'),
+                    ('eject usb1', ['safe to remove'], [], 'ejected, second time'),
+                ], timeout=120)
+            check_bad(vm, results, vm.text())
+        finally:
+            vm.close()
+        for what, ok, text in fat_checks(pulled, 'stick pulled and repaired'):
+            results.append((what, ok))
+            if not ok:
+                print(text, flush=True)
+
+        # a stick it will not repair: not a byte changes, FSInfo and the mark included
+        before_sum = sha256(twin)
+        vm = Vm('fsck-twin', args, image, firmware, mem='512', serial=True, outdir=fsck_outdir(outdir, 'twin'), extra=data_stick_args(twin))
+        try:
+            if boot_serial(vm, results, args.boot_timeout):
+                run_steps(vm, results, [
+                    ('fsck -r usb1p1; echo status $?', ['shares cluster', 'holds cluster', 'no repair: two names on one chain', 'status 1'], [],
+                     'two names on one chain: no repair, and no question'),
+                ], timeout=120)
+            check_bad(vm, results, vm.text())
+        finally:
+            vm.close()
+        results.append(('that stick is byte for byte as it was', sha256(twin) == before_sum))
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
@@ -2569,6 +2780,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
                                                              "file `/boot/initrd.tar' not found"),
              'no-kernel': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/surfos.bin',
                                                              'SurfOS: /boot/surfos.bin and /boot/grub/grub.cfg were not found')}
+SCENARIOS['fsck'] = scenario_fsck       # 11/01/26 (the command-line suite)
 
 
 def qemu_version(qemu):
@@ -2669,6 +2881,7 @@ def main():
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit',
                                'crashstack', 'shutdown', 'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
+                               'fsck',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
