@@ -19,7 +19,10 @@ A name becomes a path only through ar_safe_path(), as in tar. Links and devices 
 and modes are not kept.
 
 lseek stops at 2 GB here, and a read goes on past it. So an archive larger than that works, by
-reading forward to what is wanted, slowly: a member past 2 GB costs a read of all between.
+reading forward to what is wanted, slowly: a member past 2 GB costs a read of all between. Reading
+forward is bounded at four times the file: a pass through an archive in order needs about one, and
+without a bound a hostile directory that alternates low and high offsets would read 60 TB of a
+4 GB file. Past the bound unzip stops and says so, and naming the members wanted gets round it.
 
 Status 0, or 2 when anything was skipped or went wrong; the other files are still done.
 */
@@ -42,11 +45,14 @@ Status 0, or 2 when anything was skipped or went wrong; the other files are stil
 #define BUF_SIZE  32768
 #define NAME_SIZE 1024                  /* a name as UTF-8: longer ones are refused, and listed cut */
 #define SEEK_MAX  0x7fffffffu           /* what lseek's 32 signed bits reach */
+#define SKIP_TIMES 4                    /* reading forward to get somewhere stops at this many times the file's size */
 
 static const char usage_text[] = "usage: unzip [-l|-t|-p] [-o|-n] [-q] [-d dir] file.zip [name...]\n";
 
 static int fd, trouble;
 static uint32_t at;                     /* where fd is */
+static unsigned long long skipped;      /* read only to get somewhere */
+static int gave_up;                     /* that reached its bound */
 static uint32_t file_size;
 static struct stat archive_st;          /* what the archive is, for a member of the same name */
 static const char *archive;
@@ -76,14 +82,27 @@ static int seek_to(uint32_t to) {
     }
     while(at < to) {
         uint32_t want = to - at < BUF_SIZE ? to - at : BUF_SIZE;
-        ssize_t n = read(fd, in_buf, want);
+        ssize_t n;
+        if(skipped > (unsigned long long)SKIP_TIMES * file_size) {
+            gave_up = 1;
+            errno = EIO;
+            return -1;
+        }
+        n = read(fd, in_buf, want);
         if(n <= 0) {
             if(!n) errno = EIO;
             return -1;
         }
         at += (uint32_t)n;
+        skipped += (unsigned long long)n;
     }
     return 0;
+}
+
+/* why seek_to() or read_at() failed */
+static const char *seek_why(void) {
+    return gave_up ? "this archive's order would mean reading past 2 GB over and over: stopping here (name the members you want)" :
+                     strerror(errno);
 }
 
 /* n bytes at pos: 0, or -1 and errno */
@@ -119,14 +138,14 @@ static const char *open_archive(void) {
     if(!tail) return "out of memory";
     if(read_at(file_size - n, tail, n) < 0) {
         free(tail);
-        return strerror(errno);
+        return seek_why();
     }
     why = zip_find_end(tail, n, file_size, &end);
     free(tail);
     if(why) return why;
     central = malloc(end.cd_size ? end.cd_size : 1);
     if(!central) return "out of memory";
-    if(read_at(end.cd_offset, central, end.cd_size) < 0) return strerror(errno);
+    if(read_at(end.cd_offset, central, end.cd_size) < 0) return seek_why();
     return zip_check_directory(central, &end);
 }
 
@@ -135,7 +154,7 @@ static const char *open_archive(void) {
 static const char *copy_data(const struct zip_entry *e, uint32_t data, int out) {
     uint64_t done = 0;
     uint32_t left = e->csize, crc = 0;
-    if(seek_to(data) < 0) return strerror(errno);
+    if(seek_to(data) < 0) return seek_why();
     if(e->method == ZIP_STORED) {
         if(e->csize != e->usize) return "stored, but its two sizes differ";
         while(left) {
@@ -189,11 +208,11 @@ static const char *find_data(const struct zip_entry *e, uint32_t *data) {
     uint32_t nlen, xlen;
     uint64_t start;
     const char *why;
-    if(read_at(e->offset, head, ZIP_LOCAL_SIZE) < 0) return strerror(errno);
+    if(read_at(e->offset, head, ZIP_LOCAL_SIZE) < 0) return seek_why();
     if((why = zip_local(head, e, &nlen, &xlen))) return why;
     if(nlen != e->name_len || nlen > BUF_SIZE) return "its two headers give different names";
     if(nlen) {
-        if(read_at(e->offset + ZIP_LOCAL_SIZE, out_buf, nlen) < 0) return strerror(errno);
+        if(read_at(e->offset + ZIP_LOCAL_SIZE, out_buf, nlen) < 0) return seek_why();
         if(memcmp(out_buf, e->name, nlen)) return "its two headers give different names";
     }
     start = (uint64_t)e->offset + ZIP_LOCAL_SIZE + nlen + xlen;
@@ -364,6 +383,7 @@ static void walk(void) {
         } else {
             extract_one(&e, name, show);
         }
+        if(gave_up) return;
     }
     if(list_only) {
         printf("----------                     ----\n%10llu                     %u file%s\n", total, files, files == 1 ? "" : "s");
@@ -378,6 +398,8 @@ int main(int argc, char **argv) {
     fd = -1;
     trouble = 0;
     at = 0;
+    skipped = 0;
+    gave_up = 0;
     archive = NULL;
     central = NULL;
     list_only = test_only = to_stdout = overwrite = never = quiet = nmembers = 0;

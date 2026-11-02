@@ -1121,6 +1121,51 @@ static void test_past_2gb(void) {
     free(a);
 }
 
+/* A central directory that alternates low and high offsets past 2 GB: each high one costs a read from lseek's limit, so without a
+   bound a 4 GB file would cost about 60 TB. Both members are empty: the cost is all in getting there. */
+static void test_seek_bound(void) {
+    enum { PAIRS = 200 };                               /* 2.2 GB is 53 MB past lseek's limit: this many passes the bound */
+    const unsigned long long hole = 2200000000ULL;
+    unsigned char *a = malloc(47 * 2 * PAIRS + 4096), *p, *cd;
+    size_t head, tail_n;
+    unsigned high, cd_off, cd_n;
+    int i;
+    p = a;
+    put32(&p, 0x04034b50u); put16(&p, 20); put16(&p, 0); put16(&p, 0); put16(&p, 0); put16(&p, 0x21); put32(&p, 0);
+    put32(&p, 0); put32(&p, 0); put16(&p, 1); put16(&p, 0);
+    put8(&p, 'a');
+    head = (size_t)(p - a);
+    high = (unsigned)(head + hole);
+    put32(&p, 0x04034b50u); put16(&p, 20); put16(&p, 0); put16(&p, 0); put16(&p, 0); put16(&p, 0x21); put32(&p, 0);
+    put32(&p, 0); put32(&p, 0); put16(&p, 1); put16(&p, 0);
+    put8(&p, 'b');
+    cd_off = high + 31;
+    cd = p;
+    for(i = 0; i < 2 * PAIRS; i++) {
+        put32(&p, 0x02014b50u); put16(&p, 20); put16(&p, 20); put16(&p, 0); put16(&p, 0); put16(&p, 0); put16(&p, 0x21);
+        put32(&p, 0); put32(&p, 0); put32(&p, 0); put16(&p, 1); put16(&p, 0);
+        put16(&p, 0); put16(&p, 0); put16(&p, 0); put32(&p, 0); put32(&p, i & 1 ? high : 0);
+        put8(&p, i & 1 ? 'b' : 'a');
+    }
+    cd_n = (unsigned)(p - cd);
+    put32(&p, 0x06054b50u); put16(&p, 0); put16(&p, 0); put16(&p, 2 * PAIRS); put16(&p, 2 * PAIRS); put32(&p, cd_n); put32(&p, cd_off); put16(&p, 0);
+    tail_n = (size_t)(p - a) - head;
+    ars_reset();
+    ars_put_hole("/big.zip", a, head, hole, tail_n);
+    check(ars_cmd(unzip_main, "unzip -t -q /big.zip") == 2, "a directory that sends the reader back and forth past 2 GB: refused at the bound");
+    check(has(ars_stderr(), "past 2 GB"), "and it is said");
+    check(ars_bytes_read() <= 5 * (hole + 1000000), "and what was read stayed near the bound: at most five times the file");
+    ars_reset();
+    ars_put_hole("/big.zip", a, head, hole, tail_n);
+    check(ars_cmd(unzip_main, "unzip -l /big.zip") == 0, "-l reaches nothing past the directory, and lists it");
+    ars_reset();
+    ars_put_hole("/big.zip", a, head, hole, tail_n);
+    ars_mkdir("/d");
+    ars_chdir("/d");
+    check(ars_cmd(unzip_main, "unzip -n -q /big.zip") == 2 && ars_exists("/d/b"), "unpacking stops at the bound too, what came before it stands");
+    free(a);
+}
+
 /**** the host's tools ****/
 
 static void test_host(void) {
@@ -1239,6 +1284,7 @@ int main(void) {
     test_damage();
     test_failures();
     test_past_2gb();
+    test_seek_bound();
     test_host();
     return report("test_unzip");
 }
