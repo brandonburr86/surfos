@@ -20,6 +20,7 @@ page loads for itself and the rules of that; pictures; find, links by keyboard, 
 #include "url.h"
 #include "http.h"
 #include "doc.h"
+#include "font.h"
 #include "layout.h"
 #include "paint.h"
 #include "browser.h"
@@ -902,6 +903,96 @@ static void reading(void) {
     wb_cancel(&b);
 }
 
+/**** measured as painted (11/02/26, the integration of milestones 2 and 3) ****/
+
+static unsigned int tinted(unsigned int c) {    /* paint.c's wp_tint() of find's colour over c */
+    return ((c >> 16 & 255) * 0xff / 255) << 16 | ((c >> 8 & 255) * 0xd3 / 255) << 8 | (c & 255) * 0x4d / 255;
+}
+
+/* Is there a pixel of the page's text in column x between rows y0 and y1 of a screen, its background being bg? */
+static int ink_in(const unsigned int *px, int x, int y0, int y1, unsigned int bg) {
+    int y;
+    for(y = y0; y < y1; y++) if(px[y * W + x] != bg) return 1;
+    return 0;
+}
+
+/* find's mark, Tab's frame and an image's frame where what they are about is painted: proportional text of any size
+   and style by wf_width(), as layout.c and paint.c have it, code in its cells, an image's alt text in cells */
+static void measured(void) {
+    static unsigned int plain[W * H];
+    struct wb_request q;
+    struct wb_page *p;
+    const unsigned int bg = 0xfffdf5;
+    size_t i;
+    int k, frames = 0, framed = 0;
+
+    wb_cancel(&b);
+    wb_go(&b, "https://measure.test/");
+    serve("<title>M</title><h1>Big wave</h1><p>a <b>bold wave</b> and <code>mono wave</code> and plain wave here"
+          "<p><a href=x.html>a link that goes on and on, over the end of its line and on to the next one, long enough to "
+          "wrap at least once on a page this wide</a><p><img src=n.png alt=\"an alt text\">");
+    while(wb_take(&b, &q)) wb_image_failed(&b, q.page, q.item, 0, 0);
+    p = wb_current(&b);
+    paint();
+    memcpy(plain, screen, sizeof(plain));
+    wb_key(&b, 6);
+    type("wave");
+    for(k = 0; k < 4; k++) {
+        const struct wl_item *it = NULL;
+        int x0, x1, y0, y1, x, y, outside = 0, inside = 0;
+        char what[160];
+        for(i = 0; i < p->lay.count && !it; i++)
+            if(p->lay.items[i].kind == WI_TEXT && p->lay.items[i].off <= b.find_at && b.find_at + 4 <= p->lay.items[i].off + p->lay.items[i].len)
+                it = &p->lay.items[i];
+        if(!b.find_hit || !it) {
+            check(0, "find's word, in one item");
+            break;
+        }
+        x0 = it->x + wf_width(p->doc.text + it->off, b.find_at - it->off, it->scale, it->style);
+        x1 = x0 + wf_width(p->doc.text + b.find_at, 4, it->scale, it->style);
+        y0 = WB_TOOLBAR + it->y - p->scroll;
+        y1 = y0 + it->h;
+        paint();
+        for(y = y0; y < y1; y++)
+            for(x = 0; x < W - WB_SCROLLBAR; x++) {
+                unsigned int was = plain[y * W + x], now = screen[y * W + x];
+                if(x >= x0 && x < x1) inside += now == tinted(was);
+                else outside += now != was;
+            }
+        snprintf(what, sizeof(what), "find's mark on \"%.*s\" (size %d%s): the word's width and height, nothing else",
+                 (int)it->len, p->doc.text + it->off, wf_cell_h(it->scale), it->style & WS_MONO ? ", code" : it->style & WS_BOLD ? ", bold" : "");
+        check(!outside && inside == (x1 - x0) * (y1 - y0), what);
+        if(it->style & WS_MONO) check(x1 - x0 == 4 * wf_cell_w(it->scale), "code: four cells");
+        else check(ink_in(plain, x0, y0, y1, bg) && !ink_in(plain, x0 - 1, y0, y1, bg) && !ink_in(plain, x1, y0, y1, bg),
+                   "from the first column of its ink to the end of its last letter's advance");
+        wb_key(&b, 13);
+    }
+    wb_key(&b, 27);
+
+    /* Tab's frame round each line of a link, its text inside it */
+    wb_key(&b, 9);
+    check(b.tab_link == 0, "Tab: the link");
+    paint();
+    for(i = 0; i < p->lay.count; i++) {
+        const struct wl_item *it = &p->lay.items[i];
+        int y0 = WB_TOOLBAR + it->y - p->scroll;
+        if(it->link != 0 || it->kind != WI_TEXT) continue;
+        frames++;
+        framed += screen[(y0 - 1) * W + it->x - 1] == 0x153d49 && screen[(y0 + it->h) * W + it->x + it->w] == 0x153d49 &&
+                  ink_in(plain, it->x, y0, y0 + it->h, bg) && !ink_in(plain, it->x + it->w, y0, y0 + it->h, bg) &&
+                  it->w == wf_width(p->doc.text + it->off, it->len, it->scale, it->style);
+    }
+    check(frames >= 2 && framed == frames, "a link over two lines: a frame round each, its ink inside, as wide as its text");
+    wb_key(&b, WB_KEY_BACKTAB);
+
+    /* an image's alt text in its frame is in cells, as layout.c sizes the frame */
+    for(i = 0; i < p->lay.count; i++)
+        if(p->lay.items[i].kind == WI_IMAGE)
+            check(p->lay.items[i].w == (int)wf_count("an alt text", 11) * WF_W + 8 && p->lay.items[i].h == WF_H + 8,
+                  "an image's frame: its alt text's cells and the frame's padding");
+    wb_cancel(&b);
+}
+
 int main(void) {
     char tall[20000], msg[200];
     int x, y, i, s0;
@@ -1051,6 +1142,7 @@ int main(void) {
     loads();
     pictures();
     reading();
+    measured();
 
     wb_free(&b);
     check(ut_alloc_live == 0, "nothing held at the end");
