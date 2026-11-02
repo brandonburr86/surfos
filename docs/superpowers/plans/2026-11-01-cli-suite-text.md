@@ -1,6 +1,6 @@
 # The command-line suite, track text
 
-The account of track text of the brief `2026-11-01-cli-suite.md`: stage 1, the review of it, stage 2 (`grep -E`, `sed`), the second review, and where the code comes from.
+The account of track text of the brief `2026-11-01-cli-suite.md`: stage 1, the review of it, stage 2 (`grep -E`, `sed`), the second review, where the code comes from, and the third review.
 
 ## Stage 1: the libsurf additions
 
@@ -188,12 +188,12 @@ last scan stopped inside a word of letters such as `-ab` at `argv[1]`: then noth
 
 | Test | Checks | What |
 |---|---|---|
-| `test_regex` | 81,325 | a table of 533 rows of my own, rule by rule, each read by the oracle too and run through glibc; errors and limits; flags; UTF-8; back-references; 30,000 random patterns against an oracle in the test, which is POSIX's rule the slow way, in both syntaxes, and against glibc for the whole match; 30,000 fuzzed patterns, offsets checked to be on character boundaries; pathological patterns on long text; the limits in CPU time, each run measured against another that must cost the same order |
+| `test_regex` | 98,606 | a table of 553 rows of my own, rule by rule, each read by the oracle too and run through glibc; errors and limits; flags; UTF-8; back-references; 30,000 random patterns against an oracle in the test, which is POSIX's rule the slow way, in both syntaxes, and against glibc for the whole match; 10,000 random patterns with back-references against a second oracle, which goes every way through; 30,000 fuzzed patterns, offsets checked to be on character boundaries; pathological patterns on long text; the limits in CPU time, each run measured against another that must cost the same order |
 | `test_strtod` | 323,548 | bit for bit against glibc, with where it stops and ERANGE: every shape of number, the ends of the range, 40,000 random doubles in seven notations, exact halfway points with long double, near-numbers; `sscanf` |
 | `test_libm` | 294,949 | a grid, random doubles and the awkward places against glibc; Annex F's cases against the test's own table; the fingerprint |
 | `test_getopt` | 87 | step by step against glibc with `POSIXLY_CORRECT`; the messages |
 
-Against glibc, 48 of the 533 table rows differ, none a failure, and each of them says why in the table: on 36 glibc keeps a group of an earlier
+Against glibc, 51 of the 553 table rows differ, none a failure, and each of them says why in the table: on 39 glibc keeps a group of an earlier
 iteration, on 6 it does not divide the match by POSIX's rule (`(p|pq)(qr|r)` on `pqr`, `(pp|ppp)*` on seven `p`), on `(p*){0,2}` it reports a last, empty iteration that
 was not needed, and 5 it refuses by the decision above about `{`. A difference not recorded so is printed, and there are none. On 100,000 random
 patterns not one whole match differed from glibc's. By hand (`REGEX_FUZZ_HOST=1 test_regex`, in the C.UTF-8 locale) 100,000 fuzzed
@@ -302,8 +302,8 @@ working file, a backup and `r` open theirs during the run, and running out there
 
 | Test | Checks | What |
 |---|---|---|
-| `tests/test_sed.py` | 1,839 | `sed-host` and `grep-host` process against process with the real tools: stdout, status, and every file afterwards. 575 rows of corpus for sed and 54 for grep; 300 random scripts each alone and with `-s` on two files; bad scripts and input made at random; a megabyte's line; 200 nested `{`; a reader that goes; and `own_rules()` and `undecided()`, ours against what is written there, where the real tools cannot be the reference |
-| `test_sedsave` | 114 | `user/bin/sed.c` on the simulated file system: `-i`, backups and `w` with each write, fsync, close and rename failing, half-done renames, reads that fail, twins, read-only disks, names of one file, 3000 runs in one process for leaks, with `D` too |
+| `tests/test_sed.py` | 1,854 | `sed-host` and `grep-host` process against process with the real tools: stdout, status, and every file afterwards. 589 rows of corpus for sed and 54 for grep; 300 random scripts each alone and with `-s` on two files; bad scripts and input made at random; a megabyte's line; 200 nested `{`; a reader that goes; and `own_rules()` and `undecided()`, ours against what is written there, where the real tools cannot be the reference |
+| `test_sedsave` | 118 | `user/bin/sed.c` on the simulated file system: `-i`, backups and `w` with each write, fsync, close and rename failing, half-done renames, reads that fail, twins, read-only disks, names of one file, 3000 runs in one process for leaks, with `D` too |
 
 **Two builds of one source.** `tests/host/toolhost/` makes `sed.c` and `grep.c` programs of the host: the host's C library, the library's regex, and a
 small `surf.h`. That compares with the real tools and runs under sanitizers anywhere. `tests/host/sed_bridge.c` builds it against SurfOS's headers on
@@ -311,7 +311,7 @@ small `surf.h`. That compares with the real tools and runs under sanitizers anyw
 
 **Against GNU sed 4.9 in the Docker image.** Everything above. Random scripts found the range rules and the hold space's reset. By hand, 1500 rounds (6,248 checks) found
 two differences, one rule with two faces; in the second review's round a new seed found one more, a range to `$` that starts on the last line. `make unittest` runs 300
-rounds. On the last code, by hand, seeds 94 and 95, 1800 rounds each: 7,545 checks each, none failed. The real sed does not end on one script of the second, which is skipped.
+rounds. On the last code, by hand, seeds 96 and 97, 1800 rounds each: 7,560 checks each, none failed.
 
 **Against BSD sed and grep on the Mac:** the 141 and 45 rows of corpus that POSIX covers and BSD agrees with; the rest is GNU's alone. The test says so when it runs there.
 
@@ -363,14 +363,15 @@ on that tree, and the account said "clean" anyway. On this tree, all on the Mac 
 
 | Run | Result |
 |---|---|
-| `test_regex` | 30,000 rounds, 81,324 checks, none failed, no report |
+| `test_regex` | 30,000 rounds and 10,000 with back-references, 98,605 checks, none failed, no report |
 | `test_libm` | 294,949 checks, none failed, no report |
 | `test_getopt` | 83 checks, 4 differences from macOS's `getopt` (`optind` after a missing argument), no report |
 | `test_strtod` | 307,657 checks; with `sscanf`, `-arch x86_64` under Rosetta, 311,175; 2 differences from macOS (`nan(a b)`, ERANGE for an exact subnormal), no report |
-| `test_sed.py` against BSD's sed | 1500 rounds of bad scripts and input, 2,952 checks, none failed, no report |
-| every row of its corpus, GNU's too, and 300 random scripts alone and with `-s`, by hand | 1,175 runs, no report; nothing to compare with here, as GNU's sed is in Docker |
-| `test_sedsave` with the host's `malloc` | 114 checks, none failed, no report |
-| 1,500 scripts heavy in `D` with text that grows after it, by hand | no report; 56 stopped by a limit of 0.5 s |
+| `test_sed.py` against BSD's sed | 1500 rounds of bad scripts and input, 2,953 checks, none failed, no report |
+| every row of its corpus, GNU's too, and 300 random scripts alone and with `-s`, by hand | 1,189 runs, no report; nothing to compare with here, as GNU's sed is in Docker |
+| `test_sedsave` with the host's `malloc` | 118 checks, none failed, no report |
+| 1,500 scripts heavy in `D` with text that grows after it, by hand | no report; 49 stopped by a limit of 0.5 s |
+| `stdio.c` in the third review's harness: a pipe read dry, a smaller buffer, `ungetc()` | no report; before the fix, a heap overflow at `ungetc()` |
 
 Not run under them: the comparison with GNU itself, which needs its sed and so Docker; `system.c`; anything inside SurfOS. Scripts with `D`, `:` or `G` are left out of `test_sed.py`'s bad scripts, as they may
 loop for ever as they should.
@@ -399,16 +400,18 @@ the rules do; and the facts in `add_pair()`'s table are what any sed must do wit
 is `struct replacing`, `struct addr` is `struct address`, `a1` and `a2` are `from` and `to`, `do_subst()` is `substitute()`, `read_label()` is `take_label()`, `read_text()` is `take_text()`, `read_filename()` is `take_filename()`, `read_pattern()` is
 `next_line()`, `open_next()` is `next_file()`, `accum` is `built`, `replaced` is `substituted`. GNU's sed is still named where its behaviour is what a comment reports, which is reference, not source.
 
-**The table in `test_regex.c` is my own now:** 533 rows written rule by rule, on texts and patterns of their own: the leftmost longest, plain characters, braces, anchors, empty matches, repetitions of what can be empty, repetition in repetition,
+**The table in `test_regex.c` is my own now:** 553 rows written rule by rule, on texts and patterns of their own: the leftmost longest, plain characters, braces, anchors, empty matches, repetitions of what can be empty, repetition in repetition,
 alternatives with groups, stale groups, intervals, dividing a match among its parts, brackets, case, basic syntax. Each row's answer is in the table, and at each run the library and the oracle must both give it, the oracle reading the row's
-pattern with a small reader of its own; basic-syntax rows carry the same pattern as the oracle reads it. The 16 that are outside POSIX or the oracle, `\<` before an anchor and back-references, have the library and glibc alone. Against glibc see above.
+pattern with a small reader of its own; basic-syntax rows carry the same pattern as the oracle reads it. Rows with back-references go to the second oracle (the third review, below). The 2 that are outside POSIX, `\<` before an anchor or a
+star, have the library and glibc alone. Against glibc see above.
 
 The rule the stale-group rows test, that a group the last iteration did not pass through is not set, is Kuklewicz's reading of POSIX, which glibc and most engines do not follow: the idea is credited here and in the table's comment, and the rows are mine.
 
 Nothing the old rows caught is lost. 1,708 mutants of `regex.c` were made by rule: each comparison and `&&` or `||` turned, each `+ 1`, `++`, `= 0`, `return 0`, `continue` and the like changed, each `if` turned over, each simple statement dropped; 1,684 of them build. Each ran
-through the old table alone and the new table alone. The old one caught 983 and the new one 1,071, 90 that the old one did not. It took three runs: the first showed 104 caught only by the old table, nearly all back-references and the letters at the ends of the
-alphabet under `REG_ICASE`, so rows went in for those; the second showed `nxt->n = 0` in `make_table()`, for which `p*(pq|qp)r` and two more went in. Two are left that the old table caught and the new one did not in the last run, and they say nothing about
-either: `stack[sp--]` at line 1029 and a state buffer one short at line 1121 overrun memory, and run after run each table crashes on them or passes by chance. The 611 that neither table catches are left to the rest of `test_regex`; I did not measure that.
+through the old table alone and the new table alone. It took three runs: the first showed 104 caught only by the old table, nearly all back-references and the letters at the ends of the alphabet under `REG_ICASE`, so rows went in for those; the second
+showed `nxt->n = 0` in `make_table()`, for which `p*(pq|qp)r` and two more went in. The third left two, `stack[sp--]` at line 1029 and a state buffer one short at line 1121, which overrun memory, and run after run each table crashes on them or passes by
+chance. With the third review's rows, the old table catches 982 and the new one 1,092, and none that the old one catches escapes the new one. The 592 that neither table catches are left to the rest of `test_regex`, and the third review's
+mutants (below) show what that rest does.
 
 **What was not in question,** and stays as the last round said:
 
@@ -425,10 +428,36 @@ either: `stack[sp--]` at line 1029 and a state buffer one short at line 1121 ove
 **History.** `cli/text` was rewritten from `48a9396` on, so that `sed.c` first appears in its new form, and no commit from there on holds the old functions or names. The commits before it stay as they were, because `cli/lang` has merged them as far as
 `7ebf1ed`. The old table of `test_regex.c` is in those commits, and so stays in the history up to the commit that replaces it; the tree has only the new one.
 
+### The third review
+
+The review of `1ecbce4` found that the rewritten `sed` behaves as the old code on about 33,500 random scripts, and these, each fixed with a test seen to fail first (`test_regex` rows for the mutants, run against each mutant):
+
+| What | Fix | Test |
+|---|---|---|
+| Back-references were not pinned: four mutants of `regex.c` passed all 81,324 checks. Inner groups not cleared on each pass of a loop; the last way to the longest match kept instead of the first; `{,n}` read as `{1,n}`; the first match kept instead of the longest | rows: `((p)\|q)*r\2` on `pqrp`, `(x(y)?)*z\2`, `(p*)(p*)\2` on `ppppq`, `(p\|pq)\1*` on `pqpq`, `(p\|pq)(q*)\1`, `x{,2}` on `y`, `(p{,2})q`, and more; and a second oracle (below) | the table; 10,000 random patterns with back-references |
+| `fflush()` on a pipe, terminal or socket read dry reset the direction but left the place in the buffer, so `setvbuf()` with a smaller one and then `ungetc()` wrote past it | both places go to 0 there, and `setvbuf()` sets them too | `libtest popen` in QEMU, a 4-byte buffer inside 256 checked byte by byte; the reviewer's harness under ASan |
+| `sed -i.bak 's/a/X/;w f.bak' f` left `w`'s lines in the backup, status 0, and the old file nowhere | a `w` name that is a backup of `-i`'s is refused, whatever its case or path | `test_sedsave`, `own_rules()` |
+| `addr,$c TEXT` on a range that starts on the last line prints the text now | GNU sed 4.9 does the same, for every form tried (`2,$`, `$,$`, `/re/,$`, `$!N;2,$c`, `-s` across files); it is the code before `8d1f38d` that never printed it | 14 rows in the corpus |
+| `l` built the whole spelled line, up to four times the line, and kept it for the run | it is freed when the line is out | |
+
+**The second oracle.** With a back-reference, what a node matches depends on what a group took, so the first oracle's spans cannot be worked out node by node. The second goes every way through the tree in the order the library documents for
+back-references: alternatives from the first, a repetition's body before leaving it, an unbounded loop ending after an iteration that read nothing, the groups inside a group cleared each time it is entered; and of the ways to the longest end from the
+leftmost start that has one, it keeps the first. It is the same rule written again over the tree, a second reading and not a proof of POSIX, which leaves the groups open here. The random patterns are the first oracle's, with some characters made
+references to groups closed before them, as the parser sees them; table rows with back-references go to it too. glibc is not asked about them: its rules with back-references are its own.
+
+**The reviewer's mutants.** Their `mut.py`, run against this tree (its random step also runs the new random back-references): of 21 mutants, 18 are caught, 16 by the table, 7 by the rest of `test_regex`, 14 by the random patterns. The three
+left change nothing a test can see, so no row can catch them:
+
+- *walk keeps inner groups* removes the clearing of a group's inner groups in `walk()`. `regexec()` sets every group to -1 before `walk()`, and `walk()` reaches a group node once, before its inner groups, so they are -1 already.
+- *groups after a longer match not copied* puts `if(!found || x->me == pos)` before the copy at `R_ACCEPT`; but `found` and `x->me = pos` are set just before it, so the copy is always made.
+- *iteration may be empty when not needed (bounded)* adds `(max == INF || p < e)` to the test after `fwd()`; at `p == e` the line before it has already left the loop whenever that test could be true.
+
 ### Where it ended
 
-**`make test-all`:** passed through the lock on the last tree (the account aside): the smoke test's 545 checks at -O0 and at -O2, the Files test's 51 at each.
+**`make test-all`:** passed through the lock on the last tree (the account aside): the smoke test's 545 checks at -O0 and at -O2, the Files test's 51 at each. The run before it, on the same tree, failed two steps at -O0 that
+none of this touches, while another track's test-all ran in the lock's other slot: the boot with `settingsdisk=owner settings=off` (its `settings` said "saved on the stick", not "on hda1") and one of httpd's eight clients
+(a connection the server closed). Both passed on the run that counts.
 
-**`make unittest`:** passed on the same tree, all of it: `test_regex` 81,325, `test_strtod` 323,548, `test_libm` 294,949, `test_getopt` 87, `test_sedsave` 114, `test_sed.py` 1,839, none failed.
+**`make unittest`:** passed on the same tree, all of it: `test_regex` 98,606, `test_strtod` 323,548, `test_libm` 294,949, `test_getopt` 87, `test_sedsave` 118, `test_sed.py` 1,854, none failed.
 
-**Each commit** from `48a9396` on, as rewritten, was built and ran these host tests in Docker on its own tree.
+**Each commit** from `48a9396` on, as rewritten in the last round, was built and ran these host tests in Docker on its own tree; so was each of the third review's commits.
