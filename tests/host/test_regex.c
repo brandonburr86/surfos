@@ -326,6 +326,16 @@ static void table(void) {
     expect(B, "\\(^a\\)", "a", "(0,1)(0,1)");
     expect(B, "\\(a$\\)", "a", "(0,1)(0,1)");
     expect(B, "a\\|^b", "b", "(0,1)");
+    /* only the first ^ is an anchor, a star after any anchor is itself: as glibc reads them */
+    expect(B, "^^a", "^a", "(0,2)");
+    expect(B, "^^a", "a", "NOMATCH");
+    expect(B, "^^", "^", "(0,1)");
+    expect(B, "\\(^^a\\)", "^a", "(0,2)(0,2)");
+    expect(B, "a\\|^^b", "^b", "(0,2)");
+    expect(B, "^^*a", "^*a", "NOMATCH");
+    expect(B, "^**a", "**a", "(0,3)");
+    expect(B, "\\<^a", "a", "NOMATCH");
+    expect(B, "\\<*a", "*a", "NOMATCH");
     /* braces that are no interval */
     expect(E, "{", "{", "(0,1)");
     expect(E, "a{", "a{", "(0,2)");
@@ -429,6 +439,22 @@ static void errors(void) {
     errors_case(E, "(()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()a){32767}", S_ESIZE);
     errors_case(E, "a{32767}", 0);
     errors_case(E, "a*****************", S_ESIZE);
+    {
+        /* 64 levels of 16 operators around 40000 states: what walk() would pay for is refused, not 41 s per 100 bytes */
+        char *p = malloc(4096), *q = malloc(4096);
+        strcpy(p, "(a*){20000}");
+        for(i = 0; i < 63; i++) {
+            snprintf(q, 4096, "(%s)****************", p);
+            strcpy(p, q);
+        }
+        errors_case(E, p, S_ESIZE);
+        /* and without groups there is nothing to report: no such limit */
+        errors_case(E | S_NOSUB, p, 0);
+        /* one level of it is fine */
+        errors_case(E, "((a*){20000})*", 0);
+        free(p);
+        free(q);
+    }
     {
         char *p = malloc(200001);               /* a pattern of more than the states there may be */
         memset(p, 'a', 200000);
@@ -596,6 +622,11 @@ static void backrefs(void) {
     flags_case(E, "((a)|b)*\\2", "ab", 0, "NOMATCH");        /* the last iteration has no \2 */
     flags_case(E, "(a*)+$\\1", "b", 0, "(1,1)(1,1)");
     flags_case(E, "(\xc3\xa9)\\1", "\xc3\xa9\xc3\xa9", 0, "(0,4)(0,2)");
+    /* a back-reference is a character's bytes, not just bytes: the second \xC3 starts a sequence */
+    flags_case(B, "\\(.\\)\\1", "\xc3\xc3\xa9", 0, "NOMATCH");
+    flags_case(B, "\\(\xc3\\)\\1", "\xc3\xc3\xa9", 0, "NOMATCH");
+    flags_case(B, "\\(.\\)\\1", "\xc3\xc3", 0, "(0,2)(0,1)");
+    flags_case(B, "\\(.\\)\\1", "\xc3\xa9\xc3\xa9", 0, "(0,4)(0,2)");
     /* a star whose body can be empty ends */
     flags_case(E, "(a*)*b\\1", "aab", 0, "(0,3)(2,2)");
     flags_case(E, "(|a)*b\\1", "b", 0, "(0,1)(0,0)");
@@ -941,6 +972,22 @@ static void random_cases(int rounds) {
     printf("test_regex: %d random patterns: %d whole matches differ from the host's\n", rounds, hostbad);
 }
 
+/* is p where a character starts or ends in s? The characters counted from the start, on their own, not by the library's code */
+static int at_boundary(const char *s, int n, int p) {
+    int i = 0;
+    while(i < p && i < n) {
+        const unsigned char *u = (const unsigned char *)s + i;
+        int k = 1;
+        if(u[0] >= 0xC2 && u[0] <= 0xDF && i + 1 < n && (u[1] & 0xC0) == 0x80) k = 2;
+        else if(u[0] >= 0xE0 && u[0] <= 0xEF && i + 2 < n && (u[1] & 0xC0) == 0x80 && (u[2] & 0xC0) == 0x80 &&
+                !(u[0] == 0xE0 && u[1] < 0xA0) && !(u[0] == 0xED && u[1] > 0x9F)) k = 3;
+        else if(u[0] >= 0xF0 && u[0] <= 0xF4 && i + 3 < n && (u[1] & 0xC0) == 0x80 && (u[2] & 0xC0) == 0x80 && (u[3] & 0xC0) == 0x80 &&
+                !(u[0] == 0xF0 && u[1] < 0x90) && !(u[0] == 0xF4 && u[1] > 0x8F)) k = 4;
+        i += k;
+    }
+    return i == p;
+}
+
 static const char *printable(const char *s, char *b, size_t size) {
     size_t n = 0;
     for(; *s && n + 5 < size; s++) {
@@ -958,7 +1005,7 @@ static void fuzz(int rounds) {
     static const char pieces[] = "ab()[]{}|*+?.^$\\-:,=0129<>wWsSbB`'";
     static const char *const bytes[] = { "\xc3\xa9", "\xe2\x82\xac", "\xff", "\xc3", "\x80", "[[:", ":]]", "[.", "=]", "\\(", "\\)", "\\{", "\\}",
                                          "\\|", "\\1", "\\2" };
-    static const char *const text_parts[] = { "a", "b", "c", "\n", "\xc3\xa9", "\xff", "\xe2\x82", " ", "_" };
+    static const char *const text_parts[] = { "a", "b", "c", "\n", "\xc3\xa9", "\xff", "\xe2\x82", " ", "_", "\xc3" };
     char pat[64], text[64];
     int i, k, compiled = 0;
     for(i = 0; i < rounds; i++) {
@@ -1005,7 +1052,8 @@ static void fuzz(int rounds) {
             if(flags & S_NOSUB) continue;
             for(j = 0; j < MAXSUB; j++) {
                 int so = m[j].rm_so, eo = m[j].rm_eo;
-                if(j > (int)re.re_nsub ? so != -1 || eo != -1 : so == -1 ? eo != -1 : so < m[0].rm_so || eo > m[0].rm_eo || so > eo || eo > len)
+                if(j > (int)re.re_nsub ? so != -1 || eo != -1 : so == -1 ? eo != -1 :
+                   so < m[0].rm_so || eo > m[0].rm_eo || so > eo || eo > len || !at_boundary(text, len, so) || !at_boundary(text, len, eo))
                     fail("fuzz offsets", pat, text, "bad", "in the string");
             }
         }
@@ -1046,6 +1094,138 @@ static void long_case(const char *pat, int flags, const char *fill, size_t n, co
     if(ms > 120000) fail("time", pat, "long", "too slow", "fast");
 }
 
+/* CPU milliseconds of one regexec(), and its status */
+static double one_run(const char *pat, int flags, const char *text, size_t nmatch, int want, int repeat) {
+    surf_regex_t re;
+    surf_regmatch_t m[3];
+    clock_t c0;
+    size_t len = strlen(text);
+    int i, rc = 0;
+    if(surf_regcomp(&re, pat, flags)) {
+        fail("compile", pat, "timing", "error", "0");
+        return 0;
+    }
+    c0 = clock();
+    for(i = 0; i < repeat; i++) {               /* the length given, or the time would be strlen()'s */
+        m[0].rm_so = 0;
+        m[0].rm_eo = (int)len;
+        rc = surf_regexec(&re, text, nmatch, m, S_STARTEND);
+    }
+    {
+        double ms = (double)(clock() - c0) * 1000.0 / CLOCKS_PER_SEC;
+        surf_regfree(&re);
+        checks++;
+        if(rc != want) {
+            char g[16], w[16];
+            snprintf(g, sizeof(g), "%d", rc);
+            snprintf(w, sizeof(w), "%d", want);
+            fail("timing's status", pat, "...", g, w);
+        }
+        if(getenv("REGEX_VERBOSE")) printf("%.1f ms: /%.60s/\n", ms, pat);
+        return ms;
+    }
+}
+
+static char *repeated(const char *fill, size_t times, const char *tail) {
+    size_t k = strlen(fill), t = strlen(tail), i;
+    char *s = malloc(times * k + t + 1);
+    for(i = 0; i < times; i++) memcpy(s + i * k, fill, k);
+    memcpy(s + times * k, tail, t + 1);
+    return s;
+}
+
+/* The limits hold in time, not only in counts. Nothing here depends on the machine's speed: each run is measured against a run
+   that must cost the same order, in CPU time. */
+static void time_bounds(void) {
+    char *s, *p;
+    double plain, ms;
+    int i, n;
+    size_t k = 40000;
+    /* REG_ESTEPS after its 20,000,000 steps, the yardstick */
+    s = malloc(64);
+    memset(s, 'a', 50);
+    strcpy(s + 50, "baaac");
+    plain = one_run("\\(a\\|aa\\)*b\\1c", 0, s, 2, S_ESTEPS, 1);
+    free(s);
+    if(plain < 1) plain = 1;
+    /* a comparison that fails costs what it reads: \1 is 40 KB here, and it is tried at every place */
+    s = repeated("a", k, "b");
+    p = repeated("a", 2 * k, "");
+    {
+        char *text = malloc(3 * k + 2);
+        strcpy(text, s);
+        strcat(text, p);
+        ms = one_run("\\(a*b\\).*\\1", 0, text, 2, S_ESTEPS, 1);
+        checks++;
+        if(ms > 60 * plain) {
+            char g[64];
+            snprintf(g, sizeof(g), "%.0f ms against %.0f", ms, plain);
+            fail("a failed back-reference is charged", "\\(a*b\\).*\\1", "...", g, "the same order");
+        }
+        free(text);
+    }
+    free(s);
+    free(p);
+    /* clearing 1000 groups is 1000 steps' work, and so is each new start */
+    p = malloc(4096);
+    n = snprintf(p, 4096, "((z");
+    for(i = 0; i < 1000; i++) n += snprintf(p + n, (size_t)(4096 - n), "()");
+    snprintf(p + n, (size_t)(4096 - n), ")|a|a)*\\2");
+    s = repeated("a", 40, "");
+    ms = one_run(p, S_EXTENDED, s, 2, S_ESTEPS, 1);
+    checks++;
+    if(ms > 40 * plain) {
+        char g[64];
+        snprintf(g, sizeof(g), "%.0f ms against %.0f", ms, plain);
+        fail("clearing groups is charged", "((z()...)|a|a)*\\2", "...", g, "the same order");
+    }
+    free(s);
+    free(p);
+    /* a bracket of 1000 ranges costs little more than one of 10 */
+    {
+        double few = 1, many = 0;
+        int members;
+        for(members = 10; members <= 1000; members *= 100) {
+            size_t at = 0;
+            p = malloc(16000);
+            at = (size_t)snprintf(p, 16000, "([");
+            for(i = 0; i < members; i++) {              /* every second character of a stretch of CJK: none touch */
+                unsigned c = 0x5000 + 2u * (unsigned)i;
+                p[at++] = (char)(0xE0 | c >> 12);
+                p[at++] = (char)(0x80 | (c >> 6 & 0x3F));
+                p[at++] = (char)(0x80 | (c & 0x3F));
+            }
+            snprintf(p + at, 16000 - at, "]*){5000}z");
+            s = repeated("\xe4\xb8\x80", 700, "");    /* a character above all of them or below: the whole search */
+            ms = one_run(p, S_EXTENDED, s, 1, S_NOMATCH, 1);
+            if(members == 10) few = ms;
+            else many = ms;
+            free(s);
+            free(p);
+        }
+        checks++;
+        if(many > 12 * (few > 1 ? few : 1)) {
+            char g[64];
+            snprintf(g, sizeof(g), "%.0f ms against %.0f", many, few);
+            fail("a big bracket", "", "...", g, "a logarithm's worth");
+        }
+    }
+    /* ^ at the start: one look, however long the text */
+    {
+        double shorter, longer;
+        s = repeated("x", 1 << 20, "");
+        shorter = one_run("^foo", S_EXTENDED, "xxxxxxxx", 1, S_NOMATCH, 2000);
+        longer = one_run("^foo", S_EXTENDED, s, 1, S_NOMATCH, 2000);
+        checks++;
+        if(longer > 20 * (shorter > 5 ? shorter : 5)) {
+            char g[64];
+            snprintf(g, sizeof(g), "%.0f ms against %.0f", longer, shorter);
+            fail("an anchored pattern reads the whole text", "^foo", "...", g, "the same");
+        }
+        free(s);
+    }
+}
+
 static void long_text(void) {
     size_t n = 20000;
     long_case("(a*)*b", S_EXTENDED, "a", n, "", S_NOMATCH);
@@ -1077,6 +1257,7 @@ int main(int argc, char **argv) {
     random_cases(rounds);
     fuzz(rounds);
     long_text();
+    time_bounds();
     printf("test_regex: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

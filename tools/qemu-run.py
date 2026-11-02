@@ -1452,6 +1452,7 @@ SMOKE = [
       ('libtest getopt', ['LIBTEST getopt PASS', shown('SURF \u224b> ')]),
       ('libtest system', ['seen by a child', 'LIBTEST system PASS', shown('SURF \u224b> ')]),
       ('libtest popen', ['LIBTEST popen PASS', shown('SURF \u224b> ')]),
+      ('libtest closed', ['LIBTEST closed PASS', shown('SURF \u224b> ')]),
       ('libtest order | cat', ['first\r\nsecond\r\nthird\r\n', shown('SURF \u224b> ')]),
       ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's

@@ -13,8 +13,9 @@ SurfOS adds:
                 offsets it reports are from string, not from rm_so
   REG_ESIZE     regcomp(): the pattern is too big, or nested too deeply
   REG_ESTEPS    regexec(): a pattern with a back-reference took too many steps on this
-                text. Only such a pattern can; without one the time is bounded by the
-                pattern's size times the text's.
+                text. Only such a pattern can; without one the time is bounded by
+                the states of the program, at most 65000, plus what its subexpressions
+                add, at most 260000, per character of text.
 */
 
 #ifndef _REGEX_H
