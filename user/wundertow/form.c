@@ -249,9 +249,9 @@ int fm_unsure(const struct wd_document *d, const char *s) {
     return 0;
 }
 
-/* Can this control's name and value go, whatever is done with it? */
+/* Can this control's name go, whatever is done with it? (An image button's goes without a name too, but it adds to it.) */
 static int may_go(const struct wd_control *c) {
-    return c->name && !c->disabled && !c->image && c->kind != WF_FILE && (c->kind != WF_BUTTON || c->role == WC_SUBMIT);
+    return c->name && !c->disabled && (c->kind != WF_BUTTON || c->role == WC_SUBMIT);
 }
 
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
@@ -271,7 +271,9 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
         if(c->kind == WF_PASSWORD) d->forms[c->form].password = 1;
         if(c->cut) d->forms[c->form].too_much = 1;
         if(!may_go(c)) continue;
-        if(fm_unsure(d, c->name) || fm_unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
+        if(fm_unsure(d, c->name)) d->forms[c->form].too_much = 1;
+        if(c->image || c->kind == WF_FILE) continue;        /* their values do not go */
+        if(fm_unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
         for(k = 0; k < c->noptions; k++) {
             const struct wd_option *o = &d->options[c->first_option + k];
             if(!o->disabled && fm_unsure(d, o->value)) d->forms[c->form].too_much = 1;

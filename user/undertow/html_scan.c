@@ -591,11 +591,21 @@ int ut_html_charset(const unsigned char *in, size_t len, const char *label, int 
 }
 
 int ut_html_declared(const unsigned char *in, size_t len) {
-    char meta[UT_HTML_LABEL_MAX];
-    size_t i;
+    char label[UT_HTML_LABEL_MAX], name[16], val[256];
+    size_t i = 5;
+    int cs = -1, found = 0;
     if(len >= 5 && !memcmp(in, "<?xml", 5))
-        for(i = 5; i + 8 < len && in[i] != '>'; i++) if(!memcmp(in + i, "encoding", 8)) return 1;
-    return prescan_all(in, len, meta, sizeof(meta));
+        while(!found && pre_attr(in, len, &i, name, sizeof(name), val, sizeof(val)))
+            if(!strcmp(name, "encoding")) {
+                cs = charset_of(val);
+                found = 1;
+            }
+    if(prescan_all(in, len, label, sizeof(label))) {                            /* a <meta> says more than XML */
+        cs = charset_of(label);
+        found = 1;
+    }
+    if(!found) return -1;
+    return cs == UT_CS_UTF8 || cs == UT_CS_UTF16 ? UT_CS_UTF8 : cs == UT_CS_1252 ? UT_CS_1252 : UT_CS_ASCII;
 }
 
 int ut_html_sniff(const unsigned char *s, size_t n) {

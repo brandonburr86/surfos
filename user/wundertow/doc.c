@@ -129,7 +129,7 @@ struct bd {
     int skip_off;                       /* in what is hidden, a disabled fieldset or a legend of one, not followed */
     int skip_fields;                    /* fieldsets open in there, from the first disabled one on */
     int legends;                        /* legends of disabled fieldsets open: b->fb.off is not all that says what is in them */
-    int undeclared;                     /* nothing says what charset the page is in */
+    int undeclared;                     /* HTML, and no response's label for its charset */
 
     /* inline content */
     int target;                         /* the box that takes inline content now, -1: none yet */
@@ -1876,9 +1876,12 @@ static int forms_finish(struct bd *b, char *safe, struct ut_url *u) {
     struct wd_document *d = &b->d;
     size_t i;
     d->form_charset = b->cs;
-    if(b->cs == UT_CS_UTF8 && b->undeclared && !b->xhtml) { /* ASCII that says nothing: a browser's default, not UTF-8 */
+    if(b->cs == UT_CS_UTF8 && b->undeclared && !b->xhtml) { /* ASCII that says nothing where it was looked for */
         for(i = 0; i < b->len && b->in[i] < 0x80; i++) ;
-        if(i == b->len) d->form_charset = UT_CS_1252;
+        if(i == b->len) {
+            int cs = ut_html_declared(b->in, b->len);
+            d->form_charset = cs < 0 ? UT_CS_1252 : cs;     /* a browser's default, or what it says further on */
+        }
     }
     for(i = 0; i < d->form_count; i++) {
         struct wd_form *f = &d->forms[i];
@@ -2078,7 +2081,7 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     b->xhtml = !strcmp(r->content_type, "application/xhtml+xml");
     html = b->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && ut_html_sniff(b->in, b->len));
     if(!b->decoded) b->cs = ut_html_charset(b->in, b->len, r->charset, html, &b->pos, b->charset, sizeof(b->charset));
-    b->undeclared = !b->decoded && !r->charset[0] && !(html && ut_html_declared(b->in, b->len));
+    b->undeclared = !b->decoded && !r->charset[0] && html;
     if(html) run_html(b);
     else run_plain(b);
     if(b->failed || finish(b)) {

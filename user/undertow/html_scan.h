@@ -96,7 +96,9 @@ int ut_html_utf16(const unsigned char *in, size_t len, const char *label, unsign
 int ut_html_charset(const unsigned char *in, size_t len, const char *label, int html, size_t *start,
                     char *unknown, size_t cap);
 
-/* Does a <meta> anywhere, or an <?xml encoding=...?> at the start, name a charset? (11/1/26: a form's bytes depend on it) */
+/* The charset a page names anywhere, past what ut_html_charset() reads: by an <?xml encoding=...?> at its start, or a <meta>
+   in all of it: a UT_CS_*, with UT_CS_ASCII for one this browser does not read, or -1 when it names none (11/1/26: a form's
+   bytes depend on it, on a page whose bytes do not say) */
 int ut_html_declared(const unsigned char *in, size_t len);
 
 /* No Content-Type: a body is HTML when it starts like HTML (the MIME sniffing standard's list) */

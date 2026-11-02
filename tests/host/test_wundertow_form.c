@@ -607,6 +607,8 @@ static void encoding(void) {
     sends("<form action=/s><input name=q value=x><input type=submit value='Find &rArr;'></form>", "https://forms.test/s?q=x", "not in what cannot go: a label with no name");
     sends("<form action=/s><input name=q value=x><input type=reset name=r value='&rArr;'><input type=button name=b value='&rArr;'><button type=reset name=c value='&rArr;'>C</button></form>", "https://forms.test/s?q=x", "a button that sends nothing");
     sends("<form action=/s><input name=q value=x><input name=n value='&rArr;' disabled><input value='&rArr;'><input type=file name=f value='&rArr;'><input type=image name=i value='&rArr;'></form>", "https://forms.test/s?q=x&f=", "what is disabled, has no name, or never sends its value");
+    refuses("<form action=/s><input type=file name='f&sum;'></form>", "more than", "a file field's name goes");
+    refuses("<form action=/s><input type=image name='i&sum;'></form>", "more than", "an image button's");
     sends("<form action=/s><select name=s><option value='&rArr;' disabled>A<option value=1 selected>B</select></form>", "https://forms.test/s?s=1", "a disabled option");
     refuses("<form action=/s><input type=submit name=go value='Find &rArr;'></form>", "more than", "a button with a name can go");
     refuses("<form action='/a&sum;b'><input name=a value=1></form>", "more than", "in the address");
@@ -655,7 +657,28 @@ static void encoding(void) {
             check(!build_as(PAGE, big, "", &d) && d.form_charset == UT_CS_UTF8, "a meta after the first 1024 bytes: a browser's parser sees it");
             wd_free(&d);
         }
+        {
+            static char big[3000];
+            char *e = big;
+            e += snprintf(e, 40, "<html><head><title>");
+            memset(e, 't', 1100);
+            e += 1100;
+            snprintf(e, 200, "</title><meta http-equiv=Content-Type content='text/html; charset=iso-8859-1'></head><form action=/a><input name=s></form>");
+            check(!build_as(PAGE, big, "", &d) && d.form_charset == UT_CS_1252, "one that says windows-1252's");
+            wd_free(&d);
+            e = big;
+            e += snprintf(e, 40, "<html><head><title>");
+            memset(e, 't', 1100);
+            e += 1100;
+            snprintf(e, 200, "</title><meta charset=shift_jis></head><form action=/a><input name=s value='&eacute;'></form>");
+            check(!build_as(PAGE, big, "", &d) && d.form_charset == UT_CS_ASCII && d.forms[0].too_much, "one this browser does not write: its value is not sent");
+            wd_free(&d);
+        }
         check(!build_as(PAGE, "<?xml version='1.0' encoding='UTF-8'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "an XML declaration");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0' encoding='iso-8859-1'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "of latin-1");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0' encoding='iso-8859-1'?><html><head><meta charset=utf-8><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "a meta says more than it");
         wd_free(&d);
         check(!build_as(PAGE, "<?xml version='1.0'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "that says none");
         wd_free(&d);
