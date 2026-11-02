@@ -1456,7 +1456,7 @@ static void paint_find(struct wb *b, const struct wp_target *t) {
     }
     if(b->find_hit) snprintf(count, sizeof(count), "%d of %d", b->find_index, b->find_total);
     else snprintf(count, sizeof(count), "%s", b->find_len ? "Not found" : "");
-    wp_text(t, b->w - 12 - (int)strlen(count) * WF_W, y + 3, count, strlen(count), 1, 0, C_MUTED);
+    wp_text(t, b->w - 24 - (int)strlen(count) * WF_W, y + 3, count, strlen(count), 1, 0, C_MUTED);    /* clear of the corner */
 }
 
 void wb_paint(struct wb *b, unsigned int *pixels, int stride) {
