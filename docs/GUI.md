@@ -86,8 +86,8 @@ of the desktop's own first, then the others in the columns beside them.
   `.N.tmp` or `.part` beside a file it opens, saves over, deletes or renames, of the
   file's size and time, which is how such a pair usually looks. It remembers four such
   pairs; after more, it saves over, deletes and renames no file at all until it closes,
-  and saves only under new names. Check the stick on another computer (First Aid on
-  the Mac, `fsck` elsewhere) before you change them, also with the shell's `rm`, `mv`
+  and saves only under new names. Check the stick with SurfOS's own `fsck`, or on another
+  computer (First Aid on the Mac, `fsck` elsewhere), before you change them, also with the shell's `rm`, `mv`
   or `cp`, which take no such care. Once it is checked, delete the copy you no longer
   want with `rm` in the shell (or on the Mac), and start the desktop again: while the
   two look alike, and until it closes, the desktop keeps taking the care. Only
