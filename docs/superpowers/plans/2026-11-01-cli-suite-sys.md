@@ -216,3 +216,31 @@ Item 2 goes one step past the review's rule, as said: its own probe has the miss
 older `test_top` had a new pid below an existing one, which pids that only grow cannot do; its data changed. Items 4 and 5
 were my misreading: `exec.c`'s header states the exception on the line I read, and the page was written from the half of it
 I kept.
+
+## Where this came from
+
+The coordinator asked whether any function or table in `top`, `watch`, `man`, `termview.h` or the pages follows a specific
+existing program's source or manual from memory: procps, BSD `top`, `watch`, man-db, mandoc, or GNU or BSD man-page text.
+
+**No function or table does.** Nothing was copied or translated, and `man.c` and `manutil.h` follow nothing of man-db or
+mandoc. What did come from memory of existing programs is behaviour and a few words:
+
+- **procps `watch`, the closest thing here.** The title row's look: `Every 2s: command` at the left, the time at the right, a
+  blank row under it, and `-t` to hide it. Also the 2-second default, the 0.1-second floor, the wait counted from one run's
+  end to the next run's start, and long lines wrapping. The word `Every` and the layout are the same as procps's. The code is
+  not: `ws_title()`, `tv_every()` and the rest of `watchtext.h` are mine, and procps draws through curses and formats a float.
+  I also remembered how it reads its pipe, and differ: it stops reading a full screen, and `watch` here drains it.
+- **procps `top` and `ps`, looser.** Summary rows above a table, the words in `up ..., N tasks, N running, N stopped`, the
+  column names `PID PPID S TTY %CPU TIME`, the state letters `R S T Z`, and a kernel thread's name in brackets, as Linux's
+  `ps` shows it. `-d` and `-n` are the brief's. The keys `c m p`, the states `r` and `B`, and the row's layout are mine.
+- **A few first lines of pages.** These were written as plain descriptions, and some land close: `mkdir - make directories`
+  is word for word BSD's (checked on the Mac) and GNU's (from memory); `cp - copy files and directories` is GNU's word for
+  word (from memory); `tr - change or delete characters` is one word from GNU's "translate or delete characters" (from
+  memory); `watch - run a command again and again, on a full screen` echoes procps's "showing output fullscreen" (from memory).
+
+The pages' bodies come from this tree's source comments, `help` entries and `docs/USB-BOOT.md`, and their section names are
+the brief's. Only first lines were compared, those of the Mac's BSD pages for the 15 nearest commands. GNU's text is not on
+this Mac, so what is said of it is memory. This is my account of how I worked, not an audit of every sentence.
+
+From this tree, not from outside: `tv_utf8()`, `tv_key()`, `tv_row()`, `tv_resize()` and the alternate-screen strings follow
+`user/bin/less.c`. The escape-sequence states in `watchtext.h` follow the ECMA-48 grammar.
