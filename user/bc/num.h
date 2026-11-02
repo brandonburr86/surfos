@@ -39,8 +39,7 @@ enum {
     NUM_DIVZERO,
     NUM_NEGROOT,
     NUM_BADEXP,                         /* an exponent with a fraction */
-    NUM_BIGEXP,                         /* an exponent that does not fit 32 bits */
-    NUM_BADDIGIT                        /* a digit that the input base does not have */
+    NUM_BIGEXP                          /* an exponent that does not fit 32 bits */
 };
 
 extern int num_err;
@@ -50,7 +49,7 @@ struct num *num_ref(struct num *n);
 void num_put(struct num *n);            /* NULL is fine */
 
 struct num *num_uint(unsigned v);
-struct num *num_parse(const char *s, unsigned n, unsigned base);   /* digits 0-9 A-F, at most one point */
+struct num *num_parse(const char *s, unsigned n, unsigned base);   /* digits 0-9 A-F, each at its own value, at most one point */
 
 struct num *num_add(const struct num *a, const struct num *b);
 struct num *num_sub(const struct num *a, const struct num *b);

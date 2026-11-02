@@ -42,7 +42,6 @@ const char *num_strerror(int err) {
     case NUM_NEGROOT: return "square root of a negative number";
     case NUM_BADEXP: return "exponent is not a whole number";
     case NUM_BIGEXP: return "exponent too large";
-    case NUM_BADDIGIT: return "digit too large for ibase";
     }
     return "no error";
 }
@@ -106,7 +105,9 @@ static int digit_value(char c) {
     return c >= 'A' ? c - 'A' + 10 : c - '0';
 }
 
-/* the digits s[0..n) as a whole number, in a base that is not ten */
+/* The digits s[0..n) as a whole number: base 10 only when one of them is above 9, the way below being the quick one.
+   A digit the base does not have counts at its own value, so 12 in base 2 is 4: POSIX leaves it open, and a script
+   should not stop for it, as it does not on the Mac's bc. Fifteen in a place adds at most one more digit to the whole. */
 static struct num *whole_in_base(const char *s, unsigned n, unsigned base) {
     /* a digit of base 16 is 1.21 decimal digits, under 5/16 of a limb */
     struct num *r = alloc((uint64_t)n * 5 / 16 + 2, 0);
@@ -114,11 +115,6 @@ static struct num *whole_in_base(const char *s, unsigned n, unsigned base) {
     if(!r) return NULL;
     for(i = 0; i < n; i++) {
         uint32_t carry = (uint32_t)digit_value(s[i]);
-        if(carry >= base) {
-            num_err = NUM_BADDIGIT;
-            num_put(r);
-            return NULL;
-        }
         for(k = 0; k < len; k++) {
             uint32_t x = r->d[k] * base + carry;
             r->d[k] = x % NUM_BASE;
@@ -151,6 +147,11 @@ static struct num *parse_in_base(const char *s, unsigned nint, const char *f, un
     return r;
 }
 
+static int above_nine(const char *s, unsigned n) {
+    while(n--) if(*s++ >= 'A') return 1;
+    return 0;
+}
+
 struct num *num_parse(const char *s, unsigned n, unsigned base) {
     const char *dot = memchr(s, '.', n);
     unsigned nint = dot ? (unsigned)(dot - s) : n, nfrac = dot ? n - nint - 1 : 0, i, flimbs;
@@ -159,7 +160,7 @@ struct num *num_parse(const char *s, unsigned n, unsigned base) {
         s++;
         nint--;
     }
-    if(base != 10) return parse_in_base(s, nint, s + nint + 1, nfrac, base);
+    if(base != 10 || above_nine(s, nint + (dot ? 1 + nfrac : 0))) return parse_in_base(s, nint, s + nint + 1, nfrac, base);
     flimbs = FRAC(nfrac);
     r = alloc((uint64_t)flimbs + (nint + NUM_DIGITS - 1) / NUM_DIGITS, nfrac);
     if(!r) return NULL;
@@ -167,11 +168,6 @@ struct num *num_parse(const char *s, unsigned n, unsigned base) {
     for(i = 0; i < nint + nfrac; i++) {
         char c = i < nint ? s[i] : s[i + 1];    /* s[nint] is the point */
         unsigned v = (unsigned)digit_value(c);
-        if(v > 9) {
-            num_err = NUM_BADDIGIT;
-            num_put(r);
-            return NULL;
-        }
         if(i < nint) {
             unsigned up = nint - 1 - i;
             r->d[flimbs + up / NUM_DIGITS] += (limb_t)(v * pow10[up % NUM_DIGITS]);

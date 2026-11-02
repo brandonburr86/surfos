@@ -13,8 +13,10 @@ DESCRIPTION
     and is 0 until set. ibase and obase are the bases of what is read
     and printed: ibase from 2 to 16, obase from 2 to 100000. A single
     digit is its own value in any base, so ibase=A is always ten.
-    Digits above 9 are the capitals A to F. Results are cut, not
-    rounded. A long number goes on the next line after a backslash.
+    Digits above 9 are the capitals A to F. A digit the base does not
+    have counts at its own value: with ibase=2, 12 is 4, and with
+    ibase=A, 1E5 is 245. Results are cut, not rounded. A long number
+    goes on the next line after a backslash.
 
     Variables, arrays (a[i]) and functions have names of lower-case
     letters, digits and _, and all start at 0. Names are visible to

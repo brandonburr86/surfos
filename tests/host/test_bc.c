@@ -439,6 +439,15 @@ static void bases(void) {
     }
 }
 
+static void parses_as(const char *s, unsigned base, const char *want) {
+    struct num *n = num_parse(s, (unsigned)strlen(s), base);
+    CHECK(n != NULL);
+    if(n) {
+        text_is(n, want);
+        num_put(n);
+    }
+}
+
 static void quotient_is(const char *a, const char *b, const char *want) {
     struct num *x = parse(a), *y = parse(b), *r = num_div(x, y, 0);
     text_is(r, want);
@@ -487,9 +496,11 @@ static void numbers(void) {
     n = parse("12.00");
     CHECK(!num_hasfrac(n));
     num_put(n);
-    /* a digit that the base does not have is no number */
-    CHECK(!num_parse("1F", 2, 10) && num_err == NUM_BADDIGIT);
-    CHECK(!num_parse("12", 2, 2) && num_err == NUM_BADDIGIT);
+    /* a digit that the base does not have counts at its own value, as on the Mac's bc */
+    parses_as("1F", 10, "25");
+    parses_as("12", 2, "4");
+    parses_as("FFFFFFFF", 10, "166666665");     /* across a limb: 15 of each */
+    parses_as(".FF", 10, "1.65");
     /* digits past the scale go, towards zero, and a minus does not stay on zero */
     rescaled("-1.99999", 2, "-1.99");
     rescaled("-1.99999", 0, "-1");
@@ -755,8 +766,21 @@ static void registers(void) {
     fails("obase=1\n", "obase must be");
     fails("obase=100001\n", "obase must be");
     fails("obase=-5\n", "obase must be");
-    fails("ibase=2\n12\n", "digit too large");
-    fails("19A\n", "digit too large");
+    /* a digit above the base is taken at its own value: a script from elsewhere goes on. Each was checked on the Mac's bc */
+    is("ibase=2\n12\n", "4\n");
+    is("ibase=2\n102\n", "6\n");
+    is("ibase=2\n.2\n", "1.0\n");
+    is("ibase=2\n.12\n", "1.00\n");
+    is("ibase=2\n1A\n", "12\n");
+    is("ibase=2\nFFFFFFFF\n", "3825\n");
+    is("ibase=8\n19\n", "17\n");
+    is("1E5\n", "245\n");
+    is("1E\n", "24\n");
+    is("AB\n", "111\n");
+    is(".F\n", "1.5\n");
+    is("1.F\n", "2.5\n");
+    is("19A\n", "200\n");
+    is("FFFFFFFF\n", "166666665\n");
     is("scale=-.5;scale\n", "0\n");             /* cut to 0 first */
     is("scale=2147483647;scale\n", "2147483647\n");
 }
