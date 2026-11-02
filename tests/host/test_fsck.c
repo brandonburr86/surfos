@@ -1237,6 +1237,12 @@ static void d_lfn_sum(struct ram *r, const struct geo3 *g) {
 
 static void d_name(struct ram *r, const struct geo3 *g) { root_entry(r, g, E_SMALL)[3] = '*'; }
 
+/* the same with a value of fatgen103's list that looks harmless, and a space to start a name, and 0x05, which stands for 0xE5 and is no fault */
+static void d_name_plus(struct ram *r, const struct geo3 *g) { root_entry(r, g, E_SMALL)[3] = '+'; }
+static void d_name_space(struct ram *r, const struct geo3 *g) { root_entry(r, g, E_SMALL)[0] = ' '; }
+static void d_name_low(struct ram *r, const struct geo3 *g) { root_entry(r, g, E_SMALL)[4] = 0x05; }
+static void d_name_e5(struct ram *r, const struct geo3 *g) { root_entry(r, g, E_SMALL)[0] = 0x05; }
+
 static void d_dup(struct ram *r, const struct geo3 *g) {
     u8 *p = root_entry(r, g, E_SMALL), *q = slot_free(r, g, 0);
     memset(q, 0, 32);
@@ -1939,6 +1945,10 @@ static const struct scen scens[] = {
     { "lfn-sum", d_lfn_sum, EX_LEFT, 0 },
     { "lfn-zero", d_lfn0, EX_LEFT, 0 },
     { "name", d_name, EX_LEFT, 0 },
+    { "name-plus", d_name_plus, EX_LEFT, 0 },
+    { "name-space", d_name_space, EX_LEFT, 0 },
+    { "name-low", d_name_low, EX_LEFT, 0 },
+    { "name-05", d_name_e5, EX_NOTE, 0 },
     { "dup", d_dup, EX_LEFT, 0 },
     { "dir-size", d_dir_size, EX_LEFT, 0 },
     { "dot-self", d_dot_self, EX_BARRED, 0 },
