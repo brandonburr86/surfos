@@ -236,6 +236,7 @@ struct fck {
     u8 *names;                      /* this directory's short names, an open hash table */
     u32 names_slots, names_used;
     bool names_off;
+    u32 names_lost;                 /* directories whose names could not all be compared: the check is not whole */
     bool plan_words;                /* FAT_CHECK_PLAN */
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
@@ -938,8 +939,9 @@ static void slot_look(struct fck *f, struct frame *fr, const u8 *p, u32 lba) {
     if(short_name_bad(p)) problem(f, true, "%s: a short name with forbidden characters", f->who);
     if(!f->names_off) {
         if(f->names_used * 2 >= f->names_slots && !names_grow(f)) {
-            f->names_off = true;
-            note(f, "%s/: too many names to compare", f->path);
+            f->names_off = true;                             /* a second entry of one name is not looked for there */
+            if(!f->naming) f->names_lost++;
+            note(f, "%s/: more names than a check may compare", f->path);
         }
         if(!f->names_off) {
             if(!names_put(f->names, f->names_slots, p)) problem(f, true, "%s: a second entry with this short name", f->who);
@@ -1161,6 +1163,7 @@ static void walk(struct fck *f, bool first_look) {
     f->bar = NULL;
     f->unclean = false;
     f->joins = f->c_end = f->c_size = f->c_lost = 0;
+    f->names_lost = 0;
     f->ndirs = f->nfiles = 0;
     f->nfix = f->nlost = 0;
     memset(f->found_used, 0, sizeof(f->found_used));
@@ -1673,6 +1676,13 @@ static void more_say(struct fck *f) {
     if(!f->verbose && f->shown > SAY_MAX) say(f, "and %lu more (fsck -v says them all)", (u_long)(f->shown - SAY_MAX));
 }
 
+/* the names a look could not compare: said, and true when there were such */
+static bool not_whole(struct fck *f) {
+    if(!f->names_lost) return false;
+    say(f, "not checked whole: %lu director%s held more names than a check may compare", (u_long)f->names_lost, f->names_lost == 1 ? "y" : "ies");
+    return true;
+}
+
 /* from the first look on */
 static int run(struct fck *f) {
     struct fat_check_result *r = f->res;
@@ -1688,8 +1698,13 @@ static int run(struct fck *f) {
     more_say(f);
     if(f->verbose) say(f, "%lu directories, %lu files, %lu clusters free, %lu marked bad", (u_long)f->ndirs, (u_long)f->nfiles,
                        (u_long)f->free_now, (u_long)f->badc);
-    if(!f->found) { say(f, "clean"); return FAT_CHECK_CLEAN; }
+    if(!f->found) {
+        if(not_whole(f)) return FAT_CHECK_TROUBLE;
+        say(f, "clean");
+        return FAT_CHECK_CLEAN;
+    }
     say(f, "%lu problem%s", (u_long)f->found, f->found == 1 ? "" : "s");
+    not_whole(f);
     if(f->bar) {
         if(f->io->write || f->plan_words) say(f, "no repair: %s", f->bar);
         return FAT_CHECK_PROBLEMS;
@@ -1731,6 +1746,7 @@ static int run(struct fck *f) {
         say(f, "repaired what it could: %lu problem%s left", (u_long)left, left == 1 ? "" : "s");
         return FAT_CHECK_PROBLEMS;
     }
+    if(not_whole(f)) return FAT_CHECK_TROUBLE;
     say(f, "repaired: clean");
     return FAT_CHECK_CLEAN;
 }

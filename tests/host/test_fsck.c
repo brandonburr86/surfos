@@ -3154,8 +3154,8 @@ static void deep_and_wide(int type) {
     check(r.status == 0 && r.dirs >= 83 && r.files == 711, m);
     t_done(&t);
     {
-        /* each allocation refused, those of the table of names among them: it goes on without comparing names */
-        u32 calls, n;
+        /* each allocation refused, those of the table of names among them: it goes on without comparing names, and says so */
+        u32 calls, n, lost = 0;
         t_init(&t, x, 0);
         mem_fail_at = 0xFFFFFFFF;
         mem_calls = 0;
@@ -3167,9 +3167,16 @@ static void deep_and_wide(int type) {
             mem_calls = 0;
             mem_fail_at = n;
             (void)run(&t, FAT_CHECK_VERBOSE, &r);
+            if(strstr(t.log, "more names than a check may compare")) {
+                char m2[200];
+                lost++;
+                snprintf(m2, sizeof(m2), "FAT%d: the table of names refused at allocation %u: the look says it is not whole (status %d)", type, n, r.status);
+                check(r.status != FAT_CHECK_CLEAN && strstr(t.log, "not checked whole") && !strstr(t.log, "\nclean"), m2);
+            }
             t_done(&t);
         }
         mem_fail_at = 0;
+        check(lost > 0, "the table of names was refused at some allocation");
     }
     p = r_dir_slots(x, &g, "WIDE       ");
     q = dir_slot_n(x, &g, p, 700);
