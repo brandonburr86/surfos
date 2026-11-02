@@ -10,9 +10,12 @@ server that stops reading never stops the loop. No more is read from it while th
 not hold the answers, which bounds a flood of negotiations: the server's own window fills
 instead. A terminal's keys are read all the time, for Ctrl+] is the way out of just such a session:
 while the server takes nothing, they are dropped (it is said once) and only Ctrl+] counts. Input from
-a pipe is another matter: it is a file somebody wants delivered, so it is read only while it fits,
-and waits in the pipe. Nobody is there to press Ctrl+], so a server that takes nothing for STALL_MS
-ends the session with status 2, as does one that closes with input still to go.
+a pipe is another matter: it is a file somebody wants delivered, so it is read only while it fits
+with the room for a read of the server's to spare, and waits in the pipe. The server is then read
+whatever the pipe holds: one whose output waits for us (a shell behind a telnetd, a router's command
+line, a long banner) may read nothing more until it has gone, and the two would wait for each other.
+Nobody is there to press Ctrl+], so a server that takes nothing for STALL_MS ends the session with
+status 2, as does one that closes with input still to go.
 
 The prompt of Ctrl+] waits for its line and looks at nothing else: the server's bytes wait for
 it in the connection.
@@ -266,7 +269,7 @@ int tn_session_run(const struct tn_session *s) {
         waiting = out_len - out_off;
         reading = room() >= TNC_ROOM(PIECE);
         if(!waiting) sent_at = uptime();
-        if(keys_open && (s->terminal || room() >= TNC_KEYS_ROOM(PIECE))) {
+        if(keys_open && (s->terminal || room() >= TNC_KEYS_ROOM(PIECE) + TNC_ROOM(PIECE))) {
             p[n].fd = s->in;
             p[n].events = POLLIN;
             p[n].revents = 0;

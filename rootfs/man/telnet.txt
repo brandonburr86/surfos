@@ -23,10 +23,13 @@ DESCRIPTION
         (empty)     back to the session
 
     Input from a pipe or a file goes out as lines, with no raw mode,
-    no prompt and no echo. All of it goes: telnet waits while the
-    other end is slow. When it ends, a last line with no end goes as
-    it is, telnet waits for the other end to close, and it ends after
-    2 seconds with no byte either way.
+    no prompt and no echo. It goes as fast as the other end takes it,
+    and what the other end sends is read meanwhile, however much it
+    answers. Should the other end take nothing for a minute, or close
+    first, the rest does not go (see the status below). When the
+    input ends, a last line with no end goes as it is, telnet waits
+    for the other end to close, and it ends after 2 seconds with no
+    byte either way.
 
     The terminal is put back however the session ends: whatever the
     other end left open is ended, the screen is set right, and raw

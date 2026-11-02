@@ -615,6 +615,8 @@ static unsigned int max_net_out;
 static size_t read_while_stalled;
 static size_t max_write;                /* a write to the connection queues at most this, as the kernel's may */
 static int stdout_tty = 1;              /* standard output is a terminal */
+static size_t flood_per_line;           /* a server that answers each line received with this much output */
+static size_t flood_cap;                /* and stops reading while more than this of its output waits to be read */
 
 static void grow(unsigned char **p, size_t *cap, size_t need) {
     if(need <= *cap) return;
@@ -684,7 +686,7 @@ int sim_poll(struct pollfd *p, unsigned int n, int timeout) {
                 if((p[i].events & POLLIN) && (key_off < key_len || keys_ended)) r |= POLLIN;
             } else if(p[i].fd == SOCK && sock_open) {
                 if((p[i].events & POLLIN) && (in_off < in_len || peer_fin || peer_rst)) r |= POLLIN;
-                if((p[i].events & POLLOUT) && !peer_full && !peer_rst) r |= POLLOUT;
+                if((p[i].events & POLLOUT) && !peer_full && !peer_rst && !(flood_cap && in_len - in_off > flood_cap)) r |= POLLOUT;
                 if(peer_fin || peer_rst) r |= POLLHUP;
                 if(peer_rst) r |= POLLERR;
             } else r = POLLNVAL;
@@ -775,7 +777,7 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
             errno = ECONNRESET;
             return -1;
         }
-        if(peer_full) {
+        if(peer_full || (flood_cap && in_len - in_off > flood_cap)) {
             failures++;
             printf("FAIL: a write to a connection that takes nothing\n");
             errno = EAGAIN;
@@ -786,6 +788,15 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
         if(server_len + n < sizeof(to_server)) {
             memcpy(to_server + server_len, buf, n);
             server_len += n;
+        }
+        if(flood_per_line) {                    /* each line ended: a page of output back */
+            size_t i;
+            for(i = 0; i < n; i++) if(((const char *)buf)[i] == '\n') {
+                size_t k;
+                grow(&inq, &in_cap, in_len + flood_per_line);
+                for(k = 0; k < flood_per_line; k++) inq[in_len + k] = (unsigned char)(k % 64 == 63 ? '\n' : 'o');
+                in_len += flood_per_line;
+            }
         }
         return (ssize_t)n;
     }
@@ -1244,6 +1255,37 @@ static void test_review(void) {
     }
 }
 
+/**** the review of 856c4d8: this failed on it ****/
+
+static void test_review2(void) {
+    static char lines[40000], want[45000];
+    size_t i, n = 0, k = 0;
+    int r, line = 0;
+    while(n + 40 < sizeof(lines)) n += (size_t)snprintf(lines + n, 40, "a command line %06d\n", line++);
+    for(i = 0; i < n; i++) {
+        if(lines[i] == '\n') want[k++] = '\r';
+        want[k++] = lines[i];
+    }
+    {   /* a server that answers each line with 30 KB and reads no more while 16 KB of that wait: a shell behind a telnetd, a
+           router's command line. Its output must always be read, or it reads none of the input: the two would wait for each other */
+        static struct step s[2];
+        memset(s, 0, sizeof(s));
+        s[0].keys = lines;
+        s[0].keys_len = (int)n;
+        s[0].action = A_KEYS_END;
+        stdout_tty = 0;
+        max_write = 512;
+        flood_per_line = 30000;
+        flood_cap = 16384;
+        r = run("10.0.2.2 2000", s, 1, 0);
+        flood_per_line = flood_cap = 0;
+        max_write = 0;
+        stdout_tty = 1;
+        check(r == 0 && server_len == k && !memcmp(to_server, want, k), "a pipe into a server that floods back while it reads slowly: every line goes, none waits for ever");
+        check(!said_err("took nothing"), "... and nothing stalls");
+    }
+}
+
 /**** hostile sessions at random ****/
 
 static void test_program_random(int rounds) {
@@ -1299,6 +1341,7 @@ int main(int argc, char **argv) {
     test_random(rounds);
     test_program();
     test_review();
+    test_review2();
     test_program_random(rounds);
     printf("test_telnetc: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
