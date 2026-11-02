@@ -1,0 +1,19 @@
+zcat - write out the data of gzip files
+
+SYNOPSIS
+    zcat [-t] [file...]
+
+DESCRIPTION
+    The same as gunzip -c: each file's data goes to standard output,
+    and the files stay. Any name will do, and with no files, or for -,
+    standard input is read. It takes gunzip's options.
+
+    The data comes out as it is made, so a bad CRC is found only after
+    the data before it has gone by: the message and status 2 say so.
+
+EXAMPLES
+    zcat /hda1/LOG.TXT.gz | grep error
+    zcat /hda1/LOGS.TGZ | tar t
+
+SEE ALSO
+    gzip, gunzip

@@ -1,0 +1,73 @@
+tar - make, list and unpack archives
+
+SYNOPSIS
+    tar c [zv] [f archive] [-C dir] [--exclude=pattern] name...
+    tar x [zv] [f archive] [-C dir] [--exclude=pattern] [name...]
+    tar t [zv] [f archive] [--exclude=pattern] [name...]
+
+DESCRIPTION
+    c makes an archive of the names, with all that is in the folders
+    among them. x unpacks one, t lists one. The letters may go together
+    or apart, with a - before them or not: tar czf a.tgz dir, or
+    tar -x -f a.tar.
+
+    Without f, or with f -, the archive is standard input or output,
+    so tar works in a pipe. It always reads forward. Archives from a
+    Mac or Linux work: ustar, GNU long names and pax names and sizes.
+    One made here is ustar, which they all read.
+
+    With x and t, names choose the members to take; a folder's name
+    takes what is in it, and case does not matter.
+
+    SurfOS files have no owners or permissions, and tar cannot set a
+    file's time: every file unpacked is as new. In an archive made
+    here every file is 0644 and every folder 0755.
+
+    tar refuses a name that is absolute or holds .., and one with a
+    control character or a character FAT does not allow
+    (: * ? " < > | \), or that ends in a space or a dot. Links, devices
+    and sparse files are skipped.
+    Each of those is said and the status is then 2; the entries around
+    it are still taken. c leaves a leading / out of the names, and
+    everything up to a .., and says so.
+
+    A file that exists is replaced whole, by a new file beside it and
+    a rename. A file that cannot be finished is deleted, or the old one
+    stays. An archive that is cut short or damaged stops tar there, and
+    what was unpacked before it stands. Being killed part way, by Ctrl+C
+    or otherwise, is the exception: nothing can then tidy up, so a new
+    file may stay short, and nothing marks it. Unpack again to be sure.
+    A member that would land on the archive itself is skipped.
+
+    With c, an archive that exists is replaced only if everything went
+    in: otherwise the old one stays as it was, the status is 2, and
+    that is said. The archive itself, found in a folder being archived,
+    is left out with a note, which is no trouble. An archive that would
+    hold nothing replaces nothing, and none is made. A name of more
+    than 100 bytes without a / among its last 100 will not go into a
+    ustar archive: it is left out, and said.
+
+    The status is 0, or 2 if anything was skipped or went wrong.
+
+OPTIONS
+    c, x, t      What to do.
+    z            The archive is compressed with gzip.
+    v            Say each name: on standard error if the archive goes
+                 to standard output. With t, also the mode, size and
+                 date.
+    f archive    The archive, - for standard input or output.
+    -C dir       Go to dir first; for c, before the names after it.
+    --exclude=pattern
+                 Leave out what matches. * and ? are wildcards, and *
+                 goes across a /. A pattern may match any run of whole
+                 folders and names: tmp leaves out a/tmp/b. The case
+                 of letters does not matter.
+
+EXAMPLES
+    tar czf /usb0p1/SITE.TGZ -C /hda1 www
+    tar tzf /usb0p1/SITE.TGZ
+    tar xzf /usb0p1/SITE.TGZ -C /hda1/RESTORE
+    tar cf - --exclude='*.tmp' docs | gzip > /usb0p1/DOCS.TGZ
+
+SEE ALSO
+    gzip, gunzip, unzip
