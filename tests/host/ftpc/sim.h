@@ -43,4 +43,6 @@ int sim_vfprintf(FILE *f, const char *fmt, va_list ap) __attribute__((format(pri
 int sim_fputs(const char *s, FILE *f);
 int sim_fputc(int c, FILE *f);
 int sim_fflush(FILE *f);
+int sim_ferror(FILE *f);
+char *sim_strdup(const char *s);
 #endif

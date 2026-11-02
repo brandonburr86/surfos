@@ -8,6 +8,15 @@ DESCRIPTION
     on standard input. With a host it connects, on port 21 unless
     another is given, and logs in as anonymous.
 
+    Standard output holds only listings and the bytes of get remote -,
+    so ftp host > file holds what was asked for. Everything else, the
+    server's replies, pwd, size, status and help, goes to standard
+    error.
+
+    A script stops at its first failed command, and quits: a cd that
+    failed must not leave the next delete to run in the wrong folder.
+    At a terminal the next command is yours to choose.
+
     Transfers are binary until ascii says otherwise. Every data
     connection is passive (EPSV, then PASV) and goes only to the
     address the session reached, whatever the server names, and to a
@@ -17,7 +26,8 @@ DESCRIPTION
     Everything a server says is treated as hostile. Its text is shown
     with control characters and escape sequences as ?, and a file
     counts only when the server has said it is whole and, in binary
-    mode, as many bytes came as it promised.
+    mode, at least as many bytes came as it promised: more is taken,
+    as a file may grow.
 
 OPTIONS
     -n    Do not log in by itself: user does it.
@@ -52,9 +62,11 @@ COMMANDS
 PASSWORDS
     A password is asked for without echo, on the terminal itself,
     also when the commands come from a script: it is never read from
-    a line, a script or the command line, and without a terminal the
-    login fails. It is never shown or kept, and is hidden if the
-    server says it back. Anonymous never asks.
+    a line, a script or the command line. If nobody types it within 2
+    minutes, as where no terminal is attended, the login fails. It is
+    never kept, and is hidden if the server says it back in its answer
+    to PASS; if the server repeats it in a later reply, that is shown
+    like anything else it says. Anonymous never asks.
 
 FILES
     get replaces a file through a new file beside it, renamed over
@@ -63,8 +75,11 @@ FILES
 
     reget adds to a file from its end, and keeps what came when it
     fails, so the next reget goes on: start with reget, not get, on a
-    connection that may break. It needs binary mode, and a server
-    that sends more than was left has what it added cut off again.
+    connection that may break. It needs binary mode. A server that
+    sends more than SIZE left room for has what it added cut off
+    again, but one that gives no SIZE and ignores REST has the whole
+    file added to yours, with nothing to show it. reget does not go
+    on past 2 GB.
 
     mget lists the folder and matches the names here, so a name that
     does not match is not taken, whatever the server lists. Only the
@@ -72,8 +87,9 @@ FILES
     here: no .. and no / , nothing FAT refuses, no - at its start and
     no dot or blank at its end. Others are left out and said. mget
     never replaces a file unasked: at a terminal it asks, in a script
-    it leaves the file and says so. * and ? do not match a leading
-    dot.
+    it leaves the file and says so, which counts as a failure. * and
+    ? do not match a leading dot. A listing of more than 4096 names
+    stops there, and mget then fetches nothing.
 
     A file on SurfOS holds less than 4 GB. File times are not kept.
 
@@ -84,8 +100,13 @@ CTRL+C
     the prompt Ctrl+C leaves ftp, as it leaves any program. A kill
     leaves a partial file, or a .tmp, where it was.
 
+    Waits have limits, but a transfer that still moves does not: a
+    server that sends a byte a minute holds it for as long as it
+    likes. Ctrl+C is the way out.
+
     Status 0 when every command worked, 1 when the server said no to
-    one or mget left something out, 2 for anything worse.
+    one or mget left something out, 2 for anything worse, and that
+    command's status when it stops a script.
 
 EXAMPLES
     ftp 10.0.0.4

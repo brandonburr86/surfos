@@ -53,6 +53,7 @@ static void check(int ok, const char *what) {
 #define D_NONE  128                     /* nothing comes on the data connection, and it stays */
 #define C_MUTE  256                     /* no after, ever */
 #define C_FULL  512                     /* the control connection takes no more bytes after this reply */
+#define A_LATE 1024                     /* after comes 3 seconds later, and what the server says meanwhile behind it */
 
 struct rule {
     const char *cmd;                    /* what a line starts with; NULL ends the rules */
@@ -108,6 +109,21 @@ static unsigned long long intr_after_bytes;
 static unsigned long long data_taken;
 static unsigned int intr_at_ms;
 static int intr_with_ctl;               /* once data has come, a Ctrl+C as poll() says the control connection is readable: after the look before it */
+static int intr_on_fsync;               /* a Ctrl+C during an fsync, in no wait that a poll() sees */
+static int intr_on_connect;             /* one that cuts the next connection short (EINTR) */
+static int intr_on_line;                /* one as the input's line of this number is read, 1 the first */
+static int lines_read;
+static unsigned int hold_ms;            /* each write to standard output or error takes this: a pager at --More-- */
+static int out_broken;                  /* standard output fails */
+static int fail_strdup_at, strdups;     /* the strdup of this number fails, 1 the first */
+static const char *lied_name;           /* stat says this name has lied_size bytes */
+static unsigned int lied_size;
+static int tty_hang;                    /* a terminal that nobody types on: a detached task's */
+static char late_text[1024];            /* replies held back until late_at, and whatever the server says after them */
+static unsigned int late_at;
+static int endless_data;                /* the data connection has no end */
+static unsigned int drip_next;          /* a byte on the data connection every 59 s from this time on, 0 for none */
+static int ran_away;                    /* the client did not end by itself: the test ended it */
 static long polls;
 
 /* stdin, standard output and standard error */
@@ -136,7 +152,12 @@ static void conn_put(struct conn *c, const void *p, size_t n) {
 }
 
 static void say_ctl(const char *s) {
-    if(s) conn_put(&ctl, s, strlen(s));
+    if(!s) return;
+    if(late_at) {                       /* a server answers in turn: nothing passes what is held back */
+        snprintf(late_text + strlen(late_text), sizeof(late_text) - strlen(late_text), "%s", s);
+        return;
+    }
+    conn_put(&ctl, s, strlen(s));
 }
 
 static const struct rule defaults[] = {
@@ -146,6 +167,7 @@ static const struct rule defaults[] = {
     { "EPSV", "229 ok (|||5000|)\r\n", 0, 0, 0, 0 },
     { "SIZE", "550 no size\r\n", 0, 0, 0, 0 },
     { "ABOR", "426 stopped\r\n226 abort done\r\n", 0, 0, 0, 0 },
+    { "NOOP", "200 ok\r\n", 0, 0, 0, 0 },
     { "QUIT", "221 bye\r\n", 0, 0, 0, 0 },
     { "NLST", "150 here\r\n", "", 0, "226 done\r\n", 0 },
     { NULL, 0, 0, 0, 0, 0 }
@@ -198,6 +220,11 @@ static void server_line(const char *line) {
         return;
     }
     say_ctl(r->reply);
+    if(r->flags & A_LATE) {
+        snprintf(late_text, sizeof(late_text), "%s", r->after);
+        late_at = now_ms + 3000;
+        return;
+    }
     if(r->flags & A_EARLY) {
         say_ctl(r->after);
         sent_after = 1;
@@ -346,6 +373,10 @@ int sim_fsync(int fd) {
         return -1;
     }
     note("fsync %s\n", files[fds[i].file].name);
+    if(intr_on_fsync) {
+        intr_on_fsync = 0;
+        intr_pending++;
+    }
     if(fail_fsync[0] && !strcasecmp(fail_fsync, files[fds[i].file].name)) {
         errno = EIO;
         return -1;
@@ -377,7 +408,7 @@ int sim_stat(const char *path, struct sim_stat *st) {
         return -1;
     }
     st->type = files[f].dir ? 2 : 1;
-    st->size = (unsigned int)files[f].len;
+    st->size = lied_name && !strcasecmp(path, lied_name) ? lied_size : (unsigned int)files[f].len;
     st->mtime = 1000;                   /* one time for all: two names of one size look like the twins of saveutil.h */
     strcpy(st->fs, "fat");
     return 0;
@@ -478,6 +509,12 @@ int sim_tcp_connect(unsigned int ip, unsigned short port) {
     connects++;
     last_port = port;
     if(ip != SERVER_IP) bad_connects++;
+    if(!ctl.open && intr_on_connect) {
+        intr_on_connect = 0;
+        intr_pending++;
+        errno = EINTR;
+        return -1;
+    }
     if(!ctl.open) {
         conn_reset(&ctl);
         ctl.open = 1;
@@ -490,6 +527,12 @@ int sim_tcp_connect(unsigned int ip, unsigned short port) {
         return CTL_FD;
     }
     if(port < 1024) bad_connects++;
+    if(intr_on_connect) {
+        intr_on_connect = 0;
+        intr_pending++;
+        errno = EINTR;
+        return -1;
+    }
     if(refuse_data) {
         errno = ECONNREFUSED;
         return -1;
@@ -506,6 +549,10 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
     size_t left;
     if(fd == TTY_FD) {
         if(!raw_on) raw_reads_ok = 0;           /* a password read with the terminal echoing */
+        if(tty_hang) {
+            ran_away = 1;                       /* this read would wait for ever */
+            return 0;
+        }
         if(!tty_keys || !*tty_keys) return 0;
         *(char *)buf = *tty_keys++;
         return 1;
@@ -525,6 +572,18 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
         return (ssize_t)n;
     }
     left = c->in_len - c->in_off;
+    if(c == &dat && endless_data && !left) {
+        size_t k = 0;
+        char line[16];
+        static unsigned int serial;
+        while(k + 12 < n && k < 900) {
+            int m = snprintf(line, sizeof(line), "n%07u\r\n", serial++);
+            memcpy((char *)buf + k, line, (size_t)m);
+            k += (size_t)m;
+        }
+        data_taken += k;
+        return (ssize_t)k;
+    }
     if(left) {
         if(n > left) n = left;
         if(max_read && n > (size_t)max_read) n = (size_t)max_read;
@@ -556,6 +615,11 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
 ssize_t sim_write(int fd, const void *buf, size_t n) {
     struct conn *c = conn_of(fd);
     if(fd == 1 || fd == 2) {
+        now_ms += hold_ms;
+        if(fd == 1 && out_broken) {
+            errno = EIO;
+            return -1;
+        }
         if(fd == 1 && out_len + n < sizeof(out_buf)) {
             memcpy(out_buf + out_len, buf, n);
             out_len += n;
@@ -650,7 +714,9 @@ int sim_close(int fd) {
 static int revents_of(const struct pollfd *p) {
     struct conn *c = conn_of(p->fd);
     int r = 0;
+    if(p->fd == TTY_FD) return tty_hang ? 0 : p->events & POLLIN;
     if(!c) return POLLNVAL;
+    if((p->events & POLLIN) && c == &dat && endless_data) r |= POLLIN;
     if((p->events & POLLIN) && (c->in_off < c->in_len || c->fin || c->rst)) r |= POLLIN;
     if((p->events & POLLOUT) && !c->full && !c->rst) r |= POLLOUT;
     if(c->fin || c->rst) r |= POLLHUP;
@@ -665,6 +731,23 @@ int sim_poll(struct pollfd *p, unsigned int n, int timeout) {
         failures++;
         printf("FAIL: the client polls without end\n");
         exit(1);
+    }
+    if((endless_data && polls > 200000) || now_ms > 6u * 3600 * 1000) {     /* it would go on for ever: this ends it */
+        ran_away = 1;
+        endless_data = 0;
+        drip_next = 0;
+        dat.rst = 1;
+        ctl.rst = 1;
+        tty_hang = 0;
+    }
+    if(late_at && now_ms >= late_at) {
+        late_at = 0;
+        conn_put(&ctl, late_text, strlen(late_text));
+        late_text[0] = 0;
+    }
+    if(drip_next && now_ms >= drip_next && dat.open) {
+        conn_put(&dat, "x", 1);
+        drip_next += 59000;
     }
     for(pass = 0; pass < 2; pass++) {
         int count = 0;
@@ -693,6 +776,11 @@ int sim_poll(struct pollfd *p, unsigned int n, int timeout) {
                 return -1;
             }
             now_ms += (unsigned int)timeout;
+            if(late_at && now_ms >= late_at) {  /* what is held back comes now, in this wait */
+                late_at = 0;
+                conn_put(&ctl, late_text, strlen(late_text));
+                late_text[0] = 0;
+            }
         }
     }
     return 0;
@@ -724,6 +812,7 @@ unsigned int sim_uptime(void) {
 int sim_readline(char *buf, size_t size) {
     size_t n = 0;
     if(!script || !*script) return -1;
+    if(++lines_read == intr_on_line) intr_pending++;
     while(*script && *script != '\n') {
         if(n + 1 < size) buf[n++] = *script;
         script++;
@@ -754,6 +843,8 @@ char *sim_ipstr(unsigned int ip, char buf[16]) {
 }
 
 static void capture(FILE *f, const char *text, size_t n) {
+    now_ms += hold_ms;
+    if(f == stdout && out_broken) return;
     if(f == stderr) {
         if(err_len + n < sizeof(err_buf)) {
             memcpy(err_buf + err_len, text, n);
@@ -806,7 +897,20 @@ int sim_fputc(int c, FILE *f) {
 
 int sim_fflush(FILE *f) {
     (void)f;
-    return 0;
+    return f == stdout && out_broken ? EOF : 0;
+}
+
+int sim_ferror(FILE *f) {
+    return f == stdout && out_broken;
+}
+
+char *sim_strdup(const char *s) {
+    size_t n = strlen(s) + 1;
+    char *p;
+    if(++strdups == fail_strdup_at) return NULL;
+    p = malloc(n);
+    if(p) memcpy(p, s, n);
+    return p;
 }
 
 /**** a run ****/
@@ -840,6 +944,17 @@ static void fresh(const struct rule *r) {
     intr_after_bytes = data_taken = 0;
     intr_at_ms = 0;
     intr_with_ctl = 0;
+    intr_on_fsync = intr_on_connect = intr_on_line = lines_read = 0;
+    hold_ms = 0;
+    out_broken = 0;
+    fail_strdup_at = strdups = 0;
+    lied_name = NULL;
+    tty_hang = 0;
+    late_at = 0;
+    late_text[0] = 0;
+    endless_data = 0;
+    drip_next = 0;
+    ran_away = 0;
     polls = 0;
     out_buf[0] = err_buf[0] = 0;
     out_len = err_len = 0;
@@ -877,8 +992,9 @@ static int said(const char *needle) {
     return strstr(err_buf, needle) != NULL;
 }
 
+/* shown to the user, on either stream; the tests of standard output alone compare out_buf */
 static int shown(const char *needle) {
-    return strstr(out_buf, needle) != NULL;
+    return strstr(out_buf, needle) != NULL || strstr(err_buf, needle) != NULL;
 }
 
 static int server_got(const char *line) {
@@ -1016,6 +1132,7 @@ static void test_password(void) {
         fresh(says_it);
         have_tty = 1;
         tty_keys = PW "\r";
+        stdin_tty = 1;
         r = run("-n 10.0.2.2", "user alice\nstatus\nquit\n");
         check(r == 1 && password_hidden() && shown("530 ****"), "a server that says the password back: stars");
         check(shown("Not logged in"), "... and a refused login stays not logged in");
@@ -1147,7 +1264,7 @@ static void test_get(void) {
 
     fresh(get_ok);
     r = run("10.0.2.2", "get a.txt -\nquit\n");
-    check(r == 0 && shown("230 in\nhello\n221 bye\n") && file_count() == 0, "get remote - writes standard output");
+    check(r == 0 && !strcmp(out_buf, "hello\n") && file_count() == 0, "get remote - writes standard output");
 
     fresh(get_ok);
     put_dir("a.txt");
@@ -1611,7 +1728,7 @@ static void test_list(void) {
         l[0].after = "226 done\r\n";
         fresh(l);
         r = run("10.0.2.2", "ls\nquit\n");
-        check(r == 0 && said("too long: left out") && out_len < 1000, "lines of 3000 bytes are left out, and bounded");
+        check(r == 0 && said("too long: left out") && out_len == 1001, "lines of 3000 bytes are left out; a last one of 1000 is shown whole");
     }
     {
         static const struct rule l[] = { { "LIST", "150 here\r\n", "a\r\n", 0, 0, D_OPEN }, { 0, 0, 0, 0, 0, 0 } };
@@ -1835,7 +1952,7 @@ static void test_interrupt(void) {
     }
     {
         static const struct rule noabor[] = {
-            { "ABOR", 0, 0, 0, 0, 0 }, { "RETR", "150 here\r\n", "some", 0, 0, D_OPEN }, { 0, 0, 0, 0, 0, 0 } };
+            { "ABOR", 0, 0, 0, 0, 0 }, { "NOOP", 0, 0, 0, 0, 0 }, { "RETR", "150 here\r\n", "some", 0, 0, D_OPEN }, { 0, 0, 0, 0, 0, 0 } };
         fresh(noabor);
         stdin_tty = 1;
         intr_at_ms = 7000;
@@ -1867,6 +1984,7 @@ static void test_commands(void) {
         check(r == 1 && !server_got("RNTO"), "RNFR refused: no RNTO");
     }
     fresh(NULL);
+    stdin_tty = 1;
     r = run("10.0.2.2", "get\nput\nmkdir\nrename a\nfoo\nhelp nothing\nquit\n");
     check(r == 2 && said("usage: get") && said("usage: put") && said("no command foo") && said("no command nothing"), "mistakes in commands");
 
@@ -1955,6 +2073,7 @@ static void test_more_hostile(void) {
     {
         static const struct rule stuck[] = { { "PWD", "257 \"/\"\r\n", 0, 0, 0, C_FULL }, { 0, 0, 0, 0, 0, 0 } };
         fresh(stuck);
+        stdin_tty = 1;
         r = run("10.0.2.2", "pwd\ncd x\nstatus\nquit\n");
         check(r == 2 && said("takes no command") && shown("Not connected") && now_ms >= 30000, "a server that stops reading commands: 30 seconds, then the connection goes");
     }
@@ -2084,6 +2203,215 @@ static void test_more_hostile(void) {
     }
 }
 
+/**** the review of 69203a8: each of these failed before its fix ****/
+
+static void test_review(void) {
+    int r;
+
+    /* 2: standard output holds only what was asked for */
+    fresh(get_ok);
+    r = run("10.0.2.2", "get a.txt -\nquit\n");
+    check(r == 0 && !strcmp(out_buf, "hello\n"), "get remote -: standard output holds the file's bytes and nothing else");
+    check(said("220 hello") && said("221 bye"), "... and what the server says goes to standard error");
+    {
+        static const struct rule l[] = { { "LIST", "150 here\r\n", "a listing\r\n", 0, "226 done\r\n", 0 }, { "PWD", "257 \"/x\"\r\n", 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(l);
+        r = run("10.0.2.2", "pwd\nbinary\nstatus\nhelp get\ndir\nquit\n");
+        check(r == 0 && !strcmp(out_buf, "a listing\n"), "standard output holds a listing and no status line");
+    }
+    fresh(get_ok);
+    stdin_tty = 1;
+    r = run("10.0.2.2", "quit\n");
+    check(r == 0 && !out_buf[0] && said("ftp> "), "the prompt goes to standard error too");
+
+    /* 4: a script stops at its first failure */
+    {
+        static const struct rule no[] = { { "CWD", "550 no such folder\r\n", 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(no);
+        r = run("10.0.2.2", "cd backup\ndelete keep.txt\nquit\n");
+        check(r == 1 && !server_got("DELE") && server_got("QUIT") && said("the rest of the script"), "cd refused in a script: no delete, status 1, and it is said");
+        fresh(no);
+        stdin_tty = 1;
+        r = run("10.0.2.2", "cd backup\ndelete keep.txt\nquit\n");
+        check(server_got("DELE keep.txt"), "at a terminal the next command is the user's to give");
+    }
+    fresh(NULL);
+    r = run("10.0.2.2", "lcd /nowhere\nmget *\nquit\n");
+    check(r == 2 && !server_got("NLST"), "lcd failing in a script: no mget into the wrong folder");
+    {
+        static const struct rule no[] = { { "USER", "530 no\r\n", 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(no);
+        r = run("10.0.2.2", "delete x\nquit\n");
+        check(r == 1 && !server_got("DELE"), "a failed login at the start stops the script too");
+    }
+
+    /* 5: a Ctrl+C outside any wait */
+    {
+        static const struct rule big[] = { { "RETR", "150 here\r\n", "bytes", 0, "226 done\r\n", 0 }, { "DELE", "250 gone\r\n", 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(big);
+        intr_on_fsync = 1;
+        r = run("10.0.2.2", "get big\ndelete big\nquit\n");
+        check(r == 130 && !server_got("DELE") && file_is("big", "bytes"), "a Ctrl+C during the last fsync: the file is whole, the script ends, status 130");
+        fresh(big);
+        intr_on_line = 2;
+        r = run("10.0.2.2", "get big\ndelete big\nquit\n");
+        check(r == 130 && !server_got("DELE"), "a Ctrl+C between two commands of a script: the next does not run");
+    }
+    fresh(NULL);
+    intr_on_connect = 1;
+    r = run("", "open 10.0.2.2\nopen 10.0.2.2\nuser bob\ndelete x\nquit\n");
+    check(r == 130 && connects == 1 && !server_got("USER"), "a Ctrl+C in open ends a script");
+
+    /* 6: time at --More-- is no time without data */
+    {
+        static const struct rule l[] = { { "LIST", "150 here\r\n", "one\r\ntwo\r\nthree\r\nfour\r\n", 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(l);
+        max_read = 5;
+        hold_ms = 70000;
+        r = run("10.0.2.2", "dir\nquit\n");
+        check(r == 0 && !said("no data came") && !said("no reply came") && shown("four\n"), "70 seconds at --More-- for each line: no time-out, data or reply");
+    }
+    fresh(NULL);
+    greeting = "220-one\r\ntwo\r\nthree\r\nfour\r\n220 five\r\n";
+    greeting_len = strlen(greeting);
+    hold_ms = 70000;
+    max_read = 8;                       /* in pieces: the reply's time is looked at between them */
+    r = run("-n 10.0.2.2", "quit\n");
+    check(r == 0 && !said("no reply came"), "... nor in a long greeting");
+
+    /* 7: a listing that does not end */
+    {
+        static const struct rule m[] = { { "NLST", "150 here\r\n", "", 0, "226 done\r\n", D_OPEN }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(m);
+        endless_data = 1;
+        r = run("10.0.2.2", "mget *\nquit\n");
+        check(r == 2 && !ran_away && said("too long") && server_got("ABOR") && !server_got("RETR"), "an NLST without end: stopped at the most names kept, nothing fetched");
+        check(data_taken < 100000, "... having read no more than it keeps");
+    }
+    {
+        static const struct rule l[] = { { "LIST", "150 here\r\n", "", 0, "226 done\r\n", D_OPEN }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(l);
+        drip_next = 2000;
+        r = run("10.0.2.2", "dir\nquit\n");
+        check(r == 2 && !ran_away && said("the listing took too long") && now_ms < 400000, "a byte of a listing every 59 s: over in 5 minutes");
+    }
+
+    /* 8: q stops all of mget */
+    {
+        static const struct rule m[] = { { "NLST", "150 here\r\n", "a1\r\nb1\r\n", 0, "226 done\r\n", 0 }, { "RETR", "150 here\r\n", "x", 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(m);
+        put_file("a1", "mine");
+        stdin_tty = 1;
+        r = run("10.0.2.2", "mget a* b*\nq\nquit\n");
+        check(!server_got("RETR") && file_is("a1", "mine"), "q at mget's question stops every pattern");
+    }
+
+    /* 9: the answer to ABOR that comes late is not the next command's */
+    {
+        static const struct rule slow[] = {
+            { "RETR", "150 here\r\n", "part", 0, 0, D_OPEN },
+            { "ABOR", "426 stopped\r\n", 0, 0, "226 abort ok\r\n", A_LATE },
+            { "DELE", "550 no such file\r\n", 0, 0, 0, 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(slow);
+        stdin_tty = 1;
+        intr_at_ms = 7000;
+        r = run("10.0.2.2", "get a\ndelete keep.txt\nquit\n");
+        check(said("keep.txt: 550 no such file") && !said("226 abort ok"), "a late answer to ABOR is not taken for the next command's");
+    }
+
+    /* 10: reget past 2 GB */
+    {
+        static const struct rule go[] = { { "SIZE", "213 3500000000\r\n", 0, 0, 0, 0 }, { "REST", "350 ok\r\n", 0, 0, 0, 0 }, { "RETR", "150 here\r\n", "x", 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(go);
+        put_file("f", "hello");
+        lied_name = "f";
+        lied_size = 3000000000u;
+        r = run("10.0.2.2", "reget f\nquit\n");
+        check(r == 2 && !server_got("RETR") && !logged("ftruncate") && said("2 GB"), "reget past 2 GB, where nothing it added could be cut off again: refused");
+    }
+
+    /* 11: a file that shrinks under put */
+    {
+        static const struct rule take[] = { { "STOR", "150 send\r\n", 0, 0, "226 stored\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(take);
+        put_file("up", "short now");
+        lied_name = "up";
+        lied_size = 3000000;
+        r = run("10.0.2.2", "put up\nquit\n");
+        check(r == 2 && said("shorter") && server_got("ABOR"), "a file that shrinks under put is no success: ABOR");
+    }
+
+    /* 12: strdup fails in mput's listing (a realloc has moved the array: ASan on the Mac sees it) */
+    {
+        static const struct rule take[] = { { "STOR", "150 send\r\n", 0, 0, "226 stored\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(take);
+        put_file("a1", "1");
+        put_file("a2", "2");
+        put_file("a3", "3");
+        fail_strdup_at = 3;
+        r = run("10.0.2.2", "mput a*\nquit\n");
+        check(r == 2 && !server_got("STOR"), "no memory in mput's listing: said, nothing sent");
+    }
+
+    /* the password: a terminal nobody types on */
+    fresh(NULL);
+    have_tty = 1;
+    tty_hang = 1;
+    r = run("-n 10.0.2.2", "user bob\nquit\n");
+    check(r == 2 && !ran_away && !server_got("PASS") && said("no password"), "a detached task's password: bounded, and no PASS");
+
+    /* nits */
+    {
+        static const struct rule cut[] = { { "SIZE", "213 1000\r\n", 0, 0, 0, 0 }, { "RETR", "150 here\r\n", "short", 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(cut);
+        r = run("10.0.2.2", "get a -\nquit\n");
+        check(r == 2 && said("only 5 of the 1000 bytes"), "get - cut short says so");
+    }
+    {
+        static char line[800];
+        static struct rule l[] = { { "LIST", "150 here\r\n", line, 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        memset(line, 'd', sizeof(line) - 1);
+        memcpy(line + sizeof(line) - 6, "END\r\n", 5);
+        fresh(l);
+        r = run("10.0.2.2", "dir\nquit\n");
+        check(r == 0 && shown("dEND\n"), "a listing's line of 800 bytes is shown whole");
+    }
+    fresh(NULL);
+    put_dir("/x\x1b[2J");
+    r = run("", "lcd /x\x1b[2J\nquit\n");
+    check(!strchr(err_buf, 0x1b) && !strchr(out_buf, 0x1b), "lcd shows a folder's name cleaned");
+    {
+        static const struct rule l[] = { { "LIST", "150 here\r\n", "one\r\ntwo\r\n", 0, "226 done\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh(l);
+        out_broken = 1;
+        stdin_tty = 1;
+        r = run("10.0.2.2", "dir\ndir\nquit\n");
+        check(r == 2 && said("standard output") && strstr(lines, "LIST\n") == strstr(lines, "LIST") && !strstr(strstr(lines, "LIST") + 4, "LIST"),
+              "standard output failing ends the run, also at a terminal: one LIST, no second");
+    }
+    {
+        static char many[20000];
+        struct rule l[2];
+        size_t i;
+        for(i = 0; i < sizeof(many); i++) many[i] = i % 20 == 19 ? '\n' : 'n';
+        memset(l, 0, sizeof(l));
+        l[0].cmd = "LIST";
+        l[0].reply = "150 here\r\n";
+        l[0].data = many;
+        l[0].data_len = sizeof(many);
+        l[0].after = "226 done\r\n";
+        fresh(l);
+        out_broken = 1;
+        max_read = 100;
+        r = run("10.0.2.2", "dir\nquit\n");
+        check(r == 2 && server_got("ABOR") && data_taken <= 200, "... and the listing is stopped there, not read to its end");
+    }
+    fresh(get_ok);
+    out_broken = 1;
+    r = run("10.0.2.2", "get a.txt -\nget a.txt -\nquit\n");
+    check(r == 2 && said("standard output"), "... for get - too");
+}
+
 /**** hostile servers at random ****/
 
 static unsigned int fuzz_seed;
@@ -2198,6 +2526,7 @@ static void test_fuzz(int rounds) {
         max_read = 1 + (int)fuzz(64);
         have_tty = 1;
         tty_keys = PW "\r";
+        stdin_tty = round % 4 != 0;             /* at a prompt a failure does not end the run: every command is tried */
         put_file("keep.txt", "the user's own");
         put_file("up.txt", "to send\n");
         run("10.0.2.2", "user alice\npwd\ncd sub\nls\ndir\nget a.txt\nget keep.txt\nsize a\nreget r.txt\nascii\nget t.txt\nbinary\n"
@@ -2249,6 +2578,7 @@ int main(int argc, char **argv) {
     test_interrupt();
     test_commands();
     test_more_hostile();
+    test_review();
     test_fuzz(argc > 1 ? atoi(argv[1]) : 3000);
     printf("test_ftpcs: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

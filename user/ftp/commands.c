@@ -12,7 +12,9 @@ server's own idea of wildcards does not count and a name that does not match wha
 not taken, whatever the server lists. Each name is the last part of what the listing says, and
 must pass ftpc_safe_name() to become a local file: it is the server's word, while get's name is
 the user's. mget never replaces a file unasked: at a terminal it asks, in a script it leaves the
-file and says so. mput matches in the local folder, ignoring case as FAT does.
+file and says so. A listing cut short, by Ctrl+C or by being too long, is no list to go by: nothing
+is fetched from it. mput matches in the local folder, ignoring case as FAT does. What the commands
+say goes to standard error, as session.c's does.
 */
 
 #include <surf.h>
@@ -126,8 +128,7 @@ static int may_replace(const char *name, int *all) {
         fprintf(stderr, "ftp: %s is there already: left as it is\n", shown);
         return 0;
     }
-    printf("replace %s? (y, n, a for all, q to stop) ", shown);
-    fflush(stdout);
+    fprintf(stderr, "replace %s? (y, n, a for all, q to stop) ", shown);
     if(readline(answer, sizeof(answer)) < 0 || answer[0] == 'q') return -1;
     if(answer[0] == 'a') {
         *all = 1;
@@ -153,6 +154,11 @@ static int mget_one(const char *pattern, int *all, int *stop) {
         fs_names_free(&names);
         return worst;
     }
+    if(names.cut) {
+        fprintf(stderr, "ftp: %s: the listing is too long: nothing was fetched\n", pattern);
+        fs_names_free(&names);
+        return FS_TROUBLE;
+    }
     for(i = 0; i < names.count && fs_connected(); i++) {
         const char *name = names.name[i];
         int r;
@@ -167,7 +173,10 @@ static int mget_one(const char *pattern, int *all, int *stop) {
         }
         if(file_exists(name)) {
             r = may_replace(name, all);
-            if(r < 0) break;
+            if(r < 0) {
+                *stop = 1;
+                break;
+            }
             if(!r) {
                 if(worst < FS_NO) worst = FS_NO;
                 continue;
@@ -185,10 +194,6 @@ static int mget_one(const char *pattern, int *all, int *stop) {
             *stop = 1;
             break;
         }
-    }
-    if(names.cut) {
-        fprintf(stderr, "ftp: %s: the listing is too long: only the start of it was looked at\n", pattern);
-        worst = FS_TROUBLE;
     }
     if(!taken && worst == FS_OK) {
         fprintf(stderr, "ftp: %s: no name matches\n", pattern);
@@ -216,21 +221,20 @@ static char **local_matches(const char *dir, const char *glob, int *count) {
     int n = 0;
     if(!d) return NULL;
     while((de = readdir(d))) {
-        char **nv;
+        char **nv = NULL;
         if(de->d_type != DT_REG || !ftpc_glob(glob, de->d_name, 1)) continue;
-        if(n >= FS_NAMES_MAX || !(nv = realloc(v, (size_t)(n + 1) * sizeof(char *))) ||
-           !(nv[n] = strdup(de->d_name))) {
+        if(n < FS_NAMES_MAX && (nv = realloc(v, (size_t)(n + 1) * sizeof(char *)))) v = nv;
+        if(!nv || !(v[n] = strdup(de->d_name))) {
             closedir(d);
             while(n > 0) free(v[--n]);
             free(v);
             errno = ENOMEM;
             return NULL;
         }
-        v = nv;
         n++;
     }
     closedir(d);
-    if(!v) v = malloc(sizeof(char *));
+    if(!v && !(v = malloc(sizeof(char *)))) errno = ENOMEM;
     *count = n;
     return v;
 }
@@ -279,7 +283,11 @@ static int cmd_lcd(int argc, char **argv) {
         fprintf(stderr, "ftp: %s: %s\n", argv[1], strerror(errno));
         return FS_TROUBLE;
     }
-    if(getcwd(cwd, sizeof(cwd))) printf("The local folder is %s\n", cwd);
+    if(getcwd(cwd, sizeof(cwd))) {
+        char shown[PATH_MAX];
+        ftpc_text(shown, sizeof(shown), cwd);
+        fprintf(stderr, "The local folder is %s\n", shown);
+    }
     return FS_OK;
 }
 
@@ -312,7 +320,7 @@ static int cmd_binary(int argc, char **argv) {
     (void)argc;
     (void)argv;
     fs_set_text(0);
-    printf("Transfers are binary: the bytes as they are\n");
+    fprintf(stderr, "Transfers are binary: the bytes as they are\n");
     return FS_OK;
 }
 
@@ -320,7 +328,7 @@ static int cmd_ascii(int argc, char **argv) {
     (void)argc;
     (void)argv;
     fs_set_text(1);
-    printf("Transfers are ascii: text, its line ends converted\n");
+    fprintf(stderr, "Transfers are ascii: text, its line ends converted\n");
     return FS_OK;
 }
 
@@ -376,7 +384,7 @@ static int cmd_help(int argc, char **argv) {
     int i;
     for(i = 0; i < NCMDS; i++) {
         if(argc > 1 && strcmp(argv[1], cmds[i].name)) continue;
-        printf("%s\n", cmds[i].usage);
+        fprintf(stderr, "%s\n", cmds[i].usage);
         if(argc > 1) return FS_OK;
     }
     if(argc > 1) {

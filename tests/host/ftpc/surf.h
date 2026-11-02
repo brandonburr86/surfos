@@ -40,6 +40,10 @@
 #undef printf
 #undef fprintf
 #undef vfprintf
+#undef ferror
+#undef strdup
+#define ferror      sim_ferror
+#define strdup      sim_strdup
 #define stat        sim_stat
 #define open        sim_open
 #define close       sim_close
