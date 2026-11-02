@@ -1,0 +1,20 @@
+libtest - checks of the C library's text, numbers and commands
+
+SYNOPSIS
+    libtest regex | numbers | math | getopt | system | popen | closed
+    libtest order | all
+
+DESCRIPTION
+    A test program for what the command-line tools lean on in libsurf:
+    regular expressions, strtod, sscanf's floating point, the
+    mathematical functions, getopt, system and popen. The smoke test
+    runs it. Each mode ends with LIBTEST mode PASS, or with what failed
+    and status 1.
+
+    libtest math works out a fingerprint of many results, which must be
+    the same bits here as on the machine that built SurfOS. libtest
+    popen needs a disk mounted on /hda1. libtest order prints around a
+    command, to see through a pipe that the order is kept.
+
+SEE ALSO
+    regex

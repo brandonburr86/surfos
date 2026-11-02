@@ -72,6 +72,8 @@ USER_PROGS  += gzip gunzip zcat       # 11/01/26 (the command-line suite): one t
 USER_PROGS  += tar                    # 11/01/26: user/tar/
 USER_PROGS  += unzip                  # 11/01/26: user/unzip/
 USER_PROGS  += top watch man # 11/01/26 (the command-line suite, track sys): rootfs/man/ is the manual
+USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
+USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): the stream editor
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -610,6 +612,7 @@ unittest: test-kalloc
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
                user/libsurf/time.c user/libsurf/malloc.c
+HOSTUSER_SRC += user/libsurf/strtod.c           # 11/01/26: sscanf's floating point
 HOSTUSER_OBJ = $(HOSTUSER_SRC:user/libsurf/%.c=$(BUILD)/host/libsurf/%.o)
 $(BUILD)/host/libsurf/%.o: user/libsurf/%.c tests/host/libsurf_names.h
 	@mkdir -p $(dir $@)
@@ -821,6 +824,59 @@ unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch $(BUILD)/host/test
 	$(BUILD)/host/test_watch
 	$(BUILD)/host/test_manutil
 	$(PYTHON) -m unittest discover -s tests -p test_man.py
+
+# 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
+# (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
+# i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
+TEXT_HOST_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+                  -include tests/host/text_names.h -MMD -MP
+$(BUILD)/host/text/%.o: user/libsurf/%.c tests/host/libsurf_names.h tests/host/text_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(TEXT_HOST_FLAGS) -c $< -o $@
+$(BUILD)/host/text/regex.o: user/include/regex.h
+$(BUILD)/host/text/math.o: user/include/math.h
+$(BUILD)/host/test_regex: tests/host/test_regex.c user/include/regex.h $(BUILD)/host/text/regex.o $(BUILD)/host/libsurf/ctype.o \
+                          $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_regex.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
+                           $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_strtod.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/host/text/math.o $(BUILD)/host/libsurf/strtod.o \
+                         $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
+$(BUILD)/host/test_getopt: tests/host/test_getopt.c $(BUILD)/host/text/getopt.o $(BUILD)/host/libsurf/string.o \
+                           $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_getopt.c $(filter %.o,$^) -o $@
+# stage 2: sed and grep as programs of the host, against the real ones (tests/test_sed.py), and sed on the simulated file system,
+# for -i and w when writes and renames fail (tests/host/test_sedsave.c)
+TOOLHOST_DEPS = tests/host/toolhost/surf.h tests/host/toolhost/regex.h tests/host/toolhost/shim.c $(BUILD)/host/text/regex.o \
+                $(BUILD)/host/libsurf/ctype.o
+$(BUILD)/host/sed-host: user/bin/sed.c user/bin/saveutil.h $(TOOLHOST_DEPS)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Wno-unused-function -Itests/host/toolhost user/bin/sed.c tests/host/toolhost/shim.c $(filter %.o,$^) -o $@
+$(BUILD)/host/grep-host: user/bin/grep.c user/bin/lineutil.h $(TOOLHOST_DEPS)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Wno-unused-function -Itests/host/toolhost user/bin/grep.c tests/host/toolhost/shim.c $(filter %.o,$^) -o $@
+$(BUILD)/host/sim/sed_bridge.o: user/bin/sed.c user/bin/saveutil.h tests/host/text_names.h
+$(BUILD)/host/test_sedsave: tests/host/test_sedsave.c tests/host/sim_fs.h $(BUILD)/host/sim/sed_bridge.o $(BUILD)/host/sim/sim_fs.o \
+                            $(BUILD)/host/text/regex.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_sedsave.c $(filter %.o,$^) -o $@
+unittest: unittest-text
+.PHONY: unittest-text
+unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm $(BUILD)/host/test_getopt \
+               $(BUILD)/host/test_sedsave $(BUILD)/host/sed-host $(BUILD)/host/grep-host
+	$(BUILD)/host/test_regex
+	$(BUILD)/host/test_strtod
+	$(BUILD)/host/test_libm
+	$(BUILD)/host/test_getopt
+	$(BUILD)/host/test_sedsave
+	$(PYTHON) tests/test_sed.py $(BUILD)/host/sed-host $(BUILD)/host/grep-host
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

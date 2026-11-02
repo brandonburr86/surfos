@@ -1481,6 +1481,46 @@ SMOKE = [
       ('ptytest procsize', ['size 0 wrote 36 bytes', 'PTYTEST procsize PASS', shown('SURF \u224b> ')]),
       ('help | grep -c "man -k WORD"', ['\r\n1\r\n', shown('SURF \u224b> ')]),
       ('exit', [])]),
+    # 11/01/26 (the command-line suite, track text): what libsurf gained, inside SurfOS: libtest (user/bin/libtest.c) checks
+    # regcomp and regexec, strtod, sscanf's floats, getopt, system, popen and pclose, and that the mathematical functions
+    # give the same bits here as on the host (user/bin/libm_grid.h), at -O0 and at -O2, on x87
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-text', ['cli-text\r\n', shown('SURF \u224b> ')]),
+      ('libtest regex', ['LIBTEST regex PASS', shown('SURF \u224b> ')]),
+      ('libtest numbers', ['LIBTEST numbers PASS', shown('SURF \u224b> ')]),
+      ('libtest math', ['LIBTEST math PASS', shown('SURF \u224b> ')]),
+      ('libtest getopt', ['LIBTEST getopt PASS', shown('SURF \u224b> ')]),
+      ('libtest system', ['seen by a child', 'LIBTEST system PASS', shown('SURF \u224b> ')]),
+      ('libtest popen', ['LIBTEST popen PASS', shown('SURF \u224b> ')]),
+      ('libtest closed', ['LIBTEST closed PASS', shown('SURF \u224b> ')]),
+      ('libtest order | cat', ['first\r\nsecond\r\nthird\r\n', shown('SURF \u224b> ')]),
+      # stage 2: grep on the library, with -E, and sed: addresses, s with groups, a file replaced through saveutil.h with its
+      # backup and nothing left beside it, w, what q says, a mistake, a reader that goes, a whole UTF-8 character
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -E "an|rr"', ['Banana\r\ncherry\r\n', shown('SURF \u224b> ')]),
+      ('printf "aa\\nab\\n" | grep "\\(a\\)\\1"; printf "x\\n" | grep -E "a("; echo status $?',
+       ['aa\r\n', 'grep: a(: ', 'status 2', shown('SURF \u224b> ')]),
+      ('seq 5 | sed -n "2,3p;\\$="', ['2\r\n3\r\n5\r\n', shown('SURF \u224b> ')]),
+      ("echo hello world | sed 's/\\(hello\\) \\(world\\)/\\2 \\1/'; echo aaa | sed -E 's/a+/<&>/'",
+       ['world hello\r\n', '<aaa>\r\n', shown('SURF \u224b> ')]),
+      ("printf 'a\\nb\\n' > /hda1/SED.TXT; sed -i.BAK 's/a/X/' /hda1/SED.TXT; echo status $?; cat /hda1/SED.TXT /hda1/SED.TXT.BAK; "
+       "ls /hda1 | grep -c -i 'SED.TXT.TMP'; rm /hda1/SED.TXT /hda1/SED.TXT.BAK",
+       ['status 0\r\n', 'X\r\nb\r\na\r\nb\r\n0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n '2w /hda1/SEDW.TXT'; cat /hda1/SEDW.TXT; rm /hda1/SEDW.TXT", ['\r\n2\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n 'w /dev/null'; echo status $?", ['status 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 9 | sed 2q7; echo status $?; echo x | sed k; echo status $?", ['1\r\n2\r\n', 'status 7\r\n', 'sed: script line 1: ', 'status 2',
+                                                                          shown('SURF \u224b> ')]),
+      # names on FAT: case and paths differ, the file is one. w's two names are one output (a new file: its folder and name; the root
+      # folder's number is 0); with a suffix one file twice is refused; so is a suffix that makes the working name. The file stays
+      ("cd /hda1; printf 'a\\nb\\n' > SEDC.TXT; sed -n -e '1w /hda1/SEDO.TXT' -e '2w ./sedo.txt' SEDC.TXT; cat SEDO.TXT",
+       ['a\r\nb\r\n', shown('hda1 \u224b> ')]),
+      ("sed -i.BAK 's/a/X/' SEDC.TXT ./sedc.txt; echo status $?; sed -i.TMP 's/a/XX/' SEDC.TXT; echo status $?",
+       ['are one file', 'status 2\r\n', 'in the way', 'status 2\r\n', shown('hda1 \u224b> ')]),
+      ("cat SEDC.TXT; rm SEDC.TXT SEDO.TXT; ls | grep -c -i '^SED'; cd /", ['a\r\nb\r\n', '0\r\n', shown('SURF \u224b> ')]),
+      # D, through libsurf's malloc: the pattern space is freed from where it began
+      ("seq 3000 | sed -n ':a;$!{N;ba};P;D' | tail -1", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
+      ('seq 200000 | sed p | head -1', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ("echo h\u00e9llo | sed 's/./x/2;y/l/L/'", ['hxLLo\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],

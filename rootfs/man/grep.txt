@@ -1,36 +1,36 @@
-grep - lines that match a pattern
+grep - print the lines that match a pattern
 
 SYNOPSIS
-    grep [-ivnclqF] [-e pattern] pattern [file...]
+    grep [-ivnclqEF] [-e pattern] pattern [file...]
 
 DESCRIPTION
-    Prints the lines of the files, or of standard input without them,
-    that the pattern matches. With more than one file each line comes
-    after its file's name and a colon.
-
-    The pattern is a basic regular expression, of these parts only: .
-    any character, * the part before it any number of times, ^ and $ the
-    start and end of the line, [abc] [a-z] one of those, [^abc] one not
-    of them, \ the next character as itself. There are no groups, no \|
-    and no intervals.
-
-    The status is 0 when a line was found, 1 when none was, and 2 for a
-    mistake, such as a file that cannot be read. With -q a line found
-    counts more than a mistake.
+    grep prints the lines of the files, or of standard input, that the
+    pattern matches. With more than one file, each line comes after its
+    file's name and a colon. The pattern is a basic regular expression
+    (man regex). A [ that is never closed stands for itself.
 
 OPTIONS
-    -i          Ignore case.
+    -E          The pattern is an extended regular expression.
+    -F          The pattern is a fixed string. Of -E and -F the last one
+                counts.
+    -e pattern  The pattern, which may then start with a -.
+    -i          Ignore the case of A to Z.
     -v          The lines that do not match.
-    -n          Put each line's number before it.
+    -n          Each line's number before it.
     -c          How many lines there are, not the lines.
-    -l          The names of the files that have one.
-    -q          Nothing: only the status.
-    -F          Take the pattern as a fixed string.
-    -e pattern  The pattern, which may then begin with a -.
+    -l          Only the names of the files that have one.
+    -q          Nothing at all: only the status.
+
+STATUS
+    0 when a line was found, 1 when none was, 2 for trouble: a mistake
+    in the pattern, a file that cannot be read, or a line the search
+    gave up on, which is neither shown nor counted, with -v too. With
+    -q a line found counts for more than any of those after the pattern.
 
 EXAMPLES
+    grep -n main /hda1/PROG.C
+    grep -E '(error|warning): [0-9]+' /hda1/LOG.TXT
     dmesg | grep -i usb
-    grep -n '^#' /initrd/etc/surfsh.conf
 
 SEE ALSO
-    find, cut, sed, awk
+    regex, sed, awk

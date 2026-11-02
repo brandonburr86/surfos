@@ -1,0 +1,39 @@
+/* Force-included after libsurf_names.h when the libsurf additions of 11/01/26 (the command-line suite, track text) are
+   compiled for the host: surf_ names, so that tests/host/test_regex.c, test_strtod.c, test_libm.c and test_getopt.c
+   can call them next to the host libc's. */
+#define regcomp     surf_regcomp
+#define regexec     surf_regexec
+#define regerror    surf_regerror
+#define regfree     surf_regfree
+#define getopt      surf_getopt
+#define optarg      surf_optarg
+#define optind      surf_optind
+#define opterr      surf_opterr
+#define optopt      surf_optopt
+#define sin         surf_sin
+#define cos         surf_cos
+#define tan         surf_tan
+#define asin        surf_asin
+#define acos        surf_acos
+#define atan        surf_atan
+#define atan2       surf_atan2
+#define sinh        surf_sinh
+#define cosh        surf_cosh
+#define tanh        surf_tanh
+#define exp         surf_exp
+#define log         surf_log
+#define log2        surf_log2
+#define log10       surf_log10
+#define pow         surf_pow
+#define sqrt        surf_sqrt
+#define cbrt        surf_cbrt
+#define hypot       surf_hypot
+#define floor       surf_floor
+#define ceil        surf_ceil
+#define round       surf_round
+#define trunc       surf_trunc
+#define fabs        surf_fabs
+#define fmod        surf_fmod
+#define modf        surf_modf
+#define frexp       surf_frexp
+#define ldexp       surf_ldexp
