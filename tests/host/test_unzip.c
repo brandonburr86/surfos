@@ -1163,6 +1163,10 @@ static void test_seek_bound(void) {
     ars_mkdir("/d");
     ars_chdir("/d");
     check(ars_cmd(unzip_main, "unzip -n -q /big.zip") == 2 && ars_exists("/d/b"), "unpacking stops at the bound too, what came before it stands");
+    ars_reset();
+    ars_put_hole("/big.zip", a, head, hole, tail_n);
+    check(ars_cmd(unzip_main, "unzip -t -q /big.zip a b nosuch") == 2, "named members, and a run that stops at the bound");
+    check(has(ars_stderr(), "nosuch: not reached") && !has(ars_stderr(), "not in the archive"), "what was not reached is not called absent");
     free(a);
 }
 

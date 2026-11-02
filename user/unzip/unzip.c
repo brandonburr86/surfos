@@ -464,7 +464,9 @@ int main(int argc, char **argv) {
         }
     }
     walk();
-    for(i = 0; i < nmembers; i++) if(!member_found[i]) say(members[i], "not in the archive");
+    for(i = 0; i < nmembers; i++) {
+        if(!member_found[i]) say(members[i], gave_up ? "not reached: unzip stopped first" : "not in the archive");
+    }
     if(!list_only && !test_only && !to_stdout) sync();
 end:
     if(fd > 0) close(fd);
