@@ -7,7 +7,9 @@ File: fat_check.c  Date: 11/01/26 (the command-line suite, track fsck)
 still lose data, so shell/fsckcmd.c refuses -r, gives this no write function and never asks it
 to repair. The repairs stay, tested on the host (tests/host/test_fsck.c), for a later round: the
 account (docs/superpowers/plans/2026-11-01-cli-suite-fsck.md) lists what that round must fix.
-FAT_CHECK_PLAN: a look says what a repair would do; the kernel command does not ask for that.
+A check takes at most CHECK_MEM_MOST of the kernel heap, which keeps what it once grew to: a
+volume that needs more is refused before anything is taken. FAT_CHECK_PLAN: a look says what a
+repair would do; the kernel command does not ask for that.
 
 fsck: a FAT12, FAT16 or FAT32 volume checked, and on request repaired. Pure: its reads,
 writes, words and its one question go through struct fat_check_io (fs/fat_check.h), so
@@ -111,6 +113,10 @@ that crosses a FAT window at each step reads slowly. Both are bounded, and Ctrl+
 #define NAMES_FIRST 512             /* slots of the table of a directory's short names, before it grows */
 #define NAMES_MOST  (1UL << 17)     /* twice what a directory holds */
 #define ROOM_NAMES  1000            /* FOUND.000 to FOUND.999 */
+#define CHECK_MEM_MOST (4UL << 20)  /* of the kernel heap, which keeps what it grows to: twice what the owner's 118 GB stick
+                                       needs with its 32 KB clusters (1.8 MB), and room on it to compare a directory of
+                                       65536 names (2.2 MB while that table doubles). 10.1 million clusters fit: 330 GB with
+                                       32 KB clusters (tests/host/test_fsck.c, names_at_cap()) */
 
 #define ATTR_LABEL   0x08
 #define ATTR_DIR     0x10
@@ -237,6 +243,7 @@ struct fck {
     u32 names_slots, names_used;
     bool names_off;
     u32 names_lost;                 /* directories whose names could not all be compared: the check is not whole */
+    u32 mem_fixed;                  /* what the check holds but for the names' table */
     bool plan_words;                /* FAT_CHECK_PLAN */
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
@@ -658,10 +665,11 @@ static bool names_put(u8 *t, u32 slots, const u8 *p) {
     return true;
 }
 
+/* twice the slots, within what a check may take: the old table and the new one are held at once */
 static bool names_grow(struct fck *f) {
     u32 slots = f->names_slots * 2, i;
     u8 *t;
-    if(slots > NAMES_MOST || !(t = (u8 *)kcalloc(slots, 11))) return false;
+    if(slots > NAMES_MOST || f->mem_fixed + (f->names_slots + slots) * 11 > CHECK_MEM_MOST || !(t = (u8 *)kcalloc(slots, 11))) return false;
     for(i = 0; i < f->names_slots; i++) if(f->names[i * 11]) names_put(t, slots, f->names + i * 11);
     kfree(f->names);
     f->names = t;
@@ -1583,6 +1591,13 @@ static int boot_load(struct fck *f) {
     return -1;
 }
 
+/* what tables_make() and the fck take, in bytes, with the names' first table */
+static u32 tables_need(const struct fck *f) {
+    u32 bits = ((f->end + 31) >> 5) * 4;
+    return 3 * bits + (WINDOWS + 1) * CHUNK * SECTOR + f->cb + DIR_AHEAD * SECTOR + FIX_MAX * sizeof(struct fix) +
+           LOST_MAX * sizeof(struct lost) + DEPTH_MOST * sizeof(struct frame) + NAMES_FIRST * 11 + sizeof(struct fck);
+}
+
 /* room for the walk; false when there is none */
 static bool tables_make(struct fck *f) {
     u32 i;
@@ -1766,7 +1781,14 @@ int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result 
     f->plan_words = (flags & FAT_CHECK_PLAN) != 0;
     st = boot_load(f);
     if(st < 0) {
-        if(!tables_make(f)) {
+        u32 need = tables_need(f);
+        f->mem_fixed = need - NAMES_FIRST * 11;
+        if(need > CHECK_MEM_MOST) {
+            /* nothing is taken: the heap would keep it. (FAT32's largest volumes, and big ones with small clusters) */
+            say(f, "a volume of %lu clusters takes %lu KB to check, more than the %lu KB a check may have: check it on another computer",
+                (u_long)f->nclusters, (u_long)(need >> 10), (u_long)(CHECK_MEM_MOST >> 10));
+            st = FAT_CHECK_TROUBLE;
+        } else if(!tables_make(f)) {
             say(f, "not enough memory for a volume of %lu clusters", (u_long)f->nclusters);
             st = FAT_CHECK_TROUBLE;
         } else {

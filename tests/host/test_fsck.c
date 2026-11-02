@@ -3501,10 +3501,149 @@ static void big_stick(void) {
     snprintf(m, sizeof(m), "118 GB (%u clusters): read in pieces of at most %u blocks, %ld KB of memory, %u requests; status %d, %u problems",
              big.n, big_max, mem_peak / 1024, big_req, r.status, r.found);
     printf("    %s\n", m);
-    check(big_max <= 128 && mem_peak < 4 * 1024 * 1024 && r.status == FAT_CHECK_PROBLEMS, m);
+    check(big_max <= 128 && mem_peak < 2 * 1024 * 1024 && r.status == FAT_CHECK_PROBLEMS, m);   /* (and well inside the 4 MB a check may have) */
     check(r.found == 1, "and it finds the one thing wrong with it: a chain past its size");
     mem_now = 0;
     free(big_root);
+    t_done(&log);
+}
+
+/* The same stick with clusters of one sector: 247 million of them, three bitmaps of 30 MB, which the kernel heap would keep.
+   It is refused before anything is taken */
+static void big_refused(void) {
+    struct fat_check_io io;
+    struct fat_check_result r;
+    struct tio log;
+    u8 *bs;
+    u32 total = 247463936, spf = total / 128 + 1;
+    char m[240];
+    t_init(&log, work16, 0);
+    big_root = (u8 *)calloc(2, 512);
+    bs = big_root;
+    bs[0] = 0xEB; bs[1] = 0x58; bs[2] = 0x90;
+    wr16(bs + 11, 512);
+    bs[13] = 1;
+    wr16(bs + 14, 32);
+    bs[16] = 2;
+    bs[21] = 0xF8;
+    wr32(bs + 32, total);
+    wr32(bs + 36, spf);
+    wr32(bs + 44, 2);
+    wr16(bs + 48, 1);
+    wr16(bs + 50, 6);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    geo3(bs, &big);
+    wr32(bs + 512, 0x41615252);
+    wr32(bs + 512 + 484, 0x61417272);
+    wr32(bs + 512 + 488, 0xFFFFFFFF);
+    wr32(bs + 512 + 492, 2);
+    wr32(bs + 512 + 508, 0xAA550000);
+    memset(&io, 0, sizeof(io));
+    io.ctx = &log;
+    io.blocks = total;
+    io.read = big_read;
+    io.say = t_say;
+    mem_peak = 0;
+    fat_check(&io, 0, &r);
+    snprintf(m, sizeof(m), "118 GB in %u clusters of 512 bytes: refused, in words, having taken %ld bytes: %s", big.n, mem_peak, log.log);
+    check(r.status == FAT_CHECK_TROUBLE && strstr(log.log, "more than the 4096 KB a check may have") && mem_peak < 16384, m);
+    mem_now = 0;
+    free(big_root);
+    t_done(&log);
+}
+
+/* A FAT32 volume nothing stores, of n clusters of 32 KB: the root holds `names` short names, everything else is free */
+static u8 cap_boot[1024];
+static struct geo3 cap;
+static u32 cap_names;
+
+static int cap_read(void *ctx, u32 lba, u32 count, void *buf) {
+    u32 i, k;
+    (void)ctx;
+    memset(buf, 0, count * 512);
+    for(i = 0; i < count; i++) {
+        u32 at = lba + i;
+        u8 *o = (u8 *)buf + i * 512;
+        if(!at || at == 6) memcpy(o, cap_boot, 512);
+        else if(at == 1) memcpy(o, cap_boot + 512, 512);
+        else if(at >= cap.fat1 && at < cap.fat1 + 2 * cap.spf && (at - cap.fat1) % cap.spf == 0) {
+            wr32(o, 0x0FFFFFF8);                    /* entries 0, 1, and the root's cluster 2 */
+            wr32(o + 4, 0x0FFFFFFF);
+            wr32(o + 8, 0x0FFFFFFF);
+        } else if(at >= cap.data_lba && at < cap.data_lba + cap.spc) {
+            for(k = 0; k < 16; k++) {
+                u32 slot = (at - cap.data_lba) * 16 + k;
+                if(slot >= cap_names) break;
+                snprintf((char *)o + k * 32, 12, "N%07uTXT", slot);
+                o[k * 32 + 11] = 0x20;
+            }
+        }
+    }
+    return 0;
+}
+
+static int cap_run(u32 n, struct tio *log, struct fat_check_result *r) {
+    u8 *bs = cap_boot;
+    u32 spf = ((n + 2) * 4 + 511) / 512, total = 32 + 2 * spf + n * 64;
+    struct fat_check_io io;
+    memset(cap_boot, 0, sizeof(cap_boot));
+    bs[0] = 0xEB; bs[1] = 0x58; bs[2] = 0x90;
+    wr16(bs + 11, 512);
+    bs[13] = 64;
+    wr16(bs + 14, 32);
+    bs[16] = 2;
+    bs[21] = 0xF8;
+    wr32(bs + 32, total);
+    wr32(bs + 36, spf);
+    wr32(bs + 44, 2);
+    wr16(bs + 48, 1);
+    wr16(bs + 50, 6);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    geo3(bs, &cap);
+    wr32(bs + 512, 0x41615252);
+    wr32(bs + 512 + 484, 0x61417272);
+    wr32(bs + 512 + 488, 0xFFFFFFFF);
+    wr32(bs + 512 + 492, 3);
+    wr32(bs + 512 + 508, 0xAA550000);
+    memset(&io, 0, sizeof(io));
+    io.ctx = log;
+    io.blocks = total;
+    io.read = cap_read;
+    io.say = t_say;
+    mem_peak = 0;
+    fat_check(&io, 0, r);
+    mem_now = 0;
+    return (int)r->status;
+}
+
+/* The table of a directory's names is the one thing a walk grows, and it stays within what a check may have too. The fixed
+   part of what a check takes comes from a small volume, measured; then a volume whose tables come within a few KB of 4 MB:
+   its root's 300 names would double the table past the cap. The names are then not compared, and the look says so */
+static void names_at_cap(void) {
+    struct tio log;
+    struct fat_check_result r;
+    long fixed;
+    u32 n, bits, cap_bytes = 4u << 20;
+    char m[300];
+    cap_names = 10;
+    t_init(&log, work16, 0);
+    n = 1000000;
+    cap_run(n, &log, &r);
+    fixed = mem_peak - 3L * (long)((((n + 2) + 31) >> 5) * 4);
+    t_done(&log);
+    bits = (u32)((cap_bytes - (u32)fixed) / 12) * 4;   /* three bitmaps just within the cap, with the names' first table */
+    n = bits / 4 * 32 - 33;
+    cap_names = 300;
+    t_init(&log, work16, 0);
+    cap_run(n, &log, &r);
+    snprintf(m, sizeof(m), "a volume of %u clusters, its tables %ld bytes under the cap, 300 names in its root: status %d, %ld bytes at most:\n%s",
+             n, (long)cap_bytes - fixed - 3L * bits, r.status, mem_peak, log.log);
+    check(r.status == FAT_CHECK_TROUBLE && strstr(log.log, "not checked whole") && !strstr(log.log, "\nclean") && mem_peak <= (long)cap_bytes, m);
+    t_done(&log);
+    cap_names = 10;
+    t_init(&log, work16, 0);
+    cap_run(n, &log, &r);
+    check(r.status == FAT_CHECK_CLEAN && mem_peak <= (long)cap_bytes, "the same volume with 10 names: clean, within the cap");
     t_done(&log);
 }
 
@@ -3559,7 +3698,7 @@ int main(int argc, char **argv) {
             }
             changing(32, d_windows, 120);
         }
-        if(want("big-stick")) big_stick();
+        if(want("big-stick")) { big_stick(); big_refused(); names_at_cap(); }
         if(want("long-names")) lfn_fuzz(20261101, 4000);
         if(want("fuzz")) fuzz(20261101, 200, 1);
     }
