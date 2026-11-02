@@ -741,6 +741,44 @@ $(BUILD)/user/bin/cal: $(BUILD)/user/obj/cal.o $(BUILD)/user/wclock/clock.o $(US
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(BUILD)/user/wclock/clock.o $(USER_LIB)
 -include $(wildcard $(BUILD)/user/diff/*.d)
 
+CLID_TOOLS     = cmp comm join paste fold nl rev basename dirname od base64 strings file tree
+CLID_HOSTFLAGS = $(filter-out -m32,$(HOSTFLAGS)) -include tests/host/cli/cli_host.h -Itests/host/cli
+CLID_DEPS      = tests/host/cli/cli_host.h tests/host/cli/surf.h user/diff/cli.h user/bin/lineutil.h user/bin/fileutil.h user/bin/saveutil.h
+CLID_DIFF_SRC  = user/diff/dcore.c user/diff/dinput.c user/diff/dfile.c user/diff/dout.c
+CLID_PATCH_SRC = user/diff/dinput.c user/diff/phunk.c user/diff/papply.c
+$(CLID_TOOLS:%=$(BUILD)/host/cli/%): $(BUILD)/host/cli/%: user/bin/%.c $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) $< -o $@
+$(BUILD)/host/cli/cal: user/bin/cal.c user/wclock/clock.c user/wclock/clock.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/cal.c user/wclock/clock.c -o $@
+$(BUILD)/host/cli/diff: user/bin/diff.c $(CLID_DIFF_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/diff.c $(CLID_DIFF_SRC) -o $@
+$(BUILD)/host/cli/patch: user/bin/patch.c $(CLID_PATCH_SRC) user/diff/patch.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/patch.c $(CLID_PATCH_SRC) -o $@
+CLID_TEST_SRC  = tests/host/test_diff.c $(sort $(CLID_DIFF_SRC) $(CLID_PATCH_SRC))
+$(BUILD)/host/test_diff: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(CLID_TEST_SRC) -o $@
+$(BUILD)/host/test_diff_weak: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -DD_HASH_MASK=3 $(CLID_TEST_SRC) -o $@
+unittest: unittest-diff
+.PHONY: unittest-diff
+unittest-diff: $(BUILD)/host/test_diff $(BUILD)/host/test_diff_weak $(CLID_TOOLS:%=$(BUILD)/host/cli/%) $(BUILD)/host/cli/cal \
+               $(BUILD)/host/cli/diff $(BUILD)/host/cli/patch
+	$(BUILD)/host/test_diff
+	$(BUILD)/host/test_diff_weak
+	python3 tests/test_cli_diff.py $(BUILD)/host/cli
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
