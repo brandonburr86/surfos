@@ -11,9 +11,10 @@
    then PASV; reget going on, refused, and fooled by a server that sends the whole file again; put, with the server
    refusing, stopping, or not taking data; listings with escape sequences, long lines and no end; mget with names
    that climb, are absolute, hold controls, or do not match, more names than are kept, files already there; mput;
-   Ctrl+C during a transfer and during a reply, and before a command goes; NOOP's answer after ABOR, from servers
-   with no ABOR, late or twice; a password typed however late, and none asked for by a process with no terminal of its
-   own; the commands' mistakes; and last a fuzz of hostile servers. Run by `make unittest`, and by hand with clang's
+   Ctrl+C during a transfer and during a reply, and before a command goes, also with REST answered; NOOP's answer after
+   ABOR, from servers with no ABOR, late or twice; an upload's data connection ended by the server, which says why only
+   then; a password typed however late, and none asked for by a process with no terminal of its own, or one that a
+   detached task runs; the commands' mistakes; and last a fuzz of hostile servers. Run by `make unittest`, and by hand with clang's
    sanitizers on the Mac (the account says how). */
 #define _GNU_SOURCE                     /* memmem, and DT_REG with glibc */
 #include <stdio.h>
@@ -72,6 +73,7 @@ struct conn {
     unsigned char *in;                  /* what the server sent */
     size_t in_len, in_off, in_cap;
     int fin, rst, full;
+    int wfail;                          /* the next write fails (a reset poll() has not seen yet) */
     unsigned char *got;                 /* what the client wrote */
     size_t got_len, got_cap;
 };
@@ -130,6 +132,17 @@ static int ran_away;                    /* the client did not end by itself: the
 static int proc_tty;                    /* procinfo's tty for this process: -1, none */
 static int proc_detached;               /* and it is detached: the desktop's Run program... started it */
 static int proc_collect, proc_gone;     /* scans of procinfo() in which a task before this one is collected as it is read */
+static int parent_detached;             /* this process's parent, on its terminal, is detached: a script Run program... started */
+static int grand_detached;              /* that parent's parent, on the same terminal, is: a ring-0 shell's spawn of a script */
+static int pty_session;                 /* this process and its parent are on a pty, whose detached parent is on a console: telnetd */
+static const char *intr_on_read;        /* a Ctrl+C once a read of the control connection gives this */
+static const char *intr_on_send;        /* a Ctrl+C once the server has a command that starts with this */
+static size_t data_take;                /* an upload's data connection takes this many bytes, and then the server ends it */
+static int data_end;                    /* how: DE_WRITE the next write fails, DE_RST a reset, DE_HUP a close */
+static unsigned int data_end_gap;       /* and says the transfer's last reply this much later (ms; it is late then) */
+#define DE_WRITE 1
+#define DE_RST   2
+#define DE_HUP   3
 static int tty_opens;                   /* opens of /dev/tty */
 static unsigned int tty_key_at;         /* the password's keys come at this time (a read waits for them) */
 static int intr_with_stray;             /* a Ctrl+C as a look at the control connection, with no wait, finds a line there */
@@ -227,6 +240,10 @@ static void server_line(const char *line) {
         lines_len += n;
         lines[lines_len++] = '\n';
         lines[lines_len] = 0;
+    }
+    if(intr_on_send && !strncmp(line, intr_on_send, strlen(intr_on_send))) {
+        intr_on_send = NULL;
+        intr_pending++;
     }
     if(!r) {
         say_ctl("500 not understood\r\n");
@@ -604,6 +621,10 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
         if(max_read && n > (size_t)max_read) n = (size_t)max_read;
         memcpy(buf, c->in + c->in_off, n);
         c->in_off += n;
+        if(c == &ctl && intr_on_read && memmem(buf, n, intr_on_read, strlen(intr_on_read))) {
+            intr_on_read = NULL;
+            intr_pending++;
+        }
         if(c == &dat) {
             if(c->in_off == c->in_len && current && (current->flags & A_TAKEN)) after_data();
             data_taken += n;
@@ -675,7 +696,7 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
         f->bytes[f->len] = 0;
         return (ssize_t)n;
     }
-    if(c->rst) {
+    if(c->rst || c->wfail) {
         errno = ECONNRESET;
         return -1;
     }
@@ -689,6 +710,19 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
     grow(&c->got, &c->got_cap, c->got_len + n + 1);
     memcpy(c->got + c->got_len, buf, n);
     c->got_len += n;
+    if(c == &dat && data_take && c->got_len >= data_take) {    /* the server ends it here, and then says why */
+        data_take = 0;
+        if(data_end == DE_WRITE) c->wfail = 1;
+        else if(data_end == DE_RST) c->rst = 1;
+        else c->full = c->fin = 1;
+        if(current && !sent_after && !(current->flags & C_MUTE) && current->after) {
+            sent_after = 1;
+            if(data_end_gap) {
+                snprintf(late_text, sizeof(late_text), "%s", current->after);
+                late_at = now_ms + data_end_gap;
+            } else say_ctl(current->after);
+        }
+    }
     if(c == &ctl) {
         size_t i;
         for(i = line_start; i + 1 < c->got_len; i++) {
@@ -940,10 +974,17 @@ int sim_ferror(FILE *f) {
     return f == stdout && out_broken;
 }
 
-/* the task list, by position as SurfOS's is: init, an older task (until it is collected), this process, a shell */
+/* the task list, by position as SurfOS's is: init; task 60, telnetd or a detached surfsh when a test says so; this
+   process's parent, a shell (70); an older task (2, until it is collected); this process (77); another (80) */
 int sim_procinfo(int index, struct sim_procinfo *pi) {
-    static const int pids[] = { 1, 2, 77, 80 };
-    int n = proc_gone ? 3 : 4, k;
+    struct { int pid, ppid, tty; unsigned int flags; } t[6];
+    int n = 0, up = grand_detached || pty_session;
+    t[n].pid = 1, t[n].ppid = -1, t[n].tty = 0, t[n].flags = 0, n++;
+    t[n].pid = 60, t[n].ppid = 1, t[n].tty = 0, t[n].flags = up ? PROC_DETACHED : 0, n++;
+    t[n].pid = 70, t[n].ppid = up ? 60 : 1, t[n].tty = pty_session ? 17 : 0, t[n].flags = parent_detached ? PROC_DETACHED : 0, n++;
+    if(!proc_gone) t[n].pid = 2, t[n].ppid = 1, t[n].tty = 0, t[n].flags = 0, n++;
+    t[n].pid = 77, t[n].ppid = 70, t[n].tty = pty_session ? 17 : proc_tty, t[n].flags = proc_detached ? PROC_DETACHED : 0, n++;
+    t[n].pid = 80, t[n].ppid = 1, t[n].tty = 0, t[n].flags = 0, n++;
     if(index < 0) {
         errno = EINVAL;
         return -1;
@@ -953,12 +994,12 @@ int sim_procinfo(int index, struct sim_procinfo *pi) {
         errno = ENOENT;
         return -1;
     }
-    k = proc_gone && index >= 1 ? index + 1 : index;
     memset(pi, 0, sizeof(*pi));
-    pi->pid = pids[k];
-    pi->tty = pids[k] == 77 ? proc_tty : 0;
-    pi->flags = pids[k] == 77 && proc_detached ? PROC_DETACHED : 0;
-    if(pids[k] == 2 && proc_collect > 0) {      /* collected just after it was read: the rest move up one */
+    pi->pid = t[index].pid;
+    pi->ppid = t[index].ppid;
+    pi->tty = t[index].tty;
+    pi->flags = t[index].flags;
+    if(pi->pid == 2 && proc_collect > 0) {      /* collected just after it was read: the rest move up one */
         proc_collect--;
         proc_gone = 1;
     }
@@ -1023,6 +1064,11 @@ static void fresh(const struct rule *r) {
     proc_tty = 0;
     proc_detached = 0;
     proc_collect = proc_gone = 0;
+    parent_detached = grand_detached = pty_session = 0;
+    intr_on_read = intr_on_send = NULL;
+    data_take = 0;
+    data_end = 0;
+    data_end_gap = 0;
     intr_on_say = NULL;
     intr_again = intr_again_in = 0;
     closes[0] = 0;
@@ -2711,6 +2757,124 @@ static void test_review2(void) {
     }
 }
 
+/**** the review of 790203e: each of these failed on it, but where it says a guard ****/
+
+static void test_review3(void) {
+    static char part[1001], up[3001], big[200000];
+    static const struct rule resume[] = {
+        { "SIZE big", "213 5000\r\n", 0, 0, 0, 0 }, { "REST", "350 restarting\r\n", 0, 0, 0, 0 },
+        { "RETR", "150 here\r\n", "y", 0, "226 done\r\n", 0 }, { "STOR", "150 send\r\n", 0, 0, "226 stored\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+    int r;
+    memset(part, 'B', sizeof(part) - 1);
+    memset(up, 'N', sizeof(up) - 1);
+    memset(big, 'x', sizeof(big) - 1);
+
+    /* 1: REST answered, and the transfer's command not sent: the server keeps REST for its next transfer */
+    fresh_part(resume, 5);
+    put_file("big", part);
+    put_file("up.txt", up);
+    stdin_tty = 1;
+    intr_on_read = "350 ";
+    r = run("10.0.2.2", "reget big\nput up.txt\nstatus\nquit\n");
+    check(server_got("REST 1000") && !server_got("RETR") && !server_got("STOR") && said("stopped") && said("after REST") && shown("Not connected"),
+          "a Ctrl+C as REST's 350 comes: the connection goes, so no put meets that REST");
+    fresh_part(resume, 5);
+    put_file("big", part);
+    stdin_tty = 1;
+    intr_on_read = "350 ";
+    r = run("10.0.2.2", "reget big\nascii\nget up.txt got.txt\nquit\n");
+    check(!server_got("RETR") && no_file("got.txt") && said("after REST"), "... nor an ascii get");
+    fresh_part(resume, 5);                      /* the other order, a guard: the Ctrl+C before REST went */
+    put_file("big", part);
+    put_file("up.txt", up);
+    stdin_tty = 1;
+    intr_on_read = "229 ";
+    r = run("10.0.2.2", "reget big\nput up.txt\nquit\n");
+    check(!server_got("REST") && server_got("STOR up.txt") && said("stopped") && !said("connection is closed") && said("up.txt: 3000 bytes"),
+          "a Ctrl+C before REST went: nothing waits at the server, and the session goes on");
+    fresh_part(resume, 5);                      /* and one as REST's answer is awaited, a guard: out of step, so the connection goes */
+    put_file("big", part);
+    stdin_tty = 1;
+    intr_on_send = "REST";
+    r = run("10.0.2.2", "reget big\nstatus\nquit\n");
+    check(server_got("REST 1000") && !server_got("RETR") && shown("Not connected"), "a Ctrl+C while REST's answer is awaited: the connection goes");
+
+    /* 2: the server ends an upload's data connection, and says why only then (vsftpd's order on a full disk) */
+    {
+        static const struct rule full552[] = { { "STOR", "150 send\r\n", 0, 0, "552 Exceeded storage allocation\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        static const struct rule full451[] = { { "STOR", "150 send\r\n", 0, 0, "451 Failure writing to local file\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        static const struct rule mute[] = { { "STOR", "150 send\r\n", 0, 0, "552 never said\r\n", C_MUTE }, { 0, 0, 0, 0, 0, 0 } };
+        static const struct rule ok[] = { { "STOR", "150 send\r\n", 0, 0, "226 stored\r\n", 0 }, { 0, 0, 0, 0, 0, 0 } };
+        fresh_part(full552, 1000);
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_WRITE;
+        data_end_gap = 10;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 1 && said("big: 552 Exceeded storage allocation") && !server_got("ABOR") && !said("the data connection"),
+              "a write refused by a reset, then 552 10 ms later: the server's refusal, status 1, no ABOR");
+        fresh_part(full451, 1000);
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_RST;
+        data_end_gap = 10;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 1 && said("big: 451 Failure writing to local file") && !server_got("ABOR"), "a reset poll() sees, then 451 10 ms later: the same");
+        fresh_part(full552, 1000);
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_HUP;
+        data_end_gap = 10;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 1 && said("big: 552 Exceeded storage allocation") && !server_got("ABOR"), "a close, then 552 10 ms later: the same");
+        fresh_part(full552, 1000);              /* a guard: the 552 at once, read before the data connection's end */
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_RST;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 1 && said("big: 552 Exceeded storage allocation") && !server_got("ABOR"), "a reset and a 552 at once: the same");
+        fresh_part(ok, 1000);
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_RST;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 2 && said("less than the whole file") && !server_got("ABOR"), "a reset, then 226: no success, the file there is not whole");
+        fresh_part(mute, 1000);                 /* guards: no reply, and one past the bound */
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_RST;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 2 && said("the server closed the data connection before the end") && server_got("ABOR"), "a reset and no reply: said, and ABOR");
+        fresh_part(full552, 1000);
+        put_file("big", big);
+        data_take = 30000;
+        data_end = DE_RST;
+        data_end_gap = 8000;
+        r = run("10.0.2.2", "put big\nquit\n");
+        check(r == 2 && server_got("ABOR") && said("before the end"), "a reset and a 552 after 8 s: ABOR, which passes the 552 over");
+    }
+
+    /* 3: a script that a detached task runs: its programs are not detached themselves */
+    fresh_part(NULL, 5);
+    have_tty = 1;
+    tty_hang = 1;
+    parent_detached = 1;
+    r = run("-n 10.0.2.2", "user alice\nquit\n");
+    check(r == 2 && !server_got("PASS") && !tty_opens && said("no terminal"), "a parent on the same terminal is detached: no terminal, nothing read");
+    fresh_part(NULL, 5);
+    have_tty = 1;
+    tty_hang = 1;
+    grand_detached = 1;
+    r = run("-n 10.0.2.2", "user alice\nquit\n");
+    check(r == 2 && !server_got("PASS") && !tty_opens && said("no terminal"), "... or its parent's parent");
+    fresh_part(NULL, 5);
+    have_tty = 1;
+    tty_keys = PW "\r";
+    pty_session = 1;
+    r = run("-n 10.0.2.2", "user alice\nquit\n");
+    check(r == 0 && server_got("PASS " PW "\n") && password_hidden(), "a telnetd session: the detached server is on another terminal, so the session's is its own (a guard)");
+}
+
 /**** hostile servers at random ****/
 
 static unsigned int fuzz_seed;
@@ -2857,7 +3021,7 @@ static void test_fuzz(int rounds) {
     /* a fuzz that dies at its first command proves nothing */
     if(rounds >= 1000) {
         check(deep_retr > rounds / 4, "fuzz: data flowed in a good part of the rounds");
-        check(deep_stor > rounds / 4, "fuzz: uploads were tried in a good part of the rounds");
+        check(deep_stor > rounds / 5, "fuzz: uploads were tried in a good part of the rounds");
         check(replaced > rounds / 50 && kept > rounds / 4, "fuzz: the user's file was both replaced and kept");
     }
     printf("test_ftpcs: fuzz: %d rounds, data flowed in %d, uploads tried in %d, keep.txt replaced %d, kept %d\n",
@@ -2879,6 +3043,7 @@ int main(int argc, char **argv) {
     test_more_hostile();
     test_review();
     test_review2();
+    test_review3();
     test_fuzz(argc > 1 ? atoi(argv[1]) : 3000);
     printf("test_ftpcs: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

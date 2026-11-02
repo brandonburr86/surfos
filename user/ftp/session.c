@@ -49,6 +49,7 @@ A kill leaves a partial file or a .tmp where it was: SurfOS has no way to tell a
 #define LIST_MS      300000             /* mget's listing, start to end: names a server can feed for ever, filling nothing */
 #define SEND_MS      30000              /* a command the server does not take */
 #define ABORT_MS     5000               /* each answer after ABOR */
+#define LOST_MS      5000               /* the reply that may say why the server ended an upload's data connection */
 #define QUIT_MS      5000
 #define STEP_MS      500                /* a Ctrl+C just before a wait is seen this soon */
 #define PRELIMS      16                 /* 1xx replies taken before the real one */
@@ -396,18 +397,33 @@ static int simple(const char *verb, const char *arg, const char *what) {
 
 /**** logging in ****/
 
-/* has this process a terminal somebody types on for it? Not when procinfo() gives it none, nor when it is detached (the
-   desktop's Run program..., a ring-0 shell's &): /dev/tty then still opens, as its console's, whose keys go to others,
-   and a password asked for there would be waited for in vain. SurfOS's procinfo() gives a live task a tty always.
-   procinfo() counts tasks from the list's head at each call, so a task collected during a scan shifts the rest by one
-   and the scan can pass over this one (kernel/task.c says as much of task_info()): it is looked for again */
-static int own_terminal(void) {
-    struct procinfo pi;
-    int i, scan, me = getpid();
+/* procinfo() for the task pid: 0, or -1 when there is none. procinfo() counts tasks from the list's head at each call,
+   so a task collected during a scan moves the rest up one and the scan can pass over the one looked for (kernel/task.c
+   says as much of task_info()): it is looked for again, four times in all */
+static int task_of(int pid, struct procinfo *pi) {
+    int i, scan;
     for(scan = 0; scan < 4; scan++)
-        for(i = 0; procinfo(i, &pi) == 0; i++)
-            if(pi.pid == me) return pi.tty >= 0 && !(pi.flags & PROC_DETACHED);
-    return 0;
+        for(i = 0; procinfo(i, pi) == 0; i++)
+            if(pi->pid == pid) return 0;
+    return -1;
+}
+
+/* has this process a terminal somebody types on for it? Not when procinfo() gives it none, nor when it, or a task it
+   descends from on the same terminal, is detached: what the desktop's Run program... or a ring-0 shell's & and spawn
+   start, and a script such a task runs, whose programs are not detached themselves (no spawn passes it on). /dev/tty
+   then still opens, as that console's, whose keys go to others, and a password asked for there would be waited for in
+   vain. The walk up stops where the terminal changes: telnetd is detached, but its sessions' shells are on terminals of
+   their own (ptys). SurfOS's procinfo() gives a live task a tty always, and an orphan is init's child */
+static int own_terminal(void) {
+    struct procinfo pi, up;
+    int steps;
+    if(task_of(getpid(), &pi) < 0 || pi.tty < 0) return 0;
+    for(steps = 0; steps < 64; steps++) {
+        if(pi.flags & PROC_DETACHED) return 0;
+        if(pi.ppid < 0 || task_of(pi.ppid, &up) < 0 || up.tty != pi.tty) return 1;
+        pi = up;
+    }
+    return 1;
 }
 
 /* the password, from the terminal itself (the commands may come from a pipe), however long it takes to type: 0, -1 with
@@ -1024,6 +1040,11 @@ static int transfer_in(const char *verb, const char *arg, struct sink *k, unsign
     }
     if((c = start_cmd(verb, arg)) < 0) {
         close(dfd);
+        if(c == NOT_SENT && rest) {             /* the server keeps REST for its next transfer (RFC 3659 5.4) */
+            say("stopped\n");
+            drop("stopped by Ctrl+C after REST, which the server keeps for its next transfer");
+            return FS_TROUBLE;
+        }
         return failed(c);
     }
     c = reply(&r, 0);
@@ -1180,6 +1201,30 @@ void fs_names_free(struct fs_names *n) {
 
 /**** uploads ****/
 
+/* the server ended an upload's data connection before the file's end (what: the error a write gave, NULL for an end
+   poll() saw). A server may say why only after that: vsftpd, its disk full, closes the data connection and then says
+   451 or 552. So its reply comes first, within LOST_MS: a 4xx or 5xx is its refusal, said by the caller as any other
+   (0, with *early, as pump_out() returns one); with none, why is said here (-1), and ABOR follows; a 2xx for a file not
+   all sent is no success (1). -1 also when the connection went (said), -2 for Ctrl+C */
+static int data_lost(struct ftpc_reply *r, int *early, const char *what) {
+    char why[80];
+    int i, c;
+    snprintf(why, sizeof(why), "%s", what ? what : "");
+    for(i = 0; !*early && i < PRELIMS; i++) {
+        c = reply_wait(r, LOST_MS, 0);
+        if(c < 0) return c;
+        if(!c) break;
+        if(c >= 200) *early = 1;
+        else ftpc_reply_init(r);
+    }
+    if(*early && r->code >= 300) return 0;
+    if(what) say_err("the data connection: %s", why);
+    else say_err("the server closed the data connection before the end");
+    if(!*early) return -1;
+    say_err("the server said %d %s: it has less than the whole file", r->code, safe(r->text));
+    return 1;
+}
+
 /* the file, to the data connection: as pump_in() */
 static int pump_out(int dfd, int fd, struct ftpc_reply *r, int *early, unsigned long long *sent) {
     const char *p = data_buf;
@@ -1241,15 +1286,11 @@ static int pump_out(int dfd, int fd, struct ftpc_reply *r, int *early, unsigned 
             ssize_t w = write(dfd, p + off, (size_t)(have - off));
             if(w < 0) {
                 if(errno == EINTR) continue;
-                say_err("the data connection: %s", strerror(errno));
-                return -1;
+                return data_lost(r, early, strerror(errno));
             }
             off += (int)w;
             if(w) last = uptime();
-        } else if(f[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-            say_err("the server closed the data connection before the end");
-            return -1;
-        }
+        } else if(f[0].revents & (POLLHUP | POLLERR | POLLNVAL)) return data_lost(r, early, NULL);
     }
 }
 

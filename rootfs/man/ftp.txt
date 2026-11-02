@@ -64,11 +64,12 @@ PASSWORDS
     also when the commands come from a script: it is never read from
     a line, a script or the command line, and ftp waits for it as
     long as it takes. A program with no terminal of its own (one the
-    desktop's Run program started, say) has nobody to type it, and
-    there the login fails at once. A password is never kept, and is
-    hidden if the server says it back in its answer to PASS; if the
-    server repeats it in a later reply, that is shown like anything
-    else it says. Anonymous never asks.
+    desktop's Run program started, say, or a script that such a
+    program runs) has nobody to type it, and there the login fails
+    at once. A password is never kept, and is hidden if the server
+    says it back in its answer to PASS; if the server repeats it in
+    a later reply, that is shown like anything else it says.
+    Anonymous never asks.
 
 FILES
     get replaces a file through a new file beside it, renamed over
@@ -100,9 +101,10 @@ CTRL+C
     Ctrl+C stops the command that runs: a transfer is aborted and
     its file cleaned up, and the prompt comes back. Any other command
     the server has already is stopped by closing the connection; one
-    not sent yet is not sent. A script ends, with status 130. At
-    the prompt Ctrl+C leaves ftp, as it leaves any program. A kill
-    leaves a partial file, or a .tmp, where it was.
+    not sent yet is not sent, but after reget's REST the connection
+    closes all the same. A script ends, with status 130. At the
+    prompt Ctrl+C leaves ftp, as it leaves any program. A kill leaves
+    a partial file, or a .tmp, where it was.
 
     Waits for the server have limits, but a transfer or a listing
     that still moves does not: a server that sends a byte a minute
