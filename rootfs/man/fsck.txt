@@ -1,96 +1,83 @@
-fsck - check a FAT volume, and repair it on request
+fsck - check a FAT volume
 
 SYNOPSIS
     fsck [-v] <device>
-    fsck -r [-v] <device>
 
 DESCRIPTION
     Checks a FAT12, FAT16 or FAT32 volume on a device lsblk lists,
-    such as usb1p1: the boot sector, FSInfo, whether the two FATs
-    agree, every directory, every chain of clusters, and the clusters
-    nothing reaches. Without -r it writes nothing.
+    such as usb1p1: the boot sector and its backup, FSInfo, whether
+    the two FATs agree, every directory and name, every chain of
+    clusters and the size it holds, and the clusters nothing reaches.
+    It only reads: nothing on the device changes.
+
+    Repairs are not available in this version. fsck -r is refused,
+    with status 2: "repairs are not available in this version, and
+    the stick can be repaired on another computer". There: First Aid
+    in Disk Utility on a Mac, chkdsk /f on Windows, fsck.fat on Linux.
+    Copy off what you can first.
 
     fsck is a command of the kernel, because programs cannot read a
-    disk. It takes the device, not a path, and a volume mounted
-    read-write is refused: umount it first, or mount it with -r. A
-    mount of its disk, or of a partition of it, is refused too.
+    disk. It takes the device, not a path. A volume mounted read-only
+    is checked under its mount, which cannot go meanwhile. One mounted
+    read-write is refused, because a volume in use changes under a
+    check: umount it, or mount it with -r. A mount of its disk, or of
+    a partition of it, is refused too.
 
-    With -r it says what it will change, on the console even when the
-    output goes to a file, and asks for the device's name. Keys typed
-    before the question are dropped. Only what mkfs may change can be
-    repaired: a USB drive or a ramdisk, not mounted, and never the
-    disk SurfOS started from.
+    The network settings mount the stick SurfOS started from on
+    /.netman for a moment while they are read or saved. fsck never
+    holds that mount: it waits up to five seconds for it to go, and
+    then says to try again.
 
-    When in doubt, it changes nothing. A repair comes after a look at
-    the whole volume, and any doubt in that look means nothing at all
-    is written, FSInfo included: it says "no repair" and why. Copy off
-    what you can, or look at it on another computer. These are doubts:
+    Some problems leave it unsure what the volume was meant to hold,
+    and a repair anywhere has to guess at them: copy off what you can
+    before one. These are such doubts:
 
       - a boot sector that differs from its backup in the volume's
         shape, or a FAT much larger than its clusters need, or holding
         something past its last entry, or wrong reserved FAT entries
       - FATs that are not mirrored
-      - a first FAT and a second that disagree about a chain: a link
-        each its own, or the first ending a file or a directory
-        early where the second goes on
+      - a first FAT and a second that disagree about a chain
       - a blank sector of the first FAT where the second has more, or
         a chain into a sector of the FAT that is all zeros
       - two names on one chain, of files or directories
       - a chain into a cluster marked bad, or a first cluster that is
         no cluster
       - a directory it cannot read, one more than 128 levels down, one
-        with no "." and ".." or a "." that names another cluster (it
-        may be a damaged file), a directory whose chain has anything
-        wrong with it, anything past a directory's end mark, a
-        directory with no cluster, a label with clusters
+        of more than 65536 slots, one with no "." and ".." or a "."
+        that names another cluster (it may be a damaged file), a
+        directory whose chain has anything wrong with it, anything
+        past a directory's end mark, a directory with no cluster, a
+        label with clusters
       - a size of 0 on what looks like a directory
       - clusters nothing reaches, when they are most of what is in
         use, or when one of them starts as a directory
-      - a FAT12 entry across two sectors that would have to change
 
-    Nothing is ever deleted, and when there is no doubt it repairs
-    only these:
+    What it could not check it says, and never calls a volume clean
+    then: a block it cannot read, the directories below 128 levels,
+    the slots of a directory past 65536, and the names of a directory
+    with more of them than a check has memory to compare ("not
+    checked whole").
 
-      - the second FAT, from the first
-      - the end of a chain: a link to no cluster or back into its own
-        chain ends where it stands, and a free cluster a chain runs
-        into stays, as the end, because that cluster is read as part
-        of the file
-      - a size longer than its chain
-      - clusters nothing reaches, saved as FOUND.000/FILE0000.CHK
-        (their true size is not known: whole clusters are saved)
-      - FSInfo's count, and last the mark that it was unmounted cleanly
-
-    The rest it only reports, and repairs what it can around it: a
-    chain longer than its size, ".." entries, long names, short names,
-    a directory's size, FSInfo without its signatures, a lost chain
-    that runs into another chain or a bad cluster, and the boot
-    sector's own dirty flag. No repair changes an entry's first
-    cluster. The mark of a clean unmount stays while any problem is
-    left.
-
-    A stick pulled out during a repair is left no worse, if two things
-    hold: a sector is written whole, and the stick has its data safe
-    when it says so. Many sticks promise that and do not keep it, and
-    fsck cannot tell. The order of its writes then helps less, though
-    it never writes over anything a name or a link reaches; what is
-    left may need a person. Plug it in and run fsck -r again. Ctrl+C
-    stops it between two steps.
+    A check may take 4096 KB of memory, most of it three bitmaps of
+    one bit a cluster: a 118 GB stick with 32 KB clusters needs
+    1805 KB. A volume of more than about ten million clusters (330 GB
+    with 32 KB clusters, 41 GB with 4 KB) is refused, with what it
+    would need: check it on another computer. Ctrl+C stops a check.
 
 OPTIONS
-    -r    Repair, after asking.
     -v    Say every problem and the counts, not just the first 40.
 
 EXIT STATUS
-    0     Clean, or all of it repaired.
-    1     Problems are left.
-    2     A wrong command, a device it may not use, no FAT volume, or
-          a device that failed.
+    0     Clean.
+    1     Problems found, or it was stopped.
+    2     -r, a wrong command, a device it may not use, no FAT
+          volume, a device that failed, a volume too large for a
+          check, or a check that was not whole and found nothing else.
 
 EXAMPLES
     fsck usb1p1
-    umount /usb1p1
-    fsck -r usb1p1
+    mount -r usb1p1
+    fsck -v usb1p1
 
 SEE ALSO
-    mkfs, mount, umount, eject, lsblk
+    mount, umount, eject, lsblk, mkfs
