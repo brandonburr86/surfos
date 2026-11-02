@@ -1976,6 +1976,17 @@ static void hidden_by_css(void) {
           "<option>1</select><button name=b value=v>B</button></div></div><input name=q></form>", "https://forms.test/s?x=1&q=",
           "and so it is where display: none hides what is around it: its form is the same");
 
+    /* HTML ends a button at the next button, an a at the next a: what display: none made of the first ends with it */
+    check(!build("<form action=/s><button style=display:none name=a value=1>A<button name=b value=2>Bee</button><input name=q>"
+                 "</form><p><a style=display:none href=x>ex<a href=y>why</a> more<p><nobr style=display:none>no<nobr>yes</nobr>"
+                 " after<p><option style=display:none>one<option>two", &d), "a hidden button, a, nobr and option left open");
+    check(d.control_count == 3 && d.controls[0].run < 0 && d.controls[1].run >= 0 && d.controls[2].run >= 0,
+          "the next button and the field after it have their boxes");
+    check(strstr(d.text, "Bee") && strstr(d.text, "why") && strstr(d.text, " more") && strstr(d.text, "yes") &&
+          strstr(d.text, " after") && strstr(d.text, "two") && !strstr(d.text, "ex") && !strstr(d.text, "no") &&
+          !strstr(d.text, "one"), "and what follows each shows, the hidden one does not");
+    wd_free(&d);
+
     /* none of them has a box, and the page goes on after them */
     check(!build("<style>.h{display:none} .h2 select{display:none}</style><form><input class=h name=a><select class=h name=s>"
                  "<option>xyzzy</select><textarea class=h name=t>plugh</textarea><button class=h name=b>B</button>"

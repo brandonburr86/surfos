@@ -1519,11 +1519,28 @@ static void hidden_forms(struct bd *b, struct ut_html_tag *t, int whole) {
     } else if(el == E_BASE && t->seen[A_HREF] && !b->base_seen) b->fb.lost = 1;
 }
 
+/* 11/02/26: HTML ends an open a, button or nobr where another of its kind starts, and an option at an option or optgroup
+   when it is the current element. A frame the page's CSS made for it (display: none or block, css_inline()) ends with it:
+   else what display: none hid would go on hiding what follows, fields too. */
+static void end_made(struct bd *b, int el) {
+    int i;
+    if(el == E_BUTTON) field_close(b);              /* (its field in its own box, as at its end tag) */
+    if(el == E_OPTGROUP) el = E_OPTION;
+    for(i = b->depth - 1; i > 0; i--) {
+        if(b->st[i].el == el && b->st[i].made) {
+            pop_to(b, i);
+            return;
+        }
+        if(el == E_OPTION || (ut_html_flags(b->st[i].el) & F_SCOPE)) return;
+    }
+}
+
 static void start_tag(struct bd *b, struct ut_html_tag *t) {
     int el = t->el, s;
     unsigned int fl = ut_html_flags(el);
     struct frame *f;
     struct wd_block *x;
+    if(el == E_A || el == E_BUTTON || el == E_NOBR || el == E_OPTION || el == E_OPTGROUP) end_made(b, el);
     b->css_at = ds_height(b->ds);
     if(el == E_FORM && b->fb.open >= 0) return;     /* the standard: a form in a form is no element at all */
     if(t->seen[A_ID]) add_anchor(b, t->val[A_ID], t->len[A_ID], t->over[A_ID]);
