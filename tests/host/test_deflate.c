@@ -332,6 +332,15 @@ static void test_dynamic(void) {
     bw_put(&w, 0, 5);
     bw_put(&w, 0, 5);
     bw_put(&w, 15, 4);
+    for(i = 0; i < 19; i++) bw_put(&w, i == 4 ? 1 : 0, 3);              /* length 8 alone: with no more input, nothing else could refuse it */
+    bw_end(&w);
+    check(refused(w.b, w.n), "... and it is refused as soon as it is read, with nothing after it");
+    bw_start(&w);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 2, 2);
+    bw_put(&w, 0, 5);
+    bw_put(&w, 0, 5);
+    bw_put(&w, 15, 4);
     for(i = 0; i < 19; i++) bw_put(&w, 0, 3);
     bw_end(&w);
     check(refused(w.b, w.n), "no code of the code lengths at all");
@@ -534,6 +543,74 @@ static void test_largest_table(void) {
     check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n) && !rest,
           "the largest table a stream can ask for: every code of it decodes");
     check(run_chunks(w.b, w.n, 1, 1, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n), "and a bit at a time, as it were");
+}
+
+/* A hostile stream too short for inflate's fast loop never meets the fast loop's own checks: these have the input and room it
+   wants, so the same refusals are made there, and what it takes ahead is given back. */
+static void test_fast_loop(void) {
+    static struct bw w;
+    static unsigned char out[4096];
+    size_t made, rest;
+    int i;
+
+    bw_start(&w);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 1, 2);
+    bw_fixed(&w, 'a');
+    bw_fixed(&w, 'b');
+    bw_fixed(&w, 257);
+    bw_code(&w, 2, 5);                  /* distance 3, with 2 bytes made */
+    for(i = 0; i < 60; i++) bw_fixed(&w, 'c');
+    bw_fixed(&w, 256);
+    bw_end(&w);
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_BAD && made == 2, "a distance past the start, in the middle of a long stream");
+    check(iz->msg != NULL && inflate_run(iz) == INFLATE_BAD, "... refused, and it goes on refusing");
+    bw_start(&w);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 1, 2);
+    bw_fixed(&w, 'a');
+    bw_fixed(&w, 257);
+    bw_code(&w, 30, 5);                 /* a distance symbol that does not exist */
+    for(i = 0; i < 60; i++) bw_fixed(&w, 'c');
+    bw_fixed(&w, 256);
+    bw_end(&w);
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_BAD && made == 1, "distance symbol 30, in the middle of a long stream");
+    bw_start(&w);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 1, 2);
+    bw_fixed(&w, 'a');
+    bw_fixed(&w, 286);                  /* a length symbol that does not exist */
+    for(i = 0; i < 60; i++) bw_fixed(&w, 'c');
+    bw_fixed(&w, 256);
+    bw_end(&w);
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_BAD && made == 1, "length symbol 286, in the middle of a long stream");
+
+    /* the last block's end, met with input to spare: what follows is left, to the byte */
+    bw_start(&w);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 1, 2);
+    for(i = 0; i < 60; i++) bw_fixed(&w, 'c');
+    bw_fixed(&w, 256);
+    bw_end(&w);
+    for(i = 0; i < 64; i++) w.b[w.n++] = 'T';
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_END && made == 60 && rest == 64, "with 64 bytes after the stream, not one of them is read");
+    /* a block's end, and a stored block after it, whose lengths must be found exactly on the next byte */
+    bw_start(&w);
+    bw_put(&w, 0, 1);
+    bw_put(&w, 1, 2);
+    for(i = 0; i < 60; i++) bw_fixed(&w, 'c');
+    bw_fixed(&w, 256);
+    bw_put(&w, 1, 1);
+    bw_put(&w, 0, 2);
+    bw_end(&w);
+    bw_put(&w, 20, 8);
+    bw_put(&w, 0, 8);
+    bw_put(&w, 235, 8);
+    bw_put(&w, 255, 8);
+    for(i = 0; i < 20; i++) bw_put(&w, 'd', 8);
+    for(i = 0; i < 64; i++) w.b[w.n++] = 'T';
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_END && made == 80 && out[59] == 'c' && out[60] == 'd' && rest == 64,
+          "a stored block after a block the fast loop ended");
 }
 
 /* every way of cutting input and room over a stream with stored, fixed and dynamic blocks */
@@ -770,6 +847,7 @@ int main(void) {
     test_known();
     test_dynamic();
     test_largest_table();
+    test_fast_loop();
     test_chunks();
     test_deflate();
     test_hostile();

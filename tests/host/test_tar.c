@@ -1255,7 +1255,9 @@ static void test_pax_entry(void) {
     {
         static const char raw[] = "xx size=2000\n";
         pax_fixture(raw, sizeof(raw) - 1, NULL, NULL, 0, 512, 2000);
-        check(over_mine() == 2 && mine_stands() && !ars_exists("/dest/next.txt"), "a size in a record that cannot be framed: the same");
+        check(over_mine() == 2 && mine_stands() && !ars_exists("/dest/next.txt") && has(ars_stderr(), "pax size"), "a size in a record that cannot be framed: the same");
+        pax_fixture(raw, sizeof(raw) - 1, NULL, NULL, 0, 512, 512);     /* and when the next header would have added up */
+        check(over_mine() == 2 && mine_stands() && !ars_exists("/dest/next.txt"), "... it stops for the size, not because what follows happens not to add up");
     }
     memset(digits, '1', sizeof(digits));
     pax_fixture(NULL, 0, "size", digits, 5000, 512, 2000);
