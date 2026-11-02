@@ -495,28 +495,30 @@ static void rfc_codes(const unsigned char *lens, int n, unsigned short *code) {
     for(i = 0; i < n; i++) if(lens[i]) code[i] = next_code[lens[i]]++;
 }
 
-/* The most a code can ask of the second level of inflate's table: 40 first-bits with codes 6 bits longer than the first
-   level takes, which is all that 286 symbols can pay for, and every code of them used. */
+/* The most any whole code of 286 symbols asks of inflate's second-level array, by an exhaustive count: 340 entries, from 64
+   first-bits, with these numbers of codes of 10 to 15 bits under them. A canonical code keeps its longest codes together, so
+   this is far from what the shape of the array alone would allow. Every symbol of it is used here. */
 static void test_largest_table(void) {
     static struct bw w;
     static unsigned char lens[320], out[4096], want[4096];
     static unsigned short code[286];
-    static const unsigned char deep[7] = { 10, 11, 12, 13, 14, 15, 15 };
+    static const unsigned char how_many[6] = { 117, 1, 17, 17, 1, 130 };
+    static const unsigned short bases[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+                                              163, 195, 227, 258 };
+    unsigned int used = 0;
     size_t made, rest, n = 0;
-    int s = 4, i, k;
+    int s = 2, i, k;
     memset(lens, 0, sizeof(lens));
     lens[256] = 1;
     lens[0] = 2;
     lens[1] = 3;
-    lens[2] = 5;
-    lens[3] = 6;
-    for(i = 0; i < 40; i++) {
-        for(k = 0; k < 7; k++) {
+    for(i = 0; i < 6; i++) {
+        for(k = 0; k < how_many[i]; k++) {
             if(s == 256) s++;
-            lens[s++] = deep[k];
+            lens[s++] = (unsigned char)(10 + i);
         }
     }
-    check(s == 285, "the table's test uses 285 symbols");
+    check(s == 286, "the table's test uses all 286 symbols");
     lens[286] = 1;                                      /* one distance code */
     rfc_codes(lens, 286, code);
     bw_start(&w);
@@ -525,15 +527,12 @@ static void test_largest_table(void) {
         bw_code(&w, code[i], lens[i]);
         want[n++] = (unsigned char)i;
     }
-    for(i = 257; i < 285; i++) {                        /* each length symbol, as a match of the last byte */
-        int extra = i < 265 ? 0 : i < 285 ? (i - 261) / 4 : 0, base, q;
-        static const unsigned short bases[28] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
-                                                  163, 195, 227 };
-        base = bases[i - 257];
+    for(i = 257; i <= 285; i++) {                       /* each length symbol, as a match of the last byte */
+        int extra = i < 265 || i == 285 ? 0 : (i - 261) / 4, q;
         bw_code(&w, code[i], lens[i]);
         bw_put(&w, 0, extra);
         bw_code(&w, 0, 1);
-        for(q = 0; q < base; q++) {
+        for(q = 0; q < bases[i - 257]; q++) {
             want[n] = want[n - 1];
             n++;
         }
@@ -542,7 +541,9 @@ static void test_largest_table(void) {
     bw_end(&w);
     check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n) && !rest,
           "the largest table a stream can ask for: every code of it decodes");
-    check(run_chunks(w.b, w.n, 1, 1, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n), "and a bit at a time, as it were");
+    for(i = 0; i < 1 << INFLATE_ROOT; i++) if(iz->lit.first[i] & 0x8000) used += 1u << (iz->lit.first[i] >> 12 & 7);
+    check(used == 340, "and it is the largest: 340 entries of the second level");
+    check(run_chunks(w.b, w.n, 1, 1, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n), "and a byte of input and of room at a time");
 }
 
 /* A hostile stream too short for inflate's fast loop never meets the fast loop's own checks: these have the input and room it
