@@ -454,6 +454,39 @@ static void bases(void) {
     }
 }
 
+/* pre characters of text, n digits: the lengths of up to three lines, and all but the last end in a backslash */
+static void breaks(unsigned pre, unsigned n, unsigned first, unsigned second, unsigned third) {
+    static char t[600];
+    unsigned want[3], line = 0, i = 0, len = 0, k = 0;
+    int good = 1;
+    want[0] = first;
+    want[1] = second;
+    want[2] = third;
+    t[k++] = '"';
+    while(k <= pre) t[k++] = 'x';
+    t[k++] = '"';
+    t[k++] = ';';
+    for(i = 0; i < n; i++) t[k++] = '7';
+    t[k++] = '\n';
+    t[k] = 0;
+    run(t, 0, 0);
+    for(i = 0; i < nout; i++) {
+        if(out[i] != '\n') {
+            len++;
+            continue;
+        }
+        if(line > 2 || len != want[line] || (line < 2 && want[line + 1] && out[i - 1] != '\\')) good = 0;
+        line++;
+        len = 0;
+    }
+    if(line < 3 && want[line]) good = 0;
+    checks++;
+    if(!good) {
+        failed++;
+        printf("FAIL: %u characters and %u digits: [%.400s]\n", pre, n, out);
+    }
+}
+
 static void parses_as(const char *s, unsigned base, const char *want) {
     struct num *n = num_parse(s, (unsigned)strlen(s), base);
     CHECK(n != NULL);
@@ -771,6 +804,27 @@ static void registers(void) {
     is("obase=101\n100\n", " 100\n");
     is("obase=100000\n123456789\n", " 01234 56789\n");
     is("obase=100000\n100000\n", " 00001 00000\n");
+    /* where lines break, every case as the Mac's bc breaks it: text, digits, and each line's length with its backslash */
+    breaks(0, 68, 68, 0, 0);
+    breaks(0, 69, 69, 0, 0);                    /* its last character may take the 69th place */
+    breaks(0, 70, 69, 2, 0);
+    breaks(0, 136, 69, 68, 0);
+    breaks(0, 137, 69, 69, 0);
+    breaks(0, 138, 69, 69, 2);
+    breaks(1, 68, 69, 0, 0);
+    breaks(1, 69, 69, 2, 0);
+    breaks(2, 67, 69, 0, 0);
+    breaks(2, 68, 69, 2, 0);
+    breaks(66, 3, 69, 0, 0);
+    breaks(66, 4, 69, 2, 0);
+    breaks(67, 1, 68, 0, 0);
+    breaks(67, 2, 69, 0, 0);
+    breaks(67, 3, 69, 2, 0);
+    breaks(68, 1, 69, 1, 0);                    /* and a number does not start there */
+    breaks(68, 2, 69, 2, 0);
+    breaks(69, 1, 70, 1, 0);
+    breaks(69, 4, 70, 4, 0);
+    breaks(100, 3, 101, 3, 0);
     /* a number starts its own line when text has passed the end of one, as on the Mac's bc */
     {
         static const char start[] = "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";

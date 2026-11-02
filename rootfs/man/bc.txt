@@ -16,7 +16,7 @@ DESCRIPTION
     Digits above 9 are the capitals A to F. A digit the base does not
     have counts at its own value: with ibase=2, 12 is 4, and with
     ibase=A, 1E5 is 245. Results are cut, not rounded. A long number
-    goes on the next line after a backslash.
+    of 70 characters goes on the next line after a backslash.
 
     Variables, arrays (a[i]) and functions have names of lower-case
     letters, digits and _, and all start at 0. Names are visible to
