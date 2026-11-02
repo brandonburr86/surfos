@@ -78,9 +78,10 @@ static void walk(const char *dir, long level, size_t depth) {
     }
     for(i = 0; i < n; i++) {
         int last = i == n - 1;
+        char shown[NAME_MAX + 8];
         printf("%s%s", indent, last ? corner : branch);
         if(sizes) printf("[%11u]  ", v[i].size);
-        printf("%s\n", v[i].name);
+        printf("%s\n", cli_clean(v[i].name, shown, sizeof(shown)));   /* a name from another system's disk */
         if(v[i].dir) dirs_seen++;
         else files_seen++;
         if(v[i].dir && level < max_level) {

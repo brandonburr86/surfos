@@ -143,8 +143,12 @@ static int is_fat(const unsigned char *b, size_t n, char *out, size_t size) {
     label = b + (bits == 32 ? 71 : 43);
     len = 11;
     while(len && (label[len - 1] == ' ' || !label[len - 1])) len--;
-    if(len) snprintf(out, size, "FAT%d file system image, label %.*s", bits, len, (const char *)label);
-    else snprintf(out, size, "FAT%d file system image", bits);
+    if(len) {
+        char raw[12], shown[12 * 4];
+        memcpy(raw, label, (size_t)len);
+        raw[len] = 0;
+        snprintf(out, size, "FAT%d file system image, label %s", bits, cli_clean(raw, shown, sizeof(shown)));
+    } else snprintf(out, size, "FAT%d file system image", bits);
     return 1;
 }
 
@@ -253,7 +257,10 @@ static int classify(int fd, size_t n, char *out, size_t size) {
         return 0;
     }
     text_words(&t, words, sizeof(words));
-    if(script_of(head, n, script, sizeof(script))) snprintf(out, size, "a %s script, %s", script, words);
+    if(script_of(head, n, script, sizeof(script))) {
+        char shown[sizeof(script)];
+        snprintf(out, size, "a %s script, %s", cli_clean(script, shown, sizeof(shown)), words);
+    }
     else snprintf(out, size, "%s", words);
     return 0;
 }

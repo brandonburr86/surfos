@@ -36,6 +36,14 @@ static char command[256];               /* the options as given, for the line be
 
 static void compare_dirs(const char *d1, const char *d2);
 
+/* a name to print, which may come from a directory and so from another system's disk: two can be in use in one line */
+static const char *shown(const char *name) {
+    static char buf[2][PATH_MAX + 8];
+    static int which;
+    which = !which;
+    return cli_clean(name, buf[which], sizeof(buf[which]));
+}
+
 static int usage(void) {
     fprintf(stderr, "usage: diff [-u [n] | -U n | -c | -C n] [-q] [-r] [-i] [-b] [-w] [-B] file1 file2\n");
     return 2;
@@ -51,11 +59,11 @@ static void make_label(char *out, size_t n, const char *name) {
         t = (time_t)st.st_mtime;
         localtime_r(&t, &tm);
         if(strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm)) {
-            snprintf(out, n, "%s\t%s", name, when);
+            snprintf(out, n, "%s\t%s", shown(name), when);
             return;
         }
     }
-    snprintf(out, n, "%s", name);
+    snprintf(out, n, "%s", shown(name));
 }
 
 /* two files. in_dir: they were found in directories, and a line says which pair it is */
@@ -84,14 +92,16 @@ static void compare_files(const char *n1, const char *n2, int in_dir) {
                 s.failed_side < 0 ? "the files have too many lines" : strerror(errno));
         any_trouble = 1;
     } else if(r == DIFF_BINARY) {
-        printf(opts.brief ? "Files %s and %s differ\n" : "Binary files %s and %s differ\n", n1, n2);
+        const char *c1 = shown(n1), *c2 = shown(n2);
+        printf(opts.brief ? "Files %s and %s differ\n" : "Binary files %s and %s differ\n", c1, c2);
         any_difference = 1;
     } else if(r == DIFF_DIFFER) {
+        const char *c1 = shown(n1), *c2 = shown(n2);
         any_difference = 1;
-        if(opts.brief) printf("Files %s and %s differ\n", n1, n2);
+        if(opts.brief) printf("Files %s and %s differ\n", c1, c2);
         else {
             static char label1[PATH_MAX + 32], label2[PATH_MAX + 32];
-            if(in_dir) printf("diff%s %s %s\n", command, n1, n2);
+            if(in_dir) printf("diff%s %s %s\n", command, c1, c2);
             make_label(label1, sizeof(label1), n1);
             make_label(label2, sizeof(label2), n2);
             if(diff_print(&s, &opts, label1, label2, stdout)) {
@@ -148,9 +158,13 @@ static void compare_entry(const char *dir1, const char *n1, const char *dir2, co
     }
     if(S_ISDIR(s1.st_mode) && S_ISDIR(s2.st_mode)) {
         if(recursive) compare_dirs(p1, p2);
-        else printf("Common subdirectories: %s and %s\n", p1, p2);
+        else {
+            const char *c1 = shown(p1), *c2 = shown(p2);
+            printf("Common subdirectories: %s and %s\n", c1, c2);
+        }
     } else if(S_ISDIR(s1.st_mode) || S_ISDIR(s2.st_mode)) {
-        printf("File %s is a %s while file %s is a %s\n", p1, kind_of(&s1), p2, kind_of(&s2));
+        const char *c1 = shown(p1), *c2 = shown(p2);
+        printf("File %s is a %s while file %s is a %s\n", c1, kind_of(&s1), c2, kind_of(&s2));
         any_difference = 1;
     } else compare_files(p1, p2, 1);
 }
@@ -165,11 +179,9 @@ static void compare_dirs(const char *d1, const char *d2) {
     }
     while(i < n1 || k < n2) {
         int c = i == n1 ? 1 : k == n2 ? -1 : strcasecmp(v1[i], v2[k]);
-        if(c < 0) {
-            printf("Only in %s: %s\n", d1, v1[i++]);
-            any_difference = 1;
-        } else if(c > 0) {
-            printf("Only in %s: %s\n", d2, v2[k++]);
+        if(c != 0) {
+            const char *dir = shown(c < 0 ? d1 : d2), *name = shown(c < 0 ? v1[i++] : v2[k++]);
+            printf("Only in %s: %s\n", dir, name);
             any_difference = 1;
         } else compare_entry(d1, v1[i++], d2, v2[k++]);
     }

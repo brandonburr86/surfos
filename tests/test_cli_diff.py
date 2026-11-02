@@ -935,6 +935,17 @@ def test_review_nits():
     r = ours("nl", "-v", "-9223372036854775807", "-i", "-5", stdin=b"a\nb\n")
     ok(r[0] == 2, "nl: and downwards: %r" % (r,))
     ok(ours("nl", "-w", "2147483647", "-b", "n", stdin=b"")[0] == 2, "nl: a width that overflows")
+    with tempfile.TemporaryDirectory() as d:
+        put(d + "/vol", fat_boot(label=b"\x1b[2JX     ") + b"\0" * 512)
+        put(d + "/s", b"#!/bin/\x1b[2Jsh\n")
+        for name in ("vol", "s"):
+            r = ours("file", name, cwd=d)
+            ok(b"\x1b" not in r[1], "file: no escape from a file reaches the terminal: %r" % (r,))
+        os.mkdir(d + "/t")
+        put(d + "/t/a\x1b[2Jb", b"")
+        ok(b"\x1b" not in ours("tree", "t", cwd=d)[1], "tree: nor from a directory")
+        os.mkdir(d + "/u")
+        ok(b"\x1b" not in ours("diff", "-r", "t", "u", cwd=d)[1], "diff -r: nor from a directory")
 
 
 # -- what no tool may do -----------------------------------------------------------------------------------------------

@@ -89,6 +89,26 @@ static CLI_UNUSED int cli_in_next(struct cli_in *in, const unsigned char **s) {
     return n;
 }
 
+/* text from a file, to be shown on a terminal: what a terminal might act on becomes a ?, so that a label or a name
+   cannot clear the screen or move the cursor. Controls of either kind go, and bytes that are no UTF-8; out, of size bytes,
+   is the result */
+static CLI_UNUSED const char *cli_clean(const char *text, char *out, size_t size) {
+    const unsigned char *s = (const unsigned char *)text;
+    size_t n = strlen(text), i = 0, k = 0;
+    while(i < n && size - k > 4) {
+        int len = cli_seq(s + i, n - i);
+        if(len == 1) out[k++] = s[i] < 0x20 || s[i] >= 0x7F ? '?' : (char)s[i];
+        else if(s[i] == 0xC2 && s[i + 1] < 0xA0) out[k++] = '?';
+        else {
+            memcpy(out + k, s + i, (size_t)len);
+            k += (size_t)len;
+        }
+        i += (size_t)len;
+    }
+    out[k] = 0;
+    return out;
+}
+
 /* a whole number: 0, or -1 when s is none or does not fit. By constants: 64-bit division needs libgcc,
    which programs do not link. */
 static CLI_UNUSED int cli_number(const char *s, unsigned long long *v) {
