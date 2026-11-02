@@ -1,0 +1,22 @@
+comm - compare two sorted files line by line
+
+SYNOPSIS
+    comm [-123] file1 file2
+
+DESCRIPTION
+    Writes three columns: lines only in file1, lines only in file2,
+    and lines in both, each column a TAB further in. Lines compare by
+    their bytes, as sort without options sorts them. The order is not
+    checked: input out of order gives what a merge of it gives. - is
+    standard input, for one of the files.
+
+OPTIONS
+    -1    Leave out the first column.
+    -2    Leave out the second.
+    -3    Leave out the third.
+
+EXAMPLES
+    comm -12 old.txt new.txt
+
+SEE ALSO
+    sort, diff, join, uniq
