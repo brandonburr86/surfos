@@ -108,8 +108,8 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
   fsck       (11/01/26; 11/02/26 it only reads) fsck through the real kernel and USB stack: a copy of the foreign
              stick damaged here on the host, looked at, -r refused however it is written, a look held under a
              read-only mount, the stick on /.netman waited for and never held, Ctrl+C in that wait; the stick
-             byte for byte as it was afterwards. A second copy with two names on a chain: reported, a pull in
-             the middle of a look, byte for byte as it was; then a look at a read-write mount refused
+             byte for byte as it was afterwards. A second copy with two names on a chain: reported, a pull
+             while a look reads it, byte for byte as it was; then a look at a read-write mount refused
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -2654,8 +2654,8 @@ def scenario_fsck(args, image, firmware, outdir):
     """11/02/26: fsck only reads. A look finds what is wrong with a damaged copy of the foreign stick and says where it can
     be repaired, -r is refused however it is written, and the stick is byte for byte what it was after all of it. A look
     held under a read-only mount lets it go; one at the stick on /.netman (where the network settings mount theirs for a
-    moment) waits, holds nothing, and gives up; Ctrl+C ends that wait. A look on a mount read-write is refused; a pull in
-    the middle of a look ends it"""
+    moment) waits, holds nothing, and gives up; Ctrl+C ends that wait. A look on a mount read-write is refused; a pull
+    while a look reads the stick ends it"""
     results = []
     src = find_image('foreign-fat32.img')
     if not src:
@@ -2705,7 +2705,7 @@ def scenario_fsck(args, image, firmware, outdir):
             vm.close()
         results.append(('the stick is byte for byte what it was after every look and refusal', sha256(damaged) == before))
 
-        # two names on one chain; a pull in the middle of a look; a mount read-write
+        # two names on one chain; a pull while a look reads; a mount read-write
         vm = Vm('fsck-twin', args, image, firmware, mem='512', serial=True, outdir=fsck_outdir(outdir, 'twin'), extra=data_stick_args(twin))
         try:
             if boot_serial(vm, results, args.boot_timeout):
@@ -2713,10 +2713,14 @@ def scenario_fsck(args, image, firmware, outdir):
                     ('fsck usb1p1; echo status $?', ['shares cluster', 'holds cluster', 'status 1'], [], 'two names on one chain: reported, status 1'),
                     ('fsck -r usb1p1; echo status $?', [FSCK_REFUSED, 'status 2'], [], 'and -r refused'),
                 ], timeout=120)
+                # the pull once the look has said it is reading the volume: it lands in the walk, or on a fast kernel just
+                # after it (a look at this stick takes a fraction of a second). Which of the two, is printed
                 vm.send('fsck usb1p1; echo status $?\n')
-                time.sleep(0.3)
+                results.append(('a look starts, for the pull', vm.expect('FAT32: ', 60)))
                 vm.mon.cmd('device_del stick1')
-                results.append(('pulled in the middle of a look: it ends', vm.expect(re.compile(rb'status [12]'), 120) and vm.expect(PROMPT, 60)))
+                results.append(('pulled while a look reads the stick: it ends', vm.expect(re.compile(rb'status [12]'), 120) and vm.expect(PROMPT, 60)))
+                said = vm.text().rsplit('FAT32: ', 1)[-1]
+                print('    (the pull %s)' % ('came after the look had read it all' if '5 problems' in said else 'cut the look short'), flush=True)
                 time.sleep(1)
                 vm.mon.cmd('device_add ' + DATA_STICK)
                 run_steps(vm, results, [
