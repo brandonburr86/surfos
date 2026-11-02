@@ -1411,6 +1411,11 @@ SMOKE = [
       ("watch 'seq 1 3; cat /dev/zero | grep x'", ['\x1b[?1049h', 'Every 2s: seq 1 3;', '3']),
       (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
       ('sleep 300; ps | grep -c " cat"; true', ['\r\n0\r\n', shown('SURF \u224b> ')]),
+      # (the review of 11/01/26) what a run left in the background goes at the end of that run, and of every run: the two
+      # titles after 'started' are redraws, so a run has ended before q; without JOB_KILL there each leaves a count
+      ("watch -n 0.2 'count 100000 1000 > /dev/null & echo started'", ['\x1b[?1049h', 'started', 'Every 0.2s', 'Every 0.2s']),
+      (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('sleep 300; ps | grep -c " count"; true', ['\r\n0\r\n', shown('SURF \u224b> ')]),
       ('watch date | cat; watch; echo status $?', ['watch: standard output is no terminal', 'usage: watch [', 'status 2',
                                                    shown('SURF \u224b> ')]),
       ('ptytest procsize', ['size 0 wrote 36 bytes', 'PTYTEST procsize PASS', shown('SURF \u224b> ')]),

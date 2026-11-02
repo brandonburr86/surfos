@@ -14,7 +14,10 @@ pipelines and variables work; a pipeline must be quoted, or the shell it was typ
 One command is one program argument: 255 bytes at most (surfos/spawn.h).
 
 A run is a job of its own (surfos/job.h): nothing of it can read the keys that are watch's, and
-JOB_KILL ends all of it, however many programs a pipeline made. Its standard input is /dev/null,
+JOB_KILL ends all of it, however many programs a pipeline made, at q and at the end of every run:
+what a run left in the background would otherwise stay, one task a run, each holding its pipe's end
+until PIPE_MAX runs have used up the machine's pipes. The kernel's run starts its program in no job,
+so that alone outlives a run, and q. A run's standard input is /dev/null,
 and what it prints comes through one pipe, 1 and 2 alike. watch never waits for the command in a
 call that a key could not end: it polls the keys and the pipe together, and a command that prints
 without end or never ends is shown as far as it got, a second at a time. What was printed past
@@ -103,6 +106,14 @@ static int start_run(void) {
     return 0;
 }
 
+/* a run is over: nothing of it stays. JOB_KILL says so when nothing was left, and there is nothing more to do then */
+static void end_run(void) {
+    jobctl(JOB_KILL, kid);
+    if(out_fd >= 0) close(out_fd);
+    out_fd = -1;
+    kid = 0;
+}
+
 static void draw(void) {
     int y, top = titled ? 2 : 0;
     if(titled) {
@@ -175,9 +186,7 @@ static int loop(void) {
             if(r == kid || (r < 0 && errno != EINTR)) kid_ended = 1;
         }
         if(was_ended && !(p[1].revents & POLLIN)) {
-            if(out_fd >= 0) close(out_fd);
-            out_fd = -1;
-            kid = 0;
+            end_run();
             running = 0;
             ws_finish(&scr);
             draw();
@@ -238,7 +247,7 @@ int main(int argc, char **argv) {
     tv_flush();
     r = loop();
     i = errno;
-    if(kid > 0) jobctl(JOB_KILL, kid);  /* all of it; when it has ended that says so, and nothing more is to be done */
+    if(kid > 0) end_run();
     leave_screen();
     if(r < 0) {
         fprintf(stderr, "watch: %s\n", strerror(i));
