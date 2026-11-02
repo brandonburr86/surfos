@@ -3,7 +3,7 @@ SurfOS FAT Checker
 ------------------
 File: fat_check.h  Date: 11/01/26 (the command-line suite, track fsck)
 ------------------
-The checker and repairer behind the kernel command fsck (shell/fscmd.c). It knows
+The checker and repairer behind the kernel command fsck (shell/fsckcmd.c). It knows
 nothing of block devices, mounts or the shell: its reads and writes, what it says
 and its one question go through struct fat_check_io, so that tests/host/test_fsck.c
 runs it over images, as fs/fat_mkfs.c is run. A run that only looks is given no write
@@ -23,7 +23,8 @@ struct fat_check_io {
     int (*flush)(void *ctx);                                    /* what was written is on the medium; may be NULL */
     bool (*stop)(void *ctx);                                    /* the call is to end (Ctrl+C, a kill); may be NULL */
     void (*say)(void *ctx, const char *line);                   /* one line, without its end */
-    bool (*ask)(void *ctx);                                     /* FAT_CHECK_REPAIR, once what will change was said: go on? */
+    bool (*ask)(void *ctx, const char *plan);                   /* FAT_CHECK_REPAIR: go on? plan says what will change, and
+                                                                   the caller shows it where it is seen, whatever is redirected */
 };
 
 #define FAT_CHECK_VERBOSE 1             /* every problem and the counts, not only the first 40 */
@@ -41,15 +42,16 @@ struct fat_check_result {
     bool wrote;                         /* something was written */
     u32 found;                          /* problems the first look found */
     u32 left;                           /* problems left at the end */
-    u32 cuts, sizes, copies, saved;     /* chains cut, sizes set, names given a copy, lost chains saved */
+    u32 cuts, sizes, saved;             /* chains ended, sizes set, lost chains saved */
     u32 synced;                         /* FAT sectors copied */
     u32 writes;                         /* write requests made */
     u32 dirs, files;                    /* the tree the last look walked */
     u32 clusters, free_clusters, bad_clusters;
 };
 
-/* check the volume, and repair it when asked to; res->status, also the return value. Nothing is ever deleted: no
-   cluster in use is freed. See fs/fat_check.c for what is repaired and what is only reported. */
+/* check the volume, and repair it when asked to; res->status, also the return value. When in doubt it changes nothing:
+   fs/fat_check.c says what bars repair, what is repaired, and what is only reported. Nothing is ever deleted: no entry in
+   use in the first FAT is set free (copying the first over the second does free entries in the second, which nothing reads). */
 int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result *res);
 
 #endif

@@ -7,8 +7,8 @@ fsck: a FAT12, FAT16 or FAT32 volume checked, and on request repaired. Pure: its
 writes, words and its one question go through struct fat_check_io (fs/fat_check.h), so
 tests/host/test_fsck.c runs it over images with the driver (fs/fat.c) as a second reader.
 A run that only looks gets no write function. The kernel stack is small and the volume may
-be damaged on purpose: nothing here recurses, everything of any size is on the heap, every
-walk is bounded by a bitmap of the clusters it has been to.
+be damaged on purpose: nothing here recurses, everything of any size is on the heap, and
+every walk is bounded, by a bitmap of the clusters it has been to and a limit on its depth.
 
 What is looked at. The boot sector and its BPB, the backup, FSInfo, whether the FATs agree,
 the reserved entries, the clean bit; from the root every directory's entries, "." and "..",
@@ -17,59 +17,71 @@ loops, length against size), two names on one chain, clusters in use that nothin
 and the free count. The FAT is read 64 KB at a time through a few windows, so 118 GB takes
 no more memory than three bitmaps of one bit a cluster and those windows.
 
-What is repaired, in this order, one kind in each pass, the whole volume looked at again
-between two passes: what a repair changes decides what the next one may do, and a plan
-made on a volume that has since changed is the one mistake a repair cannot take back.
+The rule for -r: when in doubt, it changes nothing. A look at the whole volume comes first,
+and every doubt it meets goes through bar(): the run then writes nothing at all, FSInfo
+included. Being clever about a doubt is how a repair comes to lose what a person could have
+saved, so nothing here is. What bars repair:
 
-  1. The second FAT from the first, sector by sector, when the first is sound (below).
-  2. A chain cut at its first bad link, its size set to match; a size past a whole chain.
-  3. A chain longer than its size, cut at the size. What is cut off is lost clusters, and
-     pass 5 saves them. Not while another name joins the part that stays (fix_is_safe()).
-  4. Two names on one chain: the second gets its own copy, when there is room. A directory
-     never does (its files would then have two names each): that stays reported.
-  5. Lost chains saved as FOUND.nnn/FILEnnnn.CHK.
-  6. FSInfo. The clean bit last, and only when no problem is left: only a check clears the
-     mark (fs/fat.c, B42), and a check that leaves something has not.
+  - the boot sector: its shape differs from its backup's, the FAT is far larger than its
+    clusters need or holds something past its last entry (a flipped bit in the cluster size,
+    or in the volume's), the reserved FAT entries are wrong, the FATs are not mirrored;
+  - the FATs: a blank sector of the first where the second differs, a chain into a sector of
+    zeros, or a place where they disagree about a chain (below);
+  - a walk that is not whole: a directory it cannot read, one with no "." and ".." or a "."
+    that names another cluster (it may be a file with its bit flipped, and a "repair" of an
+    entry would write into the file), a chain of a directory with anything wrong with it, a
+    depth past DEPTH_MOST, anything but zeros past a directory's end mark, a label with
+    clusters, a directory with none;
+  - two names on one chain, of files or directories, or a file running into a directory;
+  - a chain into a cluster marked bad, an entry's first cluster that is no cluster, a FAT12
+    entry across two sectors that needs changing (no one write can do that);
+  - clusters no name reaches when they are most of what is in use, or when one of them
+    starts as a directory: the tree has lost its top, and FILE0000.CHK is no way to find it.
 
-Everything else is reported and left: the boot sector (never written: there is one, and a
-write torn there is the volume), the backup, reserved FAT entries, ".", "..", long names,
-names, a directory's size. A FAT12 entry that spans two sectors cannot be changed in one
-write, so a repair that needs one stays reported. So does everything when the walk was not
-whole, or when the FATs differ and the first is not sound, or when they are not mirrored:
-lost clusters may then belong to what could not be read, and a chain the first FAT cuts
-short the second may know whole.
+What is repaired, when nothing bars it, one kind in each pass, the whole volume looked at
+again between two: what a repair changes decides what the next may do.
 
-The walk goes only where it can trust what it reads, and a directory is where that matters.
-A subdirectory without "." and ".." at its first two slots may be a file whose directory bit
-was damaged: its bytes taken for entries, a "repair" of one would write into the file. A
-directory's chain is cut only where nothing can lie past the cut (a link to no cluster, a
-loop): the driver reads the cluster a link to a free or bad cluster names, so a cut there
-would take every entry in it off the volume. Each of these leaves the walk not whole.
+  1. The second FAT from the first, sector by sector.
+  2. A FAT entry made the end of its chain, and nothing else: a link to no cluster or back
+     into its own chain ends where it stands, and a free cluster a chain runs into stays as
+     that chain's last, because fs/fat.c reads it. Then an entry's size, when it runs past a
+     chain that ends well.
+  3. Lost chains that end well, saved as FOUND.nnn/FILEnnnn.CHK.
+  4. FSInfo's count and hint, in a sector that has its signatures. The clean bit last, and
+     only when no problem is left: only a check clears the mark (fs/fat.c, B42), and a check
+     that leaves something has not.
 
-Nothing is ever deleted. No FAT entry in use is ever set to free, by any repair, and the
-only data clusters written are free ones (a copy, a new directory); a directory block is
-written only to change one entry's first cluster or size, or to fill one free slot.
+Reported and left, with the rest going on: a chain longer than its size, names, long names,
+"..", a directory's size, the boot sector's dirty flag, FSInfo with no signatures (it may be
+no FSInfo, and fs/fat.c leaves such a sector alone too), a lost chain that runs into another
+or into a bad cluster.
 
-A pull at any write leaves the volume no worse. One sector is taken to be written whole,
-and a flush to mean what it says; these are the orders that rest on that, each step's
-writes in order, a flush wherever the next one depends on the last:
+Nothing is ever deleted. No entry in use in the first FAT is set free; the second is the one
+place a value goes, when the first is copied over it, and nothing reads the second. A
+cluster is written only when both FATs call it free and no link or entry names it. A
+directory's block is written only to change one entry's size or fill one free slot. An
+entry's first cluster, the boot sector and its backup are never written.
 
-  - a file's new clusters are written to free clusters; then the FAT marks them, tail
-    first, the first FAT, then the second; only then does one write link them in: a FAT
-    entry, or the entry's first cluster. Before that link they are lost clusters at
-    worst, and every other file reads as it did.
-  - a cut goes to the first FAT, then the second, and the size last: a file reads the
-    same bytes at every step, and the size is the last record of what it was.
+A pull at any write leaves the volume no worse, on two assumptions about the stick: one sector
+is written whole, and a flush means what it says. Each step's writes are in order, with a
+flush wherever the next depends on the last:
+
+  - the end of a chain goes to the first FAT, then the second; the size waits for the next
+    pass, so a file reads the same bytes at every step;
   - FOUND.nnn is written whole into free clusters, marked, and named by one write of one
-    root slot, so a saved chain never has a name that shows half a directory.
+    root slot, so it has a name entirely or not at all;
   - the volume is marked as not cleanly unmounted before the first repair and the mark
     goes last, the second FAT's before the first's, which is the one other systems read.
 
-A second run finishes what a pull interrupted: that it can is what "sound" is for. When
-the FATs differ, the first is sound unless a bad link it has is not the second's as well
-(a sector of zeros in the first FAT is such a link: every file through it would be cut for
-nothing). A repair's own half-done write never looks like that: the first FAT is written
-first, so where they differ the first holds the repaired value.
+A second run finishes what a pull interrupted, and that is what the first FAT's being written
+first is for. When the FATs differ, they are disputed wherever a chain's clusters are concerned
+and the second could be right: a bad link the second does not share; a first FAT that ends a
+chain short of its size, or a directory's, where the second goes on; two different links. A
+repair's own half-done write never looks like that: it ends chains only at links bad in both
+FATs, so where it was stopped the second holds no cluster to go on to.
+
+Known limits, neither of them harm: names that collide in names_put() take longer, and a chain
+that crosses a FAT window at each step reads slowly. Both are bounded, and Ctrl+C stops them.
 */
 
 #include <surfos/types.h>
@@ -89,7 +101,7 @@ first, so where they differ the first holds the repaired value.
 #define LOST_MAX    1024            /* lost chains saved in one pass */
 #define PASS_MAX    64              /* passes of one run */
 #define SAY_MAX     40              /* problems said without -v */
-#define STACK_FIRST 32              /* levels of directories, before it grows */
+#define DEPTH_MOST  128             /* levels of directories: a path of 256 bytes goes no deeper */
 #define NAMES_FIRST 512             /* slots of the table of a directory's short names, before it grows */
 #define NAMES_MOST  (1UL << 17)     /* twice what a directory holds */
 #define ROOM_NAMES  1000            /* FOUND.000 to FOUND.999 */
@@ -114,10 +126,22 @@ first, so where they differ the first holds the repaired value.
 #define LINK_LOOP 4                 /* back into itself */
 #define LINK_JOIN 5                 /* into a chain walked before */
 
-/* the kinds of repair, in their order within a pass */
-#define FX_CUT  0                   /* a bad link, or a chain short of its size: below */
-#define FX_LONG 1                   /* a chain longer than its size */
-#define FX_COPY 2                   /* the second of two names on a chain */
+/* whose chain is walked */
+#define CH_FILE 0
+#define CH_DIR  1
+#define CH_LOST 2
+
+/* the kinds of repair */
+#define FX_END  0                   /* a FAT entry becomes the end of its chain */
+#define FX_SIZE 1                   /* an entry's size */
+
+/* why nothing is repaired */
+#define BAR_WALK "the walk was not whole, so what it found cannot be taken to be all"
+#define BAR_FATS "the FATs disagree about a chain: which is right is for a person to say"
+#define BAR_BOOT "the boot sector cannot be trusted"
+#define BAR_TWO  "two names on one chain"
+#define BAR_LOST "most of what is in use is out of reach, or a directory is: the tree has lost its top"
+#define BAR_LINK "a chain has a link no repair here can be sure of"
 
 struct window {
     u8 *data;
@@ -140,33 +164,28 @@ struct frame {
     u8 phase;                       /* 0: the entries; 1: into the directories among them */
     bool root;
     bool ended;                     /* it has no slot left in this look */
+    bool past;                      /* past its end mark, where nothing should be */
 };
 
-/* a repair planned. An entry is known by where it is; its name and first cluster are compared
-   before it is changed */
+/* a repair planned. An entry is known by where it is; its name, first cluster and size are compared before
+   it is changed, and a FAT entry's value before that */
 struct fix {
     u8 kind;
-    bool skip;                      /* fix_is_safe(): not in this pass */
-    u16 off;                        /* lba 0: no entry (a directory's chain) */
+    u16 off;                        /* FX_SIZE: where the entry is */
     u32 lba;
     u8 name[11];
     u32 first;
-    u32 size, oldsize;              /* the size it gets, and has */
-    u32 cut;                        /* FX_CUT, FX_LONG: the cluster that becomes the chain's end; 0: none */
-    bool drop;                      /* the entry lets go of its chain: its first cluster becomes 0 */
-    u32 need;                       /* FX_LONG: clusters that stay; FX_COPY: clusters it needs from `from` on */
-    u32 prev, from;                 /* FX_COPY: its last own cluster (0: the entry's first is shared), the first shared */
+    u32 size, oldsize;              /* FX_SIZE: the size it gets, and has */
+    u32 cut, was;                   /* FX_END: the cluster that becomes the end, and what its entry holds now */
 };
 
 struct lost {
     u32 head, n;
-    u32 cut;                        /* the cluster that must become its end first (0: it ends well) */
 };
 
 struct chain {
     u32 n;                          /* clusters that are this chain's */
     u32 last;                       /* the last of them */
-    u32 keep;                       /* the one at index need - 1, when it has that many */
     u32 at;                         /* the value that ended it */
     int end;                        /* LINK_* */
 };
@@ -174,44 +193,43 @@ struct chain {
 struct fck {
     const struct fat_check_io *io;
     struct fat_check_result *res;
-    bool verbose, naming, quiet, in_lost;
+    bool verbose, naming, quiet;
     bool halt, stopped, failed;     /* halt: everything stops (stopped by the caller, failed: a device or memory) */
     /* the volume */
     int type;
     u32 spc, cshift, cb, rsv, nfats, spf, total, root_entries, root_lba, root_secs, data_lba, nclusters, end;
     u32 root_cluster, fat0, fat1, nsec, fat_bytes, eoc, eoc_min, badval, media, maxk, fsi;
-    bool no_mirror, boot_dirty;
+    bool no_mirror, boot_dirty, fat_big;
+    const char *boot_doubt;         /* what boot_load() found to doubt, for every look to say */
     u32 bits;                       /* the size of a bitmap, in bytes */
     u32 *reached, *dirhead, *aux;   /* been to; a directory starts there; joined, then has a lost predecessor */
     struct window win[WINDOWS];
     u32 age, lastw;
-    u8 *chunk;                      /* the other FAT's window, and a cluster read back */
-    u8 *clus;                       /* a cluster being copied or made */
+    u8 *chunk;                      /* the other FAT's window */
+    u8 *clus;                       /* a cluster being made */
     u8 *dbuf;
     u32 dlba, dn;
     /* one walk */
     u32 found, stay, soft;          /* problems; of them what cannot be repaired; FSInfo and the clean bit */
     u32 free_now, badc, diff_secs, first_free;
-    bool disputed, incomplete, stuck, unclean, fsi_wrong;
-    u32 joins, c_cut, c_size, c_long, c_copy, c_copyclus, c_lost, c_lostclus;
+    const char *bar;                /* why this look allows no repair; NULL: nothing bars it */
+    bool unclean, fsi_wrong;
+    u32 joins, named, c_end, c_size, c_lost;
     u32 ndirs, nfiles, shown;
     struct fix *fix;
     u32 nfix;
-    bool fix_more;
     struct lost *lost;
     u32 nlost;
-    bool lost_more;
     u32 lostc;
     u8 found_used[ROOM_NAMES / 8 + 1];
     /* the walk's place */
     struct frame *stack;
-    u32 depth, stack_cap;
+    u32 depth;
     u32 lfn_total, lfn_next;        /* parts of the set; the part it waits for */
     u8 lfn_sum;
     u8 *names;                      /* this directory's short names, an open hash table */
     u32 names_slots, names_used;
     bool names_off;
-    u32 alloc_from;
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
     char path[256], who[320];
@@ -251,6 +269,14 @@ static void problem(struct fck *f, bool stay, const char *fmt, ...) {
     f->io->say(f->io->ctx, f->line);
 }
 
+/* the first reason this look found to change nothing: a doubt is not argued with */
+static void bar(struct fck *f, const char *why) {
+    if(!f->naming && !f->bar) f->bar = why;
+}
+
+/* a problem that bars every repair */
+#define doubt(f, why, ...) do { problem(f, true, __VA_ARGS__); bar(f, why); } while(0)
+
 /* one that only says something about the volume and counts for nothing */
 #define note(f, ...) do { if((f)->verbose) say(f, __VA_ARGS__); } while(0)
 
@@ -278,10 +304,10 @@ static int rd_in_step(struct fck *f, u32 lba, void *buf) {
 }
 
 /* every write of a run goes through here: what is kept of what it wrote goes with it. A write past the FATs leaves
-   the windows alone: a long copy reads the FAT between its clusters, and 64 KB of FAT a cluster is 8 GB for a 4 GB file */
+   the windows alone */
 static int wr(struct fck *f, u32 lba, u32 count, const void *buf) {
     u32 i;
-    if(f->halt) return -1;
+    if(f->halt || !f->io->write) return -1;
     f->dn = 0;
     if(lba < f->root_lba) for(i = 0; i < WINDOWS; i++) f->win[i].valid = false;
     f->res->wrote = true;
@@ -357,27 +383,52 @@ static int fat_get(struct fck *f, u32 copy, u32 c, u32 *v) {
     return 0;
 }
 
-/* whether the two copies differ, the free count, the reserved entries, in one sweep */
+/* n bytes all zero (1), all ones (2), or neither (0) */
+static int blank(const u8 *p, u32 n) {
+    u32 i;
+    if(p[0] && p[0] != 0xFF) return 0;
+    for(i = 1; i < n; i++) if(p[i] != p[0]) return 0;
+    return p[0] ? 2 : 1;
+}
+
+/* whether the two copies differ, the free count, the reserved entries, in one sweep. A sector of the first FAT that
+   is blank where the second is not is a torn or erased sector until shown otherwise; with one FAT there is nothing to
+   compare it with, and a sector of all ones is what erased flash reads. What lies past the last entry bars repair
+   without being a problem: a volume cut smaller is healthy, and a flipped bit in its size shows nowhere else */
 static void fat_scan(struct fck *f) {
     u32 s, c, v, i, k, b0, b1, last = f->fat_bytes % SECTOR;
+    bool tail = false;
     f->free_now = f->badc = f->diff_secs = f->first_free = 0;
-    if(f->fat1) {
-        for(s = 0; s < f->nsec; s += k) {
-            const u8 *a = fat_sector(f, 0, s);
-            k = min32(CHUNK, f->nsec - s);
-            if(!a) return;
-            if(rd(f, f->fat1 + s, k, f->chunk) != 0) {
-                if(!f->halt) {
-                    say(f, "the second FAT cannot be read at block %lu: stopped", (u_long)(f->fat1 + s));
-                    fail(f);
-                }
-                return;
+    for(s = 0; s < f->nsec; s += k) {
+        const u8 *a = fat_sector(f, 0, s);
+        k = min32(CHUNK, f->nsec - s);
+        if(!a) return;
+        if(f->fat1 && rd(f, f->fat1 + s, k, f->chunk) != 0) {
+            if(!f->halt) {
+                say(f, "the second FAT cannot be read at block %lu: stopped", (u_long)(f->fat1 + s));
+                fail(f);
             }
-            for(i = 0; i < k; i++) {
-                u32 n = s + i == f->nsec - 1 && last ? last : SECTOR;     /* (what is past the last entry is nobody's) */
-                if(memcmp(a + i * SECTOR, f->chunk + i * SECTOR, n)) f->diff_secs++;
-            }
+            return;
         }
+        for(i = 0; i < k; i++) {
+            const u8 *sec = a + i * SECTOR;
+            u32 n = s + i == f->nsec - 1 && last ? last : SECTOR;     /* (what is past the last entry is nobody's) */
+            bool differs = f->fat1 && memcmp(sec, f->chunk + i * SECTOR, n);
+            int b = blank(sec, n);
+            if(differs) f->diff_secs++;
+            if(differs ? b != 0 : !f->fat1 && b == 2)
+                doubt(f, BAR_FATS, "sector %lu of the first FAT is all %s", (u_long)(s + i), b == 2 ? "ones" : "zeros");
+            if(n < SECTOR && blank(sec + n, SECTOR - n) != 1) tail = true;
+        }
+    }
+    for(s = f->nsec; s < f->spf && !f->fat_big; s++) {
+        const u8 *p = fat_sector(f, 0, s);
+        if(!p) return;
+        if(blank(p, SECTOR) != 1) tail = true;
+    }
+    if(tail) {
+        note(f, "the FAT holds something past its last entry: the boot sector's size may be wrong");
+        bar(f, BAR_BOOT);
     }
     for(c = 2; c < f->end; c++) {
         if(fat_get(f, 0, c, &v) != 0) return;
@@ -385,14 +436,10 @@ static void fat_scan(struct fck *f) {
         else if(v == f->badval) f->badc++;
     }
     if(fat_get(f, 0, 0, &b0) != 0 || fat_get(f, 0, 1, &b1) != 0) return;
-    if(b0 != ((f->type == 12 ? 0xF00 : f->type == 16 ? 0xFF00 : 0x0FFFFF00) | f->media)) {
-        problem(f, true, "the first FAT's entry 0 is %lx: it should repeat the media byte %lx", (u_long)b0, (u_long)f->media);
-        if(f->diff_secs) f->disputed = true;
-    }
-    if((b1 | (f->type == 16 ? 0xC000 : f->type == 32 ? 0x0C000000 : 0)) < f->eoc_min) {
-        problem(f, true, "the first FAT's entry 1 is %lx: no end-of-chain mark", (u_long)b1);
-        if(f->diff_secs) f->disputed = true;
-    }
+    if(b0 != ((f->type == 12 ? 0xF00 : f->type == 16 ? 0xFF00 : 0x0FFFFF00) | f->media))
+        doubt(f, BAR_BOOT, "the first FAT's entry 0 is %lx: it should repeat the media byte %lx", (u_long)b0, (u_long)f->media);
+    if((b1 | (f->type == 16 ? 0xC000 : f->type == 32 ? 0x0C000000 : 0)) < f->eoc_min)
+        doubt(f, BAR_BOOT, "the first FAT's entry 1 is %lx: no end-of-chain mark", (u_long)b1);
     if((f->type == 16 && !(b1 & 0x8000)) || (f->type == 32 && !(b1 & 0x08000000))) {
         problem(f, false, "the volume was not unmounted cleanly");
         f->soft++;
@@ -415,9 +462,7 @@ static void fsinfo_check(struct fck *f) {
         return;
     }
     if(le32(f->sec) != FSINFO_LEAD || le32(f->sec + 484) != FSINFO_STRUCT || le32(f->sec + 508) != FSINFO_TRAIL) {
-        problem(f, false, "FSInfo (block %lu) has no valid signatures", (u_long)f->fsi);
-        f->soft++;
-        f->fsi_wrong = true;
+        problem(f, true, "FSInfo (block %lu) has no valid signatures", (u_long)f->fsi);
         return;
     }
     v = le32(f->sec + 488);
@@ -430,19 +475,25 @@ static void fsinfo_check(struct fck *f) {
 
 /**** the plan ****/
 
-static struct fix *fix_add(struct fck *f, int kind, const u8 *p, u32 lba, u32 off) {
+static struct fix *fix_add(struct fck *f, int kind) {
     struct fix *x;
-    if(f->naming) return NULL;
-    if(f->nfix == FIX_MAX) { f->fix_more = true; return NULL; }
+    if(f->naming || f->nfix == FIX_MAX) return NULL;         /* (one that does not fit is the next pass's) */
     x = &f->fix[f->nfix++];
     memset(x, 0, sizeof(*x));
     x->kind = (u8)kind;
-    if(p) {
-        x->lba = lba;
-        x->off = (u16)off;
-        memcpy(x->name, p, 11);
-    }
     return x;
+}
+
+/* cluster c's entry, value was, becomes the end of its chain */
+static void end_fix(struct fck *f, u32 c, u32 was) {
+    struct fix *x;
+    if(f->naming) return;
+    if(!fat_atomic(f, c)) {
+        doubt(f, BAR_LINK, "cluster %lu's FAT12 entry spans two sectors: one write cannot change it", (u_long)c);
+        return;
+    }
+    f->c_end++;
+    if((x = fix_add(f, FX_END)) != NULL) { x->cut = c; x->was = was; }
 }
 
 /**** names ****/
@@ -533,7 +584,8 @@ static void lfn_part(struct fck *f, const struct frame *fr, const u8 *p) {
         f->lfn_sum = p[13];
         memset(f->lfn, 0, sizeof(f->lfn));
     }
-    if(!f->lfn_total || seq != f->lfn_next || p[13] != f->lfn_sum) {
+    /* (lfn_next 0: the set is whole, and a part more, of number 0 too, is no part: seq - 1 would index before lfn[]) */
+    if(!f->lfn_total || !f->lfn_next || seq != f->lfn_next || p[13] != f->lfn_sum) {
         if(!quiet) problem(f, true, "%s/: a part of a long name out of order", f->path);
         lfn_clear(f);
         return;
@@ -635,20 +687,37 @@ static bool chain_has(struct fck *f, u32 first, u32 n, u32 c) {
     return false;
 }
 
-/* the FATs differ, and this bad link is not the second's as well: the second may know better (the head comment) */
-static void dispute(struct fck *f, u32 c, u32 value) {
+/* the FATs disagree about a chain */
+static void disputed(struct fck *f, u32 c, u32 first, u32 second) {
+    doubt(f, BAR_FATS, "%s: at cluster %lu the first FAT says %lx, the second %lx", f->who, (u_long)c, (u_long)first, (u_long)second);
+}
+
+/* a bad link the second FAT must share, or the second may know better (the head comment) */
+static void agree(struct fck *f, u32 c, u32 value) {
     u32 v;
-    if(!f->diff_secs || f->in_lost || f->naming) return;
-    if(fat_get(f, 1, c, &v) == 0 && v != value) f->disputed = true;
+    if(!f->diff_secs || f->naming) return;
+    if(fat_get(f, 1, c, &v) == 0 && v != value) disputed(f, c, value, v);
+}
+
+/* The FATs differ, and this chain holds c, value v in the first, ch->n clusters so far. That is no matter while the second
+   has no cluster to go to. When it has: the first going on elsewhere is two chains, and the first ending short of the file's
+   size or a directory's chain is the second knowing more, unless the second only goes back into the chain (a loop's cut, half
+   done). Past the size, what the second goes on to is nobody's */
+static void fats_compare(struct fck *f, u32 first, const struct chain *ch, u32 need, int kind, u32 c, u32 v) {
+    u32 w;
+    if(fat_get(f, 1, c, &w) != 0 || w == v || !in_range(f, w)) return;
+    if(v >= f->eoc_min && ((kind == CH_FILE && ch->n >= need) || chain_has(f, first, ch->n, w))) return;
+    disputed(f, c, v, w);
 }
 
 /* Walk the chain from first, marking each cluster as reached, to its first bad link or the first cluster marked
-   before. need is the file's size in clusters: ch->keep. What a chain walk meets is its own to say: it says nothing */
-static void chain_walk(struct fck *f, u32 first, u32 need, struct chain *ch) {
+   before. A free cluster it runs into is marked too: fs/fat.c reads it as the chain's last, so it is taken by nothing.
+   need is a file's size in clusters. What a chain walk meets is its caller's to say */
+static void chain_walk(struct fck *f, u32 first, u32 need, int kind, struct chain *ch) {
     u32 c = first, v, steps = 0;
-    bool said = false;
+    bool said = false, named = kind != CH_LOST;
     ch->n = 0;
-    ch->last = ch->keep = 0;
+    ch->last = 0;
     ch->at = first;
     ch->end = LINK_END;
     for(;;) {
@@ -656,35 +725,51 @@ static void chain_walk(struct fck *f, u32 first, u32 need, struct chain *ch) {
         if(!in_range(f, c)) {
             ch->end = LINK_OUT;
             ch->at = c;
-            if(ch->last) dispute(f, ch->last, c);
+            if(ch->last && named) agree(f, ch->last, c);
             return;
         }
         if(fat_get(f, 0, c, &v) != 0) return;
         if(!v || v == f->badval) {
             ch->end = v ? LINK_BADC : LINK_FREE;
             ch->at = c;
-            dispute(f, c, v);
+            if(named) {
+                if(ch->last) agree(f, ch->last, c);
+                agree(f, c, v);
+            }
+            if(!v && bit_get(f->reached, c)) ch->end = LINK_JOIN;  /* (a free cluster two chains run into) */
+            if(!v) bit_set(f->reached, c);
             return;
         }
         if(f->naming && !said && bit_get(f->aux, c)) {
-            f->quiet = false;
-            say(f, "%s holds cluster %lu", f->who, (u_long)c);
-            f->quiet = true;
             said = true;
+            if(f->named++ < SAY_MAX) {
+                f->quiet = false;
+                say(f, "%s holds cluster %lu", f->who, (u_long)c);
+                f->quiet = true;
+            }
         }
         if(bit_get(f->reached, c)) {
             ch->at = c;
             ch->end = chain_has(f, first, ch->n, c) ? LINK_LOOP : LINK_JOIN;
-            if(ch->last) dispute(f, ch->last, c);
+            if(ch->last && named) agree(f, ch->last, c);
             return;
         }
         bit_set(f->reached, c);
         ch->n++;
         ch->last = c;
-        if(ch->n == need) ch->keep = c;
+        if(named && f->diff_secs && !f->naming) fats_compare(f, first, ch, need, kind, c, v);
         if(v >= f->eoc_min) return;
         c = v;
     }
+}
+
+/* A chain ran into free cluster c. One entry of a sector gone to zero is a link to look at; the whole sector is the FAT
+   gone, torn or erased. Where there is a second FAT fat_scan() has seen that; with one there is nothing else to see it by */
+static void free_end(struct fck *f, u32 c) {
+    u32 s = fat_off(f, c) / SECTOR;
+    const u8 *p = fat_sector(f, 0, s);
+    if(p && blank(p, s == f->nsec - 1 && f->fat_bytes % SECTOR ? f->fat_bytes % SECTOR : SECTOR) == 1)
+        doubt(f, BAR_FATS, "%s: a chain runs into cluster %lu, in a sector of the FAT that is all zeros", f->who, (u_long)c);
 }
 
 static const char *link_words(int end) {
@@ -694,82 +779,59 @@ static const char *link_words(int end) {
 
 static int starts_as_dir(struct fck *f, u32 c);
 
+/* the entry at p, in block lba, gets a new size */
+static void size_fix(struct fck *f, const u8 *p, u32 lba, u32 off, u32 size) {
+    struct fix *x;
+    f->c_size++;
+    if((x = fix_add(f, FX_SIZE)) == NULL) return;
+    x->lba = lba;
+    x->off = (u16)off;
+    memcpy(x->name, p, 11);
+    x->first = entry_first(f, p);
+    x->oldsize = le32(p + 28);
+    x->size = size;
+}
+
 /* the short entry of a file at p, in block lba: its chain against its size */
 static void file_check(struct fck *f, const u8 *p, u32 lba, u32 off) {
     u32 first = entry_first(f, p), size = le32(p + 28), need = size ? ((size - 1) >> f->cshift) + 1 : 0;
     struct chain ch;
-    struct fix *x;
     if(!first) {
         if(size && !f->naming) {
             problem(f, false, "%s: size %lu but no clusters", f->who, (u_long)size);
-            f->c_size++;
-            if((x = fix_add(f, FX_CUT, p, lba, off)) != NULL) { x->oldsize = size; x->first = 0; x->size = 0; }
+            size_fix(f, p, lba, off, 0);
         }
         return;
     }
-    chain_walk(f, first, need, &ch);
+    chain_walk(f, first, need, CH_FILE, &ch);
     if(f->halt || f->naming) return;
     if(ch.end == LINK_END) {
         if(ch.n < need) {
             problem(f, false, "%s: size %lu, but its chain holds %lu bytes", f->who, (u_long)size, (u_long)(ch.n << f->cshift));
-            f->c_size++;
-            if((x = fix_add(f, FX_CUT, p, lba, off)) != NULL) { x->first = first; x->oldsize = size; x->size = ch.n << f->cshift; }
-            return;
+            size_fix(f, p, lba, off, ch.n << f->cshift);
+        } else if(ch.n > need) {
+            /* left as it is. With no size at all it may be a directory that lost its bit, and all under it out of reach */
+            int d = need ? 0 : starts_as_dir(f, first);
+            if(f->halt) return;
+            if(d) doubt(f, BAR_WALK, d > 0 ? "%s: size 0 on what looks like a directory: not walked" : "%s: its first block cannot be read", f->who);
+            else problem(f, true, "%s: size %lu, but its chain goes on past %lu cluster%s", f->who, (u_long)size, (u_long)need, need == 1 ? "" : "s");
         }
-        if(ch.n == need) return;
     } else if(ch.end == LINK_JOIN) {
         bit_set(f->aux, ch.at);
         f->joins++;
-        if(ch.n < need) {
-            problem(f, false, "%s: shares cluster %lu with another name (%s)", f->who, (u_long)ch.at,
-                    ch.n ? "from there on" : "the whole chain");
-            if(ch.last && !fat_atomic(f, ch.last)) { f->stuck = true; f->stay++; return; }
-            f->c_copy++;
-            f->c_copyclus += need - ch.n;
-            if((x = fix_add(f, FX_COPY, p, lba, off)) != NULL) {
-                x->first = first;
-                x->prev = ch.last;
-                x->from = ch.at;
-                x->need = need - ch.n;
-                x->oldsize = x->size = size;
-            }
-            return;
-        }
+        doubt(f, BAR_TWO, "%s: shares cluster %lu with another name", f->who, (u_long)ch.at);
+    } else if(ch.end == LINK_BADC) {
+        doubt(f, BAR_LINK, "%s: its chain runs into cluster %lu, marked bad", f->who, (u_long)ch.at);
+    } else if(ch.end == LINK_FREE) {
+        /* fs/fat.c reads that cluster as the chain's last: it stays, as the end */
+        problem(f, false, "%s: cluster %lu of its chain is free: it stays, as the chain's end", f->who, (u_long)ch.at);
+        free_end(f, ch.at);
+        end_fix(f, ch.at, 0);
+    } else if(!ch.n) {
+        doubt(f, BAR_LINK, "%s: its first cluster %lu is %s", f->who, (u_long)first, link_words(ch.end));
     } else {
-        u32 wanted = ch.n < need ? ch.n << f->cshift : size;
-        if(ch.n) problem(f, false, "%s: cluster %lu links to %lu, %s", f->who, (u_long)ch.last, (u_long)ch.at, link_words(ch.end));
-        else problem(f, false, "%s: its first cluster %lu is %s", f->who, (u_long)first, link_words(ch.end));
-        if(ch.n && !fat_atomic(f, ch.last)) { f->stuck = true; f->stay++; return; }
-        f->c_cut++;
-        if((x = fix_add(f, FX_CUT, p, lba, off)) != NULL) {
-            x->first = first;
-            x->cut = ch.last;
-            x->drop = !ch.n;
-            x->oldsize = size;
-            x->size = ch.n ? wanted : 0;
-        }
-        return;
-    }
-    /* a chain past its size, ending well or in another chain past the size. With no size at all it may be a directory
-       that lost its bit: letting go of the chain would take its tree apart, so it is left to someone who can tell */
-    if(!need) {
-        int d = starts_as_dir(f, first);
-        if(f->halt) return;
-        if(d) {
-            problem(f, true, d > 0 ? "%s: size 0 on what looks like a directory: not walked" : "%s: its first block cannot be read", f->who);
-            f->incomplete = true;
-            return;
-        }
-    }
-    problem(f, false, "%s: size %lu, but its chain goes on past %lu cluster%s", f->who, (u_long)size, (u_long)need, need == 1 ? "" : "s");
-    if(need && !fat_atomic(f, ch.keep)) { f->stuck = true; f->stay++; return; }
-    f->c_long++;
-    if((x = fix_add(f, FX_LONG, p, lba, off)) != NULL) {
-        x->first = first;
-        x->cut = ch.keep;
-        x->drop = !need;
-        x->need = need;
-        x->oldsize = x->size = size;
+        problem(f, false, "%s: cluster %lu links to %lu, %s", f->who, (u_long)ch.last, (u_long)ch.at, link_words(ch.end));
+        end_fix(f, ch.last, ch.at);
     }
 }
 
@@ -777,17 +839,9 @@ static void file_check(struct fck *f, const u8 *p, u32 lba, u32 off) {
 
 static int frame_push(struct fck *f, u32 first, u32 parent, u32 nclus, bool root, u32 plen) {
     struct frame *fr;
-    if(f->depth == f->stack_cap) {
-        struct frame *more = (struct frame *)kalloc(f->stack_cap * 2 * sizeof(struct frame));
-        if(!more) {
-            problem(f, true, "%s: too deep for the memory there is: not walked", f->who);
-            f->incomplete = true;
-            return -1;
-        }
-        memcpy(more, f->stack, f->depth * sizeof(struct frame));
-        kfree(f->stack);
-        f->stack = more;
-        f->stack_cap *= 2;
+    if(f->depth == DEPTH_MOST) {
+        doubt(f, BAR_WALK, "%s: more than %u levels of directories: not walked", f->who, DEPTH_MOST);
+        return -1;
     }
     fr = &f->stack[f->depth++];
     memset(fr, 0, sizeof(*fr));
@@ -845,7 +899,7 @@ static const u8 *dir_sector(struct fck *f, u32 lba, u32 end) {
 /* the short entry of a directory, on the first look through its parent */
 static void dir_entry_check(struct fck *f, const u8 *p) {
     if(le32(p + 28)) problem(f, true, "%s: a directory with a size (%lu)", f->who, (u_long)le32(p + 28));
-    if(!entry_first(f, p)) problem(f, true, "%s: a directory with no cluster", f->who);
+    if(!entry_first(f, p)) doubt(f, BAR_WALK, "%s: a directory with no cluster", f->who);
 }
 
 /* "." and ".." where they stand (dir_enter() looked that they begin the directory): true when p is one */
@@ -854,8 +908,8 @@ static bool dots_check(struct fck *f, const struct frame *fr, const u8 *p) {
     if(!dot && !dotdot) return false;
     if(fr->root) problem(f, true, "the root directory holds a \"%s\" entry", dot ? "." : "..");
     else if(fr->idx != (dot ? 0 : 1)) problem(f, true, "%s/: a \"%s\" entry at slot %lu", f->path, dot ? "." : "..", (u_long)fr->idx);
-    else if(dot && entry_first(f, p) != fr->first)
-        problem(f, true, "%s/: its \".\" entry names cluster %lu, not %lu", f->path, (u_long)entry_first(f, p), (u_long)fr->first);
+    else if(dot && entry_first(f, p) != fr->first)         /* this block may be no block of this directory */
+        doubt(f, BAR_WALK, "%s/: its \".\" entry names cluster %lu, not %lu", f->path, (u_long)entry_first(f, p), (u_long)fr->first);
     else if(dotdot && entry_first(f, p) != fr->parent)
         problem(f, true, "%s/: its \"..\" entry names cluster %lu, not %lu", f->path, (u_long)entry_first(f, p), (u_long)fr->parent);
     return true;
@@ -868,7 +922,7 @@ static void slot_look(struct fck *f, struct frame *fr, const u8 *p, u32 lba) {
     if(p[11] & ATTR_LABEL) {
         lfn_orphan(f, fr);
         if(!fr->root) problem(f, true, "%s/: a volume label in a directory that is not the root", f->path);
-        if(entry_first(f, p) || le32(p + 28)) problem(f, true, "%s/: a volume label with clusters or a size", f->path);
+        if(entry_first(f, p) || le32(p + 28)) doubt(f, BAR_WALK, "%s/: a volume label with clusters or a size", f->path);
         return;
     }
     if(dots_check(f, fr, p)) { lfn_clear(f); return; }
@@ -894,23 +948,6 @@ static void slot_look(struct fck *f, struct frame *fr, const u8 *p, u32 lba) {
     }
 }
 
-/* A directory's chain with a bad link, past at least one good cluster. A link to a free or bad cluster is not cut: fs/fat.c
-   reads that cluster as part of the directory, so entries may be there, and the cut would take them off the volume.
-   What it holds was not walked: the walk is not whole */
-static void dir_chain_bad(struct fck *f, const struct chain *ch) {
-    struct fix *x;
-    if(f->naming) return;
-    if(ch->end == LINK_FREE || ch->end == LINK_BADC) {
-        problem(f, true, "%s: cluster %lu links to %lu, %s: entries may be there", f->who, (u_long)ch->last, (u_long)ch->at, link_words(ch->end));
-        f->incomplete = true;
-        return;
-    }
-    problem(f, false, "%s: cluster %lu links to %lu, %s", f->who, (u_long)ch->last, (u_long)ch->at, link_words(ch->end));
-    if(!fat_atomic(f, ch->last)) { f->stuck = true; f->stay++; return; }
-    f->c_cut++;
-    if((x = fix_add(f, FX_CUT, NULL, 0, 0)) != NULL) x->cut = ch->last;
-}
-
 /* does the cluster start as a directory does, with "." and ".."? 1 yes, 0 no, -1 it cannot be read */
 static int starts_as_dir(struct fck *f, u32 c) {
     u32 lba = f->data_lba + (c - 2) * f->spc;
@@ -919,39 +956,40 @@ static int starts_as_dir(struct fck *f, u32 c) {
     return !memcmp(p, ".          ", 11) && (p[11] & ATTR_DIR) && !memcmp(p + 32, "..         ", 11) && (p[32 + 11] & ATTR_DIR);
 }
 
+/* the directory at c is a FOUND.nnn of this file's that a pull left unnamed: it has no parent but the root, and its first
+   entry is the name fix_lost() gives (the sector is the one starts_as_dir() just read) */
+static bool found_orphan(struct fck *f, u32 c) {
+    u32 lba = f->data_lba + (c - 2) * f->spc;
+    const u8 *p = dir_sector(f, lba, lba + f->spc);
+    return p && entry_first(f, p) == c && !entry_first(f, p + 32) && !memcmp(p + 64, "FILE0000CHK", 11);
+}
+
 /* The directory at p in the second look through its parent: its chain, then the walk goes in. 1 when it did.
    Its files have then been walked once, however many names it has, unless it cannot be walked at all */
 static int dir_enter(struct fck *f, const struct frame *fr, const u8 *p) {
     u32 first = entry_first(f, p), parent = fr->root ? 0 : fr->first, plen = (u32)strlen(f->path);
     struct chain ch;
+    int d;
     if(!first) return 0;
     if(in_range(f, first) && bit_get(f->dirhead, first)) {
-        problem(f, true, "%s: a second name of a directory", f->who);
+        doubt(f, BAR_TWO, "%s: a second name of a directory", f->who);
         return 0;
     }
-    chain_walk(f, first, 0, &ch);
+    chain_walk(f, first, 0, CH_DIR, &ch);
     if(f->halt) return 0;
-    if(ch.end == LINK_JOIN) {
-        if(!f->naming) {
-            bit_set(f->aux, ch.at);
-            f->joins++;
-        }
-        problem(f, true, "%s: a directory sharing cluster %lu with another name", f->who, (u_long)ch.at);
-        f->incomplete = true;
-    } else if(ch.end != LINK_END && !ch.n) {
-        problem(f, true, "%s: a directory whose first cluster %lu is %s", f->who, (u_long)first, link_words(ch.end));
-        f->incomplete = true;
-    } else if(ch.end != LINK_END) dir_chain_bad(f, &ch);
+    if(ch.end == LINK_JOIN && !f->naming) {
+        bit_set(f->aux, ch.at);
+        f->joins++;
+    }
+    /* no bad link of a directory is cut: past it may be entries, and the driver may read them */
+    if(ch.end != LINK_END) doubt(f, BAR_WALK, "%s: a directory whose chain runs into cluster %lu, %s", f->who, (u_long)ch.at, link_words(ch.end));
     if(!ch.n) return 0;
-    {
-        int d = starts_as_dir(f, first);
-        if(f->halt) return 0;
-        if(d != 1) {
-            problem(f, true, d ? "%s: no \".\" and \"..\" at its start: it may be no directory, and is not walked" :
-                                 "%s: its first block cannot be read", f->who);
-            f->incomplete = true;
-            return 0;
-        }
+    d = starts_as_dir(f, first);
+    if(f->halt) return 0;
+    if(d != 1) {
+        doubt(f, BAR_WALK, d ? "%s: no \".\" and \"..\" at its start: it may be no directory, and is not walked" :
+                               "%s: its first block cannot be read", f->who);
+        return 0;
     }
     bit_set(f->dirhead, first);
     if(!f->naming) f->ndirs++;
@@ -968,14 +1006,10 @@ static int root_push(struct fck *f) {
     f->path[0] = 0;
     if(!f->root_cluster) return frame_push(f, 0, 0, 0, true, 0);
     snprintf(f->who, sizeof(f->who), "/");
-    chain_walk(f, f->root_cluster, 0, &ch);
+    chain_walk(f, f->root_cluster, 0, CH_DIR, &ch);
     if(f->halt) return -1;
-    if(!ch.n) {
-        problem(f, true, "the root directory's first cluster %lu is %s", (u_long)f->root_cluster, link_words(ch.end));
-        f->incomplete = true;
-        return -1;
-    }
-    if(ch.end != LINK_END) dir_chain_bad(f, &ch);
+    if(ch.end != LINK_END) doubt(f, BAR_WALK, "the root directory's chain runs into cluster %lu, %s", (u_long)ch.at, link_words(ch.end));
+    if(!ch.n) return -1;
     bit_set(f->dirhead, f->root_cluster);
     return frame_push(f, f->root_cluster, 0, ch.n, true, 0);
 }
@@ -994,33 +1028,33 @@ static void dir_step(struct fck *f) {
         int r;
         if(!(fr->idx & 255) && halted(f)) return;
         if(fr->idx >= SLOTS_MAX) {
-            if(!fr->phase) {
-                problem(f, true, "%s/: more than %u slots: the rest is not read", f->path, SLOTS_MAX);
-                f->incomplete = true;
-            }
+            if(!fr->phase && !fr->past) doubt(f, BAR_WALK, "%s/: more than %u slots: the rest is not read", f->path, SLOTS_MAX);
             break;
         }
         sec = dir_sector(f, fr->lba, fr->end);
         if(!sec) {
             if(f->halt) return;
-            if(!fr->phase) {
-                problem(f, true, "%s/: block %lu cannot be read", f->path, (u_long)fr->lba);
-                f->incomplete = true;
-            }
+            if(!fr->phase) doubt(f, BAR_WALK, "%s/: block %lu cannot be read", f->path, (u_long)fr->lba);
             break;
         }
         p = sec + fr->off;
-        if(!p[0]) {
+        if(!p[0] && !fr->past) {
             lfn_orphan(f, fr);
-            break;
+            if(fr->phase) break;
+            fr->past = true;                                 /* on, to see that nothing is there */
         }
-        if(!fr->phase) slot_look(f, fr, p, lba);
+        if(fr->past) {
+            if(blank(p, 32) != 1) {
+                doubt(f, BAR_WALK, "%s/: entries past the end mark at slot %lu: a zeroed slot may have cut the directory short", f->path, (u_long)fr->idx);
+                break;
+            }
+        } else if(!fr->phase) slot_look(f, fr, p, lba);
         else if(p[0] == 0xE5) lfn_clear(f);
         else if((p[11] & ATTR_LFN) == ATTR_LFN) lfn_part(f, fr, p);
         else if((p[11] & ATTR_LABEL) || !(p[11] & ATTR_DIR) || !memcmp(p, ".          ", 11) || !memcmp(p, "..         ", 11))
             lfn_clear(f);
         else {
-            u8 raw[32];                                      /* (going in reads other sectors, and moves the frames) */
+            u8 raw[32];                                      /* (going in reads other sectors) */
             memcpy(raw, p, 32);
             entry_name(f, fr, raw);
             r = frame_next(f, fr);
@@ -1040,7 +1074,7 @@ static void dir_step(struct fck *f) {
     }
     if(!fr->phase) {                                         /* the second look: the walk goes into what it holds */
         fr->phase = 1;
-        fr->ended = false;
+        fr->ended = fr->past = false;
         frame_rewind(f, fr);
         lfn_clear(f);
         return;
@@ -1055,51 +1089,41 @@ static void dir_walk(struct fck *f) {
     while(f->depth && !f->halt) dir_step(f);
 }
 
-/* A cut at a file's size changes the chain for everyone on it: a name that joins it before the cut would lose what
-   comes after, and the size that says so is not theirs. Such a cut waits for the name to get its copy */
-static bool fix_is_safe(struct fck *f, const struct fix *x) {
-    u32 i, c = x->first, v;
-    for(i = 0; i < x->need; i++) {
-        if(bit_get(f->aux, c)) return false;
-        if(fat_get(f, 0, c, &v) != 0) return false;
-        c = v;
-    }
-    return true;
-}
-
-static void long_check(struct fck *f) {
-    u32 i;
-    if(!f->joins) return;
-    for(i = 0; i < f->nfix && !f->halt; i++)
-        if(f->fix[i].kind == FX_LONG && !fix_is_safe(f, &f->fix[i])) f->fix[i].skip = true;
-}
-
 /**** lost chains ****/
 
+/* A chain no name reaches. One that ends well is saved in FOUND. A link to no cluster or to a free one is ended first, as a
+   named chain's, and it is saved in the next pass; one that runs into something else, or is marked bad, stays as it is. A
+   directory among them means a tree that has lost its top: nothing is done to it, but for a FOUND.nnn a pull left unnamed */
 static void lost_chain(struct fck *f, u32 head) {
     struct chain ch;
-    u32 cut = 0, n;
-    f->in_lost = true;
-    chain_walk(f, head, f->maxk, &ch);
-    f->in_lost = false;
+    int d;
+    chain_walk(f, head, 0, CH_LOST, &ch);
     if(f->halt) return;
-    n = ch.n;
-    if(ch.end != LINK_END) cut = ch.last;
-    if(n > f->maxk) { n = f->maxk; cut = ch.keep; }          /* the rest is the next pass's lost chain */
+    d = starts_as_dir(f, head);
+    if(f->halt) return;
+    if(d > 0 && found_orphan(f, head)) d = 0;
     f->who[0] = 0;
-    problem(f, false, "%lu cluster%s from cluster %lu on that no name reaches", (u_long)n, n == 1 ? "" : "s", (u_long)head);
-    if(cut && !fat_atomic(f, cut)) { f->stuck = true; f->stay++; return; }
+    if(d) doubt(f, BAR_LOST, "cluster %lu starts as a directory, and no name reaches it", (u_long)head);
+    if(ch.end == LINK_JOIN || ch.end == LINK_BADC || ch.n > f->maxk) {
+        problem(f, true, "%lu cluster%s from cluster %lu on that no name reaches, running into %s", (u_long)ch.n, ch.n == 1 ? "" : "s",
+                (u_long)head, ch.n > f->maxk ? "more than a file can hold" : link_words(ch.end));
+        return;
+    }
+    problem(f, false, "%lu cluster%s from cluster %lu on that no name reaches", (u_long)ch.n, ch.n == 1 ? "" : "s", (u_long)head);
     f->c_lost++;
-    f->c_lostclus += n;
-    if(f->nlost == LOST_MAX) { f->lost_more = true; return; }
-    f->lost[f->nlost].head = head;
-    f->lost[f->nlost].n = n;
-    f->lost[f->nlost++].cut = cut;
+    if(ch.end == LINK_FREE) {
+        free_end(f, ch.at);
+        end_fix(f, ch.at, 0);
+    } else if(ch.end != LINK_END) end_fix(f, ch.last, ch.at);
+    else if(f->nlost < LOST_MAX) {
+        f->lost[f->nlost].head = head;
+        f->lost[f->nlost++].n = ch.n;
+    }
 }
 
 /* clusters in use the walk did not reach: their chains, from the ones nothing lost points at, then the rings */
 static void lost_walk(struct fck *f) {
-    u32 c, v, pass;
+    u32 c, v, pass, in_use = f->nclusters - f->free_now - f->badc;
     memset(f->aux, 0, f->bits);
     f->lostc = 0;
     for(c = 2; c < f->end; c++) {
@@ -1109,11 +1133,9 @@ static void lost_walk(struct fck *f) {
         if(in_range(f, v) && !bit_get(f->reached, v)) bit_set(f->aux, v);
     }
     if(!f->lostc) return;
-    if(f->incomplete) {
-        problem(f, true, "%lu clusters in use that the walk did not reach (it was not whole: they may be what it could not read)",
-                (u_long)f->lostc);
-        return;
-    }
+    if(f->lostc >= in_use - f->lostc) doubt(f, BAR_LOST, "%lu of the %lu clusters in use are out of reach", (u_long)f->lostc, (u_long)in_use);
+    else if(f->bar) problem(f, true, "%lu clusters in use that no name reaches", (u_long)f->lostc);
+    if(f->bar) return;
     for(pass = 0; pass < 2; pass++) {
         for(c = 2; c < f->end; c++) {
             if(fat_get(f, 0, c, &v) != 0) return;
@@ -1129,12 +1151,21 @@ static void lost_walk(struct fck *f) {
 
 static void walk(struct fck *f, bool first_look) {
     f->found = f->stay = f->soft = 0;
-    f->disputed = f->incomplete = f->stuck = f->unclean = false;
-    f->joins = f->c_cut = f->c_size = f->c_long = f->c_copy = f->c_copyclus = f->c_lost = f->c_lostclus = 0;
+    f->bar = NULL;
+    f->unclean = false;
+    f->joins = f->c_end = f->c_size = f->c_lost = 0;
     f->ndirs = f->nfiles = 0;
     f->nfix = f->nlost = 0;
-    f->fix_more = f->lost_more = false;
     memset(f->found_used, 0, sizeof(f->found_used));
+    if(f->boot_doubt) doubt(f, BAR_BOOT, "the boot sector: %s", f->boot_doubt);
+    if(f->fat_big) {
+        note(f, "the FAT is far larger than its clusters need: the boot sector's cluster size may be wrong");
+        bar(f, BAR_BOOT);
+    }
+    if(f->no_mirror) {
+        note(f, "the FATs are not mirrored: SurfOS's driver does not know that mode");
+        bar(f, "its FATs are not mirrored");
+    }
     if(f->boot_dirty) problem(f, true, "the boot sector's own dirty flag is set");
     fat_scan(f);
     if(f->halt) return;
@@ -1145,30 +1176,19 @@ static void walk(struct fck *f, bool first_look) {
     memset(f->aux, 0, f->bits);
     dir_walk(f);
     if(f->halt) return;
-    long_check(f);
-    if(f->halt) return;
     if(first_look && f->joins && !f->quiet) {                /* who the others are: only now is it known what to look for */
         u32 ndirs = f->ndirs, nfiles = f->nfiles;
-        bool incomplete = f->incomplete;
         memset(f->reached, 0, f->bits);
         memset(f->dirhead, 0, f->bits);
+        f->named = 0;
         f->naming = f->quiet = true;
         dir_walk(f);
         f->naming = f->quiet = false;
         f->ndirs = ndirs;
         f->nfiles = nfiles;
-        f->incomplete = incomplete;
         if(f->halt) return;
     }
     lost_walk(f);
-}
-
-/* why this volume gets no repair at all, as this look saw it; NULL: none */
-static const char *barred(const struct fck *f) {
-    if(f->no_mirror) return "its FATs are not mirrored";
-    if(f->incomplete) return "the walk was not whole, so what it found cannot be trusted to be all";
-    if(f->diff_secs && f->disputed) return "the FATs differ, and the first has bad links the second does not share: which is right is for a person to say";
-    return NULL;
 }
 
 /**** repairs: the writes ****/
@@ -1185,7 +1205,7 @@ static void fat_poke(const struct fck *f, u8 *sec, u32 c, u32 v) {
 
 /* the clusters c[0..m-1], ascending, become a chain ending in tail: the first FAT, then the second, each from the tail
    on, so that at any write what has been written is a chain with a proper end, and one sector of each FAT at a time.
-   One cluster and a value is a cut, or a link. 0, or -1 */
+   One cluster and the end mark is the end of a chain. 0, or -1 */
 static int fat_store(struct fck *f, const u32 *c, u32 m, u32 tail) {
     u32 copy, i;
     for(copy = 0; copy < 2; copy++) {
@@ -1205,8 +1225,8 @@ static int fat_store(struct fck *f, const u32 *c, u32 m, u32 tail) {
     return 0;
 }
 
-/* the entry as the plan saw it: nothing else may be changed. The device is held and nothing else writes, so a
-   difference would be this file's error: it stops the repair */
+/* the entry as the look saw it: nothing else may be changed. The device is held and nothing else writes, so a
+   difference ends the repair */
 static u8 *entry_read(struct fck *f, const struct fix *x) {
     u8 *p = f->sec2 + x->off;
     if(rd_in_step(f, x->lba, f->sec2) != 0) return NULL;
@@ -1218,86 +1238,36 @@ static u8 *entry_read(struct fck *f, const struct fix *x) {
     return p;
 }
 
-static void entry_set_first(const struct fck *f, u8 *p, u32 first) {
-    put16(p + 26, first & 0xFFFF);
-    if(f->type == 32) put16(p + 20, first >> 16);
+/* a FAT entry becomes the end of its chain */
+static int fix_end(struct fck *f, const struct fix *x) {
+    u32 v;
+    if(fat_get(f, 0, x->cut, &v) != 0) return -1;
+    if(v != x->was) {
+        say(f, "cluster %lu's FAT entry is not what the look found: stopped", (u_long)x->cut);
+        fail(f);
+        return -1;
+    }
+    return fat_store(f, &x->cut, 1, f->eoc);
 }
 
-/* a cut, a size, or an entry letting go of its chain: the chain first, the entry last */
-static int fix_cut(struct fck *f, const struct fix *x) {
-    u8 *p;
-    if(x->lba && !entry_read(f, x)) return -1;
-    if(x->cut) {
-        if(fat_store(f, &x->cut, 1, f->eoc) != 0) return -1;
-        if(!x->lba || x->size == x->oldsize) return 0;
-    }
-    if(!(p = entry_read(f, x))) return -1;
-    if(x->drop) entry_set_first(f, p, 0);
+/* an entry's size */
+static int fix_size(struct fck *f, const struct fix *x) {
+    u8 *p = entry_read(f, x);
+    if(!p) return -1;
     put32(p + 28, x->size);
     if(wr(f, x->lba, 1, f->sec2) != 0 || barrier(f) != 0) return -1;
     return 0;
 }
 
-/* count free clusters into list, ascending; a FAT12 entry across two sectors is passed over. 0, or -1 */
+/* count clusters into list, ascending: free, with no link or entry that names them (those are marked as reached), and each
+   with a FAT entry one write can change. 0, or -1 */
 static int take_free(struct fck *f, u32 *list, u32 count) {
     u32 c, v, n = 0;
-    for(c = f->alloc_from < 2 ? 2 : f->alloc_from; c < f->end && n < count; c++) {
+    for(c = 2; c < f->end && n < count; c++) {
         if(fat_get(f, 0, c, &v) != 0) return -1;
-        if(!v && fat_atomic(f, c)) list[n++] = c;
+        if(!v && fat_atomic(f, c) && !bit_get(f->reached, c)) list[n++] = c;
     }
-    f->alloc_from = c;
     return n == count ? 0 : -1;
-}
-
-/* A name of its own for the second of two: 1 made, 0 not (it stays reported), -1 stopped. Before the link at the end
-   the copy is lost clusters at worst, so this may stop anywhere before it */
-static int fix_copy(struct fck *f, const struct fix *x) {
-    u32 m = 0, i, c = x->from, v, *list;
-    u8 *p;
-    if(!entry_read(f, x)) return -1;
-    for(i = 0; i < x->need; i++) {
-        if(!in_range(f, c) || fat_get(f, 0, c, &v) != 0 || !v || v == f->badval) break;
-        m++;
-        if(v >= f->eoc_min) break;
-        c = v;
-    }
-    if(!m) return 0;
-    if(m > f->free_now) { say(f, "no room for a copy of %lu clusters: the two names stay as they are", (u_long)m); return 0; }
-    if(!(list = (u32 *)kalloc(m * sizeof(u32)))) { say(f, "no memory for a copy of %lu clusters", (u_long)m); return 0; }
-    if(take_free(f, list, m) != 0) {
-        if(!f->halt) say(f, "no room for a copy of %lu clusters: the two names stay as they are", (u_long)m);
-        kfree(list);
-        return f->halt ? -1 : 0;
-    }
-    for(i = 0, c = x->from; i < m; i++) {
-        u32 src = f->data_lba + (c - 2) * f->spc, dst = f->data_lba + (list[i] - 2) * f->spc;
-        if(rd(f, src, f->spc, f->clus) != 0) {
-            if(!f->halt) say(f, "cluster %lu cannot be read: no copy", (u_long)c);
-            kfree(list);
-            return f->halt ? -1 : 0;
-        }
-        if(wr(f, dst, f->spc, f->clus) != 0) { kfree(list); return -1; }
-        if(rd(f, dst, f->spc, f->chunk) != 0 || memcmp(f->clus, f->chunk, f->cb)) {
-            if(!f->halt) {
-                say(f, "cluster %lu does not read back as it was written: stopped", (u_long)list[i]);
-                fail(f);
-            }
-            kfree(list);
-            return -1;
-        }
-        if(fat_get(f, 0, c, &v) != 0) { kfree(list); return -1; }
-        c = v;
-    }
-    if(barrier(f) != 0 || fat_store(f, list, m, f->eoc) != 0) { kfree(list); return -1; }
-    if(x->prev) i = (u32)fat_store(f, &x->prev, 1, list[0]);
-    else if(!(p = entry_read(f, x))) i = (u32)-1;
-    else {
-        entry_set_first(f, p, list[0]);
-        i = wr(f, x->lba, 1, f->sec2) != 0 || barrier(f) != 0 ? (u32)-1 : 0;
-    }
-    f->free_now -= m;
-    kfree(list);
-    return i ? -1 : 1;
 }
 
 static void fat_stamp(u8 *p) {
@@ -1320,12 +1290,12 @@ static void entry_make(const struct fck *f, u8 *p, const char *name, u32 attr, u
     memcpy(p, name, 11);
     p[11] = (u8)attr;
     fat_stamp(p);
-    entry_set_first(f, p, first);
+    put16(p + 26, first & 0xFFFF);
+    if(f->type == 32) put16(p + 20, first >> 16);
     put32(p + 28, size);
 }
 
-/* a free slot of the root: *lba and *off. A slot at the directory's end marker only when the one after it ends the
-   directory too: bytes past the marker may be anything, and one entry more would show them. 0, or -1: none */
+/* a free slot of the root: *lba and *off. One at the end mark is as good as a deleted one: the look saw nothing past the mark. 0, or -1 */
 static int root_slot(struct fck *f, u32 *lba, u32 *off) {
     struct frame fr;
     const u8 *s;
@@ -1342,21 +1312,10 @@ static int root_slot(struct fck *f, u32 *lba, u32 *off) {
     }
     frame_rewind(f, &fr);
     for(;;) {
-        int r;
         if(!(s = dir_sector(f, fr.lba, fr.end))) return -1;
         s += fr.off;
-        if(s[0] == 0xE5) { *lba = fr.lba; *off = fr.off; return 0; }
-        if(!s[0]) {
-            *lba = fr.lba;
-            *off = fr.off;
-            r = frame_next(f, &fr);
-            if(r > 0) return 0;
-            if(r < 0 || !(s = dir_sector(f, fr.lba, fr.end))) return -1;
-            return s[fr.off] ? -1 : 0;
-        }
-        if(fr.idx + 1 >= SLOTS_MAX) return -1;
-        r = frame_next(f, &fr);
-        if(r) return -1;
+        if(!s[0] || s[0] == 0xE5) { *lba = fr.lba; *off = fr.off; return 0; }
+        if(fr.idx + 1 >= SLOTS_MAX || frame_next(f, &fr) != 0) return -1;
     }
 }
 
@@ -1365,22 +1324,18 @@ static int fix_lost(struct fck *f) {
     u32 d = (((f->nlost + 2) * 32) + f->cb - 1) >> f->cshift, i, k, num, slot_lba, slot_off, *list;
     char name[12];
     u8 *p;
-    if(d > f->free_now) { say(f, "no room for FOUND.000: the lost chains stay as they are"); return 0; }
     for(num = 0; num < ROOM_NAMES; num++) if(!(f->found_used[num >> 3] & (1 << (num & 7)))) break;
     if(num == ROOM_NAMES) { say(f, "FOUND.000 to FOUND.999 are taken: the lost chains stay as they are"); return 0; }
+    if(d > f->free_now) { say(f, "no room for FOUND.%03lu: the lost chains stay as they are", (u_long)num); return 0; }
     if(root_slot(f, &slot_lba, &slot_off) != 0) {
         if(!f->halt) say(f, "the root directory has no free slot: the lost chains stay as they are");
         return f->halt ? -1 : 0;
     }
     if(!(list = (u32 *)kalloc(d * sizeof(u32)))) { say(f, "no memory for FOUND.%03lu", (u_long)num); return 0; }
     if(take_free(f, list, d) != 0) {
-        if(!f->halt) say(f, "no room for FOUND.000: the lost chains stay as they are");
+        if(!f->halt) say(f, "no room for FOUND.%03lu: the lost chains stay as they are", (u_long)num);
         kfree(list);
         return f->halt ? -1 : 0;
-    }
-    /* what must end first; these are nobody's until they have a name */
-    for(i = 0; i < f->nlost; i++) {
-        if(f->lost[i].cut && fat_store(f, &f->lost[i].cut, 1, f->eoc) != 0) { kfree(list); return -1; }
     }
     /* the directory, in free clusters that nothing names yet */
     for(i = 0, k = 0; i < d; i++) {
@@ -1402,6 +1357,12 @@ static int fix_lost(struct fck *f) {
     /* one write of one slot: all of it has a name, or none */
     if(rd_in_step(f, slot_lba, f->sec2) != 0) { kfree(list); return -1; }
     p = f->sec2 + slot_off;
+    if(p[0] && p[0] != 0xE5) {
+        say(f, "the slot in block %lu is not what the look found: stopped", (u_long)slot_lba);
+        fail(f);
+        kfree(list);
+        return -1;
+    }
     snprintf(name, sizeof(name), "FOUND   %03lu", (u_long)num);
     entry_make(f, p, name, ATTR_DIR, list[0], 0);
     i = wr(f, slot_lba, 1, f->sec2) != 0 || barrier(f) != 0;
@@ -1454,40 +1415,29 @@ static int clean_mark(struct fck *f, bool clean) {
     return 0;
 }
 
-/* FSInfo's free count and hint; a sector with no signatures gets them, its other bytes as they are */
+/* FSInfo's free count and hint, in a sector the look found its signatures in; its other bytes as they are */
 static int fix_fsinfo(struct fck *f) {
     u32 hint;
     if(rd_in_step(f, f->fsi, f->sec) != 0) return -1;
     hint = le32(f->sec + 492);
     if(!in_range(f, hint)) hint = f->first_free ? f->first_free : 2;
-    put32(f->sec, FSINFO_LEAD);
-    put32(f->sec + 484, FSINFO_STRUCT);
     put32(f->sec + 488, f->free_now);
     put32(f->sec + 492, hint);
-    put32(f->sec + 508, FSINFO_TRAIL);
     if(wr(f, f->fsi, 1, f->sec) != 0) return -1;
     return barrier(f);
 }
 
-/* one kind of repair from this look's plan: how many were made; -1 when the run stopped */
-static int fix_kind(struct fck *f, int kind) {
-    u32 i, done = 0;
+/* this look's chain ends and sizes: how many were made; -1 when the run stopped */
+static int fix_plan(struct fck *f) {
+    u32 i;
     for(i = 0; i < f->nfix; i++) {
         const struct fix *x = &f->fix[i];
-        int r;
-        if(x->kind != kind || x->skip) continue;
         if(halted(f)) return -1;
-        r = kind == FX_COPY ? fix_copy(f, x) : fix_cut(f, x);
-        if(r < 0) return -1;
-        if(kind == FX_COPY) {
-            if(r) { done++; f->res->copies++; }
-            continue;
-        }
-        done++;
-        if(x->cut || x->drop) f->res->cuts++;
-        if(x->lba && x->size != x->oldsize) f->res->sizes++;
+        if((x->kind == FX_END ? fix_end(f, x) : fix_size(f, x)) != 0) return -1;
+        if(x->kind == FX_END) f->res->cuts++;
+        else f->res->sizes++;
     }
-    return (int)done;
+    return (int)i;
 }
 
 /* the next repair the look allows: something was written (the volume must be looked at again): 1; nothing is left
@@ -1495,11 +1445,7 @@ static int fix_kind(struct fck *f, int kind) {
 static int repair_step(struct fck *f) {
     int r;
     if(f->diff_secs) return fix_sync(f) == 0 ? 1 : -1;
-    if((r = fix_kind(f, FX_CUT)) != 0) return r < 0 ? -1 : 1;
-    if((r = fix_kind(f, FX_LONG)) != 0) return r < 0 ? -1 : 1;
-    if(f->stuck) return 0;                                   /* a bad link left: no cluster is taken while one could reach it */
-    f->alloc_from = 2;
-    if((r = fix_kind(f, FX_COPY)) != 0) return r < 0 ? -1 : 1;
+    if((r = fix_plan(f)) != 0) return r < 0 ? -1 : 1;
     if(f->nlost) return fix_lost(f);
     return 0;
 }
@@ -1599,6 +1545,7 @@ static int boot_load(struct fck *f) {
         return FAT_CHECK_PROBLEMS;
     }
     f->fat1 = f->nfats == 2 ? f->rsv + f->spf : 0;
+    if(f->spf > f->nsec + f->nsec / 2 + 2) f->fat_big = true;
     f->boot_dirty = (bs[(f->type == 32 ? 64 : 36) + 1] & 1) != 0;
     if(f->type == 32) {
         u32 flags = le16(bs + 40);
@@ -1619,6 +1566,7 @@ static int boot_load(struct fck *f) {
         if(!f->fsi) note(f, "no usable FSInfo sector (the boot sector says %lu)", (u_long)fsi);
         if(bk && bk != 0xFFFF && bk < f->rsv) {
             if(rd(f, bk, 1, f->sec2) != 0) { if(f->halt) return stopped_status(f); note(f, "the backup boot sector cannot be read"); }
+            else if(memcmp(bs + 11, f->sec2 + 11, 13) || memcmp(bs + 32, f->sec2 + 32, 20)) f->boot_doubt = "its backup describes another shape of volume";
             else if(memcmp(bs, f->sec2, SECTOR)) say(f, "note: the backup boot sector (block %lu) differs from the boot sector", (u_long)bk);
         } else note(f, "no backup boot sector");
     }
@@ -1637,9 +1585,8 @@ static bool tables_make(struct fck *f) {
     f->dbuf = (u8 *)kalloc(DIR_AHEAD * SECTOR);
     f->fix = (struct fix *)kalloc(FIX_MAX * sizeof(struct fix));
     f->lost = (struct lost *)kalloc(LOST_MAX * sizeof(struct lost));
-    f->stack = (struct frame *)kalloc(STACK_FIRST * sizeof(struct frame));
+    f->stack = (struct frame *)kalloc(DEPTH_MOST * sizeof(struct frame));
     f->names = (u8 *)kalloc(NAMES_FIRST * 11);
-    f->stack_cap = STACK_FIRST;
     if(!f->reached || !f->dirhead || !f->aux || !f->chunk || !f->clus || !f->dbuf || !f->fix || !f->lost || !f->stack || !f->names) return false;
     for(i = 0; i < WINDOWS; i++) if(!(f->win[i].data = (u8 *)kalloc(CHUNK * SECTOR))) return false;
     return true;
@@ -1669,26 +1616,20 @@ static void clause(char *text, u32 size, const char *fmt, ...) {
     va_end(ap);
 }
 
-/* what a repair of this look would change, in a line */
-static void plan_say(struct fck *f, const char *lead) {
-    char text[240];
-    u32 size = sizeof(text);
-    text[0] = 0;
+/* what a repair of this look would change, in a line, into text */
+static void plan_words(struct fck *f, char *text, u32 size) {
+    memset(text, 0, size);
     if(f->diff_secs) clause(text, size, ", copy the first FAT over the second");
-    if(f->c_cut) clause(text, size, ", cut %lu chain%s", (u_long)f->c_cut, f->c_cut == 1 ? "" : "s");
+    if(f->c_end) clause(text, size, ", end %lu chain%s", (u_long)f->c_end, f->c_end == 1 ? "" : "s");
     if(f->c_size) clause(text, size, ", set %lu size%s", (u_long)f->c_size, f->c_size == 1 ? "" : "s");
-    if(f->c_long) clause(text, size, ", cut %lu chain%s at the size", (u_long)f->c_long, f->c_long == 1 ? "" : "s");
-    if(f->c_copy) clause(text, size, ", copy %lu cluster%s for %lu name%s", (u_long)f->c_copyclus, f->c_copyclus == 1 ? "" : "s",
-                         (u_long)f->c_copy, f->c_copy == 1 ? "" : "s");
-    if(f->c_lost) clause(text, size, ", save %lu lost chain%s", (u_long)f->c_lost, f->c_lost == 1 ? "" : "s");
+    if(f->c_lost) clause(text, size, ", save %lu lost chain%s in a new FOUND directory", (u_long)f->c_lost, f->c_lost == 1 ? "" : "s");
     if(f->fsi_wrong) clause(text, size, ", set FSInfo");
     if(f->unclean) clause(text, size, ", mark it clean");
-    if(text[0]) say(f, "%s: %s", lead, text + 2);
 }
 
 /* something is left to repair */
 static bool plan_any(const struct fck *f) {
-    return f->diff_secs || f->nfix || f->nlost || f->fsi_wrong || f->unclean || f->stay < f->found;
+    return f->stay < f->found;
 }
 
 static void result_take(struct fck *f) {
@@ -1705,10 +1646,10 @@ static void look_again(struct fck *f);
 /* after the passes: FSInfo whatever is left, the clean bit only when nothing is */
 static void repair_finish(struct fck *f) {
     bool none_left;
-    if(f->halt) return;
+    if(f->halt || f->bar) return;
     none_left = f->found == f->soft;
-    if(f->fsi_wrong && !barred(f) && fix_fsinfo(f) != 0) return;
-    if(f->unclean && none_left && !barred(f) && clean_mark(f, true) != 0) return;
+    if(f->fsi_wrong && fix_fsinfo(f) != 0) return;
+    if(f->unclean && none_left && clean_mark(f, true) != 0) return;
     look_again(f);
 }
 
@@ -1728,6 +1669,7 @@ static void more_say(struct fck *f) {
 /* from the first look on */
 static int run(struct fck *f) {
     struct fat_check_result *r = f->res;
+    char plan[240];
     u32 pass;
     int st;
     bool marked = false;
@@ -1741,16 +1683,19 @@ static int run(struct fck *f) {
                        (u_long)f->free_now, (u_long)f->badc);
     if(!f->found) { say(f, "clean"); return FAT_CHECK_CLEAN; }
     say(f, "%lu problem%s", (u_long)f->found, f->found == 1 ? "" : "s");
-    if(barred(f)) {
-        say(f, "no repair: %s", barred(f));
+    if(f->bar) {
+        say(f, "no repair: %s", f->bar);
         return FAT_CHECK_PROBLEMS;
     }
     if(!plan_any(f)) { say(f, "nothing here can be repaired"); return FAT_CHECK_PROBLEMS; }
-    plan_say(f, f->io->write ? "it will" : "fsck -r would");
     if(f->stay) say(f, "%lu of them stay%s reported", (u_long)f->stay, f->stay == 1 ? "s" : "");
-    if(!f->io->write) return FAT_CHECK_PROBLEMS;
-    if(!f->io->ask || !f->io->ask(f->io->ctx)) { r->cancelled = true; return FAT_CHECK_PROBLEMS; }
-    for(pass = 0; pass < PASS_MAX && !barred(f); pass++) {
+    plan_words(f, plan, sizeof(plan));
+    if(!f->io->write) {
+        say(f, "fsck -r would: %s", plan + 2);
+        return FAT_CHECK_PROBLEMS;
+    }
+    if(!f->io->ask || !f->io->ask(f->io->ctx, plan + 2)) { r->cancelled = true; return FAT_CHECK_PROBLEMS; }
+    for(pass = 0; pass < PASS_MAX && !f->bar; pass++) {
         if(!marked && (f->diff_secs || f->nfix || f->nlost)) {
             if(clean_mark(f, false) != 0) break;
             marked = true;
@@ -1772,6 +1717,7 @@ static int run(struct fck *f) {
         r->left = f->found;
         if(f->halt) return stopped_status(f);
         more_say(f);
+        if(f->bar) say(f, "no more repairs: %s", f->bar);
         say(f, "repaired what it could: %lu problem%s left", (u_long)left, left == 1 ? "" : "s");
         return FAT_CHECK_PROBLEMS;
     }
