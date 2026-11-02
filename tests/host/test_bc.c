@@ -1111,6 +1111,35 @@ static void truncates(const char *call, const char *why) {
     }
 }
 
+/* What each plan might get wrong at its edges, each value from Python's decimal, which shares no code or method with this.
+   e: where f is 0 or just under ln 2, and x below 0. l: far from 1 both ways, a power of 2. j: x much larger than n and equal to
+   it, a tiny x, the signs of -n and -x, and an order cut to a whole number. And what needs no working out. */
+static void library_edges(void) {
+    digits_are("scale=20;l(10^100)\n", "230.25850929940456840179\n");
+    digits_are("scale=60;l(10^-50)\n", "-115.129254649702284200899572734218210380055074431438648801666395\n");
+    digits_are("scale=20;l(10^1000)\n", "2302.58509299404568401799\n");
+    digits_are("scale=20;l(2^64)\n", "44.36141955583649980270\n");
+    digits_are("scale=20;l(.5)+l(2)\n", "0\n");
+    digits_are("scale=20;e(-50)\n", "0\n");
+    digits_are("scale=30;e(.000000000001)\n", "1.000000000001000000000000500000\n");
+    digits_are("scale=30;e(-.000000000001)\n", ".999999999999000000000000499999\n");
+    digits_are("scale=0;e(100)\n", "26881171418161354484126255515800135873611118\n");
+    digits_are("scale=20;e(693.14718)\n", "10715080072002167065095953624953945328001792053694574089957390750811231613753999359372782046692696596708477564721337532818666950736595423188794738140793605761642081592772646958328753003554607651999046408504108777856094212200392117999276216498956836747523642200995393236271475845722928878322778765633026.93484382529239391619\n");
+    digits_are("scale=20;j(3,1000)\n", "-.00482742082520394789\n");
+    digits_are("scale=20;j(1000,1000)\n", ".04473067294796404088\n");
+    digits_are("scale=20;j(0,300.5)\n", "-.01394956002108059669\n");
+    digits_are("scale=50;j(2,.001)\n", ".00000012499998958333365885416124131950095847760558\n");
+    digits_are("scale=20;j(-3,-2)\n", ".12894324947440205109\n");
+    digits_are("scale=20;j(-4,2)\n", ".03399571980756843414\n");
+    digits_are("scale=20;j(2.9,1)\n", ".11490348493190048046\n");
+    is_lib("j(0,0);j(5,0);j(-5,0);j(100000,1);e(-1000);e(0);l(1)\n",
+           "1.00000000000000000000\n0\n0\n0\n0\n1.00000000000000000000\n0\n");
+    /* a large x costs a recurrence and no digits for what would otherwise cancel: the value is from Hankel's expansion */
+    is_lib("scale=10;j(0,5000)\n", "-.0066489842\n");
+    /* ln 2 and pi are kept, and kept for the largest scale asked: a smaller one after it is cut from it, not worked out wrong */
+    is_lib("scale=50;x=l(2);scale=10;l(2);scale=50;l(2)-x\n", ".6931471805\n0\n");
+}
+
 static void library(void) {
     static const char *const es[] = { ".001", ".5", "1", "2.5", "10", "100", "-1", "-.5", "-20", "-46", "1000", ".00000000001" };
     static const char *const ls[] = { ".001", ".5", ".999", "1.001", "2", "10", "1000000", "1.0000001", "10^50",
@@ -1707,6 +1736,7 @@ int main(int argc, char **argv) {
     registers();
     statements();
     library();
+    library_edges();
     against_bc();
     memory();
     damaged(rounds);

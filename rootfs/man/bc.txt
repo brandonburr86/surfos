@@ -59,9 +59,11 @@ OPTIONS
     a(x)    arctangent           e(x)    e to the power x
     l(x)    natural logarithm    j(n,x)  Bessel function of order n
 
-    Each gives its result at the scale of the moment. The last digit
-    can be a unit off where the digits past it are a long run of 0s
-    or 9s. l of zero or less is an error.
+    Each is worked out about a dozen digits past the scale of the
+    moment and cut, so what it prints are the true value's digits.
+    Only where the digits past the scale start with a longer run of
+    0s or 9s than that can the last digit be a unit off. l of zero or
+    less is an error, and j cuts its order to a whole number.
 
 EXAMPLES
     echo '2^200' | bc
