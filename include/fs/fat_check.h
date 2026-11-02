@@ -3,7 +3,9 @@ SurfOS FAT Checker
 ------------------
 File: fat_check.h  Date: 11/01/26 (the command-line suite, track fsck)
 ------------------
-The checker and repairer behind the kernel command fsck (shell/fsckcmd.c). It knows
+The checker behind the kernel command fsck (shell/fsckcmd.c), which only looks: the repairs
+(FAT_CHECK_REPAIR) are reached by nothing in the kernel since 11/02/26, and stay for the host
+tests and a later round (fs/fat_check.c). It knows
 nothing of block devices, mounts or the shell: its reads and writes, what it says
 and its one question go through struct fat_check_io, so that tests/host/test_fsck.c
 runs it over images, as fs/fat_mkfs.c is run. A run that only looks is given no write
@@ -28,7 +30,7 @@ struct fat_check_io {
 };
 
 #define FAT_CHECK_VERBOSE 1             /* every problem and the counts, not only the first 40 */
-#define FAT_CHECK_REPAIR  2             /* repair (io->write set), after io->ask() */
+#define FAT_CHECK_REPAIR  2             /* repair (io->write set), after io->ask(): the host tests only */
 
 /* the statuses of the command (shell.h's CMD_* have the same values) */
 #define FAT_CHECK_CLEAN    0            /* no problem found, or all of them repaired */

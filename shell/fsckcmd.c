@@ -2,19 +2,18 @@
 SurfOS ring0 Shell - fsck
 (C)2004 Brandon Burr, written 11/01/26 (the command-line suite, track fsck)
 
-fsck, the checker of fs/fat_check.c on a device. It is read whole and nothing else changes
-it meanwhile: a run takes its device with vfs_bdev_change_begin() from before its first
-read to after its last write, the question included, so what it shows is what it repairs.
-A volume mounted read-only cannot be taken that way and need not be: its mount is held
-(vfs_hold_mount()), so that it can neither go nor be swapped under the run. A volume mounted
-read-write is refused, with the reason, and so is a mount of its disk or a partition of it,
-which nothing here could hold.
+fsck, the checker of fs/fat_check.c on a device. It reads, and never writes. -r is refused:
+repairs are not available in this version (11/02/26: two reviews found that they could still
+lose data), and a stick is repaired on another computer. Nothing here reaches the repair code
+of fs/fat_check.c: the checker is given no write function and never asked to repair, and that
+code stays in the tree, tested on the host, for a later round.
 
--r obeys bdev_may_format(), before the question and again after it: the answer may have
-been a long time coming. It is given a write function: a run without -r has none. The plan
-is part of the question, because shell_ask() shows that on the console also when the output
-goes to a file or q was answered at --More--; the keys typed before it shows are dropped,
-so the answer is what was typed after reading it.
+The volume is read whole and nothing else changes it meanwhile: an unmounted device is taken
+with vfs_bdev_change_begin() from before the first read to after the last. A volume mounted
+read-only cannot be taken that way and need not be: its mount is held (vfs_hold_mount()), so
+that it can neither go nor be swapped under the run. A volume mounted read-write is refused,
+with the reason, and so is a mount of its disk or a partition of it, which nothing here could
+hold.
 
 In a file of its own so that tests/host/test_fsckcmd.c runs the real command over a device
 layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU's list
@@ -24,32 +23,16 @@ layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU
 #include <blibc_common.h>
 #include <surfos/types.h>
 #include <surfos/task.h>
-#include <surfos/tty.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
-#include <fs/bcache.h>
 #include <fs/fat_check.h>
 
 #include "shell.h"
 
 static int fsck_read(void *d, u32 lba, u32 count, void *buf) { return bdev_read((struct bdev *)d, lba, count, buf); }
-static int fsck_write(void *d, u32 lba, u32 count, const void *buf) { return bdev_write((struct bdev *)d, lba, count, buf); }
-static int fsck_flush(void *d) { return bdev_flush((struct bdev *)d); }
 static bool fsck_stop(void *d) { (void)d; return fs_cut_short(); }
 static void fsck_say(void *d, const char *line) { (void)d; printf("    %s\n", line); }
-
-/* the plan, the device's name typed, and the rule once more */
-static bool fsck_ask(void *v, const char *plan) {
-    struct bdev *d = (struct bdev *)v;
-    char line[SHELL_LINE_LEN + 1], question[360], why[128];
-    snprintf(question, sizeof(question), "    It will: %s\n    Type %s to repair %s: ", plan, d->name, d->name);
-    tty_flush(curTask->tty ? curTask->tty : tty_active);
-    shell_ask(question, line, sizeof(line));
-    if(strcmp(line, d->name)) { printf("    Cancelled\n"); return false; }
-    if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    fsck: %s: %s\n", d->name, why); return false; }
-    return true;
-}
 
 int cmd_fsck(int argc, char **argv) {
     struct fat_check_io io;
@@ -57,8 +40,8 @@ int cmd_fsck(int argc, char **argv) {
     struct bdev *d;
     struct vnode *root = NULL;
     const char *name = NULL, *busy;
-    char why[128], size[8], path[VFS_PATH_MAX];
-    bool readonly = false;
+    char size[8], path[VFS_PATH_MAX];
+    bool readonly = false, repair = false;
     int flags = 0, i, status;
 
     for(i = 1; i < argc; i++) {
@@ -70,27 +53,26 @@ int cmd_fsck(int argc, char **argv) {
         }
         while(*++a) {
             if(*a == 'v') flags |= FAT_CHECK_VERBOSE;
-            else if(*a == 'r') flags |= FAT_CHECK_REPAIR;
+            else if(*a == 'r') repair = true;
             else { name = NULL; i = argc; break; }
         }
     }
-    if(!name) { printf("    usage: fsck [-v] [-r] <device>   (-r repairs, and asks first; lsblk lists the devices)\n"); return CMD_USAGE; }
+    if(repair) {
+        printf("    fsck: repairs are not available in this version, and the stick can be repaired on another computer\n");
+        return CMD_USAGE;
+    }
+    if(!name) { printf("    usage: fsck [-v] <device>   (it only reads; lsblk lists the devices)\n"); return CMD_USAGE; }
     d = bdev_find(name);
     if(!d) { printf("    fsck: no block device '%s' (lsblk lists them)\n", name); return CMD_USAGE; }
     memset(&io, 0, sizeof(io));
     io.ctx = d;
     io.blocks = d->nblocks;
     io.read = fsck_read;
-    io.flush = fsck_flush;
     io.stop = fsck_stop;
     io.say = fsck_say;
-    if(flags & FAT_CHECK_REPAIR) {
-        if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    fsck: %s: %s\n", d->name, why); return CMD_USAGE; }
-        io.write = fsck_write;
-        io.ask = fsck_ask;
-    }
-    fs_enter();                                              /* a kill waits until the buffers and the device are let go of */
-    if(!(flags & FAT_CHECK_REPAIR) && vfs_hold_mount(d, path, sizeof(path), &root, &readonly) == 0 && !readonly) {
+    fs_enter();                                              /* a kill waits until the device and the mount are let go of */
+    if(vfs_hold_mount(d, path, sizeof(path), &root, &readonly) != 0) root = NULL;   /* not mounted */
+    if(root && !readonly) {
         vfs_release_mount(root);
         fs_leave();
         printf("    fsck: %s is mounted read-write on %s: a volume in use changes under a check (umount it, or mount it with -r)\n", d->name, path);
@@ -104,12 +86,9 @@ int cmd_fsck(int argc, char **argv) {
     part_fmt_size(d->nblocks, size, sizeof(size));
     printf("    %s: %s, %s\n", d->name, d->model[0] ? d->model : "no model name", size);
     status = fat_check(&io, flags, &res);
-    if(res.wrote) {                                          /* nothing cached from before may be served */
-        binvalidate(d);
-        if(bdev_disk(d) != d) binvalidate(bdev_disk(d));
-    }
     if(root) vfs_release_mount(root);
     else vfs_bdev_change_end(d);
     fs_leave();
+    if(status == FAT_CHECK_PROBLEMS) printf("    repairs are not available in this version: the stick can be repaired on another computer\n");
     return status;
 }

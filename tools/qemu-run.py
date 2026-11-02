@@ -1372,14 +1372,14 @@ SMOKE = [
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
     # 11/01/26 (the command-line suite, track fsck): the kernel command fsck, as far as a guest can go: it has no way to
-    # damage a volume, so the repairs themselves are tests/host/test_fsck.c's. Its refusals, each with its status; a
-    # fresh volume clean, with files on it, read-only mounted; -r on a clean volume asks nothing. rd1 ends as it began
+    # damage a volume (tools/qemu-usb.py's fsck damages one on the host). Its refusals, each with its status, -r among
+    # them (11/02/26: it only reads); a fresh volume clean, with files on it, read-only mounted. rd1 ends as it began
     ('surfsh', [shown('SURF \u224b> ')],
      [('echo cli-fsck', ['cli-fsck\r\n', shown('SURF \u224b> ')]),
       ('fsck; echo status $?', ['usage: fsck', 'status 2', shown('SURF \u224b> ')]),
       ('fsck nosuch; echo status $?', ["fsck: no block device 'nosuch'", 'status 2', shown('SURF \u224b> ')]),
       ('fsck hda1; echo status $?', ['hda1 is mounted read-write on /hda1', 'status 2', shown('SURF \u224b> ')]),
-      ('fsck -r hda1; echo status $?', ['fsck: hda1:', 'status 2', shown('SURF \u224b> ')]),
+      ('fsck -r hda1; echo status $?', ['repairs are not available in this version', 'status 2', shown('SURF \u224b> ')]),
       ('mkfs rd1 FSCKTEST', ['Type rd1 to erase rd1']),
       ('rd1', ['rd1: FAT16', shown('SURF \u224b> ')]),
       ('fsck rd1; echo status $?', ['FAT16: ', 'clean', 'status 0', shown('SURF \u224b> ')]),
@@ -1390,9 +1390,9 @@ SMOKE = [
       ('fsck -v rd1; echo status $?', ['2 directories, 2 files', 'clean', 'status 0', shown('SURF \u224b> ')]),
       ('mount -r rd1 /fsk', ['read-only', shown('SURF \u224b> ')]),
       ('fsck rd1; echo status $?', ['clean', 'status 0', shown('SURF \u224b> ')]),
-      ('fsck -r rd1; echo status $?', ['it, its disk or one of its partitions is mounted', 'status 2', shown('SURF \u224b> ')]),
+      ('fsck -r rd1; echo status $?', ['repairs are not available in this version', 'status 2', shown('SURF \u224b> ')]),
       ('umount rd1', [shown('SURF \u224b> ')]),
-      ('fsck -r rd1; echo status $?', ['clean', 'status 0', shown('SURF \u224b> ')]),
+      ('fsck -rv rd1; echo status $?', ['repairs are not available in this version, and the stick can be repaired on another computer', 'status 2', shown('SURF \u224b> ')]),
       ('fdisk rd1 new mbr', [CONFIRM_RD1]),
       ('rd1', ['verified', shown('SURF \u224b> ')]),
       ('fsck rd1; echo status $?', ['no FAT file system', 'status 2', shown('SURF \u224b> ')]),
