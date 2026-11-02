@@ -1356,6 +1356,10 @@ def run_cmd(vm, cmd, expects, timeout=30):
 USBNET_DEV = 'usb-net,bus=xhci.0,netdev=n0,id=usbnet0,mac=52:54:00:12:34:56'
 # a second adapter on another network (not QEMU's 10.0.2.0/24), plugged in later
 USBNET_OTHER = 'usb-net,bus=xhci.0,netdev=n1,id=usbnet1,mac=52:54:00:65:43:21'
+# 11/1/26: the MAC such an adapter reports. The address it was given, but for its first byte on some QEMUs: 40 on
+# ubuntu-24.04's 8.2.2 (GitHub CI), 52 on Debian's 7.2.22 (devenv) and the Mac's 11.1.1
+USBNET_MAC = rb'(?:52|40):54:00:12:34:56'
+USBNET_OTHER_MAC = rb'(?:52|40):54:00:65:43:21'
 
 
 def load_smoke_harness():
@@ -1497,9 +1501,9 @@ def scenario_usbnet(args, image, firmware, outdir):
         if boot_serial(vm, results, args.boot_timeout):
             boot = vm.text()
             results.append(('the adapter is set up at boot as eth0 (CDC ECM)',
-                            re.search(r'\+USB: port \d+: 0525:a4a2 .*: eth0, cdc-ecm, MAC 52:54:00:12:34:56', boot) is not None))
+                            re.search(r'\+USB: port \d+: 0525:a4a2 .*: eth0, cdc-ecm, MAC ' + USBNET_MAC.decode(), boot) is not None))
             for cmd, expects in [('lsusb', ['QEMU USB HARDDRIVE', 'RNDIS/QEMU USB Network Device', '-> eth0, cdc-ecm']),
-                                 ('ifconfig', ['eth0: 52:54:00:12:34:56, link up']),
+                                 ('ifconfig', [re.compile(rb'eth0: ' + USBNET_MAC + rb', link up')]),
                                  ('dhcp', ['lease 10.0.2.15', 'gateway 10.0.2.2', 'dns 10.0.2.3']),
                                  ('ping 10.0.2.2 3', ['3 packets transmitted, 3 received']),
                                  (f'httpget 10.0.2.2 {port} /usbnet', ['200 OK', 'SurfOS HTTP test OK: /usbnet', 'bytes received'])]:
@@ -1547,11 +1551,11 @@ def scenario_usbnet(args, image, firmware, outdir):
             vm.mon.cmd('device_del usbnet0')
             ok = vm.expect('unplugged (eth0, cdc-ecm', 20)
             results.append(('unplugging the adapter is noticed', ok))
-            ok, _ = run_cmd(vm, 'ifconfig', ['eth0: 52:54:00:12:34:56, link down'])
+            ok, _ = run_cmd(vm, 'ifconfig', [re.compile(rb'eth0: ' + USBNET_MAC + rb', link down')])
             results.append(('eth0 remains, link down', ok))
             # plugged in again: the same name, and with the same MAC the same address
             vm.mon.cmd('device_add ' + USBNET_DEV)
-            ok = vm.expect('eth0, cdc-ecm, MAC 52:54:00:12:34:56', 30)
+            ok = vm.expect(re.compile(rb'eth0, cdc-ecm, MAC ' + USBNET_MAC), 30)
             results.append(('plugged in again, it is eth0 again', ok))
             vm.expect('eth0: link up', 10)
             ok, _ = run_cmd(vm, 'ifconfig', ['link up', 'inet 10.0.2.15'])
@@ -1563,10 +1567,10 @@ def scenario_usbnet(args, image, firmware, outdir):
             vm.mon.cmd('device_del usbnet0')
             vm.expect('unplugged (eth0, cdc-ecm', 20)
             vm.mon.cmd('device_add ' + USBNET_OTHER)
-            ok = vm.expect('eth0, cdc-ecm, MAC 52:54:00:65:43:21', 30)
+            ok = vm.expect(re.compile(rb'eth0, cdc-ecm, MAC ' + USBNET_OTHER_MAC), 30)
             results.append(('a different adapter becomes eth0', ok))
             vm.expect('eth0: link up', 10)
-            ok, _ = run_cmd(vm, 'ifconfig', ['eth0: 52:54:00:65:43:21', 'inet 0.0.0.0'])
+            ok, _ = run_cmd(vm, 'ifconfig', [re.compile(rb'eth0: ' + USBNET_OTHER_MAC), 'inet 0.0.0.0'])
             results.append(('without the previous adapter\'s address', ok))
             ok, _ = run_cmd(vm, 'dhcp', ['lease 192.168.76.15', 'gateway 192.168.76.2'])
             results.append(('dhcp on the other network', ok))

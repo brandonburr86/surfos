@@ -30,9 +30,11 @@ promised (it shrank meanwhile, or its stick was pulled) ends the connection, whi
 the client that the body is short.
 
 Places: a new connection takes a free one; when there is none, the place of the
-connection idle longest (waiting for a request with nothing of it read yet); when no
-connection is idle, the listening descriptor is left out of poll() and new connections
-wait in the kernel's backlog until a response ends. Times: a connection has REQUEST_MS to
+connection idle longest (waiting for a request with nothing of it read yet, for
+IDLE_GRACE_MS at least: a client's request comes just behind its connection, so one made or
+answered a moment ago is not idle yet); when no connection is idle, the listening
+descriptor is left out of poll() and new connections wait in the kernel's backlog until a
+response ends or a connection's grace does. Times: a connection has REQUEST_MS to
 begin a request and REQUEST_MS from its first byte to finish the head (then 408 when part
 of a request came, else a plain close); a response the client has taken nothing of for
 STALL_MS is given up. A client that has closed its side while its response is still
@@ -48,6 +50,7 @@ descriptors close with it, so the port is free and every client gets its FIN.
 
 #define OUT_SIZE    8192                /* a response's header, then its body, a piece at a time */
 #define REQUEST_MS  10000               /* to begin a request, and from its first byte to finish its head */
+#define IDLE_GRACE_MS 1000              /* a connection waits this long for a request before it can lose its place */
 #define STALL_MS    30000               /* a response the client has taken nothing of for this long is given up */
 #define HUP_REST_MS 20                  /* a half-closed client that takes nothing now is polled again after this */
 #define PAUSE_MS    1000                /* the listening descriptor rests this long after accept() failed */
@@ -372,10 +375,18 @@ static void expire(unsigned int now) {
     }
 }
 
-/* how long poll() may wait: until the first connection's time is up, its rest ends, or the listening
-   descriptor's rest ends; -1: until something happens */
+/* a free place, or NULL */
+static struct conn *free_place(void) {
+    int i;
+    for(i = 0; i < MAX_CONNS; i++) if(conns[i].state == FREE) return &conns[i];
+    return NULL;
+}
+
+/* how long poll() may wait: until the first connection's time is up, its rest ends, its grace ends with every
+   place taken (a new connection may wait for that), or the listening descriptor's rest ends; -1: until
+   something happens */
 static int wait_ms(unsigned int now) {
-    int i, ms = -1, left;
+    int i, ms = -1, left, full = !free_place();
     for(i = 0; i < MAX_CONNS; i++) {
         const struct conn *c = &conns[i];
         if(c->state == FREE) continue;
@@ -383,6 +394,10 @@ static int wait_ms(unsigned int now) {
         if(c->rest && (int)(c->rest_end - now) < left) left = (int)(c->rest_end - now);
         if(left < 0) left = 0;
         if(ms < 0 || left < ms) ms = left;
+        if(full && c->state == READING && !c->in_len) {
+            left = (int)(c->since + IDLE_GRACE_MS - now);
+            if(left > 0 && left < ms) ms = left;
+        }
     }
     if(resting) {
         left = (int)(rest_end - now) > 0 ? (int)(rest_end - now) : 0;
@@ -391,20 +406,14 @@ static int wait_ms(unsigned int now) {
     return ms;
 }
 
-/* a free place, or NULL */
-static struct conn *free_place(void) {
-    int i;
-    for(i = 0; i < MAX_CONNS; i++) if(conns[i].state == FREE) return &conns[i];
-    return NULL;
-}
-
-/* the connection idle longest (waiting for a request, nothing of it read), or NULL */
+/* the connection idle longest (waiting for a request, nothing of it read), or NULL. 11/1/26 (audit B90): one
+   that has waited less than IDLE_GRACE_MS is not idle yet: its request may be on its way */
 static struct conn *idle_longest(unsigned int now) {
     struct conn *best = NULL;
     int i;
     for(i = 0; i < MAX_CONNS; i++) {
         struct conn *c = &conns[i];
-        if(c->state != READING || c->in_len) continue;
+        if(c->state != READING || c->in_len || now - c->since < IDLE_GRACE_MS) continue;
         if(!best || now - c->since > now - best->since) best = c;
     }
     return best;

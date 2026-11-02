@@ -1245,8 +1245,8 @@ Limits:
 
 * One background server at a time; more sites are folders inside the folder it serves.
 * Up to 6 connections at once (a browser opens up to 6). A connection that sends no request
-  for 10 seconds is closed, or sooner when a new connection needs its place; when all 6 are
-  busy, a new one waits a moment.
+  for 10 seconds is closed, or after a second when a new connection needs its place; when all
+  6 are busy, a new one waits a moment.
 * Started in a telnet session, the server belongs to that session and stops when it ends
   (`httpd on` says so); start it on the laptop's own console to keep it running.
 * Only pages to read: no forms that post, no uploads, no server-side programs (PHP, CGI), no

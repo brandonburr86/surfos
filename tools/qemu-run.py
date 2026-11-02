@@ -102,7 +102,7 @@ def surf_prompt(crumbs, state):
 # 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
-           'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'halfclose',
+           'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'closing', 'shrink', 'pollscan', 'pollstall', 'halfclose',
            'nowait', 'finwait', 'ncstuck', 'mdns', 'end')
 
 # 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
@@ -857,7 +857,9 @@ SMOKE = [
     # for it and then gets its lease (dhcp-one-at-a-time)
     ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('usbnet-plug', CHECK),
-      ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
+      # (11/1/26: QEMU's usb-net reports the address it was given, but with 40 as its first byte on some versions,
+      # as tools/qemu-usb.py's USBNET_MAC says)
+      ('ifconfig', ['wlan0: 00:00:00:00:00:00', re.compile(rb'eth0: (?:52|40):54:00:12:34:56'), PROMPT]),
       ('wifi up', ['bridged to eth0', 'wlan0: up, not associated']),
       ('wifi join SurfSim', ['joined SurfSim']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.15']),
@@ -3061,7 +3063,9 @@ def memhog_hold_check(q):
     q.send('memhog hold 3000 &\n')
     ok = ok and q.expect('started (pid', 20) and q.expect('KB taken; holding them 3000 ms', 60)
     q.send('/initrd/bin/ls /initrd\n')
-    ok = ok and q.expect(re.compile(rb'motd|surfsh: /initrd/bin/ls: Out of memory'), 20) and q.expect(SURFSH_PROMPT, 20)
+    # (11/1/26: or it starts and then cannot load: "out of memory for a segment", "for the stack")
+    ok = ok and q.expect(re.compile(rb'motd|surfsh: /initrd/bin/ls: Out of memory|/initrd/bin/ls: out of memory for '), 20) \
+        and q.expect(SURFSH_PROMPT, 20)
     q.send('ps\n')
     ok = ok and q.expect('Kernel Idle Task', 20) and q.expect(SURFSH_PROMPT, 20)
     ok = ok and q.expect('memhog hold: given back', 60)
@@ -3836,7 +3840,7 @@ def httpd_places_check(q):
     """six idle connections fill every place: a seventh is served all the same (the one idle longest makes room);
     six requests begun but not finished: a seventh waits until one of them is finished and answered; eight clients
     side by side, three pages each on connections of their own, all answered whole (connections 50 ms apart at
-    least: www_connect())"""
+    least: www_connect()); six connections just made keep their places from a seventh"""
     port, results, socks = q.ports['www'], [], []
     css = initrd_file(q, 'www/style.css')
     try:
@@ -3892,6 +3896,18 @@ def httpd_places_check(q):
         for t in threads:
             t.join(60)
         results.append(len(answers) == 24 and all(answers))
+        # 11/1/26 (audit B90): six connections made a moment ago, their requests still to come, and a seventh that
+        # has sent its own. None of the six is idle yet, so none gives up its place for it: all seven are answered
+        q.pump(0.5)
+        for _ in range(7):
+            socks.append(www_connect(port))
+        request = b'GET /style.css HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n'
+        socks[6].sendall(request)
+        time.sleep(0.2)                     # time for the server to take the seventh, were one of them idle
+        for s in socks[:6]:
+            s.sendall(request)
+        got = [www_recv(s, 5) for s in socks]
+        results.append(all(closed and [x[0] for x in www_responses(data)] == [200] for data, closed in got))
     except (OSError, http.client.HTTPException) as e:
         print(f'  httpd places: {e!r}')
         results.append(False)
@@ -3899,8 +3915,9 @@ def httpd_places_check(q):
         for s in socks:
             s.close()
     if not all(results):
-        print(f'  httpd places: {results} (served, idle one closed, a new one waits, one finished, the new one, eight)')
-    return ('httpd: six places: idle ones make room, busy ones make new ones wait, eight clients (%d of %d)' %
+        print(f'  httpd places: {results} (served, idle one closed, a new one waits, one finished, the new one, eight, '
+              'young ones keep their places)')
+    return ('httpd: six places: idle ones make room, busy and young ones make new ones wait, eight clients (%d of %d)' %
             (sum(results), len(results)), all(results))
 
 

@@ -41,6 +41,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               acknowledges the guest's data), and not answered (no ACK ping-pong)
   orphans     closed connections whose FIN is not acknowledged (FIN_WAIT_1, LAST_ACK): no
               buffers held while they finish
+  closing     (11/1/26) both ends close at once (CLOSING), and the other end's FIN comes again
+              with the ACK of the guest's, as a BSD stack sends it: TIME_WAIT at once
   shrink      a client that shrinks its window to 0 under bytes in flight: probes with their
               backoff, no full segment every second; when it opens, everything arrives
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
@@ -545,6 +547,34 @@ def sc_orphans(rig):
     return ok
 
 
+def sc_closing(rig):
+    """11/1/26 (audit B91): the other end's FIN crosses the guest's, which is not acknowledged yet (CLOSING), and comes
+    again with the ACK of the guest's, as a BSD stack such as QEMU's user network sends it. That ACK counts, though
+    nothing else in the segment is new: the socket is in TIME_WAIT at once, where it gives its place up when one is
+    needed, not in CLOSING until the guest's FIN goes again, a second later. A FIN once more is answered too"""
+    ok = rig.start('nettest writer 23 100', 'listening on port 23')
+    c = Conn(rig.net, 3550, 23)
+    ok = c.connect() is not None and ok
+    ok = c.receive(100) == pattern(100) and ok
+    fin = rig.net.wait(lambda s: c.mine(s) and s.flags & FIN, 5)
+    ok = fin is not None and rig.expect('nettest: wrote 100 bytes in') and ok
+    if not fin:
+        return False
+    ours, theirs = c.snd, (fin.seq + len(fin.data)) & 0xffffffff
+    answered = lambda s: c.mine(s) and s.ack == (ours + 1) & 0xffffffff and not s.flags & FIN
+    rig.net.send(c.pp, c.gp, ours, theirs, ACK | FIN)               # it crossed the guest's: that one not acknowledged
+    ok = rig.net.wait(answered, 3) is not None and ok
+    ok = rig.run('netstat', 'CLOSING') and ok
+    rig.net.send(c.pp, c.gp, ours, theirs + 1, ACK | FIN)           # again, now with the ACK of the guest's
+    ok = rig.net.wait(answered, 3) is not None and ok
+    m = rig.mark()
+    ok = rig.run('netstat', 'TIME_WAIT') and 'CLOSING' not in rig.since(m) and ok
+    rig.net.send(c.pp, c.gp, ours, theirs + 1, ACK | FIN)
+    ok = rig.net.wait(answered, 3) is not None and ok
+    rig.q.wait(3)
+    return rig.run('netstat', 'no TCP sockets') and ok
+
+
 def sc_shrink(rig):
     n = 12000
     ok = rig.start('nettest writer 23 %d 4096' % n, 'listening on port 23')
@@ -1014,6 +1044,7 @@ SCENARIOS = [
     ('backlog', sc_backlog, 'a listener that asked for a backlog of 8 keeps 8 whole connections waiting'),
     ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
     ('orphans', sc_orphans, 'a closed connection still finishing holds no buffers'),
+    ('closing', sc_closing, "the ACK on a FIN sent again ends CLOSING at once"),
     ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
