@@ -18,7 +18,8 @@ libtest getopt   an option, a cluster, an argument, --, an unknown one
 libtest system   the exit status; a kernel command; a pipeline; a command too long for one
                  argument and one too long for a pipe; the environment reaching the command
 libtest popen    reading and writing; two at once; fflush(NULL) losing nothing that was read
-                 ahead; a reader that stops early; no descriptor left behind in 40 rounds
+                 ahead; setvbuf on a pipe read dry; a reader that stops early; no descriptor left
+                 behind in 40 rounds
 libtest closed   the same with descriptor 0, then 1, closed first: a command must not be given the far end
                  of its own pipe as that descriptor
 libtest order    this program's output comes out before its commands' (run it through a pipe)
@@ -264,6 +265,29 @@ static int mode_popen(void) {
         check(pclose(a) == 0, "the end of it");
     }
     check(!popen("true", "x") && errno == EINVAL, "a bad mode");
+    /* a pipe read dry: nothing is kept, so a stream may change its buffer, and what comes next is read */
+    {
+        int p[2];
+        check(pipe(p) == 0, "a pipe");
+        a = fdopen(p[0], "r");
+        check(a != NULL, "a stream on it");
+        if(a) {
+            write(p[1], "ab", 2);
+            check(fgetc(a) == 'a' && fgetc(a) == 'b', "the pipe's two bytes");
+            check(setvbuf(a, NULL, _IONBF, 0) == 0, "setvbuf with the buffer drained");
+            write(p[1], "cd", 2);
+            check(fgetc(a) == 'c' && fgetc(a) == 'd', "the bytes after setvbuf");
+            check(ungetc('x', a) == 'x' && setvbuf(a, NULL, _IOFBF, 0) != 0, "setvbuf refused with a byte pushed back");
+            check(fgetc(a) == 'x', "the byte pushed back");
+            write(p[1], "e", 1);
+            check(fgetc(a) == 'e', "and the pipe again");
+            check(fflush(a) == 0 && setvbuf(a, NULL, _IOFBF, 0) == 0, "fflush and setvbuf, drained");
+            write(p[1], "f", 1);
+            check(fgetc(a) == 'f', "and with a buffer once more");
+            fclose(a);
+        }
+        close(p[1]);
+    }
     for(i = 0; i < 40; i++) {
         a = popen("true", "r");
         check(a && pclose(a) == 0, "again and again");

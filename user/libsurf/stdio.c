@@ -235,8 +235,8 @@ int fflush(FILE *f) {
     }
     if(f->dir == 'w') r = flush_out(f);
     else if(f->dir == 'r') {
-        if(!reads_again(f)) return 0;
-        drop_input(f);
+        if(reads_again(f)) drop_input(f);
+        else if(f->rpos < f->rend || f->ungot != EOF) return 0;  /* it stays, and so does the direction */
     }
     if(!r) f->dir = 0;
     return r;
@@ -257,7 +257,7 @@ int fpurge(FILE *f) {
 int setvbuf(FILE *f, char *buf, int mode, size_t size) {
     if(mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return -1;
     fflush(f);
-    if(f->rpos < f->rend) return -1;                    /* 11/01/26: what fflush() kept is in the buffer */
+    if(f->dir) return -1;                               /* 11/01/26: fflush() kept something, and it is in the buffer */
     if(f->flags & F_OWNBUF) free(f->buf);
     f->flags &= ~F_OWNBUF;
     f->buf = mode == _IONBF ? NULL : (unsigned char *)buf;
