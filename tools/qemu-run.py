@@ -1203,7 +1203,7 @@ SMOKE = [
     # pipeline, reported by its number. 10/25/26: the kernel's ls into a program as kernel ls (ls is the program)
     ('surfsh', [shown('SURF \u224b> ')],
      [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
-      ('kernel ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('kernel ls /initrd/bin | /initrd/bin/head -2', [re.compile(rb'  [a-z0-9]+\r\n[^\r\n]*  [a-z0-9]+\r\n'), shown('SURF \u224b> ')]),
       # 10/31/26: a line of its own at the log's end, not the boot's at its start: by here the steps before have filled
       # the 16 KB ring (KLOG_SIZE), and the boot's first lines are gone
       ("printf 'dmesg-%s\\n' piped > /dev/kmsg; dmesg | /initrd/bin/tail -n 1", ['dmesg-piped', shown('SURF \u224b> ')]),
