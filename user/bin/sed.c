@@ -20,8 +20,8 @@ q Q r s t T w x y : #, and s's flags g p I i w and a number, with & and \0-\9 in
 
 This sed follows GNU's where POSIX leaves a choice: one-line a i c, \n \t \cX \dNNN \oNNN \xHH in
 patterns, replacements and y, q and Q with a status, a missing last newline stays missing. Not here:
-case conversion in replacements, the flags m e, the commands e F R W z v, -z -u -l and the long
-options.
+case conversion in replacements (\U \L \u \l \E are refused), the flags m e, the commands e F R W z v,
+-z -u -l and the long options.
 
 A line is any number of bytes, with NUL bytes in it too, and a character is a UTF-8 sequence: y works on
 characters, and an empty match in s///g steps over a whole one. l prints the bytes.
@@ -1055,6 +1055,8 @@ static int parse_replacement(struct replacing *sub, const char *t, size_t n) {
             if(d >= '0' && d <= '9') {
                 group = d - '0';
                 i++;
+            } else if(d && strchr("ULulE", d)) {        /* GNU's. As letters they would go into the file with status 0 */
+                return bad("sed has no case conversion: \\U \\L \\u \\l \\E");
             } else if((k = escaped_char(t + i, n - i, &e))) {
                 c = e;
                 i += k;

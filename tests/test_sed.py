@@ -192,6 +192,8 @@ GNU_ONLY = [
     (['s/a/b/'], b'\x00a\n'), (['s/./X/g'], b'a\x00b\n'), (['p'], b'a\x00b'), (['y/a/b/'], b'a\x00a\n'), (['l'], b'a\x00b\n'),
     # empty regular expressions
     (['/a/s//X/'], AB), (['s/a/X/;s//Y/'], b'aa\n'), (['/a/{//d}'], AB), (['/\\(a\\)/s//\\1\\1/'], AB), (['-n', '/b/,//p'], AB), (['/a/,/c/{//d}'], AB),
+    # a backslash before itself, and a delimiter that is one of case conversion's letters: no conversion is asked for
+    (['s/b/\\\\U/'], b'abc\n'), (['s/b/\\\\l\\\\E/'], b'abc\n'), (['sUbU\\UU'], b'abc\n'), (['sEbE\\EE'], b'abc\n'),
     # delimiters
     (['s.a\\.b.X.'], b'axb\n'), (['s.a\\.b.X.'], b'a.b\n'), (['s|a\\|b|X|'], b'a|b\n'), (['-E', 's|a\\|b|X|g'], b'ab\n'), (['snanxn'], b'a\n'), (['s,\\,,x,'], b',\n'), (['s&a&\\&&'], b'a\n'), (['s&a&\\n&'], b'a\n'), (['s1a1\\11'], b'a\n'), (['s(a(\\(('], b'a\n'), (['s\\a\\b\\'], b'a\n'),
     (['\\aba p'], b'a\nb\n'), (['\\a\\aa p'], b'a\n'), (['\\/a\\/b/p'], b'a/b\n'), (['/[/]/p'], b'/\n'), (['/[]/]/p'], b'/\n'), (['s/[]/]/x/'], b'/\n'), (['s/[[:alpha:]/]/x/'], b'/\n'), (['s/[^/]/x/'], b'/a\n'), (['s/\\[/x/'], b'[/\n'), (['s/[\\/]/x/'], b'\\/\n'),
@@ -361,6 +363,9 @@ def own_rules():
     expect(SED, ['-e', '#nope', '-e', 'p'], b'a\n', out=twice)
     expect(SED, ['-f', 's'], b'a\n', {'s': b'#normalise\np\n'}, out=twice)
     expect(SED, ['-i', '-f', 's', 'f'], b'', {'s': b'#normalise line ends\ns/x/y/\n', 'f': b'axb\n'}, after={'s': b'#normalise line ends\ns/x/y/\n', 'f': b'ayb\n'})
+    # no case conversion: a sentence, not a letter in the file
+    for replacement in ('\\U&', '\\L&', '\\u&', '\\l&', '&\\E'):
+        expect(SED, ['-i', 's/b/%s/' % replacement, 'f'], b'', {'f': b'abc\n'}, status=2, after={'f': b'abc\n'}, said=b'case conversion')
 
 
 def undecided():

@@ -10,8 +10,9 @@ DESCRIPTION
     hold any bytes. A character is a whole UTF-8 sequence.
 
     SurfOS's sed follows GNU's where POSIX leaves a choice. It has no
-    case conversion in replacements, no flags m and e, no commands e F R
-    W z v, and no long options. Patterns are those of man regex.
+    case conversion in replacements (\U \L \u \l \E are refused), no
+    flags m and e, no commands e F R W z v, and no long options.
+    Patterns are those of man regex.
 
 OPTIONS
     -n          Print only what p and the like ask for. A first line

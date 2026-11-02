@@ -116,6 +116,17 @@ static void in_place(void) {
     sim_put("s.sed", "#n\n/a/p\n");
     check(sed("-i", "-f", "s.sed", "a.txt", NULL) == 0 && file_is("a.txt", "axb\n"), "-i and #n alone on its line");
 
+    /* no case conversion here: refused, not a letter in the file */
+    {
+        static const char *const asked[] = { "s/b/\\U&/", "s/b/\\L&/", "s/b/\\u&/", "s/b/\\l&/", "s/b/&\\E/" };
+        int i;
+        for(i = 0; i < 5; i++) {
+            sim_reset();
+            sim_put("a.txt", "abc\n");
+            check(sed("-i", asked[i], "a.txt", NULL) == 2 && file_is("a.txt", "abc\n") && sim_names() == 1, "-i with a case conversion");
+        }
+    }
+
     /* several files: each on its own */
     sim_reset();
     sim_put("a.txt", "1\n");
