@@ -31,6 +31,7 @@ struct fat_check_io {
 
 #define FAT_CHECK_VERBOSE 1             /* every problem and the counts, not only the first 40 */
 #define FAT_CHECK_REPAIR  2             /* repair (io->write set), after io->ask(): the host tests only */
+#define FAT_CHECK_PLAN    4             /* a look also says what a repair would do, or why it would make none */
 
 /* the statuses of the command (shell.h's CMD_* have the same values) */
 #define FAT_CHECK_CLEAN    0            /* no problem found, or all of them repaired */

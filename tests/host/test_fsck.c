@@ -457,8 +457,9 @@ static void cache_loses(struct tio *t) {
     t->npend = 0;
 }
 
+/* a run with the plan said (FAT_CHECK_PLAN): what the scenarios look for. The kernel command asks for none (words()) */
 static int run(struct tio *t, int flags, struct fat_check_result *res) {
-    int r = fat_check(&t->io, flags | (fverbose ? FAT_CHECK_VERBOSE : 0), res);
+    int r = fat_check(&t->io, flags | FAT_CHECK_PLAN | (fverbose ? FAT_CHECK_VERBOSE : 0), res);
     char m[160];
     snprintf(m, sizeof(m), "the checker's memory all goes back (%ld bytes kept)", mem_now);
     check(mem_now == 0, m);
@@ -2136,6 +2137,14 @@ static void scenario(int type, const struct scen *s) {
     }
     t_done(&t);
 
+    /* the kernel command's look, which asks for no plan: the problems, and no word of a repair */
+    t_init(&t, x, 0);
+    (void)fat_check(&t.io, 0, &r1);
+    mem_now = 0;
+    snprintf(m, sizeof(m), "%s, FAT%d: a look as the kernel command makes it says nothing of a repair:\n%s", s->name, type, t.log);
+    check(!strstr(t.log, "no repair") && !strstr(t.log, "would:") && !strstr(t.log, "can be repaired") && !strstr(t.log, "stay reported"), m);
+    t_done(&t);
+
     /* the question: no answer, no write */
     t_init(&t, x, 1);
     t.answer = false;
@@ -3320,7 +3329,11 @@ static void words(void) {
     (void)fat_check(&t.io, FAT_CHECK_VERBOSE, &r);
     mem_now = 0;
     check(strstr(t.log, "FAT32:") && strstr(t.log, "directories,") && strstr(t.log, "the two FATs differ") &&
-          strstr(t.log, "not unmounted cleanly") && strstr(t.log, "fsck -r would:"), "-v says the counts and the plan");
+          strstr(t.log, "not unmounted cleanly") && !strstr(t.log, "fsck -r would:"), "-v says the counts, and without FAT_CHECK_PLAN no plan");
+    t_done(&t);
+    t_init(&t, x, 0);
+    (void)fat_check(&t.io, FAT_CHECK_VERBOSE | FAT_CHECK_PLAN, &r);
+    mem_now = 0;
     check(strstr(t.log, "copy the first FAT over the second, end 1 chain, set 1 size, save 3 lost chains in a new FOUND directory, set FSInfo, mark it clean") != NULL,
           "the plan says exactly what will change");
     t_done(&t);

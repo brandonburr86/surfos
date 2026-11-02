@@ -3,6 +3,12 @@ SurfOS FAT Checker
 ------------------
 File: fat_check.c  Date: 11/01/26 (the command-line suite, track fsck)
 ------------------
+11/02/26: the kernel command only looks. Two reviews of the repairs below found that they could
+still lose data, so shell/fsckcmd.c refuses -r, gives this no write function and never asks it
+to repair. The repairs stay, tested on the host (tests/host/test_fsck.c), for a later round: the
+account (docs/superpowers/plans/2026-11-01-cli-suite-fsck.md) lists what that round must fix.
+FAT_CHECK_PLAN: a look says what a repair would do; the kernel command does not ask for that.
+
 fsck: a FAT12, FAT16 or FAT32 volume checked, and on request repaired. Pure: its reads,
 writes, words and its one question go through struct fat_check_io (fs/fat_check.h), so
 tests/host/test_fsck.c runs it over images with the driver (fs/fat.c) as a second reader.
@@ -230,6 +236,7 @@ struct fck {
     u8 *names;                      /* this directory's short names, an open hash table */
     u32 names_slots, names_used;
     bool names_off;
+    bool plan_words;                /* FAT_CHECK_PLAN */
     u16 lfn[LFN_PARTS * LFN_CHARS + 1];
     char name[LFN_PARTS * LFN_CHARS * 3 + 8];
     char path[256], who[320];
@@ -1684,14 +1691,17 @@ static int run(struct fck *f) {
     if(!f->found) { say(f, "clean"); return FAT_CHECK_CLEAN; }
     say(f, "%lu problem%s", (u_long)f->found, f->found == 1 ? "" : "s");
     if(f->bar) {
-        say(f, "no repair: %s", f->bar);
+        if(f->io->write || f->plan_words) say(f, "no repair: %s", f->bar);
         return FAT_CHECK_PROBLEMS;
     }
-    if(!plan_any(f)) { say(f, "nothing here can be repaired"); return FAT_CHECK_PROBLEMS; }
-    if(f->stay) say(f, "%lu of them stay%s reported", (u_long)f->stay, f->stay == 1 ? "s" : "");
+    if(!plan_any(f)) {
+        if(f->io->write || f->plan_words) say(f, "nothing here can be repaired");
+        return FAT_CHECK_PROBLEMS;
+    }
+    if(f->stay && (f->io->write || f->plan_words)) say(f, "%lu of them stay%s reported", (u_long)f->stay, f->stay == 1 ? "s" : "");
     plan_words(f, plan, sizeof(plan));
     if(!f->io->write) {
-        say(f, "fsck -r would: %s", plan + 2);
+        if(f->plan_words) say(f, "fsck -r would: %s", plan + 2);
         return FAT_CHECK_PROBLEMS;
     }
     if(!f->io->ask || !f->io->ask(f->io->ctx, plan + 2)) { r->cancelled = true; return FAT_CHECK_PROBLEMS; }
@@ -1737,6 +1747,7 @@ int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result 
     f->io = io;
     f->res = res;
     f->verbose = (flags & FAT_CHECK_VERBOSE) != 0;
+    f->plan_words = (flags & FAT_CHECK_PLAN) != 0;
     st = boot_load(f);
     if(st < 0) {
         if(!tables_make(f)) {
