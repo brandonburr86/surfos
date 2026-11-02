@@ -240,3 +240,20 @@ digits and mawk `2.14748e+09`.
 
 **Not run:** on the laptop, as nothing of this track has been. No kernel file changed, so SurfCPU's check does not apply. `awk`'s
 floating point runs on x87 like the rest of SurfOS's programs: nothing here uses SSE.
+
+### What the last run covered
+
+`make test-all` passed on `awk` on text's first library: 547 smoke checks and 51 of the Files test, at -O0 and at -O2, and
+`make unittest` passed on that tree. Text's fixes (`7ebf1ed`) came while that run was under way, and by the coordinator's word were
+merged after it. On the merged tree `test_bc`, `test_awk` and this track's two smoke blocks were run again at -O0 and -O2, and all
+pass. The whole of `make test-all` has not been run on the merged tree.
+
+Under the sanitizers on the merged tree, not in `long` mode, the command in the test's header stops at once at `regex.c` line 341,
+in text's new `set_sort()`: `r->range + s->first` is NULL + 0 for a set with no ranges. Nothing reads through it, so it does no
+harm, but clang's UBSan rejects it. It is text's file, so it stays as it is here, and is reported. With only that check,
+`-fno-sanitize=pointer-overflow`, off for `regex.c`, and all of them on for `awk`'s files, `test_awk` passes, 1,129 checks. The
+`long` run, 26,553 checks, was on text's first library.
+
+Those fixes change stdio's read-ahead, which `awk` does not use: it reads the descriptor itself and keeps its own buffer, so
+`fflush(NULL)` has nothing of its to drop. The host's `popen` hides that, so three smoke steps read a command, a file and a pipe
+across a `system()` and an `fflush()`. `MAX_WALK`'s `REG_ESIZE` reaches `awk` from `regcomp()`, as a message like any other.
