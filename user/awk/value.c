@@ -194,11 +194,16 @@ static struct str *small_int(long d) {
     return str_new(t + sizeof(t) - n, n);
 }
 
-/* POSIX: a whole number as by %d; anything else through CONVFMT or OFMT */
+/* POSIX: a whole number as by %d; anything else through CONVFMT or OFMT. Those are the program's to set, and two things
+   it can set them to ask for this same conversion: a number, which would have to be made a string to be a format, and
+   %s of the number. Neither may come back here without end, so a number is no format, as on the Mac's awk and in mawk,
+   and %s gets what the default gives. */
 struct str *num_str(double d, int conv) {
+    static int converting;
+    const struct value *fmt = &A.global[conv];
     struct value arg;
     struct buf b = { NULL, 0, 0 };
-    struct str *fmt, *s;
+    struct str *s;
     if(d > -2147483648.0 && d < 2147483648.0 && d == (double)(long)d) return small_int((long)d);
     arg.kind = V_NUM;
     arg.u.num = d;
@@ -206,10 +211,12 @@ struct str *num_str(double d, int conv) {
         format_text(&b, "%f", 2, &arg, 1);
     } else if(d == floor(d)) {
         format_text(&b, "%d", 2, &arg, 1);
+    } else if(converting || (fmt->kind != V_STR && fmt->kind != V_INPUT)) {
+        format_text(&b, "%.6g", 4, &arg, 1);
     } else {
-        fmt = to_str(&A.global[conv]);
-        format_text(&b, fmt->s, fmt->len, &arg, 1);
-        str_put(fmt);
+        converting = 1;
+        format_text(&b, fmt->u.s->s, fmt->u.s->len, &arg, 1);
+        converting = 0;
     }
     s = str_new(b.p ? b.p : "", b.len);
     free(b.p);

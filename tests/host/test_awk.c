@@ -487,6 +487,20 @@ static void language(void) {
     is("BEGIN { print length(1e6), length(0.1), index(100, 0) }", NULL, "7 3 2\n");
     is("BEGIN { CONVFMT = \"%d\"; a[1.5] = 1; for(k in a) print k; print 12 \"\" }", NULL, "1\n12\n");
     is("BEGIN { OFMT = \"%.1f\"; print 1.25, 1.25 \"\"; print 7 }", NULL, "1.2 1.25\n7\n");
+    /* a format that would ask for this same conversion again: a number is no format, as on the Mac's awk and mawk, and %s
+       gets what the default gives */
+    is("BEGIN { CONVFMT = 0.5; x = 3.14 \"\"; print x }", NULL, "3.14\n");
+    is("BEGIN { CONVFMT = 0.5; x = (1.5 + 1.64) \"\"; print x }", NULL, "3.14\n");
+    is("BEGIN { OFMT = 0.5; print 3.14 }", NULL, "3.14\n");
+    is("BEGIN { OFMT = 2; print 3.14 }", NULL, "3.14\n");
+    is("BEGIN { CONVFMT = \"%s\"; x = 3.14 \"\"; print x }", NULL, "3.14\n");
+    is("BEGIN { OFMT = \"%s\"; print 3.14 }", NULL, "3.14\n");
+    is("BEGIN { OFMT = \"[%s]\"; print 3.14 }", NULL, "[3.14]\n");
+    is("BEGIN { CONVFMT = \"%s\"; a[0.5] = 1; for(k in a) print k }", NULL, "0.5\n");
+    is("BEGIN { CONVFMT = \"%c\"; x = 65.5 \"\"; print x }", NULL, "A\n");
+    is("BEGIN { CONVFMT = \"\"; x = 3.14 \"\"; print \"[\" x \"]\" }", NULL, "[]\n");
+    args_are(NULL, "0.5\n", 0, "-v", "CONVFMT=0.5", "BEGIN { x = 3.14 \"\"; print x }", NULL, NULL, NULL);      /* a string is a format */
+    fails("BEGIN { CONVFMT = \"%s %s\"; x = 3.14 \"\" }", NULL, "not enough arguments");
     is("BEGIN { printf \"%d %s\\n\", 1e18, 1e18 }", NULL, "1000000000000000000 1000000000000000000\n");
     is("BEGIN { printf \"%d\\n\", 1e30 }", NULL, "1000000000000000019884624838656\n");
     is("BEGIN { printf \"%i|%5.3d|%x|%o\\n\", 3.9, 7, 255.9, 8 }", NULL, "3|  007|ff|10\n");
