@@ -68,7 +68,7 @@ USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256
 USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
-USER_PROGS  += cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
+USER_PROGS  += diff cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -721,10 +721,20 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 # user/diff/, and cal with the Clock's arithmetic. Their tests: tests/host/test_diff.c, user/diff/ as it is, at SurfOS's ABI, and
 # again with hashes that collide (test_diff_weak); tests/test_cli_diff.py, each tool as it is, built over the host's C
 # library (tests/host/cli/cli_host.h), beside the real ones. Sanitized runs are tests/host/cli/mac-sanitize.sh, on the Mac.
+DIFF_LIB_OBJ  = $(addprefix $(BUILD)/user/diff/,dcore.o dinput.o dfile.o dout.o)
+$(BUILD)/user/diff/%.o: user/diff/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/diff: $(BUILD)/user/obj/diff.o $(DIFF_LIB_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(DIFF_LIB_OBJ) $(USER_LIB)
 $(BUILD)/user/bin/cal: $(BUILD)/user/obj/cal.o $(BUILD)/user/wclock/clock.o $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(BUILD)/user/wclock/clock.o $(USER_LIB)
+-include $(wildcard $(BUILD)/user/diff/*.d)
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

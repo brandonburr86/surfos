@@ -1,0 +1,52 @@
+diff - show what differs between two files, line by line
+
+SYNOPSIS
+    diff [-u [n] | -U n | -c | -C n] [-q] [-r] [-i] [-b] [-w] [-B]
+         file1 file2
+
+DESCRIPTION
+    Writes an edit that turns file1 into file2, in a form patch can
+    apply. Status 0 when they are the same, 1 when they differ, 2 for
+    trouble. - is standard input.
+
+    Without a style the changes come in the normal form: 2c2 and the
+    lines, < from file1 and > from file2.
+
+    Either name may be a directory. Two directories have the files of
+    the same name compared, and what is only in one is said; one level
+    down, or all the way with -r. A file against a directory is
+    compared with the file of its name in the directory. Names pair up
+    without regard to case, as on FAT.
+
+    A file with a NUL in its first 32 KB is binary, and only that the
+    two differ is said.
+
+    Files are not read into memory. Two huge files that differ in a
+    few lines take almost none; otherwise it takes about 5 bytes for
+    each line between the first and the last difference. Standard
+    input is the exception: it can be read only once, so it is kept.
+    Past 2 GB a file is compared forward only, which takes longer.
+
+    Very different large files are compared with a limit on the
+    search: the edit is then correct, but may not be the shortest.
+
+OPTIONS
+    -u, -U n   Unified form, with n lines of context (3). -u 5 also
+               works when two files follow it.
+    -c, -C n   Context form, likewise.
+    -q         Only say that they differ.
+    -r         Go down through directories.
+    -i         Upper and lower case count the same (ASCII letters).
+    -b         Any run of white space equals any other, and none at
+               the end of a line counts.
+    -w         White space does not count at all.
+    -B         Changes that only add or remove blank lines do not
+               count.
+
+EXAMPLES
+    diff /hda1/OLD.TXT /hda1/NEW.TXT
+    diff -u a.c b.c > /hda1/CHANGE.DIF
+    diff -r -q /hda1/www /usb1p1/www
+
+SEE ALSO
+    patch, cmp, comm
