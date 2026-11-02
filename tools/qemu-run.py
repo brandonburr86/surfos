@@ -1399,6 +1399,15 @@ SMOKE = [
       ("seq 3 | sed -n 'w /dev/null'; echo status $?", ['status 0\r\n', shown('SURF \u224b> ')]),
       ("seq 9 | sed 2q7; echo status $?; echo x | sed k; echo status $?", ['1\r\n2\r\n', 'status 7\r\n', 'sed: script line 1: ', 'status 2',
                                                                           shown('SURF \u224b> ')]),
+      # names on FAT: case and paths differ, the file is one. w's two names are one output (a new file: its folder and name; the root
+      # folder's number is 0); with a suffix one file twice is refused; so is a suffix that makes the working name. The file stays
+      ("cd /hda1; printf 'a\\nb\\n' > SEDC.TXT; sed -n -e '1w /hda1/SEDO.TXT' -e '2w ./sedo.txt' SEDC.TXT; cat SEDO.TXT",
+       ['a\r\nb\r\n', shown('hda1 \u224b> ')]),
+      ("sed -i.BAK 's/a/X/' SEDC.TXT ./sedc.txt; echo status $?; sed -i.TMP 's/a/XX/' SEDC.TXT; echo status $?",
+       ['are one file', 'status 2\r\n', 'in the way', 'status 2\r\n', shown('hda1 \u224b> ')]),
+      ("cat SEDC.TXT; rm SEDC.TXT SEDO.TXT; ls | grep -c -i '^SED'; cd /", ['a\r\nb\r\n', '0\r\n', shown('SURF \u224b> ')]),
+      # D, through libsurf's malloc: the pattern space is freed from where it began
+      ("seq 3000 | sed -n ':a;$!{N;ba};P;D' | tail -1", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
       ('seq 200000 | sed p | head -1', ['\r\n1\r\n', shown('SURF \u224b> ')]),
       ("echo h\u00e9llo | sed 's/./x/2;y/l/L/'", ['hxLLo\r\n', shown('SURF \u224b> ')]),
       ('exit', [])]),

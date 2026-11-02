@@ -29,7 +29,7 @@ characters, and an empty match in s///g steps over a whole one. l prints the byt
 No input is read whole. What must go on disk is safe: -i and w write through saveutil.h, so that a
 file is either as it was or complete, and a failure part of the way leaves it as it was. A w file that
 did not exist appears when sed ends. The input is read through descriptors, as is the output, with buffers
-of this program's own; all of this file's other state is in one struct, so that tests/host/test_sed.c
+of this program's own; all of this file's other state is in one struct, so that tests/host/test_sedsave.c
 can run main() many times on a simulated file system, with writes and renames failing.
 
 Status 0, q's or Q's number, 2 for trouble: a mistake in the script, a file that could not be
@@ -56,11 +56,13 @@ read (the others are still processed) or written. 141 when the reader of the out
 #define LIST_WIDTH  70                  /* l's lines */
 #define UNTIL_SAID  ((unsigned long)-1) /* cmd.stop: the second address will say which line */
 
-/* a growing string. nl, for a line: its newline was there, and is not kept here */
+/* a growing string. nl, for a line: its newline was there, and is not kept here. off: D has taken that much off the front, so s is
+   that far into the allocation, and cap counts from s */
 struct str {
     char *s;
     size_t len, cap;
     int nl;
+    size_t off;
 };
 
 /* where lines go, with what has not been written yet. owed: the last line went out without a newline, because its input had none,
@@ -226,6 +228,10 @@ static int bad(const char *why) {
 
 /**** strings ****/
 
+static char *str_block(const struct str *b) {
+    return b->off ? b->s - b->off : b->s;
+}
+
 static int str_room(struct str *b, size_t more) {
     size_t need = b->len + more + 1, cap;
     char *p;
@@ -234,6 +240,13 @@ static int str_room(struct str *b, size_t more) {
         return -1;
     }
     if(need <= b->cap) return 0;
+    if(b->off > b->len) {                       /* the move costs less than the bytes D gave back */
+        memmove(b->s - b->off, b->s, b->len + 1);
+        b->s -= b->off;
+        b->cap += b->off;
+        b->off = 0;
+        if(need <= b->cap) return 0;
+    }
     cap = b->cap ? b->cap : 128;
     while(cap < need) {
         if(cap > (size_t)-1 / 2) {
@@ -242,12 +255,12 @@ static int str_room(struct str *b, size_t more) {
         }
         cap *= 2;
     }
-    p = realloc(b->s, cap);
+    p = cap + b->off < cap ? NULL : realloc(str_block(b), cap + b->off);
     if(!p) {
         die_soon("out of memory");
         return -1;
     }
-    b->s = p;
+    b->s = p + b->off;
     b->cap = cap;
     return 0;
 }
@@ -559,23 +572,39 @@ static int at_last(void) {
     return 1;
 }
 
+/* the file of r. One that is not there is nothing. Anything else stops the run: the output would be short with no sign of it, and
+   running out of descriptors is not a missing file */
+static void put_file(const char *name) {
+    char *buf;
+    ssize_t n;
+    int fd = open(name, O_RDONLY);
+    if(fd < 0) {
+        if(errno != ENOENT && errno != ENOTDIR && !g.fatal) {
+            say("%s: %s", name, strerror(errno));
+            g.fatal = 1;
+        }
+        return;
+    }
+    buf = malloc(OUTPUT_BUF);
+    if(!buf) die_soon("out of memory");
+    else {
+        while((n = read(fd, buf, OUTPUT_BUF)) > 0) put(g.cur, buf, (size_t)n);
+        if(n < 0 && !g.fatal) {
+            say("%s: %s", name, strerror(errno));
+            g.fatal = 1;
+        }
+        free(buf);
+    }
+    close(fd);
+}
+
 static void flush_queue(void) {
     struct queued *q;
     while((q = g.qhead)) {
         g.qhead = q->next;
         line_start(g.cur);
         if(q->text) put(g.cur, q->text, q->len);
-        else {                                  /* a file that is not there is nothing */
-            int fd = open(q->file, O_RDONLY);
-            if(fd >= 0) {
-                char *buf = malloc(OUTPUT_BUF);
-                ssize_t n;
-                if(!buf) die_soon("out of memory");
-                while(buf && (n = read(fd, buf, OUTPUT_BUF)) > 0) put(g.cur, buf, (size_t)n);
-                free(buf);
-                close(fd);
-            }
-        }
+        else put_file(q->file);
         line_done(g.cur);
         free(q);
     }
@@ -1006,13 +1035,13 @@ static char *take_filename(void) {
     return s;
 }
 
-/* a label ends at a blank, a ; or a }, and what follows it is the next command */
+/* a label ends at a blank, a ;, a } or a #, and what follows it is the next command */
 static char *take_label(void) {
     size_t from, n;
     char *s;
     skip_blanks();
     from = g.at;
-    while(!at_end() && !strchr(" \t\n;}", g.sc[g.at])) g.at++;
+    while(!at_end() && !strchr(" \t\n;}#", g.sc[g.at])) g.at++;
     n = g.at - from;
     s = malloc(n + 1);
     if(!s) {
@@ -1784,9 +1813,11 @@ static void run(void) {
             case 'D': {
                 char *nl = memchr(g.line.s, '\n', g.line.len);
                 print = 0;
-                if(nl) {
+                if(nl) {                                /* the rest stays where it is: a long text, D by D, is not moved each time */
                     size_t k = (size_t)(nl - g.line.s) + 1;
-                    memmove(g.line.s, nl + 1, g.line.len - k + 1);
+                    g.line.s += k;
+                    g.line.off += k;
+                    g.line.cap -= k;
                     g.line.len -= k;
                     restart = 1;
                 }
@@ -1827,7 +1858,7 @@ static void run(void) {
                 flush_queue();
                 /* fall through */
             case 'Q':
-                if(c->number > 0) g.status = (int)(c->number & 0xFF);
+                if(c->number > 0 && !g.fatal) g.status = (int)(c->number & 0xFF);
                 return;
             case 'r': enqueue(NULL, 0, c->text); break;
             case 's': substitute(c); break;
@@ -1910,9 +1941,9 @@ static void free_all(void) {
     free(g.sc);
     free(g.files);
     free(g.ibuf);
-    free(g.line.s);
-    free(g.hold.s);
-    free(g.built.s);
+    free(str_block(&g.line));
+    free(str_block(&g.hold));
+    free(str_block(&g.built));
     free(g.out.buf);
     free(g.file.buf);
 }

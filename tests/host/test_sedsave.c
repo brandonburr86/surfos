@@ -220,6 +220,30 @@ static void in_place_failures(void) {
     sim_put("c.txt", "one\n");
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_ENOSPC, SIM_NONE);
     check(sed("-i", "s/one/1/", "a.txt", "c.txt", NULL) == 2 && file_is("a.txt", "one\n") && file_is("c.txt", "1\n"), "a rename refused: the next file is done");
+    /* r: a file that is not there is nothing, and anything else stops it all: the output would be short with no sign of it */
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    check(sed("-i", "r nosuch.txt", "a.txt", NULL) == 0 && file_is("a.txt", "one\n"), "-i and r of a missing file");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("r.txt", "R\n");
+    sim_fail(SIM_OPEN, "r.txt", SIM_EIO, 0);
+    check(sed("-i", "r r.txt", "a.txt", NULL) == 2 && file_is("a.txt", "one\n") && gone("a.txt.tmp"), "-i and r that cannot open its file");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("r.txt", "R\n");
+    sed_fail_read(1);
+    check(sed("-i", "r r.txt", "a.txt", NULL) == 2 && file_is("a.txt", "one\n") && gone("a.txt.tmp"), "-i and r that cannot read its file");
+    sed_fail_read(-1);
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("r.txt", "R\n");
+    check(sed("-n", "w o1\nw o2\nw o3\nw o4\nw o5\nw o6\nw o7\nr r.txt", "a.txt", NULL) == 2 && sim_names() == 2, "r out of descriptors");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("r.txt", "R\n");
+    sim_fail(SIM_OPEN, "r.txt", SIM_EIO, 0);
+    check(sed("-n", "r r.txt\nq7", "a.txt", NULL) == 2, "q's number does not hide what stopped the run");
     /* the input fails part of the way: what was read is no replacement */
     for(i = 0; i < 3; i++) {
         sim_reset();
@@ -378,6 +402,18 @@ static void many_runs(void) {
         }
     }
     check(file_is("out.txt", "1\nTWO\n"), "run after run: the last one's file");
+    /* D keeps its place in the allocation: it goes back whole, and the room at the front is used */
+    sim_reset();
+    sim_put("a.txt", "one\ntwo\nthree\nfour\nfive\n");
+    for(i = 0; i < 3000; i++) {
+        if(sed("-i", "$!N\ns/$/ and more and more and more and more and more and more and more/\nP\nD", "a.txt", NULL)) {
+            check(0, "run after run with D");
+            break;
+        }
+        sim_reset();
+        sim_put("a.txt", "one\ntwo\nthree\nfour\nfive\n");
+    }
+    check(sed("$!N\nP\nD", "a.txt", NULL) == 0, "run after run with D: the last one");
 }
 
 int main(void) {

@@ -27,7 +27,11 @@ OPTIONS
                 With a suffix the old file stays as file<suffix>, or
                 as the suffix with each * being the file's name. A file
                 is replaced only when all of it went well: until then
-                the new text is in file.tmp beside it.
+                the new text is in file.tmp beside it. A suffix that
+                makes that name, or the file's own, is refused for the
+                file, and with a suffix one file may be named only once,
+                in any case or form of its path. After a rename that
+                may have half happened sed stops: check the disk.
 
 ADDRESSES
     A command runs on every line, or on those its address picks.
@@ -57,13 +61,16 @@ COMMANDS
     n N         Print and read the next line. Append it after a newline.
     p P         Print. Print up to the first newline.
     q Q [n]     End, with status n. Q does not print the line first.
-    r file      Add the file after this line. A missing file is nothing.
+    r file      Add the file after this line. A missing file is nothing;
+                one that cannot be read stops sed.
     s/re/rep/f  Replace. In rep, & is the match, \1 to \9 are groups,
                 \n a newline. Flags: g all, a number that match on, p
                 print, I ignore case, w file write.
     w file      Write to the file, which appears when sed ends. A file
                 that is there is replaced then, not emptied at the
-                start. /dev/stdout and /dev/stderr are the outputs.
+                start. Names of one file are one output, whatever their
+                case or path. /dev/stdout and /dev/stderr are the
+                outputs.
     y/abc/xyz/  Change characters one for one.
     # text      A comment.
 

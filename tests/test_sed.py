@@ -103,11 +103,15 @@ def compare(real, mine, args, stdin=b'', files=None, utf8=False, what='sed'):
     return True
 
 
-def expect(prog, args, stdin=b'', files=None, status=0, out=None, after=None, said=None):
+def expect(prog, args, stdin=b'', files=None, status=0, out=None, after=None, said=None, timeout=TIMEOUT):
     """what no real tool can be asked: ours against what is written here"""
     global checks
     checks += 1
-    m = run(prog, args, stdin, files or {}, False)
+    try:
+        m = run(prog, args, stdin, files or {}, False, timeout)
+    except subprocess.TimeoutExpired:
+        fail('%s %r on %r: did not end' % (os.path.basename(prog), args, stdin[:60]))
+        return
     if m[1] != status or (out is not None and m[0] != out) or (after is not None and m[2] != after) or (said is not None and said not in m[3]):
         fail('%s %r on %r: status %d, %r, files %r, said %r' % (os.path.basename(prog), args, stdin[:60], m[1], m[0][:80], {k: v[:40] for k, v in m[2].items()}, m[3][:120]))
 
@@ -136,6 +140,7 @@ COMMON = [
     (['-n', '-e', '/a/p', '-e', '/b/p'], AB), (['s/a/1\\\n2/'], AB), (['s/$/\\\n/'], AB), (['s/^/>/'], AB), (['s/$/</'], AB),
     (['\\,a,d'], AB), (['\\%b%d'], AB), (['/a\\/b/d'], b'a/b\nc\n'), (['s/a\\/b/X/'], b'a/b\n'), (['s/[/]/X/'], b'a/b\n'), (['s/[[:digit:]]\\{1,\\}/N/g'], b'a1b22c333\n'),
     (['s/[^[:alpha:]]//g'], b'a1 b2\n'), (['s/a/X/'], AB), (['#comment\np'], AB),
+    (['$!N;$!N;P;D'], TEXT), (['$!N;h;P;D'], TEXT), (['$!N;P;D;p'], AB),
      (['-n', 'p'], b''), (['$d'], b''), (['$a\\\nx'], b''), (['s/a/b/'], b'\n'), (['/^$/d'], b'a\n\n\nb\n'), (['$!{$!N;};P;D'], b'1\n2\n3\n'),
     (['2,1p'], AB), (['-n', '3,1p'], AB), (['-n', '/c/,1p'], AB), (['-n', '/b/,/nomatch/p'], AB), (['-n', '1,/a/p'], AB),
     (['w out\n'], AB, {}), (['-n', '/b/w out'], AB, {}), (['s/a/X/w out'], AB, {}), (['-n', 's/a/X/w out'], AB, {}), (['-n', '/a/w x\n/b/w y'], AB, {}), (['w f\nw f'], AB, {}),
@@ -192,6 +197,11 @@ GNU_ONLY = [
     (['s/a/b/'], b'\x00a\n'), (['s/./X/g'], b'a\x00b\n'), (['p'], b'a\x00b'), (['y/a/b/'], b'a\x00a\n'), (['l'], b'a\x00b\n'),
     # empty regular expressions
     (['/a/s//X/'], AB), (['s/a/X/;s//Y/'], b'aa\n'), (['/a/{//d}'], AB), (['/\\(a\\)/s//\\1\\1/'], AB), (['-n', '/b/,//p'], AB), (['/a/,/c/{//d}'], AB),
+    # D and then more text than there was room for (macOS's sed leaves a stray byte at the end of the last line)
+    (['$!N;s/$/ 0123456789012345678901234567890123456789012345678901234567890123456789/;P;D'], TEXT), (['$!N;G;s/\\n$/ 0123456789/;P;D'], TEXT),
+    # a label ends at a # as well, and r of what cannot be read stops the run
+    (['bx#c\n:x'], AB), (['b x#c\n:x#c'], AB), (['b x\n:x#c'], AB), (['bx\n:x#c;p'], AB), (['t#c'], AB), (['b#c'], AB), (['Tx#c\n:x'], AB), (['{bx#c\n};:x'], AB), (['bx#c'], AB), ([':x#c'], AB), (['b x#c;p\n:x'], AB),
+    ([':x#c\n$!{n;bx#c\n}\ns/$/!/'], b'1\n2\n3\n'), (['r /'], b'a\nb\n'), (['-i', 'r /', 'f'], b'', {'f': b'a\n'}), (['-n', 'r /'], b'a\n'), (['1r /nosuch/dir/x'], b'a\n'),
     # a backslash before itself, and a delimiter that is one of case conversion's letters: no conversion is asked for
     (['s/b/\\\\U/'], b'abc\n'), (['s/b/\\\\l\\\\E/'], b'abc\n'), (['sUbU\\UU'], b'abc\n'), (['sEbE\\EE'], b'abc\n'),
     # delimiters
@@ -378,6 +388,9 @@ def own_rules():
     expect(SED, ['-i.bak', 's/$/x/', 'f', 'd/f'], b'', {'f': b'a\n', 'd/f': b'b\n'}, after={'f': b'ax\n', 'f.bak': b'a\n'})
     # a suffix that makes the backup the working name. GNU's has no such name
     expect(SED, ['-i.tmp', 's/a/bb/', 'f'], b'', {'f': b'a\n'}, status=2, after={'f': b'a\n'}, said=b'f.tmp')
+    # D takes the front off the pattern space, not the rest down to it: all of a long text in one, and D on each line
+    lines = b''.join(b'line %d\n' % i for i in range(1000000))
+    expect(SED, ['-n', ':a\n$!{N\nba\n}\nP\nD'], lines, out=lines, timeout=60)
     # no case conversion: a sentence, not a letter in the file
     for replacement in ('\\U&', '\\L&', '\\u&', '\\l&', '&\\E'):
         expect(SED, ['-i', 's/b/%s/' % replacement, 'f'], b'', {'f': b'abc\n'}, status=2, after={'f': b'abc\n'}, said=b'case conversion')
