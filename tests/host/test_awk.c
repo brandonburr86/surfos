@@ -305,6 +305,9 @@ static void binary_data(void) {
     argv[1] = "BEGIN { RS = \"\\0\" } { print }";
     run_args(2, argv, "a\0b\0", 4, 20000, 0, 1);
     CHECK(R.nout == 4 && !memcmp(R.out, "a\nb\n", 4));
+    argv[1] = "BEGIN { RS = \"a\\000b\" } { print }";
+    run_args(2, argv, "xa\0by", 5, 20000, 0, 1);
+    CHECK(R.nout == 4 && !memcmp(R.out, "x\ny\n", 4));
     /* no newline at the end; carriage returns are the record's */
     is("{ print NR, $0 }", "a\nb", "1 a\n2 b\n");
     is("{ print length($0) }", "a\r\n", "2\n");
@@ -315,6 +318,50 @@ static void records(void) {
     is("BEGIN { RS = \"\\r\\n\" } { print length($0) }", "ab\r\ncd\r\n", "2\n2\n");
     is("BEGIN { RS = \"aa|b\" } { print NR \":\" $0 }", "xaay", "1:x\n2:y\n");
     is("BEGIN { RS = \"x*\" } END { print NR }", "ab", "1\n");                              /* an empty match is no separator */
+    /* a string with no operator in it is found as it stands, wherever the reads fall */
+    is("BEGIN { RS = \"aab\" } { print NR \":\" $0 }", "xaaab\nz", "1:xa\n2:\nz\n");
+    is("BEGIN { RS = \"--\" } { print NR \":\" $0 }", "a--b---c", "1:a\n2:b\n3:-c\n");
+    is("BEGIN { RS = \"\303\251x\" } { print NR \":\" $0 }", "a\303\251xb\303\251", "1:a\n2:b\303\251\n");
+    is("BEGIN { RS = \"\\251\\303\" } END { print NR }", "\303\251\303\251\n", "1\n");        /* no character: a pattern's to judge */
+    is("BEGIN { RS = \"a.c\" } { print }", "1abc2\n", "1\n2\n\n");
+    /* a match that more input could change waits for it: the same bytes give the same records however they arrive */
+    is("BEGIN { RS = \"ab(cd)?\"; c = \"printf xabc; sleep 0.3; printf 'dy\\\\n'\"; while((c | getline l) > 0) print ++n \": \" l }", NULL, "1: x\n2: y\n\n");
+    is("BEGIN { RS = \"abcd|c\"; c = \"printf xabc; sleep 0.3; printf 'dy\\\\n'\"; while((c | getline l) > 0) print ++n \": \" l }", NULL, "1: x\n2: y\n\n");
+    is("BEGIN { RS = \"ab+\"; c = \"printf xab; sleep 0.3; printf 'by\\\\n'\"; while((c | getline l) > 0) print ++n \": \" l }", NULL, "1: x\n2: y\n\n");
+    is("BEGIN { RS = \"--\"; c = \"printf 'x-'; sleep 0.3; printf -- '-y'\"; while((c | getline l) > 0) print ++n \": \" l }", NULL, "1: x\n2: y\n");
+    {
+        char *t = malloc(200000);
+        /* the file's reads end after the c */
+        memset(t, 'x', 8189);
+        strcpy(t + 8189, "abcdy\n");
+        is("BEGIN { RS = \"ab(cd)?\" } { print length($0) }", t, "8189\n2\n");
+        memset(t, 'x', 8191);
+        strcpy(t + 8191, "\r\ny");
+        is("BEGIN { RS = \"\\r\\n\" } { print length($0) }", t, "8191\n1\n");
+        /* a long separator */
+        t[0] = 'x';
+        t[1] = 'a';
+        memset(t + 2, 'b', 60000);
+        strcpy(t + 60002, "cy");
+        is("BEGIN { RS = \"a(b*c)?\" } { print length($0) }", t, "1\n1\n");
+        free(t);
+    }
+    /* a record that has no end is read once or twice over, not once for each read */
+    {
+        size_t n = 2000000;
+        char *big = malloc(n + 1);
+        memset(big, 'a', n);
+        big[n] = 0;
+        *searched = 0;
+        is("BEGIN { RS = \"z+y\" } END { print NR, length($0) }", big, "1 2000000\n");
+        checks++;
+        if(*searched > 5 * (unsigned long long)n) {
+            failed++;
+            printf("FAIL: a record of %lu bytes took %llu bytes of searching\n", (unsigned long)n, (unsigned long long)*searched);
+        }
+        is("BEGIN { RS = \"zz\" } END { print NR, length($0) }", big, "1 2000000\n");
+        free(big);
+    }
     is("BEGIN { RS = \"\" } { print $NF }", "\n\n\na b\nc\n\n\n", "c\n");
     is("BEGIN { RS = \"\"; FS = \"[,]\" } { print NF }", "a,b\nc\n\nd\n", "3\n1\n");
     is("{ RS = \";\" } { print }", "a\nb;c;\n", "a\nb\nc\n\n\n");                         /* the last record is the newline */
@@ -968,6 +1015,18 @@ static void memory(void) {
     limited("BEGIN { for(i = 0; i < 2000; i++) if((\"x\" i) ~ (\"y\" i \"+\")) n++; print n + 0 }", NULL, 1u << 22, 0);       /* more patterns than are kept */
     limited("BEGIN { for(i = 0; i < 50000; i++) { a[i] = 1; delete a[i]; for(k in a) n++ } print n + 0 }", NULL, 1u << 16, 0);
     limited("BEGIN { for(i = 0; i < 300; i++) { c = \"echo \" i; c | getline x; close(c); n += x } print n }", NULL, 1u << 20, 0);
+    limited("BEGIN { s = \"\303\251\"; for(i = 0; i < 10; i++) s = s s; for(i = 0; i < 20000; i++) { t = s i; x = substr(t, 1000, 1) } print x }", NULL, 1u << 16, 0);
+    free(many);
+    /* a pattern as RS keeps a little more than a record's worth, however long the input */
+    many = malloc(3000001);
+    for(i = 0; i < 3000000; i += 3) {
+        many[i] = 'a';
+        many[i + 1] = 'b';
+        many[i + 2] = '1';
+    }
+    many[3000000] = 0;
+    limited("BEGIN { RS = \"[0-9]\" } { n++ } END { print n }", many, 1u << 20, 0);
+    limited("BEGIN { RS = \"1a\" } { n++ } END { print n }", many, 1u << 18, 0);
     free(many);
 }
 
@@ -1171,6 +1230,11 @@ int main(int argc, char **argv) {
     snprintf(in_path, sizeof(in_path), "%s/stdin", dir);
     snprintf(out_path, sizeof(out_path), "%s/stdout", dir);
     snprintf(err_path, sizeof(err_path), "%s/stderr", dir);
+    searched = mmap(NULL, sizeof(*searched), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    if(searched == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     for(i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         run_prog(table[i].prog, table[i].input);
         checks++;

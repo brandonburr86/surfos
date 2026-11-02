@@ -4,9 +4,9 @@ SurfOS user program: awk
 File: io.c      Date: 11/01/26
 --------------------
 Files and commands. Everything awk reads comes through one reader with a buffer of its own, on
-the descriptor, as a record may end at a byte, at a blank line or at a regular expression, and the
-input may be a pipe or a terminal: read() gives what there is and does not wait for a full
-buffer. Only one record is held, however large the file.
+the descriptor, as a record may end at a byte, at a string, at a blank line or at a regular
+expression, and the input may be a pipe or a terminal: read() gives what there is and does not
+wait for a full buffer. Only one record is held, and what is read past it, however large the file.
 
 Every file or command that print or getline names stays open until close() or the end. A program
 has 16 descriptors (FOPEN_MAX), and the message says so when they run out. print's streams are
@@ -23,6 +23,7 @@ be found then: that ends awk like any other write that fails.
 #include "awk.h"
 
 #define READ_CHUNK 8192
+#define RS_MARGIN 65536                 /* what is read past a match of RS before more input is taken to leave it alone */
 #define ARGV_MOST 1000000               /* a program may set ARGC to anything, and each number is looked up */
 
 struct reader {
@@ -60,20 +61,23 @@ static void reader_init(struct reader *r, int fd) {
     r->start = r->end = r->cap = 0;
 }
 
-/* more bytes after those there are: 0, or -1 with errno */
+/* More bytes after those there are: 0, or -1 with errno. What is held moves down only when the room behind it has gone,
+   and the buffer doubles once it is more than half full then: much may be held, and it may be asked for often. */
 static int reader_fill(struct reader *r) {
     ssize_t n;
     if(r->eof) return 0;
-    if(r->start) {
-        memmove(r->buf, r->buf + r->start, r->end - r->start);
-        r->end -= r->start;
-        r->start = 0;
-    }
     if(r->cap - r->end < READ_CHUNK) {
-        unsigned cap = r->cap ? r->cap * 2 : READ_CHUNK * 2;
-        if(cap <= r->cap || cap >= 0x7ff00000u) fatal("out of memory");
-        r->buf = xrealloc(r->buf, cap);
-        r->cap = cap;
+        if(r->start) {
+            memmove(r->buf, r->buf + r->start, r->end - r->start);
+            r->end -= r->start;
+            r->start = 0;
+        }
+        if(r->end >= r->cap / 2) {
+            unsigned cap = r->cap ? r->cap * 2 : READ_CHUNK * 2;
+            if(cap <= r->cap || cap >= 0x7ff00000u) fatal("out of memory");
+            r->buf = xrealloc(r->buf, cap);
+            r->cap = cap;
+        }
     }
     if(r->tty) fflush(stdout);
     n = read(r->fd, r->buf + r->end, READ_CHUNK);
@@ -136,11 +140,42 @@ static int read_paragraph(struct reader *r, struct str **rec) {
     return 1;
 }
 
-/* A regular expression: a match that reaches the end of what has been read might be longer with
-   more, so that is read first. An empty match separates nothing. */
-static int read_to_regex(struct reader *r, const struct regex *re, struct str **rec) {
+/* a separator with no operator in it, whose match more input cannot change: it is taken as soon as it is there */
+static int read_to_string(struct reader *r, const char *sep, unsigned len, struct str **rec) {
+    unsigned looked = 0;
     for(;;) {
-        unsigned from = 0, n = r->end - r->start;
+        const char *s = r->buf ? r->buf + r->start : "";
+        unsigned n = r->end - r->start;
+        for(; looked + len <= n; looked++) {
+            const char *p = memchr(s + looked, sep[0], n - len - looked + 1);
+            if(!p) {
+                looked = n - len + 1;
+                break;
+            }
+            looked = (unsigned)(p - s);
+            if(!memcmp(p, sep, len)) {
+                *rec = take(r, looked, len);
+                return 1;
+            }
+        }
+        if(r->eof) break;
+        if(reader_fill(r) < 0) return -1;
+    }
+    if(r->start == r->end) return 0;
+    *rec = take(r, r->end - r->start, 0);
+    return 1;
+}
+
+/* A regular expression. More input could make a match longer, or bring an earlier one, and the library has no way to say
+   whether it could, so a match is taken once RS_MARGIN bytes past it are here, or the input has ended. Then the same bytes
+   give the same records however they arrive, unless a match depends on what comes further on than that. A person at a
+   terminal cannot be made to type that much: there it is one byte past the match, a newline usually.
+   Each search goes from the record's start, so each reads as much again as the last did: a long record costs about three
+   searches of itself, not one for each read. An empty match separates nothing. */
+static int read_to_regex(struct reader *r, const struct regex *re, struct str **rec) {
+    unsigned grow = 0;
+    for(;;) {
+        unsigned from = 0, n = r->end - r->start, want = n + grow;
         regoff_t so = 0, eo = 0;
         int found = 0;
         while(from <= n && r->buf) {
@@ -152,15 +187,31 @@ static int read_to_regex(struct reader *r, const struct regex *re, struct str **
             if((unsigned)so >= n) break;
             from = (unsigned)so + 1;
         }
-        if(found && ((unsigned)eo < n || r->eof)) {
+        if(found && (r->eof || (unsigned)eo + (r->tty ? 1 : RS_MARGIN) <= n)) {
             *rec = take(r, (unsigned)so, (unsigned)(eo - so));
             return 1;
         }
         if(r->eof) break;
-        if(reader_fill(r) < 0) return -1;
+        if(found && (unsigned)eo + RS_MARGIN > want) want = (unsigned)eo + RS_MARGIN;
+        grow = n;
+        do {
+            if(reader_fill(r) < 0) return -1;
+        } while(!r->tty && !r->eof && r->end - r->start < want);
     }
     if(r->start == r->end) return 0;
     *rec = take(r, r->end - r->start, 0);
+    return 1;
+}
+
+/* An RS with no operator in it, in whole characters, is the string it says. A byte in no sequence stays with the regular
+   expressions, which go by characters and would not find it inside one. */
+static int is_plain(const struct str *rs) {
+    unsigned i = 0;
+    while(i < rs->len) {
+        unsigned k = char_len(rs->s + i, rs->len - i);
+        if(memchr("\\^$.[]|()*+?{}", rs->s[i], 14) || (k == 1 && (signed char)rs->s[i] < 0)) return 0;
+        i += k;
+    }
     return 1;
 }
 
@@ -171,6 +222,8 @@ static int read_record(struct reader *r, struct str **rec) {
         rc = read_paragraph(r, rec);
     } else if(rs->len == 1) {
         rc = read_to_byte(r, rs->s[0], rec);
+    } else if(is_plain(rs)) {
+        rc = read_to_string(r, rs->s, rs->len, rec);
     } else {
         struct value v;
         v.kind = V_STR;

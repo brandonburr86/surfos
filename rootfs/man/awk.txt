@@ -54,9 +54,13 @@ DESCRIPTION
     ARGC ARGV CONVFMT OFMT FILENAME.
 
     RS="" reads paragraphs, and an RS of more than a character is a
-    regular expression. FS is one blank by default: runs of blanks,
-    tabs and newlines. Any other single character is itself, and
-    a longer FS a regular expression. FS="" splits into characters.
+    regular expression. Without an operator in it, it is found as it
+    stands. Other patterns take a match only when 64 KB more has been
+    read or the input has ended, as more input could change it, so
+    from a slow pipe records come late; at a terminal, at the next
+    byte. FS is one blank by default: runs of blanks, tabs and
+    newlines. Any other single character is itself, and a longer FS
+    a regular expression. FS="" splits into characters.
 
     In this awk a character is a UTF-8 sequence: length, substr,
     index, match, RSTART, RLENGTH, printf's widths and %c all count
