@@ -138,6 +138,33 @@ static void test_options(void) {
     ars_ttys(0, 0);
     check(ars_cmd(gzip_main, "gzip -x") == 2 && has(ars_stderr(), "usage"), "an unknown option: usage, status 2");
 
+    /* an option is an option wherever it stands: all are read before anything is touched */
+    ars_reset();
+    ars_puts("/x", sample);
+    check(ars_cmd(gzip_main, "gzip /x -k") == 0 && ars_is("/x", sample) && ars_exists("/x.gz"), "gzip x -k keeps x");
+    ars_reset();
+    ars_puts("/x", sample);
+    ars_puts("/y", sample);
+    check(ars_cmd(gzip_main, "gzip /x -k /y") == 0 && ars_is("/x", sample) && ars_is("/y", sample), "and between two names keeps both");
+    ars_reset();
+    ars_puts("/x", sample);
+    check(ars_cmd(gzip_main, "gzip /x -c") == 0 && ars_is("/x", sample) && !ars_exists("/x.gz"), "gzip x -c writes to standard output");
+    ars_reset();
+    ars_puts("/x", sample);
+    check(ars_cmd(gzip_main, "gzip /x -Q") == 2 && has(ars_stderr(), "usage") && ars_is("/x", sample) && !ars_exists("/x.gz"), "a bad option after a name: usage, and nothing touched");
+    ars_reset();
+    ars_puts("/x", sample);
+    ars_cmd(gzip_main, "gzip /x");
+    check(ars_cmd(gunzip_main, "gunzip /x.gz -k") == 0 && ars_exists("/x.gz") && ars_is("/x", sample), "gunzip x.gz -k keeps it");
+    check(ars_cmd(zcat_main, "zcat /x.gz -t") == 0, "zcat x.gz -t only checks");
+    ars_stdout(&n);
+    check(!n, "... and writes nothing");
+    check(ars_cmd(gunzip_main, "gunzip /x.gz -f -t") == 0 && ars_exists("/x.gz"), "two options after a name");
+    ars_reset();
+    ars_puts("/d/-k", sample);
+    ars_chdir("/d");
+    check(ars_cmd(gzip_main, "gzip -- -k") == 0 && ars_exists("/d/-k.gz") && !ars_exists("/d/-k"), "after -- a name is a name, however it looks");
+
     /* several members */
     {
         size_t a, b;

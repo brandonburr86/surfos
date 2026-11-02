@@ -232,26 +232,37 @@ static int usage(const char *prog) {
 
 int gz_tool(int argc, char **argv, const char *prog, int decompress, int to_stdout) {
     struct options o;
-    int i = 1, bad = 0;
+    char **names = malloc(((size_t)argc + 1) * sizeof(*names));
+    int i, n = 0, only_names = 0, bad = 0;
     memset(&o, 0, sizeof(o));
     o.prog = prog;
     o.decompress = decompress;
     o.to_stdout = to_stdout;
     o.level = 6;
-    for(; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
-        const char *a = argv[i] + 1;
-        if(!strcmp(a, "-")) {
-            i++;
-            break;
-        }
-        for(; *a; a++) {
-            if(*a == 'c') o.to_stdout = 1;
-            else if(*a == 'd') o.decompress = 1;
-            else if(*a == 'f') o.force = 1;
-            else if(*a == 'k') o.keep = 1;
-            else if(*a == 't') o.test = 1;
-            else if(*a >= '1' && *a <= '9') o.level = *a - '0';
-            else return usage(prog);
+    if(!names) {
+        fprintf(stderr, "%s: out of memory\n", prog);
+        return 2;
+    }
+    /* Every option first, wherever it stands: gzip x -k must not have dealt with x before it reads the -k. */
+    for(i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if(only_names || a[0] != '-' || !a[1]) {
+            names[n++] = argv[i];
+        } else if(!strcmp(a, "--")) {
+            only_names = 1;
+        } else {
+            for(a++; *a; a++) {
+                if(*a == 'c') o.to_stdout = 1;
+                else if(*a == 'd') o.decompress = 1;
+                else if(*a == 'f') o.force = 1;
+                else if(*a == 'k') o.keep = 1;
+                else if(*a == 't') o.test = 1;
+                else if(*a >= '1' && *a <= '9') o.level = *a - '0';
+                else {
+                    free(names);
+                    return usage(prog);
+                }
+            }
         }
     }
     data = malloc(BUF_SIZE);
@@ -260,11 +271,12 @@ int gz_tool(int argc, char **argv, const char *prog, int decompress, int to_stdo
     if(!data || (!reader && !writer)) {
         fprintf(stderr, "%s: out of memory\n", prog);
         bad = 1;
-    } else if(i == argc) {
+    } else if(!n) {
         bad = do_stdin(&o) < 0;
     } else {
-        for(; i < argc; i++) if(do_file(&o, argv[i]) < 0) bad = 1;
+        for(i = 0; i < n; i++) if(do_file(&o, names[i]) < 0) bad = 1;
     }
+    free(names);
     free(data);
     free(reader);
     free(writer);
