@@ -1424,6 +1424,8 @@ SMOKE = [
        ['5 ör 5 HéLLO\r\n', shown('SURF ≋> ')]),
       ("awk 'BEGIN { printf \"%5.2f|%-4d|%s|%c|%x\\n\", 3.14159, 42, \"s\", 65, 255; print 2 ^ 10, 1 / 3, int(3.9), 1e6 }'",
        [' 3.14|42  |s|A|ff\r\n', '1024 0.333333 3 1000000\r\n', shown('SURF ≋> ')]),
+      # (libsurf's printf would put a sign on what has none, which a host's printf does not: only here does it show)
+      ("awk 'BEGIN { printf \"%+x|% o|%+u|% x|%+d\\n\", 255, 8, 3, 15, 5 }'", ['ff|10|3|f|+5\r\n', shown('SURF ≋> ')]),
       ("awk 'function f(n) { return n < 2 ? 1 : n * f(n - 1) } BEGIN { print f(10), sqrt(16), exp(0), length(\"\") }'",
        ['3628800 4 1 0\r\n', shown('SURF ≋> ')]),
       ("printf 'a\\nb\\na\\n' | awk '{ c[$1]++ } END { for (k in c) print k, c[k] | \"sort\" }'",

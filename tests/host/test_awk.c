@@ -669,6 +669,7 @@ static void language(void) {
     is("BEGIN { printf \"%-+5d|%#o|%#x|%e\\n\", 3, 8, 255, 0 }", NULL, "+3   |010|0xff|0.000000e+00\n");
     is("BEGIN { printf \"%ld %lld %hd\\n\", 1, 2, 3 }", NULL, "1 2 3\n");                   /* C's lengths are taken and mean nothing */
     is("BEGIN { printf \"%*d|\\n\", -4, 1 }", NULL, "1   |\n");
+    is("BEGIN { printf \"%+x|% o|%+u|% x|%+X|%+#x|%+05x|%-+4x|\\n\", 255, 8, 3, 15, 255, 255, 255, 10 }", NULL, "ff|10|3|f|FF|0xff|000ff|a   |\n");   /* no sign on what has none */
     is("BEGIN { printf \"%\" }", NULL, "%");
     is("BEGIN { printf \"%5\" }", NULL, "%5");
     is("BEGIN { printf \"a%\" \"%b\\n\" }", NULL, "a%b\n");

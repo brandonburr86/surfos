@@ -135,11 +135,14 @@ static void c_format(struct buf *b, const char *flags, long width, long prec, co
     free(t);
 }
 
+static void flags_without(char *to, const char *flags, const char *drop) {
+    for(; *flags; flags++) if(!strchr(drop, *flags)) *to++ = *flags;
+    *to = 0;
+}
+
 static void put_number(struct buf *b, const char *flags, long width, long prec, char conv, double d) {
-    char plain[8];
-    unsigned n = 0, i;
-    for(i = 0; flags[i]; i++) if(flags[i] != '0') plain[n++] = flags[i];
-    plain[n] = 0;
+    char plain[8], bare[8];
+    flags_without(plain, flags, "0");
     if(isnan(d)) d = fabs(d);           /* the sign of a NaN is the machine's business: x87's are negative */
     switch(conv) {
     case 'd': case 'i':
@@ -148,10 +151,13 @@ static void put_number(struct buf *b, const char *flags, long width, long prec, 
         else c_format(b, flags, width, 0, "", 'f', 0, 0, d);
         return;
     case 'o': case 'x': case 'X': case 'u':
+        /* no sign on these: C says nothing of + and a space here, and libsurf's printf would print them */
+        flags_without(bare, flags, "+ ");
+        flags_without(plain, bare, "0");
         if(isnan(d) || isinf(d)) c_format(b, plain, width, -1, "", 'f', 0, 0, d);
-        else if(d < 0 && d > -9.2e18) c_format(b, flags, width, prec, "ll", conv, 1, (long long)d, 0);
-        else if(d >= 0 && d < 9.2e18) c_format(b, flags, width, prec, "ll", conv, 1, (long long)d, 0);
-        else c_format(b, flags, width, 0, "", 'f', 0, 0, d);
+        else if(d < 0 && d > -9.2e18) c_format(b, bare, width, prec, "ll", conv, 1, (long long)d, 0);
+        else if(d >= 0 && d < 9.2e18) c_format(b, bare, width, prec, "ll", conv, 1, (long long)d, 0);
+        else c_format(b, bare, width, 0, "", 'f', 0, 0, d);
         return;
     default:
         c_format(b, flags, width, prec, "", conv, 0, 0, d);
