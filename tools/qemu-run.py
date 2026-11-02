@@ -209,7 +209,7 @@ def net_kill_telnet(q):
 
 def net_talk_line(q):
     """telnet to a host server that speaks no telnet (its port is not 23, so telnet says nothing first): the first thing it
-    gets must be the line typed, whole, and then it resets the connection"""
+    gets must be the line typed, whole, and then it leaves a string open and resets the connection"""
     srv, port = host_listener()
     box = NET['talk'] = {}
 
@@ -225,6 +225,7 @@ def net_talk_line(q):
                     break
                 line += d
             box['line'] = line
+            c.sendall(b'\x1b]0;a title never ended')
             c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\0\0\0\0\0\0\0')
             c.close()
         except OSError as e:
@@ -240,6 +241,8 @@ def net_ftpd_on(q):
     box = NET['talk']
     box['thread'].join(10)
     said = 'echo net-talk-ok' if box.get('line') == b'HELO surfos\r\n' else f"echo net-talk-FAILED {box.get('line')!r}"
+    if 'the connection was lost' not in q.screen():     # the string it left open would have swallowed them on the screen
+        said = 'echo net-talk-FAILED the last words are not on the screen'
     return (f"{said}; telnetd off; ftpd on {q.ports['ftp_pasv_range']}; mkdir /hda1/NET; cp /initrd/README /hda1/NET/UP.TXT; "
             "cd /hda1/NET")
 
@@ -251,10 +254,11 @@ def net_ftp_files(q):
 
 
 def net_ftp_more(q):
-    """the second script: reget on from a part, whole already; mget twice, the second time leaving what is there (status
-    1); text mode back through mput; what is left is one file four times, and the folder on the server has gone"""
+    """the second script: reget on from a part, whole already; mget; text mode back through mput; mget again, which leaves
+    what is there: status 1, and the script stops there, so its last delete does not run. What is left is one file four
+    times"""
     return (f"ftp 10.0.2.2 {q.ports['ftp']} < S2.TXT; echo status $?; "
-            "sha256sum UP.TXT PART.TXT UP3.TXT LF.TXT | cut -c1-64 | uniq | wc -l; ls REMOTE; cd /hda1; rm -r NET; cd /")
+            "sha256sum UP.TXT PART.TXT UP3.TXT LF.TXT | cut -c1-64 | uniq | wc -l; ls REMOTE/UP3.TXT; cd /hda1; rm -r NET; cd /")
 
 
 def net_login_line(q):
@@ -1606,33 +1610,33 @@ SMOKE = [
     # mode. ftp to a scripted server (ScriptedFtp): a password typed with no echo and shown nowhere; EPSV refused and a PASV
     # naming another address, the data still from the server's own; an escape sequence in a name, a low port refused;
     # Ctrl+C in a transfer, the session alive; names that climb or are not safe; a reset partway, nothing left behind
-    ('surfsh', [shown('SURF ≋> ')],
-     [('echo cli-net', ['\r\ncli-net\r\n', shown('SURF ≋> ')]),
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-net', ['\r\ncli-net\r\n', shown('SURF \u224b> ')]),
       ('telnet; telnet 10.0.2.2 0; ftp -x; echo status $?',
-       ['usage: telnet host [port]', 'telnet: 0 is no port (1-65535)', 'usage: ftp [-n] [host [port]]', 'status 2', shown('SURF ≋> ')]),
-      ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23', shown('SURF ≋> ')]),
-      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', 'Ctrl+] gives a prompt', shown('SURF ≋@> ')]),
-      (b'pagetest size\r', ['TTY_GETSIZE 80x25', shown('SURF ≋@> ')]),
+       ['usage: telnet host [port]', 'telnet: 0 is no port (1-65535)', 'usage: ftp [-n] [host [port]]', 'status 2', shown('SURF \u224b> ')]),
+      ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', 'Ctrl+] gives a prompt', shown('SURF \u224b@> ')]),
+      (b'pagetest size\r', ['TTY_GETSIZE 80x25', shown('SURF \u224b@> ')]),
       (b'\x1dstatus\r', ['telnet> ', 'The other end echoes what is typed; keys go one at a time',
                          'The other end knows the window: 80 by 25', 'Binary: sending yes, receiving no', 'bytes received']),
-      (b'\x1dsend ayt\rexit\r', ['[SurfOS: yes]', 'telnet: the other end closed the connection', shown('SURF ≋> ')]),
-      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF ≋@> ')]),
+      (b'\x1dsend ayt\rexit\r', ['[SurfOS: yes]', 'telnet: the other end closed the connection', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF \u224b@> ')]),
       (b'less /initrd/README\r', ['\x1b[?1049h']),
-      (b'\x1dquit\r', ['telnet> ', '\x1b[?1049l', shown('SURF ≋> ')]),
-      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF ≋@> ')]),
-      (net_kill_telnet, ['\r\nraw-mode-gone\r\n', shown('SURF ≋> ')]),
+      (b'\x1dquit\r', ['telnet> ', '\x1b[?1049l', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF \u224b@> ')]),
+      (net_kill_telnet, ['\r\nraw-mode-gone\r\n', shown('SURF \u224b> ')]),
       (net_talk_line, ['telnet: connected to 10.0.2.2 port', '220 mail here']),
       (b'HELO surfos\r', ['HELO surfos', 'telnet: the connection was lost', PROMPT]),
       (net_ftpd_on, ['\r\nnet-talk-ok\r\n', 'telnetd: stopped', 'ftpd: serving / at ftp://10.0.2.15/ (read-write)', PROMPT]),
       ("printf 'cd /hda1/NET\\nmkdir REMOTE\\ncd REMOTE\\npwd\\nput UP.TXT UP2.TXT\\nsize UP2.TXT\\nls\\ndir\\nget UP2.TXT BACK.TXT\\n"
        "ascii\\nget UP2.TXT LF.TXT\\nbinary\\nrename UP2.TXT UP3.TXT\\n' > S1.TXT", [PROMPT]),
-      ("printf 'cd /hda1/NET/REMOTE\\nreget UP3.TXT PART.TXT\\nreget UP3.TXT PART.TXT\\nmget *.TXT\\nmget *.TXT\\nmput LF.*\\n"
-       "delete UP3.TXT\\ndelete LF.TXT\\ncd ..\\nrmdir REMOTE\\n' > S2.TXT; head -n 1 UP.TXT > PART.TXT", [PROMPT]),
+      ("printf 'cd /hda1/NET/REMOTE\\nreget UP3.TXT PART.TXT\\nreget UP3.TXT PART.TXT\\nmget *.TXT\\nmput LF.*\\ndelete LF.TXT\\n"
+       "mget *.TXT\\ndelete UP3.TXT\\n' > S2.TXT; head -n 1 UP.TXT > PART.TXT", [PROMPT]),
       (net_ftp_files, ['/hda1/NET/REMOTE\r\n', 'UP2.TXT: ', 'BACK.TXT: ', 'status 0', re.compile(rb'\n +1 *\r'), PROMPT]),
-      (net_ftp_more, ['PART.TXT: ', 'PART.TXT: whole already', 'UP3.TXT: ', 'UP3.TXT is there already', 'LF.TXT: ', 'status 1',
-                      re.compile(rb'\n +1 *\r'), 'No such file', shown('SURF ≋> ')]),
+      (net_ftp_more, ['PART.TXT: ', 'PART.TXT: whole already', 'UP3.TXT: ', 'LF.TXT: ', 'UP3.TXT is there already',
+                      'the rest of the script does not run', 'status 1', re.compile(rb'\n +1 *\r'), shown('SURF \u224b> ')]),
       (net_script_line, ['ftpd: stopped', 'Password for bob: ']),
-      (NET_PASSWORD.encode() + b'\r', ['230 in', '221 bye', shown('SURF ≋> ')]),
+      (NET_PASSWORD.encode() + b'\r', ['230 in', '221 bye', shown('SURF \u224b> ')]),
       (net_login_line, ['220-scripted', '220 ready', 'ftp> ']),
       ('lcd /hda1\nuser alice', ['The local folder is /hda1', 'Password for alice: ']),
       (NET_PASSWORD.encode() + b'\r', ['230 in', 'ftp> ']),
