@@ -1384,6 +1384,23 @@ SMOKE = [
       ('libtest popen', ['LIBTEST popen PASS', shown('SURF \u224b> ')]),
       ('libtest closed', ['LIBTEST closed PASS', shown('SURF \u224b> ')]),
       ('libtest order | cat', ['first\r\nsecond\r\nthird\r\n', shown('SURF \u224b> ')]),
+      # stage 2: grep on the library, with -E, and sed: addresses, s with groups, a file replaced through saveutil.h with its
+      # backup and nothing left beside it, w, what q says, a mistake, a reader that goes, a whole UTF-8 character
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -E "an|rr"', ['Banana\r\ncherry\r\n', shown('SURF \u224b> ')]),
+      ('printf "aa\\nab\\n" | grep "\\(a\\)\\1"; printf "x\\n" | grep -E "a("; echo status $?',
+       ['aa\r\n', 'grep: a(: ', 'status 2', shown('SURF \u224b> ')]),
+      ('seq 5 | sed -n "2,3p;\\$="', ['2\r\n3\r\n5\r\n', shown('SURF \u224b> ')]),
+      ("echo hello world | sed 's/\\(hello\\) \\(world\\)/\\2 \\1/'; echo aaa | sed -E 's/a+/<&>/'",
+       ['world hello\r\n', '<aaa>\r\n', shown('SURF \u224b> ')]),
+      ("printf 'a\\nb\\n' > /hda1/SED.TXT; sed -i.BAK 's/a/X/' /hda1/SED.TXT; echo status $?; cat /hda1/SED.TXT /hda1/SED.TXT.BAK; "
+       "ls /hda1 | grep -c -i 'SED.TXT.TMP'; rm /hda1/SED.TXT /hda1/SED.TXT.BAK",
+       ['status 0\r\n', 'X\r\nb\r\na\r\nb\r\n0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n '2w /hda1/SEDW.TXT'; cat /hda1/SEDW.TXT; rm /hda1/SEDW.TXT", ['\r\n2\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n 'w /dev/null'; echo status $?", ['status 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 9 | sed 2q7; echo status $?; echo x | sed k; echo status $?", ['1\r\n2\r\n', 'status 7\r\n', 'sed: script line 1: ', 'status 2',
+                                                                          shown('SURF \u224b> ')]),
+      ('seq 200000 | sed p | head -1', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ("echo h\u00e9llo | sed 's/./x/2;y/l/L/'", ['hxLLo\r\n', shown('SURF \u224b> ')]),
       ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
