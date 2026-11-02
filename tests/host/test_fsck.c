@@ -245,7 +245,8 @@ static void entry_judged(const u8 *mem, u32 lba, u32 c, u32 was, u32 now, int co
     u32 clean = g->type == 16 ? 0x8000 : 0x08000000, x, n;
     if(c == 1 && g->type != 12 && !((was ^ now) & ~clean)) return;  /* the clean bit, the second FAT's first when it comes on */
     if(copy) {
-        if(now != fget(mem, g, g->fat1, c)) bad_write("the second FAT given what the first does not hold", lba);
+        /* (a FAT12 entry across two sectors is half the first's until the next sector of the copy lands: only that one) */
+        if(now != fget(mem, g, g->fat1, c) && !(g->type == 12 && (c + c / 2) % 512 == 511)) bad_write("the second FAT given what the first does not hold", lba);
         return;
     }
     if(c < 2) { bad_write("a reserved FAT entry written", lba); return; }
