@@ -183,6 +183,43 @@ static void in_place_failures(void) {
     sim_put("a.txt", "one\n");
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, SIM_DONE);
     check(sed("-i", "s/one/1/", "a.txt", NULL) == 2 && file_is("a.txt", "1\n") && gone("a.txt.tmp"), "a rename done with an error");
+    /* a rename that may have half happened: the disk needs checking, and nothing more is touched */
+    {
+        static const int how[] = { SIM_NONE, SIM_HALF, SIM_DONE };
+        for(i = 0; i < 3; i++) {
+            sim_reset();
+            sim_put("a.txt", "one\n");
+            sim_put("c.txt", "one\n");
+            sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, how[i]);
+            check(sed("-i", "s/one/1/", "a.txt", "c.txt", NULL) == 2, "a half-done rename, two files: status");
+            check(file_is("c.txt", "one\n") && !strstr(sim_log(), "open c.txt"), "a half-done rename: the next file is left alone");
+            /* and so is a w file not yet in its place */
+            sim_reset();
+            sim_put("a.txt", "one\n");
+            sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, how[i]);
+            check(sed("-i", "w out", "a.txt", NULL) == 2 && gone("out") && gone("out.tmp"), "a half-done rename: a w file does not appear");
+        }
+    }
+    /* the same for a backup */
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("c.txt", "one\n");
+    sim_fail(SIM_RENAME, "a.txt.bak.tmp", SIM_EIO, SIM_HALF);
+    check(sed("-i.bak", "s/one/1/", "a.txt", "c.txt", NULL) == 2, "a backup's half-done rename: status");
+    check(file_is("a.txt", "one\n") && gone("a.txt.tmp"), "a backup's half-done rename: the file as it was");
+    check(file_is("c.txt", "one\n") && !strstr(sim_log(), "open c.txt"), "a backup's half-done rename: the next file is left alone");
+    /* and for w's files, the last one named goes first */
+    sim_reset();
+    sim_put("a.txt", "1\n");
+    sim_fail(SIM_RENAME, "second.tmp", SIM_EIO, SIM_HALF);
+    check(sed("w first\nw second", "a.txt", NULL) == 2, "a w file's half-done rename: status");
+    check(gone("first") && gone("first.tmp") && !sim_corrupt("second"), "a w file's half-done rename: the other is left alone");
+    /* a rename refused changed nothing: the next file goes on */
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("c.txt", "one\n");
+    sim_fail(SIM_RENAME, "a.txt.tmp", SIM_ENOSPC, SIM_NONE);
+    check(sed("-i", "s/one/1/", "a.txt", "c.txt", NULL) == 2 && file_is("a.txt", "one\n") && file_is("c.txt", "1\n"), "a rename refused: the next file is done");
     /* the input fails part of the way: what was read is no replacement */
     for(i = 0; i < 3; i++) {
         sim_reset();

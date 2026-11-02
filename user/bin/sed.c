@@ -379,6 +379,13 @@ static void reset_ranges(void) {
     }
 }
 
+/* what su_commit() gave. SU_KEPT: a rename may have half happened, and nothing more on this disk until it has been checked */
+static void said_commit(const struct su_save *s, int r) {
+    su_say("sed", s, r);
+    g.status = STATUS_TROUBLE;
+    if(r == SU_KEPT) g.fatal = 1;
+}
+
 /* the name of path's backup: the suffix after it, or with each * being its last name */
 static void backup_name(char *out, size_t size, const char *path) {
     const char *base = strrchr(path, '/'), *s;
@@ -447,8 +454,7 @@ static int copy_to_backup(const char *path) {
     close(in);
     r = su_commit(&b);
     if(r < 0) {
-        su_say("sed", &b, r);
-        g.status = STATUS_TROUBLE;
+        said_commit(&b, r);
         return -1;
     }
     return 0;
@@ -466,10 +472,7 @@ static void finish_file(int keep) {
         return;
     }
     r = su_commit(&g.save);
-    if(r < 0) {
-        su_say("sed", &g.save, r);
-        g.status = STATUS_TROUBLE;
-    }
+    if(r < 0) said_commit(&g.save, r);
 }
 
 static void close_input(void) {
@@ -598,7 +601,7 @@ static int next_line(int append) {
     if(g.fatal) return 0;
     while(!file_has_more()) {
         finish_file(1);
-        if(!next_file()) return 0;
+        if(g.fatal || !next_file()) return 0;
     }
     if(g.new_file) {
         g.new_file = 0;
@@ -1857,10 +1860,8 @@ static void finish_outputs(int keep) {
             continue;
         }
         r = su_commit(w->save);
-        if(r < 0) {
-            su_say("sed", w->save, r);
-            g.status = STATUS_TROUBLE;
-        }
+        if(r < 0) said_commit(w->save, r);
+        if(r == SU_KEPT) keep = 0;
     }
 }
 
