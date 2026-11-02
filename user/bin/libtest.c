@@ -288,6 +288,28 @@ static int mode_popen(void) {
         }
         close(p[1]);
     }
+    /* read dry, then a smaller buffer: no place in the old one may be left, or ungetc() writes past the new one */
+    {
+        static char area[256];
+        char lots[200];
+        int p[2], k, clean = 1;
+        check(pipe(p) == 0, "a pipe");
+        a = fdopen(p[0], "r");
+        if(a) {
+            memset(lots, 'a', sizeof(lots));
+            write(p[1], lots, sizeof(lots));
+            for(k = 0; k < (int)sizeof(lots); k++) fgetc(a);
+            memset(area, '.', sizeof(area));
+            check(setvbuf(a, area, _IOFBF, 4) == 0, "setvbuf to 4 bytes after 200 read");
+            check(ungetc('x', a) == 'x', "ungetc then");
+            for(k = 4; k < (int)sizeof(area); k++) if(area[k] != '.') clean = 0;
+            check(clean, "nothing written past the 4 bytes");
+            write(p[1], "yz", 2);
+            check(fgetc(a) == 'x' && fgetc(a) == 'y' && fgetc(a) == 'z', "the byte pushed back, then the pipe");
+            fclose(a);
+        }
+        close(p[1]);
+    }
     for(i = 0; i < 40; i++) {
         a = popen("true", "r");
         check(a && pclose(a) == 0, "again and again");
