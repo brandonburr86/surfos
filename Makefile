@@ -68,6 +68,7 @@ USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256
 USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
+USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -715,6 +716,32 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
+
+# 11/01/26 (the command-line suite, track net): telnet, a program of several files, with its protocol and its session
+# host-tested; tests/host/telnetc holds the simulated kernel. The test's main.c is built apart, for -Dmain. No sanitizer
+# here: a -m32 binary built with -fsanitize hangs under this image's qemu-i386, so those runs are by hand, with clang on the Mac
+TELNET_SRC   = $(wildcard user/telnet/*.c)
+TELNET_OBJ   = $(TELNET_SRC:user/telnet/%.c=$(BUILD)/user/telnet/%.o)
+$(BUILD)/user/telnet/%.o: user/telnet/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/telnet: $(TELNET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TELNET_OBJ) $(USER_LIB)
+-include $(wildcard $(BUILD)/user/telnet/*.d)
+TELNETC_SRC  = user/telnet/tnclient.c user/telnet/session.c user/telnetd/telnet.c
+$(BUILD)/host/test_telnetc: tests/host/test_telnetc.c tests/host/telnetc/sim.h tests/host/telnetc/surf.h user/telnet/main.c \
+                            user/telnet/tnclient.h user/telnet/tnsession.h user/telnetd/telnet.h $(TELNETC_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetc -Dmain=telnet_main -c user/telnet/main.c -o $@.main.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnet -Itests/host/telnetc tests/host/test_telnetc.c $(TELNETC_SRC) $@.main.o -o $@
+unittest: unittest-net
+.PHONY: unittest-net
+unittest-net: $(BUILD)/host/test_telnetc
+	$(BUILD)/host/test_telnetc
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

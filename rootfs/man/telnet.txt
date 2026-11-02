@@ -1,0 +1,49 @@
+telnet - a session on another computer, or talk to a server by hand
+
+SYNOPSIS
+    telnet host [port]
+
+DESCRIPTION
+    Connects to host, an address or a name, on port 23 unless another
+    is given, and puts the terminal in raw mode: each key goes as it
+    is typed, and what the other end sends is shown.
+
+    On port 23 telnet offers its options at once: the other end's
+    echo, no go-aheads, 8 bits each way, and the window's size, told
+    again when the window changes. On any other port it says nothing
+    until the other end negotiates, so it can also talk to a mail or
+    web server by hand. There a line is edited here (Backspace,
+    Ctrl+U) and goes out at Return, and telnet shows what is typed.
+
+    Ctrl+] gives a prompt, telnet>, with these commands:
+
+        quit        leave
+        status      how things stand
+        send ayt    ask whether the other end is there
+        (empty)     back to the session
+
+    Input from a pipe or a file goes out as lines, with no raw mode
+    and no prompt. When it ends, telnet waits for the other end to
+    close, and ends after 2 seconds with no byte either way.
+
+    The terminal is put back however the session ends: a full-screen
+    program left on the other end, a hidden cursor and colours are
+    undone, and raw mode ends. On a terminal Ctrl+C goes to the other
+    end, not to telnet: Ctrl+] then quit is the way out.
+
+    There is no encryption and no login of telnet's own: anything
+    typed, a password too, crosses the network as it is. Use it on a
+    network you trust. The terminal's type is not told to the other
+    end. A kill leaves the terminal right, but the last words are
+    not said.
+
+    Status 0 when you quit or the other end ended the session, 2 for
+    a usage mistake, or a connection that failed or was lost.
+
+EXAMPLES
+    telnet 10.0.0.4
+    telnet mail.example.com 25
+    printf 'status\n' | telnet 10.0.0.4 7000
+
+SEE ALSO
+    telnetd, nc, ftp
