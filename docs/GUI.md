@@ -676,6 +676,10 @@ and its title says what it was last sent.
 * **The web browser.** `wundertow` (10/25/26) shows web pages and this computer's HTML files
   in a window: Back, Forward, Reload, the address field, links to click and the page to
   scroll (`docs/UNDERTOW.md`, "In a window: wundertow").
+  11/1/26: it loads in helper processes, so the window answers meanwhile and Stop ends a load; it shows PNG, JPEG, GIF
+  and BMP pictures, finds words (Ctrl+F), goes from link to link by Tab, and uses forms that send by GET. Windows
+  of programs get a key the desktop's own apps do not, Shift+Tab (`WIN_KEY_BACKTAB`), and Enter typed with Shift says so
+  in the event's `mods` (`WIN_MOD_SHIFT`): to a program that does not look, it is Enter.
 * **Run program...** (in the Apps menu) lists the programs of `/initrd/bin` above a line
   to run: a program picked in the list takes the line, and arguments may be typed after
   it (`wcalc` is offered, selected in the list). Run starts it on the desktop's own

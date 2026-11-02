@@ -142,11 +142,15 @@ def kernel_heap_used(vm, PROMPT):
     return None
 
 
-def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
+def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None, tracks=TRACKS, more=(), first=(), name='guiapps'):
+    """11/1/26: tracks, more of QEMU's arguments, what to run on the serial console before the desktop: another boot of
+    these checks (qemu-usb.py's guiweb), which having used a network does not hold the kernel's heap to the byte"""
     results = []
     font = base._font()
-    modules = [importlib.import_module(name) for name in TRACKS]
-    only = [name for name in os.environ.get('GUIAPPS_ONLY', '').split(',') if name]
+    modules = [importlib.import_module(track) for track in tracks]
+    only = [track for track in os.environ.get('GUIAPPS_ONLY', '').split(',') if track]
+    if tracks is not TRACKS:
+        only = []                                   # GUIAPPS_ONLY is the guiapps scenario's
     files = {}
     for m in modules:
         for path, data in getattr(m, 'STICK', {}).items():
@@ -161,7 +165,8 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                                       serial=STICK_SERIAL)
         extra += ['-drive', f'if=none,id=appstick,format=raw,file={stick}',
                   '-device', 'usb-storage,bus=xhci.0,drive=appstick,removable=on']
-    vm = Vm('guiapps', args, image, firmware, mem='512', serial=True, outdir=outdir, extra=extra)
+    extra += list(more)
+    vm = Vm(name, args, image, firmware, mem='512', serial=True, outdir=outdir, extra=extra)
     d = Driver(vm, font, results, outdir)
     d.prompt = PROMPT                               # 10/25/26: the serial console's, for checks that leave the desktop
     try:
@@ -177,6 +182,9 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
             if again == heap_before:
                 break
             heap_before = again
+        for command in first:
+            vm.send(command + '\n')
+            d.check(f'{command} on the serial console', vm.expect(PROMPT, 30))
         vm.send('gui\n')
         d.require('the desktop draws its menu bar and the suite\'s tiles',
                   d.vm.wait_screen(lambda s: (s.w, s.h) == (1920, 1080) and d.pixel(s, 0, 0) == PAPER and
@@ -198,7 +206,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
             vm.send('\r')
             left = vm.expect('text console restored', 20) and vm.expect(PROMPT, 15)
         d.check('the desktop closes and the text console comes back', left)
-        if left:
+        if left and not more:
             heap_after = kernel_heap_used(vm, PROMPT)
             d.check(f'the kernel heap holds what it held before gui ({heap_before} bytes in use, then {heap_after})',
                     heap_before is not None and heap_after == heap_before)
@@ -217,7 +225,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                     results.append((f'{m.__name__}: the stick can be read back here ({e})', False))
         if results and all(ok for _, ok in results):
             try:
-                for what, ok, text in helpers['fat_checks'](stick, 'guiapps stick'):
+                for what, ok, text in helpers['fat_checks'](stick, f'{name} stick'):
                     results.append((what, ok))
                     if not ok:
                         print(text, flush=True)
