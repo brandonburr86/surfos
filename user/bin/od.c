@@ -274,7 +274,7 @@ int main(int argc, char **argv) {
             arg = o[1] ? o + 1 : ++i < argc ? argv[i] : NULL;
             if(!arg) return usage();
             if(*o == 'A') {
-                if(arg[1] || !strchr("odxn", arg[0])) return usage();
+                if(!arg[0] || arg[1] || !strchr("odxn", arg[0])) return usage();      /* strchr finds the NUL too */
                 base = arg[0];
             } else if(*o == 't') {
                 if(parse_types(arg) < 0) {

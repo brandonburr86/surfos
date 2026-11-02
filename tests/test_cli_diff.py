@@ -1053,7 +1053,7 @@ def test_review_orig():
 
 def test_review_second():
     """the second review: an addition applied again, the first hunk's own place before any other, diff -N's dates, -o with
-    nothing to write, one file under two names"""
+    nothing to write, one file under two names, od -A with nothing"""
     for what, p in (("-U0", "--- f\n+++ f\n@@ -1,0 +2 @@\n+NEW\n"), ("normal", "1a2\n> NEW\n")):
         d, r = patch_case({"f": "a\nNEW\nb\nc\n"}, p, "f")
         ok(r[0] == 1 and get(d + "/f") == b"a\nNEW\nb\nc\n" and b"Reversed (or previously applied)" in r[1],
@@ -1075,8 +1075,11 @@ def test_review_second():
     gone = "--- f\t2026-11-02 04:00:00.000000000 -0600\n+++ f\t1969-12-31 18:00:00.000000000 -0600\n@@ -1,2 +0,0 @@\n-one\n-two\n"
     d, r = patch_case({"f": "one\ntwo\n"}, gone)
     ok(r[0] == 0 and not os.path.exists(d + "/f"), "diff -N: a file taken out is deleted: %r" % (r,))
-    d, r = patch_case({"f": "one\ntwo\nthree\n"}, gone.replace("-1,2", "-1,2"))
+    d, r = patch_case({"f": "one\ntwo\nthree\n"}, gone)
     ok(r[0] == 1 and b"Not deleting" in r[1] and get(d + "/f") == b"three\n", "diff -N: more in it than the patch had: it stays: %r" % (r,))
+    both = "--- f\t1970-01-01 00:00:00.000000000 +0000\n+++ f\t1970-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n"
+    d, r = patch_case({"f": "one\ntwo\n"}, both)
+    ok(r[0] == 0 and get(d + "/f") == b"one\nTWO\n", "files that really have the epoch's time: patched as any: %r" % (r,))
     # a second run: the patch's own place, both ways, before a block like it further on
     block = "a\nb\nc\nd\ne\nf\ng\n"
     base = "".join("%d\n" % i for i in range(1, 11)) + block + "".join("%d\n" % i for i in range(11, 21)) + block
@@ -1098,6 +1101,7 @@ def test_review_second():
     d, r = patch_case({"h": old}, moved, "-p0")
     t = tree_of(d)
     ok(r[0] == 0 and t.get("h.orig") == old.encode() and b"there already" not in r[2], "h and ./h: one .orig, the file before the run: %r" % (r,))
+    ok(ours("od", "-A", "", stdin=b"ab")[0] == 2, "od -A with nothing: refused")
 
 
 def test_review_nits():
