@@ -1447,6 +1447,16 @@ SMOKE = [
        ["syntax error near ')'\r\n", 'status 2\r\n', 'awk: /hda1/NONE.TXT: No such file or directory\r\n', 'status 2\r\n',
         shown('SURF ≋> ')]),
       ("awk 'BEGIN { s = \"x\"; while (1) s = s s }'; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a write that fails when the file is closed, as on a full stick: this file opens, and refuses every write)
+      ("awk 'BEGIN { print \"x\" >> \"/dev/config/hostname\" }'; echo status $?",
+       ['awk: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { f = \"/dev/config/hostname\"; print \"x\" >> f; close(f); print \"no\" }'; echo status $?",
+       ['awk: line 1: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a mistake waits for a command, as the end of a program does: what it writes comes before the prompt)
+      ("awk 'BEGIN { print \"sent\" | \"cat\"; print 1 / 0 }'; echo status $?", ['division by zero\r\n', 'sent\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (at a terminal a pattern as RS gives a record as soon as the next byte is there: the person does not type 64 KB)
+      ("awk 'BEGIN { RS = \"[0-9]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b2c', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
       ("awk 'BEGIN { while (1) print 7 }' | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF ≋> ')]),
       ('head -1 /initrd/man/awk.txt', ['awk - ', shown('SURF ≋> ')]),
       ('exit', [])]),

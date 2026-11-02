@@ -64,7 +64,9 @@ DESCRIPTION
     finished with, or print and getline will run out.
 
     Anything that goes wrong in the program or with a file ends awk
-    with status 2. Otherwise the status is what exit gave, or 0.
+    with status 2, a write that fails too, which on a full disk may
+    only show when the file is closed: files are closed and commands
+    waited for first. Otherwise the status is what exit gave, or 0.
     A word like nan or 0x10 in the input is a string, not a number.
     Memory is the limit on how long a string is or how deep functions
     call: past it awk says so. rand() gives the same numbers on each

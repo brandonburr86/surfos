@@ -176,6 +176,8 @@ struct awk {
 extern struct awk A;
 
 void fatal(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
+void say_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));     /* the message, and awk goes on */
+void stop(void) __attribute__((noreturn));              /* files and commands ended, status 2 */
 void *xalloc(size_t n);
 void *xrealloc(void *p, size_t n);
 

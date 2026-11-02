@@ -2,8 +2,8 @@
    expressions and tests/host/awk_host.h in front. Each run is a fork, so that a status, a message and a crash are seen as
    they are, and a run that goes wrong costs that run. A table reviewed against the Mac's awk; what SurfOS asks of a tool
    (characters are UTF-8, a NUL or a bad byte passes, the statuses, the messages); each form of getline, redirection and
-   close; a corpus against the system's awk where there is one (the one true awk on the Mac, mawk in the Docker image);
-   limits on memory, which also find a leak; a program and input cut, damaged and oversized.
+   close, and writes that fail; a corpus against the system's awk where there is one (the one true awk on the Mac, mawk in
+   the Docker image); limits on memory, which also find a leak; a program and input cut, damaged and oversized.
 
    Built and run by `make unittest`. `test_awk long` runs far more damaged input. The sanitizers are never part of
    `make unittest` (a -fsanitize build at -m32 hangs under the Docker image's emulation); run them on the Mac by hand,
@@ -26,6 +26,9 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <errno.h>
+#include "awk/regex.h"
 
 int awk_main(int argc, char **argv);
 
@@ -95,6 +98,24 @@ FILE *t_popen(const char *cmd, const char *mode) {
 
 int t_pclose(FILE *f) {
     return exit_status(pclose(f));
+}
+
+static int close_fails;                 /* the error fclose() ends with, as when a disk has filled up */
+
+int t_fclose(FILE *f) {
+    int rc = fclose(f);
+    if(close_fails) {
+        errno = close_fails;
+        return EOF;
+    }
+    return rc;
+}
+
+static volatile unsigned long long *searched;   /* bytes given to regexec, in memory that a run's fork shares */
+
+int counted_regexec(const regex_t *preg, const char *string, size_t nmatch, regmatch_t *pmatch, int eflags) {
+    if(eflags & REG_STARTEND) *searched += (unsigned long long)(pmatch[0].rm_eo - pmatch[0].rm_so);
+    return surf_regexec(preg, string, nmatch, pmatch, eflags);
 }
 
 /**** a run ****/
@@ -376,6 +397,61 @@ static void files_and_commands(void) {
         snprintf(assign, sizeof(assign), "d=%s", dir);
         args_are(NULL, "19900\n", 0, "-v", assign, (char *)p, NULL, NULL, NULL);
     }
+}
+
+static void file_holds(const char *path, const char *want) {
+    size_t n;
+    char *t = read_file(path, &n);
+    checks++;
+    if(strcmp(t, want)) {
+        failed++;
+        printf("FAIL: %s holds [%.200s], want [%.200s]\n", path, t, want);
+    }
+    free(t);
+}
+
+/* What print sent to a file may leave only when the file is closed: a disk that has filled up says so there. */
+static void writes_that_fail(void) {
+    char prog[1000];
+    const char *f = join("w.txt"), *g = join("w2.txt");
+    close_fails = ENOSPC;
+    snprintf(prog, sizeof(prog), "BEGIN { print \"data\" > \"%s\" }", f);
+    fails(prog, NULL, "No space left");
+    CHECK(strstr(R.err, f) != NULL);
+    snprintf(prog, sizeof(prog), "BEGIN { print \"data\" >> \"%s\"; exit 3 }", f);
+    fails(prog, NULL, "No space left");                     /* the failure outranks what exit said */
+    snprintf(prog, sizeof(prog), "BEGIN { print \"data\" > \"%s\"; close(\"%s\"); print \"after\" }", f, f);
+    fails(prog, NULL, "No space left");                     /* and close does not go on as if it had worked */
+    CHECK(!strstr(R.out, "after"));
+    snprintf(prog, sizeof(prog), "BEGIN { print 1 > \"%s\"; print 2 > \"%s\" }", f, g);
+    fails(prog, NULL, "No space left");                     /* each file that lost something is named */
+    CHECK(strstr(R.err, f) != NULL && strstr(R.err, g) != NULL);
+    snprintf(prog, sizeof(prog), "BEGIN { getline x < \"%s\"; close(\"%s\"); getline x < \"%s\"; print \"read\" }", g, g, g);
+    is(prog, NULL, "read\n");                               /* a file only read has lost nothing */
+    close_fails = 0;
+    /* the real thing, where the system has a device that is always full */
+    if(!access("/dev/full", W_OK)) {
+        fails("BEGIN { print \"data\" > \"/dev/full\" }", NULL, "/dev/full: No space left");
+        fails("BEGIN { print \"data\" > \"/dev/full\"; close(\"/dev/full\"); print \"after\" }", NULL, "/dev/full: No space left");
+        CHECK(!strstr(R.out, "after"));
+        fails("BEGIN { print \"data\" > \"/dev/full\"; print (fflush(\"/dev/full\") != 0) }", NULL, "/dev/full: No space left");
+        CHECK(!strcmp(R.out, "1\n"));
+    }
+    /* a mistake ends awk as the end of a program does: what was sent arrives, and commands are waited for */
+    unlink(g);
+    snprintf(prog, sizeof(prog), "BEGIN { print \"x\" | \"sleep 0.3; cat > %s\"; print 1 / 0 }", g);
+    fails(prog, NULL, "division by zero");
+    file_holds(g, "x\n");
+    unlink(f);
+    snprintf(prog, sizeof(prog), "BEGIN { print \"y\" > \"%s\"; printf \"%%d %%d\", 1 }", f);
+    fails(prog, NULL, "not enough arguments");
+    file_holds(f, "y\n");
+    /* and one that fails then is said too */
+    close_fails = ENOSPC;
+    snprintf(prog, sizeof(prog), "BEGIN { print \"y\" > \"%s\"; print 1 / 0 }", f);
+    fails(prog, NULL, "division by zero");
+    CHECK(strstr(R.err, "No space left") != NULL);
+    close_fails = 0;
 }
 
 static void command_line(void) {
@@ -1078,6 +1154,7 @@ int main(int argc, char **argv) {
     binary_data();
     records();
     files_and_commands();
+    writes_that_fail();
     command_line();
     language();
     against_system_awk();

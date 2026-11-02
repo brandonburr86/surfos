@@ -11,6 +11,8 @@ buffer. Only one record is held, however large the file.
 Every file or command that print or getline names stays open until close() or the end. A program
 has 16 descriptors (FOPEN_MAX), and the message says so when they run out. print's streams are
 stdio's, so that they are flushed by it before a command runs; system() and popen() flush them all.
+What a file's last buffer held goes out when it is closed, and a disk that has filled up may only
+be found then: that ends awk like any other write that fails.
 */
 
 #include <stdlib.h>
@@ -37,6 +39,7 @@ struct stream {
     int how;                            /* for output TO_FILE, TO_APPEND, TO_PIPE; for input IN_FILE, IN_CMD */
     FILE *f;
     struct reader *in;                  /* input */
+    int why;                            /* output: what a write that fflush() reported failed of, for its end to say */
 };
 
 enum { IN_FILE = 10, IN_CMD };
@@ -47,6 +50,7 @@ static int main_open;
 static int args_next = 1;               /* the next of ARGV */
 static int files_seen;                  /* a file operand was found, so standard input is not read */
 static int main_done;
+static int write_failed;
 
 static void reader_init(struct reader *r, int fd) {
     r->fd = fd;
@@ -307,6 +311,7 @@ static struct stream *stream_add(struct str *name, int how) {
     s->how = how;
     s->f = NULL;
     s->in = NULL;
+    s->why = 0;
     s->next = streams;
     streams = s;
     return s;
@@ -364,11 +369,24 @@ int getline_from(int cmd, struct str *name, struct str **rec) {
     return s ? read_record(s->in, rec) : -1;
 }
 
+/* A write that fails here is said, with the name; what is to become of awk is the caller's to decide. pclose() keeps
+   its flush to itself, so that is done first. */
 static int stream_end(struct stream *s) {
-    int rc;
-    if(s->how == TO_PIPE || s->how == IN_CMD) rc = pclose(s->f);
-    else if(s->f == stdin) rc = 0;
-    else rc = fclose(s->f);
+    int rc, why = s->why;
+    errno = 0;
+    if(!s->in && (fflush(s->f) == EOF || ferror(s->f)) && !why) why = errno ? errno : EIO;
+    if(s->how == TO_PIPE || s->how == IN_CMD) {
+        rc = pclose(s->f);
+    } else if(s->f == stdin) {
+        rc = 0;
+    } else {
+        rc = fclose(s->f);
+        if(rc == EOF && !s->in && !why) why = errno ? errno : EIO;
+    }
+    if(why) {
+        say_error("%s: %s", s->name->s, strerror(why));
+        write_failed = 1;
+    }
     stream_free(s);
     return rc;
 }
@@ -386,22 +404,32 @@ int stream_close(struct str *name) {
             }
         }
     } while(found);
+    if(write_failed) stop();
     return rc;
 }
 
+/* A program may not look at what fflush() gave, so a failure is kept for the stream's end to say too. */
 int stream_flush(struct str *name) {
     struct stream *s;
-    int rc = -1;
-    if(!name) return fflush(NULL) ? -1 : 0;
-    if(!strcmp(name->s, "/dev/stdout")) return fflush(stdout) ? -1 : 0;
-    if(!strcmp(name->s, "/dev/stderr")) return 0;
-    for(s = streams; s; s = s->next)
-        if(!s->in && s->name->len == name->len && !memcmp(s->name->s, name->s, name->len))
-            rc = fflush(s->f) ? -1 : 0;
-    return rc;
+    int rc = 0, found = 0;
+    if(!name || !strcmp(name->s, "/dev/stdout")) {
+        if(fflush(stdout)) rc = -1;
+        found = 1;
+    }
+    if(name && !strcmp(name->s, "/dev/stderr")) return 0;
+    for(s = streams; s; s = s->next) {
+        if(s->in || (name && (s->name->len != name->len || memcmp(s->name->s, name->s, name->len)))) continue;
+        found = 1;
+        if(fflush(s->f)) {
+            s->why = errno;
+            rc = -1;
+        }
+    }
+    return found ? rc : -1;
 }
 
 /* everything written and every command ended, at the end of the program */
 void streams_end(void) {
     while(streams) stream_end(streams);
+    if(write_failed) A.exit_status = 2;
 }

@@ -62,12 +62,25 @@ static void say(const char *fmt, va_list ap) {
     fputc('\n', stderr);
 }
 
+void say_error(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    say(fmt, ap);
+    va_end(ap);
+}
+
+/* what a program's end does: what was sent to files arrives, and a command is waited for */
+void stop(void) {
+    streams_end();
+    exit(2);
+}
+
 void fatal(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     say(fmt, ap);
     va_end(ap);
-    exit(2);
+    stop();
 }
 
 static void grow_stack(void) {

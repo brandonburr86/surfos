@@ -485,7 +485,7 @@ void builtin_call(int b, int nargs) {
         break;
     case B_SYSTEM:
         s = to_str(&ARG(0));
-        fflush(NULL);
+        stream_flush(NULL);
         if(strlen(s->s) != s->len) fatal("a command with a NUL in it");
         d = system(s->s);
         str_put(s);
