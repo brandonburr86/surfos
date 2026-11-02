@@ -93,6 +93,232 @@ def autonet_telnet(q):
     return 'echo autonet-telnet-ok' if ok else 'echo autonet-telnet-FAILED'
 
 
+# 11/01/26 (the command-line suite, track net): what the block of telnet and ftp in SMOKE needs. Its lines are functions
+# of the QEMU, as in an @boot block: they know the forwarded ports and start the scripted servers. The password is made up
+NET_PASSWORD = 'made-up-test-password-77'
+NET = {}                                                    # the block's servers, from the line that starts one to its check
+
+
+class ScriptedFtp:
+    """An FTP server of this host for the guest to reach as 10.0.2.2:self.port, as hostile as its script. replies: a verb
+    and what it gets: bytes, or a list used up in turn (the last stays), where {pasv} is the data listener's port as
+    PASV's two numbers. transfers: a whole command line, or a verb, and (data, ending): after the data 'ok' closes and
+    says 226; 'hold' keeps it open and silent until ABOR; 'reset' resets it, and waits for ABOR a little: QEMU's user network
+    may hand the guest that reset as a plain end of the data (seen under Linux, not on the Mac), and a client then rightly
+    waits for a final reply, so 426 comes by itself. self.got has every command."""
+
+    def __init__(self, replies, transfers=None, greeting=b'220 scripted\r\n'):
+        self.listener, self.port = host_listener()
+        self.data_listener, self.data_port = host_listener()
+        self.replies, self.transfers, self.greeting = replies, transfers or {}, greeting
+        self.got, self.error = [], None
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def say(self, c, word):
+        text = self.replies.get(word, b'502 no\r\n')
+        if isinstance(text, list):
+            text = text.pop(0) if len(text) > 1 else text[0]
+        c.sendall(text.replace(b'{pasv}', b'%d,%d' % (self.data_port >> 8, self.data_port & 255)))
+
+    def transfer(self, c, buf, how):
+        data, ending = how
+        self.data_listener.settimeout(20)
+        d, _ = self.data_listener.accept()
+        c.sendall(b'150 here\r\n')
+        d.sendall(data)
+        if ending == 'reset':
+            d.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\0\0\0\0\0\0\0')
+            d.close()
+            c.settimeout(3)
+        if ending in ('reset', 'hold'):
+            try:
+                while b'ABOR\r\n' not in buf:
+                    more = c.recv(4096)
+                    if not more:
+                        break
+                    buf += more
+            except socket.timeout:
+                c.settimeout(60)
+                c.sendall(b'426 cut\r\n')
+                return buf
+            c.settimeout(60)
+            self.got.append(b'ABOR')
+            d.close()
+            c.sendall(b'426 stopped\r\n226 abort done\r\n')
+            buf = buf.split(b'ABOR\r\n', 1)[-1]
+        else:
+            d.close()
+            c.sendall(b'226 done\r\n')
+        return buf
+
+    def serve(self):
+        try:
+            c, _ = self.listener.accept()
+            c.settimeout(60)
+            c.sendall(self.greeting)
+            buf = b''
+            while True:
+                while b'\r\n' not in buf:
+                    more = c.recv(4096)
+                    if not more:
+                        return
+                    buf += more
+                line, buf = buf.split(b'\r\n', 1)
+                self.got.append(line)
+                word = line.split(b' ')[0].decode('latin-1')
+                how = self.transfers.get(line.decode('latin-1')) or self.transfers.get(word)
+                if how:
+                    buf = self.transfer(c, buf, how)
+                else:
+                    self.say(c, word)
+                if word == 'QUIT':
+                    c.close()
+                    return
+        except OSError as e:
+            self.error = e
+
+    def close(self):
+        self.thread.join(5)
+        self.listener.close()
+        self.data_listener.close()
+
+
+def net_telnet_line(q):
+    """the line for a telnet session on SurfOS's own telnetd, by the hairpin through its forwarded port"""
+    return f"telnet 10.0.2.2 {q.ports['telnet']}"
+
+
+def net_kill_telnet(q):
+    """a telnet is in raw mode on the console: a session of this host finds its pid and kills it, as nobody at that console
+    could. The line to type afterwards reaches a shell only if raw mode ended with the program"""
+    t = Telnet(q.ports['telnet'], timeout=20)
+    try:
+        t.expect(TELNET_ROOT, 15)
+        t.send('kernel ps\n')
+        t.expect(TELNET_ROOT, 15)
+        m = re.search(rb'^\s*(\d+)\b.*\btelnet \(ring 3\)\s*$', t.data.replace(b'\r', b''), re.M)
+        if m:
+            t.send(f'kill {m.group(1).decode()}\n')
+            t.expect(TELNET_ROOT, 15)
+    finally:
+        t.close()
+    q.expect(PROMPT, 15)
+    return 'echo raw-mode-gone'
+
+
+def net_talk_line(q):
+    """telnet to a host server that speaks no telnet (its port is not 23, so telnet says nothing first): the first thing it
+    gets must be the line typed, whole, and then it resets the connection"""
+    srv, port = host_listener()
+    box = NET['talk'] = {}
+
+    def serve():
+        try:
+            c, _ = srv.accept()
+            c.settimeout(15)
+            c.sendall(b'220 mail here\r\n')
+            line = b''
+            while not line.endswith(b'\n'):
+                d = c.recv(100)
+                if not d:
+                    break
+                line += d
+            box['line'] = line
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\0\0\0\0\0\0\0')
+            c.close()
+        except OSError as e:
+            box['error'] = e
+        srv.close()
+    box['thread'] = threading.Thread(target=serve, daemon=True)
+    box['thread'].start()
+    return f'telnet 10.0.2.2 {port}'
+
+
+def net_ftpd_on(q):
+    """what the talk's server got, said as a line; telnetd off, ftpd on, and a folder of files for it"""
+    box = NET['talk']
+    box['thread'].join(10)
+    said = 'echo net-talk-ok' if box.get('line') == b'HELO surfos\r\n' else f"echo net-talk-FAILED {box.get('line')!r}"
+    return (f"{said}; telnetd off; ftpd on {q.ports['ftp_pasv_range']}; mkdir /hda1/NET; cp /initrd/README /hda1/NET/UP.TXT; "
+            "cd /hda1/NET")
+
+
+def net_ftp_files(q):
+    """the first script, through SurfOS's ftpd by the hairpin; what came back is what went (the count of different sums)"""
+    return (f"ftp 10.0.2.2 {q.ports['ftp']} < S1.TXT; echo status $?; "
+            "sha256sum UP.TXT BACK.TXT REMOTE/UP3.TXT | cut -c1-64 | uniq | wc -l")
+
+
+def net_ftp_more(q):
+    """the second script: reget on from a part, whole already; mget twice, the second time leaving what is there (status
+    1); text mode back through mput; what is left is one file four times, and the folder on the server has gone"""
+    return (f"ftp 10.0.2.2 {q.ports['ftp']} < S2.TXT; echo status $?; "
+            "sha256sum UP.TXT PART.TXT UP3.TXT LF.TXT | cut -c1-64 | uniq | wc -l; ls REMOTE; cd /hda1; rm -r NET; cd /")
+
+
+def net_login_line(q):
+    """ftp to the scripted server: EPSV refused, PASV naming another address (10.0.2.3, QEMU's own: a client that believed
+    it would reach nothing), then a low port, then the right port again"""
+    good = b'227 ok (10,0,2,3,{pasv})\r\n'
+    NET['ftp'] = ScriptedFtp(
+        {'USER': b'331 password please\r\n', 'PASS': b'230 in\r\n', 'TYPE': b'200 ok\r\n', 'SIZE': b'550 unknown\r\n',
+         'PASV': [good, b'227 ok (10,0,2,2,0,25)\r\n', good], 'QUIT': b'221 bye\r\n'},
+        {'NLST': (b'nice.txt\r\n\x1b[31mred\x1b[0m\r\n', 'ok'),
+         'RETR big.bin': (b'x' * 20000, 'hold'),
+         'RETR cut.bin': (b'y' * 5000, 'reset'),
+         'RETR nice.txt': (b'nice', 'ok'),
+         'RETR climb.txt': (b'up', 'ok')},
+        b'220-scripted\r\n220 ready\r\n')
+    return f"ftp -n 10.0.2.2 {NET['ftp'].port}"
+
+
+def net_script_line(q):
+    """ftpd off; a script on standard input, a pipe, and a login in it: the password can only come from the terminal"""
+    NET['script'] = ScriptedFtp({'USER': b'331 password please\r\n', 'PASS': b'230 in\r\n', 'QUIT': b'221 bye\r\n'})
+    return f"ftpd off; printf 'user bob\\nquit\\n' | ftp -n 10.0.2.2 {NET['script'].port}"
+
+
+def net_names(q):
+    """the session lives on; mget's listing from then on: a name that climbs, and two that are not safe here"""
+    NET['ftp'].transfers['NLST'] = (b'nice.txt\r\n../../climb.txt\r\nbad|name.txt\r\nx\x1b[2J.txt\r\n', 'ok')
+    return 'status\nmget *.txt'
+
+
+def net_ctrl_c(q):
+    """a transfer that begins and holds; then Ctrl+C, as bytes, once the server has its command"""
+    q.send('get big.bin NET.BIN\n')
+    deadline = time.time() + 15
+    while b'RETR big.bin' not in NET['ftp'].got and time.time() < deadline:
+        q.pump(0.1)
+    return b'\x03'
+
+
+def net_ftp_result(q):
+    """nothing left on the disk by a transfer that failed, what the server got, and the password shown nowhere on the
+    console"""
+    srv = NET['ftp']
+    srv.close()
+    NET['script'].close()
+    bad = []
+    if (b'PASS ' + NET_PASSWORD.encode()) not in NET['script'].got:
+        bad.append('no PASS from the script')
+    if (b'PASS ' + NET_PASSWORD.encode()) not in srv.got:
+        bad.append('no PASS')
+    if NET_PASSWORD.encode() in q.transcript:
+        bad.append('the password was shown')
+    if b'ABOR' not in srv.got:
+        bad.append('no ABOR')
+    if b'EPSV' not in srv.got:
+        bad.append('no EPSV')
+    if b'RETR climb.txt' not in srv.got or any(b'..' in line for line in srv.got):
+        bad.append('a name climbed')
+    if srv.error:
+        bad.append(repr(srv.error))
+    said = 'echo net-ftp-ok' if not bad else 'echo net-ftp-FAILED ' + ', '.join(bad)
+    return f'ls /hda1/NET.BIN /hda1/CUT.BIN; ls /hda1 | grep -c "\\.tmp$"; {said}; rm /hda1/nice.txt /hda1/climb.txt'
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -1371,6 +1597,52 @@ SMOKE = [
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 11/01/26 (the command-line suite, track net): the clients, user/telnet/ and user/ftp/. The depth is in test_telnetc,
+    # test_ftpc and test_ftpcs; here the real kernel, sockets and terminal. The refusals. telnet by the hairpin to SurfOS's
+    # own telnetd (10.0.2.2 and the forwarded port): keys, the window as the session sees it, Ctrl+]'s status and send ayt,
+    # the session's exit; quit from a full-screen program, the terminal back; a kill from another session, raw mode gone.
+    # telnet to a scripted server that speaks no telnet: silent, a line typed sent whole, then a reset. ftp by the hairpin to
+    # SurfOS's ftpd, scripted from standard input: folders, listings, put and get byte for byte, reget, mget, mput, text
+    # mode. ftp to a scripted server (ScriptedFtp): a password typed with no echo and shown nowhere; EPSV refused and a PASV
+    # naming another address, the data still from the server's own; an escape sequence in a name, a low port refused;
+    # Ctrl+C in a transfer, the session alive; names that climb or are not safe; a reset partway, nothing left behind
+    ('surfsh', [shown('SURF ≋> ')],
+     [('echo cli-net', ['\r\ncli-net\r\n', shown('SURF ≋> ')]),
+      ('telnet; telnet 10.0.2.2 0; ftp -x; echo status $?',
+       ['usage: telnet host [port]', 'telnet: 0 is no port (1-65535)', 'usage: ftp [-n] [host [port]]', 'status 2', shown('SURF ≋> ')]),
+      ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23', shown('SURF ≋> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', 'Ctrl+] gives a prompt', shown('SURF ≋@> ')]),
+      (b'pagetest size\r', ['TTY_GETSIZE 80x25', shown('SURF ≋@> ')]),
+      (b'\x1dstatus\r', ['telnet> ', 'The other end echoes what is typed; keys go one at a time',
+                         'The other end knows the window: 80 by 25', 'Binary: sending yes, receiving no', 'bytes received']),
+      (b'\x1dsend ayt\rexit\r', ['[SurfOS: yes]', 'telnet: the other end closed the connection', shown('SURF ≋> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF ≋@> ')]),
+      (b'less /initrd/README\r', ['\x1b[?1049h']),
+      (b'\x1dquit\r', ['telnet> ', '\x1b[?1049l', shown('SURF ≋> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF ≋@> ')]),
+      (net_kill_telnet, ['\r\nraw-mode-gone\r\n', shown('SURF ≋> ')]),
+      (net_talk_line, ['telnet: connected to 10.0.2.2 port', '220 mail here']),
+      (b'HELO surfos\r', ['HELO surfos', 'telnet: the connection was lost', PROMPT]),
+      (net_ftpd_on, ['\r\nnet-talk-ok\r\n', 'telnetd: stopped', 'ftpd: serving / at ftp://10.0.2.15/ (read-write)', PROMPT]),
+      ("printf 'cd /hda1/NET\\nmkdir REMOTE\\ncd REMOTE\\npwd\\nput UP.TXT UP2.TXT\\nsize UP2.TXT\\nls\\ndir\\nget UP2.TXT BACK.TXT\\n"
+       "ascii\\nget UP2.TXT LF.TXT\\nbinary\\nrename UP2.TXT UP3.TXT\\n' > S1.TXT", [PROMPT]),
+      ("printf 'cd /hda1/NET/REMOTE\\nreget UP3.TXT PART.TXT\\nreget UP3.TXT PART.TXT\\nmget *.TXT\\nmget *.TXT\\nmput LF.*\\n"
+       "delete UP3.TXT\\ndelete LF.TXT\\ncd ..\\nrmdir REMOTE\\n' > S2.TXT; head -n 1 UP.TXT > PART.TXT", [PROMPT]),
+      (net_ftp_files, ['/hda1/NET/REMOTE\r\n', 'UP2.TXT: ', 'BACK.TXT: ', 'status 0', re.compile(rb'\n +1 *\r'), PROMPT]),
+      (net_ftp_more, ['PART.TXT: ', 'PART.TXT: whole already', 'UP3.TXT: ', 'UP3.TXT is there already', 'LF.TXT: ', 'status 1',
+                      re.compile(rb'\n +1 *\r'), 'No such file', shown('SURF ≋> ')]),
+      (net_script_line, ['ftpd: stopped', 'Password for bob: ']),
+      (NET_PASSWORD.encode() + b'\r', ['230 in', '221 bye', shown('SURF ≋> ')]),
+      (net_login_line, ['220-scripted', '220 ready', 'ftp> ']),
+      ('lcd /hda1\nuser alice', ['The local folder is /hda1', 'Password for alice: ']),
+      (NET_PASSWORD.encode() + b'\r', ['230 in', 'ftp> ']),
+      ('ls\ndir', ['nice.txt', '?[31mred?[0m', 'the server names port 25', 'ftp> ']),
+      (net_ctrl_c, ['stopped', 'ftp> ']),
+      (net_names, ['Connected to 10.0.2.2', 'nice.txt: 4 bytes', 'climb.txt: 2 bytes', 'not safe here: left out: bad|name.txt',
+                   'not safe here: left out: x?[2J.txt', 'ftp> ']),
+      ('get cut.bin CUT.BIN\nquit', [re.compile(rb'the data connection: |cut\.bin: 426 cut'), '221 bye', re.compile(rb'\[exit status [12]\]'), PROMPT]),
+      (net_ftp_result, ['No such file', '\r\n0\r\n', '\r\nnet-ftp-ok\r\n', PROMPT]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],
@@ -5919,6 +6191,8 @@ def run_smoke(q, boot_timeout, reboot=None):
                 q.send(cmd + '\n')
                 ok = all(q.expect(e, limit) for e in expects)
                 for line, exp in follow:
+                    if callable(line):                       # 11/01/26: a function of the QEMU, as in an @boot block
+                        line = line(q)
                     if isinstance(line, bytes):              # keys as they are, for a full-screen program
                         q.ser.sendall(line)
                     else:
