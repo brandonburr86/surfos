@@ -12,39 +12,70 @@ DESCRIPTION
 
     fsck is a command of the kernel, because programs cannot read a
     disk. It takes the device, not a path, and a volume mounted
-    read-write is refused: umount it first, or mount it with -r.
+    read-write is refused: umount it first, or mount it with -r. A
+    mount of its disk, or of a partition of it, is refused too.
 
-    With -r it says what it will change and asks for the device's
-    name. Only what mkfs may change can be repaired: a USB drive or a
-    ramdisk, not mounted, and never the disk SurfOS started from.
+    With -r it says what it will change, on the console even when the
+    output goes to a file, and asks for the device's name. Keys typed
+    before the question are dropped. Only what mkfs may change can be
+    repaired: a USB drive or a ramdisk, not mounted, and never the
+    disk SurfOS started from.
 
-    Nothing is ever deleted. It frees no cluster. It repairs these:
+    When in doubt, it changes nothing. A repair comes after a look at
+    the whole volume, and any doubt in that look means nothing at all
+    is written, FSInfo included: it says "no repair" and why. Copy off
+    what you can, or look at it on another computer. These are doubts:
 
-      - the second FAT, from a sound first one
-      - a chain cut at its first bad link, the size set to match
+      - a boot sector that differs from its backup in the volume's
+        shape, or a FAT much larger than its clusters need, or holding
+        something past its last entry, or wrong reserved FAT entries
+      - FATs that are not mirrored
+      - a first FAT and a second that disagree about a chain: a link
+        each its own, or the first ending a file or a directory
+        early where the second goes on
+      - a blank sector of the first FAT where the second has more, or
+        a chain into a sector of the FAT that is all zeros
+      - two names on one chain, of files or directories
+      - a chain into a cluster marked bad, or a first cluster that is
+        no cluster
+      - a directory it cannot read, one more than 128 levels down, one
+        with no "." and ".." or a "." that names another cluster (it
+        may be a damaged file), a directory whose chain has anything
+        wrong with it, anything past a directory's end mark, a
+        directory with no cluster, a label with clusters
+      - a size of 0 on what looks like a directory
+      - clusters nothing reaches, when they are most of what is in
+        use, or when one of them starts as a directory
+      - a FAT12 entry across two sectors that would have to change
+
+    Nothing is ever deleted, and when there is no doubt it repairs
+    only these:
+
+      - the second FAT, from the first
+      - the end of a chain: a link to no cluster or back into its own
+        chain ends where it stands, and a free cluster a chain runs
+        into stays, as the end, because that cluster is read as part
+        of the file
       - a size longer than its chain
-      - a chain longer than its size: what is cut off is saved
-      - two names on one chain: the second gets its own copy,
-        when there is room
       - clusters nothing reaches, saved as FOUND.000/FILE0000.CHK
         (their true size is not known: whole clusters are saved)
-      - FSInfo, and last the mark that it was unmounted cleanly
+      - FSInfo's count, and last the mark that it was unmounted cleanly
 
-    The rest it only reports: the boot sector, its backup, the "." and
-    ".." entries, long names, short names, two names on one directory,
-    and a repair of a FAT12 entry that spans two sectors. The mark of
-    a clean unmount stays while any problem is left.
+    The rest it only reports, and repairs what it can around it: a
+    chain longer than its size, ".." entries, long names, short names,
+    a directory's size, FSInfo without its signatures, a lost chain
+    that runs into another chain or a bad cluster, and the boot
+    sector's own dirty flag. No repair changes an entry's first
+    cluster. The mark of a clean unmount stays while any problem is
+    left.
 
-    It repairs nothing at all when it cannot trust what it saw: a
-    directory that cannot be read, one whose chain runs into a free or
-    bad cluster, one without its "." and ".." (it may be a damaged
-    file), a size of 0 on what looks like a directory, two FATs that
-    differ where the first has bad links the second does not, or FATs
-    that are not mirrored. Copy off what you can, or look at it on
-    another computer.
-
-    A stick pulled out during a repair is left no worse. Plug it in
-    and run fsck -r again. Ctrl+C stops it between two steps.
+    A stick pulled out during a repair is left no worse, if two things
+    hold: a sector is written whole, and the stick has its data safe
+    when it says so. Many sticks promise that and do not keep it, and
+    fsck cannot tell. The order of its writes then helps less, though
+    it never writes over anything a name or a link reaches; what is
+    left may need a person. Plug it in and run fsck -r again. Ctrl+C
+    stops it between two steps.
 
 OPTIONS
     -r    Repair, after asking.
