@@ -315,6 +315,100 @@ static void restyled(void) {
     check(p->bytes == sizeof(*p) + p->doc.bytes + p->doc.link_count, "counted once");
 }
 
+/* the y of the first text item whose text starts with t, in the page's layout; -1 when none */
+static int y_of(const struct wb_page *p, const char *t) {
+    size_t i, n = strlen(t);
+    for(i = 0; i < p->lay.count; i++) {
+        const struct wl_item *it = &p->lay.items[i];
+        if(it->kind == WI_TEXT && it->len >= n && !memcmp(p->doc.text + it->off, t, n)) return it->y;
+    }
+    return -1;
+}
+
+/* find's match and the place being read, by where their text comes from in the page */
+static void restyled_places(void) {
+    static char page[8000];
+    struct wb_page *p;
+    struct wb_request sheet;
+    size_t n;
+    int k, y;
+
+    open_page("https://a.test/d/find.html", "<link rel=stylesheet href=a.css><p class=g>wave one<p>wave two<p>wave three");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "find, and a sheet on its way");
+    sheet = q;
+    wb_key(&b, 6);
+    keys("wave");
+    wb_key(&b, 13);
+    check(b.find_hit && b.find_index == 2 && b.find_total == 3 && !strncmp(p->doc.text + b.find_at, "wave two", 8),
+          "find is on the second of three");
+    q = sheet;
+    answer(".g{display:none}", "text/css");
+    check(b.find_open && b.find_hit && b.find_index == 1 && b.find_total == 2 && !strncmp(p->doc.text + b.find_at, "wave two", 8),
+          "the sheet hid the first: find is on the same word, the first of two now");
+    wb_paint(&b, screen, W);
+    wb_key(&b, 13);
+    check(b.find_hit && !strncmp(p->doc.text + b.find_at, "wave three", 10), "and Enter goes on from there");
+    wb_key(&b, 27);
+
+    open_page("https://a.test/d/find2.html", "<link rel=stylesheet href=a.css><p>wave one<p class=g>wave two<p>wave three");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "find on a word its sheet hides");
+    sheet = q;
+    wb_key(&b, 6);
+    check(b.find_hit && b.find_len == 4, "(find keeps its word from page to page)");
+    wb_key(&b, 13);
+    check(b.find_hit && !strncmp(p->doc.text + b.find_at, "wave two", 8), "on it");
+    q = sheet;
+    answer(".g{display:none}", "text/css");
+    check(b.find_hit && b.find_total == 2 && (!strncmp(p->doc.text + b.find_at, "wave one", 8) || !strncmp(p->doc.text + b.find_at, "wave three", 10)),
+          "it is hidden now: find is on one of the words that show, and does not match what is hidden");
+    wb_paint(&b, screen, W);
+    wb_key(&b, 27);
+    open_page("https://a.test/d/find3.html", "<link rel=stylesheet href=a.css><p class=g>wave one<p>calm");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "find's only word");
+    sheet = q;
+    wb_key(&b, 6);
+    check(b.find_hit, "found");
+    q = sheet;
+    answer(".g{display:none}", "text/css");
+    check(b.find_open && !b.find_hit && !b.find_total, "hidden by the sheet: not found");
+    wb_paint(&b, screen, W);
+    wb_key(&b, 27);
+
+    /* the place being read: what was at the top of the view is there again */
+    n = (size_t)snprintf(page, sizeof(page), "<link rel=stylesheet href=a.css><div class=g>");
+    for(k = 1; k <= 20; k++) n += (size_t)snprintf(page + n, sizeof(page) - n, "<p>gone %d", k);
+    n += (size_t)snprintf(page + n, sizeof(page) - n, "</div>");
+    for(k = 1; k <= 60; k++) n += (size_t)snprintf(page + n, sizeof(page) - n, "<p>line %d", k);
+    open_page("https://a.test/d/place.html", page);
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a long page, with a sheet");
+    sheet = q;
+    y = y_of(p, "line 30");
+    p->scroll = y + 5;
+    q = sheet;
+    answer(".g{display:none} p{margin:4px 0}", "text/css");
+    wb_paint(&b, screen, W);
+    check(y > 0 && y_of(p, "line 30") >= 0 && y_of(p, "line 30") < y && p->scroll == y_of(p, "line 30") + 5,
+          "the sheet moved the text up: the view went with it, the same line at its top");
+    open_page("https://a.test/d/place2.html", page);
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "again");
+    sheet = q;
+    p->scroll = y_of(p, "gone 10") + 2;
+    q = sheet;
+    answer(".g{display:none}", "text/css");
+    wb_paint(&b, screen, W);
+    check(p->scroll >= y_of(p, "line 1") && p->scroll < y_of(p, "line 2"), "what was being read is hidden now: the view is at what follows it");
+}
+
 int main(void) {
     struct wb_page *p;
     long i;
@@ -506,10 +600,20 @@ int main(void) {
     p = wb_current(&b);
     wb_paint(&b, screen, W);
     check(asked("https://a.test/d/a.css"), "a reader who scrolled while the sheet came");
-    p->scroll = 50;
-    answer(".gone{display:none} p{margin:0}", "text/css");
-    wb_paint(&b, screen, W);
-    check(p->scroll == 50, "keeps the place, and is not sent back to the target");
+    {
+        size_t i;
+        int k = 0, line_y = -1, into = 3;
+        for(i = 0; i < p->lay.count && line_y < 0; i++)
+            if(p->lay.items[i].kind == WI_TEXT && !strncmp(p->doc.text + p->lay.items[i].off, "line", 4) && ++k == 10)
+                line_y = p->lay.items[i].y;
+        p->scroll = line_y + into;
+        answer(".gone{display:none} p{margin:0}", "text/css");
+        wb_paint(&b, screen, W);
+        for(i = 0, k = 0, line_y = -1; i < p->lay.count && line_y < 0; i++)
+            if(p->lay.items[i].kind == WI_TEXT && !strncmp(p->doc.text + p->lay.items[i].off, "line", 4) && ++k == 10)
+                line_y = p->lay.items[i].y;
+        check(line_y > 0 && p->scroll == line_y + into, "keeps the place, the line being read at the top, and is not sent back to the target");
+    }
     open_page("https://a.test/d/tall.html#end", tall);
     check(asked("https://a.test/d/a.css"), "a sheet that answers before the page was ever laid out");
     answer("p{margin:0}", "text/css");
@@ -536,6 +640,7 @@ int main(void) {
     check(p->scroll == 20, "keeps its place");
 
     restyled();
+    restyled_places();
 
     /* the budget of the history */
     open_page("https://a.test/d/bytes.html", "<link rel=stylesheet href=a.css><p>x");

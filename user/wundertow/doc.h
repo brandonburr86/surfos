@@ -152,6 +152,8 @@ struct wd_run {
     int control;                        /* WR_FIELD: controls[control], or -1 */
     unsigned int bg;                    /* the page's CSS: the background behind the text, or WD_NONE */
     unsigned short px;                  /* the page's CSS: the font's size in pixels, 0: by size */
+    unsigned int src;                   /* 11/02/26: where in the page's bytes it began, about: the same text has the same
+                                           place in a page built again with its sheets (browser.c's wb_restyled()) */
 };
 
 /* What the window has of an image, by the number in images[] (11/1/26, stage 2.4): the frame shows until px does */

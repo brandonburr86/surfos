@@ -110,6 +110,9 @@ struct wb_page {
     int halted;                         /* Stop: it loads no more until it is loaded again */
     size_t pic_bytes;                   /* of bytes: its pictures', at most WB_PAGE_IMAGES */
     struct ws_work *style;              /* 11/01/26: its style sheets are on their way (sheets.c) */
+    /* 11/02/26: what was being read when its sheets built it again, for the next layout: a text offset, how far into it */
+    size_t place_off;
+    int place_into, placed;
 };
 
 enum { WB_LOAD_PAGE, WB_LOAD_IMAGE, WB_LOAD_TEXT };     /* what a request is for */
@@ -207,7 +210,8 @@ void wb_text(struct wb *b, unsigned int page, int tag, const char *body, size_t 
 /* 11/02/26 (the integration of milestones 2 and 3): page p was built again with its style sheets (sheets.c), old being the
    document it had, which is still there, and p's layout old's. What the window keeps against a document goes over to the
    new one, by what it is rather than by its number, as the sheets may have shown or hidden anything: what a person typed
-   and chose, the pictures, the visited links, the keyboard's focus. See browser.c. */
+   and chose, the pictures, the visited links, the keyboard's focus, find's place and the place being read. See
+   browser.c. */
 void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old);
 
 /* Stage 2.4: the answers to a page's pictures. wb_image() owns px (pw x ph pixels) now; w x h is the picture's own size.

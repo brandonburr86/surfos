@@ -509,6 +509,7 @@ static struct wd_run *run_for(struct bd *b, int kind, unsigned short style, unsi
     r->off = (unsigned int)b->d.text_len;
     r->bg = bg;
     r->px = px;
+    r->src = (unsigned int)b->pos;
     x->nruns++;
     return r;
 }

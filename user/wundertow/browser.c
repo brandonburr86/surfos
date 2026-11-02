@@ -254,6 +254,12 @@ static void ensure_layout(struct wb *b, struct wb_page *p) {
     geom(b, &g);
     if(p->lay_w == g.cw) return;
     place = p->scroll > 0 && wl_place(&p->lay, p->scroll, &top, &into);     /* what is being read stays where it is */
+    if(p->placed) {                                 /* the page built again with its sheets: what was read then */
+        place = 1;
+        top = p->place_off;
+        into = p->place_into;
+        p->placed = 0;
+    }
     wl_free(&p->lay);
     p->lay_w = 0;
     if(wl_layout(&p->doc, g.cw, &p->lay)) {
@@ -497,6 +503,56 @@ static void prepare_pictures(struct wb_page *p, int top, int bottom) {
 
 /**** a page built again with its style sheets (sheets.c) ****/
 
+/* About where in the page's bytes the text at off comes from: its run's place there (doc.h's src) and how far into the
+   run it is. The text of one place has about the same place however the page's sheets show it. */
+static size_t src_at(const struct wd_document *d, size_t off) {
+    size_t lo = 0, hi = d->run_count, k;
+    const struct wd_run *r;
+    if(!hi) return 0;
+    while(hi - lo > 1) {                            /* the last run that starts at or before off */
+        size_t mid = lo + (hi - lo) / 2;
+        if(d->runs[mid].off <= off) lo = mid;
+        else hi = mid;
+    }
+    r = &d->runs[lo];
+    k = off > r->off ? off - r->off : 0;
+    return r->src + (k < r->len ? k : r->len);
+}
+
+/* The text offset of d whose text comes from about src in the page's bytes */
+static size_t off_at(const struct wd_document *d, size_t src) {
+    size_t lo = 0, hi = d->run_count, k;
+    const struct wd_run *r;
+    if(!hi) return 0;
+    while(hi - lo > 1) {                            /* the last run that starts at or before src */
+        size_t mid = lo + (hi - lo) / 2;
+        if(d->runs[mid].src <= src) lo = mid;
+        else hi = mid;
+    }
+    r = &d->runs[lo];
+    k = src > r->src ? src - r->src : 0;
+    return r->off + (k < r->len ? k : r->len);
+}
+
+static size_t apart(size_t a, size_t c) { return a > c ? a - c : c - a; }
+
+/* find's word where it was: of its matches in d, the nearest to where the one found came from; none when the sheets hid
+   them all */
+static void restyle_find(struct wb *b, const struct wd_document *old, const struct wd_document *d) {
+    size_t s, from, a = 0, z = 0;
+    int fa, fz;
+    if(!b->find_hit) return;
+    s = src_at(old, b->find_at);
+    from = off_at(d, s);
+    fa = fi_search(d, b->find, b->find_len, from, 0, &a);
+    fz = fi_search(d, b->find, b->find_len, from, 1, &z);
+    b->find_hit = fa || fz;
+    b->find_index = b->find_total = 0;
+    if(!b->find_hit) return;
+    b->find_at = fa && (!fz || apart(src_at(d, a), s) <= apart(src_at(d, z), s)) ? a : z;
+    b->find_total = fi_count(d, b->find, b->find_len, b->find_at, &b->find_index);
+}
+
 /* The pictures go over by their addresses, in the page's order, with their pixels, their size and a failure: two of an
    address are the same picture. One the sheets hide now is let go, and one they show now is asked for. A hidden picture
    is never loaded: nothing would show it. A load on its way keeps going when its picture keeps its number; else the
@@ -610,7 +666,13 @@ static int same_field(const struct wd_document *old, const struct wd_document *d
 
 void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old) {
     struct wd_document *d = &p->doc;
-    int *map = old->control_count ? malloc(old->control_count * sizeof(*map)) : NULL;
+    int *map = old->control_count ? malloc(old->control_count * sizeof(*map)) : NULL, into;
+    size_t off;
+    if(p->lay_w && p->scroll > 0 && wl_place(&p->lay, p->scroll, &off, &into)) {     /* the layout is old's still */
+        p->place_off = off_at(d, src_at(old, off));
+        p->place_into = into;
+        p->placed = 1;
+    }
     restyle_pictures(b, p, old);
     if(map) restyle_controls(old, d, map);
     if(old->visited) p->bytes -= old->link_count;  /* (they go with old; d's are made below, or when it is shown) */
@@ -623,7 +685,7 @@ void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old) {
         b->press_field = same_field(old, d, map, b->press_field);
         b->list = same_field(old, d, map, b->list);
         if(b->focus == WB_FOCUS_FIELD && b->field < 0) b->focus = WB_FOCUS_PAGE;
-        b->find_hit = 0;                            /* (its place was old's text) */
+        restyle_find(b, old, d);
     }
     free(map);
 }
