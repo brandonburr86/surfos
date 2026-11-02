@@ -1,7 +1,7 @@
-# The command-line suite, track lang: bc
+# The command-line suite, track lang: bc and awk
 
-The account of `bc`, for the review and the integrator. `awk` follows on this branch, once text's stage 1 is committed; it
-has its own part here then. Brief: `2026-11-01-cli-suite.md`.
+The account of `bc` and `awk`, for the review and the integrator. Brief: `2026-11-01-cli-suite.md`. `bc` passed `make test-all`
+on its own before `awk` began: 545 smoke checks and 51 of the Files test, at -O0 and at -O2.
 
 ## What was built
 
@@ -134,3 +134,109 @@ that run passed, and it was not load.
 **Not run:** on the laptop, as nothing of this track has been, nor under any memory but QEMU's. `make test-usb` was not run: this
 touches no boot path, console or USB. Only the new files, the two blocks and that one line changed, no kernel file, so SurfCPU's
 check does not apply.
+
+## awk
+
+`awk [-F fs] [-v var=value]... [program | -f file...] [argument...]`: POSIX `awk` in `user/awk/`, on text's library, merged
+into this branch at `39f79ee`.
+
+| File | What |
+|---|---|
+| `parse.c` | the program to code for the machine, in one pass, without a tree |
+| `vm.c` | the stack machine, calls, the places that assignment, `++`, `getline` and `sub` share |
+| `value.c` | strings, numbers, the rules between them, arrays |
+| `field.c` | the record and its fields, split and put together when asked for |
+| `io.c` | one reader with its own buffer; the files and commands that programs name |
+| `fmt.c` | `printf`, and through it `CONVFMT` and `OFMT` |
+| `func.c` | regular expressions, `sub`, `gsub` and the built-in functions |
+| `main.c` | the command line |
+| `tests/host/test_awk.c`, `awk_host.h`, `awk/` | the host test (below) |
+
+### Decisions a reviewer would ask about
+
+**A mistake ends awk, by `exit(2)`.** libsurf has no `setjmp`, and awk has no session to recover, unlike `bc` at a terminal. So
+`fatal()` is the whole of error handling, also for memory, and nothing below it unwinds. Everything allocated goes through
+`xalloc()`, which checks.
+
+**No recursion that input drives without a limit, again.** A function's calls are heap stacks. The parser recurses up to
+`AWK_DEPTH_MAX`; every way down the grammar passes through `primary()`, so depth is counted there. Precedence climbing keeps a
+bracket to a few frames, so 1000 fit in 4 MB. The test nests 15 kinds of thing 100,000 deep. It found one: `$$$$...` overran
+the stack until the count moved to `primary()`.
+
+**`print`'s `>`.** POSIX's grammar bars comparisons from an unbracketed `print` list. This awk takes any but `>`, so
+`print a == b` works, as in gawk, where the one true awk says syntax error. `print a, b > c ? d : e` is a syntax error, as in
+every awk.
+
+**One reader, on the descriptor.** A record may end at a byte, an empty line or a regular expression, and input may be a pipe or a
+terminal, so `read()` into a buffer of its own rather than stdio. Only one record is held. An RS of more than a character is a
+regular expression, which POSIX leaves open and every awk in use does.
+
+**Fields are offsets into `$0` until they are asked for,** so `{ print $1 }` on wide records allocates once. A record is split
+when a field or `NF` is first wanted, so `FS` and `OFS` must not change under a record that waits: `global_set()` splits or
+puts together first, with the old ones. That is POSIX's rule that a new `FS` is for the next record, and gawk's for `OFS`.
+
+**What is numeric in input.** Decimal only, by a check before `strtod()`, which also takes `0x10`, `inf` and `nan`: POSIX's
+NUMBER token, so that a word in a column stays a word. Both awks at hand read `0x10` as 16.
+
+**An array as an argument.** Which a bare name is can only be known when it runs, so such an argument compiles to `OP_ARGV`. An
+unset name goes as a `V_REF` to where it lives, so that a function that makes an array of it gives it to the caller; read as a
+scalar it stays unset whatever happens to the name meanwhile, which is by value.
+
+**`x op= e` runs `e` first**, then reads `x`: `a = 1; a += a += 2` is 6 in the one true awk and in mawk. (`bc` is the other
+way, by POSIX's text for it.)
+
+**`printf`'s format never reaches the C library.** Each conversion is taken apart and rebuilt from the flags, numbers and one
+letter found, so a program's format cannot read a missing argument or use `%n`. `CONVFMT` and `OFMT` go the same way, as a
+program sets them. Too few arguments is an error. `%c` of a number above 127 is UTF-8.
+
+**`substr` gives the one true awk's answers:** `m` and `n` are cut to whole numbers and a start below 1 is 1, so `substr("hello", -1, 3)` is
+`hel`. POSIX says little here, and mawk gives `hell`.
+
+**`"cmd" | getline` leaves NR alone**, by POSIX's text for that form, and as the one true awk and mawk do.
+
+**A field past NF is the uninitialized value**, as POSIX says outright, so `$9 == 0` is true when there is no `$9`. Both awks at
+hand take it as an empty string. It is the one place here where I kept POSIX against both.
+
+**Left out:** gawk's extensions: `gensub`, `strftime`, `BEGINFILE`, `IGNORECASE`, `PROCINFO`, `@include`, `\y`, two-way pipes,
+`printf %a`, hex constants. Case folding above A-Z, as the library has none: there is no locale.
+
+### What differs from the one true awk on the Mac
+
+Mac's `awk` version 20200816, and mawk in the Docker image where the table says so. gawk is not installed, so nothing here
+was run against it. Of the 219 programs compared while writing this, 210 print the same, and these are the rest:
+
+| Case | Here | The Mac's |
+|---|---|---|
+| `length("héllo")` | 5, as the brief asks | 6: bytes |
+| `0x10` in input | a string | 16, and in mawk |
+| `$1 < $2` where there is no `$2` | by number: POSIX's uninitialized value | by string, and in mawk |
+| `/[/]/` | a / in brackets | an error |
+| `print 1 < 2 ? "y" : "n"`, `print x != ""` without brackets | taken | a syntax error |
+| `printf "%z"`, `printf "%5%"` | printed as they stand | an error |
+| `ARGV[0]` | `awk` | the path it was run by |
+
+The others in that count are the host's `system()` status, which the test's shim turns into what libsurf's gives. Beyond them,
+`printf "%c", 233` is UTF-8 here and one byte there, and a whole number past 2^31 prints in full, where the Mac's gives up to 30
+digits and mawk `2.14748e+09`.
+
+### The tests
+
+- **`tests/host/test_awk`, in `make unittest`:** each run is a fork, so a status, a message and a crash are seen as they are.
+  - 215 programs in a table, each compared with the Mac's awk and every difference read, then frozen with what this awk prints.
+  - About 400 more by hand: characters and bad bytes, NUL bytes, records and fields, every `getline` and redirection, `close`, the command
+    line, the grammar's corners, awk's escapes in regular expressions, functions and their names, every mistake and its message.
+  - A corpus of 92 programs over 31 KB, byte for byte against the system's `awk`: the one true awk on the Mac, mawk in the Docker
+    image. For-in's output goes through `sort`.
+  - Limits on memory for strings, arrays, calls and one huge record, each with its message; and loops of a few hundred thousand turns
+    under a small limit, which a leak would reach.
+  - Programs cut, tokens changed, any bytes as input; 15 kinds of nesting; a megabyte each of name, string and comment; 3000
+    functions and 3000 rules; a million fields.
+  Without `awk` on a machine the comparison says it is skipped. 1,100 checks in all, about 20 s under the image's emulation.
+- **Under the sanitizers:** never in `make unittest`. `test_awk long` runs natively on the Mac with clang's
+  `-fsanitize=address,undefined`, by the command in the test's header, on 20,000 damaged programs and 5,000 damaged inputs.
+- **Coverage, measured once with clang:** `io.c` and `main.c` every line, the others from 94 to 99%. What is left is mostly messages
+  for what the parser already stops, such as an array reaching `to_num()`.
+- **The smoke block**, 18 steps, marker `echo cli-lang`, a block of its own after `bc`'s.
+
+**Not run:** on the laptop, as nothing of this track has been. No kernel file changed, so SurfCPU's check does not apply. `awk`'s
+floating point runs on x87 like the rest of SurfOS's programs: nothing here uses SSE.
