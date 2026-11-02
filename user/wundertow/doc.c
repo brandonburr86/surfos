@@ -1422,11 +1422,12 @@ static void css_end(struct bd *b, const struct ut_html_tag *t) {
     }
 }
 
-/* Does the page's CSS show this element, for all its hidden attribute says? */
+/* Does the page's CSS show this element, for all its hidden attribute says? (11/02/26: under display: none too, where it is
+   built with no box as the rest there is, so that its forms are what they are when nothing around it is hidden) */
 static int css_shown(struct bd *b, const struct ut_html_tag *t) {
     int css = ds_height(b->ds), display = css_open(b, t->el, t);
     ds_close(b->ds, css);
-    return !b->none && (display == DS_BLOCK || display == DS_INLINE || display == DS_SHOWN);
+    return display == DS_BLOCK || display == DS_INLINE || display == DS_SHOWN;
 }
 
 static void css_root(struct bd *b, const struct ut_html_tag *t) {

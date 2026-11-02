@@ -1969,6 +1969,12 @@ static void hidden_by_css(void) {
           "https://forms.test/s?a=1", "a form display: none hides is a form, to its end");
     refuses("<form action=/s><div style=display:none><input type=password name=p></div></form>", "password",
             "a password field display: none hides still keeps its form from going");
+    sends("<style>.s{display:block}</style><form action=/s><div class=o><div hidden class=s><select name=x><option>1</select>"
+          "<button name=b value=v>B</button></div></div><input name=q></form>", "https://forms.test/s?x=1&q=",
+          "what the page's CSS shows for all its hidden attribute says is built as any other part of it");
+    sends("<style>.s{display:block} .o{display:none}</style><form action=/s><div class=o><div hidden class=s><select name=x>"
+          "<option>1</select><button name=b value=v>B</button></div></div><input name=q></form>", "https://forms.test/s?x=1&q=",
+          "and so it is where display: none hides what is around it: its form is the same");
 
     /* none of them has a box, and the page goes on after them */
     check(!build("<style>.h{display:none} .h2 select{display:none}</style><form><input class=h name=a><select class=h name=s>"
