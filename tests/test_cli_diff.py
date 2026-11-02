@@ -215,6 +215,15 @@ def test_join():
                     ok(x[1] == y[1], "join %s: %r against %r" % (args, x[1][:120], y[1][:120]))
                 else:
                     skip("join: not installed")
+    with tempfile.TemporaryDirectory() as d:     # the review: -o given twice adds to the list
+        put(d + "/j1", b"a 1\n")
+        put(d + "/j2", b"a x\n")
+        long_list = ["-o", "1.1,1.2,2.1,2.2,0,0,0,0,0,0,0,0,0,0,0,0", "-o", "0"]
+        for args in (long_list, ["-o", "1.2", "-o", "2.2"]):
+            r = ours("join", *args, "j1", "j2", cwd=d)
+            if is_gnu("join"):
+                ok(r[1] == run(["join"] + args + ["j1", "j2"], cwd=d)[1], "join: -o twice, as GNU's: %r" % (r,))
+            ok(r[0] == 0 and r[1].count(b" ") == (len(args[1].split(",")) + len(args[3].split(",")) - 1), "join: -o twice: %r" % (r,))
     ok(ours("join", "-t", "ab", "x", "y")[0] == 2, "join: -t is one character")
     ok(ours("join", "-t", "é", "-", os.devnull, stdin="aéb\n".encode())[0] == 0, "join: -t takes a UTF-8 character")
     ok(ours("join", "-o", "3.1", "x", "y")[0] == 2, "join: a bad -o list")

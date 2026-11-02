@@ -214,10 +214,10 @@ static int usage(void) {
     return 2;
 }
 
-/* the list of -o into outs: 0, or -1 */
+/* the list of -o added to outs (a second -o goes on from the first): 0, or -1 */
 static int parse_outs(const char *s) {
-    size_t cap = strlen(s) + 1;
-    outs = lu_alloc(NULL, cap * sizeof(*outs));
+    size_t cap = nouts + strlen(s) + 1;
+    outs = lu_alloc(outs, cap * sizeof(*outs));
     while(*s) {
         char *end;
         unsigned long v;
