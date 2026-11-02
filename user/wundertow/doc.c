@@ -722,18 +722,19 @@ static struct frame *frame_of(struct bd *b, int el, int kind, int hides, int css
 }
 
 static struct frame *push(struct bd *b, int el, int kind) {
-    int css = ds_height(b->ds), display;
+    int css = ds_height(b->ds), display, hides;
     if(b->depth == STACK_MAX) {
         b->over[el]++;
         return NULL;
     }
     display = css_open(b, el, b->tag.el == el && !b->tag.end ? &b->tag : NULL);
+    hides = display == DS_NONE;                     /* (11/02/26: in what hides too, which end_made() may stop hiding) */
     if(b->none) display = DS_ASIS;                  /* (it goes on the stack all the same, for what ends it) */
     if(el == E_TABLE || el == E_TR || is_cell(el)) {    /* (a table keeps its parts, but for none) */
         if(display != DS_NONE) display = DS_ASIS;
     } else if(display == DS_INLINE) kind = -1;
     b->display = display;
-    return frame_of(b, el, kind, display == DS_NONE, css);
+    return frame_of(b, el, kind, hides, css);
 }
 
 /* Close the top element */

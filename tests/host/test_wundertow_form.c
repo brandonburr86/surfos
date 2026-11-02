@@ -2057,6 +2057,9 @@ static void hidden_by_css(void) {
     check(!strstr(d.text, "ex") && !strstr(d.text, "in") && strstr(d.text, "why") && strstr(d.text, " more") && strstr(d.text, "after"),
           "what comes from the inner a on shows, as the standard has it out of the hidden one");
     wd_free(&d);
+    check(!build("<a style=display:none href=x>ex<div style=display:none>in<a href=y>why</a></div>tail</a>end", &d) &&
+          !strcmp(d.text, "tailend"), "but not what a block that hides by itself holds: it is out of the a, and hidden still");
+    wd_free(&d);
 
     /* none of them has a box, and the page goes on after them */
     check(!build("<style>.h{display:none} .h2 select{display:none}</style><form><input class=h name=a><select class=h name=s>"
