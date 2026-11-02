@@ -550,6 +550,7 @@ static void command_line(void) {
     args_are("a1b\n", "b\n", 0, "-F[0-9]", "{ print $2 }", NULL, NULL, NULL, NULL);
     args_are(NULL, "x\ty\n", 0, "-v", "s=x\\ty", "BEGIN { print s }", NULL, NULL, NULL);    /* the escapes of a string */
     args_are(NULL, "1\n", 0, "-v", "n=10", "BEGIN { print (n > 9) }", NULL, NULL, NULL);    /* and it compares as a number */
+    args_are(NULL, "A\n", 0, "-v", "s=\\x41", "BEGIN { print s }", NULL, NULL, NULL);
     args_are(NULL, ":\n", 0, "-v", "OFS=:", "BEGIN { print \"\", \"\" }", NULL, NULL, NULL);
     args_are(NULL, "2\n", 0, "-v", "NF=2", "BEGIN { print NF }", NULL, NULL, NULL);
     /* assignments among the files, when they are reached */
@@ -736,10 +737,14 @@ static void language(void) {
     is("BEGIN { print \"a\\tb\\\\c\\\"d\\/e\\101\\60\" }", NULL, "a\tb\\c\"d/eA0\n");
     is("BEGIN { print \"\\a\\b\\f\\v\\r\" }", NULL, "\a\b\f\v\r\n");
     is("BEGIN { print \"\\.\", \"\\q\" }", NULL, "\\. \\q\n");                              /* no escape: the backslash stays */
+    is("BEGIN { print \"\\x41\\x4a\\x4A\\x41B\", length(\"\\xc3\\xa9\"), length(\"\\x4\"), \"\\xZ\" }", NULL, "AJJAB 1 1 \\xZ\n");   /* two digits at most, as mawk reads them */
+    is("BEGIN { printf \"\\x00\" }", NULL, "");
+    CHECK(R.nout == 1 && !R.out[0]);
     /* regular expressions: awk's escapes first */
     is("BEGIN { print \"a]\" ~ /[\\]]/, \"a\\\\\" ~ /[\\\\]/, \"-\" ~ /[a\\-z]/, \"b\" ~ /[a\\-z]/, \"^\" ~ /[\\^]/ }", NULL, "1 1 1 0 1\n");
     is("BEGIN { print \"\\r\" ~ /\\r/, \"\\f\" ~ /\\f/, \"\\v\" ~ /\\v/, \"\\a\" ~ /\\a/, \"/\" ~ \"\\\\/\" }", NULL, "1 1 1 1 1\n");
     is("BEGIN { print \"\\t\" ~ /[\\t]/, \"\\n\" ~ /\\n/, \"/\" ~ /\\//, \"\\\"\" ~ /\\\"/, \"A\" ~ /\\101/, \"\\b\" ~ /\\b/ }", NULL, "1 1 1 1 1 1\n");
+    is("BEGIN { print \"a\" ~ /\\x61/, \"ab\" ~ /[\\x61]b/, \"b\" ~ /\\x61/, \"a\" ~ \"\\\\x61\", \".\" ~ /\\x2e/, \"a\" ~ /\\x2e/, \"\303\251\" ~ /^\\xc3\\xa9$/ }", NULL, "1 1 0 1 1 0 1\n");
     is("/[[:alpha:]/]/", "1/2\n3\n", "1/2\n");                                             /* a class in brackets, and a / after it */
     is("/[[.-.]/]/", "a/\n-\nb\n", "a/\n-\n");
     is("/[]/]/", "]\n/\nx\n", "]\n/\n");

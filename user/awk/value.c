@@ -108,6 +108,23 @@ unsigned char_at(struct str *s, unsigned k) {
     return i;
 }
 
+static int hex_digit(int c) {
+    if(c >= '0' && c <= '9') return c - '0';
+    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* \x and at most two hexadecimal digits, the way mawk reads them; the Mac's awk would go on to any number of digits */
+int hex_byte(const char *s, unsigned n, unsigned *used) {
+    unsigned k = 1;
+    int v = 0;
+    while(k < 3 && k < n && hex_digit(s[k]) >= 0) v = v * 16 + hex_digit(s[k++]);
+    if(k == 1) return -1;
+    *used = k;
+    return v;
+}
+
 /**** values ****/
 
 void val_put(struct value *v) {

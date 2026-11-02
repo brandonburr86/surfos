@@ -158,6 +158,7 @@ static int escape_byte(const char *s, unsigned n, unsigned *used) {
     case 'b': return 8;
     case 'f': return '\f';
     case 'v': return '\v';
+    case 'x': return hex_byte(s, n, used);
     }
     if(s[0] >= '0' && s[0] <= '7') {
         unsigned k = 0;

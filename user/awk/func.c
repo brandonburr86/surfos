@@ -6,7 +6,7 @@ File: func.c    Date: 11/01/26
 Regular expressions and the built-in functions.
 
 libsurf's regex.c takes POSIX's syntax, and awk's is that with a few differences, so a pattern
-goes through awk_ere() first. awk's escapes (\n, \t, \/, \" and \ddd) become what they stand for.
+goes through awk_ere() first. awk's escapes (\n, \t, \/, \", \ddd and \xhh) become what they stand for.
 In a bracket expression \ is itself in POSIX but an escape in awk, so [\]a] is rewritten, with
 [.].] for an escaped ] or the like, which POSIX has for this. Everything else with a \ goes to the
 library as it is: \. and the like, and its \w \s \< \>. A compiled pattern is kept: a string
@@ -60,6 +60,7 @@ static int escape_value(const char *s, unsigned n, unsigned *used) {
     case '/': return '/';
     case '"': return '"';
     }
+    if(s[0] == 'x') return hex_byte(s, n, used);
     if(s[0] >= '0' && s[0] <= '7') return octal(s, n, used);
     return -1;
 }
