@@ -69,6 +69,7 @@ USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a pr
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
 USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): the calculator, user/bc/
+USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -607,6 +608,7 @@ unittest: test-kalloc
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
                user/libsurf/time.c user/libsurf/malloc.c
+HOSTUSER_SRC += user/libsurf/strtod.c           # 11/01/26: sscanf's floating point
 HOSTUSER_OBJ = $(HOSTUSER_SRC:user/libsurf/%.c=$(BUILD)/host/libsurf/%.o)
 $(BUILD)/host/libsurf/%.o: user/libsurf/%.c tests/host/libsurf_names.h
 	@mkdir -p $(dir $@)
@@ -748,6 +750,41 @@ unittest: unittest-lang
 .PHONY: unittest-lang
 unittest-lang: $(BUILD)/host/test_bc
 	$(BUILD)/host/test_bc
+
+# 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
+# (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
+# i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
+TEXT_HOST_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+                  -include tests/host/text_names.h -MMD -MP
+$(BUILD)/host/text/%.o: user/libsurf/%.c tests/host/libsurf_names.h tests/host/text_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(TEXT_HOST_FLAGS) -c $< -o $@
+$(BUILD)/host/text/regex.o: user/include/regex.h
+$(BUILD)/host/text/math.o: user/include/math.h
+$(BUILD)/host/test_regex: tests/host/test_regex.c user/include/regex.h $(BUILD)/host/text/regex.o $(BUILD)/host/libsurf/ctype.o \
+                          $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_regex.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
+                           $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_strtod.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/host/text/math.o $(BUILD)/host/libsurf/strtod.o \
+                         $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
+$(BUILD)/host/test_getopt: tests/host/test_getopt.c $(BUILD)/host/text/getopt.o $(BUILD)/host/libsurf/string.o \
+                           $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_getopt.c $(filter %.o,$^) -o $@
+unittest: unittest-text
+.PHONY: unittest-text
+unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm $(BUILD)/host/test_getopt
+	$(BUILD)/host/test_regex
+	$(BUILD)/host/test_strtod
+	$(BUILD)/host/test_libm
+	$(BUILD)/host/test_getopt
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

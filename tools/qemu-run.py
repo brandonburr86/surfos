@@ -1408,6 +1408,19 @@ SMOKE = [
       ("echo 'while(1) 7' | bc | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF \u224b> ')]),
       ('head -1 /initrd/man/bc.txt', ['bc - ', shown('SURF \u224b> ')]),
       ('exit', [])]),
+    # 11/01/26 (the command-line suite, track text): what libsurf gained, inside SurfOS: libtest (user/bin/libtest.c) checks
+    # regcomp and regexec, strtod, sscanf's floats, getopt, system, popen and pclose, and that the mathematical functions
+    # give the same bits here as on the host (user/bin/libm_grid.h), at -O0 and at -O2, on x87
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-text', ['cli-text\r\n', shown('SURF \u224b> ')]),
+      ('libtest regex', ['LIBTEST regex PASS', shown('SURF \u224b> ')]),
+      ('libtest numbers', ['LIBTEST numbers PASS', shown('SURF \u224b> ')]),
+      ('libtest math', ['LIBTEST math PASS', shown('SURF \u224b> ')]),
+      ('libtest getopt', ['LIBTEST getopt PASS', shown('SURF \u224b> ')]),
+      ('libtest system', ['seen by a child', 'LIBTEST system PASS', shown('SURF \u224b> ')]),
+      ('libtest popen', ['LIBTEST popen PASS', shown('SURF \u224b> ')]),
+      ('libtest order | cat', ['first\r\nsecond\r\nthird\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],
