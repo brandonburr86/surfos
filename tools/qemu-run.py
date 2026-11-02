@@ -1429,6 +1429,12 @@ SMOKE = [
        ['1 he[ll]o 7 7 1\r\n', shown('SURF ≋> ')]),
       ("awk 'BEGIN { while ((\"seq 3\" | getline x) > 0) s += x; print s, close(\"seq 3\"), system(\"exit 7\") }'",
        ['6 0 7\r\n', shown('SURF ≋> ')]),
+      # (what awk has read of a command, a file or a pipe survives a system() and an fflush(), which flush stdio's streams)
+      ("awk 'BEGIN { c = \"seq 3000\"; while ((c | getline x) > 0) { n++; s += x; if (n == 10) system(\"true\"); "
+       "if (n == 20) fflush() } print n, s, close(c), close(c) }'", ['3000 4501500 0 -1\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 > /hda1/S.TXT; awk 'BEGIN { f = \"/hda1/S.TXT\"; while ((getline x < f) > 0) { n++; if (n == 10) "
+       "system(\"true\") } print n, close(f) }'; rm /hda1/S.TXT", ['3000 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 | awk 'NR == 10 { system(\"true\") } END { print NR }'", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
       ("awk 'BEGIN { f = \"/hda1/A.TXT\"; print \"one\" > f; close(f); print \"two\" >> f }'; awk '{ print NR, $0 }' /hda1/A.TXT; rm /hda1/A.TXT",
        ['1 one\r\n', '2 two\r\n', shown('SURF ≋> ')]),
       ("dmesg | awk '/FAT16: hda1/ { print $2, (NF > 3) }' | head -1", ['hda1: 1\r\n', shown('SURF ≋> ')]),
