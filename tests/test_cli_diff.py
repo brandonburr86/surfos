@@ -925,6 +925,18 @@ def test_property_real_files():
                 ok(r[0] == 0 and get(d + "/t") == a, "and -R: %r" % (r,))
 
 
+# -- the review of 114ac02 --------------------------------------------------------------------------------------------
+
+def test_review_nits():
+    ok(ours("od", "-N", "17592186044416m", stdin=b"abc")[0] == 2, "od -N: a suffix that overflows")
+    ok(ours("od", "-j", "17592186044416m", stdin=b"abc")[0] == 2, "od -j: a suffix that overflows")
+    r = ours("nl", "-v", "9223372036854775807", stdin=b"a\nb\n")
+    ok(r[0] == 2 and b"9223372036854775807\ta\n" in r[1] and b"nl:" in r[2], "nl: a number that would overflow: %r" % (r,))
+    r = ours("nl", "-v", "-9223372036854775807", "-i", "-5", stdin=b"a\nb\n")
+    ok(r[0] == 2, "nl: and downwards: %r" % (r,))
+    ok(ours("nl", "-w", "2147483647", "-b", "n", stdin=b"")[0] == 2, "nl: a width that overflows")
+
+
 # -- what no tool may do -----------------------------------------------------------------------------------------------
 
 
@@ -965,7 +977,7 @@ def test_pipelines():
 def main():
     tests = [test_rev, test_paths, test_cmp, test_comm, test_join, test_paste, test_fold, test_nl, test_od, test_base64, test_strings, test_file, test_tree,
              test_cal, test_diff_against_real, test_diff_options, test_diff_trees, test_patch_files, test_patch_saving, test_patch_against_real,
-             test_property_real_files, test_bad_input, test_pipelines]
+             test_property_real_files, test_review_nits, test_bad_input, test_pipelines]
     only = sys.argv[2:]
     for t in tests:
         if only and t.__name__ not in only:

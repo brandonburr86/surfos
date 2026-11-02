@@ -29,14 +29,21 @@ static int style = 't', width = 6;
 static const char *sep = "\t";
 static size_t sep_cells;                /* the columns sep takes */
 static long long number = 1, step = 1;
+static int spent;
 #ifdef NL_REGEX
 static regex_t pattern;
 #endif
 
 static void put_prefix(int numbered) {
     if(numbered) {
+        if(spent) {                             /* the number before this was the last there is */
+            cli_flush("nl");
+            fprintf(stderr, "nl: the line number goes past what 64 bits hold\n");
+            exit(2);
+        }
         printf("%*lld%s", width, number, sep);
-        number += step;
+        if(step > 0 ? number > LLONG_MAX - step : number < LLONG_MIN - step) spent = 1;
+        else number += step;
     } else printf("%*s", (int)((size_t)width + sep_cells), "");
 }
 
@@ -136,6 +143,10 @@ int main(int argc, char **argv) {
     }
     len = strlen(sep);
     for(k = 0; k < len; k += (size_t)cli_seq((const unsigned char *)sep + k, len - k)) sep_cells++;
+    if(sep_cells > (size_t)(INT_MAX - width)) {  /* the indent of a line with no number must fit an int */
+        fprintf(stderr, "nl: %d: too wide\n", width);
+        return 2;
+    }
     do {
         const char *name = i < argc ? argv[i] : "-";
         FILE *f = lu_open(name);

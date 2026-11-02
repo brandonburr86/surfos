@@ -225,11 +225,11 @@ static int parse_bytes(const char *s, unsigned long long *v) {
         n = n * b + d;
     }
     if(s == start) return -1;
-    if(*s == 'b') n <<= 9;
-    else if(*s == 'k') n <<= 10;
-    else if(*s == 'm') n <<= 20;
-    else if(*s) return -1;
-    if(*s && s[1]) return -1;
+    if(*s) {
+        int shift = *s == 'b' ? 9 : *s == 'k' ? 10 : *s == 'm' ? 20 : 0;
+        if(!shift || s[1] || n > ULLONG_MAX >> shift) return -1;
+        n <<= shift;
+    }
     *v = n;
     return 0;
 }
