@@ -2736,10 +2736,16 @@ def scenario_fsck(args, image, firmware, outdir):
                 results.append(('pulled in a repair: it ends', vm.expect('status ', 120) and vm.expect(PROMPT, 60)))
                 time.sleep(1)
                 vm.mon.cmd('device_add ' + DATA_STICK)
+                run_steps(vm, results, [('sleep 3000', []), ('lsblk', ['usb1p1'], [], 'plugged in once more')], timeout=120)
+                # the pull's moment is timing: on a fast kernel it can come after the last write, in the look that follows it.
+                # Then the volume is repaired, and there is nothing left to ask
+                vm.send('fsck -r usb1p1; echo status $?\n')
+                ok = vm.expect(re.compile(FSCK_ASK.encode() + rb'|    clean'), 120)
+                if ok and vm.transcript[:vm.cursor].endswith(FSCK_ASK.encode()):
+                    vm.send('usb1p1\n')
+                    ok = vm.expect('repaired: clean', 120)
+                results.append(('repaired after the pulls', ok and vm.expect('status 0', 60) and vm.expect(PROMPT, 60)))
                 run_steps(vm, results, [
-                    ('sleep 3000', []),
-                    ('lsblk', ['usb1p1'], [], 'plugged in once more'),
-                    ('fsck -r usb1p1; echo status $?', [FSCK_ASK], [('usb1p1', ['repaired: clean', 'status 0'])], 'repaired after the pulls'),
                     ('fsck usb1p1; echo status $?', ['clean', 'status 0'], [], 'clean after the pulls'),
                     ('mount usb1p1 /x', ['/x: fat32'], [], 'mounts'),
                     ('run wc -l /x/BIG.BIN', ['16384'], [], 'BIG.BIN whole after the pulls'),
