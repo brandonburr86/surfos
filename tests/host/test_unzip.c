@@ -432,6 +432,49 @@ static void test_refusals(void) {
         check(run("-p") == 0, "-p writes no file, so the name does not matter");
         check(run("-t") == 0, "nor does -t");
     }
+    /* no name to make, and data that would go nowhere: said, and status 2, as tar does */
+    {
+        static const char *const none[] = { "", ".", "./", "././" };
+        for(i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+            z_start();
+            z_stored(none[i], "data with no name\n");
+            z_stored("ok.txt", "ok\n");
+            z_end();
+            check(run("") == 2 && ars_is("/dest/ok.txt", "ok\n") && ars_count() == 3, "an entry with no name that holds data: status 2, and the next is taken");
+            check(has(ars_stderr(), "no name") || has(ars_stderr(), "holds data"), "and it is said");
+        }
+        z_start();
+        z_stored("", "");
+        z_end();
+        check(run("") == 2 && has(ars_stderr(), "no name"), "an empty file with no name is said as well");
+        z_start();
+        z_stored("./", "");
+        z_stored("ok.txt", "ok\n");
+        z_end();
+        check(run("") == 0 && ars_is("/dest/ok.txt", "ok\n"), "./ with nothing in it is only the top");
+    }
+    /* a folder that holds data: the folder is made, and the data must not go silently */
+    z_start();
+    z_stored("sub/", "data in a folder's entry\n");
+    z_stored("ok.txt", "ok\n");
+    z_end();
+    check(run("") == 2 && ars_is_dir("/dest/sub") && ars_is("/dest/ok.txt", "ok\n") && has(ars_stderr(), "holds data"), "a folder that holds data: made, said, status 2");
+    check(run("-t") == 2 && has(ars_stderr(), "holds data"), "-t says so too");
+    check(run("-p") == 2 && has(ars_stderr(), "holds data"), "and -p");
+    {
+        struct ent d;                                   /* a folder stored as an empty deflate stream: two bytes, and nothing in them */
+        static const unsigned char empty[2] = { 0x03, 0x00 };
+        memset(&d, 0, sizeof(d));
+        d.name = "sub/";
+        d.method = 8;
+        d.data = empty;
+        d.csize = 2;
+        z_start();
+        z_entry(&d);
+        z_end();
+        check(run("") == 0 && ars_is_dir("/dest/sub"), "a folder deflated to nothing is only a folder");
+    }
+
     /* "./" and folders in the name */
     z_start();
     z_stored("./a.txt", "x\n");

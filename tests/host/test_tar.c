@@ -917,7 +917,13 @@ static void test_refusals(void) {
     a_start();
     a_text("./", "a file named after the top\n");
     a_end();
-    check(unpack("") == 0 && ars_count() == 2, "./ with data: a name that ends in / is a folder, the top again, and its data is read past");
+    check(unpack("") == 2 && ars_count() == 2 && has(ars_stderr(), "holds data"), "./ with data: a folder, the top again, and its data is said to go");
+    a_start();
+    a_text("sub/", "data in a folder's entry\n");
+    a_text("after.txt", "after\n");
+    a_end();
+    check(unpack("") == 2 && ars_is_dir("/dest/sub") && ars_is("/dest/after.txt", "after\n") && has(ars_stderr(), "holds data"),
+          "a folder by its name that holds data: made, said, status 2");
     a_start();
     a_entry("", '0', "no name\n", 8, F_USTAR);
     a_end();

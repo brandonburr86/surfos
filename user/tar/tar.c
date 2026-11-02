@@ -47,6 +47,7 @@ stop the archive being read.
 #define SHOW_SIZE 1024                  /* a name as printed */
 #define GZ_LEVEL  6
 #define PAX_BAD   "the pax header before it could not be read, so this may not be its name: skipped"
+#define FOLDER_DATA "a folder that holds data: the data is skipped"
 
 struct item { const char *chdir_to, *name; };   /* -C and names, in the order given */
 
@@ -435,6 +436,7 @@ static int extract_entry(void) {
         return 0;
     }
     if(e->type == TAR_DIR) {
+        if(e->size) member_say(e->name, FOLDER_DATA);
         if(path[0]) make_folder(path);
         return 0;
     }

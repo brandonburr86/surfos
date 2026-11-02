@@ -220,6 +220,12 @@ static int is_folder(const char *name) {
     return n && name[n - 1] == '/';
 }
 
+/* The data of a folder's entry goes nowhere: never silently. Only real data counts: some tools deflate a folder's nothing
+   into two bytes. */
+static void folder_data(const struct zip_entry *e, const char *name) {
+    if(is_folder(name) && e->usize) say(name, "a folder that holds data: the data is skipped");
+}
+
 static void make_folder(char *path, const char *show) {
     struct stat st;
     if(of_parents(path) < 0) {
@@ -245,6 +251,11 @@ static void extract_one(const struct zip_entry *e, const char *name, const char 
         say(name, why);
         return;
     }
+    if(!path[0] && !is_folder(name)) {
+        say(name, "a file with no name: skipped");
+        return;
+    }
+    folder_data(e, name);
     if(!path[0]) return;
     if(zip_is_special(e)) {
         say(name, "a link or a device: skipped, FAT cannot hold one");
@@ -288,6 +299,7 @@ static void extract_one(const struct zip_entry *e, const char *name, const char 
 static void test_one(const struct zip_entry *e, const char *name) {
     uint32_t data;
     const char *why;
+    folder_data(e, name);
     if(is_folder(name) || !readable(e, name)) return;
     why = find_data(e, &data);
     if(!why) why = copy_data(e, data, -1);
@@ -298,6 +310,7 @@ static void test_one(const struct zip_entry *e, const char *name) {
 static void pipe_one(const struct zip_entry *e, const char *name) {
     uint32_t data;
     const char *why;
+    folder_data(e, name);
     if(is_folder(name) || !readable(e, name)) return;
     why = find_data(e, &data);
     if(!why) why = copy_data(e, data, 1);
