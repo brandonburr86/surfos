@@ -17,6 +17,7 @@
 #define S_EBADF        9
 #define S_ENOMEM      12
 #define S_EFAULT      14
+#define S_EBUSY       16
 #define S_EEXIST      17
 #define S_ENOTDIR     20
 #define S_EISDIR      21
@@ -55,7 +56,7 @@ struct node {
     size_t len, cap;
     size_t hole_at;                     /* a run of zeros begins after this many bytes of bytes */
     unsigned long long hole;
-    int dir, device, gone;
+    int dir, device, gone, unreadable;
     unsigned lie;                       /* bytes stat claims that are not there */
     int twin;                           /* half a rename: the other node holding the same data, or -1 */
     unsigned mtime;
@@ -86,6 +87,7 @@ static size_t out_limit;
 static int out_limited;
 
 static int change_count, fail_nth, fail_err, pull_nth, half_rename, most_open, long_paths, left_open;
+static unsigned long long bytes_read;
 static size_t quota, used_bytes;
 static int quota_on, mark_from;
 static jmp_buf finish;
@@ -221,6 +223,13 @@ static int bad_name(const char *abs) {
     return 0;
 }
 
+/* is n open on a descriptor? fs/fat.c's live_node(): such a file is neither removed nor renamed over */
+static int in_use(int n) {
+    int i;
+    for(i = 3; i < NR_OPEN; i++) if(fds[i].used && fds[i].node == n) return 1;
+    return 0;
+}
+
 /* one change to the disk: 0, or the error it fails with */
 static int change(void) {
     change_count++;
@@ -289,6 +298,7 @@ int surf_open(const char *path, int flags, ...) {
     if(n >= 0 && (flags & S_O_CREAT) && (flags & S_O_EXCL)) return fail_with(S_EEXIST);
     if(n >= 0 && nodes[n].dir && writing) return fail_with(S_EISDIR);
     if(n >= 0 && !nodes[n].dir && (flags & S_O_DIRECTORY)) return fail_with(S_ENOTDIR);
+    if(n >= 0 && nodes[n].unreadable) return fail_with(S_EIO);
     if(n < 0) {
         if(!(flags & S_O_CREAT)) {
             if(parent_of(abs, &err) < 0) return fail_with(err);
@@ -350,6 +360,7 @@ int surf_read(int fd, void *buf, size_t len) {
         done += k;
     }
     fds[fd].pos += done;
+    bytes_read += done;
     return (int)done;
 }
 
@@ -486,6 +497,7 @@ int surf_unlink(const char *path) {
     n = lookup(abs);
     if(n < 0) return fail_with(S_ENOENT);
     if(nodes[n].dir) return fail_with(S_EISDIR);
+    if(in_use(n)) return fail_with(S_EBUSY);
     if((e = change())) return fail_with(e);
     untwin(n);
     free_data(&nodes[n]);
@@ -503,6 +515,7 @@ int surf_rename(const char *from, const char *to) {
     if(x < 0) return fail_with(S_ENOENT);
     if(parent_of(b, &err) < 0) return fail_with(err);
     if(y >= 0 && nodes[y].dir) return fail_with(S_EISDIR);
+    if(y >= 0 && y != x && in_use(y)) return fail_with(S_EBUSY);
     if((e = bad_name(b))) return fail_with(e);
     if(half_rename) {                                   /* the new name written, the old one not yet gone */
         half_rename = 0;
@@ -858,6 +871,16 @@ int ars_open_files(void) {
     return left_open;
 }
 
+void ars_unreadable(const char *path) {
+    char x[PATH_LIMIT * 2];
+    if(normalize(path, x) || lookup(x) < 0) abort();
+    nodes[lookup(x)].unreadable = 1;
+}
+
+unsigned long long ars_bytes_read(void) {
+    return bytes_read;
+}
+
 void ars_lie_size(const char *path, unsigned extra) {
     char x[PATH_LIMIT * 2];
     if(normalize(path, x) || lookup(x) < 0) abort();
@@ -893,6 +916,7 @@ int ars_run(ars_tool tool, const char *const *argv) {
     change_count = 0;
     most_open = 0;
     long_paths = 0;
+    bytes_read = 0;
     r = setjmp(finish);
     if(!r) r = tool(argc, copy);
     else r--;

@@ -1,7 +1,8 @@
 /* The world of tests/host/ar_sim.c (11/01/26): gzip, tar and unzip as they are, built against SurfOS's user headers with
    libsurf's names (tests/host/libsurf_names.h, ar_names.h), run on an in-memory file system that behaves as FAT under
    SurfOS's kernel: names ignore ASCII case and refuse what fs/fat.c's validate_name() refuses; a path of 256 bytes or
-   more is EFAULT; lseek stops at 2 GB; a program has 16 descriptors; a folder must exist before anything goes in it.
+   more is EFAULT; lseek stops at 2 GB; a program has 16 descriptors; a folder must exist before anything goes in it; a
+   file that is open is neither removed nor renamed over (EBUSY, fs/fat.c's live_node()).
    A test sets up files and standard input, runs a tool, and reads back its status, its output and what is on the disk.
    Any change to the disk can be made to fail, once or from then on (the disk pulled out), and the disk can fill up.
    Plain C, for the host's headers. */
@@ -36,6 +37,7 @@ void ars_mark(void);
 void ars_chdir(const char *path);
 void ars_same_time(const char *a, const char *b);       /* b gets a's mtime: with one size, what a half-done rename leaves */
 void ars_lie_size(const char *path, unsigned extra);    /* stat and fstat say this many bytes more: a file that shrank since */
+void ars_unreadable(const char *path);                  /* opening it fails with EIO: a damaged folder or file */
 
 void ars_stdin(const void *bytes, size_t n, int is_pipe, size_t chunk);     /* reads give at most chunk bytes */
 void ars_ttys(int in, int out);                         /* are descriptors 0, and 1 and 2, terminals? */
@@ -52,6 +54,7 @@ int ars_changes(void);                                  /* changes the last run 
 int ars_open_files(void);                               /* descriptors open when the last run ended, 0 to 2 not counted */
 int ars_most_open(void);                                /* the most open at once, in the last run */
 int ars_long_paths(void);                               /* calls given a path of 256 bytes or more in the last run */
+unsigned long long ars_bytes_read(void);                /* read from files in the last run */
 
 /* Runs tool with these arguments, argv[0] first, NULL after the last: its status, 141 for the pipe above */
 int ars_run(ars_tool tool, const char *const *argv);
