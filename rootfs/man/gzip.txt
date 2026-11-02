@@ -9,7 +9,8 @@ DESCRIPTION
     itself is deleted once the .gz has been written and synced to the
     disk, not before. With no files, or for -, standard input is
     compressed to standard output. Options may come after the names;
-    after -- a name is a name, however it looks.
+    after -- a name is a name, however it looks, except that a lone -
+    is still standard input.
 
     A .gz that already exists is left alone unless -f is given, and a
     name that already ends in .gz is passed over. -f replaces a file

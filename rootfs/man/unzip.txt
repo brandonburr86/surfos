@@ -16,9 +16,10 @@ DESCRIPTION
     kept: SurfOS cannot set them.
 
     unzip refuses a name that is absolute or holds .., and one with a
-    character FAT does not allow (: * ? " < > | \), or that ends in a
-    space or a dot. Encrypted members, other methods, links and devices
-    are skipped. Each of those is said and the status is then 2; the
+    control character or a character FAT does not allow
+    (: * ? " < > | \), or that ends in a space or a dot. Encrypted
+    members, other methods, links and devices are skipped. Each of
+    those is said and the status is then 2; the
     members around it are still taken. A member that holds more or
     less than it claims is deleted. An archive whose members overlap,
     or claim more than the file holds, is refused whole: that is how a
