@@ -1459,6 +1459,9 @@ SMOKE = [
       # (at a terminal a pattern as RS gives a record as soon as the next byte is there: the person does not type 64 KB)
       ("awk 'BEGIN { RS = \"[0-9]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
       ('a1b2c', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
+      # (and when RS can match the newline, the line's last record comes with the line, not with the next one)
+      ("awk 'BEGIN { RS = \"[0-9\\n]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
       ("awk 'BEGIN { while (1) print 7 }' | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF ≋> ')]),
       ('head -1 /initrd/man/awk.txt', ['awk - ', shown('SURF ≋> ')]),
       ('exit', [])]),

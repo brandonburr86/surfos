@@ -169,7 +169,8 @@ static int read_to_string(struct reader *r, const char *sep, unsigned len, struc
 /* A regular expression. More input could make a match longer, or bring an earlier one, and the library has no way to say
    whether it could, so a match is taken once RS_MARGIN bytes past it are here, or the input has ended. Then the same bytes
    give the same records however they arrive, unless a match depends on what comes further on than that. A person at a
-   terminal cannot be made to type that much: there it is one byte past the match, a newline usually.
+   terminal cannot be made to type that much: there it is one byte past the match, or a match that ends the line typed,
+   as nothing more comes until the person types it.
    Each search goes from the record's start, so each reads as much again as the last did: a long record costs about three
    searches of itself, not one for each read. An empty match separates nothing. */
 static int read_to_regex(struct reader *r, const struct regex *re, struct str **rec) {
@@ -187,7 +188,7 @@ static int read_to_regex(struct reader *r, const struct regex *re, struct str **
             if((unsigned)so >= n) break;
             from = (unsigned)so + 1;
         }
-        if(found && (r->eof || (unsigned)eo + (r->tty ? 1 : RS_MARGIN) <= n)) {
+        if(found && (r->eof || (unsigned)eo + (r->tty ? 1 : RS_MARGIN) <= n || (r->tty && r->buf[r->start + eo - 1] == '\n'))) {
             *rec = take(r, (unsigned)so, (unsigned)(eo - so));
             return 1;
         }
