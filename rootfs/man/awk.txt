@@ -43,6 +43,10 @@ DESCRIPTION
         "cmd" | getline     "cmd" | getline x
         close("file")       fflush()    system("cmd")
 
+    > empties the file the first time it is named in a run, as the
+    shell does, and later prints add to it until close(): >> keeps
+    what was there. A file and a command of one name are two things.
+
     Functions: length substr index split sub gsub match sprintf
     tolower toupper sin cos atan2 exp log sqrt int rand srand.
 

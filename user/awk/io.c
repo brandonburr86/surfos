@@ -298,10 +298,16 @@ int main_record(struct str **rec) {
 
 /**** files and commands by name ****/
 
-static struct stream *stream_find(struct str *name, int in) {
+/* A file and a command may have one name, each way, and are four streams then; > and >> of a name are one. */
+static int stream_kind(int how) {
+    return how == TO_APPEND ? TO_FILE : how;
+}
+
+static struct stream *stream_find(struct str *name, int how) {
     struct stream *s;
     for(s = streams; s; s = s->next)
-        if((s->in != NULL) == in && s->name->len == name->len && !memcmp(s->name->s, name->s, name->len)) return s;
+        if(stream_kind(s->how) == stream_kind(how) && s->name->len == name->len && !memcmp(s->name->s, name->s, name->len))
+            return s;
     return NULL;
 }
 
@@ -338,7 +344,7 @@ FILE *output_to(int how, struct str *name) {
         if(!strcmp(name->s, "/dev/stderr")) return stderr;
     }
     if(strlen(name->s) != name->len || !name->len) fatal("output to a name that is empty or has a NUL in it");
-    s = stream_find(name, 0);
+    s = stream_find(name, how);
     if(s) return s->f;
     f = how == TO_PIPE ? popen(name->s, "w") : fopen(name->s, how == TO_FILE ? "w" : "a");
     if(!f) fatal("%s: %s", name->s, errno == EMFILE ? "too many files open (close some)" : strerror(errno));
@@ -349,7 +355,7 @@ FILE *output_to(int how, struct str *name) {
 
 /* a file or a command to read from, opened the first time */
 static struct stream *input_from(int cmd, struct str *name) {
-    struct stream *s = stream_find(name, 1);
+    struct stream *s = stream_find(name, cmd ? IN_CMD : IN_FILE);
     FILE *f;
     if(s) return s;
     if(strlen(name->s) != name->len) return NULL;

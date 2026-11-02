@@ -390,6 +390,24 @@ static void files_and_commands(void) {
     snprintf(prog, sizeof(prog), "BEGIN { print \"x\" > \"%s/no/such\" }", dir);
     fails(prog, NULL, "No such file");
     fails("BEGIN { print \"x\" > \"\" }", NULL, "empty");
+    /* > and >> of a name are one stream, and a file and a command of that name are two, each way */
+    snprintf(prog, sizeof(prog), "BEGIN { print \"a\" > \"%s\"; print \"b\" >> \"%s\"; close(\"%s\"); getline x < \"%s\"; getline y < \"%s\"; print x, y }", f, f, f, f, f);
+    is(prog, NULL, "a b\n");
+    {
+        const char *s = join("both.sh");
+        char here[1024];
+        write_file(s, "#!/bin/sh\necho from-command\n", 28);
+        chmod(s, 0700);
+        snprintf(prog, sizeof(prog), "BEGIN { c = \"%s\"; getline a < c; c | getline b; print a; print b; print close(c), close(c) }", s);
+        is(prog, NULL, "#!/bin/sh\nfrom-command\n0 -1\n");
+        snprintf(prog, sizeof(prog), "BEGIN { c = \"%s\"; c | getline b; getline a < c; print a; print b }", s);
+        is(prog, NULL, "#!/bin/sh\nfrom-command\n");
+        if(!getcwd(here, sizeof(here)) || chdir(dir)) abort();
+        unlink("cat");
+        is("BEGIN { print \"to the file\" > \"cat\"; print \"to the command\" | \"cat\"; close(\"cat\"); getline x < \"cat\"; print x }", NULL, "to the command\nto the file\n");
+        unlink("cat");
+        if(chdir(here)) abort();
+    }
     /* descriptors run out with a message, here at the host's limit, and close gives them back */
     {
         const char *p = "BEGIN { for(i = 0; i < 200; i++) { f = d \"/m\" i; print i > f; close(f); getline x < f; close(f); n += x }; print n }";
