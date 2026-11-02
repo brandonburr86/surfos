@@ -197,6 +197,14 @@ GNU_ONLY = [
     (['s/a/b/'], b'\x00a\n'), (['s/./X/g'], b'a\x00b\n'), (['p'], b'a\x00b'), (['y/a/b/'], b'a\x00a\n'), (['l'], b'a\x00b\n'),
     # empty regular expressions
     (['/a/s//X/'], AB), (['s/a/X/;s//Y/'], b'aa\n'), (['/a/{//d}'], AB), (['/\\(a\\)/s//\\1\\1/'], AB), (['-n', '/b/,//p'], AB), (['/a/,/c/{//d}'], AB),
+    # l: the width at the edges of what is spelled, wide escapes on narrow lines
+    (['-n', 'l 2'], b'a\tb\n'), (['-n', 'l 3'], b'a\tb\n'), (['-n', 'l 4'], b'a\tb\n'), (['-n', 'l 3'], b'\t\t\n'), (['-n', 'l 4'], b'\x01\x02\n'), (['-n', 'l 5'], b'\x01\x02\n'), (['-n', 'l 6'], b'\x01\x02\n'), (['-n', 'l 2'], b'\\\\\n'),
+    (['-n', 'l 3'], b'\\\\\n'), (['-n', 'l 1'], b'\n'), (['-n', 'l 1'], b'\t\n'), (['-n', 'l 2'], b'\t\n'), (['-n', 'l 7'], b'abcdef\n'), (['-n', 'l 8'], b'abcdef\n'), (['-n', 'l 9'], b'abcdef\n'), (['-n', 'N;l 4'], b'a\nb\n'), (['-n', 'l'], b'\n'), (['-n', 'l 4'], b'\xff\xfe\n'), (['-n', 'l 30'], b'abc\x00def\x7f\x1bghi\n' * 4),
+    # the pieces of s, y and addresses, and what ends a command
+    (['s/a\\nb/X/'], b'anb\n'), (['s/a/b\\'], AB), (['s/a\\'], AB), (['N;s/a\\\nb/X/'], b'a\nb\n'), (['s/a/x\\\ny/'], AB), (['s/[/]/x\\/y/'], b'/\n'), (['s/a/[/'], AB), (['s/[a/b]/X/'], b'/\n'), (['s/\\[a/b/'], b'[a\n'), (['s,[,],x,'], b',\n'), (['y,\\,,x,'], b',\n'), (['y/\\//x/'], b'/\n'), (['ybab\\bb'], b'a\n'),
+    (['s&a&x\\&y&'], AB), (['y&a&\\&&'], AB), (['\\|a\\|b|p'], b'a|b\n'), (['s/a/\\//'], AB), (['s/\\n/x/'], b'a\n'), (['snanbn'], b'a\n'), (['p;'], AB), (['p ;'], AB), (['p ; p'], AB), (['= ;p'], AB), (['x x'], AB), (['y/a/b/ ;p'], AB), (['y/a/b/ #c'], AB), (['s/a/b/ ; p'], AB), (['{p} ;p'], AB), (['{p} p'], AB), (['q ;'], AB), (['l ;'], AB), (['l 3 ;'], AB),
+    # escapes: digits up to their number, and what is no number
+    (['s/a/\\d6/'], AB), (['s/a/\\d0650/'], AB), (['s/a/\\o7/'], AB), (['s/a/\\o1010/'], AB), (['s/a/\\x4/'], AB), (['s/a/\\x414/'], AB), (['s/a/\\xg/'], AB), (['s/a/\\o9/'], AB), (['s/a/\\dx/'], AB), (['s/a/\\cA/'], AB), (['s/a/\\ca/'], AB), (['s/a/\\c?/'], AB), (['y/a/\\x41/'], AB), (['y/\\d097/x/'], AB), (['s/\\x61/x/'], AB), (['s/\\o141/x/'], AB), (['a \\x41b'], AB),
     # D and then more text than there was room for (macOS's sed leaves a stray byte at the end of the last line)
     (['$!N;s/$/ 0123456789012345678901234567890123456789012345678901234567890123456789/;P;D'], TEXT), (['$!N;G;s/\\n$/ 0123456789/;P;D'], TEXT),
     # a range to $ that starts on the last line is over at once, which D's second pass over the line shows
