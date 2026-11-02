@@ -77,6 +77,8 @@ USER_PROGS  += awk           # 11/01/26 (the command-line suite, track lang): th
 USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
 USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): the stream editor
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
+USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
+USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -1052,6 +1054,57 @@ unittest: unittest-fsckheap
 .PHONY: unittest-fsckheap
 unittest-fsckheap: $(BUILD)/host/test_fsckheap
 	$(BUILD)/host/test_fsckheap
+
+# 11/01/26 (the command-line suite, track net): telnet and ftp, each a program of several files, with its protocol and
+# its session host-tested. ftp links ftpd's protocol module (user/ftpd/ftp.c) as it is; tests/host/telnetc and ftpc hold
+# the simulated kernels. Each test's main.c is built apart, for -Dmain. No sanitizer here: a -m32 binary built with
+# -fsanitize hangs under this image's qemu-i386, so those runs are by hand, with clang on the Mac
+# (docs/superpowers/plans/2026-11-01-cli-suite-net.md says how)
+TELNET_SRC   = $(wildcard user/telnet/*.c)
+TELNET_OBJ   = $(TELNET_SRC:user/telnet/%.c=$(BUILD)/user/telnet/%.o)
+FTP_SRC      = $(wildcard user/ftp/*.c)
+FTP_OBJ      = $(FTP_SRC:user/ftp/%.c=$(BUILD)/user/ftp/%.o)
+$(BUILD)/user/telnet/%.o: user/telnet/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/telnet: $(TELNET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TELNET_OBJ) $(USER_LIB)
+$(BUILD)/user/ftp/%.o: user/ftp/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/ftp: $(FTP_OBJ) $(BUILD)/user/ftpd/ftp.o $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FTP_OBJ) $(BUILD)/user/ftpd/ftp.o $(USER_LIB)
+-include $(wildcard $(BUILD)/user/telnet/*.d $(BUILD)/user/ftp/*.d)
+TELNETC_SRC  = user/telnet/tnclient.c user/telnet/session.c user/telnetd/telnet.c
+FTPCS_SRC    = user/ftp/ftpclient.c user/ftp/session.c user/ftp/commands.c user/ftpd/ftp.c
+$(BUILD)/host/test_telnetc: tests/host/test_telnetc.c tests/host/telnetc/sim.h tests/host/telnetc/surf.h user/telnet/main.c \
+                            user/telnet/tnclient.h user/telnet/tnsession.h user/telnetd/telnet.h $(TELNETC_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetc -Dmain=telnet_main -c user/telnet/main.c -o $@.main.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnet -Itests/host/telnetc tests/host/test_telnetc.c $(TELNETC_SRC) $@.main.o -o $@
+$(BUILD)/host/test_ftpc: tests/host/test_ftpc.c user/ftp/ftpclient.c user/ftp/ftpclient.h user/ftpd/ftp.c user/ftpd/ftp.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/ftp tests/host/test_ftpc.c user/ftp/ftpclient.c user/ftpd/ftp.c -o $@
+$(BUILD)/host/test_ftpcs: tests/host/test_ftpcs.c tests/host/ftpc/sim.h tests/host/ftpc/surf.h user/ftp/main.c user/ftp/ftpclient.h \
+                          user/ftp/ftpsession.h user/ftp/ftpcommands.h user/ftpd/ftp.h user/bin/saveutil.h $(FTPCS_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/ftpc -Dmain=ftp_main -c user/ftp/main.c -o $@.main.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/ftpc tests/host/test_ftpcs.c $(FTPCS_SRC) $@.main.o -o $@
+unittest: unittest-net
+.PHONY: unittest-net
+unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/test_ftpcs
+	$(BUILD)/host/test_telnetc
+	$(BUILD)/host/test_ftpc
+	$(BUILD)/host/test_ftpcs
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
