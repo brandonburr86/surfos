@@ -1373,7 +1373,7 @@ SMOKE = [
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
     # 11/01/26 (the command-line suite, track diff): on the FAT disk, where saving goes through saveutil.h's rename: diff in its
     # forms and its status, patch through it and back with -R, a file made and one refused, a .rej, cmp, then one line each of
-    # the small tools. tests/host/test_diff.c and tests/test_cli_diff.py hold the depth
+    # the small tools. tests/host/test_diff.c and tests/test_cli_diff.py hold the depth; only here is the file system real
     ('surfsh', [shown('SURF \u224b> ')],
      [('echo cli-diff', ['cli-diff\r\n', shown('SURF \u224b> ')]),
       ('cd /hda1; printf "a\\nb\\nc\\n" > D1.TXT; printf "a\\nB\\nc\\nd\\n" > D2.TXT; diff D1.TXT D2.TXT; echo status $?; cd /',
@@ -1391,6 +1391,14 @@ SMOKE = [
       ('printf "%s\\n" "--- /x/y" "+++ /x/y" "@@ -1 +1 @@" "-a" "+b" | patch -p0; echo status $?', ['refused', 'status 2\r\n', shown('SURF \u224b> ')]),
       ('cd /hda1; seq 5000 > S1.TXT; seq 5000 | grep -v 777 > S2.TXT; diff S1.TXT S2.TXT | grep -c d; rm S1.TXT S2.TXT D.DIF N.DIF D1.TXT D2.TXT D3.TXT D3.TXT.rej; cd /',
        ['5\r\n', shown('SURF \u224b> ')]),
+      # the review: FAT will not replace a file with a descriptor open, so a patch naming its own file fails and leaves it; a
+      # failed -o leaves the user's file; an offset keeps the old file in .orig
+      ('cd /hda1; printf "%s\\n" "--- SELF.DIF" "+++ SELF.DIF" "@@ -1 +1 @@" "---- SELF.DIF" "+--- CHANGED" > SELF.DIF; patch -p0 -i SELF.DIF; echo status $?; head -1 SELF.DIF; ls SELF.DIF.tmp; rm SELF.DIF; cd /',
+       ['busy', 'status 2\r\n', '--- SELF.DIF\r\n', 'No such file', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "%s\\n" "--- G.TXT" "+++ G.TXT" "@@ -1 +1 @@" "-a" "+b" > G.DIF; printf "x\\n" > K.TXT; printf "KEEP\\n" > O.TXT; patch -o O.TXT K.TXT G.DIF; echo status $?; cat O.TXT; cd /',
+       ['not written', 'status 1\r\n', 'KEEP\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "top\\na\\n" > M.TXT; patch M.TXT G.DIF; echo status $?; tail -1 M.TXT; tail -1 M.TXT.orig; rm G.DIF K.TXT K.TXT.rej O.TXT M.TXT M.TXT.orig; cd /',
+       ['Hunk #1 succeeded at 2 (offset 1 line).\r\n', 'status 0\r\n', 'b\r\na\r\n', shown('SURF \u224b> ')]),
       ('printf "a\\nb\\n" > /hda1/C1.TXT; printf "b\\nc\\n" > /hda1/C2.TXT; comm /hda1/C1.TXT /hda1/C2.TXT; comm -12 /hda1/C1.TXT /hda1/C2.TXT',
        ['a\r\n\t\tb\r\n\tc\r\nb\r\n', shown('SURF \u224b> ')]),
       ('printf "1 x\\n2 y\\n" > /hda1/J1.TXT; printf "1 p\\n3 q\\n" > /hda1/J2.TXT; join /hda1/J1.TXT /hda1/J2.TXT; join -v 2 /hda1/J1.TXT /hda1/J2.TXT',
