@@ -467,7 +467,7 @@ static void read_to_end(void) {
 }
 
 static int do_read(int listing) {
-    int i, r;
+    int i, r, stopped;
     names_to = stdout;
     reader = malloc(sizeof(*reader));
     found = calloc((size_t)nitems + 1, 1);
@@ -507,6 +507,7 @@ static int do_read(int listing) {
             break;
         }
     }
+    stopped = r < 0 || reader->no_end;
     if(r < 0) {
         archive_trouble();
     } else {
@@ -521,7 +522,7 @@ static int do_read(int listing) {
         trouble = 1;
     }
     for(i = 0; i < nitems; i++) {
-        if(items[i].name && !found[i]) member_say(items[i].name, "not in the archive");
+        if(items[i].name && !found[i]) member_say(items[i].name, stopped ? "not reached: the archive stopped first" : "not in the archive");
     }
     if(fd > 0) close(fd);
     if(!listing) sync();

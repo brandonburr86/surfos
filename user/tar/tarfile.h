@@ -76,7 +76,7 @@ struct tar_reader {
     unsigned int pad;                   /* zeros after it, to the block's end */
     char long_name[TAR_NAME_MAX];       /* what 'L' or an 'x' path said of the next entry */
     int have_long, long_bad, have_size, next_sparse;
-    int next_bad, size_lost;            /* of the pax header before the next entry: see read_pax() */
+    int next_bad, size_lost, next_pax;  /* of the pax header before the next entry: see read_pax() */
     unsigned long long pax_size;
     char scratch[TAR_RECORD_KEEP];      /* a pax record, a long link name */
     unsigned char block[TAR_BLOCK];

@@ -691,6 +691,23 @@ static void test_formats(void) {
     a_end();
     check(unpack("") == 0 && ars_exists("/dest/b.txt"), "one zero block between entries: no end yet");
 
+    /* names not met because the archive stopped first */
+    a_start();
+    a_text("a.txt", "x\n");
+    a_text("b.txt", "y\n");
+    a_end();
+    A[1024 + 3] ^= 1;
+    check(unpack("a.txt b.txt c.txt") == 2 && ars_is("/dest/a.txt", "x\n") && has(ars_stderr(), "damaged"), "named members, and an archive that stops part way");
+    check(has(ars_stderr(), "b.txt: not reached") && has(ars_stderr(), "c.txt: not reached") && !has(ars_stderr(), "not in the archive"),
+          "what was not reached is not called absent");
+    a_start();
+    a_text("a.txt", "x\n");
+    check(unpack("a.txt b.txt") == 2 && has(ars_stderr(), "b.txt: not reached"), "the same with no end marker");
+    a_start();
+    a_text("a.txt", "x\n");
+    a_end();
+    check(unpack("b.txt") == 2 && has(ars_stderr(), "b.txt: not in the archive"), "and with a whole archive it is absent");
+
     /* links, devices and what FAT cannot hold: skipped and said, with the next entry found */
     {
         static const struct { int type; const char *word; } kinds[] = {
@@ -718,6 +735,20 @@ static void test_formats(void) {
     a_text("after.txt", "after\n");
     a_end();
     check(unpack("") == 0 && ars_is("/dest/after.txt", "after\n"), "nor a folder's");
+
+    /* pax lets a hard link carry the file's data (pax -o linkdata): the header's size counts there, and only there */
+    a_start();
+    a_pax("mtime", "1700000000", 10);
+    {
+        static char body[1000];
+        memset(body, 'L', sizeof(body));
+        header(b, "hard", '1', 1000, F_USTAR);
+        a_raw(b, 512);
+        a_data(body, 1000);
+    }
+    a_text("after.txt", "after\n");
+    a_end();
+    check(unpack("") == 2 && has(ars_stderr(), "hard link") && !ars_exists("/dest/hard") && ars_is("/dest/after.txt", "after\n"), "a hard link with data, in a pax archive: read past");
 
     /* GNU sparse: a map, extension blocks, its data; passed over */
     a_start();

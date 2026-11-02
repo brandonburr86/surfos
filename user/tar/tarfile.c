@@ -264,9 +264,10 @@ static int take_entry(struct tar_reader *t, unsigned long long size, unsigned lo
         e->name[n] = 0;
     }
     if(!type || type == '7') type = TAR_FILE;
-    /* These have no data, whatever the size field holds. */
-    if(type == TAR_DIR || type == TAR_HARDLINK || type == TAR_SYMLINK || type == TAR_CHARDEV || type == TAR_BLOCKDEV ||
-       type == TAR_FIFO) size = 0;
+    /* These have no data, whatever the size field holds; but pax may give a hard link the file's data (-o linkdata), and
+       a header's size for one counts in an entry with a pax header, and only there. */
+    if(type == TAR_DIR || (type == TAR_HARDLINK && !t->next_pax) || type == TAR_SYMLINK || type == TAR_CHARDEV ||
+       type == TAR_BLOCKDEV || type == TAR_FIFO) size = 0;
     /* A file by its type and a folder by its name, as old archives have it, still has its size read past. */
     if(type == TAR_FILE && e->name[0] && e->name[strlen(e->name) - 1] == '/') type = TAR_DIR;
     e->type = type;
@@ -276,7 +277,7 @@ static int take_entry(struct tar_reader *t, unsigned long long size, unsigned lo
     if(type == TAR_SPARSE && skip_sparse_map(t, b) < 0) return -1;
     t->left = e->size;
     t->pad = padding(e->size);
-    t->have_long = t->long_bad = t->have_size = t->next_sparse = t->next_bad = 0;
+    t->have_long = t->long_bad = t->have_size = t->next_sparse = t->next_bad = t->next_pax = 0;
     return 1;
 }
 
@@ -325,6 +326,7 @@ int tar_next(struct tar_reader *t) {
         }
         if(type == 'x') {
             if(read_pax(t, size) < 0) return -1;
+            t->next_pax = 1;
             continue;
         }
         if(type == 'g') {
