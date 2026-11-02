@@ -255,6 +255,10 @@ static void table(void) {
     RX("x{2", "x\\{2", "xx{2", "(1,4)", "refuses it");
     RX("(x{)", "(x\\{)", "x{", "(0,2)(0,2)", "refuses it");
     R("x{,2}", "xxx", "(0,2)");
+    R("x{,2}", "y", "(0,0)");
+    R("x{,3}y", "y", "(0,1)");
+    R("(p{,2})q", "q", "(0,1)(0,0)");
+    RB("x\\{,2\\}", "x{,2}", "y", "(0,0)");
     RB("x\\{,2\\}", "x{,2}", "xxx", "(0,2)");
     /* anchors: anywhere in an extended pattern, and they match where they match, inside groups and repetitions too */
     R("^", "xyz", "(0,0)");
@@ -710,23 +714,40 @@ static void table(void) {
     RB("p\\|^^q", "p|^\\^q", "^q", "(0,2)");
     RB("^^*p", "^\\^*p", "^^p", "(0,3)");
     RB("^**p", "^\\**p", "**p", "(0,3)");
-    /* not POSIX's or not the oracle's, so the library and the host alone: \< before an anchor or a star, and back-references */
+    /* back-references: the text the group took; a group the way did not set matches nothing; the groups are those of the first way to the longest match */
+    R("(x|y)\\1", "wxyyx", "(2,4)(2,3)");
+    R("(.)(.)\\2\\1", "wxyyx", "(1,5)(1,2)(2,3)");
+    R("(x*)y\\1", "xxyxx", "(0,5)(0,2)");
+    R("(x*)y\\1", "xyxx", "(0,3)(0,1)");
+    R("(x+)\\1", "xxxxx", "(0,4)(0,2)");
+    R("(x|xy)\\1z", "xyxyz", "(0,5)(0,2)");
+    R("((x)|y)\\2", "xx", "(0,2)(0,1)(0,1)");
+    R("(x)\\1|y", "y", "(0,1)");
+    R("(.)\\1", "wxyz", "NOMATCH");
+    RH("((p)|q)*r\\2", "pqrp", "NOMATCH", "keeps a group of an earlier iteration");
+    R("((p)|q)*r\\2", "qprp", "(0,4)(1,2)(1,2)");
+    RH("((x)y|z)*w\\2", "xyzwx", "NOMATCH", "keeps a group of an earlier iteration");
+    R("((x)y|z)*w\\2", "zxywx", "(0,5)(1,3)(1,2)");
+    RH("(x(y)?)*z\\2", "xyxzy", "NOMATCH", "keeps a group of an earlier iteration");
+    R("(x(y)?)*z\\2", "xyzy", "(0,4)(0,2)(1,2)");
+    R("(p|pq)\\1*", "pqpq", "(0,4)(0,2)");
+    R("(p|pq)(q*)\\1", "pqqpq", "(0,5)(0,2)(2,3)");
+    R("(p|pq)(r|qr)\\1", "pqrpq", "(0,5)(0,2)(2,3)");
+    R("(x|xy)\\1+", "xyxy", "(0,4)(0,2)");
+    R("(p*)(p*)\\2", "ppppq", "(0,4)(0,4)(4,4)");
+    R("(x*)(x*)\\1", "xxxx", "(0,4)(0,2)(2,2)");
+    R("(q?)(q*)\\2q", "qqqq", "(0,4)(0,1)(1,2)");
+    R("(.)(.*)\\1", "abca", "(0,4)(0,1)(1,3)");
+    RI("(p)\\1", "pP", "(0,2)(0,1)");
+    RI("(P+)\\1", "pPpP", "(0,4)(0,2)");
+    RB("\\(.\\)\\1", "(.)\\1", "wxxy", "(1,3)(1,2)");
+    RB("\\(x*\\)\\1", "(x*)\\1", "xxxxx", "(0,4)(0,2)");
+    RB("\\(x\\)\\(y\\)\\2\\1", "(x)(y)\\2\\1", "xyyx", "(0,4)(0,1)(1,2)");
+    RB("^\\(.*\\)-\\1$", "^(.*)-\\1$", "ab-ab", "(0,5)(0,2)");
+    RB("^\\(.*\\)-\\1$", "^(.*)-\\1$", "ab-ac", "NOMATCH");
+    /* \< before an anchor or a star, which is not POSIX's: the library and the host alone */
     row(B, "\\<^p", NULL, "p", "NOMATCH", NULL);
     row(B, "\\<*p", NULL, "*p", "NOMATCH", NULL);
-    row(E, "(x|y)\\1", NULL, "wxyyx", "(2,4)(2,3)", NULL);
-    row(E, "(.)(.)\\2\\1", NULL, "wxyyx", "(1,5)(1,2)(2,3)", NULL);
-    row(E, "(x*)y\\1", NULL, "xxyxx", "(0,5)(0,2)", NULL);
-    row(E, "(x*)y\\1", NULL, "xyxx", "(0,3)(0,1)", NULL);
-    row(E, "(x+)\\1", NULL, "xxxxx", "(0,4)(0,2)", NULL);
-    row(E, "(x|xy)\\1z", NULL, "xyxyz", "(0,5)(0,2)", NULL);
-    row(E, "((x)|y)\\2", NULL, "xx", "(0,2)(0,1)(0,1)", NULL);
-    row(E, "(x)\\1|y", NULL, "y", "(0,1)", NULL);
-    row(E, "(.)\\1", NULL, "wxyz", "NOMATCH", NULL);
-    row(B, "\\(.\\)\\1", NULL, "wxxy", "(1,3)(1,2)", NULL);
-    row(B, "\\(x*\\)\\1", NULL, "xxxxx", "(0,4)(0,2)", NULL);
-    row(B, "\\(x\\)\\(y\\)\\2\\1", NULL, "xyyx", "(0,4)(0,1)(1,2)", NULL);
-    row(B, "^\\(.*\\)-\\1$", NULL, "ab-ab", "(0,5)(0,2)", NULL);
-    row(B, "^\\(.*\\)-\\1$", NULL, "ab-ac", "NOMATCH", NULL);
 }
 
 static void errors_case(int flags, const char *pat, int want) {
@@ -1022,7 +1043,7 @@ static void backrefs(void) {
 
 /**** the oracle ****/
 
-enum { O_EMPTY, O_CHAR, O_ANY, O_NOTA, O_AB, O_SET, O_BOL, O_EOL, O_GROUP, O_CAT, O_ALT, O_REP };
+enum { O_EMPTY, O_CHAR, O_ANY, O_NOTA, O_AB, O_SET, O_BOL, O_EOL, O_BREF, O_GROUP, O_CAT, O_ALT, O_REP };
 
 #define OGEN 64                         /* the nodes of a random pattern */
 #define OLEN 8                          /* the bytes of a random text */
@@ -1138,6 +1159,7 @@ static size_t o_str(int n, char *b, size_t at, int ere) {
     case O_AB: at += (size_t)snprintf(b + at, 64, "[ab]"); break;
     case O_BOL: b[at++] = '^'; break;
     case O_EOL: b[at++] = '$'; break;
+    case O_BREF: at += (size_t)snprintf(b + at, 64, "\\%d", o->c); break;
     case O_GROUP:
         at += (size_t)snprintf(b + at, 64, ere ? "(" : "\\(");
         at = o_str(o->kid[0], b, at, ere);
@@ -1299,6 +1321,211 @@ static void o_solve(int root, char *want, size_t size) {
     snprintf(want, size, "NOMATCH");
 }
 
+/**** the oracle for back-references ****/
+
+/* With a back-reference what a node matches depends on what a group took, so the spans above cannot be worked out node by node.
+   This goes every way through the tree instead, in the order the library documents for back-references: alternatives from the
+   first, a repetition's body before leaving it (an unbounded one ends after an iteration that read nothing), groups inside a
+   group cleared each time it is entered; of the ways to the longest end from the leftmost start that has one, the first. How
+   each kind of repetition goes is what emit_repeat() in user/libsurf/regex.c says in its comment, written again over the tree. */
+
+#define OB_STEPS 4000000L
+
+enum { K_DONE, K_CAT, K_GROUP, K_FIXED, K_LOOP, K_STAR, K_OPTIONAL };
+
+struct kont {
+    int kind, n, count, at;
+    const struct kont *up;
+};
+
+static int ob_caps[MAXSUB][2], ob_best[MAXSUB][2], ob_found, ob_end;
+static long ob_steps;
+
+static void ob_go(int n, int i, const struct kont *k);
+static void ob_rep(int n, int count, int i, const struct kont *k);
+
+static void ob_next(int i, const struct kont *k) {
+    if(++ob_steps > OB_STEPS || (ob_found && ob_end == olen)) return;
+    switch(k->kind) {
+    case K_DONE:
+        if(!ob_found || i > ob_end) {
+            ob_found = 1;
+            ob_end = i;
+            memcpy(ob_best, ob_caps, sizeof(ob_caps));
+        }
+        return;
+    case K_CAT:                                 /* a concatenation's kids from k->count on */
+        if(k->count == on[k->n].kids) {
+            ob_next(i, k->up);
+        } else {
+            struct kont next = { K_CAT, k->n, k->count + 1, 0, k->up };
+            ob_go(on[k->n].kid[k->count], i, &next);
+        }
+        return;
+    case K_GROUP: {                             /* a group's end */
+        int g = on[k->n].group, old = ob_caps[g][1];
+        ob_caps[g][1] = i;
+        ob_next(i, k->up);
+        ob_caps[g][1] = old;
+        return;
+    }
+    case K_FIXED: case K_OPTIONAL:              /* an iteration that had to be, or one that could */
+        ob_rep(k->n, k->count, i, k->up);
+        return;
+    case K_STAR:                                /* an iteration of x* or x{0,} ended: one that read nothing leaves */
+        if(i == k->at) ob_next(i, k->up);
+        else ob_rep(k->n, 0, i, k->up);
+        return;
+    case K_LOOP:                                /* an iteration of the loop of x{m,}: again first, then out */
+        if(i == k->at) {
+            ob_next(i, k->up);
+        } else {
+            ob_rep(k->n, k->count, i, k->up);
+            ob_next(i, k->up);
+        }
+        return;
+    }
+}
+
+/* a repetition with count iterations made, at i */
+static void ob_rep(int n, int count, int i, const struct kont *k) {
+    const struct onode *o = &on[n];
+    int x = o->kid[0];
+    if(o->max == 0) {
+        ob_next(i, k);
+    } else if(o->max < 0 && o->min == 0) {      /* x*: the body, then out */
+        struct kont next = { K_STAR, n, 0, i, k };
+        ob_go(x, i, &next);
+        ob_next(i, k);
+    } else if(o->max < 0 && count < o->min - 1) {
+        struct kont next = { K_FIXED, n, count + 1, 0, k };
+        ob_go(x, i, &next);
+    } else if(o->max < 0) {                     /* x{m,}'s loop: the body, which must be there */
+        struct kont next = { K_LOOP, n, o->min - 1, i, k };
+        ob_go(x, i, &next);
+    } else if(count < o->min) {
+        struct kont next = { K_FIXED, n, count + 1, 0, k };
+        ob_go(x, i, &next);
+    } else if(count < o->max) {                 /* x{m,n}'s optional ones: the body, then out of all of them */
+        struct kont next = { K_OPTIONAL, n, count + 1, 0, k };
+        ob_go(x, i, &next);
+        ob_next(i, k);
+    } else {
+        ob_next(i, k);
+    }
+}
+
+static void ob_go(int n, int i, const struct kont *k) {
+    const struct onode *o = &on[n];
+    int j;
+    if(++ob_steps > OB_STEPS || (ob_found && ob_end == olen)) return;
+    switch(o->type) {
+    case O_EMPTY:
+        ob_next(i, k);
+        return;
+    case O_CHAR: case O_ANY: case O_NOTA: case O_AB: case O_SET:
+        if(i < olen && o_m(n, i, i + 1)) ob_next(i + 1, k);
+        return;
+    case O_BOL:
+        if(i == 0) ob_next(i, k);
+        return;
+    case O_EOL:
+        if(i == olen) ob_next(i, k);
+        return;
+    case O_BREF: {                              /* a group that is not set matches nothing */
+        int so = ob_caps[o->c][0], eo = ob_caps[o->c][1];
+        if(so < 0 || eo < 0 || i + (eo - so) > olen) return;
+        for(j = 0; j < eo - so; j++) if(o_fold((unsigned char)otext[so + j]) != o_fold((unsigned char)otext[i + j])) return;
+        ob_next(i + (eo - so), k);
+        return;
+    }
+    case O_GROUP: {
+        int g = o->group, saved[MAXSUB][2];
+        struct kont end = { K_GROUP, n, 0, 0, k };
+        memcpy(saved, ob_caps, sizeof(saved));
+        ob_caps[g][0] = i;
+        for(j = g + 1; j < g + o->ngroups && j < MAXSUB; j++) ob_caps[j][0] = ob_caps[j][1] = -1;
+        ob_go(o->kid[0], i, &end);
+        memcpy(ob_caps, saved, sizeof(saved));
+        return;
+    }
+    case O_CAT:
+        if(!o->kids) {
+            ob_next(i, k);
+        } else {
+            struct kont next = { K_CAT, n, 1, 0, k };
+            ob_go(o->kid[0], i, &next);
+        }
+        return;
+    case O_ALT:
+        for(j = 0; j < o->kids; j++) ob_go(o->kid[j], i, k);
+        return;
+    case O_REP:
+        ob_rep(n, 0, i, k);
+        return;
+    }
+}
+
+/* the answer by the rule above; 0, or -1 when there are too many ways to go through them all */
+static int ob_solve(int root, char *want, size_t size) {
+    int s, g, so[MAXSUB], eo[MAXSUB];
+    struct kont done = { K_DONE, 0, 0, 0, NULL };
+    memset(memo, -1, (size_t)onodes * sizeof(memo[0]));
+    for(s = 0; s <= olen; s++) {
+        ob_found = 0;
+        ob_steps = 0;
+        memset(ob_caps, -1, sizeof(ob_caps));
+        ob_go(root, s, &done);
+        if(ob_steps > OB_STEPS) return -1;
+        if(ob_found) {
+            for(g = 0; g < MAXSUB; g++) {
+                so[g] = ob_best[g][0];
+                eo[g] = ob_best[g][1];
+            }
+            so[0] = s;
+            eo[0] = ob_end;
+            show(want, size, 0, so, eo, MAXSUB);
+            return 0;
+        }
+    }
+    snprintf(want, size, "NOMATCH");
+    return 0;
+}
+
+/* how many groups each group holds, itself too, for the clearing above */
+static int o_count_groups(int n) {
+    int k, c = on[n].type == O_GROUP;
+    for(k = 0; k < on[n].kids; k++) c += o_count_groups(on[n].kid[k]);
+    if(on[n].type == O_GROUP) on[n].ngroups = c;
+    return c;
+}
+
+static int o_has_bref(int n) {
+    int k;
+    if(on[n].type == O_BREF) return 1;
+    for(k = 0; k < on[n].kids; k++) if(o_has_bref(on[n].kid[k])) return 1;
+    return 0;
+}
+
+/* some characters made back-references, each to a group closed before it, from the left, as the parser sees them */
+static void o_backrefs(int n, unsigned *closed) {
+    struct onode *o = &on[n];
+    int k;
+    if(o->type == O_CHAR) {
+        if(*closed && rnd(2)) {
+            int g;
+            do {
+                g = 1 + (int)rnd(9);
+            } while(!(*closed >> g & 1));
+            o->type = O_BREF;
+            o->c = g;
+        }
+        return;
+    }
+    for(k = 0; k < o->kids; k++) o_backrefs(o->kid[k], closed);
+    if(o->type == O_GROUP && o->group <= 9) *closed |= 1u << o->group;
+}
+
 /**** a table row's pattern, read for the oracle: extended syntax, where \c is c and a { is always an interval ****/
 
 static const char *ofrom;
@@ -1387,6 +1614,11 @@ static int o_read_atom(void) {
         return o_new(O_EOL);
     case '\\':
         ofrom++;
+        if(*ofrom >= '1' && *ofrom <= '9') {
+            n = o_new(O_BREF);
+            on[n].c = *ofrom++ - '0';
+            return n;
+        }
         /* fall through */
     default:
         n = o_new(O_CHAR);
@@ -1450,7 +1682,9 @@ static void o_row(const char *form, int icase, const char *str, char *want, size
     root = o_read_alt();
     otext = str;
     olen = (int)strlen(str);
-    o_solve(root, want, size);
+    o_count_groups(root);
+    if(!o_has_bref(root)) o_solve(root, want, size);
+    else if(ob_solve(root, want, size) < 0) snprintf(want, size, "too many ways");
     oicase = 0;
 }
 
@@ -1501,6 +1735,48 @@ static void random_cases(int rounds) {
     }
 #endif
     printf("test_regex: %d random patterns: %d whole matches differ from the host's\n", rounds, hostbad);
+}
+
+/* Random patterns with back-references, against the second oracle: rounds of them, made from the same patterns as above with some of
+   their characters turned into references to groups closed before. glibc is not asked: with back-references its rules are its own. */
+static void random_backrefs(int rounds) {
+    char pat[2048], bre[2048], text[OLEN + 1], want[512], got[512];
+    int done = 0, tries = 0, k, too_many = 0;
+    while(done < rounds && tries < 50 * rounds) {
+        int root, anchors = (int)rnd(3) == 0;
+        unsigned closed = 0;
+        tries++;
+        onodes = 0;
+        ogroups = 0;
+        root = o_gen(0, 10 + (int)rnd(10), anchors);
+        ogroups = 0;
+        o_number(root);
+        if(ogroups >= MAXSUB) continue;
+        o_backrefs(root, &closed);
+        if(!o_has_bref(root)) continue;
+        o_count_groups(root);
+        o_str(root, pat, 0, 1);
+        if(strlen(pat) > 300) continue;
+        olen = (int)rnd(OLEN + 1);
+        for(k = 0; k < olen; k++) text[k] = (char)('a' + rnd(3));
+        text[olen] = 0;
+        otext = text;
+        if(ob_solve(root, want, sizeof(want)) < 0) {
+            too_many++;
+            continue;
+        }
+        done++;
+        run_surf(pat, S_EXTENDED, text, 0, got, sizeof(got));
+        checks++;
+        if(strcmp(got, want)) fail("oracle with back-references", pat, text, got, want);
+        if(!anchors) {
+            o_str(root, bre, 0, 0);
+            run_surf(bre, 0, text, 0, got, sizeof(got));
+            checks++;
+            if(strcmp(got, want)) fail("oracle with back-references, basic", bre, text, got, want);
+        }
+    }
+    printf("test_regex: %d random patterns with back-references (%d more had too many ways to go through)\n", done, too_many);
 }
 
 /* is p where a character starts or ends in s? The characters counted from the start, on their own, not by the library's code */
@@ -1798,6 +2074,7 @@ int main(int argc, char **argv) {
     utf8();
     backrefs();
     random_cases(rounds);
+    random_backrefs(rounds / 3);
     fuzz(rounds);
     long_text();
     time_bounds();
