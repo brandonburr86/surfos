@@ -149,7 +149,7 @@ SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
              $(UNDERTOW_OBJ:.o=.d) $(HTTPD_OBJ:.o=.d) $(FTPD_OBJ:.o=.d) $(FETCH_OBJ:.o=.d) $(WCLOCK_OBJ:.o=.d) \
-             $(WCHARMAP_OBJ:.o=.d)
+             $(WCHARMAP_OBJ:.o=.d) $(WUNDERTOW_OBJ:.o=.d)
 
 all: $(KERNEL)
 
