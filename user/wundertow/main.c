@@ -239,7 +239,11 @@ static int render_mode(const char *typed, const char *file, int width) {
         fprintf(stderr, "wundertow: %s: %s\n", file, strerror(errno));
         return 1;
     }
-    printf("wundertow: %s: %dx%d pixels of %s (\"%s\")\n", file, t.w, h, p->url, p->doc.title);
+    {
+        char shown[WB_ADDR_MAX];
+        ut_safe_text(shown, sizeof(shown), p->url, strlen(p->url), 1);
+        printf("wundertow: %s: %dx%d pixels of %s (\"%s\")\n", file, t.w, h, shown, p->doc.title);
+    }
     free(px);
     wb_page_free(p);
     wb_free(&b);

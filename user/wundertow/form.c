@@ -23,7 +23,6 @@ void fm_begin(struct fm_build *f) {
     memset(f, 0, sizeof(*f));
     f->open = -1;
     f->select = -1;
-    f->around = -1;
 }
 
 /* Room for one more of an array: 0, or -1 (failed set) */
@@ -60,10 +59,9 @@ static char *keep(struct fm_build *f, const char *s, size_t n) {
 /* A control is not kept, so its form says less than the page and is not sent. A form= attribute may name a form only the
    page's end knows, or the one that follows: then it may be any. */
 void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner) {
-    int form = f->open >= 0 ? f->open : f->around;
     if(owner) {
         if(*owner) f->lost = 1;
-    } else if(form >= 0) d->forms[form].too_much = 1;
+    } else if(f->open >= 0) d->forms[f->open].too_much = 1;
 }
 
 /* accept-charset, by its first label: a UT_CS_* + 1, where UT_CS_ASCII is a charset this browser does not write; 0: none */
@@ -128,7 +126,7 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
     memset(c, 0, sizeof(*c));
     c->kind = (unsigned char)n->kind;
     c->role = (unsigned char)n->role;
-    c->form = n->owner && !*n->owner ? -1 : f->open >= 0 ? f->open : f->around;
+    c->form = n->owner && !*n->owner ? -1 : f->open;
     c->run = -1;
     c->checked = c->dflt_checked = n->checked != 0;
     c->disabled = n->disabled || f->off;
@@ -227,9 +225,11 @@ void fm_select_end(struct wd_document *d, struct fm_build *f) {
     f->select = -1;
 }
 
-/* On a page in a charset this browser does not read every byte over 127 reads as '?': what holds one may not be what the
-   page says */
-static int unsure(const struct wd_document *d, const char *s) { return d->form_charset == UT_CS_ASCII && s && strchr(s, '?'); }
+int fm_unsure(const struct wd_document *d, const char *s) {
+    if(d->form_charset != UT_CS_ASCII || !s) return 0;
+    for(; *s; s++) if(*s == '?' || (unsigned char)*s >= 0x80) return 1;
+    return 0;
+}
 
 void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
     size_t i, k;
@@ -245,8 +245,10 @@ void fm_finish(struct wd_document *d, struct fm_build *f, int page_cut) {
         }
         if(c->form < 0) continue;
         if(c->kind == WF_PASSWORD) d->forms[c->form].password = 1;
-        if(c->cut || unsure(d, c->name) || unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
-        for(k = 0; k < c->noptions; k++) if(unsure(d, d->options[c->first_option + k].value)) d->forms[c->form].too_much = 1;
+        if(c->cut || fm_unsure(d, c->name) || fm_unsure(d, c->dflt)) d->forms[c->form].too_much = 1;
+        for(k = 0; k < c->noptions; k++) if(fm_unsure(d, d->options[c->first_option + k].value)) d->forms[c->form].too_much = 1;
+        if(d->form_charset == UT_CS_ASCII && c->kind == WC_HIDDEN && c->name && !fm_differs(c->name, "_charset_"))
+            d->forms[c->form].too_much = 1;     /* it would name the page's charset */
     }
     for(i = 0; i < d->control_count; i++) {     /* of a radio group, the last checked is the one */
         struct wd_control *c = &d->controls[i];
@@ -576,6 +578,7 @@ static int cp1252(unsigned int cp) {
     };
     int i;
     if(cp < 0x80 || (cp >= 0xa0 && cp <= 0xff)) return (int)cp;
+    if(cp < 0xa0 && !high[cp - 0x80]) return (int)cp;   /* its five holes stand for themselves */
     for(i = 0; i < 32; i++) if(high[i] == cp) return 0x80 + i;
     return -1;
 }

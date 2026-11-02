@@ -52,8 +52,6 @@ struct fm_build {                       /* doc.c's, while it reads */
     int failed;                         /* out of memory: the page fails */
     int off;                            /* open fieldsets that are disabled */
     int lost;                           /* what was not kept could be any form's: none is sent */
-    int around;                         /* the form around the next control by elements (</form> does not end what is
-                                           open in it), for when no form is open; -1: none */
 };
 
 void fm_begin(struct fm_build *f);
@@ -71,6 +69,10 @@ int fm_control(struct wd_document *d, struct fm_build *f, const struct fm_new *n
 
 /* A control the page has and no model holds: its form is not sent, as for a limit. owner: its form= attribute, or NULL. */
 void fm_lost(struct wd_document *d, struct fm_build *f, const char *owner);
+
+/* On a page in a charset this browser does not read: may this string not be what the page says? Its bytes over 127 read
+   as '?', and a reference to any character is no byte of that charset. */
+int fm_unsure(const struct wd_document *d, const char *s);
 
 /* An option of the open select: its text (collapsed), its value (NULL: the text), its label attribute (NULL or empty: the
    text is its label). cut: what it sends is shorter than the page's, so its form is not sent. */
