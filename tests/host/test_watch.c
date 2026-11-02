@@ -248,6 +248,20 @@ static void random_screens(void) {
     }
 }
 
+/* the review of 11/01/26: every line end counted a row, past the last one too, so 2^31 of them, which a pipe carries in
+   minutes, took the row round to below 0 and the next character outside the cells. It stops at the end of the screen. */
+static void row_bounded(void) {
+    int i;
+    show(3, 5, "");
+    for(i = 0; i < 100; i++) ws_feed(&w, "\n", 1);
+    CHECK(w.row == 3);
+    show(3, 5, "");
+    for(i = 0; i < 100; i++) ws_feed(&w, "abcdefgh", 8);        /* and so does a line that wraps */
+    CHECK(w.row == 3);
+    show(3, 5, "a\nb\nc\n\n\nd\ne");                          /* with what fits still there */
+    CHECK(!strcmp(line(0), "a") && !strcmp(line(1), "b") && !strcmp(line(2), "c") && w.row == 3);
+}
+
 static void oversized(void) {
     size_t i, n = 1 << 24;
     char *big = malloc(1 << 16);
@@ -256,12 +270,10 @@ static void oversized(void) {
     show(2, 16, "");
     for(i = 0; i < n; i += 1 << 16) ws_feed(&w, big, 1 << 16);  /* 16 MB without a newline */
     CHECK(!strcmp(line(0), "xxxxxxxxxxxxxxxx") && !strcmp(line(1), "xxxxxxxxxxxxxxxx"));
-    /* row counts up past the rows; it must not reach an int's end on anything a pipe could carry for a long while, and
-       it may count on past rows without any effect */
-    CHECK(w.row >= 2 && w.col <= 16);
+    CHECK(w.row == 2 && w.col <= 16);
     memset(big, '\n', 1 << 16);
     for(i = 0; i < n; i += 1 << 16) ws_feed(&w, big, 1 << 16);
-    CHECK(!strcmp(line(1), "xxxxxxxxxxxxxxxx"));
+    CHECK(!strcmp(line(1), "xxxxxxxxxxxxxxxx") && w.row == 2);
     free(big);
 }
 
@@ -272,6 +284,7 @@ int main(void) {
     words();
     title();
     random_screens();
+    row_bounded();
     oversized();
     free(w.cells);
     free(tv_out);

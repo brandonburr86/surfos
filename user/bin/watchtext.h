@@ -56,12 +56,18 @@ static TV_UNUSED void ws_clear(struct wscreen *w) {
     w->row = w->col = w->esc = w->npend = 0;
 }
 
+/* the next row, no further than the one past the last: a pipe carries 2^31 line ends in minutes, and an int that counted
+   them all would come round to below 0, and the next character go outside the cells */
+static void ws_down(struct wscreen *w) {
+    if(w->row < w->rows) w->row++;
+}
+
 /* one character into the cell under the cursor; a row that has filled goes on in the next */
 static void ws_put(struct wscreen *w, const void *b, int n) {
     struct ws_cell *c;
     if(w->col >= w->cols) {
         w->col = 0;
-        w->row++;
+        ws_down(w);
     }
     if(w->row >= w->rows) return;
     c = &w->cells[w->row * w->cols + w->col];
@@ -74,7 +80,7 @@ static void ws_put(struct wscreen *w, const void *b, int n) {
 static void ws_ascii(struct wscreen *w, unsigned char c) {
     switch(c) {
     case '\n':
-        w->row++;
+        ws_down(w);
         w->col = 0;
         break;
     case '\r':
