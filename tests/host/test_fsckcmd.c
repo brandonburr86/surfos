@@ -1,7 +1,8 @@
 /* Host test of shell/fsckcmd.c (11/01/26, the command-line suite; 11/02/26: it only reads): the real cmd_fsck() over a
    device layer this test scripts, and a fat_check() that records what it was given. What it pins is what only the command
    knows: -r refused before anything is touched, no write function and no repair asked for, the device held from before
-   the first read to after the last, a read-only mount held and not taken, every fs_enter() with its fs_leave().
+   the first read to after the last, a read-only mount held and not taken, netman's mount on /.netman never held but waited
+   for (kernel/netman.c gives its unmount up when something holds it), every fs_enter() with its fs_leave().
    tests/host/test_fsck.c proves the checker; tools/qemu-usb.py's scenario fsck runs the two together on a stick.
    fsckcmd.c is built with its printf() renamed (fsck_printf: the Makefile), so this test keeps the host's. Built like the
    kernel objects and run by `make unittest`. */
@@ -13,6 +14,7 @@
 #include <sys/part.h>
 #include <fs/vfs.h>
 #include <fs/fat_check.h>
+#include <mm/kalloc.h>
 #include "../../shell/shell.h"
 
 int fsck_printf(const char *fmt, ...);
@@ -46,14 +48,24 @@ int fsck_printf(const char *fmt, ...) {
 static surf_task task;
 surf_task *curTask = &task;
 
+/* the heap: one block at a time, and refused when the script says so */
+static char heap[1 << 16];
+static int heap_used, heap_refuses;
+void *kalloc(size_t size) { if(heap_used || heap_refuses || size > sizeof(heap)) return NULL; heap_used = 1; return heap; }
+void kfree(void *mem) { if(mem == heap) heap_used = 0; }
+
 /* the devices: usb1 a disk, usb1p1 a partition of it */
 static struct bdev disk, part;
 
 /* the script */
 static int mounted;                             /* of the device asked for: 0 none, 1 read-only, 2 read-write */
+static int netman_for;                          /* views that list it on /.netman before it goes; -1: it stays */
+static int netman_races;                        /* holds that find netman's mount made in the moment after a view */
+static int netman_rw;                           /* netman's mount is read-write (a write of the settings) */
+static int intr_at;                             /* the sleep that Ctrl+C cuts short (0: none) */
 static const char *busy_why;                    /* vfs_bdev_change_begin() refuses */
 static int check_status;
-static int holding, changing, held_at_check, changing_at_check, flags_seen;
+static int holding, changing, held_at_check, changing_at_check, sleeps, views, flags_seen, holds_while_listed;
 static struct fat_check_io io_seen;
 static struct vnode the_root;
 
@@ -67,9 +79,42 @@ int bdev_read(struct bdev *d, u32 lba, u32 count, void *buf) { (void)d; (void)lb
 const char *bdev_busy_words(const char *busy) { return busy; }
 void part_fmt_size(u32 blocks, char *buf, size_t size) { (void)blocks; snprintf(buf, size, "16M"); }
 
+/* the mount table as a copy of it shows it: nothing held */
+static int listed;
+int vfs_mount_views(struct vfs_mount_view *out, int max) {
+    int n = 0;
+    views++;
+    listed = netman_for != 0;
+    if(netman_for > 0) netman_for--;
+    if(listed && n < max) {
+        memset(&out[n], 0, sizeof(out[n]));
+        snprintf(out[n].path, sizeof(out[n].path), "/.netman");
+        out[n].dev = &part;
+        out[n].readonly = !netman_rw;
+        n++;
+    }
+    if(n < max) {                               /* somebody else's mount, of another device */
+        memset(&out[n], 0, sizeof(out[n]));
+        snprintf(out[n].path, sizeof(out[n].path), "/hda1");
+        out[n].dev = NULL;
+        n++;
+    }
+    return n;
+}
+
 int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly) {
     (void)dev;
     ev("hold");
+    if(listed) holds_while_listed++;
+    if(netman_races) {                          /* netman mounted it in the moment since the view */
+        netman_races--;
+        holding = 1;
+        *root = &the_root;
+        if(readonly) *readonly = true;
+        snprintf(path, size, "/.netman");
+        ev("netman-held");
+        return 0;
+    }
     if(!mounted) return -ENOENT;
     holding = 1;
     *root = &the_root;
@@ -101,6 +146,13 @@ void vfs_bdev_change_end(struct bdev *d) {
     fs_leave();
 }
 
+int sleep_intr(u_long ms) {
+    (void)ms;
+    sleeps++;
+    ev("sleep");
+    return sleeps == intr_at ? -EINTR : 0;
+}
+
 /* the checker: it records what it was given, reads, says a line */
 int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result *res) {
     char sector[512];
@@ -123,16 +175,23 @@ static int run(int argc, char **argv) {
     said_len = 0;
     memset(&io_seen, 0, sizeof(io_seen));
     flags_seen = -1;
+    sleeps = views = holds_while_listed = 0;
+    listed = 0;
     r = cmd_fsck(argc, argv);
     check(task.fs_hold == 0, "every fs_enter() has its fs_leave()");
-    check(!holding && !changing, "nothing is held after it");
+    check(!holding && !changing && !heap_used, "nothing is held after it, and the heap is as it was");
     return r;
 }
 
 static void script(void) {
     mounted = 0;
+    netman_for = 0;
+    netman_races = 0;
+    netman_rw = 0;
+    intr_at = 0;
     busy_why = NULL;
     check_status = 0;
+    heap_refuses = 0;
 }
 
 static void usage(void) {
@@ -155,7 +214,7 @@ static void repairs(void) {
         script();
         mounted = 1;
         snprintf(m, sizeof(m), "-r (case %d): refused with status 2 and one plain line, and nothing looked at", i);
-        check(run(argcs[i], cases[i]) == CMD_USAGE && !events[0] && !strcmp(said,
+        check(run(argcs[i], cases[i]) == CMD_USAGE && !events[0] && !views && !strcmp(said,
               "    fsck: repairs are not available in this version, and the stick can be repaired on another computer\n"), m);
     }
 }
@@ -199,6 +258,41 @@ static void looks(void) {
           "a mount of a related device: refused, with the reason");
 }
 
+/* netman's mount of the boot volume on /.netman: never held, waited for */
+static void netman(void) {
+    char *look[] = { "fsck", "usb1p1", NULL };
+    script();
+    netman_for = 3;
+    check(run(2, look) == 0, "netman's mount, there for a moment: the look runs once it has gone");
+    check(!holds_while_listed && sleeps == 3, "no hold taken while it is listed, and a wait for each look at it");
+    check(!strcmp(events, "sleep sleep sleep hold begin check read end "), "then the device is taken as any unmounted one");
+
+    script();
+    netman_for = 2;
+    netman_rw = 1;
+    check(run(2, look) == 0 && !holds_while_listed && !strstr(said, "read-write"), "netman's mount for a write: waited for too, not refused as read-write");
+
+    script();
+    netman_for = -1;
+    check(run(2, look) == CMD_USAGE, "netman's mount that stays: refused");
+    check(!holds_while_listed && !strstr(events, "check") && sleeps == 25, "after 25 waits of 200 ms, nothing held, nothing read");
+    check(strstr(said, "the network settings have usb1p1 mounted on /.netman for a moment: try again") != NULL, "it says what is going on");
+
+    script();
+    netman_races = 1;
+    check(run(2, look) == 0, "netman's mount made in the moment between the view and the hold: the look runs once it has gone");
+    check(strstr(events, "hold netman-held release sleep hold begin check") == events, "it is let go of at once, without reading");
+
+    script();
+    heap_refuses = 1;
+    check(run(2, look) == CMD_FAIL && strstr(said, "no memory to look at the mounts") && !strstr(events, "hold"), "no memory to look at the mounts: it says so, and holds nothing");
+
+    script();
+    netman_for = -1;
+    intr_at = 2;
+    check(run(2, look) == CMD_FAIL && strstr(said, "interrupted") && !strstr(events, "check"), "Ctrl+C while it waits: interrupted, nothing read");
+}
+
 int main(void) {
     strlcpy(disk.name, "usb1", sizeof(disk.name));
     strlcpy(part.name, "usb1p1", sizeof(part.name));
@@ -208,6 +302,7 @@ int main(void) {
     usage();
     repairs();
     looks();
+    netman();
     printf("FSCKCMD: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

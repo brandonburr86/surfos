@@ -11,9 +11,13 @@ code stays in the tree, tested on the host, for a later round.
 The volume is read whole and nothing else changes it meanwhile: an unmounted device is taken
 with vfs_bdev_change_begin() from before the first read to after the last. A volume mounted
 read-only cannot be taken that way and need not be: its mount is held (vfs_hold_mount()), so
-that it can neither go nor be swapped under the run. A volume mounted read-write is refused,
-with the reason, and so is a mount of its disk or a partition of it, which nothing here could
-hold.
+that it can neither go nor be swapped under the run. Not netman's, though: the network
+settings mount the boot volume on /.netman for a moment, and netman gives up its unmount if
+anything holds it, after which every later write of the settings fails (kernel/netman.c). So
+fsck looks at the mounts in a copy of the table, which holds nothing, and waits a few seconds
+for that one to go, as netman waits for others; one it held in the moment between the two is
+let go of at once. A volume mounted read-write is refused, with the reason, and so is a mount
+of its disk or a partition of it, which nothing here could hold.
 
 In a file of its own so that tests/host/test_fsckcmd.c runs the real command over a device
 layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU's list
@@ -27,12 +31,28 @@ layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU
 #include <sys/part.h>
 #include <fs/vfs.h>
 #include <fs/fat_check.h>
+#include <mm/kalloc.h>
 
 #include "shell.h"
+
+#define NETMAN_MOUNT "/.netman"             /* kernel/netman.c's NM_MOUNT */
+#define NETMAN_TRIES 25                     /* 200 ms apart: as long as netman waits for a mount that is not its own */
+#define VIEWS        32                     /* mounts looked at */
 
 static int fsck_read(void *d, u32 lba, u32 count, void *buf) { return bdev_read((struct bdev *)d, lba, count, buf); }
 static bool fsck_stop(void *d) { (void)d; return fs_cut_short(); }
 static void fsck_say(void *d, const char *line) { (void)d; printf("    %s\n", line); }
+
+/* is d mounted on /.netman? In a copy of the mount table, which holds nothing. 1 yes, 0 no, -1 no memory to look */
+static int netman_has(const struct bdev *d) {
+    struct vfs_mount_view *v = (struct vfs_mount_view *)kalloc(VIEWS * sizeof(*v));
+    int n, i, r = 0;
+    if(!v) return -1;
+    n = vfs_mount_views(v, VIEWS);
+    for(i = 0; i < n && i < VIEWS; i++) if(v[i].dev == d && !strcmp(v[i].path, NETMAN_MOUNT)) r = 1;
+    kfree(v);
+    return r;
+}
 
 int cmd_fsck(int argc, char **argv) {
     struct fat_check_io io;
@@ -71,7 +91,30 @@ int cmd_fsck(int argc, char **argv) {
     io.stop = fsck_stop;
     io.say = fsck_say;
     fs_enter();                                              /* a kill waits until the device and the mount are let go of */
-    if(vfs_hold_mount(d, path, sizeof(path), &root, &readonly) != 0) root = NULL;   /* not mounted */
+    for(i = 0; ; i++) {
+        int nm = netman_has(d);
+        if(nm < 0) {
+            fs_leave();
+            printf("    fsck: no memory to look at the mounts\n");
+            return CMD_FAIL;
+        }
+        if(!nm) {
+            if(vfs_hold_mount(d, path, sizeof(path), &root, &readonly) != 0) { root = NULL; break; }   /* not mounted */
+            if(strcmp(path, NETMAN_MOUNT)) break;            /* held, and not netman's */
+            vfs_release_mount(root);                         /* netman's, made a moment ago: let go of at once */
+            root = NULL;
+        }
+        if(i == NETMAN_TRIES) {
+            fs_leave();
+            printf("    fsck: the network settings have %s mounted on %s for a moment: try again\n", d->name, NETMAN_MOUNT);
+            return CMD_USAGE;
+        }
+        if(sleep_intr(200) != 0) {
+            fs_leave();
+            printf("    interrupted\n");
+            return CMD_FAIL;
+        }
+    }
     if(root && !readonly) {
         vfs_release_mount(root);
         fs_leave();
