@@ -590,21 +590,36 @@ int ut_html_charset(const unsigned char *in, size_t len, const char *label, int 
     return utf8_valid(in, len) ? UT_CS_UTF8 : UT_CS_1252;
 }
 
-int ut_html_declared(const unsigned char *in, size_t len) {
-    char label[UT_HTML_LABEL_MAX], name[16], val[256];
-    size_t i = 5;
-    int cs = -1, found = 0;
-    if(len >= 5 && !memcmp(in, "<?xml", 5))
-        while(!found && pre_attr(in, len, &i, name, sizeof(name), val, sizeof(val)))
-            if(!strcmp(name, "encoding")) {
-                cs = charset_of(val);
-                found = 1;
-            }
-    if(prescan_all(in, len, label, sizeof(label))) {                            /* a <meta> says more than XML */
-        cs = charset_of(label);
-        found = 1;
+/* The encoding of an <?xml ...?> at the very start, read as browsers read it: no attributes, up to the first '>', the word
+   anywhere, then = and a quoted label */
+static int xml_label(const unsigned char *s, size_t n, char *label, size_t cap) {
+    size_t i, k = 0, end;
+    unsigned char q;
+    if(n < 5 || memcmp(s, "<?xml", 5)) return 0;
+    for(end = 5; end < n && s[end] != '>'; end++) ;
+    if(end == n) return 0;
+    for(i = 5; i + 8 <= end && memcmp(s + i, "encoding", 8); i++) ;
+    if(i + 8 > end) return 0;
+    i += 8;
+    while(i < end && s[i] <= ' ') i++;
+    if(i >= end || s[i++] != '=') return 0;
+    while(i < end && s[i] <= ' ') i++;
+    if(i >= end || (s[i] != '"' && s[i] != '\'')) return 0;
+    q = s[i++];
+    while(i < end && s[i] != q) {
+        if(k + 1 < cap) label[k++] = (char)s[i];
+        i++;
     }
-    if(!found) return -1;
+    if(i >= end) return 0;
+    label[k] = 0;
+    return 1;
+}
+
+int ut_html_declared(const unsigned char *in, size_t len) {
+    char label[UT_HTML_LABEL_MAX];
+    int cs;
+    if(!prescan_all(in, len, label, sizeof(label)) && !xml_label(in, len, label, sizeof(label))) return -1;
+    cs = charset_of(label);                         /* (a <meta> says more than XML) */
     return cs == UT_CS_UTF8 || cs == UT_CS_UTF16 ? UT_CS_UTF8 : cs == UT_CS_1252 ? UT_CS_1252 : UT_CS_ASCII;
 }
 

@@ -680,6 +680,14 @@ static void encoding(void) {
         wd_free(&d);
         check(!build_as(PAGE, "<?xml version='1.0' encoding='iso-8859-1'?><html><head><meta charset=utf-8><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "a meta says more than it");
         wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='>' encoding='utf-8'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "a declaration ends at its first >, as browsers read it");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0' ENCODING='utf-8'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "the word in lower case");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0' x-encoding='utf-8'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_UTF8, "anywhere in it");
+        wd_free(&d);
+        check(!build_as(PAGE, "<?xml version='1.0' encoding=utf-8 ?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "quoted");
+        wd_free(&d);
         check(!build_as(PAGE, "<?xml version='1.0'?><form action=/a><input name=s></form>", "", &d) && d.form_charset == UT_CS_1252, "that says none");
         wd_free(&d);
         content_type = "application/xhtml+xml";
