@@ -31,13 +31,12 @@ The brief is `2026-11-01-cli-suite.md`. This track built inflate and deflate wit
 
 - **The decoder is zlib's method, and came from my memory of zlib's design.** Only `make_table()`'s three steps are RFC 1951 section
   3.2.2, which stops at the codes. The RFC has no tables and no fast loop: the two-level table, `lookup()`, and `run_fast()`'s
-  taking two bytes at a time and giving back what it did not use follow zlib's `inftrees.c` and `inffast.c` as I remember them. No
-  zlib text is in it. `web/m2`'s `image_png.c` has another shape, one that could not stop part way. Its limits were read and kept:
-  over-full and incomplete codes refused, length symbols 286 and 287 and distance symbols 30 and 31 refused, a distance checked
-  against what the window really holds. None of its code was carried over.
+  taking two bytes at a time and giving back what it did not use follow zlib's `inftrees.c` and `inffast.c` as I remember them. The
+  fix round's account said the decoder was written from the RFC, which was wrong. See "Where the first decoder came from".
 - **It never reads past the last block.** Bytes are taken only as a code needs them, so gzip's trailer and a zip's next
   member are where `in` points. `run_fast()` takes that apart where there is plenty of input and room, taking two bytes at a
-  time, and gives back any whole byte it did not use before it returns.
+  time, and gives back any whole byte it did not use before it returns. Against the first decoder, on the same buffers: 598
+  against 237 MB/s on this tree's text, 335 against 144 on the kernel image.
 - **Every byte goes into the window and into `out`, and copies come only from the window.** Two stores a byte, but no
   history in the caller's buffer, and the distance check cannot be fooled by what `out` holds.
 - **Decoding limits nothing.** A stream may make as much as it likes, as far as `out` goes: the caller holds the bound. unzip
@@ -52,8 +51,7 @@ The brief is `2026-11-01-cli-suite.md`. This track built inflate and deflate wit
 - **A block ends at 16383 symbols.** `pending` holds a whole block because the form chosen is never larger than fixed and a
   fixed symbol is at most 31 bits, so 63.5 KB, and a stored block is chosen only when smaller still. `test_deflate` fills it with
   the worst symbols it can make.
-- **The level table's numbers are this file's own,** tuned by hand. On 1.4 MB of this tree's text, level 6 gives 461304 bytes to
-  GNU-compatible gzip's 461635, and level 9 459140 to 459396. On the kernel image, level 6 gives 2138530 to 2139790.
+- **The level table and `TOO_FAR` are measured.** See "The level table" below for the corpus, the numbers and what the old table was.
 
 ### gzip, gunzip, zcat
 
@@ -71,7 +69,9 @@ The brief is `2026-11-01-cli-suite.md`. This track built inflate and deflate wit
   whole input. No data is lost, and the next run says the output exists. The page says so, and tar's and unzip's now do too: a
   later `unzip -n` keeps such a file with status 0, so after a kill use `-o`.
 - **A short file that cannot be deleted is said.** `of_drop()` and `of_commit()` used to ignore a failed unlink. saveutil.h does not
-  say whether its own unlink worked, so `outfile.h` looks afterwards.
+  say whether its own unlink worked, so `outfile.h` looks afterwards. Only ENOENT says the file went: on a disk that has gone every
+  look fails with EIO and the file may be there when the disk comes back, so that case says it may remain. The look keeps `errno`,
+  because the caller is about to print the reason it stopped.
 - **A name and a time go into the header, and are not used on the way back.** `-N` is not in the brief, and no time can be set.
 - **Compressed data is not written to, or read from, a terminal without `-f`,** as GNU gzip. `isatty()` knows only the console, so
   this does not reach a telnet session's pty.
@@ -109,17 +109,22 @@ The brief is `2026-11-01-cli-suite.md`. This track built inflate and deflate wit
 - **The archive is named by its absolute path once opened.** `-C` moves the program, and `unlink(archive)` on the way out
   would otherwise have deleted a file of that name where `-C` went. This was a bug in the first draft, and it has a test.
 - **An archive that exists is replaced only by one that went right.** With any trouble it stays, and that is said: it may be the
-  only copy of what the new one could not read. One thing to know: leaving the archive out of itself counts as trouble, so
-  `tar cf a.tar .` run a second time in the same folder keeps the old one. GNU tar treats that as a note. It was kept as trouble
-  because `tar cf a.tar a.tar` must not empty an archive, and "any trouble" is the rule asked for; it is a one-line change if a
-  note is wanted, with a separate rule that an archive with nothing in it replaces nothing.
+  only copy of what the new one could not read.
+- **Leaving the archive out of itself is a note, not trouble.** That covers the archive and the tool's own `a.tar.tmp`, as in GNU tar:
+  status 0, and the archive commits, so `tar cf a.tar .` works the second time in a folder. In the fix round it counted as trouble,
+  and that run failed.
+- **An archive with nothing in it holds nobody's work: it replaces nothing, and is not made.** Status 2, whatever left everything out.
+  This is what stops `tar cf a.tar a.tar` from emptying an archive, and with it `tar cf /a.tar --exclude=a.tar /a.tar` and
+  `tar cf /a.tar --exclude='*' /one.txt`, which replaced the old archive with an empty one until the second review.
 - **A member that would land on the archive is refused by what it is.** The target is compared with the open archive by ino,
-  device and file system, which catches another case of letters, another path and FAT's short names. It used to be safe only
+  device and file system, which catches another case of letters and another path. FAT's short names are no third way: a lookup
+  matches only a file's long name. It used to be safe only
   because `fat_rename` answers EBUSY over an open file, which the simulation did not model; now it does, as does unlink.
 - **A folder whose own name will not fit ustar loses its entry, not its contents.** `x` makes the folders above a file.
 - **Names that will not fit are left out, with a message and status 2.** The brief says tar writes ustar, so there is no pax
   header on the way out. A name of 101 to 255 bytes with no `/` near its end is the case; such names are rare on FAT.
-- **Names not met are told apart.** After a stop, or with no end marker, a name is "not reached", not "not in the archive".
+- **Names not met are told apart.** After a stop, or with no end marker, a name is "not reached", not "not in the archive". unzip
+  says the same after the bound on reading forward stops a run.
 - **No gzip auto-detection on `x`.** Not in the brief. Without `z` the message says "not a tar archive (a gzip one needs z)".
 - **Named members and `--exclude` ignore ASCII case,** FAT's rule. Named members take a folder's contents; `--exclude` matches any
   run of whole components, as GNU tar's does by default, and `*` crosses `/`.
@@ -178,6 +183,59 @@ The brief is `2026-11-01-cli-suite.md`. This track built inflate and deflate wit
 - **Each comparison skips itself, and says so.** Docker has GNU gzip, GNU tar and Python; the Mac has Apple gzip, bsdtar, Info-ZIP
   and `ditto`, which only the sanitizer script reaches.
 
+## The level table
+
+The old table was described here as this file's own, tuned by hand. That was false: levels 6, 8 and 9 were zlib's numbers, field for
+field, and `TOO_FAR` was zlib's 4096. The integrator asked for values chosen by measuring. The structure is unchanged: same fields,
+greedy to level 3 and lazy from level 4, as deflate.c's header says.
+
+**The corpus,** 15,862,542 bytes: 4.0 MB of this tree's C, 1.2 MB of its documents and manual pages, the 4.5 MB kernel at -O2, 5.0 MB of
+the initrd in two pieces, and 1.2 MB of generated log lines. Each is packed as gzip packs, 32 KB in and 32 KB out. The times are CPU
+seconds from a native -O2 build on the Mac, on a busy machine, so they are for comparing settings and say nothing of SurfOS's own speed.
+
+**The search.** 312 sets of chain against lazy with nothing cut short, then 697 of `nice` and `good` along that frontier: 1009 in all. A
+wider second stage would have taken about 1.4 hours, so it was stopped and narrowed, the shape being clear by then. Candidates were
+timed again, three runs each, and the final table five, keeping the lowest. The comparisons of `nice` and `good` below were run
+interleaved, seven rounds each, so that load fell on every set alike.
+
+- **`chain` and `lazy`.** Level 1 is the fastest point worth having: chain 1 saves 1.6% of the time and costs 3.1% in size over chain 2.
+  Level 6, the default, sits at the knee: before it, 26% more time buys 0.42% in size, and beyond it 20% more buys under 0.2%. Level
+  9 is the smallest set measured, and a chain of 4096 gave nothing more than 3072. The others are spaced evenly in log time along the
+  frontier.
+- **`nice` is 258 at every level.** Run head to head on the corpus, lower values at chains 12, 32, 128 and 512 show no trend in time, under
+  2% either way, and size only rises. Two files were built to need it, each 2 MB of records of 50 or 100 bytes that change
+  every 100 to 240 bytes: there it saved at most 29 ms and cost up to 59% in size. The field stays because the structure stays.
+- **`good` is 4 from level 4 to level 8,** the one shortcut that pays: at chains 32, 128 and 512 it saves 19 to 27% of the time for 0.35
+  to 0.13% in size. Level 9 does not use it. Levels 1 to 3 cannot: a greedy search has no earlier match to call good.
+- **`TOO_FAR` is 3072.** Measured at 21 values from 256 to 32767 over all nine levels. The total is flat within 0.01% from 1536 to
+  3072, and rises either side: 0.2% higher at 256, 0.4% at 32767. 1536 is 206 bytes lower in 57 MB, but 3072 is smaller at levels 5 to 9,
+  the default and up.
+
+| Level | chain | lazy | nice | good | Packed | Of the corpus | Seconds | Old table: packed | Seconds |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 2 | 0 | 258 | 258 | 6,765,364 | 42.65% | 0.171 | 6,625,301 | 0.180 |
+| 2 | 12 | 0 | 258 | 258 | 6,453,454 | 40.68% | 0.208 | 6,507,271 | 0.195 |
+| 3 | 32 | 0 | 258 | 258 | 6,371,295 | 40.17% | 0.254 | 6,373,357 | 0.254 |
+| 4 | 32 | 16 | 258 | 4 | 6,291,157 | 39.66% | 0.301 | 6,410,442 | 0.229 |
+| 5 | 64 | 32 | 258 | 4 | 6,252,575 | 39.42% | 0.369 | 6,292,084 | 0.339 |
+| 6 | 128 | 32 | 258 | 4 | 6,229,482 | 39.27% | 0.459 | 6,221,447 | 0.544 |
+| 7 | 512 | 128 | 258 | 4 | 6,201,331 | 39.09% | 0.679 | 6,204,800 | 0.726 |
+| 8 | 2048 | 258 | 258 | 4 | 6,192,211 | 39.04% | 1.033 | 6,195,916 | 1.175 |
+| 9 | 3072 | 258 | 258 | 258 | 6,190,864 | 39.03% | 1.573 | 6,194,225 | 1.627 |
+
+The old column has `TOO_FAR` at 4096. Level 6 gives up 0.13% in size for 16% less time. Levels 7 to 9 are both smaller and faster than
+before. Level 1 trades 2.1% in size for 5% of the time, levels 2, 4 and 5 are smaller and slower, and level 3 is about the same. Each
+level has its own best `TOO_FAR` and there is one value for all, so level 6 alone would be 3,544 bytes smaller at 4096. The total
+decided it.
+
+**A test changed because of this, and why.** `test_gztool` asked that `-9` be smaller than `-1` on 200 KB of random letters. The new table
+fails that by 0.3%, 127,285 against 126,859. Every level is smaller there than it was, and than zlib's at any level. With no repeats
+beyond chance, a longer search only finds matches that cost more than what they replace, and random words behave the same, in the old
+table too. The old table passed by 120 bytes, so the test said nothing about the levels. Bending the table to it would have been wrong,
+and so would dropping it, since it is what shows the level reaches the coder. The round trips stay on random letters. The size check
+moves to log lines, where longer repeats exist, and asks for more: each of the nine no larger than the one before, and `-9` at least a
+tenth smaller than `-1`. The new table gives 62,514 down to 51,332. The old table fails it, with level 4 larger than level 3.
+
 ## Where the first decoder came from
 
 The first version of this account said inflate "was written new, not adapted", credited `web/m2`'s `image_png.c`, and said "No code
@@ -191,8 +249,16 @@ places" is credible. It did not come through `web/m2`: that decoder is a differe
 things it refuses. Saying I had read `image_png.c` was true, and it left out what mattered. The brief allows no third-party source,
 and I should have said this when I wrote them.
 
-Both are gone, replaced in the fix round by the table decoder, and from this branch's history too: inflate's first commit here holds
-the table decoder, and this section is what is left of the first one, on purpose. Nothing of `web/m2` was touched.
+Both are gone, replaced in the fix round by the table decoder. By the integrator's decision they are gone from the branch too: the
+branch's history, never pushed, was rewritten so that inflate first appears as the table decoder and no commit holds the first one.
+This section is what is left of it, on purpose. Nothing of `web/m2` was touched.
+
+**The table decoder is not free of zlib either, and the fix round's account was wrong to say it came from the RFC.** See "Inflate and
+deflate" above. The second review also found that the comment on `run_fast()`'s giving back of bytes restated a comment of
+`inffast.c`, and was false besides. Compared with pako, the expressions differ. The integrator's decision: the design is fine and the
+method stays, zlib's text may not. That comment is rewritten in my own words, and it now gives the real reason the step is safe. The
+headers of inflate.c and deflate.c say which methods they use, that they follow zlib's published design, and that no zlib text is in
+them.
 
 **What else came from memory of zlib, so that it can be judged rather than found:**
 
@@ -200,11 +266,12 @@ the table decoder, and this section is what is left of the first one, on purpose
   takes. The behaviour is the point; the code is mine.
 - The shape of `inflate_run()`, a state per field of the format, is the shape of zlib's `inflate()`. The format's own order suggests
   it, but I knew theirs.
-- **deflate.c is the larger question.** `longest_match()`, `step_lazy()` and `step_greedy()`, the `head` and `prev` chains, sliding the
-  window by half, the `good`, `lazy`, `nice` and `chain` settings by those names and `TOO_FAR` at 4096 are the design of zlib's
-  `deflate.c`, as I remember it. RFC 1951 section 4 describes hash chains and lazy matching in outline; the rest is zlib's. It was
-  written my own way, and the level table's numbers are my own, but it was not written without knowing theirs. It was not asked about
-  and is not changed here. Whether it needs the same treatment is the owner's or the integrator's call.
+- **deflate.c's design is zlib's.** RFC 1951 section 4 describes hash chains and lazy matching in outline. `longest_match()`,
+  `step_lazy()` and `step_greedy()`, the `head` and `prev` chains, sliding the window by half, and the `good`, `lazy`, `nice` and `chain`
+  settings by those names are zlib's `deflate.c` as I remember it, as are names such as `TOO_FAR` and `MAX_DIST`. It was written my
+  own way, but not without knowing theirs, and where I know it comes closest in expression is in `longest_match()`: a quarter of the
+  chain after a good match, and the test that ends the loop. The integrator asked for nothing else in the file to change, so it
+  stands. Its numbers were not my own, whatever this account used to say. They are measured now: see "The level table".
 - Package-merge in `code_lengths()`, `run_lengths()`, `make_codes()` (RFC 3.2.2 again) and all of gzip, tar and unzip are mine.
 
 ## What was left out, and why
@@ -223,18 +290,18 @@ Host tests, in `make unittest` (target `unittest-archive`), at `-m32` in Docker,
 
 | Test | Checks | What |
 |---|---|---|
-| `test_deflate` | 656 | CRC-32's check values; inflate on hand-made streams, every refusal, in short streams and in long ones the fast loop reads; each cut at each byte, one byte of input or room at a time; the largest table a stream can ask for; deflate at each level over a corpus, its worst symbols included; 9000 mutated and 3000 random streams; a bomb that stops where `out` ends |
-| `test_gztool` | 737 | the options, wherever they stand; each header flag; each kind of damage; every cut; 400 mutated files; a change failing, and the disk pulled, at every step; a full disk; a half-done rename; twins; a short file that cannot be deleted; GNU gzip both ways; Python's zlib for fixed, RLE, Huffman-only, level 0 and sync-flushed streams |
-| `test_tar` | 732 | `ar_safe_path` and friends, each rule alone; c, x, t and their options; every header form, byte by byte; pax headers that cannot be read, name and size; 30 hostile names as files and as folders; a member that is the archive; an old archive after trouble; every cut; 3000 mutated archives, half with their sums put right; a change failing at every step; full disks; the host's tar both ways; Python's tarfile in three formats, both ways |
-| `test_unzip` | 346 | the options; names in UTF-8 and code page 437; refusals with the entries around them taken; data with no name; some 20 ways of lying about a size, offset or name; the overlap bomb; each field of the end record; every cut; 4000 mutated archives, each extracted, listed, tested and piped; a change failing at every step; a 2.2 GB archive; a directory that alternates past 2 GB; Python's zipfile |
+| `test_deflate` | 657 | CRC-32's check values; inflate on hand-made streams, every refusal, in short streams and in long ones the fast loop reads; each cut at each byte, one byte of input or room at a time; the largest table a stream can ask for; deflate at each level over a corpus, its worst symbols included; 9000 mutated and 3000 random streams; a bomb that stops where `out` ends |
+| `test_gztool` | 754 | the options, wherever they stand; each header flag; each kind of damage; every cut; 400 mutated files; all nine levels in order on log lines; a change failing, and the disk pulled, at every step; a full disk; a half-done rename; twins; a short file that cannot be deleted; GNU gzip both ways; Python's zlib for fixed, RLE, Huffman-only, level 0 and sync-flushed streams |
+| `test_tar` | 753 | `ar_safe_path` and friends, each rule alone; c, x, t and their options; every header form, byte by byte; pax headers that cannot be read, name and size; 30 hostile names as files and as folders; a member that is the archive; an old archive after trouble; every cut; 3000 mutated archives, half with their sums put right; a change failing at every step; full disks; the host's tar both ways; Python's tarfile in three formats, both ways |
+| `test_unzip` | 348 | the options; names in UTF-8 and code page 437; refusals with the entries around them taken; data with no name; some 20 ways of lying about a size, offset or name; the overlap bomb; each field of the end record; every cut; 4000 mutated archives, each extracted, listed, tested and piped; a change failing at every step; a 2.2 GB archive; a directory that alternates past 2 GB; Python's zipfile |
 
 `tests/archive-sanitize.sh`, on the Mac, runs the same four natively under AddressSanitizer and UBSan, with what Docker skips:
-Apple gzip, bsdtar, Info-ZIP's zip, `ditto`, and a member read across 2 GB with its CRC (`test_unzip` 352 there). Then
+Apple gzip, bsdtar, Info-ZIP's zip, `ditto`, and a member read across 2 GB with its CRC (`test_unzip` 354 there). Then
 `test_inflate_zlib`, 150000 streams against the host's zlib. All pass. Under `make unittest`, `test_unzip` says what it skips:
 Info-ZIP, `ditto` and that read.
 
 **Against zlib.** The first version of this work had no such test: a small Python corpus was all. The "1.09M-stream comparison" the
-fix round named was the reviewer's own `dinf.c`, not mine. On the new decoder it gave 11.7 million streams and 0 differences, but from
+fix round named was the reviewer's own `dinf.c`, not mine. On the table decoder it gave 11.7 million streams and 0 differences, but from
 a 770-byte seed. `test_inflate_zlib.c` is in the tree now. Its first seeds reached only 12-bit codes, which a check showed, so it also
 writes random whole codes down to 15 bits in both of a block's tables, reaching the widest second-level tables (29 of its 72 seeds
 for literals, 9 for distances). On those: 2,000,000 streams with 0 differences, and 300,000 under sanitizers with 0.
@@ -258,6 +325,22 @@ test that failed on the old code, with the checks that failed, but for the manua
 | an invalid code waited for 15 bits | 1 | refused at its first bit, by the new decoder |
 | a kill leaves a short file that `unzip -n` keeps | none: a manual page | `tar.txt`, `unzip.txt` |
 
+**The last round.** The second review, of 9dd4165, found inflate.c clean and nothing above low. Each row has a test that failed on the
+old code, with the checks that failed:
+
+| Finding | Before | Fix |
+|---|---|---|
+| leaving the archive out of itself failed the run; an archive left with nothing in it replaced the old one | 15 | a note, status 0; an empty archive replaces nothing, status 2 |
+| a `.tmp` on a disk that had gone was taken for deleted | 7 | only ENOENT says it went; otherwise "a file may remain here" |
+| a read error on the archive printed "No such file or directory" | 1 | the look at the `.tmp` keeps `errno`: a regression of the fix round |
+| members unzip never reached were called absent | 1 | "not reached" |
+| `test_deflate`'s "largest table" asked for 312 entries | none: it passed | the shape an exhaustive count gives, 340, and a check that it gets there |
+| the levels were out of order on log lines | 1 | the measured table: see "The level table", which also says why the old size check went |
+
+The rest had no test to fail: the comment above, the "16 or fewer" of `run_fast()`'s (it is fewer than 16), FAT's short names in
+`outfile.h` and here, and two manual pages (`gzip -- -` reads standard input; tar refuses control characters). 340 is the exact
+maximum of the reviewer's exhaustive count. The 2592 of inflate.c's header is a sound bound, and looser.
+
 **Mutation passes.** Tests that cannot fail prove nothing, so on a scratch copy safety properties were broken one at a time and the test
 that should notice was run under sanitizers. Neither script is in the tree: each is a pass that was made, not a test that runs.
 
@@ -269,6 +352,13 @@ that should notice was run under sanitizers. Neither script is in the tree: each
   nothing, since `in_stop` and `out_stop` already keep the loop from running, and the mutants that weaken those are caught.
 
 So 93 of 95 are caught, and the two that are not cannot change behaviour.
+
+A third pass, on the last round's changes: 9 mutants, 7 caught. The other two are equivalent. `of_left_behind()` and `of_drop()` each keep
+`errno`, so removing one changes nothing, and removing both is caught. And `in > start`, in `run_fast()`'s giving back, decides nothing:
+the caller's test is the loop's own, so its body always runs, and a table with codes that long has no gaps, so the first lookup uses any
+bits held. A scratch build that counted it, on streams cut at every third byte and by 6000 random chunkings, entered the loop 564 times
+holding 8 to 12 bits, in over a million calls, and the test never decided anything. That mutant was worth running: its survival showed
+a clause written earlier in this round, about bits that stay when no symbol is decoded, described a case that cannot happen.
 
 **On QEMU.** The smoke block, `echo cli-archive`, has 26 steps: gzip, zcat and gunzip on FAT; a cut file and an output that exists;
 tar with z, -C, --exclude, x over a file, and a pipe; unzip by -l, -t, -p and unpacking of a zip written out with `printf`; and a
