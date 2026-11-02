@@ -29,6 +29,10 @@ NOT_HERE_YET = {
     'dirname', 'od', 'base64', 'strings', 'file', 'paste', 'join', 'comm', 'fold', 'nl', 'rev', 'cal', 'tree', 'bc',
 }
 
+# 11/02/26 (the integration): pages about a subject rather than a command, which other pages send the reader to.
+# regex is track text's: the patterns grep, sed and awk share.
+TOPICS = {'regex'}
+
 # the brief's sections, which come in this order on any page that has them. A page may have others among them (KEYS,
 # COMMANDS, a sed's ADDRESSES): a heading is any line of capitals at the left margin.
 SECTIONS = ['SYNOPSIS', 'DESCRIPTION', 'OPTIONS', 'EXAMPLES', 'SEE ALSO']
@@ -114,7 +118,7 @@ class EveryName(unittest.TestCase):
         self.assertEqual(sorted(set(self.table) - real), [])
 
     def test_a_page_is_for_something(self):
-        real = programs() | kernel_commands() | builtins() | SUITE
+        real = programs() | kernel_commands() | builtins() | SUITE | TOPICS
         shared = set(self.table.values())
         self.assertEqual(sorted(self.pages - real - shared), [])
 

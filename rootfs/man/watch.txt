@@ -22,9 +22,10 @@ DESCRIPTION
     and dropped, so the command runs as it would anywhere.
 
     Programs a run left in the background end with it, at the end of
-    every run and at q. Only a program started by the kernel's run lives
-    on, as that puts it in no job: watch 'run memhog hold 100000' goes
-    on after q, until kill.
+    every run and at q. Only what leaves its job lives on: a program
+    started by the kernel's run or spawn, which puts it in no job, and a
+    server that detaches, such as telnetd on. watch 'run memhog hold
+    100000' goes on after q, until kill.
 
     A window that changes size shows the same text cut to fit within a
     second, and the next run lays it out.
@@ -34,8 +35,8 @@ DESCRIPTION
     the screen back.
 
     Standard output must be a terminal; anything else is refused. The
-    status is 0 after q or Ctrl+C, and 2 for a mistake or when a run
-    cannot start.
+    status is 0 after q or Ctrl+C, and 2 for a mistake, when a run
+    cannot start, or when there is no memory for a new window size.
 
 OPTIONS
     -n seconds  The wait, 0.1 to 86400, in decimals if you like. 2

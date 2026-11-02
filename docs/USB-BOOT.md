@@ -1410,6 +1410,29 @@ Limits:
   `ftpd` the router's address: `ftpd on -a 203.0.113.7` (a range of your own:
   `ftpd on 60000-60099`).
 
+## 18. The command-line tools and the manual
+
+*11/02/26* (`docs/superpowers/plans/2026-11-01-cli-suite.md`). SurfOS has a manual: `man <name>`
+shows the page of any program, kernel command or surfsh builtin, through `less` at a terminal,
+and `man -k <word>` searches the pages' first lines. The tools the suite added:
+
+| | |
+|---|---|
+| Text | `sed`, `awk`, `grep -E`, `diff`, `patch`, `cmp`, `comm`, `join`, `paste`, `fold`, `nl`, `rev` |
+| Files | `tar`, `gzip`, `gunzip`, `zcat`, `unzip`, `od`, `base64`, `strings`, `file`, `tree`, `basename`, `dirname` |
+| System | `top`, `watch`, `fsck`, `cal`, `bc` |
+| Network | `telnet`, `ftp` |
+
+* A tool that changes a file you have (`sed -i`, `patch`, `tar x`, `unzip -o`, `gzip`) writes a
+  new file beside it and renames it over, as `edit` saves, so a failure leaves the old file as it
+  was. Archives and patches that name absolute paths or `..` are refused.
+* `fsck usb1p1` checks a FAT volume without writing anything: it says `clean`, or lists the
+  problems. `fsck -r` is refused for now: two reviews found ways its repairs could lose data, so a
+  damaged stick is still repaired on another computer (First Aid on the Mac, `fsck` elsewhere).
+* `ftp` asks for a password only at a terminal, without echo, and never keeps it; `telnet` and
+  `ftp` have no encryption, like the servers.
+* None of this has been tried on the laptop yet.
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |

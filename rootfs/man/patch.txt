@@ -50,9 +50,9 @@ DESCRIPTION
     into the .rej. The first hunk is looked for where it says, both
     ways, before anywhere else, so a patch applied twice is seen as
     that. A hunk that only adds lines is seen as applied when they
-    are already where they would go. A malformed hunk stops everything, and the file it
-    was working on is left as it was; files finished before it stay
-    finished.
+    are already where they would go. A malformed hunk stops
+    everything, and the file it was working on is left as it was;
+    files finished before it stay finished.
 
     Status 0 when all went in, 1 when some hunks did not, a file was
     not there, or something is left in a file to be deleted, 2 for
