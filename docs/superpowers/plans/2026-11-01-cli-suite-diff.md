@@ -54,18 +54,27 @@ refused a hunk GNU's placed. It does not compare with `-U 1`, for the first case
 
 **patch never asks.** GNU asks whether a reversed patch should be applied in reverse, and without a terminal skips it, writes the
 `.rej` and exits 1. That is what happens here, always, so `-N` changes nothing and is accepted for scripts. `-f` skips the look.
-The first hunk is tried forward and then reversed at each fuzz, so that a patch applied twice is seen as that, and does not land
-with fuzz in a like block further down. A hunk `-R`ed goes into the `.rej` as it was tried. The `.rej` is always unified, also for
+The first hunk is looked for at each fuzz forward where it says, reversed where it says, and then each nearby, so that a patch
+applied twice is seen as that, and does not land, with an offset or fuzz, in a like block further on. A hunk with no old lines (`-U0`,
+the normal form's `a`, a file made) is seen as applied before when the lines it adds are already where they would go: only there, as
+the same lines elsewhere may be any lines, and in a file the patch makes only as the whole of it. A hunk `-R`ed goes into the `.rej`
+as it was tried. The `.rej` is always unified, also for
 context and normal input. It adds up over a run, and one that was there before stays: the hunks go to `<file>.1.rej`, and so on,
 and that is said.
 
+**`diff -N`'s dates.** A side dated the first moment of 1970, UTC, in any zone (`1969-12-31 18:00:00.000000000 -0600`), is how
+`diff -N` marks a file that is not there, and counts as `/dev/null` when that side of the hunk is empty, as a real file may have
+that time: such a patch makes a file, refused over one with other text in it, and deletes one once nothing is left of it. Without a
+zone only `1970-01-01 00:00:00` is that date.
+
 **`.orig`.** Decided in the review, against my first version. When a hunk needed an offset or fuzz, or failed beside others that went in,
 the old file is kept as `<file>.orig`, as GNU does. It is made with `O_EXCL`, so one that is there stays, and that is said; a copy
-that cannot be made stops the file from being replaced. GNU also keeps one when no hunk went in at all, for a file it did not
+that cannot be made stops the file from being replaced. A file is one file under any spelling of its name (`f`, `./f`): its
+`.rej` and `.orig` from earlier in the same run are its own, not the user's. GNU also keeps one when no hunk went in at all, for a file it did not
 change: here that makes none.
 
 **`-o` takes its file's place only if all of the patch went in and there is something to write.** It opens at the first hunk that goes in,
-and otherwise stays as it was; a new one is not made. So a patch that empties a file makes no `-o` file. `-o -` cannot take back what it
+and otherwise stays as it was; a new one is not made, and that is said. So a patch that empties a file makes no `-o` file. `-o -` cannot take back what it
 has written, and gets what there is.
 
 **A malformed hunk stops the run** with status 2 and drops what was under way on that file, since a damaged patch may not be
@@ -113,14 +122,18 @@ were chosen by measuring, with `tests/host/cli/measure_dcore.c`, on files of sev
 as text (`seq n | sort`, "sorted"); a file with its blocks of 1 to 100 lines shuffled ("blocks"); lines of 800 kinds, 40% of them
 changed, deleted or added ("edited"); two files of the same 300 lines in other orders ("unrelated"); unique lines shuffled
 ("permuted"); and two kinds of drifting file, where stretches of about 1,500 lines are rewritten and lose half their lines, so
-that the two files drift apart as they go, the new lines being lines of their own ("drifting") or copies of others ("copies").
+that the two files drift apart as they go, the new lines being lines of their own ("drifting") or copies of others ("copies");
+and, since the second review, a quarter of the lines and one more moved from the start to the end ("moved down") or from the end
+to the start ("moved up").
 Each figure is how much longer the edit is than the shortest. For the drifting files the edit they were made by stands in for
 the shortest: for "drifting" it is the shortest, as nothing of a stretch is left to match; for "copies" it may be longer, so a
 figure there can be below zero.
 
 **The rules.** When the waves from the two corners share diagonals, the first rule cuts at both points of the one where they stopped
 nearest each other, of those on which each wave's point has at least a part of its wave's best progress; otherwise each wave's
-point nearest its course, the line between the corners, valued at four times its progress less how far it has strayed. The part:
+point nearest its course, the line between the corners, valued at four times its progress less how far it has strayed. Before
+both, when neither wave met a single line of the other file, a fallback looks along the box's edges (below, "The second
+review"). The part:
 
 | First rule | sorted, 20,000 lines | sorted, 100,000, at caps 4096, 5000, 6000 | drifting and copies, 60,000 lines: excess summed over 36 runs |
 |---|---|---|---|
@@ -146,7 +159,8 @@ five such measurements running side by side, so that only their ratios count:
 | edited | +1.3% | +0.6% | +0.2% | +0.5% | +0.3% | 0.0% | 0.0% |
 | unrelated, permuted | +0.5% | +0.3% | +0.2% | +0.2% | +0.1% | +0.2% | +0.1% |
 | sorted | +19.2% | +19% | +19% | +19% | +19% | +19% | +19% |
-| drifting and copies, 60,000 lines, mean of 12 | +14% | +4.7% | +3.7% | +2.7% | +3.0% | +3.3% | +1.8% |
+| drifting and copies, 60,000 lines, mean of 12 | +13% | +4.7% | +3.7% | +2.7% | +3.0% | +3.3% | +1.8% |
+| moved down, moved up: 20,000, 40,000 and 200,000 lines | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | time for the five 20,000-line shapes | 0.30 s | 0.61 s | 0.92 s | 1.21 s | 1.46 s | 1.89 s | 2.23 s |
 
 At 4000 every shape is within half a point of the best that any cap up to 6000 gives. A larger cap costs time in proportion, and
@@ -167,9 +181,10 @@ square root of the lines past 16.7 million in the two files): times are the best
 | copies, 60,000 lines, six files: worst, mean | +4.4%, +1.6% | +2.1%, +0.6% |
 | drifting, 200,000 lines, three files | +143%, +74%, +102% | +4.0%, +6.5%, +3.3% |
 | copies, 200,000 lines, three files | +4.3%, +0.6%, +1.0% | +6.6%, +2.1%, +2.4% |
+| moved down / moved up, 20,000, 40,000 and 200,000 lines | +200% / 0 | 0 / 0 |
 | time: sorted / the other four 20,000-line shapes | 80 ms / 823 ms | 125 ms / 870 ms |
 
-So the worst of everything measured went from +143% to +19%. What is worse: the sorted file of 20,000 lines, by 9 points; copies
+So the worst of everything measured went from +200% to +19%. What is worse: the sorted file of 20,000 lines, by 9 points; copies
 at 20,000 and 200,000 lines; moved blocks and edits, by less than a point; and time, by 6%, and by 55% on the sorted file. In
 `test_diff`'s drifting pair, cutting at the furthest point kept 415 of the 33,928 lines at a cap of 512 and 2,965 at 2048; these
 rules keep 29,500, 32,382 and 33,197 at 512, 1024 and 2048.
@@ -177,6 +192,22 @@ rules keep 29,500, 32,382 and 33,197 at 512, 1024 and 2048.
 Where no box reaches the cap the edit is the shortest, as before; which of several shortest edits comes out can differ, which is why
 the number of cases with GNU's exact text changed. Memory is still two arrays of `2 * cap + 3` ints. Time is still proportional to the
 cap times the lines: `dcore.c` gives the reason, that every cut takes out of the box a fixed part of what its search cost.
+
+## The second review (of fe843b5)
+
+It found no memory-safety issue, and diff's correctness held over about 183,000 checked runs. Each fix has a test that failed on
+fe843b5's code first: 10 failures in `test_diff`, 12 in `test_cli_diff.py`.
+
+| # | Found | Fixed |
+|---|---|---|
+| 1 | a hunk with no old lines went to its stated place before the look for a patch gone in before: a `diff -N` new file applied three times held its lines three times, and `1a2` or `-U0`'s `@@ -1,0 +2 @@` applied twice gave `a NEW NEW b c`, all with status 0 | the lines it adds, already where they would go, say it went in before (above, "patch never asks"); it is skipped as such, status 1 |
+| 2 | at each fuzz the forward search over every offset came before the reversed look, so a second run put the patch into a like block further on, "succeeded at 13 (offset 12 lines)" | forward where it says, reversed where it says, then each nearby |
+| 3 | when neither wave met a line of the other file inside the cap, every gap tied and the lowest diagonal won: `seq 1 40000` against `seq 4002 40000; seq 1 4001` gave 71,998 changed lines for 8,002. The first search did the same, +200%; a block moved up came out right with both | `cut_at_far_match()`: the box's first line of each file looked for further down the other, and its last line further up, the nearest place only, taken when the lines that agree from there are at least as many as the edits to get there. Both shapes are now exact at every cap and size measured, also with a line changed at the block's edges or before it. Of the 73 earlier runs in the tables, 70 are unchanged and 3, drifting files at a cap of 1000, got shorter |
+| 4 | `patch -o out in` with an empty result left `out` as it was, status 0, and said nothing | said on stderr, "not written: the result is empty" |
+| nits | `od -A ''` read past its argument; a `diff -N` deletion left an empty file with status 0; `f` and `./f` in two sections split their `.rej` and called this run's own `f.rej` the user's | refused; `diff -N`'s dates count as `/dev/null` both ways, which also stops a `diff -N` new file being put in front of a file with other text; one file under any spelling, for the `.rej` and the `.orig` |
+
+The decisions of the first review stand: `-B` groups as one hunk, `.orig` as above, `-o` writing nothing for an empty result, and
+cleaned labels.
 
 ## Sanitizers
 
@@ -201,17 +232,17 @@ arithmetic is covered only by the unsanitized `test_diff` at `-m32` in the image
 
 | Where | What | Result |
 |---|---|---|
-| `make unittest`, in the image | `test_diff`, at `-m32` (SurfOS's 32-bit `long`), 1,500 rounds | 53,285 checks, 0 failures |
-| | `test_diff_weak`, hashes cut to 2 bits, same rounds | 52,770 checks, 0 failures |
-| | `test_cli_diff.py`, the programs beside GNU's | 12,868 checks, 0 failures |
-| `mac-sanitize.sh`, on the Mac, ASan + UBSan, clang | `test_diff`, 6,000 rounds | 139,055 checks, 0 failures |
-| | `test_diff_weak`, 6,000 rounds | 137,106 checks, 0 failures |
-| | `test_cli_diff.py`, the programs beside BSD's | 11,101 checks, 0 failures |
+| `make unittest`, in the image | `test_diff`, at `-m32` (SurfOS's 32-bit `long`), 1,500 rounds | 53,308 checks, 0 failures |
+| | `test_diff_weak`, hashes cut to 2 bits, same rounds | 52,793 checks, 0 failures |
+| | `test_cli_diff.py`, the programs beside GNU's | 12,900 checks, 0 failures |
+| `mac-sanitize.sh`, on the Mac, ASan + UBSan, clang | `test_diff`, 6,000 rounds | 139,078 checks, 0 failures |
+| | `test_diff_weak`, 6,000 rounds | 137,129 checks, 0 failures |
+| | `test_cli_diff.py`, the programs beside BSD's | 11,133 checks, 0 failures |
 | smoke | the `echo cli-diff` block, O2 and through `make test-all` at O0 and O2 | 20 steps |
 
 `test_diff`: the search against a table of longest common subsequences (edits as short as possible, for random pairs and for edits
-of a file); a capped search still correct, and ending, on 200,000 lines with nothing in common, and keeping four fifths of what
-the shortest keeps on a long drifting pair; `diff` then `patch` gives the second file back, forward and with `-R`, in all three
+of a file); a capped search still correct, and ending, on 200,000 lines with nothing in common, keeping four fifths of what
+the shortest keeps on a long drifting pair, and finding a block moved down or up past the cap; `diff` then `patch` gives the second file back, forward and with `-R`, in all three
 forms, at 0 to 4 lines of context, with and without last newlines, empty files, and lines that look like headers; sizes around the
 32 KB block; `-i -b -w -B`; hunks moved, fuzzed, at the ends of the file and kept there at every fuzz, in order; patches written
 by hand; lies in the numbers; thousands of damaged patches (bytes flipped, ends cut, lines gone); and, added by the
@@ -222,7 +253,9 @@ review, every hunk of thousands of outputs read by its own numbers against both 
 `patch`, and `changed lines` against `diff --minimal`; `diff -r` text; `patch` against GNU patch 2.7.6 on files that moved on, comparing
 the file, the status and the messages; every option and refusal of `patch` on real files; `patch` pulled at each write, fsync and
 rename (`CLI_FAIL`), checking that the old file stays whole and nothing is left beside it, and that a rename that may be half done
-deletes nothing; a real FAT12, FAT16 and FAT32 volume from `mkfs.fat` through `file`; junk through every tool.
+deletes nothing; a real FAT12, FAT16 and FAT32 volume from `mkfs.fat` through `file`; junk through every tool; and the second
+review's cases: additions and a `diff -N` file applied again, a like block further on, `diff -N`'s dates both ways and on files
+that really have that time, `-o` with nothing to write, one file under two names.
 
 The block's depth is small on purpose. What it adds is libsurf, i486 code and real FAT with its rename.
 
@@ -241,8 +274,9 @@ libsurf (see above). The laptop. LeakSanitizer is off in the Mac run: macOS's cl
 
 ## make test-all
 
-This round's `make test-all`, O0 and O2, and `make unittest` ran on the tree of the last commit on the branch, which holds this
-file; the result is in that commit's message, as this file cannot hold the result of a run on itself.
+Each round's `make test-all`, O0 and O2, and `make unittest` ran on the tree of that round's last commit, which holds this file;
+the result is in that commit's message, as this file cannot hold the result of a run on itself. For the third round that is the
+commit `The command-line suite, track diff: the account`, and for the second review the last commit on the branch.
 
 The runs of the earlier rounds were on trees this history no longer has (below, "What came from where"). Their failures, none in
 this track's blocks:
