@@ -5,7 +5,7 @@
 # fine, so no compile probe could keep such a build out. The native build is 64-bit: libsurf and the tools are written to
 # build either way, and the host tests' sizes say which.
 #
-#   tests/archive-sanitize.sh [test_deflate test_gztool test_tar test_unzip]
+#   tests/archive-sanitize.sh [test_deflate test_gztool test_tar test_unzip test_inflate_zlib]
 #
 # Everything goes in a temporary folder, which is removed. Run it from the top of the worktree.
 set -eu
@@ -48,7 +48,17 @@ $CC $SAN -Wall -Itests/host tests/host/test_tar.c "$OUT/tar_tar.o" "$OUT/tar_tar
 $CC $SAN -Wall -Itests/host tests/host/test_unzip.c "$OUT/zip_unzip.o" "$OUT/zip_zipfile.o" "$OUT/tar_arpath.o" "$OUT/cp437.o" \
     $ALL -o "$OUT/test_unzip"
 
-for t in ${*:-test_deflate test_gztool test_tar test_unzip}; do
+# zlib's own header and library, where the host has them: inflate must agree with it on every stream
+if echo '#include <zlib.h>' | $CC -E -x c - > /dev/null 2>&1; then
+    $CC $SAN -Wall -idirafter user/include tests/host/test_inflate_zlib.c user/libsurf/inflate.c user/libsurf/deflate.c -lz \
+        -o "$OUT/test_inflate_zlib"
+    ZLIB=test_inflate_zlib
+else
+    ZLIB=
+    echo "archive-sanitize.sh: no zlib.h here: the comparison with zlib is skipped"
+fi
+
+for t in ${*:-test_deflate test_gztool test_tar test_unzip $ZLIB}; do
     echo "== $t, under ASan and UBSan"
     AR_SLOW=1 "$OUT/$t"
 done

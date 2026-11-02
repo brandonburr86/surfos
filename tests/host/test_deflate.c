@@ -209,6 +209,15 @@ static void test_dynamic(void) {
     bw_end(&w);
     check(refused(w.b, w.n), "the unused half of a one-code distance code is no code");
 
+    /* and that needs no more bits than the one: nothing that could follow would make it a code */
+    bw_start(&w);
+    bw_dynamic_head(&w, 1, 286, 1, lens);
+    bw_code(&w, 0, 2);
+    bw_code(&w, 3, 2);
+    bw_code(&w, 1, 1);
+    bw_end(&w);
+    check(refused(w.b, w.n), "the unused half of a one-code code is refused at its first bit");
+
     /* no distance codes at all: literals are fine, a length is not */
     lens[286] = 0;
     bw_start(&w);
@@ -462,6 +471,71 @@ static void test_dynamic(void) {
     }
 }
 
+/* The canonical code of section 3.2.2 of RFC 1951, worked out here, independently of inflate.c */
+static void rfc_codes(const unsigned char *lens, int n, unsigned short *code) {
+    unsigned short bl_count[16], next_code[17];
+    unsigned int c = 0;
+    int bits, i;
+    memset(bl_count, 0, sizeof(bl_count));
+    for(i = 0; i < n; i++) bl_count[lens[i]]++;
+    bl_count[0] = 0;
+    for(bits = 1; bits <= 15; bits++) {
+        c = (c + bl_count[bits - 1]) << 1;
+        next_code[bits] = (unsigned short)c;
+    }
+    for(i = 0; i < n; i++) if(lens[i]) code[i] = next_code[lens[i]]++;
+}
+
+/* The most a code can ask of the second level of inflate's table: 40 first-bits with codes 6 bits longer than the first
+   level takes, which is all that 286 symbols can pay for, and every code of them used. */
+static void test_largest_table(void) {
+    static struct bw w;
+    static unsigned char lens[320], out[4096], want[4096];
+    static unsigned short code[286];
+    static const unsigned char deep[7] = { 10, 11, 12, 13, 14, 15, 15 };
+    size_t made, rest, n = 0;
+    int s = 4, i, k;
+    memset(lens, 0, sizeof(lens));
+    lens[256] = 1;
+    lens[0] = 2;
+    lens[1] = 3;
+    lens[2] = 5;
+    lens[3] = 6;
+    for(i = 0; i < 40; i++) {
+        for(k = 0; k < 7; k++) {
+            if(s == 256) s++;
+            lens[s++] = deep[k];
+        }
+    }
+    check(s == 285, "the table's test uses 285 symbols");
+    lens[286] = 1;                                      /* one distance code */
+    rfc_codes(lens, 286, code);
+    bw_start(&w);
+    bw_dynamic_head(&w, 1, 286, 1, lens);
+    for(i = 0; i < 256; i++) {
+        bw_code(&w, code[i], lens[i]);
+        want[n++] = (unsigned char)i;
+    }
+    for(i = 257; i < 285; i++) {                        /* each length symbol, as a match of the last byte */
+        int extra = i < 265 ? 0 : i < 285 ? (i - 261) / 4 : 0, base, q;
+        static const unsigned short bases[28] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+                                                  163, 195, 227 };
+        base = bases[i - 257];
+        bw_code(&w, code[i], lens[i]);
+        bw_put(&w, 0, extra);
+        bw_code(&w, 0, 1);
+        for(q = 0; q < base; q++) {
+            want[n] = want[n - 1];
+            n++;
+        }
+    }
+    bw_code(&w, code[256], lens[256]);
+    bw_end(&w);
+    check(run_all(w.b, w.n, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n) && !rest,
+          "the largest table a stream can ask for: every code of it decodes");
+    check(run_chunks(w.b, w.n, 1, 1, out, sizeof(out), &made, &rest) == INFLATE_END && made == n && !memcmp(out, want, n), "and a bit at a time, as it were");
+}
+
 /* every way of cutting input and room over a stream with stored, fixed and dynamic blocks */
 static void test_chunks(void) {
     static unsigned char plain[60000], packed[70000], back[60000], with_tail[70003];
@@ -695,6 +769,7 @@ int main(void) {
     test_crc();
     test_known();
     test_dynamic();
+    test_largest_table();
     test_chunks();
     test_deflate();
     test_hostile();
