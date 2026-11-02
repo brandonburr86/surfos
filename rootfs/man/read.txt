@@ -1,0 +1,23 @@
+read - a line of input into variables
+
+SYNOPSIS
+    read [-r] [name...]
+
+DESCRIPTION
+    Takes one line of input, splits it at IFS, and gives a field to each
+    name, the rest of the line to the last. Without names the line goes
+    to REPLY. A \ joins a line to the next and keeps the character after
+    it. The status is 1 at the end of the input.
+
+    read takes that line and no more, so the next command reads on from
+    there, from a file or a pipe alike.
+
+OPTIONS
+    -r  A \ is itself.
+
+EXAMPLES
+    lsblk | while read name rest; do echo "$name"; done
+    read -r line < /hda1/NOTES.TXT
+
+SEE ALSO
+    test, surfsh

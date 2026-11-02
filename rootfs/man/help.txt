@@ -1,0 +1,24 @@
+help - the commands there are
+
+SYNOPSIS
+    help [command]
+
+DESCRIPTION
+    In surfsh, help lists its own commands, the kernel's and the
+    programs in PATH, or says what one name is. A kernel command marked
+    with * has a program of the same name that runs first. help is long
+    on purpose: it stops at --More--.
+
+    The ring-0 shell has a help of its own, the table of its commands,
+    which kernel help prints. man has more about each one, help only a
+    line.
+
+    The status is 1 for a name that is no command.
+
+EXAMPLES
+    help
+    help lsblk
+    help | grep -i usb
+
+SEE ALSO
+    man, type, surfsh

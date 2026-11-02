@@ -1,0 +1,18 @@
+tee - copy standard input to files too
+
+SYNOPSIS
+    tee [-a] [file...]
+
+DESCRIPTION
+    Copies standard input to standard output and into each file as it
+    comes. A file that cannot be opened or written is said, the others
+    go on, and the status is 1.
+
+OPTIONS
+    -a  At the ends of the files, not over them.
+
+EXAMPLES
+    dmesg | tee /hda1/DMESG.TXT | grep -i fat
+
+SEE ALSO
+    cat, write

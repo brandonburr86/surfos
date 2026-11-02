@@ -1,0 +1,24 @@
+tr - change or delete characters
+
+SYNOPSIS
+    tr [-d] [-s] set1 [set2]
+
+DESCRIPTION
+    Copies standard input to standard output with the characters of set1
+    changed to those of set2, place by place; the last of set2 stands
+    for the rest of set1. A set is characters as they are, a-z for a
+    range, and \n \t \r \\ \- for those. It works in bytes, so it does
+    not take a UTF-8 character as one.
+
+OPTIONS
+    -d  Delete the characters of set1 instead.
+    -s  Squeeze each run of one character of the last set given into
+        one.
+
+EXAMPLES
+    echo hello | tr a-z A-Z
+    echo "a   b" | tr -s " "
+    seq 3 | tr -d "\n"
+
+SEE ALSO
+    cut, sed

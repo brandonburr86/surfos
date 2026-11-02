@@ -1,0 +1,22 @@
+sha256sum - SHA-256 of files
+
+SYNOPSIS
+    sha256sum [file...]
+    sha256sum -c [file...]
+
+DESCRIPTION
+    Prints the SHA-256 of each file, or of standard input without one or
+    for -, as lines of the hash, two spaces and the name.
+
+OPTIONS
+    -c  Read such lines from the files, or from standard input, and
+        check each file named: name: OK, or name: FAILED and status 1. A
+        file that cannot be read says why, and lines that are neither
+        are counted and said at the end.
+
+EXAMPLES
+    sha256sum /initrd/bin/* > /hda1/SUMS.TXT
+    sha256sum -c /hda1/SUMS.TXT
+
+SEE ALSO
+    cat, fetch, rx

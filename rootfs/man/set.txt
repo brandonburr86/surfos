@@ -1,0 +1,38 @@
+set - settings and shell options
+
+SYNOPSIS
+    set
+    set key [value]
+    set key=value
+    set [-eufx] [+eufx] [-o name] [+o name] [-- args]
+
+DESCRIPTION
+    Alone it lists the settings, then the variables. A key alone shows
+    one, and with a value changes it for this shell.
+    /initrd/etc/surfsh.conf has the values every shell starts with.
+
+    set -- args sets the positional parameters.
+
+OPTIONS
+    -e            End a script at a command that fails where its status
+                  is not looked at.
+    -u            An unset variable is an error.
+    -x            Show each command on standard error before it runs.
+    -f            No wildcards.
+    +e and so on  End them. set -o and set +o list them.
+
+KEYS
+    prompt.unicode  on or off: the prompt's symbols, or their ASCII
+                    stand-ins. On only where the console draws UTF-8.
+    prompt.color    on or off: the SurfOS colours.
+    prompt.max_depth
+                    2 to 16: how many directories the prompt shows at
+                    most. 5 unless set.
+
+EXAMPLES
+    set prompt.color off
+    set -e
+    set -- a b c
+
+SEE ALSO
+    settings, export, surfsh

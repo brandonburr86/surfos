@@ -1,0 +1,36 @@
+grep - lines that match a pattern
+
+SYNOPSIS
+    grep [-ivnclqF] [-e pattern] pattern [file...]
+
+DESCRIPTION
+    Prints the lines of the files, or of standard input without them,
+    that the pattern matches. With more than one file each line comes
+    after its file's name and a colon.
+
+    The pattern is a basic regular expression, of these parts only: .
+    any character, * the part before it any number of times, ^ and $ the
+    start and end of the line, [abc] [a-z] one of those, [^abc] one not
+    of them, \ the next character as itself. There are no groups, no \|
+    and no intervals.
+
+    The status is 0 when a line was found, 1 when none was, and 2 for a
+    mistake, such as a file that cannot be read. With -q a line found
+    counts more than a mistake.
+
+OPTIONS
+    -i          Ignore case.
+    -v          The lines that do not match.
+    -n          Put each line's number before it.
+    -c          How many lines there are, not the lines.
+    -l          The names of the files that have one.
+    -q          Nothing: only the status.
+    -F          Take the pattern as a fixed string.
+    -e pattern  The pattern, which may then begin with a -.
+
+EXAMPLES
+    dmesg | grep -i usb
+    grep -n '^#' /initrd/etc/surfsh.conf
+
+SEE ALSO
+    find, cut, sed, awk

@@ -1,0 +1,24 @@
+acpi - the firmware's ACPI tables
+
+SYNOPSIS
+    acpi
+    acpidump DSDT | SSDT [instance]
+    acpinvs hex-address bytes
+
+DESCRIPTION
+    acpi lists the tables the firmware gave: each one's signature,
+    address and length, whether it passed its checks, and the instance
+    number of each SSDT. They are read only with profile=laptop;
+    elsewhere acpi says so.
+
+    acpidump prints the bytes of a checked DSDT or SSDT in hexadecimal,
+    for study on another computer. acpinvs prints 1 to 256 bytes of ACPI
+    NVS memory, and refuses a range that is not ACPI NVS below 4 GB.
+    Nothing here runs the tables' code; all three only read.
+
+EXAMPLES
+    acpi
+    acpidump SSDT 2 > /usb1p1/SSDT2.TXT
+
+SEE ALSO
+    bootinfo, lspci, drivers

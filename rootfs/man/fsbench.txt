@@ -1,0 +1,17 @@
+fsbench - time a volume
+
+SYNOPSIS
+    fsbench directory [MB]
+
+DESCRIPTION
+    Writes a file of MB megabytes, 1 to 64 and 4 unless given, in pieces
+    of 4 KB, reads it in pieces of 4 KB and of 64 KB, checks every byte,
+    and says the rates and how many requests reached the device. The
+    file is called fsbench.tmp, in that directory, and is removed
+    however it ends. Ctrl+C stops it.
+
+EXAMPLES
+    fsbench /hda1 8
+
+SEE ALSO
+    readbench, lsblk, df

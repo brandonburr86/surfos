@@ -1,0 +1,20 @@
+lspci - PCI devices
+
+SYNOPSIS
+    lspci [-v] [bus:device.function]
+
+DESCRIPTION
+    Lists the PCI devices. An address, in hexadecimal as 00:14.3, shows
+    that device in full with its 256 bytes of configuration space.
+
+OPTIONS
+    -v  The ids with the subsystem, power state, interrupts (MSI, MSI-X)
+        and PCI Express link.
+
+EXAMPLES
+    lspci
+    lspci -v > /usb1p1/LSPCI.TXT
+    lspci 00:14.3
+
+SEE ALSO
+    lsusb, drivers, wifi

@@ -1,0 +1,15 @@
+readbench - read speed of a block device
+
+SYNOPSIS
+    readbench device [MB]
+
+DESCRIPTION
+    Reads MB megabytes from the start of the device, 8 unless given, in
+    requests of 64 KB, through the block layer, and says the speed. It
+    writes nothing. Ctrl+C stops it.
+
+EXAMPLES
+    readbench usb0 32
+
+SEE ALSO
+    fsbench, lsblk, hexdump

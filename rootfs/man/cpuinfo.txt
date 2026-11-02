@@ -1,0 +1,10 @@
+cpuinfo - the processor
+
+SYNOPSIS
+    cpuinfo
+
+DESCRIPTION
+    Prints the processor's model and the features SurfOS found.
+
+SEE ALSO
+    bootinfo, drivers

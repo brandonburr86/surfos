@@ -1,0 +1,27 @@
+ls - list directories
+
+SYNOPSIS
+    ls [-la] [path...]
+
+DESCRIPTION
+    Lists the entries of each directory, in order of name without regard
+    to case, and a directory's name ends with a /. A path that is a file
+    lists that file. Names that begin with a dot are left out, as are
+    the . and .. that the kernel does not list. Without a path it lists
+    the current directory.
+
+    kernel ls [path] is the kernel's command: in the file system's
+    order, with sizes and times, and a count of entries and bytes at the
+    end.
+
+OPTIONS
+    -l  A line each: - or d, the size, the time, the name, then how many
+        entries.
+    -a  Names that begin with a dot too, and . and ..
+
+EXAMPLES
+    ls -l /hda1
+    ls /initrd/bin | wc -l
+
+SEE ALSO
+    find, du, stat, files

@@ -1,0 +1,16 @@
+dmesg - the kernel log
+
+SYNOPSIS
+    dmesg
+
+DESCRIPTION
+    Prints the kernel's log, its last 16 KB. Lines that start with +
+    come from drivers and services: +USB:, +PART:, +FAT, +NET:, +IWL:,
+    +MDNS:. It takes no options; use grep.
+
+EXAMPLES
+    dmesg | grep -i usb
+    dmesg > /usb1p1/DMESG.TXT
+
+SEE ALSO
+    grep, less, drivers

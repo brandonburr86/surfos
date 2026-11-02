@@ -1,0 +1,15 @@
+stat - size, time and place of a file
+
+SYNOPSIS
+    stat path
+
+DESCRIPTION
+    Says whether a path is a file or a directory, its size, when it was
+    changed, its inode, and the device and file system it lies on. A
+    time not known shows as -.
+
+EXAMPLES
+    stat /initrd/motd
+
+SEE ALSO
+    ls, df, touch

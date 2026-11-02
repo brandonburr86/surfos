@@ -1,0 +1,24 @@
+hexdump - bytes as hex and ASCII
+
+SYNOPSIS
+    hexdump [file]
+    hexdump file offset
+    hexdump device [block] [count]
+
+DESCRIPTION
+    With one file, or standard input without one, prints all its bytes
+    as hex and ASCII, 16 to a line, in the layout of hexdump -C on other
+    systems.
+
+    What the program does not take goes to the kernel's hexdump: a name
+    that is no file, or more than one argument. That shows blocks of a
+    block device, 1 to 8 of them, or 512 bytes of a file from an offset.
+    kernel hexdump always runs the kernel's.
+
+EXAMPLES
+    hexdump /initrd/motd | head
+    hexdump usb0 0
+    hexdump /hda1/DATA.BIN 4096
+
+SEE ALSO
+    lsblk, cat

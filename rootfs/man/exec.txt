@@ -1,0 +1,16 @@
+exec - become a command
+
+SYNOPSIS
+    exec [cmd [args]]
+
+DESCRIPTION
+    With a command, runs it and then this shell ends with its status.
+    SurfOS has no exec call: the command is a new process that the shell
+    waits for. Alone, its redirections stay for the rest of the shell.
+
+EXAMPLES
+    exec 3< /hda1/LIST.TXT; read line <&3
+    exec > /hda1/LOG.TXT
+
+SEE ALSO
+    eval, surfsh

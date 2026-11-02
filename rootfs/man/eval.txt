@@ -1,0 +1,14 @@
+eval - run its arguments as a command line
+
+SYNOPSIS
+    eval [args]
+
+DESCRIPTION
+    Joins the arguments with blanks and runs that as a command line in
+    this shell, so variables it sets stay.
+
+EXAMPLES
+    cmd="ls -l"; eval "$cmd /hda1"
+
+SEE ALSO
+    source, exec, surfsh

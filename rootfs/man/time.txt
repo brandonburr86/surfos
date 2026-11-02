@@ -1,0 +1,15 @@
+time - how long a command takes
+
+SYNOPSIS
+    time cmd [args]
+
+DESCRIPTION
+    Runs the command as it would run alone, then prints real n.nn s on
+    standard error. The status is the command's. It says only the time
+    that passed: top shows what a task took of the processor.
+
+EXAMPLES
+    time ls /initrd/bin > /dev/null
+
+SEE ALSO
+    top, uptime, sleep

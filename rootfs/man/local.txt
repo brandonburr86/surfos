@@ -1,0 +1,14 @@
+local - a function's own variables
+
+SYNOPSIS
+    local name[=value]...
+
+DESCRIPTION
+    Makes variables a function's own: what they were comes back when it
+    returns. A local keeps the value it had until it is given another.
+
+EXAMPLES
+    copy() { local from=$1; cp "$from" /hda1/; }
+
+SEE ALSO
+    export, unset, break

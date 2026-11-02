@@ -1,0 +1,18 @@
+break - leave a loop or a function
+
+SYNOPSIS
+    break [n]
+    continue [n]
+    return [n]
+
+DESCRIPTION
+    break leaves the loop, or n loops, all of them when there are fewer.
+    continue goes to the next round of the loop, the n-th from the
+    innermost. return leaves the function or the . file, with status n,
+    or $? when not given.
+
+EXAMPLES
+    for f in *; do [ -d "$f" ] && continue; echo "$f"; done
+
+SEE ALSO
+    surfsh, source, local

@@ -1,0 +1,19 @@
+tail - the last lines
+
+SYNOPSIS
+    tail [-n N | -N] [file...]
+
+DESCRIPTION
+    Prints the last 10 lines of each file, or of standard input without
+    one. With more than one file each gets a ==> name <== heading. There
+    is no -f.
+
+OPTIONS
+    -n N, -N  N lines, not 10.
+
+EXAMPLES
+    dmesg | tail -5
+    tail -n 2 /hda1/LOG.TXT
+
+SEE ALSO
+    head, less, watch

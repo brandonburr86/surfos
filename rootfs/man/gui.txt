@@ -1,0 +1,18 @@
+gui - the desktop
+
+SYNOPSIS
+    gui
+
+DESCRIPTION
+    Opens the SurfOS desktop on this console: windows, menus, Notepad,
+    Files, a Terminal and the other applications. Ctrl+Q goes back to
+    the shell, Ctrl+E opens Notepad and Ctrl+B Files. The Help menu has
+    the rest.
+
+    It needs the active local console on the UEFI framebuffer: not over
+    telnet, not in VGA text mode, and not on a console that does not
+    show. It reads the keyboard as it goes, so its output cannot go to a
+    file.
+
+SEE ALSO
+    wundertow, wcalc, wclock, wcharmap, touchpad, gfxinfo

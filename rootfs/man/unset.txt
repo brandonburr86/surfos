@@ -1,0 +1,17 @@
+unset - remove variables or functions
+
+SYNOPSIS
+    unset [-f] name...
+
+DESCRIPTION
+    The variables are gone. A readonly one stays, which is said, and the
+    status is 1.
+
+OPTIONS
+    -f  The functions instead.
+
+EXAMPLES
+    unset OLDPWD
+
+SEE ALSO
+    export, set, local

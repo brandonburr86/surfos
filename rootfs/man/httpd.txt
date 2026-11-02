@@ -1,0 +1,30 @@
+httpd - the web server
+
+SYNOPSIS
+    httpd on [folder] [port]
+    httpd serve [folder] [port]
+    httpd off
+    httpd [status]
+
+DESCRIPTION
+    Serves the files of a folder as a website. It only sends files: no
+    programs run on the server, nothing is uploaded and there are no
+    logins. It never starts by itself.
+
+    on starts it in the background: the folder (/initrd/www, the sample
+    site) on the port (80), in either order, a word of digits being the
+    port. Started in a telnet session it ends with that session. serve
+    runs the same server on this console, printing each request until
+    Ctrl+C. off stops the background server, and status says whether it
+    runs and its pid.
+
+    The status is 0, 1 for a failure, such as a server that runs
+    already, and 2 for a mistake in the words.
+
+EXAMPLES
+    httpd on
+    httpd on /hda1/site 8080
+    httpd off
+
+SEE ALSO
+    ftpd, telnetd, ifconfig

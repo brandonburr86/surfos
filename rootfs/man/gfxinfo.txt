@@ -1,0 +1,17 @@
+gfxinfo - the framebuffer, and a graphics test
+
+SYNOPSIS
+    gfxinfo
+    gfxtest [seconds]
+
+DESCRIPTION
+    gfxinfo says what the framebuffer is, what the console has cost it
+    in presents and cells, and each desktop's frame times. gfxtest shows
+    a test pattern of colours, lines and a picture for 1 to 60 seconds,
+    5 unless given; Ctrl+C or another console goes back to text.
+
+    There is a framebuffer only on the UEFI USB image: not in VGA text
+    mode, so not under plain QEMU.
+
+SEE ALSO
+    gui, bootinfo

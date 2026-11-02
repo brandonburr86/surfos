@@ -1,0 +1,31 @@
+find - names under a directory
+
+SYNOPSIS
+    find [path...] [test...] [-print0]
+
+DESCRIPTION
+    Prints the path itself, then the names under it, each directory's
+    entries in the order its file system keeps them. Without a path it
+    starts at the current directory. With tests, only the names that
+    pass every one. There are no actions: find names files, and xargs
+    does things to them.
+
+    A pattern has * ? [abc] [a-z] and [!abc], and a backslash takes the
+    next character as it is. Up to 16 -name tests can be given. A name
+    that cannot be read is said on standard error, and the status is 1.
+
+OPTIONS
+    -name pattern   The last part of the name matches.
+    -iname pattern  The same, case not counting.
+    -type f|d       Files, or directories.
+    -maxdepth n     No deeper than n; the path itself is depth 0.
+    -mindepth n     No shallower than n.
+    -print0         End each name with a NUL, not a newline, for xargs
+                    -0.
+
+EXAMPLES
+    find /initrd -name '*.conf'
+    find /hda1 -type f -print0 | xargs -0 wc -c
+
+SEE ALSO
+    xargs, du, ls, grep

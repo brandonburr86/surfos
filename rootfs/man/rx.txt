@@ -1,0 +1,27 @@
+rx - receive one file over the network
+
+SYNOPSIS
+    rx port path
+
+DESCRIPTION
+    Takes one connection on the port within 120 seconds, and writes
+    everything that comes to path.part until the other end closes. Then
+    it syncs the file, renames it to path, replacing a file of that
+    name, and says how many bytes came and their CRC-32, the one zlib
+    and Python compute, so the sender can check it. tools/devloop.py
+    pushes builds with it. Anyone who reaches the port first gets the
+    file written: there is no password.
+
+    A connection silent for 120 seconds is given up. After an error the
+    partial file is removed, unless a rename failed and may have changed
+    something: then it is kept, and the message says to have the disk
+    checked before either name is deleted, since the two may share their
+    clusters.
+
+    The status is 0, 1 for an error, and 2 for a mistake in the words.
+
+EXAMPLES
+    rx 9000 /hda1/surfos.bin
+
+SEE ALSO
+    nc, ftpd, fetch

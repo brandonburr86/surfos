@@ -1,0 +1,32 @@
+fdisk - partition tables
+
+SYNOPSIS
+    fdisk disk
+    fdisk disk new mbr|gpt
+    fdisk disk add [size] [type]
+    fdisk disk delete n
+    fdisk disk type n type
+
+DESCRIPTION
+    Shows or changes the partition table of a whole disk, MBR or GPT.
+    With the disk alone it only reads: the table, the free space, and
+    whether the disk may be changed.
+
+    A change is made only to a USB disk or a ramdisk, never an internal
+    disk, never the SurfOS boot drive, nothing read-only, nothing with a
+    mount on it. fdisk shows the disk, its table and the change, and
+    writes only after you type the disk's name. What was written is read
+    back and checked. Anything else cancels.
+
+    A size is 500M, 2G or all, the default being the largest free
+    region. A type is fat32, the default, fat16, linux, efi, or an MBR
+    byte in hexadecimal. A new table loses what the old one pointed to.
+    mkfs then makes the file system.
+
+EXAMPLES
+    fdisk usb1
+    fdisk rd1 new mbr
+    fdisk rd1 add 32M fat16
+
+SEE ALSO
+    mkfs, lsblk, mount, eject

@@ -1,0 +1,32 @@
+cp - copy files and directories
+
+SYNOPSIS
+    cp [-r] source target
+    cp [-r] source... directory
+
+DESCRIPTION
+    Copies a file to target, or each source into an existing directory
+    under its own name. With -r a source may be a directory, and
+    everything in it goes along; the target directory is made when it is
+    not there.
+
+    A target that exists is emptied first and then written, so a copy
+    that fails partway has lost what the target held. To keep a file
+    safe while it is replaced, copy to a new name and use mv.
+
+    A copy has the time it was written: SurfOS cannot set a file's time,
+    and has no owners or permissions to keep. cp refuses to copy a file
+    onto itself, or a directory into itself.
+
+    The kernel's kernel cp source destination copies one file and says
+    how many bytes.
+
+OPTIONS
+    -r, -R  Copy directories too.
+
+EXAMPLES
+    cp /initrd/motd /hda1/MOTD.TXT
+    cp -r /initrd/www /usb1p1/site
+
+SEE ALSO
+    mv, rm, mkdir, touch

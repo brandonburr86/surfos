@@ -1,0 +1,23 @@
+mv - rename or move files and directories
+
+SYNOPSIS
+    mv source target
+    mv source... directory
+
+DESCRIPTION
+    Renames source to target, replacing a file of that name, or moves
+    each source into an existing directory under its own name. Across
+    volumes, or on a file system that cannot rename, it copies and then
+    removes, which takes as long as cp and gives the copy a new time. A
+    file does not go over a directory, and a directory does not go into
+    itself.
+
+    kernel mv from to is the kernel's command: one rename, which does
+    not cross volumes.
+
+EXAMPLES
+    mv /hda1/OLD.TXT /hda1/NEW.TXT
+    mv /hda1/A.TXT /usb1p1/
+
+SEE ALSO
+    cp, rm

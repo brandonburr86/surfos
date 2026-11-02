@@ -1,0 +1,14 @@
+wcalc - the desktop's Calculator as a program
+
+SYNOPSIS
+    wcalc
+
+DESCRIPTION
+    A window on the desktop with whole numbers, + - * and /, within plus
+    or minus 999,999,999. Click its buttons or type: digits, the
+    operators, Enter or = calculates, Backspace takes a digit back, C
+    clears. Esc, Ctrl+W or the close button end it. It needs a desktop:
+    start it from the desktop's Terminal or from Apps > Run program.
+
+SEE ALSO
+    gui, wclock, wcharmap

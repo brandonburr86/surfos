@@ -1,0 +1,60 @@
+tests - the test programs
+
+SYNOPSIS
+    hello [arg...]
+    count [n [ms]]
+    fstest dir
+    fputest [race|printf]
+    kcmdtest dir
+    memhog [stack|hold ms]
+    nettest mode ...
+    pagetest mode
+    pipetest [mode]
+    ptytest mode
+    toobig
+    wdemo [hang|crash]
+    wintest mode
+
+DESCRIPTION
+    Programs that exercise the kernel from user space, for the smoke
+    test and for trying things by hand. Each of the checking ones ends
+    with a line that says PASS or FAIL. The comment at the top of each
+    one's source lists all it does.
+
+OPTIONS
+    hello     Prints its pid and arguments and exits with status 42: the
+              first user program.
+    count     Prints n numbers (5), ms milliseconds (200) apart, then
+              how long that took.
+    fstest    The file calls as a program sees them, in dir: FSTEST
+              PASS.
+    fputest   A program's floating point; race, its registers across a
+              task switch; printf, libsurf's %f %e %g.
+    kcmdtest  The bridge to the kernel's commands, as surfsh uses it.
+              More modes: crash, run, together, child-selftest, pings,
+              kills, started.
+    memhog    Takes all the memory a program may have, says how much,
+              and gives it back. stack then needs more stack than it can
+              get; hold ms keeps it that long, so others meet a full
+              machine.
+    nettest   Network connections from a program: echo, send, get, info,
+              connect, refuse, and more.
+    pagetest  The pager and the terminal: N lines, ask N, crash N, hold
+              MS, utf8, caps, size, alt.
+    pipetest  Pipes: basic, stream, full, atomic, broken, poll, limits,
+              kill, share, spawnx, waitx, all.
+    ptytest   Pseudo-terminals, poll, the process list, detach and
+              /dev/kmsg: run, surfsh, size, pager, flood, hangup, reuse,
+              poll, ps, detach and more.
+    toobig    Too big to load under QEMU, for init's retry.
+    wdemo     A window through libgui: colour bars and the last event.
+              hang pays no heed to the close button; crash faults after
+              its first present.
+    wintest   The window calls: nodesk, pty, show, tty.
+
+EXAMPLES
+    pagetest 60
+    hello a b; echo $?
+
+SEE ALSO
+    crash, selftest, wcalc

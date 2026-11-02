@@ -33,6 +33,8 @@ killed by Ctrl+C), so a shell can leave a loop that Ctrl+C stopped; with WUNTRAC
 that stopped too. job (49): job control for a shell; spawnx's job field.
 
 10/25/26 (windows for programs): winopen and winctl (52, 53, kernel/win.c, surfos/win.h).
+
+11/01/26 (top): sysinfo (54, kernel/proc.c, surfos/proc.h); struct procinfo grew by three fields.
 */
 
 #include <surfos/types.h>
@@ -70,7 +72,9 @@ typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
 typedef char netaddr_layout_is_fixed[sizeof(struct netaddr) == 8 ? 1 : -1];
 typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
 typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
-typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
+typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 48 ? 1 : -1];   /* 11/01/26: was 36 */
+typedef char procinfo_old_is_fixed[__builtin_offsetof(struct procinfo, cpu_ticks) == PROCINFO_SIZE_0 ? 1 : -1];
+typedef char sysinfo_layout_is_fixed[sizeof(struct sysinfo) == 32 ? 1 : -1];     /* 11/01/26 */
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
 typedef char spawnx_layout_is_fixed[sizeof(struct spawnx) == 28 ? 1 : -1];     /* 10/24/26 */
 typedef char waitx_layout_is_fixed[sizeof(struct waitx) == 16 ? 1 : -1];       /* 10/25/26 */
@@ -631,7 +635,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_openpty:  r = sys_openpty(); break;
     case SYS_spawnpty: r = sys_spawnpty((const char *)a, (char *const *)b, (int)c); break;
     case SYS_ptyctl:   r = sys_ptyctl((int)a, (int)b, c); break;
-    case SYS_procinfo: r = sys_procinfo((int)a, (struct procinfo *)b); break;
+    case SYS_procinfo: r = sys_procinfo((int)a, (struct procinfo *)b, (u32)c); break;
+    case SYS_sysinfo:  r = sys_sysinfo((struct sysinfo *)a); break;     /* 11/01/26 */
     case SYS_getentropy: r = sys_getentropy((void *)a, (size_t)b); break;
     case SYS_resolve:  r = sys_resolve((const char *)a, (u32 *)b); break;
     case SYS_detach:   r = sys_detach(); break;

@@ -1,0 +1,14 @@
+nslookup - resolve a host name
+
+SYNOPSIS
+    nslookup name
+
+DESCRIPTION
+    Asks the DNS server for a name's IPv4 address. It needs a server:
+    one from dhcp, or from ifconfig.
+
+EXAMPLES
+    nslookup example.com
+
+SEE ALSO
+    ping, dhcp, mdns

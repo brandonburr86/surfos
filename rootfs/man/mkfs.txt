@@ -1,0 +1,26 @@
+mkfs - make a FAT file system
+
+SYNOPSIS
+    mkfs [-t fat16|fat32] device [label]
+
+DESCRIPTION
+    Erases a device and makes a FAT file system on it. The device is a
+    USB disk or partition, or a ramdisk: never an internal disk, never
+    the SurfOS boot drive, nothing read-only, nothing mounted. It shows
+    what is there, what partitions would go, and what will be made, and
+    goes ahead only when you type the device's name. Anything else
+    cancels.
+
+    A partition gets the type that matches. A whole disk loses its
+    partition table. FAT holds no owners or permissions, and its names
+    ignore case.
+
+OPTIONS
+    -t type  fat16 or fat32. Chosen by size without it.
+
+EXAMPLES
+    mkfs usb1p1 DATA
+    mkfs -t fat16 rd1
+
+SEE ALSO
+    fdisk, mount, lsblk

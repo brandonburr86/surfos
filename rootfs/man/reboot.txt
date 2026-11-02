@@ -1,0 +1,18 @@
+reboot - restart or turn off the machine
+
+SYNOPSIS
+    reboot [-f]
+    poweroff [-n]
+
+DESCRIPTION
+    reboot ends the programs, writes out and unmounts the read-write
+    volumes, and resets the machine, each step a shutdown: line on F1.
+    poweroff does the same and turns the machine off through ACPI.
+    Ctrl+Alt+Del starts the same; pressed again, it resets at once.
+
+OPTIONS
+    -f  reboot: reset at once, writing nothing out.
+    -n  poweroff: say what it would do, and do nothing.
+
+SEE ALSO
+    sync, eject

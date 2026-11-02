@@ -1,0 +1,17 @@
+seq - a sequence of whole numbers
+
+SYNOPSIS
+    seq [first [step]] last
+
+DESCRIPTION
+    Prints the whole numbers from first (1) to last by step (1), a line
+    each. A step below 0 counts down. There are no decimals and no
+    options.
+
+EXAMPLES
+    seq 5
+    seq 10 -3 1
+    for i in $(seq 3); do echo $i; done
+
+SEE ALSO
+    printf, tr

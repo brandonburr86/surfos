@@ -1,0 +1,17 @@
+touch - make a file, or give it the current time
+
+SYNOPSIS
+    touch file...
+
+DESCRIPTION
+    Makes an empty file, or gives one that exists the current time.
+    SurfOS has no call that sets a time, so no other time can be given.
+    FAT stamps a file whenever it is written, so touch writes the file's
+    first byte back as it was, and for an empty file writes a byte and
+    cuts it away again.
+
+EXAMPLES
+    touch /hda1/STAMP.TXT
+
+SEE ALSO
+    stat, ls, write

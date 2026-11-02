@@ -1,0 +1,31 @@
+mount - attach and detach volumes
+
+SYNOPSIS
+    mount
+    mount [-r] device [path [type]]
+    umount path|device
+
+DESCRIPTION
+    mount alone lists the mounts. With a device it mounts its file
+    system at path, /device unless given; the type is found by looking.
+    Nothing mounts a USB drive by itself, with one exception: the volume
+    SurfOS was started from is read for its settings. The SurfOS boot
+    drive mounts read-only, unless it is a stick made bootable by
+    copying files onto it.
+
+    umount writes a volume out and lets it go. A device's name stands
+    for its mount. Once begun it finishes, even when blocks could not be
+    written: those are given up, and said, and the status is 1. To take
+    a stick away, use eject.
+
+OPTIONS
+    -r  Read-only.
+
+EXAMPLES
+    mount
+    mount usb1p1
+    mount -r usb1p1 /stick
+    umount /usb1p1
+
+SEE ALSO
+    eject, lsblk, df, sync

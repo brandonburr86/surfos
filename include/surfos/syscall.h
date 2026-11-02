@@ -18,6 +18,7 @@ starts a program with an environment and a descriptor 3 (surfos/spawn.h).
 ends' addresses (surfos/sock.h).
 10/25/26 (windows for programs): 52 and 53 open a window on the desktop and drive it
 (surfos/win.h).
+11/01/26 (top): 54, the machine's clock and memory totals (surfos/proc.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -70,7 +71,7 @@ ends' addresses (surfos/sock.h).
 #define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
 #define SYS_spawnpty 40  /* (const char *path, char *const argv[], int masterfd): pid of a program on the pty */
 #define SYS_ptyctl   41  /* (int masterfd, int op, u32 arg) */
-#define SYS_procinfo 42  /* (int index, struct procinfo *pi): 0, -ENOENT after the last (surfos/proc.h) */
+#define SYS_procinfo 42  /* (int index, struct procinfo *pi, u32 size): 0, -ENOENT after the last (surfos/proc.h) */
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
 #define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */
@@ -86,7 +87,9 @@ ends' addresses (surfos/sock.h).
 /* 10/25/26 (windows for programs): surfos/win.h */
 #define SYS_winopen  52  /* (const struct win_open *o): a window's descriptor */
 #define SYS_winctl   53  /* (int fd, int op, void *arg): WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO */
-#define NR_SYSCALLS 54
+/* 11/01/26 (top): surfos/proc.h */
+#define SYS_sysinfo  54  /* (struct sysinfo *si) */
+#define NR_SYSCALLS 55
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 

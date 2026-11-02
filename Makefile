@@ -71,6 +71,7 @@ USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program 
 USER_PROGS  += gzip gunzip zcat       # 11/01/26 (the command-line suite): one tool with three mains, user/gzip/
 USER_PROGS  += tar                    # 11/01/26: user/tar/
 USER_PROGS  += unzip                  # 11/01/26: user/unzip/
+USER_PROGS  += top watch man # 11/01/26 (the command-line suite, track sys): rootfs/man/ is the manual
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -795,6 +796,31 @@ unittest-archive: $(BUILD)/host/test_deflate $(BUILD)/host/test_gztool $(BUILD)/
 	$(BUILD)/host/test_gztool
 	$(BUILD)/host/test_tar
 	$(BUILD)/host/test_unzip
+
+# 11/01/26 (the command-line suite, track sys): what top, watch and man know, user/bin/termview.h, topmodel.h, watchtext.h and
+# manutil.h as they are; then every name's page. Never a -fsanitize build here: one compiles in the Docker image and then
+# hangs under its qemu-i386, so these tests run under clang's sanitizers natively on the Mac, by hand
+# (docs/superpowers/plans/2026-11-01-cli-suite-sys.md)
+SYS_HOSTFLAGS = $(HOSTFLAGS) -Iuser/bin -idirafter user/include
+$(BUILD)/host/test_top: tests/host/test_top.c user/bin/topmodel.h user/bin/termview.h include/surfos/proc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_top.c -o $@
+$(BUILD)/host/test_watch: tests/host/test_watch.c user/bin/watchtext.h user/bin/termview.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_watch.c -o $@
+$(BUILD)/host/test_manutil: tests/host/test_manutil.c user/bin/manutil.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_manutil.c -o $@
+unittest: unittest-sys
+.PHONY: unittest-sys
+unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch $(BUILD)/host/test_manutil
+	$(BUILD)/host/test_top
+	$(BUILD)/host/test_watch
+	$(BUILD)/host/test_manutil
+	$(PYTHON) -m unittest discover -s tests -p test_man.py
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

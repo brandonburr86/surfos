@@ -570,6 +570,7 @@ static int b_help(int argc, char **argv) {
            "    says that the last command failed, an @ that this is a telnet session\n"
            "    (another computer's terminal; there the @ shows instead of a !). set\n"
            "    changes how it looks; %s is read at the start.\n", SURFSH_CONF);
+    printf("\n    man NAME: the manual page of any of these; man -k WORD searches the pages\n");    /* 11/01/26 */
     printf("%s\n    (C)%s %s.\n\n", rule, SURFOS_YEARS, SURFOS_AUTHOR);
     return 0;
 }

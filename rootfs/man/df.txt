@@ -1,0 +1,22 @@
+df - size and free space of the mounted volumes
+
+SYNOPSIS
+    df [path...]
+
+DESCRIPTION
+    Shows, for / and every mount point under it, or for the volumes that
+    hold the paths given: Device, Type, Size, Used, Avail, Use%, Mounted
+    on and Label. Sizes are in powers of 1024, as 16 MB or 1.9 GB. A
+    volume mounted read-only says so after its label, and one that does
+    not count its space shows -.
+
+    The status is 1 when a volume could not say its size. kernel df is
+    the kernel's command, with the same columns, for the volumes on
+    devices.
+
+EXAMPLES
+    df
+    df /hda1
+
+SEE ALSO
+    du, lsblk, mount

@@ -1,0 +1,18 @@
+wclock - the desktop's Clock as a program
+
+SYNOPSIS
+    wclock
+
+DESCRIPTION
+    A window with the time and date, a month's calendar, a stopwatch
+    with laps and a timer, chosen in its toolbar or with the keys 1 to
+    4. The stopwatch and the timer go on while the window is tucked
+    away, and at zero the timer brings it back. Ctrl+C copies what the
+    page shows. Esc, Ctrl+W or the close button end it, asking first
+    while one runs. The desktop's Apps menu starts it, or brings its
+    window back.
+
+    The time is the PC's clock, and SurfOS knows no time zone.
+
+SEE ALSO
+    gui, date, wcharmap, wcalc

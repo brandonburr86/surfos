@@ -1,0 +1,42 @@
+edit - a full-screen text editor
+
+SYNOPSIS
+    edit file
+
+DESCRIPTION
+    A small editor in the manner of nano, on the alternate screen, which
+    works on a console and over telnet or a serial line. The whole file
+    lives in memory, up to 1 MB of it. Lines do not wrap: the line with
+    the cursor moves sideways to stay in view, and a > in the last
+    column says a line goes on.
+
+    UTF-8 is text: a character is one cell, and the keys take a whole
+    character. A byte that is not UTF-8 shows as a ?. The file keeps its
+    line ends, LF, or CRLF when its first line has one, and always ends
+    with a line end.
+
+    Saving writes file.tmp beside the file, syncs it and renames it over
+    the file, so a full disk or a failed write leaves the file as it
+    was. If that name is taken by a file of yours, edit uses file.1.tmp
+    and so on, and yours is left alone. After an I/O error the rename
+    may be half done; edit then writes nothing over the file again, says
+    where the text is, and asks to have the disk checked.
+
+KEYS
+    ^S      Save.
+    ^Q      Quit, asking first when there are unsaved changes.
+    ^F      Find; Enter alone repeats the last search.
+    ^K      Cut the line; several in a row go together.
+    ^U      Paste them.
+    ^Z, ^Y  Undo, and do again. The last 1,000 changes are kept; the
+            help line has no room for these two.
+    ^G      Go to a line.
+    ^C      Say where the cursor is.
+    ^L      Draw the screen again.
+    Tab     A tab character, shown as spaces to the next multiple of 8.
+
+EXAMPLES
+    edit /hda1/NOTES.TXT
+
+SEE ALSO
+    less, files, cat

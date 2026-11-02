@@ -1,0 +1,33 @@
+printf - print as a format says
+
+SYNOPSIS
+    printf format [args]
+
+DESCRIPTION
+    Prints the arguments as the format says, as POSIX has it. Characters
+    come out as they are, \n \t \r \a \b \f \v \\ \" \' and \ddd as what
+    they stand for, and each % takes the next argument. The format is
+    used again while arguments are left; one that is missing is empty or
+    0.
+
+    Between the % and the letter go the flags - + space # 0, a width and
+    a .precision, numbers or *. A number is decimal, 0x... hex, 0...
+    octal, or 'c the character's code. There is no %f. An argument that
+    is no number is said, counts as what of it was one, and the status
+    is 1.
+
+OPTIONS
+    %s           A string.
+    %b           A string with \ sequences in it, \0ddd and \c too,
+                 which ends all output.
+    %c           Its first character.
+    %d %i        A number.
+    %u %o %x %X  One without a sign.
+    %%           A %.
+
+EXAMPLES
+    printf '%-10s %5d\n' files 12
+    printf '%x\n' 255
+
+SEE ALSO
+    echo, seq

@@ -1,0 +1,17 @@
+ps - list tasks
+
+SYNOPSIS
+    ps
+
+DESCRIPTION
+    Lists every task: PID, STATE (ready, running, blocked, sleeping,
+    stopped, zombie), PRIO, CPU in timer ticks, SWITCHES, PARENT and
+    NAME, with (ring 3) after a program. Kernel threads are tasks too.
+    It takes no options. It is a kernel command, so it can begin a
+    pipeline but not follow a |.
+
+EXAMPLES
+    ps | grep surfsh
+
+SEE ALSO
+    top, kill, jobs

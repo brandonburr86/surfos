@@ -1,0 +1,13 @@
+uptime - time since boot
+
+SYNOPSIS
+    uptime
+    tick
+
+DESCRIPTION
+    uptime prints the seconds since boot, the timer ticks at 100 a
+    second, how many tasks there are and how many kernel timers wait.
+    tick prints the tick count.
+
+SEE ALSO
+    top, date, time

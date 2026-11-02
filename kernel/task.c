@@ -1715,6 +1715,12 @@ static void fill_info(surf_task *t, struct procinfo *pi) {
                 ((t->flags & TF_SHELL) ? PROC_SHELL : 0);
     pi->tty = (t->tty && t->state != TS_DEAD) ? tty_number(t->tty) : -1;
     strlcpy(pi->name, t->name, sizeof(pi->name));
+    pi->cpu_ticks = (unsigned int)t->cpu_ticks;         /* 11/01/26 (top) */
+    pi->switches = (unsigned int)t->switches;
+    /* as task_mem_held() counts them, so that the tasks add up to its total. A task on the list has its address space
+       or none at all: both ways of ending clear t->uvm with interrupts off before anything is freed */
+    pi->mem_pages = (unsigned int)((t->uvm ? t->uvm->pages + t->uvm->table_pages : 0) +
+                                   ((t->flags & TF_PROCESS) ? KSTACK_PAGES : 0));
 }
 
 /* 10/6/26: SYS_detach (surfos/proc.h): a process leaves its parent and the job of the shell that

@@ -1,0 +1,46 @@
+less - a file or a pipeline's text a screenful at a time
+
+SYNOPSIS
+    less [file]
+
+DESCRIPTION
+    Shows a file, or standard input, on the alternate screen, and gives
+    the shell's screen back when it ends. The bottom row says where you
+    are. The text is read whole first, 8 MB at most: the rest is left
+    unread, and the bottom row says so. The keys come from the terminal,
+    so less can end a pipeline.
+
+    Long lines are cut, with a > in the last column; Right and Left move
+    sideways by half a screen. A TAB moves to the next multiple of 8,
+    UTF-8 shows as characters, one cell each, control characters as ^X
+    in inverse video, and a CR before a line's end is dropped.
+
+    With standard output anything but a terminal, less copies the text
+    there, as cat does.
+
+KEYS
+    Space f PgDn ^F
+                    The next screenful. ^V too.
+    b PgUp ^B       The one before.
+    Enter j e Down  One line on. ^N and ^E too.
+    k y Up          One line back. ^P and ^Y too.
+    d ^D, u ^U      Half a screen on, and back.
+    g < Home        The start.
+    G > End         The end.
+    / ?             Search forward from the top line, or back from the
+                    line above it, for text, not a pattern. Case counts
+                    only when the text has capitals. Enter alone
+                    searches for the last text again. The line found
+                    goes to the top, and matches show in inverse video.
+    n, N            The next match, and the one the other way.
+    Right, Left     Sideways.
+    ^L              Draw the screen again.
+    h               The keys.
+    q Q ^C          End.
+
+EXAMPLES
+    dmesg | less
+    less /hda1/NOTES.TXT
+
+SEE ALSO
+    man, head, edit

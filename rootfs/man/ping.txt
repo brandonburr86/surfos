@@ -1,0 +1,20 @@
+ping - ICMP echo
+
+SYNOPSIS
+    ping address|name [count] [interface]
+    ping address interface
+
+DESCRIPTION
+    Sends count echo requests, 4 unless given, a second apart, and says
+    how each went and how many came back. The first line says which
+    address and interface it uses. Name an interface when two are on one
+    network. Ctrl+C ends it with the count so far. The status is 0 when
+    any reply came.
+
+EXAMPLES
+    ping 10.0.2.2
+    ping example.com 10
+    ping 10.0.0.1 wlan0
+
+SEE ALSO
+    ifconfig, nslookup, netstat
