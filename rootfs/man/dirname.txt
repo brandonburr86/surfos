@@ -1,0 +1,15 @@
+dirname - a path without its last part
+
+SYNOPSIS
+    dirname string...
+
+DESCRIPTION
+    Writes each string without its last part: a/b gives a, a name
+    alone gives ., and / and /a give /. The strings are only text:
+    nothing looks at the disk.
+
+EXAMPLES
+    dirname /hda1/www/index.html
+
+SEE ALSO
+    basename
