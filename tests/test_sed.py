@@ -199,6 +199,8 @@ GNU_ONLY = [
     (['/a/s//X/'], AB), (['s/a/X/;s//Y/'], b'aa\n'), (['/a/{//d}'], AB), (['/\\(a\\)/s//\\1\\1/'], AB), (['-n', '/b/,//p'], AB), (['/a/,/c/{//d}'], AB),
     # D and then more text than there was room for (macOS's sed leaves a stray byte at the end of the last line)
     (['$!N;s/$/ 0123456789012345678901234567890123456789012345678901234567890123456789/;P;D'], TEXT), (['$!N;G;s/\\n$/ 0123456789/;P;D'], TEXT),
+    # a range to $ that starts on the last line is over at once, which D's second pass over the line shows
+    (['s/^2$/\\n/;2,${D\n}'], b'1\n2\n'), (['s/^3$/\\n/;3,${D\n}'], b'1\n2\n3\n'), (['s/^2$/\\n/;\\,^\\n,,${D\n}'], b'1\n2\n'), (['s/^2$/x\\n/;2,${=;D\n}'], b'1\n2\n'), (['s/^2$/x\\n/;2,${=;D\n}'], b'1\n2\n3\n'), (['s/^2$/\\n/;$,${D\n}'], b'1\n2\n'),
     # a label ends at a # as well, and r of what cannot be read stops the run
     (['bx#c\n:x'], AB), (['b x#c\n:x#c'], AB), (['b x\n:x#c'], AB), (['bx\n:x#c;p'], AB), (['t#c'], AB), (['b#c'], AB), (['Tx#c\n:x'], AB), (['{bx#c\n};:x'], AB), (['bx#c'], AB), ([':x#c'], AB), (['b x#c;p\n:x'], AB),
     ([':x#c\n$!{n;bx#c\n}\ns/$/!/'], b'1\n2\n3\n'), (['r /'], b'a\nb\n'), (['-i', 'r /', 'f'], b'', {'f': b'a\n'}), (['-n', 'r /'], b'a\n'), (['1r /nosuch/dir/x'], b'a\n'),

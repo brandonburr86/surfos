@@ -28,9 +28,10 @@ characters, and an empty match in s///g steps over a whole one. l prints the byt
 
 No input is read whole. What must go on disk is safe: -i and w write through saveutil.h, so that a
 file is either as it was or complete, and a failure part of the way leaves it as it was. A w file that
-did not exist appears when sed ends. The input is read through descriptors, as is the output, with buffers
-of this program's own; all of this file's other state is in one struct, so that tests/host/test_sedsave.c
-can run main() many times on a simulated file system, with writes and renames failing.
+did not exist appears when sed ends. After a rename that may have half happened nothing more is touched.
+The input is read through descriptors, as is the output, with buffers of this program's own; all of
+this file's other state is in one struct, so that tests/host/test_sedsave.c can run main() many times
+on a simulated file system, with writes and renames failing.
 
 Status 0, q's or Q's number, 2 for trouble: a mistake in the script, a file that could not be
 read (the others are still processed) or written. 141 when the reader of the output has gone.
@@ -1562,6 +1563,7 @@ static unsigned long range_stop(const struct cmd *c) {
     case AD_LINE: return n;
     case AD_PLUS: return g.lineno + n;
     case AD_TILDE: return n ? (g.lineno / n + 1) * n : g.lineno;
+    case AD_LAST: return at_last() ? g.lineno : UNTIL_SAID;
     }
     return UNTIL_SAID;
 }
