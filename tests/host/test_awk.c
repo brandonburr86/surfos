@@ -7,12 +7,13 @@
 
    Built and run by `make unittest`. `test_awk long` runs far more damaged input. The sanitizers are never part of
    `make unittest` (a -fsanitize build at -m32 hangs under the Docker image's emulation); run them on the Mac by hand,
-   with tests/host/awk/host64.c, as libsurf's string.c is not 64-bit safe:
+   with tests/host/awk/host64.c, as libsurf's string.c is not 64-bit safe. regex.c's set_sort() adds 0 to a NULL, which
+   does no harm and which the sanitizer stops at, hence the one -fno-sanitize:
 
-       cc="clang -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined"
+       cc="clang -g -O1 -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow"
        for f in value field io fmt func parse vm main; do
            $cc -Itests/host/awk -Iuser/awk -include tests/host/awk_host.h -c user/awk/$f.c -o /tmp/awk_$f.o; done
-       $cc -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+       $cc -fno-sanitize=pointer-overflow -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
            -include tests/host/text_names.h -c user/libsurf/regex.c -o /tmp/awk_regex.o
        $cc -c tests/host/awk/host64.c -o /tmp/awk_host64.o
        $cc tests/host/test_awk.c /tmp/awk_*.o -lm -o /tmp/test_awk && ASAN_OPTIONS=abort_on_error=1 /tmp/test_awk long

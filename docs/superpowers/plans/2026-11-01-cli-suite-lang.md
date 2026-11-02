@@ -36,8 +36,10 @@ recurses as deep as memory goes (`f(100000)` is in the test) and then says so. T
 (1000 brackets or blocks), then says `nested too deeply`. Arrays are two levels, so `a[16777215] = 1` costs a few pages.
 
 **A mistake at a terminal costs its line; in a file or a pipe it ends bc with status 2.** POSIX leaves the second
-undefined. GNU goes on, and what follows a mistake then means something else; Howard's stops. At a terminal the names and
-the scale are put back and the next line starts clean. The status there stays 0: the session went well.
+undefined. GNU goes on, and what follows a mistake then means something else; Howard's stops. At a terminal the next line starts
+clean: the rest of the line with the mistake is read and dropped, and none of its statements run. When a run-time mistake stops a
+function, its parameters and autos give the names back their values as the calls unwind. `scale` goes back only for the library's
+functions: a person's function that set `scale` and then failed leaves it set. The status there stays 0: the session went well.
 
 **quit is obeyed when read**, as POSIX has it: `if(0) quit` ends bc, and the line's statements before it run first.
 
@@ -45,8 +47,10 @@ the scale are put back and the next line starts clean. The status there stays 0:
 a loop does not convert each time. A single digit is its own value in any base (POSIX asks it for `ibase` and `obase`,
 and GNU and Howard do it everywhere).
 
-**Multi-digit constants with a digit the base lacks are an error**, `digit too large for ibase`. POSIX leaves it undefined;
-GNU clamps and Howard adds up: both give a wrong number without a word.
+**A digit the base lacks counts at its own value**, so with `ibase=2`, `12` is 4, and in base ten `1E5` is 245 and `.F` is 1.5. POSIX
+leaves it undefined. This was an error until the review: a script should not stop at status 2 where other bcs go on. Every case in
+the test was checked on Howard's, which is this rule. GNU's manual has another, from memory and not run here: such a digit becomes
+`ibase-1`, which would make those 3 and 195, so a script that counts on either has a problem anyway. The page says the rule.
 
 **`^` works out the exact power and then cuts**, as GNU and Howard do and as POSIX's truncation means. So
 `1.0001^100000000` costs what its exact value costs. `power_fits()` refuses at once a power known to be too large, which
@@ -72,9 +76,20 @@ The man page says so.
 
 **`obase` stops at 100000.** Short division by a base stays in 32 bits only up to 429496. POSIX's minimum is 99.
 
-**Extensions kept:** those every other bc takes and a script from elsewhere is likely to use, at almost no cost. Names longer
-than a letter; `else`; relations anywhere; `&& || !`, which short-circuit; `#` comments; `continue`; an empty part in `for`;
-`return e`. **`-q`** is accepted and does nothing, for the fingers of people who type `bc -lq`.
+**Extensions kept:** those a script from elsewhere is likely to use, at almost no cost. Names longer than a letter; `else`;
+relations anywhere; `&& || !`, which short-circuit; `#` comments; `continue`; an empty part in `for`; `return e`. **`-q`** is
+accepted and does nothing, for the fingers of people who type `bc -lq`.
+
+**`else` after `;` and on a later line,** as on Howard's: `if(0)2;else 3`, and an `else` after blank lines and comments. `;` may
+stand directly after the statement, then newlines, and not the other way round, which is where Howard's draws the line too.
+`else_follows()` looks at the characters and leaves them to be read, so an `if` still ends its item as before, and a mistake on the
+next line is that line's and comes after the `if` has run. Looking ahead in a file costs the next line's first bytes, and a message
+from running the `if` still names its own line (`item_line`).
+At a terminal, outside braces, it does not look past the line typed. Howard's does: there `if(1)4` shows nothing until another line
+is typed, as I checked on a pty. Here the answer comes at once, and the price is that an `else` on a later line is a mistake at a
+terminal, unless it is all in braces. A person needs the answer more than the form, and a file or a pipe has both. The page says so.
+GNU's grammar, as I remember it and not from a run, takes `else` only straight after the statement, so a script that uses these
+forms is written for Howard's, or for this one.
 
 **Left out, as POSIX has none of them:** `print`, `read()`, `last` and `.`, `limits`, `warranty`, `halt`, `*a[]` references,
 `void`, `BC_ENV_ARGS`, `BC_LINE_LENGTH`. Strings and expressions do `print`'s work. Each is small if it is wanted.
@@ -95,10 +110,15 @@ from memory, not from a run.
 | long numbers in a base other than ten | break at 68 characters, as POSIX and in base 10 | do not | break |
 | `length(0.0012)` | 2: POSIX's significant digits | 2 | 4: it counts the zeros |
 | `l(0)` | an error | a large negative number | a large negative number |
+| `ibase=2; 12` | 4 | 4 | 3, by its manual: such a digit becomes `ibase-1` |
+| `if(1)4` at a terminal | the answer at once; an `else` on the next line is a mistake | no answer until the next line, for its `else` | |
+| `2e2` | a syntax error: POSIX has no exponents | 200 | |
+| `if(1)` at the end of the input | `unexpected end of input`, status 2 | takes it, status 0 | |
+| `1; )` in a file | nothing of that line runs | prints 1 first | |
 
 ## The tests
 
-- **`tests/host/test_bc`, in `make unittest`:** 68,000 checks, in about 6 s under the Docker image's emulation.
+- **`tests/host/test_bc`, in `make unittest`:** 65,284 checks, in about 6 s under the Docker image's emulation.
   - The numbers against the host's `long long` (4,000 cases of the four operations and the scales) and against identities
     (`a = q b + r`, `a (b + c) = a b + a c`, the root is the largest of its scale whose square is not above `a`) on patterns of
     0, 9 and 5000, at sizes on each side of the stack's columns and the carry rows. Knuth's step D6 by a worked case.
@@ -115,12 +135,12 @@ from memory, not from a run.
     nesting 100,000 deep, and a megabyte each of number, name, string and comment.
 - **Under the sanitizers:** never in `make unittest`, as the brief's correction says: a `-m32 -fsanitize` binary hangs under
   the image's emulation. `test_bc long`, ten times the damaged input, passes natively on the Mac with clang's
-  `-fsanitize=address,undefined`, 226,000 checks. The test's header has the command.
-- **Coverage, measured once with clang:** `parse.c` and `vm.c` every line, `num.c` all but the length check in `num_mul()`,
-  which takes 512 MB to reach.
-- **The smoke block**, 20 steps, in `make test-all`: both ends of the number sizes, scale, the bases, `-l`, a script,
-  file then standard input, a terminal session with a mistake in it, the statuses, out of memory, a missing file, a reader that
-  goes away, the manual's page.
+  `-fsanitize=address,undefined`, 226,470 checks. The test's header has the command.
+- **Coverage, measured once with clang, before the fix round:** `parse.c` and `vm.c` every line, `num.c` all but the length check
+  in `num_mul()`, which takes 512 MB to reach.
+- **The smoke block**, 22 steps, in `make test-all`: both ends of the number sizes, scale, the bases, `-l`, a script,
+  file then standard input, a terminal session with a mistake in it, the statuses, a digit above the base and `else`, out of memory,
+  a missing file, a reader that goes away, the manual's page.
 
 **By hand in QEMU, 256 MB, O2:** unbounded recursion reaches the limit and says `f: out of memory` after 3.5 s: too slow for
 the smoke test at -O0, so the host test holds it. A directory as a file is `Is a directory`.
@@ -167,9 +187,53 @@ the stack until the count moved to `primary()`.
 `print a == b` works, as in gawk, where the one true awk says syntax error. `print a, b > c ? d : e` is a syntax error, as in
 every awk.
 
-**One reader, on the descriptor.** A record may end at a byte, an empty line or a regular expression, and input may be a pipe or a
-terminal, so `read()` into a buffer of its own rather than stdio. Only one record is held. An RS of more than a character is a
-regular expression, which POSIX leaves open and every awk in use does.
+**One reader, on the descriptor.** A record may end at a byte, a string, an empty line or a regular expression, and input may be a
+pipe or a terminal, so `read()` into a buffer of its own rather than stdio. Only one record is held, and what was read past it. An RS
+of more than a character is a regular expression, which POSIX leaves open and every awk in use does.
+
+**A pattern as RS waits for 64 KB past its match, or the end.** The review found that a match stopping short of what had been read
+could still change: `ab(cd)?` over `xabc`, then `dy`. "Could more input extend or change this" is a question about the states still
+alive at the end of the text, which `regexec()` does not answer, and `user/libsurf/regex.c` is text's. So there are three cases:
+
+- An RS with no operator in it is a string, found with a plain search that goes on where it stopped: exact, at once, and in step
+  with the input. `\r\n` and `---` are here, and they are most of what people write. An RS with a byte in no sequence goes the
+  regular expression's way, which works by characters, so that it never lands inside one.
+- Any other pattern, off a terminal, takes a match only when `RS_MARGIN`, 64 KB, is read past it, or at the end of the input. The same
+  bytes then give the same records however they arrive, **with one limit: a match that more input would change by way of something
+  more than 64 KB further on.** `a(b*c)?` over 70 KB of `b` is the shape. An exact answer needs partial matching in the library. The
+  price is that from a slow pipe such records come in bursts, or at the end. The page says so.
+- At a terminal it stays a byte past the match: a person will not type 64 KB, and the newline they typed is that byte.
+
+**A long record is searched about three times over, not once a read.** Each search goes from the start of the record, as a match may
+begin anywhere, so each one reads as much again as the one before. `test_awk` counts the bytes given to `regexec()` and holds a
+record of 2 MB to 5 times that; it was 124 times. 32 MB with no match takes 0.04 s natively, for the 20 s the review measured.
+The buffer moves its contents down only when the room behind them has gone, and doubles if it is then over half full.
+
+**`>` empties a file, against the brief's rule, on purpose.** The brief says tools replace files through `saveutil.h` and "Never
+truncate a file the user already had". `print > "f"` truncates on first open, as POSIX requires of awk and as the shell's `>` does,
+and it is the program's author who wrote `>`. It cannot go through saveutil and stay what it is: the file must exist and hold what
+was printed while the program runs, because a program may `close()` it and read it, or `fflush()` and run a command on it, and it
+may print for ever. A half-written replacement beside the file would break all three. `sed -i` and the like choose to replace a file
+as a tool; here the language says what to do with it. The page says what `>` does and that `>>` keeps what was there.
+
+**A write that fails ends awk,** in `print` as it always did, and now at the close as well, when the last of a buffer goes out and
+a full stick is often only found. `stream_end()` flushes first, as libsurf's `pclose()` does its own flush and drops the result, then
+checks `fclose()`, and says `awk: name: why`. At the program's end each such file is named and the status is 2, even after `exit 3`;
+`close()` stops there, as carrying on would lie about what it wrote. A file only read loses nothing, so reads say nothing.
+The kernel's pipes end a program that writes to one nobody reads with status 141, like SIGPIPE on Unix, so a command that went away
+is no write failure here.
+
+**`fatal()` ends things as the end of a program does**, the review's suspicion, confirmed: it left commands unwaited for, so what they
+wrote came after the shell's next prompt. It now flushes, closes and waits, after its message. The test: `print "x" | "sleep 0.3;
+cat > f"; print 1 / 0`, and `f` holds `x` when awk has returned. No guard against coming back is needed: nothing in `streams_end()`
+calls `fatal()`.
+
+**A name that cannot take a value is refused** in `var=value`, at `-v` and among the arguments: `ENVIRON` and `ARGV` by number, as
+`-v` comes before they are made, any name that holds an array, a function's, and a word of the language. mawk refuses all of these,
+and the Mac's awk the arrays and the functions, but takes `length=1` and drops it. `-v f=1` with a function `f` gets the parser's
+`both a function and a variable`. A name
+that only later turns out to be an array in the program gets `a scalar used as an array`. That was the type confusion on `ARGV`:
+now nothing can make it anything but an array, so `open_next_file()` needs no check of its own.
 
 **Fields are offsets into `$0` until they are asked for,** so `{ print $1 }` on wide records allocates once. A record is split
 when a field or `NF` is first wanted, so `FS` and `OFS` must not change under a record that waits: `global_set()` splits or
@@ -187,10 +251,27 @@ way, by POSIX's text for it.)
 
 **`printf`'s format never reaches the C library.** Each conversion is taken apart and rebuilt from the flags, numbers and one
 letter found, so a program's format cannot read a missing argument or use `%n`. `CONVFMT` and `OFMT` go the same way, as a
-program sets them. Too few arguments is an error. `%c` of a number above 127 is UTF-8.
+program sets them. Too few arguments is an error. `%c` of a number above 127 is UTF-8. `+` and a space are dropped for `%u %x %o`:
+C says nothing of them there, and libsurf's `fmt_num` prints them, which only the smoke test can see.
+
+**`CONVFMT` and `OFMT` cannot call themselves.** A number is no format: `CONVFMT = 0.5` leaves the default in use, as on the Mac's
+awk and in mawk, which both print 3.14. A string is, so `-v CONVFMT=0.5` gives `0.5`, as there too. `%s` in the format asks for the same
+conversion again, so a static `converting` in `num_str()` gives that one the default. The depth is 2 at most. The Mac's prints
+3.14 for `CONVFMT = "%s"`, and mawk 1.3.4 ends with a segmentation fault.
 
 **`substr` gives the one true awk's answers:** `m` and `n` are cut to whole numbers and a start below 1 is 1, so `substr("hello", -1, 3)` is
-`hel`. POSIX says little here, and mawk gives `hell`.
+`hel`. POSIX says little here. Checked in the Docker image: mawk 1.3.4 20200120 gives `hell` for that, and `he` for
+`substr("hello", 0, 2)`, as here. The page shows both. On long strings that are not all ASCII the string keeps where every 64th
+character starts, built on the first look past the 64th: a loop over 200,000 `é` took 21.6 s by the review's clock and takes 0.03 s,
+in any order.
+
+**`index` finds whole characters**: `index("é", "\251")` is 0, as it would otherwise be 2 in a string of length 1. In a string where
+every byte is a character it stays `memchr`. `index("", "")` is 0, as on the Mac's; mawk gives 1.
+
+**`\x` is an escape, of at most two digits**, in strings and patterns, as mawk reads it; the Mac's goes on to any number of digits,
+so `"\x41B"` is `AB` here and one byte there. With no digit the backslash stays, as for any other that is no escape.
+
+**A file and a command of one name are two streams**, each way, and `close(name)` closes them all. `>` and `>>` of a name are one.
 
 **`"cmd" | getline` leaves NR alone**, by POSIX's text for that form, and as the one true awk and mawk do.
 
@@ -203,7 +284,7 @@ hand take it as an empty string. It is the one place here where I kept POSIX aga
 ### What differs from the one true awk on the Mac
 
 Mac's `awk` version 20200816, and mawk in the Docker image where the table says so. gawk is not installed, so nothing here
-was run against it. Of the 219 programs compared while writing this, 210 print the same, and these are the rest:
+was run against it. Of the 219 programs compared while writing this, 211 print the same, and these are the rest:
 
 | Case | Here | The Mac's |
 |---|---|---|
@@ -215,7 +296,7 @@ was run against it. Of the 219 programs compared while writing this, 210 print t
 | `printf "%z"`, `printf "%5%"` | printed as they stand | an error |
 | `ARGV[0]` | `awk` | the path it was run by |
 
-The others in that count are the host's `system()` status, which the test's shim turns into what libsurf's gives. Beyond them,
+That table is what the 219 show. Beyond them,
 `printf "%c", 233` is UTF-8 here and one byte there, and a whole number past 2^31 prints in full, where the Mac's gives up to 30
 digits and mawk `2.14748e+09`.
 
@@ -231,29 +312,65 @@ digits and mawk `2.14748e+09`.
     under a small limit, which a leak would reach.
   - Programs cut, tokens changed, any bytes as input; 15 kinds of nesting; a megabyte each of name, string and comment; 3000
     functions and 3000 rules; a million fields.
-  Without `awk` on a machine the comparison says it is skipped. 1,100 checks in all, about 20 s under the image's emulation.
+  - Writes that fail, through an `fclose()` told to fail, and `/dev/full` where the system has one, as the Docker image does.
+  - Records whichever way the input arrives, from a command that pauses and at the end of a read, and the bytes given to `regexec()`
+    counted, in memory the run's fork shares.
+  Without `awk` on a machine the comparison says it is skipped. 1,236 checks in all.
 - **Under the sanitizers:** never in `make unittest`. `test_awk long` runs natively on the Mac with clang's
-  `-fsanitize=address,undefined`, by the command in the test's header, on 20,000 damaged programs and 5,000 damaged inputs.
-- **Coverage, measured once with clang:** `io.c` and `main.c` every line, the others from 94 to 99%. What is left is mostly messages
-  for what the parser already stops, such as an array reaching `to_num()`.
-- **The smoke block**, 18 steps, marker `echo cli-lang`, a block of its own after `bc`'s.
+  `-fsanitize=address,undefined,float-cast-overflow`, by the command in the test's header, on 20,000 damaged programs and 5,000
+  damaged inputs.
+- **Coverage, measured once with clang, before the fix round:** `io.c` and `main.c` every line, the others from 94 to 99%. What is
+  left is mostly messages for what the parser already stops, such as an array reaching `to_num()`.
+- **The smoke block**, 27 steps, marker `echo cli-lang`, a block of its own after `bc`'s. Five of them show what a host cannot:
+  libsurf's `printf`, a write refused at the close, in `close()`, a command waited for after a mistake, and RS at a terminal.
 
 **Not run:** on the laptop, as nothing of this track has been. No kernel file changed, so SurfCPU's check does not apply. `awk`'s
 floating point runs on x87 like the rest of SurfOS's programs: nothing here uses SSE.
 
+### The fix round
+
+From the independent review of `6f2cab4`. Each item had a test first, seen to fail on the unfixed code: 58 failures in `test_awk`, 43 in
+`test_bc`, and on SurfOS `+ff| 10|+3| f` and a silent `status 0`. The reviewer's three crash programs now end cleanly (two exit 0, one
+with `a scalar used as an array`), and `fc.txt`, 18 float-cast probes, gives no runtime error.
+
+| Item | Where | The test that failed first |
+|---|---|---|
+| 1 HIGH, `ARGV=1`: type confusion | `assign_operand()` | `command_line()`: 9 refused names, operands and `-v` |
+| 2 HIGH, `CONVFMT` recursion | `num_str()` | `language()`: number and `%s`, `CONVFMT` and `OFMT` |
+| 3 MEDIUM, `fclose()`'s result | `stream_end()`, `stream_close()` | `writes_that_fail()`, through a failing `t_fclose`; `/dev/full` where there is one; the smoke step on `/dev/config/hostname`, which opens with `>>` and refuses each write |
+| 4 `getline_cmd` | `getline_follows()` | `language()` |
+| 5 one stream for a file and a command | `stream_find()` | `files_and_commands()`: both ways round |
+| 6 regex RS at a read's end | `read_to_regex()` | `records()`: a command that pauses, a file with the read's end after the `c` |
+| 7 `index` in a character | `index_of()` | `characters()` |
+| 8 `substr`, regex RS quadratic | `char_at()`, `read_to_regex()` | `characters()` at 262,144 characters within 20 s; the count of bytes searched |
+| 9 bc: `$ 5` after a line | `skip_line()` | `at_terminal`: 8 cases |
+| 10 `%+x` on SurfOS | `put_number()` | a smoke step; the host's `printf` cannot show it |
+| Suspected, `fatal()` | `stop()` | `writes_that_fail()`, confirmed: `f` was empty |
+| nits | | `\x`, `index("", "")`, the pages, bc's digits and `else` each have theirs |
+
+The smoke blocks now have 22 and 27 steps. One trap: a step typed at a program that has printed nothing can go to the shell's editor,
+so the terminal's RS step waits for `ready`.
+
 ### What the last run covered
 
-`make test-all` passed on `awk` on text's first library: 547 smoke checks and 51 of the Files test, at -O0 and at -O2, and
-`make unittest` passed on that tree. Text's fixes (`7ebf1ed`) came while that run was under way, and by the coordinator's word were
-merged after it. On the merged tree `test_bc`, `test_awk` and this track's two smoke blocks were run again at -O0 and -O2, and all
-pass. The whole of `make test-all` has not been run on the merged tree.
+`make unittest` passed on this tree, which holds text's fixes (`7ebf1ed`): `test_bc` 65,284 checks and `test_awk` 1,236, with
+`/dev/full` in them, as the Docker image has one.
 
-Under the sanitizers on the merged tree, not in `long` mode, the command in the test's header stops at once at `regex.c` line 341,
-in text's new `set_sort()`: `r->range + s->first` is NULL + 0 for a set with no ranges. Nothing reads through it, so it does no
-harm, but clang's UBSan rejects it. It is text's file, so it stays as it is here, and is reported. With only that check,
-`-fno-sanitize=pointer-overflow`, off for `regex.c`, and all of them on for `awk`'s files, `test_awk` passes, 1,129 checks. The
-`long` run, 26,553 checks, was on text's first library.
+`make test-all` ran twice on it through the lock, with nothing changed between the runs. **The second passed whole:** 547 smoke
+checks and 51 of the Files test, at -O0 and at -O2. The first passed at -O0, and at -O2 failed one smoke check of 542: `telnet: a client
+that stops reading holds back only its own session, which goes on later (the job's start line never came within 10 s)`. That step
+is surfsh, telnetd and `hexdump /dev/zero &`, with no `awk` or `bc` in it, and every other check of that run passed. I could not make it
+happen again: alone at -O2, 6 of 6 passed, and the telnet steps in their order, 4 of 4, at a load of about 4. The lock has two slots, so
+another track's run shared the machine during that first run, but I did not measure the load at that moment, so I do not know that
+load was the cause. It is reported as it stands: a failure seen once, cause unknown, not repeated.
 
-Those fixes change stdio's read-ahead, which `awk` does not use: it reads the descriptor itself and keeps its own buffer, so
+Under the sanitizers, natively on the Mac, on this tree: `test_awk long`, 26,655 checks, and `test_bc long`, 226,470, with
+`-fsanitize=address,undefined,float-cast-overflow`. `regex.c` is built with `-fno-sanitize=pointer-overflow` as well, for one reason:
+its line 341, in text's `set_sort()`, adds 0 to a NULL for a set with no ranges. Nothing reads through it, it is text's file, and it
+is reported. The test's header has the command. The reviewer's `fuzz_awk2.py`, on this tree under the sanitizers: 8,000 programs and no
+crash. `else` against the Mac's bc on 3,000 random programs of `if`, `else`, `;`, newlines, braces and comments, leaving out what the table
+already shows: 3 differ, all a number run into `else`, as in `1else`, where Howard's reads an exponent.
+
+Text's fixes change stdio's read-ahead, which `awk` does not use: it reads the descriptor itself and keeps its own buffer, so
 `fflush(NULL)` has nothing of its to drop. The host's `popen` hides that, so three smoke steps read a command, a file and a pipe
 across a `system()` and an `fflush()`. `MAX_WALK`'s `REG_ESIZE` reaches `awk` from `regcomp()`, as a message like any other.
