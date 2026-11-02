@@ -1,8 +1,8 @@
 /* Host-side tests of the regular expressions, user/libsurf/regex.c (11/01/26, the command-line suite):
 
-   - a table of patterns with what POSIX says they give, most of them the classic cases of Glenn Fowler's test suite,
-     each also run through the host's regexec(). A host need not agree where it is not POSIX's: glibc keeps a
-     subexpression from an earlier iteration, and so do others. Those are counted and said, not failures.
+   - a table of patterns with what POSIX says they give, rule by rule, each row also read by the oracle below and run through
+     the host's regexec(). A host need not agree where it is not POSIX's: glibc keeps a subexpression from an earlier
+     iteration, and so do others. Those rows say so, and a difference is counted and said, not a failure.
    - the errors, the limits, the flags, UTF-8, back-references
    - random patterns and strings against the host, whole match only, where glibc is reliable
    - random patterns and strings against an oracle in this file, which is POSIX's rule written down the slow way
@@ -16,6 +16,7 @@
 #include <string.h>
 #include <time.h>
 #include <locale.h>
+#include <ctype.h>
 
 #define regex_t surf_regex_t
 #define regmatch_t surf_regmatch_t
@@ -72,7 +73,7 @@ void surf_free(void *p) { free(p); }
 void *surf_calloc(size_t n, size_t k) { return calloc(n, k); }
 void *surf_realloc(void *p, size_t n) { return realloc(p, n); }
 
-static int failures, checks, host_runs, host_differs;
+static int failures, checks, host_runs, host_differs, host_new;
 static unsigned rng = 12345;
 
 static unsigned rnd(unsigned n) {
@@ -143,229 +144,589 @@ static void run_host(const char *pat, int flags, const char *str, int eflags, ch
     regfree(&re);
 }
 
-/* the library against what POSIX says, and the host against the same */
-static void expect(int flags, const char *pat, const char *str, const char *want) {
+static void o_row(const char *form, int icase, const char *str, char *want, size_t size);
+
+/* The library, the oracle and the host on one row. form is the pattern as the oracle reads it, in extended syntax with its own few
+   words, NULL for the few that are not POSIX's at all; host says why the host is known to differ, or NULL. */
+static void row(int flags, const char *pat, const char *form, const char *str, const char *want, const char *host_note) {
     char got[256], host[256];
     checks++;
     run_surf(pat, flags, str, 0, got, sizeof(got));
     if(strcmp(got, want)) fail("table", pat, str, got, want);
+    if(form) {
+        checks++;
+        o_row(form, flags & S_ICASE, str, got, sizeof(got));
+        if(strcmp(got, want)) fail("table against the oracle", form, str, got, want);
+    }
     run_host(pat, flags, str, 0, host, sizeof(host));
     host_runs++;
     if(strcmp(host, want)) {
         host_differs++;
-        if(getenv("REGEX_VERBOSE")) printf("host differs: /%s/ on [%s]: host %s, POSIX %s\n", pat, str, host, want);
+        if(!host_note) host_new++;
+        if(getenv("REGEX_VERBOSE") || !host_note) printf("host differs: /%s/ on [%s]: host %s, POSIX %s%s%s\n", pat, str, host, want, host_note ? ": " : "", host_note ? host_note : "");
     }
 }
 
 #define E S_EXTENDED
 #define B 0
 #define I S_ICASE
-#define BE(pat, str, want) do { expect(B, pat, str, want); expect(E, pat, str, want); } while(0)
+/* extended syntax; with a note on the host; ignoring case; another form for the oracle; basic syntax, with the oracle's form */
+#define R(pat, str, want) row(E, pat, pat, str, want, NULL)
+#define RH(pat, str, want, note) row(E, pat, pat, str, want, note)
+#define RI(pat, str, want) row(E | I, pat, pat, str, want, NULL)
+#define RX(pat, form, str, want, note) row(E, pat, form, str, want, note)
+#define RB(pat, form, str, want) row(B, pat, form, str, want, NULL)
+#define RBH(pat, form, str, want, note) row(B, pat, form, str, want, note)
 
 static void table(void) {
-    /* Fowler's basic.dat */
-    expect(E, "abracadabra$", "abracadabracadabra", "(7,18)");
-    expect(E, "a...b", "abababbb", "(2,7)");
-    expect(E, "XXXXXX", "..XXXXXX", "(2,8)");
-    expect(E, "\\)", "()", "(1,2)");
-    expect(E, "a]", "a]a", "(0,2)");
-    expect(E, "}", "}", "(0,1)");
-    expect(E, "\\}", "}", "(0,1)");
-    BE("\\]", "]", "(0,1)");
-    expect(B, "]", "]", "(0,1)");
-    expect(E, "]", "]", "(0,1)");
-    expect(B, "{", "{", "(0,1)");
-    expect(B, "}", "}", "(0,1)");
-    BE("^a", "ab", "(0,1)");
-    BE("\\^a", "a^a", "(1,3)");
-    BE("a\\^", "a^", "(0,2)");
-    BE("a$", "aa", "(1,2)");
-    BE("a\\$", "a$", "(0,2)");
-    BE("^$", "", "(0,0)");
-    expect(E, "$^", "", "(0,0)");
-    expect(E, "a($)", "aa", "(1,2)(2,2)");
-    expect(E, "a*(^a)", "aa", "(0,1)(0,1)");
-    expect(E, "(..)*(...)*", "a", "(0,0)");
-    expect(E, "(..)*(...)*", "abcd", "(0,4)(2,4)");
-    expect(E, "(ab|a)(bc|c)", "abc", "(0,3)(0,2)(2,3)");
-    expect(E, "(ab)c|abc", "abc", "(0,3)(0,2)");
-    expect(E, "a{0}b", "ab", "(1,2)");
-    expect(E, "(a*)(b?)(b+)b{3}", "aaabbbbbbb", "(0,10)(0,3)(3,4)(4,7)");
-    expect(E, "(a*)(b{0,1})(b{1,})b{3}", "aaabbbbbbb", "(0,10)(0,3)(3,4)(4,7)");
-    expect(E, "((a|a)|a)", "a", "(0,1)(0,1)(0,1)");
-    expect(E, "(a*)(a|aa)", "aaaa", "(0,4)(0,3)(3,4)");
-    expect(E, "a*(a.|aa)", "aaaa", "(0,4)(2,4)");
-    expect(E, "a(b)|c(d)|a(e)f", "aef", "(0,3)(?,?)(?,?)(1,2)");
-    expect(E, "(a|b)?.*", "b", "(0,1)(0,1)");
-    expect(E, "(a|b)c|a(b|c)", "ac", "(0,2)(0,1)");
-    expect(E, "(a|b)c|a(b|c)", "ab", "(0,2)(?,?)(1,2)");
-    expect(E, "(a|b)*c|(a|ab)*c", "abc", "(0,3)(1,2)");
-    expect(E, "(a|b)*c|(a|ab)*c", "xc", "(1,2)");
-    expect(E, "(.a|.b).*|.*(.a|.b)", "xa", "(0,2)(0,2)");
-    expect(E, "a?(ab|ba)ab", "abab", "(0,4)(0,2)");
-    expect(E, "a?(ac{0}b|ba)ab", "abab", "(0,4)(0,2)");
-    expect(E, "ab|abab", "abbabab", "(0,2)");
-    expect(E, "aba|bab|bba", "baaabbbaba", "(5,8)");
-    expect(E, "aba|bab", "baaabbbaba", "(6,9)");
-    expect(E, "(aa|aaa)*|(a|aaaaa)", "aa", "(0,2)(0,2)");
-    expect(E, "(a.|.a.)*|(a|.a...)", "aa", "(0,2)(0,2)");
-    expect(E, "ab|a", "xabc", "(1,3)");
-    expect(E, "ab|a", "xxabc", "(2,4)");
-    expect(E | I, "(Ab|cD)*", "aBcD", "(0,4)(2,4)");
-    BE("[^-]", "--Z--", "(2,3)");
-    BE("[a-]*", "--Z--", "(0,2)");
-    BE("[a-m-]*", "--Z--", "(0,2)");
-    expect(E, "a|b|c|d|e", "e", "(0,1)");
-    expect(E, "(a|b|c|d|e)f", "ef", "(0,2)(0,1)");
-    expect(E, "((a*|b))*", "-", "(0,0)(0,0)(0,0)");
-    BE("abcd*efg", "abcdefg", "(0,7)");
-    BE("ab*", "xabyabbbz", "(1,3)");
-    BE("ab*", "xayabbbz", "(1,2)");
-    expect(E, "(ab|cd)e", "abcde", "(2,5)(2,4)");
-    BE("[abhgefdc]ij", "hij", "(0,3)");
-    expect(E, "(a|b)c*d", "abcd", "(1,4)(1,2)");
-    expect(E, "(ab|ab*)bc", "abc", "(0,3)(0,1)");
-    expect(E, "a([bc]*)c*", "abc", "(0,3)(1,3)");
-    expect(E, "a([bc]*)(c*d)", "abcd", "(0,4)(1,3)(3,4)");
-    expect(E, "a([bc]+)(c*d)", "abcd", "(0,4)(1,3)(3,4)");
-    expect(E, "a([bc]*)(c+d)", "abcd", "(0,4)(1,2)(2,4)");
-    expect(E, "a[bcd]*dcdcde", "adcdcde", "(0,7)");
-    expect(E, "(ab|a)b*c", "abc", "(0,3)(0,2)");
-    expect(E, "((a)(b)c)(d)", "abcd", "(0,4)(0,3)(0,1)(1,2)(3,4)");
-    BE("[A-Za-z_][A-Za-z0-9_]*", "alpha", "(0,5)");
-    expect(E, "^a(bc+|b[eh])g|.h$", "abh", "(1,3)");
-    expect(E, "(bc+d$|ef*g.|h?i(j|k))", "effgz", "(0,5)(0,5)");
-    expect(E, "(bc+d$|ef*g.|h?i(j|k))", "ij", "(0,2)(0,2)(1,2)");
-    expect(E, "(bc+d$|ef*g.|h?i(j|k))", "effg", "NOMATCH");
-    expect(E, "(bc+d$|ef*g.|h?i(j|k))", "bcdd", "NOMATCH");
-    expect(E, "(bc+d$|ef*g.|h?i(j|k))", "reffgz", "(1,6)(1,6)");
-    expect(E, "((((((((((a))))))))))", "a", "(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)");
-    BE("multiple words", "multiple words, yeah", "(0,14)");
-    expect(E, "(.*)c(.*)", "abcde", "(0,5)(0,2)(3,5)");
-    BE("abcd", "abcd", "(0,4)");
-    expect(E, "a(bc)d", "abcd", "(0,4)(1,3)");
-    expect(E, "(a+|b)*", "ab", "(0,2)(1,2)");
-    expect(E, "(a+|b){0,}", "ab", "(0,2)(1,2)");
-    expect(E, "(a+|b)+", "ab", "(0,2)(1,2)");
-    expect(E, "(a+|b){1,}", "ab", "(0,2)(1,2)");
-    expect(E, "(a+|b)?", "ab", "(0,1)(0,1)");
-    expect(E, "(a+|b){0,1}", "ab", "(0,1)(0,1)");
-    expect(B, "\\(ab*\\)c", "xabbc", "(1,5)(1,4)");
-    expect(B, "a\\{2\\}", "caaa", "(1,3)");
-    expect(B, "a\\{1,2\\}", "aaa", "(0,2)");
-    expect(B, "\\(a\\)\\{2\\}", "aaa", "(0,2)(1,2)");
-    /* nullsubexpr.dat */
-    expect(E, "(a*)*", "a", "(0,1)(0,1)");
-    expect(E, "(a*)*", "x", "(0,0)(0,0)");
-    expect(E, "(a*)*", "aaaaaa", "(0,6)(0,6)");
-    expect(E, "(a*)*", "aaaaaax", "(0,6)(0,6)");
-    expect(E, "(a*)+", "a", "(0,1)(0,1)");
-    expect(E, "(a*)+", "x", "(0,0)(0,0)");
-    expect(E, "(a+)*", "a", "(0,1)(0,1)");
-    expect(E, "(a+)*", "x", "(0,0)");
-    expect(E, "(a+)*", "aaaaaa", "(0,6)(0,6)");
-    expect(E, "(a+)+", "a", "(0,1)(0,1)");
-    expect(E, "(a+)+", "x", "NOMATCH");
-    expect(E, "([a]*)*", "a", "(0,1)(0,1)");
-    expect(E, "([^b]*)*", "a", "(0,1)(0,1)");
-    expect(E, "([^b]*)*", "b", "(0,0)(0,0)");
-    expect(E, "([^b]*)*", "aaaaaab", "(0,6)(0,6)");
-    expect(E, "([ab]*)*", "ababab", "(0,6)(0,6)");
-    expect(E, "([ab]*)*", "aaaabcde", "(0,5)(0,5)");
-    expect(E, "([^a]*)*", "aaaaaa", "(0,0)(0,0)");
-    expect(E, "([^ab]*)*", "ccccxx", "(0,6)(0,6)");
-    expect(E, "((z)+|a)*", "zabcde", "(0,2)(1,2)");
-    expect(E, "(a*)*(x)", "x", "(0,1)(0,0)(0,1)");
-    expect(E, "(a*)*(x)", "ax", "(0,2)(0,1)(1,2)");
-    expect(E, "(a*)*(x)", "axa", "(0,2)(0,1)(1,2)");
-    expect(E, "(a*)+(x)", "x", "(0,1)(0,0)(0,1)");
-    expect(E, "(a*)+(x)", "ax", "(0,2)(0,1)(1,2)");
-    expect(E, "(a*){2}(x)", "x", "(0,1)(0,0)(0,1)");
-    expect(E, "(a*){2}(x)", "ax", "(0,2)(1,1)(1,2)");
-    expect(E, "(a*){2}(x)", "axa", "(0,2)(1,1)(1,2)");
-    /* repetition.dat, with Kuklewicz's corrections: only the last iteration counts, inside a group too */
-    expect(E, "((..)|(.))", "", "NOMATCH");
-    expect(E, "((..)|(.))*", "", "(0,0)");
-    expect(E, "((..)|(.))", "a", "(0,1)(0,1)(?,?)(0,1)");
-    expect(E, "((..)|(.)){2}", "a", "NOMATCH");
-    expect(E, "((..)|(.))*", "a", "(0,1)(0,1)(?,?)(0,1)");
-    expect(E, "((..)|(.))", "aa", "(0,2)(0,2)(0,2)");
-    expect(E, "((..)|(.))((..)|(.))", "aa", "(0,2)(0,1)(?,?)(0,1)(1,2)(?,?)(1,2)");
-    expect(E, "((..)|(.)){2}", "aa", "(0,2)(1,2)(?,?)(1,2)");
-    expect(E, "((..)|(.))*", "aa", "(0,2)(0,2)(0,2)");
-    expect(E, "((..)|(.)){3}", "aaa", "(0,3)(2,3)(?,?)(2,3)");
-    expect(E, "((..)|(.))*", "aaa", "(0,3)(2,3)(?,?)(2,3)");
-    expect(E, "((..)|(.)){2}", "aaa", "(0,3)(2,3)(?,?)(2,3)");
-    expect(E, "(a|ab|c|bcd){0,}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){1,}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){2,}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){3,}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){4,}(d*)", "ababcd", "NOMATCH");
-    expect(E, "(a|ab|c|bcd)*(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){0,10}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(a|ab|c|bcd){2,3}(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(ab|a|c|bcd)*(d*)", "ababcd", "(0,6)(3,6)(6,6)");
-    expect(E, "(.)\\1", "abccd", "(2,4)(2,3)");
-    /* the alternatives' longest, not the first */
-    expect(E, "(a|ab)(c|bcd)(d*)", "abcd", "(0,4)(0,2)(2,3)(3,4)");
-    expect(E, "(foo|foobar)(barfoo|foo)?", "foobarfoo", "(0,9)(0,6)(6,9)");
-    expect(E, "x*", "aaa", "(0,0)");
-    expect(E, "", "abc", "(0,0)");
-    expect(B, "", "abc", "(0,0)");
-    expect(E, "()", "abc", "(0,0)(0,0)");
-    expect(E, "(|a)", "abc", "(0,1)(0,1)");
-    expect(E, "(a|)", "abc", "(0,1)(0,1)");
-    expect(E, "a||b", "b", "(0,1)");
-    expect(B, "a\\|b", "b", "(0,1)");
-    /* a star that is itself in basic syntax */
-    expect(B, "*a", "*a", "(0,2)");
-    expect(B, "\\(*a\\)", "*a", "(0,2)(0,2)");
-    expect(B, "^*", "*", "(0,1)");
-    expect(B, "a^b", "a^b", "(0,3)");
-    expect(B, "a$b", "a$b", "(0,3)");
-    expect(B, "\\(^a\\)", "a", "(0,1)(0,1)");
-    expect(B, "\\(a$\\)", "a", "(0,1)(0,1)");
-    expect(B, "a\\|^b", "b", "(0,1)");
-    /* only the first ^ is an anchor, a star after any anchor is itself: as glibc reads them */
-    expect(B, "^^a", "^a", "(0,2)");
-    expect(B, "^^a", "a", "NOMATCH");
-    expect(B, "^^", "^", "(0,1)");
-    expect(B, "\\(^^a\\)", "^a", "(0,2)(0,2)");
-    expect(B, "a\\|^^b", "^b", "(0,2)");
-    expect(B, "^^*a", "^*a", "NOMATCH");
-    expect(B, "^**a", "**a", "(0,3)");
-    expect(B, "\\<^a", "a", "NOMATCH");
-    expect(B, "\\<*a", "*a", "NOMATCH");
-    /* braces that are no interval */
-    expect(E, "{", "{", "(0,1)");
-    expect(E, "a{", "a{", "(0,2)");
-    expect(E, "a{x}", "a{x}", "(0,4)");
-    expect(E, "a{1", "a{1", "(0,3)");
-    expect(E, "a{,2}", "aaa", "(0,2)");
-    expect(B, "a\\{,2\\}", "aaa", "(0,2)");
+    /* the leftmost match, then the longest from there, whatever order the alternatives come in */
+    R("tide", "the tide is in", "(4,8)");
+    R("reef$", "reef by the reef", "(12,16)");
+    R("^swell", "swell and swell", "(0,5)");
+    R("^swell", "a swell", "NOMATCH");
+    R("c.ve", "a cave, a cove", "(2,6)");
+    R("w.*e", "a wave, a tide, more", "(2,20)");
+    R("wave|wavelet", "wavelets", "(0,7)");
+    R("wavelet|wave", "wavelets", "(0,7)");
+    R("shore|shoreline|sho", "on the shoreline", "(7,16)");
+    R("ebb|flow|flood", "the flood, the ebb", "(4,9)");
+    R("o|oo|ooo", "xxoooo", "(2,5)");
+    R("xy|x|yz|xyz", "wxyz", "(1,4)");
+    R("yz|wxyz|x", "wxyz", "(0,4)");
+    R("nab|anab|ban", "bananab", "(0,3)");
+    R("x*y|x", "xxz", "(0,1)");
+    R("x+y|x+z", "xxxz", "(0,4)");
+    R("p|q|r|s|t", "t", "(0,1)");
+    R("(p|q|r|s|t)u", "tu", "(0,2)(0,1)");
+    R("kelp", "kel", "NOMATCH");
+    R("q+", "", "NOMATCH");
+    R("one|two|three", "zero", "NOMATCH");
+    R("two words", "in two words, or so", "(3,12)");
+    R("x.z", "xz xyz", "(3,6)");
+    R("...", "ab", "NOMATCH");
+    R("p.q.r", "p1q2r3", "(0,5)");
+    R(".*", "all of it", "(0,9)");
+    R(".+$", "all of it", "(0,9)");
+    R("a.*z", "a to z and z", "(0,12)");
+    R("a.*?z", "a to z and z", "(0,12)");
+    R("(m|n|o)*", "mnomnx", "(0,5)(4,5)");
+    R("[a-z]+ [a-z]+", "1 two three", "(2,11)");
+    /* what is not special, and what a backslash makes plain */
+    R("]", "[]", "(1,2)");
+    R("x]", "x]y", "(0,2)");
+    R("}", "x}", "(1,2)");
+    R("x}", "x}y", "(0,2)");
+    R("\\)", ")(", "(0,1)");
+    R("\\(x\\)", "y(x)", "(1,4)");
+    R("\\}", "x}", "(1,2)");
+    R("\\]", "[]", "(1,2)");
+    R("\\[x", "y[x", "(1,3)");
+    R("\\{x", "y{x", "(1,3)");
+    R("\\.", "x.y", "(1,2)");
+    R("\\*", "x*y", "(1,2)");
+    R("x\\*", "xx*", "(1,3)");
+    R("\\+", "x+y", "(1,2)");
+    R("\\?", "x?y", "(1,2)");
+    R("\\|", "x|y", "(1,2)");
+    R("\\\\", "x\\y", "(1,2)");
+    R("\\^x", "x^x", "(1,3)");
+    R("x\\^", "x^", "(0,2)");
+    R("x\\$", "x$x", "(0,2)");
+    R("\\$x", "x$x", "(1,3)");
+    RB("\\.", "\\.", "x.y", "(1,2)");
+    RB("\\*", "\\*", "x*y", "(1,2)");
+    RB("\\\\", "\\\\", "x\\y", "(1,2)");
+    RB("\\[x", "\\[x", "y[x", "(1,3)");
+    RB("\\]", "\\]", "[]", "(1,2)");
+    RB("]", "\\]", "[]", "(1,2)");
+    RBH("{", "\\{", "x{", "(1,2)", "refuses it");
+    RB("}", "\\}", "x}", "(1,2)");
+    RB("x{2}", "x\\{2\\}", "xx{2}", "(1,5)");
+    RB("(x)", "\\(x\\)", "y(x)", "(1,4)");
+    RB("x|y", "x\\|y", "y x|y", "(2,5)");
+    RB("x+", "x\\+", "xx+", "(1,3)");
+    RB("x?", "x\\?", "xx?", "(1,3)");
+    RB("\\^x", "\\^x", "x^x", "(1,3)");
+    RB("x\\$", "x\\$", "x$x", "(0,2)");
+    /* braces that open no interval are themselves in extended syntax; an interval may leave out its first number */
+    RX("{", "\\{", "x{", "(1,2)", "refuses it");
+    RX("x{", "x\\{", "yx{", "(1,3)", "refuses it");
+    RX("x{y}", "x\\{y}", "x{y}", "(0,4)", "refuses it");
+    RX("x{2", "x\\{2", "xx{2", "(1,4)", "refuses it");
+    RX("(x{)", "(x\\{)", "x{", "(0,2)(0,2)", "refuses it");
+    R("x{,2}", "xxx", "(0,2)");
+    RB("x\\{,2\\}", "x{,2}", "xxx", "(0,2)");
+    /* anchors: anywhere in an extended pattern, and they match where they match, inside groups and repetitions too */
+    R("^", "xyz", "(0,0)");
+    R("$", "xyz", "(3,3)");
+    R("^$", "", "(0,0)");
+    R("^$", "x", "NOMATCH");
+    R("$^", "", "(0,0)");
+    R("$^", "x", "NOMATCH");
+    R("^^x", "x", "(0,1)");
+    R("x$$", "x", "(0,1)");
+    R("x^y", "x^y", "NOMATCH");
+    R("x$y", "x$y", "NOMATCH");
+    R("(^x)", "xx", "(0,1)(0,1)");
+    R("(x$)", "xx", "(1,2)(1,2)");
+    R("x($)", "xx", "(1,2)(2,2)");
+    R("(^)x", "xx", "(0,1)(0,0)");
+    R("x*(^x)", "xx", "(0,1)(0,1)");
+    R("(x|^)y", "y", "(0,1)(0,0)");
+    R("(x|^)y", "xy", "(0,2)(0,1)");
+    R("y(x|$)", "y", "(0,1)(1,1)");
+    R("y(x|$)", "yz", "NOMATCH");
+    R("^x|y$", "yx", "NOMATCH");
+    R("^x|y$", "zy", "(1,2)");
+    R("^x|y$", "yz", "NOMATCH");
+    R("(^x|y)z", "wyz", "(1,3)(1,2)");
+    R("(^x|y)z", "xz", "(0,2)(0,1)");
+    R("(^)*x", "x", "(0,1)(0,0)");
+    R("(^)+x", "zx", "NOMATCH");
+    R("($)*", "x", "(0,0)");
+    R("x($)+", "yx", "(1,2)(2,2)");
+    R("(^|x)*", "xx", "(0,2)(1,2)");
+    R("(x|$)*", "xx", "(0,2)(1,2)");
+    R("(^|x)+y", "xxy", "(0,3)(1,2)");
+    R("(^x)*", "xx", "(0,1)(0,1)");
+    R("(x$)*", "xx", "(0,0)");
+    R(".*$", "xy", "(0,2)");
+    R("^.*", "xy", "(0,2)");
+    R("^.*$", "", "(0,0)");
+    R("(.*)$", "xy", "(0,2)(0,2)");
+    R("^(.*)", "xy", "(0,2)(0,2)");
+    R("^x*$", "xxy", "NOMATCH");
+    R("^(x|y)*$", "xyx", "(0,3)(2,3)");
+    R("^(x|y)*$", "xyz", "NOMATCH");
+    /* empty matches: of the pattern, a group, an alternative */
+    R("", "tide", "(0,0)");
+    R("", "", "(0,0)");
+    RB("", "", "tide", "(0,0)");
+    R("()", "tide", "(0,0)(0,0)");
+    R("()()", "x", "(0,0)(0,0)(0,0)");
+    R("(())", "x", "(0,0)(0,0)(0,0)");
+    R("(()())", "x", "(0,0)(0,0)(0,0)(0,0)");
+    R("(|)", "x", "(0,0)(0,0)");
+    R("p|", "q", "(0,0)");
+    R("p|", "p", "(0,1)");
+    R("|p", "p", "(0,1)");
+    R("|p", "q", "(0,0)");
+    R("p||q", "q", "(0,1)");
+    R("(|p)q", "pq", "(0,2)(0,1)");
+    R("(p|)q", "q", "(0,1)(0,0)");
+    R("(|p|)", "p", "(0,1)(0,1)");
+    R("(p|)(p|)", "p", "(0,1)(0,1)(1,1)");
+    R("(|p)(|p)", "p", "(0,1)(0,1)(1,1)");
+    R("x*", "yx", "(0,0)");
+    R("(x*)", "yx", "(0,0)(0,0)");
+    R("(x*)|y", "y", "(0,1)");
+    R("(x*)|(y*)", "y", "(0,1)(?,?)(0,1)");
+    R("(x*)(y*)", "z", "(0,0)(0,0)(0,0)");
+    R("(x*)y|z", "z", "(0,1)");
+    R("(x?)(y?)", "y", "(0,1)(0,0)(0,1)");
+    R("(x*)(y)?", "x", "(0,1)(0,1)");
+    R("(x*)(y)?", "z", "(0,0)(0,0)");
+    R("()x", "x", "(0,1)(0,0)");
+    R("x()", "x", "(0,1)(1,1)");
+    R("x()y", "xy", "(0,2)(1,1)");
+    R("(x)()(y)", "xy", "(0,2)(0,1)(1,1)(1,2)");
+    /* a repetition of what can be empty: the empty string is a match of the body if the body got no other, and the repeat ends */
+    R("(p*)*", "", "(0,0)(0,0)");
+    R("(p*)*", "q", "(0,0)(0,0)");
+    R("(p*)*", "pp", "(0,2)(0,2)");
+    R("(p*)*", "ppq", "(0,2)(0,2)");
+    R("(p*)+", "q", "(0,0)(0,0)");
+    R("(p*)+", "pp", "(0,2)(0,2)");
+    R("(p+)*", "q", "(0,0)");
+    R("(p+)*", "pp", "(0,2)(0,2)");
+    R("(p+)+", "q", "NOMATCH");
+    R("(p+)+", "pp", "(0,2)(0,2)");
+    R("(p?)*", "q", "(0,0)(0,0)");
+    R("(p?)*", "pp", "(0,2)(1,2)");
+    R("(p?)+", "pp", "(0,2)(1,2)");
+    R("(p?)+", "q", "(0,0)(0,0)");
+    R("(p|)*", "pp", "(0,2)(1,2)");
+    R("(|p)*", "pp", "(0,2)(1,2)");
+    R("(|p)+", "q", "(0,0)(0,0)");
+    R("(p*)?", "q", "(0,0)(0,0)");
+    R("(p+)?", "q", "(0,0)");
+    R("(p+|)?", "q", "(0,0)(0,0)");
+    R("(p?q*)*", "qpq", "(0,3)(1,3)");
+    R("(p?q*)*", "r", "(0,0)(0,0)");
+    R("(p*q*)+", "pqp", "(0,3)(2,3)");
+    R("(p*|q)*", "pqp", "(0,3)(2,3)");
+    R("(p*|q*)*", "qqp", "(0,3)(2,3)");
+    R("(p*|q)+", "r", "(0,0)(0,0)");
+    R("([pq]*)*", "pqp", "(0,3)(0,3)");
+    R("([^r]*)*", "pqr", "(0,2)(0,2)");
+    R("([^r]*)*", "r", "(0,0)(0,0)");
+    R("([^r]*)+", "rp", "(0,0)(0,0)");
+    R("([pq]*)*", "pqrpq", "(0,2)(0,2)");
+    R("(p*)(q*)*", "pqq", "(0,3)(0,1)(1,3)");
+    R("(p*)*(q*)*", "ppqq", "(0,4)(0,2)(2,4)");
+    R("(p*)*(q*)*", "r", "(0,0)(0,0)(0,0)");
+    R("(p*)*q", "q", "(0,1)(0,0)");
+    R("(p*)*q", "ppq", "(0,3)(0,2)");
+    R("(p*)*q", "ppr", "NOMATCH");
+    R("(p*)+q", "q", "(0,1)(0,0)");
+    R("(p*)+q", "pqp", "(0,2)(0,1)");
+    R("((p*)*)*", "pp", "(0,2)(0,2)(0,2)");
+    R("((p*)+)+", "pp", "(0,2)(0,2)(0,2)");
+    R("((p*)*)+", "q", "(0,0)(0,0)(0,0)");
+    R("((p?)*)*", "p", "(0,1)(0,1)(0,1)");
+    RH("((p*)|(q*))*", "pq", "(0,2)(1,2)(?,?)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p*)|(q*))*", "qp", "(0,2)(1,2)(1,2)", "keeps a group of an earlier iteration");
+    R("((p*)|(q*))*", "r", "(0,0)(0,0)(0,0)");
+    RH("(()|p)*", "p", "(0,1)(0,1)", "keeps a group of an earlier iteration");
+    R("(p|())*", "p", "(0,1)(0,1)");
+    R("(()*)*", "x", "(0,0)(0,0)(0,0)");
+    R("(()+)+", "x", "(0,0)(0,0)(0,0)");
+    R("()*x", "x", "(0,1)(0,0)");
+    R("()+x", "x", "(0,1)(0,0)");
+    R("(()x)*", "xx", "(0,2)(1,2)(1,1)");
+    /* repetition in repetition: each level reports its last iteration */
+    R("((p|q)r)*", "prqr", "(0,4)(2,4)(2,3)");
+    R("((p|q)r)+", "prqrs", "(0,4)(2,4)(2,3)");
+    RH("((p)r|(q)r)*", "prqr", "(0,4)(2,4)(?,?)(2,3)", "keeps a group of an earlier iteration");
+    R("(p(q*))*", "pqqp", "(0,4)(3,4)(4,4)");
+    R("(p(q*))+", "pqqpq", "(0,5)(3,5)(4,5)");
+    RH("(p(q)*)*", "pqqp", "(0,4)(3,4)", "keeps a group of an earlier iteration");
+    R("(p(q)*)*", "ppq", "(0,3)(1,3)(2,3)");
+    R("((p+)(q*))+", "ppqp", "(0,4)(3,4)(3,4)(4,4)");
+    R("((p+)(q+))*", "ppqpq", "(0,5)(3,5)(3,4)(4,5)");
+    R("((pq)+r)+", "pqpqrpqr", "(0,8)(5,8)(5,7)");
+    R("((pq)*r)*", "rpqr", "(0,4)(1,4)(1,3)");
+    RH("((pq)*r)*", "pqrr", "(0,4)(3,4)", "keeps a group of an earlier iteration");
+    R("(((p)))*", "pp", "(0,2)(1,2)(1,2)(1,2)");
+    R("(((p)q)r)*", "pqrpqr", "(0,6)(3,6)(3,5)(3,4)");
+    R("((((p*)*)*)*)*", "pp", "(0,2)(0,2)(0,2)(0,2)(0,2)");
+    RH("(p(q(r)*)*)*", "pqrrqp", "(0,6)(5,6)", "keeps a group of an earlier iteration");
+    RH("(x(y(z)?)?)*", "xyzxyx", "(0,6)(5,6)", "keeps a group of an earlier iteration");
+    R("((x|y)+z)*", "xyzyz", "(0,5)(3,5)(3,4)");
+    R("((x|yz)+w)+", "xyzwyzw", "(0,7)(4,7)(4,6)");
+    R("(x+|y)*", "xxyx", "(0,4)(3,4)");
+    R("(x+|y)+", "yxx", "(0,3)(1,3)");
+    R("(x+|y)?", "xxy", "(0,2)(0,2)");
+    R("(x+|y){0,}", "yy", "(0,2)(1,2)");
+    R("(x+|y){1,}", "xy", "(0,2)(1,2)");
+    R("(x+|y){0,1}", "xxy", "(0,2)(0,2)");
+    R("(x*y)*", "xxyyxy", "(0,6)(4,6)");
+    R("(xy*)*", "xyyx", "(0,4)(3,4)");
+    R("(xy|yx)*", "xyyxxy", "(0,6)(4,6)");
+    R("(xy|x)*y", "xyxyy", "(0,5)(2,4)");
+    R("(x|xy)*y", "xyxyy", "(0,5)(2,4)");
+    R("(x|xy)*", "xyx", "(0,3)(2,3)");
+    R("(x|y)*", "xyz", "(0,2)(1,2)");
+    R("([xy])*", "xyz", "(0,2)(1,2)");
+    R("(.)*", "xyz", "(0,3)(2,3)");
+    R("(.)+", "xyz", "(0,3)(2,3)");
+    R("(.)*z", "xyz", "(0,3)(1,2)");
+    R("(.*)*", "xyz", "(0,3)(0,3)");
+    R("(.+)*", "xyz", "(0,3)(0,3)");
+    R("(.?)*", "xyz", "(0,3)(2,3)");
+    R("(..)*", "xyz", "(0,2)(0,2)");
+    R("(..)*", "wxyz", "(0,4)(2,4)");
+    R("(..)*(...)*", "xyz", "(0,3)(?,?)(0,3)");
+    R("(...)*(..)*", "vwxyz", "(0,5)(0,3)(3,5)");
+    /* alternatives with groups: only the groups of the way taken are set, and on the same span the earlier alternative wins */
+    R("(p)|(q)", "q", "(0,1)(?,?)(0,1)");
+    R("(p)|(q)|(r)", "r", "(0,1)(?,?)(?,?)(0,1)");
+    R("(p)q|p(q)", "pq", "(0,2)(0,1)");
+    R("p(q)|(p)q", "pq", "(0,2)(1,2)");
+    R("(p|q)r|p(r|s)", "pr", "(0,2)(0,1)");
+    R("(p|q)r|p(r|s)", "ps", "(0,2)(?,?)(1,2)");
+    R("(p|q)r|p(r|s)", "qr", "(0,2)(0,1)");
+    R("p(q)|r(s)|p(t)u", "ptu", "(0,3)(?,?)(?,?)(1,2)");
+    R("((p)|(q))r", "qr", "(0,2)(0,1)(?,?)(0,1)");
+    R("((p)|(pq))r", "pqr", "(0,3)(0,2)(?,?)(0,2)");
+    RH("(p|pq)(qr|r)", "pqr", "(0,3)(0,2)(2,3)", "does not divide the match by POSIX's rule");
+    R("(pq|p)(r|qr)", "pqr", "(0,3)(0,2)(2,3)");
+    R("(mo|m)(on|n)(s?)", "mons", "(0,4)(0,2)(2,3)(3,4)");
+    RH("(w|wa|wav)(ave|ve|e)", "wave", "(0,4)(0,3)(3,4)", "does not divide the match by POSIX's rule");
+    RH("(sea|seas)(son|on)?", "season", "(0,6)(0,4)(4,6)", "does not divide the match by POSIX's rule");
+    R("(sea|seas)(son|on)?", "seas", "(0,4)(0,4)");
+    R("(x|y)*z|(x|xy)*z", "xyz", "(0,3)(1,2)");
+    R("(x|xy)*z|(x|y)*z", "xyz", "(0,3)(0,2)");
+    R("(x|y)*z|(x|xy)*z", "wz", "(1,2)");
+    R("((x|y)|z)", "y", "(0,1)(0,1)(0,1)");
+    R("((x|x)|x)", "x", "(0,1)(0,1)(0,1)");
+    R("(x)(y)|(x)(z)", "xz", "(0,2)(?,?)(?,?)(0,1)(1,2)");
+    R("(x(y)|x(z))w", "xzw", "(0,3)(0,2)(?,?)(1,2)");
+    R("(.p|.q).*|.*(.p|.q)", "rq", "(0,2)(0,2)");
+    R(".*(.p|.q)|(.p|.q).*", "rq", "(0,2)(0,2)");
+    R("(p|q)?.*", "q", "(0,1)(0,1)");
+    R("(p|q)?.*", "r", "(0,1)");
+    R("(xy)z|xyz", "xyz", "(0,3)(0,2)");
+    R("xyz|(xy)z", "xyz", "(0,3)");
+    R("x(yz)|(xy)z", "xyz", "(0,3)(1,3)");
+    R("(st+r$|wa*v.|u?x(y|z))", "waavez", "(0,5)(0,5)");
+    R("(st+r$|wa*v.|u?x(y|z))", "xz", "(0,2)(0,2)(1,2)");
+    R("(st+r$|wa*v.|u?x(y|z))", "waav", "NOMATCH");
+    R("(st+r$|wa*v.|u?x(y|z))", "strr", "NOMATCH");
+    R("(st+r$|wa*v.|u?x(y|z))", "qwaavez", "(1,6)(1,6)");
+    R("^k(lm+|l[no])p|.n$", "kln", "(1,3)");
+    R("(k|l)m*n", "klmn", "(1,4)(1,2)");
+    R("(kl|lm)n", "klmn", "(1,4)(1,3)");
+    R("(k|l)m*", "xlmm", "(1,4)(1,2)");
+    /* a group that the last iteration did not pass through is not set, whatever an earlier iteration did: the rule as Kuklewicz reads POSIX */
+    RH("((p)|q)*", "pq", "(0,2)(1,2)", "keeps a group of an earlier iteration");
+    R("((p)|q)*", "qp", "(0,2)(1,2)(1,2)");
+    RH("((p)|(q))*", "pq", "(0,2)(1,2)(?,?)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p)|(q))+", "qp", "(0,2)(1,2)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p)|(q)){2}", "pq", "(0,2)(1,2)(?,?)(1,2)", "keeps a group of an earlier iteration");
+    RH("((pq)|(r))*", "pqr", "(0,3)(2,3)(?,?)(2,3)", "keeps a group of an earlier iteration");
+    RH("((pq)|(r))*", "rpq", "(0,3)(1,3)(1,3)", "keeps a group of an earlier iteration");
+    RH("((pq)|(r))*", "pqrpq", "(0,5)(3,5)(3,5)", "keeps a group of an earlier iteration");
+    RH("((pq)|(r)){2}", "pqr", "(0,3)(2,3)(?,?)(2,3)", "keeps a group of an earlier iteration");
+    R("((pq)|(r)){3}", "rrr", "(0,3)(2,3)(?,?)(2,3)");
+    RH("((pq)|(r)){2,3}", "rpqr", "(0,4)(3,4)(?,?)(3,4)", "keeps a group of an earlier iteration");
+    RH("(p(q)|r)*", "pqr", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    R("(p(q)|r)+", "rpq", "(0,3)(1,3)(2,3)");
+    RH("((p)|(q)|r)*", "pqr", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("(((p)|q)r)*", "prqr", "(0,4)(2,4)(2,3)", "keeps a group of an earlier iteration");
+    RH("((p(q))|r)*", "pqr", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("((p)q|(r)s)*", "pqrs", "(0,4)(2,4)(?,?)(2,3)", "keeps a group of an earlier iteration");
+    RH("((p)q|(r)s)*", "rspq", "(0,4)(2,4)(2,3)", "keeps a group of an earlier iteration");
+    RH("(p|(q))*", "qp", "(0,2)(1,2)", "keeps a group of an earlier iteration");
+    RH("(p|(q)|(r))*", "rp", "(0,2)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p*)|q)*", "pq", "(0,2)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p+)|q)*", "pq", "(0,2)(1,2)", "keeps a group of an earlier iteration");
+    RH("((p)?q)*", "pqq", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    R("((p)?q)+", "qpq", "(0,3)(1,3)(1,2)");
+    RH("((p)*q)*", "ppqq", "(0,4)(3,4)", "keeps a group of an earlier iteration");
+    RH("(x(y)?)*", "xyx", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("(x(y)?){2}", "xyx", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("(x(y)?){1,3}", "xyxx", "(0,4)(3,4)", "keeps a group of an earlier iteration");
+    RH("(x(y)?z)*", "xyzxz", "(0,5)(3,5)", "keeps a group of an earlier iteration");
+    RH("((x)|y|(z))*", "xzy", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("(((x)y)|z)*", "xyz", "(0,3)(2,3)", "keeps a group of an earlier iteration");
+    RH("(((x)|(y))z)*", "xzyz", "(0,4)(2,4)(2,3)(?,?)(2,3)", "keeps a group of an earlier iteration");
+    /* intervals */
+    R("p{0}q", "pq", "(1,2)");
+    R("p{0,0}q", "pq", "(1,2)");
+    R("(p){0}q", "pq", "(1,2)");
+    R("(p){0,0}q", "pq", "(1,2)");
+    R("p{1}", "pp", "(0,1)");
+    R("p{2}", "ppp", "(0,2)");
+    R("p{2}", "p", "NOMATCH");
+    R("p{2}", "xppx", "(1,3)");
+    R("p{2,}", "pppp", "(0,4)");
+    R("p{2,}", "p", "NOMATCH");
+    R("p{2,3}", "pppp", "(0,3)");
+    R("p{0,1}q", "ppq", "(1,3)");
+    R("p{1,1}", "pp", "(0,1)");
+    R("x{2}y{2}", "xxyyy", "(0,4)");
+    R("(p{2}){2}", "ppppp", "(0,4)(2,4)");
+    R("(p{1,2}){2}", "ppp", "(0,3)(2,3)");
+    R("(p{1,2}){2}", "pp", "(0,2)(1,2)");
+    R("(p{1,2}){2,3}", "ppppp", "(0,5)(4,5)");
+    R("(p|pq){2}", "pqp", "(0,3)(2,3)");
+    R("(p|pq){1,2}q", "pqq", "(0,3)(0,2)");
+    R("(pq|p){2}q", "ppqq", "(0,4)(1,3)");
+    R("p{2}{3}", "ppppppp", "(0,6)");
+    R("(p*){1}", "pp", "(0,2)(0,2)");
+    R("(p*){0}", "pp", "(0,0)");
+    R("(p*){2}", "p", "(0,1)(1,1)");
+    R("(p*){2}", "q", "(0,0)(0,0)");
+    R("(p*){3}", "pp", "(0,2)(2,2)");
+    RH("(p*){0,2}", "pp", "(0,2)(0,2)", "reports a last, empty iteration that was not needed");
+    R("(p*){2}q", "pq", "(0,2)(1,1)");
+    R("(p*){2}q", "pqp", "(0,2)(1,1)");
+    R("(p*){2}q", "q", "(0,1)(0,0)");
+    R("(p?){2}", "p", "(0,1)(1,1)");
+    R("(p?){2}", "pp", "(0,2)(1,2)");
+    R("(p?){3}q", "pq", "(0,2)(1,1)");
+    R("(p?){2,3}q", "ppq", "(0,3)(1,2)");
+    R("(p+){2}", "ppp", "(0,3)(2,3)");
+    R("(p+){2,}", "ppp", "(0,3)(2,3)");
+    R("(|p){2}", "p", "(0,1)(1,1)");
+    R("[pq]{3}", "rpqpq", "(1,4)");
+    R(".{2}", "xyz", "(0,2)");
+    R("(.){3}", "xyzw", "(0,3)(2,3)");
+    R("(.){1,3}", "xyzw", "(0,3)(2,3)");
+    R("(.){2,}", "xyzw", "(0,4)(3,4)");
+    R("(p|q|r){2,}s", "rqs", "(0,3)(1,2)");
+    R("(ppp|pp)*", "ppppppp", "(0,7)(5,7)");
+    RH("(pp|ppp)*", "ppppppp", "(0,7)(5,7)", "does not divide the match by POSIX's rule");
+    RH("(pp|ppp)+$", "ppppp", "(0,5)(3,5)", "does not divide the match by POSIX's rule");
+    R("(pp|ppp)*|(p|ppppp)", "pp", "(0,2)(0,2)");
+    R("(x|xy|yz)*(z*)", "xyxyzz", "(0,6)(3,5)(5,6)");
+    R("(x|xy|yz){1,}(z*)", "xyxyzz", "(0,6)(3,5)(5,6)");
+    R("(x|xy|yz){2,3}(z*)", "xyxyzz", "(0,6)(3,5)(5,6)");
+    R("(x|xy|yz){3,}(z*)", "xyxyzz", "(0,6)(3,5)(5,6)");
+    R("(x|xy|yz){4,}(z*)", "xyxyzz", "NOMATCH");
+    R("(x|xy|yz){1,2}(z*)", "xyxyzz", "(0,6)(2,4)(4,6)");
+    R("(xy|x|yz){0,9}(z*)", "xyxyzz", "(0,6)(3,5)(5,6)");
+    R("(x{2}|y){2}", "xxy", "(0,3)(2,3)");
+    R("(x{2}|y)*", "yxxxx", "(0,5)(3,5)");
+    R("((x{1,2})y){2}", "xyxxy", "(0,5)(2,5)(2,4)");
+    R("((x|y){2}z){2}", "xyzyxz", "(0,6)(3,6)(4,5)");
+    R("(x{2,3}){1,2}y", "xxxxy", "(0,5)(2,4)");
+    R("x{3}|x{2}", "xxxx", "(0,3)");
+    R("(x{0,2}y){2}", "yxxy", "(0,4)(1,4)");
+    R("x{1,3}x{1,3}", "xxxxx", "(0,5)");
+    /* from the left, each part takes the longest that leaves a match for the rest */
+    R("(p*)(p*)", "ppp", "(0,3)(0,3)(3,3)");
+    R("(p*)(p+)", "ppp", "(0,3)(0,2)(2,3)");
+    R("(p+)(p*)", "ppp", "(0,3)(0,3)(3,3)");
+    R("(p?)(p?)(p?)", "pp", "(0,2)(0,1)(1,2)(2,2)");
+    R("(p*)(q?)(q+)q{2}", "ppqqqqq", "(0,7)(0,2)(2,3)(3,5)");
+    R("(p*)(q{0,1})(q{1,})q{2}", "ppqqqqq", "(0,7)(0,2)(2,3)(3,5)");
+    R("(.*)(q|r)(.*)", "pqrs", "(0,4)(0,2)(2,3)(3,4)");
+    R("(.*)-(.*)", "a-b-c", "(0,5)(0,3)(4,5)");
+    R("(.*)-(.*)-(.*)", "a-b-c-d", "(0,7)(0,3)(4,5)(6,7)");
+    R("([^-]*)-(.*)", "a-b-c", "(0,5)(0,1)(2,5)");
+    R("(p*)(pq|q)", "ppq", "(0,3)(0,2)(2,3)");
+    R("(p*)(p|pp)", "pppp", "(0,4)(0,3)(3,4)");
+    R("p*(p.|pp)", "pppp", "(0,4)(2,4)");
+    RH("(p|pp)(p|pp)", "ppp", "(0,3)(0,2)(2,3)", "does not divide the match by POSIX's rule");
+    R("(pp|p)(p|pp)", "ppp", "(0,3)(0,2)(2,3)");
+    R("(p?)(pq?)", "pq", "(0,2)(0,0)(0,2)");
+    R("(p?)(pq?)", "ppq", "(0,3)(0,1)(1,3)");
+    R("(pq*)(q*r)", "pqqr", "(0,4)(0,3)(3,4)");
+    R("(x*)(x*y)(y*)", "xxyy", "(0,4)(0,2)(2,3)(3,4)");
+    R("(.*)(.*)(.*)", "abc", "(0,3)(0,3)(3,3)(3,3)");
+    R("(.*)(.+)", "abc", "(0,3)(0,2)(2,3)");
+    R("(.+)(.*)", "abc", "(0,3)(0,3)(3,3)");
+    R("([pq]*)(q*r)", "pqqr", "(0,4)(0,3)(3,4)");
+    R("([pq]+)(q*r)", "pqqr", "(0,4)(0,3)(3,4)");
+    R("([pq]*)(q+r)", "pqqr", "(0,4)(0,2)(2,4)");
+    R("p([qr]*)r*", "pqr", "(0,3)(1,3)");
+    R("p([qr]*)(r*s)", "pqrs", "(0,4)(1,3)(3,4)");
+    R("p[qrs]*srsrst", "psrsrst", "(0,7)");
+    R("(pq|p)q*r", "pqr", "(0,3)(0,2)");
+    R("(pq|pq*)qr", "pqr", "(0,3)(0,1)");
+    R("(k(l)m)(n)", "klmn", "(0,4)(0,3)(1,2)(3,4)");
+    R("((k)(l)m)(n)", "klmn", "(0,4)(0,3)(0,1)(1,2)(3,4)");
+    R("((((((((((((q))))))))))))", "q", "(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)(0,1)");
+    R("(.*)x(.*)", "wxy", "(0,3)(0,1)(2,3)");
+    R("p*(pq|qp)r", "ppqr", "(0,4)(1,3)");
+    R("(p?)(pq|qp)pq", "pqpq", "(0,4)(0,0)(0,2)");
+    R(".?(pq|qp)pq", "pqpq", "(0,4)(0,2)");
+    R("k(lm)n", "klmn", "(0,4)(1,3)");
     /* brackets */
-    expect(E, "[]a]+", "b]a]", "(1,4)");
-    expect(E, "[^]a]+", "]ab]", "(2,3)");
-    expect(E, "[a\\]+", "a\\", "(0,2)");
-    expect(E, "[[:alpha:]]+", "12abC3", "(2,5)");
-    expect(E, "[[:digit:]]+", "ab12c", "(2,4)");
-    expect(E, "[[:alnum:]_]+", "-a1_-", "(1,4)");
-    expect(E, "[[:upper:]]+", "abCDe", "(2,4)");
-    expect(E, "[[:lower:]]+", "ABcdE", "(2,4)");
-    expect(E, "[[:space:]]+", "a \t\nb", "(1,4)");
-    expect(E, "[[:blank:]]+", "a \t\nb", "(1,3)");
-    expect(E, "[[:punct:]]+", "a,.b", "(1,3)");
-    expect(E, "[[:xdigit:]]+", "xyzAf09g", "(3,7)");
-    expect(E, "[^[:space:]]+", "  ab ", "(2,4)");
-    expect(E, "[[.a.]]", "a", "(0,1)");
-    expect(E, "[[=a=]]", "a", "(0,1)");
-    expect(E, "[[.-.]b]+", "a-b", "(1,3)");
-    expect(E, "[%--]+", "a%,-b", "(1,4)");
-    expect(E | I, "[a-c]+", "xABCx", "(1,4)");
-    expect(E | I, "[[:upper:]]+", "1aB2", "(1,3)");
-    expect(E | I, "[^a]", "Ab", "(1,2)");
-    expect(E | I, "abc", "xAbC", "(1,4)");
-    expect(B, "\\(a\\)*", "aa", "(0,2)(1,2)");
+    R("[]q]+", "p]q]", "(1,4)");
+    R("[^]q]+", "]pq]", "(1,2)");
+    R("[q]]", "pq]", "(1,3)");
+    R("[]]", "x]", "(1,2)");
+    R("[[]", "x[", "(1,2)");
+    R("[q\\]+", "pq\\", "(1,3)");
+    R("[\\q]+", "pq\\", "(1,3)");
+    R("[.]", "x.", "(1,2)");
+    R("[*]", "x*", "(1,2)");
+    R("[$]", "x$", "(1,2)");
+    R("[$^.*]+", "x$^.*y", "(1,5)");
+    R("[(|)]+", "p(|)q", "(1,4)");
+    R("[^p]", "pq", "(1,2)");
+    R("[^pq]+", "pqrsp", "(2,4)");
+    R("[p-r]+", "opqrs", "(1,4)");
+    R("[p-p]", "op", "(1,2)");
+    R("[p-]+", "x-p-", "(1,4)");
+    R("[-p]+", "x-p-", "(1,4)");
+    R("[p-r-]+", "x-q-", "(1,4)");
+    R("[^-]", "--x--", "(2,3)");
+    R("[%--]+", "p%,-q", "(1,4)");
+    R("[--/]+", "p-./q", "(1,4)");
+    R("[pqrstuvwxyz]+", "ab..st..", "(4,6)");
+    R("[a-z0-9]+", "AB12cd-", "(2,6)");
+    R("[A-Za-z_][A-Za-z0-9_]*", "9 name_1 x", "(2,8)");
+    R("[[:alpha:]]+", "12pqR3", "(2,5)");
+    R("[[:digit:]]+", "pq12r", "(2,4)");
+    R("[[:alnum:]_]+", "-p1_-", "(1,4)");
+    R("[[:upper:]]+", "pqRSt", "(2,4)");
+    R("[[:lower:]]+", "PQrsT", "(2,4)");
+    R("[[:space:]]+", "p \t\nq", "(1,4)");
+    R("[[:blank:]]+", "p \t\nq", "(1,3)");
+    R("[[:punct:]]+", "p,.q", "(1,3)");
+    R("[[:xdigit:]]+", "xyzAf09g", "(3,7)");
+    R("[[:print:]]+", "\tpq r\t", "(1,5)");
+    R("[[:graph:]]+", " pq r", "(1,3)");
+    R("[[:cntrl:]]+", "p\t\nq", "(1,3)");
+    R("[^[:space:]]+", "  pq ", "(2,4)");
+    R("[[:digit:][:upper:]]+", "p1Q2r", "(1,4)");
+    R("[[:digit:]p]+", "q1p2r", "(1,4)");
+    R("[[.p.]]", "p", "(0,1)");
+    R("[[=p=]]", "p", "(0,1)");
+    R("[[.-.]q]+", "p-q", "(1,3)");
+    R("[[.p.]-[.r.]]+", "opqrs", "(1,4)");
+    R("[[.].]x]+", "y]x", "(1,3)");
+    /* the case ignored, in characters, brackets and classes */
+    RI("pqr", "xPqR", "(1,4)");
+    RI("(Pq|rS)*", "pQRs", "(0,4)(2,4)");
+    RI("(P|Q)+", "pQ", "(0,2)(1,2)");
+    RI("[p-r]+", "xPQRx", "(1,4)");
+    RI("[P-R]+", "xpqrx", "(1,4)");
+    RI("[[:upper:]]+", "1pQ2", "(1,3)");
+    RI("[[:lower:]]+", "1pQ2", "(1,3)");
+    RI("[^p]", "Pq", "(1,2)");
+    RI("[^P]", "pq", "(1,2)");
+    RI("Alpha", "ALPHA", "(0,5)");
+    RI("ZETA", "zeta", "(0,4)");
+    RI("zeta", "ZETA", "(0,4)");
+    RI("a", "A", "(0,1)");
+    RI("A", "a", "(0,1)");
+    RI("z", "Z", "(0,1)");
+    RI("Z", "z", "(0,1)");
+    RI("(A)|(Z)", "z", "(0,1)(?,?)(0,1)");
+    RI("[a]", "A", "(0,1)");
+    RI("[Z]", "z", "(0,1)");
+    RI("[a-z]+", "1AZ2", "(1,3)");
+    RI("[A-Z]+", "1az2", "(1,3)");
+    RI("^Z", "zz", "(0,1)");
+    RI("a$", "AA", "(1,2)");
+    /* basic syntax */
+    RB("x", "x", "yx", "(1,2)");
+    RB("x*", "x*", "xxy", "(0,2)");
+    RB("[]x]*", "[]x]*", "]x", "(0,2)");
+    RB("[^-]", "[^-]", "--Z--", "(2,3)");
+    RB("^x", "^x", "xy", "(0,1)");
+    RB("x$", "x$", "yx", "(1,2)");
+    RB("^$", "^$", "", "(0,0)");
+    RB("\\(p\\)", "(p)", "xp", "(1,2)(1,2)");
+    RB("\\(p*\\)q", "(p*)q", "xppq", "(1,4)(1,3)");
+    RB("p\\{2\\}", "p{2}", "xppp", "(1,3)");
+    RB("p\\{1,2\\}", "p{1,2}", "ppp", "(0,2)");
+    RB("p\\{2,\\}", "p{2,}", "ppp", "(0,3)");
+    RB("\\(p\\)\\{2\\}", "(p){2}", "ppp", "(0,2)(1,2)");
+    RB("\\(p\\)*", "(p)*", "pp", "(0,2)(1,2)");
+    RB("\\(\\(p\\)\\|q\\)*", "((p)|q)*", "qp", "(0,2)(1,2)(1,2)");
+    RB("p\\|q", "p|q", "q", "(0,1)");
+    RB("p\\+", "p+", "ppp", "(0,3)");
+    RB("p\\?", "p?", "pp", "(0,1)");
+    RB("\\(p\\|q\\)*", "(p|q)*", "pqp", "(0,3)(2,3)");
+    RB("*p", "\\*p", "*p", "(0,2)");
+    RB("\\(*p\\)", "(\\*p)", "*p", "(0,2)(0,2)");
+    RB("^*", "^\\*", "*", "(0,1)");
+    RB("^*p", "^\\*p", "*p", "(0,2)");
+    RB("p^q", "p\\^q", "p^q", "(0,3)");
+    RB("p$q", "p\\$q", "p$q", "(0,3)");
+    RB("\\(^p\\)", "(^p)", "p", "(0,1)(0,1)");
+    RB("\\(p$\\)", "(p$)", "p", "(0,1)(0,1)");
+    RB("p\\|^q", "p|^q", "q", "(0,1)");
+    RB("^^p", "^\\^p", "^p", "(0,2)");
+    RB("^^p", "^\\^p", "p", "NOMATCH");
+    RB("^^", "^\\^", "^", "(0,1)");
+    RB("\\(^^p\\)", "(^\\^p)", "^p", "(0,2)(0,2)");
+    RB("p\\|^^q", "p|^\\^q", "^q", "(0,2)");
+    RB("^^*p", "^\\^*p", "^^p", "(0,3)");
+    RB("^**p", "^\\**p", "**p", "(0,3)");
+    /* not POSIX's or not the oracle's, so the library and the host alone: \< before an anchor or a star, and back-references */
+    row(B, "\\<^p", NULL, "p", "NOMATCH", NULL);
+    row(B, "\\<*p", NULL, "*p", "NOMATCH", NULL);
+    row(E, "(x|y)\\1", NULL, "wxyyx", "(2,4)(2,3)", NULL);
+    row(E, "(.)(.)\\2\\1", NULL, "wxyyx", "(1,5)(1,2)(2,3)", NULL);
+    row(E, "(x*)y\\1", NULL, "xxyxx", "(0,5)(0,2)", NULL);
+    row(E, "(x*)y\\1", NULL, "xyxx", "(0,3)(0,1)", NULL);
+    row(E, "(x+)\\1", NULL, "xxxxx", "(0,4)(0,2)", NULL);
+    row(E, "(x|xy)\\1z", NULL, "xyxyz", "(0,5)(0,2)", NULL);
+    row(E, "((x)|y)\\2", NULL, "xx", "(0,2)(0,1)(0,1)", NULL);
+    row(E, "(x)\\1|y", NULL, "y", "(0,1)", NULL);
+    row(E, "(.)\\1", NULL, "wxyz", "NOMATCH", NULL);
+    row(B, "\\(.\\)\\1", NULL, "wxxy", "(1,3)(1,2)", NULL);
+    row(B, "\\(x*\\)\\1", NULL, "xxxxx", "(0,4)(0,2)", NULL);
+    row(B, "\\(x\\)\\(y\\)\\2\\1", NULL, "xyyx", "(0,4)(0,1)(1,2)", NULL);
+    row(B, "^\\(.*\\)-\\1$", NULL, "ab-ab", "(0,5)(0,2)", NULL);
+    row(B, "^\\(.*\\)-\\1$", NULL, "ab-ac", "NOMATCH", NULL);
 }
 
 static void errors_case(int flags, const char *pat, int want) {
@@ -661,22 +1022,25 @@ static void backrefs(void) {
 
 /**** the oracle ****/
 
-enum { O_EMPTY, O_CHAR, O_ANY, O_NOTA, O_AB, O_BOL, O_EOL, O_GROUP, O_CAT, O_ALT, O_REP };
+enum { O_EMPTY, O_CHAR, O_ANY, O_NOTA, O_AB, O_SET, O_BOL, O_EOL, O_GROUP, O_CAT, O_ALT, O_REP };
 
-#define ONODES 64
-#define OKIDS 4
-#define OLEN 8
+#define OGEN 64                         /* the nodes of a random pattern */
+#define OLEN 8                          /* the bytes of a random text */
+#define ONODES 200                      /* of a table row's pattern */
+#define OTEXT 40                        /* of its text */
+#define OKIDS 40
 
 struct onode {
-    int type, c, min, max, group, ngroups;
+    int type, c, min, max, group, ngroups, neg;
     int kid[OKIDS], kids;
+    unsigned char set[32];
 };
 
 static struct onode on[ONODES];
-static int onodes, ogroups;
+static int onodes, ogroups, oicase;
 static const char *otext;
 static int olen;
-static signed char memo[ONODES][OLEN + 1][OLEN + 1];
+static signed char memo[ONODES][OTEXT + 1][OTEXT + 1];
 static int ocap[MAXSUB][2];
 
 static int o_new(int type) {
@@ -689,7 +1053,7 @@ static int o_new(int type) {
 /* a random pattern of at most about budget nodes */
 static int o_gen(int depth, int budget, int anchors) {
     int n, i, k = rnd(depth > 3 || budget < 3 ? 6 : 12);
-    if(onodes > ONODES - 8) k = 0;
+    if(onodes > OGEN - 8) k = 0;
     switch(k) {
     case 0: case 1:
         n = o_new(O_CHAR);
@@ -802,6 +1166,17 @@ static size_t o_str(int n, char *b, size_t at, int ere) {
 
 static int o_m(int n, int i, int e);
 
+static int o_fold(int c) {
+    return oicase && c >= 'A' && c <= 'Z' ? c + 32 : c;
+}
+
+/* is the character in the set? With the case ignored either of its cases will do, and only then is the answer turned over */
+static int o_has(const struct onode *o, int c) {
+    int alt = c >= 'a' && c <= 'z' ? c - 32 : c >= 'A' && c <= 'Z' ? c + 32 : c;
+    int in = (o->set[c >> 3] >> (c & 7) & 1) || (oicase && (o->set[alt >> 3] >> (alt & 7) & 1));
+    return in != o->neg;
+}
+
 static int o_cat(int n, int kid, int i, int e) {
     int k;
     if(kid == on[n].kids) return i == e;
@@ -827,7 +1202,8 @@ static int o_m(int n, int i, int e) {
     if(memo[n][i][e] >= 0) return memo[n][i][e];
     switch(on[n].type) {
     case O_EMPTY: r = i == e; break;
-    case O_CHAR: r = e == i + 1 && otext[i] == on[n].c; break;
+    case O_CHAR: r = e == i + 1 && o_fold((unsigned char)otext[i]) == o_fold(on[n].c); break;
+    case O_SET: r = e == i + 1 && o_has(&on[n], (unsigned char)otext[i]); break;
     case O_ANY: r = e == i + 1; break;
     case O_NOTA: r = e == i + 1 && otext[i] != 'a'; break;
     case O_AB: r = e == i + 1 && (otext[i] == 'a' || otext[i] == 'b'); break;
@@ -903,7 +1279,7 @@ static void o_cap(int n, int i, int e) {
 
 static void o_solve(int root, char *want, size_t size) {
     int s, e, so[MAXSUB], eo[MAXSUB], g;
-    memset(memo, -1, sizeof(memo));
+    memset(memo, -1, (size_t)onodes * sizeof(memo[0]));
     for(s = 0; s <= olen; s++) {
         for(e = olen; e >= s; e--) {
             if(o_m(root, s, e)) {
@@ -921,6 +1297,161 @@ static void o_solve(int root, char *want, size_t size) {
         }
     }
     snprintf(want, size, "NOMATCH");
+}
+
+/**** a table row's pattern, read for the oracle: extended syntax, where \c is c and a { is always an interval ****/
+
+static const char *ofrom;
+
+static int o_read_alt(void);
+
+static void o_set_add(struct onode *o, int c) {
+    o->set[c >> 3] |= (unsigned char)(1 << (c & 7));
+}
+
+static void o_class(struct onode *o, const char *name, size_t n) {
+    static const struct {
+        const char *name;
+        int (*has)(int);
+    } classes[] = { { "alpha", isalpha }, { "digit", isdigit }, { "alnum", isalnum }, { "upper", isupper }, { "lower", islower }, { "space", isspace },
+                    { "blank", isblank }, { "punct", ispunct }, { "xdigit", isxdigit }, { "print", isprint }, { "graph", isgraph }, { "cntrl", iscntrl } };
+    size_t i;
+    int c;
+    for(i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
+        if(strlen(classes[i].name) == n && !strncmp(classes[i].name, name, n)) {
+            for(c = 0; c < 128; c++) if(classes[i].has(c)) o_set_add(o, c);
+        }
+    }
+}
+
+/* a character of a bracket: itself, or the one inside [.x.] or [=x=] */
+static int o_bracket_char(void) {
+    int c = (unsigned char)*ofrom;
+    if(ofrom[0] == '[' && (ofrom[1] == '.' || ofrom[1] == '=')) {
+        c = (unsigned char)ofrom[2];
+        ofrom += 5;
+    } else {
+        ofrom++;
+    }
+    return c;
+}
+
+static int o_bracket(void) {
+    int n = o_new(O_SET), first = 1;
+    struct onode *o = &on[n];
+    ofrom++;
+    if(*ofrom == '^') {
+        o->neg = 1;
+        ofrom++;
+    }
+    while(first || *ofrom != ']') {
+        int lo, hi;
+        first = 0;
+        if(ofrom[0] == '[' && ofrom[1] == ':') {
+            const char *end = strstr(ofrom, ":]");
+            o_class(o, ofrom + 2, (size_t)(end - ofrom - 2));
+            ofrom = end + 2;
+            continue;
+        }
+        lo = hi = o_bracket_char();
+        if(ofrom[0] == '-' && ofrom[1] != ']') {
+            ofrom++;
+            hi = o_bracket_char();
+        }
+        for(; lo <= hi; lo++) o_set_add(o, lo);
+    }
+    ofrom++;
+    return n;
+}
+
+static int o_read_atom(void) {
+    int n;
+    switch(*ofrom) {
+    case '(':
+        ofrom++;
+        n = o_new(O_GROUP);
+        on[n].group = ++ogroups;
+        on[n].kid[on[n].kids++] = o_read_alt();
+        ofrom++;
+        return n;
+    case '[':
+        return o_bracket();
+    case '.':
+        ofrom++;
+        return o_new(O_ANY);
+    case '^':
+        ofrom++;
+        return o_new(O_BOL);
+    case '$':
+        ofrom++;
+        return o_new(O_EOL);
+    case '\\':
+        ofrom++;
+        /* fall through */
+    default:
+        n = o_new(O_CHAR);
+        on[n].c = (unsigned char)*ofrom++;
+        return n;
+    }
+}
+
+static int o_read_rep(void) {
+    int n = o_read_atom();
+    for(;;) {
+        int min = 0, max = -1, r;
+        if(*ofrom == '+') min = 1;
+        else if(*ofrom == '?') max = 1;
+        else if(*ofrom == '{') {
+            char *end;
+            min = (int)strtol(ofrom + 1, &end, 10);
+            max = min;
+            if(*end == ',') {
+                max = end[1] == '}' ? -1 : (int)strtol(end + 1, &end, 10);
+                if(max < 0) end++;
+            }
+            ofrom = end;
+        } else if(*ofrom != '*') {
+            return n;
+        }
+        ofrom++;
+        r = o_new(O_REP);
+        on[r].min = min;
+        on[r].max = max;
+        on[r].kid[on[r].kids++] = n;
+        n = r;
+    }
+}
+
+static int o_read_cat(void) {
+    int n = o_new(O_CAT);
+    while(*ofrom && *ofrom != '|' && *ofrom != ')') {
+        int k = o_read_rep();
+        on[n].kid[on[n].kids++] = k;
+    }
+    return n;
+}
+
+static int o_read_alt(void) {
+    int n = o_new(O_ALT), k = o_read_cat();
+    on[n].kid[on[n].kids++] = k;
+    while(*ofrom == '|') {
+        ofrom++;
+        k = o_read_cat();
+        on[n].kid[on[n].kids++] = k;
+    }
+    return n;
+}
+
+static void o_row(const char *form, int icase, const char *str, char *want, size_t size) {
+    int root;
+    onodes = ogroups = 0;
+    oicase = icase != 0;
+    ofrom = form;
+    root = o_read_alt();
+    otext = str;
+    olen = (int)strlen(str);
+    o_solve(root, want, size);
+    oicase = 0;
 }
 
 static void random_cases(int rounds) {
@@ -1261,7 +1792,7 @@ int main(int argc, char **argv) {
     int rounds = argc > 1 ? atoi(argv[1]) : 30000;
     if(getenv("REGEX_FUZZ_HOST")) setlocale(LC_ALL, "C.UTF-8");
     table();
-    printf("test_regex: the table against the host: %d of %d differ (REGEX_VERBOSE=1 says which)\n", host_differs, host_runs);
+    printf("test_regex: the table against the host: %d of %d differ, %d of them not recorded (REGEX_VERBOSE=1 says which)\n", host_differs, host_runs, host_new);
     errors();
     flags();
     utf8();
