@@ -716,6 +716,8 @@ static void language(void) {
     is("BEGIN { getlineX = \"cat\"; print \"hello\" | getlineX }", NULL, "hello\n");
     is("BEGIN { \"echo a\" |getline; print }", NULL, "a\n");
     is("BEGIN { \"echo a\" | getline\nprint }", NULL, "a\n");
+    is("BEGIN { \"echo a\" | \\\ngetline x; print x }", NULL, "a\n");      /* a backslash and a newline, as the Mac's awk takes them */
+    is("BEGIN { \"echo a\" |\t\\\r\n getline x; print x }", NULL, "a\n");
     is("BEGIN { \"echo a\" | getline x; print x }", NULL, "a\n");
     is("BEGIN { while((\"echo a\" | getline) > 0) print }", NULL, "a\n");
     is("function f(a) { return a * 2 } BEGIN { print f(2) f(3), f(f(2)) }", NULL, "46 8\n");

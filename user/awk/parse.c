@@ -396,10 +396,16 @@ static void expect(struct parser *p, int tok) {
     next(p);
 }
 
-/* the text after a | says what it is for: the word getline, and not a name that starts with it */
+/* the text after a | says what it is for: the word getline, and not a name that starts with it. Blanks and a
+   backslash before a newline come first, as next() takes them. */
 static int getline_follows(struct parser *p) {
     unsigned k = 0;
-    while(peek(p, k) == ' ' || peek(p, k) == '\t') k++;
+    for(;;) {
+        if(peek(p, k) == ' ' || peek(p, k) == '\t') k++;
+        else if(peek(p, k) == '\\' && peek(p, k + 1) == '\n') k += 2;
+        else if(peek(p, k) == '\\' && peek(p, k + 1) == '\r' && peek(p, k + 2) == '\n') k += 3;
+        else break;
+    }
     return p->pos + k + 7 <= p->len && !memcmp(p->src + p->pos + k, "getline", 7) && !in_name(peek(p, k + 7));
 }
 
