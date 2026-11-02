@@ -591,6 +591,75 @@ static int parses(const char *patch, const char *file) {
     return r;
 }
 
+/* the first hunk's place, with the look for a patch that went in before: 1 and *at found, 0 not, 2 seen as gone in before.
+   made: the file is one the patch makes */
+static int locate_once(const char *patch, const char *file, int made, unsigned *at) {
+    struct dsrc ps, ts;
+    struct pinput in;
+    struct psection sec;
+    struct phunk h;
+    struct ptarget t;
+    struct papply a;
+    struct mem out = { 0 };
+    unsigned fuzz = 0;
+    int r = -1, back = 0;
+    memset(&h, 0, sizeof(h));
+    dsrc_memory(&ps, patch, (unsigned)strlen(patch));
+    dsrc_memory(&ts, file, (unsigned)strlen(file));
+    if(pi_start(&in, &ps) < 0 || pt_load(&t, &ts) < 0) abort();
+    pa_start(&a, &t, mem_put, &out);
+    a.made = made;
+    if(pp_next_section(&in, &sec) > 0 && pp_next_hunk(&in, &sec, &h) > 0) {
+        r = pa_locate(&a, &h, at, &fuzz, &back);
+        if(back) r = 2;
+    }
+    pt_free(&t);
+    ph_free(&h);
+    pi_stop(&in);
+    free(out.p);
+    return r;
+}
+
+/* the second review: a hunk with no old lines went in again unseen, and a second run took a like block further on before
+   looking at the patch's own place */
+static void test_applied_before(void) {
+    unsigned at = 0;
+    check(locate_once("--- x\n+++ x\n@@ -1,0 +2 @@\n+NEW\n", "a\nNEW\nb\nc\n", 0, &at) == 2, "-U0: the added line where it would go: gone in before");
+    check(locate_once("1a2\n> NEW\n", "a\nNEW\nb\nc\n", 0, &at) == 2, "normal: the added line where it would go: gone in before");
+    check(locate_once("1a2\n> NEW\n", "a\nb\nc\n", 0, &at) == 1 && at == 1, "normal: not there: it goes in after line 1");
+    check(locate_once("--- x\n+++ x\n@@ -2,0 +3 @@\n+NEW\n", "NEW\na\nb\nc\n", 0, &at) == 1 && at == 2,
+          "-U0: the same line somewhere else says nothing: it goes in");
+    check(locate_once("--- /dev/null\n+++ f\n@@ -0,0 +1,2 @@\n+one\n+two\n", "one\ntwo\n", 1, &at) == 2, "a file made before, just that: gone in before");
+    check(locate_once("--- /dev/null\n+++ f\n@@ -0,0 +1,2 @@\n+one\n+two\n", "one\ntwo\nmore\n", 1, &at) == 1, "a file with more in it is not that file");
+    check(locate_once("--- x\n+++ x\n@@ -2,3 +2,3 @@\n a\n-b\n+B\n c\n", "0\na\nB\nc\n1\na\nb\nc\n", 0, &at) == 2,
+          "a patch gone in before is seen at its own place before a like block further on");
+    check(locate_once("--- x\n+++ x\n@@ -2,3 +2,3 @@\n a\n-b\n+B\n c\n", "0\nq\nq\nq\n1\na\nb\nc\n", 0, &at) == 1 && at == 5,
+          "not at its place either way: then nearby, as before");
+}
+
+/* diff -N dates the side of a file that is not there at the first moment of 1970, in its own zone */
+static void test_epoch(void) {
+    static const char *const yes[] = { "1970-01-01 00:00:00.000000000 +0000", "1969-12-31 18:00:00.000000000 -0600", "1970-01-01 05:30:00 +0530",
+                                       "1970-01-01 00:00:00", "Thu Jan  1 00:00:00 1970" };
+    static const char *const no[] = { "1970-01-01 00:00:00 +0100", "1970-01-01 00:00:01 +0000", "1970-01-01 00:00:00.5 +0000",
+                                      "2026-11-02 00:00:00 +0000", "1969-12-31 18:00:00", "Wed Dec 31 18:00:00 1969" };
+    char text[200];
+    unsigned i;
+    for(i = 0; i < 11; i++) {
+        int want = i < 5;
+        const char *date = want ? yes[i] : no[i - 5];
+        struct dsrc ps;
+        struct pinput in;
+        struct psection sec;
+        snprintf(text, sizeof(text), "--- f\t%s\n+++ f\t2026-11-02 00:00:00 +0000\n@@ -0,0 +1 @@\n+x\n", date);
+        dsrc_memory(&ps, text, (unsigned)strlen(text));
+        if(pi_start(&in, &ps) < 0) abort();
+        check(pp_next_section(&in, &sec) > 0 && sec.old_epoch == want && !sec.new_epoch && !strcmp(sec.old_name, "f"),
+              want ? "a date of the epoch: the file was not there" : "any other date: it was");
+        pi_stop(&in);
+    }
+}
+
 static void test_by_hand(void) {
     hand_case("mail text\n--- a/x\t2026\n+++ b/x\t2026\n@@ -1,2 +1,2 @@ a function\n a\n-b\n+B\n-- \nsignature\n", "a\nb\n", "a\nB\n",
               "text around a section is passed over");
@@ -961,6 +1030,8 @@ int main(int argc, char **argv) {
     test_moved();                               /* these want the shortest edit, which colliding hashes may not give */
 #endif
     test_by_hand();
+    test_applied_before();
+    test_epoch();
     test_damage(rounds);
     test_long_lines();
     test_strict_hunks(rounds);

@@ -1051,6 +1051,55 @@ def test_review_orig():
     ok(r[0] == 2 and tree_of(d) == {"f.txt": moved.encode()}, "pulled writing .orig: the old file, and nothing beside it: %r %r" % (r, sorted(tree_of(d))))
 
 
+def test_review_second():
+    """the second review: an addition applied again, the first hunk's own place before any other, diff -N's dates, -o with
+    nothing to write, one file under two names"""
+    for what, p in (("-U0", "--- f\n+++ f\n@@ -1,0 +2 @@\n+NEW\n"), ("normal", "1a2\n> NEW\n")):
+        d, r = patch_case({"f": "a\nNEW\nb\nc\n"}, p, "f")
+        ok(r[0] == 1 and get(d + "/f") == b"a\nNEW\nb\nc\n" and b"Reversed (or previously applied)" in r[1],
+           "%s: an addition that went in before is seen: %r" % (what, r))
+    d, r = patch_case({"f": "NEW\na\nb\nc\n"}, "--- f\n+++ f\n@@ -2,0 +3 @@\n+NEW\n", "f")
+    ok(r[0] == 0 and get(d + "/f") == b"NEW\na\nNEW\nb\nc\n", "-U0: the same line elsewhere does not stop it: %r" % (r,))
+    made = "--- f\t1969-12-31 18:00:00.000000000 -0600\n+++ f\t2026-11-02 04:00:00.000000000 -0600\n@@ -0,0 +1,2 @@\n+one\n+two\n"
+    d, r = patch_case({}, made)
+    ok(r[0] == 0 and get(d + "/f") == b"one\ntwo\n", "diff -N: the file is made: %r" % (r,))
+    for n in (2, 3):
+        r = ours("patch", "-i", os.path.join(d, "the.patch"), cwd=d)
+        ok(r[0] == 1 and get(d + "/f") == b"one\ntwo\n" and b"Reversed (or previously applied)" in r[1],
+           "diff -N, applied a %s time: seen, and the file as it was: %r" % ("second" if n == 2 else "third", r))
+    d, r = patch_case({"f": "mine\n"}, made)
+    ok(r[0] == 1 and get(d + "/f") == b"mine\n" and b"already there" in r[2], "diff -N over a file with other text: it stays: %r" % (r,))
+    d, r = patch_case({"f": "one\ntwo\n"}, made.replace("f\t1969-12-31 18:00:00.000000000 -0600", "/dev/null"))
+    ok(r[0] == 1 and get(d + "/f") == b"one\ntwo\n" and b"Reversed (or previously applied)" in r[1],
+       "/dev/null, the file there with just that text: seen as gone in before: %r" % (r,))
+    gone = "--- f\t2026-11-02 04:00:00.000000000 -0600\n+++ f\t1969-12-31 18:00:00.000000000 -0600\n@@ -1,2 +0,0 @@\n-one\n-two\n"
+    d, r = patch_case({"f": "one\ntwo\n"}, gone)
+    ok(r[0] == 0 and not os.path.exists(d + "/f"), "diff -N: a file taken out is deleted: %r" % (r,))
+    d, r = patch_case({"f": "one\ntwo\nthree\n"}, gone.replace("-1,2", "-1,2"))
+    ok(r[0] == 1 and b"Not deleting" in r[1] and get(d + "/f") == b"three\n", "diff -N: more in it than the patch had: it stays: %r" % (r,))
+    # a second run: the patch's own place, both ways, before a block like it further on
+    block = "a\nb\nc\nd\ne\nf\ng\n"
+    base = "".join("%d\n" % i for i in range(1, 11)) + block + "".join("%d\n" % i for i in range(11, 21)) + block
+    new = base.replace("d\n", "D\n", 1)
+    p = "--- f\n+++ f\n@@ -11,7 +11,7 @@\n a\n b\n c\n-d\n+D\n e\n f\n g\n"
+    d, r = patch_case({"f": new}, p)
+    ok(r[0] == 1 and get(d + "/f") == new.encode() and b"Reversed (or previously applied)" in r[1], "applied again: not into the like block: %r" % (r,))
+    # -o with nothing to write
+    d, r = patch_case({"e": "x\n", "out": "keep me\n"}, "--- e\n+++ e\n@@ -1 +0,0 @@\n-x\n", "-o", "out", "e")
+    ok(r[0] == 0 and get(d + "/out") == b"keep me\n" and b"out: not written: the result is empty" in r[2], "-o, an empty result: said: %r" % (r,))
+    # one file under two names
+    two = "--- g\n+++ g\n@@ -5,3 +5,3 @@\n 5\n-NOT\n+x\n 7\n--- ./g\n+++ ./g\n@@ -12,3 +12,3 @@\n 12\n-NOR\n+y\n 14\n"
+    d, r = patch_case({"g": "".join("%d\n" % i for i in range(1, 21))}, two, "-p0")
+    t = tree_of(d)
+    ok(r[0] == 1 and set(t) == {"g", "g.rej"} and b"NOT" in t["g.rej"] and b"NOR" in t["g.rej"] and b"there already" not in r[2],
+       "g and ./g: one .rej, both hunks in it: %r %r" % (sorted(t), r))
+    moved = "--- h\n+++ h\n@@ -5,3 +5,3 @@\n 5\n-6\n+six\n 7\n--- ./h\n+++ ./h\n@@ -12,3 +12,3 @@\n 12\n-13\n+thirteen\n 14\n"
+    old = "top\n" + "".join("%d\n" % i for i in range(1, 21))
+    d, r = patch_case({"h": old}, moved, "-p0")
+    t = tree_of(d)
+    ok(r[0] == 0 and t.get("h.orig") == old.encode() and b"there already" not in r[2], "h and ./h: one .orig, the file before the run: %r" % (r,))
+
+
 def test_review_nits():
     ok(ours("od", "-N", "17592186044416m", stdin=b"abc")[0] == 2, "od -N: a suffix that overflows")
     ok(ours("od", "-j", "17592186044416m", stdin=b"abc")[0] == 2, "od -j: a suffix that overflows")
@@ -1113,7 +1162,7 @@ def main():
     tests = [test_rev, test_paths, test_cmp, test_comm, test_join, test_paste, test_fold, test_nl, test_od, test_base64, test_strings, test_file, test_tree,
              test_cal, test_diff_against_real, test_diff_options, test_diff_trees, test_patch_files, test_patch_saving, test_patch_against_real,
              test_property_real_files, test_review_output_file, test_review_reversed_first, test_review_rej, test_review_small_patch_things,
-             test_review_orig, test_review_nits, test_bad_input, test_pipelines]
+             test_review_orig, test_review_second, test_review_nits, test_bad_input, test_pipelines]
     only = sys.argv[2:]
     for t in tests:
         if only and t.__name__ not in only:

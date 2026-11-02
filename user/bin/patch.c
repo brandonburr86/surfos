@@ -14,7 +14,7 @@ patch names; a normal diff names nothing, so it needs file, or the diff line of 
   -i file    the patch is in this file
   -o file    the results go there (- for standard output), one after the other, and the files stay.
              The file is written only if all of the patch went in and there is something to write;
-             otherwise it stays as it was, and a new one is not made
+             otherwise it stays as it was, a new one is not made, and that is said
   -d dir     go to dir first, before anything else
   -N         a patch that looks reversed or already applied is skipped: its hunks go into the .rej,
              and the status is 1. patch never asks, so this is what happens without -N too
@@ -30,7 +30,8 @@ kept as <file>.orig, unless a file has that name already: that one stays, and it
 fits nowhere goes into <file>.rej, in unified form, and the others still go in. The .rej adds up
 over a run; one that was there before stays, and the hunks go to <file>.1.rej and so on, as is
 said. A file whose old name is /dev/null is made, and one whose new name is /dev/null is deleted once
-nothing is left of it. Never any question: where others ask, the safe answer is taken and said.
+nothing is left of it; a name dated the first moment of 1970, UTC, as diff -N dates a missing file, is
+/dev/null too, when its side of the hunk is empty. Never any question: where others ask, the safe answer is taken and said.
 
 Status 0 all went in; 1 some hunks did not, a file was not there or would be made over one that has
 text in it, or something is left in a file the patch would have deleted; 2 trouble: a patch that
@@ -66,9 +67,9 @@ struct output {
     struct su_save save;
 };
 
-/* a .rej this run made, so that another section of its file adds to it */
+/* a .rej or .orig this run made, so that another section of its file, under any spelling of its name, goes on with it */
 struct rej_note {
-    char *target, *name;
+    char *target, *name;                /* the file, as plain_path() spells it, and the .rej's or the .orig's name */
     struct rej_note *next;
 };
 
@@ -77,7 +78,7 @@ static const char *output_name;
 static FILE *talk;                      /* where "patching file" goes: not into the result of -o - */
 static const char *input_name = "standard input";
 static struct output out_file, rej_file, shared_out;
-static struct rej_note *rej_notes;
+static struct rej_note *rej_notes, *orig_notes;
 
 static int usage(void) {
     fprintf(stderr, "usage: patch [-p n] [-R] [-i patchfile] [-o outfile] [-d dir] [-N] [-f] [--dry-run] [file [patchfile]]\n");
@@ -99,6 +100,46 @@ static void say_save(const struct su_save *s, int r) {
     cli_clean(s->twin, c.twin, sizeof(c.twin));
     errno = e;
     su_say("patch", &c, r);
+}
+
+/* one spelling of a path: no ./ parts and no doubled slashes, so that f and ./f are one file */
+static void plain_path(const char *path, char *out, size_t size) {
+    size_t n = 0;
+    const char *p = path;
+    if(*p == '/') out[n++] = *p++;
+    while(*p && n + 1 < size) {
+        const char *end = strchr(p, '/');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if(!(len == 1 && *p == '.')) {
+            if(n && out[n - 1] != '/') out[n++] = '/';
+            if(n + len >= size) break;
+            memcpy(out + n, p, len);
+            n += len;
+        }
+        p += len;
+        while(*p == '/') p++;
+    }
+    if(!n) out[n++] = '.';
+    out[n] = 0;
+}
+
+static struct rej_note *find_note(struct rej_note *list, const char *path) {
+    char key[PATH_MAX];
+    plain_path(path, key, sizeof(key));
+    for(; list; list = list->next)
+        if(!strcmp(list->target, key)) return list;
+    return NULL;
+}
+
+static void add_note(struct rej_note **list, const char *path, const char *name) {
+    char key[PATH_MAX];
+    struct rej_note *n = malloc(sizeof(*n));
+    plain_path(path, key, sizeof(key));
+    if(!n) return;
+    n->target = strdup(key);
+    n->name = strdup(name);
+    n->next = *list;
+    if(n->target && n->name) *list = n;
 }
 
 /**** writing ****/
@@ -204,10 +245,8 @@ static int out_open(struct output *o, const char *path) {
 /* the .rej for path: the one this run made, or a new name: a .rej that was there before is the user's, whatever it holds.
    name, of size bytes, is the one used. 0, or -1 said */
 static int rej_open(const char *path, char *name, size_t size) {
-    struct rej_note *n;
+    struct rej_note *n = find_note(rej_notes, path);
     int k;
-    for(n = rej_notes; n; n = n->next)
-        if(!strcmp(n->target, path)) break;
     if(n) {
         if(snprintf(name, size, "%s", n->name) >= (int)size || out_ready(&rej_file, name) < 0) return -1;
         rej_file.appending = 1;
@@ -235,13 +274,7 @@ static int rej_open(const char *path, char *name, size_t size) {
         fprintf(stderr, "patch: %s.rej: %s\n", show(path), strerror(errno));
         return -1;
     }
-    n = malloc(sizeof(*n));
-    if(n) {
-        n->target = strdup(path);
-        n->name = strdup(name);
-        n->next = rej_notes;
-        if(n->target && n->name) rej_notes = n;
-    }
+    add_note(&rej_notes, path, name);
     if(k) {
         char other[PATH_MAX + 16];
         fprintf(stderr, "patch: %s.rej is there already, and stays: the rejects go to ", show(path));
@@ -327,6 +360,7 @@ static int keep_old(const char *path) {
         fprintf(stderr, "patch: %s.orig: %s\n", show(path), strerror(ENAMETOOLONG));
         return -1;
     }
+    if(find_note(orig_notes, path)) return 0;   /* one this run made: the file as it was before the run */
     out = open(name, O_WRONLY | O_CREAT | O_EXCL, 0666);
     if(out < 0) {
         if(errno == EEXIST) {
@@ -357,6 +391,7 @@ static int keep_old(const char *path) {
         fprintf(stderr, "patch: %s: %s\n", show(name), strerror(r));
         return -1;
     }
+    add_note(&orig_notes, path, name);
     return 0;
 }
 
@@ -473,13 +508,16 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
     struct dsrc src;
     const char *path = NULL;
     unsigned total = 0, failed = 0, applied = 0;
-    int r, rc = 0, have_src = 0, old_null, new_null, creating, skipping = 0, gone, moved = 0;
+    int r, rc = 0, have_src = 0, old_null, new_null, creating, skipping = 0, gone, moved = 0, occupied = 0;
     if(reverse) ps_reverse(s);
     old_null = !strcmp(s->old_name, "/dev/null");
     new_null = !strcmp(s->new_name, "/dev/null");
     if((r = pp_next_hunk(in, s, h)) < 0) goto malformed;
     if(!r) return 0;
     if(reverse) ph_reverse(h);
+    /* diff -N's date for a file that is not there, where the hunk agrees that side is empty: a real file may have that time */
+    if(s->old_epoch && !h->old_count) old_null = 1;
+    if(s->new_epoch && !h->new_count) new_null = 1;
     creating = old_null || (h->old_count == 0 && h->old_start <= 1);
     r = choose_file(s, given, creating, &path);
     if(r <= 0) {
@@ -491,12 +529,7 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
     fprintf(talk, "%s file %s\n", dry_run ? "checking" : "patching", show(path));
     if(exists(path)) {
         struct stat st;
-        if(old_null && !stat(path, &st) && st.st_size > 0) {
-            fprintf(stderr, "patch: %s: already there, and the patch would make it\n", show(path));
-            if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
-            fprintf(talk, "%u hunk%s skipped\n", total, total == 1 ? "" : "s");
-            return 1;
-        }
+        occupied = old_null && !stat(path, &st) && st.st_size > 0;
         if(dsrc_open(&src, path) < 0) {
             fprintf(stderr, "patch: %s: %s\n", show(path), strerror(errno));
             if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
@@ -516,6 +549,22 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
         return 2;
     }
     pa_start(&a, &t, out_put, o);
+    a.made = old_null;
+    if(occupied) {
+        /* a file the patch would make is there. Holding just what the patch puts in it, it is the patch gone in before,
+           and is seen as that below; holding anything else, it is the user's, and stays */
+        unsigned at = 0, fuzz = 0;
+        int back = 0;
+        if(no_check || pa_locate(&a, h, &at, &fuzz, &back) < 0 || !back) {
+            if(a.failed) goto read_failed;
+            fprintf(stderr, "patch: %s: already there, and the patch would make it\n", show(path));
+            pt_free(&t);
+            dsrc_close(&src);
+            if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
+            fprintf(talk, "%u hunk%s skipped\n", total, total == 1 ? "" : "s");
+            return 1;
+        }
+    }
     for(r = 1; r > 0; ) {
         unsigned at = 0, fuzz = 0;
         int found = 0;
@@ -624,7 +673,9 @@ static int finish_output(int rc) {
         if(out_commit(&shared_out) < 0) rc = 2;
     } else if(rc || !shared_out.bytes) {
         out_abort(&shared_out);
-        if(rc && !dry_run) fprintf(stderr, "patch: %s: not written: not all of the patch went in\n", show(output_name));
+        if(!dry_run)
+            fprintf(stderr, "patch: %s: not written: %s\n", show(output_name),
+                    rc ? "not all of the patch went in" : "the result is empty");
     } else if(out_commit(&shared_out) < 0) rc = 2;
     return rc;
 }

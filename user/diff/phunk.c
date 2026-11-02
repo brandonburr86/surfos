@@ -113,24 +113,55 @@ static int is_date_at(const char *s) {
     return word_in(s, "SunMonTueWedThuFriSat") && s[3] == ' ' && word_in(s + 4, "JanFebMarAprMayJunJulAugSepOctNovDec") && s[7] == ' ';
 }
 
+/* A header's date that says the file was not there: diff -N writes the first moment of 1970, UTC, for a side that is missing,
+   in the zone it runs in. 1969-12-31 18:00:00.000000000 -0600 is one; with no zone only 1970-01-01 00:00:00 is, and the
+   older form's Thu Jan  1 00:00:00 1970 */
+static int is_epoch(const char *s) {
+    unsigned y, mo, d, hh, mi, se, zone;
+    long minutes;
+    const char *z;
+    while(*s == ' ' || *s == '\t') s++;
+    if(word_in(s, "SunMonTueWedThuFriSat") && s[3] == ' ')
+        return !strncmp(s + 4, "Jan  1 00:00:00 1970", 20) && (!s[24] || s[24] == ' ' || s[24] == '\r');
+    if(!number(&s, &y) || *s++ != '-' || !number(&s, &mo) || *s++ != '-' || !number(&s, &d) || *s++ != ' ') return 0;
+    if(!number(&s, &hh) || *s++ != ':' || !number(&s, &mi) || *s++ != ':' || !number(&s, &se)) return 0;
+    if(*s == '.')
+        for(s++; *s == '0'; s++);               /* any fraction: nothing but zeros */
+    if((*s >= '0' && *s <= '9') || se || hh > 23 || mi > 59) return 0;
+    if(y == 1970 && mo == 1 && d == 1) minutes = (long)hh * 60 + mi;
+    else if(y == 1969 && mo == 12 && d == 31) minutes = (long)hh * 60 + mi - 24 * 60;
+    else return 0;
+    while(*s == ' ') s++;
+    if(*s == '+' || *s == '-') {
+        long sign = *s == '-' ? -1 : 1;
+        z = ++s;
+        if(!number(&s, &zone) || s - z != 4 || zone % 100 > 59) return 0;
+        minutes -= sign * (long)(zone / 100 * 60 + zone % 100);
+    }
+    return minutes == 0;
+}
+
 /* the name in a header's text: up to a TAB, or the date after it, or the line's end; quotes taken off when
-   there is nothing in them to unescape. Too long for a path: none */
-static void take_name(const char *s, char *out) {
+   there is nothing in them to unescape. Too long for a path: none. *epoch: the date says the file was not there */
+static void take_name(const char *s, char *out, int *epoch) {
     size_t n;
-    const char *tab;
+    const char *tab, *date = NULL;
     out[0] = 0;
     while(*s == ' ') s++;
     tab = strchr(s, '\t');
     n = tab ? (size_t)(tab - s) : strlen(s);
-    if(!tab) {
+    if(tab) date = tab + 1;
+    else {
         const char *p;
         for(p = s; (p = strchr(p, ' ')); p++) {
             if(is_date_at(p + 1)) {
                 n = (size_t)(p - s);
+                date = p + 1;
                 break;
             }
         }
     }
+    if(epoch) *epoch = date && is_epoch(date);
     while(n && (s[n - 1] == ' ' || s[n - 1] == '\r')) n--;     /* a patch with CR LF line ends: the CR is no part of a name */
     if(n >= 2 && s[0] == '"' && s[n - 1] == '"' && !memchr(s, '\\', n)) {
         s++;
@@ -189,17 +220,17 @@ int pp_next_section(struct pinput *p, struct psection *s) {
             if((r = next_line(p)) <= 0) return r;
         }
         have = 0;
-        if(starts(p, "Index: ")) take_name(p->line + 7, s->index_name);
+        if(starts(p, "Index: ")) take_name(p->line + 7, s->index_name, NULL);
         else if(starts(p, "diff ") && !starts(p, "diff --git")) {
             names_of_command(p, s);
             memcpy(diff_old, s->old_name, sizeof(diff_old));
             memcpy(diff_new, s->new_name, sizeof(diff_new));
             s->old_name[0] = s->new_name[0] = 0;
         } else if(starts(p, "--- ")) {
-            take_name(p->line + 4, s->old_name);
+            take_name(p->line + 4, s->old_name, &s->old_epoch);
             if((r = next_line(p)) <= 0) return r;
             if(starts(p, "+++ ")) {
-                take_name(p->line + 4, s->new_name);
+                take_name(p->line + 4, s->new_name, &s->new_epoch);
                 if((r = next_line(p)) <= 0) return r;
                 if(starts(p, "@@ -")) {
                     read_again(p);
@@ -209,12 +240,13 @@ int pp_next_section(struct pinput *p, struct psection *s) {
                 }
             }
             s->old_name[0] = s->new_name[0] = 0;
+            s->old_epoch = s->new_epoch = 0;
             have = 1;
         } else if(starts(p, "*** ")) {
-            take_name(p->line + 4, s->old_name);
+            take_name(p->line + 4, s->old_name, &s->old_epoch);
             if((r = next_line(p)) <= 0) return r;
             if(starts(p, "--- ")) {
-                take_name(p->line + 4, s->new_name);
+                take_name(p->line + 4, s->new_name, &s->new_epoch);
                 if((r = next_line(p)) <= 0) return r;
                 if(starts(p, "***************")) {
                     read_again(p);
@@ -224,6 +256,7 @@ int pp_next_section(struct pinput *p, struct psection *s) {
                 }
             }
             s->old_name[0] = s->new_name[0] = 0;
+            s->old_epoch = s->new_epoch = 0;
             have = 1;
         } else if(starts(p, "@@ -")) {          /* hunks with no headers: a file named on the command line */
             read_again(p);
@@ -249,9 +282,12 @@ int pp_next_section(struct pinput *p, struct psection *s) {
 
 void ps_reverse(struct psection *s) {
     char t[PATCH_NAME_MAX];
+    int e = s->old_epoch;
     memcpy(t, s->old_name, sizeof(t));
     memcpy(s->old_name, s->new_name, sizeof(t));
     memcpy(s->new_name, t, sizeof(t));
+    s->old_epoch = s->new_epoch;
+    s->new_epoch = e;
 }
 
 /**** a hunk's lines ****/

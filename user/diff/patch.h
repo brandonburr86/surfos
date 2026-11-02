@@ -48,6 +48,7 @@ struct psection {
     int format;                         /* 'u', 'c' or 'n' */
     char old_name[PATCH_NAME_MAX];      /* "": none */
     char new_name[PATCH_NAME_MAX];
+    int old_epoch, new_epoch;           /* that side dated the first moment of 1970, UTC: diff -N's file that is not there */
     char index_name[PATCH_NAME_MAX];
     char command[32];                   /* a normal hunk's first line, read to see what it is */
     unsigned hunks;                     /* read so far */
@@ -99,6 +100,7 @@ struct papply {
     long long last_line;                /* where the last hunk starts in the new file, from 1 */
     int owe_newline;                    /* the last line out had none, and more is coming */
     int failed;                         /* a read: its errno */
+    int made;                           /* the file is one the patch makes: see pa_locate() */
 };
 
 /* the file's line index: 0, or -1 and errno. src NULL: empty */
@@ -107,9 +109,10 @@ void pt_free(struct ptarget *t);
 
 void pa_start(struct papply *a, struct ptarget *t, pa_put put, void *ctx);
 /* where h goes: 1 and *at (the file's line, from 0, of the first old line compared) and *fuzz; 0 it fits nowhere; -1 a
-   read failed. With reversed given it is looked for the other way round too, after the forward look at each fuzz: a place
-   that fits exactly backwards says more than one that needs fuzz forwards. When that is found first, *reversed is 1 and
-   the result 0 */
+   read failed. With reversed given it is looked for the other way round too: at each fuzz, forward where it says, the
+   other way round where it says, and then each nearby. A place that fits exactly backwards says more than one that needs
+   fuzz forwards. A hunk with no old lines is looked for backwards only where it says, and with made set (the file is one
+   the patch makes) only as the whole file. When the patch is found backwards first, *reversed is 1 and the result 0 */
 int pa_locate(struct papply *a, struct phunk *h, unsigned *at, unsigned *fuzz, int *reversed);
 /* the file up to there and then the hunk go out: 0, or -1 */
 int pa_apply(struct papply *a, const struct phunk *h, unsigned at, unsigned fuzz);

@@ -28,9 +28,13 @@ DESCRIPTION
     hunks go to file.1.rej, or the next free name, and that is said.
 
     A file whose old name is /dev/null is made, with any directories
-    it needs, unless a file of that name has text in it. A file
-    whose new name is /dev/null is deleted if nothing is left of it;
-    if something is, it stays with the rest, and the status is 1.
+    it needs, unless a file of that name has text in it: if the text
+    is just what the patch would put there, the patch went in before
+    and is skipped as one that did. A file whose new name is
+    /dev/null is deleted if nothing is left of it; if something is,
+    it stays with the rest, and the status is 1. A name dated
+    1970-01-01 00:00:00 UTC, as diff -N dates a file that is not
+    there, counts as /dev/null when its side of the hunk is empty.
 
     A file is replaced whole: the new contents are written beside it
     and synced, then renamed over it, so a failure at any point
@@ -43,7 +47,10 @@ DESCRIPTION
 
     patch never asks a question. Where others ask, about a patch that
     looks reversed or already applied, the hunks are skipped and go
-    into the .rej. A malformed hunk stops everything, and the file it
+    into the .rej. The first hunk is looked for where it says, both
+    ways, before anywhere else, so a patch applied twice is seen as
+    that. A hunk that only adds lines is seen as applied when they
+    are already where they would go. A malformed hunk stops everything, and the file it
     was working on is left as it was; files finished before it stay
     finished.
 
@@ -63,9 +70,9 @@ OPTIONS
     -o file      Write the results there, one after the other, and
                  leave the files alone. The file is written only if
                  all of the patch went in and there is something to
-                 write: otherwise it stays as it was, and a new one
-                 is not made. - is standard output, which gets what
-                 there is as it comes.
+                 write: otherwise it stays as it was, a new one is
+                 not made, and that is said. - is standard output,
+                 which gets what there is as it comes.
     -d dir       Go to dir first, before anything else.
     -N           Skip a patch that looks reversed or already applied.
                  As patch never asks, that is also what happens

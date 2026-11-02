@@ -6,8 +6,9 @@ File: papply.c  Date: 11/01/26
 See patch.h. A hunk is looked for where it says, moved by what the last hunk was moved; then nearer places first, on
 both sides, from the end of the last hunk to the end of the file. If it fits nowhere exactly the same search
 runs with up to PATCH_FUZZ lines of its context at each end not compared: window_at() says which lines, and
-why a hunk made at an edge of the file stays there. Hunks are applied in order, each only after the one before it, so
-that the file comes out forward, once.
+why a hunk made at an edge of the file stays there. The first hunk is also looked for the other way round, to see a patch
+that went in before: at each fuzz where it says, both ways, before anywhere else. Hunks are applied in order, each only after
+the one before it, so that the file comes out forward, once.
 */
 
 #include "patch.h"
@@ -183,31 +184,27 @@ static int window_at(const struct phunk *h, unsigned n, unsigned fuzz, struct wi
 
 #define NO_MORE 2                       /* at_fuzz(): this fuzz adds nothing */
 
-/* the hunk at one fuzz: 1 and *where, 0, -1 a read failed, or NO_MORE */
-static int at_fuzz(struct papply *a, const struct phunk *h, const unsigned *old_lines, unsigned n, unsigned f, unsigned *where) {
+/* the hunk at one fuzz: 1 and *where, 0, -1 a read failed, or NO_MORE. Only where it says, or with near nearby too, the
+   nearest first */
+static int at_fuzz(struct papply *a, const struct phunk *h, const unsigned *old_lines, unsigned n, unsigned f, int near,
+                   unsigned *where) {
     struct window w;
     int found;
     if(!window_at(h, n, f, &w)) return NO_MORE;
     if(w.at_top) found = search(a, h, old_lines, w.first, w.count, 0, 1, where);
     else if(w.at_bottom) found = search(a, h, old_lines, w.first, w.count, (long long)a->t->nlines - w.count, 1, where);
-    else found = search(a, h, old_lines, w.first, w.count, (long long)h->old_start - 1 + a->offset + w.first, 0, where);
+    else found = search(a, h, old_lines, w.first, w.count, (long long)h->old_start - 1 + a->offset + w.first, !near, where);
     return a->failed ? -1 : found;
 }
 
 int pa_locate(struct papply *a, struct phunk *h, unsigned *at, unsigned *fuzz, int *reversed) {
-    unsigned n, back_n = 0, f, *old_lines, *back_lines = NULL, where = 0;
+    unsigned n, back_n = 0, f, *old_lines, *back_lines = NULL, where = 0, step;
     long long guess = (long long)h->old_start - 1 + a->offset;
-    int r = 0, more, more_back;
+    int r = 0, more[2];
     if(reversed) *reversed = 0;
     if(!(old_lines = old_side(h, &n))) {
         a->failed = ENOMEM;
         return -1;
-    }
-    if(!n && guess >= a->done && guess <= a->t->nlines) {       /* nothing to compare: it says where, and that is all */
-        free(old_lines);
-        *at = (unsigned)guess;
-        *fuzz = 0;
-        return 1;
     }
     if(reversed) {
         ph_reverse(h);
@@ -219,33 +216,58 @@ int pa_locate(struct papply *a, struct phunk *h, unsigned *at, unsigned *fuzz, i
             return -1;
         }
     }
-    more = n != 0;
-    more_back = back_n != 0;
-    for(f = 0; f <= PATCH_FUZZ && (more || more_back); f++) {
-        if(more) {
-            r = at_fuzz(a, h, old_lines, n, f, &where);
-            if(r == NO_MORE) more = 0;
-            else if(r < 0) break;
-            else if(r) {
-                *at = where;
-                *fuzz = f;
-                break;
-            }
-        }
-        if(more_back) {
+    if(!n) {
+        /* Nothing to compare: it says where, and that is all. But the lines it adds, there already where they would go, say
+           that it went in before. Only there: the same lines elsewhere may be any lines. In a file the patch makes they must
+           be all there is */
+        if(back_n) {
             ph_reverse(h);
-            r = at_fuzz(a, h, back_lines, back_n, f, &where);
+            r = at_fuzz(a, h, back_lines, back_n, 0, 0, &where);
             ph_reverse(h);
-            if(r == NO_MORE) more_back = 0;
-            else if(r < 0) break;
-            else if(r) {
+            if(r < 0) goto done;
+            if(r == 1 && (!a->made || a->t->nlines == back_n)) {
                 *reversed = 1;
                 r = 0;
-                break;
+                goto done;
             }
         }
-        r = 0;
+        r = guess >= a->done && guess <= a->t->nlines;
+        if(r) {
+            *at = (unsigned)guess;
+            *fuzz = 0;
+        }
+        goto done;
     }
+    /* At each fuzz four looks: forward where it says, the other way round where it says, then each nearby. So a patch that
+       went in before is seen at its own place, before a block like it further on can take it a second time */
+    more[0] = 1;
+    more[1] = back_n != 0;
+    for(f = 0; f <= PATCH_FUZZ && (more[0] || more[1]); f++) {
+        for(step = 0; step < 4; step++) {
+            unsigned back = step & 1;
+            if(!more[back]) continue;
+            if(back) ph_reverse(h);
+            r = at_fuzz(a, h, back ? back_lines : old_lines, back ? back_n : n, f, step >= 2, &where);
+            if(back) ph_reverse(h);
+            if(r == NO_MORE) {
+                more[back] = 0;
+                continue;
+            }
+            if(r < 0) goto done;
+            if(r) {
+                if(back) {
+                    *reversed = 1;
+                    r = 0;
+                } else {
+                    *at = where;
+                    *fuzz = f;
+                }
+                goto done;
+            }
+        }
+    }
+    r = 0;
+done:
     free(old_lines);
     free(back_lines);
     return r;
