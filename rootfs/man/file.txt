@@ -1,0 +1,22 @@
+file - say what kind of file this is
+
+SYNOPSIS
+    file name...
+
+DESCRIPTION
+    Says what each file is, by what is in it and never by its name.
+    It knows ELF programs, BMP, PNG, JPEG and GIF images, gzip and zip
+    archives, tar archives, PDF, the image of a FAT12, FAT16 or FAT32
+    volume, scripts (#!), and ASCII or UTF-8 text with the line ends
+    it has; an empty file, a directory, and data for all else.
+
+    Only the start of a file is read: for text the first megabyte, so
+    a long text with a binary tail is called text. - is standard
+    input. Status 2 when a file could not be read; the others are
+    still said.
+
+EXAMPLES
+    file /initrd/bin/hello /hda1/README.TXT
+
+SEE ALSO
+    strings, od
