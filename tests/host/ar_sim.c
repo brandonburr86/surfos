@@ -88,6 +88,7 @@ static int out_limited;
 
 static int change_count, fail_nth, fail_err, pull_nth, half_rename, most_open, long_paths, left_open;
 static unsigned long long bytes_read;
+static long long read_left = -1;        /* files read this many bytes more, then EIO; -1: no limit */
 static size_t quota, used_bytes;
 static int quota_on, mark_from;
 static jmp_buf finish;
@@ -232,6 +233,11 @@ static int in_use(int n) {
     return 0;
 }
 
+/* The disk has gone: from then on the kernel answers EIO to everything, a lookup too (fs/fat.c's fat_lookup()) */
+static int pulled(void) {
+    return pull_nth && change_count >= pull_nth;
+}
+
 /* one change to the disk: 0, or the error it fails with */
 static int change(void) {
     change_count++;
@@ -296,6 +302,7 @@ int surf_open(const char *path, int flags, ...) {
     char abs[PATH_LIMIT * 2];
     int e = normalize(path, abs), n, err = 0, writing = (flags & S_O_ACCMODE) != S_O_RDONLY;
     if(e) return fail_with(e);
+    if(pulled()) return fail_with(S_EIO);
     n = lookup(abs);
     if(n >= 0 && (flags & S_O_CREAT) && (flags & S_O_EXCL)) return fail_with(S_EEXIST);
     if(n >= 0 && nodes[n].dir && writing) return fail_with(S_EISDIR);
@@ -341,10 +348,12 @@ int surf_read(int fd, void *buf, size_t len) {
     if(fd < 0 || fd >= NR_OPEN || !fds[fd].used || fd < 3) return fail_with(S_EBADF);
     x = &nodes[fds[fd].node];
     if(x->dir) return fail_with(S_EISDIR);
+    if(pulled() || !read_left) return fail_with(S_EIO);
     size = node_size(x);
     pos = fds[fd].pos;
     if(pos >= size) return 0;
     if(len > size - pos) len = (size_t)(size - pos);
+    if(read_left > 0 && (long long)len > read_left) len = (size_t)read_left;
     while(done < len) {                                 /* over the hole, if the file has one */
         unsigned long long at = pos + done;
         size_t left = len - done, k;
@@ -363,6 +372,7 @@ int surf_read(int fd, void *buf, size_t len) {
     }
     fds[fd].pos += done;
     bytes_read += done;
+    if(read_left > 0) read_left -= (long long)done;
     return (int)done;
 }
 
@@ -453,6 +463,7 @@ int surf_stat(const char *path, struct surf_stat *st) {
     char abs[PATH_LIMIT * 2];
     int e = normalize(path, abs), n, err = 0;
     if(e) return fail_with(e);
+    if(pulled()) return fail_with(S_EIO);
     n = lookup(abs);
     if(n < 0) {
         if(strcmp(abs, "/") && parent_of(abs, &err) < 0) return fail_with(err);
@@ -883,6 +894,10 @@ unsigned long long ars_bytes_read(void) {
     return bytes_read;
 }
 
+void ars_read_fails_after(size_t n) {
+    read_left = (long long)n;
+}
+
 void ars_lie_size(const char *path, unsigned extra) {
     char x[PATH_LIMIT * 2];
     if(normalize(path, x) || lookup(x) < 0) abort();
@@ -931,6 +946,7 @@ int ars_run(ars_tool tool, const char *const *argv) {
     }
     fail_nth = 0;
     pull_nth = 0;
+    read_left = -1;
     return r;
 }
 

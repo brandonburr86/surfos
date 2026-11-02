@@ -74,23 +74,29 @@ static OF_UNUSED void of_remove(const char *prog, const char *path) {
     }
 }
 
-/* saveutil.h does not say whether its own unlink worked */
+/* saveutil.h does not say whether its own unlink worked. Only ENOENT says it did: on a disk that has gone every look at it
+   fails, EIO, and the file may be there when the disk comes back. What the caller is about to say is in errno, and stays. */
 static OF_UNUSED void of_left_behind(const char *prog, const char *tmp) {
     struct stat st;
+    int e = errno;
     if(stat(tmp, &st) == 0) fprintf(stderr, "%s: %s: it cannot be deleted: the short file stays\n", prog, tmp);
+    else if(errno != ENOENT) fprintf(stderr, "%s: %s: a file may remain here: %s\n", prog, tmp, strerror(errno));
+    errno = e;
 }
 
 /* failed part way: what the user had is as it was, and what was made goes */
 static OF_UNUSED void of_drop(struct out_file *f, const char *prog) {
+    int e = errno;
     if(f->replacing) {
         char tmp[PATH_MAX];
         memcpy(tmp, f->save.tmp, sizeof(tmp));
         su_abort(&f->save);
         of_left_behind(prog, tmp);
-        return;
+    } else {
+        close(f->fd);
+        of_remove(prog, f->path);
     }
-    close(f->fd);
-    of_remove(prog, f->path);
+    errno = e;
 }
 
 /* all written: under its name. sync_new: a new file is on the disk too (a replaced one always is) */
@@ -101,7 +107,7 @@ static OF_UNUSED int of_commit(struct out_file *f, const char *prog, int sync_ne
         memcpy(tmp, f->save.tmp, sizeof(tmp));
         r = su_commit(&f->save);
         if(r) su_say(prog, &f->save, r);
-        if(r == -1) of_left_behind(prog, tmp);
+        if(r == -1 || (r == SU_KEPT && !f->save.tmp[0])) of_left_behind(prog, tmp);
         return r ? -1 : 0;
     }
     if(sync_new && fsync(f->fd) < 0) {
@@ -120,8 +126,8 @@ static OF_UNUSED int of_commit(struct out_file *f, const char *prog, int sync_ne
     return r;
 }
 
-/* Is path the file st describes? By what it is, not by what it is called: FAT's names ignore case, and every long name
-   has a short one too. A file system that gives no number (ino 0) says nothing. */
+/* Is path the file st describes? By what it is, not by what it is called: FAT's names ignore case, and the path may be
+   written another way. A file system that gives no number (ino 0) says nothing. */
 static OF_UNUSED int of_same_file(const char *path, const struct stat *st) {
     struct stat b;
     return st->st_ino && stat(path, &b) == 0 && b.st_ino == st->st_ino && !strcmp(b.fs, st->fs) && !strcmp(b.dev, st->dev);

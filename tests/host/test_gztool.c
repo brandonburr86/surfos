@@ -521,7 +521,7 @@ static void test_failures(void) {
         ars_puts("/a.gz", "the old one");
         ars_pull_at(k);
         st = ars_cmd(gzip_main, "gzip -f /a");
-        if(st == 2 && ars_exists("/a.gz.tmp")) check(has(ars_stderr(), "stays") || has(ars_stderr(), "a.gz.tmp"), "a .tmp that could not be deleted is said");
+        if(st == 2 && ars_exists("/a.gz.tmp")) check(has(ars_stderr(), "a.gz.tmp"), "a .tmp that may still be there is said, though the disk is gone and nothing can look");
         check(ars_is("/a.gz", "the old one") || ars_get("/a.gz", &now), "and the file is the old one or the whole new one");
         if(!ars_is("/a.gz", "the old one")) check(now == whole, "and the file is the old one or the whole new one");
     }

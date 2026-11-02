@@ -47,7 +47,8 @@ const unsigned char *ars_stdout(size_t *n);             /* since the last run be
 const char *ars_stderr(void);
 
 void ars_fail_change(int nth, int err);                 /* the nth change of the next run (1 on) fails once */
-void ars_pull_at(int nth);                              /* from the nth change on all fail, EIO: the disk is gone */
+void ars_pull_at(int nth);                              /* from the nth change on all fail, EIO, and every look at the disk too */
+void ars_read_fails_after(size_t n);                    /* in the next run files give n bytes more, then EIO */
 void ars_quota(size_t bytes);                           /* writes past this many bytes in all fail: a full disk */
 void ars_rename_half(void);                             /* the next rename fails with EIO, half done: both names hold the data */
 int ars_changes(void);                                  /* changes the last run made */

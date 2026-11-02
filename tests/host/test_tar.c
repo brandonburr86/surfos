@@ -1178,6 +1178,23 @@ static void test_failures(void) {
     check(ars_cmd(tar_main, "tar cf b.tar -C /src one.txt") == 2 && ars_is("/src/b.tar", "a file of the user's in the folder -C goes to") && !ars_exists("/b.tar"),
           "a failure after -C deletes its own file, not one of that name where -C went");
 
+    /* The reason a run stopped must survive what is done after it: cleaning up looks at the disk and sets errno. */
+    a_start();
+    a_text("one.txt", "new one, the file being written when the archive cannot be read\n");
+    a_end();
+    ars_reset();
+    ars_put("/a.tar", A, An);
+    ars_puts("/dest/one.txt", "old\n");
+    ars_read_fails_after(512 + 10);
+    check(ars_cmd(tar_main, "tar xf /a.tar -C /dest") == 2 && ars_is("/dest/one.txt", "old\n"), "a read error in the archive, replacing a file");
+    check(has(ars_stderr(), "I/O error") && !has(ars_stderr(), "No such file"), "... is called what it is");
+    ars_reset();
+    ars_put("/a.tar", A, An);
+    ars_mkdir("/dest");
+    ars_read_fails_after(512 + 10);
+    check(ars_cmd(tar_main, "tar xf /a.tar -C /dest") == 2 && !ars_exists("/dest/one.txt"), "a read error in the archive, on a new file");
+    check(has(ars_stderr(), "I/O error"), "... likewise");
+
     /* full disks */
     tree();
     ars_quota(100);
