@@ -9,12 +9,13 @@ with -E an extended one, and -F takes it as a fixed string; of -E and -F the las
 case, -v gives the lines that do not match, -n puts each line's number before it, -c gives how many
 lines there are, -l the names of the files that have one, -q nothing. With more than one file each line
 comes after its file's name and a colon. Status 0 when a line was found, 1 when none was, 2 for a
-mistake (a file that cannot be read; with -q a line found counts more).
+mistake (a file that cannot be read; with -q a line found counts more) or a line the search gave up on.
 11/01/26 (the command-line suite): the patterns are user/libsurf/regex.c's, all that man regex says: \( \)
 and \1, \{m,n\}, [:classes:], a character being a UTF-8 sequence, and no pattern that takes for ever. A \
 before those characters used to mean the character itself. A line may hold NUL bytes. An [ never closed is
 still itself in a basic pattern (and a mistake with -E, which is new); other mistakes in a pattern are said,
-with status 2.
+with status 2. A line on which the search gave up (too many steps) neither matches nor fails to match, with
+-v too: it is not shown or counted, the others go on, and the status is 2 whatever else was found.
 */
 
 #include <ctype.h>
@@ -104,7 +105,7 @@ int main(int argc, char **argv) {
     const char *pattern = NULL;
     char *line = NULL;
     size_t cap = 0;
-    int invert = 0, numbers = 0, counting = 0, names = 0, quiet = 0, i = 1, found = 0, bad = 0, files;
+    int invert = 0, numbers = 0, counting = 0, names = 0, quiet = 0, i = 1, found = 0, bad = 0, undecided = 0, files;
     lu_prog = "grep";
     for(; i < argc && argv[i][0] == '-' && argv[i][1] && !pattern; i++) {
         const char *o;
@@ -156,7 +157,10 @@ int main(int argc, char **argv) {
         while((n = lu_getline(f, &line, &cap, &nl)) >= 0) {
             int hit = matches(pattern, line, (size_t)n);
             lineno++;
-            if(hit < 0) bad = 1;
+            if(hit < 0) {
+                undecided = 1;
+                continue;
+            }
             if((hit > 0) == invert) continue;
             found = 1;
             count++;
@@ -182,6 +186,6 @@ int main(int argc, char **argv) {
         if(!files) break;
     }
     free(line);
-    if(bad && !(quiet && found)) return 2;
+    if(undecided || (bad && !(quiet && found))) return 2;
     return found ? 0 : 1;
 }

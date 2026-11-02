@@ -50,6 +50,7 @@ def run(prog, args, stdin, files, utf8, timeout=TIMEOUT):
     d = tempfile.mkdtemp(prefix='sedtest')
     try:
         for name, data in files.items():
+            os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
             with open(os.path.join(d, name), 'wb') as f:
                 f.write(data)
         env = dict(os.environ)
@@ -99,6 +100,15 @@ def compare(real, mine, args, stdin=b'', files=None, utf8=False, what='sed'):
         if r[2] != m[2]:
             print('   files: real', r[2], 'ours', m[2])
     return True
+
+
+def expect(prog, args, stdin=b'', files=None, status=0, out=None, after=None, said=None):
+    """what no real tool can be asked: ours against what is written here"""
+    global checks
+    checks += 1
+    m = run(prog, args, stdin, files or {}, False)
+    if m[1] != status or (out is not None and m[0] != out) or (after is not None and m[2] != after) or (said is not None and said not in m[3]):
+        fail('%s %r on %r: status %d, %r, files %r, said %r' % (os.path.basename(prog), args, stdin[:60], m[1], m[0][:80], {k: v[:40] for k, v in m[2].items()}, m[3][:120]))
 
 
 TEXT = b'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n'
@@ -341,6 +351,20 @@ def malformed():
         fail('a message: %r' % m[3])
 
 
+def undecided():
+    """a line on which the search gave up matches no more than it fails to, whatever the options: status 2"""
+    big = b'abcdefghij' * 300000 + b'\n'
+    pattern = '\\(.\\).*\\1'
+    for options in ([], ['-q'], ['-v'], ['-qv'], ['-c'], ['-cv'], ['-l'], ['-lv'], ['-n']):
+        expect(GREP, options + [pattern, 'f'], files={'f': big}, status=2, said=b'grep: ')
+    expect(GREP, ['-cv', pattern, 'f'], files={'f': big}, status=2, out=b'0\n')
+    expect(GREP, [pattern, 'f'], files={'f': big + b'xx\n'}, status=2, out=b'xx\n')    # the lines that were decided still count
+    expect(GREP, ['-v', pattern, 'f'], files={'f': big + b'xy\n'}, status=2, out=b'xy\n')
+    expect(GREP, ['-q', pattern, 'f'], files={'f': big + b'xx\n'}, status=2)
+    expect(GREP, ['-q', pattern, 'f'], files={'f': b'xx\n' + big}, status=0)            # it stopped before that line
+    expect(GREP, ['-q', pattern, 'f', 'nosuch'], files={'f': b'xx\n'}, status=0)        # a file not there, as POSIX says for -q
+
+
 GREP_CASES = [
     (['a'], AB), (['^a'], AB), (['a$'], b'a\nba\nab\n'), (['-i', 'A'], AB), (['-v', 'a'], AB), (['-n', 'c'], AB), (['-c', '[ab]'], AB), (['-l', 'a'], AB), (['-q', 'a'], AB), (['-q', 'x'], AB), (['x'], AB), (['-c', 'x'], AB), (['-F', 'a.b'], b'a.b\naxb\n'),
     (['-E', 'a|b'], AB), (['-E', '(a|b)c'], b'ac\nbc\nc\n'), (['-E', 'a+'], b'aa\nb\n'), (['-E', 'a{2}'], b'aa\na\n'), (['a\\{2\\}'], b'aa\na\n'), (['\\(a\\)\\1'], b'aa\nab\n'), (['-E', '(a)\\1'], b'aa\nab\n'), (['-e', 'a'], AB), (['-e', '-x'], b'-x\ny\n'), (['--', '-x'], b'-x\ny\n'),
@@ -381,6 +405,7 @@ def main():
             args, stdin = case[0], case[1]
             files = case[2] if len(case) > 2 else {}
             compare('grep', GREP, args, stdin, files, what='grep')
+    undecided()
     print('test_sed: %d checks, %d failed%s' % (checks, failures, ' (%d scripts did not end in the real sed)' % skipped if skipped else ''))
     return 1 if failures else 0
 

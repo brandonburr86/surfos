@@ -23,8 +23,9 @@ OPTIONS
 
 STATUS
     0 when a line was found, 1 when none was, 2 for trouble: a mistake
-    in the pattern, or a file that cannot be read (with -q, a line found
-    counts for more).
+    in the pattern, a file that cannot be read (with -q, a line found
+    counts for more), or a line the search gave up on, which is neither
+    shown nor counted, with -v too.
 
 EXAMPLES
     grep -n main /hda1/PROG.C
