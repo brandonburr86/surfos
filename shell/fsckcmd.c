@@ -17,7 +17,13 @@ anything holds it, after which every later write of the settings fails (kernel/n
 fsck looks at the mounts in a copy of the table, which holds nothing, and waits a few seconds
 for that one to go, as netman waits for others; one it held in the moment between the two is
 let go of at once. A volume mounted read-write is refused, with the reason, and so is a mount
-of its disk or a partition of it, which nothing here could hold.
+of its disk or a partition of it, which nothing here could hold. The other way round, a look at
+the stick SurfOS started from, unmounted, has it to itself while it runs: a save of the settings
+meanwhile waits its five seconds and gives up (stick_open()).
+
+Its status is the checker's: 0 clean, 1 problems, 2 it could not look (no memory included); and
+130 when Ctrl+C cut it short, as for any command (KCMD_INTERRUPTED), with no word of a repair
+(11/02/26, the third review: an interrupted look at a healthy stick was told to have it repaired).
 
 In a file of its own so that tests/host/test_fsckcmd.c runs the real command over a device
 layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU's list
@@ -27,6 +33,7 @@ layer it scripts. The x86 kernel takes every C file of shell/ by itself; SurfCPU
 #include <blibc_common.h>
 #include <surfos/types.h>
 #include <surfos/task.h>
+#include <surfos/kcmd.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -96,7 +103,7 @@ int cmd_fsck(int argc, char **argv) {
         if(nm < 0) {
             fs_leave();
             printf("    fsck: no memory to look at the mounts\n");
-            return CMD_FAIL;
+            return FAT_CHECK_TROUBLE;
         }
         if(!nm) {
             if(vfs_hold_mount(d, path, sizeof(path), &root, &readonly) != 0) { root = NULL; break; }   /* not mounted */
@@ -112,7 +119,7 @@ int cmd_fsck(int argc, char **argv) {
         if(sleep_intr(200) != 0) {
             fs_leave();
             printf("    interrupted\n");
-            return CMD_FAIL;
+            return KCMD_INTERRUPTED;
         }
     }
     if(root && !readonly) {
@@ -132,6 +139,7 @@ int cmd_fsck(int argc, char **argv) {
     if(root) vfs_release_mount(root);
     else vfs_bdev_change_end(d);
     fs_leave();
+    if(res.stopped) return KCMD_INTERRUPTED;                 /* it said "interrupted": no verdict, and no word of a repair */
     if(status == FAT_CHECK_PROBLEMS) printf("    repairs are not available in this version: the stick can be repaired on another computer\n");
     return status;
 }

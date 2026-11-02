@@ -2694,6 +2694,7 @@ def scenario_fsck(args, image, firmware, outdir):
                 vm.ser.sendall(b'\x03')
                 results.append(('Ctrl+C in the wait for /.netman: it ends', vm.expect('interrupted', 60) and vm.expect(PROMPT, 60)))
                 run_steps(vm, results, [
+                    ('echo status $?', ['status 130'], [], 'with status 130, as any command Ctrl+C cuts short'),   # (11/02/26)
                     ('umount /.netman; echo status $?', ['status 0'], [], 'and that mount goes at once'),
                     ('eject usb1', ['safe to remove'], [], 'ejected'),
                 ], timeout=120)

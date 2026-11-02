@@ -2,7 +2,8 @@
    device layer this test scripts, and a fat_check() that records what it was given. What it pins is what only the command
    knows: -r refused before anything is touched, no write function and no repair asked for, the device held from before
    the first read to after the last, a read-only mount held and not taken, netman's mount on /.netman never held but waited
-   for (kernel/netman.c gives its unmount up when something holds it), every fs_enter() with its fs_leave().
+   for (kernel/netman.c gives its unmount up when something holds it), every fs_enter() with its fs_leave(); 11/02/26 (the
+   third review): an interrupted look is 130 with no word of a repair, and no memory to look at the mounts is 2.
    tests/host/test_fsck.c proves the checker; tools/qemu-usb.py's scenario fsck runs the two together on a stick.
    fsckcmd.c is built with its printf() renamed (fsck_printf: the Makefile), so this test keeps the host's. Built like the
    kernel objects and run by `make unittest`. */
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <surfos/task.h>
+#include <surfos/kcmd.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -65,6 +67,7 @@ static int netman_rw;                           /* netman's mount is read-write 
 static int intr_at;                             /* the sleep that Ctrl+C cuts short (0: none) */
 static const char *busy_why;                    /* vfs_bdev_change_begin() refuses */
 static int check_status;
+static int check_stopped;                       /* Ctrl+C cut the checker short */
 static int holding, changing, held_at_check, changing_at_check, sleeps, views, flags_seen, holds_while_listed;
 static struct fat_check_io io_seen;
 static struct vnode the_root;
@@ -164,6 +167,8 @@ int fat_check(const struct fat_check_io *io, int flags, struct fat_check_result 
     ev("check");
     io->read(io->ctx, 0, 1, sector);
     io->say(io->ctx, "a line of the checker");
+    if(check_stopped) io->say(io->ctx, "interrupted");
+    res->stopped = check_stopped != 0;
     return res->status = check_status;
 }
 
@@ -191,6 +196,7 @@ static void script(void) {
     intr_at = 0;
     busy_why = NULL;
     check_status = 0;
+    check_stopped = 0;
     heap_refuses = 0;
 }
 
@@ -235,6 +241,13 @@ static void looks(void) {
     script();
     check_status = FAT_CHECK_CLEAN;
     check(run(2, look) == 0 && !strstr(said, "repairs are not available"), "clean: nothing about repairs");
+
+    script();
+    check_status = FAT_CHECK_PROBLEMS;                  /* what the checker returns when it was stopped */
+    check_stopped = 1;
+    check(run(2, look) == KCMD_INTERRUPTED && strstr(said, "    interrupted\n") && !strstr(said, "repairs are not available"),
+          "Ctrl+C in a look: status 130, as for any command cut short, and no word of a repair");
+    check(!strcmp(events, "hold begin check read end "), "and the device is let go of as after any look");
 
     script();
     run(3, verbose);
@@ -285,12 +298,13 @@ static void netman(void) {
 
     script();
     heap_refuses = 1;
-    check(run(2, look) == CMD_FAIL && strstr(said, "no memory to look at the mounts") && !strstr(events, "hold"), "no memory to look at the mounts: it says so, and holds nothing");
+    check(run(2, look) == FAT_CHECK_TROUBLE && strstr(said, "no memory to look at the mounts") && !strstr(events, "hold"),
+          "no memory to look at the mounts: it says so, status 2, and holds nothing");
 
     script();
     netman_for = -1;
     intr_at = 2;
-    check(run(2, look) == CMD_FAIL && strstr(said, "interrupted") && !strstr(events, "check"), "Ctrl+C while it waits: interrupted, nothing read");
+    check(run(2, look) == KCMD_INTERRUPTED && strstr(said, "interrupted") && !strstr(events, "check"), "Ctrl+C while it waits: interrupted, status 130, nothing read");
 }
 
 int main(void) {
