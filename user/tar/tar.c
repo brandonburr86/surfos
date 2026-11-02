@@ -14,9 +14,10 @@ members to take: a name takes a folder's contents too.
 c writes ustar: file times, no owners, and each file's mode as a Unix expects it, 0644, since FAT
 has none. A leading / or anything up to a .. is left out of the names in the archive, with a
 message, because x would refuse them. A name that will not go into ustar's two fields is left out,
-with a message. The archive is not put into itself. A file that shrinks while it is read is filled
-out with zeros, so the archive stays sound, and said. An archive that exists is replaced only by
-one that went right: with anything said above but the / and the .., the old one stays.
+with a message. The archive is not put into itself, which is a note and no trouble. A file that
+shrinks while it is read is filled out with zeros, so the archive stays sound, and said. An archive
+that exists is replaced only by one that went right, and an archive that would hold nothing
+replaces nothing and is not made: in both cases the status is 2.
 
 x reads what tarfile.h lists. A name from an archive becomes a path only through ar_safe_path():
 what is absolute or has a .. is refused, and so is what FAT cannot hold. Links, devices, sparse
@@ -67,6 +68,7 @@ static int gzipped, verbose, trouble;
 static int fd = -1;                     /* the archive */
 static struct stat archive_st;          /* x: what it is, for a member of the same name */
 static unsigned int in_record;          /* bytes written into the current record */
+static unsigned long added;             /* c: members that went in */
 static char self[PATH_MAX], self_tmp[PATH_MAX];     /* c: the archive's absolute name, and its new file's */
 static FILE *names_to;                  /* where v's names go */
 
@@ -160,6 +162,7 @@ static int add_file(const char *path, const char *member) {
     }
     say_name(member);
     if(archive_write(header, TAR_BLOCK) < 0) goto bad_write;
+    added++;
     left = st.st_size;
     while(left) {
         unsigned int want = left < BUF_SIZE ? left : BUF_SIZE;
@@ -196,8 +199,10 @@ static int add_path(const char *path, size_t skip) {
         return 0;
     }
     if(*member && excluded(member)) return 0;
-    if(is_archive(path)) {
-        member_say(path, "this is the archive: left out");
+    if(is_archive(path)) {                              /* a note: tar cf a.tar . must work the second time too */
+        char show[SHOW_SIZE];
+        ar_show_name(path, show, sizeof(show));
+        fprintf(stderr, "tar: %s: this is the archive: left out\n", show);
         return 0;
     }
     if(!strcmp(st.fs, "devfs")) {
@@ -215,6 +220,7 @@ static int add_path(const char *path, size_t skip) {
         } else {
             say_name(dir);
             if(archive_write(header, TAR_BLOCK) < 0) return -1;
+            added++;
         }
     }
     {
@@ -317,6 +323,13 @@ static int do_create(void) {
     if(r == -1) fprintf(stderr, "tar: %s: %s\n", archive, strerror(errno));
     if(r) {
         if(is_file) of_drop(&out, "tar");
+        return 2;
+    }
+    /* An archive with nothing in it holds nobody's work: it replaces nothing, and is not made. */
+    if(!added) {
+        if(is_file) of_drop(&out, "tar");
+        fprintf(stderr, "tar: %s: nothing went in, so %s\n", archive, !is_file ? "the archive is empty" :
+                out.replacing ? "the archive that was there stays as it was" : "no archive is made");
         return 2;
     }
     /* The old archive may be the only copy of what this one could not read: it goes only for one that went right. */
@@ -564,6 +577,7 @@ int main(int argc, char **argv) {
     found = NULL;
     mode = 0;
     gzipped = verbose = trouble = nexcludes = nitems = 0;
+    added = 0;
     archive = "-";
     in_record = 0;
     self[0] = self_tmp[0] = 0;

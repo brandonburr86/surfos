@@ -23,9 +23,10 @@ DESCRIPTION
     file's time: every file unpacked is as new. In an archive made
     here every file is 0644 and every folder 0755.
 
-    tar refuses a name that is absolute or holds .., and one with
-    a character FAT does not allow (: * ? " < > | \), or that ends in
-    a space or a dot. Links, devices and sparse files are skipped.
+    tar refuses a name that is absolute or holds .., and one with a
+    control character or a character FAT does not allow
+    (: * ? " < > | \), or that ends in a space or a dot. Links, devices
+    and sparse files are skipped.
     Each of those is said and the status is then 2; the entries around
     it are still taken. c leaves a leading / out of the names, and
     everything up to a .., and says so.
@@ -39,12 +40,12 @@ DESCRIPTION
     A member that would land on the archive itself is skipped.
 
     With c, an archive that exists is replaced only if everything went
-    in: after any message but the two about names above, the old one
-    stays as it was, and that is said. A folder holding the archive
-    counts, since the archive is left out of itself: write it elsewhere
-    or delete the old one first. A name of more than 100 bytes without
-    a / among its last 100 will not go into a ustar archive: it is left
-    out, and said.
+    in: otherwise the old one stays as it was, the status is 2, and
+    that is said. The archive itself, found in a folder being archived,
+    is left out with a note, which is no trouble. An archive that would
+    hold nothing replaces nothing, and none is made. A name of more
+    than 100 bytes without a / among its last 100 will not go into a
+    ustar archive: it is left out, and said.
 
     The status is 0, or 2 if anything was skipped or went wrong.
 

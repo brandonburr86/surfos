@@ -373,7 +373,7 @@ static void test_tool(void) {
     ars_puts("/d/a.txt", "x\n");
     ars_mkdir("/d/sub");
     ars_chdir("/d");
-    check(ars_cmd(tar_main, "tar cf a.tar .") == 2 && has(ars_stderr(), "the archive"), "an archive inside its own tree is left out, and said");
+    check(ars_cmd(tar_main, "tar cf a.tar .") == 0 && has(ars_stderr(), "the archive"), "an archive inside its own tree is left out, and said");
     ars_cmd(tar_main, "tar tf a.tar");
     p = ars_stdout(&n);
     {
@@ -383,7 +383,7 @@ static void test_tool(void) {
         check(has(text, "./a.txt") && !has(text, "a.tar"), "... it is not in it");
         free(text);
     }
-    check(ars_cmd(tar_main, "tar cf A.TAR .") == 2 && !has(ars_list(), ".tmp"), "over itself, in other capitals: its new file is left out too, and is gone");
+    check(ars_cmd(tar_main, "tar cf A.TAR .") == 0 && !has(ars_list(), ".tmp"), "over itself, in other capitals: its new file is left out too, and is gone");
     ars_cmd(tar_main, "tar tf a.tar");
     p = ars_stdout(&n);
     {
@@ -1432,6 +1432,10 @@ static void test_old_archive(void) {
     old_tree();
     old_stands("tar cf a.tar a.tar", "the archive as its only name");
     old_tree();
+    old_stands("tar cf /d/a.tar --exclude=a.tar /d/a.tar", "the archive excluded as well");
+    old_tree();
+    old_stands("tar cf /d/a.tar --exclude=* /src", "everything excluded");
+    old_tree();
     {
         char name[220], path[240];
         memset(name, 'n', 200);
@@ -1440,6 +1444,28 @@ static void test_old_archive(void) {
         ars_puts(path, "a name that will not go in ustar\n");
     }
     old_stands("tar cf /d/a.tar -C / src", "a name that does not fit");
+
+    /* The archive left out of itself is a note: run twice in one folder, tar must work both times. */
+    ars_reset();
+    ars_puts("/d/a.txt", "x\n");
+    ars_mkdir("/d/sub");
+    ars_chdir("/d");
+    check(ars_cmd(tar_main, "tar cf a.tar .") == 0 && has(ars_stderr(), "left out"), "an archive in its own tree: left out, said, and no trouble");
+    check(ars_cmd(tar_main, "tar cf a.tar .") == 0 && has(ars_stderr(), "left out") && !has(ars_stderr(), "stays as it was"), "and the second time too");
+    check(!has(ars_list(), ".tmp"), "... with nothing left behind");
+    ars_cmd(tar_main, "tar tf a.tar");
+    check(has((const char *)ars_stdout(NULL), "./a.txt") && !has((const char *)ars_stdout(NULL), "a.tar") && !has((const char *)ars_stdout(NULL), ".tmp"),
+          "... and it holds the rest, and neither itself nor its own new file");
+    ars_puts("/d/b.txt", "added since\n");
+    check(ars_cmd(tar_main, "tar cf A.TAR .") == 0, "in other capitals as well");
+    ars_cmd(tar_main, "tar tf a.tar");
+    check(has((const char *)ars_stdout(NULL), "./b.txt"), "... and the archive is the new one");
+    /* An archive with nothing in it replaces nothing, and is not made: it holds no one's work. */
+    ars_reset();
+    ars_puts("/src/one.txt", "first\n");
+    check(ars_cmd(tar_main, "tar cf /new.tar --exclude=* /src") == 2 && has(ars_stderr(), "nothing went in") && !ars_exists("/new.tar"), "no archive that exists, and nothing to put in one: none is made");
+    check(ars_cmd(tar_main, "tar cf /new.tar /missing") == 2 && !ars_exists("/new.tar"), "the same with a name that is not there");
+    check(ars_cmd(tar_main, "tar cf - --exclude=* /src") == 2 && has(ars_stderr(), "nothing went in"), "to standard output it can only be said");
 
     /* nothing wrong: replaced */
     old_tree();
