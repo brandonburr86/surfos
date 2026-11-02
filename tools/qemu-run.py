@@ -1371,6 +1371,42 @@ SMOKE = [
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 11/01/26 (the command-line suite, track diff): on the FAT disk, where saving goes through saveutil.h's rename: diff in its
+    # forms and its status, patch through it and back with -R, a file made and one refused, a .rej, cmp, then one line each of
+    # the small tools. tests/host/test_diff.c and tests/test_cli_diff.py hold the depth
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-diff', ['cli-diff\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "a\\nb\\nc\\n" > D1.TXT; printf "a\\nB\\nc\\nd\\n" > D2.TXT; diff D1.TXT D2.TXT; echo status $?; cd /',
+       ['2c2\r\n< b\r\n---\r\n> B\r\n3a4\r\n> d\r\n', 'status 1\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -u D1.TXT D2.TXT > D.DIF; head -4 D.DIF | tail -2; patch D1.TXT D.DIF; cmp D1.TXT D2.TXT; echo same $?; cd /',
+       ['@@ -1,3 +1,4 @@\r\n a\r\n', 'patching file D1.TXT\r\n', 'same 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; patch -R D1.TXT D.DIF; cmp D1.TXT D2.TXT; echo differ $?; ls D1.TXT.tmp; cd /', ['patching file D1.TXT\r\n',
+       'D1.TXT D2.TXT differ: byte 3, line 2\r\n', 'differ 1\r\n', 'No such file', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -c D1.TXT D2.TXT | tail -5; diff -q D1.TXT D1.TXT; echo status $?; cd /',
+       ['--- 1,4 ----\r\n  a\r\n! B\r\n  c\r\n+ d\r\n', 'status 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -u /dev/null D2.TXT > N.DIF; rm D2.TXT; patch -p0 -i N.DIF; cat D2.TXT; echo status $?; cd /',
+       ['patching file D2.TXT\r\n', 'a\r\nB\r\nc\r\nd\r\n', 'status 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "x\\n" > D3.TXT; patch D3.TXT D.DIF; echo status $?; head -3 D3.TXT.rej | tail -1; cd /',
+       ['1 out of 1 hunk FAILED -- saving rejects to file D3.TXT.rej\r\n', 'status 1\r\n', '@@ -1,3 +1,4 @@\r\n', shown('SURF \u224b> ')]),
+      ('printf "%s\\n" "--- /x/y" "+++ /x/y" "@@ -1 +1 @@" "-a" "+b" | patch -p0; echo status $?', ['refused', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; seq 5000 > S1.TXT; seq 5000 | grep -v 777 > S2.TXT; diff S1.TXT S2.TXT | grep -c d; rm S1.TXT S2.TXT D.DIF N.DIF D1.TXT D2.TXT D3.TXT D3.TXT.rej; cd /',
+       ['5\r\n', shown('SURF \u224b> ')]),
+      ('printf "a\\nb\\n" > /hda1/C1.TXT; printf "b\\nc\\n" > /hda1/C2.TXT; comm /hda1/C1.TXT /hda1/C2.TXT; comm -12 /hda1/C1.TXT /hda1/C2.TXT',
+       ['a\r\n\t\tb\r\n\tc\r\nb\r\n', shown('SURF \u224b> ')]),
+      ('printf "1 x\\n2 y\\n" > /hda1/J1.TXT; printf "1 p\\n3 q\\n" > /hda1/J2.TXT; join /hda1/J1.TXT /hda1/J2.TXT; join -v 2 /hda1/J1.TXT /hda1/J2.TXT',
+       ['1 x p\r\n3 q\r\n', shown('SURF \u224b> ')]),
+      ('rm /hda1/C1.TXT /hda1/C2.TXT /hda1/J1.TXT /hda1/J2.TXT; seq 4 | paste - -; seq 3 | paste -s -d ,', ['1\t2\r\n3\t4\r\n1,2,3\r\n', shown('SURF \u224b> ')]),
+      ('echo abcdefgh | fold -w 3; printf "a\\n\\nb\\n" | nl; echo stressed | rev',
+       ['abc\r\ndef\r\ngh\r\n', '     1\ta\r\n       \r\n     2\tb\r\n', 'desserts\r\n', shown('SURF \u224b> ')]),
+      ('basename /hda1/www/index.html .html; dirname /hda1/www/index.html', ['index\r\n/hda1/www\r\n', shown('SURF \u224b> ')]),
+      ('echo hi | od -c; echo hi | od -A x -t x1; echo hello | base64; echo aGVsbG8K | base64 -d',
+       ['0000000   h   i  \\n\r\n0000003\r\n', '000000 68 69 0a\r\n000003\r\n', 'aGVsbG8K\r\nhello\r\n', shown('SURF \u224b> ')]),
+      ('printf "\\001\\002hello world\\003ab\\004" | strings; printf "\\001abc\\002" | strings -n 3', ['hello world\r\nabc\r\n', shown('SURF \u224b> ')]),
+      ('file /initrd/bin/hello /initrd/motd /initrd/etc', ['/initrd/bin/hello: ELF 32-bit LSB executable, Intel 80386\r\n',
+       '/initrd/motd: ', ' text', '/initrd/etc: directory\r\n', shown('SURF \u224b> ')]),
+      ('tree -d /initrd/etc | tail -3; cal 11 2026; cal | head -2 | tail -1', ['ssl\r\n\r\n1 directory\r\n', '   November 2026\r\nSu Mo Tu We Th Fr Sa\r\n 1  2  3',
+       '29 30\r\nSu Mo Tu We Th Fr Sa\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],
