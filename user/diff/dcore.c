@@ -14,7 +14,7 @@ other wave's diagonal is (w - h) - k, and they have met when their two x togethe
 
 When the cap stops a search, nothing says which point the shortest edit goes through, and the cut is a guess. Two rules make
 it, chosen by measuring the edits they give on files of several shapes (tests/host/cli/measure_dcore.c; the account of this
-track has the tables):
+track has the tables), and a fallback for when the waves hold nothing to go by:
 
   - Where the waves reached common diagonals, take those on which each wave's point is well on its way, with four fifths or more
     of the progress of that wave's furthest point, and cut at both points of the one where the waves stopped nearest each
@@ -27,12 +27,16 @@ track has the tables):
     lines it should have matched for good. So a point is valued at four times its progress, less how far it has strayed from
     that line at the distance it has come. Each wave's best is taken, both when they leave a box between them, or else the
     better of the two.
+  - Before both, when neither wave met a single line of the other file, cut_at_far_match(): a block moved further than the cap
+    leaves the waves with nothing to choose by, and the rules above then cut a cap's worth of lines away at a time (a block of
+    4,001 lines moved down 40,000 gave 9 times the shortest edit). Such a block shows at the box's edges instead.
 
 Why this keeps the time: what a wave does sliding along its diagonals is at most its diagonals times the furthest it got, so a
 cut must take a fair part of that out of the box. The first rule's points have four fifths of their waves' progress, and the
 parts at the corners are within the cap. In the second a point's stray is at most twice its progress, so its value is between
 two and four times that, and the point taken has at least half the progress of its own wave's furthest, and of the other's when
-it is taken alone. So every cut pays for its search, and the total is proportional to the cap times the lines.
+it is taken alone. The fallback's cut is further than the cap from its corner, or a wave would have met that line, and its scan
+is one pass over the box. So every cut pays for its search, and the total is proportional to the cap times the lines.
 
 SEARCH_CAP: 4000, measured from 1000 to 8000. At 4000 every shape was within half a point of the best that any cap up to 6000
 gave: moved blocks within 2% of the shortest, drifting files within 13%, the sorted file 19%. A larger cap costs time in
@@ -59,6 +63,7 @@ struct wave {
     int low, high;                      /* the diagonals of its last edit */
     int before_low, before_high;        /* and of the one before */
     int zero;                           /* reach[zero] is diagonal 0 */
+    int matched;                        /* it has met a line the other file has */
 };
 
 struct area {
@@ -94,6 +99,7 @@ static int wave_edit(struct wave *v, const struct wave *other, int d, int w, int
             x++;
             y++;
         }
+        if(x > REACH(v, k)) v->matched = 1;
         REACH(v, k) = x;
         if(other) {
             int theirs = (w - h) - k;
@@ -198,6 +204,64 @@ static void cut_on_course(const struct wave *f, const struct wave *r, const stru
     }
 }
 
+/* how many lines agree from (x, y) on, inside the box: forwards, or with way -1 backwards, from the lines before it */
+static int run_from(const struct search *s, const struct area *q, int x, int y, int way) {
+    int n = 0;
+    if(way > 0)
+        while(x + n < q->x1 && y + n < q->y1 && s->a[x + n] == s->b[y + n]) n++;
+    else
+        while(x - n > q->x0 && y - n > q->y0 && s->a[x - n - 1] == s->b[y - n - 1]) n++;
+    return n;
+}
+
+/* The fallback when neither wave met a single line the other file has: what the files share starts further than the cap
+   from both corners, and the waves hold nothing to choose by. That is what a large block moved looks like: the box's first
+   line of one file is further down the other, past the block, or its last line further up. Each of those four is looked
+   for, its nearest place only, and taken when the lines that agree from there are at least as many as the edits it takes to
+   get there; of those, the one nearest its corner. The cut is there, and the part before it is the edits. 0: none */
+static int cut_at_far_match(const struct search *s, const struct area *q, struct cut *c) {
+    int w = q->x1 - q->x0, h = q->y1 - q->y0, best = INT_MAX, i;
+    for(i = 1; i < w && i < best; i++)          /* b's first line further down a */
+        if(s->a[q->x0 + i] == s->b[q->y0]) {
+            if(run_from(s, q, q->x0 + i, q->y0, 1) >= i) {
+                best = i;
+                c->x[0] = q->x0 + i;
+                c->y[0] = q->y0;
+            }
+            break;
+        }
+    for(i = 1; i < h && i < best; i++)          /* a's first line further down b */
+        if(s->b[q->y0 + i] == s->a[q->x0]) {
+            if(run_from(s, q, q->x0, q->y0 + i, 1) >= i) {
+                best = i;
+                c->x[0] = q->x0;
+                c->y[0] = q->y0 + i;
+            }
+            break;
+        }
+    for(i = 1; i < w && i < best; i++)          /* b's last line further up a */
+        if(s->a[q->x1 - 1 - i] == s->b[q->y1 - 1]) {
+            if(run_from(s, q, q->x1 - i, q->y1, -1) >= i) {
+                best = i;
+                c->x[0] = q->x1 - i;
+                c->y[0] = q->y1;
+            }
+            break;
+        }
+    for(i = 1; i < h && i < best; i++)          /* a's last line further up b */
+        if(s->b[q->y1 - 1 - i] == s->a[q->x1 - 1]) {
+            if(run_from(s, q, q->x1, q->y1 - i, -1) >= i) {
+                best = i;
+                c->x[0] = q->x1;
+                c->y[0] = q->y1 - i;
+            }
+            break;
+        }
+    if(best == INT_MAX) return 0;
+    c->points = 1;
+    return 1;
+}
+
 /* where to cut the box, nothing being equal at either of its ends */
 static void find_cut(const struct search *s, const struct area *q, struct cut *c) {
     struct wave f, r;
@@ -211,8 +275,8 @@ static void find_cut(const struct search *s, const struct area *q, struct cut *c
     r.a = s->a + q->x1 - 1;
     r.b = s->b + q->y1 - 1;
     r.way = -1;
-    f.low = f.high = f.before_low = f.before_high = 0;
-    r.low = r.high = r.before_low = r.before_high = 0;
+    f.low = f.high = f.before_low = f.before_high = f.matched = 0;
+    r.low = r.high = r.before_low = r.before_high = r.matched = 0;
     REACH(&f, 0) = REACH(&r, 0) = 0;
     c->points = 1;
     for(d = 1; d <= s->cap; d++) {
@@ -231,6 +295,7 @@ static void find_cut(const struct search *s, const struct area *q, struct cut *c
             return;
         }
     }
+    if(!f.matched && !r.matched && cut_at_far_match(s, q, c)) return;
     if(!cut_where_near(&f, &r, q, c)) cut_on_course(&f, &r, q, c);
 }
 

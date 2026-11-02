@@ -12,7 +12,7 @@
 #include <time.h>
 #include "dcore.h"
 
-#define SHAPES 7
+#define SHAPES 9
 #define EXACT_LINES 40000
 
 static unsigned long long seed;
@@ -118,6 +118,13 @@ static long long make(int shape, unsigned n, unsigned *a, unsigned *na, unsigned
         }
         if(shape == 6) made = -made;            /* a copy may match: the shortest is no longer than this */
         break;
+    case 7:                                     /* a quarter of the lines and one more, moved from the start to the end */
+    case 8:                                     /* the same moved from the end to the start */
+        t = n / 4 + 1;
+        for(i = 0; i < n; i++) a[i] = i;
+        for(i = 0; i < n; i++) b[k++] = shape == 7 ? (i + t) % n : (i + n - t) % n;
+        made = 2LL * t;                         /* the block out and in again: the rest is in order */
+        break;
     }
     *nb = k;
     return made;
@@ -132,8 +139,9 @@ static long long edits(const unsigned char *ma, unsigned na, const unsigned char
 }
 
 int main(int argc, char **argv) {
-    static const char *const names[SHAPES] = { "sorted", "blocks", "edited", "unrelated", "permuted", "drifting", "drift+copies" };
-    const char *shapes = "0123456";
+    static const char *const names[SHAPES] = { "sorted", "blocks", "edited", "unrelated", "permuted", "drifting", "drift+copies",
+                                               "moved down", "moved up" };
+    const char *shapes = "012345678";
     unsigned n = 20000, caps[16], ncaps = 0, i;
     unsigned *a, *b;
     unsigned char *ma, *mb;

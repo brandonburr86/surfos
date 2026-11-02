@@ -172,6 +172,32 @@ static void test_search_drift(void) {
     free(mb);
 }
 
+/* A block moved further than the cap, down or up: neither wave meets a line the other file has, so the waves hold nothing to
+   cut by. The second review found the moved-down block cut away a cap's worth of lines at a time, 9 times the shortest edit at
+   40,000 lines; the look along the box's edges finds where the block went */
+static void test_search_moved(void) {
+    unsigned n = 4000, block = 401, cap = 300, i, way;
+    unsigned *a = malloc(n * sizeof(*a)), *b = malloc(n * sizeof(*b));
+    unsigned char *ma = malloc(n), *mb = malloc(n);
+    for(way = 0; way < 2; way++) {
+        unsigned edits = 0;
+        for(i = 0; i < n; i++) {
+            a[i] = i;
+            b[i] = way ? (i + n - block) % n : (i + block) % n;
+        }
+        memset(ma, 0, n);
+        memset(mb, 0, n);
+        check(dc_compare_limit(a, n, b, n, ma, mb, cap) == 0, "a moved block under a cap");
+        for(i = 0; i < n; i++) edits += ma[i] + mb[i];
+        check(edits == 2 * block, way ? "a block moved up past the cap: the shortest edit" : "a block moved down past the cap: the shortest edit");
+        if(edits != 2 * block) printf("  %u edits, %u at best\n", edits, 2 * block);
+    }
+    free(a);
+    free(b);
+    free(ma);
+    free(mb);
+}
+
 /* repeated lines: an insertion ends as far down as it will go */
 static void test_slide(void) {
     unsigned a[] = { 1, 2, 2, 3 }, b[] = { 1, 2, 2, 2, 3 };
@@ -926,6 +952,7 @@ int main(int argc, char **argv) {
     test_search();
     test_search_large();
     test_search_drift();
+    test_search_moved();
     test_slide();
     test_round_trips(rounds);
     test_blocks();
