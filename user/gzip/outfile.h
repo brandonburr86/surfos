@@ -12,7 +12,7 @@ is never truncated, and until of_commit() it is as it was.
     r = of_open(&f, "tar", path, 1);            0, or -1 said; OF_EXISTS when replace is 0 and it does
     ... write to f.fd ...
     of_commit(&f, "tar", 0);                    0, or -1 said; 1: fsync a new file too
-    or of_drop(&f);                             failed part way
+    or of_drop(&f, "tar");                      failed part way
 
 path must stay valid until then. of_parents() makes the folders above a path.
 */
@@ -67,22 +67,41 @@ static OF_UNUSED int of_open(struct out_file *f, const char *prog, const char *p
     return 0;
 }
 
+/* A short file must not pass for a whole one: if it will not go, that is said. */
+static OF_UNUSED void of_remove(const char *prog, const char *path) {
+    if(unlink(path) < 0 && errno != ENOENT) {
+        fprintf(stderr, "%s: %s: it cannot be deleted (%s): the short file stays\n", prog, path, strerror(errno));
+    }
+}
+
+/* saveutil.h does not say whether its own unlink worked */
+static OF_UNUSED void of_left_behind(const char *prog, const char *tmp) {
+    struct stat st;
+    if(stat(tmp, &st) == 0) fprintf(stderr, "%s: %s: it cannot be deleted: the short file stays\n", prog, tmp);
+}
+
 /* failed part way: what the user had is as it was, and what was made goes */
-static OF_UNUSED void of_drop(struct out_file *f) {
+static OF_UNUSED void of_drop(struct out_file *f, const char *prog) {
     if(f->replacing) {
+        char tmp[PATH_MAX];
+        memcpy(tmp, f->save.tmp, sizeof(tmp));
         su_abort(&f->save);
+        of_left_behind(prog, tmp);
         return;
     }
     close(f->fd);
-    unlink(f->path);
+    of_remove(prog, f->path);
 }
 
 /* all written: under its name. sync_new: a new file is on the disk too (a replaced one always is) */
 static OF_UNUSED int of_commit(struct out_file *f, const char *prog, int sync_new) {
     int r = 0, e = 0;
     if(f->replacing) {
+        char tmp[PATH_MAX];
+        memcpy(tmp, f->save.tmp, sizeof(tmp));
         r = su_commit(&f->save);
         if(r) su_say(prog, &f->save, r);
+        if(r == -1) of_left_behind(prog, tmp);
         return r ? -1 : 0;
     }
     if(sync_new && fsync(f->fd) < 0) {
@@ -96,7 +115,7 @@ static OF_UNUSED int of_commit(struct out_file *f, const char *prog, int sync_ne
     if(r) {
         errno = e;
         of_say(prog, f->path);
-        unlink(f->path);
+        of_remove(prog, f->path);
     }
     return r;
 }

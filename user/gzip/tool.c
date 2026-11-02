@@ -215,7 +215,7 @@ static int do_file(const struct options *o, const char *name) {
                           : compress(o, in, out.fd, name, target, base_name(name), st.st_mtime);
         close(in);
         if(r < 0) {
-            of_drop(&out);
+            of_drop(&out, o->prog);
             return -1;
         }
         if(of_commit(&out, o->prog, 1) < 0) return -1;

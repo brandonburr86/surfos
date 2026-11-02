@@ -316,12 +316,12 @@ static int do_create(void) {
     if(!r && finish_archive() < 0) r = -1;
     if(r == -1) fprintf(stderr, "tar: %s: %s\n", archive, strerror(errno));
     if(r) {
-        if(is_file) of_drop(&out);
+        if(is_file) of_drop(&out, "tar");
         return 2;
     }
     /* The old archive may be the only copy of what this one could not read: it goes only for one that went right. */
     if(is_file && out.replacing && trouble) {
-        of_drop(&out);
+        of_drop(&out, "tar");
         fprintf(stderr, "tar: %s: not everything went in, so the archive that was there stays as it was\n", archive);
         return 2;
     }
@@ -404,7 +404,7 @@ static int extract_file(char *path) {
         }
     }
     if(n < 0 || failed) {
-        of_drop(&out);
+        of_drop(&out, "tar");
         return failed ? 0 : -1;
     }
     if(of_commit(&out, "tar", 0) < 0) trouble = 1;

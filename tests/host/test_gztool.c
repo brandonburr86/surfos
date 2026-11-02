@@ -381,7 +381,7 @@ static void test_format(void) {
 /* one run with the kth change failing, or the disk gone from it */
 static void test_failures(void) {
     static const int modes[] = { 0, 1 };
-    size_t zn;
+    size_t zn, whole = 0;
     unsigned char *z;
     int total, k, m;
 
@@ -465,6 +465,39 @@ static void test_failures(void) {
     ars_put("/a.gz", z, zn);
     ars_quota(zn + 3);
     check(ars_cmd(gunzip_main, "gunzip /a.gz") == 2 && ars_exists("/a.gz") && !ars_exists("/a"), "the same for gunzip");
+
+    /* the disk gone with the output part made: it cannot be deleted either, and nobody is left to think it is whole */
+    ars_reset();
+    ars_puts("/a", sample);
+    ars_cmd(gzip_main, "gzip /a");
+    total = ars_changes();
+    ars_get("/a.gz", &whole);
+    for(k = 1; k <= total; k++) {
+        size_t now = 0;
+        int st;
+        ars_reset();
+        ars_puts("/a", sample);
+        ars_pull_at(k);
+        st = ars_cmd(gzip_main, "gzip /a");
+        if(st == 2 && ars_get("/a.gz", &now) && now < whole) check(has(ars_stderr(), "stays"), "a short .gz that could not be deleted is said");
+    }
+    ars_reset();
+    ars_puts("/a", sample);
+    ars_puts("/a.gz", "the old one");
+    ars_cmd(gzip_main, "gzip -f /a");
+    total = ars_changes();
+    for(k = 1; k <= total; k++) {
+        size_t now = 0;
+        int st;
+        ars_reset();
+        ars_puts("/a", sample);
+        ars_puts("/a.gz", "the old one");
+        ars_pull_at(k);
+        st = ars_cmd(gzip_main, "gzip -f /a");
+        if(st == 2 && ars_exists("/a.gz.tmp")) check(has(ars_stderr(), "stays") || has(ars_stderr(), "a.gz.tmp"), "a .tmp that could not be deleted is said");
+        check(ars_is("/a.gz", "the old one") || ars_get("/a.gz", &now), "and the file is the old one or the whole new one");
+        if(!ars_is("/a.gz", "the old one")) check(now == whole, "and the file is the old one or the whole new one");
+    }
 
     /* a damaged input never replaces the output */
     {

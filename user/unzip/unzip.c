@@ -290,7 +290,7 @@ static void extract_one(const struct zip_entry *e, const char *name, const char 
     if(!quiet) printf("%s: %s\n", e->method == ZIP_STORED ? " extracting" : "  inflating", show);
     if((why = copy_data(e, data, f.fd))) {
         say(path, why);
-        of_drop(&f);
+        of_drop(&f, "unzip");
         return;
     }
     if(of_commit(&f, "unzip", 0) < 0) trouble = 1;
