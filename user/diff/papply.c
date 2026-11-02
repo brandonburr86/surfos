@@ -181,35 +181,74 @@ static int window_at(const struct phunk *h, unsigned n, unsigned fuzz, struct wi
     return 1;
 }
 
-int pa_locate(struct papply *a, const struct phunk *h, unsigned *at, unsigned *fuzz) {
-    unsigned n, f, *old_lines, where = 0;
+#define NO_MORE 2                       /* at_fuzz(): this fuzz adds nothing */
+
+/* the hunk at one fuzz: 1 and *where, 0, -1 a read failed, or NO_MORE */
+static int at_fuzz(struct papply *a, const struct phunk *h, const unsigned *old_lines, unsigned n, unsigned f, unsigned *where) {
+    struct window w;
+    int found;
+    if(!window_at(h, n, f, &w)) return NO_MORE;
+    if(w.at_top) found = search(a, h, old_lines, w.first, w.count, 0, 1, where);
+    else if(w.at_bottom) found = search(a, h, old_lines, w.first, w.count, (long long)a->t->nlines - w.count, 1, where);
+    else found = search(a, h, old_lines, w.first, w.count, (long long)h->old_start - 1 + a->offset + w.first, 0, where);
+    return a->failed ? -1 : found;
+}
+
+int pa_locate(struct papply *a, struct phunk *h, unsigned *at, unsigned *fuzz, int *reversed) {
+    unsigned n, back_n = 0, f, *old_lines, *back_lines = NULL, where = 0;
     long long guess = (long long)h->old_start - 1 + a->offset;
-    int found = 0;
+    int r = 0, more, more_back;
+    if(reversed) *reversed = 0;
     if(!(old_lines = old_side(h, &n))) {
         a->failed = ENOMEM;
         return -1;
     }
-    if(!n) {                                    /* nothing to compare: it says where, and that is all */
+    if(!n && guess >= a->done && guess <= a->t->nlines) {       /* nothing to compare: it says where, and that is all */
         free(old_lines);
-        if(guess < a->done || guess > a->t->nlines) return 0;
         *at = (unsigned)guess;
         *fuzz = 0;
         return 1;
     }
-    for(f = 0; f <= PATCH_FUZZ && !found && !a->failed; f++) {
-        struct window w;
-        if(!window_at(h, n, f, &w)) break;
-        if(w.at_top) found = search(a, h, old_lines, w.first, w.count, 0, 1, &where);
-        else if(w.at_bottom) found = search(a, h, old_lines, w.first, w.count, (long long)a->t->nlines - w.count, 1, &where);
-        else found = search(a, h, old_lines, w.first, w.count, guess + w.first, 0, &where);
-        if(found) {
-            *at = where;
-            *fuzz = f;
+    if(reversed) {
+        ph_reverse(h);
+        back_lines = old_side(h, &back_n);
+        ph_reverse(h);
+        if(!back_lines) {
+            free(old_lines);
+            a->failed = ENOMEM;
+            return -1;
         }
     }
+    more = n != 0;
+    more_back = back_n != 0;
+    for(f = 0; f <= PATCH_FUZZ && (more || more_back); f++) {
+        if(more) {
+            r = at_fuzz(a, h, old_lines, n, f, &where);
+            if(r == NO_MORE) more = 0;
+            else if(r < 0) break;
+            else if(r) {
+                *at = where;
+                *fuzz = f;
+                break;
+            }
+        }
+        if(more_back) {
+            ph_reverse(h);
+            r = at_fuzz(a, h, back_lines, back_n, f, &where);
+            ph_reverse(h);
+            if(r == NO_MORE) more_back = 0;
+            else if(r < 0) break;
+            else if(r) {
+                *reversed = 1;
+                r = 0;
+                break;
+            }
+        }
+        r = 0;
+    }
     free(old_lines);
-    if(a->failed) return -1;
-    return found;
+    free(back_lines);
+    return r;
 }
 
 /**** writing ****/

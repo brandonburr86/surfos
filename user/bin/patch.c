@@ -12,29 +12,37 @@ patch names; a normal diff names nothing, so it needs file, or the diff line of 
              is used. /dev/null is never touched by this: see below
   -R         the patch was made the other way round: undo it
   -i file    the patch is in this file
-  -o file    the results go there (- for standard output), one after the other, and the files stay
+  -o file    the results go there (- for standard output), one after the other, and the files stay.
+             The file is written only if all of the patch went in and there is something to write;
+             otherwise it stays as it was, and a new one is not made
   -d dir     go to dir first, before anything else
   -N         a patch that looks reversed or already applied is skipped: its hunks go into the .rej,
              and the status is 1. patch never asks, so this is what happens without -N too
   -f         no such look: each hunk simply goes in, or fails
-  --dry-run  read and check everything, and change nothing
+  --dry-run  read and check everything, and change nothing. A file named twice is checked both times as
+             it is now, while a real run works on the first result, so the two can differ
 
 Long names too: --strip=n --reverse --input=f --output=f --directory=d --forward --force.
 
 A hunk that is not where it says is looked for nearby (the offset is said), and if need be with up to
-two of its context lines at each end not compared (the fuzz is said). One that fits nowhere
-goes into <file>.rej, in unified form, and the others still go in. A file whose old name is
-/dev/null is made, and one whose new name is /dev/null is deleted once nothing is left of it. Never
-any question: where others ask, the safe answer is taken and said.
+two of its context lines at each end not compared (the fuzz is said). The file as it was is then
+kept as <file>.orig, unless a file has that name already: that one stays, and it is said. One that
+fits nowhere goes into <file>.rej, in unified form, and the others still go in. The .rej adds up
+over a run; one that was there before stays, and the hunks go to <file>.1.rej and so on, as is
+said. A file whose old name is /dev/null is made, and one whose new name is /dev/null is deleted once
+nothing is left of it. Never any question: where others ask, the safe answer is taken and said.
 
-Status 0 all went in; 1 some hunks did not, or a file was not there; 2 trouble: a patch that is
-damaged, a name refused, a file that cannot be read or written.
+Status 0 all went in; 1 some hunks did not, a file was not there or would be made over one that has
+text in it, or something is left in a file the patch would have deleted; 2 trouble: a patch that
+is damaged, a name refused, a file that cannot be read or written.
 
 Names from a patch are not trusted: one that is absolute or holds a .. is refused, after -p has
-done its work, and the file is left alone. A file that exists is only ever replaced through
-saveutil.h, whole, once its new contents are safely on the disk, so a failure at any point leaves it
-as it was. A new file is made with O_EXCL and deleted again on a failure. A malformed hunk stops
-everything, and drops what was under way on that file. Files patched before it stay patched.
+done its work, and the file is left alone. What is taken from a patch is cleaned before it is printed.
+A file that exists is only ever replaced through saveutil.h, whole, once its new contents are safely
+on the disk, so a failure at any point leaves it as it was. A new file is made with O_EXCL and
+deleted again on a failure. A malformed hunk stops everything, and drops what was under way on that
+file. Files patched before it stay patched. On FAT a file with a descriptor open cannot be replaced
+(EBUSY), so a patch that names its own file leaves both as they were, with status 2.
 */
 
 #include "fileutil.h"
@@ -54,7 +62,14 @@ struct output {
     unsigned long long bytes;
     char *buf;
     const char *path;
+    int appending;                      /* a .rej this run began: added to, and never deleted */
     struct su_save save;
+};
+
+/* a .rej this run made, so that another section of its file adds to it */
+struct rej_note {
+    char *target, *name;
+    struct rej_note *next;
 };
 
 static int strip = -1, reverse, no_check, dry_run;
@@ -62,10 +77,28 @@ static const char *output_name;
 static FILE *talk;                      /* where "patching file" goes: not into the result of -o - */
 static const char *input_name = "standard input";
 static struct output out_file, rej_file, shared_out;
+static struct rej_note *rej_notes;
 
 static int usage(void) {
     fprintf(stderr, "usage: patch [-p n] [-R] [-i patchfile] [-o outfile] [-d dir] [-N] [-f] [--dry-run] [file [patchfile]]\n");
     return 2;
+}
+
+/* a name from a patch, for a message: one at a time */
+static const char *show(const char *name) {
+    static char buf[2 * PATH_MAX];
+    return cli_clean(name, buf, sizeof(buf));
+}
+
+/* su_say(), with the names made fit to print */
+static void say_save(const struct su_save *s, int r) {
+    static struct su_save c;
+    int e = errno;
+    cli_clean(s->path, c.path, sizeof(c.path));
+    cli_clean(s->tmp, c.tmp, sizeof(c.tmp));
+    cli_clean(s->twin, c.twin, sizeof(c.twin));
+    errno = e;
+    su_say("patch", &c, r);
 }
 
 /**** writing ****/
@@ -119,9 +152,7 @@ static void make_parents(const char *path) {
     }
 }
 
-/* path, to replace or to make: 0, or -1 said */
-static int out_open(struct output *o, const char *path) {
-    struct stat st;
+static int out_ready(struct output *o, const char *path) {
     if(!o->buf && !(o->buf = malloc(OUT_BLOCK))) {
         fprintf(stderr, "patch: out of memory\n");
         return -1;
@@ -131,7 +162,15 @@ static int out_open(struct output *o, const char *path) {
     o->err = 0;
     o->bytes = 0;
     o->saved = 0;
+    o->appending = 0;
     o->open_now = 1;
+    return 0;
+}
+
+/* path, to replace or to make: 0, or -1 said */
+static int out_open(struct output *o, const char *path) {
+    struct stat st;
+    if(out_ready(o, path) < 0) return -1;
     if(dry_run) return 0;
     if(!strcmp(path, "-") && o == &shared_out) {
         o->fd = 1;
@@ -139,12 +178,12 @@ static int out_open(struct output *o, const char *path) {
     }
     if(!stat(path, &st)) {
         if(S_ISDIR(st.st_mode)) {
-            fprintf(stderr, "patch: %s: %s\n", path, strerror(EISDIR));
+            fprintf(stderr, "patch: %s: %s\n", show(path), strerror(EISDIR));
             o->open_now = 0;
             return -1;
         }
         if(su_begin(&o->save, path) < 0) {
-            su_say("patch", &o->save, -1);
+            say_save(&o->save, -1);
             o->open_now = 0;
             return -1;
         }
@@ -155,11 +194,70 @@ static int out_open(struct output *o, const char *path) {
     make_parents(path);
     o->fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
     if(o->fd < 0) {
-        fprintf(stderr, "patch: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "patch: %s: %s\n", show(path), strerror(errno));
         o->open_now = 0;
         return -1;
     }
     return 0;
+}
+
+/* the .rej for path: the one this run made, or a new name: a .rej that was there before is the user's, whatever it holds.
+   name, of size bytes, is the one used. 0, or -1 said */
+static int rej_open(const char *path, char *name, size_t size) {
+    struct rej_note *n;
+    int k;
+    for(n = rej_notes; n; n = n->next)
+        if(!strcmp(n->target, path)) break;
+    if(n) {
+        if(snprintf(name, size, "%s", n->name) >= (int)size || out_ready(&rej_file, name) < 0) return -1;
+        rej_file.appending = 1;
+        rej_file.fd = open(name, O_WRONLY | O_APPEND);
+        if(rej_file.fd < 0) {
+            fprintf(stderr, "patch: %s: %s\n", show(name), strerror(errno));
+            rej_file.open_now = 0;
+            return -1;
+        }
+        return 0;
+    }
+    make_parents(path);
+    for(k = 0; k < 10; k++) {
+        if(snprintf(name, size, k ? "%s.%d.rej" : "%s.rej", path, k) >= (int)size) {
+            errno = ENAMETOOLONG;
+            break;
+        }
+        if(out_ready(&rej_file, name) < 0) return -1;
+        rej_file.fd = open(name, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if(rej_file.fd >= 0) break;
+        rej_file.open_now = 0;
+        if(errno != EEXIST) break;
+    }
+    if(!rej_file.open_now) {
+        fprintf(stderr, "patch: %s.rej: %s\n", show(path), strerror(errno));
+        return -1;
+    }
+    n = malloc(sizeof(*n));
+    if(n) {
+        n->target = strdup(path);
+        n->name = strdup(name);
+        n->next = rej_notes;
+        if(n->target && n->name) rej_notes = n;
+    }
+    if(k) {
+        char other[PATH_MAX + 16];
+        fprintf(stderr, "patch: %s.rej is there already, and stays: the rejects go to ", show(path));
+        fprintf(stderr, "%s\n", cli_clean(name, other, sizeof(other)));
+    }
+    return 0;
+}
+
+static void rej_forget(const char *name) {
+    struct rej_note **pp;
+    for(pp = &rej_notes; *pp; pp = &(*pp)->next) {
+        if(!strcmp((*pp)->name, name)) {
+            *pp = (*pp)->next;
+            return;
+        }
+    }
 }
 
 /* the old file stays, and what was new goes */
@@ -170,7 +268,10 @@ static void out_abort(struct output *o) {
     if(o->saved) su_abort(&o->save);
     else {
         close(o->fd);
-        unlink(o->path);
+        if(!o->appending) {
+            unlink(o->path);
+            if(o == &rej_file) rej_forget(o->path);
+        }
     }
 }
 
@@ -180,7 +281,7 @@ static int out_commit(struct output *o) {
     if(!o->open_now) return 0;
     if(dry_run || (o == &shared_out && !strcmp(o->path, "-"))) {
         if(out_flush(o) < 0) {
-            fprintf(stderr, "patch: %s: %s\n", o->path, strerror(o->err));
+            fprintf(stderr, "patch: %s: %s\n", show(o->path), strerror(o->err));
             o->open_now = 0;
             return -1;
         }
@@ -188,7 +289,7 @@ static int out_commit(struct output *o) {
         return 0;
     }
     if(o->err || out_flush(o) < 0) {
-        fprintf(stderr, "patch: %s: %s\n", o->path, strerror(o->err));
+        fprintf(stderr, "patch: %s: %s\n", show(o->path), strerror(o->err));
         out_abort(o);
         return -1;
     }
@@ -196,7 +297,7 @@ static int out_commit(struct output *o) {
     if(o->saved) {
         r = su_commit(&o->save);
         if(r) {
-            su_say("patch", &o->save, r);
+            say_save(&o->save, r);
             return -1;
         }
         return 0;
@@ -204,8 +305,56 @@ static int out_commit(struct output *o) {
     r = fsync(o->fd) < 0 ? errno : 0;
     if(close(o->fd) < 0 && !r) r = errno;
     if(r) {
-        fprintf(stderr, "patch: %s: %s\n", o->path, strerror(r));
-        unlink(o->path);
+        fprintf(stderr, "patch: %s: %s\n", show(o->path), strerror(r));
+        if(!o->appending) {
+            unlink(o->path);
+            if(o == &rej_file) rej_forget(o->path);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+/* the file as it was, in <path>.orig, before it is replaced: when a hunk did not go where it said, that old file may be
+   wanted. O_EXCL: one that is there stays, and it is said. 0, or -1 said: the file is then not to be replaced, as what
+   was to be kept could not be */
+static int keep_old(const char *path) {
+    static char name[PATH_MAX + 8];
+    char *block;
+    int in, out, r = 0;
+    long n;
+    if(snprintf(name, sizeof(name), "%s.orig", path) >= (int)sizeof(name)) {
+        fprintf(stderr, "patch: %s.orig: %s\n", show(path), strerror(ENAMETOOLONG));
+        return -1;
+    }
+    out = open(name, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if(out < 0) {
+        if(errno == EEXIST) {
+            fprintf(stderr, "patch: %s is there already, and stays: the old file is not kept\n", show(name));
+            return 0;
+        }
+        fprintf(stderr, "patch: %s: %s\n", show(name), strerror(errno));
+        return -1;
+    }
+    in = open(path, O_RDONLY);
+    block = malloc(OUT_BLOCK);
+    if(in < 0 || !block) r = in < 0 ? errno : ENOMEM;
+    while(!r && (n = read(in, block, OUT_BLOCK)) != 0) {
+        long done = 0;
+        if(n < 0) r = errno;
+        while(!r && done < n) {
+            long w = write(out, block + done, (size_t)(n - done));
+            if(w <= 0) r = w ? errno : ENOSPC;
+            else done += w;
+        }
+    }
+    free(block);
+    if(in >= 0) close(in);
+    if(!r && fsync(out) < 0) r = errno;
+    if(close(out) < 0 && !r) r = errno;
+    if(r) {
+        unlink(name);
+        fprintf(stderr, "patch: %s: %s\n", show(name), strerror(r));
         return -1;
     }
     return 0;
@@ -262,7 +411,7 @@ static int choose_file(const struct psection *s, const char *given, int creating
         name = stripped(cands[i]);
         if(!name) continue;
         if(!safe_name(name)) {
-            fprintf(stderr, "patch: %s: refused: a name in a patch may not be absolute or hold ..\n", name);
+            fprintf(stderr, "patch: %s: refused: a name in a patch may not be absolute or hold ..\n", show(name));
             return -1;
         }
         if(i == 1) new_at = n;
@@ -276,7 +425,7 @@ static int choose_file(const struct psection *s, const char *given, int creating
         if(exists(names[i])) pick = names[i];
     if(!pick && creating) pick = names[new_at >= 0 ? new_at : 0];
     if(!pick) {
-        fprintf(stderr, "patch: %s: %s\n", names[0], strerror(ENOENT));
+        fprintf(stderr, "patch: %s: %s\n", show(names[0]), strerror(ENOENT));
         return 0;
     }
     *path = pick;
@@ -290,11 +439,7 @@ static int reject(const struct psection *s, const struct phunk *h, const char *p
     if(dry_run) return 0;
     if(!rej_file.open_now) {
         char head[2 * PATCH_NAME_MAX + 16];
-        if(snprintf(rej_name, size, "%s.rej", path) >= (int)size) {
-            fprintf(stderr, "patch: %s.rej: %s\n", path, strerror(ENAMETOOLONG));
-            return -1;
-        }
-        if(out_open(&rej_file, rej_name) < 0) return -1;
+        if(rej_open(path, rej_name, size) < 0) return -1;
         snprintf(head, sizeof(head), "--- %s\n+++ %s\n", s->old_name[0] ? s->old_name : path, s->new_name[0] ? s->new_name : path);
         if(out_put(&rej_file, head, (unsigned)strlen(head)) < 0) return -1;
     }
@@ -321,14 +466,14 @@ static int skip_hunks(struct pinput *in, struct psection *s, struct phunk *h, in
 
 /* 0, 1 or 2 as the status; 3: stop, the input cannot be read on */
 static int one_section(struct pinput *in, struct psection *s, const char *given, struct phunk *h) {
-    static char rej_name[PATH_MAX + 8];
+    static char rej_name[PATH_MAX + 16];
     struct output *o = output_name ? &shared_out : &out_file;
     struct ptarget t;
     struct papply a;
     struct dsrc src;
     const char *path = NULL;
     unsigned total = 0, failed = 0, applied = 0;
-    int r, rc = 0, have_src = 0, old_null, new_null, creating, skipping = 0, gone;
+    int r, rc = 0, have_src = 0, old_null, new_null, creating, skipping = 0, gone, moved = 0;
     if(reverse) ps_reverse(s);
     old_null = !strcmp(s->old_name, "/dev/null");
     new_null = !strcmp(s->new_name, "/dev/null");
@@ -343,29 +488,29 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
         fprintf(talk, "%u hunk%s skipped\n", total, total == 1 ? "" : "s");
         return bad_name ? 2 : 1;
     }
-    fprintf(talk, "%s file %s\n", dry_run ? "checking" : "patching", path);
+    fprintf(talk, "%s file %s\n", dry_run ? "checking" : "patching", show(path));
     if(exists(path)) {
         struct stat st;
-        if(old_null && !stat(path, &st) && st.st_size > 0 && !given) {
-            fprintf(stderr, "patch: %s: already there, and the patch would make it\n", path);
+        if(old_null && !stat(path, &st) && st.st_size > 0) {
+            fprintf(stderr, "patch: %s: already there, and the patch would make it\n", show(path));
             if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
             fprintf(talk, "%u hunk%s skipped\n", total, total == 1 ? "" : "s");
             return 1;
         }
         if(dsrc_open(&src, path) < 0) {
-            fprintf(stderr, "patch: %s: %s\n", path, strerror(errno));
+            fprintf(stderr, "patch: %s: %s\n", show(path), strerror(errno));
             if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
             return 2;
         }
         have_src = 1;
     } else if(!creating) {
-        fprintf(stderr, "patch: %s: %s\n", path, strerror(ENOENT));
+        fprintf(stderr, "patch: %s: %s\n", show(path), strerror(ENOENT));
         if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
         fprintf(talk, "%u hunk%s skipped\n", total, total == 1 ? "" : "s");
         return 1;
     }
     if(pt_load(&t, have_src ? &src : NULL) < 0) {
-        fprintf(stderr, "patch: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "patch: %s: %s\n", show(path), strerror(errno));
         if(have_src) dsrc_close(&src);
         if(skip_hunks(in, s, h, 1, &total) < 0) goto malformed;
         return 2;
@@ -376,23 +521,16 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
         int found = 0;
         total++;
         if(!skipping) {
-            found = pa_locate(&a, h, &at, &fuzz);
+            int back = 0;
+            found = pa_locate(&a, h, &at, &fuzz, h->number == 1 && !no_check ? &back : NULL);
             if(found < 0) goto read_failed;
-        }
-        if(!found && !skipping && h->number == 1 && !no_check) {
-            unsigned at2, fuzz2;
-            int back;
-            ph_reverse(h);
-            back = pa_locate(&a, h, &at2, &fuzz2);
-            ph_reverse(h);
-            if(back < 0) goto read_failed;
             if(back) {
                 fprintf(talk, "Reversed (or previously applied) patch detected!  Skipping patch.\n");
                 skipping = 1;
             }
         }
         if(found) {
-            if(!o->open_now && !(output_name && shared_out.open_now)) {
+            if(!o->open_now) {                  /* only now: nothing is touched for a patch that does not go in */
                 if(out_open(o, output_name ? output_name : path) < 0) {
                     rc = 2;
                     skipping = 1;
@@ -406,6 +544,7 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
                 goto write_failed;
             }
             applied++;
+            if(fuzz || a.last_offset) moved = 1;
             say_hunk(h, a.last_line, fuzz, a.last_offset);
         } else {
             if(!skipping) fprintf(talk, "Hunk #%u FAILED at %lld.\n", h->number, (long long)h->old_start + a.added);
@@ -432,35 +571,41 @@ static int one_section(struct pinput *in, struct psection *s, const char *given,
     pt_free(&t);
     if(have_src) dsrc_close(&src);
     if(!output_name) {
-        if(gone) {
+        if(have_src && applied && (moved || failed) && !dry_run && keep_old(path) < 0) {
+            out_abort(o);
+            rc = 2;
+        } else if(gone) {
             out_abort(o);
             if(!dry_run && unlink(path) < 0) {
-                fprintf(stderr, "patch: %s: %s\n", path, strerror(errno));
+                fprintf(stderr, "patch: %s: %s\n", show(path), strerror(errno));
                 rc = 2;
             }
         } else {
-            if(applied && new_null && !failed) fprintf(talk, "Not deleting %s: there is more in it than the patch had\n", path);
+            if(applied && new_null && !failed) {
+                fprintf(talk, "Not deleting %s: there is more in it than the patch had\n", show(path));
+                if(!rc) rc = 1;
+            }
             if(out_commit(o) < 0) rc = 2;
         }
     }
     if(failed) {
         const char *word = skipping ? "ignored" : "FAILED";
         if(rej_file.open_now) fprintf(talk, "%u out of %u hunk%s %s -- saving rejects to file %s\n", failed, total,
-                                      total == 1 ? "" : "s", word, rej_name);
+                                      total == 1 ? "" : "s", word, show(rej_name));
         else fprintf(talk, "%u out of %u hunk%s %s\n", failed, total, total == 1 ? "" : "s", word);
     }
     if(out_commit(&rej_file) < 0) rc = 2;
     if(failed && !rc) rc = 1;
     return rc;
 read_failed:
-    fprintf(stderr, "patch: %s: %s\n", path, strerror(a.failed));
+    fprintf(stderr, "patch: %s: %s\n", show(path), strerror(a.failed));
     out_abort(o);
     out_abort(&rej_file);
     pt_free(&t);
     if(have_src) dsrc_close(&src);
     return 3;
 write_failed:
-    fprintf(stderr, "patch: %s: %s\n", o->path, strerror(o->err));
+    fprintf(stderr, "patch: %s: %s\n", show(o->path), strerror(o->err));
     out_abort(o);
     out_abort(&rej_file);
     pt_free(&t);
@@ -469,6 +614,19 @@ write_failed:
 malformed:
     fprintf(stderr, "patch: %s: %s\n", input_name, in->why);
     return 3;
+}
+
+/* the end of -o: it takes its place only if all of the patch went in, and there is something to put there. What standard
+   output has had, it has had */
+static int finish_output(int rc) {
+    if(!output_name) return rc;
+    if(!strcmp(output_name, "-")) {
+        if(out_commit(&shared_out) < 0) rc = 2;
+    } else if(rc || !shared_out.bytes) {
+        out_abort(&shared_out);
+        if(rc && !dry_run) fprintf(stderr, "patch: %s: not written: not all of the patch went in\n", show(output_name));
+    } else if(out_commit(&shared_out) < 0) rc = 2;
+    return rc;
 }
 
 /* -x n, -xn and --name=n: the option's value, or NULL for another option */
@@ -536,28 +694,27 @@ int main(int argc, char **argv) {
         fprintf(stderr, "patch: out of memory\n");
         return 2;
     }
-    if(output_name && out_open(&shared_out, output_name) < 0) return 2;
     while((r = pp_next_section(&in, &sec)) > 0) {
         int one = one_section(&in, &sec, given, &hunk);
+        if(in.stray) {
+            fprintf(stderr, "patch: %s: line %lu: past its hunk's counts, and passed over\n", input_name, in.stray);
+            in.stray = 0;
+        }
         if(one == 3) {
-            out_abort(&shared_out);
+            rc = finish_output(2);
             cli_flush("patch");
-            return 2;
+            return rc;
         }
         if(one > rc) rc = one;
     }
     if(r < 0) {
         fprintf(stderr, "patch: %s: %s\n", input_name, in.why);
-        out_abort(&shared_out);
         rc = 2;
     } else if(!in.started && in.lineno) {
         fprintf(stderr, "patch: %s: only garbage was found in it\n", input_name);
         rc = 2;
     }
-    if(output_name) {
-        if(rc == 2 && !shared_out.bytes) out_abort(&shared_out);
-        else if(out_commit(&shared_out) < 0) rc = 2;
-    }
+    rc = finish_output(rc);
     if(cli_flush("patch")) rc = 2;
     ph_free(&hunk);
     pi_stop(&in);

@@ -265,7 +265,7 @@ static int apply(const struct mem *patch, const char *file, size_t size, int rev
             unsigned at, fuzz;
             int found;
             if(reverse) ph_reverse(&h);
-            found = pa_locate(&a, &h, &at, &fuzz);
+            found = pa_locate(&a, &h, &at, &fuzz, NULL);
             if(found <= 0) {
                 ++*failed;
                 continue;

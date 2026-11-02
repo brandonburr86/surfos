@@ -107,8 +107,10 @@ void pt_free(struct ptarget *t);
 
 void pa_start(struct papply *a, struct ptarget *t, pa_put put, void *ctx);
 /* where h goes: 1 and *at (the file's line, from 0, of the first old line compared) and *fuzz; 0 it fits nowhere; -1 a
-   read failed */
-int pa_locate(struct papply *a, const struct phunk *h, unsigned *at, unsigned *fuzz);
+   read failed. With reversed given it is looked for the other way round too, after the forward look at each fuzz: a place
+   that fits exactly backwards says more than one that needs fuzz forwards. When that is found first, *reversed is 1 and
+   the result 0 */
+int pa_locate(struct papply *a, struct phunk *h, unsigned *at, unsigned *fuzz, int *reversed);
 /* the file up to there and then the hunk go out: 0, or -1 */
 int pa_apply(struct papply *a, const struct phunk *h, unsigned at, unsigned fuzz);
 /* the rest of the file: 0, or -1 */

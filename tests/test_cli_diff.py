@@ -712,7 +712,7 @@ def test_patch_files():
     ok(r[0] == 1 and tree_of(d) == {"f.txt": other.encode()}, "--dry-run: no .rej either")
     rej = "--- a\n+++ b\n@@ -1 +1 @@\n-z\n+y\n"
     d, r = patch_case({"f.txt": other, "f.txt.rej": "old rejects\n"}, UNI)
-    ok(r[0] == 1 and b"old rejects" not in get(d + "/f.txt.rej"), "a .rej there before is replaced")
+    ok(r[0] == 1 and get(d + "/f.txt.rej") == b"old rejects\n" and b"-line 17" in get(d + "/f.txt.1.rej"), "a .rej there before stays")
     # part of a patch goes in
     two = UNI + "@@ -24,3 +24,3 @@\n-nothing like it\n+no\n line 25\n line 26\n"
     d, r = patch_case({"f.txt": BASE}, two)
@@ -740,7 +740,7 @@ def test_patch_files():
     d, r = patch_case({"old.txt": "one\ntwo\n"}, gone, "-p1", "--dry-run")
     ok(r[0] == 0 and tree_of(d) == {"old.txt": b"one\ntwo\n"}, "--dry-run removes nothing")
     d, r = patch_case({"old.txt": "one\ntwo\nthree\n"}, gone, "-p1")
-    ok(r[0] == 0 and tree_of(d) == {"old.txt": b"three\n"} and b"Not deleting" in r[1], "more in it than the patch had: it stays, with the rest")
+    ok(r[0] == 1 and tree_of(d) == {"old.txt": b"three\n"} and b"Not deleting" in r[1], "more in it than the patch had: it stays, with the rest")
     d, r = patch_case({"old.txt": "x\n"}, gone, "-p1")
     ok(r[0] == 1 and get(d + "/old.txt") == b"x\n", "one that does not match is not removed")
     d, r = patch_case({}, "--- /dev/null\n+++ /dev/null\n@@ -0,0 +1 @@\n+x\n")
@@ -880,17 +880,20 @@ def test_patch_against_real():
                 put(d + "/t1", t)
                 put(d + "/t2", t)
                 x = ours("patch", "t1", "p", "-f", cwd=d)
-                z = run(["patch", "-f", "--no-backup-if-mismatch", "t2", "p"], cwd=d)
+                z = run(["patch", "-f", "t2", "p"], cwd=d)
                 moved += x[0] == 0 and t != a
-                for rej in ("/t1.rej", "/t2.rej"):
-                    if os.path.exists(d + rej):
-                        os.unlink(d + rej)
+                orig1, orig2 = os.path.exists(d + "/t1.orig"), os.path.exists(d + "/t2.orig")
+                same_orig = not orig1 or not orig2 or get(d + "/t1.orig") == get(d + "/t2.orig")
+                for extra in ("/t1.rej", "/t2.rej", "/t1.orig", "/t2.orig"):
+                    if os.path.exists(d + extra):
+                        os.unlink(d + extra)
                 if is_gnu("patch"):
-                    # The same decisions, the same result: file, status and messages. Ours may refuse more: a hunk made at an
+                    # The same decisions, the same result: file, status, messages and .orig. Ours may refuse more: a hunk made at an
                     # edge of the file stays there at any fuzz here, where GNU's fuzz moves it. Never the other way round.
                     ours_failed = set(re.findall(rb"Hunk #(\d+) FAILED", x[1]))
                     theirs_failed = set(re.findall(rb"Hunk #(\d+) FAILED", z[1]))
                     if ours_failed == theirs_failed:
+                        ok(same_orig and (x[0] != 0 or orig1 == orig2), "the .orig against GNU's %s: ours %r theirs %r" % (args, orig1, orig2))
                         ok(x[0] == z[0] and get(d + "/t1") == get(d + "/t2") and x[1].replace(b"t1", b"t2") == z[1],
                            "patch against GNU's %s: ours %r theirs %r\n--ours\n%r\n--theirs\n%r\n--patch\n%r\n--target\n%r" %
                            (args, x, z, get(d + "/t1")[:300], get(d + "/t2")[:300], y[1][:400], t[:300]))
@@ -926,6 +929,127 @@ def test_property_real_files():
 
 
 # -- the review of 114ac02 --------------------------------------------------------------------------------------------
+
+def test_review_output_file():
+    """1: -o must not take a file from the user unless the whole result is there"""
+    bad = "--- foo\n+++ foo\n@@ -1 +1 @@\n-nothere\n+b\n"
+    good = "--- foo\n+++ foo\n@@ -1 +1 @@\n-a\n+b\n"
+    d, r = patch_case({"foo": "a\n", "out": "PRECIOUS\n"}, bad, "-o", "out", "foo")
+    ok(r[0] == 1 and get(d + "/out") == b"PRECIOUS\n", "-o over a file, a hunk fails: it stays: %r" % (r,))
+    d, r = patch_case({"foo": "a\n", "out": "PRECIOUS\n"}, "", "-o", "out", "foo")
+    ok(r[0] == 0 and get(d + "/out") == b"PRECIOUS\n", "-o, an empty patch: the file stays: %r" % (r,))
+    d, r = patch_case({"out": "PRECIOUS\n"}, good, "-o", "out")
+    ok(r[0] == 1 and get(d + "/out") == b"PRECIOUS\n", "-o, the file to patch is not there: it stays: %r" % (r,))
+    d, r = patch_case({"foo": "b\n", "out": "PRECIOUS\n"}, good, "-o", "out", "foo")
+    ok(r[0] == 1 and get(d + "/out") == b"PRECIOUS\n", "-o, a reversed patch: it stays: %r" % (r,))
+    d, r = patch_case({"g": "keep\nme\n"}, "--- g\n+++ g\n@@ -1 +1 @@\n-nothere\n+b\n", "-o", "g", "g")
+    ok(r[0] == 1 and get(d + "/g") == b"keep\nme\n", "-o naming the input, a hunk fails: it stays: %r" % (r,))
+    d, r = patch_case({"foo": "a\n"}, bad, "-o", "new", "foo")
+    ok(r[0] == 1 and not os.path.exists(d + "/new"), "-o, a new file, a hunk fails: none is made: %r" % (r,))
+    d, r = patch_case({"foo": "a\n"}, "", "-o", "new", "foo")
+    ok(r[0] == 0 and not os.path.exists(d + "/new"), "-o, a new file, an empty patch: none is made: %r" % (r,))
+    part = good + "@@ -3 +3 @@\n-nothere\n+c\n"
+    d, r = patch_case({"foo": "a\nx\ny\n", "out": "PRECIOUS\n"}, part, "-o", "out", "foo")
+    ok(r[0] == 1 and get(d + "/out") == b"PRECIOUS\n", "-o, one hunk in and one not: no partial result: %r" % (r,))
+    d, r = patch_case({"f": "a\n", "out": "PRECIOUS-AND-LONG\n"}, "--- f\n+++ f\n@@ -1 +1 @@\n-a\n+b\n--- ../x\n+++ ../x\n@@ -1 +1 @@\n-a\n+b\n", "-p0", "-o", "out")
+    ok(r[0] == 2 and get(d + "/out") == b"PRECIOUS-AND-LONG\n", "-o, a name refused after a file went in: no partial result: %r" % (r,))
+    d, r = patch_case({"foo": "a\n", "out": "old\n"}, good, "-o", "out", "foo")
+    ok(r[0] == 0 and get(d + "/out") == b"b\n" and tree_of(d).keys() == {"foo", "out"}, "-o, all well: replaced: %r" % (r,))
+    d, r = patch_case({"g": "a\n"}, "--- g\n+++ g\n@@ -1 +1 @@\n-a\n+b\n", "-o", "g", "g")
+    ok(r[0] == 0 and get(d + "/g") == b"b\n" and tree_of(d).keys() == {"g"}, "-o naming the input, all well: it is the result, and nothing is left beside it: %r" % (r,))
+    d, r = patch_case({"foo": "a\n", "out": "PRECIOUS\n"}, bad, "-o", "out", "foo")
+    ok(b"out" in r[2] and b"not" in r[2], "-o left alone: it is said: %r" % (r,))
+
+
+def test_review_reversed_first():
+    """5: at each fuzz, forward and then reversed, so a patch applied twice does not land in the next block"""
+    block = "x=1\ny=2\nz=3\nw=4\nv=5\nu=6\n"
+    cfg = "[alpha]\n" + block + "[beta]\n" + block
+    new = cfg.replace("z=3", "z=9", 1)
+    patch = "--- cfg\n+++ cfg\n@@ -1,7 +1,7 @@\n [alpha]\n x=1\n y=2\n-z=3\n+z=9\n w=4\n v=5\n u=6\n"
+    for flags in ([], ["-N"]):
+        d, r = patch_case({"cfg": new}, patch, *flags)
+        ok(r[0] == 1 and get(d + "/cfg") == new.encode() and b"Reversed (or previously applied)" in r[1], "patch %s applied twice: nothing changed: %r" % (flags, r))
+    d, r = patch_case({"cfg": new}, patch, "-f")
+    ok(get(d + "/cfg") != new.encode() or r[0] == 1, "-f: no such look")
+    d, r = patch_case({"cfg": cfg}, patch)
+    ok(r[0] == 0 and get(d + "/cfg") == new.encode(), "the first time it goes in")
+
+
+def test_review_rej():
+    """6: a .rej adds up within a run, and one that was there before stays"""
+    two = "--- f\n+++ f\n@@ -1 +1 @@\n-no\n+one\n--- f\n+++ f\n@@ -1 +1 @@\n-nor\n+two\n"
+    d, r = patch_case({"f": "a\n"}, two, "-f")
+    rej = get(d + "/f.rej") if os.path.exists(d + "/f.rej") else b""
+    ok(r[0] == 1 and b"-no\n" in rej and b"-nor\n" in rej, "two failing sections of one file: both in the .rej: %r" % (rej,))
+    d, r = patch_case({"notes.rej": "my rejected ideas\n"}, "--- /dev/null\n+++ notes\n@@ -1 +1 @@\n-x\n+y\n", "-f")
+    t = tree_of(d)
+    ok(t.get("notes.rej") == b"my rejected ideas\n", "a .rej of the user's is not replaced: %r" % (t,))
+    ok(b"-x\n" in b"".join(v for k, v in t.items() if k != "notes.rej"), "the rejects are in another file: %r" % (t,))
+    ok(b"notes.1.rej" in r[1] + r[2], "and it says which: %r" % (r,))
+    d, r = patch_case({"f": "a\n", "f.rej": "mine\n"}, two, "-f")
+    t = tree_of(d)
+    ok(t["f.rej"] == b"mine\n" and b"-no\n" in t.get("f.1.rej", b"") and b"-nor\n" in t.get("f.1.rej", b""), "both sections go to the one new name: %r" % (t,))
+
+
+def test_review_small_patch_things():
+    # 7: a file named on the command line is no way round "already there"
+    make = "--- /dev/null\n+++ foo\n@@ -0,0 +1 @@\n+x\n"
+    d, r = patch_case({"foo": "mine\n"}, make, "foo")
+    ok(r[0] == 1 and get(d + "/foo") == b"mine\n", "a patch that makes a file, on a named file with text in it: refused: %r" % (r,))
+    # 8: more in it than the patch had: not all went in
+    gone = "--- a/old.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n"
+    d, r = patch_case({"old.txt": "one\ntwo\nthree\n"}, gone, "-p1")
+    ok(r[0] == 1 and b"Not deleting" in r[1], "a file with more in it than the patch had: status 1: %r" % (r,))
+    # 9: a word after a space is no date
+    p = "--- My Doc About cats.txt\n+++ My Doc About cats.txt\n@@ -1 +1 @@\n-a\n+b\n"
+    d, r = patch_case({"My Doc About cats.txt": "a\n", "My": "a\n"}, p, "-p0")
+    ok(r[0] == 0 and get(d + "/My Doc About cats.txt") == b"b\n" and get(d + "/My") == b"a\n", "a name with words in it is the whole name: %r" % (r,))
+    p = "--- a b.txt Sun Nov  1 15:30:27 2026\n+++ a b.txt Sun Nov  1 15:30:27 2026\n@@ -1 +1 @@\n-a\n+b\n"
+    d, r = patch_case({"a b.txt": "a\n"}, p, "-p0")
+    ok(r[0] == 0 and get(d + "/a b.txt") == b"b\n", "a real date still ends a name: %r" % (r,))
+    # a CRLF patch's names
+    d, r = patch_case({}, "--- /dev/null\r\n+++ made\r\n@@ -0,0 +1 @@\r\n+x\r\n", "-p0")
+    ok(r[0] == 0 and os.path.exists(d + "/made") and not os.path.exists(d + "/made\r"), "no CR in a name: %r" % (sorted(tree_of(d)),))
+    # lines past a hunk's counts are said
+    p = "--- f\n+++ f\n@@ -1 +1 @@\n-a\n+b\n+and this one, past the counts\n"
+    d, r = patch_case({"f": "a\n"}, p)
+    ok(r[0] == 0 and b"past" in r[2], "lines past a hunk's counts are said: %r" % (r,))
+    d, r = patch_case({"f": "a\n"}, "--- f\n+++ f\n@@ -1 +1 @@\n-a\n+b\n-- \nsignature\n")
+    ok(r[0] == 0 and b"past" not in r[2], "a mail's signature is not such a line: %r" % (r,))
+    # control characters from a patch do not reach the terminal
+    p = "--- /dev/null\n+++ evil\x1b[2Jname\n@@ -0,0 +1 @@\n+x\n"
+    d, r = patch_case({}, p, "-p0")
+    ok(b"\x1b" not in r[1] + r[2], "patch: a name's escape is not printed: %r" % (r,))
+
+
+def test_review_orig():
+    """decided in the review: <file>.orig when a hunk needed fuzz or offset, as GNU keeps it; made with O_EXCL"""
+    old = BASE
+    moved = "top\n" + BASE
+    new = moved.replace("line 17\n", "LINE 17\n")
+    d, r = patch_case({"f.txt": BASE}, UNI)
+    ok(tree_of(d).keys() == {"f.txt"}, "a hunk where it said: no .orig")
+    d, r = patch_case({"f.txt": moved}, UNI)
+    t = tree_of(d)
+    ok(r[0] == 0 and t.get("f.txt") == new.encode() and t.get("f.txt.orig") == moved.encode(), "an offset: the old file in .orig: %r" % (sorted(t),))
+    fuzzy = BASE.replace("line 14\n", "changed 14\n")
+    d, r = patch_case({"f.txt": fuzzy}, UNI)
+    t = tree_of(d)
+    ok(r[0] == 0 and b"fuzz" in r[1] and t.get("f.txt.orig") == fuzzy.encode(), "fuzz: the old file in .orig: %r" % (sorted(t),))
+    d, r = patch_case({"f.txt": moved, "f.txt.orig": "the user's\n"}, UNI)
+    t = tree_of(d)
+    ok(r[0] == 0 and t["f.txt"] == new.encode() and t["f.txt.orig"] == b"the user's\n" and b".orig" in r[2], "an .orig that was there stays, and it is said: %r" % (r,))
+    d, r = patch_case({"f.txt": moved}, UNI, "--dry-run")
+    ok(tree_of(d).keys() == {"f.txt"}, "--dry-run: no .orig")
+    d, r = patch_case({"f.txt": moved}, UNI, "-o", "out")
+    ok(tree_of(d).keys() == {"f.txt", "out"}, "-o: the file stays, so no .orig")
+    d = tempfile.mkdtemp(dir=SCRATCH.name)
+    put(d + "/f.txt", moved)
+    put(d + "/the.patch", UNI)
+    r = ours("patch", "-i", "the.patch", cwd=d, env=dict(ENV, CLI_FAIL="write:1"))
+    ok(r[0] == 2 and tree_of(d) == {"f.txt": moved.encode()}, "pulled writing .orig: the old file, and nothing beside it: %r %r" % (r, sorted(tree_of(d))))
+
 
 def test_review_nits():
     ok(ours("od", "-N", "17592186044416m", stdin=b"abc")[0] == 2, "od -N: a suffix that overflows")
@@ -988,7 +1112,8 @@ def test_pipelines():
 def main():
     tests = [test_rev, test_paths, test_cmp, test_comm, test_join, test_paste, test_fold, test_nl, test_od, test_base64, test_strings, test_file, test_tree,
              test_cal, test_diff_against_real, test_diff_options, test_diff_trees, test_patch_files, test_patch_saving, test_patch_against_real,
-             test_property_real_files, test_review_nits, test_bad_input, test_pipelines]
+             test_property_real_files, test_review_output_file, test_review_reversed_first, test_review_rej, test_review_small_patch_things,
+             test_review_orig, test_review_nits, test_bad_input, test_pipelines]
     only = sys.argv[2:]
     for t in tests:
         if only and t.__name__ not in only:

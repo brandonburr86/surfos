@@ -20,15 +20,23 @@ DESCRIPTION
     A hunk that fits nowhere goes into file.rej, in unified form, and
     the others still go in.
 
+    When a hunk needed an offset or fuzz, or failed beside others that
+    went in, the file as it was is kept as file.orig. An .orig that
+    is already there stays, and that is said.
+
+    A .rej adds up over a run. One that was there before stays: the
+    hunks go to file.1.rej, or the next free name, and that is said.
+
     A file whose old name is /dev/null is made, with any directories
-    it needs. A file whose new name is /dev/null is deleted, if
-    nothing is left of it.
+    it needs, unless a file of that name has text in it. A file
+    whose new name is /dev/null is deleted if nothing is left of it;
+    if something is, it stays with the rest, and the status is 1.
 
     A file is replaced whole: the new contents are written beside it
     and synced, then renamed over it, so a failure at any point
     leaves the old file as it was. A new file is deleted again if
-    writing it fails. Nothing else is left behind: there are no .orig
-    files, so keep a copy if you want to go back, or use -R.
+    writing it fails. On FAT a file in use cannot be replaced, so a
+    patch that names its own file fails with status 2, and both stay.
 
     A name in a patch that is absolute or holds .. is refused, after
     -p has done its work.
@@ -39,9 +47,10 @@ DESCRIPTION
     was working on is left as it was; files finished before it stay
     finished.
 
-    Status 0 when all went in, 1 when some hunks did not or a file was
-    not there, 2 for trouble: a damaged patch, a name refused, a file
-    that could not be read or written.
+    Status 0 when all went in, 1 when some hunks did not, a file was
+    not there, or something is left in a file to be deleted, 2 for
+    trouble: a damaged patch, a name refused, a file that could not
+    be read or written.
 
     File times and permissions are not carried over: SurfOS has no
     permissions, and a file's time is when it was last written.
@@ -52,13 +61,20 @@ OPTIONS
     -R           The patch was made the other way round: undo it.
     -i file      Read the patch from file.
     -o file      Write the results there, one after the other, and
-                 leave the files alone. - is standard output.
+                 leave the files alone. The file is written only if
+                 all of the patch went in and there is something to
+                 write: otherwise it stays as it was, and a new one
+                 is not made. - is standard output, which gets what
+                 there is as it comes.
     -d dir       Go to dir first, before anything else.
     -N           Skip a patch that looks reversed or already applied.
                  As patch never asks, that is also what happens
                  without -N.
     -f           Do not look: each hunk goes in, or fails.
-    --dry-run    Check everything and change nothing.
+    --dry-run    Check everything and change nothing. A file named
+                 twice in a patch is checked both times as it is
+                 now, while the real run works on the first result,
+                 so the two can differ.
 
     --strip=n, --reverse, --input=f, --output=f, --directory=d,
     --forward and --force are the same.
