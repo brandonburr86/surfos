@@ -1,0 +1,72 @@
+patch - apply a diff to files
+
+SYNOPSIS
+    patch [-p n] [-R] [-i patchfile] [-o outfile] [-d dir] [-N] [-f]
+          [--dry-run] [file [patchfile]]
+
+DESCRIPTION
+    Reads a diff in unified, context or normal form, from patchfile or
+    standard input, and changes the files it names. Text around the
+    diff, such as a mail or a commit message, is passed over. Naming
+    file patches that file, whatever the diff says. A normal diff
+    names nothing, so it needs file, or the line diff -r writes
+    before it.
+
+    A hunk that is not where it says is looked for nearby, and the
+    offset is said. If it fits nowhere exactly, up to two of its
+    context lines at each end may differ, and that fuzz is said. A
+    hunk with less context at one end than the other was made at
+    that end of the file: it stays there, and that end must match.
+    A hunk that fits nowhere goes into file.rej, in unified form, and
+    the others still go in.
+
+    A file whose old name is /dev/null is made, with any directories
+    it needs. A file whose new name is /dev/null is deleted, if
+    nothing is left of it.
+
+    A file is replaced whole: the new contents are written beside it
+    and synced, then renamed over it, so a failure at any point
+    leaves the old file as it was. A new file is deleted again if
+    writing it fails. Nothing else is left behind: there are no .orig
+    files, so keep a copy if you want to go back, or use -R.
+
+    A name in a patch that is absolute or holds .. is refused, after
+    -p has done its work.
+
+    patch never asks a question. Where others ask, about a patch that
+    looks reversed or already applied, the hunks are skipped and go
+    into the .rej. A malformed hunk stops everything, and the file it
+    was working on is left as it was; files finished before it stay
+    finished.
+
+    Status 0 when all went in, 1 when some hunks did not or a file was
+    not there, 2 for trouble: a damaged patch, a name refused, a file
+    that could not be read or written.
+
+    File times and permissions are not carried over: SurfOS has no
+    permissions, and a file's time is when it was last written.
+
+OPTIONS
+    -p n         Take n leading parts off the names in the patch.
+                 Without -p only the last part of a name is used.
+    -R           The patch was made the other way round: undo it.
+    -i file      Read the patch from file.
+    -o file      Write the results there, one after the other, and
+                 leave the files alone. - is standard output.
+    -d dir       Go to dir first, before anything else.
+    -N           Skip a patch that looks reversed or already applied.
+                 As patch never asks, that is also what happens
+                 without -N.
+    -f           Do not look: each hunk goes in, or fails.
+    --dry-run    Check everything and change nothing.
+
+    --strip=n, --reverse, --input=f, --output=f, --directory=d,
+    --forward and --force are the same.
+
+EXAMPLES
+    patch -p1 < /hda1/CHANGE.DIF
+    patch --dry-run -p1 -i /hda1/CHANGE.DIF
+    patch -R /hda1/NOTES.TXT /hda1/CHANGE.DIF
+
+SEE ALSO
+    diff, edit
