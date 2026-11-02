@@ -1165,6 +1165,66 @@ static void test_failures(void) {
     check(ars_cmd(tar_main, "tar tf /a.tar") == 141, "a listing whose reader goes");
 }
 
+/**** an archive that exists ****/
+
+/* It is replaced only by one that went right: the old one may be the only copy of what the new one could not read. */
+static void old_stands(const char *cmd, const char *what) {
+    char msg[160];
+    check(ars_cmd(tar_main, cmd) == 2, what);
+    snprintf(msg, sizeof(msg), "%s: the archive that was there stands", what);
+    check(ars_is("/d/a.tar", "the old archive"), msg);
+    snprintf(msg, sizeof(msg), "%s: and that is said", what);
+    check(has(ars_stderr(), "stays as it was"), msg);
+    snprintf(msg, sizeof(msg), "%s: and no .tmp is left", what);
+    check(!has(ars_list(), ".tmp"), msg);
+}
+
+static void old_tree(void) {
+    ars_reset();
+    ars_puts("/d/a.tar", "the old archive");
+    ars_puts("/src/one.txt", "first\n");
+    ars_puts("/src/two.txt", "second\n");
+    ars_chdir("/d");
+}
+
+static void test_old_archive(void) {
+    old_tree();
+    old_stands("tar cf /d/a.tar /missing", "a name that is not there");
+    old_tree();
+    old_stands("tar cf /d/a.tar /missing /src", "one good name and one bad");
+    old_tree();
+    old_stands("tar czf /d/a.tar /missing", "the same through gzip");
+    old_tree();
+    ars_lie_size("/src/one.txt", 5000);
+    old_stands("tar cf /d/a.tar /src", "a file that shrank");
+    old_tree();
+    ars_mkdir("/src/damaged");
+    ars_unreadable("/src/damaged");
+    old_stands("tar cf /d/a.tar /src", "a folder that cannot be read");
+    old_tree();
+    ars_unreadable("/src/two.txt");
+    old_stands("tar cf /d/a.tar /src", "a file that cannot be read");
+    old_tree();
+    old_stands("tar cf a.tar a.tar", "the archive as its only name");
+    old_tree();
+    {
+        char name[220], path[240];
+        memset(name, 'n', 200);
+        name[200] = 0;
+        snprintf(path, sizeof(path), "/src/%s", name);
+        ars_puts(path, "a name that will not go in ustar\n");
+    }
+    old_stands("tar cf /d/a.tar -C / src", "a name that does not fit");
+
+    /* nothing wrong: replaced */
+    old_tree();
+    check(ars_cmd(tar_main, "tar cf /d/a.tar -C / src") == 0 && !ars_is("/d/a.tar", "the old archive"), "with nothing wrong an archive is replaced");
+    /* no archive there: what was made is all there is, and it stays, with the trouble said */
+    ars_reset();
+    ars_puts("/src/one.txt", "first\n");
+    check(ars_cmd(tar_main, "tar cf /new.tar /missing /src") == 2 && ars_exists("/new.tar"), "a new archive stays, trouble or not: it replaces nothing");
+}
+
 /**** the host's tools ****/
 
 static void make_export(const char *dir) {
@@ -1345,6 +1405,7 @@ int main(void) {
     test_refusals();
     test_damage();
     test_failures();
+    test_old_archive();
     test_host_tar();
     free(A);
     return report("test_tar");

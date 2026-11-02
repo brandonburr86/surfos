@@ -15,7 +15,8 @@ c writes ustar: file times, no owners, and each file's mode as a Unix expects it
 has none. A leading / or anything up to a .. is left out of the names in the archive, with a
 message, because x would refuse them. A name that will not go into ustar's two fields is left out,
 with a message. The archive is not put into itself. A file that shrinks while it is read is filled
-out with zeros, so the archive stays sound, and said.
+out with zeros, so the archive stays sound, and said. An archive that exists is replaced only by
+one that went right: with anything said above but the / and the .., the old one stays.
 
 x reads what tarfile.h lists. A name from an archive becomes a path only through ar_safe_path():
 what is absolute or has a .. is refused, and so is what FAT cannot hold. Links, devices, sparse
@@ -308,6 +309,12 @@ static int do_create(void) {
     if(r == -1) fprintf(stderr, "tar: %s: %s\n", archive, strerror(errno));
     if(r) {
         if(is_file) of_drop(&out);
+        return 2;
+    }
+    /* The old archive may be the only copy of what this one could not read: it goes only for one that went right. */
+    if(is_file && out.replacing && trouble) {
+        of_drop(&out);
+        fprintf(stderr, "tar: %s: not everything went in, so the archive that was there stays as it was\n", archive);
         return 2;
     }
     if(is_file && of_commit(&out, "tar", 1) < 0) trouble = 1;
