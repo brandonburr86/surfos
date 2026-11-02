@@ -1,10 +1,10 @@
 title "Hidden content"
 block
   block para
-    text "Shown 1"
+    text color=ff0000 "Shown 1"
   block para
-    text "Shown 2: no script runs here"
+    text color=ff0000 "Shown 2: no script runs here"
   block para
-    text "Shown 3 after a comment"
+    text color=ff0000 "Shown 3 after a comment"
   block para
-    text "Shown 4: a p ends the svg"
+    text color=ff0000 "Shown 4: a p ends the svg"

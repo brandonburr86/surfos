@@ -1053,7 +1053,7 @@ SCENARIOS = [
                           'refused as Undertow refuses: an unknown root, another name, expired (no request sent), '
                           'HTTPS to HTTP', [
         Step('wundertow --layout ' + url('tls13', '/about'), 'address: ' + url('tls13', '/about'),
-             'status: 200 verified TLSv1.3', 'title: About the fixtures', ' x2 b "About the fixtures"', 'link=0 "Home"',
+             'status: 200 verified TLSv1.3', 'title: About the fixtures', ' s32 b "About the fixtures"', 'link=0 "Home"',
              wait=SH, check=fetched('tls13', '/about', tls='TLSv1.3')),
         Step('echo status $?', 'status 0', wait=SH),
         Step('wundertow --layout ' + url('tls12', '/about'), 'status: 200 verified TLSv1.2', wait=SH,
@@ -1091,6 +1091,13 @@ SCENARIOS = [
              'picture 8 refused', 'picture 9 failed', wait=SH, check=no_picture_over_http),
         Step('wundertow --load ' + H('/pictures'), 'title: Pictures', 'picture 0 loaded 4x3', 'picture 8 loaded 4x3',
              wait=SH),
+        # 11/01/26 (stage 3.3): a page's sheet from the network and what it imports, over HTTPS; one over http on an
+        # https page is never loaded
+        Step('wundertow --load ' + url('tls13', '/styled'), 'color=123456', 'color=654321', wait=SH,
+             check=fetched('tls13', '/styled2.css', tls='TLSv1.3')),
+        Step('wundertow --load ' + url('tls13', '/styled-http'), 'Not styled by a sheet over http.', wait=SH,
+             absent=['color=123456']),
+        Step('wundertow --load ' + url('tls13', '/styled-404'), 'Not styled by a 404.', wait=SH, absent=['color=123456']),
     ], browser=False),
     Scenario('wundertow-production', 'the normal initrd: wundertow does not trust the fixture CA either; HTTP works', [
         Step('wundertow --layout https://10.0.2.2:{https}/about', MSG['untrusted'], wait=SH, absent=['status: '],

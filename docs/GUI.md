@@ -675,7 +675,8 @@ and its title says what it was last sent.
   first application to move out of the kernel, so that a fault in it costs only its window.
 * **The web browser.** `wundertow` (10/25/26) shows web pages and this computer's HTML files
   in a window: Back, Forward, Reload, the address field, links to click and the page to
-  scroll (`docs/UNDERTOW.md`, "In a window: wundertow").
+  scroll (`docs/UNDERTOW.md`, "In a window: wundertow"). 11/01/26: with their style sheets, in
+  proportional text and real sizes.
   11/1/26: it loads in helper processes, so the window answers meanwhile and Stop ends a load; it shows PNG, JPEG, GIF
   and BMP pictures, finds words (Ctrl+F), goes from link to link by Tab, and uses forms that send by GET. Windows
   of programs get a key the desktop's own apps do not, Shift+Tab (`WIN_KEY_BACKTAB`), and Enter typed with Shift says so

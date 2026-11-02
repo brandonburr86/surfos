@@ -109,6 +109,7 @@ struct wb_page {
     int ntexts;
     int halted;                         /* Stop: it loads no more until it is loaded again */
     size_t pic_bytes;                   /* of bytes: its pictures', at most WB_PAGE_IMAGES */
+    struct ws_work *style;              /* 11/01/26: its style sheets are on their way (sheets.c) */
 };
 
 enum { WB_LOAD_PAGE, WB_LOAD_IMAGE, WB_LOAD_TEXT };     /* what a request is for */

@@ -35,7 +35,8 @@ static void ended(struct wb *b, struct ld_result *r) {
             wb_failed(b, r->asked, err);
         else wb_loaded(b, p, r->reload);
     } else if(r->kind == WB_LOAD_TEXT)
-        wb_text(b, r->page, r->item, r->failed ? NULL : (const char *)r->body, r->len, r->type, r->why);
+        wb_text(b, r->page, r->item, r->failed || r->status < 200 || r->status > 299 ? NULL : (const char *)r->body, r->len,
+                r->type, r->why);
     else if(r->failed) wb_image_failed(b, r->page, r->item, r->w, r->h);
     else {
         wb_image(b, r->page, r->item, r->w, r->h, r->pw, r->ph, (unsigned int *)(void *)r->body);

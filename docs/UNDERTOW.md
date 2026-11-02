@@ -10,7 +10,8 @@ cookies, downloads, images or CSS layout (see [What pages work](#what-pages-work
 
 10/25/26: `wundertow` shows the same pages on the desktop, in a window, as a browser draws
 them: headings, styles, links to click, lists, tables, scrolling (see
-[In a window: wundertow](#in-a-window-wundertow)).
+[In a window: wundertow](#in-a-window-wundertow)). 11/01/26: with their style sheets, and in
+proportional text.
 
 This guide describes the integrated browser (`user/undertow/`), including the 2026-10-15
 review fixes (TLS time limits inside the TLS library's calls, a late `<base>`, random DNS
@@ -236,11 +237,12 @@ refused with the reason (`2026-02-30 is not a date`, `the month must be 01 to 12
 ## undertow.conf
 
 `/initrd/etc/undertow.conf` is read when Undertow starts. Besides blank lines and `#`
-comments it has two kinds of line:
+comments it has these lines:
 
 ```
 rtc_offset_minutes=-300          the hardware clock's offset from UTC in minutes, -840 to 840 (default 0)
 host=printer.home 10.0.0.20      a fixed IPv4 address for a name, used instead of DNS (at most 16 lines)
+font=12x24                       the base size of wundertow's text: 8x16, 12x24 or 16x32 (default: the desktop's, 8x16)
 ```
 
 A file with a mistake (an unknown setting, a value out of range, a line over 512 bytes) gets
@@ -372,13 +374,13 @@ hash of each address, and nothing is written anywhere.
 most), HTML by its name (`.html`, `.htm`), text otherwise. A file page's links lead to files beside it; a
 web page's links never lead to a file, whatever they say.
 
-**What it shows.** Headings (h1 and h2 twice the size), paragraphs, bold, italic, underlined, struck-through
+**What it shows.** Headings in their sizes (h1 in the 16x32 font, h2 in 12x24), paragraphs, bold, italic, underlined, struck-through
 and monospaced text, sub- and superscripts, highlighted text, links in the link colour and underlined,
 lists with bullets, numbers, letters or Roman numerals, quotations, preformatted text (its lines kept,
 broken only at the window's edge), rules, line breaks, centred and right-aligned text, the page's colours
 (`<body bgcolor text link>`, `<font color>`, the colours of tables, rows and cells), tables with their
 columns sized to their content, a width, borders, padding and cells that span columns, forms and pictures (below).
-The text is the console's font (code page 437); a character it does not have is shown as Undertow's ASCII
+The text is the console's fonts (code page 437); a character they do not have is shown as Undertow's ASCII
 stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, SVG, MathML, objects), this
 hides, and so the content of an element with the `hidden` attribute.
 
@@ -418,8 +420,49 @@ leaves the computer:
   is not plain ASCII, or holds a `?`, which is what its bytes read as;
 - a form whose `accept-charset` is neither UTF-8 nor windows-1252.
 
+**Style sheets** (11/01/26). A page's `<style>` elements, wherever they stand, its `<link rel=stylesheet>`s and its
+`style=` attributes count, by the standard's cascade: specificity, order, `!important`, with HTML's own attributes
+(`bgcolor`, `align`, `<font color>`, ...) below them. Sheets are read tolerantly, as the standard says: what is not
+known is skipped, and a malformed sheet changes nothing but what it managed to say. Undertow's text does not change:
+it has no use for CSS.
+
+A page shows at once. Its linked sheets load behind it, in helpers as pictures do, and when the last has answered the
+page is built again where it was, so a slow sheet holds nothing up and one that fails is left out. A sheet has a page's
+limit, 1 MB, and is taken as `text/css` or with no type at all, so an error page is no sheet. The rules are the page's:
+from an https page or sheet nothing over http; an http(s) page never reads a file, and an `@import` never does, on a
+file page neither: only a file page's own `<link>` reaches a file beside it. `@import "x"` is followed one level, so an
+imported sheet's are not; `@import url(x)` is an `url()`, and those are never followed. 16 sheets a page, with their
+`@import`s.
+
+- Selectors: type, class, id, descendant, child, grouping, `*`, and `:link`. Every link counts as `:link`, so a
+  `:visited` rule matches nothing: a sheet is never told what was visited. Any other selector that is well-formed
+  (`:hover`, `[attr]`, `a + b`) matches nothing here, and leaves the rest of its list.
+- Properties: `color`, `background-color` and `background` (its colour: no image is loaded, a gradient leaves the colour
+  before it), `display` (none, block, inline: a table keeps its parts, but for none), `font-weight`, `font-style`,
+  `text-decoration`, `margin-*`, `padding-*`, `text-align` (justified text is left-aligned), `font-size`, `font`, and
+  `inherit`, `initial`, `unset` and `revert`. Nothing else: `width`, `float`, `position`, `flex`, `list-style`, `var()`
+  and `calc()` are not read, and a page laid out with them reads top to bottom.
+- Text the colour of what is behind it, as text meant for a background that is not shown here can be (an image, a
+  gradient, a colour by `var()`), takes the theme's colour instead, or white on what is dark.
+- Margins and padding are for block boxes, and table cells' padding. A negative margin stays at 0, `auto` is 0, and a
+  percentage is of the width around the box.
+- Colours: every name, `#rgb` and its kin, `rgb()`, `hsl()`. Anything partly transparent is taken over white.
+- `@media` counts for a screen, and a query about width or any other feature does not hold: the page is built
+  before it is laid out. `@font-face`, `@supports`, `@layer`, `@keyframes` and every other at-rule are skipped.
+- `url()` is never followed, and nothing from a sheet reaches the screen or a request.
+- Limits: 1 MiB a sheet, 16,384 rules, 32,768 selectors, 131,072 selectors' parts and 65,536 declarations a page, 256
+  selectors a rule, 32 parts a selector, 32 open brackets, a style attribute of 4 KB, 16 classes of an element. Past a
+  limit the sheet stops there, what came before it stays, and the status bar says "some of the page's style is left
+  out". So it does past 32 million steps of matching selectors, which only a hostile sheet comes near.
+
+**Fonts** (11/01/26). Three real sizes, the console's: 8x16, 12x24, 16x32. A size a page asks for is the nearest of them
+(up to 20 pixels 16, up to 28 pixels 24, more than that 32), and nothing is drawn at twice its size, so 32 pixels is
+the largest there is. The base size is the desktop's font, 8x16, unless `font=` in `undertow.conf` says otherwise. Running
+text is proportional: Spleen's glyphs trimmed to their ink by a table `tools/fontmetrics.py` makes, so no new font and
+no new licence. `pre`, `code`, `tt`, `kbd` and `samp` stay monospaced, and so do the chrome and form fields.
+
 **Not yet:** file uploads, `<label>` as a place to click, drawing the EXIF orientation, `srcset`, animated GIFs, `data:`
-addresses, form validation (`required`, `pattern`), CSS and other fonts (the plan's milestone 3).
+addresses, form validation (`required`, `pattern`).
 
 A form here runs from its tag to its end tag, or holds what names it by `form=`. A page whose elements nest as they
 should sees no difference from a browser. On one that does not, a browser also has in a form what comes after its
@@ -434,7 +477,10 @@ several cells (one for the caret).
 **Limits.** Undertow's (above), and 32,768 boxes and 131,072 runs of text a page; past any of them the page
 stops there and the status bar says so. History: 16 pages, 8 MB.
 
-**Its tests.** `make unittest` runs `test_wundertow_doc` (the page model: the fixtures in
+**Its tests.** `make unittest` runs `test_wundertow_css` (the style sheet parser against malformed and hostile sheets,
+and its copy under UndefinedBehaviorSanitizer), `test_wundertow_style` (the cascade on pages made there, a malformed
+sheet changing nothing, a hostile one stopped, every allocation failing in turn), `test_wundertow_sheets` (linked sheets
+through the browser: what may and may not load, @import, Stop, leaving a page), `test_wundertow_doc` (the page model: the fixtures in
 `tests/fixtures/wundertow/`, `NAME.html` in, `NAME.tree` out, every page of Undertow's fixtures, the limits,
 every allocation failing in turn), `test_wundertow_layout` (`NAME.layout` at 640 pixels, lines, margins,
 lists, pre, tables, links under the pointer, painting and clipping, every page at widths from 64 to 1300)
@@ -444,10 +490,11 @@ HTTP and the sample site from a file, and paints a page to a BMP. `make test-web
 followed) and HTTP, and check that it refuses what Undertow refuses (an unknown root, another name, an expired
 certificate, HTTPS to HTTP; the normal initrd trusts no fixture CA). `make test-usb`'s guiapps scenario
 (`tools/gui_apps_web.py`) drives the window on the screen: started in the Terminal on pages of a data stick,
-the focus given by a click on its title bar, the text, the link colour and the heading at twice the size
+the focus given by a click on its title bar, the text, the link colour and the heading in its size
 where the layout puts them, a link followed, Backspace, Page Down and Home, the corner dragged (the page
-laid out again at the new width) and the close button. `test_wundertow_layout --render FILE OUT.ppm
-[WIDTH]` paints any HTML file on the host.
+laid out again at the new width) and the close button; then a page with a `<style>`, a `style=`, a linked sheet and a
+malformed one. `test-web` loads a linked sheet and what it imports over HTTPS, and refuses one over http.
+`test_wundertow_layout --render FILE OUT.ppm [WIDTH]` paints any HTML file on the host.
 
 11/1/26, milestone 2: `make unittest` also runs `test_wundertow_image` (125 pictures of `tests/fixtures/wundertow/
 images/`, made by `tools/wundertow-images.py`, each cut short and with bytes changed, every allocation failing,

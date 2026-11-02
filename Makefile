@@ -955,6 +955,8 @@ WT_HOSTFLAGS = $(UT_HOSTFLAGS) -Iuser/wundertow -idirafter user/include
 WT_HOST_UT   = $(addprefix $(BUILD)/host/undertow/,html_scan.o url.o util.o alloc.o)
 WT_HOST_DRAW = $(addprefix $(BUILD)/host/wundertow/,doc.o form.o font.o layout.o paint.o) $(BUILD)/host/kernel/driver/font8x16.o \
                $(BUILD)/host/kernel/driver/cp437.o
+WT_HOST_DRAW += $(addprefix $(BUILD)/host/wundertow/,docstyle.o css.o fontmetrics.o)     # 11/01/26: a page's CSS
+WT_HOST_DRAW += $(addprefix $(BUILD)/host/kernel/driver/,font12x24.o font16x32.o)    # and real sizes
 $(BUILD)/host/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
@@ -965,6 +967,8 @@ $(BUILD)/host/test_wundertow_doc: tests/host/test_wundertow_doc.c $(BUILD)/host/
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+$(BUILD)/host/test_wundertow_doc: $(addprefix $(BUILD)/host/wundertow/,docstyle.o css.o)
 
 test-wundertow-doc: $(BUILD)/host/test_wundertow_doc $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_doc tests/fixtures
@@ -987,13 +991,15 @@ $(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addp
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
 
+$(BUILD)/host/test_wundertow_browser: $(BUILD)/host/wundertow/sheets.o
+
 test-wundertow-browser: $(BUILD)/host/test_wundertow_browser $(BUILD)/user/bin/wundertow
 	$(BUILD)/host/test_wundertow_browser
 unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: forms: the model, what is sent to the byte, and the fields used as a person uses them
-$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
+$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
                                    $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
@@ -1004,9 +1010,45 @@ test-wundertow-form: $(BUILD)/host/test_wundertow_form $(BUILD)/user/bin/wundert
 unittest: test-wundertow-form
 .PHONY: test-wundertow-form
 
+# 11/01/26 (Wundertow's milestone 3): the style sheet parser against sheets that are hostile, and the same test with
+# UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it
+$(BUILD)/host/test_wundertow_css: tests/host/test_wundertow_css.c $(BUILD)/host/wundertow/css.o \
+                                  $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-css: $(BUILD)/host/test_wundertow_css $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_css
+unittest: test-wundertow-css
+.PHONY: test-wundertow-css
+
+# ... and the cascade, on pages made in the test
+$(BUILD)/host/test_wundertow_style: tests/host/test_wundertow_style.c $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-style: $(BUILD)/host/test_wundertow_style $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_style
+unittest: test-wundertow-style
+.PHONY: test-wundertow-style
+
+# ... and a page's sheets from the network, the browser driven as for its other tests
+$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
+                                     $(WT_HOST_DRAW) $(WT_HOST_UT)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
+
+test-wundertow-sheets: $(BUILD)/host/test_wundertow_sheets $(BUILD)/user/bin/wundertow
+	$(BUILD)/host/test_wundertow_sheets
+unittest: test-wundertow-sheets
+.PHONY: test-wundertow-sheets
+
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
-                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o) \
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o sheets.o) \
                                    $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
@@ -1038,6 +1080,16 @@ $(BUILD)/host/wundertow-ubsan/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $< (UBSan)"
 	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+
+$(BUILD)/host/test_wundertow_css_ubsan: tests/host/test_wundertow_css.c $(BUILD)/host/wundertow-ubsan/css.o \
+                                        $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -Iuser/wundertow -idirafter user/include $^ -o $@
+
+test-wundertow-css-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_css_ubsan)
+	$(if $(UT_UBSAN),$(BUILD)/host/test_wundertow_css_ubsan,@echo "test-wundertow-css-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")
+unittest: test-wundertow-css-ubsan
+.PHONY: test-wundertow-css-ubsan
 -include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
 
 $(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/wundertow-ubsan/,$(WT_IMAGE_NAMES)) \

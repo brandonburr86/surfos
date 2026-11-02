@@ -37,7 +37,7 @@ LINK_Y = 24
 WORDS_Y = LINK_Y + 16 + 16
 POST_Y = WORDS_Y + 24 + 16
 LOGIN_Y = POST_Y + 24 + 16
-FIELD_X = 8 + len('Words ') * 8
+FIELD_X = 8 + web.text_width('Words ')     # the page's text is proportional (milestone 3), a field's in cells
 RELOAD_X = 7 + 62 + 4 + 86 + 4              # the toolbar: 7, Back of 6 characters, Forward of 9, 14 wider than their text
 # a field of size n is n * 8 + 8 wide; after it a space
 SEARCH_LABEL = 'Search'
@@ -164,11 +164,11 @@ def checks(d):
         d.check('and nothing reached the server', len(requests) == before)
 
         # a form with a password: not over GET, whatever the scheme; its stars, nothing else
-        pw_x = 8 + (8 * 8 + 8) + 8 + 16             # the password field, after the user's of 8 cells and a space
-        page_click(d, at, pw_x, LOGIN_Y + 12)
+        pw_x = 8 + (8 * 8 + 8) + web.text_width(' ')  # the password field, after the user's of 8 cells and a space
+        page_click(d, at, pw_x + 16, LOGIN_Y + 12)
         d.move(*web.PARK)
         d.keys('hunter2')
-        d.visible('a password shows as stars', lambda s: field_text(d, s, at, LOGIN_Y + 4, '*******', pw_x - 16 + 4), timeout=20)
+        d.visible('a password shows as stars', lambda s: field_text(d, s, at, LOGIN_Y + 4, '*******', pw_x + 4), timeout=20)
         d.key('ret')
         d.visible('a password form says it was not sent', lambda s: status_text(d, s, at, 'This form has a password field'),
                   'guiapps-web-password.png', timeout=20)

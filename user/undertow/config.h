@@ -3,8 +3,8 @@ SurfOS Undertow: settings and the clock that certificates are checked against
 ----------------------
 File: config.h  Date: 10/11/26
 ----------------------
-/initrd/etc/undertow.conf (UT_CONF_PATH) holds two kinds of line, besides blank
-lines and # comments:
+/initrd/etc/undertow.conf (UT_CONF_PATH) holds these lines, besides blank lines
+and # comments:
 
   rtc_offset_minutes=N   the hardware clock's offset from UTC, -840..840: a clock
                          that keeps US Central Daylight Time (UTC-5) is -300.
@@ -13,6 +13,9 @@ lines and # comments:
   host=NAME ADDRESS      a fixed IPv4 address for NAME, used instead of DNS (like
                          curl's --resolve; the test images map their fixture
                          names this way). At most UT_HOSTS_MAX.
+  font=SIZE              11/01/26: the base size of the text in wundertow's window:
+                         8x16, 12x24 or 16x32. Without it, the desktop's font,
+                         8x16. Undertow itself has no use for it.
 
 SurfOS has no time zone: time() is the hardware clock (CMOS) counted as if it
 were UTC. The browser converts it with the offset above, or uses the time the
@@ -47,6 +50,7 @@ struct ut_config {
     struct ut_clock clock;
     struct ut_host hosts[UT_HOSTS_MAX];
     int host_count;
+    int font;                       /* 11/01/26: font=, as the height of its cell; 0: not given */
 };
 
 /* The defaults: offset 0, no override, no hosts. */

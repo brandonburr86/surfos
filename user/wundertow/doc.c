@@ -28,6 +28,8 @@ doc.h's builder, in one pass over the body as html.c reads it, over the same sca
 #include "html_scan.h"
 #include "doc.h"
 #include "form.h"
+#include "css.h"
+#include "docstyle.h"
 
 #define STACK_MAX    128                /* open elements kept; deeper ones are only counted */
 #define HREF_MAX     4096               /* bytes of an address kept from an attribute (url.c takes 2048) */
@@ -36,6 +38,8 @@ doc.h's builder, in one pass over the body as html.c reads it, over the same sca
 #define LABEL_MAX    UT_FIELD_MAX       /* a field's or a link's label */
 
 static const char cut_notice[] = "the rest of this page is not shown: it is over 512 KB";
+
+int wd_base = 16;
 
 /**** the attributes kept ****/
 
@@ -89,6 +93,10 @@ struct frame {                          /* an open element that has a box */
     struct inline_state saved;
     unsigned char off;                  /* a disabled fieldset */
     unsigned char legend;               /* a legend in a disabled fieldset */
+    int css;                            /* the elements docstyle had open before it */
+    unsigned char own;                  /* the box is its own */
+    unsigned char hides;                /* display: none */
+    unsigned char made;                 /* it is here for its CSS: HTML gives this element no box */
 };
 
 struct bd {
@@ -176,6 +184,20 @@ struct bd {
     struct ut_html_tag tag;
     struct tag_bufs tagbuf;
     char scratch[LABEL_MAX + 16];
+
+    /* the page's CSS (docstyle.c) */
+    struct ds *ds;
+    size_t tag_q;                       /* where the tag's name starts */
+    int none;                           /* open elements that are display: none: what they hold makes nothing */
+    int page_none;                      /* one of those is the page's root */
+    unsigned char root_seen[2];         /* the tag of <html>, of <body> came */
+    int css_box;                        /* the box this tag made, -1: none */
+    int css_at;                         /* docstyle's elements before this tag */
+    int display;                        /* what the cascade said of this tag's element */
+    struct wd_block no_box;             /* what box_of() gives an element without a box of its own */
+    unsigned int space_bg;              /* a waiting space's look, from the CSS around it */
+    unsigned short space_px;
+    int space_now;                      /* that space is what is being written */
 };
 
 /**** small helpers ****/
@@ -362,6 +384,7 @@ static int new_box(struct bd *b, int kind, int parent) {
 static int add_box(struct bd *b, int kind, int parent) {
     struct wd_block *p = &b->d.blocks[parent];
     int anon;
+    if(b->none) return -1;
     if(p->nruns && p->first < 0) {                  /* its inline content goes into a box of its own */
         unsigned int run = p->run, nruns = p->nruns;
         anon = new_box(b, WB_BLOCK, parent);
@@ -429,7 +452,7 @@ static unsigned short style_now(const struct bd *b) {
     if(b->is.sty[S_NOWRAP]) s |= WS_NOWRAP;
     if(b->is.sty[S_MARK]) s |= WS_MARK;
     if(b->pre) s |= WS_PRE;
-    return s;
+    return ds_style(b->ds, s);
 }
 
 static unsigned char size_now(const struct bd *b) {
@@ -445,7 +468,7 @@ static unsigned char size_now(const struct bd *b) {
 
 static unsigned int color_now(const struct bd *b) {
     int n = b->is.ncolors < COLORS_MAX ? b->is.ncolors : COLORS_MAX;
-    return n ? b->colors[n - 1] : WD_NONE;
+    return ds_color(b->ds, n ? b->colors[n - 1] : WD_NONE);
 }
 
 /* The run that takes text of this kind and look: the target's last one when it matches and its text is the
@@ -455,12 +478,14 @@ static struct wd_run *run_for(struct bd *b, int kind, unsigned short style, unsi
     int t = target(b);
     struct wd_block *x;
     struct wd_run *r;
+    unsigned int bg = b->space_now ? b->space_bg : ds_bg(b->ds);
+    unsigned short px = b->space_now ? b->space_px : ds_px(b->ds);
     if(t < 0) return NULL;
     x = &b->d.blocks[t];
     if(kind == WR_TEXT && x->nruns) {
         r = &b->d.runs[x->run + x->nruns - 1];
         if(r->kind == WR_TEXT && r->style == style && r->size == size && r->color == color && r->link == link &&
-           r->off + r->len == b->d.text_len) return r;
+           r->bg == bg && r->px == px && r->off + r->len == b->d.text_len) return r;
     }
     if(b->d.run_count >= WD_RUNS_MAX) {
         full(b);
@@ -478,6 +503,8 @@ static struct wd_run *run_for(struct bd *b, int kind, unsigned short style, unsi
     r->image = -1;
     r->control = -1;
     r->off = (unsigned int)b->d.text_len;
+    r->bg = bg;
+    r->px = px;
     x->nruns++;
     return r;
 }
@@ -494,6 +521,16 @@ static int put_text(struct bd *b, const char *s, size_t n, unsigned short style,
     b->d.text[b->d.text_len] = 0;
     r->len += (unsigned int)n;
     return 0;
+}
+
+/* The space that waits, in the look it came in; 0, or -1 when it does not fit */
+static int put_space(struct bd *b) {
+    int rc;
+    b->space = 0;
+    b->space_now = 1;
+    rc = put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link);
+    b->space_now = 0;
+    return rc;
 }
 
 static int ascii_space(unsigned int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; }
@@ -528,7 +565,7 @@ static int line_start(const struct bd *b) {
 }
 
 static void line_break(struct bd *b) {              /* <br>, a line break in pre */
-    if(b->stopped || b->failed) return;
+    if(b->stopped || b->failed || b->none) return;
     b->space = 0;
     b->col = 0;
     run_for(b, WR_BR, 0, size_now(b), WD_NONE, b->link);
@@ -541,7 +578,7 @@ static void text_char(struct bd *b, unsigned int cp) {
     unsigned short style;
     unsigned char size;
     unsigned int color;
-    if(b->stopped || b->failed) return;
+    if(b->stopped || b->failed || b->none) return;
     if(b->button || b->select) {                    /* a field's label */
         if(!b->select || b->option == 1) label_add(b->flabel, &b->flabel_len, &b->flabel_gap, cp);
         if(b->opt_open) {                           /* what it sends when it has no value: only ASCII spaces collapse */
@@ -572,16 +609,15 @@ static void text_char(struct bd *b, unsigned int cp) {
             b->space_size = size_now(b);
             b->space_color = color_now(b);
             b->space_link = b->link;
+            b->space_px = ds_px(b->ds);
+            b->space_bg = ds_bg(b->ds);
         }
         return;
     } else if(ut_html_hidden(cp)) return;
     style = style_now(b);
     size = size_now(b);
     color = color_now(b);
-    if(b->space) {
-        b->space = 0;
-        if(put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link)) return;
-    }
+    if(b->space && put_space(b)) return;
     k = ut_utf8_encode(cp, u);
     put_text(b, (const char *)u, k, style, size, color, b->link);
 }
@@ -589,11 +625,8 @@ static void text_char(struct bd *b, unsigned int cp) {
 /* A field, image or other atom: a run of its own whose text is label (n bytes, already safe) */
 static struct wd_run *atom(struct bd *b, int kind, const char *label, size_t n) {
     struct wd_run *r;
-    if(b->stopped || b->failed) return NULL;
-    if(b->space) {
-        b->space = 0;
-        if(put_text(b, " ", 1, b->space_style, b->space_size, b->space_color, b->space_link)) return NULL;
-    }
+    if(b->stopped || b->failed || b->none) return NULL;
+    if(b->space && put_space(b)) return NULL;
     if(room(b, n)) return NULL;
     r = run_for(b, kind, style_now(b), size_now(b), color_now(b), b->link);
     if(!r) return NULL;
@@ -628,24 +661,49 @@ static void link_close(struct bd *b);
 static void field_close(struct bd *b);
 static void option_end(struct bd *b);
 
+static unsigned int words_of(const struct ut_html_tag *t);
+
+/* The element opens in the page's CSS, with the elements around it right by now: how it is displayed. No tag says
+   what it is when HTML implies it (a row, a text's pre). */
+static int css_open(struct bd *b, int el, const struct ut_html_tag *t) {
+    struct ds_element e;
+    memset(&e, 0, sizeof(e));
+    e.el = el;
+    e.name = el == E_TR ? "tr" : el == E_TBODY ? "tbody" : "pre";
+    if(t) {
+        e.in = b->in;
+        e.len = b->len;
+        e.q = b->tag_q;
+        e.cs = b->cs;
+        e.name = t->name;
+        e.words = words_of(t);
+    }
+    e.style = style_now(b);
+    e.color = color_now(b);
+    return ds_open(b->ds, &e);
+}
+
 /* Open el on the stack with a box of kind (kind < 0: no box of its own); NULL when the stack is full (it is
    only counted) or the box cannot be made */
-static struct frame *push(struct bd *b, int el, int kind) {
+static struct frame *frame_of(struct bd *b, int el, int kind, int hides, int css) {
     struct frame *f;
     int box;
-    if(b->depth == STACK_MAX) {
-        b->over[el]++;
-        return NULL;
-    }
+    if(hides || b->none) kind = -1;
     box = kind >= 0 ? add_box(b, kind, box_now(b)) : box_now(b);
     if(box < 0) {
         b->over[el]++;
+        ds_close(b->ds, css);
         return NULL;
     }
     f = &b->st[b->depth];
     memset(f, 0, sizeof(*f));
     f->el = (unsigned char)el;
     f->box = box;
+    f->css = css;
+    f->own = kind >= 0;
+    f->hides = (unsigned char)hides;
+    b->none += hides;
+    b->css_box = kind >= 0 ? box : -1;
     b->open[el]++;
     b->depth++;
     if(kind >= 0) b->target = -1;
@@ -655,6 +713,21 @@ static struct frame *push(struct bd *b, int el, int kind) {
         link_close(b);
     }
     return f;
+}
+
+static struct frame *push(struct bd *b, int el, int kind) {
+    int css = ds_height(b->ds), display;
+    if(b->depth == STACK_MAX) {
+        b->over[el]++;
+        return NULL;
+    }
+    display = css_open(b, el, b->tag.el == el && !b->tag.end ? &b->tag : NULL);
+    if(b->none) display = DS_ASIS;                  /* (it goes on the stack all the same, for what ends it) */
+    if(el == E_TABLE || el == E_TR || is_cell(el)) {    /* (a table keeps its parts, but for none) */
+        if(display != DS_NONE) display = DS_ASIS;
+    } else if(display == DS_INLINE) kind = -1;
+    b->display = display;
+    return frame_of(b, el, kind, display == DS_NONE, css);
 }
 
 /* Close the top element */
@@ -674,8 +747,12 @@ static void pop(struct bd *b) {
     if(el >= E_H1 && el <= E_H6) b->headings--;
     b->depth--;
     b->open[el]--;
-    b->target = -1;
-    b->space = 0;
+    b->none -= f->hides;
+    ds_close(b->ds, f->css);
+    if(f->own) {
+        b->target = -1;
+        b->space = 0;
+    }
 }
 
 static void pop_to(struct bd *b, int i) {           /* close st[i] and everything inside it */
@@ -734,7 +811,9 @@ static int above(const struct bd *b, int from, int el, int el2) {
     return 0;
 }
 
-static struct wd_block *box_of(struct bd *b, struct frame *f) { return f ? &b->d.blocks[f->box] : NULL; }
+static struct wd_block *box_of(struct bd *b, struct frame *f) {
+    return f ? (f->own ? &b->d.blocks[f->box] : &b->no_box) : NULL;
+}
 
 static int align_of(const struct ut_html_tag *t) {
     if(attr_is(t, A_ALIGN, "center") || attr_is(t, A_ALIGN, "middle")) return WA_CENTER;
@@ -798,7 +877,7 @@ static void item_start(struct bd *b, struct ut_html_tag *t) {
         return;
     }
     x->marker = list->marker;
-    if(list->el == E_OL) {
+    if(list->el == E_OL && !b->none) {
         num = list->next;
         if(t->seen[A_VALUE]) parse_int(t->val[A_VALUE], &num);
         list->next = num + 1;
@@ -808,11 +887,21 @@ static void item_start(struct bd *b, struct ut_html_tag *t) {
 
 /**** tables ****/
 
+/* A table's section opens in the cascade (t NULL: the tbody HTML implies), and display: none hides what it holds */
+static void section_open(struct bd *b, int el, const struct ut_html_tag *t) {
+    int css = ds_height(b->ds), display = css_open(b, el, t);
+    struct frame *f;
+    if(display == DS_NONE && !b->none && b->depth < STACK_MAX && (f = frame_of(b, el, -1, 1, css)) != NULL) f->made = 1;
+}
+
+static int is_section(int el) { return el == E_TBODY || el == E_THEAD || el == E_TFOOT; }
+
 static void row_start(struct bd *b, struct ut_html_tag *t) {
     int tb = table_at(b);
     struct frame *f;
     if(!tb) return;                                 /* a row outside a table is no row */
-    pop_to(b, tb + 1);
+    pop_to(b, tb + 1 + (b->depth > tb + 1 && is_section(b->st[tb + 1].el)));    /* (a section hidden by its CSS stays) */
+    if(ds_height(b->ds) == b->st[tb].css + 1) section_open(b, E_TBODY, NULL);
     f = push(b, E_TR, WB_ROW);
     if(f && t) {
         box_of(b, f)->bg = attr_color(t, A_BGCOLOR);
@@ -1239,6 +1328,103 @@ static void font_start(struct bd *b, struct ut_html_tag *t) {
     b->is.ncolors++;
 }
 
+/**** the page's CSS on a tag ****/
+
+static unsigned int words_of(const struct ut_html_tag *t) {
+    static const unsigned short given[S_COUNT] = { [S_BOLD] = WS_BOLD, [S_ITALIC] = WS_ITALIC, [S_UNDER] = WS_UNDER,
+                                                   [S_STRIKE] = WS_STRIKE };
+    int s = style_of(t);
+    unsigned int w = s >= 0 ? given[s] : 0;
+    if((t->el >= E_H1 && t->el <= E_H6) || t->el == E_TH) w |= WS_BOLD;
+    if(t->el == E_ADDRESS) w |= WS_ITALIC;
+    if(t->el == E_FONT && attr_color(t, A_COLOR) != WD_NONE) w |= DS_W_COLOR;
+    return w;
+}
+
+/* Elements that are no part of what is shown, and those that have a place of their own in the cascade */
+static int no_style(int el) {
+    switch(el) {
+    case E_HTML: case E_BODY: case E_HEAD: case E_TITLE: case E_STYLE: case E_SCRIPT: case E_META: case E_LINK:
+    case E_BASE: case E_TBODY: case E_THEAD: case E_TFOOT: case E_XMP:
+        return 1;
+    }
+    return 0;
+}
+
+/* An element HTML gives no box: CSS may give it one, or hide it. 1 when that is all there is to it. */
+static int css_inline(struct bd *b, struct ut_html_tag *t, unsigned int fl) {
+    int css = ds_height(b->ds), display;
+    struct frame *f;
+    if(no_style(t->el)) return 0;
+    display = css_open(b, t->el, t);                /* (also where nothing shows: its end tag must find it) */
+    if(b->none) return 0;
+    if(display == DS_ASIS && t->seen[A_HIDDEN]) display = DS_NONE;
+    if(t->el == E_SELECT && display == DS_BLOCK) display = DS_ASIS;    /* (select_tag() takes its end tag) */
+    b->display = display;
+    if(display != DS_NONE && display != DS_BLOCK) return 0;
+    if(display == DS_NONE && (fl & F_VOID)) {
+        ds_close(b->ds, css);
+        return 1;
+    }
+    if(b->depth < STACK_MAX && (f = frame_of(b, t->el, display == DS_BLOCK ? WB_BLOCK : -1, display == DS_NONE, css)) != NULL)
+        f->made = 1;
+    return 0;
+}
+
+/* The tag's CSS goes on the box it made */
+static void css_box(struct bd *b) {
+    if(b->css_box >= 0) ds_box(b->ds, &b->d.blocks[b->css_box], b->display);
+    b->css_box = -1;
+}
+
+/* The tag has done what it does: so has a void element, and a <select> as far as text goes: its end tag is
+   select_tag()'s */
+static void css_done(struct bd *b, const struct ut_html_tag *t, unsigned int fl) {
+    css_box(b);
+    if(t->el == E_SELECT && !b->none) ds_close(b->ds, b->css_at);
+    if(!(fl & F_VOID)) return;
+    if(b->depth > 1 && b->st[b->depth - 1].made && b->st[b->depth - 1].el == t->el) pop(b);
+    ds_close(b->ds, b->css_at);
+}
+
+/* The end tag of an element HTML gives no box: one that CSS gave a box goes with it, else its place in the cascade */
+static void css_end(struct bd *b, const struct ut_html_tag *t) {
+    int i;
+    if(ds_end(b->ds, t->name, b->st[b->depth - 1].css + 1) || !b->open[t->el]) return;
+    for(i = b->depth - 1; i > 0; i--) {
+        if(b->st[i].el == t->el && b->st[i].made && ds_named(b->ds, b->st[i].css, t->name)) {
+            pop_to(b, i);
+            return;
+        }
+        if(ut_html_flags(b->st[i].el) & (F_SCOPE | F_SPECIAL)) return;
+    }
+}
+
+/* Does the page's CSS show this element, for all its hidden attribute says? */
+static int css_shown(struct bd *b, const struct ut_html_tag *t) {
+    int css = ds_height(b->ds), display = css_open(b, t->el, t);
+    ds_close(b->ds, css);
+    return !b->none && (display == DS_BLOCK || display == DS_INLINE || display == DS_SHOWN);
+}
+
+static void css_root(struct bd *b, const struct ut_html_tag *t) {
+    struct ds_element e;
+    memset(&e, 0, sizeof(e));
+    e.in = b->in;
+    e.len = b->len;
+    e.q = b->tag_q;
+    e.cs = b->cs;
+    e.el = t->el;
+    e.name = t->name;
+    e.color = WD_NONE;
+    if(b->root_seen[t->el == E_BODY]) return;       /* a second one adds nothing here */
+    b->root_seen[t->el == E_BODY] = 1;
+    ds_root(b->ds, t->el == E_BODY ? DS_ROOT_BODY : DS_ROOT_HTML, &e);
+    if(b->depth > 1 && !ds_hidden(b->ds)) return;   /* (what opened hidden has no boxes to go on in) */
+    b->none += ds_hidden(b->ds) - b->page_none;
+    b->page_none = ds_hidden(b->ds);
+}
+
 /**** tags ****/
 
 static int heading(int el) { return el >= E_H1 && el <= E_H6; }
@@ -1315,9 +1501,10 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     unsigned int fl = ut_html_flags(el);
     struct frame *f;
     struct wd_block *x;
+    b->css_at = ds_height(b->ds);
     if(el == E_FORM && b->fb.open >= 0) return;     /* the standard: a form in a form is no element at all */
     if(t->seen[A_ID]) add_anchor(b, t->val[A_ID], t->len[A_ID], t->over[A_ID]);
-    if(t->seen[A_HIDDEN] && !(fl & F_VOID) && el != E_OTHER) {   /* <div hidden>: not shown, nor what is in it */
+    if(t->seen[A_HIDDEN] && !(fl & F_VOID) && el != E_OTHER && !css_shown(b, t)) {   /* <div hidden>: not shown, nor what is in it */
         start_hidden(b, t);
         b->skip_live = 1;
         if(el == E_LEGEND && b->fb.off) b->skip_off = 1;
@@ -1325,6 +1512,8 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         return;
     }
     if(fl & F_CLOSEP) close_p(b);
+    if(el == E_HTML || el == E_BODY) css_root(b, t);
+    if(!(fl & F_PUSH) && css_inline(b, t, fl)) return;
     if((s = style_of(t)) >= 0) {
         b->is.sty[s]++;
         return;
@@ -1374,7 +1563,7 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         line_break(b);
         return;
     case E_HR:
-        add_box(b, WB_HR, box_now(b));
+        b->css_box = add_box(b, WB_HR, box_now(b));
         return;
     case E_IMG: case E_IMAGE:
         image(b, t);
@@ -1384,12 +1573,12 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         return;
     case E_BUTTON:
         field_close(b);
-        b->button = 1;
+        b->button = !b->none;
         b->fcontrol = control_of(b, t, WF_BUTTON, attr_is(t, A_TYPE, "reset") ? WC_RESET : attr_is(t, A_TYPE, "button") ? WC_PUSH : WC_SUBMIT, 0);
         return;
     case E_SELECT:
         field_close(b);
-        b->select = 1;
+        b->select = !b->none;
         b->option = 0;
         b->fcontrol = control_of(b, t, WF_SELECT, 0, 0);
         return;
@@ -1441,7 +1630,11 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         caption_start(b, t);
         return;
     case E_TBODY: case E_THEAD: case E_TFOOT:
-        if(table_at(b)) pop_to(b, table_at(b) + 1);
+        if(table_at(b)) {
+            pop_to(b, table_at(b) + 1);
+            ds_close(b->ds, b->st[table_at(b)].css + 1);       /* the section before it ends with it */
+            section_open(b, el, t);
+        }
         return;
     }
     if(fl & F_PUSH) {
@@ -1474,6 +1667,8 @@ static void end_tag(struct bd *b, struct ut_html_tag *t) {
         b->over[el]--;
         return;
     }
+    if(el == E_BUTTON) field_close(b);              /* (in a box of its own, if its CSS gave it one) */
+    if(!(fl & F_PUSH)) css_end(b, t);
     if((s = style_of(t)) >= 0) {
         if(b->is.sty[s]) b->is.sty[s]--;
         return;
@@ -1504,7 +1699,10 @@ static void end_tag(struct bd *b, struct ut_html_tag *t) {
         table_end(b, el);
         return;
     case E_TBODY: case E_THEAD: case E_TFOOT:
-        if(table_at(b)) pop_to(b, table_at(b) + 1);
+        if(table_at(b)) {
+            pop_to(b, table_at(b) + 1);
+            ds_close(b->ds, b->st[table_at(b)].css + 1);
+        }
         return;
     case E_ADDRESS:
         if((i = in_scope(b, el, SCOPE))) {
@@ -1563,6 +1761,7 @@ static void dispatch(struct bd *b, struct ut_html_tag *t) {
         return;
     }
     start_tag(b, t);
+    css_done(b, t, fl);
     if(whole && !(fl & F_VOID)) end_tag(b, t);
 }
 
@@ -1574,6 +1773,7 @@ static int tag(struct bd *b, size_t q, int end) {
     size_t next;
     int whole = ut_html_tag(b->in, b->len, b->cs, q, end, &b->tag, &next);
     b->pos = next;
+    b->tag_q = q;
     if(whole) dispatch(b, &b->tag);
     return whole;
 }
@@ -1670,6 +1870,7 @@ static void raw(struct bd *b, int el, const char *name) {
         f = push(b, E_XMP, WB_BLOCK);
         if(!f) return;
         box_of(b, f)->flags = WBF_PARA | WBF_PRE;
+        css_box(b);
         b->pre++;
         b->col = 0;
         for(q = start; q < end && !b->stopped && !b->failed; ) text_char(b, next_char(b, &q, end));
@@ -1726,7 +1927,7 @@ static void run_html(struct bd *b) {
     while(b->pos < b->len && !b->failed) {
         unsigned char c = b->in[b->pos];
         if(c == '<') markup(b);
-        else if(b->skip_n || b->stopped || (b->select && b->option != 1 && !b->opt_open)) {
+        else if(b->skip_n || b->stopped || b->none || (b->select && b->option != 1 && !b->opt_open)) {
             j = memchr(b->in + b->pos, '<', b->len - b->pos);      /* text nobody sees */
             b->pos = j ? (size_t)(j - b->in) : b->len;
         } else if(c == '&') text_char(b, ut_html_ref(b->in, &b->pos, b->len, 0));
@@ -1903,6 +2104,90 @@ static int forms_finish(struct bd *b, char *safe, struct ut_url *u) {
     return b->fb.failed ? -1 : 0;
 }
 
+static void sheet_free(struct wd_sheet *o) {
+    free(o->url);
+    free(o->text);
+}
+
+void wd_sheets_free(struct wd_sheets *s) {
+    size_t i;
+    if(!s) return;
+    for(i = 0; i < s->count; i++) sheet_free(&s->sheet[i]);
+    free(s);
+}
+
+/* One more sheet: 0, or -1 without memory; it is left out past the limit, and over http from what came by https */
+static int sheet_add(struct wd_sheets *q, const char *url, int source, int imported, int https) {
+    struct wd_sheet *o;
+    if(q->count == WD_SHEETS_MAX || (https && strncmp(url, "https:", 6))) return 0;
+    o = &q->sheet[q->count];
+    memset(o, 0, sizeof(*o));
+    o->url = malloc(strlen(url) + 1);
+    if(!o->url) return -1;
+    strcpy(o->url, url);
+    o->source = source;
+    o->imported = imported;
+    q->count++;
+    return 0;
+}
+
+/* What the page links to, resolved as its links are: in d->sheets when there is any. 0, or -1 out of memory */
+static int find_sheets(struct bd *b, struct ut_url *u, char *safe) {
+    const char *h;
+    int source, imported, usable = 0;
+    size_t i;
+    for(i = 0; ds_found(b->ds, i, &h, &source, &imported); i++) {
+        char *url = address(b, h, 0, &usable, u, safe);
+        int rc;
+        if(!url) return -1;
+        if(!b->d.sheets && !(b->d.sheets = calloc(1, sizeof(*b->d.sheets)))) {
+            free(url);
+            return -1;
+        }
+        b->d.sheets->https = b->r->verified;
+        rc = usable ? sheet_add(b->d.sheets, url, source, imported, b->r->verified) : 0;
+        free(url);
+        if(rc) return -1;
+    }
+    return 0;
+}
+
+int wd_sheets_imports(struct wd_sheets *s) {
+    struct { struct ut_url base, u; char urls[CSS_IMPORTS_MAX][CSS_URL_MAX + 1], err[128]; } *w;
+    size_t i, n = s ? s->count : 0, k;
+    int added = 0;
+    if(!s) return 0;
+    w = malloc(sizeof(*w));
+    if(!w) return -1;
+    for(i = 0; i < n; i++) {
+        struct wd_sheet *o = &s->sheet[i];
+        size_t count;
+        if(!o->text || o->imported || ut_url_parse(o->url, &w->base, w->err, sizeof(w->err))) continue;
+        count = css_imports(o->text, o->len, w->urls, CSS_IMPORTS_MAX);
+        for(k = 0; k < count; k++) {
+            char *c = clean_href(w->urls[k]);
+            int rc;
+            if(!c) {
+                free(w);
+                return -1;
+            }
+            rc = other_scheme(c) || ut_url_resolve(&w->base, c, &w->u, w->err, sizeof(w->err)) || !safe_utf8(w->u.text);
+            free(c);
+            if(rc) continue;
+            {
+                size_t before = s->count;
+                if(sheet_add(s, w->u.text, o->source, 1, s->https || !strncmp(o->url, "https:", 6))) {
+                    free(w);
+                    return -1;
+                }
+                added += s->count > before;
+            }
+        }
+    }
+    free(w);
+    return added;
+}
+
 /* The links' and images' addresses, the budget of the link strings, the notice; 0, or -1 out of memory */
 static int finish(struct bd *b) {
     struct wd_document *d = &b->d;
@@ -1934,6 +2219,10 @@ static int finish(struct bd *b) {
         }
         for(i = 0; i < d->run_count; i++) if(d->runs[i].link >= (int)keep) d->runs[i].link = -1;
         d->link_count = keep;
+    }
+    if(find_sheets(b, &work->u, work->safe)) {
+        free(work);
+        return -1;
     }
     d->images = calloc(d->image_count ? d->image_count : 1, sizeof(*d->images));
     if(!d->images) {
@@ -1973,6 +2262,7 @@ static int finish(struct bd *b) {
     }
     if(d->truncated & (UT_TRUNC_TEXT | WD_TRUNC_BOXES)) add_notice(d->notice, sizeof(d->notice), cut_notice);
     if(d->truncated & UT_TRUNC_LINKS) add_notice(d->notice, sizeof(d->notice), "some links are not links");
+    if(ds_finish(b->ds, d)) add_notice(d->notice, sizeof(d->notice), "some of the page's style is left out");
     d->blocks = shrink(d->blocks, d->block_count, sizeof(*d->blocks));
     d->runs = shrink(d->runs, d->run_count, sizeof(*d->runs));
     d->text = shrink(d->text, d->text_len + 1, 1);
@@ -1984,6 +2274,8 @@ static int finish(struct bd *b) {
     for(i = 0; i < d->anchor_count; i++) d->bytes += strlen(d->anchors[i].name) + 1;
     for(i = 0; i < d->image_count; i++) if(d->images[i]) d->bytes += strlen(d->images[i]) + 1;
     d->bytes += d->form_bytes;
+    if(d->sheets) d->bytes += sizeof(*d->sheets);
+    for(i = 0; d->sheets && i < d->sheets->count; i++) d->bytes += strlen(d->sheets->sheet[i].url) + 1;
     return b->failed ? -1 : 0;
 }
 
@@ -1996,11 +2288,12 @@ static void cleanup(struct bd *b, int given) {
     free(b->srcs);
     free(b->decoded);
     free(b->base);
+    ds_free(b->ds);
     if(!given) wd_free(&b->d);
     free(b);
 }
 
-int wd_build(const struct ut_response *r, struct wd_document *out, char *err, size_t cap) {
+int wd_build_with(const struct ut_response *r, const struct wd_sheets *sheets, struct wd_document *out, char *err, size_t cap) {
     struct bd *b;
     int html, rc;
     unsigned char *dec;
@@ -2082,11 +2375,22 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     html = b->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && ut_html_sniff(b->in, b->len));
     if(!b->decoded) b->cs = ut_html_charset(b->in, b->len, r->charset, html, &b->pos, b->charset, sizeof(b->charset));
     b->undeclared = !b->decoded && !r->charset[0] && html;
+    b->css_box = -1;
+    b->ds = ds_new(b->in, html ? b->len : 0, b->cs, sheets);
+    if(!b->ds) {
+        cleanup(b, 0);
+        return ut_error(err, cap, "out of memory showing the page");
+    }
+    b->none = b->page_none = ds_hidden(b->ds);
     if(html) run_html(b);
     else run_plain(b);
     if(b->failed || finish(b)) {
         cleanup(b, 0);
         return ut_error(err, cap, "out of memory showing the page");
+    }
+    if(sheets) {                                    /* (it has what it asked for) */
+        wd_sheets_free(b->d.sheets);
+        b->d.sheets = NULL;
     }
     *out = b->d;
     memset(&b->d, 0, sizeof(b->d));
@@ -2094,9 +2398,14 @@ int wd_build(const struct ut_response *r, struct wd_document *out, char *err, si
     return 0;
 }
 
+int wd_build(const struct ut_response *r, struct wd_document *out, char *err, size_t cap) {
+    return wd_build_with(r, NULL, out, err, cap);
+}
+
 void wd_free(struct wd_document *d) {
     size_t i;
     if(!d) return;
+    wd_sheets_free(d->sheets);
     for(i = 0; d->links && i < d->link_count; i++) {
         free(d->links[i].label);
         free(d->links[i].url);
@@ -2230,6 +2539,11 @@ static void dump_box(struct out *o, const struct wd_document *d, int i, int dept
     if(x->kind == WB_TABLE) outf(o, " border=%u padding=%u", x->border, x->padding);
     if(x->width) outf(o, " width=%d%s", x->width < 0 ? -x->width : x->width, x->width < 0 ? "%" : "");
     if(x->bg != WD_NONE) outf(o, " bg=%06x", x->bg);
+    if(x->given) {
+        int k;
+        for(k = 0; k < 4; k++) if(x->given & (1 << k)) outf(o, " m%c=%d", "trbl"[k], x->margin[k]);
+        for(k = 0; k < 4; k++) if(x->given & (16 << k)) outf(o, " p%c=%d", "trbl"[k], x->pad[k]);
+    }
     outf(o, "\n");
     for(r = x->run; r < x->run + x->nruns; r++) {
         const struct wd_run *u = &d->runs[r];
@@ -2248,10 +2562,14 @@ static void dump_box(struct out *o, const struct wd_document *d, int i, int dept
             if(u->style & WS_PRE) outf(o, " pre");
             if(u->style & WS_NOWRAP) outf(o, " nowrap");
             if(u->style & WS_MARK) outf(o, " mark");
+            if(u->style & WS_NOLINE) outf(o, " noline");
             if(u->size >= WZ_H1 && u->size <= WZ_H6) outf(o, " h%d", u->size);
             if(u->size == WZ_BIG) outf(o, " big");
             if(u->size == WZ_SMALL) outf(o, " small");
-            if(u->color != WD_NONE) outf(o, " color=%06x", u->color);
+            if(u->px) outf(o, " px=%u", u->px);
+            if(u->color == WD_TEXT) outf(o, " color=text");
+            else if(u->color != WD_NONE) outf(o, " color=%06x", u->color);
+            if(u->bg != WD_NONE) outf(o, " bg=%06x", u->bg);
             if(u->checked) outf(o, " checked");
             if(u->w || u->h) outf(o, " %ux%u", u->w, u->h);
             if(u->image >= 0) outf(o, " src=%s", d->images[u->image] ? d->images[u->image] : "(unusable)");

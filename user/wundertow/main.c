@@ -365,6 +365,7 @@ int main(int argc, char **argv) {
     ut_config_init(&cfg);
     if(ut_config_load(&cfg, UT_CONF_PATH, err, sizeof(err)) < 0)
         fprintf(stderr, "wundertow: %s: %s (the defaults are used)\n", UT_CONF_PATH, err);
+    if(cfg.font) wd_base = cfg.font;
     ld_init(&L);
     if(argc > 0 && strchr(argv[0], '/')) ld_self = argv[0];     /* a build run from elsewhere is its own helper */
     if(argc == 3 && !strcmp(argv[1], "--helper")) rc = ld_helper(argv[2], &cfg);
