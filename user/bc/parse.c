@@ -57,6 +57,7 @@ struct parser {
     int (*get)(void *);
     void *in;
     int ahead;                          /* a character read and not used; -2, none */
+    int at_end;                         /* the input has ended, and a terminal must not be asked again */
     int newline;                        /* the last one read ended a line, which counts when the next is read */
     int tok;
     char *text;                         /* of a number, a string or a name */
@@ -110,12 +111,13 @@ static int unexpected(struct parser *p) {
 
 static int getch(struct parser *p) {
     int c = p->ahead;
-    if(c == -2) c = p->get(p->in);
+    if(c == -2) c = p->at_end ? -1 : p->get(p->in);
     p->ahead = -2;
     if(p->newline) {
         p->b->line++;
         p->newline = 0;
     }
+    if(c < 0) p->at_end = 1;
     if(c == '\n') p->newline = 1;
     return c < 0 ? -1 : c;
 }
@@ -884,9 +886,10 @@ fail:
 /* the rest of the line goes with a mistake in it, so that the next line starts clean */
 static void skip_line(struct parser *p) {
     int c;
-    if(p->tok == '\n' || p->tok == T_EOF) return;
-    do c = getch(p); while(c >= 0 && c != '\n');
-    p->tok = c < 0 ? T_EOF : '\n';
+    if(!p->newline && !p->at_end) {     /* p->tok may be from a line before: only the characters say */
+        do c = getch(p); while(c >= 0 && c != '\n');
+    }
+    p->tok = p->at_end ? T_EOF : '\n';
 }
 
 /* one item into b->main: 0, or -1 with p->why; at the end of the input p->tok is T_EOF */

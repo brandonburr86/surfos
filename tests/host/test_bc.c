@@ -977,6 +977,18 @@ static void statements(void) {
     at_terminal("define f(x) { auto y; y=1; return g(x) }\ndefine g(y) { return 1/0 }\ny=7;x=6\nf(1)\nx;y\n", "6\n7\n", 0);
     at_terminal("a[0]=1\ndefine f(a[]) { return 1/0 }\nf(a[])\na[0]\n", "1\n", 0);
     at_terminal("1+\n", "", 0);
+    /* its whole line, whatever token came before it */
+    at_terminal("$ 5\n2\n", "2\n", 0);
+    at_terminal("1\n$ 5\n2\n", "1\n2\n", 0);
+    at_terminal("1\n$ quit\n2\n", "1\n2\n", 0);
+    at_terminal("1\n\n$ 5\n2\n", "1\n2\n", 0);
+    at_terminal("1;\n$ 5\n2\n", "1\n2\n", 0);
+    at_terminal("1\n@\n2\n", "1\n2\n", 0);          /* the line ends right after the mistake */
+    at_terminal("1\n$", "1\n", 0);
+    at_terminal("1\n$ 5", "1\n", 0);
+    at_terminal("1\n/* never closed\n", "1\n", 0);
+    at_terminal("1\n\"never closed\n", "1\n", 0);
+    at_terminal("1\n3 \\ 4\n2\n", "1\n2\n", 0);
     at_terminal("scale=5\n1/0\nscale\n", "5\n", 0);
     at_terminal("define f() { scale=9; return 1/0 }\nf()\nscale\n", "9\n", 0);      /* only the library's scale goes back */
 }
