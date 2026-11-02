@@ -33,9 +33,18 @@ DESCRIPTION
     A file that exists is replaced whole, by a new file beside it and
     a rename. A file that cannot be finished is deleted, or the old one
     stays. An archive that is cut short or damaged stops tar there, and
-    what was unpacked before it stands. A name of more than 100 bytes
-    without a / among its last 100 will not go into a ustar archive:
-    it is left out, and said.
+    what was unpacked before it stands. Being killed part way, by Ctrl+C
+    or otherwise, is the exception: nothing can then tidy up, so a new
+    file may stay short, and nothing marks it. Unpack again to be sure.
+    A member that would land on the archive itself is skipped.
+
+    With c, an archive that exists is replaced only if everything went
+    in: after any message but the two about names above, the old one
+    stays as it was, and that is said. A folder holding the archive
+    counts, since the archive is left out of itself: write it elsewhere
+    or delete the old one first. A name of more than 100 bytes without
+    a / among its last 100 will not go into a ustar archive: it is left
+    out, and said.
 
     The status is 0, or 2 if anything was skipped or went wrong.
 

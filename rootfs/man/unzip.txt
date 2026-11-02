@@ -25,9 +25,19 @@ DESCRIPTION
     zip bomb is made. So is a central directory over 16 MB, and Zip64,
     which is only for what FAT could not hold.
 
+    A member that would land on the archive itself is skipped. A file
+    that cannot be finished is deleted, or the old one stays. Being
+    killed part way, by Ctrl+C or otherwise, is the exception: nothing
+    can then tidy up, so a new file may stay short, and nothing marks
+    it. A later unzip -n sees that the file exists, keeps it, and gives
+    status 0: after a kill use -o, which makes each file whole again.
+
     A zip is read from its end, so it cannot come through a pipe. Past
     2 GB SurfOS can only read forward, so a large archive works, but
-    each member past 2 GB costs a read of what comes before it.
+    each member past 2 GB costs a read of what comes before it. If an
+    archive would send unzip back and forth past 2 GB, it stops after
+    reading four times the file, and says so: name the members you
+    want.
 
     The status is 0, or 2 if anything was skipped or went wrong.
 
