@@ -1,0 +1,23 @@
+cmp - compare two files byte by byte
+
+SYNOPSIS
+    cmp [-l] [-s] [-n count] file1 file2
+
+DESCRIPTION
+    Says where two files first differ: the byte and the line, both
+    from 1. Nothing is said when they are the same. If one ends first
+    that goes to the standard error. Status 0 the same, 1 different,
+    2 for trouble. - is standard input.
+
+OPTIONS
+    -l         List every byte that differs: its number in decimal,
+               and the two values in octal.
+    -s         Say nothing: only the status.
+    -n count   Compare at most count bytes.
+
+EXAMPLES
+    cmp /hda1/A.BIN /hda1/B.BIN
+    cmp -s a b && echo same
+
+SEE ALSO
+    diff, od
