@@ -553,19 +553,29 @@ static void restyle_find(struct wb *b, const struct wd_document *old, const stru
     b->find_total = fi_count(d, b->find, b->find_len, b->find_at, &b->find_index);
 }
 
-/* The pictures go over by their addresses, in the page's order, with their pixels, their size and a failure: two of an
-   address are the same picture. One the sheets hide now is let go, and one they show now is asked for. A hidden picture
-   is never loaded: nothing would show it. A load on its way keeps going when its picture keeps its number; else the
-   page's loads start again, as their answers would come to the wrong picture. */
+/* The pictures go over, each to itself: an image's run begins where its tag is (src), in old and in d, and the runs of both
+   are in the page's order. Its pixels, its size and a failure go with it. One the sheets hide now is let go, and one they
+   show now is asked for. A hidden picture is never loaded: nothing would show it. A load on its way keeps going when its
+   picture keeps its number; else the page's loads start again, as their answers come by number. */
 static void restyle_pictures(struct wb *b, struct wb_page *p, struct wd_document *old) {
     struct wd_document *d = &p->doc;
-    size_t i, j, o = 0, bytes = 0;
+    size_t ro = 0, rn = 0, i, j, bytes = 0;
     int again = 0;
-    for(j = 0; j < d->image_count; j++) {
-        if(!d->images[j]) continue;
-        for(i = o; i < old->image_count; i++) if(old->images[i] && !strcmp(old->images[i], d->images[j])) break;
-        if(i == old->image_count) continue;
-        o = i + 1;
+    while(ro < old->run_count && rn < d->run_count) {
+        const struct wd_run *a = &old->runs[ro], *e = &d->runs[rn];
+        if(a->kind != WR_IMAGE || a->image < 0 || (e->kind == WR_IMAGE && e->image >= 0 && a->src < e->src)) {
+            ro++;
+            continue;
+        }
+        if(e->kind != WR_IMAGE || e->image < 0 || e->src < a->src) {
+            rn++;
+            continue;
+        }
+        ro++;
+        rn++;
+        i = (size_t)a->image;
+        j = (size_t)e->image;
+        if(!old->images[i] || !d->images[j] || strcmp(old->images[i], d->images[j])) continue;
         if(old->pics[i].state == WP_RUNNING && i != j) {
             again = 1;
             old->pics[i].state = WP_WAIT;
@@ -598,23 +608,30 @@ static int same_control(const struct wd_document *old, const struct wd_control *
     return 1;
 }
 
-/* What a person made of the controls goes over to the same controls of d, in the page's order: what is typed in them,
-   where its caret is, what is ticked and chosen. map[] (old's count) gets each one's number in d, or -1. A page's
-   forms do not depend on its sheets (display: none hides a control's box, not the control), so all of them go over;
-   the hidden attribute shown by a sheet can change a form, and then what is no longer the same stays as the page has it. */
+/* What a person made of the controls goes over to the same controls of d, each found by its tag's place in the page (src),
+   in the page's order: what is typed in them, where its caret is, what is ticked and chosen. map[] (old's count) gets
+   each one's number in d, or -1. A page's forms do not depend on its sheets (display: none hides a control's box, not the
+   control), so all of them go over; the hidden attribute shown by a sheet can add a select or a button, which are new. */
 static void restyle_controls(struct wd_document *old, struct wd_document *d, int *map) {
-    size_t i, j, o = 0;
+    size_t i = 0, j = 0;
     unsigned int k;
-    for(i = 0; i < old->control_count; i++) map[i] = -1;
-    for(j = 0; j < d->control_count; j++) {
-        struct wd_control *x, *y = &d->controls[j];
+    int stray = 0;
+    for(k = 0; k < old->control_count; k++) map[k] = -1;
+    while(i < old->control_count && j < d->control_count) {
+        struct wd_control *x = &old->controls[i], *y = &d->controls[j];
         char *v;
         size_t cap;
-        for(i = o; i < old->control_count && !same_control(old, &old->controls[i], d, y); i++) ;
-        if(i == old->control_count) continue;
-        o = i + 1;
-        map[i] = (int)j;
-        x = &old->controls[i];
+        if(x->src < y->src) {                       /* x is in no tag of d's */
+            i++;
+            continue;
+        }
+        if(x->src > y->src || !same_control(old, x, d, y)) {    /* y is new */
+            stray |= y->kind == WF_RADIO && y->checked;
+            i += x->src == y->src;
+            j++;
+            continue;
+        }
+        map[i++] = (int)j++;
         v = y->value;                               /* the values change places: what goes with old is a password's */
         cap = y->cap;                               /* default, wiped there with the rest (fm_free()) */
         y->value = x->value;
@@ -628,7 +645,9 @@ static void restyle_controls(struct wd_document *old, struct wd_document *d, int
         y->checked = x->checked;
         for(k = 0; k < y->noptions; k++) d->options[y->first_option + k].on = old->options[x->first_option + k].on;
     }
-    for(i = 0; i < old->control_count; i++) {      /* a radio button that was chosen is its group's only one */
+    for(; j < d->control_count; j++) stray |= d->controls[j].kind == WF_RADIO && d->controls[j].checked;
+    if(!stray) return;                              /* a new radio button checked by the page, beside one a person chose: */
+    for(i = 0; i < old->control_count; i++) {      /* the one chosen is its group's only one */
         const struct wd_control *x = &old->controls[i];
         if(map[i] < 0 || x->kind != WF_RADIO || !x->checked || !x->name) continue;
         for(j = 0; j < d->control_count; j++) {
@@ -639,21 +658,23 @@ static void restyle_controls(struct wd_document *old, struct wd_document *d, int
     }
 }
 
-/* old's link n in d: the same address, as many of them before it. -1 when there is none, or when nothing of it is on the
-   page: the sheets hid it, and Tab does not stop there. */
+/* old's link n in d: the link of the same address whose text begins where its does in the page (its first run's src).
+   -1 when there is none, as when the sheets hid the link or where it begins: Tab does not stop at what is hidden. */
 static int same_link(const struct wd_document *old, const struct wd_document *d, int n) {
-    size_t i, k = 0;
+    size_t r, lo = 0, hi = d->run_count;
+    unsigned int s;
     if(n < 0 || (size_t)n >= old->link_count) return -1;
-    for(i = 0; i < (size_t)n; i++) if(!strcmp(old->links[i].url, old->links[n].url)) k++;
-    for(i = 0; i < d->link_count; i++) {
-        size_t r;
-        if(strcmp(d->links[i].url, old->links[n].url)) continue;
-        if(k) {
-            k--;
-            continue;
-        }
-        for(r = 0; r < d->run_count; r++) if(d->runs[r].link == (int)i) return (int)i;
-        return -1;
+    for(r = 0; r < old->run_count && old->runs[r].link != n; r++) ;
+    if(r == old->run_count) return -1;
+    s = old->runs[r].src;
+    while(lo < hi) {                                /* d's first run that begins there, or after it */
+        size_t mid = lo + (hi - lo) / 2;
+        if(d->runs[mid].src < s) lo = mid + 1;
+        else hi = mid;
+    }
+    for(; lo < d->run_count && d->runs[lo].src == s; lo++) {
+        int l = d->runs[lo].link;
+        if(l >= 0 && !strcmp(d->links[l].url, old->links[n].url)) return l;
     }
     return -1;
 }

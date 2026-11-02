@@ -212,6 +212,97 @@ static void restyled(void) {
     check(p->doc.control_count == 2 && c[0].kind == WF_SELECT && !strcmp(c[1].value, "ab"), "the sheet shows it: it is a control now, and what was typed is in its field");
     check(b.field == 1 && b.focus == WB_FOCUS_FIELD, "which still has the keys");
 
+    /* twins: a sheet shows a select just like the one a person chose in, before it; and a link to the same address */
+    open_page("https://a.test/d/twins.html", "<link rel=stylesheet href=a.css><form action=/s><div hidden class=s>"
+              "<select name=x><option>1<option>2</select><a href=/one>zero</a></div><select name=x><option>1<option>2</select>"
+              "<input name=q><input type=submit></form><p><a href=/one>one</a>");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css") && p->doc.control_count == 3 && p->doc.link_count == 1, "a select and a link under the hidden attribute");
+    sheet = q;
+    wb_key(&b, 9);
+    wb_key(&b, WB_KEY_DOWN);
+    check(b.field == 0 && fm_chosen(&p->doc, 0) == 1, "the select that shows: its second option, by the keys");
+    q = sheet;
+    answer(".s{display:block}", "text/css");
+    check(p->doc.control_count == 4 && fm_chosen(&p->doc, 0) == 0 && fm_chosen(&p->doc, 1) == 1 && b.field == 1,
+          "the sheet shows its twin before it: what was chosen, and the keys, stay with the one they were in");
+    wb_key(&b, 9);
+    wb_key(&b, 13);
+    check(b.want && !strcmp(b.req.url, "https://a.test/s?x=1&x=2&q="), "and the form says so, in the page's order");
+    while(wb_cancel(&b)) ;
+    wb_stop(&b);
+    open_page("https://a.test/d/twins2.html", "<link rel=stylesheet href=a.css><p hidden class=s><a href=/one>zero</a></p>"
+              "<p><a href=/one>one</a>");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a link, and its twin under the hidden attribute");
+    sheet = q;
+    wb_key(&b, 9);
+    check(b.tab_link == 0, "Tab on the link that shows");
+    q = sheet;
+    answer(".s{display:block}", "text/css");
+    check(p->doc.link_count == 2 && b.tab_link == 1, "the sheet shows the twin before it: the focus stays on the link it was on");
+
+    /* a press across the sheet: a field, a link; and a select's open list */
+    open_page("https://a.test/d/press.html", "<link rel=stylesheet href=a.css><form action=/s><input type=checkbox name=c>"
+              "<select name=s><option>a<option>b<option>c</select></form><p><a href=/there>there</a>");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "fields and a link, and a sheet");
+    sheet = q;
+    {
+        long i = wl_control_item(&p->lay, 0);
+        int x = p->lay.items[i].x + p->lay.items[i].w / 2, y = p->lay.items[i].y + p->lay.items[i].h / 2 + WB_TOOLBAR;
+        wb_pointer(&b, x, y, 0);
+        wb_pointer(&b, x, y, 1);
+        check(b.press_field == 0, "the button goes down on the checkbox");
+        q = sheet;
+        answer("p{color:#ff0000}", "text/css");
+        check(b.press_field == 0, "the sheet comes meanwhile");
+        wb_pointer(&b, x, y, 0);
+        check(p->doc.controls[0].checked, "and up on it: it is ticked");
+    }
+    open_page("https://a.test/d/press2.html", "<link rel=stylesheet href=a.css><p><a href=/there>there</a>");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a link, and a sheet");
+    sheet = q;
+    {
+        size_t i;
+        int x = 0, y = 0;
+        for(i = 0; i < p->lay.count; i++) if(p->lay.items[i].link == 0) {
+            x = p->lay.items[i].x + p->lay.items[i].w / 2;
+            y = p->lay.items[i].y + p->lay.items[i].h / 2 + WB_TOOLBAR;
+            break;
+        }
+        wb_pointer(&b, x, y, 0);
+        wb_pointer(&b, x, y, 1);
+        q = sheet;
+        answer("a{font-weight:bold}", "text/css");
+        wb_paint(&b, screen, W);
+        wb_pointer(&b, x, y, 0);
+        check(b.want && !strcmp(b.req.url, "https://a.test/there"), "pressed on a link, the sheet, let go on it: followed");
+        while(wb_cancel(&b)) ;
+        wb_stop(&b);
+    }
+    open_page("https://a.test/d/list.html", "<link rel=stylesheet href=a.css><form action=/s><select name=s><option>a<option>b"
+              "<option>c</select></form>");
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a select, and a sheet");
+    sheet = q;
+    wb_key(&b, 9);
+    wb_key(&b, ' ');
+    wb_key(&b, WB_KEY_DOWN);
+    check(b.list == 0 && b.list_at == 1, "its list open, the second marked");
+    q = sheet;
+    answer("select{color:#ff0000}", "text/css");
+    check(b.list == 0 && b.list_at == 1, "the sheet comes: the list stays open, the same marked");
+    wb_key(&b, WB_KEY_DOWN);
+    wb_key(&b, 13);
+    check(b.list == -1 && fm_chosen(&p->doc, 0) == 2, "and Enter takes the one marked");
+
     /* the link with the keyboard's focus: by its address */
     open_page("https://a.test/d/links.html", "<link rel=stylesheet href=a.css><p hidden class=s><a href=/zero>zero</a></p>"
               "<p><a href=/one>one</a> <a href=/two>two</a> <a href=/one>again</a>");
@@ -281,8 +372,12 @@ static void restyled(void) {
     check(p->doc.image_count == 2 && !strcmp(p->doc.images[0], "https://a.test/d/b.png"), "hidden now: it is no picture of the page's");
     check(p->pic_bytes == 0 && pixel_bytes(p) == 0 && p->bytes == sizeof(*p) + p->doc.bytes, "its pixels are let go, and counted no more");
     check((wb_cancel(&b) & WB_CANCEL_RESOURCES) && !wb_busy(&b), "the next one has another number now: the loads start again");
-    wb_image(&b, two.page, two.item, 2, 2, 2, 2, pixels_of(2, 2, 0x654321));
-    check(p->doc.pics[0].state == WP_WAIT && !p->doc.pics[0].px, "and an answer to the old number counts for nothing");
+    {
+        long held = ut_alloc_live;
+        wb_image(&b, two.page, two.item, 2, 2, 2, 2, pixels_of(2, 2, 0x654321));
+        check(two.item == 1 && p->doc.pics[1].state == WP_WAIT && !p->doc.pics[1].px && !p->doc.pics[0].px && ut_alloc_live == held,
+              "and an answer to the old number counts for nothing: the picture of that number now has no pixels, and they are let go");
+    }
     check(asked_picture("https://a.test/d/b.png") && q.item == 0, "it is asked for by its number now");
     one = q;
     check(asked_picture("https://a.test/d/c.png") && q.item == 1 && !next(), "then the last, and not the hidden one");

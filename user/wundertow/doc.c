@@ -1148,6 +1148,7 @@ static int count_attr(const struct ut_html_tag *t, int a, int lo, int hi, int no
 /* A control as this tag gives it, of kind and role, checked its own, its value the tag's */
 static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, int checked) {
     struct fm_new n;
+    int c;
     memset(&n, 0, sizeof(n));
     n.kind = kind;
     n.role = role;
@@ -1173,7 +1174,9 @@ static int control_of(struct bd *b, struct ut_html_tag *t, int kind, int role, i
     n.formaction = t->seen[A_FORMACTION] ? t->val[A_FORMACTION] : NULL;
     n.formaction_cut = t->seen[A_FORMACTION] && t->over[A_FORMACTION];
     n.formmethod = t->seen[A_FORMMETHOD] ? t->val[A_FORMMETHOD] : NULL;
-    return fm_control(&b->d, &b->fb, &n);
+    c = fm_control(&b->d, &b->fb, &n);
+    if(c >= 0) b->d.controls[c].src = (unsigned int)b->tag_q;
+    return c;
 }
 
 /* A button's or a select's label is the text inside it: the field is made at its end */

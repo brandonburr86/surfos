@@ -119,6 +119,8 @@ struct wd_control {
     unsigned int first_option, noptions;
     unsigned char here;                 /* an empty formaction: the page's own address (until the page's end) */
     unsigned char shaped;               /* a range or a colour: a text field here, but none that takes text */
+    unsigned int src;                   /* 11/02/26: where its tag is in the page's bytes: the same control of a page built
+                                           again with its sheets has the same (browser.c's wb_restyled()) */
 };
 
 #define WS_BOLD     0x0001
