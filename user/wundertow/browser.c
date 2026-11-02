@@ -668,7 +668,8 @@ void wb_restyled(struct wb *b, struct wb_page *p, struct wd_document *old) {
     struct wd_document *d = &p->doc;
     int *map = old->control_count ? malloc(old->control_count * sizeof(*map)) : NULL, into;
     size_t off;
-    if(p->lay_w && p->scroll > 0 && wl_place(&p->lay, p->scroll, &off, &into)) {     /* the layout is old's still */
+    /* the place being read, in old's layout when it has one: also one a picture's size has made out of date (picture_size()) */
+    if(p->scroll > 0 && wl_place(&p->lay, p->scroll, &off, &into)) {
         p->place_off = off_at(d, src_at(old, off));
         p->place_into = into;
         p->placed = 1;

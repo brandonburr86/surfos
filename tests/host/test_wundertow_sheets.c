@@ -407,6 +407,24 @@ static void restyled_places(void) {
     answer(".g{display:none}", "text/css");
     wb_paint(&b, screen, W);
     check(p->scroll >= y_of(p, "line 1") && p->scroll < y_of(p, "line 2"), "what was being read is hidden now: the view is at what follows it");
+
+    /* a picture's size and the sheet at once: the page is not laid out between them */
+    n = (size_t)snprintf(page, sizeof(page), "<link rel=stylesheet href=a.css><p><img src=big.png>");
+    for(k = 1; k <= 60; k++) n += (size_t)snprintf(page + n, sizeof(page) - n, "<p>line %d", k);
+    open_page("https://a.test/d/place3.html", page);
+    p = wb_current(&b);
+    wb_paint(&b, screen, W);
+    check(asked("https://a.test/d/a.css"), "a page with a picture above the place being read, and a sheet");
+    sheet = q;
+    check(asked_picture("https://a.test/d/big.png"), "the picture on its way too");
+    y = y_of(p, "line 30");
+    p->scroll = y + 5;
+    wb_image(&b, q.page, q.item, 100, 200, 100, 200, pixels_of(100, 200, 0x123456));
+    check(p->lay_w == 0, "the picture came: the page is to be laid out again");
+    q = sheet;
+    answer("p{margin:4px 0}", "text/css");
+    wb_paint(&b, screen, W);
+    check(p->scroll == y_of(p, "line 30") + 5 && y_of(p, "line 30") != y, "and the sheet before that: the same line is at the top");
 }
 
 int main(void) {
