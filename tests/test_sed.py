@@ -7,7 +7,8 @@ last part: bad scripts and input by the kilobyte. 11/01/26, the command-line sui
     tests/test_sed.py build/O0/host/sed-host build/O0/host/grep-host [rounds [seed]]
 
 Where they differ on purpose it says so here: status 2 for every kind of trouble (GNU has 1 and 4), the messages' wording, w files that
-appear when sed ends and not at the start, an empty match that steps over a whole UTF-8 character (GNU's goes by the byte)."""
+appear when sed ends and not at the start, an empty match that steps over a whole UTF-8 character (GNU's goes by the byte), and what
+own_rules() holds."""
 
 import os
 import random
@@ -165,7 +166,7 @@ GNU_ONLY = [
     ([':a;N;$!ba;s/\\n/ /g'], AB), (['{:a;N;ba}'], AB), (['{bx};:x;p'], AB), ([':a b\nb'], AB), ([': x'], AB), (['bx ;p;:x'], AB), (['t;p'], AB), (['T;p'], AB), (['s/a/x/;T;p'], AB), (['s/a/x/;Tz;p;:z'], AB), (['s/a/b/;n;ty;s/$/!/;:y'], AB),
     (['q5'], AB), (['q 5'], AB), (['Q'], AB), (['Q7'], AB), (['2Q'], AB), (['3q 9;p'], AB), (['q5 ;p'], AB), (['$!N;q'], AB), (['a x\nq'], AB), (['a x\nQ'], AB), (['r in\nq'], AB, {'in': b'R\n'}),
     (['-n', 'l 5'], b'abcdefghij\n'), (['-n', 'l 1'], b'abc\n'), (['-n', 'l 2'], b'abc\n'), (['-n', 'l 0'], b'x' * 200 + b'\n'), (['-n', 'l;l'], b'a\n'), (['l 5;p'], b'a\n'), (['l5'], b'a\n'),
-    (['#n\np'], AB), (['#no\np'], AB), (['#x\np'], AB), (['-e', '#n', '-e', 'p'], AB), (['-e', 'p', '-e', '#n'], AB), (['-f', 's'], AB, {'s': b'#n\np\n'}), (['-e', 'p', '-f', 's'], AB, {'s': b'#n\n'}),
+    (['#n\np'], AB), (['#n'], AB), (['#x\np'], AB), (['-e', '#n', '-e', 'p'], AB), (['-e', 'p', '-e', '#n'], AB), (['-f', 's'], AB, {'s': b'#n\np\n'}), (['-f', 's'], AB, {'s': b'#n'}), (['-e', 'p', '-f', 's'], AB, {'s': b'#n\n'}),
     (['-s', '-n', '$p', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}), (['-s', '-n', '1p', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}), (['-s', '-n', '2,3p', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}),
     (['-n', '2,3p', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}), (['-s', 'N', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}), (['-s', 'n;d', 'x', 'y'], b'', {'x': b'1\n2\n', 'y': b'3\n4\n'}), (['-s', 'p', 'x'], b'', {'x': b'1'}),
     (['-s', 'p', 'x', 'y'], b'', {'x': b'1', 'y': b'2'}), (['p', 'x', 'y'], b'', {'x': b'1', 'y': b'2'}),
@@ -351,6 +352,17 @@ def malformed():
         fail('a message: %r' % m[3])
 
 
+def own_rules():
+    """where sed differs from the real one on purpose, or the real one cannot be run on what matters"""
+    # #n alone on its line is -n. GNU's 4.9 takes every script that starts with those two characters so, and -i then empties the file
+    twice = b'a\na\n'
+    for script in ('#no\np', '#n x\np', '#nx\np', '#n \np', '#normalise\np'):
+        expect(SED, [script], b'a\n', out=twice)
+    expect(SED, ['-e', '#nope', '-e', 'p'], b'a\n', out=twice)
+    expect(SED, ['-f', 's'], b'a\n', {'s': b'#normalise\np\n'}, out=twice)
+    expect(SED, ['-i', '-f', 's', 'f'], b'', {'s': b'#normalise line ends\ns/x/y/\n', 'f': b'axb\n'}, after={'s': b'#normalise line ends\ns/x/y/\n', 'f': b'ayb\n'})
+
+
 def undecided():
     """a line on which the search gave up matches no more than it fails to, whatever the options: status 2"""
     big = b'abcdefghij' * 300000 + b'\n'
@@ -405,6 +417,7 @@ def main():
             args, stdin = case[0], case[1]
             files = case[2] if len(case) > 2 else {}
             compare('grep', GREP, args, stdin, files, what='grep')
+    own_rules()
     undecided()
     print('test_sed: %d checks, %d failed%s' % (checks, failures, ' (%d scripts did not end in the real sed)' % skipped if skipped else ''))
     return 1 if failures else 0

@@ -103,6 +103,19 @@ static void in_place(void) {
     sim_put("a.txt", "1\n");
     check(sed("-i", "s//x/", "a.txt", NULL) == 2 && file_is("a.txt", "1\n") && gone("a.txt.tmp"), "-i stopped by a mistake at run time");
 
+    /* #n counts alone on its line: a comment that starts so must not empty the file */
+    sim_reset();
+    sim_put("a.txt", "axb\n");
+    sim_put("s.sed", "#normalise line ends\ns/x/y/\n");
+    check(sed("-i", "-f", "s.sed", "a.txt", NULL) == 0 && file_is("a.txt", "ayb\n"), "-i and a comment that starts with #n");
+    sim_reset();
+    sim_put("a.txt", "axb\n");
+    check(sed("-i", "#n: not the option\ns/x/y/", "a.txt", NULL) == 0 && file_is("a.txt", "ayb\n"), "-i and #n with more on its line");
+    sim_reset();
+    sim_put("a.txt", "axb\n");
+    sim_put("s.sed", "#n\n/a/p\n");
+    check(sed("-i", "-f", "s.sed", "a.txt", NULL) == 0 && file_is("a.txt", "axb\n"), "-i and #n alone on its line");
+
     /* several files: each on its own */
     sim_reset();
     sim_put("a.txt", "1\n");

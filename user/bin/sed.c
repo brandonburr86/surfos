@@ -7,7 +7,7 @@ sed [-nEs] [-i[suffix]] [-e script] [-f file] [script] [file...]: a stream edito
 files (standard input without them, - for it) goes into the pattern space, the script runs on
 it, and it is printed. Options, which may come after the files as with GNU's sed, up to a --:
 
-  -n          print only what p and the like ask for (so does #n as the script's first two characters)
+  -n          print only what p and the like ask for (so does a first line that is #n and nothing else)
   -e script   this text is script; -f file: the file's text is; several add up
   -E, -r      extended regular expressions (user/libsurf/regex.c; man regex)
   -s          each file on its own: line numbers and $ start again
@@ -1287,7 +1287,8 @@ static int new_cmd(void) {
 }
 
 static int parse_script(void) {
-    if(g.sclen >= 2 && g.sc[0] == '#' && g.sc[1] == 'n') g.quiet = 1;   /* as the first two characters, as GNU's */
+    /* #n and nothing else on the line. GNU's 4.9 takes any comment that starts so, and sed -i then empties the file */
+    if(g.sclen >= 2 && g.sc[0] == '#' && g.sc[1] == 'n' && (g.sclen == 2 || g.sc[2] == '\n')) g.quiet = 1;
     for(;;) {
         struct cmd *c;
         struct address from, to;

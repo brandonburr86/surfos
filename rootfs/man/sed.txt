@@ -14,8 +14,9 @@ DESCRIPTION
     W z v, and no long options. Patterns are those of man regex.
 
 OPTIONS
-    -n          Print only what p and the like ask for. A script that
-                starts with #n does the same.
+    -n          Print only what p and the like ask for. A first line
+                of the script that is #n and nothing else does the
+                same.
     -e script   This text is script. Several -e and -f add up.
     -f file     The file's text is script.
     -E, -r      Extended regular expressions.
