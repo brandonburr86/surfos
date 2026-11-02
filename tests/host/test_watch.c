@@ -262,6 +262,25 @@ static void row_bounded(void) {
     CHECK(!strcmp(line(0), "a") && !strcmp(line(1), "b") && !strcmp(line(2), "c") && w.row == 3);
 }
 
+/* a window that changes during a run or a long wait keeps its text, cut to the new size */
+static void new_size(void) {
+    show(4, 10, "one\ntwo2\nthree3\nfour44\n");
+    CHECK(ws_fit(&w, 2, 3) == 0 && w.rows == 2 && w.cols == 3);
+    CHECK(!strcmp(line(0), "one") && !strcmp(line(1), "two") && w.row == 2 && w.col <= 3);
+    show(2, 5, "abcde\nfg");                        /* larger: all of it, and the cursor where it was */
+    CHECK(ws_fit(&w, 4, 8) == 0 && w.rows == 4 && w.cols == 8);
+    CHECK(!strcmp(line(0), "abcde") && !strcmp(line(1), "fg") && !strcmp(line(2), "") && w.row == 1 && w.col == 2);
+    ws_feed(&w, "h\ni", 3);                         /* text goes on from there */
+    CHECK(!strcmp(line(1), "fgh") && !strcmp(line(2), "i"));
+    show(1, 4, "abcd\nefgh\n");                    /* past the end, then room again */
+    CHECK(w.row == 1 && ws_fit(&w, 3, 4) == 0);
+    ws_feed(&w, "z", 1);
+    CHECK(!strcmp(line(1), "z"));
+    { struct wscreen n; memset(&n, 0, sizeof(n));    /* the first size of all, from nothing */
+      CHECK(ws_fit(&n, 2, 2) == 0 && n.rows == 2 && n.cols == 2 && n.cells && !n.cells[0].n);
+      free(n.cells); }
+}
+
 static void oversized(void) {
     size_t i, n = 1 << 24;
     char *big = malloc(1 << 16);
@@ -285,6 +304,7 @@ int main(void) {
     title();
     random_screens();
     row_bounded();
+    new_size();
     oversized();
     free(w.cells);
     free(tv_out);

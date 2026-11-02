@@ -22,6 +22,8 @@ and what it prints comes through one pipe, 1 and 2 alike. watch never waits for 
 call that a key could not end: it polls the keys and the pipe together, and a command that prints
 without end or never ends is shown as far as it got, a second at a time. What was printed past
 the last row is read and dropped (watchtext.h), so the command runs as it would anywhere.
+The size of the screen is looked at about once a second: a window that changes, as a telnet
+client's can, shows the same text cut to its new size at once, and the next run lays it out.
 
 Status 0 after q or Ctrl+C, 2 for a mistake or when a run cannot start.
 */
@@ -41,6 +43,7 @@ Status 0 after q or Ctrl+C, 2 for a mistake or when a run cannot start.
 #define CTRL_C  3
 #define SHOW_MS 1000                    /* how often a run in progress is shown */
 #define LOOK_MS 100                     /* how often a run with its pipe quiet is looked at */
+#define SIZE_MS 1000                    /* how long a wait goes before the screen's size is looked at */
 
 static struct wscreen scr;
 static char text[WATCH_TEXT_MAX + 1];   /* the command */
@@ -51,6 +54,7 @@ static int keys = -1, devnull = -1, raw_mode;
 static int kid, kid_ended;              /* the run: its first pid, which is its job's id too */
 static int out_fd = -1;                 /* the pipe from it */
 static struct tv_keys kstate;
+static char when[32];                   /* the title's time: of the last run, shown again if the screen is redrawn */
 
 static void leave_screen(void) {
     static const char bye[] = TV_LEAVE;
@@ -60,18 +64,18 @@ static void leave_screen(void) {
     ttyctl(TTY_RAW, 0);
 }
 
-/* The rows the text has take the screen's size at the start of a run. 0, or -1 without memory */
+/* The text's rows to the screen's size as it is now: 1 when that is new, and everything is drawn again; 0 when not;
+   -1 without memory */
 static int fit_screen(void) {
     int top = titled ? 2 : 0;
-    if(!tv_resize(ttyctl(TTY_GETSIZE, 0)) && scr.cells) {
-        ws_clear(&scr);
-        return 0;
-    }
-    free(rowbuf);
-    rowbuf = malloc((size_t)tv_cols * 4 + 256);
-    if(!rowbuf || ws_size(&scr, tv_rows - top > 1 ? tv_rows - top : 1, tv_cols) < 0) return -1;
+    char *p;
+    if(!tv_resize(ttyctl(TTY_GETSIZE, 0)) && scr.cells) return 0;
+    p = realloc(rowbuf, (size_t)tv_cols * 4 + 256);
+    if(!p) return -1;
+    rowbuf = p;
+    if(ws_fit(&scr, tv_rows - top > 1 ? tv_rows - top : 1, tv_cols) < 0) return -1;
     scr.utf8 = utf8;
-    return 0;
+    return 1;
 }
 
 static int start_run(void) {
@@ -82,6 +86,7 @@ static int start_run(void) {
         errno = ENOMEM;
         return -1;
     }
+    ws_clear(&scr);
     if(pipe(p) < 0) return -1;
     av[0] = "surfsh";
     av[1] = "-c";
@@ -114,14 +119,16 @@ static void end_run(void) {
     kid = 0;
 }
 
+static void stamp(void) {
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
+}
+
 static void draw(void) {
     int y, top = titled ? 2 : 0;
     if(titled) {
-        time_t now = time(NULL);
-        struct tm tm;
-        char when[32];
-        localtime_r(&now, &tm);
-        strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
         tv_row(0, rowbuf, ws_title(every_ms, text, when, tv_cols, utf8, rowbuf, (size_t)tv_cols * 4 + 256));
         tv_row(1, "", 0);
     }
@@ -161,23 +168,29 @@ static int read_keys(void) {
    it left behind in the background may hold the pipe open for good. */
 static int loop(void) {
     unsigned int next = uptime(), shown = next;
-    int running = 0, runs = 0;
+    int running = 0, first = 1;
     for(;;) {
         struct pollfd p[2];
         unsigned int now = uptime();
-        int was_ended = running && kid_ended, timeout;
-        if(!running && (int)(now - next) >= 0) {
+        int was_ended = running && kid_ended, timeout, wait = (int)(next - now);
+        if(!running && wait <= 0) {
             if(start_run() < 0) return -1;
             running = 1;
-            shown = runs++ ? now : now - SHOW_MS;       /* the first time the title shows at once */
+            shown = first ? now - SHOW_MS : now;        /* the first time the title shows at once */
+            first = 0;
+            stamp();
         }
         p[0].fd = keys;
         p[1].fd = running ? out_fd : -1;
         p[0].events = p[1].events = POLLIN;
         p[0].revents = p[1].revents = 0;
-        timeout = was_ended ? 0 : running ? LOOK_MS : (int)(next - now);
+        timeout = was_ended ? 0 : running ? LOOK_MS : wait < SIZE_MS ? wait : SIZE_MS;
         if(poll(p, 2, timeout) < 0 && errno != EINTR) return -1;
         if((p[0].revents & POLLIN) && read_keys()) return 0;
+        switch(fit_screen()) {
+        case 1: draw(); break;
+        case -1: errno = ENOMEM; return -1;
+        }
         if(!running) continue;
         if(out_fd >= 0 && (p[1].revents & (POLLIN | POLLHUP))) read_output();
         if(!kid_ended) {
@@ -189,10 +202,12 @@ static int loop(void) {
             end_run();
             running = 0;
             ws_finish(&scr);
+            stamp();
             draw();
             next = uptime() + every_ms;
         } else if(uptime() - shown >= SHOW_MS) {
             shown = uptime();
+            stamp();
             draw();
         }
     }

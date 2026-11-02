@@ -51,6 +51,23 @@ static TV_UNUSED int ws_size(struct wscreen *w, int rows, int cols) {
     return w->cells ? 0 : -1;
 }
 
+/* the same text on a screen of a new size, a telnet window's say, with no run to wait for: 0, or -1 without memory, and it
+   stays as it was. What no longer fits is cut, not wrapped again: the next run lays it out. */
+static TV_UNUSED int ws_fit(struct wscreen *w, int rows, int cols) {
+    struct ws_cell *c = calloc((size_t)rows * (size_t)cols, sizeof(w->cells[0]));
+    int y, keep = cols < w->cols ? cols : w->cols;
+    if(!c) return -1;
+    for(y = 0; y < rows && y < w->rows; y++)
+        memcpy(&c[y * cols], &w->cells[y * w->cols], (size_t)keep * sizeof(c[0]));
+    free(w->cells);
+    w->cells = c;
+    w->rows = rows;
+    w->cols = cols;
+    if(w->row > rows) w->row = rows;
+    if(w->col > cols) w->col = cols;
+    return 0;
+}
+
 static TV_UNUSED void ws_clear(struct wscreen *w) {
     if(w->cells) memset(w->cells, 0, (size_t)w->rows * (size_t)w->cols * sizeof(w->cells[0]));
     w->row = w->col = w->esc = w->npend = 0;
