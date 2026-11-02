@@ -18,6 +18,10 @@ DESCRIPTION
     plain text again and again, a blank line between them, until count
     or until its reader goes.
 
+    Started with & on a terminal, top cannot tell: it takes the
+    alternate screen and draws over the prompt, and the keys are the
+    shell's. kill %1 gives the screen back.
+
     The first report's shares are since boot, the others' since the
     report before. The kernel counts a timer tick to whichever task it
     finds running, so %CPU is a sample at 100 ticks a second: over two

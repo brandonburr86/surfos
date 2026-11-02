@@ -9,7 +9,8 @@ DESCRIPTION
     status; spawn starts it in the background and returns. A name means
     /initrd/bin/name unless it has a / in it. In surfsh, typing the name
     is the usual way, and & the way to start a job; these two are the
-    ring-0 shell's. A surfsh that run starts has no job control.
+    ring-0 shell's. A surfsh typed at the ring-0 shell has job control;
+    one from run surfsh at a surfsh prompt has none.
 
     run's status is the program's, and 1 when it could not start or was
     killed.

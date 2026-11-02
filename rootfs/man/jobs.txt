@@ -18,8 +18,9 @@ DESCRIPTION
     stops until fg gives it the keys. When the shell ends, its stopped
     jobs are killed.
 
-    A surfsh that run started in the ring-0 shell has no job control: fg
-    and bg say so.
+    A surfsh typed at the ring-0 shell has job control. One from run
+    surfsh at a surfsh prompt has none: what the kernel's run starts is
+    in no job, and fg and bg say so.
 
 EXAMPLES
     count 100 100 &

@@ -15,15 +15,19 @@ REPO = Path(__file__).resolve().parents[1]
 PAGES = REPO / 'rootfs' / 'man'
 WIDTH = 72
 
-# The command-line suite's tools that are on other tracks' branches until the integration. A name here may lack a page and
-# may be named under SEE ALSO. The integrator removes this list once every track is merged: everything in SUITE must then
-# have its page, and this test says so.
+# The brief's tools, which must have pages in the end whether or not the sources above name them yet.
+SUITE = {
+    'sed', 'awk', 'diff', 'patch', 'cmp', 'tar', 'gzip', 'gunzip', 'zcat', 'unzip', 'fsck', 'top', 'man', 'telnet', 'ftp',
+    'basename', 'dirname', 'od', 'base64', 'strings', 'file', 'paste', 'join', 'comm', 'fold', 'nl', 'rev', 'cal', 'tree',
+    'watch', 'bc',
+}
+# Those of them that are on other tracks' branches until the integration. A name here may lack a page and may be named
+# under SEE ALSO. The integrator removes this list once every track is merged: everything in SUITE must then have its page,
+# and this test says so.
 NOT_HERE_YET = {
     'sed', 'awk', 'diff', 'patch', 'cmp', 'tar', 'gzip', 'gunzip', 'zcat', 'unzip', 'fsck', 'telnet', 'ftp', 'basename',
     'dirname', 'od', 'base64', 'strings', 'file', 'paste', 'join', 'comm', 'fold', 'nl', 'rev', 'cal', 'tree', 'bc',
 }
-# the brief's tools, which must have pages in the end whether or not the sources above name them yet
-SUITE = NOT_HERE_YET | {'top', 'watch', 'man'}
 
 # the brief's sections, which come in this order on any page that has them. A page may have others among them (KEYS,
 # COMMANDS, a sed's ADDRESSES): a heading is any line of capitals at the left margin.
@@ -119,6 +123,71 @@ class EveryName(unittest.TestCase):
         here = programs() | kernel_commands() | builtins()
         for name in sorted(NOT_HERE_YET & here):
             self.assertTrue(resolves(name, self.pages, self.table), f'{name} is here now and has no page')
+
+
+class TheSuite(unittest.TestCase):
+    """the review of 11/01/26: SUITE was NOT_HERE_YET and three names, and those three were all it ever checked: with the
+    list gone it would have held only them, so a tool with no page would have passed"""
+
+    def test_it_is_the_briefs_list(self):
+        brief = (REPO / 'docs' / 'superpowers' / 'plans' / '2026-11-01-cli-suite.md').read_text(encoding='utf-8')
+        scope = brief[brief.index('**In scope:**'):brief.index('`grep -E`')]
+        self.assertEqual(sorted(set(re.findall(r'`([a-z0-9]+)`', scope))), sorted(SUITE))
+
+    def test_the_list_is_part_of_it(self):
+        self.assertLessEqual(NOT_HERE_YET, SUITE)
+
+    def test_with_the_list_gone_a_missing_page_fails(self):
+        """this file as the integrator will leave it: the list empty, and every other tool's page there but tar's and fold's"""
+        source = Path(__file__).read_text(encoding='utf-8')
+        emptied = re.sub(r'^NOT_HERE_YET = \{.*?^\}', 'NOT_HERE_YET = set()', source, flags=re.M | re.S)
+        self.assertNotEqual(emptied, source)
+        later = {'__name__': 'test_man_later', '__file__': __file__}
+        exec(compile(emptied, 'test_man_later', 'exec'), later)
+        check = later['EveryName']('test_every_tool_of_the_suite')
+        check.setUp()
+        check.pages = set(later['SUITE']) - {'tar', 'fold'}
+        self.assertEqual(check.missing(later['SUITE']), ['fold', 'tar'])
+        with self.assertRaises(AssertionError):
+            check.test_every_tool_of_the_suite()
+        check.pages = set(later['SUITE'])
+        check.test_every_tool_of_the_suite()
+
+
+class Facts(unittest.TestCase):
+    """what a review found the pages had wrong, kept right: each is a fact of the code, which the words must say"""
+
+    def says(self, page, *words):
+        text = ' '.join((PAGES / (page + '.txt')).read_text(encoding='utf-8').split())
+        for w in words:
+            self.assertIn(w, text, page)
+
+    def never_says(self, page, *words):
+        text = ' '.join((PAGES / (page + '.txt')).read_text(encoding='utf-8').split())
+        for w in words:
+            self.assertNotIn(w, text, page)
+
+    def test_which_surfsh_has_no_job_control(self):
+        """may_take_terminal(), kernel/syscall.c: one the ring-0 shell started has it; audit T14"""
+        for page in ('jobs', 'run'):
+            self.never_says(page, 'A surfsh that run started in the ring-0 shell has no job control',
+                            'A surfsh that run starts has no job control')
+            self.says(page, 'run surfsh at a surfsh prompt', 'typed at the ring-0 shell')
+
+    def test_the_last_stage_of_a_pipeline_is_this_shell(self):
+        """exec_pipe's here, user/surfsh/exec.c"""
+        self.says('surfsh', 'echo a | read x; echo $x prints a')
+
+    def test_what_q_cannot_reach(self):
+        """kernel/process.c: what a kernel command starts is in no job"""
+        self.says('watch', 'in no job', 'run memhog hold 100000')
+
+    def test_the_end_of_a_run_ends_its_jobs(self):
+        self.says('watch', 'in the background end with it')
+
+    def test_a_full_screen_program_in_the_background(self):
+        self.says('top', 'draws over the prompt')
+        self.says('watch', 'draws over the prompt')
 
 
 class Shape(unittest.TestCase):

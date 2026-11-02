@@ -20,10 +20,11 @@ DESCRIPTION
     NAME runs the kernel's.
 
     SurfOS has no fork: every process starts as a new program, so ( )
-    and each stage of a pipeline that is surfsh's own run in a new
-    surfsh. A kernel command reads only the console, so it can begin a
-    pipeline but not follow a |, and its output arrives when it is done.
-    A program gets descriptors 0 to 3.
+    and a stage of a pipeline that is surfsh's own run in a new surfsh.
+    The last stage is the exception, and runs in this shell: echo a |
+    read x; echo $x prints a. A kernel command reads only the console,
+    so it can begin a pipeline but not follow a |, and its output
+    arrives when it is done. A program gets descriptors 0 to 3.
 
     At the prompt long output stops at --More--: Space shows the next
     screenful, Enter one more line, and q leaves the rest. The settings
