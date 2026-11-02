@@ -60,9 +60,13 @@ not here, so that this file is part of the tree that was tested.
   to undo; the review showed forms it missed (`ESC ]` left open, `ESC ( [?1049h`, `ESC[?10490h`), and there will always be others. `ESC 7` before `?1049l` is there because xterm restores a
   saved cursor at `?1049l` even with the main screen showing, which with nothing saved is the top left. It goes only to a terminal, never into a file or a pipe.
 - **The window has no signal,** so it is looked at once a second while NAWS is on.
-- **Input from a pipe** is a file somebody wants delivered, not keys: it is read only while it fits, and waits in the pipe, so nothing is dropped. Nobody is there to press
-  Ctrl+], so a server that takes nothing for a minute ends the session with status 2, as does one that closes with input still to go. It is not echoed. At its end a last line
-  with no line end goes as it is, and the session ends with the server's close or after 2 seconds with no byte either way.
+- **Input from a pipe** is a file somebody wants delivered, not keys: it is read only while it fits with room for a read of the server's to spare
+  (`TNC_KEYS_ROOM(PIECE) + TNC_ROOM(PIECE)`), and waits in the pipe, so nothing is dropped and the server is always read. That matters: a server whose
+  output waits for us (a shell behind a telnetd, a router's command line, a long banner) may read nothing more until it has gone, and if we stopped
+  reading it in turn the two would wait for each other. The first fix round read the pipe until 12358 bytes waited but the server only while 8231 did,
+  and the review of `856c4d8` found that deadlock. Nobody is there to press Ctrl+], so a server that takes nothing for a minute ends the session with
+  status 2, as does one that closes with input still to go. It is not echoed. At its end a last line with no line end goes as it is, and the session
+  ends with the server's close or after 2 seconds with no byte either way.
 
 ### ftp
 
@@ -87,28 +91,54 @@ not here, so that this file is part of the tree that was tested.
 - **The password** is read in raw mode from `/dev/tty`, also when the commands come from a pipe: the next line of a script is never taken
   for it. It goes straight to the socket from a buffer that is wiped, never through stdio, and is scrubbed from the server's answer in
   case it says it back. That covers the answer to PASS only: by a later reply the password has been wiped here, so a server that repeats it
-  then is printed like anything else it says. With no terminal the login fails. Anonymous never asks.
+  then is printed like anything else it says. Anonymous never asks.
 - **Limits I could not fix here:** the kernel's raw-mode input ring keeps the keys in kernel memory until they are overwritten, and TCP's send buffer holds the `PASS` line
   in the same way until it is sent and overwritten. `tty_readline_secret()` wipes the keys, but that is for kernel commands, and `kernel/tty.c` is outside this track. No program can
   read that memory. A small kernel change could close the first if the owner wants it closed.
-- **The password's prompt comes after raw mode is on,** so a key in that gap is not echoed. `/dev/tty` always opens on SurfOS (`fs/devfs.c`), so a detached task could wait for ever: a key must
-  come within 2 minutes, or the login fails.
+- **The password's prompt comes after raw mode is on,** so a key in that gap is not echoed.
+- **A password is waited for as long as it takes,** and asked for only by a process with a terminal of its own. The first fix round gave it 2 minutes,
+  which was wrong: at the limit raw mode ended, so keys typed later were echoed and read as a command (`no command` and the password, on the screen),
+  or, from a script, read by the shell. The review's rule, which `own_terminal()` follows: `procinfo()` for this process's own pid, whose tty is -1
+  without a terminal. I added a second condition, and this is why: on SurfOS as it is, `procinfo()` gives every live task a tty (`fill_info()` in
+  `kernel/task.c`; `tty_for_console()` falls back to F1), so -1 alone never fires, while a detached task (the desktop's Run program..., a ring-0
+  shell's `&`) still opens `/dev/tty` as its console's, whose keys go to someone else, and would wait in vain. So a detached task has no terminal
+  of its own either. Either way the login fails at once and says why; nothing is read and no `PASS` goes. `procinfo()` counts tasks from the
+  list's head at each call, so a task collected during the scan moves the rest up one and the scan can pass over its own process (the kernel's
+  comment on `task_info_all()` says so); then it would refuse a password for want of a terminal, as a `printf ... | ftp` whose `printf` is
+  being reaped might. It scans again, four times at most.
 - **Ctrl+C:** `TTY_INTR` is on only while a command runs. Left on at the prompt, a background `ftp` reading the terminal would not be stopped
   (a task with `TF_INTR` never stops). So Ctrl+C at the prompt ends ftp, and during a command it stops that command. From the moment its command
   has gone, a transfer sends ABOR **before** closing the data connection, since the end of the data alone would tell a server that an upload is whole. Any
-  other command has no way back in step, so the connection closes. A second Ctrl+C gets out of a stuck ABOR. Scripts end with status 130. A script keeps `TTY_INTR` on from start to end, and
+  other command has no way back in step, so the connection closes. A Ctrl+C that comes before a command's first byte went stops it there, and the
+  session stays as it was, in step (`NOT_SENT`): nothing is sent and nothing is closed. That includes one that `drain()` meets while it reads what the
+  server said on its own before a command; the first fix round used that one up and sent the command anyway. A second Ctrl+C gets out of a stuck
+  ABOR; one before ABOR or `NOOP` has gone closes the connection, the control connection first, as the data connection's end alone would tell a
+  server taking an upload that the file is whole. Scripts end with status 130. A script keeps `TTY_INTR` on from start to end, and
   the count is read after each command, so a Ctrl+C that came in no wait (an fsync, between commands, in `open`) still stops the next command.
-- **After an abort, `NOOP`.** How many replies follow ABOR, and when, differs from server to server, and a late one taken for the next command's answer made a failed `delete` look done. A server answers
-  in turn, so everything before `NOOP`'s answer belongs to the abort and is passed over. A server that does not get there within 5 s has its connection closed, and that is said.
+- **After an abort, `NOOP`.** How many replies follow ABOR, and when, differs from server to server, and a late one taken for the next command's answer
+  made a failed `delete` look done. A server answers in turn, so every reply before `NOOP`'s 200 belongs to the abort and is passed over: a 150 on its
+  way, 426, 225, 226, and the 500 or 502 of a server with no ABOR. The first fix round took 500 and 502 for `NOOP`'s answer, so `NOOP`'s 200 went to the
+  next command, and a `delete` of a missing file said `200 NOOP ok`. A 421 among them closes the connection. A server that does not answer `NOOP`
+  within 5 s of its last reply, or sends 16 replies without it, has its connection closed, and that is said ("no answer to NOOP after ABOR").
+- **What `NOOP` cannot do,** settled as the review asked: a server that answers `NOOP` before the abort's last reply (its 426 or 226 comes after the
+  200), or answers `NOOP` twice, still hands a stale reply on to the next command, which then reports that reply as its own: the review's probes show
+  `delete x` answered with the late 426, and with a second `200 NOOP again`. No `NOOP` scheme guards against that, this one included: replies carry no
+  tag, and no wait that a correct server never needs could tell a late reply from the next command's answer. A server that knows no `NOOP` (RFC 959
+  makes it part of the minimum) loses its connection after an abort.
 - **A line cut by its length is refused,** not run: `delete` on what is left of a line could name another file.
-- **What is bounded, and what is not.** A reply 120 s, a stalled data connection 60 s, a command the server will not take 30 s, a listing 5 minutes, a key of a password 2 minutes; replies 1000 lines
-  and 64 KB, 16 preliminary replies; a listing kept for mget 4096 names and 256 KB, where it is stopped, and nothing is fetched from it. A flood with no line end is dropped as it comes and ends at the reply's
-  time limit. **A file's transfer has no limit of its own:** a byte every 59 s keeps one alive for as long as the server likes. That is inherent: a client cannot tell that from a slow link, so Ctrl+C is the way out.
-  Time a pager holds the output at `--More--` counts against none of these.
+- **What is bounded, and what is not.** A reply 120 s, a stalled data connection 60 s, a command the server will not take 30 s, mget's listing 5 minutes; replies 1000 lines
+  and 64 KB, 16 preliminary replies; a listing kept for mget 4096 names and 256 KB, where it is stopped, and nothing is fetched from it. Nothing is fetched
+  either from a listing that failed part-way: reset, stalled, over its time, or ended by a 4xx or 5xx after some names (`FS_CUT_SHORT`; the first fix round
+  fetched from those). A flood with no line end is dropped as it comes and ends at the reply's time limit. **A file's transfer has no limit of its own,
+  nor has a listing shown by `ls` or `dir`,** which may be going into a file: a byte every 59 s keeps one alive for as long as the server likes. That is
+  inherent: a client cannot tell that from a slow link, so Ctrl+C is the way out. A password has no limit either (above). Time a pager holds the output
+  at `--More--` counts against none of these.
 - **`reget` does not go on past 2 GB,** because `ftruncate()` takes 31 bits there and what a server added could not be cut off again. With no `SIZE`, a server that ignores `REST` has the whole file added to yours,
   and nothing here can tell: both are in the manual.
 - **`get` in ascii mode** reports the bytes that came, not the bytes written.
 - **`put` from a file that gets shorter** while it is read is aborted, as its end would tell the server the file is whole. One that grows is sent as it is.
+  A server that refuses part-way (552, its disk full) is reported as its refusal, with status 1: the size is looked at only when the file's own end
+  stopped the upload. The first fix round looked first, and said "the file got shorter" with status 2.
 
 ## Did any of this follow a specific program's source?
 
@@ -133,14 +163,29 @@ The standards used: RFC 854, 856, 857, 858, 1073, 1143 and 1123 for telnet; RFC 
 
 | Test | Checks | What |
 |---|---|---|
-| `test_telnetc` | 131202 | the module, telnetd's real module at every split, random bytes with exact buffers, the program |
+| `test_telnetc` | 131206 | the module, telnetd's real module at every split, random bytes with exact buffers, the program |
 | `test_ftpc` | 297 | `ftpclient.c`, with `fnmatch(3)` on random pairs |
-| `test_ftpcs` | 27964 | the whole client against scripted servers, then 3000 rounds of hostile ones |
+| `test_ftpcs` | 28074 | the whole client against scripted servers, then 3000 rounds of hostile ones |
 | the block in `SMOKE` | 30 rows | the real kernel: `telnet` to telnetd by the hairpin (NAWS as the session sees it, `status`, `send ayt`, `quit` from `less`, a kill from another session); to a server speaking no telnet; `ftp` to ftpd byte for byte; to `ScriptedFtp`: the password from a real pipeline with no echo, PASV naming another address, a low port, escape sequences, Ctrl+C, names that climb, a reset |
 
 **The fix round.** An independent review of `69203a8` found no memory-safety bug reachable from a server, but silent data loss with status 0. Each finding got a test first, and each test was run on the unchanged client and
 seen to fail, or to crash (the `strdup` use-after-free), before the fix. The review's own probes over real TCP then confirmed the fixes: its 240000 bytes through a pipe all arrive, `get x - > f` holds only the file, a failed `cd` sends no `DELE`. Two things in them needed
 care: their `/dev/tty` is not pollable, so my copy of the shim was changed for that, and their server does not answer `NOOP`, so the probe of a late ABOR took the path that closes the connection until `NOOP` was added.
+
+**The second fix round.** The review of `856c4d8` found no memory-safety bug, but three of the first round's fixes had brought regressions: the
+pipe's deadlock, `NOOP`'s answer taken from ABOR's 500 or 502, and the 2-minute password. Three more: a 552 during an upload said as a short file,
+mget fetching from a listing cut by a stall, a reset, its time or a 451, and `drain()` using up a Ctrl+C; and two nits, the message that named ABOR
+for `NOOP` and the 5-minute limit on `ls` and `dir`. Each got tests first, run over connections whose writes queue only part of what is given, as
+SurfOS's `tcp_write` does (3 to 1000 bytes at a time, mostly 5; 512 for telnet). On the unchanged client of
+`856c4d8`, 20 checks of `test_ftpcs` and 2 of `test_telnetc` fail; on this tree, none. Tests that guard the new code without failing on `856c4d8`:
+ABOR answered late, and twice (the reviewer asked for both), a second Ctrl+C before ABOR or `NOOP` went, and tasks collected while
+`procinfo()` is read. That last is a race in this round's own `own_terminal()`, found while I looked into a failed run of `test-all`:
+the scan could pass over its own process, and a single scan fails the test. The review's probes over real TCP agree: 3000 piped
+lines of 1000 bytes to a server answering 30 KB each stopped after 29 on `856c4d8` (status 2) and all go now, 90 MB back, the server read at every
+wait; `delete` after an abort on a server with no ABOR got `NOOP`'s 200 in 10 of 10 runs before and its own 550 in 10 of 10 now, with `NOOP` answered
+after 0 to 3 s; a password typed after 140 simulated seconds logs in and the next line is the next command. My copy of the probes' shim gained
+`procinfo()` and `getpid()`. A mutant found that one check had gone empty with the first round's `NOOP`: it looked for `NLST ABOR EPSV NLST` in a
+row to prove that mget's next pattern was not listed after a Ctrl+C. It counts the `NLST`s now.
 
 **What the tests found earlier.** All of these were real bugs, fixed: `fs_put` closed its descriptors on a 150 (no upload ever worked); a reply read in one
 piece with the 150 was not seen during a transfer; one Ctrl+C also stopped the ABOR that followed it; keys typed after the prompt's line were lost;
@@ -157,12 +202,14 @@ and 6 at O0 with the O0 programs put into the initrd by hand, as `build/images` 
 
 **How far to believe them.**
 
-- *Mutation:* 52 defences were broken one at a time in a scratch copy (unsafe names, the short-file check, the scrub, the low port, PASV's address, reget's cut,
-  backpressure, raw mode, every fix of the review, and so on). All 52 are caught. Two survived in the fix round at first, and got better tests. One survived at first: my flood test quit before any pressure built, and a new test closes that hole.
-- *Fuzz depth:* the first fuzz was clean and nearly worthless, with data flowing in 263 of 3000 rounds. It now reaches 1637 of 3000, with uploads in 1000, and
-  `test_ftpcs` fails if that falls. Its invariants: the user's file is as it was or whole, never a part; no `.tmp` left; no connection but the
+- *Mutation:* 75 defences were broken one at a time in a scratch copy (unsafe names, the short-file check, the scrub, the low port, PASV's address, reget's cut,
+  backpressure, raw mode, every fix of both reviews, and so on). All 75 are caught. Two survived in the first fix round at first, and got better tests;
+  one in the second (above). One survived before that: my flood test quit before any pressure built, and a new test closes that hole.
+- *Fuzz depth:* the first fuzz was clean and nearly worthless, with data flowing in 263 of 3000 rounds. It now reaches 1625 of 3000, with uploads tried in 759
+  (the same as at `856c4d8`, whose own build gives these figures; this file said 1637 and 1000 until this round, which were stale), and
+  `test_ftpcs` fails if that falls below a quarter. Its invariants: the user's file is as it was or whole, never a part; no `.tmp` left; no connection but the
   server's; no control character shown; the password nowhere. Three rounds in four run at a prompt, as a script now stops at its first failure and would get nowhere.
-- *Line coverage* (clang, natively): `session.c` of ftp 95%, `commands.c` 97%, `main.c` 100%; telnet's `session.c` 97%, `tnclient.c` 99%. What is left is
+- *Line coverage* (clang, natively): `session.c` of ftp 96%, `commands.c` 99%, `main.c` 99%; telnet's `session.c` 97%, `tnclient.c` 99%. What is left is
   mostly a failed `read` of a local file, or an allocation failing in `names_add`.
 
 **Sanitizers,** by hand on the Mac, from the worktree (ASan and UBSan, all three clean on the tree committed):
