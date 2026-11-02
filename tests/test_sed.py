@@ -396,6 +396,8 @@ def own_rules():
     expect(SED, ['-i.bak', 's/$/x/', 'f', './f'], b'', {'f': b'a\n'}, status=2, after={'f': b'a\n'}, said=b'one file')
     expect(SED, ['-i.bak', 's/$/x/', 'f', 'd/../f'], b'', {'f': b'a\n', 'd/x': b''}, status=2, after={'f': b'a\n'})
     expect(SED, ['-i.bak', 's/$/x/', 'f', 'd/f'], b'', {'f': b'a\n', 'd/f': b'b\n'}, after={'f': b'ax\n', 'f.bak': b'a\n'})
+    # a w file named as the backup. GNU's leaves w's lines in it, and the old file nowhere
+    expect(SED, ['-i.bak', 's/a/X/;w f.bak', 'f'], b'', {'f': b'a\nb\n'}, status=2, after={'f': b'a\nb\n'}, said=b'f.bak')
     # a suffix that makes the backup the working name. GNU's has no such name
     expect(SED, ['-i.tmp', 's/a/bb/', 'f'], b'', {'f': b'a\n'}, status=2, after={'f': b'a\n'}, said=b'f.tmp')
     # D takes the front off the pattern space, not the rest down to it: all of a long text in one, and D on each line

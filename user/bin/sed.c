@@ -959,17 +959,26 @@ static int make_re(char *s, size_t n, int icase, struct re **out) {
 }
 
 /* the output for a name of w. Two names for one file are one output: two would each be renamed over it, and the last one's lines stay.
-   A name that is another's working name would be renamed over that before it reaches its file. */
+   A name that is another's working name would be renamed over that before it reaches its file, and one that is a backup of -i's
+   over the backup once it is made, so that the old file is nowhere: both are refused. */
 static struct wfile *open_wfile(const char *name) {
     struct wfile *w;
     struct stat st;
-    int device = !strncmp(name, "/dev/", 5) || (stat(name, &st) == 0 && !S_ISREG(st.type));
+    char backup[PATH_MAX];
+    int device = !strncmp(name, "/dev/", 5) || (stat(name, &st) == 0 && !S_ISREG(st.type)), i;
     for(w = g.wfiles; w; w = w->next) {
         if(!strcmp(w->name, name)) return w;
         if(device || !w->save) continue;
         if(same_file(w->name, name)) return w;
         if(same_file(w->save->tmp, name)) {
             say("%s: %s is written through that name", name, w->name);
+            return NULL;
+        }
+    }
+    for(i = 0; !device && g.inplace && g.suffix && i < g.nfiles; i++) {
+        backup_name(backup, sizeof(backup), g.files[i]);
+        if(same_file(backup, name)) {
+            say("%s: it is the backup of %s", name, g.files[i]);
             return NULL;
         }
     }

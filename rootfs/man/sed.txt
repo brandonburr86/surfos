@@ -30,8 +30,9 @@ OPTIONS
                 the new text is in file.tmp beside it. A suffix that
                 makes that name, or the file's own, is refused for the
                 file, and with a suffix one file may be named only once,
-                in any case or form of its path. After a rename that
-                may have half happened sed stops: check the disk.
+                in any case or form of its path, and no w file may have
+                a backup's name. After a rename that may have half
+                happened sed stops: check the disk.
 
 ADDRESSES
     A command runs on every line, or on those its address picks.

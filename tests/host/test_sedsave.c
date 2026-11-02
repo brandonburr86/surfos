@@ -320,6 +320,20 @@ static void backups(void) {
     sim_put("a.txt", "one\n");
     sim_put("c.txt", "one\n");
     check(sed("-i.bak", "s/$/x/", "a.txt", "nosuch", "c.txt", NULL) == 2 && file_is("a.txt", "onex\n") && file_is("c.txt", "onex\n"), "a missing file with a backup");
+    /* a w file named as a backup would be renamed over it once the backup is made, and the old file would be nowhere: refused */
+    sim_reset();
+    sim_put("f", "a\nb\n");
+    check(sed("-i.bak", "s/a/X/\nw f.bak", "f", NULL) == 2 && file_is("f", "a\nb\n") && sim_names() == 1, "w named as the backup");
+    sim_reset();
+    sim_put("f", "a\nb\n");
+    check(sed("-i.bak", "w F.BAK", "f", NULL) == 2 && file_is("f", "a\nb\n") && sim_names() == 1, "w named as the backup, in another case");
+    sim_reset();
+    sim_put("f", "a\n");
+    sim_put("g", "b\n");
+    check(sed("-iold_*", "w old_g", "f", "g", NULL) == 2 && file_is("f", "a\n") && file_is("g", "b\n") && sim_names() == 2, "w named as another file's backup");
+    sim_reset();
+    sim_put("f", "a\n");
+    check(sed("-i", "w f.bak", "f", NULL) == 0 && file_is("f.bak", "a\n"), "w f.bak with no backup to lose");
     /* without a backup nothing is lost: it goes twice, as GNU's does */
     sim_reset();
     sim_put("g.txt", "one\n");
