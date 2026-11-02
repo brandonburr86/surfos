@@ -60,6 +60,8 @@ struct pinput {
     int had_newline;
     int again;                          /* the current line is to be read again */
     int started;                        /* a section has been found in it */
+    unsigned long stray;                /* a line past a hunk's counts that looked like part of it: its number; the caller
+                                           says so and clears this */
     unsigned long lineno;
     char why[120];                      /* what is wrong, when a call says -1 */
 };

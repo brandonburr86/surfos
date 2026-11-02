@@ -93,13 +93,24 @@ static int number(const char **s, unsigned *v) {
 
 /**** file names ****/
 
-static int is_date_at(const char *s) {
-    /* 2026-11-01, or Sun Nov  1: what follows a name that has no TAB before it */
+static int digits_at(const char *s, int n) {
     int i;
-    for(i = 0; i < 4; i++)
-        if(s[i] < '0' || s[i] > '9') break;
-    if(i == 4 && s[4] == '-') return 1;
-    return s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'a' && s[1] <= 'z' && s[2] >= 'a' && s[2] <= 'z' && s[3] == ' ';
+    for(i = 0; i < n; i++)
+        if(s[i] < '0' || s[i] > '9') return 0;
+    return 1;
+}
+
+/* in names, each 3 letters: is the word at s one? */
+static int word_in(const char *s, const char *names) {
+    for(; *names; names += 3)
+        if(!strncmp(s, names, 3)) return 1;
+    return 0;
+}
+
+/* the dates that follow a name with no TAB before them: 2026-11-01, or Sun Nov  1. Any other words are part of the name */
+static int is_date_at(const char *s) {
+    if(digits_at(s, 4) && s[4] == '-' && digits_at(s + 5, 2) && s[7] == '-' && digits_at(s + 8, 2)) return !s[10] || s[10] == ' ';
+    return word_in(s, "SunMonTueWedThuFriSat") && s[3] == ' ' && word_in(s + 4, "JanFebMarAprMayJunJulAugSepOctNovDec") && s[7] == ' ';
 }
 
 /* the name in a header's text: up to a TAB, or the date after it, or the line's end; quotes taken off when
@@ -120,7 +131,7 @@ static void take_name(const char *s, char *out) {
             }
         }
     }
-    while(n && s[n - 1] == ' ') n--;
+    while(n && (s[n - 1] == ' ' || s[n - 1] == '\r')) n--;     /* a patch with CR LF line ends: the CR is no part of a name */
     if(n >= 2 && s[0] == '"' && s[n - 1] == '"' && !memchr(s, '\\', n)) {
         s++;
         n -= 2;
@@ -135,7 +146,7 @@ static void take_name(const char *s, char *out) {
 static void names_of_command(const struct pinput *p, struct psection *s) {
     const char *end = p->line + p->len, *b1, *e1;
     const char *e2 = end, *b2;
-    while(e2 > p->line && e2[-1] == ' ') e2--;
+    while(e2 > p->line && (e2[-1] == ' ' || e2[-1] == '\r')) e2--;
     for(b2 = e2; b2 > p->line && b2[-1] != ' '; b2--);
     for(e1 = b2; e1 > p->line && e1[-1] == ' '; e1--);
     for(b1 = e1; b1 > p->line && b1[-1] != ' '; b1--);
@@ -312,6 +323,12 @@ static int settle(struct pinput *p, unsigned *start, unsigned count) {
     return 0;
 }
 
+/* a line of a hunk must be whole: with no newline at the end of the input the patch was cut, and what is there is a part
+   of a line. Only the \ marker may lack one: it is no line of the file */
+static int whole_line(struct pinput *p) {
+    return p->had_newline ? 0 : bad(p, "the patch ends inside a line");
+}
+
 /* a \ line: it speaks of the line before it */
 static int no_newline(struct pinput *p, struct phunk *h) {
     if(!h->nlines) return bad(p, "a \\ line with no line before it");
@@ -350,6 +367,7 @@ static int read_unified(struct pinput *p, struct phunk *h) {
             if(no_newline(p, h) < 0) return -1;
             continue;
         }
+        if(whole_line(p) < 0) return -1;
         if(c == ' ' ? !old_left || !new_left : c == '-' ? !old_left : c == '+' ? !new_left : 1)
             return bad(p, "a hunk's lines do not match its header");
         if(add_line(p, h, c, p->line + 1, p->len ? p->len - 1 : 0) < 0) return -1;
@@ -377,6 +395,7 @@ static int range_context(const char *s, const char *tail, unsigned *start, unsig
     }
     if(strcmp(s, tail)) return 0;
     if(last < *start) return 0;
+    if(!*start && last) return 0;               /* from line 0, which is only for a side of no lines */
     if(*start == last && !*start) *count = 0;   /* 0: none, before line 1 */
     else *count = last - *start + 1;
     return 1;
@@ -403,6 +422,7 @@ static int read_context_side(struct pinput *p, struct phunk *h, unsigned count, 
             i--;
             continue;
         }
+        if(whole_line(p) < 0) return -1;
         c = context_mark(p);
         if(c != ' ' && c != own && c != '!') return bad(p, "a hunk's lines do not match its header");
         if(add_line(p, h, c, p->len > 2 ? p->line + 2 : "", p->len > 2 ? p->len - 2 : 0) < 0) return -1;
@@ -524,6 +544,7 @@ static int parse_command(struct pinput *p, const char *s, struct phunk *h) {
         if(!number(&s, &d)) return bad(p, "not a hunk's header");
     }
     if(*s || b < a || d < c || (op == 'a' && a != b) || (op == 'd' && c != d)) return bad(p, "not a hunk's header");
+    if((op != 'a' && !a) || (op != 'd' && !c)) return bad(p, "a hunk at line 0");
     h->old_start = a;
     h->old_count = op == 'a' ? 0 : b - a + 1;
     h->new_start = c;
@@ -543,6 +564,7 @@ static int read_normal_side(struct pinput *p, struct phunk *h, unsigned count, c
             i--;
             continue;
         }
+        if(whole_line(p) < 0) return -1;
         if(!p->len || p->line[0] != mark || (p->len > 1 && p->line[1] != ' '))
             return bad(p, "a hunk's lines do not match its header");
         if(add_line(p, h, kind, p->line + 2, p->len > 2 ? p->len - 2 : 0) < 0) return -1;
@@ -571,6 +593,17 @@ static int read_normal(struct pinput *p, struct psection *s, struct phunk *h, co
 
 /**** the next hunk ****/
 
+/* The line after a hunk, which is not another hunk: text is passed over, but one that looks like more of the hunk may be a
+   count gone wrong, and should not go unsaid. The next section's headers and a mail's "-- " are not that. */
+static void note_stray(struct pinput *p, const struct psection *s) {
+    int stray;
+    if(!s->hunks || p->stray || !p->len) return;
+    if(s->format == 'u') stray = (p->line[0] == ' ' || p->line[0] == '+' || p->line[0] == '-') && !starts(p, "--- ") && !starts(p, "+++ ") && !starts(p, "--");
+    else if(s->format == 'c') stray = p->len >= 2 && p->line[1] == ' ' && (p->line[0] == ' ' || p->line[0] == '+' || p->line[0] == '-' || p->line[0] == '!');
+    else stray = starts(p, "< ") || starts(p, "> ");
+    if(stray) p->stray = p->lineno;
+}
+
 int pp_next_hunk(struct pinput *p, struct psection *s, struct phunk *h) {
     int r;
     reset_hunk(h);
@@ -583,6 +616,7 @@ int pp_next_hunk(struct pinput *p, struct psection *s, struct phunk *h) {
         } else {
             if((r = next_line(p)) <= 0) return r;
             if(!is_command(p)) {
+                note_stray(p, s);
                 read_again(p);
                 return 0;
             }
@@ -604,12 +638,14 @@ int pp_next_hunk(struct pinput *p, struct psection *s, struct phunk *h) {
         if((r = next_line(p)) <= 0) return r;
         if(s->format == 'u') {
             if(!starts(p, "@@ -")) {
+                note_stray(p, s);
                 read_again(p);
                 return 0;
             }
             r = read_unified(p, h);
         } else {
             if(!starts(p, "***************")) {
+                note_stray(p, s);
                 read_again(p);
                 return 0;
             }

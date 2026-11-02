@@ -606,6 +606,17 @@ static void test_by_hand(void) {
     check(parses("*** x\n--- y\n***************\n*** 1 ****\n! a\n--- 1 ----\n", "a\n") < 0, "a ! on one side only");
     check(parses("--- x\n+++ y\n@@ -1 +1 @@\n\\ No newline at end of file\n-a\n+b\n", "a\n") < 0, "a marker before any line");
     check(parses("3,1d2\n< a\n", "a\n") < 0, "a command backwards");
+    /* a patch cut in the middle of a line is a damaged patch, not a shorter line */
+    check(parses("--- f\n+++ f\n@@ -2 +2 @@\n-old\n+new line that must be wh", "a\nold\n") < 0, "unified: cut inside a line");
+    check(parses("--- f\n+++ f\n@@ -1 +1 @@\n-a", "a\n") < 0, "unified: cut inside an old line");
+    check(parses("--- f\n+++ f\n@@ -1 +1,2 @@\n a\n+b", "a\n") < 0, "unified: cut inside the last line of the hunk");
+    check(parses("*** f\n--- f\n***************\n*** 1 ****\n! a\n--- 1 ----\n! wh", "a\n") < 0, "context: cut inside a line");
+    check(parses("1c1\n< a\n---\n> wh", "a\n") < 0, "normal: cut inside a line");
+    check(parses("--- /dev/null\n+++ f\n@@ -0,0 +1 @@\n+wh", "") < 0, "a new file: cut inside a line");
+    check(parses("--- f\n+++ f\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file", "a\n") == 0, "a marker, with no newline of its own, is whole");
+    /* numbers that wrap */
+    check(parses("*** f\n--- f\n***************\n*** 0,4294967295 ****\n--- 1,1 ----\n+ new\n", "a\n") < 0, "a context range that wraps to none");
+    check(parses("0,4294967295d5\n< x\n", "a\n") < 0, "a normal range that wraps to none");
     check(parses("1,2a3\n> a\n", "a\n") < 0, "an addition after two lines");
 }
 
