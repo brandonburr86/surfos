@@ -101,6 +101,13 @@ static OF_UNUSED int of_commit(struct out_file *f, const char *prog, int sync_ne
     return r;
 }
 
+/* Is path the file st describes? By what it is, not by what it is called: FAT's names ignore case, and every long name
+   has a short one too. A file system that gives no number (ino 0) says nothing. */
+static OF_UNUSED int of_same_file(const char *path, const struct stat *st) {
+    struct stat b;
+    return st->st_ino && stat(path, &b) == 0 && b.st_ino == st->st_ino && !strcmp(b.fs, st->fs) && !strcmp(b.dev, st->dev);
+}
+
 /* every folder above the last / of path: 0, or -1 and errno, with path as it was */
 static OF_UNUSED int of_parents(char *path) {
     struct stat st;

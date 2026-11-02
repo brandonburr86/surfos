@@ -20,9 +20,10 @@ one that went right: with anything said above but the / and the .., the old one 
 
 x reads what tarfile.h lists. A name from an archive becomes a path only through ar_safe_path():
 what is absolute or has a .. is refused, and so is what FAT cannot hold. Links, devices, sparse
-files and anything else FAT cannot hold are skipped with a message. A file that exists is replaced
-through saveutil.h, a new one is made with O_EXCL and deleted again if it cannot be finished. Times
-cannot be set on SurfOS, nor modes: every file is as new.
+files and anything else FAT cannot hold are skipped with a message, as is a member that would land
+on the archive itself. A file that exists is replaced through saveutil.h, a new one is made with
+O_EXCL and deleted again if it cannot be finished. Times cannot be set on SurfOS, nor modes: every
+file is as new.
 
 Status 0, or 2 when anything was skipped or went wrong; x and t go on after anything that does not
 stop the archive being read.
@@ -63,6 +64,7 @@ static int nitems;
 static const char *archive = "-";
 static int gzipped, verbose, trouble;
 static int fd = -1;                     /* the archive */
+static struct stat archive_st;          /* x: what it is, for a member of the same name */
 static unsigned int in_record;          /* bytes written into the current record */
 static char self[PATH_MAX], self_tmp[PATH_MAX];     /* c: the archive's absolute name, and its new file's */
 static FILE *names_to;                  /* where v's names go */
@@ -382,6 +384,10 @@ static void make_folder(char *path) {
 static int extract_file(char *path) {
     struct out_file out;
     int n = 0, failed = 0;
+    if(of_same_file(path, &archive_st)) {
+        member_say(path, "this is the archive being read: skipped");
+        return 0;
+    }
     if(of_parents(path) < 0) {
         member_errno(path);
         return 0;
@@ -477,6 +483,7 @@ static int do_read(int listing) {
     } else {
         fd = 0;
     }
+    if(fstat(fd, &archive_st) < 0) memset(&archive_st, 0, sizeof(archive_st));
     for(i = 0; i < nitems; i++) {
         if(items[i].chdir_to && chdir(items[i].chdir_to) < 0) {
             member_errno(items[i].chdir_to);

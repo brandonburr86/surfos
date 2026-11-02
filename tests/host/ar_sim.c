@@ -103,13 +103,15 @@ static int fail_with(int e) {
     return -1;
 }
 
+/* always terminated, though it is bytes: a test may look for text in it */
 static void grow_out(const void *p, size_t n) {
-    if(out_len + n > out_cap) {
-        out_cap = (out_len + n) * 2;
+    if(out_len + n + 1 > out_cap) {
+        out_cap = (out_len + n + 1) * 2;
         out_bytes = need(realloc(out_bytes, out_cap));
     }
     if(n) memcpy(out_bytes + out_len, p, n);
     out_len += n;
+    out_bytes[out_len] = 0;
 }
 
 static void grow_err(const void *p, size_t n) {
@@ -911,6 +913,7 @@ int ars_run(ars_tool tool, const char *const *argv) {
     }
     copy[argc] = NULL;
     out_len = 0;
+    grow_out("", 0);
     err_len = 0;
     grow_err("", 0);
     change_count = 0;

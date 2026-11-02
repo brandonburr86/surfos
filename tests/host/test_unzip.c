@@ -391,8 +391,8 @@ static void test_names(void) {
     e.name = "esc\x1b[2J.txt";
     z_entry(&e);
     z_end();
-    check(run("-l") == 0 && !memchr(ars_stdout(NULL), 0x1b, 200), "-l does not send a name's escape to the terminal");
-    check(run("-t") == 0 && !memchr(ars_stdout(NULL), 0x1b, 200), "-t likewise");
+    check(run("-l") == 0 && !strchr((const char *)ars_stdout(NULL), 0x1b), "-l does not send a name's escape to the terminal");
+    check(run("-t") == 0 && !strchr((const char *)ars_stdout(NULL), 0x1b), "-t likewise");
     check(run("") == 2 && !strchr(ars_stderr(), 0x1b), "and the refusal does not");
     /* C1's CSI as UTF-8 is a legal FAT name, and must not reach the terminal bare */
     z_start();
@@ -522,6 +522,38 @@ static void test_refusals(void) {
     z_end();
     check(run("-o") == 0 && ars_is("/dest/case.txt", "second\n") && ars_count() == 3, "two names FAT cannot tell apart, with -o: the later one, one file");
     ars_stdout(&n);
+}
+
+/**** a member named like the archive ****/
+
+static void test_self(void) {
+    static const char *const names[] = { "a.zip", "A.ZIP", "./a.zip" };
+    unsigned i;
+    for(i = 0; i < 3; i++) {
+        const unsigned char *now;
+        size_t m;
+        z_start();
+        z_stored(names[i], "NEW CONTENTS\n");
+        z_stored("after.txt", "after\n");
+        z_end();
+        ars_reset();
+        ars_put("/d/a.zip", Z, Zn);
+        ars_chdir("/d");
+        check(ars_cmd(unzip_main, "unzip -o a.zip") == 2, names[i]);
+        check(has(ars_stderr(), "the archive"), "a member that is the archive itself is refused by what it is, not by the rename's EBUSY");
+        now = ars_get("/d/a.zip", &m);
+        check(now && m == Zn && !memcmp(now, Z, Zn), "the archive is as it was");
+        check(!has(ars_list(), ".tmp"), "and nothing was written for that member");
+        check(ars_is("/d/after.txt", "after\n"), "and the next member is taken");
+    }
+    z_start();
+    z_stored("a.zip", "NEW CONTENTS\n");
+    z_end();
+    ars_reset();
+    ars_put("/d/a.zip", Z, Zn);
+    ars_chdir("/d");
+    check(ars_cmd(unzip_main, "unzip -n a.zip") == 0 && !has(ars_stderr(), "the archive"), "-n leaves it quietly, as any file that exists");
+    check(ars_cmd(unzip_main, "unzip a.zip") == 2, "and without either it stays, and counts as trouble");
 }
 
 /**** lengths that lie ****/
@@ -1158,6 +1190,7 @@ int main(void) {
     test_options();
     test_names();
     test_refusals();
+    test_self();
     test_lies();
     test_damage();
     test_failures();

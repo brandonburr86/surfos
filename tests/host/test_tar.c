@@ -1262,6 +1262,60 @@ static void test_pax_entry(void) {
     check(unpack("") == 2 && has(ars_stderr(), "pax") && ars_is("/dest/a.txt", "x\n"), "a damaged pax header with no entry after it is said");
 }
 
+/**** a member named like the archive ****/
+
+static void test_self(void) {
+    static const char *const names[] = { "a.tar", "A.TAR", "./a.tar" };
+    unsigned char *copy;
+    size_t n, m;
+    unsigned i;
+    for(i = 0; i < 3; i++) {
+        const unsigned char *now;
+        a_start();
+        a_text(names[i], "NEW CONTENTS\n");
+        a_text("after.txt", "after\n");
+        a_end();
+        n = An;
+        ars_reset();
+        ars_put("/d/a.tar", A, n);
+        ars_chdir("/d");
+        check(ars_cmd(tar_main, "tar xf a.tar") == 2, names[i]);
+        check(has(ars_stderr(), "the archive"), "a member that is the archive itself is refused by what it is, not by the rename's EBUSY");
+        now = ars_get("/d/a.tar", &m);
+        check(now && m == n && !memcmp(now, A, n), "the archive is as it was");
+        check(!has(ars_list(), ".tmp"), "and nothing was written for that member");
+        check(ars_is("/d/after.txt", "after\n"), "and the next member is taken");
+    }
+    /* through -C, and through gzip */
+    a_start();
+    a_text("x/a.tar", "NEW CONTENTS\n");
+    a_end();
+    n = An;
+    ars_reset();
+    ars_put("/d/x/a.tar", A, n);
+    check(ars_cmd(tar_main, "tar xf /d/x/a.tar -C /d") == 2 && has(ars_stderr(), "the archive"), "by another path, from another folder");
+    ars_reset();
+    ars_puts("/s/b.tgz", "NEW CONTENTS\n");
+    check(ars_cmd(tar_main, "tar czf /b.tgz -C /s b.tgz") == 0, "a .tgz with a member of its own name");
+    {
+        const unsigned char *p = ars_get("/b.tgz", &n);
+        copy = malloc(n);
+        memcpy(copy, p, n);
+    }
+    ars_reset();
+    ars_put("/d/b.tgz", copy, n);
+    check(ars_cmd(tar_main, "tar xzf /d/b.tgz -C /d") == 2 && has(ars_stderr(), "the archive"), "through gzip");
+    free(copy);
+    /* a file of its size, under another name, is no such thing */
+    a_start();
+    a_text("other.tar", "replaced\n");
+    a_end();
+    ars_reset();
+    ars_put("/d/a.tar", A, An);
+    ars_put("/d/other.tar", A, An);
+    check(ars_cmd(tar_main, "tar xf /d/a.tar -C /d") == 0 && ars_is("/d/other.tar", "replaced\n"), "another file is replaced as ever");
+}
+
 /**** an archive that exists ****/
 
 /* It is replaced only by one that went right: the old one may be the only copy of what the new one could not read. */
@@ -1504,6 +1558,7 @@ int main(void) {
     test_failures();
     test_old_archive();
     test_pax_entry();
+    test_self();
     test_host_tar();
     free(A);
     return report("test_tar");

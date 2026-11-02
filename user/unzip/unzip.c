@@ -48,6 +48,7 @@ static const char usage_text[] = "usage: unzip [-l|-t|-p] [-o|-n] [-q] [-d dir] 
 static int fd, trouble;
 static uint32_t at;                     /* where fd is */
 static uint32_t file_size;
+static struct stat archive_st;          /* what the archive is, for a member of the same name */
 static const char *archive;
 static unsigned char *in_buf, *out_buf, *central;
 static struct inflate *z;
@@ -104,16 +105,15 @@ static int read_at(uint32_t pos, unsigned char *p, uint32_t n) {
 /* the end record and the central directory: NULL, or why not */
 static const char *open_archive(void) {
     unsigned char *tail;
-    struct stat st;
     uint32_t n;
     const char *why;
-    if(fstat(fd, &st) < 0) return strerror(errno);
-    if(S_ISDIR(st.st_mode)) return strerror(EISDIR);
+    if(fstat(fd, &archive_st) < 0) return strerror(errno);
+    if(S_ISDIR(archive_st.st_mode)) return strerror(EISDIR);
     if(lseek(fd, 0, SEEK_SET) < 0) {
         if(errno == ESPIPE) return "a zip is read from its end: it cannot come through a pipe";
         return strerror(errno);
     }
-    file_size = st.st_size;
+    file_size = archive_st.st_size;
     n = file_size < ZIP_TAIL_MAX ? file_size : ZIP_TAIL_MAX;
     tail = malloc(n ? n : 1);
     if(!tail) return "out of memory";
@@ -257,6 +257,10 @@ static void extract_one(const struct zip_entry *e, const char *name, const char 
     if(!readable(e, name)) return;
     if((why = find_data(e, &data))) {
         say(name, why);
+        return;
+    }
+    if(of_same_file(path, &archive_st) && overwrite) {
+        say(path, "this is the archive being read: skipped");
         return;
     }
     if(of_parents(path) < 0) {
