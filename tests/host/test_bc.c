@@ -771,6 +771,20 @@ static void registers(void) {
     is("obase=101\n100\n", " 100\n");
     is("obase=100000\n123456789\n", " 01234 56789\n");
     is("obase=100000\n100000\n", " 00001 00000\n");
+    /* a number starts its own line when text has passed the end of one, as on the Mac's bc */
+    {
+        static const char start[] = "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        char t[300], want[300];
+        snprintf(t, sizeof(t), "%sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n1\n", start);
+        snprintf(want, sizeof(want), "%sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\n1\n", start + 1);
+        is(t, want);
+        snprintf(t, sizeof(t), "%s\";1\n", start);
+        snprintf(want, sizeof(want), "%s\\\n1\n", start + 1);
+        is(t, want);
+        snprintf(t, sizeof(t), "%.68s\";123\n", start);
+        snprintf(want, sizeof(want), "%.67s1\\\n23\n", start + 1);
+        is(t, want);
+    }
     /* in any base a long number breaks at the character */
     is("obase=16\n2^300\n", "10000000000000000000000000000000000000000000000000000000000000000000\\\n00000000\n");
     fails("scale=-1\n", "scale must be");
