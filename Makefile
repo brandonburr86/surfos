@@ -716,6 +716,22 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
 
+# 11/01/26 (the command-line suite, track fsck): the checker, fs/fat_check.c as it is but for its allocator, which the test
+# counts and refuses, with the block cache, FAT and mkfs of test_fatfs (tests/host/test_fsck.c). No sanitizer here: they
+# run on the Mac, with clang (the account says how): a -fsanitize build under the devenv's qemu-i386 hangs
+FSCK_OBJ = $(BUILD)/host/fsck/fs/fat_check.o
+$(FSCK_OBJ): fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) -Dkalloc=fsck_kalloc -Dkcalloc=fsck_kcalloc -Dkfree=fsck_kfree -c $< -o $@
+$(BUILD)/host/test_fsck: tests/host/test_fsck.c tests/host/test_fatfs.c include/fs/fat_check.h $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fsck.c $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
+unittest: unittest-fsck
+.PHONY: unittest-fsck
+unittest-fsck: $(BUILD)/host/test_fsck
+	$(BUILD)/host/test_fsck
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
