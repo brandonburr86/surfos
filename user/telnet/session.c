@@ -11,9 +11,10 @@ not hold the answers, which bounds a flood of negotiations: the server's own win
 instead. A terminal's keys are read all the time, for Ctrl+] is the way out of just such a session:
 while the server takes nothing, they are dropped (it is said once) and only Ctrl+] counts. Input from
 a pipe is another matter: it is a file somebody wants delivered, so it is read only while it fits
-with the room for a read of the server's to spare, and waits in the pipe. The server is then read
-whatever the pipe holds: one whose output waits for us (a shell behind a telnetd, a router's command
-line, a long banner) may read nothing more until it has gone, and the two would wait for each other.
+with the room for a read of the server's to spare, and waits in the pipe. So the pipe never keeps
+the server from being read (only the server's own negotiations can, while our answers to them wait,
+as above): one whose output waits for us (a shell behind a telnetd, a router's command line, a long
+banner) may read nothing more until it has gone, and the two would wait for each other.
 Nobody is there to press Ctrl+], so a server that takes nothing for STALL_MS ends the session with
 status 2, as does one that closes with input still to go.
 
