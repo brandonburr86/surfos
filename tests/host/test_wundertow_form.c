@@ -85,6 +85,34 @@ static int build_bytes(const char *html, size_t n, struct wd_document *d) {
 static char sent[WB_ADDR_MAX + 64];
 static const char *why;
 
+/* 11/02/26 (the integration of milestones 2 and 3): what display: none hides has no box but is its form's, so a page's
+   forms are the same whatever its CSS hides: every page sent here is built again with a sheet that hides all of it, and
+   with one that hides its elements, and must send the same */
+static int css_pages, css_differ;
+
+static void same_whatever_css(const char *html, const struct wd_document *d) {
+    static const char *const hide[] = { "<style>*{display:none}</style>",
+        "<style>input,select,textarea,button,form,fieldset,legend,option,div,p,span,label,b,i,a,ul,li,table,tr,td"
+        "{display:none}</style>" };
+    static char page[600000], got[WB_ADDR_MAX + 64];
+    size_t n = strlen(html), k;
+    for(k = 0; k < sizeof(hide) / sizeof(hide[0]); k++) {
+        struct wd_document e;
+        const char *no;
+        if(n + strlen(hide[k]) + 1 > sizeof(page)) continue;
+        memcpy(page, html, n);
+        strcpy(page + n, hide[k]);
+        if(build(page, &e)) continue;
+        no = fm_submit(&e, 0, -1, 0, 0, got, sizeof(got));
+        css_pages++;
+        if(e.control_count != d->control_count || e.option_count != d->option_count || !no != !why || (!no && strcmp(got, sent))) {
+            css_differ++;
+            printf("  with %s: %.200s\n", hide[k], html);
+        }
+        wd_free(&e);
+    }
+}
+
 static const char *send_of(const char *html) {
     struct wd_document d;
     if(build(html, &d)) {
@@ -92,6 +120,7 @@ static const char *send_of(const char *html) {
         return "";
     }
     why = fm_submit(&d, 0, -1, 0, 0, sent, sizeof(sent));
+    same_whatever_css(html, &d);
     wd_free(&d);
     return why ? "" : sent;
 }
@@ -1909,9 +1938,84 @@ static void by_hand(void) {
     }
 }
 
+/**** display: none (11/02/26, the integration of milestones 2 and 3) ****/
+
+/* What display: none hides has no box, and is still its form's, as in a browser: it goes with it. Unlike what is
+   disabled, and unlike what the hidden attribute holds, which this browser follows only so far (above). */
+static void hidden_by_css(void) {
+    struct wd_document d;
+    size_t i;
+    int boxes = 0;
+    sends("<style>.h{display:none}</style><form action=/s><input class=h name=a value=1><input name=b value=2></form>",
+          "https://forms.test/s?a=1&b=2", "an input display: none hides goes");
+    sends("<form action=/s><input style='display:none' type=checkbox name=c checked>"
+          "<input type=hidden name=t value=x style=display:none><input type=radio name=r value=v checked style=display:none></form>",
+          "https://forms.test/s?c=on&t=x&r=v", "by its style attribute: a checkbox, a hidden field, a radio button");
+    sends("<form action=/s><input hidden name=a value=1><input type=checkbox hidden name=c checked></form>",
+          "https://forms.test/s?a=1&c=on", "an input with the hidden attribute, which is display: none");
+    sends("<style>div{display:none}</style><form action=/s><div><input name=a value=1><textarea name=t>words</textarea>"
+          "<select name=s><option>One<option selected>Two</select></div><input name=z value=9></form>",
+          "https://forms.test/s?a=1&t=words&s=Two&z=9", "what is in an element display: none hides: fields, a text area, a select");
+    sends("<form action=/s><select name=s style=display:none><option value=1>One<option>Two &amp; more</select>"
+          "<select name=m multiple style=display:none><option selected>A<option>B<option selected>C</select>"
+          "<select name=f style=display:none><option disabled>No<option>Yes</select></form>",
+          "https://forms.test/s?s=1&m=A&m=C&f=Yes", "a select display: none hides: its options, chosen as the page has them");
+    sends("<style>.h{display:none}</style><form action=/s><select class=h name=s><option>One</option>"
+          "<option selected>Two words</option></select><input name=after value=3></form>",
+          "https://forms.test/s?s=Two+words&after=3", "an option's text is its value there too, and the form goes on after it");
+    sends("<form action=/s><fieldset disabled style=display:none><input name=a value=1></fieldset><input name=b value=2></form>",
+          "https://forms.test/s?b=2", "a disabled fieldset display: none hides still disables what is in it");
+    sends("<form action=/s style=display:none><input name=a value=1></form><input name=b value=2>",
+          "https://forms.test/s?a=1", "a form display: none hides is a form, to its end");
+    refuses("<form action=/s><div style=display:none><input type=password name=p></div></form>", "password",
+            "a password field display: none hides still keeps its form from going");
+
+    /* none of them has a box, and the page goes on after them */
+    check(!build("<style>.h{display:none} .h2 select{display:none}</style><form><input class=h name=a><select class=h name=s>"
+                 "<option>xyzzy</select><textarea class=h name=t>plugh</textarea><button class=h name=b>B</button>"
+                 "<div class=h><input name=c><select name=d><option>quux</select></div>"
+                 "<p class=h2>before <select name=e><option>frob</select> after</p><input hidden name=f></form><p>shown", &d),
+          "controls display: none hides");
+    check(d.control_count == 8, "are all controls");
+    for(i = 0; i < d.control_count; i++) boxes += d.controls[i].run >= 0;
+    check(boxes == 0, "with no box");
+    for(i = 0; i < d.run_count; i++)
+        if(d.runs[i].kind != WR_TEXT || (d.runs[i].len == 5 && !memcmp(d.text + d.runs[i].off, "xyzzy", 5))) boxes++;
+    check(boxes == 0 && strstr(d.text, "before") && strstr(d.text, "after") && strstr(d.text, "shown") &&
+          !strstr(d.text, "quux") && !strstr(d.text, "frob") && !strstr(d.text, "plugh"), "nor a word of theirs on the page, and the rest of it is there");
+    check(d.control_count == 8 && d.controls[1].noptions == 1 && d.options[d.controls[1].first_option].on &&
+          d.controls[3].role == WC_SUBMIT, "a select's choice, a button's role");
+    wd_free(&d);
+
+    /* the same forms with the page's sheet or without: what a person did goes over when a sheet comes (sheets.c) */
+    {
+        struct wd_document e;
+        const char *page = "<form action=/s><div class=h><input name=a><select name=s><option>x<option>y</select>"
+                           "<button name=go value=1>Go</button></div><textarea class=h name=t>w</textarea></form>";
+        char styled[400];
+        snprintf(styled, sizeof(styled), "<style>.h{display:none}</style>%s", page);
+        check(!build(page, &d) && !build(styled, &e), "a form with a sheet that hides it and without");
+        check(d.control_count == e.control_count && d.option_count == e.option_count && d.form_count == e.form_count,
+              "has the same controls either way");
+        wd_free(&d);
+        wd_free(&e);
+    }
+
+    /* a hidden submit button is the form's first: Enter in a field submits by it, as in a browser */
+    check(!build("<form action=/s><input name=q value=x><input name=r value=y><input type=submit name=go value=Go style=display:none></form>", &d),
+          "a submit button display: none hides");
+    check(fm_default_button(&d, 0) == 2, "is the form's default button, so Enter in one of two fields submits");
+    check(!fm_submit(&d, 0, fm_default_button(&d, 0), 0, 0, sent, sizeof(sent)) && !strcmp(sent, "https://forms.test/s?q=x&r=y&go=Go"),
+          "and it goes as what submitted");
+    wd_free(&d);
+}
+
 int main(void) {
     model();
     encoding();
+    hidden_by_css();
+    printf("  display: none: %d builds of the pages sent here with sheets that hide them, %d sending otherwise\n", css_pages, css_differ);
+    check(css_pages > 300 && !css_differ, "every page sent here sends the same whatever its CSS hides");
     by_hand();
     check(ut_alloc_live == 0, "nothing held at the end");
     if(failures) {

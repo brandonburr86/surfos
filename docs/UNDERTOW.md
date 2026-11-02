@@ -400,7 +400,8 @@ oldest pages go first, then the pages ahead of the one shown, never that one.
 **Forms.** Fields work as a person expects, by the pointer or by Tab: typing in text fields and text areas, Space for a
 checkbox, a radio button or a button, a list for a select by Space or a click, or Up and Down in it at once. Enter in a
 field submits its form, by its first button; Reset puts it back. Only a person's key or click submits: a page cannot.
-A submit is a GET in the HTML standard's encoding (UTF-8; on a windows-1252 page, that), by the rules of any address
+A control a page's CSS hides with `display: none` (an input's `hidden` attribute too) has no box and is its form's all
+the same: it goes with it, as in a browser, and a hidden submit button is the one Enter submits by. A submit is a GET in the HTML standard's encoding (UTF-8; on a windows-1252 page, that), by the rules of any address
 on the page: the address field shows it and history keeps it. What is not sent says so in the status bar, and nothing
 leaves the computer:
 

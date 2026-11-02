@@ -198,6 +198,10 @@ struct bd {
     unsigned int space_bg;              /* a waiting space's look, from the CSS around it */
     unsigned short space_px;
     int space_now;                      /* that space is what is being written */
+
+    /* 11/02/26 (the integration of milestones 2 and 3): what display: none hides is still the page's forms */
+    int select_none;                    /* the <select> that opens has display: none of its own */
+    int field_none;                     /* the open select is hidden: its control has no box */
 };
 
 /**** small helpers ****/
@@ -578,15 +582,16 @@ static void text_char(struct bd *b, unsigned int cp) {
     unsigned short style;
     unsigned char size;
     unsigned int color;
-    if(b->stopped || b->failed || b->none) return;
+    if(b->stopped || b->failed) return;
     if(b->button || b->select) {                    /* a field's label */
-        if(!b->select || b->option == 1) label_add(b->flabel, &b->flabel_len, &b->flabel_gap, cp);
+        if(!b->none && (!b->select || b->option == 1)) label_add(b->flabel, &b->flabel_len, &b->flabel_gap, cp);
         if(b->opt_open) {                           /* what it sends when it has no value: only ASCII spaces collapse */
-            if(ascii_space(cp)) b->olabel_gap = 1;
+            if(ascii_space(cp)) b->olabel_gap = 1;  /* (display: none or not: an option's text is its form's) */
             else if(ut_html_hidden(cp) || label_put(b->olabel, &b->olabel_len, &b->olabel_gap, cp)) b->olabel_cut = 1;
         }
         return;
     }
+    if(b->none) return;
     if(b->link_open) label_add(b->label, &b->label_len, &b->label_gap, cp);
     if(b->pre) {
         if(cp == '\n') {
@@ -1184,7 +1189,8 @@ static void field_close(struct bd *b) {
     b->flabel_len = 0;
     b->flabel_gap = 0;
     b->fcontrol = -1;
-    field(b, kind, label, n, 0, control);
+    if(b->field_none) b->field_none = 0;            /* display: none: the control, with no box */
+    else field(b, kind, label, n, 0, control);
 }
 
 /* An option's end: its text is its label (or its label attribute's), and its value, its value attribute or its text */
@@ -1262,6 +1268,14 @@ static void input(struct bd *b, struct ut_html_tag *t) {
             field(b, WF_TEXT, b->scratch, n, n > 0, control);     /* checked: the label is a placeholder */
         }
     }
+}
+
+/* An input that display: none hides is a control of its form all the same, as in a browser: it has no box, as what
+   display: none holds has none */
+static void hidden_input(struct bd *b, struct ut_html_tag *t) {
+    b->none++;
+    input(b, t);
+    b->none--;
 }
 
 /* A tag inside <select>: 1 when dealt with here (only options count; anything else is ignored) */
@@ -1361,6 +1375,10 @@ static int css_inline(struct bd *b, struct ut_html_tag *t, unsigned int fl) {
     if(display == DS_ASIS && t->seen[A_HIDDEN]) display = DS_NONE;
     if(t->el == E_SELECT && display == DS_BLOCK) display = DS_ASIS;    /* (select_tag() takes its end tag) */
     b->display = display;
+    if(t->el == E_SELECT && display == DS_NONE) {   /* so no frame: nothing in it is shown but options anyway */
+        b->select_none = 1;
+        return 0;
+    }
     if(display != DS_NONE && display != DS_BLOCK) return 0;
     if(display == DS_NONE && (fl & F_VOID)) {
         ds_close(b->ds, css);
@@ -1381,7 +1399,7 @@ static void css_box(struct bd *b) {
    select_tag()'s */
 static void css_done(struct bd *b, const struct ut_html_tag *t, unsigned int fl) {
     css_box(b);
-    if(t->el == E_SELECT && !b->none) ds_close(b->ds, b->css_at);
+    if(t->el == E_SELECT && b->select) ds_close(b->ds, b->css_at);
     if(!(fl & F_VOID)) return;
     if(b->depth > 1 && b->st[b->depth - 1].made && b->st[b->depth - 1].el == t->el) pop(b);
     ds_close(b->ds, b->css_at);
@@ -1513,7 +1531,10 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
     }
     if(fl & F_CLOSEP) close_p(b);
     if(el == E_HTML || el == E_BODY) css_root(b, t);
-    if(!(fl & F_PUSH) && css_inline(b, t, fl)) return;
+    if(!(fl & F_PUSH) && css_inline(b, t, fl)) {
+        if(el == E_INPUT) hidden_input(b, t);
+        return;
+    }
     if((s = style_of(t)) >= 0) {
         b->is.sty[s]++;
         return;
@@ -1578,7 +1599,9 @@ static void start_tag(struct bd *b, struct ut_html_tag *t) {
         return;
     case E_SELECT:
         field_close(b);
-        b->select = !b->none;
+        b->select = 1;                              /* display: none or not: its options are its form's */
+        b->field_none = b->none || b->select_none;
+        b->select_none = 0;
         b->option = 0;
         b->fcontrol = control_of(b, t, WF_SELECT, 0, 0);
         return;
@@ -1927,7 +1950,7 @@ static void run_html(struct bd *b) {
     while(b->pos < b->len && !b->failed) {
         unsigned char c = b->in[b->pos];
         if(c == '<') markup(b);
-        else if(b->skip_n || b->stopped || b->none || (b->select && b->option != 1 && !b->opt_open)) {
+        else if(b->skip_n || b->stopped || (b->none && !b->opt_open) || (b->select && b->option != 1 && !b->opt_open)) {
             j = memchr(b->in + b->pos, '<', b->len - b->pos);      /* text nobody sees */
             b->pos = j ? (size_t)(j - b->in) : b->len;
         } else if(c == '&') text_char(b, ut_html_ref(b->in, &b->pos, b->len, 0));
