@@ -21,13 +21,9 @@ SUITE = {
     'basename', 'dirname', 'od', 'base64', 'strings', 'file', 'paste', 'join', 'comm', 'fold', 'nl', 'rev', 'cal', 'tree',
     'watch', 'bc',
 }
-# Those of them that are on other tracks' branches until the integration. A name here may lack a page and may be named
-# under SEE ALSO. The integrator removes this list once every track is merged: everything in SUITE must then have its page,
-# and this test says so.
-NOT_HERE_YET = {
-    'sed', 'awk', 'diff', 'patch', 'cmp', 'tar', 'gzip', 'gunzip', 'zcat', 'unzip', 'fsck', 'telnet', 'ftp', 'basename',
-    'dirname', 'od', 'base64', 'strings', 'file', 'paste', 'join', 'comm', 'fold', 'nl', 'rev', 'cal', 'tree', 'bc',
-}
+# Those of them that were on other tracks' branches until the integration. A name here could lack a page and be named
+# under SEE ALSO. 11/02/26: every track is merged and the list is empty, so everything in SUITE must have its page.
+NOT_HERE_YET = set()
 
 # 11/02/26 (the integration): pages about a subject rather than a command, which other pages send the reader to.
 # regex is track text's: the patterns grep, sed and awk share.
@@ -142,10 +138,11 @@ class TheSuite(unittest.TestCase):
         self.assertLessEqual(NOT_HERE_YET, SUITE)
 
     def test_with_the_list_gone_a_missing_page_fails(self):
-        """this file as the integrator will leave it: the list empty, and every other tool's page there but tar's and fold's"""
+        """this file with the list empty, as the integration of 11/02/26 left it: every tool's page there but tar's and
+        fold's, and those two are missed"""
         source = Path(__file__).read_text(encoding='utf-8')
-        emptied = re.sub(r'^NOT_HERE_YET = \{.*?^\}', 'NOT_HERE_YET = set()', source, flags=re.M | re.S)
-        self.assertNotEqual(emptied, source)
+        self.assertIn('\nNOT_HERE_YET = set()\n', source)
+        emptied = source
         later = {'__name__': 'test_man_later', '__file__': __file__}
         exec(compile(emptied, 'test_man_later', 'exec'), later)
         check = later['EveryName']('test_every_tool_of_the_suite')

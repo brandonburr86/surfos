@@ -97,7 +97,7 @@ FILES
 
     A file on SurfOS holds less than 4 GB. File times are not kept.
 
-CTRL+C
+INTERRUPTING
     Ctrl+C stops the command that runs: a transfer is aborted and
     its file cleaned up, and the prompt comes back. Any other command
     the server has already is stopped by closing the connection; one
