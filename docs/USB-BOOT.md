@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 22 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 24 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
@@ -71,7 +71,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 22 scenarios, several minutes
+devenv/test-usb.sh      # the automatic tests: 24 scenarios, several minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -1410,6 +1410,29 @@ Limits:
   `ftpd` the router's address: `ftpd on -a 203.0.113.7` (a range of your own:
   `ftpd on 60000-60099`).
 
+## 18. The command-line tools and the manual
+
+*11/02/26* (`docs/superpowers/plans/2026-11-01-cli-suite.md`). SurfOS has a manual: `man <name>`
+shows the page of any program, kernel command or surfsh builtin, through `less` at a terminal,
+and `man -k <word>` searches the pages' first lines. The tools the suite added:
+
+| | |
+|---|---|
+| Text | `sed`, `awk`, `grep -E`, `diff`, `patch`, `cmp`, `comm`, `join`, `paste`, `fold`, `nl`, `rev` |
+| Files | `tar`, `gzip`, `gunzip`, `zcat`, `unzip`, `od`, `base64`, `strings`, `file`, `tree`, `basename`, `dirname` |
+| System | `top`, `watch`, `fsck`, `cal`, `bc` |
+| Network | `telnet`, `ftp` |
+
+* A tool that changes a file you have (`sed -i`, `patch`, `tar x`, `unzip -o`, `gzip`) writes a
+  new file beside it and renames it over, as `edit` saves, so a failure leaves the old file as it
+  was. Archives and patches that name absolute paths or `..` are refused.
+* `fsck usb1p1` checks a FAT volume without writing anything: it says `clean`, or lists the
+  problems. `fsck -r` is refused for now: two reviews found ways its repairs could lose data, so a
+  damaged stick is still repaired on another computer (First Aid on the Mac, `fsck` elsewhere).
+* `ftp` asks for a password only at a terminal, without echo, and never keeps it; `telnet` and
+  `ftp` have no encryption, like the servers.
+* None of this has been tried on the laptop yet.
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |
@@ -1533,7 +1556,7 @@ and, for the settings and saved networks, [superpowers/plans/2026-10-17-network-
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json, and build/usb/stick/
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 22 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 24 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image

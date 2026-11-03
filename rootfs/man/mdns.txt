@@ -1,0 +1,22 @@
+mdns - this computer as name.local
+
+SYNOPSIS
+    mdns [status]
+    mdns on [name]
+    mdns off
+
+DESCRIPTION
+    Answers multicast DNS, so that other computers on the same network
+    reach this one as name.local. Alone it says what it answers for and
+    where. on starts it, for the name given, or the DHCP hostname,
+    surfos unless the settings say otherwise; a name is 1 to 63 letters,
+    digits and hyphens. It takes another name when one is in use, and
+    +MDNS: lines in dmesg say so. off stops it. It never starts by
+    itself.
+
+EXAMPLES
+    mdns on
+    mdns
+
+SEE ALSO
+    settings, ifconfig, telnetd

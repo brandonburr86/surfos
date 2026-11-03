@@ -1,0 +1,28 @@
+man - the manual
+
+SYNOPSIS
+    man name
+    man -k word
+
+DESCRIPTION
+    Shows the page of a program, a kernel command or one of surfsh's own
+    commands: through less on a terminal, plain when standard output is
+    anything else. Pages are /initrd/man/NAME.txt. Like commands share a
+    page, so man crashdiv shows crash; a page of a name's own comes
+    first.
+
+    The status is 0, 1 when there is no such page or no page has the
+    word, and 2 for a mistake.
+
+OPTIONS
+    -k word  Every page whose first line has the word, without regard to
+             case in ASCII letters, one line each, in order of name. The
+             word is plain text, not a pattern.
+
+EXAMPLES
+    man ls
+    man -k disk
+    man sed | grep -n 'address'
+
+SEE ALSO
+    help, less, type

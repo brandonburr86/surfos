@@ -1,0 +1,17 @@
+export - share variables, or fix them
+
+SYNOPSIS
+    export [name[=value]...]
+    readonly [name[=value]...]
+
+DESCRIPTION
+    export gives the variables to the programs started from here, in
+    their environment. readonly keeps them as they are for the rest of
+    this shell. Alone, or with -p, each lists its variables.
+
+EXAMPLES
+    export PATH=/initrd/bin:/hda1/bin
+    readonly LIMIT=10
+
+SEE ALSO
+    env, unset, set, local

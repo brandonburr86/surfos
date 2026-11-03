@@ -1,0 +1,64 @@
+top - a live view of the tasks
+
+SYNOPSIS
+    top [-d seconds] [-n count] [-s cpu|mem|pid]
+
+DESCRIPTION
+    Shows every task and what it takes of the processor and of memory,
+    with the machine's totals above, read again every two seconds. It is
+    the kernel's list, so kernel threads are there too, their names in
+    brackets.
+
+    On a terminal this is a live view on the alternate screen, which
+    works on a console, in the desktop's Terminal and over telnet. After
+    count reports it stays for one more wait and gives the shell's
+    screen back.
+
+    With standard output anything else, top prints the same report as
+    plain text again and again, a blank line between them, until count
+    or until its reader goes.
+
+    Started with & on a terminal, top cannot tell: it takes the
+    alternate screen and draws over the prompt, and the keys are the
+    shell's. kill %1 gives the screen back.
+
+    The first report's shares are since boot, the others' since the
+    report before. The kernel counts a timer tick to whichever task it
+    finds running, so %CPU is a sample at 100 ticks a second: over two
+    seconds it is good to a tick or two, and a task that runs only
+    between ticks shows nothing.
+
+OPTIONS
+    -d seconds  The wait between reports, 0.1 to 86400, in decimals if
+                you like. 2 without it.
+    -n count    End after that many reports. No end without it.
+    -s order    The order to begin with: cpu, the most first and the
+                default; mem, the same; or pid. In plain reports this is
+                the only way to choose.
+
+KEYS
+    c, m, p    Order by processor, memory or pid.
+    Up, Down   Move through a list longer than the screen. PgUp, PgDn,
+               Home and End too.
+    Space      Read again now.
+    q, Ctrl+C  End.
+
+COLUMNS
+    S         The state: R running, r ready, B blocked, S sleeping, T
+              stopped, Z ended and not collected yet.
+    TTY       The console F1 to F4, a pseudo-terminal pty0 and on, or -
+              for none.
+    %CPU      Its share of the processor.
+    TIME      All the processor time it has had, in
+              hours:minutes:seconds.
+    MEM (KB)  The memory it holds: its pages, its page tables and its
+              kernel stack, as memstat counts them. A kernel thread
+              shows -.
+
+EXAMPLES
+    top -d 0.5
+    top -n 1 | cat
+    top -n 1 -s mem | head -8
+
+SEE ALSO
+    ps, memstat, kill, uptime, watch

@@ -93,6 +93,256 @@ def autonet_telnet(q):
     return 'echo autonet-telnet-ok' if ok else 'echo autonet-telnet-FAILED'
 
 
+# 11/01/26 (the command-line suite, track net): what the block of telnet and ftp in SMOKE needs. Its lines are functions
+# of the QEMU, as in an @boot block: they know the forwarded ports and start the scripted servers. The password is made up
+NET_PASSWORD = 'made-up-test-password-77'
+NET = {}                                                    # the block's servers, from the line that starts one to its check
+
+
+class ScriptedFtp:
+    """An FTP server of this host for the guest to reach as 10.0.2.2:self.port, as hostile as its script. replies: a verb
+    and what it gets: bytes, or a list used up in turn (the last stays), where {pasv} is the data listener's port as
+    PASV's two numbers. transfers: a whole command line, or a verb, and (data, ending): after the data 'ok' closes and
+    says 226; 'hold' keeps it open and silent until ABOR; 'reset' resets it, and waits for ABOR a little: QEMU's user network
+    may hand the guest that reset as a plain end of the data (seen under Linux, not on the Mac), and a client then rightly
+    waits for a final reply, so 426 comes by itself. self.got has every command."""
+
+    def __init__(self, replies, transfers=None, greeting=b'220 scripted\r\n'):
+        self.listener, self.port = host_listener()
+        self.data_listener, self.data_port = host_listener()
+        self.replies, self.transfers, self.greeting = replies, transfers or {}, greeting
+        self.got, self.error = [], None
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def say(self, c, word):
+        text = self.replies.get(word, b'502 no\r\n')
+        if isinstance(text, list):
+            text = text.pop(0) if len(text) > 1 else text[0]
+        c.sendall(text.replace(b'{pasv}', b'%d,%d' % (self.data_port >> 8, self.data_port & 255)))
+
+    def transfer(self, c, buf, how):
+        data, ending = how
+        self.data_listener.settimeout(20)
+        d, _ = self.data_listener.accept()
+        c.sendall(b'150 here\r\n')
+        d.sendall(data)
+        if ending == 'reset':
+            d.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\0\0\0\0\0\0\0')
+            d.close()
+            c.settimeout(3)
+        if ending in ('reset', 'hold'):
+            try:
+                while b'ABOR\r\n' not in buf:
+                    more = c.recv(4096)
+                    if not more:
+                        break
+                    buf += more
+            except socket.timeout:
+                c.settimeout(60)
+                c.sendall(b'426 cut\r\n')
+                return buf
+            c.settimeout(60)
+            self.got.append(b'ABOR')
+            d.close()
+            c.sendall(b'426 stopped\r\n226 abort done\r\n')
+            buf = buf.split(b'ABOR\r\n', 1)[-1]
+        else:
+            d.close()
+            c.sendall(b'226 done\r\n')
+        return buf
+
+    def serve(self):
+        try:
+            c, _ = self.listener.accept()
+            c.settimeout(60)
+            c.sendall(self.greeting)
+            buf = b''
+            while True:
+                while b'\r\n' not in buf:
+                    more = c.recv(4096)
+                    if not more:
+                        return
+                    buf += more
+                line, buf = buf.split(b'\r\n', 1)
+                self.got.append(line)
+                word = line.split(b' ')[0].decode('latin-1')
+                how = self.transfers.get(line.decode('latin-1')) or self.transfers.get(word)
+                if how:
+                    buf = self.transfer(c, buf, how)
+                else:
+                    self.say(c, word)
+                if word == 'QUIT':
+                    c.close()
+                    return
+        except OSError as e:
+            self.error = e
+
+    def close(self):
+        self.thread.join(5)
+        self.listener.close()
+        self.data_listener.close()
+
+
+def net_telnet_line(q):
+    """the line for a telnet session on SurfOS's own telnetd, by the hairpin through its forwarded port"""
+    return f"telnet 10.0.2.2 {q.ports['telnet']}"
+
+
+def net_kill_telnet(q):
+    """a telnet is in raw mode on the console: a session of this host finds its pid and kills it, as nobody at that console
+    could. The line to type afterwards reaches a shell only if raw mode ended with the program"""
+    t = Telnet(q.ports['telnet'], timeout=20)
+    try:
+        t.expect(TELNET_ROOT, 15)
+        t.send('kernel ps\n')
+        t.expect(TELNET_ROOT, 15)
+        m = re.search(rb'^\s*(\d+)\b.*\btelnet \(ring 3\)\s*$', t.data.replace(b'\r', b''), re.M)
+        if m:
+            t.send(f'kill {m.group(1).decode()}\n')
+            t.expect(TELNET_ROOT, 15)
+    finally:
+        t.close()
+    q.expect(PROMPT, 15)
+    return 'echo raw-mode-gone'
+
+
+def net_talk_line(q):
+    """telnet to a host server that speaks no telnet (its port is not 23, so telnet says nothing first): the first thing it
+    gets must be the line typed, whole, and then it leaves a string open and resets the connection"""
+    srv, port = host_listener()
+    box = NET['talk'] = {}
+
+    def serve():
+        try:
+            c, _ = srv.accept()
+            c.settimeout(15)
+            c.sendall(b'220 mail here\r\n')
+            line = b''
+            while not line.endswith(b'\n'):
+                d = c.recv(100)
+                if not d:
+                    break
+                line += d
+            box['line'] = line
+            c.sendall(b'\x1b]0;a title never ended')
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\0\0\0\0\0\0\0')
+            c.close()
+        except OSError as e:
+            box['error'] = e
+        srv.close()
+    box['thread'] = threading.Thread(target=serve, daemon=True)
+    box['thread'].start()
+    return f'telnet 10.0.2.2 {port}'
+
+
+def net_ftpd_on(q):
+    """what the talk's server got, said as a line; telnetd off, ftpd on, and a folder of files for it"""
+    box = NET['talk']
+    box['thread'].join(10)
+    said = 'echo net-talk-ok' if box.get('line') == b'HELO surfos\r\n' else f"echo net-talk-FAILED {box.get('line')!r}"
+    if 'the connection was lost' not in q.screen():     # the string it left open would have swallowed them on the screen
+        said = 'echo net-talk-FAILED the last words are not on the screen'
+    return (f"{said}; telnetd off; ftpd on {q.ports['ftp_pasv_range']}; mkdir /hda1/NET; cp /initrd/README /hda1/NET/UP.TXT; "
+            "cd /hda1/NET")
+
+
+def net_ftp_files(q):
+    """the first script, through SurfOS's ftpd by the hairpin; what came back is what went (the count of different sums)"""
+    return (f"ftp 10.0.2.2 {q.ports['ftp']} < S1.TXT; echo status $?; "
+            "sha256sum UP.TXT BACK.TXT REMOTE/UP3.TXT | cut -c1-64 | uniq | wc -l")
+
+
+def net_ftp_more(q):
+    """the second script: reget on from a part, whole already; mget; text mode back through mput; mget again, which leaves
+    what is there: status 1, and the script stops there, so its last delete does not run. What is left is one file four
+    times"""
+    return (f"ftp 10.0.2.2 {q.ports['ftp']} < S2.TXT; echo status $?; "
+            "sha256sum UP.TXT PART.TXT UP3.TXT LF.TXT | cut -c1-64 | uniq | wc -l; ls REMOTE/UP3.TXT; cd /hda1; rm -r NET; cd /")
+
+
+def net_login_line(q):
+    """ftp to the scripted server: EPSV refused, PASV naming another address (10.0.2.3, QEMU's own: a client that believed
+    it would reach nothing), then a low port, then the right port again"""
+    good = b'227 ok (10,0,2,3,{pasv})\r\n'
+    NET['ftp'] = ScriptedFtp(
+        {'USER': b'331 password please\r\n', 'PASS': b'230 in\r\n', 'TYPE': b'200 ok\r\n', 'SIZE': b'550 unknown\r\n',
+         'NOOP': b'200 ok\r\n',
+         'PASV': [good, b'227 ok (10,0,2,2,0,25)\r\n', good], 'QUIT': b'221 bye\r\n'},
+        {'NLST': (b'nice.txt\r\n\x1b[31mred\x1b[0m\r\n', 'ok'),
+         'RETR big.bin': (b'x' * 20000, 'hold'),
+         'RETR cut.bin': (b'y' * 5000, 'reset'),
+         'RETR nice.txt': (b'nice', 'ok'),
+         'RETR climb.txt': (b'up', 'ok')},
+        b'220-scripted\r\n220 ready\r\n')
+    return f"ftp -n 10.0.2.2 {NET['ftp'].port}"
+
+
+def net_script_line(q):
+    """ftpd off; a script on standard input, a pipe, and a login in it: the password can only come from the terminal"""
+    NET['script'] = ScriptedFtp({'USER': b'331 password please\r\n', 'PASS': b'230 in\r\n', 'QUIT': b'221 bye\r\n'})
+    return f"ftpd off; printf 'user bob\\nquit\\n' | ftp -n 10.0.2.2 {NET['script'].port}"
+
+
+def net_detached_line(q):
+    """a script that a detached task runs (the kernel's spawn, as the desktop's Run program... starts one): its ftp is not
+    detached itself, but nobody types for it, so it must not ask for a password on the console"""
+    NET['detached'] = ScriptedFtp({'USER': b'331 password please\r\n', 'QUIT': b'221 bye\r\n'})
+    return (f"echo \"printf 'user bob\\\\nquit\\\\n' | /initrd/bin/ftp -n 10.0.2.2 {NET['detached'].port} > /hda1/D.OUT 2>&1\" "
+            "> /hda1/D.SH; kernel spawn /initrd/bin/surfsh /hda1/D.SH")
+
+
+def net_detached_result(q):
+    """what that ftp said, once the server has its QUIT (had it asked, the line typed next would have been its password)"""
+    deadline = time.time() + 20
+    while b'QUIT' not in NET['detached'].got and time.time() < deadline:
+        q.pump(0.1)
+    return 'cat /hda1/D.OUT; rm /hda1/D.SH /hda1/D.OUT'
+
+
+def net_names(q):
+    """the session lives on; mget's listing from then on: a name that climbs, and two that are not safe here"""
+    NET['ftp'].transfers['NLST'] = (b'nice.txt\r\n../../climb.txt\r\nbad|name.txt\r\nx\x1b[2J.txt\r\n', 'ok')
+    return 'status\nmget *.txt'
+
+
+def net_ctrl_c(q):
+    """a transfer that begins and holds; then Ctrl+C, as bytes, once the server has its command"""
+    q.send('get big.bin NET.BIN\n')
+    deadline = time.time() + 15
+    while b'RETR big.bin' not in NET['ftp'].got and time.time() < deadline:
+        q.pump(0.1)
+    return b'\x03'
+
+
+def net_ftp_result(q):
+    """nothing left on the disk by a transfer that failed, what the server got, and the password shown nowhere on the
+    console"""
+    srv = NET['ftp']
+    srv.close()
+    NET['script'].close()
+    NET['detached'].close()
+    bad = []
+    if (b'PASS ' + NET_PASSWORD.encode()) not in NET['script'].got:
+        bad.append('no PASS from the script')
+    if (b'PASS ' + NET_PASSWORD.encode()) not in srv.got:
+        bad.append('no PASS')
+    if any(line.startswith(b'PASS') for line in NET['detached'].got):
+        bad.append('the detached script asked for a password')
+    if NET_PASSWORD.encode() in q.transcript:
+        bad.append('the password was shown')
+    if b'ABOR' not in srv.got:
+        bad.append('no ABOR')
+    if b'EPSV' not in srv.got:
+        bad.append('no EPSV')
+    if b'RETR climb.txt' not in srv.got or any(b'..' in line for line in srv.got):
+        bad.append('a name climbed')
+    if srv.error:
+        bad.append(repr(srv.error))
+    said = 'echo net-ftp-ok' if not bad else 'echo net-ftp-FAILED ' + ', '.join(bad)
+    return f'ls /hda1/NET.BIN /hda1/CUT.BIN; ls /hda1 | grep -c "\\.tmp$"; {said}; rm /hda1/nice.txt /hda1/climb.txt'
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -1215,7 +1465,7 @@ SMOKE = [
     # pipeline, reported by its number. 10/25/26: the kernel's ls into a program as kernel ls (ls is the program)
     ('surfsh', [shown('SURF \u224b> ')],
      [('/initrd/bin/cat /initrd/etc/version | /initrd/bin/wc -c', ['     20 ', shown('SURF \u224b> ')]),
-      ('kernel ls /initrd/bin | /initrd/bin/head -2', ['  cat\r\n', '  count\r\n', shown('SURF \u224b> ')]),
+      ('kernel ls /initrd/bin | /initrd/bin/head -2', [re.compile(rb'  [a-z0-9]+\r\n[^\r\n]*  [a-z0-9]+\r\n'), shown('SURF \u224b> ')]),
       # 10/31/26: a line of its own at the log's end, not the boot's at its start: by here the steps before have filled
       # the 16 KB ring (KLOG_SIZE), and the boot's first lines are gone
       ("printf 'dmesg-%s\\n' piped > /dev/kmsg; dmesg | /initrd/bin/tail -n 1", ['dmesg-piped', shown('SURF \u224b> ')]),
@@ -1383,6 +1633,367 @@ SMOKE = [
       ('exit', [])]),
     ('@surfsh-ctrl-c', []),                                 # Ctrl+C in surfsh's loops, read, a surfsh in a surfsh
     ('@surfsh-jobs', []),                                   # 10/25/26: job control: Ctrl+Z, jobs, fg, bg, kill %1, Ctrl+D
+    # 11/01/26 (the command-line suite, track archive): gzip, zcat and gunzip on FAT, the input going and coming back; a file
+    # cut short and an output that exists, refused with nothing lost; tar czf with -C and --exclude, tz, xz, x over a file
+    # that exists, and through a pipe; unzip of a zip written out here (a stored member, a deflated one, one named ../up),
+    # by -l, -t, -p and unpacking, the bad name refused and the others taken; a tar with the same name likewise. The depth
+    # is in tests/host/test_deflate.c, test_gztool.c, test_tar.c and test_unzip.c.
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-archive', ['cli-archive\r\n', shown('SURF \u224b> ')]),
+      ('seq 1 3000 > /hda1/AR.TXT; sha256sum /hda1/AR.TXT | cut -d \' \' -f 1 > /hda1/AR.SUM; gzip -9 /hda1/AR.TXT; test -e /hda1/AR.TXT || echo input-gone',
+       ['input-gone\r\n', shown('SURF \u224b> ')]),
+      ('gzip -t /hda1/AR.TXT.gz; echo status $?; zcat /hda1/AR.TXT.gz | tail -n 1',
+       ['status 0\r\n', '3000\r\n', shown('SURF \u224b> ')]),
+      ('gunzip /hda1/AR.TXT.gz; test "$(cat /hda1/AR.SUM)" = "$(sha256sum /hda1/AR.TXT | cut -d \' \' -f 1)" && echo same-bytes; test -e /hda1/AR.TXT.gz || echo gz-gone',
+       ['same-bytes\r\n', 'gz-gone\r\n', shown('SURF \u224b> ')]),
+      ('printf \'\\037\\213\\010\\000\' > /hda1/CUT.GZ; gunzip /hda1/CUT.GZ; echo status $?; test -e /hda1/CUT || echo no-output; test -e /hda1/CUT.GZ && echo input-kept',
+       ['the data ends too early', 'status 2\r\n', 'no-output\r\n', 'input-kept\r\n', shown('SURF \u224b> ')]),
+      ('echo mine > /hda1/AR.TXT.gz; gzip /hda1/AR.TXT; echo status $?; cat /hda1/AR.TXT.gz; rm /hda1/AR.TXT.gz',
+       ['it already exists', 'status 2\r\n', 'mine\r\n', shown('SURF \u224b> ')]),
+      ('tar czf /hda1/ETC.TGZ --exclude=ssl -C /initrd etc; echo status $?; tar tzf /hda1/ETC.TGZ | grep -c ssl; tar tzf /hda1/ETC.TGZ | grep -c motd',
+       ['status 0\r\n', '0\r\n', '1\r\n', shown('SURF \u224b> ')]),
+      ('mkdir /hda1/AROUT; tar xzf /hda1/ETC.TGZ -C /hda1/AROUT; echo status $?; test "$(cat /hda1/AROUT/etc/motd.txt)" = "$(cat /initrd/etc/motd.txt)" && echo same-file',
+       ['status 0\r\n', 'same-file\r\n', shown('SURF \u224b> ')]),
+      ('echo old > /hda1/AROUT/etc/motd.txt; tar xzf /hda1/ETC.TGZ -C /hda1/AROUT; test "$(cat /hda1/AROUT/etc/motd.txt)" = "$(cat /initrd/etc/motd.txt)" && echo replaced; ls /hda1/AROUT/etc | grep -c tmp; true',
+       ['replaced\r\n', '0\r\n', shown('SURF \u224b> ')]),
+      ('tar cf - -C /initrd/etc ssl | tar tvf - | grep -c README',
+       ['1\r\n', shown('SURF \u224b> ')]),
+      ('printf \'PK\\003\\004\\024\\0\\0\\0\\0\\0\\0\\0a\\135\\027\\2268\\206\\007\\0\\0\\0\\007\\0\\0\\0\\002\\0\\0\\0okzip ok\\012PK\\003\\004\\024\\0\\0\\0\\010\\0\\0\\0a\\135\\346\\374\\043\\254\\017\\0\\0\\0\\265\\0\\0\\0\\001\\0\' > /hda1/EV.ZIP',
+       [shown('SURF \u224b> ')]),
+      ('printf \'\\0\\0dKIM\\313I\\054IMQH\\031:\\014.\\0PK\\003\\004\\024\\0\\0\\0\\0\\0\\0\\0a\\135z\\315\\077\\267\\005\\0\\0\\0\\005\\0\\0\\0\\005\\0\\0\\0../upevil\\012PK\\001\\002\\024\\0\\024\\0\\0\\0\\0\\0\\0\\0a\\135\\027\' >> /hda1/EV.ZIP',
+       [shown('SURF \u224b> ')]),
+      ('printf \'\\2268\\206\\007\\0\\0\\0\\007\\0\\0\\0\\002\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0okPK\\001\\002\\024\\0\\024\\0\\0\\0\\010\\0\\0\\0a\\135\\346\\374\\043\\254\\017\\0\\0\\0\\265\\0\\0\\0\\001\\0\\0\\0\\0\\0\\0\\0\' >> /hda1/EV.ZIP',
+       [shown('SURF \u224b> ')]),
+      ('printf \'\\0\\0\\0\\0\\0\\0\\047\\0\\0\\0dPK\\001\\002\\024\\0\\024\\0\\0\\0\\0\\0\\0\\0a\\135z\\315\\077\\267\\005\\0\\0\\0\\005\\0\\0\\0\\005\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0\\0U\\0\\0\\0../upPK\\005\\006\\0\\0\\0\\0\\003\\0\\003\' >> /hda1/EV.ZIP',
+       [shown('SURF \u224b> ')]),
+      ('printf \'\\0\\222\\0\\0\\0\\175\\0\\0\\0\\0\\0\' >> /hda1/EV.ZIP',
+       [shown('SURF \u224b> ')]),
+      ('unzip -l /hda1/EV.ZIP',
+       ['  ok\r\n', '  d\r\n', '  ../up\r\n', '3 files', shown('SURF \u224b> ')]),
+      ('unzip -tq /hda1/EV.ZIP; echo status $?; unzip -p /hda1/EV.ZIP d | wc -c',
+       ['status 0\r\n', '181', shown('SURF \u224b> ')]),
+      ('unzip -q /hda1/EV.ZIP -d /hda1/AROUT/Z; echo status $?; cat /hda1/AROUT/Z/ok; test -e /hda1/AROUT/up || echo not-above',
+       ['the name leaves the folder', 'status 2\r\n', 'zip ok\r\n', 'not-above\r\n', shown('SURF \u224b> ')]),
+      ('z() { i=0; while test $i -lt $1; do printf \'\\0\'; i=$((i+1)); done; }',
+       [shown('SURF \u224b> ')]),
+      ('printf \'../up\' > /hda1/EV.TAR; z 95 >> /hda1/EV.TAR; printf \'0000644\\0000000000\\0000000000\\00000000000005\\00014000000000\\000006527\\0 0\' >> /hda1/EV.TAR',
+       [shown('SURF \u224b> ')]),
+      ('z 100 >> /hda1/EV.TAR; printf \'ustar\\00000\' >> /hda1/EV.TAR; z 247 >> /hda1/EV.TAR; printf \'evil\\012\' >> /hda1/EV.TAR; z 507 >> /hda1/EV.TAR',
+       [shown('SURF \u224b> ')]),
+      ('printf \'ok\' >> /hda1/EV.TAR; z 98 >> /hda1/EV.TAR; printf \'0000644\\0000000000\\0000000000\\00000000000007\\00014000000000\\000006303\\0 0\' >> /hda1/EV.TAR',
+       [shown('SURF \u224b> ')]),
+      ('z 100 >> /hda1/EV.TAR; printf \'ustar\\00000\' >> /hda1/EV.TAR; z 247 >> /hda1/EV.TAR; printf \'tar ok\\012\' >> /hda1/EV.TAR; z 505 >> /hda1/EV.TAR',
+       [shown('SURF \u224b> ')]),
+      ('z 1024 >> /hda1/EV.TAR',
+       [shown('SURF \u224b> ')]),
+      ('rm /hda1/AROUT/Z/ok; tar xf /hda1/EV.TAR -C /hda1/AROUT/Z; echo status $?; cat /hda1/AROUT/Z/ok; test -e /hda1/AROUT/up || echo not-above',
+       ['the name leaves the folder', 'status 2\r\n', 'tar ok\r\n', 'not-above\r\n', shown('SURF \u224b> ')]),
+      ('rm /hda1/AR.TXT /hda1/AR.SUM /hda1/CUT.GZ /hda1/ETC.TGZ /hda1/EV.ZIP /hda1/EV.TAR; rm -r /hda1/AROUT; ls /hda1 | grep -c AR; true',
+       ['0\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track sys): top's plain reports, each counted, the one that ends when its reader goes,
+    # and a program's memory (memhog's, big enough to be no one else's) read back from the kernel; its live view, every order
+    # and q, and on a pseudo-terminal; the manual: a page, a shared one, the names a file cannot have, a name that would lead out of it, man -k, a page
+    # through less on the terminal; watch: the command with its title row, a kernel command with -t, a pipeline that never
+    # ends, gone with all its processes on q; help's pointer to man. Depth in tests/host/test_top.c, test_watch.c, test_manutil.c
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-sys', ['cli-sys\r\n', shown('SURF \u224b> ')]),
+      ('top -n 2 -d 0.2 | grep -c "PID  PPID"; top -d 0.1 | head -1; echo ended',
+       ['\r\n2\r\n', 'top: up ', ' tasks, ', '% busy\r\n', 'ended\r\n', shown('SURF \u224b> ')]),
+      ('top -n 1 -s pid | head -5 | tail -1', [re.compile(rb'\n    0     - [rR] \S+ +[0-9]+\.[0-9] +[0-9:]+ +- \[Kernel Idle Tas\]\r'),
+                                               shown('SURF \u224b> ')]),
+      ('memhog hold 1000 > /dev/null & top -n 3 -d 1 -s mem | grep memhog; wait',
+       [re.compile(rb' [0-9]{5,} memhog\r\n'), shown('SURF \u224b> ')]),
+      ('top -x; echo status $?; top -d 0; echo status $?; top -n 0 | cat; top -s name; echo status $?',
+       ['usage: top [', 'status 2', 'top: 0: no time to wait', 'status 2', 'top: 0: no count of reports',
+        'top: name: no order', 'status 2', shown('SURF \u224b> ')]),
+      ('top -d 0.3', ['\x1b[?1049h', 'top: up ', 'Memory: ', '%CPU', 'by CPU', 'q: end']),
+      (b'm', ['by memory']),
+      (b'p', ['by pid']),
+      (b'c', ['by CPU']),
+      (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('top -n 1 -d 0.1', ['\x1b[?1049h', 'q: end', '\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('ptytest run top -n 1 -d 0.1', ['\\e[?1049h', 'q: end', '\\e[?1049l', 'PTYTEST run PASS', shown('SURF \u224b> ')]),
+      ('man ls | head -1; man crashdiv | head -1; man . | head -1; man "[" | head -1; man : | head -1',
+       ['ls - list directories\r\n', 'crash - misbehave on purpose\r\n', 'source - run a file', 'test - check files',
+        'true - do nothing', shown('SURF \u224b> ')]),
+      ('man nosuch; echo status $?; man ../etc/motd; echo status $?', ['man: nosuch: no such page', 'status 1',
+                                                                       'man: ../etc/motd: no such page', 'status 1',
+                                                                       shown('SURF \u224b> ')]),
+      ('man -k DISKS; man -k nosuchword; echo status $?; man; echo status $?',
+       ['lsblk - disks, partitions and ramdisks\r\n', 'status 1', 'usage: man name', 'status 2', shown('SURF \u224b> ')]),
+      ('man top', ['/initrd/man/top.txt  lines 1-']),
+      (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('watch -n 0.2 echo tick; echo status $?', ['\x1b[?1049h', 'Every 0.2s: echo tick', 'tick']),
+      (b'q', ['\x1b[?1049l', 'status 0', shown('SURF \u224b> ')]),
+      ('watch -t -n 0.2 uptime', ['\x1b[?1049h', ' tasks, ']),
+      (b'\x03', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ("watch 'seq 1 3; cat /dev/zero | grep x'", ['\x1b[?1049h', 'Every 2s: seq 1 3;', '3']),
+      (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('sleep 300; ps | grep -c " cat"; true', ['\r\n0\r\n', shown('SURF \u224b> ')]),
+      # (the review of 11/01/26) what a run left in the background goes at the end of that run, and of every run: the two
+      # titles after 'started' are redraws, so a run has ended before q; without JOB_KILL there each leaves a count
+      ("watch -n 0.2 'count 100000 1000 > /dev/null & echo started'", ['\x1b[?1049h', 'started', 'Every 0.2s', 'Every 0.2s']),
+      (b'q', ['\x1b[?1049l', shown('SURF \u224b> ')]),
+      ('sleep 300; ps | grep -c " count"; true', ['\r\n0\r\n', shown('SURF \u224b> ')]),
+      ('watch date | cat; watch; echo status $?', ['watch: standard output is no terminal', 'usage: watch [', 'status 2',
+                                                   shown('SURF \u224b> ')]),
+      ('ptytest procsize', ['size 0 wrote 36 bytes', 'PTYTEST procsize PASS', shown('SURF \u224b> ')]),
+      ('help | grep -c "man -k WORD"', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track lang): bc: numbers of any length, scale, the bases, a long number's lines; -l;
+    # a script in a file, and a file then standard input; a mistake at a terminal costs its line, and in a pipe the status
+    # is 2; a number the machine cannot hold is said at once; a file that is not there; a reader that goes away
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-lang', ['cli-lang\r\n', shown('SURF \u224b> ')]),
+      ("echo '2^100; 2^500' | bc", ['\r\n1267650600228229401496703205376\r\n',
+                                    '32733906078961418700131896968275991522166420460430647894832913680961\\\r\n',
+                                    '053328527589376\r\n', shown('SURF \u224b> ')]),
+      ("echo 'scale=20; 1/7; scale=2; 7.555*2; -7%3' | bc", ['.14285714285714285714\r\n', '15.110\r\n', '-.01\r\n',
+                                                             shown('SURF \u224b> ')]),
+      ("echo 'obase=16; 255; obase=2; 5.25; obase=25; 1024' | bc", ['FF\r\n', '101.0100000\r\n', ' 01 15 24\r\n',
+                                                                    shown('SURF \u224b> ')]),
+      ("echo 'ibase=16; FF.8; ibase=A; sqrt(10^40-1); length(1.50)' | bc",
+       ['255.5\r\n', '99999999999999999999\r\n', '3\r\n', shown('SURF \u224b> ')]),
+      ("echo 'e(1); 4*a(1); l(10); s(1); c(1); j(1,1)' | bc -l",
+       ['2.71828182845904523536\r\n', '3.14159265358979323844\r\n', '2.30258509299404568401\r\n',
+        '.84147098480789650665\r\n', '.54030230586813971740\r\n', '.44005058574493351595\r\n',
+        shown('SURF \u224b> ')]),
+      ("printf 'define f(n) { auto a[]; a[0]=n; if(n<2) return 1; return a[0]*f(n-1) }\\nf(25)\\nquit\\n' > /hda1/F.BC; "
+       "bc /hda1/F.BC", ['15511210043330985984000000\r\n', shown('SURF \u224b> ')]),
+      ("echo 'x=41' > /hda1/F.BC; echo 'x+1' | bc /hda1/F.BC", ['42\r\n', shown('SURF \u224b> ')]),
+      # (bc says nothing when it starts: the file's answer says that it has got to the terminal)
+      ("echo 'x+1' > /hda1/F.BC; bc /hda1/F.BC", ['\r\n1\r\n']),
+      ('x=6', []),
+      ('x*7', ['42\r\n']),
+      ('1/0', ['bc: (standard input): line 3: divide by zero\r\n']),
+      ('x', ['6\r\n']),
+      ('quit', [shown('SURF \u224b> ')]),
+      ('rm /hda1/F.BC', [shown('SURF \u224b> ')]),
+      ("echo '1/0' | bc; echo status $?; echo '1+' | bc; echo status $?",
+       ['divide by zero\r\n', 'status 2\r\n', 'unexpected end of line\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      # (a digit above the base counts at its own value, and else may stand after a ; or on a later line)
+      ("printf 'ibase=2\\n12\\nibase=1010\\n1E5\\nif(0)2;else 3\\nif(0)4\\nelse 5\\n' | bc; echo status $?",
+       ['\r\n4\r\n245\r\n3\r\n5\r\nstatus 0\r\n', shown('SURF \u224b> ')]),
+      ("echo '10^1000000000' | bc; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ('bc /hda1/NONE.BC; echo status $?', ['bc: /hda1/NONE.BC: No such file or directory\r\n', 'status 2\r\n',
+                                            shown('SURF \u224b> ')]),
+      ("echo 'while(1) 7' | bc | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF \u224b> ')]),
+      ('head -1 /initrd/man/bc.txt', ['bc - ', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track lang): awk: fields, patterns, -F and -v, UTF-8 counted as characters, printf,
+    # recursion, arrays and for-in through a pipe to sort, sub and match, getline from a command, system, a file written,
+    # added to and read back, exit, a mistake and a file that is not there, memory running out, a reader that goes away
+    ('surfsh', [shown('SURF ≋> ')],
+     [('echo cli-lang', ['cli-lang\r\n', shown('SURF ≋> ')]),
+      ("printf 'a b c\\nd e f\\n' | awk '{ print NF, $2; $2 = \"x\"; print }'",
+       ['\r\n3 b\r\n', 'a x c\r\n', '3 e\r\n', 'd x f\r\n', shown('SURF ≋> ')]),
+      ("seq 10 | awk '$1 % 2 == 0 { s += $1 } NR == 2, NR == 3 { n++ } END { print s, NR, n }'", ['30 10 2\r\n', shown('SURF ≋> ')]),
+      ("printf 'x:1\\ny:2\\n' | awk -F: -v n=10 '{ print $1, $2 * n }'", ['x 10\r\n', 'y 20\r\n', shown('SURF ≋> ')]),
+      ("echo héllo wörld | awk '{ print length($1), substr($2, 2, 2), index($0, \"o\"), toupper($1) }'",
+       ['5 ör 5 HéLLO\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { printf \"%5.2f|%-4d|%s|%c|%x\\n\", 3.14159, 42, \"s\", 65, 255; print 2 ^ 10, 1 / 3, int(3.9), 1e6 }'",
+       [' 3.14|42  |s|A|ff\r\n', '1024 0.333333 3 1000000\r\n', shown('SURF ≋> ')]),
+      # (libsurf's printf would put a sign on what has none, which a host's printf does not: only here does it show)
+      ("awk 'BEGIN { printf \"%+x|% o|%+u|% x|%+d\\n\", 255, 8, 3, 15, 5 }'", ['ff|10|3|f|+5\r\n', shown('SURF ≋> ')]),
+      ("awk 'function f(n) { return n < 2 ? 1 : n * f(n - 1) } BEGIN { print f(10), sqrt(16), exp(0), length(\"\") }'",
+       ['3628800 4 1 0\r\n', shown('SURF ≋> ')]),
+      ("printf 'a\\nb\\na\\n' | awk '{ c[$1]++ } END { for (k in c) print k, c[k] | \"sort\" }'",
+       ['a 2\r\n', 'b 1\r\n', shown('SURF ≋> ')]),
+      ("echo hello | awk '{ n = gsub(/l+/, \"[&]\"); print n, $0, match($0, /o/), RSTART, RLENGTH }'",
+       ['1 he[ll]o 7 7 1\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { while ((\"seq 3\" | getline x) > 0) s += x; print s, close(\"seq 3\"), system(\"exit 7\") }'",
+       ['6 0 7\r\n', shown('SURF ≋> ')]),
+      # (what awk has read of a command, a file or a pipe survives a system() and an fflush(), which flush stdio's streams)
+      ("awk 'BEGIN { c = \"seq 3000\"; while ((c | getline x) > 0) { n++; s += x; if (n == 10) system(\"true\"); "
+       "if (n == 20) fflush() } print n, s, close(c), close(c) }'", ['3000 4501500 0 -1\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 > /hda1/S.TXT; awk 'BEGIN { f = \"/hda1/S.TXT\"; while ((getline x < f) > 0) { n++; if (n == 10) "
+       "system(\"true\") } print n, close(f) }'; rm /hda1/S.TXT", ['3000 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3000 | awk 'NR == 10 { system(\"true\") } END { print NR }'", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
+      ("awk 'BEGIN { f = \"/hda1/A.TXT\"; print \"one\" > f; close(f); print \"two\" >> f }'; awk '{ print NR, $0 }' /hda1/A.TXT; rm /hda1/A.TXT",
+       ['1 one\r\n', '2 two\r\n', shown('SURF ≋> ')]),
+      ("dmesg | awk '/FAT16: hda1/ { print $2, (NF > 3) }' | head -1", ['hda1: 1\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { exit 5 }'; echo status $?; awk 'BEGIN { print 1 / 0 }'; echo status $?",
+       ['status 5\r\n', 'division by zero\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { print ) }'; echo status $?; awk '{ print }' /hda1/NONE.TXT; echo status $?",
+       ["syntax error near ')'\r\n", 'status 2\r\n', 'awk: /hda1/NONE.TXT: No such file or directory\r\n', 'status 2\r\n',
+        shown('SURF ≋> ')]),
+      ("awk 'BEGIN { s = \"x\"; while (1) s = s s }'; echo status $?", ['out of memory\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a write that fails when the file is closed, as on a full stick: this file opens, and refuses every write)
+      ("awk 'BEGIN { print \"x\" >> \"/dev/config/hostname\" }'; echo status $?",
+       ['awk: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { f = \"/dev/config/hostname\"; print \"x\" >> f; close(f); print \"no\" }'; echo status $?",
+       ['awk: line 1: /dev/config/hostname: Read-only file system\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (a mistake waits for a command, as the end of a program does: what it writes comes before the prompt)
+      ("awk 'BEGIN { print \"sent\" | \"cat\"; print 1 / 0 }'; echo status $?", ['division by zero\r\n', 'sent\r\n', 'status 2\r\n', shown('SURF ≋> ')]),
+      # (at a terminal a pattern as RS gives a record as soon as the next byte is there: the person does not type 64 KB)
+      ("awk 'BEGIN { RS = \"[0-9]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b2c', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
+      # (and when RS can match the newline, the line's last record comes with the line, not with the next one)
+      ("awk 'BEGIN { RS = \"[0-9\\n]\"; print \"ready\" } { print \"<\" $0 \">\" } NR == 2 { exit }'", ['ready\r\n']),
+      ('a1b', ['<a>\r\n', '<b>\r\n', shown('SURF ≋> ')]),
+      ("awk 'BEGIN { while (1) print 7 }' | head -2; echo done", ['7\r\n7\r\ndone\r\n', shown('SURF ≋> ')]),
+      ('head -1 /initrd/man/awk.txt', ['awk - ', shown('SURF ≋> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track text): what libsurf gained, inside SurfOS: libtest (user/bin/libtest.c) checks
+    # regcomp and regexec, strtod, sscanf's floats, getopt, system, popen and pclose, and that the mathematical functions
+    # give the same bits here as on the host (user/bin/libm_grid.h), at -O0 and at -O2, on x87
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-text', ['cli-text\r\n', shown('SURF \u224b> ')]),
+      ('libtest regex', ['LIBTEST regex PASS', shown('SURF \u224b> ')]),
+      ('libtest numbers', ['LIBTEST numbers PASS', shown('SURF \u224b> ')]),
+      ('libtest math', ['LIBTEST math PASS', shown('SURF \u224b> ')]),
+      ('libtest getopt', ['LIBTEST getopt PASS', shown('SURF \u224b> ')]),
+      ('libtest system', ['seen by a child', 'LIBTEST system PASS', shown('SURF \u224b> ')]),
+      ('libtest popen', ['LIBTEST popen PASS', shown('SURF \u224b> ')]),
+      ('libtest closed', ['LIBTEST closed PASS', shown('SURF \u224b> ')]),
+      ('libtest order | cat', ['first\r\nsecond\r\nthird\r\n', shown('SURF \u224b> ')]),
+      # stage 2: grep on the library, with -E, and sed: addresses, s with groups, a file replaced through saveutil.h with its
+      # backup and nothing left beside it, w, what q says, a mistake, a reader that goes, a whole UTF-8 character
+      ('printf "apple\\nBanana\\ncherry\\n" | grep -E "an|rr"', ['Banana\r\ncherry\r\n', shown('SURF \u224b> ')]),
+      ('printf "aa\\nab\\n" | grep "\\(a\\)\\1"; printf "x\\n" | grep -E "a("; echo status $?',
+       ['aa\r\n', 'grep: a(: ', 'status 2', shown('SURF \u224b> ')]),
+      ('seq 5 | sed -n "2,3p;\\$="', ['2\r\n3\r\n5\r\n', shown('SURF \u224b> ')]),
+      ("echo hello world | sed 's/\\(hello\\) \\(world\\)/\\2 \\1/'; echo aaa | sed -E 's/a+/<&>/'",
+       ['world hello\r\n', '<aaa>\r\n', shown('SURF \u224b> ')]),
+      ("printf 'a\\nb\\n' > /hda1/SED.TXT; sed -i.BAK 's/a/X/' /hda1/SED.TXT; echo status $?; cat /hda1/SED.TXT /hda1/SED.TXT.BAK; "
+       "ls /hda1 | grep -c -i 'SED.TXT.TMP'; rm /hda1/SED.TXT /hda1/SED.TXT.BAK",
+       ['status 0\r\n', 'X\r\nb\r\na\r\nb\r\n0\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n '2w /hda1/SEDW.TXT'; cat /hda1/SEDW.TXT; rm /hda1/SEDW.TXT", ['\r\n2\r\n', shown('SURF \u224b> ')]),
+      ("seq 3 | sed -n 'w /dev/null'; echo status $?", ['status 0\r\n', shown('SURF \u224b> ')]),
+      ("seq 9 | sed 2q7; echo status $?; echo x | sed k; echo status $?", ['1\r\n2\r\n', 'status 7\r\n', 'sed: script line 1: ', 'status 2',
+                                                                          shown('SURF \u224b> ')]),
+      # names on FAT: case and paths differ, the file is one. w's two names are one output (a new file: its folder and name; the root
+      # folder's number is 0); with a suffix one file twice is refused; so is a suffix that makes the working name. The file stays
+      ("cd /hda1; printf 'a\\nb\\n' > SEDC.TXT; sed -n -e '1w /hda1/SEDO.TXT' -e '2w ./sedo.txt' SEDC.TXT; cat SEDO.TXT",
+       ['a\r\nb\r\n', shown('hda1 \u224b> ')]),
+      ("sed -i.BAK 's/a/X/' SEDC.TXT ./sedc.txt; echo status $?; sed -i.TMP 's/a/XX/' SEDC.TXT; echo status $?",
+       ['are one file', 'status 2\r\n', 'in the way', 'status 2\r\n', shown('hda1 \u224b> ')]),
+      ("cat SEDC.TXT; rm SEDC.TXT SEDO.TXT; ls | grep -c -i '^SED'; cd /", ['a\r\nb\r\n', '0\r\n', shown('SURF \u224b> ')]),
+      # D, through libsurf's malloc: the pattern space is freed from where it began
+      ("seq 3000 | sed -n ':a;$!{N;ba};P;D' | tail -1", ['\r\n3000\r\n', shown('SURF \u224b> ')]),
+      ('seq 200000 | sed p | head -1', ['\r\n1\r\n', shown('SURF \u224b> ')]),
+      ("echo h\u00e9llo | sed 's/./x/2;y/l/L/'", ['hxLLo\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track diff): on the FAT disk, where saving goes through saveutil.h's rename: diff in its
+    # forms and its status, patch through it and back with -R, a file made and one refused, a .rej, cmp, then one line each of
+    # the small tools. tests/host/test_diff.c and tests/test_cli_diff.py hold the depth; only here is the file system real
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-diff', ['cli-diff\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "a\\nb\\nc\\n" > D1.TXT; printf "a\\nB\\nc\\nd\\n" > D2.TXT; diff D1.TXT D2.TXT; echo status $?; cd /',
+       ['2c2\r\n< b\r\n---\r\n> B\r\n3a4\r\n> d\r\n', 'status 1\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -u D1.TXT D2.TXT > D.DIF; head -4 D.DIF | tail -2; patch D1.TXT D.DIF; cmp D1.TXT D2.TXT; echo same $?; cd /',
+       ['@@ -1,3 +1,4 @@\r\n a\r\n', 'patching file D1.TXT\r\n', 'same 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; patch -R D1.TXT D.DIF; cmp D1.TXT D2.TXT; echo differ $?; ls D1.TXT.tmp; cd /', ['patching file D1.TXT\r\n',
+       'D1.TXT D2.TXT differ: byte 3, line 2\r\n', 'differ 1\r\n', 'No such file', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -c D1.TXT D2.TXT | tail -5; diff -q D1.TXT D1.TXT; echo status $?; cd /',
+       ['--- 1,4 ----\r\n  a\r\n! B\r\n  c\r\n+ d\r\n', 'status 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; diff -u /dev/null D2.TXT > N.DIF; rm D2.TXT; patch -p0 -i N.DIF; cat D2.TXT; echo status $?; cd /',
+       ['patching file D2.TXT\r\n', 'a\r\nB\r\nc\r\nd\r\n', 'status 0\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "x\\n" > D3.TXT; patch D3.TXT D.DIF; echo status $?; head -3 D3.TXT.rej | tail -1; cd /',
+       ['1 out of 1 hunk FAILED -- saving rejects to file D3.TXT.rej\r\n', 'status 1\r\n', '@@ -1,3 +1,4 @@\r\n', shown('SURF \u224b> ')]),
+      ('printf "%s\\n" "--- /x/y" "+++ /x/y" "@@ -1 +1 @@" "-a" "+b" | patch -p0; echo status $?', ['refused', 'status 2\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; seq 5000 > S1.TXT; seq 5000 | grep -v 777 > S2.TXT; diff S1.TXT S2.TXT | grep -c d; rm S1.TXT S2.TXT D.DIF N.DIF D1.TXT D2.TXT D3.TXT D3.TXT.rej; cd /',
+       ['5\r\n', shown('SURF \u224b> ')]),
+      # the review: FAT will not replace a file with a descriptor open, so a patch naming its own file fails and leaves it; a
+      # failed -o leaves the user's file; an offset keeps the old file in .orig
+      ('cd /hda1; printf "%s\\n" "--- SELF.DIF" "+++ SELF.DIF" "@@ -1 +1 @@" "---- SELF.DIF" "+--- CHANGED" > SELF.DIF; patch -p0 -i SELF.DIF; echo status $?; head -1 SELF.DIF; ls SELF.DIF.tmp; rm SELF.DIF; cd /',
+       ['busy', 'status 2\r\n', '--- SELF.DIF\r\n', 'No such file', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "%s\\n" "--- G.TXT" "+++ G.TXT" "@@ -1 +1 @@" "-a" "+b" > G.DIF; printf "x\\n" > K.TXT; printf "KEEP\\n" > O.TXT; patch -o O.TXT K.TXT G.DIF; echo status $?; cat O.TXT; cd /',
+       ['not written', 'status 1\r\n', 'KEEP\r\n', shown('SURF \u224b> ')]),
+      ('cd /hda1; printf "top\\na\\n" > M.TXT; patch M.TXT G.DIF; echo status $?; tail -1 M.TXT; tail -1 M.TXT.orig; rm G.DIF K.TXT K.TXT.rej O.TXT M.TXT M.TXT.orig; cd /',
+       ['Hunk #1 succeeded at 2 (offset 1 line).\r\n', 'status 0\r\n', 'b\r\na\r\n', shown('SURF \u224b> ')]),
+      ('printf "a\\nb\\n" > /hda1/C1.TXT; printf "b\\nc\\n" > /hda1/C2.TXT; comm /hda1/C1.TXT /hda1/C2.TXT; comm -12 /hda1/C1.TXT /hda1/C2.TXT',
+       ['a\r\n\t\tb\r\n\tc\r\nb\r\n', shown('SURF \u224b> ')]),
+      ('printf "1 x\\n2 y\\n" > /hda1/J1.TXT; printf "1 p\\n3 q\\n" > /hda1/J2.TXT; join /hda1/J1.TXT /hda1/J2.TXT; join -v 2 /hda1/J1.TXT /hda1/J2.TXT',
+       ['1 x p\r\n3 q\r\n', shown('SURF \u224b> ')]),
+      ('rm /hda1/C1.TXT /hda1/C2.TXT /hda1/J1.TXT /hda1/J2.TXT; seq 4 | paste - -; seq 3 | paste -s -d ,', ['1\t2\r\n3\t4\r\n1,2,3\r\n', shown('SURF \u224b> ')]),
+      ('echo abcdefgh | fold -w 3; printf "a\\n\\nb\\n" | nl; echo stressed | rev',
+       ['abc\r\ndef\r\ngh\r\n', '     1\ta\r\n       \r\n     2\tb\r\n', 'desserts\r\n', shown('SURF \u224b> ')]),
+      ('basename /hda1/www/index.html .html; dirname /hda1/www/index.html', ['index\r\n/hda1/www\r\n', shown('SURF \u224b> ')]),
+      ('echo hi | od -c; echo hi | od -A x -t x1; echo hello | base64; echo aGVsbG8K | base64 -d',
+       ['0000000   h   i  \\n\r\n0000003\r\n', '000000 68 69 0a\r\n000003\r\n', 'aGVsbG8K\r\nhello\r\n', shown('SURF \u224b> ')]),
+      ('printf "\\001\\002hello world\\003ab\\004" | strings; printf "\\001abc\\002" | strings -n 3', ['hello world\r\nabc\r\n', shown('SURF \u224b> ')]),
+      ('file /initrd/bin/hello /initrd/motd /initrd/etc', ['/initrd/bin/hello: ELF 32-bit LSB executable, Intel 80386\r\n',
+       '/initrd/motd: ', ' text', '/initrd/etc: directory\r\n', shown('SURF \u224b> ')]),
+      ('tree -d /initrd/etc | tail -3; cal 11 2026; cal | head -2 | tail -1', ['ssl\r\n\r\n1 directory\r\n', '   November 2026\r\nSu Mo Tu We Th Fr Sa\r\n 1  2  3',
+       '29 30\r\nSu Mo Tu We Th Fr Sa\r\n', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track fsck): the kernel command fsck, as far as a guest can go: it has no way to
+    # damage a volume (tools/qemu-usb.py's fsck damages one on the host). Its refusals, each with its status, -r among
+    # them (11/02/26: it only reads); a fresh volume clean, with files on it, read-only mounted. rd1 ends as it began
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-fsck', ['cli-fsck\r\n', shown('SURF \u224b> ')]),
+      ('fsck; echo status $?', ['usage: fsck', 'status 2', shown('SURF \u224b> ')]),
+      ('fsck nosuch; echo status $?', ["fsck: no block device 'nosuch'", 'status 2', shown('SURF \u224b> ')]),
+      ('fsck hda1; echo status $?', ['hda1 is mounted read-write on /hda1', 'status 2', shown('SURF \u224b> ')]),
+      ('fsck -r hda1; echo status $?', ['repairs are not available in this version', 'status 2', shown('SURF \u224b> ')]),
+      ('mkfs rd1 FSCKTEST', ['Type rd1 to erase rd1']),
+      ('rd1', ['rd1: FAT16', shown('SURF \u224b> ')]),
+      ('fsck rd1; echo status $?', ['FAT16: ', 'clean', 'status 0', shown('SURF \u224b> ')]),
+      ('mount rd1 /fsk', ['rd1 on /fsk: fat16, label FSCKTEST', shown('SURF \u224b> ')]),
+      ('mkdir /fsk/dir; echo one > /fsk/dir/a-long-file-name.txt; seq 1 500 > /fsk/NUMBERS.TXT', [shown('SURF \u224b> ')]),
+      ('fsck rd1; echo status $?', ['rd1 is mounted read-write on /fsk', 'status 2', shown('SURF \u224b> ')]),
+      ('umount rd1', [shown('SURF \u224b> ')]),
+      ('fsck -v rd1; echo status $?', ['2 directories, 2 files', 'clean', 'status 0', shown('SURF \u224b> ')]),
+      ('mount -r rd1 /fsk', ['read-only', shown('SURF \u224b> ')]),
+      ('fsck rd1; echo status $?', ['clean', 'status 0', shown('SURF \u224b> ')]),
+      ('fsck -r rd1; echo status $?', ['repairs are not available in this version', 'status 2', shown('SURF \u224b> ')]),
+      ('umount rd1', [shown('SURF \u224b> ')]),
+      ('fsck -rv rd1; echo status $?', ['repairs are not available in this version, and the stick can be repaired on another computer', 'status 2', shown('SURF \u224b> ')]),
+      ('fdisk rd1 new mbr', [CONFIRM_RD1]),
+      ('rd1', ['verified', shown('SURF \u224b> ')]),
+      ('fsck rd1; echo status $?', ['no FAT file system', 'status 2', shown('SURF \u224b> ')]),
+      ('exit', [])]),
+    # 11/01/26 (the command-line suite, track net): the clients, user/telnet/ and user/ftp/. The depth is in test_telnetc,
+    # test_ftpc and test_ftpcs; here the real kernel, sockets and terminal. The refusals. telnet by the hairpin to SurfOS's
+    # own telnetd (10.0.2.2 and the forwarded port): keys, the window as the session sees it, Ctrl+]'s status and send ayt,
+    # the session's exit; quit from a full-screen program, the terminal back; a kill from another session, raw mode gone.
+    # telnet to a scripted server that speaks no telnet: silent, a line typed sent whole, then a reset. ftp by the hairpin to
+    # SurfOS's ftpd, scripted from standard input: folders, listings, put and get byte for byte, reget, mget, mput, text
+    # mode. ftp to a scripted server (ScriptedFtp): a password typed with no echo and shown nowhere, and none asked for by a
+    # script that a detached task runs (the kernel's spawn); EPSV refused and a PASV
+    # naming another address, the data still from the server's own; an escape sequence in a name, a low port refused;
+    # Ctrl+C in a transfer, the session alive; names that climb or are not safe; a reset partway, nothing left behind
+    ('surfsh', [shown('SURF \u224b> ')],
+     [('echo cli-net', ['\r\ncli-net\r\n', shown('SURF \u224b> ')]),
+      ('telnet; telnet 10.0.2.2 0; ftp -x; echo status $?',
+       ['usage: telnet host [port]', 'telnet: 0 is no port (1-65535)', 'usage: ftp [-n] [host [port]]', 'status 2', shown('SURF \u224b> ')]),
+      ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', 'Ctrl+] gives a prompt', shown('SURF \u224b@> ')]),
+      (b'pagetest size\r', ['TTY_GETSIZE 80x25', shown('SURF \u224b@> ')]),
+      (b'\x1dstatus\r', ['telnet> ', 'The other end echoes what is typed; keys go one at a time',
+                         'The other end knows the window: 80 by 25', 'Binary: sending yes, receiving no', 'bytes received']),
+      (b'\x1dsend ayt\rexit\r', ['[SurfOS: yes]', 'telnet: the other end closed the connection', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF \u224b@> ')]),
+      (b'less /initrd/README\r', ['\x1b[?1049h']),
+      (b'\x1dquit\r', ['telnet> ', '\x1b[?1049l', shown('SURF \u224b> ')]),
+      (net_telnet_line, ['telnet: connected to 10.0.2.2 port', shown('SURF \u224b@> ')]),
+      (net_kill_telnet, ['\r\nraw-mode-gone\r\n', shown('SURF \u224b> ')]),
+      (net_talk_line, ['telnet: connected to 10.0.2.2 port', '220 mail here']),
+      (b'HELO surfos\r', ['HELO surfos', 'telnet: the connection was lost', PROMPT]),
+      (net_ftpd_on, ['\r\nnet-talk-ok\r\n', 'telnetd: stopped', 'ftpd: serving / at ftp://10.0.2.15/ (read-write)', PROMPT]),
+      ("printf 'cd /hda1/NET\\nmkdir REMOTE\\ncd REMOTE\\npwd\\nput UP.TXT UP2.TXT\\nsize UP2.TXT\\nls\\ndir\\nget UP2.TXT BACK.TXT\\n"
+       "ascii\\nget UP2.TXT LF.TXT\\nbinary\\nrename UP2.TXT UP3.TXT\\n' > S1.TXT", [PROMPT]),
+      ("printf 'cd /hda1/NET/REMOTE\\nreget UP3.TXT PART.TXT\\nreget UP3.TXT PART.TXT\\nmget *.TXT\\nmput LF.*\\ndelete LF.TXT\\n"
+       "mget *.TXT\\ndelete UP3.TXT\\n' > S2.TXT; head -n 1 UP.TXT > PART.TXT", [PROMPT]),
+      (net_ftp_files, ['/hda1/NET/REMOTE\r\n', 'UP2.TXT: ', 'BACK.TXT: ', 'status 0', re.compile(rb'\n +1 *\r'), PROMPT]),
+      (net_ftp_more, ['PART.TXT: ', 'PART.TXT: whole already', 'UP3.TXT: ', 'LF.TXT: ', 'UP3.TXT is there already',
+                      'the rest of the script does not run', 'status 1', re.compile(rb'\n +1 *\r'), shown('SURF \u224b> ')]),
+      (net_script_line, ['ftpd: stopped', 'Password for bob: ']),
+      (NET_PASSWORD.encode() + b'\r', ['230 in', '221 bye', shown('SURF \u224b> ')]),
+      (net_detached_line, ['started]', PROMPT]),
+      (net_detached_result, ['bob: a password is needed, and there is no terminal to ask on', PROMPT]),
+      (net_login_line, ['220-scripted', '220 ready', 'ftp> ']),
+      ('lcd /hda1\nuser alice', ['The local folder is /hda1', 'Password for alice: ']),
+      (NET_PASSWORD.encode() + b'\r', ['230 in', 'ftp> ']),
+      ('ls\ndir', ['nice.txt', '?[31mred?[0m', 'the server names port 25', 'ftp> ']),
+      (net_ctrl_c, ['stopped', 'ftp> ']),
+      (net_names, ['Connected to 10.0.2.2', 'nice.txt: 4 bytes', 'climb.txt: 2 bytes', 'not safe here: left out: bad|name.txt',
+                   'not safe here: left out: x?[2J.txt', 'ftp> ']),
+      ('get cut.bin CUT.BIN\nquit', [re.compile(rb'the data connection: |cut\.bin: 426 cut'), '221 bye', re.compile(rb'\[exit status [12]\]'), PROMPT]),
+      (net_ftp_result, ['No such file', '\r\n0\r\n', '\r\nnet-ftp-ok\r\n', PROMPT]),
+      ('exit', [])]),
     # 10/25/26 (the filters, user/bin): sort and its -u -n -r, tr's ranges, -d and -s, uniq -c, seq and tail -n, grep's
     # patterns and -i -n -v -c -F (status 1 when nothing matches), tee into a file, and dmesg through grep and head
     ('surfsh', [shown('SURF \u224b> ')],
@@ -5946,6 +6557,8 @@ def run_smoke(q, boot_timeout, reboot=None):
                 q.send(cmd + '\n')
                 ok = all(q.expect(e, limit) for e in expects)
                 for line, exp in follow:
+                    if callable(line):                       # 11/01/26: a function of the QEMU, as in an @boot block
+                        line = line(q)
                     if isinstance(line, bytes):              # keys as they are, for a full-screen program
                         q.ser.sendall(line)
                     else:

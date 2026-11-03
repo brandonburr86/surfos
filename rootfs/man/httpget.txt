@@ -1,0 +1,17 @@
+httpget - fetch a page over TCP
+
+SYNOPSIS
+    httpget host port [path]
+
+DESCRIPTION
+    Asks a web server for a path, / unless given, over plain HTTP/1.0,
+    and prints the first 4 KB of what comes back, with control
+    characters as dots, then how many bytes came and how long it took.
+    It is a test of the network from inside the kernel: no HTTPS, and it
+    saves nothing. Use fetch for files.
+
+EXAMPLES
+    httpget 10.0.2.2 8000 /index.html
+
+SEE ALSO
+    fetch, undertow, nc

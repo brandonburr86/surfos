@@ -1,0 +1,15 @@
+exit - leave the shell
+
+SYNOPSIS
+    exit [n]
+
+DESCRIPTION
+    Leaves surfsh with status n, 0 to 255, or without a number the
+    status of the command before, as in cd /data || exit. On a console,
+    init starts a new shell. In a telnet session it ends the session.
+
+EXAMPLES
+    exit 3
+
+SEE ALSO
+    surfsh, break

@@ -1,0 +1,16 @@
+source - run a file's commands in this shell
+
+SYNOPSIS
+    . file [args]
+    source file [args]
+
+DESCRIPTION
+    Runs the commands of the file in this shell, so its variables and cd
+    stay, with $1 and on the args while it runs. A name without a / is
+    looked for in PATH's directories, then here. return leaves the file.
+
+EXAMPLES
+    . /hda1/SETUP.SH
+
+SEE ALSO
+    eval, break, surfsh

@@ -1,0 +1,21 @@
+cal - show a calendar
+
+SYNOPSIS
+    cal [[month] year]
+
+DESCRIPTION
+    Writes a month's calendar, its weeks from Sunday: this month
+    without arguments, the whole of a year with one number, and that
+    month with two. A lone number is always a year, so cal 26 is the
+    year 26.
+
+    The calendar is the Gregorian one for every year, 1 to 9999: the
+    days other systems skip in September 1752 are not skipped here.
+
+EXAMPLES
+    cal
+    cal 11 2026
+    cal 2027
+
+SEE ALSO
+    date

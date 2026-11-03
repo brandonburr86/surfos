@@ -1,0 +1,26 @@
+du - space that files take on the disk
+
+SYNOPSIS
+    du [-s] [-a] [-h] [path...]
+
+DESCRIPTION
+    Shows the space under each path, in KB of 1024 bytes: for every
+    directory, after what is in it, and in all. A file counts its size
+    rounded up to its volume's allocation unit, a FAT cluster, which is
+    what the disk really spends. Directories themselves count nothing.
+    Without a path it looks at the current directory.
+
+    The sums are in sectors of 512 bytes in 32-bit numbers, so 2 TB at
+    most.
+
+OPTIONS
+    -s  Only the total of each path.
+    -a  Each file too.
+    -h  Sizes as 512, 4.0K, 12K, 1.2M or 3.4G, rounded up.
+
+EXAMPLES
+    du -sh /initrd/bin
+    du -a /hda1
+
+SEE ALSO
+    df, find, ls

@@ -1,0 +1,92 @@
+fsck - check a FAT volume
+
+SYNOPSIS
+    fsck [-v] <device>
+
+DESCRIPTION
+    Checks a FAT12, FAT16 or FAT32 volume on a device lsblk lists,
+    such as usb1p1: the boot sector and its backup, FSInfo, whether
+    the two FATs agree, every directory and name, every chain of
+    clusters and the size it holds, and the clusters nothing reaches.
+    It only reads: nothing on the device changes.
+
+    Repairs are not available in this version. fsck -r is refused,
+    with status 2: "repairs are not available in this version, and
+    the stick can be repaired on another computer". There: First Aid
+    in Disk Utility on a Mac, chkdsk /f on Windows, fsck.fat on Linux.
+    Copy off what you can first.
+
+    fsck is a command of the kernel, because programs cannot read a
+    disk. It takes the device, not a path. A volume mounted read-only
+    is checked under its mount, which cannot go meanwhile. One mounted
+    read-write is refused, because a volume in use changes under a
+    check: umount it, or mount it with -r. A mount of its disk, or of
+    a partition of it, is refused too.
+
+    The network settings mount the stick SurfOS started from on
+    /.netman for a moment while they are read or saved. fsck never
+    holds that mount: it waits up to five seconds for it to go, and
+    then says to try again. The other way round, while fsck looks at
+    that stick unmounted, the settings cannot be saved: a save waits
+    five seconds for it, and gives up.
+
+    Some problems leave it unsure what the volume was meant to hold,
+    and a repair anywhere has to guess at them: copy off what you can
+    before one. These are such doubts:
+
+      - a boot sector that differs from its backup in the volume's
+        shape, or a FAT much larger than its clusters need, or holding
+        something past its last entry, or wrong reserved FAT entries
+      - FATs that are not mirrored
+      - a first FAT and a second that disagree about a chain
+      - a blank sector of the first FAT where the second has more, or
+        a chain into a sector of the FAT that is all zeros
+      - two names on one chain, of files or directories
+      - a chain into a cluster marked bad, or a first cluster that is
+        no cluster
+      - a directory it cannot read, one more than 128 levels down, one
+        of more than 65536 slots, one with no "." and ".." or a "."
+        that names another cluster (it may be a damaged file), a
+        directory whose chain has anything wrong with it, anything
+        past a directory's end mark, a directory with no cluster, a
+        label with clusters
+      - a size of 0 on what looks like a directory
+      - clusters nothing reaches, when they are most of what is in
+        use, or when one of them starts as a directory
+
+    What it could not check it says, and never calls a volume clean
+    then: a block it cannot read, the directories below 128 levels,
+    the slots of a directory past 65536, and the names of a directory
+    with more of them than a check has memory to compare ("not
+    checked whole").
+
+    A check takes all it needs at its start, and makes the kernel's
+    memory grow by 4096 KB at most: three bitmaps of one bit a
+    cluster, room for the names of one directory (1.5 MB on any but a
+    tiny volume) and buffers. A 118 GB stick with 32 KB clusters
+    takes 3.3 MB. Past about 5.75 million clusters (188 GB with 32 KB
+    clusters) less room is left for names, and a directory with more
+    of them than it holds is not checked whole; a volume of more than
+    about 9.93 million clusters (325 GB with 32 KB clusters, 41 GB
+    with 4 KB) is refused, with what it would need: check it on
+    another computer. Ctrl+C stops a check.
+
+OPTIONS
+    -v    Say every problem and the counts, not just the first 40.
+
+EXIT STATUS
+    0     Clean.
+    1     Problems found.
+    2     -r, a wrong command, a device it may not use, no FAT
+          volume, a device that failed, no memory, a volume too large
+          for a check, or a check that was not whole and found
+          nothing else.
+    130   Ctrl+C stopped it, as it stops any command.
+
+EXAMPLES
+    fsck usb1p1
+    mount -r usb1p1
+    fsck -v usb1p1
+
+SEE ALSO
+    mount, umount, eject, lsblk, mkfs

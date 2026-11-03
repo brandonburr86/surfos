@@ -1,0 +1,15 @@
+wcharmap - the desktop's Character Map as a program
+
+SYNOPSIS
+    wcharmap
+
+DESCRIPTION
+    A window with the console's 256 characters in a grid of 16 by 16,
+    and the chosen one large with its code, its Unicode code point and
+    its UTF-8 bytes. Enter, Ctrl+C, a double-click or the button copy it
+    to the desktop's clipboard. Ctrl+L goes to a code. Esc, Ctrl+W or
+    the close button end it. The desktop's Apps menu starts it, or
+    brings its window back.
+
+SEE ALSO
+    gui, wclock, wcalc

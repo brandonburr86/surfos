@@ -1,0 +1,29 @@
+files - browse the file system on a text screen
+
+SYNOPSIS
+    files [directory]
+
+DESCRIPTION
+    A file browser for a terminal: the folders above this one at the
+    left, the current folder at the right. Enter opens a folder, or a
+    file in edit. Devices and files that are plainly binary are refused,
+    and read-only mounts allow viewing only.
+
+    A terminal that reports the mouse (serial or telnet, not SurfOS's
+    own screen) may click: select, then click again to open.
+
+KEYS
+    Arrows      Select; Left goes to the parent.
+    Enter       Open.
+    Home, End   The first and last entry.
+    PgUp, PgDn  A page at a time.
+    /           Go to the root.
+    r           Read the folder again.
+    .           Show or hide dotfiles.
+    q           Back to the shell.
+
+EXAMPLES
+    files /hda1
+
+SEE ALSO
+    edit, ls, gui

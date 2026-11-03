@@ -1,0 +1,12 @@
+date - the date and time
+
+SYNOPSIS
+    date
+
+DESCRIPTION
+    Prints the CMOS clock as YYYY-MM-DD HH:MM:SS. The clock keeps local
+    time and SurfOS knows no time zone. date takes no arguments and
+    cannot set the clock, nor format the time.
+
+SEE ALSO
+    uptime, wclock

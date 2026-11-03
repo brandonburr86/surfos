@@ -1,0 +1,13 @@
+shift - move the positional parameters down
+
+SYNOPSIS
+    shift [n]
+
+DESCRIPTION
+    $n+1 becomes $1, and $# falls by n, 1 unless given.
+
+EXAMPLES
+    while [ $# -gt 0 ]; do echo "$1"; shift; done
+
+SEE ALSO
+    set, surfsh

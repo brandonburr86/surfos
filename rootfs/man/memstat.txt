@@ -1,0 +1,17 @@
+memstat - memory statistics
+
+SYNOPSIS
+    memstat
+    himem
+
+DESCRIPTION
+    memstat prints the physical memory, where the kernel lies, free
+    pages, the reserve programs leave the kernel, what was refused and
+    to whom, what programs hold, the reserved ranges, and both kernel
+    heaps. SurfOS is 32-bit: memory above 4 GB is counted and not used.
+
+    himem writes and reads back a line above 4 GB through a PSE-36 page,
+    to show that it can; status 1 when no such memory is mapped.
+
+SEE ALSO
+    top, ps, df

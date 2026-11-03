@@ -25,6 +25,7 @@ as the restoration; new work happens here.
 | [superpowers/plans/…nettools.md](superpowers/plans/2026-10-24-nettools.md) | The brief for the network tools: `ftpd`, an FTP server for files both ways with the Mac, `nc`, and the sockets' half-close, both ends and connections not waited for |
 | [superpowers/plans/…daily-console.md](superpowers/plans/2026-10-25-daily-console.md) | The brief for track A, the everyday console and shell: TAB, programs before kernel commands, a fast screen, modifier keys, Ctrl+R, scrollback, Spleen 12x24, escapes, `less` and tools, a startup file and saved history |
 | [superpowers/plans/…robustness.md](superpowers/plans/2026-10-25-robustness.md) | The brief for track B, robustness: kernel threads that can't be killed, floating point per task, out of memory that fails the program and not the machine, kernel stack guards, a clean reboot and `poweroff` |
+| [superpowers/plans/…cli-suite.md](superpowers/plans/2026-11-01-cli-suite.md) | The brief for the command-line suite (USB-BOOT.md section 18): sed, awk, diff and patch, tar, gzip and unzip, fsck (checking only), top, watch, the manual and `man`, telnet and ftp clients, bc and the small utilities, with an account per track beside it |
 | [superpowers/plans/…app-windows.md](superpowers/plans/2026-10-25-app-windows.md) | The brief for track C, windows for user programs (milestone M12): a window descriptor, `libgui`, the Calculator as a program, a launcher; then the desktop's polish |
 
 ## Building and running

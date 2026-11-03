@@ -1081,6 +1081,7 @@ static const struct command commands[] = {
     { "eject",     "<disk>",    "unmount all of a disk and flush it: safe to pull out", cmd_eject },
     { "df",        "",          "size, use and free space of mounted volumes", cmd_df },
     { "mkfs",      "[-t fat16|fat32] <dev> [label]", "make a FAT file system (asks first)", cmd_mkfs },
+    { "fsck",      "[-v] <dev>", "check a FAT volume (it only reads)", cmd_fsck },
     { "ls",        "[path]",    "list a directory", cmd_ls },
     { "cat",       "<file>...", "print files", cmd_cat },
     { "cd",        "[dir]",     "change the current directory", cmd_cd },

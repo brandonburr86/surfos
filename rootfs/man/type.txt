@@ -1,0 +1,16 @@
+type - which command a name runs
+
+SYNOPSIS
+    type name...
+
+DESCRIPTION
+    Says what each name runs: a function, surfsh's own command, a
+    program and its path, or a kernel command, and what it hides. The
+    status is 1 for a name that nothing has.
+
+EXAMPLES
+    type ls
+    type echo cd nosuch
+
+SEE ALSO
+    help, kernel, man

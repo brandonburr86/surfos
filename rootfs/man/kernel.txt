@@ -1,0 +1,17 @@
+kernel - run the kernel's command of a name
+
+SYNOPSIS
+    kernel name [args]
+
+DESCRIPTION
+    Runs the kernel's command, where surfsh has one of its own (test,
+    echo, cd, pwd, help, kill) or a program of PATH comes first (ls,
+    cat, cp, df, hexdump, mkdir, mv, rm, rmdir). help marks those with a
+    *, and type NAME says which one runs.
+
+EXAMPLES
+    kernel ls /initrd
+    kernel test
+
+SEE ALSO
+    type, help, surfsh

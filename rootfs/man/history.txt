@@ -1,0 +1,24 @@
+history - the lines typed before
+
+SYNOPSIS
+    history [-w]
+
+DESCRIPTION
+    Lists the lines typed at the prompt, oldest first. The last 1,000
+    are kept, and Up and Down recall them; a line that starts with a
+    space is not. !! is the line before, !$ its last word, !12 line 12,
+    !-2 the one before the last, and !ls the last line that started with
+    ls.
+
+    With the setting history on, surfsh keeps them in
+    surfos-config/history on the stick SurfOS was started from, as plain
+    text, and loads them at its start. Off, they go with the shell.
+
+OPTIONS
+    -w  Save them on the stick now.
+
+EXAMPLES
+    history | grep mount
+
+SEE ALSO
+    settings, surfsh

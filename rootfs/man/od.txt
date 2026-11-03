@@ -1,0 +1,37 @@
+od - show the bytes of files
+
+SYNOPSIS
+    od [-A base] [-t type]... [-c] [-x] [-b] [-N bytes] [-j bytes] [-v]
+       [file...]
+
+DESCRIPTION
+    Writes the files as one stream, 16 bytes to a line, each line after
+    its address. Numbers of several bytes are little-endian, as this
+    machine's are. A line the same as the one before it becomes a *.
+
+    Floating point (-t f) is not supported.
+
+OPTIONS
+    -A base    Addresses in o octal (the default), d decimal, x hex,
+               or n not at all.
+    -t type    How the bytes are shown; each -t gives a row. a named
+               characters, c characters and escapes, and d signed, u
+               unsigned, o octal, x hex numbers of 1, 2, 4 or 8 bytes:
+               x2 or x4, or C, S, I, L for those sizes, 4 being the
+               default. A z after a type adds the bytes as text.
+    -c         The same as -t c.
+    -x         The same as -t x2.
+    -b         The same as -t o1.
+    -N bytes   Show that many at most.
+    -j bytes   Skip that many first.
+    -v         Show every line, repeated ones too.
+
+    A count may start with 0x for hex or 0 for octal, and end in b, k
+    or m for 512, 1024 or 1048576 times.
+
+EXAMPLES
+    od -c /hda1/NOTES.TXT
+    od -A x -t x1z -N 64 /hda1/DISK.IMG
+
+SEE ALSO
+    hexdump, strings, cmp

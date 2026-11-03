@@ -20,6 +20,7 @@ stdout first, so a prompt shows before the program waits for the line.
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "libsurf.h"
 
 #define F_READ   0x01
@@ -215,6 +216,14 @@ int fclose(FILE *f) {
     return r;
 }
 
+/* 11/01/26: can what was read ahead be read again? Only from a file on a file system: from a pipe, a terminal or a connection
+   it is nowhere else, whatever lseek() says (only pipes refuse it), and fflush(NULL), which system() and popen() call, must not
+   lose it. fstat() calls all of those files; the name of their file system tells them apart (pipefs, ptyfs, sockfs, devfs). */
+static int reads_again(FILE *f) {
+    struct stat st;
+    return fstat(f->fd, &st) == 0 && S_ISREG(st.type) && (!strcmp(st.fs, "fat") || !strcmp(st.fs, "tarfs"));
+}
+
 int fflush(FILE *f) {
     int r = 0;
     if(!f) {
@@ -225,7 +234,11 @@ int fflush(FILE *f) {
         return r;
     }
     if(f->dir == 'w') r = flush_out(f);
-    else if(f->dir == 'r') drop_input(f);
+    else if(f->dir == 'r') {
+        if(reads_again(f)) drop_input(f);
+        else if(f->rpos < f->rend || f->ungot != EOF) return 0;  /* it stays, and so does the direction */
+        else f->rpos = f->rend = 0;             /* all read: no place in the buffer is left either */
+    }
     if(!r) f->dir = 0;
     return r;
 }
@@ -245,6 +258,8 @@ int fpurge(FILE *f) {
 int setvbuf(FILE *f, char *buf, int mode, size_t size) {
     if(mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return -1;
     fflush(f);
+    if(f->dir) return -1;                               /* 11/01/26: fflush() kept something, and it is in the buffer */
+    f->rpos = f->rend = 0;                              /* nothing is kept: ungetc() starts at the new buffer's start */
     if(f->flags & F_OWNBUF) free(f->buf);
     f->flags &= ~F_OWNBUF;
     f->buf = mode == _IONBF ? NULL : (unsigned char *)buf;

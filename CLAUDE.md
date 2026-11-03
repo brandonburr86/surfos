@@ -43,9 +43,12 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # (test_wundertow_doc, test_wundertow_layout, test_wundertow_browser), and 11/1/26 its pictures,
                   # its helpers and its forms (test_wundertow_image, test_wundertow_load, test_wundertow_form),
                   # 11/01/26 style sheets against hostile bytes, the cascade, linked sheets
-                  # (test_wundertow_css, test_wundertow_style, test_wundertow_sheets)
+                  # (test_wundertow_css, test_wundertow_style, test_wundertow_sheets);
+                  # 11/02/26, the command-line suite: regex, strtod, libm, getopt, sed, awk, bc, diff and patch,
+                  # deflate, gzip, tar, unzip, telnet and ftp, top, watch, the manual (test_man.py: every name has a
+                  # page), fsck (test_fsck, test_fsckcmd, test_fsckheap); sanitizer runs stay out of it (Mac only)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 23 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 24 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -144,7 +147,13 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            one accessor added: ut_transport_eof_clean(), whether TLS ended with close_notify),
            wclock/ (10/26/26, the desktop's Clock as a program, stage C12: clock.c the model, host-tested by
            test_wclock; main.c its window through libgui; the desktop's Apps > Clock starts it), wcharmap/
-           (10/26/26, the Character Map likewise: charmap.c, test_wcharmap, main.c)
+           (10/26/26, the Character Map likewise: charmap.c, test_wcharmap, main.c);
+           11/02/26, the command-line suite (docs/superpowers/plans/2026-11-01-cli-suite.md, an account per track):
+           libsurf's regex.c (POSIX, leftmost-longest, bounded in time), strtod.c, math.c (in integers, the same bits
+           everywhere), getopt.c, system.c (system, popen), inflate.c, deflate.c, crc32.c; bin/ sed, grep -E, cmp,
+           comm, join, paste, fold, nl, rev, basename, dirname, od, base64, strings, file, tree, cal, top, watch, man
+           (manutil.h: the pages' aliases), libtest, and saveutil.h (a file replaced as edit saves it); diff/ (diff
+           and patch), awk/, bc/, gzip/ (gzip, gunzip, zcat), tar/, unzip/, telnet/, ftp/
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
@@ -155,7 +164,8 @@ driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the 
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
-           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos,
+           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench),
+           fsckcmd.c (11/02/26: fsck, which checks only; fs/fat_check.c is its checker), selftest.c, demos,
            settings.c (the settings command), wifi.c (wifi, with save, saved, forget, connect; wlansim on|off for the tests);
            the desktop (docs/GUI.md): gui.c (the command, the session) and guifs.c (files on the VFS) in the kernel; the
            model, host-tested by test_gui: guicore.c (windows, menus, the small apps), guinote.c (Notepad), guifiles.c
@@ -175,7 +185,8 @@ tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk ima
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
            protocol, telnetd's loop, the network manager's files), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
-rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0; www/ is the sample site httpd serves
+rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0; www/ is the sample site httpd serves;
+           man/ (11/02/26) the manual, a page a name, which `man` reads from /initrd/man
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
 ```
@@ -361,8 +372,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * Storage: `lsblk` (STATUS says why a device may not be changed), `fdisk <disk>` alone
   (only reads), `mount`, `df`, `lsblk -s` (blocks moved), `hexdump <dev> <block>`,
   `readbench`, `fsbench`; `+PART:` and `+FAT` lines in `dmesg`. A device that was unplugged
-  stays in the list as gone (never freed while referenced); its mounts fail cleanly until
-  `umount`. The storage scenario checks the sticks afterwards with macOS `fsck_msdos`
+  leaves the list at once, so its name can be used again, but is never freed while anything
+  refers to it (driver/bdev.c, `bdev_unregister()`); its mounts fail cleanly until `umount`.
+  11/02/26: `fsck <dev>` checks a FAT volume on SurfOS without writing; `fsck -r` is refused (the
+  command-line suite's fsck account says why). The storage scenario checks the sticks afterwards with macOS `fsck_msdos`
   (`hdiutil attach -nomount -readonly`) and `fsck.fat` (host or the devenv container).
   Storage milestone 1 (10/24/26, docs/CODE-AUDIT.md): the cache writes a device's blocks in the
   order FAT gives them (data, tables, entries, FSInfo: `bdirty_order()`), and FAT syncs between
@@ -448,6 +461,15 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   notification the driver does not handle is logged once. QEMU has no Intel card: that code runs only on the
   laptop. A WPA2 join there needs the owner at the laptop to type the password; open networks (xfinitywifi)
   need nobody.
+* The command-line tools (11/02/26, docs/superpowers/plans/2026-11-01-cli-suite.md): a tool replaces a file
+  the user has only through `user/bin/saveutil.h` (a new file beside it, fsynced, renamed over), never by
+  truncating it; a file it makes is O_EXCL and goes again if the tool fails. Every program, kernel command
+  and surfsh builtin has a page in `rootfs/man/` (`tests/test_man.py` fails otherwise), in the brief's shape.
+  A tool's logic sits apart from its system calls, so `tests/host/` compiles it; sanitizer runs are the Mac's
+  clang only (a 32-bit sanitizer binary hangs in the Docker image). Paths from an archive, a patch or a server
+  are never absolute and never contain `..`. Code is written from standards and papers, never from another
+  program's source remembered; say where an idea came from. `fsck -r` stays refused until its repairs pass a
+  review that finds no data loss, at the owner's word (the fsck account lists what that needs).
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that

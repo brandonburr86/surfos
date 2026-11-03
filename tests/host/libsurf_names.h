@@ -44,6 +44,8 @@
 #define _exit       surf__exit
 #define strtol      surf_strtol
 #define strtoul     surf_strtoul
+#define strtod      surf_strtod
+#define atof        surf_atof
 #define atoi        surf_atoi
 #define atol        surf_atol
 #define abs         surf_abs

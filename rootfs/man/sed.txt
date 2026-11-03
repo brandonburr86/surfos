@@ -1,0 +1,96 @@
+sed - a stream editor for filtering and changing text
+
+SYNOPSIS
+    sed [-nEs] [-i[suffix]] [-e script] [-f file] [script] [file...]
+
+DESCRIPTION
+    sed reads lines from the files, or from standard input, puts each in
+    the pattern space, runs the script on it and prints what is left. It
+    has a second buffer, the hold space. A line may be of any length and
+    hold any bytes. A character is a whole UTF-8 sequence.
+
+    SurfOS's sed follows GNU's where POSIX leaves a choice. It has no
+    case conversion in replacements (\U \L \u \l \E are refused), no
+    flags m and e, no commands e F R W z v, and no long options.
+    Patterns are those of man regex.
+
+OPTIONS
+    -n          Print only what p and the like ask for. A first line
+                of the script that is #n and nothing else does the
+                same.
+    -e script   This text is script. Several -e and -f add up.
+    -f file     The file's text is script.
+    -E, -r      Extended regular expressions.
+    -s          Each file on its own: line numbers, $, ranges and the
+                hold space start again.
+    -i[suffix]  Replace each file by what comes out, which implies -s.
+                With a suffix the old file stays as file<suffix>, or
+                as the suffix with each * being the file's name. A file
+                is replaced only when all of it went well: until then
+                the new text is in file.tmp beside it. A suffix that
+                makes that name, or the file's own, is refused for the
+                file, and with a suffix one file may be named only once,
+                in any case or form of its path, and no w file may have
+                a backup's name. After a rename that may have half
+                happened sed stops: check the disk.
+
+ADDRESSES
+    A command runs on every line, or on those its address picks.
+    n           Line n.
+    $           The last line.
+    /re/        Lines that match. \cREc takes another delimiter, c. I
+                after it ignores case. // is the last pattern used.
+    first~step  Every step-th line from first on.
+    a,b         From a to b. b may also be +n, n more lines, or ~n, up
+                to the next multiple of n.
+    0,/re/      As 1,/re/, but /re/ may match on line 1 too.
+    addr!       The lines not picked.
+
+COMMANDS
+    { ... }     The commands inside, on the same lines.
+    = l [n]     Print the line number. Print the line unambiguously,
+                folded at n columns (70, 0 never); l shows bytes.
+    a i c text  Text after the line, before it, instead of it. On one
+                line (a text), or a\ and lines of which all but the
+                last end in \.
+    b t T label Jump: always; if an s worked since the last line was
+                read; if none did. No label is the end of the script.
+    :label      Where to jump.
+    d D         Next line. D: delete up to the first newline, and go
+                again without reading if anything is left.
+    g G h H x   Copy or append hold to pattern, pattern to hold, swap.
+    n N         Print and read the next line. Append it after a newline.
+    p P         Print. Print up to the first newline.
+    q Q [n]     End, with status n. Q does not print the line first.
+    r file      Add the file after this line. A missing file is nothing.
+                One that cannot be read stops sed with status 2: under
+                -i the file being edited stays as it was.
+    s/re/rep/f  Replace. In rep, & is the match, \1 to \9 are groups,
+                \n a newline. Flags: g all, a number that match on, p
+                print, I ignore case, w file write.
+    w file      Write to the file, which appears when sed ends. A file
+                that is there is replaced then, not emptied at the
+                start. Names of one file are one output, whatever their
+                case or path. /dev/stdout and /dev/stderr are the
+                outputs.
+    y/abc/xyz/  Change characters one for one.
+    # text      A comment.
+
+    Patterns, replacements and y also take \t \a \f \r \v \cX \dNNN
+    \oNNN and \xHH.
+
+STATUS
+    0, the number of q or Q, or 2 for trouble: a mistake in the script,
+    a file that could not be read (the others are still done) or
+    written. The script is checked before anything is read.
+
+EXAMPLES
+    sed -n '/error/p' /hda1/LOG.TXT
+    sed 's/\(.*\):\(.*\)/\2:\1/' /hda1/PAIRS.TXT
+    sed -E 's/[0-9]+/<&>/g' /hda1/NUMBERS.TXT
+    sed -i.bak '/^#/d' /hda1/CONFIG.TXT
+    sed -n '$=' /hda1/LOG.TXT
+    sed ':a;N;$!ba;s/\n/ /g' /hda1/WORDS.TXT
+
+SEE ALSO
+    grep, regex, awk

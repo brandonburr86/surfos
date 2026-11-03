@@ -1,0 +1,32 @@
+join - join the lines of two sorted files on a common field
+
+SYNOPSIS
+    join [-t char] [-1 field] [-2 field] [-a 1|2] [-v 1|2] [-e text]
+         [-o list] file1 file2
+
+DESCRIPTION
+    Each file must be sorted on its join field, by bytes. Lines whose
+    fields match are joined: the field, then the rest of file1's line,
+    then the rest of file2's. Fields are separated by blanks, any
+    number of them, and those at the start of a line are ignored;
+    with -t by each single character. - is standard input, for one of
+    the files.
+
+    All the lines of one join value are held in memory at once, from
+    both files, since each meets each.
+
+OPTIONS
+    -t char    The separator: one character, in and out.
+    -1 field   The join field of file1, from 1.
+    -2 field   The join field of file2.
+    -a 1|2     Also give that file's lines that join nothing.
+    -v 1|2     Only those.
+    -e text    The text for a missing or empty field.
+    -o list    What comes out: 0 for the join field and FILE.FIELD,
+               such as 0,1.2,2.3.
+
+EXAMPLES
+    join -t : -1 2 people.txt pay.txt
+
+SEE ALSO
+    sort, comm, paste, cut

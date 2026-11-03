@@ -1,0 +1,11 @@
+bootinfo - what the boot loader passed
+
+SYNOPSIS
+    bootinfo
+
+DESCRIPTION
+    Prints what the boot loader handed over, by Multiboot 1 or 2, and
+    how the screen was set up.
+
+SEE ALSO
+    cpuinfo, drivers, acpi, memstat

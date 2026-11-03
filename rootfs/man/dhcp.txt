@@ -1,0 +1,20 @@
+dhcp - get an address
+
+SYNOPSIS
+    dhcp [interface]
+    dhcp renew [interface]
+
+DESCRIPTION
+    Asks a DHCP server for an address for the interface, the default one
+    unless named, and shows the interfaces. The kernel renews a lease by
+    itself as it runs out. renew keeps the lease there is, asking the
+    server that granted it and then any; a server that says no takes the
+    address away.
+
+EXAMPLES
+    dhcp
+    dhcp wlan0
+    dhcp renew eth0
+
+SEE ALSO
+    ifconfig, wifi, settings, ping

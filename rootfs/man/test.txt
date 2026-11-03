@@ -1,0 +1,41 @@
+test - check files, strings and numbers
+
+SYNOPSIS
+    test expression
+    [ expression ]
+    kernel test
+
+DESCRIPTION
+    Status 0 when the expression is true, 1 when it is false, and 2 when
+    it is no expression, which is said. With 0 to 4 arguments POSIX's
+    rules by their count decide. With more, ! comes before an
+    expression, then -a, then -o, and ( ) groups.
+
+    SurfOS has no permissions, links, sockets or special bits, so -r and
+    -w are only -e, and -h -L -p -b -S -g -u -k are always false.
+
+    The kernel's test is another thing altogether: kernel test allocates
+    from the DMA heap and prints the physical address.
+
+OPTIONS
+    -e f        f exists.
+    -f f        A file.
+    -d f        A directory.
+    -s f        A file that is not empty.
+    -x f        A file or a directory.
+    -r f, -w f  It exists.
+    -c f        A device, in /dev.
+    -t n        Descriptor n is a terminal.
+    -n s        s is not empty; s alone too.
+    -z s        s is empty.
+    s = t       Strings; == too, != and < > in byte order.
+    a -eq b     Integers; -ne -lt -le -gt -ge.
+    f -nt g     f is newer; -ot older. One that does not exist is older.
+    f -ef g     The same file.
+
+EXAMPLES
+    [ -f /hda1/NOTES.TXT ] && echo there
+    if [ $n -lt 3 ]; then echo few; fi
+
+SEE ALSO
+    surfsh, true, read

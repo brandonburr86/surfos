@@ -1,0 +1,16 @@
+selftest - the kernel's self tests
+
+SYNOPSIS
+    selftest
+    heaptest
+
+DESCRIPTION
+    selftest runs the kernel's tests, a line each, and ends with
+    SELFTEST PASS, or STOPPED when Ctrl+C or a kill stopped it after the
+    test under way. heaptest makes random allocations with patterns and
+    then verifies the heap. One runs at a time, and a second is refused
+    with status 1. selftest uses files on /hda1 and the scratch ramdisk
+    rd1 when they are there.
+
+SEE ALSO
+    tests, crash, memstat

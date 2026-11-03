@@ -3,96 +3,102 @@ SurfOS user program: grep
 --------------------
 File: grep.c    Date: 10/25/26
 --------------------
-grep [-i] [-v] [-n] [-c] [-l] [-q] [-F] [-e pattern] pattern [file...]: the lines of the files
-(standard input without them) that the pattern matches. The pattern is a basic regular
-expression: . any character, * the one before it any number of times, ^ and $ the start and
-the end of the line, [abc] [a-z] one of those, [^abc] one not of them, \ the next character
-as itself; -F takes it as a fixed string. -i ignores case, -v gives the lines that do not
-match, -n puts each line's number before it, -c gives how many lines there are, -l the names
-of the files that have one, -q nothing. With more than one file each line comes after its
-file's name and a colon. Status 0 when a line was found, 1 when none was, 2 for a mistake
-(a file that cannot be read; with -q a line found counts more).
+grep [-i] [-v] [-n] [-c] [-l] [-q] [-E] [-F] [-e pattern] pattern [file...]: the lines of the files
+(standard input without them) that the pattern matches. The pattern is a basic regular expression,
+with -E an extended one, and -F takes it as a fixed string; of -E and -F the last one counts. -i ignores
+case, -v gives the lines that do not match, -n puts each line's number before it, -c gives how many
+lines there are, -l the names of the files that have one, -q nothing. With more than one file each line
+comes after its file's name and a colon. Status 0 when a line was found, 1 when none was, 2 for a
+mistake: a file that cannot be read, or a line the search gave up on. With -q a line found counts more.
+11/01/26 (the command-line suite): the patterns are user/libsurf/regex.c's, all that man regex says: \( \)
+and \1, \{m,n\}, [:classes:], a character being a UTF-8 sequence, and no pattern that takes for ever. A \
+before those characters used to mean the character itself. A line may hold NUL bytes. An [ never closed is
+still itself in a basic pattern (and a mistake with -E, which is new); other mistakes in a pattern are said,
+with status 2. A line on which the search gave up (too many steps) neither matches nor fails to match, with
+-v too: it is not shown or counted, the others go on, and it is trouble as an unreadable file is.
 */
 
 #include <ctype.h>
+#include <regex.h>
 #include "lineutil.h"
 
-static int icase, fixed;
+static int icase, fixed, extended;
+static int steps_said;
+static regex_t compiled;
 
 static int same(char a, char b) {
     return icase ? tolower((unsigned char)a) == tolower((unsigned char)b) : a == b;
 }
 
-/* the length of the pattern's piece at re: a character, ., \c or [...] (an [ never closed is itself) */
-static int atom_len(const char *re) {
-    const char *p;
-    if(!*re) return 0;
-    if(*re == '\\' && re[1]) return 2;
-    if(*re != '[') return 1;
-    p = re + 1;
+/* the length of the [ at re, up to its ], as the old grep saw it; 0 when no ] comes */
+static size_t bracket_len(const char *re) {
+    const char *p = re + 1;
     if(*p == '^') p++;
     if(*p == ']') p++;
     while(*p && *p != ']') p++;
-    return *p ? (int)(p - re + 1) : 1;
+    return *p ? (size_t)(p - re + 1) : 0;
 }
 
-/* does the piece at re (len bytes) take the character c? */
-static int takes(const char *re, int len, char c) {
-    const char *p, *end;
-    int neg = 0, hit = 0;
-    if(len == 2 && re[0] == '\\') return same(re[1], c);
-    if(len == 1) return re[0] == '.' || same(re[0], c);
-    p = re + 1;
-    end = re + len - 1;
-    if(*p == '^') {
-        neg = 1;
-        p++;
-    }
-    for(; p < end; p++) {
-        if(p + 2 < end && p[1] == '-') {        /* a range */
-            unsigned char lo = (unsigned char)p[0], hi = (unsigned char)p[2], u = (unsigned char)c;
-            if((u >= lo && u <= hi) || (icase && ((tolower(u) >= lo && tolower(u) <= hi) ||
-                                                  (toupper(u) >= lo && toupper(u) <= hi))))
-                hit = 1;
-            p += 2;
-        } else if(same(*p, c)) {
-            hit = 1;
+/* the pattern with each [ never closed made \[: a new string */
+static char *close_brackets(const char *re) {
+    char *out = lu_alloc(NULL, 2 * strlen(re) + 1), *q = out;
+    while(*re) {
+        size_t n = 1;
+        if(*re == '\\' && re[1]) n = 2;
+        else if(*re == '[') {
+            n = bracket_len(re);
+            if(!n) {
+                *q++ = '\\';
+                n = 1;
+            }
         }
+        memcpy(q, re, n);
+        q += n;
+        re += n;
     }
-    return hit != neg;
+    *q = 0;
+    return out;
 }
 
-static int here(const char *re, const char *text) {
-    int len;
-    if(!*re) return 1;
-    if(re[0] == '$' && !re[1]) return !*text;
-    len = atom_len(re);
-    if(re[len] == '*') {                        /* the piece any number of times, the most first */
-        const char *t = text;
-        while(*t && takes(re, len, *t)) t++;
-        for(;; t--) {
-            if(here(re + len + 1, t)) return 1;
-            if(t == text) return 0;
-        }
+static int compile(const char *pattern) {
+    char msg[128];
+    int flags = REG_NOSUB | (extended ? REG_EXTENDED : 0) | (icase ? REG_ICASE : 0);
+    int rc = regcomp(&compiled, pattern, flags);
+    if(rc == REG_EBRACK && !extended) {
+        char *closed = close_brackets(pattern);
+        rc = regcomp(&compiled, closed, flags);
+        free(closed);
     }
-    return *text && takes(re, len, *text) && here(re + len, text + 1);
+    if(!rc) return 0;
+    regerror(rc, &compiled, msg, sizeof(msg));
+    fprintf(stderr, "grep: %s: %s\n", pattern, msg);
+    return -1;
 }
 
-static int matches(const char *re, const char *line) {
+/* does the line, n bytes, match? -1 when the search gave up */
+static int matches(const char *pattern, const char *line, size_t n) {
+    regmatch_t m[1];
+    int rc;
     if(fixed) {
-        size_t n = strlen(re);
-        for(; *line; line++) {
-            size_t k;
-            for(k = 0; k < n && line[k] && same(line[k], re[k]); k++);
-            if(k == n) return 1;
+        size_t len = strlen(pattern), i, k;
+        for(i = 0; i + len <= n; i++) {
+            for(k = 0; k < len && same(line[i + k], pattern[k]); k++);
+            if(k == len) return 1;
         }
-        return !n;
+        return 0;
     }
-    if(re[0] == '^') return here(re + 1, line);
-    do {
-        if(here(re, line)) return 1;
-    } while(*line++);
-    return 0;
+    m[0].rm_so = 0;
+    m[0].rm_eo = (regoff_t)n;
+    rc = regexec(&compiled, line, 0, m, REG_STARTEND);
+    if(!rc) return 1;
+    if(rc == REG_NOMATCH) return 0;
+    if(!steps_said) {
+        char msg[128];
+        regerror(rc, &compiled, msg, sizeof(msg));
+        fprintf(stderr, "grep: %s: %s\n", pattern, msg);
+        steps_said = 1;
+    }
+    return -1;
 }
 
 int main(int argc, char **argv) {
@@ -114,23 +120,29 @@ int main(int argc, char **argv) {
             else if(*o == 'c') counting = 1;
             else if(*o == 'l') names = 1;
             else if(*o == 'q') quiet = 1;
-            else if(*o == 'F') fixed = 1;
-            else if(*o == 'e' && !o[1] && i + 1 < argc) {
+            else if(*o == 'F') {
+                fixed = 1;
+                extended = 0;
+            } else if(*o == 'E') {
+                extended = 1;
+                fixed = 0;
+            } else if(*o == 'e' && !o[1] && i + 1 < argc) {
                 pattern = argv[++i];
                 break;
             } else {
-                fprintf(stderr, "usage: grep [-ivnclqF] [-e pattern] pattern [file...]\n");
+                fprintf(stderr, "usage: grep [-ivnclqEF] [-e pattern] pattern [file...]\n");
                 return 2;
             }
         }
     }
     if(!pattern) {
         if(i == argc) {
-            fprintf(stderr, "usage: grep [-ivnclqF] [-e pattern] pattern [file...]\n");
+            fprintf(stderr, "usage: grep [-ivnclqEF] [-e pattern] pattern [file...]\n");
             return 2;
         }
         pattern = argv[i++];
     }
+    if(!fixed && compile(pattern)) return 2;
     files = argc - i;
     for(; i < argc || files == 0; i++) {
         const char *name = files ? argv[i] : "-";
@@ -143,8 +155,13 @@ int main(int argc, char **argv) {
             continue;
         }
         while((n = lu_getline(f, &line, &cap, &nl)) >= 0) {
+            int hit = matches(pattern, line, (size_t)n);
             lineno++;
-            if(matches(pattern, line) == invert) continue;
+            if(hit < 0) {
+                bad = 1;
+                continue;
+            }
+            if((hit > 0) == invert) continue;
             found = 1;
             count++;
             if(quiet) break;
@@ -152,7 +169,8 @@ int main(int argc, char **argv) {
             if(counting) continue;
             if(files > 1) printf("%s:", name);
             if(numbers) printf("%ld:", lineno);
-            printf("%s\n", line);
+            fwrite(line, 1, (size_t)n, stdout);
+            putchar('\n');
         }
         if(ferror(f)) {
             fprintf(stderr, "grep: %s: %s\n", name, strerror(errno));

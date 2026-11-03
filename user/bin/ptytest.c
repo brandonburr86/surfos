@@ -56,6 +56,8 @@ ptytest poll              poll(): a master with nothing to read (the timeout), w
                           negative one (skipped); too many (EINVAL); two masters and the
                           console at once; and a kill cuts a poll() with no timeout short
 ptytest ps                procinfo(): every task
+ptytest procsize          11/01/26: SYS_procinfo copies what the caller has room for, and for a
+                          program built before struct procinfo grew, which passes 0, its 36 bytes
 ptytest detach            a child that detaches: init is its parent, PROC_DETACHED, and
                           wait() finds it is no child of this process any more
 ptytest detach-ctrlc      in a session, a program that detaches (ptytest sleeper) lives on
@@ -1059,6 +1061,39 @@ static int mode_ps(void) {
     return pass();
 }
 
+/* the call as a program's own library makes it: this one's says how big its struct is, and an older one's left 0 there */
+static int procinfo_raw(int index, void *pi, unsigned int size) {
+    int r;
+    asm volatile("int $0x80" : "=a"(r) : "a"(42), "b"(index), "c"(pi), "d"(size) : "memory");   /* SYS_procinfo */
+    return r;
+}
+
+/* 11/01/26 (the review of track sys): a stick can hold a telnetd built when struct procinfo had 36 bytes, in a buffer of
+   36 bytes on its stack: only what the caller has room for may be written */
+static int mode_procsize(void) {
+    static const struct { unsigned int asked, wrote; } t[] = { { 0, 36 }, { 12, 12 }, { 36, 36 }, { 47, 47 }, { 48, 48 }, { 4096, 48 } };
+    unsigned char buf[64];
+    struct procinfo pi;
+    unsigned int i, k;
+    for(i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        memset(buf, 0x5a, sizeof(buf));
+        if(procinfo_raw(1, buf, t[i].asked) != 0) return fail("the call failed");   /* init: all its fields are known */
+        if(buf[t[i].wrote - 1] == 0x5a) return fail("less was written than there was room for");
+        for(k = t[i].wrote; k < sizeof(buf); k++)
+            if(buf[k] != 0x5a) {
+                printf("ptytest: size %u: byte %u of the caller's was written\n", t[i].asked, k);
+                return fail("past what the caller has");
+            }
+    }
+    printf("ptytest: size 0 wrote 36 bytes, a size that writes more or less wrote that many, and 48 at most\n");
+    if(procinfo_raw(100000, buf, 0) != -2) return fail("after the last task: no ENOENT");
+    if(procinfo_raw(0, (void *)0x100000, 0) != -14 || procinfo_raw(0, (void *)0x100000, 48) != -14) return fail("kernel memory: no EFAULT");
+    memset(&pi, 0xff, sizeof(pi));
+    if(procinfo(0, &pi) < 0 || pi.pid != 0 || pi.mem_pages != 0 || pi.cpu_ticks == 0xffffffffu)
+        return fail("libsurf's procinfo() does not get the fields of 11/01/26");
+    return pass();
+}
+
 static int mode_detach(void) {
     char *child[] = { "ptytest", "detach-child", NULL };
     struct procinfo pi;
@@ -1234,6 +1269,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "poll")) return mode_poll();
     if(!strcmp(mode, "pollwait")) return mode_pollwait();
     if(!strcmp(mode, "ps")) return mode_ps();
+    if(!strcmp(mode, "procsize")) return mode_procsize();
     if(!strcmp(mode, "detach")) return mode_detach();
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();

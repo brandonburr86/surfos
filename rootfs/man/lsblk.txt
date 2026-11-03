@@ -1,0 +1,16 @@
+lsblk - disks, partitions and ramdisks
+
+SYNOPSIS
+    lsblk [-s]
+
+DESCRIPTION
+    Lists the block devices: NAME, SIZE, BUS, RM (removable), TYPE and
+    MODEL/LABEL, and STATUS, which says why a device may not be changed.
+    A disk that was unplugged leaves the list at once, so its name can
+    be used again; a mount of it stays, and mount says to umount it.
+
+OPTIONS
+    -s  Blocks moved instead: BLOCKS, READ and WRITTEN.
+
+SEE ALSO
+    fdisk, mkfs, mount, eject

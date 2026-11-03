@@ -1,0 +1,12 @@
+drivers - what the kernel found and chose
+
+SYNOPSIS
+    drivers
+
+DESCRIPTION
+    Lists each driver with its status, then the profile, console, serial
+    port, timer, keyboard, pointer, APIC and USB as they were chosen. It
+    is the first thing to look at on new hardware.
+
+SEE ALSO
+    bootinfo, lsusb, lspci, dmesg

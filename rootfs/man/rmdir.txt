@@ -1,0 +1,14 @@
+rmdir - delete empty directories
+
+SYNOPSIS
+    rmdir directory...
+
+DESCRIPTION
+    Deletes each directory, which must be empty. kernel rmdir deletes
+    one.
+
+EXAMPLES
+    rmdir /hda1/empty
+
+SEE ALSO
+    rm, mkdir

@@ -1,0 +1,52 @@
+watch - run a command again and again, on a full screen
+
+SYNOPSIS
+    watch [-n seconds] [-t] command...
+
+DESCRIPTION
+    Runs the command every two seconds and shows what it printed on the
+    alternate screen, with a row saying what runs and when it last did.
+    The wait counts from the end of one run to the start of the next. q
+    or Ctrl+C ends it, also in the middle of a run, and the shell's
+    screen comes back.
+
+    The words are joined with blanks and given to surfsh -c, so kernel
+    commands and variables work. A pipeline must be quoted, or the shell
+    you typed it at takes it. The whole command is 255 bytes at most.
+
+    A run has /dev/null for its input and cannot read the keyboard:
+    something that asks a question stops there until you end watch. Its
+    output and its errors show together. A run that takes long shows as
+    far as it got, every second. Long lines go on in the next row;
+    colours and cursor moves are dropped, and what does not fit is read
+    and dropped, so the command runs as it would anywhere.
+
+    Programs a run left in the background end with it, at the end of
+    every run and at q. Only what leaves its job lives on: a program
+    started by the kernel's run or spawn, which puts it in no job, and a
+    server that detaches, such as telnetd on. watch 'run memhog hold
+    100000' goes on after q, until kill.
+
+    A window that changes size shows the same text cut to fit within a
+    second, and the next run lays it out.
+
+    Started with &, watch cannot tell: it takes the alternate screen and
+    draws over the prompt, and the keys are the shell's. kill %1 gives
+    the screen back.
+
+    Standard output must be a terminal; anything else is refused. The
+    status is 0 after q or Ctrl+C, and 2 for a mistake, when a run
+    cannot start, or when there is no memory for a new window size.
+
+OPTIONS
+    -n seconds  The wait, 0.1 to 86400, in decimals if you like. 2
+                without it.
+    -t          No row at the top.
+
+EXAMPLES
+    watch df
+    watch -n 0.5 'ps | grep -c surfsh'
+    watch -t uptime
+
+SEE ALSO
+    top, surfsh, sleep

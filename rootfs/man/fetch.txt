@@ -1,0 +1,42 @@
+fetch - download a file over HTTP or HTTPS
+
+SYNOPSIS
+    fetch [-o file|folder|-] [-c] [-f] [-q] [-t 'YYYY-MM-DD HH:MM:SS']
+        http[s]://address
+
+DESCRIPTION
+    Downloads an address into a file named after the last name of its
+    path, index.html for a folder, in the current directory or the
+    folder -o names. A file that is there already is not replaced unless
+    -f says so.
+
+    Nothing is written before a 2xx response with something in it has
+    come, so an error status leaves no file and changes none. A download
+    cut short keeps what came, and -c goes on with it.
+
+    Redirects are followed, 10 at most, never from https: to http:.
+    HTTPS checks the certificate chain against /initrd/etc/ssl/cert.pem,
+    the name and the dates, with no way to skip any of it; it needs a
+    CPU with RDRAND and a clock that is right. 15 seconds without a byte
+    end a download.
+
+    The status is 0, 1 after an error, and 2 for a mistake in the
+    options.
+
+OPTIONS
+    -o name  The file or folder to write, - for standard output, or a
+             device such as /dev/null.
+    -c       Go on with a file that is there, asking for the rest. A
+             server that sends all of it again leaves the file as it
+             was; -f then downloads it anew.
+    -f       Replace a file that is there.
+    -q       Say nothing but errors.
+    -t time  The UTC time for this run, when the hardware clock cannot
+             be trusted.
+
+EXAMPLES
+    fetch -o /hda1/ https://example.com/file.zip
+    fetch -c http://10.0.0.2/big.iso
+
+SEE ALSO
+    undertow, nc, ftpd, rx

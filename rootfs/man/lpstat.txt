@@ -1,0 +1,10 @@
+lpstat - the parallel port
+
+SYNOPSIS
+    lpstat
+
+DESCRIPTION
+    Prints the status of the parallel port.
+
+SEE ALSO
+    drivers

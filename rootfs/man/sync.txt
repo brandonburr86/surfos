@@ -1,0 +1,12 @@
+sync - write cached blocks to the disks
+
+SYNOPSIS
+    sync
+
+DESCRIPTION
+    Writes everything the block cache holds for the disks, and says how
+    the cache has done. A block whose write failed stays dirty, and sync
+    tries it again. To take a disk away, use eject.
+
+SEE ALSO
+    eject, mount

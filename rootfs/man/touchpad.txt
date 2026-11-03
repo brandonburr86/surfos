@@ -1,0 +1,15 @@
+touchpad - native mouse devices and the touchpad
+
+SYNOPSIS
+    touchpad [info|up|report|descriptor]
+    pointerinfo
+
+DESCRIPTION
+    pointerinfo says what pointing devices there are, USB, PS/2 and I2C,
+    and where the pointer is. touchpad says how the laptop's I2C
+    touchpad is doing; up starts it again, and touchpad info then shows
+    the progress; report and descriptor show its last report and its HID
+    descriptor. These commands make no bus transfers of their own.
+
+SEE ALSO
+    gui, drivers, lsusb

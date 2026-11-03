@@ -1,0 +1,104 @@
+awk - a pattern scanning and processing language
+
+SYNOPSIS
+    awk [-F fs] [-v var=value]... program [argument...]
+    awk [-F fs] [-v var=value]... -f file... [argument...]
+
+DESCRIPTION
+    Reads its input a record at a time, a line unless RS says
+    otherwise, splits each into fields, and for every rule whose
+    pattern matches runs its action. An argument is a file to read,
+    - for standard input, or a var=value to assign when it is
+    reached. With no file it reads standard input.
+
+    A program is rules, in order, and functions:
+
+        pattern { action }      pattern alone prints the record
+        BEGIN { action }        before any input
+        END { action }          after all of it
+        /re/, /re/ { action }   from the first match to the second
+        function f(a, b) { return a + b }
+
+    Fields are $1, $2, ... and $0 is the record. Assigning to one
+    puts $0 together again with OFS. Values are numbers or strings
+    as they are used: a field that looks like a number compares as
+    one. Arrays take any string as a key, and a[i,j] joins with
+    SUBSEP. Extra parameters of a function are its locals.
+
+        + - * / % ^        arithmetic; ** too
+        < <= == != > >=    comparison
+        ~ !~               match a regular expression (man regex)
+        && || !  ?:  in    logic, membership
+        = += -= *= /= %= ^=  ++ --  assignment
+        a b                concatenation: two values side by side
+
+    Statements: if else, while, do while, for, for (k in a), break,
+    continue, next, nextfile, exit, return, delete a[k], delete a.
+
+        print a, b          print a, b > "file"    >> "file"
+        printf "%d\n", n    print | "command"
+        getline             the next record
+        getline x           into x
+        getline < "file"    getline x < "file"
+        "cmd" | getline     "cmd" | getline x
+        close("file")       fflush()    system("cmd")
+
+    > empties the file the first time it is named in a run, as the
+    shell does, and later prints add to it until close(): >> keeps
+    what was there. A file and a command of one name are two things.
+
+    Functions: length substr index split sub gsub match sprintf
+    tolower toupper sin cos atan2 exp log sqrt int rand srand.
+    substr(s, m, n) starts at 1 if m is lower and still gives up to n
+    characters: substr("hello", 0, 2) is he, and substr("hello", -1,
+    3) is hel, where mawk gives hell. In what sub and gsub put in, &
+    is the match, \& a plain & and \\ a plain \: in a string written
+    in the program each of those backslashes is written twice.
+
+    Variables: NF NR FNR FS OFS ORS RS RSTART RLENGTH SUBSEP ENVIRON
+    ARGC ARGV CONVFMT OFMT FILENAME.
+
+    RS="" reads paragraphs, and an RS of more than a character is a
+    regular expression. Without an operator in it, it is found as it
+    stands. Other patterns take a match only when 64 KB more has
+    been read or the input has ended, as more input could change it,
+    so from a slow pipe records come late; at a terminal, at the
+    next byte, or at once if the match ends the line. FS is one
+    blank by default: runs of blanks, tabs and newlines. Any other
+    single character is itself, and a longer FS a regular
+    expression. FS="" splits into characters.
+
+    In this awk a character is a UTF-8 sequence: length, substr,
+    index, match, RSTART, RLENGTH, printf's widths and %c all count
+    them. An invalid byte is one character and passes unchanged.
+    Upper and lower case are A-Z. There is no locale.
+
+    Programs start through surfsh, so a command may be a kernel
+    command. There are 16 file descriptors: close a file you have
+    finished with, or print and getline will run out.
+
+    Anything that goes wrong in the program or with a file ends awk
+    with status 2, a write that fails too, which on a full disk may
+    only show when the file is closed: files are closed and commands
+    waited for first. Otherwise the status is what exit gave, or 0.
+    A word like nan or 0x10 in the input is a string, not a number.
+    Memory is the limit on how long a string is or how deep functions
+    call: past it awk says so. rand() gives the same numbers on each
+    run until srand() is called.
+
+OPTIONS
+    -F fs        Set FS. -Ft is a tab, and \t works too.
+    -v var=val   Assign before BEGIN runs. An array, a function or a
+                 word of the language cannot take a value, here or
+                 among the arguments: that is a mistake.
+    -f file      Read the program from a file. Several add up.
+
+EXAMPLES
+    awk '{ print $2 }' /hda1/DATA.TXT
+    awk -F: '$3 > 100 { print $1 }' /hda1/DATA.TXT
+    awk '{ n += $1 } END { print n / NR }' /hda1/NUMBERS.TXT
+    dmesg | awk '/usb/ { c++ } END { print c }'
+    awk 'length > 72' /hda1/NOTES.TXT
+
+SEE ALSO
+    sed, grep, cut, sort, regex, bc

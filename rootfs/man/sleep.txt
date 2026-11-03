@@ -1,0 +1,20 @@
+sleep - wait for a while
+
+SYNOPSIS
+    sleep [-u] [ms]
+
+DESCRIPTION
+    Waits for ms MILLISECONDS, not seconds, 1000 unless given, and says
+    how long that was. sleep 5 is five thousandths of a second. A kill
+    or Ctrl+C cuts it short.
+
+OPTIONS
+    -u  Sleep as a driver's delay does, where nothing cuts it short: a
+        test of the kill that waits.
+
+EXAMPLES
+    sleep 1500
+    sleep 200; echo done
+
+SEE ALSO
+    watch, time, uptime

@@ -68,6 +68,17 @@ USER_PROGS  += find du xargs cut sha256sum      # 10/25/26 (track A, A9); sha256
 USER_PROGS  += wclock        # 10/26/26 (stage C12): the desktop's Clock as a program, user/wclock/
 USER_PROGS  += wcharmap      # 10/26/26 (stage C12): the desktop's Character Map as a program, user/wcharmap/
 USER_PROGS  += wundertow     # 10/25/26: the web browser in a window, a program of several files in user/wundertow/
+USER_PROGS  += gzip gunzip zcat       # 11/01/26 (the command-line suite): one tool with three mains, user/gzip/
+USER_PROGS  += tar                    # 11/01/26: user/tar/
+USER_PROGS  += unzip                  # 11/01/26: user/unzip/
+USER_PROGS  += top watch man # 11/01/26 (the command-line suite, track sys): rootfs/man/ is the manual
+USER_PROGS  += bc            # 11/01/26 (the command-line suite, track lang): the calculator, user/bc/
+USER_PROGS  += awk           # 11/01/26 (the command-line suite, track lang): the language, user/awk/
+USER_PROGS  += libtest       # 11/01/26 (the command-line suite, track text): libsurf's regex, numbers, math, commands
+USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): the stream editor
+USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
+USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
+USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -606,6 +617,7 @@ unittest: test-kalloc
 # the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
 HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
                user/libsurf/time.c user/libsurf/malloc.c
+HOSTUSER_SRC += user/libsurf/strtod.c           # 11/01/26: sscanf's floating point
 HOSTUSER_OBJ = $(HOSTUSER_SRC:user/libsurf/%.c=$(BUILD)/host/libsurf/%.o)
 $(BUILD)/host/libsurf/%.o: user/libsurf/%.c tests/host/libsurf_names.h
 	@mkdir -p $(dir $@)
@@ -715,6 +727,384 @@ $(BUILD)/host/test_wcharmap: tests/host/test_wcharmap.c user/wcharmap/charmap.c 
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wcharmap -idirafter user/include tests/host/test_wcharmap.c user/wcharmap/charmap.c \
 	    $(BUILD)/host/kernel/driver/cp437.o -o $@
+
+# 11/01/26 (the command-line suite, track archive): gzip, gunzip and zcat are one tool with three mains (user/gzip/), tar
+# reads and writes gzip itself, and unzip shares tar's rules for names (user/tar/arpath.c)
+GZTOOL_OBJ = $(addprefix $(BUILD)/user/gzip/,tool.o gzfile.o)
+TAR_OBJ    = $(addprefix $(BUILD)/user/tar/,tar.o tarfile.o arpath.o) $(BUILD)/user/gzip/gzfile.o
+UNZIP_OBJ  = $(addprefix $(BUILD)/user/unzip/,unzip.o zipfile.o) $(BUILD)/user/tar/arpath.o
+$(BUILD)/user/gzip/%.o: user/gzip/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/tar/%.o: user/tar/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/unzip/%.o: user/unzip/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(addprefix $(BUILD)/user/bin/,gzip gunzip zcat): $(BUILD)/user/bin/%: $(BUILD)/user/gzip/%.o $(GZTOOL_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(GZTOOL_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/tar: $(TAR_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TAR_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/unzip: $(UNZIP_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(UNZIP_OBJ) $(USER_LIB)
+-include $(wildcard $(BUILD)/user/gzip/*.d $(BUILD)/user/tar/*.d $(BUILD)/user/unzip/*.d)
+
+# Their host tests: libsurf's CRC-32, inflate and deflate alone (test_deflate), then each tool as it is on the simulated
+# FAT of tests/host/ar_sim.c, against SurfOS's headers with libsurf's names, as test_edit does. Plain flags only: the
+# sanitizer runs are tests/archive-sanitize.sh's, natively on the Mac. A -fsanitize build must never enter `make unittest`:
+# one hung at 99% CPU in the Docker image, under qemu-i386, and compiling is no test of that.
+AR_SIM_FLAGS = $(HOSTFLAGS) -Wno-main -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+               -include tests/host/ar_names.h -MMD -MP
+AR_HOST_FLAGS = $(HOSTFLAGS) -Wno-unused-function -Itests/host
+AR_TEST_OBJ = $(addprefix $(BUILD)/host/archive/,ar_sim.o ar_crc.o libsurf/crc32.o libsurf/inflate.o libsurf/deflate.o) \
+              $(filter-out %/malloc.o,$(HOSTUSER_OBJ))
+$(BUILD)/host/archive/%.o: user/%.c tests/host/libsurf_names.h tests/host/ar_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(AR_SIM_FLAGS) -c $< -o $@
+$(BUILD)/host/archive/tar/tar.o: AR_SIM_FLAGS += -Dmain=tar_main
+$(BUILD)/host/archive/unzip/unzip.o: AR_SIM_FLAGS += -Dmain=unzip_main
+$(BUILD)/host/archive/%.o: tests/host/%.c tests/host/ar_sim.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host -c $< -o $@
+$(BUILD)/host/test_deflate: tests/host/test_deflate.c user/libsurf/crc32.c user/libsurf/inflate.c user/libsurf/deflate.c \
+                            user/include/crc32.h user/include/inflate.h user/include/deflate.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -idirafter user/include $(filter %.c,$^) -o $@
+$(BUILD)/host/test_gztool: tests/host/test_gztool.c tests/host/ar_host.h tests/host/ar_sim.h \
+                           $(addprefix $(BUILD)/host/archive/gzip/,tool.o gzfile.o) $(AR_TEST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
+$(BUILD)/host/test_tar: tests/host/test_tar.c tests/host/ar_host.h tests/host/ar_sim.h \
+                        $(addprefix $(BUILD)/host/archive/,tar/tar.o tar/tarfile.o tar/arpath.o gzip/gzfile.o) $(AR_TEST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
+$(BUILD)/host/test_unzip: tests/host/test_unzip.c tests/host/ar_host.h tests/host/ar_sim.h \
+                          $(addprefix $(BUILD)/host/archive/,unzip/unzip.o unzip/zipfile.o tar/arpath.o) \
+                          $(BUILD)/host/kernel/driver/cp437.o $(AR_TEST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(AR_HOST_FLAGS) $(filter %.c %.o,$^) -o $@
+-include $(wildcard $(BUILD)/host/archive/*/*.d)
+unittest: unittest-archive
+.PHONY: unittest-archive
+unittest-archive: $(BUILD)/host/test_deflate $(BUILD)/host/test_gztool $(BUILD)/host/test_tar $(BUILD)/host/test_unzip
+	$(BUILD)/host/test_deflate
+	$(BUILD)/host/test_gztool
+	$(BUILD)/host/test_tar
+	$(BUILD)/host/test_unzip
+
+# 11/01/26 (the command-line suite, track sys): what top, watch and man know, user/bin/termview.h, topmodel.h, watchtext.h and
+# manutil.h as they are; then every name's page. Never a -fsanitize build here: one compiles in the Docker image and then
+# hangs under its qemu-i386, so these tests run under clang's sanitizers natively on the Mac, by hand
+# (docs/superpowers/plans/2026-11-01-cli-suite-sys.md)
+SYS_HOSTFLAGS = $(HOSTFLAGS) -Iuser/bin -idirafter user/include
+$(BUILD)/host/test_top: tests/host/test_top.c user/bin/topmodel.h user/bin/termview.h include/surfos/proc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_top.c -o $@
+$(BUILD)/host/test_watch: tests/host/test_watch.c user/bin/watchtext.h user/bin/termview.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_watch.c -o $@
+$(BUILD)/host/test_manutil: tests/host/test_manutil.c user/bin/manutil.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(SYS_HOSTFLAGS) tests/host/test_manutil.c -o $@
+unittest: unittest-sys
+.PHONY: unittest-sys
+unittest-sys: $(BUILD)/host/test_top $(BUILD)/host/test_watch $(BUILD)/host/test_manutil
+	$(BUILD)/host/test_top
+	$(BUILD)/host/test_watch
+	$(BUILD)/host/test_manutil
+	$(PYTHON) -m unittest discover -s tests -p test_man.py
+
+# 11/01/26 (the command-line suite, track lang): bc, a program of several files in user/bc/. tests/host/test_bc.c runs
+# num.c, parse.c, vm.c and lib.c as they are, their memory through tests/host/bc_alloc.h; only main.c makes system calls.
+# No sanitizer build here: the test's header says how to run them on the Mac.
+BC_SRC       = $(wildcard user/bc/*.c)
+BC_OBJ       = $(BC_SRC:user/bc/%.c=$(BUILD)/user/bc/%.o)
+BC_HOST_OBJ  = $(addprefix $(BUILD)/host/bc/,num.o parse.o vm.o lib.o)
+DEPS        += $(BC_OBJ:.o=.d)
+$(BUILD)/user/bc/%.o: user/bc/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/bc: $(BC_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(BC_OBJ) $(USER_LIB)
+
+$(BUILD)/host/bc/%.o: user/bc/%.c user/bc/bc.h user/bc/num.h tests/host/bc_alloc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -include tests/host/bc_alloc.h -c $< -o $@
+
+$(BUILD)/host/test_bc: tests/host/test_bc.c $(BC_HOST_OBJ)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/bc tests/host/test_bc.c $(BC_HOST_OBJ) -o $@
+
+unittest: unittest-lang
+.PHONY: unittest-lang
+unittest-lang: $(BUILD)/host/test_bc
+	$(BUILD)/host/test_bc
+
+# 11/01/26 (the command-line suite, track text): what libsurf gained, against the host's libc, with surf_ names
+# (tests/host/text_names.h after libsurf_names.h). No -fsanitize here: such a binary hangs under the devenv's emulation of
+# i386; the sanitizer runs are made on the Mac with clang (docs/superpowers/plans/2026-11-01-cli-suite-text.md).
+TEXT_HOST_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+                  -include tests/host/text_names.h -MMD -MP
+$(BUILD)/host/text/%.o: user/libsurf/%.c tests/host/libsurf_names.h tests/host/text_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(TEXT_HOST_FLAGS) -c $< -o $@
+$(BUILD)/host/text/regex.o: user/include/regex.h
+$(BUILD)/host/text/math.o: user/include/math.h
+$(BUILD)/host/test_regex: tests/host/test_regex.c user/include/regex.h $(BUILD)/host/text/regex.o $(BUILD)/host/libsurf/ctype.o \
+                          $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_regex.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_strtod: tests/host/test_strtod.c $(BUILD)/host/libsurf/strtod.o $(BUILD)/host/libsurf/printf.o \
+                           $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_strtod.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_libm: tests/host/test_libm.c user/bin/libm_grid.h $(BUILD)/host/text/math.o $(BUILD)/host/libsurf/strtod.o \
+                         $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_libm.c $(filter %.o,$^) -lm -o $@
+$(BUILD)/host/test_getopt: tests/host/test_getopt.c $(BUILD)/host/text/getopt.o $(BUILD)/host/libsurf/string.o \
+                           $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_getopt.c $(filter %.o,$^) -o $@
+# stage 2: sed and grep as programs of the host, against the real ones (tests/test_sed.py), and sed on the simulated file system,
+# for -i and w when writes and renames fail (tests/host/test_sedsave.c)
+TOOLHOST_DEPS = tests/host/toolhost/surf.h tests/host/toolhost/regex.h tests/host/toolhost/shim.c $(BUILD)/host/text/regex.o \
+                $(BUILD)/host/libsurf/ctype.o
+$(BUILD)/host/sed-host: user/bin/sed.c user/bin/saveutil.h $(TOOLHOST_DEPS)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Wno-unused-function -Itests/host/toolhost user/bin/sed.c tests/host/toolhost/shim.c $(filter %.o,$^) -o $@
+$(BUILD)/host/grep-host: user/bin/grep.c user/bin/lineutil.h $(TOOLHOST_DEPS)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Wno-unused-function -Itests/host/toolhost user/bin/grep.c tests/host/toolhost/shim.c $(filter %.o,$^) -o $@
+$(BUILD)/host/sim/sed_bridge.o: user/bin/sed.c user/bin/saveutil.h tests/host/text_names.h
+$(BUILD)/host/test_sedsave: tests/host/test_sedsave.c tests/host/sim_fs.h $(BUILD)/host/sim/sed_bridge.o $(BUILD)/host/sim/sim_fs.o \
+                            $(BUILD)/host/text/regex.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_sedsave.c $(filter %.o,$^) -o $@
+unittest: unittest-text
+.PHONY: unittest-text
+unittest-text: $(BUILD)/host/test_regex $(BUILD)/host/test_strtod $(BUILD)/host/test_libm $(BUILD)/host/test_getopt \
+               $(BUILD)/host/test_sedsave $(BUILD)/host/sed-host $(BUILD)/host/grep-host
+	$(BUILD)/host/test_regex
+	$(BUILD)/host/test_strtod
+	$(BUILD)/host/test_libm
+	$(BUILD)/host/test_getopt
+	$(BUILD)/host/test_sedsave
+	$(PYTHON) tests/test_sed.py $(BUILD)/host/sed-host $(BUILD)/host/grep-host
+
+# 11/01/26 (the command-line suite, track lang): awk, a program of several files in user/awk/. tests/host/test_awk.c
+# runs all of them as they are, main.c too, each run in a fork of its own, with libsurf's regular expressions
+# (tests/host/awk/regex.h) and the test's memory and commands (tests/host/awk_host.h). No sanitizer build here: the test's
+# header says how to run them on the Mac.
+AWK_SRC      = $(wildcard user/awk/*.c)
+AWK_OBJ      = $(AWK_SRC:user/awk/%.c=$(BUILD)/user/awk/%.o)
+AWK_HOST_OBJ = $(AWK_SRC:user/awk/%.c=$(BUILD)/host/awk/%.o)
+DEPS        += $(AWK_OBJ:.o=.d)
+$(BUILD)/user/awk/%.o: user/awk/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/awk: $(AWK_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(AWK_OBJ) $(USER_LIB)
+
+$(BUILD)/host/awk/%.o: user/awk/%.c user/awk/awk.h tests/host/awk_host.h tests/host/awk/regex.h user/include/regex.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/awk -Iuser/awk -include tests/host/awk_host.h -c $< -o $@
+
+$(BUILD)/host/test_awk: tests/host/test_awk.c tests/host/awk/table.inc $(AWK_HOST_OBJ) $(BUILD)/host/text/regex.o \
+                        $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_awk.c $(filter %.o,$^) -lm -o $@
+
+unittest: unittest-lang-awk
+.PHONY: unittest-lang-awk
+unittest-lang-awk: $(BUILD)/host/test_awk
+	$(BUILD)/host/test_awk
+
+# 11/01/26 (the command-line suite, track diff): diff, patch and the small utilities. diff and patch are linked from
+# user/diff/, and cal with the Clock's arithmetic. Their tests: tests/host/test_diff.c, user/diff/ as it is, at SurfOS's ABI, and
+# again with hashes that collide (test_diff_weak); tests/test_cli_diff.py, each tool as it is, built over the host's C
+# library (tests/host/cli/cli_host.h), beside the real ones. Sanitized runs are tests/host/cli/mac-sanitize.sh, on the Mac.
+DIFF_LIB_OBJ  = $(addprefix $(BUILD)/user/diff/,dcore.o dinput.o dfile.o dout.o)
+PATCH_LIB_OBJ = $(addprefix $(BUILD)/user/diff/,dinput.o phunk.o papply.o)
+$(BUILD)/user/diff/%.o: user/diff/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/diff: $(BUILD)/user/obj/diff.o $(DIFF_LIB_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(DIFF_LIB_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/patch: $(BUILD)/user/obj/patch.o $(PATCH_LIB_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(PATCH_LIB_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/cal: $(BUILD)/user/obj/cal.o $(BUILD)/user/wclock/clock.o $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(BUILD)/user/wclock/clock.o $(USER_LIB)
+-include $(wildcard $(BUILD)/user/diff/*.d)
+
+CLID_TOOLS     = cmp comm join paste fold nl rev basename dirname od base64 strings file tree
+CLID_HOSTFLAGS = $(filter-out -m32,$(HOSTFLAGS)) -include tests/host/cli/cli_host.h -Itests/host/cli
+CLID_DEPS      = tests/host/cli/cli_host.h tests/host/cli/surf.h user/diff/cli.h user/bin/lineutil.h user/bin/fileutil.h user/bin/saveutil.h
+CLID_DIFF_SRC  = user/diff/dcore.c user/diff/dinput.c user/diff/dfile.c user/diff/dout.c
+CLID_PATCH_SRC = user/diff/dinput.c user/diff/phunk.c user/diff/papply.c
+$(CLID_TOOLS:%=$(BUILD)/host/cli/%): $(BUILD)/host/cli/%: user/bin/%.c $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) $< -o $@
+$(BUILD)/host/cli/cal: user/bin/cal.c user/wclock/clock.c user/wclock/clock.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/cal.c user/wclock/clock.c -o $@
+$(BUILD)/host/cli/diff: user/bin/diff.c $(CLID_DIFF_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/diff.c $(CLID_DIFF_SRC) -o $@
+$(BUILD)/host/cli/patch: user/bin/patch.c $(CLID_PATCH_SRC) user/diff/patch.h user/diff/dinput.h $(CLID_DEPS)
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(CLID_HOSTFLAGS) user/bin/patch.c $(CLID_PATCH_SRC) -o $@
+CLID_TEST_SRC  = tests/host/test_diff.c $(sort $(CLID_DIFF_SRC) $(CLID_PATCH_SRC))
+$(BUILD)/host/test_diff: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(CLID_TEST_SRC) -o $@
+$(BUILD)/host/test_diff_weak: $(CLID_TEST_SRC) user/diff/diff.h user/diff/dcore.h user/diff/dinput.h user/diff/patch.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -DD_HASH_MASK=3 $(CLID_TEST_SRC) -o $@
+unittest: unittest-diff
+.PHONY: unittest-diff
+unittest-diff: $(BUILD)/host/test_diff $(BUILD)/host/test_diff_weak $(CLID_TOOLS:%=$(BUILD)/host/cli/%) $(BUILD)/host/cli/cal \
+               $(BUILD)/host/cli/diff $(BUILD)/host/cli/patch
+	$(BUILD)/host/test_diff
+	$(BUILD)/host/test_diff_weak
+	python3 tests/test_cli_diff.py $(BUILD)/host/cli
+
+# 11/01/26 (the command-line suite, track fsck): the checker, fs/fat_check.c as it is but for its allocator, which the test
+# counts and refuses, with the block cache, FAT and mkfs of test_fatfs (tests/host/test_fsck.c). No sanitizer here: they
+# run on the Mac, with clang (the account says how): a -fsanitize build under the devenv's qemu-i386 hangs
+FSCK_OBJ = $(BUILD)/host/fsck/fs/fat_check.o
+$(FSCK_OBJ): fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) -Dkalloc=fsck_kalloc -Dkcalloc=fsck_kcalloc -Dkfree=fsck_kfree -c $< -o $@
+$(BUILD)/host/test_fsck: tests/host/test_fsck.c tests/host/test_fatfs.c include/fs/fat_check.h $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fsck.c $(FSCK_OBJ) $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
+unittest: unittest-fsck
+.PHONY: unittest-fsck
+unittest-fsck: $(BUILD)/host/test_fsck
+	$(BUILD)/host/test_fsck
+
+# the command, shell/fsckcmd.c, over a device layer the test scripts; its printf() renamed so that the test keeps the host's
+$(BUILD)/host/kernel/shell/fsckcmd_test.o: shell/fsckcmd.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck command test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -Dprintf=fsck_printf -c $< -o $@
+$(BUILD)/host/test_fsckcmd: tests/host/test_fsckcmd.c $(BUILD)/host/kernel/shell/fsckcmd_test.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-fsckcmd
+.PHONY: unittest-fsckcmd
+unittest-fsckcmd: $(BUILD)/host/test_fsckcmd
+	$(BUILD)/host/test_fsckcmd
+
+# 11/02/26 (the third review): how far a look makes the kernel heap grow, fs/fat_check.c over mm/kalloc.c as it is, the
+# heap in the test's array as test_kalloc has it (tests/host/test_fsckheap.c)
+$(BUILD)/host/fsckheap/fs/fat_check.o: fs/fat_check.c include/fs/fat_check.h tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fsck heap test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) -c $< -o $@
+$(BUILD)/host/test_fsckheap: tests/host/test_fsckheap.c tests/host/kalloc_host.h include/fs/fat_check.h \
+                             $(BUILD)/host/fsckheap/fs/fat_check.o $(BUILD)/host/kalloc/mm/kalloc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(KALLOC_FLAGS) $(filter %.c %.o,$^) -o $@
+unittest: unittest-fsckheap
+.PHONY: unittest-fsckheap
+unittest-fsckheap: $(BUILD)/host/test_fsckheap
+	$(BUILD)/host/test_fsckheap
+
+# 11/01/26 (the command-line suite, track net): telnet and ftp, each a program of several files, with its protocol and
+# its session host-tested. ftp links ftpd's protocol module (user/ftpd/ftp.c) as it is; tests/host/telnetc and ftpc hold
+# the simulated kernels. Each test's main.c is built apart, for -Dmain. No sanitizer here: a -m32 binary built with
+# -fsanitize hangs under this image's qemu-i386, so those runs are by hand, with clang on the Mac
+# (docs/superpowers/plans/2026-11-01-cli-suite-net.md says how)
+TELNET_SRC   = $(wildcard user/telnet/*.c)
+TELNET_OBJ   = $(TELNET_SRC:user/telnet/%.c=$(BUILD)/user/telnet/%.o)
+FTP_SRC      = $(wildcard user/ftp/*.c)
+FTP_OBJ      = $(FTP_SRC:user/ftp/%.c=$(BUILD)/user/ftp/%.o)
+$(BUILD)/user/telnet/%.o: user/telnet/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/telnet: $(TELNET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TELNET_OBJ) $(USER_LIB)
+$(BUILD)/user/ftp/%.o: user/ftp/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/ftp: $(FTP_OBJ) $(BUILD)/user/ftpd/ftp.o $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FTP_OBJ) $(BUILD)/user/ftpd/ftp.o $(USER_LIB)
+-include $(wildcard $(BUILD)/user/telnet/*.d $(BUILD)/user/ftp/*.d)
+TELNETC_SRC  = user/telnet/tnclient.c user/telnet/session.c user/telnetd/telnet.c
+FTPCS_SRC    = user/ftp/ftpclient.c user/ftp/session.c user/ftp/commands.c user/ftpd/ftp.c
+$(BUILD)/host/test_telnetc: tests/host/test_telnetc.c tests/host/telnetc/sim.h tests/host/telnetc/surf.h user/telnet/main.c \
+                            user/telnet/tnclient.h user/telnet/tnsession.h user/telnetd/telnet.h $(TELNETC_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetc -Dmain=telnet_main -c user/telnet/main.c -o $@.main.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnet -Itests/host/telnetc tests/host/test_telnetc.c $(TELNETC_SRC) $@.main.o -o $@
+$(BUILD)/host/test_ftpc: tests/host/test_ftpc.c user/ftp/ftpclient.c user/ftp/ftpclient.h user/ftpd/ftp.c user/ftpd/ftp.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/ftp tests/host/test_ftpc.c user/ftp/ftpclient.c user/ftpd/ftp.c -o $@
+$(BUILD)/host/test_ftpcs: tests/host/test_ftpcs.c tests/host/ftpc/sim.h tests/host/ftpc/surf.h user/ftp/main.c user/ftp/ftpclient.h \
+                          user/ftp/ftpsession.h user/ftp/ftpcommands.h user/ftpd/ftp.h user/bin/saveutil.h $(FTPCS_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/ftpc -Dmain=ftp_main -c user/ftp/main.c -o $@.main.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/ftpc tests/host/test_ftpcs.c $(FTPCS_SRC) $@.main.o -o $@
+unittest: unittest-net
+.PHONY: unittest-net
+unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/test_ftpcs
+	$(BUILD)/host/test_telnetc
+	$(BUILD)/host/test_ftpc
+	$(BUILD)/host/test_ftpcs
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

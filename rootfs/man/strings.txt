@@ -1,0 +1,20 @@
+strings - find the text in binary files
+
+SYNOPSIS
+    strings [-n min] [file...]
+
+DESCRIPTION
+    Writes the runs of at least min characters that can be printed,
+    each on a line. TAB counts as one that can. Unlike strings on
+    other systems a character is a whole UTF-8 sequence, so accented
+    and other names come out whole; any other byte ends a run. The
+    whole file is read.
+
+OPTIONS
+    -n min   The shortest run: 4. -8 is the same as -n 8.
+
+EXAMPLES
+    strings -n 8 /initrd/bin/hello
+
+SEE ALSO
+    od, file, grep

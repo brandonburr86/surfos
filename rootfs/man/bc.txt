@@ -1,0 +1,75 @@
+bc - an arbitrary precision calculator and its language
+
+SYNOPSIS
+    bc [-lq] [file...]
+
+DESCRIPTION
+    Works with decimal numbers of any length, exactly. It reads the
+    files and then standard input, and runs each line or function as
+    soon as it is complete. An expression is printed; an assignment
+    is not. Type quit, or Ctrl+D, to end.
+
+    scale says how many digits to keep after the point in a division,
+    and is 0 until set. ibase and obase are the bases of what is read
+    and printed: ibase from 2 to 16, obase from 2 to 100000. A single
+    digit is its own value in any base, so ibase=A is always ten.
+    Digits above 9 are the capitals A to F. A digit the base does not
+    have counts at its own value: with ibase=2, 12 is 4, and with
+    ibase=A, 1E5 is 245. Results are cut, not rounded. A long number
+    of 70 characters goes on the next line after a backslash.
+
+    Variables, arrays (a[i]) and functions have names of lower-case
+    letters, digits and _, and all start at 0. Names are visible to
+    the functions called from where they are made. Arrays go to
+    functions by copy, as f(a[]). An index is below 16777216.
+
+        + - * / % ^        arithmetic; ^ takes whole powers only
+        = += -= *= /= %= ^=  ++ --   assignment
+        == != < <= > >=    relations, 1 or 0
+        && || !            logic, 1 or 0
+        sqrt(x) length(x) scale(x)   the root, digits, digits kept
+        if (a) s else t     while (a) s     for (i; a; n) s
+        break  continue  return  quit  { s; t }
+        define f(x, a[]) { auto y, b[]; ... return (x) }
+        "text"             printed as it stands, no newline
+        /* a comment */    # to the end of the line
+
+    else may follow after a ; or on a later line. At a terminal,
+    outside braces, it must be on the same line, or the answer to the
+    if would wait for the next line to be typed.
+
+    Mind three things that other languages do not do: -2^2 is 4, as
+    minus binds tighter than ^; x=1<2 compares after assigning; and
+    quit acts when it is read, so if(0) quit ends bc.
+
+    Memory is the only limit on a number's length and on how deep
+    functions call: past it bc says so. A power too large to fit is
+    refused at once. A mistake at the terminal costs that line, and
+    bc goes on. In a file or a pipe it ends bc with status 2: the
+    status is 0 otherwise. Ctrl+C ends bc and its variables go too.
+    There is no print statement, read() or last: strings and
+    expressions do their work. GNU's bc counts the zeros of length(0.05)
+    as digits; POSIX's significant digits do not, nor does this one.
+
+OPTIONS
+    -l    Define the functions below and start scale at 20.
+    -q    Taken and ignored, as bc prints no banner.
+
+    s(x)    sine, of radians     c(x)    cosine
+    a(x)    arctangent           e(x)    e to the power x
+    l(x)    natural logarithm    j(n,x)  Bessel function of order n
+
+    Each is worked out about a dozen digits past the scale of the
+    moment and cut, so what it prints are the true value's digits.
+    Only where the digits past the scale start with a longer run of
+    0s or 9s than that can the last digit be a unit off. l of zero or
+    less is an error, and j cuts its order to a whole number.
+
+EXAMPLES
+    echo '2^200' | bc
+    echo 'scale=50; 4*a(1)' | bc -l
+    echo 'obase=16; 48879' | bc
+    bc -l /hda1/SCRIPT.BC
+
+SEE ALSO
+    awk, seq
