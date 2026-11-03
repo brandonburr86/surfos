@@ -1,0 +1,271 @@
+SurfCPU acceptance test m8: persistent files (milestone 8): OWNER-GUIDE.md section 8's CRC procedure
+Verdict: PASS (19 checks seen by this script passed)
+Source: the board, through /dev/cu.usbserial-210319C129C61 at 115200 8N1
+Owner: the steps were answered by a program, not by a person (--owner python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py)
+Date: 2026-11-02 12:22:33 UTC, 1203 s
+Command: surfcpu/tools/board-test.py m8 --port /dev/cu.usbserial-210319C129C61 --board arty_a7_100t --design surfcpu_arty_a7_ddr_gpu --manifest '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt' --owner 'python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py' --evidence-dir '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/surfcpu/build/board-2026-11-01/evidence' --mount /Volumes/SURFOS --slow 3
+Tools: board-test.py sha256 ede968909663185d, uart.py sha256 dd6dda3bf7893ce1 (commit 6954a75c4e03); Python 3.14.7 on Darwin arm64
+
+Build identity read from the port, and what it was compared with:
+  SurfBoot 1.1.0, ROM build bfaac489
+  bitstream build bfaac489, flags 0, board id 0x100
+    the bitstream's build id bfaac489 is the manifest's (bfaac489, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt)
+    the manifest is a recheck's (tools/fpga-build.sh --recheck): 2026-10-31T22:39:43Z, tools at d543722b3351, LVS by z3cmd; the build's own result was fail
+  SurfBoot: ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  SurfOS 1.0.0 build 6954a75c, 497476 bytes, payload CRC 0xd619e835
+    SurfOS 1.0.0 on the card is /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/build/riscv32/arty_a7/SURFOS.BIN (build 6954a75c, 497476 bytes, payload CRC 0xd619e835)
+  SurfOS bootinfo: sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  mac-file       done, answered at +0.0
+              | On the Mac, with the SurfOS card mounted (written to by SurfOS: make -C surfcpu deploy-sd
+              | MOUNT=/Volumes/<card> DEPLOY_ARGS="--cmdline sd=rw"), make a file on it:
+              |   printf 'made on the Mac\n' > /Volumes/<card>/USERS/DOCUMENTS/MAC.TXT
+              | and press Enter (before ejecting).
+  +     0.0  to-board       done, answered at +0.0
+              | Eject the card (diskutil eject /Volumes/<card>), put it in the Arty, and press Enter.
+  +     0.5  boot           done, answered at +4.1
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu), or press and release
+              | RESET if it is loaded already; hold no button. Then press Enter.
+  +    14.7  power-cycle    done, answered at +77.3
+              | Power-cycle the board: unplug its USB cable, wait 5 seconds, plug it back in; then load the
+              | design again (the FPGA forgets it at power-off):
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+              | (or, if the board starts from its flash, just wait for it). Hold no button. Then press Enter.
+  +    84.6  to-mac         done, answered at +266.5
+              | Take the card out of the Arty, put it in the Mac (it mounts at /Volumes/SURFOS), then press Enter.
+  +   266.5  kernel-update  done, answered at +1096.0
+              | Install the kernel again (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject the
+              | card and put it back in the Arty. Power-cycle the board: unplug its USB cable, wait 5 seconds, plug it back in; then load the
+              | design again (the FPGA forgets it at power-off):
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_gpu
+              | (or, if the board starts from its flash, just wait for it). Hold no button. Then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  ok       on the Mac (/Volumes/SURFOS, read only): MAC.TXT has CRC b0cfa011, 16 bytes
+  note     port /dev/cu.usbserial-210319C129C61 opened at 115200 8N1
+  ok       board id 0x100 is arty_a7_100t's (0x100)
+  ok       the bitstream's build id bfaac489 is the manifest's (bfaac489, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       SurfOS 1.0.0 on the card is /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/build/riscv32/arty_a7/SURFOS.BIN (build 6954a75c, 497476 bytes, payload CRC 0xd619e835)
+  ok       the card is mounted read-write (sd=rw in /BOOT/CMDLINE.TXT)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489)
+  ok       a file made on the Mac, read on the board: MAC.TXT b0cfa011 (b0cfa011 on the Mac)
+  ok       write BOARD.TXT made on the board 2026-11-02T12:22:33Z: done without a word of error
+  ok       append BOARD.TXT a second line: done without a word of error
+  ok       cp MAC.TXT COPY.TXT: done without a word of error (16 bytes copied)
+  ok       write MAC.TXT changed on the board: done without a word of error
+  ok       create, edit, read: BOARD.TXT 88425445, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       eject sd0: safe to remove
+  ok       after a power cycle the same CRCs: BOARD.TXT 88425445, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       eject sd0 again: safe to remove
+  ok       on the Mac (read only, /Volumes/SURFOS) the same CRCs: BOARD.TXT 88425445, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       after a kernel update the files keep their CRCs: BOARD.TXT 88425445, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       eject sd0 at the end: safe to remove
+
+The files and the CRCs they must have:
+  MAC.TXT made on the Mac: b0cfa011 (16 bytes); then changed on the board
+    BOARD.TXT  88425445  (53 bytes)
+    COPY.TXT  b0cfa011  (16 bytes)
+    MAC.TXT  f60b6140  (21 bytes)
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 10519 bytes received;
+"*": the port going away and coming back):
+  +    0.693 | cube 58303 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 3494517 drawn, 3494516 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
+  +    4.117 | 
+  +    4.117 | SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM
+  +    4.133 | soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream bfaac489
+  +    4.325 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  +    4.341 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    4.581 | sd: SDHC/SDXC, 29.7 GiB; ready after 228 ms; SPI 6250 kHz, data CRC checked
+  +    4.581 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  +    4.597 | boot: /BOOT/SURFOS.BIN
+  +    4.597 | boot: loading 485 KiB .......
+  +    7.221 | boot: SurfOS 1.0.0 build 6954a75c: 497476 bytes in 1 fragment, read in 2623 ms
+  +    7.236 | boot: load 0x80000000, entry 0x80000000, mem_size 1366512, ISA IM_Zicsr_Zifencei; payload CRC 0xd619e835 matches (card and DDR)
+  +    7.253 | boot: command line "sd=rw"
+  +    7.253 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +    7.253 | 
+  +    7.829 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +    7.845 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
+  +    8.084 | Booting SurfOS Kernel.....
+  +    8.100 | 
+  +    8.100 | 
+  +    8.100 | Interrupt Initialization
+  +    8.116 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +    8.148 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
+  +    8.180 | *Interrupts Enabled
+  +    8.452 | 
+  +    8.452 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +    8.516 | 
+  +    8.516 | Serial Console
+  +    8.533 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +    8.564 | *receive interrupt, source 0
+  +    8.580 | *DONE
+  +    8.596 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +    8.628 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +    8.692 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
+  +    8.788 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  +    8.868 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
+  +    8.900 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
+  +    8.932 | 
+  +    8.932 | Drivers: serial gpio ps2kbd sdcard gpu
+  +    8.948 | 
+  +    8.948 | File Systems
+  +    9.476 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973436 free (FSInfo)
+  +    9.652 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +    9.716 | *DONE
+  +    9.780 | 
+  +    9.828 | Timer
+  +    9.892 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +   10.036 | 
+  +   10.084 | 
+  +   10.148 | Brandon Burr's SurfOS
+  +   10.212 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   10.308 | SURF ≋#> bootinfo
+  +   10.500 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
+  +   10.596 |   boot information: SurfBoot 1.1.0 (bfaac489), version 1, CRC 0xee0e12bd ok
+  +   10.692 |   board id 0x0100 (Arty A7-100T), SoC 0.4.0, memory map 2, sys clock 25000000 Hz, timebase 1000000 Hz
+  +   10.868 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
+  +   10.964 |   image 0x80000000 + 1366512 bytes; boot device SD, FAT32 at LBA 8192
+  +   11.060 |   command line: 'sd=rw'
+  +   11.140 |   sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489, features 0x1ff
+  +   11.316 |   DDR status 0x15, 256 MB; pixel clock 25173611 Hz
+  +   11.396 |   screen: surf_video showing text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 5974 cells written, 23 hardware scrolls
+  +   11.588 | SURF ≋#> crc32 /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   11.892 |     b0cfa011       16  /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   11.988 | SURF ≋#> cd /sd0p1/USERS/DOCUMENTS
+  +   12.132 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> write BOARD.TXT made on the board 2026-11-02T12:22:33Z
+  +   12.564 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> append BOARD.TXT a second line
+  +   12.820 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> cp MAC.TXT COPY.TXT
+  +   13.108 |     16 bytes copied
+  +   13.188 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> write MAC.TXT changed on the board
+  +   13.524 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> crc32 /sd0p1/USERS/DOCUMENTS/BOARD.TXT /sd0p1/USERS/DOCUMENTS/COPY.TXT /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   13.892 |     88425445       53  /sd0p1/USERS/DOCUMENTS/BOARD.TXT
+  +   14.004 |     b0cfa011       16  /sd0p1/USERS/DOCUMENTS/COPY.TXT
+  +   14.100 |     f60b6140       21  /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   14.196 | sd0p1 ▸ USERS ▸ DOCUMENTS ≋#> cd /
+  +   14.308 | SURF ≋#> eject sd0
+  +   14.500 |     /sd0p1 unmounted
+  +   14.596 |     sd0: safe to remove
+  +   14.660 | SURF ≋#> 
+  +   54.895 * the port went away (/dev/cu.usbserial-210319C129C61: Device not configured)
+  +   61.614 * the port is back: opened again
+  +   77.284 | SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM
+  +   77.300 | soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream bfaac489
+  +   77.492 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 15 (window +-7); lane 1: bitslip 2, delay 16 (window +-8)
+  +   77.508 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +   77.700 | sd: SDHC/SDXC, 29.7 GiB; ready after 182 ms; SPI 6250 kHz, data CRC checked
+  +   77.716 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  +   77.716 | boot: /BOOT/SURFOS.BIN
+  +   77.716 | boot: loading 485 KiB .......
+  +   80.356 | boot: SurfOS 1.0.0 build 6954a75c: 497476 bytes in 1 fragment, read in 2624 ms
+  +   80.356 | boot: load 0x80000000, entry 0x80000000, mem_size 1366512, ISA IM_Zicsr_Zifencei; payload CRC 0xd619e835 matches (card and DDR)
+  +   80.372 | boot: command line "sd=rw"
+  +   80.372 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   80.388 | 
+  +   80.948 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   80.980 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
+  +   81.220 | Booting SurfOS Kernel.....
+  +   81.220 | 
+  +   81.220 | 
+  +   81.220 | Interrupt Initialization
+  +   81.236 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +   81.268 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
+  +   81.316 | *Interrupts Enabled
+  +   81.588 | 
+  +   81.588 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +   81.636 | 
+  +   81.636 | Serial Console
+  +   81.652 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +   81.700 | *receive interrupt, source 0
+  +   81.716 | *DONE
+  +   81.716 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +   81.748 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +   81.828 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
+  +   81.924 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  +   81.988 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
+  +   82.020 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
+  +   82.052 | 
+  +   82.052 | Drivers: serial gpio ps2kbd sdcard gpu
+  +   82.084 | 
+  +   82.084 | File Systems
+  +   82.596 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (FSInfo)
+  +   82.772 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +   82.836 | *DONE
+  +   82.900 | 
+  +   82.964 | Timer
+  +   83.012 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +   83.156 | 
+  +   83.220 | 
+  +   83.268 | Brandon Burr's SurfOS
+  +   83.348 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   83.428 | SURF ≋#> crc32 /sd0p1/USERS/DOCUMENTS/BOARD.TXT /sd0p1/USERS/DOCUMENTS/COPY.TXT /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   83.908 |     88425445       53  /sd0p1/USERS/DOCUMENTS/BOARD.TXT
+  +   84.020 |     b0cfa011       16  /sd0p1/USERS/DOCUMENTS/COPY.TXT
+  +   84.132 |     f60b6140       21  /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  +   84.228 | SURF ≋#> eject sd0
+  +   84.420 |     /sd0p1 unmounted
+  +   84.500 |     sd0: safe to remove
+  +   84.580 | SURF ≋#> +SD: sd0: the card was taken out
+  + 1081.045 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
+  + 1081.235 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  + 1081.347 | +SD: sd0: a card was put in: mount sd0p1 to use it
+  + 1096.034 | 
+  + 1096.034 | SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM
+  + 1096.050 | soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream bfaac489
+  + 1096.242 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 15 (window +-7); lane 1: bitslip 2, delay 16 (window +-8)
+  + 1096.258 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  + 1096.274 | sd: SDHC/SDXC, 29.7 GiB; ready after 12 ms; SPI 6250 kHz, data CRC checked
+  + 1096.290 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  + 1096.290 | boot: /BOOT/SURFOS.BIN
+  + 1096.306 | boot: loading 485 KiB .......
+  + 1098.930 | boot: SurfOS 1.0.0 build 6954a75c: 497476 bytes in 2 fragments, read in 2626 ms
+  + 1098.930 | boot: load 0x80000000, entry 0x80000000, mem_size 1366512, ISA IM_Zicsr_Zifencei; payload CRC 0xd619e835 matches (card and DDR)
+  + 1098.946 | boot: command line "sd=rw"
+  + 1098.946 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  + 1098.962 | 
+  + 1099.522 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  + 1099.554 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
+  + 1099.794 | Booting SurfOS Kernel.....
+  + 1099.811 | 
+  + 1099.811 | 
+  + 1099.811 | Interrupt Initialization
+  + 1099.826 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  + 1099.858 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
+  + 1099.890 | *Interrupts Enabled
+  + 1100.162 | 
+  + 1100.162 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  + 1100.226 | 
+  + 1100.226 | Serial Console
+  + 1100.226 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  + 1100.274 | *receive interrupt, source 0
+  + 1100.290 | *DONE
+  + 1100.290 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  + 1100.322 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  + 1100.402 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
+  + 1100.498 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  + 1100.562 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
+  + 1100.594 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
+  + 1100.642 | 
+  + 1100.642 | Drivers: serial gpio ps2kbd sdcard gpu
+  + 1100.658 | 
+  + 1100.658 | File Systems
+  + 1101.170 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (FSInfo)
+  + 1101.346 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  + 1101.426 | *DONE
+  + 1101.474 | 
+  + 1101.538 | Timer
+  + 1101.602 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  + 1101.730 | 
+  + 1101.794 | 
+  + 1101.842 | Brandon Burr's SurfOS
+  + 1101.922 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  + 1102.018 | SURF ≋#> crc32 /sd0p1/USERS/DOCUMENTS/BOARD.TXT /sd0p1/USERS/DOCUMENTS/COPY.TXT /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  + 1102.482 |     88425445       53  /sd0p1/USERS/DOCUMENTS/BOARD.TXT
+  + 1102.594 |     b0cfa011       16  /sd0p1/USERS/DOCUMENTS/COPY.TXT
+  + 1102.706 |     f60b6140       21  /sd0p1/USERS/DOCUMENTS/MAC.TXT
+  + 1102.802 | SURF ≋#> eject sd0
+  + 1102.978 |     /sd0p1 unmounted
+  + 1103.074 |     sd0: safe to remove
+  + 1103.154 | SURF ≋#> 

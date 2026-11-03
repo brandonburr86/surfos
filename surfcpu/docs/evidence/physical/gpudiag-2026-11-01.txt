@@ -1,0 +1,52 @@
+gpudiag on the board, 2026-11-01: the build of 1620026 (seed 2, sha256 082eb31a..., banner build 16200266), loaded
+over JTAG with the capture already open, so this is the first run after configuration (GPU.md section 14 steps 1-4).
+Checked with the tree's checker: gpuscenes_expect.h sha256 178d98ea... (as GPU.md gives it):
+  gpudiag_check: PASS (147 checks; 17 scenes, every FRAME_CRC the model's; the cube 10 seconds, 60 to 60 frames drawn
+  and 59 to 60 shown a second, 1 apart at most, none torn, missed or out of order)
+The first line is the baseline design, which ran until the load.
+
+# uart.py capture /dev/cu.usbserial-210319C129C61 at 115200 8N1, 2026-11-01 20:08:25 UTC; until 'cube +10 s:[^\\n]*\\n': matched at +18.109 s
++    0.724 | SurfCPU baseline arty_a7_100t 0x00000100 build 2d1f32b2 clean 1792165445 | up 111516 s | pix 25173611 Hz | sw 0101 btn 0000 rx 51
++    4.436 | 
++    4.436 | SurfGPU diagnostic 1.0.0 (build 16200266)
++    4.452 | board Arty A7-100T (0x100), SoC 0.4.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
++    4.452 | bitstream build 16200266 flags 0, features 17f
++    4.452 | identity                           ok (5 checks)
++    4.468 | VRAM window (March C-)             (300 KiB) ok (59 checks)
++    4.724 | video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
++    4.772 | gpu registers and errors           ok (14 checks)
++    4.852 | gpu2 commands                      ok (5 checks)
++    4.884 | scenes                             17, engine present
++    4.884 | scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
++    4.916 | scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (5 checks)
++    4.996 | scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
++    5.348 | scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
++    5.380 | scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
++    5.476 | scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
++    5.508 | scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
++    5.540 | scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
++    5.572 | scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
++    5.604 | scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
++    5.652 | scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
++    5.732 | scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
++    5.796 | scene 12: engine: demo             crc f501eb46 ok (3 checks)
++    5.892 | scene 13: engine: flat triangles, culling crc 9368fe97 ok (3 checks)
++    5.924 | scene 14: engine: Gouraud triangles, ramps crc f4bcafe0 ok (3 checks)
++    5.956 | scene 15: engine: depth, 320x240   crc bbe8cf82 ok (3 checks)
++    5.988 | scene 16: engine: page B drawn, FLIP crc e82b76e5 ok (3 checks)
++    6.068 | cube: 16 frames at full rate       (16 video frames, 16 shown, 1 apart at most) ok (6 checks)
++    6.420 | 
++    6.420 | GPUDIAG: PASS (147 checks)
++    6.420 | 
++    6.420 | UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostic again.
++    6.420 | cube: a line a second: frames drawn (FLIPs done), shown (frames on the screen), apart (the most video frames from a new frame of the cube to the next: 2 is one every second video frame, 29.97 a second), missed (frames not checked), torn (frames that were none of the cube's 128), out of order (frames that did not follow the one before)
++    7.492 | cube    1 s:  60 drawn,  59 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 60 drawn, 59 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++    8.500 | cube    2 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 120 drawn, 119 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++    9.492 | cube    3 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 180 drawn, 179 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   10.500 | cube    4 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 240 drawn, 239 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   11.492 | cube    5 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 300 drawn, 299 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   12.500 | cube    6 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 360 drawn, 359 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   13.492 | cube    7 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 420 drawn, 419 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   14.500 | cube    8 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 480 drawn, 479 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   15.492 | cube    9 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 540 drawn, 539 shown, 1 apart, 0 missed, 0 torn, 0 out of order)
++   16.500 | cube   10 s:  60 drawn,  60 shown, 1 apart, 0 missed, 0 torn, 0 out of order (in all 600 drawn, 599 shown, 1 apart, 0 missed, 0 torn, 0 out of order)

@@ -1,0 +1,29 @@
+The configuration flash written, 2026-11-03, with the owner's go-ahead given that day: DDR+GPU bfaac48
+(582570ab..., the manifests of the 11-01 recheck), with SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t. The factory
+image's backup (flash-backup-2026-10-17.txt) was checked first: sha256 064c2e4b..., unchanged. Then the owner put
+JP1 (MODE) on. The progress bars are left out.
+
+program: JTAG: IDCODE 0x03631093 = BOARD arty_a7_100t (xc7a100tcsg324-1), cable 210319C129C6
+program: its manifest is a recheck's: 2026-10-31T22:39:43Z, LVS by z3cmd, the tools of d543722b3351 in a clean tree (the build's own: fail)
+program: writing /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/surfcpu_arty_a7_ddr_gpu.bit to the configuration flash of arty_a7_100t
+empty
+write to flash
+Jtag frequency : requested 10.00MHz   -> real 10.00MHz  
+Open file DONE
+Parse file DONE
+Use: /opt/homebrew/Cellar/openfpgaloader/1.1.1/share/openFPGALoader/spiOverJtag_xc7a100tcsg324.bit.gz
+load program
+Done
+Shift IR 35
+ir: 1 isc_done 1 isc_ena 0 init 1 done 1
+jtag_chain_len: 1
+SOJ version: 2.000000
+JEDEC ID: 0x012018
+Detected: spansion S25FL128S 256 sectors size: 128Mb
+00000000 00000000 00000000 00
+start addr: 00000000, end_addr: 003b0000
+Done
+Done
+Verifying write (May take time)
+Done
+program: flash written and verified; set the MODE jumper (JP1) to boot from it

@@ -1,0 +1,1491 @@
+The kernel shell's checks on the board, 2026-11-03: boards/qemu_virt/test_os.py's checks of the kernel, on the Arty
+with its card, plus GPU.md 15.6 and the paste of CODE-AUDIT B88. DDR+GPU bfaac48 loaded from the flash, SurfOS
+6954a75c, the card with sd=rw. The script typed only what is listed and worked on the card only in
+/sd0p1/USERS/DOCUMENTS/BT, which it removed.
+
+Run 1: 65 of 91 checks passed. The 26 failures were the script's, not the board's: 25 took a gfx drawing
+command's echoed tail and the prompt for its output (each picture's CRC, the real check, passed), and one gave the
+mount after umount 60 s when it took 60.04 s (the card stays marked as not cleanly unmounted, so the mount counts the
+free clusters). Run 2 repeated those two parts with the script corrected: 15 of 15.
+
+== run 1: results
+ok   identity  bootinfo: SurfBoot 1.1.0, the ROM of bitstream bfaac489
+ok   identity  bootinfo: Arty A7-100T, SoC 0.4.0, map 2
+ok   identity  bootinfo: 256 MB of DDR3L, calibrated
+ok   identity  sysinfo: bitstream bfaac489, features 0x1ff (GPU bit set)
+ok   identity  the card's CMDLINE.TXT reached the kernel: 'sd=rw'
+ok   identity  help: the kernel shell, the portable commands and the Arty's, no PCI
+ok   identity  drivers: serial, gpio, ps2kbd, sdcard, gpu
+ok   identity  cpuinfo: RV32IM, misa 0x40001100
+ok   identity  date: answers
+ok   identity  leds: the switches and buttons read: LEDs 0x1, switches 0x5, buttons 0x0 (pressed since last look 0x0) SURF
+ok   timing    sleep 1000: 100 ticks (100 at 100 Hz)
+ok   timing    the tick advances: 144 ticks across the sleep
+ok   timing    uptime twice, 30 s apart
+ok   timing    the board's clock keeps time: 30.28 s by its ticks in 30.27 s of the Mac's
+ok   timing    irqstat: 6057 timer interrupts
+ok   kernel    ps: idle, init, heartbeat and a shell
+ok   kernel    tasks, run 1: two kernel tasks count, sleep, wake and end
+ok   kernel    tasks, run 2: two kernel tasks count, sleep, wake and end
+ok   kernel    tasks, run 3: two kernel tasks count, sleep, wake and end
+ok   kernel    selftest: SELFTEST PASS
+note kernel    selftest: 43 ok, 0 FAIL, 0 skip
+ok   kernel    heaptest: HEAPTEST PASS
+ok   kernel    memstat: heap check: ok
+ok   kernel    scrolltest: two tasks print at once and every row stays whole: SURF ≋#>
+ok   kernel    ansi: the console parses the escape sequences
+ok   kernel    dmesg: the kernel log reads back
+ok   storage   sdinfo: answers
+note storage   sdinfo: surf_spi at 0x10004000: card present, divider 0 (identification 31) | SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, physical layer 2.0+, block addressing, OCR 0xc0ff8000, CRC on | CSD version 2, 62333952 blocks of 512 bytes: 40 0e 00 32 5b 59 00 00 ed c8 7f 80 0a 40 40 c3 | s
+ok   storage   lsblk: the card and its partition
+ok   storage   df: the volume SURFOS
+ok   storage   mount: /sd0p1 is read-write
+ok   storage   fdisk sd0, reading only: the MBR partition table
+ok   storage   crc32 /BOOT/SURFOS.BIN on the card is the Mac's file (cf5f89f0, 497476 bytes)
+ok   storage   crc32 /BOOT/DDRDIAG.BIN on the card is the Mac's file (bf19109b, 14992 bytes)
+ok   storage   readbench sd0 4: SURF ≋#>
+ok   storage   mkdir /sd0p1/USERS/DOCUMENTS/BT
+ok   storage   cp: the kernel's 497476 bytes onto the card
+ok   storage   crc32 of the copy: cf5f89f0
+ok   storage   mv and stat: moved.bin has the size, copy.bin is gone
+ok   storage   write, append, cat
+ok   storage   cd and pwd
+ok   storage   fsbench 4 MB: device requests: 134 reads (15571 blocks), 74 writes (8202 blocks) | fsbench: ok | SURF ≋#>
+ok   storage   rm and rmdir: nothing left behind
+ok   storage   sync: the block cache written out
+ok   storage   umount /sd0p1
+FAIL storage   mount sd0p1 again: clean (umount set the clean bit)
+ok   faults    crashint: ebreak is reported and stepped over
+ok   faults    crashdiv: RISC-V division by zero gives -1 without a trap
+ok   faults    crashill: an illegal instruction kills the shell with a backtrace, init restarts it
+ok   faults    crashnull: a store to address 0 kills the shell with a backtrace, init restarts it
+ok   faults    crashmis: a misaligned word load kills the shell with a backtrace, init restarts it
+ok   faults    the file system is still there after the faults
+ok   faults    memstat after the faults: heap check: ok
+ok   gpu       the boot log: SurfGPU GPU2 (0x32555047)
+ok   gpu       gfx: the GPU's state
+note gpu       gfx: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000 | engine idle, STATUS 0x0, FIFO 64 words, 64 free | display: mode 1, text | GFX_BASE 0, GFX_STRIDE 640, GFX_SCALE 1 (640x480) | palette: rgb332 (as the configuration leaves it) | target: VRAM 0, stride 640, 640x480 | clip: (0, 0)-(640, 480) | depth buffer: none | sent: 6 words, 1 fences; FENCE 1 | interrupts: 1 (intc source 5, IE.FENCE)
+FAIL gpu       gfx mode gfx 1 said: display: mode 2, graphics, 640x480
+    the target is that picture: 640x480 at VRAM 0, stride 640
+   
+FAIL gpu       gfx pal rgb332 said: palette: rgb332 (as the configuration leaves it)
+SURF ≋#>
+FAIL gpu       gfx clear 0x25 said: SURF ≋#>
+FAIL gpu       gfx fill 16 16 200 120 0xe0 said: SURF ≋#>
+FAIL gpu       gfx rect 8 8 216 136 0xff said: SURF ≋#>
+FAIL gpu       gfx line 0 479 639 0 0x1c said: SURF ≋#>
+FAIL gpu       gfx line 0 0 639 479 0xfc said: SURF ≋#>
+FAIL gpu       gfx copy 16 16 400 300 200 120 said: SURF ≋#>
+FAIL gpu       gfx copy 0 0 240 160 64 64 0x25 said: SURF ≋#>
+FAIL gpu       gfx text 24 200 0xff - Hello from SurfOS on SurfGPU said: on SurfGPU
+SURF ≋#>
+FAIL gpu       gfx text 24 220 0x03 0xfc opaque text in the console font said: the console font
+SURF ≋#>
+FAIL gpu       gfx put 639 479 0x92 said: SURF ≋#>
+ok   gpu       GPU1's picture of GPU.md 15.6 step 4: gfx crc: frame 41839, crc 039d507c (a frame begun after the last chang (039d507c is the document's own)
+ok   gpu       gfx bench: gfx bench on the target (640x480 at VRAM 0), first word to fence: | fill 8 x 640x480: 2457600 pixels in 25.895 ms, 94.9 million/s | copy 8 x 320x480: 1228800 pixels in 25.911 ms, 47.4 million/s | line 256 lines: 68524 pi
+ok   gpu       gfx demo 10: SURF ≋#>
+note gpu       after the bench and the demo: gfx crc: frame 42590, crc a2eb2c50 (a frame begun after the last chang
+FAIL gpu       gfx mode gfx 2 said: display: mode 2, graphics, 320x240 doubled
+    the target is that picture: 320x240 at VRAM 0, stride
+FAIL gpu       gfx pal ramps said: palette: ramps (8 hues of 32 shades)
+SURF ≋#>
+FAIL gpu       gfx zbuf 153600 640 said: depth buffer: VRAM 153600, stride 640, for the target's 320x240
+SURF ≋#>
+FAIL gpu       gfx zclear said: SURF ≋#>
+FAIL gpu       gfx clear 0 said: SURF ≋#>
+FAIL gpu       gfx tri 8 8 120 16 40 100 0x3f said: SURF ≋#>
+FAIL gpu       gfx tri cullcw 200 20 300 20 250 60 0xff said: SURF ≋#>
+FAIL gpu       gfx tri cullccw 200 20 300 20 250 60 0x7f said: f
+SURF ≋#>
+FAIL gpu       gfx tri 20 140 60 140 60 180 0x5f said: SURF ≋#>
+FAIL gpu       gfx tri 20 140 60 180 20 180 0x9f said: SURF ≋#>
+FAIL gpu       gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28 said: 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28
+SURF ≋#>
+FAIL gpu       gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50 said: 0x40 310 220 30000 0x5f 250 60 30000 0x50
+SURF ≋#>
+FAIL gpu       gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0 said: 0xdf 70 238.5 0 0xd0
+SURF ≋#>
+ok   gpu       GPU2's picture of GPU.md 15.6 step 7: gfx crc: frame 42779, crc 43e2d407 (a frame begun after the last chang (43e2d407 is the document's own)
+ok   gpu       gfx cube 10: 10 seconds, drawn 59/60/61, none missed, all whole, in order: second; display back as it was gfx cube: 607 shown, 0 missed: all whole, in order SURF ≋#>
+ok   gpu       the picture comes back after the cube: gfx crc: frame 43460, crc 43e2d407 (a frame begun after the last chang
+ok   gpu       gfx mode overlay
+ok   gpu       gfx mode text
+ok   gpu       gfx zbuf off
+ok   gpu       gfx reset
+note paste     10,000 x DEL sent in 0.00 s
+ok   paste     the prompt comes back after the paste
+ok   paste     the serial line lives after 10,000 bytes at line speed (B88)
+ok   paste     no source switched off in the log
+note paste     +IRQ: source 0 stays pending after 32 rounds: it rests until each tick
+note paste     irqstat: IRQ count | 0 2111 | 1 1 | 5 599 | timer: 66916 | spurious: 0 | rested until a tick: 1 | exception 2 (illegal instruction): 1 | exception 3 (breakpoint): 1
+suite: 65 of 91 checks passed
+
+== run 2: results
+ok   gpu       the boot log: SurfGPU GPU2 (0x32555047)
+ok   gpu       gfx: the GPU's state
+note gpu       gfx: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000 | engine idle, STATUS 0x0, FIFO 64 words, 64 free | display: mode 1, text | GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled) | palette: ramps (8 hues of 32 shades) | target: VRAM 0, stride 640, 640x480 | clip: (0, 0)-(640, 480) | depth buffer: none | sent: 245401 words, 1201 fences; FENCE 1201 | interrupts: 599 (intc source 5, I
+ok   gpu       GPU1's picture of GPU.md 15.6 step 4: gfx crc: frame 47916, crc 039d507c (a frame begun after the last chang (039d507c is the document's own)
+ok   gpu       gfx bench: gfx bench on the target (640x480 at VRAM 0), first word to fence: | fill 8 x 640x480: 2457600 pixels in 25.895 ms, 94.9 million/s | copy 8 x 320x480: 1228800 pixels in 25.926 ms, 47.3 million/s | line 256 lines: 68524 pi
+ok   gpu       gfx demo 10: SURF ≋#>
+note gpu       after the bench and the demo: gfx crc: frame 48666, crc a2eb2c50 (a frame begun after the last chang
+ok   gpu       GPU2's picture of GPU.md 15.6 step 7: gfx crc: frame 48853, crc 43e2d407 (a frame begun after the last chang (43e2d407 is the document's own)
+ok   gpu       gfx cube 10: 10 seconds, drawn 59/60/61, none missed, all whole, in order: second; display back as it was gfx cube: 607 shown, 0 missed: all whole, in order SURF ≋#>
+ok   gpu       the picture comes back after the cube: gfx crc: frame 49534, crc 43e2d407 (a frame begun after the last chang
+ok   gpu       gfx mode overlay
+ok   gpu       gfx mode text
+ok   gpu       gfx zbuf off
+ok   gpu       gfx reset
+ok   remount   umount /sd0p1
+ok   remount   mount sd0p1 again: read-write, in 60.5 s
+note remount   the volume is still marked as not cleanly unmounted (only a check on another computer clears it), so the mount counted the free clusters
+ok   remount   m8's files are there after the remount
+suite: 15 of 15 checks passed
+
+== run 1: transcript
++    0.528 | 
++    0.576 | SURF ≋#> cd /
++    0.672 | SURF ≋#> bootinfo
++    0.784 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
++    0.880 |   boot information: SurfBoot 1.1.0 (bfaac489), version 1, CRC 0xee0e12bd ok
++    0.976 |   board id 0x0100 (Arty A7-100T), SoC 0.4.0, memory map 2, sys clock 25000000 Hz, timebase 1000000 Hz
++    1.153 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
++    1.248 |   image 0x80000000 + 1366512 bytes; boot device SD, FAT32 at LBA 8192
++    1.344 |   command line: 'sd=rw'
++    1.408 |   sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489, features 0x1ff
++    1.584 |   DDR status 0x15, 256 MB; pixel clock 25173611 Hz
++    1.680 |   screen: surf_video showing text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 9505 cells written, 74 hardware scrolls
++    1.872 | SURF ≋#>
++    1.872 |  help
++    1.952 | 
++    2.016 |     SurfOS kernel shell 1.0
++    2.096 |     -------------------------------
++    2.160 |     help      [command]      this menu, or one command in detail
++    2.256 |     clear                    clear the console
++    2.336 |     echo      words...       print the arguments
++    2.432 |     ps                       list tasks
++    2.512 |     kill      <pid>          kill a task
++    2.592 |     sleep     [-u] [ms]      sleep this shell for a while
++    2.672 |     tasks                    two kernel tasks that count, sleep and wake, then end
++    2.832 |     scrolltest [lines]        two kernel tasks print lines at once; then every row must be whole
++    3.008 |     tick                     print the tick count
++    3.088 |     uptime                   time since boot
++    3.184 |     date                     the time of day (real-time clock, or the build time)
++    3.344 |     memstat                  memory statistics
++    3.424 |     heaptest                 random allocations with patterns, then verify the heap
++    3.584 |     selftest                 run the kernel self tests
++    3.664 |     dmesg                    kernel log
++    3.744 |     irqstat                  interrupt and exception counts
++    3.840 |     bootinfo                 what SurfBoot passed, and the board
++    3.936 |     cpuinfo                  the hart: ISA, ID registers, counters
++    4.032 |     drivers                  driver status, console, timer and interrupts
++    4.128 |     rawkeys                  raw mode: show the bytes keys send (q ends)
++    4.224 |     ansi                     draw a test pattern with escape sequences
++    4.320 |     lsblk     [-s]           disks, partitions, ramdisks (-s: blocks moved)
++    4.432 | --More-- (Space: next page, Enter: next line, q: skip the rest)    fdisk     <disk> [cmd]   partition tables: new mbr|gpt, add, delete, type
++    4.560 |     mount     [-r] [dev [path]] list mounts, or mount a block device (-r: read-only)
++    4.720 |     umount    <path|dev>     unmount
++    4.800 |     eject     <disk>         unmount all of a disk and flush it: safe to pull out
++    4.960 |     df                       size, use and free space of mounted volumes
++    5.056 |     mkfs      [-t fat16|fat32] <dev> [label] make a FAT file system (asks first)
++    5.216 |     ls        [path]         list a directory
++    5.296 |     cat       <file>...      print files
++    5.376 |     cd        [dir]          change the current directory
++    5.472 |     pwd                      print the current directory
++    5.568 |     stat      <path>         size, time and location of a file
++    5.648 |     cp        <src> <dst>    copy a file
++    5.728 |     mv        <from> <to>    rename or move a file or directory
++    5.824 |     write     <file> <text>... create a file with one line of text
++    5.920 |     append    <file> <text>... add a line of text to the end of a file
++    6.016 |     mkdir     <dir>          create a directory
++    6.112 |     rm        <file>...      delete files
++    6.192 |     rmdir     <dir>          delete an empty directory
++    6.272 |     sync                     write cached blocks to the disks
++    6.368 |     fsbench   <dir> [MB]     time writing and reading a file
++    6.464 |     crc32     <file>...      CRC-32 (as zlib) and size of files
++    6.560 |     hexdump   <dev> [blk] [n] dump blocks of a block device
++    6.640 |     readbench <dev> [MB]     read speed of a block device (reads only)
++    6.736 |     crashdiv                 divide by zero in this shell (RISC-V: no trap)
++    6.848 |     crashill                 an illegal instruction in this shell
++    6.944 |     crashmis                 a misaligned word load in this shell
++    7.040 | --More-- (Space: next page, Enter: next line, q: skip the rest)    crashnull                write through a NULL pointer
++    7.152 |     crashfs                  a NULL pointer inside a file system: the system stops
++    7.312 |     crashlock                a NULL pointer holding a lock: the system stops
++    7.408 |     crashint                 a breakpoint (ebreak): reported and stepped over
++    7.504 |     reboot                   reboot the machine
++    7.600 |     ---- arty_a7 ----
++    7.664 |     leds      [0-15]         the LEDs, switches and buttons (set LD4..LD7)
++    7.760 |     kbdinfo                  the PS/2 keyboard: state and error counters
++    7.872 |     sdinfo                   the microSD card: type, size, registers, errors
++    7.968 |     sdmode    ro|rw          whether the card may be written (while unmounted)
++    8.064 |     gfx       [what ...]     SurfGPU: draw, modes, crc, bench, demo (gfx help)
++    8.176 |     -------------------------------
++    8.240 |     (C)2004-2026 Brandon Burr.
++    8.320 | 
++    8.384 | SURF ≋#> 
++    8.384 | drivers
++    8.464 |     driver    status
++    8.544 |     serial    ok
++    8.608 |     gpio      ok
++    8.672 |     ps2kbd    ok
++    8.736 |     sdcard    ok
++    8.800 |     gpu       ok
++    8.880 |     board     arty_a7 (SurfCPU on the Arty A7)
++    8.960 |     console   surf_video showing text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 17782 cells written, 158 hardware scrolls
++    9.152 |     serial    surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++    9.328 |     timer     machine timer, 1000000 Hz timebase, 100 Hz tick, 0 ticks counted late
++    9.488 |     irq       surf_intc at 0x10002000, 6 level sources, enabled 0x23, pending 0x00
++    9.648 |     keyboard  PS/2 on surf_ps2 (set 2 translated to set 1), 0 keys, no keyboard has answered yet
++    9.824 |     sdcard    sd0, 29 GB, read-write, 68 reads, 2 writes, 0 CRC retries, 0 timeouts, 0 errors
++    9.984 |     gpu       SurfGPU GPU2, 300 KiB VRAM; 1 fences, 0 errors
++   10.080 | SURF ≋#> 
++   10.080 | cpuinfo
++   10.176 |     hart 0: rv32im (misa 0x40001100), mvendorid 0x0, marchid 0x0, mimpid 0x00000400
++   10.352 |     kernel built for rv32im_zicsr_zifencei, ilp32; machine mode only, no MMU, no PMP used
++   10.512 |     mstatus 0x00001888 (at boot 0x00001800), mie 0x00000880, mip 0x00000000, mtvec 0x80000084
++   10.688 |     cycles 2277242294, instructions retired 153274495
++   10.768 | SURF ≋#> 
++   10.768 | date
++   10.864 |     2026-11-01 20:08:53 (no clock on this board: kernel build time + uptime, UTC)
++   11.024 | SURF ≋#> 
++   11.024 | leds
++   11.120 |     LEDs 0x1, switches 0x5, buttons 0x0 (pressed since last look 0x0)
++   11.216 | SURF ≋#> 
++   11.216 | tick
++   11.312 | 
++   11.376 |     Ticks: 2805
++   11.440 | 
++   11.488 | SURF ≋#> sleep 1000
++   12.592 |     slept 1000 ms (100 ticks)
++   12.672 | SURF ≋#> 
++   12.672 | tick
++   12.752 | 
++   12.816 |     Ticks: 2949
++   12.880 | 
++   12.928 | SURF ≋#> 
++   12.928 | uptime
++   13.024 |     up 29.76 s (2976 ticks at 100 Hz), 9 tasks, 1 timers pending
++   13.120 |     mtime 94032164 at 1000000 Hz; heartbeat 56
++   13.216 | SURF ≋#> uptime
++   43.311 |     up 60.04 s (6004 ticks at 100 Hz), 9 tasks, 1 timers pending
++   43.391 |     mtime 124304409 at 1000000 Hz; heartbeat 117
++   43.487 | SURF ≋#>
++   43.487 |  irqstat
++   43.583 |     IRQ  count
++   43.647 |       0  109
++   43.711 |       1  1
++   43.775 |       5  1
++   43.839 |     timer: 6057
++   43.903 |     spurious: 0
++   43.968 |     exception 11 (environment call from M-mode): 461
++   44.063 | SURF ≋#> 
++   44.063 | ps
++   44.143 | 
++   44.191 | SurfOS Task List
++   44.271 | --------------------------
++   44.335 |   PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME
++   44.431 |     0  ready     LOW           4442       341      -1  Kernel Idle Task
++   44.527 |     1  blocked   HIGH             4         2      -1  init
++   44.623 |     2  blocked   HIGH             0         1       1  uvmreap
++   44.719 |     3  sleeping  LOW              0       119       1  heartbeat
++   44.815 |     4  ready     LOW              0       281       1  sdwatch
++   44.895 |     5  running   HIGH          1660       124       1  Shell 0
++   44.991 |     6  blocked   HIGH             4        10       1  Shell 1
++   45.087 |     7  blocked   HIGH             3        10       1  Shell 2
++   45.183 |     8  blocked   HIGH             3         8       1  Shell 3
++   45.279 | 
++   45.327 | 9 tasks
++   45.391 | SURF ≋#> 
++   45.391 | tasks
++   45.519 |     started task A (pid 9) and task B (pid 10)
++   45.599 |     task B: round 1 of 3, tick 6233, sleeping 170 ms
++   45.679 |     task A: round 1 of 4, tick 6226, sleeping 100 ms
++   45.855 |     task B: round 2 of 3, tick 6259, sleeping 170 ms
++   45.935 |     task A: round 2 of 4, tick 6261, sleeping 100 ms
++   46.095 |     task B: round 3 of 3, tick 6284, sleeping 170 ms
++   46.191 |     task A: round 3 of 4, tick 6287, sleeping 100 ms
++   46.367 |     task A: round 4 of 4, tick 6311, sleeping 100 ms
++   46.575 |     task A ran 4 rounds, task B 3, in 109 ticks; both ended (status 0, 0)
++   46.671 | SURF ≋#> 
++   46.671 | tasks
++   46.783 |     started task A (pid 11) and task B (pid 12)
++   46.879 |     task A: round 1 of 4, tick 6354, sleeping 100 ms
++   46.959 |     task B: round 1 of 3, tick 6358, sleeping 170 ms
++   47.055 |     task A: round 2 of 4, tick 6380, sleeping 100 ms
++   47.215 |     task B: round 2 of 3, tick 6395, sleeping 170 ms
++   47.295 |     task A: round 3 of 4, tick 6398, sleeping 100 ms
++   47.455 |     task B: round 3 of 3, tick 6420, sleeping 170 ms
++   47.551 |     task A: round 4 of 4, tick 6423, sleeping 100 ms
++   47.759 |     task A ran 4 rounds, task B 3, in 99 ticks; both ended (status 0, 0)
++   47.855 | SURF ≋#> 
++   47.855 | tasks
++   47.967 |     started task A (pid 13) and task B (pid 14)
++   48.063 |     task B: round 1 of 3, tick 6479, sleeping 170 ms
++   48.143 |     task A: round 1 of 4, tick 6476, sleeping 100 ms
++   48.319 |     task B: round 2 of 3, tick 6505, sleeping 170 ms
++   48.399 |     task A: round 2 of 4, tick 6508, sleeping 100 ms
++   48.559 |     task B: round 3 of 3, tick 6530, sleeping 170 ms
++   48.655 |     task A: round 3 of 4, tick 6533, sleeping 100 ms
++   48.831 |     task A: round 4 of 4, tick 6557, sleeping 100 ms
++   49.039 |     task A ran 4 rounds, task B 3, in 108 ticks; both ended (status 0, 0)
++   49.135 | SURF ≋#> 
++   49.135 | selftest
++   49.247 | 
++   49.295 | SurfOS self test (riscv32, arty_a7)
++   49.375 | ----------------
++  111.773 | heaptest: 10041 allocs, 10041 frees, 121 live at peak, used 163856 -> 163856 bytes, 2 free blocks: HEAPTEST PASS
++  111.933 |   ok   heap
++  111.997 |   ok   ilp32: int, long and pointers are 32 bits, long long 64
++  112.093 |   ok   long long is 8-byte aligned in a struct (RV32, not i386's 4)
++  112.173 |   ok   char is signed (-fsigned-char, as the shared code expects)
++  112.269 |   ok   the boot ABI's structures: 256 and 64 bytes
++  112.349 |   ok   the trap frame matches traps.S and keeps the stack aligned
++  112.813 |   ok   every register kept across 37 timer interrupts (200000 rounds)
++  112.973 |   ok   every register kept across 300 ECALLs (yield)
++  113.293 |   ok   two tasks, spinning and yielding, keep their own registers (1 and 3 rounds, 10 and 11 switches)
++  113.453 |   ok   the task's stack is 16-byte aligned, in nested calls too
++  113.533 |   ok   sp is inside the task's own stack
++  113.613 |   ok   gp is the kernel's global pointer, tp is zero
++  113.725 |   ok   in the timer interrupt: the stack 16-byte aligned, gp the kernel's
++  113.821 |   ok   the stack's canary is intact
++  113.901 |   ok   64-bit divide and remainder (libgcc)
++  113.981 |   ok   32x32 to 64-bit multiply (mulhu)
++  114.061 |   ok   the formatter's 64-bit numbers
++  114.125 |   ok   snprintf widths and flags
++  114.205 |   ok   strcmp, strtol, atoi
++  124.316 |   ok   memcpy, memmove (both overlaps) and memset at every alignment and length up to 70 (word moves)
++  124.492 |   ok   CRC-32 test vectors of BOOT-ABI.md section 3
++  124.669 |   ok   sleep_ms(100) takes 10-15 ticks (late ticks on a busy host count at once)
++  124.812 |   ok   mtime moved as much as the ticks did
++  124.893 |   ok   tick differences survive the 32-bit wrap
++  125.165 |   ok   periodic 10 ms timer fires about 20 times in 205 ms (fewer when ticks come late)
++  125.373 |   ok   cancelled timer stays quiet
++  125.773 |   ok   32 kthreads created
++  126.204 |   ok   all 32 collected by task_wait, task count back
++  126.300 |   ok   exit code 42 reaches task_wait
++  126.572 |   ok   two kernel tasks sleep and wake 5 times each
++  126.652 |   ok   the heartbeat task keeps waking
++  128.413 |   ok   two tasks under a mutex count to exactly 4000
++  128.524 |         (the waiter had the mutex within 500 ms of the letting go)
++  128.620 |   ok   a mutex's waiter woken another way just before the letting go takes the free mutex (no mutex left free with its waiter asleep in line)
++  128.908 |   ok   500 items through an 8-slot ring arrive in order
++  129.036 |   ok   event_wait_timeout(50 ms) times out on time
++  129.148 |   ok   event set by another task wakes the waiter
++  129.596 |   ok   write 10 KB to selftest.bin on the FAT volume
++  129.852 |   ok   read it back identically
++  130.380 |         (its file counted for the kill: yes; ended 70 ms after it closed it, its clean-up done)
++  130.540 |   ok   B73: a kernel thread holding a file of the volume, killed while it waits for another lock, is killed once it has closed the file
++  130.716 |   ok   B76: and the kill does not come in its clean-up after the close: it ends by itself
++  131.020 |         (it closed the file 0 ms after its kill: its clean-up done, status 0)
++  131.100 |   ok   B80: and one that lets go of the file before the first look after its kill finishes its clean-up and ends by itself
++  131.372 |   ok   unlink removes it
++  131.452 |   ok   kernel log has the boot messages
++  131.535 | SELFTEST PASS (all checks passed)
++  131.596 | 
++  131.660 | SURF ≋#> 
++  131.660 | heaptest
++  196.730 | heaptest: 10045 allocs, 10045 frees, 117 live at peak, used 163856 -> 163856 bytes, 2 free blocks: HEAPTEST PASS
++  196.906 | SURF ≋#> 
++  196.906 | memstat
++  197.018 | 
++  197.066 | SurfOS Memory Statistics
++  197.146 | --------------------------
++  197.211 | Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
++  197.387 | Kernel: 0x80000000-0x8014d9ef (BSS 0x80079710-0x8014d9ef)
++  197.483 | Memstart: 0x8014d9f0  Memend: 0x90000000
++  197.565 | 
++  197.610 | kernel heap: 0x8024e000-0x802fe000 (704 KB grown in 11 steps, room to 0x8f000000)
++  197.770 |   used: 162320 bytes in 31 blocks   free: 558048 bytes in 2 blocks
++  197.882 | dma heap: 0x8014e000-0x8014e000 (0 KB grown in 0 steps, room to 0x8024e000)
++  197.978 |   used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
++  198.058 | heap check: ok
++  198.122 | 
++  198.186 | SURF ≋#> 
++  198.186 | scrolltest 200
++  198.330 | scroll A 001 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.410 | scroll A 002 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.490 | scroll A 003 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.586 | scroll A 004 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.666 | scroll A 005 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.746 | scroll A 006 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.826 | scroll A 007 abcdefghijklmnopqrstuvwxyz0123456789 end
++  198.906 | scroll A 008 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.002 | scroll A 009 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.082 | scroll A 010 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.162 | scroll A 011 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.242 | scroll A 012 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.322 | scroll A 013 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.418 | scroll A 014 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.499 | scroll A 015 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.578 | scroll A 016 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.658 | scroll A 017 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.738 | scroll A 018 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.834 | scroll A 019 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.914 | scroll B 001 abcdefghijklmnopqrstuvwxyz0123456789 end
++  199.994 | scroll B 002 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.074 | scroll B 003 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.154 | scroll B 004 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.250 | scroll B 005 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.332 | scroll B 006 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.410 | scroll B 007 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.490 | scroll B 008 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.570 | scroll B 009 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.666 | scroll B 010 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.746 | scroll B 011 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.826 | scroll B 012 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.906 | scroll B 013 abcdefghijklmnopqrstuvwxyz0123456789 end
++  200.986 | scroll B 014 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.082 | scroll B 015 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.162 | scroll B 016 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.242 | scroll B 017 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.322 | scroll B 018 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.402 | scroll B 019 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.499 | scroll B 020 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.578 | scroll B 021 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.658 | scroll B 022 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.738 | scroll A 020 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.818 | scroll A 021 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.914 | scroll A 022 abcdefghijklmnopqrstuvwxyz0123456789 end
++  201.994 | scroll A 023 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.074 | scroll A 024 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.154 | scroll A 025 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.234 | scroll A 026 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.330 | scroll A 027 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.410 | scroll A 028 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.490 | scroll A 029 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.570 | scroll A 030 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.650 | scroll A 031 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.746 | scroll A 032 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.826 | scroll A 033 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.906 | scroll A 034 abcdefghijklmnopqrstuvwxyz0123456789 end
++  202.986 | scroll A 035 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.066 | scroll A 036 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.162 | scroll A 037 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.242 | scroll A 038 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.322 | scroll A 039 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.402 | scroll A 040 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.499 | scroll A 041 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.578 | scroll A 042 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.658 | scroll A 043 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.738 | scroll A 044 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.818 | scroll A 045 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.916 | scroll A 046 abcdefghijklmnopqrstuvwxyz0123456789 end
++  203.994 | scroll A 047 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.074 | scroll A 048 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.154 | scroll A 049 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.234 | scroll A 050 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.332 | scroll A 051 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.410 | scroll A 052 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.490 | scroll A 053 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.570 | scroll A 054 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.650 | scroll A 055 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.746 | scroll A 056 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.826 | scroll A 057 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.906 | scroll A 058 abcdefghijklmnopqrstuvwxyz0123456789 end
++  204.986 | scroll A 059 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.066 | scroll A 060 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.162 | scroll A 061 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.242 | scroll A 062 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.322 | scroll A 063 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.402 | scroll A 064 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.482 | scroll A 065 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.578 | scroll A 066 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.658 | scroll A 067 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.738 | scroll A 068 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.818 | scroll A 069 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.899 | scroll A 070 abcdefghijklmnopqrstuvwxyz0123456789 end
++  205.994 | scroll A 071 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.074 | scroll A 072 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.154 | scroll A 073 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.234 | scroll A 074 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.331 | scroll A 075 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.410 | scroll A 076 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.490 | scroll A 077 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.570 | scroll A 078 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.650 | scroll A 079 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.746 | scroll A 080 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.826 | scroll A 081 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.906 | scroll A 082 abcdefghijklmnopqrstuvwxyz0123456789 end
++  206.986 | scroll A 083 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.066 | scroll A 084 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.162 | scroll A 085 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.242 | scroll A 086 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.322 | scroll A 087 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.402 | scroll A 088 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.482 | scroll A 089 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.578 | scroll A 090 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.658 | scroll A 091 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.738 | scroll A 092 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.818 | scroll A 093 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.899 | scroll A 094 abcdefghijklmnopqrstuvwxyz0123456789 end
++  207.994 | scroll A 095 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.074 | scroll A 096 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.154 | scroll A 097 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.234 | scroll A 098 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.330 | scroll A 099 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.410 | scroll A 100 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.490 | scroll A 101 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.570 | scroll B 023 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.650 | scroll B 024 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.746 | scroll B 025 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.826 | scroll B 026 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.906 | scroll B 027 abcdefghijklmnopqrstuvwxyz0123456789 end
++  208.986 | scroll B 028 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.066 | scroll B 029 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.162 | scroll B 030 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.242 | scroll B 031 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.322 | scroll B 032 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.402 | scroll B 033 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.482 | scroll B 034 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.578 | scroll B 035 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.658 | scroll B 036 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.738 | scroll B 037 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.818 | scroll B 038 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.899 | scroll B 039 abcdefghijklmnopqrstuvwxyz0123456789 end
++  209.994 | scroll B 040 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.074 | scroll B 041 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.155 | scroll B 042 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.234 | scroll B 043 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.314 | scroll B 044 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.410 | scroll B 045 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.490 | scroll B 046 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.570 | scroll B 047 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.650 | scroll B 048 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.730 | scroll B 049 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.826 | scroll B 050 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.906 | scroll B 051 abcdefghijklmnopqrstuvwxyz0123456789 end
++  210.986 | scroll B 052 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.066 | scroll B 053 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.146 | scroll B 054 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.242 | scroll B 055 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.322 | scroll B 056 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.402 | scroll B 057 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.482 | scroll B 058 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.562 | scroll B 059 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.658 | scroll B 060 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.738 | scroll B 061 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.818 | scroll B 062 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.898 | scroll A 102 abcdefghijklmnopqrstuvwxyz0123456789 end
++  211.978 | scroll A 103 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.074 | scroll A 104 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.154 | scroll A 105 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.234 | scroll A 106 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.314 | scroll A 107 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.410 | scroll A 108 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.490 | scroll A 109 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.570 | scroll A 110 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.650 | scroll A 111 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.730 | scroll A 112 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.826 | scroll A 113 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.906 | scroll A 114 abcdefghijklmnopqrstuvwxyz0123456789 end
++  212.986 | scroll A 115 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.066 | scroll A 116 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.146 | scroll A 117 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.242 | scroll A 118 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.322 | scroll A 119 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.402 | scroll A 120 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.482 | scroll A 121 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.562 | scroll A 122 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.658 | scroll A 123 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.738 | scroll A 124 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.818 | scroll A 125 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.898 | scroll A 126 abcdefghijklmnopqrstuvwxyz0123456789 end
++  213.994 | scroll A 127 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.074 | scroll A 128 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.154 | scroll A 129 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.234 | scroll A 130 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.314 | scroll A 131 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.410 | scroll A 132 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.490 | scroll A 133 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.570 | scroll A 134 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.650 | scroll A 135 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.730 | scroll A 136 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.826 | scroll A 137 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.906 | scroll A 138 abcdefghijklmnopqrstuvwxyz0123456789 end
++  214.986 | scroll A 139 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.066 | scroll A 140 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.146 | scroll A 141 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.242 | scroll A 142 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.322 | scroll A 143 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.402 | scroll A 144 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.483 | scroll A 145 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.578 | scroll A 146 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.658 | scroll A 147 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.738 | scroll A 148 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.818 | scroll A 149 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.898 | scroll A 150 abcdefghijklmnopqrstuvwxyz0123456789 end
++  215.994 | scroll A 151 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.074 | scroll A 152 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.154 | scroll A 153 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.234 | scroll A 154 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.314 | scroll A 155 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.410 | scroll A 156 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.490 | scroll A 157 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.570 | scroll A 158 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.650 | scroll A 159 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.730 | scroll A 160 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.826 | scroll A 161 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.906 | scroll A 162 abcdefghijklmnopqrstuvwxyz0123456789 end
++  216.986 | scroll A 163 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.066 | scroll A 164 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.146 | scroll A 165 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.242 | scroll A 166 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.322 | scroll A 167 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.402 | scroll A 168 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.482 | scroll A 169 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.578 | scroll A 170 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.658 | scroll A 171 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.738 | scroll A 172 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.818 | scroll A 173 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.898 | scroll A 174 abcdefghijklmnopqrstuvwxyz0123456789 end
++  217.993 | scroll A 175 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.073 | scroll A 176 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.153 | scroll A 177 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.234 | scroll A 178 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.314 | scroll A 179 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.409 | scroll A 180 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.490 | scroll A 181 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.570 | scroll A 182 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.650 | scroll A 183 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.730 | scroll A 184 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.826 | scroll A 185 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.906 | scroll A 186 abcdefghijklmnopqrstuvwxyz0123456789 end
++  218.986 | scroll A 187 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.066 | scroll A 188 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.162 | scroll A 189 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.242 | scroll A 190 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.322 | scroll A 191 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.402 | scroll A 192 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.482 | scroll A 193 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.578 | scroll B 063 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.658 | scroll B 064 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.738 | scroll B 065 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.818 | scroll B 066 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.898 | scroll B 067 abcdefghijklmnopqrstuvwxyz0123456789 end
++  219.994 | scroll B 068 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.074 | scroll B 069 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.154 | scroll B 070 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.234 | scroll B 071 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.314 | scroll B 072 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.409 | scroll B 073 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.490 | scroll B 074 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.570 | scroll B 075 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.650 | scroll B 076 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.730 | scroll B 077 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.826 | scroll B 078 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.905 | scroll B 079 abcdefghijklmnopqrstuvwxyz0123456789 end
++  220.986 | scroll B 080 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.065 | scroll B 081 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.145 | scroll B 082 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.241 | scroll B 083 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.322 | scroll B 084 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.402 | scroll B 085 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.481 | scroll B 086 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.561 | scroll B 087 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.658 | scroll B 088 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.738 | scroll B 089 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.818 | scroll B 090 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.899 | scroll A 194 abcdefghijklmnopqrstuvwxyz0123456789 end
++  221.978 | scroll A 195 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.074 | scroll A 196 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.154 | scroll B 091 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.233 | scroll B 092 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.315 | scroll B 093 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.409 | scroll A 197 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.489 | scroll A 198 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.570 | scroll A 199 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.650 | scroll A 200 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.733 | scroll B 094 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.826 | scroll B 095 abcdefghijklmnopqrstuvwxyz0123456789 end
++  222.906 | scroll B 096 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.001 | scroll B 097 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.082 | scroll B 098 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.161 | scroll B 099 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.241 | scroll B 100 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.322 | scroll B 101 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.402 | scroll B 102 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.497 | scroll B 103 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.577 | scroll B 104 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.657 | scroll B 105 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.737 | scroll B 106 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.817 | scroll B 107 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.914 | scroll B 108 abcdefghijklmnopqrstuvwxyz0123456789 end
++  223.994 | scroll B 109 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.073 | scroll B 110 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.153 | scroll B 111 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.234 | scroll B 112 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.330 | scroll B 113 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.409 | scroll B 114 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.490 | scroll B 115 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.570 | scroll B 116 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.650 | scroll B 117 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.731 | scroll B 118 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.826 | scroll B 119 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.906 | scroll B 120 abcdefghijklmnopqrstuvwxyz0123456789 end
++  224.986 | scroll B 121 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.066 | scroll B 122 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.146 | scroll B 123 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.242 | scroll B 124 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.322 | scroll B 125 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.402 | scroll B 126 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.482 | scroll B 127 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.562 | scroll B 128 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.642 | scroll B 129 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.737 | scroll B 130 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.818 | scroll B 131 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.898 | scroll B 132 abcdefghijklmnopqrstuvwxyz0123456789 end
++  225.978 | scroll B 133 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.057 | scroll B 134 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.154 | scroll B 135 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.233 | scroll B 136 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.316 | scroll B 137 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.394 | scroll B 138 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.473 | scroll B 139 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.569 | scroll B 140 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.650 | scroll B 141 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.729 | scroll B 142 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.810 | scroll B 143 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.890 | scroll B 144 abcdefghijklmnopqrstuvwxyz0123456789 end
++  226.969 | scroll B 145 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.065 | scroll B 146 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.146 | scroll B 147 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.225 | scroll B 148 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.305 | scroll B 149 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.386 | scroll B 150 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.481 | scroll B 151 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.561 | scroll B 152 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.642 | scroll B 153 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.721 | scroll B 154 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.801 | scroll B 155 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.898 | scroll B 156 abcdefghijklmnopqrstuvwxyz0123456789 end
++  227.977 | scroll B 157 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.057 | scroll B 158 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.137 | scroll B 159 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.217 | scroll B 160 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.299 | scroll B 161 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.393 | scroll B 162 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.473 | scroll B 163 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.554 | scroll B 164 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.633 | scroll B 165 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.714 | scroll B 166 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.809 | scroll B 167 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.889 | scroll B 168 abcdefghijklmnopqrstuvwxyz0123456789 end
++  228.969 | scroll B 169 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.049 | scroll B 170 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.129 | scroll B 171 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.225 | scroll B 172 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.305 | scroll B 173 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.385 | scroll B 174 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.465 | scroll B 175 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.545 | scroll B 176 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.625 | scroll B 177 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.721 | scroll B 178 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.802 | scroll B 179 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.881 | scroll B 180 abcdefghijklmnopqrstuvwxyz0123456789 end
++  229.961 | scroll B 181 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.041 | scroll B 182 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.137 | scroll B 183 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.218 | scroll B 184 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.298 | scroll B 185 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.377 | scroll B 186 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.457 | scroll B 187 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.553 | scroll B 188 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.633 | scroll B 189 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.713 | scroll B 190 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.793 | scroll B 191 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.873 | scroll B 192 abcdefghijklmnopqrstuvwxyz0123456789 end
++  230.953 | scroll B 193 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.049 | scroll B 194 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.129 | scroll B 195 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.209 | scroll B 196 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.289 | scroll B 197 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.369 | scroll B 198 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.465 | scroll B 199 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.545 | scroll B 200 abcdefghijklmnopqrstuvwxyz0123456789 end
++  231.705 |     scrolltest: 2 tasks x 200 lines at once in 3340 ticks, the console scrolling: every row a whole line, each task's in order
++  231.881 | SCROLLTEST PASS
++  231.945 | SURF ≋#> 
++  231.945 | ansi
++  232.105 | ANSI-TEST top leftINVERSE normalYELLOW-ON-BLUEKEEP-ERASEDABCDEBUNKNOWN-IGNOREDZANSI-TEST done, 80x30
++  232.265 | SURF ≋#> 
++  232.265 | dmesg
++  232.297 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
++  232.329 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
++  232.393 | Booting SurfOS Kernel.....
++  232.409 | 
++  232.409 | 
++  232.409 | Interrupt Initialization
++  232.425 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
++  232.473 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
++  232.521 | *Interrupts Enabled
++  232.521 | 
++  232.521 | Delays: spin on mtime at 1000000 Hz (no calibration)
++  232.553 | 
++  232.553 | Serial Console
++  232.569 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++  232.681 | *receive interrupt, source 0
++  232.761 | *DONE
++  232.809 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
++  232.905 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
++  233.082 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
++  233.289 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
++  233.401 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++  233.497 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
++  233.593 | 
++  233.657 | Drivers: serial gpio ps2kbd sdcard gpu
++  233.737 | 
++  233.801 | --More-- (Space: next page, Enter: next line, q: skip the rest)File Systems
++  233.881 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  234.057 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  234.249 | +VFS: sd0p1 mounted on /sd0p1 (fat)
++  234.329 | *DONE
++  234.393 | 
++  234.441 | Timer
++  234.505 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
++  234.601 | SURF ≋#> 
++  234.601 | sdinfo
++  234.697 |     surf_spi at 0x10004000: card present, divider 0 (identification 31)
++  234.809 |     SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, physical layer 2.0+, block addressing, OCR 0xc0ff8000, CRC on
++  235.001 |     CSD version 2, 62333952 blocks of 512 bytes: 40 0e 00 32 5b 59 00 00 ed c8 7f 80 0a 40 40 c3
++  235.177 |     sd0, 29 GB, read-write, 71 reads, 11 writes, 0 CRC retries, 0 timeouts, 0 errors
++  235.337 | SURF ≋#> 
++  235.337 | lsblk
++  235.449 | NAME    SIZE BUS RM TYPE               MODEL/LABEL                      STATUS
++  235.545 | sd0      29G -    1 disk mbr           SD32G rev 8.5, manufacturer 0x03
++  235.641 |   sd0p1  29G -    1 part mbr FAT32 LBA                                  mounted
++  235.753 | SURF ≋#>
++  235.753 |  df
++  235.833 |     Device  Type       Size     Used    Avail  Use%  Mounted on    Label
++  235.929 |     sd0p1   fat32    29.7 GB   4.6 MB  29.7 GB    1%  /sd0p1        SURFOS
++  236.041 | SURF ≋#>
++  236.041 |  mount
++  236.121 |     none   on /            type rootfs (ro)
++  236.201 |     none   on /dev         type devfs
++  236.281 |     sd0p1  on /sd0p1       type fat
++  236.377 | SURF ≋#> 
++  236.377 | fdisk sd0
++  236.489 |     sd0: SD32G rev 8.5, manufacturer 0x03 'SD', s, 29G (62333952 blocks), unknown bus, removable
++  236.649 |     MBR partition table, disk signature 00000000
++  236.745 |       #  DEVICE       START       END  SIZE  TYPE
++  236.825 |       1  sd0p1         8192  62333951   29G  0c FAT32 LBA
++  236.921 |     free: blocks 2048-8191 (3M)
++  237.001 |     fdisk and mkfs will not change sd0:
++  237.081 |   it is not a USB drive (internal disks are never repartitioned or formatted)
++  237.193 | SURF ≋#> 
++  237.193 | crc32 /sd0p1/BOOT/SURFOS.BIN
++  246.841 |     cf5f89f0   497476  /sd0p1/BOOT/SURFOS.BIN
++  246.937 | SURF ≋#> 
++  246.937 | crc32 /sd0p1/BOOT/DDRDIAG.BIN
++  247.385 |     bf19109b    14992  /sd0p1/BOOT/DDRDIAG.BIN
++  247.465 | SURF ≋#> 
++  247.465 | readbench sd0 4
++  292.872 |     4096 KB from sd0 in 45290 ms: 90 KB/s
++  293.000 | SURF ≋#>
++  293.000 |  mkdir /sd0p1/USERS/DOCUMENTS/BT
++  293.928 | SURF ≋#> 
++  293.928 | cp /sd0p1/BOOT/SURFOS.BIN /sd0p1/USERS/DOCUMENTS/BT/copy.bin
++  307.911 |     497476 bytes copied
++  308.007 | SURF ≋#>
++  308.007 |  crc32 /sd0p1/USERS/DOCUMENTS/BT/copy.bin
++  317.623 |     cf5f89f0   497476  /sd0p1/USERS/DOCUMENTS/BT/copy.bin
++  317.719 | SURF ≋#> 
++  317.719 | mv /sd0p1/USERS/DOCUMENTS/BT/copy.bin /sd0p1/USERS/DOCUMENTS/BT/moved.bin
++  318.215 | SURF ≋#> stat /sd0p1/USERS/DOCUMENTS/BT/moved.bin
++  318.423 |     /sd0p1/USERS/DOCUMENTS/BT/moved.bin: file, 497476 bytes, modified 2026-11-01 20:13:48, inode 400387 on sd0p1 (fat)
++  318.615 | SURF ≋#> ls /sd0p1/USERS/DOCUMENTS/BT
++  318.791 |     -   497476  2026-11-01 20:13:48  moved.bin
++  318.871 |     1 entries, 497476 bytes
++  318.951 | SURF ≋#> 
++  318.951 | write /sd0p1/USERS/DOCUMENTS/BT/w.txt SurfOS wrote this on the Arty
++  319.383 | SURF ≋#> append /sd0p1/USERS/DOCUMENTS/BT/w.txt a second line
++  319.687 | SURF ≋#> cat /sd0p1/USERS/DOCUMENTS/BT/w.txt
++  319.879 | SurfOS wrote this on the Arty
++  319.959 | a second line
++  320.039 | SURF ≋#> 
++  320.039 | cd /sd0p1/USERS/DOCUMENTS/BT
++  320.201 | sd0p1 ▸ USERS ▸ DOCUMENTS ▸ BT ≋#> pwd
++  320.311 |     /sd0p1/USERS/DOCUMENTS/BT
++  320.391 | sd0p1 ▸ USERS ▸ DOCUMENTS ▸ BT ≋#> cd /
++  320.503 | SURF ≋#> 
++  320.503 | fsbench /sd0p1/USERS/DOCUMENTS/BT 4
++  538.770 |     write, 4 KB pieces:        4096 KB in 68870 ms      59 KB/s
++  538.866 |     read, 4 KB pieces:         4096 KB in 79710 ms      51 KB/s
++  538.963 |     read, 64 KB pieces:        4096 KB in 69160 ms      59 KB/s
++  539.058 |     device requests: 134 reads (15571 blocks), 74 writes (8202 blocks)
++  539.154 |     fsbench: ok
++  539.315 | SURF ≋#> 
++  539.315 | rm /sd0p1/USERS/DOCUMENTS/BT/moved.bin /sd0p1/USERS/DOCUMENTS/BT/w.txt
++  539.875 | SURF ≋#> rmdir /sd0p1/USERS/DOCUMENTS/BT
++  540.179 | SURF ≋#> ls /sd0p1/USERS/DOCUMENTS
++  540.339 |     -       21  2026-11-01 20:08:28  MAC.TXT
++  540.435 |     -     4096  2026-11-02 06:22:16  ._MAC.TXT
++  540.515 |     -       53  2026-11-01 20:08:28  BOARD.TXT
++  540.611 |     -       16  2026-11-01 20:08:28  COPY.TXT
++  540.691 |     4 entries, 4186 bytes
++  540.755 | SURF ≋#> 
++  540.755 | sync
++  540.915 |     synced; block cache: 15965 hits, 9352 misses, 9283 blocks written
++  541.012 | SURF ≋#> 
++  541.012 | umount /sd0p1
++  541.188 | +FAT32: sd0p1: it was not unmounted cleanly before this mount, and only a check clears that, the volume stays marked as not cleanly unmounted
++  541.444 | SURF ≋#> 
++  541.444 | mount sd0p1
++  541.588 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  601.628 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  601.820 |     sd0p1 on /sd0p1: fat32, label SURFOS, 29.7 GB, 29.7 GB free, read-write
++  601.916 | SURF ≋#> crashint
++  601.996 | 
++  602.045 | Unexpected trap: breakpoint at pc 0x800023a4 (task 'Shell 0'), ignored
++  602.157 |     ebreak returned
++  602.221 | SURF ≋#> 
++  602.221 | crashdiv
++  602.333 |     1 / 0 = -1: RISC-V division by zero does not trap (the result is -1)
++  602.429 | SURF ≋#> 
++  602.429 | crashill
++  602.541 | 
++  602.605 | Process ('Shell 0':5) killed by "illegal instruction (mcause 2, mtval 0xc0001073)" (pc 0x80002330)
++  602.765 | Backtrace:
++  602.829 |   [<0x80002330>] cmd_crashill+0x10
++  602.893 |   [<0x80005350>] shell_run_command+0xbc
++  602.973 |   [<0x80005808>] startShell+0x188
++  603.053 |   [<0x80005944>] shell+0x3c
++  603.117 |   [<0x8001c26c>] task_stublet+0x1c
++  603.200 | init: restarted the shell
++  603.276 | 
++  603.340 | 
++  603.389 | Brandon Burr's SurfOS
++  603.468 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
++  603.548 | SURF ≋#> 
++  603.548 | crashnull
++  603.660 | 
++  603.724 | Process ('Shell 0':61) killed by "store access fault (mcause 7, mtval 0x0)" (pc 0x8000235c)
++  603.868 | Backtrace:
++  603.932 |   [<0x8000235c>] cmd_crashnull+0x14
++  604.012 |   [<0x80005350>] shell_run_command+0xbc
++  604.092 |   [<0x80005808>] startShell+0x188
++  604.157 |   [<0x80005944>] shell+0x3c
++  604.236 |   [<0x8001c26c>] task_stublet+0x1c
++  604.318 | init: restarted the shell
++  604.396 | 
++  604.460 | 
++  604.508 | Brandon Burr's SurfOS
++  604.572 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
++  604.668 | SURF ≋#> 
++  604.668 | crashmis
++  604.780 | 
++  604.844 | Process ('Shell 0':62) killed by "load address misaligned (mcause 4, mtval 0x8026c47d)" (pc 0x800023e0)
++  605.005 | Backtrace:
++  605.068 |   [<0x800023e0>] cmd_crashmis+0x18
++  605.132 |   [<0x80005350>] shell_run_command+0xbc
++  605.212 |   [<0x80005808>] startShell+0x188
++  605.293 |   [<0x80005944>] shell+0x3c
++  605.356 |   [<0x8001c26c>] task_stublet+0x1c
++  605.437 | init: restarted the shell
++  605.516 | 
++  605.580 | 
++  605.629 | Brandon Burr's SurfOS
++  605.709 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
++  605.804 | SURF ≋#> 
++  605.804 | ls /sd0p1/USERS/DOCUMENTS
++  606.061 |     -       21  2026-11-01 20:08:28  MAC.TXT
++  606.156 |     -     4096  2026-11-02 06:22:16  ._MAC.TXT
++  606.236 |     -       53  2026-11-01 20:08:28  BOARD.TXT
++  606.332 |     -       16  2026-11-01 20:08:28  COPY.TXT
++  606.412 |     4 entries, 4186 bytes
++  606.476 | SURF ≋#> 
++  606.476 | memstat
++  606.572 | 
++  606.636 | SurfOS Memory Statistics
++  606.701 | --------------------------
++  606.780 | Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
++  606.957 | Kernel: 0x80000000-0x8014d9ef (BSS 0x80079710-0x8014d9ef)
++  607.036 | Memstart: 0x8014d9f0  Memend: 0x90000000
++  607.118 | 
++  607.181 | kernel heap: 0x8024e000-0x802fe000 (704 KB grown in 11 steps, room to 0x8f000000)
++  607.340 |   used: 162320 bytes in 31 blocks   free: 558032 bytes in 3 blocks
++  607.436 | dma heap: 0x8014e000-0x8014e000 (0 KB grown in 0 steps, room to 0x8024e000)
++  607.548 |   used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
++  607.628 | heap check: ok
++  607.692 | 
++  607.756 | SURF ≋#> 
++  607.756 | dmesg
++  607.852 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
++  607.948 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
++  608.140 | Booting SurfOS Kernel.....
++  608.205 | 
++  608.269 | 
++  608.316 | Interrupt Initialization
++  608.397 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
++  608.493 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
++  608.588 | *Interrupts Enabled
++  608.669 | 
++  608.716 | Delays: spin on mtime at 1000000 Hz (no calibration)
++  608.812 | 
++  608.860 | Serial Console
++  608.924 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++  609.101 | *receive interrupt, source 0
++  609.164 | *DONE
++  609.228 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
++  609.324 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
++  609.500 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
++  609.708 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
++  609.820 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++  609.916 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
++  610.012 | 
++  610.077 | Drivers: serial gpio ps2kbd sdcard gpu
++  610.156 | 
++  610.221 | --More-- (Space: next page, Enter: next line, q: skip the rest)File Systems
++  610.319 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  610.476 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  610.669 | +VFS: sd0p1 mounted on /sd0p1 (fat)
++  610.748 | *DONE
++  610.813 | 
++  610.876 | Timer
++  610.940 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
++  611.021 | +FAT32: sd0p1: it was not unmounted cleanly before this mount, and only a check clears that, the volume stays marked as not cleanly unmounted
++  611.229 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  611.404 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  611.596 | 
++  611.644 | Unexpected trap: breakpoint at pc 0x800023a4 (task 'Shell 0'), ignored
++  611.756 | Backtrace:
++  611.820 |   [<0x80002330>] cmd_crashill+0x10
++  611.900 |   [<0x80005350>] shell_run_command+0xbc
++  611.980 |   [<0x80005808>] startShell+0x188
++  612.060 |   [<0x80005944>] shell+0x3c
++  612.124 |   [<0x8001c26c>] task_stublet+0x1c
++  612.205 | F1: init: restarted the shell
++  612.284 | Backtrace:
++  612.348 |   [<0x8000235c>] cmd_crashnull+0x14
++  612.428 |   [<0x80005350>] shell_run_command+0xbc
++  612.508 |   [<0x80005808>] startShell+0x188
++  612.588 | --More-- (Space: next page, Enter: next line, q: skip the rest)  [<0x80005944>] shell+0x3c
++  612.685 |   [<0x8001c26c>] task_stublet+0x1c
++  612.764 | F1: init: restarted the shell
++  612.828 | Backtrace:
++  612.892 |   [<0x800023e0>] cmd_crashmis+0x18
++  612.973 |   [<0x80005350>] shell_run_command+0xbc
++  613.052 |   [<0x80005808>] startShell+0x188
++  613.132 |   [<0x80005944>] shell+0x3c
++  613.212 |   [<0x8001c26c>] task_stublet+0x1c
++  613.292 | F1: init: restarted the shell
++  613.372 | SURF ≋#> 
++  613.372 | gfx
++  613.468 |     SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++  613.564 |     engine idle, STATUS 0x0, FIFO 64 words, 64 free
++  613.645 |     display: mode 1, text
++  613.708 |     GFX_BASE 0, GFX_STRIDE 640, GFX_SCALE 1 (640x480)
++  613.804 |     palette: rgb332 (as the configuration leaves it)
++  613.885 |     target: VRAM 0, stride 640, 640x480
++  613.964 |     clip: (0, 0)-(640, 480)
++  614.044 |     depth buffer: none
++  614.109 |     sent: 6 words, 1 fences; FENCE 1
++  614.189 |     interrupts: 1 (intc source 5, IE.FENCE)
++  614.269 |     fences that asked for it: 1 (gfx cube's frames' do not)
++  614.365 |     fence waits that slept on it: 0, woken by it: 0
++  614.460 |     errors 0, timeouts 0, ABORTs 0
++  614.524 |     by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0
++  614.620 |     display changes 0, 0 without a blanking
++  614.700 |     frames: FRAME_COUNT 41615, FRAME_CRC e3be6a15 (that frame's)
++  614.796 | SURF ≋#>
++  614.796 |  gfx mode gfx 1
++  614.924 |     display: mode 2, graphics, 640x480
++  615.006 |     the target is that picture: 640x480 at VRAM 0, stride 640
++  615.085 |     the text console is hidden: gfx mode text or overlay shows it again
++  615.196 | SURF ≋#> 
++  615.196 | gfx pal rgb332
++  615.324 |     palette: rgb332 (as the configuration leaves it)
++  615.420 | SURF ≋#> 
++  615.420 | gfx clear 0x25
++  615.548 | SURF ≋#> 
++  615.548 | gfx fill 16 16 200 120 0xe0
++  615.692 | SURF ≋#> 
++  615.692 | gfx rect 8 8 216 136 0xff
++  615.853 | SURF ≋#> 
++  615.853 | gfx line 0 479 639 0 0x1c
++  615.996 | SURF ≋#>
++  615.996 |  gfx line 0 0 639 479 0xfc
++  616.141 | SURF ≋#> 
++  616.141 | gfx copy 16 16 400 300 200 120
++  616.300 | SURF ≋#> 
++  616.300 | gfx copy 0 0 240 160 64 64 0x25
++  616.460 | SURF ≋#> 
++  616.460 | gfx text 24 200 0xff - Hello from SurfOS on SurfGPU
++  616.684 | SURF ≋#> 
++  616.684 | gfx text 24 220 0x03 0xfc opaque text in the console font
++  616.924 | SURF ≋#> 
++  616.924 | gfx put 639 479 0x92
++  617.068 | SURF ≋#> 
++  617.068 | gfx crc
++  617.196 |     gfx crc: frame 41839, crc 039d507c (a frame begun after the last change)
++  617.292 | SURF ≋#> 
++  617.292 | gfx bench
++  617.404 |     gfx bench on the target (640x480 at VRAM 0), first word to fence:
++  617.532 |     fill  8 x 640x480: 2457600 pixels in 25.895 ms, 94.9 million/s
++  617.644 |     copy  8 x 320x480: 1228800 pixels in 25.911 ms, 47.4 million/s
++  617.788 |     line  256 lines: 68524 pixels in 35.334 ms, 1.9 million/s
++  618.380 |     text  64 x 32 cells: 262144 pixels in 498.533 ms, 0.5 million/s
++  618.476 | SURF ≋#> 
++  618.476 | gfx mode gfx 1
++  618.604 |     display: mode 2, graphics, 640x480
++  618.684 |     the target is that picture: 640x480 at VRAM 0, stride 640
++  618.780 |     the text console is hidden: gfx mode text or overlay shows it again
++  618.876 | SURF ≋#> gfx demo 10
++  619.102 |     gfx demo: 10 s at 320x240, two pages flipped at blanking (Ctrl+C ends)
++  620.220 |     1 s: 60 frames, 60 in the last second
++  621.228 |     2 s: 115 frames, 55 in the last second
++  622.220 |     3 s: 170 frames, 55 in the last second
++  623.214 |     4 s: 224 frames, 54 in the last second
++  624.204 |     5 s: 279 frames, 55 in the last second
++  625.212 |     6 s: 334 frames, 55 in the last second
++  626.204 |     7 s: 389 frames, 55 in the last second
++  627.212 |     8 s: 444 frames, 55 in the last second
++  628.220 |     9 s: 499 frames, 55 in the last second
++  629.212 |     10 s: 554 frames, 55 in the last second
++  629.484 |     gfx demo: 554 frames in 10.08 s, 54.9 a second; display back as it was
++  629.596 | SURF ≋#> 
++  629.596 | gfx crc
++  629.724 |     gfx crc: frame 42590, crc a2eb2c50 (a frame begun after the last change)
++  629.820 | SURF ≋#> gfx mode gfx 2
++  629.948 |     display: mode 2, graphics, 320x240 doubled
++  630.044 |     the target is that picture: 320x240 at VRAM 0, stride 320
++  630.124 |     the text console is hidden: gfx mode text or overlay shows it again
++  630.236 | SURF ≋#> 
++  630.236 | gfx pal ramps
++  630.380 |     palette: ramps (8 hues of 32 shades)
++  630.460 | SURF ≋#> 
++  630.460 | gfx zbuf 153600 640
++  630.604 |     depth buffer: VRAM 153600, stride 640, for the target's 320x240
++  630.700 | SURF ≋#> 
++  630.700 | gfx zclear
++  630.828 | SURF ≋#> 
++  630.828 | gfx clear 0
++  630.941 | SURF ≋#> 
++  630.941 | gfx tri 8 8 120 16 40 100 0x3f
++  631.100 | SURF ≋#> 
++  631.100 | gfx tri cullcw 200 20 300 20 250 60 0xff
++  631.276 | SURF ≋#> 
++  631.276 | gfx tri cullccw 200 20 300 20 250 60 0x7f
++  631.468 | SURF ≋#> 
++  631.468 | gfx tri 20 140 60 140 60 180 0x5f
++  631.644 | SURF ≋#> 
++  631.644 | gfx tri 20 140 60 180 20 180 0x9f
++  631.820 | SURF ≋#> 
++  631.820 | gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28
++  632.188 | SURF ≋#> 
++  632.188 | gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50
++  632.524 | SURF ≋#> 
++  632.524 | gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0
++  632.748 | SURF ≋#> 
++  632.748 | gfx crc
++  632.876 |     gfx crc: frame 42779, crc 43e2d407 (a frame begun after the last change)
++  632.988 | SURF ≋#> 
++  632.988 | gfx cube 10
++  633.308 |     gfx cube: 10 s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)
++  634.428 |     cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  635.438 |     cube 2 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  636.428 |     cube 3 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  637.436 |     cube 4 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  638.428 |     cube 5 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  639.437 |     cube 6 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  640.428 |     cube 7 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  641.436 |     cube 8 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++  642.428 |     cube 9 s: 60 drawn, 59 shown, 0 missed: all whole, in order
++  643.436 |     cube 10 s: 61 drawn, 61 shown, 0 missed: all whole, in order
++  643.900 |     gfx cube: 601 drawn in 10.02 s, 59.9 a second; display back as it was
++  643.996 |     gfx cube: 607 shown, 0 missed: all whole, in order
++  644.092 | SURF ≋#> 
++  644.092 | gfx crc
++  644.236 |     gfx crc: frame 43460, crc 43e2d407 (a frame begun after the last change)
++  644.348 | SURF ≋#> 
++  644.348 | gfx mode overlay
++  644.492 |     display: mode 3, graphics with the text over it, 320x240 doubled
++  644.588 |     the target is that picture: 320x240 at VRAM 0, stride 320
++  644.668 | SURF ≋#> 
++  644.668 | gfx mode text
++  644.796 |     display: mode 1, text (the picture stays in VRAM)
++  644.892 | SURF ≋#> 
++  644.892 | gfx zbuf off
++  645.020 |     depth buffer: none (SET_TARGET again; the target and clip as they were)
++  645.116 | SURF ≋#> 
++  645.116 | gfx reset
++  645.228 |     gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640
++  645.340 | SURF ≋#> 
++  645.340 | sleep 2000
++  647.436 |     slept 2000 ms (200 ticks)
++  647.500 | SURF ≋#> 
++  647.500 | echo uart still works
++  649.644 | uart still works
++  649.708 | SURF ≋#> 
++  649.708 | dmesg
++  649.804 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
++  649.900 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
++  650.092 | Booting SurfOS Kernel.....
++  650.156 | 
++  650.220 | 
++  650.269 | Interrupt Initialization
++  650.348 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
++  650.444 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
++  650.540 | *Interrupts Enabled
++  650.604 | 
++  650.668 | Delays: spin on mtime at 1000000 Hz (no calibration)
++  650.764 | 
++  650.812 | Serial Console
++  650.876 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++  651.053 | *receive interrupt, source 0
++  651.116 | *DONE
++  651.180 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
++  651.275 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
++  651.452 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
++  651.660 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
++  651.772 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++  651.868 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
++  651.964 | 
++  652.028 | Drivers: serial gpio ps2kbd sdcard gpu
++  652.108 | 
++  652.172 | --More-- (Space: next page, Enter: next line, q: skip the rest)File Systems
++  652.268 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  652.428 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  652.620 | +VFS: sd0p1 mounted on /sd0p1 (fat)
++  652.700 | *DONE
++  652.764 | 
++  652.828 | Timer
++  652.892 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
++  652.972 | +FAT32: sd0p1: it was not unmounted cleanly before this mount, and only a check clears that, the volume stays marked as not cleanly unmounted
++  653.180 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++  653.356 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++  653.547 | 
++  653.596 | Unexpected trap: breakpoint at pc 0x800023a4 (task 'Shell 0'), ignored
++  653.708 | Backtrace:
++  653.771 |   [<0x80002330>] cmd_crashill+0x10
++  653.852 |   [<0x80005350>] shell_run_command+0xbc
++  653.932 |   [<0x80005808>] startShell+0x188
++  654.012 |   [<0x80005944>] shell+0x3c
++  654.076 |   [<0x8001c26c>] task_stublet+0x1c
++  654.156 | F1: init: restarted the shell
++  654.235 | Backtrace:
++  654.300 |   [<0x8000235c>] cmd_crashnull+0x14
++  654.380 |   [<0x80005350>] shell_run_command+0xbc
++  654.460 |   [<0x80005808>] startShell+0x188
++  654.540 | --More-- (Space: next page, Enter: next line, q: skip the rest)  [<0x80005944>] shell+0x3c
++  654.636 |   [<0x8001c26c>] task_stublet+0x1c
++  654.716 | F1: init: restarted the shell
++  654.780 | Backtrace:
++  654.844 |   [<0x800023e0>] cmd_crashmis+0x18
++  654.924 |   [<0x80005350>] shell_run_command+0xbc
++  655.004 |   [<0x80005808>] startShell+0x188
++  655.084 |   [<0x80005944>] shell+0x3c
++  655.164 |   [<0x8001c26c>] task_stublet+0x1c
++  655.244 | F1: init: restarted the shell
++  655.324 | +IRQ: source 0 stays pending after 32 rounds: it rests until each tick
++  655.420 | SURF ≋#> 
++  655.420 | irqstat
++  655.532 |     IRQ  count
++  655.596 |       0  2111
++  655.660 |       1  1
++  655.724 |       5  599
++  655.788 |     timer: 66916
++  655.852 |     spurious: 0
++  655.916 |     rested until a tick: 1
++  655.996 |     exception 2 (illegal instruction): 1
++  656.076 |     exception 3 (breakpoint): 1
++  656.156 |     exception 4 (load address misaligned): 1
++  656.236 |     exception 7 (store access fault): 1
++  656.316 |     exception 11 (environment call from M-mode): 22805
++  656.412 | SURF ≋#> 
+
+== run 2: transcript
++    0.528 | 
++    0.592 | SURF ≋#> cd /
++    0.672 | SURF ≋#> dmesg
++    0.768 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
++    0.864 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
++    1.056 | Booting SurfOS Kernel.....
++    1.120 | 
++    1.184 | 
++    1.232 | Interrupt Initialization
++    1.312 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
++    1.408 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
++    1.504 | *Interrupts Enabled
++    1.568 | 
++    1.632 | Delays: spin on mtime at 1000000 Hz (no calibration)
++    1.728 | 
++    1.776 | Serial Console
++    1.840 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++    2.016 | *receive interrupt, source 0
++    2.080 | *DONE
++    2.144 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
++    2.240 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
++    2.416 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
++    2.624 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
++    2.736 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++    2.832 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
++    2.928 | 
++    2.992 | Drivers: serial gpio ps2kbd sdcard gpu
++    3.072 | 
++    3.136 | --More-- (Space: next page, Enter: next line, q: skip the rest)File Systems
++    3.232 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++    3.392 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++    3.600 | +VFS: sd0p1 mounted on /sd0p1 (fat)
++    3.664 | *DONE
++    3.728 | 
++    3.792 | Timer
++    3.856 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
++    3.952 | +FAT32: sd0p1: it was not unmounted cleanly before this mount, and only a check clears that, the volume stays marked as not cleanly unmounted
++    4.145 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++    4.320 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++    4.512 | 
++    4.560 | Unexpected trap: breakpoint at pc 0x800023a4 (task 'Shell 0'), ignored
++    4.672 | Backtrace:
++    4.736 |   [<0x80002330>] cmd_crashill+0x10
++    4.816 |   [<0x80005350>] shell_run_command+0xbc
++    4.896 |   [<0x80005808>] startShell+0x188
++    4.976 |   [<0x80005944>] shell+0x3c
++    5.040 |   [<0x8001c26c>] task_stublet+0x1c
++    5.120 | F1: init: restarted the shell
++    5.200 | Backtrace:
++    5.264 |   [<0x8000235c>] cmd_crashnull+0x14
++    5.344 |   [<0x80005350>] shell_run_command+0xbc
++    5.424 |   [<0x80005808>] startShell+0x188
++    5.504 | --More-- (Space: next page, Enter: next line, q: skip the rest)  [<0x80005944>] shell+0x3c
++    5.600 |   [<0x8001c26c>] task_stublet+0x1c
++    5.680 | F1: init: restarted the shell
++    5.761 | Backtrace:
++    5.824 |   [<0x800023e0>] cmd_crashmis+0x18
++    5.888 |   [<0x80005350>] shell_run_command+0xbc
++    5.984 |   [<0x80005808>] startShell+0x188
++    6.048 |   [<0x80005944>] shell+0x3c
++    6.128 |   [<0x8001c26c>] task_stublet+0x1c
++    6.208 | F1: init: restarted the shell
++    6.288 | +IRQ: source 0 stays pending after 32 rounds: it rests until each tick
++    6.384 | SURF ≋#> 
++    6.384 | gfx
++    6.512 |     SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++    6.608 |     engine idle, STATUS 0x0, FIFO 64 words, 64 free
++    6.688 |     display: mode 1, text
++    6.752 |     GFX_BASE 0, GFX_STRIDE 320, GFX_SCALE 2 (320x240 doubled)
++    6.849 |     palette: ramps (8 hues of 32 shades)
++    6.928 |     target: VRAM 0, stride 640, 640x480
++    7.008 |     clip: (0, 0)-(640, 480)
++    7.088 |     depth buffer: none
++    7.152 |     sent: 245401 words, 1201 fences; FENCE 1201
++    7.248 |     interrupts: 599 (intc source 5, IE.FENCE)
++    7.328 |     fences that asked for it: 599 (gfx cube's frames' do not)
++    7.424 |     fence waits that slept on it: 2, woken by it: 2
++    7.504 |     errors 0, timeouts 0, ABORTs 0
++    7.584 |     by kind: OVERFLOW 0, BAD_OPCODE 0, BAD_PARAM 0
++    7.664 |     display changes 13, 0 without a blanking
++    7.744 |     frames: FRAME_COUNT 47690, FRAME_CRC 5a7e325b (that frame's)
++    7.840 | SURF ≋#> 
++    7.840 | gfx mode gfx 1
++    7.968 |     display: mode 2, graphics, 640x480
++    8.048 |     the target is that picture: 640x480 at VRAM 0, stride 640
++    8.144 |     the text console is hidden: gfx mode text or overlay shows it again
++    8.240 | SURF ≋#> gfx pal rgb332
++    8.384 |     palette: rgb332 (as the configuration leaves it)
++    8.464 | SURF ≋#> gfx clear 0x25
++    8.592 | SURF ≋#> gfx fill 16 16 200 120 0xe0
++    8.752 | SURF ≋#> gfx rect 8 8 216 136 0xff
++    8.912 | SURF ≋#> gfx line 0 479 639 0 0x1c
++    9.056 | SURF ≋#> gfx line 0 0 639 479 0xfc
++    9.200 | SURF ≋#> gfx copy 16 16 400 300 200 120
++    9.376 | SURF ≋#> gfx copy 0 0 240 160 64 64 0x25
++    9.536 | SURF ≋#> gfx text 24 200 0xff - Hello from SurfOS on SurfGPU
++    9.744 | SURF ≋#> gfx text 24 220 0x03 0xfc opaque text in the console font
++    9.984 | SURF ≋#> gfx put 639 479 0x92
++   10.129 | SURF ≋#> gfx crc
++   10.255 |     gfx crc: frame 47916, crc 039d507c (a frame begun after the last change)
++   10.368 | SURF ≋#> 
++   10.368 | gfx bench
++   10.464 |     gfx bench on the target (640x480 at VRAM 0), first word to fence:
++   10.592 |     fill  8 x 640x480: 2457600 pixels in 25.895 ms, 94.9 million/s
++   10.720 |     copy  8 x 320x480: 1228800 pixels in 25.926 ms, 47.3 million/s
++   10.848 |     line  256 lines: 68524 pixels in 35.572 ms, 1.9 million/s
++   11.440 |     text  64 x 32 cells: 262144 pixels in 498.182 ms, 0.5 million/s
++   11.536 | SURF ≋#> 
++   11.536 | gfx mode gfx 1
++   11.679 |     display: mode 2, graphics, 640x480
++   11.759 |     the target is that picture: 640x480 at VRAM 0, stride 640
++   11.840 |     the text console is hidden: gfx mode text or overlay shows it again
++   11.952 | SURF ≋#> gfx demo 10
++   12.176 |     gfx demo: 10 s at 320x240, two pages flipped at blanking (Ctrl+C ends)
++   13.280 |     1 s: 61 frames, 61 in the last second
++   14.290 |     2 s: 116 frames, 55 in the last second
++   15.296 |     3 s: 171 frames, 55 in the last second
++   16.272 |     4 s: 225 frames, 54 in the last second
++   17.280 |     5 s: 280 frames, 55 in the last second
++   18.272 |     6 s: 335 frames, 55 in the last second
++   19.280 |     7 s: 390 frames, 55 in the last second
++   20.272 |     8 s: 445 frames, 55 in the last second
++   21.280 |     9 s: 500 frames, 55 in the last second
++   22.287 |     10 s: 555 frames, 55 in the last second
++   22.544 |     gfx demo: 555 frames in 10.08 s, 55.0 a second; display back as it was
++   22.656 | SURF ≋#>
++   22.656 |  gfx crc
++   22.783 |     gfx crc: frame 48666, crc a2eb2c50 (a frame begun after the last change)
++   22.882 | SURF ≋#> gfx mode gfx 2
++   23.023 |     display: mode 2, graphics, 320x240 doubled
++   23.103 |     the target is that picture: 320x240 at VRAM 0, stride 320
++   23.199 |     the text console is hidden: gfx mode text or overlay shows it again
++   23.295 | SURF ≋#> gfx pal ramps
++   23.423 |     palette: ramps (8 hues of 32 shades)
++   23.520 | SURF ≋#> gfx zbuf 153600 640
++   23.647 |     depth buffer: VRAM 153600, stride 640, for the target's 320x240
++   23.744 | SURF ≋#> gfx zclear
++   23.855 | SURF ≋#> gfx clear 0
++   23.967 | SURF ≋#> gfx tri 8 8 120 16 40 100 0x3f
++   24.128 | SURF ≋#> gfx tri cullcw 200 20 300 20 250 60 0xff
++   24.303 | SURF ≋#> gfx tri cullccw 200 20 300 20 250 60 0x7f
++   24.495 | SURF ≋#> gfx tri 20 140 60 140 60 180 0x5f
++   24.671 | SURF ≋#> gfx tri 20 140 60 180 20 180 0x9f
++   24.832 | SURF ≋#> gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28
++   25.183 | SURF ≋#> gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50
++   25.535 | SURF ≋#> gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0
++   25.759 | SURF ≋#> gfx crc
++   25.903 |     gfx crc: frame 48853, crc 43e2d407 (a frame begun after the last change)
++   26.000 | SURF ≋#> 
++   26.000 | gfx cube 10
++   26.351 |     gfx cube: 10 s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)
++   27.455 |     cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   28.464 |     cube 2 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   29.471 |     cube 3 s: 61 drawn, 60 shown, 0 missed: all whole, in order
++   30.463 |     cube 4 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   31.471 |     cube 5 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   32.463 |     cube 6 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   33.471 |     cube 7 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   34.463 |     cube 8 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   35.455 |     cube 9 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++   36.463 |     cube 10 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   36.929 |     gfx cube: 601 drawn in 10.03 s, 59.9 a second; display back as it was
++   37.039 |     gfx cube: 607 shown, 0 missed: all whole, in order
++   37.120 | SURF ≋#> 
++   37.120 | gfx crc
++   37.263 |     gfx crc: frame 49534, crc 43e2d407 (a frame begun after the last change)
++   37.359 | SURF ≋#> 
++   37.359 | gfx mode overlay
++   37.503 |     display: mode 3, graphics with the text over it, 320x240 doubled
++   37.599 |     the target is that picture: 320x240 at VRAM 0, stride 320
++   37.695 | SURF ≋#> 
++   37.695 | gfx mode text
++   37.823 |     display: mode 1, text (the picture stays in VRAM)
++   37.903 | SURF ≋#> 
++   37.903 | gfx zbuf off
++   38.031 |     depth buffer: none (SET_TARGET again; the target and clip as they were)
++   38.127 | SURF ≋#> 
++   38.127 | gfx reset
++   38.239 |     gfx reset: ABORT, errors cleared; target 640x480 at VRAM 0, stride 640
++   38.335 | SURF ≋#> 
++   38.335 | umount /sd0p1
++   38.480 | +FAT32: sd0p1: it was not unmounted cleanly before this mount, and only a check clears that, the volume stays marked as not cleanly unmounted
++   38.688 | SURF ≋#> 
++   38.688 | mount sd0p1
++   38.847 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
++   98.862 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
++   99.054 |     sd0p1 on /sd0p1: fat32, label SURFOS, 29.7 GB, 29.7 GB free, read-write
++   99.150 | SURF ≋#> 
++   99.150 | ls /sd0p1/USERS/DOCUMENTS
++   99.438 |     -       21  2026-11-01 20:08:28  MAC.TXT
++   99.518 |     -     4096  2026-11-02 06:22:16  ._MAC.TXT
++   99.598 |     -       53  2026-11-01 20:08:28  BOARD.TXT
++   99.694 |     -       16  2026-11-01 20:08:28  COPY.TXT
++   99.774 |     4 entries, 4186 bytes
++   99.854 | SURF ≋#> 

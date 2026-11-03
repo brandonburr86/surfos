@@ -1,0 +1,26 @@
+SurfCPU acceptance test m9: the standalone release (milestone 9): cold boots and a soak
+Verdict: FAIL (0 checks seen by this script passed, 1 failed)
+Source: the board, through /dev/cu.usbserial-210319C129C61 at 115200 8N1
+Owner: the steps were answered by a program, not by a person (--owner python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py)
+Date: 2026-11-03 11:03:24 UTC, 600 s
+Command: surfcpu/tools/board-test.py m9 --port /dev/cu.usbserial-210319C129C61 --board arty_a7_100t --design surfcpu_arty_a7_ddr_gpu --manifest '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt' --owner 'python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py' --evidence-dir '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/surfcpu/build/board-2026-11-01/evidence' --boots 3 --minutes 60
+Tools: board-test.py sha256 ede968909663185d, uart.py sha256 dd6dda3bf7893ce1 (commit 6954a75c4e03); Python 3.14.7 on Darwin arm64
+
+Build identity read from the port, and what it was compared with:
+  (none read)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  flash          done, answered at +0.0
+              | Make sure the board starts from its configuration flash by itself: programmed with make -C
+              | surfcpu program-flash, the Arty's JP1 (MODE) jumper on, the SurfOS card (with sd=rw in
+              | /BOOT/CMDLINE.TXT) in the Pmod MicroSD. Then press Enter.
+  +     0.5  power-cycle    skipped, answered at +540.9
+              | Cold boot 1 of 3: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
+              | programming, no button held), then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /dev/cu.usbserial-210319C129C61 opened at 115200 8N1
+  FAIL     cold boot 1: the owner did not power-cycle
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 0 bytes received;
+"*": the port going away and coming back):

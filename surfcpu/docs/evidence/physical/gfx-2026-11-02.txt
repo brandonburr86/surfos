@@ -1,0 +1,183 @@
+SurfOS's gfx on the board, 2026-11-02, DDR+GPU bitstream bfaac48, SurfOS 6954a75c (GPU.md section 15.6).
+Step 4 printed crc 039d507c and step 7 crc 43e2d407, the values the document gives. The owner, asked what the
+monitor showed: step 4's picture with the console over it (gfx mode overlay), "Yes, that's what it shows"; the
+cube for its two minutes, "Yes, smooth and whole". gfx demo 10 and gfx cube 10 ran again in the shell suite
+(suite-2026-11-03.txt).
+
+Step 4, then the console over the picture:
++    0.528 | gfx mode gfx 1
++    0.624 |     display: mode 2, graphics, 640x480
++    0.704 |     the target is that picture: 640x480 at VRAM 0, stride 640
++    0.800 |     the text console is hidden: gfx mode text or overlay shows it again
++    0.900 | SURF ≋#> gfx pal rgb332
++    1.024 |     palette: rgb332 (as the configuration leaves it)
++    1.120 | SURF ≋#> gfx clear 0x25
++    1.264 | SURF ≋#> gfx fill 16 16 200 120 0xe0
++    1.408 | SURF ≋#> gfx rect 8 8 216 136 0xff
++    1.568 | SURF ≋#> gfx line 0 479 639 0 0x1c
++    1.728 | SURF ≋#> gfx line 0 0 639 479 0xfc
++    1.872 | SURF ≋#> gfx copy 16 16 400 300 200 120
++    2.032 | SURF ≋#> gfx copy 0 0 240 160 64 64 0x25
++    2.192 | SURF ≋#> gfx text 24 200 0xff - Hello from SurfOS on SurfGPU
++    2.432 | SURF ≋#> gfx text 24 220 0x03 0xfc opaque text in the console font
++    2.656 | SURF ≋#> gfx put 639 479 0x92
++    2.800 | SURF ≋#> gfx crc
++    2.911 |     gfx crc: frame 5633, crc 039d507c (a frame begun after the last change)
++    3.024 | SURF ≋#> gfx mode overlay
++    3.152 |     display: mode 3, graphics with the text over it, 640x480
++    3.247 |     the target is that picture: 640x480 at VRAM 0, stride 640
++    3.327 | SURF ≋#> echo This text is the SurfOS console, drawn over the picture
++    3.568 | This text is the SurfOS console, drawn over the picture
++    3.663 | SURF ≋#> 
+
+Step 7 (GPU2):
++    0.513 | gfx mode gfx 2
++    0.626 |     display: mode 2, graphics, 320x240 doubled
++    0.706 |     the target is that picture: 320x240 at VRAM 0, stride 320
++    0.802 |     the text console is hidden: gfx mode text or overlay shows it again
++    0.914 | SURF ≋#> gfx pal ramps
++    1.058 |     palette: ramps (8 hues of 32 shades)
++    1.138 | SURF ≋#> gfx zbuf 153600 640
++    1.250 |     depth buffer: VRAM 153600, stride 640, for the target's 320x240
++    1.362 | SURF ≋#> gfx zclear
++    1.474 | SURF ≋#> gfx clear 0
++    1.570 | SURF ≋#> gfx tri 8 8 120 16 40 100 0x3f
++    1.730 | SURF ≋#> gfx tri cullcw 200 20 300 20 250 60 0xff
++    1.922 | SURF ≋#> gfx tri cullccw 200 20 300 20 250 60 0x7f
++    2.113 | SURF ≋#> gfx tri 20 140 60 140 60 180 0x5f
++    2.290 | SURF ≋#> gfx tri 20 140 60 180 20 180 0x9f
++    2.449 | SURF ≋#> gfx tri gouraud,ztest,zwrite 150.5 70.25 1000 0x20 300.0625 100 60000 0x3f 200 230.75 30000 0x28
++    2.786 | SURF ≋#> gfx tri gouraud,zle,zwrite 140 230 30000 0x40 310 220 30000 0x5f 250 60 30000 0x50
++    3.121 | SURF ≋#> gfx tri gouraud 80 200 0 0xc0 140 236 0 0xdf 70 238.5 0 0xd0
++    3.362 | SURF ≋#> gfx crc
++    3.505 |     gfx crc: frame 18864, crc 43e2d407 (a frame begun after the last change)
++    3.602 | SURF ≋#> 
+
+gfx cube 120, then gfx crc:
++    0.528 | gfx cube 120
++    0.832 |     gfx cube: 120 s at 320x240 with depth, a FLIP a frame (Ctrl+C ends)
++    1.952 |     cube 1 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    2.960 |     cube 2 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    3.952 |     cube 3 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    4.959 |     cube 4 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    5.951 |     cube 5 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    6.959 |     cube 6 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    7.951 |     cube 7 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++    8.943 |     cube 8 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++    9.951 |     cube 9 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   10.943 |     cube 10 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   11.951 |     cube 11 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   12.943 |     cube 12 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   13.951 |     cube 13 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   14.943 |     cube 14 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   15.951 |     cube 15 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   16.959 |     cube 16 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   17.951 |     cube 17 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   18.959 |     cube 18 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   19.951 |     cube 19 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   20.958 |     cube 20 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   21.950 |     cube 21 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   22.958 |     cube 22 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   23.950 |     cube 23 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++   24.942 |     cube 24 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   25.950 |     cube 25 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   26.942 |     cube 26 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   27.950 |     cube 27 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   28.942 |     cube 28 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   29.950 |     cube 29 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   30.942 |     cube 30 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   31.950 |     cube 31 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   32.958 |     cube 32 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   33.950 |     cube 33 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   34.958 |     cube 34 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   35.950 |     cube 35 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   36.957 |     cube 36 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   37.949 |     cube 37 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   38.957 |     cube 38 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   39.949 |     cube 39 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++   40.941 |     cube 40 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   41.950 |     cube 41 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   42.941 |     cube 42 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   43.949 |     cube 43 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   44.941 |     cube 44 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   45.949 |     cube 45 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   46.941 |     cube 46 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   47.949 |     cube 47 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   48.957 |     cube 48 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   49.949 |     cube 49 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   50.957 |     cube 50 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   51.949 |     cube 51 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   52.957 |     cube 52 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   53.949 |     cube 53 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   54.941 |     cube 54 s: 58 drawn, 59 shown, 0 missed: all whole, in order
++   55.948 |     cube 55 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   56.941 |     cube 56 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   57.948 |     cube 57 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   58.940 |     cube 58 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   59.948 |     cube 59 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   60.940 |     cube 60 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   61.948 |     cube 61 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   62.940 |     cube 62 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   63.948 |     cube 63 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   64.956 |     cube 64 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   65.948 |     cube 65 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   66.956 |     cube 66 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   67.948 |     cube 67 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   68.956 |     cube 68 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   69.948 |     cube 69 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   70.940 |     cube 70 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++   71.948 |     cube 71 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   72.940 |     cube 72 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   73.947 |     cube 73 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   74.940 |     cube 74 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   75.947 |     cube 75 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   76.939 |     cube 76 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   77.947 |     cube 77 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   78.939 |     cube 78 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   79.947 |     cube 79 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   80.955 |     cube 80 s: 61 drawn, 60 shown, 0 missed: all whole, in order
++   81.947 |     cube 81 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   82.955 |     cube 82 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   83.947 |     cube 83 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   84.955 |     cube 84 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   85.963 |     cube 85 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   86.939 |     cube 86 s: 58 drawn, 59 shown, 0 missed: all whole, in order
++   87.947 |     cube 87 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   88.939 |     cube 88 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   89.946 |     cube 89 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   90.938 |     cube 90 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   91.946 |     cube 91 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   92.938 |     cube 92 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   93.946 |     cube 93 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++   94.938 |     cube 94 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   95.946 |     cube 95 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   96.954 |     cube 96 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   97.946 |     cube 97 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   98.954 |     cube 98 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++   99.946 |     cube 99 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  100.954 |     cube 100 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  101.962 |     cube 101 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++  102.938 |     cube 102 s: 58 drawn, 59 shown, 0 missed: all whole, in order
++  103.946 |     cube 103 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  104.938 |     cube 104 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  105.946 |     cube 105 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  106.937 |     cube 106 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  107.945 |     cube 107 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++  108.937 |     cube 108 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  109.945 |     cube 109 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  110.937 |     cube 110 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  111.945 |     cube 111 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++  112.953 |     cube 112 s: 61 drawn, 60 shown, 0 missed: all whole, in order
++  113.945 |     cube 113 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  114.953 |     cube 114 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  115.945 |     cube 115 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  116.953 |     cube 116 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  117.961 |     cube 117 s: 59 drawn, 60 shown, 0 missed: all whole, in order
++  118.937 |     cube 118 s: 59 drawn, 59 shown, 0 missed: all whole, in order
++  119.945 |     cube 119 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  120.937 |     cube 120 s: 60 drawn, 60 shown, 0 missed: all whole, in order
++  121.401 |     gfx cube: 7177 drawn in 120.03 s, 59.7 a second; display back as it was
++  121.497 |     gfx cube: 7199 shown, 0 missed: all whole, in order
++  121.592 | SURF ≋#> gfx crc
++  121.721 |     gfx crc: frame 26889, crc 43e2d407 (a frame begun after the last change)
++  121.816 | SURF ≋#> 

@@ -1,0 +1,124 @@
+SurfBoot's monitor on the board, 2026-11-02, DDR+GPU bitstream bfaac48 (582570ab..., SurfBoot 1.1.0 build bfaac489),
+the card with SurfOS 6954a75c. The captures in the order they were made; the owner pressed the buttons.
+
+1. After BTN1 held at RESET (the monitor entered at once, DDR not initialized). The bridge sets CALIB_FAIL 1.5 s
+   after reset, and only a reset clears it, so every DDR command fails: DDRDIAG.BIN cannot be booted from this
+   monitor (PROGRESS.md, 2026-11-01 to 03).
+# uart.py script /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/where.script on /dev/cu.usbserial-210319C129C61: every expect matched (exit 0)
++    0.513 | 
++    0.513 | surfboot> 
+
++    0.513 | info
++    0.529 | SurfBoot 1.1.0 build bfaac489
++    0.529 | sysinfo: magic 46525553, SoC 00000400, map 2, board 00000100, bitstream build bfaac489 flags 0, time 1792971531
++    0.545 | clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features 1ff (uart timer irq gpio spi ps2 video ddr)
++    0.545 | ddr: status 16 (present, software init, calibration failed), size 256 MiB
++    0.561 | card: present; buttons 0
++    0.561 | last boot failure: STOPPED: BTN1 was held at power-on
++    0.561 | surfboot> boot /BOOT/NOSUCH.BIN
++    0.625 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.625 | boot failed: DDR calibration failed (DDR_CALIB)
++    0.625 | surfboot> ls /SYSTEM
++    0.673 | sd: SDHC/SDXC, 29.7 GiB; ready after 11 ms; SPI 6250 kHz, data CRC checked
++    0.689 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
++    0.689 |   d-h--  .                  <dir>  cluster 18
++    0.689 |   d-h--  ..                 <dir>  cluster 0
++    0.705 |   ----a  SURFCARD.TXT          94  cluster 120
++    0.705 |   1 file (94 bytes), 2 directories
++    0.705 | surfboot> check /SYSTEM/SURFCARD.TXT
++    0.785 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.785 | surfboot> check /BOOT/DDRDIAG.BIN
++    0.849 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.849 | surfboot> boot /BOOT/DDRDIAG.BIN
++    0.913 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.913 | boot failed: DDR calibration failed (DDR_
+
+2. The DDR initialization tried again from the monitor, twice:
++    0.512 | ddr
++    0.528 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.528 | surfboot> ddr
++    0.544 | ddr: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.544 | surfboot> info
++    0.560 | SurfBoot 1.1.0 build bfaac489
++    0.560 | sysinfo: magic 46525553, SoC 00000400, map 2, board 00000100, bitstream build bfaac489 flags 0, time 1792971531
++    0.576 | clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features 1ff (uart timer irq gpio spi ps2 video ddr)
++    0.592 | ddr: status 16 (present, software init, calibration failed), size 256 MiB
++    0.592 | card: present, FAT32 mounted; buttons 0
++    0.592 | last boot failure: DDR_CALIB: DDR calibration failed (DDR_STATUS 0x00000016)
++    0.608 | surfboot> 
+
+3. The card taken out. The timer (md 0x10001000) dated the last hardware reset before the card came out: the RESET
+   asked for had not registered, so it was asked again.
++    0.520 | md 0x10001000 2
++    0.553 | 10001000: 0f55ba3f 00000000
++    0.553 | surfboot> md 0x1000300c 1
++    0.600 | 1000300c: 00000000
++    0.600 | surfboot> 
+
+4. RESET with no button and no card: DDR calibrated, then SurfBoot stopped with NO_CARD (a RESET clears the
+   bridge's CALIB_FAIL, as the design says).
+# uart.py capture /dev/cu.usbserial-210319C129C61 at 115200 8N1, 2026-11-02 14:49:15 UTC; until 'SurfBoot stopped:[^\\n]*\\n': matched at +12.006 s
++   10.256 | 
++   10.256 | SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM
++   10.256 | soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream bfaac489
++   10.464 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 15 (window +-7); lane 1: bitslip 2, delay 16 (window +-8)
++   10.464 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
++   10.480 | sd: no card in the socket (the card-detect switch is open)
++   10.480 | 
++   10.480 | SurfBoot stopped: no card (NO_CARD)
++   10.480 |   no card in the socket (the card-detect switch is open)
++   10.496 | The LEDs LD4-LD7 show code 2. Type help for the monitor's commands; inserting a card retries the boot.
++   10.496 | surfboot> 
+
+5. The card put back: SurfBoot noticed it (after one bounce of the card-detect switch) and booted SurfOS.
+# uart.py capture /dev/cu.usbserial-210319C129C61 at 115200 8N1, 2026-11-02 14:50:11 UTC; until '(?:≋|~)[!#@?]?>|SurfBoot stopped:[^\\n]*\\n|boot failed:[^\\n]*\\n': matched at +23.867 s
++   16.096 | 
++   16.096 | (card removed)
++   16.096 | surfboot> 
++   16.334 | card inserted: booting
++   16.526 | sd: SDHC/SDXC, 29.7 GiB; ready after 176 ms; SPI 6250 kHz, data CRC checked
++   16.526 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
++   16.542 | boot: /BOOT/SURFOS.BIN
++   16.542 | boot: loading 485 KiB .......
++   19.166 | boot: SurfOS 1.0.0 build 6954a75c: 497476 bytes in 2 fragments, read in 2624 ms
++   19.166 | boot: load 0x80000000, entry 0x80000000, mem_size 1366512, ISA IM_Zicsr_Zifencei; payload CRC 0xd619e835 matches (card and DDR)
++   19.198 | boot: command line "sd=rw"
++   19.198 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
++   19.198 | 
++   19.774 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
++   19.790 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
++   20.030 | Booting SurfOS Kernel.....
++   20.045 | 
++   20.045 | 
++   20.045 | Interrupt Initialization
++   20.062 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
++   20.095 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
++   20.125 | *Interrupts Enabled
++   20.398 | 
++   20.398 | Delays: spin on mtime at 1000000 Hz (no calibration)
++   20.461 | 
++   20.461 | Serial Console
++   20.461 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
++   20.511 | *receive interrupt, source 0
++   20.526 | *DONE
++   20.526 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
++   20.557 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
++   20.637 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
++   20.733 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
++   20.797 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
++   20.845 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
++   20.877 | 
++   20.877 | Drivers: serial gpio ps2kbd sdcard gpu
++   20.893 | 
++   20.893 | File Systems
++   21.406 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (FSInfo)
++   21.582 | +VFS: sd0p1 mounted on /sd0p1 (fat)
++   21.661 | *DONE
++   21.710 | 
++   21.774 | Timer
++   21.838 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
++   21.966 | 
++   22.030 | 
++   22.095 | Brandon Burr's SurfOS
++   22.158 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
++   22.253 | SURF ≋#> 

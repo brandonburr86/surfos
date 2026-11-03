@@ -1,0 +1,12 @@
+The owner's card on the Mac, 2026-11-02: SurfOS 6954a75c installed with deploy-sd (--cmdline sd=rw, after a dry run),
+then DDRDIAG.BIN copied to /BOOT (cmp: identical) and MAC.TXT made for m8 (crc b0cfa011, 16 bytes).
+
+card: /Volumes/SURFOS (/dev/disk5s1, MS-DOS FAT32, , USB)
+package: /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/build/riscv32/arty_a7/SURFOS.BIN (497476 bytes, SurfOS 1.0.0 build 6954a75c, CRC 0xd619e835): valid
+card marker: /SYSTEM/SURFCARD.TXT (id 4fa3ac5c67fa678c)
+write /BOOT/SURFOS.BIN (497476 bytes, sha256 9cde4d09c063f286...) via a temporary file
+keep the old /BOOT/SURFOS.BIN as /BOOT/BACKUP.BIN
+write /BOOT/CMDLINE.TXT (6 bytes, sha256 b495040286e1ae28...) via a temporary file
+written: 3 file(s); unmounting and mounting the card again to read them back
+verified 3 file(s), 886222 bytes, read back from the card after unmounting and mounting it again (so from the card, not from the Mac's memory)
+done. Eject the card before you take it out: diskutil eject /Volumes/SURFOS (or the eject button next to it in Finder). Do not use it on the Mac and the board at once.

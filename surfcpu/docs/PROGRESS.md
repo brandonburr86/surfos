@@ -1407,3 +1407,64 @@ ddr-3 built five candidates, every gate passing on each
 * The numbers from the open flow stay nextpnr's estimate, not sign-off.
 * Physical: nothing has run on the board. The owner's tests: gpudiag (1620026) and `gfx cube` on this
   bitstream ([GPU.md](GPU.md) sections 14 and 15.6 step 7).
+
+### 2026-11-01 to 03: the merged tree on the board
+
+* What ran: the kernel of ai-dev 6954a75 (SURFOS.BIN build 6954a75c, 497,476 bytes, payload CRC 0xd619e835) on
+  the owner's card with `sd=rw`, on the board's two bitstreams, gpudiag (1620026, 082eb31a...) and DDR+GPU
+  (bfaac48, 582570ab..., with the 11-01 recheck's manifests). Nothing was rebuilt: since 1620026 no RTL or
+  firmware file has changed, and since bfaac48 only gpudiag's own. ai-dev has moved on since (ceabc60: eight
+  files of the desktop, the windows and the keyboard), so a kernel built at its tip is not the one tested.
+* First the kit against the RTL system with that kernel: `test-os-kit` 24 of 24, `test-os-kit-rtl` 3 of 3.
+* Physical, on the owner's A7-100T. board-test's `--owner` was a program: it loaded designs over JTAG, ejected
+  the card and installed SurfOS on it on the Mac, and passed on the owner's own answers for what only they could
+  do or see.
+  * **gpudiag: PASS (147 checks)** on its first run after a JTAG load; `gpudiag_check` PASS with the tree's
+    expected values (178d98ea...), every scene's FRAME_CRC the model's
+    ([evidence](evidence/physical/gpudiag-2026-11-01.txt)). A second load ran the cube for 600 s: 35,962 frames
+    shown, none torn, missed or out of order ([evidence](evidence/physical/gpudiag-soak-2026-11-01.txt)). Its
+    picture was not looked at; the owner saw SurfOS's cube (below).
+  * **m8: PASS (19 checks)**: a file made on the Mac read on the board, and the board's files read back after two
+    real power cuts, on the Mac and after a kernel update ([evidence](evidence/physical/m8-2026-11-02.txt)).
+  * **m7: PASS (11 checks; the owner saw the shell on the VGA monitor)**. The keyboard step was not done: there is
+    still no PS/2 keyboard that works here ([evidence](evidence/physical/m7-2026-11-03.txt)).
+  * **SurfOS's gfx ([GPU.md](GPU.md) 15.6 steps 4 to 7)**: `gfx crc` printed 039d507c and 43e2d407, the values the
+    document gives; `gfx cube 120` drew 7,177 frames in 120.03 s, 7,199 shown, 0 missed: all whole, in order. The
+    owner saw step 4's picture with the console over it, and the cube turning smoothly
+    ([evidence](evidence/physical/gfx-2026-11-02.txt)).
+  * **The kernel shell's checks**, test_os.py's on the board and its card (a script of that session's): bootinfo,
+    the clock (30.28 s by its ticks in 30.27 s of the Mac's), tasks, selftest 43 of 43, heaptest, scrolltest, the
+    faults (init restarts the shell), the card (crc32 of /BOOT/SURFOS.BIN is the Mac's file, cp, mv, fsbench,
+    umount, mount), `gfx bench` and `gfx demo`, and CODE-AUDIT B88's paste, its first time on a board: 10,000
+    bytes at the line's speed, and the line lives ("source 0 stays pending after 32 rounds: it rests until each
+    tick"). The first run's 26 failures were the script's (a drawing's echo taken for its output; 60 s allowed for a
+    mount that took 60.04 s); the corrected rerun of those parts passed 15 of 15
+    ([evidence](evidence/physical/suite-2026-11-03.txt)).
+  * **m9**: the configuration flash written with the owner's go-ahead (bfaac48, verified; the factory image's
+    backup unchanged) and JP1 put on ([evidence](evidence/physical/flash-write-2026-11-03.txt)). Cold boot 1 PASS
+    from the flash; cold boot 2 was lost when the Mac's USB hub dropped its USB 2.0 side
+    ([evidence](evidence/physical/m9-2026-11-03-2.txt)). **The soak: PASS**, started by a PROG pulse over JTAG so
+    that the FPGA loaded its flash: 614 rounds in 60.1 minutes, every CRC right, the kernel heap at 162,320 bytes
+    from the first round to the last, 9 tasks throughout ([evidence](evidence/physical/m9-2026-11-03-3.txt)). Two
+    of the three cold boots are still to do.
+  * **m5**: the monitor with BTN1 held, `info` and `ls`, the card taken out (DDR calibrated, `NO_CARD`) and put
+    back (`card inserted: booting`, SurfOS from the card) all work; the DDR diagnostic does not
+    ([evidence](evidence/physical/surfboot-monitor-2026-11-02.txt)).
+* **Found: the BTN1 monitor has no DDR.** With BTN1 held SurfBoot enters its monitor without initializing DDR,
+  the bridge sets CALIB_FAIL 1.5 s after reset, and `sb_ddr_init()` refuses at once when it is set: `boot`,
+  `check` and `ddr` all fail with DDR_CALIB, so DDRDIAG.BIN cannot be booted from the card. A card put in boots
+  SURFOS.BIN by itself, so this ROM has no monitor with both DDR and a card. The kit's m5 passed on the RTL system
+  because the simulation's DDR model calibrates itself (status 5, no SWINIT). A fix in SurfBoot, and a new DDR+GPU
+  bitstream with it, is a task of its own.
+* **Found: a card that lost power while mounted read-write takes a minute to mount, every time.** fs/fat.c keeps
+  such a volume marked ("only a check clears that") and counts its free clusters at each mount: the 7,607 FAT
+  sectors of the owner's 32 GB card in about 58 s (67 KB/s; SurfBoot reads the kernel at about 190 KB/s). On a
+  standalone board with `sd=rw` every power-off is such a loss, so each boot then takes about 65 s from reset to
+  the prompt until the card is checked on the Mac. The RTL system's 36 MiB card cannot show it. What to do about
+  it is the owner's choice.
+* The board: a JTAG status read a few seconds after a power-up with JP1 on left DONE low (seen once; most likely
+  it stopped the flash load), and `openFPGALoader --reset` (JPROGRAM) loaded the flash again.
+* The kit's failed runs are kept. m5-2026-11-02 and m9-2026-11-03 failed when the owner's answer came after the
+  program answering for them had given up (after 1,700 s and 540 s; their transcripts show no byte from the board
+  meanwhile), and m9-2026-11-03-2 when the hub dropped the board. board-test's own limit for a person is 600 s
+  times `--slow`, so a run that waits for a person needs a larger `--slow`.

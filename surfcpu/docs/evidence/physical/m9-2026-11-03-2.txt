@@ -1,0 +1,110 @@
+SurfCPU acceptance test m9: the standalone release (milestone 9): cold boots and a soak
+Verdict: FAIL (6 checks seen by this script passed, 1 failed)
+Source: the board, through /dev/cu.usbserial-210319C129C61 at 115200 8N1
+Owner: the steps were answered by a program, not by a person (--owner python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py)
+Date: 2026-11-03 11:21:19 UTC, 744 s
+Command: surfcpu/tools/board-test.py m9 --port /dev/cu.usbserial-210319C129C61 --board arty_a7_100t --design surfcpu_arty_a7_ddr_gpu --manifest '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt' --owner 'python3 /private/tmp/claude-501/-Users-brandonburr-Documents-SurfOS-Restoration-Project/112c2892-c7dc-4157-a3d2-676058f9bda9/scratchpad/board/owner.py' --evidence-dir '/Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/surfcpu/build/board-2026-11-01/evidence' --boots 3 --minutes 60 --slow 10
+Tools: board-test.py sha256 ede968909663185d, uart.py sha256 dd6dda3bf7893ce1 (commit 6954a75c4e03); Python 3.14.7 on Darwin arm64
+
+Build identity read from the port, and what it was compared with:
+  SurfBoot 1.1.0, ROM build bfaac489
+  bitstream build bfaac489, flags 0, board id 0x100
+    the bitstream's build id bfaac489 is the manifest's (bfaac489, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt)
+    the manifest is a recheck's (tools/fpga-build.sh --recheck): 2026-10-31T22:39:43Z, tools at d543722b3351, LVS by z3cmd; the build's own result was fail
+  SurfBoot: ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  SurfOS 1.0.0 build 6954a75c, 497476 bytes, payload CRC 0xd619e835
+    SurfOS 1.0.0 on the card is /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/build/riscv32/arty_a7/SURFOS.BIN (build 6954a75c, 497476 bytes, payload CRC 0xd619e835)
+  SurfOS bootinfo: sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  flash          done, answered at +0.0
+              | Make sure the board starts from its configuration flash by itself: programmed with make -C
+              | surfcpu program-flash, the Arty's JP1 (MODE) jumper on, the SurfOS card (with sd=rw in
+              | /BOOT/CMDLINE.TXT) in the Pmod MicroSD. Then press Enter.
+  +     0.5  power-cycle    done, answered at +103.3
+              | Cold boot 1 of 3: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
+              | programming, no button held), then press Enter.
+  +   136.3  power-cycle    done, answered at +728.2
+              | Cold boot 2 of 3: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
+              | programming, no button held), then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /dev/cu.usbserial-210319C129C61 opened at 115200 8N1
+  ok       board id 0x100 is arty_a7_100t's (0x100)
+  ok       the bitstream's build id bfaac489 is the manifest's (bfaac489, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-gpu-integ/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_gpu/manifest.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       SurfOS 1.0.0 on the card is /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-board/build/riscv32/arty_a7/SURFOS.BIN (build 6954a75c, 497476 bytes, payload CRC 0xd619e835)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489)
+  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.70 s, a fresh boot; bitstream bfaac489
+  FAIL     SurfBoot reading the kernel from the card: the port went away at +650.6 s (/dev/cu.usbserial-210319C129C61: Device not configured): USB unplugged, or the board lost power?
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 3451 bytes received;
+"*": the port going away and coming back):
+  +   54.487 * the port went away (/dev/cu.usbserial-210319C129C61: Device not configured)
+  +   60.895 * the port is back: opened again
+  +   70.279 | 
+  +   70.279 | SurfBoot 1.1.0 (build bfaac489), the SurfCPU boot ROM
+  +   70.295 | soc: Arty A7-100T (0x100), SoC 0.4.0, memory map 2, 25000000 Hz; bitstream bfaac489
+  +   70.487 | ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  +   70.503 | ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +   70.695 | sd: SDHC/SDXC, 29.7 GiB; ready after 176 ms; SPI 6250 kHz, data CRC checked
+  +   70.695 | fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  +   70.711 | boot: /BOOT/SURFOS.BIN
+  +   70.711 | boot: loading 485 KiB .......
+  +   73.335 | boot: SurfOS 1.0.0 build 6954a75c: 497476 bytes in 2 fragments, read in 2623 ms
+  +   73.335 | boot: load 0x80000000, entry 0x80000000, mem_size 1366512, ISA IM_Zicsr_Zifencei; payload CRC 0xd619e835 matches (card and DDR)
+  +   73.351 | boot: command line "sd=rw"
+  +   73.367 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   73.367 | 
+  +   73.943 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   73.959 | Memory: kernel 0x80000000-0x8014d9ef, DMA heap 0x8014e000-0x8024dfff, kernel heap 0x8024e000-0x8effffff (237 MB)
+  +   74.199 | Booting SurfOS Kernel.....
+  +   74.215 | 
+  +   74.215 | 
+  +   74.215 | Interrupt Initialization
+  +   74.231 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +   74.263 | *surf_intc at 0x10002000, 6 level sources, enabled 0x00, pending 0x00
+  +   74.295 | *Interrupts Enabled
+  +   74.567 | 
+  +   74.567 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +   74.631 | 
+  +   74.631 | Serial Console
+  +   74.631 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +   74.679 | *receive interrupt, source 0
+  +   74.695 | *DONE
+  +   74.695 | +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +   74.727 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +   74.807 | +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-write (sd=rw on the command line writes)
+  +   74.903 | +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  +   74.967 | +GPU: SurfGPU GPU2 (gpu.ID 0x32555047), VRAM 300 KiB at 0x30000000
+  +   75.015 | +GPU: a 64-word command FIFO; fences wait on intc source 5 (IE.FENCE)
+  +   75.047 | 
+  +   75.047 | Drivers: serial gpio ps2kbd sdcard gpu
+  +   75.063 | 
+  +   75.063 | File Systems
+  +   75.527 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
+  +  133.941 | +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973434 free (counted)
+  +  134.116 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +  134.181 | *DONE
+  +  134.245 | 
+  +  134.292 | Timer
+  +  134.357 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +  134.501 | 
+  +  134.565 | 
+  +  134.613 | Brandon Burr's SurfOS
+  +  134.677 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +  134.773 | SURF ≋#> bootinfo
+  +  134.965 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
+  +  135.061 |   boot information: SurfBoot 1.1.0 (bfaac489), version 1, CRC 0xee0e12bd ok
+  +  135.157 |   board id 0x0100 (Arty A7-100T), SoC 0.4.0, memory map 2, sys clock 25000000 Hz, timebase 1000000 Hz
+  +  135.333 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
+  +  135.429 |   image 0x80000000 + 1366512 bytes; boot device SD, FAT32 at LBA 8192
+  +  135.525 |   command line: 'sd=rw'
+  +  135.605 |   sysinfo: board 0x0100, SoC 0x000400, map 2, sys clock 25000000 Hz, bitstream bfaac489, features 0x1ff
+  +  135.781 |   DDR status 0x15, 256 MB; pixel clock 25173611 Hz
+  +  135.861 |   screen: surf_video showing text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 6207 cells written, 25 hardware scrolls
+  +  136.053 | SURF ≋#> uptime
+  +  136.164 |     up 1.70 s (170 ticks at 100 Hz), 9 tasks, 1 timers pending
+  +  136.245 |     mtime 65966529 at 1000000 Hz; heartbeat 4
+  +  136.340 | SURF ≋#> 
+  +  650.589 * the port went away (/dev/cu.usbserial-210319C129C61: Device not configured)
