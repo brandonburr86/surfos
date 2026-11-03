@@ -15,12 +15,15 @@ jobs:
     container: debian:12
     timeout-minutes: 180    # 11/1/26: the suites have outgrown 60; the smoke test at -O0 takes 16 minutes here
     steps:
+      # 11/3/26: and ca-certificates, which --no-install-recommends leaves out: without it git (actions/checkout) and
+      # tools/fetch-*.py cannot verify an https server ("server certificate verification failed. CAfile: none")
       - name: Install toolchain, QEMU, GRUB and OVMF
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
-            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk openssl
+            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk openssl \
+            ca-certificates
 
       - uses: actions/checkout@v4
 
