@@ -90,8 +90,9 @@ def alpha(x, y):
 
 
 def cascade(k):
-    """where shell/guiclient.c opens a desktop's k-th program window (from 0)"""
-    return 72 + 24 * (k % 8), 52 + 20 * (k % 8)
+    """where shell/guiclient.c opens a desktop's k-th program window (from 0), wview's kept above the taskbar as
+    gui_place() keeps a window (at 960 x 540: no lower than 540 - 26 - 2 - its 400 pixels)"""
+    return 72 + 24 * (k % 8), min(52 + 20 * (k % 8), 540 - 26 - 2 - (TITLE_H + CONTENT[1] + 1))
 
 
 def titled(d, s, at, text, focused=None):
