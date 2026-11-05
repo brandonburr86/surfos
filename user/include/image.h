@@ -1,27 +1,31 @@
 /*
-SurfOS Undertow's window: pictures
+SurfOS user library: pictures
 ----------------------
 File: image.h  Date: 11/1/26
 ----------------------
 A file's bytes become pixels: BMP, GIF (its first frame), PNG (with an inflate of its own) and JPEG (baseline,
 extended sequential and progressive), each its own file (image_bmp.c, image_gif.c, image_png.c, image_jpeg.c), in
-integers only, with no library. What kind a file is comes from its first bytes, never from what the server says.
+integers only, with no library. What kind a file is comes from its first bytes, never from what a server or a
+file's name says.
 
-The bytes are a server's, so they are hostile. Every field is checked against the bytes there are before it is
-used, sizes are worked out in 64 bits, memory is bounded before it is asked for and every allocation is checked,
-and each loop ends with the input: a decoder either gives a whole picture or says why not, and nothing in between
-(a truncated or corrupted file is no picture; its frame stays on the page).
+The bytes are hostile: a server's, or a file's that anyone may have made. Every field is checked against the bytes
+there are before it is used, sizes are worked out in 64 bits, memory is bounded before it is asked for and every
+allocation is checked, and each loop ends with the input: a decoder either gives a whole picture or says why not,
+and nothing in between (a truncated or corrupted file is no picture).
 
 A pixel is 0xTTRRGGBB: TT is how transparent it is, 0 solid to 255 not there at all, so a solid pixel is plain
 0x00RRGGBB. Rows run from the top, w pixels each, one after the other.
 
 Limits: WIMG_SIDE_MAX pixels a side and WIMG_PIXELS_MAX pixels in all, before anything is allocated; a progressive
-JPEG's coefficients WIMG_COEFS_MAX bytes; WIMG_SCANS_MAX scans. The page's own limit on what it keeps of them
-(WB_PAGE_IMAGES) is browser.h's.
+JPEG's coefficients WIMG_COEFS_MAX bytes; WIMG_SCANS_MAX scans. What a program keeps of them is its own limit
+(Wundertow's page: WB_PAGE_IMAGES, browser.h).
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/, so that every program reads
+pictures the same way, as they were.
 */
 
-#ifndef WUNDERTOW_IMAGE_H
-#define WUNDERTOW_IMAGE_H
+#ifndef _IMAGE_H
+#define _IMAGE_H
 
 #include <stddef.h>
 
@@ -30,6 +34,7 @@ JPEG's coefficients WIMG_COEFS_MAX bytes; WIMG_SCANS_MAX scans. The page's own l
 #define WIMG_COEFS_MAX   (64u << 20)            /* the bytes of a progressive JPEG's coefficients */
 #define WIMG_SCANS_MAX   128                    /* a JPEG's scans (a real one has at most a dozen or so) */
 #define WIMG_KEEP_SIDE   2048                   /* a picture larger than this a side is kept smaller (wimg_shrink()) */
+#define WIMG_ERR_MAX     160                    /* an error buffer that holds any of these calls' messages */
 
 #define WIMG_SOLID(c)    (((c) >> 24) == 0)
 #define WIMG_GONE        0xff000000u            /* a pixel that is not there */
@@ -58,6 +63,8 @@ void wimg_scale(const unsigned int *src, int sw, int sh, unsigned int *dst, int 
 /* The decoders' common calls (image.c) */
 int wimg_alloc(struct wimg *m, int w, int h, char *err, size_t cap);    /* limits, then the pixels: uninitialized */
 int wimg_fail(struct wimg *m, char *err, size_t cap, const char *why);  /* frees m, says why: -1 */
+int wimg_error(char *err, size_t cap, const char *fmt, ...)             /* says why in err as safe text: -1 */
+    __attribute__((format(printf, 3, 4)));
 
 /* The decoders: in starts with what wimg_known() found */
 int wimg_bmp(const unsigned char *in, size_t len, struct wimg *out, char *err, size_t cap);

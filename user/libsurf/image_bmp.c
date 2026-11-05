@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: BMP pictures
+SurfOS user library: BMP pictures
 ----------------------
 File: image_bmp.c  Date: 11/1/26
 ----------------------
@@ -8,13 +8,14 @@ Windows and OS/2 bitmaps: the 12-byte header and the 40-byte one with its extens
 from the top. A JPEG or a PNG inside a BMP, and OS/2's own compressions, are refused. Every offset and size is
 checked against the file's real length in 64 bits: what the header says of the file's size is not looked at.
 A palette index past the palette is black. What RLE skips is not there (a transparent pixel).
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
 #define BI_RGB        0
 #define BI_RLE8       1
@@ -268,13 +269,13 @@ static const char *rle(struct bmp *b, struct wimg *m) {
 int wimg_bmp(const unsigned char *in, size_t len, struct wimg *out, char *err, size_t cap) {
     struct bmp *b = calloc(1, sizeof(*b));
     const char *why;
-    if(!b) return ut_error(err, cap, "out of memory reading a BMP");
+    if(!b) return wimg_error(err, cap, "out of memory reading a BMP");
     b->in = in;
     b->len = len;
     why = header(b);
     if(why) {
         free(b);
-        return ut_error(err, cap, "%s", why);
+        return wimg_error(err, cap, "%s", why);
     }
     if(wimg_alloc(out, b->w, b->h, err, cap)) {
         free(b);

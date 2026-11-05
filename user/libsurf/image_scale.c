@@ -1,15 +1,17 @@
 /*
-SurfOS Undertow's window: pictures at other sizes
+SurfOS user library: pictures at other sizes
 ----------------------
 File: image_scale.c  Date: 11/1/26
 ----------------------
-image.h's making pictures smaller or larger, in whole numbers: the helper's, for what is large, and the window's, for
-what is shown smaller than it is kept. Apart from the decoders, which the window has no use for.
+image.h's making pictures smaller or larger, in whole numbers: Wundertow's helper's, for what is large, and its
+window's, for what is shown smaller than it is kept. Apart from the decoders, which a window has no use for.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
-#include "image.h"
+#include <image.h>
 
 /* The average of n pixels whose channels are summed: transparency counts as a channel. Colours of pixels that are not
    there at all do not count; a pixel half there counts in full, which is near enough for a picture's edge. Each sum is

@@ -385,7 +385,8 @@ stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, 
 hides, and so the content of an element with the `hidden` attribute.
 
 **Pictures.** PNG (with its own inflate), JPEG (baseline and progressive), GIF (its first frame) and BMP, whatever the
-server calls them, read in integers by `user/wundertow/image_*.c` in the helper. They load after the page, three at
+server calls them, read in integers by libsurf's `user/libsurf/image_*.c` (`user/include/image.h`; until 11/05/26 they
+were `user/wundertow/`'s) in the helper. They load after the page, three at
 a time, in the page's order. An image's frame is as big as its `width` and `height` say, or by its shape when only one
 of them is there, else the picture's own size once it is known, and the page is laid out again then, keeping what
 you are reading where it is. Until then, and if it never comes, the frame shows its alt text. A picture is never

@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: PNG pictures
+SurfOS user library: PNG pictures
 ----------------------
 File: image_png.c  Date: 11/1/26
 ----------------------
@@ -16,13 +16,14 @@ out of inflate one at a time into the row being made; each whole row is unfilter
 small file that says it inflates to gigabytes costs nothing: the bytes a picture of its size can hold are known from
 its header, and inflate stops at the first one past them. Inflate's input is the IDAT chunks one after the other, a
 byte at a time, however they are cut.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
 #define WINDOW   32768u
 #define FAST     9                              /* bits of a code that the quick table covers */
@@ -570,7 +571,7 @@ int wimg_png(const unsigned char *in, size_t len, struct wimg *out, char *err, s
     struct png *p = calloc(1, sizeof(*p));
     const char *why;
     size_t row;
-    if(!p) return ut_error(err, cap, "out of memory reading a PNG");
+    if(!p) return wimg_error(err, cap, "out of memory reading a PNG");
     p->in = in;
     p->len = len;
     p->m = out;
@@ -580,7 +581,7 @@ int wimg_png(const unsigned char *in, size_t len, struct wimg *out, char *err, s
     why = head(p);
     if(why) {
         free(p);
-        return ut_error(err, cap, "%s", why);
+        return wimg_error(err, cap, "%s", why);
     }
     if(wimg_alloc(out, p->w, p->h, err, cap)) {
         free(p);
