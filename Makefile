@@ -1156,6 +1156,23 @@ unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_gk
 	$(BUILD)/host/test_wkit
 
+# 11/05/26 (the desktop applications, track chat): Chat's model against hostile, split and oversized servers, every
+# allocation failing in turn (its files built with tests/host/wchat_alloc.h ahead). The sanitizer runs are the Mac's,
+# by hand (the track's account)
+WCHAT_MODEL   = $(addprefix user/wchat/,irc.c ircfmt.c chat.c recv.c input.c link.c)
+$(BUILD)/host/wchat/%.o: user/wchat/%.c tests/host/wchat_alloc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wchat)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -include tests/host/wchat_alloc.h -MMD -MP -c $< -o $@
+-include $(wildcard $(BUILD)/host/wchat/*.d)
+$(BUILD)/host/test_wchat: tests/host/test_wchat.c $(WCHAT_MODEL:user/wchat/%.c=$(BUILD)/host/wchat/%.o)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wchat $^ -o $@
+unittest: unittest-chat
+.PHONY: unittest-chat
+unittest-chat: $(BUILD)/host/test_wchat
+	$(BUILD)/host/test_wchat
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
