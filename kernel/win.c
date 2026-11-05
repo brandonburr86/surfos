@@ -57,6 +57,12 @@ it (win_clip_take()), which keeps it only when that window has its focus still; 
 ends at a NUL, and empty text is refused. WIN_ALERT counts in the window's state
 (win_state.alerts), once in WIN_ALERT_MS at most for its program, whichever of its windows asks
 (struct alerter): the desktop shows the window in front of the others, without the focus.
+
+11/05/26 (docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk, stage 1: the ABI): WIN_THEME,
+the desktop's theme and its colours (until a desktop gives its own, the ocean theme's below); and
+the argument checks of WIN_MENU, WIN_PASTE, WIN_DIALOG and WIN_TAKE (surfos/win.h), each made on a
+copy in the kernel's memory, never on the program's, which may change meanwhile. Until stage 2
+implements them, a request that passes its checks is answered -ENOSYS.
 */
 
 #include <surfos/types.h>
@@ -104,6 +110,7 @@ struct win {
     int min_w, min_h, max_w, max_h;
     u32 flags, background, serial, presents;
     u32 alerts;                         /* 10/26/26: how many times it asked to be seen (WIN_ALERT) */
+    bool themed;                        /* 11/05/26: its program asked WIN_THEME: it hears of a new theme */
     bool focused;
     int size_w, size_h;                 /* its size: buf's, and still once the buffers went at the hang-up */
     char title[WIN_TITLE_MAX];
@@ -111,6 +118,13 @@ struct win {
     u_int ev_first, ev_count, lost;
     u32 buttons, buttons_before;        /* the last pointer event queued: its buttons, and those before it */
     wait_queue_t readers;
+};
+
+/* 11/05/26: the theme WIN_THEME gives until a desktop says its own: the ocean's, the colours the desktop draws its
+   windows in (include/sys/guidraw.h, by role: surfos/win.h's WIN_COLOR_*) */
+static const u32 ocean_colors[WIN_COLORS] = {
+    0x245A67, 0xF4F1E6, 0x153D49, 0x6C888C, 0x197D83, 0xF4F1E6, 0xE7E2D2, 0xDEE3D8,
+    0xC9CFC4, 0xBFE3DD, 0xFFFDF5, 0x153D49, 0x102E3B, 0xB8E9D9, 0xEE906D, 0xA3B4B3
 };
 
 static struct desk desks[WIN_DESKS];
@@ -590,6 +604,20 @@ static int info(struct win *w, struct win_info *u) {
     return 0;
 }
 
+/* 11/05/26: WIN_THEME: the theme and its colours; from now on the window hears of a new one (WIN_EV_THEME) */
+static int theme(struct win *w, struct win_theme *u) {
+    struct win_theme k;
+    u_long flags;
+    if(!u || !user_buf(u, sizeof(k), true)) return -EFAULT;
+    k.theme = WIN_THEME_OCEAN;
+    memcpy(k.colors, ocean_colors, sizeof(k.colors));
+    flags = irq_save();
+    w->themed = true;
+    irq_restore(flags);
+    memcpy(u, &k, sizeof(k));
+    return 0;
+}
+
 /* 10/26/26: whether the window may put text on its desktop's clipboard now (interrupts off): -EPIPE once it is let go,
    -EACCES without the focus */
 static int clip_may(const struct win *w) {
@@ -659,6 +687,136 @@ static int alert(struct win *w) {
     return r;
 }
 
+/**** 11/05/26: menus, the clipboard, the choosers (surfos/win.h): what a request may be ****/
+
+/* a label's or a shortcut's array made a string: its NUL within the array, a string that fills it cut between
+   characters as a title is; its length */
+static u32 menu_text(char *s, u32 size) {
+    u32 n = (u32)strnlen(s, size);
+    if(n == size) n = title_cut(s, size, size - 1);
+    s[n] = 0;
+    return n;
+}
+
+/* n entries of a WIN_MENU, copied into the kernel, as menus (surfos/win.h): each label and shortcut made a string,
+   then the rest checked: 0, or -EINVAL. A title's characters are counted as its bytes that are no UTF-8 continuation */
+static int menu_check(struct win_menu_item *it, u32 n) {
+    const u32 known = WIN_MENU_TITLE | WIN_MENU_SEPARATOR | WIN_MENU_DISABLED | WIN_MENU_CHECKED | WIN_MENU_RADIO;
+    u32 i, k, menus = 0, items = 0, cells = 0;
+    for(i = 0; i < n; i++) {
+        struct win_menu_item *e = &it[i];
+        if((e->flags & ~known) || ((e->flags & WIN_MENU_TITLE) && (e->flags & WIN_MENU_SEPARATOR))) return -EINVAL;
+        menu_text(e->label, sizeof(e->label));
+        menu_text(e->keys, sizeof(e->keys));
+        if(e->flags & WIN_MENU_TITLE) {
+            if((menus && !items) || ++menus > WIN_MENUS || !e->label[0]) return -EINVAL;   /* a menu with no items */
+            items = 0;
+            for(k = 0; e->label[k]; k++) if(((u8)e->label[k] & 0xC0) != 0x80) cells++;
+            cells += 3;
+        } else if(!menus || ++items > WIN_MENU_ITEMS || (!(e->flags & WIN_MENU_SEPARATOR) && !e->label[0]))
+            return -EINVAL;                             /* before the first title; too many; an item with no label */
+    }
+    if(n && !items) return -EINVAL;                     /* the last menu has no items */
+    return cells > WIN_MENU_BAR ? -EINVAL : 0;
+}
+
+/* WIN_MENU: the request copied in and checked (*out: the kernel's copy of its entries, NULL for none: count 0) */
+static int menu_args(const struct win_menu *um, struct win_menu_item **out, u32 *count) {
+    struct win_menu m;
+    struct win_menu_item *it;
+    int r;
+    *out = NULL;
+    *count = 0;
+    if(!um || !user_buf(um, sizeof(m), false)) return -EFAULT;
+    memcpy(&m, um, sizeof(m));
+    if(m.count > WIN_MENU_ENTRIES) return -EINVAL;
+    if(!m.count) return 0;
+    if(!m.items || !user_buf(m.items, (u_long)m.count * sizeof(*it), false)) return -EFAULT;
+    it = (struct win_menu_item *)kalloc(m.count * sizeof(*it));
+    if(!it) return -ENOMEM;
+    memcpy(it, m.items, m.count * sizeof(*it));
+    r = menu_check(it, m.count);
+    if(r) {
+        kfree(it);
+        return r;
+    }
+    *out = it;
+    *count = m.count;
+    return 0;
+}
+
+/* WIN_PASTE's and WIN_TAKE's buffer: the struct read (the buffer itself is checked when it is written) */
+static int buffer_args(const struct win_buffer *ub, struct win_buffer *b) {
+    if(!ub || !user_buf(ub, sizeof(*b), false)) return -EFAULT;
+    memcpy(b, ub, sizeof(*b));
+    return b->size && !b->buf ? -EFAULT : 0;
+}
+
+/* a path's or a name's array: its NUL within it, and no control character before it */
+static bool plain_text(const char *s, u32 size) {
+    u32 i;
+    for(i = 0; i < size && s[i]; i++) if((u8)s[i] < 0x20 || s[i] == 0x7F) return false;
+    return i < size;
+}
+
+/* a chooser's file types: extensions of 1 to WIN_TYPE_LEN letters and digits, WIN_TYPES at most, separated by spaces
+   (any number of them, around them too), the NUL within the array */
+static bool types_ok(const char *s, u32 size) {
+    u32 i, len = 0, n = 0;
+    if(!memchr(s, 0, size)) return false;
+    for(i = 0;; i++) {
+        char c = s[i];
+        if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            if(!len && ++n > WIN_TYPES) return false;
+            if(++len > WIN_TYPE_LEN) return false;
+        } else if(c == ' ') len = 0;
+        else return !c;
+    }
+}
+
+/* WIN_DIALOG: the request copied in (into d) and checked; its title made a string as a window's title is */
+static int dialog_args(const struct win_dialog *ud, struct win_dialog *d) {
+    if(!ud || !user_buf(ud, sizeof(*d), false)) return -EFAULT;
+    memcpy(d, ud, sizeof(*d));
+    if(d->kind < WIN_DLG_OPEN || d->kind > WIN_DLG_FOLDER) return -EINVAL;
+    if(!plain_text(d->dir, sizeof(d->dir)) || (d->dir[0] && d->dir[0] != '/')) return -EINVAL;
+    if(!plain_text(d->name, sizeof(d->name)) || strchr(d->name, '/')) return -EINVAL;
+    if(!types_ok(d->types, sizeof(d->types))) return -EINVAL;
+    d->title[title_cut(d->title, (u32)strnlen(d->title, sizeof(d->title)), WIN_TITLE_MAX - 1)] = 0;
+    return 0;
+}
+
+/* 11/05/26, stage 1: the ABI's checks; what passes them is answered once stage 2 implements the ops */
+static int set_menu(struct win *w, const struct win_menu *um) {
+    struct win_menu_item *it;
+    u32 n;
+    int r = menu_args(um, &it, &n);
+    (void)w;
+    kfree(it);
+    return r ? r : -ENOSYS;
+}
+
+static int paste(struct win *w, const struct win_buffer *ub) {
+    struct win_buffer b;
+    int r = buffer_args(ub, &b);
+    (void)w;
+    return r ? r : -ENOSYS;
+}
+
+static int ask_dialog(struct win *w, const struct win_dialog *ud) {
+    struct win_dialog d;
+    int r = dialog_args(ud, &d);
+    (void)w;
+    return r ? r : -ENOSYS;
+}
+
+static int take(struct win *w, const struct win_buffer *ub) {
+    struct win_buffer b;
+    int r = buffer_args(ub, &b);
+    (void)w;
+    return r ? r : -ENOSYS;
+}
+
 int sys_winctl(int fd, int op, void *arg) {
     struct file *f = fd_get(fd);
     struct win *w;
@@ -672,6 +830,11 @@ int sys_winctl(int fd, int op, void *arg) {
     case WIN_INFO:    return info(w, (struct win_info *)arg);
     case WIN_CLIP:    return set_clip(w, (const struct win_clip *)arg);      /* 10/26/26 */
     case WIN_ALERT:   return alert(w);
+    case WIN_MENU:    return set_menu(w, (const struct win_menu *)arg);      /* 11/05/26 */
+    case WIN_PASTE:   return paste(w, (const struct win_buffer *)arg);
+    case WIN_DIALOG:  return ask_dialog(w, (const struct win_dialog *)arg);
+    case WIN_TAKE:    return take(w, (const struct win_buffer *)arg);
+    case WIN_THEME:   return theme(w, (struct win_theme *)arg);
     }
     return -EINVAL;
 }
