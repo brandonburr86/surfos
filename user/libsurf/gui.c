@@ -11,7 +11,8 @@ WIN_SETSIZE, before the event is given (when there is no memory for it the image
 and so does the window). Milestone M12, stage C5 of docs/superpowers/plans/2026-10-25-app-windows.md.
 10/26/26 (stage C12): gw_clip() (WIN_CLIP), gw_alert() (WIN_ALERT) and text at scale.
 11/05/26 (the desktop applications, track kit): the view every drawing goes through (an origin and a
-clip), for the toolkit (gk.h, gk*.c), which draws its widgets and programs' areas in it.
+clip), for the toolkit (gk.h, gk*.c), which draws its widgets and programs' areas in it; and track desk's
+calls (surfos/win.h): menus in the desktop's bar, the clipboard read, its choosers and the theme.
 */
 
 #include <errno.h>
@@ -262,3 +263,33 @@ int gw_text_cut(struct gw *win, int x, int y, const char *utf8, int cells, unsig
     return guikit_text_cut(win->kit, x, y, utf8, cells, color);
 }
 
+/**** 11/05/26 (the desktop applications: track desk's calls): menus, the clipboard read, choosers, the theme ****/
+
+int gw_menu(struct gw *win, const struct win_menu_item *items, unsigned count) {
+    struct win_menu m;
+    m.items = items;
+    m.count = count;
+    return winctl(win->fd, WIN_MENU, &m);
+}
+
+int gw_paste(struct gw *win, char *buf, unsigned size) {
+    struct win_buffer b;
+    b.buf = buf;
+    b.size = size;
+    return winctl(win->fd, WIN_PASTE, &b);
+}
+
+int gw_dialog(struct gw *win, const struct win_dialog *d) {
+    return winctl(win->fd, WIN_DIALOG, (void *)d);
+}
+
+int gw_take(struct gw *win, char *buf, unsigned size) {
+    struct win_buffer b;
+    b.buf = buf;
+    b.size = size;
+    return winctl(win->fd, WIN_TAKE, &b);
+}
+
+int gw_theme(struct gw *win, struct win_theme *t) {
+    return winctl(win->fd, WIN_THEME, t);
+}

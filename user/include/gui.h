@@ -113,4 +113,15 @@ int gw_char(const char *utf8, int avail, int *len);
 /* at most cells characters, a longer text's last cell a dot (as the desktop cuts names): x after it */
 int gw_text_cut(struct gw *win, int x, int y, const char *utf8, int cells, unsigned color);
 
+/* 11/05/26 (the desktop applications: track desk's calls, surfos/win.h): the window's menus in the desktop's bar
+   (count entries, WIN_MENU_TITLE starting each menu; 0: none), the desktop's clipboard read into buf (its length; size 0
+   only says it; -1 ENOSPC for a buf too small, EACCES without the focus), a chooser asked for (WIN_EV_DIALOG answers),
+   the path it chose taken (its length), the theme and its colours (asked once, WIN_EV_THEME tells of a new one). Each
+   is 0 or a length, or -1 with errno: ENOSYS from a desktop that does not do it yet, EINVAL from a kernel before it */
+int gw_menu(struct gw *win, const struct win_menu_item *items, unsigned count);
+int gw_paste(struct gw *win, char *buf, unsigned size);
+int gw_dialog(struct gw *win, const struct win_dialog *d);
+int gw_take(struct gw *win, char *buf, unsigned size);
+int gw_theme(struct gw *win, struct win_theme *t);
+
 #endif
