@@ -674,6 +674,45 @@ for the programs of the desktop applications, and for any other program with a w
   or the `settings` command applies at once; a change made in Pointer & desktop is written there
   when there is a settings stick, and its last line says whether it was.
 
+### Settings
+
+*11/05/26* (`docs/superpowers/plans/2026-11-05-desktop-apps.md`, track settings; its account is
+`2026-11-05-desktop-apps-settings.md`). What the `wifi` and `settings` commands do, in a window:
+Apps > Programs > Settings, its tile, or `wsettings` in the Terminal (`user/wsettings/`; the kernel's
+side is `SYS_netctl`, `kernel/netctl.c` and `include/surfos/netctl.h`).
+
+* **Five tabs** (F5 to F9, View): **Wi-Fi** (the card, the network joined and its address,
+  Disconnect and Save; the networks heard in the last minute, a row a name with its signal in bars
+  and dBm, its security, joined or saved; Scan, Join, By name; the saved networks in the order they
+  are tried, and Forget; joining a saved network by itself at startup), **Network** (Ethernet's
+  DHCP, every interface's addresses and lease, the host name), **Desktop** (the theme and the
+  pointer's speed, `desktop.theme` and `pointer.speed`), **System** (`telnetd` at startup and the
+  shell's `history`, each with what it means, and where the settings are kept) and **About** (the
+  version, the build, the memory, the time since the start, the processor). The band at the bottom
+  says what the last change did and when it acts, in the `settings` command's words.
+* **Joining.** An open network joins at once, but while a telnet or FTP server without a password
+  runs Settings asks first, with the `wifi` command's warning. A WPA2 network asks for its
+  password in a panel over the tabs: the field shows a dot for each character and copies nothing,
+  and is wiped as soon as the password has been handed on; the kernel makes the key from it at
+  once and wipes it, and Save it keeps the network in `networks.conf` (the key, never the
+  password). By name joins a network that hides its name (no password: an open one). WEP, WPA3
+  only and enterprise networks are listed and say why SurfOS does not join them. A network not
+  heard in the last minute (the station forgets what it has not heard for that long, and its row
+  goes) is looked for first, as `wifi join` does, and is joined as a hidden one only when it is
+  still not heard; a look at the Wi-Fi page with nothing heard scans by itself.
+* **Questions** take the tabs' place, their words wrapped to the window so that none is cut:
+  Forget asks first, and so does `telnetd` at startup, with the warning the `settings` command
+  gives. Esc is No; Enter in the password field joins.
+* **What waits** (a scan, a join and its address, the card, the stick written) is a job of the
+  kernel's: the window never waits for it, says its stage in the band, and greys what would start
+  another meanwhile. One runs at a time in all of SurfOS: another program's (or a `wifi` command
+  using the card) makes it say so. A job ends also when the window closes.
+* **The theme and the pointer's speed** are stepped through: each step is in force at once (the
+  desktop reads them each second) and nothing is written until the steps stop for 1.5 s, when the
+  last is written once; closing the window writes what is waiting first.
+* **Keys:** Ctrl+R scans, Ctrl+J joins by name, Ctrl+W or Esc closes (asking first while a host
+  name is typed and not set).
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
