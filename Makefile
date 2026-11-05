@@ -79,6 +79,21 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wcode         # 11/05/26 (the desktop applications, track code): the Code Editor, user/wcode/
+# wcode, the Code Editor (11/05/26): user/wcode/. Its model is host-tested (tests/host/test_wcode.c), its files on the
+# simulated file system (test_wcode_save.c), its window on the toolkit's fake desktop (test_wcode_win.c); saveutil.h
+# is user/bin's
+WCODE_SRC    = $(wildcard user/wcode/*.c)
+WCODE_OBJ    = $(WCODE_SRC:user/wcode/%.c=$(BUILD)/user/wcode/%.o)
+$(BUILD)/user/wcode/%.o: user/wcode/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -Iuser/bin -c $< -o $@
+$(BUILD)/user/bin/wcode: $(WCODE_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCODE_OBJ) $(USER_LIB)
+-include $(WCODE_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1155,6 +1170,44 @@ unittest: unittest-kit
 unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_gk
 	$(BUILD)/host/test_wkit
+
+# 11/05/26 (the desktop applications, track code): the Code Editor's host tests. Its model with libsurf's regular
+# expressions (tests/host/wcode/regex.h gives them their surf_ names); its files on the simulated file system of
+# tests/host/sim_fs.c, through tests/host/wcode_save_bridge.c; its window on the toolkit's fake desktop. No sanitizer
+# build here: tests/host/wcode/mac-sanitize.sh runs them on the Mac with clang.
+WCODE_MODEL   = $(filter-out user/wcode/main.c user/wcode/window.c user/wcode/fileio.c,$(wildcard user/wcode/*.c))
+WCODE_HDRS    = $(wildcard user/wcode/*.h) tests/host/wcode/regex.h
+WCODE_SIM_OBJ = $(addprefix $(BUILD)/host/wcsim/,text.o undo.o lex.o syntax.o doc.o fileio.o)
+$(BUILD)/host/test_wcode: tests/host/test_wcode.c $(WCODE_MODEL) $(WCODE_HDRS) $(BUILD)/host/text/regex.o \
+                          $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $(WCODE_MODEL) $(filter %.o,$^) -o $@
+$(BUILD)/host/wcsim/%.o: user/wcode/%.c $(WCODE_HDRS) user/bin/saveutil.h tests/host/sim_names.h tests/host/libsurf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (sim)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(SIM_FLAGS) -Iuser/bin -c $< -o $@
+$(BUILD)/host/wcsim/wcode_save_bridge.o: tests/host/wcode_save_bridge.c tests/host/wcode_sim.h $(WCODE_HDRS) \
+                                         tests/host/sim_fs.h tests/host/sim_names.h tests/host/libsurf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(SIM_FLAGS) -Iuser/wcode -Iuser/bin -c $< -o $@
+$(BUILD)/host/test_wcode_save: tests/host/test_wcode_save.c tests/host/wcode_sim.h $(BUILD)/host/wcsim/wcode_save_bridge.o \
+                               $(WCODE_SIM_OBJ) $(BUILD)/host/sim/sim_fs.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_wcode_save.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_wcode_win: tests/host/test_wcode_win.c tests/host/gk_fake.h user/include/gk.h $(WCODE_MODEL) \
+                              user/wcode/window.c $(WCODE_HDRS) $(GK_HOST_OBJ) $(BUILD)/host/text/regex.o \
+                              $(BUILD)/host/libsurf/ctype.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Itests/host/wcode -Iuser/wcode tests/host/test_wcode_win.c $(WCODE_MODEL) \
+	    user/wcode/window.c $(GK_HOST_OBJ) $(BUILD)/host/text/regex.o $(BUILD)/host/libsurf/ctype.o -o $@
+-include $(wildcard $(BUILD)/host/wcsim/*.d)
+unittest: unittest-code
+.PHONY: unittest-code
+unittest-code: $(BUILD)/host/test_wcode $(BUILD)/host/test_wcode_save $(BUILD)/host/test_wcode_win
+	$(BUILD)/host/test_wcode
+	$(BUILD)/host/test_wcode_save
+	$(BUILD)/host/test_wcode_win
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
