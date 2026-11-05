@@ -60,6 +60,22 @@ put on the clipboard while it had the focus (WIN_CLIP) is taken each tick, and i
 clipboard from then on (Notepad pastes it) only if that window has the focus still. The window
 of a program an application's launcher started (the Clock's, guicore.c) stands where that
 application's window stood, not in the cascade.
+
+11/05/26 (the desktop applications, docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk).
+Keys reach a program with their modifiers (full keys, sys/gui.h, as surfos/win.h's "The keys" says:
+gui_program_key()), and the pointer and the wheel with those held (gui_state.mods). A window's
+menus (WIN_MENU) come lent with each update, as its pixels do, and while the window has the focus
+they take the place of the desktop's File and Edit in the bar (guicore.c, its Help's items in the
+desktop's Help); an item chosen goes to it as WIN_EV_MENU. The clipboard is given to the kernel
+for WIN_PASTE before the tick's FOCUS events, whenever a program's window has the focus and the
+clipboard changed since it was given last (gui_clipped() counts the changes), so a program never
+pastes text older than what was copied. A chooser a window asks for
+(WIN_DIALOG) is shown when it is taken, after the tick's updates, while that window still has the
+focus and no other dialog is up, and answered as cancelled otherwise: the program never waits for
+a chooser nobody sees. Its answer is checked as Notepad's Save as checks one (a file there already
+asks "Replace the file?"; one the desktop takes care of is refused), then given back, naming the
+request's number. Its title bar names the window it is for. The theme is told to the kernel once
+and at each change.
 */
 #include "guipriv.h"
 #include <string.h>
@@ -71,7 +87,11 @@ typedef char clip_fits[WIN_CLIP_MAX <= GUI_CLIP_MAX ? 1 : -1];
 
 /* the keys and buttons reach a program with the desktop's numbers */
 typedef char keys_are_the_desktops[WIN_KEY_UP == GUI_UP && WIN_KEY_PGDN == GUI_PGDN && WIN_KEY_INSERT == GUI_INSERT &&
-                                   WIN_KEY_BACKTAB == GUI_BACKTAB ? 1 : -1];
+                                   WIN_KEY_BACKTAB == GUI_BACKTAB && WIN_KEY_F(1) == GUI_F(1) &&
+                                   WIN_KEY_F12 == GUI_F(12) && WIN_KEY_TAB == GUI_CTRL_TAB &&
+                                   WIN_KEY_BACKSPACE == GUI_CTRL_BACKSPACE ? 1 : -1];
+/* 11/05/26: a program's chooser's types fit the desktop's dialog */
+typedef char types_fit[WIN_TYPES_MAX == GUI_TYPES_MAX && WIN_PATH_MAX == GUI_PATH_MAX ? 1 : -1];
 typedef char buttons_are_the_pointers[WIN_BUTTON_LEFT == POINTER_LEFT && WIN_BUTTON_RIGHT == POINTER_RIGHT &&
                                       WIN_BUTTON_MIDDLE == POINTER_MIDDLE ? 1 : -1];
 
@@ -158,7 +178,8 @@ static void send_mods(struct gui_state *g, struct gui_client *c, int type, int x
 }
 
 static void send(struct gui_state *g, struct gui_client *c, int type, int x, int y, unsigned value) {
-    send_mods(g, c, type, x, y, value, 0);
+    /* 11/05/26: the pointer and the wheel with the modifiers held as their events were taken */
+    send_mods(g, c, type, x, y, value, type == WIN_EV_POINTER || type == WIN_EV_WHEEL ? (int)g->mods : 0);
 }
 
 /* the frame around pixels of w x h, kept on the screen */
@@ -180,6 +201,9 @@ static void drop(struct gui_state *g, int id) {
     if(g->drag == id) g->drag = -1;
     if(g->resize == id) g->resize = -1;
     if(g->dialog.kind && g->dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT)) dialog_close(g);
+    if(g->dialog.kind && (g->dialog.act == ACT_CLIENT_DIALOG + (id - GUI_FIRST_CLIENT) ||    /* 11/05/26: its */
+                          g->dialog.act == ACT_CLIENT_REPLACE + (id - GUI_FIRST_CLIENT))) dialog_close(g);   /* chooser */
+    c->chooser = 0;
     g->win[id].max = false;
     gui_close_now(g, id);
 }
@@ -211,6 +235,7 @@ static void update(struct gui_state *g, int id) {
     resized = st.w != c->st.w || st.h != c->st.h;
     if(resized || st.serial != c->st.serial || view.pixels != c->view.pixels) g->dirty = true;
     if(st.alerts != c->st.alerts) c->alerted = true;   /* 10/26/26: it asks to be seen: after the input */
+    if(st.menu_serial != c->st.menu_serial) g->dirty = true;   /* 11/05/26: its menus, set again (in the view) */
     c->st = st;
     c->view = view;
     if(resized) {                                       /* pixels of another size: the frame follows them */
@@ -305,6 +330,55 @@ static void accept(struct gui_state *g) {
     }
 }
 
+/* 11/05/26: the theme, told to the kernel's windows once and whenever it changes */
+void client_theme(struct gui_state *g) {
+    u32 colors[WIN_COLORS];
+    int theme = g->night ? WIN_THEME_DUSK : WIN_THEME_OCEAN;
+    if(!g->sys || !g->sys->win_theme || g->theme_given == theme) return;
+    gui_theme_colors(g, colors);
+    if(g->sys->win_theme(g->sys->ctx, theme, colors) == 0) g->theme_given = theme;
+}
+
+/* 11/05/26 (the review): a chooser's title bar names the window it is for, so that no program's chooser passes for
+   another's or the desktop's: "the window's title: the chooser's", the window's cut to 20 cells */
+static void chooser_title(const struct gui_client *c, const char *own, char *out, size_t n) {
+    const char *t = c->st.title[0] ? c->st.title : "A program";
+    char name[WIN_TITLE_MAX + 4];
+    u32 at = 0, rest = (u32)strlen(t);
+    int cells = 0;
+    while(at < rest && cells < 20) {
+        at += gd_char_len(t + at, rest - at);
+        cells++;
+    }
+    memcpy(name, t, at);
+    strlcpy(name + at, at < rest ? "\xE2\x80\xA6" : "", sizeof(name) - at);   /* … */
+    snprintf(out, n, "%s: %s", name, own);
+}
+
+/* 11/05/26: a chooser window id asked for: shown while it has the focus and no other dialog is up, cancelled else
+   (answered by the request's number, which the kernel gave with it) */
+static void chooser(struct gui_state *g, int id) {
+    struct gui_client *c = client_of(g, id);
+    struct win_dialog d;
+    char title[GUI_DIALOG_TITLE];
+    u32 no;
+    int kind;
+    if(!c || !c->st.dialog || !g->sys->win_dialog || !g->sys->win_answer) return;
+    if(g->sys->win_dialog(g->sys->ctx, c->handle, &d, &no) < 0) return;
+    c->st.dialog = 0;
+    kind = d.kind == WIN_DLG_OPEN ? GUI_DLG_OPEN : d.kind == WIN_DLG_SAVE ? GUI_DLG_SAVE : GUI_DLG_FOLDER;
+    if(g->focus != id || g->win[id].min || g->dialog.kind || !g->fs) {
+        g->sys->win_answer(g->sys->ctx, c->handle, no, NULL);
+        return;
+    }
+    chooser_title(c, d.title[0] ? d.title : kind == GUI_DLG_OPEN ? "Open a file" : kind == GUI_DLG_FOLDER ?
+                  "Choose a folder" : "Save as", title, sizeof(title));
+    dialog_chooser_for(g, kind, ACT_CLIENT_DIALOG + (id - GUI_FIRST_CLIENT), title, d.dir, d.name, d.types);
+    snprintf(g->dialog.target, sizeof(g->dialog.target), "%d", c->st.pid);
+    c->chooser = d.kind;
+    c->request = no;
+}
+
 void client_tick(struct gui_state *g) {
     struct gui_client *c;
     int id, n;
@@ -312,11 +386,18 @@ void client_tick(struct gui_state *g) {
     if(g->sys->win_clip) {                              /* 10/26/26: a program's Copy, from the window with the focus */
         c = client_keys(g) ? client_of(g, g->focus) : NULL;
         n = g->sys->win_clip(g->sys->ctx, c ? c->handle : -1, g->clip, GUI_CLIP_MAX);
-        if(n > 0) g->clip_len = (u32)n;
+        if(n > 0) gui_clipped(g, (u32)n);
+    }
+    client_theme(g);                                    /* 11/05/26 */
+    if(g->sys->win_paste && client_keys(g) && (!g->clip_ever || g->clip_serial != g->clip_given) &&
+       g->sys->win_paste(g->sys->ctx, g->clip, g->clip_len) == 0) {     /* before the FOCUS events below */
+        g->clip_given = g->clip_serial;
+        g->clip_ever = true;
     }
     grab_check(g);
     for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) if(client_of(g, id)) update(g, id);
     accept(g);
+    for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) if(client_of(g, id)) chooser(g, id);    /* 11/05/26 */
 }
 
 /* 10/26/26: after the pass's input, the windows that asked to be seen come to the front, shown again if they were
@@ -470,11 +551,109 @@ bool client_keys(const struct gui_state *g) {
     return client_at(g, g->focus) && !g->win[g->focus].min;
 }
 
+/* 11/05/26 (the review): a full key (sys/gui.h) as a program's window gets it, surfos/win.h's "The keys": Ctrl and a
+   letter its control byte, Ctrl+[ \ ] ^ _ / 27 to 31, any other character with Ctrl itself, Ctrl+Tab, Ctrl+Enter,
+   Ctrl+Esc and Ctrl+Backspace their WIN_KEY_*, Shift+Tab WIN_KEY_BACKTAB; the modifiers into *mods */
+int gui_program_key(int key, int *mods) {
+    int code = key & GUI_KEY_MASK;
+    *mods = (key >> 16) & (WIN_MOD_SHIFT | WIN_MOD_ALT | WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    if(code == GUI_SHIFT_ENTER) { *mods |= WIN_MOD_SHIFT; return '\r'; }   /* (11/1/26) to a program that does not look, Enter */
+    if(code == GUI_BACKTAB) return WIN_KEY_BACKTAB;    /* (a terminal's ESC [ Z comes with its Shift) */
+    if(code == 9 && (*mods & WIN_MOD_SHIFT) && !(*mods & WIN_MOD_CTRL)) return WIN_KEY_BACKTAB;
+    if(code >= 0x100 || !(*mods & WIN_MOD_CTRL)) return code;
+    switch(code) {
+    case 9: return WIN_KEY_TAB;
+    case 13: return WIN_KEY_ENTER;
+    case 27: return WIN_KEY_ESC;
+    case 127: return WIN_KEY_BACKSPACE;
+    case '[': return 27;
+    case '\\': return 28;
+    case ']': return 29;
+    case '^': return 30;
+    case '_': case '/': return 31;
+    }
+    if(code >= 'a' && code <= 'z') return code - 'a' + 1;
+    if(code >= 'A' && code <= 'Z') return code - 'A' + 1;
+    return code;
+}
+
 void client_key(struct gui_state *g, int key) {
     struct gui_client *c = client_of(g, g->focus);
-    if(!c) return;
-    if(key == GUI_SHIFT_ENTER) send_mods(g, c, WIN_EV_KEY, 0, 0, '\r', WIN_MOD_SHIFT);     /* (11/1/26) to a program that does not look, Enter */
-    else send(g, c, WIN_EV_KEY, 0, 0, (unsigned)key);
+    int mods, value = gui_program_key(key, &mods);
+    if(c) send_mods(g, c, WIN_EV_KEY, 0, 0, (unsigned)value, mods);
+}
+
+/**** 11/05/26 (track desk): menus and choosers ****/
+
+/* the focused program's window's menus, when it has any: the entries lent with its last update (the kernel checked
+   them as surfos/win.h says), *count of them; NULL for none */
+const struct win_menu_item *client_menu(const struct gui_state *g, int *count) {
+    const struct gui_client *c = client_keys(g) ? client_at(g, g->focus) : NULL;
+    *count = c && c->view.menu ? c->view.menus : 0;
+    return *count > 0 ? c->view.menu : NULL;
+}
+
+/* entry number entry of its menus chosen: WIN_EV_MENU with its id, and its menu's id in x; nothing for what is no
+   item that can be chosen (a title, a separator, an item that opens a submenu, greyed, or greyed by its menu or by
+   the item whose submenu it is in) */
+void client_menu_chosen(struct gui_state *g, int entry) {
+    const struct win_menu_item *m;
+    struct gui_client *c = client_of(g, g->focus);
+    int n, k, title = -1, parent = -1;
+    if(!(m = client_menu(g, &n)) || !c || entry < 0 || entry >= n) return;
+    for(k = 0; k <= entry; k++) {
+        if(m[k].flags & WIN_MENU_TITLE) title = k;
+        else if(!(m[k].flags & WIN_MENU_CHILD)) parent = k;
+    }
+    if(title < 0 || (m[entry].flags & (WIN_MENU_TITLE | WIN_MENU_SEPARATOR | WIN_MENU_SUBMENU | WIN_MENU_DISABLED)) ||
+       (m[title].flags & WIN_MENU_DISABLED) ||
+       ((m[entry].flags & WIN_MENU_CHILD) && (parent < title || (m[parent].flags & WIN_MENU_DISABLED)))) return;
+    send_mods(g, c, WIN_EV_MENU, (int)m[title].id, 0, m[entry].id, 0);
+}
+
+/* the chooser of the window in slot slot answered (act: ACT_CLIENT_DIALOG or ACT_CLIENT_REPLACE + slot; button 0 with
+   path, else cancelled; target: its program's pid, for a slot that holds another window by now): a Save as path is
+   checked as Notepad's Save as checks one, then given back */
+void client_chooser_answer(struct gui_state *g, int slot, int act, int button, const char *path, const char *target) {
+    struct gui_client *c = client_of(g, GUI_FIRST_CLIENT + slot);
+    struct gui_entry e;
+    bool device, readonly;
+    char line[80];
+    if(!c || c->st.pid != atoi(target) || !c->chooser) return;
+    if(button == 0 && act == ACT_CLIENT_DIALOG + slot && c->chooser == WIN_DLG_SAVE && g->fs &&
+       g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) == 0) {
+        snprintf(line, sizeof(line), "%s is there already.", gui_basename(path));
+        if(e.type == GUI_DIR || device || note_guarded(g, path)) {   /* nothing to replace, or one taken care of */
+            if(e.type == GUI_DIR || device) dialog_message(g, "Not chosen", line, "It is not a file that can be replaced.");
+            else {
+                gui_unsure_line(g, path, line, sizeof(line));
+                dialog_message(g, "Not chosen", line, "Have the disk checked first (fsck).");
+            }
+            button = -1;
+        } else {
+            dialog_confirm(g, ACT_CLIENT_REPLACE + slot, "Replace the file?", line, "Saving replaces what it holds.",
+                           "Replace", NULL, "Cancel");
+            snprintf(g->dialog.target, sizeof(g->dialog.target), "%d", c->st.pid);
+            strlcpy(g->dialog.field.text, path, sizeof(g->dialog.field.text));   /* the path, for its answer */
+            return;
+        }
+    }
+    if(act == ACT_CLIENT_REPLACE + slot && button == 0) path = g->dialog.field.text[0] ? g->dialog.field.text : path;
+    c->chooser = 0;
+    if(g->sys && g->sys->win_answer) g->sys->win_answer(g->sys->ctx, c->handle, c->request, button == 0 ? path : NULL);
+}
+
+/* a dialog replaced before it was answered: a program's chooser (or its Replace question) is answered as cancelled,
+   a screenshot's dropped */
+void client_chooser_dropped(struct gui_state *g, int act, const char *target) {
+    struct gui_client *c;
+    int slot = -1;
+    if(act >= ACT_CLIENT_DIALOG && act < ACT_CLIENT_DIALOG + GUI_CLIENTS) slot = act - ACT_CLIENT_DIALOG;
+    if(act >= ACT_CLIENT_REPLACE && act < ACT_CLIENT_REPLACE + GUI_CLIENTS) slot = act - ACT_CLIENT_REPLACE;
+    if(act == ACT_DLG_SHOT || act == ACT_DLG_SHOT_REPLACE) g->shot.state = GUI_SHOT_DONE;
+    if(slot < 0 || !(c = client_of(g, GUI_FIRST_CLIENT + slot)) || c->st.pid != atoi(target) || !c->chooser) return;
+    c->chooser = 0;
+    if(g->sys && g->sys->win_answer) g->sys->win_answer(g->sys->ctx, c->handle, c->request, NULL);
 }
 
 void client_close(struct gui_state *g, int id) {
