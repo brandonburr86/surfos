@@ -116,7 +116,136 @@ an allocation failure, the last IDAT, the colour type) each fail `test_image_sav
 (Paeth's left and above exchanged, which gives the same prediction whenever they tie; `v <= 128` for `v < 128`, where
 both give 128; a loop guard that saves only time).
 
+## Stage 2: the Image Viewer as a program
+
+### What was built
+
+| Where | What |
+|---|---|
+| `user/wview/view.h`, `view.c` | the model: the views and their arithmetic as `shell/guiview.c` had them, the toolbar, the keys, the pointer, the title, the status bar, the details, `view_paint()` |
+| `user/wview/folder.c` | the folder's pictures: which names, their order, the steps |
+| `user/wview/main.c` | the window (libgui), the files, the decoders, the chooser, Copy path |
+| `shell/guiview.c` | the desktop's Image Viewer: only its entry now (the program, its Help, Sketch's answers), `viewer_takes()`, and `viewer_show()` starting the program on a file |
+| `shell/gui_media.h` | `viewer_place()` and `viewer_zoom()` gone with the kernel's viewer; the comments of what stays |
+| `rootfs/apps/wview.app` | the registry's entry (desk's format): the pictures it opens, its icon |
+| `rootfs/man/wview.txt` | the manual |
+| `tests/host/test_wview.c` | the model's host test, carrying on `test_guimedia.c`'s viewer test |
+| `tests/host/test_guimedia.c`, `test_guisuite.c` | the kernel viewer's checks out (they are `test_wview`'s now); the entry, Files' rule and `viewer_show()` checked instead |
+| `tools/gui_apps_img.py` | the guiapps scenario's checks |
+| `tools/gui_apps_media.py` | two lines: the chooser's title (below) |
+| `Makefile`, `tools/gui_apps_scenario.py`, `docs/GUI.md` | the insertions the brief allows |
+
+The files outside the brief's list (`shell/gui_media.h`, `test_guimedia.c`, `test_guisuite.c`, `gui_apps_media.py`) had
+to change with `shell/guiview.c`: they declared, tested or read the kernel's viewer, which is gone. Each change is the
+least that keeps them true; nothing else in them was touched.
+
+### How the desktop reaches it
+
+- **Apps > Image Viewer, its tile and Next window:** `gui_app_viewer.program` is `/initrd/bin/wview`, so the launcher
+  (`guicore.c`'s `app_program()`) starts it, or brings its window back, as it does the Clock's `wclock`. Its window opens
+  at the Image Viewer's place (`guiclient.c`, `gui_app_slot_of()`).
+- **Files' Enter or double-click on a picture:** `wview.app` names the pictures in `open-with`, not in `types`, so no
+  registry entry takes the double-click and Files' own rule does: `viewer_takes()`, now any of .bmp, .png, .gif, .jpg and
+  .jpeg in any case, then `viewer_show()`, which starts `wview` with the path as its one argument and keeps its pid as the
+  Image Viewer's. Its window stands where the Image Viewer's stood and its tile brings it back; a new one each time, as
+  the registry starts programs. What is no file (a folder, a device, a name no longer there) is said in a message, as
+  the desktop's own viewer said it, and nothing starts; a start refused is said and leaves the window before as the
+  Image Viewer's. With `types`, the registry would start it instead (`reg_open()`), at the next cascade
+  place and as no application's window: the tile would start a second one, and the media and suite tracks' checks,
+  which look for the Image Viewer where it stands, would not find it.
+- **File > Open with** lists the entry, "Image Viewer", which starts a new `wview` the registry's way (`reg_open()`, the
+  cascade); the desktop's own item for the Image Viewer is left out then, the entry's program being the Image Viewer's
+  (desk's `open_with_items()`).
+- **Screenshots** are 24-bit BMPs named "Screenshot YYYY-MM-DD HHMMSS.bmp": `viewer_takes()` takes them, and the name's
+  spaces stay in the one argument (`guisys_win.c`). The screen checks open one from the folder.
+- **Sketch's** Save as BMP and Open BMP stay the desktop's (`guibmp.c`), and the Image Viewer's entry still answers their
+  dialogs, as it did.
+
+### Decisions a reviewer would ask about
+
+- **The same window, at the same place.** wview opens 558 x 371 of content, the desktop's Image Viewer's 560 x 400 with its
+  frame. Its room, toolbar row, status bar and colours are the old window's, its views the old arithmetic (`fit_zoom`,
+  the steps, `zoom_to` keeping the middle, the pan), so the media track's screen checks of the Image Viewer read it as they
+  read the kernel's. The status bar begins as the old one did ("sea24.bmp  42 x 30, 24-bit") and goes on
+  (" BMP  (1 of 2)").
+- **What is new:** PNG, GIF (its first frame) and JPEG through libsurf's decoders; shrinking by an average (the kernel's
+  took the nearest pixel); transparency over squares of grey; the folder's next and previous picture; the details; Copy
+  path.
+- **The toolbar** has Open, ◄, ►, Fit, Actual, Zoom in, Zoom out, Details, Copy path: "Actual size" became "Actual" so that
+  all nine fit the old window's least width, 540 pixels.
+- **32-bit arithmetic.** `view.c` divides only in 32 bits: the middle of a zoom in two steps, exact, its ranges (16 times,
+  4096 pixels, 1/64) checked to fit; so wview links libsurf alone, without libgcc (below).
+- **Memory.** A file of at most 32 MB is read whole (the decoders need it so) and let go once decoded. The picture is kept
+  as decoded, up to the decoders' 16,000,000 pixels: 64 MB, which with the rest goes over the brief's 64 MB. Shrinking
+  big pictures as Wundertow does (2048 a side) would cap it at 16 MB, but the actual size would then no longer show the
+  picture's own pixels, which is what a viewer is for. While a new picture is decoded the old one stays, so for a moment
+  two are held: the very worst, a picture of 16,000,000 pixels shown while a 32 MB progressive JPEG decodes (64 MB of
+  coefficients, its planes and its pixels), comes to under 250 MB, which the laptop has and a program's 1 GB of address
+  space holds. Every allocation is checked; when one fails the status bar says so and the old picture stays.
+- **The folder** is listed when a file is opened (not at each step): its first 4096 pictures, 256 KB of names, by their
+  endings, in the order of numbers in names compared as numbers. A file among them that is no picture is said when it is
+  reached, the picture before staying, and the next press goes on past it.
+- **No menus of its own** (`WIN_MENU`): the desktop's File and Edit stay while its window is in front, as for the old
+  Image Viewer, and Edit > Copy sends Ctrl+C, which is Copy path.
+- **Open** asks the desktop's chooser (`WIN_DIALOG`) in the picture's folder, for bmp, png, gif, jpg and jpeg. Its answers:
+  a path chosen is taken (`WIN_TAKE`) on the answer's event, whatever request it answers, and shown when it answers
+  Open, since a path left untaken keeps the next `WIN_DIALOG` busy (`EBUSY`, desk's fix round); a chooser cancelled,
+  also one put away for another dialog, changes nothing; `EAGAIN` (its queue full) says in the status bar that the
+  desktop is busy, to try again; `EBUSY`, `EACCES` and `EINVAL` say theirs. The desktop's bar names the program
+  before the chooser's own title (by the window's title at 2c5afd30, by its registry title after desk's fix round), so
+  the screen checks find the chooser by its own title, Open a file, wherever the bar puts it (`gui_apps_media.py`'s
+  `open_chooser()`, which its two Image Viewer checks and `gui_apps_img.py` use).
+- **Help and the registry's title.** wview adds no Help items (it has no menus); the desktop's Help keeps the Image
+  Viewer's lines, which say it is the program `wview` now. `wview.app`'s title is "Image Viewer": UTF-8 with no control
+  characters, and not the desktop's sign or its names, as desk's fix round checks titles.
+- **Keys** are the old ones and N, Space, P, Backspace, I, Ctrl+O, Ctrl+C, Ctrl+W and Esc. A key with Alt is left alone
+  (`WIN_MOD_ALT`: another program's business). A held key repeats (`WIN_MOD_REPEAT`) only where repeating means
+  something: the arrows, Page Up and Down, + and -, N, P, Space and Backspace (`view_repeats()`); a held O would ask the
+  chooser again and again, a held I would show and hide the details. Ctrl with a digit comes as the digit, so Ctrl+0 is
+  Fit and Ctrl+1 the actual size, as 0 and 1 are.
+
+### What was left out, and why
+
+- `struct gui_viewer` (`include/sys/gui_media.h`) keeps its fields, though only `sketch` is used now and nothing sets
+  `loading` (`gui_working()` and `test_guiclient.c` still read it): trimming it touches Sketch's `guibmp.c` and
+  `guicore.c`, outside this track; for the integrator.
+- Rotating, a slideshow, editing and saving pictures, printing, a GIF's later frames: not asked for.
+
+### For the integrator's documents
+
+- `CLAUDE.md`: the layout gains `user/wview/` ("11/05/26, the desktop's Image Viewer as a program: view.c the model,
+  host-tested by test_wview; folder.c the folder's pictures; main.c its window"); the shell list's "guiview.c + guibmp.c"
+  becomes "guiview.c (11/05/26: the entry that starts wview) + guibmp.c"; "Programs' windows" gains "Apps > Image Viewer
+  `wview`".
+- `docs/README.md`'s row for GUI.md is still right, and so is `CLAUDE.md`'s "(the Image Viewer opens it)" for
+  `wundertow --render`.
+
+### Tests
+
+| Test | Checks | What |
+|---|---|---|
+| `test_wview` | 269 | the old viewer test's views with its numbers (Fit, the steps, the middle kept, the pan, the double-click, the wheel), the middle at the extremes (4096 x 16, 1/64 to 16 times); the toolbar's labels, places and states; painting (an average, transparency over the squares, clipping); the status bar, the title and the details, dates among them; the folder's order, its limits and its steps; which keys repeat |
+| `test_guimedia` | 436 (1,086 before: the kernel viewer's checks went to `test_wview`) | the entry: the program, Files' rule (screenshots' names among them), Apps' start at the Image Viewer's place, `viewer_show()` starting `wview` on a path (spaces and all), a start refused, a folder, a device and a file not there refused before anything starts; Hex and Sketch as before |
+| `test_guisuite` | 173 (181 before) | Files' Enter on a picture starts `wview` with its path, at the Image Viewer's place |
+| guiapps, `gui_apps_img.py` | GIMG | in the Terminal: wview on a PNG of the stick, fitted and actual, its toolbar, N through a GIF, a BMP, a JPEG, a PNG with transparency, a PNG cut short and a screenshot's name, around and back, the details, Copy path pasted in the Terminal; then Files' Enter on a PNG (at the Image Viewer's place), O and the desktop's chooser to a JPEG, Ctrl+W, Apps > Image Viewer with no picture |
+| guiapps, whole | GALL | every track's, the media track's Image Viewer checks and the suite's Files-to-Image-Viewer check now reading wview |
+
+GATES
+
+### Found on the way (for other tracks)
+
+- **libgui's `gw_button()` takes its label in code page 437, `gw_text()` in UTF-8** (`guikit_button()` is the
+  desktop's `gd_button()`, which draws bytes as the console's characters). wview's arrows are therefore "\x11" and
+  "\x10"; a trial on the desktop showed "◄" in UTF-8 as three characters. For kit: say so in `gui.h`, or decode.
+- **A program that calls `wimg_scale()` links libgcc**, as Wundertow does: `image_scale.c` divides in 64 bits
+  (`__divdi3`), and libsurf has no 64-bit division. For Paint, if it scales with `wimg_scale()`.
+- Before desk's merge, a trial: wview built into a USB image by a make fragment of this track's own (not committed), and
+  the guiapps scenario run with only these checks (a scratch wrapper adding them to `TRACKS`): 26 of 26 at -O0 and at
+  -O2. It found the two points above.
+
 ## Where the code comes from
+
+### Stage 1
 
 - **The decoders** came over from `user/wundertow/` as they were; Wundertow's account
   (`2026-11-01-browser-m2-m3.md`) says what they were written from. The only new decoding code is the PNG decoder's data
@@ -128,4 +257,24 @@ both give 128; a loop guard that saves only time).
   and the CRC are libsurf's.
 - **The tests:** this tree's test allocator and the image test's way of building files; Python's `zlib`, `struct`, and
   macOS's `sips` as readers.
-- No other program's source was used, and no program's behaviour was matched.
+
+### Stage 2
+
+- **`view.c`'s views**, the zoom steps, Fit, the pan and the double-click: the desktop's Image Viewer in this tree
+  (`shell/guiview.c` as it was), moved to the window's own coordinates and to 32-bit division, with its checks
+  (`test_guimedia.c`'s viewer test, which `test_wview.c` carries on with the same numbers).
+- **The average** where a picture is shown smaller: `image_scale.c`'s rule in this tree (transparency counted in full,
+  colour only where there is some). The squares behind transparency: a common way of showing it, drawn here in the
+  desktop's colours.
+- **The folder's order:** numbers in names compared as numbers, the way macOS's Finder orders names (its behaviour,
+  not its code), written here; the merge sort is the textbook's bottom-up one.
+- **The date in the details:** the Gregorian calendar's rules, written here.
+- **`main.c`:** the shape of `user/wclock/main.c` in this tree (libgui's loop, presenting what changed), and desk's
+  calls (`WIN_DIALOG`, `WIN_TAKE`, the modifiers) as `include/surfos/win.h` documents them.
+- **The desktop's side** (`shell/guiview.c`'s entry, `viewer_show()`): `guiclock.c`'s entry and desk's `reg_open()` in
+  this tree.
+- **`wview.app`'s icon:** drawn here, a framed landscape in the registry's palette.
+- **The screen checks:** the guiapps Driver and the media, suite and terminal tracks' helpers in this tree; the
+  pictures are two made in Python and the browser's test pictures.
+
+No other program's source was used. The one behaviour matched is named above: the folder's order, Finder's.
