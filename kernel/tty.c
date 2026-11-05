@@ -25,7 +25,9 @@ keys, or ttyctl(TTY_SKIP, 1), tty_term_input() drops what comes until its input 
 discipline with its echo off for that one line (only the Enter, or ^C, is echoed), no history
 either way, and each key wiped from the input queue as it is read.
 11/05/26 (the desktop applications, track desk): TTY_RAW_KEYS (tty.h), the desktop's raw mode, in
-which the keyboard's keys say their modifiers and repeats exactly (tty_key()).
+which the keyboard's keys say their modifiers and repeats exactly (tty_key()); no other task may
+change a terminal's raw mode while it is in it (the review of stage 2: the programs the desktop
+starts have its console as their terminal).
 */
 
 #include <surfos/types.h>
@@ -696,6 +698,10 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
     }
     if(op == TTY_RAW) {
         if(arg > TTY_RAW_KEYS) return -22;        /* EINVAL (11/05/26: 2, TTY_RAW_KEYS) */
+        /* 11/05/26 (the review of stage 2): a terminal in TTY_RAW_KEYS is its owner's, the desktop's, until it ends:
+           a program the desktop started shares its console as its terminal, and taking raw mode (or ending as its
+           owner, tty_task_gone()) would leave the desktop without its keys */
+        if(t->raw == TTY_RAW_KEYS && t->raw_owner && t->raw_owner != curTask) return -16;   /* EBUSY */
         set_raw(t, (int)arg, curTask);
         /* 10/6/26: a full-screen program is never paged nor dropped (raw mode on reads, as far as
            the pager is concerned); after it, a new screenful */
