@@ -1768,6 +1768,8 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 # 10/25/26 (windows for programs): kernel/win.c as it is, with stand-ins for the rest of the kernel (tests/host/test_win.c)
 $(BUILD)/host/test_win: $(BUILD)/host/kernel/tests/host/test_win.o $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+# 11/05/26 (track desk, the review of the ABI): kernel/win.c reads menus' text with driver/cp437.c's utf8_feed()
+$(BUILD)/host/test_win: $(BUILD)/host/kernel/driver/cp437.o
 unittest-win: $(BUILD)/host/test_win
 	$(BUILD)/host/test_win
 unittest: unittest-win

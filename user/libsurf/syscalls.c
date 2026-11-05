@@ -42,6 +42,11 @@ typedef char win_present_layout_is_fixed[sizeof(struct win_present) == 16 ? 1 : 
 typedef char win_info_layout_is_fixed[sizeof(struct win_info) == 20 ? 1 : -1];
 typedef char win_event_layout_is_fixed[sizeof(struct win_event) == 16 ? 1 : -1];
 typedef char win_clip_layout_is_fixed[sizeof(struct win_clip) == 8 ? 1 : -1];    /* 10/26/26 */
+typedef char win_menu_item_layout_is_fixed[sizeof(struct win_menu_item) == 72 ? 1 : -1];  /* 11/05/26: the desktop's calls */
+typedef char win_menu_layout_is_fixed[sizeof(struct win_menu) == 8 ? 1 : -1];
+typedef char win_buffer_layout_is_fixed[sizeof(struct win_buffer) == 8 ? 1 : -1];
+typedef char win_dialog_layout_is_fixed[sizeof(struct win_dialog) == 604 ? 1 : -1];
+typedef char win_theme_layout_is_fixed[sizeof(struct win_theme) == 136 ? 1 : -1];
 
 int errno;
 
