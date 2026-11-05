@@ -158,7 +158,8 @@ ssize_t write(int fd, const void *buf, size_t len) {
         x->bytes = p;
         x->cap = end * 2;
     }
-    memcpy(x->bytes + fds[s].pos, buf, len);
+    if(len) memcpy(x->bytes + fds[s].pos, buf, len);    /* 11/05/26: a short write halved to 0 bytes copies none
+                                                           (a new file's bytes are NULL: no pointer arithmetic on it) */
     fds[s].pos = end;
     if(end > x->len) x->len = end;
     x->mtime = ++clock_now;
