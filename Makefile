@@ -1106,6 +1106,30 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 	$(BUILD)/host/test_ftpc
 	$(BUILD)/host/test_ftpcs
 
+# 11/05/26 (the desktop applications, track img): libsurf's pictures, user/libsurf/image*.c (the decoders moved there from
+# user/wundertow/, and the encoders), on the host with Undertow's test allocator, so that a test counts what they hold
+# and fails any allocation; with libsurf's inflate, deflate and CRC-32. test_wundertow_image (with Wundertow's tests)
+# reads pictures with them; test_image_save writes pictures and reads them again, and tests/test_image_files.py reads
+# what it writes with Python's zlib (and with sips, on the Mac). Sanitizer runs are by hand, on the Mac
+# (docs/superpowers/plans/2026-11-05-desktop-apps-img.md).
+IMG_HOSTFLAGS = $(UT_HOSTFLAGS) -idirafter user/include
+IMG_HOST_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o image_save.o inflate.o deflate.o \
+                 crc32.o
+IMG_HOST = $(addprefix $(BUILD)/host/img/,$(IMG_HOST_NAMES))
+$(BUILD)/host/img/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/img/*.d)
+$(BUILD)/host/test_image_save: tests/host/test_image_save.c $(IMG_HOST) $(BUILD)/host/undertow/alloc.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $^ -o $@
+unittest: unittest-img
+.PHONY: unittest-img
+unittest-img: $(BUILD)/host/test_image_save $(USER_LIB)
+	$(BUILD)/host/test_image_save
+	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
@@ -1375,8 +1399,8 @@ test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wun
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
 
-$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
-                                      $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o) \
+                                      $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1389,8 +1413,8 @@ unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: forms: the model, what is sent to the byte, and the fields used as a person uses them
-$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
-                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o sheets.o) \
+                                   $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1425,8 +1449,8 @@ unittest: test-wundertow-style
 .PHONY: test-wundertow-style
 
 # ... and a page's sheets from the network, the browser driven as for its other tests
-$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
-                                     $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o sheets.o) \
+                                     $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1438,8 +1462,8 @@ unittest: test-wundertow-sheets
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
-                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o sheets.o) \
-                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o sheets.o) \
+                                   $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1453,8 +1477,10 @@ unittest: test-wundertow-load
 # in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
 # arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
 # hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
-WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o
-WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
+# 11/05/26 (track img): the decoders are libsurf's now (user/libsurf/image*.c, $(BUILD)/host/img/, above), with its
+# inflate and CRC-32; the test is as it was
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o inflate.o crc32.o
+WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/img/,$(WT_IMAGE_NAMES))
 $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
                                     $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
 	@mkdir -p $(dir $@)
@@ -1482,7 +1508,13 @@ unittest: test-wundertow-css-ubsan
 .PHONY: test-wundertow-css-ubsan
 -include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
 
-$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/wundertow-ubsan/,$(WT_IMAGE_NAMES)) \
+$(BUILD)/host/img-ubsan/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/img-ubsan/*.d)
+
+$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/img-ubsan/,$(WT_IMAGE_NAMES)) \
                                           $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"

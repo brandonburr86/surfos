@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: JPEG pictures
+SurfOS user library: JPEG pictures
 ----------------------
 File: image_jpeg.c  Date: 11/1/26
 ----------------------
@@ -18,13 +18,14 @@ in 32 bits (dequant(), idct()): the limits lie well above what any picture of 8 
 corrupted file, which is found at the end of each MCU. A scan's time is its picture's blocks at most, however few its
 bytes (a progressive EOB run covers many blocks in a few bits), and scans are WIMG_SCANS_MAX at most: a helper may take
 a second or more over a small file made to do that, and the window kills one that takes too long.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
 #define FAST        9                           /* bits of a code that the quick table covers */
 #define COEF_MAX    4095                        /* a coefficient, dequantized: 8-bit samples stay near 1200 */
@@ -749,7 +750,7 @@ int wimg_jpeg(const unsigned char *in, size_t len, struct wimg *out, char *err, 
     struct jpeg *j = calloc(1, sizeof(*j));
     const char *why;
     int said = 0;
-    if(!j) return ut_error(err, cap, "out of memory reading a JPEG");
+    if(!j) return wimg_error(err, cap, "out of memory reading a JPEG");
     j->in = in;
     j->len = len;
     why = segments(j, err, cap, out, &said);
