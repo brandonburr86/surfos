@@ -809,3 +809,7 @@ const char *ut_transport_tls(const struct ut_transport *t) {
 int ut_transport_eof_clean(const struct ut_transport *t) {
     return t && t->eof && (!t->secure || t->notified);
 }
+
+int ut_transport_fd(const struct ut_transport *t) {
+    return t ? t->fd : -1;
+}
