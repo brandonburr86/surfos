@@ -1,0 +1,61 @@
+wsheet - the Spreadsheet: numbers, text and formulas in a grid
+
+SYNOPSIS
+    wsheet [file]
+
+DESCRIPTION
+    A window on the desktop with a sheet of 256 columns (A to IV) and
+    65,536 rows. A cell holds a number, text, TRUE or FALSE, an error,
+    or a formula: what is typed after =. Formulas are worked out again
+    whenever anything changes, each after the cells it uses; a formula
+    in a cycle shows #CYCLE!. Apps, its tile, and Files with a .sheet
+    or a .csv start it; with a file named, it reads that file.
+
+    A formula has numbers, "text", TRUE, FALSE, references (A1, $A$1,
+    A$1, $A1) and ranges (A1:B5), the operators + - * / ^ % & and
+    = <> < <= > >=, and the functions SUM, AVERAGE, MIN, MAX, COUNT,
+    COUNTA, IF, AND, OR, NOT, ROUND, INT, ABS, SQRT, POWER, MOD, LEN,
+    LEFT, RIGHT, MID, UPPER, LOWER, TRIM and CONCAT. -2^2 is 4 and
+    2^3^2 is 64, as in other spreadsheets. A number shows its 15
+    significant digits: =0.1+0.2 is 0.3. A formula that does not parse
+    is kept as typed and shows #ERROR!; the status bar says why.
+
+    A copied formula's references move with it ($ keeps a part where
+    it is), and inserting or deleting rows and columns keeps every
+    reference on the cell it meant; one to a cell that went is #REF!.
+    The formats are General, fixed decimals and percent. Undo and Redo
+    keep the last 100 changes.
+
+    Its menus, File, Edit, Sheet and Format, are in the desktop's bar
+    while its window has the focus, and their shortcuts work in it in
+    any case. Open and Save as are the desktop's choosers.
+
+KEYS
+    typing           a cell's new content (Esc leaves it as it was)
+    Enter, Tab       put it in and move down, right (Shift: back)
+    arrows           move; with Shift select, with Ctrl jump to edges
+    Ctrl+E           edit the cell in the formula bar (a double-click)
+    Ctrl+L           go to a cell or a range, typed in its name
+    Delete           empty the selected cells
+    Ctrl+C, X, V     copy, cut, paste (text from elsewhere too)
+    Ctrl+Z, Ctrl+Y   undo, redo
+    Ctrl++, Ctrl+-   insert, delete rows
+    Ctrl+S           save (Ctrl+Shift+S: save as)
+    Ctrl+O, Ctrl+N   open a file, a new sheet
+    Ctrl+W           close, asking first about unsaved changes
+
+FILES
+    A .sheet is the Spreadsheet's own text, a line a record, which
+    keeps everything: formulas, formats and column widths. A .csv is
+    RFC 4180's comma-separated values, opened as values (a field that
+    begins with = is text), and saved as values: saving one asks first
+    when formulas would be lost.
+
+LIMITS
+    300,000 cells, 8,192 bytes a cell, files of 32 MB. No charts, no
+    sorting, no names for ranges, no whole columns (A:A) in formulas,
+    no dates. A recalculation too big for SurfOS stops, and the cells
+    it did not finish show #LIMIT!.
+
+SEE ALSO
+    gui, wkit, awk

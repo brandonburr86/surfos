@@ -1,0 +1,22 @@
+# The Spreadsheet (track sheet of the desktop applications): its own .sheet files, and CSV
+program = wsheet
+title = Spreadsheet
+types = sheet csv
+apps = yes
+desktop = yes
+icon = ................
+icon = .KKKKKKKKKKKKKK.
+icon = .KTTTTKTTTTKTTK.
+icon = .KTTTTKTTTTKTTK.
+icon = .KKKKKKKKKKKKKK.
+icon = .KPPPPLPPPPLPPK.
+icon = .KPKKPLPPKKLPPK.
+icon = .KLLLLLLLLLLLLK.
+icon = .KPPPPLPPPPLPPK.
+icon = .KPKKPLPKKKLPPK.
+icon = .KLLLLLLLLLLLLK.
+icon = .KPPPPLPPPPLPPK.
+icon = .KPKPPLPPKPLPPK.
+icon = .KLLLLLLLLLLLLK.
+icon = .KKKKKKKKKKKKKK.
+icon = ................

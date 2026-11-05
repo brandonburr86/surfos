@@ -79,6 +79,21 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wsheet        # 11/05/26 (the desktop applications, track sheet): the Spreadsheet, user/wsheet/
+# wsheet, the Spreadsheet (11/05/26): user/wsheet/, its model and its window host-tested (tests/host/test_wsheet.c,
+# test_wsheet_win.c). Its doubles are SSE2's, as the comment above USER_CFLAGS lets a program have them, so that it
+# computes the very bits its host tests check, at -O0 and -O2 alike; -Iuser/bin for saveutil.h
+WSHEET_SRC    = $(wildcard user/wsheet/*.c)
+WSHEET_OBJ    = $(WSHEET_SRC:user/wsheet/%.c=$(BUILD)/user/wsheet/%.o)
+$(BUILD)/user/wsheet/%.o: user/wsheet/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -march=pentium4 -msse2 -mfpmath=sse -Iuser/bin -c $< -o $@
+$(BUILD)/user/bin/wsheet: $(WSHEET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSHEET_OBJ) $(USER_LIB)
+-include $(WSHEET_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1155,6 +1170,25 @@ unittest: unittest-kit
 unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_gk
 	$(BUILD)/host/test_wkit
+
+# 11/05/26 (the desktop applications, track sheet): the Spreadsheet's model (numbers, formulas, recalculation, the
+# history, the files, the grid's logic) and its window on the fake desktop. SSE2's doubles at -m32 too, and no multiply
+# and add fused into one, so that the host computes the bits SurfOS does
+WSHEET_MODEL     = $(addprefix user/wsheet/,cells.c number.c formula.c eval.c recalc.c edit.c files.c view.c)
+WSHEET_HOSTFLAGS = $(if $(HOST32),-msse2 -mfpmath=sse) -ffp-contract=off -Iuser/wsheet
+$(BUILD)/host/test_wsheet: tests/host/test_wsheet.c $(WSHEET_MODEL) $(wildcard user/wsheet/*.h)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(WSHEET_HOSTFLAGS) tests/host/test_wsheet.c $(WSHEET_MODEL) -lm -o $@
+$(BUILD)/host/test_wsheet_win: tests/host/test_wsheet_win.c tests/host/gk_fake.h $(WSHEET_MODEL) user/wsheet/app.c \
+                               $(wildcard user/wsheet/*.h) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) $(WSHEET_HOSTFLAGS) tests/host/test_wsheet_win.c $(WSHEET_MODEL) user/wsheet/app.c \
+	    $(GK_HOST_OBJ) -lm -o $@
+unittest: unittest-sheet
+.PHONY: unittest-sheet
+unittest-sheet: $(BUILD)/host/test_wsheet $(BUILD)/host/test_wsheet_win
+	$(BUILD)/host/test_wsheet
+	$(BUILD)/host/test_wsheet_win
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
