@@ -280,7 +280,7 @@ static void copy(struct gui_state *g) {
         say(g, sel ? "Nothing copied: the selection is blank." : "Nothing copied: the screen is blank.");
         return;
     }
-    g->clip_len = n;
+    gui_clipped(g, n);
     gui_bytes(n, size, sizeof(size));
     snprintf(t->status, sizeof(t->status), "%s %s%s", sel ? "Copied" : "Copied the screen,", size,
              cut ? " (as much as the clipboard holds)" : "");
@@ -370,8 +370,10 @@ static void closed(struct gui_state *g) {
 
 static bool key(struct gui_state *g, int key) {
     struct gui_term *t = &g->term;
-    char b[8];
+    char b[9];
     u32 n;
+    bool alt = (key & GUI_KEY_ALT) != 0;                /* 11/05/26: an Alt key goes as Esc and the key, as a */
+    key &= GUI_KEY_MASK;                                /* terminal sends it (surfsh's Alt+. and the rest) */
     if(!g->sys) return true;
     if(t->handle < 0) {                                 /* no session: Enter starts one, and the window's keys are back */
         if(key == '\r' || key == '\n') start(g);
@@ -379,8 +381,12 @@ static bool key(struct gui_state *g, int key) {
         else if(key == 17) gui_request_quit(g);         /* Ctrl+Q */
         return true;
     }
-    n = key_bytes(key, b);
+    n = key_bytes(key, b + alt);
     if(!n) return true;
+    if(alt) {
+        b[0] = 27;
+        n++;
+    }
     if(key == 3) t->pend_at = t->pend_len = 0;          /* Ctrl+C: what waited is dropped, and it goes first */
     t->status[0] = 0;
     if(queue(t, b, n, true)) say(g, "A key was dropped: the session takes nothing now.");

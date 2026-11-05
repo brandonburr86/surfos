@@ -43,7 +43,12 @@ DHCP lease timers. It touches no device and keeps nothing, and is host-tested
 #define NETCFG_ETHERNET      3      /* dhcp | off: an address whenever an Ethernet link comes up */
 #define NETCFG_HOSTNAME      4      /* the DHCP host name */
 #define NETCFG_HISTORY       5      /* on | off: 10/25/26 (track A, A10): surfsh keeps its history on the stick */
-#define NETCFG_NKEYS         6
+#define NETCFG_THEME         6      /* ocean | dusk: 11/05/26 (the desktop applications, track desk): the desktop's colours */
+#define NETCFG_POINTER       7      /* slow | normal | fast: 11/05/26: the desktop's pointer speed */
+#define NETCFG_NKEYS         8
+
+#define NETCFG_THEME_OCEAN   0      /* 11/05/26: desktop.theme's values */
+#define NETCFG_THEME_DUSK    1
 
 struct netcfg_settings {
     bool telnetd;
@@ -52,6 +57,8 @@ struct netcfg_settings {
     bool ethernet_dhcp;
     char hostname[NETCFG_HOSTNAME_MAX + 1];
     bool history;
+    u8 theme;                       /* 11/05/26: NETCFG_THEME_OCEAN or NETCFG_THEME_DUSK */
+    u8 pointer;                     /* 11/05/26: the desktop's pointer speed, 1 slow, 2 normal, 3 fast */
     u32 set;                        /* bit k: key k was set by the file (else it has its default) */
 };
 
