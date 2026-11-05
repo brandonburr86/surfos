@@ -18,7 +18,7 @@
    devenv image):
 
    clang -std=gnu99 -g -O1 -ffp-contract=off -fsanitize=address,undefined -fno-sanitize-recover=all -Iuser/wsheet \
-       tests/host/test_wsheet.c user/wsheet/{cells,number,formula,eval,recalc,edit,files}.c -o /tmp/test_wsheet
+       tests/host/test_wsheet.c user/wsheet/{cells,number,formula,eval,recalc,edit,files,view}.c -o /tmp/test_wsheet
    /tmp/test_wsheet long */
 #include <stdio.h>
 #include <stdlib.h>
