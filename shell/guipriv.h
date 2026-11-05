@@ -13,6 +13,8 @@ in a file of its own (Terminal, System Monitor, Disks, Log, Clock, Image Viewer,
 Character Map), and the table of them (guicore.c).
 10/25/26 (programs' windows): guiclient.c's calls, gd_blit() and the programs' icon; the palette
 and the drawing kit moved to include/sys/guidraw.h (libgui builds them too).
+11/05/26 (the desktop applications, track desk): the registry's calls (guireg.c), programs' menus,
+choosers and the theme (guiclient.c), the actions they add, and the clipboard's changes counted.
 */
 #ifndef _SHELL_GUIPRIV_H
 #define _SHELL_GUIPRIV_H
@@ -69,6 +71,10 @@ enum {
     ACT_DLG_SAVE_AS, ACT_DLG_REPLACE, ACT_DLG_GUARD, ACT_DLG_READONLY,
     ACT_RUN, ACT_DLG_RUN,               /* 10/25/26: Run program..., and its answer */
     ACT_CLIENT_COPY,                    /* 10/26/26 (stage C12): Edit > Copy for a program's window: its Ctrl+C */
+    /* 11/05/26 (track desk): a screenshot (SurfOS > Screenshot, Print Screen) and its chooser's answers; Apps > Programs
+       and File > Open with, which open their menus; Open with's Notepad, Hex and Image Viewer */
+    ACT_SCREENSHOT, ACT_DLG_SHOT, ACT_DLG_SHOT_REPLACE,
+    ACT_PROGRAMS, ACT_OPEN_WITH, ACT_WITH_NOTEPAD, ACT_WITH_HEX, ACT_WITH_VIEWER,
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
 /* 10/17/26 (the suite): the answers to the suite's dialogs */
@@ -77,6 +83,19 @@ enum {
 /* 10/25/26: "End the program?" for a program's window: + its slot (id - GUI_FIRST_CLIENT); beyond Sketch's two
    numbers after the suite's dialogs (gui_media.h) */
 #define ACT_CLIENT_END (ACT_APP_DIALOG + 32 * (GUI_WINDOWS - GUI_FIRST_APP) + 8)
+/* 11/05/26 (track desk): a program's chooser answered, + its slot; its Replace question; an item of its menus, + the
+   entry's number; a registry entry from Apps > Programs or its tile, + its number; a file opened in one (Open with) */
+#define ACT_CLIENT_DIALOG (ACT_CLIENT_END + GUI_CLIENTS)
+#define ACT_CLIENT_REPLACE (ACT_CLIENT_DIALOG + GUI_CLIENTS)
+#define ACT_CLIENT_MENU (ACT_CLIENT_REPLACE + GUI_CLIENTS)
+#define ACT_REG_START (ACT_CLIENT_MENU + WIN_MENU_ENTRIES)
+#define ACT_REG_OPEN (ACT_REG_START + GUI_REG_MAX)
+/* 11/05/26: the menus beside the bar's six: Apps > Programs, File > Open with, a program's submenu (the one its item
+   gui_state.menu_sub opens, in menu menu_sub_of's place), and a program's in the bar, + its number */
+#define MENU_PROGRAMS 7
+#define MENU_OPEN_WITH 8
+#define MENU_CLIENT_SUB 9
+#define MENU_CLIENT 16
 
 /* what waits for Notepad's changes to be saved or dropped (gui_state.pending) */
 enum { PEND_NONE, PEND_NEW, PEND_OPEN, PEND_OPEN_PATH, PEND_QUIT, PEND_CLOSE };
@@ -179,11 +198,32 @@ void client_key(struct gui_state *g, int key);
 void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
 void client_answer(struct gui_state *g, int slot, int button, const char *target);
 void client_render(const struct gui_state *g, const struct gui_draw *d, int id);   /* d: its content */
+/* 11/05/26 (track desk): the focused program's menus (NULL: it has none, or no program's window has the focus) and
+   how many entries; an item of them chosen (its entry's number); its chooser answered (path NULL: cancelled; the
+   Save as checks first) and a chooser that went unanswered; the theme told again */
+const struct win_menu_item *client_menu(const struct gui_state *g, int *count);
+void client_menu_chosen(struct gui_state *g, int entry);
+void client_chooser_answer(struct gui_state *g, int slot, int act, int button, const char *path, const char *target);
+void client_chooser_dropped(struct gui_state *g, int act, const char *target);
+void client_theme(struct gui_state *g);
 const char *client_title(const struct gui_state *g, int id);
 bool client_resizable(const struct gui_state *g, int id);
 int client_min_width(const struct gui_state *g, int id);
 int client_min_height(const struct gui_state *g, int id);
 void client_limit(const struct gui_state *g, int id, int *w, int *h);   /* a frame no larger than it may be */
+
+/* 11/05/26 (track desk): the clipboard changed (its length now): a program's window pastes the new text */
+void gui_clipped(struct gui_state *g, u32 len);
+void gui_volume_dir(struct gui_state *g, char *out, size_t n);       /* the first writable volume mounted, else / */
+
+/* guireg.c (11/05/26): the application registry (sys/gui_reg.h) */
+void reg_load(struct gui_state *g);                                  /* /initrd/apps, when the desktop starts */
+bool reg_takes(const struct gui_reg *r, const char *name, bool also);   /* its types name the file (also: open-with) */
+int reg_for(const struct gui_state *g, const char *name);            /* the entry a double-click opens it in, -1 */
+int reg_of_pid(const struct gui_state *g, int pid);                  /* the entry the desktop started pid for, -1 */
+void reg_start(struct gui_state *g, int k);                          /* from Apps or its tile */
+int reg_open(struct gui_state *g, int k, const char *path);          /* a file in it: 0, -1 (said) */
+void reg_icon(const struct gui_draw *d, int x, int y, const struct gui_reg *r, int scale);   /* NULL: a program's */
 
 /* guinote.c */
 struct note_layout { int tx, ty, cols, rows, gutter, bar_x, find_y, status_y; };
@@ -243,6 +283,10 @@ void dialog_confirm(struct gui_state *g, int act, const char *title, const char 
                     const char *yes, const char *no, const char *cancel);
 void dialog_input(struct gui_state *g, int act, const char *title, const char *prompt, const char *text);
 void dialog_chooser(struct gui_state *g, int kind, int act, const char *dir, const char *name);
+/* 11/05/26: a chooser for a program (WIN_DIALOG): its kind (GUI_DLG_OPEN, GUI_DLG_SAVE, GUI_DLG_FOLDER), title ("":
+   its own) and file types ("png bmp": Open lists those files, Save as gives a name one of them) */
+void dialog_chooser_for(struct gui_state *g, int kind, int act, const char *title, const char *dir, const char *name,
+                        const char *types);
 void dialog_key(struct gui_state *g, int key);
 void dialog_pointer(struct gui_state *g, int x, int y, bool press);
 void dialog_wheel(struct gui_state *g, int rows);

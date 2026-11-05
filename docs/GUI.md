@@ -614,6 +614,66 @@ refuse; Hex's own Open (or O) opens any file.
   are selected, the last message, and the file's size. The title bar shows the file's
   name. Hex opens files, not devices. Closing the window forgets the file.
 
+### The desktop's side of the applications
+
+*11/05/26* (`docs/superpowers/plans/2026-11-05-desktop-apps.md`, track desk). What the desktop does
+for the programs of the desktop applications, and for any other program with a window.
+
+* **Apps > Programs.** The programs of `/initrd/apps/` (`rootfs/apps/<name>.app`, the format in
+  `rootfs/apps/README`) are in a menu of their own, the last item of Apps (after Run program...,
+  which keeps its place), by their titles; Right or Enter opens it, Left goes back to Apps. A menu
+  taller than the screen scrolls: the arrows follow the selection, the wheel turns it, and strips of
+  arrows at its ends move it a row (Apps does on a 640x400 screen once Programs is in it). Those
+  with `desktop = yes` also have tiles, after the desktop's own and the suite's, as many as the
+  screen has room for. Choosing one starts the program; choosing it again while its window is
+  there brings that window to the front. A program's window shows its entry's icon in its title
+  bar and on its taskbar button. An entry the desktop cannot take is left out, and the kernel log
+  says why (`dmesg`: `gui: apps/...`).
+* **Files opens a file in its program.** Enter or a double-click on a file whose type (its
+  extension, or its whole name for a `=Makefile` type) an entry's `types` names starts that program
+  with the file's path as its argument (spaces and all). What no entry names keeps the old rules:
+  a `.bmp` in the Image Viewer, a file
+  Notepad refuses in Hex, the rest in Notepad. **File > Open with** (Files in front, a file
+  selected) lists every program whose `types` or `open-with` name the file's type, then the Image
+  Viewer for a picture it reads, Notepad and Hex.
+* **A program's menus.** While a program's window that has menus of its own (`WIN_MENU`) has the
+  focus, the menu bar reads `≋ SurfOS`, the program's menus, Apps, Window and Help: its menus take
+  the place of File and Edit. Ctrl+G opens the bar as always, and the arrows, Enter, Esc and the
+  mouse work in its menus as in the desktop's. A greyed item cannot be chosen; a checked one has
+  `√` before it, one of a group `•`. An item with `▸` opens a submenu in its menu's place, as Apps >
+  Programs does (Right, Enter or a click; Left goes back). A program's Help items come first in the
+  desktop's Help, above a line and the desktop's own. A full bar fits a 640x400 screen; "Ride the
+  wave." gives it room.
+* **Its choosers.** A program asks for the desktop's Open, Save as or Choose folder chooser
+  (`WIN_DIALOG`), only while its window has the focus and after you did something in it (a key, a
+  click or a menu's item since its last chooser, so that a program cannot keep one up); the title
+  bar names the window it is for ("Paint: Save as"). It lists the types it names (and the
+  folders), and a Save as name without one of them gets the first. Save as asks before it replaces
+  a file and never takes one the desktop takes care of (a `.tmp` beside it, as Notepad's Saving
+  says). Choose folder lists the folders: Right or a double-click goes into one, Enter or Choose
+  takes the one selected (the one shown while `..` is).
+* **Keys and the clipboard.** A program's window gets every key with its modifiers, Ctrl+Shift+Left
+  and Alt+X and F5 to F12 included, Ctrl+Tab apart from Ctrl+I and Ctrl+0 at all, and a key held
+  down says when it repeats (`include/surfos/win.h`, "The keys", says exactly what comes: the
+  keyboard driver gives the desktop each key with its modifiers, `TTY_RAW_KEYS` in
+  `include/surfos/tty.h`), and the modifiers held with a click or a turn of the wheel. An Alt key
+  is no longer an Esc and the key (that Esc closed the Calculator, the Clock and the Character Map);
+  the Terminal still sends the Esc to its shell, as a terminal does. While its window has the focus it may
+  read the desktop's clipboard (`WIN_PASTE`), as it may write it (`WIN_CLIP`). It reads the
+  desktop's theme's colours (`WIN_THEME`) and hears when they change.
+* **Screenshots.** Print Screen, or SurfOS > Screenshot for a keyboard without the key, captures the
+  screen as it is, then the Save as chooser asks where to put it, offering `Screenshot YYYY-MM-DD
+  HHMMSS.bmp` in the first volume mounted that can be written (a USB stick's), or `/`. It is saved
+  as a 24-bit BMP of the desktop's own pixels (960 x 540 on the laptop's 1920x1080 screen, each
+  shown there as 2 x 2), the way Notepad saves (a new file beside it, renamed over), with the same
+  care. One screenshot at a time.
+* **Pointer & desktop is kept.** Its colours and pointer speed are `desktop.theme` (`ocean` or
+  `dusk`) and `pointer.speed` (`slow`, `normal` or `fast`: the window's 1, 2 and 3) in
+  `surfos-config/settings.conf` on the stick SurfOS was started from (the `settings` command lists
+  them). The desktop reads them when it starts and each second after, so a change made by Settings
+  or the `settings` command applies at once; a change made in Pointer & desktop is written there
+  when there is a settings stick, and its last line says whether it was.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
