@@ -10,6 +10,8 @@ wait for ever, and answers a new size itself: a new image of that size, all back
 WIN_SETSIZE, before the event is given (when there is no memory for it the image stays as it was,
 and so does the window). Milestone M12, stage C5 of docs/superpowers/plans/2026-10-25-app-windows.md.
 10/26/26 (stage C12): gw_clip() (WIN_CLIP), gw_alert() (WIN_ALERT) and text at scale.
+11/05/26 (the desktop applications, track kit): the view every drawing goes through (an origin and a
+clip), for the toolkit (gk.h, gk*.c), which draws its widgets and programs' areas in it.
 */
 
 #include <errno.h>
@@ -214,3 +216,49 @@ void gw_blit(struct gw *win, int x, int y, const unsigned *pixels, int w, int h,
 void gw_button(struct gw *win, int x, int y, int w, int h, const char *label, unsigned bg, unsigned fg) {
     guikit_button(win->kit, x, y, w, h, label, bg, fg);
 }
+
+/**** 11/05/26 (the desktop applications, track kit): the view, a character, text cut ****/
+
+void gw_get_view(const struct gw *win, struct gw_view *v) {
+    guikit_get_view(win->kit, &v->ox, &v->oy, &v->l, &v->t, &v->r, &v->b);
+}
+
+void gw_set_view(struct gw *win, const struct gw_view *v) {
+    guikit_set_view(win->kit, v->ox, v->oy, v->l, v->t, v->r, v->b);
+}
+
+void gw_view_reset(struct gw *win) {
+    guikit_set_view(win->kit, 0, 0, 0, 0, win->w, win->h);
+}
+
+/* the clip narrowed to x, y, w, h of drawing's coordinates (never widened) */
+void gw_clip_to(struct gw *win, int x, int y, int w, int h) {
+    struct gw_view v;
+    gw_get_view(win, &v);
+    x += v.ox;
+    y += v.oy;
+    if(w < 0) w = 0;
+    if(h < 0) h = 0;
+    if(x > v.l) v.l = x;
+    if(y > v.t) v.t = y;
+    if(x + w < v.r) v.r = x + w;
+    if(y + h < v.b) v.b = y + h;
+    gw_set_view(win, &v);
+}
+
+void gw_origin(struct gw *win, int x, int y) {
+    struct gw_view v;
+    gw_get_view(win, &v);
+    v.ox += x;
+    v.oy += y;
+    gw_set_view(win, &v);
+}
+
+int gw_char(const char *utf8, int avail, int *len) {
+    return guikit_char(utf8, avail, len);
+}
+
+int gw_text_cut(struct gw *win, int x, int y, const char *utf8, int cells, unsigned color) {
+    return guikit_text_cut(win->kit, x, y, utf8, cells, color);
+}
+
