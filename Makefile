@@ -1167,10 +1167,17 @@ $(BUILD)/host/test_netctl: HOSTKERN_FLAGS += -fgnu89-inline
 $(BUILD)/host/test_netctl: tests/host/test_netctl.c kernel/netctl.c include/surfos/netctl.h $(NETCTL_HOST_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_netctl.c $(NETCTL_HOST_OBJ) -o $@
+# Settings' model against a simulated kernel (tests/host/wsettings_fake.h)
+$(BUILD)/host/test_wsettings: tests/host/test_wsettings.c tests/host/wsettings_fake.h user/wsettings/settings.c \
+                              user/wsettings/settings.h include/surfos/netctl.h
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wsettings -Itests/host -idirafter user/include tests/host/test_wsettings.c \
+	    user/wsettings/settings.c -o $@
 unittest: unittest-settings
 .PHONY: unittest-settings
-unittest-settings: $(BUILD)/host/test_netctl
+unittest-settings: $(BUILD)/host/test_netctl $(BUILD)/host/test_wsettings
 	$(BUILD)/host/test_netctl
+	$(BUILD)/host/test_wsettings
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
