@@ -1181,6 +1181,25 @@ unittest-img: $(BUILD)/host/test_image_save $(USER_LIB)
 	$(BUILD)/host/test_image_save
 	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
 
+# 11/05/26 (the desktop applications, track paint): Paint's model (test_wpaint) with the console's font, and the tests'
+# allocator.
+# Sanitizer runs are by hand, on the Mac (docs/superpowers/plans/2026-11-05-desktop-apps-paint.md)
+WPAINT_HOSTFLAGS = $(HOSTFLAGS) -MMD -MP -Itests/host/undertow -Iuser/wpaint -idirafter user/include
+WPAINT_HOST      = $(addprefix $(BUILD)/host/wpaint/,canvas.o history.o draw.o tools.o view.o)
+WPAINT_FONT      = $(addprefix $(BUILD)/host/kernel/driver/,font8x16.o cp437.o)
+$(BUILD)/host/wpaint/%.o: user/wpaint/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wpaint)"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/wpaint/*.d)
+$(BUILD)/host/test_wpaint: tests/host/test_wpaint.c $(WPAINT_HOST) $(BUILD)/host/undertow/alloc.o $(WPAINT_FONT)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) $^ -o $@
+unittest: unittest-paint
+.PHONY: unittest-paint
+unittest-paint: $(BUILD)/host/test_wpaint
+	$(BUILD)/host/test_wpaint
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
