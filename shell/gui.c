@@ -32,6 +32,17 @@ TCP segment), so a flood of them gets two passes a frame, not one each. While an
 the screen the desktop looks for its own every frame (a switch wakes nobody).
 10/26/26 (stage C12): gui_input_done() once a pass's pointer events and keys are in: a program's
 window that asked to be seen comes up after them, never under a press of the same pass.
+11/05/26 (the desktop applications, docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk):
+keys go to a program's window with their modifiers (surfos/win.h's "The keys"): the console's tty is
+in TTY_RAW_KEYS (tty.h), so each key from the keyboard says its modifiers and repeats exactly (ESC [
+115 ; 5 u for Ctrl+S, ESC [ 1 ; 6 D for Ctrl+Shift+Left); a terminal at the serial line's end sends
+xterm's sequences, and its ESC with a byte in the same pass is an Alt key. Each becomes a full key
+(sys/gui.h) for the model, which gives the desktop's own windows their keys as before.
+The pointer's events go with the modifiers held as they are taken (gui_state.mods). Print Screen
+(kernel/keyboard.c, pressed on this desktop's console) asks for a screenshot, as SurfOS > Screenshot
+does: once one is wanted, the next frame drawn is copied into a 24-bit BMP of the desktop's own
+pixels (its logical size: 960 x 540 on the laptop) and handed to the model, which asks where to save
+it; the shell frees it once the model is done with it, and when the desktop ends.
 */
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +61,7 @@ window that asked to be seen comes up after them, never under a press of the sam
 #include <sys/gui.h>
 #include <sys/touchpad.h>
 #include "shell.h"
+#include "gui_media.h"                  /* 11/05/26: bmp_header24(), the screenshot's headers */
 
 struct display {
     struct gui_state *gui;
@@ -190,47 +202,54 @@ static void pointer_keys_owned(int dx,int dy,unsigned buttons) {
     if(framebuffer_graphics_owned()) pointer_report(POINTER_KEYS,dx,dy,0,buttons);
     irq_restore(flags);
 }
+/* a key (11/05/26: a full key, sys/gui.h) to the model, but for the arrows and Space that move and press the pointer
+   while no window takes them */
 static void input_key(struct gui_state *g,int key,unsigned *keys_down) {
-    /* 11/1/26: Shift+Tab and Shift+Enter are a program's window's: raw mode says the one as ESC [ Z, and of the other
-       only the Enter, so its Shift is looked at here, while it is held. The desktop's own have no use for them. */
-    bool program=gui_wants_shifted(g);
-    if(key==GUI_BACKTAB && !program) return;
-    if(key=='\r' && program && (keyboard_mods()&KEY_SHIFT)) key=GUI_SHIFT_ENTER;
-    if(key>=GUI_UP && key<=GUI_RIGHT && !gui_wants_arrows(g)) {
-        int dx=key==GUI_LEFT?-8:key==GUI_RIGHT?8:0;
-        int dy=key==GUI_UP?-8:key==GUI_DOWN?8:0;
+    int bare=key&GUI_KEY_MASK, own=gui_own_key(key);
+    if(bare>=GUI_UP && bare<=GUI_RIGHT && !gui_wants_arrows(g)) {
+        int dx=bare==GUI_LEFT?-8:bare==GUI_RIGHT?8:0;
+        int dy=bare==GUI_UP?-8:bare==GUI_DOWN?8:0;
         pointer_keys_owned(dx,dy,*keys_down);
-    } else if(!g->menu && !g->dialog.kind && g->focus==GUI_SKETCH && key==' ') {
+    } else if(!g->menu && !g->dialog.kind && g->focus==GUI_SKETCH && own==' ' && !(key&GUI_KEY_ALT)) {
         *keys_down ^= POINTER_LEFT;
         pointer_keys_owned(0,0,*keys_down);
     } else {
-        if(key<32 && key!=9 && *keys_down) {
+        if(own>=0 && own<32 && own!=9 && *keys_down) {
             *keys_down=0; pointer_keys_owned(0,0,0);
         }
         gui_key(g,key);
     }
 }
-/* 10/17/26: the end of a terminal key sequence (ESC [ or ESC O, a number, the final byte) as a key */
-static int sequence(int number,int final) {
-    switch(final) {
-    case 'A': return GUI_UP;
-    case 'B': return GUI_DOWN;
-    case 'C': return GUI_RIGHT;
-    case 'D': return GUI_LEFT;
-    case 'H': return GUI_HOME;
-    case 'F': return GUI_END;
-    case 'Z': return GUI_BACKTAB;
-    case '~':
-        switch(number) {
-        case 1: case 7: return GUI_HOME;
-        case 2: return GUI_INSERT;
-        case 3: return GUI_DELETE;
-        case 4: case 8: return GUI_END;
-        case 5: return GUI_PGUP;
-        case 6: return GUI_PGDN;
+/* 11/05/26: a screenshot of the frame just drawn: a 24-bit bottom-up BMP of the desktop's own pixels (its logical
+   size), handed to the model (struct gui_shot), which asks where to save it; without memory, handed over empty (the
+   model says so) */
+static void shot_take(struct gui_state *g,const struct display *d) {
+    u8 head[54], *bmp, *out;
+    u32 row=bmp_header24(head,(u32)d->width,(u32)d->height), len=54+row*(u32)d->height, c;
+    int x,y;
+    bmp=kalloc(len);
+    g->shot.state=GUI_SHOT_TAKEN;
+    g->shot.data=(const char *)bmp;
+    g->shot.len=bmp?len:0;
+    if(!bmp) return;
+    memcpy(bmp,head,sizeof(head));
+    for(y=0;y<d->height;y++) {
+        const u32 *in=d->pixels+y*d->width;
+        out=bmp+54+(u32)(d->height-1-y)*row;
+        for(x=0;x<d->width;x++) {
+            c=in[x];
+            *out++=(u8)c; *out++=(u8)(c>>8); *out++=(u8)(c>>16);
         }
+        for(x=d->width*3;(u32)x<row;x++) *out++=0;
     }
-    return 0;
+}
+/* the screenshot freed once the model is done with it (or at the end, whatever it was) */
+static void shot_free(struct gui_state *g,bool all) {
+    if(g->shot.state!=GUI_SHOT_DONE && !all) return;
+    if(g->shot.data) kfree((void *)g->shot.data);
+    g->shot.data=NULL;
+    g->shot.len=0;
+    g->shot.state=GUI_SHOT_NONE;
 }
 /* 10/25/26: the frame times gfxinfo shows, a record for each console's desktop (written by that desktop alone,
    read by gfxinfo with interrupts off). The TSC's cycles are turned into microseconds at a rate measured against
@@ -348,6 +367,8 @@ int cmd_gui(int argc,char **argv) {
     int oldraw,result=CMD_OK,esc=0,number=0,reg;
     u32 esc_at=0,clock_at,pass_ms=0,last_ms;
     unsigned keys_down=0;
+    bool esc_here;                                      /* 11/05/26: an ESC read in this pass (an Alt key's) */
+    int modnum=0;                                       /* 11/05/26: an escape sequence's m */
     if(argc!=1) { printf("    usage: gui\n"); return CMD_USAGE; }
     printf("    SurfOS desktop: Ctrl+Q returns to the shell; Ctrl+E Notepad, Ctrl+B Files\n");
     if(curTask->intr) return CMD_FAIL;
@@ -381,12 +402,13 @@ int cmd_gui(int argc,char **argv) {
         if(d.row) kfree(d.row);
         kfree(d.pixels); kfree(g); framebuffer_graphics_end(); return CMD_OK;
     }
-    oldraw=tty->raw; tty_ctl(tty,TTY_RAW,1); d.first=d.full=true;
+    oldraw=tty->raw; tty_ctl(tty,TTY_RAW,TTY_RAW_KEYS); d.first=d.full=true;     /* 11/05/26: keys with modifiers */
     memset(&fc,0,sizeof(fc)); frame_begin(&d,true);
     desk.width=d.width; desk.height=d.height; desk.scale=d.scale;      /* 10/25/26: programs' windows */
     gui_client_room(g,&desk.max_w,&desk.max_h);
     reg=win_register(&desk);
     if(reg<0) klog_write("gui: programs cannot open windows on this desktop\n");
+    keyboard_print_taken(tty);                          /* 11/05/26: a Print Screen from before the desktop is none */
     while(!g->quit && !curTask->intr) {
         int n,key,oldx=g->x,oldy=g->y,drawn=0;
         unsigned devices;
@@ -410,21 +432,37 @@ int cmd_gui(int argc,char **argv) {
             if(sleep_intr(FRAME_MS)) break;             /* 10/25/26 (the review): a switch wakes nobody */
             continue;
         }
+        g->mods=keyboard_mods()&(KEY_SHIFT|KEY_ALT|KEY_CTRL);  /* 11/05/26: surfos/win.h's WIN_MOD_* bits, the same */
         for(n=0;n<POINTER_QUEUE && pointer_next(&e);n++) gui_pointer(g,&e);
+        if(keyboard_print_taken(tty)) gui_screenshot(g);    /* 11/05/26: Print Screen on this desktop's console */
+        esc_here=false;
         for(n=0;n<32 && framebuffer_graphics_owned() && (key=tty_trygetc(tty))>=0;n++) {
-            if(esc==1 && (key=='[' || key=='O')) { esc=2; number=0; continue; }
+            if(esc==1 && (key=='[' || key=='O')) { esc=2; number=0; modnum=0; continue; }
             if(esc>=2) {
-                if(key>='0' && key<='9') { if(esc==2 && number<1000) number=number*10+key-'0'; continue; }
-                if(key==';') { esc=3; continue; }            /* a modifier: the key is the same */
+                if(key>='0' && key<='9') {
+                    if(esc==2 && number<1000) number=number*10+key-'0';
+                    else if(esc==3 && modnum<100) modnum=modnum*10+key-'0';
+                    continue;
+                }
+                if(key==';') { esc=3; continue; }            /* 11/05/26: the modifiers follow, xterm's m */
                 esc=0;
-                if((key=sequence(number,key))) input_key(g,key,&keys_down);
+                if((key=gui_sequence_key(number,key,modnum))) input_key(g,key,&keys_down);
                 continue;
             }
-            if(esc) { gui_key(g,27); esc=0; }
-            if(key==27) { esc=1; esc_at=getticks(); } else input_key(g,key,&keys_down);
+            if(esc) {                                   /* ESC, then a byte that starts no sequence */
+                esc=0;
+                if(esc_here && key!=27) {               /* 11/05/26: the two came together: an Alt key (the */
+                    input_key(g,gui_byte_key(key)|GUI_KEY_ALT,&keys_down);   /* serial line's; the keyboard's */
+                    continue;                           /* come whole, tty.h's TTY_RAW_KEYS) */
+                }
+                input_key(g,27,&keys_down);
+            }
+            if(key==27) { esc=1; esc_at=getticks(); esc_here=true; } else input_key(g,gui_byte_key(key),&keys_down);
         }
         keys_left=n==32;                                /* 10/25/26: the rest in the next pass, a frame on */
-        if(esc && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) gui_key(g,27); esc=0; }
+        /* an ESC that nothing followed for 100 ms is the Esc key (a serial terminal's); 11/05/26: never while bytes
+           wait (the pass stopped at 32): the keyboard's sequences are queued whole, and are longer now */
+        if(esc && !keys_left && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) input_key(g,27,&keys_down); esc=0; }
         gui_input_done(g);                              /* 10/26/26: a window that asked to be seen comes up now */
         gui_kernel_fs_idle(g->fs);                      /* 10/18/26: the frame's reads are done (the tick, the input) */
         if(g->quit) break;
@@ -436,6 +474,7 @@ int cmd_gui(int argc,char **argv) {
             t0=frame_now();
             gui_render(g,&ram); g->dirty=false;
             t1=frame_now();
+            if(g->shot.state==GUI_SHOT_WANTED) shot_take(g,&d);     /* 11/05/26: the frame just drawn */
             if((drawn=present_changes(&d))<0) continue;
             if((drawn || oldx!=g->x || oldy!=g->y) &&
                (!present(&d,oldx,oldy,12,16) || framebuffer_graphics_draw(pointer_paint,&d)<0)) continue;
@@ -444,6 +483,7 @@ int cmd_gui(int argc,char **argv) {
             if(!present(&d,oldx,oldy,12,16)) continue;
             if(framebuffer_graphics_draw(pointer_paint,&d)<0) continue;
         }
+        shot_free(g,false);                             /* 11/05/26: one the model is done with */
         if(busy(g,drawn>0,esc,keys_down,keys_left)) {   /* 10/25/26 (the review): the next pass a frame after this one */
             n=(int)(ms_now()-pass_ms);
             if(n<FRAME_MS && sleep_intr(FRAME_MS-n)) break;
@@ -452,6 +492,7 @@ int cmd_gui(int argc,char **argv) {
         } else if(poll_sleep(gen,100)) break;
     }
     gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
+    shot_free(g,true);                                  /* 11/05/26: a screenshot not saved */
     if(reg>=0) win_unregister(reg);                     /* 10/25/26: every program's window let go */
     gui_kernel_fs_end(own_fs);                          /* 10/18/26: read_at's file closed, if one is open */
     tty_ctl(tty,TTY_RAW,oldraw); pointer_speed_owned(1,true);

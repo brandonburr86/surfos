@@ -1106,6 +1106,13 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 	$(BUILD)/host/test_ftpc
 	$(BUILD)/host/test_ftpcs
 
+# 11/05/26 (the desktop applications, track desk): the registry, Apps > Programs, Files' Open with, screenshots and the
+# preferences (tests/host/test_guidesk.c, against gui_fake.c), and every .app file of rootfs/apps/ read as the desktop reads it
+unittest: unittest-desk
+.PHONY: unittest-desk
+unittest-desk: $(BUILD)/host/test_guidesk
+	$(BUILD)/host/test_guidesk $(wildcard rootfs/apps/*.app)
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
@@ -1744,6 +1751,8 @@ GUI_TOOLS_OBJ =
 # MEDIA:
 GUI_MEDIA_OBJ = $(BUILD)/host/kernel/shell/guibmp.o
 GUI_HOST_OBJ += $(GUI_TERM_OBJ) $(GUI_SYS_OBJ) $(GUI_TOOLS_OBJ) $(GUI_MEDIA_OBJ)
+# 11/05/26 (the desktop applications, track desk): the application registry (shell/guireg.c)
+GUI_HOST_OBJ += $(BUILD)/host/kernel/shell/guireg.o
 $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter %.c %.o,$^) -o $@
 # 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c. The
@@ -1751,6 +1760,7 @@ $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 # kernel/klog.c): compiled in one command, the last source's .d was the binary's only one
 GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite \
                     test_guiclient)
+GUI_SUITE_TESTS += $(BUILD)/host/test_guidesk     # 11/05/26 (the desktop applications, track desk), run by unittest-desk
 $(GUI_SUITE_TESTS): $(BUILD)/host/%: $(BUILD)/host/kernel/tests/host/%.o $(BUILD)/host/kernel/tests/host/gui_fake.o \
                                      $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(filter %.o,$^) -o $@
