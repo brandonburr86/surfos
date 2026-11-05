@@ -79,6 +79,11 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wview         # 11/05/26 (the desktop applications, track img): the Image Viewer as a program, user/wview/
+# wview: the Image Viewer, its model host-tested (tests/host/test_wview.c), its pictures libsurf's (image.h). Its rules
+# follow wcharmap's, after all:, so that they cannot be make's default goal
+WVIEW_SRC    = $(wildcard user/wview/*.c)
+WVIEW_OBJ    = $(WVIEW_SRC:user/wview/%.c=$(BUILD)/user/wview/%.o)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -351,6 +356,18 @@ $(BUILD)/user/bin/wcharmap: $(WCHARMAP_OBJ) $(USER_CRT0) $(USER_LIB) user/user.l
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHARMAP_OBJ) $(USER_LIB)
+
+# wview likewise (11/05/26, the desktop applications, track img)
+$(BUILD)/user/wview/%.o: user/wview/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/wview: $(WVIEW_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WVIEW_OBJ) $(USER_LIB)
+-include $(wildcard $(BUILD)/user/wview/*.d)
 
 # telnetd likewise
 $(BUILD)/user/telnetd/%.o: user/telnetd/%.c
@@ -1133,9 +1150,15 @@ $(BUILD)/host/test_image_save: tests/host/test_image_save.c $(IMG_HOST) $(BUILD)
 	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $^ -o $@
 unittest: unittest-img
 .PHONY: unittest-img
-unittest-img: $(BUILD)/host/test_image_save $(USER_LIB)
+# 11/05/26 (stage 2): wview's model, user/wview/view.c and folder.c as they are (they make no system calls)
+$(BUILD)/host/test_wview: tests/host/test_wview.c user/wview/view.c user/wview/folder.c user/wview/view.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wview tests/host/test_wview.c user/wview/view.c user/wview/folder.c -o $@
+unittest-img: $(BUILD)/host/test_image_save $(USER_LIB) $(BUILD)/host/test_wview $(BUILD)/user/bin/wview
 	$(BUILD)/host/test_image_save
 	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
+	$(BUILD)/host/test_wview
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
