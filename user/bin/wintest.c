@@ -33,7 +33,11 @@ wintest desk [FILE]   the calls of 11/05/26, by hand and for the screen test (to
                  "desk: paste 5 hello"), o asks for the Open chooser for .wintest files, s for Save
                  as (saved.wintest), f for Choose folder, m takes the menus away and gives them back.
                  Files starts wintest with a path (rootfs/apps/wintest.app: the type wintest), which
-                 it takes as desk's FILE: its title says "desk: file <path>" first.
+                 it takes as desk's FILE: its title says "desk: file <path>" first. (The review of
+                 stage 2) the close button gets its own question first, "desk: close? y/n": n cancels,
+                 y or the close button again ends it.
+wintest raw      TTY_RAW on its terminal, then its end: from the desktop's Run program..., the
+                 desktop keeps its keys (tty.h's TTY_RAW_KEYS)
 */
 
 #include <stdio.h>
@@ -302,7 +306,7 @@ static int mode_desk(const char *file) {
     struct win_event ev[16];
     struct win_buffer b;
     char title[WIN_TITLE_MAX], path[WIN_PATH_MAX];
-    int fd, n, i, r, menus = 1;
+    int fd, n, i, r, menus = 1, asking = 0;
     good(&o);
     o.w = 320;
     o.h = 200;
@@ -327,12 +331,20 @@ static int mode_desk(const char *file) {
         for(i = 0; i < n / (int)sizeof(ev[0]); i++) {
             const struct win_event *e = &ev[i];
             title[0] = 0;
-            if(e->type == WIN_EV_CLOSE) {
+            /* 11/05/26 (the review of stage 2): its own question first, as a program with unsaved changes asks; y or a
+               second press of the close button ends it, n cancels (and the next press asks again) */
+            if((e->type == WIN_EV_CLOSE && asking) || (e->type == WIN_EV_KEY && asking && e->value == 'y')) {
                 printf("wintest: closed\n");
                 close(fd);
                 return 0;
             }
-            if(e->type == WIN_EV_KEY && !e->mods && e->value == 'p') {
+            if(e->type == WIN_EV_CLOSE) {
+                asking = 1;
+                snprintf(title, sizeof(title), "desk: close? y/n");
+            } else if(e->type == WIN_EV_KEY && asking && e->value == 'n') {
+                asking = 0;
+                snprintf(title, sizeof(title), "desk: close cancelled");
+            } else if(e->type == WIN_EV_KEY && !e->mods && e->value == 'p') {
                 b.buf = clip;
                 b.size = sizeof(clip);
                 r = winctl(fd, WIN_PASTE, &b);
@@ -369,14 +381,25 @@ static int mode_desk(const char *file) {
     return 0;
 }
 
+/* 11/05/26 (the review of stage 2): raw mode asked for on this terminal, and the program ends. Started by the desktop
+   (Apps > Run program...), its terminal is the desktop's console, whose raw mode stays the desktop's (EBUSY: tty.h's
+   TTY_RAW_KEYS), and its end changes nothing: the screen check types on after it */
+static int mode_raw(void) {
+    int r = ttyctl(TTY_RAW, 1);
+    printf("wintest raw: TTY_RAW %s\n", r < 0 ? strerror(errno) : "taken");
+    if(r == 0) ttyctl(TTY_RAW, 0);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     mode = argc > 1 ? argv[1] : "";
     if(!strcmp(mode, "desk")) return mode_desk(argc > 2 ? argv[2] : NULL);    /* 11/05/26 */
+    if(!strcmp(mode, "raw")) return mode_raw();
     if(mode[0] == '/') return mode_desk(mode);          /* a file, from Files (rootfs/apps/wintest.app) */
     if(!strcmp(mode, "nodesk")) return mode_nodesk();
     if(!strcmp(mode, "pty")) return mode_pty();
     if(!strcmp(mode, "show")) return mode_show();
     if(!strcmp(mode, "tty")) return mode_tty();
-    fprintf(stderr, "usage: wintest nodesk | pty | show | tty | desk [file]\n");
+    fprintf(stderr, "usage: wintest nodesk | pty | show | tty | desk [file] | raw\n");
     return 2;
 }

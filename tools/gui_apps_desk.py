@@ -7,13 +7,16 @@ bar in place of File and Edit. Ctrl+G, Right, Down and Enter choose Test > Check
 choose View > Big (WIN_EV_MENU); View > Size > Large is a submenu's item, Help > About wintest the program's item in
 the desktop's Help (11/05/26, the review). Keys arrive with their modifiers: Ctrl+Shift+Left, Alt+X (no Esc before
 it), F5, Ctrl+Shift+S, and since the review Ctrl+Tab (no Ctrl+I) and Ctrl+0. s and o ask for the Save as and Open
-choosers (WIN_DIALOG), whose title bar names the window, and which Esc cancels (WIN_EV_DIALOG 0). SurfOS > Ocean / dusk
+choosers (WIN_DIALOG), whose title bar names the program (by its file name, with no sign of the desktop's: the
+review of stage 2), and which Esc or a click on Cancel cancels (WIN_EV_DIALOG 0). SurfOS > Ocean / dusk
 colors tells it the theme (WIN_EV_THEME) and back. Files mounts the data stick; its Copy path puts a path on the
 clipboard, which wintest pastes (WIN_PASTE). Enter on desk/a b.wintest opens it in wintest (the registry's
 rootfs/apps/wintest.app: the type wintest), a second window naming the file, path with its space; File > Open with
 lists Window test. Print Screen: the Save as chooser, in the stick's folder, saves shot.bmp, which the host reads
 back as a 960 x 540, 24-bit BMP. The windows are closed, the stick ejected and the theme ocean again, also after a
-failure.
+failure. 11/05/26 (the review of stage 2): `wintest raw`, run first from the desktop, asks for raw mode on the
+desktop's console and ends, and the desktop keeps its keys; wintest's close button gets its own question, n, and the
+button again asks the program again ("End the program?" only for one that does not read its events).
 """
 import struct
 
@@ -36,10 +39,24 @@ def titled(d, text):
     return lambda s: find(d, s, text) is not None and titled_at(d, s, find(d, s, text), text, True)
 
 
-def chooser(d, title, folder=None):
-    """a predicate: the desktop's chooser is up, its title (and its folder)"""
-    return lambda s: d.text(s, CHOOSER[0] + 28, CHOOSER[1] + 6, title, PAPER, TEAL) and \
+def chooser(d, title, folder=None, program=False):
+    """a predicate: the desktop's chooser is up, its title (and its folder); a program's has no sign of the desktop's
+    before its title (11/05/26, the review of stage 2)"""
+    x = CHOOSER[0] + (12 if program else 28)
+    return lambda s: d.text(s, x, CHOOSER[1] + 6, title, PAPER, TEAL) and \
         (folder is None or d.text(s, CHOOSER[0] + 80, CHOOSER[1] + 38, folder, INK))
+
+
+CANCEL = (CHOOSER[0] + 520 - 16 - 88 + 44, CHOOSER[1] + 380 - 40 + 14)   # a chooser's Cancel at 960x540 (520 x 380)
+
+
+def close_twice(d, at, title):
+    """wintest desk's close button: its own question first (desk: close? y/n), then the button again ends it"""
+    close_at(d, at)
+    d.move(*PARK)
+    d.visible(f'desk: the close button asks the program first ({title})', titled(d, 'desk: close? y/n'))
+    close_at(d, at)
+    d.move(*PARK)
 
 
 def files_open(d):
@@ -77,7 +94,7 @@ def tidy(d, state):
         d.move(*PARK)
         d.key('ctrl-w')
         d.vm.pump(0.5)
-    for _ in range(3):                                  # wintest's windows, the one with a file too
+    for _ in range(6):                                  # wintest's windows, the one with a file too (each asks first)
         at = find(d, d.vm.screen(), 'desk: ')
         if not at:
             break
@@ -91,8 +108,15 @@ def checks(d):
     done = False
     try:
         d.move(*PARK)
+        # (the review of stage 2) a program started from the desktop asks for raw mode on its terminal, the desktop's
+        # console, and ends: the desktop keeps its keys, as everything typed below shows
         run_program(d)
-        d.visible('desk: Apps > Run program... (its place kept)', lambda s: run_titled(d, s))
+        d.visible('desk: Apps > Run program...', lambda s: run_titled(d, s))
+        d.keys('wintest raw\n')
+        d.vm.pump(1.0)
+        run_program(d)
+        d.visible('desk: Apps > Run program... (its place kept), its keys still the desktop\'s after wintest raw',
+                  lambda s: run_titled(d, s))
         d.keys('wintest desk\n')
         s = d.visible('desk: wintest desk opens with the focus', titled(d, 'desk: ready'), 'guiapps-desk-open.png')
         at = find(d, s, 'desk: ready')
@@ -126,12 +150,18 @@ def checks(d):
             d.visible(f'desk: {chord} reaches the program as itself (the keyboard\'s keys with their modifiers)',
                       titled(d, title))
         d.keys('s')
-        d.visible('desk: s asks for Save as: the desktop\'s chooser, its title naming the window',
-                  chooser(d, 'desk: asking: Save as'), 'guiapps-desk-save.png')
+        d.visible('desk: s asks for Save as: the desktop\'s chooser, named for the program, no sign of the desktop\'s',
+                  chooser(d, 'wintest: Save as', program=True), 'guiapps-desk-save.png')
         d.key('esc')
         d.visible('desk: Esc cancels it: WIN_EV_DIALOG 0, the request\'s id', titled(d, 'desk: cancelled 4'))
         d.keys('o')
-        d.visible('desk: o asks for Open', chooser(d, 'desk: asking: Open a file'))
+        d.visible('desk: o asks for Open', chooser(d, 'wintest: Open a file', program=True))
+        d.click(*CANCEL)
+        d.move(*PARK)
+        d.visible('desk: a click on Cancel cancels it too', titled(d, 'desk: cancelled 3'))
+        d.keys('o')
+        d.visible('desk: o asks again, after a key (the kernel\'s rule: something done in the window since)',
+                  chooser(d, 'wintest: Open a file', program=True))
         d.key('esc')
         d.visible('desk: cancelled', titled(d, 'desk: cancelled 3'))
         for chord in ('ctrl-g', 'down', 'down', 'ret'):
@@ -177,9 +207,9 @@ def checks(d):
         d.key('ret')
         s = d.visible('desk: Enter opens a b.wintest in wintest, started with its path (space and all)',
                       titled(d, FILE_TITLE), 'guiapps-desk-file.png')
-        close_at(d, find(d, s, 'desk: file'))
-        d.move(*PARK)
-        d.visible('desk: its close button ends it', lambda s: find(d, s, 'desk: file') is None)
+        close_twice(d, find(d, s, 'desk: file'), 'the second window')
+        d.visible('desk: its close button, again, ends it', lambda s: find(d, s, 'desk: ') is None or
+                  find(d, s, 'desk: file') is None and find(d, s, 'desk: close') is None)
         # a screenshot, into the stick's folder
         d.key('print')
         d.visible('desk: Print Screen asks where to save the screenshot, in the stick\'s folder',
@@ -195,10 +225,21 @@ def checks(d):
         d.key('ctrl-w')
         d.visible('desk: Files closes', lambda s: not files_front(d)(s))
         state['files'] = False
+        # (the review of stage 2) the close button asks the program again after its own question was answered no
         s = d.vm.screen()
-        close_at(d, find(d, s, 'desk: '))
+        at = find(d, s, 'desk: ')
+        close_at(d, at)
         d.move(*PARK)
-        d.visible('desk: wintest\'s close button ends it', lambda s: find(d, s, 'desk: ') is None)
+        d.visible('desk: the close button: the program\'s own question', titled(d, 'desk: close? y/n'),
+                  'guiapps-desk-close.png')
+        d.keys('n')
+        d.visible('desk: answered no', titled(d, 'desk: close cancelled'))
+        close_at(d, at)
+        d.move(*PARK)
+        d.visible('desk: the close button again asks the program again, not "End the program?"',
+                  lambda s: titled(d, 'desk: close? y/n')(s) and not dialog_open(d, s))
+        d.keys('y')
+        d.visible('desk: answered yes: wintest ends', lambda s: find(d, s, 'desk: ') is None)
         done = True
     finally:
         if not done:
