@@ -1107,15 +1107,28 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 	$(BUILD)/host/test_ftpcs
 
 # 11/05/26 (the desktop applications, track img): libsurf's pictures, user/libsurf/image*.c (the decoders moved there from
-# user/wundertow/), on the host with Undertow's test allocator, so that a test counts what they hold and fails any
-# allocation; with libsurf's inflate and CRC-32. test_wundertow_image (with Wundertow's tests) reads pictures with them.
-# Sanitizer runs are by hand, on the Mac (docs/superpowers/plans/2026-11-05-desktop-apps-img.md).
+# user/wundertow/, and the encoders), on the host with Undertow's test allocator, so that a test counts what they hold
+# and fails any allocation; with libsurf's inflate, deflate and CRC-32. test_wundertow_image (with Wundertow's tests)
+# reads pictures with them; test_image_save writes pictures and reads them again, and tests/test_image_files.py reads
+# what it writes with Python's zlib (and with sips, on the Mac). Sanitizer runs are by hand, on the Mac
+# (docs/superpowers/plans/2026-11-05-desktop-apps-img.md).
 IMG_HOSTFLAGS = $(UT_HOSTFLAGS) -idirafter user/include
+IMG_HOST_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o image_save.o inflate.o deflate.o \
+                 crc32.o
+IMG_HOST = $(addprefix $(BUILD)/host/img/,$(IMG_HOST_NAMES))
 $(BUILD)/host/img/%.o: user/libsurf/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
 	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
 -include $(wildcard $(BUILD)/host/img/*.d)
+$(BUILD)/host/test_image_save: tests/host/test_image_save.c $(IMG_HOST) $(BUILD)/host/undertow/alloc.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $^ -o $@
+unittest: unittest-img
+.PHONY: unittest-img
+unittest-img: $(BUILD)/host/test_image_save $(USER_LIB)
+	$(BUILD)/host/test_image_save
+	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

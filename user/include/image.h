@@ -21,7 +21,11 @@ JPEG's coefficients WIMG_COEFS_MAX bytes; WIMG_SCANS_MAX scans. What a program k
 (Wundertow's page: WB_PAGE_IMAGES, browser.h).
 
 11/05/26 (the desktop applications, track img): moved here from user/wundertow/, so that every program reads
-pictures the same way; the decoders are as they were, and the PNG decoder's inflate is libsurf's (inflate.h).
+pictures the same way; the decoders are as they were, and the PNG decoder's inflate is libsurf's (inflate.h). New:
+pictures written (image_save.c), as a BMP of 24 bits or a PNG of 8 bits a sample, RGB or RGBA, compressed by
+libsurf's deflate. The bytes go to the caller's put() as they are made, so a picture is never held twice: a program
+saves one through user/bin/saveutil.h by writing them to its file. Only a picture within wimg_alloc()'s limits is
+written, so that whatever is written here is read here again.
 */
 
 #ifndef _IMAGE_H
@@ -59,6 +63,20 @@ int wimg_shrink(struct wimg *m, int side);
 /* The picture src (sw x sh) in dst (dw x dh, rows of dw pixels): where it shrinks, each pixel the average of those it
    stands for; where it grows, the nearest. Whole numbers only. */
 void wimg_scale(const unsigned int *src, int sw, int sh, unsigned int *dst, int dw, int dh);
+
+/* Writing a picture (image_save.c): its bytes go to put(ctx, p, n) in pieces of any size as they are made. put
+   returns 0, or -1 to stop (a write that failed: errno is the caller's to keep), and the save then returns -1.
+   0, or -1 with why in err: a picture over wimg_alloc()'s limits, no memory, or put's -1. Nothing is held after. */
+typedef int (*wimg_put)(void *ctx, const void *p, size_t n);
+
+/* A BMP of 24 bits: the 40-byte header, rows from the bottom. BMP has no transparency here: each pixel's colour is
+   written as it is, whatever its TT. */
+int wimg_save_bmp(const struct wimg *m, wimg_put put, void *ctx, char *err, size_t cap);
+
+/* A PNG of 8 bits a sample, not interlaced: RGB (alpha 0), each pixel's colour as it is; or RGBA (alpha 1), its TT
+   as the alpha 255 - TT. Each row's filter is the one the PNG standard suggests choosing (the least sum of its bytes
+   as signed numbers), and the rows are compressed by libsurf's deflate at level 6. */
+int wimg_save_png(const struct wimg *m, int alpha, wimg_put put, void *ctx, char *err, size_t cap);
 
 /* The decoders' common calls (image.c) */
 int wimg_alloc(struct wimg *m, int w, int h, char *err, size_t cap);    /* limits, then the pixels: uninitialized */
