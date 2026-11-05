@@ -42,6 +42,7 @@ File: keyboard.h    Date: 4/23/04, rebuilt 10/2026 (roadmap C2)
 #define KEY_SHIFT 1
 #define KEY_ALT   2
 #define KEY_CTRL  4
+#define KEY_REPEAT 16   /* 11/05/26: the keyboard repeats the key held (typematic); TTY_RAW_KEYS sends it (tty.h) */
 
 #define KBD_PORT    0x60
 #define KBD_STATUS  0x64
@@ -54,6 +55,8 @@ void init_keyboard(void);
 int keyboard_handler(u_int irq, void *param);
 void keyboard_poll(void);       /* from the timer tick; does nothing unless profile=laptop turned polling on */
 u_int keyboard_mods(void);      /* 11/1/26: KEY_SHIFT, KEY_ALT, KEY_CTRL held now */
+struct tty;
+bool keyboard_print_taken(const struct tty *t);   /* 11/05/26: Print Screen pressed on console t, taken (the desktop's) */
 const char *keyboard_describe(char *buf, size_t size);
 
 int testLED(u_char ledStatus);

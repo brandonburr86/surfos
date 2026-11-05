@@ -90,8 +90,15 @@ void tty_switch(int index);
    (bright, inverse, the colours off), ESC[90-97m and ESC[100-107m (bright colours; a text mode background has no
    bright one), ESC[38;...m and ESC[48;...m read and dropped (256 colours, RGB), and the alternate screen,
    ESC[?1049h / ESC[?1049l (TTY_CAP_ALTSCREEN): the main screen and its cursor come back as they were, and also
-   when the task that asked for it ends. */
+   when the task that asked for it ends.
+   11/05/26 (the desktop's keys): TTY_RAW 2 (TTY_RAW_KEYS) is raw mode in which each key from the keyboard says its
+   modifiers exactly (the desktop's console, shell/gui.c): a character typed with none (Tab, Enter and Backspace
+   too) is its byte; any other key ESC[c;mu, c the character as typed with Shift but before Ctrl made a control byte
+   of it (Ctrl+S 115, Ctrl+Shift+S 83, Ctrl+0 48, Ctrl+Tab 9), Esc 27 always so; the special keys always with their
+   m (ESC[1;1A); m = 1 + Shift + 2 Alt + 4 Ctrl, and + 16 when the keyboard repeats the key held down. The serial
+   line's bytes come as they were sent, as in TTY_RAW 1. */
 #define TTY_RAW     1
+#define TTY_RAW_KEYS 2              /* 11/05/26: TTY_RAW's argument for that */
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
    descended from it is paged (10/25/26: the programs of its foreground, TF_FOREGROUND, not a

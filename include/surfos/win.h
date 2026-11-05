@@ -80,12 +80,13 @@ SYS_winctl (int fd, int op, void *arg): -EBADF, or -EINVAL for a descriptor that
         item a dot (one of a group: the program marks one and clears the others). An item with
         WIN_MENU_SUBMENU opens a submenu, one level deep, in its menu's place as Apps > Programs
         does (Left goes back): the WIN_MENU_CHILD entries right after it, items and separators as
-        in a menu (a chosen one's x is still its menu's id). A title with WIN_MENU_HELP is not in the bar: its items go into the desktop's Help
-        menu, above the desktop's own, so that there is one Help. A label and a shortcut are
-        UTF-8 by the console's rules (driver/cp437.c: whole sequences, no overlong form,
-        surrogate or value past U+10FFFF) with no control character (C0, DEL or C1), cut between
-        characters to their arrays (WIN_MENU_LABEL, WIN_MENU_KEYS bytes with the NUL): a byte
-        that is no such character is -EINVAL, since the desktop would draw it a cell of its own.
+        in a menu (a chosen one's x is still its menu's id). A title with WIN_MENU_HELP is not in
+        the bar: its items go into the desktop's Help menu, above the desktop's own, so that there
+        is one Help. A label and a shortcut are UTF-8 by the console's rules (driver/cp437.c:
+        whole sequences, no overlong form, surrogate or value past U+10FFFF) with no control
+        character (C0, DEL or C1), cut between characters to their arrays (WIN_MENU_LABEL,
+        WIN_MENU_KEYS bytes with the NUL): a byte that is no such character is -EINVAL, since the
+        desktop would draw it a cell of its own.
         The first entry is a title; at most WIN_MENUS menus, each of 1 to WIN_MENU_ITEMS items
         and separators (a submenu's children not counted; a Help menu's WIN_MENU_HELP_ITEMS), a
         submenu of 1 to WIN_MENU_ITEMS, WIN_MENU_ENTRIES entries in all; a title or an item has a
@@ -138,7 +139,8 @@ SYS_winctl (int fd, int op, void *arg): -EBADF, or -EINVAL for a descriptor that
         request's id. It always comes: a place in the window's queue is kept for it while a
         request waits, and a desktop that lets the window go answers 0 for it. One request at a
         time for a window (-EBUSY while one waits for its answer); only while the window has the
-        focus (-EACCES). -EINVAL for a kind that is none, flags that are not 0, a dir that is not
+        focus (-EACCES); -EAGAIN while WIN_EVENTS events wait to be read (no place for the
+        answer: read them first). -EINVAL for a kind that is none, flags that are not 0, a dir that is not
         absolute, a name with a '/', types that are not as above, or a dir or a name without its
         NUL within its array or with a control character in it (a title is cut as a window's).
     WIN_TAKE (struct win_buffer *): the path the last WIN_EV_DIALOG chose (absolute, at most
@@ -389,7 +391,9 @@ static inline int win_types(const char *s, unsigned size, char out[][WIN_TYPE_LE
    size and title; the pid of the program that opened it; and (10/25/26, stage C6) whether that program is in the
    foreground job of a pty the desktop adopted, its Terminal's, a job that session's shell made (typed at its prompt
    without &, or started by one that was): the desktop gives such a window the focus when it appears and the Terminal
-   has it. 10/26/26: how many times it asked to be seen (WIN_ALERT). */
+   has it. 10/26/26: how many times it asked to be seen (WIN_ALERT). 11/05/26: how many times it set its menus
+   (WIN_MENU: the view has them), and whether a chooser it asked for waits for the desktop to take it
+   (win_dialog_take()). */
 struct win_state {
     char title[WIN_TITLE_MAX];
     int w, h, min_w, min_h, max_w, max_h;
@@ -397,9 +401,12 @@ struct win_state {
     int pid;
     int foreground;
     u32 alerts;
+    u32 menu_serial;
+    int dialog;
 };
-/* its pixels, 0x00RRGGBB in rows of w, lent to the desktop until its next update or close */
-struct win_view { const u32 *pixels; int w, h; };
+/* its pixels, 0x00RRGGBB in rows of w, lent to the desktop until its next update or close; 11/05/26: and its menus as
+   it set them last (menus entries, checked as surfos/win.h says; NULL and 0 for none), lent the same way */
+struct win_view { const u32 *pixels; int w, h; const struct win_menu_item *menu; int menus; };
 
 /* kernel/win.c, for the desktop (shell/gui.c, shell/guisys_win.c, shell/guisys_term.c). Each call is the calling
    task's: its desktop is the one it registered. win_register: the calling task's console has a desktop now, of
@@ -430,6 +437,18 @@ int win_update(int h, struct win_state *st, struct win_view *view);
 int win_event(int h, const struct win_event *e);
 void win_close(int h);
 int win_clip_take(int h, char *out, u32 size);
+/* 11/05/26 (the desktop applications, track desk): the desktop's side of WIN_PASTE, WIN_DIALOG and WIN_TAKE, and the
+   theme (a window's menus come with win_update()'s view). win_paste_give: the desktop's clipboard, len bytes of text
+   (to a NUL if one comes first; 0: empty), for WIN_PASTE (-ENOMEM, -ENODEV). win_dialog_take: the chooser window h
+   asked for, into out, and its number into no: 0, -ENOENT when none waits. win_dialog_answer: the answer to request
+   no of window h, path (absolute) or NULL when cancelled, with its WIN_EV_DIALOG; -EINVAL for a request that is not
+   the one waiting; -ENOMEM answers it as cancelled. win_theme_set: the desktop's theme and its WIN_COLORS colours,
+   for its windows (WIN_THEME) and with WIN_EV_THEME to those that asked. -EINVAL for a handle that is not one of the
+   calling task's desktop's; -ENODEV for a task without a desktop. */
+int win_paste_give(const char *text, u32 len);
+int win_dialog_take(int h, struct win_dialog *out, u32 *no);
+int win_dialog_answer(int h, u32 no, const char *path);
+int win_theme_set(u32 theme, const u32 *colors);
 #endif
 
 #endif
