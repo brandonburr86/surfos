@@ -647,7 +647,9 @@ for the programs of the desktop applications, and for any other program with a w
 * **Its choosers.** A program asks for the desktop's Open, Save as or Choose folder chooser
   (`WIN_DIALOG`), only while its window has the focus and after you did something in it (a key, a
   click or a menu's item since its last chooser, so that a program cannot keep one up); the title
-  bar names the window it is for ("Paint: Save as"). It lists the types it names (and the
+  bar names the program it is for by a name the program cannot set (its title in Apps > Programs,
+  else its program's file name: "Paint: Save as", "wcode: Open a file"), and has no `≋`, which
+  marks only the desktop's own dialogs. It lists the types it names (and the
   folders), and a Save as name without one of them gets the first. Save as asks before it replaces
   a file and never takes one the desktop takes care of (a `.tmp` beside it, as Notepad's Saving
   says). Choose folder lists the folders: Right or a double-click goes into one, Enter or Choose
@@ -661,6 +663,10 @@ for the programs of the desktop applications, and for any other program with a w
   the Terminal still sends the Esc to its shell, as a terminal does. While its window has the focus it may
   read the desktop's clipboard (`WIN_PASTE`), as it may write it (`WIN_CLIP`). It reads the
   desktop's theme's colours (`WIN_THEME`) and hears when they change.
+* **Its close button.** Each press asks the program (`WIN_EV_CLOSE`) while it reads its events, so
+  one that asked "Save the changes?" and was told Cancel is asked again at the next press. The
+  desktop offers "End the program?" instead when the program has not read the close it was sent
+  (it is stuck, or busy), or at a third press within 3 seconds.
 * **Screenshots.** Print Screen, or SurfOS > Screenshot for a keyboard without the key, captures the
   screen as it is, then the Save as chooser asks where to put it, offering `Screenshot YYYY-MM-DD
   HHMMSS.bmp` in the first volume mounted that can be written (a USB stick's), or `/`. It is saved
@@ -671,8 +677,10 @@ for the programs of the desktop applications, and for any other program with a w
   `dusk`) and `pointer.speed` (`slow`, `normal` or `fast`: the window's 1, 2 and 3) in
   `surfos-config/settings.conf` on the stick SurfOS was started from (the `settings` command lists
   them). The desktop reads them when it starts and each second after, so a change made by Settings
-  or the `settings` command applies at once; a change made in Pointer & desktop is written there
-  when there is a settings stick, and its last line says whether it was.
+  or the `settings` command applies at once; a change made in Pointer & desktop applies at once and
+  is written there when there is a settings stick, once it has stood a second and a half (a run of
+  clicks writes the stick once; a key held down changes it once) or when the desktop ends, and its
+  last line says whether it was.
 
 ## Programs' windows
 
@@ -705,6 +713,8 @@ and its title says what it was last sent.
   it and takes its window away. A program that ends or crashes takes only its own window
   with it. Leaving the desktop with programs' windows open asks first; their windows close
   with the desktop, and the programs are told so (they are not stopped).
+  11/05/26: while a program reads its events, a press of its close button asks it again
+  instead ("Its close button" above).
 * **The clipboard and asking to be seen** (*10/26/26*, for the applications moving out of
   the kernel). While its window has the focus, a program may put text on the desktop's
   clipboard (`gw_clip()`, up to the clipboard's 128 KB, to a NUL if one comes first; no
