@@ -79,6 +79,20 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wsettings     # 11/05/26 (the desktop applications, track settings): Settings, user/wsettings/
+# wsettings, Settings (11/05/26): user/wsettings/, its model host-tested (tests/host/test_wsettings.c) and its window on
+# the fake desktop (tests/host/test_wsettings_win.c); its kernel side is kernel/netctl.c, SYS_netctl (surfos/netctl.h)
+WSETTINGS_SRC = $(wildcard user/wsettings/*.c)
+WSETTINGS_OBJ = $(WSETTINGS_SRC:user/wsettings/%.c=$(BUILD)/user/wsettings/%.o)
+$(BUILD)/user/wsettings/%.o: user/wsettings/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/wsettings: $(WSETTINGS_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSETTINGS_OBJ) $(USER_LIB)
+-include $(WSETTINGS_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1167,17 +1181,24 @@ $(BUILD)/host/test_netctl: HOSTKERN_FLAGS += -fgnu89-inline
 $(BUILD)/host/test_netctl: tests/host/test_netctl.c kernel/netctl.c include/surfos/netctl.h $(NETCTL_HOST_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_netctl.c $(NETCTL_HOST_OBJ) -o $@
-# Settings' model against a simulated kernel (tests/host/wsettings_fake.h)
+# Settings' model against a simulated kernel (tests/host/wsettings_fake.h), and its window on the fake desktop
 $(BUILD)/host/test_wsettings: tests/host/test_wsettings.c tests/host/wsettings_fake.h user/wsettings/settings.c \
                               user/wsettings/settings.h include/surfos/netctl.h
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wsettings -Itests/host -idirafter user/include tests/host/test_wsettings.c \
 	    user/wsettings/settings.c -o $@
+$(BUILD)/host/test_wsettings_win: tests/host/test_wsettings_win.c tests/host/wsettings_fake.h tests/host/gk_fake.h \
+                                  user/wsettings/window.c user/wsettings/window.h user/wsettings/settings.c \
+                                  user/wsettings/settings.h include/surfos/netctl.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wsettings -Itests/host tests/host/test_wsettings_win.c user/wsettings/window.c \
+	    user/wsettings/settings.c $(GK_HOST_OBJ) -o $@
 unittest: unittest-settings
 .PHONY: unittest-settings
-unittest-settings: $(BUILD)/host/test_netctl $(BUILD)/host/test_wsettings
+unittest-settings: $(BUILD)/host/test_netctl $(BUILD)/host/test_wsettings $(BUILD)/host/test_wsettings_win
 	$(BUILD)/host/test_netctl
 	$(BUILD)/host/test_wsettings
+	$(BUILD)/host/test_wsettings_win
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
