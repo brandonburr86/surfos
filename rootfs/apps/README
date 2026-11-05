@@ -1,0 +1,92 @@
+SurfOS application registry
+---------------------------
+File: rootfs/apps/README   Date: 11/05/26
+---------------------------
+(docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk)
+
+Each file <name>.app in this folder (/initrd/apps/ when SurfOS runs) puts a program on the
+desktop: in Apps > Programs, on a tile of the desktop, and in Files, which opens the file types
+it names in it. The desktop (shell/gui*.c, in the kernel) reads the folder each time it starts.
+The file is the program's track's own; this one says what it may hold.
+
+    # Paint: pictures, drawn
+    program = wpaint
+    title = Paint
+    types = bmp png
+    open-with = gif jpg jpeg
+    apps = yes
+    desktop = yes
+    icon = ................
+    icon = .KKKKKKKKKKKKK..
+    ... 16 icon lines in all, the top row first
+
+The format
+    Text (UTF-8), one setting a line: "key = value", blanks around the key and the value not
+    counted. A line whose first character that is not a blank is # is a comment; blank lines
+    mean nothing. Lines end with LF or CR LF. Every key but icon may be given once.
+
+    program     required. The program, by its name in /initrd/bin (wpaint is /initrd/bin/wpaint):
+                letters, digits, '.', '-' and '_', 1 to 31 of them, not starting with '.'.
+                The desktop starts it with no argument from Apps and its tile, and with a
+                file's path as its only argument from Files (one argument, spaces and all).
+    title       required. Its name in Apps > Programs, under its tile and in Files' Open with:
+                1 to 31 bytes of UTF-8, no control characters. The console's characters show it
+                (code page 437: a character it lacks is '?').
+    types       the file types a double-click in Files opens in it (and Open with offers it
+                for), as a program's Open and Save as take them (include/surfos/win.h's
+                WIN_DIALOG, whose parser the desktop shares, win_types()): extensions without
+                their dots, 1 to 15 letters and digits, or whole file names after '=', 1 to 15
+                letters, digits, '.', '-' and '_' (=Makefile, for a name with no extension),
+                separated by blanks, at most 16 of them, any case (png and PNG are one).
+    open-with   the file types Files' Open with also offers it for, as types; a double-click
+                does not open them in it. A viewer names its pictures in types, an editor that
+                also opens them names them here, so that a double-click shows a picture.
+    apps        yes or no: listed in Apps > Programs. yes when not given.
+    desktop     yes or no: a tile on the desktop, after the desktop's own, where the screen has
+                room for it (Apps > Programs has it at every size). no when not given.
+    icon        a row of its 16 x 16 icon: 16 characters, each a pixel, from the palette below;
+                the first icon line is the top row. 16 lines or none (none: the desktop's icon
+                for a program's window).
+
+    The palette, fixed (0xRRGGBB):
+        .  nothing: what is behind shows        A  paper            0xF4F1E6
+        K  ink              0x153D49            P  white paper      0xFFFDF5
+        N  navy             0x102E3B            W  white            0xFFFFFF
+        T  teal             0x197D83            D  black            0x000000
+        F  foam             0xB8E9D9            C  coral            0xEE906D
+        M  muted grey-teal  0x6C888C            S  sand             0xD0B056
+        L  light grey       0xC9CFC4            Y  light sand       0xE8D08A
+        B  sky              0x659ECB            R  red              0xC8473B
+        G  green            0x4F9A58
+    They are the desktop's own colours (include/sys/guidraw.h) and five more. An icon is drawn
+    by its program's track: no other product's artwork.
+
+What the desktop does with them
+    It reads the .app files of /initrd/apps/ by their names in byte order, the first 32; any
+    other file there (this README) is not looked at, nor is a file whose name is not letters,
+    digits, '.', '-' and '_' (the log says one was skipped, not its name). A file it cannot
+    take is left out whole, with a line in the kernel log saying which and why, but never a
+    value's bytes ("gui: apps/paint.app line 4: types: not a list of types"): one longer than
+    4096 bytes, a line longer than 128 bytes or with a NUL byte, a line that is not "key =
+    value", a key it does not know or given twice, a value that is not as above, no program or
+    no title, a number of icon lines that is not 0 or 16, or a program that is not in
+    /initrd/bin. Two entries for one program: the second, by file name, is left out, and the
+    log says so. An entry whose program is one the desktop has as an application of its own
+    (struct gui_app's program: wclock, wcharmap) shows only there: its apps and desktop say
+    nothing, its types still count.
+
+    Apps > Programs lists the entries with apps = yes by their titles; the desktop's tiles,
+    after the desktop's own and its applications', those with desktop = yes in the same order,
+    as many as the screen has room for. Either starts the program, or, when the desktop started
+    it and its window is still there, brings that window to the front.
+
+    Files opens a file whose extension (or whole name, for an '=' type) an entry's types names
+    in that entry's program, with the file's path as its argument (two entries naming the same
+    type: the first, by file name, and the kernel log says so). What no entry names keeps the
+    desktop's own rules: a .bmp in the Image Viewer, a file Notepad refuses in Hex, any other in
+    Notepad. File > Open with... lists every program whose types or open-with name the file's
+    type, then Notepad and Hex.
+
+Bounds, since the kernel parses these: every length above is checked before anything is kept;
+nothing is allocated (the entries are kept in the desktop's own state, 32 of them); a file is
+read in one piece of at most 4096 bytes; nothing recurses.
