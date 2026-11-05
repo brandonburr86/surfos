@@ -164,6 +164,10 @@ static const struct key_info keys[NETCFG_NKEYS] = {
     { "hostname", "letters, digits, -", "the name DHCP requests give, which the router lists", "surfos" },
     { "history", "on | off", "surfsh keeps the lines typed at its prompts in surfos-config/history (plain text) and "
       "recalls them at its next start", "off" },
+    /* 11/05/26 (the desktop applications, track desk): the desktop's preferences, which Pointer & desktop and Settings
+       change */
+    { "desktop.theme", "ocean | dusk", "the desktop's colours", "ocean" },
+    { "pointer.speed", "slow | normal | fast", "how far the desktop's pointer goes for a move of the mouse", "slow" },
 };
 
 static const char template_text[] =
@@ -201,7 +205,14 @@ static const char template_text[] =
     "# surfos-config/history beside this file and recalls them at its next start (Up, Ctrl+R).\n"
     "# It is plain text: a password typed on a command line would be in it (a line that starts\n"
     "# with a space is never kept). on or off.\n"
-    "#history = off\n";
+    "#history = off\n"
+    "\n"
+    "# desktop.theme: the desktop's colours, ocean or dusk (gui: Pointer & desktop, or Settings).\n"
+    "#desktop.theme = ocean\n"
+    "\n"
+    "# pointer.speed: how far the desktop's pointer goes for a move of the mouse: slow, normal\n"
+    "# or fast.\n"
+    "#pointer.speed = slow\n";
 
 void netcfg_defaults(struct netcfg_settings *s) {
     memset(s, 0, sizeof(*s));
@@ -211,6 +222,8 @@ void netcfg_defaults(struct netcfg_settings *s) {
     s->ethernet_dhcp = false;
     strlcpy(s->hostname, keys[NETCFG_HOSTNAME].dflt, sizeof(s->hostname));
     s->history = false;
+    s->theme = NETCFG_THEME_OCEAN;                  /* 11/05/26 */
+    s->pointer = 1;
 }
 
 int netcfg_key_find(const char *name) {
@@ -244,6 +257,8 @@ const char *netcfg_value(const struct netcfg_settings *s, int k, char *buf, size
     case NETCFG_ETHERNET:     strlcpy(buf, s->ethernet_dhcp ? "dhcp" : "off", size); break;
     case NETCFG_HOSTNAME:     strlcpy(buf, s->hostname, size); break;
     case NETCFG_HISTORY:      strlcpy(buf, s->history ? "on" : "off", size); break;
+    case NETCFG_THEME:        strlcpy(buf, s->theme == NETCFG_THEME_DUSK ? "dusk" : "ocean", size); break;   /* 11/05/26 */
+    case NETCFG_POINTER:      strlcpy(buf, s->pointer == 3 ? "fast" : s->pointer == 2 ? "normal" : "slow", size); break;
     default:                  strlcpy(buf, "", size); break;
     }
     return buf;
@@ -289,6 +304,19 @@ int netcfg_set(struct netcfg_settings *s, int k, const char *value, char *why, s
     case NETCFG_ETHERNET:
         if(same_word(value, "dhcp")) s->ethernet_dhcp = true;
         else if(same_word(value, "off")) s->ethernet_dhcp = false;
+        else break;
+        s->set |= 1u << k;
+        return 0;
+    case NETCFG_THEME:                                  /* 11/05/26 */
+        if(same_word(value, "ocean")) s->theme = NETCFG_THEME_OCEAN;
+        else if(same_word(value, "dusk")) s->theme = NETCFG_THEME_DUSK;
+        else break;
+        s->set |= 1u << k;
+        return 0;
+    case NETCFG_POINTER:
+        if(same_word(value, "slow")) s->pointer = 1;
+        else if(same_word(value, "normal")) s->pointer = 2;
+        else if(same_word(value, "fast")) s->pointer = 3;
         else break;
         s->set |= 1u << k;
         return 0;

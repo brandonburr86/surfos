@@ -283,7 +283,7 @@ static void copy(struct gui_state *g) {
              d->label, d->status[0] ? "  " : "", d->status, d->mount[0] ? "  " : "", d->mount);
     len = strlen(line);
     memcpy(g->clip, line, len);
-    g->clip_len = len;
+    gui_clipped(g, len);
     snprintf(k->status, sizeof(k->status), "Copied the line of %s", d->name);
     g->dirty = true;
 }

@@ -23,6 +23,17 @@ wintest tty      10/25/26: the terminal it runs on, as procinfo says ("WINTEST t
 10/26/26 (stage C12): in wintest show, x puts "echo wintest-clip" on the desktop's clipboard
 (WIN_CLIP: its title says "wintest: clip 0", or the error's name), and y asks to be seen once the
 window has lost the focus (WIN_ALERT 1.5 s after it: "wintest: alerted").
+11/05/26 (the desktop applications, docs/superpowers/plans/2026-11-05-desktop-apps.md, track desk):
+wintest desk [FILE]   the calls of 11/05/26, by hand and for the screen test (tools/gui_apps_desk.py):
+                 menus Test and View in the desktop's bar (WIN_MENU; View > Size a submenu, and a Help
+                 merged into the desktop's), and its title says what came
+                 last: a key with its modifiers ("desk: key 0x102 mods 5"), an item chosen ("desk:
+                 menu 21 of 2"), the theme ("desk: theme 1": WIN_THEME, WIN_EV_THEME), a chooser's
+                 answer ("desk: took /usb1p1/a.wintest", "desk: cancelled 4"). p pastes (WIN_PASTE:
+                 "desk: paste 5 hello"), o asks for the Open chooser for .wintest files, s for Save
+                 as (saved.wintest), f for Choose folder, m takes the menus away and gives them back.
+                 Files starts wintest with a path (rootfs/apps/wintest.app: the type wintest), which
+                 it takes as desk's FILE: its title says "desk: file <path>" first.
 */
 
 #include <stdio.h>
@@ -241,12 +252,131 @@ static int mode_show(void) {
     return 0;
 }
 
+/**** 11/05/26 (track desk): desk ****/
+
+static struct win_menu_item menu_items[13];
+
+static void menu_entry(int n, unsigned id, unsigned flags, const char *label, const char *keys) {
+    memset(&menu_items[n], 0, sizeof(menu_items[n]));
+    menu_items[n].id = id;
+    menu_items[n].flags = flags;
+    strcpy(menu_items[n].label, label);
+    strcpy(menu_items[n].keys, keys);
+}
+
+static int set_menus(int fd, int on) {
+    struct win_menu m;
+    menu_entry(0, 1, WIN_MENU_TITLE, "Test", "");
+    menu_entry(1, 11, 0, "Hello", "Ctrl+H");
+    menu_entry(2, 12, WIN_MENU_CHECKED, "Checked", "");
+    menu_entry(3, 0, WIN_MENU_SEPARATOR, "", "");
+    menu_entry(4, 13, WIN_MENU_DISABLED, "Greyed", "");
+    menu_entry(5, 2, WIN_MENU_TITLE, "View", "");
+    menu_entry(6, 21, WIN_MENU_RADIO, "Big", "F5");
+    menu_entry(7, 22, 0, "Small", "");
+    menu_entry(8, 25, WIN_MENU_SUBMENU, "Size", "");    /* the review of 11/05/26: a submenu and a Help */
+    menu_entry(9, 23, WIN_MENU_CHILD, "Normal", "");
+    menu_entry(10, 24, WIN_MENU_CHILD, "Large", "Ctrl+=");
+    menu_entry(11, 3, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    menu_entry(12, 31, 0, "About wintest", "");
+    m.items = menu_items;
+    m.count = on ? 13 : 0;
+    return winctl(fd, WIN_MENU, &m);
+}
+
+static int ask(int fd, unsigned kind, unsigned id, const char *name) {
+    struct win_dialog d;
+    memset(&d, 0, sizeof(d));
+    d.kind = kind;
+    d.id = id;
+    strcpy(d.name, name);
+    strcpy(d.types, kind == WIN_DLG_FOLDER ? "" : "wintest txt");
+    return winctl(fd, WIN_DIALOG, &d);
+}
+
+static int mode_desk(const char *file) {
+    static char clip[WIN_CLIP_MAX + 1];
+    struct win_open o;
+    struct win_info info;
+    struct win_theme theme;
+    struct win_event ev[16];
+    struct win_buffer b;
+    char title[WIN_TITLE_MAX], path[WIN_PATH_MAX];
+    int fd, n, i, r, menus = 1;
+    good(&o);
+    o.w = 320;
+    o.h = 200;
+    strcpy(o.title, "desk: ready");
+    fd = winopen(&o);
+    if(fd < 0) return fail(strerror(errno));
+    if(winctl(fd, WIN_INFO, &info) < 0 || quadrants(info.w, info.h) < 0 || present_all(fd) < 0)
+        return fail(strerror(errno));
+    if(set_menus(fd, 1) < 0) printf("wintest: WIN_MENU: %s\n", strerror(errno));
+    if(winctl(fd, WIN_THEME, &theme) < 0) printf("wintest: WIN_THEME: %s\n", strerror(errno));
+    if(file) {
+        snprintf(title, sizeof(title), "desk: file %s", file);
+        winctl(fd, WIN_TITLE, title);
+    }
+    for(;;) {
+        n = read(fd, ev, sizeof(ev));
+        if(n == 0) break;
+        if(n < 0) {
+            if(errno == EINTR) continue;
+            return fail(strerror(errno));
+        }
+        for(i = 0; i < n / (int)sizeof(ev[0]); i++) {
+            const struct win_event *e = &ev[i];
+            title[0] = 0;
+            if(e->type == WIN_EV_CLOSE) {
+                printf("wintest: closed\n");
+                close(fd);
+                return 0;
+            }
+            if(e->type == WIN_EV_KEY && !e->mods && e->value == 'p') {
+                b.buf = clip;
+                b.size = sizeof(clip);
+                r = winctl(fd, WIN_PASTE, &b);
+                if(r < 0) snprintf(title, sizeof(title), "desk: paste %s", strerror(errno));
+                else snprintf(title, sizeof(title), "desk: paste %d %.24s", r, clip);
+            } else if(e->type == WIN_EV_KEY && !e->mods && (e->value == 'o' || e->value == 's' || e->value == 'f')) {
+                winctl(fd, WIN_TITLE, "desk: asking");  /* what the chooser's title names it by */
+                r = ask(fd, e->value == 'o' ? WIN_DLG_OPEN : e->value == 's' ? WIN_DLG_SAVE : WIN_DLG_FOLDER,
+                        e->value == 'o' ? 3 : e->value == 's' ? 4 : 5, e->value == 's' ? "saved.wintest" : "");
+                if(r < 0) snprintf(title, sizeof(title), "desk: asked %s", strerror(errno));
+            } else if(e->type == WIN_EV_KEY && !e->mods && e->value == 'm') {
+                menus = !menus;
+                r = set_menus(fd, menus);
+                snprintf(title, sizeof(title), "desk: menus %s", r < 0 ? strerror(errno) : menus ? "on" : "off");
+            } else if(e->type == WIN_EV_KEY) {
+                snprintf(title, sizeof(title), "desk: key 0x%x mods %u", e->value, e->mods);
+            } else if(e->type == WIN_EV_MENU) {
+                snprintf(title, sizeof(title), "desk: menu %u of %d", e->value, e->x);
+            } else if(e->type == WIN_EV_THEME) {
+                snprintf(title, sizeof(title), "desk: theme %u", e->value);
+            } else if(e->type == WIN_EV_DIALOG && e->value) {
+                b.buf = path;
+                b.size = sizeof(path);
+                r = winctl(fd, WIN_TAKE, &b);
+                snprintf(title, sizeof(title), "desk: took %s", r < 0 ? strerror(errno) : path);
+            } else if(e->type == WIN_EV_DIALOG) {
+                snprintf(title, sizeof(title), "desk: cancelled %d", e->x);
+            }
+            if(title[0]) winctl(fd, WIN_TITLE, title);
+        }
+    }
+    printf("wintest: the desktop let the window go\n");
+    close(fd);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     mode = argc > 1 ? argv[1] : "";
+    if(!strcmp(mode, "desk")) return mode_desk(argc > 2 ? argv[2] : NULL);    /* 11/05/26 */
+    if(mode[0] == '/') return mode_desk(mode);          /* a file, from Files (rootfs/apps/wintest.app) */
     if(!strcmp(mode, "nodesk")) return mode_nodesk();
     if(!strcmp(mode, "pty")) return mode_pty();
     if(!strcmp(mode, "show")) return mode_show();
     if(!strcmp(mode, "tty")) return mode_tty();
-    fprintf(stderr, "usage: wintest nodesk | pty | show | tty\n");
+    fprintf(stderr, "usage: wintest nodesk | pty | show | tty | desk [file]\n");
     return 2;
 }
