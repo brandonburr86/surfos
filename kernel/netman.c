@@ -740,6 +740,27 @@ int netman_set(int k, const char *value, char *why, size_t size) {
     return r ? 1 : 0;
 }
 
+/* 11/05/26 (the desktop applications, track settings): key k = value in force now, the stick not written: for a
+   setting a person steps through (Settings' theme and pointer speed, which the desktop takes from here each second), so
+   that each step acts at once and only the last is written, by netman_set() once the steps stop. 0; 1 when this start
+   does not use the settings (settings=off), nothing changed; -1 refused (a value k does not take), why says why */
+int netman_apply(int k, const char *value, char *why, size_t size) {
+    struct netcfg_settings s;
+    mutex_lock(&nm_lock);
+    s = cfg;
+    mutex_unlock(&nm_lock);
+    if(netcfg_set(&s, k, value, why, size)) return -1;
+    if(where_state == WHERE_OFF) {
+        snprintf(why, size, "this start does not use the settings (settings=off)");
+        return 1;
+    }
+    mutex_lock(&nm_lock);
+    copy_key(&cfg, &s, k);
+    cmd_set |= 1u << k;                                 /* (the boot's read, if it still comes, leaves it) */
+    mutex_unlock(&nm_lock);
+    return 0;
+}
+
 /**** 10/25/26 (track A, A10): surfsh's files ****/
 
 static bool file_allowed(const char *name, bool write) {
@@ -1382,6 +1403,25 @@ int netman_wifi_connect(struct wlan_dev *w) {
     mutex_unlock(&connect_lock);
     if(r != -EINTR && r != -EBUSY && r != -ECANCELED && where_state != WHERE_OFF) {
         keeper_resume = true;                           /* what the start does: the keeper looks by itself again */
+        start_keeper(false);
+    }
+    return r;
+}
+
+/* 11/05/26 (the desktop applications, track settings): the same for a program's job (kernel/netctl.c), whose thread has
+   no console of its own: what happens is said as the keeper says it, "+NET:" lines in the kernel log (the address's
+   first line on F1 too, as the keeper's), never as a command's lines on the caller's console */
+int netman_wifi_connect_quiet(struct wlan_dev *w) {
+    struct wlan_station_info si;
+    int r;
+    if(wlan_station(w, &si, false)) return -ENODEV;
+    if(!mutex_trylock(&connect_lock)) return -EBUSY;
+    keeper_connecting = true;
+    r = connect_saved(w, false, true, si.stops);
+    keeper_connecting = false;
+    mutex_unlock(&connect_lock);
+    if(r != -EINTR && r != -EBUSY && r != -ECANCELED && where_state != WHERE_OFF) {
+        keeper_resume = true;
         start_keeper(false);
     }
     return r;

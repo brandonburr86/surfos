@@ -1156,6 +1156,22 @@ unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_gk
 	$(BUILD)/host/test_wkit
 
+# 11/05/26 (the desktop applications, track settings)
+# SYS_netctl's kernel side, kernel/netctl.c as it is with stand-ins for the station, the network manager, DHCP and
+# memory, linked with the real net/netcfg.c, the SSID's text (net/wlan/ieee80211.c) and the supplicant's PBKDF2
+# (net/wlan/wpa.c, lib/crypto/ but its random.c): its objects by their paths, since their variables come further down
+NETCTL_HOST_OBJ = $(addprefix $(BUILD)/host/kernel/,net/netcfg.o net/wlan/ieee80211.o net/wlan/wpa.o) \
+                  $(patsubst %.c,$(BUILD)/host/kernel/%.o,$(filter-out lib/crypto/random.c,$(wildcard lib/crypto/*.c))) \
+                  $(HOSTLIB_OBJ)
+$(BUILD)/host/test_netctl: HOSTKERN_FLAGS += -fgnu89-inline
+$(BUILD)/host/test_netctl: tests/host/test_netctl.c kernel/netctl.c include/surfos/netctl.h $(NETCTL_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_netctl.c $(NETCTL_HOST_OBJ) -o $@
+unittest: unittest-settings
+.PHONY: unittest-settings
+unittest-settings: $(BUILD)/host/test_netctl
+	$(BUILD)/host/test_netctl
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \

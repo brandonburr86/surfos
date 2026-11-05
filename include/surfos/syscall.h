@@ -19,6 +19,8 @@ ends' addresses (surfos/sock.h).
 10/25/26 (windows for programs): 52 and 53 open a window on the desktop and drive it
 (surfos/win.h).
 11/01/26 (top): 54, the machine's clock and memory totals (surfos/proc.h).
+11/05/26 (the desktop applications, track settings): 55, the network manager's settings, the
+saved networks and the Wi-Fi for a program with a window (surfos/netctl.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -89,7 +91,9 @@ ends' addresses (surfos/sock.h).
 #define SYS_winctl   53  /* (int fd, int op, void *arg): WIN_PRESENT, WIN_SETSIZE, WIN_TITLE, WIN_INFO */
 /* 11/01/26 (top): surfos/proc.h */
 #define SYS_sysinfo  54  /* (struct sysinfo *si) */
-#define NR_SYSCALLS 55
+/* 11/05/26 (the desktop applications, track settings): surfos/netctl.h */
+#define SYS_netctl   55  /* (int op, void *arg, u32 size): reads, and jobs (their numbers) */
+#define NR_SYSCALLS 56
 
 #include <surfos/spawn.h>       /* 10/24/26: SPAWN_MAX_ARGS, SPAWN_ARG_BYTES */
 
