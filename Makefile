@@ -1108,7 +1108,7 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 
 # 11/05/26 (the desktop applications, track img): libsurf's pictures, user/libsurf/image*.c (the decoders moved there from
 # user/wundertow/), on the host with Undertow's test allocator, so that a test counts what they hold and fails any
-# allocation. test_wundertow_image (with Wundertow's tests) reads pictures with them.
+# allocation; with libsurf's inflate and CRC-32. test_wundertow_image (with Wundertow's tests) reads pictures with them.
 # Sanitizer runs are by hand, on the Mac (docs/superpowers/plans/2026-11-05-desktop-apps-img.md).
 IMG_HOSTFLAGS = $(UT_HOSTFLAGS) -idirafter user/include
 $(BUILD)/host/img/%.o: user/libsurf/%.c
@@ -1464,9 +1464,9 @@ unittest: test-wundertow-load
 # in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
 # arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
 # hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
-# 11/05/26 (track img): the decoders are libsurf's now (user/libsurf/image*.c, $(BUILD)/host/img/, above); the test
-# is as it was
-WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o
+# 11/05/26 (track img): the decoders are libsurf's now (user/libsurf/image*.c, $(BUILD)/host/img/, above), with its
+# inflate and CRC-32; the test is as it was
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o inflate.o crc32.o
 WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/img/,$(WT_IMAGE_NAMES))
 $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
                                     $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)

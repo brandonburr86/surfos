@@ -3,7 +3,7 @@ SurfOS user library: pictures
 ----------------------
 File: image.h  Date: 11/1/26
 ----------------------
-A file's bytes become pixels: BMP, GIF (its first frame), PNG (with an inflate of its own) and JPEG (baseline,
+A file's bytes become pixels: BMP, GIF (its first frame), PNG (through libsurf's inflate) and JPEG (baseline,
 extended sequential and progressive), each its own file (image_bmp.c, image_gif.c, image_png.c, image_jpeg.c), in
 integers only, with no library. What kind a file is comes from its first bytes, never from what a server or a
 file's name says.
@@ -21,7 +21,7 @@ JPEG's coefficients WIMG_COEFS_MAX bytes; WIMG_SCANS_MAX scans. What a program k
 (Wundertow's page: WB_PAGE_IMAGES, browser.h).
 
 11/05/26 (the desktop applications, track img): moved here from user/wundertow/, so that every program reads
-pictures the same way, as they were.
+pictures the same way; the decoders are as they were, and the PNG decoder's inflate is libsurf's (inflate.h).
 */
 
 #ifndef _IMAGE_H

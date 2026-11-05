@@ -384,7 +384,7 @@ The text is the console's fonts (code page 437); a character they do not have is
 stand-in ("EUR", "(c)", "--"). What Undertow hides (scripts, styles, templates, SVG, MathML, objects), this
 hides, and so the content of an element with the `hidden` attribute.
 
-**Pictures.** PNG (with its own inflate), JPEG (baseline and progressive), GIF (its first frame) and BMP, whatever the
+**Pictures.** PNG (with libsurf's inflate), JPEG (baseline and progressive), GIF (its first frame) and BMP, whatever the
 server calls them, read in integers by libsurf's `user/libsurf/image_*.c` (`user/include/image.h`; until 11/05/26 they
 were `user/wundertow/`'s) in the helper. They load after the page, three at
 a time, in the page's order. An image's frame is as big as its `width` and `height` say, or by its shape when only one
