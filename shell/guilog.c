@@ -305,7 +305,7 @@ static void copy(struct gui_state *g) {
     end = next_line(v, b);
     if(end - a > GUI_CLIP_MAX) end = a + GUI_CLIP_MAX;  /* never: the log is 16 KB */
     memcpy(g->clip, v->text + a, end - a);
-    g->clip_len = end - a;
+    gui_clipped(g, end - a);
     n = lines_between(v, a, b);
     snprintf(msg, sizeof(msg), "Copied %d line%s (%u bytes)", n, n == 1 ? "" : "s", end - a);
     status(g, msg);

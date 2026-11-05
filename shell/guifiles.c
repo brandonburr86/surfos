@@ -339,12 +339,16 @@ static int top_row(const struct gui_state *g, const char *name) {
 /* 10/17/26 (the suite): Open. A picture (*.bmp) goes to the Image Viewer, and a file that Notepad would refuse to
    Hex: one of more than Notepad's 256 KB, or with a NUL byte in its first 512 (one further on is Notepad's to find).
    Any other file goes to Notepad, as does what cannot be looked at here (a device, a file that is not there), so
-   that Notepad says why. */
+   that Notepad says why. 11/05/26 (the desktop applications, track desk): first, a file whose type a program of the
+   registry names (rootfs/apps/README) opens in that program, started with the file's path as its argument; these
+   rules are for what none names. */
 static void open_file(struct gui_state *g, const char *path) {
     struct gui_entry e;
     bool device = false, readonly = false;
     char head[512];
     u32 len = 0, size = 0;
+    int k = reg_for(g, gui_basename(path));
+    if(k >= 0) { reg_open(g, k, path); return; }
     if(viewer_takes(gui_basename(path))) { viewer_show(g, path); return; }
     if(g->fs && g->fs->read_at && !g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) && e.type != GUI_DIR &&
        !device && (e.size > GUI_NOTE_MAX ||
@@ -387,7 +391,7 @@ void files_act(struct gui_state *g, int act) {
         if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
         len = strlen(path);
         memcpy(g->clip, path, len);
-        g->clip_len = len;
+        gui_clipped(g, len);
         snprintf(f->status, sizeof(f->status), "Copied %s", path);
         break;
     case ACT_FILES_NEW_FILE: case ACT_FILES_NEW_FOLDER:

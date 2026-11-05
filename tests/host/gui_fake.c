@@ -318,6 +318,12 @@ int fake_run_count, fake_run_result;
 static u32 win_pool[4 * 1024 * 1024];
 static u32 win_pool_used;
 
+/* 11/05/26 (track desk) */
+char fake_paste[256], fake_run_program[32], fake_run_arg[256], fake_notes[4096];
+u32 fake_paste_len, fake_colors[WIN_COLORS];
+int fake_paste_count, fake_theme, fake_theme_count, fake_run_file_count;
+int fake_pref_theme, fake_pref_speed, fake_pref_result, fake_pref_sets, fake_pref_which, fake_pref_value;
+
 static void wins_reset(void) {
     memset(fake_wins, 0, sizeof(fake_wins));
     win_pool_used = 0;
@@ -326,6 +332,15 @@ static void wins_reset(void) {
     fake_run_result = 77;
     fake_clip[0] = 0;
     fake_clip_from = -1;
+    fake_paste[0] = fake_run_program[0] = fake_run_arg[0] = fake_notes[0] = 0;     /* 11/05/26 */
+    fake_paste_len = 0;
+    fake_paste_count = fake_theme_count = fake_run_file_count = fake_pref_sets = 0;
+    fake_theme = -1;
+    memset(fake_colors, 0, sizeof(fake_colors));
+    fake_pref_theme = 0;
+    fake_pref_speed = 1;
+    fake_pref_result = 0;
+    fake_pref_which = fake_pref_value = -1;
 }
 
 static u32 *pixels_for(int w, int h, u32 color) {
@@ -414,6 +429,8 @@ static int s_win_update(void *ctx, int h, struct win_state *st, struct win_view 
     view->pixels = fake_wins[i].px;
     view->w = fake_wins[i].st.w;
     view->h = fake_wins[i].st.h;
+    view->menu = fake_wins[i].menus ? fake_wins[i].menu : NULL;     /* 11/05/26: lent, as the pixels */
+    view->menus = fake_wins[i].menus;
     return 0;
 }
 
@@ -453,9 +470,112 @@ static int s_win_clip(void *ctx, int h, char *out, size_t n) {
     return (int)len;
 }
 
+/* 11/05/26 (track desk): menus, the clipboard given, choosers, the theme, a program with a file, the log, the
+   preferences */
+void fake_win_menus(int i, const struct win_menu_item *items, int n) {
+    if(n > WIN_MENU_ENTRIES) n = WIN_MENU_ENTRIES;
+    if(n > 0) memcpy(fake_wins[i].menu, items, (size_t)n * sizeof(*items));
+    fake_wins[i].menus = n > 0 ? n : 0;
+    fake_wins[i].st.menu_serial++;
+}
+
+void fake_win_ask(int i, const struct win_dialog *d) {
+    fake_wins[i].ask = *d;
+    fake_wins[i].st.dialog = 1;
+    fake_wins[i].asked++;                               /* the request's number: the answer must name it */
+}
+
+static int s_win_paste(void *ctx, const char *text, u32 len) {
+    (void)ctx;
+    if(len >= sizeof(fake_paste)) len = sizeof(fake_paste) - 1;
+    memcpy(fake_paste, text, len);
+    fake_paste[len] = 0;
+    fake_paste_len = len;
+    fake_paste_count++;
+    return 0;
+}
+
+static int s_win_dialog(void *ctx, int h, struct win_dialog *out, u32 *no) {
+    int i = win_of(h);
+    (void)ctx;
+    if(i < 0) return -EINVAL;
+    if(!fake_wins[i].st.dialog) return -ENOENT;
+    *out = fake_wins[i].ask;
+    *no = (u32)fake_wins[i].asked;
+    fake_wins[i].st.dialog = 0;
+    fake_wins[i].waiting = true;
+    return 0;
+}
+
+static int s_win_answer(void *ctx, int h, u32 no, const char *path) {
+    int i = win_of(h);
+    struct win_event e;
+    (void)ctx;
+    if(i < 0) return -EINVAL;
+    if(!fake_wins[i].waiting || no != (u32)fake_wins[i].asked) {   /* answered already, or not the one waiting */
+        fake_wins[i].wrong++;
+        return -EINVAL;
+    }
+    fake_wins[i].waiting = false;
+    strlcpy(fake_wins[i].answer, path ? path : "", sizeof(fake_wins[i].answer));
+    if(path) fake_wins[i].answers++;
+    else fake_wins[i].cancels++;
+    memset(&e, 0, sizeof(e));
+    e.type = WIN_EV_DIALOG;
+    e.value = path ? 1 : 0;
+    e.x = (int)fake_wins[i].ask.id;
+    if(fake_wins[i].nev < FAKE_EVENTS) fake_wins[i].ev[fake_wins[i].nev++] = e;
+    return 0;
+}
+
+static int s_win_theme(void *ctx, int theme, const u32 *colors) {
+    (void)ctx;
+    fake_theme = theme;
+    memcpy(fake_colors, colors, sizeof(fake_colors));
+    fake_theme_count++;
+    return 0;
+}
+
+static int s_run_file(void *ctx, const char *program, const char *arg, char *msg, size_t n) {
+    (void)ctx;
+    strlcpy(fake_run_program, program, sizeof(fake_run_program));
+    strlcpy(fake_run_arg, arg, sizeof(fake_run_arg));
+    fake_run_file_count++;
+    if(fake_run_result < 0) snprintf(msg, n, "could not start %s", program);
+    return fake_run_result;
+}
+
+static void s_note(void *ctx, const char *line) {
+    size_t used = strlen(fake_notes);
+    (void)ctx;
+    snprintf(fake_notes + used, sizeof(fake_notes) - used, "%s\n", line);
+}
+
+static int s_prefs(void *ctx, int *theme, int *speed) {
+    (void)ctx;
+    *theme = fake_pref_theme;
+    *speed = fake_pref_speed;
+    return 0;
+}
+
+static int s_pref_set(void *ctx, int which, int value, char *msg, size_t n) {
+    (void)ctx;
+    fake_pref_sets++;
+    fake_pref_which = which;
+    fake_pref_value = value;
+    if(fake_pref_result >= 0) {                         /* in force: the next read says so */
+        if(which == 0) fake_pref_theme = value;
+        else fake_pref_speed = value;
+    }
+    if(fake_pref_result) snprintf(msg, n, "%s", fake_pref_result > 0 ? "no settings stick" : "refused");
+    return fake_pref_result;
+}
+
 const struct gui_sys fake_sys = { NULL, s_tasks, s_memory, s_machine, s_kill, s_disks, s_log,
                                   s_term_open, s_term_read, s_term_write, s_term_resize, s_term_close,
-                                  s_win_accept, s_win_update, s_win_event, s_win_close, s_run, s_win_clip };
+                                  s_win_accept, s_win_update, s_win_event, s_win_close, s_run, s_win_clip,
+                                  s_win_paste, s_win_dialog, s_win_answer, s_win_theme,   /* 11/05/26 */
+                                  s_run_file, s_note, s_prefs, s_pref_set };
 
 /**** a screen ****/
 

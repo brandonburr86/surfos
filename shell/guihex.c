@@ -353,7 +353,7 @@ static void copy(struct gui_state *g) {
         g->clip[o++] = digits[h->piece[i] >> 4];
         g->clip[o++] = digits[h->piece[i] & 15];
     }
-    g->clip_len = o;
+    gui_clipped(g, o);
     snprintf(h->status, sizeof(h->status), "Copied %u byte%s", n, n == 1 ? "" : "s");
     g->dirty = true;
 }
@@ -361,7 +361,7 @@ static void copy(struct gui_state *g) {
 static void copy_offset(struct gui_state *g) {
     struct gui_hex *h = &g->hex;
     snprintf(g->clip, GUI_CLIP_MAX, "0x%08X", h->cursor);
-    g->clip_len = strlen(g->clip);
+    gui_clipped(g, strlen(g->clip));
     snprintf(h->status, sizeof(h->status), "Copied the offset 0x%08X", h->cursor);
     g->dirty = true;
 }
