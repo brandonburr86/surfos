@@ -674,6 +674,57 @@ for the programs of the desktop applications, and for any other program with a w
   or the `settings` command applies at once; a change made in Pointer & desktop is written there
   when there is a settings stick, and its last line says whether it was.
 
+### Spreadsheet
+
+*11/05/26* (the desktop applications, track sheet): **Spreadsheet** is a program, `wsheet`
+(`user/wsheet/`), with a window of its own: a grid of 256 columns (A to IV) and 65,536 rows, a
+formula bar above it and a status bar below. Apps > Programs and its tile start it; Files opens a
+`.sheet` or a `.csv` in it (`rootfs/apps/wsheet.app`). A fault in it costs only its window.
+
+* **Typing.** A key typed in the grid begins the active cell anew, shown in the cell and in the
+  formula bar. Enter puts it in and moves down, Tab right (Shift back), and an arrow puts it in
+  and moves that way; Enter after Tabs comes back to the column the Tabs began in, so a table is
+  typed a row at a time. Esc leaves the cell as it was, Backspace empties it as typing begins.
+  Ctrl+E, a double-click or a click in the formula bar edits what the cell holds there, where the
+  arrows move in the text; Enter puts it in, Esc cancels. The cell's name at the bar's left takes
+  a name or a range to go to (Ctrl+L).
+* **What a cell holds.** A number (`12`, `-3.5`, `1e3`; `50%` makes the cell a percent one), text,
+  TRUE or FALSE, an error, or a formula after `=`. Text that would read as something else goes in
+  after a `'`, as the formula bar shows it.
+* **Formulas.** Numbers, `"text"`, TRUE, FALSE, references (`A1`, `$A$1`, `A$1`, `$A1`) and
+  ranges (`A1:B5`), the operators `+ - * / ^ % &` and `= <> < <= > >=`, and SUM, AVERAGE, MIN,
+  MAX, COUNT, COUNTA, IF, AND, OR, NOT, ROUND, INT, ABS, SQRT, POWER, MOD, LEN, LEFT, RIGHT, MID,
+  UPPER, LOWER, TRIM and CONCAT, as OpenFormula has them: `-2^2` is 4, `2^3^2` 64. A formula that
+  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where; an
+  unknown name is #NAME?. Every change works the formulas out again, each after the cells it
+  uses, and the formulas of a cycle show #CYCLE!.
+* **Numbers** are doubles shown to their 15 significant digits, so `=0.1+0.2` shows 0.3 and equals
+  0.3; what a format or ROUND cuts is cut a half away from zero (2.675 with two decimals: 2.68).
+  The formats (Format) are General, fixed decimals and percent, with more or fewer decimals. A
+  column's width is dragged at its header's right edge, or typed (Sheet > Column width).
+* **Selecting.** Shift and the arrows, a drag or a Shift+click select a range; Ctrl and an arrow
+  goes to the edge of the data; a header selects a row or a column, the corner everything. The
+  status bar sums the selection: `Sum 6  Average 2  Count 3`.
+* **Copy and paste.** Ctrl+C puts the cells' values on the desktop's clipboard as tab-separated
+  text (as they show), for Notepad or another program, and keeps the cells: pasting what the
+  clipboard still holds from that copy puts them back with their formulas' references moved by
+  as far as they moved (`$` keeps a part). Text copied elsewhere is pasted a field a cell, as
+  typed. Ctrl+X is Copy, then the cells emptied.
+* **Rows and columns** (Sheet) are inserted and deleted at the selection; every reference keeps
+  to the cell it meant, a range grows or shrinks, and a reference to a cell that went is #REF!.
+  Inserting is refused when it would push cells off the sheet's end.
+* **The history.** Ctrl+Z and Ctrl+Y undo and redo the last 100 changes, each showing where.
+* **Files.** File > Open and Save as are the desktop's choosers. A `.sheet` is the Spreadsheet's
+  own text: `SurfOS sheet 1`, then a line for each column width not 80 pixels and each cell, with
+  its format and what the formula bar shows (`cell B4 fixed2 =SUM(B1:B3)`); it keeps everything. A
+  `.csv` (RFC 4180) opens as values (a field that begins with `=` is text) and saves the values,
+  asking first when formulas would be lost. Saving replaces a file as Notepad does (a new file
+  beside it, renamed over). A file is read a piece at a time; Esc stops it. New, Open and Close
+  ask first about unsaved changes.
+* **Limits.** 300,000 cells, 8,192 bytes a cell, files of 32 MB. A recalculation too big for
+  SurfOS stops, and what it did not finish shows #LIMIT!. No charts, sorting, dates, names for
+  ranges or whole-column references.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
