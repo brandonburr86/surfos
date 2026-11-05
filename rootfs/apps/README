@@ -33,8 +33,11 @@ The format
                 1 to 31 bytes of UTF-8, no control characters. The console's characters show it
                 (code page 437: a character it lacks is '?').
     types       the file types a double-click in Files opens in it (and Open with offers it
-                for): extensions without their dots, separated by blanks, 1 to 8 letters and
-                digits each, at most 8 of them, any case (png and PNG are one).
+                for), as a program's Open and Save as take them (include/surfos/win.h's
+                WIN_DIALOG, whose parser the desktop shares, win_types()): extensions without
+                their dots, 1 to 15 letters and digits, or whole file names after '=', 1 to 15
+                letters, digits, '.', '-' and '_' (=Makefile, for a name with no extension),
+                separated by blanks, at most 16 of them, any case (png and PNG are one).
     open-with   the file types Files' Open with also offers it for, as types; a double-click
                 does not open them in it. A viewer names its pictures in types, an editor that
                 also opens them names them here, so that a double-click shows a picture.
@@ -60,25 +63,29 @@ The format
 
 What the desktop does with them
     It reads the .app files of /initrd/apps/ by their names in byte order, the first 32; any
-    other file there (this README) is not looked at. A file it cannot take is left out whole,
-    with a line in the kernel log saying which and why ("gui: apps/paint.app line 4: types:
-    'image/png' is not an extension"): one longer than 4096 bytes, a line longer than 128 bytes
-    or with a NUL byte, a line that is not "key = value", a key it does not know or given twice,
-    a value that is not as above, no program or no title, a number of icon lines that is not 0
-    or 16, or a program that is not in /initrd/bin. An entry whose program is one the desktop
-    has as an application of its own (struct gui_app's program: wclock, wcharmap) shows only
-    there: its apps and desktop say nothing, its types still count.
+    other file there (this README) is not looked at, nor is a file whose name is not letters,
+    digits, '.', '-' and '_' (the log says one was skipped, not its name). A file it cannot
+    take is left out whole, with a line in the kernel log saying which and why, but never a
+    value's bytes ("gui: apps/paint.app line 4: types: not a list of types"): one longer than
+    4096 bytes, a line longer than 128 bytes or with a NUL byte, a line that is not "key =
+    value", a key it does not know or given twice, a value that is not as above, no program or
+    no title, a number of icon lines that is not 0 or 16, or a program that is not in
+    /initrd/bin. Two entries for one program: the second, by file name, is left out, and the
+    log says so. An entry whose program is one the desktop has as an application of its own
+    (struct gui_app's program: wclock, wcharmap) shows only there: its apps and desktop say
+    nothing, its types still count.
 
     Apps > Programs lists the entries with apps = yes by their titles; the desktop's tiles,
     after the desktop's own and its applications', those with desktop = yes in the same order,
     as many as the screen has room for. Either starts the program, or, when the desktop started
     it and its window is still there, brings that window to the front.
 
-    Files opens a file whose extension an entry's types names in that entry's program, with the
-    file's path as its argument (two entries naming the same type: the first, by file name, and
-    the kernel log says so). What no entry names keeps the desktop's own rules: a .bmp in the
-    Image Viewer, a file Notepad refuses in Hex, any other in Notepad. File > Open with... lists
-    every program whose types or open-with name the file's type, then Notepad and Hex.
+    Files opens a file whose extension (or whole name, for an '=' type) an entry's types names
+    in that entry's program, with the file's path as its argument (two entries naming the same
+    type: the first, by file name, and the kernel log says so). What no entry names keeps the
+    desktop's own rules: a .bmp in the Image Viewer, a file Notepad refuses in Hex, any other in
+    Notepad. File > Open with... lists every program whose types or open-with name the file's
+    type, then Notepad and Hex.
 
 Bounds, since the kernel parses these: every length above is checked before anything is kept;
 nothing is allocated (the entries are kept in the desktop's own state, 32 of them); a file is
