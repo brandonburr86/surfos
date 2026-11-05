@@ -336,6 +336,7 @@ static void wins_reset(void) {
     fake_paste_len = 0;
     fake_paste_count = fake_theme_count = fake_run_file_count = fake_pref_sets = 0;
     fake_theme = -1;
+    fake_answer_refused = false;
     memset(fake_colors, 0, sizeof(fake_colors));
     fake_pref_theme = 0;
     fake_pref_speed = 1;
@@ -429,7 +430,12 @@ static int s_win_update(void *ctx, int h, struct win_state *st, struct win_view 
     view->pixels = fake_wins[i].px;
     view->w = fake_wins[i].st.w;
     view->h = fake_wins[i].st.h;
-    view->menu = fake_wins[i].menus ? fake_wins[i].menu : NULL;     /* 11/05/26: lent, as the pixels */
+    /* 11/05/26: the menus lent, as the pixels: (the review of stage 2) a copy of its own at each update, and the copy
+       lent before overwritten, so that a desktop that keeps a pointer past its next update reads nonsense */
+    fake_wins[i].lent ^= 1;
+    memset(fake_wins[i].lent_menu[fake_wins[i].lent ^ 1], 0xA5, sizeof(fake_wins[i].lent_menu[0]));
+    memcpy(fake_wins[i].lent_menu[fake_wins[i].lent], fake_wins[i].menu, sizeof(fake_wins[i].menu));
+    view->menu = fake_wins[i].menus ? fake_wins[i].lent_menu[fake_wins[i].lent] : NULL;
     view->menus = fake_wins[i].menus;
     return 0;
 }
@@ -439,7 +445,13 @@ static int s_win_event(void *ctx, int h, const struct win_event *e) {
     (void)ctx;
     if(i < 0) return -EINVAL;
     if(fake_wins[i].nev < FAKE_EVENTS) fake_wins[i].ev[fake_wins[i].nev++] = *e;
+    if(e->type == WIN_EV_CLOSE) fake_wins[i].st.close_waiting = 1;     /* 11/05/26: until its program reads it */
     return 0;
+}
+
+/* 11/05/26 (the review of stage 2): its program reads what was sent to it: no CLOSE waits unread */
+void fake_win_read(int i) {
+    fake_wins[i].st.close_waiting = 0;
 }
 
 static void s_win_close(void *ctx, int h) {
@@ -479,6 +491,8 @@ void fake_win_menus(int i, const struct win_menu_item *items, int n) {
     fake_wins[i].st.menu_serial++;
 }
 
+bool fake_answer_refused;
+
 void fake_win_ask(int i, const struct win_dialog *d) {
     fake_wins[i].ask = *d;
     fake_wins[i].st.dialog = 1;
@@ -486,7 +500,9 @@ void fake_win_ask(int i, const struct win_dialog *d) {
 }
 
 static int s_win_paste(void *ctx, const char *text, u32 len) {
+    int i;
     (void)ctx;
+    for(i = 0; i < FAKE_WINS; i++) fake_wins[i].paste_at = fake_wins[i].nev;   /* (the review of stage 2) */
     if(len >= sizeof(fake_paste)) len = sizeof(fake_paste) - 1;
     memcpy(fake_paste, text, len);
     fake_paste[len] = 0;
@@ -512,6 +528,7 @@ static int s_win_answer(void *ctx, int h, u32 no, const char *path) {
     struct win_event e;
     (void)ctx;
     if(i < 0) return -EINVAL;
+    if(path && fake_answer_refused) return -EINVAL;     /* (the review of stage 2: a path the kernel refuses) */
     if(!fake_wins[i].waiting || no != (u32)fake_wins[i].asked) {   /* answered already, or not the one waiting */
         fake_wins[i].wrong++;
         return -EINVAL;

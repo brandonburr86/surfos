@@ -1097,17 +1097,31 @@ static void prefs_tick(struct gui_state *g) {
     g->pref_speed = speed;
 }
 
-/* Pointer & desktop changed one (which 0: the theme, 1: the speed): into the settings, and the status says so */
-static void pref_save(struct gui_state *g, int which, int value) {
-    char msg[GUI_STATUS];
-    int r;
+/* Pointer & desktop changed one (which 0: the theme, 1: the speed): in force here at once (the caller set it); 11/05/26
+   (the review of stage 2) written into the settings once it has stood GUI_PREF_MS, or at the desktop's end, so that a
+   run of clicks writes the stick once, and the desktop's pass never waits on the stick for each */
+static void pref_save(struct gui_state *g, int which) {
+    g->pref_pending |= 1u << which;
+    g->pref_changed = g->now;
+    strlcpy(g->pref_status, "Kept in the settings in a moment.", sizeof(g->pref_status));
     g->dirty = true;
-    if(!g->sys || !g->sys->pref_set) return;
-    msg[0] = 0;
-    r = g->sys->pref_set(g->sys->ctx, which, value, msg, sizeof(msg));
-    if(r == 0) strlcpy(g->pref_status, "Saved in the settings on the stick.", sizeof(g->pref_status));
-    else snprintf(g->pref_status, sizeof(g->pref_status), "%s%s", r > 0 ? "For now, not saved: " : "Not changed: ",
-                  msg[0] ? msg : "no settings stick");
+}
+
+/* what waits written into the settings (the values in force now), and the status says so */
+static void pref_flush(struct gui_state *g) {
+    char msg[GUI_STATUS];
+    int which, r;
+    for(which = 0; which < 2; which++) {
+        if(!(g->pref_pending & (1u << which))) continue;
+        g->pref_pending &= ~(1u << which);
+        if(!g->sys || !g->sys->pref_set) continue;
+        msg[0] = 0;
+        r = g->sys->pref_set(g->sys->ctx, which, which ? g->speed : g->night, msg, sizeof(msg));
+        if(r == 0) strlcpy(g->pref_status, "Saved in the settings on the stick.", sizeof(g->pref_status));
+        else snprintf(g->pref_status, sizeof(g->pref_status), "%s%s", r > 0 ? "For now, not saved: " : "Not changed: ",
+                      msg[0] ? msg : "no settings stick");
+    }
+    g->dirty = true;
 }
 
 /* the first volume mounted that may be written (a stick's), else / */
@@ -1189,6 +1203,7 @@ static void shot_answer(struct gui_state *g, int act, int button, const char *te
 void gui_tick(struct gui_state *g) {
     int id;
     if(!g->reg.loaded) reg_load(g);                     /* 11/05/26: the registry, when the desktop starts */
+    if(g->pref_pending && g->now - g->pref_changed >= GUI_PREF_MS) pref_flush(g);  /* a change that stood */
     prefs_tick(g);                                      /* 11/05/26: the preferences, each second */
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
@@ -1204,6 +1219,7 @@ void gui_input_done(struct gui_state *g) {
 
 void gui_finish(struct gui_state *g) {
     int id;
+    if(g->pref_pending) pref_flush(g);                  /* 11/05/26: a change not written yet */
     for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
         if(g->win[id].open && gui_app_of(id)->closed) gui_app_of(id)->closed(g);
     client_finish(g);                                   /* 10/25/26: programs' windows let go */
@@ -1246,7 +1262,7 @@ void gui_act(struct gui_state *g, int act) {
     switch(act) {
     case ACT_ABOUT: gui_open(g, GUI_ABOUT); break;
     case ACT_SETTINGS: gui_open(g, GUI_SETTINGS); break;
-    case ACT_THEME: g->night = !g->night; pref_save(g, 0, g->night); break;   /* 11/05/26: and kept */
+    case ACT_THEME: g->night = !g->night; pref_save(g, 0); break;   /* 11/05/26: and kept */
     case ACT_SCREENSHOT: gui_screenshot(g); break;     /* 11/05/26 */
     case ACT_PROGRAMS: menu_child(g, MENU_PROGRAMS); break;
     case ACT_OPEN_WITH: if(files_file(g)) menu_child(g, MENU_OPEN_WITH); break;
@@ -1532,8 +1548,8 @@ static void content_press(struct gui_state *g, int id, int x, int y) {
     if(id==GUI_ABOUT && gui_inside(x,y,16,166,4*102-8,34) && (x-16)%102<94)
         gui_act(g,tiles[(x-16)/102].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[(x-16)/102].app);
     if(id==GUI_SETTINGS) {                              /* 11/05/26: each change kept in the settings */
-        if(gui_inside(x,y,16,100,3*112,30)) { g->speed=(x-16)/112+1; pref_save(g,1,g->speed); }
-        if(gui_inside(x,y,16,172,176,32)) { g->night=!g->night; pref_save(g,0,g->night); }
+        if(gui_inside(x,y,16,100,3*112,30)) { g->speed=(x-16)/112+1; pref_save(g,1); }
+        if(gui_inside(x,y,16,172,176,32)) { g->night=!g->night; pref_save(g,0); }
     }
     if(id == GUI_NOTEPAD) note_press(g, x, y);
     if(id == GUI_FILES) files_press(g, x, y);
@@ -1600,7 +1616,11 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
            g->app_drag<0 && !g->note.selecting && !g->drawing) return;
     }
     if(!(e->buttons&POINTER_LEFT)) gui_release(g);
-    if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
+    if(g->dialog.kind) {                                /* 11/05/26 (the review of stage 2): the dialog's, and no */
+        client_pointer_lost(g);                         /* program's window under it hears a button held */
+        dialog_pointer(g,g->x,g->y,press);
+        return;
+    }
     if(!g->menu && client_grace(g,old)) return;         /* 10/26/26: a press on a window just come up by itself */
     if(client_pointer(g,old)) return;                   /* 10/25/26: a program's: over its content, or held for it */
     if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
@@ -1680,14 +1700,14 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     }
     for(i=0;i<TILES;i++) if(gui_inside(g->x,g->y,24,120+i*52,144,44)) { gui_act(g,tiles[i].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[i].app); return; }
     for(i=0;i<SUITE;i++) {                              /* 10/17/26: the suite's tiles */
-        tile_box(i,&x,&y);
-        if(gui_inside(g->x,g->y,x,y,144,44)) { gui_act(g,ACT_WINDOW+GUI_FIRST_APP+i); return; }
+        tile_box(i,&x,&y);                              /* 11/05/26 (the review of stage 2): those drawn alone */
+        if(x+144<=g->width && gui_inside(g->x,g->y,x,y,144,44)) { gui_act(g,ACT_WINDOW+GUI_FIRST_APP+i); return; }
     }
     for(i=0,id=0;i<g->reg.count;i++) {                  /* 11/05/26: the registry's, after them */
         int k=g->reg.by[i];
         if(!g->reg.e[k].desktop || g->reg.e[k].app>=0) continue;
         tile_box(SUITE+id++,&x,&y);
-        if(gui_inside(g->x,g->y,x,y,144,44)) { reg_start(g,k); return; }
+        if(x+144<=g->width && gui_inside(g->x,g->y,x,y,144,44)) { reg_start(g,k); return; }
     }
 }
 
@@ -1849,9 +1869,9 @@ void gui_key(struct gui_state *g, int key) {
         return;
     }
     if(g->focus==GUI_CALC) { gui_calc_key(&g->calc,key); g->dirty=true; }
-    if(g->focus==GUI_SETTINGS) {                        /* 11/05/26: each change kept in the settings */
-        if(key>='1' && key<='3') { g->speed=key-'0'; pref_save(g,1,g->speed); }
-        if(key=='t' || key=='T') { g->night=!g->night; pref_save(g,0,g->night); }
+    if(g->focus==GUI_SETTINGS && !(full&GUI_KEY_REPEAT)) {     /* 11/05/26: each change kept in the settings; */
+        if(key>='1' && key<='3') { g->speed=key-'0'; pref_save(g,1); }  /* a key held toggles once (the review */
+        if(key=='t' || key=='T') { g->night=!g->night; pref_save(g,0); }    /* of stage 2) */
         g->dirty=true;
     }
 }

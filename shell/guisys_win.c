@@ -153,10 +153,15 @@ int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, 
     return pid;
 }
 
+/* a line for the kernel log, whole: a text too long is cut, never its newline (11/05/26, the review of stage 2) */
 void guisys_note(void *ctx, const char *line) {
     char text[160];
+    size_t n;
     (void)ctx;
-    snprintf(text, sizeof(text), "%s\n", line);
+    n = strlcpy(text, line, sizeof(text) - 1);
+    if(n > sizeof(text) - 2) n = sizeof(text) - 2;
+    text[n] = '\n';
+    text[n + 1] = 0;
     klog_write(text);
 }
 
