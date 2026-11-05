@@ -79,6 +79,28 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
+# wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
+# (tests/host/test_wkit.c)
+WKIT_SRC      = $(wildcard user/wkit/*.c)
+WKIT_OBJ      = $(WKIT_SRC:user/wkit/%.c=$(BUILD)/user/wkit/%.o)
+$(BUILD)/user/wkit/%.o: user/wkit/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/wkit: $(WKIT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WKIT_OBJ) $(USER_LIB)
+-include $(WKIT_OBJ:.o=.d)
+# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h, libsurf's user/libsurf/gk*.c, which the
+# wildcard above builds in) on the host. Any program's window is host-tested so: compile with $(GK_HOST_FLAGS) and link
+# $(GK_HOST_OBJ): libgui and the toolkit as they are, the desktop's drawing kit, and the fake desktop of
+# tests/host/gk_fake.c (its rules are by unittest-kit's, below)
+GK_HOST_FLAGS = $(HOSTFLAGS) -Itests/host/gk_shim -idirafter user/include
+GK_HOST_OBJ   = $(patsubst user/libsurf/%.c,$(BUILD)/host/gk/%.o,user/libsurf/gui.c $(wildcard user/libsurf/gk*.c)) \
+                $(BUILD)/host/gk/gk_fake.o $(HOSTLIB_OBJ) $(addprefix $(BUILD)/host/kernel/,user/libsurf/guikit.o \
+                  shell/guidraw.o driver/fbcore.o driver/font8x16.o driver/cp437.o)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -1106,6 +1128,28 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 	$(BUILD)/host/test_ftpc
 	$(BUILD)/host/test_ftpcs
 
+# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h) and its demonstration, on the fake desktop
+$(BUILD)/host/gk/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (gk)"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/host/gk/gk_fake.o: tests/host/gk_fake.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -MMD -MP -c $< -o $@
+-include $(wildcard $(BUILD)/host/gk/*.d)
+$(BUILD)/host/test_gk: tests/host/test_gk.c tests/host/gk_fake.h user/include/gk.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) tests/host/test_gk.c $(GK_HOST_OBJ) -o $@
+$(BUILD)/host/test_wkit: tests/host/test_wkit.c tests/host/gk_fake.h user/wkit/demo.c user/wkit/demo.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wkit tests/host/test_wkit.c user/wkit/demo.c $(GK_HOST_OBJ) -o $@
+unittest: unittest-kit
+.PHONY: unittest-kit
+unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
+	$(BUILD)/host/test_gk
+	$(BUILD)/host/test_wkit
+
 # 11/05/26 (the desktop applications, track img): libsurf's pictures, user/libsurf/image*.c (the decoders moved there from
 # user/wundertow/, and the encoders), on the host with Undertow's test allocator, so that a test counts what they hold
 # and fails any allocation; with libsurf's inflate, deflate and CRC-32. test_wundertow_image (with Wundertow's tests)
@@ -1800,6 +1844,8 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 # 10/25/26 (windows for programs): kernel/win.c as it is, with stand-ins for the rest of the kernel (tests/host/test_win.c)
 $(BUILD)/host/test_win: $(BUILD)/host/kernel/tests/host/test_win.o $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+# 11/05/26 (track desk, the review of the ABI): kernel/win.c reads menus' text with driver/cp437.c's utf8_feed()
+$(BUILD)/host/test_win: $(BUILD)/host/kernel/driver/cp437.o
 unittest-win: $(BUILD)/host/test_win
 	$(BUILD)/host/test_win
 unittest: unittest-win
