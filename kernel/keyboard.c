@@ -30,6 +30,14 @@ standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
 and pressed again it resets the machine at once.
 10/26/26 (track C's C8): the IntelliMouse handshake finds a wheel mouse, whose wheel is
 reported with its motion.
+11/05/26 (the desktop applications, track desk): Print Screen (E0 37, also inside its E0 2A E0 37
+with Shift's fake prefix, which the E0 table leaves alone) is remembered for the console that has
+the screen, for its desktop to take (keyboard_print_taken(): a screenshot); it reaches no tty, as
+before. Alt+Print Screen (SysRq, 54) stays unused.
+11/05/26 (the review of the desktop's keys): a tty in TTY_RAW_KEYS (tty.h; the desktop's console)
+gets every key as it is, before Ctrl makes a control byte of it, with its modifiers apart, so that
+Ctrl+Tab is no Ctrl+I and Ctrl+0 is not lost (tty.c encodes them); and a key the keyboard repeats
+while it is held (its make code again with no break between: typematic) goes with KEY_REPEAT.
 */
 
 #include <surfos/keyboard.h>
@@ -47,10 +55,14 @@ reported with its motion.
 #include <blibc_common.h>
 #include <sys/pointer.h>
 #include <sys/ps2mouse.h>
+#include <fs/vfs.h>                     /* 11/05/26: poll_wake(), for Print Screen */
 
 static u_char led_status = NUM_LED;
 static bool shift_l, shift_r, ctrl, alt, e0;
 static struct del_key del_key;      /* 10/25/26 (the review of B4): Delete held down, for Ctrl+Alt+Del's presses */
+static const struct tty *print_tty; /* 11/05/26: the console Print Screen was pressed on, until its desktop takes it */
+static u_short held_key;            /* 11/05/26: the key pressed last (0x100 | its code after E0) until let go, 0 */
+static bool repeat;                 /* and whether the key now delivered is the keyboard's repeat of it */
 static u_long irqs, polled;
 
 /* status register bits */
@@ -133,6 +145,29 @@ static u_int mods_held(void) {
 
 u_int keyboard_mods(void) { return mods_held(); }
 
+/* 11/05/26: a Print Screen pressed on console t's screen since the last call, taken (the desktop on t: a screenshot) */
+bool keyboard_print_taken(const struct tty *t) {
+    u_long flags = irq_save();
+    bool taken = t && print_tty == t;
+    if(taken) print_tty = NULL;
+    irq_restore(flags);
+    return taken;
+}
+
+/* 11/05/26: a key's make or break code (after E0: e0key), for the repeat: a make code of the key held is its repeat.
+   Shift's fake prefixes around the E0 keys (E0 2A, E0 36 and their breaks) are none */
+static void key_seen(u_char code, bool e0key) {
+    u_short key = (u_short)((e0key ? 0x100 : 0) | (code & 0x7F));
+    if(e0key && ((code & 0x7F) == 0x2A || (code & 0x7F) == 0x36)) return;
+    if(code & 0x80) {
+        if(held_key == key) held_key = 0;
+        repeat = false;
+    } else {
+        repeat = held_key == key;
+        held_key = key;
+    }
+}
+
 static void deliver(u_char c) {
     u_int mods = mods_held();
     if(c >= F1 && c < F1 + NUM_CONSOLES) {      /* F1..Fn: switch console */
@@ -141,11 +176,12 @@ static void deliver(u_char c) {
     }
     if(mods == KEY_SHIFT && console_scroll_key(c)) return;     /* 10/25/26 (A6): the scrollback's keys */
     console_view_live();
-    tty_key(tty_active, c, mods);               /* raw mode turns special keys into escape sequences */
+    tty_key(tty_active, c, mods | (repeat ? KEY_REPEAT : 0));  /* raw mode turns special keys into escape sequences */
 }
 
 static void handle_e0(u_char code) {
     bool brk = code & 0x80;
+    key_seen(code, true);                     /* 11/05/26 */
     code &= 0x7F;
     switch(code) {
     case 0x1D: ctrl = !brk; return;           /* right control */
@@ -167,7 +203,13 @@ static void handle_e0(u_char code) {
         case DEL_DELETE: deliver(DEL); break;
         }
         return;
-    default: return;                          /* print screen, pause, media keys */
+    case 0x37:                                /* 11/05/26: Print Screen, for the desktop of the console in front */
+        if(!brk) {
+            print_tty = tty_active;
+            poll_wake();
+        }
+        return;
+    default: return;                          /* pause, media keys */
     }
 }
 
@@ -180,6 +222,7 @@ static void keyboard_byte(u_char code) {
     if(code == 0xE1) { return; }               /* pause: ignore the sequence */
     if(e0) { e0 = false; handle_e0(code); return; }
 
+    key_seen(code, false);                     /* 11/05/26 */
     brk = code & 0x80;
     code &= 0x7F;
 
@@ -203,6 +246,11 @@ static void keyboard_byte(u_char code) {
         else if((led_status & CAPS_LED) && c >= 'A' && c <= 'Z' && shift) c += 32;
     }
     if(!c) return;
+    if(tty_active->raw == TTY_RAW_KEYS) {       /* 11/05/26: the key as it is, its modifiers apart (tty.c) */
+        if(code == 0x0E || code == 0x1C) c = code == 0x0E ? 0x7F : '\r';     /* Backspace and Enter as raw mode's */
+        deliver(c);
+        return;
+    }
     if(ctrl && c < 0x80) {
         if(c >= 'a' && c <= 'z') c -= 32;
         if(c >= '@' && c <= '_') c &= 0x1F;     /* Ctrl-C = 3, Ctrl-U = 21, ... */

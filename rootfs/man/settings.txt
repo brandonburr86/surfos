@@ -32,6 +32,10 @@ KEYS
                   which the router lists. surfos unless set.
     history       on or off: surfsh keeps the lines typed at its prompts
                   in surfos-config/history, as plain text.
+    desktop.theme ocean or dusk: the desktop's colours (gui). Ocean
+                  unless set; the desktop takes a change at once.
+    pointer.speed slow, normal or fast: the desktop's pointer. Slow
+                  unless set.
 
 EXAMPLES
     settings

@@ -25,4 +25,12 @@ int guisys_win_event(void *ctx, int h, const struct win_event *e);
 void guisys_win_close(void *ctx, int h);
 int guisys_win_run(void *ctx, const char *line, char *msg, size_t n);
 int guisys_win_clip(void *ctx, int h, char *out, size_t n);                    /* 10/26/26 */
+int guisys_win_paste(void *ctx, const char *text, u32 len);                     /* 11/05/26 (track desk) */
+int guisys_win_dialog(void *ctx, int h, struct win_dialog *out, u32 *no);
+int guisys_win_answer(void *ctx, int h, u32 no, const char *path);
+int guisys_win_theme(void *ctx, int theme, const u32 *colors);
+int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, size_t n);
+void guisys_note(void *ctx, const char *line);
+int guisys_prefs(void *ctx, int *theme, int *speed);
+int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n);
 #endif

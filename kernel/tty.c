@@ -24,6 +24,8 @@ keys, or ttyctl(TTY_SKIP, 1), tty_term_input() drops what comes until its input 
 10/9/26 (Wi-Fi): tty_readline_secret(), a line that is never shown, for a password: the line
 discipline with its echo off for that one line (only the Enter, or ^C, is echoed), no history
 either way, and each key wiped from the input queue as it is read.
+11/05/26 (the desktop applications, track desk): TTY_RAW_KEYS (tty.h), the desktop's raw mode, in
+which the keyboard's keys say their modifiers and repeats exactly (tty_key()).
 */
 
 #include <surfos/types.h>
@@ -257,6 +259,21 @@ static const struct raw_key { char final; u_char n; } raw_keys[BACKTAB - F1 + 1]
    Alt on any other key is an ESC before it, the two queued together */
 void tty_key(struct tty *t, u_char c, u_int mods) {
     char seq[16];
+    if(t->raw == TTY_RAW_KEYS) {                /* 11/05/26: every key with its modifiers, and its repeat (tty.h) */
+        mods &= KEY_SHIFT | KEY_ALT | KEY_CTRL | KEY_REPEAT;
+        if(c >= 0x80) {
+            const struct raw_key *k = c <= BACKTAB ? &raw_keys[c - F1] : NULL;
+            if(!k || !k->final || k->final == 'Z') return;
+            if(k->final == '~') snprintf(seq, sizeof(seq), "\033[%u;%u~", k->n, 1 + mods);
+            else snprintf(seq, sizeof(seq), "\033[1;%u%c", 1 + mods, k->final);
+        } else if(!mods && ((c >= 0x20 && c < 0x7F) || c == '\t' || c == '\r' || c == 0x7F)) {
+            tty_input(t, c);
+            return;
+        } else snprintf(seq, sizeof(seq), "\033[%u;%uu", c, 1 + mods);
+        input_seq(t, seq);
+        return;
+    }
+    mods &= KEY_SHIFT | KEY_ALT | KEY_CTRL;     /* 11/05/26: the repeat is TTY_RAW_KEYS's alone */
     if(t->raw && c >= 0x80) {
         const struct raw_key *k = c <= BACKTAB ? &raw_keys[c - F1] : NULL;
         if(!k || !k->final) return;
@@ -678,7 +695,7 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
         return n;
     }
     if(op == TTY_RAW) {
-        if(arg > 1) return -22;                   /* EINVAL */
+        if(arg > TTY_RAW_KEYS) return -22;        /* EINVAL (11/05/26: 2, TTY_RAW_KEYS) */
         set_raw(t, (int)arg, curTask);
         /* 10/6/26: a full-screen program is never paged nor dropped (raw mode on reads, as far as
            the pager is concerned); after it, a new screenful */

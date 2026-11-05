@@ -546,7 +546,7 @@ void note_copy(struct gui_state *g, bool cut) {
     if(a == b) { note_status(g, "Select some text first"); return; }
     if(b - a > GUI_CLIP_MAX) { note_status(g, "Too much to copy: 128 KB at most"); return; }
     memcpy(g->clip, n->text + a, b - a);
-    g->clip_len = b - a;
+    gui_clipped(g, b - a);
     if(cut) { if(replace(g, a, b, "", 0, false)) show_cursor(g); }
     else note_status(g, "Copied");
 }
