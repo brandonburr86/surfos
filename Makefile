@@ -79,8 +79,22 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
+# wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
+# (tests/host/test_wkit.c)
+WKIT_SRC      = $(wildcard user/wkit/*.c)
+WKIT_OBJ      = $(WKIT_SRC:user/wkit/%.c=$(BUILD)/user/wkit/%.o)
+$(BUILD)/user/wkit/%.o: user/wkit/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/wkit: $(WKIT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WKIT_OBJ) $(USER_LIB)
+-include $(WKIT_OBJ:.o=.d)
 # 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h, libsurf's user/libsurf/gk*.c, which the
-# wildcard builds in) on the host. Any program's window is host-tested so: compile with $(GK_HOST_FLAGS) and link
+# wildcard above builds in) on the host. Any program's window is host-tested so: compile with $(GK_HOST_FLAGS) and link
 # $(GK_HOST_OBJ): libgui and the toolkit as they are, the desktop's drawing kit, and the fake desktop of
 # tests/host/gk_fake.c (its rules are by unittest-kit's, below)
 GK_HOST_FLAGS = $(HOSTFLAGS) -Itests/host/gk_shim -idirafter user/include
@@ -1114,7 +1128,7 @@ unittest-net: $(BUILD)/host/test_telnetc $(BUILD)/host/test_ftpc $(BUILD)/host/t
 	$(BUILD)/host/test_ftpc
 	$(BUILD)/host/test_ftpcs
 
-# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h), on the fake desktop
+# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h) and its demonstration, on the fake desktop
 $(BUILD)/host/gk/%.o: user/libsurf/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $< (gk)"
@@ -1127,10 +1141,14 @@ $(BUILD)/host/gk/gk_fake.o: tests/host/gk_fake.c
 $(BUILD)/host/test_gk: tests/host/test_gk.c tests/host/gk_fake.h user/include/gk.h $(GK_HOST_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) tests/host/test_gk.c $(GK_HOST_OBJ) -o $@
+$(BUILD)/host/test_wkit: tests/host/test_wkit.c tests/host/gk_fake.h user/wkit/demo.c user/wkit/demo.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wkit tests/host/test_wkit.c user/wkit/demo.c $(GK_HOST_OBJ) -o $@
 unittest: unittest-kit
 .PHONY: unittest-kit
-unittest-kit: $(BUILD)/host/test_gk
+unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_gk
+	$(BUILD)/host/test_wkit
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
