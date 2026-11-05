@@ -37,7 +37,7 @@ The format
                 WIN_DIALOG, whose parser the desktop shares, win_types()): extensions without
                 their dots, 1 to 15 letters and digits, or whole file names after '=', 1 to 15
                 letters, digits, '.', '-' and '_' (=Makefile, for a name with no extension),
-                separated by blanks, at most 16 of them, any case (png and PNG are one).
+                separated by spaces, at most 16 of them, any case (png and PNG are one).
     open-with   the file types Files' Open with also offers it for, as types; a double-click
                 does not open them in it. A viewer names its pictures in types, an editor that
                 also opens them names them here, so that a double-click shows a picture.
@@ -84,8 +84,8 @@ What the desktop does with them
     in that entry's program, with the file's path as its argument (two entries naming the same
     type: the first, by file name, and the kernel log says so). What no entry names keeps the
     desktop's own rules: a .bmp in the Image Viewer, a file Notepad refuses in Hex, any other in
-    Notepad. File > Open with... lists every program whose types or open-with name the file's
-    type, then Notepad and Hex.
+    Notepad. Files' File > Open with lists every program whose types or open-with name the file's
+    type, then the Image Viewer for a picture it reads, Notepad and Hex.
 
 Bounds, since the kernel parses these: every length above is checked before anything is kept;
 nothing is allocated (the entries are kept in the desktop's own state, 32 of them); a file is
