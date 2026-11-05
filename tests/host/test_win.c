@@ -1316,6 +1316,19 @@ static void test_menu_text(void) {
     CHECK(menu_call(fd, it, 4) == 0);
     it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Apps", "");      /* but no other of the desktop's names */
     CHECK(menu_call(fd, it, 4) == -EINVAL);
+    /* (the review of stage 2) no item of the Help menu reads as the desktop's own Help items, which follow it */
+    it[2] = mi(3, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "");
+    it[3] = mi(4, 0, "About SurfOS", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "\xC2\xA0" "about SURFOS ", "");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "Keyboard and Mouse", "F1");
+    CHECK(menu_call(fd, it, 4) == -EINVAL);
+    it[3] = mi(4, 0, "About Zoomer", "");                /* its own: good */
+    CHECK(menu_call(fd, it, 4) == 0);
+    it[2] = mi(3, WIN_MENU_TITLE, "View", "");          /* in a menu of its own the name is no Help item's */
+    it[3] = mi(4, 0, "About SurfOS", "");
+    CHECK(menu_call(fd, it, 4) == 0);
     /* the kernel's copy is what is checked: a shortcut that fills its array is cut before a sequence it cuts */
     memset(k, 0, sizeof(k));
     k[0].flags = WIN_MENU_TITLE;
@@ -1767,7 +1780,8 @@ static void test_dialogs(void) {
     n = readev(prog, fd, ev, sizeof(ev));
     CHECK(n == (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].value == 0 && ev[0].x == 8);
     CHECK(take_path(fd, path, sizeof(path)) == -ENOENT && win_of_fd(prog, fd)->ask == NULL);
-    /* a path not taken goes at the next WIN_DIALOG; a menu's item chosen is the user's doing too */
+    /* (the review of stage 2) a path not taken keeps the next WIN_DIALOG at -EBUSY until it is taken; a menu's item
+       chosen is the user's doing too */
     send_ev(h, WIN_EV_MENU, 1, 0, 2);
     readev(prog, fd, ev, sizeof(ev));
     CHECK(ask(fd, WIN_DLG_SAVE, 9, "/") == 0);
@@ -1776,8 +1790,10 @@ static void test_dialogs(void) {
     readev(prog, fd, ev, sizeof(ev));
     send_ev(h, WIN_EV_KEY, 0, 0, 's');
     readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_SAVE, 10, "/") == -EBUSY && win_of_fd(prog, fd)->input);      /* the input kept */
+    CHECK(take_path(fd, path, sizeof(path)) == 6 && !strcmp(path, "/a.png"));
     alive = live;
-    CHECK(ask(fd, WIN_DLG_SAVE, 10, "/") == 0 && live == alive);   /* the request's copy in, the path out */
+    CHECK(ask(fd, WIN_DLG_SAVE, 10, "/") == 0 && live == alive + 1);   /* the request's copy */
     CHECK(take_path(fd, path, sizeof(path)) == -ENOENT);
     /* no memory for the path: answered as cancelled */
     as(desktop);
@@ -1817,11 +1833,172 @@ static void test_dialogs(void) {
     as(desktop);
     CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/f.png") == 0);
     send_ev(h, WIN_EV_KEY, 0, 0, 'o');
-    CHECK(ask(fd, WIN_DLG_OPEN, 16, "/") == 0);         /* (the path not taken went here) */
+    CHECK(ask(fd, WIN_DLG_OPEN, 16, "/") == -EBUSY);    /* the path not taken: it goes with the window */
     as(prog);
     fd_close(fd);
     as(desktop);
     CHECK(win_dialog_take(h, &got, &no) == -ENOENT && win_dialog_answer(h, no, "/d.png") == -EINVAL);
+    win_close(h);
+    end();
+}
+
+/**** 11/05/26 (track desk): the review of stage 2's probes (K1-K5), and the close button's rule ****/
+
+/* K1: a press is the user's doing; an event that says the pointer left (x, y -1) with a button held from a click
+   elsewhere (the desktop's chooser over the window) is none, nor a button held on */
+static void test_dialog_press(void) {
+    struct win_dialog got;
+    struct win_event ev[8];
+    u32 no;
+    int fd, h;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');                  /* the user's Ctrl+O */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == 0);
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, NULL) == 0);    /* Cancel clicked */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 2, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, -1, -1, WIN_BUTTON_LEFT);    /* the button still down from the Cancel click */
+    CHECK(ask(fd, WIN_DLG_OPEN, 3, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 5, 5, WIN_BUTTON_LEFT);  /* held on, now over it: no new button */
+    CHECK(ask(fd, WIN_DLG_OPEN, 3, "/") == -EACCES);
+    send_ev(h, WIN_EV_POINTER, 5, 5, 0);
+    send_ev(h, WIN_EV_POINTER, 5, 5, WIN_BUTTON_RIGHT); /* a press: a button the event before did not have */
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 4, "/") == 0);
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K2: WIN_TAKE gives the path of the answer read last: a second request waits until the first's path is taken; a
+   cancelled answer leaves none and keeps nothing waiting */
+static void test_take_bound(void) {
+    struct win_dialog got;
+    struct win_event ev[8];
+    char path[WIN_PATH_MAX];
+    u32 no;
+    int fd, h, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'o');
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(ask(fd, WIN_DLG_OPEN, 1, "/") == 0);          /* request 1: Open */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/usb1p1/open-me.txt") == 0);
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');                  /* the user's Ctrl+S, after the answer */
+    CHECK(ask(fd, WIN_DLG_SAVE, 2, "/") == -EBUSY);     /* asked before its events are read: not yet */
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == 2 * (int)sizeof(ev[0]) && ev[0].type == WIN_EV_DIALOG && ev[0].x == 1 && ev[0].value == 1);
+    CHECK(take_path(fd, path, sizeof(path)) == 19 && !strcmp(path, "/usb1p1/open-me.txt"));    /* request 1's */
+    CHECK(ask(fd, WIN_DLG_SAVE, 2, "/") == 0);          /* the Ctrl+S still counts */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, NULL) == 0);    /* cancelled */
+    send_ev(h, WIN_EV_KEY, 0, 0, 's');
+    CHECK(ask(fd, WIN_DLG_SAVE, 3, "/") == 0);          /* no path: nothing keeps it waiting */
+    as(desktop);
+    CHECK(win_dialog_take(h, &got, &no) == 0 && win_dialog_answer(h, no, "/usb1p1/save-here.txt") == 0);
+    readev(prog, fd, ev, sizeof(ev));
+    CHECK(take_path(fd, path, sizeof(path)) == 21 && !strcmp(path, "/usb1p1/save-here.txt"));
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K3: theme changes one after another: one WIN_EV_THEME waits at most, the newest */
+static void test_theme_merged(void) {
+    static const u32 c[WIN_COLORS];
+    struct win_theme t;
+    struct win_event ev[4];
+    int fd, h, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_THEME, &t) == 0 && !win_of_fd(prog, fd)->ev_count);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'k');
+    as(desktop);
+    for(i = 0; i < 100; i++) win_theme_set((u32)(i & 1), c);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'l');
+    CHECK(win_of_fd(prog, fd)->ev_count == 3 && win_of_fd(prog, fd)->lost == 0);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == 3 * (int)sizeof(ev[0]) && ev[0].value == 'k' && ev[1].type == WIN_EV_THEME && ev[1].value == 1 &&
+          ev[2].value == 'l');
+    as(desktop);
+    win_close(h);
+    end();
+}
+
+/* K4: WIN_TAKE's refusals in their order: the buffer first, then whether a path waits, then its room */
+static void test_take_order(void) {
+    char guard[16], small[4];
+    struct win_buffer b;
+    int fd;
+    begin();
+    fd = open_as(prog, 200, 100);
+    bad_lo = guard;
+    bad_hi = guard + sizeof(guard);
+    b.buf = guard;
+    b.size = sizeof(guard);
+    as(prog);
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -EFAULT);     /* no path waiting, and a buffer not its own: -EFAULT */
+    bad_lo = bad_hi = NULL;
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -ENOENT);
+    b.buf = small;
+    b.size = sizeof(small);
+    win_of_fd(prog, fd)->answer = (char *)kalloc(8);    /* a path waiting, longer than the room */
+    strlcpy(win_of_fd(prog, fd)->answer, "/a.txt", 8);
+    CHECK(sys_winctl(fd, WIN_TAKE, &b) == -ENOSPC && win_of_fd(prog, fd)->answer);
+    end();                                              /* (the path goes with the window) */
+}
+
+/* K5: the answer's kept place on the hang-up paths: 63 events queued, a request waiting, then the desktop's close of
+   the window, or its death: the cancel still comes, last */
+static void test_hangup_full(int death) {
+    struct win_event ev[WIN_EVENTS];
+    int fd, h, i, n;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    send_ev(h, WIN_EV_FOCUS, 0, 0, 1);
+    for(i = 0; i < WIN_EVENTS - 2; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'a');     /* 63 with the focus */
+    CHECK(ask(fd, WIN_DLG_OPEN, 9, "/") == 0);
+    for(i = 0; i < 5; i++) send_ev(h, WIN_EV_KEY, 0, 0, 'b');                  /* lost: the last place is kept */
+    CHECK(win_of_fd(prog, fd)->lost == 5);
+    as(desktop);
+    if(death) reap(desktop);
+    else win_close(h);
+    n = readev(prog, fd, ev, sizeof(ev));
+    CHECK(n == (int)sizeof(ev) && ev[WIN_EVENTS - 1].type == WIN_EV_DIALOG && ev[WIN_EVENTS - 1].x == 9 &&
+          ev[WIN_EVENTS - 1].value == 0 && ev[WIN_EVENTS - 2].value == 'a');
+    CHECK(readev(prog, fd, ev, sizeof(ev)) == 0);       /* then the end */
+    end();
+}
+
+/* the close button's rule (shell/guiclient.c): the desktop sees whether a WIN_EV_CLOSE waits unread */
+static void test_close_waiting(void) {
+    struct win_state st;
+    struct win_view view;
+    struct win_event ev[4];
+    int fd, h;
+    begin();
+    fd = open_as(prog, 200, 100);
+    h = shown(prog, fd);
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
+    send_ev(h, WIN_EV_CLOSE, 0, 0, 0);
+    send_ev(h, WIN_EV_KEY, 0, 0, 'x');
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && st.close_waiting);
+    readev(prog, fd, ev, sizeof(ev[0]));                /* the CLOSE read, the key not yet */
+    as(desktop);
+    CHECK(win_update(h, &st, &view) == 0 && !st.close_waiting);
     win_close(h);
     end();
 }
@@ -1924,6 +2101,13 @@ int main(void) {
     test_paste();
     test_dialogs();
     test_dialog_queue();
+    test_dialog_press();                                /* 11/05/26 (the review of stage 2) */
+    test_take_bound();
+    test_theme_merged();
+    test_take_order();
+    test_hangup_full(0);
+    test_hangup_full(1);
+    test_close_waiting();
     test_themes();
     printf("test_win: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

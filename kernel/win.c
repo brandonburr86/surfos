@@ -255,6 +255,16 @@ static int queue_event(struct win *w, const struct win_event *e) {
         last->mods = e->mods;
         return 0;
     }
+    if(e->type == WIN_EV_THEME) {                       /* 11/05/26 (the review of stage 2): one waits at most, */
+        u_int k;                                        /* the newest (the program asks the colours anyway) */
+        for(k = 0; k < w->ev_count; k++) {
+            struct win_event *q = &w->ev[(w->ev_first + k) % WIN_EVENTS];
+            if(q->type == WIN_EV_THEME) {
+                q->value = e->value;
+                return 0;
+            }
+        }
+    }
     if(w->ev_count >= WIN_EVENTS - (w->asking && e->type != WIN_EV_DIALOG ? 1 : 0)) {
         w->lost++;                                      /* 11/05/26: the last place is a request's answer's */
         return -EAGAIN;
@@ -820,32 +830,45 @@ static int menu_cells(const char *s, u8 *cell) {
     return d.have ? -1 : cells;
 }
 
-/* a title that would pass for one of the desktop's own menus, by the cells it draws (n of them): ≋ in it (code page
-   437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help in any case with blank cells
-   around it (help: a title merged into the desktop's Help, which may be called that) */
-static bool desk_title(const u8 *cell, u32 n, bool help) {
-    static const char *const own[] = { "surfos", "apps", "window", "help" };
+/* the cells drawn (n of them) read as one of names (lower case), in any case, with blank cells around them (0xFF:
+   the no-break space) */
+static bool reads_as(const u8 *cell, u32 n, const char *const *names, u32 count) {
     u32 i, k;
-    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return true;
-    while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;      /* 0xFF: the no-break space */
+    while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;
     while(n && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
-    for(i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
-        if(help && i == 3) continue;
-        for(k = 0; k < n && own[i][k] && (cell[k] | 0x20) == own[i][k]; k++) ;
-        if(k == n && !own[i][k]) return true;
+    for(i = 0; i < count; i++) {
+        for(k = 0; k < n && names[i][k] && (cell[k] | 0x20) == names[i][k]; k++) ;
+        if(k == n && !names[i][k]) return true;
     }
     return false;
+}
+
+/* a title that would pass for one of the desktop's own menus, by the cells it draws: ≋ in it (code page 437's 0xF7,
+   which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help (help: a title merged into the desktop's Help,
+   which may be called that) */
+static bool desk_title(const u8 *cell, u32 n, bool help) {
+    static const char *const own[] = { "surfos", "apps", "window", "help" };
+    u32 i;
+    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return true;
+    return reads_as(cell, n, own, help ? 3 : 4);
+}
+
+/* 11/05/26 (the review of stage 2): an item of a Help menu that would pass for one of the desktop's own Help items */
+static bool desk_help_item(const u8 *cell, u32 n) {
+    static const char *const own[] = { "keyboard and mouse", "about surfos" };
+    return reads_as(cell, n, own, 2);
 }
 
 /* n entries of a WIN_MENU, copied into the kernel, as menus (surfos/win.h): each label and shortcut made a string,
    then the rest checked: 0, or -EINVAL. 11/05/26 (the review): labels and shortcuts the desktop draws as they are;
    14 entries a menu and a submenu; submenus one level deep, of an item, right after it; one Help title, not in the
-   bar, so not counted in its cells */
+   bar, so not counted in its cells, and (the review of stage 2) none of its items reads as the desktop's own */
 static int menu_check(struct win_menu_item *it, u32 n) {
     const u32 known = WIN_MENU_TITLE | WIN_MENU_SEPARATOR | WIN_MENU_DISABLED | WIN_MENU_CHECKED | WIN_MENU_RADIO |
                       WIN_MENU_SUBMENU | WIN_MENU_CHILD | WIN_MENU_HELP;
     u32 i, menus = 0, items = 0, children = 0, cells = 0, helps = 0, most = WIN_MENU_ITEMS;
     bool sub = false;                                   /* the entry before was a SUBMENU item or one of its children */
+    bool help = false;                                  /* the menu is the Help one */
     u8 cell[WIN_MENU_LABEL];
     int c;
     for(i = 0; i < n; i++) {
@@ -864,8 +887,11 @@ static int menu_check(struct win_menu_item *it, u32 n) {
             if((f & WIN_MENU_HELP) && ++helps > 1) return -EINVAL;
             if(!(f & WIN_MENU_HELP)) cells += (u32)c + 3;   /* a Help title is not in the bar */
             most = f & WIN_MENU_HELP ? WIN_MENU_HELP_ITEMS : WIN_MENU_ITEMS;
+            help = (f & WIN_MENU_HELP) != 0;
             items = 0;
             sub = false;
+        } else if(help && !sep && desk_help_item(cell, (u32)c)) {
+            return -EINVAL;                             /* (an item or a child of the Help menu) */
         } else if(child) {
             if(!sub || ++children > WIN_MENU_ITEMS || (!sep && !c)) return -EINVAL;   /* after its item, 14 */
         } else {
@@ -986,11 +1012,11 @@ static int paste(struct win *w, const struct win_buffer *ub) {
 /* 11/05/26: WIN_DIALOG: the request kept for the desktop, which shows its chooser while the window has the focus
    (only then may it ask: a chooser takes the keys), after something the user did in the window since its last request
    (so that a program that asks again after each answer cannot hold the keys), and while its queue has a place for the
-   answer, which is kept for it from then on; a path not taken goes */
+   answer, which is kept for it from then on. 11/05/26 (the review of stage 2): not while a path chosen waits to be
+   taken (-EBUSY), so that WIN_TAKE always gives the path of the answer the program read last */
 static int ask_dialog(struct win *w, const struct win_dialog *ud) {
     static u32 numbers;                                 /* the requests' numbers (interrupts off) */
     struct win_dialog d, *copy;
-    char *old = NULL;
     u_long flags;
     int r = dialog_args(ud, &d);
     if(r) return r;
@@ -1000,7 +1026,7 @@ static int ask_dialog(struct win *w, const struct win_dialog *ud) {
     flags = irq_save();
     if(w->hung) r = -EPIPE;
     else if(!w->focused) r = -EACCES;
-    else if(w->asking) r = -EBUSY;
+    else if(w->asking || w->answer) r = -EBUSY;          /* (the review of stage 2: a path chosen, not taken yet) */
     else if(!w->input) r = -EACCES;
     else if(w->ev_count >= WIN_EVENTS) r = -EAGAIN;    /* no place for the answer: the events first */
     else {
@@ -1010,13 +1036,10 @@ static int ask_dialog(struct win *w, const struct win_dialog *ud) {
         w->ask_id = d.id;
         if(!++numbers) numbers++;
         w->ask_no = numbers;
-        old = w->answer;
-        w->answer = NULL;
         copy = NULL;
     }
     irq_restore(flags);
     kfree(copy);
-    kfree(old);
     if(!r) poll_wake();                                 /* the desktop shows it */
     return r;
 }
@@ -1254,6 +1277,7 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
     struct winbuf *dead = NULL;
     struct menus *gone = NULL;
     u_long flags = irq_save();
+    u_int k;
     int r = 0;
     w = held_win(h);
     if(!w) r = -EINVAL;
@@ -1274,6 +1298,9 @@ int win_update(int h, struct win_state *st, struct win_view *view) {
         st->alerts = w->alerts;                         /* 10/26/26 */
         st->menu_serial = w->menu_serial;               /* 11/05/26 */
         st->dialog = w->ask != NULL;
+        st->close_waiting = 0;                          /* (the review of stage 2: the close button's rule) */
+        for(k = 0; k < w->ev_count; k++)
+            if(w->ev[(w->ev_first + k) % WIN_EVENTS].type == WIN_EV_CLOSE) st->close_waiting = 1;
         if(w->view != w->buf) {                         /* the desktop draws the new pixels from now on */
             dead = buf_put(w->view);
             w->view = w->buf;
@@ -1302,11 +1329,16 @@ int win_event(int h, const struct win_event *e) {
     int r = -EINVAL;
     w = held_win(h);
     if(w) {
+        u32 before = w->buttons;                        /* the buttons of the pointer event queued last */
         if(e->type == WIN_EV_FOCUS) w->focused = e->value != 0;
         r = queue_event(w, e);
         if(r >= 0) wake_up_all(&w->readers);
-        if(r >= 0 && (e->type == WIN_EV_KEY || e->type == WIN_EV_MENU || (e->type == WIN_EV_POINTER && e->value)))
-            w->input = true;                            /* 11/05/26: the user did something there: it may ask */
+        /* 11/05/26: the user did something there, so it may ask for a chooser: a key, an item chosen, or (the review
+           of stage 2) a press in it: a pointer event over its content with a button the one before did not have,
+           never one that says the pointer left (x, y -1) or a button held from a press elsewhere */
+        if(r >= 0 && (e->type == WIN_EV_KEY || e->type == WIN_EV_MENU ||
+                      (e->type == WIN_EV_POINTER && e->x >= 0 && e->y >= 0 && (e->value & ~before))))
+            w->input = true;
     }
     irq_restore(flags);
     if(r >= 0) poll_wake();
