@@ -1103,6 +1103,75 @@ static void random_actions(void) {
 
 /**** what the review of 11/05 found ****/
 
+/* a line of one pixel is the closed form of line_rows()'s remainder: at step i of n along its longer axis (x when the
+   two are equal), floor((2 m i + n) / 2n) of the m across; nothing else drawn */
+static int line_is(int x0, int y0, int x1, int y1) {
+    int dx = x1 - x0, dy = y1 - y0, ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy, along_x = ax >= ay,
+        n = along_x ? ax : ay, m = along_x ? ay : ax, sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1, i, j;
+    for(i = 0; i <= n; i++) {
+        j = n ? (2 * m * i + n) / (2 * n) : 0;
+        if(px(x0 + (along_x ? i : j) * sx, y0 + (along_x ? j : i) * sy) != BLACK) return 0;
+    }
+    return count(BLACK) == n + 1;
+}
+
+static void lines(void) {
+    int dx, dy, x, y, bad = 0;
+    fresh(40, 40);
+    paint_set_colour(p, 0, BLACK);
+    paint_set_size(p, 0);                               /* one pixel */
+    tool(PAINT_LINE);
+    for(dy = -13; dy <= 13; dy++)
+        for(dx = -13; dx <= 13; dx++) {
+            for(y = 0; y < 40; y++)
+                for(x = 0; x < 40; x++) setpx(x, y, WHITE);
+            drag(PAINT_LEFT, 20, 20, 20 + dx, 20 + dy);
+            if(!line_is(20, 20, 20 + dx, 20 + dy)) {
+                bad++;
+                printf("  the line to %+d, %+d\n", dx, dy);
+            }
+        }
+    CHECK(bad == 0);
+}
+
+/* an ellipse's rows against their definition, in boxes up to the largest canvas's (the root's numbers near 2^48): the
+   outermost centre X of w - 1's parity with X^2 h^2 + Y^2 w^2 <= w^2 h^2, or the middle when no centre of the row is */
+static void ellipse_rows(void) {
+    static const int boxes[][2] = { { 1, 1 }, { 2, 3 }, { 7, 5 }, { 64, 64 }, { 101, 37 }, { 4096, 4096 },
+                                    { 4096, 3906 }, { 3, 4000 }, { 4000, 1 }, { 4095, 2 } };
+    int k, i, r, a, b, wa, wb, bad = 0, w, h, rows[6];
+    long long W, H, Y, X;
+    for(k = 0; k < (int)(sizeof(boxes) / sizeof(boxes[0])); k++) {
+        w = boxes[k][0];
+        h = boxes[k][1];
+        rows[0] = 0;
+        rows[1] = h / 3;
+        rows[2] = h / 2;
+        rows[3] = h - 1;
+        rows[4] = h > 1 ? 1 : 0;
+        rows[5] = h > 7 ? h - 7 : 0;
+        for(i = 0; i < 6; i++) {
+            r = rows[i];
+            W = w;
+            H = h;
+            Y = 2LL * r + 1 - H;
+            wa = (w - 1) / 2;                           /* none in: the middle pixel, or two */
+            wb = w / 2;
+            for(X = w - 1; X >= 0; X -= 2)
+                if(X * X * H * H + Y * Y * W * W <= W * W * H * H) {
+                    wa = (int)((w - 1 - X) / 2);
+                    wb = (int)((w - 1 + X) / 2);
+                    break;
+                }
+            if(!ellipse_span(w, h, r, &a, &b) || a != wa || b != wb) {
+                bad++;
+                printf("  the ellipse in %d x %d, row %d: %d..%d, not %d..%d\n", w, h, r, a, b, wa, wb);
+            }
+        }
+    }
+    CHECK(bad == 0);
+}
+
 /* a canvas of noise set behind the history's back: every tile is kept raw */
 static void noise_canvas(int w, int h) {
     unsigned s = 7;
@@ -1252,6 +1321,8 @@ static void hard_fill(void) {
 }
 
 static void review(void) {
+    lines();
+    ellipse_rows();
     cut_without_memory();
     undo_large_after();
     cut_floating();

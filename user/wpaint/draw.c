@@ -7,14 +7,17 @@ What the tools draw, as runs of pixels in rows, in whole numbers only.
 
 A dab is the brush's print: a disc (the brush, the pencil at one pixel) or a square (the eraser),
 size pixels across. A line, and a stroke between two points of a drag, is a dab at every point of
-the line between them (Bresenham's line, from his 1965 paper); in each row the dabs make one run,
-whose ends line_rows() gathers into p->rowl[] and p->rowr[], so a stroke is drawn a row at a time
-and a line looks the same while it is dragged as when it is drawn.
+the line between them: one point for each step along its longer axis, the other coordinate the
+whole number nearest the true line's, which a remainder in whole numbers keeps (Bresenham's idea,
+from his 1965 paper, worked out here from that rounding; see line_rows()). In each row the dabs
+make one run, whose ends line_rows() gathers into p->rowl[] and p->rowr[], so a stroke is drawn a
+row at a time and a line looks the same while it is dragged as when it is drawn.
 
 A rectangle and an ellipse are rows too: up to two runs each (an outline's sides). An ellipse's
 row is worked out from its equation at the pixels' centres, x^2/a^2 + y^2/b^2 <= 1 in doubled
-whole numbers, with an integer square root (digit by digit), so it is symmetric and has no gaps.
-Its outline is the ellipse less the one inside it, size pixels in.
+whole numbers, with an integer square root (the largest root whose square does not pass, decided
+a bit at a time), so it is symmetric and has no gaps. Its outline is the ellipse less the one
+inside it, size pixels in.
 
 The flood fill is a fill of runs: a run of the colour clicked is filled whole, and the runs
 touching it in the rows above and below are queued, after the method in Paul Heckbert's "A Seed
@@ -37,16 +40,14 @@ Text is the console's font (driver/font8x16.c), each pixel of a character scale 
 
 const int paint_sizes[PAINT_SIZES] = { 1, 2, 3, 5, 8, 12, 16, 24 };
 
-/* the integer square root of v, rounded down, a bit pair at a time */
-static unsigned long long isqrt64(unsigned long long v) {
-    unsigned long long r = 0, bit = 1ULL << 62;
-    while(bit > v) bit >>= 2;
-    while(bit) {
-        if(v >= r + bit) {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else r >>= 1;
-        bit >>= 2;
+/* the integer square root of v, rounded down: the largest r with r^2 <= v, which is below 2^32 for any v of 64 bits.
+   Its bits are decided from the highest: a bit is 1 when the root with it, and the bits above as decided, still has a
+   square that does not pass v (a 32 x 32-bit product: no 64-bit division, so no libgcc) */
+static unsigned root64(unsigned long long v) {
+    unsigned r = 0, bit, t;
+    for(bit = 1u << 31; bit; bit >>= 1) {
+        t = r | bit;
+        if((unsigned long long)t * t <= v) r = t;
     }
     return r;
 }
@@ -63,7 +64,7 @@ static int ellipse_centres(int w, int h, int r, int *a, int *b) {
     if(w < 1 || h < 1 || r < 0 || r >= h) return 0;
     Y = 2LL * r + 1 - H;
     v = (unsigned long long)(W * W) * (unsigned long long)(H * H - Y * Y);
-    s = (unsigned)isqrt64(v);                           /* at most w * h */
+    s = root64(v);                                      /* at most w * h */
     m = (int)(s / (unsigned)h);                         /* the largest |X| */
     if((m & 1) != ((w - 1) & 1)) m--;                   /* X has the parity of w - 1 */
     if(m < 0) return 0;
@@ -90,9 +91,14 @@ void dab_row(int size, int round, int r, int *l, int *rr) {
 }
 
 /* the rows of a line of dabs from x0, y0 to x1, y1 into rowl[] and rowr[] (rows without any: rowl > rowr), within
-   the canvas's rows; top and bottom the rows looked at. 1 when it reaches a row of the canvas */
+   the canvas's rows; top and bottom the rows looked at. 1 when it reaches a row of the canvas.
+
+   The points: along the longer axis, n steps of one pixel; across it, m pixels in all (n >= m >= 0). At step i the
+   true line is m i / n across, and the point is the whole number nearest it, j = floor((2 m i + n) / 2n). What is
+   left over, e = 2 m i + n - 2 n j, stays in [0, 2n): it starts at n (i = 0, j = 0), each step adds 2m, and when it
+   reaches 2n the point moves one across and 2n comes off (2m <= 2n, so once is enough). */
 int line_rows(struct paint *p, int x0, int y0, int x1, int y1, int size, int round, int *top, int *bottom) {
-    int dl[PAINT_DAB_MAX], dr[PAINT_DAB_MAX], dx, dy, sx, sy, err, e2, up, lo, hi, r, y;
+    int dl[PAINT_DAB_MAX], dr[PAINT_DAB_MAX], up, lo, hi, r, y, along_x, n, m, e, i, sx, sy, x;
     if(size < 1) size = 1;
     if(size > PAINT_DAB_MAX) size = PAINT_DAB_MAX;
     up = (size - 1) / 2;
@@ -108,27 +114,29 @@ int line_rows(struct paint *p, int x0, int y0, int x1, int y1, int size, int rou
         p->rowl[y] = INT_MAX;
         p->rowr[y] = INT_MIN;
     }
-    dx = x1 > x0 ? x1 - x0 : x0 - x1;
-    dy = y1 > y0 ? y0 - y1 : y1 - y0;                   /* minus the height */
-    sx = x0 < x1 ? 1 : -1;
-    sy = y0 < y1 ? 1 : -1;
-    err = dx + dy;
-    for(;;) {
-        for(r = 0; r < size; r++) {
-            y = y0 - up + r;
-            if(y < lo || y > hi) continue;
-            if(x0 + dl[r] < p->rowl[y]) p->rowl[y] = x0 + dl[r];
-            if(x0 + dr[r] > p->rowr[y]) p->rowr[y] = x0 + dr[r];
+    sx = x1 < x0 ? -1 : 1;
+    sy = y1 < y0 ? -1 : 1;
+    along_x = (x1 - x0) * sx >= (y1 - y0) * sy;         /* the longer axis (x when they are equal) */
+    n = along_x ? (x1 - x0) * sx : (y1 - y0) * sy;
+    m = along_x ? (y1 - y0) * sy : (x1 - x0) * sx;
+    x = x0;
+    y = y0;
+    e = n;
+    for(i = 0; ; i++) {
+        for(r = 0; r < size; r++) {                     /* the dab at x, y: its rows' ends */
+            int row = y - up + r;
+            if(row < lo || row > hi) continue;
+            if(x + dl[r] < p->rowl[row]) p->rowl[row] = x + dl[r];
+            if(x + dr[r] > p->rowr[row]) p->rowr[row] = x + dr[r];
         }
-        if(x0 == x1 && y0 == y1) break;
-        e2 = 2 * err;
-        if(e2 >= dy) {
-            err += dy;
-            x0 += sx;
-        }
-        if(e2 <= dx) {
-            err += dx;
-            y0 += sy;
+        if(i == n) break;
+        e += 2 * m;
+        if(along_x) x += sx;
+        else y += sy;
+        if(e >= 2 * n) {
+            e -= 2 * n;
+            if(along_x) y += sy;
+            else x += sx;
         }
     }
     return 1;
