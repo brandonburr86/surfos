@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "paint.h"
 #include "ppriv.h"
 
@@ -1219,11 +1220,43 @@ static void refused_keeps_history(void) {
     CHECK(counted() && paint_undo(p) && px(3, 3) == WHITE);
 }
 
+/* Low: a picture made to fill the fill's stack again and again (the reviewer's teeth, upside down): levels of three
+   rows, a full row, teeth a pixel wide and a pixel apart, a wall open under the last tooth alone; filled from the
+   bottom, every level queues its teeth before the way on. The scans after a full stack read only the rows it cut
+   short, less than the canvas in all, and it ends in a moment */
+static void hard_fill(void) {
+    int w = 2048, h = 2048, x, y, r;
+    unsigned *ref, c;
+    clock_t t0;
+    double secs;
+    fresh(w, h);
+    for(y = 0; y < h; y++)
+        for(x = 0; x < w; x++) {
+            r = (h - 1 - y) % 3;
+            c = r == 0 ? WHITE : r == 1 ? (x % 2 == 0 ? WHITE : BLACK) : (x == (w - 1) / 2 * 2 ? WHITE : BLACK);
+            setpx(x, y, c);
+        }
+    ref = (unsigned *)malloc(canvas_bytes(w, h));
+    memcpy(ref, p->px, canvas_bytes(w, h));
+    fill_ref(ref, w, h, 0, h - 1, RED);
+    paint_set_colour(p, 0, RED);
+    tool(PAINT_FILL);
+    t0 = clock();
+    click(0, h - 1);
+    secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    CHECK(!memcmp(ref, p->px, canvas_bytes(w, h)) && counted());
+    CHECK(p->fill_rows > 0 && p->fill_rows < h && secs < 20);
+    printf("test_wpaint: the teeth's fill, %d x %d: %.2f s, %ld rows read again after a full stack\n", w, h, secs,
+           p->fill_rows);
+    free(ref);
+}
+
 static void review(void) {
     cut_without_memory();
     undo_large_after();
     cut_floating();
     refused_keeps_history();
+    hard_fill();
 }
 
 int main(void) {

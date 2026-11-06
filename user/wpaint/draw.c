@@ -19,9 +19,13 @@ Its outline is the ellipse less the one inside it, size pixels in.
 The flood fill is a fill of runs: a run of the colour clicked is filled whole, and the runs
 touching it in the rows above and below are queued, after the method in Paul Heckbert's "A Seed
 Fill Algorithm" (Graphics Gems, 1990), with a stack instead of recursion. The stack is bounded
-(p->fill_stack runs): when it is full a run is not queued, and once the stack is empty the canvas
-is scanned for runs of the colour beside a pixel this fill made, which a bitmap marks, until none
-is left. So any picture is filled whole, in bounded memory, without recursion.
+(p->fill_stack runs): when it is full a run is not queued and its row is marked, and once the
+stack is empty those rows alone are scanned for runs of the colour beside a pixel this fill made,
+which a bitmap marks, until no row is marked. A run left unfilled beside the fill can only be in
+such a row (every other run beside one filled was queued and taken), so each scan reads only rows
+where the fill was cut short. So any picture is filled whole, in bounded memory and without
+recursion, and a picture made to fill the stack again and again costs a few rows each time, not
+the canvas.
 
 Text is the console's font (driver/font8x16.c), each pixel of a character scale x scale.
 */
@@ -251,6 +255,7 @@ struct filling {
     struct run *stack;
     int n, cap, over;
     unsigned char *done;                                /* a bit for each pixel this fill made */
+    unsigned char *cut;                                 /* a byte a row: a run of it was not queued (the stack full) */
     long filled;
 };
 
@@ -267,6 +272,7 @@ static void push(struct filling *f, int y, int x0, int x1, int dy) {
     if(y + dy < 0 || y + dy >= f->p->h) return;
     if(f->n == f->cap) {                                /* full: the scan after it finds what this leaves */
         f->over = 1;
+        f->cut[y + dy] = 1;
         return;
     }
     f->stack[f->n].y = y;
@@ -309,10 +315,14 @@ static void drain(struct filling *f) {
     }
 }
 
-/* a pass over the canvas for runs of the target colour beside a pixel made by this fill: 1 when it found one */
+/* a pass over the rows marked as cut short, for runs of the target colour beside a pixel made by this fill: 1 when it
+   found one. A row marked while the pass goes on is read by this pass if it is still ahead, else by the next */
 static int rescan(struct filling *f) {
     int x, y, a, b, k, found = 0, w = f->p->w, h = f->p->h, near;
-    for(y = 0; y < h; y++)
+    for(y = 0; y < h; y++) {
+        if(!f->cut[y]) continue;
+        f->cut[y] = 0;
+        f->p->fill_rows++;
         for(x = 0; x < w; x++) {
             if(!is_target(f, x, y)) continue;
             for(b = x; b < w - 1 && is_target(f, b + 1, y); b++)
@@ -328,13 +338,15 @@ static int rescan(struct filling *f) {
             }
             x = b;
         }
+    }
     return found;
 }
 
 int flood_fill(struct paint *p, int x, int y, unsigned c) {
     struct filling f;
-    size_t bits;
+    size_t bits, stack;
     int a, b;
+    p->fill_rows = 0;
     if(x < 0 || y < 0 || x >= p->w || y >= p->h) return 0;
     memset(&f, 0, sizeof(f));
     f.p = p;
@@ -343,14 +355,20 @@ int flood_fill(struct paint *p, int x, int y, unsigned c) {
     if(f.target == c) return 0;
     f.cap = p->fill_stack > 0 ? p->fill_stack : 1;
     bits = ((size_t)p->w * (size_t)p->h + 7) / 8;
-    f.stack = (struct run *)pm_alloc(p, (size_t)f.cap * sizeof(struct run));
-    if(f.stack) f.done = (unsigned char *)pm_alloc(p, bits);
-    if(!f.done) {
-        pm_free(p, f.stack, (size_t)f.cap * sizeof(struct run));
+    stack = (size_t)f.cap * sizeof(struct run);
+    if(pm_room(p, stack + bits + (size_t)p->h)) {       /* all three, or none: the history gives way only for them */
+        f.stack = (struct run *)pm_alloc(p, stack);
+        if(f.stack) f.done = (unsigned char *)pm_alloc(p, bits);
+        if(f.done) f.cut = (unsigned char *)pm_alloc(p, (size_t)p->h);
+    }
+    if(!f.cut) {
+        pm_free(p, f.done, bits);
+        pm_free(p, f.stack, stack);
         say(p, "Not enough memory to fill");
         return -1;
     }
     memset(f.done, 0, bits);
+    memset(f.cut, 0, (size_t)p->h);
     fill_run(&f, x, y, &a, &b);
     push(&f, y, a, b, 1);
     push(&f, y, a, b, -1);
@@ -360,8 +378,9 @@ int flood_fill(struct paint *p, int x, int y, unsigned c) {
         f.over = 0;
         if(!rescan(&f)) break;
     }
+    pm_free(p, f.cut, (size_t)p->h);
     pm_free(p, f.done, bits);
-    pm_free(p, f.stack, (size_t)f.cap * sizeof(struct run));
+    pm_free(p, f.stack, stack);
     return f.filled > INT_MAX ? INT_MAX : (int)f.filled;
 }
 

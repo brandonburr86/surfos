@@ -186,6 +186,7 @@ struct paint {
     int at_on, at_x, at_y;
     char msg[PAINT_MSG];                /* what the last action said, until the next one */
     int fill_stack;                     /* PAINT_FILL_STACK (the tests make it small) */
+    long fill_rows;                     /* the rows the last fill read again after its stack was full (its work) */
 };
 
 extern const int paint_sizes[PAINT_SIZES];
