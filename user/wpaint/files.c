@@ -11,8 +11,11 @@ knows the kind from the first bytes (BMP, PNG, GIF, JPEG), never from the name, 
 picture or says why not. Its pixels' transparency is put on white (Paint has none), and the
 picture becomes the canvas (paint_adopt(), which counts it from then on). For that moment the
 file's bytes and the decoder's own memory are held beside Paint's (paint.h's bound is Paint's
-own blocks): a file is hostile, so the decoder bounds what it takes before it asks. A file that
-cannot be read or decoded leaves the canvas as it was.
+own blocks; paint.h says what the peak comes to): a file is hostile, so the decoder bounds what
+it takes before it asks, and the file's bytes go as soon as it is done. A file that cannot be
+read or decoded leaves the canvas as it was. pf_open() says what the file had that the canvas
+has not, transparency or more than 8 bits a channel, so that the window asks before a save
+replaces the file without it.
 
 Saving: the name's ending says the kind, .bmp a BMP of 24 bits and .png a PNG of 8 bits a sample,
 RGB; Paint writes no other (main.c offers .png instead). What floats and what is being typed is
@@ -63,19 +66,22 @@ void pf_save_name(const char *path, char *out, size_t n) {
     snprintf(out, n, "%.*s.png", (int)keep, path);
 }
 
-void pf_flatten(unsigned *px, size_t n) {
+int pf_flatten(unsigned *px, size_t n) {
     unsigned c, t, a, r, g, b;
     size_t i;
+    int seen = 0;
     for(i = 0; i < n; i++) {
         c = px[i];
         t = c >> 24;                                    /* 0 solid, 255 not there */
         if(!t) continue;
+        seen = 1;
         a = 255 - t;
         r = ((c >> 16 & 0xFF) * a + 255 * t + 127) / 255;
         g = ((c >> 8 & 0xFF) * a + 255 * t + 127) / 255;
         b = ((c & 0xFF) * a + 255 * t + 127) / 255;
         px[i] = r << 16 | g << 8 | b;
     }
+    return seen;
 }
 
 /**** opening ****/
@@ -131,25 +137,47 @@ static int read_file(const char *path, unsigned char **data, size_t *len, char *
     return 0;
 }
 
+static unsigned le32(const unsigned char *b) {
+    return (unsigned)b[0] | (unsigned)b[1] << 8 | (unsigned)b[2] << 16 | (unsigned)b[3] << 24;
+}
+
+/* a file the decoder read whole keeps more than 8 bits a channel, which its decoder kept the high 8 of: a PNG of 16
+   bits a sample (IHDR's depth, the PNG standard's offset 24), a BMP of bit fields whose red, green or blue mask is
+   wider than 8 bits (the masks after the 40 bytes of an info header, at 54, as the decoder reads them) */
+static int deeper(const unsigned char *d, size_t n) {
+    unsigned k, m, bits, comp;
+    if(n >= 25 && !memcmp(d, "\x89PNG\r\n\x1a\n", 8) && !memcmp(d + 12, "IHDR", 4)) return d[24] == 16;
+    if(n < 66 || d[0] != 'B' || d[1] != 'M' || le32(d + 14) < 40) return 0;
+    comp = le32(d + 30);
+    if(comp != 3 && comp != 6) return 0;               /* BI_BITFIELDS, BI_ALPHABITFIELDS */
+    for(k = 0; k < 3; k++) {
+        for(m = le32(d + 54 + 4 * k), bits = 0; m; m &= m - 1) bits++;
+        if(bits > 8) return 1;
+    }
+    return 0;
+}
+
 int pf_open(struct paint *p, const char *path, char *why, size_t cap) {
     struct wimg m;
     unsigned char *data;
     size_t len;
     char err[WIMG_ERR_MAX];
+    int lost;
     if(read_file(path, &data, &len, why, cap) < 0) return -1;
     if(wimg_decode(data, len, &m, err, sizeof(err)) < 0) {
         free(data);
         snprintf(why, cap, "Not read: %s", err);
         return -1;
     }
-    free(data);
-    pf_flatten(m.px, (size_t)m.w * (size_t)m.h);
+    lost = deeper(data, len) ? PF_LOST_DEPTH : 0;
+    free(data);                                         /* before the picture is taken: the peak is the decoder's */
+    if(pf_flatten(m.px, (size_t)m.w * (size_t)m.h)) lost |= PF_LOST_ALPHA;
     if(paint_adopt(p, m.px, m.w, m.h) < 0) {            /* not taken: still the decoder's */
         snprintf(why, cap, "%s", p->msg);
         wimg_free(&m);
         return -1;
     }
-    return 0;
+    return lost;
 }
 
 /**** saving ****/

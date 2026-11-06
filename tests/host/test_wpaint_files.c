@@ -346,11 +346,20 @@ static void saving(void) {
 
 /**** opening ****/
 
-/* the file at path, whose bytes are data, opened as the decoders read them: 1 for a picture, 0 refused */
-static int as_decoded(const char *path, const unsigned char *data, size_t n, const unsigned *before) {
+static int lost_alpha, lost_depth;                     /* the fixtures pf_open() said so of */
+
+/* the fixtures whose files keep more than 8 bits a channel: the PNGs of 16 bits a sample, the BMP of 10 */
+static int deep_by_name(const char *path) {
+    const char *name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+    return strstr(name, "16.png") || strstr(name, "16-adam7.png") || !strcmp(name, "rgb10.bmp");
+}
+
+/* the file at path, whose bytes are data, opened as the decoders read them: 1 for a picture, 0 refused. What it
+   says was lost: transparency when a pixel the decoder gave was not solid, depth for the deep fixtures */
+static int as_decoded(const char *path, const unsigned char *data, size_t n, const unsigned *before, int whole) {
     struct wimg m;
     char err[WIMG_ERR_MAX];
-    int r = wimg_decode(data, n, &m, err, sizeof(err)), ok;
+    int r = wimg_decode(data, n, &m, err, sizeof(err)), ok, alpha, lost;
     paint_free(p);
     picture(30, 20);
     if(r < 0) {
@@ -358,11 +367,14 @@ static int as_decoded(const char *path, const unsigned char *data, size_t n, con
               !memcmp(before, p->px, 30 * 20 * 4));
         return 0;
     }
-    pf_flatten(m.px, (size_t)m.w * (size_t)m.h);
-    ok = pf_open(p, path, why, sizeof(why)) == 0 && p->w == m.w && p->h == m.h &&
-         !memcmp(p->px, m.px, (size_t)m.w * (size_t)m.h * 4);
+    alpha = pf_flatten(m.px, (size_t)m.w * (size_t)m.h);
+    lost = pf_open(p, path, why, sizeof(why));
+    ok = lost >= 0 && p->w == m.w && p->h == m.h && !memcmp(p->px, m.px, (size_t)m.w * (size_t)m.h * 4) &&
+         !!(lost & PF_LOST_ALPHA) == alpha && (!whole || !!(lost & PF_LOST_DEPTH) == deep_by_name(path));
     CHECK(ok);
-    if(!ok) printf("  %s: %s\n", path, why);
+    if(!ok) printf("  %s: %d (%s)\n", path, lost, why);
+    lost_alpha += lost > 0 && (lost & PF_LOST_ALPHA);
+    lost_depth += lost > 0 && (lost & PF_LOST_DEPTH);
     wimg_free(&m);
     return 1;
 }
@@ -415,17 +427,35 @@ static void opening(void) {
         if(e->d_name[0] == '.' || !strcmp(e->d_name, "manifest")) continue;
         snprintf(path, sizeof(path), "%s/%s", FIXTURES, e->d_name);
         data = slurp(path, &n);
-        if(as_decoded(path, data, n, before)) pictures++;
+        if(as_decoded(path, data, n, before, 1)) pictures++;
         else refused++;
         snprintf(path, sizeof(path), "%s", at("cut"));
         make(path, data, n / 2);
-        if(as_decoded(path, data, n / 2, before)) pictures++;
+        if(as_decoded(path, data, n / 2, before, 0)) pictures++;
         else refused++;
         free(data);
     }
     if(d) closedir(d);
     CHECK(pictures >= 125 && refused >= 100);
     printf("test_wpaint_files: %d pictures opened, %d refused as the decoders refuse them\n", pictures, refused);
+    CHECK(lost_depth == 9 && lost_alpha >= 10);         /* gray, rgb, ga, rgba at 16 bits, each interlaced too; rgb10 */
+    printf("test_wpaint_files: %d said they lost transparency, %d depth\n", lost_alpha, lost_depth);
+    /* some by name: what each says it had that the canvas has not */
+    {
+        static const struct { const char *name; int lost; } said[] = {
+            { "rgb8.png", 0 }, { "rgb16.png", PF_LOST_DEPTH }, { "rgba8.png", PF_LOST_ALPHA },
+            { "rgba16.png", PF_LOST_ALPHA | PF_LOST_DEPTH }, { "trns-rgb.png", PF_LOST_ALPHA },
+            { "trns-pal.png", PF_LOST_ALPHA }, { "rgb24.bmp", 0 }, { "rgb10.bmp", PF_LOST_DEPTH },
+            { "argb-v5.bmp", PF_LOST_ALPHA }, { "noalpha-v4.bmp", 0 }, { "base444.jpg", 0 },
+        };
+        int k;
+        for(k = 0; k < (int)(sizeof(said) / sizeof(said[0])); k++) {
+            snprintf(path, sizeof(path), "%s/%s", FIXTURES, said[k].name);
+            r = pf_open(p, path, why, sizeof(why));
+            CHECK(r == said[k].lost);
+            if(r != said[k].lost) printf("  %s: %d, not %d\n", said[k].name, r, said[k].lost);
+        }
+    }
     /* an opened picture's transparency is on white, the history starts again, the clipboard stays */
     paint_free(p);
     picture(40, 40);
@@ -436,7 +466,7 @@ static void opening(void) {
     paint_release(p, 1, 1, 0);
     CHECK(paint_can_undo(p) && p->clip);
     snprintf(path, sizeof(path), "%s/rgba8.png", FIXTURES);
-    CHECK(pf_open(p, path, why, sizeof(why)) == 0 && !paint_can_undo(p) && !paint_modified(p) && p->clip);
+    CHECK(pf_open(p, path, why, sizeof(why)) == PF_LOST_ALPHA && !paint_can_undo(p) && !paint_modified(p) && p->clip);
     for(ok = 1, r = 0; r < p->w * p->h; r++) ok = ok && p->px[r] <= 0xFFFFFF;
     CHECK(ok && paint_paste(p) && p->sel.w == 40);
     free(before);
