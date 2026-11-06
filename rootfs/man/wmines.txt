@@ -1,0 +1,41 @@
+wmines - Mines, a game in a window
+
+SYNOPSIS
+    wmines
+
+DESCRIPTION
+    A field of covered cells, some of them mines. Reveal every cell
+    that holds none: a number says how many mines its eight neighbours
+    hold, and a cell with none around it opens its neighbours too. The
+    first cell revealed never holds a mine, nor do its neighbours when
+    the field has room. Flag the cells you take for mines; a click on a
+    number whose flags are all placed opens the rest around it (a
+    chord). The toolbar counts the mines left (less the flags) and the
+    time, which runs from the first cell revealed.
+
+    The fields: Small, 10 by 8 with 10 mines; Medium, 16 by 12 with 32;
+    Large, 28 by 15 with 80. The window opens large enough for the
+    large field, and the cells grow or shrink with it.
+
+    It needs a desktop: Apps > Programs > Mines or its tile starts it,
+    or wmines & in the desktop's Terminal. Its Game menu is in the
+    desktop's bar while its window has the focus. The best time of each
+    field and the games won last while the window is open; nothing is
+    written anywhere.
+
+KEYS
+    Click           reveal a cell; on a number, chord
+    Right-click     flag a cell, or take the flag away
+    Middle button   chord
+    Arrows, Home,   move the cursor (the first key shows it), to the
+    End, Page keys  row's or the column's end
+    Space, Enter    reveal the cell under the cursor, or chord
+    F               flag it
+    N, Ctrl+N       a new field of the same size
+    1, 2, 3         a new small, medium or large field
+    Esc, Ctrl+W     close the window, asking first during a game
+
+    A key held down repeats only the arrows.
+
+SEE ALSO
+    gui, wsolitaire, wswell
