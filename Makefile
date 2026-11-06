@@ -1670,7 +1670,8 @@ $(BUILD)/user/bin/sha256sum: $(BUILD)/user/obj/sha256sum.o $(MBEDTLS_LIB) $(USER
 		$(USER_LIB)
 
 # 10/25/26: wundertow, its objects and Undertow's it uses, then Mbed TLS and libgcc, before libsurf (as fetch), whose
-# font it draws with (10/26/26)
+# font it draws with (10/26/26). 11/05/26 (the review of track img): libgcc again after libsurf, whose pictures it reads
+# (image_scale.c divides in 64 bits), so that libsurf's needs are met whatever wundertow's own objects call
 $(BUILD)/user/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
@@ -1680,7 +1681,7 @@ $(BUILD)/user/bin/wundertow: $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) $(MBEDTLS_LIB)
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) \
-		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB) $(UT_LIBGCC)
 
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also
