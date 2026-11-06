@@ -14,8 +14,10 @@ DESCRIPTION
     question and a line to type over the window, and copy the name to
     the desktop's clipboard. Lists has a list with columns, Add and
     Remove, and a scroll bar. Drawing is an area the program draws
-    itself, 64 by 64 cells with scroll bars. The status bar says what
-    the program last heard, and the seconds since it started.
+    itself, 64 by 64 cells with scroll bars. More has notes (a text of
+    several lines), a progress bar, a slider and two palettes. The
+    status bar says what the program last heard, and the seconds since
+    it started.
 
     Its menus, File and View (with a Speed submenu), are in the
     desktop's bar while its window has the focus, and About the toolkit
@@ -26,7 +28,7 @@ DESCRIPTION
 KEYS
     Tab, Shift+Tab   the next widget, the one before (Ctrl+Tab from any)
     Left, Right      the page, while the tabs have the focus
-    F5 to F7         the pages (View)
+    F5 to F8         the pages (View)
     Space, Enter     a button, a check box; Enter in a list opens a line
     Ctrl+A, C, X, V  select all, copy, cut, paste in a field
     Ctrl+O, Ctrl+S   Open, Save as: the desktop's choosers
