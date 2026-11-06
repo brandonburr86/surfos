@@ -674,6 +674,80 @@ for the programs of the desktop applications, and for any other program with a w
   or the `settings` command applies at once; a change made in Pointer & desktop is written there
   when there is a settings stick, and its last line says whether it was.
 
+### Mines, Solitaire and Swell
+
+*11/05/26* (`docs/superpowers/plans/2026-11-05-desktop-apps.md`, track games). Three games, each a
+program with a window of its own, built on the toolkit (`gk.h`): `wmines`, `wsolitaire` and `wswell`
+(`user/wmines/`, `user/wsolitaire/`, `user/wswell/`). Apps > Programs and their tiles start them, or
+the Terminal (`wmines &`). Each has a Game menu in the desktop's bar while its window has the focus,
+and a line in the desktop's Help on how to play. The windows open at a size that fits a 1920x1080
+screen's desktop, are smaller on a smaller one, and can be resized: the board grows and shrinks with
+them. A game's scores last while its window is open; nothing is written anywhere. Closing a window
+(its close button, Esc, Ctrl+W, Game > Close) asks first while a game is under way, Cancel first.
+A key held down repeats only the arrows (and Down in Swell), so a held key never reveals, flags,
+deals or drops twice.
+
+**Mines** is a field of covered cells, some of them mines: reveal every cell that holds none.
+
+* **The fields.** Small, 10 by 8 with 10 mines; Medium, 16 by 12 with 32; Large, 28 by 15 with 80,
+  chosen in the toolbar, with 1 to 3, or in the Game menu. New (N, Ctrl+N) lays the field again.
+* **Playing.** A click reveals a cell (the cell under a held button shows pressed, and moving off
+  the field takes the press back). A number says how many mines its eight neighbours hold; a cell
+  with none opens its neighbours, and theirs. The first cell revealed never holds a mine, nor do its
+  neighbours where the field has room, so the first click opens an area. A right-click flags a
+  cell, or takes its flag away. A click on a number whose flags are all placed, or the middle
+  button, opens the covered cells around it: a wrong flag lets a mine go off.
+* **The keys.** The arrows move a cursor (the first one shows it, in coral), Home and End to the
+  row's ends, Page Up and Page Down to the column's; Space or Enter reveals (on a number: the chord),
+  F flags.
+* **What it shows.** The toolbar counts the mines left, less the flags, and the time from the first
+  reveal. Covered cells are sand, open ones paper; a flag is a teal pennant; a lost game shows every
+  mine, the one that went off on coral, and crosses out the flags that were wrong. The status bar
+  says what happened, and at its right the games won on the field and its best time.
+
+**Solitaire** is Klondike, drawing one card or three.
+
+* **The table.** The stock and the waste at the top left, the four foundations at the top right,
+  the seven piles below. Build the foundations up from the aces by suit, the piles down in
+  alternate colours; only a king, or a run from a king, goes on an empty pile. A face-up run moves
+  together, and the card it uncovers turns up by itself. The stock deals one card or three (the
+  waste then shows its top three side by side), and takes the waste back as often as you like. A
+  card may come back down from a foundation.
+* **Moving cards.** Drag a card, and the cards on it, to a pile; let go anywhere else and it goes
+  back. Or click it: a single card goes to its foundation first, then to the next pile it fits,
+  looking right of its own. A click on the stock deals. The keyboard: the arrows choose a card (Up
+  goes deeper into a face-up run, in coral), Enter sends it where it goes, Space or D deals.
+* **Undo** (the toolbar, U, Backspace, Ctrl+Z) takes moves back, the newest 1,024 of them; it is
+  greyed when there is nothing to undo, and an undo counts as a move.
+* **Finishing by itself.** Once no card on the piles is face down and the cards can all go home
+  from there, the game sends them up a card at a time. Drawing three, a card the foundations need
+  can stay hidden in the stock on every pass; then you play on.
+* **What it shows.** The toolbar counts the moves and the time. The faces are drawn by the program,
+  the suits from the console's own characters; the backs are navy with the desktop's wave mark. The
+  status bar's right has the games won and the best time, drawing one and three apart.
+
+**Swell** is a falling-blocks game of SurfOS's own.
+
+* **The sea** is 12 cells wide and 18 deep. Its seven pieces have two, three and five cells (the
+  pebble, the drift, the shell, the crest, the reef, the gull and the kelp); the panel shows the
+  next. A piece falls a row at a time; a landed piece rests a moment, so it can still be slid, and
+  then sets. A row filled across washes away, and the rows above come down: rows washed at once
+  score the level times 10, 25 or 50, and an empty sea 200 times the level more. Every 8 rows the
+  level rises and the pieces fall faster. From level 3 on, every 16 pieces the swell lifts the sea
+  a row and leaves a row of sand with two gaps under it. The game ends when a piece has no room to
+  come in, or the sea comes over the top.
+* **The keys.** Enter or Space starts; Left and Right move, Up or X turns clockwise and Z the other
+  way, Down moves a row (and sets a landed piece), Space drops, P pauses. Keys come as they are
+  typed: holding Left, Right or Down moves the piece on with the keyboard's repeat. N starts a new
+  game once one is paused or over; Game > New game (Ctrl+N) at any time. A click on the sea starts
+  a game that waits, or a new one once it is over.
+* **Pauses.** The game pauses when its window loses the focus (a click on another window, a
+  question over this one), and waits for P, Enter or Space: a click that brings the window back
+  lets nothing fall.
+* **What it shows.** The panel has the next piece, the score, the rows, the level, the time and the
+  session's best score; an outline at the bottom shows where the falling piece would come to rest;
+  rows washed away show foam for a moment.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
