@@ -21,6 +21,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <gk.h>
+#include <image.h>
 #include "gk_fake.h"
 #include "window.h"
 #define WPH_NAMES_ONLY
@@ -547,6 +548,229 @@ static void starting(void) {
     gkf_reset(0, 0);
 }
 
+/**** what the review of 11/05 found ****/
+
+static int put_file(void *ctx, const void *d, size_t n) {
+    return fwrite(d, 1, n, (FILE *)ctx) == n ? 0 : -1;
+}
+
+/* a picture of 40 x 30, blue, as a PNG of 8 bits a sample: with alpha, its top left corner is not there */
+static void png_with(const char *path, int alpha) {
+    static unsigned pix[40 * 30];
+    struct wimg m;
+    FILE *f = fopen(path, "wb");
+    int i;
+    for(i = 0; i < 40 * 30; i++) pix[i] = 0x3060C0;
+    if(alpha) pix[0] = WIMG_GONE;
+    m.w = 40;
+    m.h = 30;
+    m.px = pix;
+    wimg_save_png(&m, alpha, put_file, f, NULL, 0);
+    fclose(f);
+}
+
+/* a file's bytes (malloc'ed), *n of them */
+static unsigned char *bytes_of(const char *path, size_t *n) {
+    FILE *f = fopen(path, "rb");
+    unsigned char *b;
+    long len;
+    if(!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    b = (unsigned char *)malloc((size_t)len + 1);
+    *n = fread(b, 1, (size_t)len, f);
+    fclose(f);
+    return b;
+}
+
+static int same_bytes(const char *path, const unsigned char *was, size_t n) {
+    size_t m;
+    unsigned char *b = bytes_of(path, &m);
+    int same = b && m == n && !memcmp(b, was, n);
+    free(b);
+    return same;
+}
+
+/* every pixel of the picture in the file is solid (none see-through) */
+static int solid_file(const char *path) {
+    size_t n;
+    unsigned char *b = bytes_of(path, &n);
+    struct wimg m;
+    char err[WIMG_ERR_MAX];
+    int i, solid;
+    if(!b || wimg_decode(b, n, &m, err, sizeof(err)) < 0) {
+        free(b);
+        return 0;
+    }
+    for(solid = 1, i = 0; i < m.w * m.h; i++) solid = solid && WIMG_SOLID(m.px[i]);
+    wimg_free(&m);
+    free(b);
+    return solid;
+}
+
+/* File > Open of path, saying Don't save when asked about changes */
+static void open_through(const char *path) {
+    key(15, WIN_MOD_CTRL);
+    if(gk_asking(w->ui) == BOX_UNSAVED) {
+        key(WIN_KEY_RIGHT, 0);
+        key(13, 0);
+    }
+    gkf_dialog_answer(path);
+    run();
+}
+
+static void review(void) {
+    unsigned char *logo;
+    size_t n;
+    int x0, y0, x1, y1, x2, y2;
+    long before;
+    /* Critical's window: none (the model's test has Cut without the memory). Medium: the bar's menus while a box of
+       Paint's is open do nothing; Esc on "Now choose the picture to open" opens no chooser */
+    png_with(at("other.png"), 0);
+    gkf_reset(0, 0);
+    CHECK(pw_open(w, NULL) == 0);
+    gkf_focus(1);
+    run();
+    key('b', 0);
+    drag(10, 10, 60, 10);
+    key(15, WIN_MOD_CTRL);
+    key(13, 0);                                         /* Save: Save as, as it has no name */
+    gkf_dialog_answer(at("mine.png"));
+    run();
+    CHECK(gk_asking(w->ui) == BOX_THEN_OPEN && !paint_modified(&w->p));
+    CHECK(gkf_menu_choose(MENU_SELECT_ALL) && run() && gkf_menu_choose(MENU_CLEAR) && run());
+    CHECK(gk_asking(w->ui) == BOX_THEN_OPEN && !paint_modified(&w->p) && canvas_count(BLACK) > 0 && !w->p.sel.on);
+    key(27, 0);
+    CHECK(!gk_box_open(w->ui) && !gkf_dialog());
+    /* the canvas changed while the Open chooser was up (the bar works then): the question again before the picture
+       chosen replaces it; Don't save then opens it */
+    drag(10, 40, 60, 40);
+    key(15, WIN_MOD_CTRL);
+    key(WIN_KEY_RIGHT, 0);
+    key(13, 0);                                         /* Don't save: the chooser */
+    CHECK(gkf_dialog() && gkf_dialog()->kind == WIN_DLG_OPEN);
+    CHECK(gkf_menu_choose(MENU_CLEAR) && run() && canvas_count(BLACK) == 0);
+    gkf_dialog_answer(at("other.png"));
+    run();
+    CHECK(gk_asking(w->ui) == BOX_UNSAVED && w->p.w != 40);
+    key(WIN_KEY_RIGHT, 0);
+    key(13, 0);
+    CHECK(!gk_box_open(w->ui) && w->p.w == 40 && !strcmp(gkf_title(), "other.png - Paint"));
+    /* and Cancel then keeps the canvas, the picture unopened */
+    drag(5, 5, 30, 5);
+    key(15, WIN_MOD_CTRL);
+    key(WIN_KEY_RIGHT, 0);
+    key(13, 0);
+    gkf_menu_choose(MENU_CLEAR);
+    run();
+    gkf_dialog_answer(at("mine.png"));
+    run();
+    CHECK(gk_asking(w->ui) == BOX_UNSAVED);
+    key(27, 0);
+    CHECK(!gk_box_open(w->ui) && w->p.w == 40 && paint_modified(&w->p) && !strcmp(gkf_title(), "*other.png - Paint"));
+    /* New: the bar's Clear behind the size's box does nothing, and the new canvas comes without a question */
+    key(14, WIN_MOD_CTRL);
+    key(WIN_KEY_RIGHT, 0);
+    key(13, 0);                                         /* Don't save */
+    CHECK(gk_asking(w->ui) == BOX_NEW);
+    CHECK(gkf_menu_choose(MENU_CLEAR) && run() && gk_asking(w->ui) == BOX_NEW);
+    key(1, WIN_MOD_CTRL);
+    gkf_type("300 x 200\n");
+    run();
+    CHECK(!gk_box_open(w->ui) && w->p.w == 300 && w->p.h == 200 && !paint_modified(&w->p));
+    /* Low: a drag cut short. The window loses the focus with the button held: the stroke ends there, and a move with
+       no button once the focus is back draws nothing */
+    key('b', 0);
+    spot(20, 20, &x0, &y0);
+    spot(60, 20, &x1, &y1);
+    spot(250, 150, &x2, &y2);
+    gkf_advance(1000);
+    gkf_pointer(x0, y0, WIN_BUTTON_LEFT);
+    gkf_pointer(x1, y1, WIN_BUTTON_LEFT);
+    run();
+    CHECK(w->p.drag && px(40, 20) == BLACK);
+    gkf_focus(0);
+    run();
+    CHECK(!w->p.drag && !strcmp(paint_undo_what(&w->p), "Brush"));
+    before = canvas_count(BLACK);
+    gkf_focus(1);
+    run();
+    gkf_pointer(x2, y2, 0);
+    run();
+    CHECK(!w->p.drag && canvas_count(BLACK) == before && px(155, 85) == WHITE);     /* on the way to 250, 150 */
+    /* a box opening over a drag (Ctrl+W, with changes): the drag ends as the box opens */
+    gkf_advance(1000);
+    gkf_pointer(x0, y0 + 40, WIN_BUTTON_LEFT);
+    gkf_pointer(x1, y1 + 40, WIN_BUTTON_LEFT);
+    run();
+    CHECK(w->p.drag);
+    key(23, WIN_MOD_CTRL);
+    CHECK(gk_asking(w->ui) == BOX_UNSAVED && !w->p.drag);
+    key(27, 0);
+    before = canvas_count(BLACK);
+    gkf_pointer(x2, y2, 0);
+    run();
+    CHECK(!w->p.drag && canvas_count(BLACK) == before && px(155, 105) == WHITE);
+    /* Low: the desktop's clipboard pasted into text: control characters left out (C0 but the line ends, DEL, C1) */
+    key('t', 0);
+    click(20, 120);
+    gkf_set_paste("a\x01" "b\x7f" "c\xc2\x85" "d\r\ne\tf\x1b\xc3\xa9");
+    key(22, WIN_MOD_CTRL);
+    CHECK(w->p.text.on && w->p.text.n == 8 && w->p.text.cell[0] == 'a' && w->p.text.cell[1] == 'b' &&
+          w->p.text.cell[2] == 'c' && w->p.text.cell[3] == 'd' && w->p.text.cell[4] == PAINT_TEXT_NL &&
+          w->p.text.cell[5] == 'e' && w->p.text.cell[6] == 'f' && w->p.text.cell[7] == 0x82);   /* the e acute kept */
+    key(27, 0);
+    /* High: a picture with transparency, said when it opens; Save over its file asks first, Save as... the first
+       button (Enter's) and nothing replaced until Save */
+    png_with(at("logo.png"), 1);
+    logo = bytes_of(at("logo.png"), &n);
+    open_through(at("logo.png"));
+    CHECK(w->p.w == 40 && w->lost == PF_LOST_ALPHA && status_says("Opened logo.png, 40 x 30, its transparency on white"));
+    key(19, WIN_MOD_CTRL);                              /* Ctrl+S, nothing changed */
+    CHECK(gk_asking(w->ui) == BOX_LOSSY && same_bytes(at("logo.png"), logo, n));
+    key(27, 0);
+    CHECK(!gk_box_open(w->ui) && !gkf_dialog() && same_bytes(at("logo.png"), logo, n));
+    key(19, WIN_MOD_CTRL);
+    key(13, 0);                                         /* Enter: Save as... */
+    CHECK(gkf_dialog() && gkf_dialog()->kind == WIN_DLG_SAVE && !strcmp(gkf_dialog()->name, "logo.png"));
+    gkf_dialog_answer(at("logo2.png"));
+    run();
+    CHECK(exists(at("logo2.png")) && same_bytes(at("logo.png"), logo, n) && !strcmp(gkf_title(), "logo2.png - Paint"));
+    key(19, WIN_MOD_CTRL);                              /* Paint's own file now: saved at once */
+    CHECK(!gk_box_open(w->ui) && w->lost == 0 && status_says("Saved logo2.png"));
+    open_through(at("logo.png"));
+    key(19, WIN_MOD_CTRL);
+    key(WIN_KEY_RIGHT, 0);
+    key(13, 0);                                         /* Save: replaced, on white */
+    CHECK(!gk_box_open(w->ui) && !same_bytes(at("logo.png"), logo, n) && solid_file(at("logo.png")) && w->lost == 0);
+    free(logo);
+    /* a PNG of 16 bits a sample: said, and asked about; Close with changes, Save: that question too, then closed */
+    {
+        size_t m;
+        unsigned char *deep = bytes_of("tests/fixtures/wundertow/images/rgb16.png", &m);
+        FILE *f = fopen(at("deep.png"), "wb");
+        CHECK(deep && f && fwrite(deep, 1, m, f) == m);
+        if(f) fclose(f);
+        open_through(at("deep.png"));
+        CHECK(w->lost == PF_LOST_DEPTH && status_says("Opened deep.png, 23 x 17, kept at 8 bits a channel"));
+        key(19, WIN_MOD_CTRL);
+        CHECK(gk_asking(w->ui) == BOX_LOSSY && same_bytes(at("deep.png"), deep, m));
+        key(27, 0);
+        drag(2, 2, 10, 2);
+        gkf_close();
+        CHECK(run() && gk_asking(w->ui) == BOX_UNSAVED);
+        gkf_key(13, 0);                                 /* Save */
+        CHECK(run() && gk_asking(w->ui) == BOX_LOSSY && same_bytes(at("deep.png"), deep, m));
+        gkf_key(WIN_KEY_RIGHT, 0);
+        gkf_key(13, 0);                                 /* Save: replaced, and closed */
+        CHECK(!run() && !same_bytes(at("deep.png"), deep, m));
+        free(deep);
+    }
+    pw_close(w);
+    gkf_reset(0, 0);
+}
+
 static void tidy(void) {
     struct dirent *e;
     DIR *d = opendir(dir);
@@ -574,6 +798,7 @@ int main(void) {
     files();
     asking();
     starting();
+    review();
     tidy();
     printf("test_wpaint_window: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

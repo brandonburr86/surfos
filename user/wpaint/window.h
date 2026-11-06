@@ -59,7 +59,7 @@ would, the pattern of track kit's wkit.
 /* the ids of what the program hears from */
 enum {
     ID_TOOLS = 1, ID_CANVAS, ID_COLOURS,
-    BOX_UNSAVED = 100, BOX_NEW, BOX_RESIZE, BOX_COLOUR, BOX_MESSAGE, BOX_THEN_OPEN, BOX_KEYS, BOX_ABOUT,
+    BOX_UNSAVED = 100, BOX_NEW, BOX_RESIZE, BOX_COLOUR, BOX_MESSAGE, BOX_THEN_OPEN, BOX_KEYS, BOX_ABOUT, BOX_LOSSY,
     MENU_NEW = 200, MENU_OPEN, MENU_SAVE, MENU_SAVE_AS, MENU_CLOSE,
     MENU_UNDO, MENU_REDO, MENU_CUT, MENU_COPY, MENU_PASTE, MENU_DELETE, MENU_SELECT_ALL, MENU_DESELECT,
     MENU_RESIZE, MENU_CLEAR, MENU_ZOOM_IN, MENU_ZOOM_OUT, MENU_ACTUAL, MENU_FIT, MENU_ZOOMS,
@@ -76,6 +76,7 @@ enum {
 #define PW_THEN_NEW     1
 #define PW_THEN_OPEN    2
 #define PW_THEN_CLOSE   3
+#define PW_THEN_OPEN_PATH 4             /* pending: a picture already chosen, asked about again (the canvas changed) */
 
 /* what the panels last showed, to paint them again when it changes */
 struct pw_shown { int tool, size, filled, scale; unsigned fg, bg, custom[PAINT_CUSTOM]; };
@@ -88,6 +89,10 @@ struct pwin {
     char title[WIN_TITLE_MAX];
     int then;                           /* PW_THEN_*: what waits on the unsaved changes' question */
     int save_then;                      /* a Save as asked for by that question: then goes on once it is saved */
+    unsigned agreed;                    /* the canvas's state when the person let New or Open replace it */
+    char pending[PW_PATH];              /* PW_THEN_OPEN_PATH's picture */
+    int lost;                           /* PF_LOST_*: what the file at path has that the canvas has not */
+    char saving[PW_PATH];               /* the file BOX_LOSSY asks about replacing */
     int closing;                        /* the window is to close: pw_event() says 0 */
     int panning, pan_x, pan_y, pan_sx, pan_sy;  /* the middle button drags the view */
     int cw, ch;                         /* the zoomed canvas the scroll bars were last given */

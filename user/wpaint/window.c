@@ -21,8 +21,15 @@ canvas's size, Clear, the zoom), Tools (the tools, filled shapes, the brush's an
 and Colours, and Paint's lines in the desktop's Help. Open and Save as are the desktop's choosers
 (gk_choose(): only in answer to the person's own key, click or menu choice), which ask before a
 file is replaced; a desktop without them gives a line to type the path in. New, Open and Close ask
-first about changes not saved (Save, Don't save, Cancel); Save of a picture with no name, or one
-whose kind Paint does not write (GIF, JPEG), is Save as.
+first about changes not saved (Save, Don't save, Cancel), and again, just before the canvas goes,
+when it changed after that answer; Save of a picture with no name, or one whose kind Paint does
+not write (GIF, JPEG), is Save as. A picture opened with transparency or more than 8 bits a
+channel says so, and a save that would replace its file without them asks first (Save as..., the
+first button and Enter's, Save, or Cancel).
+
+While one of Paint's boxes is open, the menus in the desktop's bar do nothing (the box takes the
+keys and clicks already), and a drag on the canvas ends where it was when a box opens or the
+window loses the focus: the button let go meanwhile is never seen.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,11 +157,12 @@ static int save_as(struct pwin *w) {
     return -1;
 }
 
-/* the canvas into path: 0, or -1 with a message box saying why */
+/* the canvas into path: 0, or -1 with a message box saying why. The file is Paint's from then on: nothing of it lost */
 static int save_to(struct pwin *w, const char *path) {
     int r = pf_save(&w->p, path, w->why, sizeof(w->why), w->kept, sizeof(w->kept));
     if(r == 0) {
         if(path != w->path) snprintf(w->path, sizeof(w->path), "%s", path);
+        w->lost = 0;
         note(w, "Saved %s", base(path));
         return 0;
     }
@@ -162,28 +170,53 @@ static int save_to(struct pwin *w, const char *path) {
     return -1;
 }
 
+/* what saving over the picture's file does to what the canvas has not of it (PF_LOST_*), for a sentence */
+static const char *lost_how(int lost) {
+    if(lost == PF_LOST_ALPHA) return "without its transparency";
+    return lost == PF_LOST_DEPTH ? "at 8 bits a channel" : "on white, at 8 bits a channel";
+}
+
+/* the canvas into path; but first a question when that replaces the picture's own file without what the canvas has
+   not of it: 0 saved, 2 asked (BOX_LOSSY's answer goes on), -1 not saved (a box says why) */
+static int save_over(struct pwin *w, const char *path) {
+    char line[PF_WHY];
+    if(!w->lost || strcmp(path, w->path)) return save_to(w, path);
+    snprintf(w->saving, sizeof(w->saving), "%s", path);
+    snprintf(line, sizeof(line), "Saving replaces %s %s.", base(path), lost_how(w->lost));
+    gk_confirm(w->ui, BOX_LOSSY, "Replace the picture's file?", line, "Save as\xe2\x80\xa6 keeps the file as it is.",
+               "Save as\xe2\x80\xa6", "Save", "Cancel");
+    return 2;
+}
+
 /* Save: Save as when the picture has no name, or one of a kind Paint does not write. 0 saved, 1 a chooser asked,
-   -1 neither */
+   2 a question asked first, -1 none of them */
 static int save(struct pwin *w) {
+    int r;
     if(!w->path[0] || !pf_kind(w->path)) return save_as(w) == 0 ? 1 : -1;
-    return save_to(w, w->path) == 0 ? 0 : -1;
+    r = save_over(w, w->path);
+    return r == 2 ? 2 : r == 0 ? 0 : -1;
 }
 
 static void open_file(struct pwin *w, const char *given) {
     char line[PF_WHY], path[PW_PATH];
+    int lost;
     if(absolute(given, path, sizeof(path)) < 0) {
         snprintf(line, sizeof(line), "%s", base(given));
         gk_message(w->ui, BOX_MESSAGE, "Cannot open the picture", line, "Its path is too long.");
         return;
     }
-    if(pf_open(&w->p, path, w->why, sizeof(w->why)) < 0) {
+    if((lost = pf_open(&w->p, path, w->why, sizeof(w->why))) < 0) {
         snprintf(line, sizeof(line), "%s", base(path));
         gk_message(w->ui, BOX_MESSAGE, "Cannot open the picture", line, w->why);
         return;
     }
     snprintf(w->path, sizeof(w->path), "%s", path);
+    w->lost = lost;
     fit(w);
-    snprintf(w->p.msg, sizeof(w->p.msg), "Opened %s, %d x %d", base(path), w->p.w, w->p.h);
+    if(!lost) snprintf(w->p.msg, sizeof(w->p.msg), "Opened %s, %d x %d", base(path), w->p.w, w->p.h);
+    else snprintf(w->p.msg, sizeof(w->p.msg), "Opened %s, %d x %d, %s", base(path), w->p.w, w->p.h,
+                  lost == PF_LOST_DEPTH ? "kept at 8 bits a channel" : lost == PF_LOST_ALPHA ?
+                  "its transparency on white" : "on white, at 8 bits a channel");
 }
 
 /* "640 x 400", "640x400", "640, 400": 0 and the size, or -1 */
@@ -209,15 +242,22 @@ static int parse_size(const char *s, int *pw, int *ph) {
 
 /**** what waits on the unsaved changes ****/
 
+/* the canvas changed since the person let New or Open replace it (it is asked again then) */
+static int changed_since(const struct pwin *w) {
+    return paint_modified(&w->p) && w->p.state != w->agreed;
+}
+
 static void go_on(struct pwin *w, int what) {
     char size[32];
     w->then = PW_THEN_NOTHING;
+    w->agreed = w->p.state;                             /* saved, not changed, or let go: as it is now */
     switch(what) {
     case PW_THEN_NEW:
         snprintf(size, sizeof(size), "%d x %d", PAINT_NEW_W, PAINT_NEW_H);
         gk_ask(w->ui, BOX_NEW, "New picture", "Its size, width x height:", size, 0);
         break;
     case PW_THEN_OPEN: choose_open(w); break;
+    case PW_THEN_OPEN_PATH: open_file(w, w->pending); break;
     case PW_THEN_CLOSE: w->closing = 1; break;
     }
 }
@@ -239,10 +279,17 @@ static void saved_then(struct pwin *w) {
     w->save_then = 0;
     if(what == PW_THEN_OPEN) {                          /* a chooser answers a person's action: a box first */
         w->then = PW_THEN_NOTHING;
+        w->agreed = w->p.state;
         gk_message(w->ui, BOX_THEN_OPEN, "Saved", "The picture is saved.", "Now choose the picture to open.");
         return;
     }
     go_on(w, what);
+}
+
+/* nothing waits any more */
+static void give_up(struct pwin *w) {
+    w->then = PW_THEN_NOTHING;
+    w->save_then = 0;
 }
 
 static void answer(struct pwin *w, const struct gk_event *ev) {
@@ -254,12 +301,22 @@ static void answer(struct pwin *w, const struct gk_event *ev) {
             r = save(w);
             if(r == 1) w->save_then = 1;                /* when the chooser's picture is saved */
             else if(r == 0) go_on(w, w->then);
-            else w->then = PW_THEN_NOTHING;
+            else if(r != 2) give_up(w);                 /* 2: BOX_LOSSY's answer goes on */
         } else if(ev->value == 1) go_on(w, w->then);    /* Don't save */
-        else w->then = PW_THEN_NOTHING;
+        else give_up(w);
+        break;
+    case BOX_LOSSY:
+        if(ev->value == 1) {                            /* Save: the file replaced, without what Paint has not of it */
+            if(save_to(w, w->saving) < 0) give_up(w);
+            else if(w->save_then) saved_then(w);
+            else go_on(w, w->then);
+        } else if(ev->value == 0) {                     /* Save as...: another file, the picture's own as it is */
+            if(save_as(w) < 0) give_up(w);
+            else if(w->then) w->save_then = 1;
+        } else give_up(w);
         break;
     case BOX_THEN_OPEN:
-        choose_open(w);
+        if(ev->value == 0) choose_open(w);              /* OK; not Esc, nor another box put in its place */
         break;
     case BOX_NEW:
     case BOX_RESIZE:
@@ -267,6 +324,10 @@ static void answer(struct pwin *w, const struct gk_event *ev) {
         if(parse_size(ev->text, &nw, &nh) < 0) {
             gk_message(w->ui, BOX_MESSAGE, ev->id == BOX_NEW ? "No new picture" : "Not resized", ev->text,
                        "Type its width and height, 640 x 400 say.");
+            break;
+        }
+        if(ev->id == BOX_NEW && changed_since(w)) {     /* changed after the question: it is asked again */
+            then(w, PW_THEN_NEW);
             break;
         }
         r = ev->id == BOX_NEW ? paint_new(&w->p, nw, nh) : paint_resize(&w->p, nw, nh);
@@ -277,6 +338,7 @@ static void answer(struct pwin *w, const struct gk_event *ev) {
         }
         if(ev->id == BOX_NEW) {                         /* a new canvas at 100%, from its top left */
             w->path[0] = 0;
+            w->lost = 0;
             zoom_to(w, PAINT_ZOOM_1, 0, 0);
         }
         push_view(w);
@@ -293,18 +355,20 @@ static void answer(struct pwin *w, const struct gk_event *ev) {
 }
 
 static void chosen(struct pwin *w, const struct gk_event *ev) {
+    int r;
     if(!ev->value) {                                    /* cancelled: nothing waits on it any more */
-        w->then = PW_THEN_NOTHING;
-        w->save_then = 0;
+        give_up(w);
         return;
     }
-    if(ev->id == CHOOSE_OPEN) open_file(w, ev->text);
-    else if(ev->id == CHOOSE_SAVE) {
-        if(save_to(w, ev->text) == 0 && w->save_then) saved_then(w);
-        else if(w->save_then) {
-            w->save_then = 0;
-            w->then = PW_THEN_NOTHING;
-        }
+    if(ev->id == CHOOSE_OPEN) {
+        if(changed_since(w)) {                          /* changed while the chooser was up: asked again first */
+            snprintf(w->pending, sizeof(w->pending), "%s", ev->text);
+            then(w, PW_THEN_OPEN_PATH);
+        } else open_file(w, ev->text);
+    } else if(ev->id == CHOOSE_SAVE) {
+        r = save_over(w, ev->text);
+        if(r == 0 && w->save_then) saved_then(w);
+        else if(r < 0 && w->save_then) give_up(w);
     }
 }
 
@@ -322,17 +386,25 @@ static void resize_canvas(struct pwin *w) {
     gk_ask(w->ui, BOX_RESIZE, "Canvas size", "Width x height, at most 4096 each way:", size, 0);
 }
 
-/* the desktop's clipboard into the text being typed: its lines as lines, as much as the text takes */
+/* the desktop's clipboard into the text being typed: its lines as lines, as much as the text takes. Control
+   characters are left out (C0 but the line ends, DEL, and C1, U+0080 to U+009F, which UTF-8 writes C2 80 to C2 9F) */
 static void paste_text(struct pwin *w) {
     int len, i;
+    unsigned char c;
     char *s = gk_paste_all(w->ui, &len);
     if(!s) {
         note(w, "Nothing pasted: %s", errno == EACCES ? "the window must have the focus" : "no text to paste");
         return;
     }
     for(i = 0; i < len; i++) {
-        if(s[i] == '\r' && i + 1 < len && s[i + 1] == '\n') continue;
-        paint_key(&w->p, s[i] == '\n' ? '\r' : (unsigned char)s[i], 0);
+        c = (unsigned char)s[i];
+        if(c == '\r' && i + 1 < len && s[i + 1] == '\n') continue;
+        if(c == 0xC2 && i + 1 < len && (unsigned char)s[i + 1] >= 0x80 && (unsigned char)s[i + 1] <= 0x9F) {
+            i++;
+            continue;
+        }
+        if((c < 0x20 && c != '\r' && c != '\n') || c == 0x7F) continue;
+        paint_key(&w->p, c == '\n' ? '\r' : c, 0);
     }
     free(s);
 }
@@ -624,10 +696,22 @@ static void update(struct pwin *w) {
     menus_state(w);
 }
 
+/* the canvas lost the keys (a box opened over it, or the window lost the focus): a drag ends where it was, since the
+   button let go meanwhile will not be heard of */
+static void let_go(struct pwin *w) {
+    w->panning = 0;
+    if(w->p.drag) paint_release(&w->p, w->p.bx, w->p.by, 0);
+}
+
 int pw_event(struct pwin *w, const struct gk_event *ev) {
     switch(ev->type) {
     case GK_EV_CLOSE: then(w, PW_THEN_CLOSE); break;
-    case GK_EV_MENU: menu(w, ev->id); break;
+    case GK_EV_MENU:
+        if(!gk_box_open(w->ui)) menu(w, ev->id);       /* the bar's, behind a box: nothing (its shortcuts are the box's) */
+        break;
+    case GK_EV_FOCUS:
+        if(ev->w == w->canvas && !ev->value) let_go(w);
+        break;
     case GK_EV_ANSWER: answer(w, ev); break;
     case GK_EV_CHOSEN: chosen(w, ev); break;
     case GK_EV_POINTER:
