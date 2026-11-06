@@ -343,4 +343,15 @@ int gk_asking(const struct gk *ui);             /* the id of the box open, 0 for
 int gk_box_open(const struct gk *ui);           /* 1 while one is */
 void gk_dismiss(struct gk *ui);                 /* the box open answers -1 and goes */
 
+/**** stage 2 (11/05/26): a text of several lines ****/
+
+#define GK_READONLY     0x20            /* a text of several lines: shown, selected and copied, never changed */
+
+/* a small text of several lines (UTF-8, lines at \n), edited as Notepad edits: no wrapping, the view following the
+   cursor, a tab to the next multiple of 8 columns, the keys and the mouse of a field and Up, Down, Page Up, Page Down,
+   Ctrl+Home and Ctrl+End; Enter starts a line. At most max bytes. flags: GK_READONLY, GK_TAKES_TAB (a tab typed) */
+struct gk_widget *gk_text_area(struct gk_widget *parent, int id, int max, unsigned flags);
+void gk_text_select(struct gk_widget *text, int from, int to);    /* bytes; to -1: the end */
+void gk_text_cursor(const struct gk_widget *text, int *from, int *to);   /* the selection, from <= to */
+
 #endif

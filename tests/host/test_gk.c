@@ -1339,6 +1339,99 @@ static void modifiers(void) {
     gk_close(ui);
 }
 
+/**** stage 2: a text of several lines ****/
+
+static void text_area(void) {
+    struct gk *ui = window("Text", 300, 200);
+    struct gk_widget *t, *ro, *after;
+    int x, y, w, h, from, to;
+    t = gk_text_area(gk_root(ui), 50, 64, 0);
+    gk_size(t, 0, 4 * 16 + 4);
+    gk_grow(t, 1, 0);
+    ro = gk_text_area(gk_root(ui), 51, 200, GK_READONLY);
+    gk_size(ro, 0, 2 * 16 + 4);
+    gk_grow(ro, 1, 0);
+    after = gk_button(gk_root(ui), "After", 52);
+    run(ui);
+    gk_bounds(t, &x, &y, &w, &h);
+    gk_focus(t);
+    gkf_type("one\ntwo\nthree");
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwo\nthree") && heard(GK_EV_CHANGE, 50));
+    CHECK(gkf_text(x + 5, y + 2, "one", GW_INK) && gkf_text(x + 5, y + 2 + 16, "two", GW_INK));
+    gkf_key(WIN_KEY_UP, 0);                             /* Up from after "three": the end of "two" */
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(3, 0);
+    run(ui);
+    CHECK(!strcmp(gkf_clip(), "wo"));
+    gkf_key(WIN_KEY_END, 0);
+    gkf_key(8, 0);
+    gkf_key(WIN_KEY_DELETE, 0);                         /* the line end: the lines join */
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwthree"));
+    gkf_key(9, 0);                                      /* Tab is not its own: the focus moves on */
+    run(ui);
+    CHECK(gk_focused(ui) == ro);
+    gk_set_text(t, "\tx\ny");                           /* a tab to the next multiple of 8 */
+    run(ui);
+    CHECK(gkf_text(x + 5 + 8 * 8, y + 2, "x", GW_INK) && gkf_text(x + 5, y + 2 + 16, "y", GW_INK));
+    gk_focus(t);
+    gkf_key(1, 0);                                      /* Ctrl+A, then typing past its 64 bytes: cut */
+    gkf_type("0123456789012345678901234567890123456789012345678901234567890123456789");
+    run(ui);
+    CHECK(strlen(gk_text(t)) == 64);
+    gk_set_text(t, "a\nb\nc\nd\ne\nf\ng\nh");
+    for(from = 0; from < 7; from++) gkf_key(WIN_KEY_DOWN, 0);
+    gkf_key(WIN_KEY_END, 0);
+    run(ui);
+    gk_text_cursor(t, &from, &to);
+    CHECK(from == to && from == (int)strlen("a\nb\nc\nd\ne\nf\ng\nh") && gkf_text(x + 5, y + 2 + 2 * 16, "g", GW_INK));   /* (the cursor is on "h"'s edge) */
+    gkf_wheel(x + 20, y + 20, -3);                      /* the wheel moves the view, not the cursor */
+    run(ui);
+    CHECK(gkf_text(x + 5, y + 2, "b", GW_INK));
+    gkf_advance(1000);
+    gkf_click(x + 5 + 2, y + 2 + 5);                    /* "b" */
+    gkf_type("B");
+    run(ui);
+    CHECK(!strncmp(gk_text(t), "a\nBb", 4));
+    /* the keys as surfos/win.h has them: Ctrl+End, Ctrl+Backspace a word, Ctrl+Left by words; Alt+X, Ctrl+Enter and
+       Ctrl+I (9 with Ctrl) the window's, no tab */
+    gk_set_text(t, "sea and sand");
+    gkf_key(WIN_KEY_END, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_BACKSPACE, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_CTRL);
+    gkf_key('x', WIN_MOD_ALT);
+    gkf_key(WIN_KEY_ENTER, WIN_MOD_CTRL);
+    gkf_key(9, WIN_MOD_CTRL);
+    gkf_key('!', 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "sea !and ") && count(GK_EV_KEY) == 3 && gk_focused(ui) == t);
+    /* one that takes Tab: a tab typed; Ctrl+Tab moves on */
+    {
+        struct gk_widget *tabby = gk_text_area(gk_root(ui), 53, 64, GK_TAKES_TAB);
+        gk_focus(tabby);
+        gkf_key(9, 0);
+        gkf_key('x', 0);
+        gkf_key(WIN_KEY_TAB, WIN_MOD_CTRL);
+        run(ui);
+        CHECK(!strcmp(gk_text(tabby), "\tx") && gk_focused(ui) != tabby);
+        gk_remove(tabby);
+    }
+    /* read-only: shown, selected and copied, never changed */
+    gk_set_text(ro, "fixed text");
+    gk_focus(ro);
+    gkf_type("x");
+    gkf_key(8, 0);
+    gkf_key(1, 0);
+    gkf_key(3, 0);
+    gkf_key(24, 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(ro), "fixed text") && !strcmp(gkf_clip(), "fixed text") && count(GK_EV_CHANGE) == 0);
+    (void)after;
+    gk_close(ui);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     libgui();
@@ -1358,6 +1451,7 @@ int main(void) {
     choosers();
     theme();
     modifiers();
+    text_area();
     gkf_reset(0, 0);
     printf("test_gk: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
