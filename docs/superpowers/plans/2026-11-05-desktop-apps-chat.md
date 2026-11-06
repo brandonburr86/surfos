@@ -46,6 +46,11 @@ model gives it, as `user/wclock/`'s does.
 | `tools/gui_apps_chat.py`, `tools/gui_apps_scenario.py` | the guiapps scenario's checks (no network there), and the line that adds them |
 | `tools/gui_apps_chatnet.py`, `tools/qemu-usb.py` | a scripted IRC server and the checks against it, in a boot of their own (`--scenario guichat`, inserted as `fsck`'s was) |
 
+Merged after these, at the integrator's word: apps/kit eab009d3, kit's stage 2 (a text of several lines, progress bars,
+sliders, palettes: Chat uses none of them) with its fix to `gk_next()`, which held back the events that came after a burst
+once a finite wait had run out. Chat's loop waits with one (its timers, and 250 ms while a helper runs), so it takes the fix;
+nothing in Chat works around the bug.
+
 ## Decisions a reviewer would ask about
 
 ### The connection is a helper's, not the window's
