@@ -1048,7 +1048,7 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
     struct pollfd pf[1 + GK_WATCHES];
     struct gk_event *e;
     unsigned start = gk_now(), now;
-    int i, n, r, wait, t, slot[1 + GK_WATCHES], polled = 0;
+    int i, n, r, wait, t, slot[1 + GK_WATCHES], polled = 0, batches = 0;
     drop_given(ui);
     ui->user_act = 0;                                   /* the program has answered the event it was given */
     for(;;) {
@@ -1087,7 +1087,8 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
             slot[n++] = i;
         }
         r = poll(pf, (nfds_t)n, wait);
-        polled = 1;
+        polled = !pf[0].revents || ++batches > GK_BATCHES;   /* the window had events: they are read on, its queue
+                                                               drained (a few batches more) before 0 is the answer */
         if(r < 0) return -1;                            /* errno: EINTR for a kill or Ctrl+C */
         if(pf[0].revents && window_event(ui) < 0) return -1;
         for(i = 1; i < n; i++) {

@@ -849,6 +849,28 @@ static void boxes(void) {
 
 /**** timers, descriptors, the window's end ****/
 
+/* a burst: more events than gui.h reads at once (GW_QUEUE, 16) that the toolkit takes itself and the program hears
+   nothing of (the pointer moving over a label), then a key the program hears. gk_next() gives the key, never 0 first:
+   waiting as long as it takes (-1), with time left, and with none (0), the window's queue drained before 0 is said */
+static void bursts(void) {
+    struct gk *ui = window("Burst", 200, 100);
+    struct gk_event ev;
+    int ms, k, i, r;
+    static const int waits[] = { -1, 1000, 0 };
+    gk_label(gk_root(ui), "moves");
+    run(ui);
+    for(k = 0; k < 3; k++) {
+        ms = waits[k];
+        for(i = 0; i < 40; i++) gkf_pointer(10 + i % 4, 10, 0);
+        gkf_key(WIN_KEY_F12, 0);
+        r = gk_next(ui, &ev, ms);
+        CHECK(r == 1 && ev.type == GK_EV_KEY && ev.value == WIN_KEY_F12);
+        if(r != 1) printf("  (gk_next() with ms %d: %d)\n", ms, r);
+        CHECK(gk_next(ui, &ev, 0) == 0);                 /* and then nothing */
+    }
+    gk_close(ui);
+}
+
 static void loop(void) {
     struct gk *ui = window("Loop", 200, 100);
     struct gk_event ev;
@@ -1500,6 +1522,7 @@ int main(void) {
     areas();
     boxes();
     loop();
+    bursts();
     menus();
     submenus();
     paste();

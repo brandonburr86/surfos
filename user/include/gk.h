@@ -154,7 +154,8 @@ int gk_ok(const struct gk *ui);                 /* 0 once an allocation failed *
 const struct gk_theme *gk_theme(const struct gk *ui);
 /* paint what changed and present it, wait at most ms (< 0: as long as it takes) for what the program must hear:
    1 with it in *ev, 0 when nothing came in time, -1 when the window has gone (errno EPIPE) or the wait failed (errno;
-   EINTR: a kill or Ctrl+C) */
+   EINTR: a kill or Ctrl+C). With -1 it never says 0. With a time (0 too: a game's frame), the window's events are
+   read before 0 is said, a burst the toolkit takes itself as well (11/05/26: one read of 16 before) */
 int gk_next(struct gk *ui, struct gk_event *ev, int ms);
 int gk_flush(struct gk *ui);                    /* paint and present what changed now: 0, or -1 (errno EPIPE) */
 
