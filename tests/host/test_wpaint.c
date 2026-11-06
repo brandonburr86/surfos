@@ -1138,6 +1138,39 @@ static void cut_without_memory(void) {
     unsnap(&s);
 }
 
+/* Medium: an Undo whose step then holds more than the history's bound by itself (a photograph pasted on white) keeps
+   it, so that Redo works; a new change lets it go */
+static void undo_large_after(void) {
+    struct snap pic;
+    noise_canvas(200, 200);
+    pic = snap();
+    paint_select_all(p);
+    paint_copy(p);
+    CHECK(paint_new(p, 200, 200) == 0 && p->clip && count(WHITE) == 200 * 200);
+    p->undo_max = 64 * 1024;                            /* the photograph's tiles, raw, are 160,000 bytes */
+    paint_paste(p);
+    paint_key(p, '\r', 0);                              /* put down: a step whose tiles were white, a few bytes */
+    CHECK(same(pic) && !strcmp(paint_undo_what(p), "Paste") && p->undo_bytes < p->undo_max);
+    CHECK(paint_undo(p) && count(WHITE) == 200 * 200 && paint_can_redo(p) && !strcmp(paint_redo_what(p), "Paste"));
+    CHECK(p->undo_bytes > p->undo_max && counted());    /* over the bound, by that step alone */
+    CHECK(paint_redo(p) && same(pic) && paint_undo(p) && paint_can_redo(p) && count(WHITE) == 200 * 200);
+    tool(PAINT_PENCIL);
+    click(5, 5);                                        /* a change: the redo goes, the history within its bound */
+    CHECK(!paint_can_redo(p) && p->undo_bytes <= p->undo_max && px(5, 5) == BLACK && counted());
+    /* the paste on a new canvas and a dot over it: the dot undone, then the paste, whose room costs the dot's redo
+       beyond it, and the status line says so */
+    CHECK(paint_new(p, 200, 200) == 0);
+    paint_paste(p);
+    paint_key(p, '\r', 0);
+    tool(PAINT_PENCIL);
+    click(5, 5);
+    CHECK(px(5, 5) == BLACK && paint_undo(p) && paint_can_redo(p) && !strcmp(paint_redo_what(p), "Pencil"));
+    CHECK(paint_undo(p) && count(WHITE) == 200 * 200 && strstr(p->msg, "not enough room in the history for the redos"));
+    CHECK(paint_redo(p) && same(pic) && !paint_can_redo(p) && counted());
+    p->undo_max = PAINT_UNDO_MAX;
+    unsnap(&pic);
+}
+
 /* Low: Cut of what floats cuts it: a paste goes and the canvas is as it was; a lifted part leaves the second colour,
    one step, which Undo takes back */
 static void cut_floating(void) {
@@ -1188,6 +1221,7 @@ static void refused_keeps_history(void) {
 
 static void review(void) {
     cut_without_memory();
+    undo_large_after();
     cut_floating();
     refused_keeps_history();
 }

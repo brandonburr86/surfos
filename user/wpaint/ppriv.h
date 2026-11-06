@@ -47,7 +47,8 @@ void step_end(struct paint *p);                                 /* kept, unless 
 void step_abort(struct paint *p);                               /* the canvas as it was, and the step gone */
 void touch(struct paint *p, int y, int x0, int x1);
 void history_clear(struct paint *p);
-int history_trim(struct paint *p);                              /* the oldest step gone: 1, or 0 when none is left */
+int history_trim(struct paint *p);      /* a step gone (a redo first while a change is under way, else the oldest undo):
+                                           1, or 0 when none is left */
 size_t history_kept(const struct paint *p);                     /* the bytes of the steps kept */
 
 /* tools.c: Undo's part while a change is under way: typed text dropped, a floating selection put back or a paste

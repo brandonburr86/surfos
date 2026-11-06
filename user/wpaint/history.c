@@ -17,10 +17,16 @@ beyond it can no longer be redone. A new size (step_canvas()) saves every tile o
 before it, and its undo makes a canvas of the old size again.
 
 The bounds: PAINT_UNDO_STEPS steps and p->undo_max bytes (the step under way counted), the
-oldest step dropped first when either is passed, or when pm_alloc() needs room. A change that
-alone passes the bytes, or whose tiles cannot be had, is made all the same but is lost: its tiles
-go, the history before it is dropped (it cannot be reached across a change that cannot be
-undone), and the status line says so.
+oldest step dropped first when either is passed, or when pm_alloc() needs room; while a change is
+under way, the redos go before that (keeping the change drops them anyway). A change that alone
+passes the bytes, or whose tiles cannot be had, is made all the same but is lost: its tiles go,
+the history before it is dropped (it cannot be reached across a change that cannot be undone),
+and the status line says so. The step an Undo has just undone is never trimmed for the bytes: it
+may hold more than they allow by itself (an undone paste holds the pixels it put down), and it
+stays, so that Redo works, until another step's room needs it. After a Redo the oldest undo goes
+first as ever, that step's own way back included, so that the redos still ahead stay whole. When
+an Undo or a Redo costs redos beyond it all the same (the room its swap needed, or the bound), the
+status line says so: a redo is never lost without a word.
 
 The canvas's state moves with the history: each kept step goes from one state to another, so the
 window knows (paint_modified()) whether undoing went back to what was saved.
@@ -176,19 +182,30 @@ void history_clear(struct paint *p) {
     p->cur = 0;
 }
 
-int history_trim(struct paint *p) {
-    if(p->cur > 0) {                                    /* the oldest step that can be undone */
+/* a step out of the history, never keep: the redo the furthest away first while a change is under way, then the
+   oldest step that can be undone, then that redo. 1, or 0 when none can go */
+static int trim_but(struct paint *p, const struct pstep *keep) {
+    int redos = p->nsteps > p->cur && p->steps[p->nsteps - 1] != keep;
+    if(redos && p->open) {
+        step_free(p, p->steps[--p->nsteps]);
+        return 1;
+    }
+    if(p->cur > 0 && p->steps[0] != keep) {
         step_free(p, p->steps[0]);
         memmove(&p->steps[0], &p->steps[1], (size_t)(p->nsteps - 1) * sizeof(p->steps[0]));
         p->nsteps--;
         p->cur--;
         return 1;
     }
-    if(p->nsteps > 0) {                                 /* the redo the furthest away */
+    if(redos) {
         step_free(p, p->steps[--p->nsteps]);
         return 1;
     }
     return 0;
+}
+
+int history_trim(struct paint *p) {
+    return trim_but(p, NULL);
 }
 
 size_t history_kept(const struct paint *p) {
@@ -427,13 +444,14 @@ static struct pstep *take(struct paint *p, int at) {
 /* Undo while text is typed drops it; while a selection floats, it is put back (or the paste dropped): tools.c */
 int paint_undo(struct paint *p) {
     struct pstep *s;
-    int r;
+    int r, redos;
     if(p->drag) return 0;
     if(work_undo(p)) return 1;
     if(!p->cur) {
         say(p, "Nothing to undo");
         return 1;
     }
+    redos = p->nsteps - p->cur;                         /* the redos ahead, which this one joins */
     s = take(p, --p->cur);                              /* out of the history while it swaps: trims cannot reach it */
     r = swap(p, s);
     if(r == -2) {
@@ -449,8 +467,9 @@ int paint_undo(struct paint *p) {
         say(p, "Undone; not enough memory to redo it");
     } else {
         insert(p, p->cur, s);
-        while(p->undo_bytes > p->undo_max && history_trim(p))
+        while(p->undo_bytes > p->undo_max && trim_but(p, s))   /* never s: Redo brings it back */
             ;
+        if(p->nsteps - p->cur < redos + 1) say(p, "Undone; not enough room in the history for the redos beyond it");
     }
     selection_fit(p);
     return 1;
@@ -459,12 +478,13 @@ int paint_undo(struct paint *p) {
 /* not while a change is under way (text typed, a selection floating): it would have to go first */
 int paint_redo(struct paint *p) {
     struct pstep *s;
-    int r;
+    int r, redos;
     if(p->drag || p->text.on || p->sel.buf || p->open) return 0;
     if(p->cur == p->nsteps) {
         say(p, "Nothing to redo");
         return 1;
     }
+    redos = p->nsteps - p->cur;                         /* this one and those beyond it */
     s = take(p, p->cur);
     r = swap(p, s);
     if(r == -2) {
@@ -484,8 +504,9 @@ int paint_redo(struct paint *p) {
         say(p, "Redone; not enough memory to undo it again");
     } else {
         insert(p, p->cur++, s);
-        while(p->undo_bytes > p->undo_max && history_trim(p))
+        while(p->undo_bytes > p->undo_max && history_trim(p))  /* the oldest undo first, s too: the redos ahead stay */
             ;
+        if(p->nsteps - p->cur < redos - 1) say(p, "Redone; not enough room in the history for the redos beyond it");
     }
     selection_fit(p);
     return 1;
