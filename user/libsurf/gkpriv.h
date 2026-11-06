@@ -21,6 +21,8 @@ painted again (gk_dirty(), gk_relayout()).
 #define GK_QUEUE 64                     /* events for the program, at most (one window event makes a few) */
 #define GK_DAMAGE 16                    /* rectangles to paint again before they are merged into one */
 #define GK_DOUBLE_MS 500                /* two clicks this close together are a double-click, as on the desktop */
+#define GK_BATCHES 8                    /* gk_next() reads on while the window has events, at most these batches more
+                                           (gui.h's GW_QUEUE each) once its time is up: the kernel's queue drained */
 
 /* a widget's own flags (gk.h's GK_* are the program's, kept in opts) */
 #define GKW_HIDDEN   0x01               /* gk_show(w, 0): no room, never painted or reached */
