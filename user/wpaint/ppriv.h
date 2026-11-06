@@ -14,8 +14,11 @@ the shapes, the flood fill and the text as rows of pixels.
 
 #define PAINT_DAB_MAX 32                /* the largest brush (paint_sizes[]) fits in this */
 
-/* canvas.c: memory counted against p->mem_max (pm_alloc() gives up the history's oldest steps first; NULL when
-   that is not enough); pixels shared by the clipboard and a floating selection */
+/* canvas.c: memory counted against p->mem_max. pm_room() makes room for n bytes more by giving up the history's
+   oldest steps, as many as that needs, and only when that is enough: 1, or 0 with every step kept. pm_alloc() is
+   pm_room() and the block (NULL: no room); a change of several blocks asks pm_room() for all of them first. Pixels
+   shared by the clipboard and a floating selection */
+int pm_room(struct paint *p, size_t n);
 void *pm_alloc(struct paint *p, size_t n);
 void pm_free(struct paint *p, void *q, size_t n);
 struct pbuf *pbuf_new(struct paint *p, int w, int h);

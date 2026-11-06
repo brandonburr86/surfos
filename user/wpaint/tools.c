@@ -192,28 +192,25 @@ int paint_select_all(struct paint *p) {
     return 1;
 }
 
-int paint_copy(struct paint *p) {
+/* the selection's pixels onto Paint's clipboard: 1 when they are there, 0 when there is not the memory (said why).
+   What the clipboard held goes only once the copy is made, so a copy that fails leaves it as it was */
+static int to_clipboard(struct paint *p) {
     struct psel *s = &p->sel;
     struct pbuf *b;
     int y;
-    if(!s->on) {
-        say(p, "Select a part of the picture first");
-        return 1;
-    }
     if(s->buf) {                                        /* what floats: the same pixels, shared */
         b = s->buf;
         b->refs++;
     } else {
         selection_fit(p);
-        b = pbuf_new(p, s->w, s->h);
-        if(!b && p->clip) {                             /* room made by what the clipboard held */
-            pbuf_put(p, p->clip);
-            p->clip = NULL;
-            b = pbuf_new(p, s->w, s->h);
+        if(!s->on) {
+            say(p, "Select a part of the picture first");
+            return 0;
         }
+        b = pbuf_new(p, s->w, s->h);
         if(!b) {
-            say(p, "Not enough memory to copy %d x %d pixels", s->w, s->h);
-            return 1;
+            say(p, "Not enough memory to copy %d x %d pixels: the clipboard keeps what it had", s->w, s->h);
+            return 0;
         }
         for(y = 0; y < s->h; y++)
             memcpy(b->px + (size_t)y * (size_t)s->w, p->px + (size_t)(s->y + y) * (size_t)p->w + s->x,
@@ -221,45 +218,63 @@ int paint_copy(struct paint *p) {
     }
     pbuf_put(p, p->clip);
     p->clip = b;
-    say(p, "Copied %d x %d pixels", b->w, b->h);
     return 1;
 }
 
-int paint_delete(struct paint *p) {
-    struct psel *s = &p->sel;
-    int y;
-    if(p->drag) paint_release(p, p->bx, p->by, 0);
-    if(!s->on) {
+int paint_copy(struct paint *p) {
+    if(p->drag) paint_release(p, p->bx, p->by, 0);     /* the drag ends where it is: what it drew is copied with it */
+    if(!p->sel.on) {
         say(p, "Select a part of the picture first");
         return 1;
     }
+    if(to_clipboard(p)) say(p, "Copied %d x %d pixels", p->clip->w, p->clip->h);
+    return 1;
+}
+
+/* the selection gone, in a step named what: what floats goes (a lift leaves the second colour behind, a paste
+   nothing), a part of the canvas becomes the second colour */
+static void remove_selection(struct paint *p, const char *what) {
+    struct psel *s = &p->sel;
+    int y;
     text_commit(p);
     mark_sel(p);
-    if(s->buf) {                                        /* what floats goes; a lift leaves the second colour behind */
+    if(s->buf) {
         pbuf_put(p, s->buf);
         s->buf = NULL;
-        if(p->open) snprintf(p->open->what, sizeof(p->open->what), "Delete");
+        if(p->open) snprintf(p->open->what, sizeof(p->open->what), "%s", what);
         step_end(p);
     } else {
-        step_begin(p, "Delete");
+        step_begin(p, what);
         for(y = 0; y < s->h; y++) fill_span(p, s->y + y, s->x, s->x + s->w - 1, p->bg);
         step_end(p);
     }
     s->on = 0;
     s->lifted = 0;
-    return 1;
 }
 
-int paint_cut(struct paint *p) {
-    struct pbuf *was = p->clip;
+int paint_delete(struct paint *p) {
+    if(p->drag) paint_release(p, p->bx, p->by, 0);
     if(!p->sel.on) {
         say(p, "Select a part of the picture first");
         return 1;
     }
-    paint_copy(p);
-    if(p->clip == was) return 1;                        /* it was not copied: nothing goes */
-    paint_delete(p);
-    say(p, "Cut %d x %d pixels", p->clip->w, p->clip->h);
+    remove_selection(p, "Delete");
+    return 1;
+}
+
+/* Copy, then Delete, but only when the copy was made: else nothing goes, and the status line says why */
+int paint_cut(struct paint *p) {
+    int w, h;
+    if(p->drag) paint_release(p, p->bx, p->by, 0);
+    if(!p->sel.on) {
+        say(p, "Select a part of the picture first");
+        return 1;
+    }
+    if(!to_clipboard(p)) return 1;
+    w = p->clip->w;
+    h = p->clip->h;
+    remove_selection(p, "Cut");
+    say(p, "Cut %d x %d pixels", w, h);
     return 1;
 }
 

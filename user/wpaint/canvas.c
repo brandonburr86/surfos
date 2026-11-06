@@ -4,8 +4,9 @@ SurfOS user program: wpaint
 File: canvas.c  Date: 11/05/26
 --------------------
 The canvas and the memory Paint keeps. Every large block is counted against p->mem_max (paint.h
-says why that bound); when one would pass it, the history gives up its oldest steps first, and
-only then is what asked refused. The canvas's pixels change only through fill_span() and
+says why that bound); when one would pass it, the history gives up its oldest steps first, as many
+as it needs, and only when that is enough: what even the whole history could not make room for is
+refused at once, and the history keeps every step. The canvas's pixels change only through fill_span() and
 copy_span(), which first save the tiles they touch into the change under way (history.c's
 touch()), and then mark the pixels the window must draw again. A new canvas and a picture opened
 in its place start the history again (they are not undone, as a file opened in Notepad is not); a
@@ -20,11 +21,20 @@ new size is a step of the history, which keeps the whole canvas as it was.
 
 /**** memory ****/
 
+int pm_room(struct paint *p, size_t n) {
+    size_t kept;
+    if(p->mem <= p->mem_max && n <= p->mem_max - p->mem) return 1;
+    kept = history_kept(p);                             /* what the history's steps could give up, all of them */
+    if(n > p->mem_max || p->mem - kept > p->mem_max - n) return 0;
+    while(p->mem > p->mem_max || n > p->mem_max - p->mem)
+        if(!history_trim(p)) return 0;                 /* never: what was kept was counted */
+    return 1;
+}
+
 void *pm_alloc(struct paint *p, size_t n) {
     void *q;
     if(!n) n = 1;
-    while(p->mem > p->mem_max || n > p->mem_max - p->mem)
-        if(!history_trim(p)) return NULL;
+    if(!pm_room(p, n)) return NULL;
     q = malloc(n);
     while(!q && history_trim(p)) q = malloc(n);    /* the machine has less than the bound: the history goes first */
     if(!q) return NULL;
@@ -55,6 +65,7 @@ struct pbuf *pbuf_new(struct paint *p, int w, int h) {
     struct pbuf *b;
     if(w < 1 || h < 1 || w > PAINT_SIDE_MAX || h > PAINT_SIDE_MAX || (unsigned)w * (unsigned)h > PAINT_PIXELS_MAX)
         return NULL;
+    if(!pm_room(p, sizeof(*b) + canvas_bytes(w, h))) return NULL;     /* both, or neither */
     b = (struct pbuf *)pm_alloc(p, sizeof(*b));
     if(!b) return NULL;
     b->px = (unsigned *)pm_alloc(p, canvas_bytes(w, h));
@@ -251,7 +262,7 @@ int paint_adopt(struct paint *p, unsigned *px, int w, int h) {
 }
 
 int paint_resize(struct paint *p, int w, int h) {
-    unsigned *px, *row;
+    unsigned *px = NULL, *row;
     const unsigned *old;
     int *rows = NULL, x, y, keep;
     size_t n;
@@ -259,8 +270,10 @@ int paint_resize(struct paint *p, int w, int h) {
     if(w == p->w && h == p->h) return 0;
     paint_put_down(p);
     n = canvas_bytes(w, h);
-    px = (unsigned *)pm_alloc(p, n);
-    if(px) rows = rows_new(p, h);
+    if(pm_room(p, n + (size_t)h * 2 * sizeof(int))) {  /* both, or neither */
+        px = (unsigned *)pm_alloc(p, n);
+        if(px) rows = rows_new(p, h);
+    }
     if(!rows) {
         pm_free(p, px, n);
         say(p, "Not enough memory for a canvas of %d x %d", w, h);

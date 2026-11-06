@@ -1100,6 +1100,98 @@ static void random_actions(void) {
     CHECK(p->mem == 0);
 }
 
+/**** what the review of 11/05 found ****/
+
+/* a canvas of noise set behind the history's back: every tile is kept raw */
+static void noise_canvas(int w, int h) {
+    unsigned s = 7;
+    int x, y;
+    fresh(w, h);
+    for(y = 0; y < h; y++)
+        for(x = 0; x < w; x++) {
+            s = s * 1103515245u + 12345u;
+            setpx(x, y, (s >> 8) & 0xFFFFFF);
+        }
+}
+
+/* Critical: Cut when the copy cannot be had deletes nothing and keeps the clipboard (it once deleted the selection
+   and read through a clipboard of NULL); a stroke under way ends first */
+static void cut_without_memory(void) {
+    struct snap s;
+    fresh(1, 1);
+    noise_canvas(200, 200);
+    tool(PAINT_SELECT);
+    drag(PAINT_LEFT, 0, 0, 9, 9);
+    CHECK(paint_copy(p) && p->clip && p->clip->w == 10);
+    paint_select_all(p);
+    tool(PAINT_BRUSH);
+    paint_press(p, 5, 5, PAINT_LEFT, 0);
+    paint_move(p, 20, 5, 0);                            /* a stroke under way, in one tile */
+    s = snap();
+    p->mem_max = p->mem + 1000;                         /* no room for 200 x 200 more, even were the history gone */
+    CHECK(paint_cut(p) && !p->drag && p->clip && p->clip->w == 10 && strstr(p->msg, "keeps what it had"));
+    CHECK(same(s) && p->sel.on && !strcmp(paint_undo_what(p), "Brush") && counted());
+    CHECK(paint_copy(p) && p->clip->w == 10 && strstr(p->msg, "Not enough memory to copy 200 x 200") && same(s));
+    p->mem_max = PAINT_MEM_MAX;
+    CHECK(paint_cut(p) && p->clip->w == 200 && strstr(p->msg, "Cut 200 x 200") && count(WHITE) == 200 * 200);
+    CHECK(!memcmp(p->clip->px, s.px, canvas_bytes(200, 200)) && paint_undo(p) && same(s) && counted());
+    unsnap(&s);
+}
+
+/* Low: Cut of what floats cuts it: a paste goes and the canvas is as it was; a lifted part leaves the second colour,
+   one step, which Undo takes back */
+static void cut_floating(void) {
+    struct snap s;
+    fresh(100, 80);
+    rect(PAINT_RECT, 1, 0, RED, 10, 10, 29, 29);
+    tool(PAINT_SELECT);
+    drag(PAINT_LEFT, 10, 10, 29, 29);
+    paint_copy(p);
+    paint_paste(p);
+    s = snap();
+    CHECK(p->sel.buf == p->clip);
+    CHECK(paint_cut(p) && !p->sel.on && !p->sel.buf && p->clip && p->clip->w == 20 && same(s) &&
+          strstr(p->msg, "Cut 20 x 20") && counted());
+    unsnap(&s);
+    paint_set_colour(p, 1, BLUE);
+    drag(PAINT_LEFT, 10, 10, 29, 29);
+    paint_key(p, PAINT_KEY_RIGHT, 0);                   /* lifted, a pixel to the right */
+    CHECK(p->sel.buf && p->sel.lifted);
+    CHECK(paint_cut(p) && !p->sel.on && count_in(BLUE, 10, 10, 29, 29) == 400 && count(RED) == 0 &&
+          !strcmp(paint_undo_what(p), "Cut") && p->clip->w == 20);
+    CHECK(paint_undo(p) && count_in(RED, 10, 10, 29, 29) == 400 && count(BLUE) == 0 && counted());
+}
+
+/* Low: what is refused for want of memory costs no step of the history (and a failed copy no clipboard) */
+static void refused_keeps_history(void) {
+    int steps;
+    fresh(100, 100);
+    tool(PAINT_PENCIL);
+    click(1, 1);
+    click(2, 2);
+    click(3, 3);
+    tool(PAINT_SELECT);
+    drag(PAINT_LEFT, 0, 0, 9, 9);
+    paint_copy(p);
+    steps = p->nsteps;
+    paint_select_all(p);
+    p->mem_max = p->mem + 1000;
+    CHECK(paint_copy(p) && p->nsteps == steps && p->clip->w == 10 && strstr(p->msg, "Not enough memory to copy"));
+    tool(PAINT_FILL);
+    click(50, 50);
+    CHECK(p->nsteps == steps && strstr(p->msg, "Not enough memory to fill") && count(WHITE) == 100 * 100 - 3);
+    CHECK(paint_new(p, 1000, 1000) < 0 && p->nsteps == steps && p->w == 100);
+    CHECK(paint_resize(p, 1000, 1000) < 0 && p->nsteps == steps && p->w == 100);
+    p->mem_max = PAINT_MEM_MAX;
+    CHECK(counted() && paint_undo(p) && px(3, 3) == WHITE);
+}
+
+static void review(void) {
+    cut_without_memory();
+    cut_floating();
+    refused_keeps_history();
+}
+
 int main(void) {
     canvas();
     pencil_brush_eraser();
@@ -1115,6 +1207,7 @@ int main(void) {
     status();
     interrupted();
     random_actions();
+    review();
     paint_free(p);
     CHECK(p->mem == 0);
     printf("test_wpaint: %d checks, %d failed\n", checks, failed);
