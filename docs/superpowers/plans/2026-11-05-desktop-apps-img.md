@@ -134,10 +134,13 @@ both give 128; a loop guard that saves only time).
 | `tools/gui_apps_img.py` | the guiapps scenario's checks |
 | `tools/gui_apps_media.py` | two lines: the chooser's title (below) |
 | `Makefile`, `tools/gui_apps_scenario.py`, `docs/GUI.md` | the insertions the brief allows |
+| the review round | `user/libsurf/image_jpeg.c` (its inverse DCT, Huffman tables and bit reader written again), `image_png.c`, `image_bmp.c` and `user/include/image.h` (the bombs), `tests/host/test_wundertow_image.c` (`bombs()`), `tests/test_image_jpeg.py` (new: libsurf's JPEGs against sips), `shell/guicore.c` (one line: a program's application has its tick), the Makefile's Wundertow link and `unittest-img` |
 
 The files outside the brief's list (`shell/gui_media.h`, `test_guimedia.c`, `test_guisuite.c`, `gui_apps_media.py`) had
 to change with `shell/guiview.c`: they declared, tested or read the kernel's viewer, which is gone. Each change is the
-least that keeps them true; nothing else in them was touched.
+least that keeps them true; nothing else in them was touched. In the review round `shell/guicore.c` gained one line
+(`gui_tick()` runs the tick of an application that is a program, whose slot never opens), for H1's report of a viewer
+whose window never came; `test_wundertow_image.c` is Wundertow's test of the decoders, which are libsurf's now.
 
 ### How the desktop reaches it
 
@@ -147,15 +150,20 @@ least that keeps them true; nothing else in them was touched.
 - **Files' Enter or double-click on a picture:** `wview.app` names the pictures in `open-with`, not in `types`, so no
   registry entry takes the double-click and Files' own rule does: `viewer_takes()`, now any of .bmp, .png, .gif, .jpg and
   .jpeg in any case, then `viewer_show()`, which starts `wview` with the path as its one argument and keeps its pid as the
-  Image Viewer's. Its window stands where the Image Viewer's stood and its tile brings it back; a new one each time, as
-  the registry starts programs. What is no file (a folder, a device, a name no longer there) is said in a message, as
-  the desktop's own viewer said it, and nothing starts; a start refused is said and leaves the window before as the
-  Image Viewer's. With `types`, the registry would start it instead (`reg_open()`), at the next cascade
-  place and as no application's window: the tile would start a second one, and the media and suite tracks' checks,
-  which look for the Image Viewer where it stands, would not find it.
+  Image Viewer's. Its window stands where the Image Viewer's stood and its tile brings it back. After the review, one at
+  a time: a file opened while the Image Viewer's `wview` runs replaces it (`viewer_replace()`: the one there is told to
+  close, as it has nothing to save, or ended when it has no window yet or did not go when told), so a few
+  double-clicks no longer use up the 8 windows the desktop's programs may have. What is no file (a folder, a device,
+  a name no longer there) is said in a message, as the desktop's own viewer said it, and nothing starts; a start
+  refused is said; with every program's window in use but the viewer's, nothing starts and that is said; and a `wview`
+  whose window has not come 5 seconds after its start is said on the screen (the entry's `tick()`). With `types`, the
+  registry would start it instead (`reg_open()`), at the next cascade place and as no application's window: the tile
+  would start a second one, and the media and suite tracks' checks, which look for the Image Viewer where it stands,
+  would not find it. So a double-click reaches `wview` this way only while no registry entry lists pictures under
+  `types`: an entry that does takes them, by desk's rule, and starts its own program.
 - **File > Open with** lists the entry, "Image Viewer", which starts a new `wview` the registry's way (`reg_open()`, the
-  cascade); the desktop's own item for the Image Viewer is left out then, the entry's program being the Image Viewer's
-  (desk's `open_with_items()`).
+  cascade, each in a place of its own); the desktop's own item for the Image Viewer is left out then, the entry's
+  program being the Image Viewer's (desk's `open_with_items()`).
 - **Screenshots** are 24-bit BMPs named "Screenshot YYYY-MM-DD HHMMSS.bmp": `viewer_takes()` takes them, and the name's
   spaces stay in the one argument (`guisys_win.c`). The screen checks open one from the folder.
 - **Sketch's** Save as BMP and Open BMP stay the desktop's (`guibmp.c`), and the Image Viewer's entry still answers their
@@ -175,13 +183,16 @@ least that keeps them true; nothing else in them was touched.
   all nine fit the old window's least width, 540 pixels.
 - **32-bit arithmetic.** `view.c` divides only in 32 bits: the middle of a zoom in two steps, exact, its ranges (16 times,
   4096 pixels, 1/64) checked to fit; so wview links libsurf alone, without libgcc (below).
-- **Memory.** A file of at most 32 MB is read whole (the decoders need it so) and let go once decoded. The picture is kept
-  as decoded, up to the decoders' 16,000,000 pixels: 64 MB, which with the rest goes over the brief's 64 MB. Shrinking
-  big pictures as Wundertow does (2048 a side) would cap it at 16 MB, but the actual size would then no longer show the
-  picture's own pixels, which is what a viewer is for. While a new picture is decoded the old one stays, so for a moment
-  two are held: the very worst, a picture of 16,000,000 pixels shown while a 32 MB progressive JPEG decodes (64 MB of
-  coefficients, its planes and its pixels), comes to under 250 MB, which the laptop has and a program's 1 GB of address
-  space holds. Every allocation is checked; when one fails the status bar says so and the old picture stays.
+- **Memory.** A file of at most 32 MiB is read whole (the decoders need it so), or 62 MiB for a BMP (the review's M2), and
+  let go once decoded. The picture is kept as decoded, up to the decoders' 16,000,000 pixels: 61 MiB, which with the
+  rest goes over the brief's 64 MB. Shrinking big pictures as Wundertow does (2048 a side) would cap it at 16 MB, but the
+  actual size would then no longer show the picture's own pixels, which is what a viewer is for. While a new picture is
+  decoded the old one stays, so for a moment two are held: the very worst, a picture of 16,000,000 pixels shown while a
+  32 MiB progressive JPEG decodes (64 MiB of coefficients, its planes and its pixels), comes to about 246 to 250 MiB
+  (258 to 262 MB), which the laptop has and a program's 1 GB of address space holds; a 62 MiB BMP comes to less, about
+  184 MiB. libsurf's heap grows by sbrk and keeps its peak until the program ends, so a `wview` that once held that
+  much holds it until it is closed. Every allocation is checked; when one fails the status bar says so and the old
+  picture stays.
 - **The folder** is listed when a file is opened (not at each step): its first 4096 pictures, 256 KB of names, by their
   endings, in the order of numbers in names compared as numbers. A file among them that is no picture is said when it is
   reached, the picture before staying, and the next press goes on past it.
@@ -190,8 +201,9 @@ least that keeps them true; nothing else in them was touched.
 - **Open** asks the desktop's chooser (`WIN_DIALOG`) in the picture's folder, for bmp, png, gif, jpg and jpeg. Its answers:
   a path chosen is taken (`WIN_TAKE`) on the answer's event, whatever request it answers, and shown when it answers
   Open, since a path left untaken keeps the next `WIN_DIALOG` busy (`EBUSY`, desk's fix round); a chooser cancelled,
-  also one put away for another dialog, changes nothing; `EAGAIN` (its queue full) says in the status bar that the
-  desktop is busy, to try again; `EBUSY`, `EACCES` and `EINVAL` say theirs. The desktop's bar names the program
+  also one put away for another dialog, changes nothing; `EAGAIN` (the window's own events wait to be read, win.h) says
+  so in the status bar, to try again; `EBUSY`, `EACCES` and `EINVAL` say theirs. An answer that is no picture leaves
+  the folder and the place of the picture still shown (the review's L4). The desktop's bar names the program
   before the chooser's own title (by the window's title at 2c5afd30, by its registry title after desk's fix round), so
   the screen checks find the chooser by its own title, Open a file, wherever the bar puts it (`gui_apps_media.py`'s
   `open_chooser()`, which its two Image Viewer checks and `gui_apps_img.py` use).
@@ -224,13 +236,24 @@ least that keeps them true; nothing else in them was touched.
 
 | Test | Checks | What |
 |---|---|---|
-| `test_wview` | 269 | the old viewer test's views with its numbers (Fit, the steps, the middle kept, the pan, the double-click, the wheel), the middle at the extremes (4096 x 16, 1/64 to 16 times); the toolbar's labels, places and states; painting (an average, transparency over the squares, clipping); the status bar, the title and the details, dates among them; the folder's order, its limits and its steps; which keys repeat |
-| `test_guimedia` | 436 (1,086 before: the kernel viewer's checks went to `test_wview`) | the entry: the program, Files' rule (screenshots' names among them), Apps' start at the Image Viewer's place, `viewer_show()` starting `wview` on a path (spaces and all), a start refused, a folder, a device and a file not there refused before anything starts; Hex and Sketch as before |
+| `test_wview` | 270 | that the window fits a desktop of 640 x 400 (from the review); the old viewer test's views with its numbers (Fit, the steps, the middle kept, the pan, the double-click, the wheel), the middle at the extremes (4096 x 16, 1/64 to 16 times); the toolbar's labels, places and states; painting (an average, transparency over the squares, clipping); the status bar, the title and the details, dates among them; the folder's order, its limits and its steps; which keys repeat |
+| `test_guimedia` | 448 (1,086 before: the kernel viewer's checks went to `test_wview`) | the entry: the program, Files' rule (screenshots' names among them), Apps' start at the Image Viewer's place, `viewer_show()` starting `wview` on a path (spaces and all), a start refused, a folder, a device and a file not there refused before anything starts; from the review, one viewer from Files (a start whose window had not come ended, a window told to close, one that did not go ended), no start when the programs have every window, a start whose window never comes said once, and only Sketch's numbers going to Sketch; Hex and Sketch as before |
 | `test_guisuite` | 173 (181 before) | Files' Enter on a picture starts `wview` with its path, at the Image Viewer's place |
-| guiapps, `gui_apps_img.py` | GIMG | in the Terminal: wview on a PNG of the stick, fitted and actual, its toolbar, N through a GIF, a BMP, a JPEG, a PNG with transparency, a PNG cut short and a screenshot's name, around and back, the details, Copy path pasted in the Terminal; then Files' Enter on a PNG (at the Image Viewer's place), O and the desktop's chooser to a JPEG, Ctrl+W, Apps > Image Viewer with no picture |
-| guiapps, whole | GALL | every track's, the media track's Image Viewer checks and the suite's Files-to-Image-Viewer check now reading wview |
+| `test_wundertow_image` | 359,823 | stage 1's 359,813, the same outcome check by check after the JPEG decoder's rewrite, and the review's bombs (10): a PNG of 4 MB of empty fixed or dynamic blocks refused for its length in little time, 16 megapixels of RLE8 runs past a row's end within 4 times the same picture in rows, 128 JPEG scans refused at the 33rd within 16 times the same picture in 2 scans |
+| `tests/test_image_jpeg.py` | 126 (on the Mac) | every JPEG fixture by libsurf against macOS's sips (above); without sips it says so and passes |
+| guiapps, `gui_apps_img.py` | 39 at -O0 on 5453c2bc; the review round's (three pictures from Files, one viewer left) not yet run | in the Terminal: wview on a PNG of the stick, fitted and actual, its toolbar, N through a GIF, a BMP, a JPEG, a PNG with transparency, a PNG cut short and a screenshot's name, around and back, the details, Copy path pasted in the Terminal; then Files' Enter on a PNG (at the Image Viewer's place), O and the desktop's chooser to a JPEG, Ctrl+W, Apps > Image Viewer with no picture |
+| guiapps, whole | 358 of 358 at -O0 on 5453c2bc; not yet run on the review round's tree | every track's, the media track's Image Viewer checks and the suite's Files-to-Image-Viewer check now reading wview |
 
-GATES
+Gates. On 5453c2bc, the end of stage 2: the whole `make unittest` (99 suites passed, none failed) and the whole guiapps
+scenario at -O0 (358 of 358). On 3165be0a, the review round's code (the commit after it changes only documents): the
+whole `make unittest` again (99 suites, none failed; `test_wundertow_image` 359,823 and its UBSan build the same,
+`test_wview` 270, `test_guimedia` 448, `test_guidesk` 139 with `wview.app`), the builds at -O0 and -O2 and both USB
+images. Not run when this was written: guiapps at -O0 and -O2, test-all, test-web at -O0 and -O2 and `make -C surfcpu
+test-os-qemu`. They wait at the lock (`06-gates/suite-lock.sh`, ticket t.32 since 20:11), whose two places have been
+held since 19:55 by other tracks' runs; the results go to the scratchpad's `apps-img/gates/summary` when they come.
+Natively on the Mac: the JPEG decoder against sips (126 checks) and against itself before the rewrite, the review's
+fuzzer over the new decoders under AddressSanitizer and UBSan (1.8 million inputs, nothing found), `test_wview` and
+`test_wundertow_image` under both sanitizers.
 
 ### Found on the way (for other tracks)
 
@@ -243,14 +266,102 @@ GATES
   the guiapps scenario run with only these checks (a scratch wrapper adding them to `TRACKS`): 26 of 26 at -O0 and at
   -O2. It found the two points above.
 
+## The review
+
+An independent review read stage 2's tip (5453c2bc) against the brief's commit (e5f9a2e0) and desk's merge (ab7b1c33).
+It found the decoders memory-safe (about 21 million fuzzed inputs under AddressSanitizer and UBSan: no crash, read past
+an end, leak or uninitialised read), the writers' files right, Wundertow's pixels as before, and view.c, folder.c,
+main.c and the desktop's entry sound. Its findings, and what was done about each:
+
+- **H1, each open from Files started a new wview over the last.** A few double-clicks used up the 8 windows the
+  desktop's programs may have (GUI_CLIENTS, WIN_PER_DESK), after which nothing could open one, wview's "no window"
+  going to the console behind the desktop; each hidden viewer held its picture too. Now `viewer_show()` replaces the
+  Image Viewer's wview (`viewer_replace()`): one with a window is told to close (it has nothing to save), one that was
+  told and did not go, or one started so lately that its window has not come, is ended, and the new one stands in its
+  place. With every program's window in use but the viewer's, nothing starts and a message says so. A wview whose
+  window has not come 5 seconds after its start is said on the screen: the Image Viewer's entry has a `tick()`, and
+  `gui_tick()` (`shell/guicore.c`, one line) now runs the tick of an application that is a program even though its slot
+  never opens. Open with's entry still starts others, in the cascade, each in a place of its own. Tested in
+  `test_guimedia` (a start before the window came ended, a window told to close, one that did not go ended, the 8
+  windows, the late start said once) and on the screen: three pictures opened from Files one after the other, then
+  the chooser's, and when that viewer closes no other is left.
+- **M1, crafted files froze wview for seconds.** Each is bounded now, and each bomb is in `test_wundertow_image`'s
+  `bombs()` with a bound of time measured against a picture of its size (10 checks):
+  - PNG: inflate is given no more of the IDAT chunks than twice the rows' bytes, 8 a row and 4 KB (`data_budget()`;
+    deflate's worst, stored blocks, adds 5 bytes to 64 KB, an encoder that flushes at each row 6 a row). A stream that
+    wants more is "a PNG whose data is far longer than its rows". The review's 32 MB of empty dynamic blocks for a
+    1 x 1 picture: 3.0 s natively before the move, 6.0 s after it, 0.001 s now; its empty fixed blocks 0.24 s, now 0.
+  - BMP RLE8 and RLE4: a run or a literal draws what fits in the row and drops the rest at once
+    (`image_bmp.c`'s `rle()`): the review's 32 MB of runs of 255 past the row's end, 2.3 s, take 0.010 s, less than
+    the same picture in rows of runs.
+  - JPEG: WIMG_SCANS_MAX is 32, not 128. Each scan goes over every block, so 128 scans of EOB runs over a 4000 x 4000
+    picture (35 KB) took 0.64 s; they are refused at the 33rd now, after 0.15 s. Real files have far fewer:
+    libjpeg's simple progression, which most progressive files come from, writes 10 scans for colour, 6 for grey, 14
+    for three components of RGB and 18 for CMYK, and Photoshop's progressive files have 3 to 5.
+  (Times natively on the Mac at -O2, the review's files.)
+- **M2, BMPs the desktop used to show were refused.** wview reads a BMP of up to 62 MiB now (BMP_MAX: the decoders'
+  16,000,000 pixels at 32 bits, and 1 MiB for its headers), so 4000 x 3000 in 24 bits (36 MB) shows again; other kinds
+  keep 32 MiB. The manual says both.
+- **L1.** The memory above is in MiB, about 246 to 250 MiB at worst (258 to 262 MB), and says that the heap keeps its
+  peak until wview ends.
+- **L2.** `test_guimedia` has its check that only Sketch's three numbers go to Sketch again (acts 23 and 19 change
+  nothing). The check that the Image Viewer's narrowest window fits a desktop of 640 x 400 is in `test_wview` now,
+  since the window and its sizes (VIEW_MIN_W) are wview's: `test_guimedia` is built without the C library's headers
+  that `view.h` needs.
+- **L3.** EAGAIN from WIN_DIALOG is said as win.h means it: "this window's events wait to be read: try again".
+- **L4.** A chooser's answer that is no picture (a file of another kind, a folder, "/") leaves the folder and the place
+  of the picture still shown, so N and P step where they did and the status bar keeps "(k of n)". With no picture
+  shown yet the folder is listed all the same, so that N and P step from the file.
+- **L5.** Wundertow links libgcc after libsurf too, so that libsurf's 64-bit divisions (image_scale.c) are met
+  whatever Wundertow's own objects call.
+- **L6.** The account says that a double-click reaches wview only while no registry entry lists pictures under
+  `types` ("How the desktop reaches it").
+- **The JPEG decoder's origin.** Its inverse DCT (lines 87-169 at 5453c2bc) was libjpeg's jidctint.c jpeg_idct_islow:
+  the same twelve constants, the z1-z5 and tmp data flow, the shortcut for empty columns, descale shifts of 11 and 18,
+  and a comment naming libjpeg's method. Its Huffman tables, bit reader and decoding (lines 30-40, 178-204, 225-244,
+  264-294) matched another decoder's (stb_image's stbi__build_huffman, stbi__grow_buffer_unsafe and
+  stbi__jpeg_huff_decode): a 9-bit fast table, limits against the buffer's top 16 bits with a sentinel at 17, a delta
+  per length, a buffer kept at its top and filled while it held 24 bits or fewer. libsurf ships only code of its own,
+  so these were written again from ITU-T T.81 alone, as their own commit:
+  - the inverse DCT from A.3.3's definition, separated into the one-dimensional sums down the columns and along the
+    rows, with the symmetry of the cosines (out(n) and out(7-n) from the sums over the even and the odd k): a table of
+    C(k)/2 cos((2n+1)k pi/16) to 13 bits, 3 bits kept between the passes, and the sums running only as far as the
+    block's last row and column with a coefficient that is not 0. No fast factorisation, so no paper's either;
+  - the Huffman tables from Annex C (HUFFSIZE and HUFFCODE, C.1 and C.2) and F.2.2.3 (MINCODE, MAXCODE and VALPTR,
+    F.15; DECODE, F.16), with a lookahead of my own: two tables of 256 bytes that say the length and value of a code of
+    8 bits or fewer that the next 8 bits begin with; a longer code goes on bit by bit as F.16 does from length 9;
+  - the reading of the bits from F.1.2.3 (0xFF 0x00 is a data byte) and B.1.1.5 (0xFF and anything else a marker,
+    fill bytes 0xFF before it), a byte at a time into an accumulator whose last bits are the ones to come.
+  The progressive refinement was not flagged and is as it was; the comments that cite libjpeg's behaviour (the JFIF
+  and Adobe rules, inverted CMYK) stay as compatibility notes, and no comment calls code libjpeg's.
+  What changed in Wundertow's pictures (and wview's): JPEGs' pixels are within 3 a channel of what they were
+  (all 57 fixtures: 0 to 3 apart; a photograph of 4000 x 3000: 3 at most, 0.07 on average), and as close to macOS's
+  own decoder as before (`tests/test_image_jpeg.py` against sips: within 3, 0.5 on average, at full chroma, and 8,
+  3 on average, where chroma is sampled less: sips smooths chroma as it widens it, libsurf repeats it; 126 checks; the
+  files where the two follow different colour rules, CMYK and two of the rule's own fixtures, are left out, and the
+  test says why). `test_wundertow_image`'s expectations needed no change: its 359,813 checks give the same outcome one
+  by one before and after. Of 19,070 whole, damaged and cut-short fixtures compared before and after, 6 differ only in
+  their message: a file cut just before a restart marker is "a JPEG that ends too early", where it was "a JPEG whose data
+  ends before a restart marker" (the bits are read a byte at a time now, as they are needed, so the end is met by the
+  search for the marker). A 12-megapixel JPEG takes 0.15 s where it took 0.10 (natively, -O2). The review's fuzzer,
+  run again over the new decoders under AddressSanitizer and UBSan: 1.8 million inputs, nothing found.
+- **The decoders' origin** in "Where the code comes from" was a pointer to Wundertow's milestone brief, which has no
+  such section; it says what each decoder follows now.
+
 ## Where the code comes from
 
 ### Stage 1
 
-- **The decoders** came over from `user/wundertow/` as they were; Wundertow's account
-  (`2026-11-01-browser-m2-m3.md`) says what they were written from. The only new decoding code is the PNG decoder's data
-  part, written here from RFC 1950 (the zlib header, Adler-32) and the PNG standard; the inflate under it is libsurf's,
-  whose origin the archive track's account (`2026-11-01-cli-suite-archive.md`) states.
+- **The decoders** came over from `user/wundertow/` as they were, written in the browser's milestone 2 (11/1/26);
+  `2026-11-01-browser-m2-m3.md` is that milestone's brief and says nothing of their origin, so it is said here. The
+  GIF, BMP and PNG decoders follow their published specifications (the GIF89a specification, Microsoft's documentation
+  of the BMP headers, the PNG standard) and are original as far as the review could tell. The JPEG decoder's inverse
+  DCT, its Huffman tables and their decoding, and its reading of the scans' bits followed other programs' code too
+  closely (libjpeg's integer inverse DCT, another decoder's tables and bit reader: "The review" says how), and were
+  written again in the review round from T.81 itself; the rest of the JPEG decoder (the segments, the scans, the
+  progressive refinement, the colours) was not flagged and is as it was. The only new decoding code of stage 1 is the
+  PNG decoder's data part, written here from RFC 1950 (the zlib header, Adler-32) and the PNG standard; the inflate
+  under it is libsurf's, whose origin the archive track's account (`2026-11-01-cli-suite-archive.md`) states.
 - **The BMP encoder:** Microsoft's documentation of BITMAPFILEHEADER and BITMAPINFOHEADER.
 - **The PNG encoder:** the PNG standard (ISO/IEC 15948, the W3C's PNG second edition): the signature, the chunk layout and
   CRC, IHDR, the five filters (section 9.2) and the filter heuristic (section 12.8); RFC 1950 for the zlib stream. Deflate
@@ -277,4 +388,17 @@ GATES
 - **The screen checks:** the guiapps Driver and the media, suite and terminal tracks' helpers in this tree; the
   pictures are two made in Python and the browser's test pictures.
 
-No other program's source was used. The one behaviour matched is named above: the folder's order, Finder's.
+### The review round
+
+- **The JPEG decoder's inverse DCT, Huffman tables and bit reader:** ITU-T T.81 alone (A.3.3, Annex C, F.2.2.3,
+  F.1.2.3, B.1.1.5), as "The review" says; the factors are the cosines of A.3.3's formula, worked out here.
+- **The bounds on bombs:** the PNG budget from RFC 1951's stored blocks (5 bytes of overhead each) and the PNG
+  standard's rows; the RLE rule from Microsoft's documentation of BI_RLE8 and BI_RLE4; the number of scans from what
+  encoders are known to write (libjpeg's simple progression and Photoshop's choices: their behaviour, not their code).
+- **The bombs in the tests:** the review's own designs (its gen_bombs.py: empty deflate blocks, runs past a row, EOB
+  runs over many scans), written again in C in `test_wundertow_image.c`.
+- **The viewer's replacement and its report:** the desktop's own calls in this tree (`client_close()`, struct
+  gui_sys's kill, the launcher's `app_starting`).
+
+No other program's source was used. The one behaviour matched is named above: the folder's order, Finder's (and the
+encoders' numbers of scans, which are only a limit's reason).
