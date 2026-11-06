@@ -849,6 +849,28 @@ static void boxes(void) {
 
 /**** timers, descriptors, the window's end ****/
 
+/* a burst: more events than gui.h reads at once (GW_QUEUE, 16) that the toolkit takes itself and the program hears
+   nothing of (the pointer moving over a label), then a key the program hears. gk_next() gives the key, never 0 first:
+   waiting as long as it takes (-1), with time left, and with none (0), the window's queue drained before 0 is said */
+static void bursts(void) {
+    struct gk *ui = window("Burst", 200, 100);
+    struct gk_event ev;
+    int ms, k, i, r;
+    static const int waits[] = { -1, 1000, 0 };
+    gk_label(gk_root(ui), "moves");
+    run(ui);
+    for(k = 0; k < 3; k++) {
+        ms = waits[k];
+        for(i = 0; i < 40; i++) gkf_pointer(10 + i % 4, 10, 0);
+        gkf_key(WIN_KEY_F12, 0);
+        r = gk_next(ui, &ev, ms);
+        CHECK(r == 1 && ev.type == GK_EV_KEY && ev.value == WIN_KEY_F12);
+        if(r != 1) printf("  (gk_next() with ms %d: %d)\n", ms, r);
+        CHECK(gk_next(ui, &ev, 0) == 0);                 /* and then nothing */
+    }
+    gk_close(ui);
+}
+
 static void loop(void) {
     struct gk *ui = window("Loop", 200, 100);
     struct gk_event ev;
@@ -1339,6 +1361,154 @@ static void modifiers(void) {
     gk_close(ui);
 }
 
+/**** stage 2: a text of several lines, progress bars, sliders, palettes ****/
+
+static void text_area(void) {
+    struct gk *ui = window("Text", 300, 200);
+    struct gk_widget *t, *ro, *after;
+    int x, y, w, h, from, to;
+    t = gk_text_area(gk_root(ui), 50, 64, 0);
+    gk_size(t, 0, 4 * 16 + 4);
+    gk_grow(t, 1, 0);
+    ro = gk_text_area(gk_root(ui), 51, 200, GK_READONLY);
+    gk_size(ro, 0, 2 * 16 + 4);
+    gk_grow(ro, 1, 0);
+    after = gk_button(gk_root(ui), "After", 52);
+    run(ui);
+    gk_bounds(t, &x, &y, &w, &h);
+    gk_focus(t);
+    gkf_type("one\ntwo\nthree");
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwo\nthree") && heard(GK_EV_CHANGE, 50));
+    CHECK(gkf_text(x + 5, y + 2, "one", GW_INK) && gkf_text(x + 5, y + 2 + 16, "two", GW_INK));
+    gkf_key(WIN_KEY_UP, 0);                             /* Up from after "three": the end of "two" */
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(3, 0);
+    run(ui);
+    CHECK(!strcmp(gkf_clip(), "wo"));
+    gkf_key(WIN_KEY_END, 0);
+    gkf_key(8, 0);
+    gkf_key(WIN_KEY_DELETE, 0);                         /* the line end: the lines join */
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwthree"));
+    gkf_key(9, 0);                                      /* Tab is not its own: the focus moves on */
+    run(ui);
+    CHECK(gk_focused(ui) == ro);
+    gk_set_text(t, "\tx\ny");                           /* a tab to the next multiple of 8 */
+    run(ui);
+    CHECK(gkf_text(x + 5 + 8 * 8, y + 2, "x", GW_INK) && gkf_text(x + 5, y + 2 + 16, "y", GW_INK));
+    gk_focus(t);
+    gkf_key(1, 0);                                      /* Ctrl+A, then typing past its 64 bytes: cut */
+    gkf_type("0123456789012345678901234567890123456789012345678901234567890123456789");
+    run(ui);
+    CHECK(strlen(gk_text(t)) == 64);
+    gk_set_text(t, "a\nb\nc\nd\ne\nf\ng\nh");
+    for(from = 0; from < 7; from++) gkf_key(WIN_KEY_DOWN, 0);
+    gkf_key(WIN_KEY_END, 0);
+    run(ui);
+    gk_text_cursor(t, &from, &to);
+    CHECK(from == to && from == (int)strlen("a\nb\nc\nd\ne\nf\ng\nh") && gkf_text(x + 5, y + 2 + 2 * 16, "g", GW_INK));   /* (the cursor is on "h"'s edge) */
+    gkf_wheel(x + 20, y + 20, -3);                      /* the wheel moves the view, not the cursor */
+    run(ui);
+    CHECK(gkf_text(x + 5, y + 2, "b", GW_INK));
+    gkf_advance(1000);
+    gkf_click(x + 5 + 2, y + 2 + 5);                    /* "b" */
+    gkf_type("B");
+    run(ui);
+    CHECK(!strncmp(gk_text(t), "a\nBb", 4));
+    /* the keys as surfos/win.h has them: Ctrl+End, Ctrl+Backspace a word, Ctrl+Left by words; Alt+X, Ctrl+Enter and
+       Ctrl+I (9 with Ctrl) the window's, no tab */
+    gk_set_text(t, "sea and sand");
+    gkf_key(WIN_KEY_END, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_BACKSPACE, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_CTRL);
+    gkf_key('x', WIN_MOD_ALT);
+    gkf_key(WIN_KEY_ENTER, WIN_MOD_CTRL);
+    gkf_key(9, WIN_MOD_CTRL);
+    gkf_key('!', 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "sea !and ") && count(GK_EV_KEY) == 3 && gk_focused(ui) == t);
+    /* one that takes Tab: a tab typed; Ctrl+Tab moves on */
+    {
+        struct gk_widget *tabby = gk_text_area(gk_root(ui), 53, 64, GK_TAKES_TAB);
+        gk_focus(tabby);
+        gkf_key(9, 0);
+        gkf_key('x', 0);
+        gkf_key(WIN_KEY_TAB, WIN_MOD_CTRL);
+        run(ui);
+        CHECK(!strcmp(gk_text(tabby), "\tx") && gk_focused(ui) != tabby);
+        gk_remove(tabby);
+    }
+    /* read-only: shown, selected and copied, never changed */
+    gk_set_text(ro, "fixed text");
+    gk_focus(ro);
+    gkf_type("x");
+    gkf_key(8, 0);
+    gkf_key(1, 0);
+    gkf_key(3, 0);
+    gkf_key(24, 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(ro), "fixed text") && !strcmp(gkf_clip(), "fixed text") && count(GK_EV_CHANGE) == 0);
+    (void)after;
+    gk_close(ui);
+}
+
+static void progress_slider_palette(void) {
+    struct gk *ui = window("More", 300, 200);
+    struct gk_widget *p, *s, *pal, *tools;
+    static const unsigned pencil[4] = { 0x153D49, 0xFF000000u, 0xFF000000u, 0x153D49 };
+    int x, y, w, h, i;
+    p = gk_progress(gk_root(ui), 200);
+    gk_set_text(p, "Half");
+    s = gk_slider(gk_root(ui), 60, 0, 100, 5);
+    pal = gk_palette(gk_root(ui), 61, 4, 16, 16);
+    for(i = 0; i < 6; i++) CHECK(gk_palette_color(pal, (unsigned)(0x100000 * i)) == i);
+    tools = gk_palette(gk_root(ui), 62, 2, 24, 24);
+    CHECK(gk_palette_icon(tools, pencil, 2, 2) == 0 && gk_palette_icon(tools, pencil, 2, 2) == 1);
+    CHECK(gk_palette_icon(tools, pencil, 40, 40) < 0);  /* larger than a cell */
+    gk_set_value(p, 100);
+    run(ui);
+    gk_bounds(p, &x, &y, &w, &h);
+    CHECK(gkf_pixel(x + 2, y + 5) == GW_TEAL && gkf_pixel(x + w - 3, y + 5) == SHEET);
+    CHECK(gkf_pixel(x + (w - 2) / 2 - 1, y + h - 2) == GW_TEAL && gkf_pixel(x + (w - 2) / 2 + 3, y + h - 2) == SHEET);
+    gk_set_value(p, 999);                               /* kept within */
+    CHECK(gk_value(p) == 200);
+    /* the slider: keys by its step, a click on its track, the wheel */
+    gk_bounds(s, &x, &y, &w, &h);
+    gkf_click(x + w - 2, y + h / 2);
+    run(ui);
+    CHECK(gk_value(s) == 100 && heard(GK_EV_CHANGE, 60) && gk_focused(ui) == s);
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(WIN_KEY_PGDN, 0);
+    run(ui);
+    CHECK(gk_value(s) == 45 && count(GK_EV_CHANGE) == 2);
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_wheel(x + 10, y + 5, -3);                       /* away from the user: up */
+    run(ui);
+    CHECK(gk_value(s) == 5);
+    gkf_drag(x + 1, y + 5, x + w / 2, y + 5);
+    run(ui);
+    CHECK(gk_value(s) == 50);
+    /* the palette: a click, the arrows */
+    gk_bounds(pal, &x, &y, &w, &h);
+    CHECK(w == 4 * 18 + 2 && h == 2 * 18 + 2 && gk_value(pal) == -1);
+    gkf_click(x + 1 + 18 + 8, y + 1 + 8);
+    run(ui);
+    CHECK(gk_value(pal) == 1 && heard(GK_EV_CHANGE, 61) && gk_palette_get_color(pal, 1) == 0x100000);
+    gkf_key(WIN_KEY_DOWN, 0);
+    run(ui);
+    CHECK(gk_value(pal) == 5);
+    CHECK(gk_palette_set_color(pal, 5, 0x123456) == 0 && gk_palette_get_color(pal, 5) == 0x123456);
+    run(ui);
+    CHECK(gkf_pixel(x + 1 + 18 + 8, y + 1 + 18 + 8) == 0x123456);
+    gk_bounds(tools, &x, &y, &w, &h);
+    gkf_click(x + 1 + 26 + 12, y + 1 + 12);
+    run(ui);
+    CHECK(gk_value(tools) == 1 && gkf_pixel(x + 1 + 26 + 11, y + 1 + 11) == 0x153D49);
+    gk_close(ui);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     libgui();
@@ -1352,12 +1522,15 @@ int main(void) {
     areas();
     boxes();
     loop();
+    bursts();
     menus();
     submenus();
     paste();
     choosers();
     theme();
     modifiers();
+    text_area();
+    progress_slider_palette();
     gkf_reset(0, 0);
     printf("test_gk: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

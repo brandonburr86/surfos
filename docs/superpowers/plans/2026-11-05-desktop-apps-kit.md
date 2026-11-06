@@ -11,7 +11,9 @@ Everything here is written for this tree, from its own code and from no other to
 - **The look** is the desktop's own, read from this tree: `shell/guidraw.c` (the palette, buttons, scroll bars and
   their thumb arithmetic, `gd_thumb()` and `gd_scroll_to()`), `shell/guidialog.c` (the dialogs' layout, the text box,
   the buttons from the right), `shell/guicore.c` and `shell/guimon.c` (toolbars, the lit tab, status bars, list rows).
-  Check boxes, switches and radio buttons, which the desktop has none of, are drawn here in its colours.
+  Check boxes, switches and radio buttons, which the desktop has none of, are drawn here in its colours; so are
+  stage 2's slider and palettes. The progress bar is the desktop's meter (`shell/guimeter.c`), and the text of
+  several lines edits as Notepad does (`shell/guinote.c`).
 - **The layout** (boxes that stack their children and share what is left over by weight, a child that grows filling
   the box across) is the common idea of box layout, not any toolkit's code; the arithmetic is this file's.
 - **Damage tracking** (rectangles merged when their box is not much more than they are, presented each) is the
@@ -47,6 +49,33 @@ Everything here is written for this tree, from its own code and from no other to
   driver/cp437.c's own `utf8_feed()`, so a label the toolkit cleans is held to the kernel's rule, not the toolkit's).
 - **The demonstration** `wkit` (`user/wkit/`: `demo.c` the window, `main.c` the loop), its host test
   `tests/host/test_wkit.c` and its screen checks `tools/gui_apps_kit.py`; its page `rootfs/man/wkit.txt`.
+
+### Stage 2
+
+- **A text of several lines** (`gk_text_area()`, `gktext.c`), for small texts (notes, a description, an address
+  list): edited as Notepad edits, lines at \n that do not wrap, the view following the cursor down and across, a tab
+  to the next multiple of 8 columns; the keys of a field (Ctrl with the arrows by words, Ctrl+Backspace and
+  Ctrl+Delete a word) and Up, Down, Page Up, Page Down, Ctrl+Home and Ctrl+End, Up and Down keeping their column; the
+  mouse (a click, a drag that scrolls past an edge, a double-click a word, a third click the line); the clipboard (all
+  of a paste, a CR LF as one line end); `GK_READONLY` to show text that is selected and copied but never changed; Tab
+  moves on unless `GK_TAKES_TAB`. It keeps one buffer of at most its max bytes and finds its lines by scanning it:
+  its work grows with its text, which is why it is for small texts and an editor draws an area of its own.
+- **A progress bar** (`gk_progress()`): the desktop's meter (System Monitor's bar), filled in teal, its text in the
+  middle in the accent's text over the fill and in ink beyond it.
+- **A slider** (`gk_slider()`): a whole number from min to max by a step, by the arrows, Page Up and Down (ten
+  steps), Home and End, a click or a drag on the track (the value under the knob's middle), the wheel.
+- **Palettes** (`gk_palette()`): cells of colours (`gk_palette_color()`) or small pictures
+  (`gk_palette_icon()`, pixels whose top byte is set see-through), one chosen, by a click or the arrows: Paint's
+  colours and tools.
+- **What the app tracks report needing:** no app track had reported a need to this track by the time stage 2 was
+  done (no message reached it), so stage 2 is the brief's list; an app that needs more draws it in an area, and the
+  integrator can route a request here.
+- **The docs:** `user/include/gui.h` (floating point is allowed: the kernel keeps each program's registers since
+  robustness B2; libgui and the toolkit draw in whole pixels) and `docs/GUI.md`'s "Programs' windows" (the same, and
+  the toolkit). CLAUDE.md's "integer-only" note in "Windows for programs" is the integrator's to change (the brief
+  gives the docs to this track, the coordinator kept CLAUDE.md for the integrator): it should say that a windowed
+  program may use floating point, and point to gk.h.
+- **wkit** gains a fourth page, More: notes, the seconds of the minute, a volume, colours and tools.
 
 ### Decisions a reviewer would ask about
 
@@ -164,7 +193,13 @@ Everything here is written for this tree, from its own code and from no other to
   answer to a person, answered 0 when the window is let go, a path chosen just before it still taken, the line typed
   instead on a desktop without them, from a kernel before them); the theme (read at the opening, followed);
   modifiers on keys and the pointer as desk defines them (Ctrl+I, Ctrl+M, Ctrl+Enter, Alt, repeats, Ctrl+Tab).
-- **test_wkit**: the demonstration's window driven as a person drives it, on the fake desktop.
+- **test_gk, stage 2:** the text of several lines (typing, lines joined and split, Up and Down keeping their column,
+  a tab's columns, its max, the view following the cursor, the wheel, a click, read-only text copied but never
+  changed, the amended keys: Ctrl+End, Ctrl+Backspace, Ctrl+Left, Alt+X, Ctrl+Enter and Ctrl+I the window's, a tab
+  typed where it takes Tab and Ctrl+Tab moving on); the progress bar's fill and text; the slider by keys, a click, a
+  drag and the wheel; palettes of colours and pictures by a click and the arrows.
+- **test_wkit**: the demonstration's window driven as a person drives it, on the fake desktop (stage 2: its More
+  page).
 - **The guiapps scenario** (`GUIAPPS_ONLY=gui_apps_kit`): wkit on the desktop of a USB-booted SurfOS.
 - On the Mac, natively (x86_64 under Rosetta, as the Docker image is 32-bit x86): test_gk and test_wkit with
   AddressSanitizer and UndefinedBehaviorSanitizer, kept out of `make unittest` as the brief says.
@@ -179,11 +214,18 @@ Counts at the gates:
   passed at -O0 and -O2, 35 of 35 checks, 29 of them wkit's. Natively with ASan and UBSan: test_gk and test_wkit
   clean. Each of the six commits was also checked out alone and its libgui and toolkit compiled natively, its host
   tests run where it has them.
+- **Stage 2** (its five commits): `make unittest` passed, test_gk 430 checks and test_wkit 70 among it; `make test-all`
+  passed at -O0 and -O2, 51 Files and 558 smoke checks each; the guiapps scenario passed at -O0 and -O2, 41 of 41
+  checks, 35 of them wkit's (a first run at -O0 failed one of the More page's own checks: it read a palette cell's
+  pixel under the pointer its click had left there; the check moves the pointer off first now). Natively with ASan
+  and UBSan: clean; each commit checked out alone, compiled, its host tests run.
 
 ## Left out, and why
 
 - **No widget the six applications do not need:** no tree view, combo box, spin box, tooltip, drag and drop between
   widgets, or multiple selection in a list. A program that needs one draws it in an area.
+- **A text of several lines neither wraps nor undoes nor finds:** it is for small texts; Notepad and the Code
+  Editor are programs of their own.
 - **One font, one size.** Text is the console's 8 x 16 cells (code page 437, '?' for a character it lacks), as the
   desktop's own windows are; `gw_text_scaled()` stays for large digits. No proportional text: that is the browser's
   own (user/wundertow/font.c).
