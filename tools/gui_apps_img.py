@@ -7,9 +7,9 @@ JPEG, each where its pixels should be, then a PNG with transparency over the squ
 which the status bar says is no picture while the one before stays, then a screenshot as the desktop names them (spaces
 in its name), then around to the first; P steps back. I shows the file's details over the room, and Esc puts them
 away; Ctrl+C puts the path on the desktop's clipboard, which the Terminal's Edit > Paste gives back once Esc has closed
-the window. Then the desktop's ways in: Files opens a PNG in the Image Viewer, where the desktop's Image Viewer stood;
-O there asks the desktop's chooser (found by its own title), which opens the JPEG; Apps > Image Viewer starts it with no
-picture. The pictures are the stick's (STICK): two made here, the others the browser's test pictures
+the window. Then the desktop's ways in: Files opens a PNG in the Image Viewer, where the desktop's Image Viewer stood,
+then a GIF and a BMP, each in place of the one before, so that one viewer is left; O there asks the desktop's chooser
+(found by its own title), which opens the JPEG; Apps > Image Viewer starts it with no picture. The pictures are the stick's (STICK): two made here, the others the browser's test pictures
 (tests/fixtures/wundertow/images/). The stick is mounted in the Terminal and in Files and let go again, and the
 Terminal and Files closed, also when a check fails.
 """
@@ -31,6 +31,7 @@ NAVY, INK, BAND = bytes.fromhex('102e3b'), bytes.fromhex('153d49'), bytes.fromhe
 TEAL_C, PAPER_C = bytes.fromhex('197d83'), bytes.fromhex('f4f1e6')
 SQUARES = (bytes.fromhex('f4f1e6'), bytes.fromhex('c9cfc4'))     # view.c's over(): where a picture is not there
 PARK = (900, 480)
+FILES_BAR = (24 + 40, 48 + 14)                      # Files' title bar left of where the Image Viewer stands (gui_init)
 QUAD = ((0x10, 0x20, 0x30), (0x40, 0x50, 0x60), (0x70, 0x80, 0x90), (0xa0, 0xb0, 0xc0))   # TL, TR, BL, BR
 SHOT = 'Screenshot 2026-11-05 120000.bmp'         # as the desktop names a screenshot: spaces in it
 FOLDER = ['a-quad.png', 'b-plain.gif', 'c-rgb24.bmp', 'd-base444.jpg', 'e-rgba8.png', 'g-broken.png', SHOT]
@@ -313,11 +314,21 @@ def desktop(d):
         suite.select(d, suite.files_row(d, s, 'img', 2))
         d.key('ret')
         s = d.visible('Enter opens the img folder', lambda s: suite.files_row(d, s, 'a-quad.png', 3) is not None)
-        suite.select(d, suite.files_row(d, s, 'a-quad.png', 3))
+        rows = {name: suite.files_row(d, s, name, 3) for name in ('a-quad.png', 'b-plain.gif', 'c-rgb24.bmp')}
+        suite.select(d, rows['a-quad.png'])
         d.key('ret')
         d.visible('Files: Enter on a PNG starts wview on it, where the desktop\'s Image Viewer stood, with the focus',
                   lambda s: titled(d, s, at, 'a-quad.png - Image Viewer', True) and picture(d, s, at, 42, 30, quadrant, step=3) and
                   status(d, s, at, 'a-quad.png  42 x 30, PNG  (1 of 7)'), 'guiapps-img-files.png', timeout=40)
+        for name, colour, w, h in (('b-plain.gif', gif, 23, 17), ('c-rgb24.bmp', lambda px, py: pattern(px, py, 23, 17), 23, 17)):
+            d.click(FILES_BAR[0], FILES_BAR[1])     # Files again, by its title bar (wview has the keys)
+            d.move(*PARK)
+            d.visible(f'a click on its title bar gives Files the focus again, for {name}', suite.files_front(d))
+            suite.select(d, rows[name])
+            d.key('ret')
+            d.visible(f'Files: Enter on {name} shows it in the Image Viewer\'s window, in place of the one there',
+                      lambda s: titled(d, s, at, f'{name} - Image Viewer', True) and picture(d, s, at, w, h, colour, step=2),
+                      timeout=40)
         d.key('o')
         d.visible('O asks the desktop\'s chooser: its own title, Open a file',
                   lambda s: media.open_chooser(d, s), 'guiapps-img-chooser.png')
@@ -327,8 +338,10 @@ def desktop(d):
                   picture(d, s, at, 40, 30, lambda px, py: pattern(px, py, 40, 30), tolerance=12, step=3) and
                   status(d, s, at, 'd-base444.jpg  40 x 30, JPEG  (4 of 7)'), 'guiapps-img-chosen.png', timeout=30)
         d.key('ctrl-w')
-        d.visible('Ctrl+W ends wview, and its window goes',
-                  lambda s: not titled(d, s, at, 'd-base444.jpg - Image Viewer'), timeout=20)
+        d.visible('Ctrl+W ends wview, and its window goes; of three pictures opened from Files, no other viewer is left',
+                  lambda s: not any(titled(d, s, at, f'{name} - Image Viewer')
+                                    for name in ('a-quad.png', 'b-plain.gif', 'c-rgb24.bmp', 'd-base444.jpg')),
+                  'guiapps-img-one-viewer.png', timeout=20)
         d.open_app('Image Viewer')
         d.visible('Apps > Image Viewer starts wview with no picture, where the Image Viewer stands: only Open can be used',
                   lambda s: titled(d, s, at, 'Image Viewer', True) and

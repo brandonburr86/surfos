@@ -367,41 +367,93 @@ static bool shows(int x, int y, const char *s, u32 fg) {
 
 /* The Image Viewer is the program wview: its tile and Apps start /initrd/bin/wview, or bring its window back; a file
    (Files' rule for what no registry entry names, Open with) starts it with the file's path as its one argument, at the
-   Image Viewer's place; a start refused is said; the pictures it takes are the four kinds the program reads */
+   Image Viewer's place; a start refused is said; the pictures it takes are the four kinds the program reads.
+   11/05/26 (the review): one from Files at a time: a file replaces the wview there (told to close, or ended when it
+   has no window yet, or did not go when told); a desktop whose programs have every window they may have starts
+   nothing; a wview whose window never comes is said on the screen */
 static void viewer_entry(void) {
+    int a, b, id, i, others[GUI_CLIENTS];
+    u32 n;
     desktop(960, 540);
+    fake_file("/home/sea shore.png", "\x89PNG", 4);
+    fake_file("/home/q.bmp", "BM", 2);
+    fake_file("/home/r.gif", "GIF89a", 6);
     CHECK(gui_app_viewer.program && !strcmp(gui_app_viewer.program, "/initrd/bin/wview"));
     CHECK(viewer_takes("a.bmp") && viewer_takes("B.PNG") && viewer_takes("c.Gif") && viewer_takes("d.jpg") &&
           viewer_takes("Screenshot 2026-11-05 120000.bmp") && viewer_takes("e.JPEG"));
     CHECK(!viewer_takes(".bmp") && !viewer_takes("bmp") && !viewer_takes("a.bmpx") && !viewer_takes("a.tiff") &&
           !viewer_takes("a.txt") && !viewer_takes("jpeg"));
-    fake_file("/home/sea shore.png", "\x89PNG", 4);
-    fake_file("/home/q.bmp", "BM", 2);
     gui_act(&g, ACT_WINDOW + GUI_VIEWER);               /* Apps > Image Viewer: the program, at the Image Viewer's place */
     CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "/initrd/bin/wview") && !g.win[GUI_VIEWER].open);
     CHECK(gui_app_slot_of(&g, 77) == GUI_VIEWER);
-    fake_run_result = 78;                               /* a file: another wview, its window the Image Viewer's now */
+    fake_run_result = 78;                               /* a file before its window came: that one is ended */
     viewer_show(&g, "/home/sea shore.png");
-    CHECK(fake_run_file_count == 1 && !strcmp(fake_run_program, "wview") && !strcmp(fake_run_arg, "/home/sea shore.png"));
-    CHECK(!g.dialog.kind && gui_app_slot_of(&g, 78) == GUI_VIEWER && gui_app_slot_of(&g, 77) == -1);
-    CHECK(fake_run_count == 1 && !g.win[GUI_VIEWER].open);
-    fake_run_result = -2;                               /* ENOENT: no such program; the one before keeps its place */
+    CHECK(fake_killed == 77 && fake_run_file_count == 1 && !strcmp(fake_run_program, "wview"));
+    CHECK(!strcmp(fake_run_arg, "/home/sea shore.png") && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 78) == GUI_VIEWER && gui_app_slot_of(&g, 77) == -1 && fake_run_count == 1);
+    a = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 78);   /* wview's */
+    fake_win_present(a, 0x102E3B);                      /* its window comes: at the Image Viewer's place, in front */
+    ticks(1);
+    id = client_of_pid(&g, 78);
+    CHECK(id >= 0 && g.win[id].x == g.win[GUI_VIEWER].x && g.win[id].y == g.win[GUI_VIEWER].y && g.focus == id);
+    fake_killed = 0;                                    /* another file: the window there is told to close */
+    fake_run_result = 79;
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_win_count(a, WIN_EV_CLOSE) == 1 && !fake_killed && fake_run_file_count == 2);
+    CHECK(gui_app_slot_of(&g, 79) == GUI_VIEWER && gui_app_slot_of(&g, 78) == -1 && !g.dialog.kind);
+    fake_win_end(a);                                    /* wview ends: its window goes */
+    ticks(1);
+    CHECK(client_of_pid(&g, 78) < 0);
+    b = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 79);
+    fake_win_present(b, 0x102E3B);
+    ticks(1);
+    id = client_of_pid(&g, 79);
+    CHECK(id >= 0 && g.win[id].x == g.win[GUI_VIEWER].x && g.win[id].y == g.win[GUI_VIEWER].y);
+    client_close(&g, id);                               /* told to close by its button, and still there: */
+    CHECK(fake_win_count(b, WIN_EV_CLOSE) == 1);
+    fake_run_result = 80;                               /* the next file ends it */
     viewer_show(&g, "/home/q.bmp");
-    CHECK(fake_run_file_count == 2 && g.dialog.kind == GUI_DLG_MESSAGE && gui_app_slot_of(&g, 78) == GUI_VIEWER);
+    CHECK(fake_killed == 79 && fake_win_count(b, WIN_EV_CLOSE) == 1 && fake_run_file_count == 3 && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 80) == GUI_VIEWER);
+    fake_win_end(b);
+    ticks(1);
+    g.now += 5000;                                      /* 80's window never comes: said, once */
+    ticks(1);
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not shown"));
     key(27);
-    fake_run_result = 79;                               /* no file: said, and nothing started */
+    ticks(2);
+    CHECK(!g.dialog.kind);
+    fake_run_result = -2;                               /* ENOENT: no such program; said, and nothing is the viewer's */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE);
+    key(27);
+    fake_run_result = 81;                               /* no file: said, and nothing started */
     viewer_show(&g, "/home/gone.png");
-    CHECK(fake_run_file_count == 2 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0], "gone.png"));
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0], "gone.png"));
     key(27);
     viewer_show(&g, "/home");
-    CHECK(fake_run_file_count == 2 && g.dialog.kind == GUI_DLG_MESSAGE);
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE);
     key(27);
     device = "/home/q.bmp";                             /* a device named as a picture */
     viewer_show(&g, "/home/q.bmp");
-    CHECK(fake_run_file_count == 2 && g.dialog.kind == GUI_DLG_MESSAGE && strstr(g.dialog.text[1], "device"));
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && strstr(g.dialog.text[1], "device"));
     key(27);
     device = "";
-    CHECK(!g.dialog.kind && gui_app_slot_of(&g, 78) == GUI_VIEWER && gui_app_slot_of(&g, 79) == -1);
+    for(i = 0; i < GUI_CLIENTS; i++) {                  /* every window programs may have, none the viewer's: */
+        others[i] = fake_win_open(200, 100, 0, 0x203040, "Other", 200 + i);
+        fake_win_present(others[i], 0x203040);
+    }
+    ticks(2);
+    CHECK(client_count(&g) == GUI_CLIENTS);
+    viewer_show(&g, "/home/q.bmp");                     /* nothing starts: its window could not open */
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not opened"));
+    key(27);
+    for(i = 0; i < GUI_CLIENTS; i++) fake_win_end(others[i]);
+    ticks(2);
+    /* only Sketch's three numbers go to Sketch */
+    gui_answer(&g, gui_app_act(GUI_VIEWER, 23), 0, "/home/zz.bmp", "");
+    gui_answer(&g, gui_app_act(GUI_VIEWER, 19), 0, "/home/zz.bmp", "");
+    CHECK(!g.dialog.kind && !fake_data("/home/zz.bmp", &n));
     fake_run_result = 77;
     gui_finish(&g);
 }
