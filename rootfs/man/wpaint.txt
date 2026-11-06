@@ -9,8 +9,9 @@ DESCRIPTION
     It needs a desktop: Apps > Programs and its tile start it, and
     Files' Open with offers it for a picture. Given a picture, it opens
     it. It opens BMP, PNG, GIF and JPEG files (of up to 72 MB) and
-    saves BMP (24 bits) and PNG files; a picture's transparent pixels
-    are opened onto white.
+    saves BMP (24 bits) and PNG files. A picture's transparent pixels
+    are opened onto white, and a PNG of 16 bits a sample is kept at 8;
+    Paint says so, and asks before a save replaces such a file.
 
     The tools, at the left, and in the Tools menu: the pencil, the
     brush, the eraser, lines, rectangles and ellipses (outlined or
@@ -44,7 +45,8 @@ DESCRIPTION
     file is replaced. A file is replaced as edit saves one: a new file
     beside it, renamed over it; Paint never saves over a file that may
     share its space with a .tmp beside it. New, Open and Close ask first
-    when there are changes not saved.
+    when there are changes not saved, and again if the picture changes
+    before it goes.
 
 KEYS
     P B E L R O      pencil, brush, eraser, line, rectangle, ellipse
@@ -65,8 +67,10 @@ LIMITS
     No transparency, no layers, no anti-aliasing. Paint saves no GIF
     or JPEG: Save of such a picture asks for a .png or .bmp name. Its
     clipboard holds pixels for Paint alone; the desktop's clipboard
-    pastes text into text being typed. Everything Paint keeps comes to
-    at most about 126 MB.
+    pastes text into text being typed, without control characters.
+    Paint keeps at most about 126 MB (82 MB at 2000 by 2000); opening
+    a picture needs room for the file and the decoder beside that, up
+    to about 340 MB for the largest progressive JPEG.
 
 SEE ALSO
     gui, wkit

@@ -22,10 +22,17 @@ largest canvas is 64,000,000 bytes by itself; Paint keeps at most twice that and
 and in what is left the history, the change under way, the selection and the clipboard, so that
 on the largest canvas a new size, a selection of all of it, or a picture opened in its place
 still fit beside it. When a block would go past the bound, the oldest steps of the history go
-first; if that is not enough, what asked is refused and the status line says why. The history itself keeps
-at most PAINT_UNDO_MAX bytes and PAINT_UNDO_STEPS steps, the oldest dropped first; a single
-change larger than that is made but cannot be undone, and the whole history is dropped with it
-(as Notepad's history is by a paste too large to keep).
+first, as many as it needs, but only when that is enough: what even the whole history could not
+make room for is refused at once, every step kept, and the status line says why. The history
+itself keeps at most PAINT_UNDO_MAX bytes and PAINT_UNDO_STEPS steps, the oldest dropped first; a
+single change larger than that is made but cannot be undone, and the whole history is dropped with
+it (as Notepad's history is by a paste too large to keep). At 2000 x 2000 the bound's parts come to
+about 82 MB at most: the canvas 16, the history 32 MiB, the clipboard and a lifted selection 16 each.
+
+Opening a picture holds more for its moment, beside the bound (files.c): the file's bytes (72 MB at
+most), the decoder's picture (64,000,000 bytes) and its work (a progressive JPEG's coefficients, 64
+MiB at most). With Paint at its bound and the largest such file, that comes to about 340 MB at the
+very peak; the file's bytes go as soon as the decoder is done with them.
 
 The history saves changed regions, not whole canvases: the canvas is cut into tiles of
 PAINT_TILE x PAINT_TILE pixels, and the first time a change touches a tile its pixels are saved,

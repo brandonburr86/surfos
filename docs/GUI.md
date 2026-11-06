@@ -687,7 +687,9 @@ zoom.
 * **The canvas.** 32-bit colour, up to 4096 pixels each way and 16,000,000 in all (4000 x 4000), so
   that every picture Paint makes can be saved and opened again. A new one is 640 x 400, white;
   File > New asks its size, Image > Canvas size changes it from its top left (the new part the
-  second colour). Paint has no transparency: a picture's transparent pixels open onto white.
+  second colour). Paint has no transparency: a picture's transparent pixels open onto white, and a
+  PNG of 16 bits a sample is kept at 8; the status line says so, and a save that would replace
+  such a file asks first (Save as…, Enter's, Save, or Cancel).
 * **The tools** (the palette, the Tools menu, or a key): pencil P, brush B, eraser E, line L,
   rectangle R, ellipse O, fill F, text T, colour picker K, select S. The left button draws in the
   first colour, the right in the second, and the eraser paints the second. Under the tools are the
@@ -699,7 +701,8 @@ zoom.
   * The fill fills the area of the colour clicked, 4-connected, however large and twisted.
   * Text: a click starts it, keys type it in the console's characters (UTF-8 as code page 437, `?`
     for one it lacks), Enter starts a line, Ctrl+V pastes the desktop's clipboard's text into it. A
-    click elsewhere or another tool draws it; Esc or Undo drops it.
+    click elsewhere or another tool draws it; Esc or Undo drops it. Control characters in pasted
+    text are left out.
   * The colour picker takes the colour clicked (the right button: as the second colour) and gives
     the tool before it back.
 * **The selection.** A drag with the selection tool marks a rectangle. A drag inside it, or the
@@ -726,12 +729,15 @@ zoom.
   offered. A file you have is replaced as `edit` saves one (`user/bin/saveutil.h`: a new file beside
   it, fsynced and renamed over it), never one that may share its space with a `.tmp` beside it, and
   a file Paint makes is removed again if the save fails. New, Open and Close ask first about
-  changes not saved (Save, Don't save, Cancel). A file of more than 72 MB, or one that is no picture,
-  is refused, and the canvas stays as it was.
+  changes not saved (Save, Don't save, Cancel), and again if the picture changes before it goes;
+  while one of Paint's boxes is open its menus in the bar do nothing. A file of more than 72 MB,
+  or one that is no picture, is refused, and the canvas stays as it was.
 * **Limits.** No transparency, layers or anti-aliasing; no GIF or JPEG saved. Its clipboard is
-  Paint's own (the desktop's holds text). Everything it keeps comes to at most 126 MB, twice the
-  largest canvas and 4 MB: the history gives way first, and what does not fit then is refused,
-  saying so.
+  Paint's own (the desktop's holds text). What it keeps comes to at most 126 MB, twice the largest
+  canvas and 4 MB (82 MB at 2000 x 2000): the history gives way first, and what even all of it
+  could not make room for is refused, saying so, every step kept. Opening a picture holds the
+  file and the decoder's memory beside that for a moment: about 340 MB at the very peak, for the
+  largest progressive JPEG with Paint at its bound.
 
 ## Programs' windows
 
