@@ -168,6 +168,10 @@ static void views(void) {
 static void toolbar(void) {
     struct view_tool t, u;
     int i, x;
+    /* 11/05/26 (the review): the window fits the smallest desktop, 640 x 400 (a menu bar of 28 and a taskbar of 26), as
+       the desktop's Image Viewer's did (test_guimedia's check, whose window this is now): the narrowest with its frame of
+       2 with room to spare, the first size whole, and the lowest under the title bar of 28 and the frame's last line */
+    CHECK(VIEW_MIN_W + 2 <= 640 - 48 && VIEW_W + 2 <= 640 && VIEW_MIN_H + 28 + 1 <= 400 - 28 - 26);
     view_init(&v, VIEW_W, VIEW_H);
     /* the desktop's toolbar: 8 from the window's edge (7 in its content), 4 apart, 22 high, a character 8 wide and 14 more */
     for(i = 0, x = 7; i < VT_COUNT; i++) {

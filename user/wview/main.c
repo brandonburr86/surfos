@@ -10,12 +10,15 @@ the file's details and Copy path. "wview FILE" shows FILE; the desktop starts it
 from its Image Viewer entry (shell/guiview.c), and Open asks the desktop's chooser (WIN_DIALOG, its
 answer taken with WIN_TAKE).
 
-A file is read whole, at most FILE_MAX bytes, then decoded, and its bytes go again: what is kept is
-the picture as decoded, at most the decoders' 16 megapixels (64 MB). The picture shown stays until
-another is good, so a file that is no picture, or too big for the memory there is, costs only a
-line in the status bar. Esc, Ctrl+W or the close button end it; there is nothing to save. The
-window takes the focus only as the desktop gives it (the launcher's rule). Status 0, or 2 when it
-could not start (no window: not run on the desktop).
+A file is read whole, at most FILE_MAX bytes (BMP_MAX for a BMP, whose pixels are stored as they
+are), then decoded, and its bytes go again: what is kept is the picture as decoded, at most the
+decoders' 16 megapixels (64 MB). The picture shown stays until another is good, so a file that is
+no picture, or too big for the memory there is, costs only a line in the status bar. Esc, Ctrl+W
+or the close button end it; there is nothing to save. The window takes the focus only as the
+desktop gives it (the launcher's rule). Status 0, or 2 when it could not start (no window: not run
+on the desktop).
+11/05/26 (the review): BMP_MAX; a chooser's answer that is no picture leaves the folder and the
+place of the picture still shown; EAGAIN said as win.h means it.
 */
 
 #include <stdio.h>
@@ -31,7 +34,8 @@ could not start (no window: not run on the desktop).
 #include <image.h>
 #include "view.h"
 
-#define FILE_MAX (32u << 20)                    /* a file read whole: a BMP of 11 megapixels in 24 bits */
+#define FILE_MAX (32u << 20)                    /* a file read whole: a PNG, GIF or JPEG */
+#define BMP_MAX  (WIMG_PIXELS_MAX * 4u + (1u << 20))   /* a BMP: the decoders' most pixels at 32 bits, and its headers */
 
 static struct view v;
 static struct wimg pic;                         /* the picture shown, as decoded */
@@ -59,10 +63,15 @@ static int read_whole(const char *path, unsigned char **out, size_t *len, struct
         close(fd);
         return -1;
     }
-    if((unsigned long long)st->st_size > FILE_MAX) {
-        snprintf(why, n, "a file of %u MB: over the limit of %u MB", (unsigned)(st->st_size >> 20), FILE_MAX >> 20);
-        close(fd);
-        return -1;
+    if((unsigned long long)st->st_size > FILE_MAX) {    /* only a BMP may be larger: its first bytes say so */
+        unsigned char head[2];
+        int bmp = read(fd, head, 2) == 2 && head[0] == 'B' && head[1] == 'M' && lseek(fd, 0, SEEK_SET) == 0;
+        if(!bmp || (unsigned long long)st->st_size > BMP_MAX) {
+            snprintf(why, n, "a file of %u MB: over the limit of %u MB (%u MB for a BMP)", (unsigned)(st->st_size >> 20),
+                     FILE_MAX >> 20, BMP_MAX >> 20);
+            close(fd);
+            return -1;
+        }
     }
     buf = malloc((size_t)st->st_size + 1);      /* one byte more: a file that grew meanwhile is seen */
     if(!buf) {
@@ -133,7 +142,9 @@ static void list_folder(const char *path) {
 }
 
 /* path shown: 0; or -1, the picture before staying, and the status bar saying why. list: path was chosen (not
-   stepped to), so its folder is listed, and N and P step from it even when it is no picture */
+   stepped to), so its folder is listed once it shows, and N and P step from it. 11/05/26 (the review): a chosen
+   file that is no picture leaves the folder and the place of the picture still shown; with none shown yet, its
+   folder is listed all the same, so that N and P step from it */
 static int show(const char *path, int list) {
     char full[VIEW_PATH], why[WIMG_ERR_MAX + 64];
     unsigned char *bytes;
@@ -145,10 +156,7 @@ static int show(const char *path, int list) {
         snprintf(v.status, sizeof(v.status), "%s: the path is too long", view_name(path));
         return -1;
     }
-    if(list) {
-        list_folder(full);
-        v.file.index = v.file.count = 0;        /* the picture shown is none of these until the new one shows */
-    }
+    if(list && !pic.px) list_folder(full);
     if(read_whole(full, &bytes, &len, &st, why, sizeof(why))) {
         snprintf(v.status, sizeof(v.status), "%s: %s", view_name(full), why);
         return -1;
@@ -160,6 +168,7 @@ static int show(const char *path, int list) {
         return -1;
     }
     free(bytes);
+    if(list && pic.px) list_folder(full);
     wimg_free(&pic);
     pic = m;
     memset(&v.file, 0, sizeof(v.file));
@@ -211,7 +220,8 @@ static void ask_open(struct gw *win) {
     snprintf(d.types, sizeof(d.types), "bmp png gif jpg jpeg");
     if(winctl(win->fd, WIN_DIALOG, &d) == 0) return;
     snprintf(v.status, sizeof(v.status), "%s", errno == EBUSY ? "Open: the chooser is open already" :
-             errno == EAGAIN ? "Open: the desktop is busy: try again" : errno == EACCES ? "Open: the window must have the focus" :
+             errno == EAGAIN ? "Open: this window's events wait to be read: try again" :
+             errno == EACCES ? "Open: the window must have the focus" :
              errno == EINVAL ? "Open: this desktop has no chooser for programs" : "Open: the chooser could not be shown");
 }
 

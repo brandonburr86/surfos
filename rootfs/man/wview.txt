@@ -35,11 +35,15 @@ KEYS
     A double-click switches between fitting and the actual size.
 
 LIMITS
-    A file of 32 MB at most, read whole; a picture of 4096 pixels a
-    side and 16 megapixels at most; a GIF's first frame only; JPEG
-    baseline and progressive, not arithmetic, 12-bit or lossless. A
-    folder's first 4096 pictures are stepped through. It shows and
-    never changes a picture: there is nothing to save.
+    A file is read whole: 32 MB at most, or 62 MB for a BMP, whose
+    pixels are stored as they are (16 megapixels of 32 bits). A
+    picture of 4096 pixels a side and 16 megapixels at most; a GIF's
+    first frame only; JPEG baseline and progressive (32 scans at most),
+    not arithmetic, 12-bit or lossless. A folder's first 4096 pictures
+    are stepped through. Opening a file from Files shows it in the
+    Image Viewer's one window, in place of the picture there; File >
+    Open with starts another. It shows and never changes a picture:
+    there is nothing to save.
 
 SEE ALSO
     gui, files, wundertow, wclock, wcharmap
