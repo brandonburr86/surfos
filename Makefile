@@ -1155,10 +1155,12 @@ $(BUILD)/host/test_wview: tests/host/test_wview.c user/wview/view.c user/wview/f
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wview tests/host/test_wview.c user/wview/view.c user/wview/folder.c -o $@
-unittest-img: $(BUILD)/host/test_image_save $(USER_LIB) $(BUILD)/host/test_wview $(BUILD)/user/bin/wview
+unittest-img: $(BUILD)/host/test_image_save $(USER_LIB) $(BUILD)/host/test_wview $(BUILD)/user/bin/wview \
+              $(BUILD)/host/test_wundertow_image
 	$(BUILD)/host/test_image_save
 	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
 	$(BUILD)/host/test_wview
+	$(PYTHON) tests/test_image_jpeg.py $(BUILD)/host/test_wundertow_image tests/fixtures
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
