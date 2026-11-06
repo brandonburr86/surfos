@@ -674,6 +674,34 @@ for the programs of the desktop applications, and for any other program with a w
   or the `settings` command applies at once; a change made in Pointer & desktop is written there
   when there is a settings stick, and its last line says whether it was.
 
+### Chat
+
+*11/05/26* (the desktop applications, track chat: `docs/superpowers/plans/2026-11-05-desktop-apps-chat.md`): **Chat**
+talks on IRC. It is a program, `wchat` (`user/wchat/`), in Apps > Programs and on a tile of the desktop
+(`rootfs/apps/wchat.app`); `man wchat` has its commands and keys.
+
+* **Connecting.** The window opens on a form: the server, the port, TLS (on, port 6697; off, 6667), the nick, and a
+  password for the server (PASS) or for SASL (the nick's account), in a field of dots. Connect starts the connection;
+  the password goes to the server once, and nothing keeps it after that (the next connection asks again). With TLS
+  the server's certificate is checked as Undertow checks a web server's: a trusted issuer, the server's name, valid
+  now, nothing to turn off.
+* **The rooms** are tabs over the messages: the server's room first, then each channel and query, with how many lines
+  came since you looked at it and `!` for a line that names you. A tab's `x` leaves its channel or closes its query.
+  A channel's topic is above the messages and its nick list at their right (`@`, `+` first); a double-click on a nick
+  opens a query with it.
+* **Messages** come with their times. A line wraps at spaces under the text after the time. The formatting codes others
+  send are drawn (bold, colours, underline, strikethrough, reverse), or left out (View > Formatting); a colour that
+  cannot be read on the background is drawn in the theme's ink. The messages follow the newest line while you are at
+  the bottom; scrolled back (Page Up, the wheel, the bar), they stay where they are.
+* **The input line** sends a message, or `/join /part /msg /me /nick /topic /query /quit`; Up and Down bring back what
+  was sent. Ctrl+Page Up and Ctrl+Page Down, or Alt+1 to Alt+9, go to the rooms; Ctrl+W closes one.
+* **What it never does:** DCC, scripts, opening links, answering CTCP requests (it shows them), keeping anything (no
+  logs, no passwords, no settings).
+* **The connection is a helper's** (`wchat --helper`, started by the window with two pipes, as Wundertow's loads): it
+  makes the connection with Undertow's transport and relays bytes, so a slow connect or a broken TLS server never
+  holds up the window. What it sends back is read as hostile, as everything from the server is. The close button
+  asks first while connected; Close says QUIT and the window goes when the connection has ended.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
