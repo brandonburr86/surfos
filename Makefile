@@ -79,6 +79,24 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wchat         # 11/05/26 (the desktop applications, track chat): Chat, an IRC client in a window
+# wchat, Chat (11/05/26): user/wchat/, its model host-tested against hostile servers (tests/host/test_wchat.c) and its
+# window on the fake desktop (tests/host/test_wchatwin.c); of Undertow the URLs, the settings, the helpers and the
+# transport with its TLS, for its helper's connection, linked as fetch links them (Mbed TLS before libsurf: its
+# prerequisite is below Mbed TLS's rules)
+WCHAT_SRC     = $(wildcard user/wchat/*.c)
+WCHAT_OBJ     = $(WCHAT_SRC:user/wchat/%.c=$(BUILD)/user/wchat/%.o)
+WCHAT_UT_OBJ  = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
+$(BUILD)/user/wchat/%.o: user/wchat/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -Iuser/undertow -c $< -o $@
+$(BUILD)/user/bin/wchat: $(WCHAT_OBJ) $(WCHAT_UT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHAT_OBJ) $(WCHAT_UT_OBJ) \
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+-include $(WCHAT_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1157,8 +1175,8 @@ unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
 	$(BUILD)/host/test_wkit
 
 # 11/05/26 (the desktop applications, track chat): Chat's model against hostile, split and oversized servers, every
-# allocation failing in turn (its files built with tests/host/wchat_alloc.h ahead). The sanitizer runs are the Mac's,
-# by hand (the track's account)
+# allocation failing in turn (its files built with tests/host/wchat_alloc.h ahead), and its window on the fake desktop
+# with the helper played by the test. The sanitizer runs are the Mac's, by hand (the track's account)
 WCHAT_MODEL   = $(addprefix user/wchat/,irc.c ircfmt.c chat.c recv.c input.c link.c)
 $(BUILD)/host/wchat/%.o: user/wchat/%.c tests/host/wchat_alloc.h
 	@mkdir -p $(dir $@)
@@ -1168,10 +1186,16 @@ $(BUILD)/host/wchat/%.o: user/wchat/%.c tests/host/wchat_alloc.h
 $(BUILD)/host/test_wchat: tests/host/test_wchat.c $(WCHAT_MODEL:user/wchat/%.c=$(BUILD)/host/wchat/%.o)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wchat $^ -o $@
+$(BUILD)/host/test_wchatwin: tests/host/test_wchatwin.c tests/host/gk_fake.h user/wchat/window.c $(WCHAT_MODEL) \
+                             $(wildcard user/wchat/*.h) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wchat tests/host/test_wchatwin.c user/wchat/window.c $(WCHAT_MODEL) $(GK_HOST_OBJ) \
+		-o $@
 unittest: unittest-chat
 .PHONY: unittest-chat
-unittest-chat: $(BUILD)/host/test_wchat
+unittest-chat: $(BUILD)/host/test_wchat $(BUILD)/host/test_wchatwin
 	$(BUILD)/host/test_wchat
+	$(BUILD)/host/test_wchatwin
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
@@ -1662,6 +1686,8 @@ $(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+# 11/05/26 (the desktop applications, track chat): wchat links Mbed TLS as fetch does (its rule is by its USER_PROGS line)
+$(BUILD)/user/bin/wchat: $(MBEDTLS_LIB)
 
 # 10/25/26 (track A, A9): sha256sum sees Mbed TLS's headers and links its SHA-256 and libgcc before libsurf (as fetch)
 $(BUILD)/user/obj/sha256sum.o: USER_CFLAGS += $(MBEDTLS_CONF)
