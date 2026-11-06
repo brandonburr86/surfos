@@ -37,6 +37,7 @@ SIZES = {'Terminal': (640, 400), 'System Monitor': (540, 360), 'Disks': (580, 32
 MENU_H, TITLE_H = 28, 28
 TRACKS = ('gui_apps_term', 'gui_apps_sys', 'gui_apps_tools', 'gui_apps_media', 'gui_apps_win', 'gui_apps_web',
           'gui_apps_suite')
+TRACKS += ('gui_apps_games',)
 TRACKS += ('gui_apps_desk',)
 TRACKS += ('gui_apps_kit',)
 STICK_LABEL, STICK_SERIAL = 'APPSTICK', 0x6A11A995      # a serial of its own: GRUB's bootvol= names the boot stick's
