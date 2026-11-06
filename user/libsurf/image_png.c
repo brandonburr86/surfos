@@ -22,6 +22,10 @@ the other, however they are cut, each checked by its CRC when inflate needs its 
 but for a deflate stream whose Huffman codes have room left over (an incomplete code, RFC 1951 section 3.2.7) or no
 code for a block's end: the old inflate went on with such a stream until a code fell into the hole, libsurf's
 refuses it at once, as zlib does, so libpng's readers never show such a file either.
+11/05/26 (the review of track img): the data's input is bounded too. A stream that makes nothing for long (empty
+blocks, each with its tables) made a small picture cost seconds; now the IDAT bytes inflate is given stop at twice the
+rows' bytes, 8 more a row and 4 KB (data_budget()): deflate's worst, stored blocks, adds 5 bytes to 64 KB, and an
+encoder that flushes at every row 6 a row, so no real file comes near it.
 */
 
 #include <stddef.h>
@@ -58,6 +62,7 @@ struct png {
     int done;                                   /* the last row was made */
     int over;                                   /* a byte past it was made: the picture is whole */
     unsigned long long ahead;                   /* the bytes inflate may still make: the rows' and one more */
+    unsigned long long budget, taken;           /* the IDAT bytes inflate may be given, and has been */
     unsigned int adler_a, adler_b;
     unsigned char made[MADE];
     struct inflate z;
@@ -258,8 +263,21 @@ static unsigned long long data_bytes(const struct png *p) {
     return n;
 }
 
+/* The IDAT bytes the rows may come from: twice theirs, 8 a row (the passes' rows, for Adam7) and 4 KB */
+static unsigned long long data_budget(const struct png *p) {
+    unsigned long long rows = 0;
+    int i;
+    for(i = p->interlaced ? 0 : 6; i < 7; i++) {
+        int pw = p->interlaced ? (p->w - pass_x0[i] + pass_dx[i] - 1) / pass_dx[i] : p->w;
+        int ph = p->interlaced ? (p->h - pass_y0[i] + pass_dy[i] - 1) / pass_dy[i] : p->h;
+        if(pw > 0 && ph > 0) rows += (unsigned long long)ph;
+    }
+    return 2 * data_bytes(p) + 8 * rows + 4096;
+}
+
 /* The zlib stream in the IDAT chunks (RFC 1950): its header, the deflate data by libsurf's inflate, as far as one byte
-   past the rows, and its Adler-32 when the rows and the data end together */
+   past the rows, and its Adler-32 when the rows and the data end together. Inflate is given no more of the chunks
+   than the budget: a stream that wants more is refused */
 static const char *data(struct png *p) {
     struct inflate *z = &p->z;
     int cmf = next_byte(p), flg = next_byte(p), i;
@@ -268,16 +286,22 @@ static const char *data(struct png *p) {
         return "a PNG whose data is not zlib's";
     inflate_init(z);
     p->ahead = data_bytes(p) + 1;
+    p->budget = data_budget(p);
+    p->taken = 2;                               /* the zlib header */
     for(;;) {
-        size_t room = p->ahead < MADE ? (size_t)p->ahead : MADE, made, k;
+        size_t room = p->ahead < MADE ? (size_t)p->ahead : MADE, made, k, give = p->left, used;
         int r;
+        if(p->taken > p->budget) return "a PNG whose data is far longer than its rows";
+        if(give > p->budget - p->taken + 1) give = (size_t)(p->budget - p->taken + 1);
         z->in = p->in + p->pos;
-        z->in_n = p->left;
+        z->in_n = give;
         z->out = p->made;
         z->out_n = room;
         r = inflate_run(z);
-        p->pos += p->left - z->in_n;
-        p->left = z->in_n;
+        used = give - z->in_n;
+        p->pos += used;
+        p->left -= used;
+        p->taken += used;
         made = room - z->out_n;
         p->ahead -= made;
         for(k = 0; k < made; k++) if(emit(p, p->made[k])) return "a PNG whose data is corrupted";
@@ -285,6 +309,7 @@ static const char *data(struct png *p) {
         if(r == INFLATE_BAD) return "a PNG whose data is corrupted";
         if(r == INFLATE_END) break;
         if(!z->out_n) continue;                 /* the room was used: more of it */
+        if(p->left) continue;                   /* what it was given was used: more of this chunk, within the budget */
         if(next_chunk(p)) return "a PNG that ends too early";
     }
     if(!p->done) return "a PNG that ends too early";

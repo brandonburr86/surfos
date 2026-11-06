@@ -221,7 +221,9 @@ static void alpha_or_none(const struct bmp *b, struct wimg *m) {
     for(i = 0; i < n; i++) m->px[i] &= 0xffffff;
 }
 
-/* RLE4 and RLE8: the file's codes in pairs, the pixels from the bottom row up; pixels past a row's end are dropped */
+/* RLE4 and RLE8: the file's codes in pairs, the pixels from the bottom row up; pixels past a row's end are dropped.
+   11/05/26 (the review of track img): dropped at once, not one by one, so that a code's time is what it draws: a file
+   of runs that all fall past the row's end (255 pixels for two bytes) took seconds */
 static const char *rle(struct bmp *b, struct wimg *m) {
     const unsigned char *p = b->in + b->pixels, *end = b->in + b->len;
     int four = b->comp == BI_RLE4, x = 0, y = 0;
@@ -235,8 +237,9 @@ static const char *rle(struct bmp *b, struct wimg *m) {
         a = p[0];
         c = p[1];
         p += 2;
-        if(a) {                                     /* a run */
-            for(k = 0; k < (int)a; k++) {
+        if(a) {                                     /* a run: what fits in the row */
+            int fit = b->w - x < (int)a ? b->w - x : (int)a;
+            for(k = 0; k < fit; k++) {
                 if(four) PUT(k & 1 ? c & 15 : c >> 4);
                 else PUT(c);
             }
@@ -254,8 +257,9 @@ static const char *rle(struct bmp *b, struct wimg *m) {
             p += 2;
         } else {                                    /* c pixels as they are, kept to whole words */
             size_t bytes = four ? ((size_t)c + 1) / 2 : c, pad = bytes & 1;
+            int fit = b->w - x < (int)c ? b->w - x : (int)c;
             if((size_t)(end - p) < bytes + pad) return "a BMP whose RLE codes end too early";
-            for(k = 0; k < (int)c; k++) {
+            for(k = 0; k < fit; k++) {
                 if(four) PUT(k & 1 ? p[k / 2] & 15 : p[k / 2] >> 4);
                 else PUT(p[k]);
             }

@@ -26,6 +26,10 @@ pictures written (image_save.c), as a BMP of 24 bits or a PNG of 8 bits a sample
 libsurf's deflate. The bytes go to the caller's put() as they are made, so a picture is never held twice: a program
 saves one through user/bin/saveutil.h by writing them to its file. Only a picture within wimg_alloc()'s limits is
 written, so that whatever is written here is read here again.
+11/05/26 (the review of track img): WIMG_SCANS_MAX is 32, not 128. A progressive JPEG's scans each go over all its
+blocks, so a small file of many scans, each an EOB run over the picture, cost about a second for 128. Real files
+have far fewer: libjpeg's simple progression, which most progressive files come from, writes 10 scans for colour,
+6 for grey, 14 for three components of RGB and 18 for CMYK, and Photoshop's progressive files have 3 to 5.
 */
 
 #ifndef _IMAGE_H
@@ -36,7 +40,7 @@ written, so that whatever is written here is read here again.
 #define WIMG_SIDE_MAX    4096                   /* pixels a side */
 #define WIMG_PIXELS_MAX  16000000u              /* 16 megapixels */
 #define WIMG_COEFS_MAX   (64u << 20)            /* the bytes of a progressive JPEG's coefficients */
-#define WIMG_SCANS_MAX   128                    /* a JPEG's scans (a real one has at most a dozen or so) */
+#define WIMG_SCANS_MAX   32                     /* a JPEG's scans: twice the most a common encoder writes (below) */
 #define WIMG_KEEP_SIDE   2048                   /* a picture larger than this a side is kept smaller (wimg_shrink()) */
 #define WIMG_ERR_MAX     160                    /* an error buffer that holds any of these calls' messages */
 
