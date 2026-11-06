@@ -1339,7 +1339,7 @@ static void modifiers(void) {
     gk_close(ui);
 }
 
-/**** stage 2: a text of several lines ****/
+/**** stage 2: a text of several lines, progress bars, sliders, palettes ****/
 
 static void text_area(void) {
     struct gk *ui = window("Text", 300, 200);
@@ -1432,6 +1432,61 @@ static void text_area(void) {
     gk_close(ui);
 }
 
+static void progress_slider_palette(void) {
+    struct gk *ui = window("More", 300, 200);
+    struct gk_widget *p, *s, *pal, *tools;
+    static const unsigned pencil[4] = { 0x153D49, 0xFF000000u, 0xFF000000u, 0x153D49 };
+    int x, y, w, h, i;
+    p = gk_progress(gk_root(ui), 200);
+    gk_set_text(p, "Half");
+    s = gk_slider(gk_root(ui), 60, 0, 100, 5);
+    pal = gk_palette(gk_root(ui), 61, 4, 16, 16);
+    for(i = 0; i < 6; i++) CHECK(gk_palette_color(pal, (unsigned)(0x100000 * i)) == i);
+    tools = gk_palette(gk_root(ui), 62, 2, 24, 24);
+    CHECK(gk_palette_icon(tools, pencil, 2, 2) == 0 && gk_palette_icon(tools, pencil, 2, 2) == 1);
+    CHECK(gk_palette_icon(tools, pencil, 40, 40) < 0);  /* larger than a cell */
+    gk_set_value(p, 100);
+    run(ui);
+    gk_bounds(p, &x, &y, &w, &h);
+    CHECK(gkf_pixel(x + 2, y + 5) == GW_TEAL && gkf_pixel(x + w - 3, y + 5) == SHEET);
+    CHECK(gkf_pixel(x + (w - 2) / 2 - 1, y + h - 2) == GW_TEAL && gkf_pixel(x + (w - 2) / 2 + 3, y + h - 2) == SHEET);
+    gk_set_value(p, 999);                               /* kept within */
+    CHECK(gk_value(p) == 200);
+    /* the slider: keys by its step, a click on its track, the wheel */
+    gk_bounds(s, &x, &y, &w, &h);
+    gkf_click(x + w - 2, y + h / 2);
+    run(ui);
+    CHECK(gk_value(s) == 100 && heard(GK_EV_CHANGE, 60) && gk_focused(ui) == s);
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(WIN_KEY_PGDN, 0);
+    run(ui);
+    CHECK(gk_value(s) == 45 && count(GK_EV_CHANGE) == 2);
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_wheel(x + 10, y + 5, -3);                       /* away from the user: up */
+    run(ui);
+    CHECK(gk_value(s) == 5);
+    gkf_drag(x + 1, y + 5, x + w / 2, y + 5);
+    run(ui);
+    CHECK(gk_value(s) == 50);
+    /* the palette: a click, the arrows */
+    gk_bounds(pal, &x, &y, &w, &h);
+    CHECK(w == 4 * 18 + 2 && h == 2 * 18 + 2 && gk_value(pal) == -1);
+    gkf_click(x + 1 + 18 + 8, y + 1 + 8);
+    run(ui);
+    CHECK(gk_value(pal) == 1 && heard(GK_EV_CHANGE, 61) && gk_palette_get_color(pal, 1) == 0x100000);
+    gkf_key(WIN_KEY_DOWN, 0);
+    run(ui);
+    CHECK(gk_value(pal) == 5);
+    CHECK(gk_palette_set_color(pal, 5, 0x123456) == 0 && gk_palette_get_color(pal, 5) == 0x123456);
+    run(ui);
+    CHECK(gkf_pixel(x + 1 + 18 + 8, y + 1 + 18 + 8) == 0x123456);
+    gk_bounds(tools, &x, &y, &w, &h);
+    gkf_click(x + 1 + 26 + 12, y + 1 + 12);
+    run(ui);
+    CHECK(gk_value(tools) == 1 && gkf_pixel(x + 1 + 26 + 11, y + 1 + 11) == 0x153D49);
+    gk_close(ui);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     libgui();
@@ -1452,6 +1507,7 @@ int main(void) {
     theme();
     modifiers();
     text_area();
+    progress_slider_palette();
     gkf_reset(0, 0);
     printf("test_gk: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

@@ -343,7 +343,7 @@ int gk_asking(const struct gk *ui);             /* the id of the box open, 0 for
 int gk_box_open(const struct gk *ui);           /* 1 while one is */
 void gk_dismiss(struct gk *ui);                 /* the box open answers -1 and goes */
 
-/**** stage 2 (11/05/26): a text of several lines ****/
+/**** stage 2 (11/05/26): a text of several lines, progress bars, sliders, palettes ****/
 
 #define GK_READONLY     0x20            /* a text of several lines: shown, selected and copied, never changed */
 
@@ -353,5 +353,20 @@ void gk_dismiss(struct gk *ui);                 /* the box open answers -1 and g
 struct gk_widget *gk_text_area(struct gk_widget *parent, int id, int max, unsigned flags);
 void gk_text_select(struct gk_widget *text, int from, int to);    /* bytes; to -1: the end */
 void gk_text_cursor(const struct gk_widget *text, int *from, int *to);   /* the selection, from <= to */
+
+/* a progress bar: gk_set_value() from 0 to max, its text in the middle (gk_set_text()) */
+struct gk_widget *gk_progress(struct gk_widget *parent, int max);
+
+/* a slider: a whole number from min to max by step (gk_value()), by the arrows (a step), Page Up and Down (ten), Home,
+   End, a click or a drag on its track, the wheel */
+struct gk_widget *gk_slider(struct gk_widget *parent, int id, int min, int max, int step);
+
+/* a palette: cells of cell_w x cell_h, cols to a row, each a colour or a picture (w x h pixels of 0x00RRGGBB, those
+   with the top byte set see-through), one chosen (gk_value(): -1 for none) by a click or the arrows */
+struct gk_widget *gk_palette(struct gk_widget *parent, int id, int cols, int cell_w, int cell_h);
+int gk_palette_color(struct gk_widget *palette, unsigned color);                     /* its index, -1 */
+int gk_palette_icon(struct gk_widget *palette, const unsigned *pixels, int w, int h);  /* its index, -1 */
+int gk_palette_set_color(struct gk_widget *palette, int i, unsigned color);          /* 0, -1 (a picture's) */
+unsigned gk_palette_get_color(const struct gk_widget *palette, int i);
 
 #endif
