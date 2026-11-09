@@ -195,7 +195,7 @@ drawn for Paint in the registry's palette.
 
 ## Tests
 
-- **`tests/host/test_wpaint.c`, the model:** 954 checks. Natively on the Mac with clang, `-fsanitize=address,undefined`,
+- **`tests/host/test_wpaint.c`, the model:** 957 checks. Natively on the Mac with clang, `-fsanitize=address,undefined`,
   in under two seconds, and with the Docker image's gcc in `make unittest`. What they check: sizes and the memory bound
   (a canvas refused leaves the old one; the codecs' limits, 4096 x 3907 and 4001 x 4000 refused and 4096 x 3906 made;
   on a 4000 x 4000 canvas a clear undone, a new size undone, all of it lifted and copied, within the bound); each brush
@@ -229,7 +229,7 @@ drawn for Paint in the registry's palette.
   refused with their message and the canvas as it was (125); every allocation of an open (a progressive JPEG's) and of
   a save failing in turn, with nothing left held and the old file as it was; the model refusing a picture its bound
   cannot hold, the decoder's pixels freed; and the history and the clipboard across an open.
-- **`tests/host/test_wpaint_window.c`, the window on the fake desktop:** 152 checks, natively (x86_64 under Rosetta, as
+- **`tests/host/test_wpaint_window.c`, the window on the fake desktop:** 162 checks, natively (x86_64 under Rosetta, as
   blibc's printf has x86 assembly, kit's way) with both sanitizers, and in `make unittest`. No desktop refused; the
   window's parts in place, the canvas on the backdrop, the brush lit; a drag with the brush, a click presenting less
   than an eighth of the window; undo and redo by their shortcuts, the title's `*` coming and going; tools by the palette,
@@ -261,9 +261,9 @@ the program has answered it with a question of its own. `shell/guiclient.c`'s `c
 first press and never clears it, so after Paint's "Save the changes?" and Cancel, the next press of the close button is
 the desktop's "End the program?" (End loses the changes), not a second `WIN_EV_CLOSE`. Every application with an
 unsaved-changes question meets it. Paint's checks close the second time by File > Close (Ctrl+W), which asks Paint's
-question again. The integrator confirmed it on 11/05 and put it in desk's fix round. The check that matters, the
-close button, Cancel, then the close button again asking again, goes into Paint's checks when Paint merges desk's
-fix, in its review round.
+question again. The integrator confirmed it on 11/05 and put it in desk's fix round (1447a4c2, which came to Paint
+with kit's stage 3 on 11/09): the close button now sends a program that reads its events the close again, and
+Paint's screen checks press it a second time after Cancel and see Paint's own question, not "End the program?".
 
 ## The review
 
@@ -326,20 +326,45 @@ changed) were built against the fixed tree and run again: each finding below is 
   lines are checked against the closed form (`lines()`: every line within 13 pixels each way), the ellipses' rows
   against their definition in boxes up to 4096 x 4096 (`ellipse_rows()`).
 
+### The second review
+
+The same reviewer read the fix round (f3bee9a8..421462d7) on 11/09 and found it sound to ship: every finding fixed,
+6,000 fuzz rounds with failures injected and 600 of the window clean, the line against its closed form on 636,804
+lines. Three lows were left, fixed in a last round with the merge the integrator named:
+
+- **Merged** apps/kit d38ea834 (`git merge --no-ff`): kit's stage 3 (a box greys the program's menus, a shortcut acts
+  once a press, a drag starts only from a press seen, choosers kept on EAGAIN, kit's chooser checks finding the
+  chooser by its own title) and desk's fix round 1447a4c2. The Makefile and the TRACKS line met theirs at the same
+  places; all kept. Paint's window test had sent menu items from the bar while a box was up; the toolkit greys them
+  now, so the desktop refuses them, and the test hands Paint the item's event itself to reach Paint's own guard (in
+  the merge commit, so that it passes alone). Paint takes none of stage 2's or 3's new widgets.
+- **The check that waited for desk:** the close button, "Save the changes?", Esc, the close button again: Paint's
+  question again, not "End the program?" (`tools/gui_apps_paint.py`), then File > Close asking too.
+- **A large Cut hid its own warning:** when the Cut's step could not be kept, "Cut W x H pixels" said over lose()'s
+  "it cannot be undone"; now it comes first and lose()'s words stay. Test: `cut_too_large()`.
+- **The save question compared paths as written:** the same file through ".." or in another case was replaced without
+  it. Both paths are now made canonical and compared without case (`same_file()`): SurfOS's `struct stat` names the
+  device by name, not number, so the file's identity by stat is not the same call on SurfOS and the host; off FAT the
+  comparison can only ask once more. Test: Save as through "sub/../" and in capitals, asked; another file, saved.
+- **A question replaced did nothing:** the close button pressed while "Save the changes?" was up asked again, but the
+  first question's -1 (which the toolkit gives a box another replaces) cleared what the new one waited on. A -1 that
+  comes while a box is open is now no one's Cancel, and a new question forgets an old Save as. Test: the close button
+  twice, then Don't save: closed. The reviewer's probe_cut2 and probe_window5, built against the tree, say the same.
+
 ## The gates
 
-All on the tree of 51f37c5f (the four commits, the fix round's seven), clean (`git status` empty: the build's
-manifest says so), before this account was committed; the account changes nothing they build or run.
+The last ones on the tree of 490094db (the four commits, the fix round's seven, the merge of kit's stage 3, and the
+last round's three), clean (`git status` empty), before this account's update was committed; the account changes
+nothing they build or run.
 
-- `make unittest` (the Docker image's gcc, 32-bit): passed. Paint's among it: test_wpaint 954 checks, test_wpaint_files
-  691 (125 pictures opened, 125 refused; 15 said they lost transparency, 9 depth), test_wpaint_window 152; test_guidesk
-  reads `wpaint.app` (139 checks); test_man.py's 23 tests find Paint's page.
-- `make test-all` through the lock: passed at -O0 and -O2, 558 smoke checks and 51 of Files each.
-- The guiapps scenario, whole, through the lock: at -O0 and at -O2 alike, 362 of 364, Paint's 32 all passed. The two
-  that failed are kit's: "kit: Ctrl+O, a menu's shortcut, asks for a chooser", and then "the desktop closes and the text
-  console comes back" after it. They fail on any tree with desk's implementation merged; kit fixed them at apps/kit
-  aac42b11, which is not merged here (it brings kit's second stage, which Paint does not use, and every gate again):
-  the integrator allowed either.
+- `make unittest` (the Docker image's gcc, 32-bit): passed. Paint's among it: test_wpaint 957 checks, test_wpaint_files
+  691 (125 pictures opened, 125 refused; 15 said they lost transparency, 9 depth), test_wpaint_window 162; test_guidesk
+  reads `wpaint.app`; test_man.py finds Paint's page.
+- The guiapps scenario, whole, through the lock: passed at -O0 and at -O2, 423 of 423 checks each, Paint's 34 among
+  them (the second close press's two new). kit's two chooser checks that failed on 11/09 pass with kit's stage 3.
+- `make test-all` (not asked of the last round, which touched no kernel or shell code): passed on 51f37c5f at -O0
+  and -O2, 558 smoke checks and 51 of Files each. On 51f37c5f the guiapps scenario was 362 of 364 at both levels, the
+  two failures kit's, since fixed.
 - Natively on the Mac, with AddressSanitizer and UndefinedBehaviorSanitizer: the three tests clean.
 - Each commit of the series alone, from a clean tree of it: natively, its host tests under both sanitizers and every
   file of `user/wpaint/` compiled for i486 against SurfOS's headers with warnings as errors; in the build image, the
