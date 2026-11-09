@@ -20,7 +20,8 @@ Sketch's dialogs, whose files stay the desktop's (guibmp.c). Files' rule for wha
 names (shell/guifiles.c) takes a picture of any of the four kinds here now, not a .bmp alone.
 11/05/26 (the review of track img): one Image Viewer from Files. A file opened while its wview runs
 replaces it: the one before is told to close (it has nothing to save), or ended when it has no
-window yet, and the new one stands where it stood; Open with's entry still starts others, in the
+window yet (11/09/26: or when it has not gone 5 s later, or when the new one needs its window's
+place), and the new one stands where it stood; Open with's entry still starts others, in the
 cascade. A wview started whose window has not come in VIEWER_LATE_MS is said on the screen (tick(),
 which the desktop runs for an application that is a program), and so is a desktop whose programs
 have every window they may have, before anything is started.
@@ -63,16 +64,28 @@ bool viewer_takes(const char *name) {
     return false;
 }
 
-/* the Image Viewer's wview before a new one, gone: one with a window is told to close (CLOSE: wview ends at once); one
-   told so before that is still there, or one started just now whose window has not come, is ended */
-static void viewer_replace(struct gui_state *g) {
+static void viewer_end(struct gui_state *g, int pid) {
+    char msg[80];
+    if(pid > 0 && g->sys && g->sys->kill) g->sys->kill(g->sys->ctx, pid, msg, sizeof(msg));
+}
+
+/* the Image Viewer's wview before a new one, gone. One with a window is told to close (CLOSE: wview ends at once) and
+   remembered (asked_pid): when its window is still there at the next replace, or VIEWER_LATE_MS later (tick()), it is
+   ended, so that a busy or hung one is not left behind. One told so before by its own button that is still there, one
+   started just now whose window has not come, and, when programs have every window they may have (full), one with a
+   window, whose place the new one needs, are ended at once */
+static void viewer_replace(struct gui_state *g, bool full) {
+    struct gui_viewer *v = &g->viewer;
     int k = GUI_VIEWER - GUI_FIRST_APP, pid = g->app_pid[k], id = client_of_pid(g, pid);
     struct gui_client *c = id >= 0 ? client_of(g, id) : NULL;
-    char msg[80];
+    if(v->asked_pid > 0 && client_of_pid(g, v->asked_pid) >= 0) viewer_end(g, v->asked_pid);
+    v->asked_pid = 0;
     if(pid <= 0) return;
-    if(c && !c->closing) client_close(g, id);
-    else if((c || (g->app_starting[k] && g->now - g->app_at[k] < VIEWER_LATE_MS)) && g->sys && g->sys->kill)
-        g->sys->kill(g->sys->ctx, pid, msg, sizeof(msg));
+    if(c && !c->closing && !full) {
+        client_close(g, id);
+        v->asked_pid = pid;
+        v->asked_at = g->now;
+    } else if(c || (g->app_starting[k] && g->now - g->app_at[k] < VIEWER_LATE_MS)) viewer_end(g, pid);
     g->app_pid[k] = 0;
     g->app_starting[k] = false;
 }
@@ -82,7 +95,8 @@ static void viewer_replace(struct gui_state *g) {
    by gui_app_slot_of()), so the tile brings it back. What is no file (a folder, a device, a name not there) is said
    here, as the desktop's own viewer said it, and starts nothing; a start refused leaves the Image Viewer's window
    as it was. 11/05/26 (the review): the Image Viewer's wview before it goes (viewer_replace()), and with every
-   program's window the desktop has in use but that one, nothing starts: its window could not open */
+   program's window the desktop has in use but that one, nothing starts: its window could not open. 11/09/26: with
+   that one among them, it is ended rather than asked, so that the new one has its place */
 void viewer_show(struct gui_state *g, const char *path) {
     int k = GUI_VIEWER - GUI_FIRST_APP, pid, r;
     struct gui_entry e;
@@ -108,7 +122,7 @@ void viewer_show(struct gui_state *g, const char *path) {
         dialog_message(g, "Not opened", "Programs have every window they may have.", "Close one, then open the picture again.");
         return;
     }
-    viewer_replace(g);
+    viewer_replace(g, client_count(g) >= GUI_CLIENTS);
     msg[0] = 0;
     pid = g->sys->run_file(g->sys->ctx, "wview", path, msg, sizeof(msg));
     if(pid < 0) {
@@ -121,10 +135,16 @@ void viewer_show(struct gui_state *g, const char *path) {
     g->app_starting[k] = pid > 0;
 }
 
-/* a wview started (from Files, Apps or the tile) whose window has not come in VIEWER_LATE_MS: said once, when no other
-   dialog is up (its program could not open a window, or ended first: the Log may say why) */
+/* a wview told to close for another whose window is still there VIEWER_LATE_MS later: ended. A wview started (from
+   Files, Apps or the tile) whose window has not come in VIEWER_LATE_MS: said once, when no other dialog is up (its
+   program could not open a window, or ended first: the Log may say why) */
 static void tick(struct gui_state *g) {
+    struct gui_viewer *v = &g->viewer;
     int k = GUI_VIEWER - GUI_FIRST_APP;
+    if(v->asked_pid > 0 && g->now - v->asked_at >= VIEWER_LATE_MS) {
+        if(client_of_pid(g, v->asked_pid) >= 0) viewer_end(g, v->asked_pid);
+        v->asked_pid = 0;
+    }
     if(!g->app_starting[k] || g->now - g->app_at[k] < VIEWER_LATE_MS || g->dialog.kind) return;
     g->app_starting[k] = false;
     if(client_of_pid(g, g->app_pid[k]) >= 0) return;

@@ -458,6 +458,68 @@ static void viewer_entry(void) {
     gui_finish(&g);
 }
 
+/* 11/09/26 (the review's second reading): a wview told to close that does not go is ended, 5 s later or at the next
+   file; and when programs have every window they may have, the viewer's among them, it is ended rather than asked, so
+   that the new one has its place */
+static void viewer_replaced(void) {
+    int a, b, c, d, i, others[GUI_CLIENTS - 1];
+    desktop(960, 540);
+    fake_file("/home/sea shore.png", "\x89PNG", 4);
+    fake_file("/home/r.gif", "GIF89a", 6);
+    fake_file("/home/q.bmp", "BM", 2);
+    fake_run_result = 78;
+    viewer_show(&g, "/home/sea shore.png");
+    a = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 78);
+    fake_win_present(a, 0x102E3B);
+    ticks(1);
+    fake_run_result = 79;                               /* told to close, and it does not go */
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_win_count(a, WIN_EV_CLOSE) == 1 && !fake_killed && gui_app_slot_of(&g, 79) == GUI_VIEWER);
+    b = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 79);
+    fake_win_present(b, 0x102E3B);
+    ticks(1);
+    g.now += 4900;
+    ticks(1);
+    CHECK(!fake_killed);                                /* not yet */
+    g.now += 200;
+    ticks(1);
+    CHECK(fake_killed == 78 && client_of_pid(&g, 78) >= 0 && !g.dialog.kind);   /* ended: its window goes as it ends */
+    fake_win_end(a);
+    ticks(2);
+    CHECK(client_of_pid(&g, 78) < 0 && client_of_pid(&g, 79) >= 0);
+    fake_killed = 0;
+    fake_run_result = 80;                               /* the next file: 79 told to close, and stays */
+    viewer_show(&g, "/home/sea shore.png");
+    CHECK(fake_win_count(b, WIN_EV_CLOSE) == 1 && !fake_killed);
+    c = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 80);
+    fake_win_present(c, 0x102E3B);
+    ticks(1);
+    fake_run_result = 81;                               /* another before 5 s: 79, still there, is ended, 80 told to close */
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_killed == 79 && fake_win_count(c, WIN_EV_CLOSE) == 1 && gui_app_slot_of(&g, 81) == GUI_VIEWER);
+    fake_win_end(b);
+    fake_win_end(c);                                    /* 80 goes: nothing to end later */
+    d = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 81);
+    fake_win_present(d, 0x102E3B);
+    ticks(2);
+    fake_killed = 0;
+    g.now += 6000;
+    ticks(1);
+    CHECK(!fake_killed && client_of_pid(&g, 81) >= 0 && client_count(&g) == 1);
+    for(i = 0; i < GUI_CLIENTS - 1; i++) {              /* every window programs may have, the viewer's among them: */
+        others[i] = fake_win_open(200, 100, 0, 0x203040, "Other", 300 + i);
+        fake_win_present(others[i], 0x203040);
+    }
+    ticks(2);
+    CHECK(client_count(&g) == GUI_CLIENTS);
+    fake_run_result = 82;                               /* the viewer is ended, not asked, and the new one starts */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_killed == 81 && !fake_win_count(d, WIN_EV_CLOSE) && fake_run_file_count == 5 && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 82) == GUI_VIEWER && !g.viewer.asked_pid);
+    fake_run_result = 77;
+    gui_finish(&g);
+}
+
 static void no_files(void) {
     gui_init(&g, 640, 400);
     fake_screen(&screen, 640, 400);
@@ -945,6 +1007,7 @@ int main(void) {
     bmp_reading();
     bmp_refusing();
     viewer_entry();
+    viewer_replaced();
     no_files();
     hex();
     sketch();
