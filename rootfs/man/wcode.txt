@@ -26,7 +26,11 @@ DESCRIPTION
     may have been half done (an I/O error), or a name beside the file
     looks like its other half, nothing is written over the file again
     while it is open: each save puts a copy beside it, and the status
-    bar asks to have the disk checked first.
+    bar asks to have the disk checked first. If the file changed on
+    the disk since it was read (another wcode or Notepad saved it),
+    Save asks first: save over it, Save as, or leave it. A file is
+    open once: two names of it (a.c and A.C, or one with . or ..)
+    take the same tab.
 
     Closing a tab, Quit and the close button ask about every file with
     unsaved changes (Save, Don't save, Cancel). If the desktop ends
@@ -36,10 +40,15 @@ DESCRIPTION
 
     Find takes text or a regular expression (POSIX, extended), in
     either case or only the same, whole words if asked; a match never
-    spans lines. In a replacement with a regular expression, & is the
-    match, \1 to \9 its groups and \n a line end. Find in files
-    searches a folder and the folders in it, as the files are on the
-    disk, and lists each matching line; Enter on one opens it there.
+    spans lines and is never empty: a pattern that also matches an
+    empty text (x*, ^ or $ alone) is refused, so write x+ for x*. In
+    a replacement with a regular expression, & is the match, \1 to \9
+    its groups and \n a line end. A long search, or Replace all, goes
+    on between keys, and Esc stops it; while Replace all changes the
+    file the keys wait, and Esc takes back what it did. Find in files
+    searches a folder from / and the folders in it, as the files are
+    on the disk, and lists each matching line; Enter on one opens it
+    there.
 
 KEYS
     Arrows, Home, End, PgUp, PgDn    move; with Shift, select
@@ -77,11 +86,13 @@ LIMITS
     16 MB a file, 32 MB for all open files together, 8 files. The
     last 4,096 changes are kept to undo, 3 MB of them; one change
     larger (Replace all in a large file, say) cannot be undone, and
-    the status bar says so. Lines do not wrap; a line's colours stop
-    after its first 64 KB. A copy larger than the clipboard's 128 KB
-    is refused. Find in files reads at most 20,000 files and 256 MB,
-    lists 2,000 lines, and never reads /dev. There is no overwrite
-    mode, no word wrap and no printing.
+    the status bar says so. Lines do not wrap; a line is coloured in
+    its first 8 KB and the rest plain (a comment opened past them
+    does not go on to the next line). A copy larger than the
+    clipboard's 128 KB is refused. Find in files reads at most 20,000
+    files and 256 MB, lists 2,000 lines, never reads /dev, and leaves
+    out a line too costly to search, saying how many. There is no
+    overwrite mode, no word wrap and no printing.
 
 EXAMPLES
     wcode /usb1p1/src/main.c /usb1p1/src/Makefile

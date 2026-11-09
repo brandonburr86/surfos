@@ -715,14 +715,17 @@ first saved.
   bar closed; Esc closes it. Ctrl+H adds the replacement's line: Replace replaces the match
   selected and finds the next, Replace all replaces every match as one step to undo. With a regular
   expression, `&` in the replacement is the match, `\1` to `\9` its groups and `\n` a line end. A
-  match never spans lines and is never empty.
+  match never spans lines and is never empty: a pattern that also matches an empty text (`x*`, `^`)
+  is refused. A long search, and Replace all, go on between keys, the status bar saying so, and Esc
+  stops them; while Replace all changes the file the keys wait, and Esc takes back what it did.
 * **Find in files.** Ctrl+Shift+F: what to find, the names to look in (`*.c *.h`, or every file) and
-  the folder (Folder… asks the desktop's chooser). It reads the folder and those in it a piece at
+  the folder, from / (Folder… asks the desktop's chooser; `/a/../dev` is `/dev`, never read). It reads the folder and those in it a piece at
   a time, so the window answers and Stop ends it, holding one folder and one file open at a time;
   it reads the files as they are on the disk, never `/dev`, and leaves out files that are not text.
   Each matching line is listed with its file and number; Enter or a double-click opens it at the
   match. At most 20,000 files, 256 MB and 2,000 lines, and the line under the list says what a
-  limit left out.
+  limit left out: folders it could not read or that were too deep, files that are not text, lines too
+  costly to search.
 * **The bytes are kept.** A file keeps its line ends, LF, CR LF or both (a new one is the kind most
   of its lines have; the status bar says which), and its bytes that are not UTF-8. A file with a
   NUL byte is not text and is not opened.
@@ -731,14 +734,16 @@ first saved.
   never truncated. Save as of a new name makes the file (`O_EXCL`), and deletes it again if the save
   fails. After a rename that may have half happened, or when a name beside the file looks like its
   other half (of its size and time), nothing is renamed or written over the file again while it is
-  open: each save puts a copy beside it, and the status bar asks to have the disk checked first.
+  open: each save puts a copy beside it, and the status bar asks to have the disk checked first. A
+  file changed on the disk since it was read (another wcode, Notepad) is not saved over without a
+  question: save over it, Save as, or leave it. A file is open once, whatever spelling names it.
 * **Unsaved changes.** Close tab (Ctrl+W, a tab's x), Quit (Ctrl+Q) and the close button ask about
   each file with unsaved changes in turn, Save, Don't save or Cancel; a file never saved asks for
   its name first, and a Cancel keeps everything open. When the desktop ends first, each such file's
   text is put beside it under a new name, and the program's error output says where.
 * **Limits.** 16 MB a file, 32 MB for the files open together, 8 files; 4,096 steps and 3 MB to undo
-  a file (a larger change cannot be undone, and the status bar says so). A line's colours stop
-  after its first 64 KB. A copy of more than 128 KB is refused. No overwrite mode, no word wrap.
+  a file (a larger change cannot be undone, and the status bar says so). A line is coloured in its
+  first 8 KB, the rest plain. A copy of more than 128 KB is refused. No overwrite mode, no word wrap.
 
 ## Programs' windows
 
