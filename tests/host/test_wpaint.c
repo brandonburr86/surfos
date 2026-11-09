@@ -1320,6 +1320,16 @@ static void hard_fill(void) {
     free(ref);
 }
 
+/* the second review's low: a Cut too large for the history says so after its own words, which once hid them */
+static void cut_too_large(void) {
+    noise_canvas(200, 200);
+    p->undo_max = 64 * 1024;                            /* the canvas's tiles, raw, are 160,000 bytes */
+    paint_select_all(p);
+    CHECK(paint_cut(p) && p->clip && p->clip->w == 200 && count(WHITE) == 200 * 200 && !paint_can_undo(p));
+    CHECK(strstr(p->msg, "Cut 200 x 200 pixels. ") && strstr(p->msg, "it cannot be undone") && counted());
+    p->undo_max = PAINT_UNDO_MAX;
+}
+
 static void review(void) {
     lines();
     ellipse_rows();
@@ -1328,6 +1338,7 @@ static void review(void) {
     cut_floating();
     refused_keeps_history();
     hard_fill();
+    cut_too_large();
 }
 
 int main(void) {

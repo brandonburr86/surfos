@@ -273,8 +273,13 @@ int paint_cut(struct paint *p) {
     if(!to_clipboard(p)) return 1;
     w = p->clip->w;
     h = p->clip->h;
+    p->msg[0] = 0;
     remove_selection(p, "Cut");
-    say(p, "Cut %d x %d pixels", w, h);
+    if(p->msg[0]) {                                     /* the step could not be kept: what lose() said stays */
+        char was[PAINT_MSG];
+        snprintf(was, sizeof(was), "%s", p->msg);
+        say(p, "Cut %d x %d pixels. %s", w, h, was);
+    } else say(p, "Cut %d x %d pixels", w, h);
     return 1;
 }
 
