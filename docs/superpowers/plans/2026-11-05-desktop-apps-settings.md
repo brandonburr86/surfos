@@ -17,7 +17,8 @@ files and the gates (after merging desk's implementation, 2c5afd30).
 | `user/include/surfos/netctl.h` | the same for programs, as `surfos/win.h` reaches them |
 | `kernel/netctl.c` | the call: six reads, a step put in force, seven jobs, the job's thread |
 | `include/surfos/syscall.h`, `kernel/syscall.c`, `include/surfos/sysimpl.h` | call 55 in the table |
-| `kernel/netman.c`, `include/net/netman.h` | `netman_wifi_connect_quiet()` beside `netman_wifi_connect()`, which is unchanged; `netman_apply()` beside `netman_set()` |
+| `kernel/netman.c`, `include/net/netman.h` | `netman_wifi_connect_quiet()` beside `netman_wifi_connect()`, which is unchanged; `netman_apply()` beside `netman_set()`; the review's M1 (`keeper_resume_stops`) |
+| `lib/crypto/sha1.c`, `lib/crypto/kdf.c` | the review's defence in depth: SHA-1's message schedule wiped, the stack below PBKDF2 and the PRF overwritten |
 | `user/wsettings/settings.c`, `.h` | Settings' model: the pages, the controls, the words; no system call, host-tested |
 | `user/wsettings/window.c`, `.h` | its window on the toolkit (gk.h): the widgets, and each event to the model |
 | `user/wsettings/sys.c`, `.h`, `main.c` | the call by `int 0x80`, About's figures (sysinfo, the build id, CPUID), the loop |
@@ -25,8 +26,9 @@ files and the gates (after merging desk's implementation, 2c5afd30).
 | `tests/host/test_wsettings.c` | the model against a simulated kernel (`tests/host/wsettings_fake.h`) |
 | `tests/host/test_wsettings_win.c` | the window on kit's fake desktop, with the model and the simulated kernel |
 | `tools/gui_apps_settings.py` | the screen checks (guiapps) |
+| `tools/wsettings_scenario.py` | the wsettings scenario of `tools/qemu-usb.py` (the review): joins through the real kernel's simulated Wi-Fi |
 | `rootfs/apps/wsettings.app`, `rootfs/man/wsettings.txt` | the registry's entry (an icon drawn here: three sliders), the manual |
-| `Makefile`, `tools/gui_apps_scenario.py`, `docs/GUI.md` | insertions only (`git diff` shows no line removed) |
+| `Makefile`, `tools/gui_apps_scenario.py`, `tools/qemu-usb.py`, `docs/GUI.md` | insertions only (`git diff` shows no line removed) |
 
 `shell/wifi.c` and `net/netcfg.c` are not changed: desk's keys (`desktop.theme`, `pointer.speed`) are in the table
 as desk left them. Settings puts a step of theirs in force through `netman_apply()` and writes the last one through
@@ -198,19 +200,19 @@ On kit's toolkit, the pattern of `user/wkit/`: a window of 600 x 400 (at least 5
 - **`wifi connect` as a button.** The card's start does it when it should (above).
 - **A libsurf wrapper for the call.** `user/libsurf/syscalls.c` is shared and no track's; the program makes the call
   itself (`sys.c`) and `netctl.h` carries the number, which `kernel/netctl.c` checks against `syscall.h`'s.
-- **A smoke-test block and a wlansim scenario for the screen.** The guiapps boot has no network and no simulated Wi-Fi,
-  and `tools/qemu-run.py` and `tools/qemu-usb.py` were not among the files this track could change. The kernel side's
-  joins are host-tested against stand-ins, and were run once by hand against the real kernel with wlansim (below); a
-  permanent scenario is for the integrator to decide.
+- **A smoke-test block.** `tools/qemu-run.py` was not among the files this track could change, and the serial smoke
+  test has no window to drive. The guiapps boot has no network and no simulated Wi-Fi; the joins through the real
+  kernel are the wsettings scenario's, which the review allowed (below), after the hand-run sessions they grew from.
 
 ## Tests
 
 | Test | Checks | What |
 |---|---|---|
-| `test_netctl` | 369 | the kernel side: every op's size and pointer refused first, nothing written past a structure; the reads; jobs one at a time, their stages and numbers (wrapping); the join's security, and a name not heard looked for first by the job (heard then: decided so, its refusals in words; still not: hidden); the password wiped whatever the answer; the PMK against IEEE 802.11i-2004 annex H.4.1's vector, handed to the station and to the save, wiped after; DHCP while the association lasts; a save refused after another join; the card with the quiet connect; leave, save, forget, set; a step put in force with no job and no write, only for the desktop's two keys; out of memory; a thread that cannot start; nothing allocated and no lock held after each |
-| `test_wsettings` | 321 | the model: words (SSIDs with controls, bad UTF-8, C1, surrogates, overlong forms; wrapping), rows per name, selections that follow, joins of every kind and their refusals (the kernel's words for what its scan found), the password never in the model, what was heard going after a minute (the count with it, a scan at the next look), busy and wait, the card, leave, save, forget, settings with their warnings and `when()` texts, steps in force at once and written once when they stop (two keys one after the other, another program's job waited for, before closing, a kernel without the step), the host name's rule, the desktop's choices, interfaces and leases, About, a kernel without the call, closing, drawing only on change; every call's size as it should be |
-| `test_wsettings_win` | 140 | the window on the fake desktop: opening, the scan by itself and the greying meanwhile, the networks in their columns, the rows gone after a minute unheard and the note, a WPA2 join (dots, a password too short refused and wiped, Enter, the field wiped at once, nowhere in the window's memory), the open network's warning in full, by name, the card, forget, telnetd's warning in full, history, the host name, closing with one typed, the desktop's choices stepped by a click and by arrows held down (each in force, the stick written once), About, menus and shortcuts, nothing presented when nothing changed, the theme |
+| `test_netctl` | 415 | the kernel side: every op's size and pointer refused first, nothing written past a structure; the reads; jobs one at a time, their stages and numbers (wrapping); the join's security, and a name not heard looked for first by the job (heard then: decided so, its refusals in words; still not: hidden); the password wiped whatever the answer; the PMK against IEEE 802.11i-2004 annex H.4.1's vector, handed to the station and to the save, wiped after; DHCP while the association lasts; a save refused after another join; the card with the quiet connect; leave, save, forget, set; a step put in force with no job and no write, only for the desktop's two keys; out of memory; a thread that cannot start; nothing allocated and no lock held after each; and the review's: memory the program may read but not write, an open join while a server without a password runs refused without the person's word (at the call, and in the job after its scan), and the call's stack copies of the password and the PMK gone once it returns |
+| `test_wsettings` | 377 | the model: words (SSIDs with controls, bad UTF-8, C1, surrogates, overlong forms; wrapping), rows per name, selections that follow, joins of every kind and their refusals (the kernel's words for what its scan found), the password never in the model, what was heard going after a minute (the count with it, a scan at the next look), busy and wait, the card, leave, save, forget, settings with their warnings and `when()` texts, steps in force at once and written once when they stop (two keys one after the other, another program's job waited for, before closing, a kernel without the step), the host name's rule, the desktop's choices, interfaces and leases, About, a kernel without the call, closing, drawing only on change; every call's size as it should be; and the review's: a refusal for a server asked about again with what is true then (the flag only from that answer), Save it unticked and what it says while telnetd is on, steps back where they began writing nothing, a question kept while a job runs, Save again one setting after the other, a job record that could not be read |
+| `test_wsettings_win` | 169 | the window on the fake desktop: opening, the scan by itself and the greying meanwhile, the networks in their columns, the rows gone after a minute unheard and the note, a WPA2 join (dots, a password too short refused and wiped, Enter, the field wiped at once, nowhere in the window's memory), the open network's warning in full, by name, the card, forget, telnetd's warning in full, history, the host name, closing with one typed, the desktop's choices stepped by a click and by arrows held down (each in force, the stick written once), About, menus and shortcuts, nothing presented when nothing changed, the theme; and the review's: every byte of the wiped field, the panel asking when the kernel refuses an open join, Save it unticked, the panel's Join greyed and Enter waiting while a scan runs (the password still typed), the newest step shown while a write runs, Save again on the System page |
 | `tools/gui_apps_settings.py` | 23 (guiapps) | on the desktop of a USB boot: the window, its pages, telnetd's warning on the screen, every line, history and the theme through the kernel to the network manager (the desktop turning dusk at once and back, each written once the steps stop), About, Ctrl+W (surfsh collects the program, ps finds none), and Apps > Programs > Settings |
+| `tools/wsettings_scenario.py` | (wsettings) | the review's scenario, on the real kernel with wlansim: a WPA2 join typed and saved by ticking Save it, networks.conf with the key and never the passphrase, M1 in three orders (Disconnect right after the card's start, `wifi connect; wifi leave`, a connect after a leave that finds the network gone), M2's open join asked about while telnetd runs, the kernel log's lines, the passphrase nowhere on the serial line or new on the stick, fsck on the stick |
 
 All three host tests also run under clang's AddressSanitizer and UndefinedBehaviorSanitizer on the Mac (by hand:
 sanitizers stay out of `make unittest`), and with the Docker image's `gcc -m32`. Mutations checked that they fail: the
@@ -230,6 +232,72 @@ SurfSimWPA..."), joined and saved as a network that is not hidden; the card off,
 network by itself; the passphrase on neither the serial line nor anywhere new on the stick (the kernel image holds
 wlansim's own copy). The first run found the minute's rows going, which no host test had shown: the fixes above (the
 join's scan, the rows' note) come from it.
+
+## The review
+
+An independent review read the tree at eee0bd3a and found nothing critical: every copy of a password wiped on every
+path (the volatile wipes checked in i386 assembly at -O2), user memory handled as it should be, the jobs, the network
+manager's existing callers, the stick's writes and telnetd's question as they should be, and SSIDs escaped everywhere
+(220 000 random cases). Its other findings, and what came of each:
+
+- **M1, a leave or the card off right after a card-on, undone 30 s later.** `netman_wifi_connect_quiet()`, like
+  `netman_wifi_connect()`, sets `keeper_resume`, and the keeper honoured it at its next look (it sleeps up to 1 s) even
+  when a `wifi leave` or `wifi down` had come in between, rearming a join 30 s later (with telnetd after it, if on).
+  Fixed in kernel/netman.c for both callers: the station's count of leaves and downs is kept when `keeper_resume` is
+  set (`keeper_resume_stops`), and the keeper honours it only while the count is the same. A stop before the connect
+  changes nothing: the connect is the newer word. Both orders run in the new wsettings scenario (below): Disconnect
+  right after the card's start, and `wifi connect; wifi leave` typed at once, each with no association in the 40 s
+  after; and a connect after a leave that finds the saved network gone, which the keeper joins by itself once it is
+  back.
+- **M2, an open network joined while a server without a password runs, nobody told.** The model read the exposure up
+  to 2 s late, and the kernel did not look. Now the kernel refuses an open join while `netman_telnet_exposed()` or
+  `netman_ftp_exposed()` says so (-EPERM) unless the request carries `NETCTL_JOIN_EXPOSED`: at the call, and again in
+  the job just before it joins, since a name not heard is looked for first for up to 10 s. A refusal from the job, and
+  a join made with the flag while a server runs, have `NETCTL_DONE_EXPOSED`, and the job's log line says so; netctl.h
+  says it all. Settings sets the flag only from the answer to its warning; when the kernel refuses, it reads everything
+  again and asks with what is true then; the outcome of a join made so says the network is open while the server runs.
+- **M3, Save it ticked by default.** Unticked for every join now, as `wifi join` saves nothing without `wifi save`.
+  While telnetd is on (the setting) or a telnet server runs or is to start, the box says what saving means: "joined by
+  itself at every start, and telnetd starts on it".
+- **L1, steps away and back wrote the stick with the value it held.** Fixed in the model: a stepped setting keeps its
+  value from before the first step, and steps that end there write nothing ("as it was before the steps: nothing
+  written"). Not in `netman_set()`, which writes an unchanged value on purpose: that is how a value in force but not
+  saved gets saved, by the settings command and by L4's Save again.
+- **L2, Join answered "Wait" and the password box dropped.** The panel's Join is greyed while a job of this window's
+  runs (a scan started with Ctrl+R while the box is open, a step's write), and Enter in the password field waits with
+  the password still typed; the model keeps the question and says Wait if it is called all the same, for the Forget and
+  telnetd questions too; no scan starts by itself while a question is open. Scan, By name and Disconnect, and their
+  shortcuts (Ctrl+R, Ctrl+J), were already greyed while a job runs.
+- **L3, the radio showed the value being written, not the newest click.** The window shows a step waiting to be
+  written before the value of a write that runs.
+- **L4, a value in force but not saved could not be saved again.** Offered: the model keeps the settings this window
+  changed whose write ended "not saved" (those that are in force all the same: not telnetd or its port, not under
+  settings=off), and System's "Save again on the stick", shown while there are any, writes them one after the other
+  with the values in force, stopping at the first that is not saved again. Only this window's changes are known: the
+  network manager keeps no "not saved" mark that a program could read.
+- **L6, a failed read of the job's record dropped the job.** The job is kept, and read again at the next tick.
+- **L5, a job cannot be cancelled, and a station request that never ends leaves netctl busy, with the PMK in its
+  record, until a restart.** Left. The job's thread is waiting inside the station's request; a deadline in netctl.c
+  could mark the job failed, but not stop that thread, which still owns the request and its PMK and may still use
+  them (the save after a late join), and a second job let in meanwhile would overwrite the record under it. The clean
+  place is a deadline on the station's own requests (`request_if()` in net/wlan/wlan.c), outside this track. Until
+  then the PMK stays in the kernel's memory, which no program reads, and nothing but a restart frees the job, as for a
+  `wifi join` typed in a Terminal that never returns.
+- **Defence in depth on the password's path.** `sha1_block()` wipes its message schedule when the block is done (it
+  can be run backwards to the block: for HMAC's first, the key, a WPA2 password, xor the pad). The round variables
+  are kept in registers at -O2 and spilled anywhere on the stack; rather than slow every hash by keeping them in
+  memory, `pbkdf2_sha1()` and `ieee80211_prf_sha1()` overwrite 1 KB of the stack below them when they are done, where
+  the hashes' frames were. test_crypto and test_wpa give the same results.
+- **Tests asked for.** test_wsettings_win checks every byte of the wiped field (its 64); test_netctl's `user_buf()`
+  stand-in honours its write argument, with a scenario of memory the program may read but not write; test_netctl's
+  `join_stack_wiped` looks through the stack below the call, after it returns, for the password (a join refused while a
+  job runs) and for the PMK (a join started): leaving out either of start_join()'s wipes fails it.
+- **A permanent Wi-Fi scenario.** tools/wsettings_scenario.py, `--scenario wsettings`, registered in tools/qemu-usb.py
+  by insertion only (its function, its line in SCENARIOS, its name in the default list and in the docstring): the
+  hand-run session of before, made permanent and widened: a WPA2 join with the test passphrase typed into the field and
+  saved by ticking Save it, networks.conf holding the key and never the passphrase, M1's three orders above, M2's open
+  join asked about while telnetd runs and made only on Join, the kernel log's lines, the passphrase nowhere on the
+  serial line and nowhere new on the stick, fsck_msdos and fsck.fat on the stick.
 
 ## Where the code comes from
 

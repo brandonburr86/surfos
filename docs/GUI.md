@@ -691,11 +691,13 @@ side is `SYS_netctl`, `kernel/netctl.c` and `include/surfos/netctl.h`).
   version, the build, the memory, the time since the start, the processor). The band at the bottom
   says what the last change did and when it acts, in the `settings` command's words.
 * **Joining.** An open network joins at once, but while a telnet or FTP server without a password
-  runs Settings asks first, with the `wifi` command's warning. A WPA2 network asks for its
-  password in a panel over the tabs: the field shows a dot for each character and copies nothing,
-  and is wiped as soon as the password has been handed on; the kernel makes the key from it at
-  once and wipes it, and Save it keeps the network in `networks.conf` (the key, never the
-  password). By name joins a network that hides its name (no password: an open one). WEP, WPA3
+  runs Settings asks first, with the `wifi` command's warning, and the kernel joins such a network
+  only on that answer (a server that started a moment ago makes it ask then). A WPA2 network asks
+  for its password in a panel over the tabs: the field shows a dot for each character and copies
+  nothing, and is wiped as soon as the password has been handed on; the kernel makes the key from
+  it at once and wipes it. Save it, unticked unless the person ticks it, keeps the network in
+  `networks.conf` (the key, never the password); while telnetd is on it says that telnetd will
+  start on that network. By name joins a network that hides its name (no password: an open one). WEP, WPA3
   only and enterprise networks are listed and say why SurfOS does not join them. A network not
   heard in the last minute (the station forgets what it has not heard for that long, and its row
   goes) is looked for first, as `wifi join` does, and is joined as a hidden one only when it is
@@ -709,7 +711,10 @@ side is `SYS_netctl`, `kernel/netctl.c` and `include/surfos/netctl.h`).
   using the card) makes it say so. A job ends also when the window closes.
 * **The theme and the pointer's speed** are stepped through: each step is in force at once (the
   desktop reads them each second) and nothing is written until the steps stop for 1.5 s, when the
-  last is written once; closing the window writes what is waiting first.
+  last is written once (nothing, when the steps end where they began); closing the window writes
+  what is waiting first.
+* **A change in force but not saved** (the stick write-protected, full or gone) is offered again:
+  System > Save again on the stick writes each such setting with the value in force.
 * **Keys:** Ctrl+R scans, Ctrl+J joins by name, Ctrl+W or Esc closes (asking first while a host
   name is typed and not set).
 
