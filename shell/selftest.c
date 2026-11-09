@@ -204,9 +204,10 @@ static void test_told_ends(void) {
         task_wait(pid, &status);
     }
     n = task_ends_take(e, TASK_ENDS);
+    /* (its line within one screen line: the pager may split a longer one, and the smoke test looks for it whole) */
     check(k && status == 2 && n == 1 && e[0].pid == pid && e[0].code == 2 && e[0].how == WX_EXITED && !e[0].window &&
           !strcmp(e[0].name, "told") && task_ends_take(e, TASK_ENDS) == 0,
-          "a program the desktop started: its end kept for its starter and taken once (status 2, no window)");
+          "a program's end kept for the desktop that started it, given once");
 }
 
 static void test_tasks(void) {

@@ -740,10 +740,11 @@ SMOKE = [
     ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
                   "ok   refused writes: a save's new file goes into the cache, and its close says EIO",
                   'ok   refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted',
+                  # 11/09/26 (track desk, the second review): the ends kept for the desktop (kernel/task.c); in the order
+                  # the selftest prints (test_told_ends, after test_tasks)
+                  "ok   a program's end kept for the desktop that started it, given once",
                   "ok   kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected",
                   'ok   Ctrl+Alt+Del: a key held down is one press, a press after its break another; Delete repeats',
-                  # 11/09/26 (track desk, the second review): the ends kept for the desktop (kernel/task.c)
-                  'ok   a program the desktop started: its end kept for its starter and taken once (status 2, no window)',
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
