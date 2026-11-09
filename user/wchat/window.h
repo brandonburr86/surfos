@@ -24,7 +24,7 @@ at the other ends of its pipes. The model is chat.h's; the helper's frames are l
 #define CW_ROW_H 16                     /* a row of messages: the console's 8 x 16 characters */
 #define CW_MARGIN 4                     /* pixels left of the messages */
 #define CW_TIME 6                       /* cells of "10:15 " */
-#define CW_WHO 20                       /* cells of a nick at the start of a line, at most */
+#define CW_WHO 20                       /* cells of a sender in its form at the start of a line, at most */
 #define CW_NICKS_W 150                  /* the nick list */
 #define CW_OUTBOX 8192                  /* bytes for the helper waiting for its pipe */
 #define CW_REAP_MS 250                  /* with a helper: how often to look whether it was collected */
@@ -33,7 +33,7 @@ at the other ends of its pipes. The model is chat.h's; the helper's frames are l
 enum {
     ID_PAGES = 1, ID_TABS, ID_TOPIC, ID_AREA, ID_NICKS, ID_INPUT,
     ID_HOST, ID_PORT, ID_TLS, ID_NICK, ID_PASSKIND, ID_PASS, ID_CONNECT, ID_CANCEL,
-    BOX_CLOSE = 100, BOX_ABOUT,
+    BOX_CLOSE = 100, BOX_ABOUT, BOX_PLAIN,
     MENU_CONNECT = 200, MENU_DISCONNECT, MENU_CLOSE_ROOM, MENU_QUIT, MENU_PREV, MENU_NEXT, MENU_CODES, MENU_ABOUT,
     WATCH_FROM = 300, WATCH_TO,
 };
@@ -44,7 +44,7 @@ struct chatwin {
     struct gk *ui;
     struct chat *c;
     struct gk_widget *pages, *tabs, *topic, *area, *nicks, *input, *status;
-    struct gk_widget *host, *port, *tls, *nick, *passkind, *pass, *formerr;
+    struct gk_widget *host, *port, *tls, *nick, *passkind, *pass, *formnote, *formerr;
     unsigned tab_room[CHAT_ROOMS];      /* the room each tab shows, by its id */
     int ntabs;
     /* the active room's messages as rows: rows[seq % CHAT_LINES] for each line kept */

@@ -77,34 +77,44 @@ static void cut(char *out, int size, const char *s, int cells) {
 
 /**** the messages: rows ****/
 
-/* the start of a line before its text: the nick in its form, its colour, and the text's own colour */
+/* The start of a line before its text, its colour, and the text's colour; every row of the text starts after it, so
+   that no wrapped row can begin where a sender does and pass for a line of its own (11/09/26, the review). A sender
+   is shown in printable ASCII only: a nick, or the server's name for what it says itself, between dashes; so the
+   Chat's own lines' mark, a character no server can put there, says that the Chat wrote them. */
+#define CW_OWN "\xe2\x89\x8b"                  /* the Chat's own lines: SurfOS's mark */
+#define CW_EVENT "\xc2\xb7"                     /* what happened in a room, as the Chat tells it */
 static void who_of(const struct chatwin *w, const struct chat_line *l, char *out, int size, unsigned *who,
                    unsigned *text) {
     const struct gk_theme *t = gk_theme(w->ui);
-    char nick[CW_WHO * 4 + 8];
-    cut(nick, sizeof(nick), l->from, CW_WHO - 3);
+    char name[CW_WHO * 4 + 8], ascii[CW_WHO * 4 + 8];      /* more than the column shows: its dot */
+    int i, n = 0;
+    for(i = 0; l->from[i] && n < (int)sizeof(ascii) - 1; i++)
+        if(((unsigned char)l->from[i] & 0xc0) != 0x80)  /* a character: printable ASCII, or ? */
+            ascii[n++] = l->from[i] > ' ' && l->from[i] < 0x7f ? l->from[i] : '?';
+    ascii[n] = 0;
+    cut(name, sizeof(name), ascii, CW_WHO - 3);
     *who = l->flags & LF_HIGHLIGHT ? t->coral : l->flags & LF_SELF ? t->muted : t->teal;
     *text = t->ink;
     switch(l->kind) {
-    case LN_MSG: snprintf(out, (size_t)size, "<%s> ", nick); break;
-    case LN_ACTION: snprintf(out, (size_t)size, "* %s ", nick); break;
-    case LN_NOTICE:
-        if(nick[0]) snprintf(out, (size_t)size, "-%s- ", nick);
-        else out[0] = 0;
-        break;
-    case LN_ERROR:
-        snprintf(out, (size_t)size, "! ");
+    case LN_MSG: snprintf(out, (size_t)size, "<%s> ", n ? name : "?"); break;
+    case LN_ACTION: snprintf(out, (size_t)size, "* %s ", n ? name : "?"); break;
+    case LN_NOTICE: snprintf(out, (size_t)size, "-%s- ", n ? name : "?"); break;
+    case LN_ERROR:                                  /* the Chat's own, or a server's, in coral */
+        if(n) snprintf(out, (size_t)size, "-%s- ", name);
+        else snprintf(out, (size_t)size, "%s ", CW_OWN);
         *who = *text = t->coral;
         break;
-    default:                                        /* events and the Chat's own lines, muted */
-        snprintf(out, (size_t)size, "%s", l->kind == LN_EVENT ? "\xc2\xb7 " : "");
+    default:                                        /* events, the Chat's own lines and a server's words: muted */
+        if(n) snprintf(out, (size_t)size, "-%s- ", name);
+        else snprintf(out, (size_t)size, "%s ", l->kind == LN_EVENT ? CW_EVENT : CW_OWN);
         *who = *text = t->muted;
     }
 }
 
-/* the cells of row k: the first row's after the time and the nick, the others' after the time */
+/* the cells of a row's text: after the time and the line's start, on every row */
 static int row_cells(const struct chatwin *w, int k, int who) {
-    int n = w->cols - CW_TIME - (k ? 0 : who);
+    int n = w->cols - CW_TIME - who;
+    (void)k;
     return n < 1 ? 1 : n;
 }
 
@@ -234,7 +244,7 @@ static void draw_line(struct chatwin *w, struct gw *win, const struct chat_line 
                 gw_text(win, CW_MARGIN, ry, time, t->muted);
                 gw_text(win, CW_MARGIN + CW_TIME * 8, ry, who, who_ink);
             }
-            draw_text(w, win, l->text, at, end, CW_MARGIN + (CW_TIME + (k ? 0 : cells)) * 8, ry, ink, bg);
+            draw_text(w, win, l->text, at, end, CW_MARGIN + (CW_TIME + cells) * 8, ry, ink, bg);
         }
         at = next;
     }
@@ -510,6 +520,18 @@ static void push(struct chatwin *w) {
 
 /**** the connect form ****/
 
+/* the form's note, in coral while the password would go without encryption (11/09/26, the review) */
+static void form_note(struct chatwin *w) {
+    const struct gk_theme *t = gk_theme(w->ui);
+    if(!gk_value(w->tls) && gk_value(w->passkind) != CHAT_PASS_NONE) {
+        gk_set_text(w->formnote, "No encryption: anyone on the network can read the password.");
+        gk_label_color(w->formnote, t->coral);
+    } else {
+        gk_set_text(w->formnote, "Nothing is kept: the password is asked for at each connection.");
+        gk_label_color(w->formnote, t->muted);
+    }
+}
+
 static void show_form(struct chatwin *w) {
     struct chat *c = w->c;
     char port[12];
@@ -524,6 +546,7 @@ static void show_form(struct chatwin *w) {
     gk_enable(w->pass, c->p.pass_kind != CHAT_PASS_NONE);
     gk_field_wipe(w->pass);
     gk_set_text(w->formerr, "");
+    form_note(w);
     gk_set_value(w->pages, PAGE_CONNECT);
     gk_focus(c->p.host[0] ? w->pass : w->host);
     if(!c->p.host[0] || c->p.pass_kind == CHAT_PASS_NONE) gk_focus(c->p.host[0] ? w->nick : w->host);
@@ -534,7 +557,9 @@ static void form_error(struct chatwin *w, const char *why) {
     gk_label_color(w->formerr, gk_theme(w->ui)->coral);
 }
 
-static void connect_now(struct chatwin *w) {
+/* Connect, or Enter in the form. A password without TLS is asked about first (11/09/26, the review): Cancel is the
+   box's first answer, which Enter gives, and Esc gives Cancel too; only Send anyway, chosen, sends it (plain_ok) */
+static void connect_now(struct chatwin *w, int plain_ok) {
     struct chat_params p;
     char err[160];
     const char *s = gk_text(w->port);
@@ -562,6 +587,13 @@ static void connect_now(struct chatwin *w) {
         }
         memcpy(p.pass, gk_text(w->pass), strlen(gk_text(w->pass)) + 1);
     }
+    if(!p.tls && p.pass_kind != CHAT_PASS_NONE && !plain_ok && p.pass[0]) {
+        chat_wipe(&p, sizeof(p));
+        gk_confirm(w->ui, BOX_PLAIN, "Send your password unencrypted?", "No encryption: anyone on the network can read it.",
+                   "Cancel, and turn TLS on, to send it encrypted.", "Cancel", "Send anyway", NULL);
+        return;
+    }
+    p.plain_ok = plain_ok;
     stamp(w);
     if(chat_connect(w->c, &p, err, sizeof(err))) {
         chat_wipe(&p, sizeof(p));
@@ -642,11 +674,12 @@ int chatwin_event(struct chatwin *w, const struct gk_event *ev) {
         break;
     case GK_EV_ANSWER:
         if(ev->id == BOX_CLOSE && ev->value == 0) return closing(w);
+        if(ev->id == BOX_PLAIN && ev->value == 1) connect_now(w, 1);     /* Send anyway: chosen, never the default */
         break;
     case GK_EV_MENU:
         return menu(w, ev->id);
     case GK_EV_CLICK:
-        if(ev->id == ID_CONNECT) connect_now(w);
+        if(ev->id == ID_CONNECT) connect_now(w, 0);
         else if(ev->id == ID_CANCEL) {
             gk_field_wipe(w->pass);
             gk_set_value(w->pages, PAGE_CHAT);
@@ -654,24 +687,28 @@ int chatwin_event(struct chatwin *w, const struct gk_event *ev) {
         }
         break;
     case GK_EV_ACTIVATE:
-        if(ev->id == ID_INPUT) {
-            gk_field_remember(w->input);
+        if(ev->id == ID_INPUT) {                     /* a line for NickServ is kept out of the history, and wiped */
+            int secret = chat_secret(c, gk_text(w->input));
+            if(!secret) gk_field_remember(w->input);
             chat_input(c, gk_text(w->input));
-            gk_set_text(w->input, "");
+            if(secret) gk_field_wipe(w->input);
+            else gk_set_text(w->input, "");
         } else if(ev->id == ID_NICKS && ev->value >= 0 && gk_list_text(w->nicks, ev->value)) {
             snprintf(line, sizeof(line), "/query %s", gk_list_text(w->nicks, ev->value) + 1);
             chat_input(c, line);
             gk_focus(w->input);
-        } else if(ev->id == ID_HOST || ev->id == ID_PORT || ev->id == ID_NICK || ev->id == ID_PASS) connect_now(w);
+        } else if(ev->id == ID_HOST || ev->id == ID_PORT || ev->id == ID_NICK || ev->id == ID_PASS) connect_now(w, 0);
         break;
     case GK_EV_CHANGE:
         if(ev->id == ID_TABS) chat_select(c, ev->value);
         else if(ev->id == ID_TLS) {                 /* the usual ports follow TLS */
             if(ev->value && !strcmp(gk_text(w->port), "6667")) gk_set_text(w->port, "6697");
             if(!ev->value && !strcmp(gk_text(w->port), "6697")) gk_set_text(w->port, "6667");
+            form_note(w);
         } else if(ev->id == ID_PASSKIND) {
             gk_enable(w->pass, ev->value != CHAT_PASS_NONE);
             if(ev->value == CHAT_PASS_NONE) gk_field_wipe(w->pass);
+            form_note(w);
         }
         break;
     case GK_EV_TAB_CLOSE:
@@ -699,6 +736,7 @@ int chatwin_event(struct chatwin *w, const struct gk_event *ev) {
     case GK_EV_THEME:
         c->dirty |= CHAT_DIRTY_ALL;
         gk_redraw(w->area);
+        form_note(w);
         break;
     }
     return 1;
@@ -759,7 +797,7 @@ static void build_form(struct chatwin *w, struct gk_widget *page) {
     gk_set_value(w->passkind, CHAT_PASS_NONE);
     w->pass = gk_field(labelled(col, ""), ID_PASS, CHAT_PASS_MAX, GK_PASSWORD);
     gk_enable(w->pass, 0);
-    gk_label_color(gk_label(col, "Nothing is kept: the password is asked for at each connection."), gk_theme(w->ui)->muted);
+    w->formnote = gk_label(col, "");
     w->formerr = gk_label(col, "");
     row = gk_hbox(col, 8);
     gk_button(row, "Connect", ID_CONNECT);
@@ -819,6 +857,7 @@ int chatwin_open(struct chatwin *w, struct chat *c) {
     build_menus(w);
     w->status = gk_status(root);
     gk_set_value(w->pages, PAGE_CONNECT);
+    form_note(w);
     gk_focus(w->host);
     if(!gk_ok(w->ui)) {
         gk_close(w->ui);

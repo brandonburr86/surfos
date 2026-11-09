@@ -157,12 +157,28 @@ static const char *said_last(int room) {
     return l ? l->text : "(none)";
 }
 
-/* the password's bytes anywhere in the window's or the model's memory */
-static int remembered(const char *pass) {
+static int holds(const void *at, size_t size, const char *pass) {
+    const unsigned char *b = at;
     size_t n = strlen(pass), i;
-    const unsigned char *b = (const unsigned char *)&w, *m = (const unsigned char *)&c;
-    for(i = 0; i + n <= sizeof(w); i++) if(!memcmp(b + i, pass, n)) return 1;
-    for(i = 0; i + n <= sizeof(c); i++) if(!memcmp(m + i, pass, n)) return 1;
+    for(i = 0; i + n <= size; i++) if(!memcmp(b + i, pass, n)) return 1;
+    return 0;
+}
+
+/* the password's bytes anywhere in the window's or the model's memory: their structs, the password field's and the
+   input line's buffers, the model's static buffers and every room's lines (11/09/26, the review) */
+static int remembered(const char *pass) {
+    const struct chat_buf *const tables[] = { chat_bufs, chat_recv_bufs, chat_input_bufs };
+    int i, k;
+    if(holds(&w, sizeof(w), pass) || holds(&c, sizeof(c), pass)) return 1;
+    if(w.pass && holds(gk_text(w.pass), CHAT_PASS_MAX + 1, pass)) return 1;
+    if(w.input && holds(gk_text(w.input), CHAT_INPUT_MAX + 1, pass)) return 1;
+    for(i = 0; i < 3; i++)
+        for(k = 0; tables[i][k].at; k++) if(holds(tables[i][k].at, tables[i][k].size, pass)) return 1;
+    for(i = 0; i < c.rooms; i++)
+        for(k = 0; k < c.room[i]->count; k++) {
+            const struct chat_line *l = chat_line_at(c.room[i], k);
+            if(strstr(l->text, pass) || strstr(l->from, pass)) return 1;
+        }
     return 0;
 }
 
@@ -254,6 +270,79 @@ static void form(void) {
     for(i = 0; i < gkf_menu_count(); i++)           /* connected: Connect greyed, Disconnect not */
         if(gkf_menu_entry(i)->id == MENU_CONNECT) CHECK(gkf_menu_entry(i)->flags & WIN_MENU_DISABLED);
         else if(gkf_menu_entry(i)->id == MENU_DISCONNECT) CHECK(!(gkf_menu_entry(i)->flags & WIN_MENU_DISABLED));
+}
+
+/* 11/09/26, the review: a password over a plain connection only after a question that Enter and Esc answer Cancel
+   (H1); the Chat's own lines marked, a server's under its name (M3); a wrapped row after its line's start (L7);
+   NickServ's lines masked, kept out of the history, wiped (L8) */
+static void review(void) {
+    static const char pass[] = "made-up-pass2";
+    char line[600];
+    int s0 = spawns, bx = -1, by = -1, fx = -1, fy = -1, n;
+    opened();
+    gk_set_text(w.host, "irc.test");
+    CHECK(shows("Nothing is kept: the password is asked for at each connection.", theme()->muted));
+    click_on(w.tls);
+    run();
+    gk_focus(w.passkind);
+    gkf_key(WIN_KEY_RIGHT, 0);                      /* the server's password, without TLS: the form says what it means */
+    run();
+    CHECK(gk_value(w.passkind) == CHAT_PASS_SERVER && !strcmp(gk_text(w.port), "6667"));
+    CHECK(shows("No encryption: anyone on the network can read the password.", theme()->coral));
+    gk_focus(w.pass);
+    gkf_type(pass);
+    gkf_key('\r', 0);                               /* Connect: the question, nothing started */
+    run();
+    CHECK(spawns == s0 && gk_asking(w.ui) == BOX_PLAIN && shows("Send your password unencrypted?", theme()->paper));
+    CHECK(shows("No encryption: anyone on the network can read it.", theme()->ink));
+    gkf_key('\r', 0);                               /* Enter alone: Cancel, the form as it was */
+    run();
+    CHECK(spawns == s0 && !gk_box_open(w.ui) && gk_value(w.pages) == PAGE_CONNECT && !strcmp(gk_text(w.pass), pass));
+    gkf_key('\r', 0);
+    run();
+    CHECK(gk_asking(w.ui) == BOX_PLAIN);
+    gkf_key(27, 0);                                 /* Esc: Cancel too */
+    run();
+    CHECK(spawns == s0 && !gk_box_open(w.ui) && c.state == CHAT_OFF);
+    gkf_key('\r', 0);
+    run();
+    gkf_key(WIN_KEY_RIGHT, 0);                      /* Send anyway, chosen */
+    gkf_key('\r', 0);
+    run();
+    CHECK(spawns == s0 + 1 && spawn_tls == 0 && spawn_port == 6667 && gk_value(w.pages) == PAGE_CHAT);
+    CHECK(!strcmp(gk_text(w.pass), "") && c.p.plain_ok);
+    frame(LINK_UP, "", 0);
+    CHECK(!strcmp(took(), "CAP LS 302\r\nPASS made-up-pass2\r\nNICK surfer\r\nUSER surfer 0 * :surfer\r\n"));
+    CHECK(!remembered(pass) && shows("The password goes unencrypted, as you agreed", theme()->coral));
+    /* M3: the server's words that are the Chat's, under the server's name; the Chat's own with its mark */
+    server(":irc.test 002 surfer :Connected, without encryption\r\n");
+    CHECK(shows("\xe2\x89\x8b Connected, without encryption", theme()->muted));
+    CHECK(shows("-irc.test- Connected, without encryption", theme()->muted));
+    CHECK(!shows("\xe2\x89\x8b -irc.test-", theme()->muted));
+    server(":irc.test CAP * LS :x\r\n:irc.test 001 surfer :Welcome\r\n");
+    took();
+    /* L7: a row that a message wraps onto starts after the line's sender, not where a sender would */
+    type_line("/join #surf");
+    took();
+    server(":surfer!s@host.test JOIN #surf\r\n");
+    n = w.cols - CW_TIME - 6 - 1;                   /* the first row's room after "<bob> ", less the space */
+    memset(line, 0, sizeof(line));
+    snprintf(line, sizeof(line), ":bob!b@h PRIVMSG #surf :");
+    memset(line + strlen(line), 'x', (size_t)n);
+    strcat(line, " <alice> forged\r\n");
+    server(line);
+    CHECK(gkf_find("<bob> ", theme()->teal, &bx, &by) && gkf_find("<alice> forged", theme()->ink, &fx, &fy));
+    CHECK(fy == by + CW_ROW_H && fx == bx + 6 * 8);
+    /* L8: a line for NickServ: masked where it is shown, not in the history, wiped */
+    type_line("hello");
+    took();
+    type_line("/msg NickServ IDENTIFY made-up-pw3");
+    CHECK(!strcmp(took(), "PRIVMSG NickServ :IDENTIFY made-up-pw3\r\n") && !remembered("made-up-pw3"));
+    CHECK(shows("\xe2\x86\x92 NickServ: IDENTIFY ****", theme()->ink) && !strcmp(gk_text(w.input), ""));
+    gkf_key(WIN_KEY_UP, 0);                         /* the history: the line before it */
+    run();
+    CHECK(!strcmp(gk_text(w.input), "hello"));
+    gk_set_text(w.input, "");
 }
 
 static void channel(void) {
@@ -459,6 +548,7 @@ int main(void) {
     chat_free(&c);
     memset(&c, 0, sizeof(c));
     form();
+    review();
     channel();
     scrollback();
     helpers();
