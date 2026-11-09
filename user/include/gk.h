@@ -264,7 +264,8 @@ void gk_redraw(struct gk_widget *w);                       /* painted again at t
    "" for none. gk_set_text() for a field puts the cursor at its end, and says whether the widget holds the text as
    given (11/09/26): 0, or 1 when it holds it changed to fit (a field's or a text's max reached, the text cut at a
    character's start; a control character as a space, a CR LF as one line end: compare gk_text()), or -1 when it
-   could not take it (no memory: gk_ok() says 0) */
+   could not take it (no memory: gk_ok() says 0). A tab strip's and a list's text is their shown tab's label and their
+   selected row's: gk_set_text() changes nothing there and says -1 (gk_tab_label(), gk_list_set() do) */
 const char *gk_text(const struct gk_widget *w);
 int gk_set_text(struct gk_widget *w, const char *text);
 /* the value of a check box (0, 1), radio group, list (the row selected, -1), tabs, pages (the one shown), scroll
@@ -359,7 +360,9 @@ void gk_damage(struct gk_widget *w, int x, int y, int width, int height);   /* a
    answered once, GK_EV_ANSWER with its id: a box opened over another answers the other -1 first. A question's
    Enter answers its first button, or with gk_confirm_default() the one def says (0 yes, 1 no, 2 cancel: a
    destructive question's safe answer); Left and Right move between them and stop at the ends. A key held down
-   (WIN_MOD_REPEAT) answers no box: Enter held on a button does not answer the question it opens */
+   (WIN_MOD_REPEAT) answers no box: Enter held on a button does not answer the question it opens. While a box is up,
+   the program's menus are greyed in the desktop's bar and their shortcuts are the box's keys; a choice made in the bar
+   just before the box opened, which comes after it, is dropped (no GK_EV_MENU behind a box) */
 void gk_message(struct gk *ui, int id, const char *title, const char *line1, const char *line2);
 void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
                 const char *yes, const char *no, const char *cancel);

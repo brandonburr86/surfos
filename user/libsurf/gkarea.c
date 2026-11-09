@@ -178,8 +178,12 @@ static int area_wheel(struct gk_widget *w, int x, int y, int rows) {
         }
         return 1;
     }
-    if(across) a->sx += rows * (unit >= 16 ? 1 : 16 / unit);
-    else a->sy += rows * (unit >= 16 ? 1 : 16 / unit);
+    {                                                   /* (the re-review, N7) in 64 bits, held to the int's range */
+        long long to = (long long)(across ? a->sx : a->sy) + (long long)rows * (unit >= 16 ? 1 : 16 / unit);
+        to = to > 0x7FFFFFFF ? 0x7FFFFFFF : to < -0x7FFFFFFF ? -0x7FFFFFFF : to;
+        if(across) a->sx = (int)to;
+        else a->sy = (int)to;
+    }
     fit(w);
     if(a->sx != wx || a->sy != wy) scrolled(w);
     return 1;

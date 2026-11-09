@@ -106,13 +106,25 @@ static int has_selection(const struct gk_line *f) {
     return f->anchor != f->cursor;
 }
 
-/* the selection's bytes go (zeroed where the text ended) */
+/* the start of the character at stands in (at itself when a character starts there) */
+static int start_of(const struct gk_line *f, int at) {
+    int k = 0, len;
+    while(k < f->len) {
+        gw_char(f->buf + k, f->len - k, &len);
+        if(k + len > at) return k;
+        k += len;
+    }
+    return at;
+}
+
+/* the selection's bytes go (zeroed where the text ended); the cursor on a character's start (the re-review, N4: a
+   deletion can join a lone first byte and a lone continuation byte into one character around it) */
 static void delete_range(struct gk_line *f, int from, int to) {
     if(to <= from) return;
     memmove(f->buf + from, f->buf + to, (size_t)(f->len - to));
     gk_wipe(f->buf + f->len - (to - from), (size_t)(to - from));
     f->len -= to - from;
-    f->cursor = f->anchor = from;
+    f->cursor = f->anchor = start_of(f, from);
 }
 
 static void delete_selection(struct gk_line *f) {

@@ -418,15 +418,21 @@ const char *gk_text(const struct gk_widget *w) {
 /* (the review, F7) 0 when the widget holds the text as given, 1 when it holds it changed to fit (cut, a control
    character a space), -1 when it could not take it (no memory, or while painting) */
 int gk_set_text(struct gk_widget *w, const char *text) {
+    int had, r;
     if(!w || w->ui->painting) return -1;
+    if(!w->cls->set_text && w->cls->get_text) return -1;   /* a tab strip's, a list's: its tab's or row's (the
+                                                               re-review, N5: gk_tab_label(), gk_list_set()) */
     if(!text) text = "";
+    had = w->ui->failed;                                /* (N5: this call's failure, not an earlier one's) */
+    w->ui->failed = 0;
     if(w->cls->set_text) w->cls->set_text(w, text);
     else if(gk_set_str(w, &w->text, text)) {
         gk_relayout(w);
         gk_dirty(w);
     }
-    if(!strcmp(gk_text(w), text)) return 0;
-    return w->ui->failed ? -1 : 1;
+    r = !strcmp(gk_text(w), text) ? 0 : w->ui->failed ? -1 : 1;
+    w->ui->failed |= had;
+    return r;
 }
 
 int gk_value(const struct gk_widget *w) {
@@ -959,8 +965,27 @@ int gk_timer(struct gk *ui, int id, int ms, int repeat) {
 }
 
 void gk_timer_stop(struct gk *ui, int id) {
-    int i;
+    int i, k, n = 0;
     for(i = 0; i < GK_TIMERS; i++) if(ui->timers[i].on && ui->timers[i].id == id) ui->timers[i].on = 0;
+    for(k = 0; k < ui->qcount; k++) {                   /* (the re-review, N3) its events not given yet go too: a key and
+                                                           the timer due in one turn queue the key first */
+        int from = (ui->qhead + k) % GK_QUEUE, to = (ui->qhead + n) % GK_QUEUE;
+        if(ui->queue[from].type == GK_EV_TIMER && ui->queue[from].id == id) {
+            if(ui->qtext[from]) {
+                gk_wipe(ui->qtext[from], strlen(ui->qtext[from]));
+                free(ui->qtext[from]);
+                ui->qtext[from] = NULL;
+            }
+            continue;
+        }
+        if(from != to) {
+            ui->queue[to] = ui->queue[from];
+            ui->qtext[to] = ui->qtext[from];
+            ui->qtext[from] = NULL;
+        }
+        n++;
+    }
+    ui->qcount = n;
 }
 
 /* the timers that are due: their events (a repeating one keeps its beat, and skips the beats it missed) */

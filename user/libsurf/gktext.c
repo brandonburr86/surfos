@@ -140,6 +140,8 @@ static void delete_selection(struct text *t) {
     memmove(t->buf + from, t->buf + to, (size_t)(t->len - to));
     gk_wipe(t->buf + t->len - (to - from), (size_t)(to - from));
     t->len -= to - from;
+    if(from < t->len && from > 0 && next_char(t, prev_char(t, from)) > from)
+        from = prev_char(t, from);                      /* (the re-review, N4) on the start of a character it joined */
     t->cursor = t->anchor = from;
 }
 
@@ -411,7 +413,8 @@ static int text_wheel(struct gk_widget *w, int x, int y, int rows) {
     int was = t->top, last = max(0, lines(t) - rows_of(w));
     (void)x;
     (void)y;
-    t->top = t->top + rows < 0 ? 0 : t->top + rows > last ? last : t->top + rows;
+    long long to = (long long)t->top + rows;            /* (the re-review, N7) in 64 bits */
+    t->top = to < 0 ? 0 : to > last ? last : (int)to;
     if(t->top != was) gk_dirty(w);
     return 1;
 }

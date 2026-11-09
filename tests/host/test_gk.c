@@ -1624,6 +1624,64 @@ static void again_keys(void) {
     gk_close(ui);
 }
 
+/* the re-review. N3: a timer stopped takes its event not yet given with it. N4: a deletion leaves the cursor on a
+   character's start. N5: gk_set_text()'s result is this call's; a tab strip's and a list's text is not theirs to set
+   (-1). N7: absurd wheel rows held */
+static void again_lows(void) {
+    struct gk *ui = window("Again", 400, 300);
+    struct gk_widget *tabs = gk_tabs(gk_root(ui), 2, 0), *f = gk_field(gk_root(ui), 3, 8, 0);
+    struct gk_widget *t = gk_text_area(gk_root(ui), 4, 64, 0), *l = gk_list(gk_root(ui), 5), *a = gk_area(gk_root(ui), 6, 0, NULL, NULL);
+    struct gk_event ev;
+    const struct gk_line *fl = f->k;
+    int i;
+    for(i = 0; i < 6; i++) gk_tab(tabs, "page");
+    for(i = 0; i < 40; i++) gk_list_add(l, "row");
+    gk_area_extent(a, 1000, 1, 1000, 1);
+    run(ui);
+    /* N3: a key and the timer due in one turn queue the key first; the timer stopped in answer, its event goes */
+    gk_timer(ui, 7, 10, 0);
+    gkf_advance(10);
+    gkf_key(WIN_KEY_F12, 0);
+    CHECK(gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_KEY && ui->qcount == 1);
+    gk_timer_stop(ui, 7);
+    CHECK(gk_next(ui, &ev, 0) == 0);
+    /* N4: a lone C3, a letter, a lone A9: the letter deleted (Backspace, Delete), the two bytes one character, the
+       cursor on its start */
+    gk_focus(f);
+    gk_set_text(f, "\xc3x\xa9");
+    gkf_key(WIN_KEY_END, 0);
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(127, 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "\xc3\xa9") && fl->cursor == 0);
+    gk_set_text(f, "\xc3x\xa9");
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key(WIN_KEY_DELETE, 0);
+    gkf_type("z");
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "z\xc3\xa9"));
+    gk_focus(t);
+    gk_set_text(t, "\xc3x\xa9");
+    gkf_key(WIN_KEY_END, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(127, 0);
+    gkf_type("z");
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "z\xc3\xa9"));
+    /* N5 */
+    ui->failed = 1;                                     /* an earlier failure: this call's result is its own */
+    CHECK(gk_set_text(f, "abcdefghij") == 1 && gk_set_text(f, "ok") == 0 && !gk_ok(ui));
+    ui->failed = 0;
+    CHECK(gk_set_text(tabs, "x") == -1 && !strcmp(gk_text(tabs), "page") && gk_set_text(l, "x") == -1);
+    /* N7 */
+    gkf_wheel(10, 10, 2147483647);
+    gkf_wheel(10, 10, -2147483647 - 1);
+    run(ui);
+    CHECK(gk_ok(ui));
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -2122,6 +2180,7 @@ int main(void) {
     lows();
     fuzz();
     again_keys();
+    again_lows();
     paste();
     choosers();
     theme();

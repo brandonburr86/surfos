@@ -190,7 +190,10 @@ static int list_wheel(struct gk_widget *w, int x, int y, int rows) {
     int was = l->top;
     (void)x;
     (void)y;
-    l->top += rows;
+    {                                                   /* (the re-review, N7) in 64 bits */
+        long long to = (long long)l->top + rows;
+        l->top = to > 0x7FFFFFFF ? 0x7FFFFFFF : to < 0 ? 0 : (int)to;
+    }
     keep_top(w);
     if(l->top != was) gk_dirty(w);
     return 1;
