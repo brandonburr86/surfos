@@ -324,6 +324,16 @@ from the image track's review, and a cleanup:
   full `make test-usb` 890 of 890 at O0 and at O2; `make test-all` 558 and 51 at O0 and O2 (the coordinator's clean
   rerun: mine at 19:38 lost the owner's-stick boot's 90 s wait to a guest clock behind under load, and its rerun was
   cut by the Mac's sleep); `make -C surfcpu test-os-qemu` 137 of 137; each commit builds on its own.
+- The second review, at the tip of this branch: `test_win` 2,294 (K6, `test_close_lost`; look-alike Help items and
+  titles), `test_guiclient` 565 (the third press however slow, Cancel counting again, a refused CLOSE; a program's
+  chooser with its pid; programs that end before a window, one message at a time, the earlier ones let go),
+  `test_guidesk` 152 (a title with punctuation after), the rest unchanged, and the whole `make unittest`; the
+  selftest's kept end; screen: `gui_apps_desk.py` 49 checks (a chooser's title read whole for its pid, nothing said
+  after `wintest raw`, the message after `wintest nosuch`), wdemo hang's third press after 3.5 s; the full `make
+  test-usb` 892 of 892 at O0 and at O2 and `make -C surfcpu test-os-qemu` 137 of 137, at 3c3b6535; `make test-all`
+  558 and 51 at O0 and at O2, at 2799ff19, whose selftest line fits a screen line and is looked for where the
+  selftest prints it (at 3c3b6535 the smoke test missed it twice: in the wrong order, then cut by the pager; the
+  checks themselves passed). 2799ff19 changes only that line and its expectation. Each commit builds on its own.
 
 Nothing of this has run on the laptop, and nothing will until the owner tries it. The keyboard's repeat in
 particular is seen only there (QEMU's sendkey presses and lets go, with no typematic): `wintest desk` in the
