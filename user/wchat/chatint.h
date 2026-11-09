@@ -54,4 +54,12 @@ void chat_cap_end(struct chat *c);
 void chat_lose(struct chat *c, const char *why);    /* the connection must end: chat.ending */
 int chat_since(const struct chat *c, unsigned when);   /* milliseconds from when to now, at least 0 */
 
+/* 11/09/26 (the review) */
+void chat_room_name(struct chat_room *r, const char *name);   /* its name, and the label shown for it */
+int chat_password_may_go(const struct chat *c);     /* over TLS, or without it as the person agreed */
+int chat_secret_to(const struct chat *c, const char *target);  /* NickServ: what goes to it carries passwords */
+/* each file's static buffers, NULL-ended, for the tests to look through for a password (tests/host/test_wchat.c) */
+struct chat_buf { const void *at; size_t size; };
+extern const struct chat_buf chat_bufs[], chat_recv_bufs[], chat_input_bufs[];
+
 #endif

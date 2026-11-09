@@ -32,6 +32,16 @@ channel for them; a DCC offer is shown and nothing more, as Chat makes no DCC co
 #define PONGS 2                         /* PONGs waiting at most: a flood of PINGs is answered once or twice */
 
 static char text[IRC_TEXT_MAX], text2[IRC_TEXT_MAX], who[IRC_TEXT_MAX];
+static char rest_raw[IRC_IN_MAX + 1], escaped_raw[IRC_LINE_MAX];
+static unsigned char sasl_raw[CHAT_NICK_MAX + CHAT_PASS_MAX + 3];
+static char sasl_b64[(sizeof(sasl_raw) + 2) / 3 * 4 + 1], sasl_chunk[401];
+
+/* the static buffers of this file: test_wchat looks through them for a password (11/09/26, the review) */
+const struct chat_buf chat_recv_bufs[] = {
+    { text, sizeof(text) }, { text2, sizeof(text2) }, { who, sizeof(who) }, { rest_raw, sizeof(rest_raw) },
+    { escaped_raw, sizeof(escaped_raw) }, { sasl_raw, sizeof(sasl_raw) }, { sasl_b64, sizeof(sasl_b64) },
+    { sasl_chunk, sizeof(sasl_chunk) }, { NULL, 0 }
+};
 
 static const char *clean(char *out, const char *s) {
     irc_text(out, IRC_TEXT_MAX, s, (int)strnlen(s, IRC_IN_MAX));
@@ -40,7 +50,7 @@ static const char *clean(char *out, const char *s) {
 
 /* the parameters from the from-th on, one space between, cleaned into out */
 static const char *rest(const struct irc_msg *m, int from, char *out) {
-    static char raw[IRC_IN_MAX + 1];
+    char *raw = rest_raw;
     int i, o = 0;
     for(i = from; i < m->argc; i++) {
         int n = (int)strnlen(m->argv[i], IRC_IN_MAX);
@@ -61,6 +71,18 @@ static int user_nick(const struct chat *c, const struct irc_msg *m) {
 /* who sent m, to be shown: the nick, or the server's name cleaned */
 static const char *sender(const struct irc_msg *m) {
     return clean(who, m->nick);
+}
+
+/* the sender of what a server says itself (a numeric's text), never "", which is the Chat's own lines' (11/09/26, the
+   review): the prefix's name in printable ASCII, or the name the server was reached by */
+static const char *server_of(const struct chat *c, const struct irc_msg *m) {
+    const char *s = m->nick[0] ? m->nick : c->p.host;
+    int n = 0;
+    for(; *s && n < 63; s++)
+        if(*s > ' ' && *s < 0x7f) who[n++] = *s;
+    who[n] = 0;
+    if(!n) strcpy(who, "server");
+    return who;
 }
 
 static struct chat_room *active(struct chat *c) {
@@ -118,7 +140,7 @@ static void on_message(struct chat *c, const struct irc_msg *m, int notice) {
         irc_text(text, IRC_TEXT_MAX, arg, arglen);
     } else clean(text, m->argv[1]);
     if(!user_nick(c, m)) {                          /* the server's own, or a sender with no nick to answer */
-        chat_say(c, NULL, kind, 0, sender(m), "%s", text);
+        chat_say(c, NULL, kind, 0, server_of(c, m), "%s", text);
         return;
     }
     if(chat_is_channel(c, target)) {
@@ -181,7 +203,7 @@ static void on_join(struct chat *c, const struct irc_msg *m) {
                      "or leave a channel", clean(text, chan));
             continue;
         }
-        memcpy(r->name, chan, strlen(chan) + 1);        /* as the server writes it (CHAT_CHAN_MAX at most) */
+        chat_room_name(r, chan);                        /* as the server writes it (CHAT_CHAN_MAX at most) */
         r->joined = 1;
         r->parting = r->names_done = 0;
         chat_nicks_clear(c, r);
@@ -252,7 +274,7 @@ static void on_nick(struct chat *c, const struct irc_msg *m) {
         } else if(r->kind == ROOM_QUERY && !irc_casecmp(c->casemap, r->name, m->nick)) {
             chat_say(c, r, LN_EVENT, 0, "", "%s is now known as %s", m->nick, to);
             if(chat_find(c, ROOM_QUERY, to) < 0) {  /* the query follows the nick, unless another holds it */
-                snprintf(r->name, sizeof(r->name), "%s", to);
+                chat_room_name(r, to);
                 c->dirty |= CHAT_DIRTY_ROOMS;
             }
         }
@@ -268,7 +290,7 @@ static void on_kick(struct chat *c, const struct irc_msg *m) {
     if(chat_is_me(c, m->argv[1])) {
         r->joined = r->parting = 0;
         chat_nicks_clear(c, r);
-        chat_say(c, r, LN_EVENT, LF_HIGHLIGHT, "", "You were kicked from %s by %s%s", r->name, sender(m), text2);
+        chat_say(c, r, LN_EVENT, LF_HIGHLIGHT, "", "You were kicked from %s by %s%s", r->label, sender(m), text2);
         return;
     }
     if((i = chat_nick_find(c, r, m->argv[1], NULL)) >= 0) chat_nick_drop(c, r, i);
@@ -352,7 +374,7 @@ static void on_names(struct chat *c, const struct irc_msg *m) {
         if(n && irc_valid_nick(nick, CHAT_NICK_MAX, c->chantypes) && chat_nick_add(c, r, nick, modes) < 0 &&
            r->nicks_over == 1) {
             r->nicks_over = 2;                      /* said once */
-            chat_say(c, r, LN_INFO, 0, "", "The list of %s is longer than Chat keeps: it shows %d nicks", r->name,
+            chat_say(c, r, LN_INFO, 0, "", "The list of %s is longer than Chat keeps: it shows %d nicks", r->label,
                      r->nnicks);
         }
     }
@@ -417,9 +439,12 @@ static int has_cap(const char *list, const char *name, const char **value) {
 
 static void cap_choose(struct chat *c) {
     const char *mid[1] = { "REQ" };
-    if(c->p.pass_kind == CHAT_PASS_SASL) {
+    if(c->p.pass_kind == CHAT_PASS_SASL && !chat_password_may_go(c)) {
+        chat_say(c, NULL, LN_ERROR, 0, "", "The SASL login was not sent: this connection has no encryption");
+    } else if(c->p.pass_kind == CHAT_PASS_SASL) {
         if(c->sasl_offered && c->sasl_plain && !chat_queue(c, 1, "CAP", mid, 1, "sasl")) {
             c->cap = CAP_REQ;
+            c->cap_at = c->now;                     /* each step of the login has CHAT_CAP_MS for its answer */
             return;
         }
         chat_say(c, NULL, LN_ERROR, 0, "", c->sasl_offered ? "The server's SASL has no PLAIN login: you are not logged in"
@@ -452,8 +477,10 @@ static void on_cap(struct chat *c, const struct irc_msg *m) {
     } else if(!irc_casecmp(IRC_CM_ASCII, sub, "ACK")) {
         const char *mid[1] = { "PLAIN" };
         if(c->cap != CAP_REQ) return;
-        if(has_cap(list, "sasl", NULL) && !chat_queue(c, 1, "AUTHENTICATE", mid, 1, NULL)) c->sasl = SASL_ASKED;
-        else chat_cap_end(c);
+        if(has_cap(list, "sasl", NULL) && !chat_queue(c, 1, "AUTHENTICATE", mid, 1, NULL)) {
+            c->sasl = SASL_ASKED;
+            c->cap_at = c->now;
+        } else chat_cap_end(c);
     } else if(!irc_casecmp(IRC_CM_ASCII, sub, "NAK")) {
         if(c->cap != CAP_REQ) return;
         chat_say(c, NULL, LN_ERROR, 0, "", "The server refused SASL: you are not logged in");
@@ -465,13 +492,13 @@ static void on_cap(struct chat *c, const struct irc_msg *m) {
    own), the account the nick asked for, then the password, in base64 lines of 400 (IRCv3 SASL 3.1), a last one
    of exactly 400 followed by "+". Every copy of the password is wiped. */
 static void on_authenticate(struct chat *c, const struct irc_msg *m) {
-    static unsigned char raw[CHAT_NICK_MAX + CHAT_PASS_MAX + 3];
-    static char b64[(sizeof(raw) + 2) / 3 * 4 + 1], chunk[401];
+    unsigned char *raw = sasl_raw;
+    char *b64 = sasl_b64, *chunk = sasl_chunk;
     const char *mid[1];
     int n = 0, len, at, k;
     size_t a = strlen(c->p.nick), p = strnlen(c->p.pass, CHAT_PASS_MAX);
     if(c->sasl != SASL_ASKED) return;
-    if(m->argc < 1 || strcmp(m->argv[0], "+")) {
+    if(m->argc < 1 || strcmp(m->argv[0], "+") || !chat_password_may_go(c)) {   /* the last check before it goes */
         mid[0] = "*";
         chat_queue(c, 1, "AUTHENTICATE", mid, 1, NULL);
         chat_say(c, NULL, LN_ERROR, 0, "", "The server's SASL asked for something else: you are not logged in");
@@ -484,8 +511,8 @@ static void on_authenticate(struct chat *c, const struct irc_msg *m) {
     raw[n++] = 0;
     memcpy(raw + n, c->p.pass, p);
     n += (int)p;
-    len = irc_base64(raw, n, b64, sizeof(b64));
-    chat_wipe(raw, sizeof(raw));
+    len = irc_base64(raw, n, b64, sizeof(sasl_b64));
+    chat_wipe(raw, sizeof(sasl_raw));
     chat_forget_password(c);
     for(at = 0; at < len; at += 400) {
         k = len - at < 400 ? len - at : 400;
@@ -498,9 +525,10 @@ static void on_authenticate(struct chat *c, const struct irc_msg *m) {
         mid[0] = "+";
         chat_queue(c, 1, "AUTHENTICATE", mid, 1, NULL);
     }
-    chat_wipe(b64, sizeof(b64));
-    chat_wipe(chunk, sizeof(chunk));
+    chat_wipe(b64, sizeof(sasl_b64));
+    chat_wipe(chunk, sizeof(sasl_chunk));
     c->sasl = SASL_SENT;
+    c->cap_at = c->now;
 }
 
 /**** ISUPPORT (RPL_ISUPPORT, 005) ****/
@@ -514,9 +542,9 @@ static int hexval(char h) {
 
 /* a value with the draft's \xHH escapes undone, cleaned, into out */
 static void unescape(const char *v, char *out, int size) {
-    static char raw[IRC_LINE_MAX];
+    char *raw = escaped_raw;
     int o = 0;
-    while(*v && o < (int)sizeof(raw) - 1) {
+    while(*v && o < (int)sizeof(escaped_raw) - 1) {
         if(v[0] == '\\' && v[1] == 'x' && hexval(v[2]) >= 0 && hexval(v[3]) >= 0) {
             raw[o++] = (char)(hexval(v[2]) * 16 + hexval(v[3]));
             v += 4;
@@ -593,8 +621,10 @@ static void isupport_token(struct chat *c, const char *t) {
     } else if(!strcmp(key, "NICKLEN")) {
         long len = v ? strtol(v, NULL, 10) : 0;
         c->nicklen = len > 0 && len <= CHAT_NICK_MAX ? (int)len : 0;
-    } else if(!strcmp(key, "CASEMAPPING")) {
+    } else if(!strcmp(key, "CASEMAPPING")) {     /* once a connection: a server that flips it re-sorts nothing */
         int cm = irc_casemap_named(v ? v : "rfc1459");
+        if(c->casemap_set) return;
+        c->casemap_set = 1;
         if(cm != c->casemap) {
             c->casemap = cm;
             chat_nicks_resort(c);
@@ -619,7 +649,7 @@ static void numeric(struct chat *c, const struct irc_msg *m) {
         if(c->cap == CAP_LS || c->cap == CAP_REQ) c->cap = CAP_DONE;   /* it did not wait for CAP END */
         chat_forget_password(c);
         c->dirty |= CHAT_DIRTY_STATUS | CHAT_DIRTY_ROOMS;
-        chat_say(c, NULL, LN_INFO, 0, "", "%s", rest(m, 1, text));
+        chat_say(c, NULL, LN_INFO, 0, server_of(c, m), "%s", rest(m, 1, text));
         return;
     case 5:                                         /* RPL_ISUPPORT: read, not shown (RFC 2812's RPL_BOUNCE is) */
         if(m->argc >= 2 && !strncmp(m->argv[m->argc - 1], "Try server", 10)) break;
@@ -688,7 +718,7 @@ static void numeric(struct chat *c, const struct irc_msg *m) {
         return;
     case 903:                                       /* RPL_SASLSUCCESS */
         if(c->sasl != SASL_SENT) break;
-        chat_say(c, NULL, LN_INFO, 0, "", "%s", rest(m, 1, text));
+        chat_say(c, NULL, LN_INFO, 0, server_of(c, m), "%s", rest(m, 1, text));
         chat_cap_end(c);
         return;
     case 902:                                       /* ERR_NICKLOCKED */
@@ -701,10 +731,10 @@ static void numeric(struct chat *c, const struct irc_msg *m) {
         chat_cap_end(c);                            /* registration goes on without the login */
         return;
     }
-    if(n < 400 || n >= 600) chat_say(c, NULL, LN_INFO, 0, "", "%s", rest(m, 1, text));
+    if(n < 400 || n >= 600) chat_say(c, NULL, LN_INFO, 0, server_of(c, m), "%s", rest(m, 1, text));
     else if(m->argc >= 3)                           /* an error about a channel, a nick, a command: named first */
-        chat_say(c, active(c), LN_ERROR, 0, "", "%s: %s", clean(text2, m->argv[1]), rest(m, 2, text));
-    else chat_say(c, active(c), LN_ERROR, 0, "", "%s", rest(m, 1, text));
+        chat_say(c, active(c), LN_ERROR, 0, server_of(c, m), "%s: %s", clean(text2, m->argv[1]), rest(m, 2, text));
+    else chat_say(c, active(c), LN_ERROR, 0, server_of(c, m), "%s", rest(m, 1, text));
 }
 
 /**** the commands ****/
@@ -741,7 +771,7 @@ static void dispatch(struct chat *c, const struct irc_msg *m) {
         chat_say(c, NULL, c->state == CHAT_QUITTING ? LN_INFO : LN_ERROR, 0, "", "The server ends the connection: %s",
                  rest(m, 0, text));
     else if(!strcmp(cmd, "WALLOPS")) chat_say(c, NULL, LN_NOTICE, 0, sender(m), "%s", rest(m, 0, text));
-    else chat_say(c, NULL, LN_INFO, 0, sender(m), "%s %s", cmd, rest(m, 0, text));
+    else chat_say(c, NULL, LN_INFO, 0, server_of(c, m), "%s %s", cmd, rest(m, 0, text));
 }
 
 void chat_recv(struct chat *c, const char *in, int n) {

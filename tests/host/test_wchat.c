@@ -394,8 +394,12 @@ static const char *said(int room, int back) {
     return l ? l->text : "(none)";
 }
 
+static int plain_ok;                    /* the window's question answered Send: the password may go without TLS */
+static int consistent(void);            /* every room's list sorted, its counts right (below) */
+
 static void params(struct chat_params *p, const char *nick, int kind, const char *pass, int tls) {
     memset(p, 0, sizeof(*p));
+    p->plain_ok = plain_ok;
     strcpy(p->host, "irc.test");
     p->port = tls ? 6697 : 6667;
     p->tls = tls;
@@ -542,10 +546,25 @@ static void registration(void) {
 }
 
 /* the password's bytes anywhere in the model's own memory */
-static int remembered(const char *pass) {
-    const unsigned char *b = (const unsigned char *)&C;
+static int holds(const void *at, size_t size, const char *pass) {
+    const unsigned char *b = at;
     size_t n = strlen(pass), i;
-    for(i = 0; i + n <= sizeof(C); i++) if(!memcmp(b + i, pass, n)) return 1;
+    for(i = 0; i + n <= size; i++) if(!memcmp(b + i, pass, n)) return 1;
+    return 0;
+}
+
+/* the password anywhere in the model: its struct, every file's static buffers, every room's lines (11/09/26) */
+static int remembered(const char *pass) {
+    const struct chat_buf *const tables[] = { chat_bufs, chat_recv_bufs, chat_input_bufs };
+    int i, k;
+    if(holds(&C, sizeof(C), pass)) return 1;
+    for(i = 0; i < 3; i++)
+        for(k = 0; tables[i][k].at; k++) if(holds(tables[i][k].at, tables[i][k].size, pass)) return 1;
+    for(i = 0; i < C.rooms; i++)
+        for(k = 0; k < C.room[i]->count; k++) {
+            const struct chat_line *l = chat_line_at(C.room[i], k);
+            if(strstr(l->text, pass) || strstr(l->from, pass)) return 1;
+        }
     return 0;
 }
 
@@ -608,12 +627,67 @@ static void passwords(void) {
     out();
     server(":irc.test CAP * LS :sasl\r\n:irc.test CAP * ACK :sasl\r\nAUTHENTICATE :give me more\r\n");
     CHECK(!strcmp(out(), "CAP REQ :sasl\r\nAUTHENTICATE PLAIN\r\nAUTHENTICATE *\r\nCAP END\r\n") && !remembered("made-up"));
-    /* a server's password goes first, and only once */
+    /* a server's password goes first, and only once; without TLS only as the person agreed (11/09/26, the review) */
+    fresh();
+    connect_as("alice", CHAT_PASS_SERVER, "made-up", 0);
+    CHECK(!strcmp(out(), "CAP LS 302\r\nNICK alice\r\nUSER alice 0 * :alice\r\n"));
+    CHECK(!remembered("made-up") && !strcmp(said(0, 0), "The password was not sent: this connection has no encryption"));
+    CHECK(!strcmp(said(0, 2), "The password will not be sent: this connection has no TLS"));
+    fresh();
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 0);     /* SASL's PLAIN in base64 is the password itself */
+    CHECK(!strcmp(out(), "CAP LS 302\r\nNICK alice\r\nUSER alice 0 * :alice\r\n"));
+    server(":irc.test CAP * LS :sasl\r\n:irc.test AUTHENTICATE +\r\n");
+    CHECK(!strcmp(out(), "CAP END\r\n") && !remembered("made-up") && strstr(said(0, 0), "SASL login was not sent"));
+    plain_ok = 1;
     fresh();
     connect_as("alice", CHAT_PASS_SERVER, "made-up", 0);
     CHECK(!strcmp(out(), "CAP LS 302\r\nPASS made-up\r\nNICK alice\r\nUSER alice 0 * :alice\r\n"));
+    CHECK(!remembered("made-up") && strstr(said(0, 1), "as you agreed"));
+    fresh();
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 0);
+    out();
+    server(":irc.test CAP * LS :sasl\r\n:irc.test CAP * ACK :sasl\r\n:irc.test AUTHENTICATE +\r\n");
+    CHECK(!strcmp(out(), "CAP REQ :sasl\r\nAUTHENTICATE PLAIN\r\nAUTHENTICATE AGFsaWNlAG1hZGUtdXA=\r\n"));
     CHECK(!remembered("made-up"));
-    CHECK(strstr(said(0, 1), "unencrypted") || strstr(said(0, 2), "unencrypted"));
+    fresh();                                                /* the last check, as AUTHENTICATE is to go */
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 0);
+    out();
+    server(":irc.test CAP * LS :sasl\r\n:irc.test CAP * ACK :sasl\r\n");
+    CHECK(!strcmp(out(), "CAP REQ :sasl\r\nAUTHENTICATE PLAIN\r\n"));
+    C.p.plain_ok = 0;
+    server(":irc.test AUTHENTICATE +\r\n");
+    CHECK(!strcmp(out(), "AUTHENTICATE *\r\nCAP END\r\n") && !remembered("made-up"));
+    plain_ok = 0;
+    /* a login the server stops answering: each step has 30 seconds, then the password goes (L4) */
+    fresh();
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 1);
+    out();
+    server(":irc.test CAP * LS :sasl\r\n:irc.test CAP * ACK :sasl\r\n");
+    CHECK(!strcmp(out(), "CAP REQ :sasl\r\nAUTHENTICATE PLAIN\r\n") && remembered("made-up"));
+    CHECK(chat_wait(&C) > 0 && chat_wait(&C) <= CHAT_CAP_MS);
+    C.now += CHAT_CAP_MS - 1;
+    chat_tick(&C);
+    CHECK(!strcmp(out(), "") && remembered("made-up"));
+    C.now += 1;
+    chat_tick(&C);
+    CHECK(!strcmp(out(), "AUTHENTICATE *\r\nCAP END\r\n") && !remembered("made-up") && C.cap == CAP_DONE);
+    CHECK(!strcmp(said(0, 0), "The server did not answer the SASL login: you are not logged in"));
+    fresh();                                                /* CAP REQ with no ACK or NAK */
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 1);
+    out();
+    server(":irc.test CAP * LS :sasl\r\n");
+    CHECK(!strcmp(out(), "CAP REQ :sasl\r\n"));
+    C.now += CHAT_CAP_MS;
+    chat_tick(&C);
+    CHECK(!strcmp(out(), "CAP END\r\n") && !remembered("made-up"));
+    fresh();                                                /* the login sent, and no 903 or 904 */
+    connect_as("alice", CHAT_PASS_SASL, "made-up", 1);
+    out();
+    server(":irc.test CAP * LS :sasl\r\n:irc.test CAP * ACK :sasl\r\n:irc.test AUTHENTICATE +\r\n");
+    out();
+    C.now += CHAT_CAP_MS;
+    chat_tick(&C);
+    CHECK(!strcmp(out(), "AUTHENTICATE *\r\nCAP END\r\n") && C.cap == CAP_DONE);
     fresh();
     connect_as("alice", CHAT_PASS_SERVER, ":two words", 1);
     CHECK(!strcmp(out(), "CAP LS 302\r\nPASS ::two words\r\nNICK alice\r\nUSER alice 0 * :alice\r\n"));
@@ -686,8 +760,86 @@ static void channels(void) {
     CHECK(C.casemap == IRC_CM_ASCII && C.room[1]->nnicks == 3);
     server(":x{y}!a@h JOIN #forced\r\n");
     CHECK(C.room[1]->nnicks == 4);
-    server(":irc.test 005 alicia CASEMAPPING=rfc1459 :are supported\r\n");   /* and back: the two are one */
-    CHECK(C.room[1]->nnicks == 3);
+    server(":irc.test 005 alicia CASEMAPPING=rfc1459 :are supported\r\n");   /* and back: once a connection, ignored */
+    CHECK(C.casemap == IRC_CM_ASCII && C.room[1]->nnicks == 4 && consistent());
+}
+
+/* 11/09/26, the review's findings: CASEMAPPING once a connection (M2), the server's own text under its name (M3),
+   channels' names cleaned where they are shown (L6), NickServ's passwords neither shown nor kept (L8) */
+static void review(void) {
+    static char line[1 << 16];
+    const struct chat_line *l;
+    char title[300];
+    int r, i, k, o, own = 0, theirs = 0;
+    /* M2: a server that flips CASEMAPPING over full lists re-sorts nothing after the first */
+    online();
+    chat_input(&C, "/join #big");
+    out();
+    server(":alice!a@h JOIN #big\r\n");
+    r = chat_find(&C, ROOM_CHANNEL, "#big");
+    for(i = 0; i < CHAT_NICKS;) {
+        o = snprintf(line, sizeof(line), ":irc.test 353 alice = #big :");
+        for(k = 0; k < 400 && i < CHAT_NICKS; k++, i++) o += snprintf(line + o, sizeof(line) - (size_t)o, "%sn%05d", k ? " " : "", CHAT_NICKS - 1 - i);
+        snprintf(line + o, sizeof(line) - (size_t)o, "\r\n");
+        server(line);
+    }
+    CHECK(r > 0 && C.room[r]->nnicks == CHAT_NICKS && consistent());
+    server(":irc.test 005 alice CASEMAPPING=ascii :are supported\r\n");
+    CHECK(C.casemap == IRC_CM_ASCII && C.casemap_set);
+    o = snprintf(line, sizeof(line), ":irc.test 005 alice");
+    for(k = 0; k < 13; k++) o += snprintf(line + o, sizeof(line) - (size_t)o, " CASEMAPPING=%s", k % 2 ? "ascii" : "rfc1459");
+    snprintf(line + o, sizeof(line) - (size_t)o, " :are supported\r\n");
+    for(i = 0; i < 50; i++) server(line);
+    CHECK(C.casemap == IRC_CM_ASCII && consistent());
+    chat_down(&C, "reset");                         /* a new connection takes it again */
+    connect_as("alice", CHAT_PASS_NONE, NULL, 1);
+    CHECK(!C.casemap_set && C.casemap == IRC_CM_RFC1459);
+    server(":irc.test 005 alice CASEMAPPING=strict-rfc1459 :x\r\n");
+    CHECK(C.casemap == IRC_CM_STRICT);
+    /* M3: a numeric that says what the Chat says is the server's, under its name; the Chat's own line has none */
+    online();
+    server(":irc.test 002 alice :Connected with TLSv1.3: the server's certificate is verified\r\n"
+           "002 alice :no prefix at all\r\n:\xe2\x89\x8b\x07x 421 alice FOO :Unknown command\r\n");
+    for(k = 0; k < C.room[0]->count; k++) {
+        l = chat_line_at(C.room[0], k);
+        if(strcmp(l->text, "Connected with TLSv1.3: the server's certificate is verified")) continue;
+        if(!l->from[0]) own++;
+        else if(!strcmp(l->from, "irc.test")) theirs++;
+    }
+    CHECK(own == 1 && theirs == 1);
+    CHECK(!strcmp(newest(0, 0)->from, "x") && !strcmp(newest(0, 0)->text, "FOO: Unknown command"));
+    CHECK(!strcmp(newest(0, 1)->from, "irc.test") && !strcmp(newest(0, 1)->text, "no prefix at all"));
+    server("NOTICE * :*** Looking up your hostname\r\n");
+    CHECK(newest(0, 0)->kind == LN_NOTICE && !strcmp(newest(0, 0)->from, "irc.test"));
+    /* L6: a channel's name with a direction override and bytes that are no UTF-8, in a KICK and the title */
+    server(":alice!a@h JOIN #a\xe2\x80\xae\xff\xfe\r\n");
+    r = chat_find(&C, ROOM_CHANNEL, "#a\xe2\x80\xae\xff\xfe");
+    /* no UTF-8: windows-1252 byte by byte, the override's bytes three characters that do nothing */
+    CHECK(r > 0 && !strcmp(chat_room_label(&C, r), "#a\xc3\xa2\xe2\x82\xac\xc2\xae\xc3\xbf\xc3\xbe"));
+    chat_select(&C, r);
+    chat_title(&C, title, sizeof(title));
+    CHECK(!strcmp(title, "Chat - #a\xc3\xa2\xe2\x82\xac\xc2\xae\xc3\xbf\xc3\xbe"));
+    server(":op!o@h KICK #a\xe2\x80\xae\xff\xfe alice :bye\r\n");
+    CHECK(!strcmp(said(r, 0), "You were kicked from #a\xc3\xa2\xe2\x82\xac\xc2\xae\xc3\xbf\xc3\xbe by op (bye)"));
+    server(":alice!a@h JOIN #b\xe2\x80\xaexy\r\n");     /* UTF-8: the override goes (no name holds a control) */
+    r = chat_find(&C, ROOM_CHANNEL, "#b\xe2\x80\xaexy");
+    CHECK(r > 0 && !strcmp(chat_room_label(&C, r), "#bxy") && !strcmp(C.room[r]->name, "#b\xe2\x80\xaexy"));
+    /* L8: NickServ's commands shown with their first word, the password nowhere once sent */
+    chat_select(&C, 0);
+    CHECK(chat_secret(&C, "/msg NickServ IDENTIFY made-up-pw") && chat_secret(&C, "/MSG nickserv\tIDENTIFY x"));
+    CHECK(chat_secret(&C, "/query NickServ") && !chat_secret(&C, "/msg bob IDENTIFY x") && !chat_secret(&C, "hello"));
+    chat_input(&C, "/msg NickServ IDENTIFY made-up-pw");
+    CHECK(!strcmp(said(0, 0), "\xe2\x86\x92 NickServ: IDENTIFY ****") && remembered("made-up-pw"));    /* queued */
+    CHECK(!strcmp(out(), "PRIVMSG NickServ :IDENTIFY made-up-pw\r\n") && !remembered("made-up-pw"));
+    chat_input(&C, "/query NickServ");
+    CHECK(C.room[C.active]->kind == ROOM_QUERY && chat_secret(&C, "GHOST alice made-up-pw2") &&
+          chat_secret(&C, "/me waves") && chat_secret(&C, "//msg bob x"));   /* "//": a line for NickServ too */
+    chat_input(&C, "GHOST alice made-up-pw2");
+    CHECK(!strcmp(said(C.active, 0), "GHOST ****"));
+    CHECK(!strcmp(out(), "PRIVMSG NickServ :GHOST alice made-up-pw2\r\n") && !remembered("made-up-pw2"));
+    chat_input(&C, "HELP");
+    CHECK(!strcmp(said(C.active, 0), "HELP"));
+    out();
 }
 
 static void messages(void) {
@@ -1278,6 +1430,7 @@ int main(int argc, char **argv) {
     registration();
     passwords();
     channels();
+    review();
     messages();
     pings();
     typing();

@@ -92,6 +92,7 @@ struct chat_room {
     unsigned id;                        /* its serial number: what the window keeps its tabs by */
     int kind;
     char name[CHAT_CHAN_MAX + 1];       /* a channel's or a query's; the server's room's is "" */
+    char label[3 * CHAT_CHAN_MAX + 1];  /* the name to show: controls, invisible marks and codes out (11/09/26) */
     int joined;                         /* a channel we are in */
     int parting;                        /* a channel our /part left: its PART closes the room */
     char *topic;                        /* NULL for none */
@@ -115,6 +116,7 @@ struct chat_params {
     char nick[CHAT_NICK_MAX + 1];
     int pass_kind;                      /* CHAT_PASS_* */
     char pass[CHAT_PASS_MAX + 1];
+    int plain_ok;                       /* the password may go without TLS: the person said so, asked (11/09/26) */
 };
 
 struct chat {
@@ -133,6 +135,7 @@ struct chat {
     char why[160];                      /* why it ends, when the model ends it */
     /* the server's ISUPPORT, or RFC 2812's defaults */
     int casemap;
+    int casemap_set;                    /* this connection's CASEMAPPING came: later ones are ignored (11/09/26) */
     char prefix_modes[CHAT_PREFIXES + 1], prefix_chars[CHAT_PREFIXES + 1];
     char chantypes[9], statusmsg[9];
     char chanmodes[4][33];              /* CHANMODES' A, B, C and D */
@@ -182,6 +185,9 @@ void chat_quit(struct chat *c, const char *reason);
 /* A line typed in the active room: a message, or a command (/join /part /msg /me /nick /topic /query
    /quit); what went wrong is a line in the room. */
 void chat_input(struct chat *c, const char *line);
+/* 11/09/26 (the review): does a line typed carry a password, being for NickServ (/msg NickServ IDENTIFY ..., or a line
+   in NickServ's query)? Such a line is shown with its first word only, and the window keeps it out of its history */
+int chat_secret(const struct chat *c, const char *line);
 
 void chat_select(struct chat *c, int room);         /* the active room: its marks go */
 /* the room's close: a channel we are in is left (its room goes with the PART), anything else goes now;

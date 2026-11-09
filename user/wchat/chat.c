@@ -19,6 +19,11 @@ mapping (ISUPPORT, which comes after the first lists only on an odd server) sort
 #include <stdarg.h>
 #include "chatint.h"
 
+static char names_plain[IRC_TEXT_MAX + 512], say_text[CHAT_TEXT_MAX];
+
+/* the static buffers of this file: test_wchat looks through them for a password (11/09/26, the review) */
+const struct chat_buf chat_bufs[] = { { names_plain, sizeof(names_plain) }, { say_text, sizeof(say_text) }, { NULL, 0 } };
+
 /**** small things ****/
 
 void chat_wipe(void *p, size_t n) {
@@ -33,6 +38,12 @@ int chat_since(const struct chat *c, unsigned when) {
 
 void chat_forget_password(struct chat *c) {
     chat_wipe(c->p.pass, sizeof(c->p.pass));
+}
+
+/* the last check before PASS or AUTHENTICATE goes (11/09/26, the review): over TLS (the helper said which), or
+   without it only as the person agreed when the window asked */
+int chat_password_may_go(const struct chat *c) {
+    return c->tls[0] || c->p.plain_ok;
 }
 
 void chat_lose(struct chat *c, const char *why) {
@@ -81,11 +92,11 @@ static int nick_byte(int ch) {
 }
 
 int chat_names_us(const struct chat *c, const char *text) {
-    static char plain[IRC_TEXT_MAX + 512];
+    char *plain = names_plain;
     size_t n = strlen(c->nick), i;
     const char *p;
     if(!n) return 0;
-    irc_strip(plain, sizeof(plain), text);
+    irc_strip(plain, sizeof(names_plain), text);
     for(p = plain; *p; p++) {
         if(p > plain && nick_byte((unsigned char)p[-1])) continue;
         for(i = 0; i < n && p[i] && irc_lower(c->casemap, (unsigned char)p[i]) ==
@@ -104,7 +115,7 @@ struct chat_room *chat_room_new(struct chat *c, int kind, const char *name) {
     if(!r) return NULL;
     r->id = ++c->next_id;
     r->kind = kind;
-    snprintf(r->name, sizeof(r->name), "%s", name);
+    chat_room_name(r, name);
     c->room[c->rooms++] = r;
     c->dirty |= CHAT_DIRTY_ROOMS;
     return r;
@@ -170,7 +181,7 @@ static void trim(struct chat *c, struct chat_room *added) {
 }
 
 void chat_say(struct chat *c, struct chat_room *r, int kind, int flags, const char *from, const char *fmt, ...) {
-    static char text[CHAT_TEXT_MAX];
+    char *text = say_text;
     struct chat_line *l;
     size_t lf, lt;
     long size;
@@ -178,7 +189,7 @@ void chat_say(struct chat *c, struct chat_room *r, int kind, int flags, const ch
     if(!r) r = c->room[0];
     if(!from) from = "";
     va_start(ap, fmt);
-    vsnprintf(text, sizeof(text), fmt, ap);
+    vsnprintf(text, sizeof(say_text), fmt, ap);
     va_end(ap);
     chat_utf8_trim(text);
     if(!r->ring && !(r->ring = calloc(CHAT_LINES, sizeof(*r->ring)))) return;  /* out of memory: not kept */
@@ -240,9 +251,18 @@ int chat_close_room(struct chat *c, int room) {
     return 0;
 }
 
+/* a room's name as the server has it, and as it is shown: a channel's name holds any byte but a few (RFC 2812
+   section 1.3), so what is shown of it is cleaned as text is (11/09/26, the review) */
+void chat_room_name(struct chat_room *r, const char *name) {
+    char text[IRC_TEXT_MAX];
+    snprintf(r->name, sizeof(r->name), "%s", name);
+    irc_text(text, sizeof(text), r->name, (int)strlen(r->name));
+    irc_strip(r->label, sizeof(r->label), text);
+}
+
 const char *chat_room_label(const struct chat *c, int room) {
     if(room < 0 || room >= c->rooms) return "";
-    if(room) return c->room[room]->name;
+    if(room) return c->room[room]->label;
     if(c->network[0]) return c->network;
     return c->p.host[0] ? c->p.host : "Server";
 }
@@ -437,10 +457,22 @@ static int piece(const char *text, int budget) {
     return n ? n : 1;
 }
 
+/* NickServ's commands carry passwords (IDENTIFY, REGISTER, GHOST, SET PASSWORD ...): what goes to it is shown with
+   its first word only, and every copy here is wiped (11/09/26, the review) */
+int chat_secret_to(const struct chat *c, const char *target) {
+    return !irc_casecmp(c->casemap, target, "NickServ");
+}
+
+static void masked(char *shown, int first) {
+    size_t n = first ? strcspn(shown, " ") : 0;
+    if(first && !shown[n]) return;                  /* one word: nothing after it to hide */
+    snprintf(shown + n, IRC_TEXT_MAX - n, "%s****", n ? " " : "");
+}
+
 int chat_send_text(struct chat *c, struct chat_room *r, const char *target, const char *text, int action) {
     char part[IRC_LINE_MAX], body[IRC_LINE_MAX + 16], shown[IRC_TEXT_MAX], to[IRC_TEXT_MAX];
     const char *mid[1];
-    int at = 0, len = (int)strlen(text), n;
+    int at = 0, len = (int)strlen(text), n, secret = chat_secret_to(c, target), ret = 0;
     int elsewhere = r->kind == ROOM_SERVER || irc_casecmp(c->casemap, r->name, target);    /* /msg from another room */
     /* what the server puts in front when it passes it on: ":nick!user@host PRIVMSG target :", the user and host
        guessed (10 and 63) until our JOIN showed them */
@@ -459,9 +491,11 @@ int chat_send_text(struct chat *c, struct chat_room *r, const char *target, cons
         mid[0] = target;
         if(chat_queue(c, 0, "PRIVMSG", mid, 1, body)) {
             chat_say(c, r, LN_ERROR, 0, "", "Not sent: too much is waiting to go");
-            return -1;
+            ret = -1;
+            break;
         }
         irc_text(shown, sizeof(shown), part, n);
+        if(secret) masked(shown, !at);
         if(elsewhere) {
             irc_text(to, sizeof(to), target, (int)strlen(target));
             chat_say(c, r, action ? LN_ACTION : LN_MSG, LF_SELF, c->nick, "\xe2\x86\x92 %s: %s", to, shown);
@@ -469,7 +503,12 @@ int chat_send_text(struct chat *c, struct chat_room *r, const char *target, cons
         at += n;
         while(text[at] == ' ') at++;
     }
-    return 0;
+    if(secret) {
+        chat_wipe(part, sizeof(part));
+        chat_wipe(body, sizeof(body));
+        chat_wipe(shown, sizeof(shown));
+    }
+    return ret;
 }
 
 int chat_wait(const struct chat *c) {
@@ -478,7 +517,7 @@ int chat_wait(const struct chat *c) {
     if(c->ending || c->ucount) SOON(0);
     if(c->qcount) SOON((int)(c->send_at - c->now) - CHAT_BURST_MS + 1);
     if(c->state >= CHAT_REGISTERING) {
-        if(c->cap == CAP_LS) SOON(CHAT_CAP_MS - chat_since(c, c->cap_at));
+        if(c->cap == CAP_LS || c->cap == CAP_REQ) SOON(CHAT_CAP_MS - chat_since(c, c->cap_at));
         if(c->state == CHAT_QUITTING) SOON(CHAT_QUIT_MS - chat_since(c, c->quit_at));
         if(c->ping_at) SOON(CHAT_PING_MS - chat_since(c, c->ping_at));
         else SOON(CHAT_IDLE_MS - chat_since(c, c->last_rx));
@@ -550,7 +589,8 @@ int chat_connect(struct chat *c, const struct chat_params *p, char *err, int siz
     chat_say(c, NULL, LN_INFO, 0, "", "Connecting to %s, port %u, %s ...", p->host, p->port,
              p->tls ? "with TLS" : "without encryption");
     if(p->pass_kind != CHAT_PASS_NONE && !p->tls)
-        chat_say(c, NULL, LN_ERROR, 0, "", "The password goes unencrypted: this connection has no TLS");
+        chat_say(c, NULL, LN_ERROR, 0, "", p->plain_ok ? "The password goes unencrypted, as you agreed: this connection "
+                 "has no TLS" : "The password will not be sent: this connection has no TLS");
     c->dirty |= CHAT_DIRTY_ALL;
     return 0;
 }
@@ -564,6 +604,7 @@ void chat_up(struct chat *c, const char *tls) {
         if(tls[i] > ' ' && tls[i] < 0x7f) c->tls[n++] = tls[i];
     c->tls[n] = 0;
     chat_isupport_defaults(c);
+    c->casemap_set = 0;
     c->state = CHAT_REGISTERING;
     snprintf(c->nick, sizeof(c->nick), "%s", c->p.nick);
     c->user[0] = 0;
@@ -580,7 +621,10 @@ void chat_up(struct chat *c, const char *tls) {
     mid[1] = "302";
     chat_queue(c, 1, "CAP", mid, 2, NULL);
     c->cap = CAP_LS;
-    if(c->p.pass_kind == CHAT_PASS_SERVER) {
+    if(c->p.pass_kind == CHAT_PASS_SERVER && !chat_password_may_go(c)) {
+        chat_say(c, NULL, LN_ERROR, 0, "", "The password was not sent: this connection has no encryption");
+        chat_forget_password(c);
+    } else if(c->p.pass_kind == CHAT_PASS_SERVER) {
         mid[0] = c->p.pass;
         if(strchr(c->p.pass, ' ') || c->p.pass[0] == ':') chat_queue(c, 1, "PASS", NULL, 0, c->p.pass);
         else chat_queue(c, 1, "PASS", mid, 1, NULL);
@@ -666,6 +710,12 @@ void chat_tick(struct chat *c) {
         chat_say(c, NULL, LN_INFO, 0, "", "The server did not answer CAP: registering without it%s",
                  c->p.pass_kind == CHAT_PASS_SASL ? ", and without the SASL login" : "");
         chat_cap_end(c);
+    }
+    if(c->cap == CAP_REQ && chat_since(c, c->cap_at) >= CHAT_CAP_MS) {     /* the SASL login, a step unanswered */
+        const char *mid[1] = { "*" };
+        if(c->sasl == SASL_ASKED || c->sasl == SASL_SENT) chat_queue(c, 1, "AUTHENTICATE", mid, 1, NULL);
+        chat_say(c, NULL, LN_ERROR, 0, "", "The server did not answer the SASL login: you are not logged in");
+        chat_cap_end(c);                            /* CAP END, and what is left of the password goes */
     }
     if(c->state == CHAT_QUITTING && chat_since(c, c->quit_at) >= CHAT_QUIT_MS) {
         chat_lose(c, "closed after QUIT");
