@@ -186,6 +186,14 @@ static void paste(struct gk_widget *w) {
     free(clip);
 }
 
+/* a copy of a line (the draft, a remembered one) zeroed before it is freed: it may hold a secret (a chat's IDENTIFY) */
+static void drop_copy(char **s) {
+    if(!*s) return;
+    gk_wipe(*s, strlen(*s));
+    free(*s);
+    *s = NULL;
+}
+
 static void history(struct gk_widget *w, int back) {
     struct gk_line *f = w->k;
     char *keep;
@@ -194,7 +202,7 @@ static void history(struct gk_widget *w, int back) {
         if(f->hpos == 0) return;
         if(f->hpos < 0) {                               /* what was being typed comes back after the newest */
             if(!(keep = gk_strdup(w->ui, f->buf))) return;
-            free(f->draft);
+            drop_copy(&f->draft);
             f->draft = keep;
             f->hpos = f->nhist;
         }
@@ -202,9 +210,10 @@ static void history(struct gk_widget *w, int back) {
         set_text(f, f->hist[f->hpos]);
     } else {
         if(f->hpos < 0) return;
-        if(++f->hpos >= f->nhist) {
+        if(++f->hpos >= f->nhist) {                     /* the line being typed back: its copy goes */
             f->hpos = -1;
             set_text(f, f->draft ? f->draft : "");
+            drop_copy(&f->draft);
         } else set_text(f, f->hist[f->hpos]);
     }
     f->scroll = view_start(f, cells_of(w));
@@ -385,13 +394,9 @@ static void field_destroy(struct gk_widget *w) {
     if(f->buf) gk_wipe(f->buf, (size_t)f->max + 1);
     free(f->buf);
     free(f->hint);
-    for(i = 0; i < f->nhist; i++) {
-        gk_wipe(f->hist[i], strlen(f->hist[i]));
-        free(f->hist[i]);
-    }
+    for(i = 0; i < f->nhist; i++) drop_copy(&f->hist[i]);
     free(f->hist);
-    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
-    free(f->draft);
+    drop_copy(&f->draft);
     gk_wipe(f->part, sizeof(f->part));
 }
 
@@ -405,6 +410,7 @@ static void field_set_text(struct gk_widget *w, const char *text) {
     f->scroll = 0;
     f->scroll = view_start(f, cells_of(w));
     f->hpos = -1;
+    drop_copy(&f->draft);                               /* the program's text now: what was being typed goes */
     gk_dirty(w);
 }
 
@@ -469,7 +475,7 @@ int gk_field_history(struct gk_widget *w, int n) {
     if(n < 1 || n > FIELD_HISTORY) n = n < 1 ? 0 : FIELD_HISTORY;
     if(n < f->nhist) {                                  /* the oldest go */
         int drop = f->nhist - n, i;
-        for(i = 0; i < drop; i++) free(f->hist[i]);
+        for(i = 0; i < drop; i++) drop_copy(&f->hist[i]);
         memmove(f->hist, f->hist + drop, (size_t)n * sizeof(*f->hist));
         f->nhist = n;
     }
@@ -492,7 +498,7 @@ void gk_field_remember(struct gk_widget *w) {
     if(!f->maxhist || !f->len || (f->nhist && !strcmp(f->hist[f->nhist - 1], f->buf))) return;
     if(!(copy = gk_strdup(w->ui, f->buf))) return;
     if(f->nhist == f->maxhist) {
-        free(f->hist[0]);
+        drop_copy(&f->hist[0]);
         memmove(f->hist, f->hist + 1, (size_t)(f->nhist - 1) * sizeof(*f->hist));
         f->nhist--;
     }
@@ -506,7 +512,8 @@ void gk_field_wipe(struct gk_widget *w) {
     gk_wipe(f->buf, (size_t)f->max + 1);                /* all of it, and a character typed partway */
     gk_wipe(f->part, sizeof(f->part));
     f->len = f->cursor = f->anchor = f->scroll = f->nparts = f->need = 0;
-    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
+    drop_copy(&f->draft);
+    f->hpos = -1;
     gk_dirty(w);
 }
 

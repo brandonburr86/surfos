@@ -1159,11 +1159,24 @@ $(BUILD)/host/test_gk: tests/host/test_gk.c tests/host/gk_fake.h user/include/gk
 $(BUILD)/host/test_wkit: tests/host/test_wkit.c tests/host/gk_fake.h user/wkit/demo.c user/wkit/demo.h $(GK_HOST_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wkit tests/host/test_wkit.c user/wkit/demo.c $(GK_HOST_OBJ) -o $@
+# 11/09/26 (the review): libgui and the toolkit again, every free() of theirs through test_gksecret.c's gks_free(),
+# which looks for a secret in each block that goes
+GK_SECRET_OBJ = $(patsubst user/libsurf/%.c,$(BUILD)/host/gks/%.o,user/libsurf/gui.c $(wildcard user/libsurf/gk*.c))
+$(BUILD)/host/gks/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (gk, frees looked at)"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Dfree=gks_free -MMD -MP -c $< -o $@
+-include $(wildcard $(BUILD)/host/gks/*.d)
+$(BUILD)/host/test_gksecret: tests/host/test_gksecret.c tests/host/gk_fake.h $(GK_SECRET_OBJ) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) tests/host/test_gksecret.c $(GK_SECRET_OBJ) \
+	    $(filter-out $(BUILD)/host/gk/%,$(GK_HOST_OBJ)) $(BUILD)/host/gk/gk_fake.o -o $@
 unittest: unittest-kit
 .PHONY: unittest-kit
-unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
+unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit $(BUILD)/host/test_gksecret
 	$(BUILD)/host/test_gk
 	$(BUILD)/host/test_wkit
+	$(BUILD)/host/test_gksecret
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
