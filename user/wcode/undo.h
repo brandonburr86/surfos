@@ -59,5 +59,8 @@ void wc_undo_close(struct wc_undo *u);                      /* the next change i
 const struct wc_step *wc_undo_back(struct wc_undo *u);
 const struct wc_step *wc_undo_forward(struct wc_undo *u);
 unsigned wc_undo_can(const struct wc_undo *u, int redo);    /* how many steps */
+/* 11/09/26: whether one step of ops ops holding bytes of text would be kept (room()'s rules), so that a change can be
+   asked about before it is made when it would be too large to undo */
+int wc_undo_fits(unsigned long bytes, unsigned long ops);
 
 #endif

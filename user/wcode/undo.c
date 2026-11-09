@@ -149,6 +149,15 @@ static int room(struct wc_undo *u, struct wc_step *s, unsigned n, int op) {
     return 0;
 }
 
+int wc_undo_fits(unsigned long bytes, unsigned long ops) {
+    unsigned long bcap = 0, opcap = 0;
+    if(bytes > WC_UNDO_BYTES) return 0;
+    while(bcap < bytes) bcap = bcap ? bcap * 2 : 64;    /* as room() grows them */
+    if(bcap > WC_UNDO_BYTES) bcap = WC_UNDO_BYTES;
+    while(opcap < ops) opcap = opcap ? opcap * 2 : 4;
+    return sizeof(struct wc_step) + opcap * sizeof(struct wc_op) + bcap + 4096 <= WC_UNDO_BYTES;    /* (a margin) */
+}
+
 int wc_undo_op(struct wc_undo *u, int ins, unsigned pos, const char *bytes, unsigned n) {
     struct wc_step *s;
     struct wc_op *last;
