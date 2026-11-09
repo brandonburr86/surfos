@@ -1,0 +1,39 @@
+wkit - every widget of the window toolkit, in a window
+
+SYNOPSIS
+    wkit
+
+DESCRIPTION
+    A window with the widgets programs build their windows of (the
+    toolkit, gk.h in libsurf), for trying them by hand. It needs a
+    desktop: start it from the desktop's Terminal or from Apps > Run
+    program.
+
+    Controls has a name and a password, a check box, a switch, a radio
+    group, and Greet, Ask, Rename and Copy, which open a message, a
+    question and a line to type over the window, and copy the name to
+    the desktop's clipboard. Lists has a list with columns, Add and
+    Remove, and a scroll bar. Drawing is an area the program draws
+    itself, 64 by 64 cells with scroll bars. More has notes (a text of
+    several lines), a progress bar, a slider and two palettes. The
+    status bar says what the program last heard, and the seconds since
+    it started.
+
+    Its menus, File and View (with a Speed submenu), are in the
+    desktop's bar while its window has the focus, and About the toolkit
+    in the desktop's Help; their shortcuts work in the window in any
+    case. Open and Save as ask the desktop's choosers; a desktop
+    without them gives a line to type the path in instead.
+
+KEYS
+    Tab, Shift+Tab   the next widget, the one before (Ctrl+Tab from any)
+    Left, Right      the page, while the tabs have the focus
+    F5 to F8         the pages (View)
+    Space, Enter     a button, a check box; Enter in a list opens a line
+    Ctrl+A, C, X, V  select all, copy, cut, paste in a field
+    Ctrl+O, Ctrl+S   Open, Save as: the desktop's choosers
+    Arrows, Space    move in the drawing, mark a cell
+    Esc, Ctrl+W      close the window, asking first
+
+SEE ALSO
+    gui, wcalc, wclock

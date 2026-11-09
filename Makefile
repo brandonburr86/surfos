@@ -84,6 +84,43 @@ USER_PROGS  += wview         # 11/05/26 (the desktop applications, track img): t
 # follow wcharmap's, after all:, so that they cannot be make's default goal
 WVIEW_SRC    = $(wildcard user/wview/*.c)
 WVIEW_OBJ    = $(WVIEW_SRC:user/wview/%.c=$(BUILD)/user/wview/%.o)
+USER_PROGS  += wsheet        # 11/05/26 (the desktop applications, track sheet): the Spreadsheet, user/wsheet/
+# wsheet, the Spreadsheet (11/05/26): user/wsheet/, its model and its window host-tested (tests/host/test_wsheet.c,
+# test_wsheet_win.c). Its doubles are SSE2's, as the comment above USER_CFLAGS lets a program have them, so that it
+# computes the very bits its host tests check, at -O0 and -O2 alike; -Iuser/bin for saveutil.h
+WSHEET_SRC    = $(wildcard user/wsheet/*.c)
+WSHEET_OBJ    = $(WSHEET_SRC:user/wsheet/%.c=$(BUILD)/user/wsheet/%.o)
+$(BUILD)/user/wsheet/%.o: user/wsheet/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -march=pentium4 -msse2 -mfpmath=sse -Iuser/bin -c $< -o $@
+$(BUILD)/user/bin/wsheet: $(WSHEET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSHEET_OBJ) $(USER_LIB)
+-include $(WSHEET_OBJ:.o=.d)
+USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
+# wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
+# (tests/host/test_wkit.c)
+WKIT_SRC      = $(wildcard user/wkit/*.c)
+WKIT_OBJ      = $(WKIT_SRC:user/wkit/%.c=$(BUILD)/user/wkit/%.o)
+$(BUILD)/user/wkit/%.o: user/wkit/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/wkit: $(WKIT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WKIT_OBJ) $(USER_LIB)
+-include $(WKIT_OBJ:.o=.d)
+# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h, libsurf's user/libsurf/gk*.c, which the
+# wildcard above builds in) on the host. Any program's window is host-tested so: compile with $(GK_HOST_FLAGS) and link
+# $(GK_HOST_OBJ): libgui and the toolkit as they are, the desktop's drawing kit, and the fake desktop of
+# tests/host/gk_fake.c (its rules are by unittest-kit's, below)
+GK_HOST_FLAGS = $(HOSTFLAGS) -Itests/host/gk_shim -idirafter user/include
+GK_HOST_OBJ   = $(patsubst user/libsurf/%.c,$(BUILD)/host/gk/%.o,user/libsurf/gui.c $(wildcard user/libsurf/gk*.c)) \
+                $(BUILD)/host/gk/gk_fake.o $(HOSTLIB_OBJ) $(addprefix $(BUILD)/host/kernel/,user/libsurf/guikit.o \
+                  shell/guidraw.o driver/fbcore.o driver/font8x16.o driver/cp437.o)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -1169,6 +1206,46 @@ unittest-img: $(BUILD)/host/test_image_save $(USER_LIB) $(BUILD)/host/test_wview
 	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
 	$(BUILD)/host/test_wview
 	$(PYTHON) tests/test_image_jpeg.py $(BUILD)/host/test_wundertow_image tests/fixtures
+# 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h) and its demonstration, on the fake desktop
+$(BUILD)/host/gk/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (gk)"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/host/gk/gk_fake.o: tests/host/gk_fake.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -MMD -MP -c $< -o $@
+-include $(wildcard $(BUILD)/host/gk/*.d)
+$(BUILD)/host/test_gk: tests/host/test_gk.c tests/host/gk_fake.h user/include/gk.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) tests/host/test_gk.c $(GK_HOST_OBJ) -o $@
+$(BUILD)/host/test_wkit: tests/host/test_wkit.c tests/host/gk_fake.h user/wkit/demo.c user/wkit/demo.h $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wkit tests/host/test_wkit.c user/wkit/demo.c $(GK_HOST_OBJ) -o $@
+unittest: unittest-kit
+.PHONY: unittest-kit
+unittest-kit: $(BUILD)/host/test_gk $(BUILD)/host/test_wkit
+	$(BUILD)/host/test_gk
+	$(BUILD)/host/test_wkit
+
+# 11/05/26 (the desktop applications, track sheet): the Spreadsheet's model (numbers, formulas, recalculation, the
+# history, the files, the grid's logic) and its window on the fake desktop. SSE2's doubles at -m32 too, and no multiply
+# and add fused into one, so that the host computes the bits SurfOS does
+WSHEET_MODEL     = $(addprefix user/wsheet/,cells.c number.c formula.c eval.c recalc.c edit.c files.c view.c)
+WSHEET_HOSTFLAGS = $(if $(HOST32),-msse2 -mfpmath=sse) -ffp-contract=off -Iuser/wsheet
+$(BUILD)/host/test_wsheet: tests/host/test_wsheet.c $(WSHEET_MODEL) $(wildcard user/wsheet/*.h)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(WSHEET_HOSTFLAGS) tests/host/test_wsheet.c $(WSHEET_MODEL) -lm -o $@
+$(BUILD)/host/test_wsheet_win: tests/host/test_wsheet_win.c tests/host/gk_fake.h $(WSHEET_MODEL) user/wsheet/app.c \
+                               $(wildcard user/wsheet/*.h) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) $(WSHEET_HOSTFLAGS) tests/host/test_wsheet_win.c $(WSHEET_MODEL) user/wsheet/app.c \
+	    $(GK_HOST_OBJ) -lm -o $@
+unittest: unittest-sheet
+.PHONY: unittest-sheet
+unittest-sheet: $(BUILD)/host/test_wsheet $(BUILD)/host/test_wsheet_win
+	$(BUILD)/host/test_wsheet
+	$(BUILD)/host/test_wsheet_win
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

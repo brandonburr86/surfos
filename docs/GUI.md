@@ -736,6 +736,67 @@ the moving of a zoomed picture hold; for the rest:
 * **Closing.** Esc, Ctrl+W or the close button; there is nothing to save. The status bar
   shows the name, the picture's size and kind and its place in the folder, and the zoom.
 
+### Spreadsheet
+
+*11/05/26* (the desktop applications, track sheet): **Spreadsheet** is a program, `wsheet`
+(`user/wsheet/`), with a window of its own: a grid of 256 columns (A to IV) and 65,536 rows, a
+formula bar above it and a status bar below. Apps > Programs and its tile start it; Files opens a
+`.sheet` or a `.csv` in it (`rootfs/apps/wsheet.app`). A fault in it costs only its window.
+
+* **Typing.** A key typed in the grid begins the active cell anew, shown in the cell and in the
+  formula bar. Enter puts it in and moves down, Tab right (Shift back), and an arrow puts it in
+  and moves that way; Enter after Tabs comes back to the column the Tabs began in, so a table is
+  typed a row at a time. Esc leaves the cell as it was, Backspace empties it as typing begins.
+  Ctrl+E, a double-click or a click in the formula bar edits what the cell holds there, where the
+  arrows move in the text; Enter puts it in, Esc cancels, and an edit that changed nothing changes
+  nothing. A cell holding a line break or a tab (from a file or a paste) is not edited there, which
+  would lose them: typing replaces it. The cell's name at the bar's left takes a name or a range to
+  go to (Ctrl+L).
+* **What a cell holds.** A number (`12`, `-3.5`, `1e3`; `50%` makes the cell a percent one), text,
+  TRUE or FALSE, an error, or a formula after `=`. Text that would read as something else goes in
+  after a `'`, as the formula bar shows it.
+* **Formulas.** Numbers, `"text"`, TRUE, FALSE, references (`A1`, `$A$1`, `A$1`, `$A1`) and
+  ranges (`A1:B5`), the operators `+ - * / ^ % &` and `= <> < <= > >=`, and SUM, AVERAGE, MIN,
+  MAX, COUNT, COUNTA, IF, AND, OR, NOT, ROUND, INT, ABS, SQRT, POWER, MOD, LEN, LEFT, RIGHT, MID,
+  UPPER, LOWER, TRIM and CONCAT, as OpenFormula has them: `-2^2` is 4, `2^3^2` 64. A formula that
+  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where (when
+  cells move its references move too, unless its text does not even split into references and words,
+  a stray `?`: then it stays as typed); an unknown name is #NAME?. Every change works the formulas out again, each after the cells it
+  uses, and the formulas of a cycle show #CYCLE!.
+* **Numbers** are doubles shown to their 15 significant digits, so `=0.1+0.2` shows 0.3 and equals
+  0.3; what a format or ROUND cuts is cut a half away from zero (2.675 with two decimals: 2.68).
+  The formats (Format) are General, fixed decimals and percent, with more or fewer decimals. A
+  column's width is dragged at its header's right edge, or typed (Sheet > Column width).
+* **Selecting.** Shift and the arrows, a drag or a Shift+click select a range; Ctrl and an arrow
+  goes to the edge of the data; a header selects a row or a column, the corner everything. The
+  status bar sums the selection: `Sum 6  Average 2  Count 3`.
+* **Copy and paste.** Ctrl+C puts the cells' values on the desktop's clipboard as tab-separated
+  text (as they show), for Notepad or another program, and keeps the cells: pasting what the
+  clipboard still holds from that copy puts them back with their formulas' references moved by
+  as far as they moved (`$` keeps a part). Text copied elsewhere is pasted a field a cell, as
+  typed. Ctrl+X cuts: pasted, the cells move, a moved formula keeping its references (those into
+  the cut cells go along), while formulas elsewhere that referred to the cut cells are not changed.
+  While the formula bar holds an edit the menu's Paste is off: the bar's own Ctrl+V pastes at its
+  cursor.
+* **Rows and columns** (Sheet) are inserted and deleted at the selection; every reference keeps
+  to the cell it meant, a range grows or shrinks, and a reference to a cell that went is #REF!.
+  Inserting is refused when it would push cells off the sheet's end.
+* **The history.** Ctrl+Z and Ctrl+Y undo and redo the last 100 changes, each showing where.
+* **Files.** File > Open and Save as are the desktop's choosers. A `.sheet` is the Spreadsheet's
+  own text: `SurfOS sheet 1`, then a line for each column width not 80 pixels and each cell, with
+  its format and what the formula bar shows (`cell B4 fixed2 =SUM(B1:B3)`); it keeps everything. A
+  `.csv` (RFC 4180) opens as values (a field that begins with `=` is text) and saves the values,
+  asking first when formulas, formats or column widths would be lost; after such a save New, Open
+  and Close ask again (unless a `.sheet` was saved since the sheet last changed), their Save as
+  offering the whole sheet as a `.sheet`. A file that would pass 32 MB, which no reader opens, is
+  not written. Saving replaces a file as Notepad does (a new file
+  beside it, renamed over). A file is read a piece at a time; Esc stops it. New, Open and Close
+  ask first about unsaved changes.
+* **Limits.** 300,000 cells, 8,192 bytes a cell (the `'` that keeps a text text not counted),
+  files of 32 MB read or written. A recalculation too big for
+  SurfOS stops, and what it did not finish shows #LIMIT!. No charts, sorting, dates, names for
+  ranges or whole-column references.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary
@@ -792,8 +853,26 @@ and its title says what it was last sent.
   `include/sys/guidraw.h`, is built into libsurf); `gw_present()` shows what changed, and
   `gw_next()` waits for the next event and remakes the image at a new size by itself.
   `wdemo` is the example: colour bars, its size and the last event it got (`wdemo hang`
-  pays no heed to the close button, `wdemo crash` faults after it first draws). Until the
-  kernel keeps floating point across task switches, such a program must not use it.
+  pays no heed to the close button, `wdemo crash` faults after it first draws). *11/05/26:*
+  such a program may use floating point: the kernel keeps each program's registers across task
+  switches (robustness B2, 10/25/26). libgui itself draws in whole pixels.
+* **The toolkit** (*11/05/26*, the desktop applications, track kit:
+  `docs/superpowers/plans/2026-11-05-desktop-apps-kit.md`). `gk.h` in libsurf builds a program's
+  window of widgets drawn as the desktop draws its own: labels, buttons, check boxes and switches,
+  radio groups, lines of text (a password's, and a chat's with its history), lists with columns,
+  scroll bars, tabs, status bars, a text of several lines, progress bars, sliders, palettes of
+  colours and pictures, and areas the program draws itself, with scroll bars in its own units (rows,
+  columns, pixels). Boxes lay them out, so a window keeps its shape at any size. Tab and Shift+Tab
+  move the focus; a message, a question or a line to type opens over the window. Only what changed
+  is painted and presented. A program loops on `gk_next()`, which gives it what it must hear: a
+  click, a changed value, a key no widget took, a box's answer, a timer, a descriptor that is ready,
+  a menu item, a chosen path, the close button. Its menus go to the desktop's bar (with
+  submenus, and a Help menu that joins the desktop's), and their
+  shortcuts work in the window in any case; Open and Save as are the desktop's choosers, asked for
+  only in answer to the user's own key, click or menu choice (a desktop without choosers gets a line
+  to type the path in instead). `wkit` shows every widget (Controls, Lists, Drawing, More). On the
+  host, `tests/host/gk_fake.c` is a desktop for a program's window: the program's whole window code
+  runs natively (`make unittest`), and a test sees what the desktop would show.
 * **The Calculator as a program.** `wcalc` is the desktop's Calculator in a window of its
   own, looking and counting the same (they share their arithmetic, `shell/guicalc.c`): the
   first application to move out of the kernel, so that a fault in it costs only its window.
