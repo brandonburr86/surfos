@@ -1160,12 +1160,12 @@ $(BUILD)/host/test_wkit: tests/host/test_wkit.c tests/host/gk_fake.h user/wkit/d
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wkit tests/host/test_wkit.c user/wkit/demo.c $(GK_HOST_OBJ) -o $@
 # 11/09/26 (the review): libgui and the toolkit again, every free() of theirs through test_gksecret.c's gks_free(),
-# which looks for a secret in each block that goes
+# which looks for a secret in each block that goes, and every malloc() through gks_malloc(), which can fail one
 GK_SECRET_OBJ = $(patsubst user/libsurf/%.c,$(BUILD)/host/gks/%.o,user/libsurf/gui.c $(wildcard user/libsurf/gk*.c))
 $(BUILD)/host/gks/%.o: user/libsurf/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $< (gk, frees looked at)"
-	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Dfree=gks_free -MMD -MP -c $< -o $@
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Dfree=gks_free -Dmalloc=gks_malloc -MMD -MP -c $< -o $@
 -include $(wildcard $(BUILD)/host/gks/*.d)
 $(BUILD)/host/test_gksecret: tests/host/test_gksecret.c tests/host/gk_fake.h $(GK_SECRET_OBJ) $(GK_HOST_OBJ)
 	@echo "HOSTLD $@"

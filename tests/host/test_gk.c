@@ -21,6 +21,7 @@
    account). */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
@@ -1404,6 +1405,78 @@ static void fakes(void) {
     gk_close(ui);
 }
 
+/* the review's lows. F9: a watch ends once told its descriptor hung up with nothing to read, or is none. F10, F11: a
+   long line and a long label take linear time (a quadratic one took seconds at 64 KB). F12: a box's own line is the
+   box's, the program hearing only its answer. F13: a lone first byte before a lone continuation byte, which make a
+   character together, leave the cursor after it, never inside. F15: absurd numbers from a program are held, not
+   overflowed (the sanitizers' run sees any overflow) */
+static void lows(void) {
+    struct gk *ui = window("Lows", 400, 300);
+    struct gk_widget *f = gk_field(gk_root(ui), 1, 300000, 0), *a = gk_area(gk_root(ui), 2, 0, NULL, NULL);
+    struct gk_widget *sl = gk_slider(gk_root(ui), 3, -2147483647 - 1, 2147483647, 1000000000), *l;
+    char *big = malloc(262145);
+    int fds[2], i, fd_events = 0;
+    clock_t t0;
+    double took;
+    run(ui);
+    CHECK(pipe(fds) == 0 && gk_watch(ui, fds[0], POLLIN, 77) == 0);
+    close(fds[1]);
+    run(ui);
+    run(ui);
+    CHECK(count(GK_EV_FD) == 0);                        /* (the first run had it) */
+    gk_watch(ui, fds[0], POLLIN, 77);
+    for(i = 0; i < 3; i++) {
+        run(ui);
+        fd_events += count(GK_EV_FD);
+    }
+    CHECK(fd_events == 1);
+    close(fds[0]);
+    gk_watch(ui, fds[0], POLLIN, 78);                   /* a descriptor that is none: told once, then dropped */
+    run(ui);
+    CHECK(heard(GK_EV_FD, 78) && (heard(GK_EV_FD, 78)->value & POLLNVAL));
+    run(ui);
+    CHECK(!heard(GK_EV_FD, 78));
+    memset(big, 'w', 262144);
+    big[262144] = 0;
+    t0 = clock();
+    gk_set_text(f, big);
+    gk_focus(f);
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_key(WIN_KEY_END, 0);
+    run(ui);
+    l = gk_label(gk_root(ui), big);
+    run(ui);
+    took = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    CHECK(took < 3.0);
+    if(took >= 3.0) printf("  (256 KB in a field and a label: %.1f s)\n", took);
+    gk_remove(l);
+    gk_ask(ui, 9, "Secret", "Password:", "", GK_PASSWORD);
+    gkf_type("hunter2\n");
+    run(ui);
+    CHECK(count(GK_EV_CHANGE) == 0 && heard(GK_EV_ANSWER, 9) && !strcmp(heard(GK_EV_ANSWER, 9)->text, "hunter2"));
+    gk_set_text(f, "\xa9");                            /* a lone continuation byte; Home; a lone first byte, then x */
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_key(0xC3, 0);
+    gkf_key('x', 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "\xc3\xa9x"));
+    gk_size(a, 2147483647, 2147483647);                 /* F15: held, not overflowed */
+    gk_gap(gk_root(ui), 2147483647);
+    gk_pad(gk_root(ui), 2147483647);
+    gk_damage(a, -2147483647 - 1, -2147483647 - 1, 2147483647, 2147483647);
+    gk_damage(a, 2147483647, 2147483647, 2147483647, 2147483647);
+    gk_set_value(sl, 2147483647);
+    gk_focus(sl);
+    gkf_key(WIN_KEY_PGUP, 0);
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key(WIN_KEY_END, 0);
+    gkf_key(WIN_KEY_PGDN, 0);
+    run(ui);
+    CHECK(gk_ok(ui) && gk_value(sl) >= -2147483647 - 1);
+    free(big);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1899,6 +1972,7 @@ int main(void) {
     punct();
     fits();
     fakes();
+    lows();
     paste();
     choosers();
     theme();

@@ -7,7 +7,9 @@ The window toolkit (gk.h; the desktop applications, track kit) built with every 
 toolkit's going through gks_free() (the Makefile's -Dfree=gks_free for this test's objects), which looks
 for a marker in the whole block before it goes. A secret typed into a field, its history, a draft, a
 password field, a box's question: whatever path it takes, no block freed with it in it (the review of
-11/09/26, F1: a chat line's draft and history were freed unwiped). Built and run by `make unittest`.
+11/09/26, F1: a chat line's draft and history were freed unwiped). And every malloc() through
+gks_malloc() (-Dmalloc=gks_malloc), which fails the next one when asked (F16: a chosen path that cannot
+be kept). Built and run by `make unittest`.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +24,18 @@ password field, a box's question: whatever path it takes, no block freed with it
 #define usable(p) malloc_usable_size(p)
 #endif
 
-static int checks, failed, leaks;
+static int checks, failed, leaks, fail_next;
 static const char *marker = "hunter2";
 #define CHECK(x) do { checks++; if(!(x)) { failed++; printf("FAIL %s line %d: %s\n", __FILE__, __LINE__, #x); } } while(0)
+
+/* every malloc() of the toolkit's: the next one fails when fail_next is set */
+void *gks_malloc(size_t n) {
+    if(fail_next) {
+        fail_next = 0;
+        return NULL;
+    }
+    return malloc(n);
+}
 
 /* every free() of the toolkit's: the block looked through for the marker first */
 void gks_free(void *p) {
@@ -143,6 +154,19 @@ int main(void) {
     run(ui);
     gk_close(ui);
     CHECK(leaks == 0);
+    /* a chosen path that cannot be kept (no memory for the event's copy): not chosen, never an empty path chosen */
+    ui = window();
+    gk_label(gk_root(ui), "x");
+    run(ui);
+    gkf_key(WIN_KEY_F12, 0);
+    {
+        struct gk_event ev;
+        CHECK(gk_next(ui, &ev, 0) == 1 && gk_choose(ui, 9, WIN_DLG_OPEN, "/", "", "") == 0);
+        gkf_dialog_answer("/usb1p1/notes.txt");
+        fail_next = 1;
+        CHECK(gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_CHOSEN && ev.value == 0 && !strcmp(ev.text, ""));
+    }
+    gk_close(ui);
     gkf_reset(0, 0);
     printf("test_gksecret: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

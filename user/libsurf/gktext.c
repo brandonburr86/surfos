@@ -169,6 +169,8 @@ static int insert(struct text *t, const char *s, int n) {
     t->len += k;
     t->buf[t->len] = 0;
     t->cursor = t->anchor = t->cursor + k;
+    if(t->cursor < t->len && t->cursor > 0 && next_char(t, prev_char(t, t->cursor)) > t->cursor)
+        t->cursor = t->anchor = next_char(t, prev_char(t, t->cursor));   /* (the review, F13) never inside one */
     return 1;
 }
 

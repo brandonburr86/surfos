@@ -169,7 +169,8 @@ int gk_flush(struct gk *ui);                    /* paint and present what change
 #define GK_WATCHES 8
 int gk_timer(struct gk *ui, int id, int ms, int repeat);   /* GK_EV_TIMER after ms (again every ms): 0, -1 full */
 void gk_timer_stop(struct gk *ui, int id);
-int gk_watch(struct gk *ui, int fd, short events, int id); /* GK_EV_FD while poll() finds fd ready: 0, -1 full */
+int gk_watch(struct gk *ui, int fd, short events, int id);   /* (11/09/26: a watch ends by itself once it was told
+                                                               POLLHUP, POLLERR or POLLNVAL: read what is left then) */ /* GK_EV_FD while poll() finds fd ready: 0, -1 full */
 void gk_unwatch(struct gk *ui, int fd);
 
 /**** the clipboard ****/

@@ -68,13 +68,28 @@ static int cells_of(const struct gk_widget *w) {
 /* the first character shown so that the cursor is in view, from where the view was; and back while the text after it
    leaves room (a text set before the field had its width, a wider window) */
 static int view_start(const struct gk_line *f, int cells) {
-    int start = f->scroll;
+    int start = f->scroll, c, k, b = 0, len;
     if(start > f->len) start = f->len;
     if(f->cursor < start) start = f->cursor;
     if(cells < 1) return start;
-    while(chars(f, start, f->cursor) > cells - 1 && start < f->cursor) start = next_char(f, start);
-    while(start > 0 && chars(f, prev_char(f, start), f->len) <= cells - 1) start = prev_char(f, start);
-    return start;
+    for(c = chars(f, start, f->cursor); c > cells - 1 && start < f->cursor; c--) start = next_char(f, start);
+    /* (the review, F10: in one pass, not a count at each step) back to where the text to its end just fits */
+    for(k = chars(f, 0, f->len) - (cells - 1); k > 0 && b < f->len; k--) {
+        gw_char(f->buf + b, f->len - b, &len);
+        b += len;
+    }
+    return b < start ? b : start;
+}
+
+/* the end of the character at, when at is inside one (bytes put in one at a time can make one around the cursor: a
+   lone first byte before a lone continuation byte): the cursor never stands inside a character */
+static int whole(const struct gk_line *f, int at) {
+    int k = 0, len;
+    while(k < at) {
+        gw_char(f->buf + k, f->len - k, &len);
+        k += len;
+    }
+    return k;
 }
 
 static void changed(struct gk_widget *w, int text) {
@@ -121,7 +136,7 @@ static int insert(struct gk_line *f, const char *s, int n) {
     for(i = 0; i < n; i++) f->buf[f->cursor + i] = (unsigned char)s[i] < 32 ? ' ' : s[i];
     f->len += n;
     f->buf[f->len] = 0;
-    f->cursor = f->anchor = f->cursor + n;
+    f->cursor = f->anchor = whole(f, f->cursor + n);   /* (the review, F13) */
     return n;
 }
 

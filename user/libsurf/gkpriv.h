@@ -21,6 +21,8 @@ painted again (gk_dirty(), gk_relayout()).
 #define GK_QUEUE 64                     /* events for the program, at most (one window event makes a few) */
 #define GK_DAMAGE 16                    /* rectangles to paint again before they are merged into one */
 #define GK_DOUBLE_MS 500                /* two clicks this close together are a double-click, as on the desktop */
+#define GK_SIZE_MAX (1 << 20)           /* (the review, F15) a widget's size, a gap, a padding at most, in pixels: what a
+                                           program gives is held to it, and sums of sizes are made in 64 bits */
 #define GK_BATCHES 8                    /* gk_next() reads on while the window has events, at most these batches more
                                            (gui.h's GW_QUEUE each) once its time is up: the kernel's queue drained */
 
@@ -152,6 +154,9 @@ int gk_set_str(struct gk_widget *w, char **slot, const char *text);   /* 1 when 
 unsigned gk_now(void);
 long long gk_div64(long long n, long long d);               /* n / d, n >= 0, d > 0: no libgcc */
 void gk_wipe(void *p, size_t n);                            /* n bytes zeroed, kept by the compiler (volatile) */
+int gk_sat(long long v);                                    /* v within -GK_SIZE_MAX .. GK_SIZE_MAX */
+/* x, y, w, h clipped to 0, 0, cw, ch in 64 bits (no overflow, whatever a program gave): 1 when something is left */
+int gk_clip_rect(int *x, int *y, int *w, int *h, int cw, int ch);
 int gk_ctrl(unsigned key, unsigned mods);                   /* 'a'..'z' for Ctrl and a letter, else 0 */
 int gk_shift(unsigned mods);
 void gk_move_focus(struct gk *ui, int back);                /* Tab, Shift+Tab */

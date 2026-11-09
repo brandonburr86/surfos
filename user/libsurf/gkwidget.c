@@ -42,7 +42,7 @@ int gk_lines(const char *text, int *widest) {
             len = 1;
             continue;
         }
-        gw_char(text, (int)strlen(text), &len);
+        gw_char(text, (int)strnlen(text, 4), &len);     /* (a character is 4 bytes at most: no strlen each time) */
         if(++cells > *widest) *widest = cells;
     }
     return n;
@@ -556,8 +556,9 @@ static int sbar_wheel(struct gk_widget *w, int x, int y, int rows) {
     struct sbar *s = w->k;
     (void)x;
     (void)y;
+    long long to = (long long)s->b.first + rows;     /* (in 64 bits: rows as the desktop or a program gave them) */
     if(!gk_bar_max(&s->b)) return 0;
-    if(set_first(&s->b, s->b.first + rows)) sbar_moved(w);
+    if(set_first(&s->b, to > 0x7FFFFFFF ? 0x7FFFFFFF : to < 0 ? 0 : (int)to)) sbar_moved(w);
     return 1;
 }
 

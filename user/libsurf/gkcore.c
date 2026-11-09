@@ -73,6 +73,24 @@ void gk_wipe(void *p, size_t n) {
     while(n--) *b++ = 0;
 }
 
+int gk_sat(long long v) {
+    return v > GK_SIZE_MAX ? GK_SIZE_MAX : v < -GK_SIZE_MAX ? -GK_SIZE_MAX : (int)v;
+}
+
+int gk_clip_rect(int *x, int *y, int *w, int *h, int cw, int ch) {
+    long long l = *x, t = *y, r = l + *w, b = t + *h;
+    if(l < 0) l = 0;
+    if(t < 0) t = 0;
+    if(r > cw) r = cw;
+    if(b > ch) b = ch;
+    if(r <= l || b <= t) return 0;
+    *x = (int)l;
+    *y = (int)t;
+    *w = (int)(r - l);
+    *h = (int)(b - t);
+    return 1;
+}
+
 /* Ctrl and a letter (surfos/win.h's keys): its control byte, 1 for Ctrl+A to 26, with WIN_MOD_CTRL (Ctrl+I is 9 with
    it, Tab 9 without, Ctrl+Tab WIN_KEY_TAB). A desktop before the modifiers sent the control byte alone, and Backspace
    as 8, Tab as 9, Enter as 13: without WIN_MOD_CTRL those are the keys, the other bytes Ctrl and their letters */
@@ -213,11 +231,7 @@ static int worth_joining(const struct gk_rect *a, const struct gk_rect *b) {
 void gk_dirty_rect(struct gk *ui, int x, int y, int w, int h) {
     struct gk_rect r;
     int i, merged;
-    if(x < 0) { w += x; x = 0; }
-    if(y < 0) { h += y; y = 0; }
-    if(x + w > ui->win->w) w = ui->win->w - x;
-    if(y + h > ui->win->h) h = ui->win->h - y;
-    if(w <= 0 || h <= 0) return;
+    if(!gk_clip_rect(&x, &y, &w, &h, ui->win->w, ui->win->h)) return;
     r.x = x;
     r.y = y;
     r.w = w;
@@ -377,15 +391,15 @@ void gk_bounds(const struct gk_widget *w, int *x, int *y, int *width, int *heigh
 
 void gk_size(struct gk_widget *w, int min_w, int min_h) {
     if(!w) return;
-    w->min_w = min_w > 0 ? min_w : 0;
-    w->min_h = min_h > 0 ? min_h : 0;
+    w->min_w = min_w > 0 ? gk_sat(min_w) : 0;
+    w->min_h = min_h > 0 ? gk_sat(min_h) : 0;
     gk_relayout(w);
 }
 
 void gk_grow(struct gk_widget *w, int gx, int gy) {
     if(!w) return;
-    w->grow_x = gx > 0 ? gx : 0;
-    w->grow_y = gy > 0 ? gy : 0;
+    w->grow_x = gx > 0 ? (gx < 1024 ? gx : 1024) : 0;  /* (weights summed in 64 bits; a share is what counts) */
+    w->grow_y = gy > 0 ? (gy < 1024 ? gy : 1024) : 0;
     gk_relayout(w);
 }
 
@@ -432,7 +446,7 @@ void gk_set_value(struct gk_widget *w, int value) {
 
 static void box_measure(struct gk_widget *w) {
     struct gk_widget *c;
-    int n = 0, along = 0, across = 0;
+    long long n = 0, along = 0, across = 0;
     for(c = w->child; c; c = c->next) {
         if(c->flags & GKW_HIDDEN) continue;
         along += w->across ? c->nat_w : c->nat_h;
@@ -440,8 +454,8 @@ static void box_measure(struct gk_widget *w) {
         n++;
     }
     if(n > 1) along += (n - 1) * w->gap;
-    w->base_w = (w->across ? along : across) + 2 * w->pad;
-    w->base_h = (w->across ? across : along) + 2 * w->pad;
+    w->base_w = gk_sat((w->across ? along : across) + 2LL * w->pad);
+    w->base_h = gk_sat((w->across ? across : along) + 2LL * w->pad);
 }
 
 /* how a child sits across its box: as it asked, or filling the box when it grows that way, or the box's way (an
@@ -457,7 +471,8 @@ static void box_arrange(struct gk_widget *w) {
     int across = w->across, ix = w->x + w->pad, iy = w->y + w->pad;
     int iw = max(0, w->w - 2 * w->pad), ih = max(0, w->h - 2 * w->pad);
     int room = across ? iw : ih, cross = across ? ih : iw;
-    int n = 0, total = 0, weights = 0, shrinkable = 0, extra, pos, size, share, csize, cpos, how, nat, g;
+    int n = 0, extra, pos, size, share, csize, cpos, how, nat, g;
+    long long total = 0, weights = 0, shrinkable = 0;
     int growers = 0, given = 0, taken = 0, seen = 0;
     for(c = w->child; c; c = c->next) {
         if(c->flags & GKW_HIDDEN) continue;
@@ -471,8 +486,8 @@ static void box_arrange(struct gk_widget *w) {
         }
         n++;
     }
-    if(n > 1) total += (n - 1) * w->gap;
-    extra = room - total;
+    if(n > 1) total += (long long)(n - 1) * w->gap;
+    extra = gk_sat(room - total);
     pos = across ? ix : iy;
     for(c = w->child; c; c = c->next) {
         if(c->flags & GKW_HIDDEN) continue;
@@ -497,7 +512,7 @@ static void box_arrange(struct gk_widget *w) {
         cpos = how == GK_CENTER ? (cross - csize) / 2 : how == GK_END ? cross - csize : 0;
         if(across) gk_lay(c, pos, iy + cpos, size, csize);
         else gk_lay(c, ix + cpos, pos, csize, size);
-        pos += size + w->gap;
+        pos = gk_sat((long long)pos + size + w->gap);
     }
 }
 
@@ -519,13 +534,13 @@ struct gk_widget *gk_hbox(struct gk_widget *parent, int gap) { return box(parent
 
 void gk_pad(struct gk_widget *w, int pad) {
     if(!w) return;
-    w->pad = pad > 0 ? pad : 0;
+    w->pad = pad > 0 ? gk_sat(pad) : 0;
     gk_relayout(w);
 }
 
 void gk_gap(struct gk_widget *w, int gap) {
     if(!w) return;
-    w->gap = gap > 0 ? gap : 0;
+    w->gap = gap > 0 ? gk_sat(gap) : 0;
     gk_relayout(w);
 }
 
@@ -590,8 +605,8 @@ static void measure(struct gk_widget *w) {
     for(c = w->child; c; c = c->next) if(!(c->flags & GKW_HIDDEN)) measure(c);
     w->base_w = w->base_h = 0;
     if(w->cls->measure) w->cls->measure(w);
-    w->nat_w = max(w->base_w, w->min_w);
-    w->nat_h = max(w->base_h, w->min_h);
+    w->nat_w = gk_sat(max(w->base_w, w->min_w));
+    w->nat_h = gk_sat(max(w->base_h, w->min_h));
 }
 
 static void keep_places(struct gk_widget *w) {
@@ -714,7 +729,11 @@ int gk_flush(struct gk *ui) {
 
 struct gk_event *gk_post_ev(struct gk *ui, int type, struct gk_widget *w, int value) {
     struct gk_event *e;
+    struct gk_widget *top;
     int at;
+    for(top = w; top && top->parent; top = top->parent) ;
+    if(top && top == ui->box) return NULL;              /* (the review, F12) a box's line (a password being typed) is the
+                                                           box's own: the program hears the box's answer, nothing else */
     if(ui->qcount == GK_QUEUE) return NULL;             /* a whole queue unread: no window event makes so many */
     at = (ui->qhead + ui->qcount++) % GK_QUEUE;
     e = &ui->queue[at];
@@ -744,6 +763,9 @@ void gk_post_text(struct gk *ui, int type, int id, int value, const char *text, 
     if(!(p = malloc((size_t)len + 1))) {
         ui->failed = 1;
         e->text = "";
+        if(type == GK_EV_CHOSEN) e->value = 0;          /* (the review, F16) no path to give: not chosen, never an empty
+                                                           one chosen; a box's answer is a Cancel */
+        else if(type == GK_EV_ANSWER) e->value = -1;
         return;
     }
     memcpy(p, text, (size_t)len);
@@ -1122,6 +1144,10 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
         for(i = 1; i < n; i++) {
             if(!pf[i].revents || !ui->watches[slot[i]].fd) continue;
             if((e = gk_post_ev(ui, GK_EV_FD, NULL, pf[i].revents))) e->id = ui->watches[slot[i]].id;
+            if(pf[i].revents & (POLLNVAL | POLLHUP | POLLERR))
+                ui->watches[slot[i]].fd = 0;            /* (the review, F9) told once: no descriptor, hung up or broken,
+                                                           which poll() would say again for ever (what is left to read
+                                                           is read then, with the event) */
         }
         fire(ui, gk_now());                             /* the timers due, after the window and the descriptors were
                                                            looked at (the review: before, a timer due again at once was
