@@ -126,6 +126,9 @@ struct gk_event {
                                            path, 0 cancelled */
 #define GK_EV_THEME     17              /* the desktop's theme changed: value WIN_THEME_*, gk_theme() its colours (the
                                            window is painted again: an area's draw reads them) */
+#define GK_EV_UNCOPIED  18              /* 11/09/26: the clipboard refused a field's or a text's copy (Ctrl+C) or cut
+                                           (Ctrl+X, which then deletes nothing): w the widget, value the errno (EINVAL:
+                                           more than WIN_CLIP_MAX bytes; EACCES: the window has not the focus) */
 
 /* flags */
 #define GK_PASSWORD     0x01            /* a field: dots for its characters, nothing copied, its text wiped once gone */

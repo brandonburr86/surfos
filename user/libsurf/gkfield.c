@@ -22,6 +22,7 @@ the bytes of a character typed partway (part[]) as well, once they go in and at 
 gkpriv.h's struct gk_line, so that test_gk looks that a wiped password leaves no byte.
 */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gkpriv.h"
@@ -165,10 +166,15 @@ static int word_right(const struct gk_line *f, int at) {
 }
 
 /* the text between where the selection starts and ends, to the clipboard */
-static void copy(struct gk_widget *w) {
+/* the selection to the clipboard: 0, or -1 when the clipboard refused it (said as GK_EV_UNCOPIED) or there is none to
+   copy (a password's: never) */
+static int copy(struct gk_widget *w) {
     struct gk_line *f = w->k;
     int from = min(f->anchor, f->cursor), to = f->anchor > f->cursor ? f->anchor : f->cursor;
-    if(to > from && !(w->opts & GK_PASSWORD)) gk_copy(w->ui, f->buf + from, (unsigned)(to - from));
+    if(to <= from || (w->opts & GK_PASSWORD)) return -1;
+    if(gk_copy(w->ui, f->buf + from, (unsigned)(to - from)) == 0) return 0;
+    gk_post(w->ui, GK_EV_UNCOPIED, w, errno);
+    return -1;
 }
 
 static void paste(struct gk_widget *w) {
@@ -278,8 +284,7 @@ static int field_key(struct gk_widget *w, unsigned key, unsigned mods) {
         return 1;
     }
     if(c == 'c' || c == 'x') {
-        copy(w);
-        if(c == 'x' && has_selection(f) && !(w->opts & GK_PASSWORD)) {
+        if(copy(w) == 0 && c == 'x') {                  /* a cut takes only what the clipboard has */
             delete_selection(f);
             changed(w, 1);
         }

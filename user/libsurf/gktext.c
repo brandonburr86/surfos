@@ -18,6 +18,7 @@ proportion to the text's size; a program with megabytes (an editor) draws an are
 before it goes in, and what is deleted is zeroed.
 */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gkpriv.h"
@@ -224,10 +225,14 @@ static int word_right(const struct text *t, int at) {
     return at;
 }
 
-static void copy(struct gk_widget *w) {
+/* the selection to the clipboard: 0, or -1 when there is none or the clipboard refused it (GK_EV_UNCOPIED) */
+static int copy(struct gk_widget *w) {
     struct text *t = w->k;
     int from = min(t->anchor, t->cursor), to = max(t->anchor, t->cursor);
-    if(to > from) gk_copy(w->ui, t->buf + from, (unsigned)(to - from));
+    if(to <= from) return -1;
+    if(gk_copy(w->ui, t->buf + from, (unsigned)(to - from)) == 0) return 0;
+    gk_post(w->ui, GK_EV_UNCOPIED, w, errno);
+    return -1;
 }
 
 static void paste(struct gk_widget *w) {
@@ -275,9 +280,8 @@ static int text_key(struct gk_widget *w, unsigned key, unsigned mods) {
     case 'c':
         copy(w);
         return 1;
-    case 'x':
-        copy(w);
-        if(!ro && has_selection(t)) {
+    case 'x':                                           /* a cut takes only what the clipboard has */
+        if(copy(w) == 0 && !ro) {
             delete_selection(t);
             changed(w, 1);
         }

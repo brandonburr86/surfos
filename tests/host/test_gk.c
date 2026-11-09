@@ -1231,6 +1231,41 @@ static void repeats(void) {
     gk_close(ui);
 }
 
+/* the review (F3): a cut takes only what the clipboard took. A text longer than WIN_CLIP_MAX, Ctrl+A, Ctrl+X: the
+   clipboard refuses it (EINVAL), and the text stays, the program told why (GK_EV_UNCOPIED); a field's cut without
+   the focus likewise (EACCES); a cut the clipboard takes deletes */
+static void cuts(void) {
+    struct gk *ui = window("Cut", 300, 200);
+    struct gk_widget *t = gk_text_area(gk_root(ui), 1, 300000, 0), *f = gk_field(gk_root(ui), 2, 40, 0);
+    char *big = malloc(200001);
+    int clips;
+    memset(big, 'a', 200000);
+    big[200000] = 0;
+    run(ui);
+    gk_set_text(t, big);
+    gk_focus(t);
+    clips = gkf_clips();
+    gkf_key(1, WIN_MOD_CTRL);
+    gkf_key(24, WIN_MOD_CTRL);
+    run(ui);
+    CHECK(strlen(gk_text(t)) == 200000 && gkf_clips() == clips && heard(GK_EV_UNCOPIED, 1) &&
+          heard(GK_EV_UNCOPIED, 1)->value == EINVAL && !heard(GK_EV_CHANGE, 1));
+    gk_set_text(f, "keep");
+    gk_focus(f);
+    gkf_key(1, WIN_MOD_CTRL);
+    gkf_focus(0);
+    gkf_key(24, WIN_MOD_CTRL);
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "keep") && heard(GK_EV_UNCOPIED, 2) && heard(GK_EV_UNCOPIED, 2)->value == EACCES);
+    gkf_focus(1);
+    gkf_key(1, WIN_MOD_CTRL);
+    gkf_key(24, WIN_MOD_CTRL);
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "") && !strcmp(gkf_clip(), "keep") && !heard(GK_EV_UNCOPIED, 2));
+    free(big);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1719,6 +1754,7 @@ int main(void) {
     drags();
     wipes();
     repeats();
+    cuts();
     paste();
     choosers();
     theme();
