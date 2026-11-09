@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 24 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 26 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
@@ -23,6 +23,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Saved Wi-Fi networks joined by themselves at every start, and the settings on the stick (telnet at startup, Ethernet's DHCP, a host name) | done under emulation (a simulated Wi-Fi chip); **pending on the laptop** | `make test` (boots with a settings disk), `make test-usb` (scenario `settings`), `make unittest` (`test_netcfg`); [section 15](#15-wi-fi-saved-networks-and-the-settings-on-the-stick) |
 | A web server: websites from a folder of a stick, opened in a browser on another computer (`httpd`) | done under emulation; **pending on the laptop** | `make test`, `make unittest` and `make test-usb` (scenario `usbnet`); [section 16](#16-a-web-server-hosting-a-site) |
 | Files to and from other computers: an FTP server for the Mac's Finder, curl and FTP programs (`ftpd`), and `nc` both ways | done under emulation, and with the Mac's own curl, Finder and `nc` against SurfOS in QEMU; **pending on the laptop** | `make test`, `make unittest`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 17](#17-files-to-and-from-other-computers-ftp-and-nc) |
+| Applications on the desktop: Settings (Wi-Fi and the settings), Spreadsheet, Code Editor, Paint, Chat (IRC), Mines, Solitaire and Swell, and the Image Viewer as a program | done under emulation; **pending on the laptop** | `make unittest` and `make test-usb` (scenarios `guiapps`, `guichat` and `wsettings`); [GUI](GUI.md) |
 
 ## What is on the drive
 
@@ -71,7 +72,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 24 scenarios, several minutes
+devenv/test-usb.sh      # the automatic tests: 26 scenarios, several minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -1556,7 +1557,7 @@ and, for the settings and saved networks, [superpowers/plans/2026-10-17-network-
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json, and build/usb/stick/
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 24 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 26 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image

@@ -2639,7 +2639,8 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   given by the corner or by maximizing is told once the corner is let go (one RESIZE), the old pixels drawn
   on the background until the program presents pixels of the new size. FOCUS says when the window takes the
   focus or loses it; the focused window takes every key but Ctrl+G. The close button sends CLOSE;
-  pressed again it asks "End the program?" (Cancel first), and End kills the program. Leaving the desktop
+  pressed again it asks "End the program?" (Cancel first), and End kills the program (11/09/26: a second
+  press now sends CLOSE again to a program that reads it, and the third asks: section 25). Leaving the desktop
   with programs' windows open asks first. A console switch changes nothing: presents go on into the kernel's
   buffers, and the desktop draws them again when it has the screen back (its pointer in the middle).
 * **The Terminal** adopts its session's pty (`win_adopt()`, `shell/guisys_term.c`), so that a program typed
@@ -2649,8 +2650,8 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   font are built into libsurf by one-line wrappers, so a program draws its image as the desktop draws its
   scene: rectangles, lines, UTF-8 text in code page 437, images, buttons, in the desktop's colours.
   `gw_present()` presents a rectangle; `gw_next()` polls and reads, and remakes the image at a new size
-  before it returns the RESIZE. Integer only: until the kernel keeps floating point across task switches
-  (track B's B2), a windowed program must not use it. `wdemo` is the example (`hang` ignores CLOSE, `crash`
+  before it returns the RESIZE. libgui draws in whole pixels; a windowed program may use floating point,
+  which the kernel keeps across task switches since track B's B2. `wdemo` is the example (`hang` ignores CLOSE, `crash`
   faults after its first present).
 * **Programs started by the desktop.** `wcalc` is the desktop's Calculator as a program (the arithmetic of
   `shell/guicalc.c` built into both): the first application out of the kernel, and the pattern for the
@@ -2684,6 +2685,85 @@ shell/guiclient.c    the desktop's model: programs' windows in GUI_CLIENTS slots
   desktop (ps on the serial console once the desktop has closed); once the Terminal has closed, a
   `wintest pty` started by the desktop takes the Terminal's pty number (`wintest tty` named it) and is
   refused there.
+
+## 25. The desktop applications (November 2026)
+
+The owner asked (2026-11-05) for the applications recommended on 11/01: Settings without the shell, a spreadsheet,
+a code editor, a paint program, an IRC client, games and screenshots, as programs, and a toolkit under them
+(milestone M14; the brief is `docs/superpowers/plans/2026-11-05-desktop-apps.md`, an account a track beside it,
+and the integration's, `...-integration.md`). Nine tracks built them, three of them the platform the others
+stand on:
+
+```
+an application (ring 3)   its model (no system call, host-tested) and its window on the toolkit
+libsurf                   gk.h, gk*.c: the toolkit (track kit), over libgui (gui.h); image.h, image*.c: pictures (img)
+the window calls          include/surfos/win.h, kernel/win.c: menus, paste, choosers, the theme, keys (track desk)
+the desktop               shell/guiclient.c (programs' windows), guicore.c (the bar), guireg.c (the registry)
+Settings' call            include/surfos/netctl.h, kernel/netctl.c: SYS_netctl, call 55 (track settings)
+```
+
+* **The window calls** (`kernel/win.c`; `include/surfos/win.h` says each exactly). `WIN_MENU` replaces a window's
+  menus as one checked copy (labels and shortcut text in UTF-8 as the console draws it, no control character, no
+  title that passes for the desktop's, a submenu one level deep, Help items merged into the desktop's Help), lent
+  to the desktop with the window's pixels. `WIN_PASTE` copies the desktop's clipboard, held by a count while it
+  copies; the focused window's own `WIN_CLIP` not yet taken is newer, so a paste gets it, and another window's
+  never. `WIN_DIALOG` asks for the desktop's Open, Save as or Choose folder chooser: only after a key, a menu choice
+  or a press since the last request (`-EACCES`, so that a program cannot hold the desktop's keys), with the queue's
+  last place kept for the answer, which the desktop gives by the request's number (`WIN_EV_DIALOG`); `WIN_TAKE`
+  reads the chosen path, also after the hang-up. `WIN_THEME` reads the window's copy of the theme, colours by role,
+  and a window that asked once gets `WIN_EV_THEME` at each change. Keys come with their modifiers and a repeat bit
+  (`WIN_MOD_*`, xterm's convention; Ctrl+Tab, Ctrl+Enter, Ctrl+Esc and Ctrl+Backspace as `WIN_KEY_*`); the keyboard
+  driver gives the desktop each key with its modifiers (`TTY_RAW_KEYS`, `include/surfos/keyscan.h`, host-tested
+  by `test_keyscan`). `WIN_VERSION` stays 1 and `struct win_info` 20 bytes; `-ENOSYS` from an older kernel means a
+  program goes on without the call. What a window holds goes when either side lets go; `test_win` ends each
+  scenario with nothing allocated.
+* **The desktop's side** (`shell/guiclient.c`, `guicore.c`, `guidialog.c`). A program's menus take the place of
+  File and Edit while its window has the focus; its choosers' title bars name the program (its title in the
+  registry, else its file name) and its pid, and there is one dialog at a time (one that takes a chooser's place
+  answers it as cancelled). **The close button** (11/09/26): each press sends CLOSE while the program reads its
+  events (a program that asked "Save the changes?" and was told Cancel is asked again at the next press); the
+  desktop asks "End the program?" (Cancel first, Enter alone ends nothing) when a CLOSE waits unread, the program
+  stuck or busy (`win_state.close_waiting`, also for one its full queue refused), and at the third press however
+  slow, two CLOSEs read and the window still there. Cancel counts the presses from none again. A program the
+  desktop started that ends before its window, with a status other than 0, is said in a message.
+* **The registry** (`shell/guireg.c`, `include/sys/gui_reg.h`, `rootfs/apps/<name>.app`, the format in
+  `rootfs/apps/README`): "key = value" lines with a title, an icon of palette letters, the types a program opens
+  and those it offers to open, read in the desktop's first tick into its own 4 KB, bounded, and an entry it cannot
+  take left out with a line in the log that names no value. It gives Apps > Programs, tiles, the icons of the
+  windows a program opens, Files' Open (Enter on a file whose type an entry names starts the program with the path
+  as its one argument) and File > Open with.
+* **Screenshots and preferences.** Print Screen (E0 37, remembered by `kernel/keyboard.c` for the console in
+  front) or SurfOS > Screenshot captures the frame just drawn as a 24-bit BMP, saved through Save as (the .tmp and
+  rename of Notepad's saves). `desktop.theme` (ocean or dusk) and `pointer.speed` are settings in netcfg's table,
+  read each second, so a change Settings makes applies at once.
+* **The toolkit** (`user/include/gk.h`, `user/libsurf/gk*.c`): a window of widgets drawn as the desktop draws its
+  own (labels, buttons, check boxes, switches, radio groups, lines of text and a password's, lists with columns,
+  scroll bars, tabs, status bars, texts of several lines, progress bars, sliders, palettes, areas a program
+  draws), laid out by boxes, with the focus moved by Tab; its menus go to the desktop's bar, its Open and Save as
+  to the desktop's choosers; modal boxes (a message, a question, a line to type) grey the program's menus while
+  they are up. A program loops on `gk_next()`, which gives it what it must hear and paints only what changed.
+  `tests/host/gk_fake.c` is a desktop for the host that answers the window calls as the kernel does, so each
+  application's whole window code runs in `make unittest`. `wkit` shows every widget.
+* **Pictures** (`user/include/image.h`, `user/libsurf/image*.c`): the decoders Wundertow had (BMP, PNG, GIF's
+  first frame, baseline and progressive JPEG, the inverse DCT and Huffman tables written again from T.81), bounded
+  against bombs, and encoders for 24-bit BMP and PNG; the Image Viewer, `wview`, is a program on them, and Paint
+  reads and writes through them.
+* **SYS_netctl** (`kernel/netctl.c`): a windowed program has no terminal for `wifi join`'s question and cannot wait
+  for a scan, so Settings has one call with an operation, a structure and its size. Reads answer at once (the card,
+  the networks heard, the saved ones, the settings, the interfaces, the last job); jobs (the card on or off, a scan,
+  a join, a leave, save, forget, a setting) return a number at once and run one at a time, for every program, on a
+  kernel thread through the functions the commands use. A join's passphrase is wiped from the caller's structure
+  whatever the call answers and becomes the PMK at once; the key is kept only as the network manager keeps it.
+* **The applications**, each in `user/<name>/`, a model without system calls and a window: `wsettings`
+  (Settings), `wsheet` (the Spreadsheet: doubles in SSE2 at -O0 and -O2 alike), `wcode` (the Code Editor: libsurf's
+  regex, files saved as `edit` saves), `wpaint` (Paint), `wchat` (Chat: IRC, its connection through Undertow's
+  transport in a helper process the window talks to over two pipes), `wmines`, `wsolitaire`, `wswell` (the games),
+  `wview` (the Image Viewer, out of the kernel; `shell/guiview.c` keeps its entry). Each has an entry in
+  `rootfs/apps/` and a page in `rootfs/man/`.
+* **Checks.** `make unittest` holds a model's and a window's tests for each (the fake desktop), the window calls'
+  (`test_win`) and the desktop's (`test_guiclient`, `test_guidesk`); `make test-usb`'s guiapps scenario runs a file
+  of screen checks a track (`tools/gui_apps_<track>.py`, `GUIAPPS_ONLY` picks one), `guichat` drives Chat against a
+  scripted IRC server and `wsettings` Settings against the simulated Wi-Fi. None of this has run on the laptop.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

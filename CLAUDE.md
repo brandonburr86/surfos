@@ -46,9 +46,18 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # (test_wundertow_css, test_wundertow_style, test_wundertow_sheets);
                   # 11/02/26, the command-line suite: regex, strtod, libm, getopt, sed, awk, bc, diff and patch,
                   # deflate, gzip, tar, unzip, telnet and ftp, top, watch, the manual (test_man.py: every name has a
-                  # page), fsck (test_fsck, test_fsckcmd, test_fsckheap); sanitizer runs stay out of it (Mac only)
+                  # page), fsck (test_fsck, test_fsckcmd, test_fsckheap); sanitizer runs stay out of it (Mac only);
+                  # 11/09/26, the desktop applications: the window calls' menus, paste, choosers and theme (test_win),
+                  # the desktop's side, its registry and the keyboard's scan codes (test_guiclient, test_guidesk,
+                  # test_keyscan), the toolkit and its demonstration on a fake desktop (test_gk, test_wkit), libsurf's
+                  # pictures (test_image_save, tests/test_image_files.py, tests/test_image_jpeg.py), the Image Viewer
+                  # (test_wview), SYS_netctl and Settings (test_netctl, test_wsettings, test_wsettings_win), the
+                  # Spreadsheet (test_wsheet, test_wsheet_win), the Code Editor (test_wcode, test_wcode_save,
+                  # test_wcode_win), Paint (test_wpaint, test_wpaint_files, test_wpaint_window), Chat (test_wchat,
+                  # test_wchatwin), Mines, Solitaire and Swell (test_wmines, test_wsolitaire, test_wswell, each with
+                  # its _window test)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 24 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 26 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -90,6 +99,8 @@ boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg f
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
            pty.c (pseudo-terminals: a tty with a stream console; pty_open() etc. for the desktop's Terminal), proc.c (procinfo, detach),
            win.c (10/25/26: windows for programs, SYS_winopen and SYS_winctl: a window is a descriptor; the desktop's side),
+           netctl.c (11/05/26: SYS_netctl, call 55, for Settings: six reads, a setting put in force, the Wi-Fi jobs on
+           a thread of its own; a passphrase becomes the key at once and is wiped),
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile),
            autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds),
            netman.c (the network manager: the settings and saved Wi-Fi networks in surfos-config/ on the stick SurfOS
@@ -134,7 +145,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            wundertow/ (10/25/26: the web browser in a window: doc the page as boxes, font, layout, paint, browser the
            window's model, main; Undertow's HTTP, TLS and HTML scanner; docs/UNDERTOW.md "In a window"; 11/1/26 image*
-           the picture decoders, form forms, find, loader, loadproc and pump the window's helpers, helper a helper;
+           the picture decoders (11/05/26: libsurf's now, image.h), form forms, find, loader, loadproc and pump the
+           window's helpers, helper a helper;
            11/01/26 css the style sheet parser, docstyle the cascade onto boxes and runs, sheets a page's linked
            sheets through the loader, fontmetrics the width table tools/fontmetrics.py makes for proportional text
            from the console's fonts),
@@ -153,7 +165,14 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            everywhere), getopt.c, system.c (system, popen), inflate.c, deflate.c, crc32.c; bin/ sed, grep -E, cmp,
            comm, join, paste, fold, nl, rev, basename, dirname, od, base64, strings, file, tree, cal, top, watch, man
            (manutil.h: the pages' aliases), libtest, and saveutil.h (a file replaced as edit saves it); diff/ (diff
-           and patch), awk/, bc/, gzip/ (gzip, gunzip, zcat), tar/, unzip/, telnet/, ftp/
+           and patch), awk/, bc/, gzip/ (gzip, gunzip, zcat), tar/, unzip/, telnet/, ftp/;
+           11/09/26, the desktop applications (docs/superpowers/plans/2026-11-05-desktop-apps.md, an account per
+           track): libsurf's toolkit gk*.c (gk.h: widgets, boxes, menus, the desktop's choosers, the gk_next() loop;
+           a program's whole window code runs on the host against tests/host/gk_fake.c, a fake desktop) and its
+           pictures image*.c (image.h: BMP, PNG, GIF and JPEG read, BMP and PNG written); the programs wkit/ (every
+           widget), wview/ (the Image Viewer), wsettings/ (Settings), wsheet/ (the Spreadsheet), wcode/ (the Code
+           Editor), wpaint/ (Paint), wchat/ (Chat, an IRC client, its connection in a helper process), wmines/,
+           wsolitaire/ and wswell/ (the games): each a model without system calls, host-tested, and a window on gk.h
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
@@ -172,11 +191,14 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
            (Files), guidialog.c, guidraw.c; 10/17/26 the suite (docs/superpowers/plans/2026-10-17-gui-suite.md):
            applications in files of their own behind struct gui_app's table (guiterm.c + guivt.c, guimon.c,
            guidisks.c + guimeter.c, guilog.c, guiclock.c (10/26/26: only the entry that starts the program wclock),
-           guiview.c + guibmp.c, guihex.c, guichar.c (10/26/26: the entry that starts wcharmap)), the kernel's
+           guiview.c (11/05/26: the entry that starts wview) + guibmp.c, guihex.c, guichar.c (10/26/26: the entry that
+           starts wcharmap)), the kernel's
            side struct gui_sys (guisys*.c),
            host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario;
            10/25/26 programs' windows in the desktop (docs/superpowers/plans/2026-10-25-app-windows.md): guiclient.c,
-           in the slots after the fixed windows, through struct gui_sys's win_* calls, host-tested by test_guiclient
+           in the slots after the fixed windows, through struct gui_sys's win_* calls, host-tested by test_guiclient;
+           11/05/26 (the desktop applications, track desk) programs' menus, choosers, paste, keys and the theme there,
+           the registry of /initrd/apps (guireg.c), screenshots and the preferences, host-tested by test_guidesk
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
@@ -186,7 +208,8 @@ tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, 
            protocol, telnetd's loop, the network manager's files), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0; www/ is the sample site httpd serves;
-           man/ (11/02/26) the manual, a page a name, which `man` reads from /initrd/man
+           man/ (11/02/26) the manual, a page a name, which `man` reads from /initrd/man; apps/ (11/05/26) the
+           registry: a <name>.app a program, its title, icon and types (the format in rootfs/apps/README)
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
 ```
@@ -266,14 +289,30 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   anything new a scenario in tests/host/test_win.c (each ends with nothing allocated). The desktop's side
   (shell/guiclient.c, host-tested by test_guiclient) gives a program's window the pointer over its content (a
   press holds it until every button is up; the corner grip stays the desktop's) and, once it has the focus,
-  every key but Ctrl+G; a second press of the close button asks before it kills. A new window never takes the
+  every key but Ctrl+G. The close button sends CLOSE; 11/09/26: pressed again, while the program reads its events,
+  it sends CLOSE again, and the third press asks "End the program?" (Cancel first), however slow the presses; a
+  press while a CLOSE waits unread (the program is stuck or busy) asks at once, and Cancel counts the presses
+  from none again, so the program's own question comes back. A new window never takes the
   focus by itself (the review of 10/25/26: keys typed into the Terminal, a password say, stay there), but for
   the first window of a program the launcher just started and that of the focused Terminal's foreground job,
   a job its session's shell made (`win_adopt_shell()`; CODE-AUDIT T14 is why the foreground alone is not
-  enough): keep it so. libgui (user/include/gui.h) is integer-only: a windowed
-  program must not use floating point until the kernel keeps it across task switches (track B's B2). Apps > Run
+  enough): keep it so. A windowed program may use floating point: since track B's B2 the kernel keeps each
+  program's registers across task switches (libgui itself draws in whole pixels). Apps > Run
   program... starts a program on the desktop's console with /dev/null for its input, detached (init collects
   it); the desktop starts nothing by itself.
+* The desktop applications' window calls (11/05/26, track desk; include/surfos/win.h says each exactly): WIN_MENU
+  (a program's menus in the desktop's bar: a submenu a level deep, Help items merged into the desktop's Help,
+  shortcut text; UTF-8 as the console draws it, and no title that passes for the desktop's), WIN_PASTE (the
+  desktop's clipboard, the focused window's own copy first), WIN_DIALOG and WIN_TAKE (the desktop's Open, Save as
+  and Choose folder choosers: asked only after the user's input since the last request, their title bars naming
+  the program and its pid, answered by number, the answer's place in the queue kept), WIN_THEME and WIN_EV_THEME
+  (the theme's colours by role), keys with their modifiers and repeats (WIN_MOD_*, WIN_KEY_*; the keyboard
+  driver's TTY_RAW_KEYS for the desktop). WIN_VERSION stays 1 and struct win_info 20 bytes; -ENOSYS means a
+  program goes on without the call. The desktop reads the registry (rootfs/apps/<name>.app, shell/guireg.c) for
+  Apps > Programs, tiles, Files' Open and Open with; Print Screen (or SurfOS > Screenshot) saves the screen as a
+  BMP through Save as; desktop.theme and pointer.speed are preferences in netcfg's table. Give a new call a
+  scenario in test_win and the desktop's side one in test_guiclient or test_guidesk; build a program's window on
+  gk.h and test it on the fake desktop, as every application does.
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
@@ -357,7 +396,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `wclock`, Apps > Character Map `wcharmap`, or brings its window back); `gfxinfo` gives the desktop's
   frame times. `GUIAPPS_ONLY=gui_apps_win python3 tools/qemu-usb.py --image ... --test --scenario guiapps` runs
   only their screen checks (its last one leaves the desktop and starts it again); `GUIAPPS_ONLY=gui_apps_web`
-  only the web browser's (wundertow /usb1p1/web/one.html &, from the stick's pages).
+  only the web browser's (wundertow /usb1p1/web/one.html &, from the stick's pages). 11/09/26: each track of the
+  desktop applications has a file of its own, `GUIAPPS_ONLY=gui_apps_<track>` (desk, kit, img, settings, sheet,
+  code, paint, chat, games); Chat against a scripted IRC server is `--scenario guichat`, Settings against the
+  simulated Wi-Fi `--scenario wsettings`, both in the default list.
 * The network manager: `settings` says where the settings came from, `wifi saved` what is
   saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
   and after (the keeper's repeated tries are written only there). `settings=off` on the kernel
@@ -494,7 +536,7 @@ there keeps Undertow's text byte-identical (test_undertow_html) and the window's
 `wundertow --layout ADDRESS` and `wundertow --render ADDRESS FILE.bmp` (the Image Viewer
 opens it), and on the host with `test_wundertow_layout --render FILE OUT.ppm [WIDTH]`;
 its window on the screen is test-usb's guiapps (`tools/gui_apps_web.py`).
-Layout and painting are integer-only, as programs with windows must be. A style sheet is as
+Layout and painting are integer-only (written when programs with windows had to be). A style sheet is as
 hostile as a page: css.c keeps its limits (docs/UNDERTOW.md "Style sheets"), checks every
 allocation, keeps no string of a sheet and never follows url(); test_wundertow_css has a sheet cut
 at every byte. No sheet ever loads a file: sheets.c keeps @import from one, on a file page too. Text is measured through font.h only: `wf_width()` for a page's runs, which are
