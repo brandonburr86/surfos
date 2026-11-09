@@ -228,11 +228,12 @@ static void files_list(struct wc_window *w) {
     if(g->state == WC_GREP_RUN)
         snprintf(line, sizeof(line), "Searching" ELLIPSIS " %u line%s found in %u file%s so far (Stop ends it)", g->nhits,
                  g->nhits == 1 ? "" : "s", g->files, g->files == 1 ? "" : "s");
-    else if(g->state == WC_GREP_DONE)
-        snprintf(line, sizeof(line), "%u line%s found in %u file%s read%s%s%s", g->nhits, g->nhits == 1 ? "" : "s",
-                 g->files, g->files == 1 ? "" : "s", g->why[0] ? ". " : "", g->why,
-                 g->binary || g->skipped ? " (not text or unreadable files left out)" : "");
-    else line[0] = 0;
+    else if(g->state == WC_GREP_DONE) {
+        char notes[160];
+        wc_grep_notes(g, notes, sizeof(notes));     /* 11/09/26: what was left out, and why */
+        snprintf(line, sizeof(line), "%u line%s found in %u file%s read%s%s%s%s", g->nhits, g->nhits == 1 ? "" : "s",
+                 g->files, g->files == 1 ? "" : "s", g->why[0] ? ". " : "", g->why, notes[0] ? "; " : "", notes);
+    } else line[0] = 0;
     gk_set_text(w->fsum, line);
     gk_set_text(w->fgo, g->state == WC_GREP_RUN ? "Stop" : "Search");
 }
@@ -397,6 +398,13 @@ static int act(struct wc_window *w, int r) {
     if((r & WC_DO_ASK) && wc_app_asking(&w->app, question, sizeof(question)) >= 0)
         gk_confirm(w->ui, BOX_SAVE, question, "If you don't save them, they are lost.", "", "Save", "Don't save",
                    "Cancel");
+    if(r & WC_DO_DISK) {                        /* 11/09/26 (the review, H1) */
+        char name[WC_PATH];
+        wc_doc_title(wc_app_doc(&w->app), name, sizeof(name));
+        snprintf(question, sizeof(question), "%.60s changed on the disk", name);
+        gk_confirm(w->ui, BOX_DISK, question, "Something saved it after it was opened here.",
+                   "Saving puts this text over what it has now.", "Save over it", "Save as" ELLIPSIS, "Cancel");
+    }
     if(r & (WC_DO_FIND | WC_DO_REPLACE)) show_find(w, (r & WC_DO_REPLACE) != 0);
     if(r & WC_DO_GOTO) gk_ask(w->ui, BOX_GOTO, "Go to line", "A line, or line:column:", "", 0);
     if(r & WC_DO_FILES) show_files(w);
@@ -406,6 +414,7 @@ static int act(struct wc_window *w, int r) {
         gk_flush(w->ui);
     }
     refresh(w);
+    if(!w->app.view.exact) w->idle = 1;         /* 11/09/26: drawn with a guess (a jump): the colouring catches up */
     return 1;
 }
 
@@ -458,16 +467,34 @@ static void field_into(struct gk_widget *f, char *out, unsigned size) {
     snprintf(out, size, "%s", gk_text(f));
 }
 
+/* a person's key, click or choice (not a pointer passing by, a size, the theme or a timer) */
+static int input(const struct gk_event *ev) {
+    switch(ev->type) {
+    case GK_EV_KEY: case GK_EV_MENU: case GK_EV_ACTIVATE: case GK_EV_CLICK: case GK_EV_TAB_CLOSE: case GK_EV_CLOSE:
+        return 1;
+    case GK_EV_POINTER: return (ev->value & WIN_BUTTON_LEFT) != 0;
+    }
+    return 0;
+}
+
 int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
-    struct wc_doc *d = wc_app_doc(&w->app);
-    int r = 0;
+    struct wc_doc *d;
+    int r = 0, esc;
+    if(w->app.job && input(ev)) {               /* 11/09/26 (the review, C3): a search going on stops, or this waits */
+        esc = ev->type == GK_EV_KEY && ev->value == 27 && !(ev->mods & WIN_MOD_CTRL);
+        r = wc_app_interrupt(&w->app, esc);
+        if(r < 0) return act(w, WC_DO_DRAW | WC_DO_IDLE);
+        if(esc) return act(w, r);
+    }
+    d = wc_app_doc(&w->app);
+    r = 0;
     switch(ev->type) {
     case GK_EV_KEY:
         if(ev->w == w->text) r = wc_app_key(&w->app, (unsigned)ev->value, ev->mods);
         else if(ev->value == 27) close_bar(w);
         break;
-    case GK_EV_MENU:
-        if(w->app.asking >= 0) break;           /* the guard asks about a file: its question is answered first */
+    case GK_EV_MENU:                            /* (the guard or the disk question asking: answered first) */
+        if(w->app.asking >= 0 || gk_asking(w->ui) == BOX_DISK) break;
         if(ev->id == MENU_ABOUT)
             gk_message(w->ui, BOX_ABOUT, "Code Editor", "Text and code, coloured for C, assembly, Python, shell,",
                        "Makefiles, Markdown and JSON. Its keys: man wcode.");
@@ -543,7 +570,9 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
         }
         break;
     case GK_EV_ANSWER:
-        if(ev->id == BOX_SAVE)
+        if(ev->id == BOX_DISK)
+            r = wc_app_disk(&w->app, ev->value == 0 ? WC_DISK_OVER : ev->value == 1 ? WC_DISK_SAVE_AS : WC_DISK_CANCEL);
+        else if(ev->id == BOX_SAVE)
             r = wc_app_answer(&w->app, ev->value == 0 ? WC_ANSWER_SAVE : ev->value == 1 ? WC_ANSWER_DISCARD :
                               WC_ANSWER_CANCEL);
         else if(ev->id == BOX_GOTO && ev->value == 0) r = wc_app_goto(&w->app, ev->text);
@@ -555,7 +584,7 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
         else if(ev->id == CHOOSE_FOLDER && ev->value) gk_set_text(w->fin, ev->text);
         break;
     case GK_EV_CLOSE:                           /* pressed again while the guard asks: its question stands */
-        if(w->app.asking < 0) r = wc_app_cmd(&w->app, WC_CMD_QUIT);
+        if(w->app.asking < 0 && gk_asking(w->ui) != BOX_DISK) r = wc_app_cmd(&w->app, WC_CMD_QUIT);
         break;
     case GK_EV_TIMER:
         if(ev->id == TIMER_DRAG) r = drag_tick(w);
@@ -572,6 +601,7 @@ int wc_window_idle(struct wc_window *w) {
     int r = wc_app_idle(&w->app);
     w->idle = (r & WC_DO_IDLE) != 0;
     if(r & (WC_DO_DRAW | WC_DO_FILES)) refresh(w);
+    if(!w->app.view.exact) w->idle = 1;
     return w->idle;
 }
 

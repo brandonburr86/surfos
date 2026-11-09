@@ -21,6 +21,12 @@ their shortcuts before a key reaches here (gk.h); the Ctrl+letters below are for
 #include <string.h>
 #include "app.h"
 
+#ifdef WC_APP_MALLOC                            /* 11/09/26: a test's, which fails on request (tests/host/test_wcode.c) */
+void *WC_APP_MALLOC(size_t n);
+#else
+#define WC_APP_MALLOC malloc
+#endif
+
 #define CTRL(c) ((c) & 0x1f)
 
 int wc_app_init(struct wc_app *a, const struct wc_app_io *io, const struct wc_fsops *fs) {
@@ -88,7 +94,7 @@ static int new_tab(struct wc_app *a) {
         snprintf(a->status, sizeof(a->status), "%d files are open: close one first", WC_TABS);
         return WC_DO_DRAW;
     }
-    d = malloc(sizeof(*d));
+    d = WC_APP_MALLOC(sizeof(*d));
     if(!d || wc_doc_init(d, &a->pool) < 0) {
         free(d);
         snprintf(a->status, sizeof(a->status), "There is not enough memory for another file");
@@ -100,8 +106,10 @@ static int new_tab(struct wc_app *a) {
     return WC_DO_DRAW | WC_DO_TITLE;
 }
 
-/* tab i goes; there is always one */
-static void drop_tab(struct wc_app *a, int i) {
+/* tab i goes; there is always one, so the last gives its place to a new file, made first (11/09/26, the review: when
+   there is no memory for it, the tab stays and the status says why): 1 gone, 0 kept */
+static int drop_tab(struct wc_app *a, int i) {
+    if(a->n == 1 && !(new_tab(a) & WC_DO_TITLE)) return 0;
     wc_doc_free(a->docs[i]);
     free(a->docs[i]);
     memmove(a->docs + i, a->docs + i + 1, (size_t)(a->n - i - 1) * sizeof(a->docs[0]));
@@ -109,10 +117,7 @@ static void drop_tab(struct wc_app *a, int i) {
     a->n--;
     a->discard[a->n] = 0;
     if(a->cur > i || a->cur >= a->n) a->cur = a->cur > 0 ? a->cur - 1 : 0;
-    if(!a->n) {
-        a->n = 0;
-        new_tab(a);
-    }
+    return 1;
 }
 
 /**** the guard ****/
@@ -133,7 +138,7 @@ static int ask_next(struct wc_app *a) {
 static int close_tab(struct wc_app *a, int i) {
     if(wc_doc_safe(a->docs[i])) {
         drop_tab(a, i);
-        return follow(a) | WC_DO_TITLE;
+        return follow(a) | WC_DO_TITLE | WC_DO_DRAW;
     }
     a->closing = WC_CLOSE_TAB;
     a->asking = a->cur = i;
@@ -172,10 +177,34 @@ int wc_app_answer(struct wc_app *a, int answer) {
         return WC_DO_SAVE_AS;
     }
     if(a->io->save(d, NULL) < 0) {              /* not saved: everything stays open, the message says why */
+        if(d->disk_changed) return WC_DO_DISK | WC_DO_DRAW;    /* 11/09/26: asked first; the guard waits for it */
         snprintf(a->status, sizeof(a->status), "%s", d->msg);
         return stop(a);
     }
     return proceed(a);
+}
+
+int wc_app_disk(struct wc_app *a, int answer) {
+    struct wc_doc *d = wc_app_doc(a);
+    int guard = a->asking >= 0;
+    d->disk_changed = 0;
+    if(answer == WC_DISK_SAVE_AS) {
+        a->after_save_as = guard;
+        return WC_DO_SAVE_AS;
+    }
+    if(answer != WC_DISK_OVER) {
+        snprintf(d->msg, sizeof(d->msg), "Not saved: the file on the disk stays as it is");
+        return guard ? stop(a) : WC_DO_DRAW;
+    }
+    d->overwrite = 1;
+    if(a->io->save(d, NULL) < 0) {
+        if(guard) {
+            snprintf(a->status, sizeof(a->status), "%s", d->msg);
+            return stop(a);
+        }
+        return WC_DO_DRAW | WC_DO_TITLE;
+    }
+    return guard ? proceed(a) : WC_DO_DRAW | WC_DO_TITLE;
 }
 
 int wc_app_asking(struct wc_app *a, char *question, unsigned size) {
@@ -188,9 +217,20 @@ int wc_app_asking(struct wc_app *a, char *question, unsigned size) {
 
 int wc_app_save_as(struct wc_app *a, const char *path) {
     struct wc_doc *d = a->after_save_as && a->asking >= 0 ? a->docs[a->asking] : wc_app_doc(a);
-    int guard = a->after_save_as, r;
+    char full[WC_PATH];
+    int guard = a->after_save_as, r, i;
     a->after_save_as = 0;
     if(!path || !path[0]) return guard ? stop(a) : WC_DO_DRAW;
+    if(wc_app_path(a, path, full, sizeof(full)) < 0) {
+        snprintf(d->msg, sizeof(d->msg), "Not saved: the name is too long");
+        return guard ? stop(a) : WC_DO_DRAW;
+    }
+    for(i = 0; i < a->n; i++)                   /* 11/09/26: two tabs of one file would save over each other */
+        if(a->docs[i] != d && wc_path_same(a->docs[i]->path, full)) {
+            snprintf(d->msg, sizeof(d->msg), "Not saved: %.100s is open in another tab", full);
+            return guard ? stop(a) : WC_DO_DRAW;
+        }
+    path = full;
     r = a->io->save(d, path);
     if(guard) {
         if(r < 0) {
@@ -204,12 +244,25 @@ int wc_app_save_as(struct wc_app *a, const char *path) {
 
 /**** opening ****/
 
+int wc_app_path(const struct wc_app *a, const char *path, char *out, unsigned size) {
+    char joined[2 * WC_PATH];
+    if(path[0] == '/') return wc_path_canon(path, out, size);
+    snprintf(joined, sizeof(joined), "%s/%s", a->cwd[0] ? a->cwd : "", path);
+    return wc_path_canon(joined, out, size);
+}
+
 int wc_app_open(struct wc_app *a, const char *path) {
     struct wc_doc *d;
+    char full[WC_PATH];
     int i;
     if(!path || !path[0]) return WC_DO_DRAW;
+    if(wc_app_path(a, path, full, sizeof(full)) < 0) {
+        snprintf(a->status, sizeof(a->status), "Cannot open %.100s: the name is too long", path);
+        return WC_DO_DRAW;
+    }
+    path = full;                                /* 11/09/26 (the review, H1): one form, compared as FAT compares */
     for(i = 0; i < a->n; i++)
-        if(!strcmp(a->docs[i]->path, path)) {   /* open already: to its tab */
+        if(wc_path_same(a->docs[i]->path, path)) {      /* open already: to its tab */
             a->cur = i;
             return follow(a) | WC_DO_TITLE;
         }
@@ -229,7 +282,7 @@ int wc_app_open(struct wc_app *a, const char *path) {
         free(d);
         return WC_DO_DRAW;
     }
-    snprintf(a->status, sizeof(a->status), "%s", d->msg);
+    if(d->msg[0]) snprintf(a->status, sizeof(a->status), "%s", d->msg);    /* (an earlier refusal stays said) */
     if(pristine(wc_app_doc(a))) {               /* in place of the untouched new file */
         wc_doc_free(a->docs[a->cur]);
         free(a->docs[a->cur]);
@@ -243,10 +296,16 @@ int wc_app_open(struct wc_app *a, const char *path) {
 
 int wc_app_new_file(struct wc_app *a, const char *path) {
     struct wc_doc *d;
+    char full[WC_PATH];
     int i;
     if(!path || !path[0]) return WC_DO_DRAW;
+    if(wc_app_path(a, path, full, sizeof(full)) < 0) {
+        snprintf(a->status, sizeof(a->status), "Cannot open %.100s: the name is too long", path);
+        return WC_DO_DRAW;
+    }
+    path = full;
     for(i = 0; i < a->n; i++)
-        if(!strcmp(a->docs[i]->path, path)) {   /* open already: to its tab */
+        if(wc_path_same(a->docs[i]->path, path)) {      /* open already: to its tab */
             a->cur = i;
             return follow(a) | WC_DO_TITLE;
         }
@@ -268,15 +327,66 @@ void wc_app_find_seed(struct wc_app *a) {
     a->find.what[n] = 0;
 }
 
+/**** searches going on between events (11/09/26, the review, C3) ****/
+
+int wc_app_busy(const struct wc_app *a) {
+    return a->job == WC_JOB_ALL && wc_find_all_changing(&a->find);
+}
+
+/* a step of the search going on: more to do (it shows), or its end */
+static int run_job(struct wc_app *a, int job) {
+    struct wc_doc *d = wc_app_doc(a);
+    unsigned long step = a->step ? a->step : WC_FIND_STEP;
+    int r = job == WC_JOB_FIND ? wc_find_doc_go(&a->find, d, step) : wc_find_all_go(&a->find, d, step);
+    if(r == 2) {
+        a->job = job;
+        snprintf(a->status, sizeof(a->status), "%s: Esc stops it", job == WC_JOB_FIND ? "Searching" :
+                 wc_find_all_changing(&a->find) ? "Replacing" : "Counting the matches");
+        return WC_DO_DRAW | WC_DO_IDLE;
+    }
+    a->job = WC_JOB_NONE;
+    a->status[0] = 0;
+    return follow(a) | WC_DO_TITLE;
+}
+
+int wc_app_interrupt(struct wc_app *a, int esc) {
+    struct wc_doc *d = wc_app_doc(a);
+    if(!a->job) return 0;
+    if(wc_app_busy(a)) {
+        if(!esc) {
+            snprintf(a->status, sizeof(a->status), "Replacing: wait for it, or Esc stops it");
+            return -1;
+        }
+        if(!wc_find_all_stop(&a->find, d)) {
+            snprintf(a->status, sizeof(a->status), "Replacing goes on: too large a change to undo, it cannot stop");
+            return -1;
+        }
+    } else if(a->job == WC_JOB_ALL) wc_find_all_stop(&a->find, d);     /* counting: nothing changed */
+    else {
+        wc_find_stop(&a->find);
+        snprintf(d->msg, sizeof(d->msg), "Stopped searching");
+    }
+    a->job = WC_JOB_NONE;
+    a->status[0] = 0;
+    return follow(a) | WC_DO_TITLE;
+}
+
+/* the job going on stops before another command; 1 when it cannot (the command waits) */
+static int stop_job(struct wc_app *a) {
+    return a->job && wc_app_interrupt(a, 0) < 0;
+}
+
 static int find(struct wc_app *a, int backward) {
     if(!a->find.what[0]) return WC_DO_FIND | WC_DO_DRAW;
-    wc_find_doc(&a->find, wc_app_doc(a), backward);
-    return follow(a);
+    if(wc_find_doc_begin(&a->find, wc_app_doc(a), backward) < 0) return WC_DO_DRAW;
+    return run_job(a, WC_JOB_FIND);
 }
 
 int wc_app_cmd(struct wc_app *a, int cmd) {
-    struct wc_doc *d = wc_app_doc(a);
+    struct wc_doc *d;
     unsigned from, to;
+    if(stop_job(a)) return WC_DO_DRAW | WC_DO_IDLE;     /* Replace all changing the file: the command waits */
+    d = wc_app_doc(a);
     a->status[0] = 0;
     d->msg[0] = 0;
     switch(cmd) {
@@ -284,7 +394,7 @@ int wc_app_cmd(struct wc_app *a, int cmd) {
     case WC_CMD_OPEN: return WC_DO_OPEN;
     case WC_CMD_SAVE:
         if(!d->path[0]) return WC_DO_SAVE_AS;
-        a->io->save(d, NULL);
+        if(a->io->save(d, NULL) < 0 && d->disk_changed) return WC_DO_DISK | WC_DO_DRAW;   /* changed since: asked */
         return WC_DO_DRAW | WC_DO_TITLE;
     case WC_CMD_SAVE_AS: return WC_DO_SAVE_AS;
     case WC_CMD_CLOSE: return close_tab(a, a->cur);
@@ -308,8 +418,13 @@ int wc_app_cmd(struct wc_app *a, int cmd) {
     case WC_CMD_REPLACE: wc_app_find_seed(a); return WC_DO_REPLACE | WC_DO_DRAW;
     case WC_CMD_FIND_NEXT: return find(a, 0);
     case WC_CMD_FIND_PREV: return find(a, 1);
-    case WC_CMD_REPLACE_ONE: wc_find_replace(&a->find, d); return follow(a) | WC_DO_TITLE;
-    case WC_CMD_REPLACE_ALL: wc_find_replace_all(&a->find, d); return follow(a) | WC_DO_TITLE;
+    case WC_CMD_REPLACE_ONE:
+        if(wc_find_replace_sel(&a->find, d) < 0) return WC_DO_DRAW;
+        if(wc_find_doc_begin(&a->find, d, 0) < 0) return follow(a) | WC_DO_TITLE;
+        return run_job(a, WC_JOB_FIND);
+    case WC_CMD_REPLACE_ALL:
+        if(wc_find_all_begin(&a->find, d) < 0) return WC_DO_DRAW;
+        return run_job(a, WC_JOB_ALL);
     case WC_CMD_FIND_FILES:
         if(!a->grep.f.what[0]) snprintf(a->grep.f.what, sizeof(a->grep.f.what), "%s", a->find.what);
         return WC_DO_FILES | WC_DO_DRAW;
@@ -380,7 +495,9 @@ bad:
 }
 
 int wc_app_files(struct wc_app *a, const char *folder) {
+    char full[WC_PATH];
     a->status[0] = 0;
+    if(folder[0] && folder[0] != '/' && !wc_app_path(a, folder, full, sizeof(full))) folder = full;  /* from a->cwd */
     if(wc_grep_start(&a->grep, a->fs, folder) < 0) {
         snprintf(a->status, sizeof(a->status), "%s", a->grep.why);
         return WC_DO_DRAW | WC_DO_FILES;
@@ -436,8 +553,14 @@ static int typed(struct wc_app *a, unsigned key) {
 }
 
 int wc_app_key(struct wc_app *a, unsigned key, unsigned mods) {
-    struct wc_doc *d = wc_app_doc(a);
-    int shift = (mods & WC_MOD_SHIFT) != 0, ctrl = (mods & WC_MOD_CTRL) != 0, alt = (mods & WC_MOD_ALT) != 0;
+    struct wc_doc *d;
+    int shift = (mods & WC_MOD_SHIFT) != 0, ctrl = (mods & WC_MOD_CTRL) != 0, alt = (mods & WC_MOD_ALT) != 0, r;
+    if(a->job) {                                /* a search going on: stopped by the key (Esc used up), or it waits */
+        r = wc_app_interrupt(a, key == 0x1B && !ctrl);
+        if(r < 0) return WC_DO_DRAW | WC_DO_IDLE;
+        if(key == 0x1B && !ctrl) return r;
+    }
+    d = wc_app_doc(a);
     a->status[0] = 0;
     d->msg[0] = 0;
     if(key >= 0x20 && key < 0x100 && key != 0x7F && !ctrl) return alt ? 0 : typed(a, key);  /* Alt+a key types nothing */
@@ -509,8 +632,10 @@ int wc_app_key(struct wc_app *a, unsigned key, unsigned mods) {
 /**** the pointer ****/
 
 int wc_app_press(struct wc_app *a, int row, int col, unsigned clicks, int extend) {
-    struct wc_doc *d = wc_app_doc(a);
+    struct wc_doc *d;
     unsigned pos, line;
+    if(stop_job(a)) return WC_DO_DRAW | WC_DO_IDLE;
+    d = wc_app_doc(a);
     a->status[0] = 0;
     d->msg[0] = 0;
     if(row < 0) row = 0;
@@ -566,6 +691,7 @@ int wc_app_idle(struct wc_app *a) {
     struct wc_doc *d = wc_app_doc(a);
     int r = 0, exact;
     unsigned hits = a->grep.nhits;
+    if(a->job) r |= run_job(a, a->job);         /* 11/09/26: a search's next step */
     if(a->grep.state == WC_GREP_RUN) {
         wc_grep_step(&a->grep, 256u << 10);
         if(a->grep.nhits != hits || a->grep.state != WC_GREP_RUN) r |= WC_DO_DRAW | WC_DO_FILES;

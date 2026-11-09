@@ -108,6 +108,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "wcode: no window: %s\n", errno == ENODEV ? "this terminal is no desktop's" : strerror(errno));
         return 1;
     }
+    if(!getcwd(w.app.cwd, sizeof(w.app.cwd))) w.app.cwd[0] = 0;  /* 11/09/26: a name not from / is taken from here */
     for(i = 1; i < argc; i++) {
         r = stat(argv[i], &st) < 0 && errno == ENOENT ? 0 : 1;
         wc_window_path(&w, argv[i], r);

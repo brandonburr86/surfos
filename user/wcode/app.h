@@ -77,8 +77,11 @@ enum {
 #define WC_DO_QUIT    0x400             /* the program ends */
 #define WC_DO_TITLE   0x800             /* the window's title is another */
 #define WC_DO_IDLE    0x1000            /* more to do between events: call wc_app_idle() again soon */
+#define WC_DO_DISK    0x2000            /* 11/09/26: the file changed on the disk since: wc_app_disk() asks what to do */
 
 enum { WC_ANSWER_SAVE, WC_ANSWER_DISCARD, WC_ANSWER_CANCEL };
+enum { WC_DISK_OVER, WC_DISK_SAVE_AS, WC_DISK_CANCEL };   /* save over it, save it elsewhere, neither */
+enum { WC_JOB_NONE, WC_JOB_FIND, WC_JOB_ALL };      /* 11/09/26: a search going on between events */
 
 struct wc_app_io {
     int (*read)(struct wc_doc *d, const char *path);    /* 0, or -1 with d->msg */
@@ -105,6 +108,9 @@ struct wc_app {
     int discard[WC_TABS];               /* Don't save was the answer, for the files of a quit not yet ended */
     unsigned clicks, click_pos;         /* the last press, for double and triple clicks */
     char status[WC_MSG];                /* for the status bar, until the next key */
+    int job;                            /* 11/09/26 (the review, C3): WC_JOB_*, in the file in front */
+    unsigned long step;                 /* its work at a time (0: WC_FIND_STEP) */
+    char cwd[WC_PATH];                  /* the program's folder, for a path not from / ("" is /) */
 };
 
 enum { WC_CLOSE_NONE, WC_CLOSE_TAB, WC_CLOSE_ALL };
@@ -121,13 +127,22 @@ int wc_app_key(struct wc_app *a, unsigned key, unsigned mods);
 int wc_app_press(struct wc_app *a, int row, int col, unsigned clicks, int extend);
 int wc_app_drag(struct wc_app *a, int row, int col);
 int wc_app_wheel(struct wc_app *a, int rows);
-int wc_app_idle(struct wc_app *a);                          /* between events: find in files, the colouring */
+int wc_app_idle(struct wc_app *a);                          /* between events: searches, find in files, colouring */
+/* 11/09/26 (the review, C3): a person's key, click or choice while a search goes on (wc_app_key(), wc_app_cmd() and
+   wc_app_press() call it too): a search stops, as does Replace all still counting, and Esc is then used up (esc);
+   while Replace all changes the file the input waits (-1), and Esc takes back what it did, or says it cannot (a
+   change too large to undo). Otherwise what to do (0 when no search was going on) */
+int wc_app_interrupt(struct wc_app *a, int esc);
+int wc_app_busy(const struct wc_app *a);                    /* Replace all changing the file: input waits */
 
 /* answers */
 int wc_app_open(struct wc_app *a, const char *path);         /* a chooser's file, or the program's argument */
 int wc_app_new_file(struct wc_app *a, const char *path);     /* a file not there yet: made by its first save */
 int wc_app_save_as(struct wc_app *a, const char *path);      /* NULL: cancelled */
 int wc_app_answer(struct wc_app *a, int answer);
+int wc_app_disk(struct wc_app *a, int answer);               /* 11/09/26: WC_DISK_*, the answer to WC_DO_DISK */
+/* a path in its one form (wc_path_canon()), one not from / taken from a->cwd: 0, or -1 when it does not fit */
+int wc_app_path(const struct wc_app *a, const char *path, char *out, unsigned size);
 int wc_app_paste(struct wc_app *a, const char *text, unsigned n);
 int wc_app_copied(struct wc_app *a, int ok);                 /* the clipboard took the text (1) or not */
 int wc_app_goto(struct wc_app *a, const char *text);         /* "120" or "120:8" */
