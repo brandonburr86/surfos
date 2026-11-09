@@ -224,8 +224,9 @@ static void search_line(struct wc_grep *g, const char *s, unsigned n) {
     int r;
     if(n && s[n - 1] == '\r') n--;
     g->f.limit = g->f.work + WC_GREP_LINE_WORK(n);  /* 11/09/26: past it the line is left out, and counted */
+    g->f.limited = 1;
     r = wc_find_in(&g->f, s, n, 0, &a, &b);
-    g->f.limit = 0;
+    g->f.limited = 0;
     if(r == 1) add_hit(g, s, n, a, b);
     else if(r < 0) g->costly++;
     g->work += g->f.work - before;

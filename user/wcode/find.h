@@ -32,23 +32,32 @@ struct wc_find {
     char with[WC_FIND_MAX];
     int icase, word, regex;
     char err[96];                       /* why a pattern is none */
-    /* the compiled pattern, for what it was compiled from */
+    /* the compiled pattern, for what it was compiled from (rwhat with ricase and rword) */
     regex_t re;
     int compiled;
-    char cwhat[WC_FIND_MAX];
-    int cicase;
-    /* 11/09/26: the work done (bytes of text a search may have read), where a search stops (0: nowhere), and where
-       in its line it goes on from then */
+    char rwhat[WC_FIND_MAX];
+    int ricase, rword;
+    /* 11/09/26 (the second review): what a search searches for and puts in, taken when it begins (wc_find_prepare()),
+       so that the find bar's fields may change while it goes on: the text, the replacement, the choices */
+    char cwhat[WC_FIND_MAX], cwith[WC_FIND_MAX];
+    int cicase, cword, cregex;
+    /* 11/09/26: the work done (bytes of text the searches read), where a step stops (limit, when limited: compared as
+       work - limit, so that the count may go round), the clock a step is also timed by (ms; NULL: none) and when the
+       step began, and where in its line it goes on from then */
     unsigned long work, limit;
+    int limited;
+    unsigned (*clock)(void);
+    unsigned t0, calls;
     unsigned resume;
     /* a search of a text going on (wc_find_begin()): forward or back, round the end yet, the position and line it
        began at, the line it is in and where in that line; backward, the last match found in that line so far */
     int job, back, phase, have;
     unsigned start, first, ls, at, ma, mb;
-    /* Replace all going on (wc_find_all_begin()): counting, then changing; what it comes to, and the line
-       being built */
-    int all;
+    /* Replace all going on (wc_find_all_begin()): counting (all 1), asked about (3), then changing (2); what it
+       comes to (and the history it would take: hist), and the line being built */
+    int all, counted, confirmed;
     unsigned count, changed, maxline, linelen, lines;
+    unsigned long hist;
     long grow, maxgrow;
     int began;
     char *ob;
@@ -56,6 +65,7 @@ struct wc_find {
 };
 
 #define WC_FIND_STEP (1u << 20)         /* a search's work at a time between the window's events */
+#define WC_FIND_MS   40                 /* and its time, with a clock */
 
 void wc_find_init(struct wc_find *f);
 void wc_find_free(struct wc_find *f);
@@ -84,10 +94,12 @@ int wc_find_in(struct wc_find *f, const char *s, unsigned n, unsigned from, unsi
 /* Replace all: how many, or -1 (d->msg says why: nothing was changed); all at once, or begun (0, or -1) and gone on
    with about budget bytes of work at a time, 2 meaning more to do. Stopping it (wc_find_all_stop()) while it counts
    changes nothing; once it changes the file, it takes back what it did (1), or says it cannot (0: a change too large
-   to undo, which goes on to its end) */
+   to undo, which goes on to its end). 11/09/26: a change too large to undo is asked about first: wc_find_all_go()
+   gives 3, and goes on after wc_find_all_confirm(); wc_find_replace_all() does it all the same */
 int wc_find_replace_all(struct wc_find *f, struct wc_doc *d);
 int wc_find_all_begin(struct wc_find *f, struct wc_doc *d);
 int wc_find_all_go(struct wc_find *f, struct wc_doc *d, unsigned long budget);
+void wc_find_all_confirm(struct wc_find *f);
 int wc_find_all_stop(struct wc_find *f, struct wc_doc *d);
 int wc_find_all_changing(const struct wc_find *f);                /* it has begun to change the file */
 void wc_find_stop(struct wc_find *f);                             /* the find going on ends */

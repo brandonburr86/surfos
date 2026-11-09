@@ -33,7 +33,7 @@ so that once a line is cut nothing can fail before its new text is in its place.
 #include <errno.h>
 #include "find.h"
 
-#define GROUPS 10
+#define GROUPS 11                       /* the match and \1 to \9, and the whole-words wrapping's group */
 
 void wc_find_init(struct wc_find *f) {
     memset(f, 0, sizeof(*f));
@@ -56,8 +56,49 @@ static int fold(int c) {
     return c >= 'A' && c <= 'Z' ? c + 32 : c;
 }
 
-/* the pattern compiled, when it is a regular expression: 0, or -1 with f->err */
+/* 11/09/26 (the second review): a regular expression for whole words, the person's inside \<( and )\>, its
+   back-references one on (\1 is \2 there): the engine then finds whole words in one pass. -1 for \9, which has no
+   next, or for too long a pattern */
+static int wrap_words(const char *p, char *out, unsigned size) {
+    unsigned n = 3, j;
+    char c;
+    memcpy(out, "\\<(", 3);
+    while(*p) {
+        if(n + 8 >= size) return -1;
+        if(p[0] == '\\' && p[1]) {
+            if(p[1] == '9') return -1;
+            out[n++] = '\\';
+            out[n++] = p[1] >= '1' && p[1] <= '8' ? (char)(p[1] + 1) : p[1];
+            p += 2;
+            continue;
+        }
+        if(p[0] == '[') {                       /* a bracket expression as it is: a backslash in it is itself */
+            j = 1;
+            if(p[j] == '^') j++;
+            if(p[j] == ']') j++;
+            while(p[j] && p[j] != ']') {
+                if(p[j] == '[' && (p[j + 1] == ':' || p[j + 1] == '=' || p[j + 1] == '.')) {
+                    for(c = p[j + 1], j += 2; p[j] && !(p[j] == c && p[j + 1] == ']'); j++);
+                    if(p[j]) j += 2;
+                } else j++;
+            }
+            if(p[j]) j++;
+            if(n + j + 8 >= size) return -1;
+            memcpy(out + n, p, j);
+            n += j;
+            p += j;
+            continue;
+        }
+        out[n++] = *p++;
+    }
+    memcpy(out + n, ")\\>", 4);
+    return 0;
+}
+
+/* the pattern made ready, a regular expression compiled (whole words wrapped), and what the search uses taken from
+   the fields (the c* ones): 0, or -1 with f->err */
 int wc_find_prepare(struct wc_find *f) {
+    char pat[2 * WC_FIND_MAX + 16];
     regmatch_t pm[1];
     int r;
     f->err[0] = 0;
@@ -65,65 +106,87 @@ int wc_find_prepare(struct wc_find *f) {
         snprintf(f->err, sizeof(f->err), "Nothing to find");
         return -1;
     }
-    if(!f->regex) return 0;
-    if(f->compiled && !strcmp(f->cwhat, f->what) && f->cicase == f->icase) return 0;
-    if(f->compiled) regfree(&f->re);
-    f->compiled = 0;
-    r = regcomp(&f->re, f->what, REG_EXTENDED | (f->icase ? REG_ICASE : 0));
-    if(r) {
-        char e[64];
-        regerror(r, &f->re, e, sizeof(e));
-        snprintf(f->err, sizeof(f->err), "Not a pattern: %s", e);
-        return -1;
+    if(f->regex && !(f->compiled && !strcmp(f->rwhat, f->what) && f->ricase == f->icase && f->rword == f->word)) {
+        if(f->compiled) regfree(&f->re);
+        f->compiled = 0;
+        if(f->word && wrap_words(f->what, pat, sizeof(pat)) < 0) {
+            snprintf(f->err, sizeof(f->err), "Not searched: whole words take \\1 to \\8, not \\9");
+            return -1;
+        }
+        r = regcomp(&f->re, f->word ? pat : f->what, REG_EXTENDED | (f->icase ? REG_ICASE : 0));
+        if(r) {
+            char e[64];
+            regerror(r, &f->re, e, sizeof(e));
+            snprintf(f->err, sizeof(f->err), "Not a pattern: %s", e);
+            return -1;
+        }
+        /* 11/09/26: one that matches an empty text would match between every two characters, to be stepped over one
+           at a time; it finds nothing a match can be, so it is refused (x+ for x*) */
+        if(!regexec(&f->re, "", 1, pm, 0)) {
+            regfree(&f->re);
+            snprintf(f->err, sizeof(f->err), "Not searched: the pattern also matches nothing at all (x* where x+ is meant)");
+            return -1;
+        }
+        f->compiled = 1;
+        snprintf(f->rwhat, sizeof(f->rwhat), "%s", f->what);
+        f->ricase = f->icase;
+        f->rword = f->word;
     }
-    /* 11/09/26: one that matches an empty text would match between every two characters, to be stepped over one at a
-       time; it finds nothing a match can be, so it is refused (x+ for x*) */
-    if(!regexec(&f->re, "", 1, pm, 0)) {
-        regfree(&f->re);
-        snprintf(f->err, sizeof(f->err), "Not searched: the pattern also matches nothing at all (x* where x+ is meant)");
-        return -1;
-    }
-    f->compiled = 1;
     snprintf(f->cwhat, sizeof(f->cwhat), "%s", f->what);
+    snprintf(f->cwith, sizeof(f->cwith), "%s", f->with);
     f->cicase = f->icase;
+    f->cword = f->word;
+    f->cregex = f->regex;
     return 0;
 }
 
+/* a step's bounds: about budget of work (0: none), and with a clock WC_FIND_MS of time */
+static void step_bounds(struct wc_find *f, unsigned long budget) {
+    f->limit = f->work + budget;
+    f->limited = budget != 0;
+    f->t0 = f->clock ? f->clock() : 0;
+}
+
 /* the first match in the line s[0..n) that starts at or after from: 1 with pm[0] (and its groups, a regular
-   expression's); 0 for none; -1 when the work came to f->limit first (f->resume: where in the line to go on); -2 when
-   the pattern took too long (a back-reference: REG_ESTEPS). Each regexec() is charged what it may read: from where it
-   starts to the line's end */
+   expression's); 0 for none; -1 when the step's bounds came first (f->resume: where in the line to go on); -2 when
+   the pattern took too long (a back-reference: REG_ESTEPS). 11/09/26 (the second review): a regexec() is charged what
+   it read, to the match's end (to the line's end when none), and the clock bounds what that leaves out; the bound is
+   compared as work - limit, so that the count may go round */
 static int match_in(struct wc_find *f, const char *s, unsigned n, unsigned from, regmatch_t *pm) {
     const unsigned char *u = (const unsigned char *)s;
-    unsigned m = (unsigned)strlen(f->what), k, j, a, b;
+    unsigned m = (unsigned)strlen(f->cwhat), k, j, a, b;
     int first, r;
     while(from <= n) {
-        if(f->limit && f->work >= f->limit) {
+        if(f->limited && ((long)(f->work - f->limit) >= 0 ||
+                          (f->clock && !(++f->calls & 63) && f->clock() - f->t0 >= WC_FIND_MS))) {
             f->resume = from;
             return -1;
         }
-        if(f->regex) {
+        if(f->cregex) {
             pm[0].rm_so = (regoff_t)from;
             pm[0].rm_eo = (regoff_t)n;
             r = regexec(&f->re, s, GROUPS, pm, REG_STARTEND);
-            f->work += n - from + 1;
-            if(r == REG_ESTEPS) return -2;
-            if(r) return 0;
+            if(r) {
+                f->work += n - from + 1;
+                return r == REG_ESTEPS ? -2 : 0;
+            }
             a = (unsigned)pm[0].rm_so;
             b = (unsigned)pm[0].rm_eo;
+            f->work += b - from + 1;
             if(a == b) {                        /* nothing, at a place only (\<): on, a character further */
                 from = a + (a < n ? (unsigned)wc_utf8_len(u + a, n - a) : 1);
                 continue;
             }
+            if(f->cword) return 1;              /* (wrapped in \<( )\>: a whole word already) */
         } else {
             if(m > n || from > n - m) {
                 f->work += n - from + 1;
                 return 0;
             }
-            first = f->icase ? fold((unsigned char)f->what[0]) : (unsigned char)f->what[0];
+            first = f->cicase ? fold((unsigned char)f->cwhat[0]) : (unsigned char)f->cwhat[0];
             for(k = from; k + m <= n; k++) {
-                if(f->icase ? fold(u[k]) != first : u[k] != first) {
-                    if(!f->icase) {             /* to the next byte that can start a match */
+                if(f->cicase ? fold(u[k]) != first : u[k] != first) {
+                    if(!f->cicase) {            /* to the next byte that can start a match */
                         const unsigned char *p = memchr(u + k, first, n - m + 1 - k);
                         if(!p) {
                             k = n;
@@ -133,8 +196,8 @@ static int match_in(struct wc_find *f, const char *s, unsigned n, unsigned from,
                     }
                     continue;
                 }
-                for(j = 1; j < m && (f->icase ? fold(u[k + j]) == fold((unsigned char)f->what[j]) :
-                                     u[k + j] == (unsigned char)f->what[j]); j++);
+                for(j = 1; j < m && (f->cicase ? fold(u[k + j]) == fold((unsigned char)f->cwhat[j]) :
+                                     u[k + j] == (unsigned char)f->cwhat[j]); j++);
                 if(j == m) break;
             }
             f->work += (k + m <= n ? k + m : n) - from + 1;
@@ -144,7 +207,7 @@ static int match_in(struct wc_find *f, const char *s, unsigned n, unsigned from,
             pm[0].rm_so = (regoff_t)a;
             pm[0].rm_eo = (regoff_t)b;
         }
-        if(!f->word || ((a == 0 || !word_byte(u[a - 1])) && (b >= n || !word_byte(u[b])))) return 1;
+        if(!f->cword || ((a == 0 || !word_byte(u[a - 1])) && (b >= n || !word_byte(u[b])))) return 1;
         /* not a whole word: a match from inside the word it is in would be none either, so on from the next place a
            word can start (after a byte that is no word's) */
         for(from = a + 1; from < n && word_byte(u[from - 1]); from++);
@@ -245,11 +308,11 @@ int wc_find_go(struct wc_find *f, struct wc_text *t, unsigned long budget, unsig
     struct wc_line l;
     int r;
     if(!f->job) return 0;
-    f->limit = budget ? f->work + budget : 0;
+    step_bounds(f, budget);
     for(;;) {
         r = job_line(f, t, pm, &l);
         if(r == -1) {
-            f->limit = 0;
+            f->limited = 0;
             return 2;
         }
         if(r == -2) {
@@ -265,7 +328,7 @@ int wc_find_go(struct wc_find *f, struct wc_text *t, unsigned long budget, unsig
         if(!next_line(f, t, &l)) break;
     }
     f->job = 0;
-    f->limit = 0;
+    f->limited = 0;
     return r == -2 ? -1 : r;
 }
 
@@ -291,7 +354,7 @@ int wc_find_doc_go(struct wc_find *f, struct wc_doc *d, unsigned long budget) {
     int wrapped = 0, back = f->back, r = wc_find_go(f, &d->t, budget, &a, &b, &wrapped);
     if(r == 2) return 2;
     if(r < 0) snprintf(d->msg, sizeof(d->msg), "%s", f->err);
-    else if(!r) snprintf(d->msg, sizeof(d->msg), "Not found: %.120s", f->what);
+    else if(!r) snprintf(d->msg, sizeof(d->msg), "Not found: %.120s", f->cwhat);
     else {
         wc_doc_select(d, back ? b : a, back ? a : b);
         if(wrapped) snprintf(d->msg, sizeof(d->msg), back ? "Found again from the bottom" : "Found again from the top");
@@ -332,9 +395,9 @@ static void add(struct out *o, const char *s, unsigned n) {
 
 /* what goes in place of the match pm[0] in the line s */
 static void replacement(struct wc_find *f, const char *s, const regmatch_t *pm, int crlf, struct out *o) {
-    const char *w = f->with;
+    const char *w = f->cwith;
     int g;
-    if(!f->regex) {
+    if(!f->cregex) {
         add(o, w, (unsigned)strlen(w));
         return;
     }
@@ -356,6 +419,7 @@ static void replacement(struct wc_find *f, const char *s, const regmatch_t *pm, 
             add(o, w, 1);
             continue;
         }
+        if(g && f->cword) g++;                  /* (whole words: the wrapping's group comes first) */
         if(g < GROUPS && pm[g].rm_so >= 0) add(o, s + pm[g].rm_so, (unsigned)(pm[g].rm_eo - pm[g].rm_so));
     }
 }
@@ -374,9 +438,9 @@ int wc_find_replace_sel(struct wc_find *f, struct wc_doc *d) {
     ls = wc_text_line_begin(&d->t, from);
     wc_text_line(&d->t, ls, &l);
     if(to > l.end) return 0;
-    f->limit = f->work + WC_FIND_STEP;          /* (is the selection a match: a question of one line, bounded) */
+    step_bounds(f, WC_FIND_STEP);               /* (is the selection a match: a question of one line, bounded) */
     r = match_in(f, wc_text_span(&d->t, l.start, l.end - l.start), l.end - l.start, from - ls, pm);
-    f->limit = 0;
+    f->limited = 0;
     if(r != 1 || (unsigned)pm[0].rm_so != from - ls || (unsigned)pm[0].rm_eo != to - ls) return 0;
     replacement(f, wc_text_span(&d->t, l.start, l.end - l.start), pm, d->crlf, &o);
     if(o.failed) snprintf(d->msg, sizeof(d->msg), o.failed == 1 ? "Not replaced: the replacement is too long" :
@@ -403,9 +467,11 @@ int wc_find_all_begin(struct wc_find *f, struct wc_doc *d) {
         return -1;
     }
     f->all = 1;
+    f->counted = f->confirmed = 0;
     f->ls = f->at = f->mb = 0;
     f->have = 0;
     f->count = f->changed = f->maxline = f->linelen = f->lines = 0;
+    f->hist = 0;
     f->grow = f->maxgrow = 0;
     f->began = 0;
     free(f->ob);
@@ -420,7 +486,7 @@ int wc_find_all_changing(const struct wc_find *f) {
 
 static int all_end(struct wc_find *f, int r) {
     f->all = 0;
-    f->limit = 0;
+    f->limited = 0;
     free(f->ob);
     f->ob = NULL;
     f->on = f->ocap = 0;
@@ -487,10 +553,11 @@ static int all_count(struct wc_find *f, struct wc_doc *d) {
                 return -1;
             }
         }
-        if(f->have) {                           /* a line with a match: its new length */
+        if(f->have) {                           /* a line with a match: its new length, and both in the history */
             f->linelen += n - f->mb;
             if(f->linelen > f->maxline) f->maxline = f->linelen;
             f->lines++;
+            f->hist += (unsigned long)n + f->linelen;
         }
         f->linelen = 0;
         f->at = f->mb = 0;
@@ -502,7 +569,8 @@ static int all_count(struct wc_find *f, struct wc_doc *d) {
     return f->count ? 1 : 0;
 }
 
-/* the second run: each line with a match built anew and put in place of the old, which nothing can fail now */
+/* the second run: each line with a match built anew and put in place of the old, which nothing can fail now (the
+   line's buffer is kept in f at every way out, and a line is cut only once its new text is whole) */
 static int all_change(struct wc_find *f, struct wc_doc *d) {
     struct wc_text *t = &d->t;
     struct wc_line l;
@@ -510,7 +578,7 @@ static int all_change(struct wc_find *f, struct wc_doc *d) {
     struct out o;
     const char *s;
     unsigned n;
-    int r;
+    int r, ret = 1;
     o.b = f->ob;
     o.n = f->on;
     o.cap = f->ocap;
@@ -523,8 +591,8 @@ static int all_change(struct wc_find *f, struct wc_doc *d) {
             r = match_in(f, s, n, f->at, pm);
             if(r == -1) {
                 f->at = f->resume;
-                f->on = o.n;
-                return 2;
+                ret = 2;
+                goto out;
             }
             if(r != 1) break;                   /* (the count ran these: none gives up now) */
             add(&o, s + f->mb, (unsigned)pm[0].rm_so - f->mb);
@@ -534,41 +602,60 @@ static int all_change(struct wc_find *f, struct wc_doc *d) {
         }
         if(f->have) {                           /* this line had a match: its new text in place of the old */
             add(&o, s + f->mb, n - f->mb);
+            if(o.failed) {
+                ret = -1;
+                goto out;
+            }
             if(!f->began) {
                 wc_text_drop_marks(t, l.start);
                 wc_doc_begin(d, WC_K_OTHER);
                 f->began = 1;
             }
             wc_doc_cut(d, l.start, n);
-            if(o.failed || wc_doc_put(d, l.start, o.b, o.n) < 0) return -1;    /* (room and buffer were made first) */
+            if(wc_doc_put(d, l.start, o.b, o.n) < 0) {      /* (cannot be: the room was promised) */
+                ret = -1;
+                goto out;
+            }
             f->changed++;
             n = o.n;
         }
         o.n = 0;
-        f->on = 0;
         f->at = f->mb = 0;
         f->have = 0;
         if(!l.eol) break;
         f->ls = l.start + n + l.eol;
     }
-    return 1;
+out:
+    f->ob = o.b;
+    f->ocap = o.cap;
+    f->on = o.n;
+    return ret;
 }
 
 int wc_find_all_go(struct wc_find *f, struct wc_doc *d, unsigned long budget) {
     unsigned count;
     int r;
     if(!f->all) return 0;
-    f->limit = budget ? f->work + budget : 0;
+    step_bounds(f, budget);
     if(f->all == 1) {
-        r = all_count(f, d);
-        if(r == 2) {
-            f->limit = 0;
-            return 2;
+        if(!f->counted) {
+            r = all_count(f, d);
+            if(r == 2) {
+                f->limited = 0;
+                return 2;
+            }
+            if(r < 0) return all_end(f, -1);
+            if(!r) {
+                snprintf(d->msg, sizeof(d->msg), "Not found: %.120s", f->cwhat);
+                return all_end(f, 0);
+            }
+            f->counted = 1;
         }
-        if(r < 0) return all_end(f, -1);
-        if(!r) {
-            snprintf(d->msg, sizeof(d->msg), "Not found: %.120s", f->what);
-            return all_end(f, 0);
+        /* 11/09/26 (the second review): too large to undo, it would hold the person until its end: asked first */
+        if(!f->confirmed && !wc_undo_fits(f->hist, 2ul * f->lines)) {
+            f->limited = 0;
+            snprintf(d->msg, sizeof(d->msg), "Replace %u (on %u lines)? Too large a change to undo", f->count, f->lines);
+            return 3;
         }
         /* all of it or none: the room the text needs at its largest, and the buffer of the longest line, first */
         f->ob = malloc(f->maxline ? f->maxline : 1);
@@ -590,7 +677,7 @@ int wc_find_all_go(struct wc_find *f, struct wc_doc *d, unsigned long budget) {
     }
     r = all_change(f, d);
     if(r == 2) {
-        f->limit = 0;
+        f->limited = 0;
         return 2;
     }
     if(f->began) wc_doc_end(d);
@@ -602,7 +689,12 @@ int wc_find_all_go(struct wc_find *f, struct wc_doc *d, unsigned long budget) {
     return all_end(f, r < 0 ? -1 : (int)count);
 }
 
+void wc_find_all_confirm(struct wc_find *f) {
+    f->confirmed = 1;
+}
+
 int wc_find_replace_all(struct wc_find *f, struct wc_doc *d) {
     if(wc_find_all_begin(f, d) < 0) return -1;
+    f->confirmed = 1;                           /* (all at once: the caller has asked, or will say) */
     return wc_find_all_go(f, d, 0);
 }
