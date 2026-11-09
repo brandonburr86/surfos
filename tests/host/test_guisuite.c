@@ -6,7 +6,8 @@
    copied in the Character Map pastes into Notepad and into the Terminal's session as its UTF-8; and every window open
    at once draws inside guard pixels at three sizes, and the desktop leaves no session behind.
    10/26/26 (stage C12): the Character Map is a program (user/wcharmap/): its tile starts it, and its copy comes as a
-   program's window's text for the clipboard. */
+   program's window's text for the clipboard.
+   11/05/26 (track img): the Image Viewer is a program (user/wview/): Files' picture starts it on the file. */
 #include "gui_fake.h"
 #include "../../shell/gui_media.h"
 #include "../../shell/gui_tools.h"
@@ -47,10 +48,11 @@ static void test_files_open(void) {
     fake_type(&g, "draft");
     CHECK(g.note.modified && g.note.len == 5);
 
-    /* a picture: the Image Viewer, with no question about Notepad's changes */
+    /* a picture: the Image Viewer, the program wview started on it at the Image Viewer's place (11/05/26), with no
+       question about Notepad's changes */
     files_opens("/home/wave.bmp");
-    CHECK(g.win[GUI_VIEWER].open && g.focus == GUI_VIEWER && !strcmp(g.viewer.path, "/home/wave.bmp"));
-    CHECK(g.viewer.ready && g.viewer.w == 2 && g.viewer.h == 2);
+    CHECK(fake_run_file_count == 1 && !strcmp(fake_run_program, "wview") && !strcmp(fake_run_arg, "/home/wave.bmp"));
+    CHECK(gui_app_slot_of(&g, fake_run_result) == GUI_VIEWER);
     CHECK(!g.dialog.kind && g.note.modified && g.note.len == 5);
 
     /* a NUL byte at once, and more than 256 KB: Hex, and Notepad keeps its text */
@@ -125,16 +127,12 @@ static void test_charmap_paste(void) {
     CHECK(!fake_term_running);
 }
 
-/* 10/18/26: the Image Viewer and Hex take the arrow keys only with something to move; otherwise the arrows move
-   the pointer (shell/gui.c asks gui_wants_arrows() before the keys reach the desktop) */
+/* 10/18/26: Hex takes the arrow keys only with something to move; otherwise the arrows move the pointer (shell/gui.c
+   asks gui_wants_arrows() before the keys reach the desktop). 11/05/26: the Image Viewer is a program's window now,
+   which takes every key but Ctrl+G */
 static void test_arrows(void) {
     fake_desktop(&g, 960, 540);
     make_files();
-    gui_open(&g, GUI_VIEWER);
-    CHECK(g.focus == GUI_VIEWER && !gui_wants_arrows(&g));
-    viewer_show(&g, "/home/wave.bmp");
-    ticks(5);
-    CHECK(g.viewer.ready && gui_wants_arrows(&g));
     gui_open(&g, GUI_HEX);
     CHECK(g.focus == GUI_HEX && !gui_wants_arrows(&g));
     hex_show(&g, "/home/prog.bin");

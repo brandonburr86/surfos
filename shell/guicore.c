@@ -1205,8 +1205,8 @@ void gui_tick(struct gui_state *g) {
     if(!g->reg.loaded) reg_load(g);                     /* 11/05/26: the registry, when the desktop starts */
     if(g->pref_pending && g->now - g->pref_changed >= GUI_PREF_MS) pref_flush(g);  /* a change that stood */
     prefs_tick(g);                                      /* 11/05/26: the preferences, each second */
-    for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)
-        if(g->win[id].open && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
+    for(id = GUI_FIRST_APP; id < GUI_FIRST_CLIENT; id++)    /* 11/05/26: an application that is a program, always */
+        if((g->win[id].open || gui_app_of(id)->program) && gui_app_of(id)->tick) gui_app_of(id)->tick(g);
     client_tick(g);                                     /* 10/25/26: programs' windows */
     if(menu_stale(g)) { g->menu = 0; g->dirty = true; } /* 10/26/26: its window lost the focus */
 }

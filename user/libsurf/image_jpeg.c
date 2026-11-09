@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: JPEG pictures
+SurfOS user library: JPEG pictures
 ----------------------
 File: image_jpeg.c  Date: 11/1/26
 ----------------------
@@ -18,24 +18,33 @@ in 32 bits (dequant(), idct()): the limits lie well above what any picture of 8 
 corrupted file, which is found at the end of each MCU. A scan's time is its picture's blocks at most, however few its
 bytes (a progressive EOB run covers many blocks in a few bits), and scans are WIMG_SCANS_MAX at most: a helper may take
 a second or more over a small file made to do that, and the window kills one that takes too long.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
+11/05/26 (the review of track img): the inverse DCT, the Huffman tables and their decoding, and the reading of the
+scans' bits written again from T.81 itself: A.3.3's definition of the inverse DCT, Annex C's code sizes and codes,
+F.2.2.3's decoding procedure, F.1.2.3's stuffed bytes and B.1.1.5's markers (docs/superpowers/plans/
+2026-11-05-desktop-apps-img.md, "The review", says what was there before).
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
-#define FAST        9                           /* bits of a code that the quick table covers */
+#define LOOK        8                           /* the bits a Huffman code is looked up by at once */
 #define COEF_MAX    4095                        /* a coefficient, dequantized: 8-bit samples stay near 1200 */
-#define PASS1_MAX   8191                        /* the first pass's output: 8-bit samples stay near 4100 */
+#define K_BITS      13                          /* the inverse DCT's factors: their fraction */
+#define T_BITS      3                           /* the first pass's results: their fraction */
+#define T_MAX       ((2048 << T_BITS) - 1)      /* and their bound: 8-bit samples stay near half of it */
 
-struct table {                                  /* a Huffman table */
-    unsigned short fast[1 << FAST];             /* the input's next bits: length << 8 | value; 0: a longer code */
-    unsigned int limit[18];                     /* codes of s bits are below limit[s], left aligned to 16 bits */
-    int delta[18];                              /* code + delta[s]: its place in value[] */
-    unsigned char value[256];
+/* A Huffman table (T.81 Annex C, F.2.2.3): its values in the order of their codes, and by code length (1 to 16) the
+   first code, the last (-1 when there is none) and where their values begin. look_len and look_val: what the next
+   LOOK bits begin with, a code of LOOK bits or fewer (its length and value), or 0: a longer code, or none */
+struct table {
+    unsigned char huffval[256];
     int n;                                      /* values; 0: not defined */
+    int mincode[17], maxcode[17], valptr[17];
+    unsigned char look_len[1 << LOOK], look_val[1 << LOOK];
 };
 
 struct comp {
@@ -66,9 +75,9 @@ struct jpeg {
     int scans;
     int ss, se, ah, al;
     int eobrun;
-    unsigned int buf;                           /* bits to come, at its top */
-    int cnt;                                    /* how many */
-    int pad;                                    /* of those, how many are zeros made up after the data ended */
+    unsigned int acc;                           /* bits read and not yet taken: the last have of them, oldest first */
+    int have;
+    int pad;                                    /* zeros made up since the data ended, added to acc */
     int marker;                                 /* the marker the data ran into, 0: none yet */
     int eoi;
     /* the output */
@@ -83,88 +92,59 @@ static const unsigned char zigzag[64] = {
 
 static unsigned int be16(const unsigned char *p) { return (unsigned int)p[0] << 8 | p[1]; }
 
-/**** the inverse DCT: libjpeg's accurate integer method, as the Loeffler, Ligtenberg and Moschytz paper has it ****/
+/**** the inverse DCT (T.81 A.3.3) ****/
 
-#define F298   2446
-#define F390   3196
-#define F541   4433
-#define F765   6270
-#define F899   7373
-#define F1175  9633
-#define F1501  12299
-#define F1847  15137
-#define F1961  16069
-#define F2053  16819
-#define F2562  20995
-#define F3072  25172
+/* s(y,x) = 1/4 sum over u and v of C(u) C(v) S(v,u) cos((2x+1)u pi/16) cos((2y+1)v pi/16), with C(0) = 1/sqrt(2) and
+   C = 1 otherwise, done as the formula separates: down each column, then along each row, the one-dimensional sum
+   out(n) = sum over k of C(k)/2 in(k) cos((2n+1)k pi/16). As cos((2(7-n)+1)k pi/16) is cos((2n+1)k pi/16) for an even
+   k and its negative for an odd one, out(n) and out(7-n) are E + O and E - O of the sums over the even and the odd k.
+   K holds C(k)/2 cos((2n+1)k pi/16) for n = 0 to 3, times 2^K_BITS, rounded. Terms whose coefficient is 0 add
+   nothing, so the sums run only as far as the block's last row and column with one that is not. */
+static const int K[8][4] = {
+    { 2896, 2896, 2896, 2896 }, { 4017, 3406, 2276, 799 }, { 3784, 1567, -1567, -3784 }, { 3406, -799, -4017, -2276 },
+    { 2896, -2896, -2896, 2896 }, { 2276, -4017, 799, 3406 }, { 1567, -3784, 3784, -1567 }, { 799, -2276, 3406, -4017 }
+};
 
 static int clamp_to(int v, int m) { return v > m ? m : v < -m ? -m : v; }
 
-/* One column or row: s[0 .. 7 * step] in, each result before the descaling in out[8] */
-static void idct1(const int *s, int step, int *out) {
-    int z1, z2, z3, z4, z5, t0, t1, t2, t3, t10, t11, t12, t13;
-    z2 = s[2 * step];
-    z3 = s[6 * step];
-    z1 = (z2 + z3) * F541;
-    t2 = z1 - z3 * F1847;
-    t3 = z1 + z2 * F765;
-    t0 = (s[0] + s[4 * step]) * 8192;
-    t1 = (s[0] - s[4 * step]) * 8192;
-    t10 = t0 + t3;
-    t13 = t0 - t3;
-    t11 = t1 + t2;
-    t12 = t1 - t2;
-    t0 = s[7 * step];
-    t1 = s[5 * step];
-    t2 = s[3 * step];
-    t3 = s[step];
-    z1 = t0 + t3;
-    z2 = t1 + t2;
-    z3 = t0 + t2;
-    z4 = t1 + t3;
-    z5 = (z3 + z4) * F1175;
-    t0 *= F298;
-    t1 *= F2053;
-    t2 *= F3072;
-    t3 *= F1501;
-    z1 *= -F899;
-    z2 *= -F2562;
-    z3 = z3 * -F1961 + z5;
-    z4 = z4 * -F390 + z5;
-    t0 += z1 + z3;
-    t1 += z2 + z4;
-    t2 += z2 + z3;
-    t3 += z1 + z4;
-    out[0] = t10 + t3;
-    out[7] = t10 - t3;
-    out[1] = t11 + t2;
-    out[6] = t11 - t2;
-    out[2] = t12 + t1;
-    out[5] = t12 - t1;
-    out[3] = t13 + t0;
-    out[4] = t13 - t0;
+/* a sum of the first pass, kept with T_BITS of fraction and within T_MAX */
+static int first(int sum) { return clamp_to((sum + (1 << (K_BITS - T_BITS - 1))) >> (K_BITS - T_BITS), T_MAX); }
+
+/* a sum of the second pass as a sample: its fractions rounded off, level-shifted by 128 (A.3.1), within 0 .. 255 */
+static unsigned char sample(int sum) {
+    int v = ((sum + (1 << (K_BITS + T_BITS - 1))) >> (K_BITS + T_BITS)) + 128;
+    return (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
-/* c: 64 coefficients within COEF_MAX, in the order of the block; 8 x 8 samples into out, rows stride apart */
+/* c: 64 coefficients within COEF_MAX, row by row (S(v,u) at c[v * 8 + u]); 8 x 8 samples into out, rows stride apart.
+   Each sum is of at most 8 products of 4096 by 4095, or of 4096 by T_MAX: within 32 bits */
 static void idct(const int *c, unsigned char *out, int stride) {
-    int ws[64], r[8], x, y;
-    for(x = 0; x < 8; x++) {                    /* columns: magnitudes up to 2^30 in 32 bits */
-        if(!c[x + 8] && !c[x + 16] && !c[x + 24] && !c[x + 32] && !c[x + 40] && !c[x + 48] && !c[x + 56]) {
-            int dc = clamp_to(c[x] * 4, PASS1_MAX);
-            for(y = 0; y < 8; y++) ws[y * 8 + x] = dc;
-            continue;
+    int t[64], umax = -1, vmax = 0, i, u, y, n, k;
+    for(i = 0; i < 64; i++)
+        if(c[i]) {
+            if((i & 7) > umax) umax = i & 7;
+            if((i >> 3) > vmax) vmax = i >> 3;
         }
-        idct1(c + x, 8, r);
-        for(y = 0; y < 8; y++) ws[y * 8 + x] = clamp_to((r[y] + 1024) >> 11, PASS1_MAX);
+    if(umax < 0) {                              /* nothing: the level shift alone */
+        for(y = 0; y < 8; y++, out += stride) memset(out, 128, 8);
+        return;
     }
-    for(y = 0; y < 8; y++) {                    /* rows, of values within PASS1_MAX: again under 2^31 */
-        idct1(ws + y * 8, 1, r);
-        for(x = 0; x < 8; x++) {
-            int v = ((r[x] + (1 << 17)) >> 18) + 128;
-            out[x] = (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v);
+    for(u = 0; u <= umax; u++)                  /* down column u */
+        for(n = 0; n < 4; n++) {
+            int e = 0, o = 0;
+            for(k = 0; k <= vmax; k += 2) e += K[k][n] * c[k * 8 + u];
+            for(k = 1; k <= vmax; k += 2) o += K[k][n] * c[k * 8 + u];
+            t[n * 8 + u] = first(e + o);
+            t[(7 - n) * 8 + u] = first(e - o);
         }
-        out += stride;
-    }
+    for(y = 0; y < 8; y++, out += stride)       /* along row y, of the columns that are not all 0 */
+        for(n = 0; n < 4; n++) {
+            int e = 0, o = 0;
+            for(k = 0; k <= umax; k += 2) e += K[k][n] * t[y * 8 + k];
+            for(k = 1; k <= umax; k += 2) o += K[k][n] * t[y * 8 + k];
+            out[n] = sample(e + o);
+            out[7 - n] = sample(e - o);
+        }
 }
 
 /* A coefficient as read, by its quantizer: within COEF_MAX whatever a file says */
@@ -174,41 +154,40 @@ static int dequant(int v, unsigned int q) {
 
 /**** bits ****/
 
-static void fill(struct jpeg *j) {
-    while(j->cnt <= 24) {
-        unsigned int b = 0;
-        if(j->marker) j->pad += 8;
-        else if(j->pos >= j->len) {
-            j->marker = 0x100;                  /* the file's end */
-            j->pad += 8;
-        } else {
-            b = j->in[j->pos++];
-            if(b == 0xff) {
-                unsigned int c = 0xff;
-                while(c == 0xff && j->pos < j->len) c = j->in[j->pos++];
-                if(c == 0xff) {
-                    j->marker = 0x100;
-                    b = 0;
-                    j->pad += 8;
-                } else if(c) {                  /* a marker: the scan's data ends here */
-                    j->marker = (int)c;
-                    b = 0;
-                    j->pad += 8;
-                }
-            }
+/* One byte more of the scan's bits into acc (T.81 F.2.2.5's NEXTBIT, a byte at a time). A byte 0xFF followed by 0x00
+   is the data byte 0xFF (F.1.2.3); followed by anything else (after fill bytes 0xFF, B.1.1.5) it begins a marker, and
+   the scan's data ends there, as it does at the file's end: zeros are made up from then on, and counted in pad, so
+   that a scan that used them is found (ran_out()) */
+static void more(struct jpeg *j) {
+    unsigned int byte = 0;
+    if(!j->marker) {
+        if(j->pos >= j->len) j->marker = 0x100;             /* the file's end */
+        else if((byte = j->in[j->pos++]) == 0xff) {
+            while(j->pos < j->len && j->in[j->pos] == 0xff) j->pos++;
+            if(j->pos >= j->len) j->marker = 0x100;
+            else if(j->in[j->pos]) j->marker = j->in[j->pos++];
+            else j->pos++;                                  /* stuffed: the 0xFF is data */
         }
-        j->buf |= b << (24 - j->cnt);
-        j->cnt += 8;
     }
+    if(j->marker) {
+        byte = 0;
+        j->pad += 8;
+    }
+    j->acc = j->acc << 8 | byte;
+    j->have += 8;
+}
+
+/* the next n bits (1 to 16), not taken */
+static unsigned int peek(struct jpeg *j, int n) {
+    while(j->have < n) more(j);
+    return (j->acc >> (j->have - n)) & ((1u << n) - 1);
 }
 
 static unsigned int get_bits(struct jpeg *j, int n) {
     unsigned int v;
     if(!n) return 0;
-    if(j->cnt < n) fill(j);
-    v = j->buf >> (32 - n);
-    j->buf <<= n;
-    j->cnt -= n;
+    v = peek(j, n);
+    j->have -= n;
     return v;
 }
 
@@ -220,30 +199,29 @@ static int extend(struct jpeg *j, int s) {
     return v < 1 << (s - 1) ? v - (1 << s) + 1 : v;
 }
 
-/* The next Huffman code's value, or -1 for a code that is none */
+/* The next Huffman code's value (T.81 F.2.2.3, DECODE), or -1 for bits that are no code. The lookahead answers for a
+   code of LOOK bits or fewer; otherwise F.16 goes on from length LOOK + 1 with the bits looked at, a bit at a time */
 static int code(struct jpeg *j, const struct table *t) {
-    unsigned int e, k;
-    int s, i;
-    if(j->cnt < 16) fill(j);
-    e = t->fast[j->buf >> (32 - FAST)];
-    if(e) {
-        s = (int)(e >> 8);
-        j->buf <<= s;
-        j->cnt -= s;
-        return (int)(e & 255);
+    unsigned int look = peek(j, LOOK);
+    int l, c;
+    if(t->look_len[look]) {
+        j->have -= t->look_len[look];
+        return t->look_val[look];
     }
-    k = j->buf >> 16;
-    for(s = FAST + 1; s <= 16; s++) if(k < t->limit[s]) break;
-    if(s > 16) return -1;
-    i = (int)(k >> (16 - s)) + t->delta[s];
-    if(i < 0 || i >= t->n) return -1;
-    j->buf <<= s;
-    j->cnt -= s;
-    return t->value[i];
+    j->have -= LOOK;
+    c = (int)look;
+    for(l = LOOK + 1; l <= 16; l++) {
+        c = c << 1 | (int)get_bits(j, 1);
+        if(c <= t->maxcode[l]) {
+            int i = t->valptr[l] + c - t->mincode[l];
+            return i >= 0 && i < t->n ? t->huffval[i] : -1;
+        }
+    }
+    return -1;
 }
 
 /* Has the scan used bits that were not in the file? */
-static int ran_out(const struct jpeg *j) { return j->cnt < j->pad; }
+static int ran_out(const struct jpeg *j) { return j->have < j->pad; }
 
 /**** the segments ****/
 
@@ -260,34 +238,48 @@ static const char *dqt(struct jpeg *j, const unsigned char *d, size_t n) {
     return NULL;
 }
 
+/* DHT: each table's 16 counts of codes by length (BITS) and its values (HUFFVAL), made into the code sizes (T.81
+   C.1), the codes (C.2), and what decoding needs (F.15); a code that does not fit in its length means the counts lie */
 static const char *dht(struct jpeg *j, const unsigned char *d, size_t n) {
+    static const char bad[] = "a JPEG with a bad Huffman table";
     while(n) {
-        unsigned int tc = d[0] >> 4, th = d[0] & 15, next = 0;
+        unsigned int tc = d[0] >> 4, th = d[0] & 15;
+        int huffsize[257], huffcode[256], lastk = 0, k, l, i, code, si;
         struct table *t;
-        int s, k = 0, total = 0;
-        if(tc > 1 || th > 3 || n < 17) return "a JPEG with a bad Huffman table";
-        for(s = 1; s <= 16; s++) total += d[s];
-        if(total > 256 || n < (size_t)17 + (size_t)total) return "a JPEG with a bad Huffman table";
-        t = tc ? &j->ac[th] : &j->dc[th];
-        memset(t->fast, 0, sizeof(t->fast));
-        memcpy(t->value, d + 17, (size_t)total);
-        t->n = total;
-        for(s = 1; s <= 16; s++) {
-            int c = d[s], i;
-            t->delta[s] = k - (int)next;
-            for(i = 0; i < c; i++, k++, next++) {
-                if(next >= 1u << s) return "a JPEG with a bad Huffman table";
-                if(s <= FAST) {
-                    unsigned int first = next << (FAST - s), e;
-                    for(e = 0; e < 1u << (FAST - s); e++) t->fast[first + e] = (unsigned short)(s << 8 | t->value[k]);
-                }
+        if(tc > 1 || th > 3 || n < 17) return bad;
+        for(l = 1; l <= 16; l++)                /* C.1: HUFFSIZE */
+            for(i = 0; i < d[l]; i++) {
+                if(lastk == 256) return bad;
+                huffsize[lastk++] = l;
             }
-            t->limit[s] = next << (16 - s);
-            next <<= 1;
+        huffsize[lastk] = 0;
+        if(n < (size_t)17 + (size_t)lastk) return bad;
+        code = 0;                               /* C.2: HUFFCODE */
+        si = huffsize[0];
+        for(k = 0; huffsize[k]; si++, code <<= 1)
+            for(; huffsize[k] == si; k++, code++) {
+                if(code >= 1 << si) return bad;
+                huffcode[k] = code;
+            }
+        t = tc ? &j->ac[th] : &j->dc[th];
+        for(k = 0, l = 1; l <= 16; l++) {       /* F.15: MINCODE, MAXCODE, VALPTR */
+            t->valptr[l] = k;
+            t->mincode[l] = d[l] ? huffcode[k] : 0;
+            t->maxcode[l] = d[l] ? huffcode[k + d[l] - 1] : -1;
+            k += d[l];
         }
-        t->limit[17] = 0xffffffffu;
-        d += 17 + total;
-        n -= 17 + (size_t)total;
+        memcpy(t->huffval, d + 17, (size_t)lastk);
+        t->n = lastk;
+        memset(t->look_len, 0, sizeof(t->look_len));
+        for(k = 0; k < lastk && huffsize[k] <= LOOK; k++) {     /* each short code: every LOOK bits it begins */
+            int from = huffcode[k] << (LOOK - huffsize[k]), count = 1 << (LOOK - huffsize[k]);
+            for(i = 0; i < count; i++) {
+                t->look_len[from + i] = (unsigned char)huffsize[k];
+                t->look_val[from + i] = t->huffval[k];
+            }
+        }
+        d += 17 + lastk;
+        n -= 17 + (size_t)lastk;
     }
     return NULL;
 }
@@ -477,8 +469,8 @@ static const char *block(struct jpeg *j, struct comp *c, int bx, int by) {
 /* At a restart: the marker, wherever it is from here; the bits and the predictions start again */
 static const char *next_restart(struct jpeg *j) {
     int i;
-    j->buf = 0;
-    j->cnt = 0;
+    j->acc = 0;
+    j->have = 0;
     j->pad = 0;
     j->eobrun = 0;
     for(i = 0; i < j->ncomp; i++) j->comp[i].pred = 0;
@@ -498,8 +490,8 @@ static const char *scan_data(struct jpeg *j, const int *which, int n) {
     int across = interleaved ? j->mcux : j->comp[which[0]].nw;
     int down = interleaved ? j->mcuy : j->comp[which[0]].nh;
     int x, y;
-    j->buf = 0;
-    j->cnt = 0;
+    j->acc = 0;
+    j->have = 0;
     j->pad = 0;
     j->marker = 0;
     j->eobrun = 0;
@@ -749,7 +741,7 @@ int wimg_jpeg(const unsigned char *in, size_t len, struct wimg *out, char *err, 
     struct jpeg *j = calloc(1, sizeof(*j));
     const char *why;
     int said = 0;
-    if(!j) return ut_error(err, cap, "out of memory reading a JPEG");
+    if(!j) return wimg_error(err, cap, "out of memory reading a JPEG");
     j->in = in;
     j->len = len;
     why = segments(j, err, cap, out, &said);

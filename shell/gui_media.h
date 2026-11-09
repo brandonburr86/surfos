@@ -7,18 +7,17 @@ What the desktop's other files call of track MEDIA (docs/superpowers/plans/2026-
 Files opens a picture in the Image Viewer and any other file in Hex; Sketch's File menu, keys and
 buttons (its code in shell/guicore.c) save the canvas as a BMP and open one; and the BMP reader
 and writer they share (shell/guibmp.c). Everything here is called from the model's handlers,
-never while drawing (but viewer_place and viewer_zoom, which only look).
+never while drawing.
+11/05/26 (track img): the Image Viewer is the program wview (user/wview/); guiview.c keeps its entry.
 */
 #ifndef _SHELL_GUI_MEDIA_H
 #define _SHELL_GUI_MEDIA_H
 #include "guipriv.h"
 
 /**** the Image Viewer (guiview.c) ****/
-void viewer_show(struct gui_state *g, const char *path);   /* its window opens, and starts reading the picture */
-bool viewer_takes(const char *name);                       /* a name it opens: *.bmp, in any case */
-/* where the picture is on the screen (logical pixels; w, h 0 while there is none), and its zoom (16.16) */
-void viewer_place(const struct gui_state *g, int *x, int *y, int *w, int *h);
-u32 viewer_zoom(const struct gui_state *g);
+void viewer_show(struct gui_state *g, const char *path);   /* wview started on the file, at the viewer's place */
+                                                           /* (what is no file is said, and starts nothing) */
+bool viewer_takes(const char *name);                       /* a name it opens: *.bmp .png .gif .jpg .jpeg, any case */
 
 /**** Hex (guihex.c) ****/
 void hex_show(struct gui_state *g, const char *path);      /* its window opens on the file's first bytes */

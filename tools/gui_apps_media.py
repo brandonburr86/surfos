@@ -119,6 +119,12 @@ def dialog_open(d, s):
     return False
 
 
+def open_chooser(d, s):
+    """11/05/26 (track img): a program's Open chooser in front (the Image Viewer is the program wview), found by the
+    chooser's own title, Open a file, wherever its bar puts it after what names the program"""
+    return any(d.text(s, x, CHOOSER[1] + 6, 'Open a file', PAPER, TEAL) for x in range(CHOOSER[0] + 4, CHOOSER[0] + CHOOSER[2] - 88))
+
+
 def menu_open(d, s):
     """a menu is open: its title's teal band in the menu bar (the bar is paper otherwise, left of "Ride the wave.")"""
     return any(d.pixel(s, x, 4) == TEAL for x in range(0, 480, 2))
@@ -225,7 +231,7 @@ def viewer_check(d):
     d.open_app('Image Viewer')
     d.visible('the Image Viewer opens from the Apps menu, with no picture', title_is(d, x, y, 'Image Viewer'))
     d.keys('o')
-    d.visible('the Image Viewer: O shows the chooser', lambda s: d.text(s, 248, 87, 'Open a file', PAPER, TEAL))
+    d.visible('the Image Viewer: O shows the chooser', lambda s: open_chooser(d, s))
     choose(d, ['usb1p1', 'media', 'sea24.bmp'], 'the Image Viewer')
     place = fitted(42, 30)
     d.visible('the Image Viewer fits a 24-bit BMP to the window: its four colours where they belong',
@@ -238,7 +244,7 @@ def viewer_check(d):
               lambda s: quadrants_shown(d, s, place, (TL, TR, BL, BR)) and
               d.text(s, x + w - 24 - 4 * 8, status[1], '100%', MUTED, BAND), 'guiapps-media-viewer-actual.png')
     d.keys('o')
-    d.visible('the Image Viewer: O again', lambda s: d.text(s, 248, 87, 'Open a file', PAPER, TEAL))
+    d.visible('the Image Viewer: O again', lambda s: open_chooser(d, s))
     choose(d, ['usb1p1', 'media', 'sea8.bmp'], 'the Image Viewer')
     place = fitted(30, 20)
     d.visible('the Image Viewer shows an 8-bit top-down BMP with its palette, fitted',

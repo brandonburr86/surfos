@@ -16,7 +16,9 @@ user/wundertow/image*.c on the host, with Undertow's util.c and the test's alloc
   add up, a small PNG that inflates to far more than its size holds, a JPEG of many scans, coefficients at their
   largest (the same test built with UndefinedBehaviorSanitizer at SurfOS's ABI stops at any signed overflow or bad
   shift; the wrap of a size_t it does not see);
-- making pictures smaller.
+- making pictures smaller;
+- 11/05/26 (the review of track img): files made to cost far more than their size, each within a bound of time
+  measured against a picture of its size (bombs()).
 
 "test_wundertow_image FIXTURES" runs it all; "--dump FILE [RAW]" says what a file decodes to, and writes its pixels.
 */
@@ -1650,6 +1652,183 @@ static void jpeg_files(void) {
     memset(&b, 0, sizeof(b));
 }
 
+/**** bombs (11/05/26, the review of track img): files that cost far more than their size, each within a bound ****/
+
+/* the CPU time of decoding s, in seconds, its outcome and message; the picture, if any, let go */
+static double cpu_decode(const struct buf *s, int *rc, char *err, size_t cap) {
+    struct wimg m;
+    clock_t t = clock();
+    *rc = wimg_decode(s->p, s->n, &m, err, cap);
+    t = clock() - t;
+    if(!*rc) wimg_free(&m);
+    return (double)t / CLOCKS_PER_SEC;
+}
+
+/* deflate's empty blocks, after a zlib header: dynamic ones (each its tables: literal 256 alone, of 1 bit, and a
+   distance code of one symbol; the code-length code of symbols 1 and 18, of 1 bit each), or fixed ones (10 bits) */
+static void empty_blocks(struct buf *z, size_t bytes, int dynamic) {
+    static const unsigned char order[18] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1 };
+    struct bits s;
+    int i;
+    put8(z, 0x78);
+    put8(z, 0x01);
+    s.b = z;
+    s.acc = 0;
+    s.n = 0;
+    while(z->n < bytes) {
+        put_bits(&s, 0, 1);                         /* not the last */
+        if(!dynamic) {
+            put_bits(&s, 1, 2);
+            put_lit(&s, 256);
+            continue;
+        }
+        put_bits(&s, 2, 2);
+        put_bits(&s, 0, 5);                         /* 257 literal and length codes */
+        put_bits(&s, 0, 5);                         /* 1 distance code */
+        put_bits(&s, 14, 4);                        /* 18 code-length codes */
+        for(i = 0; i < 18; i++) put_bits(&s, order[i] == 18 || order[i] == 1 ? 1 : 0, 3);
+        put_code(&s, 1, 1);                         /* 18: 138 zeros */
+        put_bits(&s, 138 - 11, 7);
+        put_code(&s, 1, 1);                         /* 18: 118 more */
+        put_bits(&s, 118 - 11, 7);
+        put_code(&s, 0, 1);                         /* 1: symbol 256 of 1 bit */
+        put_code(&s, 0, 1);                         /* 1: the distance's one symbol */
+        put_code(&s, 0, 1);                         /* the block: 256, its end */
+    }
+    flush_bits(&s);
+}
+
+/* JPEG's scan bits, from their top, a 0xFF followed by 0x00 (T.81 F.1.2.3) */
+struct jbits {
+    struct buf *b;
+    unsigned int acc;
+    int n;
+};
+
+static void jput(struct jbits *s, unsigned int v, int n) {
+    while(n--) {
+        s->acc = s->acc << 1 | (v >> n & 1);
+        if(++s->n == 8) {
+            put8(s->b, s->acc);
+            if(s->acc == 0xff) put8(s->b, 0);
+            s->acc = 0;
+            s->n = 0;
+        }
+    }
+}
+
+static void jflush(struct jbits *s) { while(s->n) jput(s, 1, 1); }
+
+/* A progressive grey JPEG of w x h whose every block is 0: a DC scan, then scans more of AC first and refinement,
+   each one EOB run after another over all the blocks (a code of 1 bit and 14 more: 32767 blocks) */
+static void scans_jpeg(struct buf *b, unsigned int w, unsigned int h, int scans) {
+    struct jbits s;
+    unsigned int blocks = ((w + 7) / 8) * ((h + 7) / 8), i, left;
+    int k;
+    soi(b);
+    jpeg_quant(b, 1);
+    jpeg_sof(b, 0xc2, 8, h, w, 1, 0x11, 0);
+    jpeg_huff(b, 0, 0);                             /* DC: '0' a difference of 0 */
+    jpeg_huff(b, 1, 0xe0);                          /* AC: '0' an EOB run of 14 bits more */
+    jpeg_sos(b, 1, 0, 0, 0);
+    s.b = b;
+    s.acc = 0;
+    s.n = 0;
+    for(i = 0; i < blocks; i++) jput(&s, 0, 1);
+    jflush(&s);
+    for(k = 1; k < scans; k++) {
+        jpeg_sos(b, 1, 1, 63, k == 1 ? 0 : 0x10);
+        for(left = blocks; left; left -= left < 32767 ? left : 32767) {
+            jput(&s, 0, 1);
+            jput(&s, 16383, 14);
+        }
+        jflush(&s);
+    }
+    eoi(b);
+}
+
+/* RLE8 of 4000 x 4000: rows of runs as an encoder makes them (15 of 255, one of 175, the row's end), or runs of 255
+   with no row's end at all, every one past the first row's end: as many bytes as a picture that size holds */
+static void rle_4000(struct buf *b, int bomb) {
+    size_t i, n = (size_t)4000 * 4000 / 2;
+    int y, k;
+    bmp_start(b, 54 + 1024, 40, 4000, 4000, 1, 8, 1, 256);
+    for(i = 0; i < 256; i++) put32le(b, (unsigned int)i * 0x010101u);
+    if(bomb) {
+        b->cap = b->n + n * 2 + 2;
+        b->p = realloc(b->p, b->cap);
+        for(i = 0; i < n; i++) {
+            b->p[b->n++] = 0xff;
+            b->p[b->n++] = 7;
+        }
+    } else
+        for(y = 0; y < 4000; y++) {
+            for(k = 0; k < 15; k++) { put8(b, 255); put8(b, (unsigned int)(y + k)); }
+            put8(b, 175);
+            put8(b, (unsigned int)y);
+            put8(b, 0);
+            put8(b, 0);
+        }
+    put8(b, 0);
+    put8(b, 1);
+}
+
+static void bombs(void) {
+    struct buf b = { NULL, 0, 0 }, z = { NULL, 0, 0 };
+    char err[UT_ERR_MAX];
+    double t, ref;
+    int rc, kind;
+    /* PNG: a 1 x 1 picture after 4 MB of blocks that make nothing; the IDAT bytes inflate is given are bounded (twice
+       the rows', 8 a row and 4 KB): a few KB of them are read, where the whole stream once took seconds */
+    for(kind = 0; kind < 2; kind++) {
+        empty_blocks(&z, (size_t)4 << 20, kind);
+        png_start(&b, 1, 1, 8, 0, 0, 0, 0);
+        finish_png(&b, &z);
+        t = cpu_decode(&b, &rc, err, sizeof(err));
+        checkf(rc == -1 && strstr(err, "far longer than its rows"), "a PNG of 4 MB of empty %s blocks: refused for its length (%s)",
+               kind ? "dynamic" : "fixed", rc ? err : "read");
+        checkf(t < 0.25, "and in little time (%.3f s; 0.25 s at most)", t);
+        free(b.p);
+        memset(&b, 0, sizeof(b));
+    }
+    /* 11/09/26 (the review's second reading): the same blocks behind the header of a picture large enough that its
+       budget is past them (1024 x 1024 in RGB: 6.3 MB): refused once 64 KB of the data have made nothing */
+    empty_blocks(&z, (size_t)4 << 20, 1);
+    png_start(&b, 1024, 1024, 8, 2, 0, 0, 0);
+    finish_png(&b, &z);
+    t = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == -1 && strstr(err, "makes nothing"), "a PNG of 1024 x 1024 and 4 MB of empty dynamic blocks: refused (%s)",
+           rc ? err : "read");
+    checkf(t < 0.25, "and in little time (%.3f s; 0.25 s at most)", t);
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    /* BMP: 16 megapixels in runs of 255 that all fall past the first row's end cost about what the same picture in
+       rows of runs does: each code's time is the pixels it draws, not the pixels it says */
+    rle_4000(&b, 0);
+    ref = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == 0, "an RLE8 BMP of 4000 x 4000 in rows (%s)", rc ? err : "read");
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    rle_4000(&b, 1);
+    t = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == 0, "an RLE8 BMP of 4000 x 4000 in 8 million runs past the row's end (%s)", rc ? err : "read");
+    checkf(t <= 4 * ref + 0.05, "within 4 times the time of the picture in rows (%.3f s against %.3f s)", t, ref);
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    /* JPEG: 128 scans over the 250,000 blocks of a 4000 x 4000 picture, 35 KB: refused at the 33rd scan
+       (WIMG_SCANS_MAX), within 16 times the time of the same picture in 2 scans */
+    scans_jpeg(&b, 4000, 4000, 2);
+    ref = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == 0, "a progressive JPEG of 4000 x 4000 in 2 scans (%s)", rc ? err : "read");
+    free(b.p);
+    memset(&b, 0, sizeof(b));
+    scans_jpeg(&b, 4000, 4000, 128);
+    t = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == -1 && strstr(err, "too many scans"), "the same in 128 scans (%zu bytes): refused (%s)", b.n, rc ? err : "read");
+    checkf(t <= 16 * ref + 0.05, "within 16 times the time of the 2 scans (%.3f s against %.3f s)", t, ref);
+    free(b.p);
+}
+
 /**** kinds, sizes ****/
 
 static void kinds(void) {
@@ -1761,6 +1940,7 @@ int main(int argc, char **argv) {
     bmp_files();
     bmp_long_run();
     jpeg_files();
+    bombs();
     check(ut_alloc_live == 0, "nothing held at the end");
     if(failures) {
         printf("WUNDERTOW IMAGE TESTS FAILED: %d of %d checks\n", failures, checks);

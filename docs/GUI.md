@@ -531,6 +531,10 @@ same. A fault in it costs only its window.
 
 ### Image Viewer
 
+*11/05/26:* the Image Viewer is the program `wview` now. Its views, keys and moving of a
+zoomed picture are the ones described here; what it reads and how much, in place of "What it
+reads" and "Size" below, and what it does besides, are in "Image Viewer (wview)" further down.
+
 **Image Viewer** shows BMP pictures. Double-click a `.bmp` in Files, or use the
 toolbar's Open or press O: the chooser lists a folder as Notepad's does.
 
@@ -688,6 +692,49 @@ for the programs of the desktop applications, and for any other program with a w
   is written there when there is a settings stick, once it has stood a second and a half (a run of
   clicks writes the stick once; a key held down changes it once) or when the desktop ends, and its
   last line says whether it was.
+
+### Image Viewer (wview)
+
+*11/05/26:* the **Image Viewer** is a program now, `wview` (`user/wview/`), out of the
+kernel, as the Clock and the Character Map are. Apps > Image Viewer starts it, or brings its
+window back when it runs already, and its window opens where the desktop's Image Viewer
+stood, looking the same; Files opens a picture in it, and `wview FILE` in the Terminal shows
+FILE. A fault in it, or a hostile file, costs only its window. Sketch's Open BMP and Save as
+BMP stay the desktop's (`shell/guibmp.c`). In "Image Viewer" above, the views, the keys and
+the moving of a zoomed picture hold; for the rest:
+
+* **What it reads.** BMP, PNG, GIF and JPEG, by libsurf's decoders (`user/include/image.h`,
+  the ones Wundertow's pages use): BMP of every depth, RLE and bit fields included; PNG of
+  every colour type and depth, interlaced or not; a GIF's first frame; JPEG baseline and
+  progressive. What kind a file is comes from its first bytes, not its name. A file of up to
+  32 MB is read whole (62 MB for a BMP, whose pixels are stored as they are), and a picture
+  of up to 4096 pixels a side and 16 megapixels is kept as it is, so that its actual size
+  shows every pixel. A file that is no picture, or one cut short, is said in the status bar,
+  and the picture shown stays.
+* **Transparency** (PNG's alpha and tRNS, a GIF's transparent colour, a BMP's alpha mask)
+  shows over squares of grey. Shown smaller than it is, each pixel is the average of those
+  it stands for; larger, the nearest.
+* **The folder.** N (or Space, or the toolbar's ►) shows the next picture of the file's
+  folder, P (or Backspace, ◄) the previous one, by name, with case not counted and numbers
+  counted as numbers (pic9 before pic10), around the ends. The status bar says the picture's
+  place ("(3 of 12)"). A file in the folder that is no picture is said, and the next press
+  goes on past it. The folder's first 4096 pictures are counted.
+* **Details** (I, or the toolbar's Details) shows over the picture the file's name, its
+  folder, its kind ("24-bit BMP", "PNG"), its size in bytes, the picture's size, when it was
+  changed, the zoom and its place in the folder. Esc or a click in the picture puts them
+  away.
+* **Copy path** (Ctrl+C, Edit > Copy, or the toolbar's Copy path) puts the file's whole path
+  on the desktop's clipboard: Edit > Paste in the Terminal gives it back.
+* **Open** (O, or the toolbar's Open) asks the desktop's chooser. A picture opened from
+  Files (Enter or a double-click) shows in the Image Viewer's one window: the `wview` there
+  closes and a new one takes its place. File > Open with in Files offers the Image Viewer
+  for every picture it reads (`rootfs/apps/wview.app`), and each file opened there starts
+  another `wview`, in a window of its own. A `wview` whose window does not come within 5
+  seconds is said in a message.
+* **The toolbar** is Open, ◄, ►, Fit, Actual (the actual size), Zoom in, Zoom out, Details
+  and Copy path; a button that can do nothing yet is grey.
+* **Closing.** Esc, Ctrl+W or the close button; there is nothing to save. The status bar
+  shows the name, the picture's size and kind and its place in the folder, and the zoom.
 
 ## Programs' windows
 

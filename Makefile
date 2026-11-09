@@ -79,6 +79,11 @@ USER_PROGS  += sed           # 11/01/26 (the command-line suite, track text): th
 USER_PROGS  += diff patch cmp comm join paste fold nl rev basename dirname od base64 strings file tree cal   # 11/01/26 (the command-line suite, track diff)
 USER_PROGS  += telnet        # 11/01/26 (the command-line suite, track net): the telnet client, user/telnet/
 USER_PROGS  += ftp           # 11/01/26 (the command-line suite, track net): the ftp client, user/ftp/
+USER_PROGS  += wview         # 11/05/26 (the desktop applications, track img): the Image Viewer as a program, user/wview/
+# wview: the Image Viewer, its model host-tested (tests/host/test_wview.c), its pictures libsurf's (image.h). Its rules
+# follow wcharmap's, after all:, so that they cannot be make's default goal
+WVIEW_SRC    = $(wildcard user/wview/*.c)
+WVIEW_OBJ    = $(WVIEW_SRC:user/wview/%.c=$(BUILD)/user/wview/%.o)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
@@ -351,6 +356,18 @@ $(BUILD)/user/bin/wcharmap: $(WCHARMAP_OBJ) $(USER_CRT0) $(USER_LIB) user/user.l
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHARMAP_OBJ) $(USER_LIB)
+
+# wview likewise (11/05/26, the desktop applications, track img)
+$(BUILD)/user/wview/%.o: user/wview/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/wview: $(WVIEW_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WVIEW_OBJ) $(USER_LIB)
+-include $(wildcard $(BUILD)/user/wview/*.d)
 
 # telnetd likewise
 $(BUILD)/user/telnetd/%.o: user/telnetd/%.c
@@ -1121,6 +1138,38 @@ $(BUILD)/host/test_keyscan: tests/host/test_keyscan.c include/surfos/keyscan.h
 	@mkdir -p $(dir $@)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_keyscan.c -o $@
 
+# 11/05/26 (the desktop applications, track img): libsurf's pictures, user/libsurf/image*.c (the decoders moved there from
+# user/wundertow/, and the encoders), on the host with Undertow's test allocator, so that a test counts what they hold
+# and fails any allocation; with libsurf's inflate, deflate and CRC-32. test_wundertow_image (with Wundertow's tests)
+# reads pictures with them; test_image_save writes pictures and reads them again, and tests/test_image_files.py reads
+# what it writes with Python's zlib (and with sips, on the Mac). Sanitizer runs are by hand, on the Mac
+# (docs/superpowers/plans/2026-11-05-desktop-apps-img.md).
+IMG_HOSTFLAGS = $(UT_HOSTFLAGS) -idirafter user/include
+IMG_HOST_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o image_save.o inflate.o deflate.o \
+                 crc32.o
+IMG_HOST = $(addprefix $(BUILD)/host/img/,$(IMG_HOST_NAMES))
+$(BUILD)/host/img/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/img/*.d)
+$(BUILD)/host/test_image_save: tests/host/test_image_save.c $(IMG_HOST) $(BUILD)/host/undertow/alloc.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(IMG_HOSTFLAGS) $^ -o $@
+unittest: unittest-img
+.PHONY: unittest-img
+# 11/05/26 (stage 2): wview's model, user/wview/view.c and folder.c as they are (they make no system calls)
+$(BUILD)/host/test_wview: tests/host/test_wview.c user/wview/view.c user/wview/folder.c user/wview/view.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wview tests/host/test_wview.c user/wview/view.c user/wview/folder.c -o $@
+unittest-img: $(BUILD)/host/test_image_save $(USER_LIB) $(BUILD)/host/test_wview $(BUILD)/user/bin/wview \
+              $(BUILD)/host/test_wundertow_image
+	$(BUILD)/host/test_image_save
+	$(PYTHON) tests/test_image_files.py $(BUILD)/host/test_image_save
+	$(BUILD)/host/test_wview
+	$(PYTHON) tests/test_image_jpeg.py $(BUILD)/host/test_wundertow_image tests/fixtures
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
@@ -1390,8 +1439,8 @@ test-wundertow-layout: $(BUILD)/host/test_wundertow_layout $(BUILD)/user/bin/wun
 unittest: test-wundertow-layout
 .PHONY: test-wundertow-layout
 
-$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o) \
-                                      $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_browser: tests/host/test_wundertow_browser.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o) \
+                                      $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1404,8 +1453,8 @@ unittest: test-wundertow-browser
 .PHONY: test-wundertow-browser
 
 # 11/1/26: forms: the model, what is sent to the byte, and the fields used as a person uses them
-$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
-                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_form: tests/host/test_wundertow_form.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o sheets.o) \
+                                   $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1440,8 +1489,8 @@ unittest: test-wundertow-style
 .PHONY: test-wundertow-style
 
 # ... and a page's sheets from the network, the browser driven as for its other tests
-$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o image_scale.o sheets.o) \
-                                     $(WT_HOST_DRAW) $(WT_HOST_UT)
+$(BUILD)/host/test_wundertow_sheets: tests/host/test_wundertow_sheets.c $(addprefix $(BUILD)/host/wundertow/,browser.o find.o sheets.o) \
+                                     $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1453,8 +1502,8 @@ unittest: test-wundertow-sheets
 
 # 11/1/26: the loader, over real pipes to forked children that say what the test scripted (the test is loadproc.c)
 $(BUILD)/host/test_wundertow_load: tests/host/test_wundertow_load.c \
-                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o image_scale.o sheets.o) \
-                                   $(WT_HOST_DRAW) $(WT_HOST_UT)
+                                   $(addprefix $(BUILD)/host/wundertow/,loader.o pump.o browser.o find.o sheets.o) \
+                                   $(BUILD)/host/img/image_scale.o $(WT_HOST_DRAW) $(WT_HOST_UT)
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(WT_HOSTFLAGS) $^ -o $@
@@ -1468,8 +1517,10 @@ unittest: test-wundertow-load
 # in the test, and the same test with UndefinedBehaviorSanitizer at SurfOS's ABI, as Undertow's HTML has it: signed
 # arithmetic that overflows only in 32 bits stops it (an unsigned size that wraps it does not see). AddressSanitizer
 # hangs at -m32 under qemu-i386: tests/host/test_wundertow_image.c is run under it by hand, on the Mac
-WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o
-WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/wundertow/,$(WT_IMAGE_NAMES))
+# 11/05/26 (track img): the decoders are libsurf's now (user/libsurf/image*.c, $(BUILD)/host/img/, above), with its
+# inflate and CRC-32; the test is as it was
+WT_IMAGE_NAMES = image.o image_bmp.o image_gif.o image_png.o image_jpeg.o image_scale.o inflate.o crc32.o
+WT_HOST_IMAGE  = $(addprefix $(BUILD)/host/img/,$(WT_IMAGE_NAMES))
 $(BUILD)/host/test_wundertow_image: tests/host/test_wundertow_image.c $(WT_HOST_IMAGE) \
                                     $(addprefix $(BUILD)/host/undertow/,util.o alloc.o)
 	@mkdir -p $(dir $@)
@@ -1497,7 +1548,13 @@ unittest: test-wundertow-css-ubsan
 .PHONY: test-wundertow-css-ubsan
 -include $(wildcard $(BUILD)/host/wundertow-ubsan/*.d)
 
-$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/wundertow-ubsan/,$(WT_IMAGE_NAMES)) \
+$(BUILD)/host/img-ubsan/%.o: user/libsurf/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -idirafter user/include -MMD -MP $(UT_ALLOC) -c $< -o $@
+-include $(wildcard $(BUILD)/host/img-ubsan/*.d)
+
+$(BUILD)/host/test_wundertow_image_ubsan: tests/host/test_wundertow_image.c $(addprefix $(BUILD)/host/img-ubsan/,$(WT_IMAGE_NAMES)) \
                                           $(BUILD)/host/undertow-ubsan/util.o $(BUILD)/host/undertow/alloc.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
@@ -1621,7 +1678,8 @@ $(BUILD)/user/bin/sha256sum: $(BUILD)/user/obj/sha256sum.o $(MBEDTLS_LIB) $(USER
 		$(USER_LIB)
 
 # 10/25/26: wundertow, its objects and Undertow's it uses, then Mbed TLS and libgcc, before libsurf (as fetch), whose
-# font it draws with (10/26/26)
+# font it draws with (10/26/26). 11/05/26 (the review of track img): libgcc again after libsurf, whose pictures it reads
+# (image_scale.c divides in 64 bits), so that libsurf's needs are met whatever wundertow's own objects call
 $(BUILD)/user/wundertow/%.o: user/wundertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
@@ -1631,7 +1689,7 @@ $(BUILD)/user/bin/wundertow: $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) $(MBEDTLS_LIB)
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WUNDERTOW_OBJ) $(WUNDERTOW_UT_OBJ) \
-		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB) $(UT_LIBGCC)
 
 # Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
 # run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also

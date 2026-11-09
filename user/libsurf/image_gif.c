@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: GIF pictures
+SurfOS user library: GIF pictures
 ----------------------
 File: image_gif.c  Date: 11/1/26
 ----------------------
@@ -10,13 +10,14 @@ ends before its last pixel is no picture. After it, nothing of the file is read.
 
 LZW (of 12 bits at most) goes into a table of 4096 strings, each a prefix code and its last byte. A string is written
 backwards from its end, its length known, so nothing is held but the table.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
 #define CODES 4096
 
@@ -241,7 +242,7 @@ int wimg_gif(const unsigned char *in, size_t len, struct wimg *out, char *err, s
     struct gif *g = malloc(sizeof(*g));
     const char *why;
     int said = 0;
-    if(!g) return ut_error(err, cap, "out of memory reading a GIF");
+    if(!g) return wimg_error(err, cap, "out of memory reading a GIF");
     memset(g, 0, offsetof(struct gif, prefix));
     g->in = in;
     g->len = len;

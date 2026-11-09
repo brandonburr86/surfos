@@ -1,5 +1,5 @@
 /*
-SurfOS Undertow's window: BMP pictures
+SurfOS user library: BMP pictures
 ----------------------
 File: image_bmp.c  Date: 11/1/26
 ----------------------
@@ -8,13 +8,14 @@ Windows and OS/2 bitmaps: the 12-byte header and the 40-byte one with its extens
 from the top. A JPEG or a PNG inside a BMP, and OS/2's own compressions, are refused. Every offset and size is
 checked against the file's real length in 64 bits: what the header says of the file's size is not looked at.
 A palette index past the palette is black. What RLE skips is not there (a transparent pixel).
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/ as it was.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <image.h>
 
 #define BI_RGB        0
 #define BI_RLE8       1
@@ -220,7 +221,9 @@ static void alpha_or_none(const struct bmp *b, struct wimg *m) {
     for(i = 0; i < n; i++) m->px[i] &= 0xffffff;
 }
 
-/* RLE4 and RLE8: the file's codes in pairs, the pixels from the bottom row up; pixels past a row's end are dropped */
+/* RLE4 and RLE8: the file's codes in pairs, the pixels from the bottom row up; pixels past a row's end are dropped.
+   11/05/26 (the review of track img): dropped at once, not one by one, so that a code's time is what it draws: a file
+   of runs that all fall past the row's end (255 pixels for two bytes) took seconds */
 static const char *rle(struct bmp *b, struct wimg *m) {
     const unsigned char *p = b->in + b->pixels, *end = b->in + b->len;
     int four = b->comp == BI_RLE4, x = 0, y = 0;
@@ -234,8 +237,9 @@ static const char *rle(struct bmp *b, struct wimg *m) {
         a = p[0];
         c = p[1];
         p += 2;
-        if(a) {                                     /* a run */
-            for(k = 0; k < (int)a; k++) {
+        if(a) {                                     /* a run: what fits in the row */
+            int fit = b->w - x < (int)a ? b->w - x : (int)a;
+            for(k = 0; k < fit; k++) {
                 if(four) PUT(k & 1 ? c & 15 : c >> 4);
                 else PUT(c);
             }
@@ -253,8 +257,9 @@ static const char *rle(struct bmp *b, struct wimg *m) {
             p += 2;
         } else {                                    /* c pixels as they are, kept to whole words */
             size_t bytes = four ? ((size_t)c + 1) / 2 : c, pad = bytes & 1;
+            int fit = b->w - x < (int)c ? b->w - x : (int)c;
             if((size_t)(end - p) < bytes + pad) return "a BMP whose RLE codes end too early";
-            for(k = 0; k < (int)c; k++) {
+            for(k = 0; k < fit; k++) {
                 if(four) PUT(k & 1 ? p[k / 2] & 15 : p[k / 2] >> 4);
                 else PUT(p[k]);
             }
@@ -268,13 +273,13 @@ static const char *rle(struct bmp *b, struct wimg *m) {
 int wimg_bmp(const unsigned char *in, size_t len, struct wimg *out, char *err, size_t cap) {
     struct bmp *b = calloc(1, sizeof(*b));
     const char *why;
-    if(!b) return ut_error(err, cap, "out of memory reading a BMP");
+    if(!b) return wimg_error(err, cap, "out of memory reading a BMP");
     b->in = in;
     b->len = len;
     why = header(b);
     if(why) {
         free(b);
-        return ut_error(err, cap, "%s", why);
+        return wimg_error(err, cap, "%s", why);
     }
     if(wimg_alloc(out, b->w, b->h, err, cap)) {
         free(b);

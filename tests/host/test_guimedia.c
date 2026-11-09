@@ -2,7 +2,9 @@
    against the in-memory file system and system of tests/host/gui_fake.c. Built and run by `make unittest` (unittest-gui).
    The BMP files are made here: each kind that is read, each that is refused, and hostile headers. A file system of
    its own (big_fs) adds files that are made as they are read: a 4,000,000,000-byte one for Hex and a 16384 x 16384
-   32-bit picture (1 GB) for the Image Viewer. */
+   32-bit picture (1 GB) for Sketch. 11/05/26 (track img of docs/superpowers/plans/2026-11-05-desktop-apps.md): the Image
+   Viewer is the program wview, so what is tested of it here is its entry (viewer_entry()); its views, keys and drawing
+   went with the code to tests/host/test_wview.c, its reading to libsurf's picture tests. */
 #include "gui_fake.h"
 #include "../../shell/gui_media.h"
 
@@ -98,13 +100,6 @@ static const char needle[] = "NEEDLE!!";
 #define SHOT_H 1080
 #define SHOT_SIZE (54u + SHOT_W * 3u * SHOT_H)  /* 6,220,854 bytes: a screenshot, under Sketch's 8 MB */
 static u32 big_reads, big_bytes;                /* read_at's calls and bytes, of every file */
-/* FAT's walk of a made file's cluster chain (4 KB clusters), as the kernel pays it since gui/suite 3f77dfe: the file
-   stays open through a frame's reads (walk_reset() is the frame's end), and a read goes on from where the last one left
-   off in the chain when it lies further on, from the start otherwise: where the walk is, the clusters walked, the
-   furthest reached */
-#define CLUSTER 4096
-static u32 walk_at, walk_steps, walk_far;
-static void walk_reset(void) { walk_at = walk_steps = walk_far = 0; }
 static int fail_after = -1;                     /* read_at fails (EIO) once this many more calls were made; -1: never */
 static const char *device = "";                 /* a path that stat says is a device */
 
@@ -151,12 +146,8 @@ static u8 pic_byte(u32 off, u32 w, u32 h, u32 bpp) {
     c = (off - 54) % stride;
     return c / (bpp / 8) < w ? (u8)(pic(c / (bpp / 8), h - 1 - r) >> (8 * (c % (bpp / 8)))) : 0;
 }
-#define PHOTO_SIZE (54u + 12000u * 3000)        /* 4000 x 3000 x 24 */
-#define NARROW_SIZE (54u + 2048u * 16384)       /* 682 x 16384 x 24: rows of 2,046 bytes and 2 of padding */
 #define TALL_SIZE (54u + 4096u * 16384)         /* 1024 x 16384 x 32 */
-static u8 photo_byte(u32 off) { return pic_byte(off, 4000, 3000, 24); }
 static u8 tall_byte(u32 off) { return pic_byte(off, 1024, 16384, 32); }
-static u8 narrow_byte(u32 off) { return pic_byte(off, 682, 16384, 24); }
 static u32 edge_size;                           /* a 2048 x 1000 24-bit picture (6 MB), then bytes to make it edge_size */
 static u8 edge_byte(u32 off) { return off < 54 ? head_byte(off, edge_size, 2048, 1000, 24) : 0x40; }
 
@@ -165,9 +156,7 @@ static bool made(const char *path, u32 *size, u8 (**byte)(u32)) {
     if(!strcmp(path, "/max.bin")) { *size = MAX_SIZE; *byte = big_byte; return true; }
     if(!strcmp(path, "/huge.bmp")) { *size = HUGE_SIZE; *byte = huge_byte; return true; }
     if(!strcmp(path, "/shot.bmp")) { *size = SHOT_SIZE; *byte = shot_byte; return true; }
-    if(!strcmp(path, "/photo.bmp")) { *size = PHOTO_SIZE; *byte = photo_byte; return true; }
     if(!strcmp(path, "/tall.bmp")) { *size = TALL_SIZE; *byte = tall_byte; return true; }
-    if(!strcmp(path, "/narrow.bmp")) { *size = NARROW_SIZE; *byte = narrow_byte; return true; }
     if(!strcmp(path, "/edge.bmp")) { *size = edge_size; *byte = edge_byte; return true; }
     return false;
 }
@@ -208,11 +197,6 @@ static int big_read_at(void *ctx, const char *path, u32 off, char *buf, u32 n, u
     for(i = 0; i < n; i++) buf[i] = (char)byte(off + i);
     *len = n;
     big_bytes += n;
-    if(n) {                                             /* from the place remembered, or else from the start */
-        walk_steps += (off + n - 1) / CLUSTER - (walk_at <= off / CLUSTER ? walk_at : 0);
-        walk_at = (off + n - 1) / CLUSTER;
-        if(walk_at > walk_far) walk_far = walk_at;
-    }
     return 0;
 }
 
@@ -379,161 +363,163 @@ static bool shows(int x, int y, const char *s, u32 fg) {
     return true;
 }
 
-static void viewer(void) {
-    struct gui_viewer *v = &g.viewer;
-    struct gui_window *w;
-    int x, y, pw, ph, i, n, k;
-    u32 sx, sy, c;
-    struct pointer_event e;
+/**** the Image Viewer: its entry (11/05/26) ****/
+
+/* The Image Viewer is the program wview: its tile and Apps start /initrd/bin/wview, or bring its window back; a file
+   (Files' rule for what no registry entry names, Open with) starts it with the file's path as its one argument, at the
+   Image Viewer's place; a start refused is said; the pictures it takes are the four kinds the program reads.
+   11/05/26 (the review): one from Files at a time: a file replaces the wview there (told to close, or ended when it
+   has no window yet, or did not go when told); a desktop whose programs have every window they may have starts
+   nothing; a wview whose window never comes is said on the screen */
+static void viewer_entry(void) {
+    int a, b, id, i, others[GUI_CLIENTS];
+    u32 n;
     desktop(960, 540);
-    qw = 42; qh = 30;
-    n = (int)bmp(file, 40, 42, 30, 24, 0, 0, NULL, quad);
-    fake_file("/home/q.bmp", (const char *)file, (u32)n);
-    memcpy(file, "\x89PNG\r\n\x1a\n", 8);
-    fake_file("/home/q.png", (const char *)file, 64);
-    gui_act(&g, ACT_WINDOW + GUI_VIEWER);
-    w = &g.win[GUI_VIEWER];
-    CHECK(g.focus == GUI_VIEWER && !v->ready && w->x == 168 && w->y == 110 && w->w == 560 && w->h == 400);
-    /* the chooser (O), then the picture: a small one is there at once */
-    key('o');
-    CHECK(g.dialog.kind == GUI_DLG_OPEN && g.dialog.act == gui_app_act(GUI_VIEWER, 1) && !strcmp(g.dialog.dir, "/"));
-    CHECK(choose("home") && choose("q.bmp"));
-    CHECK(!g.dialog.kind && v->ready && !v->loading && v->w == 42 && v->h == 30 && v->dw == 42 && v->dh == 30);
-    CHECK(!strcmp(v->path, "/home/q.bmp"));
-    /* Fit: enlarged by the largest whole number that fits the room (558 x 318): 10 times, centred */
-    viewer_place(&g, &x, &y, &pw, &ph);
-    CHECK(viewer_zoom(&g) == 10 * 65536 && pw == 420 && ph == 300 && x == 168 + 1 + 69 && y == 110 + 59 + 9);
-    gui_render(&g, &screen);
-    CHECK(fake_guards(960, 540));
-    CHECK(at(x + 5, y + 5) == TL && at(x + pw - 5, y + 5) == TR && at(x + 5, y + ph - 5) == BL && at(x + pw - 5, y + ph - 5) == BR);
-    CHECK(at(x + 209, y + 149) == TL && at(x + 210, y + 149) == TR && at(x + 209, y + 150) == BL && at(x + 210, y + 150) == BR);
-    CHECK(at(x - 1, y + 10) == NAVY && at(x + 10, y - 1) == NAVY && at(x + pw, y + 10) == NAVY && at(x + 10, y + ph) == NAVY);
-    /* the actual size (1), centred; zoom steps (+ and -) about the middle */
-    key('1');
-    viewer_place(&g, &x, &y, &pw, &ph);
-    CHECK(!v->fit && viewer_zoom(&g) == 65536 && pw == 42 && ph == 30 && x == 169 + 258 && y == 169 + 144);
-    gui_render(&g, &screen);
-    CHECK(at(x, y) == TL && at(x + 41, y) == TR && at(x, y + 29) == BL && at(x + 41, y + 29) == BR && at(x - 1, y) == NAVY);
-    CHECK(at(x + 20, y + 14) == TL && at(x + 21, y + 14) == TR && at(x + 21, y + 15) == BR);
-    key('+'); CHECK(viewer_zoom(&g) == 65536 * 3 / 2);
-    key('+'); CHECK(viewer_zoom(&g) == 2 * 65536);
-    key('-'); CHECK(viewer_zoom(&g) == 65536 * 3 / 2);
-    key('-'); key('-'); CHECK(viewer_zoom(&g) == 65536 * 2 / 3);
-    for(i = 0; i < 30; i++) key('-');
-    CHECK(viewer_zoom(&g) == 65536 / 64);
-    viewer_place(&g, &x, &y, &pw, &ph); CHECK(pw == 1 && ph == 1);   /* 42 / 64: never less than a pixel */
-    gui_render(&g, &screen); CHECK(fake_guards(960, 540));
-    for(i = 0; i < 30; i++) key('+');
-    CHECK(viewer_zoom(&g) == 16 * 65536);
-    /* 16 times: 672 x 480 in a room of 558 x 318; the middle stays where it was */
-    key('f'); CHECK(v->fit && viewer_zoom(&g) == 10 * 65536);
-    key('+'); CHECK(viewer_zoom(&g) == 12 * 65536);        /* 504 x 360: taller than the room, centred across */
-    CHECK(v->pan_x == 0 && v->pan_y == 21);
-    key('+'); CHECK(viewer_zoom(&g) == 16 * 65536 && v->pan_x == 57 && v->pan_y == 81);
-    gui_render(&g, &screen);
-    viewer_place(&g, &x, &y, &pw, &ph);
-    CHECK(pw == 672 && ph == 480 && x == 169 - 57 && y == 169 - 81);
-    CHECK(at(169, 169) == TL && at(169 + 557, 169) == TR && at(169, 169 + 317) == BL && at(169 + 557, 169 + 317) == BR);
-    CHECK(at(168, 200) != TL && fake_guards(960, 540));   /* the window's border, not the picture */
-    /* moving it: the arrows, Home, End, Page Up and Down, the wheel, a drag */
-    key(GUI_HOME); CHECK(v->pan_x == 0 && v->pan_y == 0);
-    key(GUI_LEFT); key(GUI_UP); CHECK(v->pan_x == 0 && v->pan_y == 0);
-    key(GUI_RIGHT); key(GUI_DOWN); CHECK(v->pan_x == 32 && v->pan_y == 32);
-    key(GUI_END); CHECK(v->pan_x == 672 - 558 && v->pan_y == 480 - 318);
-    key(GUI_RIGHT); CHECK(v->pan_x == 114);
-    key(GUI_PGUP); CHECK(v->pan_y == 0);
-    key(GUI_PGDN); CHECK(v->pan_y == 162);
-    gui_render(&g, &screen);
-    CHECK(at(169 + 557, 169 + 317) == BR && at(169, 169) == TL && fake_guards(960, 540));
-    memset(&e, 0, sizeof(e));
-    e.x = w->x + 300; e.y = w->y + 200; e.wheel = 1;     /* the wheel away from the user: up */
-    gui_pointer(&g, &e); CHECK(v->pan_y == 162 - 48);
-    e.wheel = 0; e.buttons = POINTER_LEFT; gui_pointer(&g, &e);
-    e.x += 40; e.y += 30; gui_pointer(&g, &e); CHECK(v->pan_x == 114 - 40 && v->pan_y == 114 - 30);
-    e.x += 1000; e.y += 1000; gui_pointer(&g, &e); CHECK(v->pan_x == 0 && v->pan_y == 0);
-    e.buttons = 0; gui_pointer(&g, &e); CHECK(!v->dragging);
-    /* a double-click switches between Fit and the actual size */
-    g.now += 1000;
-    fake_click(&g, w->x + 300, w->y + 200); g.now += 100; fake_click(&g, w->x + 301, w->y + 200);
-    CHECK(v->fit);
-    g.now += 1000;
-    fake_click(&g, w->x + 300, w->y + 200); g.now += 100; fake_click(&g, w->x + 300, w->y + 202);
-    CHECK(!v->fit && viewer_zoom(&g) == 65536);
-    g.now += 1000;
-    /* the toolbar: Open, Fit, Actual size, Zoom in, Zoom out (at 8, 58, 100, 206, 280 from the window's left) */
-    fake_click(&g, w->x + 70, w->y + 40); CHECK(v->fit);
-    fake_click(&g, w->x + 220, w->y + 40); CHECK(!v->fit && viewer_zoom(&g) == 12 * 65536);
-    fake_click(&g, w->x + 300, w->y + 40); CHECK(viewer_zoom(&g) == 8 * 65536);
-    fake_click(&g, w->x + 120, w->y + 40); CHECK(viewer_zoom(&g) == 65536);
-    fake_click(&g, w->x + 20, w->y + 40); CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
+    fake_file("/home/sea shore.png", "\x89PNG", 4);
+    fake_file("/home/q.bmp", "BM", 2);
+    fake_file("/home/r.gif", "GIF89a", 6);
+    CHECK(gui_app_viewer.program && !strcmp(gui_app_viewer.program, "/initrd/bin/wview"));
+    CHECK(viewer_takes("a.bmp") && viewer_takes("B.PNG") && viewer_takes("c.Gif") && viewer_takes("d.jpg") &&
+          viewer_takes("Screenshot 2026-11-05 120000.bmp") && viewer_takes("e.JPEG"));
+    CHECK(!viewer_takes(".bmp") && !viewer_takes("bmp") && !viewer_takes("a.bmpx") && !viewer_takes("a.tiff") &&
+          !viewer_takes("a.txt") && !viewer_takes("jpeg"));
+    gui_act(&g, ACT_WINDOW + GUI_VIEWER);               /* Apps > Image Viewer: the program, at the Image Viewer's place */
+    CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "/initrd/bin/wview") && !g.win[GUI_VIEWER].open);
+    CHECK(gui_app_slot_of(&g, 77) == GUI_VIEWER);
+    fake_run_result = 78;                               /* a file before its window came: that one is ended */
+    viewer_show(&g, "/home/sea shore.png");
+    CHECK(fake_killed == 77 && fake_run_file_count == 1 && !strcmp(fake_run_program, "wview"));
+    CHECK(!strcmp(fake_run_arg, "/home/sea shore.png") && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 78) == GUI_VIEWER && gui_app_slot_of(&g, 77) == -1 && fake_run_count == 1);
+    a = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 78);   /* wview's */
+    fake_win_present(a, 0x102E3B);                      /* its window comes: at the Image Viewer's place, in front */
+    ticks(1);
+    id = client_of_pid(&g, 78);
+    CHECK(id >= 0 && g.win[id].x == g.win[GUI_VIEWER].x && g.win[id].y == g.win[GUI_VIEWER].y && g.focus == id);
+    fake_killed = 0;                                    /* another file: the window there is told to close */
+    fake_run_result = 79;
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_win_count(a, WIN_EV_CLOSE) == 1 && !fake_killed && fake_run_file_count == 2);
+    CHECK(gui_app_slot_of(&g, 79) == GUI_VIEWER && gui_app_slot_of(&g, 78) == -1 && !g.dialog.kind);
+    fake_win_end(a);                                    /* wview ends: its window goes */
+    ticks(1);
+    CHECK(client_of_pid(&g, 78) < 0);
+    b = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 79);
+    fake_win_present(b, 0x102E3B);
+    ticks(1);
+    id = client_of_pid(&g, 79);
+    CHECK(id >= 0 && g.win[id].x == g.win[GUI_VIEWER].x && g.win[id].y == g.win[GUI_VIEWER].y);
+    client_close(&g, id);                               /* told to close by its button, and still there: */
+    CHECK(fake_win_count(b, WIN_EV_CLOSE) == 1);
+    fake_run_result = 80;                               /* the next file ends it */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_killed == 79 && fake_win_count(b, WIN_EV_CLOSE) == 1 && fake_run_file_count == 3 && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 80) == GUI_VIEWER);
+    fake_win_end(b);
+    ticks(1);
+    g.now += 5000;                                      /* 80's window never comes: said, once */
+    ticks(1);
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not shown"));
     key(27);
-    /* Fit follows the window: maximized, the room is 958 x 404 */
-    key('f');
-    gui_act(&g, ACT_MAXIMIZE); CHECK(w->max && viewer_zoom(&g) == 13 * 65536);
-    gui_render(&g, &screen); CHECK(fake_guards(960, 540));
-    viewer_place(&g, &x, &y, &pw, &ph); CHECK(at(x + 3, y + 3) == TL && at(x + pw - 3, y + ph - 3) == BR);
-    gui_act(&g, ACT_MAXIMIZE); CHECK(!w->max);
-    CHECK(gui_app_viewer.title_of != NULL);
-    {
-        char t[64];
-        gui_app_viewer.title_of(&g, t, sizeof(t));
-        CHECK(!strcmp(t, "q.bmp - Image Viewer"));
-    }
-    /* a file that is not a BMP: said, and the picture shown stays */
-    viewer_show(&g, "/home/q.png");
-    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && strstr(g.dialog.text[1], "PNG") && v->ready && !strcmp(v->path, "/home/q.bmp"));
+    ticks(2);
+    CHECK(!g.dialog.kind);
+    fake_run_result = -2;                               /* ENOENT: no such program; said, and nothing is the viewer's */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE);
     key(27);
-    viewer_show(&g, "/home/none.bmp"); CHECK(g.dialog.kind == GUI_DLG_MESSAGE && v->ready); key(27);
-    viewer_show(&g, "/home"); CHECK(g.dialog.kind == GUI_DLG_MESSAGE && v->ready); key(27);
-    /* 1,100,000 pixels of 8 bits: kept at fewer, read a piece at a time in the tick */
-    n = (int)bmp(file, 40, 1100, 1000, 8, 0, 256, gray256, ramp);
-    fake_file("/home/big.bmp", (const char *)file, (u32)n);
-    viewer_show(&g, "/home/big.bmp");
-    CHECK(v->loading && !v->ready && strstr(v->status, "Reading big.bmp") && v->dw * v->dh <= GUI_VIEW_PIXELS);
-    CHECK(v->dw < 1100 && v->dh < 1000 && v->next > 0 && v->next < v->dh);
-    gui_render(&g, &screen); CHECK(fake_guards(960, 540));
-    for(k = 0; k < 100 && v->loading; k++) ticks(1);
-    CHECK(v->ready && k >= 3 && k < 10 && !v->status[0]);
-    for(i = 0; i < 2000; i += 97) {                      /* each kept pixel is the one in the middle of what it stands for */
-        u32 dx = (u32)i % v->dw, dy = (u32)i * 7 % v->dh;
-        sx = (2 * dx + 1) * 1100 / (2 * v->dw);
-        sy = (2 * dy + 1) * 1000 / (2 * v->dh);
-        c = gray256[ramp(sx, sy)];
-        CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
+    fake_run_result = 81;                               /* no file: said, and nothing started */
+    viewer_show(&g, "/home/gone.png");
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0], "gone.png"));
+    key(27);
+    viewer_show(&g, "/home");
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE);
+    key(27);
+    device = "/home/q.bmp";                             /* a device named as a picture */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && strstr(g.dialog.text[1], "device"));
+    key(27);
+    device = "";
+    for(i = 0; i < GUI_CLIENTS; i++) {                  /* every window programs may have, none the viewer's: */
+        others[i] = fake_win_open(200, 100, 0, 0x203040, "Other", 200 + i);
+        fake_win_present(others[i], 0x203040);
     }
-    gui_render(&g, &screen); CHECK(fake_guards(960, 540));
-    /* Esc stops a reading; a file cut short while it is read is said */
-    viewer_show(&g, "/home/big.bmp"); CHECK(v->loading);
-    key(27); CHECK(!v->loading && !v->ready && !v->path[0] && strstr(v->status, "Stopped") && g.win[GUI_VIEWER].open);
-    viewer_show(&g, "/home/big.bmp"); CHECK(v->loading);
-    fake_file("/home/big.bmp", (const char *)file, (u32)n / 2);
-    ticks(10);                                          /* the tick says so in the window, never in a dialog */
-    CHECK(!v->loading && !v->ready && !g.dialog.kind && strstr(v->status, "big.bmp could not be read"));
-    gui_render(&g, &screen);
-    CHECK(shows(w->x + 17, w->y + 59 + 16, "big.bmp could not be read", CORAL) &&
-          shows(w->x + 17, w->y + 59 + 38, "Open a BMP picture", FOAM));
-    /* a picture of 16384 x 16384 x 32 bits (1 GB): kept at 1024 x 1024, a frame reading at most 256 KB (four rows),
-       the opening handler one */
-    viewer_show(&g, "/huge.bmp");
-    CHECK(v->loading && v->dw == 1024 && v->dh == 1024);
-    for(k = 0; k < 1000 && v->loading; k++) {
-        big_bytes = 0;
-        ticks(1);
-        if(big_bytes > 256 * 1024 + 65536) break;
-    }
-    CHECK(v->ready && k == 256 && big_bytes <= 256 * 1024);
-    for(i = 0; i < 1024; i += 61) {
-        sx = (2 * (u32)i + 1) * 16384 / 2048;
-        sy = (2 * (u32)(1023 - i) + 1) * 16384 / 2048;
-        CHECK(v->pixels[((1023 - i) * 1024 + i) * 3] == sx / 64 && v->pixels[((1023 - i) * 1024 + i) * 3 + 1] == sy / 64 &&
-              v->pixels[((1023 - i) * 1024 + i) * 3 + 2] == 0x40);
-    }
-    gui_render(&g, &screen); CHECK(fake_guards(960, 540));
-    /* closing the window forgets the picture */
-    gui_close(&g, GUI_VIEWER); CHECK(!v->ready && !v->path[0]);
+    ticks(2);
+    CHECK(client_count(&g) == GUI_CLIENTS);
+    viewer_show(&g, "/home/q.bmp");                     /* nothing starts: its window could not open */
+    CHECK(fake_run_file_count == 4 && g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not opened"));
+    key(27);
+    for(i = 0; i < GUI_CLIENTS; i++) fake_win_end(others[i]);
+    ticks(2);
+    /* only Sketch's three numbers go to Sketch */
+    gui_answer(&g, gui_app_act(GUI_VIEWER, 23), 0, "/home/zz.bmp", "");
+    gui_answer(&g, gui_app_act(GUI_VIEWER, 19), 0, "/home/zz.bmp", "");
+    CHECK(!g.dialog.kind && !fake_data("/home/zz.bmp", &n));
+    fake_run_result = 77;
+    gui_finish(&g);
 }
 
-/* no files at all: the windows say so, and nothing opens */
+/* 11/09/26 (the review's second reading): a wview told to close that does not go is ended, 5 s later or at the next
+   file; and when programs have every window they may have, the viewer's among them, it is ended rather than asked, so
+   that the new one has its place */
+static void viewer_replaced(void) {
+    int a, b, c, d, i, others[GUI_CLIENTS - 1];
+    desktop(960, 540);
+    fake_file("/home/sea shore.png", "\x89PNG", 4);
+    fake_file("/home/r.gif", "GIF89a", 6);
+    fake_file("/home/q.bmp", "BM", 2);
+    fake_run_result = 78;
+    viewer_show(&g, "/home/sea shore.png");
+    a = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 78);
+    fake_win_present(a, 0x102E3B);
+    ticks(1);
+    fake_run_result = 79;                               /* told to close, and it does not go */
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_win_count(a, WIN_EV_CLOSE) == 1 && !fake_killed && gui_app_slot_of(&g, 79) == GUI_VIEWER);
+    b = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 79);
+    fake_win_present(b, 0x102E3B);
+    ticks(1);
+    g.now += 4900;
+    ticks(1);
+    CHECK(!fake_killed);                                /* not yet */
+    g.now += 200;
+    ticks(1);
+    CHECK(fake_killed == 78 && client_of_pid(&g, 78) >= 0 && !g.dialog.kind);   /* ended: its window goes as it ends */
+    fake_win_end(a);
+    ticks(2);
+    CHECK(client_of_pid(&g, 78) < 0 && client_of_pid(&g, 79) >= 0);
+    fake_killed = 0;
+    fake_run_result = 80;                               /* the next file: 79 told to close, and stays */
+    viewer_show(&g, "/home/sea shore.png");
+    CHECK(fake_win_count(b, WIN_EV_CLOSE) == 1 && !fake_killed);
+    c = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "sea shore.png - Image Viewer", 80);
+    fake_win_present(c, 0x102E3B);
+    ticks(1);
+    fake_run_result = 81;                               /* another before 5 s: 79, still there, is ended, 80 told to close */
+    viewer_show(&g, "/home/r.gif");
+    CHECK(fake_killed == 79 && fake_win_count(c, WIN_EV_CLOSE) == 1 && gui_app_slot_of(&g, 81) == GUI_VIEWER);
+    fake_win_end(b);
+    fake_win_end(c);                                    /* 80 goes: nothing to end later */
+    d = fake_win_open(558, 371, WIN_RESIZABLE, 0x102E3B, "r.gif - Image Viewer", 81);
+    fake_win_present(d, 0x102E3B);
+    ticks(2);
+    fake_killed = 0;
+    g.now += 6000;
+    ticks(1);
+    CHECK(!fake_killed && client_of_pid(&g, 81) >= 0 && client_count(&g) == 1);
+    for(i = 0; i < GUI_CLIENTS - 1; i++) {              /* every window programs may have, the viewer's among them: */
+        others[i] = fake_win_open(200, 100, 0, 0x203040, "Other", 300 + i);
+        fake_win_present(others[i], 0x203040);
+    }
+    ticks(2);
+    CHECK(client_count(&g) == GUI_CLIENTS);
+    fake_run_result = 82;                               /* the viewer is ended, not asked, and the new one starts */
+    viewer_show(&g, "/home/q.bmp");
+    CHECK(fake_killed == 81 && !fake_win_count(d, WIN_EV_CLOSE) && fake_run_file_count == 5 && !g.dialog.kind);
+    CHECK(gui_app_slot_of(&g, 82) == GUI_VIEWER && !g.viewer.asked_pid);
+    fake_run_result = 77;
+    gui_finish(&g);
+}
+
 static void no_files(void) {
     gui_init(&g, 640, 400);
     fake_screen(&screen, 640, 400);
@@ -849,127 +835,6 @@ static void sketch(void) {
 
 /**** what the first review found ****/
 
-static u32 stripes(u32 x, u32 y) { return ((x >> 5) ^ (y >> 9)) & 1; }
-static const u32 reds[2] = { 0xFF0000, 0xFF0000 };
-static u32 zero(u32 x, u32 y) { (void)x; (void)y; return 0; }
-
-/* the Image Viewer: a reading that fails in the tick never replaces a dialog in front (Notepad's question about
-   unsaved changes, a chooser with a name typed in it); a frame's reads; 4- and 1-bit pictures; "kept at"; a file
-   refused while another is read; dialogs' numbers that are not Sketch's */
-static void review_viewer(void) {
-    struct gui_viewer *v = &g.viewer;
-    struct gui_window *w;
-    int x, y, pw, ph;
-    u32 n, i, k, most, frames, dx, dy, sx, sy;
-    /* Notepad's question is in front when the reading fails: it stays, and so does what it waits for */
-    desktop(960, 540);
-    n = bmp(file, 40, 1100, 1000, 8, 0, 256, gray256, ramp);
-    fake_file("/home/big.bmp", (const char *)file, n);
-    fake_file("/home/n.txt", "hello\n", 6);
-    viewer_show(&g, "/home/big.bmp");
-    CHECK(v->loading && note_load(&g, "/home/n.txt") == 0);
-    gui_open(&g, GUI_NOTEPAD);
-    fake_type(&g, "x");
-    key(17);
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == ACT_DLG_GUARD && g.pending == PEND_QUIT);
-    fake_file("/home/big.bmp", (const char *)file, n / 2);
-    ticks(10);
-    CHECK(!v->loading && !v->ready && strstr(v->status, "big.bmp could not be read"));
-    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == ACT_DLG_GUARD && g.pending == PEND_QUIT);
-    key(27);                                            /* Cancel: nothing waits any more */
-    CHECK(!g.dialog.kind && g.pending == PEND_NONE && !g.quit);
-    key(19);                                            /* a later Ctrl+S in Notepad saves, and the desktop stays */
-    CHECK(!g.quit && !g.note.modified && !g.dialog.kind);
-    gui_open(&g, GUI_VIEWER);
-    w = &g.win[GUI_VIEWER];
-    gui_render(&g, &screen);
-    CHECK(shows(w->x + 17, w->y + 59 + 16, "big.bmp could not be read", CORAL));
-    CHECK(shows(w->x + 10, w->y + 377 + 3, "big.bmp could not be read", INK));   /* and its status bar */
-    /* Sketch's Save chooser with a name typed in it: it stays, and saves */
-    desktop(960, 540);
-    fake_file("/home/big.bmp", (const char *)file, n);
-    viewer_show(&g, "/home/big.bmp");
-    key(4); key(19);
-    field_set(&g.dialog.field, "my-drawing.bmp", false);
-    fake_file("/home/big.bmp", (const char *)file, n / 2);
-    ticks(10);
-    CHECK(!v->loading && g.dialog.kind == GUI_DLG_SAVE && !strcmp(g.dialog.field.text, "my-drawing.bmp"));
-    key('\r');
-    CHECK(!g.dialog.kind && fake_data("/my-drawing.bmp", &k) && k == GUI_SKETCH_FILE);
-    /* the first piece, read in the chooser's answer, and each frame: 16 reads at most, 256 KB and a chunk at most;
-       short rows that a reduced picture takes every other of are read as spans of the file, not a read each */
-    desktop(960, 540);
-    n = bmp(file, 40, 256, 16384, 1, 0, 2, four, stripes);
-    fake_file("/home/thin.bmp", (const char *)file, n);
-    big_reads = big_bytes = 0;
-    viewer_show(&g, "/home/thin.bmp");
-    CHECK(v->dw == 128 && v->dh == 8192 && big_reads >= 2 && big_reads <= 1 + 16 && big_bytes <= 2048 + 256 * 1024 + GUI_VIEW_CHUNK);
-    for(most = frames = 0; v->loading && frames < 100; frames++) {
-        big_reads = big_bytes = 0;
-        ticks(1);
-        if(big_reads > most) most = big_reads;
-        CHECK(big_bytes <= 256 * 1024 + GUI_VIEW_CHUNK);
-    }
-    CHECK(v->ready && most <= 16 && frames < 10);
-    for(i = 0; i < 64; i++) {                           /* each kept pixel the one in the middle of what it stands for */
-        dx = i * 37 % v->dw; dy = i * 977 % v->dh;
-        sx = (2 * dx + 1) * 256 / (2 * v->dw); sy = (2 * dy + 1) * 16384 / (2 * v->dh);
-        CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(four[stripes(sx, sy)] >> 16) &&
-              v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)four[stripes(sx, sy)]);
-    }
-    n = bmp(file, 40, 1024, 1100, 8, 0, 256, gray256, ramp);
-    fake_file("/home/wide.bmp", (const char *)file, n);
-    big_reads = 0;
-    viewer_show(&g, "/home/wide.bmp");
-    CHECK(big_reads <= 1 + 16);
-    for(most = frames = 0; v->loading && frames < 100; frames++) { big_reads = 0; ticks(1); if(big_reads > most) most = big_reads; }
-    CHECK(v->ready && most <= 16);
-    /* 4-bit and 1-bit pictures through the viewer, on the screen: 13 x 7, enlarged 16 times */
-    qw = 13; qh = 7;
-    n = bmp(file, 40, 13, 7, 4, 0, 4, four, quad_index);
-    fake_file("/home/q4.bmp", (const char *)file, n);
-    viewer_show(&g, "/home/q4.bmp");
-    viewer_place(&g, &x, &y, &pw, &ph);
-    gui_render(&g, &screen);
-    CHECK(v->ready && v->bmp.bpp == 4 && pw == 208 && ph == 112);
-    CHECK(at(x + 95, y + 47) == TL && at(x + 96, y + 47) == TR && at(x + 95, y + 48) == BL && at(x + 96, y + 48) == BR &&
-          at(x + pw - 1, y + ph - 1) == BR && at(x, y) == TL);
-    n = bmp(file, 40, 13, -7, 1, 0, 2, four, bits);
-    fake_file("/home/b1.bmp", (const char *)file, n);
-    viewer_show(&g, "/home/b1.bmp");
-    viewer_place(&g, &x, &y, &pw, &ph);
-    gui_render(&g, &screen);
-    CHECK(v->ready && v->bmp.bpp == 1 && v->bmp.topdown && pw == 208);
-    CHECK(at(x + 8, y + 8) == TL && at(x + 24, y + 8) == TR && at(x + 8, y + 24) == TR && at(x + 12 * 16 + 8, y + 6 * 16 + 8) == TL);
-    /* a picture of more than 1,048,576 pixels: the status bar says what it was kept at */
-    desktop(960, 540);                                  /* (the fake's pool of 2 MB is full) */
-    n = bmp(file, 40, 1100, 1000, 8, 0, 256, gray256, ramp);
-    fake_file("/home/big.bmp", (const char *)file, n);
-    viewer_show(&g, "/home/big.bmp");
-    ticks(10);
-    gui_render(&g, &screen);
-    w = &g.win[GUI_VIEWER];
-    CHECK(v->ready && shows(w->x + 10, w->y + 377 + 3, "big.bmp  1100 x 1000, 8-bit, kept at 1073 x 976", INK));
-    /* a file refused while another is read (its palette checked aside): that reading goes on, its colours its own */
-    viewer_show(&g, "/home/big.bmp");
-    CHECK(v->loading);
-    n = bmp(file, 40, 10, 10, 8, 0, 2, reds, zero);
-    fake_file("/home/cut.bmp", (const char *)file, n - 20);
-    viewer_show(&g, "/home/cut.bmp");
-    CHECK(v->loading && g.dialog.kind == GUI_DLG_MESSAGE && strstr(g.dialog.text[1], "cut short"));
-    key(27);
-    ticks(10);
-    CHECK(v->ready && !strcmp(v->path, "/home/big.bmp") && v->pixels[0] == v->pixels[1] && v->pixels[1] == v->pixels[2]);
-    for(i = 0, k = 0; i < v->dw * v->dh * 3; i += 3) if(v->pixels[i] != v->pixels[i + 2]) k++;
-    CHECK(k == 0);                                      /* grays all of it: no red from the refused file's palette */
-    /* only Sketch's three numbers go to Sketch */
-    gui_answer(&g, gui_app_act(GUI_VIEWER, 23), 0, "/home/zz.bmp", "");
-    gui_answer(&g, gui_app_act(GUI_VIEWER, 19), 0, "/home/zz.bmp", "");
-    CHECK(!g.dialog.kind && !fake_data("/home/zz.bmp", &k) && v->ready);
-}
-
-/* Hex: a Find that is no pattern, a copy that fails part-way or is too big, Find next after "Not found", read errors,
-   devices, and the view at the end of a 4 GB file */
 static void review_hex(void) {
     struct gui_hex *h = &g.hex;
     static u8 data[200000];
@@ -1096,94 +961,20 @@ static void review_sketch(void) {
    0c245c0 took 40 and 63 frames, reading only the rows they need; 2a75187 took 81 and 204, reading the rows they skip
    too. They must take one frame more at most (the opening handler reads one piece, no more), read the rows they
    need and no others, and keep a frame to 128 reads and 256 KB and a chunk, with every pixel right where looked at */
-static void review_frames(void) {
-    static const struct { const char *path; u32 w, h, frames, bytes; } pics[] = {
-        { "/photo.bmp", 4000, 3000, 41, 2048 + 887 * 12000 },
-        { "/tall.bmp", 1024, 16384, 64, 2048 + 4096 * 4096 },
-    };
-    struct gui_viewer *v = &g.viewer;
-    u32 i, j, frames, total, most_reads, most_bytes, dx, dy, c;
-    for(i = 0; i < 2; i++) {
-        desktop(960, 540);
-        big_reads = big_bytes = 0;
-        viewer_show(&g, pics[i].path);
-        CHECK(v->loading && big_reads == 2 && big_bytes <= 2048 + GUI_VIEW_CHUNK);   /* the headers, then one read */
-        total = big_bytes;
-        most_reads = most_bytes = 0;
-        for(frames = 0; v->loading && frames < 1000; frames++) {
-            big_reads = big_bytes = 0;
-            walk_reset();
-            ticks(1);
-            total += big_bytes;
-            if(big_reads > most_reads) most_reads = big_reads;
-            if(big_bytes > most_bytes) most_bytes = big_bytes;
-            CHECK(walk_steps == walk_far);              /* one walk a frame, to its furthest read: the reads go forward */
-        }
-        CHECK(v->ready && v->w == pics[i].w && v->h == pics[i].h);
-        CHECK(frames <= pics[i].frames && total == pics[i].bytes && most_reads <= 128 && most_bytes <= 256 * 1024 + GUI_VIEW_CHUNK);
-        if(frames > pics[i].frames || total != pics[i].bytes)
-            printf("  (%s: %u frames, %u bytes read)\n", pics[i].path, frames, total);
-        for(j = 0; j < 97; j++) {
-            dx = j * 389 % v->dw;
-            dy = j * 1291 % v->dh;
-            c = pic((2 * dx + 1) * v->w / (2 * v->dw), (2 * dy + 1) * v->h / (2 * v->dh));
-            CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 1] == (u8)(c >> 8) &&
-                  v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
-        }
-    }
-}
-
-/* the third review: a tall picture with short rows, 682 x 16384 x 24 (rows of 2,048 bytes, which a read counts for at
-   least anyway), kept at a third or so of its rows: each row it needs is a read of its own (none is next to another),
-   so every frame makes 128 reads exactly, but the last; the bytes are those rows' and no others; the reads of a frame
-   go forward, so that on the kernel, which keeps the file open through a frame since gui/suite 3f77dfe, a frame walks
-   the cluster chain once, to its furthest read (8,193 clusters of 4 KB at most here, where a walk from the start for
-   each read cost up to a million); and the pixels are right where looked at */
-static void review_cap(void) {
-    struct gui_viewer *v = &g.viewer;
-    u32 frames, rows, total, worst = 0, j, dx, dy, c;
-    desktop(960, 540);
-    big_reads = big_bytes = 0;
-    walk_reset();
-    viewer_show(&g, "/narrow.bmp");
-    CHECK(v->loading && v->dh > 4096 && v->dh < 8192 && big_reads == 2 && big_bytes == 2048 + 2048 && walk_steps == walk_far);
-    total = big_bytes;
-    rows = v->dh - 1;                                   /* the rows still to read, each a read */
-    for(frames = 0; v->loading && frames < 1000; frames++) {
-        big_reads = big_bytes = 0;
-        walk_reset();
-        ticks(1);
-        total += big_bytes;
-        CHECK(big_reads == (rows < 128 ? rows : 128) && big_bytes == big_reads * 2048 && walk_steps == walk_far &&
-              walk_far <= NARROW_SIZE / CLUSTER);
-        rows -= big_reads <= rows ? big_reads : rows;
-        if(walk_steps > worst) worst = walk_steps;
-    }
-    CHECK(v->ready && !rows && frames == (v->dh - 1 + 127) / 128 && total == 2048 + v->dh * 2048 && worst > 4096);
-    for(j = 0; j < 97; j++) {
-        dx = j * 61 % v->dw;
-        dy = j * 1291 % v->dh;
-        c = pic((2 * dx + 1) * v->w / (2 * v->dw), (2 * dy + 1) * v->h / (2 * v->dh));
-        CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 1] == (u8)(c >> 8) &&
-              v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
-    }
-}
-
 /**** every window inside the screen ****/
 
 static void windows(int width, int height) {
-    static const int ids[] = { GUI_VIEWER, GUI_HEX, GUI_SKETCH };
+    static const int ids[] = { GUI_HEX, GUI_SKETCH };
     int i, k, n;
     struct gui_window *w;
     desktop(width, height);
     qw = 42; qh = 30;
     n = (int)bmp(file, 40, 42, 30, 24, 0, 0, NULL, quad);
     fake_file("/home/q.bmp", (const char *)file, (u32)n);
-    for(i = 0; i < 3; i++) {
+    for(i = 0; i < 2; i++) {
         gui_open(&g, ids[i]);
         w = &g.win[ids[i]];
         CHECK(g.win[ids[i]].open && g.focus == ids[i] && w->x >= 0 && w->x + w->w <= width && w->y + w->h <= height - TASK_H);
-        if(ids[i] == GUI_VIEWER) { viewer_show(&g, "/home/q.bmp"); key('+'); key('+'); key('+'); key(GUI_END); }
         if(ids[i] == GUI_HEX) { hex_show(&g, "/big.bin"); key(GUI_END); g.hex.anchor = g.hex.cursor - 40; }
         if(ids[i] == GUI_SKETCH) strlcpy(g.viewer.sketch.status, "Saved a name that is far too long to fit in the window.bmp", GUI_STATUS);
         for(k = 0; k < 3; k++) ticks(1);
@@ -1199,17 +990,14 @@ static void windows(int width, int height) {
         gui_render(&g, &screen); CHECK(fake_guards(width, height));
         gui_place(&g, ids[i]);
     }
-    CHECK(gui_app_viewer.min_width() <= 640 - 48 && gui_app_hex.min_width() <= 640 - 48);
+    CHECK(gui_app_hex.min_width() <= 640 - 48);
     /* the dialogs over them */
     gui_open(&g, GUI_HEX); key(6); gui_render(&g, &screen); CHECK(fake_guards(width, height)); key(27);
     gui_open(&g, GUI_SKETCH); key(19); gui_render(&g, &screen); CHECK(fake_guards(width, height)); key(27);
-    viewer_show(&g, "/huge.bmp"); gui_render(&g, &screen); CHECK(fake_guards(width, height)); key(27);
     gui_finish(&g);
-    for(i = 0; i < 2; i++) {
-        gui_open(&g, ids[i]);
-        gui_act(&g, ACT_CLOSE);
-        CHECK(!g.win[ids[i]].open);
-    }
+    gui_open(&g, GUI_HEX);
+    gui_act(&g, ACT_CLOSE);
+    CHECK(!g.win[GUI_HEX].open);
     /* Help's lines fit its window at 640 x 400: 62 cells */
     for(i = 0; i < gui_app_viewer.help_lines; i++) CHECK(strlen(gui_app_viewer.help[i]) <= 60);
     for(i = 0; i < gui_app_hex.help_lines; i++) CHECK(strlen(gui_app_hex.help[i]) <= 60);
@@ -1218,15 +1006,13 @@ static void windows(int width, int height) {
 int main(void) {
     bmp_reading();
     bmp_refusing();
-    viewer();
+    viewer_entry();
+    viewer_replaced();
     no_files();
     hex();
     sketch();
-    review_viewer();
     review_hex();
     review_sketch();
-    review_frames();
-    review_cap();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);

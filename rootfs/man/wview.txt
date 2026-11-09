@@ -1,0 +1,49 @@
+wview - the Image Viewer: pictures in a window
+
+SYNOPSIS
+    wview [FILE]
+
+DESCRIPTION
+    A window that shows a BMP, PNG, GIF or JPEG picture, fitted to the
+    window, at its actual size or zoomed from 1/64 to 16 times, and
+    moved about when it is larger than the window. What kind a file is
+    comes from its first bytes, not from its name. The picture's
+    transparency shows over squares of grey.
+
+    The desktop starts it from Files and from Apps > Image Viewer;
+    "wview FILE" in the Terminal shows FILE. Open chooses a picture
+    with the desktop's chooser. The next and previous picture are the
+    other pictures of the file's folder, by name, numbers counted as
+    numbers, around the ends. Details shows the file's name, folder,
+    kind, size, the picture's size, when it was changed and its place
+    in the folder. Copy path puts the file's whole path on the
+    desktop's clipboard.
+
+KEYS
+    O              Open a picture
+    N, Space       the folder's next picture
+    P, Backspace   its previous picture
+    F, 0           fit the picture to the window
+    1              its actual size
+    + and -        zoom in and out
+    arrows         move a zoomed picture; Page Up, Page Down, Home
+                   and End too, and the wheel, or drag it
+    I              the details; Esc puts them away
+    Ctrl+C         copy the path (the desktop's Edit > Copy)
+    Esc, Ctrl+W    close the window
+
+    A double-click switches between fitting and the actual size.
+
+LIMITS
+    A file is read whole: 32 MB at most, or 62 MB for a BMP, whose
+    pixels are stored as they are (16 megapixels of 32 bits). A
+    picture of 4096 pixels a side and 16 megapixels at most; a GIF's
+    first frame only; JPEG baseline and progressive (32 scans at most),
+    not arithmetic, 12-bit or lossless. A folder's first 4096 pictures
+    are stepped through. Opening a file from Files shows it in the
+    Image Viewer's one window, in place of the picture there; File >
+    Open with starts another. It shows and never changes a picture:
+    there is nothing to save.
+
+SEE ALSO
+    gui, files, wundertow, wclock, wcharmap

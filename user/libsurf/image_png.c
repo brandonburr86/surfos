@@ -1,52 +1,55 @@
 /*
-SurfOS Undertow's window: PNG pictures
+SurfOS user library: PNG pictures
 ----------------------
 File: image_png.c  Date: 11/1/26
 ----------------------
-PNG, with an inflate of its own: every colour type and depth of the standard, a palette and tRNS, Adam7 interlacing,
-16 bits per sample kept to their high 8. An animated PNG shows its default image. A chunk is checked whole by its CRC
-when it is reached, if it is one that is read: IHDR first, PLTE, IDAT; an unknown critical chunk stops the picture, an
-ancillary one is passed over. Three things a real file may do are let by, as browsers let them by, with nothing at risk:
-a palette longer than the depth holds is cut, a tRNS that makes no sense or fails its CRC is ignored, and inflate stops
-at the first byte past the last row. A stream that ends badly before that byte is refused, though: its blocks' ends
-and its Adler-32 are checked when rows and stream end together, as they do in any file that is whole.
+PNG: every colour type and depth of the standard, a palette and tRNS, Adam7 interlacing, 16 bits per sample kept to
+their high 8. An animated PNG shows its default image. A chunk is checked whole by its CRC when it is reached, if it
+is one that is read: IHDR first, PLTE, IDAT; an unknown critical chunk stops the picture, an ancillary one is passed
+over. Three things a real file may do are let by, as browsers let them by, with nothing at risk: a palette longer
+than the depth holds is cut, a tRNS that makes no sense or fails its CRC is ignored, and inflate stops at the first
+byte past the last row. A stream that ends badly before that byte is refused, though: its blocks' ends and its
+Adler-32 are checked when rows and stream end together, as they do in any file that is whole.
 
-Nothing is held of the file's data but what the format needs: the inflate's 32 KB window, and two rows. Bytes come
-out of inflate one at a time into the row being made; each whole row is unfiltered and turned into pixels. So a
-small file that says it inflates to gigabytes costs nothing: the bytes a picture of its size can hold are known from
-its header, and inflate stops at the first one past them. Inflate's input is the IDAT chunks one after the other, a
-byte at a time, however they are cut.
+Nothing is held of the file's data but what the format needs: the inflate's 32 KB window, a few KB of what it made,
+and two rows. Bytes go from inflate into the row being made; each whole row is unfiltered and turned into pixels. So
+a small file that says it inflates to gigabytes costs nothing: the bytes a picture of its size holds are known from
+its header, and inflate is given room for one byte past them and no more. Its input is the IDAT chunks one after
+the other, however they are cut, each checked by its CRC when inflate needs its first byte.
+
+11/05/26 (the desktop applications, track img): moved here from user/wundertow/, and its inflate is libsurf's
+(inflate.c, RFC 1951), so that the tree has one; the CRC is libsurf's too (crc32.c). What it reads is as before,
+but for a deflate stream whose Huffman codes have room left over (an incomplete code, RFC 1951 section 3.2.7) or no
+code for a block's end: the old inflate went on with such a stream until a code fell into the hole, libsurf's
+refuses it at once, as zlib does, so libpng's readers never show such a file either.
+11/05/26 (the review of track img): the data's input is bounded too. A stream that makes nothing for long (empty
+blocks, each with its tables) made a small picture cost seconds; now the IDAT bytes inflate is given stop at twice the
+rows' bytes, 8 more a row and 4 KB (data_budget()): deflate's worst, stored blocks, adds 5 bytes to 64 KB, and an
+encoder that flushes at every row 6 a row, so no real file comes near it.
+11/09/26 (the review's second reading): and the input that makes nothing. A picture large enough has a budget no file
+of 32 MiB reaches, so empty blocks behind its header still cost seconds; now inflate is refused once QUIET_MAX bytes
+of the data have gone by without its making a byte. Between two bytes a real stream has a block's header (a dynamic
+one's tables are under 300 bytes) or a flush (5), so 64 KB is far past anything real.
 */
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include "undertow.h"
-#include "image.h"
+#include <crc32.h>
+#include <inflate.h>
+#include <image.h>
 
-#define WINDOW   32768u
-#define FAST     9                              /* bits of a code that the quick table covers */
-#define LITS     288
-#define DISTS    32
+#define MADE     4096                           /* inflate's output at a time, on its way into rows */
+#define QUIET_MAX 65536                         /* the data's bytes inflate may take without making one */
 #define WORDS(x) #x
 #define WORD(x)  WORDS(x)
 #define OVER_SIDE "a PNG over the limit of " WORD(WIMG_SIDE_MAX) " pixels a side"
-
-struct huff {
-    unsigned short fast[1 << FAST];             /* the low bits of the input: length << 9 | symbol; 0: a longer code */
-    unsigned int limit[17];                     /* codes of s bits are below limit[s], left aligned to 16 bits */
-    unsigned short first[16];                   /* the first code of each length */
-    unsigned short index[16];                   /* its place in sym[] */
-    unsigned short sym[LITS];
-    unsigned char len[LITS];
-};
 
 struct png {
     const unsigned char *in;
     size_t len, pos;                            /* the place in the file */
     size_t left;                                /* bytes left of this IDAT */
     int ended;                                  /* the IDAT chunks ended, or the next was not whole */
-    unsigned int crc[256];
     int w, h, depth, color, interlaced;
     int channels;
     unsigned int bytes;                         /* the distance of the filters: a pixel's bytes, at least 1 */
@@ -62,18 +65,13 @@ struct png {
     int filter;
     int pass, y, pw, ph;                        /* the Adam7 pass (0-6, or 0), the row in it, its size */
     int done;                                   /* the last row was made */
-    /* inflate */
-    unsigned int bits;
-    int nbits;
-    int bad;                                    /* the data ended, or a row's filter is none */
-    int made_up;                                /* of nbits, how many are zeros made up past the data's end */
-    int over;                                   /* data past the last row: inflate stops */
-    unsigned int wpos;
-    unsigned long long out;                     /* bytes made */
+    int over;                                   /* a byte past it was made: the picture is whole */
+    unsigned long long ahead;                   /* the bytes inflate may still make: the rows' and one more */
+    unsigned long long budget, taken;           /* the IDAT bytes inflate may be given, and has been */
+    size_t quiet;                               /* those it has taken since it last made a byte */
     unsigned int adler_a, adler_b;
-    int fixed_tables;                           /* lit and dist hold the fixed code (many short blocks may use it) */
-    unsigned char window[WINDOW];
-    struct huff lit, dist;
+    unsigned char made[MADE];
+    struct inflate z;
 };
 
 static const unsigned char pass_x0[7] = { 0, 4, 0, 2, 0, 1, 0 }, pass_y0[7] = { 0, 0, 4, 0, 2, 0, 1 };
@@ -84,23 +82,6 @@ static unsigned int be32(const unsigned char *p) {
 }
 
 /**** the chunks ****/
-
-static void crc_table(struct png *p) {
-    unsigned int c, i;
-    int k;
-    for(i = 0; i < 256; i++) {
-        c = i;
-        for(k = 0; k < 8; k++) c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
-        p->crc[i] = c;
-    }
-}
-
-/* CRC-32 of a chunk's type and data */
-static unsigned int crc_of(const struct png *p, const unsigned char *s, size_t n) {
-    unsigned int c = 0xffffffffu;
-    while(n--) c = p->crc[(c ^ *s++) & 255] ^ (c >> 8);
-    return c ^ 0xffffffffu;
-}
 
 /* The chunk at pos: its length and type; pos moves to its data. 0, or -1 (the file ends first) */
 static int chunk(struct png *p, unsigned int *length, const unsigned char **type) {
@@ -114,13 +95,13 @@ static int chunk(struct png *p, unsigned int *length, const unsigned char **type
     return 0;
 }
 
-/* Is the CRC of the chunk just reached (of n bytes at pos) right? */
+/* Is the CRC of the chunk just reached (of n bytes at pos) right? It covers the chunk's type and data */
 static int crc_right(const struct png *p, unsigned int n) {
-    return crc_of(p, p->in + p->pos - 4, (size_t)n + 4) == be32(p->in + p->pos + n);
+    return crc32(0, p->in + p->pos - 4, (size_t)n + 4) == be32(p->in + p->pos + n);
 }
 
-/* The next byte of the IDAT chunks, or -1 where they end */
-static int next_byte(struct png *p) {
+/* The next IDAT chunk once this one's bytes are used (one of no bytes is passed over): 0, or -1 where they end */
+static int next_chunk(struct png *p) {
     while(!p->left) {
         unsigned int n;
         const unsigned char *t;
@@ -132,6 +113,12 @@ static int next_byte(struct png *p) {
         }
         p->left = n;
     }
+    return 0;
+}
+
+/* The next byte of the IDAT chunks, or -1 where they end */
+static int next_byte(struct png *p) {
+    if(next_chunk(p)) return -1;
     p->left--;
     return p->in[p->pos++];
 }
@@ -246,233 +233,100 @@ static void row_done(struct png *p) {
     }
 }
 
-/* One byte of the data inflate makes */
-static void emit(struct png *p, unsigned int c) {
-    p->window[p->wpos] = (unsigned char)c;
-    p->wpos = (p->wpos + 1) & (WINDOW - 1);
-    p->out++;
+/* One byte of the data inflate makes: 0, or -1 for a row whose filter is none */
+static int emit(struct png *p, unsigned int c) {
     p->adler_a += c;
     if(p->adler_a >= 65521) p->adler_a -= 65521;
     p->adler_b += p->adler_a;
     if(p->adler_b >= 65521) p->adler_b -= 65521;
     if(p->done) {                               /* more than the picture holds */
         p->over = 1;
-        return;
+        return 0;
     }
     if(!p->fill) {
-        if(c > 4) {
-            p->bad = 1;
-            return;
-        }
+        if(c > 4) return -1;
         p->filter = (int)c;
         p->fill = 1;
-        return;
+        return 0;
     }
     p->row[p->fill++ - 1] = (unsigned char)c;
     if(p->fill == p->rowbytes + 1) row_done(p);
-}
-
-/**** inflate ****/
-
-static void refill(struct png *p, int n) {
-    while(p->nbits < n) {
-        int c = next_byte(p);
-        if(c < 0) {
-            p->made_up += 8;
-            c = 0;
-        }
-        p->bits |= (unsigned int)c << p->nbits;
-        p->nbits += 8;
-    }
-}
-
-/* n bits used: a code looks further ahead than it is long, so it is the bits used that may run out, not those looked at */
-static void used(struct png *p, int n) {
-    p->bits >>= n;
-    p->nbits -= n;
-    if(p->nbits < p->made_up) p->bad = 1;
-}
-
-static unsigned int take(struct png *p, int n) {
-    unsigned int v;
-    if(!n) return 0;
-    refill(p, n);
-    v = p->bits & ((1u << n) - 1);
-    used(p, n);
-    return v;
-}
-
-static unsigned int reverse(unsigned int v, int n) {
-    unsigned int r = 0;
-    while(n--) {
-        r = r << 1 | (v & 1);
-        v >>= 1;
-    }
-    return r;
-}
-
-/* The table of a code given by each symbol's length: 0, or -1 for a code that is over-full */
-static int build(struct huff *h, const unsigned char *lens, int n) {
-    int count[16], next[16], i, s, k = 0;
-    unsigned int code = 0;
-    memset(count, 0, sizeof(count));
-    memset(h->fast, 0, sizeof(h->fast));
-    for(i = 0; i < n; i++) count[lens[i]]++;
-    count[0] = 0;
-    for(s = 1; s < 16; s++) {
-        next[s] = (int)code;
-        h->first[s] = (unsigned short)code;
-        h->index[s] = (unsigned short)k;
-        code += (unsigned int)count[s];
-        if(code > 1u << s) return -1;
-        h->limit[s] = code << (16 - s);
-        code <<= 1;
-        k += count[s];
-    }
-    h->limit[16] = 0x10000;
-    for(i = 0; i < n; i++) {
-        s = lens[i];
-        if(!s) continue;
-        k = next[s] - h->first[s] + h->index[s];
-        h->len[k] = (unsigned char)s;
-        h->sym[k] = (unsigned short)i;
-        if(s <= FAST) {
-            unsigned int j = reverse((unsigned int)next[s], s);
-            for(; j < 1u << FAST; j += 1u << s) h->fast[j] = (unsigned short)(s << 9 | i);
-        }
-        next[s]++;
-    }
     return 0;
 }
 
-/* The next symbol, or -1 for a code that is none */
-static int symbol(struct png *p, const struct huff *h) {
-    unsigned int e, k, i;
-    int s;
-    refill(p, 15);
-    e = h->fast[p->bits & ((1u << FAST) - 1)];
-    if(e) {
-        used(p, (int)(e >> 9));
-        return (int)(e & 511);
+/**** the data ****/
+
+/* The bytes of every row with its filter's: those of the passes that have pixels, or of the picture */
+static unsigned long long data_bytes(const struct png *p) {
+    unsigned long long n = 0;
+    int i;
+    for(i = p->interlaced ? 0 : 6; i < 7; i++) {
+        int pw = p->interlaced ? (p->w - pass_x0[i] + pass_dx[i] - 1) / pass_dx[i] : p->w;
+        int ph = p->interlaced ? (p->h - pass_y0[i] + pass_dy[i] - 1) / pass_dy[i] : p->h;
+        if(pw > 0 && ph > 0)
+            n += (unsigned long long)ph * (1 + ((unsigned long long)pw * (unsigned int)p->channels * (unsigned int)p->depth + 7) / 8);
     }
-    k = reverse(p->bits & 0xffff, 16);
-    for(s = FAST + 1; s < 16; s++) if(k < h->limit[s]) break;
-    if(s >= 16) return -1;
-    i = (k >> (16 - s)) - h->first[s] + h->index[s];
-    if(i >= LITS || h->len[i] != s) return -1;
-    used(p, s);
-    return h->sym[i];
+    return n;
 }
 
-static const char *stored(struct png *p) {
-    unsigned int n, nn;
-    take(p, p->nbits & 7);
-    n = take(p, 16);
-    nn = take(p, 16);
-    if((n ^ nn) != 0xffff) return "a PNG whose data is corrupted";
-    while(n-- && !p->over) {
-        unsigned int c = take(p, 8);
-        if(p->bad) break;
-        emit(p, c);
+/* The IDAT bytes the rows may come from: twice theirs, 8 a row (the passes' rows, for Adam7) and 4 KB */
+static unsigned long long data_budget(const struct png *p) {
+    unsigned long long rows = 0;
+    int i;
+    for(i = p->interlaced ? 0 : 6; i < 7; i++) {
+        int pw = p->interlaced ? (p->w - pass_x0[i] + pass_dx[i] - 1) / pass_dx[i] : p->w;
+        int ph = p->interlaced ? (p->h - pass_y0[i] + pass_dy[i] - 1) / pass_dy[i] : p->h;
+        if(pw > 0 && ph > 0) rows += (unsigned long long)ph;
     }
-    return NULL;
+    return 2 * data_bytes(p) + 8 * rows + 4096;
 }
 
-static const char *codes(struct png *p) {
-    static const unsigned short base[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
-                                             67, 83, 99, 115, 131, 163, 195, 227, 258 };
-    static const unsigned char more[29] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5,
-                                            5, 5, 5, 0 };
-    static const unsigned short dbase[30] = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513,
-                                              769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 };
-    static const unsigned char dmore[30] = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10,
-                                             11, 11, 12, 12, 13, 13 };
-    for(;;) {
-        unsigned int n, d;
-        int s;
-        if(p->over) return NULL;
-        s = symbol(p, &p->lit);
-        if(s < 0 || p->bad) return "a PNG whose data is corrupted";
-        if(s < 256) {
-            emit(p, (unsigned int)s);
-            continue;
-        }
-        if(s == 256) return NULL;
-        if(s > 285) return "a PNG whose data is corrupted";
-        n = base[s - 257] + take(p, more[s - 257]);
-        s = symbol(p, &p->dist);
-        if(s < 0 || s > 29) return "a PNG whose data is corrupted";
-        d = dbase[s] + take(p, dmore[s]);
-        if(d > p->out || p->bad) return "a PNG whose data is corrupted";
-        while(n-- && !p->bad && !p->over) emit(p, p->window[(p->wpos - d) & (WINDOW - 1)]);
-    }
-}
-
-static const char *fixed(struct png *p) {
-    unsigned char lens[LITS];
-    if(p->fixed_tables) return codes(p);
-    p->fixed_tables = 1;
-    memset(lens, 8, 144);
-    memset(lens + 144, 9, 112);
-    memset(lens + 256, 7, 24);
-    memset(lens + 280, 8, 8);
-    build(&p->lit, lens, LITS);
-    memset(lens, 5, DISTS);
-    build(&p->dist, lens, DISTS);
-    return codes(p);
-}
-
-static const char *dynamic(struct png *p) {
-    static const unsigned char order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-    unsigned char lens[LITS + DISTS];
-    int nlit = (int)take(p, 5) + 257, ndist = (int)take(p, 5) + 1, nlen = (int)take(p, 4) + 4, i, n;
-    p->fixed_tables = 0;
-    if(nlit > 286 || ndist > 30 || p->bad) return "a PNG whose data is corrupted";
-    memset(lens, 0, 19);
-    for(i = 0; i < nlen; i++) lens[order[i]] = (unsigned char)take(p, 3);
-    if(build(&p->lit, lens, 19)) return "a PNG whose data is corrupted";
-    for(n = 0; n < nlit + ndist; ) {
-        int s = symbol(p, &p->lit), times, v = 0;
-        if(s < 0 || p->bad) return "a PNG whose data is corrupted";
-        if(s < 16) {
-            lens[n++] = (unsigned char)s;
-            continue;
-        }
-        if(s == 16) {
-            if(!n) return "a PNG whose data is corrupted";
-            v = lens[n - 1];
-            times = 3 + (int)take(p, 2);
-        } else if(s == 17) times = 3 + (int)take(p, 3);
-        else times = 11 + (int)take(p, 7);
-        if(n + times > nlit + ndist) return "a PNG whose data is corrupted";
-        while(times--) lens[n++] = (unsigned char)v;
-    }
-    if(build(&p->lit, lens, nlit) || build(&p->dist, lens + nlit, ndist)) return "a PNG whose data is corrupted";
-    return codes(p);
-}
-
-static const char *inflate(struct png *p) {
-    unsigned int cmf, flg, adler;
-    int final, i;
-    cmf = take(p, 8);
-    flg = take(p, 8);
-    if(p->bad || (cmf & 15) != 8 || (cmf >> 4) > 7 || (cmf * 256 + flg) % 31 || (flg & 32))
+/* The zlib stream in the IDAT chunks (RFC 1950): its header, the deflate data by libsurf's inflate, as far as one byte
+   past the rows, and its Adler-32 when the rows and the data end together. Inflate is given no more of the chunks
+   than the budget, and no more than QUIET_MAX at a time while it makes nothing: a stream that wants more is refused */
+static const char *data(struct png *p) {
+    struct inflate *z = &p->z;
+    int cmf = next_byte(p), flg = next_byte(p), i;
+    unsigned int adler;
+    if(cmf < 0 || flg < 0 || (cmf & 15) != 8 || (cmf >> 4) > 7 || (cmf * 256 + flg) % 31 || (flg & 32))
         return "a PNG whose data is not zlib's";
-    do {
-        const char *why;
-        unsigned int type;
-        final = (int)take(p, 1);
-        type = take(p, 2);
-        if(p->bad) return "a PNG that ends too early";
-        why = type == 0 ? stored(p) : type == 1 ? fixed(p) : type == 2 ? dynamic(p) : "a PNG whose data is corrupted";
-        if(why) return why;
-        if(p->over) return NULL;
-        if(p->bad) return "a PNG whose data is corrupted";
-    } while(!final);
+    inflate_init(z);
+    p->ahead = data_bytes(p) + 1;
+    p->budget = data_budget(p);
+    p->taken = 2;                               /* the zlib header */
+    for(;;) {
+        size_t room = p->ahead < MADE ? (size_t)p->ahead : MADE, made, k, give = p->left, used;
+        int r;
+        if(p->taken > p->budget) return "a PNG whose data is far longer than its rows";
+        if(p->quiet > QUIET_MAX) return "a PNG whose data makes nothing for too long";
+        if(give > p->budget - p->taken + 1) give = (size_t)(p->budget - p->taken + 1);
+        if(give > QUIET_MAX - p->quiet + 1) give = QUIET_MAX - p->quiet + 1;
+        z->in = p->in + p->pos;
+        z->in_n = give;
+        z->out = p->made;
+        z->out_n = room;
+        r = inflate_run(z);
+        used = give - z->in_n;
+        p->pos += used;
+        p->left -= used;
+        p->taken += used;
+        made = room - z->out_n;
+        p->quiet = made ? 0 : p->quiet + used;
+        p->ahead -= made;
+        for(k = 0; k < made; k++) if(emit(p, p->made[k])) return "a PNG whose data is corrupted";
+        if(p->over) return NULL;                /* the picture is whole: what follows is not read */
+        if(r == INFLATE_BAD) return "a PNG whose data is corrupted";
+        if(r == INFLATE_END) break;
+        if(!z->out_n) continue;                 /* the room was used: more of it */
+        if(p->left) continue;                   /* what it was given was used: more of this chunk, within the budget */
+        if(next_chunk(p)) return "a PNG that ends too early";
+    }
     if(!p->done) return "a PNG that ends too early";
-    take(p, p->nbits & 7);
-    for(adler = 0, i = 0; i < 4; i++) adler = adler << 8 | take(p, 8);
-    if(p->bad) return "a PNG that ends too early";
+    for(adler = 0, i = 0; i < 4; i++) {
+        int c = next_byte(p);
+        if(c < 0) return "a PNG that ends too early";
+        adler = adler << 8 | (unsigned int)c;
+    }
     if(adler != (p->adler_b << 16 | p->adler_a)) return "a PNG whose data is corrupted";
     return NULL;
 }
@@ -570,17 +424,16 @@ int wimg_png(const unsigned char *in, size_t len, struct wimg *out, char *err, s
     struct png *p = calloc(1, sizeof(*p));
     const char *why;
     size_t row;
-    if(!p) return ut_error(err, cap, "out of memory reading a PNG");
+    if(!p) return wimg_error(err, cap, "out of memory reading a PNG");
     p->in = in;
     p->len = len;
     p->m = out;
     p->adler_a = 1;
     p->pass = -1;
-    crc_table(p);
     why = head(p);
     if(why) {
         free(p);
-        return ut_error(err, cap, "%s", why);
+        return wimg_error(err, cap, "%s", why);
     }
     if(wimg_alloc(out, p->w, p->h, err, cap)) {
         free(p);
@@ -596,7 +449,7 @@ int wimg_png(const unsigned char *in, size_t len, struct wimg *out, char *err, s
         return wimg_fail(out, err, cap, "out of memory reading a PNG");
     }
     start_pass(p);
-    why = inflate(p);
+    why = data(p);
     free(p->row);
     free(p->above);
     free(p);

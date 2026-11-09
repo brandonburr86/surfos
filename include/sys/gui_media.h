@@ -59,6 +59,8 @@ struct gui_viewer {
     u8 chunk[GUI_VIEW_CHUNK];
     u8 pixels[GUI_VIEW_PIXELS * 3];     /* dw x dh, the top row first, each pixel R, G, B */
     struct gui_sketchbmp sketch;
+    int asked_pid;                      /* 11/09/26 (track img): the wview told to close for another, and when: */
+    u32 asked_at;                       /* ended when its window is still there later (shell/guiview.c) */
 };
 
 struct gui_hex {
