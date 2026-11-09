@@ -542,6 +542,13 @@ static void read_done(struct app *a) {
     a->all = 1;
 }
 
+/* done of size, in whole percent below 100: in 32 bits, multiplied first only where that cannot overflow (the
+   review's L10: a file past 21 MB did), since a long long's division would need libgcc, which programs lack */
+static int percent(long done, long size) {
+    if(done >= size) return 99;
+    return (int)(size < 0x7FFFFFFFL / 100 ? done * 100 / size : done / (size / 100));
+}
+
 int app_reading(const struct app *a) {
     return a->rd != NULL;
 }
@@ -568,8 +575,7 @@ void app_read(struct app *a) {
         a->rd_done += n;
     }
     if(a->rd && a->rd_size > 0) {
-        snprintf(line, sizeof(line), "Reading %s: %d%%", base_name(a->rd_path),
-                 (int)(a->rd_done >= a->rd_size ? 99 : (long long)a->rd_done * 100 / a->rd_size));
+        snprintf(line, sizeof(line), "Reading %s: %d%%", base_name(a->rd_path), percent(a->rd_done, a->rd_size));
         say(a, line);
         show(a);
     }
