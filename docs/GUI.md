@@ -717,7 +717,8 @@ first saved.
   expression, `&` in the replacement is the match, `\1` to `\9` its groups and `\n` a line end. A
   match never spans lines and is never empty: a pattern that also matches an empty text (`x*`, `^`)
   is refused. A long search, and Replace all, go on between keys, the status bar saying so, and Esc
-  stops them; while Replace all changes the file the keys wait, and Esc takes back what it did.
+  stops them; while Replace all changes the file the keys wait, and Esc takes back what it did. A
+  Replace all too large to undo asks first (Esc could not take it back either).
 * **Find in files.** Ctrl+Shift+F: what to find, the names to look in (`*.c *.h`, or every file) and
   the folder, from / (Folder… asks the desktop's chooser; `/a/../dev` is `/dev`, never read). It reads the folder and those in it a piece at
   a time, so the window answers and Stop ends it, holding one folder and one file open at a time;
