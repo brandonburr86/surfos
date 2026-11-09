@@ -505,7 +505,7 @@ int main(void) {
     gkf_close();
     CHECK(run() && gk_box_open(w.ui) && gk_asking(w.ui) == BOX_SAVE && w.app.cur == 0);
     gkf_close();                                /* pressed again while it asks: the question stands, */
-    CHECK(gkf_menu_choose(WC_CMD_NEW));         /* and the bar's items wait for its answer */
+    CHECK(!gkf_menu_choose(WC_CMD_NEW));        /* and the bar's items are greyed until it is answered */
     CHECK(run() && gk_box_open(w.ui) && gk_asking(w.ui) == BOX_SAVE && w.app.asking == 0 && w.app.n == 4);
     key(13, 0);                                 /* Save */
     CHECK(run() && gkf_dialog() && gkf_dialog()->kind == WIN_DLG_SAVE && !strcmp(gkf_dialog()->name, "untitled.txt"));
