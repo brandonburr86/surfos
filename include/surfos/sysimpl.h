@@ -7,6 +7,7 @@ Kernel only. The telnet server's calls (34-43, surfos/syscall.h) live with what 
 work on: net/sock.c (network connections), fs/poll.c (poll), kernel/pty.c
 (pseudo-terminals), kernel/proc.c (the process list, detach); 10/24/26: fs/pipe.c (pipes);
 10/25/26: kernel/win.c (windows for programs).
+11/05/26: kernel/netctl.c (the network settings for programs).
 syscall_trap() calls them
 with the user's arguments as they are: each checks its own pointers with user_buf() and
 user_str(), and copies an argv with user_argv(), as kernel/syscall.c does for its own.
@@ -61,5 +62,8 @@ int sys_pipe(int *fds);
 /* kernel/win.c (10/25/26) */
 int sys_winopen(const struct win_open *o);
 int sys_winctl(int fd, int op, void *arg);
+
+/* kernel/netctl.c (11/05/26, the desktop applications, track settings): surfos/netctl.h */
+int sys_netctl(int op, void *arg, u32 size);
 
 #endif

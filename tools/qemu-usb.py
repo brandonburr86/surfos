@@ -112,6 +112,11 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              read-only mount, the stick on /.netman waited for and never held, Ctrl+C in that wait; the stick
              byte for byte as it was afterwards. A second copy with two names on a chain: reported, a pull
              while a look reads it, byte for byte as it was; then a look at a read-write mount refused
+  wsettings  (11/05/26, the desktop applications' Settings, after its review) Settings against the simulated Wi-Fi
+             (tools/wsettings_scenario.py): a WPA2 join with the test passphrase, saved (the key, never the
+             passphrase); Disconnect right after the card's start, and wifi connect; wifi leave, each staying so
+             past the keeper's 30 s, and a connect after a leave rejoined by the keeper; an open network's join
+             asked about while telnetd runs; fsck on the stick
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -2773,6 +2778,16 @@ def scenario_fsck(args, image, firmware, outdir):
     return results
 
 
+def scenario_wsettings(args, image, firmware, outdir):
+    """11/05/26 (the desktop applications, track settings, after its review): Settings on the desktop against the
+    real kernel's simulated Wi-Fi: joins through SYS_netctl end to end (tools/wsettings_scenario.py)"""
+    from wsettings_scenario import run
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks,
+               'stick_folder': stick_folder, 'written_by_stick_tool': written_by_stick_tool, 'usbnet': USBNET_DEV,
+               'smoke': load_smoke_harness()}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
+
+
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps, 'guiweb': scenario_guiweb,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
@@ -2788,6 +2803,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
                                                              'SurfOS: /boot/surfos.bin and /boot/grub/grub.cfg were not found')}
 SCENARIOS['fsck'] = scenario_fsck       # 11/01/26 (the command-line suite)
 SCENARIOS['guichat'] = scenario_guichat  # 11/05/26 (the desktop applications, track chat): run by name, --scenario guichat
+SCENARIOS['wsettings'] = scenario_wsettings     # 11/05/26 (the desktop applications, track settings)
 
 
 def qemu_version(qemu):
@@ -2890,6 +2906,7 @@ def main():
                                'crashstack', 'shutdown', 'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'fsck',
+                               'wsettings',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

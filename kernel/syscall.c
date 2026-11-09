@@ -35,6 +35,9 @@ that stopped too. job (49): job control for a shell; spawnx's job field.
 10/25/26 (windows for programs): winopen and winctl (52, 53, kernel/win.c, surfos/win.h).
 
 11/01/26 (top): sysinfo (54, kernel/proc.c, surfos/proc.h); struct procinfo grew by three fields.
+
+11/05/26 (the desktop applications, track settings): netctl (55, kernel/netctl.c, surfos/netctl.h), whose
+structures it checks itself.
 */
 
 #include <surfos/types.h>
@@ -654,6 +657,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     /* 10/25/26 (windows for programs): kernel/win.c */
     case SYS_winopen:  r = sys_winopen((const struct win_open *)a); break;
     case SYS_winctl:   r = sys_winctl((int)a, (int)b, (void *)c); break;
+    /* 11/05/26 (the desktop applications, track settings): kernel/netctl.c */
+    case SYS_netctl:   r = sys_netctl((int)a, (void *)b, (u32)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

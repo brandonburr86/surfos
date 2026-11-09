@@ -1,0 +1,67 @@
+wsettings - Settings: the Wi-Fi, the network and the desktop in a window
+
+SYNOPSIS
+    wsettings
+
+DESCRIPTION
+    What the wifi and settings commands do, in a window on the desktop:
+    Apps > Programs > Settings, its tile, or wsettings in the desktop's
+    Terminal. Its pages:
+
+    Wi-Fi     The card on or off; the network joined and its address,
+              Disconnect and Save; the networks heard in the last
+              minute, a row a name with its signal and security; Scan,
+              Join, and By name for a network that hides its name; the
+              saved networks, in the order SurfOS tries them, and
+              Forget; joining a saved network by itself at startup.
+    Network   Ethernet's DHCP on or off; every interface's addresses
+              and lease; the host name DHCP requests carry.
+    Desktop   The theme and the pointer's speed: each step acts at once,
+              and the stick is written once the steps stop.
+    System    The telnet server at startup, and the shell's history on
+              the stick; where the settings are kept.
+    About     The version, the build, the memory, the time since the
+              start and the processor.
+
+    A WPA2 network's password is typed in a field that shows a dot for
+    each character and copies nothing. It goes to the kernel, which
+    makes the network's key of it at once and wipes it; the field is
+    wiped as soon as it is handed on. Save it, unticked until it is
+    ticked, keeps the network in networks.conf on the stick: the key,
+    never the password. While telnetd is on, it says what saving then
+    means: telnetd starts on a saved WPA2 network, and an open one is
+    not joined by itself.
+
+    A network not heard in the last minute is looked for first when
+    it is joined, as wifi join does, and joined as one that hides its
+    name only when it is still not heard.
+
+    It asks before joining an open network while a server without a
+    password runs (the kernel joins one then only on that answer),
+    before forgetting a network, and before turning on telnetd at
+    startup, with the warning the settings command gives.
+    What each change did, and when it acts, is said in the band at the
+    bottom. The settings are kept as the settings command keeps them,
+    on the stick SurfOS was started from; a change that cannot be saved
+    there is in force until SurfOS restarts, and says so: System > Save
+    again on the stick writes it once the stick takes it.
+
+KEYS
+    F5 to F9         the pages: Wi-Fi, Network, Desktop, System, About
+    Tab, Shift+Tab   the next control, the one before
+    Space, Enter     a button, a switch; Enter on a network joins it
+    Ctrl+R           scan for networks
+    Ctrl+J           join a network by its name
+    Esc              No to a question; otherwise close the window
+    Ctrl+W           close the window (asking first while a host name
+                     is typed and not set)
+
+LIMITS
+    It joins open and WPA2-Personal networks, as wifi join does: not
+    WEP, WPA3 only, or enterprise networks. It joins a network by its
+    name, the strongest access point of it, never a particular one. It
+    changes telnetd.port only through the settings command. One change
+    runs at a time, in all of SurfOS: another program's makes it wait.
+
+SEE ALSO
+    wifi, settings, telnetd, gui

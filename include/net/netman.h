@@ -33,6 +33,9 @@ bool netman_stick_idle(u_long ms);          /* 10/25/26: the shutdown's: what is
 /* key k = value, now and in settings.conf on the stick: 0 saved; 1 in force but not saved (why says why);
    -1 refused (why) */
 int netman_set(int k, const char *value, char *why, size_t size);
+/* 11/05/26 (the desktop applications, track settings): key k = value in force now, nothing written: a step of a setting
+   a person steps through, written once the steps stop by netman_set(). 0; 1 not in force (settings=off); -1 refused */
+int netman_apply(int k, const char *value, char *why, size_t size);
 
 /**** 10/25/26 (track A, A10): surfsh's files beside the settings ****/
 
@@ -77,6 +80,9 @@ int netman_forget_network(const u8 *ssid, u_int len, int *count, char *why, size
    address or not), -ENOENT none in range, -EBUSY the keeper is at it, -ECANCELED a wifi leave or down meanwhile,
    other errors */
 int netman_wifi_connect(struct wlan_dev *w);
+/* 11/05/26 (the desktop applications, track settings): the same for a kernel thread with no console of its own (a
+   program's job, kernel/netctl.c): said in the kernel log as the keeper's lines are, never printed on the caller's */
+int netman_wifi_connect_quiet(struct wlan_dev *w);
 
 /**** telnetd ****/
 
