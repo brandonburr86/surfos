@@ -49,8 +49,9 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # page), fsck (test_fsck, test_fsckcmd, test_fsckheap); sanitizer runs stay out of it (Mac only);
                   # 11/09/26, the desktop applications: the window calls' menus, paste, choosers and theme (test_win),
                   # the desktop's side, its registry and the keyboard's scan codes (test_guiclient, test_guidesk,
-                  # test_keyscan), the toolkit and its demonstration on a fake desktop (test_gk, test_wkit), libsurf's
-                  # pictures (test_image_save, tests/test_image_files.py, tests/test_image_jpeg.py), the Image Viewer
+                  # test_keyscan), the toolkit and its demonstration on a fake desktop (test_gk, test_wkit,
+                  # test_gksecret: no secret left in freed memory), libsurf's pictures (test_image_save,
+                  # tests/test_image_files.py, tests/test_image_jpeg.py), the Image Viewer
                   # (test_wview), SYS_netctl and Settings (test_netctl, test_wsettings, test_wsettings_win), the
                   # Spreadsheet (test_wsheet, test_wsheet_win), the Code Editor (test_wcode, test_wcode_save,
                   # test_wcode_win), Paint (test_wpaint, test_wpaint_files, test_wpaint_window), Chat (test_wchat,
@@ -312,7 +313,15 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   Apps > Programs, tiles, Files' Open and Open with; Print Screen (or SurfOS > Screenshot) saves the screen as a
   BMP through Save as; desktop.theme and pointer.speed are preferences in netcfg's table. Give a new call a
   scenario in test_win and the desktop's side one in test_guiclient or test_guidesk; build a program's window on
-  gk.h and test it on the fake desktop, as every application does.
+  gk.h and test it on the fake desktop, as every application does. gk.h's rules (11/09/26, kit's review): a key
+  held down repeats the movement keys (arrows, Home, End, Page Up and Down) and acts once a press for the activation
+  keys (Space and Enter, a box's keys, a shortcut unless its item has GK_ITEM_REPEAT); a descriptor watched with
+  gk_watch() is level-triggered until gk_unwatch() or its close, so a program unwatches at read() == 0 (a pipe says
+  POLLIN|POLLHUP while data is left and at its end alike); while a box is up the program's menus are grey and a
+  choice made in the bar just before it opened is dropped (F14); a refused copy or cut is GK_EV_UNCOPIED, and a cut
+  then deletes nothing; gk_set_text() says whether the widget holds the text as given. The fake desktop keeps 64
+  unread events, as the kernel's queue does, and says on stderr when it loses any: a test reads (gk_next()) before
+  it types more than that, and a long path is more on the Mac's TMPDIR.
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's

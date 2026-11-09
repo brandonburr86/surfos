@@ -2741,9 +2741,14 @@ Settings' call            include/surfos/netctl.h, kernel/netctl.c: SYS_netctl, 
   scroll bars, tabs, status bars, texts of several lines, progress bars, sliders, palettes, areas a program
   draws), laid out by boxes, with the focus moved by Tab; its menus go to the desktop's bar, its Open and Save as
   to the desktop's choosers; modal boxes (a message, a question, a line to type) grey the program's menus while
-  they are up. A program loops on `gk_next()`, which gives it what it must hear and paints only what changed.
-  `tests/host/gk_fake.c` is a desktop for the host that answers the window calls as the kernel does, so each
-  application's whole window code runs in `make unittest`. `wkit` shows every widget.
+  they are up, and a choice made in the bar just before one opened is dropped. A program loops on `gk_next()`,
+  which gives it what it must hear and paints only what changed, timers and watched descriptors among it (a watch
+  is level-triggered until `gk_unwatch()`). A key held down repeats the movement keys and acts once a press for
+  the activation keys (Space, Enter, a box's keys, shortcuts); a line's draft and history are wiped before they
+  are freed, and a refused copy or cut is told (`GK_EV_UNCOPIED`), the cut deleting nothing.
+  `tests/host/gk_fake.c` is a desktop for the host that answers the window calls as the kernel does (its clock,
+  its queue of 64 events and its chooser), so each application's whole window code runs in `make unittest`.
+  `wkit` shows every widget.
 * **Pictures** (`user/include/image.h`, `user/libsurf/image*.c`): the decoders Wundertow had (BMP, PNG, GIF's
   first frame, baseline and progressive JPEG, the inverse DCT and Huffman tables written again from T.81), bounded
   against bombs, and encoders for 24-bit BMP and PNG; the Image Viewer, `wview`, is a program on them, and Paint
