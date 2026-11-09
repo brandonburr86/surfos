@@ -117,6 +117,37 @@ $(BUILD)/user/bin/wchat: $(WCHAT_OBJ) $(WCHAT_UT_OBJ) $(USER_CRT0) $(USER_LIB) u
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHAT_OBJ) $(WCHAT_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
 -include $(WCHAT_OBJ:.o=.d)
+USER_PROGS  += wmines wsolitaire wswell   # 11/05/26 (the desktop applications, track games): Mines, Solitaire, Swell
+# the games (11/05/26): each a program of several files in its folder (its rules, its window's model, its window and
+# main.c), linked with libsurf and its toolkit (gk.h); their models and windows host-tested (unittest-games, below)
+WMINES_OBJ     = $(patsubst user/wmines/%.c,$(BUILD)/user/wmines/%.o,$(wildcard user/wmines/*.c))
+WSOLITAIRE_OBJ = $(patsubst user/wsolitaire/%.c,$(BUILD)/user/wsolitaire/%.o,$(wildcard user/wsolitaire/*.c))
+WSWELL_OBJ     = $(patsubst user/wswell/%.c,$(BUILD)/user/wswell/%.o,$(wildcard user/wswell/*.c))
+$(BUILD)/user/wmines/%.o: user/wmines/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/wsolitaire/%.o: user/wsolitaire/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/wswell/%.o: user/wswell/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/user/bin/wmines: $(WMINES_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WMINES_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/wsolitaire: $(WSOLITAIRE_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSOLITAIRE_OBJ) $(USER_LIB)
+$(BUILD)/user/bin/wswell: $(WSWELL_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSWELL_OBJ) $(USER_LIB)
+-include $(WMINES_OBJ:.o=.d) $(WSOLITAIRE_OBJ:.o=.d) $(WSWELL_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1286,6 +1317,52 @@ unittest: unittest-chat
 unittest-chat: $(BUILD)/host/test_wchat $(BUILD)/host/test_wchatwin
 	$(BUILD)/host/test_wchat
 	$(BUILD)/host/test_wchatwin
+# 11/05/26 (the desktop applications, track games): Mines, Solitaire and Swell, their rules and their windows' models
+# (test_wmines, test_wsolitaire, test_wswell: plain C, the host's library), and their windows on the fake desktop
+# (test_*_window: with the toolkit, $(GK_HOST_FLAGS) and $(GK_HOST_OBJ)); tests/games-sanitize.sh runs them all under
+# AddressSanitizer and UBSan on the Mac
+GAMES_TESTS = $(addprefix $(BUILD)/host/,test_wmines test_wsolitaire test_wswell test_wmines_window \
+                test_wsolitaire_window test_wswell_window)
+$(BUILD)/host/test_wmines: tests/host/test_wmines.c user/wmines/mines.c user/wmines/view.c user/wmines/mines.h \
+                           user/wmines/view.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wmines tests/host/test_wmines.c user/wmines/mines.c user/wmines/view.c -o $@
+$(BUILD)/host/test_wsolitaire: tests/host/test_wsolitaire.c user/wsolitaire/klondike.c user/wsolitaire/table.c \
+                               user/wsolitaire/klondike.h user/wsolitaire/table.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wsolitaire tests/host/test_wsolitaire.c user/wsolitaire/klondike.c \
+	    user/wsolitaire/table.c -o $@
+$(BUILD)/host/test_wswell: tests/host/test_wswell.c user/wswell/swell.c user/wswell/view.c user/wswell/swell.h \
+                           user/wswell/view.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wswell tests/host/test_wswell.c user/wswell/swell.c user/wswell/view.c -o $@
+$(BUILD)/host/test_wmines_window: tests/host/test_wmines_window.c tests/host/gk_fake.h $(wildcard user/wmines/*.[ch]) \
+                                  $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wmines tests/host/test_wmines_window.c user/wmines/window.c user/wmines/view.c \
+	    user/wmines/mines.c $(GK_HOST_OBJ) -o $@
+$(BUILD)/host/test_wsolitaire_window: tests/host/test_wsolitaire_window.c tests/host/gk_fake.h \
+                                      $(wildcard user/wsolitaire/*.[ch]) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wsolitaire tests/host/test_wsolitaire_window.c user/wsolitaire/window.c \
+	    user/wsolitaire/table.c user/wsolitaire/klondike.c $(GK_HOST_OBJ) -o $@
+$(BUILD)/host/test_wswell_window: tests/host/test_wswell_window.c tests/host/gk_fake.h $(wildcard user/wswell/*.[ch]) \
+                                  $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wswell tests/host/test_wswell_window.c user/wswell/window.c user/wswell/view.c \
+	    user/wswell/swell.c $(GK_HOST_OBJ) -o $@
+unittest: unittest-games
+.PHONY: unittest-games
+unittest-games: $(GAMES_TESTS)
+	$(BUILD)/host/test_wmines
+	$(BUILD)/host/test_wsolitaire
+	$(BUILD)/host/test_wswell
+	$(BUILD)/host/test_wmines_window
+	$(BUILD)/host/test_wsolitaire_window
+	$(BUILD)/host/test_wswell_window
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

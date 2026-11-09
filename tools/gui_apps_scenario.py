@@ -42,6 +42,7 @@ TRACKS += ('gui_apps_kit',)
 TRACKS += ('gui_apps_img',)
 TRACKS += ('gui_apps_sheet',)
 TRACKS += ('gui_apps_chat',)
+TRACKS += ('gui_apps_games',)
 STICK_LABEL, STICK_SERIAL = 'APPSTICK', 0x6A11A995      # a serial of its own: GRUB's bootvol= names the boot stick's
 
 

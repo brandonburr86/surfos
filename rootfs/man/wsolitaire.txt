@@ -1,0 +1,55 @@
+wsolitaire - Solitaire (Klondike), a card game in a window
+
+SYNOPSIS
+    wsolitaire
+
+DESCRIPTION
+    Klondike: seven piles dealt one to seven cards, the top one up; the
+    rest is the stock. Build the four foundations up from the aces by
+    suit, and the piles down in alternate colours; only a king, or a
+    run from a king, goes on an empty pile. A face-up run moves
+    together, and the card it uncovers turns up by itself. The stock
+    deals one card or three to the waste, and takes the waste back as
+    often as you like. A card may come back down from a foundation to
+    the piles, but not to another foundation.
+
+    Drag a card (and the cards on it) to a pile, or click it to send it
+    where it can go: a single card to its foundation first, then to the
+    next pile it fits. Every move can be undone. Once no card on the
+    piles is face down and the cards can all go home from there, the
+    game finishes by itself. The toolbar counts the moves and the time.
+
+    It needs a desktop: Apps > Programs > Solitaire or its tile starts
+    it, or wsolitaire & in the desktop's Terminal. Its Game menu is in
+    the desktop's bar while its window has the focus. While a game is
+    under way, a new deal (by a key, the toolbar, drawing one or three,
+    or the menu) and closing ask first, Cancel first. A game counts as
+    played from its first move. The games won, the best time and the
+    fewest moves, drawing one and three apart, last while the window is
+    open; nothing is written anywhere.
+
+KEYS
+    Drag, click     move cards; a click on the stock deals
+    Arrows          choose a card (Up goes deeper into a run)
+    Enter           send the card chosen where it goes
+    Space, D        deal from the stock
+    U, Backspace,   undo
+    Ctrl+Z
+    N, Ctrl+N       deal again
+    1, 3            deal anew, drawing one card or three
+    Esc, Ctrl+W     close the window
+
+    A key held down repeats only the arrows. A key that changes the
+    game while a card is dragged lets go of it: the card goes back.
+
+LIMITS
+    Klondike only, drawing one or three; no other solitaire, no points
+    (no Vegas or standard scoring), no limit on the passes through the
+    stock. No hints, no pause (the clock runs on in the background), no
+    sound. Undo goes back up to the last 1024 moves. Cards go home by
+    themselves only at the end, once every card is up and the rest can
+    all go home; drawing three, that is not always offered. The record
+    is the session's: it is gone when the window closes.
+
+SEE ALSO
+    gui, wmines, wswell
