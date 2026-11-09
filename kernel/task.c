@@ -362,6 +362,7 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     /* a detached task is init's from the start: nobody else may wait for it, and a shell running
        a background server must not see it as a child in task_wait(WAIT_ANY) */
     t->parent = ((flags & TF_DETACHED) && init_task_ptr) ? init_task_ptr : curTask;
+    t->teller = (flags & TF_TOLD) && curTask ? curTask->pid : 0;  /* 11/09/26: its end is kept for its starter */
     t->state = TS_READY;
 
     irqf = irq_save();
@@ -478,6 +479,43 @@ static void orphan_children(surf_task *t) {
     }
 }
 
+/* 11/09/26 (track desk): the ends of TF_TOLD tasks, for the tasks that started them (task_ends_take()); a slot with
+   pid 0 is free, and seq says which is the oldest */
+static struct task_end ends[TASK_ENDS];
+static u_long ends_teller[TASK_ENDS], ends_seq[TASK_ENDS], ends_next;
+
+/* interrupts off: t's end kept for its teller, in a free slot or the oldest one's */
+static void keep_end(surf_task *t, int code) {
+    u_int i, k = 0;
+    for(i = 0; i < TASK_ENDS; i++) {
+        if(!ends[i].pid) { k = i; break; }
+        if(ends_seq[i] < ends_seq[k]) k = i;
+    }
+    ends[k].pid = t->pid;
+    strlcpy(ends[k].name, t->name, sizeof(ends[k].name));
+    ends[k].code = code;
+    ends[k].how = t->end_how;
+    ends[k].window = (t->flags & TF_WINDOW) != 0;
+    ends_teller[k] = t->teller;
+    ends_seq[k] = ++ends_next;
+}
+
+/* the ends kept for the calling task, at most max, oldest first; forgotten once given */
+int task_ends_take(struct task_end *out, int max) {
+    int n = 0;
+    u_int i, k;
+    u_long flags = irq_save();
+    while(n < max) {
+        for(i = 0, k = TASK_ENDS; i < TASK_ENDS; i++)
+            if(ends[i].pid && ends_teller[i] == curTask->pid && (k == TASK_ENDS || ends_seq[i] < ends_seq[k])) k = i;
+        if(k == TASK_ENDS) break;
+        out[n++] = ends[k];
+        ends[k].pid = 0;
+    }
+    irq_restore(flags);
+    return n;
+}
+
 static void become_zombie(surf_task *t, int code) {
     ktimer_cancel(&t->kill_timer);            /* 10/6/26: a kill that waited has come */
     if(t->wait_timer) {                       /* killed at once in wait_on_timeout(): its timer is on t's stack */
@@ -489,6 +527,7 @@ static void become_zombie(surf_task *t, int code) {
     /* 10/25/26 (SYS_waitx): every kill marks TI_KILL (a task that exits with -1 itself is not killed);
        one that Ctrl+C began (task_interrupt_job()) left TI_INT too */
     t->end_how = !(t->intr & TI_KILL) ? WX_EXITED : (t->intr & TI_INT) ? WX_INTERRUPTED : WX_KILLED;
+    if((t->flags & TF_TOLD) && t->teller) keep_end(t, code);     /* 11/09/26 (track desk) */
     t->state = TS_DEAD;
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */

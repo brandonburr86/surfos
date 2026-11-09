@@ -742,6 +742,8 @@ SMOKE = [
                   'ok   refused writes: read again, the stick holds the old file, whole, and says not cleanly unmounted',
                   "ok   kernel stacks: mapped in full over an unmapped guard; a thread's unmapped when it is collected",
                   'ok   Ctrl+Alt+Del: a key held down is one press, a press after its break another; Delete repeats',
+                  # 11/09/26 (track desk, the second review): the ends kept for the desktop (kernel/task.c)
+                  'ok   a program the desktop started: its end kept for its starter and taken once (status 2, no window)',
                   'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage

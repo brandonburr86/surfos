@@ -377,7 +377,8 @@ int process_spawn_ex(const char *path, int argc, char *const argv[], surf_consol
     job = (flags & TF_DETACHED) || (curTask && (curTask->in_call & TC_COMMAND)) ? SPAWN_JOB_NONE : more ? more->job : 0;
     /* 10/25/26 (L15): TF_PROCESS, so that a user's kill may end it (task_user_may_kill()) */
     r = kthread_create_job(base, con, user_entry, sa, PL_NORMAL,
-                           (flags & (TF_DETACHED | TF_SHELL | TF_SESSION | TF_FOREGROUND)) | TF_INCALL | TF_PROCESS, job);
+                           (flags & (TF_DETACHED | TF_SHELL | TF_SESSION | TF_FOREGROUND | TF_TOLD)) | TF_INCALL | TF_PROCESS,
+                           job);                    /* 11/09/26: TF_TOLD, the desktop's (task_ends_take()) */
     if(r < 0) { release_files(sa); kfree(sa); }
     fs_unref();                                     /* (the child's now: its reap closes them, whatever ends it) */
     return r;

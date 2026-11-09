@@ -52,6 +52,9 @@ typedef void (*kthread_fn)(void *arg);
                             reaches it (kill_task()). Killed at once outside any call, it left its driver's lock held
                             (USB storage's in the hub thread's probe and poll, the SD card's in the card watch), and
                             every later request to that device waited for good, an umount's too */
+#define TF_TOLD     0x1000 /* 11/09/26 (the desktop applications, track desk): a program a desktop started
+                              (shell/guisys_win.c): its end is kept for that desktop (task_ends_take()) */
+#define TF_WINDOW   0x2000 /* 11/09/26: it opened a window (kernel/win.c), for the end kept */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel
@@ -220,7 +223,20 @@ typedef struct surf_task {
                                    closing (fs/vfs.c), and reap()'s of a dead task's: a kill that waited comes once it
                                    is 0 too, as for fs_hold (kernel/task.c). Not a fault's wipeout (B56): what a task
                                    killed there leaves keeps a volume mounted, and no lock held */
+    u_long teller;              /* 11/09/26: TF_TOLD: the task its end is kept for (the one that started it) */
 } surf_task;
+
+/* 11/09/26 (track desk): the end of a TF_TOLD task, kept for the task that started it until it takes it: its pid,
+   name, exit code, how it ended (WX_*, surfos/job.h) and whether it ever opened a window. TASK_ENDS are kept in all,
+   the oldest making room; task_ends_take() gives the caller's, oldest first, and forgets them */
+#define TASK_ENDS 8
+struct task_end {
+    u_long pid;
+    char name[TASK_NAME_LEN];
+    int code, how;
+    bool window;
+};
+int task_ends_take(struct task_end *out, int max);
 
 extern surf_task *curTask;
 extern surf_task *idle_task;

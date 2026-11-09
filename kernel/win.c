@@ -545,6 +545,7 @@ int sys_winopen(const struct win_open *uo) {
         w->gen = gen ? gen : 1;
         w->desk = d;
         w->owner = curTask->pid;
+        curTask->flags |= TF_WINDOW;                    /* 11/09/26: for its end, when the desktop started it */
         w->opened = getticks();
         w->seq = ++opened_so_far;
         w->buf = b;

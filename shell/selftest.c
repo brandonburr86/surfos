@@ -34,6 +34,7 @@ them at once (about 20 ms) and checks nothing then.
 #include <fs/fat.h>
 #include <fs/bcache.h>
 #include <surfos/process.h>
+#include <surfos/job.h>
 #include <net/net.h>
 #include <net/eth.h>
 #include <net/ip.h>
@@ -183,6 +184,29 @@ int heaptest() {
 
 static void exit_with_arg(void *arg) {
     task_exit((int)(u_long)arg);
+}
+
+/* 11/09/26 (track desk, the second review): a task started TF_TOLD (the desktop's programs, shell/guisys_win.c) has
+   its end kept for the task that started it, which takes it once: pid, name, exit code, how, and no window */
+static void told_exit(void *arg) {
+    task_exit((int)(u_long)arg);
+}
+
+static void test_told_ends(void) {
+    struct task_end e[TASK_ENDS];
+    surf_task *k;
+    u_long pid = 0;
+    int status = -1, n;
+    while(task_ends_take(e, TASK_ENDS) > 0) ;           /* none of an earlier run's */
+    k = kthread_create("told", told_exit, (void *)2, PL_NORMAL, TF_TOLD);
+    if(k) {
+        pid = k->pid;
+        task_wait(pid, &status);
+    }
+    n = task_ends_take(e, TASK_ENDS);
+    check(k && status == 2 && n == 1 && e[0].pid == pid && e[0].code == 2 && e[0].how == WX_EXITED && !e[0].window &&
+          !strcmp(e[0].name, "told") && task_ends_take(e, TASK_ENDS) == 0,
+          "a program the desktop started: its end kept for its starter and taken once (status 2, no window)");
 }
 
 static void test_tasks(void) {
@@ -4084,7 +4108,7 @@ static void (*const tests[])(void) = {
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
     test_close_cut_short, test_kill_lock_logged, test_mount_probe, test_vfs_holds, test_kill_reader, test_kill_cleanup,
     test_kill_loop, test_kill_soon, test_kill_fileloop,
-    test_user, test_net, test_usb, test_tasks, test_kills,
+    test_user, test_net, test_usb, test_tasks, test_told_ends, test_kills,
     test_user_kill, test_fpu, test_spawn64, test_kill_memory, test_kstack, test_del_key, test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore,
     test_event_fn, test_libc, test_tty
 };
