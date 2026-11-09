@@ -50,6 +50,7 @@ struct wc_text {
     unsigned nm, mcap;
     unsigned dirty_lo, dirty_hi;        /* changed since the colouring looked: [lo, hi], none when lo > hi */
     unsigned edits;                     /* changes since the colouring looked */
+    unsigned keep;                      /* 11/09/26: the room wc_text_reserve() promised: no shrinking meanwhile */
     struct wc_pool *pool;
 };
 
@@ -70,6 +71,11 @@ void wc_text_load_end(struct wc_text *t, unsigned n);
 /* changes: 0, or -1 with errno (EFBIG past WC_TEXT_MAX, ENOMEM past the pool or without memory) and nothing done */
 int wc_text_insert(struct wc_text *t, unsigned pos, const char *s, unsigned n);
 void wc_text_delete(struct wc_text *t, unsigned pos, unsigned n);
+/* 11/09/26 (the review, C1): before a change that cuts and then puts, room for the text to reach len bytes at most
+   meanwhile, so that no put of it can fail after a cut: 0, or -1 with errno (EFBIG past WC_TEXT_MAX, ENOMEM) and
+   nothing done. The room stays (a deletion gives no memory back) until wc_text_release(). */
+int wc_text_reserve(struct wc_text *t, unsigned long len);
+void wc_text_release(struct wc_text *t);
 
 /* reading */
 unsigned char wc_text_byte(const struct wc_text *t, unsigned pos);

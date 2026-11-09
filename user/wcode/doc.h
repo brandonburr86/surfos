@@ -62,6 +62,11 @@ struct wc_doc {
     char twin[WC_PATH];                 /* the name beside the file found to look like its other half */
     unsigned top, left;                 /* the view: the first line and the first column shown */
     char msg[WC_MSG];                   /* for the status bar, until the next key */
+    /* 11/09/26 (the review, H1): the file as it was read or last saved (its size, time and number in its file
+       system), so that a save over it that changed since (another wcode, Notepad) asks first; disk_changed: the
+       last save was refused for that; overwrite: the next save goes over it all the same (the person said so) */
+    int disk_known, disk_changed, overwrite;
+    unsigned disk_size, disk_mtime, disk_ino;
 };
 
 int wc_doc_init(struct wc_doc *d, struct wc_pool *pool);     /* an empty new file; -1 without memory */
@@ -108,7 +113,15 @@ int wc_doc_replace(struct wc_doc *d, unsigned from, unsigned to, const char *s, 
    (d->msg says so) */
 unsigned wc_doc_copy(struct wc_doc *d, char *out, unsigned size);
 
-/* for the changes find.c makes: one step of several pieces */
+/* 11/09/26 (the review, H1 and H2): an absolute path in its one form, without empty, . and .. parts (.. above / is
+   /) or a / at its end: 0, or -1 for one that is not absolute or does not fit size; and whether two such name one
+   file as FAT names it, case aside (the files a person edits are on FAT; the initrd is read-only) */
+int wc_path_canon(const char *in, char *out, unsigned size);
+int wc_path_same(const char *a, const char *b);
+
+/* for the changes find.c makes: one step of several pieces; 11/09/26, room first for what it comes to at most
+   (wc_doc_room(): 0, or -1 with d->msg and nothing done), so that no put fails after a cut (the review, C1) */
+int wc_doc_room(struct wc_doc *d, unsigned long len);
 void wc_doc_begin(struct wc_doc *d, int kind);
 int wc_doc_put(struct wc_doc *d, unsigned pos, const char *s, unsigned n);
 void wc_doc_cut(struct wc_doc *d, unsigned pos, unsigned n);

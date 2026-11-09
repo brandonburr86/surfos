@@ -157,11 +157,11 @@ static int room(struct wc_text *t, unsigned n) {
     return 0;
 }
 
-/* after a large deletion the memory goes back: the gap to the end, then a smaller block */
+/* after a large deletion the memory goes back: the gap to the end, then a smaller block (not while room is promised) */
 static void shrink(struct wc_text *t) {
     unsigned cap = t->len + WC_GAP;
     char *nb;
-    if(t->ge - t->gs <= (4u << 20) || t->ge - t->gs <= t->len) return;
+    if(t->keep || t->ge - t->gs <= (4u << 20) || t->ge - t->gs <= t->len) return;
     move_gap(t, t->len);
     nb = realloc(t->b, cap);
     if(!nb) return;                             /* it keeps the larger block */
@@ -253,6 +253,20 @@ int wc_text_insert(struct wc_text *t, unsigned pos, const char *s, unsigned n) {
     }
     dirty(t, pos, n, 1);
     return 0;
+}
+
+int wc_text_reserve(struct wc_text *t, unsigned long len) {
+    if(len > WC_TEXT_MAX) {
+        errno = EFBIG;
+        return -1;
+    }
+    if(len > t->len && room(t, (unsigned)(len - t->len)) < 0) return -1;
+    t->keep = 1;
+    return 0;
+}
+
+void wc_text_release(struct wc_text *t) {
+    t->keep = 0;
 }
 
 void wc_text_delete(struct wc_text *t, unsigned pos, unsigned n) {

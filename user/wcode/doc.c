@@ -41,6 +41,37 @@ void wc_doc_free(struct wc_doc *d) {
     wc_undo_free(&d->u);
 }
 
+int wc_path_canon(const char *in, char *out, unsigned size) {
+    unsigned n = 0, k;
+    const char *p = in, *q;
+    if(!in || in[0] != '/' || size < 2) return -1;
+    for(;;) {
+        while(*p == '/') p++;
+        if(!*p) break;
+        for(q = p; *q && *q != '/'; q++);
+        k = (unsigned)(q - p);
+        if(k == 2 && p[0] == '.' && p[1] == '.') {          /* the part before goes */
+            while(n > 0 && out[n - 1] != '/') n--;
+            if(n > 0) n--;
+        } else if(k != 1 || p[0] != '.') {
+            if(n + 1 + k + 1 > size) return -1;
+            out[n++] = '/';
+            memcpy(out + n, p, k);
+            n += k;
+        }
+        p = q;
+    }
+    if(!n) out[n++] = '/';
+    out[n] = 0;
+    return 0;
+}
+
+int wc_path_same(const char *a, const char *b) {
+    for(; *a && *b; a++, b++)
+        if((*a >= 'A' && *a <= 'Z' ? *a + 32 : *a) != (*b >= 'A' && *b <= 'Z' ? *b + 32 : *b)) return 0;
+    return !*a && !*b;
+}
+
 /* how the file is indented: by the most of its first lines, tabs or spaces, and of spaces the commonest step */
 static void detect_indent(struct wc_doc *d) {
     struct wc_text *t = &d->t;
@@ -326,12 +357,25 @@ void wc_doc_begin(struct wc_doc *d, int kind) {
     wc_undo_begin(&d->u, kind, d->anchor, d->caret);
 }
 
+static void no_room(struct wc_doc *d) {
+    snprintf(d->msg, sizeof(d->msg), errno == EFBIG ? "Not changed: a file may have 16 MB at most" :
+             "Not changed: there is not enough memory");
+}
+
+/* 11/09/26 (the review, C1 and M1): before a change that cuts and then puts, room for the text to reach len bytes,
+   so that the put cannot fail once the cut is made (wc_text_reserve(), until wc_doc_end()): 0, or -1 with d->msg and
+   nothing done */
+int wc_doc_room(struct wc_doc *d, unsigned long len) {
+    if(wc_text_reserve(&d->t, len) == 0) return 0;
+    no_room(d);
+    return -1;
+}
+
 /* the selection moves with the text: a position after pos by what went in */
 int wc_doc_put(struct wc_doc *d, unsigned pos, const char *s, unsigned n) {
     if(!n) return 0;
     if(wc_text_insert(&d->t, pos, s, n) < 0) {
-        snprintf(d->msg, sizeof(d->msg), errno == EFBIG ? "Not changed: a file may have 16 MB at most" :
-                 "Not changed: there is not enough memory");
+        no_room(d);
         return -1;
     }
     wc_undo_op(&d->u, 1, pos, s, n);
@@ -354,7 +398,14 @@ void wc_doc_end(struct wc_doc *d) {
     d->anchor = wc_text_snap(&d->t, d->anchor);     /* a lone CR that met a line feed */
     d->caret = wc_text_snap(&d->t, d->caret);
     wc_undo_end(&d->u, d->anchor, d->caret);
-    if(d->u.forgot) snprintf(d->msg, sizeof(d->msg), "Too large a change to undo: the history is forgotten");
+    wc_text_release(&d->t);
+    if(d->u.forgot && !d->msg[0])               /* (a message the change gave says it itself) */
+        snprintf(d->msg, sizeof(d->msg), "Too large a change to undo: the history is forgotten");
+}
+
+/* 11/09/26 (the review): a lone CR right before pos, which a line feed put after it would make a line end of */
+static int lone_cr_before(struct wc_doc *d, unsigned pos) {
+    return pos > 0 && BYTE(d, pos - 1) == '\r';
 }
 
 /* the selection goes, inside a step begun */
@@ -447,9 +498,11 @@ static unsigned unit(struct wc_doc *d, char *out) {
 
 int wc_doc_type(struct wc_doc *d, const char *s, unsigned n) {
     char ind[INDENT_MAX];
-    unsigned at, other, ls, k, m, close;
+    unsigned at, other, ls, k, m, close, from, to;
     int r;
     if(!n) return 0;
+    wc_doc_sel(d, &from, &to);
+    if(wc_doc_room(d, (unsigned long)d->t.len - (to - from) + n) < 0) return -1;     /* nothing cut that stays out */
     wc_doc_begin(d, WC_K_TYPE);
     cut_sel(d);
     r = wc_doc_put(d, d->caret, s, n);
@@ -464,7 +517,8 @@ int wc_doc_type(struct wc_doc *d, const char *s, unsigned n) {
         for(k = ls; k < close && blank(BYTE(d, k)); k++);
         if(k == close && wc_syn_match(&d->t, d->lang, close, &at, &other, 2000, 1u << 20) && at == close) {
             indentation(d, wc_text_line_begin(&d->t, other), other, ind, sizeof(ind), &m);
-            if(m < sizeof(ind) && !same(d, ls, close - ls, ind, m)) {
+            if(m < sizeof(ind) && !same(d, ls, close - ls, ind, m) &&
+               wc_text_reserve(&d->t, (unsigned long)d->t.len - (close - ls) + m) == 0) {
                 wc_doc_cut(d, ls, close - ls);
                 wc_doc_put(d, ls, ind, m);
                 d->anchor = d->caret = ls + m + 1;
@@ -478,8 +532,12 @@ int wc_doc_type(struct wc_doc *d, const char *s, unsigned n) {
 
 int wc_doc_enter(struct wc_doc *d) {
     char buf[2 * INDENT_MAX + 16];
-    unsigned ls, k, m, n = 0, first, end;
+    unsigned ls, k, m, n = 0, first, end, from, to;
     int open = 0, c, r;
+    wc_doc_sel(d, &from, &to);                  /* room first: at most two line ends, the indentation twice, a step */
+    ls = wc_text_line_begin(&d->t, from);
+    indentation(d, ls, from, buf, INDENT_MAX, &m);
+    if(wc_doc_room(d, (unsigned long)d->t.len - (to - from) + 2 * (m < INDENT_MAX ? m : INDENT_MAX) + 12) < 0) return -1;
     wc_doc_begin(d, WC_K_OTHER);
     cut_sel(d);
     ls = wc_text_line_begin(&d->t, d->caret);
@@ -489,7 +547,7 @@ int wc_doc_enter(struct wc_doc *d) {
         d->anchor = d->caret = ls;
     } else if(end < d->caret) open = opens(d, ls, d->caret);
     if(m >= INDENT_MAX) m = INDENT_MAX - 1;
-    if(d->crlf) buf[n++] = '\r';
+    if(d->crlf || lone_cr_before(d, d->caret)) buf[n++] = '\r';    /* after a lone CR, a CR LF: the CR stays lone */
     buf[n++] = '\n';
     memmove(buf + n, buf + 2, m);               /* the line end, then the indentation */
     n += m;
@@ -543,6 +601,7 @@ int wc_doc_tab(struct wc_doc *d, int back) {
     int r = 0;
     wc_doc_sel(d, &from, &to);
     if(!back && (from == to || wc_text_line_of(&d->t, from) == wc_text_line_of(&d->t, to))) {
+        if(wc_doc_room(d, (unsigned long)d->t.len - (to - from) + 8) < 0) return -1;
         wc_doc_begin(d, WC_K_TYPE);             /* a tab, or spaces to the next step */
         cut_sel(d);
         if(d->indent_tab) {
@@ -567,8 +626,9 @@ int wc_doc_indent(struct wc_doc *d, int back) {
     unsigned l0, l1, line, ls, k, n, m;
     int backwards = d->caret < d->anchor, r = 0, had = d->caret != d->anchor;
     sel_lines(d, &l0, &l1);
-    wc_doc_begin(d, WC_K_OTHER);
     n = unit(d, u);
+    if(!back && wc_doc_room(d, (unsigned long)d->t.len + (unsigned long)(l1 - l0 + 1) * n) < 0) return -1;
+    wc_doc_begin(d, WC_K_OTHER);
     for(line = l1 + 1; line-- > l0 && !r;) {
         ls = wc_text_line_start(&d->t, line);
         wc_text_line(&d->t, ls, &l);
@@ -631,7 +691,7 @@ int wc_doc_erase(struct wc_doc *d) {
 }
 
 int wc_doc_paste(struct wc_doc *d, const char *s, unsigned n) {
-    unsigned k, m = 0, len;
+    unsigned k, m = 0, len, from, to;
     char *buf;
     int r;
     for(len = 0; len < n && s[len]; len++);
@@ -641,10 +701,15 @@ int wc_doc_paste(struct wc_doc *d, const char *s, unsigned n) {
         snprintf(d->msg, sizeof(d->msg), "Not pasted: there is not enough memory");
         return -1;
     }
+    wc_doc_sel(d, &from, &to);
     for(k = 0; k < len; k++) {                  /* every line end the file's kind; a lone CR stays one */
         if(s[k] == '\r' && k + 1 < len && s[k + 1] == '\n') continue;
-        if(s[k] == '\n' && d->crlf) buf[m++] = '\r';
+        if(s[k] == '\n' && (d->crlf || (!m && lone_cr_before(d, from)))) buf[m++] = '\r';
         buf[m++] = s[k];
+    }
+    if(wc_doc_room(d, (unsigned long)d->t.len - (to - from) + m) < 0) {
+        free(buf);
+        return -1;
     }
     wc_doc_begin(d, WC_K_OTHER);
     cut_sel(d);
@@ -701,6 +766,7 @@ int wc_doc_comment(struct wc_doc *d) {
         }
     }
     if(!any) return 0;
+    if(!all && wc_doc_room(d, (unsigned long)d->t.len + (unsigned long)(l1 - l0 + 1) * (n + 1)) < 0) return -1;
     wc_doc_begin(d, WC_K_OTHER);
     for(line = l1 + 1; line-- > l0 && !r;) {
         ls = wc_text_line_start(&d->t, line);
@@ -724,6 +790,7 @@ int wc_doc_replace(struct wc_doc *d, unsigned from, unsigned to, const char *s, 
     int r;
     if(to > d->t.len) to = d->t.len;
     if(from > to) from = to;
+    if(wc_doc_room(d, (unsigned long)d->t.len - (to - from) + n) < 0) return -1;     /* nothing cut that stays out */
     wc_doc_begin(d, WC_K_OTHER);
     wc_doc_cut(d, from, to - from);
     r = wc_doc_put(d, from, s, n);
