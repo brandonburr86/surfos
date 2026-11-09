@@ -78,10 +78,12 @@ struct gk_watch { int fd, id; short events; };
    bar); whether the desktop has them as they are now, and whether it shows them */
 #define GK_MENU_NUMBERS 48              /* menus and submenus of a window, at most */
 enum { GK_MENUS_UNSENT, GK_MENUS_SHOWN, GK_MENUS_KEYS };
+#define GKM_RADIO  1                    /* an entry's own: one of a radio group (gk_menu_check() puts a dot) */
+#define GKM_REPEAT 2                    /* its shortcut acts at the keyboard's repeats too (GK_ITEM_REPEAT) */
 struct gk_menu_entry {
     int menu, sub;
     unsigned id, flags, shortcut;
-    unsigned char radio;
+    unsigned char own;                  /* GKM_* */
     char label[WIN_MENU_LABEL];
     char keys[WIN_MENU_KEYS];
 };

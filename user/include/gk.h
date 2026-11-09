@@ -187,7 +187,9 @@ char *gk_paste_all(struct gk *ui, int *len);
    that types a character, and its shortcuts come first for any other: Ctrl or Alt and a key, a function key, Esc).
    A shortcut is a key, with GK_CTRL, GK_SHIFT and GK_ALT: GK_CTRL | 'S', GK_CTRL | GK_SHIFT | 'Z', WIN_KEY_F5,
    WIN_KEY_DELETE, GK_CTRL | WIN_KEY_TAB (a letter in capitals; a character that Shift makes, '+' say, with or without
-   GK_SHIFT: the same); its text in the bar is made of it ("Ctrl+Shift+Z"). The toolkit sends the menus whole again
+   GK_SHIFT: the same); its text in the bar is made of it ("Ctrl+Shift+Z"). A shortcut acts once a press: the
+   keyboard's repeats of its key held down (WIN_MOD_REPEAT) do nothing, unless its item has GK_ITEM_REPEAT, for what
+   holding the key naturally does again (Undo, Redo, Zoom in and out). The toolkit sends the menus whole again
    at the next flush when anything in them changed.
    gk_menu(): a menu at the end of the bar, its number; -1 when there is no room (WIN_MENUS menus, their titles in
    WIN_MENU_BAR cells) or the title is one of the desktop's own (SurfOS, Apps, Window, or ≋ in it). A menu titled
@@ -205,6 +207,7 @@ char *gk_paste_all(struct gk *ui, int *len);
 #define GK_ITEM_CHECK   0x02            /* a check mark, put and taken away by gk_menu_check() */
 #define GK_ITEM_RADIO   0x04            /* one of a group: a dot, put by gk_menu_check() (the program takes the others') */
 #define GK_ITEM_ON      0x08            /* with CHECK or RADIO: marked from the start */
+#define GK_ITEM_REPEAT  0x10            /* its shortcut held down acts again at each of the keyboard's repeats */
 int gk_menu(struct gk *ui, const char *title);
 int gk_submenu(struct gk *ui, int menu, int id, const char *label, unsigned flags);   /* flags: GK_ITEM_OFF */
 int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned shortcut, unsigned flags);

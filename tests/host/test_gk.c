@@ -1021,7 +1021,8 @@ static void menus(void) {
     CHECK(gkf_menu_choose(10));
     run(ui);
     CHECK(heard(GK_EV_MENU, 10));
-    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_REPEAT | 0x80);  /* held down, and a bit no one knows yet: the bits that count */
+    gkf_key(19, WIN_MOD_CTRL | 0x80);                   /* a bit no one knows yet: the bits that count */
+    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_REPEAT);         /* held down: a repeat, nothing (once a press) */
     gkf_key(19, WIN_MOD_CTRL | WIN_MOD_ALT);            /* Ctrl+Alt+S is another key */
     run(ui);
     CHECK(count(GK_EV_MENU) == 1 && heard(GK_EV_MENU, 11) && count(GK_EV_KEY) == 1 && got[ngot - 1].type == GK_EV_KEY);
@@ -1174,6 +1175,35 @@ static void wipes(void) {
     gkf_type("ab");                                     /* typing goes on as in an empty field */
     run(ui);
     CHECK(!strcmp(gk_text(pw), "ab"));
+    gk_close(ui);
+}
+
+/* the games review: a shortcut acts once a press, the keyboard's repeats of its key ignored (Ctrl+Z held: one undo),
+   unless its item asks for them (GK_ITEM_REPEAT: Zoom in, held, zooms on); the repeats are nobody's keys either, and a
+   field with the focus takes neither (it types repeats of what it types) */
+static void repeats(void) {
+    struct gk *ui = window("Repeats", 300, 200);
+    struct gk_widget *f = gk_field(gk_root(ui), 1, 20, 0);
+    int edit = gk_menu(ui, "Edit");
+    CHECK(gk_menu_item(ui, edit, 1, "Undo", GK_CTRL | 'Z', 0) == 0 &&
+          gk_menu_item(ui, edit, 2, "Zoom in", GK_CTRL | '=', GK_ITEM_REPEAT) == 0);
+    run(ui);
+    gkf_key(26, WIN_MOD_CTRL);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('=', WIN_MOD_CTRL);
+    gkf_key('=', WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('=', WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 4 && nth(GK_EV_MENU, 0)->id == 1 && nth(GK_EV_MENU, 1)->id == 2 &&
+          nth(GK_EV_MENU, 3)->id == 2 && !count(GK_EV_KEY));
+    gk_focus(f);
+    gkf_key(26, WIN_MOD_CTRL);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('a', 0);
+    gkf_key('a', WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 1 && !count(GK_EV_KEY) && !strcmp(gk_text(f), "aa"));
     gk_close(ui);
 }
 
@@ -1663,6 +1693,7 @@ int main(void) {
     submenus();
     drags();
     wipes();
+    repeats();
     paste();
     choosers();
     theme();

@@ -195,7 +195,7 @@ static unsigned shortcut_of(unsigned key, unsigned mods) {
 }
 
 static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut,
-               int radio, int sub) {
+               unsigned own, int sub) {
     struct gk_menu_entry *e;
     if(m->n == WIN_MENU_ENTRIES) return -1;
     if(shortcut) shortcut = shortcut_of(shortcut & 0xFFFF, shortcut >> 16);
@@ -206,7 +206,7 @@ static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const 
     e->flags = flags;
     e->sub = sub;
     e->shortcut = shortcut;
-    e->radio = (unsigned char)radio;
+    e->own = (unsigned char)own;
     put_label(e->label, sizeof(e->label), label);
     shortcut_text(shortcut, e->keys, sizeof(e->keys));
     m->sent = 0;
@@ -242,7 +242,7 @@ int gk_submenu(struct gk *ui, int menu, int id, const char *label, unsigned flag
     return m->numbers++;
 }
 
-static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut, int radio) {
+static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut, unsigned own) {
     struct gk_menus *m = ui->menus;
     char cut[WIN_MENU_LABEL];
     int last, most;
@@ -253,7 +253,7 @@ static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char
         put_label(cut, sizeof(cut), label);
         if(desk_help_item(cut)) return -1;              /* About SurfOS is the desktop's */
     }
-    return add(m, menu, id, flags, label, shortcut, radio, -1);
+    return add(m, menu, id, flags, label, shortcut, own, -1);
 }
 
 int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned shortcut, unsigned flags) {
@@ -262,7 +262,8 @@ int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned sh
     if(flags & GK_ITEM_OFF) f |= WIN_MENU_DISABLED;
     if((flags & GK_ITEM_ON) && (flags & GK_ITEM_RADIO)) f |= WIN_MENU_RADIO;
     else if((flags & GK_ITEM_ON) && (flags & GK_ITEM_CHECK)) f |= WIN_MENU_CHECKED;
-    return item(ui, menu, (unsigned)id, f, label, shortcut, (flags & GK_ITEM_RADIO) != 0);
+    return item(ui, menu, (unsigned)id, f, label, shortcut,
+                ((flags & GK_ITEM_RADIO) ? GKM_RADIO : 0) | ((flags & GK_ITEM_REPEAT) ? GKM_REPEAT : 0));
 }
 
 int gk_menu_line(struct gk *ui, int menu) {
@@ -277,7 +278,7 @@ static void set_flag(struct gk *ui, int id, unsigned flag, int on) {
     for(i = 0; i < m->n; i++) {
         struct gk_menu_entry *e = &m->e[i];
         if((e->flags & (WIN_MENU_TITLE | WIN_MENU_SEPARATOR)) || (int)e->id != id) continue;   /* a submenu's item too */
-        want = flag == WIN_MENU_CHECKED && e->radio ? WIN_MENU_RADIO : flag;
+        want = flag == WIN_MENU_CHECKED && (e->own & GKM_RADIO) ? WIN_MENU_RADIO : flag;
         was = e->flags;
         if(on) e->flags |= want;
         else e->flags &= ~want;
@@ -355,7 +356,9 @@ static int reachable(const struct gk_menus *m, const struct gk_menu_entry *e, in
     return 1;
 }
 
-/* a key that is an enabled item's shortcut: GK_EV_MENU, as the desktop's bar would send it */
+/* a key that is an enabled item's shortcut: GK_EV_MENU, as the desktop's bar would send it, once a press: the
+   keyboard's repeats of it (WIN_MOD_REPEAT) are the shortcut's and do nothing, unless its item asked for them
+   (GK_ITEM_REPEAT: Undo, Zoom in, where holding the key is natural), so that a held Ctrl+N deals once */
 int gk_menu_key(struct gk *ui, unsigned key, unsigned mods) {
     struct gk_menus *m = ui->menus;
     struct gk_event *ev;
@@ -365,6 +368,7 @@ int gk_menu_key(struct gk *ui, unsigned key, unsigned mods) {
     for(i = 0; i < m->n; i++) {
         const struct gk_menu_entry *e = &m->e[i];
         if(!e->shortcut || e->shortcut != sc || !reachable(m, e, &top)) continue;
+        if((mods & WIN_MOD_REPEAT) && !(e->own & GKM_REPEAT)) return 1;
         if((ev = gk_post_ev(ui, GK_EV_MENU, NULL, top))) ev->id = (int)e->id;
         return 1;
     }
