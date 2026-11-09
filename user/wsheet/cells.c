@@ -16,7 +16,10 @@ Memory: every allocation of the model goes through mem_alloc(), which counts it 
 sh_mem_max, so that a file or a paste too big for SurfOS is refused with a message rather than
 taking every page the program may have; the tests make any one allocation fail with sh_mem_fail.
 A formula also keeps back, while it lives, what a recalculation needs for it (recalc_per_formula),
-so that recalc() always has its arrays within the budget (11/09/26, the review's L7).
+so that recalc() always has its arrays within the budget (11/09/26, the review's L7). And every
+allocation but a reader's stops short of the budget by what a reader needs besides the sheet it
+builds (read_headroom), so that a sheet grown until an edit is refused, saved, opens again (11/09/26,
+the second review).
 */
 
 #include <stdio.h>
@@ -27,6 +30,18 @@ so that recalc() always has its arrays within the budget (11/09/26, the review's
 
 long sh_mem_max = SH_MEMORY, sh_mem_used, sh_mem_blocks, sh_mem_fail = -1, sh_steps_max = SH_STEPS;
 long sh_file_max = SH_FILE_MAX;
+int mem_readers;                        /* files.c's readers at work, and the recalculation after one */
+
+/* what reading a file takes besides the sheet it makes: build_new()'s table of rows, each row's struct until
+   build_finish() moves the rows into the sheet's array (which is no bigger than the saved sheet's), and files.c's
+   reader and buffers (about 43 KB; 128 KB kept). The reviewer measured the reader's need: 2,094,055 bytes over a
+   sheet of 65,536 rows on 64 bits, under the 2,228,224 kept there; 1,703,936 are kept on i386 */
+const long read_headroom = (long)(SH_ROWS * (sizeof(struct row *) + sizeof(struct row))) + 131072L;
+
+/* the budget left for an allocation: all of it for a reader, read_headroom short of it for everything else */
+static long room(void) {
+    return sh_mem_max - sh_mem_used - (mem_readers ? 0 : read_headroom);
+}
 
 static const char *const error_names[SH_ERRORS + 1] = { "", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!",
                                                         "#N/A", "#NULL!", "#CYCLE!", "#ERROR!", "#LIMIT!" };
@@ -42,7 +57,7 @@ union head {                            /* in front of every block: its size, an
 void *mem_alloc(size_t n) {
     union head *h;
     if(sh_mem_fail >= 0 && sh_mem_fail-- == 0) return NULL;
-    if(n > (size_t)sh_mem_max || (long)n > sh_mem_max - sh_mem_used) return NULL;
+    if(n > (size_t)sh_mem_max || (long)n > room()) return NULL;
     h = malloc(sizeof(*h) + n);
     if(!h) return NULL;
     h->n = n;
@@ -64,7 +79,7 @@ void *mem_realloc(void *p, size_t n) {
     h = (union head *)p - 1;
     old = h->n;
     if(sh_mem_fail >= 0 && sh_mem_fail-- == 0) return NULL;
-    if(n > old && (n - old > (size_t)sh_mem_max || (long)(n - old) > sh_mem_max - sh_mem_used)) return NULL;
+    if(n > old && (n - old > (size_t)sh_mem_max || (long)(n - old) > room())) return NULL;
     nh = realloc(h, sizeof(*h) + n);
     if(!nh) return NULL;
     sh_mem_used += (long)n - (long)old;
@@ -182,7 +197,7 @@ int content_absent(const struct content *c) {
 /* a formula's block, its share of a recalculation kept back with it: NULL when the budget has no room */
 static struct formula *formula_new(void) {
     struct formula *f;
-    if(sh_mem_max - sh_mem_used < recalc_per_formula) return NULL;
+    if(room() < recalc_per_formula) return NULL;
     f = mem_zalloc(sizeof(*f));
     if(f) sh_mem_used += recalc_per_formula;
     return f;

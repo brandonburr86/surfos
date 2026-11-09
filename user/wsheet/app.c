@@ -482,15 +482,44 @@ static void failed(struct app *a, const char *title, const char *line1, const ch
     gk_message(a->ui, BOX_FAILED, title, line1, line2);
 }
 
+/* the window's sheet now s (the one it had is freed): the view on its top left, nothing being edited */
+static void take_sheet(struct app *a, struct sheet *s) {
+    struct view keep = a->v;
+    sh_free(a->s);
+    a->s = s;
+    a->said.s = NULL;                           /* a new sheet may have the old one's address */
+    a->editing = E_NONE;
+    a->lossy = 0;
+    a->whole_known = 0;
+    view_init(&a->v, s);
+    view_place(&a->v, keep.x, keep.y, keep.w, keep.h);
+    gk_scroll_to(a->grid, 0, 0);
+    a->all = 1;
+}
+
 static void start_read(struct app *a, const char *path) {
     char line[APP_MSG];
     long size = 0;
+    struct sheet *s;
     int h = a->io.open(a->io.ctx, path, &size);
     if(h < 0) {
         snprintf(line, sizeof(line), "%s: %s", base_name(path), strerror(errno));
         failed(a, "Not opened", line, "");
         return;
     }
+    /* the sheet the file replaces goes first (its question answered, if it had changes): a reader may need the
+       whole budget, so a file the window saved at its budget opens again in it (11/09/26, the second review);
+       a file that cannot be read then leaves a new, empty sheet */
+    sh_free(a->s);
+    a->s = NULL;
+    s = sh_new();
+    if(!s) {                                    /* nothing left of a budget just freed: no sheet to show */
+        a->io.close(a->io.ctx, h);
+        a->quit = 1;
+        return;
+    }
+    take_sheet(a, s);
+    a->path[0] = 0;
     a->rd = sh_read_begin(sh_kind_of(path));
     if(!a->rd) {
         a->io.close(a->io.ctx, h);
@@ -513,7 +542,7 @@ static void stop_read(struct app *a) {
 
 static void read_done(struct app *a) {
     char why[SH_WHY], line[APP_MSG];
-    struct sheet *old = a->s;                   /* freed once the new one is built, before it is worked out */
+    struct sheet *old = a->s;                   /* start_read()'s empty sheet: freed once the new one is built */
     struct sheet *s = sh_read_finish(a->rd, why, sizeof(why), &old);
     a->rd = NULL;
     a->io.close(a->io.ctx, a->rd_h);
@@ -523,18 +552,10 @@ static void read_done(struct app *a) {
         failed(a, "Not opened", line, why);
         return;
     }
-    a->s = s;
-    a->said.s = NULL;                           /* a new sheet may have the old one's address */
-    a->editing = E_NONE;
-    a->lossy = 0;
+    a->s = NULL;                                /* freed by sh_read_finish() */
+    take_sheet(a, s);
     a->whole = sh_state(s);                     /* a .sheet opened holds all of it */
     a->whole_known = sh_kind_of(a->rd_path) == SH_NATIVE;
-    {
-        struct view keep = a->v;
-        view_init(&a->v, s);
-        view_place(&a->v, keep.x, keep.y, keep.w, keep.h);
-    }
-    gk_scroll_to(a->grid, 0, 0);
     title_path(a, a->rd_path);
     snprintf(line, sizeof(line), "Opened %s: %d cells%s", base_name(a->path), sh_cells(s),
              sh_kind_of(a->path) == SH_CSV ? " (CSV: values only)" : "");
@@ -545,8 +566,10 @@ static void read_done(struct app *a) {
 /* done of size, in whole percent below 100: in 32 bits, multiplied first only where that cannot overflow (the
    review's L10: a file past 21 MB did), since a long long's division would need libgcc, which programs lack */
 static int percent(long done, long size) {
+    long p;
     if(done >= size) return 99;
-    return (int)(size < 0x7FFFFFFFL / 100 ? done * 100 / size : done / (size / 100));
+    p = size < 0x7FFFFFFFL / 100 ? done * 100 / size : done / (size / 100);
+    return p > 99 ? 99 : (int)p;                /* dividing the size first can reach 100 before the end */
 }
 
 int app_reading(const struct app *a) {
@@ -646,20 +669,8 @@ static void do_new(struct app *a) {
         say(a, "Not enough memory for a new sheet");
         return;
     }
-    sh_free(a->s);
-    a->s = s;
-    a->said.s = NULL;
-    a->editing = E_NONE;
-    a->lossy = 0;
-    a->whole_known = 0;
-    {
-        struct view keep = a->v;
-        view_init(&a->v, s);
-        view_place(&a->v, keep.x, keep.y, keep.w, keep.h);
-    }
-    gk_scroll_to(a->grid, 0, 0);
+    take_sheet(a, s);
     a->path[0] = 0;
-    a->all = 1;
     say(a, "A new sheet");
 }
 

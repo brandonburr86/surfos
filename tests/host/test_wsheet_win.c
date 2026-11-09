@@ -25,7 +25,7 @@ static struct app A;
 
 /**** files in memory ****/
 
-#define FILES 16
+#define FILES 24
 static struct mfile {
     char path[WIN_PATH_MAX];
     char *data;
@@ -468,8 +468,8 @@ int main(void) {
     put_file("/stick/bad.sheet", "hello\n", 6);
     ctrl('O', 0);
     run();
-    gkf_dialog_answer("/stick/bad.sheet");
-    CHECK(run() && box_is(BOX_FAILED) && !strcmp(inp("A1"), "a"));
+    gkf_dialog_answer("/stick/bad.sheet");                 /* the sheet went first (the second review): a new one is left */
+    CHECK(run() && box_is(BOX_FAILED) && vtype("A1") == SH_EMPTY && !strcmp(gkf_title(), "Untitled - Spreadsheet"));
     gkf_key('\r', 0);
     CHECK(run());
     /* a file named on the command line, as Files starts it */
@@ -508,17 +508,13 @@ int main(void) {
         CHECK(app_reading(&A) && reads == APP_CHUNKS && status_starts("Reading big.csv:"));
         gkf_type("q");
         while(gk_next(A.ui, &ev, 0) > 0) app_event(&A, &ev);
-        CHECK(status_is("A file is being read: Esc stops it") && !strcmp(inp("A1"), "kept"));
+        CHECK(status_is("A file is being read: Esc stops it") && vtype("A1") == SH_EMPTY);
         gkf_key(27, 0);
         while(gk_next(A.ui, &ev, 0) > 0) app_event(&A, &ev);
-        CHECK(!app_reading(&A) && status_is("Not opened") && !strcmp(inp("A1"), "kept"));
+        CHECK(!app_reading(&A) && status_is("Not opened") && vtype("A1") == SH_EMPTY);
     }
-    ctrl('O', 0);                               /* read whole: 40,000 rows */
-    run();
-    CHECK(box_is(BOX_SAVE));
-    gkf_key(WIN_KEY_RIGHT, 0);
-    gkf_key('\r', 0);
-    run();
+    ctrl('O', 0);                               /* read whole: 40,000 rows (Esc left a new sheet: nothing to ask) */
+    CHECK(run() && !gk_box_open(A.ui) && gkf_dialog());
     gkf_dialog_answer("/stick/big.csv");
     CHECK(run() && !app_reading(&A) && !strcmp(inp("B1"), "row 0") && num("A2") == 1);
     /* the theme and a new size */
@@ -680,7 +676,7 @@ int main(void) {
     click_cell(4, 2);
     ctrl('V', 0);
     CHECK(run() && !strcmp(inp("C5"), "=A1*2") && num("C5") == 8 && vtype("C1") == SH_EMPTY);
-    /* reading far into a file of 30 MB: its percentage worked out in 64 bits */
+    /* reading far into a file of 30 MB: its percentage worked out in 32 bits without overflowing */
     fresh(NULL);
     ctrl('O', 0);
     run();
@@ -697,6 +693,30 @@ int main(void) {
         while(gk_next(A.ui, &ev, 0) > 0) app_event(&A, &ev);
         CHECK(!app_reading(&A));
     }
+    /* the second review: a sheet grown until an edit is refused, saved as .sheet and as CSV, opens again in the same
+       window (Open frees the sheet first, its question answered) and in a fresh one */
+    fresh(NULL);
+    memset(big, 'x', 200);
+    for(n = i = 0; sh_set(A.s, i % SH_ROWS, i / SH_ROWS, big, 200) == 0; i++) n++;
+    CHECK(n > 100000);
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/full.sheet");
+    CHECK(run() && status_is("Saved full.sheet"));
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/full.csv");      /* texts alone: CSV loses nothing, and asks nothing */
+    CHECK(run() && status_is("Saved the values in full.csv"));
+    for(i = 0; i < 2; i++) {
+        ctrl('O', 0);
+        run();
+        gkf_dialog_answer(i ? "/stick/full.csv" : "/stick/full.sheet");
+        CHECK(run() && !app_reading(&A) && !gk_box_open(A.ui) && sh_cells(A.s) == n && status_starts("Opened full."));
+    }
+    fresh("/stick/full.sheet");
+    CHECK(!gk_box_open(A.ui) && sh_cells(A.s) == n);
+    fresh("/stick/full.csv");
+    CHECK(!gk_box_open(A.ui) && sh_cells(A.s) == n);
     fresh(NULL);
     /* closing: asked first when anything is not saved; Cancel keeps it, Don't save ends it */
     gkf_close();

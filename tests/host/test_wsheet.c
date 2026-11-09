@@ -1985,7 +1985,7 @@ static int count_put(void *ctx, const char *b, int n) {
 
 static void test_review(void) {
     static char text[8300], csv[8300], got[8300];
-    char why[SH_WHY], name[16], *a, *b;
+    char why[SH_WHY], name[16], *a, *b, *files[2];
     struct sh_reader *rd;
     struct sh_value v;
     struct sheet *t, *u, *old;
@@ -2129,7 +2129,7 @@ static void test_review(void) {
     CHECK(!sh_limited(S) && num("C2") == 8000);
     /* the recalculation's arrays never run out: each formula keeps its share back */
     fresh();
-    sh_mem_max = sh_mem_used + 150000;
+    sh_mem_max = sh_mem_used + read_headroom + 150000;
     for(n = 0; n < 65536; n++) {
         snprintf(name, sizeof(name), "A%d", n + 1);
         if(set(name, "=1+1") < 0) break;
@@ -2155,12 +2155,31 @@ static void test_review(void) {
     t = sh_read_finish(rd, why, sizeof(why), &old);
     CHECK(!t && old == S && num("A2") == 2);
     free(a);
-    /* a formula that does not parse is kept as typed: rows moving, or a paste, do not adjust it (the manual) */
+    /* a formula whose text does not split into tokens is kept as typed when rows move; one that splits but does not
+       parse has its references moved (the manual) */
     fresh();
     set("A1", "7");
     set("B5", "=A1*2+B9?");
+    set("B6", "=A1+");
     sh_insert_rows(S, 0, 2);
     CHECK_STR(inp("B7"), "=A1*2+B9?");
+    CHECK_STR(inp("B8"), "=A3+");
+    /* the second review: a sheet grown until an edit is refused (texts of 200 bytes down 65,536 rows and on), saved
+       as .sheet and as CSV, opens again: edits stop read_headroom short of the budget, all of which a reader may use */
+    fresh();
+    memset(text, 'x', 200);
+    for(n = k = 0; sh_set(S, k % SH_ROWS, k / SH_ROWS, text, 200) == 0; k++) n++;
+    CHECK(n > 100000 && sh_mem_used <= sh_mem_max - read_headroom && !strcmp(sh_why(S), "Not enough memory for the change"));
+    files[SH_NATIVE] = save(S, SH_NATIVE);
+    files[SH_CSV] = save(S, SH_CSV);
+    fresh();                                    /* a window that holds nothing else: a fresh one, or Open's */
+    for(k = SH_NATIVE; k <= SH_CSV; k++) {
+        t = load(k, files[k], (int)strlen(files[k]), 65536, why);
+        if(!t) printf("the %s of a sheet at its budget refused: %s\n", k == SH_CSV ? "CSV" : ".sheet", why);
+        CHECK(t && sh_cells(t) == n && !sh_limited(t));
+        sh_free(t);
+        free(files[k]);
+    }
 }
 
 /* a row or a column for a change: mostly among the first, sometimes at the sheet's far edge or in its middle

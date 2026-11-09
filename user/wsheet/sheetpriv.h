@@ -180,6 +180,8 @@ int text_fold_compare(const char *a, int alen, const char *b, int blen);  /* eit
 /* recalc.c */
 void recalc(struct sheet *s);
 extern const long recalc_per_formula;   /* the bytes a recalculation needs for each formula (its arrays) */
+extern int mem_readers;                 /* while not 0, allocations may use read_headroom too (cells.c) */
+extern const long read_headroom;
 
 /* edit.c */
 void hist_free(struct sheet *s);

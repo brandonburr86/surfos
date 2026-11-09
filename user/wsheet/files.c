@@ -196,9 +196,14 @@ static int build_refused(struct sh_reader *rd, int e) {
 static int csv_field(void *ctx, int r, int c, const char *text, int len);
 
 struct sh_reader *sh_read_begin(int kind) {
-    struct sh_reader *rd = mem_zalloc(sizeof(*rd));
+    struct sh_reader *rd;
     int i;
-    if(!rd) return NULL;
+    mem_readers++;                              /* a reader may use the whole budget (cells.c's read_headroom) */
+    rd = mem_zalloc(sizeof(*rd));
+    if(!rd) {
+        mem_readers--;
+        return NULL;
+    }
     rd->kind = kind;
     for(i = 0; i < SH_COLS; i++) rd->width[i] = SH_WIDTH_DEFAULT;
     rd->b = build_new();
@@ -223,6 +228,7 @@ void sh_read_cancel(struct sh_reader *rd) {
     mem_free(rd->line);
     mem_free(rd->content);
     mem_free(rd);
+    mem_readers--;
 }
 
 static int csv_field(void *ctx, int r, int c, const char *text, int len) {
@@ -454,12 +460,14 @@ struct sheet *sh_read_finish(struct sh_reader *rd, char *why, int size, struct s
         } else memcpy(s->width, rd->width, sizeof(s->width));
     }
     if(!s) snprintf(why, (size_t)size, "%s", rd->why);
+    mem_readers++;                              /* the recalculation may still use what the reader did */
     sh_read_cancel(rd);                         /* the reader's memory, and the sheet replaced, go first */
     if(s && old && *old) {
         sh_free(*old);
         *old = NULL;
     }
     if(s) recalc(s);
+    mem_readers--;
     return s;
 }
 
