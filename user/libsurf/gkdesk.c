@@ -462,6 +462,7 @@ char *gk_paste_all(struct gk *ui, int *len) {
             if(len) *len = r;
             return buf;
         }
+        gk_wipe(buf, (size_t)n + 1);
         free(buf);
         if(r >= 0 || errno != ENOSPC) return NULL;      /* (it grew meanwhile: again) */
     }
@@ -481,7 +482,7 @@ int gk_paste(struct gk *ui, char *buf, unsigned size) {
         while(n && n < len && ((unsigned char)all[n] & 0xC0) == 0x80) n--;
         memcpy(buf, all, (size_t)n);
         buf[n] = 0;
-        memset(all, 0, (size_t)len);
+        gk_wipe(all, (size_t)len);
         free(all);
         return n;
     }

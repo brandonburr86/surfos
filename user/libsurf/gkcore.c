@@ -66,6 +66,13 @@ long long gk_div64(long long n, long long d) {
     return (long long)q;
 }
 
+/* n bytes at p zeroed through a volatile pointer, so that no optimization drops it because they are freed or go out of
+   scope next: what a password field, the clipboard or a box's answer held */
+void gk_wipe(void *p, size_t n) {
+    volatile unsigned char *b = (volatile unsigned char *)p;
+    while(n--) *b++ = 0;
+}
+
 /* Ctrl and a letter (surfos/win.h's keys): its control byte, 1 for Ctrl+A to 26, with WIN_MOD_CTRL (Ctrl+I is 9 with
    it, Tab 9 without, Ctrl+Tab WIN_KEY_TAB). A desktop before the modifiers sent the control byte alone, and Backspace
    as 8, Tab as 9, Enter as 13: without WIN_MOD_CTRL those are the keys, the other bytes Ctrl and their letters */
@@ -743,7 +750,7 @@ void gk_post_text(struct gk *ui, int type, int id, int value, const char *text, 
 /* the text given with the last event goes (wiped: it may be a password a box took) */
 static void drop_given(struct gk *ui) {
     if(!ui->given) return;
-    memset(ui->given, 0, strlen(ui->given));
+    gk_wipe(ui->given, strlen(ui->given));
     free(ui->given);
     ui->given = NULL;
 }
@@ -1029,7 +1036,7 @@ void gk_close(struct gk *ui) {
     drop_given(ui);
     for(i = 0; i < GK_QUEUE; i++) {
         if(!ui->qtext[i]) continue;
-        memset(ui->qtext[i], 0, strlen(ui->qtext[i]));
+        gk_wipe(ui->qtext[i], strlen(ui->qtext[i]));
         free(ui->qtext[i]);
     }
     gw_close(ui->win);
@@ -1046,6 +1053,11 @@ static int window_event(struct gk *ui) {
     struct win_event e;
     int r = gw_next(ui->win, &e, 0);
     if(r > 0) dispatch(ui, &e);
+    if(r > 0 && e.type == WIN_EV_KEY) {                 /* a key gone where it went (a password's character, say):
+                                                           its copies, here and in gui.h's queue, zeroed */
+        gk_wipe(&ui->win->queue[ui->win->given - 1], sizeof(e));
+        gk_wipe(&e, sizeof(e));
+    }
     return r;
 }
 

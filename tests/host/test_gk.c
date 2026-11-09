@@ -27,6 +27,7 @@
 #include <poll.h>
 #include <gk.h>
 #include "gk_fake.h"
+#include "../../user/libsurf/gkpriv.h"           /* a field's state, to see that a wipe leaves no byte */
 
 static int checks, failed;
 static void show_got(void);
@@ -1130,6 +1131,31 @@ static void drags(void) {
     gk_close(ui);
 }
 
+/* a password field wiped (gk_field_wipe()): every byte it held is zero, its text's buffer whole and a character typed
+   partway (its first byte, waiting for the rest); the keys that typed them are gone from gui.h's queue too */
+static void wipes(void) {
+    struct gk *ui = window("Wipe", 300, 100);
+    struct gk_widget *pw = gk_field(gk_root(ui), 1, 16, GK_PASSWORD);
+    const struct gk_line *f = pw->k;
+    int i, kept = 0;
+    run(ui);
+    gk_focus(pw);
+    gkf_type("s3cr\xc3\xa9t");
+    gkf_key(0xC3, 0);                                   /* the first byte of one more */
+    run(ui);
+    CHECK(f->len == 7 && f->nparts == 1 && (unsigned char)f->part[0] == 0xC3 && !strcmp(gk_text(pw), "s3cr\xc3\xa9t"));
+    for(i = 0; i < GW_QUEUE; i++) kept += gk_gw(ui)->queue[i].type == WIN_EV_KEY;
+    CHECK(kept == 0);
+    gk_field_wipe(pw);
+    for(i = 0, kept = 0; i <= f->max; i++) kept += f->buf[i] != 0;
+    for(i = 0; i < (int)sizeof(f->part); i++) kept += f->part[i] != 0;
+    CHECK(kept == 0 && f->len == 0 && f->nparts == 0 && !strcmp(gk_text(pw), ""));
+    gkf_type("ab");                                     /* typing goes on as in an empty field */
+    run(ui);
+    CHECK(!strcmp(gk_text(pw), "ab"));
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1615,6 +1641,7 @@ int main(void) {
     menus();
     submenus();
     drags();
+    wipes();
     paste();
     choosers();
     theme();
