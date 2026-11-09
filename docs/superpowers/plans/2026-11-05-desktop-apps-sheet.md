@@ -110,8 +110,9 @@ for the desktop's clipboard: as they show (formats applied, no width), a field w
 quotes. Paste moves relative references by as far as the cells moved, and what would leave the sheet is #REF!; the cells
 the copy has nothing for are emptied, formats too. Text pasted from elsewhere is taken as typed, a field a cell, into the
 cells' own formats (it has none). A copy covers 1,048,576 cells at most (16 whole columns), its text 128 KB (the desktop's
-clipboard), past which only the Spreadsheet's own copy is made. Cut is Copy and then Delete: references to the cut cells
-are not moved, as they are by a spreadsheet's Cut, which is more than the brief asks.
+clipboard), past which only the Spreadsheet's own copy is made. Cut is Copy and then Delete, and since the review its
+paste moves the cells (below); references from elsewhere to the cut cells are not moved, as they are by a
+spreadsheet's Cut, which is more than the brief asks.
 
 **The history** keeps 100 steps and 8 MB; a change bigger than that is made and cannot be undone (the history starts
 again), as Notepad's does. A sheet is modified when its state is not the one its file holds: every step has a serial, so
@@ -140,8 +141,9 @@ once when let go (one step), and all selected whole columns take it. A drag past
 each move. Text runs on over empty cells to its right; a value, "" too, stops it. The status line is the active cell's
 trouble ("a ( has no ) (at character 5)"), or the selection's sum, average and count.
 
-**Limits, for every file read and everything pasted:** 256 columns, 65,536 rows, 300,000 cells, 8,192 bytes a cell, 32
-MB a file, a line of the sheet's format 4 x 8,192 + 64 bytes (every byte escaped), and the model's memory 40 MB,
+**Limits, for every file read and everything pasted:** 256 columns, 65,536 rows, 300,000 cells, 8,192 bytes a cell (the
+' that keeps a text text not counted, since the review), 32 MB a file read or written, a line of the sheet's format 4 x
+8,192 + 64 bytes (every byte escaped), and the model's memory 40 MB,
 counted by its own allocator (`mem_alloc()`), so a file or paste too big for SurfOS is refused with a message instead of
 taking every page the program may have. Within 64 MB with the window and libsurf.
 
@@ -218,8 +220,9 @@ is remembered by a hash, and a paste of it unchanged is the copy's.
 **Files.** Open and Save as are the desktop's choosers, for `sheet csv`; the chooser starts in the file's folder and
 offers its name (or `Untitled.sheet`). A file is read 4 x 64 KB between two looks at the events, so the window answers
 and Esc stops it; while it is read nothing else changes the sheet (a key says so), since the file replaces it. A file
-that cannot be read leaves the sheet as it was and says why, with the line or the row. Saving a sheet with formulas as
-CSV asks first. New, Open and Close ask about unsaved changes (Save, Don't save, Cancel); Save on an untitled sheet is
+that cannot be read leaves the sheet as it was and says why, with the line or the row. Saving as CSV asks first when
+formulas, formats or column widths would be lost, and after such a save New, Open and Close ask again (the review).
+New, Open and Close ask about unsaved changes (Save, Don't save, Cancel); Save on an untitled sheet is
 Save as, and what waited for the save goes on when it is done. The desktop's chooser comes only for a person's key or
 click: Open after a Save as on an untitled sheet cannot chain a second chooser, and says to press Ctrl+O again.
 
@@ -292,6 +295,77 @@ only change since. Through the lock, 11/05/26 and 11/06/26:
   -O2 smoke test passed (558, and the Files test's 51); the whole guiapps at -O0 was 350 of 352, the same two.
 - Nothing of the Spreadsheet has run on the laptop.
 
+## The review
+
+An independent review read 882cd963 (11/09/26). What held up: files replaced only through saveutil.h (no O_TRUNC
+anywhere, O_EXCL for a new one), a full disk and a pulled stick keeping the old file, the questions about unsaved
+changes, the snprintf fix, bounds on files and no recursion, the 24 functions on about 100 edge cases, #CYCLE!,
+#LIMIT! and the order of recalculation, numbers, rows and columns inserted and deleted, Undo, and the code's origin.
+What it found, and what one fix round did:
+
+- **Critical: an edit in the formula bar rewrote what it could not show.** Kit's field makes a byte below 32 a space
+  and holds 8,192 bytes, and commit() wrote it back whatever happened, so a double-click and a click elsewhere made
+  `line1\nline2` `line1 line2`. Now an edit that changed nothing changes nothing (commit() compares the bar with the
+  cell's input), and a cell holding a byte below 32 (a line break or a tab, from a file, a CSV's quoted field or a
+  paste) is not edited in the bar at all: a double-click, Ctrl+E, a click in the bar or a key typed there says so, and
+  typing in the grid replaces the cell. Escapes in the bar, as the .sheet format writes them, were the other way, and
+  were not taken: a backslash typed there would mean one thing in a cell that held a line break and another in every
+  other cell, and such cells come only from files and pastes. The field holds 8,193 bytes now (below).
+- **High: an 8,192-byte CSV field that needs its ' made a .sheet that wsheet refused.** The ' that keeps a text text is
+  not counted: a cell's input is at most 8,192 bytes, or 8,193 beginning with ' (input_fits(): sh_set(), the .sheet
+  reader, typing, the field). The rule of the round, anything wsheet saves wsheet opens, also gave the next two.
+- **Medium: a CSV save said too little and the sheet counted as saved.** sh_csv_loss() says what CSV leaves out:
+  formulas, formats, column widths, cells not worked out (#LIMIT!, written as that text); the question names them,
+  and after such a save the window keeps what was lost, so New, Open and Close ask again, their Save as offering the
+  file's name as a .sheet; not when a .sheet was saved since the sheet last changed (the window keeps that state), as
+  the screen checks do: total.sheet, then values.csv, then Ctrl+W.
+- **Medium: Cut then Paste shifted the moved formulas' references.** A Cut's clip (sh_clip_cut()) pastes as a move
+  (fx_rewrite()'s FX_CUT): references into the cut cells move with them, $ or not, a range when all of it was cut,
+  and the rest stay. Formulas elsewhere that referred to the cut cells are not changed: the page and docs/GUI.md say so.
+- **Medium: a .sheet could be saved past the 32 MB a reader takes** (\xHH makes one byte four). sh_write() counts
+  first and writes nothing past sh_file_max (a variable now, for the tests); the window says how big the file would be.
+- **Medium: the work limit did not count text work.** Every 8 bytes compared, scanned or made is a step (eval.c's
+  text_work()). Measured natively, a step of a range takes 4.5 ns and a byte compared 0.6 ns, so 8 bytes a step keeps
+  20 million steps near a tenth of a second either way; 25,000 formulas comparing 8 KB texts stop with #LIMIT! after
+  about 10,000 of them instead of running seconds on 100,000 counted steps.
+- **L7, the recalculation's memory near the budget.** Each formula keeps its share of recalc()'s arrays back in the
+  budget while it lives (formula_new(), recalc_per_formula), so they always fit; sh_read_finish() frees the reader's
+  memory and the sheet being replaced before the new one is worked out, and the window opens files through it. A sheet
+  holds somewhat fewer formulas: the reviewer's 150,000 small ones are refused at 122,637 ("not enough memory for the
+  sheet") rather than opened with every one #LIMIT!.
+- **L8**: the CSV question's answer leaves the close's question its place when that one took it. **L9**: kit's field
+  has no call to put text at its cursor, so Edit > Paste is off while the bar holds an edit, and the field's own
+  Ctrl+V pastes at its cursor; pasted into what is typed in the grid, control characters (a NUL, a tab) are spaces,
+  as the field makes them. **L10**: the reading's percentage in 32 bits, the size divided by 100 first past 21 MB
+  (the first fix divided a long long, which on i386 needs libgcc's __divdi3, and programs link no libgcc: the image's
+  build caught it). **L11**: f_open() reads st only once fstat() filled it. **L12**: a formula that does not parse is
+  kept as typed when cells move too, and the page says so: moving the references of a formula not finished would
+  rewrite by tokens text that a later edit may read otherwise. **L13**: FNV-1a is in the sources' table.
+
+The tests: test_wsheet has 32 checks more, 748 (the input rule, CSV fields of 8,190 to 8,192 bytes of three kinds
+saved as .sheet, opened and saved again, the writer refusing past sh_file_max with nothing written, CSV's losses, Cut
+pastes, text work, formulas filling the budget still worked out, sh_read_finish(), a broken formula kept), and
+fuzz_changes now picks rows and columns at the sheet's far edges and middle too and pastes a third of its copies as a
+Cut's; test_wsheet_win has 39 more, 161 (a cell with a line break by a double-click, Ctrl+E and a click in the bar, an
+edit that changes nothing, the 8,193-byte input saved and opened, a file too big, CSV's questions and the close after
+them, a sheet saved whole before its CSV, the CSV question replaced, Paste in the bar and into typing, a Cut, the
+percentage of a 30 MB read). `test_wsheet long` under the sanitizers: clean, in 68 s. The
+reviewer's probes against this tree: fuzz_cross 400 rounds, none bad; probe_win1 and probe_win2 as above; probe_size2's
+write refused. io.c could not be built on the host (saveutil.h reads SurfOS's struct stat): its paths are the screen
+checks' on SurfOS.
+
+The gates of the fix round, on a29f36a5 (the round's commits, and kit's aac42b11 merged as the integrator named it:
+kit's screen checks finding the desktop's chooser by its own title), 11/09/26:
+
+- **`make unittest`** (the Docker image, gcc -m32 and glibc): passed; test_wsheet 748, test_wsheet_win 161, test_guidesk
+  139, test_gk 436, test_wkit 70, test_man.
+- **The guiapps scenario, every track's checks, through the lock:** 374 of 374 at -O2 and at -O0, the Spreadsheet's 20
+  among them, the kernel heap as before gui (668,144 bytes in use), fsck_msdos and fsck.fat finding no error on the
+  stick; the Spreadsheet's checks alone: 26 of 26 at both.
+- **`make test-all`** was not run for the round: since 11/09/26 a track that changes only its own program's files leaves
+  it to the integration's full gate (the lock's queue was nine hours long). The first gates above ran it.
+- The image's build found the first L10 fix's division (above). Nothing of the Spreadsheet has run on the laptop.
+
 ## Where the code comes from
 
 Written from standards, papers and this tree; no other program's source was recalled or looked at.
@@ -308,6 +382,7 @@ Written from standards, papers and this tree; no other program's source was reca
 | CSV | RFC 4180; a number's form in it, RFC 8259 (JSON) |
 | UTF-8 | RFC 3629's well-formed sequences |
 | The tests' random numbers | G. Marsaglia's xorshift |
+| The hash that knows the clipboard again (app.c) | FNV-1a, G. Fowler, L. C. Noll and K.-P. Vo's |
 | `saveutil.h`, the drawing kit, the window calls | this tree |
 
 The sheet's own file format is mine; its records are a line each, so it reads like the tree's other settings files.
