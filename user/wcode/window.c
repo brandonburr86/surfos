@@ -169,8 +169,22 @@ static void place(struct wc_window *w) {
 
 /**** the bars, the tabs, the menus ****/
 
+/* 11/09/26 (the second review): the find bar's fields greyed while Replace all changes the file (it searches with
+   what they said when it began; a change of them meanwhile would say otherwise) */
+static void grey(struct wc_window *w) {
+    int busy = wc_app_busy(&w->app);
+    if(busy == w->greyed) return;
+    w->greyed = busy;
+    gk_enable(w->find, !busy);
+    gk_enable(w->with, !busy);
+    gk_enable(w->icase, !busy);
+    gk_enable(w->word, !busy);
+    gk_enable(w->regex, !busy);
+}
+
 static void status(struct wc_window *w) {
     struct wc_doc *d = wc_app_doc(&w->app);
+    grey(w);
     char left[WC_MSG + 64];
     if(w->app.status[0]) snprintf(left, sizeof(left), "%s", w->app.status);
     else if(d->msg[0]) snprintf(left, sizeof(left), "%s", d->msg);
@@ -389,7 +403,7 @@ static void close_bar(struct wc_window *w) {
 
 /* what app.c said to do; 0 once the program is to end */
 static int act(struct wc_window *w, int r) {
-    char question[WC_PATH + 32];
+    char question[WC_PATH + 32], name[WC_PATH];
     if(r & WC_DO_QUIT) return 0;
     if(r & WC_DO_COPY) copy(w);
     if(r & WC_DO_PASTE) paste(w);
@@ -398,8 +412,14 @@ static int act(struct wc_window *w, int r) {
     if((r & WC_DO_ASK) && wc_app_asking(&w->app, question, sizeof(question)) >= 0)
         gk_confirm(w->ui, BOX_SAVE, question, "If you don't save them, they are lost.", "", "Save", "Don't save",
                    "Cancel");
+    if(r & WC_DO_ALL_ASK) {                     /* 11/09/26 (the second review): too large to undo, asked first */
+        snprintf(question, sizeof(question), "Replace %u matches?", w->app.find.count);
+        snprintf(name, sizeof(name), "On %u line%s, as one change too large to undo:", w->app.find.lines,
+                 w->app.find.lines == 1 ? "" : "s");
+        gk_confirm(w->ui, BOX_ALL, question, name, "Ctrl+Z will not take it back, nor Esc stop it.", "Replace all", NULL,
+                   "Cancel");
+    }
     if(r & WC_DO_DISK) {                        /* 11/09/26 (the review, H1) */
-        char name[WC_PATH];
         wc_doc_title(wc_app_doc(&w->app), name, sizeof(name));
         snprintf(question, sizeof(question), "%.60s changed on the disk", name);
         gk_confirm(w->ui, BOX_DISK, question, "Something saved it after it was opened here.",
@@ -473,6 +493,8 @@ static int input(const struct gk_event *ev) {
     case GK_EV_KEY: case GK_EV_MENU: case GK_EV_ACTIVATE: case GK_EV_CLICK: case GK_EV_TAB_CLOSE: case GK_EV_CLOSE:
         return 1;
     case GK_EV_POINTER: return (ev->value & WIN_BUTTON_LEFT) != 0;
+    case GK_EV_CHANGE:                          /* 11/09/26: the find bar changed: a search with the old one stops */
+        return ev->id == ID_FIND || ev->id == ID_WITH || ev->id == ID_CASE || ev->id == ID_WORD || ev->id == ID_REGEX;
     }
     return 0;
 }
@@ -493,8 +515,8 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
         if(ev->w == w->text) r = wc_app_key(&w->app, (unsigned)ev->value, ev->mods);
         else if(ev->value == 27) close_bar(w);
         break;
-    case GK_EV_MENU:                            /* (the guard or the disk question asking: answered first) */
-        if(w->app.asking >= 0 || gk_asking(w->ui) == BOX_DISK) break;
+    case GK_EV_MENU:                            /* (the guard or the disk's or Replace all's question: answered first) */
+        if(w->app.asking >= 0 || gk_asking(w->ui) == BOX_DISK || gk_asking(w->ui) == BOX_ALL) break;
         if(ev->id == MENU_ABOUT)
             gk_message(w->ui, BOX_ABOUT, "Code Editor", "Text and code, coloured for C, assembly, Python, shell,",
                        "Makefiles, Markdown and JSON. Its keys: man wcode.");
@@ -570,7 +592,8 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
         }
         break;
     case GK_EV_ANSWER:
-        if(ev->id == BOX_DISK)
+        if(ev->id == BOX_ALL) r = wc_app_all(&w->app, ev->value == 0);
+        else if(ev->id == BOX_DISK)
             r = wc_app_disk(&w->app, ev->value == 0 ? WC_DISK_OVER : ev->value == 1 ? WC_DISK_SAVE_AS : WC_DISK_CANCEL);
         else if(ev->id == BOX_SAVE)
             r = wc_app_answer(&w->app, ev->value == 0 ? WC_ANSWER_SAVE : ev->value == 1 ? WC_ANSWER_DISCARD :
@@ -584,7 +607,8 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
         else if(ev->id == CHOOSE_FOLDER && ev->value) gk_set_text(w->fin, ev->text);
         break;
     case GK_EV_CLOSE:                           /* pressed again while the guard asks: its question stands */
-        if(w->app.asking < 0 && gk_asking(w->ui) != BOX_DISK) r = wc_app_cmd(&w->app, WC_CMD_QUIT);
+        if(w->app.asking < 0 && gk_asking(w->ui) != BOX_DISK && gk_asking(w->ui) != BOX_ALL)
+            r = wc_app_cmd(&w->app, WC_CMD_QUIT);
         break;
     case GK_EV_TIMER:
         if(ev->id == TIMER_DRAG) r = drag_tick(w);
@@ -600,7 +624,9 @@ int wc_window_event(struct wc_window *w, const struct gk_event *ev) {
 int wc_window_idle(struct wc_window *w) {
     int r = wc_app_idle(&w->app);
     w->idle = (r & WC_DO_IDLE) != 0;
-    if(r & (WC_DO_DRAW | WC_DO_FILES)) refresh(w);
+    if(r & WC_DO_ALL_ASK) act(w, r);            /* Replace all, counted, asks before it changes the file */
+    else if(r & (WC_DO_DRAW | WC_DO_FILES)) refresh(w);
+    else if(r & WC_DO_STATUS) status(w);        /* a search's step: the status bar only */
     if(!w->app.view.exact) w->idle = 1;
     return w->idle;
 }

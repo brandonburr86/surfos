@@ -26,7 +26,7 @@ enum {
     ID_TABS = 1, ID_TEXT, ID_FIND, ID_WITH, ID_CASE, ID_WORD, ID_REGEX, ID_PREV, ID_NEXT, ID_REPLACE_ONE,
     ID_REPLACE_ALL, ID_FIND_CLOSE, ID_FILES_WHAT, ID_FILES_IN, ID_FILES_NAMES, ID_FILES_FOLDER, ID_FILES_GO,
     ID_FILES_CLOSE, ID_FILES_LIST,
-    BOX_SAVE = 100, BOX_GOTO, BOX_ABOUT, BOX_DISK,
+    BOX_SAVE = 100, BOX_GOTO, BOX_ABOUT, BOX_DISK, BOX_ALL,
     CHOOSE_OPEN = 200, CHOOSE_SAVE, CHOOSE_FOLDER,
     MENU_LANGUAGE = 300, MENU_ABOUT,
     TIMER_DRAG = 400,
@@ -46,6 +46,7 @@ struct wc_window {
     int focused;                        /* the text has the keys */
     int idle;                           /* more to do between events */
     int relayout;                       /* the layout changed (a new size, a bar shown): the toolkit lays it out first */
+    int greyed;                         /* 11/09/26: the find bar's fields greyed, Replace all changing the file */
     int dragging, drag_x, drag_y;       /* the left button held in the text, and where the pointer is */
     unsigned listed;                    /* find in files' lines in its list */
     char dir[WC_PATH];                  /* the folder of the last file chosen, where a chooser starts */

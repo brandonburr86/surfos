@@ -338,20 +338,40 @@ static int run_job(struct wc_app *a, int job) {
     struct wc_doc *d = wc_app_doc(a);
     unsigned long step = a->step ? a->step : WC_FIND_STEP;
     int r = job == WC_JOB_FIND ? wc_find_doc_go(&a->find, d, step) : wc_find_all_go(&a->find, d, step);
-    if(r == 2) {
+    if(r == 2) {                                /* (the status bar only: the text is drawn at the end) */
         a->job = job;
         snprintf(a->status, sizeof(a->status), "%s: Esc stops it", job == WC_JOB_FIND ? "Searching" :
                  wc_find_all_changing(&a->find) ? "Replacing" : "Counting the matches");
-        return WC_DO_DRAW | WC_DO_IDLE;
+        return WC_DO_STATUS | WC_DO_IDLE;
+    }
+    if(r == 3) {                                /* too large to undo: asked first, the job waiting for the answer */
+        a->job = job;
+        a->all_asking = 1;
+        a->status[0] = 0;
+        return WC_DO_ALL_ASK | WC_DO_DRAW;
     }
     a->job = WC_JOB_NONE;
     a->status[0] = 0;
     return follow(a) | WC_DO_TITLE;
 }
 
+int wc_app_all(struct wc_app *a, int yes) {
+    if(a->job != WC_JOB_ALL || !a->all_asking) return WC_DO_DRAW;
+    a->all_asking = 0;
+    if(yes) {
+        wc_find_all_confirm(&a->find);
+        return run_job(a, WC_JOB_ALL);
+    }
+    wc_find_all_stop(&a->find, wc_app_doc(a));
+    snprintf(wc_app_doc(a)->msg, sizeof(wc_app_doc(a)->msg), "Not replaced");
+    a->job = WC_JOB_NONE;
+    return WC_DO_DRAW;
+}
+
 int wc_app_interrupt(struct wc_app *a, int esc) {
     struct wc_doc *d = wc_app_doc(a);
     if(!a->job) return 0;
+    a->all_asking = 0;                          /* (asked: as Cancel) */
     if(wc_app_busy(a)) {
         if(!esc) {
             snprintf(a->status, sizeof(a->status), "Replacing: wait for it, or Esc stops it");
@@ -691,7 +711,7 @@ int wc_app_idle(struct wc_app *a) {
     struct wc_doc *d = wc_app_doc(a);
     int r = 0, exact;
     unsigned hits = a->grep.nhits;
-    if(a->job) r |= run_job(a, a->job);         /* 11/09/26: a search's next step */
+    if(a->job && !a->all_asking) r |= run_job(a, a->job);     /* 11/09/26: a search's next step */
     if(a->grep.state == WC_GREP_RUN) {
         wc_grep_step(&a->grep, 256u << 10);
         if(a->grep.nhits != hits || a->grep.state != WC_GREP_RUN) r |= WC_DO_DRAW | WC_DO_FILES;
