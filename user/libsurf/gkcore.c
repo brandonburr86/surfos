@@ -401,13 +401,18 @@ const char *gk_text(const struct gk_widget *w) {
     return w->text ? w->text : "";
 }
 
-void gk_set_text(struct gk_widget *w, const char *text) {
-    if(!w || w->ui->painting) return;
+/* (the review, F7) 0 when the widget holds the text as given, 1 when it holds it changed to fit (cut, a control
+   character a space), -1 when it could not take it (no memory, or while painting) */
+int gk_set_text(struct gk_widget *w, const char *text) {
+    if(!w || w->ui->painting) return -1;
+    if(!text) text = "";
     if(w->cls->set_text) w->cls->set_text(w, text);
     else if(gk_set_str(w, &w->text, text)) {
         gk_relayout(w);
         gk_dirty(w);
     }
+    if(!strcmp(gk_text(w), text)) return 0;
+    return w->ui->failed ? -1 : 1;
 }
 
 int gk_value(const struct gk_widget *w) {

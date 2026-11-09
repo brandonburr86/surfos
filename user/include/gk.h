@@ -253,9 +253,12 @@ struct gk_widget *gk_focused(const struct gk *ui);
 void gk_remove(struct gk_widget *w);                       /* it and what is in it go */
 void gk_redraw(struct gk_widget *w);                       /* painted again at the next gk_next() */
 /* the text of a label, button, check box, field, status bar (its left part), tab strip (the page shown's label);
-   "" for none. gk_set_text() for a field puts the cursor at its end */
+   "" for none. gk_set_text() for a field puts the cursor at its end, and says whether the widget holds the text as
+   given (11/09/26): 0, or 1 when it holds it changed to fit (a field's or a text's max reached, the text cut at a
+   character's start; a control character as a space, a CR LF as one line end: compare gk_text()), or -1 when it
+   could not take it (no memory: gk_ok() says 0) */
 const char *gk_text(const struct gk_widget *w);
-void gk_set_text(struct gk_widget *w, const char *text);
+int gk_set_text(struct gk_widget *w, const char *text);
 /* the value of a check box (0, 1), radio group, list (the row selected, -1), tabs, pages (the one shown), scroll
    bar (its first unit shown); setting it is no person's change: no GK_EV_CHANGE */
 int gk_value(const struct gk_widget *w);

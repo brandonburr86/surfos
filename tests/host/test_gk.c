@@ -1346,6 +1346,19 @@ static void punct(void) {
     gk_close(ui);
 }
 
+/* the review (F7): gk_set_text() says whether the widget holds the text as given */
+static void fits(void) {
+    struct gk *ui = window("Fits", 300, 200);
+    struct gk_widget *f = gk_field(gk_root(ui), 1, 8, 0), *t = gk_text_area(gk_root(ui), 2, 64, 0);
+    struct gk_widget *l = gk_label(gk_root(ui), "x");
+    CHECK(gk_set_text(f, "abc") == 0 && gk_set_text(f, "abcdefghij") == 1 && !strcmp(gk_text(f), "abcdefgh"));
+    CHECK(gk_set_text(f, "a\tb") == 1 && !strcmp(gk_text(f), "a b") && gk_set_text(f, "") == 0);
+    CHECK(gk_set_text(f, "1234567\xc3\xa9") == 1 && !strcmp(gk_text(f), "1234567"));   /* é cut whole */
+    CHECK(gk_set_text(t, "one\ntwo") == 0 && gk_set_text(t, "one\r\ntwo") == 1 && !strcmp(gk_text(t), "one\ntwo"));
+    CHECK(gk_set_text(l, "a label") == 0 && gk_set_text(NULL, "x") == -1);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1837,6 +1850,7 @@ int main(void) {
     cuts();
     held();
     punct();
+    fits();
     paste();
     choosers();
     theme();
