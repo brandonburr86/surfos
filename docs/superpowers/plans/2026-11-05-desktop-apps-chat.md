@@ -38,7 +38,7 @@ model gives it, as `user/wclock/`'s does.
 
 | Files | What |
 |---|---|
-| `user/undertow/transport.c`, `transport.h` | one read-only accessor, `ut_transport_fd()`, added as fetch added `ut_transport_eof_clean()`: no line changed |
+| `user/undertow/transport.c`, `transport.h` | one read-only accessor, `ut_transport_fd()`, added as fetch added `ut_transport_eof_clean()`: no line changed; and since the review a read that never waits, `ut_transport_read_now()`, also by insertion |
 | `Makefile` | insertions only: the program (with Undertow's transport and Mbed TLS, as fetch), `unittest-chat` |
 | `rootfs/apps/wchat.app` | Chat in Apps > Programs and on the desktop; its icon, two speech bubbles, drawn for it |
 | `rootfs/man/wchat.txt` | the manual page |
@@ -67,9 +67,10 @@ Undertow's transport fails a read that waits 15 seconds for a byte, which an IRC
 only when `poll()` says the connection has something. The transport kept its descriptor to itself; the integrator allowed one
 read-only accessor, `ut_transport_fd()`, added to `transport.c` and `transport.h` without a line changed, as fetch added
 `ut_transport_eof_clean()`. The helper reads with room for a whole TLS record (16 KB, Mbed TLS's default here), so nothing is left
-inside TLS where `poll()` cannot see it; a record that comes in pieces is waited for within the transport's 15 seconds. A TLS 1.3
-session ticket that comes alone makes the transport wait for the data after it, up to 15 seconds: servers send them right after
-the handshake, when the IRC server's first lines follow at once. The transport's deadline is 20 days (its clock's differences hold
+inside TLS where `poll()` cannot see it. Since the review it reads with `ut_transport_read_now()` (below), which never waits: a
+record with no data in it (the session tickets a TLS 1.3 server sends after its handshake) or part of a record gives nothing, and
+the helper goes back to `poll()`; and it relays the window's lines before it reads, since a server may say nothing until the first
+ones come. The transport's deadline is 20 days (its clock's differences hold
 24): a connection that lasts longer ends and says so. Undertow's sentences about web pages are put in the Chat's words by
 `link_words()` ("TLS refused" for "HTTPS refused", without the advice about `http://` addresses and Undertow's `clock` command).
 
@@ -89,8 +90,10 @@ the window.
   (`gk_field_wipe()`) once the model has the password, and when the kind of password goes back to None or the form is cancelled.
 - **The history** of the input line is the field's (`gk_field_history()`, which kit built for this), not the model's: the model's
   own, written in phase 1 before the toolkit existed, did the same and was taken out, so that there is one.
-- **The messages are an area the program draws** (`gk_area`), in rows of 16 pixels: the time, the nick in its form (`<nick>`,
-  `* nick`, `-nick-`), the text wrapped at spaces under itself after the time. A line's rows are counted once, at the area's width
+- **The messages are an area the program draws** (`gk_area`), in rows of 16 pixels: the time, the line's start (`<nick>`,
+  `* nick`, `-nick-`; `-server-` for what a server says itself; `≋` for the Chat's own lines, `·` for what happened in a room),
+  then the text, wrapped at spaces, every row of it after the line's start, so that no wrapped row begins where a sender does.
+  A sender is shown in printable ASCII only, so no server can put the Chat's `≋` there. A line's rows are counted once, at the area's width
   less the scroll bar's room, so a bar coming or going never wraps them again, and the scroll bar is in rows. While the view is at
   the newest line it follows new ones; scrolled back it stays on the line at its top, also when the oldest lines go or the window's
   width wraps them anew. Switching rooms shows the newest lines of the other.
@@ -147,6 +150,8 @@ the window.
 - **SASL PLAIN only when asked for** in the connect dialog, and only when CAP LS offers `sasl` with PLAIN (or without a list of
   mechanisms). The account is the nick typed in the dialog, the authorization identity empty (RFC 4616). A server that says
   AUTHENTICATE + before PLAIN was asked for, or a second time, gets nothing; one that asks for anything else gets `AUTHENTICATE *`.
+- **Each step of the SASL login has 30 seconds:** CAP REQ, AUTHENTICATE PLAIN and the login itself. A server that does not
+  answer one gets `AUTHENTICATE *` and CAP END, and the password goes (it was kept for an answer that never came).
 - **When SASL fails or is not offered, registration goes on** without the login, and the server's room says so as an error. The other
   choice, ending the connection, would leave a user on a network whose services are down with no way in at all; the line says
   plainly that they are not logged in.
@@ -156,11 +161,15 @@ the window.
 
 ### The password
 
-The password is used once. PASS goes in the first lines; SASL's goes when the server asks for it. Then the model's copy is wiped,
+The password is used once, and without TLS only after a question. With TLS off and a password chosen the form says, in coral,
+that anyone on the network could read it; Connect then asks "Send your password unencrypted?" with Cancel as the first answer,
+which Enter gives (Esc gives Cancel too): only Send anyway, chosen, connects (`plain_ok`), and the model checks again just
+before PASS or AUTHENTICATE goes (`chat_password_may_go()`: TLS on the link, or that answer). PASS goes in the first lines;
+SASL's goes when the server asks for it. Then the model's copy is wiped,
 the queue slot that held the line is wiped as it is sent, and so are the buffers SASL built it in. Anything left of it goes when
 the connection ends. A reconnection asks for it again. It is never shown, logged or written anywhere. A test looks for the
-password's bytes in the whole model after each step. Without TLS the server's room says that the password goes unencrypted; the
-connection is the user's choice (a bouncer on a home network), so it is allowed.
+password's bytes in the whole model after each step: its struct, every file's static buffers, every room's lines, and in the
+window test the fields' buffers too. A connection without TLS stays the user's choice (a bouncer on a home network), asked.
 
 ### What a server's lines do
 
@@ -176,6 +185,8 @@ connection is the user's choice (a bouncer on a home network), so it is allowed.
 - **PING:** answered at once, ahead of everything waiting; at most two PONGs wait at a time, so a flood of PINGs is answered twice.
 - **Keepalive:** 90 seconds with no byte from the server, a PING; 60 more and the connection is lost ("the server has not answered
   for 150 seconds").
+- **CASEMAPPING is taken once a connection,** the first that comes: re-sorting every list at a server's whim costs the window
+  half a second for a 16 KB frame over 65,536 nicks.
 - **ISUPPORT (005)** is read, not shown: PREFIX, CHANTYPES, CHANMODES, STATUSMSG, NICKLEN, CASEMAPPING, NETWORK (with the
   draft's `\xHH` escapes), each checked; a value that fails leaves the one before. RFC 2812's RPL_BOUNCE, which has the same
   number, is shown.
@@ -208,6 +219,9 @@ connection is the user's choice (a bouncer on a home network), so it is allowed.
 - `/quit` while a connection is being made cancels it.
 - Up and Down bring back the lines sent, 64 of them: the input field's history (`gk_field_history()`), which keeps the line being
   typed when Up first leaves it and gives it back after the newest.
+- A line for NickServ (`/msg NickServ ...`, `/query NickServ ...`, or a line or `/me` in NickServ's query) carries passwords
+  (IDENTIFY, REGISTER, GHOST, SET PASSWORD): it is shown with its first word and `****`, never enters the history, and the field,
+  the model's buffers and the queue slot are wiped once it has gone.
 
 ### Limits
 
@@ -245,7 +259,7 @@ Memory: at most about 8 MB of lines, 5 MB of nicks (65,536 of 64 bytes) and the 
 
 ## The tests
 
-`tests/host/test_wchat.c` (72,343 checks), built with the host's C library and the model's memory through `wchat_alloc.h`:
+`tests/host/test_wchat.c` (72,427 checks), built with the host's C library and the model's memory through `wchat_alloc.h`:
 
 - lines cut from the server's bytes at every split; at the longest length and one byte over, with and without CR; a megabyte
   with no line end; a NUL;
@@ -267,9 +281,13 @@ Memory: at most about 8 MB of lines, 5 MB of nicks (65,536 of 64 bytes) and the 
   (the same rooms every way); 300 rounds of 20 KB of random words and bytes cut at random, with the clock jumping, every list
   checked after each;
 - a whole session with every allocation in it failing in turn: never a crash, nothing left allocated;
-- the link's frames cut at every byte, and every way a frame can be wrong.
+- the link's frames cut at every byte, and every way a frame can be wrong;
+- the review's findings: no password over a plain connection without the answer, nor as SASL's base64, and the last check before
+  AUTHENTICATE; the SASL steps' 30 seconds; CASEMAPPING flipped 650 times over 8192 nicks; a numeric that says the Chat's words,
+  under the server's name; channels' names with a direction override and bytes that are no UTF-8, cleaned in the KICK, the label
+  and the title; NickServ's lines masked, and their passwords nowhere once sent.
 
-`tests/host/test_wchatwin.c` (263 checks): the window on kit's fake desktop, with the model as it is and the helper played by the
+`tests/host/test_wchatwin.c` (290 checks): the window on kit's fake desktop, with the model as it is and the helper played by the
 test at the other ends of real pipes (the test's `chat_spawn()`, `chat_kill()`, `chat_reaped()`, `chat_minute()` stand in for
 `proc.c`):
 
@@ -284,7 +302,15 @@ test at the other ends of real pipes (the test's `chat_spawn()`, `chat_kill()`, 
 - a helper that says nonsense, one that dies (its last words read first), one that says why it ended (Undertow's words made the
   Chat's), one that does not start, and the model's own ending (no answer to its PING);
 - closing: at once when not connected; asking first when connected, Cancel, Close, QUIT, the window going with the connection's
-  end; and going after three seconds when the server never closes.
+  end; and going after three seconds when the server never closes;
+- the review's: the form's warning; the question that Enter and Esc answer Cancel, nothing started, then Send anyway and PASS; the
+  Chat's `≋` and the server's `-irc.test-` before the same words; a wrapped row that starts after `<bob> `, not where he does; a
+  line for NickServ masked, kept out of the history, wiped.
+
+`tests/host/test_wchat_transport.c` (29 checks, since the review): `ut_transport_read_now()` on Undertow's own transport test (its
+file included whole, its main renamed: its simulated network moves the clock only when something waits, and its TLS 1.3 server
+sends two tickets after the handshake and then nothing until the client speaks): the tickets give nothing, five times, with no
+wait; the response comes whole, then the end, with close_notify; the same over plain TCP; past the deadline, -1 and a message.
 
 **The screen** (`tools/gui_apps_chat.py`, in the guiapps scenario, which has no network): wchat started in the Terminal, its form,
 the focus, an empty server refused in coral, TLS off moving the port, a connection that its helper cannot make (no network) said
@@ -295,7 +321,10 @@ SASL and a made-up password shown as dots; CAP LS 302, NICK, USER, CAP REQ and t
 server; the welcome in the status bar; /join and the server's answer: the tab, the topic, the nick list, a message that names us
 with a red word; a message typed reaching the server; a query from the nick list, and a message in it reaching bob; the close
 button asking, QUIT reaching the server, the window going; then TLS to the same port, which is no TLS server: the handshake
-reaches the server, fails, and the room says so; ps finding no wchat; the password never at the server as itself.
+reaches the server, fails, and the room says so; ps finding no wchat; the password never at the server as itself. Since the
+review: the form's warning without TLS; Connect asking first, Enter alone answering Cancel with no connection made, then Send
+anyway; with TLS and a password, no question; the base64 of the login at the server once, after Send anyway, and nothing but a
+handshake on the TLS connection.
 
 `helper.c`, `proc.c` and `main.c` are SurfOS's calls (spawnx, the pipes, Undertow's transport) and run only on SurfOS: the
 screen checks exercise them (a connection made, one refused by TLS, one with no network, the helper collected), not the host
@@ -306,6 +335,28 @@ tests.
 input; test_wchatwin passes, built x86_64 (under Rosetta, as kit built the toolkit's: libgui's printf has an x86 `divl`) with kit's
 toolkit and fake desktop. None of it is in `make unittest`, as the brief says. In Docker the same files built with `gcc -m32` pass
 (`make unittest`), and the model builds for SurfOS at -O0 and -O2 with no warning.
+
+## The review (11/09/26)
+
+An independent review read bdfc05d2; one fix round followed, in the commits after it. What it found, and what was done:
+
+| | Finding | Done |
+|---|---|---|
+| H1 | A password went over a plain connection without asking: PASS at once, SASL's base64 too | The form's warning; the question, Cancel first (Enter, Esc); `plain_ok`; the model's check before PASS and AUTHENTICATE; tests turned round |
+| M2 | Each CASEMAPPING flip re-sorted every list | Taken once a connection |
+| M3 | A server's numerics looked like the Chat's own lines | The server's name as their sender; the Chat's own lines marked `≋`, which no sender shown can hold |
+| L4 | A SASL step never answered kept the password forever | 30 seconds a step, then `AUTHENTICATE *`, CAP END, the password wiped |
+| L5 | The helper could wait 15 seconds on a record with no data, and lose the connection | `ut_transport_read_now()`, added to transport.c and .h by insertion (Undertow's own behaviour unchanged: `make test-web` at O0 and O2), and the window's lines relayed first |
+| L6 | Channels' names reached the KICK line, the tabs and the title raw | A cleaned label kept for each room (`chat_room_name()`) |
+| L7 | A wrapped row could begin where a sender does | Every row after the line's start |
+| L8 | `/msg NickServ IDENTIFY pw` was shown, and kept in the history | Masked, kept out, wiped |
+| L9 | Undertow's transport offers ALPN `http/1.1` on IRC connections too | Noted, unchanged: the transport is Undertow's, the offer harmless (a server that takes it says so, and nothing else changes) |
+
+The tests' memory scan now covers every file's static buffers (moved to file scope, listed in `chat_bufs[]`, `chat_recv_bufs[]`,
+`chat_input_bufs[]`), every room's lines and the fields' buffers. The reviewer's probes (`probe_stall`, `probe_cpu`) pass against
+the fixed tree: no SASL over plain without the answer, the password gone; 0.04 ms a 005 line of flips. `probe_win` is built for
+the old flow (Connect at once) and now stops at the question; test_wchatwin's review checks take its place. Merged with the round:
+apps/kit aac42b11 (kit's chooser checks by the desktop's own title), so that guiapps runs whole.
 
 ## Where the code comes from
 
