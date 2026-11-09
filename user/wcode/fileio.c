@@ -25,11 +25,29 @@ static const char *base(const char *path) {
     return b ? b + 1 : path;
 }
 
+/* 11/09/26 (the review, H1): the file as it is on the disk now, to know later whether it changed since */
+static void remember(struct wc_doc *d, const struct stat *st) {
+    d->disk_known = 1;
+    d->disk_size = st->size;
+    d->disk_mtime = st->mtime;
+    d->disk_ino = st->ino;
+    d->disk_changed = d->overwrite = 0;
+}
+
 int wc_file_read(struct wc_doc *d, const char *path) {
     struct stat st;
-    char *p, extra, twin[WC_PATH];
+    char *p, extra, twin[WC_PATH], full[WC_PATH];
     unsigned got = 0, want;
     int fd, n = 0, r;
+    /* 11/09/26 (the review, H2): in its one form (the app gives every path so, from /), so that /usb1p1/../dev/tty
+       is /dev/tty; and whatever its name, a file of devfs is a device (fstat() below) */
+    if(path[0] == '/') {
+        if(wc_path_canon(path, full, sizeof(full)) < 0) {
+            snprintf(d->msg, sizeof(d->msg), "Cannot open %.100s: the name is too long", path);
+            return -1;
+        }
+        path = full;
+    }
     if(!strncmp(path, "/dev/", 5) || !strcmp(path, "/dev")) {
         snprintf(d->msg, sizeof(d->msg), "%s is a device, not a file to edit", base(path));
         return -1;
@@ -41,6 +59,11 @@ int wc_file_read(struct wc_doc *d, const char *path) {
     }
     if(fstat(fd, &st) < 0) {
         snprintf(d->msg, sizeof(d->msg), "Cannot read %s: %s", base(path), strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if(!strcmp(st.fs, "devfs")) {
+        snprintf(d->msg, sizeof(d->msg), "%s is a device, not a file to edit", base(path));
         close(fd);
         return -1;
     }
@@ -76,6 +99,7 @@ int wc_file_read(struct wc_doc *d, const char *path) {
         snprintf(d->msg, sizeof(d->msg), "%s is not text (it has a NUL byte): open it in Hex", base(path));
         return -1;
     }
+    remember(d, &st);
     if(su_twin_beside(path, twin, sizeof(twin))) {     /* edit's care from the start */
         d->unsure = 1;
         snprintf(d->twin, sizeof(d->twin), "%s", base(twin));
@@ -176,13 +200,22 @@ int wc_file_save(struct wc_doc *d, const char *to) {
     struct su_save s;
     struct stat st;
     char path[WC_PATH];
-    int own = !to || !strcmp(to, d->path), r, e;
+    int own = !to || wc_path_same(to, d->path), r, e;
     snprintf(path, sizeof(path), "%s", to ? to : d->path);
     if(!path[0]) {
         snprintf(d->msg, sizeof(d->msg), "Not saved: it has no name yet (Save as)");
         return -1;
     }
     if(own && d->unsure) return copy_beside(d, path, NULL, 0);
+    /* 11/09/26 (the review, H1): over its own file only as it was read or last saved here, unless the person said
+       to save over it: another wcode or Notepad may have saved it since */
+    if(own && d->disk_known && !d->overwrite && stat(path, &st) == 0 &&
+       (st.size != d->disk_size || st.mtime != d->disk_mtime || st.ino != d->disk_ino)) {
+        d->disk_changed = 1;
+        snprintf(d->msg, sizeof(d->msg), "Not saved: %s changed on the disk since it was read here", base(path));
+        return -1;
+    }
+    d->overwrite = 0;
     if(stat(path, &st) < 0) {
         if(errno != ENOENT) {
             snprintf(d->msg, sizeof(d->msg), "Not saved: %s", strerror(errno));
@@ -248,6 +281,8 @@ int wc_file_save(struct wc_doc *d, const char *to) {
         if(guessed) wc_doc_set_lang(d, wc_lang_guess(path, NULL, 0));
     }
     wc_doc_saved(d);
+    if(stat(path, &st) == 0) remember(d, &st); /* what it is now, for the next save */
+    else d->disk_known = 0;
     snprintf(d->msg, sizeof(d->msg), "Saved %s", base(path));
     return 0;
 }
