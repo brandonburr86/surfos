@@ -91,7 +91,7 @@ int main(void) {
     gkf_type("Sea\n");
     CHECK(run() && !strcmp(gk_text(d.name), "Sea") && status_says("Renamed: Sea"));
     /* the menus, in the desktop's bar: File, View with its Speed submenu, and an item for the desktop's Help */
-    CHECK(gkf_menu_count() == 17 && gk_menus_shown(d.ui));
+    CHECK(gkf_menu_count() == 18 && gk_menus_shown(d.ui));        /* View has a fourth page now */
     CHECK((gkf_menu_entry(gkf_menu_find("Speed"))->flags & WIN_MENU_SUBMENU) &&
           gkf_menu_entry(gkf_menu_find("Slow"))->flags == (WIN_MENU_CHILD | WIN_MENU_RADIO) &&
           gkf_menu_entry(gkf_menu_find("Help"))->flags == (WIN_MENU_TITLE | WIN_MENU_HELP));
@@ -192,6 +192,26 @@ int main(void) {
     /* the seconds */
     gkf_advance(1000);
     CHECK(run() && d.seconds >= 1);
+    /* More (stage 2): notes, a volume, a colour, a tool, the seconds of the minute */
+    gkf_advance(1000);
+    gkf_click(222 + 20, 12);
+    CHECK(run() && gk_value(d.tabs) == 3 && status_says("Page: More"));
+    gk_bounds(d.notes, &x, &y, &w, &h);
+    CHECK(x == 10 && y == 68 && w == 370);
+    gkf_click(x + 20, y + 20);
+    gkf_type("tide");
+    CHECK(run() && status_says("Notes: 4 bytes") && !strcmp(gk_text(d.notes), "tide") && gkf_text(x + 5, y + 2, "tid", GW_INK));
+    gk_bounds(d.volume, &x, &y, &w, &h);
+    gkf_click(x + w - 2, y + h / 2);
+    CHECK(run() && gk_value(d.volume) == 100 && status_says("Volume: 100"));
+    gk_bounds(d.colors, &x, &y, &w, &h);
+    gkf_click(x + 1 + 3 * 20 + 9, y + 1 + 9);
+    CHECK(run() && gk_value(d.colors) == 3 && status_says("Colour: #EE906D"));
+    gk_bounds(d.tools, &x, &y, &w, &h);
+    gkf_click(x + 1 + 26 + 12, y + 1 + 12);
+    CHECK(run() && gk_value(d.tools) == 1 && status_says("Tool: Eraser"));
+    gk_bounds(d.minute, &x, &y, &w, &h);
+    CHECK(gkf_pixel(x + 2, y + 5) == GW_TEAL);
     /* the close button asks first; Cancel keeps it, Close ends it */
     gkf_close();
     CHECK(run() && gk_box_open(d.ui));

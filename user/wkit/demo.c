@@ -14,6 +14,8 @@ The window of the toolkit's demonstration (demo.h): three tabs over a status bar
     Drawing   an area the program draws: 64 x 64 cells with scroll bars, a cursor cell moved by the
               arrows (the area has the keys: its cursor in coral), Space or a click marking a cell;
               only the cells that change are painted again
+    More      notes (a text of several lines), the seconds of the minute (a progress bar), a volume
+              (a slider), colours and tools (palettes)
 
 The status bar says what the program last heard, and at its right the seconds since it started (a
 timer). Its menus, in the desktop's bar while the window has the focus (and by their shortcuts in any
@@ -37,6 +39,28 @@ static const char *const networks[] = {           /* more than the list shows: i
 };
 #define NETWORKS (int)(sizeof(networks) / sizeof(networks[0]))
 static const char *const speeds[] = { "Slow", "Normal", "Fast" };
+static const unsigned colors[] = { GW_INK, GW_TEAL, GW_FOAM, GW_CORAL, GW_SAND, GW_SKY, GW_PAPER, GW_MUTED };
+static const char *const tools[] = { "Pencil", "Eraser" };
+
+/* the tools' pictures, 16 x 16, drawn here: a pencil and an eraser; '.' is see-through */
+static const char *const pictures[2][16] = {
+    { "............CC..", "...........CCCC.", "..........KSSCCK", ".........KSSSSK.", "........KSSSSK..",
+      ".......KSSSSK...", "......KSSSSK....", ".....KSSSSK.....", "....KSSSSK......", "...KSSSSK.......",
+      "..KPPSSK........", "..KPPPK.........", ".KKPPK..........", ".KKKK...........", ".KK.............",
+      "................" },
+    { "................", "................", "........KKKKK...", ".......KCCCCCK..", "......KCCCCCCK..",
+      ".....KCCCCCCK...", "....KPKCCCCK....", "...KPPPKCCK.....", "..KPPPPPKK......", ".KPPPPPPK.......",
+      ".KPPPPPK........", "..KPPPK.........", "...KKK..........", "................", "................",
+      "................" },
+};
+
+static void picture(int i, unsigned *px) {
+    int k;
+    for(k = 0; k < 256; k++) {
+        char c = pictures[i][k / 16][k % 16];
+        px[k] = c == 'K' ? GW_INK : c == 'C' ? GW_CORAL : c == 'S' ? GW_SAND : c == 'P' ? 0xFFFDF5 : 0xFF000000u;
+    }
+}
 
 static void say(struct demo *d, const char *s) {
     gk_set_text(d->status, s);
@@ -245,6 +269,10 @@ static void changed(struct demo *d, const struct gk_event *ev) {
         gk_set_text(d->barval, b);
         snprintf(b, sizeof(b), "Scroll bar at %d", ev->value);
         break;
+    case ID_NOTES: snprintf(b, sizeof(b), "Notes: %d bytes", ev->value); break;
+    case ID_VOLUME: snprintf(b, sizeof(b), "Volume: %d", ev->value); break;
+    case ID_COLORS: snprintf(b, sizeof(b), "Colour: #%06X", gk_palette_get_color(d->colors, ev->value)); break;
+    case ID_TOOLS: snprintf(b, sizeof(b), "Tool: %s", tools[ev->value % 2]); break;
     default: return;
     }
     say(d, b);
@@ -321,6 +349,9 @@ int demo_event(struct demo *d, const struct gk_event *ev) {
     case GK_EV_TIMER:
         snprintf(b, sizeof(b), "%u s", ++d->seconds);
         gk_status_right(d->status, b);
+        gk_set_value(d->minute, (int)(d->seconds % 60));
+        snprintf(b, sizeof(b), "%u of 60", d->seconds % 60);
+        gk_set_text(d->minute, b);
         break;
     case GK_EV_RESIZE:
         snprintf(b, sizeof(b), "Size %dx%d", ev->x, ev->y);
@@ -339,6 +370,7 @@ static struct gk_widget *labelled(struct gk_widget *col, const char *text) {
 int demo_open(struct demo *d) {
     static const int cols[2] = { 112, 184 };
     struct gk_widget *root, *page, *col, *row;
+    unsigned px[256];
     int i, k;
     memset(d, 0, sizeof(*d));
     d->ui = gk_open_limits("Toolkit", DEMO_W, DEMO_H, 400, 240, 0, 0, WIN_RESIZABLE);
@@ -391,6 +423,34 @@ int demo_open(struct demo *d) {
     gk_label(row, "Arrows move, Space or a click marks");
     gk_spacer(row);
     gk_button(row, "Clear", ID_CLEAR);
+    /* More */
+    page = gk_tab(d->tabs, "More");
+    row = gk_hbox(page, 10);
+    gk_pad(row, 10);
+    gk_grow(row, 1, 1);
+    col = gk_vbox(row, 6);
+    gk_grow(col, 1, 1);
+    gk_label(col, "Notes:");
+    d->notes = gk_text_area(col, ID_NOTES, 4096, 0);
+    col = gk_vbox(row, 6);
+    gk_size(col, 200, 0);
+    gk_label(col, "This minute:");
+    d->minute = gk_progress(col, 60);
+    gk_set_text(d->minute, "0 of 60");
+    gk_label(col, "Volume:");
+    d->volume = gk_slider(col, ID_VOLUME, 0, 100, 5);
+    gk_set_value(d->volume, 50);
+    gk_label(col, "Colour:");
+    d->colors = gk_palette(col, ID_COLORS, 4, 18, 18);
+    for(i = 0; i < (int)(sizeof(colors) / sizeof(colors[0])); i++) gk_palette_color(d->colors, colors[i]);
+    gk_set_value(d->colors, 0);
+    gk_label(col, "Tool:");
+    d->tools = gk_palette(col, ID_TOOLS, 2, 24, 24);
+    for(i = 0; i < 2; i++) {
+        picture(i, px);
+        gk_palette_icon(d->tools, px, 16, 16);
+    }
+    gk_set_value(d->tools, 0);
     /* the menus: File, View with its Speed submenu, and the program's part of the desktop's Help; their items'
        shortcuts working whether or not the desktop shows them */
     i = gk_menu(d->ui, "File");

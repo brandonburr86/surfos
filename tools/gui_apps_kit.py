@@ -12,13 +12,16 @@ window; Esc cancels either. The Lists tab shows the list with its columns: a cli
 wheel scrolls it. The Drawing tab shows the area the program draws, with its scroll bars: a click marks a cell, and the
 wheel scrolls it by rows. The corner grip makes the window smaller, and the layout follows (the status bar at the new
 bottom, the size in it). Its close button asks first, and Close ends it: ps finds no wkit. The checks leave the
-desktop as they found it (wkit ended, the Terminal closed), also when one fails."""
+desktop as they found it (a dialog left open closed, wkit ended, the Terminal closed), also when one fails. The
+desktop's chooser is known by its own title after whom it is for, as desk's implementation writes its bar."""
 import os
 import re
 
 import gui_apps_term as term
 from gui_apps_scenario import PAPER, INK, TEAL, MUTED, BAND
+CORAL = bytes.fromhex('ee906d')
 from gui_apps_win import answered
+from gui_apps_media import dialog_open
 
 W, H = 600, 360                     # wkit's content (user/wkit/demo.h)
 TITLE_H, FRAME_W, FRAME_H = 28, 2, 29
@@ -26,9 +29,16 @@ SHEET = bytes.fromhex('fffdf5')
 SHELL = bytes.fromhex('dee3d8')
 LINE = bytes.fromhex('c9cfc4')
 PARK = (900, 480)                   # the pointer clear of the windows and of the Terminal's text
+CHOOSER = (220, 81)                 # the desktop's chooser's top left at 960x540 (shell/guidialog.c's layout)
 EDIT_X, PASTE_Y = 160, 149          # the Edit menu's title, and its Paste item's middle (gui_apps_win.py's)
 STATUS_Y = H - 22                   # the status bar, in the content
-TABS = {'Controls': 8, 'Lists': 8 + 78 + 4, 'Drawing': 8 + 78 + 4 + 54 + 4}   # each tab's left in the strip
+TABS = {'Controls': 8, 'Lists': 8 + 78 + 4, 'Drawing': 8 + 78 + 4 + 54 + 4, 'More': 8 + 78 + 4 + 54 + 4 + 70 + 4}   # each tab's left in the strip
+
+
+def chooser_titled(d, own):
+    """a predicate: the desktop's chooser is up (at 960x540), its title bar ending in its own title after the name of
+    whom it is for ("Toolkit: Open a file" with desk's 2c5afd30, the program's name after its fix round)"""
+    return lambda s: any(d.text(s, CHOOSER[0] + 28 + 8 * k, CHOOSER[1] + 6, ': ' + own, PAPER, TEAL) for k in range(1, 30))
 
 
 def places(h=H):
@@ -133,8 +143,8 @@ def checks(d):
         # a chooser by File > Open's shortcut: the desktop's (220, 81 at 960x540, as the launcher's), or the line the
         # toolkit opens over the window instead
         d.key('ctrl-o')
-        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for a chooser: the desktop\'s, or a line to type the path in',
-                  lambda s: d.text(s, 220 + 28, 81 + 6, 'Open a file', PAPER, TEAL) or
+        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for a chooser: the desktop\'s (its own title after whom it is '
+                  'for), or a line to type the path in', lambda s: chooser_titled(d, 'Open a file')(s) or
                   w.text(s, bx + 28, (H - 160) // 2 + 6, 'Open a file', PAPER, TEAL), 'guiapps-kit-chooser.png')
         d.key('esc')
         d.visible('kit: Esc cancels it', w.status('Not chosen'))
@@ -164,6 +174,27 @@ def checks(d):
         d.vm.mon.cmd('mouse_move 0 0 -1')
         d.visible('kit: the wheel scrolls the area three rows', lambda s: w.status('Scrolled to 0, 3')(s) and
                   w.pixel(s, 3 * 20 + 3, 30 + 2 * 20 + 3) != TEAL)
+        # stage 2: the More page, after the Drawing page's checks and before the smaller window
+        w.tab('More')
+        d.visible('kit: the More tab shows notes, a progress bar, a slider and palettes',
+                  lambda s: w.status('Page: More')(s) and w.text(s, 10, 43, 'Notes:', INK, PAPER) and
+                  w.pixel(s, 15, 70) == SHEET, 'guiapps-kit-more.png')
+        w.click(10 + 40, 68 + 40)                       # the notes: a click, then lines typed
+        d.move(*PARK)
+        d.keys('tide\n')
+        d.keys('swell')
+        d.visible('kit: lines typed in the notes (a text of several lines)',
+                  lambda s: w.status('Notes: 10 bytes')(s) and w.text(s, 15, 70, 'tide', INK) and
+                  w.text(s, 15, 86, 'swel', INK))
+        w.click(390 + 200 - 2, 120 + 11)                # the slider's right end
+        d.visible('kit: a click at the slider\'s end sets it to 100', w.status('Volume: 100'))
+        w.click(390 + 1 + 3 * 20 + 9, 176 + 1 + 9)      # the fourth colour: coral
+        d.move(*PARK)                                   # (the pointer off the cell it would cover)
+        d.visible('kit: a click on a colour of the palette chooses it', lambda s: w.status('Colour: #EE906D')(s) and
+                  w.pixel(s, 390 + 1 + 3 * 20 + 9, 176 + 1 + 14) == CORAL)
+        w.click(390 + 1 + 26 + 12, 252 + 1 + 12)        # the eraser
+        d.visible('kit: a click on a tool of the palette chooses it', w.status('Tool: Eraser'))
+        d.visible('kit: the progress bar counts the seconds in teal', lambda s: w.pixel(s, 390 + 2, 68 + 4) == TEAL)
         # a smaller window: laid out again
         gx, gy = w.at[0] + W + FRAME_W - 6, w.at[1] + H + FRAME_H - 6
         d.move(gx, gy)
@@ -205,7 +236,13 @@ def checks(d):
 
 
 def tidy(d, state):
-    """wkit ended (its close button and Close, or End when it does not answer), then the Terminal closed"""
+    """a desktop dialog left open closed (a chooser, whatever happened), wkit ended (its close button and Close, or End
+    when it does not answer), then the Terminal closed"""
+    for _ in range(3):
+        if not dialog_open(d, d.vm.screen()):
+            break
+        d.key('esc')
+        d.vm.pump(0.5)
     if state.get('open'):
         s = d.vm.screen()
         at = find(d, s)

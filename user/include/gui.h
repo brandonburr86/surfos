@@ -15,12 +15,17 @@ it.
 The drawing is the desktop's own (shell/guidraw.c): text is UTF-8 shown with the console's
 characters (code page 437, '?' for any other), 8 by 16 pixels each.
 
-Until the kernel keeps a program's floating-point registers across task switches (track B's
-B2), a program with a window must not use floating point. Nothing here does.
+Floating point (11/05/26): since robustness B2 (10/25/26) the kernel keeps each program's
+floating-point registers across task switches, so a program with a window may use it. libgui and
+the toolkit use none: their drawing is in whole pixels, the same on every machine.
 10/26/26 (stage C12, the desktop's applications as programs): text for the desktop's clipboard
 (gw_clip(), while the window has the focus), a window asking to be seen (gw_alert()), and text
 drawn at a scale (gw_text_scaled(): the Clock's large digits); one of the console's characters by
 its code (gw_glyph(): the Character Map's grid).
+11/05/26 (the desktop applications, track kit): the view every drawing goes through (an origin and a
+clip), a character's code and text cut to cells; the wrappers of track desk's calls (menus in the
+desktop's bar, the clipboard read, its choosers, the theme). A program builds its window of widgets
+with the toolkit, gk.h, which stands on this.
 */
 #ifndef _GUI_H
 #define _GUI_H

@@ -772,8 +772,26 @@ and its title says what it was last sent.
   `include/sys/guidraw.h`, is built into libsurf); `gw_present()` shows what changed, and
   `gw_next()` waits for the next event and remakes the image at a new size by itself.
   `wdemo` is the example: colour bars, its size and the last event it got (`wdemo hang`
-  pays no heed to the close button, `wdemo crash` faults after it first draws). Until the
-  kernel keeps floating point across task switches, such a program must not use it.
+  pays no heed to the close button, `wdemo crash` faults after it first draws). *11/05/26:*
+  such a program may use floating point: the kernel keeps each program's registers across task
+  switches (robustness B2, 10/25/26). libgui itself draws in whole pixels.
+* **The toolkit** (*11/05/26*, the desktop applications, track kit:
+  `docs/superpowers/plans/2026-11-05-desktop-apps-kit.md`). `gk.h` in libsurf builds a program's
+  window of widgets drawn as the desktop draws its own: labels, buttons, check boxes and switches,
+  radio groups, lines of text (a password's, and a chat's with its history), lists with columns,
+  scroll bars, tabs, status bars, a text of several lines, progress bars, sliders, palettes of
+  colours and pictures, and areas the program draws itself, with scroll bars in its own units (rows,
+  columns, pixels). Boxes lay them out, so a window keeps its shape at any size. Tab and Shift+Tab
+  move the focus; a message, a question or a line to type opens over the window. Only what changed
+  is painted and presented. A program loops on `gk_next()`, which gives it what it must hear: a
+  click, a changed value, a key no widget took, a box's answer, a timer, a descriptor that is ready,
+  a menu item, a chosen path, the close button. Its menus go to the desktop's bar (with
+  submenus, and a Help menu that joins the desktop's), and their
+  shortcuts work in the window in any case; Open and Save as are the desktop's choosers, asked for
+  only in answer to the user's own key, click or menu choice (a desktop without choosers gets a line
+  to type the path in instead). `wkit` shows every widget (Controls, Lists, Drawing, More). On the
+  host, `tests/host/gk_fake.c` is a desktop for a program's window: the program's whole window code
+  runs natively (`make unittest`), and a test sees what the desktop would show.
 * **The Calculator as a program.** `wcalc` is the desktop's Calculator in a window of its
   own, looking and counting the same (they share their arithmetic, `shell/guicalc.c`): the
   first application to move out of the kernel, so that a fault in it costs only its window.
