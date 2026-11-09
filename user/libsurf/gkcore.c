@@ -1084,13 +1084,13 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
             gk_choose_again(ui);
             if(ui->qcount) continue;
         }
-        now = gk_now();
-        if(fire(ui, now)) continue;
-        if(gk_flush(ui) < 0) {
+        if(gk_flush(ui) < 0) {                          /* (painted before any wait, and before a timer's event:
+                                                           timers due one after another never starve the window) */
             errno = EPIPE;
             return -1;
         }
         if(ui->qcount) continue;                        /* the flush told an area of the keys */
+        now = gk_now();
         wait = -1;
         if(ms >= 0) {
             wait = ms - (int)(now - start);
@@ -1118,6 +1118,9 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
             if(!pf[i].revents || !ui->watches[slot[i]].fd) continue;
             if((e = gk_post_ev(ui, GK_EV_FD, NULL, pf[i].revents))) e->id = ui->watches[slot[i]].id;
         }
+        fire(ui, gk_now());                             /* the timers due, after the window and the descriptors were
+                                                           looked at (the review: before, a timer due again at once was
+                                                           all a program heard) */
         if(!r && ms >= 0 && (int)(gk_now() - start) >= ms && !ui->qcount && until_timer(ui, gk_now()) != 0) return 0;
     }
 }

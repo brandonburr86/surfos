@@ -872,6 +872,30 @@ static void bursts(void) {
     gk_close(ui);
 }
 
+/* the review (F2): a timer due again as soon as its handler is done (10 ms, a handler that takes 20) never starves the
+   window: a key typed meanwhile is heard, and the window is painted, among the timers */
+static void starved(void) {
+    struct gk *ui = window("Timers", 200, 100);
+    struct gk_widget *l = gk_label(gk_root(ui), "ticks");
+    struct gk_event ev;
+    int i, keys = 0, timers = 0, presents;
+    run(ui);
+    gk_timer(ui, 1, 10, 1);
+    gkf_advance(10);
+    gkf_key(WIN_KEY_F12, 0);
+    presents = gkf_presents();
+    for(i = 0; i < 20; i++) {
+        if(gk_next(ui, &ev, -1) != 1) break;
+        if(ev.type == GK_EV_TIMER) {
+            timers++;
+            gk_set_text(l, timers % 2 ? "tick" : "tock");   /* something to paint */
+            gkf_advance(20);                                 /* its handler took 20 ms: the next is due at once */
+        } else if(ev.type == GK_EV_KEY) keys++;
+    }
+    CHECK(keys == 1 && timers >= 10 && gkf_presents() > presents + 5);
+    gk_close(ui);
+}
+
 static void loop(void) {
     struct gk *ui = window("Loop", 200, 100);
     struct gk_event ev;
@@ -1688,6 +1712,7 @@ int main(void) {
     areas();
     boxes();
     loop();
+    starved();
     bursts();
     menus();
     submenus();
