@@ -1148,6 +1148,14 @@ unittest: unittest-desk
 .PHONY: unittest-desk
 unittest-desk: $(BUILD)/host/test_guidesk
 	$(BUILD)/host/test_guidesk $(wildcard rootfs/apps/*.app)
+# 11/05/26 (track desk, the review of stage 2): the keyboard's scan codes, their prefix and repeat (surfos/keyscan.h)
+unittest: unittest-desk-keys
+.PHONY: unittest-desk-keys
+unittest-desk-keys: $(BUILD)/host/test_keyscan
+	$(BUILD)/host/test_keyscan
+$(BUILD)/host/test_keyscan: tests/host/test_keyscan.c include/surfos/keyscan.h
+	@mkdir -p $(dir $@)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_keyscan.c -o $@
 
 # 11/05/26 (the desktop applications, track kit): the window toolkit (gk.h) and its demonstration, on the fake desktop
 $(BUILD)/host/gk/%.o: user/libsurf/%.c

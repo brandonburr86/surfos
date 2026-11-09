@@ -181,6 +181,7 @@ struct gui_dialog {
     int kind, act, choice;
     char types[GUI_TYPES_MAX];          /* 11/05/26: the file types a program's chooser is for ("png bmp"), "" all */
     bool list_focus;                    /* a chooser's Enter is for its list, not its name field */
+    bool program;                       /* 11/05/26 (the review of stage 2): a program's chooser: no desktop's sign */
     char title[GUI_DIALOG_TITLE], text[2][80];
     const char *label[3];
     struct gui_field field;
@@ -268,6 +269,9 @@ struct gui_state {
     int theme_given;                    /* the theme the programs' windows were told last (-1: none yet) */
     int pref_theme, pref_speed;         /* the preferences as the settings said them last (-1: not read yet), */
     u32 pref_at;                        /* and when (now) */
+    u32 pref_pending, pref_changed;     /* (the review of stage 2) changed here, not written yet (a bit each: the theme,
+                                           the speed), and when the last change was: written once they stand */
+    struct gui_task chooser_tasks[GUI_TASK_MAX];   /* (the review of stage 2) the tasks, read for a chooser's name */
     char pref_status[GUI_STATUS];       /* what Pointer & desktop's last change did: saved, or why not */
     struct gui_shot shot;
     struct gui_volume vols[GUI_VOLUMES];    /* the volumes, read for the screenshot's folder */

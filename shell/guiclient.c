@@ -40,6 +40,9 @@ and Ctrl+Space (the menus) is its program's, as in the Terminal.
 Closing. The close button (or Close in the menus) sends CLOSE; the program closes its window,
 or asks its own questions. Pressed again, the desktop asks "End the program?" (Cancel first),
 and End kills it through struct gui_sys's kill, whose refusals stand, and lets the window go.
+(11/05/26, the review of stage 2: pressed again, it sends CLOSE again while the program reads its
+events, and asks "End the program?" when a CLOSE waits unread, or at the third press in
+GUI_CLOSE_MS: client_close().)
 Leaving the desktop with programs' windows open asks first (guicore.c). When the desktop closes
 (client_finish()), every window is let go: the system ends them for their programs, which are
 not killed.
@@ -339,20 +342,24 @@ void client_theme(struct gui_state *g) {
     if(g->sys->win_theme(g->sys->ctx, theme, colors) == 0) g->theme_given = theme;
 }
 
-/* 11/05/26 (the review): a chooser's title bar names the window it is for, so that no program's chooser passes for
-   another's or the desktop's: "the window's title: the chooser's", the window's cut to 20 cells */
-static void chooser_title(const struct gui_client *c, const char *own, char *out, size_t n) {
-    const char *t = c->st.title[0] ? c->st.title : "A program";
-    char name[WIN_TITLE_MAX + 4];
-    u32 at = 0, rest = (u32)strlen(t);
-    int cells = 0;
-    while(at < rest && cells < 20) {
-        at += gd_char_len(t + at, rest - at);
-        cells++;
+/* 11/05/26 (the review): a chooser's title bar names the program it is for, so that no program's chooser passes for
+   another's or the desktop's. (The review of stage 2) by a name the program cannot set: its title in the application
+   registry, when the desktop started it from there, else its program's file name (the task's), else its pid; never
+   its window's title, which a program may make "SurfOS". The program's own title for the chooser follows */
+static void chooser_title(struct gui_state *g, const struct gui_client *c, const char *own, char *out, size_t n) {
+    struct gui_task *tasks = g->chooser_tasks;          /* (not on the stack: 128 of them) */
+    int k = reg_of_pid(g, c->st.pid), i, count;
+    if(k >= 0) {
+        snprintf(out, n, "%s: %s", g->reg.e[k].title, own);
+        return;
     }
-    memcpy(name, t, at);
-    strlcpy(name + at, at < rest ? "\xE2\x80\xA6" : "", sizeof(name) - at);   /* … */
-    snprintf(out, n, "%s: %s", name, own);
+    count = g->sys && g->sys->tasks ? g->sys->tasks(g->sys->ctx, tasks, GUI_TASK_MAX) : 0;
+    for(i = 0; i < count; i++)
+        if(tasks[i].pid == c->st.pid && tasks[i].name[0]) {
+            snprintf(out, n, "%s: %s", tasks[i].name, own);
+            return;
+        }
+    snprintf(out, n, "pid %d: %s", c->st.pid, own);
 }
 
 /* 11/05/26: a chooser window id asked for: shown while it has the focus and no other dialog is up, cancelled else
@@ -371,9 +378,10 @@ static void chooser(struct gui_state *g, int id) {
         g->sys->win_answer(g->sys->ctx, c->handle, no, NULL);
         return;
     }
-    chooser_title(c, d.title[0] ? d.title : kind == GUI_DLG_OPEN ? "Open a file" : kind == GUI_DLG_FOLDER ?
+    chooser_title(g, c, d.title[0] ? d.title : kind == GUI_DLG_OPEN ? "Open a file" : kind == GUI_DLG_FOLDER ?
                   "Choose a folder" : "Save as", title, sizeof(title));
     dialog_chooser_for(g, kind, ACT_CLIENT_DIALOG + (id - GUI_FIRST_CLIENT), title, d.dir, d.name, d.types);
+    g->dialog.program = true;                           /* (the review of stage 2: no sign of the desktop's) */
     snprintf(g->dialog.target, sizeof(g->dialog.target), "%d", c->st.pid);
     c->chooser = d.kind;
     c->request = no;
@@ -464,7 +472,9 @@ static bool over(const struct gui_state *g, int id, int *x, int *y) {
 }
 
 /* the pointer left the content it was over: one event says where it went (a position outside the content: over the
-   grip, which is inside, as -1, -1) */
+   grip, which is inside, as -1, -1). 11/05/26 (the review of stage 2): with no button, whatever is held: only a window
+   that holds the pointer (a press that began in it: the grab, which never comes here) hears of buttons, so that a
+   button held from a click elsewhere (a desktop's dialog over it) never reads as a press in it, nor as a drag */
 static void leave(struct gui_state *g) {
     int id = g->clients.hover, cx, cy, cw, ch;
     struct gui_client *c = client_of(g, id);
@@ -474,8 +484,23 @@ static void leave(struct gui_state *g) {
     c->px = g->x - cx;
     c->py = g->y - cy;
     if(gui_inside(g->x, g->y, cx, cy, cw, ch)) c->px = c->py = -1;
-    c->buttons = g->buttons & BUTTONS;
-    send(g, c, WIN_EV_POINTER, c->px, c->py, c->buttons);
+    c->buttons = 0;
+    send(g, c, WIN_EV_POINTER, c->px, c->py, 0);
+}
+
+/* 11/05/26 (the review of stage 2): the desktop takes the pointer (a dialog of its own is up): a window that held it
+   hears every button let go where it went, one it was over that it left; neither with a button held */
+void client_pointer_lost(struct gui_state *g) {
+    struct gui_clients *cs = &g->clients;
+    struct gui_client *c = client_of(g, cs->grab);
+    if(c) {
+        c->px = c->py = -1;
+        c->buttons = 0;
+        send(g, c, WIN_EV_POINTER, -1, -1, 0);
+        if(cs->hover == cs->grab) cs->hover = -1;
+    }
+    cs->grab = -1;
+    leave(g);
 }
 
 /* 10/26/26: a press, with any button, on a window that came up by itself less than GUI_GRACE_MS ago is nobody's: it
@@ -640,7 +665,11 @@ void client_chooser_answer(struct gui_state *g, int slot, int act, int button, c
     }
     if(act == ACT_CLIENT_REPLACE + slot && button == 0) path = g->dialog.field.text[0] ? g->dialog.field.text : path;
     c->chooser = 0;
-    if(g->sys && g->sys->win_answer) g->sys->win_answer(g->sys->ctx, c->handle, c->request, button == 0 ? path : NULL);
+    /* (the review of stage 2) a path the kernel refuses (too long for it, say) is answered as cancelled, so that the
+       request never waits on */
+    if(g->sys && g->sys->win_answer && g->sys->win_answer(g->sys->ctx, c->handle, c->request, button == 0 ? path : NULL) < 0 &&
+       button == 0)
+        g->sys->win_answer(g->sys->ctx, c->handle, c->request, NULL);
 }
 
 /* a dialog replaced before it was answered: a program's chooser (or its Replace question) is answered as cancelled,
@@ -656,12 +685,22 @@ void client_chooser_dropped(struct gui_state *g, int act, const char *target) {
     if(g->sys && g->sys->win_answer) g->sys->win_answer(g->sys->ctx, c->handle, c->request, NULL);
 }
 
+/* the close button (and Close, Ctrl+W). 11/05/26 (the review of stage 2): each press asks the program, WIN_EV_CLOSE,
+   while it reads its events: one that asked "Save the changes?" and was told Cancel is asked again at the next press.
+   The desktop offers "End the program?" instead when a CLOSE it was sent waits unread (it is not reading: busy, or
+   stuck), or at the third press in GUI_CLOSE_MS (one that reads CLOSE and ignores it can still be ended from here) */
 void client_close(struct gui_state *g, int id) {
     struct gui_client *c = client_of(g, id);
     char name[48], line[80];
+    bool hurried;
     if(!c) return;
-    if(!c->closing) {
+    hurried = c->closes >= 2 && g->now - c->close_at[0] < GUI_CLOSE_MS && g->now - c->close_at[1] < GUI_CLOSE_MS;
+    if(!c->closes || (!c->st.close_waiting && !hurried)) {
         c->closing = true;
+        c->close_at[1] = c->close_at[0];                /* the two CLOSEs sent last, the newest first */
+        c->close_at[0] = g->now;
+        if(c->closes < 2) c->closes++;
+        c->st.close_waiting = 1;                        /* (until the next update says it was read) */
         send(g, c, WIN_EV_CLOSE, 0, 0, 0);
         return;
     }

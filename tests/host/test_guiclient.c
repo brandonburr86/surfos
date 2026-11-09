@@ -1497,6 +1497,8 @@ static void test_paste_given(void) {
     tick();
     n = fake_win_count(a, WIN_EV_FOCUS);
     CHECK(fake_paste_count == 3 && !strcmp(fake_paste, "world") && n == 1 && last(a, WIN_EV_FOCUS)->value == 1);
+    for(n = 0; n < fake_wins[a].nev && fake_wins[a].ev[n].type != WIN_EV_FOCUS; n++) ;
+    CHECK(n < fake_wins[a].nev && fake_wins[a].paste_at <= n);     /* (the review of stage 2) given before it */
 }
 
 static struct win_dialog request(unsigned kind, unsigned id, const char *dir, const char *name, const char *types) {
@@ -1510,6 +1512,119 @@ static struct win_dialog request(unsigned kind, unsigned id, const char *dir, co
     return d;
 }
 
+/* 11/05/26 (the review of stage 2): the pointer events window a got from its n-th on with a button held */
+static int pressed_after(int a, int from) {
+    int i, n = 0;
+    for(i = from; i < fake_wins[a].nev; i++)
+        if(fake_wins[a].ev[i].type == WIN_EV_POINTER && fake_wins[a].ev[i].value) n++;
+    return n;
+}
+
+/* P1 and P2: a click on the desktop's chooser over a window, the pointer moving before the release, sends the window
+   no event with a button held (the kernel would take it for a press in the window, and let the program ask again at
+   once; Paint would take it for a drag) */
+static void test_dialog_pointer(void) {
+    struct win_dialog d;
+    int a, id, x, y, w, h, bx, by, mark;
+    fake_desktop(&g, 960, 540);
+    fake_file("/home/cat.png", "p", 1);
+    a = shown(900, 420, 0, "Paint", 41, 0xC0FFEE);
+    id = win_id(a);
+    held = 0;
+    at(cx(id) + 300, cy(id) + 200);                     /* the pointer rests on the canvas */
+    CHECK(g.clients.hover == id);
+    d = request(WIN_DLG_OPEN, 3, "/home", "", "");
+    fake_win_ask(a, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN);
+    mark = fake_wins[a].nev;
+    dialog_box(&g, &x, &y, &w, &h);
+    bx = x + w - 16 - 88 + 44;                          /* Cancel, the rightmost button */
+    by = y + h - 40 + 14;
+    at(bx, by);
+    CHECK(g.clients.hover == -1 && last(a, WIN_EV_POINTER)->value == 0);   /* the window was told it left */
+    hold(POINTER_LEFT);
+    CHECK(!g.dialog.kind && fake_wins[a].cancels == 1);
+    at(bx + 2, by + 1);                                 /* a small move with the button still down */
+    hold(0);
+    CHECK(pressed_after(a, mark) == 0);
+    /* P2: a double-click on a file, a jitter between the second press and its release */
+    held = 0;
+    at(cx(id) + 300, cy(id) + 200);
+    d = request(WIN_DLG_OPEN, 4, "/home", "", "png");
+    fake_win_ask(a, &d);
+    tick();
+    mark = fake_wins[a].nev;
+    dialog_box(&g, &x, &y, &w, &h);
+    bx = x + 60;
+    by = y + 64 + ROW_H + ROW_H / 2;                    /* the row after "..": cat.png */
+    at(bx, by);
+    hold(POINTER_LEFT);
+    hold(0);
+    hold(POINTER_LEFT);                                 /* the second press opens it */
+    CHECK(!g.dialog.kind && fake_wins[a].answers == 1 && !strcmp(fake_wins[a].answer, "/home/cat.png"));
+    at(bx + 1, by);
+    hold(0);
+    CHECK(pressed_after(a, mark) == 0);
+    /* a press in the window afterwards is its own again, button and all */
+    at(cx(id) + 10, cy(id) + 10);
+    hold(POINTER_LEFT);
+    CHECK(last(a, WIN_EV_POINTER)->value == WIN_BUTTON_LEFT && g.clients.grab == id);
+    /* a dialog of the desktop's coming up in the middle of the window's drag: it hears every button let go */
+    dialog_message(&g, "Busy", "", "");
+    at(cx(id) + 20, cy(id) + 20);
+    CHECK(g.clients.grab == -1 && last(a, WIN_EV_POINTER)->value == 0 && last(a, WIN_EV_POINTER)->x == -1);
+    hold(0);
+    gui_key(&g, '\r');
+}
+
+/* M4: the close button asks a program that reads its events again at each press (its own "Save the changes?" was
+   answered Cancel); "End the program?" comes for one that has not read the CLOSE it was sent, or at the third press in
+   GUI_CLOSE_MS */
+static void test_close_again(void) {
+    int a, id;
+    fake_desktop(&g, 960, 540);
+    program(41, "wpaint");
+    a = shown(200, 100, 0, "Paint", 41, 0xC0FFEE);
+    id = win_id(a);
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 1 && !g.dialog.kind);
+    fake_win_read(a);                                   /* the program read it, asked its question, was told Cancel */
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);                             /* asked again, not ended */
+    CHECK(count(a, WIN_EV_CLOSE) == 2 && !g.dialog.kind);
+    fake_win_read(a);
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && !g.dialog.kind);
+    tick();                                             /* not read this time: the program is stuck, or busy */
+    g.now += 100;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && g.dialog.kind == GUI_DLG_CONFIRM &&
+          g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT) && !strcmp(g.dialog.title, "End the program?"));
+    gui_key(&g, 27);                                    /* Cancel */
+    /* one that reads CLOSE and ignores it: three presses in GUI_CLOSE_MS offer to end it */
+    fake_win_read(a);
+    tick();
+    g.now += 4000;
+    gui_act(&g, ACT_CLOSE);
+    fake_win_read(a);
+    tick();
+    g.now += 500;
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 5 && !g.dialog.kind);
+    fake_win_read(a);
+    tick();
+    g.now += 500;
+    gui_act(&g, ACT_CLOSE);                             /* the third: two CLOSEs it read in the last 3 seconds */
+    CHECK(count(a, WIN_EV_CLOSE) == 5 && g.dialog.kind == GUI_DLG_CONFIRM);
+    gui_key(&g, GUI_RIGHT);                             /* End */
+    gui_key(&g, '\r');
+    CHECK(fake_killed == 41 && !client_at(&g, id));
+}
+
 static void test_choosers(void) {
     struct win_dialog d;
     int a, b, c, id, i, txt;
@@ -1518,14 +1633,23 @@ static void test_choosers(void) {
     fake_file("/home/notes.txt", "n", 1);
     fake_file("/home/cat.png", "p", 1);
     fake_file("/home/dog.PNG", "p", 1);
-    a = shown(200, 100, 0, "Chooser", 41, 0xC0FFEE);
+    program(41, "wpaint");
+    a = shown(200, 100, 0, "SurfOS", 41, 0xC0FFEE);    /* a window that says it is the desktop */
     id = win_id(a);
     d = request(WIN_DLG_OPEN, 3, "/home", "", "png");
     strlcpy(d.title, "Open a picture", sizeof(d.title));
     fake_win_ask(a, &d);
     tick();
     CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
-    CHECK(!strcmp(g.dialog.title, "Chooser: Open a picture"));     /* 11/05/26 (the review): the window it is for */
+    /* 11/05/26 (the review): the title names the program it is for; (the review of stage 2) by a name it cannot set,
+       its program's, not its window's, and with no sign of the desktop's before it */
+    CHECK(!strcmp(g.dialog.title, "wpaint: Open a picture") && g.dialog.program);
+    {
+        int dx, dy, dw, dh;
+        dialog_box(&g, &dx, &dy, &dw, &dh);
+        draw(960, 540);
+        CHECK(shows(960, dx + 12, dy + 6, "wpaint: Open", PAPER));
+    }
     for(i = 0, txt = 0; i < g.dialog.count; i++) if(strstr(g.dialog.list[i].name, ".txt")) txt++;
     CHECK(g.dialog.count == 3 && !txt);                 /* pics, cat.png and dog.PNG: its type in any case */
     gui_key(&g, GUI_DOWN);                              /* .., pics, cat.png */
@@ -1605,24 +1729,44 @@ static void test_choosers(void) {
     b = shown(200, 100, 0, "Other", 42, 0xC0FFEE);      /* a slot used again: the old answer is not its */
     CHECK(fake_wins[b].answers == 0 && fake_wins[b].cancels == 0);
     CHECK(fake_wins[a].wrong == 0);                     /* every answer named the request that waited */
+    /* (the review of stage 2) a folder that cannot be read: the last chooser's, then / */
+    d = request(WIN_DLG_OPEN, 9, "/nowhere", "", "");
+    fake_win_ask(b, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
+    gui_key(&g, 27);
+    strlcpy(g.dialog.dir, "/gone", sizeof(g.dialog.dir));
+    fake_win_ask(b, &d);
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/"));
+    gui_key(&g, 27);
+    /* a path the kernel refuses is answered as cancelled: the request never waits on */
+    d = request(WIN_DLG_FOLDER, 10, "/home", "", "");
+    fake_win_ask(b, &d);
+    tick();
+    fake_answer_refused = true;
+    gui_key(&g, '\r');
+    fake_answer_refused = false;
+    CHECK(!g.dialog.kind && fake_wins[b].cancels == 3 && !fake_wins[b].waiting);
     /* 11/05/26 (the review): one dialog at a time: "End the program?" in a chooser's place answers the chooser */
     id = win_id(b);
     d = request(WIN_DLG_OPEN, 7, "/home", "", "");
     fake_win_ask(b, &d);
     tick();
-    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strncmp(g.dialog.title, "Other: ", 7));
+    CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.title, "pid 42: Open a file"));   /* no name known */
     gui_act(&g, ACT_CLOSE);                             /* (the close button twice, as Close in the menus) */
     gui_act(&g, ACT_CLOSE);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT));
-    CHECK(fake_wins[b].cancels == 1 && last(b, WIN_EV_DIALOG)->value == 0 && last(b, WIN_EV_DIALOG)->x == 7);
+    CHECK(fake_wins[b].cancels == 4 && last(b, WIN_EV_DIALOG)->value == 0 && last(b, WIN_EV_DIALOG)->x == 7);
     gui_key(&g, 27);
     CHECK(fake_wins[b].wrong == 0);
-    /* a long window title is cut, the chooser's own kept */
-    c = shown(200, 100, 0, "A window with a title much longer than twenty", 43, 0xC0FFEE);
+    /* the window's title is never the chooser's name, the program's file name is */
+    program(43, "wcode");
+    c = shown(200, 100, 0, "Apps", 43, 0xC0FFEE);
     d = request(WIN_DLG_SAVE, 8, "/home", "x", "");
     fake_win_ask(c, &d);
     tick();
-    CHECK(!strcmp(g.dialog.title, "A window with a titl\xE2\x80\xA6: Save as"));
+    CHECK(!strcmp(g.dialog.title, "wcode: Save as"));
     gui_key(&g, 27);
     CHECK(fake_wins[c].cancels == 1);
 }
@@ -1637,6 +1781,9 @@ static void test_theme_told(void) {
     gui_act(&g, ACT_THEME);
     tick();
     CHECK(fake_theme == WIN_THEME_DUSK && fake_theme_count == 2 && fake_colors[WIN_COLOR_DESKTOP] == 0x142638);
+    CHECK(fake_pref_sets == 0);                         /* (the review of stage 2) kept once it has stood */
+    g.now += GUI_PREF_MS;
+    tick();
     CHECK(fake_pref_sets == 1 && fake_pref_which == 0 && fake_pref_value == 1);  /* and kept in the settings */
 }
 
@@ -1669,6 +1816,8 @@ int main(void) {
     test_full_bar();
     test_paste_given();
     test_choosers();
+    test_dialog_pointer();                              /* 11/05/26 (the review of stage 2) */
+    test_close_again();
     test_theme_told();
     test_guards(640, 400);
     test_guards(960, 540);

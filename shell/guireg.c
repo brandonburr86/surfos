@@ -75,8 +75,10 @@ static const char *yes_no(const char *v, bool *out) {
    *name: the key's name as the desktop knows it, for the log (never the file's bytes: 11/05/26, the review) */
 static const char *setting(struct gui_reg *r, const char *key, const char *v, u32 *seen, int *icons, const char **name) {
     static const char *const keys[] = { "program", "title", "types", "open-with", "apps", "desktop", "icon" };
+    static const char *const own[] = { "surfos", "apps", "window", "help" };     /* the desktop's menus */
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
-    int k, i, n = (int)strlen(v);
+    u8 cell[GUI_REG_LINE + 1];
+    int k, i, c, n = (int)strlen(v);
     for(k = 0; k < nkeys && strcmp(key, keys[k]); k++) ;
     *name = k < nkeys ? keys[k] : "a key";
     if(k == nkeys) return "not one the desktop knows";
@@ -89,9 +91,11 @@ static const char *setting(struct gui_reg *r, const char *key, const char *v, u3
             if(!alnum(v[i]) && v[i] != '.' && v[i] != '-' && v[i] != '_') return "a program is 1 to 31 letters, digits, . - _";
         strlcpy(r->program, v, sizeof(r->program));
         return NULL;
-    case 1:
+    case 1:                                             /* (the review of stage 2: as a program's menu titles) */
         if(n < 1 || n >= GUI_REG_NAME) return "a title is 1 to 31 bytes";
-        for(i = 0; i < n; i++) if((u8)v[i] < 0x20 || v[i] == 0x7F) return "a title has no control characters";
+        if((c = gd_text_cells(v, cell)) < 0) return "a title is UTF-8 with no control characters";
+        for(i = 0; i < c; i++) if(cell[i] == 0xF7) return "a title has no sign of the desktop's";
+        if(gd_reads_as(cell, c, own, 4)) return "a title is none of the desktop's menus";
         strlcpy(r->title, v, sizeof(r->title));
         return NULL;
     case 2: return type_list(v, r->types, &r->ntypes);

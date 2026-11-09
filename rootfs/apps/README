@@ -29,9 +29,12 @@ The format
                 letters, digits, '.', '-' and '_', 1 to 31 of them, not starting with '.'.
                 The desktop starts it with no argument from Apps and its tile, and with a
                 file's path as its only argument from Files (one argument, spaces and all).
-    title       required. Its name in Apps > Programs, under its tile and in Files' Open with:
-                1 to 31 bytes of UTF-8, no control characters. The console's characters show it
-                (code page 437: a character it lacks is '?').
+    title       required. Its name in Apps > Programs, under its tile, in Files' Open with and
+                in its choosers' title bars: 1 to 31 bytes of UTF-8 (whole sequences, as the
+                console reads them), no control characters, not the desktop's sign (≋) and none
+                of the desktop's menus' names (SurfOS, Apps, Window, Help), as a program's menu
+                titles. The console's characters show it (code page 437: a character it lacks is
+                '?').
     types       the file types a double-click in Files opens in it (and Open with offers it
                 for), as a program's Open and Save as take them (include/surfos/win.h's
                 WIN_DIALOG, whose parser the desktop shares, win_types()): extensions without

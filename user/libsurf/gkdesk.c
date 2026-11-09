@@ -14,7 +14,11 @@ A menu titled Help goes into the desktop's Help (WIN_MENU_HELP). Labels go as th
 a byte that is no whole UTF-8 character, or a control character, is sent as '?', since the kernel
 refuses a menu with one. Their shortcuts are the toolkit's: the desktop only shows a shortcut's text,
 so a key the window gets that is an enabled item's shortcut becomes GK_EV_MENU, as a click on the item
-in the bar does. A desktop that does not show a program's menus (a kernel before them says EINVAL,
+in the bar does. While a modal box is open (gk_message(), gk_confirm(), gk_ask()), the menus go greyed
+(every title WIN_MENU_DISABLED, which greys its menu, and the program's part of Help with it), so that
+a program's question stays a question: nothing is chosen behind it, and the bar shows why; they go
+again as they are when the box has gone. (A choice made just before the greyed menus reached the bar is
+dropped, gkcore.c; the box takes every key, so no shortcut gets past it either.) A desktop that does not show a program's menus (a kernel before them says EINVAL,
 one that has not got them yet ENOSYS) still has every command by its keys; gk_menus_shown() says
 which.
 
@@ -24,7 +28,10 @@ and comes back to the program, ENOSYS a desktop without choosers yet; without th
 line to type the path in over the window stands in (gkbox.c), answered as GK_EV_CHOSEN too. A chooser
 is asked only while the program answers a person's own key, press or choice (gkcore.c's user_act), as
 the kernel wants a key, a press or a menu choice since the window's last request. A chosen path is
-taken (WIN_TAKE) as its answer comes.
+taken (WIN_TAKE) as its answer comes. EAGAIN (the window's events fill its queue, and the answer
+would have no place) is no answer: the request is kept and asked again once gk_next() has read the
+events (gk_choose_again()), and if the desktop refuses it then (the focus gone meanwhile), it is
+answered as cancelled, so the program hears of every request it made.
 
 The clipboard is read whole when it is longer than the caller's buffer (WIN_PASTE says how long it
 is), and what is not wanted is wiped. The theme is read at the window's opening and again at each
@@ -124,29 +131,45 @@ static int cells_of(const char *s) {
     return n;
 }
 
-/* a title (a label as put_label() leaves it) that would pass for one of the desktop's own (surfos/win.h), by the
-   characters it draws: ≋ in it (code page 437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or
-   Help in any case with blanks (a space, a no-break space) around it */
-static int desk_title(const char *s, int *help) {
-    static const char *const own[] = { "surfos", "apps", "window", "help" };
-    unsigned char cell[WIN_MENU_LABEL];
-    int n = 0, a = 0, len, i, k;
-    *help = 0;
-    while(*s && n < (int)sizeof(cell)) {
+/* a label's characters as the desktop draws them (a label as put_label() leaves it: one cell each), their codes in
+   cell[]; how many */
+static int cells(const char *s, unsigned char *cell) {
+    int n = 0, len;
+    while(*s && n < WIN_MENU_LABEL) {
         cell[n++] = (unsigned char)gw_char(s, (int)strnlen(s, 4), &len);
         s += len;
     }
-    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
+    return n;
+}
+
+/* whether n cells, without the blanks around them (a space, a no-break space), read as word in any case */
+static int reads_as(const unsigned char *cell, int n, const char *word) {
+    int a = 0, k;
     while(a < n && (cell[a] == ' ' || cell[a] == 0xFF)) a++;
     while(n > a && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
-    for(i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++) {
-        for(k = 0; a + k < n && own[i][k] && (cell[a + k] | 0x20) == own[i][k]; k++) ;
-        if(a + k == n && !own[i][k]) {
-            if(i == 3) *help = 1;                       /* Help: the program's Help menu, merged into the desktop's */
-            else return 1;
-        }
-    }
+    for(k = 0; a + k < n && word[k] && (cell[a + k] | 0x20) == word[k]; k++) ;
+    return a + k == n && !word[k];
+}
+
+/* a title that would pass for one of the desktop's own (surfos/win.h), by the characters it draws: ≋ in it (code page
+   437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help (*help: the program's Help, merged
+   into the desktop's) */
+static int desk_title(const char *s, int *help) {
+    unsigned char cell[WIN_MENU_LABEL];
+    int n = cells(s, cell), i;
+    *help = 0;
+    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
+    if(reads_as(cell, n, "surfos") || reads_as(cell, n, "apps") || reads_as(cell, n, "window")) return 1;
+    *help = reads_as(cell, n, "help");
     return 0;
+}
+
+/* an item of the program's Help that would read as one of the desktop's own Help items, which follow it in the same
+   menu (the desktop refuses one, as desk's fix round has it) */
+static int desk_help_item(const char *s) {
+    unsigned char cell[WIN_MENU_LABEL];
+    int n = cells(s, cell);
+    return reads_as(cell, n, "keyboard and mouse") || reads_as(cell, n, "about surfos");
 }
 
 /* the bar's cells so far and with a title more (the Help menu is not in the bar) */
@@ -172,7 +195,7 @@ static unsigned shortcut_of(unsigned key, unsigned mods) {
 }
 
 static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut,
-               int radio, int sub) {
+               unsigned own, int sub) {
     struct gk_menu_entry *e;
     if(m->n == WIN_MENU_ENTRIES) return -1;
     if(shortcut) shortcut = shortcut_of(shortcut & 0xFFFF, shortcut >> 16);
@@ -183,7 +206,7 @@ static int add(struct gk_menus *m, int menu, unsigned id, unsigned flags, const 
     e->flags = flags;
     e->sub = sub;
     e->shortcut = shortcut;
-    e->radio = (unsigned char)radio;
+    e->own = (unsigned char)own;
     put_label(e->label, sizeof(e->label), label);
     shortcut_text(shortcut, e->keys, sizeof(e->keys));
     m->sent = 0;
@@ -219,13 +242,18 @@ int gk_submenu(struct gk *ui, int menu, int id, const char *label, unsigned flag
     return m->numbers++;
 }
 
-static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut, int radio) {
+static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut, unsigned own) {
     struct gk_menus *m = ui->menus;
+    char cut[WIN_MENU_LABEL];
     int last, most;
     if(!m || menu < 0 || menu >= m->numbers) return -1;
     most = menu == m->help ? WIN_MENU_HELP_ITEMS : WIN_MENU_ITEMS;
     if(count_of(m, menu, &last) >= most) return -1;
-    return add(m, menu, id, flags, label, shortcut, radio, -1);
+    if(menu == m->help && !(flags & WIN_MENU_SEPARATOR)) {
+        put_label(cut, sizeof(cut), label);
+        if(desk_help_item(cut)) return -1;              /* About SurfOS is the desktop's */
+    }
+    return add(m, menu, id, flags, label, shortcut, own, -1);
 }
 
 int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned shortcut, unsigned flags) {
@@ -234,7 +262,8 @@ int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned sh
     if(flags & GK_ITEM_OFF) f |= WIN_MENU_DISABLED;
     if((flags & GK_ITEM_ON) && (flags & GK_ITEM_RADIO)) f |= WIN_MENU_RADIO;
     else if((flags & GK_ITEM_ON) && (flags & GK_ITEM_CHECK)) f |= WIN_MENU_CHECKED;
-    return item(ui, menu, (unsigned)id, f, label, shortcut, (flags & GK_ITEM_RADIO) != 0);
+    return item(ui, menu, (unsigned)id, f, label, shortcut,
+                ((flags & GK_ITEM_RADIO) ? GKM_RADIO : 0) | ((flags & GK_ITEM_REPEAT) ? GKM_REPEAT : 0));
 }
 
 int gk_menu_line(struct gk *ui, int menu) {
@@ -249,7 +278,7 @@ static void set_flag(struct gk *ui, int id, unsigned flag, int on) {
     for(i = 0; i < m->n; i++) {
         struct gk_menu_entry *e = &m->e[i];
         if((e->flags & (WIN_MENU_TITLE | WIN_MENU_SEPARATOR)) || (int)e->id != id) continue;   /* a submenu's item too */
-        want = flag == WIN_MENU_CHECKED && e->radio ? WIN_MENU_RADIO : flag;
+        want = flag == WIN_MENU_CHECKED && (e->own & GKM_RADIO) ? WIN_MENU_RADIO : flag;
         was = e->flags;
         if(on) e->flags |= want;
         else e->flags &= ~want;
@@ -287,18 +316,20 @@ static int emit(const struct gk_menus *m, int menu, int child, struct win_menu_i
     return n;
 }
 
-/* the menus to the desktop, whole, once they changed: those with items (the kernel refuses a menu with none) */
+/* the menus to the desktop, whole, once they changed or a box opened or went: those with items (the kernel refuses a
+   menu with none), greyed while a box is open */
 void gk_menus_send(struct gk *ui) {
     struct gk_menus *m = ui->menus;
     static struct win_menu_item out[WIN_MENU_ENTRIES];  /* copied by the kernel during the call */
-    int i, n = 0, k, last;
-    if(!m || m->sent) return;
+    int i, n = 0, k, last, boxed = ui->box != NULL;
+    if(!m || (m->sent && m->boxed == boxed)) return;
     m->sent = 1;
+    m->boxed = boxed;
     for(i = 0; i < m->n && n < WIN_MENU_ENTRIES; i++) {
         const struct gk_menu_entry *e = &m->e[i];
         if(!(e->flags & WIN_MENU_TITLE) || !count_of(m, e->menu, &last)) continue;
         out[n].id = e->id;
-        out[n].flags = e->flags;
+        out[n].flags = e->flags | (boxed ? WIN_MENU_DISABLED : 0);
         memcpy(out[n].label, e->label, sizeof(out[n].label));
         memset(out[n].keys, 0, sizeof(out[n].keys));
         k = n + 1;
@@ -325,7 +356,9 @@ static int reachable(const struct gk_menus *m, const struct gk_menu_entry *e, in
     return 1;
 }
 
-/* a key that is an enabled item's shortcut: GK_EV_MENU, as the desktop's bar would send it */
+/* a key that is an enabled item's shortcut: GK_EV_MENU, as the desktop's bar would send it, once a press: the
+   keyboard's repeats of it (WIN_MOD_REPEAT) are the shortcut's and do nothing, unless its item asked for them
+   (GK_ITEM_REPEAT: Undo, Zoom in, where holding the key is natural), so that a held Ctrl+N deals once */
 int gk_menu_key(struct gk *ui, unsigned key, unsigned mods) {
     struct gk_menus *m = ui->menus;
     struct gk_event *ev;
@@ -335,6 +368,7 @@ int gk_menu_key(struct gk *ui, unsigned key, unsigned mods) {
     for(i = 0; i < m->n; i++) {
         const struct gk_menu_entry *e = &m->e[i];
         if(!e->shortcut || e->shortcut != sc || !reachable(m, e, &top)) continue;
+        if((mods & WIN_MOD_REPEAT) && !(e->own & GKM_REPEAT)) return 1;
         if((ev = gk_post_ev(ui, GK_EV_MENU, NULL, top))) ev->id = (int)e->id;
         return 1;
     }
@@ -374,6 +408,16 @@ int gk_choose(struct gk *ui, int id, int kind, const char *dir, const char *name
             ui->choosing = 1;
             return 0;
         }
+        if(errno == EAGAIN) {                           /* the events first: asked again once they are read */
+            if(!(ui->later = malloc(sizeof(*ui->later)))) {
+                ui->failed = 1;
+                errno = ENOMEM;
+                return -1;
+            }
+            *ui->later = d;
+            ui->choosing = 1;
+            return 0;
+        }
         if(errno != ENOSYS) return -1;                  /* EINVAL, EBUSY, EACCES: the program hears why */
     }
     /* no choosers here: the path typed, in a line over the window, which starts in dir with name offered */
@@ -382,6 +426,22 @@ int gk_choose(struct gk *ui, int id, int kind, const char *dir, const char *name
              kind == WIN_DLG_FOLDER ? "" : name);
     gk_box_chooser(ui, id, titles[kind], dir, path);
     return 0;
+}
+
+/* a request the desktop had no room for, asked again now that the window's events were read: taken, left waiting
+   while the events still fill the queue, or answered as cancelled when the desktop refuses it now */
+void gk_choose_again(struct gk *ui) {
+    struct win_dialog *d = ui->later;
+    int r;
+    if(!d) return;
+    r = gw_dialog(ui->win, d);
+    if(r < 0 && errno == EAGAIN) return;
+    ui->later = NULL;
+    if(r < 0) {
+        ui->choosing = 0;
+        gk_post_text(ui, GK_EV_CHOSEN, (int)d->id, 0, NULL, 0);
+    }
+    free(d);
 }
 
 /* WIN_EV_DIALOG: the path taken now (WIN_TAKE, which works after a hang-up too), and the program told */
@@ -412,6 +472,7 @@ char *gk_paste_all(struct gk *ui, int *len) {
             if(len) *len = r;
             return buf;
         }
+        gk_wipe(buf, (size_t)n + 1);
         free(buf);
         if(r >= 0 || errno != ENOSPC) return NULL;      /* (it grew meanwhile: again) */
     }
@@ -431,7 +492,7 @@ int gk_paste(struct gk *ui, char *buf, unsigned size) {
         while(n && n < len && ((unsigned char)all[n] & 0xC0) == 0x80) n--;
         memcpy(buf, all, (size_t)n);
         buf[n] = 0;
-        memset(all, 0, (size_t)len);
+        gk_wipe(all, (size_t)len);
         free(all);
         return n;
     }

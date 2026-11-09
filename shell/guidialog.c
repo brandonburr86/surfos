@@ -221,6 +221,7 @@ static void begin(struct gui_state *g, int kind, int act, const char *title) {
     dl->act = act;
     dl->choice = 0;
     dl->list_focus = false;
+    dl->program = false;                                /* 11/05/26 (the review of stage 2) */
     dl->types[0] = 0;                                   /* 11/05/26: every file, unless a program's says */
     strlcpy(dl->title, title, sizeof(dl->title));
     dl->text[0][0] = dl->text[1][0] = 0;
@@ -350,8 +351,7 @@ void dialog_chooser_for(struct gui_state *g, int kind, int act, const char *titl
     dl->label[0] = kind == GUI_DLG_OPEN ? "Open" : kind == GUI_DLG_FOLDER ? "Choose" : "Save";
     dl->label[2] = "Cancel";
     strlcpy(dl->types, kind == GUI_DLG_FOLDER ? "" : types, sizeof(dl->types));
-    dl->dir[0] = 0;
-    navigate(g, start);
+    navigate(g, start);                                 /* a folder that cannot be read: the last chooser's, or / */
     if(named(dl)) field_set(&dl->field, name, true);
 }
 
@@ -561,8 +561,11 @@ void dialog_render(const struct gui_state *g, const struct gui_draw *d) {
     gd_rect(d, l.x, l.y, l.w, l.h, INK);
     gd_rect(d, l.x + 1, l.y + 1, l.w - 2, l.h - 2, PAPER);
     gd_rect(d, l.x + 1, l.y + 1, l.w - 2, TITLE_H - 1, TEAL);
-    gd_glyph(d, l.x + 12, l.y + 6, 0xF7, FOAM, 1);
-    gd_name(d, l.x + 28, l.y + 6, dl->title, (l.w - 40) / 8, PAPER);
+    if(dl->program) gd_name(d, l.x + 12, l.y + 6, dl->title, (l.w - 24) / 8, PAPER);   /* 11/05/26: the sign is */
+    else {                                              /* the desktop's own dialogs' alone (the review of stage 2) */
+        gd_glyph(d, l.x + 12, l.y + 6, 0xF7, FOAM, 1);
+        gd_name(d, l.x + 28, l.y + 6, dl->title, (l.w - 40) / 8, PAPER);
+    }
     cells = (l.w - 32) / 8;
     if(dl->kind == GUI_DLG_MESSAGE || dl->kind == GUI_DLG_CONFIRM) {
         gd_name(d, l.x + 16, l.y + 44, dl->text[0], cells, INK);

@@ -27,6 +27,7 @@
 #include <poll.h>
 #include <gk.h>
 #include "gk_fake.h"
+#include "../../user/libsurf/gkpriv.h"           /* a field's state, to see that a wipe leaves no byte */
 
 static int checks, failed;
 static void show_got(void);
@@ -849,6 +850,28 @@ static void boxes(void) {
 
 /**** timers, descriptors, the window's end ****/
 
+/* a burst: more events than gui.h reads at once (GW_QUEUE, 16) that the toolkit takes itself and the program hears
+   nothing of (the pointer moving over a label), then a key the program hears. gk_next() gives the key, never 0 first:
+   waiting as long as it takes (-1), with time left, and with none (0), the window's queue drained before 0 is said */
+static void bursts(void) {
+    struct gk *ui = window("Burst", 200, 100);
+    struct gk_event ev;
+    int ms, k, i, r;
+    static const int waits[] = { -1, 1000, 0 };
+    gk_label(gk_root(ui), "moves");
+    run(ui);
+    for(k = 0; k < 3; k++) {
+        ms = waits[k];
+        for(i = 0; i < 40; i++) gkf_pointer(10 + i % 4, 10, 0);
+        gkf_key(WIN_KEY_F12, 0);
+        r = gk_next(ui, &ev, ms);
+        CHECK(r == 1 && ev.type == GK_EV_KEY && ev.value == WIN_KEY_F12);
+        if(r != 1) printf("  (gk_next() with ms %d: %d)\n", ms, r);
+        CHECK(gk_next(ui, &ev, 0) == 0);                 /* and then nothing */
+    }
+    gk_close(ui);
+}
+
 static void loop(void) {
     struct gk *ui = window("Loop", 200, 100);
     struct gk_event ev;
@@ -977,6 +1000,32 @@ static void menus(void) {
     gkf_key(19, WIN_MOD_CTRL);                          /* Save, enabled now */
     run(ui);
     CHECK(heard(GK_EV_MENU, 11));
+    /* the Paint review: a box open (a question), the menus go greyed, every title, so nothing is chosen behind it; a
+       choice made before that reached the bar is dropped, and a shortcut is the box's key; the close button is still
+       the program's to answer. The box gone, the menus come back as they were */
+    sent = gkf_menus_sent();
+    gk_confirm(ui, 70, "Save the changes?", "", "", "Save", "Don't save", "Cancel");
+    run(ui);
+    CHECK(gkf_menus_sent() == sent + 1 && (entry("File")->flags & WIN_MENU_DISABLED) &&
+          (entry("View")->flags & WIN_MENU_DISABLED) && !(entry("Open")->flags & WIN_MENU_DISABLED));
+    CHECK(!gkf_menu_choose(10));                        /* the desktop greys them: none can be chosen */
+    gkf_menu_event(10, file);                           /* one chosen just before */
+    gkf_key(15, WIN_MOD_CTRL);                          /* Ctrl+O */
+    gkf_key(WIN_KEY_F6, 0);
+    gkf_close();
+    run(ui);
+    CHECK(!count(GK_EV_MENU) && !count(GK_EV_KEY) && heard(GK_EV_CLOSE, 0) && gk_box_open(ui));
+    gk_dismiss(ui);
+    run(ui);
+    CHECK(gkf_menus_sent() == sent + 2 && !(entry("File")->flags & WIN_MENU_DISABLED) && heard(GK_EV_ANSWER, 70));
+    CHECK(gkf_menu_choose(10));
+    run(ui);
+    CHECK(heard(GK_EV_MENU, 10));
+    gkf_key(19, WIN_MOD_CTRL | 0x80);                   /* a bit no one knows yet: the bits that count */
+    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_REPEAT);         /* held down: a repeat, nothing (once a press) */
+    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_ALT);            /* Ctrl+Alt+S is another key */
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 1 && heard(GK_EV_MENU, 11) && count(GK_EV_KEY) == 1 && got[ngot - 1].type == GK_EV_KEY);
     /* no room: the bar's width, eight menus, fifteen entries in a menu */
     CHECK(gk_menu(ui, "A title far too long for the bar") < 0);
     for(i = 0; i < 6; i++) CHECK(gk_menu(ui, "M") == 2 + i);
@@ -1006,6 +1055,8 @@ static void submenus(void) {
     struct gk *ui = window("Submenus", 300, 200);
     struct gk_widget *a;
     static const struct win_menu_item bad[2] = { { 0, WIN_MENU_TITLE, "File", "" }, { 1, 0, "Op\x85n", "" } };
+    static const struct win_menu_item help_bad[2] = { { 0, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "" },
+                                                      { 1, 0, "About SurfOS", "" } };
     int view, speed, empty, off, help, i;
     a = gk_area(gk_root(ui), 2, GK_FOCUSABLE, NULL, NULL);
     CHECK(gk_menu(ui, "Apps") < 0 && gk_menu(ui, " window ") < 0 && gk_menu(ui, "SURFOS") < 0 &&
@@ -1024,6 +1075,8 @@ static void submenus(void) {
     CHECK(gk_menu_item(ui, view, 21, "Bad \x01\x7f\xc2\x85\xff\xe0\x80\x80 end", 0, 0) == 0);
     help = gk_menu(ui, "Help");
     CHECK(help == 4 && gk_menu(ui, "help") < 0 && gk_submenu(ui, help, 29, "Sub", 0) < 0);
+    CHECK(gk_menu_item(ui, help, 61, "About SurfOS", 0, 0) < 0 &&   /* the desktop's own Help items, which follow */
+          gk_menu_item(ui, help, 61, " keyboard AND mouse\xc2\xa0", 0, 0) < 0);
     for(i = 0; i < WIN_MENU_HELP_ITEMS; i++) CHECK(gk_menu_item(ui, help, 40 + i, "About", 0, 0) == 0);
     CHECK(gk_menu_item(ui, help, 60, "One more", 0, 0) < 0);
     for(i = 3; i < WIN_MENU_ITEMS; i++) CHECK(gk_menu_item(ui, speed, 70 + i, "x", 0, 0) == 0);
@@ -1037,6 +1090,7 @@ static void submenus(void) {
     CHECK(entry("Greyed")->flags == (WIN_MENU_SUBMENU | WIN_MENU_DISABLED) && entry("Hidden")->flags == WIN_MENU_CHILD);
     CHECK(gkf_menu_find("Bad ??????? end") >= 0 && !strcmp(entry("Zoom in")->keys, "Ctrl++"));
     CHECK(gw_menu(gk_gw(ui), bad, 2) < 0 && errno == EINVAL);   /* (the fake holds a label to the kernel's rule) */
+    CHECK(gw_menu(gk_gw(ui), help_bad, 2) < 0 && errno == EINVAL);
     /* chosen in a submenu: the menu it is in; never a greyed submenu's */
     CHECK(gkf_menu_choose(30) && !gkf_menu_choose(25) && !gkf_menu_choose(50));
     run(ui);
@@ -1059,6 +1113,97 @@ static void submenus(void) {
     gkf_key(WIN_KEY_F7, 0);
     run(ui);
     CHECK(heard(GK_EV_MENU, 50) && entry("Greyed")->flags == WIN_MENU_SUBMENU);
+    gk_close(ui);
+}
+
+/* desk's fix round: a drag starts only from a press the window saw over the widget. A button held since a press
+   outside a box (nobody's) is no drag over a field once the box has gone, and an area hears it as a hover */
+static void drags(void) {
+    struct gk *ui = window("Drags", 300, 200);
+    struct gk_widget *f, *a;
+    int x, y, w, h, i, held = 0;
+    f = gk_field(gk_root(ui), 1, 40, 0);
+    a = gk_area(gk_root(ui), 2, GK_FOCUSABLE, NULL, NULL);
+    gk_grow(a, 1, 1);
+    run(ui);
+    gk_set_text(f, "abcdef");
+    gk_focus(f);
+    gkf_key(WIN_KEY_END, 0);
+    gk_message(ui, 9, "Over", "", "");
+    run(ui);
+    gkf_pointer(2, 198, WIN_BUTTON_LEFT);               /* outside the box: nobody's press */
+    gkf_key(27, 0);                                     /* the box answered, gone */
+    run(ui);
+    gk_bounds(f, &x, &y, &w, &h);
+    gkf_pointer(x + 4, y + 10, WIN_BUTTON_LEFT);        /* still held, over the field's start */
+    gk_bounds(a, &x, &y, &w, &h);
+    gkf_pointer(x + 10, y + 10, WIN_BUTTON_LEFT);       /* and over the area */
+    gkf_pointer(x + 12, y + 12, 0);
+    run(ui);
+    for(i = 0; i < ngot; i++) if(got[i].type == GK_EV_POINTER && got[i].buttons) held++;
+    CHECK(held == 0 && heard(GK_EV_POINTER, 2));
+    gkf_type("X");
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "abcdefX"));              /* no selection made: the cursor still at the end */
+    gk_bounds(a, &x, &y, &w, &h);                       /* a press it saw: a drag, the buttons told */
+    gkf_drag(x + 10, y + 10, x + 40, y + 30);
+    run(ui);
+    for(i = 0, held = 0; i < ngot; i++) if(got[i].type == GK_EV_POINTER && got[i].buttons) held++;
+    CHECK(held >= 2);
+    gk_close(ui);
+}
+
+/* a password field wiped (gk_field_wipe()): every byte it held is zero, its text's buffer whole and a character typed
+   partway (its first byte, waiting for the rest); the keys that typed them are gone from gui.h's queue too */
+static void wipes(void) {
+    struct gk *ui = window("Wipe", 300, 100);
+    struct gk_widget *pw = gk_field(gk_root(ui), 1, 16, GK_PASSWORD);
+    const struct gk_line *f = pw->k;
+    int i, kept = 0;
+    run(ui);
+    gk_focus(pw);
+    gkf_type("s3cr\xc3\xa9t");
+    gkf_key(0xC3, 0);                                   /* the first byte of one more */
+    run(ui);
+    CHECK(f->len == 7 && f->nparts == 1 && (unsigned char)f->part[0] == 0xC3 && !strcmp(gk_text(pw), "s3cr\xc3\xa9t"));
+    for(i = 0; i < GW_QUEUE; i++) kept += gk_gw(ui)->queue[i].type == WIN_EV_KEY;
+    CHECK(kept == 0);
+    gk_field_wipe(pw);
+    for(i = 0, kept = 0; i <= f->max; i++) kept += f->buf[i] != 0;
+    for(i = 0; i < (int)sizeof(f->part); i++) kept += f->part[i] != 0;
+    CHECK(kept == 0 && f->len == 0 && f->nparts == 0 && !strcmp(gk_text(pw), ""));
+    gkf_type("ab");                                     /* typing goes on as in an empty field */
+    run(ui);
+    CHECK(!strcmp(gk_text(pw), "ab"));
+    gk_close(ui);
+}
+
+/* the games review: a shortcut acts once a press, the keyboard's repeats of its key ignored (Ctrl+Z held: one undo),
+   unless its item asks for them (GK_ITEM_REPEAT: Zoom in, held, zooms on); the repeats are nobody's keys either, and a
+   field with the focus takes neither (it types repeats of what it types) */
+static void repeats(void) {
+    struct gk *ui = window("Repeats", 300, 200);
+    struct gk_widget *f = gk_field(gk_root(ui), 1, 20, 0);
+    int edit = gk_menu(ui, "Edit");
+    CHECK(gk_menu_item(ui, edit, 1, "Undo", GK_CTRL | 'Z', 0) == 0 &&
+          gk_menu_item(ui, edit, 2, "Zoom in", GK_CTRL | '=', GK_ITEM_REPEAT) == 0);
+    run(ui);
+    gkf_key(26, WIN_MOD_CTRL);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('=', WIN_MOD_CTRL);
+    gkf_key('=', WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('=', WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 4 && nth(GK_EV_MENU, 0)->id == 1 && nth(GK_EV_MENU, 1)->id == 2 &&
+          nth(GK_EV_MENU, 3)->id == 2 && !count(GK_EV_KEY));
+    gk_focus(f);
+    gkf_key(26, WIN_MOD_CTRL);
+    gkf_key(26, WIN_MOD_CTRL | WIN_MOD_REPEAT);
+    gkf_key('a', 0);
+    gkf_key('a', WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 1 && !count(GK_EV_KEY) && !strcmp(gk_text(f), "aa"));
     gk_close(ui);
 }
 
@@ -1089,6 +1234,12 @@ static void paste(void) {
     CHECK(gk_paste(ui, buf, 5) == 4 && !strcmp(buf, "ab\xc3\xa9"));
     gkf_set_paste(NULL);
     CHECK(gk_paste(ui, buf, 5) == 0 && !strcmp(buf, ""));
+    /* the window's own copy, not yet the desktop's clipboard, is pasted (desk's kernel: it is the newer), and a newer
+       clipboard after it */
+    gkf_set_paste("old");
+    CHECK(gk_copy(ui, "mine", 4) == 0 && gk_paste(ui, buf, 8) == 4 && !strcmp(buf, "mine"));
+    gkf_set_paste("newer");
+    CHECK(gk_paste(ui, buf, 8) == 5 && !strcmp(buf, "newer"));
     gkf_set_paste("x");
     gkf_focus(0);                                       /* without the focus: nothing */
     run(ui);
@@ -1113,6 +1264,7 @@ static int answering(struct gk *ui) {
 static void choosers(void) {
     struct gk *ui = window("Choose", 500, 300);
     const struct win_dialog *d;
+    int i;
     int bx = (500 - 470) / 2, by = (300 - 160) / 2;
     gk_label(gk_root(ui), "files");
     run(ui);
@@ -1189,6 +1341,42 @@ static void choosers(void) {
     gk_dismiss(ui);
     run(ui);
     gkf_lacks(0, 0);
+    /* 11/05/26, desk's implementation: no room for the answer (EAGAIN, while WIN_EVENTS events wait unread): the
+       request kept, and asked again once they are read; refused by then (the focus gone): answered as cancelled */
+    CHECK(answering(ui));
+    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    CHECK(gk_choose(ui, 42, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
+    CHECK(gk_choose(ui, 43, WIN_DLG_OPEN, "/", "", "") < 0 && errno == EBUSY);
+    run(ui);
+    CHECK(gkf_dialog() && gkf_dialog()->id == 42);
+    gkf_dialog_answer("/b");
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 42) && heard(GK_EV_CHOSEN, 42)->value == 1 && !strcmp(heard(GK_EV_CHOSEN, 42)->text, "/b"));
+    CHECK(answering(ui));
+    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    CHECK(gk_choose(ui, 44, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
+    gkf_focus(0);
+    run(ui);
+    CHECK(!gkf_dialog() && heard(GK_EV_CHOSEN, 44) && heard(GK_EV_CHOSEN, 44)->value == 0);
+    gkf_focus(1);
+    run(ui);
+    /* desk's fix round: a request while an answer's path waits to be taken is EBUSY; the toolkit takes the path as the
+       answer comes, so its own next request is never refused for it */
+    CHECK(answering(ui) && gk_choose(ui, 47, WIN_DLG_OPEN, "/", "", "") == 0);
+    gkf_dialog_answer("/c");
+    gkf_key(WIN_KEY_F12, 0);
+    {
+        struct win_dialog dd;
+        memset(&dd, 0, sizeof(dd));
+        dd.kind = WIN_DLG_OPEN;
+        CHECK(gw_dialog(gk_gw(ui), &dd) < 0 && errno == EBUSY);
+    }
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 47) && !strcmp(heard(GK_EV_CHOSEN, 47)->text, "/c"));
+    CHECK(answering(ui) && gk_choose(ui, 48, WIN_DLG_OPEN, "/", "", "") == 0);
+    gkf_dialog_answer(NULL);
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 48) && heard(GK_EV_CHOSEN, 48)->value == 0);
     /* a chooser asked just before the desktop let the window go: answered 0; a path chosen just before is still taken */
     CHECK(answering(ui) && gk_choose(ui, 40, WIN_DLG_OPEN, "/", "", "") == 0 && gkf_dialog());
     gkf_gone();
@@ -1339,6 +1527,154 @@ static void modifiers(void) {
     gk_close(ui);
 }
 
+/**** stage 2: a text of several lines, progress bars, sliders, palettes ****/
+
+static void text_area(void) {
+    struct gk *ui = window("Text", 300, 200);
+    struct gk_widget *t, *ro, *after;
+    int x, y, w, h, from, to;
+    t = gk_text_area(gk_root(ui), 50, 64, 0);
+    gk_size(t, 0, 4 * 16 + 4);
+    gk_grow(t, 1, 0);
+    ro = gk_text_area(gk_root(ui), 51, 200, GK_READONLY);
+    gk_size(ro, 0, 2 * 16 + 4);
+    gk_grow(ro, 1, 0);
+    after = gk_button(gk_root(ui), "After", 52);
+    run(ui);
+    gk_bounds(t, &x, &y, &w, &h);
+    gk_focus(t);
+    gkf_type("one\ntwo\nthree");
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwo\nthree") && heard(GK_EV_CHANGE, 50));
+    CHECK(gkf_text(x + 5, y + 2, "one", GW_INK) && gkf_text(x + 5, y + 2 + 16, "two", GW_INK));
+    gkf_key(WIN_KEY_UP, 0);                             /* Up from after "three": the end of "two" */
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_SHIFT);
+    gkf_key(3, 0);
+    run(ui);
+    CHECK(!strcmp(gkf_clip(), "wo"));
+    gkf_key(WIN_KEY_END, 0);
+    gkf_key(8, 0);
+    gkf_key(WIN_KEY_DELETE, 0);                         /* the line end: the lines join */
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "one\ntwthree"));
+    gkf_key(9, 0);                                      /* Tab is not its own: the focus moves on */
+    run(ui);
+    CHECK(gk_focused(ui) == ro);
+    gk_set_text(t, "\tx\ny");                           /* a tab to the next multiple of 8 */
+    run(ui);
+    CHECK(gkf_text(x + 5 + 8 * 8, y + 2, "x", GW_INK) && gkf_text(x + 5, y + 2 + 16, "y", GW_INK));
+    gk_focus(t);
+    gkf_key(1, 0);                                      /* Ctrl+A, then typing past its 64 bytes: cut */
+    gkf_type("0123456789012345678901234567890123456789012345678901234567890123456789");
+    run(ui);
+    CHECK(strlen(gk_text(t)) == 64);
+    gk_set_text(t, "a\nb\nc\nd\ne\nf\ng\nh");
+    for(from = 0; from < 7; from++) gkf_key(WIN_KEY_DOWN, 0);
+    gkf_key(WIN_KEY_END, 0);
+    run(ui);
+    gk_text_cursor(t, &from, &to);
+    CHECK(from == to && from == (int)strlen("a\nb\nc\nd\ne\nf\ng\nh") && gkf_text(x + 5, y + 2 + 2 * 16, "g", GW_INK));   /* (the cursor is on "h"'s edge) */
+    gkf_wheel(x + 20, y + 20, -3);                      /* the wheel moves the view, not the cursor */
+    run(ui);
+    CHECK(gkf_text(x + 5, y + 2, "b", GW_INK));
+    gkf_advance(1000);
+    gkf_click(x + 5 + 2, y + 2 + 5);                    /* "b" */
+    gkf_type("B");
+    run(ui);
+    CHECK(!strncmp(gk_text(t), "a\nBb", 4));
+    /* the keys as surfos/win.h has them: Ctrl+End, Ctrl+Backspace a word, Ctrl+Left by words; Alt+X, Ctrl+Enter and
+       Ctrl+I (9 with Ctrl) the window's, no tab */
+    gk_set_text(t, "sea and sand");
+    gkf_key(WIN_KEY_END, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_BACKSPACE, WIN_MOD_CTRL);
+    gkf_key(WIN_KEY_LEFT, WIN_MOD_CTRL);
+    gkf_key('x', WIN_MOD_ALT);
+    gkf_key(WIN_KEY_ENTER, WIN_MOD_CTRL);
+    gkf_key(9, WIN_MOD_CTRL);
+    gkf_key('!', 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(t), "sea !and ") && count(GK_EV_KEY) == 3 && gk_focused(ui) == t);
+    /* one that takes Tab: a tab typed; Ctrl+Tab moves on */
+    {
+        struct gk_widget *tabby = gk_text_area(gk_root(ui), 53, 64, GK_TAKES_TAB);
+        gk_focus(tabby);
+        gkf_key(9, 0);
+        gkf_key('x', 0);
+        gkf_key(WIN_KEY_TAB, WIN_MOD_CTRL);
+        run(ui);
+        CHECK(!strcmp(gk_text(tabby), "\tx") && gk_focused(ui) != tabby);
+        gk_remove(tabby);
+    }
+    /* read-only: shown, selected and copied, never changed */
+    gk_set_text(ro, "fixed text");
+    gk_focus(ro);
+    gkf_type("x");
+    gkf_key(8, 0);
+    gkf_key(1, 0);
+    gkf_key(3, 0);
+    gkf_key(24, 0);
+    run(ui);
+    CHECK(!strcmp(gk_text(ro), "fixed text") && !strcmp(gkf_clip(), "fixed text") && count(GK_EV_CHANGE) == 0);
+    (void)after;
+    gk_close(ui);
+}
+
+static void progress_slider_palette(void) {
+    struct gk *ui = window("More", 300, 200);
+    struct gk_widget *p, *s, *pal, *tools;
+    static const unsigned pencil[4] = { 0x153D49, 0xFF000000u, 0xFF000000u, 0x153D49 };
+    int x, y, w, h, i;
+    p = gk_progress(gk_root(ui), 200);
+    gk_set_text(p, "Half");
+    s = gk_slider(gk_root(ui), 60, 0, 100, 5);
+    pal = gk_palette(gk_root(ui), 61, 4, 16, 16);
+    for(i = 0; i < 6; i++) CHECK(gk_palette_color(pal, (unsigned)(0x100000 * i)) == i);
+    tools = gk_palette(gk_root(ui), 62, 2, 24, 24);
+    CHECK(gk_palette_icon(tools, pencil, 2, 2) == 0 && gk_palette_icon(tools, pencil, 2, 2) == 1);
+    CHECK(gk_palette_icon(tools, pencil, 40, 40) < 0);  /* larger than a cell */
+    gk_set_value(p, 100);
+    run(ui);
+    gk_bounds(p, &x, &y, &w, &h);
+    CHECK(gkf_pixel(x + 2, y + 5) == GW_TEAL && gkf_pixel(x + w - 3, y + 5) == SHEET);
+    CHECK(gkf_pixel(x + (w - 2) / 2 - 1, y + h - 2) == GW_TEAL && gkf_pixel(x + (w - 2) / 2 + 3, y + h - 2) == SHEET);
+    gk_set_value(p, 999);                               /* kept within */
+    CHECK(gk_value(p) == 200);
+    /* the slider: keys by its step, a click on its track, the wheel */
+    gk_bounds(s, &x, &y, &w, &h);
+    gkf_click(x + w - 2, y + h / 2);
+    run(ui);
+    CHECK(gk_value(s) == 100 && heard(GK_EV_CHANGE, 60) && gk_focused(ui) == s);
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(WIN_KEY_PGDN, 0);
+    run(ui);
+    CHECK(gk_value(s) == 45 && count(GK_EV_CHANGE) == 2);
+    gkf_key(WIN_KEY_HOME, 0);
+    gkf_wheel(x + 10, y + 5, -3);                       /* away from the user: up */
+    run(ui);
+    CHECK(gk_value(s) == 5);
+    gkf_drag(x + 1, y + 5, x + w / 2, y + 5);
+    run(ui);
+    CHECK(gk_value(s) == 50);
+    /* the palette: a click, the arrows */
+    gk_bounds(pal, &x, &y, &w, &h);
+    CHECK(w == 4 * 18 + 2 && h == 2 * 18 + 2 && gk_value(pal) == -1);
+    gkf_click(x + 1 + 18 + 8, y + 1 + 8);
+    run(ui);
+    CHECK(gk_value(pal) == 1 && heard(GK_EV_CHANGE, 61) && gk_palette_get_color(pal, 1) == 0x100000);
+    gkf_key(WIN_KEY_DOWN, 0);
+    run(ui);
+    CHECK(gk_value(pal) == 5);
+    CHECK(gk_palette_set_color(pal, 5, 0x123456) == 0 && gk_palette_get_color(pal, 5) == 0x123456);
+    run(ui);
+    CHECK(gkf_pixel(x + 1 + 18 + 8, y + 1 + 18 + 8) == 0x123456);
+    gk_bounds(tools, &x, &y, &w, &h);
+    gkf_click(x + 1 + 26 + 12, y + 1 + 12);
+    run(ui);
+    CHECK(gk_value(tools) == 1 && gkf_pixel(x + 1 + 26 + 11, y + 1 + 11) == 0x153D49);
+    gk_close(ui);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     libgui();
@@ -1352,12 +1688,18 @@ int main(void) {
     areas();
     boxes();
     loop();
+    bursts();
     menus();
     submenus();
+    drags();
+    wipes();
+    repeats();
     paste();
     choosers();
     theme();
     modifiers();
+    text_area();
+    progress_slider_palette();
     gkf_reset(0, 0);
     printf("test_gk: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

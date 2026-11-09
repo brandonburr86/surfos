@@ -11,7 +11,9 @@ Everything here is written for this tree, from its own code and from no other to
 - **The look** is the desktop's own, read from this tree: `shell/guidraw.c` (the palette, buttons, scroll bars and
   their thumb arithmetic, `gd_thumb()` and `gd_scroll_to()`), `shell/guidialog.c` (the dialogs' layout, the text box,
   the buttons from the right), `shell/guicore.c` and `shell/guimon.c` (toolbars, the lit tab, status bars, list rows).
-  Check boxes, switches and radio buttons, which the desktop has none of, are drawn here in its colours.
+  Check boxes, switches and radio buttons, which the desktop has none of, are drawn here in its colours; so are
+  stage 2's slider and palettes. The progress bar is the desktop's meter (`shell/guimeter.c`), and the text of
+  several lines edits as Notepad does (`shell/guinote.c`).
 - **The layout** (boxes that stack their children and share what is left over by weight, a child that grows filling
   the box across) is the common idea of box layout, not any toolkit's code; the arithmetic is this file's.
 - **Damage tracking** (rectangles merged when their box is not much more than they are, presented each) is the
@@ -47,6 +49,119 @@ Everything here is written for this tree, from its own code and from no other to
   driver/cp437.c's own `utf8_feed()`, so a label the toolkit cleans is held to the kernel's rule, not the toolkit's).
 - **The demonstration** `wkit` (`user/wkit/`: `demo.c` the window, `main.c` the loop), its host test
   `tests/host/test_wkit.c` and its screen checks `tools/gui_apps_kit.py`; its page `rootfs/man/wkit.txt`.
+
+### Stage 2
+
+- **A text of several lines** (`gk_text_area()`, `gktext.c`), for small texts (notes, a description, an address
+  list): edited as Notepad edits, lines at \n that do not wrap, the view following the cursor down and across, a tab
+  to the next multiple of 8 columns; the keys of a field (Ctrl with the arrows by words, Ctrl+Backspace and
+  Ctrl+Delete a word) and Up, Down, Page Up, Page Down, Ctrl+Home and Ctrl+End, Up and Down keeping their column; the
+  mouse (a click, a drag that scrolls past an edge, a double-click a word, a third click the line); the clipboard (all
+  of a paste, a CR LF as one line end); `GK_READONLY` to show text that is selected and copied but never changed; Tab
+  moves on unless `GK_TAKES_TAB`. It keeps one buffer of at most its max bytes and finds its lines by scanning it:
+  its work grows with its text, which is why it is for small texts and an editor draws an area of its own.
+- **A progress bar** (`gk_progress()`): the desktop's meter (System Monitor's bar), filled in teal, its text in the
+  middle in the accent's text over the fill and in ink beyond it.
+- **A slider** (`gk_slider()`): a whole number from min to max by a step, by the arrows, Page Up and Down (ten
+  steps), Home and End, a click or a drag on the track (the value under the knob's middle), the wheel.
+- **Palettes** (`gk_palette()`): cells of colours (`gk_palette_color()`) or small pictures
+  (`gk_palette_icon()`, pixels whose top byte is set see-through), one chosen, by a click or the arrows: Paint's
+  colours and tools.
+- **What the app tracks report needing:** no app track had reported a need to this track by the time stage 2 was
+  done (no message reached it), so stage 2 is the brief's list; an app that needs more draws it in an area, and the
+  integrator can route a request here.
+- **The docs:** `user/include/gui.h` (floating point is allowed: the kernel keeps each program's registers since
+  robustness B2; libgui and the toolkit draw in whole pixels) and `docs/GUI.md`'s "Programs' windows" (the same, and
+  the toolkit). CLAUDE.md's "integer-only" note in "Windows for programs" is the integrator's to change (the brief
+  gives the docs to this track, the coordinator kept CLAUDE.md for the integrator): it should say that a windowed
+  program may use floating point, and point to gk.h.
+- **wkit** gains a fourth page, More: notes, the seconds of the minute, a volume, colours and tools.
+
+### Stage 3, on the desktop's own calls
+
+Desk's implementation with the review of its stage 2 (apps/desk 1447a4c2, which holds 2c5afd30) merged, and the
+toolkit checked against the real calls where the fake and -ENOSYS had answered until then, on the screen
+(tools/gui_apps_kit.py, through wkit) and on the host:
+
+- **Menus.** wkit's File and View stand in the bar in place of File and Edit; Ctrl+G, Right, Enter chooses
+  File > Open; View > Speed opens in View's place and its Normal is chosen (WIN_EV_MENU with View's id); Help >
+  About the toolkit is the program's item first in the desktop's Help. The fake's menu checks are the kernel's
+  functions of 1447a4c2 copied (`menu_cells()`, `reads_as()`, `desk_title()`, `desk_help_item()`, `menu_check()`),
+  so the limits gk keeps as it builds (14 entries, 11 in Help, 48 bytes, the desktop's titles and Help items) are
+  the kernel's.
+- **Choosers.** The title bar names whom the chooser is for, then its own title: 2c5afd30 named the window,
+  1447a4c2 the program ("wkit: Open a file"), so the screen checks know a chooser by its own title after a name
+  (aac42b11 did this first for stage 2's check, which every app's full scenario runs); Esc answers 0. Another dialog that takes a
+  chooser's place answers it 0 the same way (`client_chooser_dropped()`), which gk cannot tell from Esc and need not:
+  no way was found to open one over a program's chooser from the screen (Print Screen's waits until no dialog is
+  up), so that case is the answer 0 the screen checks see. **EAGAIN**, new in 2c5afd30's header (no room for the
+  answer while WIN_EVENTS events wait unread): gk_choose() keeps the request, says 0, and gk_next() asks again once
+  it has read the events (`gk_choose_again()`); refused by then (the focus gone), it is answered as cancelled, so
+  the program hears of every request. On the screen, Ctrl+Shift+O keeps wkit busy for three seconds while 72
+  presses of F12 fill its queue (wheel notches did not: QEMU's mouse merges them into few reports); the events
+  lost in the spell (WIN_INFO) prove the queue was full when it asked, and the chooser comes all the same. **EACCES without input since the last request:** gk's own rule (only while the
+  program answers a key, a press or a menu choice) is the stricter: a second request can follow only the first's
+  answer, which gk reads after every event queued before that request, so an event that lets the program ask was
+  sent after it. The kernel's refusal is a backstop gk does not reach but for the focus; the fake keeps it, as it
+  keeps EAGAIN. Desk's fix round makes WIN_DIALOG say EBUSY while an answered path waits to be taken (2c5afd30
+  let a second request replace it): gk takes the path (WIN_TAKE) as it dispatches WIN_EV_DIALOG, before the program
+  hears of anything after it, so its next request is never refused for it; a request that meets EBUSY anyway comes
+  back to the program as -1, and one the toolkit kept (EAGAIN) and asks again is answered as cancelled. The fake
+  refuses the same way.
+- **Paste.** Copy pastes back at once and gets the window's own copy, which the desktop has not taken yet (the
+  kernel's rule); the notes' 71 bytes pasted over the 64-byte name (WIN_PASTE says ENOSPC to the toolkit's buffer)
+  are read whole and the field takes the first line.
+- **Theme.** SurfOS > Ocean / dusk colors reaches wkit as GK_EV_THEME, dusk and back. Dusk changes only the desktop's
+  role (WIN_COLOR_DESKTOP); a window's colours stay as they are, so the toolkit's windows look the same in both.
+- **Keys.** Alt+X (no Esc before it), Ctrl+0, Ctrl+Enter and Ctrl+Esc reach the program with their modifiers;
+  Ctrl+Backspace deletes a word in a field; Ctrl+Tab moves the focus. WIN_MOD_REPEAT cannot be made on the screen:
+  QEMU's sendkey gives a make and a break, never the keyboard's repeat, so repeats are host-tested only (a field
+  types each; a shortcut held down repeats). Shortcuts are matched on the modifiers' bits, a repeat or an unknown
+  bit beside them changing nothing (host-tested).
+- **Menus, desk's review of its stage 2:** an item of the program's Help that reads as one of the desktop's own Help
+  items (About SurfOS, Keyboard and mouse, which follow it in the same menu) is refused by gk_menu_item(), read as
+  the kernel reads it (the cells drawn, blanks around them, any case), and by the fake, which copies the kernel's
+  `desk_help_item()`. The fake also takes the kernel's new rule for a chooser's input: a press over the content
+  (a button the event before did not have), not a button held from elsewhere.
+- **A drag only from a press the window saw:** a widget hears buttons held only while it has the pointer from a press
+  over it (gkcore.c's capture), so a button held since a press elsewhere (on a desktop dialog, outside a box) is a
+  hover over a field or an area, never a selection or a stroke; an area's GK_EV_POINTER says no buttons then.
+  1447a4c2 stops sending such a held button after a click on a desktop dialog, and a leave carries no buttons;
+  the toolkit does not rely on either. The close button sends CLOSE again to a program that is alive (1447a4c2):
+  gk passes each on, and wkit's question is then asked again (the one open answered first, as a box over a box is).
+- **A shortcut acts once a press (the games review):** a menu item's shortcut matched the keyboard's repeats as well
+  (shortcut_of() keeps only Shift, Alt and Ctrl), so a held key acted again and again: in Solitaire, Ctrl+Z with two
+  repeats undid three deals, and a held Ctrl+N dealt on. A repeat of a shortcut's key (WIN_MOD_REPEAT) now does
+  nothing, the program not hearing it as a key either, unless the item opts in with GK_ITEM_REPEAT, for what holding
+  the key naturally does again (Undo, Redo, Zoom in and out). Fields still type every repeat. test_gk: Ctrl+Z pressed
+  with two repeats is one Undo, Ctrl+= with GK_ITEM_REPEAT three Zoom ins, with or without a field's focus.
+- **A box is modal for the menus too (the Paint review):** while gk_message(), gk_confirm() or gk_ask() was open,
+  an item chosen in the desktop's bar still came to the program as GK_EV_MENU, so a question was no question (in
+  Paint, Clear could act behind "Save the changes?"). Now, while a box is open, the menus go to the desktop greyed:
+  every title WIN_MENU_DISABLED, which greys its menu and the program's part of Help with it, and they go again as
+  they are when the box has gone (gk_menus_send() compares the box with how it last sent them). Greyed rather than
+  only dropped: the bar then shows why nothing happens, instead of items that look ready and do nothing, and it costs
+  two WIN_MENU calls a box, the menus being sent whole anyway. A choice made before the greyed menus reached the bar
+  is dropped (gkcore.c), and no shortcut gets past a box, which takes every key. What else could get past a box was
+  checked the same way: keys, the pointer and the wheel go to the box alone; the close button is the program's to
+  answer (GK_EV_CLOSE comes), as are its own timers, descriptors, choosers' answers, the theme and a new size.
+  test_gk: a box open, the titles greyed, gkf_menu_choose() refused, a choice sent as it is dropped, Ctrl+O and F6
+  nobody's, the close button heard; the box gone, the menus as they were and an item chosen again.
+- **A password's bytes, all of them (the Settings review):** gk_field_wipe() left the bytes of a character typed
+  partway (gkfield.c's part[]), and part[] kept them after they went in too. Every zeroing of what a field, a text, a
+  paste, a box's answer or a key event held goes through gk_wipe() now, a volatile loop no optimization drops
+  (memset() before free() is a store a compiler may leave out); part[] is zeroed as its bytes go in and at a wipe;
+  each key event's copies (the toolkit's, and its slot in gui.h's queue) are zeroed once dispatched. A field keeps no
+  undo, last key or selection copy of its own, and a password field no history or draft. test_gk looks at the
+  field's state (gkpriv.h's struct gk_line, there for it): after a wipe every byte of its buffer and part[] is 0, and
+  no key is left in gui.h's queue; with part[]'s wipe taken out, the check fails.
+- **Fixed first, a commit of its own on stage 2 (eab009d3), before the merge of desk:** `gk_next()` with a time that
+  had run out (0 above all: a game's frame) answered 0 after one read of the window's events (gui.h's 16) that made
+  nothing for the program, though more waited unread: a burst the toolkit takes itself left the rest, and what came
+  after it, for a later call. It reads on now while the window has events, a few batches more (GK_BATCHES) once its
+  time is up. With -1, as the documented loop waits, it never said 0 (test_gk's bursts: -1, 1000 and 0; only 0
+  failed before). The EAGAIN test found it.
+- **What the real desktop does that the header does not promise:** nothing found.
 
 ### Decisions a reviewer would ask about
 
@@ -164,7 +279,18 @@ Everything here is written for this tree, from its own code and from no other to
   answer to a person, answered 0 when the window is let go, a path chosen just before it still taken, the line typed
   instead on a desktop without them, from a kernel before them); the theme (read at the opening, followed);
   modifiers on keys and the pointer as desk defines them (Ctrl+I, Ctrl+M, Ctrl+Enter, Alt, repeats, Ctrl+Tab).
-- **test_wkit**: the demonstration's window driven as a person drives it, on the fake desktop.
+- **test_gk, stage 2:** the text of several lines (typing, lines joined and split, Up and Down keeping their column,
+  a tab's columns, its max, the view following the cursor, the wheel, a click, read-only text copied but never
+  changed, the amended keys: Ctrl+End, Ctrl+Backspace, Ctrl+Left, Alt+X, Ctrl+Enter and Ctrl+I the window's, a tab
+  typed where it takes Tab and Ctrl+Tab moving on); the progress bar's fill and text; the slider by keys, a click, a
+  drag and the wheel; palettes of colours and pictures by a click and the arrows.
+- **test_gk, stage 3:** gk_next() after a burst the toolkit takes itself (-1, a time left, 0); choosers kept on
+  EAGAIN and asked again, or answered as cancelled when refused by then; EBUSY for an untaken path; the window's own
+  copy pasted; shortcuts on their modifiers' bits; Help items the desktop's refused; a drag only from a press seen;
+  every byte of a wiped password; menus greyed under a box (gkf_menu_choose(), a late choice dropped, shortcuts
+  nobody's, the close button heard); a shortcut once a press, and GK_ITEM_REPEAT's repeats.
+- **test_wkit**: the demonstration's window driven as a person drives it, on the fake desktop (stage 2: its More
+  page; stage 3: keys with their modifiers, the theme, its own paste, the busy Open).
 - **The guiapps scenario** (`GUIAPPS_ONLY=gui_apps_kit`): wkit on the desktop of a USB-booted SurfOS.
 - On the Mac, natively (x86_64 under Rosetta, as the Docker image is 32-bit x86): test_gk and test_wkit with
   AddressSanitizer and UndefinedBehaviorSanitizer, kept out of `make unittest` as the brief says.
@@ -179,11 +305,38 @@ Counts at the gates:
   passed at -O0 and -O2, 35 of 35 checks, 29 of them wkit's. Natively with ASan and UBSan: test_gk and test_wkit
   clean. Each of the six commits was also checked out alone and its libgui and toolkit compiled natively, its host
   tests run where it has them.
+- **Stage 3** (eab009d3, aac42b11, the merge of desk 1447a4c2 and five commits, tip 7a751f3b): `make unittest`
+  passed, test_gk 470 checks and test_wkit 76 among it; `make test-all` passed at -O0 and -O2, 51 Files and 558 smoke
+  checks each; the guiapps scenario passed at -O0 and -O2, 67 of 67 checks, 61 of them wkit's, on desk's real calls.
+  (A test-all of eab009d3 alone that straddled the Mac's night asleep and the runaway's load failed 43 of 553, in
+  kcmdtest, pipetest and ftpd; it was not looked into, as the coordinator asked: the tip's run, which holds that
+  commit, passed.) Each of the five commits checked out alone, its host tests run natively with ASan and UBSan
+  (test_gk 457, 461, 467, 470, 470; test_wkit 70, then 76 with wkit's commit).
+- **Stage 2** (its five commits): `make unittest` passed, test_gk 430 checks and test_wkit 70 among it; `make test-all`
+  passed at -O0 and -O2, 51 Files and 558 smoke checks each; the guiapps scenario passed at -O0 and -O2, 41 of 41
+  checks, 35 of them wkit's (a first run at -O0 failed one of the More page's own checks: it read a palette cell's
+  pixel under the pointer its click had left there; the check moves the pointer off first now). Natively with ASan
+  and UBSan: clean; each commit checked out alone, compiled, its host tests run.
+
+## A test run that ran away
+
+On 11/05 an early stage-1 run of test_gk (scratchpad/apps-kit/native/test_gk), started without a time limit, did not
+end: most likely the loop() test's watched pipe while it stayed readable (watches are level-triggered, so gk_next()
+gave GK_EV_FD for ever) before the test read its byte. The Bash call's own timeout ended its shell and left the
+binary orphaned; it ran 16 hours at full load, through the Mac's night asleep, until the integrator stopped it, and
+QEMU boots of every track timed out meanwhile. Every native run of this track's since goes under perl's alarm
+(`perl -e 'alarm N; exec @ARGV' ...`), mutation checks included.
 
 ## Left out, and why
 
 - **No widget the six applications do not need:** no tree view, combo box, spin box, tooltip, drag and drop between
   widgets, or multiple selection in a list. A program that needs one draws it in an area.
+- **A text of several lines neither wraps nor undoes nor finds:** it is for small texts; Notepad and the Code
+  Editor are programs of their own.
+- **On the screen, two things are host-tested only:** the keyboard's repeats (QEMU's sendkey gives a make and a
+  break, never a typematic repeat), and a desktop dialog taking a program's chooser's place (no way was found to
+  open one over a chooser from the keyboard or the pointer: Print Screen's waits until no dialog is up). Both reach
+  the toolkit as what the host tests drive: a key with WIN_MOD_REPEAT, and WIN_EV_DIALOG 0.
 - **One font, one size.** Text is the console's 8 x 16 cells (code page 437, '?' for a character it lacks), as the
   desktop's own windows are; `gw_text_scaled()` stays for large digits. No proportional text: that is the browser's
   own (user/wundertow/font.c).

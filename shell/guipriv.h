@@ -95,6 +95,7 @@ enum {
 #define MENU_PROGRAMS 7
 #define MENU_OPEN_WITH 8
 #define MENU_CLIENT_SUB 9
+#define GUI_PREF_MS 1500                /* 11/05/26: a preference changed here is written once it has stood this long */
 #define MENU_CLIENT 16
 
 /* what waits for Notepad's changes to be saved or dropped (gui_state.pending) */
@@ -187,6 +188,7 @@ int client_count(const struct gui_state *g);
 void client_tick(struct gui_state *g);                  /* windows come, are read again, go; RESIZE and FOCUS */
 void client_finish(struct gui_state *g);                /* the desktop closes: every window is let go */
 bool client_pointer(struct gui_state *g, unsigned old); /* true: the event was a program's (old: the buttons before) */
+void client_pointer_lost(struct gui_state *g);          /* 11/05/26: the desktop takes the pointer (a dialog is up) */
 void client_alerts(struct gui_state *g);                /* 10/26/26: after the input, windows that asked to be seen */
 bool client_grace(struct gui_state *g, unsigned old);   /* 10/26/26: true: a press on one just come up, nobody's */
 void client_wheel(struct gui_state *g, int id, int rows);
@@ -195,7 +197,7 @@ bool client_waiting(const struct gui_state *g, int id); /* 10/25/26: opened with
 void client_launched(struct gui_state *g, int pid);     /* 10/25/26 (C6): its first window takes the focus */
 int client_of_pid(const struct gui_state *g, int pid);  /* 10/26/26: a window of the program pid, its number; -1 */
 void client_key(struct gui_state *g, int key);
-void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, then "End the program?" */
+void client_close(struct gui_state *g, int id);         /* the close button: CLOSE, or "End the program?" */
 void client_answer(struct gui_state *g, int slot, int button, const char *target);
 void client_render(const struct gui_state *g, const struct gui_draw *d, int id);   /* d: its content */
 /* 11/05/26 (track desk): the focused program's menus (NULL: it has none, or no program's window has the focus) and

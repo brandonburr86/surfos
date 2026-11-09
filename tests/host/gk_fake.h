@@ -60,7 +60,8 @@ unsigned gkf_clock(void);
 /* the clipboard: what the window put there (WIN_CLIP, only while it has the focus), and what WIN_PASTE gives */
 const char *gkf_clip(void);
 int gkf_clips(void);
-void gkf_set_paste(const char *text);
+void gkf_set_paste(const char *text);  /* the desktop's clipboard now (newer than a WIN_CLIP before: until then,
+                                           WIN_PASTE gives the window its own copy, as the kernel does) */
 int gkf_alerts(void);                   /* WIN_ALERTs */
 
 /* 11/05/26, track desk's calls (surfos/win.h), checked as the kernel checks them and done as the desktop does them:
@@ -75,6 +76,7 @@ int gkf_menus_sent(void);
 const struct win_menu_item *gkf_menu_entry(int i);
 int gkf_menu_find(const char *label);
 int gkf_menu_choose(int id);
+void gkf_menu_event(int id, int menu);  /* WIN_EV_MENU sent as it is (a choice made before the last WIN_MENU came) */
 /* the chooser's request waiting for its answer (NULL: none), and its answer: path chosen (WIN_TAKE gives it), NULL
    cancelled. A request needs a key, a press or a menu choice sent since the last one (EACCES), as the kernel's does;
    gkf_gone() answers one that waits with 0 */

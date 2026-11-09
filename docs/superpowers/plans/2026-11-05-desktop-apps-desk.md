@@ -99,7 +99,8 @@ Decisions of stage 1 that stand:
 - *Choosers*: a request waits in the window until the desktop takes it (`win_dialog_take()`, which numbers it); the
   desktop answers by window and number (`win_dialog_answer()`, `-EINVAL` for a number not waiting), which sets the
   path and queues WIN_EV_DIALOG in one section. A request needs input since the last one (`struct win`'s `input`,
-  set by a KEY, a MENU or a pointer event with a button held that was queued) and room for its answer: while it
+  set by a KEY, a MENU or a press that was queued: since the review of stage 2, a pointer event over the content with
+  a button the one before did not have) and room for its answer: while it
   waits, the queue's last place is the answer's (other events are lost there, and counted), and a request made with
   a full queue is `-EAGAIN` (the header says so). The hang-up answers a waiting request with 0 in that place; a path
   chosen stays for WIN_TAKE, which works after the hang-up, until the program lets go.
@@ -108,7 +109,8 @@ Decisions of stage 1 that stand:
 - What a window holds goes when either side lets go (`hang_up()`, `win_release()`; the desktop's lent menus at its
   close); every scenario of `test_win` ends with nothing allocated. The order of refusals: the argument first
   (-EFAULT, -EINVAL, -ENOMEM for its copy), then -EPIPE (but WIN_TAKE), then -EACCES (focus), -EBUSY, -EACCES
-  (input), -EAGAIN, -ENOENT, -ENOSPC.
+  (input), -EAGAIN. WIN_TAKE's: its buffer (-EFAULT, as many bytes as size or a path's longest), then -ENOENT, then
+  -ENOSPC.
 
 **The keys** (`kernel/keyboard.c`, `kernel/tty.c`, `shell/gui.c`, the model). The review asked for Ctrl+Tab apart
 from Ctrl+I, Ctrl+0 at all, and a repeat bit if the driver can tell; stage 1 had read Shift and Ctrl from the
@@ -163,8 +165,9 @@ without the Esc.
   volume) once no dialog is up and saves it through `gui_fs.write` (the .tmp-and-rename save). The shell frees it when
   the model is done, and at the desktop's end.
 - *Preferences*: `desktop.theme` and `pointer.speed` in `net/netcfg.c`'s table; the desktop polls them each second
-  through `gui_sys.prefs`, edge-triggered (a change made by Settings applies at once); Pointer & desktop writes each
-  change with `netman_set()` (`gui_sys.pref_set`) and says in its last line whether it was saved.
+  through `gui_sys.prefs`, edge-triggered (a change made by Settings applies at once); Pointer & desktop writes a
+  change with `netman_set()` (`gui_sys.pref_set`) once it has stood (the review of stage 2) and says in its last line
+  whether it was saved.
 - *The theme* to the kernel: once at the start and at each change (`client_theme()`).
 
 **Tests and tools.** `wintest desk [file]` (`user/bin/wintest.c`) uses the new calls bare: menus with a submenu and a
@@ -195,6 +198,60 @@ sound places for it:
 - **Screenshots at the screen's own resolution**: the desktop's pixels are its logical ones; at 2x each is a 2 x 2
   block on the screen, so the BMP holds the same picture at a quarter of the bytes.
 - **A submenu beside its item**: it drills down in its menu's place, as the desktop's own did already.
+
+## The review of stage 2
+
+An independent review read bb0a14ff (the code of 2c5afd30): no critical or high finding; the kernel's calls, the counted
+objects and the refusals held up under ASan and UBSan. What it found, and what this fix round did; its probes are
+tests now (K1-K5 in `test_win`, P1-P4 in `test_guiclient` and `test_guidesk`, the repeat harness in `test_keyscan`):
+
+- **M1, the desktop's own pointer event defeated the chooser's input rule.** A click on a desktop dialog over a
+  window, the pointer moving before the release, gave the window a "left" event with the button held, which the
+  kernel counted as input (and Paint could take for a drag). Now `leave()` never carries a button (only a window
+  holding the pointer, a press begun in it, hears of buttons), and a desktop dialog that takes the pointer ends the
+  window's hover and its grab with no button held (`client_pointer_lost()`). The kernel counts as a press only a
+  pointer event over the content with a button the one before did not have.
+- **M2, a program's chooser could pass for the desktop's.** Its title bar named the window by its title ("≋ SurfOS:
+  Save as" for a window titled SurfOS). Now it is named by what the program cannot set: its registry title, else its
+  program's file name (the task's), else its pid; and a program's chooser has no ≋, which marks the desktop's own
+  dialogs alone. The kernel refuses a Help menu's item that reads as the desktop's own Help items (Keyboard and mouse,
+  About SurfOS), on the cells drawn, in any case.
+- **M3, Pointer & desktop wrote the stick on each change, a held key 30 times a second.** A change applies at once
+  and is written once it has stood 1.5 s (`GUI_PREF_MS`), or at the desktop's end; the toggles ignore the keyboard's
+  repeat (checked before `gui_own_key()` drops it).
+- **M4, the close button never sent WIN_EV_CLOSE again** (since 10/25: `closing` was never cleared). The rule now:
+  each press sends CLOSE while the program reads its events; the kernel tells the desktop whether a CLOSE it was sent
+  waits unread (`win_state.close_waiting`), and then the press offers "End the program?" (the program is stuck or
+  busy). A program that reads CLOSE and ignores it can still be ended from its close button: a third press within
+  `GUI_CLOSE_MS` (3 s), its two CLOSEs before read and ignored, offers "End the program?" too. Why these: whether a
+  program reads its events is the one sign of life the kernel has without guessing at time, and three presses in a row
+  is a person who means it; a program that asks its own question meanwhile is asked again at the next press.
+- **L1, WIN_TAKE was not bound to its request** (an Open answered, then a Save asked before the events were read:
+  WIN_TAKE for the Open gave the Save's path). WIN_DIALOG is now -EBUSY while an answered path waits to be taken; a
+  cancelled answer leaves none (win.h says so).
+- **L2.** WIN_EV_THEME is merged: one waits at most, the newest (100 changes queued 64 and lost 36 before).
+- **L3.** A tile the screen has no room for is no longer clicked (the suite's and the registry's alike).
+- **L4.** The controller's error forgets the key held (its break may be lost: the next press read as a repeat). The
+  scan codes' prefix and repeat moved into `include/surfos/keyscan.h`, which `tests/host/test_keyscan.c` runs on the
+  host, Print Screen's sequences among them; Print Screen held asks once. A keyboard that resumes repeating a held key
+  after another was tapped gives its first resumed make as a new press (keyscan.h says so).
+- **L5.** An unreadable chooser folder now falls back to the last chooser's, then /, as win.h says; win.h and this
+  account give WIN_TAKE's refusals in the code's order (-EFAULT, -ENOENT, -ENOSPC).
+- **L6.** A path the kernel refuses in an answer is answered as cancelled, so a request never waits on.
+- **L7.** The registry's log lines keep their newline when cut.
+- **L8.** Registry titles get the menu titles' checks: UTF-8 by the console's rules, no control character, not the
+  desktop's sign or its menus' names (`gd_text_cells()`, `gd_reads_as()` in `shell/guidraw.c`, the desktop's copy of
+  kernel/win.c's walk: the kernel's is tested by test_win without the desktop's objects).
+- **L9, a program the desktop started could take its keys.** It shares the desktop's console as its terminal, so its
+  `ttyctl(TTY_RAW, ...)` took the console out of TTY_RAW_KEYS, and its end dropped it to line mode. Chosen: while a
+  terminal is in TTY_RAW_KEYS, TTY_RAW from any task but the one that set it is -EBUSY (`kernel/tty.c`). Why: it keeps
+  the programs' terminal as it is (their output, Ctrl+C, the job rules) and changes only the one thing that broke; a
+  program that wants raw keys has none there anyway (its input is /dev/null). `selftest` checks it, and the screen
+  check runs `wintest raw` from the desktop before typing on.
+- **Test gaps:** K5 (the answer's kept place at the close and at the desktop's death with a nearly full queue) is a
+  scenario; `gui_fake` lends each update's menus in a copy of their own and poisons the copy before, so a stale
+  pointer would be seen; `test_paste_given` checks that the clipboard is given before FOCUS; the screen check also
+  cancels a chooser with the mouse, and closes wintest through its own question twice.
 
 ## Tests
 

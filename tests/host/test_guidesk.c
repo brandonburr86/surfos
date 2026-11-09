@@ -72,6 +72,15 @@ static void test_parse(void) {
     CHECK(parse("program = abcdefghijabcdefghijabcdefghija\ntitle = x\n", &r, why) == 0);       /* 31 */
     CHECK(refused("program = p\ntitle = abcdefghijabcdefghijabcdefghijab\n", "a title is 1 to 31 bytes"));
     CHECK(refused("program = p\ntitle = a\x01" "b\n", "no control characters"));
+    /* (the review of stage 2) a title as a program's menu titles: UTF-8 by the console's rules, no C1, none that passes
+       for the desktop's (its sign, its menus' names) */
+    CHECK(refused("program = p\ntitle = caf\xE9\n", "UTF-8"));
+    CHECK(refused("program = p\ntitle = a\xC2\x85" "b\n", "UTF-8"));
+    CHECK(refused("program = p\ntitle = \xE2\x89\x8B Paint\n", "no sign of the desktop's"));
+    CHECK(refused("program = p\ntitle = My \xE2\x89\x88 app\n", "no sign of the desktop's"));
+    CHECK(refused("program = p\ntitle = Apps\n", "none of the desktop's menus"));
+    CHECK(refused("program = p\ntitle = \xC2\xA0" "surfOS\n", "none of the desktop's menus"));
+    CHECK(parse("program = p\ntitle = Caf\xC3\xA9 \xE2\x80\x94 Applications\n", &r, why) == 0);
     CHECK(refused("program = p\ntitle = x\ntypes = .png\n", "line 3: types: not a list of types"));
     CHECK(refused("program = p\ntitle = x\ntypes = png,bmp\n", "not a list of types"));
     CHECK(refused("program = p\ntitle = x\ntypes = abcdefghijklmnop\n", "not a list of types"));     /* 16 */
@@ -248,6 +257,22 @@ static void test_tiles(void) {
     CHECK(fake_run_count == 1 && !strcmp(fake_run_line, "wx"));
     for(i = 0; i < 4; i++) fake_click(&g, 480 + 70, 120 + 52 + 20);     /* Beta has none: nothing below */
     CHECK(fake_run_count == 1);
+    /* P3 (the review of stage 2): a tile the screen has no room for is neither drawn nor clicked; at 640x400 the
+       suite's fill the third and fourth columns, the registry's would start at the fifth, past the right edge */
+    with_apps(640, 400);
+    for(i = 0; i < 6; i++) {
+        char name[32], text[80];
+        snprintf(name, sizeof(name), "p%d.app", i);
+        snprintf(text, sizeof(text), "program = wx%d\ntitle = Tile %d\ndesktop = yes\n", i, i);
+        app(name, text);
+        snprintf(name, sizeof(name), "wx%d", i);
+        bin(name);
+    }
+    tick();
+    fake_run_count = 0;
+    fake_click(&g, 636, 140);
+    fake_click(&g, 630, 300);
+    CHECK(fake_run_count == 0);
 }
 
 static void test_files_open(void) {
@@ -329,6 +354,7 @@ static void test_screenshot(void) {
     tick();                                             /* the chooser, in / (no stick mounted) */
     CHECK(g.dialog.kind == GUI_DLG_SAVE && g.shot.state == GUI_SHOT_ASKING && !strcmp(g.dialog.dir, "/") &&
           !strcmp(g.dialog.field.text, "Screenshot 2026-10-17 140530.bmp") && !strcmp(g.dialog.title, "Save the screenshot"));
+    CHECK(!g.dialog.program);                           /* the desktop's own: its sign (the review of stage 2) */
     gui_key(&g, 27);
     CHECK(!g.dialog.kind && g.shot.state == GUI_SHOT_DONE);   /* cancelled: the shell frees it */
     g.shot.state = GUI_SHOT_NONE;
@@ -434,6 +460,7 @@ static void test_volume_dir(void) {
 }
 
 static void test_prefs(void) {
+    int i;
     with_apps(960, 540);
     fake_pref_theme = 1;                                /* the stick says dusk and fast */
     fake_pref_speed = 3;
@@ -447,23 +474,52 @@ static void test_prefs(void) {
     tick();
     CHECK(!g.night && g.speed == 3);
     gui_act(&g, ACT_SETTINGS);                          /* Pointer & desktop: 2, then T */
-    key('2');
-    CHECK(g.speed == 2 && fake_pref_sets == 1 && fake_pref_which == 1 && fake_pref_value == 2 &&
+    key('2');                                           /* (the review of stage 2) in force at once, */
+    CHECK(g.speed == 2 && fake_pref_sets == 0 && !strcmp(g.pref_status, "Kept in the settings in a moment."));
+    g.now += GUI_PREF_MS - 1;
+    tick();
+    CHECK(fake_pref_sets == 0);
+    g.now += 1;                                         /* written once it has stood */
+    tick();
+    CHECK(fake_pref_sets == 1 && fake_pref_which == 1 && fake_pref_value == 2 &&
           !strcmp(g.pref_status, "Saved in the settings on the stick."));
     fake_pref_result = 1;                               /* no settings stick: in force, not saved */
     key('t');
+    g.now += GUI_PREF_MS;
+    tick();
     CHECK(g.night && fake_pref_which == 0 && fake_pref_value == 1 && strstr(g.pref_status, "not saved: no settings stick"));
     g.now += 1100;
     tick();
     CHECK(g.night && g.speed == 2);                     /* what it changed itself reads back the same */
     fake_pref_result = -1;                              /* refused: not in force there; the next read changes nothing */
     key('1');
+    g.now += GUI_PREF_MS;
+    tick();
     CHECK(g.speed == 1 && strstr(g.pref_status, "Not changed"));
     g.now += 1100;
     tick();
     CHECK(g.speed == 1);
     draw(960, 540);
     CHECK(fake_guards(960, 540));
+    /* P4: T held down a second (the keyboard's repeats) toggles once; a run of clicks writes the stick once, with the
+       last value; a change not written yet is written at the desktop's end */
+    fake_pref_result = 0;
+    fake_pref_sets = 0;
+    gui_key(&g, 't');
+    for(i = 0; i < 29; i++) gui_key(&g, 't' | GUI_KEY_REPEAT);
+    CHECK(!g.night && fake_pref_sets == 0);             /* dusk to ocean, once */
+    for(i = 0; i < 5; i++) {
+        g.now += 300;
+        tick();
+        key('3' - (i & 1));                             /* 3, 2, 3, 2, 3: each before the one before stood */
+    }
+    CHECK(g.speed == 3 && fake_pref_sets == 0);
+    g.now += GUI_PREF_MS;
+    tick();
+    CHECK(fake_pref_sets == 2 && fake_pref_speed == 3 && fake_pref_theme == 0);    /* each preference once */
+    key('1');
+    gui_finish(&g);                                     /* the desktop's end writes what waits */
+    CHECK(fake_pref_sets == 3 && fake_pref_which == 1 && fake_pref_value == 1);
 }
 
 /* the host's own calls, to read the files of rootfs/apps/ (the test sees SurfOS's headers, as the kernel does) */

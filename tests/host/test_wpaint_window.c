@@ -609,6 +609,16 @@ static int solid_file(const char *path) {
     return solid;
 }
 
+/* a menu item's event, as the toolkit would hand it on: what the desktop's bar sends while a box is open the toolkit
+   now greys (kit's stage 3), so this is how Paint's own guard is reached */
+static int menu_event(int id) {
+    struct gk_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GK_EV_MENU;
+    ev.id = id;
+    return pw_event(w, &ev);
+}
+
 /* File > Open of path, saying Don't save when asked about changes */
 static void open_through(const char *path) {
     key(15, WIN_MOD_CTRL);
@@ -639,7 +649,8 @@ static void review(void) {
     gkf_dialog_answer(at("mine.png"));
     run();
     CHECK(gk_asking(w->ui) == BOX_THEN_OPEN && !paint_modified(&w->p));
-    CHECK(gkf_menu_choose(MENU_SELECT_ALL) && run() && gkf_menu_choose(MENU_CLEAR) && run());
+    CHECK(!gkf_menu_choose(MENU_CLEAR));                /* the toolkit greys the menus behind a box: refused */
+    CHECK(menu_event(MENU_SELECT_ALL) && menu_event(MENU_CLEAR) && run());  /* and Paint ignores what came anyway */
     CHECK(gk_asking(w->ui) == BOX_THEN_OPEN && !paint_modified(&w->p) && canvas_count(BLACK) > 0 && !w->p.sel.on);
     key(27, 0);
     CHECK(!gk_box_open(w->ui) && !gkf_dialog());
@@ -674,7 +685,7 @@ static void review(void) {
     key(WIN_KEY_RIGHT, 0);
     key(13, 0);                                         /* Don't save */
     CHECK(gk_asking(w->ui) == BOX_NEW);
-    CHECK(gkf_menu_choose(MENU_CLEAR) && run() && gk_asking(w->ui) == BOX_NEW);
+    CHECK(!gkf_menu_choose(MENU_CLEAR) && menu_event(MENU_CLEAR) && run() && gk_asking(w->ui) == BOX_NEW);
     key(1, WIN_MOD_CTRL);
     gkf_type("300 x 200\n");
     run();

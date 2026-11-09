@@ -12,13 +12,23 @@ window; Esc cancels either. The Lists tab shows the list with its columns: a cli
 wheel scrolls it. The Drawing tab shows the area the program draws, with its scroll bars: a click marks a cell, and the
 wheel scrolls it by rows. The corner grip makes the window smaller, and the layout follows (the status bar at the new
 bottom, the size in it). Its close button asks first, and Close ends it: ps finds no wkit. The checks leave the
-desktop as they found it (wkit ended, the Terminal closed), also when one fails."""
+desktop as they found it (a dialog left open closed, wkit ended, the Terminal closed), also when one fails.
+11/05/26 (stage 3: the toolkit on the desktop's own calls, track desk's 2c5afd30): wkit's menus File and View stand
+in the bar in place of File and Edit, greyed while a message is open over the window; keys no widget takes reach the program with their modifiers (Alt+X with no Esc
+before it, Ctrl+0, Ctrl+Enter, Ctrl+Esc), Ctrl+Backspace deletes a word, Ctrl+Tab moves the focus; Copy pastes back
+the window's own copy at once; Ctrl+O and File > Open in the bar (Ctrl+G) ask the desktop's chooser; View > Speed > Normal is a submenu's item, Help > About the toolkit the program's item in the
+desktop's Help; SurfOS > Ocean / dusk colors tells the program the theme and back; Ctrl+Shift+O keeps wkit busy while
+presses of F12 fill its event queue, and the chooser it asks for comes all the same, the events lost said with its
+answer; a paste longer than a field's room (the notes' lines) gives the field the first line. A chooser is known by
+its own title, after the name of whom it is for, which desk's fix round changes from the window's to the program's."""
 import os
 import re
 
 import gui_apps_term as term
 from gui_apps_scenario import PAPER, INK, TEAL, MUTED, BAND
+CORAL = bytes.fromhex('ee906d')
 from gui_apps_win import answered
+from gui_apps_media import dialog_open
 
 W, H = 600, 360                     # wkit's content (user/wkit/demo.h)
 TITLE_H, FRAME_W, FRAME_H = 28, 2, 29
@@ -26,9 +36,17 @@ SHEET = bytes.fromhex('fffdf5')
 SHELL = bytes.fromhex('dee3d8')
 LINE = bytes.fromhex('c9cfc4')
 PARK = (900, 480)                   # the pointer clear of the windows and of the Terminal's text
+BAR_FILE_X, BAR_VIEW_X = 8 + 88 + 4, 8 + 88 + 56 + 4   # a program's first two menus in the bar, after "\xf7 SurfOS"
+CHOOSER = (220, 81)                 # the desktop's chooser's top left at 960x540 (shell/guidialog.c's layout)
 EDIT_X, PASTE_Y = 160, 149          # the Edit menu's title, and its Paste item's middle (gui_apps_win.py's)
 STATUS_Y = H - 22                   # the status bar, in the content
-TABS = {'Controls': 8, 'Lists': 8 + 78 + 4, 'Drawing': 8 + 78 + 4 + 54 + 4}   # each tab's left in the strip
+TABS = {'Controls': 8, 'Lists': 8 + 78 + 4, 'Drawing': 8 + 78 + 4 + 54 + 4, 'More': 8 + 78 + 4 + 54 + 4 + 70 + 4}   # each tab's left in the strip
+
+
+def chooser_titled(d, own):
+    """a predicate: the desktop's chooser is up (at 960x540), its title bar ending in its own title after the name of
+    whom it is for ("wkit: Open a file": desk's fix round names the program there, 2c5afd30 the window)"""
+    return lambda s: any(d.text(s, CHOOSER[0] + 28 + 8 * k, CHOOSER[1] + 6, ': ' + own, PAPER, TEAL) for k in range(1, 30))
 
 
 def places(h=H):
@@ -96,10 +114,33 @@ def checks(d):
         d.click(w.at[0] + 250, w.at[1] + 14)            # its title bar: the focus
         d.visible('kit: a click on its title bar gives it the focus; the name field, the toolkit\'s focus, is lit',
                   lambda s: titled_at(d, s, w.at, True) and w.pixel(s, 106, 40) == TEAL)
+        d.visible('kit: its menus File and View stand in the desktop\'s bar, in place of File and Edit (WIN_MENU)',
+                  lambda s: d.text(s, BAR_FILE_X, 6, 'File', INK, PAPER) and d.text(s, BAR_VIEW_X, 6, 'View', INK, PAPER))
         d.move(*PARK)
         d.keys('surf')
         d.visible('kit: a name typed shows in its field and in the status bar',
                   lambda s: w.text(s, 110, 43, 'surf', INK) and w.status('Name: surf')(s), 'guiapps-kit-typed.png')
+        # keys with their modifiers (desk's keyboard): what the name field does not take is the program's, said in the
+        # status bar with its code and modifiers
+        for chord, said in (('alt-x', 'Key 0x78 mods 2'), ('ctrl-0', 'Key 0x30 mods 4'),
+                            ('ctrl-ret', 'Key 0x10d mods 4'), ('ctrl-esc', 'Key 0x10e mods 4')):
+            d.key(chord)
+            d.visible(f'kit: {chord} in a field is the program\'s key, with its modifiers ({said})', w.status(said))
+        d.keys(' wave')
+        d.visible('kit: more typed', w.status('Name: surf wave'))
+        d.key('ctrl-backspace')
+        d.visible('kit: Ctrl+Backspace deletes the word before the cursor',
+                  lambda s: w.status('Name: surf ')(s) and not w.status('Name: surf w')(s))
+        d.key('backspace')                              # (a space is seen by what follows it)
+        d.keys('x')
+        d.visible('kit: Backspace the character before it: the space, so x follows surf', w.status('Name: surfx'))
+        d.key('backspace')
+        d.visible('kit: and the x', lambda s: w.status('Name: surf')(s) and not w.status('Name: surfx')(s))
+        d.key('ctrl-tab')
+        d.visible('kit: Ctrl+Tab moves the focus on, to the password field',
+                  lambda s: w.pixel(s, 106, 68) == TEAL and w.pixel(s, 106, 40) != TEAL)
+        d.key('shift-tab')
+        d.visible('kit: Shift+Tab back to the name', lambda s: w.pixel(s, 106, 40) == TEAL)
         d.key('tab')
         d.keys('abc')
         d.visible('kit: Tab goes to the password field, which shows a dot for each character (code page 437\'s 7)',
@@ -117,9 +158,12 @@ def checks(d):
         d.visible('kit: Greet opens a message over the window',
                   lambda s: w.text(s, bx + 28, by + 6, 'Greet', PAPER, TEAL) and
                   w.text(s, bx + 16, by + 44, 'Hello, surf.', INK, PAPER), 'guiapps-kit-message.png')
+        d.visible('kit: while it is open, the program\'s menus are greyed in the bar: nothing is chosen behind it',
+                  lambda s: d.text(s, BAR_VIEW_X, 6, 'View', MUTED, PAPER))
         d.key('ret')
         d.visible('kit: Enter answers it, and it goes', lambda s: w.status('Answered 0')(s) and
                   not w.text(s, bx + 28, by + 6, 'Greet', PAPER, TEAL))
+        d.visible('kit: and the menus are as they were', lambda s: d.text(s, BAR_VIEW_X, 6, 'View', INK, PAPER))
         w.click(154 + 38, 159 + 12)                     # Rename
         ay = (H - 160) // 2
         d.visible('kit: Rename opens a line to type, with the name in it',
@@ -129,15 +173,50 @@ def checks(d):
         d.visible('kit: what is typed replaces it, and Enter makes it the name',
                   lambda s: w.status('Renamed: sea')(s) and w.text(s, 110, 43, 'se', INK, SHEET))
         w.click(238 + 32, 159 + 12)                     # Copy
-        d.visible('kit: Copy puts the name on the desktop\'s clipboard', w.status('Copied the name'))
-        # a chooser by File > Open's shortcut: the desktop's (220, 81 at 960x540, as the launcher's), or the line the
-        # toolkit opens over the window instead
+        d.visible('kit: Copy puts the name on the desktop\'s clipboard, and a paste at once gives the window\'s own copy',
+                  w.status('Copied the name, pasted back: sea'))
+        # the desktop's chooser (220, 81 at 960x540), its own title after the name of whom it is for: by File > Open's
+        # shortcut, the toolkit's, and by File > Open in the bar
+        chooser = chooser_titled(d, 'Open a file')
         d.key('ctrl-o')
-        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for a chooser: the desktop\'s, or a line to type the path in',
-                  lambda s: d.text(s, 220 + 28, 81 + 6, 'Open a file', PAPER, TEAL) or
-                  w.text(s, bx + 28, (H - 160) // 2 + 6, 'Open a file', PAPER, TEAL), 'guiapps-kit-chooser.png')
+        d.visible('kit: Ctrl+O, a menu\'s shortcut, asks for the desktop\'s chooser, Open a file after whom it is for',
+                  chooser, 'guiapps-kit-chooser.png')
         d.key('esc')
-        d.visible('kit: Esc cancels it', w.status('Not chosen'))
+        d.visible('kit: Esc cancels it (WIN_EV_DIALOG 0)', w.status('Not chosen'))
+        for chord in ('ctrl-g', 'right', 'ret'):
+            d.key(chord)
+        d.visible('kit: Ctrl+G, Right, Enter: File > Open in the bar asks for it too (WIN_EV_MENU)', chooser)
+        d.key('esc')
+        d.visible('kit: cancelled', w.status('Not chosen'))
+        for chord in ('ctrl-g', 'right', 'right', 'down', 'down', 'down', 'down', 'down', 'right', 'down', 'ret'):
+            d.key(chord)
+        d.visible('kit: View > Speed > Normal, an item of a submenu in View\'s place', w.status('Speed: Normal'))
+        for chord in ('ctrl-g', 'left', 'ret'):
+            d.key(chord)
+        d.visible('kit: Help > About the toolkit, the program\'s item first in the desktop\'s Help: a message',
+                  lambda s: w.text(s, bx + 28, by + 6, 'About the toolkit', PAPER, TEAL), 'guiapps-kit-about.png')
+        d.key('esc')
+        d.visible('kit: Esc answers it', lambda s: not w.text(s, bx + 28, by + 6, 'About the toolkit', PAPER, TEAL))
+        for chord in ('ctrl-g', 'down', 'down', 'ret'):
+            d.key(chord)
+        state['dusk'] = True
+        d.visible('kit: SurfOS > Ocean / dusk colors: the program hears of dusk (WIN_EV_THEME)', w.status('Theme: dusk'))
+        for chord in ('ctrl-g', 'down', 'down', 'ret'):
+            d.key(chord)
+        d.visible('kit: and of ocean again', w.status('Theme: ocean'))
+        state['dusk'] = False
+        # a chooser asked while the window's queue is full: wkit busy for 3 s (Ctrl+Shift+O) while presses of F12, a
+        # key no widget takes, fill its queue (WIN_EVENTS, the rest lost: each press is an event, where the wheel's
+        # notches merge in the mouse's reports); the desktop has no room for the answer (EAGAIN), and the toolkit asks
+        # again once it has read the events: the chooser comes all the same
+        d.key('ctrl-shift-o')
+        for _ in range(72):
+            d.key('f12')
+        d.visible('kit: Ctrl+Shift+O: busy while its queue fills, and still the chooser comes', chooser, timeout=20)
+        d.key('esc')
+        d.visible('kit: cancelled, and events were lost in the busy spell: its queue was full when it asked',
+                  lambda s: w.status('Not chosen; lost while busy: ')(s) and
+                  not w.status('Not chosen; lost while busy: 0')(s))
         # the Lists page
         w.tab('Lists')
         d.visible('kit: the Lists tab shows the list, with its columns', lambda s: w.status('Page: Lists')(s) and
@@ -164,6 +243,47 @@ def checks(d):
         d.vm.mon.cmd('mouse_move 0 0 -1')
         d.visible('kit: the wheel scrolls the area three rows', lambda s: w.status('Scrolled to 0, 3')(s) and
                   w.pixel(s, 3 * 20 + 3, 30 + 2 * 20 + 3) != TEAL)
+        # stage 2: the More page, after the Drawing page's checks and before the smaller window
+        w.tab('More')
+        d.visible('kit: the More tab shows notes, a progress bar, a slider and palettes',
+                  lambda s: w.status('Page: More')(s) and w.text(s, 10, 43, 'Notes:', INK, PAPER) and
+                  w.pixel(s, 15, 70) == SHEET, 'guiapps-kit-more.png')
+        w.click(10 + 40, 68 + 40)                       # the notes: a click, then lines typed
+        d.move(*PARK)
+        d.keys('tide\n')
+        d.keys('swell')
+        d.visible('kit: lines typed in the notes (a text of several lines)',
+                  lambda s: w.status('Notes: 10 bytes')(s) and w.text(s, 15, 70, 'tide', INK) and
+                  w.text(s, 15, 86, 'swel', INK))
+        w.click(390 + 200 - 2, 120 + 11)                # the slider's right end
+        d.visible('kit: a click at the slider\'s end sets it to 100', w.status('Volume: 100'))
+        w.click(390 + 1 + 3 * 20 + 9, 176 + 1 + 9)      # the fourth colour: coral
+        d.move(*PARK)                                   # (the pointer off the cell it would cover)
+        d.visible('kit: a click on a colour of the palette chooses it', lambda s: w.status('Colour: #EE906D')(s) and
+                  w.pixel(s, 390 + 1 + 3 * 20 + 9, 176 + 1 + 14) == CORAL)
+        w.click(390 + 1 + 26 + 12, 252 + 1 + 12)        # the eraser
+        d.visible('kit: a click on a tool of the palette chooses it', w.status('Tool: Eraser'))
+        d.visible('kit: the progress bar counts the seconds in teal', lambda s: w.pixel(s, 390 + 2, 68 + 4) == TEAL)
+        # a paste longer than a field's room (WIN_PASTE says ENOSPC, the toolkit reads it whole): the notes, with a
+        # long line, copied, and pasted over the name, which takes the first line
+        w.click(10 + 40, 68 + 40)
+        d.move(*PARK)
+        d.key('ctrl-end')
+        d.keys('\n' + 'beach' * 12)
+        d.visible('kit: a long line typed in the notes', w.status('Notes: 71 bytes'))
+        d.key('ctrl-a')
+        d.key('ctrl-c')
+        w.tab('Controls')
+        d.visible('kit: back to Controls', w.status('Page: Controls'))
+        w.click(106 + 60, 40 + 11)                      # the name
+        d.move(*PARK)
+        d.key('ctrl-a')
+        d.key('ctrl-v')
+        d.visible('kit: pasted over the name, a field takes the clipboard\'s first line, read whole',
+                  lambda s: w.status('Name: tide')(s) and w.text(s, 110, 43, 'tide', INK) and
+                  not w.text(s, 110 + 4 * 8, 43, 's', INK))
+        w.click(238 + 32, 159 + 12)                     # Copy, for the Terminal at the end
+        d.visible('kit: Copy, the name now', w.status('Copied the name, pasted back: tide'))
         # a smaller window: laid out again
         gx, gy = w.at[0] + W + FRAME_W - 6, w.at[1] + H + FRAME_H - 6
         d.move(gx, gy)
@@ -189,7 +309,7 @@ def checks(d):
         d.move(*PARK)
         d.key('ret')
         d.require('kit: the name Copy put on the clipboard, pasted into the Terminal, runs there',   # (surfsh's
-                  term.wait_rows(d, grid, lambda rows: answered(rows, 'echo kit-sea', 'kit-sea')) is not None)   # job
+                  term.wait_rows(d, grid, lambda rows: answered(rows, 'echo kit-tide', 'kit-tide')) is not None)   # job
                                                                     # notice may come between the line and the prompt)
         d.keys('ps | grep -c wkit\n')
         d.require('kit: ps finds no wkit', term.wait_rows(
@@ -205,7 +325,17 @@ def checks(d):
 
 
 def tidy(d, state):
-    """wkit ended (its close button and Close, or End when it does not answer), then the Terminal closed"""
+    """a desktop dialog left open closed (a chooser, whatever happened), the theme ocean again; wkit ended (its close
+    button and Close, or End when it does not answer), then the Terminal closed"""
+    for _ in range(3):
+        if not dialog_open(d, d.vm.screen()):
+            break
+        d.key('esc')
+        d.vm.pump(0.5)
+    if state.get('dusk'):
+        for chord in ('ctrl-g', 'down', 'down', 'ret'):
+            d.key(chord)
+        d.vm.pump(0.5)
     if state.get('open'):
         s = d.vm.screen()
         at = find(d, s)

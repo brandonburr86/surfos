@@ -29,7 +29,9 @@ struct gui_client {
     bool focused;                       /* what FOCUS said last */
     bool asked;                         /* a RESIZE to sent_w x sent_h waits for the program's image */
     int sent_w, sent_h;
-    bool closing;                       /* CLOSE was sent: the close button asks to end the program */
+    bool closing;                       /* CLOSE was sent */
+    int closes;                         /* 11/05/26 (the review of stage 2): CLOSEs sent, 2 at most counted, */
+    u32 close_at[2];                    /* and when the last two were (the desktop's now, ms; the newest first) */
     bool waiting;                       /* 10/25/26: opened without the focus; its taskbar button is marked until
                                            it has it */
     bool alerted;                       /* 10/26/26: it asked to be seen, held while a button or a drag is under way */
@@ -40,6 +42,7 @@ struct gui_client {
 };
 
 #define GUI_GRACE_MS 500                /* 10/26/26: a window that came up by itself takes no press for this long */
+#define GUI_CLOSE_MS 3000               /* 11/05/26: a third press of the close button in this long offers to end it */
 
 #define GUI_LAUNCHED 4                  /* 10/25/26: programs the launcher started lately, whose window takes the focus */
 struct gui_clients {

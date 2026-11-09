@@ -55,6 +55,9 @@ struct fake_win {
        answers that named no request waiting (wrong) */
     struct win_menu_item menu[WIN_MENU_ENTRIES];
     int menus;
+    struct win_menu_item lent_menu[2][WIN_MENU_ENTRIES];   /* the copies lent, the other one poisoned at each update */
+    int lent;
+    int paste_at;                               /* its events when the clipboard was given last (win_paste) */
     struct win_dialog ask;
     int asked;
     bool waiting;
@@ -73,11 +76,13 @@ void fake_win_end(int i);                       /* its program closed it, or is 
 int fake_win_count(int i, int type);            /* the events of that type sent to it */
 const struct win_event *fake_win_last(int i, int type);   /* the last of them, NULL for none */
 void fake_win_forget(int i);                    /* the events sent so far forgotten */
+void fake_win_read(int i);                      /* 11/05/26: its program read them (no CLOSE waits unread) */
 void fake_sys_reset(void);
 extern const struct gui_sys fake_sys;
 /* 11/05/26 (track desk): a window's menus set, n entries (its menu_serial moves); a chooser asked for */
 void fake_win_menus(int i, const struct win_menu_item *items, int n);
 void fake_win_ask(int i, const struct win_dialog *d);
+extern bool fake_answer_refused;                /* (the review of stage 2) win_answer refuses every path */
 /* the clipboard as the desktop gave it last (win_paste), and how many times; the theme it said (-1: none) */
 extern char fake_paste[256];
 extern u32 fake_paste_len;

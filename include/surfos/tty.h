@@ -96,7 +96,8 @@ void tty_switch(int index);
    too) is its byte; any other key ESC[c;mu, c the character as typed with Shift but before Ctrl made a control byte
    of it (Ctrl+S 115, Ctrl+Shift+S 83, Ctrl+0 48, Ctrl+Tab 9), Esc 27 always so; the special keys always with their
    m (ESC[1;1A); m = 1 + Shift + 2 Alt + 4 Ctrl, and + 16 when the keyboard repeats the key held down. The serial
-   line's bytes come as they were sent, as in TTY_RAW 1. */
+   line's bytes come as they were sent, as in TTY_RAW 1. While a terminal is in TTY_RAW_KEYS, TTY_RAW from any task but
+   the one that set it is EBUSY: the programs the desktop starts share its console. */
 #define TTY_RAW     1
 #define TTY_RAW_KEYS 2              /* 11/05/26: TTY_RAW's argument for that */
 #define TTY_GETSIZE 2

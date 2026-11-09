@@ -36,8 +36,9 @@ draws a line, gk_pages() shows one child at a time. Hidden widgets (gk_show()) t
 Areas. gk_area() is a rectangle a program draws itself, inside the layout like any widget: its
 draw function is called with the window's drawing (gui.h's gw_* calls) at the area's top left
 (0, 0) and clipped to it, whenever any of it must be painted again (gk_redraw(), gk_damage()). It
-gets the pointer (GK_EV_POINTER, its own coordinates), the wheel and, if it takes the focus, the
-keys (GK_EV_KEY) and the focus (GK_EV_FOCUS). gk_area_extent() gives it scroll bars, which the
+gets the pointer (GK_EV_POINTER, its own coordinates; buttons held only after a press over it,
+which keeps the pointer its own until every button is up), the wheel and, if it takes the focus,
+the keys (GK_EV_KEY) and the focus (GK_EV_FOCUS). gk_area_extent() gives it scroll bars, which the
 toolkit draws and moves (with the wheel too), in the program's own units (rows, columns, pixels).
 
 Keys. The focus moves with Tab and Shift+Tab (WIN_KEY_BACKTAB) through the widgets that take it, in
@@ -154,7 +155,8 @@ int gk_ok(const struct gk *ui);                 /* 0 once an allocation failed *
 const struct gk_theme *gk_theme(const struct gk *ui);
 /* paint what changed and present it, wait at most ms (< 0: as long as it takes) for what the program must hear:
    1 with it in *ev, 0 when nothing came in time, -1 when the window has gone (errno EPIPE) or the wait failed (errno;
-   EINTR: a kill or Ctrl+C) */
+   EINTR: a kill or Ctrl+C). With -1 it never says 0. With a time (0 too: a game's frame), the window's events are
+   read before 0 is said, a burst the toolkit takes itself as well (11/05/26: one read of 16 before) */
 int gk_next(struct gk *ui, struct gk_event *ev, int ms);
 int gk_flush(struct gk *ui);                    /* paint and present what changed now: 0, or -1 (errno EPIPE) */
 
@@ -185,11 +187,14 @@ char *gk_paste_all(struct gk *ui, int *len);
    that types a character, and its shortcuts come first for any other: Ctrl or Alt and a key, a function key, Esc).
    A shortcut is a key, with GK_CTRL, GK_SHIFT and GK_ALT: GK_CTRL | 'S', GK_CTRL | GK_SHIFT | 'Z', WIN_KEY_F5,
    WIN_KEY_DELETE, GK_CTRL | WIN_KEY_TAB (a letter in capitals; a character that Shift makes, '+' say, with or without
-   GK_SHIFT: the same); its text in the bar is made of it ("Ctrl+Shift+Z"). The toolkit sends the menus whole again
+   GK_SHIFT: the same); its text in the bar is made of it ("Ctrl+Shift+Z"). A shortcut acts once a press: the
+   keyboard's repeats of its key held down (WIN_MOD_REPEAT) do nothing, unless its item has GK_ITEM_REPEAT, for what
+   holding the key naturally does again (Undo, Redo, Zoom in and out). The toolkit sends the menus whole again
    at the next flush when anything in them changed.
    gk_menu(): a menu at the end of the bar, its number; -1 when there is no room (WIN_MENUS menus, their titles in
    WIN_MENU_BAR cells) or the title is one of the desktop's own (SurfOS, Apps, Window, or ≋ in it). A menu titled
-   Help is the program's part of the desktop's Help menu (WIN_MENU_HELP: WIN_MENU_HELP_ITEMS items, not in the bar).
+   Help is the program's part of the desktop's Help menu (WIN_MENU_HELP: WIN_MENU_HELP_ITEMS items, not in the bar;
+   an item that reads as one of the desktop's own Help items, About SurfOS or Keyboard and mouse, is refused).
    gk_submenu(): an item at the end of a menu that opens a submenu, one level deep (WIN_MENU_SUBMENU), the submenu's
    number for gk_menu_item(); a submenu with no items is not shown, and gk_menu_enable() of the item's id greys it and
    all in it. gk_menu_item(): an item at the end of a menu or a submenu (WIN_MENU_ITEMS of them and lines), -1 when
@@ -202,6 +207,7 @@ char *gk_paste_all(struct gk *ui, int *len);
 #define GK_ITEM_CHECK   0x02            /* a check mark, put and taken away by gk_menu_check() */
 #define GK_ITEM_RADIO   0x04            /* one of a group: a dot, put by gk_menu_check() (the program takes the others') */
 #define GK_ITEM_ON      0x08            /* with CHECK or RADIO: marked from the start */
+#define GK_ITEM_REPEAT  0x10            /* its shortcut held down acts again at each of the keyboard's repeats */
 int gk_menu(struct gk *ui, const char *title);
 int gk_submenu(struct gk *ui, int menu, int id, const char *label, unsigned flags);   /* flags: GK_ITEM_OFF */
 int gk_menu_item(struct gk *ui, int menu, int id, const char *label, unsigned shortcut, unsigned flags);
@@ -221,7 +227,9 @@ int gk_menus_shown(const struct gk *ui);                 /* 1: the desktop's bar
    timer say; the desktop wants a key, a press or a menu choice since the window's last request). 0, or -1 with
    errno: EINVAL for a request that is none (the desktop's rules: types of letters and digits, "=Makefile" for a whole
    name), EBUSY while one waits for its answer, EACCES when it is not answering a person or the window has not the
-   focus */
+   focus. (When the window's unread events leave the desktop no room for the answer, EAGAIN, the toolkit keeps the
+   request and asks again once it has read them: 0 then, and the answer comes, cancelled if the desktop refuses it
+   by then.) */
 int gk_choose(struct gk *ui, int id, int kind, const char *dir, const char *name, const char *types);
 
 /**** any widget ****/
@@ -342,5 +350,31 @@ void gk_ask(struct gk *ui, int id, const char *title, const char *prompt, const 
 int gk_asking(const struct gk *ui);             /* the id of the box open, 0 for none (or a box of id 0) */
 int gk_box_open(const struct gk *ui);           /* 1 while one is */
 void gk_dismiss(struct gk *ui);                 /* the box open answers -1 and goes */
+
+/**** stage 2 (11/05/26): a text of several lines, progress bars, sliders, palettes ****/
+
+#define GK_READONLY     0x20            /* a text of several lines: shown, selected and copied, never changed */
+
+/* a small text of several lines (UTF-8, lines at \n), edited as Notepad edits: no wrapping, the view following the
+   cursor, a tab to the next multiple of 8 columns, the keys and the mouse of a field and Up, Down, Page Up, Page Down,
+   Ctrl+Home and Ctrl+End; Enter starts a line. At most max bytes. flags: GK_READONLY, GK_TAKES_TAB (a tab typed) */
+struct gk_widget *gk_text_area(struct gk_widget *parent, int id, int max, unsigned flags);
+void gk_text_select(struct gk_widget *text, int from, int to);    /* bytes; to -1: the end */
+void gk_text_cursor(const struct gk_widget *text, int *from, int *to);   /* the selection, from <= to */
+
+/* a progress bar: gk_set_value() from 0 to max, its text in the middle (gk_set_text()) */
+struct gk_widget *gk_progress(struct gk_widget *parent, int max);
+
+/* a slider: a whole number from min to max by step (gk_value()), by the arrows (a step), Page Up and Down (ten), Home,
+   End, a click or a drag on its track, the wheel */
+struct gk_widget *gk_slider(struct gk_widget *parent, int id, int min, int max, int step);
+
+/* a palette: cells of cell_w x cell_h, cols to a row, each a colour or a picture (w x h pixels of 0x00RRGGBB, those
+   with the top byte set see-through), one chosen (gk_value(): -1 for none) by a click or the arrows */
+struct gk_widget *gk_palette(struct gk_widget *parent, int id, int cols, int cell_w, int cell_h);
+int gk_palette_color(struct gk_widget *palette, unsigned color);                     /* its index, -1 */
+int gk_palette_icon(struct gk_widget *palette, const unsigned *pixels, int w, int h);  /* its index, -1 */
+int gk_palette_set_color(struct gk_widget *palette, int i, unsigned color);          /* 0, -1 (a picture's) */
+unsigned gk_palette_get_color(const struct gk_widget *palette, int i);
 
 #endif
