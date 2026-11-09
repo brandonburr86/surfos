@@ -370,6 +370,9 @@ folder, were run against this tree):
   bound, so the manual says so. The 8 KB a tokenizer reads steer auto-indent and the closing bracket's indentation on
   and after a longer line: the manual says so too.
 
+Gates on ddf327c9: `make unittest` passed (test_wcode 527,465, test_wcode_save 69, test_wcode_win 108); guiapps, the
+whole scenario, 383 of 383 at O2 and at O0, this track's 29 among them; `mac-sanitize.sh` (60 rounds) all passed.
+
 Tests: `test_wcode`'s `review2()` (the snapshot with the find bar changed in the middle of Replace all, plain and with
 groups; the count near its end; Find previous and Replace all on long lines in steps, timed, with the question;
 whole words in one pass, groups, `\9`), and in `test_wcode_win` the question in its box, the greyed fields, a step
