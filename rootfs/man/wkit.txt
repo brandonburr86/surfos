@@ -16,8 +16,9 @@ DESCRIPTION
     Remove, and a scroll bar. Drawing is an area the program draws
     itself, 64 by 64 cells with scroll bars. More has notes (a text of
     several lines), a progress bar, a slider and two palettes. The
-    status bar says what the program last heard, and the seconds since
-    it started.
+    status bar says what the program last heard (a key no widget took
+    with its code and modifiers: Key 0x78 mods 2 is Alt+X), and the
+    seconds since it started.
 
     Its menus, File and View (with a Speed submenu), are in the
     desktop's bar while its window has the focus, and About the toolkit
@@ -32,6 +33,8 @@ KEYS
     Space, Enter     a button, a check box; Enter in a list opens a line
     Ctrl+A, C, X, V  select all, copy, cut, paste in a field
     Ctrl+O, Ctrl+S   Open, Save as: the desktop's choosers
+    Ctrl+Shift+O     Open after three busy seconds, its events unread
+                     (a full queue: the toolkit asks again)
     Arrows, Space    move in the drawing, mark a cell
     Esc, Ctrl+W      close the window, asking first
 

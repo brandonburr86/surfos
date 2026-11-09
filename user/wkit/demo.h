@@ -39,6 +39,7 @@ struct demo {
     int added;                          /* lines Add has added */
     int pages;                          /* the tabs' pages, the View menu's items */
     unsigned seconds;
+    int busy, busy_lost;                /* Open was asked after a busy spell (Ctrl+Shift+O), and the events lost in it */
     unsigned char mark[DEMO_CELLS][DEMO_CELLS];
 };
 

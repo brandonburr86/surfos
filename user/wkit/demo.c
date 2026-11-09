@@ -3,7 +3,7 @@ SurfOS user program: wkit
 --------------------
 File: demo.c    Date: 11/05/26
 --------------------
-The window of the toolkit's demonstration (demo.h): three tabs over a status bar.
+The window of the toolkit's demonstration (demo.h): four tabs over a status bar.
 
     Controls  a name and a password (fields), Wi-Fi (a check box), Join at startup (a switch),
               the speed (a radio group), and Greet, Ask, Rename... and Copy, which open a message,
@@ -21,12 +21,21 @@ The status bar says what the program last heard, and at its right the seconds si
 timer). Its menus, in the desktop's bar while the window has the focus (and by their shortcuts in any
 case): File with Open (Ctrl+O) and Save as (Ctrl+S), which ask the desktop's choosers (or, on a desktop
 without them, a line to type the path in), and Close (Ctrl+W); View with the pages (F5 to F8) and
-Wi-Fi, checked as the check box is. Esc, Ctrl+W or the close button ask before the window closes.
+Wi-Fi, checked as the check box is, and Speed, a submenu; About the toolkit in the desktop's Help. Esc,
+Ctrl+W or the close button ask before the window closes.
+11/05/26 (stage 3, on the desktop's own calls): a key no widget took is said with its modifiers ("Key
+0x78 mods 2": Alt+X), as is a new theme; Copy pastes the clipboard back at once, which the kernel
+gives as the window's own copy; Ctrl+Shift+O keeps the program busy for three seconds, without
+reading its events, before it asks for Open: events that fill the window's queue meanwhile make the
+desktop refuse the request for now (EAGAIN), and the toolkit asks again once it has read them. The
+chooser's answer then says how many events were lost in the spell (WIN_INFO): any at all means the
+queue was full when Open was asked for.
 */
 
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <surf.h>
 #include "demo.h"
 
 static const char *const networks[] = {           /* more than the list shows: it scrolls */
@@ -161,8 +170,13 @@ static void clicked(struct demo *d, int id) {
     case ID_COPY:
         n = (int)strlen(gk_text(d->name));
         if(!n) say(d, "Nothing to copy: type a name first");
-        else if(gk_copy(d->ui, gk_text(d->name), (unsigned)n) == 0) say(d, "Copied the name");
-        else say(d, errno == EACCES ? "Not copied: the window must have the focus" : "Not copied");
+        else if(gk_copy(d->ui, gk_text(d->name), (unsigned)n) == 0) {
+            char back[24];                          /* pasted back at once: the window's own copy, newer than the
+                                                       desktop's clipboard until the desktop takes it */
+            if(gk_paste(d->ui, back, sizeof(back)) < 0) snprintf(back, sizeof(back), "%s", strerror(errno));
+            snprintf(b, sizeof(b), "Copied the name, pasted back: %s", back);
+            say(d, b);
+        } else say(d, errno == EACCES ? "Not copied: the window must have the focus" : "Not copied");
         break;
     case ID_ADD:
         snprintf(b, sizeof(b), "New network %d\t-90 dB\topen", ++d->added);
@@ -205,13 +219,13 @@ static void menu(struct demo *d, int id) {
     switch(id) {
     case MENU_OPEN:
         if(gk_choose(d->ui, CHOOSE_OPEN, WIN_DLG_OPEN, "", "", "") < 0) {
-            snprintf(b, sizeof(b), "No chooser: %s", errno == EACCES ? "the window must have the focus" : strerror(errno));
+            snprintf(b, sizeof(b), "No chooser: %s", errno == EACCES ? "not now (focus, or a key first)" : strerror(errno));
             say(d, b);
         }
         break;
     case MENU_SAVE:
         if(gk_choose(d->ui, CHOOSE_SAVE, WIN_DLG_SAVE, "", "notes.txt", "txt") < 0) {
-            snprintf(b, sizeof(b), "No chooser: %s", errno == EACCES ? "the window must have the focus" : strerror(errno));
+            snprintf(b, sizeof(b), "No chooser: %s", errno == EACCES ? "not now (focus, or a key first)" : strerror(errno));
             say(d, b);
         }
         break;
@@ -278,8 +292,26 @@ static void changed(struct demo *d, const struct gk_event *ev) {
     say(d, b);
 }
 
+/* Ctrl+Shift+O: three seconds busy, the window's events left unread, then Open; the events lost meanwhile (WIN_INFO's
+   count, before and after) are said with the chooser's answer */
+static void busy(struct demo *d) {
+    struct win_info before, after;
+    memset(&before, 0, sizeof(before));
+    memset(&after, 0, sizeof(after));
+    winctl(gk_gw(d->ui)->fd, WIN_INFO, &before);
+    msleep(3000);
+    winctl(gk_gw(d->ui)->fd, WIN_INFO, &after);
+    if(gk_choose(d->ui, CHOOSE_OPEN, WIN_DLG_OPEN, "", "", "") < 0) {
+        say(d, "No chooser after the busy spell");
+        return;
+    }
+    d->busy = 1;
+    d->busy_lost = (int)(after.lost - before.lost);
+}
+
 int demo_event(struct demo *d, const struct gk_event *ev) {
     char b[160];
+    int n;
     switch(ev->type) {
     case GK_EV_CLOSE:
         gk_confirm(d->ui, BOX_CLOSE, "Close the demonstration?", "Its window closes.", "", "Close", NULL, "Cancel");
@@ -304,8 +336,9 @@ int demo_event(struct demo *d, const struct gk_event *ev) {
         menu(d, ev->id);
         break;
     case GK_EV_CHOSEN:
-        if(ev->value) snprintf(b, sizeof(b), "Chose %s", ev->text);
-        else snprintf(b, sizeof(b), "Not chosen");
+        n = ev->value ? snprintf(b, sizeof(b), "Chose %s", ev->text) : snprintf(b, sizeof(b), "Not chosen");
+        if(d->busy && n > 0 && n < (int)sizeof(b)) snprintf(b + n, sizeof(b) - (size_t)n, "; lost while busy: %d", d->busy_lost);
+        d->busy = 0;
         say(d, b);
         break;
     case GK_EV_CHANGE:
@@ -319,12 +352,18 @@ int demo_event(struct demo *d, const struct gk_event *ev) {
         break;
     case GK_EV_KEY:
         if(ev->w == d->area) area_key(d, (unsigned)ev->value);
-        else if(ev->value == 27)                        /* Esc */
+        else if(ev->value == 27 && !(ev->mods & WIN_MOD_CTRL))     /* Esc (not Ctrl+[) */
             gk_confirm(d->ui, BOX_CLOSE, "Close the demonstration?", "Its window closes.", "", "Close", NULL, "Cancel");
+        else if(ev->value == 15 && (ev->mods & WIN_MOD_CTRL) && (ev->mods & WIN_MOD_SHIFT))
+            busy(d);                                    /* Ctrl+Shift+O */
         else {
-            snprintf(b, sizeof(b), "Key %d, no widget's", ev->value);
+            snprintf(b, sizeof(b), "Key 0x%x mods %u", (unsigned)ev->value,
+                     ev->mods & (WIN_MOD_SHIFT | WIN_MOD_ALT | WIN_MOD_CTRL | WIN_MOD_REPEAT));
             say(d, b);
         }
+        break;
+    case GK_EV_THEME:
+        say(d, ev->value == WIN_THEME_DUSK ? "Theme: dusk" : "Theme: ocean");
         break;
     case GK_EV_POINTER:                                 /* the drawing: a press marks the cell under it */
         if(ev->w == d->area && (ev->value & WIN_BUTTON_LEFT) && ev->x >= 0 && ev->y >= 0) {
