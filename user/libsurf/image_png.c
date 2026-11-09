@@ -26,6 +26,10 @@ refuses it at once, as zlib does, so libpng's readers never show such a file eit
 blocks, each with its tables) made a small picture cost seconds; now the IDAT bytes inflate is given stop at twice the
 rows' bytes, 8 more a row and 4 KB (data_budget()): deflate's worst, stored blocks, adds 5 bytes to 64 KB, and an
 encoder that flushes at every row 6 a row, so no real file comes near it.
+11/09/26 (the review's second reading): and the input that makes nothing. A picture large enough has a budget no file
+of 32 MiB reaches, so empty blocks behind its header still cost seconds; now inflate is refused once QUIET_MAX bytes
+of the data have gone by without its making a byte. Between two bytes a real stream has a block's header (a dynamic
+one's tables are under 300 bytes) or a flush (5), so 64 KB is far past anything real.
 */
 
 #include <stddef.h>
@@ -36,6 +40,7 @@ encoder that flushes at every row 6 a row, so no real file comes near it.
 #include <image.h>
 
 #define MADE     4096                           /* inflate's output at a time, on its way into rows */
+#define QUIET_MAX 65536                         /* the data's bytes inflate may take without making one */
 #define WORDS(x) #x
 #define WORD(x)  WORDS(x)
 #define OVER_SIDE "a PNG over the limit of " WORD(WIMG_SIDE_MAX) " pixels a side"
@@ -63,6 +68,7 @@ struct png {
     int over;                                   /* a byte past it was made: the picture is whole */
     unsigned long long ahead;                   /* the bytes inflate may still make: the rows' and one more */
     unsigned long long budget, taken;           /* the IDAT bytes inflate may be given, and has been */
+    size_t quiet;                               /* those it has taken since it last made a byte */
     unsigned int adler_a, adler_b;
     unsigned char made[MADE];
     struct inflate z;
@@ -277,7 +283,7 @@ static unsigned long long data_budget(const struct png *p) {
 
 /* The zlib stream in the IDAT chunks (RFC 1950): its header, the deflate data by libsurf's inflate, as far as one byte
    past the rows, and its Adler-32 when the rows and the data end together. Inflate is given no more of the chunks
-   than the budget: a stream that wants more is refused */
+   than the budget, and no more than QUIET_MAX at a time while it makes nothing: a stream that wants more is refused */
 static const char *data(struct png *p) {
     struct inflate *z = &p->z;
     int cmf = next_byte(p), flg = next_byte(p), i;
@@ -292,7 +298,9 @@ static const char *data(struct png *p) {
         size_t room = p->ahead < MADE ? (size_t)p->ahead : MADE, made, k, give = p->left, used;
         int r;
         if(p->taken > p->budget) return "a PNG whose data is far longer than its rows";
+        if(p->quiet > QUIET_MAX) return "a PNG whose data makes nothing for too long";
         if(give > p->budget - p->taken + 1) give = (size_t)(p->budget - p->taken + 1);
+        if(give > QUIET_MAX - p->quiet + 1) give = QUIET_MAX - p->quiet + 1;
         z->in = p->in + p->pos;
         z->in_n = give;
         z->out = p->made;
@@ -303,6 +311,7 @@ static const char *data(struct png *p) {
         p->left -= used;
         p->taken += used;
         made = room - z->out_n;
+        p->quiet = made ? 0 : p->quiet + used;
         p->ahead -= made;
         for(k = 0; k < made; k++) if(emit(p, p->made[k])) return "a PNG whose data is corrupted";
         if(p->over) return NULL;                /* the picture is whole: what follows is not read */

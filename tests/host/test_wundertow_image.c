@@ -1791,6 +1791,17 @@ static void bombs(void) {
         free(b.p);
         memset(&b, 0, sizeof(b));
     }
+    /* 11/09/26 (the review's second reading): the same blocks behind the header of a picture large enough that its
+       budget is past them (1024 x 1024 in RGB: 6.3 MB): refused once 64 KB of the data have made nothing */
+    empty_blocks(&z, (size_t)4 << 20, 1);
+    png_start(&b, 1024, 1024, 8, 2, 0, 0, 0);
+    finish_png(&b, &z);
+    t = cpu_decode(&b, &rc, err, sizeof(err));
+    checkf(rc == -1 && strstr(err, "makes nothing"), "a PNG of 1024 x 1024 and 4 MB of empty dynamic blocks: refused (%s)",
+           rc ? err : "read");
+    checkf(t < 0.25, "and in little time (%.3f s; 0.25 s at most)", t);
+    free(b.p);
+    memset(&b, 0, sizeof(b));
     /* BMP: 16 megapixels in runs of 255 that all fall past the first row's end cost about what the same picture in
        rows of runs does: each code's time is the pixels it draws, not the pixels it says */
     rle_4000(&b, 0);
