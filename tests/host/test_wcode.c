@@ -1927,7 +1927,16 @@ static void review_searching(void) {
     free(b);
     strcpy(a.find.what, "hay");
     strcpy(a.find.with, "straw");
+    /* (11/09/26, the second review: asked first, and No changes nothing) */
     wc_app_cmd(&a, WC_CMD_REPLACE_ALL);
+    for(steps = 0; a.job && !a.all_asking && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(a.all_asking && strstr(wc_app_doc(&a)->msg, "Too large a change to undo") && !wc_app_busy(&a));
+    wc_app_idle(&a);
+    CHECK(a.all_asking && wc_app_all(&a, 0) == WC_DO_DRAW && !a.job && wc_app_doc(&a)->t.len == 4u << 20 &&
+          !strcmp(wc_app_doc(&a)->msg, "Not replaced"));
+    wc_app_cmd(&a, WC_CMD_REPLACE_ALL);
+    for(steps = 0; a.job && !a.all_asking && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(a.all_asking && (wc_app_all(&a, 1) & WC_DO_IDLE));
     for(steps = 0; a.job && !wc_app_doc(&a)->u.forgot && steps < 1000; steps++) wc_app_idle(&a);
     CHECK(a.job && wc_app_busy(&a) && wc_app_interrupt(&a, 1) < 0 && strstr(a.status, "cannot stop"));
     for(steps = 0; a.job && steps < 1000; steps++) wc_app_idle(&a);
@@ -2024,6 +2033,139 @@ static void review(void) {
     review_files();
 }
 
+/**** 11/09/26: the second review's findings (the account, "The second review") ****/
+
+static void review2(void) {
+    struct wc_doc d;
+    struct wc_find f;
+    struct wc_grep g;
+    char *b;
+    unsigned a1, b1, k, lines;
+    int r, w1, steps;
+    double t0;
+    /* 1: what Replace all searches for and puts in is taken when it begins: the find bar changed meanwhile changes
+       nothing of it (and no step works in a block another freed) */
+    b = repeat("foo\n", 8000);
+    doc_str(&d, "s.txt", b);
+    wc_find_init(&f);
+    strcpy(f.what, "foo");
+    strcpy(f.with, "bar");
+    CHECK(wc_find_all_begin(&f, &d) == 0);
+    for(steps = 0; (r = wc_find_all_go(&f, &d, 512)) == 2 && !wc_find_all_changing(&f); steps++);
+    CHECK(r == 2 && wc_find_all_changing(&f));
+    strcpy(f.what, "zzz");
+    strcpy(f.with, "barbarbarbarbarbarbarbarbarbar");
+    f.regex = f.icase = f.word = 1;
+    while((r = wc_find_all_go(&f, &d, 512)) == 2);
+    CHECK(r == 2000 && !strncmp(d.msg, "Replaced 2000 (on 2000 lines)", 29));
+    free(b);
+    b = repeat("bar\n", 8000);
+    CHECK(text_is(&d, b));
+    free(b);
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    b = repeat("food\n", 10000);                 /* ... a regular expression's groups likewise */
+    doc_str(&d, "g.txt", b);
+    free(b);
+    wc_find_init(&f);
+    f.regex = 1;
+    strcpy(f.what, "f(o+)d");
+    strcpy(f.with, "\\1x");
+    CHECK(wc_find_all_begin(&f, &d) == 0);
+    for(steps = 0; (r = wc_find_all_go(&f, &d, 512)) == 2 && !wc_find_all_changing(&f); steps++);
+    strcpy(f.what, "(");                        /* (no pattern at all) */
+    f.regex = 0;
+    while((r = wc_find_all_go(&f, &d, 512)) == 2);
+    b = repeat("oox\n", 8000);
+    CHECK(r == 2000 && text_is(&d, b));
+    free(b);
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    /* 2: the work counted round its end (32 bits on SurfOS): a step still ends where its budget says */
+    b = repeat("int x;\n", 64u << 10);
+    doc_str(&d, "w.c", b);
+    free(b);
+    wc_find_init(&f);
+    strcpy(f.what, "absent");
+    f.work = (unsigned long)-1 - (300u << 10);
+    CHECK(wc_find_doc_begin(&f, &d, 0) == 0);
+    for(steps = 0; (r = wc_find_doc_go(&f, &d, 16u << 10)) == 2 && steps < 1000; steps++);
+    CHECK(r == 0 && steps > 2 && steps < 1000);
+    strcpy(f.what, "int");
+    strcpy(f.with, "long");
+    f.work = (unsigned long)-1 - (300u << 10);
+    CHECK(wc_find_all_begin(&f, &d) == 0);
+    for(steps = 0; (r = wc_find_all_go(&f, &d, 16u << 10)) == 2 && steps < 1000; steps++);
+    CHECK(r == 9362 && steps > 2 && steps < 1000);
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    wc_grep_init(&g);                           /* find in files' line bound likewise */
+    strcpy(g.f.what, "int");
+    CHECK(wc_find_prepare(&g.f) == 0);
+    g.f.work = (unsigned long)-1 - 10;
+    g.f.limit = g.f.work + (64u << 10);
+    g.f.limited = 1;
+    CHECK(wc_find_in(&g.f, "int x;", 6, 0, &a1, &b1) == 1 && a1 == 0 && b1 == 3);
+    wc_grep_free(&g);
+    /* 3: a call is charged what it read: a long line's matches come many to a step. Find previous [0-9]+ on 1 MB of
+       minified JSON took minutes, and Replace all on 40 lines of 160 KB 149 s */
+    b = repeat("{\"key\":12345,", 1u << 20);
+    doc_str(&d, "x.json", b);
+    free(b);
+    wc_find_init(&f);
+    f.regex = 1;
+    strcpy(f.what, "[0-9]+");
+    wc_doc_select(&d, d.t.len, d.t.len);
+    t0 = now();
+    CHECK(wc_find_doc_begin(&f, &d, 1) == 0);
+    for(steps = 0; (r = wc_find_doc_go(&f, &d, WC_FIND_STEP)) == 2; steps++);
+    CHECK(r == 1 && steps < 8 && now() - t0 < 2.0 && wc_text_byte(&d.t, d.caret) == '1');
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    lines = 40;
+    b = malloc(lines * 160001 + 1);
+    for(k = 0; k < lines * 160001; k++) b[k] = k % 160001 == 160000 ? '\n' : "{\"key\":12345,"[k % 160001 % 13];
+    b[lines * 160001] = 0;
+    doc_str(&d, "y.json", b);
+    free(b);
+    wc_find_init(&f);
+    f.regex = 1;
+    strcpy(f.what, "[0-9]+");
+    strcpy(f.with, "N");
+    t0 = now();
+    CHECK(wc_find_all_begin(&f, &d) == 0);
+    for(steps = 0; (r = wc_find_all_go(&f, &d, WC_FIND_STEP)) == 2; steps++);
+    CHECK(r == 3 && strstr(d.msg, "Too large a change to undo"));    /* asked: the person decides first */
+    wc_find_all_confirm(&f);
+    while((r = wc_find_all_go(&f, &d, WC_FIND_STEP)) == 2) steps++;
+    CHECK(r == 40 * 12308 && steps < 200 && now() - t0 < 4.0 && d.u.forgot);
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    /* lows: whole words with a regular expression in one pass, the groups still the person's; \9 has no next */
+    b = repeat("ba ", 1u << 20);
+    doc_str(&d, "b.txt", b);
+    free(b);
+    wc_find_init(&f);
+    f.regex = f.word = 1;
+    strcpy(f.what, "a.*");
+    t0 = now();
+    CHECK(wc_find_doc(&f, &d, 0) == 0 && now() - t0 < 2.0);
+    wc_doc_free(&d);
+    doc_str(&d, "c.txt", "xfoo foo foox\n");
+    strcpy(f.what, "(f)(o+)");
+    strcpy(f.with, "\\2\\1&");
+    wc_doc_select(&d, 0, 0);
+    CHECK(wc_find_doc(&f, &d, 0) == 1 && d.anchor == 5 && d.caret == 8);
+    CHECK(wc_find_replace_all(&f, &d) == 1 && text_is(&d, "xfoo ooffoo foox\n"));
+    strcpy(f.what, "(a)(b)(c)(d)(e)(f)(g)(h)(i)\\9");
+    CHECK(wc_find_doc(&f, &d, 0) < 0 && strstr(d.msg, "\\1 to \\8"));
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    w1 = 0;
+    (void)w1;
+}
+
+
 int main(int argc, char **argv) {
     if(argc > 1 && !strcmp(argv[1], "speed")) {
         speed();
@@ -2052,6 +2194,7 @@ int main(int argc, char **argv) {
     viewing();
     application();
     review();
+    review2();
     CHECK(pool.used == 0);
     printf("test_wcode: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

@@ -431,6 +431,73 @@ int main(void) {
         key(13, 0);                             /* Save over it */
         CHECK(run() && !gk_box_open(w.ui) && !strcmp(mfind("/m/notes.txt")->data, "needle in a haystack\nno match\nanother needle\nQ"));
     }
+    /* 11/09/26 (the second review): Replace all too large to undo asks first, in a box; while it changes the file the
+       find bar's fields are greyed (typing there changes nothing) and only the status bar is drawn between its steps;
+       the find bar changed while a search goes on stops it */
+    {
+        unsigned k;
+        int i2, outside;
+        bign = 200000 * 4;
+        bigtext = malloc(bign);
+        for(k = 0; k < 200000; k++) memcpy(bigtext + k * 4, "foo\n", 4);
+        ctrl('O');
+        CHECK(run() && gkf_dialog());
+        gkf_dialog_answer("/m/big.c");
+        CHECK(run() && !strcmp(doc()->path, "/m/big.c"));
+        w.app.step = 16u << 10;
+        key(8, WIN_MOD_CTRL);                   /* Ctrl+H: the find bar with the replacement's line */
+        CHECK(run() && gk_shown(w.replace_row));
+        gk_set_text(w.find, "");                /* (the fields as a person empties them; Ctrl+A is the menu's) */
+        gk_set_text(w.with, "");
+        gk_focus(w.find);
+        gkf_type("foo");
+        CHECK(run());
+        gk_focus(w.with);
+        gkf_type("bar");
+        CHECK(run() && !strcmp(w.app.find.what, "foo") && !strcmp(w.app.find.with, "bar"));
+        CHECK(gkf_find("Replace all", GW_INK, &x, &y));
+        gkf_click(x + 4, y + 4);                /* its button */
+        CHECK(run() && gk_asking(w.ui) == BOX_ALL && gkf_find("Replace 200000 matches?", GW_PAPER, &x, &y) &&
+              !wc_app_busy(&w.app));
+        key(13, 0);                             /* Replace all */
+        events_only();
+        CHECK(wc_app_busy(&w.app) && !gk_enabled(w.with) && !gk_enabled(w.find) && !gk_enabled(w.regex));
+        gkf_presented(&x, &y, &ww, &hh);
+        wc_window_idle(&w);                     /* a step: the status bar only */
+        events_only();
+        n = gkf_presented(&x, &y, &ww, &hh);
+        for(i2 = 0, outside = 0; i2 < n; i2++) {
+            gkf_presented_rect(i2, &x, &y, &ww, &hh);
+            if(y < WC_WIN_H - GK_STATUS_H) outside++;
+        }
+        CHECK(!outside && status_says("Replacing: Esc stops it"));     /* (nothing at all when the status is as it was) */
+        gkf_type("X");                          /* into the greyed Replace field: nothing */
+        CHECK(run() && !w.app.job && !strcmp(gk_text(w.with), "bar") && gk_enabled(w.with) &&
+              doc()->t.len == bign && wc_text_byte(&doc()->t, bign - 4) == 'b' && status_says("Replaced 200000"));
+        gk_set_text(w.find, "");
+        gk_focus(w.find);
+        gkf_type("zzz");
+        key(13, 0);
+        events_only();
+        CHECK(w.app.job == WC_JOB_FIND);
+        gkf_type("q");                          /* the find bar changed: the search with "zzz" stops */
+        events_only();
+        CHECK(!w.app.job && status_says("Stopped searching") && !strcmp(w.app.find.what, "zzzq"));
+        w.app.step = 0;
+        key(27, 0);
+        CHECK(run() && !gk_shown(w.findbar));
+        ctrl('W');                              /* big.c, replaced: Don't save */
+        CHECK(run() && gk_asking(w.ui) == BOX_SAVE);
+        key(WIN_KEY_RIGHT, 0);
+        key(13, 0);
+        CHECK(run());
+        free(bigtext);
+        bigtext = NULL;
+        ctrl('O');
+        CHECK(run() && gkf_dialog());
+        gkf_dialog_answer("/m/notes.txt");
+        CHECK(run() && !strcmp(doc()->path, "/m/notes.txt"));
+    }
     /* the theme: drawn again in its colours */
     gkf_set_theme(WIN_THEME_DUSK, NULL);
     CHECK(run() && row_says(0, 1, "eedle", GW_INK));
