@@ -1477,6 +1477,101 @@ static void lows(void) {
     gk_close(ui);
 }
 
+/* the review: random input with invariants. A window of every kind of widget, menus, and a program that opens boxes,
+   sets texts and asks for choosers now and then, under 20000 events from a fixed seed (keys with any modifiers,
+   repeats, the pointer, the wheel, the focus, sizes, menu choices, themes, time). After each: the window is alive,
+   the toolkit has its memory, a line of text holds whole characters within its max with its cursor on one, a
+   password is never on the clipboard, no menu choice comes while a box is open, and no event names a box's own
+   widget */
+static unsigned fuzz_seed = 20261109;
+static unsigned fuzz_rand(void) {
+    fuzz_seed = fuzz_seed * 1103515245u + 12345u;
+    return fuzz_seed >> 8;
+}
+
+static int fuzz_line_ok(const struct gk_widget *w) {
+    const struct gk_line *f = w->k;
+    int k = 0, len, cursor_ok = 0, anchor_ok = 0;
+    if(f->len < 0 || f->len > f->max || (int)strlen(f->buf) != f->len) return 0;
+    while(k <= f->len) {
+        if(k == f->cursor) cursor_ok = 1;
+        if(k == f->anchor) anchor_ok = 1;
+        if(k == f->len) break;
+        gw_char(f->buf + k, f->len - k, &len);
+        k += len;
+    }
+    return cursor_ok && anchor_ok;
+}
+
+static void fuzz(void) {
+    static const unsigned keys[] = { 'a', 'Z', ' ', '\r', 9, 27, 127, 8, 1, 3, 22, 24, 26, 15, 19, 0xC3, 0xA9, 0xE2, 0x82,
+                                     0xAC, 0xF0, WIN_KEY_LEFT, WIN_KEY_RIGHT, WIN_KEY_UP, WIN_KEY_DOWN, WIN_KEY_HOME,
+                                     WIN_KEY_END, WIN_KEY_PGUP, WIN_KEY_PGDN, WIN_KEY_DELETE, WIN_KEY_BACKTAB, WIN_KEY_TAB,
+                                     WIN_KEY_ENTER, WIN_KEY_BACKSPACE, WIN_KEY_F5, WIN_KEY_F12, 29, 31 };
+    struct gk *ui = window("Fuzz", 520, 360);
+    struct gk_widget *root = gk_root(ui), *tabs, *p1, *p2, *f, *pw, *t, *l, *a, *row;
+    struct gk_event ev;
+    int i, k, r, m, broken = 0, menu_in_box = 0, boxed_w = 0, dead = 0;
+    tabs = gk_tabs(root, 1, GK_CLOSABLE);
+    p1 = gk_tab(tabs, "One");
+    p2 = gk_tab(tabs, "Two");
+    f = gk_field(p1, 2, 24, 0);
+    gk_field_history(f, 4);
+    pw = gk_field(p1, 3, 16, GK_PASSWORD);
+    row = gk_hbox(p1, 4);
+    gk_button(row, "Go", 4);
+    gk_check(row, "Check", 5, 0);
+    gk_switch(row, "Switch", 6, 1);
+    gk_radio_add(gk_radio(p1, 7, 1), "A");
+    gk_slider(p1, 8, -5, 5, 1);
+    t = gk_text_area(p2, 9, 300, GK_TAKES_TAB);
+    l = gk_list(p2, 10);
+    for(i = 0; i < 30; i++) gk_list_add(l, "row\tcolumn");
+    a = gk_area(p2, 11, GK_FOCUSABLE, NULL, NULL);
+    gk_area_extent(a, 1000, 10, 1000, 10);
+    gk_grow(a, 1, 1);
+    m = gk_menu(ui, "File");
+    gk_menu_item(ui, m, 20, "Open", GK_CTRL | 'O', 0);
+    gk_menu_item(ui, m, 21, "Undo", GK_CTRL | 'Z', GK_ITEM_REPEAT);
+    gk_timer(ui, 30, 25, 1);
+    run(ui);
+    gk_set_text(pw, "s3cretpass");
+    for(i = 0; i < 20000 && !dead; i++) {
+        k = (int)(fuzz_rand() % 100);
+        if(k < 45) gkf_key(keys[fuzz_rand() % (sizeof(keys) / sizeof(keys[0]))], fuzz_rand() % 16);
+        else if(k < 70) gkf_pointer((int)(fuzz_rand() % 540) - 10, (int)(fuzz_rand() % 380) - 10, fuzz_rand() % 4);
+        else if(k < 76) gkf_wheel((int)(fuzz_rand() % 520), (int)(fuzz_rand() % 360), (int)(fuzz_rand() % 13) - 6);
+        else if(k < 79) gkf_focus((int)(fuzz_rand() % 4) != 0);
+        else if(k < 81) gkf_resize(200 + (int)(fuzz_rand() % 400), 120 + (int)(fuzz_rand() % 300));
+        else if(k < 84) gkf_menu_choose(20 + (int)(fuzz_rand() % 2));
+        else if(k < 86) gkf_set_theme(fuzz_rand() % 2, NULL);
+        else if(k < 90) gkf_advance(fuzz_rand() % 60);
+        else if(k < 92) gk_message(ui, 40, "Box", "a line", "");
+        else if(k < 94) gk_ask(ui, 41, "Ask", "Password:", "", GK_PASSWORD);
+        else if(k < 95) gk_dismiss(ui);
+        else if(k < 97) gk_set_text(f, fuzz_rand() % 2 ? "set \xc3\xa9 text" : "");
+        else if(k < 98) gkf_set_paste(fuzz_rand() % 2 ? "pasted\nline" : "\xe2\x82");
+        else gkf_dialog_answer(fuzz_rand() % 2 ? "/a" : NULL);
+        while((r = gk_next(ui, &ev, 0)) > 0) {
+            if(ev.type == GK_EV_MENU && gk_box_open(ui)) menu_in_box++;
+            if(ev.w && ev.w->ui == ui) {
+                struct gk_widget *top;
+                for(top = ev.w; top->parent; top = top->parent) ;
+                if(top == ui->box) boxed_w++;
+            }
+            if(ev.type == GK_EV_MENU && ev.id == 20 && fuzz_rand() % 2) gk_choose(ui, 50, WIN_DLG_OPEN, "/", "", "");
+        }
+        if(r < 0) dead = 1;
+        if(!fuzz_line_ok(f) || !fuzz_line_ok(pw) || !gk_ok(ui) || strstr(gkf_clip(), "s3cret")) broken++;
+    }
+    CHECK(!dead && !broken && !menu_in_box && !boxed_w);
+    if(dead || broken || menu_in_box || boxed_w)
+        printf("  (fuzz: event %d, dead %d, broken %d, menus in a box %d, a box's widgets %d)\n", i, dead, broken,
+               menu_in_box, boxed_w);
+    (void)t;
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1973,6 +2068,7 @@ int main(void) {
     fits();
     fakes();
     lows();
+    fuzz();
     paste();
     choosers();
     theme();
