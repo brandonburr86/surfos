@@ -237,23 +237,24 @@ whose window never came; `test_wundertow_image.c` is Wundertow's test of the dec
 | Test | Checks | What |
 |---|---|---|
 | `test_wview` | 270 | that the window fits a desktop of 640 x 400 (from the review); the old viewer test's views with its numbers (Fit, the steps, the middle kept, the pan, the double-click, the wheel), the middle at the extremes (4096 x 16, 1/64 to 16 times); the toolbar's labels, places and states; painting (an average, transparency over the squares, clipping); the status bar, the title and the details, dates among them; the folder's order, its limits and its steps; which keys repeat |
-| `test_guimedia` | 448 (1,086 before: the kernel viewer's checks went to `test_wview`) | the entry: the program, Files' rule (screenshots' names among them), Apps' start at the Image Viewer's place, `viewer_show()` starting `wview` on a path (spaces and all), a start refused, a folder, a device and a file not there refused before anything starts; from the review, one viewer from Files (a start whose window had not come ended, a window told to close, one that did not go ended), no start when the programs have every window, a start whose window never comes said once, and only Sketch's numbers going to Sketch; Hex and Sketch as before |
+| `test_guimedia` | 458 (1,086 before: the kernel viewer's checks went to `test_wview`) | the entry: the program, Files' rule (screenshots' names among them), Apps' start at the Image Viewer's place, `viewer_show()` starting `wview` on a path (spaces and all), a start refused, a folder, a device and a file not there refused before anything starts; from the review, one viewer from Files (a start whose window had not come ended, a window told to close, one that did not go ended), no start when the programs have every window, a start whose window never comes said once, and only Sketch's numbers going to Sketch; from the second reading, a viewer told to close that stays ended (5 s later, or at the next file) and the viewer ended, not asked, when programs have every window; Hex and Sketch as before |
 | `test_guisuite` | 173 (181 before) | Files' Enter on a picture starts `wview` with its path, at the Image Viewer's place |
-| `test_wundertow_image` | 359,823 | stage 1's 359,813, the same outcome check by check after the JPEG decoder's rewrite, and the review's bombs (10): a PNG of 4 MB of empty fixed or dynamic blocks refused for its length in little time, 16 megapixels of RLE8 runs past a row's end within 4 times the same picture in rows, 128 JPEG scans refused at the 33rd within 16 times the same picture in 2 scans |
+| `test_wundertow_image` | 359,825 | stage 1's 359,813, the same outcome check by check after the JPEG decoder's rewrite, and the review's bombs (12): a PNG of 1024 x 1024 and 4 MB of empty dynamic blocks refused for making nothing, in little time; a PNG of 4 MB of empty fixed or dynamic blocks refused for its length in little time, 16 megapixels of RLE8 runs past a row's end within 4 times the same picture in rows, 128 JPEG scans refused at the 33rd within 16 times the same picture in 2 scans |
 | `tests/test_image_jpeg.py` | 126 (on the Mac) | every JPEG fixture by libsurf against macOS's sips (above); without sips it says so and passes |
-| guiapps, `gui_apps_img.py` | 39 at -O0 on 5453c2bc; the review round's (three pictures from Files, one viewer left) not yet run | in the Terminal: wview on a PNG of the stick, fitted and actual, its toolbar, N through a GIF, a BMP, a JPEG, a PNG with transparency, a PNG cut short and a screenshot's name, around and back, the details, Copy path pasted in the Terminal; then Files' Enter on a PNG (at the Image Viewer's place), O and the desktop's chooser to a JPEG, Ctrl+W, Apps > Image Viewer with no picture |
-| guiapps, whole | 358 of 358 at -O0 on 5453c2bc; not yet run on the review round's tree | every track's, the media track's Image Viewer checks and the suite's Files-to-Image-Viewer check now reading wview |
+| guiapps, `gui_apps_img.py` | 43 at -O0 and at -O2 (39 before the review round) | in the Terminal: wview on a PNG of the stick, fitted and actual, its toolbar, N through a GIF, a BMP, a JPEG, a PNG with transparency, a PNG cut short and a screenshot's name, around and back, the details, Copy path pasted in the Terminal; then Files' Enter on a PNG (at the Image Viewer's place), O and the desktop's chooser to a JPEG, Ctrl+W, Apps > Image Viewer with no picture |
+| guiapps, whole | 362 of 362 at -O0 and at -O2 (the gates below) | every track's, the media track's Image Viewer checks and the suite's Files-to-Image-Viewer check now reading wview |
 
 Gates. On 5453c2bc, the end of stage 2: the whole `make unittest` (99 suites passed, none failed) and the whole guiapps
-scenario at -O0 (358 of 358). On 3165be0a, the review round's code (the commit after it changes only documents): the
-whole `make unittest` again (99 suites, none failed; `test_wundertow_image` 359,823 and its UBSan build the same,
-`test_wview` 270, `test_guimedia` 448, `test_guidesk` 139 with `wview.app`), the builds at -O0 and -O2 and both USB
-images. Not run when this was written: guiapps at -O0 and -O2, test-all, test-web at -O0 and -O2 and `make -C surfcpu
-test-os-qemu`. They wait at the lock (`06-gates/suite-lock.sh`, ticket t.32 since 20:11), whose two places have been
-held since 19:55 by other tracks' runs; the results go to the scratchpad's `apps-img/gates/summary` when they come.
+scenario at -O0 (358 of 358). On 3165be0a, the review round's code: the whole `make unittest` (99 suites, none failed),
+guiapps 362 of 362 at -O0 and at -O2 (43 of them these checks), test-all (the smoke test's 558 checks and the files
+test's 51, at -O0 and -O2), test-web at -O0 and -O2 (66 checks each) and `make -C surfcpu test-os-qemu` (137 of 137 at
+-O2 and at -O0). On 507866fc, the second reading's code (the commit after it changes only this account): the whole
+`make unittest` (99 suites, none failed; `test_wundertow_image` 359,825 and its UBSan build the same, `test_guimedia`
+458), guiapps 362 of 362 at -O2 and at -O0 (its first run gave 359 of 360: the kernel heap's reading before the desktop came 16 bytes above where it settles, 668032 then 668016, a boot under load; run again once, as the coordinator allows, it held to the byte), test-all (558 and 51 at both levels), test-web at -O0 and -O2 (66 each) and
+`make -C surfcpu test-os-qemu` (137 of 137 at both levels), each timing-sensitive one through `06-gates/suite-lock.sh`.
 Natively on the Mac: the JPEG decoder against sips (126 checks) and against itself before the rewrite, the review's
 fuzzer over the new decoders under AddressSanitizer and UBSan (1.8 million inputs, nothing found), `test_wview` and
-`test_wundertow_image` under both sanitizers.
+`test_wundertow_image` under both sanitizers, and the review's 360 legitimate PNGs near the budget, all decoded.
 
 ### Found on the way (for other tracks)
 
@@ -329,7 +330,11 @@ main.c and the desktop's entry sound. Its findings, and what was done about each
     block's last row and column with a coefficient that is not 0. No fast factorisation, so no paper's either;
   - the Huffman tables from Annex C (HUFFSIZE and HUFFCODE, C.1 and C.2) and F.2.2.3 (MINCODE, MAXCODE and VALPTR,
     F.15; DECODE, F.16), with a lookahead of my own: two tables of 256 bytes that say the length and value of a code of
-    8 bits or fewer that the next 8 bits begin with; a longer code goes on bit by bit as F.16 does from length 9;
+    8 bits or fewer that the next 8 bits begin with; a longer code goes on bit by bit as F.16 does from length 9.
+    This design, an 8-bit lookahead in two 256-entry tables of length and value over a right-aligned accumulator,
+    coincides with libjpeg 6b's jdhuff.c lookahead (its look_nbits and look_sym). It was written here from T.81 and
+    the review found no line in common; it is the obvious way to look a code up a byte at a time, and is named here
+    so that nobody has to find the likeness for themselves;
   - the reading of the bits from F.1.2.3 (0xFF 0x00 is a data byte) and B.1.1.5 (0xFF and anything else a marker,
     fill bytes 0xFF before it), a byte at a time into an accumulator whose last bits are the ones to come.
   The progressive refinement was not flagged and is as it was; the comments that cite libjpeg's behaviour (the JFIF
@@ -347,6 +352,31 @@ main.c and the desktop's entry sound. Its findings, and what was done about each
   run again over the new decoders under AddressSanitizer and UBSan: 1.8 million inputs, nothing found.
 - **The decoders' origin** in "Where the code comes from" was a pointer to Wundertow's milestone brief, which has no
   such section; it says what each decoder follows now.
+
+### The review's second reading (11/09/26)
+
+The same reviewer read the round (5453c2bc..26c4802e): H1, M2 and L1 to L6 fixed, 4.1 million more fuzzed inputs
+clean, the JPEG rewrite original (its 32 cosines checked against the formula) and within 3 levels on the fixtures,
+cut files and cjpeg's extremes, the test counts as stated. What it left, and what was done:
+
+- **Medium: the PNG budget did not stop a flood of empty blocks behind a large header.** A header of 4096 x 3906 in
+  RGB gives a budget of 96 MB, which no file of 32 MiB reaches, so 3 million empty dynamic blocks decoded for 6.0 s
+  before "ends too early". Now inflate is also refused once 64 KB of the data have gone by without its making a byte
+  (`image_png.c`'s QUIET_MAX: between two bytes a real stream has a block's header, under 300 bytes, or a flush of 5),
+  and is given no more than that at a time while it makes nothing; the budget stays. The review's file is refused in
+  0.014 s ("a PNG whose data makes nothing for too long"); its 360 legitimate files near the budget (sync and full
+  flushes at every row, stored and compressed, interlaced or not, a 1 MiB iCCP before the data) all decode; the same
+  kind of file (1024 x 1024, 4 MB of empty dynamic blocks) is in `bombs()` with a bound of 0.25 s (2 checks).
+- **Low: a viewer that ignored the close it was sent was never ended.** `viewer_replace()` remembers the wview it told
+  to close (`struct gui_viewer`'s asked_pid and asked_at): if its window is still there at the next replace, or 5 s
+  later (the entry's `tick()`), it is ended. When programs have every window they may have, the viewer's among them,
+  the viewer is ended rather than asked, so that the new one is not refused. `test_guimedia`'s `viewer_replaced()`
+  tests both: not ended before 5 s and ended after, ended at the next file, nothing ended when it went, and the limit.
+- **Low, optional: 32 scans refuse valid but unusual progressive JPEGs.** Kept at 32. No common encoder writes more
+  than 18; a bound on scans times blocks would let small pictures have more, but it is a second limit, with its own
+  tests and its own way of being wrong, for files nobody has been seen to make. A JPEG it refuses says so ("a JPEG of
+  too many scans") and costs nothing else.
+- **The Huffman lookahead's likeness to libjpeg 6b's** is named above, where the rewrite is described.
 
 ## Where the code comes from
 
