@@ -28,6 +28,7 @@ as it is; view.c is the window's side.
 #define SW_SWELL_LEVEL 3                /* the swell begins at this level */
 #define SW_SWELL_PIECES 16              /* and lifts the sea every this many pieces */
 #define SW_ROWS_LEVEL 8                 /* rows washed away for each level */
+#define SW_NO_REST (-1000)              /* "has not rested": no row a piece reaches (it climbs at most a few rows above the sea) */
 
 /* the pieces, by name (swell_names[]) */
 #define SW_PEBBLE 0
@@ -61,8 +62,9 @@ struct swell {
     int swells;                         /* times it did */
     unsigned fall_at;                   /* when the piece falls its next row */
     unsigned lock_at;                   /* landed: when it sets; 0 while it can fall */
-    int rest_y;                         /* the row it last landed on, and when it was to set there */
-    unsigned rest_at;
+    int rest_low;                       /* the lowest row its lowest cell rested at (SW_NO_REST before it landed), */
+    unsigned rest_at;                   /* when it was to set there, */
+    int deepest;                        /* and the lowest row that cell has been down to: Down and Space pay below it */
     unsigned paused_at, played;         /* the pause's start; the milliseconds played, pauses not counted */
     unsigned since;                     /* when the count of played last went on */
     unsigned char washed[SW_H];         /* the rows the last setting washed away (1 each), for the window */
@@ -85,8 +87,8 @@ int swell_start(struct swell *s, unsigned now);          /* the first piece come
 int swell_fits(const struct swell *s, int kind, int turn, int x, int y);
 int swell_move(struct swell *s, int dx, unsigned now);   /* a column left or right: 1 when it moved */
 int swell_turn(struct swell *s, int dir, unsigned now);  /* a quarter turn, 1 clockwise or -1: 1 when it turned */
-int swell_down(struct swell *s, unsigned now);           /* a row down by a key: 1 point; it sets if it cannot */
-int swell_drop(struct swell *s, unsigned now);           /* straight down and set: 2 points a row; the rows */
+int swell_down(struct swell *s, unsigned now);           /* a row down by a key: a point for a new row; landed, it sets */
+int swell_drop(struct swell *s, unsigned now);           /* straight down and set: 2 points a new row; the rows */
 int swell_tick(struct swell *s, unsigned now);           /* what time does: 1 when anything changed */
 unsigned swell_wait(const struct swell *s, unsigned now);    /* milliseconds until a tick has something to do */
 int swell_pause(struct swell *s, int on, unsigned now);  /* paused or going on: 1 when that changed */

@@ -5,7 +5,10 @@
    cells; the timer letting it fall a row; Space dropping it, the score following, a held Space dropping one; a row
    washed away showing foam for a moment; P and the menu pausing, the menu's check following; the focus lost pausing
    it; the end at the top, its band and the session's best; the close button and Esc asking during a game, Cancel
-   first, Close ending it; New game and Help from the menu. Built and run by `make unittest`. */
+   first, Close ending it; New game and Help from the menu. The review of 11/05/26: New game asking first during a
+   game, Cancel first, not taken while the close question is up, and the close button over its question asking its
+   own; the window at its own smallest size (no smaller taken), the panel's last line within the board, the Help's
+   and the questions' lines whole there. Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -60,6 +63,18 @@ static int piece_shown(void) {
     for(i = 0; i < p->n; i++)
         if(w.v.game.y + p->y[i] >= 0 && middle(w.v.game.x + p->x[i], w.v.game.y + p->y[i]) != colors[w.v.game.kind]) return 0;
     return 1;
+}
+
+/* a box's line, whole (gkbox.c: the first in ink, the second muted, the title on teal) */
+static int box_says(const char *title, const char *line1, const char *line2) {
+    return gk_box_open(w.ui) && find_text(title, GW_PAPER) && (!*line1 || find_text(line1, GW_INK)) &&
+           (!*line2 || find_text(line2, GW_MUTED));
+}
+
+/* the question's buttons: Cancel first, the default, then the other */
+static int cancel_first(const char *other) {
+    int cx, cy, ox, oy;
+    return gkf_find("Cancel", GW_PAPER, &cx, &cy) && gkf_find(other, GW_INK, &ox, &oy) && cx < ox && cy == oy;
 }
 
 static int presented_area(void) {
@@ -192,7 +207,27 @@ int main(void) {
     gkf_key(' ', 0);
     run();
     n = w.v.game.pieces;
-    CHECK(gkf_menu_choose(MENU_NEW) && run() && w.v.game.state == SW_PLAYING && w.v.game.pieces == 0 && n == 1);
+    /* the menu's New game during a game: paused and asked, Cancel first; Cancel keeps the game; New game ends it */
+    CHECK(gkf_menu_choose(MENU_NEW) && run() && gk_asking(w.ui) == BOX_NEW && w.v.game.state == SW_PAUSED);
+    CHECK(box_says("Start a new game?", "A game is under way: a new one ends it.", "") && cancel_first("New game"));
+    gkf_key('\r', 0);
+    CHECK(run() && !gk_box_open(w.ui) && w.v.game.state == SW_PAUSED && w.v.game.pieces == n && n == 1);
+    CHECK(gkf_menu_choose(MENU_NEW) && run() && gk_asking(w.ui) == BOX_NEW);
+    gkf_key(WIN_KEY_RIGHT, 0);                          /* to New game */
+    gkf_key('\r', 0);
+    CHECK(run() && !gk_box_open(w.ui) && w.v.game.state == SW_PLAYING && w.v.game.pieces == 0 && w.v.games == 1);
+    /* N asks the same; the close question over it in its place, and New not taken while that one is up */
+    gkf_key('n', 0);
+    CHECK(run() && gk_asking(w.ui) == BOX_NEW && w.v.asking == SV_ASK_NEW);
+    gkf_close();
+    CHECK(run() && gk_asking(w.ui) == BOX_CLOSE && w.v.asking == SV_ASK_CLOSE && box_says("Close Swell?", "", ""));
+    CHECK(gkf_menu_choose(MENU_NEW) && run() && gk_asking(w.ui) == BOX_CLOSE && w.v.game.state == SW_PAUSED);
+    for(i = 0; i < 8; i++) gkf_advance(500);
+    CHECK(run() && w.v.game.y == 0 && w.v.game.state == SW_PAUSED);      /* nothing fell under the question */
+    gkf_key(27, 0);                                     /* Esc: Cancel */
+    CHECK(run() && !gk_box_open(w.ui) && !w.v.asking && status_says("Paused: P or Enter goes on, N starts again"));
+    gkf_key('p', 0);
+    CHECK(run() && w.v.game.state == SW_PLAYING && w.v.games == 1);
     CHECK(gkf_menu_choose(MENU_HELP) && run() && gk_asking(w.ui) == BOX_HELP && w.v.game.state == SW_PAUSED);
     gkf_key('\r', 0);
     CHECK(run() && !gk_box_open(w.ui));
@@ -210,6 +245,31 @@ int main(void) {
     CHECK(run() && w.v.cell == 15);
     cell_xy(SW_W - 1, SW_H - 1, &px, &py);
     CHECK(py + w.v.cell <= 317 - GK_STATUS_H && middle(SW_W - 1, SW_H - 1) == C_WATER && find_text("Best", GW_MUTED));
+    ww_close(&w);
+    /* the window at its own smallest size (the review of 11/05/26: the panel's last line fell under the board, and the
+       Help's lines were cut): no smaller is taken; the sea, the panel and its best within the board; the Help's and the
+       questions' lines whole */
+    gkf_reset(0, 0);
+    CHECK(ww_open(&w, 11) == 0);
+    gkf_focus(1);
+    gkf_resize(SV_MIN_W, SV_MIN_H);
+    CHECK(run() && gkf_w() == SV_MIN_W && gkf_h() == SV_MIN_H && w.v.cell == 15);
+    gkf_resize(SV_MIN_W - 1, SV_MIN_H);
+    gkf_resize(SV_MIN_W, SV_MIN_H - 1);
+    CHECK(run() && gkf_w() == SV_MIN_W && gkf_h() == SV_MIN_H);
+    cell_xy(SW_W - 1, SW_H - 1, &px, &py);
+    CHECK(py + w.v.cell <= SV_MIN_H - GK_STATUS_H && middle(SW_W - 1, SW_H - 1) == C_WATER);
+    CHECK(gkf_find("Best", GW_MUTED, &x, &y) && gkf_text(x, y + 16, "0", GW_INK) && y + 32 <= SV_MIN_H - GK_STATUS_H);
+    CHECK(strlen(WW_HELP_1) <= 50 && strlen(WW_HELP_2) <= 50);
+    CHECK(gkf_menu_choose(MENU_HELP) && run() && box_says("Playing Swell", WW_HELP_1, WW_HELP_2));
+    gkf_key('\r', 0);
+    gkf_key('\r', 0);                                   /* a game */
+    gkf_key('n', 0);
+    CHECK(run() && box_says("Start a new game?", "A game is under way: a new one ends it.", "") &&
+          cancel_first("New game"));
+    gkf_key(27, 0);
+    gkf_key(27, 0);
+    CHECK(run() && box_says("Close Swell?", "A game is under way: it ends with the window.", "") && cancel_first("Close"));
     ww_close(&w);
     gkf_reset(0, 0);
     printf("test_wswell_window: %d checks, %d failed\n", checks, failed);

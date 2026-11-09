@@ -11,11 +11,14 @@ there it tries a column to the left, one to the right, a row up, two left and tw
 order, and stays as it was when none fits.
 
 Time: the piece falls a row every swell_interval(level) milliseconds. When it cannot fall, it has
-landed and sets SW_LOCK_MS later, unless a move or a turn lets it fall again meanwhile. Landing
-again on the row it landed on keeps the time it had there, so a piece cannot be kept from setting
-by sliding it to and fro over a gap; only a lower row gives it a new rest. Down
-moves it a row (1 point) and sets it when it cannot; Space drops it to where it would rest (2
-points a row) and sets it at once. A pause stops the clock, and the time played leaves pauses out.
+landed and sets SW_LOCK_MS later, unless a move or a turn lets it fall again meanwhile. A rest is
+measured by the piece's lowest cell: a piece gets a new rest only when that cell comes to rest
+lower than it ever rested, and otherwise keeps the time of its deepest rest, so neither sliding to
+and fro over a gap nor turning it (a turn keeps the box's middle and may kick it a row up) can keep
+it from setting (the review of 11/05/26). Down moves it a row and sets it when it cannot; Space
+drops it to where it would rest and sets it at once. Each pays for the rows its lowest cell goes
+below the deepest it had been (Down 1 point a row, Space 2), never for a row twice. A pause stops
+the clock, the times of the fall and the rest with it, and the time played leaves pauses out.
 
 Setting a piece writes its cells into the sea; each full row is washed away and the rows above it
 come down. Rows washed at once score the level times 10, 25 or 50 (one, two, three: no piece is
@@ -183,8 +186,21 @@ static void spawn(struct swell *s, unsigned now) {
     s->y = 0;
     s->fall_at = later(now, swell_interval(s->level));
     s->lock_at = 0;
-    s->rest_y = -1;
+    s->rest_low = SW_NO_REST;
+    s->deepest = s->y + p->h - 1;
     if(!swell_fits(s, s->kind, 0, s->x, s->y)) over(s, now);
+}
+
+/* the row of the falling piece's lowest cell */
+static int lowest(const struct swell *s) {
+    return s->y + swell_shape(s->kind, s->turn)->h - 1;
+}
+
+/* the rows its lowest cell has gone below the deepest it had been: the points Down and Space pay for */
+static int deeper(struct swell *s) {
+    int low = lowest(s), rows = low > s->deepest ? low - s->deepest : 0;
+    if(low > s->deepest) s->deepest = low;
+    return rows;
 }
 
 int swell_start(struct swell *s, unsigned now) {
@@ -195,20 +211,20 @@ int swell_start(struct swell *s, unsigned now) {
     return 1;
 }
 
-/* after a fall, a move or a turn: able to fall, the piece has not landed; landed, it sets at the time it first landed
-   on this row, or SW_LOCK_MS from now on a row it never rested on */
+/* after a fall, a move or a turn: able to fall, the piece has not landed; landed with its lowest cell lower than it
+   ever rested, it rests SW_LOCK_MS from now; anywhere else it sets at the time of its deepest rest */
 static void landing(struct swell *s, unsigned now) {
+    int low;
     if(swell_fits(s, s->kind, s->turn, s->x, s->y + 1)) {
         s->lock_at = 0;
         return;
     }
-    if(s->lock_at) return;
-    if(s->y == s->rest_y) s->lock_at = s->rest_at;
-    else {
-        s->lock_at = later(now, SW_LOCK_MS);
-        s->rest_y = s->y;
-        s->rest_at = s->lock_at;
+    low = lowest(s);
+    if(low > s->rest_low) {
+        s->rest_low = low;
+        s->rest_at = later(now, SW_LOCK_MS);
     }
+    s->lock_at = s->rest_at;
 }
 
 /* the swell: the sea a row up, sand with two gaps under it; anything in the top row goes over: the game ends */
@@ -281,6 +297,7 @@ int swell_turn(struct swell *s, int dir, unsigned now) {
             s->turn = t;
             s->x = x + kick[i][0];
             s->y = y + kick[i][1];
+            deeper(s);                  /* a turn can bring the lowest cell a row down: Down does not pay for it again */
             landing(s, now);
             return 1;
         }
@@ -300,7 +317,7 @@ int swell_down(struct swell *s, unsigned now) {
         return 1;
     }
     s->y++;
-    s->score++;
+    s->score += (unsigned)deeper(s);    /* a point for a row it had not been down to */
     s->fall_at = later(now, swell_interval(s->level));
     landing(s, now);
     return 1;
@@ -311,7 +328,7 @@ int swell_drop(struct swell *s, unsigned now) {
     if(s->state != SW_PLAYING) return 0;
     rows = swell_ghost(s) - s->y;
     s->y += rows;
-    s->score += 2u * (unsigned)rows;
+    s->score += 2u * (unsigned)deeper(s);
     set(s, now);
     return rows;
 }
@@ -333,6 +350,7 @@ int swell_tick(struct swell *s, unsigned now) {
             break;
         }
         s->y++;
+        deeper(s);
         s->fall_at = later(s->fall_at, swell_interval(s->level));
         landing(s, now);                /* come to rest by this row: it rests from now */
         changed = 1;
@@ -361,10 +379,11 @@ int swell_pause(struct swell *s, int on, unsigned now) {
         s->played += now - s->since;
         return 1;
     }
-    if(!on && s->state == SW_PAUSED) {  /* the clock goes on where it stopped */
+    if(!on && s->state == SW_PAUSED) {  /* the clock goes on where it stopped: the fall's time and the rest's */
         gone = now - s->paused_at;
         s->fall_at = later(s->fall_at, gone);
         if(s->lock_at) s->lock_at = later(s->lock_at, gone);
+        if(s->rest_low != SW_NO_REST) s->rest_at = later(s->rest_at, gone);
         s->since = now;
         s->state = SW_PLAYING;
         return 1;

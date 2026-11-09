@@ -20,10 +20,11 @@ do (the next row, the end of a rest, the end of the washed rows' moment, the nex
 The board has the keys; losing them (another window in front, a question over this one) pauses
 the game. The Game menu (in the desktop's bar while the window has the focus, by its shortcuts in
 any case) has New game (Ctrl+N), Pause (P, checked while paused) and Close (Ctrl+W); Help has a
-line for the desktop's Help. The close button, Esc and Ctrl+W ask first while a game is under
-way, Cancel first, the game paused meanwhile. A click on the board starts a game that waits, or a
-new one once it is over; a pause goes on only by a key, so a click that brings the window back
-lets nothing fall.
+line for the desktop's Help. The close button, Esc and Ctrl+W, and N and New game, ask first
+while a game is under way, Cancel first, the game paused meanwhile: view.c says which question,
+and the box on the screen follows it (a new box takes the place of one open, which is answered
+as cancelled). A click on the board starts a game that waits, or a new one once it is over; a
+pause goes on only by a key, so a click that brings the window back lets nothing fall.
 */
 
 #include <stdio.h>
@@ -41,7 +42,7 @@ lets nothing fall.
 
 /* the pieces' colours, by kind: pebble, drift, shell, crest, reef, gull, kelp */
 static const unsigned colors[SW_KINDS] = { 0xD0B056, 0x659ECB, 0xEE906D, 0xB8E9D9, 0x7ED48C, 0xB48CC8, 0x3FB8AF };
-static const char *const panel_names[SW_PANEL_LINES] = { "Score", "Rows", "Level", "Time", "Best" };
+static const char *const panel_names[SV_LINES] = { "Score", "Rows", "Level", "Time", "Best" };
 
 /**** drawing ****/
 
@@ -96,36 +97,20 @@ static void panel_text(const struct swwin *w, int i, unsigned now, char *out, in
     }
 }
 
-/* the panel's parts: the next piece's box, and each number's line */
-static int preview_cell(const struct swwin *w) {
-    return w->v.cell < 18 ? w->v.cell : 18;
-}
-
-static void preview_box(const struct swwin *w, int *x, int *y, int *size) {
-    *size = 4 * preview_cell(w) + 8;
-    *x = w->v.px;
-    *y = w->v.py + 20;
-}
-
-static int line_y(const struct swwin *w, int i) {
-    int x, y, size;
-    preview_box(w, &x, &y, &size);
-    return y + size + 12 + i * 36;
-}
-
+/* the panel as view.c lays it out: the next piece's box, and each number's line */
 static void draw_panel(struct gw *win, const struct swwin *w, const struct gk_theme *t, unsigned now) {
     const struct swell_piece *p = swell_shape(w->v.game.next, 0);
     char b[24];
-    int x, y, size, pc = preview_cell(w), i, ox, oy;
+    int x, y, size, pc, i, ox, oy;
     gw_text(win, w->v.px, w->v.py, "Next", t->muted);
-    preview_box(w, &x, &y, &size);
+    sview_preview(&w->v, &x, &y, &size, &pc);
     gw_rect(win, x, y, size, size, t->line);
     gw_rect(win, x + 1, y + 1, size - 2, size - 2, C_WATER);
     ox = x + (size - p->w * pc) / 2;
     oy = y + (size - p->h * pc) / 2;
     for(i = 0; i < p->n; i++) block(win, ox + p->x[i] * pc, oy + p->y[i] * pc, pc, colors[w->v.game.next]);
-    for(i = 0; i < SW_PANEL_LINES; i++) {
-        y = line_y(w, i);
+    for(i = 0; i < SV_LINES; i++) {
+        y = sview_line_y(&w->v, i);
         gw_text(win, w->v.px, y, panel_names[i], t->muted);
         panel_text(w, i, now, b, sizeof(b));
         gw_text(win, w->v.px, y + 16, b, t->ink);
@@ -179,7 +164,7 @@ static void set_text(struct gk_widget *g, const char *s) {
 static void refresh(struct swwin *w, unsigned now) {
     struct gk_view vw;
     char b[SV_STATUS + 16];
-    int x, y, look, i, all, s, size;
+    int x, y, look, i, all, s, size, pc;
     unsigned wait;
     gk_area_view(w->sea, &vw);
     all = fit(w, vw.w, vw.h);
@@ -197,15 +182,15 @@ static void refresh(struct swwin *w, unsigned now) {
     }
     if(w->shown_next != w->v.game.next) {
         w->shown_next = w->v.game.next;
-        preview_box(w, &x, &y, &size);
+        sview_preview(&w->v, &x, &y, &size, &pc);
         if(!all) gk_damage(w->sea, x, y, size, size);
     }
-    for(i = 0; i < SW_PANEL_LINES; i++) {
+    for(i = 0; i < SV_LINES; i++) {
         char line[sizeof(w->panel[0])];
         panel_text(w, i, now, line, sizeof(line));
         if(!strcmp(line, w->panel[i]) && !all) continue;
         memcpy(w->panel[i], line, sizeof(line));
-        if(!all) gk_damage(w->sea, w->v.px, line_y(w, i) + 16, SV_PANEL, 16);
+        if(!all) gk_damage(w->sea, w->v.px, sview_line_y(&w->v, i) + 16, SV_PANEL, 16);
     }
     sview_status(&w->v, b, sizeof(b));
     set_text(w->status, b);
@@ -216,41 +201,40 @@ static void refresh(struct swwin *w, unsigned now) {
     else gk_timer(w->ui, TIMER_SEA, wait < 1 ? 1 : wait > 60000 ? 60000 : (int)wait, 0);
 }
 
-static void ask(struct swwin *w) {
-    gk_confirm(w->ui, BOX_CLOSE, "Close Swell?", "A game is under way: it ends with the window.", "", "Cancel",
-               "Close", NULL);
+/* the question view.c asked for, Cancel first, and the box it is in */
+static int box_of(int asking) {
+    return asking == SV_ASK_NEW ? BOX_NEW : BOX_CLOSE;
 }
 
-static int closing(struct swwin *w, unsigned now) {
-    if(sview_close(&w->v, now) == SV_CLOSE) return 0;
-    ask(w);
-    return 1;
+static void ask(struct swwin *w) {
+    if(w->v.asking == SV_ASK_NEW)
+        gk_confirm(w->ui, BOX_NEW, "Start a new game?", "A game is under way: a new one ends it.", "", "Cancel",
+                   "New game", NULL);
+    else gk_confirm(w->ui, BOX_CLOSE, "Close Swell?", "A game is under way: it ends with the window.", "", "Cancel",
+                    "Close", NULL);
 }
 
 int ww_event(struct swwin *w, const struct gk_event *ev) {
     unsigned now = uptime();
     switch(ev->type) {
     case GK_EV_CLOSE:
-        if(!closing(w, now)) return 0;
+        if(sview_close(&w->v, now) == SV_CLOSE) return 0;
         break;
-    case GK_EV_ANSWER:
-        if(ev->id == BOX_CLOSE && sview_answer(&w->v, ev->value == 1) == SV_CLOSE) return 0;
+    case GK_EV_ANSWER:                                  /* the question on the screen (an older one's answer is not) */
+        if(w->v.asking && ev->id == box_of(w->v.asking) && sview_answer(&w->v, ev->value == 1, now) == SV_CLOSE)
+            return 0;
         break;
     case GK_EV_MENU:
         switch(ev->id) {
-        case MENU_NEW: sview_restart(&w->v, now); break;
+        case MENU_NEW: sview_request(&w->v, now); break;
         case MENU_PAUSE: sview_key(&w->v, 'p', 0, now); break;
-        case MENU_CLOSE: if(!closing(w, now)) return 0; break;
-        case MENU_HELP:
-            gk_message(w->ui, BOX_HELP, "Playing Swell", "Fill rows across the sea: full ones wash away.",
-                       "Arrows move, Up turns, Space drops, P pauses.");
-            break;
+        case MENU_CLOSE: if(sview_close(&w->v, now) == SV_CLOSE) return 0; break;
+        case MENU_HELP: gk_message(w->ui, BOX_HELP, "Playing Swell", WW_HELP_1, WW_HELP_2); break;
         }
         break;
     case GK_EV_KEY:
         if(ev->w && ev->w != w->sea) break;
         if(sview_key(&w->v, ev->value, ev->mods, now) == SV_CLOSE) return 0;
-        if(w->v.asking && !gk_box_open(w->ui)) ask(w);  /* Esc or Ctrl+W during a game */
         break;
     case GK_EV_POINTER:                                 /* a click: a game that waits, or a new one after the end */
         if(ev->w == w->sea && (ev->value & WIN_BUTTON_LEFT) &&
@@ -266,6 +250,10 @@ int ww_event(struct swwin *w, const struct gk_event *ev) {
         gk_redraw(w->sea);
         break;
     }
+    if(w->v.asking != w->asked) {                       /* a question asked, or answered: the box follows */
+        w->asked = w->v.asking;
+        if(w->asked) ask(w);
+    }
     refresh(w, now);
     return 1;
 }
@@ -276,8 +264,7 @@ int ww_open(struct swwin *w, unsigned seed) {
     memset(w, 0, sizeof(*w));
     sview_init(&w->v, seed);
     sview_window(0, 0, &width, &height);
-    w->ui = gk_open_limits("Swell", width, height, SW_W * SV_CELL_MIN + SV_PANEL + 3 * SV_MARGIN,
-                           SW_H * SV_CELL_MIN + 2 * SV_MARGIN + SV_STATUS_H, 0, 0, WIN_RESIZABLE);
+    w->ui = gk_open_limits("Swell", width, height, SV_MIN_W, SV_MIN_H, 0, 0, WIN_RESIZABLE);
     if(!w->ui) return -1;
     root = gk_root(w->ui);
     w->sea = gk_area(root, ID_SEA, GK_FOCUSABLE, draw, w);

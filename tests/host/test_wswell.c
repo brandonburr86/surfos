@@ -8,7 +8,11 @@
    wait. Thousands of random games keeping the sea's rules. The window's model: its sizes, the cells it shows (the
    piece and its ghost), the keys in every state, the focus lost pausing a game, the washed rows' moment, closing
    during a game, the status bar, the session's best. The drawing is checked on the screen (tools/gui_apps_games.py).
-   Built and run by `make unittest`. */
+   The review of 11/05/26: a rest measured by the piece's lowest cell, so turning cannot keep a piece from setting nor
+   Down earn points without end; a rest on the row above the sea; the rest across a pause; a game ended by a piece set
+   above the sea counted, once, through the window's model, in thousands of games; New asking first, and not while
+   the close question is up; a game given up counted; every window size from the smallest keeping the sea and the
+   panel within the board. Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "swell.h"
@@ -16,6 +20,8 @@
 
 static int checks, failed;
 #define CHECK(x) do { checks++; if(!(x)) { failed++; printf("FAIL %s line %d: %s\n", __FILE__, __LINE__, #x); } } while(0)
+
+static struct sview v;                  /* the window's model, for the tests that play through it */
 
 /* a shape as a bitmap of 5 x 5, for comparing turns */
 static unsigned bits(const struct swell_piece *p, int dx, int dy) {
@@ -89,6 +95,18 @@ static void playing(struct swell *s, int kind) {
     swell_new(s, 1);
     s->next = kind;
     swell_start(s, 0);
+}
+
+/* the falling piece put where a test wants it, as if it had come in there: no rest yet, its lowest cell the deepest
+   it has been */
+static void put(struct swell *s, int kind, int turn, int x, int y) {
+    s->kind = kind;
+    s->turn = turn;
+    s->x = x;
+    s->y = y;
+    s->lock_at = 0;
+    s->rest_low = SW_NO_REST;
+    s->deepest = y + swell_shape(kind, turn)->h - 1;
 }
 
 /* the falling piece's cells, written in the sea as if it had set (for the tests' own fills) */
@@ -211,7 +229,87 @@ static void resting(void) {
     swell_move(&s, 1, 1100);                            /* over the gap */
     swell_tick(&s, 1000 + 800);                         /* it falls into it, to the bottom row by row */
     while(s.y < SW_H - 1 && s.pieces == 0) swell_tick(&s, s.fall_at);
-    CHECK(s.y == SW_H - 1 && s.lock_at == s.rest_at && s.rest_y == SW_H - 1 && s.lock_at > 1000 + SW_LOCK_MS);
+    CHECK(s.y == SW_H - 1 && s.lock_at == s.rest_at && s.rest_low == SW_H - 1 && s.lock_at > 1000 + SW_LOCK_MS);
+}
+
+/* the review of 11/05/26: turning a landed piece lifts it (a turn keeps the box's middle, and kicks it a row up when
+   it does not fit there), and Down brought it back: each came as a new rest, and each Down as a point, so a piece
+   could be kept from setting, and score, for ever. A rest is now measured by the lowest cell, and new only lower than
+   any before; Down pays only for rows new to that cell. Also: the row above the sea, a real row, as "no rest yet"
+   (-1), and the rest's time across a pause */
+static void rests(void) {
+    struct swell s;
+    unsigned now, landed, score;
+    int i, cycles, pieces;
+    /* the drift flat on the floor: Up four times (upright a row up, flat, upright, flat), then Down, 150 ms apart, the
+       clock every 10 ms, as a person would: it sets within its first rest; the Downs pay nothing */
+    playing(&s, SW_DRIFT);
+    now = 1000;
+    while(s.y < SW_H - 1) swell_down(&s, now += 10);
+    landed = now;
+    CHECK(s.y == SW_H - 1 && s.lock_at == landed + SW_LOCK_MS && s.rest_low == SW_H - 1 && s.score == SW_H - 1);
+    score = s.score;
+    pieces = s.pieces;
+    for(cycles = 0; cycles < 100 && s.pieces == pieces; cycles++)
+        for(i = 0; i < 5 && s.pieces == pieces; i++) {
+            unsigned end = now + 150;
+            if(i < 4) swell_turn(&s, 1, now);
+            else swell_down(&s, now);
+            while(now < end && s.pieces == pieces) swell_tick(&s, now += 10);
+        }
+    CHECK(s.pieces == pieces + 1 && cycles == 1 && now <= landed + SW_LOCK_MS + 160 && s.score == score);
+    /* the same through the window's model, a step at a time, held as long as it is held: the piece sets in time */
+    sview_init(&v, 1);
+    sview_key(&v, '\r', 0, 1000);
+    put(&v.game, SW_DRIFT, 0, 4, 0);
+    for(now = 1000; v.game.y < SW_H - 1; now += 10) sview_key(&v, SV_DOWN, 0, now);
+    pieces = v.game.pieces;
+    score = v.game.score;
+    for(cycles = 0; cycles < 2000 && v.game.pieces == pieces; cycles++)
+        for(i = 0; i < 5 && v.game.pieces == pieces; i++) {
+            unsigned end = now + 150;
+            sview_key(&v, i < 4 ? SV_UP : SV_DOWN, 0, now);
+            while(now < end && v.game.pieces == pieces) sview_tick(&v, now += 10);
+        }
+    CHECK(v.game.pieces == pieces + 1 && cycles == 1 && v.game.score == score);
+    /* Down pays for a row once: the drift on a floor, upright a row up by a turn's kick, flat again a row up, and Down
+       back to the row it rested on earns nothing (Space's two points a row are paid alike) */
+    playing(&s, SW_DRIFT);
+    put(&s, SW_DRIFT, 0, 4, 6);
+    fill_row(&s, 8, 0, 0);                              /* a floor at row 8 (not full): the drift rests on row 7 */
+    s.score = 0;
+    CHECK(swell_down(&s, 10) == 1 && s.y == 7 && s.score == 1 && s.deepest == 7);
+    CHECK(swell_turn(&s, 1, 20) == 1 && s.turn == 1 && s.y == 5);    /* upright, kicked a row up: rows 5 to 7 */
+    CHECK(swell_turn(&s, 1, 30) == 1 && s.turn == 2 && s.y == 6);    /* flat again, on row 6 */
+    CHECK(swell_down(&s, 40) == 1 && s.y == 7 && s.score == 1);      /* back on row 7: no point again */
+    CHECK(swell_turn(&s, 1, 50) == 1 && s.y == 5 && swell_drop(&s, 60) == 0 && s.score == 1 && s.pieces == 1);
+    /* the row above the sea is a row: a piece landed with its lowest cell there rests its full time, wherever the last
+       piece rested (the old "no rest yet" was -1, this row) */
+    playing(&s, SW_DRIFT);
+    fill_row(&s, 0, 0, 0);                              /* the top row full but its first cell */
+    put(&s, SW_DRIFT, 0, 4, -1);
+    s.rest_at = 7;                                      /* what a piece before it left */
+    swell_tick(&s, 1000);
+    CHECK(s.rest_low == -1 && s.lock_at == 1000 + SW_LOCK_MS && s.state == SW_PLAYING);
+    CHECK(swell_tick(&s, 1000 + SW_LOCK_MS - 1) == 0 && s.state == SW_PLAYING);
+    CHECK(swell_tick(&s, 1000 + SW_LOCK_MS) == 1 && s.state == SW_OVER && s.pieces == 0);  /* set above the sea */
+    /* the rest across a pause: landed at 1000, paused at 1100 for a minute; off the ledge and back, it sets at its rest
+       moved by the pause, not at once */
+    playing(&s, SW_PEBBLE);
+    fill_row(&s, 10, 7, 8);
+    put(&s, SW_PEBBLE, 0, 5, 9);
+    swell_tick(&s, 1000);
+    CHECK(s.lock_at == 1000 + SW_LOCK_MS && s.rest_at == s.lock_at);
+    swell_pause(&s, 1, 1100);
+    swell_pause(&s, 0, 61100);
+    CHECK(s.lock_at == 61000 + SW_LOCK_MS && s.rest_at == s.lock_at);
+    swell_move(&s, 1, 61200);
+    swell_move(&s, 1, 61210);                           /* over the gap: it could fall */
+    CHECK(s.lock_at == 0 && s.x == 7);
+    swell_move(&s, -1, 61220);
+    CHECK(s.lock_at == 61000 + SW_LOCK_MS);
+    CHECK(swell_tick(&s, 61000 + SW_LOCK_MS - 1) == 0 && s.pieces == 0);
+    CHECK(swell_tick(&s, 61000 + SW_LOCK_MS) == 1 && s.pieces == 1);
 }
 
 static void washing(void) {
@@ -419,8 +517,6 @@ static void random_games(void) {
 
 /**** the window's model ****/
 
-static struct sview v;
-
 static void status_is(const char *want) {
     char t[160];
     sview_status(&v, t, sizeof(t));
@@ -443,9 +539,32 @@ static void window(void) {
     sview_window(958, 457, &w, &h);
     CHECK(w == SW_W * 22 + SV_PANEL + 30 && h == SW_H * 22 + 20 + SV_STATUS_H);
     sview_window(638, 317, &w, &h);
+    CHECK(w == SV_MIN_W && h == SV_MIN_H);              /* 15-pixel cells: no narrower than the smallest window */
     CHECK(sview_layout(&v, w, h - SV_STATUS_H) == 1 && v.cell == 15 && sview_layout(&v, w, h - SV_STATUS_H) == 0);
+    sview_window(300, 200, &w, &h);
+    CHECK(w == SV_MIN_W && h == SV_MIN_H);
     sview_layout(&v, 100, 100);
     CHECK(v.cell == SV_CELL_MIN && v.sx == SV_MARGIN);
+    /* the review of 11/05/26: at its smallest the window had the panel's last line (the best) under the board. Every
+       window from the smallest up keeps the sea, and the next piece and the five lines beside it, within the board */
+    {
+        int ok = 1, bh, x, y, size, pc;
+        for(w = SV_MIN_W; w <= 1100; w += 3) for(h = SV_MIN_H; h <= 760; h += 3) {
+            bh = h - SV_STATUS_H;
+            sview_layout(&v, w, bh);
+            sview_preview(&v, &x, &y, &size, &pc);
+            if(v.cell < SV_CELL_MIN || v.sx < SV_MARGIN || v.sy < SV_MARGIN || v.sy + SW_H * v.cell > bh - SV_MARGIN ||
+               v.sx + SW_W * v.cell + SV_MARGIN > v.px || v.px + SV_PANEL > w || x != v.px || y + size > bh ||
+               4 * pc + 8 != size || sview_line_y(&v, SV_LINES - 1) + 32 > bh) {
+                if(ok) printf("  the window %d x %d: cell %d, the sea at %d,%d, the last line ends at %d\n", w, h, v.cell,
+                              v.sx, v.sy, sview_line_y(&v, SV_LINES - 1) + 32);
+                ok = 0;
+            }
+        }
+        CHECK(ok);
+        sview_layout(&v, SV_MIN_W, SV_MIN_H - SV_STATUS_H);
+        CHECK(v.cell == 15 && sview_line_y(&v, SV_LINES - 1) + 32 <= SV_MIN_H - SV_STATUS_H);
+    }
 }
 
 static void keys(void) {
@@ -476,8 +595,11 @@ static void keys(void) {
     n = v.game.y;
     CHECK(sview_key(&v, SV_DOWN, 0, 1000) == SV_DRAW && v.game.y == n + 1);
     CHECK(sview_key(&v, 'q', 0, 1000) == 0);
-    CHECK(sview_key(&v, 'n', 0, 1000) == SV_DRAW && v.game.state == SW_PLAYING);  /* not in the middle of a game */
-    status_is("P pauses the game; then N starts a new one");
+    /* N in the middle of a game: paused, and asked first; Cancel leaves it paused, P goes on */
+    CHECK(sview_key(&v, 'n', 0, 1000) == SV_DRAW && v.asking == SV_ASK_NEW && v.game.state == SW_PAUSED);
+    CHECK(sview_key(&v, ' ', 0, 1000) == 0 && sview_answer(&v, 0, 1000) == SV_DRAW && !v.asking);
+    status_is("Paused: P or Enter goes on, N starts again");
+    CHECK(sview_key(&v, 'p', 0, 1000) == SV_DRAW && v.game.state == SW_PLAYING);
     n = v.game.pieces;
     CHECK(sview_key(&v, ' ', 0, 1000) == SV_DRAW && v.game.pieces == n + 1);
     CHECK(sview_key(&v, ' ', SV_REPEAT, 1000) == 0 && v.game.pieces == n + 1);    /* Space held: one drop */
@@ -498,14 +620,27 @@ static void keys(void) {
     CHECK(sview_key(&v, 'P', 0, 4000) == SV_DRAW && v.game.state == SW_PLAYING);
     CHECK(swell_ms(&v.game, 4000) == 1500);             /* 1000 to 2000, 3000 to 3500 */
     /* closing during a game pauses and asks; Cancel leaves it paused; the question has the keys */
-    CHECK(sview_key(&v, 27, 0, 5000) == SV_DRAW && v.asking && v.game.state == SW_PAUSED);
-    CHECK(sview_key(&v, 'p', 0, 5000) == 0 && sview_answer(&v, 0) == SV_DRAW && !v.asking && v.game.state == SW_PAUSED);
-    CHECK(sview_close(&v, 5000) == SV_DRAW && v.asking && sview_answer(&v, 1) == SV_CLOSE);
-    v.asking = 0;
-    CHECK(sview_key(&v, 'N', 0, 6000) == SV_DRAW && v.game.state == SW_PLAYING && v.game.pieces == 0);   /* paused: N */
+    CHECK(sview_key(&v, 27, 0, 5000) == SV_DRAW && v.asking == SV_ASK_CLOSE && v.game.state == SW_PAUSED);
+    CHECK(sview_key(&v, 'p', 0, 5000) == 0 && sview_answer(&v, 0, 5000) == SV_DRAW && !v.asking &&
+          v.game.state == SW_PAUSED);
+    CHECK(sview_close(&v, 5000) == SV_DRAW && v.asking == SV_ASK_CLOSE && sview_answer(&v, 1, 5000) == SV_CLOSE);
+    CHECK(sview_answer(&v, 1, 5000) == 0);              /* no question up: an answer does nothing */
+    /* N while paused asks too; yes: a new game at once, the one given up counted with its score (as Mines and
+       Solitaire count a game left for a new one) */
+    n = (int)v.game.score;
+    CHECK(n > 0 && sview_key(&v, 'N', 0, 6000) == SV_DRAW && v.asking == SV_ASK_NEW);
+    CHECK(sview_answer(&v, 1, 6000) == SV_DRAW && v.game.state == SW_PLAYING && v.game.pieces == 0 && v.games == 1 &&
+          v.best == (unsigned)n && !v.asking);
     sview_key(&v, ' ', 0, 6000);
-    sview_restart(&v, 6000);                            /* the menu's New game: at once, in the middle of one */
-    CHECK(v.game.state == SW_PLAYING && v.game.pieces == 0 && v.games == 0);
+    /* the Game menu's New game asks too; the close button over that question asks its own instead; and New while the
+       close question is up is not taken (it started a game under the question, Cancel then said "Paused") */
+    CHECK(sview_request(&v, 6000) == SV_DRAW && v.asking == SV_ASK_NEW && v.game.state == SW_PAUSED);
+    CHECK(sview_close(&v, 6000) == SV_DRAW && v.asking == SV_ASK_CLOSE);
+    n = v.game.pieces;
+    CHECK(n == 1 && sview_request(&v, 6000) == 0 && v.asking == SV_ASK_CLOSE && v.game.pieces == n);
+    CHECK(sview_answer(&v, 0, 6000) == SV_DRAW && v.game.state == SW_PAUSED && v.game.pieces == n && v.games == 1);
+    status_is("Paused: P or Enter goes on, N starts again");
+    CHECK(sview_key(&v, '\r', 0, 6000) == SV_DRAW && v.game.state == SW_PLAYING);
     /* the wait: the next row, the second shown, the washed rows' moment */
     CHECK(sview_wait(&v, 6000) <= 800 && sview_wait(&v, 6000) > 0);
     sview_time(0, t, sizeof(t));
@@ -530,14 +665,11 @@ static void ends(void) {
     int x;
     sview_init(&v, 8);
     sview_key(&v, ' ', 0, 0);
-    CHECK(sview_close(&v, 10) == SV_DRAW && sview_answer(&v, 0) == SV_DRAW);
+    CHECK(sview_close(&v, 10) == SV_DRAW && sview_answer(&v, 0, 10) == SV_DRAW);
     sview_key(&v, 'p', 0, 10);
     /* the end: the top row blocked, a drop: the next cannot come in */
     for(x = 0; x < SW_W; x++) if(x != 0) v.game.sea[3][x] = SW_SAND;
-    v.game.kind = SW_PEBBLE;
-    v.game.turn = 0;
-    v.game.x = 6;
-    v.game.y = 0;
+    put(&v.game, SW_PEBBLE, 0, 6, 0);
     v.game.next = SW_GULL;
     v.game.score = 120;
     v.game.rows = 3;
@@ -548,12 +680,8 @@ static void ends(void) {
     CHECK(sview_key(&v, '\n', 0, 3000) == SV_DRAW && v.game.state == SW_PLAYING && v.game.score == 0);
     /* a lower score: the best stays; the end by the clock counts too */
     for(x = 0; x < SW_W; x++) if(x != 0) v.game.sea[3][x] = SW_SAND;
-    v.game.kind = SW_PEBBLE;
-    v.game.turn = 0;
-    v.game.x = 6;
-    v.game.y = 2;
+    put(&v.game, SW_PEBBLE, 0, 6, 2);
     v.game.next = SW_GULL;
-    v.game.lock_at = 0;
     v.game.fall_at = 3000 + 800;
     sview_tick(&v, 3800);                               /* it cannot fall: landed */
     CHECK(v.game.lock_at == 3800 + SW_LOCK_MS);
@@ -563,6 +691,50 @@ static void ends(void) {
     status_is("Over the top. Enter or N starts again");
     CHECK(sview_wait(&v, 0) == 0xFFFFFFFFu);
     CHECK(sview_key(&v, 'n', 0, 4000) == SV_DRAW && v.game.state == SW_PLAYING && v.games == 2);
+}
+
+/* the review of 11/05/26: a piece set above the sea ends the game without setting, and the window's model, which
+   looked at the pieces set, missed that end: no game counted, the status bar not told (103 of 2,000 games). The change
+   to over is what counts now, once, whatever brought it: Space, the clock, and every game of hundreds played through
+   the model as the review played them */
+static void above_the_sea(void) {
+    unsigned r = swell_seed(99), now = 20000;
+    int g, i, before, ok = 1;
+    sview_init(&v, 3);
+    sview_key(&v, '\r', 0, 1000);
+    fill_row(&v.game, 1, 0, 0);                         /* row 1 full but its first cell */
+    put(&v.game, SW_DRIFT, 1, 5, -2);                   /* upright on it, rows -2 to 0: two cells above the sea */
+    v.game.score = 30;
+    CHECK(sview_key(&v, ' ', 0, 2000) == SV_DRAW && v.game.state == SW_OVER && v.game.pieces == 0 && v.games == 1);
+    CHECK(v.best == 30);
+    status_is("Over the top: 30 points, the best yet. Enter: again");
+    CHECK(sview_tick(&v, 9000) == 0 && sview_key(&v, SV_LEFT, 0, 9000) == 0 && v.games == 1);    /* counted once */
+    /* by the clock: landed above the sea, its rest over */
+    CHECK(sview_key(&v, '\r', 0, 10000) == SV_DRAW && v.game.state == SW_PLAYING);
+    fill_row(&v.game, 1, 0, 0);
+    put(&v.game, SW_DRIFT, 1, 5, -2);
+    sview_tick(&v, 10000 + 800);                        /* it cannot fall: it rests */
+    CHECK(v.game.lock_at == 10800 + SW_LOCK_MS && v.games == 1);
+    CHECK(sview_tick(&v, 10800 + SW_LOCK_MS) == SV_DRAW && v.game.state == SW_OVER && v.games == 2);
+    status_is("Over the top: 0 points (best 30). Enter: again");
+    CHECK(sview_tick(&v, 12000) == 0 && v.games == 2);
+    /* games played through the model with random keys and the clock, as the review played them: each ends, and is
+       counted once */
+    for(g = 0; g < 500; g++) {
+        before = v.games;
+        sview_key(&v, '\r', 0, now);
+        for(i = 0; i < 100000 && v.game.state == SW_PLAYING; i++) {
+            unsigned k = swell_below(&r, 10);
+            now += swell_below(&r, 120);
+            if(k < 3) sview_key(&v, SV_UP, 0, now);
+            else if(k < 5) sview_key(&v, swell_below(&r, 2) ? SV_LEFT : SV_RIGHT, 0, now);
+            else if(k < 6) sview_key(&v, ' ', 0, now);
+            else if(k < 7) sview_key(&v, SV_DOWN, 0, now);
+            else sview_tick(&v, now);
+        }
+        if(v.game.state != SW_OVER || v.games != before + 1) ok = 0;
+    }
+    CHECK(ok && v.games == 2 + 500);
 }
 
 int main(void) {
@@ -575,9 +747,11 @@ int main(void) {
     the_swell();
     ending_and_pause();
     random_games();
+    rests();
     window();
     keys();
     ends();
+    above_the_sea();
     printf("test_wswell: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 }
