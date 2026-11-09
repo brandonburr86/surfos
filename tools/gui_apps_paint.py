@@ -11,9 +11,9 @@ the keyboard) shows the picture twice as large; Ctrl+0 goes back to 100%. F, the
 and a click in the yellow quadrant fill it white; Ctrl+Shift+S asks the desktop's Save as chooser (its own title looked
 for anywhere in its bar), in the picture's folder, and copy.png typed saves a PNG. Ctrl+O and bad.png, which is no
 picture: Paint says it cannot open it, and the picture stays. A stroke more, and the close button asks first: Esc keeps
-the window; then File > Close (Ctrl+W) asks again, and Don't save closes it (the close button pressed a second time is
-the desktop's "End the program?", shell/guiclient.c's client_close(), whatever the program answered the first). Files
-ejects the stick and closes. The host reads sea.bmp and copy.png back: the stroke black, the quadrant white in the PNG
+the window; the close button again asks again, Paint's question and not the desktop's "End the program?" (desk's fix
+round, 1447a4c2, sends a program that reads its events the close again); Esc; then File > Close (Ctrl+W) asks too, and
+Don't save closes it. Files ejects the stick and closes. The host reads sea.bmp and copy.png back: the stroke black, the quadrant white in the PNG
 alone. Everything is left as it was found, also after a failure.
 """
 import struct
@@ -264,8 +264,15 @@ def checks(d):
         d.key('esc')
         d.visible('paint: Esc cancels: the window stays', lambda s: not box(d, 'Save the changes?')(s) and
                   titled(d, '*copy.png - Paint')(s))
-        d.key('ctrl-w')                                 # the close button, pressed a second time, is the desktop's
-        d.visible('paint: File > Close (Ctrl+W) asks again', box(d, 'Save the changes?'))   # "End the program?"
+        close_button(d)
+        d.move(*PARK)
+        d.visible('paint: its close button again asks again, Paint\'s question, not "End the program?"',
+                  lambda s: box(d, 'Save the changes?')(s) and not dialog_open(d, s), 'guiapps-paint-close-again.png')
+        d.key('esc')
+        d.visible('paint: Esc cancels again', lambda s: not box(d, 'Save the changes?')(s) and
+                  titled(d, '*copy.png - Paint')(s))
+        d.key('ctrl-w')
+        d.visible('paint: File > Close (Ctrl+W) asks too', box(d, 'Save the changes?'))
         d.key('right')
         d.key('ret')
         d.visible('paint: Don\'t save closes it', gone(d, '*copy.png - Paint'))
@@ -315,8 +322,8 @@ def tidy(d, state):
             d.key('ret')
             if d.vm.wait_screen(none, 3, interval=0.2) is not None:
                 break
-        if d.vm.wait_screen(none, 1, interval=0.2) is None:   # still there: the desktop's End the program?, as kit's
-            close_button(d)                             # tidy does
+        if d.vm.wait_screen(none, 1, interval=0.2) is None:   # still there: the close button twice, then Right and
+            close_button(d)                             # Enter (Don't save; or End, on a desktop before desk's fix)
             close_button(d)
             d.move(*PARK)
             d.key('right')
