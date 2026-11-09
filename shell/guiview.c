@@ -81,7 +81,7 @@ static void viewer_replace(struct gui_state *g, bool full) {
     if(v->asked_pid > 0 && client_of_pid(g, v->asked_pid) >= 0) viewer_end(g, v->asked_pid);
     v->asked_pid = 0;
     if(pid <= 0) return;
-    if(c && !c->closing && !full) {
+    if(c && !c->closes && !c->st.close_waiting && !full) {   /* (the integration: desk's closes and close_waiting) */
         client_close(g, id);
         v->asked_pid = pid;
         v->asked_at = g->now;
