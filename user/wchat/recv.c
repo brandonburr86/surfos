@@ -118,9 +118,9 @@ static int next_name(const char **list, char *out, int size) {
 static void ctcp(struct chat *c, const struct irc_msg *m, int notice, const char *cmd, const char *arg, int arglen) {
     irc_text(text2, IRC_TEXT_MAX, arg, arglen);
     if(!strcmp(cmd, "DCC"))
-        chat_say(c, NULL, LN_INFO, 0, "", "%s offered a DCC connection (%s), which Chat does not make", sender(m), text2);
+        chat_say(c, NULL, LN_INFO, 0, "", "A DCC connection offered by %s (%s): Chat does not make them", sender(m), text2);
     else if(notice) chat_say(c, NULL, LN_NOTICE, 0, sender(m), "CTCP %s reply: %s", cmd, text2);
-    else chat_say(c, NULL, LN_INFO, 0, "", "%s sent a CTCP %s request, which Chat does not answer", sender(m), cmd);
+    else chat_say(c, NULL, LN_INFO, 0, "", "A CTCP %s request from %s: Chat does not answer them", cmd, sender(m));
 }
 
 static void on_message(struct chat *c, const struct irc_msg *m, int notice) {
@@ -401,7 +401,7 @@ static void nick_refused(struct chat *c, const struct irc_msg *m) {
     const char *tried = m->argc >= 2 ? m->argv[1] : "";
     rest(m, 2, text2);
     if(c->state != CHAT_REGISTERING) {
-        chat_say(c, active(c), LN_ERROR, 0, "", "%s: %s", clean(text, tried), text2);
+        chat_say(c, active(c), LN_ERROR, 0, "", "The server refused the nick %s: %s", clean(text, tried), text2);
         return;
     }
     if(irc_casecmp(c->casemap, tried, c->nick)) return;    /* about a nick tried before: the answer to ours comes */
@@ -411,10 +411,10 @@ static void nick_refused(struct chat *c, const struct irc_msg *m) {
         return;
     }
     if(c->tries < 0 || !next_nick(c)) {
-        chat_say(c, NULL, LN_ERROR, 0, "", "%s is taken too: choose another nick with /nick NAME", clean(text, tried));
+        chat_say(c, NULL, LN_ERROR, 0, "", "The nick %s is taken too: choose another with /nick NAME", clean(text, tried));
         return;
     }
-    chat_say(c, NULL, LN_INFO, 0, "", "%s is taken: trying %s", clean(text, tried), c->nick);
+    chat_say(c, NULL, LN_INFO, 0, "", "The nick %s is taken: trying %s", clean(text, tried), c->nick);
     mid[0] = c->nick;
     chat_queue(c, 1, "NICK", mid, 1, NULL);
 }
@@ -659,7 +659,8 @@ static void numeric(struct chat *c, const struct irc_msg *m) {
     case 301:                                       /* RPL_AWAY */
         if(m->argc < 3) break;
         r = chat_room_of(c, ROOM_QUERY, m->argv[1]);
-        chat_say(c, r ? r : active(c), LN_INFO, 0, "", "%s is away: %s", clean(text, m->argv[1]), clean(text2, m->argv[2]));
+        chat_say(c, r ? r : active(c), LN_INFO, 0, server_of(c, m), "%s is away: %s", clean(text, m->argv[1]),
+                 clean(text2, m->argv[2]));
         return;
     case 324:                                       /* RPL_CHANNELMODEIS */
         if(m->argc < 3 || !(r = chat_room_of(c, ROOM_CHANNEL, m->argv[1]))) break;
@@ -763,10 +764,10 @@ static void dispatch(struct chat *c, const struct irc_msg *m) {
     else if(!strcmp(cmd, "CAP")) on_cap(c, m);
     else if(!strcmp(cmd, "AUTHENTICATE")) on_authenticate(c, m);
     else if(!strcmp(cmd, "INVITE") && m->argc >= 2)
-        chat_say(c, active(c), LN_INFO, LF_HIGHLIGHT, "", "%s invites you to %s (to go: /join %s)", sender(m),
+        chat_say(c, active(c), LN_INFO, LF_HIGHLIGHT, "", "An invitation from %s to %s (to go: /join %s)", sender(m),
                  clean(text, m->argv[1]), text);
     else if(!strcmp(cmd, "KILL") && m->argc >= 1 && chat_is_me(c, m->argv[0]))
-        chat_say(c, NULL, LN_ERROR, 0, "", "%s disconnected you: %s", sender(m), rest(m, 1, text));
+        chat_say(c, NULL, LN_ERROR, 0, "", "You were disconnected by %s: %s", sender(m), rest(m, 1, text));
     else if(!strcmp(cmd, "ERROR"))
         chat_say(c, NULL, c->state == CHAT_QUITTING ? LN_INFO : LN_ERROR, 0, "", "The server ends the connection: %s",
                  rest(m, 0, text));

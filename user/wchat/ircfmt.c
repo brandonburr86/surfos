@@ -108,6 +108,7 @@ int irc_text(char *out, int size, const char *in, int n) {
         }
         if(c == '\t') c = ' ';
         if(hidden(c)) continue;
+        if(c == 0x224b || c == 0x2248) c = '~';     /* the console draws both as SurfOS's mark, the Chat's own lines' */
         k = encode(c, b);
         if(o + k > size - 1) break;
         memcpy(out + o, b, (size_t)k);

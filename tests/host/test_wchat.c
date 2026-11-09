@@ -842,6 +842,138 @@ static void review(void) {
     out();
 }
 
+/* 11/09/26, the re-review: a line with the Chat's mark (no sender, info or error) begins with words the Chat chose, so no
+   server can make one of the Chat's own. The Chat's own lines are gathered from sessions that make them; then each, cut
+   at its first ": " where a server's parameters could make its two halves, goes to every numeric and to the commands, as
+   the parameters, in the trailing one whole, and from a sender named as its first word; every marked line that comes of
+   it must differ from every one of the Chat's own. And the mark's glyph is no character of a server's text (L2) */
+#define OWN_MAX 64
+static char own[OWN_MAX][IRC_TEXT_MAX];
+static int nown;
+
+static void gather(void) {
+    int i, k, j;
+    for(i = 0; i < C.rooms; i++)
+        for(k = 0; k < C.room[i]->count; k++) {
+            const struct chat_line *l = chat_line_at(C.room[i], k);
+            if(l->from[0] || (l->kind != LN_INFO && l->kind != LN_ERROR)) continue;
+            for(j = 0; j < nown && strcmp(own[j], l->text); j++) ;
+            if(j == nown && nown < OWN_MAX) snprintf(own[nown++], IRC_TEXT_MAX, "%s", l->text);
+        }
+}
+
+static void registered(void) {
+    fresh();
+    connect_as("me", CHAT_PASS_NONE, NULL, 1);
+    out();
+    server(":irc.test CAP * LS :x\r\n:irc.test 001 me :hi\r\n:me!u@h JOIN #c\r\n");
+    out();
+}
+
+static unsigned long marks[CHAT_ROOMS][2];      /* each room's id and its seq before a server's line */
+static int nmarks, bad;
+static char first_bad[IRC_TEXT_MAX + 64];
+
+static void feed(const char *line) {
+    int i, j, k;
+    nmarks = 0;
+    for(i = 0; i < C.rooms; i++, nmarks++) {
+        marks[i][0] = C.room[i]->id;
+        marks[i][1] = C.room[i]->seq;
+    }
+    server(line);
+    out();
+    for(i = 0; i < C.rooms; i++) {
+        unsigned long from = 0;
+        for(j = 0; j < nmarks; j++) if(marks[j][0] == C.room[i]->id) from = marks[j][1];
+        for(k = 0; k < C.room[i]->count; k++) {
+            const struct chat_line *l = chat_line_at(C.room[i], k);
+            if(l->seq < from || l->from[0] || (l->kind != LN_INFO && l->kind != LN_ERROR)) continue;
+            for(j = 0; j < nown; j++)
+                if(!strcmp(l->text, own[j]) && !bad++) snprintf(first_bad, sizeof(first_bad), "%s <- %s", l->text, line);
+        }
+    }
+    if(C.ending || C.state != CHAT_ONLINE) registered();
+}
+
+static void own_lines(void) {
+    static const char *const cmds[] = { "PRIVMSG", "NOTICE", "INVITE", "KILL", "ERROR", "WALLOPS", "KICK", "PART", "QUIT",
+                                        "TOPIC", "MODE", "JOIN", "NICK", "PING", "PONG", "FOO", "CAP", "AUTHENTICATE" };
+    static char line[4 * IRC_TEXT_MAX];
+    char text[64];
+    int j, n, k;
+    /* the Chat's own lines, from sessions that make them */
+    fresh();
+    connect_as("me", CHAT_PASS_NONE, NULL, 1);
+    chat_down(&C, "the server closed the connection");
+    gather();
+    fresh();
+    connect_as("me", CHAT_PASS_SERVER, "made-up", 0);
+    C.now += CHAT_CAP_MS;
+    chat_tick(&C);
+    gather();
+    fresh();
+    connect_as("me", CHAT_PASS_SASL, "made-up", 1);
+    server(":irc.test CAP * LS :sasl\r\n");
+    C.now += CHAT_CAP_MS;
+    chat_tick(&C);
+    gather();
+    registered();
+    server(":irc.test 433 me me_ :taken\r\n:irc.test 432 me x :bad\r\n");
+    chat_input(&C, "/part #nowhere");
+    chat_input(&C, "/msg");
+    chat_quit(&C, NULL);
+    C.now += CHAT_QUIT_MS;
+    chat_tick(&C);
+    chat_down(&C, "closed after QUIT");
+    gather();
+    {
+        struct chat_params p;
+        char err[200];
+        fresh();
+        params(&p, "me", CHAT_PASS_NONE, NULL, 1);
+        chat_connect(&C, &p, err, sizeof(err));
+        chat_down(&C, "the connection was not made");
+        gather();
+    }
+    CHECK(nown >= 12);
+    /* each fed to every path a server has */
+    registered();
+    for(j = 0; j < nown; j++) {
+        const char *colon = strstr(own[j], ": ");
+        char head[IRC_TEXT_MAX], tail[IRC_TEXT_MAX], word[IRC_TEXT_MAX];
+        snprintf(head, sizeof(head), "%.*s", colon ? (int)(colon - own[j]) : (int)strlen(own[j]), own[j]);
+        snprintf(tail, sizeof(tail), "%s", colon ? colon + 2 : "");
+        snprintf(word, sizeof(word), "%.*s", (int)strcspn(head, " "), head);
+        for(n = 1; n < 1000; n++) {
+            snprintf(line, sizeof(line), ":irc.test %03d me %s :%s\r\n", n, head, tail);
+            feed(line);
+            snprintf(line, sizeof(line), ":irc.test %03d me :%s\r\n", n, own[j]);
+            feed(line);
+            snprintf(line, sizeof(line), "%03d me %s %s :%s\r\n", n, word, head, tail);
+            feed(line);
+        }
+        for(k = 0; k < (int)(sizeof(cmds) / sizeof(cmds[0])); k++) {
+            snprintf(line, sizeof(line), ":%s!u@h %s me %s :%s\r\n", word, cmds[k], head, tail);
+            feed(line);
+            snprintf(line, sizeof(line), ":%s!u@h %s #c :%s\r\n", word, cmds[k], own[j]);
+            feed(line);
+            snprintf(line, sizeof(line), ":irc.test %s me :%s\r\n", cmds[k], own[j]);
+            feed(line);
+            snprintf(line, sizeof(line), ":%s!u@h PRIVMSG me :\001%s %s\001\r\n", word, cmds[k], own[j]);
+            feed(line);
+        }
+    }
+    if(bad) printf("  a server made the Chat's own line: %s", first_bad);
+    CHECK(bad == 0);
+    /* L2: the console draws U+224B and U+2248 as the mark; in a server's text they are ~ */
+    irc_text(text, sizeof(text), "a\xe2\x89\x8b b\xe2\x89\x88 c", 9 + 2);
+    CHECK(!strcmp(text, "a~ b~ c"));
+    registered();
+    server(":bob!b@h PRIVMSG #c :\xe2\x89\x8b Connected\r\n:irc.test NOTICE me :\xe2\x89\x88 x\r\n");
+    CHECK(!strcmp(said(chat_find(&C, ROOM_CHANNEL, "#c"), 0), "~ Connected") && !strcmp(said(0, 0), "~ x"));
+}
+
 static void messages(void) {
     int r = in_surf(), q;
     server(":bob!b@h PRIVMSG #surf :hi Alice, surf's up\r\n");
@@ -852,8 +984,8 @@ static void messages(void) {
     server(":bob!b@h PRIVMSG #surf :\001ACTION waves at alice\001\r\n");
     CHECK(newest(r, 0)->kind == LN_ACTION && !strcmp(said(r, 0), "waves at alice") && newest(r, 0)->flags == LF_HIGHLIGHT);
     server(":bob!b@h PRIVMSG #surf :\001VERSION\001\r\n:bob!b@h PRIVMSG alice :\001DCC SEND x 1 2 3\001\r\n");
-    CHECK(!strcmp(out(), "") && strstr(said(0, 1), "CTCP VERSION request, which Chat does not answer"));
-    CHECK(strstr(said(0, 0), "DCC connection") && C.rooms == 2);
+    CHECK(!strcmp(out(), "") && !strcmp(said(0, 1), "A CTCP VERSION request from bob: Chat does not answer them"));
+    CHECK(!strncmp(said(0, 0), "A DCC connection offered by bob", 31) && C.rooms == 2);
     server(":bob!b@h NOTICE alice :\001PING 1\001\r\n");
     CHECK(!strcmp(said(0, 0), "CTCP PING reply: 1") && !strcmp(out(), ""));
     server(":bob!b@h PRIVMSG alice :psst\r\n");            /* a query, made for it */
@@ -876,7 +1008,7 @@ static void messages(void) {
     server(":bob!b@h PRIVMSG #surf :\x1b[2J\x03" "4red \x07\xe9t\xe9\r\n");   /* escapes out, codes in, Latin-1 */
     CHECK(!strcmp(said(r, 0), "[2J\x03" "4red \xc3\xa9t\xc3\xa9"));
     server(":bob!b@h INVITE alice :#secret\r\n");
-    CHECK(strstr(said(r, 0), "bob invites you to #secret"));
+    CHECK(strstr(said(r, 0), "An invitation from bob to #secret"));
     chat_select(&C, q);
     CHECK(!C.room[q]->highlight && !C.room[q]->unread && C.active == q);
     server(":bob!b@h PRIVMSG alice :again\r\n");
@@ -1431,6 +1563,7 @@ int main(int argc, char **argv) {
     passwords();
     channels();
     review();
+    own_lines();
     messages();
     pings();
     typing();
