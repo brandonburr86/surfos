@@ -2,8 +2,9 @@
 Solitaire and Swell, each started in the Terminal (wmines &, wsolitaire &, wswell &); the Driver is
 gui_apps_scenario.py's. Each window comes up without the focus, and a click on its title bar gives it the focus.
 Mines: the small field's covered cells and the status bar's line; a click reveals an area, a right-click flags a
-covered cell (its teal pennant); Esc during the game asks first and Enter (Cancel, the first button) keeps it; 3 lays
-the large field out with 24-pixel cells; the close button closes a field not yet begun at once. Solitaire: the stock's
+covered cell (its teal pennant); Esc during the game asks first and Enter (Cancel, the first button) keeps it; 3
+during the game asks first too, and New field (Right, Enter) lays the large field out with 24-pixel cells; the close
+button closes a field not yet begun at once. Solitaire: the stock's
 back, a tableau's face up and the status bar; a click on the stock deals a face to the waste; Space deals another and
 U takes it back; the close button during a game asks, and Close (Right, Enter) ends it. Swell: the band that says
 Enter starts, the panel's Next; Enter lets a piece in at the top, Space drops it to the bottom, P pauses (the band
@@ -140,6 +141,9 @@ def mines(d, grid, state):
     d.visible('games: Enter keeps the game (Cancel is the first button)',
               lambda s: not g.asked('Close Mines?')(s) and g.pixel(s, fx + 4 * cell + 3, fy + 3 * cell + 3) == OPEN)
     d.keys('3')
+    d.visible('games: 3 during a game asks first', g.asked('Start a new field?'))
+    d.key('right')
+    d.key('ret')
     lx, ly = (692 - 28 * 24) // 2, BAR_H + (436 - BAR_H - STATUS_H - 15 * 24) // 2
     d.visible('games: 3 lays the large field out, 28 by 15 with 24-pixel cells',
               lambda s: g.status('80 mines in 28 by 15: click a cell to begin')(s) and

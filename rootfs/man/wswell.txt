@@ -16,14 +16,20 @@ DESCRIPTION
     3 on, every 16 pieces the swell lifts the whole sea a row and leaves
     a row of sand with two gaps under it. Rows washed away at once score
     the level times 10, 25 or 50, and a sea left empty 200 times the
-    level more; Down scores a point a row, Space two. The game ends when
-    a piece has no room to come in, or the sea comes over the top.
+    level more; Down scores a point a row, Space two, for each row the
+    piece's lowest cell had not been down to before. A landed piece
+    gets a new rest only lower than it rested before, so turning it
+    cannot hold it up. The game ends when a piece has no room to come
+    in, sets above the sea, or the sea comes over the top.
 
     It needs a desktop: Apps > Programs > Swell or its tile starts it,
     or wswell & in the desktop's Terminal. The game pauses when its
     window loses the focus. Its Game menu is in the desktop's bar while
-    its window has the focus. The best score lasts while the window is
-    open; nothing is written anywhere.
+    its window has the focus. While a game is under way (playing or
+    paused), a new game and closing pause it and ask first, Cancel
+    first. A game counts once it ends, over the top or given up for a
+    new one; the best score lasts while the window is open; nothing is
+    written anywhere.
 
 KEYS
     Enter, Space    start a game; go on from a pause
@@ -33,12 +39,19 @@ KEYS
     Down            move it a row down; set it once it has landed
     Space           drop it
     P               pause, and go on
-    N               a new game, once a game is paused or over
-    Ctrl+N          a new game at once (Game > New game)
-    Esc, Ctrl+W     close the window, asking first during a game
+    N, Ctrl+N       a new game
+    Esc, Ctrl+W     close the window
 
     Keys come as they are typed: hold Left, Right or Down and the
     keyboard's repeat moves the piece on. No other key repeats.
+
+LIMITS
+    One player, one sea. Only the next piece shows, and there is no
+    piece to hold back. The pieces fall no faster than a row in 100
+    ms, from level 16 on. A held key moves only as fast as the
+    keyboard repeats, and the keys work only while the window has the
+    focus. No sound, no saved games; the best score is the session's
+    and is gone when the window closes.
 
 SEE ALSO
     gui, wmines, wsolitaire

@@ -682,10 +682,13 @@ program with a window of its own, built on the toolkit (`gk.h`): `wmines`, `wsol
 the Terminal (`wmines &`). Each has a Game menu in the desktop's bar while its window has the focus,
 and a line in the desktop's Help on how to play. The windows open at a size that fits a 1920x1080
 screen's desktop, are smaller on a smaller one, and can be resized: the board grows and shrinks with
-them. A game's scores last while its window is open; nothing is written anywhere. Closing a window
-(its close button, Esc, Ctrl+W, Game > Close) asks first while a game is under way, Cancel first.
-A key held down repeats only the arrows (and Down in Swell), so a held key never reveals, flags,
-deals or drops twice.
+them, down to a smallest size where the toolbar, the board and the boxes' lines are whole. A
+game's scores last while its window is open; nothing is written anywhere; a game counts as played
+from its first move, so one given up for a new one counts too. While a game is under way, closing
+the window (its close button, Esc, Ctrl+W, Game > Close) and starting a new one (by a key, the
+toolbar or the Game menu) ask first, Cancel first; a question up has the keys. A key held down
+repeats only the arrows (and Down in Swell), so a held key never reveals, flags, deals or drops
+twice. Each game's manual page says what it cannot do (`man wmines`, LIMITS).
 
 **Mines** is a field of covered cells, some of them mines: reveal every cell that holds none.
 
@@ -702,8 +705,9 @@ deals or drops twice.
   F flags.
 * **What it shows.** The toolbar counts the mines left, less the flags, and the time from the first
   reveal. Covered cells are sand, open ones paper; a flag is a teal pennant; a lost game shows every
-  mine, the one that went off on coral, and crosses out the flags that were wrong. The status bar
-  says what happened, and at its right the games won on the field and its best time.
+  mine (a navy depth charge, an upright drum with two teal hoops), the one that went off in a ring
+  of foam on sky blue, and crosses out the flags that were wrong. The status bar says what happened,
+  and at its right the games won on the field and its best time (a field won in no time has 0:00).
 
 **Solitaire** is Klondike, drawing one card or three.
 
@@ -712,7 +716,9 @@ deals or drops twice.
   alternate colours; only a king, or a run from a king, goes on an empty pile. A face-up run moves
   together, and the card it uncovers turns up by itself. The stock deals one card or three (the
   waste then shows its top three side by side), and takes the waste back as often as you like. A
-  card may come back down from a foundation.
+  card may come back down from a foundation to the piles (not to another foundation).
+* **New deals.** New, N and Ctrl+N deal again; drawing one or three (the toolbar, 1 and 3, the Game
+  menu) deals anew that way. A key that changes the game while a card is dragged lets go of it.
 * **Moving cards.** Drag a card, and the cards on it, to a pile; let go anywhere else and it goes
   back. Or click it: a single card goes to its foundation first, then to the next pile it fits,
   looking right of its own. A click on the stock deals. The keyboard: the arrows choose a card (Up
@@ -734,12 +740,14 @@ deals or drops twice.
   then sets. A row filled across washes away, and the rows above come down: rows washed at once
   score the level times 10, 25 or 50, and an empty sea 200 times the level more. Every 8 rows the
   level rises and the pieces fall faster. From level 3 on, every 16 pieces the swell lifts the sea
-  a row and leaves a row of sand with two gaps under it. The game ends when a piece has no room to
-  come in, or the sea comes over the top.
+  a row and leaves a row of sand with two gaps under it. Down scores a point a row and Space two,
+  for each row the piece's lowest cell had not been down to; a landed piece gets a new rest only
+  lower than it rested, so turning it cannot hold it up. The game ends when a piece has no room to
+  come in, sets above the sea, or the sea comes over the top.
 * **The keys.** Enter or Space starts; Left and Right move, Up or X turns clockwise and Z the other
   way, Down moves a row (and sets a landed piece), Space drops, P pauses. Keys come as they are
-  typed: holding Left, Right or Down moves the piece on with the keyboard's repeat. N starts a new
-  game once one is paused or over; Game > New game (Ctrl+N) at any time. A click on the sea starts
+  typed: holding Left, Right or Down moves the piece on with the keyboard's repeat. N and Game > New
+  game (Ctrl+N) start a new game, during one after pausing it and asking. A click on the sea starts
   a game that waits, or a new one once it is over.
 * **Pauses.** The game pauses when its window loses the focus (a click on another window, a
   question over this one), and waits for P, Enter or Space: a click that brings the window back

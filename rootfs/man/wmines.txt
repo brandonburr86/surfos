@@ -19,9 +19,11 @@ DESCRIPTION
 
     It needs a desktop: Apps > Programs > Mines or its tile starts it,
     or wmines & in the desktop's Terminal. Its Game menu is in the
-    desktop's bar while its window has the focus. The best time of each
-    field and the games won last while the window is open; nothing is
-    written anywhere.
+    desktop's bar while its window has the focus. While a game is under
+    way, a new field (by a key, the toolbar or the menu) and closing ask
+    first, Cancel first. A game counts as played from its first cell
+    revealed. The best time of each field and the games won last while
+    the window is open; nothing is written anywhere.
 
 KEYS
     Click           reveal a cell; on a number, chord
@@ -33,9 +35,16 @@ KEYS
     F               flag it
     N, Ctrl+N       a new field of the same size
     1, 2, 3         a new small, medium or large field
-    Esc, Ctrl+W     close the window, asking first during a game
+    Esc, Ctrl+W     close the window
 
     A key held down repeats only the arrows.
+
+LIMITS
+    Three fields only: no field of your own size or count of mines.
+    No question marks, no pause (the clock runs on while the window is
+    in the background), no undo, no hints, no sound. The record is the
+    session's: it is gone when the window closes, and there is no table
+    of names. The keys work only while the window has the focus.
 
 SEE ALSO
     gui, wsolitaire, wswell
