@@ -1419,19 +1419,40 @@ static void lows(void) {
     clock_t t0;
     double took;
     run(ui);
-    CHECK(pipe(fds) == 0 && gk_watch(ui, fds[0], POLLIN, 77) == 0);
+    /* (the re-review, N2) a watch stays level-triggered until the program unwatches it: data left after a hang-up is
+       told until it is read (a pipe says POLLIN|POLLHUP while data is left and at its end alike) */
+    CHECK(pipe(fds) == 0 && write(fds[1], "abc", 3) == 3 && gk_watch(ui, fds[0], POLLIN, 77) == 0);
     close(fds[1]);
-    run(ui);
-    run(ui);
-    CHECK(count(GK_EV_FD) == 0);                        /* (the first run had it) */
-    gk_watch(ui, fds[0], POLLIN, 77);
-    for(i = 0; i < 3; i++) {
-        run(ui);
-        fd_events += count(GK_EV_FD);
+    {
+        struct gk_event ev;
+        char got3[4];
+        for(i = 0; i < 3; i++) fd_events += gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_FD && ev.id == 77 &&
+                                            ev.x == fds[0] && (ev.value & POLLIN);
+        CHECK(fd_events == 3 && ui->qcount == 0);       /* told at each turn, one at a time */
+        CHECK(read(fds[0], got3, 4) == 3 && read(fds[0], got3, 4) == 0);   /* the data, then its end: */
+        gk_unwatch(ui, fds[0]);                         /* the program's to unwatch */
+        CHECK(gk_next(ui, &ev, 0) == 0);
+        /* two descriptors ready: one event each a turn, never two of one waiting */
+        CHECK(pipe(fds) == 0 && write(fds[1], "x", 1) == 1 && gk_watch(ui, fds[0], POLLIN, 80) == 0);
+        {
+            int more[2], seen80 = 0, seen81 = 0;
+            CHECK(pipe(more) == 0 && write(more[1], "y", 1) == 1 && gk_watch(ui, more[0], POLLIN, 81) == 0);
+            for(i = 0; i < 6; i++) {
+                if(gk_next(ui, &ev, 0) != 1 || ev.type != GK_EV_FD) break;
+                seen80 += ev.id == 80;
+                seen81 += ev.id == 81;
+                CHECK(ui->qcount <= 1);
+            }
+            CHECK(seen80 == 3 && seen81 == 3);
+            gk_unwatch(ui, more[0]);
+            close(more[0]);
+            close(more[1]);
+        }
+        gk_unwatch(ui, fds[0]);
+        close(fds[1]);
     }
-    CHECK(fd_events == 1);
     close(fds[0]);
-    gk_watch(ui, fds[0], POLLIN, 78);                   /* a descriptor that is none: told once, then dropped */
+    gk_watch(ui, fds[0], POLLIN, 78);                   /* a descriptor that is none: told once, its watch gone */
     run(ui);
     CHECK(heard(GK_EV_FD, 78) && (heard(GK_EV_FD, 78)->value & POLLNVAL));
     run(ui);

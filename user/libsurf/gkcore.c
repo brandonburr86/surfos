@@ -994,6 +994,26 @@ static int until_timer(const struct gk *ui, unsigned now) {
     return best;
 }
 
+/* a watch's GK_EV_FD (x: its descriptor): one waits at most, a new one's revents merged into it, so that a program that
+   never unwatches a descriptor at its end costs time, never memory. (The re-review, N2: watches stay level-triggered
+   until gk_unwatch() or a close, POLLHUP or not: SurfOS's pipes and sockets say POLLIN|POLLHUP both while data is left
+   and at the end, so only the program's read() can tell, and an event told once would strand what was left) */
+static void fd_event(struct gk *ui, const struct gk_watch *wa, short revents) {
+    struct gk_event *e;
+    int k;
+    for(k = 0; k < ui->qcount; k++) {
+        e = &ui->queue[(ui->qhead + k) % GK_QUEUE];
+        if(e->type == GK_EV_FD && e->x == wa->fd - 1 && e->id == wa->id) {
+            e->value |= revents;
+            return;
+        }
+    }
+    if((e = gk_post_ev(ui, GK_EV_FD, NULL, revents))) {
+        e->id = wa->id;
+        e->x = wa->fd - 1;
+    }
+}
+
 int gk_watch(struct gk *ui, int fd, short events, int id) {
     int i, slot = -1;
     if(fd < 0) return -1;
@@ -1092,7 +1112,6 @@ static int window_event(struct gk *ui) {
 
 int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
     struct pollfd pf[1 + GK_WATCHES];
-    struct gk_event *e;
     unsigned start = gk_now(), now;
     int i, n, r, wait, t, slot[1 + GK_WATCHES], polled = 0, batches = 0;
     drop_given(ui);
@@ -1143,11 +1162,8 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
         if(pf[0].revents && window_event(ui) < 0) return -1;
         for(i = 1; i < n; i++) {
             if(!pf[i].revents || !ui->watches[slot[i]].fd) continue;
-            if((e = gk_post_ev(ui, GK_EV_FD, NULL, pf[i].revents))) e->id = ui->watches[slot[i]].id;
-            if(pf[i].revents & (POLLNVAL | POLLHUP | POLLERR))
-                ui->watches[slot[i]].fd = 0;            /* (the review, F9) told once: no descriptor, hung up or broken,
-                                                           which poll() would say again for ever (what is left to read
-                                                           is read then, with the event) */
+            fd_event(ui, &ui->watches[slot[i]], pf[i].revents);
+            if(pf[i].revents & POLLNVAL) ui->watches[slot[i]].fd = 0;   /* no descriptor: told once, the watch gone */
         }
         fire(ui, gk_now());                             /* the timers due, after the window and the descriptors were
                                                            looked at (the review: before, a timer due again at once was

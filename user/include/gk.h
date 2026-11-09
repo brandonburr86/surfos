@@ -173,8 +173,11 @@ int gk_flush(struct gk *ui);                    /* paint and present what change
 #define GK_WATCHES 8
 int gk_timer(struct gk *ui, int id, int ms, int repeat);   /* GK_EV_TIMER after ms (again every ms): 0, -1 full */
 void gk_timer_stop(struct gk *ui, int id);
-int gk_watch(struct gk *ui, int fd, short events, int id);   /* (11/09/26: a watch ends by itself once it was told
-                                                               POLLHUP, POLLERR or POLLNVAL: read what is left then) */ /* GK_EV_FD while poll() finds fd ready: 0, -1 full */
+/* a descriptor watched beside the window (poll()'s events; GK_EV_FD with id, x the descriptor, value the revents),
+   level-triggered: told at each turn while it is ready, one event waiting at most. At read() == 0 or an error,
+   gk_unwatch() it (or close it): a pipe or a socket says POLLIN|POLLHUP while data is left and at its end alike. A
+   watch ends by itself only when its descriptor is none (POLLNVAL, told once) */
+int gk_watch(struct gk *ui, int fd, short events, int id); /* GK_EV_FD while poll() finds fd ready: 0, -1 full */
 void gk_unwatch(struct gk *ui, int fd);
 
 /**** the clipboard ****/
