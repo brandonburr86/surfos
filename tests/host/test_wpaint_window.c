@@ -358,8 +358,8 @@ static int exists(const char *path) {
 }
 
 static void files(void) {
-    char path[600];
-    int x, y;
+    char path[600], one[2] = { 0, 0 };
+    int x, y, i;
     paint_new(&w->p, 200, 100);
     run();
     key('b', 0);
@@ -434,8 +434,11 @@ static void files(void) {
     CHECK(gk_box_open(w->ui));
     key(1, WIN_MOD_CTRL);
     snprintf(path, sizeof(path), "%s\n", at("two.bmp"));
-    gkf_type(path);
-    run();
+    for(i = 0; path[i]; i++) {                  /* a key at a time, each read before the next: the fake keeps 64 */
+        one[0] = path[i];                       /* unread, as the kernel does, and a long TMPDIR's path is more */
+        gkf_type(one);
+        run();
+    }
     CHECK(w->p.w == 200 && !strcmp(gkf_title(), "two.bmp - Paint"));
     gkf_lacks(0, 0);
     /* a kind Paint does not write, typed into Save as: refused, saying so */
