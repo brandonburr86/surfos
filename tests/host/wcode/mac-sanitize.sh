@@ -20,12 +20,13 @@ WARN="-Wall -Wextra -Wno-unused-parameter -Wno-sign-compare"
 MODEL="user/wcode/text.c user/wcode/undo.c user/wcode/lex.c user/wcode/syntax.c user/wcode/doc.c user/wcode/find.c \
        user/wcode/grep.c user/wcode/view.c user/wcode/app.c"
 LIBSURF="-ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h"
+HOOKS="-DWC_UNDO_REALLOC=wc_test_realloc -DWC_APP_MALLOC=wc_test_malloc"     # 11/09/26: allocations that fail on request
 export ASAN_OPTIONS=abort_on_error=1
 
 clang $SAN -fno-sanitize=pointer-overflow -w $LIBSURF -include tests/host/text_names.h -c user/libsurf/regex.c -o "$OUT/regex.o"
-clang $SAN $WARN -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL tests/host/wcode/host64.c "$OUT/regex.o" \
+clang $SAN $WARN $HOOKS -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL tests/host/wcode/host64.c "$OUT/regex.o" \
     -o "$OUT/test_wcode"
-clang $SAN $WARN -DWC_MARK_EVERY=3 -DWC_MARK_BYTES=64 -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL \
+clang $SAN $WARN $HOOKS -DWC_MARK_EVERY=3 -DWC_MARK_BYTES=64 -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL \
     tests/host/wcode/host64.c "$OUT/regex.o" -o "$OUT/test_wcode_marks3"
 perl -e 'alarm 1800; exec @ARGV' "$OUT/test_wcode" "$ROUNDS"
 perl -e 'alarm 1800; exec @ARGV' "$OUT/test_wcode_marks3" "$ROUNDS"
@@ -57,7 +58,7 @@ clang $SAN $X86 $WARN -Itests/host/wcode -Itests/host/gk_shim -idirafter user/in
 perl -e 'alarm 600; exec @ARGV' arch -x86_64 "$OUT/test_wcode_win"
 
 clang -O2 -g -w $LIBSURF -include tests/host/text_names.h -c user/libsurf/regex.c -o "$OUT/regex_fast.o"
-clang -O2 -g $WARN -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL tests/host/wcode/host64.c \
+clang -O2 -g $WARN $HOOKS -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $MODEL tests/host/wcode/host64.c \
     "$OUT/regex_fast.o" -o "$OUT/test_wcode_fast"
 perl -e 'alarm 600; exec @ARGV' "$OUT/test_wcode_fast" speed
 echo "mac-sanitize: all passed, binaries in $OUT"

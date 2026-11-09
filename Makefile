@@ -1181,7 +1181,8 @@ WCODE_SIM_OBJ = $(addprefix $(BUILD)/host/wcsim/,text.o undo.o lex.o syntax.o do
 $(BUILD)/host/test_wcode: tests/host/test_wcode.c $(WCODE_MODEL) $(WCODE_HDRS) $(BUILD)/host/text/regex.o \
                           $(BUILD)/host/libsurf/ctype.o $(BUILD)/host/libsurf/string.o
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/wcode -Iuser/wcode tests/host/test_wcode.c $(WCODE_MODEL) $(filter %.o,$^) -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -DWC_UNDO_REALLOC=wc_test_realloc -DWC_APP_MALLOC=wc_test_malloc -Itests/host/wcode \
+	    -Iuser/wcode tests/host/test_wcode.c $(WCODE_MODEL) $(filter %.o,$^) -o $@
 $(BUILD)/host/wcsim/%.o: user/wcode/%.c $(WCODE_HDRS) user/bin/saveutil.h tests/host/sim_names.h tests/host/libsurf_names.h
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $< (sim)"

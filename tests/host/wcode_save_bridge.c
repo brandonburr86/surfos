@@ -7,14 +7,17 @@
 #include "wcode_sim.h"
 
 static struct wc_pool pool = { 0, WC_POOL_MAX };
-static struct wc_doc doc;
-static int live;
+static struct wc_doc docs[2];                   /* 11/09/26: two, as two windows (or tabs) of one file would be */
+static int live[2], cur;
+#define doc docs[cur]
 
 static void fresh(void) {
-    if(live) wc_doc_free(&doc);
+    if(live[cur]) wc_doc_free(&doc);
     if(wc_doc_init(&doc, &pool) < 0) __builtin_trap();
-    live = 1;
+    live[cur] = 1;
 }
+
+void wcs_use(int i) { cur = i ? 1 : 0; }
 
 int wcs_open(const char *path) {
     int r;
@@ -37,6 +40,9 @@ void wcs_type(const char *s) {
     }
 }
 
+void wcs_caret(unsigned pos) { wc_doc_select(&doc, pos, pos); }
+unsigned wcs_len(void) { return doc.t.len; }
+void wcs_back(void) { wc_doc_backspace(&doc, 0); }
 int wcs_save(const char *to) { return wc_file_save(&doc, to); }
 const char *wcs_msg(void) { return doc.msg; }
 int wcs_modified(void) { return wc_doc_modified(&doc); }
@@ -48,3 +54,5 @@ int wcs_lang(void) { return doc.lang; }
 int wcs_crlf(void) { return doc.crlf; }
 int wcs_rescue(char *out, unsigned size) { return wc_file_rescue(&doc, out, size); }
 void wcs_undo(void) { wc_doc_undo(&doc, 0); }
+int wcs_disk_changed(void) { return doc.disk_changed; }
+void wcs_overwrite(void) { doc.overwrite = 1; }

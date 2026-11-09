@@ -20,5 +20,13 @@ int wcs_lang(void);
 int wcs_crlf(void);
 int wcs_rescue(char *out, unsigned size);               /* the window gone: the text beside the file */
 void wcs_undo(void);
+/* 11/09/26 (the review): which of two documents the calls are for (0 or 1); the caret, the text's bytes, Backspace;
+   whether the last save was refused because the file changed on the disk since, and the person's "save over it" */
+void wcs_use(int i);
+void wcs_caret(unsigned pos);
+unsigned wcs_len(void);
+void wcs_back(void);
+int wcs_disk_changed(void);
+void wcs_overwrite(void);
 
 #endif

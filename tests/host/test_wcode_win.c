@@ -46,9 +46,18 @@ static void mput(const char *path, const char *data) {
     snprintf(f->data, sizeof(f->data), "%s", data);
 }
 
+static char *bigtext;                   /* 11/09/26: /m/big.c, 4 MB of C whose first line opens a comment */
+static unsigned bign;
+static int disk_changes;                /* saves to refuse as a file another program saved since */
+
 static int m_read(struct wc_doc *d, const char *path) {
     struct mfile *f = mfind(path);
     unsigned n;
+    if(!strcmp(path, "/m/big.c") && bigtext) {
+        memcpy(wc_text_load_begin(&d->t, bign), bigtext, bign);
+        wc_text_load_end(&d->t, bign);
+        return wc_doc_loaded(d, path) == 0 ? 0 : -1;
+    }
     if(!f) {
         snprintf(d->msg, sizeof(d->msg), "Cannot open %s", path);
         return -1;
@@ -61,6 +70,13 @@ static int m_read(struct wc_doc *d, const char *path) {
 
 static int m_save(struct wc_doc *d, const char *to) {
     char b[4096];
+    if(disk_changes && !to && !d->overwrite) {
+        disk_changes--;
+        d->disk_changed = 1;
+        snprintf(d->msg, sizeof(d->msg), "Not saved: it changed on the disk since it was read here");
+        return -1;
+    }
+    d->overwrite = 0;
     unsigned n = d->t.len < sizeof(b) - 1 ? d->t.len : (unsigned)sizeof(b) - 1;
     wc_text_get(&d->t, 0, b, n);
     b[n] = 0;
@@ -138,6 +154,13 @@ static void f_close(void *ctx, int h) {
 static const struct wc_fsops mfs = { NULL, f_opendir, f_readdir, f_closedir, f_open, f_read, f_close };
 
 /**** driving it ****/
+
+/* 11/09/26: the events waiting, through the window, and no idle work (a search stays between its steps) */
+static void events_only(void) {
+    struct gk_event ev;
+    while(gk_next(w.ui, &ev, 0) > 0)
+        if(!wc_window_event(&w, &ev)) ended = 1;
+}
 
 /* every event the window has, through it, and its idle work; 0 once it ended */
 static int run(void) {
@@ -354,6 +377,60 @@ int main(void) {
     ctrl('O');
     CHECK(run() && !gkf_dialog() && !gk_box_open(w.ui) && status_says("No chooser yet: the desktop is busy; try again"));
     gkf_lacks(0, 0);
+    /* 11/09/26 (the review): a jump in a large file draws with a guess and has the colouring catch up between events
+       (L1); a search goes on between events, and Esc stops it (C3); a save over a file another program saved since
+       asks first, in a box (H1) */
+    {
+        unsigned k, n = 0;
+        const char *line = "\nint x = 1; char *s = \"text\";";
+        bign = 4u << 20;
+        bigtext = malloc(bign);
+        bigtext[n++] = '/';
+        bigtext[n++] = '*';
+        while(n < bign)
+            for(k = 0; line[k] && n < bign; k++) bigtext[n++] = line[k];
+        ended = 0;
+        ctrl('O');
+        CHECK(run() && gkf_dialog());
+        gkf_dialog_answer("/m/big.c");
+        CHECK(run() && !strcmp(doc()->path, "/m/big.c"));
+        key(WIN_KEY_END, WIN_MOD_CTRL);
+        events_only();
+        CHECK(!w.app.view.exact && w.idle);     /* drawn with a guess, the catch-up asked for */
+        CHECK(run() && w.app.view.exact && row_says(0, 0, "int x", GW_MUTED));    /* a comment, as it is */
+        ctrl('F');
+        CHECK(run());
+        ctrl('A');
+        gkf_type("not in it");
+        key(13, 0);
+        events_only();
+        CHECK(w.app.job == WC_JOB_FIND && w.idle && status_says("Searching: Esc stops it"));
+        key(27, 0);
+        events_only();
+        CHECK(!w.app.job && status_says("Stopped searching") && gk_shown(w.findbar));
+        key(27, 0);                             /* the bar's own Esc, now */
+        CHECK(run() && !gk_shown(w.findbar));
+        free(bigtext);
+        bigtext = NULL;
+        ctrl('W');
+        CHECK(run());
+        ctrl('O');
+        CHECK(run() && gkf_dialog());
+        gkf_dialog_answer("/m/notes.txt");
+        CHECK(run() && !strcmp(doc()->path, "/m/notes.txt"));
+        key(WIN_KEY_END, WIN_MOD_CTRL);
+        gkf_type("Q");
+        disk_changes = 1;
+        ctrl('S');
+        CHECK(run() && gk_box_open(w.ui) && gk_asking(w.ui) == BOX_DISK && gkf_find("notes.txt changed on the disk", GW_PAPER, &x, &y));
+        key(27, 0);                             /* Cancel: not saved, said */
+        CHECK(run() && !gk_box_open(w.ui) && status_says("Not saved: the file on the disk stays as it is"));
+        disk_changes = 1;
+        ctrl('S');
+        CHECK(run() && gk_asking(w.ui) == BOX_DISK);
+        key(13, 0);                             /* Save over it */
+        CHECK(run() && !gk_box_open(w.ui) && !strcmp(mfind("/m/notes.txt")->data, "needle in a haystack\nno match\nanother needle\nQ"));
+    }
     /* the theme: drawn again in its colours */
     gkf_set_theme(WIN_THEME_DUSK, NULL);
     CHECK(run() && row_says(0, 1, "eedle", GW_INK));

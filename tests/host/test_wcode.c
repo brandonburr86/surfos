@@ -45,6 +45,20 @@ void surf_free(void *p) { free(p); }
 void *surf_calloc(size_t n, size_t k) { return calloc(n, k); }
 void *surf_realloc(void *p, size_t n) { return realloc(p, n); }
 
+/* 11/09/26: the history's and the tabs' allocations (the Makefile builds undo.c and app.c with WC_UNDO_REALLOC and
+   WC_APP_MALLOC naming these), each failing on request: the how-manieth call from now, -1 for none */
+static int realloc_fails_at = -1, malloc_fails_at = -1;
+void *wc_test_realloc(void *p, size_t n);
+void *wc_test_malloc(size_t n);
+void *wc_test_realloc(void *p, size_t n) {
+    if(realloc_fails_at >= 0 && !realloc_fails_at--) return NULL;
+    return realloc(p, n);
+}
+void *wc_test_malloc(size_t n) {
+    if(malloc_fails_at >= 0 && !malloc_fails_at--) return NULL;
+    return malloc(n);
+}
+
 int wc_lex_tables_sorted(void);
 
 static int checks, failed;
@@ -1043,11 +1057,14 @@ static void finding(void) {
     CHECK(wc_find_doc(&f, &d, 1) == 1 && shows(&d, "Foo |foo^ food\nbar FOO\n"));
     strcpy(f.what, "nothere");
     CHECK(wc_find_doc(&f, &d, 0) == 0 && strstr(d.msg, "Not found"));
-    /* regular expressions: no empty matches, groups in the replacement */
+    /* regular expressions: no empty matches (11/09/26: a pattern that matches an empty text is refused), groups in
+       the replacement */
     f.regex = 1;
     f.icase = f.word = 0;
     strcpy(f.what, "o*");
     wc_doc_select(&d, 0, 0);
+    CHECK(wc_find_doc(&f, &d, 0) < 0 && strstr(d.msg, "matches nothing at all") && shows(&d, "|Foo foo food\nbar FOO\n"));
+    strcpy(f.what, "o+");
     CHECK(wc_find_doc(&f, &d, 0) == 1 && shows(&d, "F^oo| foo food\nbar FOO\n"));
     strcpy(f.what, "([a-z]+) ([A-Z]+)");
     CHECK(wc_find_doc(&f, &d, 0) == 1 && shows(&d, "Foo foo food\n^bar FOO|\n"));
@@ -1124,10 +1141,12 @@ static int handle(int node) {
     return -1;
 }
 
+static const char *refused_dir;         /* 11/09/26: a folder listed that does not open */
+
 static int f_opendir(void *ctx, const char *path) {
     int n = node_of(path);
     (void)ctx;
-    if(n < 0 || !tree[n].dir || !strncmp(path, "/dev", 4)) return -1;
+    if(n < 0 || !tree[n].dir || !strncmp(path, "/dev", 4) || (refused_dir && !strcmp(path, refused_dir))) return -1;
     if(++open_dirs > most_dirs) most_dirs = open_dirs;
     return handle(n);
 }
@@ -1302,7 +1321,7 @@ static void viewing(void) {
 
 struct mfile { char path[64]; char data[256]; };
 static struct mfile disk[16];
-static int ndisk, saves, save_fails;
+static int ndisk, saves, save_fails, disk_changes;
 
 static struct mfile *mfind(const char *path) {
     int i;
@@ -1336,6 +1355,13 @@ static int m_read(struct wc_doc *d, const char *path) {
 static int m_save(struct wc_doc *d, const char *to) {
     char *b;
     saves++;
+    if(disk_changes && !to && !d->overwrite) {  /* 11/09/26: as fileio.c says a file another program saved since */
+        disk_changes--;
+        d->disk_changed = 1;
+        snprintf(d->msg, sizeof(d->msg), "Not saved: it changed on the disk since it was read here");
+        return -1;
+    }
+    d->overwrite = 0;
     if(save_fails) {
         save_fails--;
         snprintf(d->msg, sizeof(d->msg), "Not saved: I/O error");
@@ -1475,7 +1501,7 @@ static void application(void) {
     CHECK(strstr(b, "Not a line number") && wc_app_doc(&a)->caret == 3);
     wc_app_key(&a, WC_KEY_RIGHT, WC_MOD_SHIFT);
     CHECK(wc_app_key(&a, CTRL('f'), WC_MOD_CTRL) & WC_DO_FIND && !strcmp(a.find.what, "x"));
-    CHECK(wc_app_key(&a, WC_KEY_F(5), 0) == WC_DO_DRAW && wc_app_doc(&a)->caret == 4);
+    CHECK((wc_app_key(&a, WC_KEY_F(5), 0) & WC_DO_DRAW) && wc_app_doc(&a)->caret == 4);
     wc_app_cmd(&a, WC_CMD_LANG + WC_LANG_C);
     wc_app_key(&a, CTRL('b'), WC_MOD_CTRL);               /* to the brace's match: there is none */
     wc_app_key(&a, WC_KEY_HOME, WC_MOD_CTRL);
@@ -1651,6 +1677,352 @@ static void speed(void) {
     wc_doc_free(&d);
 }
 
+
+/**** 11/09/26: the review's findings (docs/superpowers/plans/2026-11-05-desktop-apps-code.md, "The review") ****/
+
+/* a line of unit over and over, n bytes */
+static char *repeat(const char *unit, unsigned n) {
+    char *b = malloc(n + 1);
+    unsigned k, u = (unsigned)strlen(unit);
+    for(k = 0; k < n; k++) b[k] = unit[k % u];
+    b[n] = 0;
+    return b;
+}
+
+static void review_changes(void) {
+    struct wc_doc d;
+    struct wc_find f;
+    char *b, *big;
+    /* C1: Replace all with no room for what it comes to: nothing changed, and said (it cut each line first) */
+    b = repeat("aaaa\n", 5000);
+    doc_str(&d, "a.txt", b);
+    pool.limit = pool.used;
+    wc_find_init(&f);
+    strcpy(f.what, "a");
+    strcpy(f.with, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    CHECK(wc_find_replace_all(&f, &d) == -1 && text_is(&d, b) && !wc_undo_can(&d.u, 0) &&
+          !strcmp(d.msg, "Not replaced: there is not enough memory"));
+    pool.limit = WC_POOL_MAX;
+    wc_doc_free(&d);
+    free(b);
+    /* ... with room, larger than the history: done, and said that it cannot be undone */
+    big = repeat("x", 4u << 20);
+    doc_str(&d, "a.json", big);
+    strcpy(f.what, "x");
+    strcpy(f.with, "yy");
+    CHECK(wc_find_replace_all(&f, &d) == (int)(4u << 20) && d.t.len == 8u << 20 && d.u.forgot &&
+          strstr(d.msg, "Replaced 4194304 (on 1 line)") && strstr(d.msg, "too large a change to undo"));
+    wc_doc_free(&d);
+    free(big);
+    /* M1: a paste and Replace over a selection with no room: the selection stays, and it is said */
+    doc_str(&d, "b.txt", "keep SELECTED keep\n");
+    pool.limit = pool.used;
+    big = repeat("p", 100000);
+    wc_doc_select(&d, 5, 13);
+    CHECK(wc_doc_paste(&d, big, 100000) < 0 && text_is(&d, "keep SELECTED keep\n") && !wc_doc_modified(&d) &&
+          !strcmp(d.msg, "Not changed: there is not enough memory"));
+    CHECK(wc_doc_replace(&d, 5, 13, big, 100000, 0) < 0 && text_is(&d, "keep SELECTED keep\n"));
+    pool.limit = WC_POOL_MAX;
+    wc_doc_free(&d);
+    /* ... and one that fits only once the selection is cut: done (the old order asked the room first) */
+    b = repeat("q", 70000);
+    doc_str(&d, "c.txt", b);
+    pool.limit = pool.used;
+    wc_doc_select(&d, 0, 70000);
+    CHECK(wc_doc_paste(&d, big, 100000) == 0 && d.t.len == 100000 && wc_text_byte(&d.t, 0) == 'p');
+    wc_doc_undo(&d, 0);
+    CHECK(text_is(&d, b));
+    pool.limit = WC_POOL_MAX;
+    wc_doc_free(&d);
+    free(b);
+    free(big);
+    /* ... at 16 MB: a paste over foo fits once foo is cut; Replace refused, and its reason stays said (the search
+       after it said "Found again from the top") */
+    big = repeat("a", WC_TEXT_MAX - 4);
+    memcpy(big, "int foo;\n", 9);
+    doc_str(&d, "big.c", big);
+    free(big);
+    wc_doc_select(&d, 4, 7);
+    CHECK(wc_doc_paste(&d, "foobar", 6) == 0 && d.t.len == WC_TEXT_MAX - 1);
+    wc_doc_undo(&d, 0);
+    wc_find_init(&f);
+    strcpy(f.what, "foo");
+    strcpy(f.with, "foobarbaz");
+    wc_doc_select(&d, 4, 7);
+    CHECK(wc_find_replace(&f, &d) == 0 && strstr(d.msg, "16 MB") && wc_text_byte(&d.t, 4) == 'f' &&
+          d.t.len == WC_TEXT_MAX - 4);
+    wc_doc_free(&d);
+    wc_find_free(&f);
+    /* L6: the history's ops array refused after its bytes' block grew: forgotten, its count back to nothing */
+    doc_str(&d, "u.txt", "");
+    realloc_fails_at = 1;                       /* (the bytes' block first, then the ops') */
+    wc_doc_type(&d, "a", 1);
+    realloc_fails_at = -1;
+    CHECK(text_is(&d, "a") && d.u.forgot && d.u.bytes == 0);
+    wc_doc_type(&d, "b", 1);
+    CHECK(d.u.bytes > 0 && d.u.bytes < 4096);
+    wc_doc_free(&d);
+    /* L3: Enter after a lone CR in an LF file: a CR LF, so the CR stays lone; Backspace takes only what Enter put */
+    doc_at(&d, "r.c", "a\rb\r\rc\n\r|");
+    wc_doc_enter(&d);
+    CHECK(text_is(&d, "a\rb\r\rc\n\r\r\n"));
+    wc_doc_backspace(&d, 0);
+    CHECK(text_is(&d, "a\rb\r\rc\n\r"));
+    wc_doc_select(&d, 2, 2);
+    wc_doc_paste(&d, "\nz", 2);
+    CHECK(text_is(&d, "a\r\r\nzb\r\rc\n\r"));
+    wc_doc_free(&d);
+}
+
+static void review_lexing(void) {
+    static const char *const units[] = { "[", "![", "*a ", "_a ", "`", "``a", "<a", "\"", "'", "/*", "*/", "#", "$(",
+                                         "${", "<<E\n", "\\", "{", "(", "]", ")", "<!--", "'''", "\"\"\"", ";", "%" };
+    static unsigned char cls[WC_LEX_CLASSES];
+    char *b;
+    unsigned u, lang, st, st1;
+    double t0, worst = 0, t;
+    /* C2: every tokenizer, hostile lines of 64 KB and of 1 MB: a line's first WC_LEX_MAX bytes are read, as if it ended
+       there, so its state is theirs, and the time is a short line's */
+    for(u = 0; u < sizeof(units) / sizeof(units[0]); u++) {
+        b = repeat(units[u], 1u << 20);
+        for(lang = 0; lang < WC_LANGS; lang++) {
+            t0 = now();
+            st = wc_lex((int)lang, b, 1u << 20, 0, cls, sizeof(cls));
+            st1 = wc_lex((int)lang, b, 64u << 10, 0, NULL, 0);
+            t = now() - t0;
+            if(t > worst) worst = t;
+            CHECK(st == wc_lex((int)lang, b, WC_LEX_MAX, 0, NULL, 0) && st1 == st);
+        }
+        free(b);
+    }
+    CHECK(worst < 0.25);
+    if(worst >= 0.25) printf("  the slowest tokenizing of a hostile line: %.3f s\n", worst);
+    /* the Markdown scans themselves are linear: lines of WC_LEX_MAX [, *a and backticks, 64 times each */
+    t = 0;
+    for(u = 0; u < 3; u++) {
+        b = repeat(u == 0 ? "[" : u == 1 ? "*a " : "` `` ``` ", WC_LEX_MAX);
+        t0 = now();
+        for(lang = 0; lang < 64; lang++) wc_lex(WC_LANG_MD, b, WC_LEX_MAX, 0, cls, sizeof(cls));
+        t += now() - t0;
+        free(b);
+    }
+    CHECK(t < 0.25);
+    /* the classes past the first WC_LEX_MAX bytes: plain */
+    b = repeat("/* c */ ", 20000);
+    wc_lex(WC_LANG_C, b, 20000, 0, cls, sizeof(cls));
+    CHECK(cls[0] == WC_C_COMMENT && cls[WC_LEX_CLASSES - 8] == WC_C_COMMENT);
+    free(b);
+}
+
+static void review_searching(void) {
+    struct wc_doc d;
+    struct wc_find f, g;
+    struct wc_app a;
+    char *b;
+    unsigned a1, b1, a2, b2, k;
+    int w1, w2, r, steps;
+    double t0;
+    /* C3: Find previous walks a line's matches once; a pattern that matches an empty text is refused */
+    b = repeat("{\"key\":\"value\",", 1u << 20);
+    doc_str(&d, "x.json", b);
+    free(b);
+    wc_find_init(&f);
+    f.regex = 1;
+    strcpy(f.what, "\".*\"");
+    wc_doc_select(&d, d.t.len, d.t.len);
+    t0 = now();
+    CHECK(wc_find_doc(&f, &d, 1) == 1 && d.caret == 1 && d.anchor > d.t.len - 16 && wc_text_byte(&d.t, d.anchor - 1) == '"');
+    CHECK(wc_find_doc(&f, &d, 0) == 1);
+    strcpy(f.what, ".+");
+    wc_doc_select(&d, d.t.len, d.t.len);
+    CHECK(wc_find_doc(&f, &d, 1) == 1 && d.caret == 0);
+    strcpy(f.what, "(a*b)?");
+    CHECK(wc_find_doc(&f, &d, 0) < 0 && strstr(d.msg, "matches nothing at all"));
+    CHECK(now() - t0 < 0.5);
+    wc_doc_free(&d);
+    /* whole words go on from the next place a word can start */
+    doc_str(&d, "w.c", "xfoo foox foo_ foo\n");
+    f.regex = 0;
+    f.word = 1;
+    strcpy(f.what, "foo");
+    wc_doc_select(&d, 0, 0);
+    CHECK(wc_find_doc(&f, &d, 0) == 1 && d.anchor == 15 && d.caret == 18);
+    f.regex = 1;
+    strcpy(f.what, "fo+");
+    wc_doc_select(&d, 0, 0);
+    CHECK(wc_find_doc(&f, &d, 0) == 1 && d.anchor == 15);
+    f.word = 0;
+    wc_doc_free(&d);
+    /* L5: a back-reference that takes too long is said so, not "Not found" */
+    b = repeat("a", 400);
+    b[399] = 'b';
+    doc_str(&d, "e.txt", b);
+    free(b);
+    strcpy(f.what, "(a*)(a*)(a*)\\1\\2\\3b");
+    wc_doc_select(&d, 0, 0);
+    CHECK(wc_find_doc(&f, &d, 0) < 0 && strstr(d.msg, "takes too long"));
+    wc_doc_free(&d);
+    /* in steps: a budget at a time, the same match as all at once, forward and back, round the ends */
+    b = repeat("alpha beta gamma\n", 20000 * 17);
+    doc_str(&d, "s.txt", b);
+    free(b);
+    wc_find_init(&g);
+    for(k = 0; k < 8; k++) {
+        f.regex = g.regex = k & 1;
+        strcpy(f.what, k & 1 ? "gam+a" : "beta");
+        strcpy(g.what, f.what);
+        r = wc_find_next(&f, &d.t, k * 40000 + 7, (k >> 1) & 1, &a1, &b1, &w1);
+        CHECK(r == 1 && wc_find_begin(&g, &d.t, k * 40000 + 7, (k >> 1) & 1) == 0);
+        for(steps = 0; (r = wc_find_go(&g, &d.t, 997, &a2, &b2, &w2)) == 2; steps++);
+        CHECK(r == 1 && a1 == a2 && b1 == b2 && w1 == w2);
+    }
+    strcpy(g.what, "nowhere");
+    g.regex = 0;
+    CHECK(wc_find_begin(&g, &d.t, 5, 0) == 0);
+    for(steps = 0; (r = wc_find_go(&g, &d.t, 1u << 16, &a2, &b2, &w2)) == 2; steps++);
+    CHECK(r == 0 && steps > 3);
+    wc_find_free(&g);
+    wc_find_free(&f);
+    wc_doc_free(&d);
+    /* the app: a search in steps between events, which a key stops; Replace all counting, then changing (input
+       waits, and Esc takes it back), or too large to undo (it cannot stop) */
+    CHECK(wc_app_init(&a, &mio, &fake) == 0);
+    a.step = 16u << 10;                         /* (fine steps, so that each phase takes several) */
+    b = repeat("needle in a haystack, with hay\n", 256u << 10);
+    wc_doc_free(a.docs[0]);
+    doc_str(a.docs[0], "/m/h.txt", b);
+    strcpy(a.find.what, "nothing like it");
+    CHECK((wc_app_cmd(&a, WC_CMD_FIND_NEXT) & WC_DO_IDLE) && a.job == WC_JOB_FIND && strstr(a.status, "Searching"));
+    CHECK(wc_app_interrupt(&a, 1) >= 0 && !a.job && !strcmp(wc_app_doc(&a)->msg, "Stopped searching"));
+    wc_app_cmd(&a, WC_CMD_FIND_NEXT);
+    for(steps = 0; a.job && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(!a.job && strstr(wc_app_doc(&a)->msg, "Not found"));
+    strcpy(a.find.what, "hay");
+    strcpy(a.find.with, "straw");
+    CHECK((wc_app_cmd(&a, WC_CMD_REPLACE_ALL) & WC_DO_IDLE) && a.job == WC_JOB_ALL && !wc_app_busy(&a));
+    CHECK(wc_app_interrupt(&a, 1) >= 0 && !a.job && text_is(wc_app_doc(&a), b) &&
+          !strcmp(wc_app_doc(&a)->msg, "Stopped: nothing replaced"));
+    wc_app_cmd(&a, WC_CMD_REPLACE_ALL);
+    for(steps = 0; a.job && !wc_app_busy(&a) && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(wc_app_busy(&a) && wc_app_interrupt(&a, 0) < 0 && wc_app_key(&a, 'z', 0) == (WC_DO_DRAW | WC_DO_IDLE) &&
+          (wc_app_cmd(&a, WC_CMD_UNDO) & WC_DO_IDLE) && strstr(a.status, "Replacing"));
+    for(steps = 0; wc_app_busy(&a) && a.find.changed < 1000 && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(wc_app_busy(&a) && !wc_app_doc(&a)->u.forgot && wc_app_interrupt(&a, 1) >= 0 && !a.job &&
+          text_is(wc_app_doc(&a), b) && !strcmp(wc_app_doc(&a)->msg, "Stopped: nothing replaced"));
+    wc_app_cmd(&a, WC_CMD_REPLACE_ALL);
+    for(steps = 0; a.job && steps < 1000; steps++) wc_app_idle(&a);
+    {
+        char head[36];
+        wc_text_get(&wc_app_doc(&a)->t, 0, head, 35);
+        head[35] = 0;
+        CHECK(!a.job && strstr(wc_app_doc(&a)->msg, "Replaced") && !strcmp(head, "needle in a strawstack, with straw\n"));
+    }
+    wc_app_free(&a);
+    free(b);
+    b = repeat("hay\n", 4u << 20);             /* too large to undo: Esc cannot stop it once it is forgotten */
+    CHECK(wc_app_init(&a, &mio, &fake) == 0);
+    wc_doc_free(a.docs[0]);
+    doc_str(a.docs[0], "/m/hay.txt", b);
+    free(b);
+    strcpy(a.find.what, "hay");
+    strcpy(a.find.with, "straw");
+    wc_app_cmd(&a, WC_CMD_REPLACE_ALL);
+    for(steps = 0; a.job && !wc_app_doc(&a)->u.forgot && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(a.job && wc_app_busy(&a) && wc_app_interrupt(&a, 1) < 0 && strstr(a.status, "cannot stop"));
+    for(steps = 0; a.job && steps < 1000; steps++) wc_app_idle(&a);
+    CHECK(!a.job && wc_app_doc(&a)->t.len == 6u << 20 && strstr(wc_app_doc(&a)->msg, "too large a change to undo"));
+    wc_app_free(&a);
+}
+
+static void review_files(void) {
+    struct wc_app a;
+    struct wc_grep g;
+    char notes[200];
+    /* H1: one file under two spellings, or with . and .., is one tab; Save as onto another tab's file is refused */
+    ndisk = 0;
+    mput("/m/a.c", "int a;\n");
+    mput("/m/b.c", "int b;\n");
+    CHECK(wc_app_init(&a, &mio, &fake) == 0);
+    strcpy(a.cwd, "/m");
+    wc_app_open(&a, "a.c");
+    wc_app_open(&a, "/m/A.C");
+    wc_app_open(&a, "/m/./x/../a.c");
+    CHECK(a.n == 1 && !strcmp(wc_app_doc(&a)->path, "/m/a.c"));
+    wc_app_open(&a, "b.c");
+    CHECK(a.n == 2 && a.cur == 1);
+    wc_app_cmd(&a, WC_CMD_SAVE_AS);
+    CHECK((wc_app_save_as(&a, "/m/A.c") & WC_DO_DRAW) && strstr(wc_app_doc(&a)->msg, "open in another tab") &&
+          !strcmp(mfind("/m/a.c")->data, "int a;\n"));
+    /* ... a save over a file that changed on the disk since asks first: save over it, Save as, or neither */
+    keys(&a, "x");
+    disk_changes = 1;
+    CHECK(wc_app_cmd(&a, WC_CMD_SAVE) == (WC_DO_DISK | WC_DO_DRAW) && wc_app_doc(&a)->disk_changed);
+    CHECK((wc_app_disk(&a, WC_DISK_CANCEL) & WC_DO_DRAW) && wc_doc_modified(wc_app_doc(&a)) &&
+          strstr(wc_app_doc(&a)->msg, "stays as it is"));
+    disk_changes = 1;
+    wc_app_cmd(&a, WC_CMD_SAVE);
+    CHECK(wc_app_disk(&a, WC_DISK_SAVE_AS) == WC_DO_SAVE_AS);
+    disk_changes = 1;
+    wc_app_cmd(&a, WC_CMD_SAVE);
+    CHECK((wc_app_disk(&a, WC_DISK_OVER) & WC_DO_TITLE) && !wc_doc_modified(wc_app_doc(&a)) &&
+          !strcmp(mfind("/m/b.c")->data, "xint b;\n"));
+    /* ... and in the guard: its question waits for the disk's, then goes on */
+    keys(&a, "y");
+    disk_changes = 1;
+    wc_app_cmd(&a, WC_CMD_QUIT);
+    CHECK(a.asking == 1 && wc_app_answer(&a, WC_ANSWER_SAVE) == (WC_DO_DISK | WC_DO_DRAW) && a.asking == 1);
+    CHECK(wc_app_disk(&a, WC_DISK_OVER) == WC_DO_QUIT && !strcmp(mfind("/m/b.c")->data, "xyint b;\n"));
+    wc_app_free(&a);
+    /* L8: with several files named, a refusal stays said when a later one opens */
+    CHECK(wc_app_init(&a, &mio, &fake) == 0);
+    wc_app_open(&a, "/m/missing.c");
+    wc_app_open(&a, "/m/a.c");
+    CHECK(strstr(a.status, "Cannot open /m/missing.c") && a.n == 1);
+    /* L7: closing the last tab when there is no memory for the new file in its place: it stays */
+    malloc_fails_at = 0;
+    wc_app_cmd(&a, WC_CMD_CLOSE);
+    malloc_fails_at = -1;
+    CHECK(a.n == 1 && !strcmp(wc_app_doc(&a)->path, "/m/a.c") && strstr(a.status, "not enough memory"));
+    wc_app_cmd(&a, WC_CMD_CLOSE);
+    CHECK(a.n == 1 && !wc_app_doc(&a)->path[0]);
+    wc_app_free(&a);
+    /* H2, L2: find in files from a folder in its one form, never /dev; the folders it left out said, and why */
+    ntree = 0;
+    tree_add("/", NULL, 0, 1);
+    tree_add("/dev", NULL, 0, 1);
+    tree_add("/dev/tty", "needle", 0, 0);
+    tree_add("/usb1p1", NULL, 0, 1);
+    tree_add("/usb1p1/a.c", "a needle\n", 0, 0);
+    tree_add("/locked", NULL, 0, 1);
+    wc_grep_init(&g);
+    strcpy(g.f.what, "needle");
+    CHECK(wc_grep_start(&g, &fake, "/usb1p1/../dev") < 0 && strstr(g.why, "devices are never read"));
+    CHECK(wc_grep_start(&g, &fake, ".") < 0 && strstr(g.why, "one from /"));
+    CHECK(wc_grep_start(&g, &fake, "/.") == 0 && !strcmp(g.root, "/"));
+    refused_dir = "/locked";
+    while(wc_grep_step(&g, 1u << 20));
+    refused_dir = NULL;
+    CHECK(g.nhits == 1 && g.left_out == 1 && g.left_unreadable == 1);
+    wc_grep_notes(&g, notes, sizeof(notes));
+    CHECK(!strcmp(notes, "1 folder left out (1 unreadable)"));
+    wc_grep_free(&g);
+    CHECK(wc_app_init(&a, &mio, &fake) == 0);   /* the app takes a folder not from / from its own */
+    strcpy(a.cwd, "/usb1p1");
+    strcpy(a.grep.f.what, "needle");
+    wc_app_files(&a, ".");
+    while(wc_grep_step(&a.grep, 1u << 20));
+    CHECK(!strcmp(a.grep.root, "/usb1p1") && a.grep.nhits == 1);
+    wc_app_free(&a);
+    ntree = 0;
+}
+
+static void review(void) {
+    review_changes();
+    review_lexing();
+    review_searching();
+    review_files();
+}
+
 int main(int argc, char **argv) {
     if(argc > 1 && !strcmp(argv[1], "speed")) {
         speed();
@@ -1678,6 +2050,7 @@ int main(int argc, char **argv) {
     find_in_files();
     viewing();
     application();
+    review();
     CHECK(pool.used == 0);
     printf("test_wcode: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

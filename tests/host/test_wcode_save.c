@@ -19,9 +19,11 @@ static void check(int ok, const char *what) {
     }
 }
 
+/* the file's bytes are want's, all of them and no more (11/09/26: by count, not as strings) */
 static int is(const char *name, const char *want) {
     static char buf[1 << 16];
-    return sim_get(name, buf, sizeof(buf)) >= 0 && !strcmp(buf, want);
+    int n = sim_get(name, buf, sizeof(buf));
+    return n >= 0 && (size_t)n == strlen(want) && !memcmp(buf, want, (size_t)n);
 }
 
 static int gone(const char *name) {
@@ -219,12 +221,55 @@ static void reading(void) {
     check(wcs_rescue(where, sizeof(where)) < 0, "a new file has nowhere to go");
 }
 
+
+/* 11/09/26 (the review): a file saved by another window since this one read it (H1); a device under another name
+   (H2); a lone CR kept through Enter and Backspace (L3); the bytes compared as bytes, their count and all */
+static void review(void) {
+    static const char lone[] = "a\rb\r\rc\n\r";
+    sim_reset();
+    sim_put("h.c", "int x;\n");
+    wcs_use(0);
+    check(wcs_open("h.c") == 0, "window A reads h.c");
+    wcs_use(1);
+    check(wcs_open("h.c") == 0, "window B reads it too");
+    wcs_caret(wcs_len());
+    wcs_type("// B");
+    check(wcs_save(NULL) == 0 && is("h.c", "int x;\n// B"), "B saves");
+    wcs_use(0);
+    wcs_caret(wcs_len());
+    wcs_type("// A");
+    check(wcs_save(NULL) < 0 && wcs_disk_changed() && is("h.c", "int x;\n// B") &&
+          has(wcs_msg(), "changed on the disk since it was read here"), "A's save over it is refused: B's work stays");
+    wcs_overwrite();
+    check(wcs_save(NULL) == 0 && is("h.c", "int x;\n// A") && !wcs_disk_changed(), "A says save over it: saved");
+    wcs_type("!");
+    check(wcs_save(NULL) == 0 && is("h.c", "int x;\n// A!"), "... and saves again without asking: what it saved it knows");
+    wcs_use(1);
+    wcs_type("?");
+    check(wcs_save(NULL) < 0 && wcs_disk_changed() && is("h.c", "int x;\n// A!"), "now B is asked");
+    wcs_use(0);
+    check(wcs_open("/usb1p1/../dev/tty") < 0 && has(wcs_msg(), "is a device"), "/usb1p1/../dev/tty is /dev/tty: refused");
+    sim_reset();
+    sim_put("r.c", lone);
+    wcs_open("r.c");
+    wcs_caret(wcs_len());
+    wcs_type("\n");
+    wcs_back();
+    check(wcs_save(NULL) == 0 && is("r.c", lone), "Enter after the last lone CR, then Backspace: the same bytes");
+    wcs_open("r.c");
+    wcs_caret(2);
+    wcs_type("\n");
+    check(wcs_save(NULL) == 0 && is("r.c", "a\r\r\nb\r\rc\n\r"), "Enter after a lone CR: it stays lone, a CR LF after it");
+    check(!is("r.c", "a\r\r\nb\r\rc\n\rX") && !is("r.c", "a\r\r\nb"), "(is() compares every byte, and the count)");
+}
+
 int main(void) {
     saving();
     renames();
     twins();
     save_as();
     reading();
+    review();
     printf("test_wcode_save: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }
