@@ -21,5 +21,6 @@ which the fake desktop provides (tests/host/gk_fake.c). It comes first on the in
 int winopen(const struct win_open *o);
 int winctl(int fd, int op, void *arg);
 unsigned int uptime(void);
+int msleep(unsigned int ms);            /* 11/05/26: the fake's clock moves on, nothing waits */
 
 #endif

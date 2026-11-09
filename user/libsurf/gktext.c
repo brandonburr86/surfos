@@ -137,7 +137,7 @@ static void delete_selection(struct text *t) {
     int from = min(t->anchor, t->cursor), to = max(t->anchor, t->cursor);
     if(to <= from) return;
     memmove(t->buf + from, t->buf + to, (size_t)(t->len - to));
-    memset(t->buf + t->len - (to - from), 0, (size_t)(to - from));
+    gk_wipe(t->buf + t->len - (to - from), (size_t)(to - from));
     t->len -= to - from;
     t->cursor = t->anchor = from;
 }
@@ -175,6 +175,7 @@ static int flush_part(struct text *t) {
     int i, n = t->nparts, did = 0;
     t->nparts = 0;
     for(i = 0; i < n; i++) did |= insert(t, t->part + i, 1);
+    gk_wipe(t->part, sizeof(t->part));
     return did;
 }
 
@@ -189,6 +190,7 @@ static void typed(struct gk_widget *w, unsigned char c) {
         if(len == n) {
             t->nparts = 0;
             did = insert(t, t->part, n);
+            gk_wipe(t->part, sizeof(t->part));
         } else did = flush_part(t);
         if(did) changed(w, 1);
         return;
@@ -235,7 +237,7 @@ static void paste(struct gk_widget *w) {
     if(!(clip = malloc((size_t)t->max + 1))) return;
     n = gk_paste(w->ui, clip, (unsigned)t->max + 1);
     if(n > 0 && insert(t, clip, n)) changed(w, 1);
-    memset(clip, 0, (size_t)t->max + 1);
+    gk_wipe(clip, (size_t)t->max + 1);
     free(clip);
 }
 
@@ -470,8 +472,9 @@ static void text_arrange(struct gk_widget *w) {
 
 static void text_destroy(struct gk_widget *w) {
     struct text *t = w->k;
-    if(t->buf) memset(t->buf, 0, (size_t)t->max + 1);
+    if(t->buf) gk_wipe(t->buf, (size_t)t->max + 1);
     free(t->buf);
+    gk_wipe(t->part, sizeof(t->part));
 }
 
 static const char *text_get(const struct gk_widget *w) {
@@ -484,7 +487,7 @@ static void text_set(struct gk_widget *w, const char *s) {
     t->len = t->cursor = t->anchor = 0;
     t->buf[0] = 0;
     insert(t, s ? s : "", (int)strlen(s ? s : ""));
-    if(old > t->len) memset(t->buf + t->len, 0, (size_t)(old - t->len));
+    if(old > t->len) gk_wipe(t->buf + t->len, (size_t)(old - t->len));
     t->cursor = t->anchor = 0;
     t->top = t->left = 0;
     t->goal = -1;

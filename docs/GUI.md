@@ -956,6 +956,71 @@ side is `SYS_netctl`, `kernel/netctl.c` and `include/surfos/netctl.h`).
 * **Keys:** Ctrl+R scans, Ctrl+J joins by name, Ctrl+W or Esc closes (asking first while a host
   name is typed and not set).
 
+### Paint
+
+*11/05/26* (track paint of `docs/superpowers/plans/2026-11-05-desktop-apps.md`): **Paint**, `wpaint`
+(`user/wpaint/`), draws pictures, opens BMP, PNG, GIF and JPEG files and saves BMP and PNG ones. Apps >
+Programs and its tile start it; Files' File > Open with offers it for a picture (a double-click
+still shows a picture), and starts it with the file's path. The tool palette is at the left, the
+canvas in the middle with its scroll bars, the colours under it, and the status bar says the last
+message or the tool's hint, then where the pointer is, the selection, the canvas's size and the
+zoom.
+
+* **The canvas.** 32-bit colour, up to 4096 pixels each way and 16,000,000 in all (4000 x 4000), so
+  that every picture Paint makes can be saved and opened again. A new one is 640 x 400, white;
+  File > New asks its size, Image > Canvas size changes it from its top left (the new part the
+  second colour). Paint has no transparency: a picture's transparent pixels open onto white, and a
+  PNG of 16 bits a sample is kept at 8; the status line says so, and a save that would replace
+  such a file asks first (Save as…, Enter's, Save, or Cancel).
+* **The tools** (the palette, the Tools menu, or a key): pencil P, brush B, eraser E, line L,
+  rectangle R, ellipse O, fill F, text T, colour picker K, select S. The left button draws in the
+  first colour, the right in the second, and the eraser paints the second. Under the tools are the
+  chosen one's options: the brush's sizes (1 to 24 pixels; [ and ] too) for the brush, the eraser,
+  lines and outlines, outlined or filled for rectangles and ellipses, 1 to 8 times for text.
+  * A line, a rectangle or an ellipse shows while it is dragged and is drawn when the button is
+    let go; Shift held keeps a line at 45 degrees and makes squares and circles. Esc while it is
+    dragged draws nothing.
+  * The fill fills the area of the colour clicked, 4-connected, however large and twisted.
+  * Text: a click starts it, keys type it in the console's characters (UTF-8 as code page 437, `?`
+    for one it lacks), Enter starts a line, Ctrl+V pastes the desktop's clipboard's text into it. A
+    click elsewhere or another tool draws it; Esc or Undo drops it. Control characters in pasted
+    text are left out.
+  * The colour picker takes the colour clicked (the right button: as the second colour) and gives
+    the tool before it back.
+* **The selection.** A drag with the selection tool marks a rectangle. A drag inside it, or the
+  arrows (ten pixels with Shift), lifts its pixels: they float, and what they leave is the second
+  colour; a click outside, Enter, another tool or anything that draws puts them down, Esc puts them
+  down and selects none, and Undo before that puts them back. Cut, Copy and Paste use Paint's own
+  clipboard (Paste floats the pixels at the top left of the view); Delete fills the selection with
+  the second colour.
+* **Undo and Redo** (Ctrl+Z, Ctrl+Y) go over the last 100 changes, 32 MB of them: Paint keeps the
+  64 x 64 pieces of the canvas a change touched, run-length coded, so a stroke on a large blank
+  canvas costs a few bytes. A change larger than that is made but cannot be undone, and the status
+  bar says so. Undoing back to what was saved clears the title's `*`.
+* **The view.** Zoom from 12% to 3200%: + and - (Ctrl++, Ctrl+-), Ctrl+0 for 100%, Ctrl+F to fit,
+  Image > Zoom for each level, and Ctrl with the wheel about the pointer. The wheel scrolls (across
+  with Shift), the middle button drags the view, and the arrows move it when nothing is selected.
+  A picture opened that is larger than the view is fitted to it.
+* **The colours.** The first colour over the second (a click there swaps them, as X does), the 24
+  of the palette and 8 custom colours: the left button makes one the first colour, the right one the
+  second. Edit... (Colours > Edit colour...) takes `#RRGGBB` or `red, green, blue` and makes it the
+  first colour and the newest custom one. The first colour's code shows beside them.
+* **Files.** Open and Save as are the desktop's choosers (their bars name Paint), which ask before
+  a file is replaced. Save writes the picture as its name says, `.png` (8 bits a sample) or `.bmp`
+  (24 bits); a picture opened from a GIF or JPEG, or never saved, goes through Save as, `.png`
+  offered. A file you have is replaced as `edit` saves one (`user/bin/saveutil.h`: a new file beside
+  it, fsynced and renamed over it), never one that may share its space with a `.tmp` beside it, and
+  a file Paint makes is removed again if the save fails. New, Open and Close ask first about
+  changes not saved (Save, Don't save, Cancel), and again if the picture changes before it goes;
+  while one of Paint's boxes is open its menus in the bar do nothing. A file of more than 72 MB,
+  or one that is no picture, is refused, and the canvas stays as it was.
+* **Limits.** No transparency, layers or anti-aliasing; no GIF or JPEG saved. Its clipboard is
+  Paint's own (the desktop's holds text). What it keeps comes to at most 126 MB, twice the largest
+  canvas and 4 MB (82 MB at 2000 x 2000): the history gives way first, and what even all of it
+  could not make room for is refused, saying so, every step kept. Opening a picture holds the
+  file and the decoder's memory beside that for a moment: about 340 MB at the very peak, for the
+  largest progressive JPEG with Paint at its bound.
+
 ## Programs' windows
 
 *10/25/26* (milestone M12, `docs/superpowers/plans/2026-10-25-app-windows.md`): an ordinary

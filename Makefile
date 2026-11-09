@@ -162,6 +162,20 @@ $(BUILD)/user/bin/wsettings: $(WSETTINGS_OBJ) $(USER_CRT0) $(USER_LIB) user/user
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSETTINGS_OBJ) $(USER_LIB)
 -include $(WSETTINGS_OBJ:.o=.d)
+USER_PROGS  += wpaint        # 11/05/26 (the desktop applications, track paint): Paint, user/wpaint/
+# wpaint, Paint (11/05/26): user/wpaint/, its model, files and window host-tested (tests/host/test_wpaint*.c); its files
+# through libsurf's pictures (image.h) and saveutil.h (-Iuser/bin)
+WPAINT_SRC    = $(wildcard user/wpaint/*.c)
+WPAINT_OBJ    = $(WPAINT_SRC:user/wpaint/%.c=$(BUILD)/user/wpaint/%.o)
+$(BUILD)/user/wpaint/%.o: user/wpaint/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -Iuser/bin -c $< -o $@
+$(BUILD)/user/bin/wpaint: $(WPAINT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WPAINT_OBJ) $(USER_LIB)
+-include $(WPAINT_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1406,6 +1420,46 @@ unittest-settings: $(BUILD)/host/test_netctl $(BUILD)/host/test_wsettings $(BUIL
 	$(BUILD)/host/test_netctl
 	$(BUILD)/host/test_wsettings
 	$(BUILD)/host/test_wsettings_win
+
+# 11/05/26 (the desktop applications, track paint): Paint's model (test_wpaint) with the console's font; its files over
+# libsurf's pictures (test_wpaint_files), with the tests' allocator, which counts and fails allocations, and
+# tests/host/wpaint_host.h, which fails file calls on request; its window on the fake desktop (test_wpaint_window).
+# Sanitizer runs are by hand, on the Mac (docs/superpowers/plans/2026-11-05-desktop-apps-paint.md)
+WPAINT_HOSTFLAGS = $(HOSTFLAGS) -MMD -MP -Itests/host/undertow -Iuser/wpaint -idirafter user/include
+WPAINT_HOST      = $(addprefix $(BUILD)/host/wpaint/,canvas.o history.o draw.o tools.o view.o)
+WPAINT_FONT      = $(addprefix $(BUILD)/host/kernel/driver/,font8x16.o cp437.o)
+$(BUILD)/host/wpaint/%.o: user/wpaint/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wpaint)"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
+$(BUILD)/host/wpaint/files.o: user/wpaint/files.c tests/host/wpaint_host.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wpaint)"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) $(UT_ALLOC) -include tests/host/wpaint_host.h -Iuser/bin -c $< -o $@
+$(BUILD)/host/wpaint/gk_%.o: user/wpaint/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wpaint, gk)"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -MMD -MP -Iuser/wpaint -c $< -o $@
+-include $(wildcard $(BUILD)/host/wpaint/*.d)
+$(BUILD)/host/test_wpaint: tests/host/test_wpaint.c $(WPAINT_HOST) $(BUILD)/host/undertow/alloc.o $(WPAINT_FONT)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) $^ -o $@
+$(BUILD)/host/test_wpaint_files: tests/host/test_wpaint_files.c $(WPAINT_HOST) $(BUILD)/host/wpaint/files.o $(IMG_HOST) \
+                                 $(BUILD)/host/undertow/alloc.o $(WPAINT_FONT)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(WPAINT_HOSTFLAGS) -Itests/host $^ -o $@
+$(BUILD)/host/test_wpaint_window: tests/host/test_wpaint_window.c tests/host/gk_fake.h $(BUILD)/host/wpaint/gk_window.o \
+                                  $(BUILD)/host/wpaint/gk_panel.o $(WPAINT_HOST) $(BUILD)/host/wpaint/files.o $(IMG_HOST) \
+                                  $(BUILD)/host/undertow/alloc.o $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wpaint -Itests/host tests/host/test_wpaint_window.c \
+	    $(filter %.o,$^) -o $@
+unittest: unittest-paint
+.PHONY: unittest-paint
+unittest-paint: $(BUILD)/host/test_wpaint $(BUILD)/host/test_wpaint_files $(BUILD)/host/test_wpaint_window
+	$(BUILD)/host/test_wpaint
+	$(BUILD)/host/test_wpaint_files
+	$(BUILD)/host/test_wpaint_window
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \

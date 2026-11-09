@@ -78,7 +78,7 @@ int main(void) {
     CHECK(run() && !gk_box_open(d.ui) && status_says("Answered 0"));
     /* Copy: the name on the desktop's clipboard while the window has the focus */
     gkf_click(238 + 32, 159 + 12);
-    CHECK(run() && !strcmp(gkf_clip(), "Surf") && status_says("Copied the name"));
+    CHECK(run() && !strcmp(gkf_clip(), "Surf") && status_says("Copied the name, pasted back: Surf"));
     gkf_focus(0);
     gkf_advance(1000);
     gkf_click(238 + 32, 159 + 12);
@@ -119,6 +119,22 @@ int main(void) {
           !strcmp(gkf_dialog()->types, "txt"));
     gkf_dialog_answer(NULL);
     CHECK(run() && status_says("Not chosen"));
+    /* Ctrl+Shift+O: busy three seconds, its events unread meanwhile, then Open: no room for the answer while
+       WIN_EVENTS events wait (EAGAIN), and the toolkit asks again once it has read them */
+    gkf_key(15, WIN_MOD_CTRL | WIN_MOD_SHIFT);
+    for(i = 0; i < WIN_EVENTS + 16; i++) gkf_pointer(DEMO_W - 5, DEMO_H - 5, 0);
+    CHECK(run() && gkf_dialog() && gkf_dialog()->id == CHOOSE_OPEN);
+    gkf_dialog_answer(NULL);
+    CHECK(run() && status_says("Not chosen; lost while busy: 0"));   /* (the fake's pipe loses nothing) */
+    /* keys no widget takes, with their modifiers; a new theme */
+    gkf_key('x', WIN_MOD_ALT);
+    CHECK(run() && status_says("Key 0x78 mods 2"));
+    gkf_key(WIN_KEY_ESC, WIN_MOD_CTRL);
+    CHECK(run() && status_says("Key 0x10e mods 4") && !gk_box_open(d.ui));
+    gkf_set_theme(WIN_THEME_DUSK, NULL);
+    CHECK(run() && status_says("Theme: dusk"));
+    gkf_set_theme(WIN_THEME_OCEAN, NULL);
+    CHECK(run() && status_says("Theme: ocean"));
     gkf_lacks(1u << WIN_DIALOG, ENOSYS);                /* a desktop without choosers: a path typed instead */
     gkf_key(15, WIN_MOD_CTRL);
     CHECK(run() && gk_box_open(d.ui) && boxed(160));

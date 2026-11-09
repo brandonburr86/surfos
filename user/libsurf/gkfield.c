@@ -17,6 +17,9 @@ that draws them), so what is shown and what is edited always agree. A field hold
 bytes; what would pass that is cut at a character's start. A password field (GK_PASSWORD) shows a
 dot for each character, copies and cuts nothing, never remembers a line, and its bytes are zeroed
 when they go: every field zeroes what was deleted, and gk_field_wipe() all of it.
+11/05/26 (stage 3, the Settings review): zeroed through gk_wipe(), which no optimization drops, and
+the bytes of a character typed partway (part[]) as well, once they go in and at a wipe; the state is
+gkpriv.h's struct gk_line, so that test_gk looks that a wiped password leaves no byte.
 */
 
 #include <stdlib.h>
@@ -26,24 +29,11 @@ when they go: every field zeroes what was deleted, and gk_field_wipe() all of it
 #define FIELD_MAX (1 << 20)             /* a line's bytes at most: a field of more is made with this */
 #define FIELD_HISTORY 256               /* remembered lines at most */
 
-struct field {
-    char *buf;                          /* the text and its NUL: max + 1 bytes */
-    int len, max;
-    int cursor, anchor;                 /* the selection is between them (equal: none) */
-    int scroll;                         /* the first character shown */
-    int dragging;
-    char *hint;
-    char **hist;                        /* remembered lines, oldest first */
-    int nhist, maxhist, hpos;           /* hpos: the line brought back, -1 while none is */
-    char *draft;                        /* what was being typed before Up */
-    char part[4];                       /* a character typed byte by byte, until it is whole */
-    int nparts, need;
-};
 
 static int min(int a, int b) { return a < b ? a : b; }
 
 /* the character before at, and after it (whole characters, gw_char()'s) */
-static int prev_char(const struct field *f, int at) {
+static int prev_char(const struct gk_line *f, int at) {
     int k = 0, len, last = 0;
     while(k < at) {
         last = k;
@@ -53,14 +43,14 @@ static int prev_char(const struct field *f, int at) {
     return last;
 }
 
-static int next_char(const struct field *f, int at) {
+static int next_char(const struct gk_line *f, int at) {
     int len;
     if(at >= f->len) return f->len;
     gw_char(f->buf + at, f->len - at, &len);
     return at + len;
 }
 
-static int chars(const struct field *f, int from, int to) {
+static int chars(const struct gk_line *f, int from, int to) {
     int n = 0, len;
     while(from < to) {
         gw_char(f->buf + from, f->len - from, &len);
@@ -76,7 +66,7 @@ static int cells_of(const struct gk_widget *w) {
 
 /* the first character shown so that the cursor is in view, from where the view was; and back while the text after it
    leaves room (a text set before the field had its width, a wider window) */
-static int view_start(const struct field *f, int cells) {
+static int view_start(const struct gk_line *f, int cells) {
     int start = f->scroll;
     if(start > f->len) start = f->len;
     if(f->cursor < start) start = f->cursor;
@@ -87,7 +77,7 @@ static int view_start(const struct field *f, int cells) {
 }
 
 static void changed(struct gk_widget *w, int text) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     f->scroll = view_start(f, cells_of(w));
     gk_dirty(w);
     if(text) {
@@ -96,26 +86,26 @@ static void changed(struct gk_widget *w, int text) {
     }
 }
 
-static int has_selection(const struct field *f) {
+static int has_selection(const struct gk_line *f) {
     return f->anchor != f->cursor;
 }
 
 /* the selection's bytes go (zeroed where the text ended) */
-static void delete_range(struct field *f, int from, int to) {
+static void delete_range(struct gk_line *f, int from, int to) {
     if(to <= from) return;
     memmove(f->buf + from, f->buf + to, (size_t)(f->len - to));
-    memset(f->buf + f->len - (to - from), 0, (size_t)(to - from));
+    gk_wipe(f->buf + f->len - (to - from), (size_t)(to - from));
     f->len -= to - from;
     f->cursor = f->anchor = from;
 }
 
-static void delete_selection(struct field *f) {
+static void delete_selection(struct gk_line *f) {
     delete_range(f, min(f->anchor, f->cursor), f->anchor > f->cursor ? f->anchor : f->cursor);
 }
 
 /* n bytes at the cursor, over the selection: control characters as spaces, and no more than room for whole
    characters */
-static int insert(struct field *f, const char *s, int n) {
+static int insert(struct gk_line *f, const char *s, int n) {
     int i, k, len;
     delete_selection(f);
     if(n > f->max - f->len) {                           /* cut at a character's start */
@@ -134,12 +124,12 @@ static int insert(struct field *f, const char *s, int n) {
     return n;
 }
 
-static void set_text(struct field *f, const char *text) {
+static void set_text(struct gk_line *f, const char *text) {
     int n = (int)strlen(text ? text : ""), old = f->len;
     f->len = f->cursor = f->anchor = 0;
     f->buf[0] = 0;
     insert(f, text ? text : "", n);
-    if(old > f->len) memset(f->buf + f->len, 0, (size_t)(old - f->len));
+    if(old > f->len) gk_wipe(f->buf + f->len, (size_t)(old - f->len));
 }
 
 /* a word: letters, digits, _ and characters beyond ASCII; anything else alone */
@@ -147,7 +137,7 @@ static int wordy(unsigned char c) {
     return c >= 0x80 || c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-static void select_word(struct field *f, int at) {
+static void select_word(struct gk_line *f, int at) {
     int from = at, to = at;
     if(at >= f->len) {
         f->anchor = f->cursor = f->len;
@@ -162,13 +152,13 @@ static void select_word(struct field *f, int at) {
     f->cursor = to;
 }
 
-static int word_left(const struct field *f, int at) {
+static int word_left(const struct gk_line *f, int at) {
     while(at > 0 && !wordy((unsigned char)f->buf[at - 1])) at = prev_char(f, at);
     while(at > 0 && wordy((unsigned char)f->buf[at - 1])) at--;
     return at;
 }
 
-static int word_right(const struct field *f, int at) {
+static int word_right(const struct gk_line *f, int at) {
     while(at < f->len && !wordy((unsigned char)f->buf[at])) at = next_char(f, at);
     while(at < f->len && wordy((unsigned char)f->buf[at])) at++;
     return at;
@@ -176,13 +166,13 @@ static int word_right(const struct field *f, int at) {
 
 /* the text between where the selection starts and ends, to the clipboard */
 static void copy(struct gk_widget *w) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     int from = min(f->anchor, f->cursor), to = f->anchor > f->cursor ? f->anchor : f->cursor;
     if(to > from && !(w->opts & GK_PASSWORD)) gk_copy(w->ui, f->buf + from, (unsigned)(to - from));
 }
 
 static void paste(struct gk_widget *w) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     char *clip;
     int n, k;
     if(!(clip = malloc((size_t)f->max + 1))) return;
@@ -192,12 +182,12 @@ static void paste(struct gk_widget *w) {
         n = has_selection(f);
         if(insert(f, clip, k) || n) changed(w, 1);
     }
-    memset(clip, 0, (size_t)f->max + 1);
+    gk_wipe(clip, (size_t)f->max + 1);
     free(clip);
 }
 
 static void history(struct gk_widget *w, int back) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     char *keep;
     if(!f->nhist) return;
     if(back) {
@@ -223,23 +213,24 @@ static void history(struct gk_widget *w, int back) {
 }
 
 /* n bytes over the selection: 1 when the text changed */
-static int put(struct field *f, const char *s, int n) {
+static int put(struct gk_line *f, const char *s, int n) {
     int had = has_selection(f);
     return insert(f, s, n) > 0 || had;
 }
 
 /* a character's first bytes typed, and something else came: they go in as they are */
-static int flush_part(struct field *f) {
+static int flush_part(struct gk_line *f) {
     int i, n = f->nparts, did = 0;
     f->nparts = 0;
     for(i = 0; i < n; i++) did |= put(f, f->part + i, 1);
+    gk_wipe(f->part, sizeof(f->part));                  /* (a password's bytes are in it) */
     return did;
 }
 
 /* bytes typed one at a time make a character before it goes in, so that a field never holds part of one: a lead byte
    waits for its continuation bytes (the console's rules, gw_char()'s), and bytes that make none go in as they are */
 static void typed(struct gk_widget *w, unsigned char c) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     int did = 0, n, len;
     if(f->nparts && (c & 0xC0) == 0x80) {
         f->part[f->nparts++] = (char)c;
@@ -249,6 +240,7 @@ static void typed(struct gk_widget *w, unsigned char c) {
         if(len == n) {
             f->nparts = 0;
             did = put(f, f->part, n);
+            gk_wipe(f->part, sizeof(f->part));
         } else did = flush_part(f);
         if(did) changed(w, 1);
         return;
@@ -266,7 +258,7 @@ static void typed(struct gk_widget *w, unsigned char c) {
 }
 
 static int field_key(struct gk_widget *w, unsigned key, unsigned mods) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     int shift = gk_shift(mods), c = gk_ctrl(key, mods), ctrl = (mods & WIN_MOD_CTRL) != 0, to;
     struct gk_event *e;
     if(f->nparts && !(key >= 0x80 && key < 0x100) && flush_part(f)) changed(w, 1);
@@ -329,7 +321,7 @@ static int field_key(struct gk_widget *w, unsigned key, unsigned mods) {
 
 /* the character boundary nearest x */
 static int at_x(const struct gk_widget *w, int x) {
-    const struct field *f = w->k;
+    const struct gk_line *f = w->k;
     int at = view_start(f, cells_of(w)), col = (x - (w->x + 4) + 4) / 8, n;
     if(x < w->x + 4) return at > 0 ? prev_char(f, at) : 0;      /* past the left edge: one more */
     for(n = 0; n < col && at < f->len; n++) at = next_char(f, at);
@@ -337,7 +329,7 @@ static int at_x(const struct gk_widget *w, int x) {
 }
 
 static void field_pointer(struct gk_widget *w, int x, int y, unsigned buttons, unsigned pressed, unsigned released) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     int at;
     (void)y;
     (void)released;
@@ -368,7 +360,7 @@ static void field_pointer(struct gk_widget *w, int x, int y, unsigned buttons, u
 }
 
 static void field_paint(struct gk_widget *w, struct gw *win) {
-    const struct field *f = w->k;
+    const struct gk_line *f = w->k;
     const struct gk_theme *t = &w->ui->theme;
     int lit = gk_lit(w), off = (w->flags & GKW_DISABLED) != 0, cells = cells_of(w), col, at, len, code;
     int from = min(f->anchor, f->cursor), to = f->anchor > f->cursor ? f->anchor : f->cursor, y = w->y + (w->h - 16) / 2;
@@ -388,23 +380,27 @@ static void field_paint(struct gk_widget *w, struct gw *win) {
 }
 
 static void field_destroy(struct gk_widget *w) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     int i;
-    if(f->buf) memset(f->buf, 0, (size_t)f->max + 1);
+    if(f->buf) gk_wipe(f->buf, (size_t)f->max + 1);
     free(f->buf);
     free(f->hint);
-    for(i = 0; i < f->nhist; i++) free(f->hist[i]);
+    for(i = 0; i < f->nhist; i++) {
+        gk_wipe(f->hist[i], strlen(f->hist[i]));
+        free(f->hist[i]);
+    }
     free(f->hist);
-    if(f->draft) memset(f->draft, 0, strlen(f->draft));
+    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
     free(f->draft);
+    gk_wipe(f->part, sizeof(f->part));
 }
 
 static const char *field_text(const struct gk_widget *w) {
-    return ((const struct field *)w->k)->buf;
+    return ((const struct gk_line *)w->k)->buf;
 }
 
 static void field_set_text(struct gk_widget *w, const char *text) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     set_text(f, text);
     f->scroll = 0;
     f->scroll = view_start(f, cells_of(w));
@@ -413,7 +409,7 @@ static void field_set_text(struct gk_widget *w, const char *text) {
 }
 
 static void field_focus(struct gk_widget *w, int on) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     if(!on) f->dragging = 0;
 }
 
@@ -428,8 +424,8 @@ static const struct gk_class field_class = {
 };
 
 struct gk_widget *gk_field(struct gk_widget *parent, int id, int max, unsigned flags) {
-    struct gk_widget *w = gk_make(parent, &field_class, sizeof(struct field));
-    struct field *f;
+    struct gk_widget *w = gk_make(parent, &field_class, sizeof(struct gk_line));
+    struct gk_line *f;
     if(!w) return NULL;
     f = w->k;
     f->max = max > 0 && max <= FIELD_MAX ? max : max > FIELD_MAX ? FIELD_MAX : 256;
@@ -447,11 +443,11 @@ struct gk_widget *gk_field(struct gk_widget *parent, int id, int max, unsigned f
 
 void gk_field_hint(struct gk_widget *w, const char *hint) {
     if(!w || w->cls != &field_class) return;
-    if(gk_set_str(w, &((struct field *)w->k)->hint, hint)) gk_dirty(w);
+    if(gk_set_str(w, &((struct gk_line *)w->k)->hint, hint)) gk_dirty(w);
 }
 
 void gk_field_select(struct gk_widget *w, int from, int to) {
-    struct field *f;
+    struct gk_line *f;
     int at;
     if(!w || w->cls != &field_class) return;
     f = w->k;
@@ -466,7 +462,7 @@ void gk_field_select(struct gk_widget *w, int from, int to) {
 }
 
 int gk_field_history(struct gk_widget *w, int n) {
-    struct field *f;
+    struct gk_line *f;
     char **h;
     if(!w || w->cls != &field_class || (w->opts & GK_PASSWORD)) return -1;
     f = w->k;
@@ -488,7 +484,7 @@ int gk_field_history(struct gk_widget *w, int n) {
 }
 
 void gk_field_remember(struct gk_widget *w) {
-    struct field *f;
+    struct gk_line *f;
     char *copy;
     if(!w || w->cls != &field_class || (w->opts & GK_PASSWORD)) return;
     f = w->k;
@@ -504,18 +500,19 @@ void gk_field_remember(struct gk_widget *w) {
 }
 
 void gk_field_wipe(struct gk_widget *w) {
-    struct field *f;
+    struct gk_line *f;
     if(!w || w->cls != &field_class) return;
     f = w->k;
-    memset(f->buf, 0, (size_t)f->max + 1);
-    f->len = f->cursor = f->anchor = f->scroll = 0;
-    if(f->draft) memset(f->draft, 0, strlen(f->draft));
+    gk_wipe(f->buf, (size_t)f->max + 1);                /* all of it, and a character typed partway */
+    gk_wipe(f->part, sizeof(f->part));
+    f->len = f->cursor = f->anchor = f->scroll = f->nparts = f->need = 0;
+    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
     gk_dirty(w);
 }
 
 /* for a box's answer: the text (the field keeps it, and wipes it when it goes) */
 void gk_field_take(struct gk_widget *w, char **text, int *len) {
-    struct field *f = w->k;
+    struct gk_line *f = w->k;
     *text = f->buf;
     *len = f->len;
 }

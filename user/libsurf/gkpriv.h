@@ -78,10 +78,12 @@ struct gk_watch { int fd, id; short events; };
    bar); whether the desktop has them as they are now, and whether it shows them */
 #define GK_MENU_NUMBERS 48              /* menus and submenus of a window, at most */
 enum { GK_MENUS_UNSENT, GK_MENUS_SHOWN, GK_MENUS_KEYS };
+#define GKM_RADIO  1                    /* an entry's own: one of a radio group (gk_menu_check() puts a dot) */
+#define GKM_REPEAT 2                    /* its shortcut acts at the keyboard's repeats too (GK_ITEM_REPEAT) */
 struct gk_menu_entry {
     int menu, sub;
     unsigned id, flags, shortcut;
-    unsigned char radio;
+    unsigned char own;                  /* GKM_* */
     char label[WIN_MENU_LABEL];
     char keys[WIN_MENU_KEYS];
 };
@@ -89,6 +91,7 @@ struct gk_menus {
     struct gk_menu_entry e[WIN_MENU_ENTRIES];
     int parent[GK_MENU_NUMBERS];
     int n, numbers, help, sent, state;
+    int boxed;                          /* they went greyed, for a modal box open then (gk_menus_send()) */
 };
 
 struct gk {
@@ -126,6 +129,8 @@ struct gk {
     int user_act;                       /* the event given last is a person's doing: a key, a press, a click, a menu
                                            item, a box's answer (until the next gk_next()): a chooser may be asked */
     int desk_calls;                     /* the kernel has the calls of 11/05/26 (WIN_THEME answered at the opening) */
+    struct win_dialog *later;           /* a chooser's request the desktop had no room for (EAGAIN: the window's events
+                                           unread), asked again once they are read (gk_choose_again()) */
 };
 
 /* gkcore.c */
@@ -146,6 +151,7 @@ char *gk_strdup(struct gk *ui, const char *s);              /* NULL (and gk_ok()
 int gk_set_str(struct gk_widget *w, char **slot, const char *text);   /* 1 when it changed */
 unsigned gk_now(void);
 long long gk_div64(long long n, long long d);               /* n / d, n >= 0, d > 0: no libgcc */
+void gk_wipe(void *p, size_t n);                            /* n bytes zeroed, kept by the compiler (volatile) */
 int gk_ctrl(unsigned key, unsigned mods);                   /* 'a'..'z' for Ctrl and a letter, else 0 */
 int gk_shift(unsigned mods);
 void gk_move_focus(struct gk *ui, int back);                /* Tab, Shift+Tab */
@@ -173,7 +179,21 @@ void gk_bar_paint(struct gw *win, const struct gk_theme *t, int x, int y, int le
 int gk_bar_press(int len, int pos, struct gk_bar *b, int *grab);
 int gk_bar_drag(int len, int pos, struct gk_bar *b, int grab);
 
-/* gkfield.c: a field's text for gkbox.c, wiped when it goes */
+/* gkfield.c: a line of text's state (here for test_gk, which looks that a wiped password leaves no byte), and its text
+   for gkbox.c, wiped when it goes */
+struct gk_line {
+    char *buf;                          /* the text and its NUL: max + 1 bytes */
+    int len, max;
+    int cursor, anchor;                 /* the selection is between them (equal: none) */
+    int scroll;                         /* the first character shown */
+    int dragging;
+    char *hint;
+    char **hist;                        /* remembered lines, oldest first */
+    int nhist, maxhist, hpos;           /* hpos: the line brought back, -1 while none is */
+    char *draft;                        /* what was being typed before Up */
+    char part[4];                       /* a character typed byte by byte, until it is whole */
+    int nparts, need;
+};
 void gk_field_take(struct gk_widget *field, char **text, int *len);
 
 /* gkbox.c */
@@ -187,6 +207,7 @@ void gk_box_chooser(struct gk *ui, int id, const char *title, const char *dir, c
 void gk_menus_send(struct gk *ui);                          /* at a flush: the menus again if they changed */
 int gk_menu_key(struct gk *ui, unsigned key, unsigned mods);   /* 1: an item's shortcut, GK_EV_MENU posted */
 void gk_dialog_answer(struct gk *ui, const struct win_event *e);   /* WIN_EV_DIALOG */
+void gk_choose_again(struct gk *ui);                        /* ui->later asked again, with the window's events read */
 int gk_theme_read(struct gk *ui);                           /* WIN_THEME: the colours by role; 1 when it answered */
 
 #endif
