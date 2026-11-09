@@ -171,10 +171,25 @@ void gk_box_layout(struct gk *ui) {
     gk_lay(w, x, y, b->bw + 6, b->bh + 7);
 }
 
+/* a box's own keys: Esc, Enter, Space, the arrows and Tab between its buttons */
+static int own_key(unsigned key) {
+    return key == 27 || key == '\r' || key == '\n' || key == ' ' || key == WIN_KEY_LEFT || key == WIN_KEY_RIGHT ||
+           key == 9 || key == WIN_KEY_BACKTAB;
+}
+
+/* the labelled button next to the one chosen, left (step -1) or right; the chosen one at an end */
+static int next_button(const struct box *b, int step) {
+    int k;
+    for(k = b->choice + step; k >= 0 && k <= 2; k += step) if(b->label[k][0]) return k;
+    return b->choice;
+}
+
 int gk_box_key(struct gk *ui, unsigned key, unsigned mods) {
     struct box *b = ui->box->k;
-    int k;
     if((mods & WIN_MOD_CTRL) && key != 27) return 0;   /* Ctrl and a key: the line's (Ctrl+V), or nobody's */
+    if((mods & WIN_MOD_REPEAT) && own_key(key))         /* a key held down since before (a repeat): answers nothing, a
+                                                           button's Enter held over its own question say */
+        return b->kind != BOX_ASK || !(key == ' ' || key == WIN_KEY_LEFT || key == WIN_KEY_RIGHT) ? 1 : 0;
     if(key == 27) {                                     /* Esc (and Ctrl+[, which is Esc on a terminal) */
         answer(ui, 2);
         return 1;
@@ -183,12 +198,10 @@ int gk_box_key(struct gk *ui, unsigned key, unsigned mods) {
     case BOX_MESSAGE:
         if(key == '\r' || key == '\n' || key == ' ') answer(ui, 0);
         return 1;
-    case BOX_CONFIRM:
+    case BOX_CONFIRM:                                   /* Left and Right stop at the ends: from the safe end, never
+                                                           round to the other */
         if(key == WIN_KEY_LEFT || key == WIN_KEY_RIGHT || key == 9 || key == WIN_KEY_BACKTAB) {
-            for(k = 0; k < 3; k++) {                    /* the next button that has a label */
-                b->choice = (b->choice + (key == WIN_KEY_LEFT || key == WIN_KEY_BACKTAB ? 2 : 1)) % 3;
-                if(b->label[b->choice][0]) break;
-            }
+            b->choice = next_button(b, key == WIN_KEY_LEFT || key == WIN_KEY_BACKTAB ? -1 : 1);
             gk_dirty(ui->box);
         } else if(key == '\r' || key == '\n' || key == ' ') answer(ui, b->choice);
         return 1;
@@ -244,8 +257,8 @@ void gk_message(struct gk *ui, int id, const char *title, const char *line1, con
     copy_to(b->label[0], sizeof(b->label[0]), "OK");
 }
 
-void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
-                const char *yes, const char *no, const char *cancel) {
+void gk_confirm_default(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
+                        const char *yes, const char *no, const char *cancel, int def) {
     struct box *b = open_box(ui, BOX_CONFIRM, id, title, 0);
     if(!b) return;
     copy_to(b->line[0], sizeof(b->line[0]), line1);
@@ -253,6 +266,12 @@ void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, con
     copy_to(b->label[0], sizeof(b->label[0]), yes ? yes : "OK");
     copy_to(b->label[1], sizeof(b->label[1]), no);
     copy_to(b->label[2], sizeof(b->label[2]), cancel);
+    if(def >= 0 && def <= 2 && b->label[def][0]) b->choice = def;   /* the button Enter answers at first */
+}
+
+void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
+                const char *yes, const char *no, const char *cancel) {
+    gk_confirm_default(ui, id, title, line1, line2, yes, no, cancel, 0);
 }
 
 void gk_ask(struct gk *ui, int id, const char *title, const char *prompt, const char *text, unsigned flags) {

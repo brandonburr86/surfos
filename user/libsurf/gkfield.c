@@ -22,6 +22,7 @@ the bytes of a character typed partway (part[]) as well, once they go in and at 
 gkpriv.h's struct gk_line, so that test_gk looks that a wiped password leaves no byte.
 */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gkpriv.h"
@@ -67,13 +68,28 @@ static int cells_of(const struct gk_widget *w) {
 /* the first character shown so that the cursor is in view, from where the view was; and back while the text after it
    leaves room (a text set before the field had its width, a wider window) */
 static int view_start(const struct gk_line *f, int cells) {
-    int start = f->scroll;
+    int start = f->scroll, c, k, b = 0, len;
     if(start > f->len) start = f->len;
     if(f->cursor < start) start = f->cursor;
     if(cells < 1) return start;
-    while(chars(f, start, f->cursor) > cells - 1 && start < f->cursor) start = next_char(f, start);
-    while(start > 0 && chars(f, prev_char(f, start), f->len) <= cells - 1) start = prev_char(f, start);
-    return start;
+    for(c = chars(f, start, f->cursor); c > cells - 1 && start < f->cursor; c--) start = next_char(f, start);
+    /* (the review, F10: in one pass, not a count at each step) back to where the text to its end just fits */
+    for(k = chars(f, 0, f->len) - (cells - 1); k > 0 && b < f->len; k--) {
+        gw_char(f->buf + b, f->len - b, &len);
+        b += len;
+    }
+    return b < start ? b : start;
+}
+
+/* the end of the character at, when at is inside one (bytes put in one at a time can make one around the cursor: a
+   lone first byte before a lone continuation byte): the cursor never stands inside a character */
+static int whole(const struct gk_line *f, int at) {
+    int k = 0, len;
+    while(k < at) {
+        gw_char(f->buf + k, f->len - k, &len);
+        k += len;
+    }
+    return k;
 }
 
 static void changed(struct gk_widget *w, int text) {
@@ -90,13 +106,25 @@ static int has_selection(const struct gk_line *f) {
     return f->anchor != f->cursor;
 }
 
-/* the selection's bytes go (zeroed where the text ended) */
+/* the start of the character at stands in (at itself when a character starts there) */
+static int start_of(const struct gk_line *f, int at) {
+    int k = 0, len;
+    while(k < f->len) {
+        gw_char(f->buf + k, f->len - k, &len);
+        if(k + len > at) return k;
+        k += len;
+    }
+    return at;
+}
+
+/* the selection's bytes go (zeroed where the text ended); the cursor on a character's start (the re-review, N4: a
+   deletion can join a lone first byte and a lone continuation byte into one character around it) */
 static void delete_range(struct gk_line *f, int from, int to) {
     if(to <= from) return;
     memmove(f->buf + from, f->buf + to, (size_t)(f->len - to));
     gk_wipe(f->buf + f->len - (to - from), (size_t)(to - from));
     f->len -= to - from;
-    f->cursor = f->anchor = from;
+    f->cursor = f->anchor = start_of(f, from);
 }
 
 static void delete_selection(struct gk_line *f) {
@@ -120,7 +148,7 @@ static int insert(struct gk_line *f, const char *s, int n) {
     for(i = 0; i < n; i++) f->buf[f->cursor + i] = (unsigned char)s[i] < 32 ? ' ' : s[i];
     f->len += n;
     f->buf[f->len] = 0;
-    f->cursor = f->anchor = f->cursor + n;
+    f->cursor = f->anchor = whole(f, f->cursor + n);   /* (the review, F13) */
     return n;
 }
 
@@ -165,10 +193,15 @@ static int word_right(const struct gk_line *f, int at) {
 }
 
 /* the text between where the selection starts and ends, to the clipboard */
-static void copy(struct gk_widget *w) {
+/* the selection to the clipboard: 0, or -1 when the clipboard refused it (said as GK_EV_UNCOPIED) or there is none to
+   copy (a password's: never) */
+static int copy(struct gk_widget *w) {
     struct gk_line *f = w->k;
     int from = min(f->anchor, f->cursor), to = f->anchor > f->cursor ? f->anchor : f->cursor;
-    if(to > from && !(w->opts & GK_PASSWORD)) gk_copy(w->ui, f->buf + from, (unsigned)(to - from));
+    if(to <= from || (w->opts & GK_PASSWORD)) return -1;
+    if(gk_copy(w->ui, f->buf + from, (unsigned)(to - from)) == 0) return 0;
+    gk_post(w->ui, GK_EV_UNCOPIED, w, errno);
+    return -1;
 }
 
 static void paste(struct gk_widget *w) {
@@ -186,6 +219,14 @@ static void paste(struct gk_widget *w) {
     free(clip);
 }
 
+/* a copy of a line (the draft, a remembered one) zeroed before it is freed: it may hold a secret (a chat's IDENTIFY) */
+static void drop_copy(char **s) {
+    if(!*s) return;
+    gk_wipe(*s, strlen(*s));
+    free(*s);
+    *s = NULL;
+}
+
 static void history(struct gk_widget *w, int back) {
     struct gk_line *f = w->k;
     char *keep;
@@ -194,7 +235,7 @@ static void history(struct gk_widget *w, int back) {
         if(f->hpos == 0) return;
         if(f->hpos < 0) {                               /* what was being typed comes back after the newest */
             if(!(keep = gk_strdup(w->ui, f->buf))) return;
-            free(f->draft);
+            drop_copy(&f->draft);
             f->draft = keep;
             f->hpos = f->nhist;
         }
@@ -202,9 +243,10 @@ static void history(struct gk_widget *w, int back) {
         set_text(f, f->hist[f->hpos]);
     } else {
         if(f->hpos < 0) return;
-        if(++f->hpos >= f->nhist) {
+        if(++f->hpos >= f->nhist) {                     /* the line being typed back: its copy goes */
             f->hpos = -1;
             set_text(f, f->draft ? f->draft : "");
+            drop_copy(&f->draft);
         } else set_text(f, f->hist[f->hpos]);
     }
     f->scroll = view_start(f, cells_of(w));
@@ -269,8 +311,7 @@ static int field_key(struct gk_widget *w, unsigned key, unsigned mods) {
         return 1;
     }
     if(c == 'c' || c == 'x') {
-        copy(w);
-        if(c == 'x' && has_selection(f) && !(w->opts & GK_PASSWORD)) {
+        if(copy(w) == 0 && c == 'x') {                  /* a cut takes only what the clipboard has */
             delete_selection(f);
             changed(w, 1);
         }
@@ -385,13 +426,9 @@ static void field_destroy(struct gk_widget *w) {
     if(f->buf) gk_wipe(f->buf, (size_t)f->max + 1);
     free(f->buf);
     free(f->hint);
-    for(i = 0; i < f->nhist; i++) {
-        gk_wipe(f->hist[i], strlen(f->hist[i]));
-        free(f->hist[i]);
-    }
+    for(i = 0; i < f->nhist; i++) drop_copy(&f->hist[i]);
     free(f->hist);
-    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
-    free(f->draft);
+    drop_copy(&f->draft);
     gk_wipe(f->part, sizeof(f->part));
 }
 
@@ -405,6 +442,7 @@ static void field_set_text(struct gk_widget *w, const char *text) {
     f->scroll = 0;
     f->scroll = view_start(f, cells_of(w));
     f->hpos = -1;
+    drop_copy(&f->draft);                               /* the program's text now: what was being typed goes */
     gk_dirty(w);
 }
 
@@ -469,7 +507,7 @@ int gk_field_history(struct gk_widget *w, int n) {
     if(n < 1 || n > FIELD_HISTORY) n = n < 1 ? 0 : FIELD_HISTORY;
     if(n < f->nhist) {                                  /* the oldest go */
         int drop = f->nhist - n, i;
-        for(i = 0; i < drop; i++) free(f->hist[i]);
+        for(i = 0; i < drop; i++) drop_copy(&f->hist[i]);
         memmove(f->hist, f->hist + drop, (size_t)n * sizeof(*f->hist));
         f->nhist = n;
     }
@@ -492,7 +530,7 @@ void gk_field_remember(struct gk_widget *w) {
     if(!f->maxhist || !f->len || (f->nhist && !strcmp(f->hist[f->nhist - 1], f->buf))) return;
     if(!(copy = gk_strdup(w->ui, f->buf))) return;
     if(f->nhist == f->maxhist) {
-        free(f->hist[0]);
+        drop_copy(&f->hist[0]);
         memmove(f->hist, f->hist + 1, (size_t)(f->nhist - 1) * sizeof(*f->hist));
         f->nhist--;
     }
@@ -506,7 +544,8 @@ void gk_field_wipe(struct gk_widget *w) {
     gk_wipe(f->buf, (size_t)f->max + 1);                /* all of it, and a character typed partway */
     gk_wipe(f->part, sizeof(f->part));
     f->len = f->cursor = f->anchor = f->scroll = f->nparts = f->need = 0;
-    if(f->draft) gk_wipe(f->draft, strlen(f->draft));
+    drop_copy(&f->draft);
+    f->hpos = -1;
     gk_dirty(w);
 }
 

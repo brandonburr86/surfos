@@ -119,8 +119,8 @@ int main(void) {
           !strcmp(gkf_dialog()->types, "txt"));
     gkf_dialog_answer(NULL);
     CHECK(run() && status_says("Not chosen"));
-    /* Ctrl+Shift+O: busy three seconds, its events unread meanwhile, then Open: no room for the answer while
-       WIN_EVENTS events wait (EAGAIN), and the toolkit asks again once it has read them */
+    /* Ctrl+Shift+O: busy three seconds, then Open; the chooser comes (the pointer's moves meanwhile merge in the queue
+       as the kernel merges them, so here the request finds room: test_gk drives a full queue, EAGAIN) */
     gkf_key(15, WIN_MOD_CTRL | WIN_MOD_SHIFT);
     for(i = 0; i < WIN_EVENTS + 16; i++) gkf_pointer(DEMO_W - 5, DEMO_H - 5, 0);
     CHECK(run() && gkf_dialog() && gkf_dialog()->id == CHOOSE_OPEN);

@@ -29,6 +29,7 @@ own Help items is refused. msleep() moves the clock on, nothing waits.
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <surf.h>
+#undef poll                                     /* (the shim sends the toolkit's poll() here, gkf_poll(); this is the host's) */
 #include "gk_fake.h"
 #include "../../user/libsurf/guikit.h"
 
@@ -54,7 +55,10 @@ static struct {
     struct win_dialog dialog;
     int dialog_waiting, have_path;
     int input;                          /* a key, a press or a menu choice sent since the last chooser asked for */
-    unsigned sent_buttons;              /* the buttons of the pointer event sent last */
+    unsigned ev_buttons, ev_before;     /* the buttons of the pointer event queued last, and of the one before it */
+    unsigned lost;                      /* events lost past WIN_EVENTS (WIN_INFO) */
+    int flood;                          /* a test floods the queue on purpose: no word of the losses (gkf_flood()) */
+    int forever;                        /* polls that would have waited for ever */
     char path[WIN_PATH_MAX];
     int themed;
     struct win_theme theme;
@@ -116,6 +120,54 @@ static int unread(void) {
     int n = 0;
     if(F.rfd < 0 || ioctl(F.rfd, FIONREAD, &n) < 0) return 0;
     return n / (int)sizeof(struct win_event);
+}
+
+/* 11/09/26 (the review, F8): the toolkit's and libgui's poll() (tests/host/gk_shim/surf.h): what is ready now, and when
+   nothing is, the fake's clock moves on by the wait instead of the test waiting it out; a wait for ever with nothing
+   ready (a test that would hang) is EINTR, counted (gkf_forever()) */
+int gkf_poll(struct pollfd *fds, nfds_t n, int timeout) {
+    int r = poll(fds, n, 0);
+    if(r != 0) return r;
+    if(timeout > 0) F.now += (unsigned)timeout;
+    else if(timeout < 0) {
+        F.forever++;
+        errno = EINTR;
+        return -1;
+    }
+    return 0;
+}
+
+int gkf_forever(void) {
+    return F.forever;
+}
+
+unsigned gkf_lost(void) {
+    return F.lost;
+}
+
+void gkf_flood(int on) {
+    F.flood = on != 0;
+}
+
+/* (the re-review, N8) a loss said on stderr: the first in a run at once, and the run's count at its end, unless the
+   test floods on purpose; what the fake keeps is the same either way */
+static unsigned lost_in_run;
+
+static void lost_total(void) {
+    fprintf(stderr, "gk_fake: %u events lost in all in this run, past the window's queue (WIN_EVENTS)\n", lost_in_run);
+}
+
+static void say_lost(void) {
+    if(F.flood) return;
+    if(!lost_in_run++) {
+        fprintf(stderr, "gk_fake: the window's queue is full (WIN_EVENTS): an event lost, as the kernel loses it; a "
+                "test that types more than %d events reads them between (gkf_lost(), gkf_flood())\n", WIN_EVENTS);
+        atexit(lost_total);
+    }
+}
+
+int gkf_queued(void) {
+    return unread();
 }
 
 void gkf_advance(unsigned ms) {
@@ -504,6 +556,7 @@ int winctl(int fd, int op, void *arg) {
         info->screen_h = F.gone ? 0 : 540;
         info->scale = F.gone ? 0 : 2;
         info->focused = (unsigned short)F.focused;
+        info->lost = F.lost;
         return 0;
     case WIN_CLIP:
         c = arg;
@@ -618,8 +671,15 @@ int gkf_presented_rect(int i, int *x, int *y, int *w, int *h) {
 
 /**** events ****/
 
+/* an event into the window's queue as kernel/win.c's queue_event() keeps it (11/09/26, the review): what waits unread
+   taken out of the pipe, a pointer move with the buttons of the move queued last merged into it (never a press or a
+   release), a new size into the last, one theme event at most, and past WIN_EVENTS (one fewer while a chooser's answer
+   is owed) lost and counted; then all of it written back */
 static void put_event(unsigned short type, unsigned short mods, int x, int y, unsigned value) {
-    struct win_event e;
+    static struct win_event q[WIN_EVENTS + 1];
+    struct win_event e, *last;
+    unsigned before = F.ev_buttons;
+    int n, k, queued = 1;
     if(F.wfd < 0) return;
     memset(&e, 0, sizeof(e));
     e.type = type;
@@ -627,18 +687,50 @@ static void put_event(unsigned short type, unsigned short mods, int x, int y, un
     e.x = x;
     e.y = y;
     e.value = value;
-    if(write(F.wfd, &e, sizeof(e)) != (ssize_t)sizeof(e)) abort();   /* a test that fills a pipe is wrong */
-    if(type == WIN_EV_KEY || type == WIN_EV_MENU || (type == WIN_EV_POINTER && x >= 0 && y >= 0 && (value & ~F.sent_buttons)))
+    n = unread();
+    if(n > WIN_EVENTS || (n && read(F.rfd, q, (size_t)n * sizeof(q[0])) != (ssize_t)(n * sizeof(q[0])))) abort();
+    last = n ? &q[n - 1] : NULL;
+    if(last && last->type == type && ((type == WIN_EV_POINTER && last->value == value && F.ev_before == last->value) ||
+                                      type == WIN_EV_RESIZE)) {
+        last->x = x;
+        last->y = y;
+        last->mods = mods;
+    } else {
+        for(k = 0; type == WIN_EV_THEME && k < n && q[k].type != WIN_EV_THEME; k++) ;
+        if(type == WIN_EV_THEME && k < n) q[k].value = value;
+        else if(n >= WIN_EVENTS - (F.dialog_waiting && type != WIN_EV_DIALOG ? 1 : 0)) {
+            F.lost++;
+            queued = 0;
+            say_lost();
+        } else {
+            q[n++] = e;
+            if(type == WIN_EV_POINTER) {
+                F.ev_before = F.ev_buttons;
+                F.ev_buttons = value;
+            }
+        }
+    }
+    if(n && write(F.wfd, q, (size_t)n * sizeof(q[0])) != (ssize_t)(n * sizeof(q[0]))) abort();
+    if(queued && (type == WIN_EV_KEY || type == WIN_EV_MENU || (type == WIN_EV_POINTER && x >= 0 && y >= 0 && (value & ~before))))
         F.input = 1;                                    /* a key, a choice, a press over the content (1447a4c2) */
-    if(type == WIN_EV_POINTER) F.sent_buttons = value;
 }
 
+/* a key; while a chooser waits, the desktop's chooser takes it (Esc cancels it), as the real desktop does */
 void gkf_key(unsigned key, unsigned mods) {
+    if(F.dialog_waiting) {
+        if(key == 27) gkf_dialog_answer(NULL);
+        return;
+    }
     put_event(WIN_EV_KEY, (unsigned short)mods, 0, 0, key);
 }
 
+/* text as typed on a US keyboard: a capital or a character Shift makes comes with WIN_MOD_SHIFT */
 void gkf_type(const char *text) {
-    for(; *text; text++) gkf_key(*text == '\n' ? '\r' : (unsigned char)*text, 0);
+    for(; *text; text++) {
+        unsigned c = (unsigned char)*text;
+        gkf_key(c == '\n' ? '\r' : c, (c >= 'A' && c <= 'Z') || (c && strchr("~!@#$%^&*()_+{}|:\"<>?", (int)c)) ?
+                WIN_MOD_SHIFT : 0);
+    }
 }
 
 void gkf_pointer(int x, int y, unsigned buttons) {

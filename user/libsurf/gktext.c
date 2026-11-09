@@ -18,6 +18,7 @@ proportion to the text's size; a program with megabytes (an editor) draws an are
 before it goes in, and what is deleted is zeroed.
 */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gkpriv.h"
@@ -139,6 +140,8 @@ static void delete_selection(struct text *t) {
     memmove(t->buf + from, t->buf + to, (size_t)(t->len - to));
     gk_wipe(t->buf + t->len - (to - from), (size_t)(to - from));
     t->len -= to - from;
+    if(from < t->len && from > 0 && next_char(t, prev_char(t, from)) > from)
+        from = prev_char(t, from);                      /* (the re-review, N4) on the start of a character it joined */
     t->cursor = t->anchor = from;
 }
 
@@ -168,6 +171,8 @@ static int insert(struct text *t, const char *s, int n) {
     t->len += k;
     t->buf[t->len] = 0;
     t->cursor = t->anchor = t->cursor + k;
+    if(t->cursor < t->len && t->cursor > 0 && next_char(t, prev_char(t, t->cursor)) > t->cursor)
+        t->cursor = t->anchor = next_char(t, prev_char(t, t->cursor));   /* (the review, F13) never inside one */
     return 1;
 }
 
@@ -224,10 +229,14 @@ static int word_right(const struct text *t, int at) {
     return at;
 }
 
-static void copy(struct gk_widget *w) {
+/* the selection to the clipboard: 0, or -1 when there is none or the clipboard refused it (GK_EV_UNCOPIED) */
+static int copy(struct gk_widget *w) {
     struct text *t = w->k;
     int from = min(t->anchor, t->cursor), to = max(t->anchor, t->cursor);
-    if(to > from) gk_copy(w->ui, t->buf + from, (unsigned)(to - from));
+    if(to <= from) return -1;
+    if(gk_copy(w->ui, t->buf + from, (unsigned)(to - from)) == 0) return 0;
+    gk_post(w->ui, GK_EV_UNCOPIED, w, errno);
+    return -1;
 }
 
 static void paste(struct gk_widget *w) {
@@ -275,9 +284,8 @@ static int text_key(struct gk_widget *w, unsigned key, unsigned mods) {
     case 'c':
         copy(w);
         return 1;
-    case 'x':
-        copy(w);
-        if(!ro && has_selection(t)) {
+    case 'x':                                           /* a cut takes only what the clipboard has */
+        if(copy(w) == 0 && !ro) {
             delete_selection(t);
             changed(w, 1);
         }
@@ -405,7 +413,8 @@ static int text_wheel(struct gk_widget *w, int x, int y, int rows) {
     int was = t->top, last = max(0, lines(t) - rows_of(w));
     (void)x;
     (void)y;
-    t->top = t->top + rows < 0 ? 0 : t->top + rows > last ? last : t->top + rows;
+    long long to = (long long)t->top + rows;            /* (the re-review, N7) in 64 bits */
+    t->top = to < 0 ? 0 : to > last ? last : (int)to;
     if(t->top != was) gk_dirty(w);
     return 1;
 }

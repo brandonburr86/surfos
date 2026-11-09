@@ -318,6 +318,84 @@ Counts at the gates:
   pixel under the pointer its click had left there; the check moves the pointer off first now). Natively with ASan
   and UBSan: clean; each commit checked out alone, compiled, its host tests run.
 
+## The review
+
+An independent review read d38ea834 (11/09/26). It found memory safety sound under many fuzz batches with ASan and
+UBSan through the fake (failed allocations, extreme values, choosers and the pointer included, nothing drawn outside
+the presented damage), the GK_PASSWORD field sound, and modality, shortcuts once a press, drags, choosers and
+gk_next()'s drain holding; the code's origin clean. One fix round followed, each finding its own commit with its test
+(F14 alone left, as documented):
+
+- **F1, critical: a secret left in freed memory.** A chat line's draft was freed unwiped by Up, kept after Down,
+  left by the program's gk_set_text(); a history shrinking or full freed lines unwiped (Chat masks NickServ IDENTIFY
+  lines and relies on it). Every copy of a line goes through drop_copy() now (gk_wipe(), then free()), and the draft
+  goes once it is back, when the program sets the text and at gk_field_wipe(). test_gksecret builds libgui and the
+  toolkit with each free() looking for the secret in the block first (-Dfree=gks_free).
+- **F2, high: timers starved the window.** A timer due again at once (a 10 ms timer, a handler of 20) was all a
+  program heard, keys unread and nothing painted: each turn of gk_next() now paints and polls (at once when a timer is
+  due) before it posts the timers due.
+- **F3, high: Ctrl+X deleted what the clipboard refused** (over 128 KiB, or without the focus). A cut deletes only
+  after gk_copy() returned 0, and a refused copy or cut is told as GK_EV_UNCOPIED with the errno.
+- **F4, high: key repeats answered boxes and repeated buttons.** Boxes ignore the repeats of their own keys (Enter
+  held on Delete no longer answers the question it opens); buttons, check boxes, radio groups and tabs act once a
+  press; a line to type still takes its typing's repeats.
+- **F5: a question's default and its ends.** gk_confirm_default() names the button Enter answers at first, and Left
+  and Right stop at the ends: Left from a safe Cancel put first never comes round to the destructive choice.
+- **F6: Ctrl+[ \ ] ^ and /** come as 27 to 31 with WIN_MOD_CTRL and now match the shortcuts written so.
+- **F7: data changed without a word.** gk_set_text() returns 0 when the widget holds the text as given, 1 when it
+  holds it changed to fit (cut at its max, a control character a space), -1 without memory.
+- **F8: the fake desktop.** Its clock moves by poll()'s waits (the shim sends the toolkit's poll() to gkf_poll()), a
+  wait for ever with nothing to come fails as EINTR instead of hanging; the window's queue merges and loses as
+  kernel/win.c's does (so the EAGAIN tests fill it with keys, which do not merge); a chooser takes the keys while it
+  is up; gkf_type() types capitals with Shift; test_gk's run() stops at 100000 events.
+- **The lows:** a watch ends once told POLLHUP, POLLERR or POLLNVAL (F9); a field's view start in one pass, 64 KB in
+  milliseconds instead of 6 s (F10); a label's lines without strlen() at each character (F11); a box's own line is
+  the box's, the program hearing its answer only (F12); a lone first byte before a lone continuation byte no longer
+  leaves the cursor inside the character they make (F13); sizes, gaps, padding, weights, damage and a slider's range
+  held within GK_SIZE_MAX or done in 64 bits (F15); an event's text that cannot be kept (no memory) is a failure,
+  never an empty success (F16).
+- **A fuzz with invariants** (test_gk's fuzz): 20000 seeded events of every kind over every kind of widget, menus
+  and boxes; after each, the window alive, the memory there, every line's text whole within its max with its cursor
+  on a character, no password on the clipboard, no menu choice in a box, no event of a box's own widget.
+- **The review's probes** (review-kit/probes, read only), built against the fixed toolkit in this track's scratchpad:
+  secret 0 blocks freed unwiped; starve keys and the field typed among the timers; cut the 200,000 bytes and the
+  field kept; gaps 64 KB fields and labels in milliseconds, a dead descriptor told once, no box event, Space held on
+  a check box one change.
+- **The slider's rounding** (F15's commit) used a 64-bit division, which i386 makes a call to libgcc, which libsurf
+  does not link: the smoke test's build of wkit failed. It goes through gk_div64() now (ab8b676b), and the track's
+  native runs compile the toolkit for i386 and look for any libgcc division.
+- **Counts at the gates** (tip ab8b676b): `make unittest` passed, test_gk 514, test_wkit 76 and test_gksecret 10
+  among it; `make test-all` passed at -O0 and -O2, 51 Files and 558 smoke checks each (a first run's -O2 smoke test
+  failed the kernel's selftest while the owner's programs loaded the Mac; run again, as the coordinator asked for a
+  boot-timing step, it passed; this track changes nothing in the kernel); the guiapps scenario passed at -O0 and -O2,
+  67 of 67 checks, 61 of them wkit's. Natively, ASan and UBSan (undefined behaviour fatal) found nothing.
+
+- **The re-review** of 3e1551f3 found no critical or high finding and every F-item holding; one more small round
+  (four commits, 31f5864d..9dcd814d):
+  - N1 (decided): movement keys repeat and activation keys act once a press, the rule in gk.h: a radio group's and
+    tabs' arrows, Home and End move at each repeat again, as lists and sliders do (Settings' held arrow gives its
+    five applies); Space and Enter, boxes and shortcuts but GK_ITEM_REPEAT's act once.
+  - N2 (decided): a watch stays level-triggered until gk_unwatch() or a close, and ends by itself only on POLLNVAL:
+    SurfOS's pipes and sockets say POLLIN|POLLHUP while data is left and at the end alike, so F9's watch told once
+    stranded what a program had not read in one go. At most one GK_EV_FD a watch waits, its revents merged (x: the
+    descriptor); gk.h says to unwatch at read() == 0 or an error, as Chat's end_link() does.
+  - N3: gk_timer_stop() takes the timer's events not given yet with it. N4: after a deletion the cursor stands on a
+    character's start. N5: gk_set_text()'s result is the call's own, and -1 for a tab strip's and a list's text,
+    which is their tab's and row's. N6: gk.h states F14. N7: a wheel's rows in 64 bits in areas, lists and texts.
+  - N8: the fake desktop says on stderr when it loses events (the first loss in a run, and the run's count at its
+    end), gkf_flood() for tests that flood on purpose, gkf_lost() to count; what it keeps is unchanged.
+  - Checked: `make unittest` (test_gk 536, test_wkit 76, test_gksecret 10) and the guiapps scenario at -O0 and -O2
+    through the lock (test-all skipped, as the coordinator decided: no kernel change, and the integration gate runs
+    it); natively ASan and UBSan with undefined behaviour fatal, and the i386 compile with no libgcc division. The
+    nine apps' window tests of 582153be, built in this track's scratchpad from git objects with this kit's files laid
+    over (review-kit's build_apps.sh, copied): Spreadsheet 169, Chat 290, Mines 77, Solitaire 82, Swell 63,
+    Settings 173, wkit 76, Code Editor 108 checks, all passing; Paint 162 checks, 8 failing on the Mac's 49-character
+    TMPDIR (its test types a path and Enter without reading, and the fake, as the kernel, loses what passes 64
+    events; it now says so: 9 lost) and all passing with TMPDIR=/tmp. Paint's test is the integrator's to change at
+    the merge.
+  - The gates on 9dcd814d: unittest passed (test_gk 536, test_wkit 76, test_gksecret 10); the guiapps scenario
+    passed at -O0 and -O2, 67 of 67 checks, 61 of them wkit's.
+
 ## A test run that ran away
 
 On 11/05 an early stage-1 run of test_gk (scratchpad/apps-kit/native/test_gk), started without a time limit, did not

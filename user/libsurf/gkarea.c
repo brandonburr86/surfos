@@ -178,8 +178,12 @@ static int area_wheel(struct gk_widget *w, int x, int y, int rows) {
         }
         return 1;
     }
-    if(across) a->sx += rows * (unit >= 16 ? 1 : 16 / unit);
-    else a->sy += rows * (unit >= 16 ? 1 : 16 / unit);
+    {                                                   /* (the re-review, N7) in 64 bits, held to the int's range */
+        long long to = (long long)(across ? a->sx : a->sy) + (long long)rows * (unit >= 16 ? 1 : 16 / unit);
+        to = to > 0x7FFFFFFF ? 0x7FFFFFFF : to < -0x7FFFFFFF ? -0x7FFFFFFF : to;
+        if(across) a->sx = (int)to;
+        else a->sy = (int)to;
+    }
     fit(w);
     if(a->sx != wx || a->sy != wy) scrolled(w);
     return 1;
@@ -280,16 +284,6 @@ void gk_area_reveal(struct gk_widget *w, int ux, int uy, int uw, int uh) {
 void gk_damage(struct gk_widget *w, int x, int y, int width, int height) {
     const struct area *a = area_of(w);
     if(!w) return;
-    if(a) {                                             /* in its view, clipped to it */
-        if(x < 0) { width += x; x = 0; }
-        if(y < 0) { height += y; y = 0; }
-        if(x + width > a->vw) width = a->vw - x;
-        if(y + height > a->vh) height = a->vh - y;
-    } else {
-        if(x < 0) { width += x; x = 0; }
-        if(y < 0) { height += y; y = 0; }
-        if(x + width > w->w) width = w->w - x;
-        if(y + height > w->h) height = w->h - y;
-    }
-    if(width > 0 && height > 0 && gk_shown_now(w)) gk_dirty_rect(w->ui, w->x + x, w->y + y, width, height);
+    if(!gk_clip_rect(&x, &y, &width, &height, a ? a->vw : w->w, a ? a->vh : w->h)) return;   /* in its view */
+    if(gk_shown_now(w)) gk_dirty_rect(w->ui, w->x + x, w->y + y, width, height);
 }

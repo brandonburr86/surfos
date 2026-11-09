@@ -49,8 +49,12 @@ item has it for its shortcut. A key the focused widget does not use is a menu it
 surfos/win.h says: Ctrl and a letter is its control byte with WIN_MOD_CTRL (Ctrl+S 19, Ctrl+I 9),
 Tab, Enter, Esc and Backspace are 9, 13, 27 and 127 and with Ctrl WIN_KEY_TAB .. WIN_KEY_BACKSPACE;
 a program tests the modifiers' bits (ev.mods & WIN_MOD_CTRL, & WIN_MOD_REPEAT for a key held down),
-never mods whole. Fields and lists type and jump only for a key without Ctrl or Alt. All text is
-UTF-8, shown with the console's characters (code page 437), 8 x 16 pixels each.
+never mods whole. Fields and lists type and jump only for a key without Ctrl or Alt. A key held
+down: movement keys repeat (the arrows, Home and End, Page Up and Down move a list, a slider, a
+radio group, tabs, a field's or a text's cursor at each repeat), and activation keys act once a
+press (Space and Enter on a button, a check box or a radio group; a box's keys; a menu item's
+shortcut, but GK_ITEM_REPEAT's). All text is UTF-8, shown with the console's characters (code
+page 437), 8 x 16 pixels each.
 
 Testing: tests/host/gk_fake.h is a desktop for a program's window on the host (the Makefile's
 GK_HOST_FLAGS and GK_HOST_OBJ), and user/wkit/ with tests/host/test_wkit.c is the pattern.
@@ -126,6 +130,9 @@ struct gk_event {
                                            path, 0 cancelled */
 #define GK_EV_THEME     17              /* the desktop's theme changed: value WIN_THEME_*, gk_theme() its colours (the
                                            window is painted again: an area's draw reads them) */
+#define GK_EV_UNCOPIED  18              /* 11/09/26: the clipboard refused a field's or a text's copy (Ctrl+C) or cut
+                                           (Ctrl+X, which then deletes nothing): w the widget, value the errno (EINVAL:
+                                           more than WIN_CLIP_MAX bytes; EACCES: the window has not the focus) */
 
 /* flags */
 #define GK_PASSWORD     0x01            /* a field: dots for its characters, nothing copied, its text wiped once gone */
@@ -166,6 +173,10 @@ int gk_flush(struct gk *ui);                    /* paint and present what change
 #define GK_WATCHES 8
 int gk_timer(struct gk *ui, int id, int ms, int repeat);   /* GK_EV_TIMER after ms (again every ms): 0, -1 full */
 void gk_timer_stop(struct gk *ui, int id);
+/* a descriptor watched beside the window (poll()'s events; GK_EV_FD with id, x the descriptor, value the revents),
+   level-triggered: told at each turn while it is ready, one event waiting at most. At read() == 0 or an error,
+   gk_unwatch() it (or close it): a pipe or a socket says POLLIN|POLLHUP while data is left and at its end alike. A
+   watch ends by itself only when its descriptor is none (POLLNVAL, told once) */
 int gk_watch(struct gk *ui, int fd, short events, int id); /* GK_EV_FD while poll() finds fd ready: 0, -1 full */
 void gk_unwatch(struct gk *ui, int fd);
 
@@ -250,9 +261,13 @@ struct gk_widget *gk_focused(const struct gk *ui);
 void gk_remove(struct gk_widget *w);                       /* it and what is in it go */
 void gk_redraw(struct gk_widget *w);                       /* painted again at the next gk_next() */
 /* the text of a label, button, check box, field, status bar (its left part), tab strip (the page shown's label);
-   "" for none. gk_set_text() for a field puts the cursor at its end */
+   "" for none. gk_set_text() for a field puts the cursor at its end, and says whether the widget holds the text as
+   given (11/09/26): 0, or 1 when it holds it changed to fit (a field's or a text's max reached, the text cut at a
+   character's start; a control character as a space, a CR LF as one line end: compare gk_text()), or -1 when it
+   could not take it (no memory: gk_ok() says 0). A tab strip's and a list's text is their shown tab's label and their
+   selected row's: gk_set_text() changes nothing there and says -1 (gk_tab_label(), gk_list_set() do) */
 const char *gk_text(const struct gk_widget *w);
-void gk_set_text(struct gk_widget *w, const char *text);
+int gk_set_text(struct gk_widget *w, const char *text);
 /* the value of a check box (0, 1), radio group, list (the row selected, -1), tabs, pages (the one shown), scroll
    bar (its first unit shown); setting it is no person's change: no GK_EV_CHANGE */
 int gk_value(const struct gk_widget *w);
@@ -341,11 +356,18 @@ void gk_damage(struct gk_widget *w, int x, int y, int width, int height);   /* a
 /**** modal boxes in the window ****/
 
 /* one at a time over the window's content, taking every key and click: a message (OK), a question with up to three
-   buttons (yes, no, cancel: NULL for none), a line to type (OK and Cancel; GK_PASSWORD). Each is answered once,
-   GK_EV_ANSWER with its id: a box opened over another answers the other -1 first */
+   buttons (yes, no, cancel from left to right: NULL for none), a line to type (OK and Cancel; GK_PASSWORD). Each is
+   answered once, GK_EV_ANSWER with its id: a box opened over another answers the other -1 first. A question's
+   Enter answers its first button, or with gk_confirm_default() the one def says (0 yes, 1 no, 2 cancel: a
+   destructive question's safe answer); Left and Right move between them and stop at the ends. A key held down
+   (WIN_MOD_REPEAT) answers no box: Enter held on a button does not answer the question it opens. While a box is up,
+   the program's menus are greyed in the desktop's bar and their shortcuts are the box's keys; a choice made in the bar
+   just before the box opened, which comes after it, is dropped (no GK_EV_MENU behind a box) */
 void gk_message(struct gk *ui, int id, const char *title, const char *line1, const char *line2);
 void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
                 const char *yes, const char *no, const char *cancel);
+void gk_confirm_default(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
+                        const char *yes, const char *no, const char *cancel, int def);
 void gk_ask(struct gk *ui, int id, const char *title, const char *prompt, const char *text, unsigned flags);
 int gk_asking(const struct gk *ui);             /* the id of the box open, 0 for none (or a box of id 0) */
 int gk_box_open(const struct gk *ui);           /* 1 while one is */

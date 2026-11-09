@@ -88,7 +88,7 @@ static int knob_x(const struct gk_widget *w) {
     const struct slider *s = w->k;
     int run = w->w - KNOB_W - 2;
     if(s->max <= s->min || run <= 0) return w->x + 1;
-    return w->x + 1 + (int)gk_div64((long long)(w->value - s->min) * run, s->max - s->min);
+    return w->x + 1 + (int)gk_div64(((long long)w->value - s->min) * run, (long long)s->max - s->min);
 }
 
 static void slider_paint(struct gk_widget *w, struct gw *win) {
@@ -100,10 +100,12 @@ static void slider_paint(struct gk_widget *w, struct gw *win) {
     gw_frame(win, kx, w->y + 2, KNOB_W, w->h - 4, off ? t->line : lit ? t->ink : t->muted);
 }
 
-static void slider_to(struct gk_widget *w, int value) {
+static void slider_to(struct gk_widget *w, long long v) {
     const struct slider *s = w->k;
-    if(s->step > 1) value = s->min + (value - s->min + s->step / 2) / s->step * s->step;
-    value = clamp(value, s->min, s->max);
+    int value;
+    if(v < s->min) v = s->min;                          /* (64 bits: gk_div64(), as libsurf links no libgcc) */
+    if(s->step > 1 && v < s->max) v = s->min + gk_div64(v - s->min + s->step / 2, s->step) * s->step;
+    value = v > s->max ? s->max : (int)v;
     if(value == w->value) return;
     w->value = value;
     gk_dirty(w);
@@ -114,10 +116,10 @@ static int slider_key(struct gk_widget *w, unsigned key, unsigned mods) {
     const struct slider *s = w->k;
     if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;  /* Ctrl or Alt and a key: a shortcut's */
     switch(key) {
-    case WIN_KEY_LEFT: case WIN_KEY_DOWN: slider_to(w, w->value - s->step); return 1;
-    case WIN_KEY_RIGHT: case WIN_KEY_UP: slider_to(w, w->value + s->step); return 1;
-    case WIN_KEY_PGDN: slider_to(w, w->value - 10 * s->step); return 1;
-    case WIN_KEY_PGUP: slider_to(w, w->value + 10 * s->step); return 1;
+    case WIN_KEY_LEFT: case WIN_KEY_DOWN: slider_to(w, (long long)w->value - s->step); return 1;
+    case WIN_KEY_RIGHT: case WIN_KEY_UP: slider_to(w, (long long)w->value + s->step); return 1;
+    case WIN_KEY_PGDN: slider_to(w, (long long)w->value - 10LL * s->step); return 1;
+    case WIN_KEY_PGUP: slider_to(w, (long long)w->value + 10LL * s->step); return 1;
     case WIN_KEY_HOME: slider_to(w, s->min); return 1;
     case WIN_KEY_END: slider_to(w, s->max); return 1;
     }
@@ -130,7 +132,7 @@ static int value_at(const struct gk_widget *w, int x) {
     int run = w->w - KNOB_W - 2, pos = x - w->x - 1 - KNOB_W / 2;
     if(run <= 0 || s->max <= s->min) return s->min;
     pos = clamp(pos, 0, run);
-    return s->min + (int)gk_div64((long long)pos * (s->max - s->min) + run / 2, run);
+    return (int)(s->min + gk_div64((long long)pos * ((long long)s->max - s->min) + run / 2, run));
 }
 
 static void slider_pointer(struct gk_widget *w, int x, int y, unsigned buttons, unsigned pressed, unsigned released) {
@@ -149,7 +151,7 @@ static int slider_wheel(struct gk_widget *w, int x, int y, int rows) {
     const struct slider *s = w->k;
     (void)x;
     (void)y;
-    slider_to(w, w->value - (rows > 0 ? s->step : rows < 0 ? -s->step : 0));   /* away from the user: more */
+    slider_to(w, (long long)w->value - (rows > 0 ? s->step : rows < 0 ? -(long long)s->step : 0));   /* away: more */
     return 1;
 }
 

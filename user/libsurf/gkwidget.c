@@ -42,7 +42,7 @@ int gk_lines(const char *text, int *widest) {
             len = 1;
             continue;
         }
-        gw_char(text, (int)strlen(text), &len);
+        gw_char(text, (int)strnlen(text, 4), &len);     /* (a character is 4 bytes at most: no strlen each time) */
         if(++cells > *widest) *widest = cells;
     }
     return n;
@@ -214,6 +214,7 @@ static void button_paint(struct gk_widget *w, struct gw *win) {
 
 static int button_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if((key != ' ' && key != '\r' && key != '\n') || (mods & (WIN_MOD_CTRL | WIN_MOD_ALT))) return 0;
+    if(mods & WIN_MOD_REPEAT) return 1;                 /* once a press: a held key clicks once */
     gk_post(w->ui, GK_EV_CLICK, w, 0);
     return 1;
 }
@@ -294,6 +295,7 @@ static void check_toggle(struct gk_widget *w) {
 
 static int check_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(key != ' ' || (mods & (WIN_MOD_CTRL | WIN_MOD_ALT))) return 0;
+    if(mods & WIN_MOD_REPEAT) return 1;                 /* once a press */
     check_toggle(w);
     return 1;
 }
@@ -395,6 +397,7 @@ static void radio_choose(struct gk_widget *w, int i) {
 
 static int radio_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
+    if((mods & WIN_MOD_REPEAT) && key == ' ') return 1;   /* Space once a press; the arrows move at each repeat */
     if(key == WIN_KEY_UP || key == WIN_KEY_LEFT) radio_choose(w, w->value <= 0 ? 0 : w->value - 1);
     else if(key == WIN_KEY_DOWN || key == WIN_KEY_RIGHT) radio_choose(w, w->value + 1);
     else if(key == ' ') radio_choose(w, w->value < 0 ? 0 : w->value);
@@ -553,8 +556,9 @@ static int sbar_wheel(struct gk_widget *w, int x, int y, int rows) {
     struct sbar *s = w->k;
     (void)x;
     (void)y;
+    long long to = (long long)s->b.first + rows;     /* (in 64 bits: rows as the desktop or a program gave them) */
     if(!gk_bar_max(&s->b)) return 0;
-    if(set_first(&s->b, s->b.first + rows)) sbar_moved(w);
+    if(set_first(&s->b, to > 0x7FFFFFFF ? 0x7FFFFFFF : to < 0 ? 0 : (int)to)) sbar_moved(w);
     return 1;
 }
 
@@ -690,7 +694,7 @@ static void tabs_choose(struct gk_widget *w, int i) {
 }
 
 static int tabs_key(struct gk_widget *w, unsigned key, unsigned mods) {
-    if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
+    if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;   /* (the arrows, Home and End move at each repeat) */
     if(key == WIN_KEY_LEFT) tabs_choose(w, w->value - 1);
     else if(key == WIN_KEY_RIGHT) tabs_choose(w, w->value + 1);
     else if(key == WIN_KEY_HOME) tabs_choose(w, 0);
