@@ -696,8 +696,8 @@ side is `SYS_netctl`, `kernel/netctl.c` and `include/surfos/netctl.h`).
   for its password in a panel over the tabs: the field shows a dot for each character and copies
   nothing, and is wiped as soon as the password has been handed on; the kernel makes the key from
   it at once and wipes it. Save it, unticked unless the person ticks it, keeps the network in
-  `networks.conf` (the key, never the password); while telnetd is on it says that telnetd will
-  start on that network. By name joins a network that hides its name (no password: an open one). WEP, WPA3
+  `networks.conf` (the key, never the password); while telnetd is on it says what saving then
+  means (telnetd starts on a saved WPA2 network; an open one is not joined by itself). By name joins a network that hides its name (no password: an open one). WEP, WPA3
   only and enterprise networks are listed and say why SurfOS does not join them. A network not
   heard in the last minute (the station forgets what it has not heard for that long, and its row
   goes) is looked for first, as `wifi join` does, and is joined as a hidden one only when it is

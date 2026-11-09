@@ -209,8 +209,8 @@ On kit's toolkit, the pattern of `user/wkit/`: a window of 600 x 400 (at least 5
 | Test | Checks | What |
 |---|---|---|
 | `test_netctl` | 415 | the kernel side: every op's size and pointer refused first, nothing written past a structure; the reads; jobs one at a time, their stages and numbers (wrapping); the join's security, and a name not heard looked for first by the job (heard then: decided so, its refusals in words; still not: hidden); the password wiped whatever the answer; the PMK against IEEE 802.11i-2004 annex H.4.1's vector, handed to the station and to the save, wiped after; DHCP while the association lasts; a save refused after another join; the card with the quiet connect; leave, save, forget, set; a step put in force with no job and no write, only for the desktop's two keys; out of memory; a thread that cannot start; nothing allocated and no lock held after each; and the review's: memory the program may read but not write, an open join while a server without a password runs refused without the person's word (at the call, and in the job after its scan), and the call's stack copies of the password and the PMK gone once it returns |
-| `test_wsettings` | 377 | the model: words (SSIDs with controls, bad UTF-8, C1, surrogates, overlong forms; wrapping), rows per name, selections that follow, joins of every kind and their refusals (the kernel's words for what its scan found), the password never in the model, what was heard going after a minute (the count with it, a scan at the next look), busy and wait, the card, leave, save, forget, settings with their warnings and `when()` texts, steps in force at once and written once when they stop (two keys one after the other, another program's job waited for, before closing, a kernel without the step), the host name's rule, the desktop's choices, interfaces and leases, About, a kernel without the call, closing, drawing only on change; every call's size as it should be; and the review's: a refusal for a server asked about again with what is true then (the flag only from that answer), Save it unticked and what it says while telnetd is on, steps back where they began writing nothing, a question kept while a job runs, Save again one setting after the other, a job record that could not be read |
-| `test_wsettings_win` | 169 | the window on the fake desktop: opening, the scan by itself and the greying meanwhile, the networks in their columns, the rows gone after a minute unheard and the note, a WPA2 join (dots, a password too short refused and wiped, Enter, the field wiped at once, nowhere in the window's memory), the open network's warning in full, by name, the card, forget, telnetd's warning in full, history, the host name, closing with one typed, the desktop's choices stepped by a click and by arrows held down (each in force, the stick written once), About, menus and shortcuts, nothing presented when nothing changed, the theme; and the review's: every byte of the wiped field, the panel asking when the kernel refuses an open join, Save it unticked, the panel's Join greyed and Enter waiting while a scan runs (the password still typed), the newest step shown while a write runs, Save again on the System page |
+| `test_wsettings` | 397 | the model: words (SSIDs with controls, bad UTF-8, C1, surrogates, overlong forms; wrapping), rows per name, selections that follow, joins of every kind and their refusals (the kernel's words for what its scan found), the password never in the model, what was heard going after a minute (the count with it, a scan at the next look), busy and wait, the card, leave, save, forget, settings with their warnings and `when()` texts, steps in force at once and written once when they stop (two keys one after the other, another program's job waited for, before closing, a kernel without the step), the host name's rule, the desktop's choices, interfaces and leases, About, a kernel without the call, closing, drawing only on change; every call's size as it should be; and the review's: a refusal for a server asked about again with what is true then (the flag only from that answer), Save it unticked and what it says while telnetd is on, steps back where they began writing nothing, a question kept while a job runs, Save again one setting after the other, a job record that could not be read |
+| `test_wsettings_win` | 173 | the window on the fake desktop: opening, the scan by itself and the greying meanwhile, the networks in their columns, the rows gone after a minute unheard and the note, a WPA2 join (dots, a password too short refused and wiped, Enter, the field wiped at once, nowhere in the window's memory), the open network's warning in full, by name, the card, forget, telnetd's warning in full, history, the host name, closing with one typed, the desktop's choices stepped by a click and by arrows held down (each in force, the stick written once), About, menus and shortcuts, nothing presented when nothing changed, the theme; and the review's: every byte of the wiped field, the panel asking when the kernel refuses an open join, Save it unticked, the panel's Join greyed and Enter waiting while a scan runs (the password still typed), the newest step shown while a write runs, Save again on the System page |
 | `tools/gui_apps_settings.py` | 23 (guiapps) | on the desktop of a USB boot: the window, its pages, telnetd's warning on the screen, every line, history and the theme through the kernel to the network manager (the desktop turning dusk at once and back, each written once the steps stop), About, Ctrl+W (surfsh collects the program, ps finds none), and Apps > Programs > Settings |
 | `tools/wsettings_scenario.py` | (wsettings) | the review's scenario, on the real kernel with wlansim: a WPA2 join typed and saved by ticking Save it, networks.conf with the key and never the passphrase, M1 in three orders (Disconnect right after the card's start, `wifi connect; wifi leave`, a connect after a leave that finds the network gone), M2's open join asked about while telnetd runs, the kernel log's lines, the passphrase nowhere on the serial line or new on the stick, fsck on the stick |
 
@@ -277,12 +277,12 @@ manager's existing callers, the stick's writes and telnetd's question as they sh
   network manager keeps no "not saved" mark that a program could read.
 - **L6, a failed read of the job's record dropped the job.** The job is kept, and read again at the next tick.
 - **L5, a job cannot be cancelled, and a station request that never ends leaves netctl busy, with the PMK in its
-  record, until a restart.** Left. The job's thread is waiting inside the station's request; a deadline in netctl.c
-  could mark the job failed, but not stop that thread, which still owns the request and its PMK and may still use
-  them (the save after a late join), and a second job let in meanwhile would overwrite the record under it. The clean
-  place is a deadline on the station's own requests (`request_if()` in net/wlan/wlan.c), outside this track. Until
-  then the PMK stays in the kernel's memory, which no program reads, and nothing but a restart frees the job, as for a
-  `wifi join` typed in a Terminal that never returns.
+  record, until a restart.** Left. A deadline in netctl.c could mark the job failed but not stop its thread, which
+  still owns the request and its PMK and may use them (the save after a late join), and a second job let in meanwhile
+  would overwrite the record under it. The re-review gave the way forward: `request_if()` in net/wlan/wlan.c returns
+  -EINTR when its task is interrupted (`task_interrupted()`, how Ctrl+C cuts a `wifi join` short), so a cancel of a
+  job can interrupt the job's thread itself, which then ends as any job does and wipes its PMK, with no deadline in
+  wlan.c. Until then the PMK stays in the kernel's memory, which no program reads.
 - **Defence in depth on the password's path.** `sha1_block()` wipes its message schedule when the block is done (it
   can be run backwards to the block: for HMAC's first, the key, a WPA2 password, xor the pad). The round variables
   are kept in registers at -O2 and spilled anywhere on the stack; rather than slow every hash by keeping them in
@@ -298,6 +298,28 @@ manager's existing callers, the stick's writes and telnetd's question as they sh
   saved by ticking Save it, networks.conf holding the key and never the passphrase, M1's three orders above, M2's open
   join asked about while telnetd runs and made only on Join, the kernel log's lines, the passphrase nowhere on the
   serial line and nowhere new on the stick, fsck_msdos and fsck.fat on the stick.
+
+### The re-review
+
+The fix round, read again at 4a56ffea: sound to ship (M1 in every order and the boot's keeper unaffected, M2's two
+checks, M3, the wipes at -O2: the i386 code calls crypto_wipe in another file, and 1 KB covers the frames even after a
+tail call; the new kernel tests catch mutations made by hand). Four lows left, all in user/wsettings:
+
+- **N2, a question raised by itself could take a click meant for another.** A join by name whose job was refused for
+  a server that started while it looked put "Join ... all the same?" in the place of a question already open (the
+  close question, say), its Join where that one's Close was. Now a question is never put in the place of an open one:
+  the band says the network was not joined and why, and Join asks again. A question the model raised by itself also
+  takes no Yes in its first 500 ms (`WS_ASK_GUARD_MS`): a click meant for what was there before it. The reviewer's
+  probe P2 is a scenario of test_wsettings.
+- **N1, under settings=off a step back to the value of before was ignored**, since NETCTL_APPLY puts nothing in force
+  then and the table still held that value: dusk and back wrote dusk. A step is now compared with the step waiting to
+  be written; back where it began, nothing is written (probe P1).
+- **N3, Save it's words were untrue in two cases.** For an open network: the network manager joins none by itself
+  while a server without a password runs or is to start, and telnetd never starts on one ("joined by itself only
+  while no telnetd or ftpd is on"); for a WPA2 network while telnetd runs only because it was started by hand,
+  nothing of it comes back at a start (plain words). By name, the words follow whether a password is typed.
+- **N4, every read error of the job's record but ENOSYS was waited out.** Only no memory is now; another error would
+  come again, so the job is given up and said so.
 
 ## Where the code comes from
 
