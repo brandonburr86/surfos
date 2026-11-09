@@ -675,9 +675,27 @@ static int moved_span(int *lo, int *hi, int at, int n, int limit) {
     return *lo <= *hi;
 }
 
+static struct { int r1, c1, r2, c2; } cut;    /* FX_CUT's rectangle */
+
+void fx_cut_box(int r1, int c1, int r2, int c2) {
+    cut.r1 = r1;
+    cut.c1 = c1;
+    cut.r2 = r2;
+    cut.c2 = c2;
+}
+
+static int in_cut(const struct ref *r) {
+    return r->row >= cut.r1 && r->row <= cut.r2 && r->col >= cut.c1 && r->col <= cut.c2;
+}
+
 /* one reference after how: 0 when it is #REF! now */
 static int move_ref(struct ref *r, int how, int a, int b) {
     switch(how) {
+    case FX_CUT:                                /* what was cut moves, $ or not; the rest stays where it is */
+        if(!in_cut(r)) return 1;
+        r->row += a;
+        r->col += b;
+        return r->row >= 0 && r->row < SH_ROWS && r->col >= 0 && r->col < SH_COLS;
     case FX_MOVE:
         if(!r->rabs) r->row += a;
         if(!r->cabs) r->col += b;
@@ -694,6 +712,9 @@ static int move_ref(struct ref *r, int how, int a, int b) {
 
 static int move_range(struct ref *x, struct ref *y, int how, int a, int b) {
     switch(how) {
+    case FX_CUT:                                /* a range moves when all of it was cut */
+        if(in_cut(x) && in_cut(y) && (!move_ref(x, how, a, b) || !move_ref(y, how, a, b))) return 0;
+        break;
     case FX_MOVE:
         if(!move_ref(x, how, a, b) || !move_ref(y, how, a, b)) return 0;
         break;

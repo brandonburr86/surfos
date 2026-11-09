@@ -21,12 +21,13 @@ The formula language, the files and the limits are described in the files that d
 
 #define SH_COLS 256
 #define SH_ROWS 65536
-#define SH_INPUT_MAX 8192               /* bytes a cell holds as typed: text, or a formula with its '=' */
+#define SH_INPUT_MAX 8192               /* bytes a cell holds as typed: text, or a formula with its '='; the '
+                                           that keeps a text text is not counted (11/09/26, the review) */
 #define SH_TEXT_MAX 8192                /* bytes of text a formula may make */
 #define SH_CELLS_MAX 300000             /* cells that hold something or have a format of their own */
 #define SH_AREA_MAX 65536               /* cells a format may cover at once: a whole column */
 #define SH_COPY_MAX 1048576             /* cells a copy may cover at once: 16 whole columns */
-#define SH_FILE_MAX (32L * 1024 * 1024) /* bytes of a file read */
+#define SH_FILE_MAX (32L * 1024 * 1024) /* bytes of a file read, and of a file written (sh_file_max) */
 #define SH_WIDTH_DEFAULT 80             /* a column's width in pixels: ten characters of 8 */
 #define SH_WIDTH_MIN 16
 #define SH_WIDTH_MAX 800
@@ -34,10 +35,11 @@ The formula language, the files and the limits are described in the files that d
 #define SH_WHY 160                      /* a message's bytes */
 
 /* what the model may take: memory in bytes, and the work of a recalculation in steps (an instruction, a cell
-   looked at). The tests change them; sh_mem_fail makes the allocation that many from now fail (-1: none) */
+   looked at, 8 bytes of text compared, scanned or made). The tests change them, and sh_file_max, the bytes of a
+   file read or written; sh_mem_fail makes the allocation that many from now fail (-1: none) */
 #define SH_MEMORY (40L * 1024 * 1024)
 #define SH_STEPS 20000000L
-extern long sh_mem_max, sh_mem_used, sh_mem_blocks, sh_mem_fail, sh_steps_max;
+extern long sh_mem_max, sh_mem_used, sh_mem_blocks, sh_mem_fail, sh_steps_max, sh_file_max;
 
 /* a value */
 enum { SH_EMPTY, SH_NUMBER, SH_TEXT, SH_BOOL, SH_ERROR };
@@ -125,6 +127,10 @@ struct sh_clip *sh_copy(struct sheet *s, struct sh_range r);   /* NULL: sh_why()
 const char *sh_clip_text(const struct sh_clip *c, int *len);
 void sh_clip_size(const struct sh_clip *c, int *rows, int *cols);
 void sh_clip_free(struct sh_clip *c);
+/* the clip is a Cut's (11/09/26): its paste moves the cells there, as spreadsheets do, so a moved formula keeps
+   its references, and those into the cut cells go along with them; formulas elsewhere that referred to the cut
+   cells are not changed */
+void sh_clip_cut(struct sh_clip *c);
 int sh_paste(struct sheet *s, const struct sh_clip *c, int row, int col, struct sh_range *where);
 int sh_paste_text(struct sheet *s, const char *text, int len, int row, int col, struct sh_range *where);
 
@@ -136,7 +142,18 @@ int sh_kind_of(const char *path);       /* SH_CSV for a .csv, SH_NATIVE for anyt
 struct sh_reader *sh_read_begin(int kind);      /* NULL: no memory */
 int sh_read(struct sh_reader *rd, const char *bytes, int n);   /* 0, or -1 once it refuses */
 struct sheet *sh_read_end(struct sh_reader *rd, char *why, int size);   /* the sheet, or NULL and why; rd goes */
+/* as sh_read_end(), and with the new sheet built, *old (the sheet it replaces, or NULL) is freed and set NULL
+   before the new one is worked out, as the reader's memory is: they never hold the budget at once */
+struct sheet *sh_read_finish(struct sh_reader *rd, char *why, int size, struct sheet **old);
 void sh_read_cancel(struct sh_reader *rd);
+/* 0, or -1: put() stopped it, or the file would pass sh_file_max (nothing written then), which a reader refuses */
 int sh_write(const struct sheet *s, int kind, int (*put)(void *ctx, const char *bytes, int n), void *ctx);
+long sh_write_size(const struct sheet *s, int kind);   /* the bytes sh_write() would write */
+/* what a CSV save leaves out, which this sheet has: formulas, formats, column widths, cells not worked out */
+#define SH_LOSE_FORMULAS 1
+#define SH_LOSE_FORMATS 2
+#define SH_LOSE_WIDTHS 4
+#define SH_LOSE_LIMIT 8
+unsigned sh_csv_loss(const struct sheet *s);
 
 #endif

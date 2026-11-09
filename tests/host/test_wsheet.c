@@ -208,22 +208,26 @@ static int round_trips(const struct sheet *s) {
 }
 
 /* its values as CSV, and those of the sheet read again from its own file: the recalculation left nothing stale */
+/* the values of the sheet read back from its own file are the same, cell by cell (compared directly: a CSV of a sheet
+   whose cells reach IV65536 would be 17 MB of commas, 11/09/26) */
 static int values_hold(const struct sheet *s) {
-    char why[SH_WHY], *a = save(s, SH_NATIVE), *v1 = save(s, SH_CSV), *v2;
+    char why[SH_WHY], *a = save(s, SH_NATIVE);
     struct sheet *t = load(SH_NATIVE, a, (int)strlen(a), 0, why);
-    int ok;
-    if(!t) {
-        free(a);
-        free(v1);
-        return 0;
-    }
-    v2 = save(t, SH_CSV);
-    ok = !strcmp(v1, v2);
-    if(!ok) printf("values differ:\n%.400s\n---\n%.400s\n", v1, v2);
+    struct sh_value x, y;
+    int ok = t != NULL, i, j, r, c;
+    for(i = 0; ok && i < s->nrows; i++)
+        for(j = 0; ok && j < s->rows[i].n; j++) {
+            r = s->rows[i].r;
+            c = s->rows[i].cells[j].col;
+            sh_value(s, r, c, &x);
+            sh_value(t, r, c, &y);
+            ok = x.type == y.type && x.b == y.b && (x.type != SH_NUMBER || x.num == y.num) &&
+                 (x.type != SH_TEXT || (x.len == y.len && !memcmp(x.text, y.text, (size_t)x.len)));
+            if(!ok) printf("values differ at row %d, column %d\n", r + 1, c + 1);
+        }
+    if(ok && sh_cells(s) != sh_cells(t)) ok = 0;
     sh_free(t);
     free(a);
-    free(v1);
-    free(v2);
     return ok;
 }
 
@@ -1968,12 +1972,213 @@ static void fuzz_csv(int rounds) {
 }
 
 /* a random change to S: 0, or 1 when it was Undo or Redo */
+/**** the review (11/09/26): one test for each of its findings in the model ****/
+
+static int puts_seen;
+static int count_put(void *ctx, const char *b, int n) {
+    (void)ctx;
+    (void)b;
+    (void)n;
+    puts_seen++;
+    return 0;
+}
+
+static void test_review(void) {
+    static char text[8300], csv[8300], got[8300];
+    char why[SH_WHY], name[16], *a, *b;
+    struct sh_reader *rd;
+    struct sh_value v;
+    struct sheet *t, *u, *old;
+    struct sh_clip *c;
+    int len, k, n, ok;
+    /* a text's ' is not counted: "'" and 8,192 bytes is a cell, and 8,193 bytes of anything else is not */
+    fresh();
+    text[0] = '\'';
+    text[1] = '=';
+    memset(text + 2, 'b', 8191);
+    CHECK(sh_set(S, 0, 0, text, 8193) == 0 && vtype("A1") == SH_TEXT && strlen(inp("A1")) == 8193);
+    CHECK(sh_set(S, 0, 1, text + 1, 8192) == 0 && vtype("B1") == SH_ERROR);   /* a formula: =bbb... is #NAME? */
+    text[0] = 'b';
+    CHECK(sh_set(S, 0, 2, text, 8193) < 0 && vtype("C1") == SH_EMPTY);
+    /* anything wsheet saves, wsheet opens: CSV fields of 8,190 to 8,192 bytes, two kinds that need the ' as text
+       (= in front, a number's look) and one that does not, saved as .sheet, opened, saved again */
+    ok = 1;
+    for(len = 8190; len <= 8192; len++)
+        for(k = 0; k < 3; k++) {
+            memset(csv, k == 1 ? '7' : 'a', (size_t)len);
+            csv[0] = k == 0 ? '=' : k == 1 ? '\'' : 'a';
+            memcpy(csv + len, "\r\n", 2);
+            t = load(SH_CSV, csv, len + 2, 4096, why);
+            if(!t) {
+                printf("the CSV of a %d-byte field refused: %s\n", len, why);
+                ok = 0;
+                continue;
+            }
+            sh_input(t, 0, 0, got, sizeof(got));
+            a = save(t, SH_NATIVE);
+            u = load(SH_NATIVE, a, (int)strlen(a), 1000, why);
+            if(!u) {
+                printf("the .sheet of a %d-byte field refused: %s\n", len, why);
+                ok = 0;
+            } else {
+                b = save(u, SH_NATIVE);
+                sh_value(u, 0, 0, &v);
+                if(strcmp(a, b) || (int)strlen(got) != len + (k < 2) || v.type != SH_TEXT || v.len != len ||
+                   memcmp(v.text, csv, (size_t)len))
+                    ok = 0;
+                free(b);
+            }
+            sh_free(u);
+            sh_free(t);
+            free(a);
+        }
+    CHECK(ok);
+    /* nothing is written that a reader would refuse: past sh_file_max nothing at all, the same bytes read */
+    fresh();
+    set("A1", "hello");
+    set("B2", "=A1&\"!\"");
+    a = save(S, SH_NATIVE);
+    n = (int)strlen(a);
+    CHECK(sh_write_size(S, SH_NATIVE) == n);
+    sh_file_max = n - 1;
+    puts_seen = 0;
+    CHECK(sh_write(S, SH_NATIVE, count_put, NULL) < 0 && puts_seen == 0);
+    t = load(SH_NATIVE, a, n, 0, why);
+    CHECK(!t && !strcmp(why, "The file is bigger than 32 MB"));
+    sh_file_max = n;
+    CHECK(sh_write(S, SH_NATIVE, count_put, NULL) == 0 && puts_seen > 0);
+    t = load(SH_NATIVE, a, n, 0, why);
+    if(t) sh_value(t, 1, 1, &v);
+    CHECK(t && v.type == SH_TEXT && !strcmp(v.text, "hello!"));
+    sh_free(t);
+    free(a);
+    sh_file_max = SH_FILE_MAX;
+    a = save(S, SH_CSV);
+    n = (int)strlen(a);
+    CHECK(sh_write_size(S, SH_CSV) == n);
+    sh_file_max = n - 1;
+    puts_seen = 0;
+    CHECK(sh_write(S, SH_CSV, count_put, NULL) < 0 && puts_seen == 0);
+    sh_file_max = SH_FILE_MAX;
+    free(a);
+    /* what a CSV save leaves out */
+    fresh();
+    CHECK(sh_csv_loss(S) == 0);
+    set("A1", "5");
+    set("A2", "text");
+    CHECK(sh_csv_loss(S) == 0);
+    set("A3", "50%");
+    CHECK(sh_csv_loss(S) == SH_LOSE_FORMATS);
+    sh_set_width(S, 2, 2, 120);
+    CHECK(sh_csv_loss(S) == (SH_LOSE_FORMATS | SH_LOSE_WIDTHS));
+    set("B1", "=A1*2");
+    CHECK(sh_csv_loss(S) == (SH_LOSE_FORMATS | SH_LOSE_WIDTHS | SH_LOSE_FORMULAS));
+    sh_steps_max = 1;
+    set("B2", "=A1*3");
+    CHECK((sh_csv_loss(S) & SH_LOSE_LIMIT) && sh_limited(S));
+    sh_steps_max = SH_STEPS;
+    set("B2", "=A1*4");
+    CHECK(!(sh_csv_loss(S) & SH_LOSE_LIMIT) && num("B2") == 20);
+    /* a Cut pasted moves its cells: references into them go along, $ and all, a range when all of it was cut;
+       the rest stays where it is */
+    fresh();
+    set("A1", "4");
+    set("C1", "=A1*2");
+    c = sh_copy(S, rg("C1"));
+    sh_clip_cut(c);
+    sh_clear(S, rg("C1"));
+    CHECK(c && sh_paste(S, c, 4, 2, NULL) == 0 && vtype("C1") == SH_EMPTY && num("C5") == 8);
+    CHECK_STR(inp("C5"), "=A1*2");
+    sh_clip_free(c);
+    set("A1", "3");
+    set("B1", "=A1*2+$A$1");
+    set("C1", "=SUM(A1:B1)+SUM(A1:A2)");
+    c = sh_copy(S, rg("A1:C1"));
+    sh_clip_cut(c);
+    sh_clear(S, rg("A1:C1"));
+    CHECK(c && sh_paste(S, c, 9, 0, NULL) == 0 && num("B10") == 9 && num("C10") == 12);
+    CHECK_STR(inp("B10"), "=A10*2+$A$10");
+    CHECK_STR(inp("C10"), "=SUM(A10:B10)+SUM(A1:A2)");
+    sh_clip_free(c);
+    /* text work is counted: 8 bytes compared, scanned or made a step */
+    fresh();
+    memset(text, 'a', 8000);
+    text[8000] = 0;
+    set("A1", text);
+    set("A2", text);
+    sh_steps_max = 100000;
+    for(n = 0; n < 40; n++) {
+        snprintf(name, sizeof(name), "B%d", n + 1);
+        set(name, "=A1=A2");
+    }
+    CHECK(!sh_limited(S) && vtype("B40") == SH_BOOL);       /* 40 of 2,000 steps */
+    for(; n < 100; n++) {
+        snprintf(name, sizeof(name), "B%d", n + 1);
+        set(name, "=A1=A2");
+    }
+    CHECK(sh_limited(S) && vtype("B100") == SH_ERROR);      /* 100: past 100,000 */
+    fresh();
+    set("A1", text);
+    for(n = 0; n < 150; n++) {
+        snprintf(name, sizeof(name), "C%d", n + 1);
+        set(name, n % 2 ? "=LEN(A1)" : "=UPPER(A1)");
+    }
+    CHECK(sh_limited(S));
+    sh_steps_max = SH_STEPS;
+    set("D1", "1");
+    CHECK(!sh_limited(S) && num("C2") == 8000);
+    /* the recalculation's arrays never run out: each formula keeps its share back */
+    fresh();
+    sh_mem_max = sh_mem_used + 150000;
+    for(n = 0; n < 65536; n++) {
+        snprintf(name, sizeof(name), "A%d", n + 1);
+        if(set(name, "=1+1") < 0) break;
+    }
+    snprintf(name, sizeof(name), "A%d", n);
+    CHECK(n > 100 && n < 65536 && !sh_limited(S) && num("A1") == 2 && num(name) == 2);
+    sh_mem_max = SH_MEMORY;
+    /* a sheet opened in place of another: the other goes before the new one is worked out; refused, it stays */
+    fresh();
+    set("A1", "1");
+    set("A2", "=A1+1");
+    a = save(S, SH_NATIVE);
+    old = S;
+    rd = sh_read_begin(SH_NATIVE);
+    sh_read(rd, a, (int)strlen(a));
+    t = sh_read_finish(rd, why, sizeof(why), &old);
+    CHECK(t && !old);
+    S = t;                                      /* the old one is freed */
+    CHECK(num("A2") == 2);
+    old = S;
+    rd = sh_read_begin(SH_NATIVE);
+    sh_read(rd, "not a sheet\n", 12);
+    t = sh_read_finish(rd, why, sizeof(why), &old);
+    CHECK(!t && old == S && num("A2") == 2);
+    free(a);
+    /* a formula that does not parse is kept as typed: rows moving, or a paste, do not adjust it (the manual) */
+    fresh();
+    set("A1", "7");
+    set("B5", "=A1*2+B9?");
+    sh_insert_rows(S, 0, 2);
+    CHECK_STR(inp("B7"), "=A1*2+B9?");
+}
+
+/* a row or a column for a change: mostly among the first, sometimes at the sheet's far edge or in its middle
+   (11/09/26, the review: the changes' fuzzing kept to A1:F10) */
+static int pick(int near, int limit) {
+    switch(below(8)) {
+    case 0: return limit - 1 - below(near);
+    case 1: return limit / 2 + below(near);
+    default: return below(near);
+    }
+}
+
 static int random_change(void) {
     static char f[512];
     struct sh_clip *c;
     char name[8];
-    int k = below(16), r = below(10), col = below(6);
-    snprintf(name, sizeof(name), "%c%d", 'A' + col, r + 1);
+    int k = below(16), r = pick(10, SH_ROWS), col = pick(6, SH_COLS);
+    sh_cellname(r, col, name);
     switch(k) {
     case 0: case 1: snprintf(f, sizeof(f), "%d", below(1000) - 500); set(name, f); break;
     case 2: set(name, below(2) ? "text" : "'12"); break;
@@ -1994,7 +2199,8 @@ static int random_change(void) {
     case 12:
         c = sh_copy(S, (struct sh_range){ r, col, r + below(3), col + below(3) });
         if(c) {
-            sh_paste(S, c, below(10), below(6), NULL);
+            if(!below(3)) sh_clip_cut(c);       /* pasted as a Cut's: moved */
+            sh_paste(S, c, pick(10, SH_ROWS), pick(6, SH_COLS), NULL);
             sh_clip_free(c);
         }
         break;
@@ -2103,6 +2309,7 @@ int main(int argc, char **argv) {
     test_csv();
     test_view();
     test_faults();
+    test_review();
     fuzz_formulas(lng ? 200000 : 3000);
     fuzz_csv(lng ? 100000 : 1500);
     fuzz_changes(lng ? 30000 : 600);

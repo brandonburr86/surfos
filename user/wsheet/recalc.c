@@ -17,8 +17,10 @@ so a chain of 65,536 formulas each using the one above costs no recursion.
 
 The whole sheet is recalculated each time: a sheet of SurfOS's size takes milliseconds, and no
 change can leave a value stale. Its work is bounded: every reference followed, row and cell looked
-at in a range, and instruction run is a step, and past sh_steps_max it stops. The formulas it did
-not finish then show #LIMIT!, and sh_limited() says so; so does memory running out.
+at in a range, and instruction run is a step, and so are 8 bytes of text compared, scanned or made
+(eval.c), and past sh_steps_max it stops. The formulas it did not finish then show #LIMIT!, and
+sh_limited() says so; so does memory running out for a formula's work. Its own arrays never run out:
+every formula keeps their share back in the budget while it lives (recalc_per_formula).
 */
 
 #include <string.h>
@@ -70,6 +72,9 @@ struct search {
     int sp, top, counter;
 };
 
+/* each formula keeps this back in the budget while it lives (cells.c's formula_new()): recalc()'s three arrays */
+const long recalc_per_formula = (long)(2 * sizeof(struct formula *) + sizeof(struct frame));
+
 static void push(struct search *x, struct formula *w) {
     w->index = w->low = x->counter++;
     w->mark |= M_ONSTACK;
@@ -93,10 +98,11 @@ void recalc(struct sheet *s) {
     struct search x;
     struct formula **all, *f, *w;
     int n = s->nformulas, i, j, k = 0, r;
-    long steps = 0;
+    long steps = 0, held = (long)n * recalc_per_formula;
     s->limited = 0;
     if(!n) return;
     memset(&x, 0, sizeof(x));
+    sh_mem_used -= held;                        /* what the formulas kept back for this: the arrays always fit */
     all = mem_alloc((size_t)n * sizeof(*all));
     x.comp = mem_alloc((size_t)n * sizeof(*x.comp));
     x.fr = mem_alloc((size_t)n * sizeof(*x.fr));
@@ -157,4 +163,5 @@ out:
     mem_free(all);
     mem_free(x.comp);
     mem_free(x.fr);
+    sh_mem_used += held;
 }

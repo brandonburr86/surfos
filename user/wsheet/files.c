@@ -207,7 +207,7 @@ struct sh_reader *sh_read_begin(int kind) {
         if(dsv_init(&rd->d, ',', csv_field, rd) < 0) goto fail;
     } else {
         rd->line = mem_alloc(LINE_MAX_BYTES + 1);
-        rd->content = mem_alloc(SH_INPUT_MAX + 1);
+        rd->content = mem_alloc(SH_INPUT_MAX + 2);
         if(!rd->line || !rd->content) goto fail;
     }
     return rd;
@@ -281,7 +281,8 @@ static int unescape(struct sh_reader *rd, const char *s, int len) {
                 return refuse(rd, "a \\ that begins no escape");
             }
         }
-        if(n >= SH_INPUT_MAX) return refuse(rd, "a cell holds 8,192 bytes at most");
+        if(n >= SH_INPUT_MAX + ((n ? rd->content[0] : c) == '\''))  /* a text's ' is not counted (cells.c) */
+            return refuse(rd, "a cell holds 8,192 bytes at most");
         rd->content[n++] = c;
     }
     rd->content[n] = 0;
@@ -387,7 +388,7 @@ int sh_read(struct sh_reader *rd, const char *bytes, int n) {
     int i;
     if(rd->failed) return -1;
     rd->bytes += n;
-    if(rd->bytes > SH_FILE_MAX) return refuse(rd, "The file is bigger than 32 MB");
+    if(rd->bytes > sh_file_max) return refuse(rd, "The file is bigger than 32 MB");
     if(rd->kind == SH_CSV) {
         while(rd->bom >= 0 && n > 0) {          /* a byte order mark at the start is no data */
             if(bytes[0] != bom[rd->bom]) {      /* none after all: what looked like its start is data */
@@ -425,6 +426,10 @@ int sh_read(struct sh_reader *rd, const char *bytes, int n) {
 }
 
 struct sheet *sh_read_end(struct sh_reader *rd, char *why, int size) {
+    return sh_read_finish(rd, why, size, NULL);
+}
+
+struct sheet *sh_read_finish(struct sh_reader *rd, char *why, int size, struct sheet **old) {
     struct sheet *s = NULL;
     if(!rd->failed) {
         if(rd->kind == SH_CSV) {
@@ -446,13 +451,15 @@ struct sheet *sh_read_end(struct sh_reader *rd, char *why, int size) {
             rd->failed = 1;
             sh_free(s);
             s = NULL;
-        } else {
-            memcpy(s->width, rd->width, sizeof(s->width));
-            recalc(s);
-        }
+        } else memcpy(s->width, rd->width, sizeof(s->width));
     }
     if(!s) snprintf(why, (size_t)size, "%s", rd->why);
-    sh_read_cancel(rd);
+    sh_read_cancel(rd);                         /* the reader's memory, and the sheet replaced, go first */
+    if(s && old && *old) {
+        sh_free(*old);
+        *old = NULL;
+    }
+    if(s) recalc(s);
     return s;
 }
 
@@ -464,14 +471,16 @@ int sh_kind_of(const char *path) {
 /**** writing ****/
 
 struct writer {
-    int (*put)(void *ctx, const char *bytes, int n);
+    int (*put)(void *ctx, const char *bytes, int n);    /* NULL: only counted */
     void *ctx;
     char buf[4096];
     int len, failed;
+    long total;                         /* bytes written (or counted) */
 };
 
 static void flush(struct writer *w) {
-    if(w->len && !w->failed && w->put(w->ctx, w->buf, w->len) < 0) w->failed = 1;
+    w->total += w->len;
+    if(w->len && !w->failed && w->put && w->put(w->ctx, w->buf, w->len) < 0) w->failed = 1;
     w->len = 0;
 }
 
@@ -591,7 +600,7 @@ static void write_csv(const struct sheet *s, struct writer *w) {
     }
 }
 
-int sh_write(const struct sheet *s, int kind, int (*put)(void *ctx, const char *bytes, int n), void *ctx) {
+static long write_all(const struct sheet *s, int kind, int (*put)(void *ctx, const char *bytes, int n), void *ctx) {
     static struct writer w;
     memset(&w, 0, sizeof(w));
     w.put = put;
@@ -599,5 +608,32 @@ int sh_write(const struct sheet *s, int kind, int (*put)(void *ctx, const char *
     if(kind == SH_CSV) write_csv(s, &w);
     else write_native(s, &w);
     flush(&w);
-    return w.failed ? -1 : 0;
+    return w.failed ? -1 : w.total;
+}
+
+long sh_write_size(const struct sheet *s, int kind) {
+    return write_all(s, kind, NULL, NULL);
+}
+
+/* nothing is written that a reader would refuse (11/09/26, the review): a file past sh_file_max, which escapes
+   (\xHH: four bytes for one) or a CSV's quotes can make of a sheet within its limits, is counted first */
+int sh_write(const struct sheet *s, int kind, int (*put)(void *ctx, const char *bytes, int n), void *ctx) {
+    if(sh_write_size(s, kind) > sh_file_max) return -1;
+    return write_all(s, kind, put, ctx) < 0 ? -1 : 0;
+}
+
+unsigned sh_csv_loss(const struct sheet *s) {
+    unsigned lose = 0;
+    int i, j;
+    if(s->nformulas) lose |= SH_LOSE_FORMULAS;
+    if(s->limited) lose |= SH_LOSE_LIMIT;
+    for(i = 0; i < SH_COLS; i++)
+        if(s->width[i] != SH_WIDTH_DEFAULT) lose |= SH_LOSE_WIDTHS;
+    for(i = 0; i < s->nrows && !(lose & SH_LOSE_FORMATS); i++)
+        for(j = 0; j < s->rows[i].n; j++)
+            if(s->rows[i].cells[j].c.fmt != SH_GENERAL) {
+                lose |= SH_LOSE_FORMATS;
+                break;
+            }
+    return lose;
 }

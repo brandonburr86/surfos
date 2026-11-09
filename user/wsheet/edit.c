@@ -70,6 +70,7 @@ struct sh_clip {
     struct clipcell *cells;             /* row by row */
     char *text;                         /* the values as text; NULL when longer than CLIP_TEXT_MAX */
     int len;
+    int cut;                            /* a Cut's: pasted, its cells move (sh_clip_cut()) */
 };
 
 static int nomem(struct sheet *s, const char *what) {
@@ -398,7 +399,7 @@ int sh_set(struct sheet *s, int row, int col, const char *text, int len) {
         sheet_set_why(s, "No such cell");
         return -1;
     }
-    if(len > SH_INPUT_MAX) {
+    if(!input_fits(text, len)) {
         sheet_set_why(s, "A cell holds %d bytes at most", SH_INPUT_MAX);
         return -1;
     }
@@ -692,6 +693,10 @@ void sh_clip_free(struct sh_clip *c) {
     mem_free(c);
 }
 
+void sh_clip_cut(struct sh_clip *c) {
+    if(c) c->cut = 1;
+}
+
 struct sh_clip *sh_copy(struct sheet *s, struct sh_range r) {
     struct sh_clip *c;
     struct walk w;
@@ -781,7 +786,10 @@ int sh_paste(struct sheet *s, const struct sh_clip *clip, int row, int col, stru
         const struct content *from = &clip->cells[i].ct;
         int tr = row + clip->cells[i].r, tc = col + clip->cells[i].c;
         if(from->kind == K_FORMULA) {
-            len = fx_rewrite(from->f->src, from->f->len, FX_MOVE, row - clip->r0, col - clip->c0, buf, sizeof(buf));
+            if(clip->cut)                       /* moved: what it refers to stays, but for the cut cells */
+                fx_cut_box(clip->r0, clip->c0, clip->r0 + clip->rows - 1, clip->c0 + clip->cols - 1);
+            len = fx_rewrite(from->f->src, from->f->len, clip->cut ? FX_CUT : FX_MOVE, row - clip->r0, col - clip->c0,
+                             buf, sizeof(buf));
             if(len == -2) {
                 step_free(st);
                 sheet_set_why(s, "A formula would grow past %d bytes", SH_INPUT_MAX - 1);

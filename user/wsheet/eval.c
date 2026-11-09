@@ -34,8 +34,9 @@ values of its cells, and a value written in the call is taken as it is.
   spaces from both ends and leaves one between words; CONCAT joins text, ranges cell by cell.
 Text a formula makes is SH_TEXT_MAX bytes at most: longer is #VALUE!.
 
-Every instruction, and every cell a range shows, is a step: past sh_steps_max ev_formula()
-stops, and recalc.c shows #LIMIT! where it could not finish.
+Every instruction, every cell a range shows, and every 8 bytes of text compared, scanned or made
+is a step: past sh_steps_max ev_formula() stops, and recalc.c shows #LIMIT! where it could not
+finish.
 */
 
 #include <stdio.h>
@@ -91,11 +92,19 @@ static void set_bool(struct val *v, int b) {
     v->e = (unsigned char)(b != 0);
 }
 
+/* text work as steps: every 8 bytes compared, scanned or made is one, so that formulas working on long texts
+   are bounded as those working on ranges are (11/09/26, the review: 25,000 formulas comparing 8 KB texts took
+   seconds and counted 100,000 steps) */
+static void text_work(struct ev *x, long bytes) {
+    *x->steps += bytes >> 3;
+}
+
 /* len bytes of new text for v, to be filled: NULL when there is no memory (v is then #LIMIT!) or it is too long
    (#VALUE!) */
 static char *new_text(struct ev *x, struct val *v, int len) {
     char *p;
     memset(v, 0, sizeof(*v));
+    text_work(x, len);
     if(len > SH_TEXT_MAX) {
         set_err(v, SH_VALUE);
         return NULL;
@@ -173,7 +182,9 @@ static int to_num(struct ev *x, struct val *v, double *d) {
     case V_EMPTY: *d = 0; return 0;
     case V_NUM: *d = v->n; return 0;
     case V_BOOL: *d = v->e; return 0;
-    case V_STR: return text_num(v->s, v->len, d) ? 0 : SH_VALUE;
+    case V_STR:
+        text_work(x, v->len);
+        return text_num(v->s, v->len, d) ? 0 : SH_VALUE;
     case V_ERR: return v->e;
     }
     return SH_VALUE;
@@ -343,7 +354,10 @@ static int compare(struct ev *x, struct val *a, struct val *b, int *err) {
     }
     if(rank(a->t) != rank(b->t)) return rank(a->t) < rank(b->t) ? -1 : 1;
     if(a->t == V_NUM) return num_equal(a->n, b->n) ? 0 : a->n < b->n ? -1 : 1;
-    if(a->t == V_STR) return text_fold_compare(a->s, a->len, b->s, b->len);
+    if(a->t == V_STR) {
+        text_work(x, (long)a->len + b->len);
+        return text_fold_compare(a->s, a->len, b->s, b->len);
+    }
     return (a->e > b->e) - (a->e < b->e);
 }
 
@@ -595,6 +609,7 @@ static void text_part(struct ev *x, int fn, struct val *argv, int argc, struct v
         set_err(out, e);
         return;
     }
+    text_work(x, len);                          /* the scans for characters */
     n = whole(d);
     if(n < 0 || (fn == F_MID && start < 1)) {
         set_err(out, SH_VALUE);
@@ -628,6 +643,7 @@ static void text_fn(struct ev *x, int fn, struct val *arg, struct val *out) {
         set_err(out, e);
         return;
     }
+    text_work(x, len);
     switch(fn) {
     case F_LEN:
         set_num(out, u8_chars(s, len));

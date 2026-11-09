@@ -15,6 +15,8 @@ so that a change can be taken back halfway without asking for memory (edit.c).
 Memory: every allocation of the model goes through mem_alloc(), which counts it against
 sh_mem_max, so that a file or a paste too big for SurfOS is refused with a message rather than
 taking every page the program may have; the tests make any one allocation fail with sh_mem_fail.
+A formula also keeps back, while it lives, what a recalculation needs for it (recalc_per_formula),
+so that recalc() always has its arrays within the budget (11/09/26, the review's L7).
 */
 
 #include <stdio.h>
@@ -24,6 +26,7 @@ taking every page the program may have; the tests make any one allocation fail w
 #include "sheetpriv.h"
 
 long sh_mem_max = SH_MEMORY, sh_mem_used, sh_mem_blocks, sh_mem_fail = -1, sh_steps_max = SH_STEPS;
+long sh_file_max = SH_FILE_MAX;
 
 static const char *const error_names[SH_ERRORS + 1] = { "", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!",
                                                         "#N/A", "#NULL!", "#CYCLE!", "#ERROR!", "#LIMIT!" };
@@ -176,8 +179,18 @@ int content_absent(const struct content *c) {
     return c->kind == K_NONE && c->fmt == SH_GENERAL;
 }
 
+/* a formula's block, its share of a recalculation kept back with it: NULL when the budget has no room */
+static struct formula *formula_new(void) {
+    struct formula *f;
+    if(sh_mem_max - sh_mem_used < recalc_per_formula) return NULL;
+    f = mem_zalloc(sizeof(*f));
+    if(f) sh_mem_used += recalc_per_formula;
+    return f;
+}
+
 static void formula_free(struct formula *f) {
     if(!f) return;
+    sh_mem_used -= recalc_per_formula;
     mem_free(f->src);
     mem_free(f->code);
     mem_free(f->vtext);
@@ -191,7 +204,7 @@ void content_free(struct content *c) {
 }
 
 int content_formula(struct content *c, const char *src, int len, int fmt) {
-    struct formula *f = mem_zalloc(sizeof(*f));
+    struct formula *f = formula_new();
     memset(c, 0, sizeof(*c));
     if(!f) return -1;
     f->src = mem_dup(src, len);
@@ -214,7 +227,7 @@ int content_copy(struct content *dst, const struct content *src) {
         dst->text = mem_dup(src->text, src->len);
         if(!dst->text) goto nomem;
     } else if(src->kind == K_FORMULA) {
-        struct formula *f = mem_zalloc(sizeof(*f));
+        struct formula *f = formula_new();
         size_t bytes;
         if(!f) goto nomem;
         dst->f = f;
@@ -297,6 +310,11 @@ int content_parse(struct content *c, const char *text, int len, int fmt) {
         return 0;
     }
     return make_text(c, text, len);
+}
+
+/* whether len bytes as typed fit a cell: SH_INPUT_MAX, and one more for the ' in front of a text of that many */
+int input_fits(const char *t, int len) {
+    return len <= SH_INPUT_MAX || (len == SH_INPUT_MAX + 1 && t[0] == '\'');
 }
 
 /* text that typing would take for something else, and that therefore shows with a ' in front */

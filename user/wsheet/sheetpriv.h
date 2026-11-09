@@ -126,6 +126,7 @@ int content_parse(struct content *c, const char *text, int len, int fmt);
 int content_formula(struct content *c, const char *src, int len, int fmt);     /* a formula's text, no '=' */
 int content_input(const struct content *c, char *out, int size);
 int text_needs_quote(const char *t, int len);
+int input_fits(const char *t, int len);
 void cell_value(const struct sheet *s, const struct cell *c, struct sh_value *v);
 /* the cell at r, c takes other's content and other the cell's: 0, or -1 (no memory to make the cell) */
 int cell_swap(struct sheet *s, int r, int c, struct content *other);
@@ -158,12 +159,14 @@ int num_digits15(double x, char *dig, int *e);                 /* x's 15 digits;
 #define FX_ARGS 255                     /* a function's arguments */
 int fx_compile(struct formula *f);      /* f->src into f->code: 0, -1 when it does not parse, -2 no memory */
 int fx_check(const char *src, int len, char *why, int size);   /* 0, or 1 with why */
-enum { FX_NORMAL, FX_MOVE, FX_ROWS, FX_COLS };
+enum { FX_NORMAL, FX_MOVE, FX_ROWS, FX_COLS, FX_CUT };
 /* the formula's text again: FX_NORMAL with refs and names in capitals; FX_MOVE with its relative references
    moved by a rows and b columns; FX_ROWS or FX_COLS after rows or columns from a moved by b (b < 0: -b of them
    went). Its length; -1 when it does not even split into tokens, and stays as it is; -2 when it would not fit in
    size (out is src then, when that fits) */
 int fx_rewrite(const char *src, int len, int how, int a, int b, char *out, int size);
+/* FX_CUT: references into the cut rectangle (fx_cut_box()) move by a rows and b columns, the rest stay */
+void fx_cut_box(int r1, int c1, int r2, int c2);
 int fn_find(const char *name, int len, int *min, int *max);   /* F_*, or F_UNKNOWN */
 const char *fn_name(int fn);
 
@@ -176,6 +179,7 @@ int text_fold_compare(const char *a, int alen, const char *b, int blen);  /* eit
 
 /* recalc.c */
 void recalc(struct sheet *s);
+extern const long recalc_per_formula;   /* the bytes a recalculation needs for each formula (its arrays) */
 
 /* edit.c */
 void hist_free(struct sheet *s);
