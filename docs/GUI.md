@@ -686,8 +686,10 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   and moves that way; Enter after Tabs comes back to the column the Tabs began in, so a table is
   typed a row at a time. Esc leaves the cell as it was, Backspace empties it as typing begins.
   Ctrl+E, a double-click or a click in the formula bar edits what the cell holds there, where the
-  arrows move in the text; Enter puts it in, Esc cancels. The cell's name at the bar's left takes
-  a name or a range to go to (Ctrl+L).
+  arrows move in the text; Enter puts it in, Esc cancels, and an edit that changed nothing changes
+  nothing. A cell holding a line break or a tab (from a file or a paste) is not edited there, which
+  would lose them: typing replaces it. The cell's name at the bar's left takes a name or a range to
+  go to (Ctrl+L).
 * **What a cell holds.** A number (`12`, `-3.5`, `1e3`; `50%` makes the cell a percent one), text,
   TRUE or FALSE, an error, or a formula after `=`. Text that would read as something else goes in
   after a `'`, as the formula bar shows it.
@@ -695,8 +697,8 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   ranges (`A1:B5`), the operators `+ - * / ^ % &` and `= <> < <= > >=`, and SUM, AVERAGE, MIN,
   MAX, COUNT, COUNTA, IF, AND, OR, NOT, ROUND, INT, ABS, SQRT, POWER, MOD, LEN, LEFT, RIGHT, MID,
   UPPER, LOWER, TRIM and CONCAT, as OpenFormula has them: `-2^2` is 4, `2^3^2` 64. A formula that
-  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where; an
-  unknown name is #NAME?. Every change works the formulas out again, each after the cells it
+  does not parse is kept as typed and shows #ERROR!, and the status bar says why and where (cells
+  moving leave it as typed too); an unknown name is #NAME?. Every change works the formulas out again, each after the cells it
   uses, and the formulas of a cycle show #CYCLE!.
 * **Numbers** are doubles shown to their 15 significant digits, so `=0.1+0.2` shows 0.3 and equals
   0.3; what a format or ROUND cuts is cut a half away from zero (2.675 with two decimals: 2.68).
@@ -709,7 +711,10 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   text (as they show), for Notepad or another program, and keeps the cells: pasting what the
   clipboard still holds from that copy puts them back with their formulas' references moved by
   as far as they moved (`$` keeps a part). Text copied elsewhere is pasted a field a cell, as
-  typed. Ctrl+X is Copy, then the cells emptied.
+  typed. Ctrl+X cuts: pasted, the cells move, a moved formula keeping its references (those into
+  the cut cells go along), while formulas elsewhere that referred to the cut cells are not changed.
+  While the formula bar holds an edit the menu's Paste is off: the bar's own Ctrl+V pastes at its
+  cursor.
 * **Rows and columns** (Sheet) are inserted and deleted at the selection; every reference keeps
   to the cell it meant, a range grows or shrinks, and a reference to a cell that went is #REF!.
   Inserting is refused when it would push cells off the sheet's end.
@@ -718,10 +723,13 @@ formula bar above it and a status bar below. Apps > Programs and its tile start 
   own text: `SurfOS sheet 1`, then a line for each column width not 80 pixels and each cell, with
   its format and what the formula bar shows (`cell B4 fixed2 =SUM(B1:B3)`); it keeps everything. A
   `.csv` (RFC 4180) opens as values (a field that begins with `=` is text) and saves the values,
-  asking first when formulas would be lost. Saving replaces a file as Notepad does (a new file
+  asking first when formulas, formats or column widths would be lost; after such a save New, Open
+  and Close ask again, their Save as offering the whole sheet as a `.sheet`. A file that would pass
+  32 MB, which no reader opens, is not written. Saving replaces a file as Notepad does (a new file
   beside it, renamed over). A file is read a piece at a time; Esc stops it. New, Open and Close
   ask first about unsaved changes.
-* **Limits.** 300,000 cells, 8,192 bytes a cell, files of 32 MB. A recalculation too big for
+* **Limits.** 300,000 cells, 8,192 bytes a cell (the `'` that keeps a text text not counted),
+  files of 32 MB read or written. A recalculation too big for
   SurfOS stops, and what it did not finish shows #LIMIT!. No charts, sorting, dates, names for
   ranges or whole-column references.
 
