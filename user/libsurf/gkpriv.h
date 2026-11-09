@@ -89,6 +89,7 @@ struct gk_menus {
     struct gk_menu_entry e[WIN_MENU_ENTRIES];
     int parent[GK_MENU_NUMBERS];
     int n, numbers, help, sent, state;
+    int boxed;                          /* they went greyed, for a modal box open then (gk_menus_send()) */
 };
 
 struct gk {

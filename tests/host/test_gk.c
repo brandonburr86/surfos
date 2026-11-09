@@ -1000,6 +1000,27 @@ static void menus(void) {
     gkf_key(19, WIN_MOD_CTRL);                          /* Save, enabled now */
     run(ui);
     CHECK(heard(GK_EV_MENU, 11));
+    /* the Paint review: a box open (a question), the menus go greyed, every title, so nothing is chosen behind it; a
+       choice made before that reached the bar is dropped, and a shortcut is the box's key; the close button is still
+       the program's to answer. The box gone, the menus come back as they were */
+    sent = gkf_menus_sent();
+    gk_confirm(ui, 70, "Save the changes?", "", "", "Save", "Don't save", "Cancel");
+    run(ui);
+    CHECK(gkf_menus_sent() == sent + 1 && (entry("File")->flags & WIN_MENU_DISABLED) &&
+          (entry("View")->flags & WIN_MENU_DISABLED) && !(entry("Open")->flags & WIN_MENU_DISABLED));
+    CHECK(!gkf_menu_choose(10));                        /* the desktop greys them: none can be chosen */
+    gkf_menu_event(10, file);                           /* one chosen just before */
+    gkf_key(15, WIN_MOD_CTRL);                          /* Ctrl+O */
+    gkf_key(WIN_KEY_F6, 0);
+    gkf_close();
+    run(ui);
+    CHECK(!count(GK_EV_MENU) && !count(GK_EV_KEY) && heard(GK_EV_CLOSE, 0) && gk_box_open(ui));
+    gk_dismiss(ui);
+    run(ui);
+    CHECK(gkf_menus_sent() == sent + 2 && !(entry("File")->flags & WIN_MENU_DISABLED) && heard(GK_EV_ANSWER, 70));
+    CHECK(gkf_menu_choose(10));
+    run(ui);
+    CHECK(heard(GK_EV_MENU, 10));
     gkf_key(19, WIN_MOD_CTRL | WIN_MOD_REPEAT | 0x80);  /* held down, and a bit no one knows yet: the bits that count */
     gkf_key(19, WIN_MOD_CTRL | WIN_MOD_ALT);            /* Ctrl+Alt+S is another key */
     run(ui);

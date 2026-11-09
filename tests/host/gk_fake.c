@@ -729,6 +729,11 @@ int gkf_menu_choose(int id) {
     return 0;
 }
 
+/* WIN_EV_MENU as it is, whatever the menus say now: a choice the desktop made before the window's last WIN_MENU */
+void gkf_menu_event(int id, int menu) {
+    put_event(WIN_EV_MENU, 0, menu, 0, (unsigned)id);
+}
+
 const struct win_dialog *gkf_dialog(void) {
     return F.dialog_waiting ? &F.dialog : NULL;
 }

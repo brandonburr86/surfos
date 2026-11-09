@@ -14,7 +14,11 @@ A menu titled Help goes into the desktop's Help (WIN_MENU_HELP). Labels go as th
 a byte that is no whole UTF-8 character, or a control character, is sent as '?', since the kernel
 refuses a menu with one. Their shortcuts are the toolkit's: the desktop only shows a shortcut's text,
 so a key the window gets that is an enabled item's shortcut becomes GK_EV_MENU, as a click on the item
-in the bar does. A desktop that does not show a program's menus (a kernel before them says EINVAL,
+in the bar does. While a modal box is open (gk_message(), gk_confirm(), gk_ask()), the menus go greyed
+(every title WIN_MENU_DISABLED, which greys its menu, and the program's part of Help with it), so that
+a program's question stays a question: nothing is chosen behind it, and the bar shows why; they go
+again as they are when the box has gone. (A choice made just before the greyed menus reached the bar is
+dropped, gkcore.c; the box takes every key, so no shortcut gets past it either.) A desktop that does not show a program's menus (a kernel before them says EINVAL,
 one that has not got them yet ENOSYS) still has every command by its keys; gk_menus_shown() says
 which.
 
@@ -311,18 +315,20 @@ static int emit(const struct gk_menus *m, int menu, int child, struct win_menu_i
     return n;
 }
 
-/* the menus to the desktop, whole, once they changed: those with items (the kernel refuses a menu with none) */
+/* the menus to the desktop, whole, once they changed or a box opened or went: those with items (the kernel refuses a
+   menu with none), greyed while a box is open */
 void gk_menus_send(struct gk *ui) {
     struct gk_menus *m = ui->menus;
     static struct win_menu_item out[WIN_MENU_ENTRIES];  /* copied by the kernel during the call */
-    int i, n = 0, k, last;
-    if(!m || m->sent) return;
+    int i, n = 0, k, last, boxed = ui->box != NULL;
+    if(!m || (m->sent && m->boxed == boxed)) return;
     m->sent = 1;
+    m->boxed = boxed;
     for(i = 0; i < m->n && n < WIN_MENU_ENTRIES; i++) {
         const struct gk_menu_entry *e = &m->e[i];
         if(!(e->flags & WIN_MENU_TITLE) || !count_of(m, e->menu, &last)) continue;
         out[n].id = e->id;
-        out[n].flags = e->flags;
+        out[n].flags = e->flags | (boxed ? WIN_MENU_DISABLED : 0);
         memcpy(out[n].label, e->label, sizeof(out[n].label));
         memset(out[n].keys, 0, sizeof(out[n].keys));
         k = n + 1;

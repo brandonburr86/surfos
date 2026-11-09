@@ -76,6 +76,7 @@ int gkf_menus_sent(void);
 const struct win_menu_item *gkf_menu_entry(int i);
 int gkf_menu_find(const char *label);
 int gkf_menu_choose(int id);
+void gkf_menu_event(int id, int menu);  /* WIN_EV_MENU sent as it is (a choice made before the last WIN_MENU came) */
 /* the chooser's request waiting for its answer (NULL: none), and its answer: path chosen (WIN_TAKE gives it), NULL
    cancelled. A request needs a key, a press or a menu choice sent since the last one (EACCES), as the kernel's does;
    gkf_gone() answers one that waits with 0 */

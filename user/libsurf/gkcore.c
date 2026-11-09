@@ -898,8 +898,10 @@ static void dispatch(struct gk *ui, const struct win_event *e) {
     case WIN_EV_CLOSE:
         gk_post(ui, GK_EV_CLOSE, NULL, 0);
         break;
-    case WIN_EV_MENU:                                   /* 11/05/26: an item chosen in the desktop's bar */
-        if((ev = gk_post_ev(ui, GK_EV_MENU, NULL, e->x))) ev->id = (int)e->value;
+    case WIN_EV_MENU:                                   /* 11/05/26: an item chosen in the desktop's bar; while a box is
+                                                           open, none (the menus are greyed: one chosen before that
+                                                           reached the bar goes) */
+        if(!ui->box && (ev = gk_post_ev(ui, GK_EV_MENU, NULL, e->x))) ev->id = (int)e->value;
         break;
     case WIN_EV_DIALOG:                                 /* a chooser answered */
         gk_dialog_answer(ui, e);
