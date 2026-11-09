@@ -36,7 +36,7 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
   guiweb     (11/1/26) the web browser in a window with a server: Stop, a GET form, what is not sent (gui_apps_webnet.py)
-  guichat    (11/05/26) Chat with a scripted IRC server, SASL, TLS refused (gui_apps_chatnet.py); not in the default list
+  guichat    (11/05/26) Chat with a scripted IRC server, SASL, TLS refused (gui_apps_chatnet.py)
   guiapps    (10/17/26) the desktop's applications (Terminal, System Monitor, Disks, Log, Clock,
              Character Map, Image Viewer, Hex) at 1920x1080, each track's checks in a file of its
              own (tools/gui_apps_*.py), with a FAT32 data stick whose files are read back here and
@@ -2802,7 +2802,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
              'no-kernel': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/surfos.bin',
                                                              'SurfOS: /boot/surfos.bin and /boot/grub/grub.cfg were not found')}
 SCENARIOS['fsck'] = scenario_fsck       # 11/01/26 (the command-line suite)
-SCENARIOS['guichat'] = scenario_guichat  # 11/05/26 (the desktop applications, track chat): run by name, --scenario guichat
+SCENARIOS['guichat'] = scenario_guichat  # 11/05/26 (the desktop applications, track chat)
 SCENARIOS['wsettings'] = scenario_wsettings     # 11/05/26 (the desktop applications, track settings)
 
 
@@ -2906,6 +2906,7 @@ def main():
                                'crashstack', 'shutdown', 'bootpanic', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
                                'fsck',
+                               'guichat',
                                'wsettings',
                                'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
