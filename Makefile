@@ -99,6 +99,24 @@ $(BUILD)/user/bin/wsheet: $(WSHEET_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WSHEET_OBJ) $(USER_LIB)
 -include $(WSHEET_OBJ:.o=.d)
+USER_PROGS  += wchat         # 11/05/26 (the desktop applications, track chat): Chat, an IRC client in a window
+# wchat, Chat (11/05/26): user/wchat/, its model host-tested against hostile servers (tests/host/test_wchat.c) and its
+# window on the fake desktop (tests/host/test_wchatwin.c); of Undertow the URLs, the settings, the helpers and the
+# transport with its TLS, for its helper's connection, linked as fetch links them (Mbed TLS before libsurf: its
+# prerequisite is below Mbed TLS's rules)
+WCHAT_SRC     = $(wildcard user/wchat/*.c)
+WCHAT_OBJ     = $(WCHAT_SRC:user/wchat/%.c=$(BUILD)/user/wchat/%.o)
+WCHAT_UT_OBJ  = $(addprefix $(BUILD)/user/undertow/,url.o config.o util.o transport.o tls_platform.o)
+$(BUILD)/user/wchat/%.o: user/wchat/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -Iuser/undertow -c $< -o $@
+$(BUILD)/user/bin/wchat: $(WCHAT_OBJ) $(WCHAT_UT_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(WCHAT_OBJ) $(WCHAT_UT_OBJ) \
+		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+-include $(WCHAT_OBJ:.o=.d)
 USER_PROGS  += wkit          # 11/05/26 (the desktop applications, track kit): every widget of libgui's toolkit
 # wkit, the window toolkit's demonstration (11/05/26): user/wkit/, its window logic host-tested on the fake desktop
 # (tests/host/test_wkit.c)
@@ -1246,6 +1264,28 @@ unittest: unittest-sheet
 unittest-sheet: $(BUILD)/host/test_wsheet $(BUILD)/host/test_wsheet_win
 	$(BUILD)/host/test_wsheet
 	$(BUILD)/host/test_wsheet_win
+# 11/05/26 (the desktop applications, track chat): Chat's model against hostile, split and oversized servers, every
+# allocation failing in turn (its files built with tests/host/wchat_alloc.h ahead), and its window on the fake desktop
+# with the helper played by the test. The sanitizer runs are the Mac's, by hand (the track's account)
+WCHAT_MODEL   = $(addprefix user/wchat/,irc.c ircfmt.c chat.c recv.c input.c link.c)
+$(BUILD)/host/wchat/%.o: user/wchat/%.c tests/host/wchat_alloc.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (wchat)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -include tests/host/wchat_alloc.h -MMD -MP -c $< -o $@
+-include $(wildcard $(BUILD)/host/wchat/*.d)
+$(BUILD)/host/test_wchat: tests/host/test_wchat.c $(WCHAT_MODEL:user/wchat/%.c=$(BUILD)/host/wchat/%.o)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/wchat $^ -o $@
+$(BUILD)/host/test_wchatwin: tests/host/test_wchatwin.c tests/host/gk_fake.h user/wchat/window.c $(WCHAT_MODEL) \
+                             $(wildcard user/wchat/*.h) $(GK_HOST_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(GK_HOST_FLAGS) -Iuser/wchat tests/host/test_wchatwin.c user/wchat/window.c $(WCHAT_MODEL) $(GK_HOST_OBJ) \
+		-o $@
+unittest: unittest-chat
+.PHONY: unittest-chat
+unittest-chat: $(BUILD)/host/test_wchat $(BUILD)/host/test_wchatwin
+	$(BUILD)/host/test_wchat
+	$(BUILD)/host/test_wchatwin
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
@@ -1744,6 +1784,8 @@ $(BUILD)/user/bin/fetch: $(FETCH_OBJ) $(FETCH_UT_OBJ) $(MBEDTLS_LIB) $(USER_CRT0
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(FETCH_OBJ) $(FETCH_UT_OBJ) \
 		$(MBEDTLS_LIB) $(UT_LIBGCC) $(USER_LIB)
+# 11/05/26 (the desktop applications, track chat): wchat links Mbed TLS as fetch does (its rule is by its USER_PROGS line)
+$(BUILD)/user/bin/wchat: $(MBEDTLS_LIB)
 
 # 10/25/26 (track A, A9): sha256sum sees Mbed TLS's headers and links its SHA-256 and libgcc before libsurf (as fetch)
 $(BUILD)/user/obj/sha256sum.o: USER_CFLAGS += $(MBEDTLS_CONF)
@@ -1838,6 +1880,18 @@ test-undertow-transport: $(BUILD)/host/test_undertow_transport $(BUILD)/user/bin
 	$(BUILD)/host/test_undertow_transport tests/host/undertow/certs
 unittest: test-undertow-transport
 .PHONY: test-undertow-transport
+# 11/09/26 (the desktop applications, track chat, the review): ut_transport_read_now(), the read wchat's helper makes
+# after poll(), on the transport test's own simulated network and TLS server (that file included whole)
+$(BUILD)/host/test_wchat_transport: tests/host/test_wchat_transport.c tests/host/test_undertow_transport.c \
+                                   $(UT_TRANSPORT_OBJ) $(MBEDTLS_HOST_LIB)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $(MBEDTLS_HOST_CONF) -I$(MBEDTLS_DIR)/library tests/host/test_wchat_transport.c \
+		$(filter %.o %.a,$^) -o $@
+unittest-chat-transport: $(BUILD)/host/test_wchat_transport
+	$(BUILD)/host/test_wchat_transport tests/host/undertow/certs
+unittest: unittest-chat-transport
+.PHONY: unittest-chat-transport
 
 # tools/fetch-webdeps.py against local archives made by the test (nothing is downloaded), then the real thing
 # checked: every extracted Mbed TLS file as it came from the archive, and rootfs/etc/ssl/cert.pem as pinned

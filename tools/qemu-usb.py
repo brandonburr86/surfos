@@ -36,6 +36,7 @@ keyboard (monitor sendkey), text comes out of the framebuffer.
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
   guiweb     (11/1/26) the web browser in a window with a server: Stop, a GET form, what is not sent (gui_apps_webnet.py)
+  guichat    (11/05/26) Chat with a scripted IRC server, SASL, TLS refused (gui_apps_chatnet.py); not in the default list
   guiapps    (10/17/26) the desktop's applications (Terminal, System Monitor, Disks, Log, Clock,
              Character Map, Image Viewer, Hex) at 1920x1080, each track's checks in a file of its
              own (tools/gui_apps_*.py), with a FAT32 data stick whose files are read back here and
@@ -939,6 +940,17 @@ def scenario_guiweb(args, image, firmware, outdir):
     helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
     return run(Vm, PROMPT, args, image, firmware, outdir, helpers, tracks=('gui_apps_webnet',),
                more=['-netdev', 'user,id=n0', '-device', USBNET_DEV], first=('dhcp',), name='guiweb')
+
+
+def scenario_guichat(args, image, firmware, outdir):
+    """11/05/26 (the desktop applications, track chat): Chat with a scripted IRC server in the test, on the screen:
+    registration with SASL, a channel, messages both ways, a query, QUIT, and TLS refused by a server that has none
+    (tools/gui_apps_chatnet.py). A boot of its own, as guiweb's: a USB Ethernet adapter (guiapps has no network, and
+    holds the kernel's heap to the byte), and QEMU's CPU with RDRAND, without which TLS does not start."""
+    from gui_apps_scenario import run
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers, tracks=('gui_apps_chatnet',),
+               more=['-netdev', 'user,id=n0', '-device', USBNET_DEV, '-cpu', 'max'], first=('dhcp',), name='guichat')
 
 
 def scenario_graphics(args, image, firmware, outdir):
@@ -2775,6 +2787,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
              'no-kernel': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/surfos.bin',
                                                              'SurfOS: /boot/surfos.bin and /boot/grub/grub.cfg were not found')}
 SCENARIOS['fsck'] = scenario_fsck       # 11/01/26 (the command-line suite)
+SCENARIOS['guichat'] = scenario_guichat  # 11/05/26 (the desktop applications, track chat): run by name, --scenario guichat
 
 
 def qemu_version(qemu):

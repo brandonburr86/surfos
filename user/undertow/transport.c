@@ -809,3 +809,47 @@ const char *ut_transport_tls(const struct ut_transport *t) {
 int ut_transport_eof_clean(const struct ut_transport *t) {
     return t && t->eof && (!t->secure || t->notified);
 }
+
+int ut_transport_fd(const struct ut_transport *t) {
+    return t ? t->fd : -1;
+}
+
+int ut_transport_read_now(struct ut_transport *t, void *buf, size_t len) {
+    int n;
+    if(!t) return -1;
+    if(t->failed) return -1;
+    if(t->eof) return 0;
+    if(!len) {
+        ut_error(t->error, sizeof(t->error), "a read of no bytes");
+        return -1;
+    }
+    if(len > INT_MAX) len = INT_MAX;
+    if(ut_expired(t->deadline, ut_now())) return too_late(t, DURING_READ);
+    t->progress = ut_now();                 /* as a read that starts: the quiet before it is no stall */
+    if(t->secure) {
+        for(;;) {
+            n = mbedtls_ssl_read(&t->ssl, buf, len);
+            if(t->late) return too_late(t, DURING_READ);
+            if(n > 0) return n;
+            if(n == 0 || n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == MBEDTLS_ERR_SSL_CONN_EOF) {
+                t->eof = 1;
+                t->notified = n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
+                return 0;
+            }
+            if(n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) continue;
+            if(n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) return UT_TRANSPORT_AGAIN;
+            tls_error(t, n, NULL, t->error, sizeof(t->error));
+            return fail(t);
+        }
+    } else {
+        int r = ready(t->fd, POLLIN);
+        ssize_t got;
+        if(r < 0) return io_failed(t, "reading from");
+        if(!r) return UT_TRANSPORT_AGAIN;
+        got = read(t->fd, buf, len);
+        if(got > 0) return (int)got;
+        if(got < 0) return io_failed(t, "reading from");
+        t->eof = 1;
+        return 0;
+    }
+}

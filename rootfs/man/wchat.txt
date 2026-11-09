@@ -1,0 +1,74 @@
+wchat - Chat, an IRC client in a window
+
+SYNOPSIS
+    wchat
+
+DESCRIPTION
+    Talks on IRC: channels, private talks with one person (queries),
+    nicks, topics. It needs a desktop: start it from Apps > Programs
+    (Chat), its tile, the desktop's Terminal, or Apps > Run program.
+
+    The window opens on a form: the server, the port, TLS (on, port
+    6697; off, port 6667), the nick, and a password if the server or
+    your account wants one: the server's own, or SASL's, which logs in
+    to the account of the nick. The password shows as dots, goes to
+    the server once and is wiped: nothing keeps it, so each connection
+    asks for it again. Without TLS it would cross the network as it
+    is: the form says so, and Connect asks first, Cancel being the
+    answer Enter gives; only Send anyway, chosen, sends it.
+
+    With TLS the server's certificate must be from a trusted issuer
+    (the roots of /initrd/etc/ssl/cert.pem), for the server's name, and
+    valid now, as Undertow checks a web server's. Nothing turns those
+    checks off. TLS needs a CPU with RDRAND and a clock that is right.
+
+    The rooms are tabs: the server's first, then the channels and the
+    queries, each with how many lines came since you last looked at it,
+    and a ! for one that names you. A channel shows its topic and its
+    nick list (@ operators, + voices). Lines carry the time they came
+    and who sent them: Chat's own lines start with SurfOS's mark (the
+    prompt's), what a server says itself with its name between dashes.
+    The formatting codes others send (bold, colours, underline) are
+    drawn, or left out by View > Formatting. A line for NickServ, which
+    carries passwords, is shown masked (IDENTIFY ****) and not kept
+    for Up and Down.
+
+    Type a message and press Enter, or a command:
+
+        /join #channel [key]   join it (and show its room)
+        /part [#channel] [why] leave it (the room's own channel)
+        /msg nick text         say text to nick, or to a channel
+        /me does something     an action in this room
+        /nick name             another nick
+        /topic [text]          set the channel's topic, or ask it
+        /query nick [text]     a room for talking with nick
+        /quit [why]            leave the server
+
+    //text sends text that starts with one /.
+
+KEYS
+    Enter                 send the line
+    Up, Down              the lines sent before
+    Page Up, Page Down    scroll the messages
+    Ctrl+Page Up, Down    the room before, the room after
+    Alt+1 to Alt+9        the rooms by their places
+    Ctrl+W                close the room (leave its channel)
+    Ctrl+N                connect (while not connected)
+    Ctrl+Q                close Chat, saying goodbye first
+
+LIMITS
+    Chat does not do DCC, run scripts, open links, answer CTCP
+    requests (it shows them), or keep anything: no logs, no passwords,
+    no settings. 64 rooms, 2000 lines a room, 8 MB of lines in all;
+    8192 nicks a channel. A line from the server over 8703 bytes is
+    left out. What you send is paced, a line every two seconds after
+    the first four, so a long paste is never thrown out for flooding.
+    The rooms stay after a disconnection, for the same server, but
+    the channels are not joined again by themselves. Only IRC's own
+    character sets: UTF-8, or windows-1252 for text that is not.
+
+EXAMPLES
+    wchat &
+
+SEE ALSO
+    gui, telnet, undertow
