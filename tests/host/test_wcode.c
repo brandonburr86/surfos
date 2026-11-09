@@ -1795,8 +1795,8 @@ static void review_lexing(void) {
         }
         free(b);
     }
-    CHECK(worst < 0.25);
-    if(worst >= 0.25) printf("  the slowest tokenizing of a hostile line: %.3f s\n", worst);
+    CHECK(worst < 2.5);                         /* (microseconds on the Mac; the quadratic Markdown took 140 s) */
+    if(worst >= 2.5) printf("  the slowest tokenizing of a hostile line: %.3f s\n", worst);
     /* the Markdown scans themselves are linear: lines of WC_LEX_MAX [, *a and backticks, 64 times each */
     t = 0;
     for(u = 0; u < 3; u++) {
@@ -1806,7 +1806,7 @@ static void review_lexing(void) {
         t += now() - t0;
         free(b);
     }
-    CHECK(t < 0.25);
+    CHECK(t < 2.5);
     /* the classes past the first WC_LEX_MAX bytes: plain */
     b = repeat("/* c */ ", 20000);
     wc_lex(WC_LANG_C, b, 20000, 0, cls, sizeof(cls));
@@ -1838,7 +1838,8 @@ static void review_searching(void) {
     CHECK(wc_find_doc(&f, &d, 1) == 1 && d.caret == 0);
     strcpy(f.what, "(a*b)?");
     CHECK(wc_find_doc(&f, &d, 0) < 0 && strstr(d.msg, "matches nothing at all"));
-    CHECK(now() - t0 < 0.5);
+    CHECK(now() - t0 < 5.0);                    /* (0.02 s on the Mac; room for an emulated 32-bit build under load:
+                                                   the searches the review timed would take hours on this line) */
     wc_doc_free(&d);
     /* whole words go on from the next place a word can start */
     doc_str(&d, "w.c", "xfoo foox foo_ foo\n");
