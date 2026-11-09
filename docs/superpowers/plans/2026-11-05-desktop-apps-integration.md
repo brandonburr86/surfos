@@ -17,7 +17,7 @@ their final hashes came, each with `git merge --no-ff --no-commit`, checked, and
 | settings | bd0098b6 | 7f72bd4f | kit aac42b11, desk 2c5afd30 | `Makefile` (three regions), `TRACKS`, `tools/qemu-usb.py`'s `SCENARIOS` line |
 | paint | f721b2e1 | ddda278f | kit aac42b11, desk 1447a4c2, img aea719bd | `Makefile` (four regions), `TRACKS`, `docs/GUI.md` |
 | code | 9ae58991 | 35f2d971 | kit aac42b11, desk 2c5afd30 | `Makefile` (three regions), `TRACKS` |
-| kit | (to come) | | | |
+| kit | 40156e90 | 8b7e870d | kit d38ea834 | none: the `Makefile`, the one file both sides changed, takes `test_gksecret` once |
 
 Every conflict was in the files the tracks shared by insertion. How each was resolved:
 
@@ -36,10 +36,12 @@ Every conflict was in the files the tracks shared by insertion. How each was res
 - **`include/sys/gui_media.h`**, which the coordinator expected to conflict: desk did not change it after 2c5afd30,
   so img's two fields (`asked_pid`, `asked_at`) went in alone.
 
-**How the merges were checked.** For every file both sides of a merge changed (59 to 93 files a merge), a script
-compared each line's count in the result with the three-way expectation, count in HEAD + count in the track -
-count in the merge base, the virtual base's counts for several bases. Every file was as expected: no block twice,
-none lost. `docs/GUI.md` was also read for one section a track and a blank line before each heading.
+**How the merges were checked.** A script compared each line's count in the result with the three-way
+expectation, count in HEAD + count in the track - count in the merge base (the virtual base's counts for several
+bases): for the four shared files at every merge, and from chat on for every file both sides changed (70 to 93 a
+merge; at kit's, the `Makefile` alone). Every file was as expected: no block twice, none lost. `docs/GUI.md` was
+also read for one section a track and a blank line before each heading. The coordinator compared 582153be file by
+file with the tips.
 
 ## What the integration broke, and the fixes
 
@@ -52,6 +54,24 @@ none lost. `docs/GUI.md` was also read for one section a track and a blank line 
   Paint's merge of kit d38ea834) greys a program's menus while a box is open and drops a menu event that comes
   meanwhile. The two tests chose a menu item under a question to see it wait; on the fake desktop the greyed item
   can no longer be chosen, so they expect the refusal, and the checks after it are unchanged.
+- **521efe0d, Paint's window test.** kit's last rounds made the fake desktop keep 64 unread events, as the kernel's
+  window queue does, and say on stderr when it loses any. The test typed `$TMPDIR/wpaintw.XXXXXX/two.bmp` and Enter
+  before reading: on the Mac's 49-character TMPDIR that is more than 64 keys, the Enter was lost and 8 checks failed
+  ("9 events lost"). Each key is now read before the next; natively on the Mac with that TMPDIR, 162 checks and
+  none failed, and in Docker in `make unittest`.
+- **ae1e522f, the toolkit's `gk_unwatch()` (L1, review-kit's last reading).** A key and a watched descriptor ready
+  in one turn queue the key first; a program that unwatched and closed the descriptor on that key still got its
+  GK_EV_FD next, with `x` the closed number, which a new pipe may have by then. `gk_unwatch()` now drops the
+  descriptor's queued events as `gk_timer_stop()` drops a timer's (one `drop_queued()` for both, the other events
+  keeping their order and text round the ring's end). test_gk's `unwatched()` has the case (4 of its checks fail
+  without the fix); natively test_gk passes, also under ASan and UBSan. No application was hit: Chat checks its
+  own descriptor, and nothing reads `ev.x` yet.
+- **Not changed: Settings' window test.** A trial merge of kit's first fix round (3e1551f3) failed its check of a
+  held arrow on the theme's radio group (5 applies expected, 3 got: radio groups acted once a press). kit's last
+  round (N1) made movement keys repeat again and only activation keys act once a press, so the test passes as
+  written. The apps needed nothing else for kit's rounds: no caller uses `gk_set_text()`'s result, the event
+  switches have no default (GK_EV_UNCOPIED is ignored), Chat's watch ends at `read() == 0` in `end_link()`, as the
+  level-triggered watch asks, and the Code Editor's Ctrl+] and Ctrl+/ stay its own keys (no menu item has them).
 - **c39e776e, guichat in the default list.** `make test-usb` and the gate run `tools/qemu-usb.py --test` with no
   `--scenario`, which runs the default list in `main()`; a scenario joins the gate by a line there, as fsck did
   and as Settings' wsettings did by its own insertion. Chat had left guichat to be run by name; it is in the list
@@ -61,15 +81,18 @@ none lost. `docs/GUI.md` was also read for one section a track and a blank line 
   game that read both and stayed was left open after a failure; it presses three times now. The other checks:
   sheet's cleanup presses three times; Paint's presses twice and answers Right, Enter, which is "Don't save" in its
   question or End in the desktop's when it is stuck; the Code Editor's presses, quits, presses; Chat's and
-  Settings' press once (their branch for "End the program?" is not reached by one press, under either rule). kit's
-  is looked at again with its final round.
+  Settings' press once (their branch for "End the program?" is not reached by one press, under either rule); kit's
+  presses the close button once, at one of two widths, and answers wkit's question, so the rule changes nothing
+  there either.
 
 ## The docs
 
 `CLAUDE.md`: the host tests, 26 scenarios, `kernel/netctl.c`, the toolkit, the pictures and the programs in the
 layout, the desktop's files and the registry, the close button's rule, floating point in windowed programs (the
 M12 paragraph and the Undertow section's note), the window calls the applications added, and `GUIAPPS_ONLY` a
-track. `docs/ARCHITECTURE.md`: section 24's close rule and floating point, and section 25, the desktop
+track, and gk.h's rules as kit's last round left them (movement keys repeat, activation keys once a press; a
+level-triggered watch until `gk_unwatch()`; menus grey under a box, a choice made just before one dropped; the
+fake's 64 events). `docs/ARCHITECTURE.md`: section 24's close rule and floating point, and section 25, the desktop
 applications. `docs/ROADMAP.md`: M14. `docs/README.md`: GUI.md's line, the brief and the accounts. `docs/USB-BOOT.md`:
 26 scenarios, and the applications in the table of stages.
 
@@ -100,7 +123,13 @@ Each track's account has the detail.
   the last.
 - **img:** the 32-scan limit of a progressive JPEG is kept.
 - **paint:** none; its last round fixed the three it had.
-- **kit:** (to come)
+- **kit:** while a box is up the program's menus are grey, and a choice made in the bar meanwhile is refused (F14,
+  as gk.h documents it); a key held while another is tapped resumes as a new press, so one box can be answered that
+  way (narrow: it comes from the keyboard's make and break codes); a lost break code costs one press; L1 (a
+  descriptor's event after `gk_unwatch()`) is fixed at the integration (ae1e522f). Not done, optional: the
+  applications do not say when a copy is refused (GK_EV_UNCOPIED), and the games could ask with
+  `gk_confirm_default()` instead of putting Cancel first. Host-tested only: the keyboard's repeats (QEMU's sendkey
+  never repeats) and a desktop dialog taking a program's chooser's place.
 
 ## On the laptop
 
