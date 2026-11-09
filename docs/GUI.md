@@ -682,19 +682,24 @@ talks on IRC. It is a program, `wchat` (`user/wchat/`), in Apps > Programs and o
 
 * **Connecting.** The window opens on a form: the server, the port, TLS (on, port 6697; off, 6667), the nick, and a
   password for the server (PASS) or for SASL (the nick's account), in a field of dots. Connect starts the connection;
-  the password goes to the server once, and nothing keeps it after that (the next connection asks again). With TLS
+  the password goes to the server once, and nothing keeps it after that (the next connection asks again). *11/09/26:*
+  without TLS the form says, in coral, that anyone on the network could read the password, and Connect asks first:
+  Cancel is the question's first answer (Enter, and Esc too); only Send anyway, chosen, sends it. With TLS
   the server's certificate is checked as Undertow checks a web server's: a trusted issuer, the server's name, valid
   now, nothing to turn off.
 * **The rooms** are tabs over the messages: the server's room first, then each channel and query, with how many lines
   came since you looked at it and `!` for a line that names you. A tab's `x` leaves its channel or closes its query.
   A channel's topic is above the messages and its nick list at their right (`@`, `+` first); a double-click on a nick
   opens a query with it.
-* **Messages** come with their times. A line wraps at spaces under the text after the time. The formatting codes others
+* **Messages** come with their times. A line wraps at spaces, every row after the line's start (the sender), so that no
+  wrapped row passes for a line of its own; the Chat's own lines start with `≋`, which no sender shown can hold, and
+  what a server says itself with its name between dashes. The formatting codes others
   send are drawn (bold, colours, underline, strikethrough, reverse), or left out (View > Formatting); a colour that
   cannot be read on the background is drawn in the theme's ink. The messages follow the newest line while you are at
   the bottom; scrolled back (Page Up, the wheel, the bar), they stay where they are.
 * **The input line** sends a message, or `/join /part /msg /me /nick /topic /query /quit`; Up and Down bring back what
-  was sent. Ctrl+Page Up and Ctrl+Page Down, or Alt+1 to Alt+9, go to the rooms; Ctrl+W closes one.
+  was sent (not a line for NickServ, which carries passwords: it is shown masked, `IDENTIFY ****`, and wiped). Ctrl+Page
+  Up and Ctrl+Page Down, or Alt+1 to Alt+9, go to the rooms; Ctrl+W closes one.
 * **What it never does:** DCC, scripts, opening links, answering CTCP requests (it shows them), keeping anything (no
   logs, no passwords, no settings).
 * **The connection is a helper's** (`wchat --helper`, started by the window with two pipes, as Wundertow's loads): it
