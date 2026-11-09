@@ -932,10 +932,32 @@ static unsigned md_comment_end(const struct lx *x, unsigned i, int *closed) {
     return x->n;
 }
 
+/* 11/09/26 (the review, C2): the next ']' (or ')') at or after from, escapes stepped over. A line asks from places
+   that only go on, so a scan's answer holds for every place up to it, and the next scan starts after it: a line is
+   read once for each of these, however many [ it has */
+struct md_next { unsigned at; int known, c; };
+
+static unsigned md_next(const struct lx *x, struct md_next *m, unsigned from) {
+    unsigned j;
+    if(m->known && from <= m->at) return m->at;
+    for(j = from; j < x->n && x->s[j] != m->c; j++)
+        if(x->s[j] == '\\') j++;
+    m->known = 1;
+    m->at = j < x->n ? j : x->n;
+    return m->at;
+}
+
 static unsigned lex_md(struct lx *x, unsigned st) {
     const unsigned char *s = x->s;
     unsigned n = x->n, i = 0, j, k, ind, len;
     int closed, c;
+    /* 11/09/26 (the review, C2): what a scan of this line found nowhere after where it began, which no later scan
+       can find either: a closing run of backticks of a length (1 to 32; a longer run opens nothing), a closing *
+       or _ (needing one, or two); and the next ] and ) */
+    unsigned char no_tick[33], no_emph[2][3];
+    struct md_next rb = { 0, 0, ']' }, rb2 = { 0, 0, ']' }, rp = { 0, 0, ')' };
+    memset(no_tick, 0, sizeof(no_tick));
+    memset(no_emph, 0, sizeof(no_emph));
     if(st & MD_FENCE) {
         int fc = st & MD_TILDE ? '~' : '`';
         k = skip_blanks(x, 0);
@@ -997,14 +1019,19 @@ static unsigned lex_md(struct lx *x, unsigned st) {
         }
         if(c == '`') {                          /* a code span: closed by a run of as many backticks */
             len = run_of(x, i, '`');
-            for(j = i + len; j < n; j += k) {
-                k = s[j] == '`' ? run_of(x, j, '`') : 1;
-                if(s[j] == '`' && k == len) break;
-            }
+            j = n;
+            if(len <= 32 && !no_tick[len])
+                for(j = i + len; j < n; j += k) {
+                    k = s[j] == '`' ? run_of(x, j, '`') : 1;
+                    if(s[j] == '`' && k == len) break;
+                }
             if(j < n) {
                 paint(x, i, j + len, WC_C_CODE);
                 i = j + len;
-            } else i += len;
+            } else {
+                if(len <= 32) no_tick[len] = 1;
+                i += len;
+            }
             continue;
         }
         if(c == '<' && i + 3 < n && s[i + 1] == '!' && s[i + 2] == '-' && s[i + 3] == '-') {
@@ -1023,15 +1050,10 @@ static unsigned lex_md(struct lx *x, unsigned st) {
             }
         }
         if(c == '[' || (c == '!' && i + 1 < n && s[i + 1] == '[')) {     /* [text](where) and [text][name] */
-            unsigned a = c == '!' ? i + 1 : i, depth = 0;
-            for(j = a; j < n; j++) {
-                if(s[j] == '\\') j++;
-                else if(s[j] == '[') depth++;
-                else if(s[j] == ']' && !--depth) break;
-            }
+            unsigned a = c == '!' ? i + 1 : i;  /* (its text to the first ], brackets in it not followed) */
+            j = md_next(x, &rb, a + 1);
             if(j < n && j + 1 < n && (s[j + 1] == '(' || s[j + 1] == '[')) {
-                int close = s[j + 1] == '(' ? ')' : ']';
-                for(k = j + 2; k < n && s[k] != close; k++);
+                k = md_next(x, s[j + 1] == '(' ? &rp : &rb2, j + 2);
                 if(k < n) {
                     paint(x, i, j + 1, WC_C_LINK);
                     paint(x, j + 1, k + 1, WC_C_STRING);
@@ -1043,8 +1065,11 @@ static unsigned lex_md(struct lx *x, unsigned st) {
             continue;
         }
         if(c == '*' || c == '_') {              /* emphasis: a run that opens before a letter and closes after one */
+            unsigned need;
             len = run_of(x, i, c);
-            if(i + len < n && !blank(s[i + len]) && !(c == '_' && i > 0 && alnum(s[i - 1]))) {
+            need = len > 2 ? 2 : len;
+            if(i + len < n && !blank(s[i + len]) && !(c == '_' && i > 0 && alnum(s[i - 1])) &&
+               !no_emph[c == '_'][need]) {
                 for(j = i + len; j < n; j++) {
                     if(s[j] == '\\') {
                         j++;
@@ -1062,6 +1087,8 @@ static unsigned lex_md(struct lx *x, unsigned st) {
                     i = j + k;
                     continue;
                 }
+                no_emph[c == '_'][need] = 1;    /* none needing one is none needing two either */
+                if(need == 1) no_emph[c == '_'][2] = 1;
             }
             i += len;
             continue;
@@ -1133,10 +1160,10 @@ static unsigned lex_json(struct lx *x, unsigned st) {
 unsigned wc_lex(int lang, const char *s, unsigned n, unsigned state, unsigned char *cls, unsigned ncls) {
     struct lx x;
     x.s = (const unsigned char *)s;
-    x.n = n;
     x.cls = cls;
     x.ncls = cls ? ncls : 0;
     if(cls) memset(cls, WC_C_TEXT, n < ncls ? n : ncls);
+    x.n = n < WC_LEX_MAX ? n : WC_LEX_MAX;      /* 11/09/26 (the review, C2): a line's first bytes only, as if it ended */
     switch(lang) {
     case WC_LANG_C: return lex_c(&x, state);
     case WC_LANG_NASM: return lex_nasm(&x, state);

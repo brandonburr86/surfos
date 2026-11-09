@@ -28,7 +28,10 @@ enum { WC_LANG_TEXT, WC_LANG_C, WC_LANG_NASM, WC_LANG_GAS, WC_LANG_PY, WC_LANG_S
 enum { WC_C_TEXT, WC_C_COMMENT, WC_C_STRING, WC_C_NUMBER, WC_C_KEYWORD, WC_C_TYPE, WC_C_PREPROC, WC_C_VAR,
        WC_C_LABEL, WC_C_HEADING, WC_C_EMPH, WC_C_CODE, WC_C_LINK, WC_C_KEY, WC_C_BAD, WC_CLASSES };
 
-#define WC_LEX_CLASSES (64u << 10)      /* a line's bytes past these are drawn uncoloured (they are still read) */
+/* 11/09/26 (the review, C2): the tokenizers read a line's first WC_LEX_MAX bytes, as if it ended there (the state
+   it ends in is theirs), and the rest is drawn plain, so that no line costs more than these to colour */
+#define WC_LEX_MAX     (8u << 10)
+#define WC_LEX_CLASSES WC_LEX_MAX       /* a line's bytes past these are drawn uncoloured */
 
 const char *wc_lang_name(int lang);                         /* "C", "Assembly (NASM)", ... */
 /* the language of a file by its name (its last part is enough) and its first line (#! lines) */
