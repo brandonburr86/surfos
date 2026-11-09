@@ -259,7 +259,7 @@ Memory: at most about 8 MB of lines, 5 MB of nicks (65,536 of 64 bytes) and the 
 
 ## The tests
 
-`tests/host/test_wchat.c` (72,427 checks), built with the host's C library and the model's memory through `wchat_alloc.h`:
+`tests/host/test_wchat.c` (72,456 checks), built with the host's C library and the model's memory through `wchat_alloc.h`:
 
 - lines cut from the server's bytes at every split; at the longest length and one byte over, with and without CR; a megabyte
   with no line end; a NUL;
@@ -285,7 +285,10 @@ Memory: at most about 8 MB of lines, 5 MB of nicks (65,536 of 64 bytes) and the 
 - the review's findings: no password over a plain connection without the answer, nor as SASL's base64, and the last check before
   AUTHENTICATE; the SASL steps' 30 seconds; CASEMAPPING flipped 650 times over 8192 nicks; a numeric that says the Chat's words,
   under the server's name; channels' names with a direction override and bytes that are no UTF-8, cleaned in the KICK, the label
-  and the title; NickServ's lines masked, and their passwords nowhere once sent.
+  and the title; NickServ's lines masked, and their passwords nowhere once sent;
+- the re-review's: the Chat's own lines gathered from sessions that make them, then each, cut at its first `: `, fed to every
+  numeric from 001 to 999 and to 18 commands, as parameters, whole in the trailing one, from a sender named as its first word
+  and inside CTCP: no marked line that comes of it is one of the Chat's own; and U+224B and U+2248 in a server's text as `~`.
 
 `tests/host/test_wchatwin.c` (290 checks): the window on kit's fake desktop, with the model as it is and the helper played by the
 test at the other ends of real pipes (the test's `chat_spawn()`, `chat_kill()`, `chat_reaped()`, `chat_minute()` stand in for
@@ -357,6 +360,15 @@ The tests' memory scan now covers every file's static buffers (moved to file sco
 the fixed tree: no SASL over plain without the answer, the password gone; 0.04 ms a 005 line of flips. `probe_win` is built for
 the old flow (Connect at once) and now stops at the question; test_wchatwin's review checks take its place. Merged with the round:
 apps/kit aac42b11 (kit's chooser checks by the desktop's own title), so that guiapps runs whole.
+
+The re-review (of bdfc05d2..609ca894) found M3 not closed: a nick refused after registration was still a marked line made
+of the server's two parameters (`%s: %s`), so `433 me Disconnected :the server closed the connection` was the Chat's own
+`Disconnected:` line to the byte; an away reply, an invitation, a KILL, a CTCP request and a DCC offer began with words the
+server chose. Now every line with the mark begins with the Chat's words ("The server refused the nick ...", "The nick ... is
+taken", "An invitation from ...", "You were disconnected by ...", "A CTCP ... request from ...", "A DCC connection offered
+by ..."), and an away reply has the server's name as its sender; the rule is tested as above. And the console draws U+2248
+as it draws the mark, U+224B: both become `~` in a server's text (`irc_text()`). Its notes for kit (the question box's Left
+wraps from Cancel to Send anyway; the input line's draft freed without a wipe) are the toolkit's.
 
 ## Where the code comes from
 
