@@ -214,6 +214,7 @@ static void button_paint(struct gk_widget *w, struct gw *win) {
 
 static int button_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if((key != ' ' && key != '\r' && key != '\n') || (mods & (WIN_MOD_CTRL | WIN_MOD_ALT))) return 0;
+    if(mods & WIN_MOD_REPEAT) return 1;                 /* once a press: a held key clicks once */
     gk_post(w->ui, GK_EV_CLICK, w, 0);
     return 1;
 }
@@ -294,6 +295,7 @@ static void check_toggle(struct gk_widget *w) {
 
 static int check_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(key != ' ' || (mods & (WIN_MOD_CTRL | WIN_MOD_ALT))) return 0;
+    if(mods & WIN_MOD_REPEAT) return 1;                 /* once a press */
     check_toggle(w);
     return 1;
 }
@@ -395,6 +397,7 @@ static void radio_choose(struct gk_widget *w, int i) {
 
 static int radio_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
+    if((mods & WIN_MOD_REPEAT) && (key == ' ' || (key >= WIN_KEY_UP && key <= WIN_KEY_RIGHT))) return 1;  /* once */
     if(key == WIN_KEY_UP || key == WIN_KEY_LEFT) radio_choose(w, w->value <= 0 ? 0 : w->value - 1);
     else if(key == WIN_KEY_DOWN || key == WIN_KEY_RIGHT) radio_choose(w, w->value + 1);
     else if(key == ' ') radio_choose(w, w->value < 0 ? 0 : w->value);
@@ -691,6 +694,7 @@ static void tabs_choose(struct gk_widget *w, int i) {
 
 static int tabs_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
+    if((mods & WIN_MOD_REPEAT) && key >= WIN_KEY_LEFT && key <= WIN_KEY_END) return 1;   /* once a press */
     if(key == WIN_KEY_LEFT) tabs_choose(w, w->value - 1);
     else if(key == WIN_KEY_RIGHT) tabs_choose(w, w->value + 1);
     else if(key == WIN_KEY_HOME) tabs_choose(w, 0);

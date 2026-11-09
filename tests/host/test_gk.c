@@ -1266,6 +1266,63 @@ static void cuts(void) {
     gk_close(ui);
 }
 
+/* the review (F4, F5): a key held down acts once. Enter on a focused button clicks it once, and the program's question
+   that the click opens is not answered by Enter's repeats; Space held on a check box turns it once; a line to type
+   still takes its repeats. A question answers its first button on Enter, or the one gk_confirm_default() names, and
+   Left and Right stop at the ends: Left from the safe answer never comes round to the other */
+static void held(void) {
+    struct gk *ui = window("Held", 400, 200);
+    struct gk_widget *b = gk_button(gk_root(ui), "Delete", 1), *c = gk_check(gk_root(ui), "Wi-Fi", 2, 0);
+    run(ui);
+    gk_focus(b);
+    gkf_key('\r', 0);
+    run(ui);
+    CHECK(count(GK_EV_CLICK) == 1);
+    gk_confirm(ui, 80, "Delete it?", "", "", "Cancel", "Delete", NULL);
+    gkf_key('\r', WIN_MOD_REPEAT);
+    gkf_key('\r', WIN_MOD_REPEAT);
+    gkf_key(27, WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_box_open(ui) && !count(GK_EV_ANSWER) && !count(GK_EV_CLICK) && !count(GK_EV_KEY));
+    gkf_key(WIN_KEY_LEFT, 0);                           /* from Cancel, the left end: it stays */
+    gkf_key('\r', 0);
+    run(ui);
+    CHECK(heard(GK_EV_ANSWER, 80) && heard(GK_EV_ANSWER, 80)->value == 0);
+    gk_confirm_default(ui, 81, "Delete it?", "", "", "Delete", NULL, "Cancel", 2);
+    gkf_key(WIN_KEY_RIGHT, 0);                          /* Cancel, the right end: it stays */
+    gkf_key('\r', 0);
+    run(ui);
+    CHECK(heard(GK_EV_ANSWER, 81) && heard(GK_EV_ANSWER, 81)->value == -1);
+    gk_confirm_default(ui, 82, "Delete it?", "", "", "Delete", NULL, "Cancel", 2);
+    gkf_key(WIN_KEY_LEFT, 0);                           /* past the button without a label, to Delete; and no further */
+    gkf_key(WIN_KEY_LEFT, 0);
+    gkf_key(' ', 0);
+    run(ui);
+    CHECK(heard(GK_EV_ANSWER, 82) && heard(GK_EV_ANSWER, 82)->value == 0);
+    gk_focus(c);
+    gkf_key(' ', 0);
+    gkf_key(' ', WIN_MOD_REPEAT);
+    gkf_key(' ', WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_value(c) == 1 && count(GK_EV_CHANGE) == 1);
+    gk_focus(b);
+    gkf_key(' ', 0);
+    gkf_key(' ', WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(count(GK_EV_CLICK) == 1);
+    gk_ask(ui, 83, "Name", "Name:", "", 0);
+    gkf_key('a', 0);
+    gkf_key('a', WIN_MOD_REPEAT);
+    gkf_key(' ', WIN_MOD_REPEAT);
+    gkf_key('\r', WIN_MOD_REPEAT);                      /* held: no answer */
+    run(ui);
+    CHECK(gk_box_open(ui) && !count(GK_EV_ANSWER));
+    gkf_key('\r', 0);
+    run(ui);
+    CHECK(heard(GK_EV_ANSWER, 83) && !strcmp(heard(GK_EV_ANSWER, 83)->text, "aa "));
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1755,6 +1812,7 @@ int main(void) {
     wipes();
     repeats();
     cuts();
+    held();
     paste();
     choosers();
     theme();

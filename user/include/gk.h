@@ -344,11 +344,16 @@ void gk_damage(struct gk_widget *w, int x, int y, int width, int height);   /* a
 /**** modal boxes in the window ****/
 
 /* one at a time over the window's content, taking every key and click: a message (OK), a question with up to three
-   buttons (yes, no, cancel: NULL for none), a line to type (OK and Cancel; GK_PASSWORD). Each is answered once,
-   GK_EV_ANSWER with its id: a box opened over another answers the other -1 first */
+   buttons (yes, no, cancel from left to right: NULL for none), a line to type (OK and Cancel; GK_PASSWORD). Each is
+   answered once, GK_EV_ANSWER with its id: a box opened over another answers the other -1 first. A question's
+   Enter answers its first button, or with gk_confirm_default() the one def says (0 yes, 1 no, 2 cancel: a
+   destructive question's safe answer); Left and Right move between them and stop at the ends. A key held down
+   (WIN_MOD_REPEAT) answers no box: Enter held on a button does not answer the question it opens */
 void gk_message(struct gk *ui, int id, const char *title, const char *line1, const char *line2);
 void gk_confirm(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
                 const char *yes, const char *no, const char *cancel);
+void gk_confirm_default(struct gk *ui, int id, const char *title, const char *line1, const char *line2,
+                        const char *yes, const char *no, const char *cancel, int def);
 void gk_ask(struct gk *ui, int id, const char *title, const char *prompt, const char *text, unsigned flags);
 int gk_asking(const struct gk *ui);             /* the id of the box open, 0 for none (or a box of id 0) */
 int gk_box_open(const struct gk *ui);           /* 1 while one is */
