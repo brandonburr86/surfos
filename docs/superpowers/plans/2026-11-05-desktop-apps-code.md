@@ -73,7 +73,8 @@ rather than keep part of it, as Notepad does, and the status bar says so.
 
 **Find and replace.** A line at a time: a match never takes a line end, and a regular expression is never given more
 than one line. libsurf's `regexec()` is bounded in time by the pattern, and `REG_STARTEND` lets a search start inside
-a line while `^` still sees what is before it. A match is never empty (`x*` finds only where there is an x). The
+a line while `^` still sees what is before it. A match is never empty: a pattern that matches an empty text is
+refused (11/09/26, the review; one that matches nothing only at a place, as `\<`, steps over it). The
 replacement is literal, or with a regular expression POSIX sed's: `&` (and `\0`) the match, `\1`-`\9` its groups,
 plus `\n` (the file's line end) and `\t`. Replace all works out the file's size first and does all or none of it,
 never half at the 16 MB limit; it is one step, it builds each changed line anew (one op pair a line, not a match), and
@@ -82,7 +83,8 @@ it drops the index's marks past the first change first, since they would move at
 **Find in files.** Iterative, through a stack of folder paths with their depths; a folder is read entry by entry and
 each file read and searched in 64 KB chunks before the next entry, so at most one folder and one file are open (two of
 the program's 16 descriptors). Bounded everywhere: 24 folders deep, 4,096 folders, 20,000 files, 256 MB read, 2,000
-lines listed, a line searched in its first 64 KB, 256 KB of paths waiting; each limit stops the search or leaves
+lines listed, a line searched in its first 64 KB and with a bound on its work, 256 KB of paths waiting; each limit
+stops the search or leaves
 something out and says which. Files of more than 16 MB, and files with a NUL in their first chunk, are skipped and
 counted. `/dev` and `/.netman` are never entered. It reads files as they are on the disk, not unsaved changes. It works
 256 KB at a time between the window's events (`gk_next()` with no wait while there is more), so the window answers
@@ -92,8 +94,8 @@ and Stop ends it. It starts with what the find bar found last, in the folder of 
 live in the marks. After a change, the first look tokenizes from the mark before it to the first good mark after it and
 compares: when the state there is the same (typing inside a line nearly always), nothing after it is stale; otherwise
 the marks after it are, and they are worked out again when a screenful needs them, within a budget (512 KB a
-screenful), drawing with the stale state meanwhile, or a little at a time while idle. A line's bytes past 64 KB are
-drawn uncoloured (they are still tokenized, so the next line's state is right). A language is chosen by the file's name
+screenful), drawing with the stale state meanwhile, or a little at a time while idle. A tokenizer reads a line's
+first 8 KB only (11/09/26, the review), as if it ended there; the rest is drawn plain. A language is chosen by the file's name
 (`.c .h`, `.asm .nasm .inc` NASM, `.s .S` GNU as, `.py`, `.sh .bash`, `Makefile makefile GNUmakefile .mk .mak`,
 `.md .markdown`, `.json`, `surfshrc`, `.profile`) or its `#!` line, and View > Language changes it. The colours are
 dark ones on the toolkit's paper (keywords plum, types blue, strings sea green, numbers rust, the preprocessor and
@@ -210,9 +212,9 @@ one to the front.
 
 | Test | What | Checks |
 |---|---|---|
-| `test_wcode` | everything but `fileio.c`, `window.c` and `main.c`: random edits against a plain array, the history round trip, the colouring's states against a from-scratch tokenizing after random edits, hostile bytes in every tokenizer, the commands, the guard, the keys as desk's ABI sends them (the bits, repeats), the pointer | 527,096 (60 rounds, as `make unittest` runs it); 529,030 with marks every 3 lines |
-| `test_wcode_save` | `fileio.c` on `tests/host/sim_fs.c`: every write, fsync and rename failure, half-done renames, twins, Save as, reading, the rescue copy | 58 |
-| `test_wcode_win` | the window on the toolkit's fake desktop (`tests/host/gk_fake.c`), files in memory: it opens (the tab, the numbers, the status bar); typing presents only the rows that change; Open through the chooser, colours; the menus in the bar (shortcuts, radio items, greyed ones); the find bar (Enter, Shift+Enter, Esc, F5); Go to line's box; the clipboard both ways; a click, a drag, a double click, the numbers; the wheel; a new size; find in files, its list, a line opened at its match; the guard on Close tab, on the close button (pressed again while it asks) and on Quit; a never-saved file named through the chooser; no choosers (a path typed); a busy desktop; a missing file; the theme; the gutter down to the area's foot | 76 |
+| `test_wcode` | everything but `fileio.c`, `window.c` and `main.c`: random edits against a plain array, the history round trip, the colouring's states against a from-scratch tokenizing after random edits, hostile bytes in every tokenizer, the commands, the guard, the keys as desk's ABI sends them (the bits, repeats), the pointer; the review's findings (`review()`) | 527,441 (60 rounds, as `make unittest` runs it); 529,375 with marks every 3 lines |
+| `test_wcode_save` | `fileio.c` on `tests/host/sim_fs.c`: every write, fsync and rename failure, half-done renames, twins, Save as, reading, the rescue copy; two windows of one file, a device by another name, lone CRs (every comparison by bytes and count) | 69 |
+| `test_wcode_win` | the window on the toolkit's fake desktop (`tests/host/gk_fake.c`), files in memory: it opens (the tab, the numbers, the status bar); typing presents only the rows that change; Open through the chooser, colours; the menus in the bar (shortcuts, radio items, greyed ones); the find bar (Enter, Shift+Enter, Esc, F5); Go to line's box; the clipboard both ways; a click, a drag, a double click, the numbers; the wheel; a new size; find in files, its list, a line opened at its match; the guard on Close tab, on the close button (pressed again while it asks) and on Quit; a never-saved file named through the chooser; no choosers (a path typed); a busy desktop; a missing file; the theme; the gutter down to the area's foot; the colouring's catch-up after a jump, Esc stopping a search between its steps, the disk's question | 91 |
 | `test_wcode speed` | a 16 MB file and a 16 MB single line, timed (below) | 23 |
 | screen checks | `tools/gui_apps_code.py` in qemu-usb's guiapps scenario, on the real desktop (below) | 29 |
 
@@ -271,6 +273,61 @@ undefined in C (C11 6.5.6), and UBSan's pointer-overflow check stops there, so `
 without the check. The narrow fix the coordinator allowed: the copy only when there is something to copy (`if(len)`),
 with a comment; nothing else in the file changed, and its other users' tests pass as before. `mac-sanitize.sh` now
 builds it with every check.
+
+## The review
+
+An independent review read b13fb6c6 (11/09/26). What held up: saving (never truncated, `O_EXCL`, the care over a
+half-done rename), byte-exact round trips, the guard on every way out, the model's bounds, no recursion, the keys,
+the clipboard, the loop, the `sim_fs.c` fix, and where the code comes from. What it found, and what was done, each
+with its test (the review's own probes, in its scratch folder, were run against the fixed tree too):
+
+- **C1, Replace all could delete text no undo brings back.** It cut each line, then put its new text; a put that
+  failed (no room) left the line cut, with the history perhaps already forgotten. Now the count works out the file's
+  largest size along the way and its longest new line, has that room promised (`wc_text_reserve()`, which no deletion
+  shrinks meanwhile) and the line's buffer made before the first cut, so nothing can fail after one: all of it or
+  none, and a change too large to undo says so. Tests: no room (nothing changed, said), larger than the history (done,
+  said); the probes' 4 MB line of JSON that went to 0 bytes, now refused whole or done whole.
+- **M1, typing, Enter, a paste, Replace, Tab, indenting and comments over a selection could lose it.** The same cut
+  before a put: each now asks for the room the change comes to first (`wc_doc_room()`), counting the selection's
+  bytes out, so a paste that fits once the selection is cut is done (the old order refused it after the cut), and one
+  that does not leaves everything as it was. Replace's refusal is no longer hidden by the search after it.
+- **C2, the Markdown tokenizer was quadratic** (a line of `[` took 140 s at 1 MB). Its scans for `]`, `)`, a closing
+  backtick run and a closing `*` or `_` now remember what a scan found nowhere after where it began, so a line is read
+  once for each (link text runs to its first `]`: brackets in it are not followed). And every tokenizer reads a line's
+  first 8 KB only (`WC_LEX_MAX`), as if it ended there, so no line costs more than that to colour or to carry a state
+  over; the rest is plain, and a comment opened past 8 KB does not go on to the next line. Tests: 25 hostile units at
+  64 KB and 1 MB in every language, the state the first 8 KB's, under a time bound; Markdown's scans at 8 KB, timed.
+- **C3, regular-expression searches were unbounded and could not be stopped** (`".*"` with Find previous 8.2 s on a
+  64 KB line, `(a*b)?` 35.6 s). A pattern that matches an empty text is refused (x+ for x*); Find previous walks a
+  line's matches once; whole words go on from the next place a word can start; and every search is charged the text
+  each `regexec()` may read, stops where it is when its budget (1 MB) is spent and goes on from there: Find, Replace
+  and Replace all run between events (the status bar says so, a key or Esc stops a search; while Replace all changes
+  the file the keys wait, and Esc takes it back unless it is too large to undo), and find in files bounds each line
+  (`WC_GREP_LINE_WORK`), leaving out and counting one too costly. REG_ESTEPS (a back-reference giving up) is said, no
+  longer "Not found". Left as it is: whole words with a pattern that runs to the line's end (`a.*`) on a line of many
+  words costs the line's length at each word start; the budget keeps the window answering and Esc stops it.
+- **H1, a save could go over a file changed on the disk, and one file could be open twice.** A document keeps the
+  size, time and number of its file as read or last saved, and a save over it that finds them changed (another
+  wcode, Notepad) asks first, in a box: save over it, Save as, or leave it (the guard's question waits for it). Paths
+  are made absolute (`main.c` gives the program's folder) and taken in one form (`wc_path_canon()`), and compared as
+  FAT names them, case aside, so `a.c`, `A.C` and `/m/./x/../a.c` are one tab; Save as onto another tab's file is
+  refused. FAT keeps times to 2 seconds: two saves of the same size in those 2 seconds are not told apart.
+- **H2, find in files could enter `/dev` through `.` or `/.`.** Its folder is taken from / in its one form (`.` from
+  the program's folder, `/usb1p1/../dev` is `/dev`, refused), so the check holds on it and on every path joined to it;
+  `wc_file_read()` takes the same form, and refuses whatever `fstat()` calls devfs, by any name.
+- **Lows:** the colouring's catch-up is asked for after any jump, not only by find in files; the folders find in files
+  leaves out are said, with why (unreadable, too deep, a path too long), with the files and lines left out; Enter
+  or a paste right after a lone CR puts CR LF, so that CR stays lone and Backspace takes only what was put; Replace
+  all's messages say what happened, its count only what it replaced; the history's count no longer underflows when
+  its ops' block is refused after its bytes' grew; closing the last tab makes the new file first (it stays when there
+  is no memory, said), no longer freeing what it then used; with several files named, a later one opened leaves an
+  earlier refusal said; the manual says that empty matches are never found.
+
+The tests for these are in `tests/host/test_wcode.c` (`review()`), `test_wcode_save.c` (two windows of one file, a
+device by another name, lone CRs, and every comparison by bytes and count) and `test_wcode_win.c` (the catch-up after
+Ctrl+End in 4 MB, Esc stopping a search between its steps, the disk's question in its box). To reach two failures
+that only a refused allocation brings, `undo.c` and `app.c` take a test's allocator when built with
+`WC_UNDO_REALLOC` and `WC_APP_MALLOC` (the Makefile's test_wcode and `mac-sanitize.sh` do).
 
 ## Where the code comes from
 
