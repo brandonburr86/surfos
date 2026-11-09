@@ -30,8 +30,9 @@ static int f_open(void *ctx, const char *path, long *size) {
     int fd = open(path, O_RDONLY), e;
     (void)ctx;
     if(fd < 0) return -1;
-    if(fstat(fd, &st) < 0 || S_ISDIR(st.st_mode)) {
-        e = S_ISDIR(st.st_mode) ? EISDIR : errno;
+    if(fstat(fd, &st) < 0) e = errno;           /* st is read only once fstat() filled it (the review's L11) */
+    else e = S_ISDIR(st.st_mode) ? EISDIR : 0;
+    if(e) {
         close(fd);
         errno = e;
         return -1;

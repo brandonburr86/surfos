@@ -63,7 +63,7 @@ struct app {
     struct sheet_io io;
     char path[WIN_PATH_MAX];            /* the sheet's file; "" for one never saved */
     int editing, edit_row, edit_col;    /* E_*, and the cell it goes into */
-    char edit[SH_INPUT_MAX + 1];        /* E_TYPING's text */
+    char edit[SH_INPUT_MAX + 2];        /* E_TYPING's text: a text's ' and SH_INPUT_MAX bytes */
     int edit_len;
     struct sh_clip *clip;               /* the last copy */
     unsigned clip_seen;                 /* the desktop's clipboard as the copy left it, when its text was too long */
@@ -74,6 +74,7 @@ struct app {
     char rd_path[WIN_PATH_MAX];
     char save_path[WIN_PATH_MAX];       /* a Save as waiting for CSV's question */
     int after;                          /* AFTER_*: what a save or a question was for */
+    unsigned lossy;                     /* SH_LOSE_*: what the last save, a CSV's, left out of the file */
     int all;                            /* the whole grid is to be painted again */
     char msg[APP_MSG];                  /* the status bar's message, until the next change */
     char title[WIN_TITLE_MAX];          /* the window's title as last set */

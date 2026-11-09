@@ -25,7 +25,7 @@ static struct app A;
 
 /**** files in memory ****/
 
-#define FILES 8
+#define FILES 16
 static struct mfile {
     char path[WIN_PATH_MAX];
     char *data;
@@ -526,6 +526,162 @@ int main(void) {
     CHECK(run());
     gkf_resize(500, 300);
     CHECK(run() && A.v.w < 500 && A.v.h < 300 && A.v.w > 300);
+    /* the review (11/09/26) */
+    /* cells the formula bar cannot edit (a line break, a tab): neither a double-click, Ctrl+E nor a click in the
+       bar edits them, and nothing changes; an edit of a cell it can edit that changes nothing changes nothing */
+    {
+        static const char lines[] = "SurfOS sheet 1\ncell A1 general line1\\nline2\ncell A2 general a\\tb\n"
+                                    "cell B1 general =1+2\n";
+        put_file("/stick/lines.sheet", lines, (int)strlen(lines));
+    }
+    fresh("/stick/lines.sheet");
+    gkf_advance(1000);
+    cell_xy(0, 0, &x, &y);
+    gkf_click(x, y);
+    gkf_click(x, y);                            /* a double-click on A1 */
+    CHECK(run() && !A.editing && gk_focused(A.ui) == A.grid && status_starts("A1 holds a line break"));
+    click_cell(5, 5);
+    CHECK(run() && !strcmp(inp("A1"), "line1\nline2") && !sh_modified(A.s) && !sh_undo_label(A.s));
+    click_cell(1, 0);
+    ctrl('E', 0);                               /* Ctrl+E on A2, then Enter */
+    CHECK(run() && !A.editing && status_starts("A2 holds a line break or a tab"));
+    gkf_key('\r', 0);
+    CHECK(run() && !A.editing && !strcmp(inp("A2"), "a\tb") && !sh_modified(A.s));
+    click_cell(0, 0);
+    gk_bounds(A.formula, &x, &y, &w, &h);
+    gkf_click(x + 40, y + h / 2);               /* a click in the bar, on A1 */
+    CHECK(run() && gk_focused(A.ui) == A.grid && !A.editing && status_starts("A1 holds a line break"));
+    gkf_advance(1000);
+    cell_xy(0, 1, &x, &y);
+    gkf_click(x, y);
+    gkf_click(x, y);                            /* B1, which the bar can edit */
+    CHECK(run() && A.editing == E_FIELD);
+    click_cell(5, 5);
+    CHECK(run() && !A.editing && !sh_modified(A.s) && !sh_undo_label(A.s) && num("B1") == 3);
+    click_cell(0, 1);
+    ctrl('E', 0);
+    gkf_key('\r', 0);
+    CHECK(run() && !A.editing && !sh_modified(A.s) && !sh_undo_label(A.s));
+    /* a text of 8,192 bytes that keeps its ' (a CSV field beginning with =): saved as .sheet, opened again, and
+       its edit in the bar that changes nothing */
+    big[0] = '=';
+    memset(big + 1, 'a', 8191);
+    memcpy(big + 8192, "\r\n", 2);
+    put_file("/stick/long.csv", big, 8194);
+    fresh("/stick/long.csv");
+    CHECK(vtype("A1") == SH_TEXT && strlen(inp("A1")) == 8193);
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/long.sheet");
+    CHECK(run() && status_is("Saved long.sheet"));
+    fresh("/stick/long.sheet");
+    CHECK(!gk_box_open(A.ui) && vtype("A1") == SH_TEXT && strlen(inp("A1")) == 8193);
+    ctrl('E', 0);
+    CHECK(run() && A.editing == E_FIELD && strlen(gk_text(A.formula)) == 8193);
+    gkf_key('\r', 0);
+    CHECK(run() && !A.editing && !sh_modified(A.s) && strlen(inp("A1")) == 8193);
+    /* a file larger than a reader takes is not written */
+    sh_file_max = 100;
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/huge.sheet");
+    CHECK(run() && box_is(BOX_FAILED) && !find("/stick/huge.sheet", 0));
+    sh_file_max = SH_FILE_MAX;
+    gkf_key('\r', 0);
+    CHECK(run() && !gk_box_open(A.ui));
+    /* CSV leaves out formats too: it asks first; after such a save, Close asks, its Save as offering a .sheet */
+    fresh(NULL);
+    gkf_type("50%\n1.5\n");
+    run();
+    ctrl('S', 0);
+    run();
+    gkf_dialog_answer("/stick/f.csv");
+    CHECK(run() && box_is(BOX_CSV) && !find("/stick/f.csv", 0));
+    gkf_key('\r', 0);                           /* Save */
+    CHECK(run() && !strcmp(file_text("/stick/f.csv"), "0.5\r\n1.5\r\n") && !sh_modified(A.s) &&
+          A.lossy == SH_LOSE_FORMATS);
+    ctrl('W', 0);
+    CHECK(run() && box_is(BOX_SAVE));           /* the formats are in this window alone */
+    gkf_key('\r', 0);                           /* Save as */
+    CHECK(run() && gkf_dialog() && !strcmp(gkf_dialog()->name, "f.sheet"));
+    gkf_dialog_answer("/stick/f.sheet");
+    CHECK(run() == 0 && find("/stick/f.sheet", 0));     /* saved whole, then closed */
+    /* the values only, saved: Ctrl+W still asks, and Don't save closes */
+    fresh(NULL);
+    gkf_type("2\n=A1*3\n");
+    run();
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/v.csv");
+    CHECK(run() && box_is(BOX_CSV));
+    gkf_key('\r', 0);
+    CHECK(run() && !strcmp(file_text("/stick/v.csv"), "2\r\n6\r\n") && A.lossy == SH_LOSE_FORMULAS);
+    ctrl('W', 0);
+    CHECK(run() && box_is(BOX_SAVE));
+    gkf_key(WIN_KEY_RIGHT, 0);                  /* Don't save */
+    gkf_key('\r', 0);
+    CHECK(run() == 0);
+    /* the close button over the CSV question: its own question takes its place and goes on */
+    fresh(NULL);
+    gkf_type("=1+1\n");
+    run();
+    ctrl('S', WIN_MOD_SHIFT);
+    run();
+    gkf_dialog_answer("/stick/w.csv");
+    CHECK(run() && box_is(BOX_CSV));
+    gkf_close();
+    CHECK(run() && box_is(BOX_SAVE) && A.after == AFTER_CLOSE);
+    gkf_key(WIN_KEY_RIGHT, 0);                  /* Don't save */
+    gkf_key('\r', 0);
+    CHECK(run() == 0 && !find("/stick/w.csv", 0));
+    /* the menu's Paste is off while the bar edits (its field's Ctrl+V pastes at its cursor); pasted into what is
+       typed, the clipboard's first line, a tab as a space */
+    fresh(NULL);
+    gkf_type("=A1+B1\n");
+    run();
+    click_cell(0, 0);
+    ctrl('E', 0);
+    CHECK(run() && A.editing == E_FIELD && (gkf_menu_entry(gkf_menu_find("Paste"))->flags & WIN_MENU_DISABLED));
+    gkf_set_paste("C1*");
+    gkf_menu_choose(MENU_PASTE);
+    CHECK(run() && !strcmp(gk_text(A.formula), "=A1+B1"));
+    gkf_key(27, 0);
+    CHECK(run() && !(gkf_menu_entry(gkf_menu_find("Paste"))->flags & WIN_MENU_DISABLED));
+    gkf_set_paste("a\tb\r\nnext");
+    gkf_type("x");
+    CHECK(gkf_menu_choose(MENU_PASTE) && run() && A.editing == E_TYPING && !strcmp(A.edit, "xa b"));
+    gkf_key(27, 0);
+    run();
+    /* a Cut pasted moves the cell: its formula keeps its reference */
+    gkf_type("4\n");
+    click_cell(0, 2);
+    gkf_type("=A1*2\n");
+    run();
+    click_cell(0, 2);
+    ctrl('X', 0);
+    run();
+    gkf_set_paste(gkf_clip());                  /* the desktop's clipboard holds what the Cut put there */
+    click_cell(4, 2);
+    ctrl('V', 0);
+    CHECK(run() && !strcmp(inp("C5"), "=A1*2") && num("C5") == 8 && vtype("C1") == SH_EMPTY);
+    /* reading far into a file of 30 MB: its percentage worked out in 64 bits */
+    fresh(NULL);
+    ctrl('O', 0);
+    run();
+    gkf_dialog_answer("/stick/big.csv");
+    {
+        struct gk_event ev;
+        while(gk_next(A.ui, &ev, 0) > 0) app_event(&A, &ev);
+        CHECK(app_reading(&A));
+        A.rd_done = 25000000;
+        A.rd_size = 30000000;
+        app_read(&A);
+        CHECK(app_reading(&A) && status_is("Reading big.csv: 84%"));
+        gkf_key(27, 0);
+        while(gk_next(A.ui, &ev, 0) > 0) app_event(&A, &ev);
+        CHECK(!app_reading(&A));
+    }
+    fresh(NULL);
     /* closing: asked first when anything is not saved; Cancel keeps it, Don't save ends it */
     gkf_close();
     CHECK(run() == 0);                          /* nothing unsaved: it closes */

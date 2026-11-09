@@ -24,13 +24,14 @@ to, Edit the cell), Sheet (rows and columns inserted and deleted, column widths)
 fixed decimals, percent, more and fewer decimals) and the program's part of the desktop's Help.
 Open and Save as are the desktop's choosers; a file is read a piece at a time between the window's
 events, so the window answers meanwhile and Esc stops it. New, Open and Close ask first about
-unsaved changes; saving as CSV asks first when formulas would be lost.
+unsaved changes; saving as CSV asks first when formulas, formats or column widths would be lost,
+and after such a save New, Open and Close ask again (11/09/26, the review).
 
 Copy puts the cells' values on the desktop's clipboard as tab-separated text, and keeps the cells
 themselves: a paste of what the clipboard still holds from this copy puts the cells back with their
-formulas moved, and other text is pasted as typed, a field a cell. Only what changed is painted
-again: a move of the active cell paints the cells it left and reached and the headers, a change of
-the sheet the grid.
+formulas moved (a Cut's cells moved there, keeping their references), and other text is pasted as
+typed, a field a cell. Only what changed is painted again: a move of the active cell paints the
+cells it left and reached and the headers, a change of the sheet the grid.
 */
 
 #include <stdio.h>
@@ -307,6 +308,7 @@ static void show(struct app *a) {
     }
     gk_menu_enable(a->ui, MENU_UNDO, sh_undo_label(a->s) != NULL || a->editing);
     gk_menu_enable(a->ui, MENU_REDO, sh_redo_label(a->s) != NULL && !a->editing);
+    gk_menu_enable(a->ui, MENU_PASTE, a->editing != E_FIELD);
     gk_menu_check(a->ui, MENU_GENERAL, kind == SH_GENERAL);
     gk_menu_check(a->ui, MENU_FIXED, kind == SH_FIXED(0));
     gk_menu_check(a->ui, MENU_PERCENT, kind == SH_PERCENT(0));
@@ -326,7 +328,7 @@ static void type_start(struct app *a) {
 }
 
 static void type_add(struct app *a, const char *s, int n) {
-    if(a->edit_len + n > SH_INPUT_MAX) {
+    if(a->edit_len + n > SH_INPUT_MAX + ((a->edit_len ? a->edit[0] : n ? s[0] : 0) == '\'')) {
         say(a, "A cell holds 8,192 bytes at most");
         return;
     }
@@ -343,9 +345,18 @@ static void type_back(struct app *a) {          /* the last character, a UTF-8 s
 
 /* the edit put into its cell: 0, or -1 when the sheet refused it (it stays, and the status bar says why) */
 static int commit(struct app *a) {
+    static char was[SH_INPUT_MAX + 64];
     const char *text = a->editing == E_FIELD ? gk_text(a->formula) : a->edit;
     char why[SH_WHY], name[16], line[APP_MSG];
     if(!a->editing) return 0;
+    if(a->editing == E_FIELD) {                 /* the bar as the cell is: nothing changes (11/09/26, the review) */
+        sh_input(a->s, a->edit_row, a->edit_col, was, sizeof(was));
+        if(!strcmp(was, text)) {
+            a->editing = E_NONE;
+            a->all = 1;
+            return 0;
+        }
+    }
     if(sh_set(a->s, a->edit_row, a->edit_col, text, (int)strlen(text)) < 0) {
         say(a, sh_why(a->s));
         return -1;
@@ -367,6 +378,22 @@ static void cancel(struct app *a) {
     if(gk_focused(a->ui) == a->formula) gk_focus(a->grid);
 }
 
+/* the active cell, when the formula bar cannot edit what it holds: kit's field makes a control character
+   a space, so a line break or a tab would be lost by an edit that changed nothing else. 1, saying so */
+static int bar_refuses(struct app *a) {
+    static char input[SH_INPUT_MAX + 64];
+    char name[16], line[APP_MSG];
+    const char *p;
+    sh_input(a->s, a->v.row, a->v.col, input, sizeof(input));
+    for(p = input; *p && (unsigned char)*p >= 32; p++) ;
+    if(!*p) return 0;
+    sh_cellname(a->v.row, a->v.col, name);
+    snprintf(line, sizeof(line), "%s holds a line break or a tab, which the formula bar cannot edit: type to replace it",
+             name);
+    say(a, line);
+    return 1;
+}
+
 /* the active cell edited in the formula bar: what it holds, the cursor at its end */
 static void edit_in_bar(struct app *a) {
     static char input[SH_INPUT_MAX + 64];
@@ -374,6 +401,7 @@ static void edit_in_bar(struct app *a) {
         gk_focus(a->formula);
         return;
     }
+    if(a->editing != E_TYPING && bar_refuses(a)) return;
     if(a->editing == E_TYPING) snprintf(input, sizeof(input), "%s", a->edit);
     else sh_input(a->s, a->v.row, a->v.col, input, sizeof(input));
     if(a->editing != E_TYPING) {
@@ -484,7 +512,8 @@ static void stop_read(struct app *a) {
 
 static void read_done(struct app *a) {
     char why[SH_WHY], line[APP_MSG];
-    struct sheet *s = sh_read_end(a->rd, why, sizeof(why));
+    struct sheet *old = a->s;                   /* freed once the new one is built, before it is worked out */
+    struct sheet *s = sh_read_finish(a->rd, why, sizeof(why), &old);
     a->rd = NULL;
     a->io.close(a->io.ctx, a->rd_h);
     a->rd_h = -1;
@@ -493,10 +522,10 @@ static void read_done(struct app *a) {
         failed(a, "Not opened", line, why);
         return;
     }
-    sh_free(a->s);
     a->s = s;
     a->said.s = NULL;                           /* a new sheet may have the old one's address */
     a->editing = E_NONE;
+    a->lossy = 0;
     {
         struct view keep = a->v;
         view_init(&a->v, s);
@@ -537,7 +566,7 @@ void app_read(struct app *a) {
     }
     if(a->rd && a->rd_size > 0) {
         snprintf(line, sizeof(line), "Reading %s: %d%%", base_name(a->rd_path),
-                 (int)(a->rd_done >= a->rd_size ? 99 : a->rd_done * 100 / a->rd_size));
+                 (int)(a->rd_done >= a->rd_size ? 99 : (long long)a->rd_done * 100 / a->rd_size));
         say(a, line);
         show(a);
     }
@@ -547,6 +576,12 @@ void app_read(struct app *a) {
 static int write_to(struct app *a, const char *path) {
     char why[SH_WHY], line[APP_MSG];
     int kind = sh_kind_of(path);
+    long bytes = sh_write_size(a->s, kind);
+    if(bytes > sh_file_max) {                   /* what no reader would open is not written (11/09/26, the review) */
+        snprintf(line, sizeof(line), "%s would be %ld MB as a file,", base_name(path), (bytes + 1048575) / 1048576);
+        failed(a, "Not saved", line, "more than the 32 MB a file may be: nothing written.");
+        return -1;
+    }
     if(a->io.save(a->io.ctx, path, a->s, kind, why, sizeof(why)) < 0) {
         snprintf(line, sizeof(line), "%s could not be saved:", base_name(path));
         failed(a, "Not saved", line, why);
@@ -554,6 +589,7 @@ static int write_to(struct app *a, const char *path) {
     }
     title_path(a, path);
     sh_saved(a->s);
+    a->lossy = kind == SH_CSV ? sh_csv_loss(a->s) : 0;     /* then New, Open and Close still ask */
     snprintf(line, sizeof(line), kind == SH_CSV ? "Saved the values in %s" : "Saved %s", base_name(path));
     say(a, line);
     return 0;
@@ -565,15 +601,18 @@ static void choose_failed(struct app *a) {
            "No chooser: the desktop refused it");
 }
 
-static void save_as(struct app *a) {
-    char dir[WIN_PATH_MAX], *slash;
+/* Save as: the chooser in the file's folder, offering its name, or with whole set, the name as a .sheet */
+static void save_as(struct app *a, int whole) {
+    char dir[WIN_PATH_MAX], name[WIN_PATH_MAX], *slash, *dot;
     snprintf(dir, sizeof(dir), "%s", a->path);
     slash = strrchr(dir, '/');
     if(slash && slash != dir) *slash = 0;
     else if(slash) dir[1] = 0;
     else dir[0] = 0;
-    if(gk_choose(a->ui, CHOOSE_SAVE, WIN_DLG_SAVE, dir, a->path[0] ? base_name(a->path) : "Untitled.sheet",
-                 "sheet csv") < 0) {
+    snprintf(name, sizeof(name), "%s", a->path[0] ? base_name(a->path) : "Untitled.sheet");
+    if(whole && sh_kind_of(name) == SH_CSV && (dot = strrchr(name, '.')))
+        snprintf(dot, sizeof(name) - (size_t)(dot - name), ".sheet");
+    if(gk_choose(a->ui, CHOOSE_SAVE, WIN_DLG_SAVE, dir, name, "sheet csv") < 0) {
         choose_failed(a);
         a->after = AFTER_NONE;
     }
@@ -598,6 +637,7 @@ static void do_new(struct app *a) {
     a->s = s;
     a->said.s = NULL;
     a->editing = E_NONE;
+    a->lossy = 0;
     {
         struct view keep = a->v;
         view_init(&a->v, s);
@@ -620,28 +660,57 @@ static void proceed(struct app *a) {
     }
 }
 
-/* Save: 0 done (or nothing to do), 1 a chooser asked (Save as), -1 failed */
+/* what a CSV save leaves out, in words: "formulas, formats and column widths" */
+static void lost_words(unsigned lose, char *out, int size) {
+    const char *w[3];
+    int n = 0;
+    if(lose & (SH_LOSE_FORMULAS | SH_LOSE_LIMIT)) w[n++] = "formulas";
+    if(lose & SH_LOSE_FORMATS) w[n++] = "formats";
+    if(lose & SH_LOSE_WIDTHS) w[n++] = "column widths";
+    if(n == 3) snprintf(out, (size_t)size, "%s, %s and %s", w[0], w[1], w[2]);
+    else if(n == 2) snprintf(out, (size_t)size, "%s and %s", w[0], w[1]);
+    else snprintf(out, (size_t)size, "%s", n ? w[0] : "");
+}
+
+/* a CSV save of path, which keeps the values: asked first when the sheet has more (11/09/26, the review: formats,
+   widths and cells not worked out too). 1 when it asks, 0 when it may go on */
+static int csv_asks(struct app *a, const char *path) {
+    unsigned lose = sh_csv_loss(a->s);
+    char what[64], line[APP_MSG];
+    if(!lose) return 0;
+    snprintf(a->save_path, sizeof(a->save_path), "%s", path);
+    lost_words(lose, what, sizeof(what));
+    snprintf(line, sizeof(line), "In CSV, %s are lost:", what);
+    gk_confirm(a->ui, BOX_CSV, "Save the values only?", line, lose & SH_LOSE_LIMIT ?
+               "cells saying #LIMIT! go as that. .sheet keeps all." : "they stay only in this window. .sheet keeps them.",
+               "Save", NULL, "Cancel");
+    return 1;
+}
+
+/* Save: 0 done (or nothing to do), 1 a chooser or a question asked (its answer goes on), -1 failed */
 static int save(struct app *a) {
     if(!a->path[0]) {
-        save_as(a);
+        save_as(a, 0);
         return 1;
     }
-    if(sh_kind_of(a->path) == SH_CSV && sh_formulas(a->s)) {   /* CSV keeps the values: ask first */
-        snprintf(a->save_path, sizeof(a->save_path), "%s", a->path);
-        gk_confirm(a->ui, BOX_CSV, "Save the values only?", "CSV keeps values, not formulas: they stay",
-                   "only in this window. Save as .sheet keeps them.", "Save", NULL, "Cancel");
-        return 1;
-    }
+    if(sh_kind_of(a->path) == SH_CSV && csv_asks(a, a->path)) return 1;
     return write_to(a, a->path);
 }
 
 /* New, Open and Close: 1 when it asks about unsaved changes first (the answer goes on), 0 when it can go on now */
 static int unsaved(struct app *a, int after) {
-    char line[APP_MSG];
+    char line[APP_MSG], line2[APP_MSG], what[64];
     a->after = after;
-    if(!sh_modified(a->s)) return 0;
-    snprintf(line, sizeof(line), "%s has changes that are not saved.", sheet_name(a));
-    gk_confirm(a->ui, BOX_SAVE, "Save the changes?", line, "", "Save", "Don't save", "Cancel");
+    if(sh_modified(a->s)) {
+        snprintf(line, sizeof(line), "%s has changes that are not saved.", sheet_name(a));
+        gk_confirm(a->ui, BOX_SAVE, "Save the changes?", line, "", "Save", "Don't save", "Cancel");
+        return 1;
+    }
+    if(!a->lossy) return 0;
+    lost_words(a->lossy, what, sizeof(what));   /* saved, but as CSV: what it left out is in this window alone */
+    snprintf(line, sizeof(line), "%s keeps only the values:", sheet_name(a));
+    snprintf(line2, sizeof(line2), "the %s are here only.", what);
+    gk_confirm(a->ui, BOX_SAVE, "Save the whole sheet first?", line, line2, "Save as", "Don't save", "Cancel");
     return 1;
 }
 
@@ -662,12 +731,7 @@ static void chosen(struct app *a, const struct gk_event *ev) {
         start_read(a, ev->text);
         return;
     }
-    if(sh_kind_of(ev->text) == SH_CSV && sh_formulas(a->s)) {
-        snprintf(a->save_path, sizeof(a->save_path), "%s", ev->text);
-        gk_confirm(a->ui, BOX_CSV, "Save the values only?", "CSV keeps values, not formulas: they stay",
-                   "only in this window. Save as .sheet keeps them.", "Save", NULL, "Cancel");
-        return;
-    }
+    if(sh_kind_of(ev->text) == SH_CSV && csv_asks(a, ev->text)) return;
     if(write_to(a, ev->text) == 0) proceed(a);
     else a->after = AFTER_NONE;
 }
@@ -690,7 +754,7 @@ static void answered(struct app *a, const struct gk_event *ev) {
     switch(ev->id) {
     case BOX_SAVE:
         if(ev->value == 0) {                    /* Save, then go on: when Save as asks, its answer goes on */
-            int r = save(a);
+            int r = !sh_modified(a->s) && a->lossy ? (save_as(a, 1), 1) : save(a);
             if(r == 0) proceed(a);
             else if(r < 0) a->after = AFTER_NONE;
         } else if(ev->value == 1) proceed(a);   /* Don't save */
@@ -700,10 +764,12 @@ static void answered(struct app *a, const struct gk_event *ev) {
         }
         break;
     case BOX_CSV:
-        if(ev->value == 0 && write_to(a, a->save_path) == 0) proceed(a);
-        else {
+        if(ev->value == 0) {
+            if(write_to(a, a->save_path) == 0) proceed(a);
+            else a->after = AFTER_NONE;
+        } else if(!gk_box_open(a->ui)) {        /* not a box put in its place, which asks on (the review's L8) */
             a->after = AFTER_NONE;
-            if(ev->value) say(a, "Not saved");
+            say(a, "Not saved");
         }
         break;
     case BOX_WIDTH:
@@ -727,6 +793,7 @@ static void copy(struct app *a, int cut) {
         say(a, sh_why(a->s));
         return;
     }
+    if(cut) sh_clip_cut(c);                     /* pasted, the cells move */
     sh_clip_free(a->clip);
     a->clip = c;
     a->clip_known = 0;
@@ -758,16 +825,19 @@ static void paste(struct app *a) {
     char *text, *nl, name[40], line[APP_MSG];
     int len = 0, olen = 0, r, use_clip;
     text = gk_paste_all(a->ui, &len);
-    if(a->editing == E_TYPING || a->editing == E_FIELD) {     /* into the edit: the clipboard's first line */
-        if(text) {
+    if(a->editing == E_FIELD) {                 /* kit's field pastes at its cursor, by its Ctrl+V: the menu's is off */
+        free(text);
+        say(a, "Ctrl+V pastes into the formula bar, at the cursor");
+        return;
+    }
+    if(a->editing == E_TYPING) {                /* into what is typed: the clipboard's first line, as the field takes */
+        if(text) {                              /* it: control characters (a NUL, a tab) as spaces */
+            int i;
             if((nl = memchr(text, '\n', (size_t)len))) len = (int)(nl - text);
             if(len && text[len - 1] == '\r') len--;
-            if(a->editing == E_TYPING) type_add(a, text, len);
-            else {
-                static char joined[SH_INPUT_MAX + 1];
-                snprintf(joined, sizeof(joined), "%s%.*s", gk_text(a->formula), len, text);
-                gk_set_text(a->formula, joined);
-            }
+            for(i = 0; i < len; i++)
+                if((unsigned char)text[i] < 32) text[i] = ' ';
+            type_add(a, text, len);
             free(text);
         }
         return;
@@ -865,7 +935,7 @@ static void menu(struct app *a, int id) {
     case MENU_NEW: if(!unsaved(a, AFTER_NEW)) proceed(a); break;
     case MENU_OPEN: if(!unsaved(a, AFTER_OPEN)) proceed(a); break;
     case MENU_SAVE: a->after = AFTER_NONE; save(a); break;
-    case MENU_SAVE_AS: a->after = AFTER_NONE; save_as(a); break;
+    case MENU_SAVE_AS: a->after = AFTER_NONE; save_as(a, 0); break;
     case MENU_CLOSE: close_asked(a); break;
     case MENU_UNDO: undo_redo(a, 0); break;
     case MENU_REDO: undo_redo(a, 1); break;
@@ -1026,9 +1096,15 @@ int app_event(struct app *a, const struct gk_event *ev) {
         break;
     case GK_EV_FOCUS:                           /* the grid has the keys: an edit in the formula bar goes in */
         if(ev->w == a->grid && ev->value && a->editing == E_FIELD) commit(a);
+        else if(ev->w == a->grid && !ev->value && !a->editing && gk_focused(a->ui) == a->formula && bar_refuses(a))
+            gk_focus(a->grid);                  /* a click in the bar, for a cell it cannot edit */
         break;
     case GK_EV_CHANGE:
         if(ev->id == ID_FORMULA && a->editing != E_FIELD) {
+            if(a->editing != E_TYPING && bar_refuses(a)) {
+                gk_focus(a->grid);              /* and show() puts the cell back in the bar */
+                break;
+            }
             if(a->editing != E_TYPING) {
                 a->edit_row = a->v.row;
                 a->edit_col = a->v.col;
@@ -1080,7 +1156,7 @@ int app_open(struct app *a, const struct sheet_io *io, const char *path) {
     gk_size(a->name, 96, 0);
     gk_grow(a->name, 0, 0);                     /* its own width; the formula takes the rest */
     gk_field_hint(a->name, "Cell");
-    a->formula = gk_field(bar, ID_FORMULA, SH_INPUT_MAX, 0);
+    a->formula = gk_field(bar, ID_FORMULA, SH_INPUT_MAX + 1, 0);   /* a text's ' and SH_INPUT_MAX bytes */
     gk_grow(a->formula, 1, 0);
     gk_field_hint(a->formula, "A number, text, or = and a formula");
     a->grid = gk_area(root, ID_GRID, GK_FOCUSABLE | GK_TAKES_TAB, draw, a);
