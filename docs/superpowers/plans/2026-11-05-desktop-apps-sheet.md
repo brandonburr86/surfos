@@ -338,9 +338,10 @@ What it found, and what one fix round did:
   Ctrl+V pastes at its cursor; pasted into what is typed in the grid, control characters (a NUL, a tab) are spaces,
   as the field makes them. **L10**: the reading's percentage in 32 bits, the size divided by 100 first past 21 MB
   (the first fix divided a long long, which on i386 needs libgcc's __divdi3, and programs link no libgcc: the image's
-  build caught it). **L11**: f_open() reads st only once fstat() filled it. **L12**: a formula that does not parse is
-  kept as typed when cells move too, and the page says so: moving the references of a formula not finished would
-  rewrite by tokens text that a later edit may read otherwise. **L13**: FNV-1a is in the sources' table.
+  build caught it). **L11**: f_open() reads st only once fstat() filled it. **L12**: documented: a formula whose text
+  does not split into tokens (a stray `?`) is kept as typed when cells move, while one that splits but does not parse
+  (`=A1+`) has its references moved like any formula's; the page says so. Moving the references of a text that does
+  not split would rewrite by guesses what a later edit may read otherwise. **L13**: FNV-1a is in the sources' table.
 
 The tests: test_wsheet has 32 checks more, 748 (the input rule, CSV fields of 8,190 to 8,192 bytes of three kinds
 saved as .sheet, opened and saved again, the writer refusing past sh_file_max with nothing written, CSV's losses, Cut
@@ -365,6 +366,38 @@ kit's screen checks finding the desktop's chooser by its own title), 11/09/26:
 - **`make test-all`** was not run for the round: since 11/09/26 a track that changes only its own program's files leaves
   it to the integration's full gate (the lock's queue was nine hours long). The first gates above ran it.
 - The image's build found the first L10 fix's division (above). Nothing of the Spreadsheet has run on the laptop.
+
+**The re-review** of 882cd963..9b86832b found the thirteen fixed and no new memory-safety problem, and one new finding:
+
+- **High: at the budget, wsheet saved files it could not open again.** A reader needs more than the sheet it rebuilds:
+  build_new()'s table of 65,536 rows, and each row's struct until build_finish() moves the rows into the sheet's array;
+  a sheet grown until an edit is refused (148,448 texts of 200 bytes, a 32.77 MB .sheet) was refused by a fresh
+  window, and Open in the same window failed sooner, the old sheet held for the whole read. Of the two ways offered,
+  the headroom: every allocation but a reader's stops `read_headroom` short of the budget (65,536 times a row's
+  pointer and struct, and 128 KB for the reader's buffers: 2,228,224 bytes on 64 bits, over the 2,094,055 the
+  reviewer measured the reader to need; 1,703,936 on i386), and a reader, and the recalculation after it, may use all
+  of it. Building the rows straight into one array would have shrunk the need to the table (256 KB), but a reader
+  that takes rows in any order then sorts or moves them, more code at the end of a round than a constant. And Open
+  frees the sheet it replaces before reading, once the question about its changes is answered, so the reader has the
+  whole budget: holding it, the window would need two sheets' memory, past the brief's 64 MB. A file that cannot be
+  read, or a read stopped by Esc, so leaves a new, empty sheet.
+- **Nits:** the page says which broken formulas keep their references (those whose text does not split into tokens:
+  `=A1+` has its moved); percent() stays at 99 until the end; a comment no longer says 64 bits.
+
+Tests: test_wsheet grows a sheet until an edit is refused, with texts of 200 bytes down 65,536 rows and with formulas
+pasted a thousand at a time, then fewer, saves it as .sheet and as CSV and opens both in a sheet that holds nothing
+else (757 checks; the texts' .sheet passes 32 MB with i386's smaller structs, and is then refused by the writer, as
+the image's first run showed); test_wsheet_win does it in the window with the formulas, opening both files in the same
+window and in fresh ones, and a failed or stopped Open leaves a new sheet (169 checks). The reviewer's
+probe_edge: 137,689 texts typed, then both files open in a fresh window; probe_margin: the reader needs 2,094,055
+(.sheet) and 2,061,719 (CSV) bytes over the typed sheet, under `read_headroom`. probe_edge's "opened over itself" still
+fails, as it reads with the old sheet held, which the window no longer does. `test_wsheet long` under the sanitizers:
+clean, in 76 s.
+
+The gates of the re-review's round, on 83050821, 11/09/26: `make unittest` passed (test_wsheet 757, test_wsheet_win
+169, test_guidesk 139, test_gk 436, test_wkit 70); the guiapps scenario, every track's checks, through the lock: 374 of
+374 at -O2 and at -O0, the kernel heap as before gui, fsck_msdos and fsck.fat finding no error; the Spreadsheet's
+checks alone 26 of 26 at both. test-all is the integration's. Nothing of the Spreadsheet has run on the laptop.
 
 ## Where the code comes from
 
