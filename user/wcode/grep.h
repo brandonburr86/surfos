@@ -17,6 +17,13 @@ manager's).
 
 The calls to the file system are main.c's (struct wc_fsops), so tests/host/test_wcode.c gives it
 one in memory.
+
+11/09/26 (the review): the folder searched is absolute and taken in its one form (wc_path_canon():
+/usb1p1/../dev is /dev), so the check for /dev and /.netman holds on it and on every path joined
+to it; a folder left out is counted by why (unreadable, too deep, too many waiting, a path too
+long), and wc_grep_notes() says so with the files and lines left out. A line is searched with a
+bound on its work (WC_GREP_LINE_WORK, charged as find.c charges it), past which it is left out
+and counted, so no line can hold the search; its work counts in the step's.
 */
 #ifndef _WCODE_GREP_H
 #define _WCODE_GREP_H
@@ -33,6 +40,7 @@ one in memory.
 #define WC_GREP_SHOW    120             /* of a matching line, the bytes kept around its match */
 #define WC_GREP_PENDING (256u << 10)    /* the paths of the folders waiting, their bytes */
 #define WC_GREP_FILTER  64
+#define WC_GREP_LINE_WORK(n) (16ul * (n) + (64ul << 10))   /* a line's search, at most (find.c's charge) */
 
 struct wc_fsops {
     void *ctx;
@@ -79,7 +87,8 @@ struct wc_grep {
     char *paths;                        /* the paths of the files with matches */
     unsigned paths_used, paths_cap;
     unsigned dirs, files, skipped, binary, left_out;
-    unsigned long bytes;
+    unsigned left_unreadable, left_deep, left_long, costly;    /* 11/09/26: the folders left out, by why; lines */
+    unsigned long bytes, work;
     char why[128];                      /* what stopped it early, or was left out */
 };
 
@@ -90,6 +99,9 @@ int wc_grep_step(struct wc_grep *g, unsigned long budget);      /* about budget 
 void wc_grep_stop(struct wc_grep *g);                           /* what is open is closed; the list stays */
 void wc_grep_free(struct wc_grep *g);
 const char *wc_grep_path(const struct wc_grep *g, const struct wc_hit *h);
+/* 11/09/26: what was left out, and why, as a sentence ("" for nothing): folders, files that are not text or could not
+   be read, lines too costly to search */
+void wc_grep_notes(const struct wc_grep *g, char *out, unsigned size);
 int wc_grep_name_ok(const char *filter, const char *name);      /* the filter takes this name */
 
 #endif

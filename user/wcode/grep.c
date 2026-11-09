@@ -104,6 +104,28 @@ const char *wc_grep_path(const struct wc_grep *g, const struct wc_hit *h) {
     return g->paths + h->file;
 }
 
+void wc_grep_notes(const struct wc_grep *g, char *out, unsigned size) {
+    char why[96];
+    unsigned n = 0, k = 0;
+    if(!size) return;
+    out[0] = 0;
+    why[0] = 0;
+    if(g->left_unreadable) k += (unsigned)snprintf(why + k, sizeof(why) - k, "%s%u unreadable", k ? ", " : "",
+                                                   g->left_unreadable);
+    if(g->left_deep && k < sizeof(why)) k += (unsigned)snprintf(why + k, sizeof(why) - k, "%s%u too deep or too many",
+                                                                k ? ", " : "", g->left_deep);
+    if(g->left_long && k < sizeof(why)) snprintf(why + k, sizeof(why) - k, "%s%u with too long a path", k ? ", " : "",
+                                                 g->left_long);
+    if(g->left_out) n += (unsigned)snprintf(out, size, "%u folder%s left out (%s)", g->left_out,
+                                            g->left_out == 1 ? "" : "s", why);
+    if(g->binary + g->skipped && n < size)
+        n += (unsigned)snprintf(out + n, size - n, "%s%u file%s not text or unreadable", n ? "; " : "",
+                                g->binary + g->skipped, g->binary + g->skipped == 1 ? "" : "s");
+    if(g->costly && n < size)
+        snprintf(out + n, size - n, "%s%u line%s too costly to search", n ? "; " : "", g->costly,
+                 g->costly == 1 ? "" : "s");
+}
+
 /**** the folders waiting: [depth + 1][path][NUL] after one another ****/
 
 static int push(struct wc_grep *g, const char *path, int depth) {
@@ -145,7 +167,10 @@ static int pop(struct wc_grep *g) {
         return 1;
     }
     g->dh = g->fs->opendir(g->fs->ctx, g->dir);
-    if(g->dh < 0) g->left_out++;
+    if(g->dh < 0) {
+        g->left_out++;
+        g->left_unreadable++;
+    }
     g->dir_mark = g->pend_used;
     return 1;
 }
@@ -194,9 +219,16 @@ static void add_hit(struct wc_grep *g, const char *s, unsigned n, unsigned a, un
 }
 
 static void search_line(struct wc_grep *g, const char *s, unsigned n) {
+    unsigned long before = g->f.work;
     unsigned a, b;
+    int r;
     if(n && s[n - 1] == '\r') n--;
-    if(wc_find_in(&g->f, s, n, 0, &a, &b)) add_hit(g, s, n, a, b);
+    g->f.limit = g->f.work + WC_GREP_LINE_WORK(n);  /* 11/09/26: past it the line is left out, and counted */
+    r = wc_find_in(&g->f, s, n, 0, &a, &b);
+    g->f.limit = 0;
+    if(r == 1) add_hit(g, s, n, a, b);
+    else if(r < 0) g->costly++;
+    g->work += g->f.work - before;
 }
 
 static void close_file(struct wc_grep *g) {
@@ -241,7 +273,7 @@ static unsigned long read_some(struct wc_grep *g) {
         snprintf(g->why, sizeof(g->why), "Stopped after %u MB", WC_GREP_BYTES >> 20);
         finish(g, NULL);
     }
-    return (unsigned long)r;
+    return (unsigned long)r + g->work;          /* what was read, and the searches' work on it */
 }
 
 /* the open folder's next entry: the work it was */
@@ -257,12 +289,18 @@ static unsigned long next_entry(struct wc_grep *g) {
     }
     if(!strcmp(name, ".") || !strcmp(name, "..")) return 16;
     if(!join(path, g->dir, name)) {
-        g->left_out++;
+        if(dir) {
+            g->left_out++;
+            g->left_long++;
+        } else g->skipped++;
         return 16;
     }
     if(dir) {
         if(system_path(path)) return 16;
-        if(g->depth + 1 > WC_GREP_DEPTH || push(g, path, g->depth + 1) < 0) g->left_out++;
+        if(g->depth + 1 > WC_GREP_DEPTH || push(g, path, g->depth + 1) < 0) {
+            g->left_out++;
+            g->left_deep++;
+        }
         return 16;
     }
     if(!wc_grep_name_ok(g->filter, name)) return 16;
@@ -287,20 +325,26 @@ static unsigned long next_entry(struct wc_grep *g) {
 }
 
 int wc_grep_start(struct wc_grep *g, const struct wc_fsops *fs, const char *folder) {
-    size_t n;
+    char root[WC_PATH];
     wc_grep_stop(g);
     g->fs = fs;
     g->state = WC_GREP_IDLE;
     g->why[0] = 0;
     g->nhits = g->paths_used = g->pend_used = 0;
     g->dirs = g->files = g->skipped = g->binary = g->left_out = 0;
-    g->bytes = 0;
+    g->left_unreadable = g->left_deep = g->left_long = g->costly = 0;
+    g->bytes = g->work = 0;
     if(wc_find_prepare(&g->f) < 0) {
         snprintf(g->why, sizeof(g->why), "%s", g->f.err);
         return -1;
     }
-    if(!folder[0] || system_path(folder)) {
-        snprintf(g->why, sizeof(g->why), "Not a folder to search: %s", folder[0] ? folder : "(none)");
+    if(folder[0] != '/' || wc_path_canon(folder, root, sizeof(root)) < 0) {   /* 11/09/26 (the review, H2) */
+        snprintf(g->why, sizeof(g->why), "Not a folder to search: %.80s (one from /, as /usb1p1/src)",
+                 folder[0] ? folder : "(none)");
+        return -1;
+    }
+    if(system_path(root)) {
+        snprintf(g->why, sizeof(g->why), "Not a folder to search: %.80s (devices are never read)", root);
         return -1;
     }
     if(!g->pend) g->pend = malloc(WC_GREP_PENDING);
@@ -310,9 +354,7 @@ int wc_grep_start(struct wc_grep *g, const struct wc_fsops *fs, const char *fold
         snprintf(g->why, sizeof(g->why), "There is not enough memory");
         return -1;
     }
-    snprintf(g->root, sizeof(g->root), "%s", folder);
-    n = strlen(g->root);
-    while(n > 1 && g->root[n - 1] == '/') g->root[--n] = 0;
+    snprintf(g->root, sizeof(g->root), "%s", root);
     push(g, g->root, 0);
     g->state = WC_GREP_RUN;
     return 0;
@@ -321,6 +363,7 @@ int wc_grep_start(struct wc_grep *g, const struct wc_fsops *fs, const char *fold
 int wc_grep_step(struct wc_grep *g, unsigned long budget) {
     unsigned long work = 0;
     while(g->state == WC_GREP_RUN && work < budget) {
+        g->work = 0;
         if(g->fh >= 0) work += read_some(g);
         else if(g->dh >= 0) work += next_entry(g);
         else if(!pop(g)) finish(g, NULL);
