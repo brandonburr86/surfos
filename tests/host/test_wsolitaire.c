@@ -8,8 +8,10 @@
    not offered when three at a time hides the card it needs. Random and greedy games keeping the 52 cards and the
    rules. The window's model: the layout at three sizes, fans that keep a long pile above the status bar, the card
    under the pointer, clicks, drags let go over a pile or back, the keyboard, the finish a card a tick, closing during
-   a game, the session's scores. The drawing is checked on the screen (tools/gui_apps_games.py). Built and run by
-   `make unittest`. */
+   a game, the session's scores. The review of 11/05/26: an ace from one foundation to another refused; a key that
+   changes the game during a drag letting go of it, and a drag whose cards are gone not drawn; a new deal during a game
+   asked about first, kept on Cancel, the game left counted as played; a game won in no time keeping its best. The
+   drawing is checked on the screen (tools/gui_apps_games.py). Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "klondike.h"
@@ -575,7 +577,8 @@ static void keyboard_and_finish(void) {
     CHECK(table_key(&t, ' ', 0, 5) == 0 && click(SOL_STOCK, t.game.pile[SOL_STOCK].n - 1, 5) == 0);
     CHECK(table_answer(&t, 0) == TB_DRAW && !t.asking && table_key(&t, 23, 0, 5) == TB_DRAW && t.asking);
     CHECK(table_answer(&t, 1) == TB_CLOSE);
-    CHECK(table_key(&t, '1', 0, 0) == TB_DRAW && t.draw == 1 && !t.asking);
+    CHECK(table_key(&t, '1', 0, 0) == TB_DRAW && t.asking == TB_ASK_NEW && t.draw == 3);  /* under way: asked */
+    CHECK(table_answer(&t, 1) == TB_DRAW && t.draw == 1 && !t.asking);
     table_record(&t, s, sizeof(s));
     CHECK(!strcmp(s, "Won 2 of 2, best 0:01"));         /* drawing one again: its record, not drawing three's */
     t.draw = 3;
@@ -586,6 +589,107 @@ static void keyboard_and_finish(void) {
     CHECK(!strcmp(s, "1:02:03"));
     CHECK(!strcmp(table_card_name(card("QH"), s, sizeof(s)), "the queen of hearts"));
     CHECK(!strcmp(table_card_name(card("AS"), s, sizeof(s)), "the ace of spades"));
+}
+
+/* the review of 11/05/26: an ace from one foundation to another, empty, one moved nothing and counted a move */
+static void home_to_home(void) {
+    struct klondike k;
+    bare(&k, 1);
+    pile_is(&k, SOL_FOUNDATION, "AS");
+    CHECK(!sol_can_put(&k, SOL_FOUNDATION, 0, SOL_FOUNDATION + 2) && !sol_move(&k, SOL_FOUNDATION, 0, SOL_FOUNDATION + 2, 5));
+    CHECK(k.moves == 0 && k.pile[SOL_FOUNDATION].n == 1 && k.pile[SOL_FOUNDATION + 2].n == 0);
+    pile_is(&k, SOL_FOUNDATION + 1, "AH 2H");           /* back down to the tableau still goes */
+    pile_is(&k, SOL_TABLEAU, "3S");
+    CHECK(sol_move(&k, SOL_FOUNDATION + 1, 1, SOL_TABLEAU, 6) && k.moves == 1 && k.pile[SOL_TABLEAU].n == 2);
+}
+
+/* the review of 11/05/26: Space during a drag of the waste's top took the waste back to the stock, and the window went
+   on drawing the dragged card where the waste had been (table_dragged() said -23 cards). A key that changes the game
+   lets go of the drag first, and a drag whose cards are no longer there is not one */
+static void drag_and_key(void) {
+    int x, y, p, i, n;
+    table_init(&t, 4242);
+    for(i = 0; i < 24; i++) table_key(&t, ' ', 0, 10);
+    CHECK(t.game.pile[SOL_STOCK].n == 0 && t.game.pile[SOL_WASTE].n == 24);
+    middle(SOL_WASTE, 23, &x, &y);
+    table_pointer(&t, x, y, TB_BUTTON_LEFT, TB_BUTTON_LEFT, 600);
+    table_pointer(&t, x + 30, y + 200, TB_BUTTON_LEFT, 0, 610);
+    CHECK(t.dragging && table_dragged(&t, &p, &i, &n) && p == SOL_WASTE && i == 23 && n == 1);
+    CHECK(table_key(&t, ' ', 0, 620) == TB_DRAW && t.game.pile[SOL_WASTE].n == 0 && t.game.pile[SOL_STOCK].n == 24);
+    CHECK(!t.dragging && !table_dragged(&t, &p, &i, &n));
+    n = t.game.moves;
+    CHECK(table_pointer(&t, 5, TB_H - 5, 0, 0, 700) == 0 && t.game.moves == n);    /* the release: nothing */
+    /* Enter and Undo let go too; an arrow, which changes nothing, does not */
+    table_key(&t, ' ', 0, 800);
+    middle(SOL_WASTE, 0, &x, &y);
+    table_pointer(&t, x, y, TB_BUTTON_LEFT, TB_BUTTON_LEFT, 1400);
+    table_pointer(&t, x + 30, y + 200, TB_BUTTON_LEFT, 0, 1410);
+    CHECK(table_key(&t, TB_LEFT, 0, 1420) == TB_DRAW && t.dragging);
+    t.cursor = 1;
+    CHECK(table_key(&t, '\r', 0, 1430) == TB_DRAW && !t.dragging);
+    table_pointer(&t, x, y, 0, 0, 1440);
+    middle(SOL_WASTE, t.game.pile[SOL_WASTE].n - 1, &x, &y);
+    table_pointer(&t, x, y, TB_BUTTON_LEFT, TB_BUTTON_LEFT, 2000);
+    table_pointer(&t, x + 30, y + 200, TB_BUTTON_LEFT, 0, 2010);
+    CHECK(t.dragging && table_undo(&t, 2020) == TB_DRAW && !t.dragging);
+    table_pointer(&t, x, y, 0, 0, 2030);
+    /* the cards gone from under a drag some other way: no drag to draw */
+    middle(SOL_TABLEAU + 6, t.game.pile[SOL_TABLEAU + 6].n - 1, &x, &y);
+    table_pointer(&t, x, y, TB_BUTTON_LEFT, TB_BUTTON_LEFT, 3000);
+    table_pointer(&t, x + 30, y + 40, TB_BUTTON_LEFT, 0, 3010);
+    CHECK(t.dragging && table_dragged(&t, &p, &i, &n) && n == 1);
+    t.game.pile[SOL_TABLEAU + 6].n = 0;
+    CHECK(!table_dragged(&t, &p, &i, &n));
+    table_cancel(&t);
+}
+
+/* the review of 11/05/26: N, 1, 3, New and the ways of drawing threw a game under way away unasked. A new deal asked
+   for during a game is asked about, Cancel first; Cancel keeps it, yes deals (the game left counted as played from its
+   first move); the question has the keys, the pointer and Undo, and another new deal asked for meanwhile is not taken;
+   the close button's question takes the new deal's place */
+static void new_deal_asked(void) {
+    int x, y;
+    table_init(&t, 31);
+    CHECK(table_request(&t, 3) == TB_DRAW && t.draw == 3 && !t.asking);    /* nothing under way: at once */
+    CHECK(table_key(&t, '1', 0, 0) == TB_DRAW && t.draw == 1 && !t.asking);
+    table_key(&t, ' ', 0, 10);
+    CHECK(t.game.started && t.played[0] == 1 && t.game.pile[SOL_WASTE].n == 1);
+    CHECK(table_key(&t, 'n', 0, 20) == TB_DRAW && t.asking == TB_ASK_NEW && t.ask_draw == 1);
+    CHECK(table_key(&t, ' ', 0, 20) == 0 && table_request(&t, 3) == 0 && t.ask_draw == 1 && table_undo(&t, 20) == 0);
+    middle(SOL_STOCK, t.game.pile[SOL_STOCK].n - 1, &x, &y);
+    table_pointer(&t, x, y, TB_BUTTON_LEFT, TB_BUTTON_LEFT, 30);
+    table_pointer(&t, x, y, 0, 0, 31);
+    CHECK(t.game.pile[SOL_WASTE].n == 1 && t.game.moves == 1);
+    CHECK(table_answer(&t, 0) == TB_DRAW && !t.asking && t.game.started && t.game.pile[SOL_WASTE].n == 1);
+    CHECK(table_answer(&t, 1) == 0);                    /* no question up: nothing */
+    CHECK(table_key(&t, '3', 0, 40) == TB_DRAW && t.asking == TB_ASK_NEW && t.ask_draw == 3 && t.draw == 1);
+    CHECK(table_answer(&t, 1) == TB_DRAW && t.draw == 3 && t.game.draw == 3 && !t.game.started && !t.asking);
+    CHECK(t.played[0] == 1 && t.won[0] == 0 && t.played[1] == 0);
+    table_key(&t, ' ', 0, 50);
+    CHECK(table_request(&t, 3) == TB_DRAW && t.asking == TB_ASK_NEW);
+    CHECK(table_close(&t) == TB_DRAW && t.asking == TB_ASK_CLOSE && table_answer(&t, 1) == TB_CLOSE);
+}
+
+/* the review of 11/05/26: a game won in no time kept 0 as its best, which also meant "none won yet". The count of wins
+   says it: the best stays 0:00, and the record shows it */
+static void no_time(void) {
+    char s[64];
+    int g, f, r;
+    table_init(&t, 1);
+    for(g = 0; g < 2; g++) {                            /* every card home but the king of diamonds, which goes */
+        table_new(&t, 1);
+        bare(&t.game, 1);
+        for(f = 0; f < 4; f++) for(r = 0; r < 13; r++) if(f != 3 || r != 12)
+            t.game.pile[SOL_FOUNDATION + f].card[t.game.pile[SOL_FOUNDATION + f].n++] = (unsigned char)((f * 13 + r) | SOL_UP);
+        pile_is(&t.game, SOL_TABLEAU, "KD");
+        t.game.start = 5000;
+        t.played[0]++;
+        click(SOL_TABLEAU, 0, g ? 14000 : 5000);
+        CHECK(t.game.won && t.won[0] == g + 1 && t.best_ms[0] == 0);
+    }
+    status_is("Won in 0:09 with 1 moves (best 0:00, 1)");
+    table_record(&t, s, sizeof(s));
+    CHECK(!strcmp(s, "Won 2 of 2, best 0:00"));
 }
 
 int main(void) {
@@ -599,6 +703,10 @@ int main(void) {
     layout();
     pointer();
     keyboard_and_finish();
+    home_to_home();
+    drag_and_key();
+    new_deal_asked();
+    no_time();
     printf("test_wsolitaire: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 }

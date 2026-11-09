@@ -7,7 +7,8 @@ Solitaire's rules (klondike.h), Klondike as it is commonly played: the deal, the
 one or three cards to the waste, the waste taken back without limit, the foundations up by suit
 from the ace, the tableau down in alternate colours with kings on empty piles, runs moving
 together, and a face-down top turning up by itself (so the game needs no click for that). A card
-may come back down from a foundation onto the tableau. The deck is shuffled with Durstenfeld's
+may come back down from a foundation onto the tableau, but not to another foundation: only an ace
+could go there, to an empty one, which moves nothing and counted as a move (the review of 11/05/26). The deck is shuffled with Durstenfeld's
 form of the Fisher-Yates shuffle (Knuth, TAOCP vol. 2, algorithm 3.4.2 P) on Marsaglia's
 xorshift32 ("Xorshift RNGs", 2003).
 
@@ -115,6 +116,7 @@ static int fits(const struct klondike *k, unsigned char card, int count, int to)
 
 int sol_can_put(const struct klondike *k, int from, int index, int to) {
     if(to < 0 || to >= SOL_PILES || to == from || !sol_can_take(k, from, index)) return 0;
+    if(SOL_IS_FOUNDATION(from) && SOL_IS_FOUNDATION(to)) return 0;     /* home to home: no move */
     return fits(k, k->pile[from].card[index], k->pile[from].n - index, to);
 }
 

@@ -17,14 +17,19 @@ under the pointer, or under the middle of the top card dragged), or go back. A p
 without moving is a click, which sends the cards where they can go (sol_target()), and a click on
 the stock deals. The keyboard: the arrows choose a card (up and down along a face-up run too),
 Enter sends it where it can go, Space deals, U, Backspace or Ctrl+Z undo, N deals again, 1 and 3
-deal anew drawing one or three, Esc or Ctrl+W close, asking first while a game is under way. A key
-held down comes again (the keyboard's repeat): the arrows move on with it, and nothing else repeats,
-so a held Space deals once.
+deal anew drawing one or three, Esc or Ctrl+W close. A new deal asked for while a game is under
+way, by a key, the toolbar or the Game menu, and closing then, are asked about first, Cancel
+first (the review of 11/05/26: a new deal threw a game away unasked); the question has the keys
+and the pointer, and nothing else that would change the game is taken meanwhile. A key that
+changes the game (a deal, Enter, Undo) lets go of a drag under way first, so the cards a drag
+held are never drawn where they no longer are. A key held down comes again (the keyboard's
+repeat): the arrows move on with it, and nothing else repeats, so a held Space deals once.
 
 When a move leaves the game able to finish by itself, it does: a card each TB_FINISH_MS, the
-window drawing each (table_tick()). A game counts as played from its first move; the session
-keeps the games played and won, the best time and the fewest moves of a win, drawing one and
-drawing three apart, while the program runs.
+window drawing each (table_tick()). A game counts as played from its first move, so one left for a
+new deal counts too; the session keeps the games played and won, the best time and the fewest
+moves of a win, drawing one and drawing three apart, while the program runs (the count of wins,
+not a time of 0, says whether there is a best).
 */
 #include <stdio.h>
 #include <string.h>
@@ -60,6 +65,17 @@ void table_new(struct table *t, int draw) {
     t->cur_pile = SOL_STOCK;
     t->cur_index = t->game.pile[SOL_STOCK].n - 1;
     t->status[0] = 0;
+}
+
+int table_request(struct table *t, int draw) {
+    if(t->asking) return 0;             /* a question is up: it is answered first */
+    if(t->game.started && !t->game.won) {
+        t->asking = TB_ASK_NEW;         /* a game under way: main.c asks, Cancel first */
+        t->ask_draw = draw == 3 ? 3 : 1;
+        return TB_DRAW;
+    }
+    table_new(t, draw);
+    return TB_DRAW;
 }
 
 void table_init(struct table *t, unsigned seed) {
@@ -164,7 +180,7 @@ int table_drop(const struct table *t, int x, int y) {
 }
 
 int table_dragged(const struct table *t, int *pile, int *index, int *n) {
-    if(!t->dragging || t->press_pile < 0) return 0;
+    if(!t->dragging || t->press_pile < 0 || !sol_can_take(&t->game, t->press_pile, t->press_index)) return 0;
     *pile = t->press_pile;
     *index = t->press_index;
     *n = t->game.pile[*pile].n - *index;
@@ -180,9 +196,9 @@ static void ended(struct table *t, unsigned now) {
     unsigned ms = sol_ms(&t->game, now);
     t->won[d]++;
     table_time(ms, time, sizeof(time));
-    if(!t->best_ms[d] || ms < t->best_ms[d] || moves < t->best_moves[d]) {
-        if(!t->best_ms[d] || ms < t->best_ms[d]) t->best_ms[d] = ms;
-        if(!t->best_moves[d] || moves < t->best_moves[d]) t->best_moves[d] = moves;
+    if(t->won[d] == 1 || ms < t->best_ms[d] || moves < t->best_moves[d]) {    /* the first win is the best, any time */
+        if(t->won[d] == 1 || ms < t->best_ms[d]) t->best_ms[d] = ms;
+        if(t->won[d] == 1 || moves < t->best_moves[d]) t->best_moves[d] = moves;
         snprintf(msg, sizeof(msg), "Won in %s with %d moves: the best yet", time, moves);
     } else {
         table_time(t->best_ms[d], best, sizeof(best));
@@ -235,19 +251,23 @@ static void send(struct table *t, int pile, int index, unsigned now) {
     after(t, was, now);
 }
 
-int table_undo(struct table *t, unsigned now) {
-    if(t->finishing) return 0;
-    if(!sol_undo(&t->game, now)) status(t, t->game.won ? "The game is won: N deals again" : "Nothing to undo");
-    else t->status[0] = 0;
+/* a press or a drag let go of without a move: the cards stay where they are */
+static void let_go(struct table *t) {
     t->press_pile = -1;
     t->dragging = 0;
+}
+
+int table_undo(struct table *t, unsigned now) {
+    if(t->finishing || t->asking) return 0;            /* (the menu's Ctrl+Z under the question: nothing) */
+    let_go(t);
+    if(!sol_undo(&t->game, now)) status(t, t->game.won ? "The game is won: N deals again" : "Nothing to undo");
+    else t->status[0] = 0;
     return TB_DRAW;
 }
 
 int table_cancel(struct table *t) {
     int was = t->press_pile >= 0 || t->dragging;
-    t->press_pile = -1;
-    t->dragging = 0;
+    let_go(t);
     t->buttons = 0;
     return was ? TB_DRAW : 0;
 }
@@ -264,13 +284,18 @@ int table_tick(struct table *t, unsigned now) {
 
 int table_close(struct table *t) {
     if(!t->game.started || t->game.won) return TB_CLOSE;
-    t->asking = 1;                      /* a game under way: main.c asks, Cancel first */
+    t->asking = TB_ASK_CLOSE;           /* a game under way: main.c asks, Cancel first (over a new deal's question too) */
     return TB_DRAW;
 }
 
-int table_answer(struct table *t, int close) {
+int table_answer(struct table *t, int yes) {
+    int was = t->asking;
+    if(!was) return 0;
     t->asking = 0;
-    return close ? TB_CLOSE : TB_DRAW;
+    if(!yes) return TB_DRAW;
+    if(was == TB_ASK_CLOSE) return TB_CLOSE;
+    table_new(t, t->ask_draw);          /* the game left: it counted as played from its first move */
+    return TB_DRAW;
 }
 
 /**** the pointer ****/
@@ -283,8 +308,7 @@ int table_pointer(struct table *t, int x, int y, unsigned buttons, unsigned pres
         r = table_cancel(t);            /* a release never seen: a drag starts only from a press seen here */
     if(t->asking || t->finishing) {     /* the question, or the finish, has the pointer: a drag goes back */
         if(t->dragging || t->press_pile >= 0) r = TB_DRAW;
-        t->press_pile = -1;
-        t->dragging = 0;
+        let_go(t);
         return r;
     }
     if(down & TB_BUTTON_LEFT) {
@@ -385,19 +409,21 @@ int table_key(struct table *t, int key, unsigned mods, unsigned now) {
     if((mods & TB_REPEAT) && (key < TB_UPKEY || key > TB_RIGHT)) return 0;     /* only the arrows move on a repeat */
     switch(key) {
     case 27: case 23: return table_close(t);           /* Esc, Ctrl+W */
-    case 'n': case 'N': table_new(t, t->draw); return TB_DRAW;
-    case '1': table_new(t, 1); return TB_DRAW;
-    case '3': table_new(t, 3); return TB_DRAW;
+    case 'n': case 'N': return table_request(t, t->draw);
+    case '1': return table_request(t, 1);
+    case '3': return table_request(t, 3);
     }
     if(t->finishing) return 0;
     switch(key) {
     case 'u': case 'U': case 127: case 8: case 26: return table_undo(t, now);  /* U, Backspace (127; 8 from an older
                                                                                 desktop), Ctrl+Z */
     case ' ': case 'd': case 'D':
+        let_go(t);                      /* a drag under way goes back: the cards it held may move */
         deal(t, now);
         return TB_DRAW;
     case '\r': case '\n':
         if(!t->cursor) { t->cursor = 1; return TB_DRAW; }   /* the first key shows the card it is on */
+        let_go(t);
         send(t, t->cur_pile, t->cur_index, now);
         if(t->cur_index >= t->game.pile[t->cur_pile].n || t->cur_pile == SOL_STOCK) choose(t, t->cur_pile);
         return TB_DRAW;
@@ -421,7 +447,7 @@ void table_status(const struct table *t, char *out, int n) {
 void table_record(const struct table *t, char *out, int n) {
     char time[24];
     int d = t->draw == 3;
-    if(!t->best_ms[d]) {
+    if(!t->won[d]) {
         snprintf(out, (size_t)n, "Won %d of %d", t->won[d], t->played[d]);
         return;
     }

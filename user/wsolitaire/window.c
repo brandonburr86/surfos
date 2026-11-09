@@ -20,8 +20,11 @@ the keyboard's card on it, the cards a drag took from it), and a pile whose hash
 again, with where dragged cards were and are. The Game menu (in the desktop's bar while the window
 has the focus, by its shortcuts in any case) has New deal (Ctrl+N), Undo (Ctrl+Z), drawing one or
 three (1, 3) and Close (Ctrl+W); Help has a line for the desktop's Help. The close button, Esc and
-Ctrl+W ask first while a game is under way, Cancel first. Two timers of the toolkit: the clock on
-the second while a game runs, and a card each TB_FINISH_MS while the game finishes by itself.
+Ctrl+W, and a new deal however it is asked for (N, 1, 3, New, the ways of drawing, the menu), ask
+first while a game is under way, Cancel first: table.c says which question, and the box on the
+screen follows it (a new box takes the place of one open, which is answered as cancelled). Two
+timers of the toolkit: the clock on the second while a game runs, and a card each TB_FINISH_MS
+while the game finishes by itself.
 */
 
 #include <stdio.h>
@@ -242,30 +245,34 @@ static void refresh(struct swin *s, unsigned now) {
     }
 }
 
+/* a new deal asked for, at once or after the question; the table has the keys again (a click on the toolbar took
+   them), and the box, if one comes, gives them back to it */
 static void new_deal(struct swin *s, int draw) {
-    table_new(&s->t, draw);
+    table_request(&s->t, draw);
     gk_focus(s->table);
 }
 
-static void ask(struct swin *s) {
-    gk_confirm(s->ui, BOX_CLOSE, "Close Solitaire?", "A game is under way: it ends with the window.", "", "Cancel",
-               "Close", NULL);
+/* the question table.c asked for, Cancel first, and the box it is in */
+static int box_of(int asking) {
+    return asking == TB_ASK_NEW ? BOX_NEW : BOX_CLOSE;
 }
 
-static int closing(struct swin *s) {
-    if(table_close(&s->t) == TB_CLOSE) return 0;
-    ask(s);
-    return 1;
+static void ask(struct swin *s) {
+    if(s->t.asking == TB_ASK_NEW)
+        gk_confirm(s->ui, BOX_NEW, "Deal again?", "A game is under way: a new deal ends it.", "", "Cancel", "Deal",
+                   NULL);
+    else gk_confirm(s->ui, BOX_CLOSE, "Close Solitaire?", "A game is under way: it ends with the window.", "", "Cancel",
+                    "Close", NULL);
 }
 
 int sw_event(struct swin *s, const struct gk_event *ev) {
     unsigned now = uptime();
     switch(ev->type) {
     case GK_EV_CLOSE:
-        if(!closing(s)) return 0;
+        if(table_close(&s->t) == TB_CLOSE) return 0;
         break;
-    case GK_EV_ANSWER:
-        if(ev->id == BOX_CLOSE && table_answer(&s->t, ev->value == 1) == TB_CLOSE) return 0;
+    case GK_EV_ANSWER:                                  /* the question on the screen (an older one's answer is not) */
+        if(s->t.asking && ev->id == box_of(s->t.asking) && table_answer(&s->t, ev->value == 1) == TB_CLOSE) return 0;
         break;
     case GK_EV_CLICK:
         if(ev->id == ID_NEW) new_deal(s, s->t.draw);
@@ -283,17 +290,13 @@ int sw_event(struct swin *s, const struct gk_event *ev) {
         case MENU_UNDO: table_undo(&s->t, now); break;
         case MENU_ONE: new_deal(s, 1); break;
         case MENU_THREE: new_deal(s, 3); break;
-        case MENU_CLOSE: if(!closing(s)) return 0; break;
-        case MENU_HELP:
-            gk_message(s->ui, BOX_HELP, "Playing Solitaire", "Build the foundations up from the aces, by suit.",
-                       "Drag cards, or click one to send it where it goes.");
-            break;
+        case MENU_CLOSE: if(table_close(&s->t) == TB_CLOSE) return 0; break;
+        case MENU_HELP: gk_message(s->ui, BOX_HELP, "Playing Solitaire", SW_HELP_1, SW_HELP_2); break;
         }
         break;
     case GK_EV_KEY:
         if(ev->w && ev->w != s->table) break;
         if(table_key(&s->t, ev->value, ev->mods, now) == TB_CLOSE) return 0;
-        if(s->t.asking && !gk_box_open(s->ui)) ask(s);  /* Esc or Ctrl+W during a game */
         break;
     case GK_EV_POINTER:
         if(ev->w == s->table) table_pointer(&s->t, ev->x, ev->y, ev->buttons, (unsigned)ev->value, now);
@@ -310,6 +313,10 @@ int sw_event(struct swin *s, const struct gk_event *ev) {
         gk_redraw(s->table);
         break;
     }
+    if(s->t.asking != s->asked) {                       /* a question asked, or answered: the box follows */
+        s->asked = s->t.asking;
+        if(s->asked) ask(s);
+    }
     refresh(s, now);
     return 1;
 }
@@ -319,9 +326,7 @@ int sw_open(struct swin *s, unsigned seed) {
     int i;
     memset(s, 0, sizeof(*s));
     table_init(&s->t, seed);
-    s->ui = gk_open_limits("Solitaire", TB_W, TB_BAR_H + TB_H + TB_STATUS_H, 7 * TB_CARD_MIN + 6 * TB_GAP + 2 * TB_MARGIN,
-                           TB_BAR_H + TB_STATUS_H + 2 * (TB_CARD_MIN * 4 / 3) + TB_ROW_GAP + 2 * TB_MARGIN + 24, 0, 0,
-                           WIN_RESIZABLE);
+    s->ui = gk_open_limits("Solitaire", TB_W, TB_BAR_H + TB_H + TB_STATUS_H, TB_MIN_W, TB_MIN_H, 0, 0, WIN_RESIZABLE);
     if(!s->ui) return -1;
     root = gk_root(s->ui);
     bar = gk_hbox(root, 10);
@@ -333,9 +338,9 @@ int sw_open(struct swin *s, unsigned seed) {
     gk_radio_add(s->draw, "Draw three");
     gk_spacer(bar);
     s->moves = gk_label(bar, "Moves 0");
-    gk_size(s->moves, 9 * 8, 0);
+    gk_size(s->moves, 10 * 8, 0);                       /* room for "Moves 9999" */
     s->clock = gk_label(bar, "Time 0:00");
-    gk_size(s->clock, 10 * 8, 0);
+    gk_size(s->clock, 12 * 8, 0);                       /* and "Time 1:02:03" */
     s->table = gk_area(root, ID_TABLE, GK_FOCUSABLE, draw, s);
     s->status = gk_status(root);
     i = gk_menu(s->ui, "Game");

@@ -6,7 +6,10 @@
    card where it goes; Undo by the toolbar, Ctrl+Z and the menu, greyed when there is nothing to undo; drawing three
    by the toolbar and the menu, its waste fanned; the keyboard's card framed while the table has the keys; a game that
    finishes by itself a card a tick, and the session's record; the close button and Esc asking during a game, Cancel
-   first; Help; the smallest desktop. Built and run by `make unittest`. */
+   first; Help; the smallest desktop. The review of 11/05/26: a new deal during a game (the ways of drawing, the menu)
+   asked about first, Cancel first, Cancel keeping the game and the way shown; Space during a drag letting go of it,
+   nothing drawn where the waste was; the window at its own smallest size (no smaller taken): the toolbar whole, the
+   longest pile within the board, the Help's and the questions' lines whole. Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -30,6 +33,38 @@ static int run(void) {
     struct gk_event ev;
     while(gk_next(s.ui, &ev, 0) > 0) if(!sw_event(&s, &ev)) return !(closed = 1);
     return 1;
+}
+
+/* a box's lines, whole (gkbox.c: the title on teal, the first line in ink, the second muted) */
+static int box_says(const char *title, const char *line1, const char *line2) {
+    int x, y;
+    return gk_box_open(s.ui) && gkf_find(title, GW_PAPER, &x, &y) && (!*line1 || gkf_find(line1, GW_INK, &x, &y)) &&
+           (!*line2 || gkf_find(line2, GW_MUTED, &x, &y));
+}
+
+/* the question's buttons: Cancel first, the default, then the other */
+static int cancel_first(const char *other) {
+    int cx, cy, ox, oy;
+    return gkf_find("Cancel", GW_PAPER, &cx, &cy) && gkf_find(other, GW_INK, &ox, &oy) && cx < ox && cy == oy;
+}
+
+/* the question answered with its second button (Deal, Close) */
+static void second(void) {
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key('\r', 0);
+}
+
+/* where a widget ends, and starts */
+static int right_of(struct gk_widget *g) {
+    int x, y, w, h;
+    gk_bounds(g, &x, &y, &w, &h);
+    return x + w;
+}
+
+static int left_of(struct gk_widget *g) {
+    int x, y, w, h;
+    gk_bounds(g, &x, &y, &w, &h);
+    return x;
 }
 
 /* card index of pile on the desktop's picture of the window: its top left, and a point on its visible part */
@@ -149,9 +184,13 @@ int main(void) {
     CHECK(run() && s.t.game.pile[SOL_WASTE].n == 0 && s.t.game.pile[SOL_STOCK].n == 24 && !gk_enabled(s.undo));
     CHECK(gk_focused(s.ui) == s.table);
     /* a drag onto a pile it fits: it moves, and only the piles it touched (and where it went) are presented */
-    while(!tableau_move(&from, &index, &to)) {          /* (a deal with none: the next) */
+    while(!tableau_move(&from, &index, &to)) {          /* (a deal with none: the next, asked about once under way) */
         sw_event(&s, &(struct gk_event){ .type = GK_EV_MENU, .id = MENU_NEW });
         run();
+        if(gk_asking(s.ui) == BOX_NEW) {
+            second();
+            run();
+        }
     }
     run();
     gkf_presented(&x, &y, &w, &h);
@@ -197,12 +236,23 @@ int main(void) {
     n = s.t.game.moves;
     gkf_key(26, WIN_MOD_CTRL);
     CHECK(run() && s.t.game.moves == n + 1);
-    /* drawing three: the toolbar's radio button deals anew, and a deal fans three */
+    /* drawing three: the toolbar's radio button deals anew, during a game once asked (Cancel first: the game, and
+       drawing one, stay), and a deal fans three */
     {
         int rx, ry;
         CHECK(gkf_find("Draw three", GW_INK, &rx, &ry));
         gkf_advance(600);
         gkf_click(rx - 6, ry + 6);
+        CHECK(run() && gk_asking(s.ui) == BOX_NEW && s.t.draw == 1 && s.t.game.started);
+        CHECK(box_says("Deal again?", "A game is under way: a new deal ends it.", "") && cancel_first("Deal"));
+        n = s.t.game.moves;
+        gkf_key('\r', 0);
+        CHECK(run() && !gk_box_open(s.ui) && s.t.draw == 1 && gk_value(s.draw) == 0 && s.t.game.moves == n);
+        CHECK(gk_focused(s.ui) == s.table);
+        gkf_advance(600);
+        gkf_click(rx - 6, ry + 6);
+        CHECK(run() && gk_asking(s.ui) == BOX_NEW);
+        second();
     }
     CHECK(run() && s.t.draw == 3 && s.t.game.draw == 3 && !s.t.game.started);
     CHECK(gkf_menu_entry(gkf_menu_find("Draw three"))->flags & WIN_MENU_RADIO);
@@ -211,7 +261,9 @@ int main(void) {
     card_xy(SOL_WASTE, 2, &x, &y);
     card_xy(SOL_WASTE, 0, &px, &py);
     CHECK(x == px + 2 * TB_FAN && gkf_pixel(x + s.t.cw - 4, y + 30) == C_FACE && gkf_pixel(px + 4, py + 30) == C_FACE);
-    CHECK(gkf_menu_choose(MENU_ONE) && run() && s.t.draw == 1);
+    CHECK(gkf_menu_choose(MENU_ONE) && run() && gk_asking(s.ui) == BOX_NEW && s.t.draw == 3);
+    second();
+    CHECK(run() && s.t.draw == 1 && !s.t.game.started);
     /* the keyboard's card: framed while the table has the keys */
     gkf_key(WIN_KEY_DOWN, 0);
     gkf_key(WIN_KEY_DOWN, 0);
@@ -287,6 +339,62 @@ int main(void) {
     CHECK(run() && s.t.cw < TB_CARD_W && s.t.cw >= TB_CARD_MIN);
     card_xy(SOL_TABLEAU + 6, 6, &x, &y);
     CHECK(y + s.t.ch <= 317 - GK_STATUS_H && x + s.t.cw <= TB_W && gkf_pixel(x + s.t.cw - 4, y + s.t.ch / 2) == C_FACE);
+    sw_close(&s);
+    /* Space during a drag of the waste's top (the review of 11/05/26): the waste goes back to the stock and the drag
+       is let go of; nothing is drawn where the waste was, and the release moves nothing */
+    gkf_reset(0, 0);
+    CHECK(sw_open(&s, 4242) == 0);
+    gkf_focus(1);
+    run();
+    for(i = 0; i < 24; i++) gkf_key(' ', 0);
+    CHECK(run() && s.t.game.pile[SOL_STOCK].n == 0 && s.t.game.pile[SOL_WASTE].n == 24);
+    on_card(SOL_WASTE, 23, &x, &y);
+    gkf_advance(600);
+    gkf_pointer(x, y, WIN_BUTTON_LEFT);
+    gkf_pointer(x + 30, y + 200, WIN_BUTTON_LEFT);
+    CHECK(run() && s.t.dragging && s.drag_w > 0);
+    gkf_key(' ', 0);
+    CHECK(run() && !s.t.dragging && s.drag_w == 0 && s.t.game.pile[SOL_WASTE].n == 0 && s.t.game.pile[SOL_STOCK].n == 24);
+    card_xy(SOL_WASTE, 0, &px, &py);
+    CHECK(gkf_pixel(px + s.t.cw - 8, py + s.t.ch / 2) != C_FACE && gkf_pixel(x + 30, y + 200) != C_FACE);
+    n = s.t.game.moves;
+    gkf_pointer(x + 30, y + 200, 0);
+    CHECK(run() && s.t.game.moves == n && !s.t.dragging);
+    sw_close(&s);
+    /* the window at its own smallest size (the review of 11/05/26: its toolbar ran 190 pixels past its edge): no
+       smaller taken; the toolbar whole, apart and inside; the longest pile a game can have (six face down, thirteen up)
+       within the board; the Help's and the questions' lines whole */
+    gkf_reset(0, 0);
+    CHECK(sw_open(&s, 8) == 0);
+    gkf_focus(1);
+    gkf_resize(TB_MIN_W, TB_MIN_H);
+    CHECK(run() && gkf_w() == TB_MIN_W && gkf_h() == TB_MIN_H);
+    gkf_resize(TB_MIN_W - 1, TB_MIN_H);
+    gkf_resize(TB_MIN_W, TB_MIN_H - 1);
+    CHECK(run() && gkf_w() == TB_MIN_W && gkf_h() == TB_MIN_H);
+    CHECK(right_of(s.clock) <= TB_MIN_W - 5 && left_of(s.clock) >= right_of(s.moves) + 10);
+    CHECK(left_of(s.moves) >= right_of(s.draw) + 10 && find_text("Moves 0", GW_INK) && find_text("Time 0:00", GW_INK));
+    {
+        struct sol_pile *q = &s.t.game.pile[SOL_TABLEAU + 6];
+        for(i = 0; i < 6; i++) q->card[i] = (unsigned char)(39 + i);                     /* six face down */
+        for(i = 0; i < 13; i++) q->card[6 + i] = (unsigned char)((12 - i + (i & 1 ? 13 : 0)) | SOL_UP);
+        q->n = 19;
+        gk_redraw(s.table);
+        CHECK(run());
+        card_xy(SOL_TABLEAU + 6, 18, &x, &y);
+        CHECK(y + s.t.ch <= TB_MIN_H - GK_STATUS_H && x + s.t.cw <= TB_MIN_W);
+        CHECK(gkf_pixel(x + s.t.cw - 4, y + s.t.ch / 2) == C_FACE);
+    }
+    CHECK(strlen(SW_HELP_1) <= 50 && strlen(SW_HELP_2) <= 50);
+    CHECK(gkf_menu_choose(MENU_HELP) && run() && box_says("Playing Solitaire", SW_HELP_1, SW_HELP_2));
+    gkf_key('\r', 0);
+    gkf_key(' ', 0);                                    /* a deal: a game under way */
+    gkf_key('n', 0);
+    CHECK(run() && box_says("Deal again?", "A game is under way: a new deal ends it.", "") && cancel_first("Deal"));
+    gkf_key(27, 0);
+    gkf_key(27, 0);
+    CHECK(run() && box_says("Close Solitaire?", "A game is under way: it ends with the window.", "") &&
+          cancel_first("Close"));
     sw_close(&s);
     gkf_reset(0, 0);
     printf("test_wsolitaire_window: %d checks, %d failed\n", checks, failed);

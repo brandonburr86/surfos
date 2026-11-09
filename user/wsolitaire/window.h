@@ -19,10 +19,14 @@ and klondike.c.
 /* the ids of what the window hears from */
 enum {
     ID_NEW = 1, ID_UNDO, ID_DRAW, ID_TABLE,
-    BOX_CLOSE = 100, BOX_HELP,
+    BOX_CLOSE = 100, BOX_HELP, BOX_NEW,
     TIMER_CLOCK = 200, TIMER_FINISH,
     MENU_NEW = 300, MENU_UNDO, MENU_ONE, MENU_THREE, MENU_CLOSE, MENU_HELP,
 };
+
+/* the Help box's lines: at most 50 characters each, which the smallest window's box shows (table.h's TB_MIN_W) */
+#define SW_HELP_1 "Build the foundations up from the aces, by suit."
+#define SW_HELP_2 "Drag cards, or click one to send it where it goes."
 
 struct swin {
     struct gk *ui;
@@ -34,6 +38,7 @@ struct swin {
                                            is painted again */
     int drag_x, drag_y, drag_w, drag_h; /* where the dragged cards were drawn (w 0: none) */
     int finish_timer;                   /* the timer of the finish runs */
+    int asked;                          /* the question on the screen (table.h's TB_ASK_*), 0 for none */
 };
 
 int sw_open(struct swin *s, unsigned seed);     /* 0, or -1 with errno (ENODEV: no desktop here) */
