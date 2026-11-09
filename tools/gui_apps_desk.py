@@ -7,8 +7,8 @@ bar in place of File and Edit. Ctrl+G, Right, Down and Enter choose Test > Check
 choose View > Big (WIN_EV_MENU); View > Size > Large is a submenu's item, Help > About wintest the program's item in
 the desktop's Help (11/05/26, the review). Keys arrive with their modifiers: Ctrl+Shift+Left, Alt+X (no Esc before
 it), F5, Ctrl+Shift+S, and since the review Ctrl+Tab (no Ctrl+I) and Ctrl+0. s and o ask for the Save as and Open
-choosers (WIN_DIALOG), whose title bar names the program (by its file name, with no sign of the desktop's: the
-review of stage 2), and which Esc or a click on Cancel cancels (WIN_EV_DIALOG 0). SurfOS > Ocean / dusk
+choosers (WIN_DIALOG), whose title bar names the program (by its file name and, since the second review, its pid,
+with no sign of the desktop's: the review of stage 2), and which Esc or a click on Cancel cancels (WIN_EV_DIALOG 0). SurfOS > Ocean / dusk
 colors tells it the theme (WIN_EV_THEME) and back. Files mounts the data stick; its Copy path puts a path on the
 clipboard, which wintest pastes (WIN_PASTE). Enter on desk/a b.wintest opens it in wintest (the registry's
 rootfs/apps/wintest.app: the type wintest), a second window naming the file, path with its space; File > Open with
@@ -17,10 +17,14 @@ back as a 960 x 540, 24-bit BMP. The windows are closed, the stick ejected and t
 failure. 11/05/26 (the review of stage 2): `wintest raw`, run first from the desktop, asks for raw mode on the
 desktop's console and ends, and the desktop keeps its keys; wintest's close button gets its own question, n, and the
 button again asks the program again ("End the program?" only for one that does not read its events).
+11/09/26 (the second review): wintest raw ended with 0 and no window, and nothing is said; `wintest nosuch` ends with
+status 2 before any window (its usage went to the console behind the desktop), and the desktop says so.
 """
+import re
 import struct
 
 import gui_scenario as base
+import gui_apps_term as term
 from gui_apps_scenario import PAPER, INK, TEAL, MENU_H
 from gui_apps_suite import files_front, files_status, files_row, select, EJECT
 from gui_apps_win import find, titled_at, run_program, run_titled
@@ -48,6 +52,31 @@ def chooser(d, title, folder=None, program=False):
 
 
 CANCEL = (CHOOSER[0] + 520 - 16 - 88 + 44, CHOOSER[1] + 380 - 40 + 14)   # a chooser's Cancel at 960x540 (520 x 380)
+MESSAGE_LINE = ((960 - 470) // 2 + 16, 28 + (540 - 28 - 26 - 146) // 2 + 44)   # a message's first line (guidialog.c)
+
+
+def cells_text(s, x, y, cells):
+    """the text of a row of cells of the console's 8x16 font from x, y, read as the Terminal's are (gui_apps_term.py)"""
+    grid = term.Grid()
+    grid.tx, grid.ty = x, y
+    return ''.join(grid.cell(s, c, 0)[0] for c in range(cells)).rstrip()
+
+
+def program_chooser(d, own):
+    """a predicate: wintest's chooser is up, titled "wintest (pid N): own" (11/09/26, the second review: the pid, which
+    no program chooses, after its name), with no sign of the desktop's"""
+    def seen(s):
+        title = cells_text(s, CHOOSER[0] + 12, CHOOSER[1] + 6, (520 - 24) // 8)
+        return re.fullmatch(r'wintest \(pid \d+\): ' + re.escape(own), title) is not None and \
+            chooser(d, title, program=True)(s)
+    return seen
+
+
+def ended_said(d, line):
+    """a predicate: the desktop's message that a program ended before any window (11/09/26), its first line matching
+    the pattern line"""
+    return lambda s: term.dialog_up(d, s, 'Program ended') and \
+        re.fullmatch(line, cells_text(s, *MESSAGE_LINE, (470 - 32) // 8)) is not None
 
 
 def close_twice(d, at, title):
@@ -115,8 +144,16 @@ def checks(d):
         d.keys('wintest raw\n')
         d.vm.pump(1.0)
         run_program(d)
-        d.visible('desk: Apps > Run program... (its place kept), its keys still the desktop\'s after wintest raw',
-                  lambda s: run_titled(d, s))
+        d.visible('desk: Apps > Run program... (its place kept), its keys still the desktop\'s after wintest raw, which '
+                  'ended with 0 and no window: nothing said', lambda s: run_titled(d, s) and
+                  not term.dialog_up(d, s, 'Program ended'))
+        # 11/09/26 (the second review): a program that ends before any window, with a status other than 0
+        d.keys('wintest nosuch\n')
+        d.visible('desk: wintest nosuch ends with status 2 before any window, and the desktop says so',
+                  ended_said(d, r'wintest \(pid \d+\) ended: status 2'), 'guiapps-desk-ended.png')
+        d.key('ret')
+        run_program(d)
+        d.visible('desk: Apps > Run program... again', lambda s: run_titled(d, s))
         d.keys('wintest desk\n')
         s = d.visible('desk: wintest desk opens with the focus', titled(d, 'desk: ready'), 'guiapps-desk-open.png')
         at = find(d, s, 'desk: ready')
@@ -150,18 +187,18 @@ def checks(d):
             d.visible(f'desk: {chord} reaches the program as itself (the keyboard\'s keys with their modifiers)',
                       titled(d, title))
         d.keys('s')
-        d.visible('desk: s asks for Save as: the desktop\'s chooser, named for the program, no sign of the desktop\'s',
-                  chooser(d, 'wintest: Save as', program=True), 'guiapps-desk-save.png')
+        d.visible('desk: s asks for Save as: the desktop\'s chooser, named for the program and its pid, no sign of the '
+                  'desktop\'s', program_chooser(d, 'Save as'), 'guiapps-desk-save.png')
         d.key('esc')
         d.visible('desk: Esc cancels it: WIN_EV_DIALOG 0, the request\'s id', titled(d, 'desk: cancelled 4'))
         d.keys('o')
-        d.visible('desk: o asks for Open', chooser(d, 'wintest: Open a file', program=True))
+        d.visible('desk: o asks for Open', program_chooser(d, 'Open a file'))
         d.click(*CANCEL)
         d.move(*PARK)
         d.visible('desk: a click on Cancel cancels it too', titled(d, 'desk: cancelled 3'))
         d.keys('o')
         d.visible('desk: o asks again, after a key (the kernel\'s rule: something done in the window since)',
-                  chooser(d, 'wintest: Open a file', program=True))
+                  program_chooser(d, 'Open a file'))
         d.key('esc')
         d.visible('desk: cancelled', titled(d, 'desk: cancelled 3'))
         for chord in ('ctrl-g', 'down', 'down', 'ret'):

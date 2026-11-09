@@ -19,8 +19,8 @@ shows a text console and F1 brings the desktop back with wdemo's window as it wa
 size, which it answers (its bars and its size drawn again); its close button ends it, and ps in the Terminal finds no
 wdemo. wdemo typed without & is the Terminal's foreground job, a job its shell made: its window takes the focus as it
 appears, and a key reaches it at once. wdemo hang pays no heed to the close button: pressed again, it is told again
-(11/05/26, the review of stage 2: it reads its events; a key typed between shows it), and three presses at once, the
-third within 3 s, ask "End the program?", and End kills it (surfsh: killed).
+(11/05/26, the review of stage 2: it reads its events; a key typed between shows it), and the third press asks "End
+the program?" (11/09/26, the second review: however slow), and End kills it (surfsh: killed).
 wdemo crash faults after it first draws: only its window goes (surfsh:
 killed), and the Terminal and the desktop go on. Last, wcalc started from Run program... outlives the Terminal (closed
 with its session) and still counts; wintest pty, started by the desktop once the Terminal has closed, takes the
@@ -207,7 +207,7 @@ def end_window(d, at, widths):
         if d.vm.wait_screen(lambda s: not there(s), 5, interval=0.2) is not None:
             return
         for _ in range(3):                        # 11/05/26: a program that reads its events is told again; the
-            d.click(at[0] + w - 16, at[1] + 14)   # third press in 3 s asks "End the program?", Cancel first: End
+            d.click(at[0] + w - 16, at[1] + 14)   # third press asks "End the program?", Cancel first: End
         if d.vm.wait_screen(lambda s: term.dialog_up(d, s, 'End the program?'), 5, interval=0.2) is not None:
             d.key('right')
             d.key('ret')
@@ -374,16 +374,16 @@ def checks(d):
         d.visible('its close button: the program is told (its last event) and the window stays',
                   lambda s: wdemo_at(d, s, HANG, last='last: close'))
         # 11/05/26 (the review of stage 2): while it reads its events each press tells it again (a program that asked
-        # its own question and was told Cancel is asked again); the third press within 3 s, or one while a CLOSE waits
-        # unread, asks "End the program?" (shell/guiclient.c's client_close())
+        # its own question and was told Cancel is asked again); the third press (11/09/26: however slow), or one while
+        # a CLOSE waits unread, asks "End the program?" (shell/guiclient.c's client_close())
         d.keys('b')
         d.visible('a key typed reaches it, its last event', lambda s: wdemo_at(d, s, HANG, last='last: key 98'))
         d.click(HANG[0] + 362 - 16, HANG[1] + 14)
         d.visible('pressed again, it is told again (it reads its events), and the desktop asks nothing yet',
                   lambda s: wdemo_at(d, s, HANG, last='last: close') and not term.dialog_up(d, s, 'End the program?'))
-        for _ in range(3):                          # three at once: the third within 3 s, whatever came before
-            d.click(HANG[0] + 362 - 16, HANG[1] + 14)
-        d.visible('pressed three times at once, the desktop asks "End the program?"',
+        d.vm.pump(3.5)                              # (11/09/26: it was three presses within 3 s)
+        d.click(HANG[0] + 362 - 16, HANG[1] + 14)
+        d.visible('pressed a third time, however long after, the desktop asks "End the program?"',
                   lambda s: term.dialog_up(d, s, 'End the program?'), 'guiapps-end.png')
         d.key('right')                              # Cancel first: End
         d.key('ret')
