@@ -221,7 +221,8 @@ int main(void) {
     CHECK(run() && gk_asking(w.ui) == BOX_NEW && w.v.asking == SV_ASK_NEW);
     gkf_close();
     CHECK(run() && gk_asking(w.ui) == BOX_CLOSE && w.v.asking == SV_ASK_CLOSE && box_says("Close Swell?", "", ""));
-    CHECK(gkf_menu_choose(MENU_NEW) && run() && gk_asking(w.ui) == BOX_CLOSE && w.v.game.state == SW_PAUSED);
+    /* (the integration: kit's stage 3 greys the bar's menus while a box is up, so New cannot be chosen at all) */
+    CHECK(!gkf_menu_choose(MENU_NEW) && run() && gk_asking(w.ui) == BOX_CLOSE && w.v.game.state == SW_PAUSED);
     for(i = 0; i < 8; i++) gkf_advance(500);
     CHECK(run() && w.v.game.y == 0 && w.v.game.state == SW_PAUSED);      /* nothing fell under the question */
     gkf_key(27, 0);                                     /* Esc: Cancel */
