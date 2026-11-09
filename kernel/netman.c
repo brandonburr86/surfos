@@ -168,6 +168,8 @@ static volatile bool boot_read_pending; /* 10/25/26: the boot has not read the s
 static volatile bool boot_looking;      /* 10/25/26: the boot looks for the stick still (found: it reads it) */
 static u_int history_gen;               /* 10/25/26 (the kernel review, 4): history's writes so far, under stick_lock */
 static volatile bool keeper_resume;     /* wifi connect hands the card back: the keeper looks by itself again */
+static volatile u_int keeper_resume_stops;  /* 11/05/26 (Settings' review, M1): the station's leaves and downs when it
+                                               was set: one since is the owner's, which the resume never undoes */
 static volatile bool telnetd_due;       /* telnetd = on: the server starts once there is a trusted address */
 
 /* not optimised away */
@@ -1402,6 +1404,7 @@ int netman_wifi_connect(struct wlan_dev *w) {
     keeper_connecting = false;
     mutex_unlock(&connect_lock);
     if(r != -EINTR && r != -EBUSY && r != -ECANCELED && where_state != WHERE_OFF) {
+        keeper_resume_stops = si.stops;                 /* before keeper_resume, which the keeper reads first */
         keeper_resume = true;                           /* what the start does: the keeper looks by itself again */
         start_keeper(false);
     }
@@ -1421,6 +1424,7 @@ int netman_wifi_connect_quiet(struct wlan_dev *w) {
     keeper_connecting = false;
     mutex_unlock(&connect_lock);
     if(r != -EINTR && r != -EBUSY && r != -ECANCELED && where_state != WHERE_OFF) {
+        keeper_resume_stops = si.stops;
         keeper_resume = true;
         start_keeper(false);
     }
@@ -1468,7 +1472,10 @@ static void wifiman_main(void *arg) {
         }
         if(keeper_resume) {                             /* wifi connect: the keeper's again */
             keeper_resume = false;
-            if(si.state != WLAN_STA_UP && si.state != WLAN_STA_JOINING && si.state != WLAN_STA_RECONNECTING) {
+            /* 11/05/26 (Settings' review, M1): unless a wifi leave or down came since the connect (the leave right
+               after a card's start from a window, say), before this look: that is the owner's, as above */
+            if(si.stops == keeper_resume_stops && si.state != WLAN_STA_UP && si.state != WLAN_STA_JOINING &&
+               si.state != WLAN_STA_RECONNECTING) {
                 retrying = true;
                 tries = 1;
                 next = ticks_after(WIFI_RETRY_MS);
