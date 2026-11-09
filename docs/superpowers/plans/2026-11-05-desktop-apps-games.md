@@ -51,9 +51,10 @@ The Game menu has New game (Ctrl+N), Pause (P, checked while paused) and Close.
 
 **The look**, drawn by each program's own code in the desktop's palette:
 - Mines: covered cells sand, open ones paper, the numbers in the sea colours (teal, sky, coral, navy, lilac, kelp, ink,
-  muted), a flag a teal pennant on an ink pole, a mine a navy sea mine with a foam glint, the one that went off on coral,
-  wrong flags crossed out, the keyboard's cursor a coral frame. No bevelled grey tiles, no face button, no seven-segment
-  counters.
+  muted), a flag a teal pennant on an ink pole, a mine a navy depth charge (an upright drum with two teal hoops and a
+  stub on top), the one that went off a splash (a ring of foam on sky blue), wrong flags crossed out, the keyboard's
+  cursor a coral frame. No bevelled grey tiles, no face button, no seven-segment counters, and since the review no
+  round mine with spikes, glint or red cell either (below).
 - Solitaire: a deep teal table; faces of paper with the rank and the suit at the top left (the suits are the console's
   own code page 437 characters 3 to 6), the suit again at the bottom right, the suit large in the middle, a jack, queen
   or king its letter in a tinted panel; backs navy with a foam rim and the desktop's wave mark (≋) tiled in teal; empty
@@ -62,8 +63,8 @@ The Game menu has New game (Ctrl+N), Pause (P, checked while paused) and Close.
   sky, coral, foam, kelp green, lilac, sea green), sand darker and speckled, the falling piece's resting place as its
   outline, rows washed away foam for a moment, a dark band across the sea saying Enter starts, Paused or Over the top.
 
-The icons in the `.app` files are drawn here too: a sea mine on sand, a wave-mark back behind a face with a red
-diamond, a coral shell falling into the sea over sand and a wave.
+The icons in the `.app` files are drawn here too: the game's depth charge on sand, a wave-mark back behind a face with
+a red diamond, a coral shell falling into the sea over sand and a wave.
 
 ## Decisions a reviewer would ask about
 
@@ -186,20 +187,21 @@ takes in blibc's x86 code), under AddressSanitizer and UBSan (`tests/games-sanit
 
 | Test | Checks | What |
 |---|---|---|
-| `test_wmines` | 393 | the generator; fields refused; the first reveal on 6,000 seeded fields and crowded ones; hand-laid fields: areas, a serpentine area through the largest field, flags, chords, a wrong flag, the win, the loss, the timer past 2^32 ms; 3,000 random games; the model: sizes at 958 x 457 and 638 x 317, the board's layout, presses taken back and made elsewhere, pressed cells, buttons, the keyboard and its repeats, closing, the session |
-| `test_wsolitaire` | 179 | the deal and its evenness over 52,000 deals; the stock one and three at a time and taken back; every move and refusal; Undo of every kind, back through 400 random moves, the ring's limit; where a click sends a card; finishing by itself, and not when drawing three hides the ace; 400 greedy and random games (59 won, each finished by itself); the layout at four sizes, a 19-card pile kept in the board; clicks, drags let go over a pile, by the card's middle, or back, a press made elsewhere; the keyboard; the finish a card a tick; closing; the session |
-| `test_wswell` | 150 | the pieces and their turns; the set; falling on time; moves, turns, kicks, a tunnel, the room above the sea; resting, and the rest a gap cannot stretch; Down and Space; rows washed, two apart, three at once, the empty sea's bonus; levels; the swell and its end; the end two ways; the pause; 200 games, half random, half careful (every careful one into the swell); the model: sizes, cells, the ghost, the keys in every state and their repeats, focus, the washed rows' flash, closing, a restart, the session |
-| `test_wmines_window` | 57 | no desktop; the window's size; toolbar, board and status bar drawn; a click revealing an area, the clock and its presents; a flag and what it presents; the cursor with and without the keys; Esc and the close button asking, Cancel first; the size by the radio buttons, the menu and the keys; a game won and lost by clicks; Help; a new size and theme; the smallest desktop |
-| `test_wsolitaire_window` | 58 | no desktop; the window; backs, faces and places drawn; the stock dealing; Undo by the toolbar, Ctrl+Z, greyed; a drag onto a pile and what it presents; a drag back; drawing three, fanned; the keyboard's frame with and without the keys; repeats; Esc asking; a game finishing by itself to the win, and the record; Help; the close button; the smallest desktop |
-| `test_wswell_window` | 44 | no desktop; the window; the band and the panel; Enter, the piece and its ghost; arrows pressed and held, what they present; the timer; Space and a held Space; a washed row's foam; P and the menu's Pause; focus lost, and a click that does not resume; Esc asking; the end and the best; the close button; New game and Help; the smallest desktop |
+| `test_wmines` | 420 | the generator; fields refused; the first reveal on 6,000 seeded fields and crowded ones; hand-laid fields: areas, a serpentine area through the largest field, flags, chords, a wrong flag, the win, the loss, the timer past 2^32 ms; 3,000 random games; the model: sizes at 958 x 457 and 638 x 317, the board's layout, presses taken back and made elsewhere, pressed cells, buttons, the keyboard and its repeats, closing, the session |
+| `test_wsolitaire` | 210 | the deal and its evenness over 52,000 deals; the stock one and three at a time and taken back; every move and refusal; Undo of every kind, back through 400 random moves, the ring's limit; where a click sends a card; finishing by itself, and not when drawing three hides the ace; 400 greedy and random games (59 won, each finished by itself); the layout at four sizes, a 19-card pile kept in the board; clicks, drags let go over a pile, by the card's middle, or back, a press made elsewhere; the keyboard; the finish a card a tick; closing; the session |
+| `test_wswell` | 190 | the pieces and their turns; the set; falling on time; moves, turns, kicks, a tunnel, the room above the sea; resting, and the rest a gap cannot stretch; Down and Space; rows washed, two apart, three at once, the empty sea's bonus; levels; the swell and its end; the end two ways; the pause; 200 games, half random, half careful (every careful one into the swell); the model: sizes, cells, the ghost, the keys in every state and their repeats, focus, the washed rows' flash, closing, a restart, the session |
+| `test_wmines_window` | 77 | no desktop; the window's size; toolbar, board and status bar drawn; a click revealing an area, the clock and its presents; a flag and what it presents; the cursor with and without the keys; Esc and the close button asking, Cancel first; the size by the radio buttons, the menu and the keys; a game won and lost by clicks; Help; a new size and theme; the smallest desktop |
+| `test_wsolitaire_window` | 82 | no desktop; the window; backs, faces and places drawn; the stock dealing; Undo by the toolbar, Ctrl+Z, greyed; a drag onto a pile and what it presents; a drag back; drawing three, fanned; the keyboard's frame with and without the keys; repeats; Esc asking; a game finishing by itself to the win, and the record; Help; the close button; the smallest desktop |
+| `test_wswell_window` | 63 | no desktop; the window; the band and the panel; Enter, the piece and its ghost; arrows pressed and held, what they present; the timer; Space and a held Space; a washed row's foam; P and the menu's Pause; focus lost, and a click that does not resume; Esc asking; the end and the best; the close button; New game and Help; the smallest desktop |
 
-The same six tests run in the Docker image under `make unittest` (gcc, -m32, -O1), and the models compile for i386
-against SurfOS's own headers without a warning.
+The counts are those after the review's fix round, its tests (below, "The review") among them. The same six tests
+run in the Docker image under `make unittest` (gcc, -m32, -O1), and the models compile for i386 against SurfOS's own
+headers without a warning.
 
-**The gates, on the tree committed** (the branch at this account's commit, desk's 2c5afd30 and kit's 2ba18949 merged in;
+**The gates at 2a3899aa**, phase 3's commit (desk's 2c5afd30 and kit's 2ba18949 merged in;
 kit's eab009d3 is not needed here: every game's loop waits with -1, and the falls are the toolkit's timers):
 
-- `make unittest` in the Docker image: passed, the six tests of this track among it (393, 179, 150, 57, 58 and 44
+- `make unittest` in the Docker image: passed, the six tests of this track among it (then 393, 179, 150, 57, 58 and 44
   checks), with desk's `test_guidesk` reading the three `.app` files (145 checks) and `test_man` finding their pages;
   gcc warns about nothing of this track's (a `-Wmaybe-uninitialized` at -O2 in Mines' pointer code, a false one, was
   answered by initializing the two variables it named).
@@ -219,6 +221,87 @@ kit's eab009d3 is not needed here: every game's loop waits with -1, and the fall
 
 None of this has run on the laptop: the games are emulator-tested only until the owner tries them.
 
+## The review
+
+An independent review, read at 2a3899aa, found the games safe to ship, with two medium findings and ten low ones, and
+asked for one fix round. Each finding is fixed in the commits after 2a3899aa (one for each game, one for the pages), and
+each has a test; the review's own probes, built against the fixed tree, pass too.
+
+- **M1, Swell: a game ended above the sea was not counted.** A piece set with a cell above the sea ends the game before
+  a piece is counted, and the window's model looked only at the pieces set: 103 of the review's 2,000 games were lost
+  from the session, the status bar never told. The model now notes the game's state before each key and each tick, and
+  counts the game once, on the change to over, whatever brought it. Tests: a piece set above the sea by Space and by the
+  clock, counted once; 500 games played through the model with random keys, each counted once (the review's probe:
+  2,000 of 2,000).
+- **M2, Swell: turning kept a landed piece from setting.** A turn keeps the box's middle and may kick the piece a row
+  up; each such row was a new rest, and Down back down a point, so Up four times and Down held a piece 25 minutes and
+  paid 2,000 points. A rest is now measured by the piece's lowest cell and is new only lower than any rest the piece
+  had; otherwise it keeps the time of its deepest rest. Down and Space pay only for rows the lowest cell had not been
+  down to (`deepest`), so no row pays twice. Tests: the review's Up, Up, Up, Up, Down at a person's pace, in the rules
+  and through the model (the piece sets within its first rest and earns nothing); Down after a turn's kick earns
+  nothing.
+- **L1, Swell's rest marker and the pause.** "No rest yet" was -1, a row a piece can rest on above the sea; it is
+  `SW_NO_REST` (-1000) now, which no piece reaches. A pause moves the rest's time with the fall's and the lock's.
+  Tests: a piece resting on the row above the sea gets its full rest; off a ledge and back after a pause, it sets at
+  its rest moved by the pause.
+- **L2, Swell: New game under the close question.** It started a game under the question, and Cancel then said
+  "Paused". A question up takes no New now, and each window's box follows its model's question (`asking`): asked,
+  answered, or replaced (the close button over a new game's question asks its own, and the older box's answer, which
+  the toolkit sends as cancelled, is not taken for the new one's).
+- **L3, Solitaire: a key during a drag.** Space took the waste back while its top card was dragged, and the window
+  drew it where the waste had been (`table_dragged()` said -23 cards). A key that changes the game (a deal, Enter,
+  Undo) lets go of a drag first, `table_dragged()` checks the cards can still be taken, and Undo by the menu's Ctrl+Z
+  under a question does nothing. An arrow, which changes nothing, leaves a drag alone.
+- **L4, a new game threw one under way away.** I chose to ask for every control, rather than apply a way of drawing
+  or a size to the next deal: one rule for all three games, and a toolbar that always shows the game in front of you
+  (the radio buttons spring back on Cancel). While a game is under way (Mines: from the first reveal; Solitaire: from
+  the first move until it is won; Swell: playing or paused), N, Ctrl+N, New, 1 to 3, the sizes, drawing one or three
+  and the Game menu ask "Start a new field?", "Deal again?" or "Start a new game?", Cancel first; a new game when none
+  is under way starts at once. Swell's N no longer refuses in the middle of a game: it pauses and asks like the menu.
+- **L5, the smallest windows cut what they hold.** Each minimum now comes from its contents: Mines 518 x 316 (the
+  toolbar's natural width, its counters with room for "Mines -100" and "Time 1:02:03", more than the large field's 468
+  at 16-pixel cells); Solitaire 564 x 262 (the toolbar likewise, with "Moves 9999"; the longest pile, six face down
+  and thirteen up, at the closest fan); Swell 448 x 312 (the boxes' lines of 50 characters; the panel's next piece and
+  five lines beside the sea at 15-pixel cells). Swell's panel places moved from `window.c` into the model
+  (`sview_preview()`, `sview_line_y()`), so its test tries every size from the smallest up. Each window test opens the
+  window at its own minimum and finds a smaller size refused.
+- **L6, Help cut.** Mines' second line was 62 characters; every Help line is 50 at most now, kept in each `window.h`
+  (`MW_HELP_1`, `SW_HELP_1`, `WW_HELP_1`), and the window tests read the lines whole in the box at the window's
+  smallest size, as they read the questions.
+- **L7, Solitaire: home to home.** An ace could go from one foundation to another, empty, one, and counted as a move;
+  `sol_can_put()` refuses home to home.
+- **L8, the records' edges.** A Mines field won in no time stored 0, which also meant "none won yet"; Mines and
+  Solitaire ask the count of wins now. Swell did not count a game given up for a new one, though Mines and Solitaire
+  count it as played: it counts now, its score a candidate for the best.
+- **L9, the mine's look** echoed another game's artwork (a round mine, eight spikes, a light square glint, a red
+  cell). Mines draws a depth charge now, an upright navy drum with two teal hoops and a stub on top, and the mine that
+  went off is a splash, the drum in a ring of foam on sky blue; the `.app` icon is the same drum. The window test finds
+  the hoops, the ring and no coral.
+- **L10, what the games cannot do**: each manual page has a LIMITS section (no custom fields, no pause in Mines and
+  Solitaire, Klondike only, no points, the undo depth, the fastest fall, the session-only records).
+- Held menu shortcuts repeating (Ctrl+Z, Ctrl+N held) come from the toolkit's shortcut matching: kit's to fix, not
+  worked around here. With a new game asked about during one, a held Ctrl+N during a game now opens one question.
+
+**The tests after the review**: test_wmines 420 checks, test_wsolitaire 210, test_wswell 190, test_wmines_window 77,
+test_wsolitaire_window 82, test_wswell_window 63, all passing natively under AddressSanitizer and UBSan
+(`tests/games-sanitize.sh`) and in the Docker image.
+
+**The gates after the review**, on the tree of the fix round's commits (bbf7bdff to 69422c05; nothing merged since
+2a3899aa: kit's aac42b11, which fixes kit's own chooser checks, was offered and not taken, so its two failures below
+remain):
+
+- `make unittest` in the Docker image: passed, this track's six tests among it (the counts above), desk's
+  `test_guidesk` reading the three `.app` files with Mines' new icon (145 checks), and `test_man` finding the pages.
+- `make test-all` through the suite lock: passed at -O0 and -O2, 558 smoke checks and 51 Files checks each.
+- The guiapps scenario through the suite lock, every track's checks, at -O0 and -O2: 361 of 363 each. All 31 of this
+  track's pass at both levels (one more than before: 3 during a game asks first). The two that fail are kit's, as at
+  2a3899aa: its "Ctrl+O, a menu's shortcut, asks for a chooser", and then "the desktop closes and the text console
+  comes back", which the chooser it leaves open stops (kit's aac42b11 fixes the first).
+- So that the end checks the full run did not reach cover the games, their checks alone (`GUIAPPS_ONLY=gui_apps_games`)
+  at -O0 through the suite lock: 37 of 37, the desktop closing and the text console back, the kernel heap back to the
+  byte (668512 bytes in use before gui and after), `fsck_msdos` and `fsck.fat` clean on the stick.
+
+None of this has run on the laptop either.
 ## Where the code comes from
 
 Written for SurfOS from these, and from this tree's own programs (`user/wclock/`, `user/wcharmap/`, `user/wkit/`,
