@@ -397,7 +397,7 @@ static void radio_choose(struct gk_widget *w, int i) {
 
 static int radio_key(struct gk_widget *w, unsigned key, unsigned mods) {
     if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
-    if((mods & WIN_MOD_REPEAT) && (key == ' ' || (key >= WIN_KEY_UP && key <= WIN_KEY_RIGHT))) return 1;  /* once */
+    if((mods & WIN_MOD_REPEAT) && key == ' ') return 1;   /* Space once a press; the arrows move at each repeat */
     if(key == WIN_KEY_UP || key == WIN_KEY_LEFT) radio_choose(w, w->value <= 0 ? 0 : w->value - 1);
     else if(key == WIN_KEY_DOWN || key == WIN_KEY_RIGHT) radio_choose(w, w->value + 1);
     else if(key == ' ') radio_choose(w, w->value < 0 ? 0 : w->value);
@@ -694,8 +694,7 @@ static void tabs_choose(struct gk_widget *w, int i) {
 }
 
 static int tabs_key(struct gk_widget *w, unsigned key, unsigned mods) {
-    if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;
-    if((mods & WIN_MOD_REPEAT) && key >= WIN_KEY_LEFT && key <= WIN_KEY_END) return 1;   /* once a press */
+    if(mods & (WIN_MOD_CTRL | WIN_MOD_ALT)) return 0;   /* (the arrows, Home and End move at each repeat) */
     if(key == WIN_KEY_LEFT) tabs_choose(w, w->value - 1);
     else if(key == WIN_KEY_RIGHT) tabs_choose(w, w->value + 1);
     else if(key == WIN_KEY_HOME) tabs_choose(w, 0);

@@ -49,8 +49,12 @@ item has it for its shortcut. A key the focused widget does not use is a menu it
 surfos/win.h says: Ctrl and a letter is its control byte with WIN_MOD_CTRL (Ctrl+S 19, Ctrl+I 9),
 Tab, Enter, Esc and Backspace are 9, 13, 27 and 127 and with Ctrl WIN_KEY_TAB .. WIN_KEY_BACKSPACE;
 a program tests the modifiers' bits (ev.mods & WIN_MOD_CTRL, & WIN_MOD_REPEAT for a key held down),
-never mods whole. Fields and lists type and jump only for a key without Ctrl or Alt. All text is
-UTF-8, shown with the console's characters (code page 437), 8 x 16 pixels each.
+never mods whole. Fields and lists type and jump only for a key without Ctrl or Alt. A key held
+down: movement keys repeat (the arrows, Home and End, Page Up and Down move a list, a slider, a
+radio group, tabs, a field's or a text's cursor at each repeat), and activation keys act once a
+press (Space and Enter on a button, a check box or a radio group; a box's keys; a menu item's
+shortcut, but GK_ITEM_REPEAT's). All text is UTF-8, shown with the console's characters (code
+page 437), 8 x 16 pixels each.
 
 Testing: tests/host/gk_fake.h is a desktop for a program's window on the host (the Makefile's
 GK_HOST_FLAGS and GK_HOST_OBJ), and user/wkit/ with tests/host/test_wkit.c is the pattern.

@@ -1572,6 +1572,37 @@ static void fuzz(void) {
     gk_close(ui);
 }
 
+/* the re-review, N1: movement keys repeat (a radio group's arrows, tabs' arrows, Home and End move at each repeat),
+   activation keys act once a press (Space on a radio group) */
+static void again_keys(void) {
+    struct gk *ui = window("Again", 400, 300);
+    struct gk_widget *r = gk_radio(gk_root(ui), 1, 0), *tabs = gk_tabs(gk_root(ui), 2, 0);
+    int i;
+    for(i = 0; i < 6; i++) gk_radio_add(r, "option");
+    for(i = 0; i < 6; i++) gk_tab(tabs, "page");
+    run(ui);
+    gk_focus(r);
+    gkf_key(WIN_KEY_DOWN, 0);
+    gkf_key(WIN_KEY_DOWN, WIN_MOD_REPEAT);
+    gkf_key(WIN_KEY_DOWN, WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_value(r) == 3);                            /* (from the first: one, then two repeats) */
+    gkf_key(' ', 0);
+    gkf_key(' ', WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_value(r) == 3);
+    gk_focus(tabs);
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key(WIN_KEY_RIGHT, WIN_MOD_REPEAT);
+    gkf_key(WIN_KEY_RIGHT, WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_value(tabs) == 3);
+    gkf_key(WIN_KEY_HOME, WIN_MOD_REPEAT);
+    run(ui);
+    CHECK(gk_value(tabs) == 0);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -2069,6 +2100,7 @@ int main(void) {
     fakes();
     lows();
     fuzz();
+    again_keys();
     paste();
     choosers();
     theme();
