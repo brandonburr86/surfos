@@ -9,12 +9,16 @@ time; its descriptor is the read end of a pipe the test writes the desktop's eve
 libgui's read() and poll() are the host's own. Presents are copied into the desktop's picture of the
 window, checked as the kernel checks them (within the window and within a row of the stride), so a
 test sees what the desktop would show, and how much was presented. Track desk's calls (11/05/26:
-WIN_MENU, WIN_PASTE, WIN_DIALOG, WIN_TAKE, WIN_THEME) are checked as kernel/win.c checks them (as the
-review of desk's stage 1 amended them: its menu_cells(), desk_title() and menu_check() are copied
+WIN_MENU, WIN_PASTE, WIN_DIALOG, WIN_TAKE, WIN_THEME) are checked as kernel/win.c checks them (as desk's
+1447a4c2 has them: its menu_cells(), reads_as(), desk_title(), desk_help_item() and menu_check() are copied
 here, reading labels with the console's own UTF-8 decoder, driver/cp437.c's utf8_feed(), so that a
 label the toolkit makes is held to the kernel's rule and not to the toolkit's idea of it) and then
 done as the desktop will do them; gkf_lacks() makes them say ENOSYS, as until desk's stage 2, or
-EINVAL, as a kernel before them.
+EINVAL, as a kernel before them. As desk's implementation (2c5afd30) and its fix round have it: WIN_DIALOG
+says EAGAIN while WIN_EVENTS events wait unread in the window's pipe (FIONREAD) and EBUSY while an
+answered path waits to be taken; WIN_PASTE gives the window its own WIN_CLIP until the desktop's
+clipboard is newer (gkf_set_paste()); an item of the program's Help that reads as one of the desktop's
+own Help items is refused. msleep() moves the clock on, nothing waits.
 */
 
 #include <errno.h>
@@ -23,6 +27,7 @@ EINVAL, as a kernel before them.
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <surf.h>
 #include "gk_fake.h"
 #include "../../user/libsurf/guikit.h"
@@ -41,6 +46,7 @@ static struct {
     int log[64][4], last[64][4];
     char *clip, *paste;
     int clips, alerts;
+    int clip_new;                       /* the window's WIN_CLIP, which the desktop has not made its clipboard yet */
     unsigned lacks;                     /* ops (1 << op) answered lack_err */
     int lack_err;
     struct win_menu_item menu[WIN_MENU_ENTRIES];
@@ -48,6 +54,7 @@ static struct {
     struct win_dialog dialog;
     int dialog_waiting, have_path;
     int input;                          /* a key, a press or a menu choice sent since the last chooser asked for */
+    unsigned sent_buttons;              /* the buttons of the pointer event sent last */
     char path[WIN_PATH_MAX];
     int themed;
     struct win_theme theme;
@@ -96,6 +103,19 @@ void gkf_refuse(int err) {
 
 unsigned int uptime(void) {
     return F.now;
+}
+
+/* 11/05/26: a program that waits (wkit's busy spell): the clock moves on at once */
+int msleep(unsigned int ms) {
+    F.now += ms;
+    return 0;
+}
+
+/* the events written into the window's pipe that it has not read (FIONREAD), as the kernel counts its queue */
+static int unread(void) {
+    int n = 0;
+    if(F.rfd < 0 || ioctl(F.rfd, FIONREAD, &n) < 0) return 0;
+    return n / (int)sizeof(struct win_event);
 }
 
 void gkf_advance(unsigned ms) {
@@ -210,28 +230,39 @@ static int menu_cells(const char *s, unsigned char *cell) {
     return d.have ? -1 : cells;
 }
 
-/* kernel/win.c's desk_title() */
-static int desk_title(const unsigned char *cell, unsigned n, int help) {
-    static const char *const own[] = { "surfos", "apps", "window", "help" };
+/* kernel/win.c's reads_as(): the cells drawn read as one of names (lower case), in any case, with blank cells around
+   them (0xFF: the no-break space) */
+static int reads_as(const unsigned char *cell, unsigned n, const char *const *names, unsigned count) {
     unsigned i, k;
-    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
     while(n && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;
     while(n && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
-    for(i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
-        if(help && i == 3) continue;
-        for(k = 0; k < n && own[i][k] && (cell[k] | 0x20) == own[i][k]; k++) ;
-        if(k == n && !own[i][k]) return 1;
+    for(i = 0; i < count; i++) {
+        for(k = 0; k < n && names[i][k] && (cell[k] | 0x20) == names[i][k]; k++) ;
+        if(k == n && !names[i][k]) return 1;
     }
     return 0;
 }
 
-/* kernel/win.c's menu_check(), but that an array without its NUL is refused here (the kernel cuts it: the toolkit
-   must never send one) */
+/* kernel/win.c's desk_title() and desk_help_item() (desk's review of its stage 2) */
+static int desk_title(const unsigned char *cell, unsigned n, int help) {
+    static const char *const own[] = { "surfos", "apps", "window", "help" };
+    unsigned i;
+    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
+    return reads_as(cell, n, own, help ? 3 : 4);
+}
+
+static int desk_help_item(const unsigned char *cell, unsigned n) {
+    static const char *const own[] = { "keyboard and mouse", "about surfos" };
+    return reads_as(cell, n, own, 2);
+}
+
+/* kernel/win.c's menu_check() (desk 1447a4c2), but that an array without its NUL is refused here (the kernel cuts it:
+   the toolkit must never send one) */
 static int menu_check(struct win_menu_item *it, unsigned n) {
     const unsigned known = WIN_MENU_TITLE | WIN_MENU_SEPARATOR | WIN_MENU_DISABLED | WIN_MENU_CHECKED | WIN_MENU_RADIO |
                            WIN_MENU_SUBMENU | WIN_MENU_CHILD | WIN_MENU_HELP;
     unsigned i, menus = 0, items = 0, children = 0, cells = 0, helps = 0, most = WIN_MENU_ITEMS;
-    int sub = 0, c;
+    int sub = 0, help = 0, c;
     unsigned char cell[WIN_MENU_LABEL];
     for(i = 0; i < n; i++) {
         struct win_menu_item *e = &it[i];
@@ -248,8 +279,11 @@ static int menu_check(struct win_menu_item *it, unsigned n) {
             if((f & WIN_MENU_HELP) && ++helps > 1) return -1;
             if(!(f & WIN_MENU_HELP)) cells += (unsigned)c + 3;
             most = f & WIN_MENU_HELP ? WIN_MENU_HELP_ITEMS : WIN_MENU_ITEMS;
+            help = (f & WIN_MENU_HELP) != 0;
             items = 0;
             sub = 0;
+        } else if(help && !sep && desk_help_item(cell, (unsigned)c)) {
+            return -1;
         } else if(child) {
             if(!sub || ++children > WIN_MENU_ITEMS || (!sep && !c)) return -1;
         } else {
@@ -328,15 +362,18 @@ static int desk_call(int op, void *arg) {
             errno = EACCES;
             return -1;
         }
-        n = F.paste ? strlen(F.paste) : 0;
-        if(!b->size) return (int)n;
-        if(b->size < n) {
-            errno = ENOSPC;
-            return -1;
+        {                                               /* the window's own copy not yet taken is the newer */
+            const char *text = F.clip_new && F.clip ? F.clip : F.paste ? F.paste : "";
+            n = strlen(text);
+            if(!b->size) return (int)n;
+            if(b->size < n) {
+                errno = ENOSPC;
+                return -1;
+            }
+            memcpy(b->buf, text, n);
+            if(b->size > n) b->buf[n] = 0;
+            return (int)n;
         }
-        memcpy(b->buf, F.paste ? F.paste : "", n);
-        if(b->size > n) b->buf[n] = 0;
-        return (int)n;
     case WIN_DIALOG:
         d = arg;
         if(!d) break;
@@ -348,7 +385,7 @@ static int desk_call(int op, void *arg) {
             errno = EACCES;
             return -1;
         }
-        if(F.dialog_waiting) {
+        if(F.dialog_waiting || F.have_path) {           /* (desk's fix round: an answer's path not taken yet too) */
             errno = EBUSY;
             return -1;
         }
@@ -356,10 +393,13 @@ static int desk_call(int op, void *arg) {
             errno = EACCES;
             return -1;
         }
+        if(unread() >= WIN_EVENTS) {                    /* no place for the answer: the events first */
+            errno = EAGAIN;
+            return -1;
+        }
         F.input = 0;
         F.dialog = *d;
         F.dialog_waiting = 1;
-        F.have_path = 0;                                /* a path not taken goes at the next request */
         return 0;
     case WIN_TAKE:
         b = arg;
@@ -484,6 +524,7 @@ int winctl(int fd, int op, void *arg) {
         memcpy(F.clip, c->text, n);
         F.clip[n] = 0;
         F.clips++;
+        F.clip_new = 1;
         return 0;
     case WIN_ALERT:
         F.alerts++;
@@ -509,6 +550,7 @@ int gkf_alerts(void) { return F.alerts; }
 void gkf_set_paste(const char *text) {
     free(F.paste);
     F.paste = text ? strdup(text) : NULL;
+    F.clip_new = 0;                                     /* the desktop's clipboard is newer than the window's copy */
 }
 
 unsigned gkf_pixel(int x, int y) {
@@ -576,7 +618,7 @@ int gkf_presented_rect(int i, int *x, int *y, int *w, int *h) {
 
 /**** events ****/
 
-static void send(unsigned short type, unsigned short mods, int x, int y, unsigned value) {
+static void put_event(unsigned short type, unsigned short mods, int x, int y, unsigned value) {
     struct win_event e;
     if(F.wfd < 0) return;
     memset(&e, 0, sizeof(e));
@@ -586,11 +628,13 @@ static void send(unsigned short type, unsigned short mods, int x, int y, unsigne
     e.y = y;
     e.value = value;
     if(write(F.wfd, &e, sizeof(e)) != (ssize_t)sizeof(e)) abort();   /* a test that fills a pipe is wrong */
-    if(type == WIN_EV_KEY || type == WIN_EV_MENU || (type == WIN_EV_POINTER && value)) F.input = 1;
+    if(type == WIN_EV_KEY || type == WIN_EV_MENU || (type == WIN_EV_POINTER && x >= 0 && y >= 0 && (value & ~F.sent_buttons)))
+        F.input = 1;                                    /* a key, a choice, a press over the content (1447a4c2) */
+    if(type == WIN_EV_POINTER) F.sent_buttons = value;
 }
 
 void gkf_key(unsigned key, unsigned mods) {
-    send(WIN_EV_KEY, (unsigned short)mods, 0, 0, key);
+    put_event(WIN_EV_KEY, (unsigned short)mods, 0, 0, key);
 }
 
 void gkf_type(const char *text) {
@@ -599,7 +643,7 @@ void gkf_type(const char *text) {
 
 void gkf_pointer(int x, int y, unsigned buttons) {
     F.buttons = buttons;
-    send(WIN_EV_POINTER, (unsigned short)F.mods, x, y, buttons);
+    put_event(WIN_EV_POINTER, (unsigned short)F.mods, x, y, buttons);
 }
 
 void gkf_mods(unsigned mods) {
@@ -619,26 +663,26 @@ void gkf_drag(int x0, int y0, int x1, int y1) {
 }
 
 void gkf_wheel(int x, int y, int rows) {
-    send(WIN_EV_WHEEL, (unsigned short)F.mods, x, y, (unsigned)rows);
+    put_event(WIN_EV_WHEEL, (unsigned short)F.mods, x, y, (unsigned)rows);
 }
 
 void gkf_focus(int on) {
     F.focused = on != 0;
-    send(WIN_EV_FOCUS, 0, 0, 0, (unsigned)F.focused);
+    put_event(WIN_EV_FOCUS, 0, 0, 0, (unsigned)F.focused);
 }
 
 void gkf_resize(int w, int h) {
-    send(WIN_EV_RESIZE, 0, w, h, 0);
+    put_event(WIN_EV_RESIZE, 0, w, h, 0);
 }
 
 void gkf_close(void) {
-    send(WIN_EV_CLOSE, 0, 0, 0, 0);
+    put_event(WIN_EV_CLOSE, 0, 0, 0, 0);
 }
 
 void gkf_gone(void) {
     if(F.dialog_waiting) {                              /* the desktop answers a request that waits: cancelled */
         F.dialog_waiting = 0;
-        send(WIN_EV_DIALOG, 0, (int)F.dialog.id, 0, 0);
+        put_event(WIN_EV_DIALOG, 0, (int)F.dialog.id, 0, 0);
     }
     if(F.wfd >= 0) close(F.wfd);
     F.wfd = -1;
@@ -679,7 +723,7 @@ int gkf_menu_choose(int id) {
         if((f & (WIN_MENU_SEPARATOR | WIN_MENU_SUBMENU)) || (int)F.menu[i].id != id) continue;
         if((f & WIN_MENU_DISABLED) || (title >= 0 && (F.menu[title].flags & WIN_MENU_DISABLED)) ||
            ((f & WIN_MENU_CHILD) && sub >= 0 && (F.menu[sub].flags & WIN_MENU_DISABLED))) return 0;
-        send(WIN_EV_MENU, 0, title >= 0 ? (int)F.menu[title].id : 0, 0, (unsigned)id);
+        put_event(WIN_EV_MENU, 0, title >= 0 ? (int)F.menu[title].id : 0, 0, (unsigned)id);
         return 1;
     }
     return 0;
@@ -694,11 +738,11 @@ void gkf_dialog_answer(const char *path) {
     F.dialog_waiting = 0;
     F.have_path = path != NULL;
     if(path) snprintf(F.path, sizeof(F.path), "%s", path);
-    send(WIN_EV_DIALOG, 0, (int)F.dialog.id, 0, path ? 1 : 0);
+    put_event(WIN_EV_DIALOG, 0, (int)F.dialog.id, 0, path ? 1 : 0);
 }
 
 void gkf_set_theme(unsigned which, const unsigned *colors) {
     F.theme.theme = which;
     if(colors) memcpy(F.theme.colors, colors, WIN_COLORS * sizeof(F.theme.colors[0]));
-    if(F.themed) send(WIN_EV_THEME, 0, 0, 0, which);
+    if(F.themed) put_event(WIN_EV_THEME, 0, 0, 0, which);
 }

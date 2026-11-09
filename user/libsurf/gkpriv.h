@@ -126,6 +126,8 @@ struct gk {
     int user_act;                       /* the event given last is a person's doing: a key, a press, a click, a menu
                                            item, a box's answer (until the next gk_next()): a chooser may be asked */
     int desk_calls;                     /* the kernel has the calls of 11/05/26 (WIN_THEME answered at the opening) */
+    struct win_dialog *later;           /* a chooser's request the desktop had no room for (EAGAIN: the window's events
+                                           unread), asked again once they are read (gk_choose_again()) */
 };
 
 /* gkcore.c */
@@ -187,6 +189,7 @@ void gk_box_chooser(struct gk *ui, int id, const char *title, const char *dir, c
 void gk_menus_send(struct gk *ui);                          /* at a flush: the menus again if they changed */
 int gk_menu_key(struct gk *ui, unsigned key, unsigned mods);   /* 1: an item's shortcut, GK_EV_MENU posted */
 void gk_dialog_answer(struct gk *ui, const struct win_event *e);   /* WIN_EV_DIALOG */
+void gk_choose_again(struct gk *ui);                        /* ui->later asked again, with the window's events read */
 int gk_theme_read(struct gk *ui);                           /* WIN_THEME: the colours by role; 1 when it answered */
 
 #endif

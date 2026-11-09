@@ -816,12 +816,15 @@ static void hover(struct gk *ui, struct gk_widget *t, const struct win_event *e)
         ev->x = e->x - ui->under->x;
         ev->y = e->y - ui->under->y;
         if(ev->x >= 0 && ev->y >= 0 && ev->x < ui->under->w && ev->y < ui->under->h) ev->x = -1;   /* it left it */
-        ev->buttons = e->value;
+        ev->buttons = 0;                                /* (no press of its: nothing it may drag with) */
         ev->mods = e->mods;
     }
     ui->under = a;
 }
 
+/* the pointer: a press gives the widget under it the pointer (capture) until every button is up, and a widget hears
+   buttons held only while it has it, so that a drag starts only from a press the window saw over it (a button held
+   since a press elsewhere, on the desktop or outside a box, is a hover) */
 static void pointer(struct gk *ui, const struct win_event *e) {
     unsigned old = ui->buttons, now = e->value, pressed = now & ~old, released = old & ~now;
     struct gk_widget *layer = ui->box ? ui->box : ui->root, *t;
@@ -844,7 +847,8 @@ static void pointer(struct gk *ui, const struct win_event *e) {
         if(takes_focus(t)) gk_set_focus(ui, t);
         ui->capture = t;
     }
-    if(t && gk_reached(t) && t->cls->pointer) t->cls->pointer(t, e->x, e->y, now, pressed, released);
+    if(t && gk_reached(t) && t->cls->pointer)
+        t->cls->pointer(t, e->x, e->y, t == ui->capture ? now : 0, pressed, t == ui->capture ? released : 0);
     if(!now) ui->capture = NULL;
 }
 
@@ -1021,6 +1025,7 @@ void gk_close(struct gk *ui) {
     gk_box_free(ui);
     gk_free_tree(ui->root);
     free(ui->menus);
+    free(ui->later);
     drop_given(ui);
     for(i = 0; i < GK_QUEUE; i++) {
         if(!ui->qtext[i]) continue;
@@ -1060,6 +1065,10 @@ int gk_next(struct gk *ui, struct gk_event *ev, int ms) {
         if(ui->win->given < ui->win->queued) {          /* read already: no wait for those */
             if(window_event(ui) < 0) return -1;
             continue;
+        }
+        if(ui->later) {                                 /* a chooser's request waits for room: those read, again */
+            gk_choose_again(ui);
+            if(ui->qcount) continue;
         }
         now = gk_now();
         if(fire(ui, now)) continue;

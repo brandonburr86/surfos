@@ -60,7 +60,8 @@ unsigned gkf_clock(void);
 /* the clipboard: what the window put there (WIN_CLIP, only while it has the focus), and what WIN_PASTE gives */
 const char *gkf_clip(void);
 int gkf_clips(void);
-void gkf_set_paste(const char *text);
+void gkf_set_paste(const char *text);  /* the desktop's clipboard now (newer than a WIN_CLIP before: until then,
+                                           WIN_PASTE gives the window its own copy, as the kernel does) */
 int gkf_alerts(void);                   /* WIN_ALERTs */
 
 /* 11/05/26, track desk's calls (surfos/win.h), checked as the kernel checks them and done as the desktop does them:

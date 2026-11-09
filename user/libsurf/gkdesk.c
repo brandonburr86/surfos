@@ -24,7 +24,10 @@ and comes back to the program, ENOSYS a desktop without choosers yet; without th
 line to type the path in over the window stands in (gkbox.c), answered as GK_EV_CHOSEN too. A chooser
 is asked only while the program answers a person's own key, press or choice (gkcore.c's user_act), as
 the kernel wants a key, a press or a menu choice since the window's last request. A chosen path is
-taken (WIN_TAKE) as its answer comes.
+taken (WIN_TAKE) as its answer comes. EAGAIN (the window's events fill its queue, and the answer
+would have no place) is no answer: the request is kept and asked again once gk_next() has read the
+events (gk_choose_again()), and if the desktop refuses it then (the focus gone meanwhile), it is
+answered as cancelled, so the program hears of every request it made.
 
 The clipboard is read whole when it is longer than the caller's buffer (WIN_PASTE says how long it
 is), and what is not wanted is wiped. The theme is read at the window's opening and again at each
@@ -124,29 +127,45 @@ static int cells_of(const char *s) {
     return n;
 }
 
-/* a title (a label as put_label() leaves it) that would pass for one of the desktop's own (surfos/win.h), by the
-   characters it draws: ≋ in it (code page 437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or
-   Help in any case with blanks (a space, a no-break space) around it */
-static int desk_title(const char *s, int *help) {
-    static const char *const own[] = { "surfos", "apps", "window", "help" };
-    unsigned char cell[WIN_MENU_LABEL];
-    int n = 0, a = 0, len, i, k;
-    *help = 0;
-    while(*s && n < (int)sizeof(cell)) {
+/* a label's characters as the desktop draws them (a label as put_label() leaves it: one cell each), their codes in
+   cell[]; how many */
+static int cells(const char *s, unsigned char *cell) {
+    int n = 0, len;
+    while(*s && n < WIN_MENU_LABEL) {
         cell[n++] = (unsigned char)gw_char(s, (int)strnlen(s, 4), &len);
         s += len;
     }
-    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
+    return n;
+}
+
+/* whether n cells, without the blanks around them (a space, a no-break space), read as word in any case */
+static int reads_as(const unsigned char *cell, int n, const char *word) {
+    int a = 0, k;
     while(a < n && (cell[a] == ' ' || cell[a] == 0xFF)) a++;
     while(n > a && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
-    for(i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++) {
-        for(k = 0; a + k < n && own[i][k] && (cell[a + k] | 0x20) == own[i][k]; k++) ;
-        if(a + k == n && !own[i][k]) {
-            if(i == 3) *help = 1;                       /* Help: the program's Help menu, merged into the desktop's */
-            else return 1;
-        }
-    }
+    for(k = 0; a + k < n && word[k] && (cell[a + k] | 0x20) == word[k]; k++) ;
+    return a + k == n && !word[k];
+}
+
+/* a title that would pass for one of the desktop's own (surfos/win.h), by the characters it draws: ≋ in it (code page
+   437's 0xF7, which U+224B and U+2248 both draw), or SurfOS, Apps, Window or Help (*help: the program's Help, merged
+   into the desktop's) */
+static int desk_title(const char *s, int *help) {
+    unsigned char cell[WIN_MENU_LABEL];
+    int n = cells(s, cell), i;
+    *help = 0;
+    for(i = 0; i < n; i++) if(cell[i] == 0xF7) return 1;
+    if(reads_as(cell, n, "surfos") || reads_as(cell, n, "apps") || reads_as(cell, n, "window")) return 1;
+    *help = reads_as(cell, n, "help");
     return 0;
+}
+
+/* an item of the program's Help that would read as one of the desktop's own Help items, which follow it in the same
+   menu (the desktop refuses one, as desk's fix round has it) */
+static int desk_help_item(const char *s) {
+    unsigned char cell[WIN_MENU_LABEL];
+    int n = cells(s, cell);
+    return reads_as(cell, n, "keyboard and mouse") || reads_as(cell, n, "about surfos");
 }
 
 /* the bar's cells so far and with a title more (the Help menu is not in the bar) */
@@ -221,10 +240,15 @@ int gk_submenu(struct gk *ui, int menu, int id, const char *label, unsigned flag
 
 static int item(struct gk *ui, int menu, unsigned id, unsigned flags, const char *label, unsigned shortcut, int radio) {
     struct gk_menus *m = ui->menus;
+    char cut[WIN_MENU_LABEL];
     int last, most;
     if(!m || menu < 0 || menu >= m->numbers) return -1;
     most = menu == m->help ? WIN_MENU_HELP_ITEMS : WIN_MENU_ITEMS;
     if(count_of(m, menu, &last) >= most) return -1;
+    if(menu == m->help && !(flags & WIN_MENU_SEPARATOR)) {
+        put_label(cut, sizeof(cut), label);
+        if(desk_help_item(cut)) return -1;              /* About SurfOS is the desktop's */
+    }
     return add(m, menu, id, flags, label, shortcut, radio, -1);
 }
 
@@ -374,6 +398,16 @@ int gk_choose(struct gk *ui, int id, int kind, const char *dir, const char *name
             ui->choosing = 1;
             return 0;
         }
+        if(errno == EAGAIN) {                           /* the events first: asked again once they are read */
+            if(!(ui->later = malloc(sizeof(*ui->later)))) {
+                ui->failed = 1;
+                errno = ENOMEM;
+                return -1;
+            }
+            *ui->later = d;
+            ui->choosing = 1;
+            return 0;
+        }
         if(errno != ENOSYS) return -1;                  /* EINVAL, EBUSY, EACCES: the program hears why */
     }
     /* no choosers here: the path typed, in a line over the window, which starts in dir with name offered */
@@ -382,6 +416,22 @@ int gk_choose(struct gk *ui, int id, int kind, const char *dir, const char *name
              kind == WIN_DLG_FOLDER ? "" : name);
     gk_box_chooser(ui, id, titles[kind], dir, path);
     return 0;
+}
+
+/* a request the desktop had no room for, asked again now that the window's events were read: taken, left waiting
+   while the events still fill the queue, or answered as cancelled when the desktop refuses it now */
+void gk_choose_again(struct gk *ui) {
+    struct win_dialog *d = ui->later;
+    int r;
+    if(!d) return;
+    r = gw_dialog(ui->win, d);
+    if(r < 0 && errno == EAGAIN) return;
+    ui->later = NULL;
+    if(r < 0) {
+        ui->choosing = 0;
+        gk_post_text(ui, GK_EV_CHOSEN, (int)d->id, 0, NULL, 0);
+    }
+    free(d);
 }
 
 /* WIN_EV_DIALOG: the path taken now (WIN_TAKE, which works after a hang-up too), and the program told */

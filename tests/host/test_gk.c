@@ -999,6 +999,10 @@ static void menus(void) {
     gkf_key(19, WIN_MOD_CTRL);                          /* Save, enabled now */
     run(ui);
     CHECK(heard(GK_EV_MENU, 11));
+    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_REPEAT | 0x80);  /* held down, and a bit no one knows yet: the bits that count */
+    gkf_key(19, WIN_MOD_CTRL | WIN_MOD_ALT);            /* Ctrl+Alt+S is another key */
+    run(ui);
+    CHECK(count(GK_EV_MENU) == 1 && heard(GK_EV_MENU, 11) && count(GK_EV_KEY) == 1 && got[ngot - 1].type == GK_EV_KEY);
     /* no room: the bar's width, eight menus, fifteen entries in a menu */
     CHECK(gk_menu(ui, "A title far too long for the bar") < 0);
     for(i = 0; i < 6; i++) CHECK(gk_menu(ui, "M") == 2 + i);
@@ -1028,6 +1032,8 @@ static void submenus(void) {
     struct gk *ui = window("Submenus", 300, 200);
     struct gk_widget *a;
     static const struct win_menu_item bad[2] = { { 0, WIN_MENU_TITLE, "File", "" }, { 1, 0, "Op\x85n", "" } };
+    static const struct win_menu_item help_bad[2] = { { 0, WIN_MENU_TITLE | WIN_MENU_HELP, "Help", "" },
+                                                      { 1, 0, "About SurfOS", "" } };
     int view, speed, empty, off, help, i;
     a = gk_area(gk_root(ui), 2, GK_FOCUSABLE, NULL, NULL);
     CHECK(gk_menu(ui, "Apps") < 0 && gk_menu(ui, " window ") < 0 && gk_menu(ui, "SURFOS") < 0 &&
@@ -1046,6 +1052,8 @@ static void submenus(void) {
     CHECK(gk_menu_item(ui, view, 21, "Bad \x01\x7f\xc2\x85\xff\xe0\x80\x80 end", 0, 0) == 0);
     help = gk_menu(ui, "Help");
     CHECK(help == 4 && gk_menu(ui, "help") < 0 && gk_submenu(ui, help, 29, "Sub", 0) < 0);
+    CHECK(gk_menu_item(ui, help, 61, "About SurfOS", 0, 0) < 0 &&   /* the desktop's own Help items, which follow */
+          gk_menu_item(ui, help, 61, " keyboard AND mouse\xc2\xa0", 0, 0) < 0);
     for(i = 0; i < WIN_MENU_HELP_ITEMS; i++) CHECK(gk_menu_item(ui, help, 40 + i, "About", 0, 0) == 0);
     CHECK(gk_menu_item(ui, help, 60, "One more", 0, 0) < 0);
     for(i = 3; i < WIN_MENU_ITEMS; i++) CHECK(gk_menu_item(ui, speed, 70 + i, "x", 0, 0) == 0);
@@ -1059,6 +1067,7 @@ static void submenus(void) {
     CHECK(entry("Greyed")->flags == (WIN_MENU_SUBMENU | WIN_MENU_DISABLED) && entry("Hidden")->flags == WIN_MENU_CHILD);
     CHECK(gkf_menu_find("Bad ??????? end") >= 0 && !strcmp(entry("Zoom in")->keys, "Ctrl++"));
     CHECK(gw_menu(gk_gw(ui), bad, 2) < 0 && errno == EINVAL);   /* (the fake holds a label to the kernel's rule) */
+    CHECK(gw_menu(gk_gw(ui), help_bad, 2) < 0 && errno == EINVAL);
     /* chosen in a submenu: the menu it is in; never a greyed submenu's */
     CHECK(gkf_menu_choose(30) && !gkf_menu_choose(25) && !gkf_menu_choose(50));
     run(ui);
@@ -1081,6 +1090,43 @@ static void submenus(void) {
     gkf_key(WIN_KEY_F7, 0);
     run(ui);
     CHECK(heard(GK_EV_MENU, 50) && entry("Greyed")->flags == WIN_MENU_SUBMENU);
+    gk_close(ui);
+}
+
+/* desk's fix round: a drag starts only from a press the window saw over the widget. A button held since a press
+   outside a box (nobody's) is no drag over a field once the box has gone, and an area hears it as a hover */
+static void drags(void) {
+    struct gk *ui = window("Drags", 300, 200);
+    struct gk_widget *f, *a;
+    int x, y, w, h, i, held = 0;
+    f = gk_field(gk_root(ui), 1, 40, 0);
+    a = gk_area(gk_root(ui), 2, GK_FOCUSABLE, NULL, NULL);
+    gk_grow(a, 1, 1);
+    run(ui);
+    gk_set_text(f, "abcdef");
+    gk_focus(f);
+    gkf_key(WIN_KEY_END, 0);
+    gk_message(ui, 9, "Over", "", "");
+    run(ui);
+    gkf_pointer(2, 198, WIN_BUTTON_LEFT);               /* outside the box: nobody's press */
+    gkf_key(27, 0);                                     /* the box answered, gone */
+    run(ui);
+    gk_bounds(f, &x, &y, &w, &h);
+    gkf_pointer(x + 4, y + 10, WIN_BUTTON_LEFT);        /* still held, over the field's start */
+    gk_bounds(a, &x, &y, &w, &h);
+    gkf_pointer(x + 10, y + 10, WIN_BUTTON_LEFT);       /* and over the area */
+    gkf_pointer(x + 12, y + 12, 0);
+    run(ui);
+    for(i = 0; i < ngot; i++) if(got[i].type == GK_EV_POINTER && got[i].buttons) held++;
+    CHECK(held == 0 && heard(GK_EV_POINTER, 2));
+    gkf_type("X");
+    run(ui);
+    CHECK(!strcmp(gk_text(f), "abcdefX"));              /* no selection made: the cursor still at the end */
+    gk_bounds(a, &x, &y, &w, &h);                       /* a press it saw: a drag, the buttons told */
+    gkf_drag(x + 10, y + 10, x + 40, y + 30);
+    run(ui);
+    for(i = 0, held = 0; i < ngot; i++) if(got[i].type == GK_EV_POINTER && got[i].buttons) held++;
+    CHECK(held >= 2);
     gk_close(ui);
 }
 
@@ -1111,6 +1157,12 @@ static void paste(void) {
     CHECK(gk_paste(ui, buf, 5) == 4 && !strcmp(buf, "ab\xc3\xa9"));
     gkf_set_paste(NULL);
     CHECK(gk_paste(ui, buf, 5) == 0 && !strcmp(buf, ""));
+    /* the window's own copy, not yet the desktop's clipboard, is pasted (desk's kernel: it is the newer), and a newer
+       clipboard after it */
+    gkf_set_paste("old");
+    CHECK(gk_copy(ui, "mine", 4) == 0 && gk_paste(ui, buf, 8) == 4 && !strcmp(buf, "mine"));
+    gkf_set_paste("newer");
+    CHECK(gk_paste(ui, buf, 8) == 5 && !strcmp(buf, "newer"));
     gkf_set_paste("x");
     gkf_focus(0);                                       /* without the focus: nothing */
     run(ui);
@@ -1135,6 +1187,7 @@ static int answering(struct gk *ui) {
 static void choosers(void) {
     struct gk *ui = window("Choose", 500, 300);
     const struct win_dialog *d;
+    int i;
     int bx = (500 - 470) / 2, by = (300 - 160) / 2;
     gk_label(gk_root(ui), "files");
     run(ui);
@@ -1211,6 +1264,42 @@ static void choosers(void) {
     gk_dismiss(ui);
     run(ui);
     gkf_lacks(0, 0);
+    /* 11/05/26, desk's implementation: no room for the answer (EAGAIN, while WIN_EVENTS events wait unread): the
+       request kept, and asked again once they are read; refused by then (the focus gone): answered as cancelled */
+    CHECK(answering(ui));
+    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    CHECK(gk_choose(ui, 42, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
+    CHECK(gk_choose(ui, 43, WIN_DLG_OPEN, "/", "", "") < 0 && errno == EBUSY);
+    run(ui);
+    CHECK(gkf_dialog() && gkf_dialog()->id == 42);
+    gkf_dialog_answer("/b");
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 42) && heard(GK_EV_CHOSEN, 42)->value == 1 && !strcmp(heard(GK_EV_CHOSEN, 42)->text, "/b"));
+    CHECK(answering(ui));
+    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    CHECK(gk_choose(ui, 44, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
+    gkf_focus(0);
+    run(ui);
+    CHECK(!gkf_dialog() && heard(GK_EV_CHOSEN, 44) && heard(GK_EV_CHOSEN, 44)->value == 0);
+    gkf_focus(1);
+    run(ui);
+    /* desk's fix round: a request while an answer's path waits to be taken is EBUSY; the toolkit takes the path as the
+       answer comes, so its own next request is never refused for it */
+    CHECK(answering(ui) && gk_choose(ui, 47, WIN_DLG_OPEN, "/", "", "") == 0);
+    gkf_dialog_answer("/c");
+    gkf_key(WIN_KEY_F12, 0);
+    {
+        struct win_dialog dd;
+        memset(&dd, 0, sizeof(dd));
+        dd.kind = WIN_DLG_OPEN;
+        CHECK(gw_dialog(gk_gw(ui), &dd) < 0 && errno == EBUSY);
+    }
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 47) && !strcmp(heard(GK_EV_CHOSEN, 47)->text, "/c"));
+    CHECK(answering(ui) && gk_choose(ui, 48, WIN_DLG_OPEN, "/", "", "") == 0);
+    gkf_dialog_answer(NULL);
+    run(ui);
+    CHECK(heard(GK_EV_CHOSEN, 48) && heard(GK_EV_CHOSEN, 48)->value == 0);
     /* a chooser asked just before the desktop let the window go: answered 0; a path chosen just before is still taken */
     CHECK(answering(ui) && gk_choose(ui, 40, WIN_DLG_OPEN, "/", "", "") == 0 && gkf_dialog());
     gkf_gone();
@@ -1525,6 +1614,7 @@ int main(void) {
     bursts();
     menus();
     submenus();
+    drags();
     paste();
     choosers();
     theme();
