@@ -1683,6 +1683,45 @@ static void again_lows(void) {
     gk_close(ui);
 }
 
+/* (the integration, L1) a key and a descriptor ready in one turn queue the key first; the program unwatches and closes
+   the descriptor on that key, and no GK_EV_FD of it follows, though a new pipe may have its number by then. Round the
+   ring's end, the events before and after the descriptor's keep their order and their text */
+static void unwatched(void) {
+    struct gk *ui = window("Unwatched", 200, 100);
+    struct gk_event ev, *e;
+    int fds[2], more[2];
+    run(ui);
+    CHECK(pipe(fds) == 0 && write(fds[1], "z", 1) == 1 && gk_watch(ui, fds[0], POLLIN, 90) == 0);
+    gkf_key(WIN_KEY_F12, 0);
+    CHECK(gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_KEY && ui->qcount == 1);   /* its GK_EV_FD waits behind */
+    CHECK(ui->queue[ui->qhead].type == GK_EV_FD && ui->queue[ui->qhead].x == fds[0]);
+    gk_unwatch(ui, fds[0]);
+    close(fds[0]);
+    close(fds[1]);
+    CHECK(pipe(more) == 0 && write(more[1], "y", 1) == 1);  /* a new pipe, its number likely the old one's */
+    CHECK(gk_next(ui, &ev, 0) == 0);
+    close(more[0]);
+    close(more[1]);
+    CHECK(ui->qcount == 0);
+    ui->qhead = GK_QUEUE - 1;                           /* the queue empty: its next three places wrap round */
+    CHECK(pipe(fds) == 0 && gk_watch(ui, fds[0], POLLIN, 91) == 0);
+    gk_post_text(ui, GK_EV_CHOSEN, 1, 1, "/before", -1);
+    if((e = gk_post_ev(ui, GK_EV_FD, NULL, POLLIN))) {
+        e->id = 91;
+        e->x = fds[0];
+    }
+    gk_post_text(ui, GK_EV_CHOSEN, 2, 1, "/after", -1);
+    CHECK(ui->qcount == 3);
+    gk_unwatch(ui, fds[0]);
+    CHECK(ui->qcount == 2);
+    CHECK(gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_CHOSEN && ev.id == 1 && !strcmp(ev.text, "/before"));
+    CHECK(gk_next(ui, &ev, 0) == 1 && ev.type == GK_EV_CHOSEN && ev.id == 2 && !strcmp(ev.text, "/after"));
+    CHECK(gk_next(ui, &ev, 0) == 0);
+    close(fds[0]);
+    close(fds[1]);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -2184,6 +2223,7 @@ int main(void) {
     fuzz();
     again_keys();
     again_lows();
+    unwatched();
     paste();
     choosers();
     theme();

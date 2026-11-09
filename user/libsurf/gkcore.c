@@ -964,13 +964,14 @@ int gk_timer(struct gk *ui, int id, int ms, int repeat) {
     return 0;
 }
 
-void gk_timer_stop(struct gk *ui, int id) {
-    int i, k, n = 0;
-    for(i = 0; i < GK_TIMERS; i++) if(ui->timers[i].on && ui->timers[i].id == id) ui->timers[i].on = 0;
-    for(k = 0; k < ui->qcount; k++) {                   /* (the re-review, N3) its events not given yet go too: a key and
-                                                           the timer due in one turn queue the key first */
+/* the events not given yet of a timer (GK_EV_TIMER, id) or of a descriptor (GK_EV_FD, x) go, their text wiped; the
+   others keep their order and text, the ring closed up round its end */
+static void drop_queued(struct gk *ui, int type, int key) {
+    int k, n = 0;
+    for(k = 0; k < ui->qcount; k++) {
         int from = (ui->qhead + k) % GK_QUEUE, to = (ui->qhead + n) % GK_QUEUE;
-        if(ui->queue[from].type == GK_EV_TIMER && ui->queue[from].id == id) {
+        const struct gk_event *e = &ui->queue[from];
+        if(e->type == type && (type == GK_EV_FD ? e->x : e->id) == key) {
             if(ui->qtext[from]) {
                 gk_wipe(ui->qtext[from], strlen(ui->qtext[from]));
                 free(ui->qtext[from]);
@@ -986,6 +987,13 @@ void gk_timer_stop(struct gk *ui, int id) {
         n++;
     }
     ui->qcount = n;
+}
+
+void gk_timer_stop(struct gk *ui, int id) {
+    int i;
+    for(i = 0; i < GK_TIMERS; i++) if(ui->timers[i].on && ui->timers[i].id == id) ui->timers[i].on = 0;
+    drop_queued(ui, GK_EV_TIMER, id);                   /* (the re-review, N3) its events not given yet go too: a key
+                                                           and the timer due in one turn queue the key first */
 }
 
 /* the timers that are due: their events (a repeating one keeps its beat, and skips the beats it missed) */
@@ -1056,6 +1064,10 @@ int gk_watch(struct gk *ui, int fd, short events, int id) {
 void gk_unwatch(struct gk *ui, int fd) {
     int i;
     for(i = 0; i < GK_WATCHES; i++) if(ui->watches[i].fd == fd + 1) ui->watches[i].fd = 0;
+    drop_queued(ui, GK_EV_FD, fd);                      /* (the integration, L1) as a timer's: a key and the descriptor
+                                                           ready in one turn queue the key first, and a program that
+                                                           unwatches and closes on it must not hear of the number,
+                                                           which a new descriptor may have by then */
 }
 
 int gk_copy(struct gk *ui, const char *text, unsigned len) {
