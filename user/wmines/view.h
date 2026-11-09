@@ -5,9 +5,9 @@ File: view.h    Date: 11/05/26
 --------------------
 Mines in its window, without the drawing (view.c): the field laid out in the board, the area of
 the window between its toolbar and its status bar; what each cell looks like, the keyboard's
-cursor, what a key or the pointer does, the status bar's line, closing while a game is under way,
-and the session's scores (the best time of each field, the games played and won), which last while
-the program runs and are never written anywhere. window.c draws what this says and talks to the
+cursor, what a key or the pointer does, the status bar's line, the questions before closing or
+starting anew while a game is under way, and the session's scores (the best time of each field,
+the games played and won), which last while the program runs and are never written anywhere. window.c draws what this says and talks to the
 desktop through the toolkit (gk.h); tests/host/test_wmines.c runs this on the host as it is.
 */
 #ifndef _WMINES_VIEW_H
@@ -21,7 +21,13 @@ desktop through the toolkit (gk.h); tests/host/test_wmines.c runs this on the ho
 #define MV_BAR_H 34                     /* the window's toolbar and status bar (gk.h's), and the room around the field */
 #define MV_STATUS_H 22
 #define MV_MARGIN 10
-#define MV_MIN_W 440                    /* the narrowest window: the toolbar's buttons and counters */
+/* the smallest window (the review of 11/05/26): the toolbar at its natural width (New 64, the sizes' buttons 220, the
+   counters 80 and 96, which hold "Mines -100" and "Time 1:02:03", 12 apart and 5 in from the edges, with the spacer's
+   two gaps), which is wider than the large field's 28 cells of MV_CELL_MIN and its margins (468); as tall as those
+   cells' 15 rows need under the toolbar and over the status bar. A box's lines of 50 characters fit in it (gk.h's
+   boxes show (the window's width - 48) / 8). test_wmines_window.c opens the window there */
+#define MV_MIN_W 518
+#define MV_MIN_H (MV_BAR_H + 15 * MV_CELL_MIN + 2 * MV_MARGIN + MV_STATUS_H)
 #define MV_STATUS 112
 
 /* the keys that are no bytes (surfos/win.h's WIN_KEY_*) */
@@ -61,11 +67,16 @@ struct mview {
     unsigned buttons;                   /* the pointer's buttons as last seen */
     int held;                           /* a left press began on the field and is held */
     int px, py;                         /* the cell under it (-1: off the field) */
-    int asking;                         /* closing asked about while a game is under way: main.c's question */
-    unsigned best[MINES_SIZES];         /* the session's: each field's best time in ms (0: none won yet) */
+    int asking;                         /* the question main.c asks while a game is under way (MV_ASK_*), 0 none */
+    int ask_size;                       /* the field a new game was asked for in */
+    unsigned best[MINES_SIZES];         /* the session's: each field's best time in ms, once won[] says one was won */
     int played[MINES_SIZES], won[MINES_SIZES];
     char status[MV_STATUS];             /* what the last move said, until the next */
 };
+
+/* the questions, Cancel first */
+#define MV_ASK_CLOSE 1                  /* closing the window */
+#define MV_ASK_NEW 2                    /* a new game in its place (N, 1 to 3, New, the sizes, the Game menu) */
 
 /* what a key or the pointer asks main.c to do besides drawing again */
 #define MV_DRAW 1                       /* draw again */
@@ -74,6 +85,9 @@ struct mview {
 
 void mview_init(struct mview *v, unsigned seed);
 void mview_new(struct mview *v, int size);              /* a new game: of that field, the seed from v->rng */
+/* a new game of that field asked for: at once when none is under way (MV_DRAW, or MV_RESIZE for another field);
+   with one under way, asking set (MV_DRAW: main.c asks); nothing while a question is up (0) */
+int mview_request(struct mview *v, int size);
 /* the window's content size for a field, as large as MV_CELL cells make it within max_w x max_h (0: no limit) */
 void mview_window(int size, int max_w, int max_h, int *w, int *h);
 /* the field laid out in the board of w x h, in the middle: 1 when that changed anything */
@@ -90,7 +104,8 @@ int mview_pointer(struct mview *v, int x, int y, unsigned buttons, unsigned pres
    reveals nothing: MV_DRAW when one was */
 int mview_cancel(struct mview *v);
 int mview_close(struct mview *v);                       /* MV_CLOSE, or MV_DRAW with asking set */
-int mview_answer(struct mview *v, int close);           /* the question answered: MV_CLOSE, or MV_DRAW */
+/* the question answered, yes (Close, New field) or not: MV_CLOSE, MV_RESIZE or MV_DRAW (0: there was none) */
+int mview_answer(struct mview *v, int yes);
 void mview_status(const struct mview *v, char *out, int n);
 void mview_record(const struct mview *v, char *out, int n);     /* the session's for the field: "Won 1 of 3, best 0:41" */
 void mview_time(unsigned ms, char *out, int n);         /* 0:42, from an hour on 1:02:03 */

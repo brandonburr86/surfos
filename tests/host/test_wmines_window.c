@@ -5,8 +5,11 @@
    cells that changed presented; the keyboard's cursor shown while the board has the keys, Space and F; the field's
    size by the toolbar, the Game menu and the keys, its check in the menu following; a game won by clicks and the
    session's record; a game lost, its mines shown; the close button and Esc asking during a game (Cancel first),
-   Close ending it, closing at once otherwise; Help; a new size and a new theme painting the board again. Built and
-   run by `make unittest`. */
+   Close ending it, closing at once otherwise; Help; a new size and a new theme painting the board again. The review
+   of 11/05/26: a new field during a game (the sizes' buttons, Ctrl+N) asked about first, Cancel first, Cancel keeping
+   the game and the size shown; the mine that went off a splash of SurfOS's own (no coral); the window at its own
+   smallest size (no smaller taken): the toolbar whole, the large field within the board, the Help's and the questions'
+   lines whole. Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -19,8 +22,11 @@ static int checks, failed;
 
 #define C_COVER 0xDCCB9E                /* window.c's colours */
 #define C_OPEN 0xF7F3E8
-#define C_BLAST 0xEE906D
+#define C_SPLASH 0x659ECB
+#define C_RING 0xE8F6F1
+#define C_CORAL 0xEE906D                /* (the old look's blast: no more) */
 #define C_MINE 0x102E3B
+#define C_HOOP 0x197D83
 #define C_FLAG 0x197D83
 #define C_CURSOR 0xE0603F
 
@@ -71,6 +77,31 @@ static int status_says(const char *s) {
 static int find_text(const char *s, unsigned color) {
     int x, y;
     return gkf_find(s, color, &x, &y);
+}
+
+/* a box's lines, whole (gkbox.c: the title on teal, the first line in ink, the second muted) */
+static int box_says(const char *title, const char *line1, const char *line2) {
+    return gk_box_open(m.ui) && find_text(title, GW_PAPER) && (!*line1 || find_text(line1, GW_INK)) &&
+           (!*line2 || find_text(line2, GW_MUTED));
+}
+
+/* the question's buttons: Cancel first, the default, then the other */
+static int cancel_first(const char *other) {
+    int cx, cy, ox, oy;
+    return gkf_find("Cancel", GW_PAPER, &cx, &cy) && gkf_find(other, GW_INK, &ox, &oy) && cx < ox && cy == oy;
+}
+
+/* where a widget ends, and starts */
+static int right_of(struct gk_widget *g) {
+    int x, y, w, h;
+    gk_bounds(g, &x, &y, &w, &h);
+    return x + w;
+}
+
+static int left_of(struct gk_widget *g) {
+    int x, y, w, h;
+    gk_bounds(g, &x, &y, &w, &h);
+    return x;
 }
 
 /* every clear cell clicked: the game won */
@@ -155,13 +186,27 @@ int main(void) {
     gkf_key(27, 0);
     CHECK(run() && !gk_box_open(m.ui));
     /* the field's size: the toolbar's radio buttons, the menu, the keys; the menu's check follows */
+    /* during the game a new size is asked about first (the review of 11/05/26), Cancel first: Cancel keeps the game and
+       the size shown; New field lays the new one */
     gkf_advance(600);
     {
         int rx, ry;
         CHECK(gkf_find("Large", GW_INK, &rx, &ry));
         gkf_click(rx + 4, ry + 4);
+        CHECK(run() && gk_asking(m.ui) == BOX_NEW && m.v.size == MINES_SMALL && m.v.game.state == MINES_PLAYING);
+        CHECK(box_says("Start a new field?", "A game is under way: a new field ends it.", "") &&
+              cancel_first("New field"));
+        gkf_key('\r', 0);
+        CHECK(run() && !gk_box_open(m.ui) && m.v.size == MINES_SMALL && gk_value(m.size) == MINES_SMALL);
+        CHECK(m.v.game.state == MINES_PLAYING && corner(4, 3) == C_OPEN && gk_focused(m.ui) == m.board);
+        gkf_advance(600);
+        gkf_click(rx + 4, ry + 4);
+        CHECK(run() && gk_asking(m.ui) == BOX_NEW);
+        gkf_key(WIN_KEY_RIGHT, 0);                      /* to New field */
+        gkf_key('\r', 0);
     }
     CHECK(run() && m.v.size == MINES_LARGE && m.v.game.w == 28 && gk_focused(m.ui) == m.board);
+    CHECK(m.v.played[0] == 1 && m.v.won[0] == 0);       /* the game left counts as played */
     CHECK(m.v.cell == 24 && status_says("80 mines in 28 by 15: click a cell to begin"));
     CHECK(gkf_menu_entry(gkf_menu_find("Large field (28 by 15)"))->flags & WIN_MENU_RADIO);
     CHECK(!(gkf_menu_entry(gkf_menu_find("Small field (10 by 8)"))->flags & WIN_MENU_RADIO));
@@ -171,7 +216,10 @@ int main(void) {
     CHECK(run() && m.v.size == MINES_SMALL && m.v.cell == MV_CELL_MAX);
     click(0, 0, WIN_BUTTON_LEFT);
     CHECK(run() && m.v.game.state == MINES_PLAYING);
-    gkf_key(14, WIN_MOD_CTRL);          /* Ctrl+N: the field again, new */
+    gkf_key(14, WIN_MOD_CTRL);          /* Ctrl+N: the field again, new, once asked */
+    CHECK(run() && gk_asking(m.ui) == BOX_NEW && m.v.game.state == MINES_PLAYING);
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key('\r', 0);
     CHECK(run() && m.v.game.state == MINES_READY && m.v.played[0] == 2);
     /* a game won by clicks: the status bar and the session's record */
     click(5, 4, WIN_BUTTON_LEFT);
@@ -193,7 +241,7 @@ int main(void) {
     CHECK(!run() && closed);
     mw_close(&m);
     CHECK(!gkf_open());
-    /* a game lost: the mines shown, the one that went off on coral */
+    /* a game lost: the mines shown, the one that went off a splash (a ring of foam on sky blue; no coral) */
     gkf_reset(0, 0);
     closed = 0;
     CHECK(mw_open(&m, 7) == 0);
@@ -203,9 +251,11 @@ int main(void) {
     run();
     for(i = 0; i < 80; i++) if(m.v.game.cell[i] & MINE_HERE) break;
     click(i % 10, i / 10, WIN_BUTTON_LEFT);
-    CHECK(run() && m.v.game.state == MINES_LOST && corner(i % 10, i / 10) == C_BLAST && shows(i % 10, i / 10, C_MINE));
+    CHECK(run() && m.v.game.state == MINES_LOST && corner(i % 10, i / 10) == C_SPLASH && shows(i % 10, i / 10, C_MINE));
+    CHECK(shows(i % 10, i / 10, C_RING) && shows(i % 10, i / 10, C_HOOP) && !shows(i % 10, i / 10, C_CORAL));
     for(n = i + 1; n < 80; n++) if(m.v.game.cell[n] & MINE_HERE) break;
-    CHECK(n < 80 && corner(n % 10, n / 10) == C_OPEN && shows(n % 10, n / 10, C_MINE));
+    CHECK(n < 80 && corner(n % 10, n / 10) == C_OPEN && shows(n % 10, n / 10, C_MINE) && shows(n % 10, n / 10, C_HOOP));
+    CHECK(!shows(n % 10, n / 10, C_RING) && !shows(n % 10, n / 10, C_CORAL));
     CHECK(gkf_find("A mine went off after 0:00", GW_INK, &x, &y));
     /* Help, in the desktop's Help */
     CHECK(gkf_menu_choose(MENU_HELP) && run() && gk_box_open(m.ui) && gk_asking(m.ui) == BOX_HELP);
@@ -229,6 +279,34 @@ int main(void) {
     CHECK(run() && m.v.size == MINES_LARGE && m.v.cell == MV_CELL_MIN);
     cell_xy(27, 14, &px, &py);
     CHECK(px + MV_CELL_MIN <= 638 && py + MV_CELL_MIN <= 317 - GK_STATUS_H && corner(27, 14) == C_COVER);
+    mw_close(&m);
+    /* the window at its own smallest size (the review of 11/05/26: the toolbar and the large field were cut, the Help's
+       second line too): no smaller taken; the toolbar's widgets whole, apart, inside; the large field within the board;
+       the Help's and the questions' lines whole */
+    gkf_reset(0, 0);
+    CHECK(mw_open(&m, 13) == 0);
+    gkf_focus(1);
+    gkf_resize(MV_MIN_W, MV_MIN_H);
+    gkf_key('3', 0);
+    CHECK(run() && gkf_w() == MV_MIN_W && gkf_h() == MV_MIN_H && m.v.size == MINES_LARGE && m.v.cell == MV_CELL_MIN);
+    gkf_resize(MV_MIN_W - 1, MV_MIN_H);
+    gkf_resize(MV_MIN_W, MV_MIN_H - 1);
+    CHECK(run() && gkf_w() == MV_MIN_W && gkf_h() == MV_MIN_H);
+    CHECK(right_of(m.clock) <= MV_MIN_W - 5 && left_of(m.clock) >= right_of(m.left) + 12);
+    CHECK(left_of(m.left) >= right_of(m.size) + 12 && find_text("Time 0:00", GW_INK) && find_text("Mines 80", GW_INK));
+    cell_xy(27, 14, &px, &py);
+    CHECK(px + MV_CELL_MIN <= MV_MIN_W && py + MV_CELL_MIN <= MV_MIN_H - GK_STATUS_H && corner(27, 14) == C_COVER);
+    CHECK(strlen(MW_HELP_1) <= 50 && strlen(MW_HELP_2) <= 50);
+    CHECK(gkf_menu_choose(MENU_HELP) && run() && box_says("Playing Mines", MW_HELP_1, MW_HELP_2));
+    gkf_key('\r', 0);
+    click(13, 7, WIN_BUTTON_LEFT);
+    CHECK(run() && m.v.game.state == MINES_PLAYING);
+    gkf_key('n', 0);
+    CHECK(run() && box_says("Start a new field?", "A game is under way: a new field ends it.", "") &&
+          cancel_first("New field"));
+    gkf_key(27, 0);
+    gkf_key(27, 0);
+    CHECK(run() && box_says("Close Mines?", "A game is under way: it ends with the window.", "") && cancel_first("Close"));
     mw_close(&m);
     gkf_reset(0, 0);
     printf("test_wmines_window: %d checks, %d failed\n", checks, failed);

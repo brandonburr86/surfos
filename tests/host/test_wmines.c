@@ -8,7 +8,10 @@
    thousands of random games against a count of the field's own. The window's model: its sizes on the laptop's and
    the smallest desktop's room, the layout and the cell under the pointer, a press taken back, the pressed cells,
    flags and chords by the buttons, the keyboard's cursor, closing during a game, and the session's scores. The
-   drawing is checked on the screen (tools/gui_apps_games.py). Built and run by `make unittest`. */
+   review of 11/05/26: a new game asked for during one (N, 1 to 3, the toolbar, the menu) asked first, the game kept
+   on Cancel and counted as played on yes, nothing more taken while a question is up; a field won in no time keeping
+   its best; the smallest window holding the large field. The drawing is checked on the screen
+   (tools/gui_apps_games.py). Built and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "mines.h"
@@ -331,7 +334,7 @@ static void sizes(void) {
         board(s, rooms[r][0], rooms[r][1], &w, &h);
         bh = h - MV_BAR_H - MV_STATUS_H;
         if(rooms[r][0] && (w > rooms[r][0] || h > rooms[r][1])) ok = 0;
-        if(v.cell < MV_CELL_MIN || v.cell > MV_CELL) ok = 0;
+        if(v.cell < MV_CELL_MIN || v.cell > (w == MV_MIN_W || h == MV_MIN_H ? MV_CELL_MAX : MV_CELL)) ok = 0;
         if(v.fx < MV_MARGIN || v.fx + v.game.w * v.cell > w - MV_MARGIN) ok = 0;
         if(v.fy < MV_MARGIN || v.fy + v.game.h * v.cell > bh - MV_MARGIN) ok = 0;
         for(cy = 0; cy < v.game.h; cy++) for(cx = 0; cx < v.game.w; cx++) {
@@ -345,7 +348,10 @@ static void sizes(void) {
     mview_window(MINES_SMALL, 958, 457, &w, &h);
     CHECK(w == MV_MIN_W);                               /* the toolbar's width */
     board(MINES_LARGE, 638, 317, &w, &h);
-    CHECK(h <= 317 && w == 28 * 16 + 20 && v.cell == 16);  /* the smallest desktop: 16-pixel cells */
+    CHECK(h <= 317 && w == MV_MIN_W && v.cell == 16);  /* the smallest desktop: 16-pixel cells, the toolbar's width */
+    CHECK(MV_MIN_W >= 28 * MV_CELL_MIN + 2 * MV_MARGIN && h == MV_MIN_H);  /* the smallest window holds the large field */
+    mview_window(MINES_SMALL, 300, 200, &w, &h);
+    CHECK(w == MV_MIN_W && h == MV_MIN_H);              /* never under the smallest */
     CHECK(!mview_cell_at(&v, v.fx - 1, at_y(0), &cx, &cy) && !mview_cell_at(&v, at_x(0), v.fy - 1, &cx, &cy));
     CHECK(!mview_cell_at(&v, v.fx + v.game.w * v.cell, at_y(0), &cx, &cy));
     CHECK(!mview_cell_at(&v, at_x(0), v.fy + v.game.h * v.cell, &cx, &cy));
@@ -552,6 +558,73 @@ static void scores_and_loss(void) {
     CHECK(mview_close(&v) == MV_CLOSE && mview_look(&v, -1, 0) == MV_COVERED);
 }
 
+/* the review of 11/05/26: N, 1 to 3, New and the sizes threw a game under way away unasked. Now a new game asked for
+   during one is asked about, Cancel first: Cancel keeps it, yes starts the new one (the game left counted as played,
+   from its first reveal); the question has the keys and the pointer, and another new game or a second question asked
+   for meanwhile is not taken, but the close button's question takes the new game's place */
+static void new_game_asked(void) {
+    int w, h, open;
+    char t[64];
+    mview_init(&v, 21);
+    board(MINES_SMALL, 958, 457, &w, &h);
+    CHECK(mview_request(&v, MINES_SMALL) == MV_DRAW && v.game.state == MINES_READY && !v.asking);  /* none under way */
+    CHECK(mview_request(&v, MINES_MEDIUM) == MV_RESIZE && v.size == MINES_MEDIUM && !v.asking);
+    CHECK(mview_key(&v, '1', 0, 0) == MV_RESIZE && v.size == MINES_SMALL);
+    board(MINES_SMALL, 958, 457, &w, &h);
+    click(MV_BUTTON_LEFT, 4, 3, 1000);
+    open = v.game.open;
+    CHECK(v.game.state == MINES_PLAYING && v.played[0] == 1 && open > 0);
+    CHECK(mview_key(&v, 'n', 0, 2000) == MV_DRAW && v.asking == MV_ASK_NEW && v.ask_size == MINES_SMALL);
+    CHECK(mview_key(&v, '3', 0, 2000) == 0 && mview_request(&v, MINES_LARGE) == 0 && v.ask_size == MINES_SMALL);
+    CHECK(click(MV_BUTTON_LEFT, 0, 0, 2000) == 0 && v.game.open == open);
+    CHECK(mview_answer(&v, 0) == MV_DRAW && !v.asking && v.game.state == MINES_PLAYING && v.game.open == open);
+    CHECK(mview_answer(&v, 1) == 0 && v.game.state == MINES_PLAYING);      /* no question up: nothing */
+    /* 3 during the game: asked; yes: the large field, the window's size with it, the game left counted */
+    CHECK(mview_key(&v, '3', 0, 3000) == MV_DRAW && v.asking == MV_ASK_NEW && v.ask_size == MINES_LARGE);
+    CHECK(mview_answer(&v, 1) == MV_RESIZE && v.size == MINES_LARGE && v.game.state == MINES_READY && !v.asking);
+    CHECK(v.played[0] == 1 && v.won[0] == 0);
+    v.size = MINES_SMALL;
+    mview_record(&v, t, sizeof(t));
+    CHECK(!strcmp(t, "Won 0 of 1"));
+    v.size = MINES_LARGE;
+    /* the same field again by N, asked, yes: no new size */
+    board(MINES_LARGE, 958, 457, &w, &h);
+    click(MV_BUTTON_LEFT, 10, 7, 4000);
+    CHECK(v.game.state == MINES_PLAYING && mview_request(&v, MINES_LARGE) == MV_DRAW && v.asking == MV_ASK_NEW);
+    CHECK(mview_close(&v) == MV_DRAW && v.asking == MV_ASK_CLOSE);  /* the close button: its question instead */
+    CHECK(mview_answer(&v, 0) == MV_DRAW && v.game.state == MINES_PLAYING);
+    CHECK(mview_key(&v, 'N', 0, 5000) == MV_DRAW && mview_answer(&v, 1) == MV_DRAW && v.size == MINES_LARGE);
+    CHECK(v.game.state == MINES_READY && v.played[2] == 1);
+}
+
+/* the review of 11/05/26: a field won in no time (its first reveal opened it all) kept 0 as its best, which also meant
+   "none won yet": the record showed no best, and the next, slower, win took its place. The count of wins says it */
+static void no_time(void) {
+    int w, h;
+    unsigned seed;
+    char t[64];
+    for(seed = 1; seed < 200; seed++) {                 /* one mine where the first reveal opens all the rest */
+        struct mines m;
+        mines_new(&m, 10, 8, 1, seed);
+        mines_reveal(&m, 0, 0, 0);
+        if(m.state == MINES_WON) break;
+    }
+    CHECK(seed < 200);
+    mview_init(&v, 5);
+    board(MINES_SMALL, 958, 457, &w, &h);
+    CHECK(mines_new(&v.game, 10, 8, 1, seed) == 0);
+    CHECK(click(MV_BUTTON_LEFT, 0, 0, 1000) == MV_DRAW && v.game.state == MINES_WON && v.best[0] == 0 && v.won[0] == 1);
+    status_is("Cleared in 0:00: the best this session");
+    mview_record(&v, t, sizeof(t));
+    CHECK(!strcmp(t, "Won 1 of 1, best 0:00"));
+    mview_new(&v, MINES_SMALL);                         /* a slower win: the best stays */
+    click(MV_BUTTON_LEFT, 0, 0, 0);
+    if(v.game.state == MINES_PLAYING) clear_all(5000);
+    CHECK(v.game.state == MINES_WON && v.won[0] == 2 && v.best[0] == 0);
+    mview_record(&v, t, sizeof(t));
+    CHECK(!strcmp(t, "Won 2 of 2, best 0:00"));
+}
+
 int main(void) {
     generator();
     refused();
@@ -564,6 +637,8 @@ int main(void) {
     pointer();
     keyboard();
     scores_and_loss();
+    new_game_asked();
+    no_time();
     printf("test_wmines: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 }

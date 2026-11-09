@@ -18,12 +18,16 @@ checks (tools/gui_apps_games.py) drive it on the desktop. The game itself is vie
 /* the ids of what the window hears from */
 enum {
     ID_NEW = 1, ID_SIZE, ID_BOARD,
-    BOX_CLOSE = 100, BOX_HELP,
+    BOX_CLOSE = 100, BOX_HELP, BOX_NEW,
     TIMER_CLOCK = 200,
     MENU_NEW = 300, MENU_SIZE, MENU_CLOSE = MENU_SIZE + MINES_SIZES, MENU_HELP,
 };
 
 #define MW_CURSOR 0x80                  /* a cell's look with the keyboard's cursor on it */
+
+/* the Help box's lines: at most 50 characters each, which the smallest window's box shows (view.h's MV_MIN_W) */
+#define MW_HELP_1 "Click a cell to reveal it, right-click to flag it."
+#define MW_HELP_2 "Arrows, Space and F play too; N starts again."
 
 struct mwin {
     struct gk *ui;
@@ -32,6 +36,7 @@ struct mwin {
     int keys;                           /* the board has the keys (GK_EV_FOCUS): the cursor shows */
     int bw, bh;                         /* the board's size the field is laid out for */
     int relayout;                       /* the field changed: laid out again at the next look */
+    int asked;                          /* the question on the screen (view.h's MV_ASK_*), 0 for none */
     unsigned char shown[MINES_MAX];     /* each cell's look as the window shows it: only what changes is painted */
 };
 

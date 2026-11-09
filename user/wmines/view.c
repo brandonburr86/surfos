@@ -14,12 +14,17 @@ moving off the field. On an open number the release chords: the covered cells ar
 pressed meanwhile. The right button flags and unflags at its press, and the middle one chords.
 The keyboard: the arrows move a cursor, which shows from the first key on, Space or Enter reveals
 (chords on a number), F flags, N starts the field again, 1 to 3 choose the field, and Esc or
-Ctrl+W close the window, asking first while a game is under way. A key held down comes again and
-again (the keyboard's repeat): the arrows move on with it, and nothing else repeats, so a flag
-held is not taken back nor a cell revealed twice.
+Ctrl+W close the window. A new game asked for while one is under way, by a key, the toolbar or
+the Game menu, and closing then, are asked about first, Cancel first (the review of 11/05/26: a
+new game threw one away unasked); the question has the keys and the pointer, and another new game
+asked for meanwhile is not taken. A key held down comes again and again (the keyboard's repeat):
+the arrows move on with it, and nothing else repeats, so a flag held is not taken back nor a cell
+revealed twice.
 
-A game counts as played from its first reveal. The best time of each field, and the games played
-and won, last while the program runs; nothing is written to a file.
+A game counts as played from its first reveal, so one left for a new one counts too. The best
+time of each field, and the games played and won, last while the program runs; nothing is
+written to a file. A field is won in no time when its first reveal opens it all: its best is 0
+then, which is why the count of games won, not the time, says whether there is a best.
 */
 #include <stdio.h>
 #include <string.h>
@@ -47,6 +52,19 @@ void mview_new(struct mview *v, int size) {
     v->status[0] = 0;
 }
 
+int mview_request(struct mview *v, int size) {
+    int was = v->size;
+    if(v->asking) return 0;             /* a question is up: it is answered first */
+    if(size < 0 || size >= MINES_SIZES) size = MINES_SMALL;
+    if(v->game.state == MINES_PLAYING) {
+        v->asking = MV_ASK_NEW;         /* a game under way: main.c asks, Cancel first */
+        v->ask_size = size;
+        return MV_DRAW;
+    }
+    mview_new(v, size);
+    return size != was ? MV_RESIZE : MV_DRAW;
+}
+
 void mview_init(struct mview *v, unsigned seed) {
     memset(v, 0, sizeof(*v));
     v->rng = mines_seed(seed);          /* each new game's seed is this generator's next number */
@@ -61,6 +79,7 @@ void mview_window(int size, int max_w, int max_h, int *w, int *h) {
         *w = s->w * cell + 2 * MV_MARGIN;
         if(*w < MV_MIN_W) *w = MV_MIN_W;
         *h = MV_BAR_H + s->h * cell + 2 * MV_MARGIN + MV_STATUS_H;
+        if(*h < MV_MIN_H) *h = MV_MIN_H;
         if(cell <= MV_CELL_MIN || ((!max_w || *w <= max_w) && (!max_h || *h <= max_h))) return;
     }
 }
@@ -122,7 +141,7 @@ static void ended(struct mview *v, unsigned now) {
     mview_time(ms, t, sizeof(t));
     if(v->game.state == MINES_WON) {
         v->won[s]++;
-        if(!v->best[s] || ms < v->best[s]) {
+        if(v->won[s] == 1 || ms < v->best[s]) {    /* the first win is the best, also in no time */
             v->best[s] = ms;
             snprintf(msg, sizeof(msg), "Cleared in %s: the best this session", t);
         } else {
@@ -147,13 +166,18 @@ static int play(struct mview *v, int x, int y, int chord, unsigned now) {
 
 int mview_close(struct mview *v) {
     if(v->game.state != MINES_PLAYING) return MV_CLOSE;
-    v->asking = 1;                      /* a game under way: main.c asks, Cancel first */
+    v->asking = MV_ASK_CLOSE;           /* a game under way: main.c asks, Cancel first (over a new game's question too) */
     return MV_DRAW;
 }
 
-int mview_answer(struct mview *v, int close) {
+int mview_answer(struct mview *v, int yes) {
+    int was = v->asking, size = v->size;
+    if(!was) return 0;
     v->asking = 0;
-    return close ? MV_CLOSE : MV_DRAW;
+    if(!yes) return MV_DRAW;
+    if(was == MV_ASK_CLOSE) return MV_CLOSE;
+    mview_new(v, v->ask_size);          /* the game under way left: it counted as played from its first reveal */
+    return v->size != size ? MV_RESIZE : MV_DRAW;
 }
 
 int mview_key(struct mview *v, int key, unsigned mods, unsigned now) {
@@ -162,10 +186,8 @@ int mview_key(struct mview *v, int key, unsigned mods, unsigned now) {
     if((mods & MV_REPEAT) && (key < MV_UP || key > MV_PGDN)) return 0;     /* only the cursor moves on a repeat */
     switch(key) {
     case 27: case 23: return mview_close(v);            /* Esc, Ctrl+W */
-    case 'n': case 'N': mview_new(v, v->size); return MV_DRAW;
-    case '1': case '2': case '3':
-        mview_new(v, key - '1');
-        return MV_RESIZE;
+    case 'n': case 'N': return mview_request(v, v->size);
+    case '1': case '2': case '3': return mview_request(v, key - '1');
     case MV_LEFT: if(v->cx > 0 && v->cursor) v->cx--; break;
     case MV_RIGHT: if(v->cx < m->w - 1 && v->cursor) v->cx++; break;
     case MV_UP: if(v->cy > 0 && v->cursor) v->cy--; break;
@@ -245,7 +267,7 @@ void mview_status(const struct mview *v, char *out, int n) {
 void mview_record(const struct mview *v, char *out, int n) {
     char t[24];
     int s = v->size;
-    if(!v->best[s]) {
+    if(!v->won[s]) {
         snprintf(out, (size_t)n, "Won %d of %d", v->won[s], v->played[s]);
         return;
     }

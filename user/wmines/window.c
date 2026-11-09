@@ -12,15 +12,21 @@ Mines' window (window.h), built on the toolkit (gk.h):
                   the field
 
 The look is SurfOS's own: covered cells are sand, open ones the paper of the desktop's windows,
-the numbers in the desktop's sea colours, a flag a teal pennant, a mine a navy sea mine, the one
-that went off on coral. Nothing is drawn but what changed: the window keeps each cell's look as
-it shows it, and after every event marks only the cells whose look changed (gk_damage()), so a
-click presents a few cells, and the timer presents its label and nothing else.
+the numbers in the desktop's sea colours, a flag a teal pennant, a mine a navy depth charge (an
+upright drum with two teal hoops and a stub on top), and the one that went off a splash: the drum
+in a ring of foam on sky blue (the review of 11/05/26 asked for a mine of SurfOS's own: the round
+mine with spikes, a square glint and a red cell were another game's). Nothing is drawn but what
+changed: the window keeps each cell's look as it shows it, and after every event marks only the
+cells whose look changed (gk_damage()), so a click presents a few cells, and the timer presents
+its label and nothing else.
 
 The Game menu (in the desktop's bar while the window has the focus, by its shortcuts in any case)
 has New field (Ctrl+N), the three sizes (1 to 3) and Close (Ctrl+W); Help has a line for the
-desktop's Help. The close button, Esc and Ctrl+W ask first while a game is under way, Cancel
-first; the toolkit's timer moves the clock on the second while a game runs.
+desktop's Help. The close button, Esc and Ctrl+W, and a new field however it is asked for (N, 1
+to 3, New, the sizes' buttons, the menu), ask first while a game is under way, Cancel first:
+view.c says which question, and the box on the screen follows it (a new box takes the place of
+one open, which is answered as cancelled). The toolkit's timer moves the clock on the second
+while a game runs.
 */
 
 #include <stdio.h>
@@ -33,9 +39,10 @@ first; the toolkit's timer moves the clock on the second while a game runs.
 #define C_COVER  0xDCCB9E               /* sand: a covered cell */
 #define C_PRESS  0xC5B282               /* and pressed */
 #define C_OPEN   0xF7F3E8               /* an open cell */
-#define C_BLAST  0xEE906D               /* coral: the mine that went off */
+#define C_SPLASH 0x659ECB               /* sky: the cell of the mine that went off */
+#define C_RING   0xE8F6F1               /* foam: the splash's ring */
 #define C_MINE   0x102E3B               /* navy: a mine */
-#define C_GLINT  0xB8E9D9               /* foam: its glint */
+#define C_HOOP   0x197D83               /* teal: its hoops */
 #define C_POLE   0x153D49               /* ink: a flag's pole */
 #define C_FLAG   0x197D83               /* teal: its pennant */
 #define C_WRONG  0xC8553D               /* a flag where no mine was: crossed out */
@@ -63,15 +70,21 @@ static void disc(struct gw *win, int cx, int cy, int r, unsigned color) {
     }
 }
 
-/* a sea mine: a round body, eight horns, a glint */
+/* a depth charge: an upright drum, its corners cut, two teal hoops round it and a stub on top */
 static void mine(struct gw *win, int x, int y, int s) {
-    int cx = x + s / 2, cy = y + s / 2, r = s * 3 / 10, k = r + r / 2, d = k * 7 / 10;
-    gw_line(win, cx - k, cy, cx + k, cy, C_MINE);
-    gw_line(win, cx, cy - k, cx, cy + k, C_MINE);
-    gw_line(win, cx - d, cy - d, cx + d, cy + d, C_MINE);
-    gw_line(win, cx - d, cy + d, cx + d, cy - d, C_MINE);
-    disc(win, cx, cy, r, C_MINE);
-    gw_rect(win, cx - r / 2, cy - r / 2, r / 3 + 1, r / 3 + 1, C_GLINT);
+    int w = s * 2 / 5, h = s / 2, left = x + (s - w) / 2, top = y + (s - h) / 2 + s / 16, band = s >= 30 ? 2 : 1;
+    gw_rect(win, left + 1, top, w - 2, h, C_MINE);
+    gw_rect(win, left, top + 1, w, h - 2, C_MINE);
+    gw_rect(win, left, top + h / 4, w, band, C_HOOP);
+    gw_rect(win, left, top + h - h / 4 - band, w, band, C_HOOP);
+    gw_rect(win, x + s / 2 - band, top - s / 8, 2 * band, s / 8, C_MINE);
+}
+
+/* the mine that went off: a ring of foam round it, on the sky blue of its cell */
+static void splash(struct gw *win, int x, int y, int s) {
+    int cx = x + s / 2, cy = y + s / 2, r = s * 2 / 5;
+    disc(win, cx, cy, r, C_RING);
+    disc(win, cx, cy, r - (s >= 30 ? 3 : 2), C_SPLASH);
 }
 
 /* a pennant on a pole; a wrong one crossed out */
@@ -99,7 +112,7 @@ static int look_of(const struct mwin *m, int x, int y) {
 static void cell(struct gw *win, const struct mwin *m, int cx, int cy, int look) {
     const struct mview *v = &m->v;
     int s = v->cell, x = v->fx + cx * s, y = v->fy + cy * s, base = look & ~MW_CURSOR, scale = s >= 34 ? 2 : 1;
-    unsigned bg = base == MV_PRESSED ? C_PRESS : base == MV_BLAST ? C_BLAST : base >= MV_OPEN && base <= MV_MINE ? C_OPEN :
+    unsigned bg = base == MV_PRESSED ? C_PRESS : base == MV_BLAST ? C_SPLASH : base >= MV_OPEN && base <= MV_MINE ? C_OPEN :
                   C_COVER;
     char digit[2];
     gw_rect(win, x + 1, y + 1, s - 1, s - 1, bg);   /* the grid's line is its left and top */
@@ -108,7 +121,10 @@ static void cell(struct gw *win, const struct mwin *m, int cx, int cy, int look)
         digit[1] = 0;
         gw_text_scaled(win, x + 1 + (s - 1 - 8 * scale) / 2, y + 1 + (s - 1 - 16 * scale) / 2, digit,
                        digits[base - MV_OPEN], scale);
-    } else if(base == MV_MINE || base == MV_BLAST) mine(win, x, y, s);
+    } else if(base == MV_MINE || base == MV_BLAST) {
+        if(base == MV_BLAST) splash(win, x, y, s);
+        mine(win, x, y, s);
+    }
     else if(base == MV_FLAG || base == MV_WRONG) flag(win, x, y, s, base == MV_WRONG);
     if(look & MW_CURSOR) {
         gw_frame(win, x + 1, y + 1, s - 1, s - 1, C_CURSOR);
@@ -187,29 +203,28 @@ static void refresh(struct mwin *m, unsigned now) {
     else gk_timer_stop(m->ui, TIMER_CLOCK);
 }
 
-/* a new game: of that field; the board has the keys again (a click on the toolbar took them) */
+/* a new game of that field asked for, at once or after the question; the board has the keys again (a click on the
+   toolbar took them), and the box, if one comes, gives them back to it */
 static void new_game(struct mwin *m, int size) {
-    if(size != m->v.size) m->relayout = 1;
-    mview_new(&m->v, size);
+    if(mview_request(&m->v, size) == MV_RESIZE) m->relayout = 1;
     gk_focus(m->board);
 }
 
-/* the question before closing, Cancel first (view.c asks it while a game is under way) */
-static void ask(struct mwin *m) {
-    gk_confirm(m->ui, BOX_CLOSE, "Close Mines?", "A game is under way: it ends with the window.", "", "Cancel",
-               "Close", NULL);
+/* the question view.c asked for, Cancel first, and the box it is in */
+static int box_of(int asking) {
+    return asking == MV_ASK_NEW ? BOX_NEW : BOX_CLOSE;
 }
 
-/* closing: at once, or after the question (0: close now) */
-static int closing(struct mwin *m) {
-    if(mview_close(&m->v) == MV_CLOSE) return 0;
-    ask(m);
-    return 1;
+static void ask(struct mwin *m) {
+    if(m->v.asking == MV_ASK_NEW)
+        gk_confirm(m->ui, BOX_NEW, "Start a new field?", "A game is under way: a new field ends it.", "", "Cancel",
+                   "New field", NULL);
+    else gk_confirm(m->ui, BOX_CLOSE, "Close Mines?", "A game is under way: it ends with the window.", "", "Cancel",
+                    "Close", NULL);
 }
 
 static void help(struct mwin *m) {
-    gk_message(m->ui, BOX_HELP, "Playing Mines", "Click a cell to reveal it; right-click flags a mine.",
-               "Arrows, Space and F play too; N starts again, 1 to 3 the size.");
+    gk_message(m->ui, BOX_HELP, "Playing Mines", MW_HELP_1, MW_HELP_2);
 }
 
 int mw_event(struct mwin *m, const struct gk_event *ev) {
@@ -217,10 +232,14 @@ int mw_event(struct mwin *m, const struct gk_event *ev) {
     int r;
     switch(ev->type) {
     case GK_EV_CLOSE:
-        if(!closing(m)) return 0;
+        if(mview_close(&m->v) == MV_CLOSE) return 0;
         break;
-    case GK_EV_ANSWER:
-        if(ev->id == BOX_CLOSE && mview_answer(&m->v, ev->value == 1) == MV_CLOSE) return 0;
+    case GK_EV_ANSWER:                                  /* the question on the screen (an older one's answer is not) */
+        if(m->v.asking && ev->id == box_of(m->v.asking)) {
+            r = mview_answer(&m->v, ev->value == 1);
+            if(r == MV_CLOSE) return 0;
+            if(r == MV_RESIZE) m->relayout = 1;
+        }
         break;
     case GK_EV_CLICK:
         if(ev->id == ID_NEW) new_game(m, m->v.size);
@@ -231,7 +250,7 @@ int mw_event(struct mwin *m, const struct gk_event *ev) {
     case GK_EV_MENU:
         if(ev->id == MENU_NEW) new_game(m, m->v.size);
         else if(ev->id >= MENU_SIZE && ev->id < MENU_SIZE + MINES_SIZES) new_game(m, ev->id - MENU_SIZE);
-        else if(ev->id == MENU_CLOSE && !closing(m)) return 0;
+        else if(ev->id == MENU_CLOSE && mview_close(&m->v) == MV_CLOSE) return 0;
         else if(ev->id == MENU_HELP) help(m);
         break;
     case GK_EV_KEY:
@@ -239,7 +258,6 @@ int mw_event(struct mwin *m, const struct gk_event *ev) {
         r = mview_key(&m->v, ev->value, ev->mods, now);
         if(r == MV_RESIZE) m->relayout = 1;
         if(r == MV_CLOSE) return 0;
-        if(m->v.asking && !gk_box_open(m->ui)) ask(m);  /* Esc or Ctrl+W during a game */
         break;
     case GK_EV_POINTER:
         if(ev->w == m->board) mview_pointer(&m->v, ev->x, ev->y, ev->buttons, (unsigned)ev->value, now);
@@ -253,6 +271,10 @@ int mw_event(struct mwin *m, const struct gk_event *ev) {
         gk_redraw(m->board);
         break;
     }
+    if(m->v.asking != m->asked) {                       /* a question asked, or answered: the box follows */
+        m->asked = m->v.asking;
+        if(m->asked) ask(m);
+    }
     refresh(m, now);
     return 1;
 }
@@ -263,8 +285,7 @@ int mw_open(struct mwin *m, unsigned seed) {
     memset(m, 0, sizeof(*m));
     mview_init(&m->v, seed);
     mview_window(MINES_LARGE, 0, 0, &w, &h);
-    m->ui = gk_open_limits("Mines", w, h, MV_MIN_W, MV_BAR_H + MV_STATUS_H + 15 * MV_CELL_MIN + 2 * MV_MARGIN, 0, 0,
-                           WIN_RESIZABLE);
+    m->ui = gk_open_limits("Mines", w, h, MV_MIN_W, MV_MIN_H, 0, 0, WIN_RESIZABLE);
     if(!m->ui) return -1;
     root = gk_root(m->ui);
     bar = gk_hbox(root, 12);
@@ -274,9 +295,9 @@ int mw_open(struct mwin *m, unsigned seed) {
     for(i = 0; i < MINES_SIZES; i++) gk_radio_add(m->size, mines_sizes[i].name);
     gk_spacer(bar);
     m->left = gk_label(bar, "Mines 10");
-    gk_size(m->left, 9 * 8, 0);
+    gk_size(m->left, 10 * 8, 0);                        /* room for "Mines -100": flags are not limited */
     m->clock = gk_label(bar, "Time 0:00");
-    gk_size(m->clock, 12 * 8, 0);
+    gk_size(m->clock, 12 * 8, 0);                       /* and "Time 1:02:03" */
     m->board = gk_area(root, ID_BOARD, GK_FOCUSABLE, draw, m);
     m->status = gk_status(root);
     i = gk_menu(m->ui, "Game");
