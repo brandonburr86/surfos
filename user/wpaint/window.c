@@ -176,11 +176,44 @@ static const char *lost_how(int lost) {
     return lost == PF_LOST_DEPTH ? "at 8 bits a channel" : "on white, at 8 bits a channel";
 }
 
+/* an absolute path made canonical into out: "." and ".." taken out, each run of '/' one */
+static void canonical(const char *path, char *out, size_t n) {
+    const char *s = path, *e;
+    size_t len = 0, k;
+    out[0] = 0;
+    while(*s) {
+        while(*s == '/') s++;
+        for(e = s; *e && *e != '/'; e++)
+            ;
+        k = (size_t)(e - s);
+        if(k == 2 && s[0] == '.' && s[1] == '.') {      /* back over the last name */
+            while(len > 0 && out[len - 1] != '/') len--;
+            if(len > 0) len--;
+            out[len] = 0;
+        } else if(k && !(k == 1 && s[0] == '.') && len + 1 + k < n) {
+            out[len++] = '/';
+            memcpy(out + len, s, k);
+            out[len += k] = 0;
+        }
+        s = e;
+    }
+    if(!len) snprintf(out, n, "/");
+}
+
+/* path names the picture's own file: the same path, or another way to it ("..", another case: FAT's names ignore
+   case, and elsewhere an extra question is all that can come of it) */
+static int same_file(const char *a, const char *b) {
+    char ca[PW_PATH], cb[PW_PATH];
+    canonical(a, ca, sizeof(ca));
+    canonical(b, cb, sizeof(cb));
+    return !strcasecmp(ca, cb);
+}
+
 /* the canvas into path; but first a question when that replaces the picture's own file without what the canvas has
    not of it: 0 saved, 2 asked (BOX_LOSSY's answer goes on), -1 not saved (a box says why) */
 static int save_over(struct pwin *w, const char *path) {
     char line[PF_WHY];
-    if(!w->lost || strcmp(path, w->path)) return save_to(w, path);
+    if(!w->lost || !same_file(path, w->path)) return save_to(w, path);
     snprintf(w->saving, sizeof(w->saving), "%s", path);
     snprintf(line, sizeof(line), "Saving replaces %s %s.", base(path), lost_how(w->lost));
     gk_confirm(w->ui, BOX_LOSSY, "Replace the picture's file?", line, "Save as\xe2\x80\xa6 keeps the file as it is.",
@@ -265,6 +298,7 @@ static void go_on(struct pwin *w, int what) {
 /* New, Open or Close: first the question about changes not saved, if there are any */
 static void then(struct pwin *w, int what) {
     char line[PF_WHY];
+    w->save_then = 0;                                   /* a new question: nothing of an old one goes on */
     if(!paint_modified(&w->p)) {
         go_on(w, what);
         return;
@@ -295,6 +329,7 @@ static void give_up(struct pwin *w) {
 static void answer(struct pwin *w, const struct gk_event *ev) {
     unsigned rgb;
     int nw, nh, r;
+    if(ev->value < 0 && gk_box_open(w->ui)) return;   /* answered for being replaced by the box open: no one's Cancel */
     switch(ev->id) {
     case BOX_UNSAVED:
         if(ev->value == 0) {                            /* Save, then go on */

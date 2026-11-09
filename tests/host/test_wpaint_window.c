@@ -779,6 +779,45 @@ static void review(void) {
         free(deep);
     }
     pw_close(w);
+    /* the second review's lows. The question before a save replaces the picture's file knows the file reached another
+       way: through "..", or in another case (FAT's names ignore case); another file is saved at once */
+    gkf_reset(0, 0);
+    CHECK(pw_open(w, NULL) == 0);
+    gkf_focus(1);
+    run();
+    png_with(at("logo4.png"), 1);
+    logo = bytes_of(at("logo4.png"), &n);
+    mkdir(at("sub"), 0755);
+    open_through(at("logo4.png"));
+    CHECK(w->lost == PF_LOST_ALPHA);
+    key(19, WIN_MOD_CTRL | WIN_MOD_SHIFT);
+    gkf_dialog_answer(at("sub/../logo4.png"));
+    run();
+    CHECK(gk_asking(w->ui) == BOX_LOSSY);
+    key(27, 0);
+    key(19, WIN_MOD_CTRL | WIN_MOD_SHIFT);
+    gkf_dialog_answer(at("LOGO4.PNG"));
+    run();
+    CHECK(gk_asking(w->ui) == BOX_LOSSY);
+    key(27, 0);
+    CHECK(same_bytes(at("logo4.png"), logo, n));
+    key(19, WIN_MOD_CTRL | WIN_MOD_SHIFT);
+    gkf_dialog_answer(at("logo5.png"));
+    run();
+    CHECK(!gk_box_open(w->ui) && exists(at("logo5.png")) && same_bytes(at("logo4.png"), logo, n));
+    free(logo);
+    rmdir(at("sub"));
+    /* the close button pressed again while its question is up: the question asked again, and its answer works (the
+       first one's -1, for being replaced, is no one's Cancel) */
+    drag(2, 2, 20, 2);
+    gkf_close();
+    CHECK(run() && gk_asking(w->ui) == BOX_UNSAVED);
+    gkf_close();
+    CHECK(run() && gk_asking(w->ui) == BOX_UNSAVED && w->then == PW_THEN_CLOSE);
+    gkf_key(WIN_KEY_RIGHT, 0);
+    gkf_key(13, 0);                                     /* Don't save: closed */
+    CHECK(!run());
+    pw_close(w);
     gkf_reset(0, 0);
 }
 
