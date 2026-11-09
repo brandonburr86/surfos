@@ -117,13 +117,14 @@ void kfree(void *p) {
     free(p);
 }
 
-/* the program's memory: all of the test's but [bad_lo, bad_hi) and the first page */
-static const char *bad_lo, *bad_hi;
+/* the program's memory: all of the test's but [bad_lo, bad_hi) and the first page; [ro_lo, ro_hi) it may read but
+   not write (11/05/26, the review: so that a call that writes without asking user_buf() to check for it fails) */
+static const char *bad_lo, *bad_hi, *ro_lo, *ro_hi;
 bool user_buf(const void *p, u_long len, bool write) {
     u_long a = (u_long)p, end = a + len;
-    (void)write;
     if(a < 4096 || end < a) return false;
     if(bad_lo && a < (u_long)bad_hi && end > (u_long)bad_lo) return false;
+    if(write && ro_lo && a < (u_long)ro_hi && end > (u_long)ro_lo) return false;
     return true;
 }
 
@@ -432,7 +433,7 @@ static void start(void) {
     threads_made = thread_fail = 0;
     thread_fn = NULL;
     fail_in = 0;
-    bad_lo = bad_hi = NULL;
+    bad_lo = bad_hi = ro_lo = ro_hi = NULL;
     klog[0] = 0;
     memset(&program, 0, sizeof(program));
     strcpy(program.name, "wsettings");
@@ -743,7 +744,7 @@ static void join_refusals(void) {
     CHECK(join("SurfSimSAE", "abcdefgh", 0) == -ENOSYS);
     CHECK(join("SurfSimWPA", "short", 0) == -EINVAL);              /* 8 to 63 characters */
     CHECK(join("SurfSimWPA", "has a \x01 control", 0) == -EINVAL);
-    CHECK(join("SurfSimWPA", "surfsim-wpa2-test-passphrase", 2) == -EINVAL);      /* flags that are none */
+    CHECK(join("SurfSimWPA", "surfsim-wpa2-test-passphrase", 4) == -EINVAL);      /* flags that are none */
     memset(&k, 0, sizeof(k));
     memcpy(k.ssid, "SurfSimWPA", 10);
     k.ssid_len = 10;
@@ -1073,6 +1074,121 @@ static void set(void) {
     finish();
 }
 
+/* memory the program may read but not write: the reads and a join (whose password the call wipes) refused before
+   anything is read or written; a request the call only reads taken */
+static void read_only_memory(void) {
+    static const int reads[6] = { NETCTL_WIFI, NETCTL_NETWORKS, NETCTL_SAVED, NETCTL_SETTINGS, NETCTL_IFACES, NETCTL_JOB };
+    static const unsigned sizes[6] = { sizeof(struct netctl_wifi), sizeof(struct netctl_bss_list),
+                                       sizeof(struct netctl_saved), sizeof(struct netctl_settings),
+                                       sizeof(struct netctl_ifaces), sizeof(struct netctl_job) };
+    static char big[4096];
+    struct netctl_join *k = (struct netctl_join *)big;
+    struct netctl_req *r = (struct netctl_req *)big;
+    int i;
+    start();
+    ro_lo = big;
+    ro_hi = big + sizeof(big);
+    for(i = 0; i < 6; i++) {
+        memset(big, 0x77, sizeof(big));
+        CHECK(sys_netctl(reads[i], big, sizes[i]) == -EFAULT && (u8)big[0] == 0x77);
+    }
+    memset(big, 0, sizeof(big));
+    memcpy(k->ssid, "SurfSimWPA", 10);
+    k->ssid_len = 10;
+    strcpy(k->passphrase, "surfsim-wpa2-test-passphrase");
+    CHECK(sys_netctl(NETCTL_JOIN, k, sizeof(*k)) == -EFAULT && !strcmp(k->passphrase, "surfsim-wpa2-test-passphrase"));
+    CHECK(threads_made == 0);
+    memset(big, 0, sizeof(big));
+    strcpy(r->key, "desktop.theme");
+    strcpy(r->value, "dusk");
+    CHECK(sys_netctl(NETCTL_APPLY, r, sizeof(*r)) == 0 && cfg.theme == NETCFG_THEME_DUSK);
+    strcpy(r->key, "history");
+    strcpy(r->value, "on");
+    CHECK(sys_netctl(NETCTL_SET, r, sizeof(*r)) > 0);
+    run_thread();
+    CHECK(job_now().result == 0);
+    ro_lo = ro_hi = NULL;
+    finish();
+}
+
+/* 11/05/26 (the review, M2): an open network while a server without a password runs is refused unless the person was
+   told (NETCTL_JOIN_EXPOSED): at the call, and by the job just before it joins (a server that started while it looked) */
+static void join_exposed(void) {
+    struct netctl_job j;
+    start();
+    telnet_exposed = true;
+    CHECK(join("SurfSim", "", 0) == -EPERM && threads_made == 0 && sta.joins == 0);
+    CHECK(join("Unheard", "", NETCTL_JOIN_SAVE) == -EPERM);        /* not heard, no password: open, refused too */
+    CHECK(join("SurfSim", "", NETCTL_JOIN_EXPOSED | 4) == -EINVAL); /* flags that are none */
+    CHECK(join("SurfSimWPA", "surfsim-wpa2-test-passphrase", 0) > 0);    /* WPA2: no matter */
+    run_thread();
+    j = job_now();
+    CHECK(j.result == 0 && !(j.flags & NETCTL_DONE_EXPOSED) && sta.joins == 1);
+    sta.state = WLAN_STA_IDLE;
+    CHECK(join("SurfSim", "", NETCTL_JOIN_EXPOSED) > 0 && req.exposed_ok);   /* the person was told */
+    run_thread();
+    j = job_now();
+    CHECK(j.result == 0 && (j.flags & NETCTL_DONE_EXPOSED) && sta.joins == 2 && !sta.join_had_pmk);
+    CHECK(strstr(klog, ", open while a server without a password runs\n") != NULL);
+    telnet_exposed = false;
+    sta.state = WLAN_STA_IDLE;
+    add_bss("LaterOpen", WLAN_SEC_OPEN, -50, 6, false);            /* heard by the job's scan only */
+    sta.heard = sta.list[--sta.nlist];
+    sta.heard_by_scan = true;
+    CHECK(join("LaterOpen", "", 0) > 0 && req.unheard);
+    ftp_exposed = true;                                             /* ftpd started while the job looked */
+    run_thread();
+    j = job_now();
+    CHECK(j.result == -EPERM && (j.flags & NETCTL_DONE_EXPOSED) && sta.joins == 2 && sta.scans == 1);
+    CHECK(!strcmp(j.why, "a server without a password runs (telnetd or ftpd), and anyone on an open network reaches it: "
+                         "not joined without the person's word"));
+    CHECK(strstr(klog, "join \"LaterOpen\": ") != NULL);
+    CHECK(join("LaterOpen", "", NETCTL_JOIN_EXPOSED) > 0);         /* told: heard now, joined */
+    run_thread();
+    j = job_now();
+    CHECK(j.result == 0 && (j.flags & NETCTL_DONE_EXPOSED) && sta.joins == 3);
+    ftp_exposed = false;
+    finish();
+}
+
+/* the n bytes s in the stack below the caller's frame, where the call it just made had its frames: what a missing wipe
+   leaves there. Not inlined, so that its own frame lies over theirs; it only reads */
+static __attribute__((noinline)) bool stack_holds(const void *s, size_t n) {
+    volatile u8 probe[16384];
+    const volatile u8 *p = probe;
+    size_t i, j;
+    __asm__ volatile("" : "+r"(p));                     /* where p points, forgotten: the bytes read as they are */
+    for(i = 0; i + n <= sizeof(probe); i++) {
+        for(j = 0; j < n && p[i + j] == ((const u8 *)s)[j]; j++) ;
+        if(j == n) return true;
+    }
+    return false;
+}
+
+/* 11/05/26 (the review): the call's own copies on the kernel stack (start_join()'s k and r) are wiped: the password when
+   the call refuses before the PMK is made (a job runs), the PMK once the job's record has it */
+static void join_stack_wiped(void) {
+    static const char pass[] = "stack-probe-passphrase-7Qx";      /* made up for this test */
+    u8 pmk[32];
+    int r1, r2;
+    bool pass1, pass2, pmk2;
+    start();
+    CHECK(wpa_passphrase_to_pmk(pass, (const u8 *)"Probe", 5, pmk) == 0);
+    add_bss("Probe", WLAN_SEC_WPA2_PSK, -50, 6, false);
+    CHECK(sys_netctl(NETCTL_SCAN, NULL, 0) > 0);
+    r1 = join("Probe", pass, 0);                                    /* busy: refused before the PBKDF2 */
+    pass1 = stack_holds(pass, sizeof(pass) - 1);
+    CHECK(r1 == -EBUSY && !pass1);
+    run_thread();
+    r2 = join("Probe", pass, 0);                                    /* started: the PMK made, handed to the record */
+    pmk2 = stack_holds(pmk, sizeof(pmk));
+    pass2 = stack_holds(pass, sizeof(pass) - 1);
+    CHECK(r2 > 0 && !pmk2 && !pass2 && !memcmp(req.pmk, pmk, 32));
+    run_thread();
+    crypto_wipe(pmk, sizeof(pmk));
+    finish();
+}
+
 int main(void) {
     sizes_and_pointers();
     reads();
@@ -1087,6 +1203,9 @@ int main(void) {
     leave_save_forget();
     apply();
     set();
+    read_only_memory();
+    join_exposed();
+    join_stack_wiped();
     printf("test_netctl: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;
 }

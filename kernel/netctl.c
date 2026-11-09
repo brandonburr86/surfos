@@ -29,7 +29,11 @@ that name in the last scans ask, WPA2 first, then open, else the strongest one's
 when SurfOS does not join it. A name not heard in the last minute (the station's list forgets what it
 has not heard for that long, and a person may look at a list for longer) is looked for first, by the
 job, with a scan, as wifi join makes one, and then decided so; a name still not heard is joined as a
-hidden network (the station probes for it), WPA2 when a password came. The password comes in the request: the caller's field is wiped as soon
+hidden network (the station probes for it), WPA2 when a password came. An open network while a server
+without a password runs (telnetd, ftpd: netman_telnet_exposed(), netman_ftp_exposed()) is refused
+(-EPERM) unless the request says the person was told (NETCTL_JOIN_EXPOSED, which Settings sets only
+from its warning's answer): at the call, and again by the job just before it joins, since its scan
+first takes up to 10 s and a server may start meanwhile (11/05/26, the review's M2). The password comes in the request: the caller's field is wiped as soon
 as the structure is known to be the caller's to write, whatever the call answers; the PMK is made
 from a copy at once (wpa_passphrase_to_pmk(): PBKDF2 with the SSID) and the copy wiped, on the stack
 of the call. The PMK goes to the job's record, the station (wlan_join_unless(), quiet: its failure in
@@ -124,6 +128,7 @@ struct job_req {
     u_int stops;                        /* the station's leaves and downs when a join was asked: one since calls it off */
     bool on, save, hidden, has_pmk;
     bool unheard;                       /* a join's name not heard when it was asked: the job scans first */
+    bool exposed_ok;                    /* NETCTL_JOIN_EXPOSED: an open network while a server runs, the person told */
     u8 pmk[WPA_PMK_LEN];
     u8 ssid[WLAN_SSID_MAX];
     u_int ssid_len;
@@ -356,10 +361,11 @@ static void job_end(int r, u32 flags, const char *why) {
     if(op == NETCTL_SET) snprintf(what, sizeof(what), " %s = %s", netcfg_key_name(req.key), req.value);
     else if(req.ssid_len) snprintf(what, sizeof(what), " \"%s\"", ieee80211_ssid_text(req.ssid, req.ssid_len, false, name,
                                                                                       sizeof(name)));
-    snprintf(line, sizeof(line), "+NET: %s: %s%s: %s%s%s%s%s\n", job_who, op_name(op), what, r ? strerror(r) : "done",
+    snprintf(line, sizeof(line), "+NET: %s: %s%s: %s%s%s%s%s%s\n", job_who, op_name(op), what, r ? strerror(r) : "done",
              flags & NETCTL_DONE_ADDRESS ? ", an address" : "", flags & NETCTL_DONE_SAVED ? ", saved" : "",
              flags & NETCTL_DONE_NOT_SAVED ? ", not saved" : "", flags & NETCTL_DONE_NONE_NEAR ?
-             ", no saved network in range" : "");
+             ", no saved network in range" : "", flags & NETCTL_DONE_EXPOSED ?
+             ", open while a server without a password runs" : "");
     if((int)strlen(line) >= (int)sizeof(line) - 1) line[sizeof(line) - 2] = '\n';
     mutex_lock(&job_lock);
     job.result = r;
@@ -497,6 +503,14 @@ static int do_join(u32 *flags, char *why, size_t n) {
     u_int join = 0;
     int r = req.unheard ? scan_first(w, why, n) : 0;
     if(r) return r;
+    if(!req.has_pmk && exposed()) {                     /* open, and a server without a password runs now */
+        *flags |= NETCTL_DONE_EXPOSED;
+        if(!req.exposed_ok) {
+            snprintf(why, n, "%s", "a server without a password runs (telnetd or ftpd), and anyone on an open "
+                     "network reaches it: not joined without the person's word");
+            return -EPERM;
+        }
+    }
     r = wlan_join_unless(w, req.ssid, req.ssid_len, req.has_pmk ? req.pmk : NULL, req.stops, true, &join);
     if(r) return r;
     if(req.save) {
@@ -632,7 +646,8 @@ static int join_checked(struct netctl_join *k, struct job_req *r) {
     struct wlan_dev *w;
     size_t plen = strnlen(k->passphrase, NETCTL_PASS_MAX);
     int security;
-    if(!k->ssid_len || k->ssid_len > NETCTL_SSID_MAX || (k->flags & ~NETCTL_JOIN_SAVE) || plen >= NETCTL_PASS_MAX)
+    if(!k->ssid_len || k->ssid_len > NETCTL_SSID_MAX || (k->flags & ~(NETCTL_JOIN_SAVE | NETCTL_JOIN_EXPOSED)) ||
+       plen >= NETCTL_PASS_MAX)
         return -EINVAL;
     w = wlan_find(NULL);
     if(!w || !w->up) return -ENODEV;                   /* none, or its card off (wifi up first) */
@@ -644,6 +659,8 @@ static int join_checked(struct netctl_join *k, struct job_req *r) {
         security = plen ? WLAN_SEC_WPA2_PSK : WLAN_SEC_OPEN;   /* as it is joined when still not heard (hidden) */
     }
     if(security == WLAN_SEC_OPEN && plen) return -EINVAL;  /* a password for an open network: a mistake, not sent */
+    if(security == WLAN_SEC_OPEN && exposed() && !(k->flags & NETCTL_JOIN_EXPOSED))
+        return -EPERM;                                  /* a server without a password runs: the person is to be told */
     if(security != WLAN_SEC_OPEN && security != WLAN_SEC_WPA2_PSK && security != WLAN_SEC_WPA2_WPA3) return -ENOSYS;
     if(security != WLAN_SEC_OPEN) {
         if(!plen) return -EACCES;
@@ -657,6 +674,7 @@ static int join_checked(struct netctl_join *k, struct job_req *r) {
     r->w = w;
     r->stops = si.stops;                                /* a wifi leave or down from now on calls the join off */
     r->save = (k->flags & NETCTL_JOIN_SAVE) != 0;
+    r->exposed_ok = (k->flags & NETCTL_JOIN_EXPOSED) != 0;
     r->ssid_len = k->ssid_len;
     memcpy(r->ssid, k->ssid, k->ssid_len);
     return job_start(r);

@@ -37,16 +37,26 @@ station, saves it in networks.conf when the request asks (the key, as wifi save 
 password), and wipes it. No answer ever holds a key.
 
 The security a join uses is the one wifi join would: the networks of that name in the last scans,
-WPA2 first, then open; one not heard is joined as a hidden network, with WPA2 when a password came
-and open otherwise. CLAUDE.md's rules hold as for the commands: the settings are the network
-manager's (kernel/netman.c), written only to the stick SurfOS was started from, and a saved network
-is joined by itself only as the network manager decides.
+WPA2 first, then open. One not heard in the last minute is looked for first, by the job's own scan
+(as wifi join scans before it calls a network hidden), and decided on what that heard; one still
+not heard is joined as a hidden network, with WPA2 when a password came and open otherwise.
+
+An open network is joined while a server without a password runs (telnetd or ftpd: anyone on that
+network reaches it) only when the request says the person was told (NETCTL_JOIN_EXPOSED): otherwise
+the call answers -EPERM, and so does the job (NETCTL_DONE_EXPOSED in its flags, and why) when such a
+server started while it looked for the network. A join made with the flag while one runs has
+NETCTL_DONE_EXPOSED too. A program sets the flag only from the person's answer to that warning.
+
+CLAUDE.md's rules hold as for the commands: the settings are the network manager's
+(kernel/netman.c), written only to the stick SurfOS was started from, and a saved network is joined
+by itself only as the network manager decides.
 
 Errors are -errno: -EINVAL for an op, size or field that is none (sizes must be exactly the
 structure's: they say its version), -EFAULT for memory that is not the caller's, -ENODEV without a
 Wi-Fi device or with its card off (the station layer's answer too), -EBUSY while a job runs. A
 join's own: -EACCES (the network takes a password and none came), -ENOSYS (a security SurfOS does
-not join: WEP, WPA3 only, enterprise, other; or no WPA2 supplicant in this kernel).
+not join: WEP, WPA3 only, enterprise, other; or no WPA2 supplicant in this kernel), -EPERM (an open
+network while a server without a password runs, and the person was not told).
 
 This header uses no SurfOS types, and its structures no pointers, so that they have the same layout
 for the kernel, for programs and for host tests (kernel/netctl.c checks the sizes). User programs
@@ -124,6 +134,8 @@ reach it through user/include/surfos/netctl.h.
 
 /* struct netctl_join's flags */
 #define NETCTL_JOIN_SAVE        1   /* once joined, save it on the stick (first in the list), as wifi save does */
+#define NETCTL_JOIN_EXPOSED     2   /* 11/05/26 (the review, M2): an open network, although a server without a password
+                                       runs: the person was told (the program's question) and joins all the same */
 
 /* a job */
 #define NETCTL_JOB_NONE         0   /* none since SurfOS started */
@@ -146,6 +158,8 @@ reach it through user/include/surfos/netctl.h.
 #define NETCTL_DONE_JOINED      0x8 /* the card started and a saved network was joined */
 #define NETCTL_DONE_NONE_NEAR   0x10 /* the card started; no saved network was in range */
 #define NETCTL_DONE_PARTIAL     0x20 /* a scan that did not end in time: what it heard until then */
+#define NETCTL_DONE_EXPOSED     0x40 /* an open network while a server without a password runs: joined (the person was
+                                        told), or refused (-EPERM: they were not) */
 
 struct netctl_wifi {                        /* 388 bytes */
     unsigned char present;                  /* a Wi-Fi device: nothing below means anything without one */
