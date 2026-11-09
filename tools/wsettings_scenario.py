@@ -14,9 +14,9 @@ other order, a leave and then a connect that finds the saved network gone (switc
 keeper joins it by itself once it is back. The review's M2: with telnetd started on the serial console before the
 desktop (a Terminal's pseudo-terminal is no place for one), an open network's Join only asks, with the warning, and
 nothing is joined until the person answers Join; the band then says the network is open while the server runs. M3: the
-password panel's Save it, unticked, says that telnetd starts on a network saved so. At the end: the kernel log has a
-line for each job; the passphrase is nowhere on the serial line and nowhere new on the stick (the kernel image holds
-wlansim's own copy); fsck_msdos and fsck.fat find no error on the stick."""
+password panel's Save it, unticked, says only what is true (telnetd started by hand comes back at no start). At the
+end: the kernel log has a line for each job; the passphrase is nowhere on the serial line and nowhere new on the stick
+(the kernel image holds wlansim's own copy); fsck_msdos and fsck.fat find no error on the stick."""
 import hashlib
 import os
 import shutil
@@ -150,8 +150,9 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers):
         d.move(*gs.PARK)
         d.visible('wsettings: Join asks SurfSimWPA\'s password in the panel, Save it unticked',
                   lambda s: w.text(s, 16, 48, 'Password for SurfSimWPA', INK, PAPER))
-        d.check('wsettings (M3): Save it, unticked, says that telnetd starts on a network saved so (telnetd runs)',
-                w.text(vm.screen(), 36, 219, 'Save it: joined by itself at every start, and telnetd starts on it', INK))
+        d.check('wsettings (M3, N3): Save it, unticked, says only what is true: telnetd runs here by hand, and comes '
+                'back at no start by itself', w.text(vm.screen(), 36, 219, 'Save it: SurfOS joins it by itself at every '
+                                                    'start', INK))
         d.keys(passphrase.decode())                     # into the password field, which has the focus
         d.visible('wsettings: the field shows a dot for each character', lambda s: w.text(s, 148, 189, '\x07' * 8, INK),
                   'wsettings-password.png')
