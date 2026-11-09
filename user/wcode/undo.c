@@ -14,6 +14,12 @@ it: a history with a hole in it would undo into a text that never was.
 #include <string.h>
 #include "undo.h"
 
+#ifdef WC_UNDO_REALLOC                          /* 11/09/26: a test's, which fails on request (tests/host/test_wcode.c) */
+void *WC_UNDO_REALLOC(void *p, size_t n);
+#else
+#define WC_UNDO_REALLOC realloc
+#endif
+
 static unsigned long step_bytes(const struct wc_step *s) {
     return sizeof(struct wc_step) + (unsigned long)s->opcap * sizeof(struct wc_op) + s->bcap;
 }
@@ -101,7 +107,7 @@ void wc_undo_begin(struct wc_undo *u, int kind, unsigned anchor, unsigned caret)
 
 /* room in the open step for n more bytes, and an op more when op: 0, or -1 with the history forgotten */
 static int room(struct wc_undo *u, struct wc_step *s, unsigned n, int op) {
-    unsigned long grow = 0, before = step_bytes(s);
+    unsigned long grow = 0;
     unsigned bcap = s->bcap, opcap = s->opcap;
     char *b;
     struct wc_op *o;
@@ -119,25 +125,27 @@ static int room(struct wc_undo *u, struct wc_step *s, unsigned n, int op) {
         return -1;
     }
     s = &u->s[u->n - 1];                        /* the steps may have moved down */
+    /* each block counted as soon as it is had (11/09/26, the review): give_up() takes off what the steps have */
     if(bcap != s->bcap) {
-        b = realloc(s->blob, bcap);
+        b = WC_UNDO_REALLOC(s->blob, bcap);
         if(!b) {
             give_up(u);
             return -1;
         }
+        u->bytes += bcap - s->bcap;
         s->blob = b;
         s->bcap = bcap;
     }
     if(opcap != s->opcap) {
-        o = realloc(s->ops, opcap * sizeof(struct wc_op));
+        o = WC_UNDO_REALLOC(s->ops, opcap * sizeof(struct wc_op));
         if(!o) {
             give_up(u);
             return -1;
         }
+        u->bytes += (unsigned long)(opcap - s->opcap) * sizeof(struct wc_op);
         s->ops = o;
         s->opcap = opcap;
     }
-    u->bytes += step_bytes(s) - before;
     return 0;
 }
 
