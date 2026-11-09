@@ -42,11 +42,17 @@ static struct gk_event got[MAXEV];
 static char said[MAXEV][160];
 static int ngot;
 
+/* every event the program would hear now (gk_next() with 0); at most 100000 of them, a check failing past that, so
+   that a toolkit that never says 0 fails the test instead of running it for hours */
 static int run(struct gk *ui) {
     struct gk_event ev;
-    int r;
+    int r, turns = 0;
     ngot = 0;
     while((r = gk_next(ui, &ev, 0)) > 0) {
+        if(++turns > 100000) {
+            CHECK(!"run(): gk_next() never said 0");
+            return -1;
+        }
         if(ngot == MAXEV) continue;
         got[ngot] = ev;
         snprintf(said[ngot], sizeof(said[ngot]), "%s", ev.text ? ev.text : "(null)");
@@ -1359,6 +1365,45 @@ static void fits(void) {
     gk_close(ui);
 }
 
+/* the review (F8): the fake desktop as the kernel and the desktop are. gk_next() with a time and nothing to give says 0
+   once the time has passed (the fake's clock moved on by it); a timer comes at its time while gk_next() waits as long
+   as it takes; a wait for ever with nothing to come fails (EINTR) instead of hanging the test. Pointer moves merge in
+   the window's queue, and what comes past WIN_EVENTS is lost; a chooser takes the keys while it is up; capitals and
+   the characters Shift makes are typed with Shift */
+static void fakes(void) {
+    struct gk *ui = window("Fake", 300, 200);
+    struct gk_event ev;
+    unsigned t0;
+    int i;
+    gk_label(gk_root(ui), "fake");
+    run(ui);
+    t0 = gkf_clock();
+    CHECK(gk_next(ui, &ev, 250) == 0 && gkf_clock() - t0 >= 250);
+    gk_timer(ui, 9, 40, 0);
+    t0 = gkf_clock();
+    CHECK(gk_next(ui, &ev, -1) == 1 && ev.type == GK_EV_TIMER && ev.id == 9 && gkf_clock() - t0 == 40);
+    CHECK(gk_next(ui, &ev, -1) == -1 && errno == EINTR && gkf_forever() == 1);
+    for(i = 0; i < 100; i++) gkf_pointer(10 + i, 10, 0);
+    CHECK(gkf_queued() == 1 && gkf_lost() == 0);       /* merged into one */
+    gkf_pointer(110, 10, WIN_BUTTON_LEFT);              /* a press and a release: never merged */
+    gkf_pointer(110, 10, 0);
+    CHECK(gkf_queued() == 3);
+    run(ui);
+    for(i = 0; i < WIN_EVENTS + 6; i++) gkf_key(WIN_KEY_F11, 0);
+    run(ui);
+    CHECK(count(GK_EV_KEY) == WIN_EVENTS && gkf_lost() == 6);
+    gkf_type("Ab!");
+    run(ui);
+    CHECK(count(GK_EV_KEY) == 3 && got[0].mods == WIN_MOD_SHIFT && got[1].mods == 0 && got[2].mods == WIN_MOD_SHIFT);
+    gkf_key(WIN_KEY_F12, 0);
+    CHECK(gk_next(ui, &ev, 0) == 1 && gk_choose(ui, 5, WIN_DLG_OPEN, "/", "", "") == 0 && gkf_dialog());
+    gkf_key('x', 0);                                    /* the chooser's, not the window's */
+    gkf_key(27, 0);                                     /* Esc: it cancels */
+    run(ui);
+    CHECK(!count(GK_EV_KEY) && heard(GK_EV_CHOSEN, 5) && heard(GK_EV_CHOSEN, 5)->value == 0);
+    gk_close(ui);
+}
+
 static void paste(void) {
     struct gk *ui = window("Paste", 300, 200);
     struct gk_widget *small, *big;
@@ -1496,7 +1541,7 @@ static void choosers(void) {
     /* 11/05/26, desk's implementation: no room for the answer (EAGAIN, while WIN_EVENTS events wait unread): the
        request kept, and asked again once they are read; refused by then (the focus gone): answered as cancelled */
     CHECK(answering(ui));
-    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    for(i = 0; i < WIN_EVENTS; i++) gkf_key(WIN_KEY_F11, 0);   /* (keys: moves would merge, as the kernel merges them) */
     CHECK(gk_choose(ui, 42, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
     CHECK(gk_choose(ui, 43, WIN_DLG_OPEN, "/", "", "") < 0 && errno == EBUSY);
     run(ui);
@@ -1505,7 +1550,7 @@ static void choosers(void) {
     run(ui);
     CHECK(heard(GK_EV_CHOSEN, 42) && heard(GK_EV_CHOSEN, 42)->value == 1 && !strcmp(heard(GK_EV_CHOSEN, 42)->text, "/b"));
     CHECK(answering(ui));
-    for(i = 0; i < WIN_EVENTS; i++) gkf_pointer(1, 1, 0);
+    for(i = 0; i < WIN_EVENTS; i++) gkf_key(WIN_KEY_F11, 0);   /* (keys: moves would merge, as the kernel merges them) */
     CHECK(gk_choose(ui, 44, WIN_DLG_OPEN, "/", "", "") == 0 && !gkf_dialog());
     gkf_focus(0);
     run(ui);
@@ -1718,7 +1763,9 @@ static void text_area(void) {
     CHECK(gkf_text(x + 5 + 8 * 8, y + 2, "x", GW_INK) && gkf_text(x + 5, y + 2 + 16, "y", GW_INK));
     gk_focus(t);
     gkf_key(1, 0);                                      /* Ctrl+A, then typing past its 64 bytes: cut */
-    gkf_type("0123456789012345678901234567890123456789012345678901234567890123456789");
+    gkf_type("01234567890123456789012345678901234");     /* (in two goes: the queue holds WIN_EVENTS) */
+    run(ui);
+    gkf_type("56789012345678901234567890123456789");
     run(ui);
     CHECK(strlen(gk_text(t)) == 64);
     gk_set_text(t, "a\nb\nc\nd\ne\nf\ng\nh");
@@ -1851,6 +1898,7 @@ int main(void) {
     held();
     punct();
     fits();
+    fakes();
     paste();
     choosers();
     theme();

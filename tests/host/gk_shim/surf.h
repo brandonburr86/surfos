@@ -22,5 +22,8 @@ int winopen(const struct win_open *o);
 int winctl(int fd, int op, void *arg);
 unsigned int uptime(void);
 int msleep(unsigned int ms);            /* 11/05/26: the fake's clock moves on, nothing waits */
+/* 11/09/26 (the review): poll() is the fake's, whose waits move its clock on instead of passing (gk_fake.c) */
+int gkf_poll(struct pollfd *fds, nfds_t n, int timeout);
+#define poll(fds, n, timeout) gkf_poll(fds, n, timeout)
 
 #endif

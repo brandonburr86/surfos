@@ -54,7 +54,11 @@ void gkf_focus(int on);
 void gkf_resize(int w, int h);          /* the user's new size: the program answers with WIN_SETSIZE */
 void gkf_close(void);                   /* the close button */
 void gkf_gone(void);                    /* the desktop lets the window go */
-void gkf_advance(unsigned ms);          /* uptime() moves on */
+void gkf_advance(unsigned ms);          /* uptime() moves on (11/09/26: and by each wait of poll() that finds nothing:
+                                           the toolkit's poll() is the fake's, gkf_poll()) */
+int gkf_forever(void);                  /* polls that would have waited for ever with nothing to come (EINTR) */
+unsigned gkf_lost(void);                /* events lost past WIN_EVENTS, as the kernel loses them (WIN_INFO's lost) */
+int gkf_queued(void);                   /* events waiting in the window's queue, unread */
 unsigned gkf_clock(void);
 
 /* the clipboard: what the window put there (WIN_CLIP, only while it has the focus), and what WIN_PASTE gives */
