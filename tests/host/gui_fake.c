@@ -324,8 +324,35 @@ u32 fake_paste_len, fake_colors[WIN_COLORS];
 int fake_paste_count, fake_theme, fake_theme_count, fake_run_file_count;
 int fake_pref_theme, fake_pref_speed, fake_pref_result, fake_pref_sets, fake_pref_which, fake_pref_value;
 
+/* 11/09/26: the ends waiting for ended, oldest first */
+static struct gui_end fake_ends[8];
+static int fake_nends;
+int fake_ended_calls;
+
+void fake_end(int pid, const char *name, int status, bool killed, bool window) {
+    struct gui_end *e;
+    if(fake_nends == 8) return;
+    e = &fake_ends[fake_nends++];
+    e->pid = pid;
+    e->status = status;
+    e->killed = killed;
+    e->window = window;
+    strlcpy(e->name, name, sizeof(e->name));
+}
+
+static int s_ended(void *ctx, struct gui_end *out, int max) {
+    int n = fake_nends < max ? fake_nends : max;
+    (void)ctx;
+    fake_ended_calls++;
+    memcpy(out, fake_ends, (size_t)n * sizeof(out[0]));
+    memmove(fake_ends, fake_ends + n, (size_t)(fake_nends - n) * sizeof(fake_ends[0]));
+    fake_nends -= n;
+    return n;
+}
+
 static void wins_reset(void) {
     memset(fake_wins, 0, sizeof(fake_wins));
+    fake_nends = fake_ended_calls = 0;              /* 11/09/26 */
     win_pool_used = 0;
     fake_run_line[0] = 0;
     fake_run_count = 0;
@@ -592,7 +619,7 @@ const struct gui_sys fake_sys = { NULL, s_tasks, s_memory, s_machine, s_kill, s_
                                   s_term_open, s_term_read, s_term_write, s_term_resize, s_term_close,
                                   s_win_accept, s_win_update, s_win_event, s_win_close, s_run, s_win_clip,
                                   s_win_paste, s_win_dialog, s_win_answer, s_win_theme,   /* 11/05/26 */
-                                  s_run_file, s_note, s_prefs, s_pref_set };
+                                  s_run_file, s_note, s_prefs, s_pref_set, s_ended };
 
 /**** a screen ****/
 

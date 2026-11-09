@@ -50,7 +50,8 @@ u32 gd_char_len(const char *s, u32 avail);            /* the bytes of the charac
    kernel/win.c checks a program's menus by: gd_text_cells(), its cells (their code page 437 indexes into cell[] when not
    NULL, room for one a byte), or -1 for a string that is not whole UTF-8 by the console's rules (driver/cp437.c's
    utf8_feed()) or has a control character (C0, DEL, C1); gd_reads_as(), whether those cells read as one of names
-   (lower case) in any case, blank cells around them not counted */
+   (lower case) in any case, blank cells around them not counted (11/09/26: a run of them inside reads as one, and
+   punctuation at the end is left out, as kernel/win.c reads a menu's) */
 int gd_text_cells(const char *s, u8 *cell);
 bool gd_reads_as(const u8 *cell, int n, const char *const *names, int count);
 u8 gd_char(const char *s, u32 avail, u32 *len);       /* its glyph, and its bytes */

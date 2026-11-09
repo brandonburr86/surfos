@@ -83,6 +83,10 @@ extern const struct gui_sys fake_sys;
 void fake_win_menus(int i, const struct win_menu_item *items, int n);
 void fake_win_ask(int i, const struct win_dialog *d);
 extern bool fake_answer_refused;                /* (the review of stage 2) win_answer refuses every path */
+/* 11/09/26 (the second review): a program the desktop started has ended (struct gui_sys's ended gives it next);
+   how many calls of ended were made */
+void fake_end(int pid, const char *name, int status, bool killed, bool window);
+extern int fake_ended_calls;
 /* the clipboard as the desktop gave it last (win_paste), and how many times; the theme it said (-1: none) */
 extern char fake_paste[256];
 extern u32 fake_paste_len;

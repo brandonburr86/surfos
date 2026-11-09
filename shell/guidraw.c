@@ -141,13 +141,25 @@ int gd_text_cells(const char *s, u8 *cell) {
     return d.have ? -1 : cells;
 }
 
+static u8 fold(u8 c) {
+    return c == 0xFF ? ' ' : c >= 'A' && c <= 'Z' ? (u8)(c + 32) : c;
+}
+
+static bool trailing(u8 c) {
+    c = fold(c);
+    return c == ' ' || (c > ' ' && c < 0x7F && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9'));
+}
+
+/* 11/09/26 (the second review, N4): kernel/win.c's reads_as(): blanks around, and runs of them inside, read as one
+   space, and punctuation at the end is left out */
 bool gd_reads_as(const u8 *cell, int n, const char *const *names, int count) {
-    int i, k;
-    while(n > 0 && (cell[0] == ' ' || cell[0] == 0xFF)) cell++, n--;
-    while(n > 0 && (cell[n - 1] == ' ' || cell[n - 1] == 0xFF)) n--;
+    int i, j, k;
+    while(n > 0 && fold(cell[0]) == ' ') cell++, n--;
+    while(n > 0 && trailing(cell[n - 1])) n--;
     for(i = 0; i < count; i++) {
-        for(k = 0; k < n && names[i][k] && (cell[k] | 0x20) == names[i][k]; k++) ;
-        if(k == n && !names[i][k]) return true;
+        for(k = 0, j = 0; k < n && names[i][j] && fold(cell[k]) == (u8)names[i][j]; j++)
+            if(fold(cell[k++]) == ' ') while(k < n && fold(cell[k]) == ' ') k++;
+        if(k == n && !names[i][j]) return true;
     }
     return false;
 }

@@ -1579,8 +1579,8 @@ static void test_dialog_pointer(void) {
 }
 
 /* M4: the close button asks a program that reads its events again at each press (its own "Save the changes?" was
-   answered Cancel); "End the program?" comes for one that has not read the CLOSE it was sent, or at the third press in
-   GUI_CLOSE_MS */
+   answered Cancel); "End the program?" comes for one that has not read the CLOSE it was sent, and (11/09/26, the
+   second review) at the third press however slow, two CLOSEs read and ignored; Cancel there counts from none again */
 static void test_close_again(void) {
     int a, id;
     fake_desktop(&g, 960, 540);
@@ -1591,38 +1591,68 @@ static void test_close_again(void) {
     CHECK(count(a, WIN_EV_CLOSE) == 1 && !g.dialog.kind);
     fake_win_read(a);                                   /* the program read it, asked its question, was told Cancel */
     tick();
-    g.now += 4000;
+    g.now += 60000;                                     /* a minute later */
     gui_act(&g, ACT_CLOSE);                             /* asked again, not ended */
     CHECK(count(a, WIN_EV_CLOSE) == 2 && !g.dialog.kind);
     fake_win_read(a);
     tick();
-    g.now += 4000;
-    gui_act(&g, ACT_CLOSE);
+    g.now += 60000;
+    gui_act(&g, ACT_CLOSE);                             /* the third press, however slow: the desktop asks */
+    CHECK(count(a, WIN_EV_CLOSE) == 2 && g.dialog.kind == GUI_DLG_CONFIRM &&
+          g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT) && !strcmp(g.dialog.title, "End the program?"));
+    gui_key(&g, 27);                                    /* Cancel: the presses are counted from none again */
+    CHECK(!g.dialog.kind && client_at(&g, id));
+    gui_act(&g, ACT_CLOSE);                             /* so the program's own question comes back */
     CHECK(count(a, WIN_EV_CLOSE) == 3 && !g.dialog.kind);
     tick();                                             /* not read this time: the program is stuck, or busy */
-    g.now += 100;
     gui_act(&g, ACT_CLOSE);
-    CHECK(count(a, WIN_EV_CLOSE) == 3 && g.dialog.kind == GUI_DLG_CONFIRM &&
-          g.dialog.act == ACT_CLIENT_END + (id - GUI_FIRST_CLIENT) && !strcmp(g.dialog.title, "End the program?"));
-    gui_key(&g, 27);                                    /* Cancel */
-    /* one that reads CLOSE and ignores it: three presses in GUI_CLOSE_MS offer to end it */
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && g.dialog.kind == GUI_DLG_CONFIRM);
+    gui_key(&g, 27);
+    gui_act(&g, ACT_CLOSE);                             /* Cancel, and it still has not read: asked at once */
+    CHECK(count(a, WIN_EV_CLOSE) == 3 && g.dialog.kind == GUI_DLG_CONFIRM);
+    gui_key(&g, 27);
+    /* N1: the kernel says a CLOSE waits when its full queue refused one (kernel/win.c): the next press asks too */
     fake_win_read(a);
     tick();
-    g.now += 4000;
     gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 4 && !g.dialog.kind);
     fake_win_read(a);
     tick();
-    g.now += 500;
-    gui_act(&g, ACT_CLOSE);
-    CHECK(count(a, WIN_EV_CLOSE) == 5 && !g.dialog.kind);
-    fake_win_read(a);
+    fake_wins[a].st.close_waiting = 1;                  /* as kernel/win.c's win_update() says it then */
     tick();
-    g.now += 500;
-    gui_act(&g, ACT_CLOSE);                             /* the third: two CLOSEs it read in the last 3 seconds */
-    CHECK(count(a, WIN_EV_CLOSE) == 5 && g.dialog.kind == GUI_DLG_CONFIRM);
+    gui_act(&g, ACT_CLOSE);
+    CHECK(count(a, WIN_EV_CLOSE) == 4 && g.dialog.kind == GUI_DLG_CONFIRM);
     gui_key(&g, GUI_RIGHT);                             /* End */
     gui_key(&g, '\r');
     CHECK(fake_killed == 41 && !client_at(&g, id));
+}
+
+/* 11/09/26 (the second review, from the review of img): a program the desktop started that ends before it ever opened
+   a window, killed or with a status other than 0, is said in a message; with 0, or once it had a window, nothing. One
+   message at a time, while no other dialog is up; the ends kept from before this desktop began are let go */
+static void test_ended(void) {
+    fake_desktop(&g, 960, 540);
+    fake_end(30, "old", 2, false, false);               /* kept before this desktop began */
+    tick();
+    CHECK(!g.dialog.kind && fake_ended_calls >= 2);
+    fake_end(31, "ls", 0, false, false);                /* a tool from Run program...: nothing */
+    fake_end(32, "wdemo", -1, true, true);              /* killed once it had a window: its window went, as told */
+    fake_end(33, "wpaint", 2, false, false);
+    fake_end(34, "wview", -1, true, false);             /* a fault before any window */
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Program ended") &&
+          !strcmp(g.dialog.text[0], "wpaint (pid 33) ended: status 2"));
+    tick();                                             /* the next one waits while a dialog is up */
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0], "wpaint (pid 33) ended: status 2"));
+    gui_key(&g, '\r');
+    tick();
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0], "wview (pid 34) ended: killed"));
+    gui_key(&g, '\r');
+    tick();
+    CHECK(!g.dialog.kind);
+    fake_end(35, "wcalc", 1, false, true);              /* a window first: nothing */
+    tick();
+    CHECK(!g.dialog.kind);
 }
 
 static void test_choosers(void) {
@@ -1642,13 +1672,13 @@ static void test_choosers(void) {
     tick();
     CHECK(g.dialog.kind == GUI_DLG_OPEN && !strcmp(g.dialog.dir, "/home"));
     /* 11/05/26 (the review): the title names the program it is for; (the review of stage 2) by a name it cannot set,
-       its program's, not its window's, and with no sign of the desktop's before it */
-    CHECK(!strcmp(g.dialog.title, "wpaint: Open a picture") && g.dialog.program);
+       its program's, not its window's, and with no sign of the desktop's before it; (the second review) and its pid */
+    CHECK(!strcmp(g.dialog.title, "wpaint (pid 41): Open a picture") && g.dialog.program);
     {
         int dx, dy, dw, dh;
         dialog_box(&g, &dx, &dy, &dw, &dh);
         draw(960, 540);
-        CHECK(shows(960, dx + 12, dy + 6, "wpaint: Open", PAPER));
+        CHECK(shows(960, dx + 12, dy + 6, "wpaint (pid 41): Open", PAPER));
     }
     for(i = 0, txt = 0; i < g.dialog.count; i++) if(strstr(g.dialog.list[i].name, ".txt")) txt++;
     CHECK(g.dialog.count == 3 && !txt);                 /* pics, cat.png and dog.PNG: its type in any case */
@@ -1766,7 +1796,7 @@ static void test_choosers(void) {
     d = request(WIN_DLG_SAVE, 8, "/home", "x", "");
     fake_win_ask(c, &d);
     tick();
-    CHECK(!strcmp(g.dialog.title, "wcode: Save as"));
+    CHECK(!strcmp(g.dialog.title, "wcode (pid 43): Save as"));
     gui_key(&g, 27);
     CHECK(fake_wins[c].cancels == 1);
 }
@@ -1818,6 +1848,7 @@ int main(void) {
     test_choosers();
     test_dialog_pointer();                              /* 11/05/26 (the review of stage 2) */
     test_close_again();
+    test_ended();                                       /* 11/09/26 (the second review) */
     test_theme_told();
     test_guards(640, 400);
     test_guards(960, 540);

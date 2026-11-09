@@ -41,8 +41,8 @@ Closing. The close button (or Close in the menus) sends CLOSE; the program close
 or asks its own questions. Pressed again, the desktop asks "End the program?" (Cancel first),
 and End kills it through struct gui_sys's kill, whose refusals stand, and lets the window go.
 (11/05/26, the review of stage 2: pressed again, it sends CLOSE again while the program reads its
-events, and asks "End the program?" when a CLOSE waits unread, or at the third press in
-GUI_CLOSE_MS: client_close().)
+events, and asks "End the program?" when a CLOSE waits unread; 11/09/26, the second review: or
+was refused by its full queue, and at the third press however slow: client_close().)
 Leaving the desktop with programs' windows open asks first (guicore.c). When the desktop closes
 (client_finish()), every window is let go: the system ends them for their programs, which are
 not killed.
@@ -345,18 +345,20 @@ void client_theme(struct gui_state *g) {
 /* 11/05/26 (the review): a chooser's title bar names the program it is for, so that no program's chooser passes for
    another's or the desktop's. (The review of stage 2) by a name the program cannot set: its title in the application
    registry, when the desktop started it from there, else its program's file name (the task's), else its pid; never
-   its window's title, which a program may make "SurfOS". The program's own title for the chooser follows */
+   its window's title, which a program may make "SurfOS". 11/09/26 (the second review): a file name can be chosen
+   too (a copy of a program named Paint), so the pid follows the name, as in "End the program?", and tells two apart.
+   The program's own title for the chooser follows */
 static void chooser_title(struct gui_state *g, const struct gui_client *c, const char *own, char *out, size_t n) {
     struct gui_task *tasks = g->chooser_tasks;          /* (not on the stack: 128 of them) */
     int k = reg_of_pid(g, c->st.pid), i, count;
     if(k >= 0) {
-        snprintf(out, n, "%s: %s", g->reg.e[k].title, own);
+        snprintf(out, n, "%s (pid %d): %s", g->reg.e[k].title, c->st.pid, own);
         return;
     }
     count = g->sys && g->sys->tasks ? g->sys->tasks(g->sys->ctx, tasks, GUI_TASK_MAX) : 0;
     for(i = 0; i < count; i++)
         if(tasks[i].pid == c->st.pid && tasks[i].name[0]) {
-            snprintf(out, n, "%s: %s", tasks[i].name, own);
+            snprintf(out, n, "%s (pid %d): %s", tasks[i].name, c->st.pid, own);
             return;
         }
     snprintf(out, n, "pid %d: %s", c->st.pid, own);
@@ -387,6 +389,27 @@ static void chooser(struct gui_state *g, int id) {
     c->request = no;
 }
 
+/* 11/09/26 (the second review, from the review of img): a program the desktop started (Apps, a tile, Files, Open
+   with, Run program...) that ended before it ever opened a window, killed or with a status other than 0, is said in a
+   message, since what it printed went to the console behind the desktop; one that ends with 0 without a window (a
+   command-line tool from Run program...) says nothing. One message at a time, while no dialog is up: the others wait
+   in the kernel, which keeps a few (struct gui_sys's ended). Those kept before this desktop began are let go */
+static void ended(struct gui_state *g) {
+    struct gui_end e[4];
+    char line[80];
+    if(!g->sys->ended) return;
+    if(!g->clients.ends_fresh) {
+        while(g->sys->ended(g->sys->ctx, e, 4) > 0) ;
+        g->clients.ends_fresh = true;
+    }
+    while(!g->dialog.kind && g->sys->ended(g->sys->ctx, e, 1) == 1) {
+        if(e[0].window || (!e[0].killed && e[0].status == 0)) continue;
+        if(e[0].killed) snprintf(line, sizeof(line), "%s (pid %d) ended: killed", e[0].name, e[0].pid);
+        else snprintf(line, sizeof(line), "%s (pid %d) ended: status %d", e[0].name, e[0].pid, e[0].status);
+        dialog_message(g, "Program ended", line, "It opened no window; its text went to the console.");
+    }
+}
+
 void client_tick(struct gui_state *g) {
     struct gui_client *c;
     int id, n;
@@ -406,6 +429,7 @@ void client_tick(struct gui_state *g) {
     for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) if(client_of(g, id)) update(g, id);
     accept(g);
     for(id = GUI_FIRST_CLIENT; id < GUI_SLOTS; id++) if(client_of(g, id)) chooser(g, id);    /* 11/05/26 */
+    ended(g);                                           /* 11/09/26 */
 }
 
 /* 10/26/26: after the pass's input, the windows that asked to be seen come to the front, shown again if they were
@@ -688,18 +712,15 @@ void client_chooser_dropped(struct gui_state *g, int act, const char *target) {
 /* the close button (and Close, Ctrl+W). 11/05/26 (the review of stage 2): each press asks the program, WIN_EV_CLOSE,
    while it reads its events: one that asked "Save the changes?" and was told Cancel is asked again at the next press.
    The desktop offers "End the program?" instead when a CLOSE it was sent waits unread (it is not reading: busy, or
-   stuck), or at the third press in GUI_CLOSE_MS (one that reads CLOSE and ignores it can still be ended from here) */
+   stuck; 11/09/26, the second review: or its full queue refused one), and at the third press, however slow: two
+   CLOSEs it read and stayed. An "End the program?" answered Cancel counts the presses from none again, so the
+   program's own question comes back */
 void client_close(struct gui_state *g, int id) {
     struct gui_client *c = client_of(g, id);
     char name[48], line[80];
-    bool hurried;
     if(!c) return;
-    hurried = c->closes >= 2 && g->now - c->close_at[0] < GUI_CLOSE_MS && g->now - c->close_at[1] < GUI_CLOSE_MS;
-    if(!c->closes || (!c->st.close_waiting && !hurried)) {
-        c->closing = true;
-        c->close_at[1] = c->close_at[0];                /* the two CLOSEs sent last, the newest first */
-        c->close_at[0] = g->now;
-        if(c->closes < 2) c->closes++;
+    if(!c->st.close_waiting && c->closes < 2) {
+        c->closes++;
         c->st.close_waiting = 1;                        /* (until the next update says it was read) */
         send(g, c, WIN_EV_CLOSE, 0, 0, 0);
         return;
@@ -712,12 +733,17 @@ void client_close(struct gui_state *g, int id) {
     g->dialog.choice = 2;                               /* Enter alone ends nothing */
 }
 
-/* "End the program?" answered: End kills it (the system's refusal is shown) and lets its window go */
+/* "End the program?" answered: End kills it (the system's refusal is shown) and lets its window go; 11/09/26: Cancel
+   counts the close button's presses from none again */
 void client_answer(struct gui_state *g, int slot, int button, const char *target) {
     int id = GUI_FIRST_CLIENT + slot;
     struct gui_client *c = client_of(g, id);
     char msg[80];
-    if(button != 0 || !c || c->st.pid != atoi(target)) return;     /* the slot may hold another window by now */
+    if(!c || c->st.pid != atoi(target)) return;        /* the slot may hold another window by now */
+    if(button != 0) {
+        c->closes = 0;
+        return;
+    }
     msg[0] = 0;
     if(g->sys && g->sys->kill && g->sys->kill(g->sys->ctx, c->st.pid, msg, sizeof(msg)) < 0) {
         dialog_message(g, "Not ended", msg, "");

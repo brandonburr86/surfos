@@ -80,6 +80,7 @@ static void test_parse(void) {
     CHECK(refused("program = p\ntitle = My \xE2\x89\x88 app\n", "no sign of the desktop's"));
     CHECK(refused("program = p\ntitle = Apps\n", "none of the desktop's menus"));
     CHECK(refused("program = p\ntitle = \xC2\xA0" "surfOS\n", "none of the desktop's menus"));
+    CHECK(refused("program = p\ntitle = Window:\n", "none of the desktop's menus"));     /* 11/09/26: punctuation after */
     CHECK(parse("program = p\ntitle = Caf\xC3\xA9 \xE2\x80\x94 Applications\n", &r, why) == 0);
     CHECK(refused("program = p\ntitle = x\ntypes = .png\n", "line 3: types: not a list of types"));
     CHECK(refused("program = p\ntitle = x\ntypes = png,bmp\n", "not a list of types"));
