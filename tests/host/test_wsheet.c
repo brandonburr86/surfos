@@ -1990,7 +1990,7 @@ static void test_review(void) {
     struct sh_value v;
     struct sheet *t, *u, *old;
     struct sh_clip *c;
-    int len, k, n, ok;
+    int len, k, n, ok, i;
     /* a text's ' is not counted: "'" and 8,192 bytes is a cell, and 8,193 bytes of anything else is not */
     fresh();
     text[0] = '\'';
@@ -2164,21 +2164,42 @@ static void test_review(void) {
     sh_insert_rows(S, 0, 2);
     CHECK_STR(inp("B7"), "=A1*2+B9?");
     CHECK_STR(inp("B8"), "=A3+");
-    /* the second review: a sheet grown until an edit is refused (texts of 200 bytes down 65,536 rows and on), saved
-       as .sheet and as CSV, opens again: edits stop read_headroom short of the budget, all of which a reader may use */
-    fresh();
-    memset(text, 'x', 200);
-    for(n = k = 0; sh_set(S, k % SH_ROWS, k / SH_ROWS, text, 200) == 0; k++) n++;
-    CHECK(n > 100000 && sh_mem_used <= sh_mem_max - read_headroom && !strcmp(sh_why(S), "Not enough memory for the change"));
-    files[SH_NATIVE] = save(S, SH_NATIVE);
-    files[SH_CSV] = save(S, SH_CSV);
-    fresh();                                    /* a window that holds nothing else: a fresh one, or Open's */
-    for(k = SH_NATIVE; k <= SH_CSV; k++) {
-        t = load(k, files[k], (int)strlen(files[k]), 65536, why);
-        if(!t) printf("the %s of a sheet at its budget refused: %s\n", k == SH_CSV ? "CSV" : ".sheet", why);
-        CHECK(t && sh_cells(t) == n && !sh_limited(t));
-        sh_free(t);
-        free(files[k]);
+    /* the second review: a sheet grown until an edit is refused, saved as .sheet and as CSV, opens again in a sheet
+       that holds nothing else: edits stop read_headroom short of the budget, all of which a reader may use. Texts of
+       200 bytes down 65,536 rows and on (whose .sheet passes 32 MB on i386: then nothing is written, as no reader
+       would take it), and formulas, pasted a thousand at a time, then fewer, so that a recalculation of them all is
+       not done for each */
+    for(i = 0; i < 2; i++) {
+        fresh();
+        n = 0;
+        if(i == 0) {
+            memset(text, 'x', 200);
+            for(k = 0; sh_set(S, k % SH_ROWS, k / SH_ROWS, text, 200) == 0; k++) n++;
+        } else {
+            static char block[3 * 1000 + 1];
+            int size;
+            for(k = 0; k < 1000; k++) memcpy(block + 3 * k, "=1\n", 3);
+            for(size = 1000; size >= 1; size /= 10)
+                while(n / 65000 < SH_COLS && sh_paste_text(S, block, 3 * size, n % 65000, n / 65000, NULL) == 0)
+                    n += size;
+        }
+        CHECK(n > 100000 && sh_mem_used <= sh_mem_max - read_headroom && !sh_limited(S));
+        for(k = SH_NATIVE; k <= SH_CSV; k++) {
+            if(sh_write_size(S, k) > sh_file_max) {
+                CHECK(sh_write(S, k, count_put, NULL) < 0);
+                files[k] = NULL;
+            } else files[k] = save(S, k);
+        }
+        CHECK(i == 0 || (files[SH_NATIVE] && files[SH_CSV]));
+        fresh();                                /* a window that holds nothing else: a fresh one, or Open's */
+        for(k = SH_NATIVE; k <= SH_CSV; k++) {
+            if(!files[k]) continue;
+            t = load(k, files[k], (int)strlen(files[k]), 65536, why);
+            if(!t) printf("the %s of a sheet at its budget refused: %s\n", k == SH_CSV ? "CSV" : ".sheet", why);
+            CHECK(t && sh_cells(t) == n && !sh_limited(t));
+            sh_free(t);
+            free(files[k]);
+        }
     }
 }
 

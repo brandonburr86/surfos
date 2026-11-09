@@ -695,17 +695,20 @@ int main(void) {
     }
     /* the second review: a sheet grown until an edit is refused, saved as .sheet and as CSV, opens again in the same
        window (Open frees the sheet first, its question answered) and in a fresh one */
-    fresh(NULL);
-    memset(big, 'x', 200);
-    for(n = i = 0; sh_set(A.s, i % SH_ROWS, i / SH_ROWS, big, 200) == 0; i++) n++;
-    CHECK(n > 100000);
+    fresh(NULL);                                /* formulas, a thousand pasted at a time, then fewer: small files */
+    for(i = 0; i < 1000; i++) memcpy(big + 3 * i, "=1\n", 3);
+    for(n = 0, i = 1000; i >= 1; i /= 10)
+        while(n / 65000 < SH_COLS && sh_paste_text(A.s, big, 3 * i, n % 65000, n / 65000, NULL) == 0) n += i;
+    CHECK(n > 100000 && !sh_limited(A.s));
     ctrl('S', WIN_MOD_SHIFT);
     run();
     gkf_dialog_answer("/stick/full.sheet");
     CHECK(run() && status_is("Saved full.sheet"));
     ctrl('S', WIN_MOD_SHIFT);
     run();
-    gkf_dialog_answer("/stick/full.csv");      /* texts alone: CSV loses nothing, and asks nothing */
+    gkf_dialog_answer("/stick/full.csv");      /* the formulas lost: asked, and saved */
+    CHECK(run() && box_is(BOX_CSV));
+    gkf_key('\r', 0);
     CHECK(run() && status_is("Saved the values in full.csv"));
     for(i = 0; i < 2; i++) {
         ctrl('O', 0);
