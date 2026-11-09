@@ -25,7 +25,7 @@ TLS = (256, 85)                     # the TLS check box's
 FORM_ERR = (16, 238)                # the form's message
 STATUS = (10, H - 22 + 3)           # the status bar's text
 ROW0 = 61                           # the messages' first row (the tab strip, the topic line, a line)
-TEXT_X = 4 + 6 * 8                  # a message's text, after its time; an error's after "! " too
+TEXT_X = 4 + 6 * 8                  # a line's start, after its time; the Chat's own lines' text after its mark and a space
 
 
 def places(h=H):
@@ -104,9 +104,9 @@ def checks(d):
         d.move(*PARK)
         d.key('ret')
         d.visible('chat: Enter connects: the rooms show, and the server\'s room says it is connecting',
-                  lambda s: w.text(s, TEXT_X, ROW0, 'Connecting to irc.nowhere.test, port 6667', MUTED, SHEET))
+                  lambda s: w.text(s, TEXT_X + 16, ROW0, 'Connecting to irc.nowhere.test, port 6667', MUTED, SHEET))
         d.visible('chat: its helper finds no network, and the room says why, in coral; the status bar Not connected',
-                  lambda s: w.text(s, TEXT_X + 16, ROW0 + 16, 'Not connected: ', CORAL, SHEET) and
+                  lambda s: any(w.text(s, TEXT_X + 16, ROW0 + 16 * k, 'Not connected: ', CORAL, SHEET) for k in (1, 2)) and
                   w.status('Not connected')(s), 'guiapps-chat-no-network.png', timeout=30)
         d.key('ctrl-n')
         d.visible('chat: Ctrl+N, the Chat menu\'s Connect, brings the form back with the server in it',

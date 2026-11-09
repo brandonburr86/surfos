@@ -5,13 +5,16 @@ the Mac's loopback, which the guest reaches at 10.0.2.2 through QEMU's user netw
 Its only password is a made-up one, and it never answers anything but the script.
 
 wchat is started in the Terminal. The form: the server 10.0.2.2, TLS off, the server's port, SASL, a password that
-shows as dots. Connect: the server receives CAP LS 302, NICK and USER, asks for SASL's PLAIN login and gets the right
-base64; the welcome comes and the status bar says who is where. /join #surf: the server receives the JOIN and answers
+shows as dots, and the form's warning that it would go unencrypted. Connect asks first (11/09/26, the review): Enter
+alone answers Cancel and nothing reaches the server; then Send anyway, chosen. The server receives CAP LS 302, NICK and
+USER, asks for SASL's PLAIN login and gets the right base64; the welcome comes and the status bar says who is where. /join #surf: the server receives the JOIN and answers
 it with the topic, the names and a message that names us with a word in red; the window shows the channel's tab, the
 topic, the nick list, the message (its nick in coral, the red word red). A message typed reaches the server. A
 double-click on @bob opens a query, and a message there reaches bob. The close button asks first; Close says QUIT,
-the server ends the connection, and the window goes. Then a second wchat asks for TLS on the same port, which is no
-TLS server: the handshake fails and the room says so. ps finds no wchat at the end."""
+the server ends the connection, and the window goes. Then a second wchat asks for TLS on the same port, with SASL and
+the password: no question, since it would be encrypted; the server, which speaks no TLS, gets a handshake and nothing
+else, and the room says it failed. ps finds no wchat at the end, and the server never got the password, nor its base64
+but once, after Send anyway."""
 import base64
 import socket
 import threading
@@ -31,6 +34,7 @@ server.listen(4)
 PORT = server.getsockname()[1]
 received = []                       # every line from the client, in order
 tls_tried = []                      # connections that began with a TLS record
+accepted = []                       # every connection the server took
 RED = bytes.fromhex('e02020')       # colour 4 as Chat draws it (user/wchat/ircfmt.c)
 NICKS_X = 600                       # the nick list's left, in the content
 TABS_Y = 7
@@ -96,6 +100,7 @@ def serve():
             conn, _ = server.accept()
         except OSError:
             return
+        accepted.append(True)
         threading.Thread(target=serve_one, args=(conn,), daemon=True).start()
 
 
@@ -142,6 +147,10 @@ def form(d, w, tls, sasl):
         d.visible('chatnet: the password shows as dots (code page 437\'s 7), never as itself',
                   lambda s: w.text(s, chat.HOST[0] + 4, 175 + 3, '\x07' * (len(PASSWORD) - 1), INK, chat.SHEET))
         # (the last dot shares its cell's edge with the caret)
+        if not tls:
+            d.visible('chatnet: without TLS the form says that anyone on the network could read the password',
+                      lambda s: any(w.text(s, 16, y, 'No encryption: anyone on the network can read the password.',
+                                           chat.CORAL, chat.PAPER) for y in range(200, 232)))
     d.move(*chat.PARK)
     d.key('ret')
 
@@ -157,6 +166,19 @@ def checks(d):
         d.require('chatnet: the Terminal shows its prompt', term.wait_rows(d, grid, term.prompted, 30) is not None)
         w = start(d, grid, state, 'to talk to the test server')
         form(d, w, False, True)
+        asked = lambda s: w.text(s, (chat.W - 470) // 2 + 28, (chat.H - 146) // 2 + 6, 'Send your password unencrypted?',
+                                 chat.PAPER)
+        d.visible('chatnet: without TLS, Connect first asks whether to send the password unencrypted', asked,
+                  'guiapps-chatnet-plain.png', timeout=15)
+        d.key('ret')                                # Enter alone: Cancel, the box's first answer
+        d.require('chatnet: Enter alone answers Cancel: no connection reaches the server',
+                  not waited(lambda: bool(accepted) or bool(received), 5) and d.vm.wait_screen(
+                      lambda s: not asked(s), 5, interval=0.2) is not None)
+        d.key('ret')                                # Connect again, from the password field
+        d.visible('chatnet: asked again', asked, timeout=15)
+        d.key('right')
+        d.key('ret')                                # Send anyway, chosen
+        consent_at = len(received)
         d.require('chatnet: Connect: the server receives CAP LS 302, NICK and USER', waited(got('CAP LS 302'), 30) and
                   waited(got(f'USER {NICK} 0 * :{NICK}'), 10) and got(f'NICK {NICK}')())
         plain = base64.b64encode(b'\0' + NICK.encode() + b'\0' + PASSWORD.encode()).decode()
@@ -190,13 +212,15 @@ def checks(d):
         d.visible('chatnet: and the window goes when the connection has ended', lambda s: chat.find(d, s) is None,
                   timeout=20)
         state['open'] = False
-        # TLS to a server that has none: refused, and said
+        # TLS to a server that has none, with the password: no question, the handshake refused, and said
+        lines_before_tls = len(received)
         w = start(d, grid, state, 'for TLS')
-        form(d, w, True, False)
-        d.require('chatnet: TLS on the port: a handshake reaches the server', waited(lambda: bool(tls_tried), 30))
-        d.visible('chatnet: the handshake fails, and the room says so', lambda s: w.text(
-            s, chat.TEXT_X + 16, chat.ROW0 + 16, 'Not connected: ', chat.CORAL, chat.SHEET), 'guiapps-chatnet-tls.png',
-                  timeout=30)
+        form(d, w, True, True)
+        d.require('chatnet: TLS on the port: a handshake reaches the server, and no question was asked',
+                  waited(lambda: bool(tls_tried), 30) and not asked(d.vm.screen()))
+        d.visible('chatnet: the handshake fails, and the room says so', lambda s: any(w.text(
+            s, chat.TEXT_X + 16, chat.ROW0 + 16 * k, 'Not connected: ', chat.CORAL, chat.SHEET) for k in (1, 2)),
+                  'guiapps-chatnet-tls.png', timeout=30)
         w.close()
         d.visible('chatnet: not connected, the close button closes it', lambda s: chat.find(d, s) is None, timeout=15)
         state['open'] = False
@@ -204,8 +228,11 @@ def checks(d):
         d.keys('wait; ps | grep -c wchat\n')         # wait: the jobs' ends, which come just after their windows'
         d.require('chatnet: ps finds no wchat', term.wait_rows(
             d, grid, lambda rows: answered(rows, 'wait; ps | grep -c wchat', '0')) is not None)
-        d.check('chatnet: the password never reached the server as itself',
-                not any(PASSWORD in r for r in received))
+        plain = base64.b64encode(b'\0' + NICK.encode() + b'\0' + PASSWORD.encode()).decode()
+        d.check('chatnet: the password never reached the server as itself; in base64 once, after Send anyway; and the '
+                'TLS connection carried no line', not any(PASSWORD in r for r in received) and
+                sum(plain in r for r in received) == 1 and not any(plain in r for r in received[:consent_at]) and
+                len(received) == lines_before_tls)
         state['done'] = True
     except AssertionError:
         d.vm.screen('guiapps-chatnet-at-failure.png')
