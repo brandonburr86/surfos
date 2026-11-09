@@ -9,6 +9,10 @@ end first, so no buffer needs any alignment and the host's byte order does not m
 A context is wiped when its hash is finished: for HMAC it holds keyed state.
 See include/crypto/crypto.h; tests/host/test_crypto.c checks it against FIPS 180 and
 RFC 2202.
+11/05/26 (Settings' review): a block's message schedule is wiped when the block is done:
+the schedule can be run backwards to the block, which for HMAC's first is the key (a WPA2
+password) xor the pad. What the round variables leave in spilled registers is pbkdf2_sha1()'s
+and ieee80211_prf_sha1()'s to overwrite (kdf.c).
 */
 
 #include <surfos/types.h>
@@ -35,6 +39,7 @@ static void sha1_block(u32 h[5], const u8 *p) {
         e = d; d = c; c = rol(b, 30); b = a; a = t;
     }
     h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    crypto_wipe(w, sizeof(w));                          /* the schedule: the block, run backwards */
 }
 
 void sha1_init(struct sha1_ctx *c) {

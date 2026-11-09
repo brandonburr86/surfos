@@ -8,11 +8,21 @@ PBKDF2 (RFC 8018, 4096 iterations of HMAC-SHA1: 802.11-2016 J.4), and the PMK to
 PTK with the PRF of 802.11-2016 12.7.1.2. Both key HMAC once and copy the keyed
 context for every block, so an iteration costs two SHA-1 blocks. Intermediate values
 are wiped. tests/host/test_crypto.c checks them against RFC 6070 and Annex J.
+11/05/26 (Settings' review): and so is the stack below them once they are done, where the
+hashes' frames were: sha1_block() wipes its message schedule, but its round variables, keyed
+state while it hashes HMAC's first blocks, may have been spilled there (at -O0 they all are).
 */
 
 #include <surfos/types.h>
 #include <crypto/crypto.h>
 #include <blibc_common.h>
+
+/* the stack the hashes below a derivation used, overwritten: a frame of its own where theirs were (not inlined), deeper
+   than they go (HMAC, SHA-1 and their locals: some hundreds of bytes at -O0) */
+static __attribute__((noinline)) void burn_stack(void) {
+    u8 b[1024];
+    crypto_wipe(b, sizeof(b));
+}
 
 int pbkdf2_sha1(const u8 *pass, size_t pass_len, const u8 *salt, size_t salt_len, u_int iterations,
                 u8 *out, size_t out_len) {
@@ -46,6 +56,7 @@ int pbkdf2_sha1(const u8 *pass, size_t pass_len, const u8 *salt, size_t salt_len
     crypto_wipe(&c, sizeof(c));
     crypto_wipe(u, sizeof(u));
     crypto_wipe(t, sizeof(t));
+    burn_stack();
     return 0;
 }
 
@@ -73,4 +84,5 @@ void ieee80211_prf_sha1(const u8 *key, size_t key_len, const char *label, const 
     crypto_wipe(&k, sizeof(k));
     crypto_wipe(&c, sizeof(c));
     crypto_wipe(h, sizeof(h));
+    burn_stack();
 }
