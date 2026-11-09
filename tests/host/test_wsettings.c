@@ -237,7 +237,7 @@ static void join_wpa2(void) {
     t = row("SurfSimWPA");
     CHECK(ws_join(&m, t) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && !m.job && k.starts == 1);
     CHECK(!strcmp(m.ask.text, "Password for SurfSimWPA (WPA2-Personal):") && m.ask.save == 0);   /* unticked (M3) */
-    CHECK(!strcmp(ws_save_label(&m), "Save it: SurfOS joins it by itself at every start"));
+    CHECK(!strcmp(ws_save_label(&m, 1), "Save it: SurfOS joins it by itself at every start"));
     CHECK(!strcmp(m.ask.yes, "Join") && !strcmp(m.ask.no, "Cancel"));
     strcpy(pass, "short");                                          /* 8 to 63 characters: the box stays */
     CHECK(ws_join_answer(&m, NULL, 0, pass, 1) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && k.starts == 1);
@@ -805,6 +805,8 @@ static void review_fixes(void) {
     CHECK(!strncmp(m.ask.text, "A telnet server runs or is to start, and it has no password", 59) &&
           strstr(m.ask.text, "Join SurfSim all the same?") != NULL);
     CHECK(!strcmp(m.status, "SurfSim is open, and a server without a password runs: asked first"));
+    CHECK(ws_answer(&m, 1) == 0 && !m.job && m.ask.kind == WS_ASK_OPEN);   /* raised by itself: no Yes so soon (N2) */
+    m.now += WS_ASK_GUARD_MS;
     CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.flags == NETCTL_JOIN_EXPOSED);
     job_done(0, NETCTL_DONE_EXPOSED, NULL);
     m.now += 200;
@@ -824,6 +826,7 @@ static void review_fixes(void) {
     m.now += 200;
     ws_tick(&m);
     CHECK(!m.job && m.ask.kind == WS_ASK_OPEN && m.ask.save == 1 && strstr(m.ask.text, "An FTP server runs") != NULL);
+    m.now += WS_ASK_GUARD_MS;
     CHECK(ws_answer(&m, 1) == WS_DRAW && m.job && k.last_join.flags == (NETCTL_JOIN_SAVE | NETCTL_JOIN_EXPOSED));
     job_done(0, NETCTL_DONE_SAVED | NETCTL_DONE_EXPOSED, NULL);
     m.now += 200;
@@ -837,19 +840,21 @@ static void review_fixes(void) {
     snprintf(setting("telnetd")->value, sizeof(setting("telnetd")->value), "%s", "on");
     m.now += WS_READ_MS;
     ws_tick(&m);
-    CHECK(!strcmp(ws_save_label(&m), "Save it: joined by itself at every start, and telnetd starts on it"));
+    CHECK(!strcmp(ws_save_label(&m, 1), "Save it: joined by itself at every start, and telnetd starts on it"));
+    CHECK(!strcmp(ws_save_label(&m, 0), "Save it: joined by itself only while no telnetd or ftpd is on"));  /* N3 */
     CHECK(ws_answer(&m, 0) == WS_DRAW && m.ask.kind == WS_ASK_NONE);
     snprintf(setting("telnetd")->value, sizeof(setting("telnetd")->value), "%s", "off");
     k.wifi.exposed = NETCTL_EXPOSED_TELNET;                         /* telnetd on in a Terminal: running */
     m.now += WS_READ_MS;
     ws_tick(&m);
-    CHECK(ws_join_other(&m) == WS_DRAW && m.ask.save == 0);
-    CHECK(!strcmp(ws_save_label(&m), "Save it: joined by itself at every start, and telnetd starts on it"));
+    CHECK(ws_join_other(&m) == WS_DRAW && m.ask.save == 0);         /* telnetd by hand only: nothing at a start (N3) */
+    CHECK(!strcmp(ws_save_label(&m, 1), "Save it: SurfOS joins it by itself at every start"));
+    CHECK(!strcmp(ws_save_label(&m, 0), "Save it: joined by itself only while no telnetd or ftpd is on"));
     CHECK(ws_answer(&m, 0) == WS_DRAW);
     k.wifi.exposed = 0;
     m.now += WS_READ_MS;
     ws_tick(&m);
-    CHECK(!strcmp(ws_save_label(&m), "Save it: SurfOS joins it by itself at every start"));
+    CHECK(!strcmp(ws_save_label(&m, 1), "Save it: SurfOS joins it by itself at every start"));
     /* L2: a job of this window's runs while the password box is open: the answer waits and the box stays */
     CHECK(ws_join(&m, row("SurfSimWPA")) == WS_DRAW && m.ask.kind == WS_ASK_PASSWORD && ws_answer_starts(&m));
     CHECK(ws_scan(&m) == WS_DRAW && m.job);
@@ -935,6 +940,50 @@ static void review_fixes(void) {
     m.now += 200;
     ws_tick(&m);
     CHECK(!m.job && !strcmp(m.status, "6 networks in range"));
+    CHECK(ws_scan(&m) == WS_DRAW && m.job);                        /* N4: another error would come again: given up */
+    k.job_read_r = -22;
+    m.now += 200;
+    ws_tick(&m);
+    CHECK(!m.job && !strcmp(m.status, "Done (its outcome was not seen: the kernel's record moved on)"));
+    job_done(0, 0, NULL);
+}
+
+/* the review's second round (11/09/26): N1 a step back under settings=off, N2 a question never put in the place of an
+   open one (probe P2), the reviewer's probes P1 and P2 as they ran */
+static void review_round2(void) {
+    char pass[4] = "";
+    int starts;
+    start();
+    add_setting("desktop.theme", "ocean", "ocean | dusk");
+    started();
+    /* N1: settings=off, so a step puts nothing in force: back to the value of before is a step all the same */
+    k.apply_r = 1;
+    starts = k.starts;
+    CHECK(ws_choose(&m, "desktop.theme", "dusk") == WS_DRAW && !strcmp(setting("desktop.theme")->value, "ocean"));
+    m.now += 400;
+    CHECK(ws_choose(&m, "desktop.theme", "ocean") == WS_DRAW && !strcmp(m.step[0].value, "ocean") &&
+          !strcmp(m.step[0].from, "ocean"));
+    m.now += WS_WRITE_AFTER_MS;
+    ws_tick(&m);
+    CHECK(k.starts == starts && !m.job && !m.step[0].key[0]);       /* nothing written: dusk never was */
+    CHECK(!strcmp(m.status, "desktop.theme = ocean, as it was before the steps: nothing written"));
+    k.apply_r = 0;
+    /* N2: a by-name open join looks for its network; meanwhile the close question; the job is refused for a server
+       that started: the close question stays, and its Yes closes */
+    CHECK(ws_join_other(&m) == WS_DRAW);
+    CHECK(ws_join_answer(&m, "CafeOpen", 8, pass, 0) == WS_DRAW && m.job && k.last_join.flags == 0);
+    CHECK(ws_close(&m, "newhost") == WS_DRAW && m.ask.kind == WS_ASK_CLOSE);
+    k.exposed_now = 1;
+    k.wifi.exposed = NETCTL_EXPOSED_TELNET;
+    job_done(-1, NETCTL_DONE_EXPOSED, "a server without a password runs");
+    starts = k.starts;
+    m.now += 250;
+    ws_tick(&m);
+    CHECK(!m.job && m.ask.kind == WS_ASK_CLOSE && !strcmp(m.ask.yes, "Close"));
+    CHECK(!strcmp(m.status, "CafeOpen was not joined: it is open, and a server without a password runs (Join asks "
+                            "first)"));
+    CHECK(ws_answer(&m, 1) == WS_CLOSE && k.starts == starts && !m.job);    /* the click meant for Close: closed */
+    k.exposed_now = 0;
 }
 
 int main(void) {
@@ -949,6 +998,7 @@ int main(void) {
     without_the_call();
     closing_and_lost_jobs();
     review_fixes();
+    review_round2();
     CHECK(k.bad == 0);                                              /* every call's size and argument as they should be */
     printf("test_wsettings: %d checks, %d failed\n", checks, failed);
     return failed ? 1 : 0;

@@ -28,6 +28,8 @@ and the kernel's call.
 #define WS_CHOICES      8
 #define WS_STEPS        2               /* settings stepped through and not yet written: the theme, the pointer speed */
 #define WS_WRITE_AFTER_MS 1500          /* a stepped setting is written once its steps have stopped for so long */
+#define WS_ASK_GUARD_MS 500             /* a question the model raised by itself takes no Yes so soon: a click meant
+                                           for what was there before it */
 
 /* the kernel's call: SYS_netctl, or the tests' simulation. Its answer: >= 0, or -errno */
 typedef int (*ws_netctl_fn)(void *ctx, int op, void *arg, unsigned size);
@@ -72,6 +74,8 @@ struct ws_ask {
     char text[480];
     char yes[24];                       /* its buttons' words */
     char no[24];
+    int raised;                         /* raised by the model itself (no click of the person's asked for it) */
+    unsigned at;                        /* when it was asked */
 };
 
 struct wsettings {
@@ -151,7 +155,8 @@ int ws_joined_saved(const struct wsettings *m);         /* the network joined no
 int ws_forget(struct wsettings *m, int i);              /* the saved row's network: asked about first */
 int ws_answer(struct wsettings *m, int yes);            /* the other boxes' Yes or No */
 int ws_answer_starts(const struct wsettings *m);        /* the question's Yes starts a job (greyed while one runs) */
-const char *ws_save_label(const struct wsettings *m);   /* the join boxes' Save it: what saving means now */
+const char *ws_save_label(const struct wsettings *m, int wpa2);   /* the join boxes' Save it: what saving means now
+                                                                       for a WPA2 network (1) or an open one (0) */
 void ws_wifi_line(const struct wsettings *m, char *out, int n);    /* the card and the network joined */
 /* the lists' rows, their columns apart at tabs: a network in range (its name, the signal in four bars and in dBm, the
    security, joined, saved or not supported), a saved network (its name, its security, its state as wifi saved says it) */

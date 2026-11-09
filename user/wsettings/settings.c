@@ -608,7 +608,10 @@ int ws_choose(struct wsettings *m, const char *name, const char *value) {
         say(m, "This SurfOS has no setting called %s", name, NULL, NULL);
         return WS_DRAW;
     }
-    if(!strcmp(s->value, value)) return 0;
+    for(i = 0; i < WS_STEPS && strcmp(m->step[i].key, name); i++) ;    /* a step of it waiting: the newest value (under
+                                                                           settings=off nothing is in force: s's is the
+                                                                           value of before, the review's N1) */
+    if(!strcmp(i < WS_STEPS ? m->step[i].value : s->value, value)) return 0;
     memset(&r, 0, sizeof(r));
     snprintf(r.key, sizeof(r.key), "%s", name);
     snprintf(r.value, sizeof(r.value), "%s", value);
@@ -636,8 +639,9 @@ int ws_tick(struct wsettings *m) {
     int draw = 0, r;
     if(m->job) {
         r = m->netctl(m->ctx, NETCTL_JOB, &j, sizeof(j));
-        if(r < 0 && r != -E_NOSYS) {
-            ;                                           /* not read now (-ENOMEM): the job runs on; read again next tick */
+        if(r == -E_NOMEM) {
+            ;                                           /* not read now: the job runs on; read again next tick (another
+                                                           error would come again: the job is given up below) */
         } else if(r < 0 || (int)j.seq != m->job || j.state != NETCTL_JOB_RUNNING) {
             int quiet = m->job_quiet, saved = 0;
             ws_refresh(m);                              /* what it changed */
@@ -818,10 +822,18 @@ static int ask_exposed(struct wsettings *m, const unsigned char *ssid, int len, 
     char why[300], name[WS_NAME];
     ws_refresh(m);
     ws_ssid_text(ssid, len, name, sizeof(name));
+    if(m->ask.kind) {                                   /* never in the place of a question that is open (the review's
+                                                           N2): its buttons would take a click meant for that one */
+        say(m, "%s was not joined: it is open, and a server without a password runs (Join asks first)", name, NULL,
+            NULL);
+        return WS_DRAW;
+    }
     if(!exposed_text(m, why, sizeof(why)))
         snprintf(why, sizeof(why), "%s", "A server without a password runs, and anyone on an open network reaches it. ");
     ask(m, WS_ASK_OPEN, ssid, len, "Join an open network", "Join", "Cancel");
     m->ask.save = save;
+    m->ask.raised = 1;                                  /* no click of the person's asked for it: a Yes waits a moment */
+    m->ask.at = m->now;
     snprintf(m->ask.text, sizeof(m->ask.text), "%sJoin %s all the same?", why, name);
     say(m, "%s is open, and a server without a password runs: asked first", name, NULL, NULL);
     return WS_DRAW;
@@ -992,19 +1004,25 @@ int ws_answer_starts(const struct wsettings *m) {
     return k == WS_ASK_PASSWORD || k == WS_ASK_OTHER || k == WS_ASK_OPEN || k == WS_ASK_FORGET || k == WS_ASK_TELNETD;
 }
 
-/* what saving a network means while telnetd is on or to start: it starts on a saved WPA2 network at every start (the
-   review's M3); the box itself is unticked for every join */
-const char *ws_save_label(const struct wsettings *m) {
+/* what saving a network means (the review's M3, N3); the box itself is unticked for every join. A WPA2 network: with
+   telnetd at startup on, telnetd starts on it at every start (a server started by hand does not come back by itself).
+   An open network: the network manager joins none by itself while a server without a password runs or is to start,
+   and telnetd never starts on one */
+const char *ws_save_label(const struct wsettings *m, int wpa2) {
     const struct netctl_setting *t = ws_setting(m, "telnetd");
-    int due = (t && !strcmp(t->value, "on")) || (m->have_wifi && (m->wifi.exposed & NETCTL_EXPOSED_TELNET));
-    return due ? "Save it: joined by itself at every start, and telnetd starts on it" :
-                 "Save it: SurfOS joins it by itself at every start";
+    int at_start = t && !strcmp(t->value, "on");
+    int exposed = at_start || (m->have_wifi && m->wifi.exposed);
+    if(wpa2) return at_start ? "Save it: joined by itself at every start, and telnetd starts on it" :
+                               "Save it: SurfOS joins it by itself at every start";
+    return exposed ? "Save it: joined by itself only while no telnetd or ftpd is on" :
+                     "Save it: SurfOS joins it by itself at every start";
 }
 
 int ws_answer(struct wsettings *m, int yes) {
     struct ws_ask a = m->ask;
     struct netctl_req r;
     if(yes && m->job && ws_answer_starts(m)) return wait_first(m);    /* the question stays until the job has ended */
+    if(yes && a.raised && m->now - a.at < WS_ASK_GUARD_MS) return 0;  /* too soon to be an answer to it */
     memset(&m->ask, 0, sizeof(m->ask));
     if(a.kind == WS_ASK_CLOSE) return yes ? close_now(m) : WS_DRAW;
     if(!yes || a.kind == WS_ASK_NONE) return WS_DRAW;

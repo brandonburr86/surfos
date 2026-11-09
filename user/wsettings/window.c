@@ -306,7 +306,8 @@ static void show_model(struct wswin *s) {
     set_value(s->tabs, m->page);
     for(k = 0; k < WS_PAGES; k++) gk_menu_check(s->ui, MENU_PAGE + k, k == m->page);
     panel_sync(s);
-    if(s->asked == WS_ASK_PASSWORD || s->asked == WS_ASK_OTHER) set_text(s->ask_save, ws_save_label(m));
+    if(s->asked == WS_ASK_PASSWORD || s->asked == WS_ASK_OTHER)    /* by name: WPA2 once a password is typed */
+        set_text(s->ask_save, ws_save_label(m, s->asked == WS_ASK_PASSWORD || gk_text(s->ask_pass)[0]));
     enable(s->ask_yes, !(m->job && ws_answer_starts(m)));  /* a job runs: the answer waits, the box stays (L2) */
     wifi_sync(s);
     network_sync(s);

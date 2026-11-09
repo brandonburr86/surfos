@@ -480,6 +480,16 @@ static void review_window(void) {
     CHECK(run() && k.last_op == NETCTL_JOIN && !strcmp(k.last_join.passphrase, PASSPHRASE) && !k.last_join.flags);
     CHECK(!memcmp(gk_text(s.ask_pass), zero, NETCTL_PASS_MAX) && !in_window(PASSPHRASE));
     job_done(0, 0, NULL);
+    CHECK(tick(WSW_TICK_MS));
+    /* N3: by name, telnetd at startup on: Save it says what is true for an open network until a password is typed */
+    gkf_key(10, WIN_MOD_CTRL);
+    CHECK(run() && s.asked == WS_ASK_OTHER &&
+          !strcmp(gk_text(s.ask_save), "Save it: joined by itself only while no telnetd or ftpd is on"));
+    gk_focus(s.ask_pass);
+    gkf_type("x");
+    CHECK(run() && !strcmp(gk_text(s.ask_save), "Save it: joined by itself at every start, and telnetd starts on it"));
+    click_on(s.ask_no);
+    CHECK(run() && s.asked == WS_ASK_NONE && !gk_text(s.ask_pass)[0]);
     strcpy(setting("telnetd")->value, "off");
     CHECK(tick(WS_READ_MS));
     /* L3: a step's write runs, and a newer click comes: the radio shows the newer one */

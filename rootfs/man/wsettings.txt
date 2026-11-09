@@ -28,8 +28,9 @@ DESCRIPTION
     makes the network's key of it at once and wipes it; the field is
     wiped as soon as it is handed on. Save it, unticked until it is
     ticked, keeps the network in networks.conf on the stick: the key,
-    never the password. While telnetd is on, it says that telnetd will
-    start on that network.
+    never the password. While telnetd is on, it says what saving then
+    means: telnetd starts on a saved WPA2 network, and an open one is
+    not joined by itself.
 
     A network not heard in the last minute is looked for first when
     it is joined, as wifi join does, and joined as one that hides its
