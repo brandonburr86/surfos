@@ -33,4 +33,5 @@ int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, 
 void guisys_note(void *ctx, const char *line);
 int guisys_prefs(void *ctx, int *theme, int *speed);
 int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n);
+int guisys_ended(void *ctx, struct gui_end *out, int max);  /* 11/09/26 */
 #endif

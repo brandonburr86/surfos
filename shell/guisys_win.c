@@ -12,6 +12,8 @@ waits: win_update() lends the window's pixels until the next update or close, so
 them without a call.
 10/25/26 (stage C6): run, the launcher (Apps > Run program...).
 10/26/26 (stage C12): win_clip, the text a program's window put on the clipboard.
+11/09/26 (the second review): the programs run and run_file start are TF_TOLD, and ended gives their ends
+(kernel/task.c keeps them for this desktop), so that one that fails before it opens a window is said.
 11/05/26 (the desktop applications, track desk): the menus, the clipboard, the choosers and the theme
 (kernel/win.c's desktop side); run_file, a program of /initrd/bin with one argument, as Files opens a
 file in the program the registry names for it; note, a line for the kernel log; and the desktop's
@@ -26,6 +28,7 @@ the desktop waits for the stick meanwhile, as it does for Files' Mount and Eject
 #include <surfos/process.h>
 #include <surfos/spawn.h>
 #include <surfos/klog.h>
+#include <surfos/job.h>
 #include <surfos/win.h>
 #include <fs/vfs.h>
 #include <net/netman.h>
@@ -88,7 +91,7 @@ int guisys_win_run(void *ctx, const char *line, char *msg, size_t n) {
         snprintf(msg, n, "/dev/null: %s", strerror(r));
         return r;
     }
-    pid = process_spawn_files(path, argc, argv, curTask->con, TF_DETACHED, files);
+    pid = process_spawn_files(path, argc, argv, curTask->con, TF_DETACHED | TF_TOLD, files);
     vfs_close(files[0]);                                /* the program holds its own */
     if(pid < 0) {
         snprintf(msg, n, "%s: %s", argv[0], strerror(pid));
@@ -142,7 +145,7 @@ int guisys_run_file(void *ctx, const char *program, const char *arg, char *msg, 
         snprintf(msg, n, "/dev/null: %s", strerror(r));
         return r;
     }
-    pid = process_spawn_files(path, file[0] ? 2 : 1, argv, curTask->con, TF_DETACHED, files);
+    pid = process_spawn_files(path, file[0] ? 2 : 1, argv, curTask->con, TF_DETACHED | TF_TOLD, files);
     vfs_close(files[0]);
     if(pid < 0) {
         snprintf(msg, n, "%s: %s", name, strerror(pid));
@@ -182,4 +185,20 @@ int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n) {
     if(which == 1 && value >= 1 && value <= 3) return netman_set(NETCFG_POINTER, speeds[value - 1], msg, n);
     strlcpy(msg, "no such preference", n);
     return -1;
+}
+
+/* 11/09/26 (the second review): the ends of the programs this desktop started (TF_TOLD), from kernel/task.c */
+int guisys_ended(void *ctx, struct gui_end *out, int max) {
+    struct task_end e[TASK_ENDS];
+    int n, i;
+    (void)ctx;
+    n = task_ends_take(e, max < TASK_ENDS ? max : TASK_ENDS);
+    for(i = 0; i < n; i++) {
+        out[i].pid = (int)e[i].pid;
+        out[i].status = e[i].code;
+        out[i].killed = e[i].how != WX_EXITED;
+        out[i].window = e[i].window;
+        strlcpy(out[i].name, e[i].name, sizeof(out[i].name));
+    }
+    return n;
 }

@@ -39,6 +39,10 @@ struct gui_time { u32 year, month, date, weekday, hour, minute, second; };   /* 
 #define GUI_TASK_SHELL 0x4
 struct gui_task { int pid, ppid, state, tty; u32 flags; char name[GUI_TASK_NAME]; };
 
+/* 11/09/26 (track desk): a program the desktop started (run, run_file) that has ended: its pid and name, its exit
+   status, whether it was killed (a fault, or a kill), and whether it ever opened a window */
+struct gui_end { int pid, status; bool killed, window; char name[GUI_TASK_NAME]; };
+
 /* memory as memstat counts it. 10/17/26 (System Monitor): a heap's size is the most it may grow to (its room in the
    address space, its arena); used and free are of what it has grown to */
 struct gui_memory {
@@ -139,6 +143,9 @@ struct gui_sys {
     void (*note)(void *ctx, const char *line);
     int (*prefs)(void *ctx, int *theme, int *speed);
     int (*pref_set)(void *ctx, int which, int value, char *msg, size_t n);
+    /* 11/09/26 (track desk, the second review): ended: the programs this desktop started that have ended since the
+       call before, at most max, oldest first (the kernel keeps a few: kernel/task.c's task_ends_take()) */
+    int (*ended)(void *ctx, struct gui_end *out, int max);
 };
 
 const struct gui_sys *gui_kernel_sys(void);     /* shell/guisys.c: the kernel's (the kernel only) */

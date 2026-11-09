@@ -127,6 +127,8 @@ int guisys_pref_set(void *ctx, int which, int value, char *msg, size_t n) {
     (void)ctx; (void)which; (void)value; (void)msg; (void)n;
     return -1;
 }
+struct gui_end;                                 /* 11/09/26: nor the ends of the programs a desktop started */
+int guisys_ended(void *ctx, struct gui_end *out, int max) { (void)ctx; (void)out; (void)max; return 0; }
 
 /**** memory: an allocator that can fail ****/
 
