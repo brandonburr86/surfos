@@ -103,8 +103,9 @@ static void slider_paint(struct gk_widget *w, struct gw *win) {
 static void slider_to(struct gk_widget *w, long long v) {
     const struct slider *s = w->k;
     int value;
-    if(s->step > 1) v = s->min + (v - s->min + s->step / 2) / s->step * s->step;
-    value = v < s->min ? s->min : v > s->max ? s->max : (int)v;
+    if(v < s->min) v = s->min;                          /* (64 bits: gk_div64(), as libsurf links no libgcc) */
+    if(s->step > 1 && v < s->max) v = s->min + gk_div64(v - s->min + s->step / 2, s->step) * s->step;
+    value = v > s->max ? s->max : (int)v;
     if(value == w->value) return;
     w->value = value;
     gk_dirty(w);
